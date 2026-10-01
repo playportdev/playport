@@ -1,0 +1,12 @@
+0024:err:server:server_init_process_done signal_start_thread: teb=0x140f1a000 peb=0x140f1d000 TransferAddress=0x140891140 suspend=0
+[Wine child] teb=0x140f17000 child_peb=0x140884000 (parent_peb=0x140f1d000)
+[init-peb] thread_peb=0x14126d000 global_peb=0x14126d000 params=0x70390b0000 module=0x141230000
+[Wine child] PE loaded: Machine=0x8664 TransferAddress=0x141231140 ImageBase=0x141230000
+002c:err:thread:init_thread_stack iOS native stack: TEB 0x140f17000 StackBase=0x70398c0000 StackLimit=0x70390c8000 DeallocStack=0x70390c0000 (reserve=0x0 commit=0x0)
+002c:err:server:server_init_process_done signal_start_thread: teb=0x14126a000 peb=0x14126d000 TransferAddress=0x141231140 suspend=0
+[native-bt] ml1054   lr  1052bc664 S1Probe`init_syscall_frame+0x184
+[native-bt] ml1054   #0 1052b2380 S1Probe`signal_start_thread+0x40
+[native-bt] ml1054   #1 1052a8f54 S1Probe`server_init_process_done+0x2f8
+[native-bt] ml1054   #2 1052938a0 S1Probe`wine_ios_child_main+0x804
+002c:err:seh:segv_handler SEGV #1: pc=0x19b4e8048 addr=0xfffffffffffffc60 uctx_x18=0x0 disp=0 mach_exc=260
+[Wine ntdll/server] process_exit_wrapper(1): closing child fd_socket=70

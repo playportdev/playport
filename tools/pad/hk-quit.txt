@@ -1,0 +1,18 @@
+# Hollow Knight: from the main menu, Quit Game, and Yes on its "Quit Game?"
+# dialog, which opens with the cursor on No: UP moves it to Yes. Push this once
+# the main menu is up and still (pp pad wait-still); the game exits with code 0
+# and Playport restarts itself (decision 0029). Checked on the phone on 2026-09-30.
+120 DOWN     # Options
+500 -
+120 DOWN     # Achievements
+500 -
+120 DOWN     # Extras
+500 -
+120 DOWN     # Quit Game
+800 -
+150 A        # "Quit Game?", cursor on No
+1500 -
+120 UP       # Yes
+800 -
+150 A
+1000 -

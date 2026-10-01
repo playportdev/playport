@@ -1,0 +1,3 @@
+native 150 wow64 150
+CHECK slot   4 thunk WMTCopyAllDevices                                  native _MTLCopyAllDevices                                 wow64 _MTLCopyAllDevices
+suspicious: 1

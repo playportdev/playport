@@ -1,0 +1,333 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 30 Jul 2026 01:14:32 +0800
+Subject: [PATCH] iOS: implement 128-bit CASPAL, bound the callret leak, add
+ CPU-area/dispatcher probes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+FORK-ONLY. Not for upstream (see FEX/CLAUDE.md); user approved fork edits 2026-07-29.
+
+128-bit CASPAL (Arm64.cpp) — RunCASPAL had no Size==1 branch, so every 128-bit CAS
+fell through to `return false` -> "Unhandled JIT SIGBUS CASPAL" -> fatal
+STATUS_DATATYPE_MISALIGNMENT. That ended ml258 at unix_calls=24293 on
+  CASPAL x6,x7, x4,x5, [x11]  (insn 0x4866fd64, misalign=0, crosses16B=no)
+so it was never an alignment problem, just unimplemented. Added Size==1 mirroring the
+Size==0 conventions: reg 31 reads as 0 (only the upper reg can be 31), misaligned
+returns false unchanged (CASP with 64-bit operands requires 16-byte alignment and the
+LOCK CMPXCHG16B it comes from #GPs when unaligned, so a correct guest cannot emit it),
+no split-lock handling needed (a 16-byte aligned 16-byte access cannot cross a 64-byte
+cacheline), and on failure the observed value is written back to the Rs pair so the
+guest's retry loop converges. Verified: caspal128 1 -> 0.
+
+callret leak (BranchOps.cpp, all 3 guard sites) — the >>24 test only fired when the
+pointer left the ENTIRE 16MB region, so a large in-range leak sailed through. Measured
+on the CEF webhelper: tid 0098 had 1.1MB pushed (~36,000 nested calls) and tid 0078
+2.75MB (~90,000) while those threads' GUEST stacks had used only 2,264 and 10,008
+bytes — impossible, since every x86 CALL pushes >=8 bytes. Non-local exits (SEH unwind,
+C++ throw) skip the guest RETs and CEF init throws constantly. Now bounded to a 4MB
+window centred on DefaultLocation. Safe by construction: this stack is a return-address
+PREDICTOR, so a stale entry fails the RipReg compare and falls through to the L1 lookup.
+
+Probes: [cpu-area] at ThreadInit + at the silent null-ThreadState bail (which returned
+STATUS_SUCCESS with no trace), now including EnterEC so a faulting pool PC can be made
+dispatcher-relative; [callret-geom] once per process (also the only greppable marker
+for the emitter-side guard change); [ir-null] guard at GenerateIR.
+
+Deliberately uses LogMan, not the WriteFile(hStdError) path the existing
+"ThreadInit() done" line uses — that one has never once appeared in a log, so its
+silence carries no information.
+
+Madeira-commit: ceabf254afbdc3c4c943d238f8c3082a13595028
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp        | 26 +++++++++
+ .../Source/Interface/Core/JIT/BranchOps.cpp   | 29 ++++++++--
+ FEXCore/Source/Utils/ArchHelpers/Arm64.cpp    | 54 ++++++++++++++++++-
+ Source/Windows/ARM64EC/Module.cpp             | 47 ++++++++++++++++
+ Source/Windows/Common/CallRetStack.h          | 20 +++++++
+ 5 files changed, 171 insertions(+), 5 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index b6bfdd7..15974e7 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -568,6 +568,32 @@ ContextImpl::GenerateIRResult
+ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, bool ExtendedDebugInfo, uint64_t MaxInst) {
+   FEXCORE_PROFILE_SCOPED("GenerateIR");
+ 
++  /* iOS-Mythic ml250: Thread->OpDispatcher has been observed NULL here, faulting as
++   * `str xzr,[x0,#0x378]` with x0=0 inside IREmitter::ResetWorkingList and killing the
++   * process (unhandled c0000005, ml247 via chromehtml.dll -> tier0_s64).
++   *
++   * It is not a missing init: the faulting thread logged the FULL [TI-IC] sequence, so
++   * InitializeCompiler ran and created the OpDispatcher. That leaves a stale/foreign
++   * InternalThreadState -- the same class as #33, where a CEF child was wired to the wrong
++   * JIT-pool ntdll copy, and pseudo-processes get CLONED .data.
++   *
++   * The caller already handles an empty IRView ("OpDispatcher IR already released"), so
++   * bail cleanly instead of dereferencing NULL, and report enough state to identify whose
++   * thread object this is. */
++  if (!Thread || !Thread->OpDispatcher) {
++    static int NullN = 0;
++    if (NullN++ < 12) {
++      LogMan::Msg::EFmt("[ir-null] Thread={} OpDispatcher={} LookupCache={} FrontendDecoder={} "
++                        "CurrentFrame={} GuestRIP={:#x} -- bailing instead of faulting",
++                        static_cast<void*>(Thread),
++                        Thread ? static_cast<void*>(Thread->OpDispatcher.get()) : nullptr,
++                        Thread ? static_cast<void*>(Thread->LookupCache.get()) : nullptr,
++                        Thread ? static_cast<void*>(Thread->FrontendDecoder.get()) : nullptr,
++                        Thread ? static_cast<void*>(Thread->CurrentFrame) : nullptr, GuestRIP);
++    }
++    return {};
++  }
++
+   Thread->OpDispatcher->ResetWorkingList();
+ 
+   uint64_t TotalInstructions {0};
+diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+index 232adb4..7ed3d77 100644
+--- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+@@ -178,9 +178,28 @@ DEF_OP(ExitFunction) {
+         // pointer in-range. Uses TMP1 as scratch; adr below re-initializes it.
+         {
+           ARMEmitter::ForwardLabel l_callret_ok;
++          /* iOS-Mythic ml263: the >>24 test only fires when the pointer leaves the
++           * ENTIRE 16MB region, so a large-but-in-range leak sails straight through.
++           * Measured on the CEF webhelper thread:
++           *   tid 0098 sp-base=0x2c8c40 -> 1.1MB pushed  (~36,000 nested calls)
++           *   tid 0078 sp-base=0x132900 -> 2.75MB pushed (~90,000 nested calls)
++           * while those threads' GUEST stacks had used only 2,264 and 10,008 bytes. 36,000
++           * nested calls cannot exist in 2.2KB of stack (every x86 CALL pushes >=8 bytes),
++           * so entries are pushed and never popped -- non-local exits (SEH unwind, C++
++           * throw) skip the guest RETs, and CEF init throws constantly.
++           *
++           * Bound it to a 4MB window CENTRED on DefaultLocation (base + 4MB): test
++           * (sp - (base + 2MB)) >> 22, so sp-base must stay in [2MB, 6MB). Caps pushes at
++           * ~131,072 entries (~65,536 nested calls), far beyond any real program.
++           *
++           * Resetting is SAFE, not a papering-over: this stack is purely a return-address
++           * PREDICTOR. A stale or missing entry fails the `sub TMP1, TMP1, RipReg` compare
++           * and falls through to the L1 lookup, which is always correct. A reset costs
++           * mispredictions, nothing else. */
+           ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++          add(ARMEmitter::Size::i64Bit, TMP1, TMP1, 0x200000);
+           sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
+-          lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 24);
++          lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 22);
+           (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &l_callret_ok);
+           ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
+           add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x400000);
+@@ -237,9 +256,11 @@ DEF_OP(ExitFunction) {
+       // site for rationale. Reset to DefaultLocation if OOB before ldp.
+       {
+         ARMEmitter::ForwardLabel l_callret_ok;
++        /* iOS-Mythic ml263: tightened to a 4MB window -- see the first CALL push site. */
+         ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++        add(ARMEmitter::Size::i64Bit, TMP1, TMP1, 0x200000);
+         sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
+-        lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 24);
++        lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 22);
+         (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &l_callret_ok);
+         ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
+         add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x400000);
+@@ -282,9 +303,11 @@ DEF_OP(ExitFunction) {
+       // linked-path CALL push.
+       {
+         ARMEmitter::ForwardLabel l_callret_ok;
++        /* iOS-Mythic ml263: tightened to a 4MB window -- see the first CALL push site. */
+         ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++        add(ARMEmitter::Size::i64Bit, TMP1, TMP1, 0x200000);
+         sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
+-        lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 24);
++        lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 22);
+         (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &l_callret_ok);
+         ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
+         add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x400000);
+diff --git a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+index a92aced..4460afd 100644
+--- a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
++++ b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+@@ -517,6 +517,53 @@ static bool RunCASPAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg1, uint3
+         }
+       }
+     }
++  } else if (Size == 1) {
++    // 64-bit pairs -- a true 128-bit CAS, which is what x86 LOCK CMPXCHG16B lowers to.
++    //
++    // iOS-Mythic ml258: this branch did not exist, so every CASPAL with sz=1 fell
++    // through to `return false`, which callers escalate to "Unhandled JIT SIGBUS
++    // CASPAL" and a fatal STATUS_DATATYPE_MISALIGNMENT. That is what ends the Steam
++    // run: CASPAL x6,x7, x4,x5, [x11] (Instruction 0x4866fd64), reported aligned
++    // (misalign=0, crosses16B=no) -- so nothing exotic, simply unimplemented.
++    uint64_t Addr = GPRs[AddressReg];
++
++    // Lower register must be even, so only the upper register can be 31.
++    uint64_t DesiredLower = GPRs[DesiredReg1];
++    uint64_t DesiredUpper = DesiredReg2 == 31 ? 0 : GPRs[DesiredReg2];
++
++    uint64_t ExpectedLower = GPRs[ExpectedReg1];
++    uint64_t ExpectedUpper = ExpectedReg2 == 31 ? 0 : GPRs[ExpectedReg2];
++
++    if (Addr & 0b1111) {
++      // CASP with 64-bit operands architecturally requires a 16-byte aligned address,
++      // and the LOCK CMPXCHG16B it comes from #GPs on hardware when unaligned -- so a
++      // correct guest cannot produce this. Emulating it would be inventing semantics
++      // x86 does not have, so keep the existing behaviour and let the caller report it.
++      return false;
++    }
++
++    // A 16-byte aligned 16-byte access can never cross a 64-byte cacheline
++    // (16 divides 64), so the split-lock handling the Size==0 path needs
++    // cannot apply here.
++    auto Atomic128 = std::atomic_ref<__uint128_t>(*reinterpret_cast<__uint128_t*>(Addr));
++
++    __uint128_t Desired = (static_cast<__uint128_t>(DesiredUpper) << 64) | DesiredLower;
++    __uint128_t Expected = (static_cast<__uint128_t>(ExpectedUpper) << 64) | ExpectedLower;
++
++    __uint128_t Tmp = Expected;
++    if (Atomic128.compare_exchange_strong(Tmp, Desired)) {
++      // Succeeded. CAS writes the loaded value back to the Rs pair, and on success
++      // that value equals Expected, so the registers already hold it.
++      return true;
++    }
++
++    // Failed: compare_exchange_strong left the observed value in Tmp, and CAS returns
++    // it in the Rs pair so the guest can retry its loop.
++    GPRs[ExpectedReg1] = static_cast<uint64_t>(Tmp);
++    if (ExpectedReg2 != 31) {
++      GPRs[ExpectedReg2] = static_cast<uint64_t>(Tmp >> 64);
++    }
++    return true;
+   }
+   return false;
+ }
+@@ -536,7 +583,10 @@ static bool RunCASPAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg1, uint3
+ static void IosLogUnimplementedCASPAL(uint32_t Size, uint64_t* GPRs, uint32_t AddressReg) {
+   static int reports;
+ 
+-  if (Size == 0 || reports >= 8) {
++  /* ml258: Size==1 is IMPLEMENTED now (see RunCASPAL). The only case still handed
++   * back to the caller is a misaligned CASP, which a correct guest cannot emit, so
++   * report exactly that and stay quiet otherwise. */
++  if (Size == 0 || (GPRs[AddressReg] & 15) == 0 || reports >= 8) {
+     return;
+   }
+   reports++;
+@@ -553,7 +603,7 @@ static void IosLogUnimplementedCASPAL(uint32_t Size, uint64_t* GPRs, uint32_t Ad
+   if (VirtualQuery(reinterpret_cast<LPCVOID>(GPRs[AddressReg]), &mbi, sizeof(mbi))) {
+     type = mbi.Type == MEM_IMAGE ? "MEM_IMAGE" : mbi.Type == MEM_MAPPED ? "MEM_MAPPED" : "MEM_PRIVATE";
+   }
+-  LogMan::Msg::EFmt("[caspal128] UNIMPLEMENTED Size={} addrReg=x{} addr={:#x} misalign={} "
++  LogMan::Msg::EFmt("[caspal128] MISALIGNED-UNSUPPORTED Size={} addrReg=x{} addr={:#x} misalign={} "
+                     "crosses16B={} | region base={} size={:#x} prot={:#x} type={} state={:#x}",
+                     Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
+                     (GPRs[AddressReg] & 15) ? "yes" : "no", mbi.BaseAddress, mbi.RegionSize,
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 5ccb7b5..4e3eb42 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -215,6 +215,42 @@ ThreadCPUArea GetCPUArea() {
+ #endif
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* iOS-Mythic ml259 PROBE (#44). The CEF thread (0098) executes FEX JIT with x28 == 0:
++ *   insn ldr x0,[x28,#0x658] faults with addr=0x658 -- the fault address IS the
++ *   immediate, so the base is null. x28 is the CpuStateFrame, i.e. EmulatorData[0].
++ *
++ * Three causes need three different fixes and must be told apart:
++ *   (a) ThreadInit never ran for this thread            -> no [ti-area] line for its tid
++ *   (b) it ran, then the area was clobbered             -> [ti-area] non-null, [no-state] null
++ *   (c) we are reading the WRONG CPU area               -> teb/area differ between the two
++ * (c) is a live risk on iOS because GetCPUArea() goes through IOSLoadTEB(), which
++ * falls back to NtCurrentTeb() (an x18 read) when TSD slot 275 is not yet populated --
++ * and x18 is clobbered by Apple runtime calls.
++ *
++ * Deliberately uses LogMan (which reaches mythic-log.txt, as [caspal128] proved) and
++ * NOT the WriteFile(hStdError) path the existing "ThreadInit() done" line uses -- that
++ * one has never once appeared in a log, so its silence means nothing. */
++static void IosLogCPUArea(const char* tag) {
++  uintptr_t tpidrro;
++  __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
++  void* tsd275 = *reinterpret_cast<void**>((tpidrro & ~uintptr_t(7)) + 0x898);
++  _TEB* teb = IOSLoadTEB();
++  auto* area = *reinterpret_cast<CHPE_V2_CPU_AREA_INFO**>(reinterpret_cast<uintptr_t>(teb) + ThreadCPUArea::TEBCPUAreaOffset);
++
++  LogMan::Msg::EFmt("[cpu-area] {} tid={:#x} teb={} tsd275={} x18teb={} area={} "
++                    "StateFrame(ED0)={} ThreadState(ED1)={} EnterEC={}",
++                    tag, (unsigned long long)GetCurrentThreadId(), (void*)teb, tsd275,
++                    (void*)NtCurrentTeb(), (void*)area,
++                    area ? (void*)area->EmulatorData[0] : nullptr,
++                    area ? (void*)area->EmulatorData[1] : nullptr,
++                    /* ml265: EnterEC is the dispatcher base. Needed to convert a faulting
++                     * pool PC into a dispatcher-relative offset, so it can be matched
++                     * against the documented emit layout (+0x160 / +0x184 / +0x264). */
++                    area ? (void*)area->EmulatorData[2] : nullptr);
++}
++#endif
++
+ FrontendThreadData* GetFrontendThreadData(FEXCore::Core::InternalThreadState* Thread) {
+   return static_cast<FrontendThreadData*>(Thread->FrontendPtr);
+ }
+@@ -1009,6 +1045,14 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
+ 
+   const auto CPUArea = GetCPUArea();
+   if (!CPUArea.ThreadState()) {
++#ifdef FEX_IOS_HOST
++    /* ml259 #44: this bail SILENTLY swallows the null-state case and returns
++     * STATUS_SUCCESS, so the fault escalates with no trace. Say so, capped. */
++    static int reported;
++    if (reported++ < 10) {
++      IosLogCPUArea("no-state-at-exception");
++    }
++#endif
+     return STATUS_SUCCESS;
+   }
+ 
+@@ -1554,6 +1598,9 @@ NTSTATUS ThreadInit() {
+ 
+   CPUArea.ThreadState() = Thread;
+   CPUArea.Area->SuspendDoorbell = reinterpret_cast<ULONG*>(&Thread->CurrentFrame->SuspendDoorbell);
++#ifdef FEX_IOS_HOST
++  IosLogCPUArea("ThreadInit-done");
++#endif
+ #ifdef FEX_IOS_HOST
+   {
+     HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 532738a..13805be 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -47,6 +47,26 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   // PAGE_NOACCESS on the guard pages, so the SEH-driven HandleAccessViolation
+   // never fires — JIT code has to detect-and-reset proactively.
+   Thread->CurrentFrame->State.callret_sp_base = reinterpret_cast<uint64_t>(Thread->CallRetStackBase);
++
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic ml263: print the geometry ONCE per process. Two jobs:
++   * (1) a verifiable content marker for the JIT-side guard change in BranchOps.cpp
++   *     (an emitter constant leaves no string in the binary, so there is otherwise
++   *     nothing to grep in the installed bundle);
++   * (2) states the window the inline guard now enforces, so a [callret] dump in a
++   *     later crash can be read against it without re-deriving the arithmetic. */
++  {
++    static bool reported = false;
++    if (!reported) {
++      reported = true;
++      auto Info = GetInfoThread(Thread);
++      LogMan::Msg::EFmt("[callret-geom] base={:#x} default={:#x} size={:#x} "
++                        "guard-window=[base+0x200000, base+0x600000) grows-DOWN",
++                        reinterpret_cast<uint64_t>(Thread->CallRetStackBase), Info.DefaultLocation,
++                        FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++    }
++  }
++#endif
+ }
+ 
+ void DestroyThread(FEXCore::Core::InternalThreadState* Thread) {

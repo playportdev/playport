@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 16 Sep 2026 10:02:10 +0800
+Subject: [PATCH] Licensing: draft converter exception for the Madeira-authored
+ parts
+
+GPL-3.0-or-later with the Madeira Converter Exception, version 1 (draft of
+2026-09-16, not in effect until adopted), reproduced in full in
+LICENSE-MADEIRA.md; upstream MIT code unchanged; contribution terms carry
+the exception. rpmalloc submodule advanced to its matching commit.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Madeira-commit: c75a94e0ef7df35d1a9a5458051a0bc9a889b6be
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ CONTRIBUTING.md    |  5 +++++
+ LICENSE-MADEIRA.md | 26 ++++++++++++++++++++++++++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 821379c..221d3af 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -10,3 +10,8 @@ sign off your commits:
+ 
+ Upstream code keeps its original licence (see `LICENSE` and
+ `LICENSE-MADEIRA.md`); do not alter upstream copyright or licence notices.
++
++Contributions are accepted under GPL-3.0-or-later **together with the
++Madeira Converter Exception** reproduced in `LICENSE-MADEIRA.md` (draft of
++2026-09-16). By submitting a change you agree that it carries that
++additional permission as well.
+diff --git a/LICENSE-MADEIRA.md b/LICENSE-MADEIRA.md
+index 5a6603c..b83f667 100644
+--- a/LICENSE-MADEIRA.md
++++ b/LICENSE-MADEIRA.md
+@@ -35,3 +35,29 @@ Three limits, stated plainly rather than left implied:
+ ## Contributing
+ 
+ Contributions are accepted under **GPL-3.0-or-later**. See `CONTRIBUTING.md`.
++
++## Additional permission for the Apple Metal Shader Converter (DRAFT, not yet in effect)
++
++The Madeira-authored modifications and new files in this repository (the
++commits by Will Faust) are offered under GPL-3.0-or-later **with** the
++following additional permission, reproduced here in full so this grant is
++self-contained. Upstream code keeps its own licence and notices and needs
++no exception. This is a draft prepared 2026-09-16; it takes effect only
++when adopted in a tagged release, and is provisional until then.
++
++### Madeira Converter Exception, version 1 (DRAFT of 2026-09-16; not in effect until adopted)
++
++Additional permission under GNU GPL version 3 section 7.
++
++If you modify this Program, or any covered work, by linking or combining it
++with the Apple Metal Shader Converter dynamic library
++(libmetalirconverter.dylib, in any version) or with Apple's Metal,
++Foundation, CoreGraphics, QuartzCore, UIKit, AppKit and related system
++frameworks, or with modified versions of those libraries, the licensors of
++this Program grant you additional permission to convey the resulting work.
++Corresponding Source for a non-source form of such a combination shall
++include the source code for the parts of the Program used in the
++combination, but need not include the source code of those Apple libraries.
++This permission does not extend to those libraries, which remain subject to
++Apple's own licence terms. You may remove this additional permission from
++copies you convey, as GPL-3.0 section 7 allows.

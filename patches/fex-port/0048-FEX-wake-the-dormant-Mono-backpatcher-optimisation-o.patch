@@ -1,0 +1,512 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 12 Aug 2026 02:35:21 +0800
+Subject: [PATCH] FEX: wake the dormant Mono backpatcher optimisation on iOS
+
+HandleRWXAccessViolation already recognises Mono's XCHG patcher and recompiles
+that block so the store becomes a direct MonoBackpatcherWrite call, with no
+fault at all. On iOS it had never once fired: [mono-cfg] reported HOOKS ARMED
+while "Detected mono backpatcher" appeared zero times in every run, because our
+Mach handler emulates the SWPAL before FEX is ever offered the fault.
+
+This adds the FEX half of the bridge.
+
+IosMonoBridge.h is a byte-for-byte copy of the unix-side contract. The two live
+in different build systems with no shared include path, so abi_version is the
+runtime guard - FEX refuses to arm rather than read a drifted layout, which
+matters because the native side reads that struct inside a fault handler.
+
+IosJitAlias.cpp owns the table, for the same reason it owns IosAliasEntries:
+reaching global storage from ARM64EC class methods in Module.cpp produces
+misaligned ldr/str link errors. IosMonoResolveRW is a sequence-lock read that
+mirrors the writer exactly - sample generation, read, sample again, accept only
+if equal and odd - so a retired-and-reused slot misses instead of returning a
+mapping that no longer backs the address.
+
+Core.cpp publishes the CpuStateFrame and JIT block header/tail offsets so the
+native capture is self-calibrating; nothing is hardcoded across the boundary.
+IosMonoTryActivate consumes a pending event at CompileBlock. ios_fex_rip_from_hostpc
+is used ONLY to prove the faulting instruction is inside Mono and really is an
+XCHG; MarkMonoBackpatcherBlock receives JITCodeTail.RIP, the block entry, because
+FEX compares it against the compilation's starting GuestRIP. In the field those
+two differed by 0xC0 - passing the instruction RIP would have compiled, shipped,
+and silently done nothing.
+
+MonoBackpatcherWrite now resolves the destination to the writable alias. Its
+plain store to the R+X guest VA would Mach-fault straight back on iOS, trading
+one fault for another. A resolve miss is counted and falls through to the direct
+store: degraded, never wrong.
+
+DisableSMCDetection is skipped on iOS. It reprotects every RWX interval as
+writable, and iOS will never grant write on the guest VA - that is the entire
+reason the RW alias exists.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: 43659eb9fd4227bc42f9ae3f714b861f1f1ab237
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp        | 140 +++++++++++++++++-
+ Source/Windows/ARM64EC/IosJitAlias.cpp        | 131 ++++++++++++++++
+ Source/Windows/ARM64EC/IosMonoBridge.h        |  65 ++++++++
+ Source/Windows/ARM64EC/libarm64ecfex.def      |   1 +
+ Source/Windows/Common/InvalidationTracker.cpp |  23 +++
+ 5 files changed, 358 insertions(+), 2 deletions(-)
+ create mode 100644 Source/Windows/ARM64EC/IosMonoBridge.h
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index c5cc0a1..91a441b 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -1297,6 +1297,98 @@ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);
+ extern "C" uint64_t IosFfsBypassLog[4];
+ #endif
+ 
++#ifdef FEX_IOS_HOST
++/* ml648: publish the struct offsets the native Mach handler needs.
++ *
++ * NEVER hardcoded on the native side. It reads CpuStateFrame and the JIT block
++ * header/tail from inside a fault handler, so a silent field reshuffle here
++ * would turn that into a wild read at the worst possible moment. Publishing
++ * makes the capture self-calibrating: zero offsets mean "not published", and
++ * the native side then declines to capture at all.
++ *
++ * mono_base/mono_end are deliberately NOT set here — Mono is not loaded at FEX
++ * startup. InvalidationTracker publishes them when it recognises the module,
++ * and capture stays inert until it does. */
++extern "C" void ios_fex_mono_bridge_publish(void* BridgeRaw) {
++  struct BridgeHead {
++    uint32_t abi_version, off_frame_hdr, off_block_tail, off_tail_rip;
++  };
++  auto* B = reinterpret_cast<BridgeHead*>(BridgeRaw);
++  B->off_frame_hdr = static_cast<uint32_t>(offsetof(FEXCore::Core::CpuStateFrame, State) +
++                                           offsetof(FEXCore::Core::CPUState, InlineJITBlockHeader));
++  B->off_block_tail = static_cast<uint32_t>(offsetof(FEXCore::CPU::CPUBackend::JITCodeHeader, OffsetToBlockTail));
++  B->off_tail_rip = static_cast<uint32_t>(offsetof(FEXCore::CPU::CPUBackend::JITCodeTail, RIP));
++  LogMan::Msg::EFmt("[mono-bridge] ml648 OFFSETS PUBLISHED bridge={} frame_hdr={} block_tail={} tail_rip={}"
++                    " -- capture still inert until Mono is armed",
++                    BridgeRaw, B->off_frame_hdr, B->off_block_tail, B->off_tail_rip);
++}
++
++extern "C" uint64_t IosMonoResolveRW(uint64_t GuestAddr, uint64_t Size);
++extern "C" void ios_fex_mono_count_helper(int Miss);
++extern "C" int ios_fex_mono_take_pending(uint64_t* BlockBegin, uint64_t* HostPC, uint64_t* FaultAddr);
++extern "C" void ios_fex_mono_count_activated();
++extern "C" uint64_t ios_fex_mono_captured_count();
++extern "C" int ios_fex_mono_bridge_armed();
++
++/* Liveness line 3 of 3. Lives here because LogMan is not available in the
++ * ARM64EC alias TU. */
++extern "C" void ios_fex_mono_report_armed(uint64_t Base, uint64_t End) {
++  LogMan::Msg::EFmt("[mono-bridge] ml648 MONO ARMED base={:#x} end={:#x} -- native capture is now live", Base, End);
++}
++
++/* ml648: consume a pending Mono-backpatcher event.
++ *
++ * ⚠️ THE TWO RIPs ARE NOT INTERCHANGEABLE, and getting them the wrong way round
++ * makes the whole optimisation compile, ship, and silently do nothing:
++ *   ios_fex_rip_from_hostpc() -> the EXACT instruction RIP. Used ONLY to prove
++ *       the faulting instruction is inside Mono and really is an XCHG (0x87).
++ *   JITCodeTail.RIP           -> the BLOCK ENTRY. This is what
++ *       MarkMonoBackpatcherBlock() must receive, because FEX compares it against
++ *       the compilation's starting GuestRIP.
++ *
++ * Use the standalone ios_fex_rip_from_hostpc(BlockBegin, HostPC), never
++ * RestoreRIPFromHostPC(Thread, HostPC) — the latter reads the thread's CURRENT
++ * block header, which may have moved on since the fault was recorded. */
++static inline bool MonoBackpatcherBridgeArmed() {
++  return ios_fex_mono_bridge_armed() != 0;
++}
++
++static void IosMonoTryActivate(ContextImpl* CTX, FEXCore::Core::InternalThreadState* Thread) {
++  uint64_t BlockBegin = 0, HostPC = 0, FaultAddr = 0;
++  if (!ios_fex_mono_take_pending(&BlockBegin, &HostPC, &FaultAddr)) {
++    return;
++  }
++
++  const uint64_t InsnRIP = ios_fex_rip_from_hostpc(BlockBegin, HostPC);
++  auto* Header = reinterpret_cast<const FEXCore::CPU::CPUBackend::JITCodeHeader*>(BlockBegin);
++  auto* Tail = reinterpret_cast<const FEXCore::CPU::CPUBackend::JITCodeTail*>(BlockBegin + Header->OffsetToBlockTail);
++  const uint64_t BlockEntry = Tail->RIP;
++
++  LogMan::Msg::EFmt("[mono-bridge] ml648 PENDING block_begin={:#x} host_pc={:#x} fault={:#x} "
++                    "insn_rip={:#x} block_entry={:#x} captured={}",
++                    BlockBegin, HostPC, FaultAddr, InsnRIP, BlockEntry, ios_fex_mono_captured_count());
++
++  if (!InsnRIP || !BlockEntry) {
++    LogMan::Msg::EFmt("[mono-bridge] ml648 REJECT: rip reconstruction failed");
++    return;
++  }
++  static constexpr uint8_t XChgOp = 0x87;
++  const uint8_t* Code = reinterpret_cast<const uint8_t*>(InsnRIP);
++  if (Code[0] != XChgOp && Code[1] != XChgOp) {
++    LogMan::Msg::EFmt("[mono-bridge] ml648 REJECT: not an XCHG at {:#x} ({:#x} {:#x})", InsnRIP, Code[0], Code[1]);
++    return;
++  }
++
++  {
++    std::scoped_lock CodeLock(CTX->GetCodeInvalidationMutex());
++    CTX->MarkMonoBackpatcherBlock(BlockEntry);
++  }
++  CTX->SyscallHandler->InvalidateGuestCodeRange(Thread, BlockEntry, FEXCore::Utils::FEX_PAGE_SIZE);
++  ios_fex_mono_count_activated();
++  LogMan::Msg::EFmt("[mono-bridge] ml648 ACTIVATED mono backpatcher block {:#x} -- SWPAL storm should collapse", BlockEntry);
++}
++#endif
++
+ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP, uint64_t MaxInst) {
+   if constexpr (BLOCK_DEBUGGING) {
+     // Block debugging logic is hand-written and needs to be handled with care.
+@@ -1313,6 +1405,30 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   FEXCORE_PROFILE_SCOPED("CompileBlock");
+   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedJITTime);
+ 
++#ifdef FEX_IOS_HOST
++  /* ml648: consume any pending Mono-backpatcher event.
++   *
++   * ⚠️ HONEST LIMITATION. Sol asked for a safe point guaranteed on the NEXT block
++   * transition. There isn't a free one: the per-block LookupCache probe is
++   * emitted assembly, and ExitFunctionLink only runs on an edge's FIRST
++   * traversal, so the only zero-cost C++ hooks are compile-time. Adding a check
++   * to the dispatcher's emitted path would tax every block transition forever to
++   * save a one-shot activation.
++   *
++   * Why CompileBlock is nonetheless prompt here: the capture happens the first
++   * time Mono PATCHES code, which is precisely when Mono is also EMITTING code,
++   * so compiles are dense at exactly that moment (179,415 in the ml647 run).
++   * Capture and compilation are correlated by construction, not by luck.
++   *
++   * This is measurable rather than assumed — the [mono-bridge] PENDING line
++   * prints n_captured at activation, so the number of faults paid while waiting
++   * is in the log. If that gap is large, the answer is a dispatcher hook and the
++   * log will say so outright. */
++  if (MonoBackpatcherBridgeArmed()) {
++    IosMonoTryActivate(this, Thread);
++  }
++#endif
++
+   /* iOS-Mythic ml304 (task #51): REPORT CallbackPtr ENTRY ON ITS OWN, not via the bogus-RIP path.
+    *
+    * ml302 proved the JITCallback prologue writes the bad State.rip, and ml303 added an LR witness --
+@@ -2352,16 +2468,36 @@ void ContextImpl::RemoveCustomIREntrypoint(FEXCore::Core::InternalThreadState* T
+   SyscallHandler->InvalidateGuestCodeRange(Thread, Entrypoint, 1);
+ }
+ 
++
+ void ContextImpl::MonoBackpatcherWrite(FEXCore::Core::CpuStateFrame* Frame, uint8_t Size, uint64_t Address, uint64_t Value) {
+   auto Thread = Frame->Thread;
+   auto CTX = static_cast<ContextImpl*>(Thread->CTX);
+   {
+     auto lk = GuardSignalDeferringSection(CTX->CodeInvalidationMutex, Thread);
+ 
++    uint64_t Dest = Address;
++#ifdef FEX_IOS_HOST
++    /* ml648: THE STORE MUST GO TO THE WRITABLE ALIAS.
++     *
++     * The whole point of this helper is to replace a faulting write with a
++     * direct one. On iOS the guest VA is R+X only -- iOS will not grant RWX --
++     * so a plain store to `Address` Mach-faults straight back and we would have
++     * swapped one fault for another, gaining nothing. Resolve through the
++     * anonymous alias table (NOT IosAliasEntries) and write the RW view.
++     *
++     * A miss is counted and falls through to the direct store, which faults and
++     * is emulated as before: degraded, never wrong. */
++    const uint64_t RW = IosMonoResolveRW(Address, Size);
++    if (RW) {
++      Dest = RW;
++    }
++    ios_fex_mono_count_helper(RW ? 0 : 1);
++#endif
++
+     if (Size == 8) {
+-      *reinterpret_cast<uint64_t*>(Address) = Value;
++      *reinterpret_cast<uint64_t*>(Dest) = Value;
+     } else if (Size == 4) {
+-      *reinterpret_cast<uint32_t*>(Address) = Value;
++      *reinterpret_cast<uint32_t*>(Dest) = Value;
+     } else {
+       ERROR_AND_DIE_FMT("Unexpected write size for backpatcher: {}", Size);
+     }
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index 286d7a8..b4dc86c 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -18,6 +18,9 @@
+ // their own TU sidesteps the issue.
+ 
+ #include <cstdint>
++#include <windows.h>
++#include <winternl.h>
++#include "IosMonoBridge.h"
+ 
+ #ifdef FEX_IOS_HOST
+ 
+@@ -77,6 +80,134 @@ uint64_t BTCpu64IosRipFromHostPC(uint64_t BlockBegin, uint64_t HostPC) {
+   return ios_fex_rip_from_hostpc(BlockBegin, HostPC);
+ }
+ 
++/* ============================ ml648 MONO BRIDGE ============================
++ * Owned here rather than in Module.cpp for the same reason the alias table is:
++ * reaching global storage from ARM64EC class methods there produced misaligned
++ * ldr/str link errors. Kept in a DIFFERENT table from IosAliasEntries — see
++ * IosMonoBridge.h. */
++ios_mono_bridge* g_MonoBridge = nullptr;
++
++extern void ios_fex_mono_bridge_publish(void* Bridge);      // Core.cpp: has the types
++extern void ios_fex_mono_report_armed(uint64_t, uint64_t);  // Core.cpp: has LogMan
++
++void BTCpu64IosSetMonoBridge(uint64_t BridgeAddr) {
++  auto* B = reinterpret_cast<ios_mono_bridge*>(BridgeAddr);
++  if (!B || B->abi_version != IOS_MONO_ABI_VERSION) {
++    // Refuse rather than arm a struct whose layout we cannot trust — the native
++    // side reads it inside a Mach fault handler.
++    return;
++  }
++  g_MonoBridge = B;
++  ios_fex_mono_bridge_publish(B);
++}
++
++/* Resolve a guest RX address to its writable alias. Sequence-lock read exactly
++ * as the writer publishes: sample the generation, read, sample again, and
++ * accept only when both are equal and ODD. A retired-and-reused slot therefore
++ * misses instead of returning a stale mapping — which would put a guest code
++ * write into memory that no longer backs it. Returns 0 on miss; the caller
++ * counts it and falls back rather than guessing. */
++uint64_t IosMonoResolveRW(uint64_t GuestAddr, uint64_t Size) {
++  auto* B = g_MonoBridge;
++  if (!B) {
++    return 0;
++  }
++  const uint32_t Count = __atomic_load_n(&B->alias_count, __ATOMIC_ACQUIRE);
++  for (uint32_t i = 0; i < Count && i < IOS_MONO_MAX_ALIASES; i++) {
++    const uint32_t G1 = __atomic_load_n(&B->aliases[i].generation, __ATOMIC_ACQUIRE);
++    if (!(G1 & 1)) {
++      continue;  // retired or mid-update
++    }
++    const uint64_t Base = B->aliases[i].guest_rx;
++    const uint64_t Sz = B->aliases[i].size;
++    const uint64_t RW = B->aliases[i].host_rw;
++    const uint32_t G2 = __atomic_load_n(&B->aliases[i].generation, __ATOMIC_ACQUIRE);
++    if (G1 != G2) {
++      continue;  // changed under us
++    }
++    if (GuestAddr >= Base && GuestAddr + Size <= Base + Sz) {
++      return RW + (GuestAddr - Base);
++    }
++  }
++  return 0;
++}
++/* Called from InvalidationTracker the moment the Mono module is recognised.
++ * Until this runs, mono_base is 0 and the native Mach handler declines every
++ * capture — the ordering the design depends on, enforced by construction. */
++void ios_fex_mono_arm(uint64_t Base, uint64_t End) {
++  auto* B = g_MonoBridge;
++  if (!B) {
++    return;
++  }
++  B->mono_end = End;
++  __atomic_store_n(&B->mono_base, Base, __ATOMIC_RELEASE);  // publish LAST: it is the gate
++  ios_fex_mono_report_armed(Base, End);
++}
++
++/* Take this context's pending event, if any. One-shot: the slot moves to state 2
++ * and never fires again for this process, so a mis-detection cannot loop.
++ *
++ * Keyed by PEB because pseudo-processes share one address space — a global slot
++ * would let one process's fault mark another process's block. */
++int ios_fex_mono_take_pending(uint64_t* BlockBegin, uint64_t* HostPC, uint64_t* FaultAddr) {
++  auto* B = g_MonoBridge;
++  if (!B) {
++    return 0;
++  }
++  const uint64_t Context = reinterpret_cast<uint64_t>(NtCurrentTeb()->ProcessEnvironmentBlock);
++  if (!Context) {
++    return 0;
++  }
++  for (uint32_t i = 0; i < IOS_MONO_MAX_CONTEXTS; i++) {
++    auto& P = B->pending[i];
++    if (__atomic_load_n(&P.context, __ATOMIC_ACQUIRE) != Context) {
++      continue;
++    }
++    uint32_t Want = 1;
++    if (!__atomic_compare_exchange_n(&P.state, &Want, 2, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
++      return 0;  // empty, or already consumed
++    }
++    *BlockBegin = P.block_begin;
++    *HostPC = P.host_pc;
++    *FaultAddr = P.fault_addr;
++    return 1;
++  }
++  return 0;
++}
++
++/* One relaxed load. Keeps CompileBlock's added cost to a load+branch until the
++ * bridge is armed AND something is actually pending. */
++int ios_fex_mono_bridge_armed() {
++  auto* B = g_MonoBridge;
++  if (!B || !__atomic_load_n(&B->mono_base, __ATOMIC_ACQUIRE)) {
++    return 0;
++  }
++  return __atomic_load_n(&B->n_captured, __ATOMIC_RELAXED) != __atomic_load_n(&B->n_activated, __ATOMIC_RELAXED);
++}
++
++void ios_fex_mono_count_activated() {
++  if (g_MonoBridge) {
++    __atomic_add_fetch(&g_MonoBridge->n_activated, 1, __ATOMIC_RELAXED);
++  }
++}
++
++uint64_t ios_fex_mono_captured_count() {
++  return g_MonoBridge ? __atomic_load_n(&g_MonoBridge->n_captured, __ATOMIC_RELAXED) : 0;
++}
++
++/* Counters live with the table, off the caller's hot path. */
++void ios_fex_mono_count_helper(int Miss) {
++  auto* B = g_MonoBridge;
++  if (!B) {
++    return;
++  }
++  __atomic_add_fetch(&B->n_helper_calls, 1, __ATOMIC_RELAXED);
++  if (Miss) {
++    __atomic_add_fetch(&B->n_alias_miss, 1, __ATOMIC_RELAXED);
++  }
++}
++/* ========================== end ml648 MONO BRIDGE ========================= */
++
+ void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
+   int count = g_EntryCount;
+ 
+diff --git a/Source/Windows/ARM64EC/IosMonoBridge.h b/Source/Windows/ARM64EC/IosMonoBridge.h
+new file mode 100644
+index 0000000..3f7e4f7
+--- /dev/null
++++ b/Source/Windows/ARM64EC/IosMonoBridge.h
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: MIT
++// iOS-Mythic ml648 — FEX's copy of the Mono-bridge contract.
++//
++// ⚠️ THIS MUST STAY BYTE-IDENTICAL TO build/ntdll-unix/ios_mono_bridge.h.
++// The two live in different build systems (llvm-mingw arm64ec PE here, native
++// clang there) so there is no shared include path and no compile-time check is
++// possible. `abi_version` is the runtime guard: FEX refuses to arm the bridge
++// if it does not match, which turns a silent layout drift — the worst possible
++// failure for a struct read inside a fault handler — into one loud line.
++//
++// See the unix-side header for WHY this table is separate from IosAliasEntries.
++// Short version: Module.S's ios_ffs_xlate_loop rewrites control-flow targets
++// through that one, so a guest-RX -> RW pair in it would send calls into the
++// non-executable mapping.
++
++#pragma once
++#include <cstdint>
++
++#define IOS_MONO_ABI_VERSION 1
++#define IOS_MONO_MAX_ALIASES 4096
++#define IOS_MONO_MAX_CONTEXTS 64
++
++struct ios_mono_alias {
++  uint64_t guest_rx;
++  uint64_t host_rw;
++  uint64_t size;
++  uint32_t generation;  // odd = live, even = retired
++  uint32_t _pad;
++};
++
++struct ios_mono_pending {
++  uint64_t context;      // PEB, 0 = slot free
++  uint64_t block_begin;  // CpuStateFrame+0, the InlineJITBlockHeader
++  uint64_t host_pc;
++  uint64_t fault_addr;
++  uint32_t state;  // 0 empty, 1 published, 2 consumed (one-shot)
++  uint32_t _pad;
++};
++
++struct ios_mono_bridge {
++  uint32_t abi_version;
++  uint32_t off_inline_jit_block_header;
++  uint32_t off_block_tail;
++  uint32_t off_tail_rip;
++
++  uint64_t mono_base;
++  uint64_t mono_end;
++  uint64_t code_lo;
++  uint64_t code_hi;
++
++  ios_mono_pending pending[IOS_MONO_MAX_CONTEXTS];
++
++  uint32_t alias_count;
++  ios_mono_alias aliases[IOS_MONO_MAX_ALIASES];
++
++  uint64_t n_captured;
++  uint64_t n_activated;
++  uint64_t n_helper_calls;
++  uint64_t n_alias_miss;
++  uint64_t n_residual_swp;
++  uint64_t n_reject_unarmed;
++  uint64_t n_reject_no_frame;
++  uint64_t n_reject_bad_block;
++  uint64_t n_reject_outside_code;
++};
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index 14f43f9..e2e6239 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -4,6 +4,7 @@ EXPORTS
+   BTCpu64FlushInstructionCache
+   BTCpu64IosAddAliasMapping
+   BTCpu64IosRipFromHostPC
++  BTCpu64IosSetMonoBridge
+   BTCpu64IosReleaseThreadHolds
+   BTCpu64IsProcessorFeaturePresent
+   BTCpu64NotifyMemoryDirty
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 999d4c8..93e375d 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -17,6 +17,13 @@
+  * purpose -- an extern "C" at block scope is a compile error and cost a build earlier. */
+ extern "C" uint64_t FEX_MythicIRCapTarget;
+ 
++/* ml648: defined in the ARM64EC alias TU. Declared at FILE scope — an
++ * extern "C" declaration is illegal at block scope, and declaring it inside
++ * namespace FEX::Windows would mangle it as FEX::Windows::ios_fex_mono_arm. */
++#ifdef FEX_IOS_HOST
++extern "C" void ios_fex_mono_arm(uint64_t Base, uint64_t End);
++#endif
++
+ namespace FEX::Windows {
+ InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads)
+   : CTX {CTX}
+@@ -219,6 +226,15 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+       MonoBackpatcherDetectionPending = true;
+       MonoBase = Address;
+       MonoEnd = LastExecutableSectionEnd;
++#ifdef FEX_IOS_HOST
++      /* ml648: arm the native bridge HERE, not at FEX startup — Mono is not
++       * loaded then. The Mach handler declines to capture while mono_base is 0,
++       * so the ordering is enforced by construction rather than by discipline.
++       * This is the last of the three one-time liveness lines; without it a run
++       * with no activations cannot be told apart from one where the bridge was
++       * never wired up at all. */
++      ios_fex_mono_arm(MonoBase, MonoEnd);
++#endif
+     }
+   }
+ 
+@@ -418,7 +434,14 @@ void InvalidationTracker::DetectMonoBackpatcherBlock(FEXCore::Core::InternalThre
+ 
+   uint64_t BlockEntry = CTX.GetGuestBlockEntry(Thread);
+   LogMan::Msg::DFmt("Detected mono backpatcher at: {:X}", BlockEntry);
++#ifndef FEX_IOS_HOST
++  /* ml648: SKIPPED ON iOS. DisableSMCDetection() reprotects every RWX interval
++   * as WRITABLE, and iOS will never grant write on the guest VA — that is the
++   * entire reason the RW alias exists. On iOS it can only churn protections
++   * that cannot change. The win here comes purely from MarkMonoBackpatcherBlock
++   * plus the alias-directed MonoBackpatcherWrite. */
+   DisableSMCDetection();
++#endif
+   {
+     std::scoped_lock CodeLock(CTX.GetCodeInvalidationMutex());
+     CTX.MarkMonoBackpatcherBlock(BlockEntry);

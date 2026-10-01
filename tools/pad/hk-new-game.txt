@@ -1,0 +1,78 @@
+# Hollow Knight: from the main menu to the Knight in King's Pass, on profile 1.
+# On the phone profile 1 holds a game in progress (2026-09-27), so this lands in
+# that save; a new game (and its calibration screens and opening cinematic)
+# needs an empty slot, and the phone's slots change as agents play them: take a
+# screenshot of the profile screen before pressing on. Push this once the main
+# menu is up, about 18 s after the first frame (pp perf --pad
+# first-frame+25:hk-new-game). A new game first shows the screen-scale and then
+# the brightness calibration, each with the cursor on its slider: DOWN, A takes
+# Done and keeps the value. Where they do not appear, DOWN looks down and A
+# jumps. The opening cinematic plays (Media Foundation through winegstreamer);
+# the A presses every 1.5 s skip it. On 2026-09-26 the Knight had control only
+# about 40 s after the calibration, so the presses run for 39 s. A is jump in
+# play, so the extra presses are harmless; START would open the pause menu.
+# hk-walk follows (push it when this script ends).
+150 A        # Start Game
+3000 -
+150 A        # profile 1
+3000 -
+120 DOWN     # screen scale: Done
+600 -
+150 A
+2500 -
+120 DOWN     # brightness: Done
+600 -
+150 A
+4000 -       # the prologue
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -

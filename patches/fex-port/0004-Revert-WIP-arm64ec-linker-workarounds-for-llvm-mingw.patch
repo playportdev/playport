@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Apr 2026 01:55:18 +0800
+Subject: [PATCH] =?UTF-8?q?Revert=20"[WIP]=20arm64ec:=20linker=20workaroun?=
+ =?UTF-8?q?ds=20for=20llvm-mingw=2022.1.4=20=E2=80=94=20INCOMPLETE"?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This reverts commit be7fd64f0c53876c662ca82f489ea9611037fb23.
+
+Madeira-commit: 344cc9c87c0bc167114e6e71207ecd87531400fb
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/CMakeLists.txt | 18 +------------
+ Source/Windows/ARM64EC/IOSStubs.S     | 38 ---------------------------
+ 2 files changed, 1 insertion(+), 55 deletions(-)
+ delete mode 100644 Source/Windows/ARM64EC/IOSStubs.S
+
+diff --git a/Source/Windows/ARM64EC/CMakeLists.txt b/Source/Windows/ARM64EC/CMakeLists.txt
+index 27a143b..0c9a57a 100644
+--- a/Source/Windows/ARM64EC/CMakeLists.txt
++++ b/Source/Windows/ARM64EC/CMakeLists.txt
+@@ -1,7 +1,6 @@
+ add_library(arm64ecfex SHARED
+   Module.cpp
+   Module.S
+-  IOSStubs.S
+   libarm64ecfex.def
+   $<TARGET_OBJECTS:FEXCore_object>)
+ 
+@@ -20,23 +19,8 @@ target_link_libraries(arm64ecfex PRIVATE
+   CommonWindowsRuntime
+   ntdll_ex)
+ 
+-# Link order: libc++ provides STL, libc++abi provides exception personality
+-# (__gxx_personality_seh0). Both need --whole-archive on llvm-mingw arm64ec
+-# because EC-mangled symbols are weak/lazy and don't get pulled by default
+-# resolution. But linking BOTH whole-archive duplicates std::bad_alloc vtables
+-# etc — they're defined in both archives. Workaround: --whole-archive libc++
+-# only, then explicit-load libc++abi's personality function via a forced
+-# extern reference in target_link_options.
+-target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs
+-  -Wl,--whole-archive -lc++ -Wl,--no-whole-archive
+-  -Wl,--whole-archive -lc++abi -Wl,--no-whole-archive
+-  -lunwind -lm -lmsvcrt -lkernel32 -lucrt)
++target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
+ target_link_libraries(arm64ecfex PRIVATE ${LIBGCC_PATH})
+-
+-# llvm-mingw arm64ec link issues: btowc/wctob/access are POSIX-extension
+-# functions not in our restricted ucrt subset; __gxx_personality_seh0 is the
+-# C++ exception personality. Stubs in IOSStubs.S satisfy the linker without
+-# pulling in heavier stdlib chains. FEX doesn't actually throw or call these.
+ install(TARGETS arm64ecfex RUNTIME
+   DESTINATION ${CMAKE_INSTALL_LIBDIR}
+   COMPONENT Runtime)
+diff --git a/Source/Windows/ARM64EC/IOSStubs.S b/Source/Windows/ARM64EC/IOSStubs.S
+deleted file mode 100644
+index 450d834..0000000
+--- a/Source/Windows/ARM64EC/IOSStubs.S
++++ /dev/null
+@@ -1,38 +0,0 @@
+-// Stubs for symbols missing in llvm-mingw's arm64ec runtime when building
+-// libarm64ecfex.dll for iOS hosting. These are referenced by C++ EH unwind
+-// tables and POSIX-extension wrappers, but FEX doesn't actually throw or
+-// call them — they just need to satisfy the linker.
+-
+-#ifdef FEX_IOS_HOST
+-.text
+-
+-// libc++abi defines `T #__gxx_personality_seh0` (EC-mangled). The linker
+-// references the plain non-EC form too — provide a non-EC alias here.
+-.global __gxx_personality_seh0
+-__gxx_personality_seh0:
+-  mov w0, #0
+-  ret
+-
+-.global "#access"
+-"#access":
+-.global access
+-access:
+-  // POSIX access() — return -1 (failure). Not used by FEX hot paths.
+-  mov w0, #-1
+-  ret
+-
+-.global "#btowc"
+-"#btowc":
+-.global btowc
+-btowc:
+-  // ANSI char-to-wchar promote. Trivial mapping for ASCII.
+-  ret
+-
+-.global "#wctob"
+-"#wctob":
+-.global wctob
+-wctob:
+-  // ANSI wchar-to-char demote. Trivial mapping for ASCII.
+-  ret
+-
+-#endif

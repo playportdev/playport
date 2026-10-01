@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 15:49:38 +0200
+Subject: [PATCH 09/10] ARM64EC: log the FEX host band per thread on iOS
+
+Every emulator thread keeps host state in the FEX host band: its rpmalloc
+heap's spans, a call-return stack of 16MB and two guard pages, and its L1
+lookup cache (the L2 cache and its 8GB VirtualMemSize table are off on
+iOS, so they take nothing). A title with enough threads filled the band.
+ThreadInit now logs what this thread's start mapped through rpmalloc and
+the call-return stack's size, and ThreadInit and ThreadTerm both log the
+live threads, what rpmalloc and the call-return stacks hold, and the spans
+rpmalloc mapped per page type and its huge blocks, as `[band]` lines; an
+image mapping logs the same whenever rpmalloc grew by 256MB since the last
+such line, which places the growth between thread starts. ntdll's
+`[band-map]` lines give the band's map. Nothing the band holds changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-28-fex-band.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 52 +++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 41aab2d..c9fd693 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1540,6 +1540,42 @@ extern "C" void NotifyImageMap(void* Address) {
+   }
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* Playport: the FEX host band per thread. rpmalloc counts what its heaps map
++ * in the band (every heap maps its own 16MB span per page type it uses); a
++ * thread's call-return stack and L1 lookup cache are fixed sizes. ThreadInit
++ * logs what this thread's start took and what the live threads hold, and
++ * ThreadTerm what is left; ntdll's `[band-map]` lines give the band's map. */
++extern "C" size_t ios_rpm_band_bytes;
++extern "C" size_t ios_rpm_band_maps;
++extern "C" size_t ios_rpm_span_maps[3];
++extern "C" size_t ios_rpm_huge_maps;
++extern "C" size_t ios_rpm_huge_bytes;
++extern "C" size_t ios_rpm_heaps_new;
++
++static void IosLogBand(const char* What, uint64_t TID, size_t RpmBefore, size_t MapsBefore, size_t Live) {
++  const size_t Rpm = __atomic_load_n(&ios_rpm_band_bytes, __ATOMIC_RELAXED);
++  const size_t Maps = __atomic_load_n(&ios_rpm_band_maps, __ATOMIC_RELAXED);
++  constexpr size_t CallRet = FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE;
++  const size_t Small = __atomic_load_n(&ios_rpm_span_maps[0], __ATOMIC_RELAXED);
++  const size_t Medium = __atomic_load_n(&ios_rpm_span_maps[1], __ATOMIC_RELAXED);
++  const size_t Large = __atomic_load_n(&ios_rpm_span_maps[2], __ATOMIC_RELAXED);
++  const size_t Huge = __atomic_load_n(&ios_rpm_huge_maps, __ATOMIC_RELAXED);
++  const size_t HugeBytes = __atomic_load_n(&ios_rpm_huge_bytes, __ATOMIC_RELAXED);
++  const size_t Heaps = __atomic_load_n(&ios_rpm_heaps_new, __ATOMIC_RELAXED);
++  if (RpmBefore != SIZE_MAX) {
++    LogMan::Msg::EFmt("[band] {}{:#x}: rpmalloc {:+}MB in {:+} maps, callret {}KB | live threads={} "
++                      "rpmalloc={}MB in {} maps callret={}MB | heaps made={} spans mapped small={} medium={} large={} huge={} ({}MB)",
++                      What, TID, ((int64_t)Rpm - (int64_t)RpmBefore) >> 20, (int64_t)Maps - (int64_t)MapsBefore,
++                      CallRet >> 10, Live, Rpm >> 20, Maps, (Live * CallRet) >> 20, Heaps, Small, Medium, Large, Huge, HugeBytes >> 20);
++  } else {
++    LogMan::Msg::EFmt("[band] {}{:#x} | live threads={} rpmalloc={}MB in {} maps callret={}MB | heaps made={} spans mapped small={} "
++                      "medium={} large={} huge={} ({}MB)",
++                      What, TID, Live, Rpm >> 20, Maps, (Live * CallRet) >> 20, Heaps, Small, Medium, Large, Huge, HugeBytes >> 20);
++  }
++}
++#endif
++
+ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
+   /* iOS-Madeira ml183: do NOT require GetCPUArea().ThreadState() here.
+    *
+@@ -1567,6 +1603,15 @@ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Si
+   {
+     std::scoped_lock Lock(ThreadCreationMutex);
+     HandleImageMap(reinterpret_cast<uint64_t>(Address));
++#ifdef FEX_IOS_HOST
++    /* Playport: the band between thread starts, as images load. */
++    static size_t IosBandLogged;
++    const size_t Rpm = __atomic_load_n(&ios_rpm_band_bytes, __ATOMIC_RELAXED);
++    if (Rpm >= IosBandLogged + (256ULL << 20)) {
++      IosBandLogged = Rpm;
++      IosLogBand("image at ", reinterpret_cast<uint64_t>(Address), SIZE_MAX, 0, Threads.size());
++    }
++#endif
+   }
+ 
+ 
+@@ -1837,6 +1882,7 @@ static void IosTiLog(const char* msg) {
+ }
+ #endif
+ 
++
+ NTSTATUS ThreadInit() {
+ #ifdef FEX_IOS_HOST
+   /* iOS-Madeira diagnostic: log entry to thread-init so we can confirm Wine
+@@ -1858,6 +1904,8 @@ NTSTATUS ThreadInit() {
+   std::scoped_lock Lock(ThreadCreationMutex);
+ #ifdef FEX_IOS_HOST
+   IosTiLog("[FEX-iOS] TI:lock\n");
++  const size_t IosRpmBefore = __atomic_load_n(&ios_rpm_band_bytes, __ATOMIC_RELAXED);
++  const size_t IosMapsBefore = __atomic_load_n(&ios_rpm_band_maps, __ATOMIC_RELAXED);
+ #endif
+   FEX::Windows::InitCRTThread();
+ #ifdef FEX_IOS_HOST
+@@ -2218,6 +2266,7 @@ NTSTATUS ThreadInit() {
+   CPUArea.Area->SuspendDoorbell = reinterpret_cast<ULONG*>(&Thread->CurrentFrame->SuspendDoorbell);
+ #ifdef FEX_IOS_HOST
+   IosLogCPUArea("ThreadInit-done");
++  IosLogBand("ThreadInit tid=", GetCurrentThreadId(), IosRpmBefore, IosMapsBefore, Threads.size());
+ #endif
+ #ifdef FEX_IOS_HOST
+   {
+@@ -2305,6 +2354,9 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
+     if (StatAllocHandler) {
+       StatAllocHandler->DeallocateSlot(CPUArea.ThreadState()->ThreadStats);
+     }
++#ifdef FEX_IOS_HOST
++    IosLogBand("ThreadTerm tid=", ThreadTID, SIZE_MAX, 0, Threads.size());
++#endif
+   }
+   auto ThreadState = CPUArea.ThreadState();
+ 

@@ -1,0 +1,1 @@
+E 24 [callret] ml610 resets=23552 bytes=376832MB per_reset=16384KB site=core by_site core=23512 cpubackend=40 jit-rollover=0

@@ -1,0 +1,2190 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 25 Aug 2026 23:03:58 +0900
+Subject: [PATCH] Rename the project from Mythic to Madeira
+
+Identifiers, environment variables, diagnostic labels and comments referring to
+the host project follow its new name. No behavioural change.
+
+Madeira-commit: ac555dd81fa84f86d1927476e152451005e78f49
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ CodeEmitter/CodeEmitter/Buffer.h              |   2 +-
+ FEXCore/Source/Interface/Config/Config.cpp    |   8 +-
+ .../Source/Interface/Config/Config.json.in    |   2 +-
+ FEXCore/Source/Interface/Core/CPUBackend.cpp  |   8 +-
+ FEXCore/Source/Interface/Core/CPUBackend.h    |   2 +-
+ FEXCore/Source/Interface/Core/Core.cpp        | 184 +++++++++---------
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  |  20 +-
+ FEXCore/Source/Interface/Core/Frontend.cpp    |  12 +-
+ .../Source/Interface/Core/JIT/BranchOps.cpp   |  20 +-
+ FEXCore/Source/Interface/Core/JIT/JIT.cpp     |  30 +--
+ FEXCore/Source/Interface/Core/LookupCache.cpp |   6 +-
+ FEXCore/Source/Interface/Core/LookupCache.h   |   8 +-
+ .../Core/SharedCodeBufferManager.cpp          |   4 +-
+ .../Interface/Core/SharedCodeBufferManager.h  |   2 +-
+ FEXCore/Source/Interface/IR/IRTopologyCheck.h |   2 +-
+ FEXCore/Source/Interface/IR/PassManager.cpp   |  34 ++--
+ .../RedundantFlagCalculationElimination.cpp   |  10 +-
+ .../IR/Passes/RegisterAllocationPass.cpp      |   2 +-
+ FEXCore/Source/Utils/AllocWatch.cpp           |   2 +-
+ FEXCore/Source/Utils/AllocWatch.h             |   2 +-
+ FEXCore/Source/Utils/AllocatorHooks.cpp       |   2 +-
+ FEXCore/Source/Utils/ArchHelpers/Arm64.cpp    |   8 +-
+ FEXCore/Source/Utils/LogManager.cpp           |   4 +-
+ FEXCore/include/FEXCore/Core/CoreState.h      |   8 +-
+ .../FEXCore/Debug/InternalThreadState.h       |   4 +-
+ .../include/FEXCore/Utils/AllocatorHooks.h    |   8 +-
+ FEXCore/include/FEXCore/Utils/SpinWaitLock.h  |   2 +-
+ .../FEXCore/Utils/WritePriorityMutex.h        |  12 +-
+ Source/Common/HostFeatures.cpp                |   2 +-
+ Source/Windows/ARM64EC/IosJitAlias.cpp        |   2 +-
+ Source/Windows/ARM64EC/IosMonoBridge.h        |   2 +-
+ Source/Windows/ARM64EC/Module.cpp             |  58 +++---
+ Source/Windows/Common/CPUFeatures.cpp         |   2 +-
+ Source/Windows/Common/CallRetStack.h          |  12 +-
+ Source/Windows/Common/FEXUnixLib.cpp          |   4 +-
+ Source/Windows/Common/InvalidationTracker.cpp |  32 +--
+ Source/Windows/Common/Logging.cpp             |  12 +-
+ Source/Windows/Common/TSOHandlerConfig.h      |   2 +-
+ Source/Windows/Common/WinAPI/IO.cpp           |   4 +-
+ 39 files changed, 270 insertions(+), 270 deletions(-)
+
+diff --git a/CodeEmitter/CodeEmitter/Buffer.h b/CodeEmitter/CodeEmitter/Buffer.h
+index af8c9d3..dcb44e9 100644
+--- a/CodeEmitter/CodeEmitter/Buffer.h
++++ b/CodeEmitter/CodeEmitter/Buffer.h
+@@ -111,7 +111,7 @@ protected:
+   // Convert an RX (executable) address to the RW (writable) address for memory writes.
+   // On non-Apple platforms, WriteOffset is 0 and this is identity.
+   //
+-  // iOS-Mythic 2026-05-19: ARM64EC PE builds (xtajit64.dll) target Windows
++  // iOS-Madeira 2026-05-19: ARM64EC PE builds (xtajit64.dll) target Windows
+   // so __APPLE__ is undefined, but they still need the dual-map offset
+   // because the JIT pool they write to is iOS-allocated dual-mapped memory.
+   // FEX_IOS_HOST is defined for those PE builds and switches in a global
+diff --git a/FEXCore/Source/Interface/Config/Config.cpp b/FEXCore/Source/Interface/Config/Config.cpp
+index c9eea2f..4f7eb4c 100644
+--- a/FEXCore/Source/Interface/Config/Config.cpp
++++ b/FEXCore/Source/Interface/Config/Config.cpp
+@@ -128,7 +128,7 @@ fextl::string GetApplicationConfig(const std::string_view Program, bool Global)
+   return fextl::fmt::format("{}{}.json", ConfigFile, Program);
+ }
+ 
+-/* iOS-Mythic: function-local-static so the map is constructed on first
++/* iOS-Madeira: function-local-static so the map is constructed on first
+  * access regardless of whether the C++ static-init chain ran. The
+  * arm64ec-w64-mingw32 build appears to skip global static ctors when
+  * the DLL's DllMain doesn't call _CRT_INIT, leading to a zero-initialized
+@@ -260,7 +260,7 @@ void MetaLayer::MergeConfigMap(const LayerOptions& Options) {
+   }
+ }
+ 
+-/* iOS-Mythic bisect tags. NtTerminateProcess + __declspec are ntdll/MS-only,
++/* iOS-Madeira bisect tags. NtTerminateProcess + __declspec are ntdll/MS-only,
+  * so they're available on the ARM64EC PE (llvm-mingw) build but not the native
+  * iOS-host build (Apple clang has no __declspec / no ntdll). No-op there. */
+ #if defined(_WIN32)
+@@ -272,7 +272,7 @@ extern "C" __declspec(dllimport) long __stdcall NtTerminateProcess(void *hProces
+ 
+ void Initialize() {
+   AddLayer(fextl::make_unique<MetaLayer>(FEXCore::Config::LayerType::LAYER_TOP));
+-  /* iOS-Mythic: avoid dynamic_cast — RTTI for cross-DLL types under
++  /* iOS-Madeira: avoid dynamic_cast — RTTI for cross-DLL types under
+    * arm64ec-w64-mingw32 returns NULL. We just inserted MetaLayer above
+    * so static_cast is safe. */
+   Meta = static_cast<MetaLayer*>(ConfigLayers.begin()->second.get());
+@@ -280,7 +280,7 @@ void Initialize() {
+   auto it = ConfigLayers.begin();
+   if (it == ConfigLayers.end()) INIT_TAG_EXIT(0x0013);
+   if (!it->second) INIT_TAG_EXIT(0x0014);
+-  /* iOS-Mythic: static_cast — see comment above. */
++  /* iOS-Madeira: static_cast — see comment above. */
+   Meta = static_cast<MetaLayer*>(it->second.get());
+   if (!Meta) INIT_TAG_EXIT(0x0015);
+   /* tag 0x1F — Initialize completed. To confirm we got here, uncomment: */
+diff --git a/FEXCore/Source/Interface/Config/Config.json.in b/FEXCore/Source/Interface/Config/Config.json.in
+index 60b1fc9..88d0bac 100644
+--- a/FEXCore/Source/Interface/Config/Config.json.in
++++ b/FEXCore/Source/Interface/Config/Config.json.in
+@@ -45,7 +45,7 @@
+       "HostFeatures": {
+         "Type": "strenum",
+         "_comment_ml538": [
+-          "iOS-Mythic ml538 REVERTED: AVX is EXONERATED for the render corruption.",
++          "iOS-Madeira ml538 REVERTED: AVX is EXONERATED for the render corruption.",
+           "With HostFeatures=disableavx (shipped, proven by the runtime marker) the",
+           "corruption was UNCHANGED - and the writer census CHANGED (clear 816->1140,",
+           "content painter 1320->684, the +0x58d937 writer vanished entirely). So",
+diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+index e81e792..7a38de8 100644
+--- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
++++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+@@ -308,7 +308,7 @@ namespace CPU {
+   CPUBackend::~CPUBackend() = default;
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml460 (#75): every C++ toucher of CurrentCodeBuffer /
++  /* iOS-Madeira ml460 (#75): every C++ toucher of CurrentCodeBuffer /
+    * SignalHandlerCodeBuffers holds this while the sweeper may run (see the
+    * header comment). Plain test-and-set spin — all critical sections are a
+    * few pointer ops. NOT recursive: RegisterForSignalHandler is only called
+@@ -348,7 +348,7 @@ namespace CPU {
+       // This means that we can not safely clear the code at this point in time
+       // Keep a reference to the old code buffer to delay deallocation
+ #ifdef FEX_IOS_HOST
+-      /* iOS-Mythic ml459 (#75): old code buffers are the pool's TAIL, and the
++      /* iOS-Madeira ml459 (#75): old code buffers are the pool's TAIL, and the
+        * ml458 run ended with 12 carves (5 of them 32MB) but only ONE freed —
+        * 214MB of a 896MB pool pinned while the head needed 1MB more. A buffer
+        * lives until every strong ref drops; this vector is the one ref that can
+@@ -388,7 +388,7 @@ namespace CPU {
+ 
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml460 (#75): remote-migrate a PARKED thread off a stale
++  /* iOS-Madeira ml460 (#75): remote-migrate a PARKED thread off a stale
+    * generation. Runs on the SWEEPER's thread; the caller has verified under
+    * the Dekker gate that the owner is outside emitted code (InSimulation==0)
+    * and cannot re-enter until the gate clears — so the owner cannot be inside
+@@ -433,7 +433,7 @@ namespace CPU {
+ #endif
+ 
+ #if defined(FEX_IOS_HOST) && defined(_WIN32)
+-  /* iOS-Mythic ml460 (#75): the pool-tail sweep. ml459 proved the 208MB tail
++  /* iOS-Madeira ml460 (#75): the pool-tail sweep. ml459 proved the 208MB tail
+    * is 13 live generations where steady state needs ~2 — each pinned by the
+    * CurrentCodeBuffer ref of threads parked in wine waits, which never run
+    * the compile-path self-migration. This sweep remote-migrates them.
+diff --git a/FEXCore/Source/Interface/Core/CPUBackend.h b/FEXCore/Source/Interface/Core/CPUBackend.h
+index ed538f0..62db301 100644
+--- a/FEXCore/Source/Interface/Core/CPUBackend.h
++++ b/FEXCore/Source/Interface/Core/CPUBackend.h
+@@ -148,7 +148,7 @@ namespace CPU {
+     fextl::shared_ptr<CodeBuffer> CheckCodeBufferUpdate();
+ 
+ #ifdef FEX_IOS_HOST
+-    /* iOS-Mythic ml460 (#75 pool exhaustion): CurrentCodeBuffer pins a whole
++    /* iOS-Madeira ml460 (#75 pool exhaustion): CurrentCodeBuffer pins a whole
+      * generation for as long as this thread holds the ref, and the ONLY
+      * release sites are compile-path self-migrations — so a thread parked in
+      * a wine wait pins its generation for the entire park (ml459 census: 13
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 91a441b..0176bcf 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -63,7 +63,7 @@ $end_info$
+ #include <chrono>
+ #include <cstring>
+ 
+-/* iOS-Mythic ml622: mirror of rpmalloc's POD snapshot (rpmalloc.c). Declared here
++/* iOS-Madeira ml622: mirror of rpmalloc's POD snapshot (rpmalloc.c). Declared here
+  * rather than in a shared header because rpmalloc is C and vendored; keep the two
+  * definitions in sync — the drain below is the only consumer. */
+ extern "C" {
+@@ -95,36 +95,36 @@ int rpm_cas_snapshot_take(struct rpm_cas_snapshot* out);
+ #include <arm_acle.h>
+ #endif
+ 
+-/* iOS-Mythic HOTRIP telemetry — plain globals (no constructors/guard vars).
++/* iOS-Madeira HOTRIP telemetry — plain globals (no constructors/guard vars).
+  * 2026-05-14: per-thread callret tracking (GPT diagnosis: FMOD worker
+  * thread leaks callret entries; need to confirm WHICH thread leaks and
+  * separate game-thread vs render-thread vs FMOD-worker activity). 4 thread
+  * slots hashed by Frame pointer. */
+-static volatile uint64_t g_mythic_hot_count[12] = {0,0,0,0,0,0,0,0,0,0,0,0};
+-static volatile uint64_t g_mythic_max_alloc_size = 0;
+-static volatile uint64_t g_mythic_last_str = 0;
+-static volatile uint64_t g_mythic_last_vt = 0;
+-static volatile uint64_t g_mythic_last_vt2 = 0;
+-static volatile uint64_t g_mythic_callret_max = 0;
+-static volatile uint64_t g_mythic_callret_min = ~(uint64_t)0;
+-static volatile uint64_t g_mythic_callret_last = 0;
++static volatile uint64_t g_madeira_hot_count[12] = {0,0,0,0,0,0,0,0,0,0,0,0};
++static volatile uint64_t g_madeira_max_alloc_size = 0;
++static volatile uint64_t g_madeira_last_str = 0;
++static volatile uint64_t g_madeira_last_vt = 0;
++static volatile uint64_t g_madeira_last_vt2 = 0;
++static volatile uint64_t g_madeira_callret_max = 0;
++static volatile uint64_t g_madeira_callret_min = ~(uint64_t)0;
++static volatile uint64_t g_madeira_callret_last = 0;
+ 
+ /* Per-thread tracking (4 slots). Key = Frame ptr (unique per FEX thread).
+  * Records callret_sp range, block-dispatch count, and last guest RIP seen
+  * to localize WHICH thread is leaking callret entries. */
+-static volatile uint64_t g_mythic_thr_key[4] = {0,0,0,0};
+-static volatile uint64_t g_mythic_thr_crsp_min[4] = {~(uint64_t)0, ~(uint64_t)0, ~(uint64_t)0, ~(uint64_t)0};
+-static volatile uint64_t g_mythic_thr_crsp_max[4] = {0,0,0,0};
+-static volatile uint64_t g_mythic_thr_crsp_last[4] = {0,0,0,0};
+-static volatile uint64_t g_mythic_thr_count[4] = {0,0,0,0};
+-static volatile uint64_t g_mythic_thr_last_rip[4] = {0,0,0,0};
+-
+-/* iOS-Mythic 2026-05-18 low-noise CompileBlock instrumentation counters. */
++static volatile uint64_t g_madeira_thr_key[4] = {0,0,0,0};
++static volatile uint64_t g_madeira_thr_crsp_min[4] = {~(uint64_t)0, ~(uint64_t)0, ~(uint64_t)0, ~(uint64_t)0};
++static volatile uint64_t g_madeira_thr_crsp_max[4] = {0,0,0,0};
++static volatile uint64_t g_madeira_thr_crsp_last[4] = {0,0,0,0};
++static volatile uint64_t g_madeira_thr_count[4] = {0,0,0,0};
++static volatile uint64_t g_madeira_thr_last_rip[4] = {0,0,0,0};
++
++/* iOS-Madeira 2026-05-18 low-noise CompileBlock instrumentation counters. */
+ static volatile uint64_t g_cb_total = 0;
+ static volatile uint64_t g_cb_real_compiles = 0;
+ 
+ #if defined(FEX_IOS_HOST) && defined(_WIN32)
+-/* iOS-Mythic ml460 (#75): pool-tail sweeper, implemented by the ARM64EC
++/* iOS-Madeira ml460 (#75): pool-tail sweeper, implemented by the ARM64EC
+  * frontend (Module.cpp) which owns the thread registry. extern "C" so the
+  * cross-layer reference has no namespace in its linkage name. */
+ extern "C" void IosMaybeSweepCodeBuffers(FEXCore::Core::InternalThreadState* CallerThread);
+@@ -140,7 +140,7 @@ ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
+     Config.VirtualMemSize = 1ULL << 32;
+   }
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: shrink the per-thread LookupCache L2 page table from 128MB
++  /* iOS-Madeira: shrink the per-thread LookupCache L2 page table from 128MB
+    * (64GB VirtualMemSize) to 16MB (8GB). Every thread's LookupCache commits
+    * its full arena upfront on iOS (commit-on-fault doesn't work — see
+    * LookupCache.cpp), so ~264MB × ~19 game threads ≈ 5GB was killing the
+@@ -241,7 +241,7 @@ uint64_t ContextImpl::RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* T
+   return Frame->State.rip;
+ }
+ 
+-/* iOS-Mythic ml549: EXACT guest RIP from a host PC, callable from C.
++/* iOS-Madeira ml549: EXACT guest RIP from a host PC, callable from C.
+  *
+  * WHY: our fault probes (srcwatch, the bus/segv handlers) read the guest RIP out of
+  * CpuStateFrame+0x18, which FEX only syncs at BLOCK boundaries. That names the calling
+@@ -620,7 +620,7 @@ void ContextImpl::ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, boo
+   FEXCore::Core::ResetCallRetStack(Thread, "core");
+ }
+ 
+-/* iOS-Mythic ml610: THE ONLY place the callret predictor is reset.
++/* iOS-Madeira ml610: THE ONLY place the callret predictor is reset.
+  *
+  * ml609 clipped this to the [base+2MB, base+6MB) window on the theory that the
+  * rest of the 16MB was unreachable, so decommitting it was pure waste. Both
+@@ -796,22 +796,22 @@ bool ContextImpl::CheckIfBlockIsCacheable(FEXCore::Core::InternalThreadState& Th
+   return Thread.FrontendDecoder->CheckIfCacheable(Thread, reinterpret_cast<const uint8_t*>(GuestRIP), GuestRIP, MaxInst);
+ }
+ 
+-/* iOS-Mythic ml623: targeted IR capture (PassManager.cpp). FEX_MythicIRCapTarget is the
++/* iOS-Madeira ml623: targeted IR capture (PassManager.cpp). FEX_MadeiraIRCapTarget is the
+  * absolute guest address of the ONE instruction under investigation, published by the
+  * Windows-side InvalidationTracker at module load. The decode loop below marks the
+  * compile when the block CONTAINS that address -- containment, not entry RIP, because
+  * with multiblock a block routinely starts hundreds of bytes earlier. */
+-extern "C" uint64_t FEX_MythicIRCapTarget;
+-extern "C" void FEX_MythicIRCapMark(uint64_t GuestRIP);
+-extern "C" void FEX_MythicIRCapClear();
+-extern "C" uint64_t FEX_MythicIRCapCurrentRIP();
++extern "C" uint64_t FEX_MadeiraIRCapTarget;
++extern "C" void FEX_MadeiraIRCapMark(uint64_t GuestRIP);
++extern "C" void FEX_MadeiraIRCapClear();
++extern "C" uint64_t FEX_MadeiraIRCapCurrentRIP();
+ 
+ ContextImpl::GenerateIRResult
+ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, bool ExtendedDebugInfo, uint64_t MaxInst) {
+   FEXCORE_PROFILE_SCOPED("GenerateIR");
+-  FEX_MythicIRCapClear(); // ml623: never inherit a previous compile's mark
++  FEX_MadeiraIRCapClear(); // ml623: never inherit a previous compile's mark
+ 
+-  /* iOS-Mythic ml250: Thread->OpDispatcher has been observed NULL here, faulting as
++  /* iOS-Madeira ml250: Thread->OpDispatcher has been observed NULL here, faulting as
+    * `str xzr,[x0,#0x378]` with x0=0 inside IREmitter::ResetWorkingList and killing the
+    * process (unhandled c0000005, ml247 via chromehtml.dll -> tier0_s64).
+    *
+@@ -924,8 +924,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+         uint64_t InstAddress = Block.Entry + BlockInstructionsLength;
+ 
+         // ml623: does THIS block contain the instruction under investigation?
+-        if (FEX_MythicIRCapTarget && InstAddress == FEX_MythicIRCapTarget) {
+-          FEX_MythicIRCapMark(GuestRIP);
++        if (FEX_MadeiraIRCapTarget && InstAddress == FEX_MadeiraIRCapTarget) {
++          FEX_MadeiraIRCapMark(GuestRIP);
+         }
+         const FEXCore::X86Tables::X86InstInfo* TableInfo {nullptr};
+         const FEXCore::X86Tables::DecodedInst* DecodedInfo {nullptr};
+@@ -1062,14 +1062,14 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+             } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::UNIMPLEMENTED_INST) {
+               Thread->OpDispatcher->UnimplementedOp(DecodedInfo);
+             } else {
+-              /* iOS-Mythic ml196: name the decode failure. The pre-existing
++              /* iOS-Madeira ml196: name the decode failure. The pre-existing
+                * "Invalid or Unknown instruction" message above cannot fire for this path
+                * because DecodeInstruction sets TableInfo = nullptr on exactly these
+                * errors. This branch (NOEXEC_INST / PARTIAL_DECODE_INST) is what raises
+                * FAULT_SIGSEGV -> GuestSignal_SIGSEGV -> the deliberate read of address 0
+                * that has been killing webhelper threads. Log which address failed and
+                * which status, so the guest RIP is stated rather than inferred. */
+-              /* iOS-Mythic ml486 (#89): this log was UNBOUNDED. ml485's run wrote
++              /* iOS-Madeira ml486 (#89): this log was UNBOUNDED. ml485's run wrote
+                * 1,117,783 copies of the SAME line for ONE address (0x7ED30A0080,
+                * inside the FEX host band) — a 148MB log, 2.26M lines, from line
+                * 16,648 to the end. NoExecOp raises SIGSEGV, the guest resumes at
+@@ -1170,7 +1170,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+ }
+ 
+ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst) {
+-  // [iOS-Mythic] verbose CompileCode logs suppressed — flooding log faster than splash
++  // [iOS-Madeira] verbose CompileCode logs suppressed — flooding log faster than splash
+ 
+   if (SourcecodeResolver && Config.GDBSymbols()) {
+     auto MappedSection = SyscallHandler->LookupExecutableFileSection(Thread, GuestRIP);
+@@ -1187,7 +1187,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+     Thread->FrontendDecoder->ValidateDisownedOrFree();
+     Thread->OpDispatcher->ValidateDisownedOrFree();
+     // OpDispatcher IR already released in this case.
+-    FEX_MythicIRCapClear(); // ml623
++    FEX_MadeiraIRCapClear(); // ml623
+     return {{}, nullptr, 0, 0, false};
+   }
+ 
+@@ -1201,7 +1201,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+   if (MaxInst != 1 && !FEXCore::Utils::WritePriorityMutex::IosUnpublishedCompileActive()) {
+     if (auto Block = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
+       // Raced to compile, release the OpDispatcher IR.
+-      FEX_MythicIRCapClear(); // ml623
++      FEX_MadeiraIRCapClear(); // ml623
+       Thread->OpDispatcher->DelayedDisownBuffer();
+       Thread->FrontendDecoder->ValidateDisownedOrFree();
+       Thread->OpDispatcher->ValidateDisownedOrFree();
+@@ -1225,8 +1225,8 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+    * arm that separates "the emitter dropped it" from "SMC/cache/alias lifetime rewrote
+    * it later": the hash printed here is of the bytes AT COMPILE TIME, so a runtime
+    * disassembly that disagrees convicts something after codegen. */
+-  if (const uint64_t CapRIP = FEX_MythicIRCapCurrentRIP()) {
+-    const uint64_t Target = FEX_MythicIRCapTarget;
++  if (const uint64_t CapRIP = FEX_MadeiraIRCapCurrentRIP()) {
++    const uint64_t Target = FEX_MadeiraIRCapTarget;
+     if (Target >= CapRIP && CompiledCode.BlockBegin && DebugData) {
+       const uint64_t WantOffset = Target - CapRIP;
+       const auto& GO = DebugData->GuestOpcodes;
+@@ -1268,7 +1268,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+         }
+       }
+     }
+-    FEX_MythicIRCapClear();
++    FEX_MadeiraIRCapClear();
+   }
+ 
+   // Release the IR
+@@ -1286,13 +1286,13 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+ }
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic ml306 (task #51): CallbackPtr entry-state capture buffer, defined in Dispatcher.cpp
++/* iOS-Madeira ml306 (task #51): CallbackPtr entry-state capture buffer, defined in Dispatcher.cpp
+  * and written by emitted code at CallbackPtr entry. Read by the [cb-entry] reporter below. */
+ extern "C" uint64_t IosCbEntryLog[8];
+-/* iOS-Mythic ml315 (#52): alias-table walk from IosJitAlias.cpp (same DLL link). Maps a
++/* iOS-Madeira ml315 (#52): alias-table walk from IosJitAlias.cpp (same DLL link). Maps a
+  * module-pool-copy address back to its PE VA; returns the input unchanged on no match. */
+ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);
+-/* iOS-Mythic ml316: ExitToX64's FFS-bypass counters, defined in Module.cpp and written by
++/* iOS-Madeira ml316: ExitToX64's FFS-bypass counters, defined in Module.cpp and written by
+  * the bypass asm in Module.S. Reported below the same way as [cb-entry]. */
+ extern "C" uint64_t IosFfsBypassLog[4];
+ #endif
+@@ -1429,7 +1429,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   }
+ #endif
+ 
+-  /* iOS-Mythic ml304 (task #51): REPORT CallbackPtr ENTRY ON ITS OWN, not via the bogus-RIP path.
++  /* iOS-Madeira ml304 (task #51): REPORT CallbackPtr ENTRY ON ITS OWN, not via the bogus-RIP path.
+    *
+    * ml302 proved the JITCallback prologue writes the bad State.rip, and ml303 added an LR witness --
+    * but gated the report on a later bogus-RIP hit, which only occurs in roughly half of runs. That
+@@ -1449,7 +1449,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+    * entry happened). Key on the entry COUNTER in the static capture buffer instead, and print the
+    * full captured entry state; x16/x17 are the interesting ones since a `br` through an IP register
+    * is the most plausible way to arrive with LR=0. */
+-  /* iOS-Mythic ml316: report ExitToX64 FFS bypasses (native short-circuit of an EC target
++  /* iOS-Madeira ml316: report ExitToX64 FFS bypasses (native short-circuit of an EC target
+    * reached via its x64 fast-forward sequence -- preserves the x4/x5 varargs contract that
+    * the emulation round trip destroys; see Module.S). Same change-detection pattern as
+    * [cb-entry] below: CompileBlock runs often enough to notice promptly. */
+@@ -1480,7 +1480,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     }
+   }
+ 
+-  /* iOS-Mythic: refuse to compile obviously-invalid guest RIPs. After a
++  /* iOS-Madeira: refuse to compile obviously-invalid guest RIPs. After a
+    * NULL-vtable virtual call (`call [rax+8]` with rax=0), control flow
+    * lands at RIP=0x8, which then loops compiling thousands of garbage
+    * blocks before SEH unwinds. Returning 0 here raises C0000005 to the
+@@ -1491,7 +1491,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   }
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml315 (#52 root cause, ml314): a guest RIP inside a module's JIT-POOL COPY
++  /* iOS-Madeira ml315 (#52 root cause, ml314): a guest RIP inside a module's JIT-POOL COPY
+    * must be reverse-translated to its PE VA and re-classified -- NEVER compiled.
+    *
+    * The EcCodeBitMap is populated per-module at its PE-space mapping (wine's
+@@ -1532,7 +1532,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   }
+ #endif
+ 
+-  /* iOS-Mythic ml197: NAME THE PRODUCER OF A HOST-ADDRESS "GUEST RIP".
++  /* iOS-Madeira ml197: NAME THE PRODUCER OF A HOST-ADDRESS "GUEST RIP".
+    *
+    * [iOS-noexec] showed FEX being asked to decode x86 at addresses that are not guest
+    * code at all:
+@@ -1551,7 +1551,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+    *
+    * Log the host return address (which lands in the dispatcher stub that supplied the
+    * RIP) plus State.rip, so the PRODUCER is named instead of the consumer. */
+-  /* iOS-Mythic ml296: ALSO CATCH HOST-PC-IN-GUEST-RIP INSIDE FEX'S OWN CODE BUFFER.
++  /* iOS-Madeira ml296: ALSO CATCH HOST-PC-IN-GUEST-RIP INSIDE FEX'S OWN CODE BUFFER.
+    *
+    * ml292/294/295 showed a SECOND leak, distinct from the 0x7c-0x7f host-heap one above and now
+    * the DOMINANT killer (3 of the last 4 runs, and it fires EARLIER -- ~24.6k calls vs ~36.4k --
+@@ -1571,7 +1571,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+    * unambiguously a host-PC leak with no possibility of a guest-image false positive. */
+   const bool RIPInFEXCodeBuffer = IsAddressInCodeBuffer(Thread, GuestRIP);
+ 
+-  /* iOS-Mythic ml300 (task #52): ALSO catch pool MODULE-COPY addresses, not just FEX's code buffer.
++  /* iOS-Madeira ml300 (task #52): ALSO catch pool MODULE-COPY addresses, not just FEX's code buffer.
+    *
+    * ml299 hit a third variant of the same leak and the gate missed all 3,422 occurrences of it:
+    *   [fault_rip] cnt=3422 rip=0x13b2b888c
+@@ -1612,7 +1612,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+                         GuestRIP, Frame ? Frame->State.rip : 0, __builtin_return_address(0),
+                         Frame ? Frame->State.callret_sp : 0);
+ 
+-      /* iOS-Mythic ml295 (task #51): IS THE BAD RIP A GUEST VALUE OR A FEX-SYNTHESISED ONE?
++      /* iOS-Madeira ml295 (task #51): IS THE BAD RIP A GUEST VALUE OR A FEX-SYNTHESISED ONE?
+        *
+        * ml294 established, offline, that the guest CANNOT have computed this address. At fault
+        * time the guest is inside chrome_elf.dll's memset (r10 = exact image base, r11 = exact
+@@ -1729,7 +1729,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+         }
+       }
+ 
+-      /* iOS-Mythic ml292: NAME THE GUEST CALLER of the bogus RIP.
++      /* iOS-Madeira ml292: NAME THE GUEST CALLER of the bogus RIP.
+        *
+        * Offline analysis of nine runs showed every bogus RIP has the form
+        *   <steered 512MB PA arena base> + {0xd0080, 0xe0080, 0xf0080}
+@@ -1774,7 +1774,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     }
+   }
+ 
+-  /* iOS-Mythic 2026-05-18: CALLRET_SP bounds-validation + RESET.
++  /* iOS-Madeira 2026-05-18: CALLRET_SP bounds-validation + RESET.
+    *
+    * Initial diagnostic showed callret_sp going 0x10..0x70 BELOW
+    * Thread->CallRetStackBase — underflow of the FEX prediction stack into
+@@ -1831,7 +1831,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     }
+   }
+ 
+-  /* iOS-Mythic 2026-05-15: JIT-pool RIP detector — LOG-ONLY.
++  /* iOS-Madeira 2026-05-15: JIT-pool RIP detector — LOG-ONLY.
+    *
+    * Earlier attempt to "recover" by setting State.rip = callret[0].pc and
+    * compiling that as guest x86 produced a livelock: the recovered code
+@@ -1877,7 +1877,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     }
+   }
+ 
+-  /* iOS-Mythic 2026-05-18 low-noise summary. Replaces per-call log (which
++  /* iOS-Madeira 2026-05-18 low-noise summary. Replaces per-call log (which
+    * was producing ~180K lines/run for hot RIP 0x140028d46 alone, each
+    * amplified ~6× by Wine's file trace). Counters: g_cb_total bumped
+    * every CompileBlock call; g_cb_real_compiles bumped after cache miss
+@@ -1899,7 +1899,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     if ((total - g_cb_last_summary_total) >= 16384) {
+       g_cb_last_summary_total = total;
+       uint64_t reals = g_cb_real_compiles;
+-      /* iOS-Mythic 2026-07-03 perf hunt: also print the JIT-visible L1
++      /* iOS-Madeira 2026-07-03 perf hunt: also print the JIT-visible L1
+        * lookup fields. The emitted dispatcher L1 probe reads
+        * State.L1Pointer/L1Mask; the measured ~15K CompileBlock calls per
+        * frame (~60us each = the whole frame time) with 99% cache hits mean
+@@ -1919,7 +1919,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+                         Frame ? Frame->State.L1Mask : 0,
+                         (T && T->LookupCache) ? T->LookupCache->GetL1Pointer() : 0);
+ 
+-      /* iOS-Mythic ml622: drain the rpmalloc remote-free CAS snapshot HERE —
++      /* iOS-Madeira ml622: drain the rpmalloc remote-free CAS snapshot HERE —
+        * outside rpmalloc, where formatting is safe. The allocator side only ever
+        * copies scalars into a POD and sets a flag; it must never format, because
+        * LogMan/fmt can allocate and re-enter the very allocator that is stuck
+@@ -1946,7 +1946,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     }
+   }
+ 
+-  /* iOS-Mythic 2026-05-14: per-thread callret tracking (runs for EVERY
++  /* iOS-Madeira 2026-05-14: per-thread callret tracking (runs for EVERY
+    * block dispatch, not just hot RIPs). 4-slot hash table keyed by Frame
+    * pointer (unique per FEX thread). Identifies WHICH thread is leaking
+    * callret entries vs healthy. */
+@@ -1954,20 +1954,20 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     uintptr_t fk = reinterpret_cast<uintptr_t>(Frame);
+     int slot = (int)((fk >> 6) & 3);
+     /* Claim the slot if empty, or use if matches; ignore on collision. */
+-    if (g_mythic_thr_key[slot] == 0 || g_mythic_thr_key[slot] == fk) {
+-      g_mythic_thr_key[slot] = fk;
++    if (g_madeira_thr_key[slot] == 0 || g_madeira_thr_key[slot] == fk) {
++      g_madeira_thr_key[slot] = fk;
+       uint64_t crsp = Frame->State.callret_sp;
+-      g_mythic_thr_crsp_last[slot] = crsp;
+-      g_mythic_thr_last_rip[slot] = GuestRIP;
+-      g_mythic_thr_count[slot]++;
++      g_madeira_thr_crsp_last[slot] = crsp;
++      g_madeira_thr_last_rip[slot] = GuestRIP;
++      g_madeira_thr_count[slot]++;
+       if (crsp != 0) {
+-        if (crsp < g_mythic_thr_crsp_min[slot]) g_mythic_thr_crsp_min[slot] = crsp;
+-        if (crsp > g_mythic_thr_crsp_max[slot]) g_mythic_thr_crsp_max[slot] = crsp;
++        if (crsp < g_madeira_thr_crsp_min[slot]) g_madeira_thr_crsp_min[slot] = crsp;
++        if (crsp > g_madeira_thr_crsp_max[slot]) g_madeira_thr_crsp_max[slot] = crsp;
+       }
+     }
+   }
+ 
+-  /* iOS-Mythic 2026-05-13 lightweight HOTRIP instrumentation (v3): use
++  /* iOS-Madeira 2026-05-13 lightweight HOTRIP instrumentation (v3): use
+    * plain volatile globals to avoid __cxa_guard_acquire on static-local
+    * initialization, which appears to trip a stack-cookie check on
+    * ARM64EC mingw. POD types only — no constructors. Atomicity isn't
+@@ -1997,17 +1997,17 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+         break;
+     }
+     if (idx >= 0) {
+-      uint64_t n = ++g_mythic_hot_count[idx];
++      uint64_t n = ++g_madeira_hot_count[idx];
+ 
+       /* Track callret_sp range — answers "leak (monotonic) vs boundary (oscillating)". */
+       uint64_t crsp = Frame->State.callret_sp;
+-      g_mythic_callret_last = crsp;
+-      if (crsp > g_mythic_callret_max) g_mythic_callret_max = crsp;
+-      if (crsp != 0 && crsp < g_mythic_callret_min) g_mythic_callret_min = crsp;
++      g_madeira_callret_last = crsp;
++      if (crsp > g_madeira_callret_max) g_madeira_callret_max = crsp;
++      if (crsp != 0 && crsp < g_madeira_callret_min) g_madeira_callret_min = crsp;
+ 
+       if (idx == 5 || idx == 6) {
+         uint64_t sz = Frame->State.gregs[FEXCore::X86State::REG_RDI];
+-        if (sz > g_mythic_max_alloc_size) g_mythic_max_alloc_size = sz;
++        if (sz > g_madeira_max_alloc_size) g_madeira_max_alloc_size = sz;
+       }
+ 
+       if (idx == 1) {
+@@ -2018,15 +2018,15 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+           if (rbx_0 >= 0x10000ull && rbx_0 < 0x800000000000ull) {
+             uint64_t vt = *reinterpret_cast<uint64_t*>(rbx_0);
+             if (vt >= 0x10000ull && vt < 0x800000000000ull) {
+-              g_mythic_last_vt = vt;
+-              g_mythic_last_vt2 = *reinterpret_cast<uint64_t*>(vt + 0x10);
++              g_madeira_last_vt = vt;
++              g_madeira_last_vt2 = *reinterpret_cast<uint64_t*>(vt + 0x10);
+             }
+           }
+         }
+         if (rcx >= 0x10000ull && rcx < 0x800000000000ull) {
+           uint64_t bytes = *reinterpret_cast<uint64_t*>(rcx);
+           uint8_t b0 = bytes & 0xff;
+-          if (b0 >= 0x20 && b0 <= 0x7e) g_mythic_last_str = bytes;
++          if (b0 >= 0x20 && b0 <= 0x7e) g_madeira_last_str = bytes;
+         }
+       }
+ 
+@@ -2042,29 +2042,29 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+                            "max_alloc=0x{:x} crsp[min..last..max]=0x{:x}..0x{:x}..0x{:x} "
+                            "last_vt=0x{:x} vt2=0x{:x} last_str=0x{:x}",
+                            elapsed,
+-                           g_mythic_hot_count[0], g_mythic_hot_count[1], g_mythic_hot_count[2],
+-                           g_mythic_hot_count[3], g_mythic_hot_count[4], g_mythic_hot_count[5],
+-                           g_mythic_hot_count[6],
+-                           g_mythic_hot_count[7], g_mythic_hot_count[8],
+-                           g_mythic_hot_count[9], g_mythic_hot_count[10], g_mythic_hot_count[11],
+-                           g_mythic_max_alloc_size,
+-                           g_mythic_callret_min, g_mythic_callret_last, g_mythic_callret_max,
+-                           g_mythic_last_vt, g_mythic_last_vt2, g_mythic_last_str);
++                           g_madeira_hot_count[0], g_madeira_hot_count[1], g_madeira_hot_count[2],
++                           g_madeira_hot_count[3], g_madeira_hot_count[4], g_madeira_hot_count[5],
++                           g_madeira_hot_count[6],
++                           g_madeira_hot_count[7], g_madeira_hot_count[8],
++                           g_madeira_hot_count[9], g_madeira_hot_count[10], g_madeira_hot_count[11],
++                           g_madeira_max_alloc_size,
++                           g_madeira_callret_min, g_madeira_callret_last, g_madeira_callret_max,
++                           g_madeira_last_vt, g_madeira_last_vt2, g_madeira_last_str);
+         /* Per-thread breakdown — dump all 4 slots so we can see which
+          * thread is leaking callret entries. Distance min→last is the
+          * "depth below high-water" — for the leaking thread this grows. */
+         for (int s = 0; s < 4; s++) {
+-          if (g_mythic_thr_key[s] == 0) continue;
+-          uint64_t mn = g_mythic_thr_crsp_min[s];
+-          uint64_t la = g_mythic_thr_crsp_last[s];
+-          uint64_t mx = g_mythic_thr_crsp_max[s];
++          if (g_madeira_thr_key[s] == 0) continue;
++          uint64_t mn = g_madeira_thr_crsp_min[s];
++          uint64_t la = g_madeira_thr_crsp_last[s];
++          uint64_t mx = g_madeira_thr_crsp_max[s];
+           uint64_t span = (la <= mx) ? (mx - la) : 0;
+           LogMan::Msg::EFmt("[HOT thr{} t={}s] frame=0x{:x} blocks={} "
+                              "crsp[min..last..max]=0x{:x}..0x{:x}..0x{:x} "
+                              "leak_depth=0x{:x} last_rip=0x{:x}",
+-                             s, elapsed, g_mythic_thr_key[s],
+-                             g_mythic_thr_count[s], mn, la, mx, span,
+-                             g_mythic_thr_last_rip[s]);
++                             s, elapsed, g_madeira_thr_key[s],
++                             g_madeira_thr_count[s], mn, la, mx, span,
++                             g_madeira_thr_last_rip[s]);
+         }
+       }
+     }
+@@ -2073,7 +2073,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   static_cast<ContextImpl*>(Thread->CTX)->SyscallHandler->PreCompile();
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml455 (#74 delivery-under-locks): if an interrupted frame on
++  /* iOS-Madeira ml455 (#74 delivery-under-locks): if an interrupted frame on
+    * THIS thread already holds emission locks, this call can only be guest SEH
+    * delivery re-entering the compiler asynchronously.  Re-taking the
+    * invalidation shared lock risks the write-priority recursive-read park,
+@@ -2110,7 +2110,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   }
+ #endif
+ 
+-  // iOS-Mythic: cache miss reached — count as true compile.
++  // iOS-Madeira: cache miss reached — count as true compile.
+   __sync_add_and_fetch(&g_cb_real_compiles, 1);
+ 
+   Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, MaxInst);
+@@ -2176,7 +2176,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   }
+ #endif
+   auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
+-  /* iOS-Mythic diag (Thumper desktop ILL 2026-07-06): three crashes branched
++  /* iOS-Madeira diag (Thumper desktop ILL 2026-07-06): three crashes branched
+    * to BlockTail+0x18 instead of a code entry — the published entry itself
+    * was wrong. Validate every entry against the block layout at publication
+    * time: an entry must land in [BlockBegin, Tail) and must not decode as
+@@ -2308,7 +2308,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   Thread->OpDispatcher->ValidateDisownedOrFree();
+ 
+ #if defined(FEX_IOS_HOST) && defined(_WIN32)
+-  /* iOS-Mythic ml460 (#75): deferred pool-tail sweep. A generation swap makes
++  /* iOS-Madeira ml460 (#75): deferred pool-tail sweep. A generation swap makes
+    * every parked thread's CurrentCodeBuffer ref a dead pin (ml459: 13 16MB
+    * generations live where steady state needs ~2). The frontend sweeper walks
+    * its thread registry and remote-migrates threads that are outside emitted
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index de98548..9625646 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -64,7 +64,7 @@ Dispatcher::~Dispatcher() {
+ }
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic ml306 (task #51): entry-state capture buffer for the CallbackPtr block.
++/* iOS-Madeira ml306 (task #51): entry-state capture buffer for the CallbackPtr block.
+  * Layout: [0]=x0 [1]=x1 [2]=x16 [3]=x17 [4]=x30 [5]=sp [6]=entry count [7]=spare.
+  * Written by emitted code at CallbackPtr entry via a materialised constant address, so the
+  * capture works even when x0 is not a valid CpuStateFrame. Read by CompileBlock's [cb-entry]
+@@ -103,7 +103,7 @@ void Dispatcher::EmitDispatcher() {
+   // Move our thread pointer to the correct register
+   // This is passed in to parameter 0 (x0)
+ #if defined(ARCHITECTURE_arm64ec) && defined(FEX_IOS_HOST)
+-  /* iOS-Mythic 2026-07-03: derive STATE from the thread's CPU area instead
++  /* iOS-Madeira 2026-07-03: derive STATE from the thread's CPU area instead
+    * of trusting the caller's x0. Observed on iOS 27: the exit-linker path
+    * reached DispatchPtr with x0=0 (x28 had been zeroed after an EC call and
+    * every spill store was silently absorbed by the Wine page-0 Mach
+@@ -154,7 +154,7 @@ void Dispatcher::EmitDispatcher() {
+   ldr(STATE, EC_ENTRY_CPUAREA_REG, CPU_AREA_EMULATOR_DATA_OFFSET);
+   str(EC_CALL_CHECKER_PC_REG, STATE_PTR(CpuStateFrame, State.rip));
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml299 (task #52): witness the value this path writes into State.rip.
++  /* iOS-Madeira ml299 (task #52): witness the value this path writes into State.rip.
+    * One extra store, per-thread, no branch -- see CoreState.h IosLastEnterECRip. If a later
+    * [iOS-bogusrip] reports the same value, EnterEC is PROVEN to be the writer; if it reports a
+    * different one, the leak is in BranchOps' L1-miss store or the JITCallback store instead and
+@@ -172,7 +172,7 @@ void Dispatcher::EmitDispatcher() {
+   FillSpecialRegs(TMP1, TMP2, {.SetFIZ = false, .SetPredRegs = true});
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: skip the opportunistic call-ret-stack return on iOS. The
++  /* iOS-Madeira: skip the opportunistic call-ret-stack return on iOS. The
+    * call-ret stack is zero-initialized via memset (CallRetStack.h iOS branch),
+    * so the LDP loads (0,0) and cbnz takes us to LoopTop anyway. But if the
+    * memset somehow misses (iOS demand-fault quirks on the previously-NOACCESS
+@@ -246,7 +246,7 @@ void Dispatcher::EmitDispatcher() {
+ 
+   ARMEmitter::ForwardLabel NoBlock;
+ 
+-  /* iOS-Mythic 2026-07-03 perf: probe the L1 cache FIRST at loop top.
++  /* iOS-Madeira 2026-07-03 perf: probe the L1 cache FIRST at loop top.
+    *
+    * Upstream's loop-top lookup goes straight to the L2 page table, which
+    * masks addresses to Config.VirtualMemSize (64GB). Wine on iOS maps PE
+@@ -569,7 +569,7 @@ void Dispatcher::EmitDispatcher() {
+ 
+     PauseReturnInstruction = GetCursorAddress<uint64_t>();
+ #ifdef FEX_IOS_HOST
+-    /* iOS-Mythic ml325 -- THE #51 ROOT CAUSE.
++    /* iOS-Madeira ml325 -- THE #51 ROOT CAUSE.
+      *
+      * Upstream ends this block with hlt(0) and relies on the signal handler to notice
+      * Pc == PauseReturnInstruction and resume via RestoreThreadState(TYPE_PAUSE)
+@@ -624,7 +624,7 @@ void Dispatcher::EmitDispatcher() {
+     PushCalleeSavedRegisters();
+ 
+ #ifdef FEX_IOS_HOST
+-    /* iOS-Mythic ml306 (task #51): full entry-state capture into a STATIC buffer.
++    /* iOS-Madeira ml306 (task #51): full entry-state capture into a STATIC buffer.
+      *
+      * ml302/ml306 proved this prologue's str(x1, State.rip) writes the recurring bad guest RIP
+      * (IosLastCallbackRip == GuestRIP, 2/2 host-heap-band hits), and the ml303 LR witness came
+@@ -684,14 +684,14 @@ void Dispatcher::EmitDispatcher() {
+     // Store RIP to the context state
+     str(ARMEmitter::XReg::x1, STATE_PTR(CpuStateFrame, State.rip));
+ #ifdef FEX_IOS_HOST
+-    /* iOS-Mythic ml302 (task #51): witness this store -- see CoreState.h IosLastCallbackRip. */
++    /* iOS-Madeira ml302 (task #51): witness this store -- see CoreState.h IosLastCallbackRip. */
+     str(ARMEmitter::XReg::x1, STATE_PTR(CpuStateFrame, IosLastCallbackRip));
+ #endif
+ 
+     // load static regs
+     FillStaticRegs();
+ #ifdef ARCHITECTURE_arm64ec
+-    // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2). The JITCallback
++    // iOS-Madeira 2026-05-18: inline bounds-guard (Tier-2). The JITCallback
+     // sentinel push uses REG_CALLRET_SP after FillStaticRegs, which on iOS
+     // ARM64EC reloads x17 from State.callret_sp. If State has drifted OOB
+     // (e.g. underflow during prior dispatch), reset before stp to avoid
+@@ -808,7 +808,7 @@ void Dispatcher::EmitDispatcher() {
+   End = GetCursorAddress<uint64_t>();
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml298 (task #52): PUBLISH THE DISPATCHER ADDRESS MAP.
++  /* iOS-Madeira ml298 (task #52): PUBLISH THE DISPATCHER ADDRESS MAP.
+    *
+    * ml297's [bogus-host] dump proved CompileBlock is reached with the guest RIP taken from x12,
+    * but there is no way to tell from a raw host address WHICH dispatcher entry ran -- and that is
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index b0084b0..f61085d 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -1510,7 +1510,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+ 
+       // Do a bit of pointer math to figure out where we are in code
+       InstStream = AdjustAddrForSpecialRegion(_InstStream, EntryPoint, RIPToDecode);
+-      /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Block RIP={:#x}, InstStream={}, entering inner loop", RIPToDecode, (void*)InstStream);
++      /* [iOS-Madeira] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Block RIP={:#x}, InstStream={}, entering inner loop", RIPToDecode, (void*)InstStream);
+     } else if (BlockResume != -1) {
+       BlockIt = BlockInfo.Blocks.begin() + BlockResume;
+       BlockResume = -1;
+@@ -1546,7 +1546,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+ 
+       LastFieldReadSize = 0;
+       if (TotalInstructions == 0) {
+-        /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: About to decode first instruction at {:#x}, byte={:#x}", OpAddress, InstStream[0]);
++        /* [iOS-Madeira] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: About to decode first instruction at {:#x}, byte={:#x}", OpAddress, InstStream[0]);
+       }
+       BlockIt->BlockStatus = DecodeInstruction(OpAddress);
+       if (HitBadRelocation) {
+@@ -1672,7 +1672,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+   }
+ 
+   BlockInfo.TotalInstructionCount = TotalInstructions;
+-  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Done! TotalInstructions={}, Blocks={}", TotalInstructions, BlockInfo.Blocks.size());
++  /* [iOS-Madeira] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Done! TotalInstructions={}, Blocks={}", TotalInstructions, BlockInfo.Blocks.size());
+ 
+   for (auto& Block : BlockInfo.Blocks) {
+     Block.IsEntryPoint = BlockInfo.EntryPoints.contains(Block.Entry);
+@@ -1704,9 +1704,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+   // Decode operating mode from thread's CS segment.
+   const auto CSSegment = Core::CPUState::GetSegmentFromIndex(Thread->CurrentFrame->State, Thread->CurrentFrame->State.cs_idx);
+   BlockInfo.Is64BitMode = CSSegment->L == 1;
+-  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: CSSegment->L={}, Is64BitMode={}, Config.Is64BitMode={}", CSSegment->L, BlockInfo.Is64BitMode, (bool)CTX->Config.Is64BitMode);
++  /* [iOS-Madeira] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: CSSegment->L={}, Is64BitMode={}, Config.Is64BitMode={}", CSSegment->L, BlockInfo.Is64BitMode, (bool)CTX->Config.Is64BitMode);
+   LOGMAN_THROW_A_FMT(BlockInfo.Is64BitMode == CTX->Config.Is64BitMode, "Expected operating mode to not change at runtime!");
+-  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Assertion passed OK");
++  /* [iOS-Madeira] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Assertion passed OK");
+ 
+   EntryPoint = PC;
+   BlockInfo.EntryPoints = {PC};
+@@ -1738,7 +1738,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+ 
+   EntryBlock = true;
+   FinalInstruction = false;
+-  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: MaxInst={}, entering decode loop...", MaxInst);
++  /* [iOS-Madeira] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: MaxInst={}, entering decode loop...", MaxInst);
+ }
+ 
+ } // namespace FEXCore::Frontend
+diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+index 74ecb7d..05e96bf 100644
+--- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+@@ -166,19 +166,19 @@ DEF_OP(ExitFunction) {
+       ARMEmitter::ForwardLabel l_CallReturn;
+       if (Op->Hint == IR::BranchHint::Call) {
+ #ifdef ARCHITECTURE_arm64ec
+-        // iOS-Mythic 2026-05-13: REG_CALLRET_SP (x17) gets clobbered when a
++        // iOS-Madeira 2026-05-13: REG_CALLRET_SP (x17) gets clobbered when a
+         // previous BLR returns from native ARM64EC code (DXMT vtable methods,
+         // ARM64EC entry thunks). Reload from State.callret_sp before pushing
+         // the call-return frame so we don't stp to wherever x17 was left.
+         ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
+-        // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2). iOS doesn't
++        // iOS-Madeira 2026-05-18: inline bounds-guard (Tier-2). iOS doesn't
+         // honor PAGE_NOACCESS on the callret stack's guard pages, so the
+         // SEH-driven HandleAccessViolation never resets the stack on
+         // underflow. Detect-and-reset inline before the `stp` to keep stack
+         // pointer in-range. Uses TMP1 as scratch; adr below re-initializes it.
+         {
+           ARMEmitter::ForwardLabel l_callret_ok;
+-          /* iOS-Mythic ml263: the >>24 test only fires when the pointer leaves the
++          /* iOS-Madeira ml263: the >>24 test only fires when the pointer leaves the
+            * ENTIRE 16MB region, so a large-but-in-range leak sails straight through.
+            * Measured on the CEF webhelper thread:
+            *   tid 0098 sp-base=0x2c8c40 -> 1.1MB pushed  (~36,000 nested calls)
+@@ -244,7 +244,7 @@ DEF_OP(ExitFunction) {
+     if (Op->Hint == IR::BranchHint::Return) {
+       // First try to pop from the call-ret stack, otherwise follow the normal path (but ending in a ret)
+ #ifdef ARCHITECTURE_arm64ec
+-      // iOS-Mythic 2026-05-15: POP-side x17 reload + state sync. ARM64EC
++      // iOS-Madeira 2026-05-15: POP-side x17 reload + state sync. ARM64EC
+       // native returns clobber x17, so we reload from State.callret_sp
+       // before popping. AND we write back the post-pop value to State so
+       // the dispatcher LoopTop's reload (line 134 of Dispatcher.cpp) sees
+@@ -252,11 +252,11 @@ DEF_OP(ExitFunction) {
+       // pop changes are lost on next dispatcher iteration — quantified
+       // as ~1 leaked callret entry per block dispatch on Thumper FMOD.
+       ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
+-      // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2) — see CALL push
++      // iOS-Madeira 2026-05-18: inline bounds-guard (Tier-2) — see CALL push
+       // site for rationale. Reset to DefaultLocation if OOB before ldp.
+       {
+         ARMEmitter::ForwardLabel l_callret_ok;
+-        /* iOS-Mythic ml263: tightened to a 4MB window -- see the first CALL push site. */
++        /* iOS-Madeira ml263: tightened to a 4MB window -- see the first CALL push site. */
+         ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
+         add(ARMEmitter::Size::i64Bit, TMP1, TMP1, 0x200000);
+         sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
+@@ -273,7 +273,7 @@ DEF_OP(ExitFunction) {
+ #endif
+       sub(TMP1, TMP1, RipReg.X());
+ #ifdef FEX_IOS_HOST
+-      /* iOS-Mythic ml305 (tasks #42 / #51 / #52): DO NOT TRUST THE CALL-RET PREDICTION ON iOS.
++      /* iOS-Madeira ml305 (tasks #42 / #51 / #52): DO NOT TRUST THE CALL-RET PREDICTION ON iOS.
+        *
+        * Taking this shortcut means `br TMP2`, where TMP2 is the HOST half of the popped entry -- an
+        * intra-block `adr(&l_CallReturn)` label recorded by the CALL push above. That is only safe if
+@@ -328,15 +328,15 @@ DEF_OP(ExitFunction) {
+     if (Op->Hint == IR::BranchHint::Call) {
+       ARMEmitter::ForwardLabel l_CallReturn;
+ #ifdef ARCHITECTURE_arm64ec
+-      // iOS-Mythic 2026-05-13: see note above — reload REG_CALLRET_SP (x17)
++      // iOS-Madeira 2026-05-13: see note above — reload REG_CALLRET_SP (x17)
+       // from State.callret_sp before pushing the call-return frame, since
+       // native ARM64EC returns leave x17 pointing at an arbitrary RX page.
+       ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
+-      // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2). Same as
++      // iOS-Madeira 2026-05-18: inline bounds-guard (Tier-2). Same as
+       // linked-path CALL push.
+       {
+         ARMEmitter::ForwardLabel l_callret_ok;
+-        /* iOS-Mythic ml263: tightened to a 4MB window -- see the first CALL push site. */
++        /* iOS-Madeira ml263: tightened to a 4MB window -- see the first CALL push site. */
+         ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
+         add(ARMEmitter::Size::i64Bit, TMP1, TMP1, 0x200000);
+         sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
+diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+index d424fa2..5c2598b 100644
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -16,7 +16,7 @@ $end_info$
+ #endif
+ 
+ #if defined(FEX_IOS_HOST) && !defined(__APPLE__)
+-// iOS-Mythic 2026-07-06: cross-modifying code flushes MUST go through the
++// iOS-Madeira 2026-07-06: cross-modifying code flushes MUST go through the
+ // kernel (NtFlushInstructionCache → __clear_cache → sys_icache_invalidate),
+ // which IPIs every core so remote PEs take the required context
+ // synchronization. The old inline dc/ic asm only broadcast the cache
+@@ -580,7 +580,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+     return Frame->Pointers.DispatcherLoopTop;
+   } else {
+ #ifdef FEX_IOS_HOST
+-    /* iOS-Mythic ml455 (#74 delivery-under-locks): guest SEH delivery running
++    /* iOS-Madeira ml455 (#74 delivery-under-locks): guest SEH delivery running
+      * while an interrupted frame on this thread holds emission locks.  Both
+      * FindBlock and the link patch below take locks that frame may own —
+      * bounce to the dispatcher loop instead, which compiles unpublished
+@@ -610,7 +610,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+     }
+   }
+ 
+-  /* iOS-Mythic diag: companion to [fex-entry] in Core.cpp — scream when the
++  /* iOS-Madeira diag: companion to [fex-entry] in Core.cpp — scream when the
+    * link target the blocks will be patched to jump at starts with the NOP
+    * prefill or decodes as block-tail data (upper 16 bits all zero — no real
+    * ARM64 instruction looks like that). */
+@@ -906,7 +906,7 @@ void Arm64JITCore::EmitEntryPoint(ARMEmitter::BackwardLabel& HeaderLabel, bool C
+ extern "C" int32_t NtTerminateProcess(void* ProcessHandle, int32_t ExitStatus);
+ #endif
+ 
+-/* iOS-Mythic ml460 (#75): the ml455 bail paths return a null code pointer,
++/* iOS-Madeira ml460 (#75): the ml455 bail paths return a null code pointer,
+  * which the dispatcher then executes -> c0000005 at address 0 -> guest SEH
+  * re-enters the compiler under delivery -> bails again. At pool exhaustion
+  * this looped 69,902 times in the ml459 run, burning minutes of CPU and
+@@ -1026,7 +1026,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ 
+   // JIT output is first written to a temporary buffer and later relocated to the CodeBuffer.
+   // This minimizes lock contention of CodeBufferWriteMutex.
+-  // [iOS-Mythic] verbose SSACount/TempBuf logs suppressed
++  // [iOS-Madeira] verbose SSACount/TempBuf logs suppressed
+   auto TempCodeBufferInfo = TempCodeBufferAllocator.ReownOrClaimBufferWithSize(DesiredBufferRange);
+   auto TempCodeBuffer = TempCodeBufferInfo.Ptr;
+   const uint32_t UsableBufferRange = TempCodeBufferInfo.Size - FEXCore::Utils::FEX_PAGE_SIZE;
+@@ -1078,14 +1078,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+   PendingTargetLabel = nullptr;
+   PendingCallReturnTargetLabel = nullptr;
+ 
+-  // [iOS-Mythic] verbose IR block loop entry log suppressed
++  // [iOS-Madeira] verbose IR block loop entry log suppressed
+   for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
+     auto BlockIROp = BlockHeader->CW<FEXCore::IR::IROp_CodeBlock>();
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+     LOGMAN_THROW_A_FMT(BlockIROp->Header.Op == IR::OP_CODEBLOCK, "IR type failed to be a code block");
+ #endif
+ 
+-    // [iOS-Mythic] verbose per-block log suppressed — was flooding 100MB log in 20m before splash.
++    // [iOS-Madeira] verbose per-block log suppressed — was flooding 100MB log in 20m before splash.
+     auto BlockStartHostCode = GetCursorAddress<uint8_t*>();
+     {
+       const auto Node = IR->GetID(BlockNode);
+@@ -1102,7 +1102,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ 
+       if (BlockIROp->EntryPoint) {
+         uint64_t BlockStartRIP = Entry + BlockIROp->GuestEntryOffset;
+-        // [iOS-Mythic] verbose EntryPoint log suppressed
++        // [iOS-Madeira] verbose EntryPoint log suppressed
+ 
+         const auto IsReturnTarget = CallReturnTargets.try_emplace(Node).first;
+         if (PendingTargetLabel) {
+@@ -1119,7 +1119,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+         DebugData->GuestOpcodes.push_back({BlockIROp->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
+ 
+         EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
+-        // [iOS-Mythic] verbose EmitEntryPoint-done log suppressed
++        // [iOS-Madeira] verbose EmitEntryPoint-done log suppressed
+       }
+ 
+       if (PendingCallReturnTargetLabel) {
+@@ -1132,11 +1132,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+       BindOrRestart(Target);
+     }
+ 
+-    // [iOS-Mythic] verbose block-header-done log suppressed
++    // [iOS-Madeira] verbose block-header-done log suppressed
+     {
+       int OpIdx = 0;
+       for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+-        // [iOS-Mythic] verbose per-op dispatch log suppressed
++        // [iOS-Madeira] verbose per-op dispatch log suppressed
+         switch (IROp->Op) {
+ #define REGISTER_OP(op, x) \
+   case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
+@@ -1149,7 +1149,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+         }
+         OpIdx++;
+       }
+-      // [iOS-Mythic] verbose block-done log suppressed
++      // [iOS-Madeira] verbose block-done log suppressed
+     }
+ 
+     DebugData->Subblocks.push_back({static_cast<uint32_t>(BlockStartHostCode - CodeData.BlockBegin),
+@@ -1299,11 +1299,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ 
+     // Copy over CodeBuffer contents (write to RW mirror on iOS)
+ #if defined(FEX_IOS_HOST)
+-    /* iOS-Mythic 2026-05-19 sanity log: one-shot diagnostic on first 2 JIT
++    /* iOS-Madeira 2026-05-19 sanity log: one-shot diagnostic on first 2 JIT
+      * copies to verify the per-Buffer dual-map wiring is correct.
+      * Expect: TempCodeBuffer != RXCursor (temp is heap, offset 0), and
+      * RWCursor = RXCursor + WriteOffset where WriteOffset is the real
+-     * runtime RX→RW distance (from MYTHIC_JIT_WRITE_OFFSET — NOT a fixed
++     * runtime RX→RW distance (from MADEIRA_JIT_WRITE_OFFSET — NOT a fixed
+      * 0x10000000; the RW alias is placed with VM_FLAGS_ANYWHERE). */
+     {
+       static volatile int dual_map_log_count = 0;
+@@ -1339,7 +1339,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+     sys_icache_invalidate(CodeBegin, CodeOnlySize);
+   }
+ #elif defined(FEX_IOS_HOST)
+-  // iOS-Mythic 2026-07-06: route the whole-block flush through
++  // iOS-Madeira 2026-07-06: route the whole-block flush through
+   // NtFlushInstructionCache (kernel-coordinated __clear_cache /
+   // sys_icache_invalidate) instead of inline dc/ic asm. The inline
+   // broadcast never forced the required ISB on OTHER cores — a core
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.cpp b/FEXCore/Source/Interface/Core/LookupCache.cpp
+index 2923c76..1b93edb 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.cpp
++++ b/FEXCore/Source/Interface/Core/LookupCache.cpp
+@@ -26,7 +26,7 @@ GuestToHostMap::GuestToHostMap()
+   BlockLinks = BlockLinks_pma->new_object<BlockLinksMapType>();
+ }
+ 
+-// iOS-Mythic ml606: live/cumulative census for the L1-only A/B. `live` is what
++// iOS-Madeira ml606: live/cumulative census for the L1-only A/B. `live` is what
+ // matters — footprints must be compared at equal live-cache counts, not at equal
+ // elapsed time, because caches are created and destroyed throughout a run.
+ static std::atomic<uint64_t> LookupCacheLive {0};
+@@ -79,7 +79,7 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+   } else {
+     AllocationSize = TotalCacheSize;
+ #ifdef FEX_IOS_HOST
+-    /* iOS-Mythic: commit upfront. The auto-commit-on-access-violation path
++    /* iOS-Madeira: commit upfront. The auto-commit-on-access-violation path
+      * (OvercommitTracker.HandleAccessViolation) doesn't take effect cleanly
+      * on iOS — pages stay faulting after VirtualAlloc(MEM_COMMIT) returns.
+      * Pre-commit the whole region; physical pages are still demand-faulted
+@@ -137,7 +137,7 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+   }
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: L2/L1 must start all-zero — nonzero stale bytes (the 0x69
++  /* iOS-Madeira: L2/L1 must start all-zero — nonzero stale bytes (the 0x69
+    * pattern observed during JIT-pool dumps, or recycled-arena content) make
+    * the dispatcher's cbz miss and BR to garbage. The original fix was two
+    * unconditional memsets, but those commit 32MB of private-dirty pages per
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.h b/FEXCore/Source/Interface/Core/LookupCache.h
+index 1b45aa4..40025eb 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.h
++++ b/FEXCore/Source/Interface/Core/LookupCache.h
+@@ -29,7 +29,7 @@ struct LookupCacheWriteLockToken : public LookupCacheBaseLockToken {
+ private:
+   // Only constructible by GuestToHostMap
+   friend struct GuestToHostMap;
+-  /* iOS-Mythic ml452 (#74): manual RAII instead of lock_guard so a token
++  /* iOS-Madeira ml452 (#74): manual RAII instead of lock_guard so a token
+    * constructed while this thread ALREADY write-owns the mutex no-ops (the
+    * fault-handler re-entry chain: outer swap holds L'-write → nested compile
+    * → nested swap re-acquires — the write→write self-park that stalled
+@@ -486,7 +486,7 @@ private:
+ 
+   size_t TotalCacheSize;
+ 
+-  // iOS-Mythic ml606: L1-ONLY LAYOUT when the L2 cache is disabled.
++  // iOS-Madeira ml606: L1-ONLY LAYOUT when the L2 cache is disabled.
+   //
+   // The full layout is [L2 page table][CODE_SIZE arena][L1] contiguous — on iOS
+   // 16MB + 32MB + 2MB = 50MB per guest thread, and FEX_IOS_HOST COMMITS it all
+@@ -511,7 +511,7 @@ private:
+   // Max out at 1 million entries to give each thread 16MB of L1 cache maximum.
+   constexpr static size_t MIN_L1_ENTRIES = 8 * 1024;        // Must be a power of 2
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml363: cap the dynamic-L1 growth ceiling at 128K entries (2MB)
++  /* iOS-Madeira ml363: cap the dynamic-L1 growth ceiling at 128K entries (2MB)
+    * instead of 1M (16MB). A hot thread's L1 inserts hash-scatter across the
+    * whole array, so a few thousand cached blocks dirty nearly every 16KB page
+    * of whatever the ceiling allows — ml362 [phys-map] measured ~29MB dirty
+@@ -528,7 +528,7 @@ private:
+ #endif
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: halve the per-thread block-backing arena — it's committed
++  /* iOS-Madeira: halve the per-thread block-backing arena — it's committed
+    * upfront on iOS (see LookupCache.cpp) and 128MB × ~19 threads was OOM-ing
+    * the process. 64MB still backs 1024 guest code pages per thread; on
+    * overflow AllocateBackingForPage returns 0 → clean ClearCodeCache.
+diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+index c54bf2f..bf610f3 100644
+--- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
++++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+@@ -14,7 +14,7 @@
+ namespace FEXCore::CPU {
+ static constexpr size_t INITIAL_CODE_SIZE = 1024 * 1024 * 16;
+ #ifdef FEX_IOS_HOST
+-// iOS-Mythic ml437 (#74): the shared 896MB JIT pool's tail budget is ~188MB
++// iOS-Madeira ml437 (#74): the shared 896MB JIT pool's tail budget is ~188MB
+ // for ALL threads' code buffers; hot threads doubling 16->32->64->128MB
+ // exhausted it in ml436 (head 708MB of DLL copies + tail collided; 10 honest
+ // refusals, 123 degraded threads). Cap growth at 32MB — hot threads clear
+@@ -29,7 +29,7 @@ CodeBuffer::CodeBuffer(size_t Size)
+   : AllocatedSize(Size) {
+   Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml364: exec allocations come from the finite JIT pool, and
++  /* iOS-Madeira ml364: exec allocations come from the finite JIT pool, and
+    * ml363 died exactly here — the pool was exhausted (bump 858/896MB,
+    * freelist 0), VirtualAlloc returned garbage/NULL with LOGMAN_THROW
+    * compiled out, and ClearCache scribbled the detection string through a
+diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
+index 27c7e80..4710385 100644
+--- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
++++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
+@@ -132,7 +132,7 @@ public:
+   virtual void OnCodeBufferAllocated(const std::shared_ptr<CodeBuffer>&) {};
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml460 (#75): the pool-tail sweeper (Module.cpp) reads Latest
++  /* iOS-Madeira ml460 (#75): the pool-tail sweeper (Module.cpp) reads Latest
+    * with no lock of its own, racing AllocateNew's assignment. A shared_ptr
+    * copy concurrent with an assignment is UB, so both go through this small
+    * leaf mutex. Never held while acquiring any other lock (assignment + copy
+diff --git a/FEXCore/Source/Interface/IR/IRTopologyCheck.h b/FEXCore/Source/Interface/IR/IRTopologyCheck.h
+index e4d339e..3bcb5bb 100644
+--- a/FEXCore/Source/Interface/IR/IRTopologyCheck.h
++++ b/FEXCore/Source/Interface/IR/IRTopologyCheck.h
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: MIT
+ #pragma once
+ /*
+- * iOS-Mythic ml599: bounded structural validation of the intrusive IR node list.
++ * iOS-Madeira ml599: bounded structural validation of the intrusive IR node list.
+  *
+  * WHY THIS EXISTS
+  * ---------------
+diff --git a/FEXCore/Source/Interface/IR/PassManager.cpp b/FEXCore/Source/Interface/IR/PassManager.cpp
+index dad9ccd..3668cb1 100644
+--- a/FEXCore/Source/Interface/IR/PassManager.cpp
++++ b/FEXCore/Source/Interface/IR/PassManager.cpp
+@@ -9,7 +9,7 @@ $end_info$
+ 
+ #include "Interface/Context/Context.h"
+ #include <cstdio>    // ml599: snprintf for the [ir-topo] sweep labels
+-#include <cstdlib>   // ml597: getenv for the MYTHIC_NO_DFE gate
++#include <cstdlib>   // ml597: getenv for the MADEIRA_NO_DFE gate
+ #include "Interface/IR/IREmitter.h"
+ #include "Interface/IR/IRTopologyCheck.h"
+ #include "Interface/IR/PassManager.h"
+@@ -85,22 +85,22 @@ void PassManager::AddDefaultPasses(Context::ContextImpl* ctx) {
+   if (!DisablePasses()) {
+     InsertPass(CreateX87StackOptimizationPass(ctx->HostFeatures, ctx->Config.Is64BitMode ? IR::OpSize::i64Bit : IR::OpSize::i32Bit));
+ 
+-    // iOS-Mythic ml597: TARGETED A/B for the ml594 post-login hang. The renderer
++    // iOS-Madeira ml597: TARGETED A/B for the ml594 post-login hang. The renderer
+     // thread was sampled 9x at 97-100% CPU inside DeadFlagCalculationEliminination
+     // while everything else idled and Steam presented no further frames.
+     //
+     // FEX_O0 is the wrong instrument for convicting it: it drops the x87 pass too,
+     // so a pass implicates one of two things and a failure exonerates neither.
+-    // MYTHIC_NO_DFE removes ONLY this pass, leaving the rest of the pipeline —
++    // MADEIRA_NO_DFE removes ONLY this pass, leaving the rest of the pipeline —
+     // including x87 — exactly as it is in a known-good run. Env-gated rather than
+     // compiled out so both arms come from one FEX build.
+     //   set  -> hang disappears  => this pass is the cause
+     //   set  -> hang persists    => exonerated, look elsewhere in the compile path
+     // The [dfe-guard] bounds in the pass itself remain active either way and will
+     // name the failure mode (cyclic list vs non-converging dataflow) if it recurs.
+-    const char* NoDFE = getenv("MYTHIC_NO_DFE");
++    const char* NoDFE = getenv("MADEIRA_NO_DFE");
+     if (NoDFE && *NoDFE && *NoDFE != '0') {
+-      LogMan::Msg::EFmt("[dfe-guard] ml597: MYTHIC_NO_DFE set — DeadFlagCalculationEliminination DISABLED");
++      LogMan::Msg::EFmt("[dfe-guard] ml597: MADEIRA_NO_DFE set — DeadFlagCalculationEliminination DISABLED");
+     } else {
+       InsertPass(CreateDeadFlagCalculationEliminination());
+     }
+@@ -132,7 +132,7 @@ void PassManager::InsertValidationPass(fextl::unique_ptr<Pass> Pass, const fextl
+ }
+ #endif
+ namespace {
+-// iOS-Mythic ml599: name the pass that breaks the intrusive node list.
++// iOS-Madeira ml599: name the pass that breaks the intrusive node list.
+ //
+ // DFE and RA both detect corruption at their own entry, but by then the damage
+ // is upstream and anonymous. This sweeps every block after every pass and
+@@ -140,10 +140,10 @@ namespace {
+ // "the IR is corrupt" into "pass N corrupts it".
+ //
+ // Off by default: it walks every block twice per pass, which is real cost on a
+-// 13,000-node function. Set MYTHIC_IR_TOPO=1 for a diagnostic run.
++// 13,000-node function. Set MADEIRA_IR_TOPO=1 for a diagnostic run.
+ bool IRTopoSweepEnabled() {
+   static const bool Enabled = [] {
+-    const char* E = getenv("MYTHIC_IR_TOPO");
++    const char* E = getenv("MADEIRA_IR_TOPO");
+     return E && *E && *E != '0';
+   }();
+   return Enabled;
+@@ -159,7 +159,7 @@ bool IRTopoSweepEnabled() {
+ // SSA count keeps the attribution while dropping essentially all of the cost.
+ uint32_t IRTopoSweepMinSSA() {
+   static const uint32_t Min = [] {
+-    const char* E = getenv("MYTHIC_IR_TOPO_MIN");
++    const char* E = getenv("MADEIRA_IR_TOPO_MIN");
+     const long V = (E && *E) ? strtol(E, nullptr, 0) : 0;
+     return static_cast<uint32_t>(V > 0 ? V : 2048);
+   }();
+@@ -193,7 +193,7 @@ bool SweepBlockTopology(IREmitter* IREmit, int PassIndex) {
+ }
+ } // namespace
+ 
+-/* iOS-Mythic ml623 — TARGETED IR CAPTURE FOR ONE GUEST INSTRUCTION.
++/* iOS-Madeira ml623 — TARGETED IR CAPTURE FOR ONE GUEST INSTRUCTION.
+  *
+  * The ULTRAKILL wall is a miscompile of exactly one x86 instruction inside
+  * Mono's x86-64 code emitter:
+@@ -224,7 +224,7 @@ extern "C" {
+ /* Absolute guest address to capture; 0 = disarmed. Published by the Windows
+  * InvalidationTracker at module load, so nothing here needs to know about PE
+  * layout or load order. */
+-uint64_t FEX_MythicIRCapTarget = 0;
++uint64_t FEX_MadeiraIRCapTarget = 0;
+ }
+ 
+ namespace {
+@@ -314,7 +314,7 @@ bool IRCapDefinedID(std::string_view Line, uint32_t& Out) {
+ }
+ 
+ void IRCapEmit(IREmitter* IREmit, const char* Stage, uint64_t GuestRIP, uint32_t Session) {
+-  const uint64_t Target = FEX_MythicIRCapTarget;
++  const uint64_t Target = FEX_MadeiraIRCapTarget;
+   if (!Target || Target < GuestRIP) {
+     return;
+   }
+@@ -428,13 +428,13 @@ void IRCapEmit(IREmitter* IREmit, const char* Stage, uint64_t GuestRIP, uint32_t
+ 
+ } // namespace
+ 
+-extern "C" void FEX_MythicIRCapMark(uint64_t GuestRIP) {
++extern "C" void FEX_MadeiraIRCapMark(uint64_t GuestRIP) {
+   IRCapRIP = GuestRIP;
+ }
+-extern "C" void FEX_MythicIRCapClear() {
++extern "C" void FEX_MadeiraIRCapClear() {
+   IRCapRIP = 0;
+ }
+-extern "C" uint64_t FEX_MythicIRCapCurrentRIP() {
++extern "C" uint64_t FEX_MadeiraIRCapCurrentRIP() {
+   return IRCapRIP;
+ }
+ 
+@@ -460,7 +460,7 @@ void PassManager::Run(IREmitter* IREmit) {
+    * loop saw the target instruction in this block. Claimed per compile rather
+    * than per stage, so a session always yields a complete before/after set
+    * rather than a truncated one. */
+-  const uint64_t CapRIP = FEX_MythicIRCapCurrentRIP();
++  const uint64_t CapRIP = FEX_MadeiraIRCapCurrentRIP();
+   uint32_t CapSession = 0;
+   bool Cap = false;
+   if (CapRIP) {
+@@ -471,7 +471,7 @@ void PassManager::Run(IREmitter* IREmit) {
+       Cap = true;
+       CapSession = Prev + 1;
+       LogMan::Msg::EFmt("[ircap] ml623 ===== CAPTURE {}/{} — block rip={:#x} CONTAINS target {:#x} =====", CapSession,
+-                        IRCapMaxCaptures, CapRIP, FEX_MythicIRCapTarget);
++                        IRCapMaxCaptures, CapRIP, FEX_MadeiraIRCapTarget);
+       IRCapEmit(IREmit, "frontend", CapRIP, CapSession);
+     }
+   }
+diff --git a/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp b/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp
+index 0de7658..9a83944 100644
+--- a/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp
++++ b/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp
+@@ -127,7 +127,7 @@ struct ControlFlowGraph {
+     }
+   }
+ 
+-  // iOS-Mythic ml605: EVERY BlockMap lookup is bounds-checked, and an out-of-range
++  // iOS-Madeira ml605: EVERY BlockMap lookup is bounds-checked, and an out-of-range
+   // ID lands on this sentinel instead of past the end of the vector.
+   //
+   // ml604 (db 7276) died here: switching Steam to Library gave the in-process
+@@ -627,7 +627,7 @@ bool DeadFlagCalculationEliminination::ProcessBlock(IREmitter* IREmit, IRListVie
+   // Reverse iteration is not yet working with the iterators
+   auto BlockIROp = CurrentIR.GetOp<IR::IROp_CodeBlock>(Block);
+ 
+-  // iOS-Mythic ml599: VALIDATE BEFORE MUTATING.
++  // iOS-Madeira ml599: VALIDATE BEFORE MUTATING.
+   //
+   // ml597 bounded the reverse walk below and ml598 saw it fire (block 405,
+   // 13,183 steps). But that bound trips only AFTER the walk has already called
+@@ -660,7 +660,7 @@ bool DeadFlagCalculationEliminination::ProcessBlock(IREmitter* IREmit, IRListVie
+     FlagsRead = CFG.Get(ExitOp->Args[0])->Flags;
+   }
+ 
+-  // iOS-Mythic ml597/ml599: BOUND THE REVERSE WALK (backstop).
++  // iOS-Madeira ml597/ml599: BOUND THE REVERSE WALK (backstop).
+   //
+   // This walk terminates only by reaching CodeBegin, so a cyclic or truncated
+   // Previous chain spins forever holding a fexlock read reference and stalls
+@@ -846,7 +846,7 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
+     CFG.Get(Block->ID)->Node = BlockNode;
+   }
+ 
+-  // iOS-Mythic ml605: SEMANTIC CFG VALIDATION, once, right after construction.
++  // iOS-Madeira ml605: SEMANTIC CFG VALIDATION, once, right after construction.
+   //
+   // Answers the question the ml604 crash could not: was the CFG born invalid
+   // (emitter / block-ID gather supplied bad IDs) or did it become invalid while
+@@ -941,7 +941,7 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
+   // After processing a block, if we made progress, we must process its
+   // predecessors to propagate globally. A block will be reprocessed only if
+   // there is a loop backedge.
+-  // iOS-Mythic ml597: BOUND THE WORKLIST TOO — the second way this pass can fail
++  // iOS-Madeira ml597: BOUND THE WORKLIST TOO — the second way this pass can fail
+   // to terminate. Blocks are re-queued whenever their flag set changes, so if the
+   // dataflow never reaches a fixed point the queue refills forever even though the
+   // per-block walk above is healthy. Bounding both separates the two causes: a
+diff --git a/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp b/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp
+index de9765f..e53d63e 100644
+--- a/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp
++++ b/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp
+@@ -595,7 +595,7 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
+ 
+     auto BlockIROp = BlockHeader->CW<IR::IROp_CodeBlock>();
+ 
+-    // iOS-Mythic ml599: THIS is where ml598 hung.
++    // iOS-Madeira ml599: THIS is where ml598 hung.
+     //
+     // The backwards pass below walks `--CodeLast` and exits only on reaching
+     // CodeBegin. When Steam's store page failed to render,
+diff --git a/FEXCore/Source/Utils/AllocWatch.cpp b/FEXCore/Source/Utils/AllocWatch.cpp
+index fb20b10..96719d2 100644
+--- a/FEXCore/Source/Utils/AllocWatch.cpp
++++ b/FEXCore/Source/Utils/AllocWatch.cpp
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: MIT
+-// iOS-Mythic ml611 — see AllocWatch.h for why this exists and why it is shaped
++// iOS-Madeira ml611 — see AllocWatch.h for why this exists and why it is shaped
+ // the way it is (the hot path runs inside malloc/free, so it must not allocate,
+ // lock, or format).
+ 
+diff --git a/FEXCore/Source/Utils/AllocWatch.h b/FEXCore/Source/Utils/AllocWatch.h
+index cf981ec..ceb5fbd 100644
+--- a/FEXCore/Source/Utils/AllocWatch.h
++++ b/FEXCore/Source/Utils/AllocWatch.h
+@@ -3,7 +3,7 @@
+ 
+ #include <cstdint>
+ 
+-/* iOS-Mythic ml611: WATCH SPECIFIC HEAP BUFFERS FOR FREE/REUSE WHILE STILL LIVE.
++/* iOS-Madeira ml611: WATCH SPECIFIC HEAP BUFFERS FOR FREE/REUSE WHILE STILL LIVE.
+  *
+  * ml610 died because DFE's predecessor vectors came back holding the low 32 bits
+  * of FEX-arena pointers (block "id" 918357056 = 0x36BD0000, in a vector whose own
+diff --git a/FEXCore/Source/Utils/AllocatorHooks.cpp b/FEXCore/Source/Utils/AllocatorHooks.cpp
+index 5b8ed46..56b2b73 100644
+--- a/FEXCore/Source/Utils/AllocatorHooks.cpp
++++ b/FEXCore/Source/Utils/AllocatorHooks.cpp
+@@ -66,7 +66,7 @@ static rpmalloc_config_t global_config {
+   .unmap_on_finalize = 0,
+ };
+ 
+-// iOS-Mythic (ml107-ml109): threads that enter FEX without passing through
++// iOS-Madeira (ml107-ml109): threads that enter FEX without passing through
+ // InitCRTThread (wine loader threads during EC child boot) have no rpmalloc
+ // thread heap, so every hook below returned NULL/failed. The observed death:
+ // LogMan::Msg::MFmtImpl -> aligned_alloc == NULL -> unchecked memmove(NULL)
+diff --git a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+index 7fb119c..3d63fa2 100644
+--- a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
++++ b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+@@ -338,7 +338,7 @@ static __uint128_t DoLoad128(uint64_t Addr) {
+ }
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic ml275: route an emulated ATOMIC to the JIT pool's WRITABLE alias.
++/* iOS-Madeira ml275: route an emulated ATOMIC to the JIT pool's WRITABLE alias.
+  *
+  * Guest PE images are COPIED into the JIT pool so they can execute, and the copy
+  * includes their .data. The pool's execute alias is mapped READ|EXECUTE with no write
+@@ -623,7 +623,7 @@ static bool RunCASPAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg1, uint3
+   } else if (Size == 1) {
+     // 64-bit pairs -- a true 128-bit CAS, which is what x86 LOCK CMPXCHG16B lowers to.
+     //
+-    // iOS-Mythic ml258: this branch did not exist, so every CASPAL with sz=1 fell
++    // iOS-Madeira ml258: this branch did not exist, so every CASPAL with sz=1 fell
+     // through to `return false`, which callers escalate to "Unhandled JIT SIGBUS
+     // CASPAL" and a fatal STATUS_DATATYPE_MISALIGNMENT. That is what ends the Steam
+     // run: CASPAL x6,x7, x4,x5, [x11] (Instruction 0x4866fd64), reported aligned
+@@ -674,7 +674,7 @@ static bool RunCASPAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg1, uint3
+   return false;
+ }
+ 
+-/* iOS-Mythic ml220 PROBE. RunCASPAL implements ONLY Size==0 (32-bit pairs); Size==1
++/* iOS-Madeira ml220 PROBE. RunCASPAL implements ONLY Size==0 (32-bit pairs); Size==1
+  * (64-bit pairs, i.e. a 128-bit CAS from x86 LOCK CMPXCHG16B) falls straight through to
+  * `return false`, which callers report as "Unhandled JIT SIGBUS CASPAL" and escalate to a
+  * fatal STATUS_DATATYPE_MISALIGNMENT. Steam/CEF hits this
+@@ -2314,7 +2314,7 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
+   // Lock code mutex during any SIGBUS handling that potentially changes code.
+   // Due to code buffer sharing between threads, code must be carefully backpatched from last to first.
+   // Multiple threads can be attempting to handle the SIGBUS or even be executing the code being backpatched.
+-  // iOS-Mythic ml472 (#80): the lock word carries no owner and lives in the
++  // iOS-Madeira ml472 (#80): the lock word carries no owner and lives in the
+   // code buffer; the holder's backpatch stores fault through the Mach RX-alias
+   // emulator, so a holder that dies or is unwound there orphans the lock and
+   // every later unaligned-atomic thread WFE-spun here forever (ml470/ml471
+diff --git a/FEXCore/Source/Utils/LogManager.cpp b/FEXCore/Source/Utils/LogManager.cpp
+index f5641d9..8d6be70 100644
+--- a/FEXCore/Source/Utils/LogManager.cpp
++++ b/FEXCore/Source/Utils/LogManager.cpp
+@@ -39,13 +39,13 @@ namespace Msg {
+     Handler = nullptr;
+   }
+ 
+-  // iOS-Mythic ml115: last format string that reached MFmtImpl, exported so a
++  // iOS-Madeira ml115: last format string that reached MFmtImpl, exported so a
+ // crash dump can name the message even when every output channel is unusable
+ // in a cloned pool copy. Plain pointer store — cannot fail.
+ extern "C" __attribute__((visibility("default"))) const char* LastDroppedFmt = nullptr;
+ 
+ void MFmtImpl(DebugLevels level, const char* fmt, const fmt::format_args& args) {
+-    // iOS-Mythic (ml107/ml114): three separate child deaths traced to THIS
++    // iOS-Madeira (ml107/ml114): three separate child deaths traced to THIS
+     // function — the allocator returned NULL on the logging thread and the
+     // unchecked memmove inside vformat/fextl::string killed the process, so
+     // the message that would have named the real bug never surfaced. Emit the
+diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
+index 8c6164a..a00f4f0 100644
+--- a/FEXCore/include/FEXCore/Core/CoreState.h
++++ b/FEXCore/include/FEXCore/Core/CoreState.h
+@@ -107,7 +107,7 @@ struct alignas(64) CPUState {
+   uint64_t L1Pointer {};
+   uint64_t L1Mask {};
+   uint64_t callret_sp {};
+-  // iOS-Mythic 2026-05-18: callret_sp_base = Thread->CallRetStackBase, mirrored
++  // iOS-Madeira 2026-05-18: callret_sp_base = Thread->CallRetStackBase, mirrored
+   // here so JIT code can emit inline bounds checks against it. Initialized by
+   // CallRetStack::InitializeThread alongside callret_sp. Repurposes _pad1
+   // (same offset, same size — was alignment padding).
+@@ -439,7 +439,7 @@ struct CpuStateFrame {
+   // Pointers that the JIT needs to load to remove relocations
+   JITPointers Pointers;
+ 
+-  /* iOS-Mythic ml299 (task #52): witness slot for the EnterEC State.rip store.
++  /* iOS-Madeira ml299 (task #52): witness slot for the EnterEC State.rip store.
+    *
+    * Three code paths write State.rip -- BranchOps' L1-miss store, the JITCallback store, and
+    * AbsoluteLoopTopAddressEnterEC's `str(EC_CALL_CHECKER_PC_REG, State.rip)`. ml298 gathered strong
+@@ -454,7 +454,7 @@ struct CpuStateFrame {
+    * offset the ntdll-side probes hardcode (all inside State) is unchanged. */
+   uint64_t IosLastEnterECRip {};
+ 
+-  /* iOS-Mythic ml302 (task #51): second witness, completing the 3-way discriminator.
++  /* iOS-Madeira ml302 (task #51): second witness, completing the 3-way discriminator.
+    *
+    * ml301 ran with the corrected (narrow) gate and produced exactly one hit -- the host-heap
+    * variant, GuestRIP=0x7e600f0080 -- with the verdict NOT EnterEC (IosLastEnterECRip=0x73899eb34a,
+@@ -469,7 +469,7 @@ struct CpuStateFrame {
+    * Appended after IosLastEnterECRip, still past Pointers, so no hardcoded offset moves. */
+   uint64_t IosLastCallbackRip {};
+ 
+-  /* iOS-Mythic ml303 (task #51): HOW did control reach CallbackPtr at all?
++  /* iOS-Madeira ml303 (task #51): HOW did control reach CallbackPtr at all?
+    *
+    * ml302 proved via IosLastCallbackRip that the JITCallback prologue's str(x1, State.rip) is what
+    * writes the bad value. But on ARM64EC that code should be UNREACHABLE: ExecuteJITCallback is only
+diff --git a/FEXCore/include/FEXCore/Debug/InternalThreadState.h b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+index 894d904..cbded16 100644
+--- a/FEXCore/include/FEXCore/Debug/InternalThreadState.h
++++ b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+@@ -109,7 +109,7 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
+   ///< Data pointer for exclusive use by the frontend
+   void* FrontendPtr;
+ 
+-  // iOS-Mythic 2026-05-13: bumped 4MB → 16MB. SEH unwinds through translated
++  // iOS-Madeira 2026-05-13: bumped 4MB → 16MB. SEH unwinds through translated
+   // code on iOS don't pop FEX callret entries (FEX has no SEH-aware callret
+   // cleanup yet), so caught faults leak entries. With 9700+ caught faults
+   // observed in Thumper FMOD worker, the original 4MB filled up. 16MB buys
+@@ -117,7 +117,7 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
+   // hundred per-thread caught faults. Real fix: callret-aware SEH unwind.
+   static constexpr size_t CALLRET_STACK_SIZE {0x1000000};
+ 
+-  // iOS-Mythic ml609/ml610: NAMED bounds for the window the CALL/RET guard enforces.
++  // iOS-Madeira ml609/ml610: NAMED bounds for the window the CALL/RET guard enforces.
+   //
+   // The default sp sits at base + SIZE/4 = base+4MB and the predictor grows DOWN
+   // from there; BranchOps.cpp bounds sp to [base+2MB, base+6MB).
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index a41e648..6c9ddce 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -55,7 +55,7 @@ FEX_DEFAULT_VISIBILITY void SetupHooks(size_t PageSize, HookPtrs Ptrs);
+ FEX_DEFAULT_VISIBILITY void ClearHooks();
+ 
+ #ifdef _WIN32
+-/* iOS-Mythic ml706: the one VA-layout profile, selected in rpmalloc's os_mmap
++/* iOS-Madeira ml706: the one VA-layout profile, selected in rpmalloc's os_mmap
+  * (the earliest allocator in the process) and followed by every other
+  * consumer. C linkage: it is chosen from C. */
+ extern "C" {
+@@ -68,7 +68,7 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
+   DWORD Flags = (Commit ? MEM_COMMIT : 0) | MEM_RESERVE | MEM_TOP_DOWN;
+ #ifdef ARCHITECTURE_arm64ec
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml321: keep FEX's host structures OUT of the guest VA band.
++  /* iOS-Madeira ml321: keep FEX's host structures OUT of the guest VA band.
+    *
+    * Every FEXMem_* region (Lookup/L1, BlockLinks, CallRetStacks, OpDispatcher,
+    * Frontend, ThreadState, ...) allocates through here, and by default wine's VA
+@@ -95,7 +95,7 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
+    * hardening, never a new fatal (#43).
+    * Exec allocations are excluded: EC_CODE buffers have their own JIT-pool
+    * steering that must keep control of placement. */
+-  /* iOS-Mythic ml706: use the band rpmalloc selected at process start.
++  /* iOS-Madeira ml706: use the band rpmalloc selected at process start.
+    *
+    * This is not the earliest allocator -- rpmalloc runs before
+    * arm64ec_process_init and before SetupHooks -- so it cannot choose the
+@@ -229,7 +229,7 @@ inline void VirtualTHPControl(const void* Ptr, size_t Size, THPControl Control)
+ 
+ #endif
+ 
+-/* iOS-Mythic ml362: zero a region without dirtying pages that are already
++/* iOS-Madeira ml362: zero a region without dirtying pages that are already
+  * zero. The defensive full memsets added for stale-content bugs (LookupCache
+  * L2/L1, CallRetStack) each commit their whole range as private-dirty pages;
+  * at ~40 guest threads that is ~1.9GB of phys_footprint against the 4096MB
+diff --git a/FEXCore/include/FEXCore/Utils/SpinWaitLock.h b/FEXCore/include/FEXCore/Utils/SpinWaitLock.h
+index d1f534f..6272978 100644
+--- a/FEXCore/include/FEXCore/Utils/SpinWaitLock.h
++++ b/FEXCore/include/FEXCore/Utils/SpinWaitLock.h
+@@ -331,7 +331,7 @@ static inline void unlock(T* Futex) {
+ #undef SPINLOOP_16BIT
+ #undef SPINLOOP_32BIT
+ #undef SPINLOOP_64BIT
+-// iOS-Mythic ml472: tag type for adopting a futex already acquired by the
++// iOS-Madeira ml472: tag type for adopting a futex already acquired by the
+ // caller (e.g. a bounded/stamped acquire); the destructor still releases.
+ struct adopt_lock_t {};
+ inline constexpr adopt_lock_t adopt_lock {};
+diff --git a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+index c616659..605bafc 100644
+--- a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
++++ b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+@@ -136,7 +136,7 @@ public:
+   }
+ 
+   void lock_shared() {
+-    /* iOS-Mythic ml442 (#74 ROOT FIX): the class forbids recursive locking,
++    /* iOS-Madeira ml442 (#74 ROOT FIX): the class forbids recursive locking,
+      * but the invalidation paths hold this WRITE-locked while a fault taken
+      * on the same thread re-enters the compiler, which asks for SHARED — the
+      * thread then parks forever behind itself (ml441 run: tid 00e4 write-owned
+@@ -338,7 +338,7 @@ public:
+   }
+ #endif
+ 
+-  /* iOS-Mythic ml612: identity of the address NoteReadAcquired() stamps into
++  /* iOS-Madeira ml612: identity of the address NoteReadAcquired() stamps into
+    * TEB Instrumentation[8]. The thread-exit cleanup MUST verify a stamped
+    * address against this before releasing anything — the stamp is a diagnostic
+    * value written by whichever mutex was held, and acting on it blindly (or
+@@ -389,7 +389,7 @@ private:
+     // No-op: spin-waiters will see the change
+   }
+ #else
+-  /* iOS-Mythic ml411: an INFINITE wait here is unobservable — a thread parked
++  /* iOS-Madeira ml411: an INFINITE wait here is unobservable — a thread parked
+    * on a never-released lock looks identical to an idle one, and this mutex is
+    * anonymous (no owner is recorded). Wait in 1s slices instead and, past a few
+    * seconds, name the write-owner from the ring below. Semantics are unchanged:
+@@ -546,7 +546,7 @@ private:
+   uint32_t Futex {};
+ 
+ #if defined(_WIN32)
+-  /* iOS-Mythic ml411: who holds it exclusive. Written after every successful
++  /* iOS-Madeira ml411: who holds it exclusive. Written after every successful
+    * write-acquire and cleared on release, so a stuck waiter can name the
+    * thread instead of guessing. TEB comes from x18 (the ARM64 platform
+    * register) and the tid from TEB.ClientId.UniqueThread at +0x48; both are
+@@ -648,7 +648,7 @@ private:
+     return true;
+   }
+ 
+-  /* iOS-Mythic ml413: the ml413 wedge was read-owners=1 with the writer parked
++  /* iOS-Madeira ml413: the ml413 wedge was read-owners=1 with the writer parked
+    * behind it — the WRITE stamp above can't name a leaked READ hold. Ring of
+    * live shared holds: acquire claims a zero slot, release clears one of the
+    * caller's slots. Additionally each holder stamps TEB Instrumentation[8]
+@@ -725,7 +725,7 @@ private:
+ #endif
+ };
+ 
+-/* iOS-Mythic ml455 (#74 delivery-under-locks): every stall flavor left after
++/* iOS-Madeira ml455 (#74 delivery-under-locks): every stall flavor left after
+  * ml454 is one shape — a fault delivered while THIS thread's interrupted frame
+  * holds emission locks (WPM shared / CodeBufferWriteMutex / lookup write), and
+  * the guest SEH machinery then re-enters the compiler, which parks on those
+diff --git a/Source/Common/HostFeatures.cpp b/Source/Common/HostFeatures.cpp
+index 6d9c16a..5d83889 100644
+--- a/Source/Common/HostFeatures.cpp
++++ b/Source/Common/HostFeatures.cpp
+@@ -21,7 +21,7 @@ namespace FEX {
+ 
+ void FillMIDRInformationViaLinux(FEXCore::HostFeatures* Features) {
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: no /sys/devices on iOS and std::thread::hardware_concurrency()
++  /* iOS-Madeira: no /sys/devices on iOS and std::thread::hardware_concurrency()
+    * comes from arm64ec-mingw libstdc++ which can return garbage / call into
+    * unimplemented Wine functions. Use a fixed reasonable value. */
+   Features->CPUMIDRs.resize(1);
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index b4dc86c..4a14f4a 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -61,7 +61,7 @@ extern "C" {
+ // this reason; this is that rule's missing twin on the FEX side. Tombstone
+ // order matches wine's: Size = 0 first (a zero-size entry matches no range
+ // query, including Module.S's inline asm walk), barrier, then reuse the slot.
+-/* iOS-Mythic ml549: EXACT guest RIP from a host PC, for the unix-side fault probes.
++/* iOS-Madeira ml549: EXACT guest RIP from a host PC, for the unix-side fault probes.
+  *
+  * The Mach handlers in ntdll-unix read the guest RIP from CpuStateFrame+0x18, which FEX
+  * only syncs at BLOCK boundaries -- it names the calling block, not the instruction that
+diff --git a/Source/Windows/ARM64EC/IosMonoBridge.h b/Source/Windows/ARM64EC/IosMonoBridge.h
+index b5e3e77..9f4d232 100644
+--- a/Source/Windows/ARM64EC/IosMonoBridge.h
++++ b/Source/Windows/ARM64EC/IosMonoBridge.h
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: MIT
+-// iOS-Mythic ml648 — FEX's copy of the Mono-bridge contract.
++// iOS-Madeira ml648 — FEX's copy of the Mono-bridge contract.
+ //
+ // ⚠️ THIS MUST STAY BYTE-IDENTICAL TO build/ntdll-unix/ios_mono_bridge.h.
+ // The two live in different build systems (llvm-mingw arm64ec PE here, native
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 83fd381..2f6a512 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -174,7 +174,7 @@ std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
+ std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
+ std::optional<FEX::Windows::ImageTracker> ImageTracker;
+ 
+-// iOS-Mythic: arm64ec-mingw doesn't reliably run global C++ ctors, so the
++// iOS-Madeira: arm64ec-mingw doesn't reliably run global C++ ctors, so the
+ // recursive_mutex / unordered_map below would be zero-init'd and any lock()
+ // would hang in NtWaitForAlertByThreadId. Wrap as Meyers singletons so they
+ // construct on first use regardless of the broken static-init chain.
+@@ -191,7 +191,7 @@ inline std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& GetThread
+ #define Threads GetThreadsMap()
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic ml460 (#75): pool-tail sweep registry, implemented in
++/* iOS-Madeira ml460 (#75): pool-tail sweep registry, implemented in
+  * CPUBackend.cpp (which has the full CPUBackend type). This frontend only
+  * registers each thread's ThreadState + &CpuArea->InSimulation at init and
+  * unregisters at term — the unregister BLOCKS until any in-flight sweep
+@@ -207,7 +207,7 @@ std::pair<NTSTATUS, ThreadCPUArea> GetThreadCPUArea(HANDLE Thread) {
+ }
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic 2026-05-19: NtCurrentTeb() compiles to a read of x18 on
++/* iOS-Madeira 2026-05-19: NtCurrentTeb() compiles to a read of x18 on
+  * ARM64EC, but x18 is clobbered by Apple runtime calls (libobjc, mach
+  * syscalls, pthread, etc.). Reading it after any such call returns
+  * garbage — typically 0 in cold-start paths. This is the documented
+@@ -243,7 +243,7 @@ ThreadCPUArea GetCPUArea() {
+ }
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic ml259 PROBE (#44). The CEF thread (0098) executes FEX JIT with x28 == 0:
++/* iOS-Madeira ml259 PROBE (#44). The CEF thread (0098) executes FEX JIT with x28 == 0:
+  *   insn ldr x0,[x28,#0x658] faults with addr=0x658 -- the fault address IS the
+  *   immediate, so the base is null. x28 is the CpuStateFrame, i.e. EmulatorData[0].
+  *
+@@ -255,7 +255,7 @@ ThreadCPUArea GetCPUArea() {
+  * falls back to NtCurrentTeb() (an x18 read) when TSD slot 275 is not yet populated --
+  * and x18 is clobbered by Apple runtime calls.
+  *
+- * Deliberately uses LogMan (which reaches mythic-log.txt, as [caspal128] proved) and
++ * Deliberately uses LogMan (which reaches madeira-log.txt, as [caspal128] proved) and
+  * NOT the WriteFile(hStdError) path the existing "ThreadInit() done" line uses -- that
+  * one has never once appeared in a log, so its silence means nothing. */
+ static void IosLogCPUArea(const char* tag) {
+@@ -412,7 +412,7 @@ void HandleImageMap(uint64_t Address, bool MainImage = false) {
+   ImageTracker->HandleImageMap(ModulePath, Address, MainImage);
+ }
+ 
+-/* iOS-Mythic ml190: REPLAY IMAGE MAPS THAT ARRIVE BEFORE THE TRACKERS EXIST.
++/* iOS-Madeira ml190: REPLAY IMAGE MAPS THAT ARRIVE BEFORE THE TRACKERS EXIST.
+  *
+  * NotifyMapViewOfSection returns early when InvalidationTracker/ImageTracker are not yet
+  * constructed (they are created in ProcessInit), and that notification was previously lost
+@@ -504,7 +504,7 @@ static void LoadStateFromECContext(FEXCore::Core::InternalThreadState* Thread, C
+ 
+     // The TEB is the only populated GDT entry by default
+     //
+-    // iOS-Mythic 2026-07-02: use IOSLoadTEB() (TPIDRRO_EL0 + TSD slot 275)
++    // iOS-Madeira 2026-07-02: use IOSLoadTEB() (TPIDRRO_EL0 + TSD slot 275)
+     // instead of NtCurrentTeb() (raw x18 read). This function runs late in
+     // ThreadInit and on every EC->x86 context restore; on threads whose x18
+     // has been clobbered by Apple runtime calls, NtCurrentTeb() returns 0
+@@ -792,9 +792,9 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
+ }
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic 2026-05-19: define FEXCore::DualMap::WriteOffset for THIS PE.
++/* iOS-Madeira 2026-05-19: define FEXCore::DualMap::WriteOffset for THIS PE.
+  * xtajit64.dll has its own statically-linked copy of FEXCore separate from
+- * the iOS Mythic app's libFEXCore_Base.a — so we need our own storage for
++ * the iOS Madeira app's libFEXCore_Base.a — so we need our own storage for
+  * the variable. Set early in ProcessInit (before InitCore + dispatcher emit).
+  * Convention is +0x10000000 (RX→RW alias separation), matching the iOS JIT
+  * pool layout established in virtual_ios.c. */
+@@ -804,9 +804,9 @@ int64_t WriteOffset = 0;
+ #endif
+ 
+ NTSTATUS ProcessInit() {
+-  /* iOS-Mythic: DualMap::WriteOffset (RX→RW alias distance) is set below,
++  /* iOS-Madeira: DualMap::WriteOffset (RX→RW alias distance) is set below,
+    * after InitCRTProcess() populates the environment, and BEFORE InitCore().
+-   * It is read from MYTHIC_JIT_WRITE_OFFSET rather than hardcoded, because
++   * It is read from MADEIRA_JIT_WRITE_OFFSET rather than hardcoded, because
+    * the app creates the RW alias with VM_FLAGS_ANYWHERE — the alias is NOT
+    * guaranteed to land at RX+0x10000000 (observed +0x105a4000 on iOS 27).
+    * The old hardcode corrupted the JIT pool on runs where the offset
+@@ -853,7 +853,7 @@ NTSTATUS ProcessInit() {
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_FILENAME, ExecutablePath);
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, AppConfigName);
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml278: announce the atomic-alias geometry UNCONDITIONALLY, AFTER
++  /* iOS-Madeira ml278: announce the atomic-alias geometry UNCONDITIONALLY, AFTER
+    * Logging::Init().
+    *
+    * The first cut put this line inside IosAtomicWritableAlias (Arm64.cpp), on its first
+@@ -870,7 +870,7 @@ NTSTATUS ProcessInit() {
+                       RxEnv ? RxEnv : "<unset>", SzEnv ? SzEnv : "<unset>", RwEnv ? RwEnv : "<unset>");
+   }
+ 
+-  /* iOS-Mythic ml293: UNCONDITIONAL BUILD IDENTITY.
++  /* iOS-Madeira ml293: UNCONDITIONAL BUILD IDENTITY.
+    *
+    * ml292 could only be attributed to a build by comparing the log's wall-clock start
+    * against the install time, because every other marker in the binary is printed from
+@@ -883,15 +883,15 @@ NTSTATUS ProcessInit() {
+    *
+    * CAVEAT found immediately (ml294): __DATE__/__TIME__ stamp THIS translation unit's
+    * compile time, so changing only another .cpp leaves the stamp stale and the ambiguity
+-   * half-returns. The MYTHIC_REV tag below fixes that: bump it for every deploy, which
++   * half-returns. The MADEIRA_REV tag below fixes that: bump it for every deploy, which
+    * necessarily edits this file and so refreshes the timestamp too. Self-enforcing. */
+ /* ml706: this tag went stale -- an ml705 binary still reported ml466, which is
+  * exactly the "self-enforcing marker" failure it exists to prevent. The
+  * __DATE__/__TIME__ below is compiler-generated and therefore the
+  * authoritative identity; if the two disagree, the tag is wrong, not the
+  * build. */
+-#define MYTHIC_REV "ml712"
+-  LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MYTHIC_REV " compiled " __DATE__ " " __TIME__);
++#define MADEIRA_REV "ml712"
++  LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MADEIRA_REV " compiled " __DATE__ " " __TIME__);
+ #ifdef FEX_IOS_HOST
+   {
+     const uint32_t Off = IosTebTsdOffset;
+@@ -937,7 +937,7 @@ NTSTATUS ProcessInit() {
+    * Wine launches, forwarded through get_initial_environment because they
+    * are WINE-prefixed and non-special). offset = RW_base - RX_base.
+    *
+-   * This replaces the earlier MYTHIC_JIT_WRITE_OFFSET attempt, which read
++   * This replaces the earlier MADEIRA_JIT_WRITE_OFFSET attempt, which read
+    * an uninitialized FEXBridge pool (the guest's real pool is owned by
+    * StikJITHelper, not FEXBridge) and always came back null. Fail LOUD if
+    * the vars are missing — a wrong/zero offset corrupts the JIT pool. */
+@@ -953,7 +953,7 @@ NTSTATUS ProcessInit() {
+         : nullptr;
+     char buf[160];
+     if (off != 0) {
+-      /* iOS-Mythic 2026-07-06: FAST-WRITE re-enabled per the 2026-07-03
++      /* iOS-Madeira 2026-07-06: FAST-WRITE re-enabled per the 2026-07-03
+        * TODO — the flush is now NtFlushInstructionCache (kernel IPI) in
+        * JIT.cpp instead of inline dc/ic asm, which was the suspected root
+        * cause of the msvcp140-DllMain/steam_api64 fast-write crashes AND
+@@ -1000,7 +1000,7 @@ NTSTATUS ProcessInit() {
+                                                           PAGE_EXECUTE_READ);
+   *reinterpret_cast<uint8_t*>(X64ReturnInstr) = 0xc3;
+ 
+-  /* iOS-Mythic ml199: state this address explicitly.
++  /* iOS-Madeira ml199: state this address explicitly.
+    *
+    * [iOS-noexec]/[iOS-bogusrip] show FEX being handed GuestRIP=0x7c200e0080 — page
+    * 0x7c200e0000 plus 0x80 — and the same +0x0e0080 offset has appeared across three
+@@ -1164,7 +1164,7 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+     return true;
+   } else {
+ #ifdef FEX_IOS_HOST
+-    // iOS-Mythic 2026-05-13: iOS doesn't switch exception delivery to a
++    // iOS-Madeira 2026-05-13: iOS doesn't switch exception delivery to a
+     // separate emulator stack like Windows-ARM64EC does (no CPU_AREA-driven
+     // sigaltstack). Mach exception delivery arrives on whatever thread
+     // stack was current, which is usually the guest stack. Attempt rethrow
+@@ -1278,7 +1278,7 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
+   }
+ }
+ 
+-/* iOS-Mythic ml710: LOADER-SAFE EXECUTABLE-INTERVAL REGISTRATION.
++/* iOS-Madeira ml710: LOADER-SAFE EXECUTABLE-INTERVAL REGISTRATION.
+  *
+  * This is a FALLBACK, not a second full registration path. It exists because in a child
+  * pseudo-process the syscall notification never arrives -- enter_syscall_callback()
+@@ -1327,7 +1327,7 @@ extern "C" void NotifyImageMap(void* Address) {
+ }
+ 
+ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
+-  /* iOS-Mythic ml183: do NOT require GetCPUArea().ThreadState() here.
++  /* iOS-Madeira ml183: do NOT require GetCPUArea().ThreadState() here.
+    *
+    * HandleImageMap() only needs InvalidationTracker + ImageTracker — it never touches
+    * thread state. Requiring a live ThreadState silently DROPPED the notification whenever
+@@ -1402,7 +1402,7 @@ void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {
+   InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
+ }
+ 
+-/* iOS-Mythic ml411 (#60/#66): the release half must never be gated on state
++/* iOS-Madeira ml411 (#60/#66): the release half must never be gated on state
+  * that can change between the paired calls.
+  *
+  * Upstream returns early when `!InvalidationTracker || !ThreadState`, and
+@@ -1473,7 +1473,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+ 
+   if (AppConfigName == "P5R.exe") {
+     // Use the locking mechanism for (Persona 5 Royal AppID 1687950) which does exactly the problem described above.
+-    // The release half ran at the top of this function (iOS-Mythic ml411).
++    // The release half ran at the top of this function (iOS-Madeira ml411).
+     if (!After) {
+       ThreadCreationMutex.lock();
+       CTX->GetCodeInvalidationMutex().lock();
+@@ -1495,7 +1495,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+   }
+ }
+ 
+-/* iOS-Mythic ml612: RELEASE FEX LOCKS A DYING THREAD STILL HOLDS.
++/* iOS-Madeira ml612: RELEASE FEX LOCKS A DYING THREAD STILL HOLDS.
+  *
+  * ml611's whole-app freeze: CrBrowserMain (00b0) blew FEX's 256KB emulator stack
+  * inside a recursive fextl::set tree deleter, the fault was misclassified as
+@@ -1603,7 +1603,7 @@ extern "C" uint32_t BTCpu64IosReleaseThreadHolds(void* TebPtr, uint64_t* OutStam
+ }
+ 
+ #ifdef FEX_IOS_HOST
+-/* iOS-Mythic: step markers through ThreadInit. Two runs have died with a
++/* iOS-Madeira: step markers through ThreadInit. Two runs have died with a
+  * fresh post-detach thread's "ThreadInit() entered" as the last FEX log
+  * line (silent kill, no crash report) — once during loading's worker-thread
+  * spawn, once when QuickTime's recording start triggered a thread spawn.
+@@ -1625,7 +1625,7 @@ static void IosTiLog(const char* msg) {
+ 
+ NTSTATUS ThreadInit() {
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic diagnostic: log entry to thread-init so we can confirm Wine
++  /* iOS-Madeira diagnostic: log entry to thread-init so we can confirm Wine
+    * is calling BTCpu64ThreadInit for the main x86_64 thread before the
+    * dispatcher is invoked. Without this, EmulatorData[0] is garbage and
+    * the dispatcher BLR's into uninitialized memory. */
+@@ -1684,7 +1684,7 @@ NTSTATUS ThreadInit() {
+   Frame->State.cs_cached = FEXCore::Core::CPUState::CalculateGDTBase(GDT);
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: set up GS base for x86_64 TLS access. On Windows x64 the
++  /* iOS-Madeira: set up GS base for x86_64 TLS access. On Windows x64 the
+    * convention is GS-base = TEB pointer, and MSVC-emitted code uses
+    * `mov rax, gs:[0x58]` to reach TEB->ThreadLocalStoragePointer.
+    * LoadStateFromECContext() at the EC->x86 transition sets this, but for
+@@ -1727,7 +1727,7 @@ NTSTATUS ThreadInit() {
+   CPUArea.DispatcherLoopTopEnterEC() = EnterEC;
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: PATCH FEX dispatcher's broken SpillStaticRegs.
++  /* iOS-Madeira: PATCH FEX dispatcher's broken SpillStaticRegs.
+    *
+    * FEX's emitter on iOS produces 7 stale `madd`/`mul` instructions where
+    * 7 `stp` should be (pairs 1-7: RDX/RBX, RSP/RBP, RSI/RDI, R8/R9, R10/R11,
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index f89ee42..25f5544 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -58,7 +58,7 @@ public:
+ 
+ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostFeatures::HostTypeEnum HostType) {
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: registry has nothing useful here (Hardware\... reg keys
++  /* iOS-Madeira: registry has nothing useful here (Hardware\... reg keys
+    * aren't populated). Synthesize a minimal HostFeatures manually with
+    * baseline ARMv8.2 features that Apple Silicon supports. */
+   FEXCore::HostFeatures HostFeatures = {};
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 19f3e01..fb604c9 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -6,7 +6,7 @@
+ #include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/Debug/InternalThreadState.h>
+ 
+-/* iOS-Mythic ml706: the one VA-layout profile, selected in rpmalloc's os_mmap
++/* iOS-Madeira ml706: the one VA-layout profile, selected in rpmalloc's os_mmap
+  * (the earliest allocator in the process) and followed here. C linkage: it is
+  * chosen from C. */
+ extern "C" {
+@@ -33,7 +33,7 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   const size_t CallRetStackAllocSize = FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE;
+   const void* CallRetStackAlloc = nullptr;
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml324: steer the call-ret stack out of the guest VA band.
++  /* iOS-Madeira ml324: steer the call-ret stack out of the guest VA band.
+    *
+    * This calls ::VirtualAlloc directly rather than FEXCore::Allocator::VirtualAlloc,
+    * so ml321's steering missed it -- ml323 confirmed every other FEXMem_* region moved
+@@ -73,7 +73,7 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   Thread->CallRetStackBase = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(CallRetStackAlloc) + FEXCore::Utils::FEX_PAGE_SIZE);
+   ::VirtualAlloc(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE, MEM_COMMIT, PAGE_READWRITE);
+ 
+-  /* iOS-Mythic: VirtualAlloc(MEM_COMMIT) on a previously-MEM_RESERVE'd
++  /* iOS-Madeira: VirtualAlloc(MEM_COMMIT) on a previously-MEM_RESERVE'd
+    * PAGE_NOACCESS region might not zero-initialize the pages on iOS. The
+    * dispatcher uses callret_sp to BLR via stored values; uninit content
+    * (e.g. 0x55 poison from prior wine activity) would BLR to garbage.
+@@ -90,14 +90,14 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+ #endif
+ 
+   Thread->CurrentFrame->State.callret_sp = GetInfoThread(Thread).DefaultLocation;
+-  // iOS-Mythic 2026-05-18: mirror CallRetStackBase into CpuStateFrame so JIT
++  // iOS-Madeira 2026-05-18: mirror CallRetStackBase into CpuStateFrame so JIT
+   // code can emit inline bounds checks. Needed because iOS Wine doesn't honor
+   // PAGE_NOACCESS on the guard pages, so the SEH-driven HandleAccessViolation
+   // never fires — JIT code has to detect-and-reset proactively.
+   Thread->CurrentFrame->State.callret_sp_base = reinterpret_cast<uint64_t>(Thread->CallRetStackBase);
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml263: print the geometry ONCE per process. Two jobs:
++  /* iOS-Madeira ml263: print the geometry ONCE per process. Two jobs:
+    * (1) a verifiable content marker for the JIT-side guard change in BranchOps.cpp
+    *     (an emitter constant leaves no string in the binary, so there is otherwise
+    *     nothing to grep in the installed bundle);
+@@ -112,7 +112,7 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+                         "guard-window=[base+0x200000, base+0x600000) grows-DOWN",
+                         reinterpret_cast<uint64_t>(Thread->CallRetStackBase), Info.DefaultLocation,
+                         FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
+-      /* iOS-Mythic ml271: print the REAL CpuStateFrame offsets once.
++      /* iOS-Madeira ml271: print the REAL CpuStateFrame offsets once.
+        *
+        * The ntdll-unix side reads these fields out of x28 in signal handlers using
+        * hand-derived constants, and ml271 showed why that is unsafe: [rsp-forensics]
+diff --git a/Source/Windows/Common/FEXUnixLib.cpp b/Source/Windows/Common/FEXUnixLib.cpp
+index dd68462..6b6ea10 100644
+--- a/Source/Windows/Common/FEXUnixLib.cpp
++++ b/Source/Windows/Common/FEXUnixLib.cpp
+@@ -78,7 +78,7 @@ bool Init(HMODULE NtDll) {
+   };
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic (FEX-2607 rebase): the new load-by-name unixlib method
++  /* iOS-Madeira (FEX-2607 rebase): the new load-by-name unixlib method
+    * (TryNewWineMethod) expects a separate "libarm64ecfex" .so unixlib. iOS has
+    * no .so files — load_unixlib_by_name dlopen()s a nonexistent path and can
+    * return a bogus handle whose funcs table is garbage; the dispatcher then
+@@ -168,7 +168,7 @@ void VirtualTHPControl(const void* Ptr, size_t Size, FEXCore::Allocator::THPCont
+ 
+ void VirtualName(const char* Name, const void* Ptr, size_t Size) {
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic ml294 (task #51): PUBLISH FEX'S OWN NAME FOR EVERY HOST ALLOCATION.
++  /* iOS-Madeira ml294 (task #51): PUBLISH FEX'S OWN NAME FOR EVERY HOST ALLOCATION.
+    *
+    * The prctl/unixlib naming below is meaningless on iOS, so this was a pure no-op --
+    * which meant FEX already knew the identity of every region it allocates and we were
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 172cca7..003dc35 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -15,7 +15,7 @@
+ 
+ /* ml623: targeted IR capture target (defined in FEXCore PassManager.cpp). File scope on
+  * purpose -- an extern "C" at block scope is a compile error and cost a build earlier. */
+-extern "C" uint64_t FEX_MythicIRCapTarget;
++extern "C" uint64_t FEX_MadeiraIRCapTarget;
+ 
+ /* ml648: defined in the ARM64EC alias TU. Declared at FILE scope — an
+  * extern "C" declaration is illegal at block scope, and declaring it inside
+@@ -81,7 +81,7 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
+       }
+       return true;
+     } else if (XIntervals.Intersect(ProtInterval)) {
+-      /* iOS-Mythic ml208 ROOT-CAUSE FIX.
++      /* iOS-Madeira ml208 ROOT-CAUSE FIX.
+        *
+        * A >=1GB non-executable range is an allocator reserving or managing a pool, never a
+        * code-permission change. Removing exec intervals for it wipes the executable range
+@@ -184,7 +184,7 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+       uint64_t SectionBase = Address + Section->VirtualAddress;
+       uint64_t SectionEnd = SectionBase + Section->Misc.VirtualSize;
+       XIntervals.Insert({SectionBase, SectionEnd});
+-      /* iOS-Mythic ml200: FEX reports NOEXEC for libcef code addresses even though the
++      /* iOS-Madeira ml200: FEX reports NOEXEC for libcef code addresses even though the
+        * ntdll side proves the map notification arrives and nothing ever removes the
+        * interval. So log the actual inserts (with `this`, since each pseudo-process runs
+        * its own xtajit64 copy and its own tracker) and pair it with the query-side log in
+@@ -209,7 +209,7 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+    * above -- so on Marvel Cosmic Invasion the hooks stayed inert and Mono startup paid
+    * the full W^X tax: ~735,000 emulated stores from one hot site during init.
+    *
+-   * Recognised, but activation is OPT-IN via MYTHIC_WINEMONO_BRIDGE=1, default OFF, for a
++   * Recognised, but activation is OPT-IN via MADEIRA_WINEMONO_BRIDGE=1, default OFF, for a
+    * correctness reason rather than caution about perf: the bridge reclassifies a detected
+    * XCHG from a true atomic exchange into an alias-directed plain write. Deciding that by
+    * FILENAME alone would let any unrelated lock-free XCHG in this DLL be treated as a
+@@ -230,9 +230,9 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+   const bool IsWineMono = (Name == "libmono-2.0-x86_64.dll" || Name == "libmono-2.0-x86.dll");
+   bool WineMonoOptIn = false;
+   if (IsWineMono) {
+-    const char* Env = getenv("MYTHIC_WINEMONO_BRIDGE");
++    const char* Env = getenv("MADEIRA_WINEMONO_BRIDGE");
+     WineMonoOptIn = Env && Env[0] == '1';
+-    LogMan::Msg::EFmt("[mono-winemono] ml712 module={} base={:#x} opt-in={} (MYTHIC_WINEMONO_BRIDGE={})", Name, Address,
++    LogMan::Msg::EFmt("[mono-winemono] ml712 module={} base={:#x} opt-in={} (MADEIRA_WINEMONO_BRIDGE={})", Name, Address,
+                       WineMonoOptIn ? 1 : 0, Env ? Env : "unset");
+   }
+ 
+@@ -242,7 +242,7 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+      *
+      * MonoHacks defaults to true and is gated on Multiblock && MaxInst >= 500, but
+      * MarkMonoDetected() logs nothing and the refusal message is IFmt, which
+-     * MYTHIC_QUIET eats -- so the ULTRAKILL log could not distinguish "hooks armed"
++     * MADEIRA_QUIET eats -- so the ULTRAKILL log could not distinguish "hooks armed"
+      * from "hooks refused". That ambiguity also decides whether a later
+      * block-splitting A/B is interpretable at all, because the hook explicitly
+      * requires all SMC sites to land in ONE block. Never leave this unfalsifiable. */
+@@ -276,10 +276,10 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+    * Mono emitter store `mov byte ptr [rcx+2], al`.
+    *
+    * setenv() in WineProcessBridge.m does NOT reach GetEnvironmentVariableW, but it DOES
+-   * reach FEX's own getenv (proven by MYTHIC_NO_DFE in ml597/598), which is what this uses. */
++   * reach FEX's own getenv (proven by MADEIRA_NO_DFE in ml597/598), which is what this uses. */
+   {
+-    const char* CapRVA = getenv("MYTHIC_IRCAP_RVA");
+-    const char* CapMod = getenv("MYTHIC_IRCAP_MODULE");
++    const char* CapRVA = getenv("MADEIRA_IRCAP_RVA");
++    const char* CapMod = getenv("MADEIRA_IRCAP_MODULE");
+ 
+     /* ml623b: THE ENV CHANNEL DOES NOT REACH THIS CODE.
+      *
+@@ -294,7 +294,7 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+       static bool Reported = false;
+       if (!Reported) {
+         Reported = true;
+-        LogMan::Msg::EFmt("[ircap] ml623b env probe: MYTHIC_IRCAP_RVA={} MYTHIC_IRCAP_MODULE={}", CapRVA ? CapRVA : "(null)",
++        LogMan::Msg::EFmt("[ircap] ml623b env probe: MADEIRA_IRCAP_RVA={} MADEIRA_IRCAP_MODULE={}", CapRVA ? CapRVA : "(null)",
+                           CapMod ? CapMod : "(null)");
+       }
+     }
+@@ -316,11 +316,11 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+       if (Match) {
+         const uint64_t RVA = strtoull(CapRVA, nullptr, 0);
+         if (RVA) {
+-          FEX_MythicIRCapTarget = Address + RVA;
++          FEX_MadeiraIRCapTarget = Address + RVA;
+           LogMan::Msg::EFmt("[ircap] ml623b ARMED: module={} base={:#x} rva={:#x} => target guest addr {:#x}", Name, Address,
+-                            RVA, FEX_MythicIRCapTarget);
++                            RVA, FEX_MadeiraIRCapTarget);
+         } else {
+-          LogMan::Msg::EFmt("[ircap] ml623b DISARMED by MYTHIC_IRCAP_RVA=0 (module={})", Name);
++          LogMan::Msg::EFmt("[ircap] ml623b DISARMED by MADEIRA_IRCAP_RVA=0 (module={})", Name);
+         }
+       }
+     }
+@@ -420,7 +420,7 @@ bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t S
+   return ProtectRWXIntervalsInternal(Address, Size, true);
+ }
+ 
+-/* iOS-Mythic ml201: log EVERY XIntervals removal, tagged by path.
++/* iOS-Madeira ml201: log EVERY XIntervals removal, tagged by path.
+  *
+  * Proven this run: libcef's .text IS inserted (0x7385cf1000-0x7390d2cd23) into the SAME
+  * tracker (0x1229612c8) that later reports MISS for 0x73875f0733 and 0x73898408f0 — both
+@@ -469,7 +469,7 @@ void InvalidationTracker::DetectMonoBackpatcherBlock(FEXCore::Core::InternalThre
+ 
+   /* ml712: name the site at EFmt, once, with module-relative RVAs and the bytes.
+    *
+-   * The DFmt line above is eaten by MYTHIC_QUIET, so a run could neither confirm which
++   * The DFmt line above is eaten by MADEIRA_QUIET, so a run could neither confirm which
+    * guest instruction was reclassified nor let it be checked afterwards. That matters more
+    * for wine-mono than for Unity's Mono: this reclassifies an XCHG from a true atomic
+    * exchange into an alias-directed plain write, wine-mono ships no PDB, and its exports
+diff --git a/Source/Windows/Common/Logging.cpp b/Source/Windows/Common/Logging.cpp
+index cdb8263..6b0426a 100644
+--- a/Source/Windows/Common/Logging.cpp
++++ b/Source/Windows/Common/Logging.cpp
+@@ -17,14 +17,14 @@ namespace {
+ void (*WineDbgOut)(const char* Message);
+ FILE* LogFile;
+ 
+-/* iOS-Mythic ml194: FEX's log output was being DISCARDED, which is why no LogMan
+- * message (e.g. "[TI-IC] lookupcache-alloc") has ever appeared in mythic-log.txt and why
++/* iOS-Madeira ml194: FEX's log output was being DISCARDED, which is why no LogMan
++ * message (e.g. "[TI-IC] lookupcache-alloc") has ever appeared in madeira-log.txt and why
+  * every FEX-side question this session had to be answered indirectly from ntdll probes.
+  *
+  * Logging::Init() IS called (ARM64EC Module.cpp ProcessInit) and ProcessInit completes,
+  * yet even its own install trace never showed up. Cause: this is a PE module, so
+  * ::write(2, ...) goes through the CRT's descriptor table bound to the Windows stderr
+- * HANDLE — NOT the unix fd 2 that the app redirects into mythic-log.txt. Writing to the
++ * HANDLE — NOT the unix fd 2 that the app redirects into madeira-log.txt. Writing to the
+  * process's real hStdError is the path already proven to work here (see the FEX-iOS FATAL
+  * message in ARM64EC/Module.cpp). */
+ static void IosLogWrite(const char* Str, size_t Len) {
+@@ -32,7 +32,7 @@ static void IosLogWrite(const char* Str, size_t Len) {
+    * (which also means the pre-existing "[FEX-iOS] FATAL" message was never functional).
+    * Prefer __wine_dbg_output: it IS exported by our PE ntdll (export table ordinal 1464)
+    * and is exactly what that ntdll's own ERR() lines go through — those reach
+-   * mythic-log.txt reliably. Keep WriteFile as a fallback. */
++   * madeira-log.txt reliably. Keep WriteFile as a fallback. */
+   static int (__cdecl *DbgOut)(const char*);
+   static bool Resolved;
+   if (!Resolved) {
+@@ -57,7 +57,7 @@ static void IosLogWrite(const char* Str, size_t Len) {
+ static void MsgHandler(LogMan::DebugLevels Level, const char* Message) {
+   const auto Output = fextl::fmt::format("{} {:X} {}\n", LogMan::DebugLevelStr(Level), GetCurrentThreadId(), Message);
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: route directly to stderr (which is dup2'd to mythic-log.txt
++  /* iOS-Madeira: route directly to stderr (which is dup2'd to madeira-log.txt
+    * by WineProcessBridge). __wine_dbg_output is exported but doesn't always
+    * resolve via GetProcAddress on our embedded ntdll, so go around it. */
+   IosLogWrite(Output.c_str(), Output.size());
+@@ -94,7 +94,7 @@ void Init() {
+ #endif
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: trace install via stderr directly to confirm Init() ran. */
++  /* iOS-Madeira: trace install via stderr directly to confirm Init() ran. */
+   const char *m = "[FEX-iOS] Logging::Init installing MsgHandler\n";
+   IosLogWrite(m, __builtin_strlen(m));
+ #endif
+diff --git a/Source/Windows/Common/TSOHandlerConfig.h b/Source/Windows/Common/TSOHandlerConfig.h
+index 0048283..0019184 100644
+--- a/Source/Windows/Common/TSOHandlerConfig.h
++++ b/Source/Windows/Common/TSOHandlerConfig.h
+@@ -28,7 +28,7 @@ public:
+       LogMan::Msg::IFmt("FEX: Kernel unaligned atomics enabled!");
+     }
+ 
+-    /* iOS-Mythic ml512/ml513: report the EFFECTIVE TSO configuration at
++    /* iOS-Madeira ml512/ml513: report the EFFECTIVE TSO configuration at
+      * runtime. A compiled-in config default is invisible to binary greps, so
+      * this line is the only way to know what the JIT is actually doing.
+      *
+diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
+index e3131a0..f953c3c 100644
+--- a/Source/Windows/Common/WinAPI/IO.cpp
++++ b/Source/Windows/Common/WinAPI/IO.cpp
+@@ -120,7 +120,7 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,
+     ByteOffset.QuadPart = (static_cast<LONGLONG>(lpOverlapped->OffsetHigh) << 32) | lpOverlapped->Offset;
+     ByteOffsetPtr = &ByteOffset;
+   }
+-  /* iOS-Mythic ml572: WriteFile TRACING BLOCK REMOVED — it was a stack smash.
++  /* iOS-Madeira ml572: WriteFile TRACING BLOCK REMOVED — it was a stack smash.
+    *
+    * It formatted into `char dbg[8 + 64 + 16]` (88 bytes) but wrote a 38-byte
+    * header plus up to 64 preview bytes, each of which could expand to 2 chars
+@@ -373,7 +373,7 @@ DLLEXPORT_FUNC(WINBOOL, SetEndOfFile, (HANDLE hFile)) {
+ }
+ 
+ DLLEXPORT_FUNC(DWORD, GetFileAttributesA, (LPCSTR lpFileName)) {
+-  /* iOS-Mythic stub: pretend the file doesn't exist so FEX's config-file
++  /* iOS-Madeira stub: pretend the file doesn't exist so FEX's config-file
+    * lookups (FEX::Config::LoadConfig etc.) skip cleanly. */
+   SetLastError(ERROR_FILE_NOT_FOUND);
+   return INVALID_FILE_ATTRIBUTES;

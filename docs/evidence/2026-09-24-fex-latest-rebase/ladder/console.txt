@@ -1,0 +1,26 @@
+[ladder 20:16:21] run directory $PLAYPORT_BUILD/lanes/fex-rebase/device/ladder; backend ios
+[ladder 20:16:38] rung cpu-jit: pass
+[ladder 20:16:54] rung win32-core: pass
+[ladder 20:17:15] rung concurrency: pass
+[ladder 20:17:35] rung process-model: pass
+[ladder 20:18:41] rung persistence: pass
+[ladder 20:19:40] rung resource-envelope: pass
+backend: madeira:fex-0f8edf8f6+wine-e82864432+madeira-5a82d392e
+  cpu-jit            pass
+      cpu-jit/1              ladder-cpujit-x86-64               pass
+  win32-core         pass
+      win32-core/1           ladder-w32core-x86-64              pass
+  concurrency        pass
+      concurrency/1          ladder-concurrency-x86-64          pass
+  process-model      pass
+      process-model/1        ladder-process-x86-64              pass
+  persistence        pass
+      persistence/1          ladder-persist-write-x86-64        pass
+      persistence/2          ladder-persist-verify-x86-64       pass
+      persistence/3          ladder-persist-write-x86-64        pass
+      persistence/4          ladder-persist-verify-x86-64       pass
+  resource-envelope  pass
+      resource-envelope/1    ladder-envelope-coldstart-x86-64   pass
+      resource-envelope/2    ladder-envelope-load-x86-64        pass
+      measurements: cold_start_s=5.404, cold_start_excl_activation_s=0.246, peak_rss_mb=1250, steady_rss_mb=1245.6, available_memory_min_mb=6941, prefix_bytes_before=5308436480, prefix_bytes_after=5308436480, storage_amplification=0, main_thread_max_stall_ms=0.2
+ladder: pass; gate evidence: yes

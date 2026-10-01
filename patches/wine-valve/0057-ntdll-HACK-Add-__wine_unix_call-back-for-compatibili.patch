@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Tue, 10 Dec 2024 18:16:08 -0600
+Subject: [PATCH] ntdll: HACK: Add __wine_unix_call() back for compatibility.
+
+CW-Bug-Id: #24568
+Valve-commit: 473509718c708960b6ba7218c6fce4cef4f8bb55
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c   | 9 +++++++++
+ dlls/ntdll/ntdll.spec | 1 +
+ 2 files changed, 10 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 82eeac2..476d9697 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4160,6 +4160,15 @@ NTSTATUS WINAPI __wine_ctrl_routine( void *arg )
+ }
+ 
+ 
++/***********************************************************************
++ *              __wine_unix_call
++ */
++NTSTATUS WINAPI compat___wine_unix_call( unixlib_handle_t handle, unsigned int code, void *args )
++{
++    return __wine_unix_call( handle, code, args );
++}
++
++
+ /***********************************************************************
+  *           __wine_unix_spawnvp
+  */
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 9315f57..254de86 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1765,6 +1765,7 @@
+ @ cdecl wine_server_handle_to_fd(long long ptr ptr)
+ 
+ # Unix interface
++@ stdcall __wine_unix_call(int64 long ptr) compat___wine_unix_call
+ @ stdcall __wine_unix_spawnvp(long ptr)
+ @ stdcall __wine_ctrl_routine(ptr)
+ @ extern -private __wine_syscall_dispatcher

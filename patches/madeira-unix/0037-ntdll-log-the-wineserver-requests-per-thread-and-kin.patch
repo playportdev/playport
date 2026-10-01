@@ -1,0 +1,284 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 06:52:33 +0200
+Subject: [PATCH] ntdll: log the wineserver requests per thread and kind every
+ second
+
+Whether in-process sync is worth making work depends on how many server
+requests a frame makes and how much of the main thread they take, and
+nothing counted them by thread or kind: [sync-census] prints one total
+every 20 s and [srv-req] the ten busiest request numbers every 200000
+requests. server_call_unlocked now counts each request by kind (select,
+event, mutex, semaphore, handle, message queue, other) in its thread's slot
+with the wall time of the round trip, and server_select adds the time a
+pending select blocks for its wake-up and counts the selects that
+blocked. Once a second the xprobe thread logs the process's totals and
+busiest request types ([srv]) and each thread's counts, round-trip and
+blocked ms and blocked selects ([srv-t]), most round-trip time first and
+blocked time only breaking a tie, so threads parked in selects never push
+a thread that makes requests past the line's 1024 bytes; pp perf reads
+them. Nothing a request does changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-28-server-sync.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 217 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 215 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 08cc64c..dc47d16 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1398,6 +1398,209 @@ static void ios_xp_api_report( const char *wall, double wall_s )
+     }
+ }
+ 
++/* Playport: [srv] and [srv-t] census (measurement only). Once a second, from
++ * the xprobe thread: the wineserver requests every thread made in that second,
++ * by kind, and the wall time each thread spent in the round trips (sending,
++ * the server's handling, the reply) and blocked in a select's wait for its
++ * wake-up. The kinds are the NT sync objects' requests (select, event, mutex,
++ * semaphore), handles, the message queue and the rest; the busiest request
++ * types by name follow. Per frame and against the main thread's time, they
++ * decide whether in-process sync is worth making work (runtime-risks plan,
++ * item 3). A thread owns its slot (its TEB, found by open addressing), so the
++ * counters take no lock; the reader tolerates a torn read. */
++#define IOS_SRV_SLOTS 1024
++#define IOS_SRV_KINDS 7
++static const char ios_srv_kind_names[IOS_SRV_KINDS][4] = { "sel", "ev", "mtx", "sem", "hdl", "msg", "oth" };
++struct ios_srv_thr
++{
++    uintptr_t          teb;
++    unsigned int       wine_tid;
++    unsigned long long n[IOS_SRV_KINDS];
++    unsigned long long rt_ticks, blk_ticks, nblk;
++};
++static struct ios_srv_thr ios_srv_thr_tab[IOS_SRV_SLOTS];
++static volatile unsigned long long ios_srv_type_n[REQ_NB_REQUESTS];
++
++static int ios_srv_kind( unsigned int req )
++{
++    switch (req)
++    {
++    case REQ_select:
++        return 0;
++    case REQ_event_op: case REQ_create_event: case REQ_open_event: case REQ_query_event:
++        return 1;
++    case REQ_release_mutex: case REQ_create_mutex: case REQ_open_mutex: case REQ_query_mutex:
++        return 2;
++    case REQ_release_semaphore: case REQ_create_semaphore: case REQ_open_semaphore: case REQ_query_semaphore:
++        return 3;
++    case REQ_close_handle: case REQ_dup_handle:
++        return 4;
++    case REQ_send_message: case REQ_send_hardware_message: case REQ_get_message: case REQ_reply_message:
++    case REQ_accept_hardware_message: case REQ_get_message_reply: case REQ_get_queue_status: case REQ_set_queue_mask:
++        return 5;
++    default:
++        return 6;
++    }
++}
++
++static const char *ios_srv_type_name( unsigned int req )
++{
++    switch (req)
++    {
++#define N(x) case REQ_##x: return #x;
++    N(select) N(event_op) N(create_event) N(open_event) N(query_event)
++    N(release_mutex) N(create_mutex) N(open_mutex) N(query_mutex)
++    N(release_semaphore) N(create_semaphore) N(open_semaphore) N(query_semaphore)
++    N(close_handle) N(dup_handle) N(send_message) N(send_hardware_message) N(get_message)
++    N(reply_message) N(accept_hardware_message) N(get_message_reply) N(get_queue_status)
++    N(set_queue_mask) N(queue_apc) N(get_apc_result) N(get_handle_fd) N(get_thread_times)
++    N(get_key_state) N(set_cursor) N(get_update_region) N(get_msg_queue) N(get_msg_queue_handle)
++    N(create_keyed_event) N(open_keyed_event) N(get_process_idle_event) N(set_timer) N(cancel_timer)
++    N(create_timer) N(open_key) N(get_key_value) N(read_directory_changes)
++#undef N
++    default: return NULL;
++    }
++}
++
++static struct ios_srv_thr *ios_srv_slot( void )
++{
++    uintptr_t teb = (uintptr_t)NtCurrentTeb();
++    unsigned int tid, h, i;
++
++    if (!teb) return NULL;   /* a process's first requests come before its TEB is set */
++    tid = (unsigned int)(uintptr_t)((TEB *)teb)->ClientId.UniqueThread;
++    h = (unsigned int)(((teb >> 12) * 2654435761u) % IOS_SRV_SLOTS);
++    for (i = 0; i < 32; i++, h = (h + 1) % IOS_SRV_SLOTS)
++    {
++        struct ios_srv_thr *s = &ios_srv_thr_tab[h];
++        if (s->teb == teb)
++        {
++            if (s->wine_tid != tid)   /* a new thread in a freed TEB: start over */
++            {
++                memset( s->n, 0, sizeof(s->n) );
++                s->rt_ticks = s->blk_ticks = s->nblk = 0;
++                s->wine_tid = tid;
++            }
++            return s;
++        }
++        if (!s->teb && __sync_bool_compare_and_swap( &s->teb, 0, teb ))
++        {
++            s->wine_tid = tid;
++            return s;
++        }
++    }
++    return NULL;
++}
++
++/* one request's round trip; req is the request's type, read before the reply
++ * overwrote it */
++static void ios_srv_note_call( unsigned int req, unsigned long long ticks )
++{
++    struct ios_srv_thr *s = ios_srv_slot();
++    if (req < REQ_NB_REQUESTS) ios_srv_type_n[req]++;
++    if (!s) return;
++    s->n[ios_srv_kind( req )]++;
++    s->rt_ticks += ticks;
++}
++
++/* a select's wait for its wake-up, after the request said the wait is pending */
++static void ios_srv_note_block( unsigned long long ticks )
++{
++    struct ios_srv_thr *s = ios_srv_slot();
++    if (!s) return;
++    s->blk_ticks += ticks;
++    s->nblk++;
++}
++
++static void ios_srv_report( const char *wall, double wall_s )
++{
++    static struct { unsigned int tid; unsigned long long n[IOS_SRV_KINDS], rt, blk, nblk; } prev[IOS_SRV_SLOTS];
++    static struct { unsigned int tid; unsigned long long n[IOS_SRV_KINDS], tot, rt, blk, nblk; } rows[IOS_SRV_SLOTS];
++    static unsigned long long prev_type[REQ_NB_REQUESTS], dtype[REQ_NB_REQUESTS];
++    static double last_s;
++    static int have;
++    mach_timebase_info_data_t tb;
++    unsigned long long kind[IOS_SRV_KINDS] = {0}, all = 0, rt = 0, blk = 0, nblk = 0;
++    double dt = last_s > 0 ? (wall_s - last_s) * 1000.0 : 0, tms;
++    char line[1024];
++    int nrows = 0, n, i, k, shown;
++
++    mach_timebase_info( &tb );
++    tms = (double)tb.numer / tb.denom / 1e6;   /* ms per tick */
++    for (i = 0; i < IOS_SRV_SLOTS; i++)
++    {
++        const struct ios_srv_thr *s = &ios_srv_thr_tab[i];
++        unsigned long long cur[IOS_SRV_KINDS], crt, cblk, cnblk, tot = 0;
++        unsigned int tid;
++        if (!s->teb) continue;
++        tid = s->wine_tid;
++        for (k = 0; k < IOS_SRV_KINDS; k++) cur[k] = s->n[k];
++        crt = s->rt_ticks; cblk = s->blk_ticks; cnblk = s->nblk;
++        if (prev[i].tid != tid) memset( &prev[i], 0, sizeof(prev[i]) );
++        if (have && nrows < IOS_SRV_SLOTS)
++        {
++            rows[nrows].tid = tid;
++            for (k = 0; k < IOS_SRV_KINDS; k++)
++            {
++                rows[nrows].n[k] = cur[k] >= prev[i].n[k] ? cur[k] - prev[i].n[k] : 0;
++                tot += rows[nrows].n[k];
++                kind[k] += rows[nrows].n[k];
++            }
++            rows[nrows].tot = tot;
++            rows[nrows].rt = crt >= prev[i].rt ? crt - prev[i].rt : 0;
++            rows[nrows].blk = cblk >= prev[i].blk ? cblk - prev[i].blk : 0;
++            rows[nrows].nblk = cnblk >= prev[i].nblk ? cnblk - prev[i].nblk : 0;
++            all += tot; rt += rows[nrows].rt; blk += rows[nrows].blk; nblk += rows[nrows].nblk;
++            if (tot || rows[nrows].blk) nrows++;
++        }
++        prev[i].tid = tid;
++        for (k = 0; k < IOS_SRV_KINDS; k++) prev[i].n[k] = cur[k];
++        prev[i].rt = crt; prev[i].blk = cblk; prev[i].nblk = cnblk;
++    }
++    for (i = 0; i < REQ_NB_REQUESTS; i++)
++    {
++        unsigned long long c = ios_srv_type_n[i];
++        dtype[i] = c >= prev_type[i] ? c - prev_type[i] : 0;
++        prev_type[i] = c;
++    }
++    last_s = wall_s;
++    if (!have) { have = 1; return; }
++
++    /* the whole process: requests by kind, round-trip and blocked ms, then the busiest types */
++    n = snprintf( line, sizeof(line), "[srv] %s dt=%.0f req=%llu", wall, dt, all );
++    for (k = 0; k < IOS_SRV_KINDS; k++) n += snprintf( line + n, sizeof(line) - n, " %s=%llu", ios_srv_kind_names[k], kind[k] );
++    n += snprintf( line + n, sizeof(line) - n, " rt=%.1f blk=%.1f nblk=%llu |", rt * tms, blk * tms, nblk );
++    for (shown = 0; shown < 10 && n < (int)sizeof(line) - 48; shown++)
++    {
++        int best = -1; const char *nm;
++        for (i = 0; i < REQ_NB_REQUESTS; i++) if (dtype[i] && (best < 0 || dtype[i] > dtype[best])) best = i;
++        if (best < 0) break;
++        if ((nm = ios_srv_type_name( best ))) n += snprintf( line + n, sizeof(line) - n, " %s=%llu", nm, dtype[best] );
++        else n += snprintf( line + n, sizeof(line) - n, " req%d=%llu", best, dtype[best] );
++        dtype[best] = 0;
++    }
++    wine_log_write( "%s", line );
++
++    /* each thread that made a request or was blocked: Windows TID, then
++     * sel/ev/mtx/sem/hdl/msg/oth counts : round-trip ms / blocked ms /
++     * selects that blocked; most round-trip ms first, blocked ms breaking a
++     * tie, so threads parked in selects never push a calling one off the line */
++    n = snprintf( line, sizeof(line), "[srv-t] %s", wall );
++    for (shown = 0; n < (int)sizeof(line) - 80; shown++)
++    {
++        int best = -1;
++        for (i = 0; i < nrows; i++)
++            if (rows[i].tid != ~0u && (best < 0 || rows[i].rt > rows[best].rt || (rows[i].rt == rows[best].rt && rows[i].blk > rows[best].blk))) best = i;
++        if (best < 0) break;
++        n += snprintf( line + n, sizeof(line) - n, " -%04x:", rows[best].tid );
++        for (k = 0; k < IOS_SRV_KINDS; k++)
++            n += snprintf( line + n, sizeof(line) - n, k ? "/%llu" : "%llu", rows[best].n[k] );
++        n += snprintf( line + n, sizeof(line) - n, ":%.2f/%.1f/%llu", rows[best].rt * tms, rows[best].blk * tms, rows[best].nblk );
++        rows[best].tid = ~0u;
++    }
++    wine_log_write( "%s", line );
++}
++
+ static void ios_xprobe_main( void )
+ {
+     static struct ios_xp_row rows[1024];
+@@ -1536,6 +1739,7 @@ static void ios_xprobe_main( void )
+                 wine_log_write( "%s", line );
+             }
+             if (!(gen & 3)) ios_xp_api_report( wall, XP_MS( now - t_start ) / 1000.0 );   /* ml1131: ~1 s */
++            if (!(gen & 3)) ios_srv_report( wall, XP_MS( now - t_start ) / 1000.0 );      /* Playport: ~1 s */
+         }
+         else if (ru_rc && gen < 4) wine_log_write( "[xp] ml1128 proc_pid_rusage v6 failed rc=%d errno=%d", ru_rc, errno );
+         if (!ru_rc) { pru = ru; have_ru = 1; }
+@@ -1810,6 +2014,9 @@ unsigned int server_call_unlocked( void *req_ptr )
+     struct __server_request_info * const req = req_ptr;
+     unsigned int ret;
+ 
++    unsigned int type = req->u.req.request_header.req;   /* the reply overwrites it */
++    unsigned long long t0 = mach_absolute_time();
++
+     ios_srv_req_count++;
+     if ((ret = send_request( data->request_fd, req ))) return ret;
+     /* iOS-Madeira 2026-07-05: kick the in-process server loop out of its
+@@ -1819,7 +2026,9 @@ unsigned int server_call_unlocked( void *req_ptr )
+         extern void ios_wineserver_wake(void);
+         ios_wineserver_wake();
+     }
+-    return wait_reply( data->reply_fd, req );
++    ret = wait_reply( data->reply_fd, req );
++    ios_srv_note_call( type, mach_absolute_time() - t0 );   /* Playport: [srv] census */
++    return ret;
+ }
+ 
+ 
+@@ -2320,7 +2529,11 @@ unsigned int server_select( const union select_op *select_op, data_size_t size,
+         pthread_sigmask( SIG_SETMASK, &old_set, NULL );
+         if (signaled) break;
+ 
+-        ret = wait_select_reply( data->wait_fd, &cookie );
++        {
++            unsigned long long t0 = mach_absolute_time();
++            ret = wait_select_reply( data->wait_fd, &cookie );
++            ios_srv_note_block( mach_absolute_time() - t0 );   /* Playport: [srv] census */
++        }
+     }
+     while (ret == STATUS_USER_APC || ret == STATUS_KERNEL_APC);
+ 

@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Thu, 10 Oct 2024 21:32:55 -0600
+Subject: [PATCH] ntdll: HACK: Introduce WINE_HEAP_TOP_DOWN hack.
+
+CW-Bug-Id: #24362
+Valve-commit: 0673170e08124f172454b109c75aded85b9a9039
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/heap.c       | 6 +++++-
+ dlls/ntdll/loader.c     | 5 +++++
+ dlls/ntdll/ntdll_misc.h | 1 +
+ 3 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/heap.c b/dlls/ntdll/heap.c
+index 1f72376..3665665 100644
+--- a/dlls/ntdll/heap.c
++++ b/dlls/ntdll/heap.c
+@@ -330,6 +330,7 @@ C_ASSERT( HEAP_MIN_LARGE_BLOCK_SIZE <= HEAP_INITIAL_GROW_SIZE );
+ 
+ BOOL delay_heap_free = FALSE;
+ BOOL heap_zero_hack = FALSE;
++BOOL heap_top_down_hack = FALSE;
+ 
+ static struct heap *process_heap;  /* main process heap */
+ 
+@@ -974,6 +975,7 @@ static struct block *split_block( struct heap *heap, ULONG flags, struct block *
+ static void *allocate_region( struct heap *heap, ULONG flags, SIZE_T *region_size, SIZE_T *commit_size )
+ {
+     const SIZE_T align = 0x400 * sizeof(void*);  /* minimum alignment for virtual allocations */
++    ULONG reserve_flags = MEM_RESERVE;
+     void *addr = NULL;
+     NTSTATUS status;
+ 
+@@ -986,8 +988,10 @@ static void *allocate_region( struct heap *heap, ULONG flags, SIZE_T *region_siz
+     *region_size = ROUND_SIZE( *region_size, align - 1 );
+     *commit_size = ROUND_SIZE( *commit_size, align - 1 );
+ 
++    if (heap_top_down_hack) reserve_flags |= MEM_TOP_DOWN;
++
+     /* allocate the memory block */
+-    if ((status = NtAllocateVirtualMemory( NtCurrentProcess(), &addr, 0, region_size, MEM_RESERVE,
++    if ((status = NtAllocateVirtualMemory( NtCurrentProcess(), &addr, 0, region_size, reserve_flags,
+                                            get_protection_type( flags ) )))
+     {
+         WARN( "Could not allocate %#Ix bytes, status %#lx\n", *region_size, status );
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index e5afd69..f8aa050 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -5670,6 +5670,11 @@ void loader_init( CONTEXT *context, void **entry )
+             ERR( "Enabling heap zero hack.\n" );
+             heap_zero_hack = TRUE;
+         }
++        if (get_env( L"WINE_HEAP_TOP_DOWN", env_str, sizeof(env_str)) && env_str[0] == L'1')
++        {
++            ERR( "Enabling heap top down hack.\n" );
++            heap_top_down_hack = TRUE;
++        }
+ 
+         peb->ProcessHeap        = RtlCreateHeap( heap_flags, NULL, 0, 0, NULL, NULL );
+ 
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index c77ca61..281d746 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -53,6 +53,7 @@ static const UINT_PTR page_size = 0x1000;
+ 
+ extern BOOL delay_heap_free;
+ extern BOOL heap_zero_hack;
++extern BOOL heap_top_down_hack;
+ 
+ /* exceptions */
+ extern NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *context );

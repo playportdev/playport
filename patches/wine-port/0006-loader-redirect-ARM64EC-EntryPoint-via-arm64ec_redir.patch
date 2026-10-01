@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 15:09:29 +0800
+Subject: [PATCH] loader: redirect ARM64EC EntryPoint via arm64ec_redirect_ptr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ARM64EC PE binaries (ucrtbase, kernel32, kernelbase) point
+AddressOfEntryPoint at the .hexpthk section — the x86_64 fast-forward
+thunk that wraps the actual ARM64-native DllMain. Calling DllMain at
+that address directly executes x86_64 bytes as ARM64 instructions,
+faulting immediately.
+
+Apply arm64ec_redirect_ptr to the EntryPoint after computing it so
+Wine calls the real ARM64-native DllMain. Mirrors the same redirect
+applied to imported function pointers in import_dll.
+
+After this, kernelbase + kernel32 DllMains run to RETURN 1 cleanly
+during the ARM64EC dependency walk.
+
+(cherry picked from commit b06e11567d5b177e5d7185e266f69f73e3f27a9f)
+Madeira-commit: ca9a759f1ab10ae40c3b70b937fcb5222a4099c9
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 4dba3d010f9..f7bce0d23b7 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1603,7 +1603,19 @@ static WINE_MODREF *alloc_module( HMODULE hModule, const UNICODE_STRING *nt_name
+         if (nt->FileHeader.Characteristics & IMAGE_FILE_DLL)
+             wm->ldr.Flags |= LDR_IMAGE_IS_DLL;
+         if (nt->OptionalHeader.AddressOfEntryPoint)
++        {
+             wm->ldr.EntryPoint = (char *)hModule + nt->OptionalHeader.AddressOfEntryPoint;
++#ifdef __arm64ec__
++            /* For ARM64EC PEs, AddressOfEntryPoint can point into .hexpthk
++             * (x86_64 fast-forward thunks). Redirect to the ARM64-native
++             * target so we don't execute x86_64 bytes as ARM64. */
++            {
++                const IMAGE_ARM64EC_METADATA *metadata = arm64ec_get_module_metadata( hModule );
++                if (metadata)
++                    wm->ldr.EntryPoint = arm64ec_redirect_ptr( hModule, wm->ldr.EntryPoint, metadata );
++            }
++#endif
++        }
+     }
+ 
+     InsertTailList(&NtCurrentTeb()->Peb->LdrData->InLoadOrderModuleList,

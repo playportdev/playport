@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Thu, 26 Oct 2023 14:26:41 +0200
+Subject: [PATCH] HACK: dmime: Don't send segment end message for secondary
+ segments.
+
+CW-Bug-Id: #16680
+CW-Bug-Id: #20424
+CW-Bug-Id: #22409
+Valve-commit: 46cedf9d9fe872e406f6e1ad213dcf91bce0a982
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/dmime/dmime_private.h | 2 +-
+ dlls/dmime/performance.c   | 2 +-
+ dlls/dmime/segmentstate.c  | 7 +++++--
+ 3 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/dmime/dmime_private.h b/dlls/dmime/dmime_private.h
+index f2d1947..b3a297b 100644
+--- a/dlls/dmime/dmime_private.h
++++ b/dlls/dmime/dmime_private.h
+@@ -77,7 +77,7 @@ extern void set_audiopath_perf_pointer(IDirectMusicAudioPath*,IDirectMusicPerfor
+ extern void set_audiopath_dsound_buffer(IDirectMusicAudioPath*,IDirectSoundBuffer*);
+ extern void set_audiopath_primary_dsound_buffer(IDirectMusicAudioPath*,IDirectSoundBuffer*);
+ 
+-extern HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time,
++extern HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time, DWORD segment_flags,
+         IDirectMusicPerformance8 *performance, IDirectMusicSegmentState **ret_iface);
+ extern HRESULT segment_state_play(IDirectMusicSegmentState *iface, IDirectMusicPerformance8 *performance);
+ extern HRESULT segment_state_tick(IDirectMusicSegmentState *iface, IDirectMusicPerformance8 *performance);
+diff --git a/dlls/dmime/performance.c b/dlls/dmime/performance.c
+index 9ab6e8c..a0c6929 100644
+--- a/dlls/dmime/performance.c
++++ b/dlls/dmime/performance.c
+@@ -1627,7 +1627,7 @@ static HRESULT WINAPI performance_PlaySegmentEx(IDirectMusicPerformance8 *iface,
+     if (control) performance_set_control_segment(This, segment);
+ 
+     if ((!(music_time = start_time) && FAILED(hr = IDirectMusicPerformance8_GetTime(iface, NULL, &music_time)))
+-            || FAILED(hr = segment_state_create(segment, music_time, iface, &state)))
++            || FAILED(hr = segment_state_create(segment, music_time, segment_flags, iface, &state)))
+     {
+         if (primary) performance_set_primary_segment(This, NULL);
+         if (control) performance_set_control_segment(This, NULL);
+diff --git a/dlls/dmime/segmentstate.c b/dlls/dmime/segmentstate.c
+index 4fece41..2c6f889 100644
+--- a/dlls/dmime/segmentstate.c
++++ b/dlls/dmime/segmentstate.c
+@@ -61,6 +61,7 @@ struct segment_state
+     BOOL auto_download;
+     DWORD repeats, actual_repeats;
+     DWORD track_flags;
++    DWORD segment_flags;
+ 
+     struct list tracks;
+ };
+@@ -118,7 +119,7 @@ static ULONG WINAPI segment_state_Release(IDirectMusicSegmentState8 *iface)
+ 
+     if (!ref)
+     {
+-        segment_state_end_play((IDirectMusicSegmentState *)iface, NULL);
++        if (!(This->segment_flags & DMUS_SEGF_SECONDARY)) segment_state_end_play((IDirectMusicSegmentState *)iface, NULL);
+         if (This->segment) IDirectMusicSegment_Release(This->segment);
+         if (This->parent_graph) IDirectMusicGraph_Release(This->parent_graph);
+         free(This);
+@@ -309,7 +310,7 @@ HRESULT create_dmsegmentstate(REFIID riid, void **ret_iface)
+     return hr;
+ }
+ 
+-HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time,
++HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time, DWORD segment_flags,
+         IDirectMusicPerformance8 *performance, IDirectMusicSegmentState **ret_iface)
+ {
+     IDirectMusicSegmentState *iface;
+@@ -324,6 +325,7 @@ HRESULT segment_state_create(IDirectMusicSegment *segment, MUSIC_TIME start_time
+     if (FAILED(hr = create_dmsegmentstate(&IID_IDirectMusicSegmentState, (void **)&iface))) return hr;
+     This = impl_from_IDirectMusicSegmentState8((IDirectMusicSegmentState8 *)iface);
+ 
++    This->segment_flags = segment_flags;
+     This->segment = segment;
+     IDirectMusicSegment_AddRef(This->segment);
+ 
+@@ -436,6 +438,7 @@ static HRESULT segment_state_play_chunk(struct segment_state *This, IDirectMusic
+         {
+             MUSIC_TIME end_time = This->start_time + This->played;
+ 
++            if (This->segment_flags & DMUS_SEGF_SECONDARY) return S_OK;
+             if (FAILED(hr = performance_send_segment_end(performance, end_time, iface, FALSE)))
+             {
+                 ERR("Failed to send segment end, hr %#lx\n", hr);

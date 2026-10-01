@@ -1,0 +1,276 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 15:15:45 +0200
+Subject: [PATCH] winemetal: regenerate the dispatch guards and census names
+ after the upstream rebase
+
+The rebase onto 3Shain/dxmt main put upstream's unix calls at slots 127-145
+and Madeira's appended calls after them (madeira_ir_convert 146,
+newRenderPipelineStateVD 147, newGeometryEmulationPipelineState 148,
+madeira_ctl 149). gen_remote_guard.py and gen_api_names.py own the table's
+guard names and the census name list, so both are rerun here. Upstream's
+residency-set and heap calls carry Madeira's remote handling in their bodies
+and join the routed set.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/gen_remote_guard.py     |  6 +-
+ src/winemetal/unix/winemetal_unix.c   | 44 ++++++-------
+ src/winemetal/unix/wmt_remote_guard.h | 91 +++++++++++++++++++++++++++
+ src/winemetal/wmt_api_names.h         | 29 ++++++---
+ 4 files changed, 138 insertions(+), 32 deletions(-)
+
+diff --git a/src/winemetal/gen_remote_guard.py b/src/winemetal/gen_remote_guard.py
+index ae367b4..49f60aa 100644
+--- a/src/winemetal/gen_remote_guard.py
++++ b/src/winemetal/gen_remote_guard.py
+@@ -79,8 +79,12 @@ ROUTED = {
+     '_MTLCommandEncoder_setLabel',
+     '_MTLDevice_newRenderPipelineStateVD',
+     '_MTLDevice_newSharedTexture',
+-    '_MTLDevice_newResidencySet', '_MTLResidencySet_addAllocation',
++    # residency sets and heaps: upstream DXMT's calls, with Madeira's remote
++    # handling folded into their bodies (routed, or a clean 0 / no-op)
++    '_MTLDevice_newResidencySet', '_MTLResidencySet_addAllocations',
++    '_MTLResidencySet_removeAllocations',
+     '_MTLResidencySet_commit', '_MTLCommandQueue_addResidencySet',
++    '_MTLDevice_newHeap', '_MTLDevice_heapTextureSizeAndAlign', '_MTLHeap_newTexture',
+     '_MTLDevice_newGeometryEmulationPipelineState',
+ }
+ 
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 44fb5ae..6664ef0 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -5161,25 +5161,25 @@ const void *__wine_unix_call_funcs[] = {
+     &_rmg_MTLDevice_newSharedEventWithMachPort,
+     &_MTLDevice_registryID,
+     &_rmg_MTLSharedEvent_waitUntilSignaledValue,
+-    &_MTLCounterSampleBuffer_newTimestampBuffer,
+-    &_MTLCounterSampleBuffer_resolveCounterRange,
+-    &_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers,
+-    &_MTLCommandBuffer_property,
+-    &_MTLDevice_newTileRenderPipelineState,
++    &_rmg_MTLCounterSampleBuffer_newTimestampBuffer,
++    &_rmg_MTLCounterSampleBuffer_resolveCounterRange,
++    &_rmg_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers,
++    &_rmg_MTLCommandBuffer_property,
++    &_rmg_MTLDevice_newTileRenderPipelineState,
+     &_MTLDevice_newResidencySet,
+     &_MTLResidencySet_addAllocations,
+     &_MTLResidencySet_removeAllocations,
+-    &_MTLResidencySet_removeAllAllocations,
++    &_rmg_MTLResidencySet_removeAllAllocations,
+     &_MTLResidencySet_commit,
+     &_MTLCommandQueue_addResidencySet,
+     &_MTLDevice_newHeap,
+-    &_MTLDevice_heapBufferSizeAndAlign,
++    &_rmg_MTLDevice_heapBufferSizeAndAlign,
+     &_MTLDevice_heapTextureSizeAndAlign,
+-    &_MTLHeap_newBuffer,
++    &_rmg_MTLHeap_newBuffer,
+     &_MTLHeap_newTexture,
+-    &_MTLDevice_newIndirectCommandBuffer,
+-    &_MTLDevice_newLibraryWithSource,
+-    &_MTLTexture_getBytes,
++    &_rmg_MTLDevice_newIndirectCommandBuffer,
++    &_rmg_MTLDevice_newLibraryWithSource,
++    &_rmg_MTLTexture_getBytes,
+     /* Madeira's appended slots (madeira-d3d12 and the geometry-emulation
+      * pipeline). APPENDED after upstream's, never inserted: the slot number is
+      * the ABI. Madeira's own residency-set slots are not carried: upstream
+@@ -5323,25 +5323,25 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_rmg_MTLDevice_newSharedEventWithMachPort,
+     &_MTLDevice_registryID,
+     &_rmg_MTLSharedEvent_waitUntilSignaledValue,
+-    &_MTLCounterSampleBuffer_newTimestampBuffer,
+-    &_MTLCounterSampleBuffer_resolveCounterRange,
+-    &_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers,
+-    &_MTLCommandBuffer_property,
+-    &_MTLDevice_newTileRenderPipelineState,
++    &_rmg_MTLCounterSampleBuffer_newTimestampBuffer,
++    &_rmg_MTLCounterSampleBuffer_resolveCounterRange,
++    &_rmg_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers,
++    &_rmg_MTLCommandBuffer_property,
++    &_rmg_MTLDevice_newTileRenderPipelineState,
+     &_MTLDevice_newResidencySet,
+     &_MTLResidencySet_addAllocations,
+     &_MTLResidencySet_removeAllocations,
+-    &_MTLResidencySet_removeAllAllocations,
++    &_rmg_MTLResidencySet_removeAllAllocations,
+     &_MTLResidencySet_commit,
+     &_MTLCommandQueue_addResidencySet,
+     &_MTLDevice_newHeap,
+-    &_MTLDevice_heapBufferSizeAndAlign,
++    &_rmg_MTLDevice_heapBufferSizeAndAlign,
+     &_MTLDevice_heapTextureSizeAndAlign,
+-    &_MTLHeap_newBuffer,
++    &_rmg_MTLHeap_newBuffer,
+     &_MTLHeap_newTexture,
+-    &_MTLDevice_newIndirectCommandBuffer,
+-    &_MTLDevice_newLibraryWithSource,
+-    &_MTLTexture_getBytes,
++    &_rmg_MTLDevice_newIndirectCommandBuffer,
++    &_rmg_MTLDevice_newLibraryWithSource,
++    &_rmg_MTLTexture_getBytes,
+     &_madeira_ir_convert_wow64,
+     &_MTLDevice_newRenderPipelineStateVD_wow64,
+     &_MTLDevice_newGeometryEmulationPipelineState_wow64,
+diff --git a/src/winemetal/unix/wmt_remote_guard.h b/src/winemetal/unix/wmt_remote_guard.h
+index b386a96..1baea14 100644
+--- a/src/winemetal/unix/wmt_remote_guard.h
++++ b/src/winemetal/unix/wmt_remote_guard.h
+@@ -257,3 +257,94 @@ static NTSTATUS _rmg_MTLSharedEvent_waitUntilSignaledValue(void *obj) {
+   }
+   return _MTLSharedEvent_waitUntilSignaledValue(obj);
+ }
++static NTSTATUS _rmg_MTLCounterSampleBuffer_newTimestampBuffer(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlcountersamplebuffer_newtimestampbuffer *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCounterSampleBuffer_newTimestampBuffer");
++  }
++  return _MTLCounterSampleBuffer_newTimestampBuffer(obj);
++}
++static NTSTATUS _rmg_MTLCounterSampleBuffer_resolveCounterRange(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLCounterSampleBuffer_resolveCounterRange");
++  }
++  return _MTLCounterSampleBuffer_resolveCounterRange(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlcommandbuffer_blitcommandencoderwithsamplebuffers *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCommandBuffer_blitCommandEncoderWithSampleBuffers");
++  }
++  return _MTLCommandBuffer_blitCommandEncoderWithSampleBuffers(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_property(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCommandBuffer_property");
++  }
++  return _MTLCommandBuffer_property(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newTileRenderPipelineState(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newrenderpso *p = obj;
++    p->ret_error = 0;   /* never hand back uninitialised stack */
++    p->ret_pso = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newTileRenderPipelineState");
++  }
++  return _MTLDevice_newTileRenderPipelineState(obj);
++}
++static NTSTATUS _rmg_MTLResidencySet_removeAllAllocations(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLResidencySet_removeAllAllocations");
++  }
++  return _MTLResidencySet_removeAllAllocations(obj);
++}
++static NTSTATUS _rmg_MTLDevice_heapBufferSizeAndAlign(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_heapbuffersizeandalign *p = obj;
++    p->ret_size = 0;   /* never hand back uninitialised stack */
++    p->ret_align = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_heapBufferSizeAndAlign");
++  }
++  return _MTLDevice_heapBufferSizeAndAlign(obj);
++}
++static NTSTATUS _rmg_MTLHeap_newBuffer(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlheap_newbuffer *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLHeap_newBuffer");
++  }
++  return _MTLHeap_newBuffer(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newIndirectCommandBuffer(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newicb *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newIndirectCommandBuffer");
++  }
++  return _MTLDevice_newIndirectCommandBuffer(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newLibraryWithSource(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newlibrarywithsource *p = obj;
++    p->ret_error = 0;   /* never hand back uninitialised stack */
++    p->ret_library = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newLibraryWithSource");
++  }
++  return _MTLDevice_newLibraryWithSource(obj);
++}
++static NTSTATUS _rmg_MTLTexture_getBytes(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLTexture_getBytes");
++  }
++  return _MTLTexture_getBytes(obj);
++}
++static NTSTATUS _rmg_madeira_ctl(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("madeira_ctl");
++  }
++  return _madeira_ctl(obj);
++}
+diff --git a/src/winemetal/wmt_api_names.h b/src/winemetal/wmt_api_names.h
+index 06b2941..bc77ab1 100644
+--- a/src/winemetal/wmt_api_names.h
++++ b/src/winemetal/wmt_api_names.h
+@@ -3,7 +3,7 @@
+ #ifndef WMT_API_NAMES_H
+ #define WMT_API_NAMES_H
+ 
+-#define WMT_API_COUNT 139
++#define WMT_API_COUNT 150
+ 
+ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "NSObject_retain",
+@@ -126,24 +126,35 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "CacheWriter_alloc_init",
+     "CacheWriter_set",
+     "WMTSetMetalShaderCachePath",
+-    "rmg_MTLDevice_newSharedTexture",
++    "MTLDevice_newSharedTexture",
+     "rmg_WMTBootstrapRegister",
+     "rmg_WMTBootstrapLookUp",
+     "rmg_MTLSharedEvent_createMachPort",
+     "rmg_MTLDevice_newSharedEventWithMachPort",
+     "MTLDevice_registryID",
+     "rmg_MTLSharedEvent_waitUntilSignaledValue",
+-    "madeira_ir_convert",
+-    "MTLDevice_newRenderPipelineStateVD",
++    "rmg_MTLCounterSampleBuffer_newTimestampBuffer",
++    "rmg_MTLCounterSampleBuffer_resolveCounterRange",
++    "rmg_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers",
++    "rmg_MTLCommandBuffer_property",
++    "rmg_MTLDevice_newTileRenderPipelineState",
+     "MTLDevice_newResidencySet",
+-    "MTLResidencySet_addAllocation",
++    "MTLResidencySet_addAllocations",
++    "MTLResidencySet_removeAllocations",
++    "rmg_MTLResidencySet_removeAllAllocations",
+     "MTLResidencySet_commit",
+     "MTLCommandQueue_addResidencySet",
+-    "MTLDevice_newGeometryEmulationPipelineState",
+-    "MTLResidencySet_removeAllocation",
++    "MTLDevice_newHeap",
++    "rmg_MTLDevice_heapBufferSizeAndAlign",
+     "MTLDevice_heapTextureSizeAndAlign",
+-    "MTLDevice_newPlacementHeap",
+-    "MTLHeap_newTextureAtOffset",
++    "rmg_MTLHeap_newBuffer",
++    "MTLHeap_newTexture",
++    "rmg_MTLDevice_newIndirectCommandBuffer",
++    "rmg_MTLDevice_newLibraryWithSource",
++    "rmg_MTLTexture_getBytes",
++    "madeira_ir_convert",
++    "MTLDevice_newRenderPipelineStateVD",
++    "MTLDevice_newGeometryEmulationPipelineState",
+     "madeira_ctl",
+ };
+ 

@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 11:30:47 +0200
+Subject: [PATCH] ntdll: take the XInput DLLs from system32, never from the
+ game's folder
+
+A game's own copy of these cannot work in this process. Microsoft's XInput,
+which Witcher 3 ships in bin\x64 and imports statically, looks for pads
+through SetupAPI and HID, and there is no winebus here; Wine's builtins read
+the host controller snapshot. Madeira's iOS unix loader never substitutes a
+builtin for a mapped file (loader_ios.c load_builtin), so a load-order
+override cannot choose the builtin, and the app runs no wineboot to create
+KnownDLLs. Open these five names from system32 before the search, as a
+KnownDLL would be.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-26-witcher3-profile.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 3da2f862505..f4eb9ff8b43 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3913,6 +3913,42 @@ done:
+     return status;
+ }
+ 
++/* Playport: DLLs a game's own copy of cannot work in this process, so they are
++ * always taken from system32, as a KnownDLL would be. Microsoft's XInput (which
++ * Witcher 3 ships in bin\x64) looks for pads through SetupAPI and HID, and this
++ * process has no winebus; Wine's builtins read the host controller snapshot.
++ * The iOS unix loader never substitutes a builtin for a mapped file
++ * (loader_ios.c load_builtin), so a load-order override cannot do this, and
++ * the app runs no wineboot to create KnownDLLs. */
++static NTSTATUS open_system_only_dll( const WCHAR *name, UNICODE_STRING *nt_name, WINE_MODREF **pwm,
++                                      HANDLE *mapping, SECTION_IMAGE_INFORMATION *image_info,
++                                      struct file_id *id )
++{
++    static const WCHAR * const names[] =
++        { L"xinput1_1.dll", L"xinput1_2.dll", L"xinput1_3.dll", L"xinput1_4.dll", L"xinput9_1_0.dll" };
++    static const WCHAR sys32W[] = L"\\??\\C:\\windows\\system32\\";
++    WCHAR *buf;
++    unsigned int i;
++    NTSTATUS status;
++
++    for (i = 0; i < ARRAY_SIZE(names); i++) if (!wcsicmp( name, names[i] )) break;
++    if (i == ARRAY_SIZE(names)) return STATUS_DLL_NOT_FOUND;
++    if (!(buf = RtlAllocateHeap( GetProcessHeap(), 0, (wcslen( sys32W ) + wcslen( name ) + 1) * sizeof(WCHAR) )))
++        return STATUS_NO_MEMORY;
++    wcscpy( buf, sys32W );
++    wcscat( buf, name );
++    RtlInitUnicodeString( nt_name, buf );
++    status = open_dll_file( nt_name, pwm, mapping, image_info, id );
++    if (status)
++    {
++        RtlFreeUnicodeString( nt_name );
++        nt_name->Buffer = NULL;
++    }
++    else TRACE( "%s from system32 (a game's own copy cannot work here)\n", debugstr_w(name) );
++    return status;
++}
++
++
+ /***********************************************************************
+  *	find_dll_file
+  *
+@@ -3956,6 +3992,7 @@ static NTSTATUS find_dll_file( const WCHAR *load_path, const WCHAR *libname, UNI
+                 return STATUS_DLL_NOT_FOUND;
+             }
+             if (!open_known_dll( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
++            if (!open_system_only_dll( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
+         }
+     }
+ 

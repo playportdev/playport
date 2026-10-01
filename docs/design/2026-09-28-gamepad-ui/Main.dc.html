@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Playport Home</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+a.leg{padding:4px 8px;margin:0 -8px;border-radius:14px;color:#C9D1DC}a.leg:hover{background:#1D242E;color:#EEF1F5}
+.tab{font:600 15px 'Barlow Semi Condensed',sans-serif;color:#9AA5B4;padding:5px 12px;border-radius:8px}
+.tab.on{color:#0B0E13;background:#EEF1F5}
+.focus{outline:3px solid #F5B544;outline-offset:3px}
+.art{display:flex;align-items:flex-end;box-sizing:border-box;padding:10px;font:700 15px 'Barlow Semi Condensed',sans-serif;color:#FFFFFF;text-transform:uppercase;letter-spacing:.04em;border-radius:10px}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13; display: flex; flex-direction: column">
+<div style="height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 44px; flex-shrink: 0">
+<span class="g">LB</span>
+<a class="tab on" href="Main.dc.html">Home</a>
+<a class="tab" href="Library.dc.html">Library</a>
+<a class="tab" href="Downloads.dc.html">Downloads</a>
+<span style="font: 600 11px 'Barlow'; color: #0B0E13; background: #F5B544; border-radius: 8px; padding: 1px 6px; margin-left: -6px">1</span>
+<span class="g">RB</span>
+<div style="flex-grow: 1"></div>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #9AA5B4"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12a4 4 0 0 1 4 4v1a4 4 0 0 1-7 2.6L14 15h-4l-1 .6A4 4 0 0 1 2 13v-1a4 4 0 0 1 4-4z"></path><path d="M7 11v3"></path><path d="M5.5 12.5h3"></path></svg>Controller 80%</span>
+<a href="Settings.dc.html" aria-label="Settings" style="width: 30px; height: 30px; border-radius: 15px; background: #1D242E; color: #C9D1DC; display: flex; align-items: center; justify-content: center; margin-left: 10px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"></path></svg></a>
+</div>
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 14px; padding: 8px 44px 0">
+<div style="display: flex; gap: 14px; height: 170px; flex-shrink: 0">
+<a href="Game.dc.html" class="focus" style="flex-grow: 1; border-radius: 14px; background: #24324A; position: relative; display: flex; flex-direction: column; justify-content: flex-end; padding: 18px 20px; box-sizing: border-box; color: #EEF1F5">
+<div style="position: absolute; top: 14px; right: 16px; font: 600 11px 'Barlow'; letter-spacing: .08em; color: #9FB3D1">[HERO ART]</div>
+<div style="font: 600 12px 'Barlow'; letter-spacing: .1em; text-transform: uppercase; color: #F5B544">Continue playing</div>
+<div class="d" style="font-size: 38px; font-weight: 700; line-height: 1; margin-top: 4px">Hollow Knight</div>
+<div style="display: flex; align-items: center; gap: 14px; margin-top: 10px; font-size: 13px; color: #C9D1DC">
+<span style="display: flex; align-items: center; gap: 6px; background: #F5B544; color: #1A1204; font-weight: 700; padding: 5px 12px 5px 6px; border-radius: 16px"><span class="g" style="background: #1A1204; color: #F5B544">A</span>Play</span>
+<span>Played 2 h ago · 14 h total</span>
+</div>
+</a>
+<div style="width: 250px; height: 170px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px">
+<a href="Downloads.dc.html" style="flex: 1 1 0; min-height: 0; overflow: hidden; background: #151A21; border-radius: 12px; padding: 10px 14px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 5px; color: #EEF1F5">
+<div style="font: 600 11px 'Barlow'; line-height: 1; letter-spacing: .1em; text-transform: uppercase; color: #9AA5B4">Downloading</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between"><span class="d" style="font-size: 19px; font-weight: 700; line-height: 1.1">Hades</span><span style="font-size: 12px; color: #9AA5B4">62% · 4 min</span></div>
+<div style="height: 6px; background: #2A3340; border-radius: 3px"><div style="width: 62%; height: 6px; background: #6CA8FF; border-radius: 3px"></div></div>
+</a>
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; background: #151A21; border-radius: 12px; padding: 10px 14px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 5px">
+<div style="font: 600 11px 'Barlow'; line-height: 1; letter-spacing: .1em; text-transform: uppercase; color: #9AA5B4">Up next</div>
+<div class="d" style="font-size: 19px; font-weight: 700; line-height: 1.1">Celeste update</div>
+<div style="font-size: 12px; line-height: 1.2; color: #9AA5B4">1.2 GB · starts after Hades</div>
+</div>
+</div>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<div class="d" style="font-size: 17px; font-weight: 600">Installed</div>
+<a href="Library.dc.html" style="font-size: 13px">All games ›</a>
+</div>
+<div style="display: flex; gap: 12px">
+<a class="art" href="Game.dc.html" style="flex: 1 1 0; min-width: 0; height: 70px; background: #24324A">Hollow Knight</a>
+<div class="art" style="flex: 1 1 0; min-width: 0; height: 70px; background: #5B3A8C">Celeste</div>
+<div class="art" style="flex: 1 1 0; min-width: 0; height: 70px; background: #3E6A3A">Stardew Valley</div>
+<div class="art" style="flex: 1 1 0; min-width: 0; height: 70px; background: #6E2B2B; opacity: .55">Hades · 62%</div>
+<div class="art" style="flex: 1 1 0; min-width: 0; height: 70px; background: #151A21; color: #9AA5B4; border: 1px dashed #2A3340; justify-content: center; align-items: center">+ Find games</div>
+</div>
+</div>
+<div style="height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 18px; padding: 0 44px; border-top: 1px solid #1D242E">
+<a class="leg" href="Launch.dc.html"><span class="g">A</span>Play</a>
+<a class="leg" href="GameOptions.dc.html"><span class="g">X</span>Options</a>
+<a class="leg" href="Library.dc.html"><span class="g">Y</span>Search</a>
+<a class="leg" href="Settings.dc.html"><span class="g">≡</span>Settings</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

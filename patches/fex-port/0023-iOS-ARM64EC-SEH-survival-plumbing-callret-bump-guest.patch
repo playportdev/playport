@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 13 May 2026 14:30:16 +0800
+Subject: [PATCH] =?UTF-8?q?iOS=20ARM64EC:=20SEH=20survival=20plumbing=20?=
+ =?UTF-8?q?=E2=80=94=20callret=20bump=20+=20guest-stack=20rethrow?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two coordinated changes that let Thumper survive ~20k caught Mach
+exceptions on iOS instead of fatally terminating:
+
+1. CALLRET_STACK_SIZE bumped 4 MB → 16 MB (stopgap, not a principled fix).
+   SEH unwinds through translated code on iOS don't pop FEX's callret
+   entries because we don't have callret-aware SEH cleanup yet. With
+   thousands of caught faults on FMOD's worker thread, the original 4 MB
+   filled up. 16 MB buys ~1 M entries — enough to survive normal game
+   runtimes with a few hundred caught faults per thread. The principled
+   fix is callret-aware SEH unwind, tracked for later.
+
+2. Module.cpp:794 unconditional fatal bail when JIT-code fault arrives
+   on the guest stack converted to a "rethrow anyway" path under
+   FEX_IOS_HOST. iOS doesn't switch exception delivery to a separate
+   emulator stack like Windows-ARM64EC does (no CPU_AREA-driven
+   sigaltstack); Mach exception delivery arrives on whatever thread
+   stack is current, usually the guest stack. The Windows-only check
+   IsEmulatorStackAddress() always fails on iOS, so all JIT-code faults
+   were terminating the process. Now we attempt RethrowGuestException
+   anyway — same code Windows runs — and on this run that diverted 2
+   propagated C0000005s into recoverable guest-SEH dispatch.
+
+Effect on Thumper iOS port: process now survives the FMOD-worker
+ARM64EC entry-thunk NULL-deref loop (caused upstream by FMOD running
+without a real-time audio output clock). Game runs 13.7 M log lines
+with 20 k+ caught Mach exceptions, no NtTerminateProcess. Next blocker
+is the audio output clock itself, not exception machinery.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: 8f0243b30303aaeacb4a7f6d7e96f61b6e4fb316
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ .../include/FEXCore/Debug/InternalThreadState.h |  8 +++++++-
+ Source/Windows/ARM64EC/Module.cpp               | 17 +++++++++++++++++
+ 2 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/FEXCore/include/FEXCore/Debug/InternalThreadState.h b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+index 332169d..a9d1d52 100644
+--- a/FEXCore/include/FEXCore/Debug/InternalThreadState.h
++++ b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+@@ -109,7 +109,13 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
+   ///< Data pointer for exclusive use by the frontend
+   void* FrontendPtr;
+ 
+-  static constexpr size_t CALLRET_STACK_SIZE {0x400000};
++  // iOS-Mythic 2026-05-13: bumped 4MB → 16MB. SEH unwinds through translated
++  // code on iOS don't pop FEX callret entries (FEX has no SEH-aware callret
++  // cleanup yet), so caught faults leak entries. With 9700+ caught faults
++  // observed in Thumper FMOD worker, the original 4MB filled up. 16MB buys
++  // ~1M entries — enough to survive normal game runtimes that have a few
++  // hundred per-thread caught faults. Real fix: callret-aware SEH unwind.
++  static constexpr size_t CALLRET_STACK_SIZE {0x1000000};
+ 
+   // The low address of the call-ret stack allocation (not including guard pages)
+   void* CallRetStackBase {};
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 3b859b5..4e97870 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -800,8 +800,25 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+     LogMan::Msg::DFmt("Rethrowing onto guest stack: {:X}", NativeContext->Sp);
+     return true;
+   } else {
++#ifdef FEX_IOS_HOST
++    // iOS-Mythic 2026-05-13: iOS doesn't switch exception delivery to a
++    // separate emulator stack like Windows-ARM64EC does (no CPU_AREA-driven
++    // sigaltstack). Mach exception delivery arrives on whatever thread
++    // stack was current, which is usually the guest stack. Attempt rethrow
++    // anyway — same path Windows takes; worst case we crash here instead
++    // of terminating with "Unexpected exception" silently. Better signal
++    // than fatal bail.
++    LogMan::Msg::EFmt("iOS: rethrowing JIT fault onto guest stack despite "
++                       "frame@{:X} not in emulator-stack range ({:X}..{:X})",
++                       (uint64_t)__builtin_frame_address(0),
++                       CPUArea.EmulatorStackLimit(),
++                       CPUArea.EmulatorStackBase());
++    Exception::RethrowGuestException(*Exception, *NativeContext);
++    return true;
++#else
+     LogMan::Msg::EFmt("Unexpected exception in JIT code on guest stack");
+     return false;
++#endif
+   }
+ }
+ 

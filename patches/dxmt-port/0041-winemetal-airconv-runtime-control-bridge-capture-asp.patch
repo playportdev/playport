@@ -1,0 +1,1039 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 23 Sep 2026 03:13:14 +0800
+Subject: [PATCH] winemetal/airconv: runtime control bridge, capture aspect
+ copies, budget trim, GPU timing, defined render-target output lanes
+
+MadeiraCtl (slot 138): capture polling, file writes into the sandbox, config
+lookups and command-buffer GPU start/end times for the runtime's perf census.
+Texture-to-buffer blits carry an options field so depth and stencil aspect
+copies skip the block-compressed pitch check. The advertised video budget can
+be held fixed (vram-trim-mb = 0): a moving budget made the streamer thrash.
+Configuration comes from one file through madeira_cfg.h.
+
+airconv: a pixel shader that writes only some lanes of a render-target output
+used to shuffle the others in as undef, and LLVM folded the blend equation
+around an undefined source alpha to a constant 0. Unwritten lanes are now
+(0,0,0,1), the convention of the hardware D3D titles ship against. Also:
+interpolants the paired vertex stage never writes are zero-filled instead of
+rejecting the pipeline; SM5.x DXBC through the public converter entry.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Madeira-commit: 4c86e0920cea26d32d195429ae79644be7f41a03
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/airconv/airconv_public.h              |  59 ++++++++
+ src/airconv/dxbc_converter.cpp            | 104 +++++++++++++
+ src/airconv/dxbc_converter.hpp            |  18 ++-
+ src/airconv/dxbc_converter_basicblock.cpp |  52 +++++++
+ src/airconv/dxbc_instructions.cpp         |   8 +
+ src/airconv/dxbc_signature.cpp            |  18 ++-
+ src/dxgi/dxgi_adapter.cpp                 | 127 +++++++++++++++-
+ src/winemetal/unix/winemetal_unix.c       | 170 +++++++++++++++++++++-
+ src/winemetal/unix/wmt_remote_client.h    |  43 +++++-
+ src/winemetal/winemetal.h                 |  27 ++++
+ src/winemetal/winemetal_thunks.c          |  33 +++++
+ src/winemetal/wmt_api_names.h             |   7 +-
+ 12 files changed, 650 insertions(+), 16 deletions(-)
+
+diff --git a/src/airconv/airconv_public.h b/src/airconv/airconv_public.h
+index e167ae4..3761fd1 100644
+--- a/src/airconv/airconv_public.h
++++ b/src/airconv/airconv_public.h
+@@ -36,6 +36,26 @@ enum SM50_BINDING_INDEX: uint32_t {
+   SM50_BINDING_INDEX_STATIC_SAMPLERS = 1,
+ };
+ 
++/* ml1008: D3D12 needs each declaration range's REGISTER IDENTITY, which
++ * MTL_SM50_SHADER_ARGUMENT does not carry. That struct's SM50BindingSlot is the
++ * declaration RANGE ID; under SM 5.0 the range id doubles as the register, but
++ * under SM 5.1 it does not (a shader can declare range id 0 at b17). Binding by
++ * the reflected slot therefore silently binds the wrong resource.
++ *
++ * This is purely ADDITIVE -- no existing struct, field or entry point changes
++ * meaning -- so the D3D11 path, which relies on the SM 5.0 coincidence, is
++ * unaffected. */
++struct MTL_SM50_RANGE_INFO {
++  SM50BindingType Type;
++  uint32_t RangeID;            /* matches MTL_SM50_SHADER_ARGUMENT::SM50BindingSlot */
++  uint32_t RegisterSpace;
++  uint32_t LowerBound;         /* the actual D3D register, e.g. 17 for b17 */
++  uint32_t RangeSize;          /* 1 == singleton; 0xffffffff == unbounded */
++  uint32_t StructurePtrOffset; /* 64-bit WORD offset into the argument table */
++  uint32_t Flags;              /* MTL_SM50_SHADER_ARGUMENT_FLAG: picks the encoding */
++  uint32_t IsConstantBufferTable; /* 1 = belongs to the table at ConstanttBufferTableBindIndex */
++};
++
+ enum MTL_SM50_SHADER_ARGUMENT_FLAG : uint32_t {
+   MTL_SM50_SHADER_ARGUMENT_BUFFER = 1 << 0,
+   MTL_SM50_SHADER_ARGUMENT_TEXTURE = 1 << 1,
+@@ -204,6 +224,8 @@ enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE {
+   SM50_SHADER_PSO_TESSELLATOR = 7,
+   SM50_SHADER_ROOT_SIGNATURE = 8,
+   SM50_SHADER_ROOT_SIGNATURE2 = 9,
++  /* ml1031: the vertex stage this pixel shader will be paired with. */
++  SM50_SHADER_PSO_VERTEX_INTERFACE = 10, /* Madeira 8 before the upstream rebase; 8 and 9 are upstream root signatures */
+   SM50_SHADER_ARGUMENT_TYPE_MAX = 0xffffffff,
+ };
+ 
+@@ -212,6 +234,36 @@ struct SM50_SHADER_COMPILATION_ARGUMENT_DATA {
+   enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE type;
+ };
+ 
++/* ml1031: VS/PS INTERPOLANT RECONCILIATION.
++ *
++ * D3D lets a pixel shader read an interpolant the vertex shader never writes --
++ * the value is simply undefined. Metal does not: newRenderPipelineState fails
++ * with "Fragment input(s) `user(texcoord4),user(texcoord7)` mismatching vertex
++ * shader output type(s) or not written by vertex shader", and a failed pipeline
++ * is a NULL pipeline, so every draw through it silently disappears. RDR2's
++ * deferred G-buffer (5 targets + depth) died exactly this way on 4 pipelines,
++ * which is why its first-boot screens rendered the UI but no scene.
++ *
++ * Chain this when compiling a PIXEL shader to declare which vertex stage it will
++ * be paired with. The converter parses that shader's own output signature and,
++ * for any input the vertex stage does not write, declines to declare the
++ * stage_in entry and zero-initialises the input register instead -- which is a
++ * legal value for something D3D leaves undefined.
++ *
++ * Zero-filling in the PS is deliberate: the alternative (synthesising the
++ * missing outputs in the VS) would need a VS variant per pixel shader, since one
++ * VS is shared across many pipelines.
++ *
++ * Absent => no filtering, i.e. exactly the pre-ml1031 behaviour. Callers that
++ * chain it MUST include the vertex bytecode in their shader-cache key, or a PS
++ * compiled against one vertex stage will be reused against another. */
++struct SM50_SHADER_PSO_VERTEX_INTERFACE_DATA {
++  void *next;
++  enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE type;
++  const void *vertex_bytecode;      /* the paired VS's DXBC container */
++  uint32_t vertex_bytecode_size;
++};
++
+ struct SM50_STREAM_OUTPUT_ELEMENT {
+   uint32_t reg_id;
+   uint32_t component;
+@@ -354,6 +406,13 @@ AIRCONV_API void SM50GetArgumentsInfo(
+   struct MTL_SM50_SHADER_ARGUMENT *pArguments
+ );
+ 
++/* ml1008: writes up to Capacity range records and returns the TOTAL number the
++ * shader has, so a caller can size its buffer from a first call with
++ * Capacity 0. See MTL_SM50_RANGE_INFO for why D3D12 needs this. */
++AIRCONV_API uint32_t SM50GetRangeInfo(
++  sm50_shader_t pShader, struct MTL_SM50_RANGE_INFO *pRanges, uint32_t Capacity
++);
++
+ #ifdef __cplusplus
+ };
+ 
+diff --git a/src/airconv/dxbc_converter.cpp b/src/airconv/dxbc_converter.cpp
+index 369a775..e95b887 100644
+--- a/src/airconv/dxbc_converter.cpp
++++ b/src/airconv/dxbc_converter.cpp
+@@ -340,6 +340,32 @@ llvm::Error convert_dxbc_pixel_shader(
+     pso_sample_mask = pso_data->sample_mask;
+     pso_pixel_formats = pso_data->pixel_formats;
+   }
++
++  /* ml1031: the interpolants the paired vertex stage actually writes.
++   *
++   * Parsed HERE, from the vertex bytecode, rather than handed to us as strings:
++   * the names must match Signature::fullSemanticString() exactly (lowercased
++   * semantic + index, e.g. "texcoord4"), and the only way to guarantee that is
++   * to build them with the same code that builds this shader's own. */
++  std::unordered_set<std::string> provided_interpolants;
++  bool have_vertex_interface = false;
++  {
++    SM50_SHADER_PSO_VERTEX_INTERFACE_DATA *vs_iface = nullptr;
++    if (args_get_data<SM50_SHADER_PSO_VERTEX_INTERFACE, SM50_SHADER_PSO_VERTEX_INTERFACE_DATA>(
++          pArgs, &vs_iface
++        ) &&
++        vs_iface->vertex_bytecode && vs_iface->vertex_bytecode_size) {
++      CSignatureParser5 vs_out;
++      if (DXBCGetOutputSignature(vs_iface->vertex_bytecode, &vs_out) == S_OK) {
++        const D3D11_SIGNATURE_PARAMETER *vs_params;
++        vs_out.RastSignature()->GetParameters(&vs_params);
++        for (unsigned i = 0; i < vs_out.RastSignature()->GetNumParameters(); i++)
++          provided_interpolants.insert(Signature(vs_params[i]).fullSemanticString());
++        have_vertex_interface = true;
++      }
++    }
++  }
++
+   SM50_SHADER_METAL_VERSION metal_version = SM50_SHADER_METAL_310;
+   SM50_SHADER_FLAG shader_flags = {};
+   SM50_SHADER_COMMON_DATA *sm50_common = nullptr;
+@@ -370,9 +396,28 @@ llvm::Error convert_dxbc_pixel_shader(
+     sig_ctx.unorm_output_reg_mask = pso_unorm_output_reg_mask;
+     if (pso_pixel_formats)
+       memcpy(sig_ctx.pixel_formats, pso_pixel_formats, sizeof(sig_ctx.pixel_formats));
++    if (have_vertex_interface)
++      sig_ctx.provided_interpolants = &provided_interpolants;
+     for (auto &p : pShaderInternal->signature_handlers) {
+       p(sig_ctx);
+     }
++    /* ml1033: say what the filter did. Zeroing an interpolant the vertex stage
++     * DOES write corrupts shading silently, so this must never be inferred --
++     * a healthy shader zeroes few or none, and "zeroed most of them" is the
++     * signature of a broken match. */
++    if (have_vertex_interface && sig_ctx.ps_inputs_zeroed) {
++      static unsigned reported;
++      unsigned n = ++reported;
++      if (n <= 24 || (n % 128) == 0)
++        fprintf(
++          stderr,
++          "[airconv] ml1033 PS zero-filled %u of %u interpolants the paired VS "
++          "does not write (VS writes %u): %s\n",
++          sig_ctx.ps_inputs_zeroed, sig_ctx.ps_inputs_seen,
++          (unsigned)provided_interpolants.size(),
++          sig_ctx.ps_inputs_zeroed_names.c_str()
++        );
++    }
+   }
+   if (pso_sample_mask != 0xffffffff) {
+     auto assigned_index =
+@@ -1337,6 +1382,65 @@ AIRCONV_API void SM50GetArgumentsInfo(
+     );
+ }
+ 
++/* ml1008: see MTL_SM50_RANGE_INFO. Iterates the SAME reflection arrays the
++ * encoder consumes, in the SAME order, and joins each entry with its parsed
++ * declaration record -- so record i here describes reflected argument i, and
++ * Flags/StructurePtrOffset cannot drift from what the encoder was told. The
++ * range identity (space, lower_bound, size) was always parsed; it was simply
++ * unreachable from outside the compiler. */
++AIRCONV_API uint32_t SM50GetRangeInfo(
++  sm50_shader_t pShader, struct MTL_SM50_RANGE_INFO *pRanges, uint32_t Capacity
++) {
++  auto sm50_shader = (dxmt::dxbc::SM50ShaderInternal *)pShader;
++  auto &info = sm50_shader->shader_info;
++  uint32_t total = 0;
++
++  auto emit = [&](const MTL_SM50_SHADER_ARGUMENT &arg, uint32_t is_cb_table) {
++    const dxmt::dxbc::ResourceRange *r = nullptr;
++    switch (arg.Type) {
++    case SM50BindingType::ConstantBuffer: {
++      auto it = info.cbufferMap.find(arg.SM50BindingSlot);
++      if (it != info.cbufferMap.end()) r = &it->second.range;
++      break;
++    }
++    case SM50BindingType::Sampler: {
++      auto it = info.samplerMap.find(arg.SM50BindingSlot);
++      if (it != info.samplerMap.end()) r = &it->second.range;
++      break;
++    }
++    case SM50BindingType::SRV: {
++      auto it = info.srvMap.find(arg.SM50BindingSlot);
++      if (it != info.srvMap.end()) r = &it->second.range;
++      break;
++    }
++    case SM50BindingType::UAV: {
++      auto it = info.uavMap.find(arg.SM50BindingSlot);
++      if (it != info.uavMap.end()) r = &it->second.range;
++      break;
++    }
++    }
++    if (pRanges && total < Capacity) {
++      auto &o = pRanges[total];
++      o.Type = arg.Type;
++      o.RangeID = arg.SM50BindingSlot;
++      /* A missing declaration record cannot happen for a reflected argument,
++       * but report it as an unbounded range in space ~0 rather than silently
++       * as b0/space0 -- the caller refuses those, which is the safe direction. */
++      o.RegisterSpace = r ? r->space : ~0u;
++      o.LowerBound = r ? r->lower_bound : ~0u;
++      o.RangeSize = r ? r->size : ~0u;
++      o.StructurePtrOffset = arg.StructurePtrOffset;
++      o.Flags = (uint32_t)arg.Flags;
++      o.IsConstantBufferTable = is_cb_table;
++    }
++    total++;
++  };
++
++  for (auto &arg : sm50_shader->args_reflection_cbuffer) emit(arg, 1);
++  for (auto &arg : sm50_shader->args_reflection) emit(arg, 0);
++  return total;
++}
++
+ AIRCONV_API void SM50Destroy(sm50_shader_t pShader) {
+   delete (dxmt::dxbc::SM50ShaderInternal *)pShader;
+ }
+diff --git a/src/airconv/dxbc_converter.hpp b/src/airconv/dxbc_converter.hpp
+index a64f6e0..e3af0a9 100644
+--- a/src/airconv/dxbc_converter.hpp
++++ b/src/airconv/dxbc_converter.hpp
+@@ -4,6 +4,7 @@
+ #include <map>
+ #include <optional>
+ #include <string>
++#include <unordered_set>
+ #include <unordered_map>
+ #include <variant>
+ #include <vector>
+@@ -254,6 +255,9 @@ template <typename S> IREffect make_effect_bind(S &&fs) {
+   });
+ }
+ 
++/* ml1031: zero an input register the paired vertex stage never writes. */
++IREffect init_input_reg_zero(uint32_t to_reg, uint32_t mask, bool is_int);
++
+ IREffect store_at_vec4_array_masked(
+   llvm::Value *array, pvalue index, pvalue maybe_vec4, uint32_t mask
+ );
+@@ -271,6 +275,8 @@ IREffect init_input_reg_with_interpolation(
+ std::function<IRValue(pvalue)>
+ pop_output_reg(uint32_t from_reg, uint32_t mask, uint32_t to_element);
+ 
++std::function<IRValue(pvalue)>
++pop_output_reg_fill(uint32_t from_reg, uint32_t mask, uint32_t to_element);
+ std::function<IRValue(pvalue)>
+ pop_output_reg_fix_unorm(uint32_t from_reg, uint32_t mask, uint32_t to_element);
+ 
+@@ -333,6 +339,13 @@ struct SignatureContext {
+   uint32_t unorm_output_reg_mask;
+   // it is considered optional (as a hint)
+   air::MTLPixelFormat pixel_formats[8];
++  /* ml1031: names the paired vertex stage actually writes. nullptr => do not
++   * filter (pre-ml1031 behaviour). */
++  const std::unordered_set<std::string> *provided_interpolants;
++  /* ml1033: what the filter actually DID, so a misfire is visible. */
++  unsigned ps_inputs_seen;
++  unsigned ps_inputs_zeroed;
++  std::string ps_inputs_zeroed_names;
+ 
+   SignatureContext(
+       IREffect &prologue, IRValue &epilogue, air::FunctionSignatureBuilder &func_signature, io_binding_map &resource
+@@ -346,7 +359,10 @@ struct SignatureContext {
+       disable_depth_output(false),
+       skip_vertex_output(false),
+       pull_mode_reg_mask(0),
+-      unorm_output_reg_mask(0) {
++      unorm_output_reg_mask(0),
++      provided_interpolants(nullptr),
++      ps_inputs_seen(0),
++      ps_inputs_zeroed(0) {
+     memset(pixel_formats, 0, sizeof(pixel_formats));
+   };
+ };
+diff --git a/src/airconv/dxbc_converter_basicblock.cpp b/src/airconv/dxbc_converter_basicblock.cpp
+index a289a58..86baf67 100644
+--- a/src/airconv/dxbc_converter_basicblock.cpp
++++ b/src/airconv/dxbc_converter_basicblock.cpp
+@@ -204,6 +204,25 @@ IREffect store_at_vec4_array_masked(
+   };
+ };
+ 
++/* ml1031: zero an input register whose interpolant the paired vertex stage does
++ * not write. D3D leaves such a read undefined, so zero is a legal value -- and
++ * declaring the stage_in entry instead would make Metal reject the pipeline. */
++IREffect init_input_reg_zero(uint32_t to_reg, uint32_t mask, bool is_int) {
++  return make_effect_bind([=](context ctx) {
++    auto const_index =
++      llvm::ConstantInt::get(ctx.llvm, llvm::APInt{32, to_reg, false});
++    if (is_int)
++      return store_at_vec4_array_masked(
++        ctx.resource.input.ptr_int4, const_index,
++        llvm::ConstantAggregateZero::get(ctx.types._int4), mask
++      );
++    return store_at_vec4_array_masked(
++      ctx.resource.input.ptr_float4, const_index,
++      llvm::ConstantAggregateZero::get(ctx.types._float4), mask
++    );
++  });
++};
++
+ IREffect init_input_reg(
+   uint32_t with_fnarg_at, uint32_t to_reg, uint32_t mask,
+   bool fix_w_component
+@@ -309,6 +328,39 @@ pop_output_reg(uint32_t from_reg, uint32_t mask, uint32_t to_element) {
+   };
+ }
+ 
++/* ml1109: a render-target output whose register the shader only partly writes
++ * (RDR2's emissive sprites write o1.x into a blended R16F "transparent depth"
++ * target). The unwritten lanes used to be shuffled in as UNDEF, and LLVM folded
++ * the blend equation around an undef source alpha to a constant 0 -- so the
++ * flames landed at depth 0 and the depth-of-field drew a maximal disc around
++ * every lamp. D3D leaves the lanes undefined; the hardware the game was built
++ * against exports (0,0,0,1) for unexported channels, which is what makes the
++ * game's own idiom (blend with the source alpha the shader never wrote) do
++ * what its authors saw. Same convention here. */
++std::function<IRValue(pvalue)> pop_output_reg_fill(uint32_t from_reg, uint32_t mask, uint32_t to_element) {
++  return [=](pvalue ret) {
++    return make_irvalue_bind([=](context ctx) -> IRValue {
++      auto const_index = llvm::ConstantInt::get(ctx.llvm, llvm::APInt{32, from_reg, false});
++      auto ivec4 = co_yield load_from_array_at(ctx.resource.output.ptr_int4, const_index);
++      auto desired_type = ctx.function->getReturnType()->getStructElementType(to_element);
++      if (!llvm::isa<llvm::FixedVectorType>(desired_type) ||
++          llvm::cast<llvm::FixedVectorType>(desired_type)->getNumElements() != 4) {
++        auto value = co_yield to_desired_type_from_int_vec4(ivec4, desired_type, mask);
++        co_return ctx.builder.CreateInsertValue(ret, value, {to_element});
++      }
++      auto value = co_yield to_desired_type_from_int_vec4(ivec4, desired_type, 0xf);
++      auto elem = llvm::cast<llvm::FixedVectorType>(desired_type)->getElementType();
++      for (unsigned i = 0; i < 4; i++) {
++        if (mask & (1u << i)) continue;
++        llvm::Constant *c = elem->isFloatingPointTy() ? llvm::ConstantFP::get(elem, i == 3 ? 1.0 : 0.0)
++                                                      : llvm::ConstantInt::get(elem, i == 3 ? 1 : 0);
++        value = ctx.builder.CreateInsertElement(value, c, (uint64_t)i);
++      }
++      co_return ctx.builder.CreateInsertValue(ret, value, {to_element});
++    });
++  };
++}
++
+ std::function<IRValue(pvalue)> pop_output_reg_fix_unorm(uint32_t from_reg, uint32_t mask, uint32_t to_element) {
+   return [=](pvalue ret) {
+     return make_irvalue_bind([=](context ctx) -> IRValue {
+diff --git a/src/airconv/dxbc_instructions.cpp b/src/airconv/dxbc_instructions.cpp
+index 0bb439b..3319dfb 100644
+--- a/src/airconv/dxbc_instructions.cpp
++++ b/src/airconv/dxbc_instructions.cpp
+@@ -304,6 +304,14 @@ SrcOperand readSrcOperand(
+     break;
+   }
+   case D3D10_SB_OPERAND_TYPE_CONSTANT_BUFFER: {
++    /* SM 5.0 spells a constant-buffer operand cb<rangeid>[<regindex>] (2D),
++     * where the range id doubles as the register slot. SM 5.1 inserts the
++     * index WITHIN the descriptor range: cb<rangeid>[<rangeindex>][<regindex>]
++     * (3D), so every index read shifts up one position and the range id stops
++     * being the register. This mirrors readSrcOperandResource /
++     * readSrcOperandSampler / readSrcOperandUAV, which already handle both
++     * shapes the same way; the constant buffer was the one operand type left
++     * unimplemented, and it aborted every SM 5.1 shader before this. */
+     if (O.m_IndexDimension == D3D10_SB_OPERAND_INDEX_2D) {
+       return SrcOperandConstantBuffer{
+         ._ = readSrcOperandCommon(O, read_type),
+diff --git a/src/airconv/dxbc_signature.cpp b/src/airconv/dxbc_signature.cpp
+index 72d67f9..4204272 100644
+--- a/src/airconv/dxbc_signature.cpp
++++ b/src/airconv/dxbc_signature.cpp
+@@ -440,6 +440,22 @@ void handle_signature_ps(
+     if (sig.mask() == 0) break;
+     signature_handlers.push_back([=, type = sig.componentType(), name = sig.consistentAttributeName()]
+     (SignatureContext &ctx) {
++      /* ml1031: if we know which interpolants the paired vertex stage writes and
++       * this is not one of them, do NOT declare a stage_in entry for it --
++       * Metal would reject the whole pipeline. Zero the register instead; the
++       * value is undefined in D3D anyway. */
++      ctx.ps_inputs_seen++;
++      if (ctx.provided_interpolants && !ctx.provided_interpolants->contains(name)) {
++        ctx.ps_inputs_zeroed++;
++        if (ctx.ps_inputs_zeroed_names.size() < 160) {
++          if (!ctx.ps_inputs_zeroed_names.empty()) ctx.ps_inputs_zeroed_names += ",";
++          ctx.ps_inputs_zeroed_names += name;
++        }
++        ctx.prologue << init_input_reg_zero(
++          reg, mask, type != RegisterComponentType::Float
++        );
++        return;
++      }
+       bool pull_mode = bool(ctx.pull_mode_reg_mask & (1 << reg)) && interpolation != air::Interpolation::flat;
+       auto assigned_index = ctx.func_signature.DefineInput(InputFragmentStageIn{
+         .user = name, .type = to_msl_type(type), .interpolation = interpolation, .pull_mode = pull_mode
+@@ -625,7 +641,7 @@ void handle_signature_ps(
+         if (type == RegisterComponentType::Float && ctx.unorm_output_reg_mask & (1 << reg))
+           ctx.epilogue >> pop_output_reg_fix_unorm(reg, mask, assigned_index);
+         else
+-          ctx.epilogue >> pop_output_reg(reg, mask, assigned_index);
++          ctx.epilogue >> pop_output_reg_fill(reg, mask, assigned_index);   /* ml1109 */
+       });
+       break;
+     }
+diff --git a/src/dxgi/dxgi_adapter.cpp b/src/dxgi/dxgi_adapter.cpp
+index abccc65..47bf183 100644
+--- a/src/dxgi/dxgi_adapter.cpp
++++ b/src/dxgi/dxgi_adapter.cpp
+@@ -8,6 +8,12 @@
+ #include "dxgi_object.hpp"
+ #include "d3d10_1.h"
+ #include "Metal.hpp"
++#include <cstdio>     /* ml1007 */
++#include <cstdlib>
++#include <mutex>
++#include <string>
++#include <utility>
++#include <vector>
+ 
+ namespace dxmt {
+ 
+@@ -173,10 +179,11 @@ public:
+ 
+     pDesc->SubSysId = 0;
+     pDesc->Revision = 0;
+-    if (device_.hasUnifiedMemory())
+-      pDesc->DedicatedVideoMemory = device_.recommendedMaxWorkingSetSize() / 2; // FIXME: use a more appropriate value
+-    else
+-      pDesc->DedicatedVideoMemory = device_.recommendedMaxWorkingSetSize();
++    // ml1042: the unix side now returns an honest per-process video budget (see
++    // winemetal_unix.c), so report it whole. The old "/2 on unified memory" was a
++    // guess compensating for a number that was far too large; halving a correct
++    // number would just starve the application of half its real budget.
++    pDesc->DedicatedVideoMemory = device_.recommendedMaxWorkingSetSize();
+     pDesc->DedicatedSystemMemory = 0;
+     pDesc->SharedSystemMemory = 0;
+     pDesc->AdapterLuid = GetAdapterLuid(device_);
+@@ -222,15 +229,35 @@ public:
+     return hr;
+   }
+ 
++  /* ml1007: the same defect as the budget-notification pair below -- both were
++   * `assert(0 && "TODO")` with no return, compiling to a single `brk #1`. The
++   * compiler says so plainly ("non-void function does not return a value"), and
++   * rdr76 died on the sibling method, so this one is the same landmine one
++   * vtable slot away.
++   *
++   * Unlike the budget notification, this is genuinely UNAVAILABLE rather than
++   * merely static: there is no hardware content-protection path on this
++   * platform, so there is no teardown to be notified about. DXGI_ERROR_UNSUPPORTED
++   * is the truthful answer -- returning S_OK would promise a notification that
++   * could never arrive and would mislead a caller that depends on it. */
+   HRESULT STDMETHODCALLTYPE
+   RegisterHardwareContentProtectionTeardownStatusEvent(HANDLE event,
+                                                        DWORD *cookie) override {
+-    assert(0 && "TODO");
++    (void)event;
++    if (!cookie)
++      return E_INVALIDARG;
++    *cookie = 0;
++    Logger::warn("DXGI: RegisterHardwareContentProtectionTeardownStatusEvent -- "
++                 "no hardware content protection on this platform, returning "
++                 "DXGI_ERROR_UNSUPPORTED");
++    return DXGI_ERROR_UNSUPPORTED;
+   }
+ 
+   void STDMETHODCALLTYPE
+   UnregisterHardwareContentProtectionTeardownStatus(DWORD cookie) override {
+-    assert(0 && "TODO");
++    /* Nothing was ever registered; the method returns void and cannot report. */
++    Logger::warn(str::format("DXGI: UnregisterHardwareContentProtectionTeardownStatus "
++                             "cookie=", cookie, " -- nothing was registered, ignored"));
+   }
+ 
+   HRESULT STDMETHODCALLTYPE QueryVideoMemoryInfo(
+@@ -266,26 +293,110 @@ public:
+     return S_OK;
+   }
+ 
++  /* ml1007: implement budget-change notification registration.
++   *
++   * These two were `assert(0 && "TODO")`. The Register variant additionally had
++   * no return statement at all, so even with NDEBUG it falls off the end of a
++   * non-void function. Compiled, the body is a single `brk #1`, and rdr76
++   * traps there: RDR2 reaches DXGI adapter setup, calls this method through the
++   * IDXGIAdapter3 vtable, and the process takes STATUS_ILLEGAL_INSTRUCTION
++   * (c000001d) which nothing handles.
++   *
++   * Contract: register `event` to be signalled when the video-memory budget
++   * changes, hand back a cookie that Unregister accepts. Registration is done
++   * for real -- a unique cookie, the handle retained, and Unregister actually
++   * removing it -- so the bookkeeping the caller observes is truthful.
++   *
++   * We do NOT fabricate notifications. QueryVideoMemoryInfo reports Budget from
++   * the Metal device's recommended working-set size, which does not change
++   * during a run on this platform, so no budget-change event is due and an
++   * event that never fires is the accurate outcome rather than a missing
++   * feature. If Budget ever becomes dynamic, signal the registered handles at
++   * the point it changes -- that is the only correct place for it.
++   *
++   * ⛔ MEASURED, rdr77 vs rdr78 -- a clean single-variable A/B on the same
++   * build, flipping only the file below:
++   *   S_OK + event never fires  -> RDR2 HUNG on an auto-reset Event, infinite
++   *                                wait, 8 minutes, no window
++   *   DXGI_ERROR_UNSUPPORTED    -> swapchain created, 240 GPU flush cycles, the
++   *                                game window appeared
++   * So the caller really does wait on this event, and "register successfully and
++   * never signal" is NOT an acceptable reading of a static budget -- Astra's
++   * warning against returning fake success was correct and my first
++   * implementation was wrong. DEFAULT IS THEREFORE THE HONEST FAILURE.
++   *
++   * Documents/madeira-dxgi-budget.txt = 1 re-enables real registration, for
++   * when Budget becomes dynamic and we can actually signal the handles. Do not
++   * enable it before there is a signalling path. */
+   HRESULT STDMETHODCALLTYPE RegisterVideoMemoryBudgetChangeNotificationEvent(
+       HANDLE event, DWORD *cookie) override {
+-    *cookie = 0;
++    if (!cookie)
++      return E_INVALIDARG;
++
++    if (!budget_notify_enabled()) {
++      Logger::warn("DXGI: RegisterVideoMemoryBudgetChangeNotificationEvent "
++                   "disabled by madeira-dxgi-budget.txt -> DXGI_ERROR_UNSUPPORTED");
++      return DXGI_ERROR_UNSUPPORTED;
++    }
++
++    std::lock_guard<std::mutex> lock(budget_mutex_);
++    DWORD assigned = ++budget_cookie_seq_;
++    budget_events_.emplace_back(assigned, event);
++    *cookie = assigned;
++    Logger::warn(str::format("DXGI: registered video-memory budget notification "
++                             "cookie=", assigned, " (budget is static on this "
++                             "platform, so no notification is expected)"));
+     return S_OK;
+   }
+ 
+   void STDMETHODCALLTYPE
+   UnregisterVideoMemoryBudgetChangeNotification(DWORD cookie) override {
+-    // no op
++    std::lock_guard<std::mutex> lock(budget_mutex_);
++    for (auto it = budget_events_.begin(); it != budget_events_.end(); ++it) {
++      if (it->first == cookie) {
++        budget_events_.erase(it);
++        Logger::warn(str::format("DXGI: unregistered video-memory budget "
++                                 "notification cookie=", cookie));
++        return;
++      }
++    }
++    /* Windows ignores an unknown cookie here (the method returns void and
++     * cannot report). Say so rather than silently doing nothing. */
++    Logger::warn(str::format("DXGI: UnregisterVideoMemoryBudgetChangeNotification "
++                             "for unknown cookie=", cookie, " -- ignored"));
+   }
+ 
+   WMT::Device STDMETHODCALLTYPE GetMTLDevice() final { return device_; }
+   D3DKMT_HANDLE STDMETHODCALLTYPE GetLocalD3DKMT() final { return local_kmt_; }
+ 
+ private:
++  /* ml1007: read once. Absent file (the normal case) leaves this enabled. */
++  static bool budget_notify_enabled() {
++    /* Default FALSE: see the A/B in the comment above. Only an explicit "1"
++     * turns real registration back on. */
++    static const bool enabled = [] {
++      const char *docs = std::getenv("MADEIRA_DOCS_DIR");
++      if (!docs || !*docs)
++        return false;
++      std::string path = std::string(docs) + "/madeira-dxgi-budget.txt";
++      FILE *f = std::fopen(path.c_str(), "r");
++      if (!f)
++        return false;
++      int c = std::fgetc(f);
++      std::fclose(f);
++      return c == '1';
++    }();
++    return enabled;
++  }
++
+   WMT::Reference<WMT::Device> device_;
+   D3DKMT_HANDLE local_kmt_ = 0;
+   Com<IDXGIFactory> factory_;
+   DxgiOptions options_;
+   uint64_t mem_reserved_[2] = {0, 0};
++  std::mutex budget_mutex_;
++  std::vector<std::pair<DWORD, HANDLE>> budget_events_;
++  DWORD budget_cookie_seq_ = 0;
+ };
+ 
+ Com<IMTLDXGIAdapter> CreateAdapter(WMT::Device Device,
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index f3a7eca..f288c3e 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1,7 +1,10 @@
+ #include <stdatomic.h>
++#include "../../../../../build/madeira_cfg.h"   /* ml1095: one config file */
+ #include <sys/mman.h>
+ #include <mach/vm_statistics.h>
+ #include <errno.h>
++#include <fcntl.h>
++#include <sys/stat.h>
+ #include <string.h>
+ #include <stdlib.h>
+ #include <dlfcn.h>
+@@ -134,6 +137,95 @@ _MTLCopyAllDevices(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* ml1042: THE VIDEO MEMORY BUDGET IS WHAT THIS PROCESS CAN AFFORD, NOT WHAT THE
++ * GPU COULD ADDRESS.
++ *
++ * Everything DXGI tells an application about video memory (adapter
++ * DedicatedVideoMemory, QueryVideoMemoryInfo.Budget) comes from this one number,
++ * and it was Metal's recommendedMaxWorkingSetSize -- on a 12GB phone, most of
++ * RAM. An engine budgets system RAM and video RAM as two separate pools: it
++ * filled the 4GB of RAM we report (guest band 4070MB dirty) AND streamed
++ * textures toward a multi-GB "VRAM" target (IOAccelerator 1983MB and climbing).
++ * On this device those are the SAME pool, and the process has one limit. The
++ * first run to reach the 3D benchmark sat at 8186MB with 1.5GB in the
++ * compressor -- ~2 FPS, scene never finished streaming -- and was jetsammed.
++ *
++ * So: budget = process limit - the RAM we let the guest believe it has - what
++ * our own runtime costs (JIT pool, FEX, Wine, host: ~2.5GB measured), floored at
++ * 1GB, never above what Metal recommends. os_proc_available_memory() +
++ * phys_footprint gives the real limit, including the Game Mode increase.
++ * Documents/madeira-vram-mb.txt overrides the result outright. */
++#include <os/proc.h>
++#include <mach/mach.h>
++static uint64_t madeira_ml1042_video_budget(uint64_t metal_recommended);
++/* ml1075: DYNAMIC BUDGET. The number above is a one-off: the game read it once
++ * and then grew its heap through a cutscene until jetsam (ph-rdr42: guest heap
++ * 2.3 -> 4.0 GB, footprint 4.7 -> 7.9 GB, killed at 8.19). On Windows, DXGI's
++ * budget MOVES under memory pressure and RAGE trims its texture pool when it
++ * shrinks. So: once the process passes a high-water mark, shrink the advertised
++ * budget 1:1 with the excess, floored at 768 MB, recomputed at most every 250 ms,
++ * and count the queries -- if the count stays at one, the game does not poll and
++ * this cannot help (the budget-change EVENT would be next). */
++static uint64_t madeira_ml1075_dynamic_budget(uint64_t base) {
++  static uint64_t last_ns, last_budget, last_logged; static unsigned long calls;
++  struct timespec ts; uint64_t now;
++  calls++;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  now = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
++  if (last_budget && now - last_ns < 250000000ull) return last_budget;
++  last_ns = now;
++  {
++    task_vm_info_data_t vmi; mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
++    uint64_t foot = 0, limit, high, budget = base;
++    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &cnt) == KERN_SUCCESS) foot = vmi.phys_footprint;
++    limit = (uint64_t)os_proc_available_memory() + foot;
++    /* ml1103: madeira.cfg vram-trim-mb = distance below the kill line where the
++     * trim starts (default 1536, the ml1075 value); 0 = never trim. ph-rdr56:
++     * raising vram-mb to 3072 doubled the snow-scene frame rate, but in the city
++     * the footprint reached 7.1 GB, this trim cut the budget to 2625 MB, and the
++     * game went back to evicting and re-streaming (the pop-in). */
++    { static long long trim_mb = -1; if (trim_mb < 0) { trim_mb = madeira_cfg_int("vram-trim-mb", 1536); if (trim_mb < 0) trim_mb = 1536;
++        fprintf(stderr, "[wmt] ml1103 video budget trim starts %lld MB below the kill line (madeira.cfg vram-trim-mb; 0 = never)\n", trim_mb); }
++      high = trim_mb ? (limit > ((uint64_t)trim_mb << 20) ? limit - ((uint64_t)trim_mb << 20) : 0) : ~0ull; }
++    if (foot > high) budget = base > foot - high ? base - (foot - high) : 0;
++    if (budget < (768ull << 20)) budget = 768ull << 20;
++    if (budget > base) budget = base;
++    if (!last_logged || (last_logged > budget ? last_logged - budget : budget - last_logged) >= (64ull << 20) || (calls % 5000) == 0) {
++      fprintf(stderr, "[wmt] ml1075 video budget now %llu MB (base %llu, footprint %llu of %llu MB; %lu queries so far)\n",
++              (unsigned long long)(budget >> 20), (unsigned long long)(base >> 20), (unsigned long long)(foot >> 20),
++              (unsigned long long)(limit >> 20), calls);
++      last_logged = budget;
++    }
++    last_budget = budget;
++    return budget;
++  }
++}
++static uint64_t madeira_ml1042_video_budget(uint64_t metal_recommended) {
++  static uint64_t cached;
++  if (cached) return madeira_ml1075_dynamic_budget(cached);
++
++  uint64_t budget = 0;
++  { long long mb = madeira_cfg_int("vram-mb", 0);   /* ml1095: madeira.cfg vram-mb = N */
++    if (mb >= 256) budget = (uint64_t)mb << 20; }
++  uint64_t limit = 0, foot = 0;
++  if (!budget) {
++    task_vm_info_data_t vmi; mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
++    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &cnt) == KERN_SUCCESS) foot = vmi.phys_footprint;
++    limit = (uint64_t)os_proc_available_memory() + foot;
++    const uint64_t guest_ram = 4096ull << 20;      /* what ml992 lets the guest see */
++    const uint64_t overhead  = 2560ull << 20;      /* JIT pool + FEX + Wine + host, measured */
++    budget = limit > guest_ram + overhead ? limit - guest_ram - overhead : 0;
++    if (budget < (1024ull << 20)) budget = 1024ull << 20;
++  }
++  if (metal_recommended && budget > metal_recommended) budget = metal_recommended;
++  cached = budget;
++  fprintf(stderr, "[wmt] ml1042 video memory budget = %llu MB (process limit %llu MB, footprint now %llu MB, "
++                  "Metal recommends %llu MB)\n",
++          (unsigned long long)(budget >> 20), (unsigned long long)(limit >> 20),
++          (unsigned long long)(foot >> 20), (unsigned long long)(metal_recommended >> 20));
++  return madeira_ml1075_dynamic_budget(cached);
++}
++
+ static NTSTATUS
+ _MTLDevice_recommendedMaxWorkingSetSize(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
+@@ -143,7 +235,7 @@ _MTLDevice_recommendedMaxWorkingSetSize(void *obj) {
+     params->ret = (wmtr_call(RM_OP_DEVICE_MAX_WORKING_SET, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
+     return STATUS_SUCCESS;
+   }
+-  params->ret = [(id<MTLDevice>)params->handle recommendedMaxWorkingSetSize];
++  params->ret = madeira_ml1042_video_budget([(id<MTLDevice>)params->handle recommendedMaxWorkingSetSize]);
+   return STATUS_SUCCESS;
+ }
+ 
+@@ -1696,7 +1788,13 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+     case WMTBlitCommandCopyFromTextureToBuffer: {
+       struct wmtcmd_blit_copy_from_texture_to_buffer *body = (struct wmtcmd_blit_copy_from_texture_to_buffer *)next;
+       id<MTLTexture> src = (id<MTLTexture>)body->src;
+-      /* iOS-Madeira: skip BC-pitch readback to remapped RGBA8 textures. */
++      /* iOS-Madeira: skip BC-pitch readback to remapped RGBA8 textures.
++       * ml1102: not for an ASPECT copy -- a depth or stencil readback of a
++       * Depth32Float_Stencil8 texture is 4 or 1 bytes per pixel, not the
++       * combined format's, and this check silently dropped every depth capture
++       * (all-zero DepthTarget files in ph-rdr55). Aspect copies use upstream's
++       * WMTBlitCommandCopyFromTextureToBufferWithBlitOption below, which does
++       * not take this check. */
+       if (!texture_upload_pitch_ok(src, body->size.width, body->bytes_per_row))
+         break;
+       [encoder copyFromTexture:src
+@@ -4598,6 +4696,7 @@ _MTLResidencySet_addAllocations(void *obj) {
+ static NTSTATUS
+ _MTLResidencySet_removeAllocations(void *obj) {
+   struct unixcall_mtlresidencyset_addallocations *params = obj;
++  if (wmtr_enabled()) return STATUS_SUCCESS;   /* ml1050: the remote host owns its own set */
+   id<MTLResidencySet> set = (id<MTLResidencySet>)params->set;
+   [set removeAllocations:(id<MTLAllocation> const *)params->allocations.ptr count:params->count];
+   return STATUS_SUCCESS;
+@@ -4641,6 +4740,8 @@ _MTLCommandQueue_addResidencySet(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newHeap(void *obj) {
+   struct unixcall_mtldevice_newheap *params = obj;
++  params->ret = 0;
++  if (wmtr_enabled()) return STATUS_SUCCESS;   /* ml1072: remote mode has no heaps; callers fall back */
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTHeapInfo const *info = params->info.ptr;
+   MTLHeapDescriptor *desc = [[MTLHeapDescriptor alloc] init];
+@@ -4669,6 +4770,9 @@ _MTLDevice_heapBufferSizeAndAlign(void *obj) {
+ static NTSTATUS
+ _MTLDevice_heapTextureSizeAndAlign(void *obj) {
+   struct unixcall_mtldevice_heaptexturesizeandalign *params = obj;
++  params->ret_size = 0;
++  params->ret_align = 0;
++  if (wmtr_enabled()) return STATUS_SUCCESS;   /* ml1072 */
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTTextureInfo *info = params->info.ptr;
+   MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
+@@ -4701,6 +4805,8 @@ _MTLHeap_newBuffer(void *obj) {
+ static NTSTATUS
+ _MTLHeap_newTexture(void *obj) {
+   struct unixcall_mtlheap_newtexture *params = obj;
++  params->ret = 0;
++  if (wmtr_enabled()) return STATUS_SUCCESS;   /* ml1072 */
+   id<MTLHeap> heap = (id<MTLHeap>)params->heap;
+   struct WMTTextureInfo *info = params->info.ptr;
+   MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
+@@ -4816,6 +4922,64 @@ static NTSTATUS _madeira_ir_convert_wow64(void *args) { (void)args; return STATU
+ static NTSTATUS _MTLDevice_newRenderPipelineStateVD_wow64(void *args) { (void)args; return STATUS_NOT_IMPLEMENTED; }
+ static NTSTATUS _MTLDevice_newGeometryEmulationPipelineState_wow64(void *args) { (void)args; return STATUS_NOT_IMPLEMENTED; }
+ 
++/* ml1098: runtime control (winemetal.h, struct madeira_ctl_args). */
++static volatile int g_madeira_capture_req;
++void madeira_capture_request(int frames) {   /* called from the app's UI */
++  __sync_fetch_and_add(&g_madeira_capture_req, frames > 0 ? frames : 1);
++  fprintf(stderr, "[capture] ml1098 UI requested %d frame(s)\n", frames);
++}
++static NTSTATUS _madeira_ctl(void *args) {
++  struct madeira_ctl_args *a = args;
++  if (!a) return STATUS_SUCCESS;
++  a->ret = 0;
++  switch (a->op) {
++  case 0: {
++    int n;
++    do { n = g_madeira_capture_req; } while (n && !__sync_bool_compare_and_swap(&g_madeira_capture_req, n, 0));
++    a->ret = (uint32_t)n;
++    break;
++  }
++  case 1: {
++    const char *docs = getenv("MADEIRA_DOCS_DIR");
++    char path[1400];
++    int fd;
++    if (!docs || !*docs || !a->name[0] || !a->ptr) break;
++    snprintf(path, sizeof path, "%s/capture", docs);
++    mkdir(path, 0755);
++    snprintf(path, sizeof path, "%s/capture/%s", docs, a->name);
++    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
++    if (fd < 0) { fprintf(stderr, "[capture] ml1098 cannot create %s: %s\n", path, strerror(errno)); break; }
++    {
++      const unsigned char *p = (const unsigned char *)(uintptr_t)a->ptr;
++      uint64_t left = a->len; int ok = 1;
++      while (left) { ssize_t w = write(fd, p, left > (1u << 20) ? (1u << 20) : (size_t)left); if (w <= 0) { ok = 0; break; } p += w; left -= (uint64_t)w; }
++      close(fd);
++      a->ret = ok ? 1u : 0u;
++    }
++    break;
++  }
++  case 3: {   /* ml1108: GPU start/end of a COMPLETED command buffer (seconds, CACurrentMediaTime base) */
++    struct { uint64_t cb; double start, end; } *t = (void *)(uintptr_t)a->ptr;
++    if (!t || !t->cb || wmtr_enabled()) break;
++    t->start = [(id<MTLCommandBuffer>)(uintptr_t)t->cb GPUStartTime];
++    t->end = [(id<MTLCommandBuffer>)(uintptr_t)t->cb GPUEndTime];
++    a->ret = 1;
++    break;
++  }
++  case 2: {
++    char v[512];
++    if (madeira_cfg_get(a->name, v, sizeof v)) {
++      if (a->ptr && a->len) { strncpy((char *)(uintptr_t)a->ptr, v, (size_t)a->len - 1); ((char *)(uintptr_t)a->ptr)[a->len - 1] = 0; }
++      a->ret = 1;
++    }
++    break;
++  }
++  default: break;
++  }
++  return STATUS_SUCCESS;
++}
++static NTSTATUS _madeira_ctl_wow64(void *args) { (void)args; return STATUS_NOT_IMPLEMENTED; }
++
+ #if TARGET_OS_IOS
+ /* On iOS we statically link DXMT's unix side into the host app (Madeira.app),
+  * alongside ntdll's own __wine_unix_call_funcs. Rename ours so the linker
+@@ -5015,6 +5179,7 @@ const void *__wine_unix_call_funcs[] = {
+     &_madeira_ir_convert,
+     &_MTLDevice_newRenderPipelineStateVD,
+     &_MTLDevice_newGeometryEmulationPipelineState,
++    &_madeira_ctl,   /* ml1098; Madeira slot 138 before the upstream rebase */
+ };
+ 
+ #ifndef DXMT_NATIVE
+@@ -5168,5 +5333,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_madeira_ir_convert_wow64,
+     &_MTLDevice_newRenderPipelineStateVD_wow64,
+     &_MTLDevice_newGeometryEmulationPipelineState_wow64,
++    &_madeira_ctl_wow64,
+ };
+ #endif
+diff --git a/src/winemetal/unix/wmt_remote_client.h b/src/winemetal/unix/wmt_remote_client.h
+index f3c443c..223c8a2 100644
+--- a/src/winemetal/unix/wmt_remote_client.h
++++ b/src/winemetal/unix/wmt_remote_client.h
+@@ -162,9 +162,46 @@ static void wmtr_init(void) {
+     setsockopt(wmtr_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+     setsockopt(wmtr_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+     wmtr_mode = 1;   /* set before the auth call so the socket is usable */
+-    if (wmtr_call(RM_OP_PING, tok, (uint32_t)strlen(tok), 0, 0, 0) != RM_OK) {
+-        fprintf(stderr, "[wmt-remote] authentication rejected -- staying local\n");
+-        close(wmtr_fd); wmtr_fd = -1; wmtr_mode = 0; return;
++    {
++        /* ml1022: DISTINGUISH A REJECTED TOKEN FROM A TIMEOUT, AND SAY SO LOUDLY.
++         *
++         * This printed "authentication rejected -- staying local" for ANY
++         * non-RM_OK ping, including a 30-second transport timeout, and then
++         * silently rendered locally for the whole session. That cost a run: the
++         * guest quietly used the local paravirtual device (which reports NO
++         * Metal family at all, so Apple's driver later asserted) while the stale
++         * host log still showed the PREVIOUS session's frames -- and the two
++         * together read exactly like a successful remote run.
++         *
++         * The daemon serves ONE connection at a time, so a previous stuck
++         * session lets a second TCP connect succeed in the backlog and then
++         * never answer. That is a transport timeout, not a bad token, and the
++         * two need different responses from whoever reads the log.
++         *
++         * Falling back is still the behaviour (a hard failure here would need a
++         * failed-backend state threaded through device creation, which this
++         * header cannot do), but it is now IMPOSSIBLE to miss. */
++        int rc = (int)wmtr_call(RM_OP_PING, tok, (uint32_t)strlen(tok), 0, 0, 0);
++        if (rc != RM_OK) {
++            /* The daemon rejects a bad token by CLOSING WITHOUT REPLYING
++             * (authenticate() returns 0 and never calls reply), so from here a
++             * wrong token and a daemon too busy to answer look identical. Say
++             * that, rather than asserting "authentication rejected" as the old
++             * message did -- it sent me looking for a token mismatch when the
++             * real cause was a 30-second timeout against an occupied daemon. */
++            const char *why = "no reply -- either the token is wrong OR the daemon is busy/stuck "
++                              "(it serves ONE connection at a time)";
++            fprintf(stderr,
++                "[wmt-remote] ml1022 ================ REMOTE METAL NOT AVAILABLE ================\n"
++                "[wmt-remote] ml1022 %s:%d -- %s (ping rc=%d)\n"
++                "[wmt-remote] ml1022 FALLING BACK TO LOCAL METAL. Remote was explicitly requested,\n"
++                "[wmt-remote] ml1022 so this run is NOT a valid remote-mode test: the local device\n"
++                "[wmt-remote] ml1022 reports no Metal family and behaves differently. Any host log\n"
++                "[wmt-remote] ml1022 you read alongside it belongs to a PREVIOUS session.\n"
++                "[wmt-remote] ml1022 ============================================================\n",
++                host, RM_PORT, why, rc);
++            close(wmtr_fd); wmtr_fd = -1; wmtr_mode = 0; return;
++        }
+     }
+     fprintf(stderr, "[wmt-remote] ml762 REMOTE MODE via %s:%d -- no local Metal objects "
+                     "will be created in this process\n", host, RM_PORT);
+diff --git a/src/winemetal/winemetal.h b/src/winemetal/winemetal.h
+index 2223b97..ff55921 100644
+--- a/src/winemetal/winemetal.h
++++ b/src/winemetal/winemetal.h
+@@ -2196,6 +2196,33 @@ MTLDevice_newRenderPipelineStateVD(obj_handle_t device, const struct WMTRenderPi
+  * and the single-allocation form is kept as a PE-side wrapper over
+  * MTLResidencySet_addAllocations. */
+ WINEMETAL_API void MTLResidencySet_addAllocation(obj_handle_t set, obj_handle_t allocation);
++/* ml1050: staged like addAllocation; takes effect at the next commit. A PE-side
++ * wrapper over upstream's MTLResidencySet_removeAllocations. */
++WINEMETAL_API void MTLResidencySet_removeAllocation(obj_handle_t set, obj_handle_t allocation);
++/* ml1072: placement heaps: a private placement heap and a texture placed at an
++ * offset in it, as PE-side wrappers over upstream's MTLDevice_newHeap and
++ * MTLHeap_newTexture. The size/align query is upstream's
++ * MTLDevice_heapTextureSizeAndAlign, which returns a struct WMTSizeAndAlign
++ * (Madeira's version took two out pointers). Remote mode returns 0 for all of
++ * them (callers fall back to standalone allocations). */
++WINEMETAL_API obj_handle_t MTLDevice_newPlacementHeap(obj_handle_t device, uint64_t size, enum WMTResourceOptions options);
++WINEMETAL_API obj_handle_t MTLHeap_newTextureAtOffset(obj_handle_t heap, struct WMTTextureInfo *info, uint64_t offset);
++
++/* ml1098: madeira runtime control, slot 149 (Madeira slot 138 before the
++ * upstream rebase). A PE-side runtime has no reach
++ * into the app's sandbox; this is its one door. Ops:
++ *   0  capture poll: ret = frames requested from the UI since the last poll (cleared)
++ *   1  write file: Documents/capture/<name> from ptr/len; ret = 1 on success
++ *   2  config get: madeira.cfg value of key <name> copied into ptr/len (NUL-terminated); ret = 1 when set
++ * Local in both backends: it never touches a Metal object. */
++struct madeira_ctl_args {
++  uint32_t op;
++  uint32_t ret;
++  uint64_t ptr;
++  uint64_t len;
++  char name[160];
++};
++WINEMETAL_API void MadeiraCtl(struct madeira_ctl_args *args);
+ 
+ /* ml927 (slot 148, Madeira slot 133 before the upstream rebase): a geometry-shader pipeline through the Metal Shader
+  * Converter's mesh emulation. The converter turns the vertex shader into an
+diff --git a/src/winemetal/winemetal_thunks.c b/src/winemetal/winemetal_thunks.c
+index 1de7493..5d941db 100644
+--- a/src/winemetal/winemetal_thunks.c
++++ b/src/winemetal/winemetal_thunks.c
+@@ -1405,3 +1405,36 @@ MTLDevice_newGeometryEmulationPipelineState(obj_handle_t device, const struct WM
+     *err_out = params.ret_error;
+   return params.ret_pso;
+ }
++
++/* ml1050 / ml1072: Madeira's single-allocation removal and placement-heap calls
++ * (Madeira slots 134, 136, 137 before the upstream rebase), as wrappers over
++ * upstream's residency-set and heap calls. Madeira's slot-135 size/align query
++ * is replaced by upstream's MTLDevice_heapTextureSizeAndAlign. */
++WINEMETAL_API void
++MTLResidencySet_removeAllocation(obj_handle_t set, obj_handle_t allocation) {
++  MTLResidencySet_removeAllocations(set, &allocation, 1);
++}
++
++WINEMETAL_API obj_handle_t
++MTLDevice_newPlacementHeap(obj_handle_t device, uint64_t size, enum WMTResourceOptions options) {
++  struct WMTHeapInfo info = {};
++  info.size = size;
++  info.options = (enum WMTResourceOptions)(
++      ((options & 0x30) == WMTResourceStorageModePrivate ? WMTResourceStorageModePrivate
++                                                         : WMTResourceStorageModeShared) |
++      WMTResourceHazardTrackingModeTracked
++  );
++  info.type = WMTHeapTypePlacement;
++  return MTLDevice_newHeap(device, &info);
++}
++
++WINEMETAL_API obj_handle_t
++MTLHeap_newTextureAtOffset(obj_handle_t heap, struct WMTTextureInfo *info, uint64_t offset) {
++  return MTLHeap_newTexture(heap, info, offset);
++}
++
++/* ml1098: slot 149 (Madeira slot 138 before the upstream rebase), see winemetal.h. */
++WINEMETAL_API void
++MadeiraCtl(struct madeira_ctl_args *args) {
++  UNIX_CALL(149, args);
++}
+diff --git a/src/winemetal/wmt_api_names.h b/src/winemetal/wmt_api_names.h
+index 9a65ef8..06b2941 100644
+--- a/src/winemetal/wmt_api_names.h
++++ b/src/winemetal/wmt_api_names.h
+@@ -3,7 +3,7 @@
+ #ifndef WMT_API_NAMES_H
+ #define WMT_API_NAMES_H
+ 
+-#define WMT_API_COUNT 134
++#define WMT_API_COUNT 139
+ 
+ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "NSObject_retain",
+@@ -140,6 +140,11 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "MTLResidencySet_commit",
+     "MTLCommandQueue_addResidencySet",
+     "MTLDevice_newGeometryEmulationPipelineState",
++    "MTLResidencySet_removeAllocation",
++    "MTLDevice_heapTextureSizeAndAlign",
++    "MTLDevice_newPlacementHeap",
++    "MTLHeap_newTextureAtOffset",
++    "madeira_ctl",
+ };
+ 
+ #endif

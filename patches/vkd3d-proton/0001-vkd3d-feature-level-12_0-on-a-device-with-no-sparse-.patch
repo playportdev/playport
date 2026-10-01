@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 01:08:11 +0200
+Subject: [PATCH 1/4] vkd3d: feature level 12_0 on a device with no sparse
+ binding
+
+KosmicKrisp, Mesa's Vulkan driver on Metal, has no sparse binding, so
+the device reports tiled resources tier NOT_SUPPORTED and its highest
+feature level stops at 11_1. Tiled resources tier 2 is the only 12_0
+requirement it misses. A game whose Direct3D 12 renderer asks for 12_0
+(Unreal Engine 5) then refuses the device and exits.
+
+When the driver has no sparse binding at all, reach 12_0 without the
+tiled tier. TiledResourcesTier itself stays NOT_SUPPORTED, so a game
+that checks it before creating reserved resources still sees the truth;
+this is narrower than VKD3D_FEATURE_LEVEL=12_0 (Proton's vkd3dfl12),
+which also reports tier 2. The level and what decided it are logged at
+info level, where only a trace showed the level before.
+
+Class: feature
+Evidence: docs/evidence/2026-09-30-d3d12-feature-level-12.md
+Offered-upstream: no
+---
+ libs/vkd3d/device.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 4a25216..f8e0fdb 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -9614,8 +9614,13 @@ static void d3d12_device_caps_init_feature_level(struct d3d12_device *device)
+             vk_info->device_limits.maxPerStageDescriptorStorageImages >= D3D12_UAV_SLOT_COUNT)
+         caps->max_feature_level = D3D_FEATURE_LEVEL_11_1;
+ 
++    /* A driver with no sparse binding at all (KosmicKrisp on Metal) cannot
++     * give tiled resources tier 2, which is all that keeps it from 12_0.
++     * Games that ask for 12_0 (Unreal Engine 5's Direct3D 12 renderer) do
++     * not use tiled resources without checking TiledResourcesTier, which
++     * stays NOT_SUPPORTED, so the level is reached without it there. */
+     if (caps->max_feature_level >= D3D_FEATURE_LEVEL_11_1 &&
+-            caps->options.TiledResourcesTier >= D3D12_TILED_RESOURCES_TIER_2 &&
++            (caps->options.TiledResourcesTier >= D3D12_TILED_RESOURCES_TIER_2 || !features->sparseBinding) &&
+             caps->options.ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_2 &&
+             caps->options.TypedUAVLoadAdditionalFormats)
+         caps->max_feature_level = D3D_FEATURE_LEVEL_12_0;
+@@ -9637,7 +9642,10 @@ static void d3d12_device_caps_init_feature_level(struct d3d12_device *device)
+             caps->options7.SamplerFeedbackTier >= D3D12_SAMPLER_FEEDBACK_TIER_0_9)
+         caps->max_feature_level = D3D_FEATURE_LEVEL_12_2;
+ 
+-    TRACE("Max feature level: %#x.\n", caps->max_feature_level);
++    INFO("Max feature level %#x: tiled resources tier %u (sparse binding %u), resource binding tier %u, "
++            "typed UAV loads %u, shader model %#x.\n", caps->max_feature_level, caps->options.TiledResourcesTier,
++            features->sparseBinding, caps->options.ResourceBindingTier,
++            caps->options.TypedUAVLoadAdditionalFormats, caps->max_shader_model);
+ 
+     if (caps->max_feature_level >= D3D_FEATURE_LEVEL_12_2)
+         INFO("DX Ultimate supported!\n");

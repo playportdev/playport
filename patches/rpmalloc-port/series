@@ -1,0 +1,20 @@
+# rpmalloc-port: Madeira's rpmalloc changes (willfaust/rpmalloc at the
+# pins.lock rpmalloc-port commit), rebased onto the pins.lock rpmalloc commit
+# of FEX-Emu/rpmalloc (the External/rpmalloc gitlink of the fex pin). Applied
+# in this order with `git am -3` inside the FEX tree's External/rpmalloc.
+0001-Establish-the-licensing-boundary-for-Madeira-s-modif.patch
+0002-iOS-Mythic-log-skip-rpfree-on-small-invalid-pointer-.patch
+0003-iOS-Mythic-SPAN_SIZE-256MB-64MB-on-FEX_IOS_HOST.patch
+0004-iOS-Mythic-VirtualAlloc2-exact-aligned-spans-128MB-t.patch
+0005-iOS-Mythic-ml436-73-16MB-spans-LARGE_PAGE_SIZE_SHIFT.patch
+0006-iOS-Mythic-ml484-ml485-88-validate-the-OWNER-and-re-.patch
+0007-iOS-Mythic-ml490-ml492-88-capture-the-poison-payload.patch
+0008-rpmalloc-page-list-guard-CAS-livelock-quarantine-ml6.patch
+0009-os_mmap-select-the-FEX-host-VA-band-at-runtime-never.patch
+0010-Discover-the-host-VA-band-instead-of-hardcoding-cand.patch
+0011-Clarify-what-each-branch-offers-and-what-was-already.patch
+0012-Guard-page-list-repair-and-CAS-quarantine-paths-on-i.patch
+0013-Licensing-draft-converter-exception-for-the-Madeira-.patch
+0014-Licensing-the-exception-takes-effect-at-the-adoption.patch
+0015-Take-the-thread-id-from-TEB-Self-and-serialise-the-a.patch
+0016-Licensing-the-converter-exception-is-adopted-2026-09.patch

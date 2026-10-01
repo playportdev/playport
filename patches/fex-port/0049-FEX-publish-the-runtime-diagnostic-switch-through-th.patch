@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 12 Aug 2026 12:27:44 +0800
+Subject: [PATCH] FEX: publish the runtime diagnostic switch through the Mono
+ bridge
+
+Adds diag_enabled to the shared contract and bumps IOS_MONO_ABI_VERSION to 2,
+since the struct grew.
+
+The ABI guard earned its place immediately. Adding this field and rebuilding
+only the unix side left the shipped FEX compiled against version 1, so
+BTCpu64IosSetMonoBridge refused the pointer, the bridge never armed, and the
+SWPAL storm returned in full - 5,411,000 emulated stores against 806,912. That
+is a clean, reversible perf regression instead of FEX reading a struct whose
+every field past abi_version had shifted four bytes, inside a Mach fault
+handler.
+
+The rule that follows: touching ios_mono_bridge.h means rebuilding FEX, always.
+Bumping the ABI turns silent corruption into a loud failure; it does not spare
+you the rebuild.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: 4cc5afe2bf35edc1f7adf256bb48ed6e3d800c3e
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/IosMonoBridge.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/ARM64EC/IosMonoBridge.h b/Source/Windows/ARM64EC/IosMonoBridge.h
+index 3f7e4f7..b5e3e77 100644
+--- a/Source/Windows/ARM64EC/IosMonoBridge.h
++++ b/Source/Windows/ARM64EC/IosMonoBridge.h
+@@ -16,7 +16,7 @@
+ #pragma once
+ #include <cstdint>
+ 
+-#define IOS_MONO_ABI_VERSION 1
++#define IOS_MONO_ABI_VERSION 2
+ #define IOS_MONO_MAX_ALIASES 4096
+ #define IOS_MONO_MAX_CONTEXTS 64
+ 
+@@ -39,6 +39,7 @@ struct ios_mono_pending {
+ 
+ struct ios_mono_bridge {
+   uint32_t abi_version;
++  uint32_t diag_enabled;  // ml649: runtime diagnostic switch
+   uint32_t off_inline_jit_block_header;
+   uint32_t off_block_tail;
+   uint32_t off_tail_rip;

@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 15:59:52 +0800
+Subject: [PATCH] loader: trace load_arm64ec_module + arm64ec_process_init
+ progression
+
+ERR-level traces around load_arm64ec_module and arm64ec_process_init
+to spot exactly where init flow diverges from the expected
+"all DllMains run, FEX ProcessInit returns, kernel32 loaded, main
+exe attached, entry point dispatched" sequence.
+
+(cherry picked from commit 07d3e009ded7b1ddcd9c43e2d4431a70f301f579)
+Madeira-commit: be54300d767d32e2ee438f49a83e8b3e1d25e188
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index c47f86512d2..92d2192a31d 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4377,11 +4377,13 @@ static void load_arm64ec_module(void)
+     }
+ 
+     /* Phase 2: invoke FEX's ProcessInit/ThreadInit. */
++    ERR( "load_arm64ec_module: about to call arm64ec_process_init\n" );
+     if ((status = arm64ec_process_init( wm->ldr.DllBase )))
+     {
+         ERR( "arm64ec_process_init for %s failed, status %lx\n", debugstr_w(module), status );
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
++    ERR( "load_arm64ec_module: arm64ec_process_init returned cleanly, status=%lx\n", status );
+ }
+ 
+ #endif
+@@ -4569,8 +4571,11 @@ void loader_init( CONTEXT *context, void **entry )
+         wm = build_main_module();
+         build_ntdll_module();
+ #ifdef __arm64ec__
++        ERR( "loader_init: calling load_arm64ec_module\n" );
+         load_arm64ec_module();
++        ERR( "loader_init: load_arm64ec_module returned, calling update_load_config\n" );
+         update_load_config( wm->ldr.DllBase );
++        ERR( "loader_init: update_load_config done, proceeding to load kernel32\n" );
+ #endif
+ 
+         if ((status = load_dll( NULL, L"kernel32.dll", 0, &kernel32, FALSE )) != STATUS_SUCCESS)

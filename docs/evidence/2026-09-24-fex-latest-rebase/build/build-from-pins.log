@@ -1,0 +1,17 @@
+22:04:48  == fex
+22:05:16    5494272 c36fdd02060caa5b2f39dc5b9164705f61bf3ed8bb2c8ce3026574002dbc4a1a $PLAYPORT_BUILD/lanes/fex-rebase/pb/run/fex/build-arm64ec/Bin/libarm64ecfex.dll
+22:05:16  == dxmt
+22:13:02  == dxmt
+22:13:49    ac55db104117da58  libdxmt_combined.a
+22:13:49  == xinput
+22:13:51  == stage
+22:13:52    staged 279 artifacts (2 gaps); all sizes and sha256 match
+22:13:52  == guests
+22:14:51  == app
+22:15:23  == verify
+22:15:25  IPA $PLAYPORT_BUILD/lanes/fex-rebase/pb/out/20260924-221525-c2f7472d/Playport-26.5-c2f7472d.ipa
+22:15:25  sha256 c2f7472d0ad184f0075f28a33775379a288d2187e01562aad9ad6efd5eb5273f
+22:15:25  verify-ipa: 49 checks passed, 0 failed
+22:15:25    record: app/artifacts.tsv | 16 ++++++++--------
+22:15:25    record: 1 file changed, 8 insertions(+), 8 deletions(-)
+22:15:25  done (dxmt..verify)

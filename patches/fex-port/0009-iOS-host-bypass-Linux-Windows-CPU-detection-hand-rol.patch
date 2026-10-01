@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 17:49:53 +0800
+Subject: [PATCH] iOS-host: bypass Linux/Windows CPU detection; hand-roll
+ baseline HostFeatures
+
+The Linux MIDR probe path reads /sys/devices, which doesn't exist on iOS.
+The Windows path reads HKLM\Hardware\Description\System\CentralProcessor\0
+registry keys, which Wine on iOS doesn't populate either. Both paths leave
+HostFeatures.CPUMIDRs in a state whose destructor passes a corrupted small
+pointer to rpfree.
+
+When FEX_IOS_HOST is defined, return a minimal HostFeatures hand-built with
+sensible Apple-Silicon ARMv8.2 baseline features (AES, CRC, atomics, RCPC,
+SHA, PMULL, FCMA, FlagM/M2, AFP) and CPUMIDRs sized to one. SVE is left off
+because Wine arm64ec doesn't have SVE context save/restore yet.
+
+Also bumps the rpmalloc submodule for the rpfree-skip guard.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: 16cae730631b213e07bc1c40d6a2e185d9f251ae
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Common/HostFeatures.cpp        |  9 +++++++++
+ Source/Windows/Common/CPUFeatures.cpp | 22 ++++++++++++++++++++++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/Source/Common/HostFeatures.cpp b/Source/Common/HostFeatures.cpp
+index ddc2cf4..6d9c16a 100644
+--- a/Source/Common/HostFeatures.cpp
++++ b/Source/Common/HostFeatures.cpp
+@@ -20,6 +20,14 @@
+ namespace FEX {
+ 
+ void FillMIDRInformationViaLinux(FEXCore::HostFeatures* Features) {
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: no /sys/devices on iOS and std::thread::hardware_concurrency()
++   * comes from arm64ec-mingw libstdc++ which can return garbage / call into
++   * unimplemented Wine functions. Use a fixed reasonable value. */
++  Features->CPUMIDRs.resize(1);
++  Features->CPUMIDRs[0] = 0;
++  return;
++#else
+   auto Cores = FEX::CPUInfo::CalculateNumberOfCPUs();
+   Features->CPUMIDRs.resize(Cores);
+ #ifdef ARCHITECTURE_arm64
+@@ -39,6 +47,7 @@ void FillMIDRInformationViaLinux(FEXCore::HostFeatures* Features) {
+     }
+   }
+ #endif
++#endif
+ }
+ 
+ #if defined(ARCHITECTURE_arm64) && !defined(VIXL_SIMULATOR)
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index 034c2ca..f89ee42 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -57,6 +57,27 @@ public:
+ };
+ 
+ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostFeatures::HostTypeEnum HostType) {
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: registry has nothing useful here (Hardware\... reg keys
++   * aren't populated). Synthesize a minimal HostFeatures manually with
++   * baseline ARMv8.2 features that Apple Silicon supports. */
++  FEXCore::HostFeatures HostFeatures = {};
++  HostFeatures.DCacheLineLog2 = 4; // 4 << 4 = 64-byte lines (upstream dropped ICacheLineSize)
++  HostFeatures.SupportsCacheMaintenanceOps = !IsWine;
++  HostFeatures.SupportsAES = true;
++  HostFeatures.SupportsCRC = true;
++  HostFeatures.SupportsAtomics = true;
++  HostFeatures.SupportsRCPC = true;
++  HostFeatures.SupportsSHA = true;
++  HostFeatures.SupportsPMULL_128Bit = true;
++  HostFeatures.SupportsFCMA = true;
++  HostFeatures.SupportsFlagM = true;
++  HostFeatures.SupportsFlagM2 = true;
++  HostFeatures.SupportsAFP = true;
++  HostFeatures.CPUMIDRs.push_back(0u);
++  HostFeatures.HostType = HostType;
++  return HostFeatures;
++#else
+   HKEY Key = OpenProcessorKey(0);
+   if (!Key) {
+     ERROR_AND_DIE_FMT("Couldn't detect CPU features");
+@@ -90,6 +111,7 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+     HostFeatures.SupportsAVX = false;
+   }
+   return HostFeatures;
++#endif
+ }
+ 
+ CPUFeatures::CPUFeatures(FEXCore::Context::Context& CTX) {

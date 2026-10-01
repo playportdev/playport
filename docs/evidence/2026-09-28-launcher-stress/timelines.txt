@@ -1,0 +1,444 @@
+== ls-alive8
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+jit: acquire(896 MiB) -> 0 after 3.96 s
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.96 s
+pool-stress: p start mode=alive n=8 pace_ms=2500 regions=1
+pool-stress: p baseline regions=1 bad=352
+title: pool: size_mb=896 head_mb=20 head_live_mb=20 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=860 alias=2 alias_slots=2 alias_cap=4096 images=6 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: p child 1: not ready (wait=1 exit=0) after 0 alive
+pool-stress: p child 1 exited code=0 wait=0
+pool-stress: p done started=1 ready=0 of 8 failed=0 total_ms=2569
+title: pool: size_mb=896 head_mb=24 head_live_mb=20 head_free_mb=5 tail_mb=17 tail_live_mb=17 room_mb=856 alias=2 alias_slots=2 alias_cap=4096 images=6 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +9.31 s limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: +9.31 s pool: size_mb=896 head_mb=24 head_live_mb=20 head_free_mb=5 tail_mb=17 tail_live_mb=16 room_mb=856 alias=2 alias_slots=2 alias_cap=4096 images=6 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: done nonce=5a7471a7 exit=0x00000001 after_s=5
+== ls-alive8b
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+jit: acquire(896 MiB) -> 0 after 3.66 s
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.66 s
+pool-stress: p start mode=alive n=8 pace_ms=2500 regions=1
+pool-stress: p baseline regions=1/1 bad=0 stale=352
+title: pool: size_mb=896 head_mb=20 head_live_mb=20 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=860 alias=2 alias_slots=2 alias_cap=4096 images=6 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c1 ready pid=40 regions=1/1 bad=0 stale=352 work_ms=8
+pool-stress: p child 1 ready pid=40 spawn_ms=108 alive=1
+title: pool: size_mb=896 head_mb=40 head_live_mb=40 head_free_mb=0 tail_mb=33 tail_live_mb=33 room_mb=824 alias=4 alias_slots=4 alias_cap=4096 images=12 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c2 ready pid=48 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 2 ready pid=48 spawn_ms=106 alive=2
+title: pool: size_mb=896 head_mb=60 head_live_mb=60 head_free_mb=0 tail_mb=49 tail_live_mb=49 room_mb=788 alias=6 alias_slots=6 alias_cap=4096 images=18 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c3 ready pid=56 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 3 ready pid=56 spawn_ms=110 alive=3
+title: pool: size_mb=896 head_mb=79 head_live_mb=79 head_free_mb=0 tail_mb=65 tail_live_mb=65 room_mb=753 alias=8 alias_slots=8 alias_cap=4096 images=24 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c4 ready pid=64 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 4 ready pid=64 spawn_ms=107 alive=4
+title: pool: size_mb=896 head_mb=99 head_live_mb=99 head_free_mb=0 tail_mb=81 tail_live_mb=81 room_mb=717 alias=10 alias_slots=10 alias_cap=4096 images=30 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c5 ready pid=72 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 5 ready pid=72 spawn_ms=109 alive=5
+title: pool: size_mb=896 head_mb=119 head_live_mb=119 head_free_mb=0 tail_mb=97 tail_live_mb=97 room_mb=681 alias=12 alias_slots=12 alias_cap=4096 images=36 children=5 children_mb=21 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c6 ready pid=80 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 6 ready pid=80 spawn_ms=112 alive=6
+title: pool: size_mb=896 head_mb=138 head_live_mb=138 head_free_mb=0 tail_mb=113 tail_live_mb=113 room_mb=646 alias=14 alias_slots=14 alias_cap=4096 images=42 children=6 children_mb=25 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c7 ready pid=88 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 7 ready pid=88 spawn_ms=112 alive=7
+title: pool: size_mb=896 head_mb=158 head_live_mb=158 head_free_mb=0 tail_mb=129 tail_live_mb=129 room_mb=610 alias=16 alias_slots=16 alias_cap=4096 images=48 children=7 children_mb=29 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c8 ready pid=96 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 8 ready pid=96 spawn_ms=112 alive=8
+title: pool: size_mb=896 head_mb=178 head_live_mb=178 head_free_mb=0 tail_mb=145 tail_live_mb=145 room_mb=574 alias=18 alias_slots=18 alias_cap=4096 images=54 children=8 children_mb=33 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: p child 1 exited code=0 wait=0
+pool-stress: p child 2 exited code=0 wait=0
+pool-stress: p child 3 exited code=0 wait=0
+pool-stress: p child 4 exited code=0 wait=0
+pool-stress: p child 5 exited code=0 wait=0
+pool-stress: p child 6 exited code=0 wait=0
+pool-stress: p child 7 exited code=0 wait=0
+pool-stress: p child 8 exited code=0 wait=0
+pool-stress: p done started=8 ready=8 of 8 failed=0 total_ms=23403
+title: +29.79 s limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: +29.79 s pool: size_mb=896 head_mb=178 head_live_mb=20 head_free_mb=158 tail_mb=145 tail_live_mb=16 room_mb=574 alias=2 alias_slots=18 alias_cap=4096 images=6 children=8 children_mb=33 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: done nonce=8f883207 exit=0x00000000 after_s=26
+== ls-alive64
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+jit: acquire(896 MiB) -> 0 after 3.67 s
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.67 s
+pool-stress: p start mode=alive n=64 pace_ms=2500 regions=1
+pool-stress: p baseline regions=1/1 bad=0 stale=352
+title: pool: size_mb=896 head_mb=20 head_live_mb=20 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=860 alias=2 alias_slots=2 alias_cap=4096 images=6 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c1 ready pid=40 regions=1/1 bad=0 stale=352 work_ms=8
+pool-stress: p child 1 ready pid=40 spawn_ms=106 alive=1
+title: pool: size_mb=896 head_mb=40 head_live_mb=40 head_free_mb=0 tail_mb=33 tail_live_mb=33 room_mb=824 alias=4 alias_slots=4 alias_cap=4096 images=12 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c2 ready pid=48 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 2 ready pid=48 spawn_ms=104 alive=2
+title: pool: size_mb=896 head_mb=60 head_live_mb=60 head_free_mb=0 tail_mb=49 tail_live_mb=49 room_mb=788 alias=6 alias_slots=6 alias_cap=4096 images=18 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c3 ready pid=56 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 3 ready pid=56 spawn_ms=104 alive=3
+title: pool: size_mb=896 head_mb=79 head_live_mb=79 head_free_mb=0 tail_mb=65 tail_live_mb=65 room_mb=753 alias=8 alias_slots=8 alias_cap=4096 images=24 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c4 ready pid=64 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 4 ready pid=64 spawn_ms=106 alive=4
+title: pool: size_mb=896 head_mb=99 head_live_mb=99 head_free_mb=0 tail_mb=81 tail_live_mb=81 room_mb=717 alias=10 alias_slots=10 alias_cap=4096 images=30 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c5 ready pid=72 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 5 ready pid=72 spawn_ms=106 alive=5
+title: pool: size_mb=896 head_mb=119 head_live_mb=119 head_free_mb=0 tail_mb=97 tail_live_mb=97 room_mb=681 alias=12 alias_slots=12 alias_cap=4096 images=36 children=5 children_mb=21 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c6 ready pid=80 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 6 ready pid=80 spawn_ms=108 alive=6
+title: pool: size_mb=896 head_mb=138 head_live_mb=138 head_free_mb=0 tail_mb=113 tail_live_mb=113 room_mb=646 alias=14 alias_slots=14 alias_cap=4096 images=42 children=6 children_mb=25 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c7 ready pid=88 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 7 ready pid=88 spawn_ms=109 alive=7
+title: pool: size_mb=896 head_mb=158 head_live_mb=158 head_free_mb=0 tail_mb=129 tail_live_mb=129 room_mb=610 alias=16 alias_slots=16 alias_cap=4096 images=48 children=7 children_mb=29 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c8 ready pid=96 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 8 ready pid=96 spawn_ms=110 alive=8
+title: pool: size_mb=896 head_mb=178 head_live_mb=178 head_free_mb=0 tail_mb=145 tail_live_mb=145 room_mb=574 alias=18 alias_slots=18 alias_cap=4096 images=54 children=8 children_mb=33 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c9 ready pid=104 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 9 ready pid=104 spawn_ms=111 alive=9
+title: pool: size_mb=896 head_mb=197 head_live_mb=197 head_free_mb=0 tail_mb=161 tail_live_mb=161 room_mb=539 alias=20 alias_slots=20 alias_cap=4096 images=60 children=9 children_mb=37 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c10 ready pid=112 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 10 ready pid=112 spawn_ms=113 alive=10
+title: pool: size_mb=896 head_mb=217 head_live_mb=217 head_free_mb=0 tail_mb=177 tail_live_mb=177 room_mb=503 alias=22 alias_slots=22 alias_cap=4096 images=66 children=10 children_mb=41 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c11 ready pid=120 regions=1/1 bad=0 stale=352 work_ms=7
+pool-stress: p child 11 ready pid=120 spawn_ms=109 alive=11
+title: pool: size_mb=896 head_mb=237 head_live_mb=237 head_free_mb=0 tail_mb=193 tail_live_mb=193 room_mb=467 alias=24 alias_slots=24 alias_cap=4096 images=72 children=11 children_mb=45 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c12 ready pid=128 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 12 ready pid=128 spawn_ms=113 alive=12
+title: pool: size_mb=896 head_mb=256 head_live_mb=256 head_free_mb=0 tail_mb=209 tail_live_mb=209 room_mb=432 alias=26 alias_slots=26 alias_cap=4096 images=78 children=12 children_mb=49 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c13 ready pid=136 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 13 ready pid=136 spawn_ms=114 alive=13
+title: pool: size_mb=896 head_mb=276 head_live_mb=276 head_free_mb=0 tail_mb=225 tail_live_mb=225 room_mb=396 alias=28 alias_slots=28 alias_cap=4096 images=84 children=13 children_mb=53 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c14 ready pid=144 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 14 ready pid=144 spawn_ms=118 alive=14
+title: pool: size_mb=896 head_mb=296 head_live_mb=296 head_free_mb=0 tail_mb=241 tail_live_mb=241 room_mb=360 alias=30 alias_slots=30 alias_cap=4096 images=90 children=14 children_mb=57 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c15 ready pid=152 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 15 ready pid=152 spawn_ms=71 alive=15
+title: pool: size_mb=896 head_mb=315 head_live_mb=315 head_free_mb=0 tail_mb=257 tail_live_mb=257 room_mb=324 alias=32 alias_slots=32 alias_cap=4096 images=96 children=15 children_mb=61 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c16 ready pid=160 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 16 ready pid=160 spawn_ms=117 alive=16
+title: pool: size_mb=896 head_mb=335 head_live_mb=335 head_free_mb=0 tail_mb=273 tail_live_mb=273 room_mb=289 alias=34 alias_slots=34 alias_cap=4096 images=102 children=16 children_mb=65 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c17 ready pid=168 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 17 ready pid=168 spawn_ms=118 alive=17
+title: pool: size_mb=896 head_mb=355 head_live_mb=355 head_free_mb=0 tail_mb=289 tail_live_mb=289 room_mb=253 alias=36 alias_slots=36 alias_cap=4096 images=108 children=17 children_mb=69 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c18 ready pid=176 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 18 ready pid=176 spawn_ms=119 alive=18
+title: pool: size_mb=896 head_mb=374 head_live_mb=374 head_free_mb=0 tail_mb=305 tail_live_mb=305 room_mb=217 alias=38 alias_slots=38 alias_cap=4096 images=114 children=18 children_mb=73 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c19 ready pid=184 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 19 ready pid=184 spawn_ms=122 alive=19
+title: pool: size_mb=896 head_mb=394 head_live_mb=394 head_free_mb=0 tail_mb=321 tail_live_mb=321 room_mb=182 alias=40 alias_slots=40 alias_cap=4096 images=120 children=19 children_mb=77 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c20 ready pid=192 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 20 ready pid=192 spawn_ms=123 alive=20
+title: pool: size_mb=896 head_mb=414 head_live_mb=414 head_free_mb=0 tail_mb=337 tail_live_mb=337 room_mb=146 alias=42 alias_slots=42 alias_cap=4096 images=126 children=20 children_mb=81 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c21 ready pid=200 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 21 ready pid=200 spawn_ms=123 alive=21
+title: pool: size_mb=896 head_mb=433 head_live_mb=433 head_free_mb=0 tail_mb=353 tail_live_mb=353 room_mb=110 alias=44 alias_slots=44 alias_cap=4096 images=132 children=21 children_mb=85 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c22 ready pid=208 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 22 ready pid=208 spawn_ms=120 alive=22
+title: pool: size_mb=896 head_mb=453 head_live_mb=453 head_free_mb=0 tail_mb=369 tail_live_mb=369 room_mb=75 alias=46 alias_slots=46 alias_cap=4096 images=138 children=22 children_mb=89 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c23 ready pid=216 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 23 ready pid=216 spawn_ms=125 alive=23
+title: pool: size_mb=896 head_mb=473 head_live_mb=473 head_free_mb=0 tail_mb=385 tail_live_mb=385 room_mb=39 alias=48 alias_slots=48 alias_cap=4096 images=144 children=23 children_mb=93 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c24 ready pid=224 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 24 ready pid=224 spawn_ms=127 alive=24
+title: pool: size_mb=896 head_mb=492 head_live_mb=492 head_free_mb=0 tail_mb=401 tail_live_mb=401 room_mb=3 alias=50 alias_slots=50 alias_cap=4096 images=150 children=24 children_mb=97 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+[child-ntdll] JIT pool exhausted (need 0x408000, bump=0x1ebe0000 of 0x38000000, tail_resv=0x19064000, freelist=0)
+pool-stress: p child 25: CreateProcess failed error=8 after 24 alive
+pool-stress: p child 1 exited code=0 wait=0
+pool-stress: p child 2 exited code=0 wait=0
+pool-stress: p child 3 exited code=0 wait=0
+pool-stress: p child 4 exited code=0 wait=0
+pool-stress: p child 5 exited code=0 wait=0
+pool-stress: p child 6 exited code=0 wait=0
+pool-stress: p child 7 exited code=0 wait=0
+pool-stress: p child 8 exited code=0 wait=0
+pool-stress: p child 9 exited code=0 wait=0
+pool-stress: p child 10 exited code=0 wait=0
+pool-stress: p child 11 exited code=0 wait=0
+pool-stress: p child 12 exited code=0 wait=0
+pool-stress: p child 13 exited code=0 wait=0
+pool-stress: p child 14 exited code=0 wait=0
+pool-stress: p child 15 exited code=0 wait=0
+pool-stress: p child 16 exited code=0 wait=0
+pool-stress: p child 17 exited code=0 wait=0
+pool-stress: p child 18 exited code=0 wait=0
+pool-stress: p child 19 exited code=0 wait=0
+pool-stress: p child 20 exited code=0 wait=0
+pool-stress: p child 21 exited code=0 wait=0
+pool-stress: p child 22 exited code=0 wait=0
+pool-stress: p child 23 exited code=0 wait=0
+pool-stress: p child 24 exited code=0 wait=0
+pool-stress: p done started=24 ready=24 of 64 failed=0 total_ms=65268
+title: pool: ran out of JIT memory (head)
+title: pool: size_mb=896 head_mb=492 head_live_mb=20 head_free_mb=473 tail_mb=401 tail_live_mb=17 room_mb=3 alias=2 alias_slots=50 alias_cap=4096 images=6 children=24 children_mb=97 head_exhausted=1 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: +71.62 s limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: +71.62 s pool: size_mb=896 head_mb=492 head_live_mb=20 head_free_mb=473 tail_mb=401 tail_live_mb=16 room_mb=3 alias=2 alias_slots=50 alias_cap=4096 images=6 children=24 children_mb=97 head_exhausted=1 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: done nonce=1bcfe699 pool=exhausted:head exit=0x00010018 after_s=67
+== ls-serial40
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+jit: acquire(896 MiB) -> 0 after 3.73 s
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.73 s
+pool-stress: p start mode=serial n=40 pace_ms=2500 regions=1
+pool-stress: p baseline regions=1/1 bad=0 stale=352
+title: pool: size_mb=896 head_mb=20 head_live_mb=20 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=860 alias=2 alias_slots=2 alias_cap=4096 images=6 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c1 ready pid=40 regions=1/1 bad=0 stale=352 work_ms=8
+pool-stress: p child 1 ready pid=40 spawn_ms=108 alive=1
+pool-stress: p child 1 exited code=0
+title: pool: size_mb=896 head_mb=40 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=824 alias=2 alias_slots=4 alias_cap=4096 images=6 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c2 ready pid=48 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 2 ready pid=48 spawn_ms=105 alive=1
+pool-stress: p child 2 exited code=0
+title: pool: size_mb=896 head_mb=60 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=804 alias=2 alias_slots=4 alias_cap=4096 images=6 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c3 ready pid=56 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 3 ready pid=56 spawn_ms=105 alive=1
+pool-stress: p child 3 exited code=0
+title: pool: size_mb=896 head_mb=79 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=785 alias=2 alias_slots=4 alias_cap=4096 images=6 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c4 ready pid=64 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 4 ready pid=64 spawn_ms=103 alive=1
+pool-stress: p child 4 exited code=0
+title: pool: size_mb=896 head_mb=99 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=765 alias=2 alias_slots=4 alias_cap=4096 images=6 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c5 ready pid=72 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 5 ready pid=72 spawn_ms=107 alive=1
+pool-stress: p child 5 exited code=0
+title: pool: size_mb=896 head_mb=118 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=746 alias=2 alias_slots=4 alias_cap=4096 images=6 children=5 children_mb=21 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c6 ready pid=80 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 6 ready pid=80 spawn_ms=106 alive=1
+pool-stress: p child 6 exited code=0
+title: pool: size_mb=896 head_mb=138 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=726 alias=2 alias_slots=4 alias_cap=4096 images=6 children=6 children_mb=25 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c7 ready pid=88 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 7 ready pid=88 spawn_ms=104 alive=1
+pool-stress: p child 7 exited code=0
+title: pool: size_mb=896 head_mb=157 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=706 alias=2 alias_slots=4 alias_cap=4096 images=6 children=7 children_mb=29 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c8 ready pid=96 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 8 ready pid=96 spawn_ms=107 alive=1
+pool-stress: p child 8 exited code=0
+title: pool: size_mb=896 head_mb=177 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=687 alias=2 alias_slots=4 alias_cap=4096 images=6 children=8 children_mb=33 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c9 ready pid=104 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 9 ready pid=104 spawn_ms=111 alive=1
+pool-stress: p child 9 exited code=0
+title: pool: size_mb=896 head_mb=197 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=667 alias=2 alias_slots=4 alias_cap=4096 images=6 children=9 children_mb=37 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c10 ready pid=112 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 10 ready pid=112 spawn_ms=104 alive=1
+pool-stress: p child 10 exited code=0
+title: pool: size_mb=896 head_mb=216 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=648 alias=2 alias_slots=4 alias_cap=4096 images=6 children=10 children_mb=41 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c11 ready pid=120 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 11 ready pid=120 spawn_ms=74 alive=1
+pool-stress: p child 11 exited code=0
+title: pool: size_mb=896 head_mb=236 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=628 alias=2 alias_slots=4 alias_cap=4096 images=6 children=11 children_mb=45 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c12 ready pid=128 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 12 ready pid=128 spawn_ms=104 alive=1
+pool-stress: p child 12 exited code=0
+title: pool: size_mb=896 head_mb=255 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=609 alias=2 alias_slots=4 alias_cap=4096 images=6 children=12 children_mb=49 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c13 ready pid=136 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 13 ready pid=136 spawn_ms=107 alive=1
+pool-stress: p child 13 exited code=0
+title: pool: size_mb=896 head_mb=275 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=589 alias=2 alias_slots=4 alias_cap=4096 images=6 children=13 children_mb=53 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c14 ready pid=144 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 14 ready pid=144 spawn_ms=105 alive=1
+pool-stress: p child 14 exited code=0
+title: pool: size_mb=896 head_mb=295 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=569 alias=2 alias_slots=4 alias_cap=4096 images=6 children=14 children_mb=57 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c15 ready pid=152 regions=1/1 bad=0 stale=352 work_ms=4
+pool-stress: p child 15 ready pid=152 spawn_ms=59 alive=1
+pool-stress: p child 15 exited code=0
+title: pool: size_mb=896 head_mb=314 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=550 alias=2 alias_slots=4 alias_cap=4096 images=6 children=15 children_mb=61 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c16 ready pid=160 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 16 ready pid=160 spawn_ms=106 alive=1
+pool-stress: p child 16 exited code=0
+title: pool: size_mb=896 head_mb=334 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=530 alias=2 alias_slots=4 alias_cap=4096 images=6 children=16 children_mb=65 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c17 ready pid=168 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 17 ready pid=168 spawn_ms=108 alive=1
+pool-stress: p child 17 exited code=0
+title: pool: size_mb=896 head_mb=353 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=511 alias=2 alias_slots=4 alias_cap=4096 images=6 children=17 children_mb=69 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c18 ready pid=176 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 18 ready pid=176 spawn_ms=106 alive=1
+pool-stress: p child 18 exited code=0
+title: pool: size_mb=896 head_mb=373 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=491 alias=2 alias_slots=4 alias_cap=4096 images=6 children=18 children_mb=73 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c19 ready pid=184 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 19 ready pid=184 spawn_ms=107 alive=1
+pool-stress: p child 19 exited code=0
+title: pool: size_mb=896 head_mb=393 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=471 alias=2 alias_slots=4 alias_cap=4096 images=6 children=19 children_mb=77 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c20 ready pid=192 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 20 ready pid=192 spawn_ms=105 alive=1
+pool-stress: p child 20 exited code=0
+title: pool: size_mb=896 head_mb=412 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=452 alias=2 alias_slots=4 alias_cap=4096 images=6 children=20 children_mb=81 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c21 ready pid=200 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 21 ready pid=200 spawn_ms=104 alive=1
+pool-stress: p child 21 exited code=0
+title: pool: size_mb=896 head_mb=432 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=432 alias=2 alias_slots=4 alias_cap=4096 images=6 children=21 children_mb=85 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c22 ready pid=208 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 22 ready pid=208 spawn_ms=109 alive=1
+pool-stress: p child 22 exited code=0
+title: pool: size_mb=896 head_mb=451 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=413 alias=2 alias_slots=4 alias_cap=4096 images=6 children=22 children_mb=89 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c23 ready pid=216 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 23 ready pid=216 spawn_ms=106 alive=1
+pool-stress: p child 23 exited code=0
+title: pool: size_mb=896 head_mb=471 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=393 alias=2 alias_slots=4 alias_cap=4096 images=6 children=23 children_mb=93 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c24 ready pid=224 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 24 ready pid=224 spawn_ms=108 alive=1
+pool-stress: p child 24 exited code=0
+title: pool: size_mb=896 head_mb=491 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=373 alias=2 alias_slots=4 alias_cap=4096 images=6 children=24 children_mb=97 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c25 ready pid=232 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 25 ready pid=232 spawn_ms=91 alive=1
+pool-stress: p child 25 exited code=0
+title: pool: size_mb=896 head_mb=510 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=354 alias=2 alias_slots=4 alias_cap=4096 images=6 children=25 children_mb=101 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c26 ready pid=240 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 26 ready pid=240 spawn_ms=108 alive=1
+pool-stress: p child 26 exited code=0
+title: pool: size_mb=896 head_mb=530 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=334 alias=2 alias_slots=4 alias_cap=4096 images=6 children=26 children_mb=105 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c27 ready pid=248 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 27 ready pid=248 spawn_ms=106 alive=1
+pool-stress: p child 27 exited code=0
+title: pool: size_mb=896 head_mb=549 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=315 alias=2 alias_slots=4 alias_cap=4096 images=6 children=27 children_mb=109 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c28 ready pid=256 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 28 ready pid=256 spawn_ms=108 alive=1
+pool-stress: p child 28 exited code=0
+title: pool: size_mb=896 head_mb=569 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=295 alias=2 alias_slots=4 alias_cap=4096 images=6 children=28 children_mb=113 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c29 ready pid=264 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 29 ready pid=264 spawn_ms=107 alive=1
+pool-stress: p child 29 exited code=0
+title: pool: size_mb=896 head_mb=588 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=275 alias=2 alias_slots=4 alias_cap=4096 images=6 children=29 children_mb=117 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c30 ready pid=272 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 30 ready pid=272 spawn_ms=105 alive=1
+pool-stress: p child 30 exited code=0
+title: pool: size_mb=896 head_mb=608 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=256 alias=2 alias_slots=4 alias_cap=4096 images=6 children=30 children_mb=121 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c31 ready pid=280 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 31 ready pid=280 spawn_ms=107 alive=1
+pool-stress: p child 31 exited code=0
+title: pool: size_mb=896 head_mb=628 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=236 alias=2 alias_slots=4 alias_cap=4096 images=6 children=31 children_mb=125 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c32 ready pid=288 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 32 ready pid=288 spawn_ms=105 alive=1
+pool-stress: p child 32 exited code=0
+title: pool: size_mb=896 head_mb=647 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=217 alias=2 alias_slots=4 alias_cap=4096 images=6 children=32 children_mb=129 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c33 ready pid=296 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 33 ready pid=296 spawn_ms=105 alive=1
+pool-stress: p child 33 exited code=0
+title: pool: size_mb=896 head_mb=667 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=197 alias=2 alias_slots=4 alias_cap=4096 images=6 children=33 children_mb=134 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c34 ready pid=304 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 34 ready pid=304 spawn_ms=103 alive=1
+pool-stress: p child 34 exited code=0
+title: pool: size_mb=896 head_mb=686 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=178 alias=2 alias_slots=4 alias_cap=4096 images=6 children=34 children_mb=138 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c35 ready pid=312 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 35 ready pid=312 spawn_ms=107 alive=1
+pool-stress: p child 35 exited code=0
+title: pool: size_mb=896 head_mb=706 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=158 alias=2 alias_slots=4 alias_cap=4096 images=6 children=35 children_mb=142 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c36 ready pid=320 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 36 ready pid=320 spawn_ms=106 alive=1
+pool-stress: p child 36 exited code=0
+title: pool: size_mb=896 head_mb=726 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=138 alias=2 alias_slots=4 alias_cap=4096 images=6 children=36 children_mb=146 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c37 ready pid=328 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 37 ready pid=328 spawn_ms=104 alive=1
+pool-stress: p child 37 exited code=0
+title: pool: size_mb=896 head_mb=745 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=119 alias=2 alias_slots=4 alias_cap=4096 images=6 children=37 children_mb=150 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c38 ready pid=336 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 38 ready pid=336 spawn_ms=107 alive=1
+pool-stress: p child 38 exited code=0
+title: pool: size_mb=896 head_mb=765 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=99 alias=2 alias_slots=4 alias_cap=4096 images=6 children=38 children_mb=154 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c39 ready pid=344 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 39 ready pid=344 spawn_ms=107 alive=1
+pool-stress: p child 39 exited code=0
+title: pool: size_mb=896 head_mb=784 head_live_mb=20 head_free_mb=20 tail_mb=33 tail_live_mb=17 room_mb=80 alias=2 alias_slots=4 alias_cap=4096 images=6 children=39 children_mb=158 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c40 ready pid=352 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 40 ready pid=352 spawn_ms=107 alive=1
+pool-stress: p child 40 exited code=0
+title: pool: size_mb=896 head_mb=804 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=17 room_mb=60 alias=2 alias_slots=4 alias_cap=4096 images=6 children=40 children_mb=162 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: p done started=40 ready=40 of 40 failed=0 total_ms=106745
+title: +113.20 s limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: +113.20 s pool: size_mb=896 head_mb=804 head_live_mb=20 head_free_mb=40 tail_mb=33 tail_live_mb=16 room_mb=60 alias=2 alias_slots=4 alias_cap=4096 images=6 children=40 children_mb=162 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: done nonce=1637b8bd exit=0x00000000 after_s=109
+== ls-alive64-512
+title: jit pool: 512 MiB for a memory limit of 8192 MB (simulated pool)
+jit: acquire(512 MiB) -> 0 after 3.04 s
+title: runtime: pool 512 MiB; wine_host_init -> 0, activation 3.04 s
+pool-stress: p start mode=alive n=64 pace_ms=2500 regions=1
+pool-stress: p baseline regions=1/1 bad=0 stale=352
+title: pool: size_mb=512 head_mb=20 head_live_mb=20 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=476 alias=2 alias_slots=2 alias_cap=4096 images=6 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c1 ready pid=40 regions=1/1 bad=0 stale=352 work_ms=8
+pool-stress: p child 1 ready pid=40 spawn_ms=107 alive=1
+title: pool: size_mb=512 head_mb=40 head_live_mb=40 head_free_mb=0 tail_mb=33 tail_live_mb=33 room_mb=440 alias=4 alias_slots=4 alias_cap=4096 images=12 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c2 ready pid=48 regions=1/1 bad=0 stale=352 work_ms=7
+pool-stress: p child 2 ready pid=48 spawn_ms=106 alive=2
+title: pool: size_mb=512 head_mb=60 head_live_mb=60 head_free_mb=0 tail_mb=49 tail_live_mb=49 room_mb=404 alias=6 alias_slots=6 alias_cap=4096 images=18 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c3 ready pid=56 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 3 ready pid=56 spawn_ms=106 alive=3
+title: pool: size_mb=512 head_mb=79 head_live_mb=79 head_free_mb=0 tail_mb=65 tail_live_mb=65 room_mb=369 alias=8 alias_slots=8 alias_cap=4096 images=24 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c4 ready pid=64 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 4 ready pid=64 spawn_ms=107 alive=4
+title: pool: size_mb=512 head_mb=99 head_live_mb=99 head_free_mb=0 tail_mb=81 tail_live_mb=81 room_mb=333 alias=10 alias_slots=10 alias_cap=4096 images=30 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c5 ready pid=72 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 5 ready pid=72 spawn_ms=108 alive=5
+title: pool: size_mb=512 head_mb=119 head_live_mb=119 head_free_mb=0 tail_mb=97 tail_live_mb=97 room_mb=297 alias=12 alias_slots=12 alias_cap=4096 images=36 children=5 children_mb=21 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c6 ready pid=80 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 6 ready pid=80 spawn_ms=110 alive=6
+title: pool: size_mb=512 head_mb=138 head_live_mb=138 head_free_mb=0 tail_mb=113 tail_live_mb=113 room_mb=262 alias=14 alias_slots=14 alias_cap=4096 images=42 children=6 children_mb=25 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c7 ready pid=88 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 7 ready pid=88 spawn_ms=111 alive=7
+title: pool: size_mb=512 head_mb=158 head_live_mb=158 head_free_mb=0 tail_mb=129 tail_live_mb=129 room_mb=226 alias=16 alias_slots=16 alias_cap=4096 images=48 children=7 children_mb=29 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c8 ready pid=96 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 8 ready pid=96 spawn_ms=111 alive=8
+title: pool: size_mb=512 head_mb=178 head_live_mb=178 head_free_mb=0 tail_mb=145 tail_live_mb=145 room_mb=190 alias=18 alias_slots=18 alias_cap=4096 images=54 children=8 children_mb=33 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c9 ready pid=104 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 9 ready pid=104 spawn_ms=112 alive=9
+title: pool: size_mb=512 head_mb=197 head_live_mb=197 head_free_mb=0 tail_mb=161 tail_live_mb=161 room_mb=155 alias=20 alias_slots=20 alias_cap=4096 images=60 children=9 children_mb=37 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c10 ready pid=112 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 10 ready pid=112 spawn_ms=117 alive=10
+title: pool: size_mb=512 head_mb=217 head_live_mb=217 head_free_mb=0 tail_mb=177 tail_live_mb=177 room_mb=119 alias=22 alias_slots=22 alias_cap=4096 images=66 children=10 children_mb=41 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c11 ready pid=120 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 11 ready pid=120 spawn_ms=74 alive=11
+title: pool: size_mb=512 head_mb=237 head_live_mb=237 head_free_mb=0 tail_mb=193 tail_live_mb=193 room_mb=83 alias=24 alias_slots=24 alias_cap=4096 images=72 children=11 children_mb=45 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c12 ready pid=128 regions=1/1 bad=0 stale=352 work_ms=6
+pool-stress: p child 12 ready pid=128 spawn_ms=115 alive=12
+title: pool: size_mb=512 head_mb=256 head_live_mb=256 head_free_mb=0 tail_mb=209 tail_live_mb=209 room_mb=48 alias=26 alias_slots=26 alias_cap=4096 images=78 children=12 children_mb=49 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c13 ready pid=136 regions=1/1 bad=0 stale=352 work_ms=5
+pool-stress: p child 13 ready pid=136 spawn_ms=118 alive=13
+title: pool: size_mb=512 head_mb=276 head_live_mb=276 head_free_mb=0 tail_mb=225 tail_live_mb=225 room_mb=12 alias=28 alias_slots=28 alias_cap=4096 images=84 children=13 children_mb=53 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: p child 14: not ready (wait=1 exit=c0000135) after 13 alive
+pool-stress: p child 1 exited code=0 wait=0
+pool-stress: p child 2 exited code=0 wait=0
+pool-stress: p child 3 exited code=0 wait=0
+pool-stress: p child 4 exited code=0 wait=0
+pool-stress: p child 5 exited code=0 wait=0
+pool-stress: p child 6 exited code=0 wait=0
+pool-stress: p child 7 exited code=0 wait=0
+pool-stress: p child 8 exited code=0 wait=0
+pool-stress: p child 9 exited code=0 wait=0
+pool-stress: p child 10 exited code=0 wait=0
+pool-stress: p child 11 exited code=0 wait=0
+pool-stress: p child 12 exited code=0 wait=0
+pool-stress: p child 13 exited code=0 wait=0
+pool-stress: p child 14 exited code=3221225781 wait=0
+pool-stress: p done started=14 ready=13 of 64 failed=1 total_ms=36542
+title: pool: ran out of JIT memory (head)
+title: pool: size_mb=512 head_mb=288 head_live_mb=20 head_free_mb=268 tail_mb=225 tail_live_mb=17 room_mb=0 alias=2 alias_slots=28 alias_cap=4096 images=6 children=14 children_mb=57 head_exhausted=33 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: +42.25 s limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: +42.25 s pool: size_mb=512 head_mb=288 head_live_mb=20 head_free_mb=268 tail_mb=225 tail_live_mb=16 room_mb=0 alias=2 alias_slots=28 alias_cap=4096 images=6 children=14 children_mb=57 head_exhausted=33 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: done nonce=d4e53afa pool=exhausted:head exit=0x0003000d after_s=39
+== ls-alias
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+jit: acquire(896 MiB) -> 0 after 3.69 s
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.69 s
+pool-stress: p start mode=alive n=12 pace_ms=2500 regions=400
+title: pool: size_mb=896 head_mb=31 head_live_mb=31 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=721 alias=182 alias_slots=182 alias_cap=4096 images=6 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=43 head_live_mb=43 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=709 alias=372 alias_slots=372 alias_cap=4096 images=6 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: p baseline regions=400/400 bad=0 stale=102455
+title: pool: size_mb=896 head_mb=71 head_live_mb=71 head_free_mb=0 tail_mb=161 tail_live_mb=161 room_mb=665 alias=510 alias_slots=510 alias_cap=4096 images=12 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=83 head_live_mb=83 head_free_mb=0 tail_mb=289 tail_live_mb=273 room_mb=525 alias=698 alias_slots=698 alias_cap=4096 images=12 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c1 ready pid=40 regions=400/400 bad=0 stale=102446 work_ms=4244
+pool-stress: p child 1 ready pid=40 spawn_ms=4344 alive=1
+title: pool: size_mb=896 head_mb=90 head_live_mb=90 head_free_mb=0 tail_mb=289 tail_live_mb=273 room_mb=518 alias=802 alias_slots=802 alias_cap=4096 images=12 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=111 head_live_mb=111 head_free_mb=0 tail_mb=305 tail_live_mb=305 room_mb=481 alias=829 alias_slots=829 alias_cap=4096 images=18 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=123 head_live_mb=122 head_free_mb=0 tail_mb=433 tail_live_mb=417 room_mb=341 alias=1018 alias_slots=1018 alias_cap=4096 images=18 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=134 head_live_mb=122 head_free_mb=0 tail_mb=433 tail_live_mb=417 room_mb=330 alias=1201 alias_slots=1201 alias_cap=4096 images=18 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c2 ready pid=48 regions=400/400 bad=0 stale=102446 work_ms=4289
+pool-stress: p child 2 ready pid=48 spawn_ms=4394 alive=2
+title: pool: size_mb=896 head_mb=162 head_live_mb=122 head_free_mb=0 tail_mb=577 tail_live_mb=561 room_mb=158 alias=1335 alias_slots=1335 alias_cap=4096 images=24 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=173 head_live_mb=122 head_free_mb=0 tail_mb=577 tail_live_mb=561 room_mb=147 alias=1515 alias_slots=1515 alias_cap=4096 images=24 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c3 ready pid=56 regions=400/400 bad=0 stale=102446 work_ms=4356
+pool-stress: p child 3 ready pid=56 spawn_ms=4459 alive=3
+title: pool: size_mb=896 head_mb=179 head_live_mb=122 head_free_mb=0 tail_mb=577 tail_live_mb=561 room_mb=141 alias=1604 alias_slots=1604 alias_cap=4096 images=24 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=201 head_live_mb=122 head_free_mb=0 tail_mb=593 tail_live_mb=593 room_mb=103 alias=1646 alias_slots=1646 alias_cap=4096 images=30 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=212 head_live_mb=122 head_free_mb=0 tail_mb=625 tail_live_mb=609 room_mb=60 alias=1826 alias_slots=1826 alias_cap=4096 images=30 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+pool-stress: c4 ready pid=64 regions=400/400 bad=0 stale=102414 work_ms=4403
+pool-stress: p child 4 ready pid=64 spawn_ms=4507 alive=4
+title: pool: size_mb=896 head_mb=224 head_live_mb=122 head_free_mb=0 tail_mb=625 tail_live_mb=593 room_mb=48 alias=2005 alias_slots=2005 alias_cap=4096 images=30 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=251 head_live_mb=122 head_free_mb=0 tail_mb=645 tail_live_mb=629 room_mb=1 alias=2137 alias_slots=2137 alias_cap=4096 images=36 children=5 children_mb=21 head_exhausted=0 tail_refused=2 tail_fatal=0 alias_full=0 exhausted=none
+[redeliv] terminating process rev=ml465
+== ls-hk
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+jit: acquire(896 MiB) -> 0 after 3.09 s
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.09 s
+[proc-gate] REFUSING spawn of L"C:\\Games\\Hollow Knight\\UnityCrashHandler64.exe" (unitycrashhandler64 gate)
+title: pool: size_mb=896 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=603 alias=7 alias_slots=7 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=164 head_live_mb=164 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=588 alias=39 alias_slots=39 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +9.48 s first frame

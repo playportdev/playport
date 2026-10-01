@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 8 May 2026 13:53:09 +0800
+Subject: [PATCH] ARM64EC iOS: translate redirect_ptr results to JIT-pool alias
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+iOS denies execute on PE .text at its unix-mapped VA; the executable copy
+lives in the JIT pool. arm64ec_redirect_ptr returned unix-VA destinations
+which the caller's BLR x11 then crashed on (BUS exec=1 — most visibly
+in win32u DllMain where ~270K faults piled up before progressing).
+
+Add xlate_ios_jit, a naked PE-side thunk that tail-branches via BR x16
+to a unix-side translation function (ios_jit_translate_addr) installed at
+load time through the new p_ios_jit_translate_addr global. Same pattern as
+__wine_unix_call_arm64ec; bypasses arm64x_check_call which would otherwise
+misroute the non-EC unix-side function through x86 emulation.
+
+Wire it into all four return paths of arm64ec_redirect_ptr:
+  - direct redirection-table hit
+  - fast-forward thunk (b)
+  - forwarder thunk fallthrough (a)
+  - default ptr return
+
+The pointer is exported via @ extern -private -arch=arm64ec; unix-side
+ntdll-unix's load_ntdll_functions writes ios_jit_translate_addr's address
+into it once at init.
+
+This is companion to mapping-table-bookkeeping fixes in the iOS port; with
+both, Thumper progresses from win32u DllMain past D3D11/DXGI/MSVCP140 init
+into the Steam emu init layer.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+(cherry picked from commit f7412bdecfe6a7641834e8b66e8625a30ac50901)
+Madeira-commit: 2c3d58d77ac0efd5a73b84a124ae0bb7b91a25d1
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/ntdll.spec       |  1 +
+ dlls/ntdll/signal_arm64ec.c | 41 ++++++++++++++++++++++++++++++++-----
+ 2 files changed, 37 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 2c66313e6ce..9f147d17741 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1770,6 +1770,7 @@
+ @ extern -private __wine_syscall_dispatcher
+ @ extern -private __wine_unix_call_dispatcher
+ @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
++@ extern -private -arch=arm64ec p_ios_jit_translate_addr
+ @ extern -private __wine_unixlib_handle
+ 
+ # Debugging
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index cfee56e8ee4..694459f00e9 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -163,6 +163,35 @@ static BOOL send_cross_process_notification( HANDLE process, UINT id, const void
+ }
+ 
+ 
++/* iOS: PE .text sections are non-executable at their unix VA; an executable
++ * alias lives in the JIT pool. arm64ec_redirect_ptr resolves to unix .text
++ * addresses, so on iOS every return path must be translated to the JIT alias.
++ *
++ * `p_ios_jit_translate_addr` holds the address of unix-side
++ * ios_jit_translate_addr (a native ARM64 function), set by unix-side
++ * load_ntdll_functions. NULL on non-iOS / pre-init.
++ *
++ * `xlate_ios_jit` is a naked PE-side thunk that does `br x16` to the unix
++ * function — bypassing arm64x_check_call which would otherwise misroute a
++ * non-EC target through x86 emulation. Same trick as __wine_unix_call_arm64ec.
++ *
++ * The pointer is exported via ntdll.spec so unix-side can install the address. */
++void *p_ios_jit_translate_addr = NULL;
++
++void *__attribute__((naked)) xlate_ios_jit( void *ptr )
++{
++    asm( ".seh_proc \"#xlate_ios_jit\"\n\t"
++         ".seh_endprologue\n\t"
++         "cbz x0, 1f\n\t"                                 /* NULL → return NULL */
++         "adrp x16, p_ios_jit_translate_addr\n\t"
++         "ldr x16, [x16, #:lo12:p_ios_jit_translate_addr]\n\t"
++         "cbz x16, 1f\n\t"                                /* fn-ptr unset → identity */
++         "br x16\n"                                       /* tail-call unix fn */
++         "1: ret\n\t"
++         ".seh_endproc" );
++}
++
++
+ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METADATA *metadata )
+ {
+     const IMAGE_ARM64EC_REDIRECTION_ENTRY *map = get_rva( module, metadata->RedirectionMetadata );
+@@ -173,7 +202,7 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+     while (min <= max)
+     {
+         int pos = (min + max) / 2;
+-        if (map[pos].Source == rva) return get_rva( module, map[pos].Destination );
++        if (map[pos].Source == rva) return xlate_ios_jit( get_rva( module, map[pos].Destination ) );
+         if (map[pos].Source < rva) min = pos + 1;
+         else max = pos - 1;
+     }
+@@ -199,7 +228,7 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+         {
+             LONG off = *(const LONG *)&bytes[10];
+             void *target = (char *)ptr + 14 + off;
+-            return target;
++            return xlate_ios_jit( target );
+         }
+         /* (a) simple forwarder thunk */
+         if (bytes[0] == 0xff && bytes[1] == 0x25)
+@@ -231,16 +260,18 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+                     {
+                         const IMAGE_ARM64EC_METADATA *target_metadata =
+                             arm64ec_get_module_metadata( mod_entry->DllBase );
++                        /* Recursive call already applies xlate_ios_jit at its
++                         * own return paths; passing through unchanged is correct. */
+                         if (target_metadata)
+                             return arm64ec_redirect_ptr( mod_entry->DllBase, target, target_metadata );
+-                        return target;
++                        return xlate_ios_jit( target );
+                     }
+                 }
+-                return target;
++                return xlate_ios_jit( target );
+             }
+         }
+     }
+-    return ptr;
++    return xlate_ios_jit( ptr );
+ }
+ 
+ static void arm64x_check_call(void);

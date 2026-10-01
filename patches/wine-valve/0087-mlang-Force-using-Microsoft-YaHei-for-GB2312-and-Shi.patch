@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ziqing Hui <zhui@codeweavers.com>
+Date: Wed, 25 Jun 2025 22:26:59 +0800
+Subject: [PATCH] mlang: Force using Microsoft YaHei for GB2312 and ShiftJIS
+ charset.
+
+CW-Bug-Id: #23857
+Valve-commit: 0888f79fedaa8bcc43fa8b3e008026771a5297af
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/mlang/mlang.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/dlls/mlang/mlang.c b/dlls/mlang/mlang.c
+index 8d26cc1..229359e 100644
+--- a/dlls/mlang/mlang.c
++++ b/dlls/mlang/mlang.c
+@@ -1327,6 +1327,10 @@ static INT CALLBACK map_font_enum_proc(const LOGFONTW *lf, const TEXTMETRICW *nt
+     UINT charset;
+     struct map_font_enum_data *data = (struct map_font_enum_data *)lParam;
+ 
++    if ((data->charset == GB2312_CHARSET || data->charset == SHIFTJIS_CHARSET)
++            && wcscmp(lf->lfFaceName, L"Microsoft YaHei") != 0)
++        return 1;
++
+     data->src_lf.lfCharSet = lf->lfCharSet;
+     wcscpy(data->src_lf.lfFaceName, lf->lfFaceName);
+ 

@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] win32u: report the host panel's refresh rate for the virtual
+ monitor
+
+The virtual monitor reported a fixed 60 Hz. MADEIRA_SCREEN_HZ, set by the
+host app from the panel, is reported instead (up to 120 Hz).
+
+Class: host-app
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/win32u-unix/sysparams_ios.c | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/build/win32u-unix/sysparams_ios.c b/build/win32u-unix/sysparams_ios.c
+index db4a188..5e21f83 100644
+--- a/build/win32u-unix/sysparams_ios.c
++++ b/build/win32u-unix/sysparams_ios.c
+@@ -196,6 +196,20 @@ static void ios_screen_size( int *w, int *h )
+     *w = sw;
+     *h = sh;
+ }
++
++/* The virtual monitor's refresh rate: MADEIRA_SCREEN_HZ, which the app sets
++ * to the panel's (120 on ProMotion) for a title, so DXGI's mode list and
++ * EnumDisplaySettings report what the game is presented at; 60 unset. */
++static int ios_screen_hz( void )
++{
++    static int hz;
++    if (!hz)
++    {
++        const char *e = getenv( "MADEIRA_SCREEN_HZ" );
++        hz = (e && atoi( e ) >= 24 && atoi( e ) <= 240) ? atoi( e ) : 60;
++    }
++    return hz;
++}
+ #endif
+ 
+ /* the various registry keys that are used to store parameters */
+@@ -3866,7 +3880,7 @@ static BOOL ios_virtual_enum_display_settings( DWORD index, DEVMODEW *devmode, D
+                         DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFLAGS | DM_DISPLAYFREQUENCY;
+     devmode->dmDisplayOrientation = DMDO_DEFAULT;
+     devmode->dmBitsPerPel = 32;
+-    devmode->dmDisplayFrequency = 60;
++    devmode->dmDisplayFrequency = ios_screen_hz();
+     devmode->dmDisplayFlags = 0;
+     devmode->dmPosition.x = 0;
+     devmode->dmPosition.y = 0;

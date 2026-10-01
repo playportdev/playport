@@ -1,0 +1,70 @@
+# Hollow Knight: from the main menu to a new game, so every measured run starts
+# in the same state: the Knight just landed in King's Pass with full health
+# (hk-walk, then hk-roam, follow). Slot 1 holds a game in progress that changes
+# when a run in it dies or rests (the game saves on death and at benches), so
+# runs that load it do not compare. The profile screen opens with the cursor on
+# the last slot used and wraps (4 slots and Back, checked 2026-09-29), so this
+# presses nothing but A: it starts a game in whichever slot the cursor is on,
+# which is the last run's new game, and an unsaved new game reads New Game
+# again. A run whose Knight died or rested saved that slot; so did a person's
+# play in slot 1. Take a screenshot of the profile screen (pp perf --shot
+# first-frame+28 with this pushed at first-frame+25) and check that the slot
+# the cursor is on reads New Game. The calibration screens appear only before
+# the phone's first new game, not here. The A presses every 1.5 s skip the
+# prologue (about 40 s), as in hk-new-game. Push hk-walk at first-frame+75.
+150 A        # Start Game
+3000 -
+150 A        # the slot the cursor is on: New Game (see above)
+3500 -       # the prologue
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -

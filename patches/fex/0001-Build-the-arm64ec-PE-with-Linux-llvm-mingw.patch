@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] Build the arm64ec PE with Linux llvm-mingw
+
+Upstream handles only a macOS host. Use the <cstdlib> strtoll, skip the
+FEXCore_shared and FEXOfflineCompiler targets on arm64ec, link the C++
+runtime explicitly, and build the ntdll/wow64 import libraries with EC
+thunks.
+
+Class: linux-build
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ FEXCore/Source/CMakeLists.txt         | 15 ++++++++++++---
+ FEXCore/Source/Common/StringConv.h    |  6 +++---
+ Source/Windows/ARM64EC/CMakeLists.txt |  4 ++++
+ Source/Windows/CMakeLists.txt         | 15 +++++++++++++--
+ 4 files changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
+index 34d0a4f..e7963a9 100644
+--- a/FEXCore/Source/CMakeLists.txt
++++ b/FEXCore/Source/CMakeLists.txt
+@@ -292,9 +292,16 @@ endfunction()
+ 
+ AddObject(${PROJECT_NAME}_object)
+ AddLibrary(${PROJECT_NAME} STATIC)
+-AddLibrary(${PROJECT_NAME}_shared SHARED)
++# iOS-Madeira: on the arm64ec Windows target the shipped artifact is
++# arm64ecfex, which embeds FEXCore_object plus the iOS-host-provided
++# ios_fex_* externs (IosJitAlias.cpp). A standalone FEXCore shared library
++# cannot link, because those externs only exist inside the iOS host process.
++# Skip it for the arm64ec target.
++if (NOT ARCHITECTURE_arm64ec)
++  AddLibrary(${PROJECT_NAME}_shared SHARED)
++endif()
+ 
+-if (NOT MINGW AND NOT APPLE AND NOT BUILD_STEAM_SUPPORT)
++if (NOT MINGW AND NOT APPLE AND NOT BUILD_STEAM_SUPPORT AND NOT ARCHITECTURE_arm64ec)
+   install(TARGETS ${PROJECT_NAME}_shared LIBRARY
+     DESTINATION ${CMAKE_INSTALL_LIBDIR}
+     COMPONENT Libraries)
+@@ -321,4 +328,6 @@ if (NOT MINGW AND NOT APPLE)
+ endif()
+ 
+ # The shared library should always link enabled jemalloc libraries
+-target_link_libraries(${PROJECT_NAME}_shared PRIVATE JemallocLibs)
++if (NOT ARCHITECTURE_arm64ec)
++  target_link_libraries(${PROJECT_NAME}_shared PRIVATE JemallocLibs)
++endif()
+diff --git a/FEXCore/Source/Common/StringConv.h b/FEXCore/Source/Common/StringConv.h
+index 52ba073..4cb295e 100644
+--- a/FEXCore/Source/Common/StringConv.h
++++ b/FEXCore/Source/Common/StringConv.h
+@@ -10,16 +10,16 @@ namespace FEXCore::StrConv {
+ template<std::integral T>
+ bool Conv(std::string_view Value, T* Result) {
+   if constexpr (std::is_signed_v<T>) {
+-    *Result = static_cast<T>(std::strtoll(Value.data(), nullptr, 0));
++    *Result = static_cast<T>(strtoll(Value.data(), nullptr, 0));
+   } else {
+-    *Result = static_cast<T>(std::strtoull(Value.data(), nullptr, 0));
++    *Result = static_cast<T>(strtoull(Value.data(), nullptr, 0));
+   }
+   return true;
+ }
+ 
+ template<typename T, typename = std::enable_if_t<std::is_enum_v<T>, T>>
+ bool Conv(std::string_view Value, T* Result) {
+-  *Result = static_cast<T>(std::strtoull(Value.data(), nullptr, 0));
++  *Result = static_cast<T>(strtoull(Value.data(), nullptr, 0));
+   return true;
+ }
+ 
+diff --git a/Source/Windows/ARM64EC/CMakeLists.txt b/Source/Windows/ARM64EC/CMakeLists.txt
+index c527c28..cb70228 100644
+--- a/Source/Windows/ARM64EC/CMakeLists.txt
++++ b/Source/Windows/ARM64EC/CMakeLists.txt
+@@ -31,6 +31,10 @@ target_link_libraries(arm64ecfex PRIVATE
+ # The resulting DLL is slightly larger but links cleanly.
+ if (FEX_IOS_HOST_BUILD)
+   target_link_options(arm64ecfex PRIVATE -static)
++  # This toolchain's mingw link rules do not auto-link the C++ runtime or
++  # libgcc for the arm64ec target, so provide them explicitly (all built with
++  # -marm64x in the llvm-mingw package, i.e. EC-capable).
++  target_link_libraries(arm64ecfex PRIVATE $<LINK_GROUP:RESCAN,c++;c++abi;unwind;gcc;mingwex;mingw32;ucrt;msvcrt>)
+ else()
+   target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
+   target_link_libraries(arm64ecfex PRIVATE ${LIBGCC_PATH})
+diff --git a/Source/Windows/CMakeLists.txt b/Source/Windows/CMakeLists.txt
+index fa7ed60..53f40da 100644
+--- a/Source/Windows/CMakeLists.txt
++++ b/Source/Windows/CMakeLists.txt
+@@ -1,8 +1,14 @@
+ function(build_implib name)
+   set(name_ex ${name}_ex)
++  # On the arm64ec target the import thunks must be EC-mangled (llvm-dlltool
++  # -m arm64ec + native .def via -N) so that EC references from FEXCore
++  # objects (e.g. #memmove, imported from ntdll by FEX on Windows) resolve.
++  if (ARCHITECTURE_arm64ec)
++    set(EC_ARGS -m arm64ec -N ${CMAKE_CURRENT_SOURCE_DIR}/Defs/${name}.def)
++  endif()
+   add_custom_target(${name_ex}lib ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/lib${name_ex}.a)
+   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/lib${name_ex}.a
+-    COMMAND ${CMAKE_DLLTOOL} -d ${CMAKE_CURRENT_SOURCE_DIR}/Defs/${name}.def -k -l lib${name_ex}.a
++    COMMAND ${CMAKE_DLLTOOL} ${EC_ARGS} -d ${CMAKE_CURRENT_SOURCE_DIR}/Defs/${name}.def -k -l lib${name_ex}.a
+     COMMENT "Building lib${name_ex}.a")
+ 
+   add_library(${name_ex} SHARED IMPORTED)
+@@ -31,4 +37,9 @@ elseif (ARCHITECTURE_arm64)
+   add_subdirectory(WOW64)
+ endif()
+ 
+-add_subdirectory(../Tools/FEXOfflineCompiler ${CMAKE_CURRENT_BINARY_DIR}/FEXOfflineCompiler)
++# FEXOfflineCompiler is a host tool; on the arm64ec Windows target it cannot
++# link (it would need the iOS-host-provided ios_fex_* externs and the C++
++# runtime, which only arm64ecfex carries). Skip it for that target.
++if (NOT ARCHITECTURE_arm64ec)
++  add_subdirectory(../Tools/FEXOfflineCompiler ${CMAKE_CURRENT_BINARY_DIR}/FEXOfflineCompiler)
++endif()

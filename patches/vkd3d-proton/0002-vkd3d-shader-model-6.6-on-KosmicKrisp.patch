@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 01:58:30 +0200
+Subject: [PATCH 2/4] vkd3d: shader model 6.6 on KosmicKrisp
+
+KosmicKrisp has no float controls, no compute shader derivatives and no
+64-bit buffer atomics (Metal has 64-bit atomic min and max only), so the
+device stopped at shader model 6.0. Unreal Engine 5's Direct3D 12
+renderer needs 12_0 and SM 6.6: with anything less it stops at start
+with a message box (MultiVersus, En Garde!, UE 5.1.1 both).
+
+On KosmicKrisp only: count the denorm behaviour as given (Metal has one;
+a shader's requested DXIL denorm mode, optional and "any" by default, is
+not honoured), and expose SM 6.6 without native compute derivatives,
+as vkd3d-proton already does on pre-Turing NVIDIA, and without 64-bit
+buffer atomics. A shader that uses a missing feature fails to compile;
+the others run, and both games render on it. The missing features are
+logged at warn level when SM 6.6 is enabled.
+
+Class: feature
+Evidence: docs/evidence/2026-09-30-d3d12-feature-level-12.md
+Offered-upstream: no
+---
+ libs/vkd3d/device.c | 20 +++++++++++++++++---
+ 1 file changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index f8e0fdb..3551e94 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -9766,6 +9766,12 @@ static void d3d12_device_caps_init_shader_model(struct d3d12_device *device)
+             }
+         }
+ 
++        /* KosmicKrisp: Metal has one denorm behaviour and no float controls. A shader's
++         * requested DXIL denorm mode (optional since SM 6.2, "any" by default) is not
++         * honoured there; the rest of SM 6.2 and later does not need it. */
++        if (device->device_info.vulkan_1_2_properties.driverID == VK_DRIVER_ID_MESA_KOSMICKRISP)
++            denorm_behavior = true;
++
+         if (denorm_behavior)
+         {
+             device->d3d12_caps.max_shader_model = D3D_SHADER_MODEL_6_2;
+@@ -9819,16 +9825,24 @@ static void d3d12_device_caps_init_shader_model(struct d3d12_device *device)
+          *   If minSize == maxSize, we are trivially guaranteed the desired wave size anyways.
+          * - RayPayload attribute (purely metadata in DXIL land, irrelevant for us).
+          */
++        /* KosmicKrisp has neither compute shader derivatives nor 64-bit buffer atomics
++         * (Metal has 64-bit atomic min and max only), and Unreal Engine 5's Direct3D 12
++         * renderer asks for SM 6.6. Expose it there as on pre-Turing NVIDIA: a shader
++         * that uses either feature fails to compile, the rest run. */
+         if (device->d3d12_caps.max_shader_model == D3D_SHADER_MODEL_6_5 &&
+                 (device->device_info.compute_shader_derivatives_features_khr.computeDerivativeGroupLinear ||
+-                        device->device_info.vulkan_1_2_properties.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY) &&
+-                device->device_info.vulkan_1_2_features.shaderBufferInt64Atomics &&
++                        device->device_info.vulkan_1_2_properties.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY ||
++                        device->device_info.vulkan_1_2_properties.driverID == VK_DRIVER_ID_MESA_KOSMICKRISP) &&
++                (device->device_info.vulkan_1_2_features.shaderBufferInt64Atomics ||
++                        device->device_info.vulkan_1_2_properties.driverID == VK_DRIVER_ID_MESA_KOSMICKRISP) &&
+                 device->device_info.vulkan_1_2_features.shaderInt8 &&
+                 d3d12_device_supports_required_subgroup_size_for_stage(device, VK_SHADER_STAGE_COMPUTE_BIT))
+         {
+             INFO("Enabling support for SM 6.6.\n");
+             if (!device->device_info.compute_shader_derivatives_features_khr.computeDerivativeGroupLinear)
+-                WARN("Enabling SM 6.6 on pre-Turing NVIDIA despite lack of native compute shader derivatives.\n");
++                WARN("Enabling SM 6.6 despite lack of native compute shader derivatives.\n");
++            if (!device->device_info.vulkan_1_2_features.shaderBufferInt64Atomics)
++                WARN("Enabling SM 6.6 despite lack of 64-bit buffer atomics.\n");
+             device->d3d12_caps.max_shader_model = D3D_SHADER_MODEL_6_6;
+         }
+ 

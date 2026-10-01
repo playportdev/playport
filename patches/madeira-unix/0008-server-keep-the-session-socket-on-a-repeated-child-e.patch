@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] server: keep the session socket on a repeated child exit
+
+A second exit from a child pseudo-process that had already exited closed
+the main session's socket. Exited child PEBs are remembered and a repeated
+exit is ignored.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 2aaf949..3019672 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -3471,6 +3471,21 @@ static int init_thread_pipe(void)
+  *
+  * Close server socket and exit process normally.
+  */
++#ifdef WINE_IOS
++/* Playport: PEBs of child pseudo-processes that have already exited. */
++#define IOS_DEAD_PEB_MAX 1024
++static void *ios_dead_pebs[IOS_DEAD_PEB_MAX];
++static unsigned int ios_dead_peb_count;
++
++static int ios_peb_is_dead_child( void *peb )
++{
++    unsigned int i, n = __sync_fetch_and_add( &ios_dead_peb_count, 0 );
++    if (n > IOS_DEAD_PEB_MAX) n = IOS_DEAD_PEB_MAX;
++    for (i = 0; peb && i < n; i++) if (ios_dead_pebs[i] == peb) return 1;
++    return 0;
++}
++#endif
++
+ void process_exit_wrapper( int status )
+ {
+ #ifdef WINE_IOS
+@@ -3492,6 +3507,10 @@ void process_exit_wrapper( int status )
+         ios_fdt_note_close( ios_proc_sockets[i].fd, "exit-master", dead_peb );
+         close( ios_proc_sockets[i].fd );
+         ios_proc_sockets[i].peb = NULL;
++        {
++            unsigned int d = __sync_fetch_and_add( &ios_dead_peb_count, 1 );
++            if (d < IOS_DEAD_PEB_MAX) ios_dead_pebs[d] = dead_peb;
++        }
+         /* ml571: drop this pseudo-process's fd cache and close what it held.
+          * Must happen on the SAME identity used to key it, and before the JIT
+          * reclaim below reuses anything. */
+@@ -3512,6 +3531,14 @@ void process_exit_wrapper( int status )
+             ios_exe_win_mark_ready( dead_peb );
+         }
+     }
++    else if (ios_peb_is_dead_child( ios_jit_current_peb() ))
++        /* Playport: a second exit from a child that has already exited (e.g. a
++         * fault in its exit path, then abort_thread) found no socket slot and
++         * closed fd_socket, the SESSION's master socket: the server then killed
++         * the main process along with it. The child is already gone; only its
++         * thread ends here. */
++        wine_log_write("[Wine ntdll/server] process_exit_wrapper(%d): repeated exit of dead child peb=%p; session socket kept",
++                       status, ios_jit_current_peb() );
+     else close( fd_socket );
+ #else
+     close( fd_socket );

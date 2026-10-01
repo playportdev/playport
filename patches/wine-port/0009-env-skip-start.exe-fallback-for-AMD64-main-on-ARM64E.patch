@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 17:49:17 +0800
+Subject: [PATCH] env: skip start.exe fallback for AMD64 main on ARM64EC iOS
+
+When loading an x86_64 main exe on an ARM64 host, get_alternate_wineloader
+sets status to STATUS_INVALID_IMAGE_FORMAT, which would normally route to
+start.exe /exec to relaunch under a 64-bit loader. On iOS arm64ec the
+AMD64 main image is dispatched directly through xtajit64 by
+load_arm64ec_module in PE-side loader_init, and start.exe is not bundled.
+
+Force status back to STATUS_SUCCESS so the start.exe fallback is skipped.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+(cherry picked from commit c6fc2f3915a17c0b2eb383552a9c9b87256eeb28)
+Madeira-commit: be1cd7415cce700b11f705119ecf05d44e8293ee
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/env.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+index ae74a7b8417..8681b2ae3fb 100644
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -1932,9 +1932,15 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params(void)
+ #ifdef WINE_IOS
+         /* iOS arm64ec: AMD64 main exe is dispatched via xtajit64 directly
+          * (loaded by load_arm64ec_module in PE-side loader_init). start.exe
+-         * is not bundled and not needed — skip the fallback. */
+-        if (status == STATUS_INVALID_IMAGE_FORMAT && is_arm64ec())
++         * is not bundled in arm64ec-windows/ and not needed — skip fallback. */
++        ERR( "iOS env: status=0x%x main_machine=0x%x current_machine=0x%x is_arm64ec=%d\n",
++             status, main_image_info.Machine, current_machine, is_arm64ec() );
++        if (main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64 &&
++            current_machine == IMAGE_FILE_MACHINE_ARM64)
++        {
++            ERR( "iOS env: skipping start.exe fallback for AMD64 main on ARM64 host\n" );
+             status = STATUS_SUCCESS;
++        }
+ #endif
+     }
+ 

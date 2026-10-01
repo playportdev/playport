@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 10 Jul 2026 19:21:40 +0800
+Subject: [PATCH] =?UTF-8?q?Mythic=20iOS:=20task=20#32=20=E2=80=94=20stop?=
+ =?UTF-8?q?=5Fthread=20via=20Mach=20context=20capture=20(POSIX=20signal=20?=
+ =?UTF-8?q?suspend=20is=20dead=20on=20iOS)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Cross-thread SuspendThread+GetThreadContext never completed on iOS:
+__pthread_kill(port, SIGUSR1) returns success but the usr1_handler is
+never invoked (handler installation verified correct), so the classic
+send_thread_signal path wedges every caller in STATUS_PENDING — Steam's
+watchdog thread being the load-bearing victim.
+
+stop_thread now branches on WINE_IOS: ios_fill_thread_context (in the
+app-side mach_ios.c fork) does thread_suspend + thread_get_state on the
+target's Mach port, fills both the native ARM64 context and the guest
+AMD64 context (read from TEB ChpeV2CpuAreaInfo->ContextAmd64), signals
+the context sync, and resumes the thread — no signal delivery needed.
+
+Verified: Steam's watchdog unwedges; steam.exe progressed from the CM
+phase to spawning steamwebhelper.exe (CEF) for the first time.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+(cherry picked from commit a2de48bbac53a004a882d1ef0e5790c95c8b9054)
+Madeira-commit: 9d3499ac96325367f1fe1c50a1cec34d8ac11b9d
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ server/thread.c | 22 +++++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/server/thread.c b/server/thread.c
+index bdf48c4bf8f..34c1f0adfc6 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -907,7 +907,27 @@ void stop_thread( struct thread *thread )
+     if (thread->context) return;  /* already suspended, no need for a signal */
+     if (!(thread->context = create_thread_context( thread ))) return;
+     /* can't stop a thread while initialisation is in progress */
+-    if (is_process_init_done(thread->process)) send_thread_signal( thread, SIGUSR1 );
++    if (!is_process_init_done(thread->process)) return;
++#ifdef WINE_IOS
++    /* iOS (task #32): POSIX signal suspend is dead (SIGUSR1 via __pthread_kill
++     * never runs the target's usr1_handler), so the target-fills-its-own-context
++     * path never completes and GetThreadContext hung forever. Capture the
++     * context synchronously via Mach (thread_suspend + thread_get_state + read
++     * the guest CPU-area context) and signal the sync so the client returns
++     * without STATUS_PENDING. */
++    {
++        extern int ios_fill_thread_context( struct thread *, struct context_data *,
++                                            struct context_data * );
++        if (ios_fill_thread_context( thread, &thread->context->regs[CTX_NATIVE],
++                                     &thread->context->regs[CTX_WOW] ))
++        {
++            thread->context->status = STATUS_SUCCESS;
++            signal_sync( thread->context->sync );
++        }
++    }
++#else
++    send_thread_signal( thread, SIGUSR1 );
++#endif
+ }
+ 
+ /* suspend a thread */

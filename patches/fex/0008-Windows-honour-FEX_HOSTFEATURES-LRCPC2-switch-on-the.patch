@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 06:54:18 +0200
+Subject: [PATCH] Windows: honour FEX_HOSTFEATURES' LRCPC2 switch on the iOS
+ host
+
+The iOS branch of CPUFeatures::FetchHostFeatures builds the feature set
+by hand and returns before FEX::FetchHostFeatures, so
+SupportsTSOImm9 (FEAT_LRCPC2) is always false there and
+enablelrcpc2 in FEX_HOSTFEATURES is read and ignored. With LRCPC2 a
+TSO load or store with a small offset is one LDAPUR or STLUR instead
+of an address add and an LDAPR or STLR. Code at EL0 cannot read the ID registers on iOS, so the
+host app asks the kernel and passes enablelrcpc2; honour that switch,
+and disablelrcpc2, the way fex 0005 honours disableafp, and log the
+state the JIT uses.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-28-fex-memory-ordering.md
+Offered-upstream: no
+---
+ Source/Windows/Common/CPUFeatures.cpp | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index 460e78044..4cc531314 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -87,7 +87,19 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+     if (HostFeatureControl() & FEXCore::Config::HostFeatures::DISABLEAFP) {
+       HostFeatures.SupportsAFP = false;
+     }
+-    LogMan::Msg::IFmt("FEX: iOS host AFP={} (FEX_HOSTFEATURES={})", HostFeatures.SupportsAFP, HostFeatureControl());
++    /* Playport: and its LRCPC2 switch. FEAT_LRCPC2's LDAPUR and STLUR take
++     * a signed 9-bit offset, so a TSO load or store needs no separate
++     * address add. Code at EL0 cannot read the ID registers on iOS, so the
++     * host app asks the kernel (sysctl hw.optional.arm.FEAT_LRCPC2) and
++     * passes the answer as enablelrcpc2; without it this stays off. */
++    if (HostFeatureControl() & FEXCore::Config::HostFeatures::ENABLELRCPC2) {
++      HostFeatures.SupportsTSOImm9 = true;
++    }
++    if (HostFeatureControl() & FEXCore::Config::HostFeatures::DISABLELRCPC2) {
++      HostFeatures.SupportsTSOImm9 = false;
++    }
++    LogMan::Msg::IFmt("FEX: iOS host AFP={} LRCPC2={} (FEX_HOSTFEATURES={})", HostFeatures.SupportsAFP,
++                      HostFeatures.SupportsTSOImm9, HostFeatureControl());
+   }
+   HostFeatures.CPUMIDRs.push_back(0u);
+   HostFeatures.HostType = HostType;

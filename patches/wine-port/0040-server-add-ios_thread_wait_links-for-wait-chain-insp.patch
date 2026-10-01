@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 16 Aug 2026 12:35:06 +0800
+Subject: [PATCH] server: add ios_thread_wait_links() for wait-chain inspection
+
+struct thread_wait is private to thread.c, so the iOS [srv-stuck] probe
+in queue_ios.c cannot walk a thread's active wait to check whether it
+actually references a given object. This accessor answers that: 1 linked,
+0 not linked, -1 no wait at all.
+
+Compares against the WRAPPER object because that is what wait_on() stores
+in entry->obj; object_sync_add_queue() resolves the sync object
+internally.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+(cherry picked from commit a0ccfbe4651e361fa0271990ff9e614fc19ed6bd)
+Madeira-commit: ae6c7b3eea32ba4420814ebab8319a8c743babea
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ server/thread.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/server/thread.c b/server/thread.c
+index 2d685198e74..fccc462e463 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -965,6 +965,24 @@ int resume_thread( struct thread *thread )
+ }
+ 
+ /* add a thread to an object wait queue; return 1 if OK, 0 on error */
++/* iOS-Mythic ml687: does this thread's active wait actually reference `obj`?
++ * struct thread_wait is private to this file, so [srv-stuck] in queue_ios.c
++ * cannot walk it directly. entry->obj holds the WRAPPER (set at line ~1162 via
++ * grab_object(obj)); object_sync_add_queue resolves the sync internally, so the
++ * comparison here must be against the wrapper too.
++ * Returns 1 linked, 0 not linked, -1 no wait at all. */
++int ios_thread_wait_links( struct thread *t, struct object *obj )
++{
++    struct thread_wait *w;
++    int i;
++    if (!t || !obj) return -1;
++    if (!t->wait) return -1;
++    for (w = t->wait; w; w = w->next)
++        for (i = 0; i < w->count; i++)
++            if (w->queues[i].obj == obj) return 1;
++    return 0;
++}
++
+ int add_queue( struct object *obj, struct wait_queue_entry *entry )
+ {
+     list_add_tail( &obj->wait_queue, &entry->entry );

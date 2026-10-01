@@ -1,0 +1,8 @@
+superproject 63dd873246584b2005d0b26474a9309e03fa1a78 (with local changes)
+series dxmt 1727f9db1c68b007
+series dxmt-port 207d64a518ce84a9
+series fex 57b3f7205c55efb2
+series madeira-unix 322ff8a3aadcfe6e
+series madeira-winios b3c2eb8e90381083
+series wine-pe 34152b1ca44141bd
+series wine-unix b932dd4d33e8f4fd

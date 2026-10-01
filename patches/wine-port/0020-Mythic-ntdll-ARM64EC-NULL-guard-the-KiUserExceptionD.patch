@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 10 Jul 2026 05:34:01 +0800
+Subject: [PATCH] =?UTF-8?q?Mythic:=20ntdll=20ARM64EC=20=E2=80=94=20NULL-gu?=
+ =?UTF-8?q?ard=20the=20KiUserExceptionDispatcher=20fast=20path?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In a child pseudo-process's private ntdll copy the
+__os_arm64x_dispatch_call_no_redirect slot can still be NULL
+(per-process ntdll global not populated; the dispatcher re-patch is
+skipped for ntdll itself). The naked-asm KiUserExceptionDispatcher then
+did `blr x16` with x16=0 → jump to NULL → SEGV loop → dead thread —
+observed killing steam.exe's relaunched bootstrapper on every guest
+exception. The blr path is only a stack-cleanliness optimization, so a
+NULL slot now falls through to the full dispatch_exception path.
+
+Likely also fixes the taskmgr boot death (task #26, guest RIP=0 loop).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+(cherry picked from commit d3e7c6165176e0aaecee4af73fe173e8bc74d628)
+Madeira-commit: 2d0eccb169f708a091e728164a77f6bb53b7bd9d
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 0bfb10ff94e..5a7bf7ce6eb 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -1599,6 +1599,14 @@ void __attribute__((naked)) KiUserExceptionDispatcher( EXCEPTION_RECORD *rec, CO
+          /* bypass exit thunk to avoid messing up the stack */
+          "adrp x16, __os_arm64x_dispatch_call_no_redirect\n\t"
+          "ldr x16, [x16, #:lo12:__os_arm64x_dispatch_call_no_redirect]\n\t"
++         /* iOS-Mythic (task#29): in a child pseudo-process's private ntdll copy
++          * this slot is sometimes still NULL (per-process ntdll global not
++          * populated; arm64ec_process_init_dispatchers SKIPs ntdll re-patch).
++          * A NULL x16 here → `blr x16` to 0 → SEGV loop → dead thread (observed
++          * killing steam.exe). The `blr x16` path is only a stack-cleanliness
++          * optimization; label 1 (dispatch_exception) is the full, correct
++          * ARM64EC SEH dispatcher. So if the slot is NULL, fall through to it. */
++         "cbz x16, 1f\n\t"
+          "mov x9, x0\n\t"
+          "blr x16\n"
+          "1:\tadd x0, sp, #0x3b0+0x4d0\n\t" /* rec */

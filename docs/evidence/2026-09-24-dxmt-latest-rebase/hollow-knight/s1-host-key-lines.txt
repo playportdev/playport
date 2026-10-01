@@ -1,0 +1,40 @@
+title: S1_MODE=title nonce=6aba87be TITLE_EXE=Games\Hollow%20Knight\hollow_knight.exe TITLE_ARGS=-logFile,C:\hollow_knight-player.log
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: display: screen 2736x1260 (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, guest monitor 120 Hz
+[17:38:07.940] [wine_host] JIT pool: reserve 0x102094000-0x156094000; freed 0x119000000+960 MiB for the pool (kr=0)
+[17:38:07.941] [wine_host] JIT pool: largest gap in [0x119000000, guest window): 960 MiB at 0x119000000 (pool needs 896 MiB)
+[17:38:10.699] [wine_host] JIT pool: 1 low pins; prepare(NULL, 0x38000000) -> 0x119000000 in 2.76 s
+[17:38:10.699] [wine_host] JIT pool: placement inside the reservation (+0x0)
+[17:38:11.192] [wine_host] JIT pool: rx=0x119000000 rw=0x7000000000 size=0x38000000; debugger detached
+[17:38:11.298] [wine_host] JIT pool rx=0x119000000 rw=0x7000000000 size=0x38000000 write_offset=476321939456
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 5.37 s
+title: wine_host_run_exe -> 0
+[va-gaps] ==== map walk (jit pool init) ====
+[pool-warmer] cycle=1 touched=2 pages (head=0x4000 tail=0x0)
+[jit-pool] bump-probe off=0x4000 size=0xb0000 cur=0x5 max=0x7 execable=1 (VIRGIN control)
+[jit-pool] image 0x151550000+0xa9000 (WindowsPlayer.exe) → pool 0x119007000 used=0xb7000/0x38000000 tramp+0x0
+ml957: WindowsPlayer.exe backing 0x151550000+0x4000 W RESTORED (section declares EXECUTE|WRITE; backing stays non-exec, pool copy keeps X)
+[pool-va] SKIP scan over JIT pool at 0x119000000 -> 0x151000000
+[pool-va] SKIP scan over JIT pool at 0x119000000 -> 0x151000000
+[jit-pool] image 0x71ffa30000+0x3d0000 (ntdll.dll) → pool 0x1190b4000 used=0x48c000/0x38000000 tramp+0x8000
+UNIXCALL-DIRECT: slot @ 0x71ffb00bd0 -> pool thunk 0x1191179c4 (was PE 0x71ffa939c4)
+0024:err:seh:init_syscall_frame init_syscall_frame: redirected PC 0x71ffa93b84 → 0x119117b84 (JIT pool)
+[jit-pool] image 0x71fe620000+0x40a000 (libarm64ecfex.dll) → pool 0x11948c000 used=0x89c000/0x38000000 tramp+0x4000
+ml957: libarm64ecfex.dll backing 0x71fe620000+0x4000 W RESTORED (section declares EXECUTE|WRITE; backing stays non-exec, pool copy keeps X)
+[jit-pool] image 0x71fe280000+0x3a0000 (ucrtbase.dll) → pool 0x11989c000 used=0xc40000/0x38000000 tramp+0x4000
+[jit-pool] image 0x71fe090000+0x1f0000 (kernel32.dll) → pool 0x119c40000 used=0xe38000/0x38000000 tramp+0x8000
+[jit-pool] image 0x71fdb10000+0x580000 (kernelbase.dll) → pool 0x119e38000 used=0x13c8000/0x38000000 tramp+0x10000
+[commit-zero] #1 arena/pool OK base=0x7c00000000 size=0x1000 protect=0x4 (zero) checked=2/1 stale=0/0 recommit=0 rev=ml546
+[commit-zero] #2 arena/pool OK base=0x7c00010000 size=0x1000 protect=0x4 (zero) checked=2/2 stale=0/0 recommit=0 rev=ml546
+[commit-zero] #3 arena/pool OK base=0x7c01000000 size=0x10000 protect=0x4 (zero) checked=2/3 stale=0/0 recommit=0 rev=ml546
+[commit-zero] #4 arena/pool OK base=0x7c01010000 size=0x10000 protect=0x4 (zero) checked=2/4 stale=0/0 recommit=0 rev=ml546
+[commit-zero] #5 arena/pool OK base=0x7c01020000 size=0x10000 protect=0x4 (zero) checked=2/5 stale=0/0 recommit=0 rev=ml546
+[commit-zero] #6 arena/pool OK base=0x7c01030000 size=0x10000 protect=0x4 (zero) checked=2/6 stale=0/0 recommit=0 rev=ml546
+[commit-zero] #7 arena/pool OK base=0x7c01040000 size=0x10000 protect=0x4 (zero) checked=2/7 stale=0/0 recommit=0 rev=ml546
+[commit-zero] #8 arena/pool OK base=0x7c01050000 size=0x10000 protect=0x4 (zero) checked=2/8 stale=0/0 recommit=0 rev=ml546
+E 24 [atomic-alias] LIVE: WINE_IOS_JIT_RX=119000000 SIZE=38000000 RW=7000000000 -- atomics whose target lands in the pool's RX alias get redirected to RX+WriteOffset
+0024:err:virtual:NtAllocateVirtualMemoryEx NtAllocateVirtualMemoryEx iOS: redirected EC_CODE 16384 bytes to JIT pool tail rx=0x150ffc000 rw=0x7037ffc000 NOP-prefilled
+[jit-pool] tail EC_CODE rx=0x150ffc000 size=0x4000 tail_resv=0x4000 head_used=0x13c8000/0x38000000
+[jit-copy] ml634 #1 PRE-REMAP 0x71fdb00000+0x4000: 0/16384 bytes nonzero, fnv=be7fb0911be00383 — copied into pool off=0x13c8000
+[jit-pool] anon RWX 0x71fdb00000 size=0x4000 → used=0x13cc000/0x38000000 NEW off=0x13c8000 tid=0024 peb=0x71ffff0000 rev=ml625

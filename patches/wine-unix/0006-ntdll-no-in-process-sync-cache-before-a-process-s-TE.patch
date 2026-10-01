@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 08:16:28 +0200
+Subject: [PATCH] ntdll: no in-process sync cache before a process's TEB is set
+
+With in-process sync on (madeira.cfg inproc-sync = 1), the first process
+of a Play crashed at start: server_init_process closes a handle before its
+thread's TEB is set, NtClose reaches close_inproc_sync, and the per-process
+cache lookup read NtCurrentTeb()->Peb through a NULL TEB. A thread with no
+PEB now gets an empty cache that nothing is stored in, so the close finds
+nothing, as it would with the cache off. Nothing changes with in-process
+sync off (the default), where close_inproc_sync returns first.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-server-sync.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/sync.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index f6f4b3a..cb07966 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -562,13 +562,20 @@ struct ios_inproc_cache
+ static struct ios_inproc_cache *ios_inproc_caches[IOS_MAX_INPROC_CACHES];
+ static pthread_mutex_t ios_inproc_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+ static struct ios_inproc_cache ios_inproc_cache_fallback;
++/* Playport: before a pseudo-process's first thread has its TEB (NtClose in
++ * server_init_process) there is no PEB to key a cache by. That thread gets
++ * this cache, which stays empty: cache_inproc_sync() stores nothing in it. */
++static struct ios_inproc_cache ios_inproc_cache_none;
+ 
+ static struct ios_inproc_cache *ios_get_inproc_cache(void)
+ {
+-    void *peb = NtCurrentTeb()->Peb;
++    TEB *teb = NtCurrentTeb();
++    void *peb = teb ? teb->Peb : NULL;
+     struct ios_inproc_cache *c = NULL;
+     int i, free_slot = -1;
+ 
++    if (!peb) return &ios_inproc_cache_none;
++
+     for (i = 0; i < IOS_MAX_INPROC_CACHES; i++)      /* lock-free hit: entries only appear/disappear under the lock */
+     {
+         struct ios_inproc_cache *e = ios_inproc_caches[i];
+@@ -630,6 +637,9 @@ static struct inproc_sync *cache_inproc_sync( HANDLE handle, struct inproc_sync
+ 
+     /* don't cache pseudo-handles; waiting on them is pointless anyway */
+     if (is_pseudo_handle( handle )) return sync;
++#ifdef WINE_IOS
++    if (ios_get_inproc_cache() == &ios_inproc_cache_none) return sync;   /* Playport: no PEB yet */
++#endif
+ 
+     if (entry >= INPROC_SYNC_CACHE_ENTRIES)
+     {

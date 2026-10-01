@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 8 Aug 2026 16:42:12 +0800
+Subject: [PATCH] Mythic: exact guest RIP from host PC + AVX exoneration note
+ (ml538-ml549)
+
+BTCpu64IosRipFromHostPC / ios_fex_rip_from_hostpc: expose FEX's existing
+host-PC -> guest-RIP block table to the unix side, so the Mach fault probes
+can name the exact faulting instruction instead of the enclosing block
+(CpuStateFrame+0x18 only syncs at block boundaries, which is why ml548
+disassembled call setup instead of the store it was hunting). Zero runtime
+cost -- the table already exists; returns 0 outside the block so callers can
+tell "no answer" from a real RIP.
+
+Config.json.in records the ml538 result: AVX is EXONERATED for the render
+corruption. disableavx left the corruption identical while the writer census
+changed completely, which exonerates the vector blitter paths generally, not
+just AVX. Reverted rather than kept -- an unproven change does not ship.
+
+Also: iOS JIT alias mapping export, TSO handler config, WinAPI IO cleanups.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: 2e6bbec5f19d68db081242f27d6405d2b5a7ae7d
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ .../Source/Interface/Config/Config.json.in    | 11 ++++
+ FEXCore/Source/Interface/Core/Core.cpp        | 46 +++++++++++++++
+ Source/Windows/ARM64EC/IosJitAlias.cpp        | 19 +++++++
+ Source/Windows/ARM64EC/libarm64ecfex.def      |  1 +
+ Source/Windows/Common/TSOHandlerConfig.h      |  6 ++
+ Source/Windows/Common/WinAPI/IO.cpp           | 57 ++++++++-----------
+ 6 files changed, 107 insertions(+), 33 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Config/Config.json.in b/FEXCore/Source/Interface/Config/Config.json.in
+index 136aa1c..60b1fc9 100644
+--- a/FEXCore/Source/Interface/Config/Config.json.in
++++ b/FEXCore/Source/Interface/Config/Config.json.in
+@@ -44,6 +44,17 @@
+       },
+       "HostFeatures": {
+         "Type": "strenum",
++        "_comment_ml538": [
++          "iOS-Mythic ml538 REVERTED: AVX is EXONERATED for the render corruption.",
++          "With HostFeatures=disableavx (shipped, proven by the runtime marker) the",
++          "corruption was UNCHANGED - and the writer census CHANGED (clear 816->1140,",
++          "content painter 1320->684, the +0x58d937 writer vanished entirely). So",
++          "different Skia vector routines ran and the bug survived identically, which",
++          "exonerates the vector blitter/raster paths generally, not just AVX.",
++          "It was NOT slower (webhelper spawn t+11.2s vs t+15.5s), so the 256-bit-as-two-",
++          "128-bit emulation was costing more than it bought - but an unproven change is",
++          "not kept (ml513 lesson). Flip to DISABLEAVX to reproduce."
++        ],
+         "Default": "FEXCore::Config::HostFeatures::OFF",
+         "AffectsCodeGen": "true",
+         "Comment": "Technically affects codegen, but this is serialized elsewhere.",
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 444980c..2b5a485 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -226,6 +226,52 @@ uint64_t ContextImpl::RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* T
+   return Frame->State.rip;
+ }
+ 
++/* iOS-Mythic ml549: EXACT guest RIP from a host PC, callable from C.
++ *
++ * WHY: our fault probes (srcwatch, the bus/segv handlers) read the guest RIP out of
++ * CpuStateFrame+0x18, which FEX only syncs at BLOCK boundaries. That names the calling
++ * block, never the instruction that actually executed — ml548 disassembled such a RIP
++ * and found `movq %rbp,%rcx; callq` (call setup), not the store we were hunting. Every
++ * "which instruction wrote this pixel" question dies on that imprecision.
++ *
++ * FEX already carries the answer: each JIT block appends a host-PC -> guest-RIP table
++ * (JIT.cpp writes it as vl64pair entries in the block tail), and RestoreRIPFromHostPC
++ * walks it for exception reconstruction. This is the same walk, minus the Thread
++ * dependency, exported as plain C so ntdll-unix can call it with values it already has:
++ * the block header pointer lives at CPUState offset 0 (== x28+0), and the host PC comes
++ * straight from the Mach thread state.
++ *
++ * Zero runtime cost: no instrumentation, no extra faults, just a table walk at fault
++ * time using data FEX maintains anyway. Returns 0 when the PC is outside the block or
++ * the header is unusable, so the caller can tell "no answer" from a real RIP. */
++extern "C" uint64_t ios_fex_rip_from_hostpc(uint64_t BlockBegin, uint64_t HostPC) {
++  if (!BlockBegin) {
++    return 0;
++  }
++  const auto* InlineHeader = reinterpret_cast<const CPU::CPUBackend::JITCodeHeader*>(BlockBegin);
++  const auto* InlineTail = reinterpret_cast<const CPU::CPUBackend::JITCodeTail*>(BlockBegin + InlineHeader->OffsetToBlockTail);
++
++  if (HostPC < BlockBegin || HostPC >= (BlockBegin + InlineTail->Size)) {
++    return 0;
++  }
++
++  const auto* RIPEntry = reinterpret_cast<const uint8_t*>(BlockBegin + InlineHeader->OffsetToBlockTail + InlineTail->OffsetToRIPEntries);
++  uint64_t StartingHostPC = BlockBegin;
++  uint64_t StartingGuestRIP = InlineTail->RIP;
++
++  for (uint32_t i = 0; i < InlineTail->NumberOfRIPEntries; ++i) {
++    auto Offset = FEXCore::Utils::vl64pair::Decode(RIPEntry);
++    RIPEntry += Offset.Size;
++    if (HostPC >= (StartingHostPC + Offset.IntegerARMPC)) {
++      StartingHostPC += Offset.IntegerARMPC;
++      StartingGuestRIP += Offset.IntegerX86RIP;
++    } else {
++      break;
++    }
++  }
++  return StartingGuestRIP;
++}
++
+ uint32_t ContextImpl::ReconstructCompactedEFLAGS(FEXCore::Core::InternalThreadState* Thread, bool WasInJIT, const uint64_t* HostGPRs,
+                                                  uint64_t PSTATE) {
+   const auto Frame = Thread->CurrentFrame;
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index 3887597..286d7a8 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -58,6 +58,25 @@ extern "C" {
+ // this reason; this is that rule's missing twin on the FEX side. Tombstone
+ // order matches wine's: Size = 0 first (a zero-size entry matches no range
+ // query, including Module.S's inline asm walk), barrier, then reuse the slot.
++/* iOS-Mythic ml549: EXACT guest RIP from a host PC, for the unix-side fault probes.
++ *
++ * The Mach handlers in ntdll-unix read the guest RIP from CpuStateFrame+0x18, which FEX
++ * only syncs at BLOCK boundaries -- it names the calling block, not the instruction that
++ * ran. ml548 disassembled such a RIP and got call setup instead of the store it was
++ * hunting, which is why the render-corruption writer could never be identified.
++ *
++ * FEX already stores a host-PC -> guest-RIP table in every JIT block tail and walks it
++ * for exception reconstruction. ios_fex_rip_from_hostpc (Core.cpp) is that walk without
++ * the Thread dependency; this is its EC export so the unix side can reach it through the
++ * same bind-and-push path as BTCpu64IosAddAliasMapping.
++ *
++ * Zero runtime cost: nothing is instrumented, the table already exists. Returns 0 when
++ * the PC is outside the block, so a caller can distinguish "no answer" from a real RIP. */
++uint64_t BTCpu64IosRipFromHostPC(uint64_t BlockBegin, uint64_t HostPC) {
++  extern uint64_t ios_fex_rip_from_hostpc(uint64_t, uint64_t);
++  return ios_fex_rip_from_hostpc(BlockBegin, HostPC);
++}
++
+ void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
+   int count = g_EntryCount;
+ 
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index a19cc62..fc0a4b8 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -3,6 +3,7 @@ LIBRARY libarm64ecfex.dll
+ EXPORTS
+   BTCpu64FlushInstructionCache
+   BTCpu64IosAddAliasMapping
++  BTCpu64IosRipFromHostPC
+   BTCpu64IsProcessorFeaturePresent
+   BTCpu64NotifyMemoryDirty
+   BTCpu64NotifyReadFile
+diff --git a/Source/Windows/Common/TSOHandlerConfig.h b/Source/Windows/Common/TSOHandlerConfig.h
+index 3691ae5..0048283 100644
+--- a/Source/Windows/Common/TSOHandlerConfig.h
++++ b/Source/Windows/Common/TSOHandlerConfig.h
+@@ -46,6 +46,12 @@ public:
+       FEX_CONFIG_OPT(MemcpyTSO, MEMCPYSETTSOENABLED);
+       LogMan::Msg::IFmt("FEX: TSO config tso={} halfbar={} vector={} memcpyset={} rev=ml513",
+                         TSOEnabled(), HalfBarrierTSOEnabled(), VecTSO(), MemcpyTSO());
++      /* ml538: and the EFFECTIVE host-feature set. A compiled-in default is
++       * invisible to binary greps, and the whole AVX experiment is worthless
++       * without proof of which way it shipped. */
++      FEX_CONFIG_OPT(HostFeat, HOSTFEATURES);
++      LogMan::Msg::IFmt("FEX: HostFeatures={} (ml538: DISABLEAVX expected; "
++                        "AVX off => Skia takes SSE paths) rev=ml538", HostFeat());
+     }
+   }
+ 
+diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
+index e5e84bc..e3131a0 100644
+--- a/Source/Windows/Common/WinAPI/IO.cpp
++++ b/Source/Windows/Common/WinAPI/IO.cpp
+@@ -120,39 +120,30 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,
+     ByteOffset.QuadPart = (static_cast<LONGLONG>(lpOverlapped->OffsetHigh) << 32) | lpOverlapped->Offset;
+     ByteOffsetPtr = &ByteOffset;
+   }
+-  /* iOS-Mythic: also dprintf to stderr (= mythic-log.txt) so we can SEE
+-   * what x86_64 PE writes regardless of where hFile actually points. */
+-  {
+-    char dbg[8 + 64 + 16];
+-    const char *hexd = "0123456789abcdef";
+-    int i = 0;
+-    const char *p = "[WriteFile h=0x";
+-    while (p[i]) { dbg[i] = p[i]; i++; }
+-    unsigned long long h = (unsigned long long)hFile;
+-    for (int j = 60; j >= 0; j -= 4) dbg[i++] = hexd[(h >> j) & 0xf];
+-    dbg[i++] = ' ';
+-    dbg[i++] = 'b';
+-    dbg[i++] = 'y';
+-    dbg[i++] = 't';
+-    dbg[i++] = 'e';
+-    dbg[i++] = 's';
+-    dbg[i++] = '=';
+-    unsigned long n = nNumberOfBytesToWrite > 64 ? 64 : nNumberOfBytesToWrite;
+-    for (unsigned long k = 0; k < n; ++k) {
+-      unsigned char c = ((const unsigned char*)lpBuffer)[k];
+-      if (c >= 0x20 && c < 0x7f) dbg[i++] = (char)c;
+-      else if (c == '\n') { dbg[i++] = '\\'; dbg[i++] = 'n'; }
+-      else { dbg[i++] = '?'; }
+-    }
+-    dbg[i++] = '\n';
+-    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+-                          ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
+-                          : nullptr;
+-    if (stderr_h && stderr_h != hFile) {
+-      IO_STATUS_BLOCK sb;
+-      NtWriteFile(stderr_h, nullptr, nullptr, nullptr, &sb, dbg, (ULONG)i, nullptr, nullptr);
+-    }
+-  }
++  /* iOS-Mythic ml572: WriteFile TRACING BLOCK REMOVED — it was a stack smash.
++   *
++   * It formatted into `char dbg[8 + 64 + 16]` (88 bytes) but wrote a 38-byte
++   * header plus up to 64 preview bytes, each of which could expand to 2 chars
++   * for '\n', plus a trailing newline: 103 bytes for ordinary text and 167 in
++   * the worst case. Any WriteFile whose payload was >= 50 bytes overflowed, and
++   * the compiler had placed the callee-saved registers immediately after it
++   * (dbg at sp+0x18, saved x19 at sp+0x70 — exactly 88 bytes later, x20 at
++   * sp+0x78). So the overflow wrote the log text straight onto the caller's
++   * saved x20, and on return the caller's `blr x20` jumped into ASCII.
++   *
++   * Proven byte-for-byte across four runs: ml571 faulted at pc=0xa336531373030,
++   * which is the little-endian bytes "0071e3\n\0" — the tail of the rpm-poison
++   * record being written at that moment. ml483a/ml484a/mlf show the same shape
++   * with 0071e0/0071e1/0071e2. Diagnosis by Sol.
++   *
++   * The fault then landed while FEX's CodeInvalidationMutex was held, and the
++   * guest redirect bypassed the RAII unlock — leaving one leaked reader and one
++   * waiting writer, which stops compilation dead. That is the [deliver-hold]
++   * "leaks the read hold" line and the whole-app freeze.
++   *
++   * Deleted rather than enlarged: this is a hot path on every guest write, the
++   * output was going to a guest stderr handle we rarely read, and a fixed-size
++   * formatter here has now cost more than it ever explained. */
+   NTSTATUS Status = NtWriteFile(hFile, nullptr, nullptr, nullptr, &IOSB, lpBuffer, nNumberOfBytesToWrite, ByteOffsetPtr, nullptr);
+   if (lpNumberOfBytesWritten) {
+     *lpNumberOfBytesWritten = static_cast<DWORD>(IOSB.Information);

@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 12:00:00 +0200
+Subject: [PATCH] virtual: serve an 8 GB ask from the cage before the jumbo
+ holdback
+
+With a jumbo-mb holdback, the kernel-pick branch (ml997) hands the
+holdback to the first large reservation that fits it, whatever its size.
+The ml433 cage holdback, which exists for exactly one 8 GB ask, is only
+tried in the hinted-retry branch, which an unhinted ask never reaches.
+Witcher 3 reserves 8 GB and then 32 GB: the 8 GB took the 32 GB
+holdback, and the 32 GB then failed (0xc0000017) with no hole that size
+left, so the game wrote through the NULL it got back.
+
+When a jumbo holdback exists, an exactly-8 GB ask in that branch now
+takes the cage stretch at 0x7200000000 first: the full 8 GB when the
+64 KB above it is free, otherwise the 64 KB-short view with an ios_soft
+tail, as ml433 does. The holdback then stays whole for the ask it was
+sized for. If both placements fail (another mapping took part of the
+stretch once it was released), the stretch is reserved again where it
+is still free, so a later 8 GB ask can still have it. Without jumbo-mb
+nothing changes.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-25-witcher3-setup.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 48 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 5453230..ca3287c 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -17272,6 +17272,54 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                 static int probed;
+                 dprintf(2, "[jumbo] kernel-pick reserve failed (0x%x) for size=0x%lx — top window is full\n",
+                         (unsigned)st, (unsigned long)*size_ptr);
++                /* Playport: with a jumbo-mb holdback, an exactly-8 GB ask goes to
++                 * the ml433 cage holdback first. ml997 below hands the jumbo
++                 * holdback to the first large ask that fits it, whatever its
++                 * size, and the ml433 cage path sits in the hinted-retry branch,
++                 * which an unhinted ask never reaches. Witcher 3 asks 8 GB and
++                 * then 32 GB: its 8 GB took the 32 GB holdback, and the 32 GB
++                 * then failed with no hole that size left. Here the cage takes
++                 * the 8 GB and the holdback stays whole for the ask it was sized
++                 * for. The full 8 GB is mapped when the 64 KB above the cage is
++                 * free (it is when the holdback starts at 0x7400000000);
++                 * otherwise the view is 64 KB short and the tail rides an
++                 * ios_soft entry, as ml433 does. Without jumbo-mb nothing
++                 * changes. */
++                if (ios_jumbo_hold_size && ios_cage_holdback_live && *size_ptr == 0x200000000ULL)
++                {
++                    void *pick2 = (void *)(uintptr_t)IOS_CAGE_BASE;
++                    SIZE_T csz = *size_ptr;
++                    unsigned int st3;
++
++                    munmap( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE );
++                    ios_cage_holdback_live = 0;
++                    st3 = allocate_virtual_memory( &pick2, &csz, type, protect, 0, 0, 0, 0 );
++                    if (st3)
++                    {
++                        pick2 = (void *)(uintptr_t)IOS_CAGE_BASE;
++                        csz = IOS_CAGE_REAL_SIZE;
++                        st3 = allocate_virtual_memory( &pick2, &csz, type, protect, 0, 0, 0, 0 );
++                        if (!st3 && (uintptr_t)pick2 == IOS_CAGE_BASE && ios_soft_n < IOS_SOFT_MAX)
++                        {
++                            ios_soft[ios_soft_n].base = IOS_CAGE_BASE + IOS_CAGE_REAL_SIZE;
++                            ios_soft[ios_soft_n].size = 0x200000000ULL - IOS_CAGE_REAL_SIZE;
++                            ios_soft[ios_soft_n].cage = 1;
++                            ios_soft_n++;
++                            csz = *size_ptr;   /* report the full 8 GB, as ml433 */
++                        }
++                    }
++                    if (st3 && anon_mmap_tryfixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE,
++                                                   PROT_NONE, 0 ) == (void *)(uintptr_t)IOS_CAGE_BASE)
++                        ios_cage_holdback_live = 1;   /* both failed: hold the stretch again */
++                    dprintf( 2, "[cage] 8 GB ask served before the jumbo holdback -> %p size=0x%lx "
++                             "st=0x%x\n", pick2, (unsigned long)(st3 ? 0 : csz), st3 );
++                    if (!st3)
++                    {
++                        *ret = pick2;
++                        *size_ptr = csz;
++                        return STATUS_SUCCESS;
++                    }
++                }
+                 /* ml997: serve it from the boot holdback HERE. rdr65 proved this
+                  * is the branch that runs -- it printed the line above and then
+                  * gave up, while ml996's take() sat in the hinted-retry branch

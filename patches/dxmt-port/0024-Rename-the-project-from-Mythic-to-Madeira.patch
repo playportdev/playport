@@ -1,0 +1,519 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 25 Aug 2026 23:03:58 +0900
+Subject: [PATCH] Rename the project from Mythic to Madeira
+
+Identifiers, environment variables, diagnostic labels and comments referring to
+the host project follow its new name. No behavioural change.
+
+Madeira-commit: 59c1739cba5305d8ef4d5281fa40d94e51b312e5
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11.cpp                 |  2 +-
+ src/d3d11/d3d11_swapchain.cpp       | 56 ++++++++++----------
+ src/dxmt/dxmt_context.cpp           |  4 +-
+ src/dxmt/dxmt_presenter.cpp         |  2 +-
+ src/util/meson.build                |  2 +-
+ src/util/wsi_monitor_headless.cpp   |  4 +-
+ src/util/wsi_window_headless.cpp    |  4 +-
+ src/winemetal/unix/winemetal_unix.c | 82 ++++++++++++++---------------
+ 8 files changed, 78 insertions(+), 78 deletions(-)
+
+diff --git a/src/d3d11/d3d11.cpp b/src/d3d11/d3d11.cpp
+index fc55df8..cbaa26f 100644
+--- a/src/d3d11/d3d11.cpp
++++ b/src/d3d11/d3d11.cpp
+@@ -81,7 +81,7 @@ D3D11CoreCreateDevice(IDXGIFactory *pFactory, IDXGIAdapter *pAdapter,
+   Logger::info(
+       str::format("Maximum supported feature level: ", maxFeatureLevel));
+ 
+-  /* iOS-Mythic ml709: report the GPU's real capabilities once, at device creation.
++  /* iOS-Madeira ml709: report the GPU's real capabilities once, at device creation.
+    *
+    * A15 cannot sample BC at all (supportsBCTextureCompression = NO), which is why
+    * remap_unsupported_bc() swaps BC->RGBA8 and the upload is dropped. Whether newer
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index f26bf0d..a94d87c 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -740,7 +740,7 @@ public:
+     if (SyncInterval > 4)
+       return DXGI_ERROR_INVALID_CALL;
+ 
+-    /* iOS-Mythic 2026-07-03: [PRESENT_GAP] — attribute the exactly-20-FPS
++    /* iOS-Madeira 2026-07-03: [PRESENT_GAP] — attribute the exactly-20-FPS
+      * ceiling. Splits each frame into time spent INSIDE Present1 (our
+      * present path: SyncFrame wait, Commit, PresentBoundary) vs OUTSIDE
+      * (game sim/render/its own frame limiter). gap≈50ms with inside≈0 ⇒
+@@ -748,24 +748,24 @@ public:
+      * Also logs the SyncInterval the game passes (3 @60Hz would = 20). */
+     {
+       auto now = std::chrono::steady_clock::now();
+-      if (mythic_gap_last_entry_.time_since_epoch().count() != 0) {
+-        double gap_ms = std::chrono::duration<double, std::milli>(now - mythic_gap_last_entry_).count();
+-        mythic_gap_sum_ms_ += gap_ms;
+-        mythic_gap_max_ms_ = std::max(mythic_gap_max_ms_, gap_ms);
++      if (madeira_gap_last_entry_.time_since_epoch().count() != 0) {
++        double gap_ms = std::chrono::duration<double, std::milli>(now - madeira_gap_last_entry_).count();
++        madeira_gap_sum_ms_ += gap_ms;
++        madeira_gap_max_ms_ = std::max(madeira_gap_max_ms_, gap_ms);
+       }
+-      mythic_gap_last_entry_ = now;
+-      mythic_gap_sync_min_ = std::min(mythic_gap_sync_min_, SyncInterval);
+-      mythic_gap_sync_max_ = std::max(mythic_gap_sync_max_, SyncInterval);
+-      if ((++mythic_gap_count_ % 64) == 0) {
++      madeira_gap_last_entry_ = now;
++      madeira_gap_sync_min_ = std::min(madeira_gap_sync_min_, SyncInterval);
++      madeira_gap_sync_max_ = std::max(madeira_gap_sync_max_, SyncInterval);
++      if ((++madeira_gap_count_ % 64) == 0) {
+         Logger::info(std::format(
+             "[PRESENT_GAP] #{} gap_avg={:.1f}ms gap_max={:.1f}ms inside_avg={:.1f}ms "
+             "inside_max={:.1f}ms sync_interval={}..{}",
+-            mythic_gap_count_, mythic_gap_sum_ms_ / 64.0, mythic_gap_max_ms_,
+-            mythic_inside_sum_ms_ / 64.0, mythic_inside_max_ms_,
+-            mythic_gap_sync_min_, mythic_gap_sync_max_));
+-        mythic_gap_sum_ms_ = 0; mythic_gap_max_ms_ = 0;
+-        mythic_inside_sum_ms_ = 0; mythic_inside_max_ms_ = 0;
+-        mythic_gap_sync_min_ = ~0u; mythic_gap_sync_max_ = 0;
++            madeira_gap_count_, madeira_gap_sum_ms_ / 64.0, madeira_gap_max_ms_,
++            madeira_inside_sum_ms_ / 64.0, madeira_inside_max_ms_,
++            madeira_gap_sync_min_, madeira_gap_sync_max_));
++        madeira_gap_sum_ms_ = 0; madeira_gap_max_ms_ = 0;
++        madeira_inside_sum_ms_ = 0; madeira_inside_max_ms_ = 0;
++        madeira_gap_sync_min_ = ~0u; madeira_gap_sync_max_ = 0;
+       }
+     }
+ 
+@@ -855,9 +855,9 @@ public:
+ 
+     {
+       double inside_ms = std::chrono::duration<double, std::milli>(
+-          std::chrono::steady_clock::now() - mythic_gap_last_entry_).count();
+-      mythic_inside_sum_ms_ += inside_ms;
+-      mythic_inside_max_ms_ = std::max(mythic_inside_max_ms_, inside_ms);
++          std::chrono::steady_clock::now() - madeira_gap_last_entry_).count();
++      madeira_inside_sum_ms_ += inside_ms;
++      madeira_inside_max_ms_ = std::max(madeira_inside_max_ms_, inside_ms);
+     }
+ 
+     return hr;
+@@ -921,19 +921,19 @@ public:
+         std::min(frame.clear_pass_count - frame.clear_pass_optimized, 999u), std::min(frame.clear_pass_optimized, 99u)
+     ));
+ 
+-    /* iOS-Mythic 2026-07-03: dump the same frame statistics to the log every
++    /* iOS-Madeira 2026-07-03: dump the same frame statistics to the log every
+      * 64 frames — the HUD is invisible without MTL_HUD_ENABLED, and these
+      * numbers split the measured ~10-12ms-per-draw frame cost into
+      * game/encode/commit/GPU-sync so the bottleneck is attributable from a
+      * pulled device log alone. Averages are per-frame, in ms. */
+     {
+-      static uint64_t mythic_stats_frame = 0;
+-      if ((++mythic_stats_frame % 64) == 0) {
++      static uint64_t madeira_stats_frame = 0;
++      if ((++madeira_stats_frame % 64) == 0) {
+         Logger::info(std::format(
+             "[FRAME_STATS] #{} cmdbufs={} commit_avg={:.2f}ms sync_cnt={} sync_avg={:.2f}ms "
+             "event_stall_max={} latency_avg={:.2f}ms enc_prep={:.2f}ms enc_flush={:.2f}ms "
+             "drawable_block={:.2f}ms renderpass={}+{} clear={}+{}",
+-            mythic_stats_frame, frame.command_buffer_count,
++            madeira_stats_frame, frame.command_buffer_count,
+             average.commit_interval.count() / 1000000.0,
+             frame.sync_count,
+             average.sync_interval.count() / 1000000.0,
+@@ -1147,11 +1147,11 @@ private:
+ 
+   /* [PRESENT_GAP] accumulators — Present1 is only called from the game
+    * thread, so plain members are fine. */
+-  std::chrono::steady_clock::time_point mythic_gap_last_entry_{};
+-  uint64_t mythic_gap_count_ = 0;
+-  double mythic_gap_sum_ms_ = 0, mythic_gap_max_ms_ = 0;
+-  double mythic_inside_sum_ms_ = 0, mythic_inside_max_ms_ = 0;
+-  UINT mythic_gap_sync_min_ = ~0u, mythic_gap_sync_max_ = 0;
++  std::chrono::steady_clock::time_point madeira_gap_last_entry_{};
++  uint64_t madeira_gap_count_ = 0;
++  double madeira_gap_sum_ms_ = 0, madeira_gap_max_ms_ = 0;
++  double madeira_inside_sum_ms_ = 0, madeira_inside_max_ms_ = 0;
++  UINT madeira_gap_sync_min_ = ~0u, madeira_gap_sync_max_ = 0;
+   std::unique_ptr<CpuFence> frame_latency_fence_;
+   HWND hWnd;
+   HMONITOR monitor_;
+@@ -1184,7 +1184,7 @@ CreateSwapChain(
+     return DXGI_ERROR_INVALID_CALL;
+   InitReturnPtr(ppSwapChain);
+ 
+-  /* Mythic-iOS: Wine runs the game as a thread inside the host app, so the
++  /* Madeira-iOS: Wine runs the game as a thread inside the host app, so the
+    * HWND's "process" and GetCurrentProcess() can legitimately disagree in
+    * ways that don't map to a real cross-process scenario. Skip the check. */
+ 
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index fc237fe..e7e7ffa 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -866,7 +866,7 @@ QueryReadbacks
+ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId, uint64_t event_seq_id) {
+   assert(!encoder_current);
+ 
+-  /* iOS-Mythic 2026-07-03: drain autoreleased thunk objects once per flush.
++  /* iOS-Madeira 2026-07-03: drain autoreleased thunk objects once per flush.
+    * Everything created through the winemetal unix thunks in this function —
+    * render/compute/blit encoders, and critically the CAMetalDrawable from
+    * Presenter::encodeCommands — is returned autoreleased onto a Wine pthread
+@@ -1111,7 +1111,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
+       );
+       auto t1 = clock::now();
+       currentFrameStatistics().drawable_blocking_interval += (t1 - t0);
+-      /* iOS-Mythic 2026-07-03 EXPERIMENT: always plain presentDrawable.
++      /* iOS-Madeira 2026-07-03 EXPERIMENT: always plain presentDrawable.
+        * presentDrawableAfterMinimumDuration schedules each frame relative
+        * to the PREVIOUS frame's completed on-glass presentation. On iOS 27
+        * our layer's presentations only complete when the render server is
+diff --git a/src/dxmt/dxmt_presenter.cpp b/src/dxmt/dxmt_presenter.cpp
+index fab69d5..61503f3 100644
+--- a/src/dxmt/dxmt_presenter.cpp
++++ b/src/dxmt/dxmt_presenter.cpp
+@@ -159,7 +159,7 @@ Presenter::encodeCommands(
+     std::function<void(WMT::RenderCommandEncoder)> &&update_fences
+ ) {
+   auto drawable = layer_.nextDrawable();
+-  /* iOS-Mythic RAW mode: the unix thunk returns nil inside the
++  /* iOS-Madeira RAW mode: the unix thunk returns nil inside the
+    * frame-skip window (mailbox). Skip the blit — caller drops the
+    * present on a nil drawable. */
+   if (!drawable)
+diff --git a/src/util/meson.build b/src/util/meson.build
+index 10bdb97..1337a17 100644
+--- a/src/util/meson.build
++++ b/src/util/meson.build
+@@ -31,7 +31,7 @@ if not dxmt_crossbuild
+     'wsi_platform_darwin.cpp',
+   ])
+ elif host_machine.cpu_family() == 'aarch64' and host_machine.system() == 'windows'
+-  # Mythic iOS target: aarch64-windows PE, but running inside our iOS Wine
++  # Madeira iOS target: aarch64-windows PE, but running inside our iOS Wine
+   # with no real window manager. Use headless wsi to stop user32 calls from
+   # returning garbage.
+   util_src += files([
+diff --git a/src/util/wsi_monitor_headless.cpp b/src/util/wsi_monitor_headless.cpp
+index b9c2045..5494f0a 100644
+--- a/src/util/wsi_monitor_headless.cpp
++++ b/src/util/wsi_monitor_headless.cpp
+@@ -7,7 +7,7 @@
+  *
+  * See <https://github.com/doitsujin/dxvk/blob/master/LICENSE>
+  *
+- * iOS-Mythic note 2026-05-13: Was all-nullptr stub which caused
++ * iOS-Madeira note 2026-05-13: Was all-nullptr stub which caused
+  * IDXGIAdapter::EnumOutputs to return DXGI_ERROR_NOT_FOUND. Thumper
+  * then stored NULL in a global IDXGIOutput slot and crashed calling
+  * vtable[7] (GetDesc) through NULL. Implements a synthetic single
+@@ -23,7 +23,7 @@ namespace dxmt::wsi {
+  * dereference HMONITOR. */
+ static HMONITOR const kSyntheticMonitor = reinterpret_cast<HMONITOR>(1);
+ 
+-/* iOS-Mythic 2026-07-07 (task #24): the hardcoded 1024x768 predates the
++/* iOS-Madeira 2026-07-07 (task #24): the hardcoded 1024x768 predates the
+  * 960x540 virtual desktop — user32 (GetSystemMetrics/GetMonitorInfo) and
+  * DXGI disagreed on the screen size, games booted at a mode that crops on
+  * the desktop, and Thumper's video-settings page fataled (ExitProcess -1)
+diff --git a/src/util/wsi_window_headless.cpp b/src/util/wsi_window_headless.cpp
+index e345ade..558f352 100644
+--- a/src/util/wsi_window_headless.cpp
++++ b/src/util/wsi_window_headless.cpp
+@@ -7,7 +7,7 @@
+  *
+  * See <https://github.com/doitsujin/dxvk/blob/master/LICENSE>
+  *
+- * iOS-Mythic 2026-05-13: Synthetic monitor / no-op fullscreen so Thumper-
++ * iOS-Madeira 2026-05-13: Synthetic monitor / no-op fullscreen so Thumper-
+  * style games can negotiate display mode without DISP_CHANGE_BADMODE.
+  * Pairs with wsi_monitor_headless.cpp (1024x768 @ 60Hz synthetic monitor).
+  */
+@@ -24,7 +24,7 @@ namespace dxmt::wsi {
+ static HMONITOR const kSyntheticMonitor = reinterpret_cast<HMONITOR>(1);
+ 
+ void getWindowSize(HWND hWindow, uint32_t *pWidth, uint32_t *pHeight) {
+-  /* iOS-Mythic 2026-07-07 (task #24): report the REAL client size (user32
++  /* iOS-Madeira 2026-07-07 (task #24): report the REAL client size (user32
+    * works fine now) so swapchains match the window instead of a hardcoded
+    * 1024x768 that predates the 960x540 virtual desktop. Fall back to the
+    * screen size if the window query fails. */
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index d29a400..e3eb6bb 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -36,11 +36,11 @@ extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name,
+ #include "../winemetal_thunks.h"
+ #include "../airconv_thunks.h"
+ 
+-/* iOS-Mythic 2026-05-22 draw-call telemetry. Defined further down with
++/* iOS-Madeira 2026-05-22 draw-call telemetry. Defined further down with
+  * the present counter; forward-declared here so the draw command cases
+  * (above the definition site in source order) can increment them. */
+-static _Atomic uint64_t g_mythic_draw_calls;
+-static _Atomic uint64_t g_mythic_draw_calls_at_last_log;
++static _Atomic uint64_t g_madeira_draw_calls;
++static _Atomic uint64_t g_madeira_draw_calls_at_last_log;
+ 
+ typedef int NTSTATUS;
+ #define STATUS_SUCCESS 0
+@@ -263,7 +263,7 @@ _MTLDevice_newDepthStencilState(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
+-/* iOS-Mythic 2026-05-13: iPhone GPUs (Apple7/Apple8 = A14/A15) lack native
++/* iOS-Madeira 2026-05-13: iPhone GPUs (Apple7/Apple8 = A14/A15) lack native
+  * BC (DXT/BPTC) texture support — that's Apple9 / Mac2 only. Games like
+  * Thumper unconditionally CreateTexture2D(BC1) on their .pc cache files,
+  * which then dies in Metal's MTLTextureDescriptor validateWithDevice.
+@@ -304,7 +304,7 @@ static enum WMTPixelFormat remap_unsupported_bc(enum WMTPixelFormat fmt, bool bc
+ }
+ 
+ /* Cached per-device check — set on first to_metal_pixel_format call.
+- * Safe because Mythic runs a single MTLDevice. */
++ * Safe because Madeira runs a single MTLDevice. */
+ static int g_bc_supported_cached = -1;
+ static bool query_bc_support(void) {
+   if (__builtin_expect(g_bc_supported_cached >= 0, 1))
+@@ -319,7 +319,7 @@ static bool query_bc_support(void) {
+     }
+   }
+   g_bc_supported_cached = supported ? 1 : 0;
+-  /* iOS-Mythic 2026-05-18: one-shot log so we can see if A15+ supports BC
++  /* iOS-Madeira 2026-05-18: one-shot log so we can see if A15+ supports BC
+    * natively (would skip all the BC decoder work). Fires exactly once
+    * per process — first call to to_metal_pixel_format. */
+   dprintf(STDERR_FILENO,
+@@ -356,7 +356,7 @@ MTLPixelFormat to_metal_pixel_format(enum WMTPixelFormat format) {
+   return (MTLPixelFormat)stripped;
+ }
+ 
+-/* iOS-Mythic 2026-05-13: When BC textures are remapped to RGBA8 by
++/* iOS-Madeira 2026-05-13: When BC textures are remapped to RGBA8 by
+  * to_metal_pixel_format, the game continues to upload BC-compressed bytes
+  * with BC row pitch. Metal's replaceRegion/copyFromBuffer validators will
+  * abort if bytesPerRow < width * bytes_per_pixel for the (now RGBA8)
+@@ -876,7 +876,7 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+     case WMTBlitCommandCopyFromBufferToTexture: {
+       struct wmtcmd_blit_copy_from_buffer_to_texture *body = (struct wmtcmd_blit_copy_from_buffer_to_texture *)next;
+       id<MTLTexture> dst = (id<MTLTexture>)body->dst;
+-      /* iOS-Mythic: skip BC-pitch uploads to remapped RGBA8 textures. */
++      /* iOS-Madeira: skip BC-pitch uploads to remapped RGBA8 textures. */
+       if (!texture_upload_pitch_ok(dst, body->size.width, body->bytes_per_row))
+         break;
+       [encoder copyFromBuffer:(id<MTLBuffer>)body->src
+@@ -908,7 +908,7 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+     case WMTBlitCommandCopyFromTextureToBuffer: {
+       struct wmtcmd_blit_copy_from_texture_to_buffer *body = (struct wmtcmd_blit_copy_from_texture_to_buffer *)next;
+       id<MTLTexture> src = (id<MTLTexture>)body->src;
+-      /* iOS-Mythic: skip BC-pitch readback to remapped RGBA8 textures. */
++      /* iOS-Madeira: skip BC-pitch readback to remapped RGBA8 textures. */
+       if (!texture_upload_pitch_ok(src, body->size.width, body->bytes_per_row))
+         break;
+       [encoder copyFromTexture:src
+@@ -1214,7 +1214,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTRenderCommandDraw: {
+       struct wmtcmd_render_draw *body = (struct wmtcmd_render_draw *)next;
+-      atomic_fetch_add_explicit(&g_mythic_draw_calls, 1, memory_order_relaxed);
++      atomic_fetch_add_explicit(&g_madeira_draw_calls, 1, memory_order_relaxed);
+       [encoder drawPrimitives:(MTLPrimitiveType)body->primitive_type
+                   vertexStart:body->vertex_start
+                   vertexCount:body->vertex_count
+@@ -1224,7 +1224,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTRenderCommandDrawIndexed: {
+       struct wmtcmd_render_draw_indexed *body = (struct wmtcmd_render_draw_indexed *)next;
+-      atomic_fetch_add_explicit(&g_mythic_draw_calls, 1, memory_order_relaxed);
++      atomic_fetch_add_explicit(&g_madeira_draw_calls, 1, memory_order_relaxed);
+       [encoder drawIndexedPrimitives:(MTLPrimitiveType)body->primitive_type
+                           indexCount:body->index_count
+                            indexType:(MTLIndexType)body->index_type
+@@ -1237,7 +1237,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTRenderCommandDrawIndirect: {
+       struct wmtcmd_render_draw_indirect *body = (struct wmtcmd_render_draw_indirect *)next;
+-      atomic_fetch_add_explicit(&g_mythic_draw_calls, 1, memory_order_relaxed);
++      atomic_fetch_add_explicit(&g_madeira_draw_calls, 1, memory_order_relaxed);
+       [encoder drawPrimitives:(MTLPrimitiveType)body->primitive_type
+                 indirectBuffer:(id<MTLBuffer>)body->indirect_args_buffer
+           indirectBufferOffset:body->indirect_args_offset];
+@@ -1245,7 +1245,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTRenderCommandDrawIndexedIndirect: {
+       struct wmtcmd_render_draw_indexed_indirect *body = (struct wmtcmd_render_draw_indexed_indirect *)next;
+-      atomic_fetch_add_explicit(&g_mythic_draw_calls, 1, memory_order_relaxed);
++      atomic_fetch_add_explicit(&g_madeira_draw_calls, 1, memory_order_relaxed);
+       [encoder drawIndexedPrimitives:(MTLPrimitiveType)body->primitive_type
+                            indexType:(MTLIndexType)body->index_type
+                          indexBuffer:(id<MTLBuffer>)body->index_buffer
+@@ -1489,7 +1489,7 @@ static NTSTATUS
+ _MTLTexture_replaceRegion(void *obj) {
+   struct unixcall_mtltexture_replaceregion *params = obj;
+   id<MTLTexture> tex = (id<MTLTexture>)params->texture;
+-  /* iOS-Mythic: skip BC-pitch uploads to remapped RGBA8 textures. */
++  /* iOS-Madeira: skip BC-pitch uploads to remapped RGBA8 textures. */
+   if (!texture_upload_pitch_ok(tex, params->size.width, params->bytes_per_row))
+     return STATUS_SUCCESS;
+   [tex replaceRegion:MTLRegionMake3D(
+@@ -1515,24 +1515,24 @@ _MTLBuffer_didModifyRange(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
+-/* iOS-Mythic 2026-05-13: track Present cadence so we can tell whether the
++/* iOS-Madeira 2026-05-13: track Present cadence so we can tell whether the
+  * game's render loop is alive (continuous Presents → splash sustained via
+  * redraw) or wedged on first frame. Prints once per ~60 frames at ~1Hz. */
+-static _Atomic uint64_t g_mythic_present_count = 0;
+-/* iOS-Mythic 2026-05-22: draw-call counter, sampled+reset on each present
++static _Atomic uint64_t g_madeira_present_count = 0;
++/* iOS-Madeira 2026-05-22: draw-call counter, sampled+reset on each present
+  * log line. Tells us if the game is issuing draws between Presents or
+  * presenting empty frames. Bumped in WMTRenderCommandDraw{,Indexed,Indirect,
+  * IndexedIndirect} cases of the render-command processor.
+  * Forward-declared near top of file; definition lives here. */
+ 
+-static inline void mythic_log_present_cadence(const char *path, double after) {
+-  uint64_t n = atomic_fetch_add_explicit(&g_mythic_present_count, 1, memory_order_relaxed) + 1;
+-  /* iOS-Mythic quiet mode: counter always ticks (FPS overlay reads it);
++static inline void madeira_log_present_cadence(const char *path, double after) {
++  uint64_t n = atomic_fetch_add_explicit(&g_madeira_present_count, 1, memory_order_relaxed) + 1;
++  /* iOS-Madeira quiet mode: counter always ticks (FPS overlay reads it);
+    * only the log line is suppressed. At RAW rates this line fires 100+
+    * times/s — real I/O + heat. */
+   {
+     static int quiet = -1;
+-    if (quiet < 0) quiet = getenv("MYTHIC_QUIET") != NULL;
++    if (quiet < 0) quiet = getenv("MADEIRA_QUIET") != NULL;
+     if (quiet) return;
+   }
+   /* 2026-07-03: every-16 cadence (was 60) + monotonic timestamp + the
+@@ -1543,8 +1543,8 @@ static inline void mythic_log_present_cadence(const char *path, double after) {
+     struct timespec ts;
+     clock_gettime(CLOCK_MONOTONIC, &ts);
+     /* Sample + reset draw counter delta since last log line. */
+-    uint64_t cur_draws = atomic_load_explicit(&g_mythic_draw_calls, memory_order_relaxed);
+-    uint64_t last_draws = atomic_exchange_explicit(&g_mythic_draw_calls_at_last_log, cur_draws, memory_order_relaxed);
++    uint64_t cur_draws = atomic_load_explicit(&g_madeira_draw_calls, memory_order_relaxed);
++    uint64_t last_draws = atomic_exchange_explicit(&g_madeira_draw_calls_at_last_log, cur_draws, memory_order_relaxed);
+     uint64_t draws_since_last = cur_draws - last_draws;
+     /* 2026-07-03 Mach-exception storm probe: the PC-sampling profiler put
+      * ~25% of game-thread time in the exception-resume trampoline. This
+@@ -1556,7 +1556,7 @@ static inline void mythic_log_present_cadence(const char *path, double after) {
+     int cur_exc = ios_exc_msg_count;
+     int exc_delta = cur_exc - last_exc_count;
+     last_exc_count = cur_exc;
+-    /* iOS-Mythic 2026-07-05: frame anatomy for the locked-60 push —
++    /* iOS-Madeira 2026-07-05: frame anatomy for the locked-60 push —
+      * game-thread server_wait wall time + wait/timeout/request counts
+      * (server_ios.c, same binary). Deltas cover the 16 presents since
+      * the last line. Answers: is the last ~1.5ms/frame server-request
+@@ -1583,10 +1583,10 @@ static inline void mythic_log_present_cadence(const char *path, double after) {
+   }
+ }
+ 
+-/* iOS-Mythic 2026-05-18: exposed for SwiftUI FPS overlay. Reads the
++/* iOS-Madeira 2026-05-18: exposed for SwiftUI FPS overlay. Reads the
+  * atomic counter on the calling thread (typically a 100ms Swift Timer). */
+-uint64_t mythic_get_present_count(void) {
+-  return atomic_load_explicit(&g_mythic_present_count, memory_order_relaxed);
++uint64_t madeira_get_present_count(void) {
++  return atomic_load_explicit(&g_madeira_present_count, memory_order_relaxed);
+ }
+ 
+ /* NOTE (2026-07-03): a presented-handler probe lived here during the
+@@ -1594,7 +1594,7 @@ uint64_t mythic_get_present_count(void) {
+  * even for frames provably on glass (the splash), so it carries no signal
+  * for this layer. See project memory for the full postmortem. */
+ 
+-/* iOS-Mythic 2026-07-05: runtime present-pacing mode, read per present
++/* iOS-Madeira 2026-07-05: runtime present-pacing mode, read per present
+  * (live-flippable from the Swift UI):
+  *   1 = LOCKED (default): afterMinimumDuration(1/60) — exact 60.
+  *   0 = MAX: present every frame, free-run to the display refresh
+@@ -1606,28 +1606,28 @@ uint64_t mythic_get_present_count(void) {
+  *       Measures raw stack throughput independent of the panel; the
+  *       present COUNTER counts every game present (incl. skipped) so
+  *       the FPS overlay reads true game rate. */
+-static volatile int g_mythic_vsync_mode = 1;
+-void mythic_set_vsync_locked(int mode) {
+-  g_mythic_vsync_mode = mode;
++static volatile int g_madeira_vsync_mode = 1;
++void madeira_set_vsync_locked(int mode) {
++  g_madeira_vsync_mode = mode;
+   dprintf(STDERR_FILENO, "[iOS DXMT] vsync_mode=%d (1=locked60 0=max 2=raw)\n", mode);
+ }
+-int mythic_get_vsync_locked(void) { return g_mythic_vsync_mode; }
++int madeira_get_vsync_locked(void) { return g_madeira_vsync_mode; }
+ 
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;
+-  int mode = g_mythic_vsync_mode;
++  int mode = g_madeira_vsync_mode;
+   if (mode == 1) {
+-    mythic_log_present_cadence("presentDrawable60", 0.0);
++    madeira_log_present_cadence("presentDrawable60", 0.0);
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg
+                                      afterMinimumDuration:(1.0 / 60.0)];
+   } else if (mode == 2) {
+     /* Frame-skip gating lives in _MetalLayer_nextDrawable (nil return);
+      * only real, ≥18ms-spaced frames reach here. */
+-    mythic_log_present_cadence("presentRaw", 0.0);
++    madeira_log_present_cadence("presentRaw", 0.0);
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
+   } else {
+-    mythic_log_present_cadence("presentDrawable", 0.0);
++    madeira_log_present_cadence("presentDrawable", 0.0);
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
+   }
+   return STATUS_SUCCESS;
+@@ -1636,7 +1636,7 @@ _MTLCommandBuffer_presentDrawable(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj) {
+   struct unixcall_generic_obj_obj_double_noret *params = obj;
+-  mythic_log_present_cadence("presentDrawableAfterMinDuration", params->arg1);
++  madeira_log_present_cadence("presentDrawableAfterMinDuration", params->arg1);
+   [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg0
+                                    afterMinimumDuration:params->arg1];
+   return STATUS_SUCCESS;
+@@ -1929,7 +1929,7 @@ _MetalDrawable_texture(void *obj) {
+ static NTSTATUS
+ _MetalLayer_nextDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
+-  /* iOS-Mythic 2026-07-05 RAW mode (mode 2): the mailbox skip lives HERE,
++  /* iOS-Madeira 2026-07-05 RAW mode (mode 2): the mailbox skip lives HERE,
+    * before any drawable is consumed. First attempt gated at the
+    * presentDrawable thunk — too late: every game frame had already
+    * acquired a drawable, and PRESENTED drawables are held until vsync,
+@@ -1941,7 +1941,7 @@ _MetalLayer_nextDrawable(void *obj) {
+    * drawables can never exhaust the pool even on a 60Hz-capped panel.
+    * Skipped frames tick the present counter so the FPS overlay shows
+    * TRUE game rate. */
+-  if (g_mythic_vsync_mode == 2) {
++  if (g_madeira_vsync_mode == 2) {
+     static struct timespec last_acquire; /* encode-thread only */
+     struct timespec now;
+     double since;
+@@ -1949,7 +1949,7 @@ _MetalLayer_nextDrawable(void *obj) {
+     since = (now.tv_sec - last_acquire.tv_sec) + (now.tv_nsec - last_acquire.tv_nsec) / 1e9;
+     if (since < 0.018) {
+       params->ret = 0;
+-      mythic_log_present_cadence("presentSkipped", 0.0);
++      madeira_log_present_cadence("presentSkipped", 0.0);
+       return STATUS_SUCCESS;
+     }
+     last_acquire = now;
+@@ -3569,7 +3569,7 @@ NTSTATUS _CacheWriter_set(void *obj);
+ NTSTATUS _WMTSetMetalShaderCachePath(void *obj);
+ 
+ #if TARGET_OS_IOS
+-/* On iOS we statically link DXMT's unix side into the host app (Mythic.app),
++/* On iOS we statically link DXMT's unix side into the host app (Madeira.app),
+  * alongside ntdll's own __wine_unix_call_funcs. Rename ours so the linker
+  * doesn't get a duplicate symbol; our ntdll's load_builtin_unixlib picks
+  * it up by name when a DLL registers winemetal.so as its unix path.        */

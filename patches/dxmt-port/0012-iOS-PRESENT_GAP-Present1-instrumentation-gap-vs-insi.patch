@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 4 Jul 2026 14:00:44 +0800
+Subject: [PATCH] =?UTF-8?q?iOS:=20[PRESENT=5FGAP]=20Present1=20instrumenta?=
+ =?UTF-8?q?tion=20=E2=80=94=20gap=20vs=20inside=20+=20SyncInterval?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Every 64 presents, log time between Present1 entries (game-side frame
+time) vs time spent inside our present path, plus the SyncInterval range
+the game passes. Proved the 57-59ms menu/gameplay frame is entirely
+game-side (inside_avg=0.2ms, sync_interval=1..1) — the present path is
+not the bottleneck.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: a0a9068326155edf49d73b525e75456ff1500072
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_swapchain.cpp | 44 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index 96bed95..f26bf0d 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -740,6 +740,35 @@ public:
+     if (SyncInterval > 4)
+       return DXGI_ERROR_INVALID_CALL;
+ 
++    /* iOS-Mythic 2026-07-03: [PRESENT_GAP] — attribute the exactly-20-FPS
++     * ceiling. Splits each frame into time spent INSIDE Present1 (our
++     * present path: SyncFrame wait, Commit, PresentBoundary) vs OUTSIDE
++     * (game sim/render/its own frame limiter). gap≈50ms with inside≈0 ⇒
++     * the game paces itself between presents; inside≈50ms ⇒ we block.
++     * Also logs the SyncInterval the game passes (3 @60Hz would = 20). */
++    {
++      auto now = std::chrono::steady_clock::now();
++      if (mythic_gap_last_entry_.time_since_epoch().count() != 0) {
++        double gap_ms = std::chrono::duration<double, std::milli>(now - mythic_gap_last_entry_).count();
++        mythic_gap_sum_ms_ += gap_ms;
++        mythic_gap_max_ms_ = std::max(mythic_gap_max_ms_, gap_ms);
++      }
++      mythic_gap_last_entry_ = now;
++      mythic_gap_sync_min_ = std::min(mythic_gap_sync_min_, SyncInterval);
++      mythic_gap_sync_max_ = std::max(mythic_gap_sync_max_, SyncInterval);
++      if ((++mythic_gap_count_ % 64) == 0) {
++        Logger::info(std::format(
++            "[PRESENT_GAP] #{} gap_avg={:.1f}ms gap_max={:.1f}ms inside_avg={:.1f}ms "
++            "inside_max={:.1f}ms sync_interval={}..{}",
++            mythic_gap_count_, mythic_gap_sum_ms_ / 64.0, mythic_gap_max_ms_,
++            mythic_inside_sum_ms_ / 64.0, mythic_inside_max_ms_,
++            mythic_gap_sync_min_, mythic_gap_sync_max_));
++        mythic_gap_sum_ms_ = 0; mythic_gap_max_ms_ = 0;
++        mythic_inside_sum_ms_ = 0; mythic_inside_max_ms_ = 0;
++        mythic_gap_sync_min_ = ~0u; mythic_gap_sync_max_ = 0;
++      }
++    }
++
+     HRESULT hr = S_OK;
+ #ifdef DXMT_IOS
+     // iOS has no real window manager, so wsi::isMinimized / isForeground
+@@ -824,6 +853,13 @@ public:
+ 
+     cmd_queue.PresentBoundary();
+ 
++    {
++      double inside_ms = std::chrono::duration<double, std::milli>(
++          std::chrono::steady_clock::now() - mythic_gap_last_entry_).count();
++      mythic_inside_sum_ms_ += inside_ms;
++      mythic_inside_max_ms_ = std::max(mythic_inside_max_ms_, inside_ms);
++    }
++
+     return hr;
+   };
+ 
+@@ -1108,6 +1144,14 @@ private:
+   IMTLD3D11DeviceContext* device_context_;
+   Com<D3D11ResourceCommon, false> backbuffer_;
+   HANDLE present_semaphore_;
++
++  /* [PRESENT_GAP] accumulators — Present1 is only called from the game
++   * thread, so plain members are fine. */
++  std::chrono::steady_clock::time_point mythic_gap_last_entry_{};
++  uint64_t mythic_gap_count_ = 0;
++  double mythic_gap_sum_ms_ = 0, mythic_gap_max_ms_ = 0;
++  double mythic_inside_sum_ms_ = 0, mythic_inside_max_ms_ = 0;
++  UINT mythic_gap_sync_min_ = ~0u, mythic_gap_sync_max_ = 0;
+   std::unique_ptr<CpuFence> frame_latency_fence_;
+   HWND hWnd;
+   HMONITOR monitor_;

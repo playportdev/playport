@@ -1,0 +1,133 @@
+# MultiVersus Training: about 70 s of play, pushed once the stage is up.
+# Getting there (offline, the EULA accepted once): START on the title
+# screen, `pp pad wait-still` through the account sync, then UP from PLAY
+# to TRAINING and A, and wait-still through the load. The title screen
+# ignores the pad for a while after it appears (up to a minute and a half
+# in these runs): send START again until "Syncing Account State" shows.
+# The first launch shows the EULA instead, with DECLINE AND EXIT
+# highlighted: LEFT to ACCEPT, then A (the right stick, `RY=-1`, scrolls
+# the text).
+#   pp pad send '400 START' '2000 -'; pp pad wait-still --timeout 90
+#   pp pad send '150 UP' '800 -' '200 A' '4000 -'; pp pad wait-still --timeout 120
+# Twelve rounds of walking and attacking both ways: RIGHT/LEFT move, X and
+# Y attack, A jumps.
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -
+1500 RIGHT
+150 X
+350 -
+150 X
+350 -
+300 A
+700 -
+1500 LEFT
+150 Y
+500 -

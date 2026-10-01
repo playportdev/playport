@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Esme Povirk <esme@codeweavers.com>
+Date: Sat, 28 Sep 2024 17:34:29 +0000
+Subject: [PATCH] user32: Respond to OBJID_QUERYCLASSNAMEIDX in combo boxes.
+
+This is a hack. We should implement RealGetWindowClass instead.
+
+CW-Bug-Id: #24314
+Valve-commit: c633c15dfa03907c5b46a221a91de8498d380a3b
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/user32/combo.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/dlls/user32/combo.c b/dlls/user32/combo.c
+index cb92734..62b5e04 100644
+--- a/dlls/user32/combo.c
++++ b/dlls/user32/combo.c
+@@ -1915,6 +1915,11 @@ LRESULT ComboWndProc_common( HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
+                 return SendMessageW(lphc->owner, message, wParam, lParam);
+             break;
+ 
++        case WM_GETOBJECT:
++            if ((LONG)lParam == OBJID_QUERYCLASSNAMEIDX)
++                return 0x10005;
++            break;
++
+ 	/* Combo messages */
+ 
+ 	case CB_ADDSTRING:

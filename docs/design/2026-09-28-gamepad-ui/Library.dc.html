@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Playport Library</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+a.leg{padding:4px 8px;margin:0 -8px;border-radius:14px;color:#C9D1DC}a.leg:hover{background:#1D242E;color:#EEF1F5}
+.tab{font:600 15px 'Barlow Semi Condensed',sans-serif;color:#9AA5B4;padding:5px 12px;border-radius:8px}
+.tab.on{color:#0B0E13;background:#EEF1F5}
+.focus{outline:3px solid #F5B544;outline-offset:3px}
+.chip{font:600 13px 'Barlow',sans-serif;color:#C9D1DC;background:#151A21;border:1px solid #2A3340;border-radius:15px;padding:4px 12px}
+.chip.on{background:#2A3340;color:#EEF1F5;border-color:#4A5667}
+.tile{display:flex;flex-direction:column;gap:5px;color:#EEF1F5}
+.art{height:78px;display:flex;align-items:flex-end;box-sizing:border-box;padding:8px 10px;font:700 14px 'Barlow Semi Condensed',sans-serif;color:#FFFFFF;text-transform:uppercase;letter-spacing:.04em;border-radius:10px;position:relative}
+.meta{display:flex;align-items:center;gap:5px;font-size:12px;color:#9AA5B4}
+.ok{color:#7FD49A}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13; display: flex; flex-direction: column">
+<div style="height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 44px; flex-shrink: 0">
+<span class="g">LB</span>
+<a class="tab" href="Main.dc.html">Home</a>
+<a class="tab on" href="Library.dc.html">Library</a>
+<a class="tab" href="Downloads.dc.html">Downloads</a>
+<span style="font: 600 11px 'Barlow'; color: #0B0E13; background: #F5B544; border-radius: 8px; padding: 1px 6px; margin-left: -6px">1</span>
+<span class="g">RB</span>
+<div style="flex-grow: 1"></div>
+<span style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9AA5B4; background: #151A21; border-radius: 16px; padding: 5px 12px 5px 6px"><span class="g">Y</span>Search 212 games</span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 44px 12px">
+<span class="chip on">Installed · 4</span>
+<span class="chip">All Steam games · 212</span>
+<span class="chip">Recently played</span>
+<div style="flex-grow: 1"></div>
+<span class="meta">Sort: Recent</span>
+</div>
+<div style="flex-grow: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 14px; padding: 4px 44px 0; align-content: start">
+<a class="tile" href="Game.dc.html">
+<div class="art focus" style="background: #24324A">Hollow Knight</div>
+<div class="meta"><span class="ok">●</span>Ready · Played 2 h ago</div>
+</a>
+<div class="tile">
+<div class="art" style="background: #5B3A8C">Celeste</div>
+<div class="meta"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"></path><path d="M7 10l5 5 5-5"></path><path d="M5 20h14"></path></svg>Update queued · 1.2 GB</div>
+</div>
+<div class="tile">
+<div class="art" style="background: #3E6A3A">Stardew Valley</div>
+<div class="meta"><span class="ok">●</span>Ready · Played last week</div>
+</div>
+<div class="tile">
+<div class="art" style="background: #6E2B2B">Hades
+<div style="position: absolute; left: 10px; right: 10px; bottom: 6px; height: 4px; background: rgba(0,0,0,.45); border-radius: 2px"><div style="width: 62%; height: 4px; background: #6CA8FF; border-radius: 2px"></div></div>
+</div>
+<div class="meta">Downloading · 62%</div>
+</div>
+<a class="tile" href="GameInstall.dc.html">
+<div class="art" style="background: #5A2A4E">Dead Cells</div>
+<div class="meta">Not installed · 1.8 GB</div>
+</a>
+<div class="tile">
+<div class="art" style="background: #2E5E7A">Terraria</div>
+<div class="meta">Not installed · 1.2 GB</div>
+</div>
+<div class="tile">
+<div class="art" style="background: #7A5A22">Cuphead</div>
+<div class="meta">Not installed · 4.9 GB</div>
+</div>
+<div class="tile">
+<div class="art" style="background: #3A4452">Hollow Knight: Silksong</div>
+<div class="meta">Not installed · 7.3 GB</div>
+</div>
+</div>
+<div style="height: 36px; flex-shrink: 0; display: flex; align-items: center; gap: 18px; padding: 0 44px; border-top: 1px solid #1D242E">
+<div style="flex-grow: 1"></div>
+<a class="leg" href="Game.dc.html"><span class="g">A</span>Open</a>
+<span class="leg"><span class="g">X</span>Filter</span>
+<a class="leg" href="Main.dc.html"><span class="g">B</span>Back</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

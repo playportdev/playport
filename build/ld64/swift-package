@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Pass-through: xtool runs "$SWIFTPM_CUSTOM_BIN_DIR/swift-package" to plan.
+set -eu
+unset SWIFTPM_CUSTOM_BIN_DIR
+exec swift package "$@"

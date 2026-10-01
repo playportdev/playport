@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 27 Sep 2026 21:50:00 +0200
+Subject: [PATCH 2/2] premake: build the Windows DLLs with llvm-mingw on Linux
+
+A cross build of the Windows targets (premake5 --os=windows gmake, the
+llvm-mingw toolchain) failed at link time in four places, each fixed
+here without changing the MSVC or native Linux builds:
+
+- premake's gcc toolset adds the build host's -L/usr/lib32 and
+  -L/usr/lib64, so lld took the host's ELF libc++.a: the toolset's
+  architecture library directories are cleared for a Windows target
+  built on another host.
+- -Wl,--exclude-libs,ALL is an ELF option lld's COFF driver rejects; it
+  is kept for the non-Windows targets only (a DLL exports only what is
+  marked dllexport).
+- The Windows import libraries are named in lower case, the names
+  MinGW's import libraries have; MSVC's link is case-insensitive.
+- MinGW's SDL3 static build is libSDL3.a, not SDL3-static, and MinGW
+  has no #pragma comment(lib): ole32, setupapi, shell32, uuid and
+  winpthread, which SDL, portaudio and the known-folder calls need, are
+  named.
+
+Class: linux-build
+Evidence: docs/evidence/2026-09-27-gbe-steam-api-build.md
+Offered-upstream: no
+---
+ premake5.lua | 35 ++++++++++++++++++++++++-----------
+ 1 file changed, 24 insertions(+), 11 deletions(-)
+
+diff --git a/premake5.lua b/premake5.lua
+index fbe9159..fc23fd7 100644
+--- a/premake5.lua
++++ b/premake5.lua
+@@ -326,7 +326,7 @@ if os.target() == 'windows' then
+ end
+ 
+ local sdl_name = 'SDL3'
+-if os.target() == 'windows' then
++if os.target() == 'windows' and not (_ACTION and string.match(_ACTION, 'gmake.*')) then -- MinGW's build is libSDL3.a
+     sdl_name = 'SDL3-static'
+ end
+ 
+@@ -438,19 +438,25 @@ table_append(deps_link, {
+ 
+ local common_link_win = {
+     -- os specific
+-    "Ws2_32"   .. static_postfix,
+-    "Iphlpapi" .. static_postfix,
+-    "Wldap32"  .. static_postfix,
+-    "Winmm"    .. static_postfix,
+-    "Bcrypt"   .. static_postfix,
+-    "Dbghelp"  .. static_postfix,
++    "ws2_32"   .. static_postfix,
++    "iphlpapi" .. static_postfix,
++    "wldap32"  .. static_postfix,
++    "winmm"    .. static_postfix,
++    "bcrypt"   .. static_postfix,
++    "dbghelp"  .. static_postfix,
+     "ntdll"    .. static_postfix,
++    -- MinGW has no #pragma comment(lib): what SDL, portaudio and the known-folder calls need
++    "ole32"    .. static_postfix,
++    "setupapi" .. static_postfix,
++    "shell32"  .. static_postfix,
++    "uuid"     .. static_postfix,
++    "winpthread" .. static_postfix,
+     -- gamepad
+-    "Xinput"   .. static_postfix,
++    "xinput"   .. static_postfix,
+     -- imgui / overlay
+-    "Gdi32"    .. static_postfix,
+-    "Dwmapi"   .. static_postfix,
+-    "OpenGL32" .. static_postfix,
++    "gdi32"    .. static_postfix,
++    "dwmapi"   .. static_postfix,
++    "opengl32" .. static_postfix,
+ }
+ -- add deps to win
+ table_append(common_link_win, deps_link)
+@@ -651,6 +657,7 @@ filter { "action:gmake*", }
+         -- https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html
+         "-fno-jump-tables" , "-Wno-switch",
+     }
++filter { "action:gmake*", "system:not windows", }
+     linkoptions {
+         "-Wl,--exclude-libs,ALL",
+     }
+@@ -792,6 +799,12 @@ end
+ 
+ 
+ 
++-- premake's gcc toolset adds the build host's -L/usr/lib32 and -L/usr/lib64 for x86 and
++-- x86_64; a MinGW cross build on Linux would then link the host's ELF libc++.a
++if os.target() == 'windows' and os.host() ~= 'windows' and premake.tools.gcc.libraryDirectories then
++    premake.tools.gcc.libraryDirectories.architecture = {}
++end
++
+ workspace "gbe"
+     location("build/project/%{_ACTION}/" .. os_iden)
+ 

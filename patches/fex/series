@@ -1,0 +1,12 @@
+# fex: applied in this order with `git am -3` onto the fex pin in pins.lock
+0001-Build-the-arm64ec-PE-with-Linux-llvm-mingw.patch
+0002-OpcodeDispatcher-raise-DE-for-DIV-IDIV.patch
+0003-Turn-SMC-detection-off-once-Mono-s-backpatcher-is-fo.patch
+0004-Count-the-disk-cache-s-hits-and-time-the-call-return.patch
+0005-Windows-honour-FEX_HOSTFEATURES-AFP-switch-on-the-iO.patch
+0006-JIT-trust-the-call-return-prediction-on-iOS-again.patch
+0007-ARM64EC-refuse-to-start-on-iOS-without-the-JIT-pool-.patch
+0008-Windows-honour-FEX_HOSTFEATURES-LRCPC2-switch-on-the.patch
+0009-ARM64EC-log-the-FEX-host-band-per-thread-on-iOS.patch
+0010-Windows-place-iOS-call-return-stacks-from-the-top-of.patch
+0011-ARM64EC-count-the-transitions-only-while-the-runtime.patch

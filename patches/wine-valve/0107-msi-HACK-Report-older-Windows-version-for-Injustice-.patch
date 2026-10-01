@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Wed, 30 Jul 2025 12:07:52 -0600
+Subject: [PATCH] msi: HACK: Report older Windows version for Injustice 2
+ redists.
+
+CW-Bug-Id: #25520
+Valve-commit: e97ddc286031674efa114174ff0785260699d111
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/msi/package.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/msi/package.c b/dlls/msi/package.c
+index 04009d0..25fcbbd 100644
+--- a/dlls/msi/package.c
++++ b/dlls/msi/package.c
+@@ -636,6 +636,7 @@ static void fixup_winver(DWORD *verval)
+                         || !strcmp(s, "231430")
+                         || !strcmp(s, "1017900")
+                         || !strcmp(s, "285190")
++                        || !strcmp(s, "627270")
+                     );
+         if (cached)
+             ERR("HACK: setting winver 502.\n");

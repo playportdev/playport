@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 01:37:04 +0200
+Subject: [PATCH] virtual: apply the protection FEX asks for on a guest's own
+ code pages
+
+With the RW view of a guest's anonymous code ranges (0019), a page is
+writable on the host whenever it was mapped so, and only the protection
+asked for later can make a store to it fault. The alias-ownership early
+return in mprotect_exec (ml640) returned before applying any protection,
+so when FEX set PAGE_EXECUTE_READ on a page it had translated from, the
+page stayed writable. Stores to it never faulted, FEX never dropped the
+stale translation, and every call site Mono patched kept calling
+mono_magic_trampoline: in Hollow Knight's gameplay the Unity main thread
+spent most of its time there, at about 175 M instructions a frame.
+
+The early return now applies write or no-write to the RW view (never
+host EXEC). A store to a trapped page takes the smc-trap delivery (0003),
+FEX invalidates the page and makes it writable again, and the patched
+call runs directly from then on.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-26-hk-mono-trampoline.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index fbff21c..4bfca7e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9428,6 +9428,30 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                             (unix_prot & PROT_WRITE) ? 'w' : '-',
+                             (unix_prot & PROT_EXEC)  ? 'x' : '-',
+                             cov_rx, cov_rw);
++                /* Playport: in the RW view (ios_anon_plain_view) the guest's
++                 * pages are the pool's RW side, so the protection asked for
++                 * here is the only thing that makes a store fault. FEX asks
++                 * for PAGE_EXECUTE_READ on a page once it has translated code
++                 * from it and relies on the write fault to drop the stale
++                 * translation (HandleRWXAccessViolation). Returning without
++                 * applying it left every such page writable: Mono's call-site
++                 * patches landed unseen and each patched call kept going
++                 * through mono_magic_trampoline. Apply write/no-write; the
++                 * view never gets host EXEC. */
++                if (ios_anon_plain_view())
++                {
++                    vm_prot_t vp = VM_PROT_READ | ((unix_prot & PROT_WRITE) ? VM_PROT_WRITE : 0);
++                    kern_return_t pkr = vm_protect( mach_task_self(), (vm_address_t)base, size, FALSE, vp );
++                    static int view_n;
++                    if (view_n < 16 || pkr != KERN_SUCCESS)
++                    {
++                        view_n++;
++                        dprintf( 2, "[anon-view] owned %p+0x%lx %s%s\n", base, (unsigned long)size,
++                                 (vp & VM_PROT_WRITE) ? "rw" : "r-",
++                                 pkr == KERN_SUCCESS ? "" : " vm_protect FAILED" );
++                    }
++                    if (pkr != KERN_SUCCESS) { errno = EACCES; return -1; }
++                }
+                 return 0;
+             }
+         }

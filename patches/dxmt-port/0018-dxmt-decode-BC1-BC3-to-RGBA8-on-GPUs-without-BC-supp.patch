@@ -1,0 +1,468 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 12 Aug 2026 12:27:31 +0800
+Subject: [PATCH] dxmt: decode BC1/BC3 to RGBA8 on GPUs without BC support,
+ plus a format census
+
+A15 reports supportsBCTextureCompression = NO. remap_unsupported_bc() already
+created these textures as RGBA8 so the Metal descriptor would validate, but the
+upload still carried BC-shaped pitches, so texture_upload_pitch_ok() dropped it
+and the texture was never filled. That was Thumper's static and missing art -
+the 2026-05-13 workaround's own comment predicted exactly this.
+
+The fix belongs in initWithData because that function derives its entire copy
+layout from texture->pixelFormat(), which is still logically BC. Decoding the
+data without also switching the layout to the physical format would keep
+staging BC-sized rows into an RGBA8 texture.
+
+The logical/physical split stays honest: the D3D resource keeps reporting BC
+everywhere - description, pitches, subresources, SRVs are untouched. Only this
+upload path uses RGBA8. Surfacing the physical format to the Windows app would
+violate D3D semantics even where the game would not notice.
+
+Decode is lossless block expansion, not a re-encode, and runs per subresource
+so the largest temporary is one 2048x2048 mip at 16MB, freed immediately. BC1
+punch-through (c0 <= c1, index 3 transparent) is handled; BC3's embedded colour
+block never uses that mode and is decoded accordingly. Edge blocks decode in
+full then clip, as the spec requires for non-multiple-of-4 dimensions. 3D is
+excluded - none observed, and guessing at volume slice pitches produces silent
+corruption rather than a clean failure.
+
+Scope came from measurement rather than assumption. The census, taken at the
+D3D layer before the remap so usage and bind flags still exist, found over real
+gameplay: 128 BC resources, 1,234 subresources, BC1 and BC3 only, 30MB total,
+all USAGE_DEFAULT with initial data, shader-resource only, zero CPU access,
+zero staging, and zero UpdateSubresource/CopyResource/CopySubresourceRegion.
+That deleted ASTC, BC7, BC6H, the update path, shadow copies and reverse
+conversion from the design.
+
+Verified on device: art correct, zero faults, full mip chains down to 1x1,
+peak memory 3007MB against 3013MB before, and 300+ FPS at 640x480 unchanged.
+
+Known census gaps: Map is never hooked, so Map=0 means unmeasured; the copy
+probe classifies destinations only, so a BC source copied into a non-BC
+destination would be missed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: bc6d4c790b7f7432c90880aaae073e42e5f645a8
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_context_impl.cpp       |  21 ++++
+ src/d3d11/d3d11_device.cpp             | 164 +++++++++++++++++++++++++
+ src/dxmt/dxmt_resource_initializer.cpp | 144 ++++++++++++++++++++++
+ 3 files changed, 329 insertions(+)
+
+diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
+index 02eff44..4bde286 100644
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -42,6 +42,24 @@
+ #include "util_math.hpp"
+ #include "util_win32_compat.h"
+ 
++/* ml653: BC runtime-operation census. Defined in d3d11_device.cpp.
++ * Answers the one question ml652 could not: DEFAULT textures MAY take
++ * UpdateSubresource/copies after creation, and without these counters
++ * "all DEFAULT with initial data" cannot be narrowed to "written only once". */
++extern "C" void BCCensusRecordOp(unsigned int fmt, int op);
++namespace {
++inline unsigned int BCCensusFormatOf(ID3D11Resource *r) {
++  if (!r) return 0;
++  D3D11_RESOURCE_DIMENSION dim;
++  r->GetType(&dim);
++  if (dim != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return 0;   /* cheap reject: buffers/Map are hot */
++  D3D11_TEXTURE2D_DESC d {};
++  static_cast<ID3D11Texture2D *>(r)->GetDesc(&d);
++  return (unsigned int)d.Format;
++}
++} // namespace
++
++
+ namespace dxmt {
+ 
+ template<typename Object> Rc<Object> forward_rc(Rc<Object>& obj);
+@@ -1028,6 +1046,7 @@ public:
+   void
+   STDMETHODCALLTYPE
+   CopyResource(ID3D11Resource *pDstResource, ID3D11Resource *pSrcResource) override {
++    BCCensusRecordOp(BCCensusFormatOf(pDstResource), 1);  /* ml653 */
+     std::lock_guard<mutex_t> lock(mutex);
+ 
+     if (!pDstResource || !pSrcResource || (pDstResource == pSrcResource))
+@@ -1087,6 +1106,7 @@ public:
+       ID3D11Resource *pDstResource, UINT DstSubresource, UINT DstX, UINT DstY, UINT DstZ, ID3D11Resource *pSrcResource,
+       UINT SrcSubresource, const D3D11_BOX *pSrcBox, UINT CopyFlags
+   ) override {
++    BCCensusRecordOp(BCCensusFormatOf(pDstResource), 2);  /* ml653 */
+     std::lock_guard<mutex_t> lock(mutex);
+ 
+     if (!pDstResource)
+@@ -1172,6 +1192,7 @@ public:
+       ID3D11Resource *pDstResource, UINT DstSubresource, const D3D11_BOX *pDstBox, const void *pSrcData,
+       UINT SrcRowPitch, UINT SrcDepthPitch, UINT CopyFlags
+   ) override {
++    BCCensusRecordOp(BCCensusFormatOf(pDstResource), 0);  /* ml653 */
+     std::lock_guard<mutex_t> lock(mutex);
+ 
+     if (!pDstResource)
+diff --git a/src/d3d11/d3d11_device.cpp b/src/d3d11/d3d11_device.cpp
+index a21b3c5..c612fab 100644
+--- a/src/d3d11/d3d11_device.cpp
++++ b/src/d3d11/d3d11_device.cpp
+@@ -28,6 +28,164 @@
+ 
+ namespace dxmt {
+ 
++/* ============================ ml652 BC FORMAT CENSUS ============================
++ * Read-only. Changes NO behaviour on any device — it exists to turn "implement
++ * BCn" into a specific, much smaller format set.
++ *
++ * Placed at the D3D layer on purpose. The BC identity does survive down to
++ * winemetal (to_metal_pixel_format() is where remap_unsupported_bc() runs), but
++ * usage, bind flags, CPU access, typeless/view relationships, initial-data
++ * presence and logical pitches only exist HERE. Counting at the Metal boundary
++ * would lose exactly the information needed to design the abstraction.
++ *
++ * Aggregated only — never a line per texture. Snapshots every N resources
++ * rather than at shutdown, because these runs frequently die abnormally and a
++ * shutdown-only census would be lost precisely when it matters.
++ *
++ * Existing behaviour for reference: iPhone GPUs report
++ * supportsBCTextureCompression = NO, so remap_unsupported_bc() swaps BC->RGBA8
++ * to make the descriptor validate, and texture_upload_pitch_ok() then DROPS the
++ * upload whose BC row pitch Metal would reject. The texture is created and
++ * never filled — that is Thumper's static/missing art. */
++namespace {
++
++struct BCCensusEntry {
++  uint32_t count;
++  uint64_t logical_bytes;
++  uint32_t max_w, max_h, max_mips, max_array;
++  uint32_t usage_default, usage_immutable, usage_dynamic, usage_staging;
++  uint32_t with_data, without_data;
++  uint32_t cpu_read, cpu_write;
++  uint32_t bind_srv, bind_rt, bind_uav;
++  uint32_t is_cube;
++};
++
++constexpr uint32_t kDxgiMax = 132;
++BCCensusEntry g_bc_census[kDxgiMax] {};
++/* ml653: runtime-operation counters. ml652 recorded creation-time properties ONLY,
++ * which is why "all DEFAULT" could not be narrowed to "only written at creation" —
++ * DEFAULT textures may still take UpdateSubresource/copies, and we had no way to see it. */
++uint64_t g_bc_op_update = 0, g_bc_op_copyres = 0, g_bc_op_copyregion = 0, g_bc_op_map = 0;
++uint32_t g_bc_srv_formats[kDxgiMax] {};
++uint64_t g_bc_resources_total = 0;
++uint64_t g_bc_subresources_total = 0;
++std::mutex g_bc_census_mutex;
++
++inline bool IsBCFormat(uint32_t f) { return (f >= 70 && f <= 84) || (f >= 94 && f <= 99); }
++
++/* 8 bytes per 4x4 block for BC1/BC4; 16 for BC2/BC3/BC5/BC6H/BC7. */
++inline uint32_t BCBlockBytes(uint32_t f) {
++  if ((f >= 70 && f <= 72) || (f >= 79 && f <= 81)) return 8;
++  return 16;
++}
++
++const char *BCName(uint32_t f) {
++  switch (f) {
++  case 70: return "BC1_TYPELESS";   case 71: return "BC1_UNORM";  case 72: return "BC1_UNORM_SRGB";
++  case 73: return "BC2_TYPELESS";   case 74: return "BC2_UNORM";  case 75: return "BC2_UNORM_SRGB";
++  case 76: return "BC3_TYPELESS";   case 77: return "BC3_UNORM";  case 78: return "BC3_UNORM_SRGB";
++  case 79: return "BC4_TYPELESS";   case 80: return "BC4_UNORM";  case 81: return "BC4_SNORM";
++  case 82: return "BC5_TYPELESS";   case 83: return "BC5_UNORM";  case 84: return "BC5_SNORM";
++  case 94: return "BC6H_TYPELESS";  case 95: return "BC6H_UF16";  case 96: return "BC6H_SF16";
++  case 97: return "BC7_TYPELESS";   case 98: return "BC7_UNORM";  case 99: return "BC7_UNORM_SRGB";
++  default: return "?";
++  }
++}
++
++void BCCensusDump(const char *why) {
++  /* ml653: DXMT's ERR() is str::format(...), which CONCATENATES its arguments — it is
++   * NOT printf. ml652 passed "%s: %llu" templates, so the placeholders printed
++   * literally and every value piled up at the end of the line. Interleave literals
++   * and values instead. */
++  ERR("[bc-census] ml653 ", why, ": ", g_bc_resources_total, " BC resources, ",
++      g_bc_subresources_total, " subresources");
++  uint64_t grand = 0;
++  for (uint32_t f = 0; f < kDxgiMax; f++) {
++    auto &e = g_bc_census[f];
++    if (!e.count) continue;
++    grand += e.logical_bytes;
++    ERR("[bc-census] ml653   ", BCName(f), " n=", e.count, " ", (e.logical_bytes >> 10),
++        "KB max=", e.max_w, "x", e.max_h, " mips=", e.max_mips, " arr=", e.max_array,
++        " cube=", e.is_cube, " | use def=", e.usage_default, " imm=", e.usage_immutable,
++        " dyn=", e.usage_dynamic, " stg=", e.usage_staging, " | data y=", e.with_data,
++        " n=", e.without_data, " | cpu r=", e.cpu_read, " w=", e.cpu_write,
++        " | bind srv=", e.bind_srv, " rt=", e.bind_rt, " uav=", e.bind_uav);
++  }
++  for (uint32_t f = 0; f < kDxgiMax; f++)
++    if (g_bc_srv_formats[f])
++      ERR("[bc-census] ml653   SRV view fmt ", f, " (", BCName(f), ") x", g_bc_srv_formats[f]);
++  /* THE question this build exists to answer. */
++  ERR("[bc-census] ml653   RUNTIME OPS on BC textures: UpdateSubresource=", g_bc_op_update,
++      " CopyResource=", g_bc_op_copyres, " CopySubresourceRegion=", g_bc_op_copyregion,
++      " Map=", g_bc_op_map);
++  ERR("[bc-census] ml653   TOTAL logical BC bytes = ", (grand >> 10), "KB");
++}
++
++void BCCensusRecord(const D3D11_TEXTURE2D_DESC1 *d, const D3D11_SUBRESOURCE_DATA *data) {
++  const uint32_t f = (uint32_t)d->Format;
++  if (!IsBCFormat(f) || f >= kDxgiMax) return;
++
++  const uint32_t bb = BCBlockBytes(f);
++  const uint32_t mips = d->MipLevels ? d->MipLevels : 1;
++  const uint32_t arr = d->ArraySize ? d->ArraySize : 1;
++  uint64_t bytes = 0;
++  for (uint32_t m = 0; m < mips; m++) {
++    uint32_t w = d->Width >> m, h = d->Height >> m;
++    if (!w) w = 1;
++    if (!h) h = 1;
++    bytes += (uint64_t)((w + 3) / 4) * ((h + 3) / 4) * bb;
++  }
++  bytes *= arr;
++
++  std::lock_guard<std::mutex> lk(g_bc_census_mutex);
++  auto &e = g_bc_census[f];
++  e.count++;
++  e.logical_bytes += bytes;
++  if (d->Width > e.max_w) e.max_w = d->Width;
++  if (d->Height > e.max_h) e.max_h = d->Height;
++  if (mips > e.max_mips) e.max_mips = mips;
++  if (arr > e.max_array) e.max_array = arr;
++  if (d->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) e.is_cube++;
++  switch (d->Usage) {
++  case D3D11_USAGE_DEFAULT:   e.usage_default++; break;
++  case D3D11_USAGE_IMMUTABLE: e.usage_immutable++; break;
++  case D3D11_USAGE_DYNAMIC:   e.usage_dynamic++; break;
++  case D3D11_USAGE_STAGING:   e.usage_staging++; break;
++  }
++  if (data) e.with_data++; else e.without_data++;
++  if (d->CPUAccessFlags & D3D11_CPU_ACCESS_READ)  e.cpu_read++;
++  if (d->CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) e.cpu_write++;
++  if (d->BindFlags & D3D11_BIND_SHADER_RESOURCE)  e.bind_srv++;
++  if (d->BindFlags & D3D11_BIND_RENDER_TARGET)    e.bind_rt++;
++  if (d->BindFlags & D3D11_BIND_UNORDERED_ACCESS) e.bind_uav++;
++
++  g_bc_resources_total++;
++  g_bc_subresources_total += (uint64_t)mips * arr;
++  if ((g_bc_resources_total % 64) == 0) BCCensusDump("periodic");
++}
++
++} // namespace
++
++/* ml653: reachable from d3d11_context_impl.cpp (different TU). */
++extern "C" void BCCensusRecordSRV(unsigned int fmt) {
++  if (!IsBCFormat(fmt) || fmt >= kDxgiMax) return;
++  std::lock_guard<std::mutex> lk(g_bc_census_mutex);
++  g_bc_srv_formats[fmt]++;
++}
++
++extern "C" void BCCensusRecordOp(unsigned int fmt, int op) {
++  if (!IsBCFormat(fmt)) return;
++  std::lock_guard<std::mutex> lk(g_bc_census_mutex);
++  switch (op) {
++  case 0: g_bc_op_update++; break;
++  case 1: g_bc_op_copyres++; break;
++  case 2: g_bc_op_copyregion++; break;
++  case 3: g_bc_op_map++; break;
++  }
++}
++/* ========================== end ml652 BC FORMAT CENSUS ========================= */
++
++
+ const GUID kRenderdocUUID = {0xa7aa6116,
+                              0x9c8d,
+                              0x4bba,
+@@ -840,6 +998,8 @@ public:
+     if ((pDesc->MiscFlags & D3D11_RESOURCE_MISC_TILED))
+       return E_INVALIDARG; // not supported yet
+ 
++    BCCensusRecord(pDesc, pInitialData);   /* ml652: read-only, no behaviour change */
++
+     try {
+       switch (pDesc->Usage) {
+       case D3D11_USAGE_DEFAULT:
+@@ -906,6 +1066,10 @@ public:
+   HRESULT STDMETHODCALLTYPE CreateShaderResourceView1(
+       ID3D11Resource *pResource, const D3D11_SHADER_RESOURCE_VIEW_DESC1 *pDesc,
+       ID3D11ShaderResourceView1 **ppSRView) override {
++    /* ml653: ml652 declared g_bc_srv_formats but NEVER incremented it, so the
++     * typeless-resource vs view-format question went unanswered. */
++    if (pDesc) BCCensusRecordSRV((unsigned int)pDesc->Format);
++
+     InitReturnPtr(ppSRView);
+ 
+     if (!pResource)
+diff --git a/src/dxmt/dxmt_resource_initializer.cpp b/src/dxmt/dxmt_resource_initializer.cpp
+index b961a6a..8064ed5 100644
+--- a/src/dxmt/dxmt_resource_initializer.cpp
++++ b/src/dxmt/dxmt_resource_initializer.cpp
+@@ -16,6 +16,7 @@
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+  */
+ 
++#include <memory>
+ #include "Metal.hpp"
+ #include "dxmt_resource_initializer.hpp"
+ #include "dxmt_format.hpp"
+@@ -226,6 +227,120 @@ ResourceInitializer::initWithZero(
+   return current_seq_id_;
+ }
+ 
++
++/* ======================= ml654 BC1/BC3 -> RGBA8 DECODE =======================
++ * WHY: A15 reports supportsBCTextureCompression = NO. remap_unsupported_bc()
++ * (winemetal_unix.c) therefore creates these textures as RGBA8 so the Metal
++ * descriptor validates — but the UPLOAD still carries BC-shaped pitches, so
++ * texture_upload_pitch_ok() drops it and the texture is never filled. That is
++ * Thumper's static/missing art.
++ *
++ * The fix belongs HERE because initWithData computes its whole copy layout from
++ * texture->pixelFormat(), which is still LOGICALLY BC. Decoding the data without
++ * also switching the layout to the PHYSICAL format would still stage BC-sized
++ * rows into an RGBA8 texture.
++ *
++ * ⚠️ LOGICAL vs PHYSICAL: the D3D resource keeps reporting BC everywhere — its
++ * description, pitches, subresources and SRVs are untouched. Only this upload
++ * path uses the physical RGBA8 layout. Surfacing RGBA8 to the Windows app would
++ * violate D3D semantics even where the game would not notice.
++ *
++ * ml653 census justifies the narrow scope: Thumper is BC1+BC3 only, 128 textures /
++ * 1,234 subresources / 30MB, all USAGE_DEFAULT written once at creation, zero
++ * UpdateSubresource/Copy, zero CPU access. Decode costs ~+119MB of RGBA8 (peak
++ * ~3.13GB vs a 4096MB jetsam) and is LOSSLESS, unlike an ETC2 re-encode. */
++
++static inline void bc_rgb565(uint16_t c, uint8_t *out) {
++  uint32_t r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f;
++  out[0] = (uint8_t)((r << 3) | (r >> 2));
++  out[1] = (uint8_t)((g << 2) | (g >> 4));
++  out[2] = (uint8_t)((b << 3) | (b >> 2));
++}
++
++/* One BC1 colour block -> 16 RGBA8 texels. `punchthrough` selects the 3-colour
++ * mode with a transparent index-3; BC3's embedded colour block never uses it. */
++static void bc1_block(const uint8_t *blk, uint8_t out[64], bool punchthrough) {
++  uint16_t c0 = (uint16_t)(blk[0] | (blk[1] << 8));
++  uint16_t c1 = (uint16_t)(blk[2] | (blk[3] << 8));
++  uint8_t p[4][4];
++  bc_rgb565(c0, p[0]); p[0][3] = 255;
++  bc_rgb565(c1, p[1]); p[1][3] = 255;
++  if (!punchthrough || c0 > c1) {
++    for (int i = 0; i < 3; i++) {
++      p[2][i] = (uint8_t)((2 * p[0][i] + p[1][i] + 1) / 3);
++      p[3][i] = (uint8_t)((p[0][i] + 2 * p[1][i] + 1) / 3);
++    }
++    p[2][3] = p[3][3] = 255;
++  } else {
++    for (int i = 0; i < 3; i++) {
++      p[2][i] = (uint8_t)((p[0][i] + p[1][i] + 1) / 2);
++      p[3][i] = 0;
++    }
++    p[2][3] = 255;
++    p[3][3] = 0;   /* the punch-through texel */
++  }
++  uint32_t idx = (uint32_t)(blk[4] | (blk[5] << 8) | (blk[6] << 16) | ((uint32_t)blk[7] << 24));
++  for (int t = 0; t < 16; t++) {
++    const uint8_t *src = p[(idx >> (t * 2)) & 3];
++    out[t * 4 + 0] = src[0]; out[t * 4 + 1] = src[1];
++    out[t * 4 + 2] = src[2]; out[t * 4 + 3] = src[3];
++  }
++}
++
++/* BC3 = 8-byte BC4-style alpha block + a BC1 colour block that is ALWAYS in
++ * 4-colour mode (no punch-through). */
++static void bc3_block(const uint8_t *blk, uint8_t out[64]) {
++  bc1_block(blk + 8, out, /*punchthrough=*/false);
++  uint8_t a[8];
++  a[0] = blk[0]; a[1] = blk[1];
++  if (a[0] > a[1]) {
++    for (int i = 1; i < 7; i++) a[i + 1] = (uint8_t)(((7 - i) * a[0] + i * a[1] + 3) / 7);
++  } else {
++    for (int i = 1; i < 5; i++) a[i + 1] = (uint8_t)(((5 - i) * a[0] + i * a[1] + 2) / 5);
++    a[6] = 0; a[7] = 255;
++  }
++  uint64_t bits = 0;
++  for (int i = 0; i < 6; i++) bits |= (uint64_t)blk[2 + i] << (8 * i);
++  for (int t = 0; t < 16; t++) out[t * 4 + 3] = a[(bits >> (t * 3)) & 7];
++}
++
++/* Decode a whole subresource. src_pitch is the guest's BC row pitch (bytes per
++ * ROW OF BLOCKS); dst is tightly packed RGBA8 at width*4. Edge blocks are
++ * decoded in full and clipped, which is what the BC spec requires for
++ * non-multiple-of-4 dimensions. */
++static void bc_decode_image(const uint8_t *src, size_t src_pitch, uint8_t *dst, uint32_t width,
++                            uint32_t height, bool is_bc3) {
++  const uint32_t bx_n = (width + 3) / 4, by_n = (height + 3) / 4;
++  const size_t blk_bytes = is_bc3 ? 16 : 8;
++  const size_t dst_pitch = (size_t)width * 4;
++  uint8_t texels[64];
++  for (uint32_t by = 0; by < by_n; by++) {
++    const uint8_t *row = src + (size_t)by * src_pitch;
++    for (uint32_t bx = 0; bx < bx_n; bx++) {
++      if (is_bc3) bc3_block(row + bx * blk_bytes, texels);
++      else        bc1_block(row + bx * blk_bytes, texels, /*punchthrough=*/true);
++      for (uint32_t ty = 0; ty < 4; ty++) {
++        const uint32_t y = by * 4 + ty;
++        if (y >= height) break;
++        for (uint32_t tx = 0; tx < 4; tx++) {
++          const uint32_t x = bx * 4 + tx;
++          if (x >= width) break;
++          memcpy(dst + (size_t)y * dst_pitch + (size_t)x * 4, texels + (ty * 4 + tx) * 4, 4);
++        }
++      }
++    }
++  }
++}
++
++static inline int bc_decode_kind(enum WMTPixelFormat f) {
++  switch (f) {
++  case WMTPixelFormatBC1_RGBA: case WMTPixelFormatBC1_RGBA_sRGB: return 1;
++  case WMTPixelFormatBC3_RGBA: case WMTPixelFormatBC3_RGBA_sRGB: return 3;
++  default: return 0;
++  }
++}
++/* ===================== end ml654 BC1/BC3 -> RGBA8 DECODE ==================== */
++
+ uint64_t
+ ResourceInitializer::initWithData(
+     const Texture *texture, TextureAllocation *allocation, uint32_t slice, uint32_t level, const void *data,
+@@ -265,6 +380,35 @@ ResourceInitializer::initWithData(
+   bool is_1d_tex = (texture->textureType() == WMTTextureType1D) || (texture->textureType() == WMTTextureType1DArray);
+   bool is_3d_tex = texture->textureType() == WMTTextureType3D;
+   size_t texel_size = MTLGetTexelSize(texture->pixelFormat());
++
++  /* ml654: BC decode. The Metal texture is PHYSICALLY RGBA8 (remap_unsupported_bc);
++   * only the D3D-visible format stays BC. Switch the layout to the physical format
++   * and feed decoded texels, or we stage BC-sized rows into an RGBA8 texture and
++   * the upload gets dropped. 3D is excluded — no BC volume textures observed, and
++   * guessing at slice pitches here is how you get silent corruption. */
++  std::unique_ptr<uint8_t[]> decoded;
++  const int bc_kind = bc_decode_kind(texture->pixelFormat());
++  if (bc_kind && !is_3d_tex && !device_.supportsBCTextureCompression()) {
++    const size_t out_bytes = (size_t)width_sub * height_sub * 4;
++    decoded.reset(new (std::nothrow) uint8_t[out_bytes]);
++    if (decoded) {
++      bc_decode_image((const uint8_t *)data, row_pitch, decoded.get(), width_sub, height_sub,
++                      bc_kind == 3);
++      data = decoded.get();
++      block_size = 1u;                 /* physical RGBA8 is not block-compressed */
++      texel_size = 4u;
++      row_pitch = (size_t)width_sub * 4;
++      depth_pitch = out_bytes;
++      static unsigned n;
++      if (n < 4 || (n & 0x7f) == 0)
++        ERR("[bc-decode] ml654 #", n, " ", (bc_kind == 3 ? "BC3" : "BC1"), " ", width_sub, "x",
++            height_sub, " level=", level, " slice=", slice, " -> RGBA8 ", out_bytes, "B");
++      n++;
++    } else {
++      ERR("[bc-decode] ml654 OOM decoding ", width_sub, "x", height_sub, " — upload skipped");
++    }
++  }
++
+   size_t bytes_per_row_needed = texel_size * align(width_sub, block_size) / block_size;
+   size_t bytes_per_row_increment = is_1d_tex ? bytes_per_row_needed : row_pitch;
+   size_t bytes_per_row_valid = is_1d_tex ? bytes_per_row_needed : std::min(row_pitch, bytes_per_row_needed);

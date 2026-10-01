@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 6 Jul 2026 20:10:02 +0800
+Subject: [PATCH] =?UTF-8?q?iOS:=20fix=20cross-core=20icache=20staleness=20?=
+ =?UTF-8?q?=E2=80=94=20NtFlushInstructionCache=20+=20fast-write=20ON?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Root cause of the Thumper-desktop ILL crashes: FEX_IOS_HOST flushed
+cross-modified code with inline dc/ic asm, which broadcasts cache
+maintenance but cannot force the remote core's required ISB (needs the
+kernel IPI that FlushInstructionCache/sys_icache_invalidate provide).
+A core entering a freshly-published block through stale icache lines
+(still NOP prefill) slid into the block tail — every crash pc was
+exactly 64-byte cache-line aligned. Trap-mode's fault-emulated writes
+(~300K mach exceptions per compile storm) widened the window ~1000x.
+
+- JIT.cpp: IOSFlushOneInstr + whole-block flush → NtFlushInstructionCache
+- Module.cpp: fast-write re-enabled (WriteOffset = real RX→RW delta),
+  per the 2026-07-03 TODO; if the old msvcp140/steam_api64 fast-write
+  crashes return, revert WriteOffset to 0 but keep the NtFlush.
+- Core.cpp/JIT.cpp: [fex-entry]/[fex-link] publication validation probes
+  (silent in healthy runs; exonerated the compile path during diagnosis)
+
+Verified: Thumper windowed-desktop gameplay 200+ FPS, emulated-STR count
+294K → 4, launch-to-splash visibly faster, multiple regression-free runs.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: 6084de07629ab14bf5ed8c4af051c02920b5d357
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp    | 17 ++++++
+ FEXCore/Source/Interface/Core/JIT/JIT.cpp | 67 +++++++++++------------
+ Source/Windows/ARM64EC/Module.cpp         | 24 ++++----
+ 3 files changed, 61 insertions(+), 47 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 9432952..7afcca2 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -1274,6 +1274,23 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+ 
+   auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
+   auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
++  /* iOS-Mythic diag (Thumper desktop ILL 2026-07-06): three crashes branched
++   * to BlockTail+0x18 instead of a code entry — the published entry itself
++   * was wrong. Validate every entry against the block layout at publication
++   * time: an entry must land in [BlockBegin, Tail) and must not decode as
++   * the NOP prefill. */
++  if (CodePtr && CompiledCode.BlockBegin) {
++    uint32_t TailOff = *reinterpret_cast<uint32_t*>(CompiledCode.BlockBegin);
++    uint8_t* Tail = CompiledCode.BlockBegin + TailOff;
++    uint32_t FirstInsn = *reinterpret_cast<uint32_t*>(CodePtr);
++    if (reinterpret_cast<uint8_t*>(CodePtr) < CompiledCode.BlockBegin ||
++        reinterpret_cast<uint8_t*>(CodePtr) >= Tail || FirstInsn == 0xd503201fu) {
++      LogMan::Msg::EFmt("[fex-entry] BAD ENTRY at publication: rip=0x{:x} entry=0x{:x} "
++                        "block=0x{:x} tail_off=0x{:x} first_insn=0x{:08x}",
++                        GuestRIP, reinterpret_cast<uintptr_t>(CodePtr),
++                        reinterpret_cast<uintptr_t>(CompiledCode.BlockBegin), TailOff, FirstInsn);
++    }
++  }
+   if (CodePtr == nullptr) {
+     return 0;
+   } else if (!DebugData) {
+diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+index ed5a69a..8951bb3 100644
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -16,16 +16,18 @@ $end_info$
+ #endif
+ 
+ #if defined(FEX_IOS_HOST) && !defined(__APPLE__)
+-// iOS-Mythic 2026-05-19: helper to flush a single ARM64 instruction (4 bytes)
+-// from the block-linking backpatch sites below. dc cvau on the RW alias
+-// (read access OK), ic ivau on the RX alias (XO OK on Apple silicon).
+-// dsb/isb provide ordering.
++// iOS-Mythic 2026-07-06: cross-modifying code flushes MUST go through the
++// kernel (NtFlushInstructionCache → __clear_cache → sys_icache_invalidate),
++// which IPIs every core so remote PEs take the required context
++// synchronization. The old inline dc/ic asm only broadcast the cache
++// maintenance — a core already executing near the target kept stale
++// icache lines (prefill NOPs) and slid into block-tail data: every
++// Thumper-desktop ILL pc was exactly 64-byte cache-line aligned.
++extern "C" long NtFlushInstructionCache(void* Handle, const void* Addr, unsigned long long Size);
+ namespace {
+ inline void IOSFlushOneInstr(void* RWAddr, void* RXAddr) {
+-  __asm__ volatile("dc cvau, %0" :: "r"(RWAddr) : "memory");
+-  __asm__ volatile("dsb ish" ::: "memory");
+-  __asm__ volatile("ic ivau, %0" :: "r"(RXAddr) : "memory");
+-  __asm__ volatile("dsb ish; isb" ::: "memory");
++  (void)RWAddr; // dcache clean by RX VA reaches the same physical lines (PIPT)
++  NtFlushInstructionCache(reinterpret_cast<void*>(~0ull), RXAddr, 4);
+ }
+ }  // namespace
+ #endif
+@@ -593,6 +595,18 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+     }
+   }
+ 
++  /* iOS-Mythic diag: companion to [fex-entry] in Core.cpp — scream when the
++   * link target the blocks will be patched to jump at starts with the NOP
++   * prefill or decodes as block-tail data (upper 16 bits all zero — no real
++   * ARM64 instruction looks like that). */
++  if (HostCode) {
++    uint32_t FirstInsn = *reinterpret_cast<uint32_t*>(HostCode);
++    if (FirstInsn == 0xd503201fu || (FirstInsn >> 16) == 0) {
++      LogMan::Msg::EFmt("[fex-link] SUSPICIOUS resolved target: rip=0x{:x} host=0x{:x} first_insn=0x{:08x}",
++                        GuestRip, HostCode, FirstInsn);
++    }
++  }
++
+   // See ExitFunction in BranchOps.cpp for an assembly level view of the handled cases.
+   uintptr_t JumpThunkStartAddress = reinterpret_cast<uintptr_t>(Record) - 0x10;
+   uintptr_t CallerAddress = JumpThunkStartAddress + Record->CallerOffset;
+@@ -1248,33 +1262,16 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+     sys_icache_invalidate(CodeBegin, CodeOnlySize);
+   }
+ #elif defined(FEX_IOS_HOST)
+-  // Same logic as __APPLE__ for ARM64EC PE running on iOS, but without
+-  // Darwin libsystem (sys_icache_invalidate not available). Use inline
+-  // ARM64 asm: dc cvau (clean to PoU) on RW alias where we have read
+-  // access, then ic ivau (invalidate to PoU) on RX alias which works on
+-  // XO pages on Apple Silicon. dsb ish / isb provide the required
+-  // ordering.
+-  //
+-  // 2026-07-02: cache-line stride is hardcoded to 64 bytes. It was
+-  // previously read from CTR_EL0, but on iOS 27 that `mrs` raises an
+-  // illegal-instruction fault when executed from JIT-pool memory
+-  // (confirmed: C000001D exactly on the mrs at pool+0x8eeaac, killing
+-  // Thumper's main thread ~31s in). 64 bytes is the true I/D cache line
+-  // size on all Apple Silicon (A-series and M-series), so this is
+-  // correct, not approximate.
+-  {
+-    auto* RWBegin = WritePtr(CodeBegin);
+-    auto* RXBegin = CodeBegin;
+-    constexpr size_t kCacheLine = 64;
+-    for (size_t off = 0; off < CodeOnlySize; off += kCacheLine) {
+-      __asm__ volatile("dc cvau, %0" :: "r"(RWBegin + off) : "memory");
+-    }
+-    __asm__ volatile("dsb ish" ::: "memory");
+-    for (size_t off = 0; off < CodeOnlySize; off += kCacheLine) {
+-      __asm__ volatile("ic ivau, %0" :: "r"(RXBegin + off) : "memory");
+-    }
+-    __asm__ volatile("dsb ish; isb" ::: "memory");
+-  }
++  // iOS-Mythic 2026-07-06: route the whole-block flush through
++  // NtFlushInstructionCache (kernel-coordinated __clear_cache /
++  // sys_icache_invalidate) instead of inline dc/ic asm. The inline
++  // broadcast never forced the required ISB on OTHER cores — a core
++  // entering a freshly-published block through stale (prefill-NOP)
++  // icache lines slid into the block tail and ILL'd at a 64-byte line
++  // boundary. The kernel IPI in the blessed flush closes that window;
++  // dcache clean by RX VA reaches the physical lines dirtied via the
++  // RW alias (PIPT). Pool RX pages are readable, so dc-by-RX is safe.
++  NtFlushInstructionCache(reinterpret_cast<void*>(~0ull), CodeBegin, CodeOnlySize);
+ #else
+   ClearICache(CodeBegin, CodeOnlySize);
+ #endif
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index dd3cb00..a047f8c 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -759,19 +759,19 @@ NTSTATUS ProcessInit() {
+         : nullptr;
+     char buf[160];
+     if (off != 0) {
+-      /* iOS-Mythic 2026-07-03: TRAP-MODE writes are the shipping config.
+-       * WriteOffset stays 0 so WritePtr is identity — every JIT-pool write
+-       * faults and the Wine Mach STR emulator redirects it through the RW
+-       * alias AND invalidates icache. The direct-RW fast-write path
+-       * (WriteOffset = off) corrupted x86→EC transitions (msvcp140 DllMain
+-       * EH via RtlPcToFileHeader; Goldberg steam_api64 init) — root cause
+-       * inside it unproven, suspected inline dc/ic flush. Bisect-verified
+-       * 2026-07-03: trap-mode reaches the 3D menu; fast-write dies pre-
+-       * splash. Before re-enabling, rework the flush to
+-       * NtFlushInstructionCache and re-verify those two crash sites. */
+-      FEXCore::DualMap::WriteOffset = 0;
++      /* iOS-Mythic 2026-07-06: FAST-WRITE re-enabled per the 2026-07-03
++       * TODO — the flush is now NtFlushInstructionCache (kernel IPI) in
++       * JIT.cpp instead of inline dc/ic asm, which was the suspected root
++       * cause of the msvcp140-DllMain/steam_api64 fast-write crashes AND
++       * the proven cause of the Thumper-desktop icache-staleness ILLs
++       * (every crash pc 64-byte aligned; trap-mode's 1000x slower copies
++       * just widened the same window). Fast-write removes ~300K mach
++       * exceptions per compile storm. If the old fast-write crash sites
++       * return (msvcp140 EH pre-splash, steam_api64 init), revert THIS
++       * assignment to 0 but KEEP the NtFlushInstructionCache flush. */
++      FEXCore::DualMap::WriteOffset = off;
+       int n = snprintf(buf, sizeof(buf),
+-          "[FEX-iOS] trap-mode writes (WriteOffset=0; real off=0x%llx RW=0x%llx RX=0x%llx)\n",
++          "[FEX-iOS] fast-write ENABLED (WriteOffset=0x%llx RW=0x%llx RX=0x%llx)\n",
+           (unsigned long long)off, (unsigned long long)rw, (unsigned long long)rx);
+       if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
+     } else {

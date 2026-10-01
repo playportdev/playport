@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 26 Jun 2023 15:30:13 -0600
+Subject: [PATCH] rsaenh: Store keys as volatile for SF6.
+
+CW-Bug-Id: #22347
+Valve-commit: a677f27c2280baa1512f71307cd74d0c63ebe98a
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/rsaenh/rsaenh.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/rsaenh/rsaenh.c b/dlls/rsaenh/rsaenh.c
+index 38f6af4..d8422b9 100644
+--- a/dlls/rsaenh/rsaenh.c
++++ b/dlls/rsaenh/rsaenh.c
+@@ -1204,9 +1204,20 @@ static void store_key_permissions(HCRYPTKEY hCryptKey, HKEY hKey, DWORD dwKeySpe
+  */
+ static BOOL create_container_key(KEYCONTAINER *pKeyContainer, REGSAM sam, HKEY *phKey)
+ {
++    static DWORD key_options = ~0ul;
+     CHAR szRSABase[sizeof(RSAENH_REGKEY) + MAX_PATH];
+     HKEY hRootKey;
+ 
++    if (key_options == ~0ul)
++    {
++        const char *sgi;
++
++        if ((sgi = getenv("SteamGameId")) && !strcmp(sgi, "1364780"))
++            key_options = REG_OPTION_VOLATILE;
++        else
++            key_options = REG_OPTION_NON_VOLATILE;
++    }
++
+     sprintf(szRSABase, RSAENH_REGKEY, pKeyContainer->szName);
+ 
+     if (pKeyContainer->dwFlags & CRYPT_MACHINE_KEYSET)
+@@ -1217,7 +1228,7 @@ static BOOL create_container_key(KEYCONTAINER *pKeyContainer, REGSAM sam, HKEY *
+     /* @@ Wine registry key: HKLM\Software\Wine\Crypto\RSA */
+     /* @@ Wine registry key: HKCU\Software\Wine\Crypto\RSA */
+     return RegCreateKeyExA(hRootKey, szRSABase, 0, NULL,
+-                           REG_OPTION_NON_VOLATILE, sam, NULL, phKey, NULL)
++                           key_options, sam, NULL, phKey, NULL)
+                            == ERROR_SUCCESS;
+ }
+ 

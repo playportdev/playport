@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] signal: deliver stores to guest-read-only pages instead of
+ emulating them
+
+A store to a page Wine records as not writable to the guest was emulated,
+so FEX kept stale translations of self-modifying code. The store is now
+delivered to the guest as an access fault. Upstream's own CASAL emulation
+(ios_mach_emulate_cas) is kept.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 38 +++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 4c532fa..b6f4a34 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1316,6 +1316,11 @@ static int ios_fault_read_insn( uint64_t fault_pc, uint32_t *out )
+     }
+     return 1;
+ }
++/* smc-trap: set while the store emulator hands a write to a page
++ * Wine records as not writable to the guest exception path. Such a fault is
++ * not transient, so it is dispatched on the first occurrence. Only the single
++ * Mach exception-server thread touches it. */
++static int ios_deliver_first_fault;
+ 
+ static void *ios_mach_exception_thread( void *arg )
+ {
+@@ -3010,6 +3015,38 @@ static void *ios_mach_exception_thread( void *arg )
+                                 (unsigned long long)fault_pc);
+                     }
+                 }
++                /* smc-trap: a store to a page whose Windows protection
++                 * is not writable must raise the access violation Windows raises.
++                 * FEX's SMC tracking (mtrack) depends on it: once it translates code
++                 * from an RWX page it re-protects that page PAGE_EXECUTE_READ, and
++                 * the write fault is where HandleRWXAccessViolation invalidates the
++                 * stale translation and restores PAGE_EXECUTE_READWRITE. Emulating
++                 * the store here skipped that, so an unflushed in-place code write
++                 * kept running the old translation. Deliver the fault instead; the
++                 * retried store finds the page writable and is emulated below.
++                 * Limited to anonymous aliases (Wine owns their protection) and to
++                 * pool pcs (guest and PE code, which the delivery path accepts). */
++                if (rw_addr && !in_jit && fault_pc >= rx && fault_pc < rx + sz)
++                {
++                    extern unsigned char ios_reclaim_page_vprot( unsigned long long va );
++                    enum { SMC_VPROT_WRITE = 0x02, SMC_VPROT_WRITECOPY = 0x08, SMC_VPROT_COMMITTED = 0x20 };
++                    unsigned char pv = ios_reclaim_page_vprot( (unsigned long long)fault_addr );
++                    if ((pv & SMC_VPROT_COMMITTED) && !(pv & (SMC_VPROT_WRITE | SMC_VPROT_WRITECOPY)))
++                    {
++                        static unsigned smc_trap_n;
++                        int dr;
++                        ios_deliver_first_fault = 1;
++                        dr = ios_mach_deliver_guest_exception( thread, &state, &neon_state, have_neon,
++                                                               req->exception, fault_addr, thread_teb );
++                        ios_deliver_first_fault = 0;
++                        if (++smc_trap_n <= 16 || !(smc_trap_n & 0xff))
++                            dprintf( STDERR_FILENO, "[smc-trap] #%u store pc=0x%llx addr=0x%llx vprot=0x%02x -> %s\n",
++                                     smc_trap_n, (unsigned long long)fault_pc, (unsigned long long)fault_addr, pv,
++                                     dr == 1 ? "guest access violation" : dr == 2 ? "page serviced, retry" : "NOT delivered" );
++                        if (dr) handled = 1;
++                        rw_addr = 0;   /* never emulate a store the page does not allow */
++                    }
++                }
+                 if (rw_addr && (uintptr_t)fault_pc >= 0x100000000ULL)
+                 {
+                     uint32_t insn; ios_fault_read_insn( (uint64_t)(uintptr_t)fault_pc, &insn );  /* ml982 */
+@@ -7161,6 +7198,7 @@ static int ios_mach_deliver_guest_exception_inner( thread_t thread, arm_thread_s
+      * the decline regime. Dispatch only on the 3rd identical
+      * (thread,pc,addr) fault — still well before the script's 8-stop kill.
+      * Single server thread services all messages: no atomics needed. */
++    if (!ios_deliver_first_fault)
+     {
+         static struct { uint64_t key; uint32_t n; } rep[16];
+         uint64_t key = ((uint64_t)thread << 48) ^ pc ^ ((uint64_t)fault_addr << 1);

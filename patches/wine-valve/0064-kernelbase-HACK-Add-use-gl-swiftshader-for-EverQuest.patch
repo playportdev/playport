@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matteo Bruni <mbruni@codeweavers.com>
+Date: Fri, 1 Sep 2023 00:54:36 +0200
+Subject: [PATCH] kernelbase: HACK: Add --use-gl=swiftshader for EverQuest
+ 2/LaunchPad.exe.
+
+CW-Bug-Id: #18509
+Valve-commit: 139eebc53b36051ad981d58c869d483c46e52777
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 635fa2a..d276e88 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -518,6 +518,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+         {L"DC Universe Online\\LaunchPad.exe", L" --use-gl=swiftshader"},
+         {L"PlanetSide 2\\LaunchPad.exe", L" --use-gl=swiftshader"},
+         {L"PaladinLias\\Game.exe", L" --use-gl=desktop"},
++        {L"EverQuest 2\\LaunchPad.exe", L" --use-gl=swiftshader"},
+     };
+     unsigned int i;
+ 

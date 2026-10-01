@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] winemetal: find madeira_cfg.h beside the fork
+
+winemetal_unix.c expects the fork at <Madeira>/research/dxmt. The build
+root places Madeira's build/ beside the fork, as it already does for
+remote-metal/.
+
+Class: linux-build
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 5105e26..e44c827 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1,5 +1,5 @@
+ #include <stdatomic.h>
+-#include "../../../../../build/madeira_cfg.h"   /* ml1095: one config file */
++#include "../../../../build/madeira_cfg.h"   /* ml1095: one config file; Playport: build/ is a sibling of the fork, as remote-metal is */
+ #include <pthread.h>
+ #include <time.h>
+ #include <unistd.h>

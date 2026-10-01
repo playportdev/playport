@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 29 Sep 2026 19:31:40 +0200
+Subject: [PATCH] ARM64EC: count the transitions only while the runtime's
+ counters are on
+
+fex-port 0061's transition probe adds to an sp-sharded counter with an LSE
+atomic on every x64->EC call (and every 64th call appends its target to a
+ring), every performed FPCR write and every emulated EC->x64 call. Its
+only reader is the [xp-api] sampler, which MADEIRA_NO_DIAGNOSTICS does not
+start, so the release app paid the busiest transition's atomic for
+nothing. ProcessInit now copies ntdll's ios_counters_on export (cleared by
+the unix loader under MADEIRA_NO_DIAGNOSTICS or MADEIRA_NO_COUNTERS) into
+IosXpFexOn, and each probe loads it and branches past the counting when it
+is clear. The transitions themselves, the FPCR write included, are
+unchanged.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-29-release-counters.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.S   | 9 +++++++++
+ Source/Windows/ARM64EC/Module.cpp | 9 +++++++++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 9f58bd4..4453195 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -20,7 +20,11 @@
+ #ifdef FEX_IOS_HOST
+ .arch_extension lse   // ml1131: stadd/ldadd for the transition probe counters
+ // ml1131: add 1 to the sp-sharded counter at IosXpFex + \off. Clobbers \a, \b.
++// Playport: only while IosXpFexOn is set (Module.cpp); flags are left alone.
+ .macro IOS_XP_COUNT off, a, b
++  adrp \a, IosXpFexOn
++  ldr \b, [\a, #:lo12:IosXpFexOn]
++  cbz \b, .Lios_xp_skip\@
+   adrp \a, IosXpFex
+   add \a, \a, #:lo12:IosXpFex
+   mov \b, sp
+@@ -29,6 +33,7 @@
+   add \a, \a, #\off
+   mov \b, #1
+   stadd \b, [\a]
++.Lios_xp_skip\@:
+ .endm
+ .macro IOS_LOAD_TEB reg
+   mrs \reg, TPIDRRO_EL0
+@@ -285,6 +290,10 @@ ExitFunctionEC:
+   // ml1131: count this x64->EC call (x9 = target as the caller addressed it) and
+   // append every 64th target of a shard to the ring. x4 (x64 R10, volatile at a
+   // call boundary), x16, x17 and x23 are clobbered on every path below anyway.
++  // Playport: none of it while IosXpFexOn is clear (Module.cpp).
++  adrp x16, IosXpFexOn
++  ldr x23, [x16, #:lo12:IosXpFexOn]
++  cbz x23, 2f
+   adrp x16, IosXpFex
+   add x16, x16, #:lo12:IosXpFex
+   mov x23, sp
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index c9fd693..6d5005b 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -107,6 +107,12 @@ uint64_t IosFfsBypassLog[4] {};
+  * Keep in sync with Module.S and build/ntdll-unix/server_ios.c (ios_xp_fex_*). */
+ extern "C" __attribute__((aligned(64))) uint64_t IosXpFex[4496];
+ __attribute__((aligned(64))) uint64_t IosXpFex[4496] {};
++/* Playport: Module.S counts into IosXpFex only while this is set. ProcessInit
++ * copies ntdll's ios_counters_on, which the unix loader clears under
++ * MADEIRA_NO_DIAGNOSTICS (whose samplers are the counters' only readers) or
++ * MADEIRA_NO_COUNTERS. 64-bit for Module.S's single ldr. */
++extern "C" __attribute__((aligned(8))) uint64_t IosXpFexOn;
++__attribute__((aligned(8))) uint64_t IosXpFexOn = 1;
+ #endif // FEX_IOS_HOST
+ 
+ namespace Exception {
+@@ -909,6 +915,9 @@ NTSTATUS ProcessInit() {
+       return STATUS_UNSUCCESSFUL;
+     }
+     IosXpFex[0] = 0x5845465058444d41ull;   /* ml1131 'AMDXPFEX' little-endian magic */
++    if (const auto On = reinterpret_cast<const uint32_t*>(GetProcAddress(NtDllForTsd, "ios_counters_on"))) {
++      IosXpFexOn = *On ? 1 : 0;
++    }
+   }
+ #endif
+ 

@@ -1,0 +1,3 @@
+[submodule "upstream/madeira"]
+	path = upstream/madeira
+	url = https://github.com/willfaust/Madeira.git

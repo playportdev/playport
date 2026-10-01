@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 16:31:20 +0800
+Subject: [PATCH] config: revert mixed-allocator bisect, keep static_cast +
+ lazy init
+
+Madeira-commit: 2e7d471b37887c65d75435c204044644efa60058
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Config/Config.cpp | 16 ++++------------
+ 1 file changed, 4 insertions(+), 12 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Config/Config.cpp b/FEXCore/Source/Interface/Config/Config.cpp
+index c07d774..a6391a3 100644
+--- a/FEXCore/Source/Interface/Config/Config.cpp
++++ b/FEXCore/Source/Interface/Config/Config.cpp
+@@ -265,19 +265,11 @@ extern "C" __declspec(dllimport) long __stdcall NtTerminateProcess(void *hProces
+ #define INIT_TAG_EXIT(id) NtTerminateProcess((void*)-1, (long)(0xCC700000 | (id)))
+ 
+ void Initialize() {
+-  /* Step 1: try plain new instead of fextl::make_unique to isolate
+-   * whether the allocator (rpmalloc + fextl) is what's faulting. */
+-  MetaLayer *raw = nullptr;
+-  raw = new MetaLayer(FEXCore::Config::LayerType::LAYER_TOP);
+-  if (!raw) INIT_TAG_EXIT(0x0030);  /* plain new returned null */
+-  /* If we got here, allocator works for std::operator new. Now try wrapping
+-   * in fextl::unique_ptr (which wraps + transfers ownership). */
+-  fextl::unique_ptr<Layer> layer(raw);
+-  if (!layer) INIT_TAG_EXIT(0x0031);
+-  AddLayer(std::move(layer));
+-  if (ConfigLayers.empty()) INIT_TAG_EXIT(0x0032);
++  AddLayer(fextl::make_unique<MetaLayer>(FEXCore::Config::LayerType::LAYER_TOP));
++  /* iOS-Mythic: avoid dynamic_cast — RTTI for cross-DLL types under
++   * arm64ec-w64-mingw32 returns NULL. We just inserted MetaLayer above
++   * so static_cast is safe. */
+   Meta = static_cast<MetaLayer*>(ConfigLayers.begin()->second.get());
+-  /* Initialize success — let it return cleanly. */
+   if (ConfigLayers.empty()) INIT_TAG_EXIT(0x0012);
+   auto it = ConfigLayers.begin();
+   if (it == ConfigLayers.end()) INIT_TAG_EXIT(0x0013);

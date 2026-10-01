@@ -1,0 +1,300 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 17 Aug 2026 00:45:53 +0800
+Subject: [PATCH] Read the TEB from the TSD slot wine owns, not from hardcoded
+ slot 275
+
+Every TEB recovery on iOS goes through TPIDRRO_EL0 plus a raw Apple TSD slot,
+since x18 does not survive context switches. That slot was the constant 0x898
+(slot 275) in seven places: IOS_TEB_TSD_OFFSET feeding six JIT emit sites,
+the IOS_LOAD_TEB macro in Module.S, and two direct reads in Module.cpp.
+
+275 is a DYNAMIC pthread key. Nobody guaranteed it to us; wine simply wrote
+the TEB there and it worked wherever nothing else had claimed it yet. On an
+M4 iPad the real owner turned up -- something in the Metal stack, brought up
+by the first nextDrawable -- reclaimed the key and reset the slot to NULL.
+Every one of these reads then produced TEB=0, and the process died
+dereferencing TEB->PEB at address 0x60, 49 c0000005 deep, in a redelivery
+storm that terminated it.
+
+The slot is not a constant. Four values have been seen on real devices: 275,
+276, 280 (M4 iPad / iOS 26.4), 284 (iPhone 13 Pro / iOS 27). The iPhone's own
+key was 284 the whole time -- wine's TEB lived in a slot it did not own while
+the slot it did own sat unused, so that device was one framework load away
+from the same failure.
+
+IosTebTsdOffset is imported once in ProcessInit from wine's ntdll data export
+and read by the six JIT emitters at emit time. A missing or zero export is
+fatal, not a reason to fall back: the constant is precisely the value that is
+wrong, and a bad offset does not fail here, it fails arbitrarily far away in
+whichever thread next touches a TEB.
+
+Module.S keeps 0x898 as a placeholder. Its three-instruction triplet is
+recognised and rewritten by wine's x18 binary patcher through the .text RW
+alias before the code is ever executed, which avoids giving the hottest EC
+thunks a scratch register they do not have -- at check_target_ec the stack is
+8-mod-16 after the return-address push, so a spill there would fault on SP
+alignment. The comment there says not to "correct" the constant and not to
+reorder the triplet, because an unmatched sequence would silently keep
+reading the wrong slot.
+
+Verified on both regimes with the offset genuinely differing from the old
+constant, so this exercised the new path rather than coinciding with it:
+iPhone 13 Pro / iOS 27 offset 0x8e0, M4 iPad / iOS 26.4 offset 0x8c0. Both
+report "found 6 static TSD read(s), retargeted 6" -- matching an offline scan
+of the shipped .text -- and run cube-x64 with zero faults. The M4 went from
+49 c0000005 and termination to 896 frames at 16.5ms.
+
+IosTebTsdImportFound is uint32_t rather than bool: as a one-byte global it
+misaligned the adrp/ldr pair lld generates for a neighbouring word
+("misaligned ldr/str offset").
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: d21da240b746868cdc388617c3cb15c529b23f7f
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ .../Core/ArchHelpers/Arm64Emitter.cpp         |  8 ++-
+ .../Interface/Core/ArchHelpers/Arm64Emitter.h | 17 ++++--
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  |  8 +--
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp |  2 +-
+ Source/Windows/ARM64EC/Module.S               | 21 +++++--
+ Source/Windows/ARM64EC/Module.cpp             | 55 ++++++++++++++++++-
+ 6 files changed, 93 insertions(+), 18 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index 072e0ed..c0c0c45 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -23,6 +23,12 @@
+ #include <tuple>
+ #include <utility>
+ 
++#ifdef FEX_IOS_HOST
++// Published by wine's ntdll (data export `ios_teb_tsd_offset`), imported in
++// ARM64EC/Module.cpp at process init. See IosTebTsdOffset in Arm64Emitter.h.
++extern "C" uint32_t IosTebTsdOffset = 0;
++#endif
++
+ namespace FEXCore::CPU {
+ 
+ // LLVM's preserve_all doc, this is used throughout this file and reproduced
+@@ -829,7 +835,7 @@ void Arm64Emitter::FillStaticRegs(FillStaticRegOptions Options) {
+   // iOS clobbers x18 — read TEB from TPIDRRO_EL0+TSD slot 275 instead.
+   mrs(TmpReg.X(), ARMEmitter::SystemRegister::TPIDRRO_EL0);
+   and_(ARMEmitter::Size::i64Bit, TmpReg.X(), TmpReg.X(), ~7ULL);
+-  ldr(TmpReg.X(), TmpReg.X(), IOS_TEB_TSD_OFFSET);
++  ldr(TmpReg.X(), TmpReg.X(), IosTebTsdOffset);
+   ldr(TmpReg.X(), TmpReg.X(), TEB_CPU_AREA_OFFSET);
+ #else
+   ldr(TmpReg.X(), ARMEmitter::Reg::r18, TEB_CPU_AREA_OFFSET);
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+index 64233b9..7e6037c 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.h
+@@ -94,10 +94,19 @@ constexpr size_t CPU_AREA_EMULATOR_DATA_OFFSET = 0x30;
+ // canonical TEB-pointer source and emit a 3-instruction read at every site
+ // that would otherwise touch x18.
+ //
+-// Must match TSD_TEB_SLOT_OFFSET in our Wine ntdll-unix x18 patcher. Defined
+-// at build time via -DFEX_IOS_HOST=1 since we cross-compile to a Windows PE
+-// (so __APPLE__ is not defined even though the host OS is iOS).
+-constexpr size_t IOS_TEB_TSD_OFFSET = 0x898;
++// The slot is NOT a compile-time constant. It is whichever raw TSD slot backs
++// the pthread key wine's ntdll-unix creates for the TEB, which varies by device
++// and by what has already allocated keys. We used to hardcode slot 275
++// (0x898); that is a dynamic key we never owned, and on an M4 iPad its real
++// owner -- something in the Metal stack, brought up by the first nextDrawable
++// -- reclaimed it and reset it to NULL, after which every one of these reads
++// produced TEB=0 and the process died dereferencing TEB->PEB.
++//
++// Wine discovers the offset at process init and publishes it as the ntdll data
++// export `ios_teb_tsd_offset`; ARM64EC/Module.cpp imports it into this variable
++// before any code is emitted. It is zero until then, and emitting a read
++// against zero is a bug, not a fallback -- see the check at its import site.
++extern "C" uint32_t IosTebTsdOffset;
+ #endif
+ 
+ constexpr uint64_t EC_CODE_BITMAP_MAX_ADDRESS = 1ULL << 47;
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index e77a6ce..de98548 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -114,7 +114,7 @@ void Dispatcher::EmitDispatcher() {
+    * strictly safer and matches the rest of the iOS dispatcher. */
+   mrs(TMP1, ARMEmitter::SystemRegister::TPIDRRO_EL0);
+   and_(ARMEmitter::Size::i64Bit, TMP1, TMP1, ~7ULL);
+-  ldr(TMP1, TMP1, IOS_TEB_TSD_OFFSET);
++  ldr(TMP1, TMP1, IosTebTsdOffset);
+   ldr(TMP1, TMP1, TEB_CPU_AREA_OFFSET);
+   ldr(STATE, TMP1, CPU_AREA_EMULATOR_DATA_OFFSET);
+ #else
+@@ -218,7 +218,7 @@ void Dispatcher::EmitDispatcher() {
+   // iOS clobbers x18 — read TEB from TPIDRRO_EL0+TSD slot 275 instead.
+   mrs(TMP1, ARMEmitter::SystemRegister::TPIDRRO_EL0);
+   and_(ARMEmitter::Size::i64Bit, TMP1, TMP1, ~7ULL);
+-  ldr(TMP1, TMP1, IOS_TEB_TSD_OFFSET);
++  ldr(TMP1, TMP1, IosTebTsdOffset);
+   ldr(TMP1, TMP1, TEB_PEB_OFFSET);
+ #else
+   ldr(TMP1, ARMEmitter::XReg::x18, TEB_PEB_OFFSET);
+@@ -364,7 +364,7 @@ void Dispatcher::EmitDispatcher() {
+     // iOS x18 quirk: TEB read via TPIDRRO_EL0+TSD slot 275.
+     mrs(TMP2, ARMEmitter::SystemRegister::TPIDRRO_EL0);
+     and_(ARMEmitter::Size::i64Bit, TMP2, TMP2, ~7ULL);
+-    ldr(TMP2, TMP2, IOS_TEB_TSD_OFFSET);
++    ldr(TMP2, TMP2, IosTebTsdOffset);
+     ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #else
+     ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
+@@ -379,7 +379,7 @@ void Dispatcher::EmitDispatcher() {
+ #ifdef FEX_IOS_HOST
+     mrs(TMP2, ARMEmitter::SystemRegister::TPIDRRO_EL0);
+     and_(ARMEmitter::Size::i64Bit, TMP2, TMP2, ~7ULL);
+-    ldr(TMP2, TMP2, IOS_TEB_TSD_OFFSET);
++    ldr(TMP2, TMP2, IosTebTsdOffset);
+     ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #else
+     ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 9a4fe41..331db8c 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -343,7 +343,7 @@ DEF_OP(MonoBackpatcherWrite) {
+   // iOS x18 quirk: TEB read via TPIDRRO_EL0+TSD slot 275.
+   mrs(TMP2, ARMEmitter::SystemRegister::TPIDRRO_EL0);
+   and_(ARMEmitter::Size::i64Bit, TMP2, TMP2, ~7ULL);
+-  ldr(TMP2, TMP2, IOS_TEB_TSD_OFFSET);
++  ldr(TMP2, TMP2, IosTebTsdOffset);
+   ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
+ #else
+   ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index c910a70..5e96f35 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -1,11 +1,22 @@
+ .text
+ .balign 16
+ 
+-// iOS clobbers x18 on context switches. Read TEB from TPIDRRO_EL0+TSD slot 275
+-// (set up by our Wine ntdll-unix x18 patcher) instead of trusting x18 directly.
+-// TPIDRRO_EL0 is preserved by iOS across context switches, and the AND #~7 +
+-// ldr at TSD slot 275 (offset 0x898) is the canonical pthread TLS pattern.
+-// Must match IOS_TEB_TSD_OFFSET in Arm64Emitter.h.
++// iOS clobbers x18 on context switches. Read TEB from TPIDRRO_EL0 + the raw
++// pthread TSD slot that wine's ntdll-unix publishes the TEB in, instead of
++// trusting x18 directly. TPIDRRO_EL0 IS preserved by iOS across context
++// switches, and AND #~7 + ldr is the canonical pthread TLS pattern.
++//
++// The #0x898 below is a PLACEHOLDER, not the slot. The real slot is whichever
++// one backs ntdll-unix's TEB pthread key in this process, which is not knowable
++// at assembly time and differs per device and per load order. Wine's x18
++// binary patcher recognises this exact three-instruction triplet and rewrites
++// the immediate through the .text RW alias, before this code is ever executed
++// (see the "retarget hand-written TEB-from-TSD reads" pass in virtual_ios.c).
++//
++// Do NOT "correct" this constant, and do NOT break the triplet apart or
++// reorder it -- the patcher matches all three instructions with matching
++// registers, and an unmatched sequence silently keeps reading the wrong slot.
++// The JIT emitters read the same offset at runtime via IosTebTsdOffset.
+ #ifdef FEX_IOS_HOST
+ .macro IOS_LOAD_TEB reg
+   mrs \reg, TPIDRRO_EL0
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index fa5299c..11cad10 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -77,6 +77,14 @@ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);
+  * [2] = FFS matched but target not EC (fell through to emulation), [3] = last such
+  * target. Read by the [ffs-bypass] reporter in Core.cpp's CompileBlock. */
+ extern "C" uint64_t IosFfsBypassLog[4];
++
++/* Raw TSD byte offset (from TPIDRRO_EL0 & ~7) of the slot holding the TEB.
++ * Discovered and published by wine's ntdll-unix; imported in ProcessInit.
++ * Defined in FEXCore Arm64Emitter.cpp, where the JIT emitters also read it. */
++extern "C" uint32_t IosTebTsdOffset;
++/* uint32_t, not bool: a 1-byte global here misaligned the adrp/ldr pair
++ * lld generates for the neighbouring word ("misaligned ldr/str offset"). */
++static uint32_t IosTebTsdImportFound = 0;
+ uint64_t IosFfsBypassLog[4] {};
+ #endif // FEX_IOS_HOST
+ 
+@@ -213,7 +221,9 @@ static inline _TEB* IOSLoadTEB() {
+   uintptr_t tpidrro;
+   __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
+   tpidrro &= ~uintptr_t(7);
+-  _TEB* via_tsd = *reinterpret_cast<_TEB**>(tpidrro + 0x898);  // IOS_TEB_TSD_OFFSET
++  /* Offset zero means ProcessInit has not imported it yet -- read nothing
++   * rather than dereferencing TSD slot 0, which belongs to libpthread. */
++  _TEB* via_tsd = IosTebTsdOffset ? *reinterpret_cast<_TEB**>(tpidrro + IosTebTsdOffset) : nullptr;
+   if (via_tsd) return via_tsd;
+   /* 2026-05-19: TSD slot 275 isn't always populated by the time ThreadInit
+    * runs on FMOD worker threads (Wine thread bootstrap race). Fall back to
+@@ -251,7 +261,9 @@ ThreadCPUArea GetCPUArea() {
+ static void IosLogCPUArea(const char* tag) {
+   uintptr_t tpidrro;
+   __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
+-  void* tsd275 = *reinterpret_cast<void**>((tpidrro & ~uintptr_t(7)) + 0x898);
++  void* tsd275 = IosTebTsdOffset
++                     ? *reinterpret_cast<void**>((tpidrro & ~uintptr_t(7)) + IosTebTsdOffset)
++                     : nullptr;
+   _TEB* teb = IOSLoadTEB();
+   auto* area = *reinterpret_cast<CHPE_V2_CPU_AREA_INFO**>(reinterpret_cast<uintptr_t>(teb) + ThreadCPUArea::TEBCPUAreaOffset);
+ 
+@@ -800,6 +812,35 @@ NTSTATUS ProcessInit() {
+    * The old hardcode corrupted the JIT pool on runs where the offset
+    * differed. See FEXBridge.mm (setenv) + env_ios.c (forwarding). */
+ 
++#ifdef FEX_IOS_HOST
++  /* Import the raw TSD slot offset for the TEB before anything reads a TEB or
++   * emits code. It is published by wine's ntdll as a data export because the
++   * slot is not knowable at build time: it is whichever slot backs the pthread
++   * key ntdll-unix creates, which differs per device and per load order.
++   *
++   * We used to assemble slot 275 (0x898) into every one of these reads. That
++   * is a dynamic pthread key nobody guaranteed us, and when its real owner
++   * showed up -- Metal, on an M4 iPad, at the first nextDrawable -- it reset
++   * the slot and every TEB read in the process started returning zero.
++   *
++   * A missing or zero export is fatal, not a reason to fall back: the old
++   * constant is exactly the value that is wrong. */
++  {
++    const auto NtDllForTsd = GetModuleHandleW(L"ntdll.dll");
++    const auto Published = reinterpret_cast<uint32_t*>(GetProcAddress(NtDllForTsd, "ios_teb_tsd_offset"));
++    if (Published && *Published) {
++      IosTebTsdOffset = *Published;
++    }
++    /* Report via LogMan next to [build-id], not here: at this point
++     * ProcessParameters->hStdError is not usable yet, so the ml707 build's
++     * WriteFile report never reached the log at all. */
++    IosTebTsdImportFound = Published != nullptr ? 1u : 0u;
++    if (!IosTebTsdOffset) {
++      return STATUS_UNSUCCESSFUL;
++    }
++  }
++#endif
++
+   InitSyscalls();
+ 
+   FEX::Windows::InitCRTProcess();
+@@ -849,8 +890,16 @@ NTSTATUS ProcessInit() {
+  * __DATE__/__TIME__ below is compiler-generated and therefore the
+  * authoritative identity; if the two disagree, the tag is wrong, not the
+  * build. */
+-#define MYTHIC_REV "ml706"
++#define MYTHIC_REV "ml708"
+   LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MYTHIC_REV " compiled " __DATE__ " " __TIME__);
++#ifdef FEX_IOS_HOST
++  {
++    const uint32_t Off = IosTebTsdOffset;
++    const bool Found = IosTebTsdImportFound != 0;
++    LogMan::Msg::EFmt("[fex-tsd] imported offset={:#x} (ntdll export {})", Off,
++                      Found ? "found" : "MISSING");
++  }
++#endif
+ #endif
+ 
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_IS64BIT_MODE, "1");

@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Thu, 5 Jun 2025 10:40:52 -0600
+Subject: [PATCH] user32: Reserve more space in kernel_callback_table[].
+
+CW-Bug-Id: #25506
+Valve-commit: 85d55101c55bbe9c7df16b867b6d5ce2df6eed41
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/user32/user_main.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/user32/user_main.c b/dlls/user32/user_main.c
+index ebd8373..3e15dcb 100644
+--- a/dlls/user32/user_main.c
++++ b/dlls/user32/user_main.c
+@@ -189,14 +189,15 @@ static NTSTATUS WINAPI User32DragDropPost( void *args, ULONG size )
+     return STATUS_SUCCESS;
+ }
+ 
+-static KERNEL_CALLBACK_PROC kernel_callback_table[NtUserCallCount] =
++C_ASSERT( NtUserCallCount <= 256 );
++
++static KERNEL_CALLBACK_PROC kernel_callback_table[256] =
+ {
+ #define USER32_CALLBACK_ENTRY(name) User32##name,
+     ALL_USER32_CALLBACKS
+ #undef USER32_CALLBACK_ENTRY
+ };
+ 
+-
+ /***********************************************************************
+  *           USER initialisation routine
+  */

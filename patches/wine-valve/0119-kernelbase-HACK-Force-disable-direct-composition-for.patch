@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 23 Mar 2026 14:01:54 -0600
+Subject: [PATCH] kernelbase: HACK: Force disable direct composition for
+ Blaite.
+
+CW-Bug-Id: #26818
+Valve-commit: aba0af213b07203fe69d65c68874fb5db7ce84a1
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 061e976..444c7a4 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -511,6 +511,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     }
+     options[] =
+     {
++        {L"Blaite\\nw.exe", L" --disable_direct_composition=1"},
+         {L"Click&Fight.exe", L" --disable_direct_composition=1"},
+         {L"Willful.exe", L" --disable_direct_composition=1"},
+         {L"Banyu Lintar Angin - Little Storm -.exe", L" --disable_direct_composition=1"},

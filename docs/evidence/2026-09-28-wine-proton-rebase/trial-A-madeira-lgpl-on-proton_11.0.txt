@@ -1,0 +1,9 @@
+CONFLICT 9dff575ed6db39fd14ebfd584f3062d1033a7d08 hunks=2 files=dlls/ntdll/unixlib.h ntdll: add unix_ios_push_jit_aliases bridge for iOS FEX alias awareness
+CONFLICT 24fa95892bafde0e04bc7665298dc8b6d2f411ed hunks=1 files=server/winstation.c iOS build: catch-up commit — 2 months of accumulated fork work (S0 TLS → rpcss → task-21)
+CONFLICT 69eff3376e649080b157ef1d94f7dae2f39dd7bf hunks=1 files=dlls/ntdll/signal_arm64ec.c iOS: EC exception dispatch across three stacks + [rtcs] guest-Rip conversion trace
+CONFLICT de9cfea05904dbbb54954933cb6cbf6e131d3654 hunks=3 files=dlls/ntdll/signal_arm64ec.c,dlls/ntdll/unix/sync.c iOS: Crashpad-VEH context guard + EC exception hardening (ml418-ml432)
+CONFLICT d8168f156238b21c60ed194bb135853a80655e67 hunks=1 files=dlls/ntdll/loader.c loader: [tls-life] probe for TLS slot assignment and callback invocation
+CONFLICT 492f1e5ab240cac52fdf66ba9eab6b9f253c0764 hunks=1 files=server/thread.c Report thread context from the syscall frame, and stop capped probes hiding dependencies
+CONFLICT d88d55eee004943170cd92bda8dc9cc961121536 hunks=3 files=dlls/ntdll/unix/sync.c,server/inproc_sync.c ntdll/server iOS: loader and ARM64EC signal fixes, file and sync paths, inproc-sync and thread bookkeeping
+CONFLICT e828644329967ec9d411b0025f6ca57ff9d04d85 hunks=1 files=dlls/ntdll/unix/system.c ntdll iOS: sync and timer census counters, ECO QoS switch, processor-count override
+TOTAL commits=56 conflicting=8 hunks=13 empty=0

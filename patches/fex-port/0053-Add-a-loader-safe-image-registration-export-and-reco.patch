@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 21 Aug 2026 12:23:48 +0800
+Subject: [PATCH] Add a loader-safe image-registration export, and recognise
+ wine-mono opt-in
+
+NotifyImageMap() exists because wine's loader must be able to register a
+module's executable intervals from a thread that is executing translated code,
+and NotifyMapViewOfSection() cannot be called from there. That path drives
+ImageTracker::HandleImageMap(), which opens with an EXCLUSIVE scoped_lock on
+CodeInvalidationMutex; a thread running translated code already holds that
+mutex SHARED, there is no read-to-write upgrade, and it blocks on itself
+forever while holding wine's loader lock. Book of the Dead froze that way on a
+module unload and Marvel Cosmic Invasion on cryptbase.dll's load.
+
+So this touches only InvalidationTracker, which takes its own IntervalsLock.
+That is the half that matters for correctness: the intervals are what gate
+decoding, and without them the first x86-64 instruction in an unregistered
+module raises NoExecOp and takes the GuestSignal_SIGSEGV trampoline.
+
+What it deliberately does NOT do is the ImageTracker half. That is a real gap,
+not merely skipped bookkeeping: ImageTracker owns image relocation and
+code-cache information plus extended volatile/ForceTSO metadata, and that
+metadata stays incomplete for any module whose syscall notification was
+genuinely missed. The durable fix is to repair the pseudo-process notification
+gate, or to defer the ImageTracker half to a dispatcher point where no shared
+code-invalidation hold exists. Neither is done here.
+
+Separately, Mono detection now recognises wine-mono, which ships its runtime
+as libmono-2.0-x86_64.dll and so matched neither existing name -- leaving the
+hooks inert while wine-mono startup paid the full W^X tax.
+
+Activation is OPT-IN (MYTHIC_WINEMONO_BRIDGE=1, default off) for a correctness
+reason, not caution: the bridge reclassifies a detected XCHG from a true
+atomic exchange into an alias-directed plain write, and deciding that by
+filename alone would let any unrelated lock-free XCHG in that DLL lose its
+atomicity -- wine-mono's thread-suspend machinery is exactly such code. The
+two pre-existing names are Unity's embedded Mono, field-proven since ml648.
+
+[mono-site] prints the first detected RIP, its module-relative RVA and the
+instruction bytes before marking anything, because that is the only evidence
+available for judging whether a site is a genuine patching routine.
+
+Measured afterwards, the opt-in cannot help this particular storm: the hot
+faulting instruction is inside UCRT memcpy, called from
+mono_breakpoint_clean_code+0x68 via an import thunk, and
+DetectMonoBackpatcherBlock requires the RIP to lie inside Mono's own range. It
+stays off, and the storm remains a startup cost worth attacking by another
+route.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: b4bedfa60800cea8a2ad415f6e2e09390497ca49
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp             | 50 ++++++++++++++++-
+ Source/Windows/ARM64EC/libarm64ecfex.def      |  1 +
+ Source/Windows/Common/InvalidationTracker.cpp | 55 ++++++++++++++++++-
+ 3 files changed, 104 insertions(+), 2 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 11cad10..83fd381 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -890,7 +890,7 @@ NTSTATUS ProcessInit() {
+  * __DATE__/__TIME__ below is compiler-generated and therefore the
+  * authoritative identity; if the two disagree, the tag is wrong, not the
+  * build. */
+-#define MYTHIC_REV "ml708"
++#define MYTHIC_REV "ml712"
+   LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MYTHIC_REV " compiled " __DATE__ " " __TIME__);
+ #ifdef FEX_IOS_HOST
+   {
+@@ -1278,6 +1278,54 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
+   }
+ }
+ 
++/* iOS-Mythic ml710: LOADER-SAFE EXECUTABLE-INTERVAL REGISTRATION.
++ *
++ * This is a FALLBACK, not a second full registration path. It exists because in a child
++ * pseudo-process the syscall notification never arrives -- enter_syscall_callback()
++ * refuses, InSyscallCallback having been left set -- so no module except the main image
++ * and ntdll is ever marked executable and the first x86-64 instruction the loader enters
++ * decodes as NOEXEC, raises NoExecOp and takes the GuestSignal_SIGSEGV trampoline.
++ *
++ * Wine calls this from its loader once a module is mapped, relocated and imported, before
++ * any DllMain runs. It must therefore be safe to call from a thread that is EXECUTING
++ * TRANSLATED CODE, and that constraint is what makes it distinct from
++ * NotifyMapViewOfSection():
++ *
++ *   NotifyMapViewOfSection -> HandleImageMap() -> ImageTracker::HandleImageMap(), which
++ *   opens with std::scoped_lock(CTX.GetCodeInvalidationMutex()) -- EXCLUSIVE. A thread
++ *   running translated code already holds that mutex SHARED, there is no read-to-write
++ *   upgrade, and it blocks on itself forever while holding wine's loader lock. That is
++ *   exactly how Book of the Dead froze on an unload and Marvel Cosmic Invasion froze on
++ *   cryptbase.dll's load, 88s parked with the [iOS-xins] lines as the last output.
++ *
++ * So this touches ONLY InvalidationTracker, which takes just its own IntervalsLock.
++ *
++ * WHAT THIS DOES NOT DO, and why that is still a gap: ImageTracker owns image relocation
++ * and code-cache information plus extended volatile/ForceTSO metadata. Skipping it keeps
++ * execution correct -- the intervals are what gate decoding -- but leaves that metadata
++ * incomplete for any module whose syscall notification was genuinely missed. The durable
++ * fix is to repair the pseudo-process notification gate, or to defer the ImageTracker half
++ * to a dispatcher point where no shared code-invalidation hold exists. Neither is done.
++ *
++ * Idempotent: re-registering the same intervals is harmless, and the syscall path still
++ * fires for the same module whenever its gate does let it through. */
++extern "C" void NotifyImageMap(void* Address) {
++  if (!InvalidationTracker || !Address) {
++    return;
++  }
++
++  static std::atomic<uint32_t> Count {0};
++  const auto N = ++Count;
++
++  fextl::string ModulePath = FEX::Windows::GetSectionFilePath(reinterpret_cast<uint64_t>(Address));
++  fextl::string ModuleName = fextl::string {FEX::Windows::BaseName(ModulePath)};
++  InvalidationTracker->HandleImageMap(ModuleName, reinterpret_cast<uint64_t>(Address));
++
++  if (N <= 64) {
++    LogMan::Msg::EFmt("[img-map] ml710 #{} intervals-only {} base={}", N, ModuleName, Address);
++  }
++}
++
+ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
+   /* iOS-Mythic ml183: do NOT require GetCPUArea().ThreadState() here.
+    *
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index e2e6239..a59f0e8 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -14,6 +14,7 @@ EXPORTS
+   ExitToX64 DATA
+   BeginSimulation DATA
+   FlushInstructionCacheHeavy
++  NotifyImageMap
+   NotifyMapViewOfSection
+   NotifyMemoryAlloc
+   NotifyMemoryFree
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 93e375d..172cca7 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -204,7 +204,39 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+   FEX_CONFIG_OPT(MaxInst, MAXINST);
+   FEX_CONFIG_OPT(Multiblock, MULTIBLOCK);
+ 
+-  const bool IsMono = (Name == "mono-2.0-bdwgc.dll" || Name == "mono.dll");
++  /* ml712: wine-mono ships its runtime as libmono-2.0-x86_64.dll (the file mscoree's
++   * find_mono_dll() looks for on an x86_64/ARM64EC host), which matched neither name
++   * above -- so on Marvel Cosmic Invasion the hooks stayed inert and Mono startup paid
++   * the full W^X tax: ~735,000 emulated stores from one hot site during init.
++   *
++   * Recognised, but activation is OPT-IN via MYTHIC_WINEMONO_BRIDGE=1, default OFF, for a
++   * correctness reason rather than caution about perf: the bridge reclassifies a detected
++   * XCHG from a true atomic exchange into an alias-directed plain write. Deciding that by
++   * FILENAME alone would let any unrelated lock-free XCHG in this DLL be treated as a
++   * backpatch site and silently lose its atomicity -- and wine-mono's thread-suspend
++   * machinery is exactly the kind of lock-free code that would break. The existing two
++   * names are Unity's embedded Mono, where the hook has been field-proven since ml648.
++   *
++   * Verification is deliberately incomplete: wine-mono ships no PDB (its debug directory
++   * points at a build-server path) and its exports are ~195KB apart around the hot RIP, so
++   * the faulting site CANNOT be symbolized offline to prove it is a code-patching routine.
++   * Until it is, this stays off by default and the detected RIP is logged for inspection.
++   *
++   * NOTE: this storm is a STARTUP cost and is NOT why the game shows no window. Measured
++   * between matched checkpoints the rate is ~91/sec by the time FNA3D loads, not the
++   * thousands/sec a cumulative-total-over-runtime average suggests. The current stall is
++   * thread 007c holding a Mono critical section while workers queue behind it. */
++  const bool IsUnityMono = (Name == "mono-2.0-bdwgc.dll" || Name == "mono.dll");
++  const bool IsWineMono = (Name == "libmono-2.0-x86_64.dll" || Name == "libmono-2.0-x86.dll");
++  bool WineMonoOptIn = false;
++  if (IsWineMono) {
++    const char* Env = getenv("MYTHIC_WINEMONO_BRIDGE");
++    WineMonoOptIn = Env && Env[0] == '1';
++    LogMan::Msg::EFmt("[mono-winemono] ml712 module={} base={:#x} opt-in={} (MYTHIC_WINEMONO_BRIDGE={})", Name, Address,
++                      WineMonoOptIn ? 1 : 0, Env ? Env : "unset");
++  }
++
++  const bool IsMono = IsUnityMono || (IsWineMono && WineMonoOptIn);
+   if (IsMono) {
+     /* ml623: report the EFFECTIVE settings at EFmt on every branch.
+      *
+@@ -434,6 +466,27 @@ void InvalidationTracker::DetectMonoBackpatcherBlock(FEXCore::Core::InternalThre
+ 
+   uint64_t BlockEntry = CTX.GetGuestBlockEntry(Thread);
+   LogMan::Msg::DFmt("Detected mono backpatcher at: {:X}", BlockEntry);
++
++  /* ml712: name the site at EFmt, once, with module-relative RVAs and the bytes.
++   *
++   * The DFmt line above is eaten by MYTHIC_QUIET, so a run could neither confirm which
++   * guest instruction was reclassified nor let it be checked afterwards. That matters more
++   * for wine-mono than for Unity's Mono: this reclassifies an XCHG from a true atomic
++   * exchange into an alias-directed plain write, wine-mono ships no PDB, and its exports
++   * sit ~195KB apart around the hot region -- so the RVA printed here is the ONLY evidence
++   * available for deciding whether the site is a genuine code-patching routine or an
++   * unrelated lock-free exchange that must keep its atomicity. Print it before marking. */
++  {
++    static bool Reported = false;
++    if (!Reported) {
++      Reported = true;
++      const auto* Bytes = reinterpret_cast<const uint8_t*>(RIP);
++      LogMan::Msg::EFmt("[mono-site] ml712 FIRST detect rip={:#x} (mono+{:#x}) block={:#x} (mono+{:#x}) "
++                        "bytes={:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
++                        RIP, RIP - MonoBase, BlockEntry, BlockEntry - MonoBase, Bytes[0], Bytes[1], Bytes[2], Bytes[3],
++                        Bytes[4], Bytes[5], Bytes[6], Bytes[7]);
++    }
++  }
+ #ifndef FEX_IOS_HOST
+   /* ml648: SKIPPED ON iOS. DisableSMCDetection() reprotects every RWX interval
+    * as WRITABLE, and iOS will never grant write on the guest VA — that is the

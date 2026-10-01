@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Apr 2026 02:03:16 +0800
+Subject: [PATCH] arm64ec: build libarm64ecfex.dll cleanly on macOS-host
+ llvm-mingw 22.1.4
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Cause of prior link failure: upstream FEX uses `-static -nostdlib -nostartfiles
+-nodefaultlibs` to avoid mingw's libmsvcrt + provides its own CRT replacement
+(Source/Windows/Common/CRT/{Alloc,IO,Math,String,Misc}.cpp). On Windows-host
+llvm-mingw arm64ec this works. On macOS-host llvm-mingw 22.1.4, ld.lld can't
+reconcile EC-mangled defs in libc++abi.a against non-EC-mangled refs from
+the C++ frontend AND segfaults on the link.
+
+Fix on iOS-host build (FEX_IOS_HOST_BUILD=ON):
+- Drop the `-nostdlib -nostartfiles -nodefaultlibs` flags; let mingw's default
+  link rules pull in libmsvcrt + libc++ chains correctly.
+- Skip FEX's CRT replacement files (Alloc.cpp/IO.cpp/Math.cpp/String.cpp/
+  Misc.cpp/Musl/) which would now duplicate libmsvcrt symbols.
+- Provide a minimal CRT_iOS.cpp stub with no-op InitCRTProcess/InitCRTThread/
+  DeinitCRTThread (Module.cpp's only entry into FEX::Windows::* CRT code) —
+  mingw's startup chain handles real CRT init.
+
+Result: libarm64ecfex.dll is a clean coff-arm64ec hybrid PE with .hexpthk,
+.a64xrm, .pdata sections and exports all 21 BTCpu* + ARM64EC dispatcher
+functions (BTCpu64FlushInstructionCache, ProcessInit, ResetToConsistentState,
+NotifyMemoryAlloc, etc.). 5.2 MB.
+
+Combined with the earlier x18 substitution (e8d367e), the FEX side of the
+ARM64EC iOS port is functionally complete. Next: ship the DLL into a Wine
+prefix as system32/xtajit64.dll and run dlls/ntdll/tests/wow64.c::test_xtajit64
+on iOS.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: a38fb5b4e2e89484a24b1cb2eff53a53685d77f2
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/CMakeLists.txt    | 17 +++++++++++++++--
+ Source/Windows/Common/CRT/CMakeLists.txt | 12 ++++++++++--
+ Source/Windows/Common/CRT/CRT_iOS.cpp    | 20 ++++++++++++++++++++
+ 3 files changed, 45 insertions(+), 4 deletions(-)
+ create mode 100644 Source/Windows/Common/CRT/CRT_iOS.cpp
+
+diff --git a/Source/Windows/ARM64EC/CMakeLists.txt b/Source/Windows/ARM64EC/CMakeLists.txt
+index 0c9a57a..49e8e11 100644
+--- a/Source/Windows/ARM64EC/CMakeLists.txt
++++ b/Source/Windows/ARM64EC/CMakeLists.txt
+@@ -19,8 +19,21 @@ target_link_libraries(arm64ecfex PRIVATE
+   CommonWindowsRuntime
+   ntdll_ex)
+ 
+-target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
+-target_link_libraries(arm64ecfex PRIVATE ${LIBGCC_PATH})
++# Upstream FEX uses `-static -nostdlib -nostartfiles -nodefaultlibs` to avoid
++# pulling in mingw's CRT, then re-adds libc++/libc++abi/libunwind manually.
++# This works on Linux-host arm64ec builds but FAILS on macOS-host llvm-mingw
++# 22.1.4: ld.lld can't reconcile EC-mangled defs in libc++abi.a against
++# non-EC-mangled refs from C++ frontend code, and segfaults on the link.
++#
++# For our iOS-host build, fall through to the default mingw link rules —
++# they include the right startup files, CRT, and produce a clean arm64ec PE.
++# The resulting DLL is slightly larger but links cleanly.
++if (FEX_IOS_HOST_BUILD)
++  target_link_options(arm64ecfex PRIVATE -static)
++else()
++  target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
++  target_link_libraries(arm64ecfex PRIVATE ${LIBGCC_PATH})
++endif()
+ install(TARGETS arm64ecfex RUNTIME
+   DESTINATION ${CMAKE_INSTALL_LIBDIR}
+   COMPONENT Runtime)
+diff --git a/Source/Windows/Common/CRT/CMakeLists.txt b/Source/Windows/Common/CRT/CMakeLists.txt
+index da998cb..53d7ba3 100644
+--- a/Source/Windows/Common/CRT/CMakeLists.txt
++++ b/Source/Windows/Common/CRT/CMakeLists.txt
+@@ -1,2 +1,10 @@
+-target_sources(CommonWindowsRuntime PRIVATE Alloc.cpp IO.cpp Math.cpp String.cpp Misc.cpp CRT.cpp)
+-add_subdirectory(Musl)
++if (FEX_IOS_HOST_BUILD)
++  # Minimal stub for iOS-host build — only the FEX::Windows::* lifecycle
++  # hooks that Module.cpp calls; skips _tls_index, DllMainCRTStartup,
++  # CRT$XIA/XCA/etc. section markers, and rpmalloc init that conflict with
++  # mingw's default startup.
++  target_sources(CommonWindowsRuntime PRIVATE CRT_iOS.cpp)
++else()
++  target_sources(CommonWindowsRuntime PRIVATE Alloc.cpp IO.cpp Math.cpp String.cpp Misc.cpp CRT.cpp)
++  add_subdirectory(Musl)
++endif()
+diff --git a/Source/Windows/Common/CRT/CRT_iOS.cpp b/Source/Windows/Common/CRT/CRT_iOS.cpp
+new file mode 100644
+index 0000000..46ed3d6
+--- /dev/null
++++ b/Source/Windows/Common/CRT/CRT_iOS.cpp
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: MIT
++// Minimal CRT lifecycle hooks for the iOS-host arm64ec build of libarm64ecfex.dll.
++// The full CRT.cpp redefines _tls_index, DllMainCRTStartup, section markers,
++// and runs rpmalloc — all of which conflict with mingw's default startup
++// chain that we use on iOS-host builds (since llvm-mingw 22.1.4's arm64ec
++// EC-mangling doesn't reconcile cleanly with -nostdlib + custom CRT). This
++// stub provides ONLY the symbols Module.cpp's namespace FEX::Windows
++// references, so the link succeeds.
++
++namespace FEX::Windows {
++void InitCRTProcess() {
++  // No-op: mingw's default startup ran ctors and initialized the heap.
++}
++void InitCRTThread() {
++  // No-op: mingw's default per-thread init handles TLS.
++}
++void DeinitCRTThread() {
++  // No-op: matches InitCRTThread.
++}
++} // namespace FEX::Windows

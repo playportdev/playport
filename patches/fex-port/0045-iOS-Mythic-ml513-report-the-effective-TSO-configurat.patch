@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 5 Aug 2026 10:40:31 +0800
+Subject: [PATCH] iOS-Mythic ml513: report the effective TSO configuration at
+ runtime
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A compiled-in config default is invisible to a binary grep, so there was
+no way to know what the JIT was actually doing. This logs it from the
+TSOHandlerConfig ctor:
+
+  FEX: TSO config tso=1 halfbar=1 vector=0 memcpyset=0 rev=ml513
+
+It exists because of an experiment it then disproved. ml512 flipped
+VectorTSOEnabled and MemcpySetTSOEnabled to true — x86 orders SSE/AVX and
+rep-movs accesses under TSO and FEX emits them unordered, which was the
+last broad memory-ordering gap left after scalar TSO was audited clean.
+Deploy was proven by this very line in both processes, and the Chromium
+raster corruption was UNCHANGED.
+
+Both defaults are therefore back at upstream (false) rather than kept: an
+unproven change with a known cost muddies every later experiment, and
+ordering every vector access taxes exactly the vector-heavy game
+workloads that are the product. Recorded as a KNOWN ACCURACY GAP,
+deliberately accepted — re-enable by flipping the two Config.json.in
+defaults, and this line proves which way any build shipped.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Madeira-commit: 93c640cfbe7300831d9716ff1ab1ba5174c47132
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/Common/TSOHandlerConfig.h | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/Source/Windows/Common/TSOHandlerConfig.h b/Source/Windows/Common/TSOHandlerConfig.h
+index f63478d..3691ae5 100644
+--- a/Source/Windows/Common/TSOHandlerConfig.h
++++ b/Source/Windows/Common/TSOHandlerConfig.h
+@@ -27,6 +27,26 @@ public:
+     if (UnixLib::SetKernelUnalignedAtomicControl(Flags)) {
+       LogMan::Msg::IFmt("FEX: Kernel unaligned atomics enabled!");
+     }
++
++    /* iOS-Mythic ml512/ml513: report the EFFECTIVE TSO configuration at
++     * runtime. A compiled-in config default is invisible to binary greps, so
++     * this line is the only way to know what the JIT is actually doing.
++     *
++     * ml512 flipped VectorTSOEnabled/MemcpySetTSOEnabled to true and the
++     * Chromium raster corruption was UNCHANGED; ml513 reverted both to the
++     * upstream default (false). KNOWN ACCURACY GAP, deliberately accepted:
++     * x86 orders SSE/AVX and rep-movs accesses under TSO and FEX emits them
++     * unordered, so a guest relying on per-location vector ordering without
++     * a scalar release would misbehave. Nothing observed needs it, and
++     * ordering every vector access taxes exactly the vector-heavy game
++     * workloads that are the product (Thumper). Re-enable by flipping the
++     * two Config.json.in defaults; this line proves which way it shipped. */
++    {
++      FEX_CONFIG_OPT(VecTSO, VECTORTSOENABLED);
++      FEX_CONFIG_OPT(MemcpyTSO, MEMCPYSETTSOENABLED);
++      LogMan::Msg::IFmt("FEX: TSO config tso={} halfbar={} vector={} memcpyset={} rev=ml513",
++                        TSOEnabled(), HalfBarrierTSOEnabled(), VecTSO(), MemcpyTSO());
++    }
+   }
+ 
+   FEXCore::ArchHelpers::Arm64::UnalignedHandlerType GetUnalignedHandlerType() const {

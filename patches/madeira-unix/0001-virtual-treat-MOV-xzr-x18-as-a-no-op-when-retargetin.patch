@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] virtual: treat MOV xzr, x18 as a no-op when retargeting x18
+
+The x18 retarget pass rewrote MOV xzr, x18 (clang emits one for a discarded
+value) as a store to sp, which set sp to 0.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 5fe04d4..06904d8 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -4603,6 +4603,17 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
+         int is_mov_from_x18 = (role == X18_ROLE_RM) &&
+             ((insn & 0xFFE0FFE0) == 0xAA0003E0) && rm == 18;
+ 
++        /* Playport: MOV xzr, x18 is a no-op (clang emits one for a discarded
++         * TEB read). In the TEB-load sequence below register 31 is SP for the
++         * AND (immediate) and the LDR base, so its trampoline would set sp = 0.
++         * Replace it with a NOP and emit no trampoline. */
++        if (is_mov_from_x18 && (insn & 0x1f) == 31)
++        {
++            *(uint32_t *)(text_rw + i) = 0xd503201f;
++            skipped++;
++            continue;
++        }
++
+         if (is_mov_from_x18)
+         {
+             int rd = insn & 0x1f;

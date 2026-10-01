@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 25 Mar 2024 13:22:12 -0600
+Subject: [PATCH] kernelbase: HACK: Force CEF swiftshader for Aisling and the
+ Tavern of Elves/nw.exe.
+
+CW-Bug-Id: #23612
+Valve-commit: 20c781075de51e846d6bdeaef55ba3479fa547a1
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 4501299..025dfd7 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -513,6 +513,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     {
+         {L"Paradox Launcher.exe", L" --use-angle=gl"},
+         {L"Montaro\\nw.exe", L" --use-gl=swiftshader"},
++        {L"Aisling and the Tavern of Elves\\nw.exe", L" --use-gl=swiftshader"},
+         {L"OlympiaRising.exe", L" --use-gl=swiftshader"},
+         {L"nw.exe.exe", L" --use-angle=d3d9"},
+         {L"DC Universe Online\\LaunchPad.exe", L" --use-gl=swiftshader"},

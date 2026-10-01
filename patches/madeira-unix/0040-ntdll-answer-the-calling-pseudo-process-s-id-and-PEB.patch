@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 21:46:16 +0200
+Subject: [PATCH] ntdll: answer the calling pseudo-process's id and PEB
+
+wine-11.18 added PsGetCurrentProcessId and RtlGetCurrentPeb for the unix
+libraries, and they return the pid and peb globals; it also gives a new
+thread's TEB, and a new thread's client id, the pid global. Before, all
+of these came from the calling thread's TEB. In one Mach process the
+globals name one pseudo-process only: pid the session's first, peb the
+last child to start. A child that created a window got the session's id
+from PsGetCurrentProcessId, so win32u took the child's own new window for
+another process's (OBJ_OTHER_PROCESS, 1) and NtUserCreateWindowEx read
+its style at 0x1 + 0x98: the fault at addr=0x99, and the child ended
+with NtTerminateProcess(0xc0000005).
+
+On iOS both now answer from the calling thread's TEB: ios_current_pid()
+is its ClientId's process id (the pid global for a thread with no TEB
+yet), and init_teb, NtCreateThreadEx's client id, the Mach thread name
+check and is_process_wow64 use it. In the session's own process the
+TEB holds the same values as the globals, so nothing changes there.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-child-process.md
+Offered-upstream: no
+---
+ build/ntdll-unix/env_ios.c     | 33 +++++++++++++++++++++++++++++++++
+ build/ntdll-unix/thread_ios.c  | 16 ++++++++++++++++
+ build/ntdll-unix/virtual_ios.c | 10 ++++++++++
+ 3 files changed, 59 insertions(+)
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index d3e2dba..32b5952 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -2724,15 +2724,48 @@ void WINAPI RtlSetLastWin32Error( DWORD err )
+  */
+ PEB * WINAPI RtlGetCurrentPeb(void)
+ {
++#ifdef WINE_IOS
++    /* Playport: every pseudo-process's threads share this Mach process, and
++     * the peb global names only one of them (the last child to start). The
++     * calling thread's TEB names its own. */
++    TEB *teb = NtCurrentTeb();
++    if (teb && teb->Peb) return teb->Peb;
++#endif
+     return peb;
+ }
+ 
++#ifdef WINE_IOS
++/**********************************************************************
++ *      ios_current_pid
++ *
++ * Playport: the id of the calling thread's pseudo-process. wine-11.18 keeps
++ * the process id in the pid global, set once for the session's first
++ * process; a child's threads carry theirs in their TEB's ClientId (set by
++ * server_init_process_child for its first thread, and inherited from the
++ * creating thread by init_teb for the rest). A thread with no TEB yet is
++ * the session's, or a child's before it registers.
++ */
++DWORD ios_current_pid(void)
++{
++    TEB *teb = NtCurrentTeb();
++    if (teb && teb->ClientId.UniqueProcess) return HandleToULong( teb->ClientId.UniqueProcess );
++    return pid;
++}
++#endif
++
+ /**********************************************************************
+  *      PsGetCurrentProcessId  (ntdll.so)
+  */
+ HANDLE WINAPI PsGetCurrentProcessId(void)
+ {
++#ifdef WINE_IOS
++    /* Playport: win32u compares this with a user handle's owner, so a
++     * child that got the session's id took its own new window for another
++     * process's and faulted in NtUserCreateWindowEx. */
++    return ULongToHandle( ios_current_pid() );
++#else
+     return ULongToHandle( pid );
++#endif
+ }
+ 
+ /**********************************************************************
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 68a179c..2b67cb0 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -80,6 +80,10 @@ volatile long long ios_affinity_sets;   /* ml1117 */
+ #include "unix_private.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(thread);
++
++#ifdef WINE_IOS
++extern DWORD ios_current_pid(void);   /* env_ios.c: the calling thread's pseudo-process */
++#endif
+ WINE_DECLARE_DEBUG_CHANNEL(seh);
+ WINE_DECLARE_DEBUG_CHANNEL(threadname);
+ 
+@@ -1717,7 +1721,11 @@ NTSTATUS WINAPI PsCreateSystemThread( HANDLE *handle, ACCESS_MASK access, OBJECT
+         return status;
+     }
+ 
++#ifdef WINE_IOS
++    if (id) *id = make_client_id( ios_current_pid(), data->tid );  /* Playport: the creator's pseudo-process */
++#else
+     if (id) *id = make_client_id( pid, data->tid );
++#endif
+     return status;
+ }
+ 
+@@ -2568,7 +2576,11 @@ static void set_native_thread_name( HANDLE handle, const UNICODE_STRING *name )
+     if (NtQueryInformationThread( handle, ThreadBasicInformation, &info, sizeof(info), NULL ))
+         return;
+ 
++#ifdef WINE_IOS
++    if (HandleToULong( info.ClientId.UniqueProcess ) != ios_current_pid() )
++#else
+     if (HandleToULong( info.ClientId.UniqueProcess ) != pid )
++#endif
+     {
+         static int once;
+         if (!once++) FIXME("cross-process native thread naming not supported\n");
+@@ -2627,7 +2639,11 @@ static BOOL is_process_wow64( const CLIENT_ID *id )
+     ULONG_PTR info;
+     BOOL ret = FALSE;
+ 
++#ifdef WINE_IOS
++    if (id->UniqueProcess == ULongToHandle(ios_current_pid())) return is_old_wow64();
++#else
+     if (id->UniqueProcess == ULongToHandle(pid)) return is_old_wow64();
++#endif
+     if (!NtOpenProcess( &handle, PROCESS_QUERY_LIMITED_INFORMATION, NULL, id ))
+     {
+         if (!NtQueryInformationProcess( handle, ProcessWow64Information, &info, sizeof(info), NULL ))
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 242974b..f5b398e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15160,9 +15160,19 @@ NTSTATUS virtual_relocate_module( void *module )
+ 
+ 
+ /* set some initial values in a new TEB */
++#ifdef WINE_IOS
++extern DWORD ios_current_pid(void);   /* env_ios.c */
++#endif
++
+ static void init_teb( struct thread_data *data, void *ptr )
+ {
+     TEB *teb = ptr;
++#ifdef WINE_IOS
++    /* Playport: a thread belongs to the pseudo-process of the thread that
++     * creates it, not to the session whose id the pid global holds. Before
++     * wine-11.18 the TEB took GetCurrentProcessId(), the creator's. */
++    DWORD pid = ios_current_pid();
++#endif
+ 
+ #ifdef _WIN64
+     if (wow_peb)

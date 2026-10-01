@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 15:39:45 +0800
+Subject: [PATCH] arm64ec: split process_init into dispatchers + ProcessInit;
+ redirect ffwd thunks
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two-phase ARM64EC init so the dependency DllMain walk can run between
+dispatcher setup and FEX's CRT-using ProcessInit:
+
+1. arm64ec_process_init_dispatchers: sets __os_arm64x_dispatch_call_no_redirect,
+   _dispatch_fptr, _dispatch_ret, the FEX BTCpu function pointers, and the
+   ChpeV2ProcessInfo struct. Runs BEFORE walk_node_dependencies so that
+   KiUserExceptionDispatcher (which loads from those slots) and
+   dispatch_emulation can dispatch x86_64 calls during DllMain.
+
+2. arm64ec_process_init: invokes pProcessInit + pThreadInit. Runs AFTER
+   walk_node_dependencies so ucrtbase's lock_table[17] is initialized
+   before FEX's CRT static constructors fire.
+
+Also extends arm64ec_redirect_ptr to handle two more .hexpthk thunk forms:
+
+- Forwarder thunk (`jmp [rip+offset]`): kernel32!lstrcmpW etc. that import
+  from kernelbase. Decode the operand to find the import slot, deref to
+  get the cross-module target, recurse to redirect there.
+
+- Fast-forward thunk (`mov rsp,rax; mov [rax+0x20],rbx; push rbp; pop rbp;
+  jmp arm_code` — the canonical 14-byte sequence arm64x_check_call's
+  ffwd-detector recognizes): the ARM64 target is at thunk+14+offset within
+  the same module. Replicate the decode here so direct callers don't have
+  to dispatch through arm64x_check_call.
+
+Same loader.c change adds the dispatchers/walk/init phases and
+redirects AddressOfEntryPoint via arm64ec_redirect_ptr (the entry can
+point into .hexpthk too).
+
+(cherry picked from commit 49bcfb48173757dc0bb70188ca6600af95bd226a)
+Madeira-commit: 948212bd97480b7acc9ffe1171f3f825bb1f0e9a
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         | 30 ++++++++++---
+ dlls/ntdll/ntdll_misc.h     |  1 +
+ dlls/ntdll/signal_arm64ec.c | 88 ++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 112 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index f7bce0d23b7..c47f86512d2 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1129,6 +1129,15 @@ void * WINAPI RtlFindExportedRoutineByName( HMODULE module, const char *name )
+     if (((const char *)proc >= (const char *)exports) &&
+         ((const char *)proc < (const char *)exports + exp_size))
+         return NULL;
++#ifdef __arm64ec__
++    /* On ARM64EC, exports often point to .hexpthk x86_64 thunks. Redirect
++     * to the ARM64-native target so direct callers (FEX, LdrGetProcedureAddress
++     * paths, etc.) don't execute x86_64 bytes as ARM64. */
++    {
++        const IMAGE_ARM64EC_METADATA *metadata = arm64ec_get_module_metadata( module );
++        if (metadata) proc = arm64ec_redirect_ptr( module, proc, metadata );
++    }
++#endif
+     return proc;
+ }
+ 
+@@ -4346,17 +4355,28 @@ static void load_arm64ec_module(void)
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
+ 
+-    /* Run process_attach (DllMain) on xtajit64's dependency tree BEFORE calling
+-     * arm64ec_process_init. arm64ec_process_init invokes FEX's ProcessInit,
+-     * which runs C++ static constructors via InitCRTProcess. Those ctors call
+-     * into ucrtbase (e.g. _lock); without ucrtbase's DllMain having run, its
+-     * lock_table[17] is uninitialized and _lock(17) recurses infinitely. */
++    /* Phase 1: set up dispatcher pointers and FEX function pointers BEFORE
++     * the DllMain dependency walk, so that exception dispatch
++     * (KiUserExceptionDispatcher needs __os_arm64x_dispatch_call_no_redirect)
++     * and dispatch_emulation (needs pBeginSimulation) work during DllMain. */
++    if ((status = arm64ec_process_init_dispatchers( wm->ldr.DllBase )))
++    {
++        ERR( "arm64ec_process_init_dispatchers for %s failed, status %lx\n",
++             debugstr_w(module), status );
++        NtTerminateProcess( GetCurrentProcess(), status );
++    }
++
++    /* Phase 1.5: run DllMains on xtajit64's dependency tree so ucrtbase's
++     * lock_table[17] is initialized before FEX's CRT static constructors
++     * (InitCRTProcess) run from pProcessInit. Without this, _lock(17)
++     * recurses infinitely in FEX's ctors. */
+     if ((status = walk_node_dependencies( wm->ldr.DdagNode, NULL, process_attach )))
+     {
+         ERR( "process_attach for %s deps failed, status %lx\n", debugstr_w(module), status );
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
+ 
++    /* Phase 2: invoke FEX's ProcessInit/ThreadInit. */
+     if ((status = arm64ec_process_init( wm->ldr.DllBase )))
+     {
+         ERR( "arm64ec_process_init for %s failed, status %lx\n", debugstr_w(module), status );
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 4be99677f46..8688e6e73b1 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -161,6 +161,7 @@ extern void heap_thread_detach(void);
+ 
+ #ifdef __arm64ec__
+ 
++extern NTSTATUS arm64ec_process_init_dispatchers( HMODULE module );
+ extern NTSTATUS arm64ec_process_init( HMODULE module );
+ extern NTSTATUS arm64ec_thread_init(void);
+ extern IMAGE_ARM64EC_METADATA *arm64ec_get_module_metadata( HMODULE module );
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 25d776f7b35..b78b21efebc 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -177,6 +177,60 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+         if (map[pos].Source < rva) min = pos + 1;
+         else max = pos - 1;
+     }
++
++    /* No entry in the redirection table — but the export may still be a
++     * .hexpthk x86_64 thunk in one of two forms:
++     *   (a) Forwarder: `jmp qword ptr [rip+offset]` (ff 25 NN NN NN NN) —
++     *       loads target from import slot. Used for cross-module forwards
++     *       (e.g. kernel32!lstrcmpW → kernelbase!lstrcmpW).
++     *   (b) Fast-forward: `mov rsp,rax; mov [rax+0x20],rbx; push rbp;
++     *       pop rbp; jmp arm_code` (14 bytes: 48 8b c4 48 89 58 20 55 5d
++     *       e9 NN NN NN NN) — the ARM64 target is at thunk+14+offset
++     *       within the same module. arm64x_check_call recognizes this at
++     *       runtime; we replicate the decode here so direct callers don't
++     *       have to dispatch through it. */
++    {
++        const unsigned char *bytes = ptr;
++        /* (b) fast-forward sequence */
++        if (bytes[0] == 0x48 && bytes[1] == 0x8b && bytes[2] == 0xc4 &&
++            bytes[3] == 0x48 && bytes[4] == 0x89 && bytes[5] == 0x58 &&
++            bytes[6] == 0x20 && bytes[7] == 0x55 && bytes[8] == 0x5d &&
++            bytes[9] == 0xe9)
++        {
++            LONG off = *(const LONG *)&bytes[10];
++            void *target = (char *)ptr + 14 + off;
++            return target;
++        }
++        /* (a) simple forwarder thunk */
++        if (bytes[0] == 0xff && bytes[1] == 0x25)
++        {
++            LONG off = *(const LONG *)&bytes[2];
++            void **imp = (void **)(bytes + 6 + off);
++            if (*imp && *imp != ptr)
++            {
++                /* Find the module containing the target and redirect within
++                 * it. If the target is also a thunk, this recurses. */
++                void *target = *imp;
++                LDR_DATA_TABLE_ENTRY *mod_entry;
++                LIST_ENTRY *list = &RtlGetCurrentPeb()->LdrData->InLoadOrderModuleList;
++                LIST_ENTRY *entry;
++                for (entry = list->Flink; entry != list; entry = entry->Flink)
++                {
++                    mod_entry = CONTAINING_RECORD( entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
++                    if ((char *)target >= (char *)mod_entry->DllBase &&
++                        (char *)target < (char *)mod_entry->DllBase + mod_entry->SizeOfImage)
++                    {
++                        const IMAGE_ARM64EC_METADATA *target_metadata =
++                            arm64ec_get_module_metadata( mod_entry->DllBase );
++                        if (target_metadata)
++                            return arm64ec_redirect_ptr( mod_entry->DllBase, target, target_metadata );
++                        return target;
++                    }
++                }
++                return target;
++            }
++        }
++    }
+     return ptr;
+ }
+ 
+@@ -185,9 +239,21 @@ static void arm64x_check_call(void);
+ /*******************************************************************
+  *         arm64ec_process_init
+  */
+-NTSTATUS arm64ec_process_init( HMODULE module )
++/*******************************************************************
++ *         arm64ec_process_init_dispatchers
++ *
++ * Phase 1 of arm64ec init: set up dispatcher pointers and FEX function
++ * pointers. Must run BEFORE the PE-side DllMain dependency walk so that
++ * exception dispatch (KiUserExceptionDispatcher uses
++ * __os_arm64x_dispatch_call_no_redirect) and dispatch_emulation
++ * (uses pBeginSimulation) work during DllMain.
++ *
++ * Note: pProcessInit is captured here but NOT called — that's deferred
++ * to phase 2 (arm64ec_process_init_finish), which runs AFTER DllMains
++ * because FEX's CRT init requires ucrtbase to be initialized.
++ */
++NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+ {
+-    NTSTATUS status = STATUS_SUCCESS;
+     CHPEV2_PROCESS_INFO *info = (CHPEV2_PROCESS_INFO *)(RtlGetCurrentPeb() + 1);
+     const IMAGE_ARM64EC_METADATA *metadata = arm64ec_get_module_metadata( module );
+ 
+@@ -233,6 +299,24 @@ NTSTATUS arm64ec_process_init( HMODULE module )
+     info->EmulatedMachineType = IMAGE_FILE_MACHINE_AMD64;
+     memcpy( KiUserExceptionDispatcher_orig, KiUserExceptionDispatcher_thunk, sizeof(KiUserExceptionDispatcher_orig) );
+ 
++    return STATUS_SUCCESS;
++}
++
++
++/*******************************************************************
++ *         arm64ec_process_init
++ *
++ * Phase 2 of arm64ec init: invoke FEX's pProcessInit and pThreadInit,
++ * then set the call-checker slots. Must run AFTER all module DllMains
++ * so that ucrtbase's CRT (lock_table etc.) is initialized when FEX's
++ * CRT static constructors fire.
++ */
++NTSTATUS arm64ec_process_init( HMODULE module )
++{
++    NTSTATUS status = STATUS_SUCCESS;
++    CHPEV2_PROCESS_INFO *info = RtlGetCurrentPeb()->ChpeV2ProcessInfo;
++    (void)module;
++
+     enter_syscall_callback();
+     if (pProcessInit) status = pProcessInit();
+     if (!status)

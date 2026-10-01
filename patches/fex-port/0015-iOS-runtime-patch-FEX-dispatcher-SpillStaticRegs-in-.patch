@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 30 Apr 2026 06:14:07 +0800
+Subject: [PATCH] iOS: runtime patch FEX dispatcher SpillStaticRegs in
+ ThreadInit
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The emitter produces 7 stale madd/mul instructions where 7 stp should
+be (pairs 1-7: RDX/RBX, RSP/RBP, RSI/RDI, R8/R9, R10/R11, R12/R13,
+R14/R15). Same bug at both SpillStaticRegs sites in the dispatcher
+(EnterEC+0x164 ExitFunctionLink path, EnterEC+0x264 NoBlock path).
+Result: State.gregs[REG_RSP] never spilled before CompileBlock;
+FillStaticRegs reloads x23=0; block 0's first stp x26, x25, [x23, #-0x10]!
+faults at 0xfffffffffffffff0.
+
+Workaround: write the correct 7 stp encodings over both broken sites
+via the dual-map RW alias (RX + 128MB), flush via NtFlushInstructionCache.
+
+HACK, not a fix. Proper fix is upstream — investigate why FEX's
+templated stp<OFFSET> produces madd in this context. The encoded
+register fields in the wrong instructions hint at static-reg-array
+indexing collision but root cause not yet pinned.
+
+After this: FEX-translated x86_64 code runs cleanly on iOS for the
+first time. Verified via 4 distinct RIPs translated end-to-end
+(__dyn_tls_init → __mingw_TLScallback → __dyn_tls_dtor + branch
+target), no recompile-loop on RIP=0x2.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: 83e12849f53363402721893250d5e9ca9dd0e7fd
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 81 +++++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 390d423..02cc68f 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1010,6 +1010,87 @@ NTSTATUS ThreadInit() {
+   uint64_t EnterEC = Thread->CurrentFrame->Pointers.DispatcherLoopTopEnterEC;
+   CPUArea.DispatcherLoopTopEnterEC() = EnterEC;
+ 
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: PATCH FEX dispatcher's broken SpillStaticRegs.
++   *
++   * FEX's emitter on iOS produces 7 stale `madd`/`mul` instructions where
++   * 7 `stp` should be (pairs 1-7: RDX/RBX, RSP/RBP, RSI/RDI, R8/R9, R10/R11,
++   * R12/R13, R14/R15). Same bug at BOTH SpillStaticRegs sites in the
++   * dispatcher (ExitFunctionLink at +0x164, NoBlock at +0x264). Net effect:
++   * State.gregs[REG_RSP] never spilled before CompileBlock; FillStaticRegs
++   * later reloads x23=0 and block 0's first `stp x26, x25, [x23, #-0x10]!`
++   * faults at 0xfffffffffffffff0.
++   *
++   * Workaround: write the correct stp encodings over the broken slots at
++   * BOTH sites, via the RW alias. iOS dual-map: RW = RX + 128MB.            */
++  {
++    /* Expected stp instructions for pairs 1..7 of SpillStaticRegs.
++     * ARM64EC SRA: RAX=x8 (pair0=RAX,RCX), RDX=x1, RBX=x27 (pair1),
++     * RSP=x23, RBP=x29 (pair2), RSI=x25, RDI=x26 (pair3),
++     * R8=x2, R9=x3 (pair4), R10=x4, R11=x5 (pair5),
++     * R12=x19, R13=x20 (pair6), R14=x21, R15=x22 (pair7). */
++    static constexpr uint32_t expected[7] = {
++      0xa9036f81,  // stp x1, x27, [x28, #0x30]
++      0xa9047797,  // stp x23, x29, [x28, #0x40]
++      0xa9056b99,  // stp x25, x26, [x28, #0x50]
++      0xa9060f82,  // stp x2, x3, [x28, #0x60]
++      0xa9071784,  // stp x4, x5, [x28, #0x70]
++      0xa9085393,  // stp x19, x20, [x28, #0x80]
++      0xa9095b95,  // stp x21, x22, [x28, #0x90]
++    };
++
++    /* Two SpillStaticRegs sites in the dispatcher emit. Both have the same
++     * bug, both at the same offsets relative to the SpillStaticRegs start. */
++    static constexpr uintptr_t kPatchOffsets[] = {
++      0x168,  // ExitFunctionLink path SpillStaticRegs's pair-1 onwards
++      0x268,  // NoBlock path SpillStaticRegs's pair-1 onwards
++    };
++    constexpr uintptr_t kPoolSize = 0x8000000;  // 128MB
++
++    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
++        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
++              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
++        : nullptr;
++    auto log_hex = [&](const char* label, uint64_t val) {
++      if (!stderr_h) return;
++      char buf[160];
++      const char* hexd = "0123456789abcdef";
++      int n = 0;
++      while (label[n]) { buf[n] = label[n]; n++; }
++      buf[n++] = '0'; buf[n++] = 'x';
++      for (int j = 60; j >= 0; j -= 4) buf[n++] = hexd[(val >> j) & 0xf];
++      buf[n++] = '\n';
++      ULONG written = 0;
++      WriteFile(stderr_h, buf, n, &written, nullptr);
++    };
++
++    log_hex("[FEX-iOS] DispatcherPatch: EnterEC=", EnterEC);
++    for (auto patch_off : kPatchOffsets) {
++      uint32_t* patch_rx = reinterpret_cast<uint32_t*>(EnterEC + patch_off);
++      uint32_t* patch_rw = reinterpret_cast<uint32_t*>(EnterEC + patch_off + kPoolSize);
++
++      bool already_ok = true;
++      for (int i = 0; i < 7; i++) {
++        if (patch_rx[i] != expected[i]) { already_ok = false; break; }
++      }
++
++      if (!already_ok) {
++        log_hex("[FEX-iOS]   site offset=", patch_off);
++        for (int i = 0; i < 7; i++) {
++          patch_rw[i] = expected[i];
++        }
++        /* Use NtFlushInstructionCache instead of __builtin___clear_cache.
++         * The latter emits `dc cvau` instructions which fault on iOS JIT-pool
++         * RX pages. NtFlushInstructionCache uses the iOS-aware syscall path. */
++        NtFlushInstructionCache(NtCurrentProcess(), patch_rx, sizeof(expected));
++      } else {
++        log_hex("[FEX-iOS]   already OK at offset=", patch_off);
++      }
++    }
++    log_hex("[FEX-iOS] DispatcherPatch DONE.", 0);
++  }
++#endif
++
+   uint64_t EnterECFillSRA = Thread->CurrentFrame->Pointers.DispatcherLoopTopEnterECFillSRA;
+   CPUArea.DispatcherLoopTopEnterECFillSRA() = EnterECFillSRA;
+ 

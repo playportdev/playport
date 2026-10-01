@@ -1,0 +1,59 @@
+CONFLICT 35c974f49b4 hunks=1 files=dlls/ntdll/path.c HACK: ntdll: Disable 16-bit TIB hack.
+CONFLICT 12e7d48882a hunks=2 files=programs/winedbg/debugger.h,programs/winedbg/winedbg.c HACK: winedbg: When crash dialog is not shown, dump crash info to stderr
+CONFLICT 85ffc3a79a3 hunks=1 files=dlls/dinput/joystick_hid.c dinput: Don't apply G920 mapping when used through windows.gaming.input.
+CONFLICT 64ca68c68d6 hunks=2 files=dlls/xinput1_3/main.c xinput1_3: Move controller_(destroy|disable) code around.
+CONFLICT db523be38ee hunks=3 files=dlls/xinput1_3/main.c xinput: Hardcode gamepad capabilities like native report them.
+CONFLICT eda0a9bf629 hunks=1 files=dlls/user32/misc.c user32: Return PT_TOUCH from GetPointerType() for non-mouse pointer.
+CONFLICT 39e7eed749a hunks=1 files=dlls/webservices/Makefile.in webservices: Prefer native.
+CONFLICT fadcf28ba20 hunks=1 files=dlls/winhttp/net.c winhttp: Move connect end checks out of the loop.
+CONFLICT 294b122185f hunks=1 files=dlls/winhttp/net.c winhttp: Introduce new netconn_negotiate helper.
+CONFLICT 377075a4df1 hunks=3 files=dlls/winhttp/net.c winhttp: Handle SEC_I_RENEGOTIATE after DecryptMessage.
+CONFLICT 083a8f7f275 hunks=1 files=dlls/jscript/enumerator.c jscript: Implement mshtml cycle collection for jscript objects, when available.
+CONFLICT fcf8e23d727 hunks=1 files=dlls/bcrypt/bcrypt_main.c,dlls/bcrypt/gnutls.c bcrypt: Add support for none and OAEP-padded asymmetric key encryption.
+CONFLICT 4cf6d8b6f09 hunks=1 files=dlls/bcrypt/bcrypt_main.c,dlls/bcrypt/gnutls.c bcrypt: Add support for none and OAEP padded asymmetric key decryption.
+CONFLICT 49a26f3bd8e hunks=0 files=dlls/bcrypt/gnutls.c bcrypt: Support for ECDH_P521 through gcrypt.
+CONFLICT 095fdddb5e1 hunks=3 files=dlls/xapofx1_1/Makefile.in,dlls/xapofx1_3/Makefile.in,dlls/xaudio2_9/Makefile.in xaudio2: Prefer native
+CONFLICT 7b4037421ea hunks=4 files=dlls/kernel32/tests/version.c,dlls/kernelbase/version.c,include/appmodel.h kernel32: Implement GetPackagesByPackageFamily().
+CONFLICT c18ebc392d1 hunks=3 files=dlls/kernelbase/version.c,include/appmodel.h kernel32: Implement PackageFullNameFromId().
+CONFLICT 8089c27dae7 hunks=9 files=dlls/kernel32/kernel32.spec,dlls/kernel32/tests/version.c,dlls/kernelbase/version.c,include/appmodel.h kernel32: Implement GetPackagePath().
+CONFLICT e415577be81 hunks=2 files=dlls/msvcrt/file.c msvcrt: HACK: Introduce asm wrapper for _isatty on x64.
+CONFLICT baf7cf6aec6 hunks=2 files=dlls/ntdll/loader.c ntdll: HACK: Add WINE_HEAP_DELAY_FREE variable to force the use of pending free buffer.
+CONFLICT a20b0e65ebe hunks=1 files=dlls/kernelbase/process.c kernelbase: HACK: Add --use-gl=swiftshader for another game.
+CONFLICT 2bf5a5799fa hunks=2 files=dlls/ntdll/loader.c HACK: ntdll: Add WINE_HEAP_ZERO_MEMORY variable to force zeroing allocated memory.
+CONFLICT 870373c99ae hunks=3 files=dlls/ntdll/heap.c,dlls/ntdll/loader.c,dlls/ntdll/ntdll_misc.h HACK: ntdll: Extend heap zero hack to private heaps.
+CONFLICT c7e869c1f61 hunks=1 files=dlls/kernelbase/process.c kernelbase: HACK: Force angle d3d9 for Alpha League.
+CONFLICT 3dcea332471 hunks=4 files=dlls/ntdll/loader.c ntdll: Match memory allocation layout for ThreadLocalStoragePointer.
+CONFLICT 0673170e081 hunks=3 files=dlls/ntdll/heap.c,dlls/ntdll/loader.c,dlls/ntdll/ntdll_misc.h ntdll: HACK: Introduce WINE_HEAP_TOP_DOWN hack.
+CONFLICT 89d7ee5f985 hunks=1 files=dlls/mmdevapi/client.c mmdevapi: Round min_period_frames up in client_GetSharedModeEnginePeriod().
+CONFLICT b6f7c600d36 hunks=1 files=dlls/msctf/threadmgr.c msctf: Use list to keep thread managers.
+CONFLICT 1bd0c7edb54 hunks=5 files=dlls/d3dx9_36/d3dx_helpers.c,dlls/d3dx9_36/d3dx_helpers.h,dlls/d3dx9_36/tests/surface.c d3dx9: Handle D3DX_FILTER_SRGB flags.
+CONFLICT b123817064e hunks=2 files=dlls/d3dx10_43/tests/d3dx10.c,dlls/d3dx10_43/texture.c d3dx10: Implement D3DX10LoadTextureFromTexture().
+CONFLICT b8cb280c21b hunks=1 files=dlls/d3dx10_43/tests/d3dx10.c d3dx10: Add support for sRGB formats.
+CONFLICT 2ff0c5e7209 hunks=2 files=dlls/d3dx10_43/tests/d3dx10.c,dlls/d3dx10_43/texture.c d3dx10: Implement D3DX10FilterTexture().
+CONFLICT 0c7d34d3fac hunks=1 files=dlls/d3dx10_43/tests/d3dx10.c d3dx10: Add D3DX10CreateAsyncShaderResourceViewProcessor() stub.
+CONFLICT c7b2ce3ab42 hunks=2 files=dlls/d3dx10_43/async.c,dlls/d3dx10_43/tests/d3dx10.c d3dx10: Implement D3DX10CreateAsyncShaderResourceViewProcessor().
+CONFLICT 60a9a91b179 hunks=1 files=dlls/d3dx10_43/texture.c d3dx10: Implement D3DX10CreateShaderResourceViewFrom{File,Memory,Resource}().
+CONFLICT 8448f7cdff1 hunks=1 files=dlls/d3dx10_43/tests/d3dx10.c d3dx10: Add stubs for D3DX10SaveTextureTo{Memory,File}().
+CONFLICT e3bf5801d01 hunks=24 files=dlls/d3dx10_43/tests/d3dx10.c,dlls/d3dx10_43/texture.c d3dx10: Add partial support for saving to DDS files in D3DX10SaveTextureToMemory().
+CONFLICT 2ed12ec865c hunks=23 files=dlls/d3dx10_43/tests/d3dx10.c,dlls/d3dx10_43/texture.c,dlls/d3dx9_36/d3dx_helpers.c d3dx10: Add support for saving DXT10 DDS files in D3DX10SaveTextureToMemory().
+CONFLICT df77a666b2b hunks=3 files=dlls/d3dx10_43/tests/d3dx10.c,dlls/d3dx10_43/texture.c,dlls/d3dx9_36/d3dx_helpers.h d3dx10: Add support for saving textures to non-DDS file formats.
+CONFLICT 046d8148368 hunks=5 files=dlls/d3dx11_43/tests/d3dx11.c d3dx11: Implement D3DX11LoadTextureFromTexture().
+CONFLICT aebaaafc346 hunks=2 files=dlls/d3dx11_43/tests/d3dx11.c,dlls/d3dx11_43/texture.c d3dx11: Implement D3DX11FilterTexture().
+CONFLICT e15ba9d19d1 hunks=1 files=dlls/d3dx9_36/d3dx_helpers.c d3dx{10,11}: Add support for DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.
+CONFLICT 21e624ea64f hunks=1 files=dlls/d3dx9_36/d3dx_helpers.c d3dx{10,11}: Add support for DXGI_FORMAT_R11G11B10_FLOAT.
+CONFLICT ed581161c2a hunks=3 files=dlls/d3dx10_43/tests/d3dx10.c,dlls/d3dx10_43/texture.c d3dx10: Implement D3DX10SaveTextureToFile{A,W}().
+CONFLICT e2c3789375c hunks=2 files=dlls/d3dx11_43/texture.c d3dx11: Implement D3DX11SaveTextureTo{File,Memory}().
+CONFLICT 764bff28f1b hunks=1 files=dlls/setupapi/devinst.c setupapi: Support DICGF_PRESENT when looking for devices
+CONFLICT 1c95e6c0b50 hunks=2 files=dlls/setupapi/devinst.c setupapi: Use HID device instance ID when checking winebus devices for presence.
+CONFLICT 13a018bc07b hunks=1 files=dlls/setupapi/devinst.c setupapi: Remove devices without any present interfaces from the device info list.
+CONFLICT bd7e90c83fd hunks=1 files=dlls/mmdevapi/tests/propstore.c mmdevapi: Add support for storing VT_BOOL properties.
+CONFLICT 486fe0fb0ed hunks=3 files=dlls/mmdevapi/devenum.c,dlls/mmdevapi/tests/propstore.c mmdevapi: Add support for storing VT_CLSID properties.
+CONFLICT 469a9fea3d1 hunks=2 files=dlls/appwiz.cpl/addons.c,dlls/mscoree/metahost.c HACK: Use x86 mono on aarch64.
+CONFLICT 4dd6a640f97 hunks=1 files=dlls/user32/user32.spec user32: Add a stub for GetPointerInfoHistory().
+CONFLICT 06e63ed967a hunks=1 files=dlls/user32/input.c user32: Add a stub for SkipPointerFrameMessages().
+CONFLICT 7c37252819e hunks=1 files=dlls/ntdll/loader.c ntdll: When overriding dlls, update len.
+CONFLICT 4c175582270 hunks=4 files=dlls/ddraw/tests/ddraw1.c,dlls/ddraw/tests/ddraw2.c,dlls/ddraw/tests/ddraw4.c,dlls/ddraw/tests/ddraw7.c ddraw: Ignore hwnd clipper in exclusive fullscreen mode.
+CONFLICT 17f7a76dc56 hunks=1 files=dlls/msctf/threadmgr.c msctf: HACK: Stub ITfFnReconversion function.
+CONFLICT 9af748e9df5 hunks=1 files=dlls/ntdll/tests/info.c ntdll: Add tests for PROCESS_PARAMS_IMAGE_KEY_MISSING flag.
+CONFLICT acd2f9f92fd hunks=3 files=dlls/imm32/ime.c,dlls/imm32/tests/imm32.c imm32: Strip off tralining zero in ImeSetCompositionString().
+TOTAL commits=198 conflicting=58 hunks=159 empty=0 applied=140

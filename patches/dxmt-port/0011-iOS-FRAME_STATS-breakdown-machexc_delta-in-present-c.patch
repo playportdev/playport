@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 3 Jul 2026 19:01:04 +0800
+Subject: [PATCH] iOS: FRAME_STATS breakdown + machexc_delta in present cadence
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- d3d11_swapchain.cpp: [FRAME_STATS] every 64 frames splits frame cost
+  into commit/sync/encode-prep/encode-flush/drawable-block. Attributed
+  the 1.4s frames to game-side CPU (encode is ~4ms) during the
+  exec-fault-storm hunt.
+- winemetal_unix.c: present-cadence log now includes machexc_delta
+  (Mach exceptions since last present, via ios_exc_msg_count) — the
+  metric that exposed the ~40K faults/frame storm and verified the fix
+  (~165/present after). Dropped the presentedTime probe (always 0 for
+  this layer, even for visible frames).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: 401629fc7266a7b5ed619bb3d8061ad4d0e84dfc
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_swapchain.cpp       | 26 ++++++++++++++++++++++++++
+ src/winemetal/unix/winemetal_unix.c | 18 +++++++++++++++++-
+ 2 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index 7b792fe..96bed95 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -884,6 +884,32 @@ public:
+         std::min(frame.render_pass_optimized, 999u),
+         std::min(frame.clear_pass_count - frame.clear_pass_optimized, 999u), std::min(frame.clear_pass_optimized, 99u)
+     ));
++
++    /* iOS-Mythic 2026-07-03: dump the same frame statistics to the log every
++     * 64 frames — the HUD is invisible without MTL_HUD_ENABLED, and these
++     * numbers split the measured ~10-12ms-per-draw frame cost into
++     * game/encode/commit/GPU-sync so the bottleneck is attributable from a
++     * pulled device log alone. Averages are per-frame, in ms. */
++    {
++      static uint64_t mythic_stats_frame = 0;
++      if ((++mythic_stats_frame % 64) == 0) {
++        Logger::info(std::format(
++            "[FRAME_STATS] #{} cmdbufs={} commit_avg={:.2f}ms sync_cnt={} sync_avg={:.2f}ms "
++            "event_stall_max={} latency_avg={:.2f}ms enc_prep={:.2f}ms enc_flush={:.2f}ms "
++            "drawable_block={:.2f}ms renderpass={}+{} clear={}+{}",
++            mythic_stats_frame, frame.command_buffer_count,
++            average.commit_interval.count() / 1000000.0,
++            frame.sync_count,
++            average.sync_interval.count() / 1000000.0,
++            statistics.max().event_stall,
++            average.present_latency_interval.count() / 1000000.0,
++            average.encode_prepare_interval.count() / 1000000.0,
++            average.encode_flush_interval.count() / 1000000.0,
++            average.drawable_blocking_interval.count() / 1000000.0,
++            frame.render_pass_count - frame.render_pass_optimized, frame.render_pass_optimized,
++            frame.clear_pass_count - frame.clear_pass_optimized, frame.clear_pass_optimized));
++      }
++    }
+     {
+       /* scaler info */
+       auto &info = frame.last_scaler_info;
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 6ce0d2e..b27423b 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1515,12 +1515,23 @@ static inline void mythic_log_present_cadence(const char *path, double after) {
+     uint64_t cur_draws = atomic_load_explicit(&g_mythic_draw_calls, memory_order_relaxed);
+     uint64_t last_draws = atomic_exchange_explicit(&g_mythic_draw_calls_at_last_log, cur_draws, memory_order_relaxed);
+     uint64_t draws_since_last = cur_draws - last_draws;
+-    dprintf(STDERR_FILENO, "[iOS DXMT] Present #%llu t=%llu.%03lu after=%.4f (draws_since_last=%llu total_draws=%llu) [%s]\n",
++    /* 2026-07-03 Mach-exception storm probe: the PC-sampling profiler put
++     * ~25% of game-thread time in the exception-resume trampoline. This
++     * counter (signal_arm64_ios.c, same binary) exposes exceptions/present.
++     * Thousands per present = steady-state trap storm (suspect: guest CALL
++     * pushes into trap-mode-protected callret memory at ~70us each). */
++    extern volatile int ios_exc_msg_count;
++    static int last_exc_count = 0;
++    int cur_exc = ios_exc_msg_count;
++    int exc_delta = cur_exc - last_exc_count;
++    last_exc_count = cur_exc;
++    dprintf(STDERR_FILENO, "[iOS DXMT] Present #%llu t=%llu.%03lu after=%.4f (draws_since_last=%llu total_draws=%llu machexc_delta=%d) [%s]\n",
+             (unsigned long long)n,
+             (unsigned long long)ts.tv_sec, (unsigned long)(ts.tv_nsec / 1000000),
+             after,
+             (unsigned long long)draws_since_last,
+             (unsigned long long)cur_draws,
++            exc_delta,
+             path);
+   }
+ }
+@@ -1531,6 +1542,11 @@ uint64_t mythic_get_present_count(void) {
+   return atomic_load_explicit(&g_mythic_present_count, memory_order_relaxed);
+ }
+ 
++/* NOTE (2026-07-03): a presented-handler probe lived here during the
++ * visibility-stall investigation. Removed — presentedTime reported 0.000
++ * even for frames provably on glass (the splash), so it carries no signal
++ * for this layer. See project memory for the full postmortem. */
++
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;

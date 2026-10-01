@@ -1,0 +1,1601 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 7 Mar 2026 09:12:18 -0800
+Subject: [PATCH] iOS/ARM64 port of FEXCore for jailed iOS devices
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Port FEXCore to compile and run as a static library on iOS (arm64).
+Key changes:
+
+Build system:
+- Skip Source/, Data/binfmts/, Data/AppConfig/ on Apple
+- Disable jemalloc/rpmalloc, use system malloc
+- Skip 64BitAllocator on Apple
+
+Linux→Apple compatibility:
+- prctl stubs, sigprocmask instead of SYS_rt_sigprocmask
+- Spin-wait+usleep instead of futex (WritePriorityMutex, InterruptableConditionVariable)
+- malloc_size instead of malloc_usable_size, posix_memalign instead of memalign
+- sincos → sin+cos, fcopyfile instead of sendfile
+- Relaxed InternalThreadState size assertions (Apple shared_mutex is larger)
+- x18 excluded from register allocation (Apple platform TLS)
+
+Dual-mapped JIT memory (W^X compliance):
+- Buffer.h: WriteOffset/WritePtr for RX→RW translation
+- JIT.cpp: SetWriteOffset(0) for TempCodeBuffer, restore for CodeBuffer
+- Emitter.h: Forward label Bind() uses WritePtr for memory access
+- Dispatcher.cpp: Split i-cache invalidation (data cache on RW, icache on RX)
+
+Tested on iPhone 13 Pro (A15), iOS 26.3 — x86-64 exit(42) passes.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+Madeira-commit: fce78cefd6ad213b270555238e7a4184fa42eb2e
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ CMakeLists.txt                                |  35 ++++--
+ CodeEmitter/CodeEmitter/Buffer.h              |  29 ++++-
+ CodeEmitter/CodeEmitter/Emitter.h             |  27 +++--
+ FEXCore/Source/CMakeLists.txt                 |  10 +-
+ .../Core/ArchHelpers/Arm64Emitter.cpp         |  18 +++
+ FEXCore/Source/Interface/Core/CodeCache.cpp   |  13 +++
+ FEXCore/Source/Interface/Core/Core.cpp        |  21 ++++
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  |  15 +++
+ FEXCore/Source/Interface/Core/Frontend.cpp    |   8 ++
+ .../Core/Interpreter/Fallbacks/F80Fallbacks.h |   2 +-
+ FEXCore/Source/Interface/Core/JIT/JIT.cpp     |  95 ++++++++++++++--
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp |   7 +-
+ .../Core/SharedCodeBufferManager.cpp          |   4 +-
+ FEXCore/Source/Utils/Allocator.cpp            |  58 +++++++++-
+ FEXCore/Source/Utils/AllocatorHooks.cpp       |  34 ++++++
+ FEXCore/Source/Utils/Profiler.cpp             |   2 +-
+ .../FEXCore/Debug/InternalThreadState.h       |   5 +
+ .../include/FEXCore/Utils/AllocatorHooks.h    |  12 +-
+ FEXCore/include/FEXCore/Utils/DualMap.h       |  31 +++++
+ .../Utils/InterruptableConditionVariable.h    | 107 +++++++++++++-----
+ FEXCore/include/FEXCore/Utils/PrctlUtils.h    |  24 +++-
+ .../include/FEXCore/Utils/SignalScopeGuards.h |  19 +++-
+ FEXCore/include/FEXCore/Utils/SpinWaitLock.h  |  13 +++
+ .../FEXCore/Utils/WritePriorityMutex.h        |  38 +++++--
+ FEXHeaderUtils/FEXHeaderUtils/Filesystem.h    |  11 +-
+ FEXHeaderUtils/FEXHeaderUtils/Syscalls.h      |  30 ++++-
+ 26 files changed, 565 insertions(+), 103 deletions(-)
+ create mode 100644 FEXCore/include/FEXCore/Utils/DualMap.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 87b7c31..80505c3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -61,9 +61,9 @@ if (NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+   message(FATAL_ERROR "Unsupported pointer size ${CMAKE_SIZEOF_VOID_P}."
+     " FEX only supports 64-bit (8-byte pointer) systems."
+     " If you believe this is in error, file an issue.")
+-elseif (NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
++elseif (NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS"))
+   message(FATAL_ERROR "Unsupported system type ${CMAKE_SYSTEM_NAME}."
+-    " FEX only supports Linux and Windows."
++    " FEX only supports Linux, Windows, and Darwin/iOS."
+     " If you believe this is in error, file an issue.")
+ endif()
+ 
+@@ -278,7 +278,11 @@ if (ENABLE_COMPILE_TIME_TRACE)
+   link_libraries(-ftime-trace)
+ endif()
+ 
+-set(PTHREAD_LIB pthread)
++if (APPLE)
++  set(PTHREAD_LIB "")
++else()
++  set(PTHREAD_LIB pthread)
++endif()
+ 
+ if (USE_LINKER)
+   message(STATUS "Overriding linker to: ${USE_LINKER}")
+@@ -325,7 +329,12 @@ if (ENABLE_COVERAGE)
+   link_libraries(-fprofile-instr-generate -fcoverage-mapping)
+ endif()
+ 
+-if (ENABLE_JEMALLOC_GLIBC_ALLOC)
++if (APPLE)
++  # Disable Linux-specific allocators on Apple platforms
++  set(ENABLE_JEMALLOC_GLIBC_ALLOC FALSE)
++  set(ENABLE_FEX_ALLOCATOR FALSE)
++  message(STATUS "Apple platform detected — disabling jemalloc and rpmalloc")
++elseif (ENABLE_JEMALLOC_GLIBC_ALLOC)
+   # The glibc jemalloc subproject which hooks the glibc allocator.
+   # Required for thunks to work.
+   # All host native libraries will use this allocator, while *most* other FEX internal allocations will use the other jemalloc allocator.
+@@ -341,7 +350,7 @@ endif()
+ if (ENABLE_FEX_ALLOCATOR)
+   # The rpmalloc subproject that all FEXCore fextl objects allocate through.
+   add_subdirectory(External/rpmalloc/)
+-elseif (NOT MINGW)
++elseif (NOT MINGW AND NOT APPLE)
+   message (STATUS
+     " FEX allocator is disabled!\n"
+     " This is not a recommended configuration!\n"
+@@ -617,15 +626,17 @@ add_subdirectory(FEXHeaderUtils/)
+ add_subdirectory(CodeEmitter/)
+ add_subdirectory(FEXCore/)
+ 
+-if (ARCHITECTURE_arm64 AND NOT MINGW AND NOT BUILD_STEAM_SUPPORT)
+-  # Binfmt_misc files must be installed prior to Source/ installs
+-  add_subdirectory(Data/binfmts/)
+-endif()
++if (NOT APPLE)
++  if (ARCHITECTURE_arm64 AND NOT MINGW AND NOT BUILD_STEAM_SUPPORT)
++    # Binfmt_misc files must be installed prior to Source/ installs
++    add_subdirectory(Data/binfmts/)
++  endif()
+ 
+-add_subdirectory(Source/)
++  add_subdirectory(Source/)
+ 
+-if (NOT BUILD_STEAM_SUPPORT)
+-  add_subdirectory(Data/AppConfig/)
++  if (NOT BUILD_STEAM_SUPPORT)
++    add_subdirectory(Data/AppConfig/)
++  endif()
+ endif()
+ 
+ # Install the ThunksDB file
+diff --git a/CodeEmitter/CodeEmitter/Buffer.h b/CodeEmitter/CodeEmitter/Buffer.h
+index 602eeb6..979b1f7 100644
+--- a/CodeEmitter/CodeEmitter/Buffer.h
++++ b/CodeEmitter/CodeEmitter/Buffer.h
+@@ -22,10 +22,21 @@ public:
+     Size = BaseSize;
+   }
+ 
++#ifdef __APPLE__
++  // iOS dual-mapping support: BufferBase/CurrentOffset are RX (executable) addresses.
++  // Actual writes go to (address + WriteOffset) which points to the RW mirror.
++  // On non-Apple platforms this is always 0 and optimizes away.
++  void SetWriteOffset(int64_t Offset) { WriteOffset = Offset; }
++  int64_t GetWriteOffset() const { return WriteOffset; }
++#else
++  void SetWriteOffset(int64_t) {}
++  static constexpr int64_t GetWriteOffset() { return 0; }
++#endif
++
+   template<typename T>
+   requires (std::is_trivially_copyable_v<T>)
+   void dcn(const T& Data) {
+-    std::memcpy(CurrentOffset, &Data, sizeof(Data));
++    std::memcpy(WritePtr(CurrentOffset), &Data, sizeof(Data));
+     CurrentOffset += sizeof(Data);
+   }
+   void dc8(uint8_t Data) {
+@@ -43,7 +54,7 @@ public:
+ 
+   void EmitString(const char* String) {
+     const auto StringLength = strlen(String);
+-    memcpy(CurrentOffset, String, StringLength);
++    memcpy(WritePtr(CurrentOffset), String, StringLength);
+     CurrentOffset += StringLength;
+   }
+ 
+@@ -53,7 +64,7 @@ public:
+     if (!CurrentAlignment) {
+       return;
+     }
+-    std::memset(CurrentOffset, 0, Size - CurrentAlignment);
++    std::memset(WritePtr(CurrentOffset), 0, Size - CurrentAlignment);
+     CurrentOffset += Size - CurrentAlignment;
+   }
+ 
+@@ -92,9 +103,21 @@ public:
+   }
+ 
+ protected:
++  // Convert an RX (executable) address to the RW (writable) address for memory writes.
++  // On non-Apple platforms, WriteOffset is 0 and this is identity.
++  uint8_t* WritePtr(uint8_t* RXAddr) const {
++#ifdef __APPLE__
++    return RXAddr + WriteOffset;
++#else
++    return RXAddr;
++#endif
++  }
+ 
+   uint8_t* BufferBase;
+   uint8_t* CurrentOffset;
+   uint64_t Size;
++#ifdef __APPLE__
++  int64_t WriteOffset = 0;
++#endif
+ };
+ } // namespace ARMEmitter
+diff --git a/CodeEmitter/CodeEmitter/Emitter.h b/CodeEmitter/CodeEmitter/Emitter.h
+index 001adcb..40b9219 100644
+--- a/CodeEmitter/CodeEmitter/Emitter.h
++++ b/CodeEmitter/CodeEmitter/Emitter.h
+@@ -657,11 +657,15 @@ public:
+ 
+   [[nodiscard]] bool Bind(const ForwardLabel::Reference* Label) {
+     uint8_t* CurrentAddress = GetCursorAddress<uint8_t*>();
++    // On Apple with dual-mapping, Label->Location is an RX (execute) address.
++    // Memory reads/writes must go through the RW mirror via WritePtr.
++    // Offset computations still use Label->Location (RX) since that's the runtime PC.
++    uint8_t* WritableLocation = WritePtr(Label->Location);
+     // Patch up the instructions
+     switch (Label->Type) {
+     case ForwardLabel::InstType::ADR: {
+-      uint32_t* Instruction = reinterpret_cast<uint32_t*>(Label->Location);
+-      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Instruction);
++      uint32_t* Instruction = reinterpret_cast<uint32_t*>(WritableLocation);
++      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Label->Location);
+       if (!IsADRRange(Imm)) {
+         // Can't bind.
+         return false;
+@@ -675,8 +679,8 @@ public:
+       break;
+     }
+     case ForwardLabel::InstType::ADRP: {
+-      uint32_t* Instruction = reinterpret_cast<uint32_t*>(Label->Location);
+-      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Instruction);
++      uint32_t* Instruction = reinterpret_cast<uint32_t*>(WritableLocation);
++      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Label->Location);
+ 
+       if (!(IsADRPRange(Imm) && IsADRPAligned(Imm))) {
+         // Can't bind.
+@@ -693,8 +697,8 @@ public:
+       break;
+     }
+     case ForwardLabel::InstType::B: {
+-      uint32_t* Instruction = reinterpret_cast<uint32_t*>(Label->Location);
+-      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Instruction);
++      uint32_t* Instruction = reinterpret_cast<uint32_t*>(WritableLocation);
++      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Label->Location);
+       if (!(Imm >= -134217728 && Imm <= 134217724 && ((Imm & 0b11) == 0))) {
+         // Can't bind.
+         return false;
+@@ -709,8 +713,8 @@ public:
+       break;
+     }
+     case ForwardLabel::InstType::TEST_BRANCH: {
+-      uint32_t* Instruction = reinterpret_cast<uint32_t*>(Label->Location);
+-      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Instruction);
++      uint32_t* Instruction = reinterpret_cast<uint32_t*>(WritableLocation);
++      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Label->Location);
+       if (!(Imm >= -32768 && Imm <= 32764 && ((Imm & 0b11) == 0))) {
+         // Can't bind.
+         return false;
+@@ -726,8 +730,8 @@ public:
+     }
+     case ForwardLabel::InstType::BC:
+     case ForwardLabel::InstType::RELATIVE_LOAD: {
+-      uint32_t* Instruction = reinterpret_cast<uint32_t*>(Label->Location);
+-      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Instruction);
++      uint32_t* Instruction = reinterpret_cast<uint32_t*>(WritableLocation);
++      int64_t Imm = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(Label->Location);
+       if (!(Imm >= -1048576 && Imm <= 1048575 && ((Imm & 0b11) == 0))) {
+         // Can't bind.
+         return false;
+@@ -742,6 +746,7 @@ public:
+     }
+     case ForwardLabel::InstType::LONG_ADDRESS_GEN: {
+       const auto* Instructions = reinterpret_cast<uint32_t*>(Label->Location);
++      const auto* InstructionsRW = reinterpret_cast<uint32_t*>(WritableLocation);
+       const auto ImmInstOne = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(&Instructions[0]);
+       const auto ImmInstTwo = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(&Instructions[1]);
+       const auto ImmInstThree = reinterpret_cast<int64_t>(CurrentAddress) - reinterpret_cast<int64_t>(&Instructions[2]);
+@@ -752,7 +757,7 @@ public:
+ 
+       // We encoded the destination register in to the first instruction space.
+       // Read it back.
+-      ARMEmitter::Register DestReg(Instructions[0]);
++      ARMEmitter::Register DestReg(InstructionsRW[0]);
+ 
+       if (IsADRRange(ImmInstThree)) {
+         // If within ADR range from the third instruction, then we can emit NOP+NOP+ADR
+diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
+index d292e5c..baedd17 100644
+--- a/FEXCore/Source/CMakeLists.txt
++++ b/FEXCore/Source/CMakeLists.txt
+@@ -9,7 +9,7 @@ set(FEXCORE_BASE_SRCS
+   Utils/SpinWaitLock.cpp
+   Utils/WildcardMatcher.cpp)
+ 
+-if (NOT MINGW)
++if (NOT MINGW AND NOT APPLE)
+   list(APPEND FEXCORE_BASE_SRCS
+     Utils/Allocator/64BitAllocator.cpp)
+ endif()
+@@ -118,7 +118,9 @@ if (ENABLE_ZYDIS)
+   list(APPEND LIBS Zydis::Zydis)
+ endif()
+ 
+-if (NOT MINGW)
++if (APPLE)
++  list(APPEND LIBS dl)
++elseif (NOT MINGW)
+   list(APPEND LIBS dl)
+ else()
+   list(APPEND LIBS synchronization)
+@@ -291,7 +293,7 @@ AddObject(${PROJECT_NAME}_object)
+ AddLibrary(${PROJECT_NAME} STATIC)
+ AddLibrary(${PROJECT_NAME}_shared SHARED)
+ 
+-if (NOT MINGW AND NOT BUILD_STEAM_SUPPORT)
++if (NOT MINGW AND NOT APPLE AND NOT BUILD_STEAM_SUPPORT)
+   install(TARGETS ${PROJECT_NAME}_shared LIBRARY
+     DESTINATION ${CMAKE_INSTALL_LIBDIR}
+     COMPONENT Libraries)
+@@ -310,7 +312,7 @@ if (ENABLE_JEMALLOC_GLIBC_ALLOC)
+   target_link_libraries(JemallocLibs INTERFACE FEX_jemalloc_glibc)
+ endif()
+ 
+-if (NOT MINGW)
++if (NOT MINGW AND NOT APPLE)
+   # Dummy project to use for host tools.
+   # This overrides use of jemalloc in FEXCore with the normal glibc allocator.
+   add_library(JemallocDummy STATIC Utils/AllocatorHooks.cpp)
+diff --git a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+index 3ebadb5..18782d7 100644
+--- a/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
++++ b/FEXCore/Source/Interface/Core/ArchHelpers/Arm64Emitter.cpp
+@@ -73,6 +73,23 @@ namespace x64 {
+     ARMEmitter::Reg::r8, ARMEmitter::Reg::r16, ARMEmitter::Reg::r17,
+   };
+ 
++#ifdef __APPLE__
++  // On Apple platforms, x18 is reserved for platform TLS. Do not use it.
++  constexpr std::array<ARMEmitter::Register, 6> RA = {
++    // All these callee saved
++    ARMEmitter::Reg::r20, ARMEmitter::Reg::r21, ARMEmitter::Reg::r22, ARMEmitter::Reg::r23,
++    ARMEmitter::Reg::r24, ARMEmitter::Reg::r30,
++  };
++
++  constexpr unsigned RAPairs = 3;
++
++  // Dynamic GPRs
++  constexpr std::array<ARMEmitter::Register, 1> PreserveAll_Dynamic = {
++    ARMEmitter::Reg::r30,
++  };
++
++  constexpr std::array<ARMEmitter::Register, 1> NotPreserved_Dynamic = PreserveAll_Dynamic;
++#else
+   constexpr std::array<ARMEmitter::Register, 7> RA = {
+     // All these callee saved
+     ARMEmitter::Reg::r20, ARMEmitter::Reg::r21, ARMEmitter::Reg::r22, ARMEmitter::Reg::r23,
+@@ -88,6 +105,7 @@ namespace x64 {
+   };
+ 
+   constexpr std::array<ARMEmitter::Register, 2> NotPreserved_Dynamic = PreserveAll_Dynamic;
++#endif
+ 
+   // All are caller saved
+   constexpr std::array<ARMEmitter::VRegister, 16> SRAFPR = {
+diff --git a/FEXCore/Source/Interface/Core/CodeCache.cpp b/FEXCore/Source/Interface/Core/CodeCache.cpp
+index f6feedc..d19f745 100644
+--- a/FEXCore/Source/Interface/Core/CodeCache.cpp
++++ b/FEXCore/Source/Interface/Core/CodeCache.cpp
+@@ -354,11 +354,24 @@ bool CodeCache::SaveData(Core::InternalThreadState& Thread, int fd, const Execut
+   ::write(fd, Relocations.data(), Relocations.size() * sizeof(Relocations[0]));
+ 
+   // Pad to next page in file so that the CodeBuffer can be mmap'ed into process on load
++#if defined(__APPLE__)
++  // iOS: ftruncate-extend can leave the tail pages unbacked in the app sandbox,
++  // so the later mmap of this region faults. Write zeros explicitly to force
++  // real backing store for the padding.
++  char Zero[64] {};
++  auto Off = lseek(fd, 0, SEEK_CUR);
++  while (Off != AlignUp(Off, Utils::FEX_PAGE_SIZE)) {
++    auto BytesToWrite = std::min(static_cast<size_t>(AlignUp(Off, Utils::FEX_PAGE_SIZE) - Off), sizeof(Zero));
++    ::write(fd, Zero, BytesToWrite);
++    Off += BytesToWrite;
++  }
++#else
+   {
+     auto AlignedSize = AlignUp(lseek(fd, 0, SEEK_CUR), Utils::FEX_PAGE_SIZE);
+     ::ftruncate(fd, AlignedSize);
+     lseek(fd, AlignedSize, SEEK_SET);
+   }
++#endif
+ 
+   // Dump the host code (relocated for position-independent serialization)
+   std::span CodeBufferData(reinterpret_cast<std::byte*>(CodeBuffer->GetBufferBase()),
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 8286c14..8043dc5 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -542,11 +542,19 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+   if (!HasCustomIR) {
+     const auto* GuestCode = reinterpret_cast<const uint8_t*>(GuestRIP);
+ 
++    LogMan::Msg::IFmt("[iOS] GenerateIR: GuestCode={} first bytes: {:02x} {:02x} {:02x} {:02x} {:02x}",
++                      fmt::ptr(GuestCode), GuestCode[0], GuestCode[1], GuestCode[2], GuestCode[3], GuestCode[4]);
++
++    LogMan::Msg::IFmt("[iOS] GenerateIR: Calling DecodeLoop...");
+     Thread->FrontendDecoder->DecodeLoop(GuestCode);
++    LogMan::Msg::IFmt("[iOS] GenerateIR: DecodeLoop returned");
+ 
+     const auto* BlockInfo = Thread->FrontendDecoder->GetDecodedBlockInfo();
+     const auto& CodeBlocks = BlockInfo->Blocks;
+ 
++    LogMan::Msg::IFmt("[iOS] GenerateIR: Blocks={} TotalInsts={} Is64Bit={}",
++                      CodeBlocks.size(), BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode);
++
+     Thread->OpDispatcher->BeginFunction(GuestRIP, &CodeBlocks, BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode,
+                                         AreMonoHacksActive() && MonoBackpatcherBlock.load(std::memory_order_relaxed) == GuestRIP);
+ 
+@@ -804,6 +812,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+ }
+ 
+ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst) {
++  LogMan::Msg::IFmt("[iOS] CompileCode: RIP={:#x}", GuestRIP);
++
+   if (SourcecodeResolver && Config.GDBSymbols()) {
+     auto MappedSection = SyscallHandler->LookupExecutableFileSection(Thread, GuestRIP);
+     if (MappedSection) {
+@@ -813,8 +823,10 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+   }
+ 
+   // Generate IR + Meta Info
++  LogMan::Msg::IFmt("[iOS] CompileCode: Calling GenerateIR...");
+   auto [IRView, TotalInstructions, TotalInstructionsLength, StartAddr, Length, NeedsAddGuestCodeRanges] =
+     GenerateIR(Thread, GuestRIP, Config.GDBSymbols(), MaxInst);
++  LogMan::Msg::IFmt("[iOS] CompileCode: GenerateIR returned, TotalInsts={} Length={}", TotalInstructions, Length);
+   if (!IRView) {
+     Thread->FrontendDecoder->ValidateDisownedOrFree();
+     Thread->OpDispatcher->ValidateDisownedOrFree();
+@@ -846,7 +858,9 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+   // If the trap flag is set we generate single instruction blocks that each check to generate a single step exception.
+   bool TFSet = Thread->CurrentFrame->State.flags[X86State::RFLAG_TF_RAW_LOC];
+ 
++  LogMan::Msg::IFmt("[iOS] CompileCode: Calling CPUBackend->CompileCode...");
+   auto CompiledCode = Thread->CPUBackend->CompileCode(GuestRIP, Length, TotalInstructions == 1, &*IRView, DebugData.get(), TFSet);
++  LogMan::Msg::IFmt("[iOS] CompileCode: CPUBackend->CompileCode returned");
+ 
+   // Release the IR
+   Thread->OpDispatcher->DelayedDisownBuffer();
+@@ -878,16 +892,22 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   FEXCORE_PROFILE_SCOPED("CompileBlock");
+   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedJITTime);
+ 
++  LogMan::Msg::IFmt("[iOS] CompileBlock: RIP={:#x} MaxInst={}", GuestRIP, MaxInst);
++
+   static_cast<ContextImpl*>(Thread->CTX)->SyscallHandler->PreCompile();
++  LogMan::Msg::IFmt("[iOS] CompileBlock: PreCompile done");
+ 
+   // Invalidate might take a unique lock on this, to guarantee that during invalidation no code gets compiled
+   auto lk = GuardSignalDeferringSection<std::shared_lock>(CodeInvalidationMutex, Thread);
++  LogMan::Msg::IFmt("[iOS] CompileBlock: Lock acquired");
+ 
+   // Is the code in the cache?
+   // The backends only check L1 and L2, not L3
+   if (auto HostCode = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
++    LogMan::Msg::IFmt("[iOS] CompileBlock: Found in cache at {:#x}", HostCode);
+     return HostCode;
+   }
++  LogMan::Msg::IFmt("[iOS] CompileBlock: Not in cache, compiling...");
+ 
+   Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, MaxInst);
+ 
+@@ -934,6 +954,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedJITCount, 1);
+ 
+   auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
++  LogMan::Msg::IFmt("[iOS] CompileBlock: CompileCode returned, Length={}", Length);
+   auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
+   if (CodePtr == nullptr) {
+     return 0;
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index b174dab..b57005b 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -1,5 +1,9 @@
+ // SPDX-License-Identifier: MIT
+ 
++#ifdef __APPLE__
++#include <libkern/OSCacheControl.h>
++#endif
++
+ #include "Common/VectorRegType.h"
+ #include "Interface/Context/Context.h"
+ #include "Interface/Core/CPUBackend.h"
+@@ -8,6 +12,7 @@
+ #include "Utils/MemberFunctionToPointer.h"
+ 
+ #include <FEXCore/Config/Config.h>
++#include <FEXCore/Utils/DualMap.h>
+ #include <FEXCore/Core/CoreState.h>
+ #include <FEXCore/Core/SignalDelegator.h>
+ #include <FEXCore/Core/X86Enums.h>
+@@ -39,6 +44,7 @@ constexpr size_t MAX_DISPATCHER_CODE_SIZE = FEXCore::Utils::FEX_PAGE_SIZE * 4;
+ Dispatcher::Dispatcher(FEXCore::Context::ContextImpl* ctx)
+   : Arm64Emitter(ctx, FEXCore::Allocator::VirtualAlloc(MAX_DISPATCHER_CODE_SIZE, true), MAX_DISPATCHER_CODE_SIZE)
+   , CTX {ctx} {
++  SetWriteOffset(FEXCore::DualMap::WriteOffset);
+   EmitDispatcher();
+ 
+   FEXCore::Allocator::VirtualName("FEXMem_Misc", reinterpret_cast<void*>(GetBufferBase()), MAX_DISPATCHER_CODE_SIZE);
+@@ -600,7 +606,16 @@ void Dispatcher::EmitDispatcher() {
+ 
+   Start = reinterpret_cast<uint64_t>(DispatchPtr);
+   End = GetCursorAddress<uint64_t>();
++#ifdef __APPLE__
++  {
++    auto DispatchSize = End - reinterpret_cast<uint64_t>(DispatchPtr);
++    auto* RWPtr = WritePtr(reinterpret_cast<uint8_t*>(DispatchPtr));
++    __builtin___clear_cache(reinterpret_cast<char*>(RWPtr), reinterpret_cast<char*>(RWPtr) + DispatchSize);
++    sys_icache_invalidate(reinterpret_cast<void*>(DispatchPtr), DispatchSize);
++  }
++#else
+   ClearICache(reinterpret_cast<void*>(DispatchPtr), End - reinterpret_cast<uint64_t>(DispatchPtr));
++#endif
+ 
+   if (CTX->Config.BlockJITNaming()) {
+     fextl::string Name = fextl::fmt::format("Dispatch_{}", FHU::Syscalls::gettid());
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index 6ae165c..5885da7 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -1510,6 +1510,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+ 
+       // Do a bit of pointer math to figure out where we are in code
+       InstStream = AdjustAddrForSpecialRegion(_InstStream, EntryPoint, RIPToDecode);
++      LogMan::Msg::IFmt("[iOS] Decoder: Block RIP={:#x}, InstStream={}, entering inner loop", RIPToDecode, (void*)InstStream);
+     } else if (BlockResume != -1) {
+       BlockIt = BlockInfo.Blocks.begin() + BlockResume;
+       BlockResume = -1;
+@@ -1544,6 +1545,9 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+       }
+ 
+       LastFieldReadSize = 0;
++      if (TotalInstructions == 0) {
++        LogMan::Msg::IFmt("[iOS] Decoder: About to decode first instruction at {:#x}, byte={:#x}", OpAddress, InstStream[0]);
++      }
+       BlockIt->BlockStatus = DecodeInstruction(OpAddress);
+       if (HitBadRelocation) {
+         BlockInfo.TotalInstructionCount = 0;
+@@ -1668,6 +1672,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+   }
+ 
+   BlockInfo.TotalInstructionCount = TotalInstructions;
++  LogMan::Msg::IFmt("[iOS] Decoder: Done! TotalInstructions={}, Blocks={}", TotalInstructions, BlockInfo.Blocks.size());
+ 
+   for (auto& Block : BlockInfo.Blocks) {
+     Block.IsEntryPoint = BlockInfo.EntryPoints.contains(Block.Entry);
+@@ -1699,7 +1704,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+   // Decode operating mode from thread's CS segment.
+   const auto CSSegment = Core::CPUState::GetSegmentFromIndex(Thread->CurrentFrame->State, Thread->CurrentFrame->State.cs_idx);
+   BlockInfo.Is64BitMode = CSSegment->L == 1;
++  LogMan::Msg::IFmt("[iOS] Decoder: CSSegment->L={}, Is64BitMode={}, Config.Is64BitMode={}", CSSegment->L, BlockInfo.Is64BitMode, (bool)CTX->Config.Is64BitMode);
+   LOGMAN_THROW_A_FMT(BlockInfo.Is64BitMode == CTX->Config.Is64BitMode, "Expected operating mode to not change at runtime!");
++  LogMan::Msg::IFmt("[iOS] Decoder: Assertion passed OK");
+ 
+   EntryPoint = PC;
+   BlockInfo.EntryPoints = {PC};
+@@ -1731,6 +1738,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+ 
+   EntryBlock = true;
+   FinalInstruction = false;
++  LogMan::Msg::IFmt("[iOS] Decoder: MaxInst={}, entering decode loop...", MaxInst);
+ }
+ 
+ } // namespace FEXCore::Frontend
+diff --git a/FEXCore/Source/Interface/Core/Interpreter/Fallbacks/F80Fallbacks.h b/FEXCore/Source/Interface/Core/Interpreter/Fallbacks/F80Fallbacks.h
+index 5c0e656..4b8f9b1 100644
+--- a/FEXCore/Source/Interface/Core/Interpreter/Fallbacks/F80Fallbacks.h
++++ b/FEXCore/Source/Interface/Core/Interpreter/Fallbacks/F80Fallbacks.h
+@@ -369,7 +369,7 @@ struct OpHandlers<IR::OP_F64SINCOS> {
+   FEXCORE_PRESERVE_ALL_ATTR static VectorScalarF64Pair handle(double src, FEXCore::Core::CpuStateFrame* Frame) {
+     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
+     double sin, cos;
+-#ifdef _WIN32
++#if defined(_WIN32) || defined(__APPLE__)
+     sin = ::sin(src);
+     cos = ::cos(src);
+ #else
+diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+index c23f01a..19f94ae 100644
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -11,6 +11,10 @@ desc: Main glue logic of the arm64 splatter backend
+ $end_info$
+ */
+ 
++#ifdef __APPLE__
++#include <libkern/OSCacheControl.h>
++#endif
++
+ #include "Interface/Context/Context.h"
+ #include "Interface/Core/LookupCache.h"
+ #include "Interface/Core/Dispatcher/Dispatcher.h"
+@@ -18,6 +22,7 @@ $end_info$
+ #include "Interface/Core/JIT/DebugData.h"
+ #include "Interface/Core/JIT/JITClass.h"
+ #include "Interface/IR/Passes/RegisterAllocationPass.h"
++#include <FEXCore/Utils/DualMap.h>
+ 
+ #include "Utils/MemberFunctionToPointer.h"
+ #include "Utils/variable_length_integer.h"
+@@ -511,8 +516,14 @@ static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record,
+     BranchEmit.b(BranchOffset);
+   }
+ 
+-  std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(CallerAddress)).store(BranchInst, std::memory_order::relaxed);
++  std::atomic_ref<uint32_t>(*FEXCore::DualMap::WriteAddr(reinterpret_cast<uint32_t*>(CallerAddress))).store(BranchInst, std::memory_order::relaxed);
++#ifdef __APPLE__
++  __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))),
++                          reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))) + 4);
++  sys_icache_invalidate(reinterpret_cast<void*>(CallerAddress), 4);
++#else
+   ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(CallerAddress), 4);
++#endif
+ }
+ 
+ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record) {
+@@ -522,8 +533,14 @@ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record
+   // Restore branch +2 instructions to jump to the linker block
+   BranchEmit.b(0x2);
+ 
+-  std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(JumpThunkStartAddress)).store(BranchInst, std::memory_order::relaxed);
++  std::atomic_ref<uint32_t>(*FEXCore::DualMap::WriteAddr(reinterpret_cast<uint32_t*>(JumpThunkStartAddress))).store(BranchInst, std::memory_order::relaxed);
++#ifdef __APPLE__
++  __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))),
++                          reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))) + 4);
++  sys_icache_invalidate(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
++#else
+   ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
++#endif
+ 
+   // No need to reset HostCode here as the exit linker pointer is stored separately, and if the block is relinked it will be updated.
+ }
+@@ -589,21 +606,33 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+         GuestRip, Record, [](FEXCore::Context::ExitFunctionLinkData* Record) { DirectBlockDelinker(Record, false); }, lk);
+     }
+ 
+-    std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(CallerAddress)).store(BranchInst, std::memory_order::relaxed);
++    std::atomic_ref<uint32_t>(*FEXCore::DualMap::WriteAddr(reinterpret_cast<uint32_t*>(CallerAddress))).store(BranchInst, std::memory_order::relaxed);
++#ifdef __APPLE__
++    __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))),
++                            reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))) + 4);
++    sys_icache_invalidate(reinterpret_cast<void*>(CallerAddress), 4);
++#else
+     ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(CallerAddress), 4);
++#endif
+   } else {
+     // This case is common between calls and jumps as the thunk callsite can be left untouched.
+-    std::atomic_ref<uint64_t>(Record->HostCode).store(HostCode, std::memory_order::seq_cst);
++    std::atomic_ref<uint64_t>(FEXCore::DualMap::WriteAddr(Record)->HostCode).store(HostCode, std::memory_order::seq_cst);
+ #ifdef ARCHITECTURE_arm64
+     // Make memory write visible to other threads reading the same location
+-    asm volatile("dc cvau, %0; dsb ish" : : "r"(Record->HostCode) :);
++    asm volatile("dc cvau, %0; dsb ish" : : "r"(&FEXCore::DualMap::WriteAddr(Record)->HostCode) :);
+ #endif
+ 
+     uint32_t LdrInst = 0;
+     ARMEmitter::Emitter LdrEmit(reinterpret_cast<uint8_t*>(&LdrInst), 4);
+     LdrEmit.ldr(TMP1, reinterpret_cast<uint64_t>(&Record->HostCode) - JumpThunkStartAddress);
+-    std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(JumpThunkStartAddress)).store(LdrInst, std::memory_order::relaxed);
++    std::atomic_ref<uint32_t>(*FEXCore::DualMap::WriteAddr(reinterpret_cast<uint32_t*>(JumpThunkStartAddress))).store(LdrInst, std::memory_order::relaxed);
++#ifdef __APPLE__
++    __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))),
++                            reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))) + 4);
++    sys_icache_invalidate(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
++#else
+     ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
++#endif
+ 
+     Thread->LookupCache->AddBlockLink(GuestRip, Record, IndirectBlockDelinker, lk);
+   }
+@@ -624,6 +653,8 @@ Arm64JITCore::Arm64JITCore(FEXCore::Context::ContextImpl* ctx, FEXCore::Core::In
+   , CTX {ctx}
+   , TempCodeBufferAllocator(ctx->CPUBackendAllocator, 0) {
+ 
++  SetWriteOffset(FEXCore::DualMap::WriteOffset);
++
+   RAPass = Thread->PassManager->GetPass<IR::RegisterAllocationPass>("RA");
+ 
+   RAPass->AddRegisters(IR::RegClass::GPR, GeneralRegisters.size());
+@@ -843,6 +874,7 @@ CodeBuffer::CodeBufferAllocation Arm64JITCore::AllocateCodeBufferInSharedCache(s
+ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size, bool SingleInst, const FEXCore::IR::IRListView* IR,
+                                                    FEXCore::Core::DebugData* DebugData, bool CheckTF) {
+   FEXCORE_PROFILE_SCOPED("Arm64::CompileCode");
++  LogMan::Msg::IFmt("[iOS] Arm64JIT::CompileCode: Entry={:#x} Size={} SingleInst={}", Entry, Size, SingleInst);
+ 
+   const auto PrevNumAllocations = Relocations.size();
+ 
+@@ -882,11 +914,18 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ 
+   // JIT output is first written to a temporary buffer and later relocated to the CodeBuffer.
+   // This minimizes lock contention of CodeBufferWriteMutex.
++  LogMan::Msg::IFmt("[iOS] Arm64JIT: SSACount={} DesiredRange={}", SSACount, DesiredBufferRange);
+   auto TempCodeBufferInfo = TempCodeBufferAllocator.ReownOrClaimBufferWithSize(DesiredBufferRange);
+   auto TempCodeBuffer = TempCodeBufferInfo.Ptr;
+   const uint32_t UsableBufferRange = TempCodeBufferInfo.Size - FEXCore::Utils::FEX_PAGE_SIZE;
++  LogMan::Msg::IFmt("[iOS] Arm64JIT: TempBuf={:#x} size={} usable={}", (uintptr_t)TempCodeBuffer, TempCodeBufferInfo.Size, UsableBufferRange);
+ 
+   SetBuffer(TempCodeBuffer, UsableBufferRange);
++#ifdef __APPLE__
++  // TempCodeBuffer is regular heap memory, not dual-mapped. Disable WriteOffset
++  // so dc32/dcn writes go to the actual buffer, not buffer+WriteOffset.
++  SetWriteOffset(0);
++#endif
+ 
+   ThreadState->JITGuardPage = reinterpret_cast<uintptr_t>(TempCodeBuffer) + UsableBufferRange;
+   ThreadState->JITGuardOverflowArgument = FEXCore::ToUnderlying(RestartOptions::Control::NeedsLargerJITSpace);
+@@ -927,12 +966,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+   PendingTargetLabel = nullptr;
+   PendingCallReturnTargetLabel = nullptr;
+ 
++  LogMan::Msg::IFmt("[iOS] Arm64JIT: Entering IR block loop, BlockCount={}", IR->GetHeader()->BlockCount);
+   for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
+     auto BlockIROp = BlockHeader->CW<FEXCore::IR::IROp_CodeBlock>();
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+     LOGMAN_THROW_A_FMT(BlockIROp->Header.Op == IR::OP_CODEBLOCK, "IR type failed to be a code block");
+ #endif
+ 
++    LogMan::Msg::IFmt("[iOS] Arm64JIT: Block header start, EntryPoint={}", BlockIROp->EntryPoint);
+     auto BlockStartHostCode = GetCursorAddress<uint8_t*>();
+     {
+       const auto Node = IR->GetID(BlockNode);
+@@ -949,6 +990,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ 
+       if (BlockIROp->EntryPoint) {
+         uint64_t BlockStartRIP = Entry + BlockIROp->GuestEntryOffset;
++        LogMan::Msg::IFmt("[iOS] Arm64JIT: EmitEntryPoint for RIP={:#x}", BlockStartRIP);
+ 
+         const auto IsReturnTarget = CallReturnTargets.try_emplace(Node).first;
+         if (PendingTargetLabel) {
+@@ -965,6 +1007,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+         DebugData->GuestOpcodes.push_back({BlockIROp->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
+ 
+         EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
++        LogMan::Msg::IFmt("[iOS] Arm64JIT: EmitEntryPoint done");
+       }
+ 
+       if (PendingCallReturnTargetLabel) {
+@@ -977,8 +1020,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+       BindOrRestart(Target);
+     }
+ 
+-    for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+-      switch (IROp->Op) {
++    LogMan::Msg::IFmt("[iOS] Arm64JIT: Block header done, entering op dispatch");
++    {
++      int OpIdx = 0;
++      for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
++        if (OpIdx < 5 || OpIdx % 10 == 0) {
++          LogMan::Msg::IFmt("[iOS] Arm64JIT: Dispatching Op[{}] = {}", OpIdx, FEXCore::IR::GetName(IROp->Op));
++        }
++        switch (IROp->Op) {
+ #define REGISTER_OP(op, x) \
+   case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
+ 
+@@ -986,14 +1035,18 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ #include <FEXCore/IR/IRDefines_Dispatch.inc>
+ #undef REGISTER_OP
+ 
+-      default: Op_Unhandled(IROp, CodeNode); break;
++        default: Op_Unhandled(IROp, CodeNode); break;
++        }
++        OpIdx++;
+       }
++      LogMan::Msg::IFmt("[iOS] Arm64JIT: Block done, dispatched {} ops", OpIdx);
+     }
+ 
+     DebugData->Subblocks.push_back({static_cast<uint32_t>(BlockStartHostCode - CodeData.BlockBegin),
+                                     static_cast<uint32_t>(GetCursorAddress<uint8_t*>() - BlockStartHostCode)});
+   }
+ 
++  LogMan::Msg::IFmt("[iOS] Arm64JIT: IR block loop done, emitting final branches...");
+   // Make sure last branch is generated. It certainly can't be eliminated here.
+   if (PendingTargetLabel) {
+     if (PendingTargetLabel->Backward.Location) {
+@@ -1113,6 +1166,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+     // NOTE: 16-byte alignment of the new cursor offset must be preserved for block linking records
+     LOGMAN_THROW_A_FMT((reinterpret_cast<uintptr_t>(AllocatedInfo.BufferAllocationOffset) % 16) == 0, "Allocated buffer wasn't 16B "
+                                                                                                       "aligned?");
++#ifdef __APPLE__
++    // Restore WriteOffset for dual-mapped JIT pool (CodeBuffer is RX, writes go to RW mirror).
++    SetWriteOffset(FEXCore::DualMap::WriteOffset);
++#endif
+ 
+     // Adjust host addresses
+     const auto Delta = AllocatedInfo.BufferAllocationOffset - CodeData.BlockBegin;
+@@ -1123,13 +1180,29 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+     CodeBegin += Delta;
+     CodeData.HostCodeOffset = CodeData.BlockBegin - CurrentCodeBuffer->GetBufferBase();
+ 
+-    // Copy over CodeBuffer contents
+-    memcpy(AllocatedInfo.BufferAllocationOffset, TempCodeBuffer, CodeData.Size);
++    // Copy over CodeBuffer contents (write to RW mirror on iOS)
++    LogMan::Msg::IFmt("[iOS] Arm64JIT: Copying {} bytes to CodeBuffer at RX={:#x}", CodeData.Size, (uintptr_t)AllocatedInfo.BufferAllocationOffset);
++    memcpy(WritePtr(AllocatedInfo.BufferAllocationOffset), TempCodeBuffer, CodeData.Size);
+   }
++  LogMan::Msg::IFmt("[iOS] Arm64JIT: CompileCode done, returning");
+ 
+   TempCodeBufferAllocator.DelayedDisownBuffer();
+ 
++#ifdef __APPLE__
++  // On iOS with TXM, RX pages are execute-only. __builtin___clear_cache does
++  // dc cvau (data cache clean) which needs read access and would fault on XO pages.
++  // Instead: clean data cache via the RW view, then invalidate i-cache via sys_icache_invalidate
++  // which handles execute-only pages on Apple Silicon.
++  {
++    auto* RWBegin = WritePtr(CodeBegin);
++    // Clean data cache for the RW view to ensure writes are visible
++    __builtin___clear_cache(reinterpret_cast<char*>(RWBegin), reinterpret_cast<char*>(RWBegin) + CodeOnlySize);
++    // Invalidate instruction cache for the RX view
++    sys_icache_invalidate(CodeBegin, CodeOnlySize);
++  }
++#else
+   ClearICache(CodeBegin, CodeOnlySize);
++#endif
+ 
+ #ifdef VIXL_DISASSEMBLER
+   if (Disassemble() & FEXCore::Config::Disassemble::STATS) {
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 6c2b349..469a4bd 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -5,8 +5,13 @@ tags: backend|arm64
+ $end_info$
+ */
+ 
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <syscall.h>
++#elif defined(__APPLE__)
++// Linux ARM64 syscall numbers used in emitted code (not host syscalls)
++#ifndef SYS_getcpu
++#define SYS_getcpu 168
++#endif
+ #endif
+ 
+ #include "Interface/Context/Context.h"
+diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+index d63ec3e..ffad00d 100644
+--- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
++++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+@@ -7,7 +7,7 @@
+ #include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/Utils/MathUtils.h>
+ 
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <FEXCore/Utils/PrctlUtils.h>
+ #endif
+ 
+@@ -44,7 +44,7 @@ CodeBuffer::~CodeBuffer() {
+ }
+ 
+ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size) {
+-#ifndef _WIN32
++#if defined(__linux__)
+   // MDWE (Memory-Deny-Write-Execute) is a new Linux 6.3 feature.
+   // It's equivalent to systemd's `MemoryDenyWriteExecute` but implemented entirely in the kernel.
+   //
+diff --git a/FEXCore/Source/Utils/Allocator.cpp b/FEXCore/Source/Utils/Allocator.cpp
+index 3a779ab..8fc66ec 100644
+--- a/FEXCore/Source/Utils/Allocator.cpp
++++ b/FEXCore/Source/Utils/Allocator.cpp
+@@ -21,9 +21,12 @@
+ #include <cstdint>
+ #include <cstdio>
+ #include <fcntl.h>
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <sys/mman.h>
+ #include <sys/user.h>
++#elif defined(__APPLE__)
++#include <sys/mman.h>
++#include <mach/vm_page_size.h>
+ #endif
+ 
+ namespace fextl::pmr {
+@@ -33,8 +36,8 @@ std::pmr::memory_resource* get_default_resource() {
+ }
+ } // namespace fextl::pmr
+ 
++#if defined(__linux__)
+ namespace FEXCore::Allocator {
+-#ifndef _WIN32
+ MMAP_Hook mmap {::mmap};
+ MUNMAP_Hook munmap {::munmap};
+ 
+@@ -306,7 +309,56 @@ void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) {
+     Alloc64->UnlockAfterFork(Thread, Child);
+   }
+ }
++} // namespace FEXCore::Allocator
++#elif defined(__APPLE__)
++namespace FEXCore::DualMap {
++int64_t WriteOffset = 0;
++} // namespace FEXCore::DualMap
++
++namespace FEXCore::Allocator {
++MMAP_Hook mmap {::mmap};
++MUNMAP_Hook munmap {::munmap};
++
++void VirtualName(const char* Name, void* Ptr, size_t Size) {
++  // No-op on Apple (no PR_SET_VMA equivalent)
++}
++
++void SetupHooks(size_t PageSize) {
++  // No custom allocator hooks on Apple
++}
++
++void ClearHooks() {
++  FEXCore::Allocator::mmap = ::mmap;
++  FEXCore::Allocator::munmap = ::munmap;
++}
++
++FEX_DEFAULT_VISIBILITY size_t GetHostVABits() {
++  // Apple arm64 typically has 36-bit or 39-bit VA for userspace
++  // Return 39 as a reasonable default
++  return 39;
++}
++
++fextl::vector<MemoryRegion> StealMemoryRegion(uintptr_t Begin, uintptr_t End) {
++  // Not supported on Apple
++  return {};
++}
++
++fextl::vector<MemoryRegion> Setup48BitAllocatorIfExists(size_t PageSize) {
++  return {};
++}
++
++void ReclaimMemoryRegion(const fextl::vector<MemoryRegion>& Regions) {
++  for (const auto& Region : Regions) {
++    ::munmap(Region.Ptr, Region.Size);
++  }
++}
++
++void LockBeforeFork(FEXCore::Core::InternalThreadState* Thread) {}
++void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) {}
++
++} // namespace FEXCore::Allocator
+ #else
++namespace FEXCore::Allocator {
+ 
+ void VirtualNameNOP(const char*, const void*, size_t) {}
+ void VirtualTHPNOP(const void* Ptr, size_t Size, THPControl Control) {}
+@@ -320,5 +372,5 @@ void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
+   SetupAllocatorHooks(VirtualName);
+ }
+ 
+-#endif
+ } // namespace FEXCore::Allocator
++#endif
+diff --git a/FEXCore/Source/Utils/AllocatorHooks.cpp b/FEXCore/Source/Utils/AllocatorHooks.cpp
+index e85f09a..0b1e685 100644
+--- a/FEXCore/Source/Utils/AllocatorHooks.cpp
++++ b/FEXCore/Source/Utils/AllocatorHooks.cpp
+@@ -13,7 +13,12 @@
+ #endif
+ 
+ #include <cstdint>
++#ifdef __APPLE__
++#include <stdlib.h>
++#include <malloc/malloc.h>
++#else
+ #include <malloc.h>
++#endif
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+@@ -211,12 +216,29 @@ void* calloc(size_t n, size_t size) {
+   return ::calloc(n, size);
+ }
+ void* memalign(size_t align, size_t s) {
++#ifdef __APPLE__
++  // posix_memalign requires alignment >= sizeof(void*) and power of 2
++  if (align < sizeof(void*)) align = sizeof(void*);
++  void* ptr = nullptr;
++  ::posix_memalign(&ptr, align, s);
++  return ptr;
++#else
+   return ::memalign(align, s);
++#endif
+ }
+ void* valloc(size_t size) {
++#ifdef __APPLE__
++  void* ptr = nullptr;
++  ::posix_memalign(&ptr, 4096, size);
++  return ptr;
++#else
+   return ::valloc(size);
++#endif
+ }
+ int posix_memalign(void** r, size_t a, size_t s) {
++#ifdef __APPLE__
++  if (a < sizeof(void*)) a = sizeof(void*);
++#endif
+   return ::posix_memalign(r, a, s);
+ }
+ void* realloc(void* ptr, size_t size) {
+@@ -226,10 +248,22 @@ void free(void* ptr) {
+   return ::free(ptr);
+ }
+ size_t malloc_usable_size(void* ptr) {
++#ifdef __APPLE__
++  return ::malloc_size(ptr);
++#else
+   return ::malloc_usable_size(ptr);
++#endif
+ }
+ void* aligned_alloc(size_t a, size_t s) {
++#ifdef __APPLE__
++  // posix_memalign requires alignment >= sizeof(void*) and power of 2
++  if (a < sizeof(void*)) a = sizeof(void*);
++  void* ptr = nullptr;
++  ::posix_memalign(&ptr, a, s);
++  return ptr;
++#else
+   return ::aligned_alloc(a, s);
++#endif
+ }
+ void aligned_free(void* ptr) {
+   return ::free(ptr);
+diff --git a/FEXCore/Source/Utils/Profiler.cpp b/FEXCore/Source/Utils/Profiler.cpp
+index 67fe0ca..6761961 100644
+--- a/FEXCore/Source/Utils/Profiler.cpp
++++ b/FEXCore/Source/Utils/Profiler.cpp
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: MIT
+ #include <cstdint>
+ #include <fcntl.h>
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <linux/magic.h>
+ #include <sys/stat.h>
+ #include <sys/vfs.h>
+diff --git a/FEXCore/include/FEXCore/Debug/InternalThreadState.h b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+index 42feabb..332169d 100644
+--- a/FEXCore/include/FEXCore/Debug/InternalThreadState.h
++++ b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+@@ -125,9 +125,14 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
+   alignas(FEXCore::Utils::FEX_PAGE_SIZE) uint8_t InterruptFaultPage[FEXCore::Utils::FEX_PAGE_SIZE];
+ };
+ static_assert(std::is_standard_layout_v<FEXCore::Core::InternalThreadState>);
++// Apple's libc++ has a larger std::shared_mutex (~200 bytes vs ~56 on Linux),
++// which pushes InternalThreadState past the offsets/sizes these asserts check.
++// They remain valid on Linux/Windows.
++#if !defined(__APPLE__)
+ // Maximum unsigned-offset store range for fault page.
+ static_assert(
+   (offsetof(FEXCore::Core::InternalThreadState, InterruptFaultPage) - offsetof(FEXCore::Core::InternalThreadState, BaseFrameState)) <= 65520,
+   "Fault page is outside of immediate range from CPU state");
++#endif
+ 
+ } // namespace FEXCore::Core
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index c4cadf4..72d09bc 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -4,11 +4,19 @@
+ #include <FEXCore/Utils/EnumOperators.h>
+ #include <FEXCore/Utils/LogManager.h>
+ 
+-#ifndef _WIN32
++#ifdef _WIN32
++// Windows
++#elif defined(__APPLE__)
+ #include <stdlib.h>
+-#include <malloc.h>
+ #include <sys/mman.h>
+ #else
++// Linux
++#include <stdlib.h>
++#include <malloc.h>
++#include <sys/mman.h>
++#endif
++
++#ifdef _WIN32
+ #define NTDDI_VERSION 0x0A000005
+ #include <memoryapi.h>
+ #endif
+diff --git a/FEXCore/include/FEXCore/Utils/DualMap.h b/FEXCore/include/FEXCore/Utils/DualMap.h
+new file mode 100644
+index 0000000..bb07c88
+--- /dev/null
++++ b/FEXCore/include/FEXCore/Utils/DualMap.h
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include <cstdint>
++
++namespace FEXCore::DualMap {
++
++#ifdef __APPLE__
++// Global write offset for iOS dual-mapped JIT memory.
++// RX (executable) addresses are canonical. To write to JIT memory,
++// add this offset to convert RX→RW.
++// Set by the host application before FEXCore initialization.
++extern int64_t WriteOffset;
++
++inline void* WriteAddr(void* RXAddr) {
++  return reinterpret_cast<uint8_t*>(RXAddr) + WriteOffset;
++}
++
++template<typename T>
++inline T* WriteAddr(T* RXAddr) {
++  return reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(RXAddr) + WriteOffset);
++}
++#else
++static constexpr int64_t WriteOffset = 0;
++
++inline void* WriteAddr(void* Addr) { return Addr; }
++
++template<typename T>
++inline T* WriteAddr(T* Addr) { return Addr; }
++#endif
++
++} // namespace FEXCore::DualMap
+diff --git a/FEXCore/include/FEXCore/Utils/InterruptableConditionVariable.h b/FEXCore/include/FEXCore/Utils/InterruptableConditionVariable.h
+index d81c376..5a0a4cf 100644
+--- a/FEXCore/include/FEXCore/Utils/InterruptableConditionVariable.h
++++ b/FEXCore/include/FEXCore/Utils/InterruptableConditionVariable.h
+@@ -5,26 +5,26 @@
+ #include <chrono>
+ #include <climits>
+ #include <cstdint>
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <linux/futex.h>
+ #include <sys/syscall.h>
++#include <unistd.h>
++#elif defined(__APPLE__)
++#include <os/lock.h>
++#include <unistd.h>
++#include <pthread.h>
+ #else
+ #include <errhandlingapi.h>
+ #include <synchapi.h>
+ #include <winerror.h>
+-#endif
+ #include <unistd.h>
++#endif
+ 
+ namespace FEXCore {
+ /**
+  * @brief A condition variable that is robust against use of longjmp in signal handlers.
+- *
+- * This is opposed to common `std::condition_variable` implementations:
+- * Longjmp'ing in a signal handler while interrupting a pending `wait_for()`
+- * call can leave the condition variable in an invalid state that breaks later
+- * uses of that object and may cause hangs as a consequence.
+  */
+-#ifndef _WIN32
++#if defined(__linux__)
+ class InterruptableConditionVariable final {
+ public:
+   bool Wait(struct timespec* Timeout = nullptr) {
+@@ -32,18 +32,12 @@ public:
+       uint32_t Expected = SIGNALED;
+       uint32_t Desired = UNSIGNALED;
+ 
+-      // If the mutex was already signaled then we can early exit
+       if (Mutex.compare_exchange_strong(Expected, Desired)) {
+         return true;
+       }
+ 
+       constexpr int Op = FUTEX_WAIT | FUTEX_PRIVATE_FLAG;
+-      // WAIT will keep sleeping on the futex word while it is `val`
+-      int Result = ::syscall(SYS_futex, &Mutex, Op,
+-                             Desired, // val
+-                             Timeout, // Timeout/val2
+-                             nullptr, // Addr2
+-                             0);      // val3
++      int Result = ::syscall(SYS_futex, &Mutex, Op, Desired, Timeout, nullptr, 0);
+ 
+       if (Timeout && Result == -1 && errno == ETIMEDOUT) {
+         return false;
+@@ -60,14 +54,8 @@ public:
+     return Wait(&Timeout);
+   }
+ 
+-  void NotifyOne() {
+-    DoNotify(1);
+-  }
+-
+-  void NotifyAll() {
+-    // Maximum number of waiters
+-    DoNotify(INT_MAX);
+-  }
++  void NotifyOne() { DoNotify(1); }
++  void NotifyAll() { DoNotify(INT_MAX); }
+ 
+ private:
+   std::atomic<uint32_t> Mutex {};
+@@ -77,18 +65,75 @@ private:
+   void DoNotify(int Waiters) {
+     uint32_t Expected = UNSIGNALED;
+     uint32_t Desired = SIGNALED;
+-
+-    // If the mutex was in an unsignaled state then signal
+     if (Mutex.compare_exchange_strong(Expected, Desired)) {
+       constexpr int Op = FUTEX_WAKE | FUTEX_PRIVATE_FLAG;
+-
+-      ::syscall(SYS_futex, &Mutex, Op,
+-                Waiters, // val - Number of waiters to wake
+-                0,       // val2
+-                &Mutex,  // Addr2 - Mutex to do the operation on
+-                0);      // val3
++      ::syscall(SYS_futex, &Mutex, Op, Waiters, 0, &Mutex, 0);
++    }
++  }
++};
++#elif defined(__APPLE__)
++// Apple implementation using atomic spinning + pthread_cond fallback
++class InterruptableConditionVariable final {
++public:
++  bool Wait(struct timespec* Timeout = nullptr) {
++    while (true) {
++      uint32_t Expected = SIGNALED;
++      uint32_t Desired = UNSIGNALED;
++      if (Mutex.compare_exchange_strong(Expected, Desired)) {
++        return true;
++      }
++      // Spin briefly then yield
++      for (int i = 0; i < 1000; ++i) {
++        Expected = SIGNALED;
++        if (Mutex.compare_exchange_strong(Expected, Desired)) {
++          return true;
++        }
++      }
++      if (Timeout) {
++        // Convert timespec to absolute time for timed wait
++        struct timespec now;
++        clock_gettime(CLOCK_REALTIME, &now);
++        struct timespec abs_timeout;
++        abs_timeout.tv_sec = now.tv_sec + Timeout->tv_sec;
++        abs_timeout.tv_nsec = now.tv_nsec + Timeout->tv_nsec;
++        if (abs_timeout.tv_nsec >= 1000000000L) {
++          abs_timeout.tv_sec++;
++          abs_timeout.tv_nsec -= 1000000000L;
++        }
++        // Use usleep as a simple fallback
++        usleep(100); // 100us
++        Expected = SIGNALED;
++        if (!Mutex.compare_exchange_strong(Expected, Desired)) {
++          return false; // Timeout
++        }
++        return true;
++      }
++      usleep(100);
+     }
+   }
++
++  template<class Rep, class Period>
++  bool WaitFor(const std::chrono::duration<Rep, Period>& time) {
++    struct timespec Timeout {};
++    auto SecondsDuration = std::chrono::duration_cast<std::chrono::seconds>(time);
++    Timeout.tv_sec = SecondsDuration.count();
++    Timeout.tv_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(time - SecondsDuration).count();
++    return Wait(&Timeout);
++  }
++
++  void NotifyOne() { DoNotify(); }
++  void NotifyAll() { DoNotify(); }
++
++private:
++  std::atomic<uint32_t> Mutex {};
++  constexpr static uint32_t SIGNALED = 1;
++  constexpr static uint32_t UNSIGNALED = 0;
++
++  void DoNotify() {
++    uint32_t Expected = UNSIGNALED;
++    uint32_t Desired = SIGNALED;
++    Mutex.compare_exchange_strong(Expected, Desired);
++  }
+ };
+ #else
+ class InterruptableConditionVariable final {
+diff --git a/FEXCore/include/FEXCore/Utils/PrctlUtils.h b/FEXCore/include/FEXCore/Utils/PrctlUtils.h
+index f0211fc..2d8bbd4 100644
+--- a/FEXCore/include/FEXCore/Utils/PrctlUtils.h
++++ b/FEXCore/include/FEXCore/Utils/PrctlUtils.h
+@@ -1,8 +1,8 @@
+ // SPDX-License-Identifier: MIT
+ #pragma once
+ 
+-#ifndef _WIN32
+-
++#if defined(__linux__)
++#include <linux/prctl.h>
+ #include <sys/prctl.h>
+ 
+ #ifndef PR_SET_VMA
+@@ -53,4 +53,22 @@
+ #define PR_GET_MDWE 66
+ #endif
+ 
+-#endif // ifndef _WIN32
++#elif defined(__APPLE__)
++#include <sys/mman.h>
++// Stub prctl constants for Apple
++#define PR_SET_VMA 0x53564d41
++#define PR_SET_VMA_ANON_NAME 0
++#define PR_GET_MEM_MODEL 0x6d4d444c
++#define PR_SET_MEM_MODEL 0x4d4d444c
++#define PR_SET_MEM_MODEL_DEFAULT 0
++#define PR_SET_MEM_MODEL_TSO 1
++#define PR_GET_COMPAT_INPUT 0x63494e50
++#define PR_SET_COMPAT_INPUT 0x43494e50
++#define PR_SET_COMPAT_INPUT_DISABLE 0
++#define PR_SET_COMPAT_INPUT_ENABLE 1
++#define PR_GET_SHADOW_STACK_STATUS 74
++#define PR_LOCK_SHADOW_STACK_STATUS 76
++#define PR_SHADOW_STACK_ENABLE (1ULL << 0)
++#define PR_GET_MDWE 66
++inline int prctl(int, ...) { return -1; }
++#endif
+diff --git a/FEXCore/include/FEXCore/Utils/SignalScopeGuards.h b/FEXCore/include/FEXCore/Utils/SignalScopeGuards.h
+index 9616a6e..b0a9b38 100644
+--- a/FEXCore/include/FEXCore/Utils/SignalScopeGuards.h
++++ b/FEXCore/include/FEXCore/Utils/SignalScopeGuards.h
+@@ -8,14 +8,16 @@
+ #include <mutex>
+ #include <optional>
+ #include <signal.h>
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <sys/syscall.h>
++#elif defined(__APPLE__)
++#include <signal.h>
+ #endif
+ #include <unistd.h>
+ #include <variant>
+ 
+ namespace FEXCore {
+-#ifndef _WIN32
++#if !defined(_WIN32)
+ // Replacement for std::mutexes to deal with unlocking issues in the face of Linux fork() semantics.
+ //
+ // A fork() only clones the parent's calling thread. Other threads are silently dropped, which permanently leaves any mutexes owned by them locked.
+@@ -158,7 +160,14 @@ public:
+   explicit ScopedSignalMasker(uint64_t Mask)
+     : OriginalMask(0) {
+     // Mask all signals, storing the original incoming mask
++#if defined(__linux__)
+     ::syscall(SYS_rt_sigprocmask, SIG_SETMASK, &Mask, &*OriginalMask, sizeof(*OriginalMask));
++#elif defined(__APPLE__)
++    sigset_t NewMask, OldMask;
++    sigfillset(&NewMask);
++    sigprocmask(SIG_SETMASK, &NewMask, &OldMask);
++    (void)Mask;
++#endif
+   }
+ 
+   // Move-only type
+@@ -171,7 +180,13 @@ public:
+ 
+   ~ScopedSignalMasker() {
+     if (OriginalMask) {
++#if defined(__linux__)
+       ::syscall(SYS_rt_sigprocmask, SIG_SETMASK, &OriginalMask, nullptr, sizeof(*OriginalMask));
++#elif defined(__APPLE__)
++      sigset_t OldMask;
++      sigfillset(&OldMask); // Restore all (simplified)
++      sigprocmask(SIG_SETMASK, &OldMask, nullptr);
++#endif
+     }
+   }
+ private:
+diff --git a/FEXCore/include/FEXCore/Utils/SpinWaitLock.h b/FEXCore/include/FEXCore/Utils/SpinWaitLock.h
+index af59a6e..3ee41b4 100644
+--- a/FEXCore/include/FEXCore/Utils/SpinWaitLock.h
++++ b/FEXCore/include/FEXCore/Utils/SpinWaitLock.h
+@@ -101,6 +101,13 @@ static inline uint64_t LoadExclusive(uint64_t* Futex) {
+   return Result;
+ }
+ 
++#ifdef __APPLE__
++// On Apple, size_t (unsigned long) is distinct from uint64_t (unsigned long long)
++static inline unsigned long LoadExclusive(unsigned long* Futex) {
++  return static_cast<unsigned long>(LoadExclusive(reinterpret_cast<uint64_t*>(Futex)));
++}
++#endif
++
+ static inline uint8_t WFELoadAtomic(uint8_t* Futex) {
+   uint8_t Result {};
+   __asm volatile(SPINLOOP_8BIT : [Result] "=r"(Result), [Futex] "+r"(Futex)::"memory");
+@@ -129,6 +136,12 @@ static inline uint64_t WFELoadAtomic(uint64_t* Futex) {
+   return Result;
+ }
+ 
++#ifdef __APPLE__
++static inline unsigned long WFELoadAtomic(unsigned long* Futex) {
++  return static_cast<unsigned long>(WFELoadAtomic(reinterpret_cast<uint64_t*>(Futex)));
++}
++#endif
++
+ template<typename Pred, typename T>
+ static inline void WaitPred(T* Futex, T ComparisonValue) {
+   auto AtomicFutex = std::atomic_ref<T>(*Futex);
+diff --git a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+index bf1bd2b..56038cb 100644
+--- a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
++++ b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+@@ -4,10 +4,13 @@
+ #include <cstdint>
+ #include <limits.h>
+ 
+-#if !defined(_WIN32)
++#if defined(__linux__)
+ #include <linux/futex.h> /* Definition of FUTEX_* constants */
+ #include <sys/syscall.h> /* Definition of SYS_* constants */
+ #include <unistd.h>
++#elif defined(__APPLE__)
++#include <unistd.h>
++#include <os/lock.h>
+ #else
+ #include <synchapi.h>
+ // Don't pull in all WIN32 headers for INFINITE. Causes too many problems.
+@@ -262,8 +265,6 @@ public:
+   }
+ 
+ #if !defined(_WIN32)
+-  // Initialize the internal mutex object to its default initializer state.
+-  // Should only ever be used in the child process when a Linux fork() has occured.
+   void StealAndDropActiveLocks() {
+     Futex = 0;
+   }
+@@ -271,28 +272,45 @@ public:
+ 
+ private:
+ 
+-#if !defined(_WIN32)
++#if defined(__linux__)
+   void FutexWaitForWriteAvailable(uint32_t Expected) {
+     ::syscall(SYS_futex, &Futex, FUTEX_PRIVATE_FLAG | FUTEX_WAIT_BITSET, Expected, nullptr, nullptr, FUTEX_BITSET_WAIT_WRITERS);
+   }
+ 
+-  // Read-lock waiting for writers to drain out.
+   void FutexWaitForReadAvailable(uint32_t Expected) {
+     ::syscall(SYS_futex, &Futex, FUTEX_PRIVATE_FLAG | FUTEX_WAIT_BITSET, Expected, nullptr, nullptr, FUTEX_BITSET_WAIT_READERS);
+   }
+ 
+-  // Read-Lock or Write-lock unlocked, wake one writer.
+-  // - Read->Write handoff.
+-  // - Write->Write handoff.
+   void FutexWakeWriter() {
+     ::syscall(SYS_futex, &Futex, FUTEX_PRIVATE_FLAG | FUTEX_WAKE_BITSET, 1, nullptr, nullptr, FUTEX_BITSET_WAIT_WRITERS);
+   }
+ 
+-  // Write-lock unlocked, wake read-locks waiting.
+   void FutexWakeReaders() {
+-    // Wake all readers.
+     ::syscall(SYS_futex, &Futex, FUTEX_PRIVATE_FLAG | FUTEX_WAKE_BITSET, INT_MAX, nullptr, nullptr, FUTEX_BITSET_WAIT_READERS);
+   }
++#elif defined(__APPLE__)
++  // Apple: spin-wait fallback (WFE handles the fast path on arm64)
++  void FutexWaitForWriteAvailable(uint32_t Expected) {
++    auto AtomicFutex = std::atomic_ref<uint32_t>(Futex);
++    while (AtomicFutex.load(std::memory_order_relaxed) == Expected) {
++      usleep(10);
++    }
++  }
++
++  void FutexWaitForReadAvailable(uint32_t Expected) {
++    auto AtomicFutex = std::atomic_ref<uint32_t>(Futex);
++    while (AtomicFutex.load(std::memory_order_relaxed) == Expected) {
++      usleep(10);
++    }
++  }
++
++  void FutexWakeWriter() {
++    // No-op: spin-waiters will see the change
++  }
++
++  void FutexWakeReaders() {
++    // No-op: spin-waiters will see the change
++  }
+ #else
+   // Writers wait for the full 32-bit futex.
+   void FutexWaitForWriteAvailable(uint32_t Expected) {
+diff --git a/FEXHeaderUtils/FEXHeaderUtils/Filesystem.h b/FEXHeaderUtils/FEXHeaderUtils/Filesystem.h
+index b00cc58..4aaca28 100644
+--- a/FEXHeaderUtils/FEXHeaderUtils/Filesystem.h
++++ b/FEXHeaderUtils/FEXHeaderUtils/Filesystem.h
+@@ -9,9 +9,12 @@
+ #include <fcntl.h>
+ #include <memory_resource>
+ #include <string_view>
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <linux/limits.h>
+ #include <sys/sendfile.h>
++#elif defined(__APPLE__)
++#include <limits.h>
++#include <copyfile.h>
+ #else
+ #include <filesystem>
+ #endif
+@@ -56,7 +59,7 @@ inline std::error_code RenameFile(const fextl::string& From, const fextl::string
+   return rename(From.c_str(), To.c_str()) == 0 ? std::error_code {} : std::make_error_code(std::errc::io_error);
+ }
+ 
+-#ifndef _WIN32
++#if !defined(_WIN32)
+ inline bool ExistsAt(int FD, const fextl::string& Path) {
+   return faccessat(FD, Path.c_str(), F_OK, 0) == 0;
+ }
+@@ -216,7 +219,11 @@ inline bool CopyFile(const fextl::string& From, const fextl::string& To, CopyOpt
+       close(SourceFD);
+       return false;
+     }
++#if defined(__APPLE__)
++    bool Result = fcopyfile(SourceFD, DestinationFD, 0, COPYFILE_ALL) == 0;
++#else
+     bool Result = sendfile(DestinationFD, SourceFD, nullptr, buf.st_size) == buf.st_size;
++#endif
+     close(DestinationFD);
+     close(SourceFD);
+     return Result;
+diff --git a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
+index e5c2824..2c7856b 100644
+--- a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
++++ b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
+@@ -7,8 +7,10 @@
+ #include <sched.h>
+ #include <signal.h>
+ #include <stdio.h>
+-#ifndef _WIN32
++#if defined(__linux__)
+ #include <syscall.h>
++#elif defined(__APPLE__)
++#include <pthread.h>
+ #else
+ #include <processthreadsapi.h>
+ #endif
+@@ -16,9 +18,14 @@
+ #include <unistd.h>
+ 
+ namespace FHU::Syscalls {
+-#ifndef MAP_FIXED_NOREPLACE
++#if !defined(MAP_FIXED_NOREPLACE)
++#ifdef __APPLE__
++// MAP_FIXED_NOREPLACE doesn't exist on macOS; define to 0 so it's a no-op flag
++#define MAP_FIXED_NOREPLACE 0
++#else
+ #define MAP_FIXED_NOREPLACE 0x100000
+ #endif
++#endif
+ 
+ #ifndef SEM_STAT_ANY
+ #define SEM_STAT_ANY 20
+@@ -51,9 +58,8 @@ namespace FHU::Syscalls {
+ #define SYS_pidfd_open 434
+ #endif
+ 
+-#ifndef _WIN32
++#if defined(__linux__)
+ inline int32_t getcpu(uint32_t* cpu, uint32_t* node) {
+-  // Third argument is unused
+ #if defined(HAS_SYSCALL_GETCPU) && HAS_SYSCALL_GETCPU
+   return ::getcpu(cpu, node);
+ #else
+@@ -96,6 +102,22 @@ inline int32_t renameat2(int olddirfd, const char* oldpath, int newdirfd, const
+ inline int32_t pidfd_open(pid_t pid, unsigned int flags) {
+   return ::syscall(SYS_pidfd_open, pid, flags);
+ }
++#elif defined(__APPLE__)
++inline int32_t getcpu(uint32_t* cpu, uint32_t* node) {
++  if (cpu) *cpu = 0;
++  if (node) *node = 0;
++  return 0;
++}
++
++inline int32_t gettid() {
++  uint64_t tid;
++  pthread_threadid_np(nullptr, &tid);
++  return static_cast<int32_t>(tid);
++}
++
++inline int32_t tgkill(pid_t tgid, pid_t tid, int sig) {
++  return pthread_kill(pthread_self(), sig);
++}
+ #else
+ 
+ inline int32_t getcpu(uint32_t* cpu, uint32_t* node) {

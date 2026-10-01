@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 15:49:28 +0200
+Subject: [PATCH 1/2] Count what rpmalloc maps in the FEX host band
+
+Every emulator thread's rpmalloc heap maps its own 16MB span per page type
+it uses, in the FEX host band, and a title with enough threads filled the
+band. ios_rpm_band_bytes and ios_rpm_band_maps now count what os_mmap
+placed in the band and os_munmap gave back, ios_rpm_span_maps,
+ios_rpm_huge_maps and ios_rpm_huge_bytes the spans mapped per page type
+(small, medium, large) and the huge blocks, and ios_rpm_heaps_new the
+heaps made, so FEX can log what each thread's start took, what the live
+threads hold and what it is made of. Nothing rpmalloc does changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-28-fex-band.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 89b546e..c6da961 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -896,6 +896,20 @@ uintptr_t ios_fex_band_base = 0;
+ char ios_va_log[4096];
+ int ios_va_log_len = 0;
+ uintptr_t ios_fex_band_end = 0;
++/* Playport: what rpmalloc holds in the FEX host band, and how many mappings,
++ * for FEX's per-thread [band] lines. Every heap maps its own 16MB span per page
++ * type it uses, so this is the part of the band that grows with the thread
++ * count besides each thread's call-return stack and L1 cache. */
++_Atomic(size_t) ios_rpm_band_bytes = 0;
++_Atomic(size_t) ios_rpm_band_maps = 0;
++/* Spans mapped by page type (small, medium, large), and huge blocks mapped
++ * (count and bytes), since the start: what the band's rpmalloc share is made of. */
++_Atomic(size_t) ios_rpm_span_maps[3] = {0, 0, 0};
++_Atomic(size_t) ios_rpm_huge_maps = 0;
++_Atomic(size_t) ios_rpm_huge_bytes = 0;
++/* Heaps rpmalloc made (heap_allocate_new; a released heap is reused, not
++ * made again). Each new heap maps its own spans. */
++_Atomic(size_t) ios_rpm_heaps_new = 0;
+ 
+ typedef PVOID(WINAPI* ios_valloc2_t)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
+ 
+@@ -1275,6 +1289,10 @@ os_mmap(size_t size, size_t alignment, size_t* offset, size_t* mapped_size) {
+ 	 * FEX-band heap was poisoned anyway — the guest-band framing above is
+ 	 * REFUTED as the root cause. Keep the pin as VA-map hygiene; the corrupter
+ 	 * is pointer-mediated (see ios_block_ptr_ok / [rpm-poison]). */
++	if (ptr && ios_fex_band_base && (uintptr_t)ptr >= ios_fex_band_base && (uintptr_t)ptr < ios_fex_band_end) {
++		atomic_fetch_add_explicit(&ios_rpm_band_bytes, map_size, memory_order_relaxed);
++		atomic_fetch_add_explicit(&ios_rpm_band_maps, 1, memory_order_relaxed);
++	}
+ 	if (ptr && ios_fex_band_base && (uintptr_t)ptr < ios_fex_band_base) {
+ 		static _Atomic(int) band_logs;
+ 		if (atomic_fetch_add_explicit(&band_logs, 1, memory_order_relaxed) < 24) {
+@@ -1460,6 +1478,12 @@ os_munmap(void* address, size_t offset, size_t mapped_size) {
+ 	address = pointer_offset(address, -(int32_t)offset);
+ #if ENABLE_UNMAP
+ #if PLATFORM_WINDOWS
++#ifdef FEX_IOS_HOST
++	if (ios_fex_band_base && (uintptr_t)address >= ios_fex_band_base && (uintptr_t)address < ios_fex_band_end) {
++		atomic_fetch_sub_explicit(&ios_rpm_band_bytes, mapped_size, memory_order_relaxed);
++		atomic_fetch_sub_explicit(&ios_rpm_band_maps, 1, memory_order_relaxed);
++	}
++#endif
+ 	if (!VirtualFree(address, 0, MEM_RELEASE)) {
+ 		rpmalloc_assert(0, "Failed to unmap virtual memory block");
+ 	}
+@@ -2396,6 +2420,9 @@ heap_allocate_new(void) {
+ 	heap_t* heap = heap_initialize((void*)block);
+ 	heap->offset = (uint32_t)offset;
+ 	heap->mapped_size = mapped_size;
++#if defined(_WIN32) && defined(FEX_IOS_HOST)
++	atomic_fetch_add_explicit(&ios_rpm_heaps_new, 1, memory_order_relaxed);
++#endif
+ #if ENABLE_STATISTICS
+ 	atomic_fetch_add_explicit(&global_statistics.heap_count, 1, memory_order_relaxed);
+ #endif
+@@ -2497,6 +2524,10 @@ heap_get_span(heap_t* heap, page_type_t page_type) {
+ 	size_t offset = 0;
+ 	size_t mapped_size = 0;
+ 	span_t* span = global_memory_interface->memory_map(SPAN_SIZE, SPAN_SIZE, &offset, &mapped_size);
++#if defined(_WIN32) && defined(FEX_IOS_HOST)
++	if (span && page_type <= PAGE_LARGE)
++		atomic_fetch_add_explicit(&ios_rpm_span_maps[page_type], 1, memory_order_relaxed);
++#endif
+ 	if (EXPECTED(span != 0)) {
+ 		uint32_t page_count = 0;
+ 		uint32_t page_size = 0;
+@@ -2737,6 +2768,12 @@ heap_allocate_block_huge(heap_t* heap, size_t size, unsigned int zero) {
+ 	size_t offset = 0;
+ 	size_t mapped_size = 0;
+ 	void* block = global_memory_interface->memory_map(alloc_size, SPAN_SIZE, &offset, &mapped_size);
++#if defined(_WIN32) && defined(FEX_IOS_HOST)
++	if (block) {
++		atomic_fetch_add_explicit(&ios_rpm_huge_maps, 1, memory_order_relaxed);
++		atomic_fetch_add_explicit(&ios_rpm_huge_bytes, mapped_size, memory_order_relaxed);
++	}
++#endif
+ 	if (block) {
+ 		span_t* span = block;
+ #if ENABLE_DECOMMIT

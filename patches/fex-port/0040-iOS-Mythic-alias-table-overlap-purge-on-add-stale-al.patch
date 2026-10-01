@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 31 Jul 2026 23:50:21 +0800
+Subject: [PATCH] =?UTF-8?q?iOS-Mythic:=20alias=20table=20overlap-purge=20o?=
+ =?UTF-8?q?n=20add=20=E2=80=94=20stale=20aliases=20routed=20new=20modules?=
+ =?UTF-8?q?=20into=20dead=20pool=20copies?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BTCpu64IosAddAliasMapping de-duped by PeBase equality and returned early,
+so a module unloaded and replaced at the same (or an overlapping) PE VA
+left FEX translating the NEW module's RIPs into the tombstoned, eventually
+zeroed pool copy of the DEAD one. ml356: wevtapi.dll loaded inside a
+departed module's registered range; its x64 fast-forward sequence jumped
+into the dead copy and executed a page of zeros (udf -> c000001d).
+
+Mirror wine's ios_jit_add_mapping rule: retire every overlapping entry
+(Size=0 tombstone + barrier — Module.S's inline walk can never match a
+zero-size entry), reuse retired slots, publish Size last.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: 13488326b534a362d738b16a61f1c15be3949b81
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/IosJitAlias.cpp | 62 ++++++++++++++++++++++----
+ 1 file changed, 53 insertions(+), 9 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index 50cf006..3887597 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -45,18 +45,62 @@ volatile int& g_EntryCount = IosAliasCount;
+ 
+ extern "C" {
+ 
++// ml357: STALE ALIASES ARE FATAL, and the old de-dupe guaranteed them.
++//
++// The previous rule was "same PeBase = already registered, ignore" — so a DLL
++// that unloaded and was replaced at the same (or an overlapping) PE VA kept
++// FEX pointing at the ORIGINAL pool copy forever. That copy is tombstoned and
++// eventually reclaimed/zeroed, so every guest RIP in the new module translated
++// into dead memory: ml356 died executing a page of zeros (udf → c000001d) one
++// instruction after wevtapi.dll loaded INSIDE a departed module's old range.
++//
++// Wine's own table (ios_jit_add_mapping) already purges by OVERLAP for exactly
++// this reason; this is that rule's missing twin on the FEX side. Tombstone
++// order matches wine's: Size = 0 first (a zero-size entry matches no range
++// query, including Module.S's inline asm walk), barrier, then reuse the slot.
+ void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
+-  int idx = g_EntryCount;
+-  // De-dupe: same PE base = already registered.
+-  for (int i = 0; i < idx; i++) {
+-    if (g_Entries[i].PeBase == PeBase) return;
++  int count = g_EntryCount;
++
++  // Identical re-registration: nothing to do.
++  for (int i = 0; i < count; i++) {
++    if (g_Entries[i].PeBase == PeBase && g_Entries[i].JitBase == JitBase && g_Entries[i].Size == Size) {
++      return;
++    }
++  }
++
++  // Retire every entry whose PE range overlaps the incoming image: a live
++  // image proves any overlapping entry is dead (two images cannot share a VA).
++  for (int i = 0; i < count; i++) {
++    const uint64_t pb = g_Entries[i].PeBase;
++    const uint64_t sz = g_Entries[i].Size;
++    if (!sz) {
++      continue;
++    }
++    if (pb < PeBase + Size && PeBase < pb + sz) {
++      g_Entries[i].Size = 0;
++      __sync_synchronize();
++    }
++  }
++
++  // Prefer a retired slot so long-running processes don't exhaust the table.
++  for (int i = 0; i < count; i++) {
++    if (!g_Entries[i].Size) {
++      g_Entries[i].PeBase = PeBase;
++      g_Entries[i].JitBase = JitBase;
++      __sync_synchronize();
++      g_Entries[i].Size = Size; // published last: readers see a complete entry
++      return;
++    }
++  }
++
++  if (count >= kMaxEntries) {
++    return;
+   }
+-  if (idx >= kMaxEntries) return;
+-  g_Entries[idx].PeBase = PeBase;
+-  g_Entries[idx].JitBase = JitBase;
+-  g_Entries[idx].Size = Size;
++  g_Entries[count].PeBase = PeBase;
++  g_Entries[count].JitBase = JitBase;
++  g_Entries[count].Size = Size;
+   __sync_synchronize();
+-  g_EntryCount = idx + 1;
++  g_EntryCount = count + 1;
+ }
+ 
+ uint64_t IosJitTranslate(uint64_t Addr) {

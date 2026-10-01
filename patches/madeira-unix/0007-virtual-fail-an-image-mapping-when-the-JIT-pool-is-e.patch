@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] virtual: fail an image mapping when the JIT pool is exhausted
+
+ENOMEM from the pool was ignored and the mapping continued into memory it
+did not own. The mapping now fails so the loader reports it.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 50f8973..cff7b23 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -13522,7 +13522,17 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+         if (sec[si].Characteristics & IMAGE_SCN_MEM_WRITE) prot |= PROT_WRITE;
+         ERR("iOS: eager JIT-copy section %.8s (addr=%p size=0x%lx)\n",
+             sec[si].Name, sec_addr, (unsigned long)sec_size);
+-        mprotect_exec(sec_addr, sec_size, prot);
++        if (mprotect_exec(sec_addr, sec_size, prot) && errno == ENOMEM)
++        {
++            /* Playport: the JIT pool is exhausted. Fail the mapping so the
++             * loader reports a failed DLL load (a failed process start, when it
++             * is a static import) instead of leaving the image read-only, which
++             * the process executes later and faults in, wedging the launch. */
++            dprintf( 2, "[jit-pool] image map FAILED (pool exhausted): %.8s of view %p -> STATUS_NO_MEMORY\n",
++                     sec[si].Name, ptr );
++            status = STATUS_NO_MEMORY;
++            goto done;
++        }
+     }
+     /* iOS: data sections were mapped MAP_PRIVATE + PROT_READ|PROT_WRITE
+      * (see map_file_into_view) so they're already mprotect-able. No

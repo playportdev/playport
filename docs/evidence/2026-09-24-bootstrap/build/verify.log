@@ -1,0 +1,59 @@
+IPA   S1Probe.ipa 655,295,453 B sha256 72e2f1b384035276f28488a3cfad6f73cbd7e71a461c6df11a863e846beff213
+ok    checksum equals the recorded value
+ok    zip: 292 entries (285 files), all stored
+ok    zip: no symlinks
+ok    zip: no case collisions
+ok    executable: arm64 MH_EXECUTE
+ok    executable: NOUNDEFS
+ok    executable: platform iOS, minos 26.5 (sdk 26.5); Info.plist MinimumOSVersion 26.5
+ok    executable: cryptid 0
+ok    executable: 43 dylibs (12 weak), all from system paths
+ok    bundle: no Frameworks/
+ok    Info.plist: UIApplicationSupportsIndirectInputEvents (mouse through GCMouse, not as touches)
+      bundle id XTL-TEAMIDXXXX.dev.playport.app, version 1.0.0 (1), display name Playport
+ok    signature: sha1 code directory v0x20400, 10055 code pages and special slots 1-7 match; exec seg flags 0x11
+ok    signature: identifier equals the bundle ID
+ok    signature: sha256 code directory v0x20400, 10055 code pages and special slots 1-7 match; exec seg flags 0x11
+ok    signature: identifier equals the bundle ID
+      entitlements: ['application-identifier', 'com.apple.developer.kernel.increased-memory-limit', 'com.apple.developer.team-identifier', 'get-task-allow', 'keychain-access-groups']; get-task-allow True
+ok    signature: carries increased-memory-limit (FEX's arena needs it; stock xtool drops it)
+ok    signature: CodeResources files2 282 entries all match; every bundle file sealed
+ok    signature: CMS verifies over the first code directory
+ok    signature: CMS signer is byte-identical to the profile's DeveloperCertificate
+      certificate notBefore=Aug  5 07:17:00 2026 GMT; notAfter=Aug  5 07:16:59 2027 GMT
+      profile: created 2026-09-24 12:12:29 UTC, expires 2026-10-01 12:12:29 UTC, 1 device(s), IsXcodeManaged False
+ok    profile: one provisioned device
+ok    profile: allows every entitlement the signature carries
+ok    profile: same provisioned device as Playport-26.5-febe58e1.ipa
+ok    resources: Runtime/ at the app root only, not also in a resource bundle
+      runtime layout: app root
+ok    resources: bundled artifacts.tsv equals the committed one
+ok    resources: all 267 rows match, no extras; gaps absent: 2/2
+ok    resources: ladder guests 8/8 staged, each matching harness/ladder/guests.tsv
+ok    resources: G2 guests 5/5 staged, each matching harness/g2/guests.tsv
+ok    resources: no empty directories
+      unix table: 140 slots; slot 139 -> 0x10031c264 (__MTLDevice_newLibraryWithSource)
+ok    dxmt: linked unix table has 140 slots and slot 139 is _MTLDevice_newLibraryWithSource
+ok    dxmt: arm64ec winemetal.dll exports and d3d11.dll imports MTLDevice_newLibraryWithSource
+ok    dxmt: arm64ec d3d11.dll holds no metallib container
+ok    dxmt: arm64ec d3d11.dll embeds the fork's dxmt_command.metal once
+ok    dxmt: aarch64 winemetal.dll exports and d3d11.dll imports MTLDevice_newLibraryWithSource
+ok    dxmt: aarch64 d3d11.dll holds no metallib container
+ok    dxmt: aarch64 d3d11.dll embeds the fork's dxmt_command.metal once
+ok    dxmt: bundled Runtime/arm64ec-windows/d3d10core.dll is byte-identical to the patched build's arm64ec-windows/d3d10core.dll
+ok    dxmt: bundled Runtime/arm64ec-windows/d3d11.dll is byte-identical to the patched build's arm64ec-windows/d3d11.dll
+ok    dxmt: bundled Runtime/arm64ec-windows/dxgi.dll is byte-identical to the patched build's arm64ec-windows/dxgi.dll
+ok    dxmt: bundled Runtime/arm64ec-windows/winemetal.dll is byte-identical to the patched build's arm64ec-windows/winemetal.dll
+ok    dxmt: bundled Runtime/aarch64-windows/d3d11.dll is byte-identical to the patched build's aarch64-windows/d3d11.dll
+ok    dxmt: bundled Runtime/aarch64-windows/dxgi.dll is byte-identical to the patched build's aarch64-windows/dxgi.dll
+ok    dxmt: bundled Runtime/aarch64-windows/winemetal.dll is byte-identical to the patched build's aarch64-windows/winemetal.dll
+ok    host-io: IOSDisplayShim's macdrv_functions and its 5 fallbacks are in the export trie (DXMT's dlsym finds them)
+ok    host-io: display shim, Winios input and focus, audio host-suspend and controller block linked
+ok    host-io: GameController and AVFAudio linked
+ok    host-io: the prefix registry seed is linked and bundled, with the audio path's MMDeviceEnumerator class
+ok    host-io: the 5 bundled xinput DLLs are hio_xinput builds (P6-xinput), none a Wine builtin
+ok    steam: Keychain store linked (SecItem add/copy/update/delete, AfterFirstUnlockThisDeviceOnly, synchronizable)
+ok    steam: CM transport is URLSessionWebSocketTask (whole-message receive and send imported from Foundation)
+ok    steam: Security.framework loaded; no libcurl, CCurlWS or Secret Service code in the executable
+
+0 failure(s)

@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 23:30:49 +0200
+Subject: [PATCH] winevulkan: end the chain of a layered API's Vulkan
+ properties
+
+VkPhysicalDeviceLayeredApiVulkanPropertiesKHR carries a
+VkPhysicalDeviceProperties2 that the driver fills. The win-to-host
+conversion allocates the host copy from the conversion context without
+clearing it and sets only the outer sType and pNext, so the inner
+properties.pNext was whatever the context held. The host-to-win
+conversion then walked it: vkd3d-proton's vkGetPhysicalDeviceProperties2
+with VkPhysicalDeviceLayeredApiPropertiesListKHR faulted on a leftover
+debug string, and Hollow Knight on Direct3D 12 exited at device creation.
+Set the inner sType and end its chain. make_vulkan emits the same code;
+this changes only its output.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-26-vulkan-d3d11-d3d12.md
+Offered-upstream: no
+---
+ dlls/winevulkan/vulkan_thunks.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dlls/winevulkan/vulkan_thunks.c b/dlls/winevulkan/vulkan_thunks.c
+index 065d57566fa..627e1ffdae8 100644
+--- a/dlls/winevulkan/vulkan_thunks.c
++++ b/dlls/winevulkan/vulkan_thunks.c
+@@ -40375,6 +40375,9 @@ static void convert_VkPhysicalDeviceLayeredApiPropertiesKHR_win64_to_host(struct
+             VkPhysicalDeviceLayeredApiVulkanPropertiesKHR *out_ext = conversion_context_alloc(ctx, sizeof(*out_ext));
+             out_ext->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_VULKAN_PROPERTIES_KHR;
+             out_ext->pNext = NULL;
++            /* The driver fills properties and walks its chain; it is not converted, so end it here. */
++            out_ext->properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
++            out_ext->properties.pNext = NULL;
+             out_header->pNext = (void *)out_ext;
+             out_header = (void *)out_ext;
+             break;
+@@ -43184,6 +43187,9 @@ static void convert_VkPhysicalDeviceLayeredApiPropertiesKHR_win32_to_host(struct
+             VkPhysicalDeviceLayeredApiVulkanPropertiesKHR *out_ext = conversion_context_alloc(ctx, sizeof(*out_ext));
+             out_ext->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_VULKAN_PROPERTIES_KHR;
+             out_ext->pNext = NULL;
++            /* The driver fills properties and walks its chain; it is not converted, so end it here. */
++            out_ext->properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
++            out_ext->properties.pNext = NULL;
+             out_header->pNext = (void *)out_ext;
+             out_header = (void *)out_ext;
+             break;

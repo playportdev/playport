@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 21:47:07 +0200
+Subject: [PATCH] virtual: log the ARM64EC map without reading a PEB that does
+ not exist yet
+
+alloc_arm64ec_map logged peb->EcCodeBitMap after setting it only when
+there is a PEB. Since wine-11.18 the PEB is made after the main image is
+mapped (virtual_alloc_first_teb, from init_startup_info), so an ARM64EC
+main image reaches alloc_arm64ec_map with peb NULL, and the log line read
+0x368: the app aborted in update_arm64ec_ranges <- virtual_map_image <-
+virtual_map_main_module <- load_main_exe <- __wine_main. An x86-64 main
+image maps its ARM64EC DLLs after the PEB exists, which is why no title
+hit it. The line now logs the map itself; virtual_alloc_first_teb already
+gives the PEB the map when it makes it.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-child-process.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index f5b398e..2f0e693 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -13501,8 +13501,14 @@ static void alloc_arm64ec_map(void)
+     if (peb) peb->EcCodeBitMap = arm64ec_view->base;
+     /* ml127: dprintf, not ERR — the `virtual` channel's ERR is suppressed in
+      * this build, which is why this line has never once appeared in a log. */
+-    dprintf(2, "[ec-map] peb->EcCodeBitMap=%p size=0x%lx (%lu MB)\n",
+-            peb->EcCodeBitMap, (unsigned long)size, (unsigned long)(size >> 20));
++    /* Playport: log the map, not peb->EcCodeBitMap. Since wine-11.18 the PEB
++     * is made after the main image is mapped (virtual_alloc_first_teb), so an
++     * ARM64EC main image gets here with peb NULL, and reading its
++     * EcCodeBitMap (at 0x368) aborted the app in update_arm64ec_ranges.
++     * virtual_alloc_first_teb gives the PEB the map when it makes it. */
++    dprintf(2, "[ec-map] EcCodeBitMap=%p size=0x%lx (%lu MB)%s\n",
++            arm64ec_view->base, (unsigned long)size, (unsigned long)(size >> 20),
++            peb ? "" : " (no PEB yet: the first TEB gets it)");
+ }
+ 
+ 

@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 17:00:40 -0700
+Subject: [PATCH] Discover the host VA band instead of hardcoding candidates
+
+The band selector had two fixed candidates: a high band for the normal
+address-space regime and a constrained low band. A research device with
+randomised VM range partitions satisfies neither reliably -- the usable
+windows move between launches. The same build on the same machine found 40
+and 44GB mappable one run and refused them the next, with 34 and 36GB
+mappable instead. Every hardcoded low band is therefore right sometimes and
+wrong otherwise, and when it is wrong the allocator gets no arena and wedges
+with threads parked on events forever.
+
+Sweep the low region in 4GB windows and take the first that accepts a
+reservation. Confirm with a real 256MB reservation, not just the 16KB probe:
+spans are 64-128MB, so a 16KB success says nothing about capacity. The two
+fixed candidates are tried first and are untouched, so devices that already
+work keep their exact placement.
+
+Defer the selector's log rather than emitting it in place. It ran during
+allocator init, before the ARM64EC TEB exists, writing to a handle that
+reaches nothing captured -- so it had been invisible since it was written.
+Routing it through OutputDebugString crashed every launch for the same
+reason the original was silent: that context cannot safely call anything.
+Append to a static byte buffer and let a caller flush it later.
+
+Say so loudly when no band is found. Every host allocation then returns NULL
+and the first use stores through it, which the fault path redelivers
+thousands of times before a guard kills the process -- with the real cause
+nowhere near the wreckage.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01M1HvfVX2Y29TgJbFWbahdt
+Madeira-commit: 7f4ac3b701e4e2723b266275ef5d343f70a5bab6
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 132 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 132 insertions(+)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 4f25dde..bdab6dd 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -862,6 +862,10 @@ os_set_page_name(void* address, size_t size) {
+  * that opens a file, and CreateFileA can allocate, which would re-enter
+  * rpmalloc during its own initialisation. */
+ uintptr_t ios_fex_band_base = 0;
++/* ml751: deferred beacon buffer -- see ios_va_emit(). Written before the EC TEB
++ * exists, so it must stay a dumb byte array; flushed later from Module.cpp. */
++char ios_va_log[4096];
++int ios_va_log_len = 0;
+ uintptr_t ios_fex_band_end = 0;
+ 
+ typedef PVOID(WINAPI* ios_valloc2_t)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
+@@ -869,7 +873,30 @@ typedef PVOID(WINAPI* ios_valloc2_t)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EX
+ static void
+ ios_va_emit(const char* buf, int len) {
+ 	unsigned long w;
++	int room;
+ 	WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)len, &w, 0);
++
++	/* ml751: DEFER. Do not call ANY logging API from here.
++	 *
++	 * The WriteFile above targets the Win32 STD_ERROR_HANDLE, which on iOS
++	 * reaches nothing we capture -- which is why every [va-profile] beacon is
++	 * absent from the device logs although the selector plainly runs. ml750
++	 * tried to fix that with OutputDebugStringA and CRASHED EVERY LAUNCH:
++	 * x18=0x0, NULL dereference, no build-id line at all. This runs during
++	 * rpmalloc's allocator init, BEFORE the ARM64EC TEB exists, and
++	 * OutputDebugStringA reaches into ntdll and touches it. WriteFile survived
++	 * only because it was failing silently.
++	 *
++	 * So append to a plain static buffer -- memcpy and an integer, no syscall,
++	 * no TEB, no lock, no allocation -- and let Module.cpp flush it once LogMan
++	 * is up, which is the same place the build-id line prints successfully. */
++	room = (int)sizeof(ios_va_log) - 1 - ios_va_log_len;
++	if (room > 0) {
++		int n = len < room ? len : room;
++		memcpy(ios_va_log + ios_va_log_len, buf, (size_t)n);
++		ios_va_log_len += n;
++		ios_va_log[ios_va_log_len] = 0;
++	}
+ }
+ 
+ static int
+@@ -949,13 +976,108 @@ ios_fex_band_select(ios_valloc2_t valloc2) {
+ 		ios_va_emit(buf, i);
+ 
+ 		if (probe) {
++			void* big;
+ 			VirtualFree(probe, 0, MEM_RELEASE);
++
++			/* ml750: 16KB landing somewhere in a 4-8GB window says almost nothing
++			 * about whether real span allocations will fit -- rpmalloc reserves
++			 * 64-128MB at a time. Ask for something meaningful and REPORT it.
++			 * Deliberately NOT a selection criterion: cand0/cand1 are proven on
++			 * hardware and on iOS 26 with the 16KB test, and silently changing
++			 * what they require could regress a working device to chase a VM. If
++			 * this line reports FAIL on the band that then gets selected, that is
++			 * the next thing to fix, and now it is visible. */
++			memset(&req, 0, sizeof(req));
++			req.Alignment = 0x10000;
++			req.LowestStartingAddress = (PVOID)cand[c][0];
++			req.HighestEndingAddress = (PVOID)cand[c][1];
++			param.Type = MemExtendedParameterAddressRequirements;
++			param.Pointer = &req;
++			big = valloc2(GetCurrentProcess(), 0, 0x10000000 /* 256MB */, MEM_RESERVE, PAGE_NOACCESS, &param, 1);
++			i = ios_va_cat(buf, 0, "[va-profile] ml750 cand");
++			buf[i++] = (char)('0' + c);
++			i = ios_va_cat(buf, i, " 256MB-reserve ");
++			if (big) {
++				i = ios_va_cat(buf, i, "OK got=");
++				i = ios_va_hex(buf, i, (uintptr_t)big);
++				VirtualFree(big, 0, MEM_RELEASE);
++			} else {
++				i = ios_va_cat(buf, i, "FAIL -- 16KB fits but a real span may not");
++			}
++			i = ios_va_cat(buf, i, "\n");
++			ios_va_emit(buf, i);
++
+ 			ios_fex_band_base = cand[c][0];
+ 			ios_fex_band_end = cand[c][1];
+ 			break;
+ 		}
+ 	}
+ 
++	/* ml753: SWEEP -- do not hardcode a low band, DISCOVER one.
++	 *
++	 * ml750 added a fixed 40-44GB candidate because a fixed 16KB probe found
++	 * 40 and 44GB usable on the research VM. It was usable *that launch*. Two
++	 * launches later, on the same VM and the same build, 40 and 44GB were
++	 * REFUSED and 34 and 36GB were mappable -- the opposite result. This
++	 * kernel randomises its vm_map_range_configure() partitions per process,
++	 * so every hardcoded low band is right sometimes and wrong the rest of the
++	 * time, and when it is wrong FEX gets no arena and rpmalloc wedges with
++	 * every thread parked on an event forever (the ml413/ml415 wedge shape).
++	 *
++	 * So walk the low region and take the first window that actually accepts a
++	 * reservation. A 16KB probe only proves the address is legal; rpmalloc
++	 * reserves 64-128MB spans, so confirm with a real 256MB reservation before
++	 * committing. Both are released immediately.
++	 *
++	 * The two fixed candidates above are tried FIRST and are untouched, so a
++	 * real device and the iOS 26 regime keep the exact placement they already
++	 * had -- this only runs when both have failed, which on hardware never
++	 * happens. */
++	if (!ios_fex_band_base) {
++		uintptr_t base;
++		for (base = 0x0800000000ULL; base < 0x1000000000ULL; base += 0x0100000000ULL) {
++			MEM_ADDRESS_REQUIREMENTS req;
++			MEM_EXTENDED_PARAMETER param;
++			void* small;
++			void* big;
++			uintptr_t end = base + 0x0100000000ULL - 1;
++
++			memset(&req, 0, sizeof(req));
++			memset(&param, 0, sizeof(param));
++			req.Alignment = 0x10000;
++			req.LowestStartingAddress = (PVOID)base;
++			req.HighestEndingAddress = (PVOID)end;
++			param.Type = MemExtendedParameterAddressRequirements;
++			param.Pointer = &req;
++
++			small = valloc2(GetCurrentProcess(), 0, 0x10000, MEM_RESERVE, PAGE_NOACCESS, &param, 1);
++			if (!small)
++				continue;
++			VirtualFree(small, 0, MEM_RELEASE);
++
++			memset(&req, 0, sizeof(req));
++			memset(&param, 0, sizeof(param));
++			req.Alignment = 0x10000;
++			req.LowestStartingAddress = (PVOID)base;
++			req.HighestEndingAddress = (PVOID)end;
++			param.Type = MemExtendedParameterAddressRequirements;
++			param.Pointer = &req;
++			big = valloc2(GetCurrentProcess(), 0, 0x10000000, MEM_RESERVE, PAGE_NOACCESS, &param, 1);
++
++			i = ios_va_cat(buf, 0, "[va-profile] ml753 sweep base=");
++			i = ios_va_hex(buf, i, base);
++			i = ios_va_cat(buf, i, big ? " 16KB+256MB OK -- TAKING\n" : " 16KB ok but 256MB FAIL -- skipping\n");
++			ios_va_emit(buf, i);
++
++			if (big) {
++				VirtualFree(big, 0, MEM_RELEASE);
++				ios_fex_band_base = base;
++				ios_fex_band_end = end;
++				break;
++			}
++		}
++	}
++
+ 	if (ios_fex_band_base) {
+ 		i = ios_va_cat(buf, 0, "[va-profile] ml706 SELECTED base=");
+ 		i = ios_va_hex(buf, i, ios_fex_band_base);
+@@ -965,6 +1087,16 @@ ios_fex_band_select(ios_valloc2_t valloc2) {
+ 	} else {
+ 		i = ios_va_cat(buf, 0,
+ 		               "[va-profile] ml706 NO BAND -- FEX host allocations fail instead of entering guest space\n");
++		/* ml755: SAY SO LOUDLY. With no band every FEX host allocation returns
++		 * NULL, and the first use is `str xzr, [x20, #0x7f0]` through that null
++		 * result -- which the fault path then redelivers 2,000 times before a
++		 * guard kills the process. The real cause (no arena) is nowhere near
++		 * that wreckage. On the research VM this happens whenever the kernel's
++		 * randomised VA partitions leave no usable window: one launch had EVERY
++		 * 4GB window from 32-63GB refuse even a 16KB reservation. */
++		i = ios_va_cat(buf, i,
++		               "[va-profile] ml755 FATAL: no FEX arena -- x64 cannot start. "
++		               "Expect a null-pointer store at +0x7f0 next; that is a SYMPTOM, not the cause.\n");
+ 	}
+ 	ios_va_emit(buf, i);
+ }

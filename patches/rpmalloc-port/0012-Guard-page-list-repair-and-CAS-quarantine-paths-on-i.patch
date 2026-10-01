@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 16 Sep 2026 09:26:56 +0800
+Subject: [PATCH] Guard page-list repair and CAS quarantine paths on iOS
+
+Carried from the ml615/ml622 work: the page-list guard and the
+compare-and-swap quarantine, kept as opt-in behaviour.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Madeira-commit: 0b96482fe05760bf6d3377426dd4dfed77da8100
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 39 +++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index bdab6dd..67b27b6 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -940,9 +940,44 @@ ios_fex_band_select(ios_valloc2_t valloc2) {
+ 
+ 	memset(&si, 0, sizeof(si));
+ 	GetSystemInfo(&si);
+-	i = ios_va_cat(buf, 0, "[va-profile] ml706 maxapp=");
++	/* ml787: label what this number IS.
++	 *
++	 * lpMaximumApplicationAddress is the limit Windows ADVERTISES; it is not
++	 * this task's map ceiling, and on iOS the two differ by orders of
++	 * magnitude -- 128TiB advertised against a 63GiB kernel ceiling. Printing
++	 * it bare invited exactly that misreading, and a placement proposal was
++	 * built on address space the task can never map. */
++	/* ml793 step 3: CONSUME a published arena instead of selecting.
++	 *
++	 * When the host process has reserved a range for us, running the selector
++	 * as well is how both sides came to believe different ranges were theirs:
++	 * one held 8GB while the other picked an overlapping window and had LESS
++	 * room than with no reservation at all (19 threads against 35). Validation
++	 * of a published range lives in ntdll now -- see ml797 below. */
++	/* ml797: the arena arrives as PRE-SET GLOBALS, never read from here.
++	 *
++	 * This function runs during rpmalloc init, BEFORE the ARM64EC TEB exists
++	 * (x18=0), and before ucrtbase's DllMain has initialised lock_table[17].
++	 * Both obvious channels are therefore fatal, and both were tried:
++	 *
++	 *   getenv()                 -> ucrtbase _lock(17) recurses on an
++	 *                               uninitialised lock table until the stack is
++	 *                               gone. ml793 shipped this and killed EVERY
++	 *                               launch, x64 cube included, with a stack
++	 *                               overflow at ucrtbase+0x3a138.
++	 *   GetEnvironmentVariableA  -> reaches RtlAcquirePebLock, which reads the
++	 *                               TEB. Same shape as ml750's OutputDebugStringA
++	 *                               here, which crashed every launch at x18=0.
++	 *
++	 * So this reads NOTHING. ntdll writes ios_fex_band_base/end directly, from
++	 * arm64ec_process_init_dispatchers(), which provably runs before this does
++	 * (its own else-branch reports "band selection has not run yet"). The caller
++	 * already skips the selector entirely when the band is set, which is exactly
++	 * the ml793 requirement: a published arena must be consumed, not raced. */
++
++	i = ios_va_cat(buf, 0, "[va-profile] ml787 advertised-maxapp(NOT the task ceiling)=");
+ 	i = ios_va_hex(buf, i, (uintptr_t)si.lpMaximumApplicationAddress);
+-	i = ios_va_cat(buf, i, "\n");
++	i = ios_va_cat(buf, i, " -- the usable ceiling is TASK_VM_INFO.max_address, which is far lower\n");
+ 	ios_va_emit(buf, i);
+ 
+ 	for (c = 0; c < (int)(sizeof(cand) / sizeof(cand[0])); ++c) {

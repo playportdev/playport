@@ -1,0 +1,2511 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 11 Aug 2026 20:01:12 +0800
+Subject: [PATCH] FEX: release thread lock holds at exit, IR
+ validate-and-repair, L1-only lookup cache
+
+Covers ml599 and ml612-ml622.
+
+BTCpu64IosReleaseThreadHolds (Module.cpp, exported in libarm64ecfex.def) is
+called from wine's pthread_exit_wrapper before the TSD-275 clear, while TEB and
+FEX state are still reachable. A thread that died holding a CodeInvalidationMutex
+read hold used to wedge the whole app: the writer queues behind the dead reader
+and write-priority blocks every later reader, so JIT compilation stops
+process-wide. Verify the stamp against CodeInvalidationMutex::IosStampAddress()
+and never poke the futex word directly.
+
+RedundantFlagCalculationElimination and RegisterAllocationPass both walked a
+block's Previous chain unbounded; validate before mutate and repair from the
+forward chain. IRTopologyCheck.h adds a per-pass sweep to name a corrupter.
+
+LookupCache is L1-only, worth 70-100 MB across many threads.
+
+AllocWatch is diagnostic only. Its per-record drain is deliberately gone: it
+formatted 512 lines from inside a corruption path and killed the process with
+its own format-string text as the exception code. Do not reinstate it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: d6d49752eb15da0806e1c8f0bbd09f5b83fbd713
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/CMakeLists.txt                 |   1 +
+ FEXCore/Source/Interface/Core/CPUBackend.cpp  |   2 +-
+ FEXCore/Source/Interface/Core/Core.cpp        | 277 +++++++++++-
+ FEXCore/Source/Interface/Core/JIT/JIT.cpp     |   2 +-
+ FEXCore/Source/Interface/Core/LookupCache.cpp | 127 ++++--
+ FEXCore/Source/Interface/Core/LookupCache.h   |  27 +-
+ FEXCore/Source/Interface/IR/IRTopologyCheck.h | 347 +++++++++++++++
+ FEXCore/Source/Interface/IR/PassManager.cpp   | 396 +++++++++++++++++-
+ .../RedundantFlagCalculationElimination.cpp   | 305 +++++++++++++-
+ .../IR/Passes/RegisterAllocationPass.cpp      |  37 +-
+ FEXCore/Source/Utils/AllocWatch.cpp           | 194 +++++++++
+ FEXCore/Source/Utils/AllocWatch.h             |  70 ++++
+ .../FEXCore/Debug/InternalThreadState.h       |  37 ++
+ .../FEXCore/Utils/WritePriorityMutex.h        |   9 +
+ Source/Windows/ARM64EC/Module.cpp             | 107 +++++
+ Source/Windows/ARM64EC/libarm64ecfex.def      |   1 +
+ Source/Windows/Common/InvalidationTracker.cpp |  88 +++-
+ 17 files changed, 1981 insertions(+), 46 deletions(-)
+ create mode 100644 FEXCore/Source/Interface/IR/IRTopologyCheck.h
+ create mode 100644 FEXCore/Source/Utils/AllocWatch.cpp
+ create mode 100644 FEXCore/Source/Utils/AllocWatch.h
+
+diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
+index baedd17..34d0a4f 100644
+--- a/FEXCore/Source/CMakeLists.txt
++++ b/FEXCore/Source/CMakeLists.txt
+@@ -67,6 +67,7 @@ set(SRCS
+   Interface/IR/Passes/RedundantFlagCalculationElimination.cpp
+   Interface/IR/Passes/RegisterAllocationPass.cpp
+   Interface/IR/Passes/x87StackOptimizationPass.cpp
++  Utils/AllocWatch.cpp
+   Utils/LongJump.cpp
+   Utils/Telemetry.cpp
+   Utils/Threads.cpp
+diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+index 3aef1e5..e81e792 100644
+--- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
++++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+@@ -422,7 +422,7 @@ namespace CPU {
+       // Stale callret predictions pair (guest RIP, host addr into Prev); wipe
+       // the entries the same way the self-migration path does. SP itself
+       // stays — zeroed entries just mispredict into the slow path.
+-      FEXCore::Allocator::VirtualDontNeed(ThreadState->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++      FEXCore::Core::ResetCallRetStack(ThreadState, "cpubackend");
+       SignalHandlerCodeBuffers.clear();
+       return 1;
+       // Prev + KeepAlive drop after lk releases; the final ref frees the
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 2b5a485..c5cc0a1 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -61,6 +61,21 @@ $end_info$
+ #include <array>
+ #include <atomic>
+ #include <chrono>
++#include <cstring>
++
++/* iOS-Mythic ml622: mirror of rpmalloc's POD snapshot (rpmalloc.c). Declared here
++ * rather than in a shared header because rpmalloc is C and vendored; keep the two
++ * definitions in sync — the drain below is the only consumer. */
++extern "C" {
++struct rpm_cas_snapshot {
++  unsigned long long page_addr, block_addr, heap_addr, owner_teb;
++  unsigned long long prev_token, cur_token, ret_addr, atomic_addr;
++  unsigned int size_class, page_type, block_index, list_size;
++  unsigned int fail_changed, fail_unchanged, fail_invalid, quarantined;
++  unsigned int block_count, block_used, is_full, which_loop;
++};
++int rpm_cas_snapshot_take(struct rpm_cas_snapshot* out);
++}
+ #include <condition_variable>
+ #include <fcntl.h>
+ #include <functional>
+@@ -602,8 +617,172 @@ void ContextImpl::ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, boo
+     auto lk = Thread->LookupCache->AcquireWriteLock();
+     Thread->LookupCache->ClearCache(lk);
+   }
+-  Allocator::VirtualDontNeed(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++  FEXCore::Core::ResetCallRetStack(Thread, "core");
++}
++
++/* iOS-Mythic ml610: THE ONLY place the callret predictor is reset.
++ *
++ * ml609 clipped this to the [base+2MB, base+6MB) window on the theory that the
++ * rest of the 16MB was unreachable, so decommitting it was pure waste. Both
++ * halves of that premise were wrong and the build regressed (+388MB of `fex`
++ * band at a matched cycle), so the full clear is restored here.
++ *
++ *  1. "UNREACHABLE" IS FALSE. BranchOps.cpp's CALL/RET guard does bound sp to
++ *     [base+2MB, base+6MB) (`add 0x200000` then `lsr #22`), but the JITCallback
++ *     sentinel push in Dispatcher.cpp only tests (sp - base) >> 24 -- the WHOLE
++ *     16MB reservation. The callback path can therefore push outside the window
++ *     the other path enforces. (How MUCH of the 16MB it actually touches is not
++ *     established; that is what the unix-side census below measures.)
++ *
++ *  2. THE CLEAR RECLAIMS -- IT DOES NOT DIRTY. VirtualDontNeed() here is
++ *     VirtualFree(MEM_DECOMMIT) + VirtualAlloc(MEM_COMMIT). This stack is not
++ *     pool-aliased, so wine's decommit_pages() (virtual_ios.c) takes the
++ *     anon_mmap_fixed() branch: a fresh MAP_ANON|MAP_FIXED over the range, which
++ *     DROPS the old physical pages and installs zero-fill-on-demand. The
++ *     MEM_COMMIT that follows only restores access; it does not touch pages.
++ *     So the full clear was RETURNING up to 16MB per reset, and ml609's 4MB
++ *     version left the rest of each stack resident.
++ *
++ * Resetting the predictor costs prediction quality only, never correctness: a
++ * zeroed entry fails the `sub TMP1, TMP1, RipReg` compare and falls through to
++ * the L1 lookup, which is always right.
++ *
++ * The counters stay, and now carry the one real finding ml609 did produce --
++ * the expensive axis is FREQUENCY (10,240 resets, every one from
++ * site=cpubackend). They break down by site and by CodeBuffer generation so a
++ * later frequency fix has a baseline to beat, and so a redundant migration
++ * (same thread cleared twice for one generation) becomes visible rather than
++ * assumed absent.
++ *
++ * How many bytes a clear actually RETURNS is deliberately NOT measured here:
++ * this TU compiles into an arm64ec PE under llvm-mingw, where __APPLE__ is
++ * undefined and mincore/mach_vm_region/task_info do not exist. That
++ * measurement lives at the reclaim site itself -- [dc-census] in
++ * decommit_pages(), build/ntdll-unix/virtual_ios.c.
++ */
++} // namespace (ml609: reopened below)
++namespace FEXCore::Core {
++namespace {
++  // Keep in sync with the literals passed by the three call sites.
++  constexpr const char* CallRetSiteNames[] = {"core", "cpubackend", "jit-rollover"};
++  constexpr size_t CallRetSiteCount = sizeof(CallRetSiteNames) / sizeof(CallRetSiteNames[0]);
++} // namespace
++
++static std::atomic<uint64_t> CallRetResets {0};
++static std::atomic<uint64_t> CallRetBytesReset {0};
++static std::atomic<uint64_t> CallRetResetsBySite[CallRetSiteCount] {};
++
++#ifdef FEX_IOS_HOST
++/* Per-generation attribution. A plain spin lock is enough: ~10k resets across a
++ * whole run, and the critical section is a bounded scan of a 256-entry table.
++ * Nothing is logged while holding it -- the sweeper calls this with the
++ * code-buffer migration gate active, so the section stays as short as possible.
++ */
++static std::atomic<uint32_t> CallRetGenLock {0};
++static constexpr uint32_t CallRetGenSeenSlots = 256;
++static uint64_t CallRetGenCur {~0ULL};
++static uint64_t CallRetGenResets {0};
++static uint64_t CallRetGenerations {0};
++static uint32_t CallRetGenThreads {0};
++static bool CallRetGenSaturated {false};
++static void* CallRetGenSeen[CallRetGenSeenSlots] {};
++#endif
++
++void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* Site) {
++  if (!Thread || !Thread->CallRetStackBase) {
++    return;
++  }
++  using TS = FEXCore::Core::InternalThreadState;
++
++  // The FULL reservation -- see the note above. This decommit is what returns
++  // the pages; clipping it strands the remainder resident.
++  FEXCore::Allocator::VirtualDontNeed(Thread->CallRetStackBase, TS::CALLRET_STACK_SIZE);
++
++  for (size_t i = 0; i < CallRetSiteCount; ++i) {
++    if (Site && strcmp(Site, CallRetSiteNames[i]) == 0) {
++      CallRetResetsBySite[i].fetch_add(1, std::memory_order_relaxed);
++      break;
++    }
++  }
++
++  const uint64_t N = CallRetResets.fetch_add(1, std::memory_order_relaxed) + 1;
++  const uint64_t B = CallRetBytesReset.fetch_add(TS::CALLRET_STACK_SIZE, std::memory_order_relaxed) + TS::CALLRET_STACK_SIZE;
++
++#ifdef FEX_IOS_HOST
++  // Closing summary for the generation we just left, filled under the lock and
++  // emitted after releasing it.
++  bool ClosedGen = false;
++  uint64_t ClosedGenId = 0, ClosedGenResets = 0;
++  uint32_t ClosedGenThreads = 0;
++  bool ClosedGenSaturated = false;
++  {
++    const uint64_t Gen = FEXCore::CPU::IosCodeBufferGeneration();
++    uint32_t Expected = 0;
++    while (!CallRetGenLock.compare_exchange_weak(Expected, 1, std::memory_order_acquire, std::memory_order_relaxed)) {
++      Expected = 0;
++    }
++
++    if (Gen != CallRetGenCur) {
++      if (CallRetGenCur != ~0ULL) {
++        ClosedGen = true;
++        ClosedGenId = CallRetGenCur;
++        ClosedGenResets = CallRetGenResets;
++        ClosedGenThreads = CallRetGenThreads;
++        ClosedGenSaturated = CallRetGenSaturated;
++      }
++      CallRetGenCur = Gen;
++      CallRetGenResets = 0;
++      CallRetGenThreads = 0;
++      CallRetGenSaturated = false;
++      memset(CallRetGenSeen, 0, sizeof(CallRetGenSeen));
++      ++CallRetGenerations;
++    }
++    ++CallRetGenResets;
++
++    /* Open-addressed set of threads already cleared for this generation.
++     * CPUBackend's `KeepAlive == LatestBuf` early-out should make a repeat
++     * impossible, so resets > unique_threads is the signal that it isn't
++     * holding -- and ml609 had no way to see that either way. */
++    const uintptr_t H = reinterpret_cast<uintptr_t>(Thread) >> 12;
++    bool Found = false, Inserted = false;
++    for (uint32_t Probe = 0; Probe < CallRetGenSeenSlots; ++Probe) {
++      const uint32_t Slot = static_cast<uint32_t>(H + Probe) & (CallRetGenSeenSlots - 1);
++      if (CallRetGenSeen[Slot] == Thread) {
++        Found = true;
++        break;
++      }
++      if (CallRetGenSeen[Slot] == nullptr) {
++        CallRetGenSeen[Slot] = Thread;
++        Inserted = true;
++        break;
++      }
++    }
++    if (Inserted) {
++      ++CallRetGenThreads;
++    } else if (!Found) {
++      // Table full: unique-thread count is now a floor, so say so rather than
++      // letting the number quietly under-report.
++      CallRetGenSaturated = true;
++    }
++
++    CallRetGenLock.store(0, std::memory_order_release);
++  }
++
++  if (ClosedGen) {
++    LogMan::Msg::EFmt("[callret-gen] ml610 gen={} resets={} unique_threads={}{} redundant={}", ClosedGenId, ClosedGenResets,
++                      ClosedGenThreads, ClosedGenSaturated ? "+ (table saturated)" : "",
++                      ClosedGenResets > ClosedGenThreads ? ClosedGenResets - ClosedGenThreads : 0);
++  }
++#endif
++
++  if ((N & 0x3ff) == 0) {
++    LogMan::Msg::EFmt("[callret] ml610 resets={} bytes={}MB per_reset={}KB site={} by_site core={} cpubackend={} jit-rollover={}", N,
++                      B >> 20, TS::CALLRET_STACK_SIZE >> 10, Site, CallRetResetsBySite[0].load(std::memory_order_relaxed),
++                      CallRetResetsBySite[1].load(std::memory_order_relaxed), CallRetResetsBySite[2].load(std::memory_order_relaxed));
++  }
+ }
++} // namespace FEXCore::Core
++namespace FEXCore::Context {
+ 
+ static void IRDumper(FEXCore::Core::InternalThreadState* Thread, IR::IREmitter* IREmitter, uint64_t GuestRIP) {
+   FEXCore::File::File FD = FEXCore::File::File::GetStdERR();
+@@ -617,9 +796,20 @@ bool ContextImpl::CheckIfBlockIsCacheable(FEXCore::Core::InternalThreadState& Th
+   return Thread.FrontendDecoder->CheckIfCacheable(Thread, reinterpret_cast<const uint8_t*>(GuestRIP), GuestRIP, MaxInst);
+ }
+ 
++/* iOS-Mythic ml623: targeted IR capture (PassManager.cpp). FEX_MythicIRCapTarget is the
++ * absolute guest address of the ONE instruction under investigation, published by the
++ * Windows-side InvalidationTracker at module load. The decode loop below marks the
++ * compile when the block CONTAINS that address -- containment, not entry RIP, because
++ * with multiblock a block routinely starts hundreds of bytes earlier. */
++extern "C" uint64_t FEX_MythicIRCapTarget;
++extern "C" void FEX_MythicIRCapMark(uint64_t GuestRIP);
++extern "C" void FEX_MythicIRCapClear();
++extern "C" uint64_t FEX_MythicIRCapCurrentRIP();
++
+ ContextImpl::GenerateIRResult
+ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, bool ExtendedDebugInfo, uint64_t MaxInst) {
+   FEXCORE_PROFILE_SCOPED("GenerateIR");
++  FEX_MythicIRCapClear(); // ml623: never inherit a previous compile's mark
+ 
+   /* iOS-Mythic ml250: Thread->OpDispatcher has been observed NULL here, faulting as
+    * `str xzr,[x0,#0x378]` with x0=0 inside IREmitter::ResetWorkingList and killing the
+@@ -732,6 +922,11 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+       uint64_t BlockInstructionsLength {};
+       for (size_t i = 0; i < InstsInBlock; ++i) {
+         uint64_t InstAddress = Block.Entry + BlockInstructionsLength;
++
++        // ml623: does THIS block contain the instruction under investigation?
++        if (FEX_MythicIRCapTarget && InstAddress == FEX_MythicIRCapTarget) {
++          FEX_MythicIRCapMark(GuestRIP);
++        }
+         const FEXCore::X86Tables::X86InstInfo* TableInfo {nullptr};
+         const FEXCore::X86Tables::DecodedInst* DecodedInfo {nullptr};
+ 
+@@ -992,6 +1187,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+     Thread->FrontendDecoder->ValidateDisownedOrFree();
+     Thread->OpDispatcher->ValidateDisownedOrFree();
+     // OpDispatcher IR already released in this case.
++    FEX_MythicIRCapClear(); // ml623
+     return {{}, nullptr, 0, 0, false};
+   }
+ 
+@@ -1005,6 +1201,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+   if (MaxInst != 1 && !FEXCore::Utils::WritePriorityMutex::IosUnpublishedCompileActive()) {
+     if (auto Block = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
+       // Raced to compile, release the OpDispatcher IR.
++      FEX_MythicIRCapClear(); // ml623
+       Thread->OpDispatcher->DelayedDisownBuffer();
+       Thread->FrontendDecoder->ValidateDisownedOrFree();
+       Thread->OpDispatcher->ValidateDisownedOrFree();
+@@ -1023,6 +1220,57 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+ 
+   auto CompiledCode = Thread->CPUBackend->CompileCode(GuestRIP, Length, TotalInstructions == 1, &*IRView, DebugData.get(), TFSet);
+ 
++  /* ml623: the final arm of the capture -- the host bytes actually emitted for the
++   * target instruction, bounded to [its HostEntryOffset, the next one). This is the
++   * arm that separates "the emitter dropped it" from "SMC/cache/alias lifetime rewrote
++   * it later": the hash printed here is of the bytes AT COMPILE TIME, so a runtime
++   * disassembly that disagrees convicts something after codegen. */
++  if (const uint64_t CapRIP = FEX_MythicIRCapCurrentRIP()) {
++    const uint64_t Target = FEX_MythicIRCapTarget;
++    if (Target >= CapRIP && CompiledCode.BlockBegin && DebugData) {
++      const uint64_t WantOffset = Target - CapRIP;
++      const auto& GO = DebugData->GuestOpcodes;
++      size_t Idx = GO.size();
++      for (size_t i = 0; i < GO.size(); ++i) {
++        if (GO[i].GuestEntryOffset == WantOffset) {
++          Idx = i;
++          break;
++        }
++      }
++      if (Idx == GO.size()) {
++        LogMan::Msg::EFmt("[ircap] ml623 HOST: no GuestOpcode entry for offset {:#x} among {} entries "
++                          "(rip={:#x} hostsize={})",
++                          WantOffset, GO.size(), CapRIP, DebugData->HostCodeSize);
++      } else {
++        const ptrdiff_t HostFrom = GO[Idx].HostEntryOffset;
++        const ptrdiff_t HostTo = (Idx + 1 < GO.size()) ? GO[Idx + 1].HostEntryOffset : static_cast<ptrdiff_t>(DebugData->HostCodeSize);
++        // Neighbours give the `or al,0x44` that shares the clobbered register.
++        for (size_t i = (Idx > 1 ? Idx - 2 : 0); i < GO.size() && i <= Idx + 1; ++i) {
++          LogMan::Msg::EFmt("[ircap] ml623 HOST map guest+{:#x} -> host+{:#x}{}", GO[i].GuestEntryOffset, GO[i].HostEntryOffset,
++                            i == Idx ? "   <== TARGET" : "");
++        }
++        if (HostTo > HostFrom && (HostTo - HostFrom) < 4096) {
++          const uint32_t* Words = reinterpret_cast<const uint32_t*>(CompiledCode.BlockBegin + HostFrom);
++          const size_t NumWords = static_cast<size_t>(HostTo - HostFrom) / 4;
++          uint64_t Hash = 1469598103934665603ull; // FNV-1a
++          for (size_t i = 0; i < NumWords; ++i) {
++            for (int b = 0; b < 4; ++b) {
++              Hash = (Hash ^ ((Words[i] >> (b * 8)) & 0xff)) * 1099511628211ull;
++            }
++          }
++          LogMan::Msg::EFmt("[ircap] ml623 HOST bytes blockbegin={} host+{:#x}..{:#x} words={} fnv1a={:#x}",
++                            static_cast<void*>(CompiledCode.BlockBegin), HostFrom, HostTo, NumWords, Hash);
++          for (size_t i = 0; i < NumWords; ++i) {
++            LogMan::Msg::EFmt("[ircap]   +{:#06x}  {:08x}", HostFrom + static_cast<ptrdiff_t>(i * 4), Words[i]);
++          }
++        } else {
++          LogMan::Msg::EFmt("[ircap] ml623 HOST bytes SKIPPED: implausible range host+{:#x}..{:#x}", HostFrom, HostTo);
++        }
++      }
++    }
++    FEX_MythicIRCapClear();
++  }
++
+   // Release the IR
+   Thread->OpDispatcher->DelayedDisownBuffer();
+ 
+@@ -1554,6 +1802,31 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+                         Frame ? Frame->State.L1Pointer : 0,
+                         Frame ? Frame->State.L1Mask : 0,
+                         (T && T->LookupCache) ? T->LookupCache->GetL1Pointer() : 0);
++
++      /* iOS-Mythic ml622: drain the rpmalloc remote-free CAS snapshot HERE —
++       * outside rpmalloc, where formatting is safe. The allocator side only ever
++       * copies scalars into a POD and sets a flag; it must never format, because
++       * LogMan/fmt can allocate and re-enter the very allocator that is stuck
++       * (that is how ml620 killed itself).
++       *
++       * Read the counters, not the total: fail_changed vs fail_unchanged is the
++       * discriminator, and fail_invalid outranks both. ⚠️ A changed token is NOT
++       * automatically healthy contention — it can equally be page reuse or a
++       * foreign writer, so check block_index/list_size against block_count before
++       * concluding anything. */
++      {
++        rpm_cas_snapshot Snap;
++        if (rpm_cas_snapshot_take(&Snap)) {
++          LogMan::Msg::EFmt("[rpm-cas] ml622 loop={} {} page=0x{:x} block=0x{:x} heap=0x{:x} atomic=0x{:x} "
++                            "teb=0x{:x} ret=0x{:x} class={} ptype={} idx={}/{} list_size={} used={} is_full={} "
++                            "prev_token=0x{:x} cur_token=0x{:x} | fail changed={} unchanged={} invalid={}",
++                            Snap.which_loop, Snap.quarantined ? "QUARANTINED (block leaked, spin abandoned)" : "spinning",
++                            Snap.page_addr, Snap.block_addr, Snap.heap_addr, Snap.atomic_addr, Snap.owner_teb,
++                            Snap.ret_addr, Snap.size_class, Snap.page_type, Snap.block_index, Snap.block_count,
++                            Snap.list_size, Snap.block_used, Snap.is_full, Snap.prev_token, Snap.cur_token,
++                            Snap.fail_changed, Snap.fail_unchanged, Snap.fail_invalid);
++        }
++      }
+     }
+   }
+ 
+@@ -1983,7 +2256,7 @@ void ContextImpl::InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadS
+     FEXCORE_PROFILE_SCOPED("InvalidateCallRet");
+ 
+     // This may cause access violations in the thread on Windows as zeroing is not atomic, this is handled by the frontend
+-    Allocator::VirtualDontNeed(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++    FEXCore::Core::ResetCallRetStack(Thread, "core");
+   }
+ }
+ 
+diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+index 526bbc3..d424fa2 100644
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -963,7 +963,7 @@ CodeBuffer::CodeBufferAllocation Arm64JITCore::AllocateCodeBufferInSharedCache(s
+ #endif
+   // Bring CodeBuffer up to date
+   if (auto Prev = CheckCodeBufferUpdate()) {
+-    Allocator::VirtualDontNeed(ThreadState->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++    FEXCore::Core::ResetCallRetStack(ThreadState, "jit-rollover");
+     auto lk = ThreadState->LookupCache->AcquireWriteLock();
+     ThreadState->LookupCache->ChangeGuestToHostMapping(*Prev, *CurrentCodeBuffer->LookupCache, lk);
+   }
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.cpp b/FEXCore/Source/Interface/Core/LookupCache.cpp
+index 1f84bf2..2923c76 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.cpp
++++ b/FEXCore/Source/Interface/Core/LookupCache.cpp
+@@ -14,6 +14,7 @@ $end_info$
+ #include "Interface/Core/LookupCache.h"
+ 
+ #ifdef FEX_IOS_HOST
++#include <atomic>
+ #include <cstring>
+ #endif
+ 
+@@ -25,10 +26,28 @@ GuestToHostMap::GuestToHostMap()
+   BlockLinks = BlockLinks_pma->new_object<BlockLinksMapType>();
+ }
+ 
++// iOS-Mythic ml606: live/cumulative census for the L1-only A/B. `live` is what
++// matters — footprints must be compared at equal live-cache counts, not at equal
++// elapsed time, because caches are created and destroyed throughout a run.
++static std::atomic<uint64_t> LookupCacheLive {0};
++static std::atomic<uint64_t> LookupCacheCumulative {0};
++static std::atomic<uint64_t> LookupCacheBytesLive {0};
++
+ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+   : ctx {CTX} {
+ 
+-  TotalCacheSize = ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8 + CODE_SIZE + MAX_L1_SIZE;
++  // Snapshot ONCE, from the same FEX_CONFIG_OPT accessor every other L2 path in
++  // this class uses, so the object is internally consistent for its lifetime.
++  //
++  // Residual hazard worth knowing: Dispatcher.cpp samples DisableL2Cache through
++  // its own FEX_CONFIG_OPT. Both read the same underlying config and it is not
++  // mutated at runtime, but if they ever disagreed the JIT would emit an L2
++  // lookup against an L1-only allocation. The [lookup-cache] line below prints
++  // the mode actually chosen, so a mismatch is visible rather than silent.
++  L2Enabled = !DisableL2Cache();
++
++  const size_t L2TableSize = ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8;
++  TotalCacheSize = L2TableSize + CODE_SIZE + MAX_L1_SIZE;
+ 
+   // Block cache ends up looking like this
+   // PageMemoryMap[VirtualMemoryRegion >> 12]
+@@ -42,38 +61,71 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+   // Allocate a region of memory that we can use to back our block pointers
+   // We need one pointer per page of virtual memory
+   // At 64GB of virtual memory this will allocate 128MB of virtual memory space
++  if (!L2Enabled) {
++    // ml606: L1-ONLY. Skip the 16MB L2 table and the 32MB backing arena
++    // entirely — with DisableL2Cache the JIT never emits a lookup against them.
++    AllocationSize = MAX_L1_SIZE;
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: commit upfront. The auto-commit-on-access-violation path
+-   * (OvercommitTracker.HandleAccessViolation) doesn't take effect cleanly
+-   * on iOS — pages stay faulting after VirtualAlloc(MEM_COMMIT) returns.
+-   * Pre-commit the whole region; physical pages are still demand-faulted
+-   * by the kernel. */
+-  LogMan::Msg::EFmt("[TI-IC] lookupcache-alloc size=0x{:x}", TotalCacheSize);
+-  PagePointer = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, true));
+-  LogMan::Msg::EFmt("[TI-IC] lookupcache-alloc -> 0x{:x}", PagePointer);
++    AllocationBase = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(AllocationSize, false, true));
+ #else
+-  PagePointer = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, false));
++    AllocationBase = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(AllocationSize, false, false));
+ #endif
+-  LOGMAN_THROW_A_FMT(PagePointer != -1ULL, "Failed to allocate PagePointer");
++    LOGMAN_THROW_A_FMT(AllocationBase != -1ULL, "Failed to allocate L1-only LookupCache");
++
++    // No L2 regions exist. Leave these pointing at nothing usable so a stray
++    // consumer faults immediately instead of scribbling on the L1 array.
++    PagePointer = 0;
++    PageMemory = 0;
++  } else {
++    AllocationSize = TotalCacheSize;
++#ifdef FEX_IOS_HOST
++    /* iOS-Mythic: commit upfront. The auto-commit-on-access-violation path
++     * (OvercommitTracker.HandleAccessViolation) doesn't take effect cleanly
++     * on iOS — pages stay faulting after VirtualAlloc(MEM_COMMIT) returns.
++     * Pre-commit the whole region; physical pages are still demand-faulted
++     * by the kernel. */
++    LogMan::Msg::EFmt("[TI-IC] lookupcache-alloc size=0x{:x}", TotalCacheSize);
++    AllocationBase = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, true));
++    LogMan::Msg::EFmt("[TI-IC] lookupcache-alloc -> 0x{:x}", AllocationBase);
++#else
++    AllocationBase = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, false));
++#endif
++    LOGMAN_THROW_A_FMT(AllocationBase != -1ULL, "Failed to allocate PagePointer");
++    PagePointer = AllocationBase;
++  }
+ 
+-  // Disable THP on the Lookup cache.
+-  FEXCore::Allocator::VirtualTHPControl(reinterpret_cast<const void*>(PagePointer), TotalCacheSize, FEXCore::Allocator::THPControl::Disable);
++  // Disable THP on whatever we actually mapped.
++  FEXCore::Allocator::VirtualTHPControl(reinterpret_cast<const void*>(AllocationBase), AllocationSize,
++                                        FEXCore::Allocator::THPControl::Disable);
++  CTX->SyscallHandler->MarkOvercommitRange(AllocationBase, AllocationSize);
+ 
+-  FEXCore::Allocator::VirtualName("FEXMem_Lookup", reinterpret_cast<void*>(PagePointer),
+-                                  ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8 + CODE_SIZE);
+-  CTX->SyscallHandler->MarkOvercommitRange(PagePointer, TotalCacheSize);
++  if (L2Enabled) {
++    FEXCore::Allocator::VirtualName("FEXMem_Lookup", reinterpret_cast<void*>(PagePointer), L2TableSize + CODE_SIZE);
+ 
+-  // Allocate our memory backing our pages
+-  // We need 32KB per guest page (One pointer per byte)
+-  // XXX: We can drop down to 16KB if we store 4byte offsets from the code base
+-  // We currently limit to 128MB of real memory for caching for the total cache size.
+-  // Can end up being inefficient if we compile a small number of blocks per page
+-  PageMemory = PagePointer + ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8;
++    // Allocate our memory backing our pages
++    // We need 32KB per guest page (One pointer per byte)
++    // XXX: We can drop down to 16KB if we store 4byte offsets from the code base
++    // We currently limit to 128MB of real memory for caching for the total cache size.
++    // Can end up being inefficient if we compile a small number of blocks per page
++    PageMemory = PagePointer + L2TableSize;
+ 
+-  // L1 Cache
+-  L1Pointer = PageMemory + CODE_SIZE;
++    // L1 Cache
++    L1Pointer = PageMemory + CODE_SIZE;
++  } else {
++    // ml606: the allocation IS the L1 array.
++    L1Pointer = AllocationBase;
++  }
+   FEXCore::Allocator::VirtualName("FEXMem_Lookup_L1", reinterpret_cast<void*>(L1Pointer), MAX_L1_SIZE);
+ 
++  {
++    const uint64_t Live = LookupCacheLive.fetch_add(1, std::memory_order_relaxed) + 1;
++    const uint64_t Cum = LookupCacheCumulative.fetch_add(1, std::memory_order_relaxed) + 1;
++    const uint64_t Bytes = LookupCacheBytesLive.fetch_add(AllocationSize, std::memory_order_relaxed) + AllocationSize;
++    LogMan::Msg::EFmt("[lookup-cache] ml606 mode={} alloc={}MB live={} cumulative={} fleet_live={}MB "
++                      "(full-layout would be {}MB/cache)",
++                      L2Enabled ? "full-l2" : "l1-only", AllocationSize >> 20, Live, Cum, Bytes >> 20, TotalCacheSize >> 20);
++  }
++
+   VirtualMemSize = ctx->Config.VirtualMemSize;
+ 
+   if (DynamicL1Cache()) {
+@@ -93,22 +145,34 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+    * jetsam limit. ZeroScrub verifies by read (untouched anon pages map the
+    * shared zero page, no footprint) and memsets only stale pages. The stale
+    * counts double as the probe for whether the hazard still exists at all. */
+-  size_t StaleL2 = FEXCore::Allocator::ZeroScrub(reinterpret_cast<void*>(PageMemory),
+-                                                 ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8);
++  size_t StaleL2 = L2Enabled ? FEXCore::Allocator::ZeroScrub(reinterpret_cast<void*>(PageMemory), L2TableSize) : 0;
+   size_t StaleL1 = FEXCore::Allocator::ZeroScrub(reinterpret_cast<void*>(L1Pointer), MAX_L1_SIZE);
+-  LogMan::Msg::EFmt("[TI-IC] zero-scrub rev=ml362 l2-stale=0x{:x} l1-stale=0x{:x}", StaleL2, StaleL1);
++  LogMan::Msg::EFmt("[TI-IC] zero-scrub rev=ml606 l2-stale=0x{:x} l1-stale=0x{:x}", StaleL2, StaleL1);
+ #endif
+ }
+ 
+ LookupCache::~LookupCache() {
+-  FEXCore::Allocator::VirtualFree(reinterpret_cast<void*>(PagePointer), TotalCacheSize);
+-  ctx->SyscallHandler->UnmarkOvercommitRange(PagePointer, TotalCacheSize);
++  // ml606: free what was actually mapped. PagePointer/TotalCacheSize only
++  // describe the full layout and are wrong (PagePointer is 0) in L1-only mode.
++  FEXCore::Allocator::VirtualFree(reinterpret_cast<void*>(AllocationBase), AllocationSize);
++  ctx->SyscallHandler->UnmarkOvercommitRange(AllocationBase, AllocationSize);
++
++  LookupCacheLive.fetch_sub(1, std::memory_order_relaxed);
++  LookupCacheBytesLive.fetch_sub(AllocationSize, std::memory_order_relaxed);
+ 
+   // No need to free BlockLinks map.
+   // These will get freed when their memory allocators are deallocated.
+ }
+ 
+ void LookupCache::ClearL2Cache(const FEXCore::LookupCacheBaseLockToken& lk) {
++  // ml606: nothing to clear in L1-only mode — the L2 regions were never mapped.
++  // Without this the VirtualDontNeed below would run against PagePointer == 0.
++  if (!L2Enabled) {
++    LOGMAN_THROW_A_FMT(PagePointer == 0, "L2 disabled but PagePointer is set");
++    AllocateOffset = 0;
++    return;
++  }
++
+   // Clear out the page memory
+   // PagePointer and PageMemory are sequential with each other. Clear both at once.
+   FEXCore::Allocator::VirtualDontNeed(reinterpret_cast<void*>(PagePointer),
+@@ -118,8 +182,9 @@ void LookupCache::ClearL2Cache(const FEXCore::LookupCacheBaseLockToken& lk) {
+ 
+ void LookupCache::ClearThreadLocalCaches(const LookupCacheWriteLockToken&) {
+   // TODO: Preserve code cache entries?
+-  // Clear L1 and L2 by clearing the full cache.
+-  FEXCore::Allocator::VirtualDontNeed(reinterpret_cast<void*>(PagePointer), TotalCacheSize, false);
++  // ml606: clear exactly what is mapped. In L1-only mode that is the L1 array
++  // alone; using TotalCacheSize here would decommit 48MB we never allocated.
++  FEXCore::Allocator::VirtualDontNeed(reinterpret_cast<void*>(AllocationBase), AllocationSize, false);
+ 
+   // TODO: Rename this member to avoid confusion with code caching
+   CachedCodePages.clear();
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.h b/FEXCore/Source/Interface/Core/LookupCache.h
+index 821ba98..1b45aa4 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.h
++++ b/FEXCore/Source/Interface/Core/LookupCache.h
+@@ -393,7 +393,11 @@ public:
+     return L1PointerMask << FEXCore::ilog2(sizeof(LookupCache::LookupCacheEntry));
+   }
+   uintptr_t GetPagePointer() const {
+-    return PagePointer;
++    // ml606: publish NULL when there is no L2 region. The JIT never loads
++    // Pointers.L2Pointer in this mode (Dispatcher.cpp:279), so a null here is
++    // inert — and if anything ever does dereference it, it faults at 0 rather
++    // than wandering into whatever now lives at the old address.
++    return L2Enabled ? PagePointer : 0;
+   }
+   uintptr_t GetVirtualMemorySize() const {
+     return VirtualMemSize;
+@@ -482,6 +486,27 @@ private:
+ 
+   size_t TotalCacheSize;
+ 
++  // iOS-Mythic ml606: L1-ONLY LAYOUT when the L2 cache is disabled.
++  //
++  // The full layout is [L2 page table][CODE_SIZE arena][L1] contiguous — on iOS
++  // 16MB + 32MB + 2MB = 50MB per guest thread, and FEX_IOS_HOST COMMITS it all
++  // up front (the auto-commit-on-AV path doesn't work here). DisableL2Cache
++  // defaults to TRUE and Dispatcher.cpp:279 emits `b(&NoBlock)` instead of any
++  // L2 lookup when it is set, so on the shipping config those 48MB per thread
++  // were allocated, committed and scrubbed but never read. ml605 had ~100 live
++  // caches when it was jetsam-killed at 4080/4096MB with fex=1234MB dirty.
++  //
++  // L2Enabled is snapshotted ONCE here. Do not re-consult the config later:
++  // Dispatcher and each LookupCache would otherwise sample it independently and
++  // could disagree, which would emit an L2 lookup against an L1-only allocation.
++  //
++  // AllocationBase/AllocationSize describe what was ACTUALLY mapped, so the
++  // destructor and the clear paths stay correct in both layouts rather than
++  // operating on PagePointer/TotalCacheSize which only describe the full one.
++  bool L2Enabled;
++  uintptr_t AllocationBase;
++  size_t AllocationSize;
++
+   // Start with 8k entries in L1 to give 128KB of L1 cache to each thread.
+   // Max out at 1 million entries to give each thread 16MB of L1 cache maximum.
+   constexpr static size_t MIN_L1_ENTRIES = 8 * 1024;        // Must be a power of 2
+diff --git a/FEXCore/Source/Interface/IR/IRTopologyCheck.h b/FEXCore/Source/Interface/IR/IRTopologyCheck.h
+new file mode 100644
+index 0000000..e4d339e
+--- /dev/null
++++ b/FEXCore/Source/Interface/IR/IRTopologyCheck.h
+@@ -0,0 +1,347 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++/*
++ * iOS-Mythic ml599: bounded structural validation of the intrusive IR node list.
++ *
++ * WHY THIS EXISTS
++ * ---------------
++ * Two passes walk a code block BACKWARDS and terminate only by reaching
++ * CodeBegin, with no bound on the number of steps:
++ *
++ *   DeadFlagCalculationEliminination::ProcessBlock   (RedundantFlagCalculationElimination.cpp)
++ *   ConstrainedRAPass::Run                           (RegisterAllocationPass.cpp)
++ *
++ * Both assume the Previous chain from BlockIROp->Last always reaches
++ * BlockIROp->Begin. ml598 proved that assumption can fail on real workloads:
++ * the ml597 DFE bound fired on block 405 after 13,183 steps (budget =
++ * SSACount + 16), and the SAME run then hung Chrome_InProcRendererThread at
++ * 97-100% CPU for minutes inside ConstrainedRAPass::Run -- PC sampled at
++ * libarm64ecfex.dll RVA 0x100b0c / 0x100cb4 / 0x100cc4 / 0x100cdc, all inside
++ * [Run, Run+0xcd8), on the `ldr w27,[x26,#8]` (Previous) back edge. Steam had
++ * logged in and reached its main UI; the store page never rendered because the
++ * renderer's compile never returned.
++ *
++ * Skipping a pass after the damage is done ("fail open") is NOT a fix: DFE
++ * calls IREmit->Remove() as it walks, so by the time a step counter trips it
++ * has already mutated the list thousands of times, and the register allocator
++ * is then handed that IR anyway.
++ *
++ * WHAT THIS DOES
++ * --------------
++ * Validate BEFORE anything mutates, then either repair or decline:
++ *
++ *   ValidateBlockTopology()  bounded forward walk Begin->Last, bounded backward
++ *                            walk Last->Begin, Next/Previous reciprocity check,
++ *                            and Floyd cycle detection on the Previous chain.
++ *                            Says WHICH field is wrong, not merely "something is".
++ *
++ *   RepairBlockPrevious()    rebuild the Previous chain from the forward chain.
++ *                            Sound only when the forward walk reached Last, so
++ *                            callers must check that first.
++ *
++ * A caller that cannot repair must skip its backward walk entirely rather than
++ * bound it mid-flight: a partial backward pass in RA sets kill bits on only
++ * some nodes, which is conservative and safe, whereas walking a cyclic chain
++ * sets kill bits on nodes belonging to other blocks, which is a miscompile.
++ */
++
++#include "Interface/IR/IntrusiveIRList.h"
++
++#include <FEXCore/IR/IR.h>
++#include <FEXCore/Utils/LogManager.h>
++
++#include <atomic>
++#include <cstdint>
++
++namespace FEXCore::IR {
++
++struct IRBlockTopology {
++  static constexpr uint32_t NoNode = 0xffffffffu;
++
++  uint32_t BeginID {};
++  uint32_t LastID {};
++
++  // Steps actually taken. Both are capped at SSACount + 16; hitting the cap is
++  // itself proof of corruption, since a single block cannot hold more nodes
++  // than the entire listing.
++  uint32_t ForwardSteps {};
++  uint32_t BackwardSteps {};
++
++  bool ForwardReachedLast {};
++  bool BackwardReachedBegin {};
++
++  // Previous chain revisits a node (Floyd tortoise/hare). Distinguishes "loops
++  // forever" from "walks off into another block's nodes and stops".
++  bool BackwardCyclic {};
++
++  // First node N on the forward walk where Next(N)->Previous != N.
++  uint32_t ReciprocityBreakID {NoNode};
++  uint16_t ReciprocityBreakOp {};
++
++  [[nodiscard]]
++  bool OK() const {
++    return ForwardReachedLast && BackwardReachedBegin && !BackwardCyclic && ReciprocityBreakID == NoNode;
++  }
++
++  // Repair is only sound when the forward chain is intact end to end.
++  [[nodiscard]]
++  bool Repairable() const {
++    return ForwardReachedLast;
++  }
++};
++
++/**
++ * @brief CHEAP detection: bounded backward walk only.
++ *
++ * ml599 shipped the full diagnostic on every block at DFE entry, RA entry, AND
++ * after every pass. That was far too expensive -- the renderer thread spent as
++ * much time inside ValidateBlockTopology as inside the entire x86 decoder, and
++ * Steam never reached the UI it had reached the run before. A probe must not
++ * break what it measures.
++ *
++ * So detection is now just the walk that actually hangs: follow Previous from
++ * Last, bounded, and see whether it reaches Begin. No Floyd, no forward walk, no
++ * reciprocity -- those cost 3-4x more and are only needed to DESCRIBE a fault we
++ * have already found. One extra pointer-chase loop per block is small against
++ * the many loads and stores per node the passes themselves do.
++ *
++ * @return true when the backward chain reaches Begin within budget.
++ */
++[[nodiscard]]
++inline bool QuickBackwardOK(const IRListView& IR, Ref BlockNode) {
++  auto BlockIROp = IR.GetOp<IROp_CodeBlock>(BlockNode);
++  const uint32_t Budget = IR.GetSSACount() + 16;
++
++  Ref const Begin = IR.GetNode(BlockIROp->Begin);
++  Ref Cur = IR.GetNode(BlockIROp->Last);
++
++  for (uint32_t Steps = 0; Steps <= Budget; ++Steps) {
++    if (Cur == Begin) {
++      return true;
++    }
++    const OrderedNodeWrapper PrevW = Cur->Header.Previous;
++    if (PrevW.NodeOffset == 0) {
++      return false; // truncated: hit the sentinel without seeing Begin
++    }
++    Cur = IR.GetNode(PrevW);
++  }
++  return false; // exceeded budget: cyclic, or chained into foreign nodes
++}
++
++/**
++ * @brief FULL diagnostic. Only worth running once QuickBackwardOK has failed.
++ * @return true when the block is well formed. Never dereferences past the
++ *         budget, so it is safe to call on already-corrupt IR.
++ */
++[[nodiscard]]
++inline bool ValidateBlockTopology(const IRListView& IR, Ref BlockNode, IRBlockTopology& Out) {
++  Out = IRBlockTopology {};
++
++  auto BlockIROp = IR.GetOp<IROp_CodeBlock>(BlockNode);
++  const uint32_t Budget = IR.GetSSACount() + 16;
++
++  Ref const Begin = IR.GetNode(BlockIROp->Begin);
++  Ref const Last = IR.GetNode(BlockIROp->Last);
++
++  Out.BeginID = IR.GetID(Begin).Value;
++  Out.LastID = IR.GetID(Last).Value;
++
++  // Forward: Begin -> ... -> Last, checking reciprocity as we go.
++  {
++    Ref Cur = Begin;
++    OrderedNodeWrapper CurW = BlockIROp->Begin;
++
++    while (true) {
++      ++Out.ForwardSteps;
++
++      if (Cur == Last) {
++        Out.ForwardReachedLast = true;
++        break;
++      }
++
++      if (Out.ForwardSteps > Budget) {
++        break;
++      }
++
++      const OrderedNodeWrapper NextW = Cur->Header.Next;
++      if (NextW.NodeOffset == 0) {
++        // Ran into the sentinel without ever seeing Last: the chain is
++        // truncated, or Last does not belong to this block.
++        break;
++      }
++
++      Ref Next = IR.GetNode(NextW);
++      if (Out.ReciprocityBreakID == IRBlockTopology::NoNode && IR.GetNode(Next->Header.Previous) != Cur) {
++        Out.ReciprocityBreakID = IR.GetID(Cur).Value;
++        Out.ReciprocityBreakOp = static_cast<uint16_t>(IR.GetOp<IROp_Header>(Cur)->Op);
++      }
++
++      CurW = NextW;
++      Cur = Next;
++    }
++  }
++
++  // Backward: Last -> ... -> Begin, with Floyd cycle detection running on the
++  // same chain. Slow advances one link per iteration, Fast two; they can only
++  // meet if the chain closes on itself.
++  {
++    Ref Cur = Last;
++    Ref Slow = Last;
++    Ref Fast = Last;
++
++    auto StepPrev = [&IR](Ref N) -> Ref {
++      const OrderedNodeWrapper PrevW = N->Header.Previous;
++      return PrevW.NodeOffset == 0 ? nullptr : IR.GetNode(PrevW);
++    };
++
++    while (true) {
++      ++Out.BackwardSteps;
++
++      if (Cur == Begin) {
++        Out.BackwardReachedBegin = true;
++        break;
++      }
++
++      if (Out.BackwardSteps > Budget) {
++        break;
++      }
++
++      Cur = StepPrev(Cur);
++      if (!Cur) {
++        break;
++      }
++
++      // Floyd, one tortoise step and two hare steps per iteration.
++      if (Fast) {
++        Fast = StepPrev(Fast);
++      }
++      if (Fast) {
++        Fast = StepPrev(Fast);
++      }
++      Slow = StepPrev(Slow);
++
++      if (Fast && Fast == Slow) {
++        Out.BackwardCyclic = true;
++        break;
++      }
++    }
++  }
++
++  return Out.OK();
++}
++
++/**
++ * @brief Rebuild the Previous chain from the forward chain.
++ *
++ * Caller MUST have validated that the forward walk reaches Last
++ * (IRBlockTopology::Repairable), otherwise this walks the same broken chain.
++ *
++ * @return number of Previous links rewritten.
++ */
++inline uint32_t RepairBlockPrevious(const IRListView& IR, Ref BlockNode) {
++  auto BlockIROp = IR.GetOp<IROp_CodeBlock>(BlockNode);
++  const uint32_t Budget = IR.GetSSACount() + 16;
++
++  Ref const Last = IR.GetNode(BlockIROp->Last);
++
++  OrderedNodeWrapper CurW = BlockIROp->Begin;
++  Ref Cur = IR.GetNode(CurW);
++
++  uint32_t Relinked = 0;
++  uint32_t Steps = 0;
++
++  while (Cur != Last && ++Steps <= Budget) {
++    const OrderedNodeWrapper NextW = Cur->Header.Next;
++    if (NextW.NodeOffset == 0) {
++      break;
++    }
++
++    Ref Next = IR.GetNode(NextW);
++    if (IR.GetNode(Next->Header.Previous) != Cur) {
++      Next->Header.Previous = CurW;
++      ++Relinked;
++    }
++
++    CurW = NextW;
++    Cur = Next;
++  }
++
++  return Relinked;
++}
++
++/**
++ * @brief One line naming exactly which structural invariant broke.
++ * @param Where short tag for the call site, e.g. "dfe-entry" or "ra-entry".
++ */
++inline void ReportBlockTopology(const char* Where, const IRListView& IR, Ref BlockNode, const IRBlockTopology& Topo) {
++  auto BlockIROp = IR.GetOp<IROp_CodeBlock>(BlockNode);
++  auto Header = IR.GetHeader();
++
++  LogMan::Msg::EFmt("[ir-topo] ml599 {} CORRUPT block={} rip=0x{:x}+0x{:x} ssa={} "
++                    "begin={} last={} fwd={}{} bwd={}{}{} recip-break={} op={}",
++                    Where, BlockIROp->ID, Header->OriginalRIP, BlockIROp->GuestEntryOffset, IR.GetSSACount(), Topo.BeginID, Topo.LastID,
++                    Topo.ForwardSteps, Topo.ForwardReachedLast ? "(reached-last)" : "(NEVER-REACHED-LAST)", Topo.BackwardSteps,
++                    Topo.BackwardReachedBegin ? "(reached-begin)" : "(NEVER-REACHED-BEGIN)", Topo.BackwardCyclic ? "(CYCLIC)" : "",
++                    Topo.ReciprocityBreakID == IRBlockTopology::NoNode ? 0xffffffffu : Topo.ReciprocityBreakID, Topo.ReciprocityBreakOp);
++}
++
++// Census. ml599's ZERO [ir-topo] lines were ambiguous -- no corruption, or the
++// checks never ran? A probe whose silence cannot be interpreted is not a probe.
++// These make "nothing fired" mean something.
++inline std::atomic<uint64_t> IRTopoChecked {0};
++inline std::atomic<uint64_t> IRTopoTripped {0};
++inline std::atomic<uint64_t> IRTopoRepaired {0};
++inline std::atomic<uint64_t> IRTopoDeclined {0};
++
++enum class IRTopoAction {
++  Proceed, // chain is (now) sound: the caller's backward walk will terminate
++  Skip,    // unrepairable: the caller MUST NOT walk this block backwards
++};
++
++inline void IRTopoNoteChecked() {
++  const uint64_t N = IRTopoChecked.fetch_add(1, std::memory_order_relaxed) + 1;
++  if ((N & 0xfffff) == 0) { // every ~1M blocks
++    LogMan::Msg::EFmt("[ir-topo] ml599b census: checked={} tripped={} repaired={} declined={}", N,
++                      IRTopoTripped.load(std::memory_order_relaxed), IRTopoRepaired.load(std::memory_order_relaxed),
++                      IRTopoDeclined.load(std::memory_order_relaxed));
++  }
++}
++
++/**
++ * @brief Full diagnosis + repair for a block the cheap check flagged.
++ *
++ * Only reached when QuickBackwardOK() failed, so the expensive walks here cost
++ * nothing on the healthy path.
++ */
++inline IRTopoAction HandleSuspectBlock(const char* Where, const IRListView& IR, Ref BlockNode) {
++  IRTopoTripped.fetch_add(1, std::memory_order_relaxed);
++
++  IRBlockTopology Topo;
++  if (ValidateBlockTopology(IR, BlockNode, Topo)) {
++    // Cheap check said bad, full check says good. Report it rather than hide it:
++    // it would mean the two disagree, which is a bug in one of them.
++    LogMan::Msg::EFmt("[ir-topo] ml599b {} DISAGREEMENT: quick check tripped but full "
++                      "validation passed (fwd={} bwd={}) -- proceeding",
++                      Where, Topo.ForwardSteps, Topo.BackwardSteps);
++    return IRTopoAction::Proceed;
++  }
++
++  ReportBlockTopology(Where, IR, BlockNode, Topo);
++
++  if (Topo.Repairable()) {
++    const uint32_t Relinked = RepairBlockPrevious(IR, BlockNode);
++    const bool NowOK = ValidateBlockTopology(IR, BlockNode, Topo);
++    LogMan::Msg::EFmt("[ir-topo] ml599b {} repair: relinked {} Previous link(s) from the "
++                      "forward chain -> {}",
++                      Where, Relinked, NowOK ? "VALID" : "STILL CORRUPT");
++    if (NowOK) {
++      IRTopoRepaired.fetch_add(1, std::memory_order_relaxed);
++      return IRTopoAction::Proceed;
++    }
++  }
++
++  IRTopoDeclined.fetch_add(1, std::memory_order_relaxed);
++  return IRTopoAction::Skip;
++}
++
++} // namespace FEXCore::IR
+diff --git a/FEXCore/Source/Interface/IR/PassManager.cpp b/FEXCore/Source/Interface/IR/PassManager.cpp
+index 5d3bcec..dad9ccd 100644
+--- a/FEXCore/Source/Interface/IR/PassManager.cpp
++++ b/FEXCore/Source/Interface/IR/PassManager.cpp
+@@ -8,6 +8,10 @@ $end_info$
+ */
+ 
+ #include "Interface/Context/Context.h"
++#include <cstdio>    // ml599: snprintf for the [ir-topo] sweep labels
++#include <cstdlib>   // ml597: getenv for the MYTHIC_NO_DFE gate
++#include "Interface/IR/IREmitter.h"
++#include "Interface/IR/IRTopologyCheck.h"
+ #include "Interface/IR/PassManager.h"
+ #include "Interface/IR/Passes.h"
+ #include "Interface/IR/Passes/RegisterAllocationPass.h"
+@@ -15,9 +19,15 @@ $end_info$
+ #include <FEXCore/Config/Config.h>
+ #include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/Utils/Profiler.h>
++#include <FEXCore/fextl/sstream.h>  // ml623: targeted IR capture
++#include <FEXCore/fextl/string.h>
++#include <FEXCore/fextl/vector.h>
++
++#include <algorithm>
++#include <atomic>
++#include <string_view>
+ 
+ namespace FEXCore::IR {
+-class IREmitter;
+ 
+ void PassManager::Finalize() {
+   if (!PassManagerDumpIR()) {
+@@ -74,7 +84,26 @@ void PassManager::AddDefaultPasses(Context::ContextImpl* ctx) {
+   // still be well-formed regardless of the modifications made to it.
+   if (!DisablePasses()) {
+     InsertPass(CreateX87StackOptimizationPass(ctx->HostFeatures, ctx->Config.Is64BitMode ? IR::OpSize::i64Bit : IR::OpSize::i32Bit));
+-    InsertPass(CreateDeadFlagCalculationEliminination());
++
++    // iOS-Mythic ml597: TARGETED A/B for the ml594 post-login hang. The renderer
++    // thread was sampled 9x at 97-100% CPU inside DeadFlagCalculationEliminination
++    // while everything else idled and Steam presented no further frames.
++    //
++    // FEX_O0 is the wrong instrument for convicting it: it drops the x87 pass too,
++    // so a pass implicates one of two things and a failure exonerates neither.
++    // MYTHIC_NO_DFE removes ONLY this pass, leaving the rest of the pipeline —
++    // including x87 — exactly as it is in a known-good run. Env-gated rather than
++    // compiled out so both arms come from one FEX build.
++    //   set  -> hang disappears  => this pass is the cause
++    //   set  -> hang persists    => exonerated, look elsewhere in the compile path
++    // The [dfe-guard] bounds in the pass itself remain active either way and will
++    // name the failure mode (cyclic list vs non-converging dataflow) if it recurs.
++    const char* NoDFE = getenv("MYTHIC_NO_DFE");
++    if (NoDFE && *NoDFE && *NoDFE != '0') {
++      LogMan::Msg::EFmt("[dfe-guard] ml597: MYTHIC_NO_DFE set — DeadFlagCalculationEliminination DISABLED");
++    } else {
++      InsertPass(CreateDeadFlagCalculationEliminination());
++    }
+   }
+ 
+   InsertPass(IR::CreateRegisterAllocationPass(&ctx->CPUID), "RA");
+@@ -102,12 +131,375 @@ void PassManager::InsertValidationPass(fextl::unique_ptr<Pass> Pass, const fextl
+   AttemptNameMapping(Name, PassPtr);
+ }
+ #endif
++namespace {
++// iOS-Mythic ml599: name the pass that breaks the intrusive node list.
++//
++// DFE and RA both detect corruption at their own entry, but by then the damage
++// is upstream and anonymous. This sweeps every block after every pass and
++// reports the FIRST pass at which a block stops validating, which converts
++// "the IR is corrupt" into "pass N corrupts it".
++//
++// Off by default: it walks every block twice per pass, which is real cost on a
++// 13,000-node function. Set MYTHIC_IR_TOPO=1 for a diagnostic run.
++bool IRTopoSweepEnabled() {
++  static const bool Enabled = [] {
++    const char* E = getenv("MYTHIC_IR_TOPO");
++    return E && *E && *E != '0';
++  }();
++  return Enabled;
++}
++
++// ml599b: only sweep BIG functions.
++//
++// ml599 swept every block after every pass on every compile and that alone
++// stalled the renderer -- it spent as much time in ValidateBlockTopology as in
++// the whole x86 decoder, and Steam never reached the UI it had reached the run
++// before. The corruption we are hunting lives in a ~13,167-node multiblock
++// region, so almost every compile in the program is irrelevant to it. Gating on
++// SSA count keeps the attribution while dropping essentially all of the cost.
++uint32_t IRTopoSweepMinSSA() {
++  static const uint32_t Min = [] {
++    const char* E = getenv("MYTHIC_IR_TOPO_MIN");
++    const long V = (E && *E) ? strtol(E, nullptr, 0) : 0;
++    return static_cast<uint32_t>(V > 0 ? V : 2048);
++  }();
++  return Min;
++}
++
++// Returns true when corruption was found (caller stops sweeping this compile:
++// every later pass would report the same damage and flood the log).
++bool SweepBlockTopology(IREmitter* IREmit, int PassIndex) {
++  auto IR = IREmit->ViewIR();
++
++  for (auto [BlockNode, BlockHeader] : IR.GetBlocks()) {
++    (void)BlockHeader;
++    if (!QuickBackwardOK(IR, BlockNode)) {
++      char Where[48];
++      if (PassIndex < 0) {
++        snprintf(Where, sizeof(Where), "sweep/post-emit");
++      } else {
++        snprintf(Where, sizeof(Where), "sweep/after-pass-%d", PassIndex);
++      }
++      // Report only -- do NOT repair here. The point of the sweep is to name the
++      // pass that broke the chain; repairing mid-pipeline would erase the very
++      // evidence the next sweep needs.
++      IRBlockTopology Topo;
++      (void)ValidateBlockTopology(IR, BlockNode, Topo);
++      ReportBlockTopology(Where, IR, BlockNode, Topo);
++      return true;
++    }
++  }
++  return false;
++}
++} // namespace
++
++/* iOS-Mythic ml623 — TARGETED IR CAPTURE FOR ONE GUEST INSTRUCTION.
++ *
++ * The ULTRAKILL wall is a miscompile of exactly one x86 instruction inside
++ * Mono's x86-64 code emitter:
++ *
++ *     mono-2.0-bdwgc.dll+0x4db259   or  al, 0x44
++ *     mono-2.0-bdwgc.dll+0x4db25b   mov byte ptr [rcx+2], al
++ *
++ * Guest state was CORRECT (RCX=0x7040140010 into a fresh RWX buffer, AL=0x4c),
++ * yet FEX emitted
++ *
++ *     movz w6, #0x44 ; orr x8, x8, x6 ; dmb ish ; strb w8, [x6, xzr]
++ *
++ * so the ADDRESS register x6 still held the IMMEDIATE: the `add x6, x0, #2`
++ * that both sibling branches emit was never generated, and the store landed on
++ * 0x44. This capture prints the IR for that one instruction after the frontend
++ * and after every pass; the last stage at which the address computation is
++ * still present names the culprit outright.
++ *
++ * ⛔ COMPILE TIME ONLY — never reachable from a fault path. ml620 died
++ * formatting inside DFE's fault path and came back with its own format string
++ * as the exception code (0x3d736469 == "ids="). Everything here runs while
++ * CompileBlock is building IR, which already allocates and formats freely.
++ *
++ * Bounded by construction: IRCapMaxCaptures sessions total, and each stage
++ * prints only the window between the target's GuestOpcode marker and the next
++ * one, plus the defining lines of the SSA values the store consumes. */
++extern "C" {
++/* Absolute guest address to capture; 0 = disarmed. Published by the Windows
++ * InvalidationTracker at module load, so nothing here needs to know about PE
++ * layout or load order. */
++uint64_t FEX_MythicIRCapTarget = 0;
++}
++
++namespace {
++
++/* Set by Core.cpp's decode loop when the block being compiled CONTAINS the
++ * target instruction. Containment, NOT entry RIP: with multiblock the block
++ * routinely starts hundreds of bytes earlier, so an entry-range gate (which is
++ * what I first proposed) would have missed this block entirely. */
++thread_local uint64_t IRCapRIP = 0;
++std::atomic<uint32_t> IRCapTaken {0};
++
++constexpr uint32_t IRCapMaxCaptures = 4; // a LATER generation may be the faulty one
++constexpr int IRCapLinesBefore = 12;
++constexpr int IRCapLinesAfter = 96;
++constexpr int IRCapMaxDefs = 24;
++
++/* Read the last integer on a line ("#0x1a2b" or "#42") without depending on the
++ * dumper's exact arg formatting, which is generated code and may change. */
++bool IRCapTrailingInt(std::string_view Line, uint64_t& Out) {
++  size_t End = Line.size();
++  while (End > 0 && (Line[End - 1] == ' ' || Line[End - 1] == '\t' || Line[End - 1] == '\r')) {
++    --End;
++  }
++  size_t Begin = End;
++  while (Begin > 0) {
++    const char C = Line[Begin - 1];
++    const bool IsHexDigit = (C >= '0' && C <= '9') || (C >= 'a' && C <= 'f') || (C >= 'A' && C <= 'F');
++    if (!IsHexDigit && C != 'x' && C != 'X') {
++      break;
++    }
++    --Begin;
++  }
++  if (Begin >= End) {
++    return false;
++  }
++  std::string_view Tok = Line.substr(Begin, End - Begin);
++  int Base = 10;
++  if (Tok.size() > 2 && Tok[0] == '0' && (Tok[1] == 'x' || Tok[1] == 'X')) {
++    Base = 16;
++    Tok = Tok.substr(2);
++  }
++  uint64_t Val = 0;
++  for (const char C : Tok) {
++    int D;
++    if (C >= '0' && C <= '9') {
++      D = C - '0';
++    } else if (C >= 'a' && C <= 'f') {
++      D = C - 'a' + 10;
++    } else if (C >= 'A' && C <= 'F') {
++      D = C - 'A' + 10;
++    } else {
++      return false;
++    }
++    if (D >= Base) {
++      return false;
++    }
++    Val = Val * Base + static_cast<uint64_t>(D);
++  }
++  Out = Val;
++  return true;
++}
++
++/* The SSA id a line DEFINES: the dumper writes "%12 i32 = Op ..." for ops with a
++ * destination and "(%12 i32) Op ..." for ops without one. */
++bool IRCapDefinedID(std::string_view Line, uint32_t& Out) {
++  size_t i = 0;
++  while (i < Line.size() && (Line[i] == '\t' || Line[i] == ' ')) {
++    ++i;
++  }
++  if (i < Line.size() && Line[i] == '(') {
++    ++i;
++  }
++  if (i >= Line.size() || Line[i] != '%') {
++    return false;
++  }
++  ++i;
++  if (i >= Line.size() || Line[i] < '0' || Line[i] > '9') {
++    return false;
++  }
++  uint32_t Val = 0;
++  while (i < Line.size() && Line[i] >= '0' && Line[i] <= '9') {
++    Val = Val * 10 + static_cast<uint32_t>(Line[i] - '0');
++    ++i;
++  }
++  Out = Val;
++  return true;
++}
++
++void IRCapEmit(IREmitter* IREmit, const char* Stage, uint64_t GuestRIP, uint32_t Session) {
++  const uint64_t Target = FEX_MythicIRCapTarget;
++  if (!Target || Target < GuestRIP) {
++    return;
++  }
++  const uint64_t WantOffset = Target - GuestRIP;
++
++  auto IR = IREmit->ViewIR();
++  fextl::ostringstream Stream;
++  FEXCore::IR::Dump(&Stream, &IR);
++  const fextl::string Text = Stream.str();
++  const std::string_view All {Text.data(), Text.size()};
++
++  // Split once; the dump is one block's worth of IR, not the whole program.
++  fextl::vector<std::string_view> Lines;
++  for (size_t Pos = 0; Pos <= All.size();) {
++    const size_t NL = All.find('\n', Pos);
++    if (NL == std::string_view::npos) {
++      if (Pos < All.size()) {
++        Lines.push_back(All.substr(Pos));
++      }
++      break;
++    }
++    Lines.push_back(All.substr(Pos, NL - Pos));
++    Pos = NL + 1;
++  }
++
++  int Start = -1;
++  int Stop = static_cast<int>(Lines.size());
++  for (int i = 0; i < static_cast<int>(Lines.size()); ++i) {
++    if (Lines[i].find("GuestOpcode") == std::string_view::npos) {
++      continue;
++    }
++    uint64_t Off = 0;
++    if (!IRCapTrailingInt(Lines[i], Off)) {
++      continue;
++    }
++    if (Start < 0 && Off == WantOffset) {
++      Start = i;
++    } else if (Start >= 0 && i > Start) {
++      Stop = i;
++      break;
++    }
++  }
++
++  // Silence must be interpretable: say so rather than printing nothing.
++  if (Start < 0) {
++    LogMan::Msg::EFmt("[ircap] ml623 s{} stage={} postra={} NO GuestOpcode marker for offset {:#x} "
++                      "(rip={:#x} target={:#x} ssa={} lines={}) -- instruction has no side-effect marker "
++                      "in this stage's IR",
++                      Session, Stage, IR.PostRA() ? 1 : 0, WantOffset, GuestRIP, Target, IR.GetSSACount(), Lines.size());
++    return;
++  }
++
++  const int From = std::max(0, Start - IRCapLinesBefore);
++  const int To = std::min(Stop, Start + IRCapLinesAfter);
++
++  LogMan::Msg::EFmt("[ircap] ml623 s{} stage={} postra={} rip={:#x} target={:#x} off={:#x} "
++                    "ssa={} window=[{},{}) marker@{}",
++                    Session, Stage, IR.PostRA() ? 1 : 0, GuestRIP, Target, WantOffset, IR.GetSSACount(), From, To, Start);
++
++  // Collect the SSA ids the store consumes so their definitions can be shown
++  // even when they were produced far earlier in the block.
++  uint32_t Wanted[IRCapMaxDefs];
++  int NumWanted = 0;
++  for (int i = From; i < To; ++i) {
++    const std::string_view L = Lines[i];
++    LogMan::Msg::EFmt("[ircap]   {}{}", i == Start ? "* " : "  ", L);
++    if (L.find("StoreMem") == std::string_view::npos) {
++      continue;
++    }
++    // Everything after '=' or the op name; grab every %N referenced.
++    for (size_t p = 0; p + 1 < L.size(); ++p) {
++      if (L[p] != '%' || L[p + 1] < '0' || L[p + 1] > '9') {
++        continue;
++      }
++      uint32_t Val = 0;
++      size_t q = p + 1;
++      while (q < L.size() && L[q] >= '0' && L[q] <= '9') {
++        Val = Val * 10 + static_cast<uint32_t>(L[q] - '0');
++        ++q;
++      }
++      bool Dup = false;
++      for (int k = 0; k < NumWanted; ++k) {
++        Dup |= (Wanted[k] == Val);
++      }
++      if (!Dup && NumWanted < IRCapMaxDefs) {
++        Wanted[NumWanted++] = Val;
++      }
++      p = q - 1;
++    }
++  }
++
++  // Print the defining line of each consumed value, wherever it lives. This is
++  // what answers "was the address computation ever emitted, and by which op".
++  for (int i = 0; i < static_cast<int>(Lines.size()); ++i) {
++    uint32_t Def = 0;
++    if (!IRCapDefinedID(Lines[i], Def)) {
++      continue;
++    }
++    for (int k = 0; k < NumWanted; ++k) {
++      if (Wanted[k] != Def) {
++        continue;
++      }
++      const bool InWindow = (i >= From && i < To);
++      if (!InWindow) {
++        LogMan::Msg::EFmt("[ircap]   DEF %{} @{}  {}", Def, i, Lines[i]);
++      }
++      break;
++    }
++  }
++}
++
++} // namespace
++
++extern "C" void FEX_MythicIRCapMark(uint64_t GuestRIP) {
++  IRCapRIP = GuestRIP;
++}
++extern "C" void FEX_MythicIRCapClear() {
++  IRCapRIP = 0;
++}
++extern "C" uint64_t FEX_MythicIRCapCurrentRIP() {
++  return IRCapRIP;
++}
+ 
+ void PassManager::Run(IREmitter* IREmit) {
+   FEXCORE_PROFILE_SCOPED("PassManager::Run");
+ 
++  // One-time armed line so that ZERO [ir-topo] output is INTERPRETABLE. In ml599
++  // the log had no [ir-topo] lines at all and that could equally have meant
++  // "nothing was corrupt" or "the checks never ran" -- an unfalsifiable probe.
++  [[maybe_unused]] static const bool Armed = [] {
++    LogMan::Msg::EFmt("[ir-topo] ml599b ARMED: entry checks ON (dfe+ra, cheap backward walk), "
++                      "sweep={} min-ssa={}",
++                      IRTopoSweepEnabled() ? "ON" : "off", IRTopoSweepMinSSA());
++    return true;
++  }();
++
++  const bool Sweep = IRTopoSweepEnabled() && IREmit->ViewIR().GetSSACount() >= IRTopoSweepMinSSA();
++  // -1 means "as emitted, before any pass ran". If this fires, the IR is born
++  // corrupt and no optimization pass is responsible.
++  bool Corrupt = Sweep && SweepBlockTopology(IREmit, -1);
++
++  /* ml623: claim ONE capture session for this whole compilation if the decode
++   * loop saw the target instruction in this block. Claimed per compile rather
++   * than per stage, so a session always yields a complete before/after set
++   * rather than a truncated one. */
++  const uint64_t CapRIP = FEX_MythicIRCapCurrentRIP();
++  uint32_t CapSession = 0;
++  bool Cap = false;
++  if (CapRIP) {
++    uint32_t Prev = IRCapTaken.load(std::memory_order_relaxed);
++    while (Prev < IRCapMaxCaptures && !IRCapTaken.compare_exchange_weak(Prev, Prev + 1, std::memory_order_relaxed)) {
++    }
++    if (Prev < IRCapMaxCaptures) {
++      Cap = true;
++      CapSession = Prev + 1;
++      LogMan::Msg::EFmt("[ircap] ml623 ===== CAPTURE {}/{} — block rip={:#x} CONTAINS target {:#x} =====", CapSession,
++                        IRCapMaxCaptures, CapRIP, FEX_MythicIRCapTarget);
++      IRCapEmit(IREmit, "frontend", CapRIP, CapSession);
++    }
++  }
++
++  int PassIndex = 0;
+   for (const auto& Pass : Passes) {
+     Pass->Run(IREmit);
++
++    if (Cap) {
++      char NameBuf[32];
++      const char* PassName = nullptr;
++      for (const auto& NP : NameToPassMaping) {
++        if (NP.second == Pass.get()) {
++          PassName = NP.first.c_str();
++          break;
++        }
++      }
++      if (!PassName) {
++        snprintf(NameBuf, sizeof(NameBuf), "pass%d", PassIndex);
++        PassName = NameBuf;
++      }
++      IRCapEmit(IREmit, PassName, CapRIP, CapSession);
++    }
++
++    if (Sweep && !Corrupt) {
++      Corrupt = SweepBlockTopology(IREmit, PassIndex);
++    }
++    ++PassIndex;
+   }
+ 
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+diff --git a/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp b/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp
+index dc44f16..0de7658 100644
+--- a/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp
++++ b/FEXCore/Source/Interface/IR/Passes/RedundantFlagCalculationElimination.cpp
+@@ -8,7 +8,9 @@ $end_info$
+ #include "Interface/IR/IR.h"
+ #include "Interface/IR/IREmitter.h"
+ #include "Interface/IR/Passes.h"
++#include "Interface/IR/IRTopologyCheck.h"
+ #include "Interface/IR/PassManager.h"
++#include "Utils/AllocWatch.h"
+ 
+ #include <FEXCore/Core/X86Enums.h>
+ #include <FEXCore/IR/IR.h>
+@@ -118,16 +120,61 @@ struct ControlFlowGraph {
+       Info.Predecessors.reserve(2);
+ 
+       BlockMap[ID] = std::move(Info);
++      /* ⛔ ml621: the ml611 AllocWatch registration was REMOVED here. See
++       * AllocWatch.h — it produced 71.9M events / 17.2M slot collisions and its
++       * 512-line drain corrupted the exception record, killing ml620. */
+       Worklist.push_back(ID);
+     }
+   }
+ 
++  // iOS-Mythic ml605: EVERY BlockMap lookup is bounds-checked, and an out-of-range
++  // ID lands on this sentinel instead of past the end of the vector.
++  //
++  // ml604 (db 7276) died here: switching Steam to Library gave the in-process
++  // renderer new libcef code to translate, and DFE::Run+0x378 —
++  //     AddWorklist -> Get(Pred) -> ldrb w9,[x8,#0x21]   (Info->InWorklist)
++  // computed x8 = BlockMap.data() + Pred*40 = 0x97d8c32280 and faulted. That
++  // address is outside EVERY legal band (guest <=0x73ffff0000, PA pools
++  // [0x74,0x7c)G, FEX [0x7c,0x80)G), i.e. it was never a pointer — it is a bogus
++  // *block ID* scaled by sizeof(BlockInfo). So the defect is an invalid CFG index,
++  // NOT a wild IR-node pointer, and pointer-band heuristics would not have caught it.
++  //
++  // Note the structural hazard this guards: Init() sizes BlockMap from
++  // IR header BlockCount, while Get() indexes by each block's own Block->ID.
++  // If those ever disagree the very first Get(Block->ID) is already out of range.
++  //
++  // Sentinel semantics are deliberately CONSERVATIVE, so degrading is always safe:
++  //   Flags = FLAG_ALL  -> readers believe every flag is live => nothing eliminated
++  //   InWorklist = true -> AddWorklist never re-queues it => no infinite requeue
++  BlockInfo Sentinel {{}, nullptr, FLAG_ALL, true};
++  uint32_t BadIDs {0};
++  uint32_t FirstBadID {~0u};
++  uint32_t BadIDReports {0};
++
++  bool IDValid(uint32_t Block) const {
++    return Block < BlockMap.size();
++  }
++
+   BlockInfo* Get(uint32_t Block) {
++    if (Block >= BlockMap.size()) [[unlikely]] {
++      ++BadIDs;
++      if (FirstBadID == ~0u) {
++        FirstBadID = Block;
++      }
++      if (BadIDReports++ < 4) {
++        LogMan::Msg::EFmt("[dfe-cfg] ml605 OUT-OF-RANGE block id {} (BlockMap.size()={}) "
++                          "rip=0x{:x} -- returning conservative sentinel instead of "
++                          "dereferencing BlockMap.data()+{}",
++                          Block, BlockMap.size(), IR.GetHeader()->OriginalRIP,
++                          (uint64_t)Block * sizeof(BlockInfo));
++      }
++      return &Sentinel;
++    }
+     return &BlockMap[Block];
+   }
+ 
+   BlockInfo* Get(IROp_CodeBlock* Block) {
+-    return &BlockMap[Block->ID];
++    return Get(Block->ID);
+   }
+ 
+   BlockInfo* Get(OrderedNodeWrapper Block) {
+@@ -136,16 +183,69 @@ struct ControlFlowGraph {
+ 
+   void RecordEdge(uint32_t From, OrderedNodeWrapper To) {
+     auto Info = Get(To);
++    if (Info == &Sentinel) {
++      return; // invalid edge target: drop the edge rather than record into scratch
++    }
++
++    // ml607: validate the value we push AND re-read it immediately afterwards.
++    //
++    // This is the discriminator ml606 needed. Every From here is a Block->ID and
++    // ml606 confirmed all block IDs were valid (bad_block_ids=0, max_id=257 <
++    // blockmap=258) — yet a predecessor slot came out holding 0xa8953b50, which
++    // has the shape of a truncated pointer into the vector's own allocator slab
++    // (data=0x7ca8950020). If From is valid going in and the slot is wrong
++    // coming out, the writer is FOREIGN (allocator/heap corruption), not CFG
++    // construction. That distinction decides which subsystem to chase.
++    const bool FromValid = IDValid(From);
++    if (!FromValid && EdgeReports < 4) {
++      ++EdgeReports;
++      LogMan::Msg::EFmt("[dfe-edge] ml607 PUSHING INVALID From={} (blockmap={}) rip=0x{:x} "
++                        "-- CFG construction itself supplied a bad id",
++                        From, BlockMap.size(), IR.GetHeader()->OriginalRIP);
++    }
++
++    const size_t Idx = Info->Predecessors.size();
+     Info->Predecessors.push_back(From);
++
++    if (FromValid && Info->Predecessors[Idx] != From && EdgeReports < 4) {
++      ++EdgeReports;
++      LogMan::Msg::EFmt("[dfe-edge] ml607 SLOT CHANGED UNDER US: pushed {} read back {} at index {} "
++                        "(size={} cap={} data={}) rip=0x{:x} -- the value was VALID going in, so a "
++                        "FOREIGN WRITER corrupted the vector, not CFG construction",
++                        From, Info->Predecessors[Idx], Idx, Info->Predecessors.size(), Info->Predecessors.capacity(),
++                        (void*)Info->Predecessors.data(), IR.GetHeader()->OriginalRIP);
++    }
++
+   }
+ 
++  uint32_t EdgeReports {0};
++
+   void AddWorklist(fextl::deque<uint32_t>& Worklist, uint32_t Block) {
++    if (!IDValid(Block)) [[unlikely]] {
++      Get(Block); // accounts + reports; never dereferences out of range
++      return;     // skip this edge; the block keeps its conservative flags
++    }
+     auto Info = Get(Block);
+     if (!Info->InWorklist) {
+       Info->InWorklist = true;
+       Worklist.push_front(Block);
+     }
+   }
++
++  // Cheap order-sensitive digest of every predecessor list. Taken right after CFG
++  // construction and again at the end: if it changes, something MUTATED the
++  // predecessor vectors during the pass. That distinguishes "the CFG was built
++  // wrong" from "the CFG was fine and DFE (or another writer) corrupted it".
++  uint64_t PredecessorDigest() const {
++    uint64_t h = 1469598103934665603ull;
++    for (size_t b = 0; b < BlockMap.size(); ++b) {
++      h = (h ^ (b + 0x9e3779b9ull)) * 1099511628211ull;
++      for (uint32_t p : BlockMap[b].Predecessors) {
++        h = (h ^ p) * 1099511628211ull;
++      }
++    }
++    return h;
++  }
+ };
+ 
+ class DeadFlagCalculationEliminination final : public FEXCore::IR::Pass {
+@@ -527,6 +627,23 @@ bool DeadFlagCalculationEliminination::ProcessBlock(IREmitter* IREmit, IRListVie
+   // Reverse iteration is not yet working with the iterators
+   auto BlockIROp = CurrentIR.GetOp<IR::IROp_CodeBlock>(Block);
+ 
++  // iOS-Mythic ml599: VALIDATE BEFORE MUTATING.
++  //
++  // ml597 bounded the reverse walk below and ml598 saw it fire (block 405,
++  // 13,183 steps). But that bound trips only AFTER the walk has already called
++  // IREmit->Remove() thousands of times, so "skip the rest" left half-optimized
++  // IR behind and the register allocator then hung on the same block. Checking
++  // the structure up front means we either fix it or never touch it.
++  // ml599b: the CHEAP check on the healthy path. The full diagnostic (forward
++  // walk + Floyd + reciprocity) runs only when this one trips, because ml599
++  // proved the full version on every block is ruinously expensive.
++  IRTopoNoteChecked();
++  if (!QuickBackwardOK(CurrentIR, Block)) {
++    if (HandleSuspectBlock("dfe-entry", CurrentIR, Block) == IRTopoAction::Skip) {
++      return false;
++    }
++  }
++
+   // We grab these nodes this way so we can iterate easily
+   auto CodeBegin = CurrentIR.at(BlockIROp->Begin);
+   auto CodeLast = CurrentIR.at(BlockIROp->Last);
+@@ -543,8 +660,29 @@ bool DeadFlagCalculationEliminination::ProcessBlock(IREmitter* IREmit, IRListVie
+     FlagsRead = CFG.Get(ExitOp->Args[0])->Flags;
+   }
+ 
++  // iOS-Mythic ml597/ml599: BOUND THE REVERSE WALK (backstop).
++  //
++  // This walk terminates only by reaching CodeBegin, so a cyclic or truncated
++  // Previous chain spins forever holding a fexlock read reference and stalls
++  // every other FEX thread. That was the ml594/ml598 hang.
++  //
++  // As of ml599 the entry check above has already PROVEN this chain reaches
++  // CodeBegin, so this bound should now be unreachable. That makes it a
++  // discriminator rather than a duplicate: entry validated clean but the walk
++  // still ran away means DFE's own IREmit->Remove() calls are what corrupt the
++  // list -- which would make this pass the corrupter, not a victim of it.
++  const uint32_t IRNodeBudget = CurrentIR.GetSSACount() + 16;
++  uint32_t StepsTaken = 0;
++
+   // Iterate the block in reverse
+   while (true) {
++    if (++StepsTaken > IRNodeBudget) {
++      LogMan::Msg::EFmt("[dfe-guard] ml599: reverse walk exceeded {} steps in block {} AFTER a "
++                        "clean entry validation -- DFE ITSELF corrupted the Previous/Next chain "
++                        "while removing nodes; skipping the rest of this block",
++                        IRNodeBudget, BlockIROp->ID);
++      return false;
++    }
+     auto [CodeNode, IROp] = CodeLast();
+ 
+     // Optimizing flags can cause earlier flag reads to become dead but dead
+@@ -708,14 +846,155 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
+     CFG.Get(Block->ID)->Node = BlockNode;
+   }
+ 
++  // iOS-Mythic ml605: SEMANTIC CFG VALIDATION, once, right after construction.
++  //
++  // Answers the question the ml604 crash could not: was the CFG born invalid
++  // (emitter / block-ID gather supplied bad IDs) or did it become invalid while
++  // the pass ran? Everything below is O(blocks + edges) and only logs on failure.
++  const uint64_t PredDigestAtBuild = CFG.PredecessorDigest();
++  {
++    const uint32_t HeaderBlockCount = CurrentIR.GetHeader()->BlockCount;
++    uint32_t MaxSeenID = 0, Enumerated = 0, BadPreds = 0, BadBlockIDs = 0;
++
++    for (auto [BlockNode, BlockHeader] : CurrentIR.GetBlocks()) {
++      auto Block = BlockHeader->C<IROp_CodeBlock>();
++      ++Enumerated;
++      if (Block->ID > MaxSeenID) {
++        MaxSeenID = Block->ID;
++      }
++      if (!CFG.IDValid(Block->ID)) {
++        ++BadBlockIDs;
++      }
++    }
++    for (size_t b = 0; b < CFG.BlockMap.size(); ++b) {
++      for (uint32_t p : CFG.BlockMap[b].Predecessors) {
++        if (!CFG.IDValid(p)) {
++          if (!BadPreds) {
++            const auto& V = CFG.BlockMap[b].Predecessors;
++            LogMan::Msg::EFmt("[dfe-cfg] ml605 BAD PREDECESSOR pred={} in block={} "
++                              "blockmap={} header_blockcount={} enumerated={} max_id={} "
++                              "rip=0x{:x} predvec(size={} cap={} data={})",
++                              p, b, CFG.BlockMap.size(), HeaderBlockCount, Enumerated, MaxSeenID,
++                              CurrentIR.GetHeader()->OriginalRIP, V.size(), V.capacity(), (void*)V.data());
++          }
++          ++BadPreds;
++        }
++      }
++    }
++
++    // ml611 (3): the old test (Enumerated == HeaderBlockCount && MaxSeenID <
++    // size) does NOT prove the IDs are a unique 0..N-1 permutation — a set with
++    // one duplicate and one gap passes it. Check uniqueness, gaps, and the Node
++    // pointer that ProcessBlock will actually dereference.
++    uint32_t DupIDs = 0, MissingIDs = 0, NullNodes = 0, BadWorklistIDs = 0;
++    {
++      fextl::vector<uint8_t> Seen(CFG.BlockMap.size(), 0);
++      for (auto [BlockNode, BlockHeader] : CurrentIR.GetBlocks()) {
++        auto Block = BlockHeader->C<IROp_CodeBlock>();
++        if (CFG.IDValid(Block->ID)) {
++          if (Seen[Block->ID]) {
++            ++DupIDs;
++          }
++          Seen[Block->ID] = 1;
++        }
++      }
++      for (size_t b = 0; b < CFG.BlockMap.size(); ++b) {
++        if (!Seen[b]) {
++          ++MissingIDs;
++        }
++        // THE field that killed ml610: Get() hands a caller Info->Node, and the
++        // out-of-range sentinel's Node is nullptr.
++        if (CFG.BlockMap[b].Node == nullptr) {
++          ++NullNodes;
++        }
++      }
++      // ml611: the worklist is a separate container (deque) from BlockMap, so it
++      // can be corrupted independently. Validate every entry now, so a later
++      // failure can be attributed to propagation rather than to gather.
++      for (uint32_t W : Worklist) {
++        if (!CFG.IDValid(W)) {
++          ++BadWorklistIDs;
++        }
++      }
++    }
++
++    if (BadBlockIDs || BadPreds || Enumerated != HeaderBlockCount || MaxSeenID >= CFG.BlockMap.size() || DupIDs || MissingIDs ||
++        NullNodes || BadWorklistIDs) {
++      // ml607: DO NOT say "born bad" here. This check runs immediately after
++      // gather, so all it establishes is "already bad by then" — it cannot tell
++      // an invalid EDGE from memory corrupted DURING gathering. ml606 showed the
++      // difference matters: every pushed From was a valid block ID, yet a
++      // predecessor slot held pointer debris, and the digest ALSO changed during
++      // propagation. That is a foreign writer, not bad CFG construction.
++      LogMan::Msg::EFmt("[dfe-cfg] ml611 CFG INVALID BY END OF GATHER: bad_block_ids={} bad_preds={} "
++                        "dup_ids={} missing_ids={} null_nodes={} bad_worklist_ids={} "
++                        "enumerated={} header_blockcount={} max_id={} blockmap={} rip=0x{:x} "
++                        "-- ABANDONING this DFE invocation before touching IR (true no-op: gather "
++                        "is read-only, so the block simply keeps every flag calculation)",
++                        BadBlockIDs, BadPreds, DupIDs, MissingIDs, NullNodes, BadWorklistIDs, Enumerated, HeaderBlockCount,
++                        MaxSeenID, CFG.BlockMap.size(), CurrentIR.GetHeader()->OriginalRIP);
++      FEXCore::Utils::AllocWatch::Clear();  // ml621: no drain — see AllocWatch.h
++      return;
++    }
++  }
++
+   // After processing a block, if we made progress, we must process its
+   // predecessors to propagate globally. A block will be reprocessed only if
+   // there is a loop backedge.
++  // iOS-Mythic ml597: BOUND THE WORKLIST TOO — the second way this pass can fail
++  // to terminate. Blocks are re-queued whenever their flag set changes, so if the
++  // dataflow never reaches a fixed point the queue refills forever even though the
++  // per-block walk above is healthy. Bounding both separates the two causes: a
++  // [dfe-guard] "reverse walk" message means a corrupt intrusive list, a "worklist"
++  // message means non-converging dataflow. Same fail-open rule.
++  const uint64_t WorklistBudget = (uint64_t)CurrentIR.GetSSACount() * 64 + 4096;
++  uint64_t WorklistSteps = 0;
++
+   for (; !Worklist.empty(); Worklist.pop_back()) {
+     auto Block = Worklist.back();
++
++    // ml611 (2): RE-VALIDATE AT EVERY POP, and ABORT THE WHOLE INVOCATION on any
++    // failure — do not merely skip the bad entry.
++    //
++    // This is the ml610 crash. CFG.Get() returns &Sentinel for an out-of-range id,
++    // Sentinel.Node is nullptr, and the old code passed Info->Node straight into
++    // ProcessBlock(), which dereferences it at its 7th instruction
++    // (libarm64ecfex.dll+0xfe608, `ldr w10,[x3]`, x3=0). The ml605 sentinel did not
++    // contain that failure, it CONVERTED an out-of-bounds read into a null deref.
++    //
++    // Skipping the entry is not good enough: once any id or Node is invalid the
++    // whole CFG is untrustworthy, and continuing could eliminate flags on the
++    // strength of propagation that never completed.
++    //
++    // ⚠️ HONEST SCOPE: unlike the end-of-gather bail this is NOT a true no-op.
++    // Earlier ProcessBlock() calls in this same invocation may already have removed
++    // instructions, and returning cannot undo them. It prevents the crash and stops
++    // further damage; it does not restore the block. A proper recovery would
++    // re-compile this guest block from fresh IR with DFE disabled, which the
++    // compiler cannot currently be asked to do from here.
++    if (!CFG.IDValid(Block) || CFG.Get(Block)->Node == nullptr) {
++      LogMan::Msg::EFmt("[dfe-cfg] ml611 INVALID WORKLIST ENTRY at pop: block={} (blockmap={}) "
++                        "node={} slot_addr={} steps={} rip=0x{:x} -- the CFG passed end-of-gather "
++                        "validation, so this was corrupted DURING propagation; ABANDONING "
++                        "(⚠️ not a no-op: {} blocks were already processed and any flag "
++                        "calculations they removed stay removed)",
++                        Block, CFG.BlockMap.size(), (void*)(CFG.IDValid(Block) ? CFG.Get(Block)->Node : nullptr),
++                        (void*)&Worklist.back(), WorklistSteps, CurrentIR.GetHeader()->OriginalRIP, WorklistSteps);
++      FEXCore::Utils::AllocWatch::Clear();  // ml621: no drain — see AllocWatch.h
++      return;
++    }
++
+     auto Info = CFG.Get(Block);
+     Info->InWorklist = false;
+ 
++    if (++WorklistSteps > WorklistBudget) {
++      LogMan::Msg::EFmt("[dfe-guard] ml597: CFG worklist exceeded {} iterations "
++                        "(last block {}) -- flag dataflow is not converging; abandoning "
++                        "global propagation (fail-open)",
++                        WorklistBudget, Block);
++      break;
++    }
++
+     if (ProcessBlock(IREmit, CurrentIR, Info->Node, CFG)) {
+       for (auto Pred : Info->Predecessors) {
+         CFG.AddWorklist(Worklist, Pred);
+@@ -723,6 +1002,30 @@ void DeadFlagCalculationEliminination::Run(IREmitter* IREmit) {
+     }
+   }
+ 
++  // ml605: did the predecessor lists change under us? Built-valid + changed-here
++  // means DFE (or something running concurrently) corrupted them; built-invalid
++  // was already reported above. Either way the sentinel kept us alive.
++  if (CFG.PredecessorDigest() != PredDigestAtBuild) {
++    LogMan::Msg::EFmt("[dfe-cfg] ml605 PREDECESSOR LISTS MUTATED during propagation "
++                      "(rip=0x{:x} blocks={}) -- the CFG was valid at build and something "
++                      "wrote to it while the pass ran",
++                      CurrentIR.GetHeader()->OriginalRIP, CFG.BlockMap.size());
++    // ml611: this is the case the allocation trace exists for — the CFG was born
++    // clean and changed underneath us. Dump who touched those buffers.
++    FEXCore::Utils::AllocWatch::Clear();  // ml621: no drain — see AllocWatch.h
++  } else {
++    // Uneventful run: drop the watches silently so the table does not accumulate
++    // stale entries across compilations.
++    FEXCore::Utils::AllocWatch::Clear();
++  }
++  if (CFG.BadIDs) {
++    LogMan::Msg::EFmt("[dfe-cfg] ml605 summary: {} out-of-range block id(s), first={}, "
++                      "blockmap={} rip=0x{:x} -- all served the conservative sentinel, "
++                      "so flags stayed FLAG_ALL and nothing was eliminated for them",
++                      CFG.BadIDs, CFG.FirstBadID, CFG.BlockMap.size(),
++                      CurrentIR.GetHeader()->OriginalRIP);
++  }
++
+   // Fold compares into branches now that we're otherwise optimized. This needs
+   // to run after eliminating carries etc and it needs the global flag metadata.
+   // But it only needs to run once, we don't do it in the loop.
+diff --git a/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp b/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp
+index c47998a..de9765f 100644
+--- a/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp
++++ b/FEXCore/Source/Interface/IR/Passes/RegisterAllocationPass.cpp
+@@ -8,6 +8,7 @@ $end_info$
+ #include "Interface/IR/Passes/RegisterAllocationPass.h"
+ #include "Interface/IR/IR.h"
+ #include "Interface/IR/IREmitter.h"
++#include "Interface/IR/IRTopologyCheck.h"
+ #include "Interface/IR/RegisterAllocationData.h"
+ #include "Interface/IR/Passes.h"
+ #include "Interface/Core/CPUID.h"
+@@ -594,14 +595,48 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
+ 
+     auto BlockIROp = BlockHeader->CW<IR::IROp_CodeBlock>();
+ 
++    // iOS-Mythic ml599: THIS is where ml598 hung.
++    //
++    // The backwards pass below walks `--CodeLast` and exits only on reaching
++    // CodeBegin. When Steam's store page failed to render,
++    // Chrome_InProcRendererThread sat at 97-100% CPU for minutes with its PC
++    // inside this function (libarm64ecfex.dll RVA 0x100b0c/0x100cb4/0x100cc4/
++    // 0x100cdc, all within [Run, Run+0xcd8)) on exactly this loop's Previous
++    // back edge. The compile never returned, so no frame was ever presented.
++    //
++    // Validate the chain first. If the forward chain is intact we can rebuild
++    // Previous from it and run normally. If it is not, SKIP the backwards pass
++    // rather than bound it partway: stopping early merely leaves some kill bits
++    // unset and some SRA hints missing, which is conservative and correct,
++    // whereas walking a cyclic chain would set kill bits on nodes belonging to
++    // other blocks and free their registers early -- a miscompile.
++    // ml599b: cheap backward-only check here; full diagnosis only when it trips.
++    bool BackwardPassSafe = true;
++    IRTopoNoteChecked();
++    if (!QuickBackwardOK(*IR, BlockNode)) {
++      BackwardPassSafe = HandleSuspectBlock("ra-entry", *IR, BlockNode) == IRTopoAction::Proceed;
++    }
++
+     // Backwards pass: analyze kill bits and SRA affinities
+-    {
++    if (BackwardPassSafe) {
+       // Reverse iteration is not yet working with the iterators
+       // We grab these nodes this way so we can iterate easily
+       auto CodeBegin = IR->at(BlockIROp->Begin);
+       auto CodeLast = IR->at(BlockIROp->Last);
+ 
++      // Backstop. The check above proves this walk terminates, so tripping this
++      // would mean the validator itself is wrong -- worth a loud line rather
++      // than another unkillable client.
++      const uint32_t IRNodeBudget = IR->GetSSACount() + 16;
++      uint32_t StepsTaken = 0;
++
+       while (1) {
++        if (++StepsTaken > IRNodeBudget) {
++          LogMan::Msg::EFmt("[ir-topo] ml599 ra-walk exceeded {} steps in block {} AFTER a clean "
++                            "validation -- the topology checker is wrong; abandoning the backwards pass",
++                            IRNodeBudget, BlockIROp->ID);
++          break;
++        }
+         auto [CodeNode, IROp] = CodeLast();
+         // End of iteration gunk
+ 
+diff --git a/FEXCore/Source/Utils/AllocWatch.cpp b/FEXCore/Source/Utils/AllocWatch.cpp
+new file mode 100644
+index 0000000..fb20b10
+--- /dev/null
++++ b/FEXCore/Source/Utils/AllocWatch.cpp
+@@ -0,0 +1,194 @@
++// SPDX-License-Identifier: MIT
++// iOS-Mythic ml611 — see AllocWatch.h for why this exists and why it is shaped
++// the way it is (the hot path runs inside malloc/free, so it must not allocate,
++// lock, or format).
++
++#include "Utils/AllocWatch.h"
++
++#include <FEXCore/Utils/LogManager.h>
++
++#include <atomic>
++#include <cstring>
++
++extern "C" {
++volatile int FEX_AllocWatch_Armed = 0;
++}
++
++namespace FEXCore::Utils::AllocWatch {
++namespace {
++
++  // Direct-mapped, no probing: a collision simply loses the older watch. That is
++  // acceptable for a diagnostic AND it is counted, so the report can say how much
++  // it might have missed instead of implying full coverage.
++  constexpr uint32_t WatchSlots = 512;
++  constexpr uint32_t RingSlots = 512;
++
++  struct WatchEntry {
++    std::atomic<uint64_t> Ptr;
++    uint64_t Size;
++    uint64_t Owner; // ml615: registering thread, so Clear() retires only its own
++    uint32_t Tag;
++  };
++
++  struct Record {
++    uint64_t Ptr;
++    uint64_t Size;
++    uint32_t Event;
++    uint32_t Tag;
++    uint64_t Thread;
++  };
++
++  WatchEntry WatchTable[WatchSlots] {};
++  Record Ring[RingSlots] {};
++
++  std::atomic<uint64_t> RingSeq {0};
++  std::atomic<uint32_t> LiveWatches {0};
++  std::atomic<uint32_t> Collisions {0};
++
++  inline uint32_t SlotFor(const void* Ptr) {
++    // rpmalloc hands out 16-byte-aligned blocks, so drop the dead low bits before
++    // folding, or every watch would land in a handful of slots.
++    const uint64_t V = reinterpret_cast<uint64_t>(Ptr) >> 4;
++    return static_cast<uint32_t>((V ^ (V >> 9) ^ (V >> 18)) & (WatchSlots - 1));
++  }
++
++  uint64_t CurrentThreadId() {
++    // Cheap, allocation-free thread identity: the address of a TLS byte. Only used
++    // to tell "same thread" from "different thread", never to name a thread.
++    static thread_local char Anchor {};
++    return reinterpret_cast<uint64_t>(&Anchor);
++  }
++
++  const char* EventName(uint32_t Event) {
++    switch (Event) {
++    case EV_ALLOC: return "ALLOC";
++    case EV_FREE: return "FREE";
++    case EV_WATCH: return "watch";
++    case EV_UNWATCH: return "unwatch";
++    default: return "?";
++    }
++  }
++
++  void Push(const void* Ptr, uint64_t Size, uint32_t Event, uint32_t Tag) {
++    const uint64_t Seq = RingSeq.fetch_add(1, std::memory_order_relaxed);
++    Record& R = Ring[Seq & (RingSlots - 1)];
++    R.Ptr = reinterpret_cast<uint64_t>(Ptr);
++    R.Size = Size;
++    R.Event = Event;
++    R.Tag = Tag;
++    R.Thread = CurrentThreadId();
++  }
++
++} // namespace
++
++void Watch(const void* Ptr, uint64_t Size, uint32_t Tag) {
++  if (!Ptr) {
++    return;
++  }
++  WatchEntry& E = WatchTable[SlotFor(Ptr)];
++  const uint64_t Prev = E.Ptr.load(std::memory_order_relaxed);
++  const uint64_t Want = reinterpret_cast<uint64_t>(Ptr);
++  if (Prev == Want) {
++    return; // already watched (a vector re-push with unchanged data())
++  }
++  if (Prev != 0) {
++    Collisions.fetch_add(1, std::memory_order_relaxed);
++  } else {
++    LiveWatches.fetch_add(1, std::memory_order_relaxed);
++  }
++  E.Size = Size;
++  E.Tag = Tag;
++  E.Owner = CurrentThreadId();
++  E.Ptr.store(Want, std::memory_order_release);
++  Push(Ptr, Size, EV_WATCH, Tag);
++  FEX_AllocWatch_Armed = 1;
++}
++
++void Unwatch(const void* Ptr) {
++  if (!Ptr) {
++    return;
++  }
++  WatchEntry& E = WatchTable[SlotFor(Ptr)];
++  if (E.Ptr.load(std::memory_order_relaxed) != reinterpret_cast<uint64_t>(Ptr)) {
++    return;
++  }
++  Push(Ptr, E.Size, EV_UNWATCH, E.Tag);
++  E.Ptr.store(0, std::memory_order_release);
++  LiveWatches.fetch_sub(1, std::memory_order_relaxed);
++}
++
++/* ml615: CLEAR ONLY THIS THREAD'S WATCHES.
++ *
++ * The ml614 run reported `live_watches=0` for a CFG that had registered 124
++ * predecessor vectors, which I took at face value. It was wrong: DFE runs
++ * concurrently on many threads, Clear() wiped the WHOLE table, and any one
++ * uneventful pass erased every other pass's watches. An `events=0` census from
++ * that build proves nothing about whether those buffers were touched.
++ *
++ * Ownership is per-slot now, so a pass only retires what it registered. */
++void Clear() {
++  const uint64_t Self = CurrentThreadId();
++  uint32_t Removed = 0;
++  for (auto& E : WatchTable) {
++    if (E.Ptr.load(std::memory_order_relaxed) && E.Owner == Self) {
++      E.Ptr.store(0, std::memory_order_release);
++      ++Removed;
++    }
++  }
++  if (Removed) {
++    LiveWatches.fetch_sub(Removed, std::memory_order_relaxed);
++  }
++  /* Disarm only when nothing anywhere is still watched. */
++  if (LiveWatches.load(std::memory_order_relaxed) == 0) {
++    FEX_AllocWatch_Armed = 0;
++  }
++}
++
++void ReportAndDisarm(const char* Site) {
++  // Disarm FIRST so nothing new lands in the ring while we walk it.
++  FEX_AllocWatch_Armed = 0;
++
++  const uint64_t Seq = RingSeq.load(std::memory_order_acquire);
++  const uint32_t Coll = Collisions.load(std::memory_order_relaxed);
++  const uint32_t Live = LiveWatches.load(std::memory_order_relaxed);
++  const bool Overflowed = Seq > RingSlots;
++  const uint64_t First = Overflowed ? (Seq - RingSlots) : 0;
++
++  // Always print the census, even when empty: silence must mean "no allocator
++  // activity touched a watched buffer", never "the probe was not running".
++  LogMan::Msg::EFmt("[alloc-watch] ml611 site={} events={} live_watches={} slot_collisions={}{}", Site, Seq, Live, Coll,
++                    Overflowed ? " (RING OVERFLOWED — oldest events lost)" : "");
++
++  /* ⛔⛔ ml621: THE PER-RECORD DRAIN IS GONE. DO NOT REINSTATE IT.
++   *
++   * ml620 died here. This loop emitted 512 formatted lines through LogMan from
++   * inside DFE's corruption path; the exception record came out holding this
++   * file's own format-string text and the process terminated on
++   *   Unhandled exception code 3d736469   ("ids=" — from the [dfe-cfg] message)
++   * That is the ml571 fixed-size-formatter family that IO.cpp already documents:
++   * "a fixed-size formatter here has now cost more than it ever explained."
++   *
++   * The census below is retained because it is one line and it is what revealed
++   * the probe's own pathology: events=71,906,680 with slot_collisions=17,174,920
++   * in a 512-slot table, and live_watches=816 — more than the table holds, so
++   * even that counter was wrong. Across every run this probe produced ZERO
++   * findings about the corruption it was built for.
++   *
++   * If buffer lifetime ever needs watching again, do it OUTSIDE any fault or
++   * corruption path and bound it by construction, not by a cap. */
++  (void)First;
++
++  Clear();
++}
++
++} // namespace FEXCore::Utils::AllocWatch
++
++extern "C" void FEX_AllocWatch_Event(const void* Ptr, uint32_t Event) {
++  using namespace FEXCore::Utils::AllocWatch;
++  // Hot path: one hash, one load, one compare. No allocation, no lock, no format.
++  WatchEntry& E = WatchTable[SlotFor(Ptr)];
++  if (E.Ptr.load(std::memory_order_acquire) != reinterpret_cast<uint64_t>(Ptr)) {
++    return;
++  }
++  Push(Ptr, E.Size, Event, E.Tag);
++}
+diff --git a/FEXCore/Source/Utils/AllocWatch.h b/FEXCore/Source/Utils/AllocWatch.h
+new file mode 100644
+index 0000000..cf981ec
+--- /dev/null
++++ b/FEXCore/Source/Utils/AllocWatch.h
+@@ -0,0 +1,70 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++#include <cstdint>
++
++/* iOS-Mythic ml611: WATCH SPECIFIC HEAP BUFFERS FOR FREE/REUSE WHILE STILL LIVE.
++ *
++ * ml610 died because DFE's predecessor vectors came back holding the low 32 bits
++ * of FEX-arena pointers (block "id" 918357056 = 0x36BD0000, in a vector whose own
++ * data was 0x7c36bd0020). That is the shape of an allocator freelist pointer
++ * written into storage that was freed or handed out again — not a random wild
++ * write.
++ *
++ * A canary CANNOT settle this: rpmalloc writes its freelist link into the freed
++ * block's CONTENTS, leaving any surrounding guard bytes perfectly intact. The
++ * decisive question is instead "was this exact allocation freed or re-issued
++ * while the CFG still referenced it", which only the allocator can answer.
++ *
++ * ⚠️ CONSTRAINT THAT SHAPES THIS ENTIRE FILE: the hot path runs INSIDE
++ * malloc/free. It must never allocate, never take a lock, and never format a
++ * string — doing any of those would re-enter rpmalloc and could manufacture the
++ * very corruption we are chasing. So:
++ *   - the watch set is a fixed-size, direct-mapped table (no probing, no growth),
++ *   - events go into a fixed ring of PODs (raw pointer/size/event/tag/thread/seq),
++ *   - nothing is formatted until ReportAndDisarm(), which runs from the DFE pass
++ *     AFTER control has left the allocator.
++ * Collisions and ring overflow are COUNTED and reported, so a quiet log means
++ * "nothing happened", never "the probe silently dropped it".
++ *
++ * ⚠️ KNOWN LIMITS — read these before drawing a conclusion from a quiet log:
++ *   - The table is PROCESS-GLOBAL while DFE runs on many threads at once, so one
++ *     thread's Clear() can drop another's watches. That can only cause MISSED
++ *     events, never invented ones; slot_collisions in the report bounds it.
++ *   - Only the predecessor vectors are watched. The worklist deque's backing
++ *     blocks are NOT (std::deque exposes no way to name them), so a corrupted
++ *     worklist entry is reported with its slot address but without alloc history.
++ *   - Arming costs every rpmalloc/rpfree in the process one hash+load+compare.
++ *     That is a few cycles against ~50-100 for the allocation itself, but it is
++ *     not free, and CEF allocates heavily.
++ */
++
++extern "C" {
++// Hot-path gate. Zero until something is actually being watched, so the cost in
++// the common case is one predictable load. Read directly by rpmalloc.
++extern volatile int FEX_AllocWatch_Armed;
++
++// Called from rpmalloc's allocate/free paths. Does nothing unless Ptr is watched.
++void FEX_AllocWatch_Event(const void* Ptr, uint32_t Event);
++}
++
++namespace FEXCore::Utils::AllocWatch {
++enum : uint32_t {
++  EV_ALLOC = 1,   // allocator handed this address out
++  EV_FREE = 2,    // allocator took this address back
++  EV_WATCH = 3,   // we started watching it
++  EV_UNWATCH = 4, // we stopped watching it
++};
++
++// Start/stop watching one allocation. Tag is caller-defined (DFE uses the block id).
++void Watch(const void* Ptr, uint64_t Size, uint32_t Tag);
++void Unwatch(const void* Ptr);
++
++// Drop every watch without reporting (normal, uneventful teardown).
++void Clear();
++
++// Dump the ring, then disarm and clear. MUST be called from outside the
++// allocator — it formats with LogMan. Prints nothing if no events were recorded,
++// beyond a one-line census so silence is never ambiguous.
++void ReportAndDisarm(const char* Site);
++} // namespace FEXCore::Utils::AllocWatch
+diff --git a/FEXCore/include/FEXCore/Debug/InternalThreadState.h b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+index a9d1d52..894d904 100644
+--- a/FEXCore/include/FEXCore/Debug/InternalThreadState.h
++++ b/FEXCore/include/FEXCore/Debug/InternalThreadState.h
+@@ -117,6 +117,37 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
+   // hundred per-thread caught faults. Real fix: callret-aware SEH unwind.
+   static constexpr size_t CALLRET_STACK_SIZE {0x1000000};
+ 
++  // iOS-Mythic ml609/ml610: NAMED bounds for the window the CALL/RET guard enforces.
++  //
++  // The default sp sits at base + SIZE/4 = base+4MB and the predictor grows DOWN
++  // from there; BranchOps.cpp bounds sp to [base+2MB, base+6MB).
++  //
++  // ⚠️ These are NAMED because several sites derive their own bounds from
++  // CALLRET_STACK_SIZE (/4 for the default location, +SIZE for the end). Changing
++  // CALLRET_STACK_SIZE alone does NOT move the window — fix these together.
++  //
++  // ⛔ THIS WINDOW IS NOT THE LIVE SET, AND MUST NOT BE USED TO SIZE A CLEAR.
++  // ml609 assumed it was and clipped ResetCallRetStack() to it; the build
++  // regressed by ~388MB of `fex` band at a matched cycle and still died of
++  // jetsam. Two reasons, both checkable in source:
++  //
++  //   (a) Dispatcher.cpp's JITCallback sentinel push tests only
++  //       (sp - base) >> 24 — the WHOLE 16MB — so the callback path is not
++  //       bounded by this window at all. (What fraction of the 16MB it really
++  //       touches is measured by [dc-census] in wine's decommit_pages().)
++  //
++  //   (b) The clear RECLAIMS rather than dirties. VirtualDontNeed() is
++  //       MEM_DECOMMIT + MEM_COMMIT, and on this (non-pool-aliased) range wine's
++  //       decommit_pages() does anon_mmap_fixed() — a fresh MAP_ANON|MAP_FIXED
++  //       that drops the physical pages and installs zero-fill-on-demand. The
++  //       recommit only restores access. So a full-size clear RETURNS memory,
++  //       and shrinking it strands the remainder resident.
++  //
++  // Clear CALLRET_STACK_SIZE. These constants describe the guard, not the cost.
++  static constexpr size_t CALLRET_DEFAULT_OFFSET {CALLRET_STACK_SIZE / 4};        // 4MB: initial sp
++  static constexpr size_t CALLRET_LIVE_OFFSET {CALLRET_STACK_SIZE / 8};           // 2MB: guard low bound
++  static constexpr size_t CALLRET_LIVE_SIZE {CALLRET_STACK_SIZE / 4};             // 4MB: guard window [2MB,6MB)
++
+   // The low address of the call-ret stack allocation (not including guard pages)
+   void* CallRetStackBase {};
+ 
+@@ -141,4 +172,10 @@ static_assert(
+   "Fault page is outside of immediate range from CPU state");
+ #endif
+ 
++// ml609/ml610: THE single callret reset path, shared by Core.cpp/CPUBackend.cpp/JIT.cpp.
++// Defined in Core.cpp. Clears the FULL [base, base+CALLRET_STACK_SIZE) reservation —
++// see the ⛔ note above for why a smaller clear is a regression, not an optimisation.
++// Site must be one of the literals in Core.cpp's CallRetSiteNames[] to be counted.
++void ResetCallRetStack(InternalThreadState* Thread, const char* Site);
++
+ } // namespace FEXCore::Core
+diff --git a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+index 8f9341a..c616659 100644
+--- a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
++++ b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+@@ -338,6 +338,15 @@ public:
+   }
+ #endif
+ 
++  /* iOS-Mythic ml612: identity of the address NoteReadAcquired() stamps into
++   * TEB Instrumentation[8]. The thread-exit cleanup MUST verify a stamped
++   * address against this before releasing anything — the stamp is a diagnostic
++   * value written by whichever mutex was held, and acting on it blindly (or
++   * poking its futex word directly) would corrupt an unrelated lock. */
++  uint64_t IosStampAddress() const {
++    return reinterpret_cast<uint64_t>(&Futex);
++  }
++
+ private:
+ 
+ #if defined(__linux__)
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index e49b624..c0b7c3f 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1358,6 +1358,113 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+   }
+ }
+ 
++/* iOS-Mythic ml612: RELEASE FEX LOCKS A DYING THREAD STILL HOLDS.
++ *
++ * ml611's whole-app freeze: CrBrowserMain (00b0) blew FEX's 256KB emulator stack
++ * inside a recursive fextl::set tree deleter, the fault was misclassified as
++ * STATUS_DATATYPE_MISALIGNMENT, dispatch DID occur, nothing handled it, and the
++ * thread ran pthread_exit while owning one READ hold of CodeInvalidationMutex
++ * ([exit-hold] said exactly that). A writer then queued behind the dead reader;
++ * write-priority blocks every later reader, so JIT compilation stopped process-
++ * wide -- 11 minutes of an alive app repainting one frozen frame.
++ *
++ * Called from wine's pthread_exit_wrapper BEFORE it clears TSD slot 275, while
++ * x18/TEB and FEX thread state are still reachable.
++ *
++ * ⚠️ THREE RULES, each of which was a way to make this worse:
++ *  1. NEVER trust the stamped address alone and NEVER poke its futex word. The
++ *     stamp in Instrumentation[8] is a diagnostic written by whichever mutex was
++ *     held; releasing on that basis could unlock a completely different lock.
++ *     Verify it equals THIS context's CodeInvalidationMutex, then go through the
++ *     mutex API so the futex/wake protocol stays intact.
++ *  2. Release exactly the recorded per-thread depth (Instrumentation[7]) -- the
++ *     mutex is non-recursive for writers but shared holds nest, and one unlock
++ *     for an N-deep hold leaves the wedge in place.
++ *  3. Instrumentation[9] means BTCpu64NotifyReadFile is mid-flight, which holds
++ *     CodeInvalidationMutex EXCLUSIVELY *and* ThreadCreationMutex. Both must be
++ *     dropped, in the same order its After path uses.
++ *
++ * Returns a bitmask of what was actually released so the caller can log it;
++ * every branch is reported, so silence never has to be interpreted.
++ */
++/* ml618: TEB is passed EXPLICITLY rather than read from x18.
++ *
++ * This is invoked from wine's pthread_exit_wrapper on a dying thread, so the
++ * caller is the authority on which TEB is being torn down. A SELF-TEST call
++ * (TebPtr == nullptr) returns REL_SELFTEST and echoes nothing — registration
++ * uses it to prove the pointer it bound is the redirected ARM64 alias and not a
++ * raw x64 entry thunk, which is exactly what ml613 shipped by mistake. */
++extern "C" uint32_t BTCpu64IosReleaseThreadHolds(void* TebPtr, uint64_t* OutStamp, uint32_t* OutDepth, uint32_t* OutFlags) {
++  enum : uint32_t {
++    REL_NOTHING = 0,
++    REL_SHARED = 1 << 0,      // dropped N shared holds
++    REL_RWX_EXCLUSIVE = 1 << 1, // dropped the NotifyReadFile exclusive pair
++    REL_STAMP_FOREIGN = 1 << 2, // stamp did not match our mutex -- refused
++    REL_NO_CTX = 1 << 3,      // context already gone
++  };
++
++  enum : uint32_t { REL_SELFTEST = 1u << 4 };
++  if (!TebPtr) {
++    /* Registration self-test: reaching here at all proves the callback was
++     * entered with a correct ARM64 ABI. */
++    return REL_SELFTEST;
++  }
++  auto* Teb = reinterpret_cast<TEB*>(TebPtr);
++
++  auto* Depth = reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(Teb) + 0x16f0);
++  auto* Stamp = reinterpret_cast<volatile uint64_t*>(reinterpret_cast<uintptr_t>(Teb) + 0x16f8);
++  auto* InLockedRead = IosInLockedRWXReadSlot();
++
++  const uint64_t StampVal = *Stamp;
++  const uint32_t DepthVal = *Depth;
++  const bool RWXRead = InLockedRead && *InLockedRead;
++
++  if (OutStamp) {
++    *OutStamp = StampVal;
++  }
++  if (OutDepth) {
++    *OutDepth = DepthVal;
++  }
++  if (OutFlags) {
++    *OutFlags = RWXRead ? 1 : 0;
++  }
++
++  if (!StampVal && !RWXRead) {
++    return REL_NOTHING; // clean exit, nothing held
++  }
++  if (!CTX) {
++    return REL_NO_CTX;
++  }
++
++  auto& CodeMutex = CTX->GetCodeInvalidationMutex();
++  uint32_t Result = REL_NOTHING;
++
++  // Rule 3 first: the exclusive pair, in NotifyReadFile's own release order.
++  if (RWXRead) {
++    *InLockedRead = false;
++    auto* ThreadState = GetCPUArea().ThreadState();
++    if (ThreadState) {
++      GetFrontendThreadData(ThreadState)->InLockedRWXRead = false;
++    }
++    CodeMutex.unlock();
++    ThreadCreationMutex.unlock();
++    Result |= REL_RWX_EXCLUSIVE;
++  }
++
++  // Rule 1 + 2: shared holds, only after proving the stamp is ours.
++  if (StampVal && DepthVal) {
++    if (StampVal != CodeMutex.IosStampAddress()) {
++      return Result | REL_STAMP_FOREIGN;
++    }
++    for (uint32_t i = 0; i < DepthVal; ++i) {
++      CodeMutex.unlock_shared(); // clears the stamp/depth via NoteReadReleased()
++    }
++    Result |= REL_SHARED;
++  }
++
++  return Result;
++}
++
+ #ifdef FEX_IOS_HOST
+ /* iOS-Mythic: step markers through ThreadInit. Two runs have died with a
+  * fresh post-detach thread's "ThreadInit() entered" as the last FEX log
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index fc0a4b8..14f43f9 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -4,6 +4,7 @@ EXPORTS
+   BTCpu64FlushInstructionCache
+   BTCpu64IosAddAliasMapping
+   BTCpu64IosRipFromHostPC
++  BTCpu64IosReleaseThreadHolds
+   BTCpu64IsProcessorFeaturePresent
+   BTCpu64NotifyMemoryDirty
+   BTCpu64NotifyReadFile
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 2612829..999d4c8 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -1,6 +1,8 @@
+ // SPDX-License-Identifier: MIT
+ 
+ #include <atomic>
++#include <cstdlib>  // ml623: getenv/strtoull for the IR-capture target
++#include <cstring>  // ml623: strlen
+ #include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/Utils/TypeDefines.h>
+ #include <FEXCore/Utils/SignalScopeGuards.h>
+@@ -11,6 +13,10 @@
+ #include <windef.h>
+ #include <winternl.h>
+ 
++/* ml623: targeted IR capture target (defined in FEXCore PassManager.cpp). File scope on
++ * purpose -- an extern "C" at block scope is a compile error and cost a build earlier. */
++extern "C" uint64_t FEX_MythicIRCapTarget;
++
+ namespace FEX::Windows {
+ InvalidationTracker::InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads)
+   : CTX {CTX}
+@@ -188,17 +194,87 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+   }
+ 
+   FEX_CONFIG_OPT(MonoHacks, MONOHACKS);
+-  if (MonoHacks && (Name == "mono-2.0-bdwgc.dll" || Name == "mono.dll")) {
+-    FEX_CONFIG_OPT(MaxInst, MAXINST);
+-    FEX_CONFIG_OPT(Multiblock, MULTIBLOCK);
+-    if (Multiblock && MaxInst() >= 500) {
++  FEX_CONFIG_OPT(MaxInst, MAXINST);
++  FEX_CONFIG_OPT(Multiblock, MULTIBLOCK);
++
++  const bool IsMono = (Name == "mono-2.0-bdwgc.dll" || Name == "mono.dll");
++  if (IsMono) {
++    /* ml623: report the EFFECTIVE settings at EFmt on every branch.
++     *
++     * MonoHacks defaults to true and is gated on Multiblock && MaxInst >= 500, but
++     * MarkMonoDetected() logs nothing and the refusal message is IFmt, which
++     * MYTHIC_QUIET eats -- so the ULTRAKILL log could not distinguish "hooks armed"
++     * from "hooks refused". That ambiguity also decides whether a later
++     * block-splitting A/B is interpretable at all, because the hook explicitly
++     * requires all SMC sites to land in ONE block. Never leave this unfalsifiable. */
++    const bool Armed = MonoHacks && Multiblock && MaxInst() >= 500;
++    LogMan::Msg::EFmt("[mono-cfg] ml623 module={} base={:#x} xend={:#x} | MonoHacks={} Multiblock={} MaxInst={} => {}", Name,
++                      Address, LastExecutableSectionEnd, MonoHacks() ? 1 : 0, Multiblock() ? 1 : 0, MaxInst(),
++                      Armed          ? "HOOKS ARMED (MarkMonoDetected)" :
++                      !MonoHacks()   ? "off: MonoHacks disabled" :
++                                       "off: needs Multiblock && MaxInst>=500");
++    if (Armed) {
+       // Require these settings to ensure we can safely hook all SMC sites in a single block
+       CTX.MarkMonoDetected();
+       MonoBackpatcherDetectionPending = true;
+       MonoBase = Address;
+       MonoEnd = LastExecutableSectionEnd;
+-    } else {
+-      LogMan::Msg::IFmt("Not applying mono hacks, Multiblock with MaxInst >= 500 required");
++    }
++  }
++
++  /* ml623: arm the targeted IR capture (PassManager.cpp) once the module that owns the
++   * instruction under investigation is mapped. Module + RVA come from the environment so
++   * chasing a different miscompile never needs a rebuild; the defaults are the ULTRAKILL
++   * Mono emitter store `mov byte ptr [rcx+2], al`.
++   *
++   * setenv() in WineProcessBridge.m does NOT reach GetEnvironmentVariableW, but it DOES
++   * reach FEX's own getenv (proven by MYTHIC_NO_DFE in ml597/598), which is what this uses. */
++  {
++    const char* CapRVA = getenv("MYTHIC_IRCAP_RVA");
++    const char* CapMod = getenv("MYTHIC_IRCAP_MODULE");
++
++    /* ml623b: THE ENV CHANNEL DOES NOT REACH THIS CODE.
++     *
++     * ml623 shipped env-gated and never armed -- yet [mono-cfg] printed from this very
++     * function in the same run, so the function ran and getenv simply returned null.
++     * (get_initial_environment copies all of unix `environ` into the Windows block, so
++     * the loss is somewhere later: the PE CRT's copy, or the pseudo-process PEB clone.)
++     * Rather than theorise, the target is now COMPILED IN and env is only an override.
++     * The probe line below reports what getenv actually returned, so the channel
++     * question gets settled for free instead of costing another run. */
++    {
++      static bool Reported = false;
++      if (!Reported) {
++        Reported = true;
++        LogMan::Msg::EFmt("[ircap] ml623b env probe: MYTHIC_IRCAP_RVA={} MYTHIC_IRCAP_MODULE={}", CapRVA ? CapRVA : "(null)",
++                          CapMod ? CapMod : "(null)");
++      }
++    }
++    if (!CapRVA || !*CapRVA) {
++      CapRVA = "0x4db25b"; // mono-2.0-bdwgc.dll: mov byte ptr [rcx+2], al
++    }
++    if (CapRVA && *CapRVA) {
++      if (!CapMod || !*CapMod) {
++        CapMod = "mono-2.0-bdwgc.dll";
++      }
++      // Case-insensitive: the loader logs both "VERSION.dll" and "version.dll".
++      const size_t ModLen = strlen(CapMod);
++      bool Match = (Name.size() == ModLen);
++      for (size_t i = 0; Match && i < ModLen; ++i) {
++        const char A = Name[i] | 0x20;
++        const char B = CapMod[i] | 0x20;
++        Match = (A == B);
++      }
++      if (Match) {
++        const uint64_t RVA = strtoull(CapRVA, nullptr, 0);
++        if (RVA) {
++          FEX_MythicIRCapTarget = Address + RVA;
++          LogMan::Msg::EFmt("[ircap] ml623b ARMED: module={} base={:#x} rva={:#x} => target guest addr {:#x}", Name, Address,
++                            RVA, FEX_MythicIRCapTarget);
++        } else {
++          LogMan::Msg::EFmt("[ircap] ml623b DISARMED by MYTHIC_IRCAP_RVA=0 (module={})", Name);
++        }
++      }
+     }
+   }
+ }

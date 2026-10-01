@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 16:59:36 -0700
+Subject: [PATCH] Accept a Metal device that reports no GPU family, and stop
+ the logger crashing
+
+FormatCapabilityInspector::Inspect() accepted only Apple7+ or Mac2 and threw
+MTLD3DError("Invalid MTLDevice") otherwise. A virtualised Metal device
+advertises neither, so device construction threw at the very end, after the
+worker threads had been created and torn down. Fall back to the Apple7 format
+table with a warning. This cannot engage on hardware, where Apple7 is always
+true, and genuine runtime queries still answer for themselves -- only the
+format table is assumed.
+
+The failure was invisible for two compounding reasons. The catch printed a
+fixed string, so the throw's own message never reached the log. And the
+Logger call in that catch crashed: std::ofstream virtually inherits
+basic_ios, so `if (m_fileStream)` loads a vbase offset from the vtable at a
+NEGATIVE offset, faulting at exactly -24 when the vtable is null. The crash
+then pointed at the logger rather than at the device failure it was reporting.
+
+Guard on a plain bool that records whether a file log was opened, and report
+the error through __wine_dbg_output rather than through Logger.
+
+Add Mac2 to the capability probe. It was missing, and it is the other
+accepted family, so a device reporting Apple7=0 Apple8=0 Apple9=0 told us
+nothing about whether it would be rejected.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01M1HvfVX2Y29TgJbFWbahdt
+Madeira-commit: da9d5ab0c23cc52b47f30931cbebe58906947e9b
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11.cpp      | 35 +++++++++++++++++++++++++++++++++--
+ src/dxmt/dxmt_format.cpp | 26 +++++++++++++++++++++++++-
+ src/util/log/log.cpp     |  7 +++++--
+ src/util/log/log.hpp     |  7 +++++++
+ 4 files changed, 70 insertions(+), 5 deletions(-)
+
+diff --git a/src/d3d11/d3d11.cpp b/src/d3d11/d3d11.cpp
+index cbaa26f..3990a58 100644
+--- a/src/d3d11/d3d11.cpp
++++ b/src/d3d11/d3d11.cpp
+@@ -93,7 +93,12 @@ D3D11CoreCreateDevice(IDXGIFactory *pFactory, IDXGIAdapter *pAdapter,
+         "[gpu-caps] ml709 BC=", dev.supportsBCTextureCompression() ? 1 : 0,
+         " Apple7=", dev.supportsFamily(WMTGPUFamilyApple7) ? 1 : 0,
+         " Apple8=", dev.supportsFamily(WMTGPUFamilyApple8) ? 1 : 0,
+-        " Apple9=", dev.supportsFamily(WMTGPUFamilyApple9) ? 1 : 0));
++        " Apple9=", dev.supportsFamily(WMTGPUFamilyApple9) ? 1 : 0,
++        /* ml752: Mac2 was missing, and it is the OTHER family
++         * FormatCapabilityInspector::Inspect() accepts -- so a device reporting
++         * Apple7=0 Apple8=0 Apple9=0 told us nothing about whether it would be
++         * rejected. A virtual Metal device advertises neither. */
++        " Mac2=", dev.supportsFamily(WMTGPUFamilyMac2) ? 1 : 0));
+   }
+ 
+   for (uint32_t flId = 0; flId < FeatureLevels; flId++) {
+@@ -120,7 +125,33 @@ D3D11CoreCreateDevice(IDXGIFactory *pFactory, IDXGIAdapter *pAdapter,
+ 
+     return device->QueryInterface(IID_PPV_ARGS(ppDevice));
+   } catch (const MTLD3DError &e) {
+-    Logger::err("D3D11CoreCreateDevice: Failed to create D3D11 device");
++    /* ml752: report WHAT failed, and do not use Logger to do it.
++     *
++     * This catch printed a fixed string, so the actual reason -- thrown from
++     * deep inside device construction -- never reached the log. Worse, on a
++     * virtual Metal device the Logger call ITSELF crashed here: std::ofstream
++     * virtually inherits basic_ios, so `if (m_fileStream)` loads the vbase
++     * offset from the vtable at a NEGATIVE offset, and with a null vtable that
++     * faults at exactly -24 (p1=0xffffffffffffffe8, d3d11+0x125d44). The device
++     * failure was invisible and the crash that replaced it pointed at the
++     * logger rather than the cause. Go straight to Wine's debug output. */
++    {
++      const char *what = e.message().c_str();
++      char buf[512];
++      snprintf(buf, sizeof(buf),
++               "err:   [d3d11-fail] ml752 D3D11CoreCreateDevice failed: %s\n",
++               what ? what : "(no message)");
++#ifdef _WIN32
++      HMODULE ntdll = GetModuleHandleA("ntdll.dll");
++      PFN_wineLogOutput out = ntdll ? reinterpret_cast<PFN_wineLogOutput>(
++                                          GetProcAddress(ntdll, "__wine_dbg_output"))
++                                    : nullptr;
++      if (out) out(buf);
++      else fputs(buf, stderr);
++#else
++      fputs(buf, stderr);
++#endif
++    }
+     return E_FAIL;
+   }
+ }
+diff --git a/src/dxmt/dxmt_format.cpp b/src/dxmt/dxmt_format.cpp
+index 658b3f6..25e6921 100644
+--- a/src/dxmt/dxmt_format.cpp
++++ b/src/dxmt/dxmt_format.cpp
+@@ -1,6 +1,7 @@
+ #include "ftl.hpp"
+ #include "dxmt_format.hpp"
+ #include "util_error.hpp"
++#include "log/log.hpp"   /* ml752 */
+ #include "dxgi.h"
+ #include <cassert>
+ #include <cmath>
+@@ -34,7 +35,30 @@ constexpr FormatCapability APPLE_INT_FORMAT_CAP_32 =
+ 
+ void
+ FormatCapabilityInspector::Inspect(WMT::Device device) {
+-  if (device.supportsFamily(WMTGPUFamilyApple7)) {
++  /* ml752: accept an UNRECOGNISED Metal device instead of rejecting it.
++   *
++   * This function knew only Apple7+ and Mac2 and threw MTLD3DError("Invalid
++   * MTLDevice") otherwise. A virtualised Metal device advertises NEITHER, so
++   * device construction threw at the very end -- after the worker threads had
++   * been created and torn down -- and the only surviving evidence was a fixed
++   * "Failed to create D3D11 device" string, because the throw's own message was
++   * never printed.
++   *
++   * Falling back to the Apple7 table is a guess about FORMAT capabilities only.
++   * It cannot engage on real hardware, where Apple7 is always true, so it
++   * changes nothing on a physical device by construction. Genuine runtime
++   * queries such as supportsBCTextureCompression() are untouched and still
++   * answer for themselves. */
++  const bool apple7 = device.supportsFamily(WMTGPUFamilyApple7);
++  const bool mac2 = device.supportsFamily(WMTGPUFamilyMac2);
++  const bool unknown_family = !apple7 && !mac2;
++
++  if (unknown_family)
++    Logger::warn("[gpu-caps] ml752 device reports neither Apple7 nor Mac2 -- "
++                 "assuming the Apple7 format table. Formats may be advertised "
++                 "that this device cannot actually sample.");
++
++  if (apple7 || unknown_family) {
+     // Apple 7: M1
+     APPEND_CAP(WMTPixelFormatA8Unorm, ALL_CAP | TEXTURE_BUFFER_ALL_CAP)
+     APPEND_CAP(WMTPixelFormatR8Unorm, ALL_CAP | TEXTURE_BUFFER_ALL_CAP)
+diff --git a/src/util/log/log.cpp b/src/util/log/log.cpp
+index 96ced95..6c99f00 100644
+--- a/src/util/log/log.cpp
++++ b/src/util/log/log.cpp
+@@ -66,8 +66,10 @@ void Logger::emitMsg(LogLevel level, const std::string &message) {
+ #endif
+       auto path = getFileName(m_fileName);
+ 
+-      if (!path.empty())
++      if (!path.empty()) {
+         m_fileStream = std::ofstream(str::topath(path.c_str()).c_str());
++        m_fileStreamOpen = true;   /* ml752 */
++      }
+     }
+ 
+     std::stringstream stream(message);
+@@ -86,7 +88,8 @@ void Logger::emitMsg(LogLevel level, const std::string &message) {
+           std::cerr << adjusted;
+       }
+ 
+-      if (m_fileStream)
++      /* ml752: guard on the bool, NOT on the stream -- see log.hpp. */
++      if (m_fileStreamOpen)
+         m_fileStream << adjusted;
+     }
+   }
+diff --git a/src/util/log/log.hpp b/src/util/log/log.hpp
+index 7e16e20..7ca4388 100644
+--- a/src/util/log/log.hpp
++++ b/src/util/log/log.hpp
+@@ -61,6 +61,13 @@ private:
+ 
+   bool m_initialized = false;
+   PFN_wineLogOutput m_wineLogOutput = nullptr;
++  /* ml752: set only when a file log is actually opened. `if (m_fileStream)`
++   * evaluates std::ofstream's operator bool, and ofstream VIRTUALLY inherits
++   * basic_ios -- so that load reads a vbase offset from the vtable at a
++   * NEGATIVE offset. With a null vtable it faults at exactly -24, which is the
++   * crash that replaced the real "failed to create D3D11 device" message on a
++   * virtual Metal device. A plain bool cannot fault. */
++  bool m_fileStreamOpen = false;
+ 
+   void emitMsg(LogLevel level, const std::string &message);
+ 

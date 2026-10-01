@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] env: keep file names exactly as the guest wrote them
+
+iOS has no volume that forces NFD, and APFS keeps names as written. NFC
+normalisation renamed files, so a guest could not find what it created.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/env_ios.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 2c6f3de..58a9f87 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -208,7 +208,13 @@ static struct norm_table *nfc_table;
+ 
+ static void init_unix_codepage(void)
+ {
++#ifndef WINE_IOS
+     nfc_table = read_nls_file( "normnfc.nls" );
++#endif
++    /* unicode-exact: iOS has no HFS+ volume that forces NFD. APFS
++     * stores a name as it was created, so composing it to NFC here returns a
++     * different name than the guest created (a combining sequence comes back
++     * precomposed). Windows returns names unchanged, so leave nfc_table NULL. */
+ }
+ 
+ #elif defined(__ANDROID__)  /* Android always uses UTF-8 */

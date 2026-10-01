@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Set up Playport</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+.focus{outline:3px solid #F5B544;outline-offset:3px}
+.st{flex:1;background:#151A21;border-radius:14px;padding:16px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;min-height:176px}
+.num{width:26px;height:26px;border-radius:13px;display:flex;align-items:center;justify-content:center;font:700 13px 'Barlow'}
+.done{background:#7FD49A;color:#0B0E13}
+.todo{background:#2A3340;color:#EEF1F5}
+.t{font:700 18px 'Barlow Semi Condensed',sans-serif}
+.s{font-size:12px;line-height:1.4;color:#9AA5B4}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13; display: flex; flex-direction: column">
+<div style="padding: 24px 44px 16px; display: flex; flex-direction: column; gap: 4px">
+<div class="d" style="font-size: 30px; font-weight: 700">Let's get you playing</div>
+<div style="font-size: 13px; color: #9AA5B4">Four steps, once. Playport checks them again by itself before every game.</div>
+</div>
+<div style="display: flex; gap: 12px; padding: 0 44px">
+<div class="st">
+<span class="num done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></span>
+<span class="t">Controller</span>
+<span class="s">Xbox Wireless Controller connected.</span>
+</div>
+<div class="st focus">
+<span class="num todo">2</span>
+<span class="t">Pairing file</span>
+<span class="s">Lets Playport run games fast. Made once on a computer; pick it from Files.</span>
+<span style="margin-top: auto; display: flex; align-items: center; gap: 6px; font: 600 13px 'Barlow'; background: #F5B544; color: #1A1204; border-radius: 8px; padding: 7px 10px"><span class="g" style="background: #1A1204; color: #F5B544">A</span>Choose file</span>
+</div>
+<div class="st">
+<span class="num todo">3</span>
+<span class="t">LocalDevVPN</span>
+<span class="s">Install it and turn it on. Keep it on while you play.</span>
+</div>
+<div class="st">
+<span class="num todo">4</span>
+<span class="t">Steam</span>
+<span class="s">Optional. Sign in for your library, cloud saves and achievements.</span>
+</div>
+</div>
+<div style="flex-grow: 1"></div>
+<div style="height: 36px; flex-shrink: 0; display: flex; align-items: center; gap: 18px; padding: 0 44px; border-top: 1px solid #1D242E">
+<span style="font-size: 12px; color: #9AA5B4">Choosing a file uses touch</span>
+<div style="flex-grow: 1"></div>
+<span class="leg"><span class="g">A</span>Do this step</span>
+<a class="leg" href="SignIn.dc.html"><span class="g">RB</span>Next</a>
+<span class="leg"><span class="g">Y</span>How to make the file</span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

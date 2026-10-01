@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 08:34:44 +0200
+Subject: [PATCH] Count the disk cache's hits and time the call-return stack
+ resets
+
+FEX's disk cache (FEX_DISKCACHE=1) counts its hits only in the profiler.
+Count lookups that hit, lookups that missed and blocks stored, and log
+the totals as a [diskcache] line every 4096 events, so a run's log shows
+how much of its translation the cache served. The [callret] line also
+gives the total and the longest time the resets took.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-26-first-run-stutter.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp | 44 ++++++++++++++++++++++++--
+ 1 file changed, 41 insertions(+), 3 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 7a6056d85..1ff4fd71e 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -738,7 +738,22 @@ void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* S
+ 
+   // The FULL reservation -- see the note above. This decommit is what returns
+   // the pages; clipping it strands the remainder resident.
++  uint64_t ResetT0, ResetT1, ResetFreq;
++  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ResetT0));
+   FEXCore::Allocator::VirtualDontNeed(Thread->CallRetStackBase, TS::CALLRET_STACK_SIZE);
++  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ResetT1));
++  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(ResetFreq));
++  // Playport: the time the reset takes, in microseconds, for the [callret] line.
++  static std::atomic<uint64_t> CallRetResetUs {0};
++  static std::atomic<uint64_t> CallRetResetMaxUs {0};
++  {
++    const uint64_t PerUs = ResetFreq / 1000000 ? ResetFreq / 1000000 : 24;
++    const uint64_t Us = (ResetT1 - ResetT0) / PerUs;
++    CallRetResetUs.fetch_add(Us, std::memory_order_relaxed);
++    uint64_t Max = CallRetResetMaxUs.load(std::memory_order_relaxed);
++    while (Us > Max && !CallRetResetMaxUs.compare_exchange_weak(Max, Us, std::memory_order_relaxed)) {
++    }
++  }
+ 
+   for (size_t i = 0; i < CallRetSiteCount; ++i) {
+     if (Site && strcmp(Site, CallRetSiteNames[i]) == 0) {
+@@ -818,9 +833,11 @@ void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* S
+ #endif
+ 
+   if ((N & 0x3ff) == 0) {
+-    LogMan::Msg::EFmt("[callret] ml610 resets={} bytes={}MB per_reset={}KB site={} by_site core={} cpubackend={} jit-rollover={}", N,
+-                      B >> 20, TS::CALLRET_STACK_SIZE >> 10, Site, CallRetResetsBySite[0].load(std::memory_order_relaxed),
+-                      CallRetResetsBySite[1].load(std::memory_order_relaxed), CallRetResetsBySite[2].load(std::memory_order_relaxed));
++    LogMan::Msg::EFmt("[callret] ml610 resets={} bytes={}MB per_reset={}KB site={} by_site core={} cpubackend={} jit-rollover={} "
++                      "reset_us={} max_us={}",
++                      N, B >> 20, TS::CALLRET_STACK_SIZE >> 10, Site, CallRetResetsBySite[0].load(std::memory_order_relaxed),
++                      CallRetResetsBySite[1].load(std::memory_order_relaxed), CallRetResetsBySite[2].load(std::memory_order_relaxed),
++                      CallRetResetUs.load(std::memory_order_relaxed), CallRetResetMaxUs.load(std::memory_order_relaxed));
+   }
+ }
+ } // namespace FEXCore::Core
+@@ -1431,6 +1448,22 @@ static void IosMonoTryActivate(ContextImpl* CTX, FEXCore::Core::InternalThreadSt
+ }
+ #endif
+ 
++/* Playport [diskcache]: FEX's disk cache (FEX_DISKCACHE=1) counts its hits
++ * only in the profiler. Count lookups that hit, lookups that missed and
++ * blocks stored, and log the totals every 4096 events, so a run's log shows
++ * how much of its translation the cache served. */
++static void DiskCacheCensus(int Kind) {
++  static std::atomic<uint64_t> Counts[3];
++  static std::atomic<uint64_t> Events;
++  Counts[Kind].fetch_add(1, std::memory_order_relaxed);
++  // The release app sets MADEIRA_NO_DIAGNOSTICS: count, but print nothing.
++  static const bool Quiet = getenv("MADEIRA_NO_DIAGNOSTICS") != nullptr;
++  if (((Events.fetch_add(1, std::memory_order_relaxed) + 1) & 0xfff) == 0 && !Quiet) {
++    LogMan::Msg::EFmt("[diskcache] hits={} misses={} stored={}", Counts[0].load(std::memory_order_relaxed),
++                      Counts[1].load(std::memory_order_relaxed), Counts[2].load(std::memory_order_relaxed));
++  }
++}
++
+ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP, uint64_t MaxInst) {
+   if constexpr (BLOCK_DEBUGGING) {
+     // Block debugging logic is hand-written and needs to be handled with care.
+@@ -2191,6 +2224,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+         LOGMAN_THROW_A_FMT(CachedHostCode != 0, "Couldn't find GuestRIP in Disk Cache entrypoints!");
+ 
+         FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedDiskCacheHitCount, 1);
++        DiskCacheCensus(0);
+         Thread->FrontendDecoder->DelayedDisownBuffer();
+ 
+         Thread->FrontendDecoder->ValidateDisownedOrFree();
+@@ -2199,6 +2233,9 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+       }
+     }
+     FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedDiskCacheMissCount, 1);
++    if (DiskCacheGuestCodeKey) {
++      DiskCacheCensus(1);
++    }
+   }
+ 
+   // Accumulate a JIT count now, as even if another thread raced us, it should count as a compile.
+@@ -2329,6 +2366,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+       const Frontend::Decoder::DecodedBlockInformation* BlockInfo =
+         NeedsAddGuestCodeRanges ? Thread->FrontendDecoder->GetDecodedBlockInfo() : nullptr;
+       DiskCache.Store(Thread, Region, GuestRIP, *DiskCacheGuestCodeKey, GuestCode, CompiledCode, Relocations, BlockInfo);
++      DiskCacheCensus(2);
+     }
+ 
+     if (CodeMapWriter && Region && Region->FileStartVA != 0) {

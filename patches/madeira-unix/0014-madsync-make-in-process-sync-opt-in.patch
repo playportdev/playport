@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] madsync: make in-process sync opt-in
+
+With in-process NT sync on, a thread blocked in madsync never makes the
+server wait that would run a system APC. iOS delivers no SIGUSR1, so the
+async completion that copies a named-pipe read's data never runs and the
+read returns 0 bytes (ladder rung 4, proc.named_pipe_*). madsync is now
+off unless madeira.cfg says inproc-sync = 1.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/madsync/madsync.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/build/madsync/madsync.c b/build/madsync/madsync.c
+index 39098d5..79ca132 100644
+--- a/build/madsync/madsync.c
++++ b/build/madsync/madsync.c
+@@ -125,9 +125,14 @@ int madsync_enabled(void)
+     static int state = -1;
+     if (state < 0)
+     {
+-        int on = madeira_cfg_bool( "inproc-sync", 1 );   /* ml1095: madeira.cfg inproc-sync = 0 disables */
++        /* Playport: off unless madeira.cfg says inproc-sync = 1. The server
++         * wakes an in-process wait only for user APCs (alert_sync); a system
++         * APC such as an async I/O completion needs SIGUSR1, which iOS never
++         * delivers, so a thread blocked here never copies a pipe read's data
++         * (ladder rung 4, proc.named_pipe_*: 0 bytes). */
++        int on = madeira_cfg_bool( "inproc-sync", 0 );
+         state = on;
+-        dprintf( 2, "[madsync] ml1058 in-process synchronisation %s (madeira.cfg inproc-sync = 0 disables)\n",
++        dprintf( 2, "[madsync] ml1058 in-process synchronisation %s (madeira.cfg inproc-sync = 1 enables)\n",
+                  on ? "ENABLED" : "disabled" );
+     }
+     return state;

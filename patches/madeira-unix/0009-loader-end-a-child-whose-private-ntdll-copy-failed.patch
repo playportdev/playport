@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] loader: end a child whose private ntdll copy failed
+
+A child fell back to the shared ntdll when its own copy failed, and the
+shared copy's .data cannot start a second process, so it crashed later.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/loader_ios.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index 1c296de..43a775c 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -3320,7 +3320,17 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+ 
+             if (ios_jit_copy_module_for_child(pLdrInitializeThunk, child_peb) != 0)
+             {
+-                dprintf(STDERR_FILENO, "[Wine child] ntdll copy FAILED — falling back to SHARED ntdll (module lists will collide!)\n");
++                /* Playport: the shared ntdll cannot start a child. Its .data
++                 * is the parent's, so loader_init finds the imports already
++                 * fixed up, takes the thread-attach branch, and thread_attach
++                 * reads the child PEB's NULL LdrData (fault at 0x30, then a
++                 * crash cascade in the fault handlers). The copy fails when the
++                 * JIT pool is exhausted, so end the child with STATUS_NO_MEMORY,
++                 * as a failed image map does: NtTerminateProcess records the
++                 * exit code and abort_process() ends only this pseudo-process. */
++                dprintf(STDERR_FILENO, "[Wine child] ntdll copy FAILED — ending the child with STATUS_NO_MEMORY\n");
++                NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
++                return;
+             }
+             else
+             {

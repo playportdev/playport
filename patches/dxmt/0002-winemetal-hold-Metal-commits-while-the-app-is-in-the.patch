@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] winemetal: hold Metal commits while the app is in the
+ background
+
+iOS silently drops command buffers committed while the app is in the
+background. Commits wait at the gate until the app is in front again.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 87 ++++++++++++++++++++++++++++-
+ 1 file changed, 86 insertions(+), 1 deletion(-)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 6664ef0..1d418c1 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1,5 +1,8 @@
+ #include <stdatomic.h>
+ #include "../../../../../build/madeira_cfg.h"   /* ml1095: one config file */
++#include <pthread.h>
++#include <time.h>
++#include <unistd.h>
+ #include <sys/mman.h>
+ #include <mach/vm_statistics.h>
+ #include <errno.h>
+@@ -59,6 +62,88 @@ typedef int NTSTATUS;
+  * down, past every handler this routes. */
+ #include "wmt_remote_client.h"
+ 
++/* Playport: the background GPU gate
++ * (docs/ARCHITECTURE.md, "Background GPU gate").
++ * iOS refuses GPU work from an app in the background: a command buffer
++ * committed after applicationDidEnterBackground returns ends with
++ * kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted and runs
++ * none of its commands. DXMT logs the error and still retires the chunk, so
++ * the guest is never told: a staging copy made in that buffer maps as memory
++ * the copy never wrote (all zero after the 2026-09-24 pad session's third
++ * trip to the Home Screen), and a render or upload in it is lost. The host
++ * closes the gate from its didEnterBackground handler and opens it again on
++ * willEnterForeground (winemetal_host_gpu_gate); while it is closed every
++ * commit waits here, on the committing thread, so the game stalls as it does
++ * on a blocked nextDrawable instead of losing work. The remote backend is
++ * not gated: it runs on a desktop host. */
++static pthread_mutex_t g_gpu_gate_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t g_gpu_gate_cond = PTHREAD_COND_INITIALIZER;
++static int g_gpu_gate_closed;          /* under g_gpu_gate_lock */
++static int g_gpu_gate_committing;      /* threads inside -commit, under the lock */
++static uint64_t g_gpu_gate_waited;     /* commits that met a closed gate, under the lock */
++static _Atomic int g_gpu_gate_unscheduled; /* committed, not yet scheduled */
++
++static void
++gpu_gate_commit(id<MTLCommandBuffer> cmdbuf) {
++  int waited = 0;
++  pthread_mutex_lock(&g_gpu_gate_lock);
++  while (g_gpu_gate_closed) {
++    waited = 1;
++    pthread_cond_wait(&g_gpu_gate_cond, &g_gpu_gate_lock);
++  }
++  g_gpu_gate_committing++;
++  g_gpu_gate_waited += waited;
++  pthread_mutex_unlock(&g_gpu_gate_lock);
++  atomic_fetch_add(&g_gpu_gate_unscheduled, 1);
++  [cmdbuf addScheduledHandler:^(id<MTLCommandBuffer> b) {
++    (void)b;
++    atomic_fetch_sub(&g_gpu_gate_unscheduled, 1);
++  }];
++  [cmdbuf commit];
++  pthread_mutex_lock(&g_gpu_gate_lock);
++  if (--g_gpu_gate_committing == 0)
++    pthread_cond_broadcast(&g_gpu_gate_cond);
++  pthread_mutex_unlock(&g_gpu_gate_lock);
++}
++
++/* Called by the host on the main thread: open = 0 from didEnterBackground,
++ * 1 from willEnterForeground. Closing waits for commits already under way,
++ * then up to 100 ms for the committed buffers to be scheduled, which Apple
++ * requires before the handler returns (work scheduled before the app leaves
++ * the foreground still runs). Returns the buffers still unscheduled after
++ * that wait (0 is the expected answer), or 0 when opening. */
++int
++winemetal_host_gpu_gate(int open) {
++  struct timespec t0, t1;
++  int left;
++  double ms;
++  uint64_t waited;
++  pthread_mutex_lock(&g_gpu_gate_lock);
++  if (open) {
++    g_gpu_gate_closed = 0;
++    waited = g_gpu_gate_waited;
++    pthread_cond_broadcast(&g_gpu_gate_cond);
++    pthread_mutex_unlock(&g_gpu_gate_lock);
++    dprintf(STDERR_FILENO, "[gpu-gate] open (commits held so far: %llu)\n", (unsigned long long)waited);
++    return 0;
++  }
++  g_gpu_gate_closed = 1;
++  while (g_gpu_gate_committing)
++    pthread_cond_wait(&g_gpu_gate_cond, &g_gpu_gate_lock);
++  pthread_mutex_unlock(&g_gpu_gate_lock);
++  clock_gettime(CLOCK_MONOTONIC, &t0);
++  for (;;) {
++    left = atomic_load(&g_gpu_gate_unscheduled);
++    clock_gettime(CLOCK_MONOTONIC, &t1);
++    ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
++    if (left <= 0 || ms >= 100.0)
++      break;
++    usleep(500);
++  }
++  dprintf(STDERR_FILENO, "[gpu-gate] closed: %d committed buffer(s) unscheduled after %.1f ms\n", left, ms);
++  return left > 0 ? left : 0;
++}
++
+ void
+ execute_on_main(dispatch_block_t block) {
+   if ([NSThread isMainThread]) {
+@@ -327,7 +412,7 @@ _MTLCommandBuffer_commit(void *obj) {
+     wmtr_call(RM_OP_COMMIT, &a, sizeof a, 0, 0, 0);
+     return STATUS_SUCCESS;
+   }
+-  [(id<MTLCommandBuffer>)params->handle commit];
++  gpu_gate_commit((id<MTLCommandBuffer>)params->handle);
+   return STATUS_SUCCESS;
+ }
+ 

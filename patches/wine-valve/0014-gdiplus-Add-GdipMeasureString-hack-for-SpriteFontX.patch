@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Esme Povirk <esme@codeweavers.com>
+Date: Wed, 27 Dec 2023 20:20:22 +0000
+Subject: [PATCH] gdiplus: Add GdipMeasureString hack for SpriteFontX.
+
+CW-Bug-Id: #23181
+Valve-commit: 3b4421a77037da4d50a6f1e2b45ed90441e0aed6
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/gdiplus/graphics.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dlls/gdiplus/graphics.c b/dlls/gdiplus/graphics.c
+index 6996f23..6e1d08f 100644
+--- a/dlls/gdiplus/graphics.c
++++ b/dlls/gdiplus/graphics.c
+@@ -6171,6 +6171,15 @@ GpStatus WINGDIPAPI GdipMeasureString(GpGraphics *graphics,
+     if(!graphics || !string || !font || !rect || !bounds)
+         return InvalidParameter;
+ 
++    if (length == 1 && string[0] == '\n')
++    {
++        /* Proton hack for SpriteFontX class used by TouHou Makuka Sai.
++         * Returned size is passed to Bitmap constructor, but we currently measure "\n" as zero size. */
++        char const *sgi = getenv("SteamGameId");
++        if (sgi && (!strcmp(sgi, "882710") || !strcmp(sgi, "1031480")))
++            string = L" ";
++    }
++
+     if(!has_gdi_dc(graphics))
+     {
+         hdc = temp_hdc = CreateCompatibleDC(0);

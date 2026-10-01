@@ -1,0 +1,13 @@
+# wine-pe: applied in this order with `git am -3` onto the wine pin in pins.lock plus patches/wine-port
+0001-ntdll-configure-from-a-clean-checkout.patch
+0002-ntdll-guard-the-arm64ec-only-IAT-probe-in-the-aarch6.patch
+0003-ntdll-store-each-TLS-index-into-the-module-s-JIT-poo.patch
+0004-ntdll-walk-RtlWalkFrameChain-in-PE-space-not-pool-sp.patch
+0005-ntdll-run-FEX-s-image-map-notification-as-a-syscall-.patch
+0006-win32u-guard-the-iOS-only-srcwatch-probe.patch
+0007-ntdll-take-the-XInput-DLLs-from-system32-never-from-.patch
+0008-ffmpeg-narrow-B-first-in-the-ARM64EC-yuv2rgb-NEON.patch
+0009-kernelbase-pass-the-WCHAR-count-to-GetEnvironmentVar.patch
+0010-ntdll-resolve-a-data-export-of-an-ARM64EC-module-to-.patch
+0011-user32-log-each-message-box-s-caption-and-text.patch
+0012-ntdll-count-the-lock-wait-on-address-and-QPC-census-.patch

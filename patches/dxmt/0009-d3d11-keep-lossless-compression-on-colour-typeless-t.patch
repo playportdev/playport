@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 02:10:45 +0200
+Subject: [PATCH] d3d11: keep lossless compression on colour typeless textures
+
+Metal turns off lossless framebuffer compression on GPU family 5 and
+later for a texture with MTLTextureUsagePixelFormatView. DXMT set that
+flag on every TYPELESS texture, and Unity makes its render textures
+TYPELESS, so each of Hollow Knight's full-screen passes at native
+resolution read and wrote uncompressed colour: the frame is bandwidth
+bound. Metal needs the flag only for a view that changes the component
+layout, and a colour typeless family never does (UNORM, SNORM, UINT,
+SINT; an sRGB view needs no flag). Depth/stencil plane views and block
+compressed formats keep it. DXMT_TYPELESS_PFV=1 restores the flag
+everywhere. A view that changes the format of a texture made without the
+flag is logged as [pfv-view], for the first 32 such views.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-26-hk-lossless-compression.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_resource_helper.cpp | 16 ++++++++++++++--
+ src/dxmt/dxmt_texture.cpp           | 19 +++++++++++++++++++
+ 2 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/src/d3d11/d3d11_resource_helper.cpp b/src/d3d11/d3d11_resource_helper.cpp
+index edea275..20de2e4 100644
+--- a/src/d3d11/d3d11_resource_helper.cpp
++++ b/src/d3d11/d3d11_resource_helper.cpp
+@@ -4,6 +4,7 @@
+ #include "d3d11_resource.hpp"
+ #include "d3d11_1.h"
+ #include "util_math.hpp"
++#include "util_env.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -367,8 +368,19 @@ CreateMTLTextureDescriptorInternal(
+   }
+ 
+   if (metal_format.Flag & MTL_DXGI_FORMAT_TYPELESS) {
+-    // well this is necessary for passing validation layer
+-    metal_usage |= WMTTextureUsagePixelFormatView;
++    /* Playport: pixelFormatView turns off Apple's lossless framebuffer
++     * compression (GPU family 5 and later), and Unity makes its render
++     * textures TYPELESS, so every full-screen pass paid uncompressed
++     * bandwidth. Metal needs the flag only for a view that changes the
++     * component layout; a colour typeless family keeps the layout (UNORM,
++     * SNORM, UINT, SINT, and sRGB, which needs no flag). Depth/stencil
++     * (plane views) and block-compressed formats keep it.
++     * DXMT_TYPELESS_PFV=1 restores the flag on every typeless format. */
++    static const bool always_pfv = env::getEnvVar("DXMT_TYPELESS_PFV") == "1";
++    if (always_pfv ||
++        (metal_format.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER |
++                              MTL_DXGI_FORMAT_BC)))
++      metal_usage |= WMTTextureUsagePixelFormatView;
+   }
+ 
+   if (metal_format.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)) {
+diff --git a/src/dxmt/dxmt_texture.cpp b/src/dxmt/dxmt_texture.cpp
+index e367bc8..b6fb2ab 100644
+--- a/src/dxmt/dxmt_texture.cpp
++++ b/src/dxmt/dxmt_texture.cpp
+@@ -18,6 +18,8 @@
+ 
+ #include "dxmt_texture.hpp"
+ #include "dxmt_residency.hpp"
++#include "log/log.hpp"
++#include <atomic>
+ #include "wsi_platform.hpp"
+ #include <atomic>
+ #include <cassert>
+@@ -49,6 +51,23 @@ TextureView::TextureView(TextureAllocation *allocation, unsigned index, TextureV
+     allocation(allocation),
+     key(descriptor, index, allocation->descriptor->miplevelCount()) {
+   auto parent = allocation->texture();
++  /* Playport: a view that changes the pixel format of a texture made without
++   * pixelFormatView (a colour typeless family, see
++   * CreateMTLTextureDescriptorInternal) is reported, the first 32 such views, so
++   * a layout change there shows in the log. */
++  if (!(allocation->descriptor->usage() & WMTTextureUsagePixelFormatView)) {
++    unsigned from = ORIGINAL_FORMAT(allocation->descriptor->pixelFormat());
++    unsigned to = ORIGINAL_FORMAT(descriptor.format);
++    auto srgb_pair = [](unsigned a, unsigned b) {
++      return (a == WMTPixelFormatRGBA8Unorm && b == WMTPixelFormatRGBA8Unorm_sRGB) ||
++             (a == WMTPixelFormatBGRA8Unorm && b == WMTPixelFormatBGRA8Unorm_sRGB);
++    };
++    if (from != to && !srgb_pair(from, to) && !srgb_pair(to, from)) {
++      static std::atomic<unsigned> reported{0};
++      if (reported.fetch_add(1, std::memory_order_relaxed) < 32)
++        ERR("[pfv-view] texture format ", from, " viewed as ", to, " without pixelFormatView");
++    }
++  }
+   texture = parent.newTextureView(
+       descriptor.format, descriptor.type, descriptor.firstMiplevel, descriptor.miplevelCount,
+       descriptor.firstArraySlice, descriptor.arraySize,
+-- 
+2.55.0
+

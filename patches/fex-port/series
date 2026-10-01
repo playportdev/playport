@@ -1,0 +1,69 @@
+# fex-port: Madeira's iOS port of FEX (willfaust/FEX at the pins.lock fex-port
+# commit), rebased onto the pins.lock fex commit of FEX-Emu/FEX. Applied in
+# this order with `git am -3`, before patches/fex. Each Madeira commit names
+# its original in Madeira-commit: and whether the rebase was clean; the last
+# patch is Playport's adaptation to the new base. The port's External/rpmalloc
+# gitlink moves are not carried here: rpmalloc is patches/rpmalloc-port.
+0001-iOS-ARM64-port-of-FEXCore-for-jailed-iOS-devices.patch
+0002-arm64ec-substitute-x18-TEB-reads-with-TPIDRRO_EL0-TS.patch
+0003-WIP-arm64ec-linker-workarounds-for-llvm-mingw-22.1.4.patch
+0004-Revert-WIP-arm64ec-linker-workarounds-for-llvm-mingw.patch
+0005-arm64ec-build-libarm64ecfex.dll-cleanly-on-macOS-hos.patch
+0006-windows-common-encode-UNIMPLEMENTED-location-in-exit.patch
+0007-config-function-local-static-for-ConfigLayers-iOS-bi.patch
+0008-config-revert-mixed-allocator-bisect-keep-static_cas.patch
+0009-iOS-host-bypass-Linux-Windows-CPU-detection-hand-rol.patch
+0010-iOS-host-Meyers-singletonize-ThreadCreationMutex-Thr.patch
+0011-WinAPI-IO-implement-GetStdHandle-WriteConsoleA-Write.patch
+0012-LookupCache-pre-commit-guest-RIP-host-block-region-o.patch
+0013-ARM64EC-log-ThreadInit-entry-exit-EmulatorData-0-Ent.patch
+0014-iOS-dispatcher-fixes-skip-EC-mark-for-block-CodeBuff.patch
+0015-iOS-runtime-patch-FEX-dispatcher-SpillStaticRegs-in-.patch
+0016-ARM64EC-don-t-hold-ThreadCreationMutex-across-memory.patch
+0017-iOS-dispatcher-shift-first-SpillStaticRegs-site-to-e.patch
+0018-iOS-ARM64EC-set-gs_cached-TEB-in-ThreadInit.patch
+0019-iOS-refuse-to-compile-guest-RIP-0x10000-to-prevent-c.patch
+0020-iOS-ARM64EC-write-dispatcher-SpillStaticRegs-patches.patch
+0021-iOS-ARM64EC-add-JIT-pool-alias-awareness-to-FEX-rang.patch
+0022-iOS-ARM64EC-reload-REG_CALLRET_SP-x17-before-CALL-em.patch
+0023-iOS-ARM64EC-SEH-survival-plumbing-callret-bump-guest.patch
+0024-iOS-ARM64EC-Tier-2-inline-callret-bounds-guard-Thump.patch
+0025-iOS-dual-map-fast-write-infra-trap-mode-default-iOS-.patch
+0026-iOS-ARM64EC-translate-x64-EC-targets-PE-pool-in-Exit.patch
+0027-iOS-fix-new-thread-OOM-death-shrink-per-thread-Looku.patch
+0028-iOS-fix-cross-core-icache-staleness-NtFlushInstructi.patch
+0029-iOS-adapt-to-FEX-2607-API-platform-changes-build-fix.patch
+0030-iOS-adapt-to-FEX-2607-new-unixlib-architecture-no-op.patch
+0031-Mythic-FEX-2607-CRT_iOS-rpmalloc-init-un-no-op-the-C.patch
+0032-Mythic-survive-allocation-failure-lazy-rpmalloc-thre.patch
+0033-iOS-never-remove-exec-intervals-for-a-bulk-non-exec-.patch
+0034-iOS-fix-off-by-8-in-ret_sp_misaligned-for-variadic-A.patch
+0035-iOS-probe-unimplemented-128-bit-CASPAL-with-its-targ.patch
+0036-iOS-implement-128-bit-CASPAL-bound-the-callret-leak-.patch
+0037-ios-52-pool-alias-RIP-redirect-ExitToX64-FFS-bypass-.patch
+0038-ios-51-SOLVED-ThreadPauseHandler-fall-through-FEX-ho.patch
+0039-iOS-Mythic-exception-path-pool-alias-RIP-fix-rpmallo.patch
+0040-iOS-Mythic-alias-table-overlap-purge-on-add-stale-al.patch
+0041-iOS-Mythic-footprint-reclaim-exec-alloc-hardening-ml.patch
+0042-iOS-Mythic-60-drain-self-repair-L1-cap-EC-exception-.patch
+0043-iOS-Mythic-JIT-lock-family-74-75-80-code-buffer-life.patch
+0044-iOS-Mythic-ml486-89-bound-the-NoExec-log-and-name-th.patch
+0045-iOS-Mythic-ml513-report-the-effective-TSO-configurat.patch
+0046-Mythic-exact-guest-RIP-from-host-PC-AVX-exoneration-.patch
+0047-FEX-release-thread-lock-holds-at-exit-IR-validate-an.patch
+0048-FEX-wake-the-dormant-Mono-backpatcher-optimisation-o.patch
+0049-FEX-publish-the-runtime-diagnostic-switch-through-th.patch
+0050-ARM64EC-anon-alias-atomic-coverage-and-SMC-retry.patch
+0051-Follow-rpmalloc-s-runtime-selected-VA-band-instead-o.patch
+0052-Read-the-TEB-from-the-TSD-slot-wine-owns-not-from-ha.patch
+0053-Add-a-loader-safe-image-registration-export-and-reco.patch
+0054-Rename-the-project-from-Mythic-to-Madeira.patch
+0055-Establish-the-licensing-boundary-for-Madeira-s-modif.patch
+0056-Defer-the-band-selector-s-log-until-a-logging-path-e.patch
+0057-Allocator-and-call-return-stack-hardening-for-the-iO.patch
+0058-Licensing-draft-converter-exception-for-the-Madeira-.patch
+0059-Licensing-the-exception-takes-effect-at-the-adoption.patch
+0060-iOS-JIT-retry-code-generation-sweeps-while-holders-w.patch
+0061-ARM64EC-transition-counters-last-hit-alias-cache-L1-.patch
+0062-Licensing-the-converter-exception-is-adopted-2026-09.patch
+0063-iOS-adapt-to-FEX-2609-guest-exception-delivery-disk-.patch

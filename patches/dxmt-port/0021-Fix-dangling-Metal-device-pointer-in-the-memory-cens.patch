@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 16 Aug 2026 12:35:06 +0800
+Subject: [PATCH] Fix dangling Metal device pointer in the memory census
+
+mem_census_set_device() was handed &device, a pointer to a BY-VALUE
+constructor parameter of BufferAllocation. It dangled the moment the
+constructor returned, so every mem_census_report() called
+currentAllocatedSize() through a reused stack slot.
+
+The symptom was visible for several builds and misread as harmless: the
+census printed "METAL currentAllocatedSize=0MB" while labelling that
+figure authoritative. Thumper then died on sig=5 (SIGTRAP) at a system
+library address on a non-guest thread, ~294 census reports into the run,
+which is what calling a Metal method on a garbage handle looks like.
+
+WMT::Device is a thin handle wrapper, so hold it by value; there was
+never a reason to take its address. Thumper boots and plays again, and
+the Metal figure is trustworthy for the first time.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Madeira-commit: 7cda64a16896b8ee39b0ba60e6770d7f0710aa88
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/dxmt/dxmt_buffer.cpp     |  2 +-
+ src/dxmt/dxmt_mem_census.cpp | 13 ++++++++++---
+ src/dxmt/dxmt_mem_census.hpp |  2 +-
+ 3 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/src/dxmt/dxmt_buffer.cpp b/src/dxmt/dxmt_buffer.cpp
+index 0f4a16d..2464b31 100644
+--- a/src/dxmt/dxmt_buffer.cpp
++++ b/src/dxmt/dxmt_buffer.cpp
+@@ -58,7 +58,7 @@ BufferAllocation::BufferAllocation(WMT::Device device, const WMTBufferInfo &info
+    * gap between mem-census buffer live and the sum of the site rows. */
+   mem_census_add(MEMOWN_BUFFER, census_bytes_);
+   mem_census_buffer_detail(census_bytes_, census_storage_, census_flags_, 1);
+-  mem_census_set_device(&device);
++  mem_census_set_device(device);   /* ml696 */
+   gpuAddress_ = info_.gpu_address;
+   mappedMemory_ = info_.memory.get_accessible_or_null();
+ };
+diff --git a/src/dxmt/dxmt_mem_census.cpp b/src/dxmt/dxmt_mem_census.cpp
+index 6fef2bf..5799585 100644
+--- a/src/dxmt/dxmt_mem_census.cpp
++++ b/src/dxmt/dxmt_mem_census.cpp
+@@ -151,10 +151,17 @@ dyn_census_report(void) {
+  * and then never implemented it, so the census reported REQUESTED capacity while
+  * reading as though it were physical footprint. Metal's own number is the only
+  * thing that reconciles our owner totals against tag 100. */
+-static WMT::Device *g_census_device;
++/* ml696: ml678 stored &device -- a pointer to a BY-VALUE CONSTRUCTOR PARAMETER,
++ * so it dangled the moment BufferAllocation's constructor returned. Every census
++ * report since then called currentAllocatedSize() through a stack address that
++ * had been reused, which is why this line always printed 0MB and why Thumper
++ * died on a SIGTRAP inside a system library on a non-guest thread. WMT::Device
++ * is a thin handle wrapper, so hold it by VALUE. */
++static WMT::Device g_census_device {};
++static bool g_census_device_valid = false;
+ 
+ void
+-mem_census_set_device(WMT::Device *d) { g_census_device = d; }
++mem_census_set_device(WMT::Device d) { g_census_device = d; g_census_device_valid = true; }
+ 
+ void
+ mem_census_report(const char *why) {
+@@ -164,7 +171,7 @@ mem_census_report(const char *why) {
+     tp += g_mem_census.peak[i].load(std::memory_order_relaxed);
+     tr += g_mem_census.requested[i].load(std::memory_order_relaxed);
+   }
+-  uint64_t metal = g_census_device ? g_census_device->currentAllocatedSize() : 0;
++  uint64_t metal = g_census_device_valid ? g_census_device.currentAllocatedSize() : 0;
+   ERR("[mem-census] ml678 why=", why, " LIVE=", tl >> 20, "MB peak-sum=", tp >> 20,
+       "MB requested=", tr >> 20, "MB | METAL currentAllocatedSize=", metal >> 20,
+       "MB (authoritative; our LIVE is requested capacity, not residency)");
+diff --git a/src/dxmt/dxmt_mem_census.hpp b/src/dxmt/dxmt_mem_census.hpp
+index 03ccbdf..32fb654 100644
+--- a/src/dxmt/dxmt_mem_census.hpp
++++ b/src/dxmt/dxmt_mem_census.hpp
+@@ -201,7 +201,7 @@ mem_census_buffer_detail(uint64_t bytes, uint32_t storage_mode, uint32_t flag_bi
+ }
+ 
+ void mem_census_report(const char *why);
+-void mem_census_set_device(WMT::Device *d);   /* ml678 */
++void mem_census_set_device(WMT::Device d);    /* ml696: BY VALUE, never a pointer */
+ 
+ inline void
+ mem_census_add(MemOwner o, uint64_t bytes) {

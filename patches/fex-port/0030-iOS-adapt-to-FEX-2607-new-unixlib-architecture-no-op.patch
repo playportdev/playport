@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 8 Jul 2026 15:09:25 +0800
+Subject: [PATCH] iOS: adapt to FEX-2607 new unixlib architecture (no-op
+ FEXUnixLib on iOS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+FEX-2607 split FEXUnixLib into Common (PE-side caller) + UnixLib (unix funcs
+table) and made the PE side route VirtualName/VirtualTHPControl/TSO/SHM through
+__wine_unix_call into that new funcs table. iOS has no separate libarm64ecfex
+.so unixlib, so the load-by-name handle path (and the legacy Illegal:: path,
+which fires raw Linux prctl/madvise syscalls) don't apply — the dispatcher
+indexed a wrong table and blr'd into code bytes (0x913c...=ADRP+ADD pair),
+killing every x64 program.
+
+- Force iOS to the old MemoryWineUnixFuncs-on-__ImageBase handle path.
+- No-op all 6 FEXUnixLib entry points on iOS (VMA naming / THP hints / SHM
+  stats are cosmetic; TSO/atomic fall back to software, which is correct since
+  our hand-rolled HostFeatures doesn't advertise hardware TSO). Matches ios-port,
+  which never had this FEXUnixLib layer.
+
+Result: unix calls flow (50+ ok); Thumper now loads d3d11/winemetal/fmod64/
+openvr and runs deep into startup (was: instant fault storm).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Madeira-commit: 412d12118bcccab437d4c372a2f88c4cf1dfd1bc
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/Common/FEXUnixLib.cpp | 55 +++++++++++++++++++++++++++-
+ 1 file changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/Common/FEXUnixLib.cpp b/Source/Windows/Common/FEXUnixLib.cpp
+index 3188034..8e14475 100644
+--- a/Source/Windows/Common/FEXUnixLib.cpp
++++ b/Source/Windows/Common/FEXUnixLib.cpp
+@@ -76,9 +76,23 @@ bool Init(HMODULE NtDll) {
+     return NtQueryVirtualMemory(NtCurrentProcess(), &__ImageBase, MemoryWineUnixFuncs, &UnixLibHandle, sizeof(UnixLibHandle), nullptr) == 0;
+   };
+ 
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic (FEX-2607 rebase): the new load-by-name unixlib method
++   * (TryNewWineMethod) expects a separate "libarm64ecfex" .so unixlib. iOS has
++   * no .so files — load_unixlib_by_name dlopen()s a nonexistent path and can
++   * return a bogus handle whose funcs table is garbage; the dispatcher then
++   * blr's into code bytes (the post-rebase fault storm). The old
++   * MemoryWineUnixFuncs-on-__ImageBase path is the one our iOS ntdll-unix
++   * actually implements and what ios-port always used. Force it. */
++  (void)TryNewWineMethod;
++  if (!TryOldWineMethod()) {
++    return false;
++  }
++#else
+   if (!TryNewWineMethod() && !TryOldWineMethod()) {
+     return false;
+   }
++#endif
+ 
+ #ifdef ARCHITECTURE_arm64ec
+   UnixCallDispatcherDirect = *reinterpret_cast<decltype(__wine_unix_call_dispatcher)*>(Sym);
+@@ -88,7 +102,7 @@ bool Init(HMODULE NtDll) {
+ #endif
+ 
+   // Give a log saying that the unix lib was loaded.
+-  LogMan::Msg::IFmt("FEX: Loaded FEXUnixLib");
++  LogMan::Msg::IFmt("FEX: Loaded FEXUnixLib (UnixLibHandle=0x{:x})", static_cast<unsigned long long>(UnixLibHandle));
+   return true;
+ }
+ 
+@@ -97,6 +111,13 @@ bool Available() {
+ }
+ 
+ bool TryEnableHardwareTSO() {
++#ifdef FEX_IOS_HOST
++  // iOS: FEX-2607's FEXUnixLib funcs table isn't registered on the iOS unix
++  // side, and the legacy Illegal:: paths issue raw Linux syscalls (unsafe on
++  // XNU). No-op every entry point; FEX falls back to software TSO, which is
++  // correct (our hand-rolled HostFeatures doesn't advertise hardware TSO).
++  return false;
++#endif
+   if (!Available()) {
+     return false;
+   }
+@@ -109,6 +130,10 @@ bool TryEnableHardwareTSO() {
+ }
+ 
+ bool SetKernelUnalignedAtomicControl(uint64_t Flags) {
++#ifdef FEX_IOS_HOST
++  (void)Flags;
++  return false;
++#endif
+   if (!Available()) {
+     return false;
+   }
+@@ -121,6 +146,12 @@ bool SetKernelUnalignedAtomicControl(uint64_t Flags) {
+ }
+ 
+ void VirtualTHPControl(const void* Ptr, size_t Size, FEXCore::Allocator::THPControl Control) {
++#ifdef FEX_IOS_HOST
++  (void)Ptr;
++  (void)Size;
++  (void)Control;
++  return;
++#endif
+   if (!Available()) {
+     return;
+   }
+@@ -135,6 +166,12 @@ void VirtualTHPControl(const void* Ptr, size_t Size, FEXCore::Allocator::THPCont
+ }
+ 
+ void VirtualName(const char* Name, const void* Ptr, size_t Size) {
++#ifdef FEX_IOS_HOST
++  (void)Name;
++  (void)Ptr;
++  (void)Size;
++  return;
++#endif
+   if (!SupportsVirtualName || !Available()) {
+     return;
+   }
+@@ -151,6 +188,12 @@ void VirtualName(const char* Name, const void* Ptr, size_t Size) {
+ }
+ 
+ SHMSlotResult AllocateSHMSlots(void* SHMBase, uint32_t MapSize, uint32_t MaxSize) {
++#ifdef FEX_IOS_HOST
++  (void)SHMBase;
++  (void)MapSize;
++  (void)MaxSize;
++  return {};
++#endif
+   if (!Available()) {
+     return {};
+   }
+@@ -172,6 +215,9 @@ SHMSlotResult AllocateSHMSlots(void* SHMBase, uint32_t MapSize, uint32_t MaxSize
+ }
+ 
+ void DeleteSHMStatsFile() {
++#ifdef FEX_IOS_HOST
++  return;
++#endif
+   if (!Available()) {
+     return;
+   }
+@@ -180,6 +226,13 @@ void DeleteSHMStatsFile() {
+ }
+ 
+ void* MapFile(HANDLE FileHandle, uint64_t MapSize) {
++#ifdef FEX_IOS_HOST
++  // Upstream's DiskCache mmap reads (2a82f5819) also go through the funcs
++  // table the iOS unix side does not register; callers fall back to reads.
++  (void)FileHandle;
++  (void)MapSize;
++  return nullptr;
++#endif
+   if (Available() && WineServerHandleToFd) {
+     FEXUnixLib_MapFile Args {
+       .FD = -1,

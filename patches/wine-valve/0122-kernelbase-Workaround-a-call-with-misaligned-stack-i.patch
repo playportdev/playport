@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 19 Dec 2025 18:30:54 -0600
+Subject: [PATCH] kernelbase: Workaround a call with misaligned stack in
+ OpenMutexW().
+
+CW-Bug-Id: #26378
+Valve-commit: 742845481e46cd0f5df7d44e596c378abbd78429
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/sync.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/kernelbase/sync.c b/dlls/kernelbase/sync.c
+index 90785ef..880091c 100644
+--- a/dlls/kernelbase/sync.c
++++ b/dlls/kernelbase/sync.c
+@@ -769,7 +769,7 @@ HANDLE WINAPI DECLSPEC_HOTPATCH OpenMutexW( DWORD access, BOOL inherit, LPCWSTR
+ {
+     HANDLE ret;
+     UNICODE_STRING nameW;
+-    OBJECT_ATTRIBUTES attr;
++    DECLSPEC_ALIGN(32) OBJECT_ATTRIBUTES attr;
+ 
+     if (!is_version_nt()) access = MUTEX_ALL_ACCESS;
+ 

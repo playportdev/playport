@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 27 Jul 2026 19:55:02 +0800
+Subject: [PATCH] =?UTF-8?q?Mythic:=20=F0=9F=9B=9F=20survive=20allocation?=
+ =?UTF-8?q?=20failure=20=E2=80=94=20lazy=20rpmalloc=20thread-init=20+=20dr?=
+ =?UTF-8?q?op-not-crash=20logger?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two unchecked-NULL deaths during ARM64EC child boot on iOS, both of which
+destroyed the diagnostic that would have named the real bug.
+
+AllocatorHooks: threads that enter FEX without passing through InitCRTThread
+(wine loader threads during EC child boot) had no rpmalloc thread heap, so
+every hook returned NULL. Lazily initialize at the hook boundary —
+rpmalloc_is_thread_initialized() is a cheap TLS read.
+
+LogManager MFmtImpl: the allocator returning NULL on the logging thread fed an
+unchecked memmove(NULL) inside vformat, killing the process while formatting a
+message. Probe the allocator and drop the message instead of crashing; the
+child surviving matters more than the text. A raw write(2) emit was tried first
+and ALSO crashed — in a pseudo-process child the FEX pool copy's .data is
+cloned, so the CRT file table and rpmalloc state are invalid there and nothing
+in this DLL that touches its own globals is safe. Message identity is parked in
+LastDroppedFmt, a plain pointer store that cannot fail.
+
+Later work proved the NULLs were downstream of Wine returning
+STATUS_NO_MEMORY, not of FEX itself — but hardening the failure path is what
+made that diagnosable at all.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Madeira-commit: fa15626253b73d59fde6632d645838aee823dc13
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Utils/AllocatorHooks.cpp | 22 +++++++++++++++++++
+ FEXCore/Source/Utils/LogManager.cpp     | 29 ++++++++++++++++++++++++-
+ 2 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/FEXCore/Source/Utils/AllocatorHooks.cpp b/FEXCore/Source/Utils/AllocatorHooks.cpp
+index 0b1e685..5b8ed46 100644
+--- a/FEXCore/Source/Utils/AllocatorHooks.cpp
++++ b/FEXCore/Source/Utils/AllocatorHooks.cpp
+@@ -66,37 +66,59 @@ static rpmalloc_config_t global_config {
+   .unmap_on_finalize = 0,
+ };
+ 
++// iOS-Mythic (ml107-ml109): threads that enter FEX without passing through
++// InitCRTThread (wine loader threads during EC child boot) have no rpmalloc
++// thread heap, so every hook below returned NULL/failed. The observed death:
++// LogMan::Msg::MFmtImpl -> aligned_alloc == NULL -> unchecked memmove(NULL)
++// -> c0000005 in ntdll memcpy, killing the child before the message it was
++// formatting ever surfaced. Lazily initialize the thread heap at the hook
++// boundary; rpmalloc_is_thread_initialized() is a cheap TLS read.
++static inline void EnsureThreadHeap() {
++  if (!::rpmalloc_is_thread_initialized()) {
++    ::rpmalloc_thread_initialize();
++  }
++}
++
+ void* malloc(size_t size) {
++  EnsureThreadHeap();
+   return ::rpmalloc(size);
+ }
+ void* calloc(size_t n, size_t size) {
++  EnsureThreadHeap();
+   return ::rpcalloc(n, size);
+ }
+ void* memalign(size_t align, size_t s) {
++  EnsureThreadHeap();
+   return ::rpmemalign(align, s);
+ }
+ void* valloc(size_t size) {
++  EnsureThreadHeap();
+   return ::rpaligned_alloc(global_config.page_size, size);
+ }
+ int posix_memalign(void** r, size_t a, size_t s) {
+   void* ptr;
++  EnsureThreadHeap();
+   auto res = ::rpposix_memalign(&ptr, a, s);
+   *r = ptr;
+   return res;
+ }
+ void* realloc(void* ptr, size_t size) {
++  EnsureThreadHeap();
+   return ::rprealloc(ptr, size);
+ }
+ void free(void* ptr) {
++  EnsureThreadHeap();
+   return ::rpfree(ptr);
+ }
+ size_t malloc_usable_size(void* ptr) {
+   return ::rpmalloc_usable_size(ptr);
+ }
+ void* aligned_alloc(size_t a, size_t s) {
++  EnsureThreadHeap();
+   return ::rpaligned_alloc(a, s);
+ }
+ void aligned_free(void* ptr) {
++  EnsureThreadHeap();
+   return ::rpfree(ptr);
+ }
+ 
+diff --git a/FEXCore/Source/Utils/LogManager.cpp b/FEXCore/Source/Utils/LogManager.cpp
+index 002bb62..f5641d9 100644
+--- a/FEXCore/Source/Utils/LogManager.cpp
++++ b/FEXCore/Source/Utils/LogManager.cpp
+@@ -39,7 +39,34 @@ namespace Msg {
+     Handler = nullptr;
+   }
+ 
+-  void MFmtImpl(DebugLevels level, const char* fmt, const fmt::format_args& args) {
++  // iOS-Mythic ml115: last format string that reached MFmtImpl, exported so a
++// crash dump can name the message even when every output channel is unusable
++// in a cloned pool copy. Plain pointer store — cannot fail.
++extern "C" __attribute__((visibility("default"))) const char* LastDroppedFmt = nullptr;
++
++void MFmtImpl(DebugLevels level, const char* fmt, const fmt::format_args& args) {
++    // iOS-Mythic (ml107/ml114): three separate child deaths traced to THIS
++    // function — the allocator returned NULL on the logging thread and the
++    // unchecked memmove inside vformat/fextl::string killed the process, so
++    // the message that would have named the real bug never surfaced. Emit the
++    // raw format string first via write(2): it is a compile-time literal and
++    // needs no allocation, so the complaint is readable even if everything
++    // below fails. Then probe the allocator and drop the formatted message
++    // gracefully instead of crashing.
++    // ml115: the write(2) raw-emit itself crashed — in a pseudo-process child
++    // the FEX pool copy's .data is cloned, so the CRT file table (and the
++    // rpmalloc heap state) are invalid in that copy; NOTHING in this DLL that
++    // touches its own globals is safe there. Probe the allocator and drop the
++    // message silently rather than crash; the child surviving matters more
++    // than the message text. (Message identity: park the fmt pointer in a
++    // fixed global so a debugger/fault dump can retrieve it — a pointer store
++    // to our own .data is the only side effect that cannot fail.)
++    LastDroppedFmt = fmt;
++    void* probe = FEXCore::Allocator::malloc(64);
++    if (!probe) {
++      return;   // allocator dead in this copy — drop the message, survive
++    }
++    FEXCore::Allocator::free(probe);
+     if (Handler) {
+       const auto msg = fextl::fmt::vformat(fmt, args);
+       Handler(level, msg.c_str());

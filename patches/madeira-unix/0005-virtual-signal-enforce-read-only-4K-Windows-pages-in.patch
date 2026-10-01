@@ -1,0 +1,337 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] virtual, signal: enforce read-only 4K Windows pages inside a
+ 16K host page
+
+A 16K host page holds four 4K Windows pages; a read-only 4K page next to a
+writable one could not be enforced. Writes to the writable parts of such a
+split page are emulated (including LSE atomics), and a legal write the
+store emulator cannot handle opens the page briefly.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 129 ++++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c      |  85 ++++++++++++++++++
+ 2 files changed, 214 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index b6f4a34..3fb5398 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -2975,6 +2975,47 @@ static void *ios_mach_exception_thread( void *arg )
+                 } else {
+                     rw_addr = ios_jit_anon_alias_lookup(fault_addr);
+                 }
++                /* split-page: a write to a writable 4KB page of a host
++                 * page that virtual_ios.c keeps unwritable for a read-only
++                 * neighbour (ios_host_page_split). Complete it through a transient
++                 * RW alias of the host page; a write to the read-only page itself
++                 * is not allowed here and raises the access violation below. */
++                mach_vm_address_t split_alias = 0;
++                mach_vm_size_t split_len = 0;
++                if (!rw_addr && !in_jit && req->exception == EXC_BAD_ACCESS)
++                {
++                    extern int ios_split_page_write_allowed( unsigned long long va );
++                    arm_exception_state64_t ses;
++                    mach_msg_type_number_t sesc = ARM_EXCEPTION_STATE64_COUNT;
++                    if (thread_get_state( thread, ARM_EXCEPTION_STATE64, (thread_state_t)&ses, &sesc ) == KERN_SUCCESS
++                        && ((ses.__esr >> 6) & 1)
++                        && ios_split_page_write_allowed( (unsigned long long)fault_addr ))
++                    {
++                        mach_vm_address_t pg = (mach_vm_address_t)fault_addr & ~(mach_vm_address_t)0x3fff;
++                        vm_prot_t cur = 0, max = 0;
++                        split_len = ((fault_addr & 0x3fff) + 32 > 0x4000) ? 0x8000 : 0x4000;
++                        if (mach_vm_remap( mach_task_self(), &split_alias, split_len, 0, VM_FLAGS_ANYWHERE,
++                                           mach_task_self(), pg, FALSE, &cur, &max, VM_INHERIT_NONE ) == KERN_SUCCESS)
++                        {
++                            if (mach_vm_protect( mach_task_self(), split_alias, split_len, FALSE,
++                                                 VM_PROT_READ | VM_PROT_WRITE ) == KERN_SUCCESS)
++                                rw_addr = (uintptr_t)(split_alias + ((mach_vm_address_t)fault_addr - pg));
++                            else
++                            {
++                                mach_vm_deallocate( mach_task_self(), split_alias, split_len );
++                                split_alias = 0;
++                            }
++                        }
++                        else split_alias = 0;
++                        {
++                            static unsigned split_n;
++                            if (++split_n <= 8 || !(split_n & 0xfff))
++                                dprintf( STDERR_FILENO, "[split-page] #%u write pc=0x%llx addr=0x%llx -> %s\n", split_n,
++                                         (unsigned long long)__darwin_arm_thread_state64_get_pc(state),
++                                         (unsigned long long)fault_addr, rw_addr ? "alias" : "NO alias" );
++                        }
++                    }
++                }
+                 /* ml348 DISCRIMINATOR: a write fault with NO alias is a
+                  * different bug from a write fault whose instruction we can't
+                  * decode, and the two need opposite fixes. Without this the
+@@ -3103,6 +3144,7 @@ static void *ios_mach_exception_thread( void *arg )
+                         /* The WHOLE 32-byte destination must live in the SAME alias, or the
+                          * second copy would land outside it. */
+                         uintptr_t rw_end = in_jit ? (uintptr_t)(rw + ((fault_addr + 31) - rx))
++                                         : split_alias ? ((fault_addr & 0x3fff) + 31 < split_len ? (uintptr_t)rw_addr + 31 : 0)
+                                                   : (uintptr_t)ios_jit_anon_alias_lookup( fault_addr + 31 );
+                         if (!rw_end || rw_end != (uintptr_t)rw_addr + 31)
+                         {
+@@ -3572,6 +3614,62 @@ static void *ios_mach_exception_thread( void *arg )
+                                         (unsigned long long)rw_addr, cas_width);
+                         }
+                     }
++                    /* split-page: LSE atomic memory operations, aligned.
++                     *   size(2) 111 0 00 A R 1 Rs o3=0 opc(3) 00 Rn Rt; mask 0x3F208C00, value 0x38200000
++                     * LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/LDUMAX/LDUMIN and their ST* aliases
++                     * (Rt = 31): old = mem[Rn]; mem[Rn] = op(old, Rs); Rt = old. FEX emits
++                     * them for x86 lock-prefixed arithmetic. A compare-exchange loop on the
++                     * alias is atomic, since the alias maps the same memory. */
++                    else if ((insn & 0x3F208C00u) == 0x38200000u)
++                    {
++                        int size_lg2 = (insn >> 30) & 0x3;
++                        int rs = (insn >> 16) & 0x1f;
++                        int opc = (insn >> 12) & 0x7;
++                        int rt = insn & 0x1f;
++                        int bits = 8 << size_lg2;
++                        uint64_t szmask = (size_lg2 == 3) ? ~0ULL : ((1ULL << bits) - 1);
++                        uint64_t v = ((rs >= 29) ? 0 : state.__x[rs]) & szmask;
++                        uint64_t old = 0, nv;
++                        int done = 0;
++                        if (!(rw_addr & ((1ULL << size_lg2) - 1))
++                            && (rs < 29 || rs == 31) && (rt < 29 || rt == 31))   /* __x[] is x0-x28 */
++                        {
++                            while (!done)
++                            {
++                                int64_t so, sv;
++                                switch (size_lg2)
++                                {
++                                case 0: old = __atomic_load_n((uint8_t  *)rw_addr, __ATOMIC_SEQ_CST); break;
++                                case 1: old = __atomic_load_n((uint16_t *)rw_addr, __ATOMIC_SEQ_CST); break;
++                                case 2: old = __atomic_load_n((uint32_t *)rw_addr, __ATOMIC_SEQ_CST); break;
++                                default: old = __atomic_load_n((uint64_t *)rw_addr, __ATOMIC_SEQ_CST); break;
++                                }
++                                so = (int64_t)(old << (64 - bits)) >> (64 - bits);
++                                sv = (int64_t)(v << (64 - bits)) >> (64 - bits);
++                                switch (opc)
++                                {
++                                case 0: nv = old + v; break;
++                                case 1: nv = old & ~v; break;
++                                case 2: nv = old ^ v; break;
++                                case 3: nv = old | v; break;
++                                case 4: nv = so > sv ? old : v; break;
++                                case 5: nv = so < sv ? old : v; break;
++                                case 6: nv = old > v ? old : v; break;
++                                default: nv = old < v ? old : v; break;
++                                }
++                                nv &= szmask;
++                                switch (size_lg2)
++                                {
++                                case 0: { uint8_t  e = (uint8_t)old;  done = __atomic_compare_exchange_n((uint8_t  *)rw_addr, &e, (uint8_t)nv,  0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; }
++                                case 1: { uint16_t e = (uint16_t)old; done = __atomic_compare_exchange_n((uint16_t *)rw_addr, &e, (uint16_t)nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; }
++                                case 2: { uint32_t e = (uint32_t)old; done = __atomic_compare_exchange_n((uint32_t *)rw_addr, &e, (uint32_t)nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; }
++                                default: { uint64_t e = old;          done = __atomic_compare_exchange_n((uint64_t *)rw_addr, &e, nv,           0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break; }
++                                }
++                            }
++                            if (rt != 31) state.__x[rt] = old;
++                            emulated = 1;
++                        }
++                    }
+                     /* ml350 DISCRIMINATOR: alias EXISTS but the instruction is not
+                      * in this decode list — every such miss previously cost a full
+                      * run to name (ml349's STRB-reg took one). Print the insn so
+@@ -3592,6 +3690,7 @@ static void *ios_mach_exception_thread( void *arg )
+                          * translation is NOT invalidated here (the ARM64EC path would call
+                          * HandleRWXAccessViolation); this counter is what proves whether a
+                          * page was filled AFTER its translation was compiled. */
++                        if (!split_alias)   /* split-page: not a JIT alias */
+                         {
+                             extern void ios_jit_anon_alias_note_write( unsigned long long );
+                             ios_jit_anon_alias_note_write( (unsigned long long)fault_addr );
+@@ -3971,6 +4070,7 @@ wx_done: ;
+                         }
+                     }
+                 }
++                if (split_alias) mach_vm_deallocate( mach_task_self(), split_alias, split_len );
+             }
+ 
+             /* iOS-Madeira RECLAIM RECOVERY (FEX-2607 Thumper): a page that Wine/FEX
+@@ -4128,6 +4228,35 @@ wx_done: ;
+                         fa >= rwb && fa < rwb + ios_jit_pool_size_global)
+                         goto skip_reclaim_band;
+                 }
++                /* band-honours-vprot: recovery is for a page whose host
++                 * protection was lost behind Wine's back. When Wine's own 4KB
++                 * protection forbids this access (a guard page, no access, or a
++                 * write to a read-only page), the fault is the guest's to see:
++                 * recovering it granted RW and swallowed a guard-page violation. */
++                if (!handled && fa != (uint64_t)fault_pc &&
++                    fa >= 0x7C00000000ULL && fa < 0x8000000000ULL)
++                {
++                    extern unsigned char ios_reclaim_page_vprot( unsigned long long va );
++                    enum { BV_READ = 0x01, BV_WRITE = 0x02, BV_EXEC = 0x04, BV_WRITECOPY = 0x08,
++                           BV_GUARD = 0x10, BV_COMMITTED = 0x20 };
++                    unsigned char fv = ios_reclaim_page_vprot( fa );
++                    if (fv & BV_COMMITTED)
++                    {
++                        arm_exception_state64_t bes;
++                        mach_msg_type_number_t besc = ARM_EXCEPTION_STATE64_COUNT;
++                        int wr = thread_get_state( thread, ARM_EXCEPTION_STATE64, (thread_state_t)&bes, &besc )
++                                 == KERN_SUCCESS && ((bes.__esr >> 6) & 1);
++                        if ((fv & BV_GUARD) || !(fv & (BV_READ | BV_WRITE | BV_EXEC | BV_WRITECOPY))
++                            || (wr && !(fv & (BV_WRITE | BV_WRITECOPY))))
++                        {
++                            static unsigned bv_n;
++                            if (++bv_n <= 8)
++                                dprintf( STDERR_FILENO, "[band-vprot] #%u addr=0x%llx vprot=0x%02x write=%d -> not recovered\n",
++                                         bv_n, (unsigned long long)fa, fv, wr );
++                            goto skip_reclaim_band;
++                        }
++                    }
++                }
+                 if (!handled && fa != (uint64_t)fault_pc &&
+                     fa >= 0x7C00000000ULL && fa < 0x8000000000ULL)
+                 {
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index dbc8682..fbcef90 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -4847,6 +4847,7 @@ struct file_view
+ #define VPROT_GUARD      0x10
+ #define VPROT_COMMITTED  0x20
+ #define VPROT_WRITEWATCH 0x40
++#define VPROT_GUEST_RO   0x80  /* split-page: made read-only by NtProtectVirtualMemory */
+ /* per-mapping protection flags */
+ #define VPROT_ARM64EC          0x0100  /* view may contain ARM64EC code */
+ #define VPROT_SYSTEM           0x0200  /* system view (underlying mmap not under our control) */
+@@ -7353,6 +7354,59 @@ static BYTE get_host_page_vprot( const void *addr )
+     return vprot;
+ }
+ 
++#ifdef WINE_IOS
++/* split-page: a 16KB host page holds four 4KB Windows pages, and its
++ * one physical protection is the union of theirs, so a write to a read-only
++ * page whose neighbour is writable never faults. When committed pages of one
++ * host page are writable and read-only side by side, the read-only one made so
++ * by NtProtectVirtualMemory (VPROT_GUEST_RO; Wine's own read-only views, such
++ * as the EC code bitmap, keep the union), and none of them is executable,
++ * write-copy, write-watched or a guard, the host page is "split":
++ * mprotect_range drops PROT_WRITE for it (valloc views only), the Mach store
++ * emulator completes writes to its writable pages through a transient alias,
++ * and a write to its read-only page raises the access violation. Lock-free,
++ * like get_page_vprot. */
++static BOOL ios_host_page_split_vprot( const void *addr )
++{
++    const char *page = ROUND_ADDR( addr, host_page_mask );
++    BOOL any_w = FALSE, any_ro = FALSE;
++    size_t i;
++
++    for (i = 0; i < host_page_size; i += page_size)
++    {
++        BYTE v = get_page_vprot( page + i );
++        if (!(v & VPROT_COMMITTED) || (v & VPROT_GUARD)) continue;
++        if (v & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_WRITEWATCH)) return FALSE;
++        if (v & VPROT_WRITE) any_w = TRUE;
++        else if ((v & VPROT_READ) && (v & VPROT_GUEST_RO)) any_ro = TRUE;
++    }
++    return any_w && any_ro;
++}
++
++static struct file_view *find_view( const void *addr, size_t size );
++
++/* called with virtual_mutex held */
++static BOOL ios_host_page_split( const void *addr )
++{
++    struct file_view *view;
++
++    if (!ios_host_page_split_vprot( addr )) return FALSE;
++    view = find_view( ROUND_ADDR( addr, host_page_mask ), 0 );
++    return view && is_view_valloc( view );
++}
++
++/* For the Mach store emulator: is a write to va a legal write into a split host page? */
++int ios_split_page_write_allowed( unsigned long long va )
++{
++    BYTE v = get_page_vprot( (const void *)(uintptr_t)va );
++
++    if ((v & (VPROT_COMMITTED | VPROT_WRITE | VPROT_GUARD | VPROT_EXEC | VPROT_WRITECOPY | VPROT_WRITEWATCH))
++        != (VPROT_COMMITTED | VPROT_WRITE))
++        return 0;
++    return ios_host_page_split_vprot( (const void *)(uintptr_t)va );
++}
++#endif
++
+ 
+ /***********************************************************************
+  *           get_vprot_range_size
+@@ -10755,10 +10809,17 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ 
+     vprot = get_host_page_vprot( addr );
+     prot = get_unix_prot( (vprot & ~clear) | set );
++#ifdef WINE_IOS
++    if (!set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
++#endif
+     for (count = i = 1; i < size / host_page_size; i++, count++)
+     {
+         vprot = get_host_page_vprot( addr + count * host_page_size );
+         next = get_unix_prot( (vprot & ~clear) | set );
++#ifdef WINE_IOS
++        if (!set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
++            next &= ~PROT_WRITE;
++#endif
+         if (next == prot) continue;
+         if (mprotect_exec( addr, count * host_page_size, prot )) return -1;
+         addr += count * host_page_size;
+@@ -10827,6 +10888,9 @@ static NTSTATUS set_protection( struct file_view *view, void *base, SIZE_T size,
+     if (is_view_valloc( view ))
+     {
+         if (vprot & VPROT_WRITECOPY) return STATUS_INVALID_PAGE_PROTECTION;
++#ifdef WINE_IOS
++        if ((vprot & VPROT_READ) && !(vprot & (VPROT_WRITE | VPROT_EXEC))) vprot |= VPROT_GUEST_RO;
++#endif
+     }
+     else
+     {
+@@ -15225,6 +15289,18 @@ NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack )
+             if ((vprot & VPROT_WRITEWATCH) || is_write_watch_range( page, 1 ))
+                 ret = STATUS_SUCCESS;
+         }
++#ifdef WINE_IOS
++        /* split-page: a legal write the Mach store emulator could not
++         * complete. Give up this host page's split rather than fault the write;
++         * the next mprotect_range over it splits it again. */
++        if (ret != STATUS_SUCCESS && ios_host_page_split( page )
++            && (get_page_vprot( addr ) & (VPROT_COMMITTED | VPROT_WRITE)) == (VPROT_COMMITTED | VPROT_WRITE)
++            && !mprotect( page, host_page_size, PROT_READ | PROT_WRITE ))
++        {
++            ERR( "[split-page] write at %p not emulated; host page %p made writable\n", addr, page );
++            ret = STATUS_SUCCESS;
++        }
++#endif
+     }
+     mutex_unlock( &virtual_mutex );
+     rec->ExceptionCode = ret;
+@@ -15617,6 +15693,11 @@ static NTSTATUS check_write_access( void *base, size_t size, BOOL *has_write_wat
+         if (vprot & VPROT_WRITEWATCH) *has_write_watch = TRUE;
+         if (!(get_unix_prot( vprot & ~VPROT_WRITEWATCH ) & PROT_WRITE))
+             return STATUS_INVALID_USER_BUFFER;
++#ifdef WINE_IOS
++        /* split-page: the kernel cannot write a split host page. Open it
++         * for the call like a write watch; update_write_watches splits it again. */
++        if (ios_host_page_split( addr + i )) *has_write_watch = TRUE;
++#endif
+     }
+     if (*has_write_watch)
+         mprotect_range( addr, size, 0, VPROT_WRITEWATCH );  /* temporarily enable write access */
+@@ -19684,7 +19765,11 @@ static unsigned int fill_basic_memory_info( const void *addr, MEMORY_BASIC_INFOR
+         BYTE vprot;
+ 
+         info->AllocationBase = alloc_base;
++#ifdef WINE_IOS
++        info->RegionSize = get_committed_size( view, base, ~(size_t)0, &vprot, ~(VPROT_WRITEWATCH | VPROT_GUEST_RO) );
++#else
+         info->RegionSize = get_committed_size( view, base, ~(size_t)0, &vprot, ~VPROT_WRITEWATCH );
++#endif
+         info->State = (vprot & VPROT_COMMITTED) ? MEM_COMMIT : MEM_RESERVE;
+         info->Protect = (vprot & VPROT_COMMITTED) ? get_win32_prot( vprot, view->protect ) : 0;
+         info->AllocationProtect = get_win32_prot( view->protect, view->protect );

@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Gabriel=20Iv=C4=83ncescu?= <gabrielopcode@gmail.com>
+Date: Mon, 15 Dec 2025 22:22:34 +0200
+Subject: [PATCH] dwmapi: Add DWMWA_NCRENDERING_ENABLED stub for
+ DwmGetWindowAttribute.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Gabriel Ivăncescu <gabrielopcode@gmail.com>
+Valve-commit: 50678a17fc50f2d80009f72c045ace2a1d68c34e
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/dwmapi/dwmapi_main.c  | 13 +++++++++++--
+ dlls/dwmapi/tests/dwmapi.c | 22 ++++++++++++++++++++++
+ 2 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/dwmapi/dwmapi_main.c b/dlls/dwmapi/dwmapi_main.c
+index 49e05cd..bcda7a8 100644
+--- a/dlls/dwmapi/dwmapi_main.c
++++ b/dlls/dwmapi/dwmapi_main.c
+@@ -193,15 +193,24 @@ HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attrib
+         return E_HANDLE;
+     if (!IsWindow(hwnd))
+         return E_HANDLE;
++    if (!pv_attribute)
++        return E_INVALIDARG;
+ 
+     switch (attribute) {
++    case DWMWA_NCRENDERING_ENABLED:
++        if (size < sizeof(BOOL))
++            return E_INVALIDARG;
++
++        WARN("DWMWA_NCRENDERING_ENABLED: always returning FALSE.\n");
++        *(BOOL*)(pv_attribute) = FALSE;
++        hr = S_OK;
++        break;
++
+     case DWMWA_EXTENDED_FRAME_BOUNDS:
+     {
+         RECT *rect = (RECT *)pv_attribute;
+         DPI_AWARENESS_CONTEXT context;
+ 
+-        if (!rect)
+-            return E_INVALIDARG;
+         if (size < sizeof(*rect))
+             return E_NOT_SUFFICIENT_BUFFER;
+         if (GetWindowLongW(hwnd, GWL_STYLE) & WS_CHILD)
+diff --git a/dlls/dwmapi/tests/dwmapi.c b/dlls/dwmapi/tests/dwmapi.c
+index 6c5cf50..5d41d63 100644
+--- a/dlls/dwmapi/tests/dwmapi.c
++++ b/dlls/dwmapi/tests/dwmapi.c
+@@ -83,6 +83,27 @@ static void test_DwmGetCompositionTimingInfo(void)
+             "Got wrong monitor refresh period %s.\n", wine_dbgstr_longlong(timing_info.qpcRefreshPeriod));
+ }
+ 
++static void test_DWMWA_NCRENDERING_ENABLED(void)
++{
++    BOOL nc_rendering;
++    HRESULT hr;
++    HWND hwnd;
++
++    hwnd = CreateWindowW(L"static", L"static", WS_OVERLAPPEDWINDOW | WS_POPUP | WS_VISIBLE, 10, 10, 200, 200, NULL, NULL, NULL, NULL);
++
++    hr = DwmGetWindowAttribute(hwnd, DWMWA_NCRENDERING_ENABLED, NULL, sizeof(nc_rendering));
++    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
++    hr = DwmGetWindowAttribute(hwnd, DWMWA_NCRENDERING_ENABLED, &nc_rendering, 0);
++    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
++
++    nc_rendering = 0xdeadbeef;
++    hr = DwmGetWindowAttribute(hwnd, DWMWA_NCRENDERING_ENABLED, &nc_rendering, sizeof(nc_rendering));
++    ok(hr == S_OK, "Got hr %#lx.\n", hr);
++    ok(nc_rendering == FALSE || nc_rendering == TRUE, "non-boolean value %#x.\n", nc_rendering);
++
++    DestroyWindow(hwnd);
++}
++
+ static void test_DWMWA_EXTENDED_FRAME_BOUNDS(void)
+ {
+     DPI_AWARENESS_CONTEXT (WINAPI *pSetThreadDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
+@@ -174,6 +195,7 @@ START_TEST(dwmapi)
+ {
+     test_DwmIsCompositionEnabled();
+     test_DwmGetCompositionTimingInfo();
++    test_DWMWA_NCRENDERING_ENABLED();
+     test_DWMWA_EXTENDED_FRAME_BOUNDS();
+     test_DwmFlush();
+ }

@@ -1,0 +1,2626 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 00:09:38 +0200
+Subject: [PATCH] ntdll-unix: port env, process, loader, server and thread
+ replacements onto wine-11.18 thread data
+
+wine-11.18 moved the per-thread server fds, tid and suspend flag into
+struct thread_data (thread_data_key), allocates the first TEB in
+init_startup_info and keeps the main image in main_module. loader: start the
+main thread in 11.18's order, probe the x18 TSD slot before the TEB exists and
+publish the first TEB once it does; a pseudo-process child gets its own
+thread data and saves/restores main_module around its boot. env: init_peb
+keeps the child's own module. server: requests use data->request_fd and
+reply_fd, and server_init_thread does the iOS parts of the removed
+start_thread (QoS hook, TEB publication). thread: create_server_thread and
+pthread_exit_wrapper take the thread data.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ build/ntdll-unix/env_ios.c     | 174 ++++++++-----
+ build/ntdll-unix/loader_ios.c  | 380 +++++++++++----------------
+ build/ntdll-unix/process_ios.c |  39 +--
+ build/ntdll-unix/server_ios.c  | 233 +++++++++++------
+ build/ntdll-unix/thread_ios.c  | 462 ++++++++++++++++++---------------
+ 5 files changed, 685 insertions(+), 603 deletions(-)
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 58a9f87..d3e2dba 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -67,11 +67,13 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(environ);
+ 
++DWORD pid = 0;
+ PEB *peb = NULL;
+ WOW_PEB *wow_peb = NULL;
+ USHORT *uctable = NULL, *lctable = NULL;
+ SIZE_T startup_info_size = 0;
+ BOOL is_prefix_bootstrap = FALSE;
++ULONG session_id = 0;
+ 
+ static const WCHAR bootstrapW[] = {'W','I','N','E','B','O','O','T','S','T','R','A','P','M','O','D','E'};
+ 
+@@ -157,7 +159,7 @@ static NTSTATUS open_nls_data_file( const char *path, const WCHAR *sysdir, HANDL
+     OBJECT_ATTRIBUTES attr;
+     UNICODE_STRING valueW;
+     WCHAR buffer[64];
+-    char *p;
++    const char *p;
+ 
+     wcscpy( buffer, system_dir );
+     p = strrchr( path, '/' ) + 1;
+@@ -165,11 +167,11 @@ static NTSTATUS open_nls_data_file( const char *path, const WCHAR *sysdir, HANDL
+     init_unicode_string( &valueW, buffer );
+     InitializeObjectAttributes( &attr, &valueW, 0, 0, NULL );
+ 
+-    status = open_unix_file( file, path, GENERIC_READ, &attr, 0, FILE_SHARE_READ,
++    status = open_unix_file( file, path, GENERIC_READ | SYNCHRONIZE, &attr, 0, FILE_SHARE_READ,
+                              FILE_OPEN, FILE_SYNCHRONOUS_IO_ALERT, NULL, 0 );
+     if (status != STATUS_NO_SUCH_FILE) return status;
+ 
+-    return NtOpenFile( file, GENERIC_READ, &attr, &io, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_ALERT );
++    return NtOpenFile( file, GENERIC_READ | SYNCHRONIZE, &attr, &io, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_ALERT );
+ }
+ 
+ static NTSTATUS get_nls_section_name( UINT type, UINT id, WCHAR name[32] )
+@@ -364,6 +366,7 @@ static BOOL is_ignored_env_var( const char *var )
+             STARTS_WITH( var, "SDL_AUDIO_DRIVER=" ) ||
+             STARTS_WITH( var, "SDL_VIDEODRIVER=" ) ||
+             STARTS_WITH( var, "SDL_VIDEO_DRIVER=" ) ||
++            STARTS_WITH( var, "WAYLAND_DISPLAY=" ) ||
+             STARTS_WITH( var, "VK_" ));
+ }
+ 
+@@ -501,7 +504,7 @@ const WCHAR *ntdll_get_data_dir(void)
+  */
+ static void set_process_name( const char *name )
+ {
+-    char *p;
++    const char *p;
+ 
+ #ifdef HAVE_SETPROCTITLE
+     setproctitle("-%s", name );
+@@ -856,7 +859,7 @@ void init_environment(void)
+ /* check if a WINE_HOST_ prefixed variable already exists in the environment */
+ static BOOL host_var_exists( const char *name )
+ {
+-    char *end = strchr( name, '=' );
++    const char *end = strchr( name, '=' );
+ 
+     if (!end) return FALSE;
+     for (char **e = environ; *e; e++)
+@@ -1684,7 +1687,8 @@ static void run_wineboot( WCHAR *env, SIZE_T size )
+         's','y','s','t','e','m','3','2','\\','w','i','n','e','b','o','o','t','.','e','x','e','"',
+         ' ','-','-','i','n','i','t',0};
+     RTL_USER_PROCESS_PARAMETERS params = { sizeof(params), sizeof(params) };
+-    PS_ATTRIBUTE_LIST ps_attr;
++    ULONG_PTR attr_buffer[offsetof(PS_ATTRIBUTE_LIST,Attributes[2]) / sizeof(ULONG_PTR)];
++    PS_ATTRIBUTE_LIST *ps_attr = (PS_ATTRIBUTE_LIST *)attr_buffer;
+     PS_CREATE_INFO create_info;
+     HANDLE process, thread, handles[2];
+     UNICODE_STRING nameW;
+@@ -1714,17 +1718,19 @@ static void run_wineboot( WCHAR *env, SIZE_T size )
+     init_unicode_string( &params.WindowTitle, appnameW + 4 );
+     init_unicode_string( &nameW, appnameW );
+ 
+-    ps_attr.TotalLength = sizeof(ps_attr);
+-    ps_attr.Attributes[0].Attribute    = PS_ATTRIBUTE_IMAGE_NAME;
+-    ps_attr.Attributes[0].Size         = sizeof(appnameW) - sizeof(WCHAR);
+-    ps_attr.Attributes[0].ValuePtr     = (WCHAR *)appnameW;
+-    ps_attr.Attributes[0].ReturnLength = NULL;
++    ps_attr->TotalLength = sizeof(attr_buffer);
++    ps_attr->Attributes[0].Attribute    = PS_ATTRIBUTE_IMAGE_NAME;
++    ps_attr->Attributes[0].Size         = sizeof(appnameW) - sizeof(WCHAR);
++    ps_attr->Attributes[0].ValuePtr     = (WCHAR *)appnameW;
++    ps_attr->Attributes[0].ReturnLength = NULL;
++    ps_attr->Attributes[1].Attribute    = PS_ATTRIBUTE_MACHINE_TYPE;
++    ps_attr->Attributes[1].Value        = native_machine;
+ 
+     wine_server_fd_to_handle( 2, GENERIC_WRITE | SYNCHRONIZE, OBJ_INHERIT, &params.hStdError );
+ 
+     status = NtCreateUserProcess( &process, &thread, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS,
+                                   NULL, NULL, 0, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, &params,
+-                                  &create_info, &ps_attr );
++                                  &create_info, ps_attr );
+     NtClose( params.hStdError );
+ 
+     if (status)
+@@ -1761,16 +1767,8 @@ static inline void put_unicode_string( WCHAR *src, WCHAR **dst, UNICODE_STRING *
+     copy_unicode_string( &src, dst, str, wcslen(src) * sizeof(WCHAR) );
+ }
+ 
+-static void copy_dos_path_string( WCHAR **src, WCHAR **dst, UNICODE_STRING *str,
+-                                  UNICODE_STRING *nt_str, UINT len )
++static void copy_dos_path_string( WCHAR **src, WCHAR **dst, UNICODE_STRING *str, UINT len )
+ {
+-    /* copy the original string into nt_str */
+-    nt_str->Buffer = malloc( len + sizeof(WCHAR) );
+-    memcpy( nt_str->Buffer, *src, len );
+-    nt_str->Buffer[len / sizeof(WCHAR)] = 0;
+-    nt_str->Length = len;
+-    nt_str->MaximumLength = len + sizeof(WCHAR);
+-
+     if (len > 5 * sizeof(WCHAR) && (*src)[5] == ':') /* skip the \??\ prefix */
+     {
+         *src += 4;
+@@ -1844,7 +1842,7 @@ static ULONG get_dword_option( HANDLE key, const WCHAR *name, ULONG defval )
+ /*************************************************************************
+  *		load_global_options
+  */
+-static void load_global_options( const UNICODE_STRING *image )
++static void load_global_options( const UNICODE_STRING *image, BOOL debugged )
+ {
+     static const WCHAR optionsW[] = {'\\','R','e','g','i','s','t','r','y','\\',
+         'M','a','c','h','i','n','e','\\','S','o','f','t','w','a','r','e','\\',
+@@ -1878,6 +1876,12 @@ static void load_global_options( const UNICODE_STRING *image )
+         peb->HeapDeCommitFreeBlockThreshold = get_dword_option( key, heapdecommitblockW, 0x1000 );
+         NtClose( key );
+     }
++
++    if (debugged) peb->NtGlobalFlag |= FLG_HEAP_ENABLE_TAIL_CHECK |
++                                       FLG_HEAP_ENABLE_FREE_CHECK |
++                                       FLG_HEAP_VALIDATE_PARAMETERS;
++    else peb->ProcessParameters->Flags |= PROCESS_PARAMS_IMAGE_KEY_MISSING;
++
+     init_unicode_string( &nameW, optionsW );
+     if (!NtOpenKey( &key, KEY_QUERY_VALUE, &attr ))
+     {
+@@ -1888,6 +1892,7 @@ static void load_global_options( const UNICODE_STRING *image )
+         if (!NtOpenKey( &key, KEY_QUERY_VALUE, &attr ))
+         {
+             peb->NtGlobalFlag = get_dword_option( key, globalflagW, peb->NtGlobalFlag );
++            peb->ProcessParameters->Flags &= ~PROCESS_PARAMS_IMAGE_KEY_MISSING;
+             NtClose( key );
+         }
+         NtClose( attr.RootDirectory );
+@@ -1962,7 +1967,7 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
+ /*************************************************************************
+  *		init_peb
+  */
+-static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, void *module )
++static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, BOOL debugged, void *module )
+ {
+     /* iOS-Madeira (ml111, task #35 fallout): write to the BOOTING THREAD's PEB,
+      * not the file-scope `peb` global. Pseudo-process children boot through
+@@ -1990,6 +1995,7 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, void *module )
+     }
+     peb->ImageBaseAddress           = module;
+     peb->ProcessParameters          = params;
++    peb->NumberOfProcessors         = cpu_count;
+     peb->OSMajorVersion             = 10;
+     peb->OSMinorVersion             = 0;
+     peb->OSBuildNumber              = 19045;
+@@ -1997,19 +2003,9 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, void *module )
+     peb->ImageSubSystem             = main_image_info.SubSystemType;
+     peb->ImageSubSystemMajorVersion = main_image_info.MajorSubsystemVersion;
+     peb->ImageSubSystemMinorVersion = main_image_info.MinorSubsystemVersion;
++    peb->SessionId                  = session_id;
+ 
+-#ifdef _WIN64
+-    if (!is_machine_64bit( main_image_info.Machine ))
+-    {
+-        NtCurrentTeb()->WowTebOffset = teb_offset;
+-        NtCurrentTeb()->Tib.ExceptionList = (void *)((char *)NtCurrentTeb() + teb_offset);
+-        wow_peb = (PEB32 *)((char *)peb + page_size);
+-        set_thread_id( NtCurrentTeb(), GetCurrentProcessId(), GetCurrentThreadId() );
+-    }
+-#endif
+-
+-    virtual_set_large_address_space();
+-    load_global_options( &params->ImagePathName );
++    load_global_options( &params->ImagePathName, debugged );
+ 
+     if (wow_peb)
+     {
+@@ -2041,7 +2037,7 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, void *module )
+  *
+  * Build process parameters from scratch, for processes without a parent.
+  */
+-static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
++static RTL_USER_PROCESS_PARAMETERS *build_initial_params(void)
+ {
+     static const WCHAR valueW[] = {'1',0};
+     static const WCHAR pathW[] = {'P','A','T','H'};
+@@ -2055,8 +2051,9 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
+     WCHAR *curdir = get_initial_directory();
+     UNICODE_STRING nt_name;
+     NTSTATUS status;
++    struct thread_data *data = get_thread_data();
+ 
+-    if (NtCurrentTeb64()) NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR] = TRUE;
++    data->filesys_redir = TRUE;
+ 
+     /* store the initial PATH value */
+     path = get_env_var( env, env_pos, pathW, 4 );
+@@ -2103,7 +2100,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
+ #ifdef WINE_IOS
+     os_log(OS_LOG_DEFAULT, "[Wine] build_initial_params: load_main_exe...");
+ #endif
+-    status = load_main_exe( &nt_name, 0, module );
++    status = load_main_exe( &nt_name, 0 );
+     /* fail only if the file contained an explicit path */
+     if (status == STATUS_DLL_NOT_FOUND &&
+         (strpbrk( main_argv[1], "/\\" ) || (main_argv[1][0] && main_argv[1][1] == ':')))
+@@ -2146,16 +2143,18 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
+         dprintf(2, "[main-exe] falling back to start.exe (status=0x%x)\n", (unsigned)status);
+         static const char *args[] = { "start.exe", "/exec" };
+         free( nt_name.Buffer );
+-        if (*module) NtUnmapViewOfSection( GetCurrentProcess(), *module );
+-        load_start_exe( &nt_name, module );
++        if (main_module) NtUnmapViewOfSection( GetCurrentProcess(), main_module );
++        load_start_exe( &nt_name );
+         prepend_argv( args, 2 );
+     }
+     else
+     {
+         rebuild_argv();
+-        if (NtCurrentTeb64()) NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR] = FALSE;
++        data->filesys_redir = FALSE;
+     }
+ 
++    virtual_alloc_first_teb();
++
+     main_wargv = build_wargv( get_dos_path( nt_name.Buffer ));
+     cmdline = build_command_line( main_wargv );
+ 
+@@ -2176,7 +2175,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
+     params->Size            = size;
+     params->Flags           = PROCESS_PARAMS_FLAG_NORMALIZED;
+     params->wShowWindow     = 1; /* SW_SHOWNORMAL */
+-    params->ProcessGroupId  = GetCurrentProcessId();
++    params->ProcessGroupId  = pid;
+ 
+     params->CurrentDirectory.DosPath.Buffer = (WCHAR *)(params + 1);
+     wcscpy( params->CurrentDirectory.DosPath.Buffer, get_dos_path( curdir ));
+@@ -2219,13 +2218,14 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
+ void unix_init_startup_info(void)
+ {
+     WCHAR *src, *dst, *env;
+-    void *module = NULL;
+     unsigned int status;
+     SIZE_T size, info_size, env_size, env_pos;
+     RTL_USER_PROCESS_PARAMETERS *params = NULL;
+     struct startup_info_data *info;
+     UNICODE_STRING nt_name;
+     USHORT machine;
++    BOOL debugged;
++    void *module = NULL;
+ 
+ #ifdef WINE_IOS
+     os_log(OS_LOG_DEFAULT, "[Wine] init_startup_info: startup_info_size=%lu", (unsigned long)startup_info_size);
+@@ -2235,11 +2235,11 @@ void unix_init_startup_info(void)
+ #ifdef WINE_IOS
+         os_log(OS_LOG_DEFAULT, "[Wine] init_startup_info: calling build_initial_params...");
+ #endif
+-        params = build_initial_params( &module );
++        params = build_initial_params();
+ #ifdef WINE_IOS
+         os_log(OS_LOG_DEFAULT, "[Wine] init_startup_info: build_initial_params returned, calling init_peb...");
+ #endif
+-        init_peb( params, module );
++        init_peb( params, FALSE, main_module );
+ #ifdef WINE_IOS
+         os_log(OS_LOG_DEFAULT, "[Wine] init_startup_info: done!");
+ #endif
+@@ -2253,6 +2253,7 @@ void unix_init_startup_info(void)
+         wine_server_set_reply( req, info, startup_info_size );
+         status = wine_server_call( req );
+         machine = reply->machine;
++        debugged = reply->debugged;
+         info_size = reply->info_size;
+         env_size = (wine_server_reply_size( reply ) - info_size) / sizeof(WCHAR);
+     }
+@@ -2266,10 +2267,26 @@ void unix_init_startup_info(void)
+     is_prefix_bootstrap = !!find_env_var( env, env_pos, bootstrapW, ARRAY_SIZE(bootstrapW) );
+     env[env_pos++] = 0;
+ 
++    nt_name.Buffer = (WCHAR *)(info + 1);
++    nt_name.Length = info->imagepath_len;
++    status = load_main_exe( &nt_name, machine );
++    /* iOS (wine-11.18 port): upstream keeps the main image in the main_module
++     * global. Pseudo-process children boot in this same Mach process, so take
++     * this child's image while it is still ours; init_peb must not read the
++     * global later. */
++    module = main_module;
++    if (!NT_SUCCESS(status))
++    {
++        MESSAGE( "wine: failed to start %s: %x\n", debugstr_us(&nt_name), status );
++        NtTerminateProcess( GetCurrentProcess(), status );
++    }
++
++    virtual_alloc_first_teb();
++
+     size = (sizeof(*params)
++            + info->imagepath_len + sizeof(WCHAR)
+             + MAX_PATH * sizeof(WCHAR)  /* curdir */
+             + info->dllpath_len + sizeof(WCHAR)
+-            + info->imagepath_len + sizeof(WCHAR)
+             + info->cmdline_len + sizeof(WCHAR)
+             + info->title_len + sizeof(WCHAR)
+             + info->desktop_len + sizeof(WCHAR)
+@@ -2311,13 +2328,14 @@ void unix_init_startup_info(void)
+     src = (WCHAR *)(info + 1);
+     dst = (WCHAR *)(params + 1);
+ 
++    copy_dos_path_string( &src, &dst, &params->ImagePathName, info->imagepath_len );
++
+     /* curdir is special */
+     copy_unicode_string( &src, &dst, &params->CurrentDirectory.DosPath, info->curdir_len );
++    dst += MAX_PATH - params->CurrentDirectory.DosPath.MaximumLength / sizeof(WCHAR);
+     params->CurrentDirectory.DosPath.MaximumLength = MAX_PATH * sizeof(WCHAR);
+-    dst = params->CurrentDirectory.DosPath.Buffer + MAX_PATH;
+ 
+     if (info->dllpath_len) copy_unicode_string( &src, &dst, &params->DllPath, info->dllpath_len );
+-    copy_dos_path_string( &src, &dst, &params->ImagePathName, &nt_name, info->imagepath_len );
+     copy_unicode_string( &src, &dst, &params->CommandLine, info->cmdline_len );
+     copy_unicode_string( &src, &dst, &params->WindowTitle, info->title_len );
+     copy_unicode_string( &src, &dst, &params->Desktop, info->desktop_len );
+@@ -2343,16 +2361,9 @@ void unix_init_startup_info(void)
+     free( env );
+     free( info );
+ 
+-    status = load_main_exe( &nt_name, machine, &module );
+-    if (!NT_SUCCESS(status))
+-    {
+-        MESSAGE( "wine: failed to start %s: %x\n", debugstr_us(&params->ImagePathName), status );
+-        NtTerminateProcess( GetCurrentProcess(), status );
+-    }
+     rebuild_argv();
+     main_wargv = build_wargv( params->ImagePathName.Buffer );
+-    free( nt_name.Buffer );
+-    init_peb( params, module );
++    init_peb( params, debugged, module );
+ }
+ 
+ 
+@@ -2415,9 +2426,9 @@ void *create_startup_info( const UNICODE_STRING *nt_image, ULONG process_flags,
+     info->process_group_id = params->ProcessGroupId;
+ 
+     ptr = info + 1;
++    info->imagepath_len = append_string( &ptr, params, nt_image );
+     info->curdir_len = append_string( &ptr, params, &params->CurrentDirectory.DosPath );
+     info->dllpath_len = append_string( &ptr, params, &params->DllPath );
+-    info->imagepath_len = append_string( &ptr, params, nt_image );
+     info->cmdline_len = append_string( &ptr, params, &params->CommandLine );
+     info->title_len = append_string( &ptr, params, &params->WindowTitle );
+     info->desktop_len = append_string( &ptr, params, &params->Desktop );
+@@ -2660,8 +2671,9 @@ void WINAPI RtlInitUnicodeString( UNICODE_STRING *str, const WCHAR *data )
+  */
+ ULONG WINAPI RtlNtStatusToDosError( NTSTATUS status )
+ {
+-    NtCurrentTeb()->LastStatusValue = status;
++    TEB *teb = NtCurrentTeb();
+ 
++    if (teb) teb->LastStatusValue = status;
+     if (!status || (status & 0x20000000)) return status;
+     if ((status & 0xf0000000) == 0xd0000000) status &= ~0x10000000;
+ 
+@@ -2677,7 +2689,17 @@ ULONG WINAPI RtlNtStatusToDosError( NTSTATUS status )
+  */
+ DWORD WINAPI RtlGetLastWin32Error(void)
+ {
+-    return NtCurrentTeb()->LastErrorValue;
++    TEB *teb = NtCurrentTeb();
++
++    if (teb)
++    {
++#ifdef _WIN64
++        WOW_TEB *wow_teb = get_wow_teb( teb );
++        if (wow_teb) return wow_teb->LastErrorValue;
++#endif
++        return teb->LastErrorValue;
++    }
++    else return 0;
+ }
+ 
+ /**********************************************************************
+@@ -2686,9 +2708,37 @@ DWORD WINAPI RtlGetLastWin32Error(void)
+ void WINAPI RtlSetLastWin32Error( DWORD err )
+ {
+     TEB *teb = NtCurrentTeb();
++
++    if (teb)
++    {
+ #ifdef _WIN64
+-    WOW_TEB *wow_teb = get_wow_teb( teb );
+-    if (wow_teb) wow_teb->LastErrorValue = err;
++        WOW_TEB *wow_teb = get_wow_teb( teb );
++        if (wow_teb) wow_teb->LastErrorValue = err;
+ #endif
+-    teb->LastErrorValue = err;
++        teb->LastErrorValue = err;
++    }
++}
++
++/**********************************************************************
++ *      RtlGetCurrentPeb  (ntdll.so)
++ */
++PEB * WINAPI RtlGetCurrentPeb(void)
++{
++    return peb;
++}
++
++/**********************************************************************
++ *      PsGetCurrentProcessId  (ntdll.so)
++ */
++HANDLE WINAPI PsGetCurrentProcessId(void)
++{
++    return ULongToHandle( pid );
++}
++
++/**********************************************************************
++ *      PsGetCurrentThreadId  (ntdll.so)
++ */
++HANDLE WINAPI PsGetCurrentThreadId(void)
++{
++    return ULongToHandle( get_thread_data()->tid );
+ }
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index 43a775c..07ee93b 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -77,9 +77,6 @@
+ #else
+   extern char **environ;
+ #endif
+-#ifdef __ANDROID__
+-# include <jni.h>
+-#endif
+ 
+ #include "ntstatus.h"
+ #include "windef.h"
+@@ -100,7 +97,7 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(module);
+ 
+-#if defined __i386__ || defined __x86_64__
++#if defined __i386__ || (defined __x86_64__ && !defined __APPLE__)
+ #define SO_DLLS_SUPPORTED
+ #endif
+ 
+@@ -133,6 +130,7 @@ const char *wineloader = NULL;
+ const char **dll_paths = NULL;
+ const char **system_dll_paths = NULL;
+ const char *user_name = NULL;
++void *main_module = NULL;
+ SECTION_IMAGE_INFORMATION main_image_info = { NULL };
+ 
+ /* die on a fatal error; use only during initialization */
+@@ -773,7 +771,8 @@ NTSTATUS exec_wineloader( char **argv, int socketfd, const struct pe_image_info
+     char preloader_reserve[64], socket_env[64];
+ 
+     if (pe_info->wine_fakedll) res_start = res_end = 0;
+-    if (pe_info->image_flags & IMAGE_FLAGS_ComPlusNativeReady) machine = native_machine;
++    if (pe_info->image_flags & IMAGE_FLAGS_ComPlusNativeReady)
++        machine = is_machine_64bit( native_machine ) ? IMAGE_FILE_MACHINE_AMD64 : native_machine;
+ 
+     signal( SIGPIPE, SIG_DFL );
+ 
+@@ -1131,6 +1130,9 @@ static NTSTATUS dlopen_dll( const char *so_name, UNICODE_STRING *nt_name, void *
+         dlclose( handle );
+         return STATUS_NO_MEMORY;
+     }
++#ifdef __x86_64__
++    signal_disable_syscall_dispatch();
++#endif
+     *ret_module = module;
+     return STATUS_SUCCESS;
+ }
+@@ -1151,7 +1153,7 @@ static NTSTATUS load_so_dll( void *args )
+     NTSTATUS status;
+     DWORD len;
+ 
+-    if (get_load_order( nt_name ) == LO_DISABLED) return STATUS_DLL_NOT_FOUND;
++    if (get_load_order( nt_name, FALSE, NULL ) == LO_DISABLED) return STATUS_DLL_NOT_FOUND;
+     InitializeObjectAttributes( &attr, nt_name, OBJ_CASE_INSENSITIVE, 0, 0 );
+     if (!get_nt_and_unix_names( &attr, &true_nt_name, &unix_name, FILE_OPEN, FALSE ))
+     {
+@@ -1246,8 +1248,7 @@ static NTSTATUS open_builtin_so_file( char *name, OBJECT_ATTRIBUTES *attr, void
+ /***********************************************************************
+  *           open_main_image_so_file
+  */
+-static NTSTATUS open_main_image_so_file( const char *name, UNICODE_STRING *nt_name, void **module,
+-                                         SECTION_IMAGE_INFORMATION *image_info )
++static NTSTATUS open_main_image_so_file( const char *name, UNICODE_STRING *nt_name )
+ {
+     struct pe_image_info pe_info;
+     NTSTATUS status;
+@@ -1263,8 +1264,8 @@ static NTSTATUS open_main_image_so_file( const char *name, UNICODE_STRING *nt_na
+             nt_name->Length -= 3 * sizeof(WCHAR);
+         }
+     }
+-    status = dlopen_dll( name, nt_name, module, &pe_info, FALSE );
+-    if (!status) virtual_fill_image_information( &pe_info, image_info );
++    status = dlopen_dll( name, nt_name, &main_module, &pe_info, FALSE );
++    if (!status) virtual_fill_image_information( &pe_info, &main_image_info );
+     return status;
+ }
+ 
+@@ -1280,8 +1281,7 @@ static NTSTATUS open_builtin_so_file( char *name, OBJECT_ATTRIBUTES *attr, void
+     return STATUS_DLL_NOT_FOUND;
+ }
+ 
+-static NTSTATUS open_main_image_so_file( const char *name, UNICODE_STRING *nt_name, void **module,
+-                                         SECTION_IMAGE_INFORMATION *image_info )
++static NTSTATUS open_main_image_so_file( const char *name, UNICODE_STRING *nt_name )
+ {
+     return STATUS_INVALID_IMAGE_FORMAT;
+ }
+@@ -1636,10 +1636,9 @@ done:
+  * Load the builtin dll if specified by load order configuration.
+  * Return STATUS_IMAGE_ALREADY_LOADED if we should keep the native one that we have found.
+  */
+-NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *nt_name,
+-                       ANSI_STRING *exp_name, USHORT machine, SECTION_IMAGE_INFORMATION *info,
+-                       void **module, SIZE_T *size, ULONG_PTR limit_low, ULONG_PTR limit_high,
+-                       off_t offset )
++NTSTATUS load_builtin( struct pe_mapping_info *pe_mapping, USHORT machine,
++                       SECTION_IMAGE_INFORMATION *info, void **module, SIZE_T *size,
++                       ULONG_PTR limit_low, ULONG_PTR limit_high, off_t offset )
+ {
+ #ifdef WINE_IOS
+     /* iOS: still respect WINEDLLOVERRIDES=name= (LO_DISABLED) so users can
+@@ -1647,10 +1646,12 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
+      * blows up Wine's loader). The original short-circuit below skips the
+      * builtin .so search; we keep that, just gate it on the override. */
+     {
+-        enum loadorder lo = get_load_order( nt_name );
++        USHORT sysdir_machine;
++        BOOL is_system_dir = is_system_dir_path( &pe_mapping->nt_name, &sysdir_machine );
++        enum loadorder lo = get_load_order( &pe_mapping->nt_name, is_system_dir, pe_mapping );
+         if (lo == LO_DISABLED)
+         {
+-            TRACE( "iOS: %s disabled by WINEDLLOVERRIDES\n", debugstr_us(nt_name) );
++            TRACE( "iOS: %s disabled by WINEDLLOVERRIDES\n", debugstr_us(&pe_mapping->nt_name) );
+             return STATUS_DLL_NOT_FOUND;
+         }
+     }
+@@ -1660,25 +1661,31 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
+     return STATUS_IMAGE_ALREADY_LOADED;
+ #else
+     NTSTATUS status;
+-    USHORT search_machine = image_info->machine;
+-    enum loadorder loadorder = get_load_order( nt_name );
++    USHORT sysdir_machine, search_machine = pe_mapping->image.machine;
++    BOOL is_system_dir = is_system_dir_path( &pe_mapping->nt_name, &sysdir_machine );
++    enum loadorder loadorder = get_load_order( &pe_mapping->nt_name, is_system_dir, pe_mapping );
+ 
+     if (loadorder == LO_DISABLED) return STATUS_DLL_NOT_FOUND;
+ 
+-    if (image_info->wine_builtin)
++    if (pe_mapping->image.wine_builtin)
+     {
+         if (loadorder == LO_NATIVE) return STATUS_DLL_NOT_FOUND;
+         loadorder = LO_BUILTIN_NATIVE;  /* load builtin, then fallback to the file we found */
+     }
+-    else if (image_info->wine_fakedll)
++    else if (pe_mapping->image.wine_fakedll)
+     {
+-        TRACE( "%s is a fake Wine dll\n", debugstr_us(nt_name) );
++        TRACE( "%s is a fake Wine dll\n", debugstr_us(&pe_mapping->nt_name) );
+         if (loadorder == LO_NATIVE) return STATUS_DLL_NOT_FOUND;
+         loadorder = LO_BUILTIN;  /* builtin with no fallback since mapping a fake dll is not useful */
+     }
+ 
+-    if (ios_is_arm64ec_cur() && image_info->is_hybrid && search_machine == IMAGE_FILE_MACHINE_AMD64)
+-        search_machine = current_machine;
++    if (current_machine == IMAGE_FILE_MACHINE_ARM64 && search_machine == IMAGE_FILE_MACHINE_AMD64)
++    {
++        /* force loading the x64 version of the builtin */
++        if (!pe_mapping->image.is_hybrid && !machine) machine = IMAGE_FILE_MACHINE_AMD64;
++        /* but make sure we load from the aarch64 builtin directory */
++        search_machine = IMAGE_FILE_MACHINE_ARM64;
++    }
+ 
+     switch (loadorder)
+     {
+@@ -1686,11 +1693,12 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
+     case LO_NATIVE_BUILTIN:
+         return STATUS_IMAGE_ALREADY_LOADED;
+     case LO_BUILTIN:
+-        return find_builtin_dll( nt_name, exp_name, module, size, info, limit_low, limit_high,
+-                                 search_machine, machine, FALSE, offset );
++        return find_builtin_dll( &pe_mapping->nt_name, &pe_mapping->exp_name, module, size, info,
++                                 limit_low, limit_high, search_machine, machine, FALSE, offset );
+     default:
+-        status = find_builtin_dll( nt_name, exp_name, module, size, info, limit_low, limit_high,
+-                                   search_machine, machine, (loadorder == LO_DEFAULT), offset );
++        status = find_builtin_dll( &pe_mapping->nt_name, &pe_mapping->exp_name, module, size, info,
++                                   limit_low, limit_high, search_machine, machine,
++                                   (loadorder == LO_DEFAULT), offset );
+         if (status == STATUS_DLL_NOT_FOUND || status == STATUS_NOT_SUPPORTED)
+             return STATUS_IMAGE_ALREADY_LOADED;
+         return status;
+@@ -1704,7 +1712,7 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
+  */
+ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret )
+ {
+-    unsigned int i, pos, namepos, maxlen = 0;
++    unsigned int i, pos, maxlen = 0;
+     unsigned int len = nt_name->Length / sizeof(WCHAR);
+     const char *so_dir = get_so_dir( current_machine );
+     char *ptr = NULL, *file, *ext = NULL;
+@@ -1712,8 +1720,7 @@ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret
+ 
+     if (!len) return STATUS_DLL_NOT_FOUND;
+ 
+-    for (i = namepos = 0; i < len; i++)
+-        if (nt_name->Buffer[i] == '/' || nt_name->Buffer[i] == '\\') break;
++    for (i = 0; i < len; i++) if (nt_name->Buffer[i] == '/' || nt_name->Buffer[i] == '\\') break;
+ 
+     if (i < len)  /* explicit path */
+     {
+@@ -1733,17 +1740,17 @@ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret
+     if (!(file = malloc( maxlen ))) return STATUS_NO_MEMORY;
+ 
+     pos = maxlen - len - 4;
++    ext = file + pos + len;
+     /* we don't want to depend on the current codepage here */
+     for (i = 0; i < len; i++)
+     {
+-        if (nt_name->Buffer[namepos + i] > 127) goto done;
+-        file[pos + i] = (char)nt_name->Buffer[namepos + i];
++        if (nt_name->Buffer[i] > 127) goto done;
++        file[pos + i] = (char)nt_name->Buffer[i];
+         if (file[pos + i] >= 'A' && file[pos + i] <= 'Z') file[pos + i] += 'a' - 'A';
+         else if (file[pos + i] == '.') ext = file + pos + i;
+     }
+     file[pos + len] = 0;
+     file[--pos] = '/';
+-    if (!ext) ext = file + pos + len;
+ 
+     if (build_dir)
+     {
+@@ -1795,19 +1802,16 @@ static const WCHAR *get_machine_wow64_dir( WORD machine )
+ 
+ 
+ /***************************************************************************
+- *	is_builtin_path
++ *	is_system_dir_path
+  *
+  * Check if path is inside a system directory, to support loading builtins
+  * when the corresponding file doesn't exist yet.
+  */
+-BOOL is_builtin_path( const UNICODE_STRING *path, WORD *machine )
++BOOL is_system_dir_path( const UNICODE_STRING *path, WORD *machine )
+ {
+     unsigned int i, len = path->Length / sizeof(WCHAR), dirlen;
+     const WCHAR *sysdir, *p = path->Buffer;
+ 
+-    /* only fake builtin existence during prefix bootstrap */
+-    if (!is_prefix_bootstrap) return FALSE;
+-
+     for (i = 0; i < supported_machines_count; i++)
+     {
+         sysdir = get_machine_wow64_dir( supported_machines[i] );
+@@ -1825,71 +1829,69 @@ BOOL is_builtin_path( const UNICODE_STRING *path, WORD *machine )
+ 
+ 
+ /***********************************************************************
+- *           open_main_image
++ *           load_main_exe
+  */
+-static NTSTATUS open_main_image( UNICODE_STRING *nt_name, void **module, SECTION_IMAGE_INFORMATION *info,
+-                                 enum loadorder loadorder, USHORT machine )
++NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine )
+ {
++    NTSTATUS status = STATUS_DLL_NOT_FOUND;
+     OBJECT_ATTRIBUTES attr;
+-    SIZE_T size = 0;
+-    char *unix_name;
+-    NTSTATUS status;
++    char *unix_name = NULL;
+     HANDLE mapping;
+-    UNICODE_STRING true_nt_name;
++    UNICODE_STRING true_nt_name = { 0 };
++    SIZE_T size = 0;
++    USHORT search_machine;
++    BOOL is_system_dir = is_system_dir_path( nt_name, &search_machine );
++    enum loadorder loadorder = get_load_order( nt_name, is_system_dir, NULL );
+ 
+-    if (loadorder == LO_DISABLED) NtTerminateProcess( GetCurrentProcess(), STATUS_DLL_NOT_FOUND );
++    if (loadorder == LO_DISABLED) NtTerminateProcess( GetCurrentProcess(), status );
+ 
+     InitializeObjectAttributes( &attr, nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
+-    if (get_nt_and_unix_names( &attr, &true_nt_name, &unix_name, FILE_OPEN, FALSE ))
++    if (!get_nt_and_unix_names( &attr, &true_nt_name, &unix_name, FILE_OPEN, FALSE ))
+     {
+-        dprintf(2, "[main-exe] get_nt_and_unix_names FAILED for main image\n");
+-        return STATUS_DLL_NOT_FOUND;
++        status = open_dll_file( unix_name, &attr, &mapping );
++        dprintf(2, "[main-exe] open_dll_file('%s') = 0x%x\n", unix_name, (unsigned)status);
+     }
++    else dprintf(2, "[main-exe] get_nt_and_unix_names FAILED for main image\n");
+ 
+-    status = open_dll_file( unix_name, &attr, &mapping );
+-    dprintf(2, "[main-exe] open_dll_file('%s') = 0x%x\n", unix_name, (unsigned)status);
+     if (!status)
+     {
+-        status = virtual_map_module( mapping, module, &size, info, 0, 0, machine );
+-        dprintf(2, "[main-exe] virtual_map_module = 0x%x Machine=0x%x chars=0x%x\n",
+-                (unsigned)status, info->Machine, info->ImageCharacteristics);
+-        if (status == STATUS_IMAGE_MACHINE_TYPE_MISMATCH && info->ComPlusNativeReady)
++        status = virtual_map_main_module( mapping, load_machine );
++        dprintf(2, "[main-exe] virtual_map_main_module = 0x%x Machine=0x%x chars=0x%x\n",
++                (unsigned)status, main_image_info.Machine, main_image_info.ImageCharacteristics);
++        if (status == STATUS_IMAGE_MACHINE_TYPE_MISMATCH && main_image_info.ComPlusNativeReady)
+         {
+-            info->Machine = native_machine;
++            main_image_info.Machine = is_machine_64bit( native_machine ) ? IMAGE_FILE_MACHINE_AMD64 : native_machine;
+             status = STATUS_SUCCESS;
+         }
+         NtClose( mapping );
+     }
+     else if (status == STATUS_INVALID_IMAGE_NOT_MZ && loadorder != LO_NATIVE)
+     {
+-        status = open_main_image_so_file( unix_name, attr.ObjectName, module, info );
++        status = open_main_image_so_file( unix_name, attr.ObjectName );
+     }
+     free( unix_name );
+     free( true_nt_name.Buffer );
+-    return status;
+-}
+-
+-
+-/***********************************************************************
+- *           load_main_exe
+- */
+-NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine, void **module )
+-{
+-    enum loadorder loadorder = get_load_order( nt_name );
+-    unsigned int status;
+-    SIZE_T size;
+-    USHORT search_machine;
+ 
+-    status = open_main_image( nt_name, module, &main_image_info, loadorder, load_machine );
+-    if (status != STATUS_DLL_NOT_FOUND) return status;
+-
+-    /* if path is in system dir, we can load the builtin even if the file itself doesn't exist */
+-    if (loadorder != LO_NATIVE && is_builtin_path( nt_name, &search_machine ))
++    switch (status)
+     {
+-        status = find_builtin_dll( nt_name, NULL, module, &size, &main_image_info, 0, 0,
+-                                   search_machine, load_machine, FALSE, 0 );
+-        dprintf(2, "[main-exe] builtin-path retry: find_builtin_dll(search_machine=0x%x) = 0x%x Machine=0x%x\n",
+-                search_machine, (unsigned)status, main_image_info.Machine);
++    case STATUS_DLL_NOT_FOUND:
++    case STATUS_INVALID_IMAGE_FORMAT:
++    case STATUS_NOT_SUPPORTED:
++        /* if path is in system dir, we can load the builtin even if the file itself doesn't exist.
++         * iOS (wine-11.18 port): upstream now does this only while the prefix is
++         * bootstrapping; the iOS prefix keeps the 11.4 behaviour (any time). */
++#ifdef WINE_IOS
++        if (loadorder != LO_NATIVE && is_system_dir)
++#else
++        if (loadorder != LO_NATIVE && is_prefix_bootstrap && is_system_dir)
++#endif
++        {
++            status = find_builtin_dll( nt_name, NULL, &main_module, &size, &main_image_info, 0, 0,
++                                       search_machine, load_machine, FALSE, 0 );
++            dprintf(2, "[main-exe] builtin-path retry: find_builtin_dll(search_machine=0x%x) = 0x%x Machine=0x%x\n",
++                    search_machine, (unsigned)status, main_image_info.Machine);
++        }
++        break;
+     }
+     return status;
+ }
+@@ -1900,7 +1902,7 @@ NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine, void **mod
+  *
+  * Load start.exe as main image.
+  */
+-NTSTATUS load_start_exe( UNICODE_STRING *nt_name, void **module )
++NTSTATUS load_start_exe( UNICODE_STRING *nt_name )
+ {
+     static const WCHAR startW[] = {'s','t','a','r','t','.','e','x','e',0};
+     unsigned int status;
+@@ -1910,7 +1912,8 @@ NTSTATUS load_start_exe( UNICODE_STRING *nt_name, void **module )
+     wcscpy( image, get_machine_wow64_dir( current_machine ));
+     wcscat( image, startW );
+     init_unicode_string( nt_name, image );
+-    status = find_builtin_dll( nt_name, NULL, module, &size, &main_image_info, 0, 0, current_machine, 0, FALSE, 0 );
++    status = find_builtin_dll( nt_name, NULL, &main_module, &size,
++                               &main_image_info, 0, 0, current_machine, 0, FALSE, 0 );
+     if (!NT_SUCCESS(status))
+     {
+         MESSAGE( "wine: failed to load start.exe: %x\n", status );
+@@ -2662,6 +2665,31 @@ static ULONG_PTR get_image_address(void)
+  */
+ extern void ios_reserve_fex_arena(void);  /* ml756, virtual_ios.c */
+ 
++#ifdef WINE_IOS
++/* wine-11.18: the first TEB is made in init_startup_info, after the thread
++ * data, so start_main_thread finds the x18 trampolines' raw TSD slot first
++ * and stores the TEB there once it exists. Nothing reads the slot before
++ * then: no PE code has run. */
++static void ios_publish_first_teb( TEB *teb )
++{
++    extern pthread_key_t ios_teb_tls_key;
++    extern int ios_teb_tls_slot_offset;
++    uintptr_t tsd_base;
++
++    pthread_setspecific( ios_teb_tls_key, teb );
++    __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tsd_base));
++    tsd_base &= ~7ULL;
++    if (*(void **)(tsd_base + ios_teb_tls_slot_offset) != teb)
++    {
++        dprintf(STDERR_FILENO, "[teb-tsd] FATAL: slot 0x%x does not hold the first TEB %p\n",
++                ios_teb_tls_slot_offset, (void *)teb);
++        abort();
++    }
++    dprintf(STDERR_FILENO, "[teb-tsd] first teb=%p published at offset 0x%x\n",
++            (void *)teb, ios_teb_tls_slot_offset);
++}
++#endif
++
+ static void start_main_thread(void)
+ {
+ #ifdef WINE_IOS
+@@ -2669,9 +2697,9 @@ static void start_main_thread(void)
+ #else
+ #define WINE_IOS_LOG(msg)
+ #endif
+-    WINE_IOS_LOG("virtual_alloc_first_teb...");
+-    TEB *teb = virtual_alloc_first_teb();
+-    WINE_IOS_LOG("virtual_alloc_first_teb done");
++    WINE_IOS_LOG("virtual_alloc_first_thread_data...");
++    struct thread_data *data = virtual_alloc_first_thread_data();
++    WINE_IOS_LOG("virtual_alloc_first_thread_data done");
+ 
+ #ifdef WINE_IOS
+     /* Create TLS key for TEB storage BEFORE any PE loading.
+@@ -2715,17 +2743,21 @@ static void start_main_thread(void)
+             {
+                 if (*(void **)(tsd_base + s * 8) == sentinel) { slot = s; break; }
+             }
+-            pthread_setspecific(ios_teb_tls_key, teb);
++            /* wine-11.18: the TEB does not exist yet (upstream allocates it in
++             * init_startup_info, after the thread data). The slot holds NULL
++             * until ios_publish_first_teb() below stores the TEB. */
++            pthread_setspecific(ios_teb_tls_key, NULL);
+         }
+ 
+-        /* The slot must now hold the TEB, via the same base the trampolines
+-         * will use. Anything else and we do not understand the layout. */
+-        if (slot >= 0 && *(void **)(tsd_base + slot * 8) == teb)
++        /* The slot must now read back what the key holds, via the same base
++         * the trampolines will use. Anything else and we do not understand
++         * the layout. */
++        if (slot >= 0 && *(void **)(tsd_base + slot * 8) == NULL)
+         {
+             ios_teb_tls_slot_offset = slot * 8;
+             WINE_IOS_LOG("TEB TLS slot found");
+             dprintf(STDERR_FILENO, "[teb-tsd] key=%d offset=0x%x verified=1 tsd_base=%p teb=%p\n",
+-                    (int)ios_teb_tls_key, ios_teb_tls_slot_offset, (void *)tsd_base, teb);
++                    (int)ios_teb_tls_key, ios_teb_tls_slot_offset, (void *)tsd_base, (void *)data);
+         }
+         else
+         {
+@@ -2734,18 +2766,14 @@ static void start_main_thread(void)
+              * patched module, arbitrarily far from here. */
+             dprintf(STDERR_FILENO,
+                     "[teb-tsd] FATAL: pthread key %d has no direct raw TSD slot "
+-                    "(sentinel slot=%d, tsd_base=%p, teb=%p)\n",
+-                    (int)ios_teb_tls_key, slot, (void *)tsd_base, teb);
++                    "(sentinel slot=%d, tsd_base=%p, thread_data=%p)\n",
++                    (int)ios_teb_tls_key, slot, (void *)tsd_base, (void *)data);
+             abort();
+         }
+     }
+ #endif
+-    WINE_IOS_LOG("signal_init_threading...");
+-    signal_init_threading();
+-    WINE_IOS_LOG("dbg_init...");
+-    dbg_init();
+     WINE_IOS_LOG("server_init_process...");
+-    startup_info_size = server_init_process();
++    server_init_process( data );
+     WINE_IOS_LOG("server_init_process done");
+     WINE_IOS_LOG("virtual_map_user_shared_data...");
+     virtual_map_user_shared_data();
+@@ -2755,10 +2783,15 @@ static void start_main_thread(void)
+     init_files();
+     WINE_IOS_LOG("init_startup_info...");
+     unix_init_startup_info();
++    WINE_IOS_LOG("dbg_init...");
++    dbg_init();
++#ifdef WINE_IOS
++    ios_publish_first_teb( data->teb );
++#endif
+     *(ULONG_PTR *)&peb->CloudFileFlags = get_image_address();
+     set_load_order_app_name( main_wargv[0] );
+     WINE_IOS_LOG("init_thread_stack...");
+-    init_thread_stack( teb, 0, 0, 0 );
++    init_thread_stack( data->teb, 0, 0, 0 );
+     NtCreateKeyedEvent( &keyed_event, GENERIC_READ | GENERIC_WRITE, NULL, 0 );
+     /* ml756: take FEX's host arena BEFORE any PE module is placed.
+      *
+@@ -2790,128 +2823,6 @@ static void start_main_thread(void)
+     server_init_process_done();
+ }
+ 
+-#ifdef __ANDROID__
+-
+-#ifndef WINE_JAVA_CLASS
+-#define WINE_JAVA_CLASS "org/winehq/wine/WineActivity"
+-#endif
+-
+-DECLSPEC_EXPORT JavaVM *java_vm = NULL;
+-DECLSPEC_EXPORT jobject java_object = 0;
+-DECLSPEC_EXPORT unsigned short java_gdt_sel = 0;
+-
+-/* main Wine initialisation */
+-static jstring wine_init_jni( JNIEnv *env, jobject obj, jobjectArray cmdline, jobjectArray environment )
+-{
+-    char **argv;
+-    char *str;
+-    char error[1024];
+-    int i, argc, length;
+-
+-    /* get the command line array */
+-
+-    argc = (*env)->GetArrayLength( env, cmdline );
+-    for (i = length = 0; i < argc; i++)
+-    {
+-        jobject str_obj = (*env)->GetObjectArrayElement( env, cmdline, i );
+-        length += (*env)->GetStringUTFLength( env, str_obj ) + 1;
+-    }
+-
+-    argv = malloc( (argc + 1) * sizeof(*argv) + length );
+-    str = (char *)(argv + argc + 1);
+-    for (i = 0; i < argc; i++)
+-    {
+-        jobject str_obj = (*env)->GetObjectArrayElement( env, cmdline, i );
+-        length = (*env)->GetStringUTFLength( env, str_obj );
+-        (*env)->GetStringUTFRegion( env, str_obj, 0,
+-                                    (*env)->GetStringLength( env, str_obj ), str );
+-        argv[i] = str;
+-        str[length] = 0;
+-        str += length + 1;
+-    }
+-    argv[argc] = NULL;
+-
+-    /* set the environment variables */
+-
+-    if (environment)
+-    {
+-        int count = (*env)->GetArrayLength( env, environment );
+-        for (i = 0; i < count - 1; i += 2)
+-        {
+-            jobject var_obj = (*env)->GetObjectArrayElement( env, environment, i );
+-            jobject val_obj = (*env)->GetObjectArrayElement( env, environment, i + 1 );
+-            const char *var = (*env)->GetStringUTFChars( env, var_obj, NULL );
+-
+-            if (val_obj)
+-            {
+-                const char *val = (*env)->GetStringUTFChars( env, val_obj, NULL );
+-                setenv( var, val, 1 );
+-                if (!strcmp( var, "LD_LIBRARY_PATH" ))
+-                {
+-                    void (*update_func)( const char * ) = dlsym( RTLD_DEFAULT,
+-                                                                 "android_update_LD_LIBRARY_PATH" );
+-                    if (update_func) update_func( val );
+-                }
+-                else if (!strcmp( var, "WINEDEBUGLOG" ))
+-                {
+-                    int fd = open( val, O_WRONLY | O_CREAT | O_APPEND, 0666 );
+-                    if (fd != -1)
+-                    {
+-                        dup2( fd, 2 );
+-                        close( fd );
+-                    }
+-                }
+-                (*env)->ReleaseStringUTFChars( env, val_obj, val );
+-            }
+-            else unsetenv( var );
+-
+-            (*env)->ReleaseStringUTFChars( env, var_obj, var );
+-        }
+-    }
+-
+-    java_object = (*env)->NewGlobalRef( env, obj );
+-
+-    main_argc = argc;
+-    main_argv = argv;
+-
+-    init_paths();
+-    init_environment();
+-
+-#ifdef __i386__
+-    {
+-        unsigned short java_fs;
+-        __asm__( "mov %%fs,%0" : "=r" (java_fs) );
+-        if (!(java_fs & 4)) java_gdt_sel = java_fs;
+-        __asm__( "mov %0,%%fs" :: "r" (0) );
+-        start_main_thread();
+-        __asm__( "mov %0,%%fs" :: "r" (java_fs) );
+-    }
+-#else
+-    start_main_thread();
+-#endif
+-    return (*env)->NewStringUTF( env, error );
+-}
+-
+-jint JNI_OnLoad( JavaVM *vm, void *reserved )
+-{
+-    static const JNINativeMethod method =
+-    {
+-        "wine_init", "([Ljava/lang/String;[Ljava/lang/String;)Ljava/lang/String;", wine_init_jni
+-    };
+-
+-    JNIEnv *env;
+-    jclass class;
+-
+-    virtual_init();
+-
+-    java_vm = vm;
+-    if ((*vm)->AttachCurrentThread( vm, &env, NULL ) != JNI_OK) return JNI_ERR;
+-    if (!(class = (*env)->FindClass( env, WINE_JAVA_CLASS ))) return JNI_ERR;
+-    (*env)->RegisterNatives( env, class, &method, 1 );
+-    return JNI_VERSION_1_6;
+-}
+-
+-#endif  /* __ANDROID__ */
+ 
+ #ifdef __APPLE__
+ static void *apple_wine_thread( void *arg )
+@@ -3143,10 +3054,11 @@ static void check_command_line( int argc, char *argv[] )
+  * Instead of fork+exec, the parent creates a thread that calls this.
+  * Does a minimal subset of __wine_main/start_main_thread init.
+  */
+-extern size_t server_init_process_child( int child_fd_socket );
++extern size_t server_init_process_child( struct thread_data *data, int child_fd_socket );
+ 
+ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_socket )
+ {
++    struct thread_data *data;
+     TEB *teb;
+     PEB *child_peb;
+     NTSTATUS status;
+@@ -3162,12 +3074,26 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+             is_arm64ec(), main_image_info.Machine, current_machine,
+             argc > 1 ? argv[1] : "?");
+ 
++    /* wine-11.18: per-thread state (server fds, tid, signal and kernel
++     * stacks) lives in a struct thread_data reached through thread_data_key,
++     * and the TEB is allocated for it. This thread was made by pthread_create
++     * in process_ios.c, not by NtCreateThreadEx, so it has neither yet.
++     * The tid is 0 until server_init_process_child() registers the thread,
++     * which then fixes the TEB's ClientId (the old set_thread_id). */
++    if (!(data = virtual_alloc_thread_data()))
++    {
++        dprintf(STDERR_FILENO, "[Wine child] virtual_alloc_thread_data FAILED\n");
++        return;
++    }
++    pthread_setspecific( thread_data_key, data );
++
+     /* Allocate a new TEB for this child "process" thread */
+-    status = virtual_alloc_teb( &teb );
++    status = virtual_alloc_teb( data );
+     if (status) {
+         dprintf(STDERR_FILENO, "[Wine child] virtual_alloc_teb FAILED: 0x%x\n", status);
+         return;
+     }
++    teb = data->teb;
+ 
+     /* Allocate a SEPARATE PEB for this child "process".
+      * Without this, parent and child share peb->Ldr (module list),
+@@ -3232,8 +3158,8 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+     dprintf(STDERR_FILENO, "[Wine child] teb=%p child_peb=%p (parent_peb=%p)\n",
+             teb, child_peb, peb);
+ 
+-    /* Set TEB key so NtCurrentTeb() works on this thread */
+-    pthread_setspecific( teb_key, teb );
++    /* NtCurrentTeb() already works on this thread: it reads data->teb through
++     * thread_data_key (set above). */
+ 
+     /* Store TEB in patcher TLS slot so TPIDRRO_EL0-based trampolines work */
+     {
+@@ -3267,7 +3193,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+         main_argv = argv;
+ 
+         /* Register with wineserver using the child's socketfd */
+-        startup_info_size = server_init_process_child( child_fd_socket );
++        startup_info_size = server_init_process_child( data, child_fd_socket );
+ 
+         /* init_startup_info — reads startup info from wineserver, loads the
+          * child's PE. It OVERWRITES the main_image_info global with the
+@@ -3278,9 +3204,11 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+          * thread reads identity owner-aware from here on. */
+         {
+             SECTION_IMAGE_INFORMATION session_image_info = main_image_info;
++            void *session_main_module = main_module;  /* wine-11.18: a global too */
+             unix_init_startup_info();
+             ios_register_proc_ident( child_peb, &main_image_info );
+             main_image_info = session_image_info;
++            main_module = session_main_module;
+         }
+         dprintf(STDERR_FILENO, "[Wine child] PE loaded: Machine=0x%x TransferAddress=%p ImageBase=%p\n",
+                 ios_cur_image_info()->Machine, ios_cur_image_info()->TransferAddress, peb->ImageBaseAddress);
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index f804fb9..0ae9c2b 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -274,19 +274,11 @@ static unsigned int get_pe_file_info( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
+     memset( info, 0, sizeof(*info) );
+     if (!(status = get_nt_and_unix_names( attr, nt_name, unix_name, FILE_OPEN, FALSE )))
+     {
+-        status = open_unix_file( handle, *unix_name, GENERIC_READ, attr, 0,
++        status = open_unix_file( handle, *unix_name, GENERIC_READ | SYNCHRONIZE, attr, 0,
+                                  FILE_SHARE_READ | FILE_SHARE_DELETE,
+                                  FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0 );
+     }
+-    if (status)
+-    {
+-        if (is_builtin_path( attr->ObjectName, &info->machine ))
+-        {
+-            TRACE( "assuming %04x builtin for %s\n", info->machine, debugstr_us(attr->ObjectName));
+-            return STATUS_SUCCESS;
+-        }
+-        return status;
+-    }
++    if (status) goto done;
+ 
+     if (!(status = NtCreateSection( &mapping, STANDARD_RIGHTS_REQUIRED | SECTION_QUERY |
+                                     SECTION_MAP_READ | SECTION_MAP_EXECUTE,
+@@ -313,6 +305,13 @@ static unsigned int get_pe_file_info( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
+             if (needs_close) close( unix_fd );
+         }
+     }
++
++ done:
++    if (status && is_prefix_bootstrap && is_system_dir_path( attr->ObjectName, &info->machine ))
++    {
++        TRACE( "assuming %04x builtin for %s\n", info->machine, debugstr_us(attr->ObjectName));
++        return STATUS_SUCCESS;
++    }
+     return status;
+ }
+ 
+@@ -531,7 +530,8 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
+     {
+         if (!(pid = fork()))  /* grandchild */
+         {
+-            if ((peb->ProcessParameters && params->ProcessGroupId != peb->ProcessParameters->ProcessGroupId) ||
++            if ((peb && peb->ProcessParameters &&
++                 params->ProcessGroupId != peb->ProcessParameters->ProcessGroupId) ||
+                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC ||
+                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC_NO_WINDOW ||
+                 params->ConsoleHandle == NULL)
+@@ -712,7 +712,8 @@ static NTSTATUS fork_and_exec( OBJECT_ATTRIBUTES *attr, const char *unix_name, i
+         {
+             close( fd[0] );
+ 
+-            if ((peb->ProcessParameters && params->ProcessGroupId != peb->ProcessParameters->ProcessGroupId) ||
++            if ((peb && peb->ProcessParameters &&
++                 params->ProcessGroupId != peb->ProcessParameters->ProcessGroupId) ||
+                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC ||
+                 params->ConsoleHandle == CONSOLE_HANDLE_ALLOC_NO_WINDOW ||
+                 params->ConsoleHandle == NULL)
+@@ -819,7 +820,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+     ULONG startup_info_size, env_size;
+     int unixdir, socketfd[2] = { -1, -1 };
+     struct pe_image_info pe_info;
+-    CLIENT_ID id;
++    ULONG process_id, thread_id;
+     USHORT machine = 0;
+     HANDLE parent = 0, debug = 0, token = 0;
+     UNICODE_STRING nt_name, path = {0};
+@@ -1349,7 +1350,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         goto done;
+     env_size = get_env_size( params, &winedebug );
+ 
+-    if ((status = alloc_object_attributes( process_attr, &objattr, &attr_len ))) goto done;
++    if ((status = wine_server_alloc_object_attributes( process_attr, &objattr, &attr_len ))) goto done;
+ 
+     if ((status = alloc_handle_list( handles_attr, &handles, &handles_size )))
+     {
+@@ -1406,7 +1407,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         if (!(status = wine_server_call( req )))
+         {
+             process_handle = wine_server_ptr_handle( reply->handle );
+-            id.UniqueProcess = ULongToHandle( reply->pid );
++            process_id     = reply->pid;
+         }
+         process_info = wine_server_ptr_handle( reply->info );
+     }
+@@ -1431,7 +1432,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         goto done;
+     }
+ 
+-    if ((status = alloc_object_attributes( thread_attr, &objattr, &attr_len ))) goto done;
++    if ((status = wine_server_alloc_object_attributes( thread_attr, &objattr, &attr_len ))) goto done;
+ 
+     SERVER_START_REQ( new_thread )
+     {
+@@ -1443,7 +1444,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         if (!(status = wine_server_call( req )))
+         {
+             thread_handle = wine_server_ptr_handle( reply->handle );
+-            id.UniqueThread = ULongToHandle( reply->tid );
++            thread_id     = reply->tid;
+         }
+     }
+     SERVER_END_REQ;
+@@ -1476,8 +1477,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+     }
+ 
+     TRACE( "%s pid %04x tid %04x handles %p/%p\n", debugstr_us(&path),
+-           HandleToULong(id.UniqueProcess), HandleToULong(id.UniqueThread),
+-           process_handle, thread_handle );
++           process_id, thread_id, process_handle, thread_handle );
+ 
+     /* update output attributes */
+ 
+@@ -1487,6 +1487,7 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         {
+         case PS_ATTRIBUTE_CLIENT_ID:
+         {
++            CLIENT_ID id = make_client_id( process_id, thread_id );
+             SIZE_T size = min( ps_attr->Attributes[i].Size, sizeof(id) );
+             memcpy( ps_attr->Attributes[i].ValuePtr, &id, size );
+             if (ps_attr->Attributes[i].ReturnLength) *ps_attr->Attributes[i].ReturnLength = size;
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index c02df4f..3b60236 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -417,10 +417,8 @@ static DECLSPEC_NORETURN void server_protocol_perror( const char *err )
+  *
+  * Send a request to the server.
+  */
+-static unsigned int send_request( const struct __server_request_info *req )
++static unsigned int send_request( int request_fd, const struct __server_request_info *req )
+ {
+-    int request_fd = ntdll_get_thread_data()->request_fd;
+-
+     if (!req->u.req.request_header.request_size)
+     {
+         data_size_t to_write = sizeof(req->u.req);
+@@ -483,13 +481,13 @@ static unsigned int send_request( const struct __server_request_info *req )
+  *
+  * Read data from the reply buffer; helper for wait_reply.
+  */
+-static void read_reply_data( void *buffer, size_t size )
++static void read_reply_data( int reply_fd, void *buffer, size_t size )
+ {
+     int ret;
+ 
+     for (;;)
+     {
+-        if ((ret = read( ntdll_get_thread_data()->reply_fd, buffer, size )) > 0)
++        if ((ret = read( reply_fd, buffer, size )) > 0)
+         {
+             if (!(size -= ret)) return;
+             buffer = (char *)buffer + ret;
+@@ -500,7 +498,7 @@ static void read_reply_data( void *buffer, size_t size )
+         if (errno == EPIPE) break;
+ #ifdef WINE_IOS
+         {
+-            int bad_fd = ntdll_get_thread_data()->reply_fd;
++            int bad_fd = get_thread_data()->reply_fd;
+             void *teb = NtCurrentTeb();
+             uint64_t x18_val;
+             __asm__ volatile("mov %0, x18" : "=r"(x18_val));
+@@ -512,7 +510,7 @@ static void read_reply_data( void *buffer, size_t size )
+     }
+ #ifdef WINE_IOS
+     /* EOF flavor: the server-side write end of our reply pipe vanished */
+-    ios_fdt_autopsy( "reply-read-eof", ntdll_get_thread_data()->reply_fd, ret, errno );
++    ios_fdt_autopsy( "reply-read-eof", get_thread_data()->reply_fd, ret, errno );
+ #endif
+     /* the server closed the connection; time to die... */
+     abort_thread(0);
+@@ -524,11 +522,11 @@ static void read_reply_data( void *buffer, size_t size )
+  *
+  * Wait for a reply from the server.
+  */
+-static inline unsigned int wait_reply( struct __server_request_info *req )
++static inline unsigned int wait_reply( int reply_fd, struct __server_request_info *req )
+ {
+-    read_reply_data( &req->u.reply, sizeof(req->u.reply) );
++    read_reply_data( reply_fd, &req->u.reply, sizeof(req->u.reply) );
+     if (req->u.reply.reply_header.reply_size)
+-        read_reply_data( req->reply_data, req->u.reply.reply_header.reply_size );
++        read_reply_data( reply_fd, req->reply_data, req->u.reply.reply_header.reply_size );
+     return req->u.reply.reply_header.error;
+ }
+ 
+@@ -1755,11 +1753,12 @@ uintptr_t ios_srv_game_teb = 0;           /* set once by server_init_process_don
+  */
+ unsigned int server_call_unlocked( void *req_ptr )
+ {
++    struct thread_data *data = get_thread_data();
+     struct __server_request_info * const req = req_ptr;
+     unsigned int ret;
+ 
+     ios_srv_req_count++;
+-    if ((ret = send_request( req ))) return ret;
++    if ((ret = send_request( data->request_fd, req ))) return ret;
+     /* iOS-Madeira 2026-07-05: kick the in-process server loop out of its
+      * tick sleep so the request is picked up in ~50us instead of waiting
+      * for the next 1ms iteration (fd_ios.c ios_srv_wake_sem). */
+@@ -1767,7 +1766,7 @@ unsigned int server_call_unlocked( void *req_ptr )
+         extern void ios_wineserver_wake(void);
+         ios_wineserver_wake();
+     }
+-    return wait_reply( req );
++    return wait_reply( data->reply_fd, req );
+ }
+ 
+ 
+@@ -1824,24 +1823,25 @@ void server_leave_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigse
+  *
+  * Wait for a reply on the waiting pipe of the current thread.
+  */
+-static int wait_select_reply( void *cookie )
++static int wait_select_reply( int wait_fd[2], void *cookie )
+ {
+     int signaled;
+     struct wake_up_reply reply;
++
+     for (;;)
+     {
+         int ret;
+-        ret = read( ntdll_get_thread_data()->wait_fd[0], &reply, sizeof(reply) );
++        ret = read( wait_fd[0], &reply, sizeof(reply) );
+         if (ret == sizeof(reply))
+         {
+             if (!reply.cookie) abort_thread( reply.signaled );  /* thread got killed */
+             if (wine_server_get_ptr(reply.cookie) == cookie) return reply.signaled;
+             /* we stole another reply, wait for the real one */
+-            signaled = wait_select_reply( cookie );
++            signaled = wait_select_reply( wait_fd, cookie );
+             /* and now put the wrong one back in the pipe */
+             for (;;)
+             {
+-                ret = write( ntdll_get_thread_data()->wait_fd[1], &reply, sizeof(reply) );
++                ret = write( wait_fd[1], &reply, sizeof(reply) );
+                 if (ret == sizeof(reply)) break;
+                 if (ret >= 0) server_protocol_error( "partial wakeup write %d\n", ret );
+                 if (errno == EINTR) continue;
+@@ -1852,7 +1852,7 @@ static int wait_select_reply( void *cookie )
+         if (ret >= 0)
+         {
+ #ifdef WINE_IOS
+-            ios_fdt_autopsy( "wakeup-read", ntdll_get_thread_data()->wait_fd[0], ret, 0 );
++            ios_fdt_autopsy( "wakeup-read", get_thread_data()->wait_fd[0], ret, 0 );
+ #endif
+             server_protocol_error( "partial wakeup read %d\n", ret );
+         }
+@@ -1860,7 +1860,7 @@ static int wait_select_reply( void *cookie )
+ #ifdef WINE_IOS
+         {
+             int saved_errno = errno;
+-            ios_fdt_autopsy( "wakeup-read", ntdll_get_thread_data()->wait_fd[0], ret, saved_errno );
++            ios_fdt_autopsy( "wakeup-read", get_thread_data()->wait_fd[0], ret, saved_errno );
+             errno = saved_errno;
+         }
+ #endif
+@@ -2035,7 +2035,7 @@ static void invoke_system_apc( const union apc_call *call, union apc_result *res
+         if ((ULONG_PTR)addr == call->virtual_flush.addr && size == call->virtual_flush.size)
+         {
+             result->virtual_flush.status = NtFlushVirtualMemory( NtCurrentProcess(),
+-                                                                 (const void **)&addr, &size, 0 );
++                                                                 (const void **)&addr, &size, NULL );
+             result->virtual_flush.addr = wine_server_client_ptr( addr );
+             result->virtual_flush.size = size;
+         }
+@@ -2213,6 +2213,7 @@ unsigned int server_select( const union select_op *select_op, data_size_t size,
+ #endif
+     unsigned int ret;
+     int cookie;
++    struct thread_data *data = get_thread_data();
+     obj_handle_t apc_handle = 0;
+     BOOL suspend_context = !!context;
+     union apc_result result;
+@@ -2266,7 +2267,7 @@ unsigned int server_select( const union select_op *select_op, data_size_t size,
+         pthread_sigmask( SIG_SETMASK, &old_set, NULL );
+         if (signaled) break;
+ 
+-        ret = wait_select_reply( &cookie );
++        ret = wait_select_reply( data->wait_fd, &cookie );
+     }
+     while (ret == STATUS_USER_APC || ret == STATUS_KERNEL_APC);
+ 
+@@ -3170,22 +3171,22 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
+  */
+ static int setup_config_dir(void)
+ {
+-    char *p;
++    char *p, *dir;
+     struct stat st;
+     int fd_cwd = open( ".", O_RDONLY );
+ 
+     if (chdir( config_dir ) == -1)
+     {
+         if (errno != ENOENT) fatal_perror( "cannot use directory %s", config_dir );
+-        if ((p = strrchr( config_dir, '/' )) && p != config_dir)
++        dir = strdup( config_dir );
++        if ((p = strrchr( dir, '/' )) && p != dir)
+         {
+-            while (p > config_dir + 1 && p[-1] == '/') p--;
++            while (p > dir + 1 && p[-1] == '/') p--;
+             *p = 0;
+-            if (!stat( config_dir, &st ) && st.st_uid != getuid())
+-                fatal_error( "'%s' is not owned by you, refusing to create a configuration directory there\n",
+-                             config_dir );
+-            *p = '/';
++            if (!stat( dir, &st ) && st.st_uid != getuid())
++                fatal_error( "'%s' is not owned by you, refusing to create a configuration directory there\n", dir );
+         }
++        free( dir );
+         mkdir( config_dir, 0777 );
+         if (chdir( config_dir ) == -1) fatal_perror( "chdir to %s", config_dir );
+         MESSAGE( "wine: created the configuration directory '%s'\n", config_dir );
+@@ -3354,6 +3355,8 @@ static int server_connect(void)
+ #include <mach/mach_error.h>
+ #include <servers/bootstrap.h>
+ 
++extern NTSTATUS apple_spawn_main_thread(void);
++
+ /* send our task port to the server */
+ static void send_server_task_port(void)
+ {
+@@ -3434,38 +3437,50 @@ static int get_unix_tid(void)
+  *
+  * Create the server->client communication pipe.
+  */
+-static int init_thread_pipe(void)
++static int init_thread_pipe( struct thread_data *data )
+ {
+     int reply_pipe[2];
+     stack_t ss;
+ 
+-    ss.ss_sp    = get_signal_stack();
++    ss.ss_sp    = data->signal_stack;
+     ss.ss_size  = signal_stack_size;
+     ss.ss_flags = 0;
+     sigaltstack( &ss, NULL );
+ 
+     if (server_pipe( reply_pipe ) == -1) server_protocol_perror( "pipe" );
+-    if (server_pipe( ntdll_get_thread_data()->wait_fd ) == -1) server_protocol_perror( "pipe" );
++    if (server_pipe( data->wait_fd ) == -1) server_protocol_perror( "pipe" );
+ #ifdef WINE_IOS
+     {
+         void *peb = ios_jit_current_peb();
+         ios_fdt_reg( reply_pipe[0], FDT_REPLY_RD, peb );
+         ios_fdt_reg( reply_pipe[1], FDT_REPLY_WR, peb );
+-        ios_fdt_reg( ntdll_get_thread_data()->wait_fd[0], FDT_WAIT_RD, peb );
+-        ios_fdt_reg( ntdll_get_thread_data()->wait_fd[1], FDT_WAIT_WR, peb );
++        ios_fdt_reg( data->wait_fd[0], FDT_WAIT_RD, peb );
++        ios_fdt_reg( data->wait_fd[1], FDT_WAIT_WR, peb );
+         wine_log_write("[fdtrace] pipes tid=%04x peb=%p master=%d reply=%d/%d wait=%d/%d rev=ml586",
+                        (unsigned int)GetCurrentThreadId(), peb, ios_current_fd_socket(),
+                        reply_pipe[0], reply_pipe[1],
+-                       ntdll_get_thread_data()->wait_fd[0], ntdll_get_thread_data()->wait_fd[1]);
++                       data->wait_fd[0], data->wait_fd[1]);
+     }
+ #endif
+     wine_server_send_fd( reply_pipe[1] );
+-    wine_server_send_fd( ntdll_get_thread_data()->wait_fd[1] );
+-    ntdll_get_thread_data()->reply_fd = reply_pipe[0];
++    wine_server_send_fd( data->wait_fd[1] );
++    data->reply_fd = reply_pipe[0];
+     return reply_pipe[1];
+ }
+ 
+ 
++/***********************************************************************
++ *           init_teb_data
++ */
++static void init_teb_data( struct thread_data *data )
++{
++    struct teb_data *teb_data = get_teb_data( data );
++
++    teb_data->syscall_table = KeServiceDescriptorTable;
++    teb_data->syscall_trace = TRACE_ON(syscall);
++}
++
++
+ /***********************************************************************
+  *           process_exit_wrapper
+  *
+@@ -3659,17 +3674,14 @@ static void ios_create_drive_symlinks(void)
+  *
+  * Start the server and create the initial socket pair.
+  */
+-size_t server_init_process(void)
++void server_init_process( struct thread_data *data )
+ {
+     const char *arch = getenv( "WINEARCH" );
+     const char *env_socket = getenv( "WINESERVERSOCKET" );
+-    struct ntdll_thread_data *data = ntdll_get_thread_data();
+     obj_handle_t version;
+     unsigned int i;
+     int ret, reply_pipe;
+     struct sigaction sig_act;
+-    size_t info_size;
+-    DWORD pid, tid;
+ 
+     server_pid = -1;
+     if (env_socket)
+@@ -3757,7 +3769,7 @@ size_t server_init_process(void)
+     sigemptyset( &sig_act.sa_mask );
+     sigaction( SIGPIPE, &sig_act, NULL );
+ 
+-    reply_pipe = init_thread_pipe();
++    reply_pipe = init_thread_pipe( data );
+ #ifdef WINE_IOS
+     wine_log_write("[Wine init_process] reply_pipe=%d, sending init_first_thread...", reply_pipe);
+ #endif
+@@ -3769,14 +3781,15 @@ size_t server_init_process(void)
+         req->reply_fd    = reply_pipe;
+         req->wait_fd     = data->wait_fd[1];
+         req->debug_level = (TRACE_ON(server) != 0);
++        req->page_size   = get_host_page_size();
+         wine_server_set_reply( req, supported_machines, sizeof(supported_machines) );
+         if (!(ret = wine_server_call( req )))
+         {
+             obj_handle_t handle;
+             pid               = reply->pid;
+-            tid               = reply->tid;
+-            peb->SessionId    = reply->session_id;
+-            info_size         = reply->info_size;
++            data->tid         = reply->tid;
++            session_id        = reply->session_id;
++            startup_info_size = reply->info_size;
+             server_start_time = reply->server_start;
+             supported_machines_count = wine_server_reply_size( reply ) / sizeof(*supported_machines);
+             if (reply->inproc_device)
+@@ -3794,7 +3807,7 @@ size_t server_init_process(void)
+     close( reply_pipe );
+ 
+ #ifdef WINE_IOS
+-    wine_log_write("[Wine init_process] init_first_thread ret=%d, pid=%d, tid=%d", ret, pid, tid);
++    wine_log_write("[Wine init_process] init_first_thread ret=%d, pid=%d, tid=%d", ret, pid, data->tid);
+ #endif
+     if (ret) server_protocol_error( "init_first_thread failed with status %x\n", ret );
+ 
+@@ -3807,11 +3820,6 @@ size_t server_init_process(void)
+     {
+         if (arch && !strcmp( arch, "win32" ))
+             fatal_error( "WINEARCH set to win32 but '%s' is a 64-bit installation.\n", config_dir );
+-#ifndef _WIN64
+-        NtCurrentTeb()->GdiBatchCount = PtrToUlong( (char *)NtCurrentTeb() - teb_offset );
+-        NtCurrentTeb()->WowTebOffset  = -teb_offset;
+-        wow_peb = (PEB64 *)((char *)peb - page_size);
+-#endif
+     }
+     else
+     {
+@@ -3821,8 +3829,6 @@ size_t server_init_process(void)
+             fatal_error( "WINEARCH set to %s but '%s' is a 32-bit installation.\n", arch, config_dir );
+     }
+ 
+-    set_thread_id( NtCurrentTeb(), pid, tid );
+-
+ #ifdef WINE_IOS
+     /* First process only (children use server_init_process_child), so the DOS
+      * drive objects are published exactly once, before the shell enumerates. */
+@@ -3830,7 +3836,7 @@ size_t server_init_process(void)
+ #endif
+ 
+     for (i = 0; i < supported_machines_count; i++)
+-        if (supported_machines[i] == current_machine) return info_size;
++        if (supported_machines[i] == current_machine) return;
+ 
+     fatal_error( "wineserver doesn't support the %04x architecture\n", current_machine );
+ }
+@@ -3844,9 +3850,8 @@ size_t server_init_process(void)
+  * that are really threads. Takes the socketfd directly instead of
+  * reading WINESERVERSOCKET from the environment.
+  */
+-size_t server_init_process_child( int child_fd_socket )
++size_t server_init_process_child( struct thread_data *data, int child_fd_socket )
+ {
+-    struct ntdll_thread_data *data = ntdll_get_thread_data();
+     obj_handle_t version;
+     int ret, reply_pipe;
+     size_t info_size;
+@@ -3874,7 +3879,7 @@ size_t server_init_process_child( int child_fd_socket )
+     if (version != SERVER_PROTOCOL_VERSION)
+         server_protocol_error( "version mismatch %d/%d\n", version, SERVER_PROTOCOL_VERSION );
+ 
+-    reply_pipe = init_thread_pipe();
++    reply_pipe = init_thread_pipe( data );
+ 
+     SERVER_START_REQ( init_first_thread )
+     {
+@@ -3883,6 +3888,7 @@ size_t server_init_process_child( int child_fd_socket )
+         req->reply_fd    = reply_pipe;
+         req->wait_fd     = data->wait_fd[1];
+         req->debug_level = (TRACE_ON(server) != 0);
++        req->page_size   = get_host_page_size();
+         wine_server_set_reply( req, supported_machines, sizeof(supported_machines) );
+         if (!(ret = wine_server_call( req )))
+         {
+@@ -3908,7 +3914,12 @@ size_t server_init_process_child( int child_fd_socket )
+ 
+     if (ret) server_protocol_error( "init_first_thread (child) failed: %x\n", ret );
+ 
+-    set_thread_id( NtCurrentTeb(), pid, tid );
++    /* wine-11.18: the TEB was made before the tid was known (see
++     * wine_ios_child_main), and the global pid is the session's: give the
++     * TEB this child's ids, as set_thread_id did. */
++    data->tid = tid;
++    data->teb->ClientId = make_client_id( pid, tid );
++    data->teb->RealClientId = data->teb->ClientId;
+ 
+     return info_size;
+ }
+@@ -3920,11 +3931,10 @@ size_t server_init_process_child( int child_fd_socket )
+  */
+ void server_init_process_done(void)
+ {
+-    void *teb;
+     unsigned int status;
+-    int suspend;
+     FILE_FS_DEVICE_INFORMATION info;
+-    struct ntdll_thread_data *thread_data = ntdll_get_thread_data();
++    struct thread_data *data = get_thread_data();
++    TEB64 *teb64 = get_teb64( data->teb );
+ 
+     /* iOS-Madeira: this runs on the main (game) thread exactly once —
+      * capture its TEB for the server_wait frame-anatomy accounting. */
+@@ -3939,25 +3949,23 @@ void server_init_process_done(void)
+ 
+ #if defined(__APPLE__) && !defined(WINE_IOS)
+     send_server_task_port();
++    if ((status = apple_spawn_main_thread()))
++        ERR("Failed to spawn main thread, status %x\n", status);
+ #endif
+ 
+     /* Install signal handlers; this cannot be done earlier, since we cannot
+      * send exceptions to the debugger before the create process event that
+      * is sent by init_process_done */
+-    signal_init_process();
+-    thread_data->syscall_table = KeServiceDescriptorTable;
+-    thread_data->syscall_trace = TRACE_ON(syscall);
+-
+-    /* always send the native TEB */
+-    if (!(teb = NtCurrentTeb64())) teb = NtCurrentTeb();
++    signal_init_process( data->teb );
++    init_teb_data( data );
+ 
+     /* Signal the parent process to continue */
+     SERVER_START_REQ( init_process_done )
+     {
+-        req->teb = wine_server_client_ptr( teb );
+-        req->peb = NtCurrentTeb64() ? NtCurrentTeb64()->Peb : wine_server_client_ptr( peb );
++        req->teb = wine_server_client_ptr( teb64 ? (void *)teb64 : (void *)data->teb );
++        req->peb = teb64 ? teb64->Peb : wine_server_client_ptr( peb );
+         status = wine_server_call( req );
+-        suspend = reply->suspend;
++        data->suspend = reply->suspend;
+     }
+     SERVER_END_REQ;
+ 
+@@ -3967,17 +3975,17 @@ void server_init_process_done(void)
+      * NtResumeThread to unsuspend the child. But since we use thread-based
+      * CreateProcess, the resume mechanism may not work correctly.
+      * Force suspend=0 so the child proceeds immediately. */
+-    if (suspend)
++    if (data->suspend)
+     {
+-        dprintf(STDERR_FILENO, "[Wine init_done] overriding suspend=%d → 0 for iOS\n", suspend);
+-        suspend = 0;
++        dprintf(STDERR_FILENO, "[Wine init_done] overriding suspend=%d → 0 for iOS\n", data->suspend);
++        data->suspend = 0;
+     }
+     {
+         extern void *pLdrInitializeThunk;
+         extern void *pRtlUserThreadStart;
+         extern const SECTION_IMAGE_INFORMATION *ios_cur_image_info(void);
+         ERR("signal_start_thread: teb=%p peb=%p TransferAddress=%p suspend=%d\n",
+-            NtCurrentTeb(), peb, ios_cur_image_info()->TransferAddress, suspend);
++            NtCurrentTeb(), peb, ios_cur_image_info()->TransferAddress, data->suspend);
+ 
+         /* Watchdog: suspend thread and sample registers at 2s and 4s */
+         {
+@@ -4291,7 +4299,7 @@ void server_init_process_done(void)
+          * exe's entry — main_image_info is restored to the session's exe
+          * right after child startup-info init (see wine_ios_child_main). */
+         extern const SECTION_IMAGE_INFORMATION *ios_cur_image_info(void);
+-        signal_start_thread( ios_cur_image_info()->TransferAddress, peb, suspend, NtCurrentTeb() );
++        signal_start_thread( ios_cur_image_info()->TransferAddress, peb, data->teb );
+     }
+ }
+ 
+@@ -4301,29 +4309,80 @@ void server_init_process_done(void)
+  *
+  * Send an init thread request.
+  */
+-void server_init_thread( void *entry_point, BOOL *suspend )
++void server_init_thread( struct thread_data *data )
+ {
+-    void *teb;
+-    int reply_pipe = init_thread_pipe();
++    int reply_pipe;
++    TEB64 *teb64 = get_teb64( data->teb );
+ 
+-    /* always send the native TEB */
+-    if (!(teb = NtCurrentTeb64())) teb = NtCurrentTeb();
++#ifdef WINE_IOS
++    /* wine-11.18 folded thread.c's start_thread into this function; the iOS
++     * start_thread additions (Madeira) moved here with it.
++     *
++     * iOS-Madeira 2026-07-04 perf: promote guest threads to USER_INTERACTIVE
++     * QoS. Default-QoS pthreads on iOS are E-core-eligible and get heavy
++     * kernel timer coalescing (tens of ms of wakeup leeway on
++     * select/nanosleep). USER_INTERACTIVE = P-core scheduling + minimal timer
++     * leeway. ml1133: through ios_eco_apply_self (sync.c), which picks the eco
++     * class instead while the ECO switch is on. */
++    {
++        extern void ios_eco_apply_self(void);
++        ios_eco_apply_self();
++    }
++#endif
++    data->pthread_id = pthread_self();
++    pthread_setspecific( thread_data_key, data );
++#ifdef WINE_IOS
++    /* iOS: publish the TEB through our own pthread key so the x18
++     * trampolines (mrs TPIDRRO_EL0; ldr TEB) work on this newly-created
++     * thread. Without this, worker threads (DXMT command buffers,
++     * NtCreateThreadEx threads) read TEB=0 and fault on the first guest x18
++     * reference. Only the slot backing ios_teb_tls_key is ours to write
++     * (raw slot 275 belonged to whoever created that key first). A system
++     * thread (PsCreateSystemThread) has no TEB and publishes NULL. */
++    {
++        extern pthread_key_t ios_teb_tls_key;
++        extern int ios_teb_tls_slot_offset;
++        uintptr_t tsd_base;
++        void *raw;
++        pthread_setspecific( ios_teb_tls_key, data->teb );
++        __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tsd_base));
++        tsd_base &= ~7ULL;
++        raw = ios_teb_tls_slot_offset ? *(void **)(tsd_base + ios_teb_tls_slot_offset) : NULL;
++        if (data->teb)
++            dprintf(2, "[teb-tsd] thread tid=%04x raw=%p pthread=%p %s\n",
++                    (unsigned int)data->tid, raw, (void *)data->teb,
++                    raw == data->teb ? "MATCH" : "MISMATCH");
++    }
++#endif
+ 
++    reply_pipe = init_thread_pipe( data );
+     SERVER_START_REQ( init_thread )
+     {
+         req->unix_tid  = get_unix_tid();
+-        req->teb       = wine_server_client_ptr( teb );
+-        req->entry     = wine_server_client_ptr( entry_point );
++        req->teb       = wine_server_client_ptr( teb64 ? (void *)teb64 : (void *)data->teb );
+         req->reply_fd  = reply_pipe;
+-        req->wait_fd   = ntdll_get_thread_data()->wait_fd[1];
++        req->wait_fd   = data->wait_fd[1];
++        if (data->teb) req->entry = wine_server_client_ptr( data->start );
+         wine_server_call( req );
+-        *suspend = reply->suspend;
++        data->suspend = reply->suspend;
+     }
+     SERVER_END_REQ;
+ #ifdef WINE_IOS
+     ios_fdt_mark_closed( reply_pipe );   /* expected handoff close (server holds a dup) */
+ #endif
+     close( reply_pipe );
++
++    if (data->teb)
++    {
++        init_teb_data( data );
++        signal_start_thread( data->start, data->param, data->teb );
++    }
++    else if (data->start)
++    {
++        void (*entry)(void *) = data->start;
++        entry( data->param );
++        PsTerminateSystemThread( 1 );
++    }
+ }
+ 
+ NTSTATUS WINAPI NtAllocateReserveObject( HANDLE *handle, const OBJECT_ATTRIBUTES *attr,
+@@ -4336,7 +4395,7 @@ NTSTATUS WINAPI NtAllocateReserveObject( HANDLE *handle, const OBJECT_ATTRIBUTES
+     TRACE("(%p, %p, %d)\n", handle, attr, type);
+ 
+     *handle = 0;
+-    if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
++    if ((ret = wine_server_alloc_object_attributes( attr, &objattr, &len ))) return ret;
+ 
+     SERVER_START_REQ( allocate_reserve_object )
+     {
+@@ -4516,11 +4575,13 @@ NTSTATUS WINAPI NtClose( HANDLE handle )
+     }
+ #endif
+ 
+-    if (!peb->BeingDebugged) return ret;
++    if (!peb || !peb->BeingDebugged) return ret;
+     if (!NtQueryInformationProcess( NtCurrentProcess(), ProcessDebugPort, &port, sizeof(port), NULL) && port)
+     {
+-        NtCurrentTeb()->ExceptionCode = ret;
+-        call_raise_user_exception_dispatcher();
++        struct thread_data *data = get_thread_data();
++        if (!data->teb) return ret;
++        data->teb->ExceptionCode = ret;
++        call_raise_user_exception_dispatcher( data );
+     }
+     return ret;
+ }
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index d85cc14..68a179c 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -65,6 +65,7 @@ volatile long long ios_affinity_sets;   /* ml1117 */
+ #endif
+ 
+ #ifdef __APPLE__
++#include <CoreFoundation/CoreFoundation.h>
+ #include <mach/mach.h>
+ #endif
+ #ifdef __FreeBSD__
+@@ -80,11 +81,8 @@ volatile long long ios_affinity_sets;   /* ml1117 */
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(thread);
+ WINE_DECLARE_DEBUG_CHANNEL(seh);
+-WINE_DECLARE_DEBUG_CHANNEL(syscall);
+ WINE_DECLARE_DEBUG_CHANNEL(threadname);
+ 
+-pthread_key_t teb_key = 0;
+-
+ static LONG nb_threads = 1;
+ 
+ static inline int get_unix_exit_code( NTSTATUS status )
+@@ -206,6 +204,7 @@ static unsigned int get_server_context_flags( const void *context, USHORT machin
+         if (flags & CONTEXT_ARM64_CONTROL) ret |= SERVER_CTX_CONTROL;
+         if (flags & CONTEXT_ARM64_INTEGER) ret |= SERVER_CTX_INTEGER;
+         if (flags & CONTEXT_ARM64_FLOATING_POINT) ret |= SERVER_CTX_FLOATING_POINT;
++        if (flags & CONTEXT_ARM64_X18) ret |= SERVER_CTX_TLS;
+         if (flags & CONTEXT_ARM64_DEBUG_REGISTERS) ret |= SERVER_CTX_DEBUG_REGISTERS;
+         break;
+     }
+@@ -590,8 +589,8 @@ static NTSTATUS context_to_server( struct context_data *to, USHORT to_machine, c
+         if (flags & CONTEXT_ARM64_CONTROL)
+         {
+             to->flags |= SERVER_CTX_CONTROL;
+-            to->integer.arm64_regs.x[29] = from->Fp;
+-            to->integer.arm64_regs.x[30] = from->Lr;
++            to->integer.arm64_regs.x19[10] = from->Fp;
++            to->integer.arm64_regs.x19[11] = from->Lr;
+             to->ctl.arm64_regs.sp     = from->Sp;
+             to->ctl.arm64_regs.pc     = from->Pc;
+             to->ctl.arm64_regs.pstate = from->Cpsr;
+@@ -599,7 +598,8 @@ static NTSTATUS context_to_server( struct context_data *to, USHORT to_machine, c
+         if (flags & CONTEXT_ARM64_INTEGER)
+         {
+             to->flags |= SERVER_CTX_INTEGER;
+-            for (i = 0; i <= 28; i++) to->integer.arm64_regs.x[i] = from->X[i];
++            for (i = 0; i < 18; i++) to->integer.arm64_regs.x0[i] = from->X[i];
++            for (i = 19; i <= 28; i++) to->integer.arm64_regs.x19[i - 19] = from->X[i];
+         }
+         if (flags & CONTEXT_ARM64_FLOATING_POINT)
+         {
+@@ -612,6 +612,11 @@ static NTSTATUS context_to_server( struct context_data *to, USHORT to_machine, c
+             to->fp.arm64_regs.fpcr = from->Fpcr;
+             to->fp.arm64_regs.fpsr = from->Fpsr;
+         }
++        if (flags & CONTEXT_ARM64_X18)
++        {
++            to->flags |= SERVER_CTX_TLS;
++            to->tls.arm64_x18 = from->X[18];
++        }
+         if (flags & CONTEXT_ARM64_DEBUG_REGISTERS)
+         {
+             to->flags |= SERVER_CTX_DEBUG_REGISTERS;
+@@ -1011,8 +1016,8 @@ static NTSTATUS context_from_server( void *dst, const struct context_data *from,
+         if ((from->flags & SERVER_CTX_CONTROL) && (to_flags & CONTEXT_ARM64_CONTROL))
+         {
+             to->ContextFlags |= CONTEXT_ARM64_CONTROL;
+-            to->Fp   = from->integer.arm64_regs.x[29];
+-            to->Lr   = from->integer.arm64_regs.x[30];
++            to->Fp   = from->integer.arm64_regs.x19[10];
++            to->Lr   = from->integer.arm64_regs.x19[11];
+             to->Sp   = from->ctl.arm64_regs.sp;
+             to->Pc   = from->ctl.arm64_regs.pc;
+             to->Cpsr = from->ctl.arm64_regs.pstate;
+@@ -1020,7 +1025,8 @@ static NTSTATUS context_from_server( void *dst, const struct context_data *from,
+         if ((from->flags & SERVER_CTX_INTEGER) && (to_flags & CONTEXT_ARM64_INTEGER))
+         {
+             to->ContextFlags |= CONTEXT_ARM64_INTEGER;
+-            for (i = 0; i <= 28; i++) to->X[i] = from->integer.arm64_regs.x[i];
++            for (i = 0; i < 18; i++) to->X[i] = from->integer.arm64_regs.x0[i];
++            for (i = 19; i <= 28; i++) to->X[i] = from->integer.arm64_regs.x19[i - 19];
+         }
+         if ((from->flags & SERVER_CTX_FLOATING_POINT) && (to_flags & CONTEXT_ARM64_FLOATING_POINT))
+         {
+@@ -1033,6 +1039,11 @@ static NTSTATUS context_from_server( void *dst, const struct context_data *from,
+             to->Fpcr = from->fp.arm64_regs.fpcr;
+             to->Fpsr = from->fp.arm64_regs.fpsr;
+         }
++        if (from->flags & SERVER_CTX_TLS)
++        {
++            to->ContextFlags |= CONTEXT_ARM64_X18;
++            to->X[18] = from->tls.arm64_x18;
++        }
+         if ((from->flags & SERVER_CTX_DEBUG_REGISTERS) && (to_flags & CONTEXT_ARM64_DEBUG_REGISTERS))
+         {
+             to->ContextFlags |= CONTEXT_ARM64_DEBUG_REGISTERS;
+@@ -1121,7 +1132,10 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+      * is gone -- 5,000+ iterations, sp walking down ~0x70 each time. A thread
+      * with no wine TEB owns no wine fds, so there is simply nothing to close;
+      * exiting quietly is both correct and the only way out of the loop. */
+-    if (!NtCurrentTeb())
++    /* wine-11.18: the fds live in struct thread_data, which a system thread
++     * (PsCreateSystemThread) has without a TEB; only a thread with neither
++     * has nothing to close. */
++    if (!get_thread_data())
+     {
+         static unsigned long noteb_n;
+         if (++noteb_n <= 8)
+@@ -1129,11 +1143,14 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+                        "exiting cleanly (n=%lu) rev=ml558\n", noteb_n);
+         pthread_exit( UIntToPtr(status) );
+     }
+-    close( ntdll_get_thread_data()->alert_fd );
+-    close( ntdll_get_thread_data()->wait_fd[0] );
+-    close( ntdll_get_thread_data()->wait_fd[1] );
+-    close( ntdll_get_thread_data()->reply_fd );
+-    close( ntdll_get_thread_data()->request_fd );
++    {
++        struct thread_data *data = get_thread_data();
++        close( data->alert_fd );
++        close( data->wait_fd[0] );
++        close( data->wait_fd[1] );
++        close( data->reply_fd );
++        close( data->request_fd );
++    }
+     /* iOS-Madeira (Steam S0): we write the TEB directly into TSD slot 275
+      * (start_thread above) because FEX hardcodes offset 0x898 — but we
+      * don't OWN dynamic key 275. If an Apple framework allocated that key
+@@ -1221,6 +1238,9 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+          * We used to poke raw slot 275 here, which we never owned. */
+         extern pthread_key_t ios_teb_tls_key;
+         pthread_setspecific( ios_teb_tls_key, NULL );
++    }
++    if (NtCurrentTeb())  /* not a system thread */
++    {
+         /* iOS-Madeira ml413 (#60): xtajit64 stamps TEB->Instrumentation[8]
+          * (+0x16f8) while this thread holds a FEX shared lock (compile-time
+          * CodeInvalidationMutex read hold). A thread exiting with the stamp
+@@ -1246,63 +1266,6 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+ }
+ 
+ 
+-/***********************************************************************
+- *           start_thread
+- *
+- * Startup routine for a newly created thread.
+- */
+-static void start_thread( TEB *teb )
+-{
+-    struct ntdll_thread_data *thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+-    BOOL suspend;
+-
+-    /* iOS-Madeira 2026-07-04 perf: promote guest threads to USER_INTERACTIVE
+-     * QoS. Default-QoS pthreads on iOS are E-core-eligible and get heavy
+-     * kernel timer coalescing (tens of ms of wakeup leeway on
+-     * select/nanosleep). [PROF] showed the game thread parked ~87% of each
+-     * 59ms frame in one system wait — if that's a frame-limiter sleep being
+-     * coalesced, this alone can collapse the wait to its requested length.
+-     * USER_INTERACTIVE = P-core scheduling + minimal timer leeway.
+-     * ml1133: through ios_eco_apply_self (sync.c), which picks the eco class
+-     * instead while the ECO switch is on. */
+-    {
+-        extern void ios_eco_apply_self(void);
+-        ios_eco_apply_self();
+-    }
+-
+-    thread_data->syscall_table = KeServiceDescriptorTable;
+-    thread_data->syscall_trace = TRACE_ON(syscall);
+-    thread_data->pthread_id = pthread_self();
+-    pthread_setspecific( teb_key, teb );
+-    /* iOS: publish the TEB through our own pthread key so the x18
+-     * trampolines (mrs TPIDRRO_EL0; ldr TEB) work on this newly-created
+-     * thread. Without this, worker threads (DXMT command buffers,
+-     * NtCreateThreadEx threads) read TEB=0 and fault on the first guest x18
+-     * reference.
+-     *
+-     * This used to additionally write raw TSD slot 275, a dynamic pthread key
+-     * belonging to whoever created it first. Its real owner can reclaim and
+-     * reset it at any time -- observed on an M4 iPad, where the slot went to
+-     * NULL once the Metal stack came up and every trampoline then loaded
+-     * TEB=0. Only the slot backing ios_teb_tls_key is ours to write. */
+-    {
+-        extern pthread_key_t ios_teb_tls_key;
+-        extern int ios_teb_tls_slot_offset;
+-        uintptr_t tsd_base;
+-        void *raw;
+-        pthread_setspecific( ios_teb_tls_key, teb );
+-        __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tsd_base));
+-        tsd_base &= ~7ULL;
+-        raw = ios_teb_tls_slot_offset ? *(void **)(tsd_base + ios_teb_tls_slot_offset) : NULL;
+-        dprintf(2, "[teb-tsd] thread tid=%04x raw=%p pthread=%p %s\n",
+-                (unsigned int)(ULONG_PTR)teb->ClientId.UniqueThread, raw, (void *)teb,
+-                raw == teb ? "MATCH" : "MISMATCH");
+-    }
+-    server_init_thread( thread_data->start, &suspend );
+-    signal_start_thread( thread_data->start, thread_data->param, suspend, teb );
+-}
+-
+-
+ /***********************************************************************
+  *           get_machine_context_size
+  */
+@@ -1324,16 +1287,16 @@ static SIZE_T get_machine_context_size( USHORT machine )
+  *
+  * cf. RtlWow64GetCurrentCpuArea
+  */
+-void *get_cpu_area( USHORT machine )
++void *get_cpu_area( struct thread_data *data, USHORT machine )
+ {
+     WOW64_CPURESERVED *cpu;
+     ULONG align;
+ 
+     if (!is_wow64()) return NULL;
+ #ifdef _WIN64
+-    cpu = NtCurrentTeb()->TlsSlots[WOW64_TLS_CPURESERVED];
++    cpu = data->teb->TlsSlots[WOW64_TLS_CPURESERVED];
+ #else
+-    cpu = ULongToPtr( NtCurrentTeb64()->TlsSlots[WOW64_TLS_CPURESERVED] );
++    cpu = ULongToPtr( get_teb64(data->teb)->TlsSlots[WOW64_TLS_CPURESERVED] );
+ #endif
+     if (cpu->Machine != machine) return NULL;
+     switch (cpu->Machine)
+@@ -1348,40 +1311,15 @@ void *get_cpu_area( USHORT machine )
+ }
+ 
+ 
+-/***********************************************************************
+- *           set_thread_id
+- */
+-void set_thread_id( TEB *teb, DWORD pid, DWORD tid )
+-{
+-    WOW_TEB *wow_teb = get_wow_teb( teb );
+-
+-    teb->ClientId.UniqueProcess = ULongToHandle( pid );
+-    teb->ClientId.UniqueThread  = ULongToHandle( tid );
+-    teb->RealClientId = teb->ClientId;
+-    if (wow_teb)
+-    {
+-        wow_teb->ClientId.UniqueProcess = pid;
+-        wow_teb->ClientId.UniqueThread  = tid;
+-        wow_teb->RealClientId = wow_teb->ClientId;
+-    }
+-}
+-
+-
+ /***********************************************************************
+  *           init_thread_stack
+  */
+ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE_T commit_size )
+ {
+-    struct ntdll_thread_data *thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+     WOW_TEB *wow_teb = get_wow_teb( teb );
+     INITIAL_TEB stack;
+     NTSTATUS status;
+ 
+-    /* kernel stack */
+-    if ((status = virtual_alloc_thread_stack( &stack, limit_4g, 0, kernel_stack_size, kernel_stack_size, FALSE )))
+-        return status;
+-    thread_data->kernel_stack = stack.DeallocationStack;
+-
+     if (wow_teb)
+     {
+         WOW64_CPURESERVED *cpu;
+@@ -1458,6 +1396,117 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
+ }
+ 
+ 
++/***********************************************************************
++ *           create_server_thread
++ */
++static NTSTATUS create_server_thread( HANDLE *handle, struct thread_data **data_ret,
++                                      ACCESS_MASK access, OBJECT_ATTRIBUTES *attr,
++                                      void *start, void *param, ULONG flags, BOOL is_system )
++{
++    data_size_t len;
++    struct object_attributes *objattr;
++    struct thread_data *data;
++    int request_pipe[2];
++    DWORD tid = 0;
++    NTSTATUS status;
++
++    if ((status = wine_server_alloc_object_attributes( attr, &objattr, &len ))) return status;
++
++    if (server_pipe( request_pipe ) == -1)
++    {
++        free( objattr );
++        return STATUS_TOO_MANY_OPENED_FILES;
++    }
++#ifdef WINE_IOS
++    {
++        /* ml586 fd-ownership trace (ledger lives in server_ios.c) */
++        extern void ios_fdt_reg_request_pipe( int rd, int wr, void *peb );
++        extern void *ios_jit_current_peb(void);
++        ios_fdt_reg_request_pipe( request_pipe[0], request_pipe[1], ios_jit_current_peb() );
++    }
++#endif
++    wine_server_send_fd( request_pipe[0] );
++
++    SERVER_START_REQ( new_thread )
++    {
++        req->process    = wine_server_obj_handle( NtCurrentProcess() );
++        req->access     = access;
++        req->flags      = flags;
++        req->is_system  = !!is_system;
++        req->request_fd = request_pipe[0];
++        wine_server_add_data( req, objattr, len );
++        if (!(status = wine_server_call( req )))
++        {
++            *handle = wine_server_ptr_handle( reply->handle );
++            tid = reply->tid;
++        }
++#ifdef WINE_IOS
++        {
++            extern void ios_fdt_mark_closed( int fd );
++            ios_fdt_mark_closed( request_pipe[0] );  /* expected handoff close */
++        }
++#endif
++        close( request_pipe[0] );
++    }
++    SERVER_END_REQ;
++
++    free( objattr );
++    if (status)
++    {
++#ifdef WINE_IOS
++        {
++            extern void ios_fdt_mark_closed( int fd );
++            ios_fdt_mark_closed( request_pipe[1] );
++        }
++#endif
++        close( request_pipe[1] );
++        return status;
++    }
++
++    if (!(data = virtual_alloc_thread_data()))
++    {
++        NtClose( *handle );
++        close( request_pipe[1] );
++        return STATUS_NO_MEMORY;
++    }
++
++    data->request_fd = request_pipe[1];
++    data->tid        = tid;
++    data->start      = start;
++    data->param      = param;
++
++    *data_ret = data;
++    return STATUS_SUCCESS;
++}
++
++
++/***********************************************************************
++ *           spawn_thread
++ */
++static NTSTATUS spawn_thread( struct thread_data *data )
++{
++    sigset_t sigset;
++    pthread_t pthread_id;
++    pthread_attr_t attr;
++    NTSTATUS status = STATUS_SUCCESS;
++
++    pthread_sigmask( SIG_BLOCK, &server_block_set, &sigset );
++    pthread_attr_init( &attr );
++    pthread_attr_setstack( &attr, get_kernel_stack( data ), kernel_stack_size );
++    pthread_attr_setguardsize( &attr, 0 );
++    pthread_attr_setscope( &attr, PTHREAD_SCOPE_SYSTEM ); /* force creating a kernel thread */
++    InterlockedIncrement( &nb_threads );
++    if (pthread_create( &pthread_id, &attr, (void * (*)(void *))server_init_thread, data ))
++    {
++        InterlockedDecrement( &nb_threads );
++        status = STATUS_NO_MEMORY;
++    }
++    pthread_attr_destroy( &attr );
++    pthread_sigmask( SIG_SETMASK, &sigset, NULL );
++    return status;
++}
++
++
+ /***********************************************************************
+  *           update_attr_list
+  *
+@@ -1521,14 +1570,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+     static const ULONG supported_flags = THREAD_CREATE_FLAGS_CREATE_SUSPENDED | THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH |
+                                          THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER | THREAD_CREATE_FLAGS_SKIP_LOADER_INIT |
+                                          THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE;
+-    sigset_t sigset;
+-    pthread_t pthread_id;
+-    pthread_attr_t pthread_attr;
+-    data_size_t len;
+-    struct object_attributes *objattr;
+-    struct ntdll_thread_data *thread_data;
+-    DWORD tid = 0;
+-    int request_pipe[2];
++    struct thread_data *data;
+     TEB *teb;
+     WOW_TEB *wow_teb;
+     unsigned int status;
+@@ -1556,7 +1598,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+             static volatile int cs_count;
+             if (__sync_add_and_fetch(&cs_count, 1) <= 20)
+             {
+-                char *frame = (char *)get_syscall_frame();
++                char *frame = (char *)get_syscall_frame( get_thread_data() );
+                 uint64_t pe_sp = frame ? *(uint64_t *)(frame + 0xf8) : 0;
+                 uint64_t pe_lr = frame ? *(uint64_t *)(frame + 0xf0) : 0;
+                 uint64_t pe_pc = frame ? *(uint64_t *)(frame + 0x100) : 0;
+@@ -1609,113 +1651,45 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+ 
+         if (!(status = result.create_thread.status))
+         {
+-            CLIENT_ID client_id;
++            CLIENT_ID client_id = make_client_id( result.create_thread.pid, result.create_thread.tid );
+             TEB *teb = wine_server_get_ptr( result.create_thread.teb );
+             *handle = wine_server_ptr_handle( result.create_thread.handle );
+-            client_id.UniqueProcess = ULongToHandle( result.create_thread.pid );
+-            client_id.UniqueThread  = ULongToHandle( result.create_thread.tid );
+             if (attr_list) status = update_attr_list( attr_list, *handle, &client_id, teb );
+         }
+         return status;
+     }
+ 
+-    if ((status = alloc_object_attributes( attr, &objattr, &len ))) return status;
+-
+-    if (server_pipe( request_pipe ) == -1)
+-    {
+-        free( objattr );
+-        return STATUS_TOO_MANY_OPENED_FILES;
+-    }
+-    {
+-        /* ml586 fd-ownership trace (ledger lives in server_ios.c) */
+-        extern void ios_fdt_reg_request_pipe( int rd, int wr, void *peb );
+-        extern void *ios_jit_current_peb(void);
+-        ios_fdt_reg_request_pipe( request_pipe[0], request_pipe[1], ios_jit_current_peb() );
+-    }
+-    wine_server_send_fd( request_pipe[0] );
+-
+     if (!access) access = THREAD_ALL_ACCESS;
+ 
+-    SERVER_START_REQ( new_thread )
+-    {
+-        req->process    = wine_server_obj_handle( process );
+-        req->access     = access;
+-        req->flags      = flags;
+-        req->request_fd = request_pipe[0];
+-        wine_server_add_data( req, objattr, len );
+-        if (!(status = wine_server_call( req )))
+-        {
+-            *handle = wine_server_ptr_handle( reply->handle );
+-            tid = reply->tid;
+-        }
+-        {
+-            extern void ios_fdt_mark_closed( int fd );
+-            ios_fdt_mark_closed( request_pipe[0] );  /* expected handoff close */
+-        }
+-        close( request_pipe[0] );
+-    }
+-    SERVER_END_REQ;
+-
+-    free( objattr );
+-    if (status)
+-    {
+-        {
+-            extern void ios_fdt_mark_closed( int fd );
+-            ios_fdt_mark_closed( request_pipe[1] );
+-        }
+-        close( request_pipe[1] );
++    if ((status = create_server_thread( handle, &data, access, attr, start, param, flags, FALSE )))
+         return status;
+-    }
+-
+-    pthread_sigmask( SIG_BLOCK, &server_block_set, &sigset );
+ 
+-    if ((status = virtual_alloc_teb( &teb ))) goto done;
++    if ((status = virtual_alloc_teb( data ))) goto done;
++    teb = data->teb;
+ 
+     if ((status = init_thread_stack( teb, get_zero_bits_limit( zero_bits ), stack_reserve, stack_commit )))
+-    {
+-        virtual_free_teb( teb );
+         goto done;
+-    }
+-
+-    set_thread_id( teb, GetCurrentProcessId(), tid );
+ 
+     teb->SkipThreadAttach = !!(flags & THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH);
+     teb->SkipLoaderInit = !!(flags & THREAD_CREATE_FLAGS_SKIP_LOADER_INIT);
+-    wow_teb = get_wow_teb( teb );
+-    if (wow_teb)
++    if ((wow_teb = get_wow_teb( teb )))
+     {
+         wow_teb->SkipThreadAttach = teb->SkipThreadAttach;
+         wow_teb->SkipLoaderInit = teb->SkipLoaderInit;
+     }
+ 
+-    thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+-    thread_data->request_fd  = request_pipe[1];
+-    thread_data->start = start;
+-    thread_data->param = param;
+-
+-    pthread_attr_init( &pthread_attr );
+-    pthread_attr_setstack( &pthread_attr, thread_data->kernel_stack, kernel_stack_size );
+-    pthread_attr_setguardsize( &pthread_attr, 0 );
+-    pthread_attr_setscope( &pthread_attr, PTHREAD_SCOPE_SYSTEM ); /* force creating a kernel thread */
+-    InterlockedIncrement( &nb_threads );
+-    if (pthread_create( &pthread_id, &pthread_attr, (void * (*)(void *))start_thread, teb ))
+-    {
+-        InterlockedDecrement( &nb_threads );
+-        virtual_free_teb( teb );
+-        status = STATUS_NO_MEMORY;
+-    }
+-    pthread_attr_destroy( &pthread_attr );
++    status = spawn_thread( data );
+ 
+ done:
+-    pthread_sigmask( SIG_SETMASK, &sigset, NULL );
+     if (status)
+     {
+         NtClose( *handle );
+         {
+             extern void ios_fdt_mark_closed( int fd );
+-            ios_fdt_mark_closed( request_pipe[1] );
++            ios_fdt_mark_closed( data->request_fd );
+         }
+-        close( request_pipe[1] );
++        close( data->request_fd );
++        virtual_free_thread_data( data );
+         return status;
+     }
+     if (attr_list) status = update_attr_list( attr_list, *handle, &teb->ClientId, teb );
+@@ -1723,6 +1697,31 @@ done:
+ }
+ 
+ 
++/***********************************************************************
++ *              PsCreateSystemThread   (ntdll.so)
++ */
++NTSTATUS WINAPI PsCreateSystemThread( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr,
++                                      HANDLE process, CLIENT_ID *id, PKSTART_ROUTINE start, void *param )
++{
++    struct thread_data *data;
++    NTSTATUS status;
++    ULONG flags = THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE;
++
++    if ((status = create_server_thread( handle, &data, access, attr, start, param, flags, TRUE )))
++        return status;
++
++    if ((status = spawn_thread( data )))
++    {
++        NtClose( *handle );
++        virtual_free_thread_data( data );
++        return status;
++    }
++
++    if (id) *id = make_client_id( pid, data->tid );
++    return status;
++}
++
++
+ /***********************************************************************
+  *           abort_thread
+  */
+@@ -1785,21 +1784,19 @@ void abort_process( int status )
+  */
+ static DECLSPEC_NORETURN void exit_thread( int status )
+ {
+-    static void *prev_teb;
+-    TEB *teb;
++    static void *prev_data;
++    struct thread_data *data;
+ 
+     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
+ 
+     if (InterlockedDecrement( &nb_threads ) <= 0) exit_process( status );
+ 
+-    if ((teb = InterlockedExchangePointer( &prev_teb, NtCurrentTeb() )))
++    if ((data = InterlockedExchangePointer( &prev_data, get_thread_data() )))
+     {
+-        struct ntdll_thread_data *thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+-
+-        if (thread_data->pthread_id)
++        if (data->pthread_id)
+         {
+-            pthread_join( thread_data->pthread_id, NULL );
+-            virtual_free_teb( teb );
++            pthread_join( data->pthread_id, NULL );
++            virtual_free_thread_data( data );
+         }
+     }
+     pthread_exit_wrapper( status );
+@@ -1837,12 +1834,41 @@ void wait_suspend( CONTEXT *context )
+ }
+ 
+ 
++#if defined(__APPLE__) && !defined(WINE_IOS)  /* iOS: server_init_process_done does not call it */
++/**********************************************************************
++ *           apple_spawn_main_thread
++ */
++NTSTATUS apple_spawn_main_thread( void )
++{
++    struct thread_data *data;
++    HANDLE handle;
++    NTSTATUS status;
++    ULONG flags = THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE;
++    CFRunLoopSourceContext context = { .perform = (void (*)(void *))server_init_thread };
++    CFRunLoopSourceRef source;
++
++    if ((status = create_server_thread( &handle, &data, THREAD_ALL_ACCESS, NULL, NULL, NULL, flags, TRUE )))
++        return status;
++    NtClose( handle );
++
++    context.info = data;
++    source = CFRunLoopSourceCreate( NULL, 0, &context );
++    CFRunLoopAddSource( CFRunLoopGetMain(), source, kCFRunLoopCommonModes );
++    CFRunLoopSourceSignal( source );
++    CFRunLoopWakeUp( CFRunLoopGetMain() );
++    CFRelease( source );
++    return STATUS_SUCCESS;
++}
++#endif
++
++
+ /**********************************************************************
+  *           send_debug_event
+  *
+  * Send an EXCEPTION_DEBUG_EVENT event to the debugger.
+  */
+-NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance, BOOL exception )
++NTSTATUS send_debug_event( struct thread_data *data, EXCEPTION_RECORD *rec,
++                           CONTEXT *context, BOOL first_chance )
+ {
+     unsigned int ret;
+     DWORD i;
+@@ -1851,6 +1877,12 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_c
+     union select_op select_op;
+     sigset_t old_set;
+ 
++    if (!data->teb)
++    {
++        ERR_(seh)( "Exception %x in system thread at %p\n", rec->ExceptionCode, rec->ExceptionAddress );
++        NtTerminateProcess( NtCurrentProcess(), rec->ExceptionCode );
++    }
++
+     if (!peb->BeingDebugged) return 0;  /* no debugger present */
+ 
+     pthread_sigmask( SIG_BLOCK, &server_block_set, &old_set );
+@@ -1880,7 +1912,7 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_c
+ 
+         contexts_to_server( server_contexts, context );
+         server_contexts[0].flags |= SERVER_CTX_EXEC_SPACE;
+-        server_contexts[0].exec_space.space.space = exception ? EXEC_SPACE_EXCEPTION : EXEC_SPACE_SYSCALL;
++        server_contexts[0].exec_space.space.space = EXEC_SPACE_EXCEPTION;
+         server_select( &select_op, offsetof( union select_op, wait.handles[1] ), SELECT_INTERRUPTIBLE,
+                        TIMEOUT_INFINITE, server_contexts, NULL );
+ 
+@@ -1903,6 +1935,7 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_c
+  */
+ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance )
+ {
++    struct thread_data *data = get_thread_data();
+     NTSTATUS status;
+ #ifdef WINE_IOS
+     /* ml845: the engine's thread-naming exception is where a bogus "stack base"
+@@ -1913,12 +1946,12 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL
+         ios_tlswatch_arm( "raise 0x406D1388" );
+     }
+ #endif
+-    status = send_debug_event( rec, context, first_chance, !(is_win64 || is_wow64() || is_old_wow64()) );
++    status = send_debug_event( data, rec, context, first_chance );
+ 
+     if (status == DBG_CONTINUE || status == DBG_EXCEPTION_HANDLED)
+         return NtContinue( context, FALSE );
+ 
+-    if (first_chance) return call_user_exception_dispatcher( rec, context );
++    if (first_chance) return call_user_exception_dispatcher( data, rec, context );
+ 
+     /* ml257: A DEBUG PRINT MUST NEVER KILL THE PROCESS.
+      *
+@@ -1964,7 +1997,8 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL
+  */
+ TEB * WINAPI NtCurrentTeb(void)
+ {
+-    return pthread_getspecific( teb_key );
++    struct thread_data *data = get_thread_data();
++    return data ? data->teb : NULL;
+ }
+ 
+ 
+@@ -2175,6 +2209,15 @@ NTSTATUS WINAPI NtTerminateThread( HANDLE handle, LONG exit_code )
+ }
+ 
+ 
++/******************************************************************************
++ *              PsTerminateSystemThread  (ntdll.so)
++ */
++NTSTATUS WINAPI PsTerminateSystemThread( NTSTATUS exit_code )
++{
++    for (;;) exit_thread( exit_code );
++}
++
++
+ /******************************************************************************
+  *              NtQueueApcThreadEx2  (NTDLL.@)
+  */
+@@ -2324,8 +2367,9 @@ NTSTATUS get_thread_context( HANDLE handle, void *context, BOOL *self, USHORT ma
+  */
+ void ntdll_set_exception_jmp_buf( jmp_buf jmp )
+ {
+-    assert( !jmp || !ntdll_get_thread_data()->jmp_buf );
+-    ntdll_get_thread_data()->jmp_buf = jmp;
++    struct thread_data *data = get_thread_data();
++    assert( !jmp || !data->jmp_buf );
++    data->jmp_buf = jmp;
+ }
+ 
+ 
+@@ -2524,7 +2568,7 @@ static void set_native_thread_name( HANDLE handle, const UNICODE_STRING *name )
+     if (NtQueryInformationThread( handle, ThreadBasicInformation, &info, sizeof(info), NULL ))
+         return;
+ 
+-    if (HandleToULong( info.ClientId.UniqueProcess ) != GetCurrentProcessId())
++    if (HandleToULong( info.ClientId.UniqueProcess ) != pid )
+     {
+         static int once;
+         if (!once++) FIXME("cross-process native thread naming not supported\n");
+@@ -2583,7 +2627,7 @@ static BOOL is_process_wow64( const CLIENT_ID *id )
+     ULONG_PTR info;
+     BOOL ret = FALSE;
+ 
+-    if (id->UniqueProcess == ULongToHandle(GetCurrentProcessId())) return is_old_wow64();
++    if (id->UniqueProcess == ULongToHandle(pid)) return is_old_wow64();
+     if (!NtOpenProcess( &handle, PROCESS_QUERY_LIMITED_INFORMATION, NULL, id ))
+     {
+         if (!NtQueryInformationProcess( handle, ProcessWow64Information, &info, sizeof(info), NULL ))
+@@ -2617,8 +2661,7 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
+             {
+                 info.ExitStatus             = reply->exit_code;
+                 info.TebBaseAddress         = wine_server_get_ptr( reply->teb );
+-                info.ClientId.UniqueProcess = ULongToHandle(reply->pid);
+-                info.ClientId.UniqueThread  = ULongToHandle(reply->tid);
++                info.ClientId               = make_client_id( reply->pid, reply->tid );
+                 info.AffinityMask           = reply->affinity & affinity_mask;
+                 info.Priority               = reply->priority;
+                 info.BasePriority           = reply->base_priority;
+@@ -3136,7 +3179,7 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+         if (handle != GetCurrentThread()) return STATUS_NOT_SUPPORTED;
+         if (mem->Version != 2) return STATUS_REVISION_MISMATCH;
+         if (mem->ProcessEnableWriteExceptions) return STATUS_INVALID_PARAMETER;
+-        ntdll_get_thread_data()->allow_writes = mem->ThreadAllowWrites;
++        get_thread_data()->allow_writes = mem->ThreadAllowWrites;
+         return STATUS_SUCCESS;
+ #else
+         return STATUS_NOT_SUPPORTED;
+@@ -3187,21 +3230,20 @@ ULONG WINAPI NtGetCurrentProcessorNumber(void)
+     }
+ #endif
+ 
+-    if (peb->NumberOfProcessors > 1)
++    if (cpu_count > 1)
+     {
+         ULONG_PTR thread_mask, processor_mask;
+ 
+         if (!NtQueryInformationThread( GetCurrentThread(), ThreadAffinityMask,
+                                        &thread_mask, sizeof(thread_mask), NULL ))
+         {
+-            for (processor = 0; processor < peb->NumberOfProcessors; processor++)
++            for (processor = 0; processor < cpu_count; processor++)
+             {
+                 processor_mask = (1 << processor);
+                 if (thread_mask & processor_mask)
+                 {
+                     if (thread_mask != processor_mask)
+-                        FIXME( "need multicore support (%d processors)\n",
+-                               peb->NumberOfProcessors );
++                        FIXME( "need multicore support (%d processors)\n", cpu_count );
+                     return processor;
+                 }
+             }

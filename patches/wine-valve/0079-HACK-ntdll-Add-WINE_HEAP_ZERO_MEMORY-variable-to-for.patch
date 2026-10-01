@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 9 Feb 2024 11:46:31 -0600
+Subject: [PATCH] HACK: ntdll: Add WINE_HEAP_ZERO_MEMORY variable to force
+ zeroing allocated memory.
+
+CW-Bug-Id: #23394
+CW-Bug-Id: #23466
+Valve-commit: 2bf5a5799faa5d56e99a1ad4a507dbffc05facee
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 476d9697..aebd77a 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -5648,6 +5648,7 @@ void loader_init( CONTEXT *context, void **entry )
+         WINE_MODREF *kernel32;
+         PEB *peb = NtCurrentTeb()->Peb;
+         WCHAR env_str[16];
++        ULONG heap_flags = HEAP_GROWABLE;
+         unsigned int i;
+ 
+         peb->LdrData            = &ldr;
+@@ -5664,8 +5665,13 @@ void loader_init( CONTEXT *context, void **entry )
+                 delay_heap_free = TRUE;
+             }
+         }
++        if (get_env( L"WINE_HEAP_ZERO_MEMORY", env_str, sizeof(env_str)) && env_str[0] == L'1')
++        {
++            ERR( "Enabling heap zero hack.\n" );
++            heap_flags |= HEAP_ZERO_MEMORY;
++        }
+ 
+-        peb->ProcessHeap        = RtlCreateHeap( HEAP_GROWABLE, NULL, 0, 0, NULL, NULL );
++        peb->ProcessHeap        = RtlCreateHeap( heap_flags, NULL, 0, 0, NULL, NULL );
+ 
+         RtlInitializeBitMap( &tls_bitmap, peb->TlsBitmapBits, sizeof(peb->TlsBitmapBits) * 8 );
+         RtlInitializeBitMap( &tls_expansion_bitmap, peb->TlsExpansionBitmapBits,

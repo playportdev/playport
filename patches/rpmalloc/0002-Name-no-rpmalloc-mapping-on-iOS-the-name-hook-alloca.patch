@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 17:08:21 +0200
+Subject: [PATCH 2/2] Name no rpmalloc mapping on iOS: the name hook allocates
+
+Every mapping rpmalloc makes names itself through rp_name_hook, which on
+iOS is FEX's VirtualName, and VirtualName logs each name (the first 256)
+through LogMan, which allocates. So a mapping made for an allocation
+allocated again before rpmalloc had recorded the mapping. On a thread with
+no heap yet the nested allocation made another heap; on a heap with no
+partial span for the size class it mapped another span; and so on until
+the log's cap of 256 names stopped the recursion. On 2026-09-28 Hollow
+Knight's second thread, as it started, made 231 heaps that way, and 232
+small spans for 64-byte blocks: each level set its own span as the heap's
+partial one, so each span kept the one 64KB page it gave out and lost the
+other 255. That was 3.7GB of the 16GB FEX host band, a quarter of it,
+before the first frame. On iOS a name is a no-op apart from that log, so
+os_set_page_name now names nothing there.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-fex-band.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index c6da961..2034703 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -853,6 +853,22 @@ get_page_aligned_size(size_t size) {
+ 
+ static void
+ os_set_page_name(void* address, size_t size) {
++#if defined(_WIN32) && defined(FEX_IOS_HOST)
++	/* Playport: no names for rpmalloc's own mappings on iOS. The name hook is
++	 * FEX's VirtualName, which logs each name (the first 256), and the log
++	 * allocates. A mapping made for an allocation therefore allocated again
++	 * before the mapping was recorded: on a thread with no heap yet the nested
++	 * allocation made another heap, and on a heap with no partial span it
++	 * mapped another span, and so on until the log's cap stopped it. On
++	 * 2026-09-28 Hollow Knight's second thread went 231 levels deep twice
++	 * over: 231 heaps, and 232 small spans of which each kept one 64KB page in
++	 * use and lost the rest, because every level set its own span as the
++	 * heap's partial one. That was 3.7GB of the 16GB FEX host band, a quarter
++	 * of it, before the first frame. A name has no other use on iOS. */
++	(void)address;
++	(void)size;
++	return;
++#endif
+   const char* name = os_huge_pages ? global_config.huge_page_name : global_config.page_name;
+ #if defined(__linux__) || defined(__ANDROID__)
+ 	if ((address == MAP_FAILED) || !name) {

@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 16:59:56 -0700
+Subject: [PATCH] Defer the band selector's log until a logging path exists
+
+The selector emitted through the Win32 standard error handle, which on this
+host reaches nothing that is captured -- so the code deciding where the
+emulator's arena lives had been invisible since it was written. Routing it
+through OutputDebugString instead crashed every launch: it runs during
+allocator init, before the ARM64EC TEB exists, and that call reaches into
+ntdll and touches it. The original write had survived only because it was
+failing silently, which is the same reason it was invisible.
+
+Append to a plain static byte buffer -- memcpy and an integer, no syscall, no
+TEB, no lock, no allocation -- and flush it once a logging path is known to
+work. Export the buffer as data so ntdll can also print it, and never call a
+PE export from native code to reach it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01M1HvfVX2Y29TgJbFWbahdt
+Madeira-commit: 053c385ecc9090702e4959a1d96752ea918a6110
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp        | 27 +++++++++++++++++++++++-
+ Source/Windows/ARM64EC/libarm64ecfex.def |  7 ++++++
+ 2 files changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 2f6a512..12311be 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -64,6 +64,12 @@ $end_info$
+ #include <winnt.h>
+ #include <wine/debug.h>
+ 
++/* ml751: the VA band selector's deferred beacon buffer, filled by
++ * ios_va_emit() in rpmalloc.c before the ARM64EC TEB exists and therefore
++ * before any logging API is callable. Flushed once LogMan is up. */
++extern "C" char ios_va_log[];
++extern "C" int ios_va_log_len;
++
+ #ifdef FEX_IOS_HOST
+ /* iOS JIT-pool alias resolution. Implemented in IosJitAlias.cpp (separate
+  * TU because ARM64EC class-method access to the static table directly from
+@@ -890,8 +896,27 @@ NTSTATUS ProcessInit() {
+  * __DATE__/__TIME__ below is compiler-generated and therefore the
+  * authoritative identity; if the two disagree, the tag is wrong, not the
+  * build. */
+-#define MADEIRA_REV "ml712"
++#define MADEIRA_REV "ml755"
+   LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MADEIRA_REV " compiled " __DATE__ " " __TIME__);
++#ifdef FEX_IOS_HOST
++  /* ml751: flush the VA band selector's beacons.
++   *
++   * ios_fex_band_select() runs during rpmalloc init, before the ARM64EC TEB
++   * exists, so it cannot call a logging API -- ml750 tried OutputDebugStringA
++   * there and crashed every launch with x18=0x0. It appends to a plain byte
++   * buffer instead; this is the first point where LogMan is known to work, as
++   * the build-id line above demonstrates. Without this the selector that
++   * decides where FEX's arena lives reports nothing at all. */
++  {
++    if (ios_va_log_len > 0) {
++      ios_va_log[ios_va_log_len] = 0;
++      LogMan::Msg::EFmt("[va-profile] ml751 deferred selector log ({} bytes):\n{}",
++                        ios_va_log_len, ios_va_log);
++    } else {
++      LogMan::Msg::EFmt("[va-profile] ml751 selector emitted NOTHING -- it did not run");
++    }
++  }
++#endif
+ #ifdef FEX_IOS_HOST
+   {
+     const uint32_t Off = IosTebTsdOffset;
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index a59f0e8..d8ced1d 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -26,3 +26,10 @@ EXPORTS
+   ThreadInit
+   ThreadTerm
+   UpdateProcessorInformation
++  ; ml755: the VA band selector's deferred beacon buffer, exported as DATA so
++  ; ntdll can print it from arm64ec_process_init_dispatchers(). The selector
++  ; runs before the ARM64EC TEB exists and so cannot log for itself; ml751
++  ; flushed it from Module.cpp after [build-id], which is never reached when
++  ; the selector finds NO BAND -- exactly the failure that needs explaining.
++  ios_va_log DATA
++  ios_va_log_len DATA

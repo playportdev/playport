@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 18 May 2026 17:37:25 +0800
+Subject: [PATCH] iOS DXMT: boot-time BC support log + present counter accessor
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two small additions used by the iOS Mythic frontend:
+
+- supportsBCTextureCompression result is logged exactly once at boot
+  (`[iOS DXMT] supportsBCTextureCompression = YES/NO`). On Apple GPU 7
+  (A15, iPhone 13 Pro) this reports NO. CPU BC decoders would be
+  needed for any title that uses BC formats — though Thumper appears
+  to use vertex/SDF rendering and uncompressed atlases throughout, so
+  this is informational, not blocking.
+
+- New C export: `uint64_t mythic_get_present_count(void)` — atomic
+  read of the existing internal counter (the same one driving the
+  `Present #N` cadence log). Used by the SwiftUI FPS overlay in the
+  iOS app, polled every 100ms for smoothed FPS display.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: 1a8b9d7ee963dc6131f36b77a09a6803a5acc256
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 2696f12..87783d7 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -312,6 +312,12 @@ static bool query_bc_support(void) {
+     }
+   }
+   g_bc_supported_cached = supported ? 1 : 0;
++  /* iOS-Mythic 2026-05-18: one-shot log so we can see if A15+ supports BC
++   * natively (would skip all the BC decoder work). Fires exactly once
++   * per process — first call to to_metal_pixel_format. */
++  dprintf(STDERR_FILENO,
++          "[iOS DXMT] supportsBCTextureCompression = %s\n",
++          supported ? "YES" : "NO");
+   return supported;
+ }
+ 
+@@ -1488,6 +1494,12 @@ static inline void mythic_log_present_cadence(const char *path) {
+   }
+ }
+ 
++/* iOS-Mythic 2026-05-18: exposed for SwiftUI FPS overlay. Reads the
++ * atomic counter on the calling thread (typically a 100ms Swift Timer). */
++uint64_t mythic_get_present_count(void) {
++  return atomic_load_explicit(&g_mythic_present_count, memory_order_relaxed);
++}
++
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;

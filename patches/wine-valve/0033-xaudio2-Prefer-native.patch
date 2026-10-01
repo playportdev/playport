@@ -1,0 +1,494 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Eikum <aeikum@codeweavers.com>
+Date: Tue, 28 Dec 2021 12:05:22 -0600
+Subject: [PATCH] xaudio2: Prefer native
+
+This should be safe now on 64-bit due to the top-down allocation
+patches.
+Valve-commit: 095fdddb5e186a48f55a3d529c3b7d99c89d2ef6
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/x3daudio1_0/Makefile.in   | 2 ++
+ dlls/x3daudio1_1/Makefile.in   | 2 ++
+ dlls/x3daudio1_2/Makefile.in   | 2 ++
+ dlls/x3daudio1_3/Makefile.in   | 2 ++
+ dlls/x3daudio1_4/Makefile.in   | 2 ++
+ dlls/x3daudio1_5/Makefile.in   | 2 ++
+ dlls/x3daudio1_6/Makefile.in   | 2 ++
+ dlls/x3daudio1_7/Makefile.in   | 2 ++
+ dlls/xactengine2_0/Makefile.in | 2 ++
+ dlls/xactengine2_4/Makefile.in | 2 ++
+ dlls/xactengine2_7/Makefile.in | 2 ++
+ dlls/xactengine2_9/Makefile.in | 2 ++
+ dlls/xactengine3_0/Makefile.in | 2 ++
+ dlls/xactengine3_1/Makefile.in | 2 ++
+ dlls/xactengine3_2/Makefile.in | 2 ++
+ dlls/xactengine3_3/Makefile.in | 2 ++
+ dlls/xactengine3_4/Makefile.in | 2 ++
+ dlls/xactengine3_5/Makefile.in | 2 ++
+ dlls/xactengine3_6/Makefile.in | 2 ++
+ dlls/xactengine3_7/Makefile.in | 2 ++
+ dlls/xapofx1_1/Makefile.in     | 1 +
+ dlls/xapofx1_2/Makefile.in     | 2 ++
+ dlls/xapofx1_3/Makefile.in     | 1 +
+ dlls/xapofx1_4/Makefile.in     | 2 ++
+ dlls/xapofx1_5/Makefile.in     | 2 ++
+ dlls/xaudio2_0/Makefile.in     | 2 ++
+ dlls/xaudio2_1/Makefile.in     | 2 ++
+ dlls/xaudio2_2/Makefile.in     | 2 ++
+ dlls/xaudio2_3/Makefile.in     | 2 ++
+ dlls/xaudio2_4/Makefile.in     | 2 ++
+ dlls/xaudio2_5/Makefile.in     | 2 ++
+ dlls/xaudio2_6/Makefile.in     | 2 ++
+ dlls/xaudio2_7/Makefile.in     | 2 ++
+ dlls/xaudio2_8/Makefile.in     | 2 ++
+ dlls/xaudio2_9/Makefile.in     | 1 +
+ 35 files changed, 67 insertions(+)
+
+diff --git a/dlls/x3daudio1_0/Makefile.in b/dlls/x3daudio1_0/Makefile.in
+index d3c2cbe..ab5af4a 100644
+--- a/dlls/x3daudio1_0/Makefile.in
++++ b/dlls/x3daudio1_0/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/x3daudio1_1/Makefile.in b/dlls/x3daudio1_1/Makefile.in
+index 8dfccce..6b25e39 100644
+--- a/dlls/x3daudio1_1/Makefile.in
++++ b/dlls/x3daudio1_1/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/x3daudio1_2/Makefile.in b/dlls/x3daudio1_2/Makefile.in
+index 699aac4..150028a 100644
+--- a/dlls/x3daudio1_2/Makefile.in
++++ b/dlls/x3daudio1_2/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/x3daudio1_3/Makefile.in b/dlls/x3daudio1_3/Makefile.in
+index 093fe11..c87c19d 100644
+--- a/dlls/x3daudio1_3/Makefile.in
++++ b/dlls/x3daudio1_3/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/x3daudio1_4/Makefile.in b/dlls/x3daudio1_4/Makefile.in
+index c67d653..a3319b8 100644
+--- a/dlls/x3daudio1_4/Makefile.in
++++ b/dlls/x3daudio1_4/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/x3daudio1_5/Makefile.in b/dlls/x3daudio1_5/Makefile.in
+index 471e2c6..3b548bf 100644
+--- a/dlls/x3daudio1_5/Makefile.in
++++ b/dlls/x3daudio1_5/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/x3daudio1_6/Makefile.in b/dlls/x3daudio1_6/Makefile.in
+index 7fb6f05..956c369 100644
+--- a/dlls/x3daudio1_6/Makefile.in
++++ b/dlls/x3daudio1_6/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/x3daudio1_7/Makefile.in b/dlls/x3daudio1_7/Makefile.in
+index fd22a26..b906e91 100644
+--- a/dlls/x3daudio1_7/Makefile.in
++++ b/dlls/x3daudio1_7/Makefile.in
+@@ -4,5 +4,7 @@ PARENTSRC = ../xaudio2_7
+ IMPORTS   = $(FAUDIO_PE_LIBS)
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c
+diff --git a/dlls/xactengine2_0/Makefile.in b/dlls/xactengine2_0/Makefile.in
+index 2064afa..ea57370 100644
+--- a/dlls/xactengine2_0/Makefile.in
++++ b/dlls/xactengine2_0/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0200
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine2_4/Makefile.in b/dlls/xactengine2_4/Makefile.in
+index b61774d..4771318 100644
+--- a/dlls/xactengine2_4/Makefile.in
++++ b/dlls/xactengine2_4/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0204
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine2_7/Makefile.in b/dlls/xactengine2_7/Makefile.in
+index bd91161..faae6a2 100644
+--- a/dlls/xactengine2_7/Makefile.in
++++ b/dlls/xactengine2_7/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0207
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine2_9/Makefile.in b/dlls/xactengine2_9/Makefile.in
+index 10e0578..016efa9 100644
+--- a/dlls/xactengine2_9/Makefile.in
++++ b/dlls/xactengine2_9/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0209
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_0/Makefile.in b/dlls/xactengine3_0/Makefile.in
+index b944a7d..a52a282 100644
+--- a/dlls/xactengine3_0/Makefile.in
++++ b/dlls/xactengine3_0/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0300
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_1/Makefile.in b/dlls/xactengine3_1/Makefile.in
+index 410ac6c..6f2466d 100644
+--- a/dlls/xactengine3_1/Makefile.in
++++ b/dlls/xactengine3_1/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0301
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_2/Makefile.in b/dlls/xactengine3_2/Makefile.in
+index 32d855d..70c3491 100644
+--- a/dlls/xactengine3_2/Makefile.in
++++ b/dlls/xactengine3_2/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0302
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_3/Makefile.in b/dlls/xactengine3_3/Makefile.in
+index 650b577..47795dc 100644
+--- a/dlls/xactengine3_3/Makefile.in
++++ b/dlls/xactengine3_3/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0303
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_4/Makefile.in b/dlls/xactengine3_4/Makefile.in
+index 1fad4f2..fa459af 100644
+--- a/dlls/xactengine3_4/Makefile.in
++++ b/dlls/xactengine3_4/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0304
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_5/Makefile.in b/dlls/xactengine3_5/Makefile.in
+index 1e74124..bb1a25e 100644
+--- a/dlls/xactengine3_5/Makefile.in
++++ b/dlls/xactengine3_5/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0305
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_6/Makefile.in b/dlls/xactengine3_6/Makefile.in
+index 12861db..3bc6871 100644
+--- a/dlls/xactengine3_6/Makefile.in
++++ b/dlls/xactengine3_6/Makefile.in
+@@ -4,6 +4,8 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0306
+ PARENTSRC = ../xactengine3_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xactengine3_7/Makefile.in b/dlls/xactengine3_7/Makefile.in
+index e9b815b..8883b86 100644
+--- a/dlls/xactengine3_7/Makefile.in
++++ b/dlls/xactengine3_7/Makefile.in
+@@ -3,6 +3,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) ole32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ EXTRADEFS = -DXACT3_VER=0x0307
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xact_classes.idl \
+ 	xact_dll.c
+diff --git a/dlls/xapofx1_1/Makefile.in b/dlls/xapofx1_1/Makefile.in
+index 63d4493..c100440 100644
+--- a/dlls/xapofx1_1/Makefile.in
++++ b/dlls/xapofx1_1/Makefile.in
+@@ -6,6 +6,7 @@ PARENTSRC = ../xaudio2_7
+ 
+ VER_FILEDESCRIPTION_STR = "Wine XAPOFX dll"
+ VER_PRODUCTVERSION      = 9,24,1400,0
++EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+ SOURCES = \
+ 	xapo.c \
+diff --git a/dlls/xapofx1_2/Makefile.in b/dlls/xapofx1_2/Makefile.in
+index 6353414..88532c0 100644
+--- a/dlls/xapofx1_2/Makefile.in
++++ b/dlls/xapofx1_2/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) ole32
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xapofx.c \
+diff --git a/dlls/xapofx1_3/Makefile.in b/dlls/xapofx1_3/Makefile.in
+index c5bd078..5394d18 100644
+--- a/dlls/xapofx1_3/Makefile.in
++++ b/dlls/xapofx1_3/Makefile.in
+@@ -6,6 +6,7 @@ PARENTSRC = ../xaudio2_7
+ 
+ VER_FILEDESCRIPTION_STR = "Wine XAPOFX dll"
+ VER_PRODUCTVERSION      = 9,26,1590,0
++EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+ SOURCES = \
+ 	xapo.c \
+diff --git a/dlls/xapofx1_4/Makefile.in b/dlls/xapofx1_4/Makefile.in
+index 43dde8f..1988195 100644
+--- a/dlls/xapofx1_4/Makefile.in
++++ b/dlls/xapofx1_4/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) ole32
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xapofx.c \
+diff --git a/dlls/xapofx1_5/Makefile.in b/dlls/xapofx1_5/Makefile.in
+index fb53428..d3586b2 100644
+--- a/dlls/xapofx1_5/Makefile.in
++++ b/dlls/xapofx1_5/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) ole32
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xapofx.c \
+diff --git a/dlls/xaudio2_0/Makefile.in b/dlls/xaudio2_0/Makefile.in
+index 18721ae..239bdbc 100644
+--- a/dlls/xaudio2_0/Makefile.in
++++ b/dlls/xaudio2_0/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xaudio_allocator.c \
+diff --git a/dlls/xaudio2_1/Makefile.in b/dlls/xaudio2_1/Makefile.in
+index 97fbed4..103edb2 100644
+--- a/dlls/xaudio2_1/Makefile.in
++++ b/dlls/xaudio2_1/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xaudio_allocator.c \
+diff --git a/dlls/xaudio2_2/Makefile.in b/dlls/xaudio2_2/Makefile.in
+index 11dfabc..83ff54d 100644
+--- a/dlls/xaudio2_2/Makefile.in
++++ b/dlls/xaudio2_2/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xaudio_allocator.c \
+diff --git a/dlls/xaudio2_3/Makefile.in b/dlls/xaudio2_3/Makefile.in
+index ea979c2..c2ed7ff 100644
+--- a/dlls/xaudio2_3/Makefile.in
++++ b/dlls/xaudio2_3/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xaudio_allocator.c \
+diff --git a/dlls/xaudio2_4/Makefile.in b/dlls/xaudio2_4/Makefile.in
+index e94796c..71b0719 100644
+--- a/dlls/xaudio2_4/Makefile.in
++++ b/dlls/xaudio2_4/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xaudio_allocator.c \
+diff --git a/dlls/xaudio2_5/Makefile.in b/dlls/xaudio2_5/Makefile.in
+index acc5b35..cd77261 100644
+--- a/dlls/xaudio2_5/Makefile.in
++++ b/dlls/xaudio2_5/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xaudio_allocator.c \
+diff --git a/dlls/xaudio2_6/Makefile.in b/dlls/xaudio2_6/Makefile.in
+index 9e6e844..88c894f 100644
+--- a/dlls/xaudio2_6/Makefile.in
++++ b/dlls/xaudio2_6/Makefile.in
+@@ -4,6 +4,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	xapo.c \
+ 	xaudio_allocator.c \
+diff --git a/dlls/xaudio2_7/Makefile.in b/dlls/xaudio2_7/Makefile.in
+index e1e2176..136315c 100644
+--- a/dlls/xaudio2_7/Makefile.in
++++ b/dlls/xaudio2_7/Makefile.in
+@@ -3,6 +3,8 @@ MODULE    = xaudio2_7.dll
+ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c \
+ 	xapo.c \
+diff --git a/dlls/xaudio2_8/Makefile.in b/dlls/xaudio2_8/Makefile.in
+index b5406fe..f4a1596 100644
+--- a/dlls/xaudio2_8/Makefile.in
++++ b/dlls/xaudio2_8/Makefile.in
+@@ -5,6 +5,8 @@ IMPORTS   = $(FAUDIO_PE_LIBS) advapi32 ole32 user32 uuid
+ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
++EXTRADLLFLAGS = -Wb,--prefer-native
++
+ SOURCES = \
+ 	x3daudio.c \
+ 	xapo.c \
+diff --git a/dlls/xaudio2_9/Makefile.in b/dlls/xaudio2_9/Makefile.in
+index 84960c3..4a9422c 100644
+--- a/dlls/xaudio2_9/Makefile.in
++++ b/dlls/xaudio2_9/Makefile.in
+@@ -5,6 +5,7 @@ EXTRAINCL = $(FAUDIO_PE_CFLAGS)
+ PARENTSRC = ../xaudio2_7
+ 
+ VER_PRODUCTVERSION = 10,0,19041,1
++EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+ SOURCES = \
+ 	x3daudio.c \

@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 12:00:00 +0200
+Subject: [PATCH] thread: set a named thread's QoS class from
+ WINE_IOS_THREAD_QOS
+
+Every Wine thread inherits USER_INTERACTIVE from the host thread, so the
+scheduler keeps a title's helper threads (Unity's graphics worker and job
+workers, DXMT's encoder) on the two P cores beside the game's main thread,
+and their power pulls the P cluster's clock down under thermal pressure.
+WINE_IOS_THREAD_QOS="prefix=class,..." gives a thread that names itself
+with a matching prefix that QoS class (interactive, initiated, default,
+utility, background), logged as a [thr-qos] line. Unset, nothing changes.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-25-hk-thread-qos.md
+Offered-upstream: no
+---
+ build/ntdll-unix/thread_ios.c | 39 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index b4ac20a..d85cc14 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -2415,6 +2415,42 @@ BOOL get_thread_times(int unix_pid, int unix_tid, LARGE_INTEGER *kernel_time, LA
+ #endif
+ }
+ 
++/* Playport: WINE_IOS_THREAD_QOS="prefix=class,..." gives a thread that names
++ * itself with a matching name prefix that QoS class (interactive, initiated,
++ * default, utility, background). Every Wine thread otherwise inherits
++ * USER_INTERACTIVE from the host thread, so the scheduler runs helper threads
++ * on the two P cores beside the game's main thread and the P cluster's power
++ * pulls its clock down under thermal pressure. A lower class lets them run on
++ * the E cores. A thread can only set its own QoS, hence the self-name hook. */
++static void ios_thread_qos_for_name( const char *nm )
++{
++    const char *spec = getenv( "WINE_IOS_THREAD_QOS" ), *p;
++    if (!spec || !*spec || !*nm) return;
++    for (p = spec; *p; )
++    {
++        const char *end = strchr( p, ',' ), *eq;
++        size_t len = end ? (size_t)(end - p) : strlen( p );
++        eq = memchr( p, '=', len );
++        if (eq && eq > p && !strncmp( nm, p, eq - p ))
++        {
++            static const struct { const char *n; qos_class_t q; } cls[] = {
++                { "interactive", QOS_CLASS_USER_INTERACTIVE }, { "initiated", QOS_CLASS_USER_INITIATED },
++                { "default", QOS_CLASS_DEFAULT }, { "utility", QOS_CLASS_UTILITY }, { "background", QOS_CLASS_BACKGROUND } };
++            size_t cl = len - (eq + 1 - p); unsigned i;
++            for (i = 0; i < sizeof(cls) / sizeof(cls[0]); i++)
++                if (strlen( cls[i].n ) == cl && !strncmp( eq + 1, cls[i].n, cl ))
++                {
++                    int r = pthread_set_qos_class_self_np( cls[i].q, 0 );
++                    ERR( "[thr-qos] tid=%04x name=\"%s\" qos=%s rc=%d\n",
++                         (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, nm, cls[i].n, r );
++                    return;
++                }
++        }
++        if (!end) break;
++        p = end + 1;
++    }
++}
++
+ static void set_native_thread_name( HANDLE handle, const UNICODE_STRING *name )
+ {
+     /* iOS-Madeira ml810: publish the thread name <-> TID <-> TEB mapping.
+@@ -2436,9 +2472,12 @@ static void set_native_thread_name( HANDLE handle, const UNICODE_STRING *name )
+         if (nlen < 0) nlen = 0;
+         nm[nlen] = 0;
+         if (ios_terminate_is_self( handle ))
++        {
+             ERR( "[thr-name] ml810 tid=%04x teb=%p name=\"%s\"\n",
+                  (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread,
+                  NtCurrentTeb(), nm );
++            ios_thread_qos_for_name( nm );
++        }
+         else
+             ERR( "[thr-name] ml810 handle=%p (named by tid=%04x, NOT self) name=\"%s\"\n",
+                  handle, (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, nm );

@@ -1,0 +1,60 @@
+title: S1_MODE=title nonce=82e5333a TITLE_EXE=Games\Hollow%20Knight\hollow_knight.exe TITLE_ARGS=-logFile,C:\hollow_knight-player.log
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: display: screen 2736x1260 (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, guest monitor 120 Hz
+hostio: HIO_XINPUT_BLOCK=0x1586ad3b0 WINEDLLOVERRIDES=xinput1_1,xinput1_2,xinput1_3,xinput1_4,xinput9_1_0=n;windows.gaming.input=d
+hostio: controller connected "DUALSHOCK 4 Wireless Controller" category "DualShock 4" extended=true
+hostio: controller "DUALSHOCK 4 Wireless Controller" is XInput slot 0
+hostio: audio session active, 48000 Hz, output latency 14 ms
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=1
+[14:26:47.120] [wine_host] JIT pool: placement inside the reservation (+0x0)
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 5.76 s
+[14:26:47.729] [wine_host] run_exe: Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+[14:26:47.741] [wine_host] run_exe: working directory C:\Games\Hollow Knight; host file <container>/Documents/prefix/drive_c/Games/Hollow Knight/hollow_knight.exe
+[14:26:47.741] [wine_host] run_exe: argv[1] = "-logFile"
+[14:26:47.741] [wine_host] run_exe: argv[2] = "C:\hollow_knight-player.log"
+[14:26:47.741] [wine_host] run_exe: argv[3] = "-screen-fullscreen"
+[14:26:47.741] [wine_host] run_exe: argv[4] = "1"
+[14:26:47.741] [wine_host] run_exe: argv[5] = "-screen-width"
+[14:26:47.741] [wine_host] run_exe: argv[6] = "2736"
+[14:26:47.741] [wine_host] run_exe: argv[7] = "-screen-height"
+[14:26:47.741] [wine_host] run_exe: argv[8] = "1260"
+title: wine_host_run_exe -> 0
+D 24 Load module xinput1_4.dll (xinput1_4.dll-a61dfd37123ccfb7): 71F3E30000
+D 24 Load module xinput1_3.dll (xinput1_3.dll-1e62f1740a6167cd): 71F3E20000
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0002 lt=0 rt=0 l=(0,0) r=(0,0) calls=5
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=3
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=4
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=6
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=4
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=8
+hostio: input pad0 buttons=0x8000 lt=0 rt=0 l=(0,0) r=(0,0) calls=5
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=5
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=6
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=4
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=6
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=10
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=12
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=16
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=10
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=4
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=4
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=4
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=6
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=2
+hostio: input pad0 buttons=0x0001 lt=0 rt=0 l=(0,0) r=(0,0) calls=5
+hostio: input pad0 buttons=0x0004 lt=0 rt=0 l=(0,0) r=(0,0) calls=4
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=5
+hostio: input pad0 buttons=0x0002 lt=0 rt=0 l=(0,0) r=(0,0) calls=3
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=5
+hostio: input pad0 buttons=0x0004 lt=0 rt=0 l=(0,0) r=(0,0) calls=3
+hostio: input pad0 buttons=0x0000 lt=0 rt=0 l=(0,0) r=(0,0) calls=1

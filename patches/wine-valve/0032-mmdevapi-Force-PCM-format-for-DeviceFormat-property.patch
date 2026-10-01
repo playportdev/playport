@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Eikum <aeikum@codeweavers.com>
+Date: Mon, 31 Jan 2022 10:57:51 -0600
+Subject: [PATCH] mmdevapi: Force PCM format for DeviceFormat property
+
+Native xaudio2 returns this format directly from GetDeviceDetails. Far
+Cry 4 expects to get a PCM format from GetDeviceDetails, so we need to
+set it to PCM here.
+Valve-commit: 272b435e04fc0ef5b604057244525a50156e9228
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/mmdevapi/devenum.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/dlls/mmdevapi/devenum.c b/dlls/mmdevapi/devenum.c
+index 8440b5d..5502b75 100644
+--- a/dlls/mmdevapi/devenum.c
++++ b/dlls/mmdevapi/devenum.c
+@@ -639,6 +639,7 @@ static HRESULT set_format(MMDevice *dev)
+     HRESULT hr;
+     IAudioClient *client;
+     WAVEFORMATEX *fmt;
++    WAVEFORMATEXTENSIBLE *fmtex;
+     PROPVARIANT pv = { VT_EMPTY };
+ 
+     hr = AudioClient_Create(&dev->devguid, &dev->IMMDevice_iface, &client);
+@@ -653,6 +654,24 @@ static HRESULT set_format(MMDevice *dev)
+ 
+     IAudioClient_Release(client);
+ 
++    /* for most devices, native Windows only allows PCM formats for
++     * DeviceFormat. GetMixFormat often returns float. */
++    if(fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE){
++        fmtex = (WAVEFORMATEXTENSIBLE *)fmt;
++        if(IsEqualGUID(&fmtex->SubFormat, &KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)){
++            fmt->wBitsPerSample = 16;
++            fmt->nBlockAlign = fmt->wBitsPerSample * fmt->nChannels / 8;
++            fmt->nAvgBytesPerSec = fmt->nSamplesPerSec * fmt->nBlockAlign;
++            fmtex->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
++            fmtex->Samples.wValidBitsPerSample = fmt->wBitsPerSample;
++        }
++    }else if(fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT){
++        fmt->wFormatTag = WAVE_FORMAT_PCM;
++        fmt->wBitsPerSample = 16;
++        fmt->nBlockAlign = fmt->wBitsPerSample * fmt->nChannels / 8;
++        fmt->nAvgBytesPerSec = fmt->nSamplesPerSec * fmt->nBlockAlign;
++    }
++
+     pv.vt = VT_BLOB;
+     pv.blob.cbSize = sizeof(WAVEFORMATEX) + fmt->cbSize;
+     pv.blob.pBlobData = (BYTE*)fmt;

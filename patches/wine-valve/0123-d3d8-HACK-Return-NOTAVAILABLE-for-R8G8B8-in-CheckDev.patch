@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Conor McCarthy <cmccarthy@codeweavers.com>
+Date: Fri, 15 May 2026 14:58:10 +1000
+Subject: [PATCH] d3d8: HACK: Return NOTAVAILABLE for R8G8B8 in
+ CheckDeviceMultiSampleType() for STAR WARS Starfighter.
+
+CW-Bug-Id: #27020
+Valve-commit: c6a17f3d62a103fe7d1927e089bf54b39e47a4a6
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/d3d8/directx.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/dlls/d3d8/directx.c b/dlls/d3d8/directx.c
+index 9f4cece..37c101f 100644
+--- a/dlls/d3d8/directx.c
++++ b/dlls/d3d8/directx.c
+@@ -321,6 +321,7 @@ static HRESULT WINAPI d3d8_CheckDeviceMultiSampleType(IDirect3D8 *iface, UINT ad
+     struct d3d8 *d3d8 = impl_from_IDirect3D8(iface);
+     struct wined3d_adapter *wined3d_adapter;
+     unsigned int output_idx;
++    const char *sgi;
+     HRESULT hr;
+ 
+     TRACE("iface %p, adapter %u, device_type %#x, format %#x, windowed %#x, multisample_type %#x.\n",
+@@ -333,6 +334,16 @@ static HRESULT WINAPI d3d8_CheckDeviceMultiSampleType(IDirect3D8 *iface, UINT ad
+     if (multisample_type > D3DMULTISAMPLE_16_SAMPLES)
+         return D3DERR_INVALIDCALL;
+ 
++    sgi = getenv("SteamGameId");
++    if (sgi && !strcmp(sgi, "32350"))
++    {
++        /* STAR WARS Starfighter checks R8G8B8 but if available it then uses R5G5B5.
++         * Even if multisampling is available for R5G5B5, it will fail because it enables
++         * backbuffer locking, and locking a multisampled backbuffer is required to fail. */
++        WARN("HACK: returning D3DERR_NOTAVAILABLE.\n");
++        return D3DERR_NOTAVAILABLE;
++    }
++
+     wined3d_mutex_lock();
+     wined3d_adapter = wined3d_output_get_adapter(d3d8->wined3d_outputs[output_idx]);
+     hr = wined3d_check_device_multisample_type(wined3d_adapter, wined3d_device_type_from_d3d(device_type),

@@ -1,0 +1,325 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# From scratch to the phone in one command: build the IPA with
+# pp build and install it on the paired iPhone, upgrading the
+# installed app in place (its container, with the Wine prefix, the Steam
+# session and the staged titles, survives).
+#
+#   pp install [--variant dev|release] [--clean | --from STAGE] [--keep-outputs N] [--force]
+#   pp install [--variant dev|release] --no-build [--ipa IPA] [--force]
+#   pp install --check [--no-build] [--ipa IPA]
+#
+#   (none)          build what changed (pp build), then install the verified IPA
+#   --clean         rebuild every tree from its pin first (pp build --clean)
+#   --force         install even when the phone already has this IPA (by default
+#                   an IPA whose sha256 the last install recorded is not sent again)
+#   --variant V     dev (default: $PLAYPORT_VARIANT, else dev) or release
+#                   (pp build --variant; docs/BUILDING.md, "Variants").
+#                   Both install over the same app; a release build cannot
+#                   be driven from the workstation (no S1_MODE)
+#   --from STAGE    run STAGE and every later stage (pp build --from)
+#   --keep-outputs N  passed to pp build (default 3)
+#   --no-build      install without building: the newest verified IPA of the
+#                   variant (after waiting for a build running in this checkout)
+#                   in $PLAYPORT_OUT (default $PLAYPORT_BUILD/out), or --ipa
+#   --ipa IPA       install this IPA (implies --no-build)
+#   --check         run the checks only (host, account, device, IPA); build
+#                   and install nothing
+#
+# Environment:
+#   ALLOW_LAST_SLOT=1  a first install may take the last free-team slot
+#   LOCK_WAIT        seconds to wait for the device lock (default: wait as long as it takes)
+#   PLAYPORT_DEVICE_LOCK    the device lock (default $PLAYPORT_DEVICE_DIR/device.lock:
+#                    build/lib.sh; tools/phonelib.py takes the same one)
+#   PLAYPORT_USBMUX_SOCKET  netmuxd's socket (pp setup records it)
+#   plus everything pp build reads (build/lib.sh, JOBS, PLAYPORT_RUN,
+#   PLAYPORT_OUT)
+#
+# The phone checks run before the build, so a missing device, an expired
+# login or an unregistered phone stops the run in seconds, not after the
+# build. Cached inputs that build/toolchain/ld64.sh and build/toolchain/xtool.sh
+# produce are built when missing; llvm-mingw and the SDK are not
+# (docs/BUILDING.md). The device steps run under the device lock,
+# close a running app first, and never uninstall anything: a first install
+# into a full set of free-team slots stops (docs/DEVICE.md, "Free-team
+# limits"). Each run's log and summary go to $PLAYPORT_BUILD/install-runs/.
+# No UDID, team ID or account name is written there.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
+
+BUILD=1 CHECK=0 FROM="" KEEP=3 IPA="" VARIANT=${PLAYPORT_VARIANT:-dev} FORCE=0
+while [ $# -gt 0 ]; do
+    case $1 in
+    --variant) VARIANT=$2; shift 2 ;;
+    --from) FROM=$2; shift 2 ;;
+    --clean) FROM=clean; shift ;;
+    --force) FORCE=1; shift ;;
+    --keep-outputs) KEEP=$2; shift 2 ;;
+    --no-build) BUILD=0; shift ;;
+    --ipa) IPA=$(realpath "$2"); BUILD=0; shift 2 ;;
+    --check) CHECK=1; shift ;;
+    -h|--help) sed -n '3,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+[ "$BUILD" = 1 ] || [ -z "$FROM" ] || { echo "--from needs a build" >&2; exit 2; }
+case $VARIANT in dev|release) ;; *) echo "no variant $VARIANT (dev or release)" >&2; exit 2 ;; esac
+
+SOCK=${PLAYPORT_USBMUX_SOCKET:?the netmuxd socket is not set: run ./pp setup}
+DEVICE_LOCK=${PLAYPORT_DEVICE_LOCK:-$PLAYPORT_DEVICE_DIR/device.lock}
+HOLDER=$(dirname "$DEVICE_LOCK")/device.holder.json
+OUT=${PLAYPORT_OUT:-$PLAYPORT_BUILD/out}
+RUN=${PLAYPORT_RUN:-$PLAYPORT_BUILD/run}
+STATE=$PLAYPORT_DEVICE_DIR/device-state.json
+SLOT_LIMIT=3
+LOG=$PLAYPORT_BUILD/install-runs/$(date +%Y%m%d-%H%M%S)
+mkdir -p "$LOG"
+say() { local m="$*"; printf '%s  %s\n' "$(date +%H:%M:%S)" "${m//"$PLAYPORT_REPO/"/}" | tee -a "$LOG/run.log" >&2; }
+die() { say "STOP: $1"; exit "${2:-1}"; }
+
+# pmd NAME SECS ARGS...: one bounded pymobiledevice3 call, output kept in
+# $LOG/NAME.{out,err}. A failure tells "device gone" (exit 3) from "command
+# failed" (exit 1).
+pmd() {
+    local name=$1 secs=$2; shift 2
+    if ! timeout "$secs" env USBMUXD_SOCKET_ADDRESS="$SOCK" pymobiledevice3 "$@" \
+            > "$LOG/$name.out" 2> "$LOG/$name.err"; then
+        timeout 30 env USBMUXD_SOCKET_ADDRESS="$SOCK" pymobiledevice3 usbmux list 2>/dev/null |
+            jq -e 'length == 1' > /dev/null || die "the phone stopped answering during $name ($LOG/$name.err)" 3
+        die "$name failed ($LOG/$name.err)"
+    fi
+}
+# xtl_apps NAME: the free-team apps on the phone, one bundle ID per line, in $LOG/NAME.txt.
+xtl_apps() { pmd "$1" 60 apps list -t User; jq -r 'keys[] | select(startswith("XTL-"))' "$LOG/$1.out" > "$LOG/$1.txt"; }
+
+# ipa_info IPA: "BID EXPIRY_EPOCH PROFILE_UUID DEVICE_LISTED" from the IPA's
+# Info.plist and embedded profile; DEVICE_LISTED says whether $CHECK_UDID is
+# among the profile's devices. Nothing identifying is printed.
+ipa_info() {
+    CHECK_UDID=$UDID python3 - "$1" <<'EOF'
+import os, plistlib, re, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+app = next(n for n in z.namelist() if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", n))[:-len("Info.plist")]
+info = plistlib.loads(z.read(app + "Info.plist"))
+cms = z.read(app + "embedded.mobileprovision")
+prof = plistlib.loads(cms[cms.index(b"<?xml"):cms.index(b"</plist>") + len(b"</plist>")])
+listed = os.environ["CHECK_UDID"] in prof.get("ProvisionedDevices", [])
+print(info["CFBundleIdentifier"], int(prof["ExpirationDate"].timestamp()), prof["UUID"], "yes" if listed else "no")
+EOF
+}
+
+# --- Host: tools, no other build on the shared run/, the SDK's clang headers.
+for t in pymobiledevice3 netmuxd jq python3 flock timeout unzip sha256sum realpath; do
+    command -v "$t" > /dev/null || die "missing host tool: $t"
+done
+if [ "$BUILD" = 1 ]; then
+    [ "$FROM" = clean ] && [ -d "$RUN" ] && say "clean build: $RUN is deleted and rebuilt"
+    git -C "$PLAYPORT_REPO" diff --quiet HEAD -- . ':!app/artifacts.tsv' ':!build/generated' ||
+        say "note: the working tree has local changes; provenance.txt will say so"
+fi
+if [ "$BUILD" = 1 ] && [ "$CHECK" = 0 ]; then
+    [ -e "$PLAYPORT_REPO/upstream/madeira/.git" ] ||
+        git -C "$PLAYPORT_REPO" submodule update --init upstream/madeira
+fi
+
+# --- Account and phone (read-only).
+[ -x "$XTOOL" ] || [ "$BUILD" = 0 ] || [ "$CHECK" = 1 ] || {
+    root=${XTOOL%/.build/release/xtool}
+    [ "$root" != "$XTOOL" ] || die "XTOOL $XTOOL is missing and not a toolchain/xtool.sh layout"
+    say "XTOOL missing: build/toolchain/xtool.sh $root"
+    bash "$HERE/toolchain/xtool.sh" "$root" > "$LOG/build-xtool.log" 2>&1 || die "toolchain/xtool.sh failed ($LOG/build-xtool.log)"
+}
+[ -x "$LD64" ] || [ "$BUILD" = 0 ] || [ "$CHECK" = 1 ] || {
+    root=${LD64%/prefix/bin/arm64-apple-darwin-ld}
+    [ "$root" != "$LD64" ] || die "LD64 $LD64 is missing and not a toolchain/ld64.sh layout"
+    say "LD64 missing: build/toolchain/ld64.sh $root (slow: it builds libtapi)"
+    bash "$HERE/toolchain/ld64.sh" "$root" > "$LOG/build-ld64.log" 2>&1 || die "toolchain/ld64.sh failed ($LOG/build-ld64.log)"
+}
+if [ "$BUILD" = 1 ]; then
+    [ -x "$XTOOL" ] || die "no XTOOL at $XTOOL (build/toolchain/xtool.sh)"
+    timeout 60 "$XTOOL" auth status > "$LOG/auth.out" 2>&1 && grep -q '^Logged in' "$LOG/auth.out" ||
+        die "xtool is not logged in: run '$XTOOL auth login' in a terminal"
+    grep -v -e 'Apple ID' -e 'Team ID' "$LOG/auth.out" > "$LOG/auth.txt"; rm "$LOG/auth.out"
+fi
+systemctl --user is-active netmuxd > /dev/null 2>&1 || systemctl --user start netmuxd ||
+    die "netmuxd is not running (systemctl --user start netmuxd)"
+[ -S "$SOCK" ] || die "no netmuxd socket at $SOCK"
+pmd usbmux 30 usbmux list
+n=$(jq length "$LOG/usbmux.out")
+skipped=""
+if [ "$n" = 0 ]; then
+    # A netmuxd that started before the network had a route fails the phone's
+    # first heartbeat and never lists it again; a restart rediscovers it. It is
+    # the machine's, shared by every agent: phonelib decides whether it is ours to
+    # restart (under the device lock, taken for the restart alone when no other job
+    # holds it; our socket; not restarted lately).
+    if why=$(PLAYPORT_USBMUX_SOCKET=$SOCK python3 "$PLAYPORT_REPO/tools/phonelib.py" netmuxd-restart); then
+        say "no phone on $SOCK: restarted netmuxd once"
+    else
+        skipped="; netmuxd not restarted: $why"
+    fi
+    [ -n "$skipped" ] || for _ in $(seq 20); do
+        sleep 3
+        [ -S "$SOCK" ] || continue
+        pmd usbmux 30 usbmux list
+        n=$(jq length "$LOG/usbmux.out")
+        [ "$n" = 0 ] || break
+    done
+fi
+[ "$n" = 1 ] || die "expected exactly one phone on $SOCK, found $n (is it unlocked, on the same network or cabled?)$skipped" 3
+jq -c '.[0] | {ConnectionType, ProductType, ProductVersion}' "$LOG/usbmux.out" > "$LOG/device.json"
+UDID=$(jq -r '.[0].Identifier // empty' "$LOG/usbmux.out"); rm "$LOG/usbmux.out"   # kept in memory only
+[ -n "$UDID" ] || die "usbmux list gave no device identifier"
+say "phone $(cat "$LOG/device.json")"
+pmd devmode 30 amfi developer-mode-status
+grep -qi true "$LOG/devmode.out" || die "Developer Mode is off (Settings, Privacy & Security, Developer Mode)"
+if [ "$BUILD" = 1 ]; then
+    # Signing fails with a 409 after the whole build when the phone is not on the team.
+    timeout 120 "$XTOOL" ds devices list > "$LOG/ds.out" 2>&1 || die "xtool ds devices failed (see $LOG/ds.out)"
+    grep -qiF "udid: $UDID" "$LOG/ds.out" && reg=1 || reg=0
+    rm "$LOG/ds.out"
+    [ "$reg" = 1 ] || die "the phone is not registered on the team; 'xtool install --network' once registers it (docs/BUILDING.md, Signing)"
+fi
+BID_RE='^XTL-[A-Z0-9]+\.dev\.playport\.app$'
+xtl_apps apps-before
+mapfile -t APPS < "$LOG/apps-before.txt"
+INSTALLED=$(grep -E "$BID_RE" "$LOG/apps-before.txt" || true)
+pmd disk 30 lockdown get --domain com.apple.disk_usage
+FREE=$(jq .AmountDataAvailable "$LOG/disk.out")
+say "free-team apps: ${#APPS[@]}/$SLOT_LIMIT; Playport $([ -n "$INSTALLED" ] && echo installed || echo 'not installed'); $((FREE / 1000000)) MB free"
+[ "$FREE" -gt 2000000000 ] || die "less than 2 GB free on the phone"
+if [ -z "$INSTALLED" ]; then
+    [ "${#APPS[@]}" -lt "$SLOT_LIMIT" ] ||
+        die "all $SLOT_LIMIT free-team slots are taken; remove one app first (docs/DEVICE.md, Free-team limits)"
+    [ "${#APPS[@]}" -lt $((SLOT_LIMIT - 1)) ] || [ "${ALLOW_LAST_SLOT:-0}" = 1 ] || [ "$CHECK" = 1 ] ||
+        die "installing Playport takes the last free-team slot; set ALLOW_LAST_SLOT=1 to accept"
+fi
+
+# --- Build.
+if [ "$BUILD" = 1 ] && [ "$CHECK" = 0 ]; then
+    args=(--variant "$VARIANT" --keep-outputs "$KEEP")
+    case $FROM in "") ;; clean) args+=(--clean) ;; *) args+=(--from "$FROM") ;; esac
+    say "pp build ${args[*]} (log: $RUN/logs/build.log)"
+    start=$(date +%s)
+    "$HERE/pipeline" "${args[@]}" 2>&1 | tee "$LOG/build.log" || die "pp build failed"
+    IPA=$(awk '$2 == "IPA" { p = $3 } END { print p }' "$LOG/build.log")
+    [ -f "$IPA" ] || die "pp build reported no IPA"
+    say "build took $(( ($(date +%s) - start) / 60 )) min"
+elif [ "$BUILD" = 0 ] && [ -z "$IPA" ]; then
+    # The newest IPA of a build still running here is not written yet: wait for it (its lock).
+    exec 7>> "$RUN.lock"
+    if ! flock -n -s 7; then
+        say "waiting for the build using $RUN to finish (--no-build takes the newest IPA)"
+        flock -s 7
+    fi
+    flock -u 7; exec 7>&-
+    # Release IPAs are Playport-<sdk>-release-<sha8>.ipa, dev ones Playport-<sdk>-<sha8>.ipa;
+    # an unsigned one (Playport-<sdk>-release-unsigned-<sha8>.ipa, for a published release) cannot install.
+    if [ "$VARIANT" = release ]; then
+        IPA=$(ls -t "$OUT"/*/Playport-*-release-*.ipa 2>/dev/null | grep -v -- '-unsigned-' | head -1 || true)
+    else
+        IPA=$(ls -t "$OUT"/*/Playport-*.ipa 2>/dev/null | grep -v -- '-release-' | head -1 || true)
+    fi
+fi
+
+# --- The IPA: its recorded checksum, bundle ID, profile dates, this phone in it.
+if [ -n "$IPA" ]; then
+    [ -f "$IPA" ] || die "no IPA at $IPA"
+    SHA=$(sha256sum "$IPA" | cut -d' ' -f1)
+    sums=$(dirname "$IPA")/SHA256SUMS
+    if [ -f "$sums" ]; then
+        grep -q "^$SHA  $(basename "$IPA")\$" "$sums" || die "$IPA does not match its SHA256SUMS"
+    fi
+    info=$(ipa_info "$IPA") || die "cannot read the IPA's Info.plist or provisioning profile"
+    read -r BID EXPIRY PROFILE LISTED <<< "$info"
+    [[ $BID =~ $BID_RE ]] || die "IPA bundle ID is not XTL-<team>.dev.playport.app"
+    [ -z "$INSTALLED" ] || [ "$INSTALLED" = "$BID" ] || die "the phone has Playport under another team's bundle ID"
+    left=$(( (EXPIRY - $(date +%s)) / 3600 ))
+    [ "$left" -gt 0 ] || die "the IPA's provisioning profile has expired; rebuild (the app stage re-signs)"
+    [ "$LISTED" = yes ] || die "the IPA's profile does not cover this phone"
+    say "IPA $IPA"
+    say "sha256 $SHA; profile valid for ${left} h more"
+    [ "$left" -ge 24 ] || say "note: the profile expires within a day; the app stops launching then"
+elif [ "$CHECK" = 0 ]; then
+    die "no verified IPA in $OUT; build first or pass --ipa"
+fi
+[ "$CHECK" = 0 ] || { say "checks passed; nothing was built or installed"; exit 0; }
+
+# --- Install, under the device lock: close the app, upgrade in place, confirm.
+# A caller that already holds the lock (pp phone lock, pp sync, pp perf) says so in the
+# environment, with its session, which must be the live holder's (tools/phonelib.py holds_lock).
+held=0
+if [ "${PLAYPORT_DEVICE_LOCK_HELD:-}" = 1 ] && [ -n "${PLAYPORT_DEVICE_SESSION:-}" ] &&
+        [ "$(jq -r .session "$HOLDER" 2>/dev/null)" = "$PLAYPORT_DEVICE_SESSION" ] &&
+        kill -0 "$(jq -r .pid "$HOLDER" 2>/dev/null)" 2>/dev/null; then
+    held=1
+fi
+if [ "$held" != 1 ]; then
+    mkdir -p "$(dirname "$DEVICE_LOCK")"
+    exec 9>> "$DEVICE_LOCK"
+    flock -n 9 || {
+        say "waiting for the phone: $(cat "$HOLDER" 2>/dev/null || echo 'holder unknown')"
+        flock ${LOCK_WAIT:+-w "$LOCK_WAIT"} 9 || die "$DEVICE_LOCK still held after ${LOCK_WAIT}s"
+    }
+    jq -cn --argjson pid $$ --arg what "pp install $(basename "$IPA")" --arg checkout "$PLAYPORT_REPO" \
+        --arg session "install-$$-$(date +%s)" --arg since "$(date -Is)" \
+        '{pid: $pid, what: $what, checkout: $checkout, session: $session, since: $since}' > "$HOLDER"
+    trap 'rm -f "$HOLDER"' EXIT
+fi
+# Under the lock, so another checkout's install cannot slip in between.
+if [ "$FORCE" = 0 ] && [ -n "$INSTALLED" ] && [ "$(jq -r .ipa_sha256 "$STATE" 2>/dev/null)" = "$SHA" ]; then
+    say "the phone already has this IPA (last install, $STATE); nothing to do (--force installs anyway)"
+    # The same IPA may have come from another checkout; it is now this checkout's to drive.
+    jq --arg ipa "$IPA" --arg checkout "$PLAYPORT_REPO" --arg head "$(git -C "$PLAYPORT_REPO" rev-parse --short HEAD)" \
+        '.ipa = $ipa | .checkout = $checkout | .head = $head' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+    exit 0
+fi
+# From here until the new record is written the phone's build is unknown: pp ui refuses it.
+rm -f "$STATE"
+if [ -n "$INSTALLED" ]; then
+    # An install hangs while the app runs.
+    if timeout 60 env USBMUXD_SOCKET_ADDRESS="$SOCK" pymobiledevice3 developer dvt process-id-for-bundle-id "$BID" \
+            > "$LOG/pid.out" 2> "$LOG/pid.err"; then
+        pid=$(grep -oE '^-?[0-9]+$' "$LOG/pid.out" | tail -1 || true)
+        if [ -n "$pid" ] && [ "$pid" -gt 0 ]; then
+            say "closing the running app (pid $pid)"
+            pmd kill 60 developer dvt kill "$pid"
+            sleep 3
+        fi
+    else
+        say "note: could not ask the phone for the app's pid ($LOG/pid.err); if the install hangs, close Playport on the phone"
+    fi
+fi
+say "installing (about 650 MB; keep the phone awake and unlocked)"
+start=$(date +%s)
+if ! timeout 1800 env USBMUXD_SOCKET_ADDRESS="$SOCK" pymobiledevice3 apps install "$IPA" \
+        > "$LOG/install.out" 2> "$LOG/install.err"; then
+    # installd may still finish after a timeout that fired after the upload.
+    say "the install command failed or timed out ($LOG/install.err); checking whether installd finished"
+    sleep 60
+fi
+pmd provision 60 provision list
+grep -q "$PROFILE" "$LOG/provision.out" && fresh=1 || fresh=0
+rm "$LOG/provision.out"
+xtl_apps apps-after
+grep -qxF "$BID" "$LOG/apps-after.txt" || die "Playport is not on the phone after the install"
+[ "$fresh" = 1 ] || die "the phone does not hold this IPA's provisioning profile; the install did not complete"
+say "installed in $(( $(date +%s) - start )) s: upgrade in place, container kept"
+{
+    echo "ipa $IPA"
+    echo "ipa_sha256 $SHA"
+    echo "variant $(case $(basename "$IPA") in *-release-*) echo release ;; *) echo dev ;; esac)"
+    echo "superproject $(git -C "$PLAYPORT_REPO" rev-parse HEAD)"
+    echo "profile_expires $(date -d "@$EXPIRY" '+%F %H:%M')"
+    echo "device $(cat "$LOG/device.json")"
+    echo "installed $(date '+%F %T')"
+} > "$LOG/summary.txt"
+# What the phone runs now, for pp phone status and the next install.
+jq -n --arg ipa "$IPA" --arg sha "$SHA" --arg variant "$(case $(basename "$IPA") in *-release-*) echo release ;; *) echo dev ;; esac)" \
+    --arg checkout "$PLAYPORT_REPO" --arg head "$(git -C "$PLAYPORT_REPO" rev-parse --short HEAD)" \
+    --arg at "$(date -Is)" --arg expires "$(date -d "@$EXPIRY" -Is)" \
+    '{ipa: $ipa, ipa_sha256: $sha, variant: $variant, checkout: $checkout, head: $head,
+      installed_at: $at, profile_expires: $expires}' > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+say "done: open Playport from the Home Screen (profile valid until $(date -d "@$EXPIRY" '+%F %H:%M')); log $LOG"

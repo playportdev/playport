@@ -1,0 +1,6 @@
+# vkd3d-proton: applied in this order with `git am -3` onto the vkd3d-proton pin in pins.lock.
+# The Vulkan backend's Direct3D 12 layer; build/stages/vulkan-pe.sh.
+0001-vkd3d-feature-level-12_0-on-a-device-with-no-sparse-.patch
+0002-vkd3d-shader-model-6.6-on-KosmicKrisp.patch
+0003-vkd3d-place-a-resource-where-its-Vulkan-memory-allow.patch
+0004-vkd3d-log-a-failed-committed-or-placed-resource-crea.patch

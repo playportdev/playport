@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 10 Mar 2023 20:51:53 +0100
+Subject: [PATCH] user32: Add more devnotify traces on +rawinput.
+
+CW-Bug-Id: #22037
+Valve-commit: 4cd67b779e07738a8814ee3fd424c671ff288d32
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/user32/input.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/user32/input.c b/dlls/user32/input.c
+index 051f4e4..aad3da5 100644
+--- a/dlls/user32/input.c
++++ b/dlls/user32/input.c
+@@ -31,6 +31,7 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(win);
+ WINE_DECLARE_DEBUG_CHANNEL(keyboard);
++WINE_DECLARE_DEBUG_CHANNEL(rawinput);
+ 
+ /***********************************************************************
+  *           get_locale_kbd_layout
+@@ -453,6 +454,7 @@ BOOL WINAPI UnloadKeyboardLayout( HKL layout )
+ 
+ static DWORD CALLBACK devnotify_window_callbackW(HANDLE handle, DWORD flags, DEV_BROADCAST_HDR *header)
+ {
++    TRACE_(rawinput)("handle %p, flags %#lx, header %p\n", handle, flags, header);
+     SendMessageTimeoutW(handle, WM_DEVICECHANGE, flags, (LPARAM)header, SMTO_ABORTIFHUNG, 2000, NULL);
+     return 0;
+ }
+@@ -539,7 +541,7 @@ HDEVNOTIFY WINAPI RegisterDeviceNotificationW( HANDLE handle, void *filter, DWOR
+     DEV_BROADCAST_HDR *header = filter;
+     device_notify_callback callback;
+ 
+-    TRACE("handle %p, filter %p, flags %#lx\n", handle, filter, flags);
++    TRACE_(rawinput)("handle %p, filter %p, flags %#lx\n", handle, filter, flags);
+ 
+     if (flags & ~(DEVICE_NOTIFY_SERVICE_HANDLE | DEVICE_NOTIFY_ALL_INTERFACE_CLASSES))
+     {

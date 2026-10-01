@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] OpcodeDispatcher: raise #DE for DIV/IDIV
+
+x86 raises #DE for a zero divisor and for IDIV of the most negative value
+by -1. FEX never raised it, so a guest's divide-by-zero handler never ran.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ .../Interface/Core/OpcodeDispatcher.cpp       | 61 +++++++++++++++++++
+ .../Source/Interface/Core/OpcodeDispatcher.h  |  1 +
+ Source/Windows/Common/Exception.h             |  4 ++
+ 3 files changed, 66 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+index 16d9840..8fc3254 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+@@ -3704,10 +3704,67 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
+   }
+ }
+ 
++// divide-error: x86 raises #DE for a zero divisor and for IDIV of the most
++// negative dividend by -1; arm64 udiv/sdiv trap on neither. Raise it as INTO raises #OF:
++// a Break with X86_TRAPNO_DE at the instruction, ErrorRegister 0 for the zero divisor and
++// 1 for the INT_MIN / -1 overflow, which Windows reports as EXCEPTION_INT_OVERFLOW.
++// Other quotient overflows (a dividend whose high half is not a sign extension, or an
++// unsigned quotient that does not fit) are not detected. Values do not cross blocks, so
++// the caller loads its operands after this check.
++void OpDispatchBuilder::DivideErrorCheck(OpcodeArgs, bool Signed) {
++  const auto Size = OpSizeFromSrc(Op);
++  const auto Bits = IR::OpSizeAsBits(Size);
++  const int64_t Mask = Bits == 64 ? -1 : (int64_t)((1ULL << Bits) - 1);
++
++  CalculateDeferredFlags();
++
++  auto Raise = [&](IRPair<IROp_CondJump> NoError, uint16_t Reason) {
++    auto ErrorBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
++    SetFalseJumpTarget(NoError, ErrorBlock);
++    SetCurrentCodeBlock(ErrorBlock);
++    StartNewBlock();
++
++    _StoreContextGPR(GetGPROpSize(), GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
++    Break(FEXCore::IR::BreakDefinition {
++      .ErrorRegister = Reason,
++      .Signal = Core::FAULT_SIGSEGV,
++      .TrapNumber = X86State::X86_TRAPNO_DE,
++      .si_code = 0x80,
++    });
++
++    auto Next = CreateNewCodeBlockAfter(ErrorBlock);
++    SetTrueJumpTarget(NoError, Next);
++    SetCurrentCodeBlock(Next);
++    StartNewBlock();
++  };
++
++  Ref Divisor = _Bfe(OpSize::i64Bit, Bits, 0, LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = true}));
++  Raise(CondJump(Divisor, CondClass::NEQ), 0);
++
++  if (Signed) {
++    Divisor = _Bfe(OpSize::i64Bit, Bits, 0, LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = true}));
++    Ref Diff = _Xor(OpSize::i64Bit, Divisor, Constant(Mask));
++    if (Size == OpSize::i8Bit) {
++      Ref AX = _Bfe(OpSize::i64Bit, 16, 0, LoadGPRRegister(X86State::REG_RAX));
++      Diff = _Or(OpSize::i64Bit, Diff, _Xor(OpSize::i64Bit, AX, Constant(0xFF80)));
++    } else {
++      Ref Low = _Bfe(OpSize::i64Bit, Bits, 0, LoadGPRRegister(X86State::REG_RAX));
++      Ref High = _Bfe(OpSize::i64Bit, Bits, 0, LoadGPRRegister(X86State::REG_RDX));
++      Diff = _Or(OpSize::i64Bit, Diff, _Xor(OpSize::i64Bit, Low, Constant((int64_t)(1ULL << (Bits - 1)))));
++      Diff = _Or(OpSize::i64Bit, Diff, _Xor(OpSize::i64Bit, High, Constant(Mask)));
++    }
++    Raise(CondJump(Diff, CondClass::NEQ), 1);
++  }
++}
++
+ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
+   const auto GPRSize = GetGPROpSize();
+   auto Size = OpSizeFromSrc(Op);
+ 
++  if (!(Size == OpSize::i64Bit && !Is64BitMode)) {
++    DivideErrorCheck(Op, false);
++  }
++
+   // This loads the divisor. 32-bit/64-bit paths mask inside the JIT, 8/16 do not.
+   Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= OpSize::i32Bit});
+ 
+@@ -3746,6 +3803,10 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
+ }
+ 
+ void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
++  if (!(OpSizeFromSrc(Op) == OpSize::i64Bit && !Is64BitMode)) {
++    DivideErrorCheck(Op, true);
++  }
++
+   // This loads the divisor
+   Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
+ 
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
+index c663454..e4850a2 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
+@@ -453,6 +453,7 @@ public:
+   void INCOp(OpcodeArgs);
+   void DECOp(OpcodeArgs);
+   void NEGOp(OpcodeArgs);
++  void DivideErrorCheck(OpcodeArgs, bool Signed);
+   void DIVOp(OpcodeArgs);
+   void IDIVOp(OpcodeArgs);
+   void BSFOp(OpcodeArgs);
+diff --git a/Source/Windows/Common/Exception.h b/Source/Windows/Common/Exception.h
+index 73bf5a9..883fffc 100644
+--- a/Source/Windows/Common/Exception.h
++++ b/Source/Windows/Common/Exception.h
+@@ -64,6 +64,10 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
+       }
+       break;
+     case FEXCore::X86State::X86_TRAPNO_OF: Dst.ExceptionCode = EXCEPTION_INT_OVERFLOW; return Dst;
++    case FEXCore::X86State::X86_TRAPNO_DE:
++      // divide-error: ErrorRegister 1 marks IDIV INT_MIN / -1, which Windows reports as an overflow.
++      Dst.ExceptionCode = Fault.err_code ? EXCEPTION_INT_OVERFLOW : EXCEPTION_INT_DIVIDE_BY_ZERO;
++      return Dst;
+     case FEXCore::X86State::X86_TRAPNO_PF:
+       // A page-fault raised by an explicit break in JIT code is always an execute fault
+       Dst.NumberParameters = 2;

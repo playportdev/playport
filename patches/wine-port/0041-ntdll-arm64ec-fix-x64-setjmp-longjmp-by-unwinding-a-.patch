@@ -1,0 +1,460 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 16 Aug 2026 18:21:03 +0800
+Subject: [PATCH] ntdll/arm64ec: fix x64 setjmp/longjmp by unwinding a PE pc,
+ not a JIT-pool pc
+
+do_setjmpex() called unwind_one_frame() with context.Rip still a JIT-pool VA.
+Unwind info is registered for PE VAs, so RtlLookupFunctionEntry found no
+function entry, RtlVirtualUnwind treated the frame as a leaf, popped a zero
+return address, and left Rip = 0. Because RtlIsEcCode(0) is false, the
+"caller is x64, use its context instead of the ARM one" branch was taken and
+copied that all-zero context over the registers NTDLL__setjmpex had just
+stored correctly. NTDLL_longjmp -- which on ARM64EC has no
+if (!buf->Frame) fast path -- then called RtlUnwind(0, 0, ...), raising
+STATUS_LONGJUMP with a target of RIP 0, and the guest branched to address 0.
+
+Two changes:
+
+1. unwind_one_frame() reverse-translates the control pc through
+   xlate_ios_jit_rev() before both RtlLookupFunctionEntry and
+   RtlVirtualUnwind, mirroring what virtual_unwind() already does. This is
+   safe for addresses that were never pool-mapped: xlate_ios_jit_rev()
+   resolves by registered alias identity and returns its input unchanged
+   when there is no PE counterpart, rather than guessing from address ranges.
+
+2. unwind_one_frame() now reports whether it actually unwound, and the
+   copy-back requires unwound && context.Rip && !RtlIsEcCode(context.Rip).
+   A non-zero Rip alone is not proof of a successful unwind, and a failed
+   unwind must never overwrite a good jump buffer.
+
+Verified on device against LibreMines (Qt5). Before: UNWOUND Rip=0x0 ->
+COPY-BACK (treated as x64 caller), FINAL Rip=0, process dies with
+c0000005 at pc=0 after 22s. After: UNWOUND ok=1 Rip=0x71F8E9BA71 ->
+COPY-BACK (real x64 caller); that address is Qt5Gui.dll+0x20ba71, exactly
+frame [5] of the original crash's guest call chain. Zero SEGVs at pc=0,
+zero "REFUSING low/invalid RIP=0x0", zero c0000005 terminations, one clean
+STATUS_LONGJUMP, ~15 minutes of run time.
+
+This is not specific to one application. Any x86-64 guest that uses
+setjmp/longjmp hits it, which includes every libjpeg and libpng error path.
+
+Also adds two diagnostics, both self-calibrating and capped:
+
+- [setjmp-life] in do_setjmpex/NTDLL_longjmp, which is what located this and
+  now doubles as a regression canary (it prints UNWOUND ok=).
+- [iat-life] in loader.c: reports an import slot that is NULL after binding,
+  and sweeps every loaded module's import table after each LdrLoadDll,
+  checking both the PE view and the JIT-pool copy. It emits a per-sweep
+  coverage beacon so silence is evidence rather than ambiguity. This refuted
+  an earlier theory that the crash came from an unbound VCRUNTIME140!longjmp
+  slot: 52 sweeps x ~13,800 slots reported no NULL in either view.
+
+d3d9: one-shot [d3d9-probe] on the three Direct3DCreate9 entry points, to
+tell an import-table-only reference apart from real d3d9 use.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+(cherry picked from commit 25b00c4700ee1c17594247b6e0c7e16239bba9f1)
+Madeira-commit: 2ef8a117b1ce578823fea257c06e490ca1cd2bfe
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/d3d9/d3d9_main.c       |  24 ++++++
+ dlls/ntdll/loader.c         | 166 ++++++++++++++++++++++++++++++++++++
+ dlls/ntdll/signal_arm64ec.c |  71 +++++++++++++--
+ 3 files changed, 256 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/d3d9/d3d9_main.c b/dlls/d3d9/d3d9_main.c
+index b3fcfc272e4..28537e2dcba 100644
+--- a/dlls/d3d9/d3d9_main.c
++++ b/dlls/d3d9/d3d9_main.c
+@@ -26,6 +26,24 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d9);
+ 
++/* iOS-Mythic (rev ml700): several titles hard-import d3d9.dll purely to satisfy
++ * their import table and then render through D3D11.  Report once per entry point
++ * whether a guest actually creates a d3d9 object, and whether wined3d can come up
++ * at all on a host with no GL/Vulkan driver, so one device log answers both.
++ * `entry` is always a string literal, so the pointer identifies the call site. */
++static void d3d9_ios_probe( const char *entry, BOOL ok )
++{
++    static const char *seen[4];
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE(seen); i++)
++    {
++        if (seen[i] == entry) return;
++        if (!seen[i]) { seen[i] = entry; break; }
++    }
++    ERR( "[d3d9-probe] rev=ml700 %s called -> d3d9_init %s\n", entry, ok ? "OK" : "FAILED" );
++}
++
+ static int D3DPERF_event_level = 0;
+ 
+ void WINAPI DebugSetMute(void) {
+@@ -44,9 +62,11 @@ IDirect3D9 * WINAPI DECLSPEC_HOTPATCH Direct3DCreate9(UINT sdk_version)
+     if (!d3d9_init(object, FALSE, FALSE))
+     {
+         WARN("Failed to initialize d3d9.\n");
++        d3d9_ios_probe( "Direct3DCreate9", FALSE );
+         free(object);
+         return NULL;
+     }
++    d3d9_ios_probe( "Direct3DCreate9", TRUE );
+ 
+     TRACE("Created d3d9 object %p.\n", object);
+ 
+@@ -65,9 +85,11 @@ HRESULT WINAPI DECLSPEC_HOTPATCH Direct3DCreate9Ex(UINT sdk_version, IDirect3D9E
+     if (!d3d9_init(object, TRUE, FALSE))
+     {
+         WARN("Failed to initialize d3d9.\n");
++        d3d9_ios_probe( "Direct3DCreate9Ex", FALSE );
+         free(object);
+         return D3DERR_NOTAVAILABLE;
+     }
++    d3d9_ios_probe( "Direct3DCreate9Ex", TRUE );
+ 
+     TRACE("Created d3d9 object %p.\n", object);
+     *d3d9ex = &object->IDirect3D9Ex_iface;
+@@ -91,9 +113,11 @@ IDirect3D9 * WINAPI DECLSPEC_HOTPATCH Direct3DCreate9On12(UINT sdk_version, D3D9
+     if (!d3d9_init(object, TRUE, d3d9on12))
+     {
+         WARN("Failed to initialize d3d9.\n");
++        d3d9_ios_probe( "Direct3DCreate9On12", FALSE );
+         free(object);
+         return NULL;
+     }
++    d3d9_ios_probe( "Direct3DCreate9On12", TRUE );
+ 
+     TRACE("Created d3d9 object %p.\n", object);
+     return (IDirect3D9 *)&object->IDirect3D9Ex_iface;
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 9276b96fce1..a70a32c5529 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -510,8 +510,40 @@ static ULONG_PTR allocate_stub( const char *dll, const char *name )
+ 
+ #else  /* __i386__ */
+ static inline ULONG_PTR allocate_stub( const char *dll, const char *name ) { return 0xdeadbeef; }
++
++
+ #endif  /* __i386__ */
+ 
++/*************************************************************************
++ *  iOS-Mythic ml701 [iat-life] — stage 1 of the IAT slot-lifecycle probe.
++ *
++ * An IAT slot must NEVER end up NULL.  An unresolved import becomes
++ * allocate_stub()'s 0xdeadbeef, and every arm64ec_redirect_ptr path is
++ * NULL-safe (it only returns NULL for NULL input), so a zero slot after
++ * binding is a real defect rather than a normal "not implemented".
++ *
++ * Found via LibreMines/Qt5: Qt5Gui.dll's VCRUNTIME140!longjmp slot held 0 at
++ * runtime and the guest branched to address 0.  This reports the offender by
++ * importer + dll + symbol + slot RVA — never the ASLR address — so it is
++ * comparable across runs, and prints the pre-redirect value so a redirect
++ * that zeroes a good pointer is distinguishable from an export that resolved
++ * to zero in the first place.  Capped; costs one compare per import.
++ */
++static void iat_life_bind_check( const char *dll, const char *sym, int ordinal,
++                                 const WINE_MODREF *wm, const void *module,
++                                 const void *slot, ULONG_PTR pre, ULONG_PTR post )
++{
++    static int reported;
++
++    if (post) return;                      /* the overwhelmingly common case */
++    if (reported >= 48) return;
++    reported++;
++    ERR( "[iat-life] ml701 BIND-ZERO importer=%s imp=%s.%s ord=%d slotRVA=0x%lx pre=%p post=NULL\n",
++         wm ? debugstr_w(wm->ldr.BaseDllName.Buffer) : "?", dll,
++         sym ? sym : "(by-ordinal)", ordinal,
++         (unsigned long)((const char *)slot - (const char *)module), (void *)pre );
++}
++
+ /* call ldr notifications */
+ static void call_ldr_notifications( ULONG reason, LDR_DATA_TABLE_ENTRY *module )
+ {
+@@ -1384,12 +1416,15 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+ 
+     while (import_list->u1.Ordinal)
+     {
++        ULONG_PTR iat_life_pre = 0;   /* ml701 [iat-life]: value before EC redirect */
++
+         if (IMAGE_SNAP_BY_ORDINAL(import_list->u1.Ordinal))
+         {
+             int ordinal = IMAGE_ORDINAL(import_list->u1.Ordinal);
+ 
+             thunk_list->u1.Function = (ULONG_PTR)find_ordinal_export( imp_mod, exports, exp_size,
+                                                                       ordinal - exports->Base, load_path, wm, FALSE );
++            iat_life_pre = thunk_list->u1.Function;   /* ml701 [iat-life] */
+             if (!thunk_list->u1.Function)
+             {
+                 thunk_list->u1.Function = allocate_stub( name, IntToPtr(ordinal) );
+@@ -1412,6 +1447,7 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+             thunk_list->u1.Function = (ULONG_PTR)find_named_export( imp_mod, exports, exp_size,
+                                                                     (const char*)pe_name->Name,
+                                                                     pe_name->Hint, load_path, wm, FALSE );
++            iat_life_pre = thunk_list->u1.Function;   /* ml701 [iat-life] */
+             if (!thunk_list->u1.Function)
+             {
+                 thunk_list->u1.Function = allocate_stub( name, (const char*)pe_name->Name );
+@@ -1492,6 +1528,22 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+             TRACE_(imports)("--- %s %s.%d = %p\n",
+                             pe_name->Name, name, pe_name->Hint, (void *)thunk_list->u1.Function);
+         }
++        /* ml701 [iat-life] stage 1: covers BOTH branches after every rewrite. */
++        if (!thunk_list->u1.Function)
++        {
++            const char *sym = NULL;
++            int ord = 0;
++
++            if (IMAGE_SNAP_BY_ORDINAL(import_list->u1.Ordinal))
++                ord = IMAGE_ORDINAL(import_list->u1.Ordinal);
++            else
++            {
++                IMAGE_IMPORT_BY_NAME *pn = get_rva( module, (DWORD)import_list->u1.AddressOfData );
++                sym = (const char *)pn->Name;
++            }
++            iat_life_bind_check( name, sym, ord, wm, module, thunk_list,
++                                 iat_life_pre, thunk_list->u1.Function );
++        }
+         import_list++;
+         thunk_list++;
+     }
+@@ -3781,6 +3833,110 @@ NTSTATUS CDECL wine_server_handle_to_fd( HANDLE handle, unsigned int access, int
+ /******************************************************************
+  *		LdrLoadDll (NTDLL.@)
+  */
++/*************************************************************************
++ *  iOS-Mythic ml701 [iat-life] - stage 2 of the IAT slot-lifecycle probe.
++ *
++ * Stage 1 reports a slot that was never bound to anything.  This one reports
++ * a slot that is NULL *right now*, sweeping every loaded module after each
++ * successful LdrLoadDll, so a slot that bound fine and was zeroed later is
++ * both caught and bracketed in time (the `when` tag names the load that had
++ * just completed).  Together they separate: never bound / bound then zeroed.
++ *
++ * Only descriptors carrying an OriginalFirstThunk are walked - without an ILT
++ * there is no way to tell a zeroed slot from the table terminator, and
++ * inventing one would manufacture false positives.  Deduped per (module,
++ * slot) so one persistent zero cannot flood the cap.
++ */
++static void iat_life_sweep( const char *when )
++{
++    extern void *xlate_ios_jit( void *ptr );
++    static struct { const void *base; ULONG rva; } seen[64];
++    static int nseen, sweeps, reports;
++    LIST_ENTRY *list, *entry;
++    int n_mod = 0, n_slot = 0, n_pool = 0, n_pezero = 0, n_poolzero = 0;
++
++    if (sweeps >= 512 || reports >= 48) return;
++    sweeps++;
++
++    list = &NtCurrentTeb()->Peb->LdrData->InLoadOrderModuleList;
++    for (entry = list->Flink; entry != list && reports < 48; entry = entry->Flink)
++    {
++        LDR_DATA_TABLE_ENTRY *mod = CONTAINING_RECORD( entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
++        const IMAGE_IMPORT_DESCRIPTOR *descr;
++        ULONG size;
++
++        if (!mod->DllBase) continue;
++        descr = RtlImageDirectoryEntryToData( mod->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size );
++        if (!descr) continue;
++
++        for (; descr->Name && descr->FirstThunk && reports < 48; descr++)
++        {
++            const char *dll = get_rva( mod->DllBase, descr->Name );
++            const IMAGE_THUNK_DATA *ilt;
++            IMAGE_THUNK_DATA *iat;
++            int i;
++
++            if (!descr->OriginalFirstThunk) continue;
++            ilt = get_rva( mod->DllBase, descr->OriginalFirstThunk );
++            iat = get_rva( mod->DllBase, descr->FirstThunk );
++
++            for (i = 0; ilt[i].u1.Ordinal && reports < 48; i++)
++            {
++                void *slot = &iat[i].u1.Function, *pslot;
++                ULONG_PTR pe_val = iat[i].u1.Function, pool_val = pe_val;
++                ULONG slot_rva;
++                int j, dup = 0, has_pool = 0;
++                const char *kind;
++
++                n_slot++;
++
++                /* ml233's note applies here: the pool copy is taken at MAP time,
++                 * before imports bind, so it is only meaningful AFTER init — which
++                 * is exactly when this sweep runs.  The guest executes one of these
++                 * two views; a zero in EITHER is a branch-to-zero waiting to happen,
++                 * and checking only the PE side (as the first cut of this probe did)
++                 * cannot see a stale pool slot at all. */
++                pslot = xlate_ios_jit( slot );
++                if (pslot && pslot != slot) { has_pool = 1; n_pool++; pool_val = *(ULONG_PTR *)pslot; }
++
++                if (pe_val && !(has_pool && !pool_val)) continue;   /* both views fine */
++                if (!pe_val) n_pezero++;
++                if (has_pool && !pool_val) n_poolzero++;
++
++                slot_rva = (ULONG)((const char *)&iat[i] - (const char *)mod->DllBase);
++                for (j = 0; j < nseen; j++)
++                    if (seen[j].base == mod->DllBase && seen[j].rva == slot_rva) { dup = 1; break; }
++                if (dup) continue;
++                if (nseen < 64) { seen[nseen].base = mod->DllBase; seen[nseen].rva = slot_rva; nseen++; }
++
++                kind = !pe_val ? (has_pool && !pool_val ? "BOTH-ZERO" : "PE-ZERO") : "POOL-ZERO";
++                reports++;
++                if (IMAGE_SNAP_BY_ORDINAL(ilt[i].u1.Ordinal))
++                    ERR( "[iat-life] ml701 %s after=%s importer=%s imp=%s.#%d slotRVA=0x%lx pe=%p pool=%p(%s)\n",
++                         kind, when, debugstr_w(mod->BaseDllName.Buffer), dll,
++                         (int)IMAGE_ORDINAL(ilt[i].u1.Ordinal), (unsigned long)slot_rva,
++                         (void *)pe_val, (void *)pool_val, has_pool ? "live" : "no-pool-copy" );
++                else
++                {
++                    const IMAGE_IMPORT_BY_NAME *pn = get_rva( mod->DllBase, (DWORD)ilt[i].u1.AddressOfData );
++                    ERR( "[iat-life] ml701 %s after=%s importer=%s imp=%s.%s slotRVA=0x%lx pe=%p pool=%p(%s)\n",
++                         kind, when, debugstr_w(mod->BaseDllName.Buffer), dll,
++                         (const char *)pn->Name, (unsigned long)slot_rva,
++                         (void *)pe_val, (void *)pool_val, has_pool ? "live" : "no-pool-copy" );
++                }
++            }
++        }
++        n_mod++;
++    }
++
++    /* Self-calibration beacon: without this, "no [iat-life] lines" is
++     * indistinguishable from "the probe never ran".  Printed for the first few
++     * sweeps and then every 32nd, so coverage is provable without flooding. */
++    if (sweeps <= 3 || !(sweeps % 32))
++        ERR( "[iat-life] ml701 sweep#%d after=%s modules=%d slots=%d pooled=%d pe0=%d pool0=%d\n",
++             sweeps, when, n_mod, n_slot, n_pool, n_pezero, n_poolzero );
++}
++
+ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_flags,
+                                              const UNICODE_STRING *libname, HMODULE* hModule)
+ {
+@@ -3821,6 +3977,16 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_fl
+             LdrUnloadDll(wm->ldr.DllBase);
+             wm = NULL;
+         }
++        else
++        {
++            char tag[64];
++            const WCHAR *bn = wm->ldr.BaseDllName.Buffer;
++            unsigned int k = 0;
++
++            while (bn && bn[k] && k < sizeof(tag) - 1) { tag[k] = (char)bn[k]; k++; }
++            tag[k] = 0;
++            iat_life_sweep( tag );   /* ml701 [iat-life] stage 2 */
++        }
+     }
+     if (wm) *hModule = wm->ldr.DllBase;
+ 
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index d813a072da4..4635ade9c6b 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -3428,13 +3428,29 @@ BOOLEAN WINAPI RtlIsEcCode( ULONG_PTR ptr )
+ 
+ 
+ /* unwind context by one call frame */
+-static void unwind_one_frame( CONTEXT *context )
++/* iOS-Mythic ml703: returns whether a real function entry was found and used.
++ *
++ * Unwind info is registered for PE VAs, but code physically executes from the
++ * JIT-pool alias, so context->Rip is a POOL VA here.  RtlLookupFunctionEntry
++ * then finds nothing, RtlVirtualUnwind treats the frame as a leaf, pops a zero
++ * return address off the stack and yields Rip=0 -- which do_setjmpex used to
++ * copy over a perfectly good jump buffer (LibreMines/Qt5: libjpeg's longjmp
++ * error path unwound to RIP 0 and the guest branched to address zero).
++ * virtual_unwind() already reverse-translates for exactly this reason; mirror
++ * it.  xlate_ios_jit_rev() resolves by REGISTERED ALIAS IDENTITY and returns
++ * its input unchanged when there is no PE counterpart, so addresses that were
++ * never pool-mapped are unaffected -- it is not guessing from address ranges. */
++static BOOL unwind_one_frame( CONTEXT *context )
+ {
++    extern void *xlate_ios_jit_rev( void *ptr );
+     void *data;
+     ULONG_PTR base, frame, pc = context->Rip - 4;
+-    RUNTIME_FUNCTION *func = RtlLookupFunctionEntry( pc, &base, NULL );
++    ULONG_PTR lookup_pc = (ULONG_PTR)xlate_ios_jit_rev( (void *)pc );
++    RUNTIME_FUNCTION *func = RtlLookupFunctionEntry( lookup_pc, &base, NULL );
+ 
+-    RtlVirtualUnwind( UNW_FLAG_NHANDLER, base, pc, func, context, &data, &frame, NULL );
++    if (!func) return FALSE;
++    RtlVirtualUnwind( UNW_FLAG_NHANDLER, base, lookup_pc, func, context, &data, &frame, NULL );
++    return TRUE;
+ }
+ 
+ static void __attribute__((used)) unwind_entry_thunk( CONTEXT *context )
+@@ -3525,8 +3541,31 @@ static int __attribute__((used)) do_setjmpex( _JUMP_BUFFER *buf, UINT fpcr, UINT
+     context.R15 = buf->R15;
+     context.Rip = buf->Rip;
+     memcpy( &context.Xmm6, &buf->Xmm6, 10 * sizeof(context.Xmm6) );
+-    unwind_one_frame( &context );
+-    if (!RtlIsEcCode( context.Rip ))  /* caller is x64, use its context instead of the ARM one */
++
++    /* ml703: the copy-back below replaces the registers NTDLL__setjmpex just
++     * stored with the unwound caller's.  That is only correct when the unwind
++     * ACTUALLY SUCCEEDED and landed on x64 code.  A failed unwind yields
++     * Rip=0, which RtlIsEcCode() reports as "not EC" -- i.e. it used to be
++     * misread as "the caller is x64", zeroing a valid buffer.  Require all
++     * three: the lookup found a function entry, the result is plausible, and
++     * it really is x64 code. */
++    {
++        BOOL unwound = unwind_one_frame( &context );
++        static int n_sj;
++
++        if (n_sj < 24)   /* [setjmp-life] ml702 probe, retained */
++        {
++            n_sj++;
++            ERR( "[setjmp-life] ml702 setjmp#%d buf=%p | STORED Frame=%p Rip=%p Rsp=%p Rbx=%p"
++                 " | UNWOUND ok=%d Rip=%p Rsp=%p | isEc(post)=%d -> %s\n",
++                 n_sj, buf, (void *)buf->Frame, (void *)buf->Rip, (void *)buf->Rsp, (void *)buf->Rbx,
++                 unwound, (void *)context.Rip, (void *)context.Rsp,
++                 (int)RtlIsEcCode( context.Rip ),
++                 (unwound && context.Rip && !RtlIsEcCode( context.Rip ))
++                     ? "COPY-BACK (real x64 caller)" : "KEEP stores" );
++        }
++
++        if (unwound && context.Rip && !RtlIsEcCode( context.Rip ))
+     {
+         buf->Rbx = context.Rbx;
+         buf->Rsp = context.Rsp;
+@@ -3539,6 +3578,16 @@ static int __attribute__((used)) do_setjmpex( _JUMP_BUFFER *buf, UINT fpcr, UINT
+         buf->R15 = context.R15;
+         buf->Rip = context.Rip;
+         memcpy( &buf->Xmm6, &context.Xmm6, 10 * sizeof(context.Xmm6) );
++        }
++    }
++    {
++        static int n_out;
++        if (n_out < 24)
++        {
++            n_out++;
++            ERR( "[setjmp-life] ml702 setjmp-exit#%d buf=%p FINAL Frame=%p Rip=%p Rsp=%p Rbx=%p\n",
++                 n_out, buf, (void *)buf->Frame, (void *)buf->Rip, (void *)buf->Rsp, (void *)buf->Rbx );
++        }
+     }
+     return 0;
+ }
+@@ -4198,6 +4247,18 @@ void __cdecl NTDLL_longjmp( _JUMP_BUFFER *buf, int retval )
+ 
+     if (!retval) retval = 1;
+ 
++    {   /* ml702 [setjmp-life]: what the buffer holds at the moment of use.  If
++         * this is zero the unwind target is zero and the guest branches to 0. */
++        static int n_lj;
++        if (n_lj < 24)
++        {
++            n_lj++;
++            ERR( "[setjmp-life] ml702 longjmp#%d buf=%p retval=%d Frame=%p Rip=%p Rsp=%p Rbx=%p Rsi=%p Rdi=%p\n",
++                 n_lj, buf, retval, (void *)buf->Frame, (void *)buf->Rip, (void *)buf->Rsp,
++                 (void *)buf->Rbx, (void *)buf->Rsi, (void *)buf->Rdi );
++        }
++    }
++
+     rec.ExceptionCode = STATUS_LONGJUMP;
+     rec.ExceptionFlags = 0;
+     rec.ExceptionRecord = NULL;

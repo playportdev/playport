@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "rust": "1.98.1",
+  "release": "1.98.1 (48a229cea 2026-09-01)",
+  "source_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+  "date": "2026-09-03",
+  "manifest_url": "https://static.rust-lang.org/dist/channel-rust-1.98.1.toml",
+  "manifest_sha256": "a7c8774a5fd8441c997d94c029776cbc5eb111e9d72ab5d256fa69866644347e",
+  "components": {
+    "rustc": {
+      "target": "x86_64-unknown-linux-gnu",
+      "archive": "rustc-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+      "url": "https://static.rust-lang.org/dist/2026-09-03/rustc-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+      "sha256": "e974f036b28565f37c0f3bd92ddefa809bee16c04f9dcf07b9ed96e05aaaf7c4"
+    },
+    "rust-src": {
+      "target": "*",
+      "archive": "rust-src-1.98.1.tar.xz",
+      "url": "https://static.rust-lang.org/dist/2026-09-03/rust-src-1.98.1.tar.xz",
+      "sha256": "5c846ebcebcc7e2e0777a4cdaa12051691593f16a7e94edbae5e6241cc62d98c"
+    },
+    "rust-std": {
+      "target": "aarch64-apple-ios",
+      "archive": "rust-std-1.98.1-aarch64-apple-ios.tar.xz",
+      "url": "https://static.rust-lang.org/dist/2026-09-03/rust-std-1.98.1-aarch64-apple-ios.tar.xz",
+      "sha256": "ce5ddfb5d970ba38e26dbf657da7a4dd11e747d215786ed44c541f521e84881a"
+    }
+  }
+}

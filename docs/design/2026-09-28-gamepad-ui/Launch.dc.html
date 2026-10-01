@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Starting Hollow Knight</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#05070A;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.dot{width:8px;height:8px;border-radius:4px;background:#2A3340}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #05070A">
+<div style="position: absolute; inset: 0; background: #131C2B"></div>
+<div style="position: absolute; top: 16px; right: 44px; font: 600 11px 'Barlow'; letter-spacing: .08em; color: #6F83A3">[HERO ART, dimmed]</div>
+<div style="position: absolute; left: 0; right: 0; top: 118px; display: flex; flex-direction: column; align-items: center; gap: 18px">
+<div class="d" style="font-size: 56px; font-weight: 700; letter-spacing: .02em">HOLLOW KNIGHT</div>
+<div style="width: 320px; height: 4px; background: #2A3340; border-radius: 2px"><div style="width: 58%; height: 4px; background: #F5B544; border-radius: 2px"></div></div>
+<div style="display: flex; align-items: center; gap: 10px; font-size: 14px; color: #C9D1DC">
+<span class="dot" style="background: #F5B544"></span><span class="dot" style="background: #F5B544"></span><span class="dot"></span>
+<span>Starting the game…</span>
+</div>
+</div>
+<a href="QuickMenu.dc.html" style="position: absolute; left: 0; right: 0; bottom: 26px; display: flex; justify-content: center; align-items: center; gap: 6px; font-size: 13px; color: #9AA5B4">Tip: hold <span class="g">⌂</span> on your controller for the Playport menu</a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

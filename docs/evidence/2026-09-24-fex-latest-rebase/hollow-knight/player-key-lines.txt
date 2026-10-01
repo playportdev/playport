@@ -1,0 +1,20 @@
+Direct3D:
+    Version:  Direct3D 11.0 [level 11.1]
+    Renderer: Apple A19 Pro GPU (ID=0x0)
+[Physics::Module] SDK Version: 4.1.2
+[Physics::Module] Integration Version: 1.0.0
+GpuFence::Create(): Failed to create ID3D11Fence, error 0x80004005
+Loaded saved language code 'EN'
+Restored language code 'EN'
+Unloading 49 unused Assets to reduce memory usage. Loaded Objects now: 4274.
+Direct3D: detected that using refresh rate causes time drift. Will stop trusting refresh rate until the game window is moved.
+ArgumentException: Path cannot be the empty string or all whitespace.
+Loaded saved language code 'EN'
+Restored language code 'EN'
+Unloading 66 unused Assets to reduce memory usage. Loaded Objects now: 47106.
+Unloading 280 unused Assets to reduce memory usage. Loaded Objects now: 63361.
+Object Pool attached to GlobalPool has run out of Strike Nail R prefabs, Instantiating an additional one.
+Object Pool attached to GlobalPool has run out of Strike Nail R prefabs, Instantiating an additional one.
+Object Pool attached to GlobalPool has run out of Run Effects prefabs, Instantiating an additional one.
+Object Pool attached to GlobalPool has run out of Run Effects prefabs, Instantiating an additional one.
+Object Pool attached to GlobalPool has run out of Run Effects prefabs, Instantiating an additional one.

@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 7 Jul 2026 04:13:24 +0800
+Subject: [PATCH] wsi headless: report the real desktop size instead of
+ hardcoded 1024x768
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The hardcode predates the 960x540 virtual desktop — user32
+(GetSystemMetrics/EnumDisplaySettings, now synthesized by win32u's
+virtual-monitor regime) and DXGI disagreed on the screen, so D3D11
+games created windows that cropped on the desktop surface.
+
+getDesktopCoordinates / getCurrentDisplayMode now query
+GetSystemMetrics(SM_CX/CYSCREEN); the mode list is {640x480, 800x600,
+desktop} @60Hz 32bpp — mirroring the win32u synth exactly, nothing
+larger than the desktop. getWindowSize returns the real GetClientRect
+so swapchains match their window.
+
+Verified: Thumper boots at 960x540 fitting the desktop uncropped
+(was 1024x768 cropped).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: 2134b0791203a271e6eb036a326d798b48647e73
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/util/wsi_monitor_headless.cpp | 64 ++++++++++++++++++++++---------
+ src/util/wsi_window_headless.cpp  | 20 ++++++++--
+ 2 files changed, 63 insertions(+), 21 deletions(-)
+
+diff --git a/src/util/wsi_monitor_headless.cpp b/src/util/wsi_monitor_headless.cpp
+index a15db08..b9c2045 100644
+--- a/src/util/wsi_monitor_headless.cpp
++++ b/src/util/wsi_monitor_headless.cpp
+@@ -23,6 +23,20 @@ namespace dxmt::wsi {
+  * dereference HMONITOR. */
+ static HMONITOR const kSyntheticMonitor = reinterpret_cast<HMONITOR>(1);
+ 
++/* iOS-Mythic 2026-07-07 (task #24): the hardcoded 1024x768 predates the
++ * 960x540 virtual desktop — user32 (GetSystemMetrics/GetMonitorInfo) and
++ * DXGI disagreed on the screen size, games booted at a mode that crops on
++ * the desktop, and Thumper's video-settings page fataled (ExitProcess -1)
++ * failing to reconcile the two. Ask user32 for the real screen size; the
++ * Wine iOS win32u virtual monitor serves it in every regime (desktop and
++ * game mode). Fall back to 1024x768 only if the call fails. */
++static void getScreenSize(uint32_t *w, uint32_t *h) {
++  int sw = ::GetSystemMetrics(SM_CXSCREEN);
++  int sh = ::GetSystemMetrics(SM_CYSCREEN);
++  *w = (sw > 0) ? (uint32_t)sw : 1024;
++  *h = (sh > 0) ? (uint32_t)sh : 768;
++}
++
+ HMONITOR getDefaultMonitor() {
+   return kSyntheticMonitor;
+ }
+@@ -47,42 +61,56 @@ bool getDisplayName(HMONITOR hMonitor, WCHAR (&Name)[32]) {
+ bool getDesktopCoordinates(HMONITOR hMonitor, RECT *pRect) {
+   if (hMonitor != kSyntheticMonitor || !pRect)
+     return false;
+-  /* 1024x768 at origin — matches Wine iOS sysparams_ios.c + driver_ios.c
+-   * which advertise 1024x768. Mismatch caused NtUserChangeDisplaySettings
+-   * to return DISP_CHANGE_BADMODE and a downstream fault loop. */
++  /* Real screen size from user32 — MUST agree with what win32u's virtual
++   * monitor reports (sysparams_ios.c now serves the same values through
++   * NtUserEnumDisplaySettings), or games fatal reconciling the two. */
++  uint32_t w, h;
++  getScreenSize(&w, &h);
+   pRect->left = 0;
+   pRect->top = 0;
+-  pRect->right = 1024;
+-  pRect->bottom = 768;
++  pRect->right = (LONG)w;
++  pRect->bottom = (LONG)h;
+   return true;
+ }
+ 
+-/* Single supported mode: 1024x768 @ 60Hz, 32bpp, non-interlaced. */
+-static inline bool retrieveDisplayMode(HMONITOR hMonitor, DWORD modeNumber,
+-                                       WsiMode *pMode) {
+-  if (hMonitor != kSyntheticMonitor || !pMode)
+-    return false;
+-  pMode->width = 1024;
+-  pMode->height = 768;
++static inline void fillMode(WsiMode *pMode, uint32_t w, uint32_t h) {
++  pMode->width = w;
++  pMode->height = h;
+   pMode->refreshRate.numerator = 60;
+   pMode->refreshRate.denominator = 1;
+   pMode->bitsPerPixel = 32;
+   pMode->interlaced = false;
+-  return true;
+ }
+ 
++/* Mode list: classic small modes + the real desktop resolution (deduped),
++ * all @ 60Hz 32bpp. Mirrors the win32u NtUserEnumDisplaySettings synth so
++ * user32 and DXGI tell games the same story. Nothing larger than the
++ * desktop — bigger modes crop on the virtual desktop surface. */
+ bool getDisplayMode(HMONITOR hMonitor, uint32_t modeNumber, WsiMode *pMode) {
+-  if (modeNumber != 0)
+-    return false;  /* only one mode exposed */
+-  return retrieveDisplayMode(hMonitor, modeNumber, pMode);
++  if (hMonitor != kSyntheticMonitor || !pMode)
++    return false;
++  uint32_t sw, sh;
++  getScreenSize(&sw, &sh);
++  uint32_t widths[3]  = {640, 800, sw};
++  uint32_t heights[3] = {480, 600, sh};
++  uint32_t count = ((sw == 640 && sh == 480) || (sw == 800 && sh == 600)) ? 2 : 3;
++  if (modeNumber >= count)
++    return false;
++  fillMode(pMode, widths[modeNumber], heights[modeNumber]);
++  return true;
+ }
+ 
+ bool getCurrentDisplayMode(HMONITOR hMonitor, WsiMode *pMode) {
+-  return retrieveDisplayMode(hMonitor, ENUM_CURRENT_SETTINGS, pMode);
++  if (hMonitor != kSyntheticMonitor || !pMode)
++    return false;
++  uint32_t sw, sh;
++  getScreenSize(&sw, &sh);
++  fillMode(pMode, sw, sh);
++  return true;
+ }
+ 
+ bool getDesktopDisplayMode(HMONITOR hMonitor, WsiMode *pMode) {
+-  return retrieveDisplayMode(hMonitor, ENUM_REGISTRY_SETTINGS, pMode);
++  return getCurrentDisplayMode(hMonitor, pMode);
+ }
+ 
+ } // namespace dxmt::wsi
+diff --git a/src/util/wsi_window_headless.cpp b/src/util/wsi_window_headless.cpp
+index f8cf78d..e345ade 100644
+--- a/src/util/wsi_window_headless.cpp
++++ b/src/util/wsi_window_headless.cpp
+@@ -24,11 +24,25 @@ namespace dxmt::wsi {
+ static HMONITOR const kSyntheticMonitor = reinterpret_cast<HMONITOR>(1);
+ 
+ void getWindowSize(HWND hWindow, uint32_t *pWidth, uint32_t *pHeight) {
++  /* iOS-Mythic 2026-07-07 (task #24): report the REAL client size (user32
++   * works fine now) so swapchains match the window instead of a hardcoded
++   * 1024x768 that predates the 960x540 virtual desktop. Fall back to the
++   * screen size if the window query fails. */
++  RECT rect;
++  if (hWindow && ::GetClientRect(hWindow, &rect) &&
++      rect.right > rect.left && rect.bottom > rect.top) {
++    if (pWidth)
++      *pWidth = (uint32_t)(rect.right - rect.left);
++    if (pHeight)
++      *pHeight = (uint32_t)(rect.bottom - rect.top);
++    return;
++  }
++  int sw = ::GetSystemMetrics(SM_CXSCREEN);
++  int sh = ::GetSystemMetrics(SM_CYSCREEN);
+   if (pWidth)
+-    *pWidth = 1024;
+-
++    *pWidth = (sw > 0) ? (uint32_t)sw : 1024;
+   if (pHeight)
+-    *pHeight = 768;
++    *pHeight = (sh > 0) ? (uint32_t)sh : 768;
+ }
+ 
+ void resizeWindow(HWND hWindow, DXMTWindowState *pState, uint32_t width,

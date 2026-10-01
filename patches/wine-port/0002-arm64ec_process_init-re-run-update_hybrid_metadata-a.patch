@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Apr 2026 17:13:33 +0800
+Subject: [PATCH] arm64ec_process_init: re-run update_hybrid_metadata after
+ globals are set
+
+The dispatcher globals (__os_arm64x_dispatch_call_no_redirect,
+__os_arm64x_dispatch_fptr, __os_arm64x_dispatch_ret) are 0 when
+xtajit64's process_module runs arm64ec_update_hybrid_metadata, so
+xtajit64's hybrid pointer slots stay 0. Re-run the metadata update
+with the now-populated globals so xtajit64's exit thunks read real
+dispatcher addresses.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+(cherry picked from commit 119bbbec06748e68ae518187f32055e779105dd2)
+Madeira-commit: 5a139a03f65b0512e1462eed562d38a5c729b112
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 24d3b6d27e4..66a79906e6c 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -195,6 +195,12 @@ NTSTATUS arm64ec_process_init( HMODULE module )
+     __os_arm64x_dispatch_fptr = RtlFindExportedRoutineByName( module, "DispatchJump" );
+     __os_arm64x_dispatch_ret = RtlFindExportedRoutineByName( module, "RetToEntryThunk" );
+ 
++    /* The dispatcher globals were 0 when xtajit64's process_module ran
++     * arm64ec_update_hybrid_metadata, so xtajit64's hybrid pointer slots
++     * still hold 0. Re-run the metadata update with the now-populated
++     * globals so xtajit64's exit thunks read real dispatcher addresses. */
++    arm64ec_update_hybrid_metadata( module, RtlImageNtHeader( module ), (IMAGE_ARM64EC_METADATA *)metadata );
++
+ #define GET_PTR(name) p ## name = arm64ec_redirect_ptr( module, \
+                                       RtlFindExportedRoutineByName( module, #name ), metadata )
+     GET_PTR( BTCpu64FlushInstructionCache );

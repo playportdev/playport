@@ -1,0 +1,205 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 4 Jul 2026 14:00:42 +0800
+Subject: [PATCH] =?UTF-8?q?iOS:=20fix=20new-thread=20OOM=20death=20?=
+ =?UTF-8?q?=E2=80=94=20shrink=20per-thread=20LookupCache=20264MB=E2=86=929?=
+ =?UTF-8?q?6MB?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Thumper's loading screen intermittently killed the process (silent, no
+crash report) when spawning worker threads. Bisected with ThreadInit step
+markers over three runs: death inside the per-thread LookupCache ctor.
+Each thread committed L2 (128MB, sized for 64GB VirtualMemSize) +
+CODE_SIZE (128MB) + L1 upfront (iOS can't commit-on-fault) — ~264MB ×
+~19 threads ≈ 5GB.
+
+- Config.VirtualMemSize 64GB → 8GB on iOS (ContextImpl ctor): L2 shrinks
+  128MB → 16MB. DLL code at ~0x7EExxxxxxxxx aliased in L2 even at 64GB
+  and is served by the dispatcher's loop-top L1 probe; the exe at
+  0x140000000 stays covered.
+- CODE_SIZE 128MB → 64MB on iOS: overflow path is a clean
+  ClearCodeCache (AllocateBackingForPage returns 0).
+- ThreadInit step markers (Module.cpp TI:*, Core.cpp [TI-IC]) + alloc
+  size/result logging kept for future thread-death forensics.
+
+Verified: 20/20 threads init, loading no longer crashes, long stable
+gameplay session.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: b648df3374ed5ac554c74ad8f84233f89f359fd8
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp        | 19 ++++++++++
+ FEXCore/Source/Interface/Core/LookupCache.cpp |  2 ++
+ FEXCore/Source/Interface/Core/LookupCache.h   |  8 +++++
+ Source/Windows/ARM64EC/Module.cpp             | 36 +++++++++++++++++++
+ 4 files changed, 65 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index d642b9c..9432952 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -117,6 +117,18 @@ ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
+     // When operating in 32-bit mode, the virtual memory we care about is only the lower 32-bits.
+     Config.VirtualMemSize = 1ULL << 32;
+   }
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: shrink the per-thread LookupCache L2 page table from 128MB
++   * (64GB VirtualMemSize) to 16MB (8GB). Every thread's LookupCache commits
++   * its full arena upfront on iOS (commit-on-fault doesn't work — see
++   * LookupCache.cpp), so ~264MB × ~19 game threads ≈ 5GB was killing the
++   * process when Thumper's loading screen spawned workers (silent death
++   * inside the LookupCache ctor, bisected via [TI-IC] markers). 8GB covers
++   * everything the L2 usefully serves anyway: the exe at 0x140000000 (5GB)
++   * and low mappings. DLL code at ~0x7EExxxxxxxxx aliased in L2 even at
++   * 64GB and is served by the dispatcher's loop-top L1 probe instead. */
++  Config.VirtualMemSize = 1ULL << 33;
++#endif
+ 
+   if (Config.BlockJITNaming() || Config.GlobalJITNaming() || Config.LibraryJITNaming()) {
+     // Only initialize symbols file if enabled. Ensures we don't pollute /tmp with empty files.
+@@ -426,9 +438,12 @@ void ContextImpl::ExecuteThread(FEXCore::Core::InternalThreadState* Thread) {
+ void ContextImpl::InitializeCompiler(FEXCore::Core::InternalThreadState* Thread) {
+   Thread->OpDispatcher = fextl::make_unique<FEXCore::IR::OpDispatchBuilder>(this, Thread);
+   Thread->OpDispatcher->SetMultiblock(Config.Multiblock);
++  LogMan::Msg::EFmt("[TI-IC] lookupcache");
+   Thread->LookupCache = fextl::make_unique<FEXCore::LookupCache>(this);
++  LogMan::Msg::EFmt("[TI-IC] decoder");
+   Thread->FrontendDecoder = fextl::make_unique<FEXCore::Frontend::Decoder>(Thread);
+   Thread->PassManager = fextl::make_unique<FEXCore::IR::PassManager>(this);
++  LogMan::Msg::EFmt("[TI-IC] passmanager");
+ 
+   Thread->CurrentFrame->State.L1Pointer = Thread->LookupCache->GetL1Pointer();
+   Thread->CurrentFrame->State.L1Mask = Thread->LookupCache->GetScaledL1PointerMask();
+@@ -438,7 +453,9 @@ void ContextImpl::InitializeCompiler(FEXCore::Core::InternalThreadState* Thread)
+   Dispatcher->InitThreadPointers(Thread);
+ 
+   // Create CPU backend
++  LogMan::Msg::EFmt("[TI-IC] jitcore");
+   Thread->CPUBackend = FEXCore::CPU::CreateArm64JITCore(this, Thread);
++  LogMan::Msg::EFmt("[TI-IC] jitcore-done");
+ 
+   // We finalize *after* the CPU backend is initialized, as the CPU backend will
+   // provide necessary register information to the register allocation pass.
+@@ -446,9 +463,11 @@ void ContextImpl::InitializeCompiler(FEXCore::Core::InternalThreadState* Thread)
+ }
+ 
+ FEXCore::Core::InternalThreadState* ContextImpl::CreateThread(const FEXCore::Core::CPUState* NewThreadState) {
++  LogMan::Msg::EFmt("[TI-IC] createthread-enter");
+   FEXCore::Core::InternalThreadState* Thread = new FEXCore::Core::InternalThreadState {
+     .CTX = this,
+   };
++  LogMan::Msg::EFmt("[TI-IC] threadstate-alloc");
+   FEXCore::Allocator::VirtualName("FEXMem_ThreadState", Thread, sizeof(*Thread));
+ 
+   // Copy over the new thread state to the new object
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.cpp b/FEXCore/Source/Interface/Core/LookupCache.cpp
+index 370a62c..a46d2e0 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.cpp
++++ b/FEXCore/Source/Interface/Core/LookupCache.cpp
+@@ -48,7 +48,9 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+    * on iOS — pages stay faulting after VirtualAlloc(MEM_COMMIT) returns.
+    * Pre-commit the whole region; physical pages are still demand-faulted
+    * by the kernel. */
++  LogMan::Msg::EFmt("[TI-IC] lookupcache-alloc size=0x{:x}", TotalCacheSize);
+   PagePointer = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, true));
++  LogMan::Msg::EFmt("[TI-IC] lookupcache-alloc -> 0x{:x}", PagePointer);
+ #else
+   PagePointer = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, false));
+ #endif
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.h b/FEXCore/Source/Interface/Core/LookupCache.h
+index 391d485..0051f08 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.h
++++ b/FEXCore/Source/Interface/Core/LookupCache.h
+@@ -465,7 +465,15 @@ private:
+   constexpr static size_t MIN_L1_ENTRIES = 8 * 1024;        // Must be a power of 2
+   constexpr static size_t MAX_L1_ENTRIES = 1 * 1024 * 1024; // Must be a power of 2
+ 
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: halve the per-thread block-backing arena — it's committed
++   * upfront on iOS (see LookupCache.cpp) and 128MB × ~19 threads was OOM-ing
++   * the process. 64MB still backs 1024 guest code pages per thread; on
++   * overflow AllocateBackingForPage returns 0 → clean ClearCodeCache. */
++  constexpr static size_t CODE_SIZE = 64 * 1024 * 1024;
++#else
+   constexpr static size_t CODE_SIZE = 128 * 1024 * 1024;
++#endif
+   constexpr static size_t SIZE_PER_PAGE = FEXCore::Utils::FEX_PAGE_SIZE * sizeof(LookupCacheEntry);
+   constexpr static size_t MAX_L1_SIZE = MAX_L1_ENTRIES * sizeof(LookupCacheEntry);
+ 
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index b1249dd..dd3cb00 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1129,6 +1129,27 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+   }
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* iOS-Mythic: step markers through ThreadInit. Two runs have died with a
++ * fresh post-detach thread's "ThreadInit() entered" as the last FEX log
++ * line (silent kill, no crash report) — once during loading's worker-thread
++ * spawn, once when QuickTime's recording start triggered a thread spawn.
++ * These markers bisect which init step dies (CreateThread's per-thread
++ * CodeBuffer/LookupCache allocation is the prime suspect). */
++static void IosTiLog(const char* msg) {
++  HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
++      ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
++            NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
++      : nullptr;
++  if (stderr_h) {
++    ULONG written = 0;
++    size_t len = 0;
++    while (msg[len]) len++;
++    WriteFile(stderr_h, msg, static_cast<DWORD>(len), &written, nullptr);
++  }
++}
++#endif
++
+ NTSTATUS ThreadInit() {
+ #ifdef FEX_IOS_HOST
+   /* iOS-Mythic diagnostic: log entry to thread-init so we can confirm Wine
+@@ -1148,7 +1169,13 @@ NTSTATUS ThreadInit() {
+   }
+ #endif
+   std::scoped_lock Lock(ThreadCreationMutex);
++#ifdef FEX_IOS_HOST
++  IosTiLog("[FEX-iOS] TI:lock\n");
++#endif
+   FEX::Windows::InitCRTThread();
++#ifdef FEX_IOS_HOST
++  IosTiLog("[FEX-iOS] TI:crt\n");
++#endif
+   const auto CPUArea = GetCPUArea();
+ 
+   static constexpr size_t EmulatorStackSize = 0x40000;
+@@ -1156,8 +1183,14 @@ NTSTATUS ThreadInit() {
+     reinterpret_cast<uint64_t>(::VirtualAlloc(nullptr, EmulatorStackSize, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE));
+   CPUArea.EmulatorStackLimit() = EmulatorStack;
+   CPUArea.EmulatorStackBase() = EmulatorStack + EmulatorStackSize;
++#ifdef FEX_IOS_HOST
++  IosTiLog("[FEX-iOS] TI:stack\n");
++#endif
+ 
+   auto* Thread = CTX->CreateThread();
++#ifdef FEX_IOS_HOST
++  IosTiLog("[FEX-iOS] TI:createthread\n");
++#endif
+ 
+   // Default segment setup.
+   auto Frame = Thread->CurrentFrame;
+@@ -1211,6 +1244,9 @@ NTSTATUS ThreadInit() {
+ #endif
+ 
+   FEX::Windows::CallRetStack::InitializeThread(Thread);
++#ifdef FEX_IOS_HOST
++  IosTiLog("[FEX-iOS] TI:callret\n");
++#endif
+   Thread->CurrentFrame->Pointers.ExitFunctionEC = reinterpret_cast<uintptr_t>(&ExitFunctionEC);
+   CPUArea.StateFrame() = Thread->CurrentFrame;
+ 

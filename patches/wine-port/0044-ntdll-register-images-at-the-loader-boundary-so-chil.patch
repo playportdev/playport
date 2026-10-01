@@ -1,0 +1,309 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 21 Aug 2026 12:23:24 +0800
+Subject: [PATCH] ntdll: register images at the loader boundary so child
+ processes can execute x86-64
+
+In a child pseudo-process no module except the main image and ntdll was ever
+marked executable, so the first x86-64 instruction the loader entered decoded
+as NOEXEC, raised NoExecOp and took FEX's GuestSignal_SIGSEGV trampoline --
+which deliberately reads address zero. The resulting c0000005 looked exactly
+like a bad pointer in the guest and was not one. GTA V died this way on
+d3dx9_43.dll, which was simply the first native x64 dependency whose code
+anything tried to run: FEX was still allocating its JIT frontend at the time,
+so zero x86-64 instructions had executed in that process.
+
+The cause is on the syscall path. notify_map_view_of_section() only runs
+behind NT_SUCCESS && RtlIsCurrentProcess && enter_syscall_callback(), and the
+last of those returns FALSE whenever InSyscallCallback is already set. In a
+child it is: the [map-gate] probe added here counted 105 refusals against a
+single success. Once stuck it stays stuck, silently dropping every later
+notification for that thread.
+
+Rather than guess which gate was to blame, [map-gate] logs outside all of
+them -- handle, process, status, RtlIsCurrentProcess, CPU area,
+InSyscallCallback before, enter result, base and size -- so one run separates
+"never called", "not current process", "callback refused" and "mapped
+elsewhere". The existing [map-notify] probe could not: it sits inside the
+helper, so its silence was ambiguous between all four.
+
+Registration now also happens from the loader's own "module is mapped,
+relocated and imported, no DllMain has run yet" boundary, which does not
+depend on any of those gates and is keyed to the correct pseudo-process by
+construction. Result: registrations went 2 -> 217, NOEXEC to zero, and GTA V
+now reaches its Rockstar launcher handshake instead of dying during
+loader_init.
+
+It must call FEX's intervals-only entry point, never NotifyMapViewOfSection.
+The latter also drives ImageTracker, which opens with an EXCLUSIVE
+scoped_lock on CodeInvalidationMutex; the loader may call us from a thread
+already holding that mutex SHARED from executing translated code, there is no
+read-to-write upgrade, and it then waits on itself while holding
+loader_section. Marvel Cosmic Invasion froze exactly that way on
+cryptbase.dll -- 88s parked, the [iOS-xins] lines its last output. If the
+export is missing we do nothing: the syscall path remains authoritative and a
+wedge is far worse than a missed registration.
+
+The matching unmap is deliberately NOT wired. Symmetry belongs here in
+principle -- registering at the loader boundary while removing only at the
+syscall boundary can strand executable intervals over a freed image, which a
+later allocation reusing that address would inherit -- but it cannot be done
+with NotifyUnmapViewOfSection. That API is split-phase (After=false locks and
+invalidates, the caller unmaps, After=true unlocks) and its invalidation takes
+the same mutex exclusively. Wiring it froze Book of the Dead deterministically
+on its second module unload, with thread 0100 self-deadlocked 831 shared
+acquisitions deep while holding loader_section. The removed call site keeps
+the full reasoning, including why making that mutex recursive or upgrading a
+read hold in place would trade a visible freeze for stale code and corrupt
+lock accounting.
+
+Verified on iPhone 13 Pro / iOS 27: GTA V 2 -> 217 registrations and no
+NOEXEC; Book of the Dead unloads avrt.dll and reaches its launcher; Marvel
+Cosmic Invasion loads 59 modules including cryptbase.dll without wedging.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+(cherry picked from commit 9dac36649124ccb421f2e581133eeaa833d1f163)
+Madeira-commit: b548a2fc0284ac78fdda3cdf83f580265d125700
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         |  31 +++++++++
+ dlls/ntdll/ntdll_misc.h     |   2 +
+ dlls/ntdll/signal_arm64ec.c | 130 ++++++++++++++++++++++++++++++++++--
+ 3 files changed, 157 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 4de99f5149f..9bc2c92ab5c 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3199,6 +3199,15 @@ static NTSTATUS load_native_dll( LPCWSTR load_path, const UNICODE_STRING *nt_nam
+ #endif
+     if (NT_SUCCESS(status)) status = build_module( load_path, nt_name, &module, image_info, id,
+                                                    flags, system, redirected, pwm );
++#ifdef __arm64ec__
++    /* iOS-Mythic ml709: tell the emulator this image's code is executable, here rather
++     * than relying on NtMapViewOfSection's notification -- that one never fires in a
++     * child pseudo-process, leaving every native x64 dependency unregistered until the
++     * first one FEX is asked to execute dies on a synthetic NOEXEC SIGSEGV. This is the
++     * point where mapping, relocation and imports have all succeeded and no DllMain has
++     * run yet. See arm64ec_notify_image_map(). */
++    if (NT_SUCCESS(status) && *pwm) arm64ec_notify_image_map( (*pwm)->ldr.DllBase );
++#endif
+     if (status && module) NtUnmapViewOfSection( NtCurrentProcess(), module );
+     return status;
+ }
+@@ -4700,6 +4709,28 @@ static void free_modref( WINE_MODREF *wm )
+ 
+     free_tls_slot( &wm->ldr );
+     RtlReleaseActivationContext( wm->ldr.ActivationContext );
++    /* ml709b: DO NOT notify the emulator of the unload from here.
++     *
++     * The symmetric call belongs here in principle -- registering images at the loader
++     * boundary while removing them only at the syscall boundary can strand executable
++     * intervals over a freed image, which a later allocation reusing that address would
++     * inherit. It cannot be done with NotifyUnmapViewOfSection, and doing so froze Book
++     * of the Dead deterministically on its second module unload (avrt.dll):
++     *
++     *   - that API is split-phase. After=false locks and invalidates, the caller then
++     *     performs the real NtUnmapViewOfSection, and After=true unlocks. Calling both
++     *     halves back to back from here inverts the contract.
++     *   - worse, InvalidateContainingSection() takes FEX's CodeInvalidationMutex
++     *     EXCLUSIVELY, and free_modref runs on a thread that is executing translated code
++     *     and therefore already holds that mutex SHARED -- 831 deep in the observed case.
++     *     There is no read-to-write upgrade, so the thread waits on itself forever while
++     *     holding loader_section, and every other thread wedges behind it.
++     *
++     * If loader-driven symmetry is wanted, it needs a dedicated non-blocking API that
++     * queues {tracker, base, generation} here and drains it at a point where the thread
++     * holds no shared code-invalidation lock -- not a reuse of the syscall pair. Do not
++     * "fix" this by making that mutex recursive or by upgrading a read hold in place;
++     * both trade a visible freeze for stale code and corrupt lock accounting. */
+     NtUnmapViewOfSection( NtCurrentProcess(), wm->ldr.DllBase );
+     if (cached_modref == wm) cached_modref = NULL;
+     RtlFreeUnicodeString( &wm->ldr.FullDllName );
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 8688e6e73b1..9d6980836af 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -169,6 +169,8 @@ extern void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64E
+ extern void arm64ec_update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,
+                                             const IMAGE_ARM64EC_METADATA *metadata );
+ extern void invoke_arm64ec_syscall(void);
++extern void arm64ec_notify_image_map( void *base );
++extern void arm64ec_notify_image_unmap( void *base );
+ 
+ extern void *__os_arm64x_check_call;
+ extern void *__os_arm64x_check_icall;
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 4635ade9c6b..ed1aeb79070 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -57,6 +57,7 @@ static void     (WINAPI *pBTCpu64NotifyReadFile)(HANDLE,void*,SIZE_T,BOOL,NTSTAT
+ static void     (WINAPI *pBeginSimulation)(void);
+ static void     (WINAPI *pFlushInstructionCacheHeavy)(const void*,SIZE_T);
+ static NTSTATUS (WINAPI *pNotifyMapViewOfSection)(void*,void*,void*,SIZE_T,ULONG,ULONG);
++static void     (WINAPI *pNotifyImageMap)(void*);
+ static void     (WINAPI *pNotifyMemoryAlloc)(void*,SIZE_T,ULONG,ULONG,BOOL,NTSTATUS);
+ static void     (WINAPI *pNotifyMemoryFree)(void*,SIZE_T,ULONG,BOOL,NTSTATUS);
+ static void     (WINAPI *pNotifyMemoryProtect)(void*,SIZE_T,ULONG,BOOL,NTSTATUS);
+@@ -627,6 +628,7 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+     GET_PTR( BTCpu64NotifyReadFile );
+     GET_PTR( BeginSimulation );
+     GET_PTR( FlushInstructionCacheHeavy );
++    GET_PTR( NotifyImageMap );  /* iOS-only loader-safe fallback; NULL on other hosts. */
+     GET_PTR( NotifyMapViewOfSection );
+     GET_PTR( NotifyMemoryAlloc );
+     GET_PTR( NotifyMemoryFree );
+@@ -1755,6 +1757,98 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
+     *ret_status = status;
+ }
+ 
++/* iOS-Mythic ml709: WHICH GATE DROPS THE IMAGE NOTIFICATION?
++ *
++ * FEX only treats a guest range as executable if InvalidationTracker::XIntervals
++ * covers it, and that is populated ONLY from HandleImageMap(), which runs off
++ * notify_map_view_of_section(). In the GTA V run the child pseudo-process
++ * registered just two images -- the main exe and ntdll, both of which FEX's own
++ * ProcessInit inserts directly -- and every native x64 dependency was absent, so
++ * the first one whose code was executed (d3dx9_43) decoded as NOEXEC, raised
++ * NoExecOp, and took the GuestSignal_SIGSEGV trampoline that deliberately reads
++ * address 0. That synthetic fault is what surfaced as c0000005; it is NOT a bad
++ * pointer in the guest.
++ *
++ * The existing [map-notify] probe sits INSIDE the helper, which is only entered
++ * after three outer gates, so its silence was ambiguous between four causes:
++ *   (a) this wrapper is never called (images mapped by unix code directly),
++ *   (b) the map failed,
++ *   (c) RtlIsCurrentProcess() is false for a pseudo-process,
++ *   (d) enter_syscall_callback() refused -- InSyscallCallback already set, which
++ *       once stuck stays stuck and silently drops every later notification.
++ * Log outside every gate so one run separates them. Zero [map-gate] lines
++ * alongside the [jit-pool] image lines means (a) and nothing else. */
++
++/* iOS-Mythic ml709: REGISTER IMAGES AT THE LOADER BOUNDARY, NOT THE SYSCALL BOUNDARY.
++ *
++ * FEX only treats a guest range as executable if InvalidationTracker::XIntervals covers
++ * it, and that is populated from HandleImageMap(), which until now ran ONLY off
++ * NtMapViewOfSection's notification. In a child pseudo-process that notification never
++ * arrived: the GTA V run registered just two images -- the main exe and ntdll, both
++ * inserted directly by FEX's own ProcessInit -- while every native x64 dependency was
++ * absent, so the first one whose code was executed (d3dx9_43) decoded as NOEXEC, raised
++ * NoExecOp, and took the GuestSignal_SIGSEGV trampoline that deliberately reads address
++ * zero. The resulting c0000005 looked exactly like a bad pointer in the guest and is not
++ * one. The direct-launch case registers 14 images and works, which is the control.
++ *
++ * The syscall notification stays (applications may map executable images without ever
++ * loading them as modules), but it is no longer the only path. This one fires from the
++ * loader's semantic "module is mapped, relocated and imported, no DllMain has run yet"
++ * boundary, which is in safe PE/ARM64EC context, is keyed to the correct pseudo-process
++ * by construction, and does not depend on any of the four syscall-path gates.
++ *
++ * Symmetry matters as much as the map: if registration bypasses the broken gate but
++ * removal still depends on it, FEX keeps stale executable intervals across a DLL unload
++ * and a later address reuse inherits them. So the unload boundary is wired too.
++ *
++ * Duplicate registration is harmless -- HandleImageMap re-inserts the same intervals --
++ * so the direct-launch path can and does notify twice for the same image. */
++void arm64ec_notify_image_map( void *base )
++{
++    static unsigned int n_map;
++
++    /* ml710: must be the intervals-only entry point, NEVER NotifyMapViewOfSection.
++     * The latter also drives ImageTracker, which takes FEX's CodeInvalidationMutex
++     * EXCLUSIVELY; we are called from the loader on a thread that may already hold it
++     * SHARED from executing translated code, and there is no read-to-write upgrade. That
++     * combination froze Marvel Cosmic Invasion on cryptbase.dll for 88s with wine's
++     * loader lock held. If pNotifyImageMap is absent, do nothing: the syscall path is
++     * still authoritative, and a wedge is far worse than a missed registration. */
++    if (!base || !pNotifyImageMap) return;
++    n_map++;
++    if (n_map <= 64)
++        ERR( "[ldr-image] ml710 MAP #%u base=%p peb=%p\n", n_map, base, RtlGetCurrentPeb() );
++    pNotifyImageMap( base );
++}
++
++/* ml709b: UNUSED, deliberately. The loader must not call this -- see the long comment
++ * at the removed call site in loader.c free_modref(). Kept only so the reasoning has a
++ * home next to its map counterpart; wiring it up again re-freezes the process. */
++void arm64ec_notify_image_unmap( void *base )
++{
++    static unsigned int n_unmap;
++
++    if (!base || !pNotifyUnmapViewOfSection) return;
++    n_unmap++;
++    if (n_unmap <= 64)
++        ERR( "[ldr-image] ml709 UNMAP #%u base=%p peb=%p\n", n_unmap, base, RtlGetCurrentPeb() );
++    pNotifyUnmapViewOfSection( base, FALSE, 0 );
++    pNotifyUnmapViewOfSection( base, TRUE, STATUS_SUCCESS );
++}
++
++static void ios_map_gate_probe( const char *who, HANDLE handle, HANDLE process, NTSTATUS status,
++                                void *base, SIZE_T size, int is_cur, void *area,
++                                int insc_before, int entered )
++{
++    static int n;
++    if (n >= 48) return;
++    n++;
++    ERR( "[map-gate] ml709 %s handle=%p process=%p status=%x ok=%d cur=%d area=%p "
++         "insc_before=%d entered=%d base=%p size=%p\n",
++         who, handle, process, (unsigned int)status, NT_SUCCESS(status) ? 1 : 0, is_cur,
++         area, insc_before, entered, base, (void *)size );
++}
++
+ NTSTATUS SYSCALL_API NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_ptr,
+                                          ULONG_PTR zero_bits, SIZE_T commit_size,
+                                          const LARGE_INTEGER *offset, SIZE_T *size_ptr,
+@@ -1765,10 +1859,22 @@ NTSTATUS SYSCALL_API NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *a
+ 
+     if (NT_SUCCESS(status) && RtlIsCurrentProcess( process ) && ios_chrome_lookup( handle ))
+         ios_chrome_set_view( handle, *addr_ptr );
+-    if (NT_SUCCESS(status) && RtlIsCurrentProcess( process ) && enter_syscall_callback())
+     {
+-        notify_map_view_of_section( handle, *addr_ptr, *size_ptr, alloc_type, protect, &status );
+-        leave_syscall_callback();
++        CHPE_V2_CPU_AREA_INFO *area = get_arm64ec_cpu_area();
++        int is_cur = RtlIsCurrentProcess( process ) ? 1 : 0;
++        int insc_before = area ? !!area->InSyscallCallback : 0;
++        int entered = 0;
++
++        if (NT_SUCCESS(status) && is_cur) entered = enter_syscall_callback() ? 1 : 0;
++        ios_map_gate_probe( "NtMapViewOfSection", handle, process, status,
++                            NT_SUCCESS(status) ? *addr_ptr : NULL,
++                            NT_SUCCESS(status) ? *size_ptr : 0,
++                            is_cur, area, insc_before, entered );
++        if (entered)
++        {
++            notify_map_view_of_section( handle, *addr_ptr, *size_ptr, alloc_type, protect, &status );
++            leave_syscall_callback();
++        }
+     }
+     return status;
+ }
+@@ -1782,10 +1888,22 @@ NTSTATUS SYSCALL_API NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID
+ 
+     if (NT_SUCCESS(status) && RtlIsCurrentProcess( process ) && ios_chrome_lookup( handle ))
+         ios_chrome_set_view( handle, *addr_ptr );
+-    if (NT_SUCCESS(status) && RtlIsCurrentProcess( process ) && enter_syscall_callback())
+     {
+-        notify_map_view_of_section( handle, *addr_ptr, *size_ptr, alloc_type, protect, &status );
+-        leave_syscall_callback();
++        CHPE_V2_CPU_AREA_INFO *area = get_arm64ec_cpu_area();
++        int is_cur = RtlIsCurrentProcess( process ) ? 1 : 0;
++        int insc_before = area ? !!area->InSyscallCallback : 0;
++        int entered = 0;
++
++        if (NT_SUCCESS(status) && is_cur) entered = enter_syscall_callback() ? 1 : 0;
++        ios_map_gate_probe( "NtMapViewOfSectionEx", handle, process, status,
++                            NT_SUCCESS(status) ? *addr_ptr : NULL,
++                            NT_SUCCESS(status) ? *size_ptr : 0,
++                            is_cur, area, insc_before, entered );
++        if (entered)
++        {
++            notify_map_view_of_section( handle, *addr_ptr, *size_ptr, alloc_type, protect, &status );
++            leave_syscall_callback();
++        }
+     }
+     return status;
+ }

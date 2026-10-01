@@ -1,0 +1,2376 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 29 Aug 2026 01:30:26 -0700
+Subject: [PATCH] Route winemetal to a remote Metal daemon behind a runtime
+ flag
+
+The device this runs on has no usable GPU feature set: it reports no Metal
+family at all and no BC support, so texture formats are remapped and shaders
+are compiled for a machine that will not execute them. This routes the
+winemetal unixcall surface to a Metal daemon on another host instead, decided
+once per process and off unless configured.
+
+Which calls travel, and which deliberately do not:
+
+- Descriptors cross VERBATIM as their WMT*Info structs. Copying them field by
+  field into a parallel schema is what let an earlier pipeline path become a
+  toy: eight colour attachments, blend factors, write masks, topology and
+  tessellation simply were not carried, and nothing said so.
+- Buffers keep the CALLER'S memory as their storage. A caller-supplied
+  memory.ptr is what the ring allocator writes argument data through;
+  substituting an allocation meant the app wrote one block while the flush
+  uploaded another, so shaders read zero addresses and every draw produced
+  nothing while the clear still landed.
+- Shader bytes cross, containers do not. DispatchData, the on-disk cache,
+  autorelease pools, event listeners and strings are guest-local by design;
+  routing them put untagged guest pointers on the wire.
+- Calls whose iOS implementation is a no-op that WRITES ITS OUTPUTS stay
+  local. Guarding them was worse than running them: the guard returns without
+  touching outputs that are not named `ret`, and one of those is queried once
+  per frame, so a display version read from uninitialised stack made the
+  renderer reconfigure presentation several times a second.
+
+Handles carry a tag. A local pointer reaching the wire, or a host id reaching
+a local call, is then a named error at the point of misuse rather than a
+subtly wrong frame on another machine. Lifetime calls dispatch on that tag,
+because guest-local objects legitimately exist in this mode.
+
+The guard table is GENERATED, not hand-written. ntdll indexes the dispatch
+table directly, so there is no central hook and the guard has to be the table
+entry; the slot number is the ABI, and one inserted line would send every
+later call to the wrong function.
+
+Unrouted calls fail by name. Discovering the surface by running is what
+worked: a local census of a rendering client showed 62 of 127 entries in use,
+against a much larger guess.
+
+Madeira-commit: 40b84f81a3eeb42abcaec38c4df4b7d1099a0212
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/gen_api_names.py         |  12 +-
+ src/winemetal/gen_remote_guard.py      | 176 ++++++
+ src/winemetal/unix/winemetal_unix.c    | 729 +++++++++++++++++++++----
+ src/winemetal/unix/wmt_remote_client.h | 409 ++++++++++++++
+ src/winemetal/unix/wmt_remote_guard.h  | 356 ++++++++++++
+ src/winemetal/unix/wmt_remote_pack.h   |   2 +-
+ src/winemetal/wmt_api_census.c         |  58 +-
+ src/winemetal/wmt_api_names.h          |  15 +-
+ 8 files changed, 1647 insertions(+), 110 deletions(-)
+ create mode 100644 src/winemetal/gen_remote_guard.py
+ create mode 100644 src/winemetal/unix/wmt_remote_client.h
+ create mode 100644 src/winemetal/unix/wmt_remote_guard.h
+
+diff --git a/src/winemetal/gen_api_names.py b/src/winemetal/gen_api_names.py
+index 12f1d1f..67c9b9e 100644
+--- a/src/winemetal/gen_api_names.py
++++ b/src/winemetal/gen_api_names.py
+@@ -13,7 +13,17 @@ text = open(src).read()
+ m = re.search(r'const void \*__wine_unix_call_funcs\[\] = \{(.*?)\n\};', text, re.S)
+ if not m:
+     sys.exit("dispatch table not found in %s" % src)
+-names = re.findall(r'&_([A-Za-z0-9_]+)', m.group(1))
++# EVERY slot, in order, whatever its shape. Matching only `&_Name` silently
++# dropped 12 thunk_SM50* entries and a NULL at slots 74+, which does not shorten
++# the table -- it SHIFTS every name after that point onto the wrong slot. A
++# census that misnames what it counts is worse than no census.
++raw = re.findall(r'^\s*(&?[A-Za-z0-9_]+|NULL)\s*,', m.group(1), re.M)
++names = []
++for e in raw:
++    if e == 'NULL':
++        names.append('<null slot>')
++    else:
++        names.append(e.lstrip('&').lstrip('_'))
+ 
+ out = os.path.join(os.path.dirname(__file__), 'wmt_api_names.h')
+ with open(out, 'w') as f:
+diff --git a/src/winemetal/gen_remote_guard.py b/src/winemetal/gen_remote_guard.py
+new file mode 100644
+index 0000000..6549a99
+--- /dev/null
++++ b/src/winemetal/gen_remote_guard.py
+@@ -0,0 +1,176 @@
++#!/usr/bin/env python3
++"""Generate unix/wmt_remote_guard.h from the unix dispatch table.
++
++ntdll indexes __wine_unix_call_funcs[] directly, so there is no central
++dispatch function to hook: in remote mode the guard has to BE the table entry.
++Every handler not yet routed to the host fails BY NAME rather than running its
++local ObjC body on a handle owned by another address space -- that derefs a
++host pointer and dies as a wrong-looking frame instead of an error.
++
++Generating this rather than hand-writing it keeps the table's ORDER intact.
++The slot number is the ABI: a single inserted or dropped line silently sends
++every later call to the wrong function.
++"""
++import re, os, sys
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++SRC = os.path.join(HERE, 'unix', 'winemetal_unix.c')
++THUNKS = os.path.join(HERE, 'winemetal_thunks.h')
++
++
++def ret_fields():
++    """Map each unixcall params struct to its OUTPUT members.
++
++    An unrouted call must not leave its output untouched. Returning
++    NOT_IMPLEMENTED while the caller's `ret` still held uninitialised stack gave
++    DXMT a non-zero garbage handle (0x1002a), which sailed through its own
++    `cbz` null check and faulted on the store that followed. A clean NULL turns
++    that into the graceful failure the null check was written for.
++    """
++    text = open(THUNKS).read()
++    out = {}
++    for m in re.finditer(r'struct\s+(unixcall_[A-Za-z0-9_]+)\s*\{(.*?)\}\s*;', text, re.S):
++        members = re.findall(r'^\s*[A-Za-z_][A-Za-z0-9_ *]*?\**\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*;',
++                             m.group(2), re.M)
++        outs = [x for x in members if x == 'ret' or x.startswith('ret_')]
++        if outs:
++            out[m.group(1)] = outs
++    return out
++
++# Handlers with a remote implementation. Anything absent here fails by name.
++ROUTED = {
++    '_NSObject_retain', '_NSObject_release', '_NSArray_object', '_NSArray_count',
++    '_MTLCopyAllDevices', '_MTLDevice_newCommandQueue',
++    # capability group -- these gate shader and format selection downstream
++    '_MTLDevice_registryID', '_MTLDevice_hasUnifiedMemory',
++    '_MTLDevice_recommendedMaxWorkingSetSize', '_MTLDevice_currentAllocatedSize',
++    '_MTLDevice_supportsBCTextureCompression', '_MTLDevice_supportsFamily',
++    '_WMTGetOSVersion', '_MTLDevice_name',
++    '_MTLDevice_setShouldMaximizeConcurrentCompilation',
++    # shader path: metallib BYTES cross, the DispatchData container does not
++    '_MTLDevice_newLibrary', '_MTLLibrary_newFunction',
++    '_MTLLibrary_newFunctionWithConstants',
++    # descriptors travel verbatim; the host builds the real Metal objects
++    '_MTLDevice_newRenderPipelineState', '_MTLDevice_newComputePipelineState',
++    '_MTLDevice_newDepthStencilState', '_MTLDevice_newSamplerState',
++    # resources and sync
++    '_MTLDevice_newBuffer', '_MTLBuffer_updateContents', '_MTLDevice_newSharedEvent',
++    # presentation seam: the HWND stays guest-local, the host layer crosses
++    '_CreateMetalViewFromHWND', '_ReleaseMetalView',
++    '_MetalLayer_nextDrawable', '_MetalDrawable_texture',
++    # frame path: persistent command buffer and encoder, packed batches replayed
++    '_MTLCommandQueue_commandBuffer', '_MTLCommandBuffer_renderCommandEncoder',
++    '_MTLRenderCommandEncoder_encodeCommands', '_MTLCommandEncoder_endEncoding',
++    '_MTLCommandBuffer_commit', '_MTLCommandBuffer_waitUntilCompleted',
++    '_MTLCommandBuffer_status', '_MTLCommandBuffer_presentDrawable',
++    '_MTLCommandBuffer_encodeSignalEvent', '_MTLCommandBuffer_encodeWaitForEvent',
++    '_MTLSharedEvent_signaledValue', '_MTLTexture_width', '_MTLTexture_height',
++    # textures: without these a pass has colour but no depth while the pipeline
++    # declares one, and building the encoder aborts inside Metal's compiler
++    '_MTLDevice_newTexture', '_MTLTexture_replaceRegion', '_MTLTexture_newTextureView',
++    # layer properties: the guest's requested drawable size must reach the host
++    '_MetalLayer_setProps', '_MetalLayer_getProps',
++}
++
++# Deliberately NOT guarded -- these belong on whichever machine runs the guest.
++#
++# airconv's DXBC->AIR compiler (thunk_SM50*): CPU-only, takes and returns plain
++# memory, touches no Metal object. Its output reaches the host as BYTES when a
++# library is created, which is also why the shader cache stays here.
++#   KNOWN GAP: compilation is targeted at the LOCAL device's feature set. On the
++#   VM that device reports no GPU family at all and falls back to the Apple7
++#   table (ml752), while the remote host is Apple9. Host capability reporting has
++#   to drive that selection before shaders are routed.
++#
++# The object families below are guest-local BY DESIGN, and routing them was what
++# put untagged pointers on the wire:
++#   CacheReader/CacheWriter  - the on-disk (SQLite) shader cache, guest storage
++#   DispatchData             - a byte container; the bytes get copied into the
++#                              RPC, so the container itself must never travel
++#   NSAutoreleasePool        - an ObjC scope on the calling thread
++#   SharedEventListener      - dispatches callbacks onto guest threads
++#   NSString                 - guest-side string storage
++#
++# Also local: calls whose iOS implementation is a safe no-op that WRITES ITS
++# OUTPUTS. Guarding them was worse than running them -- the guard returns
++# without touching the output fields, and these have outputs that are not named
++# `ret`, so the caller read uninitialised stack. WMTQueryDisplaySettingForLayer
++# is called ONCE PER FRAME and yields `version`, `colorspace` and `edr_value`;
++# a version that changes at random makes DXMT reconfigure presentation
++# repeatedly. Their layer dereferences are all inside `#if !TARGET_OS_IOS`, so
++# running them locally never touches a host handle.
++LOCAL_OK = re.compile(r'^(thunk_SM50|CacheReader_|CacheWriter_|DispatchData_|'
++                      r'NSAutoreleasePool_|SharedEventListener_|NSString_|'
++                      r'WMTSetMetalShaderCachePath|WMTQueryDisplaySettingForLayer|'
++                      r'MetalLayer_getEDRValue|DeveloperHUDProperties_)')
++
++def main():
++    text = open(SRC).read()
++    rets = ret_fields()
++    # struct used by each handler, read from its own body
++    bodies = dict(re.findall(r'^(_[A-Za-z0-9_]+)\(void \*obj\) \{\s*\n\s*struct (unixcall_[A-Za-z0-9_]+) \*params = obj;',
++                             text, re.M))
++    m = re.search(r'const void \*__wine_unix_call_funcs\[\] = \{(.*?)\n\};', text, re.S)
++    if not m:
++        sys.exit('dispatch table not found in %s' % SRC)
++    raw = re.findall(r'^\s*(&?[A-Za-z0-9_]+|NULL)\s*,', m.group(1), re.M)
++
++    out, n, guarded = [], 0, set()
++    for e in raw:
++        if e == 'NULL' or not e.startswith('&'):
++            continue
++        name = e.lstrip('&')
++        if name.startswith('_rmg'):
++            name = '_' + name[len('_rmg_'):]
++        if name in ROUTED or LOCAL_OK.match(name.lstrip('_')):
++            continue
++        # A declaration is enough to take the address; several handlers are
++        # defined in another translation unit and only declared here.
++        if not re.search(r'^\s*(static\s+)?(NTSTATUS\s+)?%s\(' % re.escape(name), text, re.M):
++            sys.exit('unresolvable handler: %s' % name)
++        st = bodies.get(name)
++        zero = rets.get(st, []) if st else []
++        body = ['static NTSTATUS _rmg%s(void *obj) {' % name,
++                '  if (wmtr_enabled()) {']
++        if zero:
++            body.append('    struct %s *p = obj;' % st)
++            for f in zero:
++                body.append('    p->%s = 0;   /* never hand back uninitialised stack */' % f)
++        body += ['    return wmtr_unimplemented("%s");' % name[1:],
++                 '  }',
++                 '  return %s(obj);' % name, '}']
++        out += body
++        guarded.add(name)
++        n += 1
++
++    # Rewrite the table entries too. Emitting guards without owning the table
++    # let the two drift: names that became local kept pointing at wrappers that
++    # were no longer generated. The generator owns both or neither.
++    def fix_table(m):
++        body = m.group(1)
++        def one(mm):
++            lead, name = mm.group(1), mm.group(2)
++            base = '_' + name[len('_rmg_'):] if name.startswith('_rmg_') else name
++            want = '_rmg' + base if base in guarded else base
++            return '%s&%s,' % (lead, want)
++        return m.group(0)[:m.start(1)-m.start(0)] + \
++               re.sub(r'^(\s*)&(_[A-Za-z0-9_]+),\s*$', one, body, flags=re.M) + \
++               m.group(0)[m.end(1)-m.start(0):]
++
++    text2 = re.sub(r'const void \*__wine_unix_call_funcs\[\] = \{(.*?)\n\};',
++                   fix_table, text, flags=re.S)
++    text2 = re.sub(r'const void \*__wine_unix_call_wow64_funcs\[\] = \{(.*?)\n\};',
++                   fix_table, text2, flags=re.S)
++    if text2 != text:
++        open(SRC, 'w').write(text2)
++
++    dst = os.path.join(HERE, 'unix', 'wmt_remote_guard.h')
++    with open(dst, 'w') as f:
++        f.write('/* GENERATED by gen_remote_guard.py from the unix dispatch table.\n'
++                ' * Regenerate whenever __wine_unix_call_funcs[] or the routed set changes.\n'
++                ' * Do not hand-edit. */\n\n')
++        f.write('\n'.join(out) + '\n')
++    print('wrote %s with %d guards (%d routed, SM50 thunks intentionally local)'
++          % (os.path.relpath(dst, HERE), n, len(ROUTED)))
++
++main()
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 29def03..9229df8 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -45,6 +45,12 @@ static _Atomic uint64_t g_madeira_draw_calls_at_last_log;
+ typedef int NTSTATUS;
+ #define STATUS_SUCCESS 0
+ #define STATUS_UNSUCCESSFUL 0xC0000001
++#define STATUS_NOT_IMPLEMENTED 0xC0000002
++
++/* ml762: remote backend. Included after the NTSTATUS/STATUS_* defines it uses
++ * and before the first routed handler; the packer's include sits much further
++ * down, past every handler this routes. */
++#include "wmt_remote_client.h"
+ 
+ void
+ execute_on_main(dispatch_block_t block) {
+@@ -57,12 +63,27 @@ execute_on_main(dispatch_block_t block) {
+ 
+ static NTSTATUS
+ _NSObject_retain(NSObject **obj) {
++  /* Dispatch by TAG, not by mode. Guest-local objects legitimately exist in
++   * remote mode; only a tagged handle names something on the host. */
++  if (wmtr_enabled() && RM_IS_REMOTE((uint64_t)(uintptr_t)*obj)) {
++    struct rm_arg_handle a = { (uint64_t)(uintptr_t)*obj };
++    struct rm_ret_handle r;
++    /* The host returns the SAME handle; identity must not change under retain. */
++    wmtr_call(RM_OP_RETAIN, &a, sizeof a, &r, sizeof r, 0);
++    return STATUS_SUCCESS;
++  }
+   [*obj retain];
+   return STATUS_SUCCESS;
+ }
+ 
+ static NTSTATUS
+ _NSObject_release(NSObject **obj) {
++  if (wmtr_enabled() && RM_IS_REMOTE((uint64_t)(uintptr_t)*obj)) {
++    struct rm_arg_handle a = { (uint64_t)(uintptr_t)*obj };
++    wmtr_buf_remove(a.handle);   /* no-op unless it was a registered buffer */
++    wmtr_call(RM_OP_RELEASE, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   [*obj release];
+   return STATUS_SUCCESS;
+ }
+@@ -70,6 +91,12 @@ _NSObject_release(NSObject **obj) {
+ static NTSTATUS
+ _NSArray_object(void *obj) {
+   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle_u64 a = { params->handle, params->arg };
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_ARRAY_OBJECT, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(NSArray *)params->handle objectAtIndex:params->arg];
+   return STATUS_SUCCESS;
+ }
+@@ -77,6 +104,12 @@ _NSArray_object(void *obj) {
+ static NTSTATUS
+ _NSArray_count(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_ARRAY_COUNT, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(NSArray *)params->handle count];
+   return STATUS_SUCCESS;
+ }
+@@ -84,6 +117,11 @@ _NSArray_count(void *obj) {
+ static NTSTATUS
+ _MTLCopyAllDevices(void *obj) {
+   struct unixcall_generic_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_COPY_ALL_DEVICES, 0, 0, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)MTLCopyAllDevices();
+   return STATUS_SUCCESS;
+ }
+@@ -91,6 +129,12 @@ _MTLCopyAllDevices(void *obj) {
+ static NTSTATUS
+ _MTLDevice_recommendedMaxWorkingSetSize(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_DEVICE_MAX_WORKING_SET, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLDevice>)params->handle recommendedMaxWorkingSetSize];
+   return STATUS_SUCCESS;
+ }
+@@ -98,6 +142,12 @@ _MTLDevice_recommendedMaxWorkingSetSize(void *obj) {
+ static NTSTATUS
+ _MTLDevice_currentAllocatedSize(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_ALLOCATED_SIZE, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLDevice>)params->handle currentAllocatedSize];
+   return STATUS_SUCCESS;
+ }
+@@ -105,6 +155,18 @@ _MTLDevice_currentAllocatedSize(void *obj) {
+ static NTSTATUS
+ _MTLDevice_name(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    char buf[256]; uint32_t got = 0;
++    if (wmtr_call(RM_OP_DEVICE_NAME, &a, sizeof a, buf, sizeof buf - 1, &got) == RM_OK) {
++      if (got >= sizeof buf) got = sizeof buf - 1;
++      buf[got] = 0;
++      params->ret = (obj_handle_t)[[NSString alloc] initWithUTF8String:buf];
++    } else {
++      params->ret = (obj_handle_t)[[NSString alloc] initWithUTF8String:"remote device"];
++    }
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle name];
+   return STATUS_SUCCESS;
+ }
+@@ -121,6 +183,12 @@ _NSString_getCString(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newCommandQueue(void *obj) {
+   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle_u64 a = { params->handle, params->arg };
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_NEW_COMMAND_QUEUE, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle newCommandQueueWithMaxCommandBufferCount:params->arg];
+   return STATUS_SUCCESS;
+ }
+@@ -135,6 +203,12 @@ _NSAutoreleasePool_alloc_init(void *obj) {
+ static NTSTATUS
+ _MTLCommandQueue_commandBuffer(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_COMMAND_BUFFER, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(id<MTLCommandQueue>)params->handle commandBuffer];
+   return STATUS_SUCCESS;
+ }
+@@ -142,6 +216,15 @@ _MTLCommandQueue_commandBuffer(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_commit(void *obj) {
+   struct unixcall_generic_obj_noret *params = obj;
++  if (wmtr_enabled()) {
++    /* Push guest shadows BEFORE the GPU reads them. The app writes into buffer
++     * contents with no call of its own, so this is the last point at which the
++     * host copy can be made to match. */
++    wmtr_flush_buffers();
++    struct rm_arg_handle a = { params->handle };
++    wmtr_call(RM_OP_COMMIT, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   [(id<MTLCommandBuffer>)params->handle commit];
+   return STATUS_SUCCESS;
+ }
+@@ -149,6 +232,11 @@ _MTLCommandBuffer_commit(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_waitUntilCompleted(void *obj) {
+   struct unixcall_generic_obj_noret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    wmtr_call(RM_OP_WAIT_COMPLETED, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   [(id<MTLCommandBuffer>)params->handle waitUntilCompleted];
+   return STATUS_SUCCESS;
+ }
+@@ -156,6 +244,12 @@ _MTLCommandBuffer_waitUntilCompleted(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_status(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_CMDBUF_STATUS, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLCommandBuffer>)params->handle status];
+   return STATUS_SUCCESS;
+ }
+@@ -163,6 +257,12 @@ _MTLCommandBuffer_status(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newSharedEvent(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_NEW_SHARED_EVENT, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(id<MTLDevice>)params->handle newSharedEvent];
+   return STATUS_SUCCESS;
+ }
+@@ -170,6 +270,12 @@ _MTLDevice_newSharedEvent(void *obj) {
+ static NTSTATUS
+ _MTLSharedEvent_signaledValue(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_SHARED_EVENT_VALUE, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLSharedEvent>)params->handle signaledValue];
+   return STATUS_SUCCESS;
+ }
+@@ -177,6 +283,11 @@ _MTLSharedEvent_signaledValue(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_encodeSignalEvent(void *obj) {
+   struct unixcall_generic_obj_obj_uint64_noret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_encode_sig a = { params->handle, params->arg0, params->arg1 };
++    wmtr_call(RM_OP_ENCODE_SIGNAL, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   [(id<MTLCommandBuffer>)params->handle encodeSignalEvent:(id<MTLSharedEvent>)params->arg0 value:params->arg1];
+   return STATUS_SUCCESS;
+ }
+@@ -184,6 +295,45 @@ _MTLCommandBuffer_encodeSignalEvent(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newBuffer(void *obj) {
+   struct unixcall_mtldevice_newbuffer *params = obj;
++  if (wmtr_enabled()) {
++    struct WMTBufferInfo *bi = params->info.ptr;
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTBufferInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof *bi; w->extra_count = 0;
++    memcpy(buf + sizeof *w, bi, sizeof *bi);
++    struct rm_ret_handle_u64 r;
++    params->ret = 0;
++    if (wmtr_call(RM_OP_NEW_BUFFER_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK && r.handle) {
++      params->ret = r.handle;
++      bi->gpu_address = r.value;
++      /* Private buffers are never touched by the CPU, so they need no shadow. */
++      int cpu = ((bi->options & 0x30) != WMTResourceStorageModePrivate);
++      /* CRITICAL: if the caller supplied memory, that IS the buffer's storage
++       * and must be preserved. The local path passes it to
++       * newBufferWithBytesNoCopy; DXMT's ring allocator hands in
++       * block.mapped_address and then keeps writing argument-buffer contents
++       * and GPU addresses through that same pointer. Substituting our own
++       * allocation here meant the app wrote one block while the flush uploaded
++       * another, so the shaders read zeros -- draws executed and produced
++       * nothing, which is exactly the flat clear with no geometry. */
++      void *shadow = bi->memory.ptr;
++      int owned = 0;
++      if (cpu && !shadow) {
++        shadow = calloc(1, bi->length ? bi->length : 1);
++        owned = 1;
++        if (!shadow)
++          fprintf(stderr, "[wmt-remote] no shadow for a %llu byte buffer -- its writes "
++                          "will NOT reach the host\n", (unsigned long long)bi->length);
++        bi->memory.ptr = shadow;   /* only when the caller supplied none */
++      }
++      wmtr_buf_add(r.handle, shadow, bi->length, bi->options,
++                   cpu && shadow != NULL, owned);
++    } else {
++      bi->memory.ptr = NULL;
++      bi->gpu_address = 0;
++    }
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTBufferInfo *info = params->info.ptr;
+   id<MTLBuffer> buffer;
+@@ -204,6 +354,20 @@ _MTLDevice_newBuffer(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newSamplerState(void *obj) {
+   struct unixcall_mtldevice_newsamplerstate *params = obj;
++  if (wmtr_enabled()) {
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTSamplerInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof(struct WMTSamplerInfo); w->extra_count = 0;
++    memcpy(buf + sizeof *w, params->info.ptr, sizeof(struct WMTSamplerInfo));
++    struct rm_ret_handle_u64 r;
++    if (wmtr_call(RM_OP_NEW_SAMPLER_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) {
++      params->ret = r.handle;
++      ((struct WMTSamplerInfo *)params->info.ptr)->gpu_resource_id = r.value;
++    } else {
++      params->ret = 0;
++    }
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTSamplerInfo *info = params->info.ptr;
+ 
+@@ -233,6 +397,15 @@ _MTLDevice_newSamplerState(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newDepthStencilState(void *obj) {
+   struct unixcall_mtldevice_newdepthstencilstate *params = obj;
++  if (wmtr_enabled()) {
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTDepthStencilInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof(struct WMTDepthStencilInfo); w->extra_count = 0;
++    memcpy(buf + sizeof *w, params->info.ptr, sizeof(struct WMTDepthStencilInfo));
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_NEW_DSS_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   const struct WMTDepthStencilInfo *info = params->info.ptr;
+ 
+@@ -309,6 +482,13 @@ static int g_bc_supported_cached = -1;
+ static bool query_bc_support(void) {
+   if (__builtin_expect(g_bc_supported_cached >= 0, 1))
+     return g_bc_supported_cached != 0;
++  /* In remote mode this must describe the HOST gpu. The local probe below
++   * creates an MTLDevice directly -- which both answers for the wrong machine
++   * and creates a local Metal object in a mode that is supposed to have none. */
++  if (wmtr_enabled()) {
++    g_bc_supported_cached = wmtr_host_bc();
++    return g_bc_supported_cached != 0;
++  }
+   bool supported = false;
+   @autoreleasepool {
+     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+@@ -465,6 +645,25 @@ extract_texture_descriptor(id<MTLTexture> desc, struct WMTTextureInfo *info) {
+ static NTSTATUS
+ _MTLDevice_newTexture(void *obj) {
+   struct unixcall_mtldevice_newtexture *params = obj;
++  if (wmtr_enabled()) {
++    struct WMTTextureInfo *ti = params->info.ptr;
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTTextureInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof *ti; w->extra_count = 0;
++    memcpy(buf + sizeof *w, ti, sizeof *ti);
++    struct rm_ret_handle_u64 r;
++    if (wmtr_call(RM_OP_NEW_TEXTURE_FULL, buf, sizeof buf, &r, sizeof r, 0) == RM_OK && r.handle) {
++      params->ret = r.handle;
++      ti->gpu_resource_id = r.value;
++    } else {
++      params->ret = 0; ti->gpu_resource_id = 0;
++      fprintf(stderr, "[wmt-remote] host could not create a %ux%u texture (format %u)\n",
++              ti->width, ti->height, (unsigned)ti->pixel_format);
++    }
++    /* Mach-port texture sharing cannot work across machines. */
++    ti->mach_port = 0;
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTTextureInfo *info = params->info.ptr;
+   MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
+@@ -509,6 +708,17 @@ to_metal_swizzle(struct WMTTextureSwizzleChannels swizzle, enum WMTPixelFormat f
+ static NTSTATUS
+ _MTLTexture_newTextureView(void *obj) {
+   struct unixcall_mtltexture_newtextureview *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_tex_view a = { params->texture, (uint32_t)params->format,
++                             (uint32_t)params->texture_type,
++                             params->level_start, params->level_count,
++                             params->slice_start, params->slice_count, 0 };
++    struct rm_ret_handle_u64 r;
++    if (wmtr_call(RM_OP_NEW_TEXTURE_VIEW, &a, sizeof a, &r, sizeof r, 0) == RM_OK) {
++      params->ret = r.handle; params->gpu_resource_id = r.value;
++    } else { params->ret = 0; params->gpu_resource_id = 0; }
++    return STATUS_SUCCESS;
++  }
+   id<MTLTexture> texture = (id<MTLTexture>)params->texture;
+ 
+   id<MTLTexture> ret = [texture
+@@ -532,6 +742,38 @@ _MTLDevice_minimumLinearTextureAlignmentForPixelFormat(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newLibrary(void *obj) {
+   struct unixcall_mtldevice_newlibrary *params = obj;
++  if (wmtr_enabled()) {
++    /* DispatchData stays guest-local (it is a byte container, not an identity),
++     * so the metallib BYTES are what travel. dispatch_data_create_map hands us
++     * one contiguous view even when the data is a composite of regions. */
++    const void *bytes = NULL; size_t len = 0;
++    dispatch_data_t flat = dispatch_data_create_map((dispatch_data_t)params->data, &bytes, &len);
++    params->ret_error = 0;
++    params->ret_library = 0;
++    if (flat && bytes && len && len <= RM_CHUNK_BYTES) {
++      /* The host builds its OWN dispatch_data from these bytes, then the
++       * library from that. Two round trips for three libraries is nothing. */
++      uint8_t *msg = malloc(len);
++      if (msg) {
++        memcpy(msg, bytes, len);
++        struct rm_ret_handle rd_;
++        if (wmtr_call(RM_OP_DISPATCH_DATA, msg, (uint32_t)len, &rd_, sizeof rd_, 0) == RM_OK) {
++          struct rm_arg_handle_u64 a = { params->device, rd_.handle };
++          struct rm_ret_handle rl;
++          if (wmtr_call(RM_OP_NEW_LIBRARY_DATA, &a, sizeof a, &rl, sizeof rl, 0) == RM_OK)
++            params->ret_library = rl.handle;
++          struct rm_arg_handle da = { rd_.handle };   /* the library holds its own ref */
++          wmtr_call(RM_OP_RELEASE, &da, sizeof da, 0, 0, 0);
++        }
++        free(msg);
++      }
++    } else if (len > RM_CHUNK_BYTES) {
++      fprintf(stderr, "[wmt-remote] metallib is %zu bytes, over the %u cap -- not sent\n",
++              len, RM_CHUNK_BYTES);
++    }
++    if (flat) dispatch_release(flat);
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   NSError *err = NULL;
+   params->ret_library = (obj_handle_t)[device newLibraryWithData:(dispatch_data_t)params->data error:&err];
+@@ -542,6 +784,24 @@ _MTLDevice_newLibrary(void *obj) {
+ static NTSTATUS
+ _MTLLibrary_newFunction(void *obj) {
+   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    /* arg is a guest pointer to a C string; the NAME crosses, never the pointer. */
++    const char *nm = (const char *)params->arg;
++    size_t nlen = nm ? strlen(nm) : 0;
++    params->ret = 0;
++    if (nlen && nlen < 1024) {
++      uint8_t buf[sizeof(struct rm_arg_handle) + 1024];
++      struct rm_arg_handle *a = (void *)buf;
++      a->handle = params->handle;
++      memcpy(buf + sizeof *a, nm, nlen);
++      struct rm_ret_handle r;
++      if (wmtr_call(RM_OP_NEW_FUNCTION, buf, (uint32_t)(sizeof *a + nlen), &r, sizeof r, 0) == RM_OK)
++        params->ret = r.handle;
++      if (!params->ret)
++        fprintf(stderr, "[wmt-remote] newFunction(\"%s\") returned nothing\n", nm);
++    }
++    return STATUS_SUCCESS;
++  }
+   id<MTLLibrary> library = (id<MTLLibrary>)params->handle;
+   NSString *name = [[NSString alloc] initWithCString:(char *)params->arg encoding:NSUTF8StringEncoding];
+   params->ret = (obj_handle_t)[library newFunctionWithName:name];
+@@ -566,6 +826,16 @@ _NSObject_description(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newComputePipelineState(void *obj) {
+   struct unixcall_mtldevice_newcomputepso *params = obj;
++  if (wmtr_enabled()) {
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTComputePipelineInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof(struct WMTComputePipelineInfo); w->extra_count = 0;
++    memcpy(buf + sizeof *w, params->info.ptr, sizeof(struct WMTComputePipelineInfo));
++    struct rm_ret_handle r;
++    params->ret_error = 0;
++    params->ret_pso = (wmtr_call(RM_OP_NEW_COMPUTE_PSO_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   const struct WMTComputePipelineInfo *info = params->info.ptr;
+   MTLComputePipelineDescriptor *descriptor = [[MTLComputePipelineDescriptor alloc] init];
+@@ -612,6 +882,19 @@ static NTSTATUS
+ _MTLCommandBuffer_renderCommandEncoder(void *obj) {
+   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
+   struct WMTRenderPassInfo *info = (struct WMTRenderPassInfo *)params->arg;
++  if (wmtr_enabled()) {
++    /* The full pass: eight colour attachments with their own load/store
++     * actions, levels, slices and resolve targets, plus depth and stencil.
++     * The handles inside are already host handles, so they resolve there. */
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTRenderPassInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->handle; w->info_len = sizeof(struct WMTRenderPassInfo); w->extra_count = 0;
++    memcpy(buf + sizeof *w, info, sizeof(struct WMTRenderPassInfo));
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_RENDER_ENCODER, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    if (!params->ret) fprintf(stderr, "[wmt-remote] host refused a render encoder\n");
++    return STATUS_SUCCESS;
++  }
+   MTLRenderPassDescriptor *descriptor = [[MTLRenderPassDescriptor alloc] init];
+   for (unsigned i = 0; i < 8; i++) {
+     descriptor.colorAttachments[i].clearColor = MTLClearColorMake(
+@@ -670,6 +953,11 @@ _MTLCommandBuffer_renderCommandEncoder(void *obj) {
+ static NTSTATUS
+ _MTLCommandEncoder_endEncoding(void *obj) {
+   struct unixcall_generic_obj_noret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    wmtr_call(RM_OP_END_ENCODING, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   [(id<MTLCommandEncoder>)params->handle endEncoding];
+   return STATUS_SUCCESS;
+ }
+@@ -716,6 +1004,19 @@ MTLMeshRenderPipelineDescriptor ()
+ static NTSTATUS
+ _MTLDevice_newRenderPipelineState(void *obj) {
+   struct unixcall_mtldevice_newrenderpso *params = obj;
++  if (wmtr_enabled()) {
++    /* The WHOLE descriptor crosses: eight colour attachments, blend factors,
++     * write masks, depth/stencil formats, sample count, topology and
++     * tessellation. A hand-picked subset is how this became a toy before. */
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTRenderPipelineInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof(struct WMTRenderPipelineInfo); w->extra_count = 0;
++    memcpy(buf + sizeof *w, params->info.ptr, sizeof(struct WMTRenderPipelineInfo));
++    struct rm_ret_handle r;
++    params->ret_error = 0;
++    params->ret_pso = (wmtr_call(RM_OP_NEW_RENDER_PSO_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
+   const struct WMTRenderPipelineInfo *info = params->info.ptr;
+   MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
+ 
+@@ -1277,6 +1578,56 @@ static NTSTATUS
+ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
++  if (wmtr_enabled()) {
++    /* Pack with the SAME packer the wire tests exercise: a second walker here
++     * would prove nothing about either. The batch replays into the existing
++     * encoder, so Metal state survives across the dozen batches a frame sends. */
++    /* Allocated on FIRST USE per thread, not as static thread-local storage.
++     * As _Thread_local these two arrays were 1.1MB of TLS in EVERY thread the
++     * process creates -- wine and FEX make many, none of which encode -- and
++     * the run that introduced them died with a guest allocation returning NULL
++     * and DXMT zeroing a structure through it. Only encoding threads pay now. */
++    static _Thread_local uint8_t *rec, *side;
++    if (!rec) {
++      rec = malloc(WMTW_MAX_BATCH_BYTES);
++      side = malloc(WMTW_MAX_SIDECAR_BYTES);
++      if (!rec || !side) {
++        free(rec); free(side); rec = side = NULL;
++        static unsigned once;
++        if (!once++) fprintf(stderr, "[wmt-remote] no packing buffers -- batches dropped\n");
++        return STATUS_SUCCESS;
++      }
++    }
++    struct wmtw_packer pk = { rec, WMTW_MAX_BATCH_BYTES, 0, side, WMTW_MAX_SIDECAR_BYTES, 0, 0 };
++    struct wmtw_pack_result pr;
++    if (wmtw_pack_render(next, &pk, &pr) != WMTW_PACK_OK) {
++      static unsigned reported;
++      if (reported++ < 8)
++        fprintf(stderr, "[wmt-remote] pack failed: %s at record %u (opcode %u)\n",
++                wmtw_pack_strerror(pr.status), pr.record_index, pr.opcode);
++      return STATUS_SUCCESS;
++    }
++    uint32_t total = (uint32_t)(sizeof(struct rm_arg_handle) + sizeof(struct wmtw_batch)
++                                + pk.rec_len + pk.side_len);
++    uint8_t *msg = malloc(total);
++    if (msg) {
++      struct rm_arg_handle *a = (void *)msg;
++      a->handle = params->encoder;
++      struct wmtw_batch *b = (void *)(msg + sizeof *a);
++      b->magic = WMTW_BATCH_MAGIC; b->version = WMTW_VERSION; b->encoder_kind = 0;
++      b->record_bytes = pk.rec_len; b->record_count = pk.count;
++      b->sidecar_bytes = pk.side_len; b->reserved = 0;
++      memcpy((uint8_t *)(b + 1), rec, pk.rec_len);
++      memcpy((uint8_t *)(b + 1) + pk.rec_len, side, pk.side_len);
++      struct rm_ret_u64 rr;
++      if (wmtr_call(RM_OP_ENCODE_INTO, msg, total, &rr, sizeof rr, 0) != RM_OK) {
++        static unsigned bad;
++        if (bad++ < 8) fprintf(stderr, "[wmt-remote] host rejected a packed batch\n");
++      }
++      free(msg);
++    }
++    return STATUS_SUCCESS;
++  }
+   /* Shadow BEFORE census: the census report is emitted from inside
+    * wmt_census_batch, so with the old order it had counted the current batch
+    * while shadow had not, and the two totals differed by exactly one batch
+@@ -1649,6 +2000,10 @@ _MTLTexture_pixelFormat(void *obj) {
+ static NTSTATUS
+ _MTLTexture_width(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    params->ret = wmtr_tex_dim(params->handle, 'w');
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLTexture>)params->handle width];
+   return STATUS_SUCCESS;
+ }
+@@ -1656,6 +2011,10 @@ _MTLTexture_width(void *obj) {
+ static NTSTATUS
+ _MTLTexture_height(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    params->ret = wmtr_tex_dim(params->handle, 'h');
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLTexture>)params->handle height];
+   return STATUS_SUCCESS;
+ }
+@@ -1684,6 +2043,30 @@ _MTLTexture_mipmapLevelCount(void *obj) {
+ static NTSTATUS
+ _MTLTexture_replaceRegion(void *obj) {
+   struct unixcall_mtltexture_replaceregion *params = obj;
++  if (wmtr_enabled()) {
++    uint64_t rows = params->size.height ? params->size.height : 1;
++    uint64_t depth = params->size.depth ? params->size.depth : 1;
++    uint64_t bytes = params->bytes_per_row * rows * depth;
++    if (bytes && bytes <= RM_CHUNK_BYTES - sizeof(struct rm_tex_replace) && params->data.ptr) {
++      uint8_t *msg = malloc(sizeof(struct rm_tex_replace) + bytes);
++      if (msg) {
++        struct rm_tex_replace *a = (void *)msg;
++        a->texture = params->texture;
++        a->x = params->origin.x; a->y = params->origin.y; a->z = params->origin.z;
++        a->w = params->size.width; a->h = params->size.height; a->d = params->size.depth;
++        a->level = (uint32_t)params->level; a->slice = (uint32_t)params->slice;
++        a->bytes_per_row = (uint32_t)params->bytes_per_row;
++        a->bytes_per_image = (uint32_t)params->bytes_per_image;
++        memcpy(msg + sizeof *a, params->data.ptr, bytes);
++        wmtr_call(RM_OP_TEXTURE_REPLACE, msg, (uint32_t)(sizeof *a + bytes), 0, 0, 0);
++        free(msg);
++      }
++    } else if (bytes > RM_CHUNK_BYTES - sizeof(struct rm_tex_replace)) {
++      fprintf(stderr, "[wmt-remote] texture upload of %llu bytes exceeds the message cap"
++                      " -- NOT sent\n", (unsigned long long)bytes);
++    }
++    return STATUS_SUCCESS;
++  }
+   id<MTLTexture> tex = (id<MTLTexture>)params->texture;
+   /* iOS-Madeira: skip BC-pitch uploads to remapped RGBA8 textures. */
+   if (!texture_upload_pitch_ok(tex, params->size.width, params->bytes_per_row))
+@@ -1812,6 +2195,13 @@ int madeira_get_vsync_locked(void) { return g_madeira_vsync_mode; }
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;
++  if (wmtr_enabled()) {
++    /* Presenting hands the drawable back to the host layer; without this the
++     * pool leaks one a frame and acquisition eventually blocks forever. */
++    struct rm_present a = { params->handle, params->arg };
++    wmtr_call(RM_OP_PRESENT_DRAWABLE, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   int mode = g_madeira_vsync_mode;
+   if (mode == 1) {
+     madeira_log_present_cadence("presentDrawable60", 0.0);
+@@ -1841,6 +2231,12 @@ _MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj) {
+ static NTSTATUS
+ _MTLDevice_supportsFamily(void *obj) {
+   struct unixcall_generic_obj_uint64_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle_u64 a = { params->handle, params->arg };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_SUPPORTS_FAMILY, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLDevice>)params->handle supportsFamily:(MTLGPUFamily)params->arg];
+   return STATUS_SUCCESS;
+ }
+@@ -1848,6 +2244,12 @@ _MTLDevice_supportsFamily(void *obj) {
+ static NTSTATUS
+ _MTLDevice_supportsBCTextureCompression(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_SUPPORTS_BC, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLDevice>)params->handle supportsBCTextureCompression];
+   return STATUS_SUCCESS;
+ }
+@@ -1862,6 +2264,12 @@ _MTLDevice_supportsTextureSampleCount(void *obj) {
+ static NTSTATUS
+ _MTLDevice_hasUnifiedMemory(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_DEVICE_UNIFIED_MEM, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLDevice>)params->handle hasUnifiedMemory];
+   return STATUS_SUCCESS;
+ }
+@@ -2118,6 +2526,14 @@ _DeveloperHUDProperties_remove(void *obj) {
+ static NTSTATUS
+ _MetalDrawable_texture(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    /* Already known from the nextDrawable reply -- no round trip needed. */
++    params->ret = wmtr_pair_texture(params->handle);
++    if (!params->ret)
++      fprintf(stderr, "[wmt-remote] texture asked for an unknown drawable 0x%llx\n",
++              (unsigned long long)params->handle);
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(id<CAMetalDrawable>)params->handle texture];
+   return STATUS_SUCCESS;
+ }
+@@ -2125,6 +2541,22 @@ _MetalDrawable_texture(void *obj) {
+ static NTSTATUS
+ _MetalLayer_nextDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_ret_drawable r;
++    params->ret = 0;
++    if (wmtr_call(RM_OP_NEXT_DRAWABLE, 0, 0, &r, sizeof r, 0) == RM_OK && r.drawable) {
++      wmtr_pair_record(r.drawable, r.texture);
++      params->ret = r.drawable;
++    } else {
++      /* Silent before. A frame with no drawable is drawn nowhere and shows as
++       * a black flash, so it has to be counted rather than inferred. */
++      static unsigned long missed;
++      if (++missed <= 4 || (missed % 256) == 0)
++        fprintf(stderr, "[wmt-remote] no drawable from the host (%lu times) -- this frame "
++                        "will be blank\n", missed);
++    }
++    return STATUS_SUCCESS;
++  }
+   /* iOS-Madeira 2026-07-05 RAW mode (mode 2): the mailbox skip lives HERE,
+    * before any drawable is consumed. First attempt gated at the
+    * presentDrawable thunk — too late: every game frame had already
+@@ -2189,6 +2621,14 @@ _MTLDevice_supportsFXTemporalScaler(void *obj) {
+ static NTSTATUS
+ _MetalLayer_setProps(void *obj) {
+   struct unixcall_generic_obj_constptr_noret *params = obj;
++  if (wmtr_enabled()) {
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTLayerProps)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->handle; w->info_len = sizeof(struct WMTLayerProps); w->extra_count = 0;
++    memcpy(buf + sizeof *w, params->arg.ptr, sizeof(struct WMTLayerProps));
++    wmtr_call(RM_OP_LAYER_SET_PROPS, buf, sizeof buf, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   CAMetalLayer *layer = (CAMetalLayer *)params->handle;
+   const struct WMTLayerProps *props = params->arg.ptr;
+   execute_on_main(^{
+@@ -2208,6 +2648,17 @@ _MetalLayer_setProps(void *obj) {
+ static NTSTATUS
+ _MetalLayer_getProps(void *obj) {
+   struct unixcall_generic_obj_ptr_noret *params = obj;
++  if (wmtr_enabled()) {
++    struct WMTLayerProps got;
++    if (wmtr_call(RM_OP_LAYER_GET_PROPS, 0, 0, &got, sizeof got, 0) == RM_OK) {
++      /* The device stays the guest's own handle: the host's layer.device is a
++       * host object and returning it would put an untagged id in guest hands. */
++      obj_handle_t keep = ((struct WMTLayerProps *)params->arg.ptr)->device;
++      memcpy(params->arg.ptr, &got, sizeof got);
++      ((struct WMTLayerProps *)params->arg.ptr)->device = keep;
++    }
++    return STATUS_SUCCESS;
++  }
+   CAMetalLayer *layer = (CAMetalLayer *)params->handle;
+   struct WMTLayerProps *props = params->arg.ptr;
+   props->device = (obj_handle_t)layer.device;
+@@ -2256,6 +2707,21 @@ struct macdrv_functions_t {
+ static NTSTATUS
+ _CreateMetalViewFromHWND(void *obj) {
+   struct unixcall_create_metal_view_from_hwnd *params = obj;
++  if (wmtr_enabled()) {
++    /* The HWND names a window in the GUEST's windowing system and is not sent.
++     * The surface that gets presented is the host's own layer, which is what
++     * the guest actually needs in order to acquire drawables. */
++    struct rm_arg_handle a = { params->device };
++    struct rm_ret_view r;
++    if (wmtr_call(RM_OP_CREATE_VIEW, &a, sizeof a, &r, sizeof r, 0) == RM_OK) {
++      params->ret_view = r.view;
++      params->ret_layer = r.layer;
++    } else {
++      params->ret_view = 0; params->ret_layer = 0;
++      fprintf(stderr, "[wmt-remote] host refused to bind a view\n");
++    }
++    return STATUS_SUCCESS;
++  }
+ 
+   struct macdrv_win_data *(*pfn_get_win_data)(HWND hwnd) = NULL;
+   void (*pfn_release_win_data)(struct macdrv_win_data *data) = NULL;
+@@ -2293,6 +2759,11 @@ _CreateMetalViewFromHWND(void *obj) {
+ static NTSTATUS
+ _ReleaseMetalView(void *obj) {
+   struct unixcall_generic_obj_noret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    wmtr_call(RM_OP_RELEASE_VIEW, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+ 
+   void (*pfn_macdrv_view_release_metal_view)(macdrv_metal_view v) = NULL;
+ 
+@@ -2427,6 +2898,13 @@ _MTLCommandEncoder_setLabel(void *args) {
+ static NTSTATUS
+ _MTLDevice_setShouldMaximizeConcurrentCompilation(void *args) {
+   struct unixcall_generic_obj_uint64_noret *params = args;
++  /* Skipped on iOS below because the selector raises there -- but in remote
++   * mode the device lives on macOS, where it is both valid and useful. */
++  if (wmtr_enabled()) {
++    struct rm_arg_handle_u64 a = { params->handle, params->arg };
++    wmtr_call(RM_OP_DEVICE_SET_MAXCC, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+ #if !TARGET_OS_IOS
+   [(id<MTLDevice>)params->handle setShouldMaximizeConcurrentCompilation:(BOOL)params->arg];
+ #else
+@@ -3025,6 +3503,35 @@ _MetalLayer_getEDRValue(void *obj) {
+ static NTSTATUS
+ _MTLLibrary_newFunctionWithConstants(void *obj) {
+   struct unixcall_mtllibrary_newfunction_with_constants *params = obj;
++  if (wmtr_enabled()) {
++    /* Each constant's VALUE is inlined; the pointer inside WMTFunctionConstant
++     * is a guest address and cannot cross. */
++    const char *nm = (const char *)params->name.ptr;
++    size_t nlen = nm ? strlen(nm) : 0;
++    const struct WMTFunctionConstant *cs = params->constants.ptr;
++    uint8_t buf[4096];
++    struct rm_wmt_info *w = (void *)buf;
++    size_t off = sizeof *w;
++    params->ret = 0; params->ret_error = 0;
++    if (nlen && off + nlen < sizeof buf) {
++      memcpy(buf + off, nm, nlen); off += nlen;
++      w->owner = params->library; w->info_len = (uint32_t)nlen; w->extra_count = 0;
++      for (uint64_t k = 0; k < params->num_constants && cs; k++) {
++        uint32_t vlen = wmt_const_size(cs[k].type);
++        if (!vlen) { fprintf(stderr, "[wmt-remote] unknown function-constant type %u at index %u"
++                                     " -- not sent\n", (unsigned)cs[k].type, cs[k].index); continue; }
++        if (off + sizeof(struct rm_fn_const) + vlen > sizeof buf) break;
++        struct rm_fn_const fc = { (uint16_t)cs[k].type, cs[k].index, vlen };
++        memcpy(buf + off, &fc, sizeof fc); off += sizeof fc;
++        memcpy(buf + off, cs[k].data.ptr, vlen); off += vlen;
++        w->extra_count++;
++      }
++      struct rm_ret_handle r;
++      if (wmtr_call(RM_OP_NEW_FUNCTION_CONSTS, buf, (uint32_t)off, &r, sizeof r, 0) == RM_OK)
++        params->ret = r.handle;
++    }
++    return STATUS_SUCCESS;
++  }
+   id<MTLLibrary> library = (id<MTLLibrary>)params->library;
+   NSString *name = [[NSString alloc] initWithCString:(char *)params->name.ptr encoding:NSUTF8StringEncoding];
+   struct WMTFunctionConstant *constants = (struct WMTFunctionConstant *)params->constants.ptr;
+@@ -3111,6 +3618,11 @@ _WMTQueryDisplaySettingForLayer(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_encodeWaitForEvent(void *obj) {
+   struct unixcall_generic_obj_obj_uint64_noret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_encode_sig a = { params->handle, params->arg0, params->arg1 };
++    wmtr_call(RM_OP_ENCODE_WAIT, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   [(id<MTLCommandBuffer>)params->handle encodeWaitForEvent:(id<MTLSharedEvent>)params->arg0 value:params->arg1];
+   return STATUS_SUCCESS;
+ }
+@@ -3238,6 +3750,18 @@ _MTLDevice_newEvent(void *obj) {
+ static NTSTATUS
+ _MTLBuffer_updateContents(void *obj) {
+   struct unixcall_mtlbuffer_updatecontents *params = obj;
++  if (wmtr_enabled()) {
++    struct wmtr_buf *b = wmtr_buf_find(params->buffer);
++    if (b && b->shadow && params->offset + params->length <= b->length) {
++      memcpy((char *)b->shadow + params->offset, params->data.ptr, params->length);
++      wmtr_buf_upload(params->buffer, (const char *)b->shadow + params->offset,
++                      params->offset, params->length);
++    } else if (!b) {
++      fprintf(stderr, "[wmt-remote] updateContents on an unregistered buffer 0x%llx\n",
++              (unsigned long long)params->buffer);
++    }
++    return STATUS_SUCCESS;
++  }
+   memcpy((void *)((char *)[(id<MTLBuffer>)params->buffer contents] + params->offset), params->data.ptr, params->length);
+ #if !TARGET_OS_IOS
+   /* Managed storage mode doesn't exist on iOS (unified memory). */
+@@ -3250,6 +3774,15 @@ _MTLBuffer_updateContents(void *obj) {
+ static NTSTATUS
+ _WMTGetOSVersion(void *obj) {
+   struct unixcall_get_os_version *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_os_version v;
++    if (wmtr_call(RM_OP_OS_VERSION, 0, 0, &v, sizeof v, 0) == RM_OK) {
++      params->ret_major = v.major; params->ret_minor = v.minor; params->ret_patch = v.patch;
++    } else {
++      params->ret_major = params->ret_minor = params->ret_patch = 0;
++    }
++    return STATUS_SUCCESS;
++  }
+   NSOperatingSystemVersion version = [NSProcessInfo processInfo].operatingSystemVersion;
+   params->ret_major = version.majorVersion;
+   params->ret_minor = version.minorVersion;
+@@ -3405,6 +3938,12 @@ _MTLDevice_newSharedEventWithMachPort(void *obj) {
+ static NTSTATUS
+ _MTLDevice_registryID(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_DEVICE_REGISTRY_ID, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLDevice>)params->handle registryID];
+   return STATUS_SUCCESS;
+ }
+@@ -3772,6 +4311,8 @@ NTSTATUS _WMTSetMetalShaderCachePath(void *obj);
+ #define __wine_unix_call_funcs dxmt_winemetal_unix_call_funcs
+ #endif
+ 
++#include "wmt_remote_guard.h"
++
+ const void *__wine_unix_call_funcs[] = {
+     &_NSObject_retain,
+     &_NSObject_release,
+@@ -3795,44 +4336,44 @@ const void *__wine_unix_call_funcs[] = {
+     &_MTLDevice_newSamplerState,
+     &_MTLDevice_newDepthStencilState,
+     &_MTLDevice_newTexture,
+-    &_MTLBuffer_newTexture,
++    &_rmg_MTLBuffer_newTexture,
+     &_MTLTexture_newTextureView,
+-    &_MTLDevice_minimumLinearTextureAlignmentForPixelFormat,
++    &_rmg_MTLDevice_minimumLinearTextureAlignmentForPixelFormat,
+     &_MTLDevice_newLibrary,
+     &_MTLLibrary_newFunction,
+     &_NSString_lengthOfBytesUsingEncoding,
+-    &_NSObject_description,
++    &_rmg_NSObject_description,
+     &_MTLDevice_newComputePipelineState,
+-    &_MTLCommandBuffer_blitCommandEncoder,
+-    &_MTLCommandBuffer_computeCommandEncoder,
++    &_rmg_MTLCommandBuffer_blitCommandEncoder,
++    &_rmg_MTLCommandBuffer_computeCommandEncoder,
+     &_MTLCommandBuffer_renderCommandEncoder,
+     &_MTLCommandEncoder_endEncoding,
+     &_MTLDevice_newRenderPipelineState,
+-    &_MTLDevice_newMeshRenderPipelineState,
+-    &_MTLBlitCommandEncoder_encodeCommands,
+-    &_MTLComputeCommandEncoder_encodeCommands,
++    &_rmg_MTLDevice_newMeshRenderPipelineState,
++    &_rmg_MTLBlitCommandEncoder_encodeCommands,
++    &_rmg_MTLComputeCommandEncoder_encodeCommands,
+     &_MTLRenderCommandEncoder_encodeCommands,
+-    &_MTLTexture_pixelFormat,
++    &_rmg_MTLTexture_pixelFormat,
+     &_MTLTexture_width,
+     &_MTLTexture_height,
+-    &_MTLTexture_depth,
+-    &_MTLTexture_arrayLength,
+-    &_MTLTexture_mipmapLevelCount,
++    &_rmg_MTLTexture_depth,
++    &_rmg_MTLTexture_arrayLength,
++    &_rmg_MTLTexture_mipmapLevelCount,
+     &_MTLTexture_replaceRegion,
+-    &_MTLBuffer_didModifyRange,
++    &_rmg_MTLBuffer_didModifyRange,
+     &_MTLCommandBuffer_presentDrawable,
+-    &_MTLCommandBuffer_presentDrawableAfterMinimumDuration,
++    &_rmg_MTLCommandBuffer_presentDrawableAfterMinimumDuration,
+     &_MTLDevice_supportsFamily,
+     &_MTLDevice_supportsBCTextureCompression,
+-    &_MTLDevice_supportsTextureSampleCount,
++    &_rmg_MTLDevice_supportsTextureSampleCount,
+     &_MTLDevice_hasUnifiedMemory,
+-    &_MTLCaptureManager_sharedCaptureManager,
+-    &_MTLCaptureManager_startCapture,
+-    &_MTLCaptureManager_stopCapture,
+-    &_MTLDevice_newTemporalScaler,
+-    &_MTLDevice_newSpatialScaler,
+-    &_MTLCommandBuffer_encodeTemporalScale,
+-    &_MTLCommandBuffer_encodeSpatialScale,
++    &_rmg_MTLCaptureManager_sharedCaptureManager,
++    &_rmg_MTLCaptureManager_startCapture,
++    &_rmg_MTLCaptureManager_stopCapture,
++    &_rmg_MTLDevice_newTemporalScaler,
++    &_rmg_MTLDevice_newSpatialScaler,
++    &_rmg_MTLCommandBuffer_encodeTemporalScale,
++    &_rmg_MTLCommandBuffer_encodeSpatialScale,
+     &_NSString_string,
+     &_NSString_alloc_init,
+     &_DeveloperHUDProperties_instance,
+@@ -3841,8 +4382,8 @@ const void *__wine_unix_call_funcs[] = {
+     &_DeveloperHUDProperties_remove,
+     &_MetalDrawable_texture,
+     &_MetalLayer_nextDrawable,
+-    &_MTLDevice_supportsFXSpatialScaler,
+-    &_MTLDevice_supportsFXTemporalScaler,
++    &_rmg_MTLDevice_supportsFXSpatialScaler,
++    &_rmg_MTLDevice_supportsFXTemporalScaler,
+     &_MetalLayer_setProps,
+     &_MetalLayer_getProps,
+     &_CreateMetalViewFromHWND,
+@@ -3859,47 +4400,47 @@ const void *__wine_unix_call_funcs[] = {
+     NULL,
+     &thunk_SM50CompileTessellationPipelineHull,
+     &thunk_SM50CompileTessellationPipelineDomain,
+-    &_MTLCommandEncoder_setLabel,
++    &_rmg_MTLCommandEncoder_setLabel,
+     &_MTLDevice_setShouldMaximizeConcurrentCompilation,
+     &thunk_SM50GetArgumentsInfo,
+-    &_MTLCommandBuffer_error,
+-    &_MTLCommandBuffer_logs,
+-    &_MTLLogContainer_enumerate,
+-    &_CGColorSpace_checkColorSpaceSupported,
+-    &_MetalLayer_setColorSpace,
+-    &_WMTGetPrimaryDisplayId,
+-    &_WMTGetSecondaryDisplayId,
+-    &_WMTGetDisplayDescription,
++    &_rmg_MTLCommandBuffer_error,
++    &_rmg_MTLCommandBuffer_logs,
++    &_rmg_MTLLogContainer_enumerate,
++    &_rmg_CGColorSpace_checkColorSpaceSupported,
++    &_rmg_MetalLayer_setColorSpace,
++    &_rmg_WMTGetPrimaryDisplayId,
++    &_rmg_WMTGetSecondaryDisplayId,
++    &_rmg_WMTGetDisplayDescription,
+     &_MetalLayer_getEDRValue,
+     &_MTLLibrary_newFunctionWithConstants,
+-    &_WMTQueryDisplaySetting,
+-    &_WMTUpdateDisplaySetting,
++    &_rmg_WMTQueryDisplaySetting,
++    &_rmg_WMTUpdateDisplaySetting,
+     &_WMTQueryDisplaySettingForLayer,
+     &_MTLCommandBuffer_encodeWaitForEvent,
+-    &_MTLSharedEvent_signalValue,
+-    &_MTLSharedEvent_setWin32EventAtValue,
+-    &_MTLDevice_newFence,
+-    &_MTLDevice_newEvent,
++    &_rmg_MTLSharedEvent_signalValue,
++    &_rmg_MTLSharedEvent_setWin32EventAtValue,
++    &_rmg_MTLDevice_newFence,
++    &_rmg_MTLDevice_newEvent,
+     &_MTLBuffer_updateContents,
+     &_SharedEventListener_create,
+     &_SharedEventListener_start,
+     &_SharedEventListener_destroy,
+     &_WMTGetOSVersion,
+-    &_MTLDevice_newBinaryArchive,
+-    &_MTLBinaryArchive_serialize,
++    &_rmg_MTLDevice_newBinaryArchive,
++    &_rmg_MTLBinaryArchive_serialize,
+     &_DispatchData_alloc_init,
+     &_CacheReader_alloc_init,
+     &_CacheReader_get,
+     &_CacheWriter_alloc_init,
+     &_CacheWriter_set,
+     &_WMTSetMetalShaderCachePath,
+-    &_MTLDevice_newSharedTexture,
+-    &_WMTBootstrapRegister,
+-    &_WMTBootstrapLookUp,
+-    &_MTLSharedEvent_createMachPort,
+-    &_MTLDevice_newSharedEventWithMachPort,
++    &_rmg_MTLDevice_newSharedTexture,
++    &_rmg_WMTBootstrapRegister,
++    &_rmg_WMTBootstrapLookUp,
++    &_rmg_MTLSharedEvent_createMachPort,
++    &_rmg_MTLDevice_newSharedEventWithMachPort,
+     &_MTLDevice_registryID,
+-    &_MTLSharedEvent_waitUntilSignaledValue,
++    &_rmg_MTLSharedEvent_waitUntilSignaledValue,
+     &_MTLCounterSampleBuffer_newTimestampBuffer,
+     &_MTLCounterSampleBuffer_resolveCounterRange,
+     &_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers,
+@@ -3945,44 +4486,44 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_MTLDevice_newSamplerState,
+     &_MTLDevice_newDepthStencilState,
+     &_MTLDevice_newTexture,
+-    &_MTLBuffer_newTexture,
++    &_rmg_MTLBuffer_newTexture,
+     &_MTLTexture_newTextureView,
+-    &_MTLDevice_minimumLinearTextureAlignmentForPixelFormat,
++    &_rmg_MTLDevice_minimumLinearTextureAlignmentForPixelFormat,
+     &_MTLDevice_newLibrary,
+     &_MTLLibrary_newFunction,
+     &_NSString_lengthOfBytesUsingEncoding,
+-    &_NSObject_description,
++    &_rmg_NSObject_description,
+     &_MTLDevice_newComputePipelineState,
+-    &_MTLCommandBuffer_blitCommandEncoder,
+-    &_MTLCommandBuffer_computeCommandEncoder,
++    &_rmg_MTLCommandBuffer_blitCommandEncoder,
++    &_rmg_MTLCommandBuffer_computeCommandEncoder,
+     &_MTLCommandBuffer_renderCommandEncoder,
+     &_MTLCommandEncoder_endEncoding,
+     &_MTLDevice_newRenderPipelineState,
+-    &_MTLDevice_newMeshRenderPipelineState,
+-    &_MTLBlitCommandEncoder_encodeCommands,
+-    &_MTLComputeCommandEncoder_encodeCommands,
++    &_rmg_MTLDevice_newMeshRenderPipelineState,
++    &_rmg_MTLBlitCommandEncoder_encodeCommands,
++    &_rmg_MTLComputeCommandEncoder_encodeCommands,
+     &_MTLRenderCommandEncoder_encodeCommands,
+-    &_MTLTexture_pixelFormat,
++    &_rmg_MTLTexture_pixelFormat,
+     &_MTLTexture_width,
+     &_MTLTexture_height,
+-    &_MTLTexture_depth,
+-    &_MTLTexture_arrayLength,
+-    &_MTLTexture_mipmapLevelCount,
++    &_rmg_MTLTexture_depth,
++    &_rmg_MTLTexture_arrayLength,
++    &_rmg_MTLTexture_mipmapLevelCount,
+     &_MTLTexture_replaceRegion,
+-    &_MTLBuffer_didModifyRange,
++    &_rmg_MTLBuffer_didModifyRange,
+     &_MTLCommandBuffer_presentDrawable,
+-    &_MTLCommandBuffer_presentDrawableAfterMinimumDuration,
++    &_rmg_MTLCommandBuffer_presentDrawableAfterMinimumDuration,
+     &_MTLDevice_supportsFamily,
+     &_MTLDevice_supportsBCTextureCompression,
+-    &_MTLDevice_supportsTextureSampleCount,
++    &_rmg_MTLDevice_supportsTextureSampleCount,
+     &_MTLDevice_hasUnifiedMemory,
+-    &_MTLCaptureManager_sharedCaptureManager,
+-    &_MTLCaptureManager_startCapture,
+-    &_MTLCaptureManager_stopCapture,
+-    &_MTLDevice_newTemporalScaler,
+-    &_MTLDevice_newSpatialScaler,
+-    &_MTLCommandBuffer_encodeTemporalScale,
+-    &_MTLCommandBuffer_encodeSpatialScale,
++    &_rmg_MTLCaptureManager_sharedCaptureManager,
++    &_rmg_MTLCaptureManager_startCapture,
++    &_rmg_MTLCaptureManager_stopCapture,
++    &_rmg_MTLDevice_newTemporalScaler,
++    &_rmg_MTLDevice_newSpatialScaler,
++    &_rmg_MTLCommandBuffer_encodeTemporalScale,
++    &_rmg_MTLCommandBuffer_encodeSpatialScale,
+     &_NSString_string,
+     &_NSString_alloc_init,
+     &_DeveloperHUDProperties_instance,
+@@ -3991,8 +4532,8 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_DeveloperHUDProperties_remove,
+     &_MetalDrawable_texture,
+     &_MetalLayer_nextDrawable,
+-    &_MTLDevice_supportsFXSpatialScaler,
+-    &_MTLDevice_supportsFXTemporalScaler,
++    &_rmg_MTLDevice_supportsFXSpatialScaler,
++    &_rmg_MTLDevice_supportsFXTemporalScaler,
+     &_MetalLayer_setProps,
+     &_MetalLayer_getProps,
+     &_CreateMetalViewFromHWND,
+@@ -4009,47 +4550,47 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     NULL,
+     &thunk32_SM50CompileTessellationPipelineHull,
+     &thunk32_SM50CompileTessellationPipelineDomain,
+-    &_MTLCommandEncoder_setLabel,
++    &_rmg_MTLCommandEncoder_setLabel,
+     &_MTLDevice_setShouldMaximizeConcurrentCompilation,
+     &thunk32_SM50GetArgumentsInfo,
+-    &_MTLCommandBuffer_error,
+-    &_MTLCommandBuffer_logs,
+-    &_MTLLogContainer_enumerate,
+-    &_CGColorSpace_checkColorSpaceSupported,
+-    &_MetalLayer_setColorSpace,
+-    &_WMTGetPrimaryDisplayId,
+-    &_WMTGetSecondaryDisplayId,
+-    &_WMTGetDisplayDescription,
++    &_rmg_MTLCommandBuffer_error,
++    &_rmg_MTLCommandBuffer_logs,
++    &_rmg_MTLLogContainer_enumerate,
++    &_rmg_CGColorSpace_checkColorSpaceSupported,
++    &_rmg_MetalLayer_setColorSpace,
++    &_rmg_WMTGetPrimaryDisplayId,
++    &_rmg_WMTGetSecondaryDisplayId,
++    &_rmg_WMTGetDisplayDescription,
+     &_MetalLayer_getEDRValue,
+     &_MTLLibrary_newFunctionWithConstants,
+-    &_WMTQueryDisplaySetting,
+-    &_WMTUpdateDisplaySetting,
++    &_rmg_WMTQueryDisplaySetting,
++    &_rmg_WMTUpdateDisplaySetting,
+     &_WMTQueryDisplaySettingForLayer,
+     &_MTLCommandBuffer_encodeWaitForEvent,
+-    &_MTLSharedEvent_signalValue,
+-    &_MTLSharedEvent_setWin32EventAtValue,
+-    &_MTLDevice_newFence,
+-    &_MTLDevice_newEvent,
++    &_rmg_MTLSharedEvent_signalValue,
++    &_rmg_MTLSharedEvent_setWin32EventAtValue,
++    &_rmg_MTLDevice_newFence,
++    &_rmg_MTLDevice_newEvent,
+     &_MTLBuffer_updateContents,
+     &_SharedEventListener_create,
+     &_SharedEventListener_start,
+     &_SharedEventListener_destroy,
+     &_WMTGetOSVersion,
+-    &_MTLDevice_newBinaryArchive,
+-    &_MTLBinaryArchive_serialize,
++    &_rmg_MTLDevice_newBinaryArchive,
++    &_rmg_MTLBinaryArchive_serialize,
+     &_DispatchData_alloc_init,
+     &_CacheReader_alloc_init,
+     &_CacheReader_get,
+     &_CacheWriter_alloc_init,
+     &_CacheWriter_set,
+     &_WMTSetMetalShaderCachePath,
+-    &_MTLDevice_newSharedTexture,
+-    &_WMTBootstrapRegister,
+-    &_WMTBootstrapLookUp,
+-    &_MTLSharedEvent_createMachPort,
+-    &_MTLDevice_newSharedEventWithMachPort,
++    &_rmg_MTLDevice_newSharedTexture,
++    &_rmg_WMTBootstrapRegister,
++    &_rmg_WMTBootstrapLookUp,
++    &_rmg_MTLSharedEvent_createMachPort,
++    &_rmg_MTLDevice_newSharedEventWithMachPort,
+     &_MTLDevice_registryID,
+-    &_MTLSharedEvent_waitUntilSignaledValue,
++    &_rmg_MTLSharedEvent_waitUntilSignaledValue,
+     &_MTLCounterSampleBuffer_newTimestampBuffer,
+     &_MTLCounterSampleBuffer_resolveCounterRange,
+     &_MTLCommandBuffer_blitCommandEncoderWithSampleBuffers,
+diff --git a/src/winemetal/unix/wmt_remote_client.h b/src/winemetal/unix/wmt_remote_client.h
+new file mode 100644
+index 0000000..f8b3b50
+--- /dev/null
++++ b/src/winemetal/unix/wmt_remote_client.h
+@@ -0,0 +1,409 @@
++/* ml762: remote winemetal backend -- route unixcalls to a host Metal daemon.
++ *
++ * In remote mode winemetal creates NO local Metal objects. Every obj_handle_t
++ * in the process is therefore a tagged remote handle, and the tag is what makes
++ * a partial switch detectable: a local pointer reaching the wire, or a remote
++ * id reaching a local Metal call, is a named error at the point of misuse
++ * rather than a subtly wrong frame on another machine.
++ *
++ * ⚠️ The mode is decided ONCE and never changes. Flipping it mid-process would
++ * leave handles from both address spaces alive simultaneously, which is exactly
++ * the state the tag exists to make impossible.
++ *
++ * Calls not yet routed fail BY NAME. Discovering the remaining surface by
++ * running is the approach that has worked throughout: the command census found
++ * 15 of 38 opcodes, the API census 43 of 127 entries -- both far smaller than
++ * the speculative estimate.
++ */
++#ifndef WMT_REMOTE_CLIENT_H
++#define WMT_REMOTE_CLIENT_H
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <arpa/inet.h>
++#include <pthread.h>
++#include "../../../../remote-metal/protocol.h"
++
++static int  wmtr_fd   = -1;
++static int  wmtr_mode = -1;          /* -1 undecided, 0 local, 1 remote */
++static pthread_once_t wmtr_once = PTHREAD_ONCE_INIT;
++static pthread_mutex_t wmtr_lock = PTHREAD_MUTEX_INITIALIZER;
++static uint32_t wmtr_seq;
++
++/* Defined below; the mode gate registers it with atexit. */
++static void wmtr_report_unrouted(void);
++
++static int wmtr_rd(void *p, size_t n) {
++    uint8_t *b = p;
++    while (n) { ssize_t r = read(wmtr_fd, b, n); if (r <= 0) return -1; b += r; n -= (size_t)r; }
++    return 0;
++}
++static int wmtr_wr(const void *p, size_t n) {
++    const uint8_t *b = p;
++    while (n) { ssize_t r = write(wmtr_fd, b, n); if (r <= 0) return -1; b += r; n -= (size_t)r; }
++    return 0;
++}
++
++/* One synchronous call, serialised. The transport measured 0.06 ms per round
++ * trip and command count is nearly free once batched, so a lock here costs far
++ * less than the correctness it buys while the backend is being brought up. */
++static uint32_t wmtr_call(uint16_t op, const void *arg, uint32_t alen,
++                          void *out, uint32_t ocap, uint32_t *olen) {
++    if (out && ocap) memset(out, 0, ocap);
++    if (olen) *olen = 0;
++    pthread_mutex_lock(&wmtr_lock);
++    struct rm_hdr h = { RM_MAGIC, RM_VERSION, op, ++wmtr_seq, 0, alen, 0 };
++    uint32_t status = 0xffffffffu;
++    if (wmtr_wr(&h, sizeof h)) goto out;
++    if (alen && wmtr_wr(arg, alen)) goto out;
++    struct rm_hdr r;
++    if (wmtr_rd(&r, sizeof r)) goto out;
++    if (r.magic != RM_MAGIC || r.version != RM_VERSION ||
++        r.opcode != op || r.seq != h.seq) {
++        /* Name the field that actually differs. Printing only op and seq once
++         * reported "mismatch" with both matching, which reads as a protocol
++         * bug when the real cause was a guest built before a version bump. */
++        fprintf(stderr, "[wmt-remote] reply mismatch:%s%s%s%s"
++                        " (magic %08x/%08x, version %u/%u, op %u/%u, seq %u/%u)\n",
++                r.magic   != RM_MAGIC   ? " MAGIC"   : "",
++                r.version != RM_VERSION ? " VERSION" : "",
++                r.opcode  != op         ? " OPCODE"  : "",
++                r.seq     != h.seq      ? " SEQ"     : "",
++                r.magic, RM_MAGIC, r.version, RM_VERSION, r.opcode, op, r.seq, h.seq);
++        if (r.version != RM_VERSION)
++            fprintf(stderr, "[wmt-remote] the daemon speaks v%u and this build speaks v%u"
++                            " -- rebuild whichever is older\n", r.version, RM_VERSION);
++        goto out;
++    }
++    {
++        uint32_t n = r.payload_len, take = (out && n) ? (n < ocap ? n : ocap) : 0;
++        if (take && wmtr_rd(out, take)) goto out;
++        for (uint32_t left = n - take; left; ) {
++            uint8_t sink[4096];
++            uint32_t c = left < sizeof sink ? left : (uint32_t)sizeof sink;
++            if (wmtr_rd(sink, c)) goto out;
++            left -= c;
++        }
++        if (olen) *olen = take;
++    }
++    status = r.status;
++out:
++    pthread_mutex_unlock(&wmtr_lock);
++    return status;
++}
++
++/* Decided once. DXMT_REMOTE_METAL=<host-ip> turns it on. */
++/* Decided exactly once. The gate sits on EVERY dispatch entry, so without
++ * this two threads racing the first call would each open a socket: one leaks
++ * and wmtr_fd changes under a call already in flight on the other.
++ * wmtr_call() does not consult the mode, so there is no recursion here. */
++static void wmtr_init(void) {
++    const char *host = getenv("DXMT_REMOTE_METAL");
++    const char *tok  = getenv("RMETAL_TOKEN");
++    if (!host || !*host) { wmtr_mode = 0; return; }
++    if (!tok || !*tok) {
++        fprintf(stderr, "[wmt-remote] DXMT_REMOTE_METAL set but RMETAL_TOKEN missing -- staying local\n");
++        wmtr_mode = 0; return;
++    }
++    wmtr_fd = socket(AF_INET, SOCK_STREAM, 0);
++    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(RM_PORT) };
++    if (inet_pton(AF_INET, host, &a.sin_addr) != 1 ||
++        connect(wmtr_fd, (struct sockaddr *)&a, sizeof a)) {
++        fprintf(stderr, "[wmt-remote] cannot reach %s:%d -- staying local\n", host, RM_PORT);
++        close(wmtr_fd); wmtr_fd = -1; wmtr_mode = 0; return;
++    }
++    int one = 1;
++    setsockopt(wmtr_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
++    setsockopt(wmtr_fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
++    struct timeval tv = { .tv_sec = 30 };
++    setsockopt(wmtr_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
++    setsockopt(wmtr_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
++    wmtr_mode = 1;   /* set before the auth call so the socket is usable */
++    if (wmtr_call(RM_OP_PING, tok, (uint32_t)strlen(tok), 0, 0, 0) != RM_OK) {
++        fprintf(stderr, "[wmt-remote] authentication rejected -- staying local\n");
++        close(wmtr_fd); wmtr_fd = -1; wmtr_mode = 0; return;
++    }
++    fprintf(stderr, "[wmt-remote] ml762 REMOTE MODE via %s:%d -- no local Metal objects "
++                    "will be created in this process\n", host, RM_PORT);
++    /* The per-name lines are the primary signal and are emitted as each call
++     * is first seen; this summary is only a convenience for a clean exit. A
++     * jetsam kill runs no atexit handler, which is exactly why discovery does
++     * not depend on it. */
++    atexit(wmtr_report_unrouted);
++    return;
++}
++
++static int wmtr_enabled(void) {
++    pthread_once(&wmtr_once, wmtr_init);
++    return wmtr_mode;
++}
++
++/* Bytes occupied by one function-constant value.
++ *
++ * Metal reads the value through a pointer whose length it infers from the type,
++ * so the guest must send exactly that many bytes. An unknown type returns 0 and
++ * the caller reports it BY NAME rather than guessing a width -- a wrong length
++ * would either truncate the constant or copy adjacent memory into the shader.
++ * Vector rows follow Metal's rule that a 3-component vector occupies 4. */
++static uint32_t wmt_const_size(unsigned type) {
++    switch (type) {
++    case 3:  return 4;   case 4:  return 8;   case 5:  return 16;  case 6:  return 16;  /* float,2,3,4 */
++    case 7:  return 16;  case 8:  return 32;  case 9:  return 32;                       /* float2xN */
++    case 10: return 24;  case 11: return 48;  case 12: return 48;                       /* float3xN */
++    case 13: return 32;  case 14: return 64;  case 15: return 64;                       /* float4xN */
++    case 16: return 2;   case 17: return 4;   case 18: return 8;   case 19: return 8;   /* half,2,3,4 */
++    case 20: return 8;   case 21: return 16;  case 22: return 16;
++    case 23: return 12;  case 24: return 24;  case 25: return 24;
++    case 26: return 16;  case 27: return 32;  case 28: return 32;
++    case 29: case 33: return 4;                                                          /* int, uint */
++    case 30: case 34: return 8;
++    case 31: case 32: case 35: case 36: return 16;                                       /* int3/4, uint3/4 */
++    case 37: case 41: return 2;                                                          /* short, ushort */
++    case 38: case 42: return 4;
++    case 39: case 40: case 43: case 44: return 8;
++    case 45: case 49: case 53: return 1;                                                 /* char, uchar, bool */
++    case 46: case 50: case 54: return 2;
++    case 47: case 48: case 51: case 52: case 55: case 56: return 4;
++    default: return 0;   /* None, Struct, Array, or anything new: refuse to guess */
++    }
++}
++
++/* The host's default device, fetched once. Some paths need a device without
++ * having one to hand -- notably the pixel-format translator, which asks whether
++ * BC is supported. In remote mode that question is about the HOST gpu; asking a
++ * local MTLDevice there gives the VM's answer (no BC) and remaps compressed
++ * formats that the host could have sampled directly. */
++static uint64_t wmtr_dev_cached;
++static pthread_once_t wmtr_dev_once = PTHREAD_ONCE_INIT;
++
++static void wmtr_dev_init(void) {
++    struct rm_ret_handle devs;
++    if (wmtr_call(RM_OP_COPY_ALL_DEVICES, 0, 0, &devs, sizeof devs, 0) != RM_OK) return;
++    struct rm_arg_handle_u64 a = { devs.handle, 0 };
++    struct rm_ret_handle d;
++    if (wmtr_call(RM_OP_ARRAY_OBJECT, &a, sizeof a, &d, sizeof d, 0) == RM_OK)
++        wmtr_dev_cached = d.handle;
++}
++
++static uint64_t wmtr_host_device(void) {
++    if (!wmtr_enabled()) return 0;
++    pthread_once(&wmtr_dev_once, wmtr_dev_init);
++    return wmtr_dev_cached;
++}
++
++/* Does the HOST support BC? Cached; -1 until asked. */
++static int wmtr_host_bc(void) {
++    static int cached = -1;
++    if (cached >= 0) return cached;
++    uint64_t dev = wmtr_host_device();
++    if (!dev) return 0;
++    struct rm_arg_handle a = { dev };
++    struct rm_ret_u64 r;
++    cached = (wmtr_call(RM_OP_SUPPORTS_BC, &a, sizeof a, &r, sizeof r, 0) == RM_OK && r.value) ? 1 : 0;
++    fprintf(stderr, "[wmt-remote] host BC support = %d (formats will NOT be remapped)\n", cached);
++    return cached;
++}
++
++/* ---- buffer shadow registry ----------------------------------------------
++ *
++ * MTLBuffer.contents hands the guest a raw pointer it then writes through with
++ * no further calls. That pointer cannot be a host address, so CPU-visible
++ * buffers get guest shadow memory and the host copy is refreshed from it.
++ *
++ * The flush is deliberately pessimistic: everything live is uploaded before a
++ * commit. updateContents announces SOME writes, but nothing guarantees it
++ * announces all of them, and a missed write shows up as a wrong-looking frame
++ * rather than an error. Narrowing to dirty ranges is an optimisation to make
++ * once frames are correct, not before. */
++struct wmtr_buf {
++    uint64_t handle;      /* tagged remote handle -- the key   */
++    void    *shadow;      /* guest memory the app writes into  */
++    uint64_t length;
++    uint32_t options;
++    int      cpu_visible;
++    int      owned;       /* did WE allocate the shadow?       */
++};
++#define WMTR_BUFS_MAX 4096
++static struct wmtr_buf wmtr_bufs[WMTR_BUFS_MAX];
++static unsigned wmtr_bufs_n;
++static pthread_mutex_t wmtr_bufs_lock = PTHREAD_MUTEX_INITIALIZER;
++
++static void wmtr_buf_add(uint64_t handle, void *shadow, uint64_t len, uint32_t opts,
++                         int cpu, int owned) {
++    pthread_mutex_lock(&wmtr_bufs_lock);
++    if (wmtr_bufs_n < WMTR_BUFS_MAX) {
++        wmtr_bufs[wmtr_bufs_n++] = (struct wmtr_buf){ handle, shadow, len, opts, cpu, owned };
++    } else {
++        /* Never let a cap read as success: a buffer missing from the registry
++         * is never uploaded, so its contents silently never reach the host. */
++        static int warned;
++        if (!warned) { warned = 1;
++            fprintf(stderr, "[wmt-remote] buffer registry full at %d -- further buffers "
++                            "will NOT be uploaded\n", WMTR_BUFS_MAX); }
++    }
++    pthread_mutex_unlock(&wmtr_bufs_lock);
++}
++
++/* Drop a buffer when its handle is released. Leaving it registered means the
++ * flush keeps uploading through a pointer whose owner has gone, and keeps a
++ * stale handle alive on the wire. Only memory WE allocated is freed. */
++static void wmtr_buf_remove(uint64_t handle) {
++    pthread_mutex_lock(&wmtr_bufs_lock);
++    for (unsigned i = 0; i < wmtr_bufs_n; i++) {
++        if (wmtr_bufs[i].handle != handle) continue;
++        if (wmtr_bufs[i].owned) free(wmtr_bufs[i].shadow);
++        wmtr_bufs[i] = wmtr_bufs[--wmtr_bufs_n];
++        break;
++    }
++    pthread_mutex_unlock(&wmtr_bufs_lock);
++}
++
++static struct wmtr_buf *wmtr_buf_find(uint64_t handle) {
++    for (unsigned i = 0; i < wmtr_bufs_n; i++)
++        if (wmtr_bufs[i].handle == handle) return &wmtr_bufs[i];
++    return NULL;
++}
++
++/* Upload one range. Chunked: a single message is capped, and AAA buffers are
++ * far larger than that cap. */
++static int wmtr_buf_upload(uint64_t handle, const void *src, uint64_t off, uint64_t len) {
++    const uint8_t *p = src;
++    while (len) {
++        uint64_t n = len > (RM_CHUNK_BYTES - sizeof(struct rm_buffer_range))
++                   ? (RM_CHUNK_BYTES - sizeof(struct rm_buffer_range)) : len;
++        uint8_t *msg = malloc(sizeof(struct rm_buffer_range) + n);
++        if (!msg) return -1;
++        struct rm_buffer_range *r = (void *)msg;
++        r->handle = handle; r->offset = off; r->length = n;
++        memcpy(msg + sizeof *r, p, n);
++        uint32_t st = wmtr_call(RM_OP_BUFFER_UPLOAD, msg, (uint32_t)(sizeof *r + n), 0, 0, 0);
++        free(msg);
++        if (st != RM_OK) return -1;
++        p += n; off += n; len -= n;
++    }
++    return 0;
++}
++
++/* Push every CPU-visible shadow to the host. Called before submission. */
++static void wmtr_flush_buffers(void) {
++    pthread_mutex_lock(&wmtr_bufs_lock);
++    unsigned n = wmtr_bufs_n, failed = 0;
++    for (unsigned i = 0; i < n; i++) {
++        struct wmtr_buf *b = &wmtr_bufs[i];
++        if (!b->cpu_visible || !b->shadow || !b->length) continue;
++        if (wmtr_buf_upload(b->handle, b->shadow, 0, b->length) != 0) {
++            failed++;
++            /* Name the buffer, not just the count: a vertex buffer that never
++             * reaches the host draws nothing while the clear still lands, which
++             * looks like a working frame with missing geometry. */
++            static unsigned told;
++            if (told++ < 8)
++                fprintf(stderr, "[wmt-remote] upload FAILED for buffer 0x%llx "
++                                "(%llu bytes, options 0x%x)\n",
++                        (unsigned long long)b->handle, (unsigned long long)b->length,
++                        b->options);
++        }
++    }
++    pthread_mutex_unlock(&wmtr_bufs_lock);
++    if (failed) {
++        static unsigned reported;
++        if (reported++ < 4)
++            fprintf(stderr, "[wmt-remote] %u buffer upload(s) failed during flush\n", failed);
++    }
++}
++
++/* Drawable -> texture pairing.
++ *
++ * NEXT_DRAWABLE returns both handles in one reply, so the texture is already
++ * known by the time the guest asks for it. Recording the pair here turns
++ * MetalDrawable_texture into a lookup instead of a round trip -- it is called
++ * once per frame, and the answer cannot change for a given drawable. */
++#define WMTR_DRAWABLES 8
++static struct { uint64_t drawable, texture; } wmtr_pairs[WMTR_DRAWABLES];
++static unsigned wmtr_pair_next;
++
++static void wmtr_pair_record(uint64_t d, uint64_t t) {
++    wmtr_pairs[wmtr_pair_next % WMTR_DRAWABLES].drawable = d;
++    wmtr_pairs[wmtr_pair_next % WMTR_DRAWABLES].texture  = t;
++    wmtr_pair_next++;
++}
++
++static uint64_t wmtr_pair_texture(uint64_t d) {
++    for (unsigned i = 0; i < WMTR_DRAWABLES; i++)
++        if (wmtr_pairs[i].drawable == d) return wmtr_pairs[i].texture;
++    return 0;
++}
++
++/* Texture dimensions. width and height are asked separately, once per frame
++ * each, but arrive together and cannot change for a given texture -- so one
++ * round trip serves both. */
++static struct { uint64_t tex, w, h; } wmtr_dims[8];
++static unsigned wmtr_dims_next;
++
++static uint64_t wmtr_tex_dim(uint64_t tex, char which) {
++    for (unsigned i = 0; i < 8; i++)
++        if (wmtr_dims[i].tex == tex)
++            return which == 'w' ? wmtr_dims[i].w : wmtr_dims[i].h;
++    struct rm_arg_handle a = { tex };
++    struct rm_ret_handle_u64 r;
++    if (wmtr_call(RM_OP_TEXTURE_DIMS, &a, sizeof a, &r, sizeof r, 0) != RM_OK) return 0;
++    unsigned slot = wmtr_dims_next++ % 8;
++    wmtr_dims[slot].tex = tex; wmtr_dims[slot].w = r.handle; wmtr_dims[slot].h = r.value;
++    return which == 'w' ? r.handle : r.value;
++}
++
++/* A routed call that has no remote implementation yet must say so with its own
++ * name. "remote call failed" one machine from the GPU is close to undebuggable.
++ *
++ * Names are reported ONCE each and counted, so a run answers "which calls does
++ * this title actually need" in one pass. That is how every surface here was
++ * sized: the command census found 15 of 38 opcodes and the API census 43 of
++ * 127 entries -- both far below the speculative estimate. */
++#define WMTR_SEEN_MAX 128
++static const char *wmtr_seen[WMTR_SEEN_MAX];
++static unsigned wmtr_seen_n;
++static unsigned long wmtr_unimpl_hits;
++static unsigned wmtr_seen_dropped;
++static pthread_mutex_t wmtr_seen_lock = PTHREAD_MUTEX_INITIALIZER;
++
++static inline NTSTATUS wmtr_unimplemented(const char *fn) {
++    pthread_mutex_lock(&wmtr_seen_lock);
++    wmtr_unimpl_hits++;
++    unsigned i;
++    for (i = 0; i < wmtr_seen_n; i++)
++        if (strcmp(wmtr_seen[i], fn) == 0) break;
++    if (i == wmtr_seen_n) {
++        if (wmtr_seen_n < WMTR_SEEN_MAX) {
++            wmtr_seen[wmtr_seen_n++] = fn;
++            fprintf(stderr, "[wmt-remote] unrouted: %s\n", fn);
++        } else {
++            /* Never let a cap read as coverage. */
++            wmtr_seen_dropped++;
++        }
++    }
++    pthread_mutex_unlock(&wmtr_seen_lock);
++    return STATUS_NOT_IMPLEMENTED;
++}
++
++/* Call from a partially routed handler for the paths it does not cover. */
++#define WMTR_UNIMPLEMENTED(fn) ((void)wmtr_unimplemented(fn))
++
++static void wmtr_report_unrouted(void) {
++    pthread_mutex_lock(&wmtr_seen_lock);
++    fprintf(stderr, "[wmt-remote] unrouted summary: %lu calls across %u distinct entries",
++            wmtr_unimpl_hits, wmtr_seen_n);
++    if (wmtr_seen_dropped)
++        fprintf(stderr, " (+%u distinct names DROPPED, cap %d)", wmtr_seen_dropped, WMTR_SEEN_MAX);
++    fprintf(stderr, "\n");
++    for (unsigned i = 0; i < wmtr_seen_n; i++)
++        fprintf(stderr, "[wmt-remote]   %s\n", wmtr_seen[i]);
++    pthread_mutex_unlock(&wmtr_seen_lock);
++}
++
++#endif
+diff --git a/src/winemetal/unix/wmt_remote_guard.h b/src/winemetal/unix/wmt_remote_guard.h
+new file mode 100644
+index 0000000..4f7e9aa
+--- /dev/null
++++ b/src/winemetal/unix/wmt_remote_guard.h
+@@ -0,0 +1,356 @@
++/* GENERATED by gen_remote_guard.py from the unix dispatch table.
++ * Regenerate whenever __wine_unix_call_funcs[] or the routed set changes.
++ * Do not hand-edit. */
++
++static NTSTATUS _rmg_MTLBuffer_newTexture(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlbuffer_newtexture *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLBuffer_newTexture");
++  }
++  return _MTLBuffer_newTexture(obj);
++}
++static NTSTATUS _rmg_MTLDevice_minimumLinearTextureAlignmentForPixelFormat(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_minimumLinearTextureAlignmentForPixelFormat");
++  }
++  return _MTLDevice_minimumLinearTextureAlignmentForPixelFormat(obj);
++}
++static NTSTATUS _rmg_NSObject_description(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("NSObject_description");
++  }
++  return _NSObject_description(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_blitCommandEncoder(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCommandBuffer_blitCommandEncoder");
++  }
++  return _MTLCommandBuffer_blitCommandEncoder(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_computeCommandEncoder(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCommandBuffer_computeCommandEncoder");
++  }
++  return _MTLCommandBuffer_computeCommandEncoder(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newMeshRenderPipelineState(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newmeshrenderpso *p = obj;
++    p->ret_error = 0;   /* never hand back uninitialised stack */
++    p->ret_pso = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newMeshRenderPipelineState");
++  }
++  return _MTLDevice_newMeshRenderPipelineState(obj);
++}
++static NTSTATUS _rmg_MTLBlitCommandEncoder_encodeCommands(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLBlitCommandEncoder_encodeCommands");
++  }
++  return _MTLBlitCommandEncoder_encodeCommands(obj);
++}
++static NTSTATUS _rmg_MTLComputeCommandEncoder_encodeCommands(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLComputeCommandEncoder_encodeCommands");
++  }
++  return _MTLComputeCommandEncoder_encodeCommands(obj);
++}
++static NTSTATUS _rmg_MTLTexture_pixelFormat(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLTexture_pixelFormat");
++  }
++  return _MTLTexture_pixelFormat(obj);
++}
++static NTSTATUS _rmg_MTLTexture_depth(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLTexture_depth");
++  }
++  return _MTLTexture_depth(obj);
++}
++static NTSTATUS _rmg_MTLTexture_arrayLength(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLTexture_arrayLength");
++  }
++  return _MTLTexture_arrayLength(obj);
++}
++static NTSTATUS _rmg_MTLTexture_mipmapLevelCount(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLTexture_mipmapLevelCount");
++  }
++  return _MTLTexture_mipmapLevelCount(obj);
++}
++static NTSTATUS _rmg_MTLBuffer_didModifyRange(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLBuffer_didModifyRange");
++  }
++  return _MTLBuffer_didModifyRange(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLCommandBuffer_presentDrawableAfterMinimumDuration");
++  }
++  return _MTLCommandBuffer_presentDrawableAfterMinimumDuration(obj);
++}
++static NTSTATUS _rmg_MTLDevice_supportsTextureSampleCount(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_supportsTextureSampleCount");
++  }
++  return _MTLDevice_supportsTextureSampleCount(obj);
++}
++static NTSTATUS _rmg_MTLCaptureManager_sharedCaptureManager(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCaptureManager_sharedCaptureManager");
++  }
++  return _MTLCaptureManager_sharedCaptureManager(obj);
++}
++static NTSTATUS _rmg_MTLCaptureManager_startCapture(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlcapturemanager_startcapture *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCaptureManager_startCapture");
++  }
++  return _MTLCaptureManager_startCapture(obj);
++}
++static NTSTATUS _rmg_MTLCaptureManager_stopCapture(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLCaptureManager_stopCapture");
++  }
++  return _MTLCaptureManager_stopCapture(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newTemporalScaler(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newfxtemporalscaler *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newTemporalScaler");
++  }
++  return _MTLDevice_newTemporalScaler(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newSpatialScaler(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newfxspatialscaler *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newSpatialScaler");
++  }
++  return _MTLDevice_newSpatialScaler(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_encodeTemporalScale(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLCommandBuffer_encodeTemporalScale");
++  }
++  return _MTLCommandBuffer_encodeTemporalScale(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_encodeSpatialScale(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLCommandBuffer_encodeSpatialScale");
++  }
++  return _MTLCommandBuffer_encodeSpatialScale(obj);
++}
++static NTSTATUS _rmg_MTLDevice_supportsFXSpatialScaler(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_supportsFXSpatialScaler");
++  }
++  return _MTLDevice_supportsFXSpatialScaler(obj);
++}
++static NTSTATUS _rmg_MTLDevice_supportsFXTemporalScaler(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_supportsFXTemporalScaler");
++  }
++  return _MTLDevice_supportsFXTemporalScaler(obj);
++}
++static NTSTATUS _rmg_MTLCommandEncoder_setLabel(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLCommandEncoder_setLabel");
++  }
++  return _MTLCommandEncoder_setLabel(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_error(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCommandBuffer_error");
++  }
++  return _MTLCommandBuffer_error(obj);
++}
++static NTSTATUS _rmg_MTLCommandBuffer_logs(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLCommandBuffer_logs");
++  }
++  return _MTLCommandBuffer_logs(obj);
++}
++static NTSTATUS _rmg_MTLLogContainer_enumerate(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_enumerate *p = obj;
++    p->ret_read = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLLogContainer_enumerate");
++  }
++  return _MTLLogContainer_enumerate(obj);
++}
++static NTSTATUS _rmg_CGColorSpace_checkColorSpaceSupported(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("CGColorSpace_checkColorSpaceSupported");
++  }
++  return _CGColorSpace_checkColorSpaceSupported(obj);
++}
++static NTSTATUS _rmg_MetalLayer_setColorSpace(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_uint64_uint64_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MetalLayer_setColorSpace");
++  }
++  return _MetalLayer_setColorSpace(obj);
++}
++static NTSTATUS _rmg_WMTGetPrimaryDisplayId(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("WMTGetPrimaryDisplayId");
++  }
++  return _WMTGetPrimaryDisplayId(obj);
++}
++static NTSTATUS _rmg_WMTGetSecondaryDisplayId(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("WMTGetSecondaryDisplayId");
++  }
++  return _WMTGetSecondaryDisplayId(obj);
++}
++static NTSTATUS _rmg_WMTGetDisplayDescription(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("WMTGetDisplayDescription");
++  }
++  return _WMTGetDisplayDescription(obj);
++}
++static NTSTATUS _rmg_WMTQueryDisplaySetting(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_query_display_setting *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("WMTQueryDisplaySetting");
++  }
++  return _WMTQueryDisplaySetting(obj);
++}
++static NTSTATUS _rmg_WMTUpdateDisplaySetting(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("WMTUpdateDisplaySetting");
++  }
++  return _WMTUpdateDisplaySetting(obj);
++}
++static NTSTATUS _rmg_MTLSharedEvent_signalValue(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLSharedEvent_signalValue");
++  }
++  return _MTLSharedEvent_signalValue(obj);
++}
++static NTSTATUS _rmg_MTLSharedEvent_setWin32EventAtValue(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("MTLSharedEvent_setWin32EventAtValue");
++  }
++  return _MTLSharedEvent_setWin32EventAtValue(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newFence(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newFence");
++  }
++  return _MTLDevice_newFence(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newEvent(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_generic_obj_obj_ret *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newEvent");
++  }
++  return _MTLDevice_newEvent(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newBinaryArchive(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newbinaryarchive *p = obj;
++    p->ret_archive = 0;   /* never hand back uninitialised stack */
++    p->ret_error = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newBinaryArchive");
++  }
++  return _MTLDevice_newBinaryArchive(obj);
++}
++static NTSTATUS _rmg_MTLBinaryArchive_serialize(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlbinaryarchive_serialize *p = obj;
++    p->ret_error = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLBinaryArchive_serialize");
++  }
++  return _MTLBinaryArchive_serialize(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newSharedTexture(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newtexture *p = obj;
++    p->ret = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newSharedTexture");
++  }
++  return _MTLDevice_newSharedTexture(obj);
++}
++static NTSTATUS _rmg_WMTBootstrapRegister(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("WMTBootstrapRegister");
++  }
++  return _WMTBootstrapRegister(obj);
++}
++static NTSTATUS _rmg_WMTBootstrapLookUp(void *obj) {
++  if (wmtr_enabled()) {
++    return wmtr_unimplemented("WMTBootstrapLookUp");
++  }
++  return _WMTBootstrapLookUp(obj);
++}
++static NTSTATUS _rmg_MTLSharedEvent_createMachPort(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlsharedevent_createmachport *p = obj;
++    p->ret_mach_port = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLSharedEvent_createMachPort");
++  }
++  return _MTLSharedEvent_createMachPort(obj);
++}
++static NTSTATUS _rmg_MTLDevice_newSharedEventWithMachPort(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtldevice_newsharedeventwithmachport *p = obj;
++    p->ret_event = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLDevice_newSharedEventWithMachPort");
++  }
++  return _MTLDevice_newSharedEventWithMachPort(obj);
++}
++static NTSTATUS _rmg_MTLSharedEvent_waitUntilSignaledValue(void *obj) {
++  if (wmtr_enabled()) {
++    struct unixcall_mtlsharedevent_waituntilsignaledvalue *p = obj;
++    p->ret_timeout = 0;   /* never hand back uninitialised stack */
++    return wmtr_unimplemented("MTLSharedEvent_waitUntilSignaledValue");
++  }
++  return _MTLSharedEvent_waitUntilSignaledValue(obj);
++}
+diff --git a/src/winemetal/unix/wmt_remote_pack.h b/src/winemetal/unix/wmt_remote_pack.h
+index 290b4ea..db029da 100644
+--- a/src/winemetal/unix/wmt_remote_pack.h
++++ b/src/winemetal/unix/wmt_remote_pack.h
+@@ -18,7 +18,7 @@
+ #ifndef WMT_REMOTE_PACK_H
+ #define WMT_REMOTE_PACK_H
+ 
+-#include "../../../../research/remote-metal/wmt_pack.h"
++#include "../../../../remote-metal/wmt_pack.h"
+ #include "winemetal.h"
+ 
+ static inline enum wmtw_pack_status
+diff --git a/src/winemetal/wmt_api_census.c b/src/winemetal/wmt_api_census.c
+index 07d4ceb..67c9bc2 100644
+--- a/src/winemetal/wmt_api_census.c
++++ b/src/winemetal/wmt_api_census.c
+@@ -19,20 +19,41 @@ static int g_on = -1;
+ /* Bounded first-call sequence: the ORDER of the control plane is what has to
+  * be reimplemented, and a frequency table alone does not show it. */
+ #define FIRSTN 96
+-static unsigned short g_first[FIRSTN];
++#define FIRST_EMPTY 0xffffu
++/* Atomic slots with a sentinel. Claiming the index atomically is not enough:
++ * the reporter could read a claimed slot before its value was written and
++ * print whatever was there. Each slot is now atomic and starts EMPTY, so a
++ * half-published entry is visibly missing rather than silently wrong. */
++static atomic_ushort g_first[FIRSTN];
+ static atomic_uint g_first_len;
++static atomic_int g_first_init;
+ 
+ /* Classification. A call can be more than one thing; the label names its
+  * primary role for the purpose of redirecting the control plane. */
++/* Producers are named EXPLICITLY. Two heuristic attempts were both wrong:
++ * `strstr(n,"new")==n` matched nothing (every entry is Class_newThing), and
++ * broadening to "CommandEncoder" then swept in endEncoding and encodeCommands,
++ * which consume an encoder rather than produce one. A census exists to be read,
++ * and a confidently wrong label is worse than a missing one. */
++static int is_producer(const char *n) {
++    static const char *const P[] = {
++        "MTLCopyAllDevices", "NSArray_object", "NSString_string", "NSString_alloc_init",
++        "NSAutoreleasePool_alloc_init", "MTLDevice_newCommandQueue",
++        "MTLCommandQueue_commandBuffer", "MTLCommandBuffer_renderCommandEncoder",
++        "MTLCommandBuffer_computeCommandEncoder", "MTLCommandBuffer_blitCommandEncoder",
++        "MTLDevice_newBuffer", "MTLDevice_newTexture", "MTLDevice_newLibrary",
++        "MTLLibrary_newFunction", "MTLDevice_newRenderPipelineState",
++        "MTLDevice_newComputePipelineState", "MTLDevice_newDepthStencilState",
++        "MTLDevice_newSamplerState", "MTLDevice_newSharedEvent",
++        "MTLDevice_newBinaryArchive", "MTLTexture_newTextureView",
++        "MetalLayer_nextDrawable", "MetalDrawable_texture", 0
++    };
++    for (int i = 0; P[i]; i++) if (strcmp(n, P[i]) == 0) return 1;
++    return 0;
++}
++
+ static const char *classify(const char *n) {
+-    /* `strstr(n,"new") == n` required the NAME to start with "new", which no
+-     * winemetal entry does -- they are all Class_newThing. That mislabelled
+-     * every real producer as a consumer. Match the substring anywhere. */
+-    if (strstr(n, "new") || strstr(n, "New") || strstr(n, "Copy") ||
+-        strstr(n, "alloc") || strstr(n, "Create") ||
+-        strstr(n, "commandBuffer") || strstr(n, "CommandEncoder") ||
+-        strstr(n, "nextDrawable") || strstr(n, "Drawable_texture") ||
+-        strstr(n, "NSArray_object") || strstr(n, "NSString_string")) return "PRODUCER";
++    if (is_producer(n)) return "PRODUCER";
+     if (strstr(n, "retain") || strstr(n, "release"))          return "lifetime";
+     if (strstr(n, "commit") || strstr(n, "waitUntil") ||
+         strstr(n, "Event") || strstr(n, "Fence"))             return "sync";
+@@ -59,10 +80,12 @@ static void wmt_api_report(void) {
+     }
+     fprintf(stderr, "[api-census] %u of %d entries used\n", used, WMT_API_COUNT);
+     unsigned fl = atomic_load(&g_first_len);
++    if (fl > FIRSTN) fl = FIRSTN;
+     if (fl) {
+         fprintf(stderr, "[api-census] first %u calls (control-plane ORDER):\n", fl);
+         for (unsigned i = 0; i < fl; i++) {
+-            unsigned code = g_first[i];
++            unsigned short code = atomic_load(&g_first[i]);
++            if (code == FIRST_EMPTY) { fprintf(stderr, "[api-census]     %2u. <pending>\n", i); continue; }
+             fprintf(stderr, "[api-census]     %2u. %s\n", i,
+                     code < WMT_API_COUNT ? wmt_api_names[code] : "?");
+         }
+@@ -78,7 +101,16 @@ void wmt_api_census_note(unsigned code) {
+     if (__builtin_expect(g_on != 1, 1)) return;
+     if (code < WMT_API_COUNT) atomic_fetch_add(&g_calls[code], 1);
+     unsigned long t = atomic_fetch_add(&g_total, 1) + 1;
+-    unsigned fl = atomic_load(&g_first_len);
+-    if (fl < FIRSTN) { g_first[fl] = (unsigned short)code; atomic_store(&g_first_len, fl + 1); }
+-    if (t == 1 || (t % 20000) == 0) wmt_api_report();
++    /* Claim a slot atomically. Load-then-store races between threads and can
++     * drop or duplicate entries in the very sequence the control plane has to
++     * be reimplemented from. */
++    if (!atomic_exchange(&g_first_init, 1))
++        for (int i = 0; i < FIRSTN; i++) atomic_store(&g_first[i], FIRST_EMPTY);
++    unsigned slot = atomic_fetch_add(&g_first_len, 1);
++    if (slot < FIRSTN) atomic_store(&g_first[slot], (unsigned short)code);
++
++    /* Report often enough that the last checkpoint is close to the end. atexit
++     * never fires here -- iOS apps are killed, not exited -- so "the whole run"
++     * can only ever mean "the latest checkpoint", and 20,000 was too coarse. */
++    if (t == 1 || t == 100 || t == 1000 || (t % 5000) == 0) wmt_api_report();
+ }
+diff --git a/src/winemetal/wmt_api_names.h b/src/winemetal/wmt_api_names.h
+index 0df750e..f0bc7e7 100644
+--- a/src/winemetal/wmt_api_names.h
++++ b/src/winemetal/wmt_api_names.h
+@@ -3,7 +3,7 @@
+ #ifndef WMT_API_NAMES_H
+ #define WMT_API_NAMES_H
+ 
+-#define WMT_API_COUNT 114
++#define WMT_API_COUNT 127
+ 
+ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "NSObject_retain",
+@@ -80,8 +80,21 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "MetalLayer_getProps",
+     "CreateMetalViewFromHWND",
+     "ReleaseMetalView",
++    "thunk_SM50Initialize",
++    "thunk_SM50Destroy",
++    "thunk_SM50Compile",
++    "thunk_SM50GetCompiledBitcode",
++    "thunk_SM50DestroyBitcode",
++    "thunk_SM50GetErrorMessage",
++    "thunk_SM50FreeError",
++    "thunk_SM50CompileGeometryPipelineVertex",
++    "thunk_SM50CompileGeometryPipelineGeometry",
++    "<null slot>",
++    "thunk_SM50CompileTessellationPipelineHull",
++    "thunk_SM50CompileTessellationPipelineDomain",
+     "MTLCommandEncoder_setLabel",
+     "MTLDevice_setShouldMaximizeConcurrentCompilation",
++    "thunk_SM50GetArgumentsInfo",
+     "MTLCommandBuffer_error",
+     "MTLCommandBuffer_logs",
+     "MTLLogContainer_enumerate",

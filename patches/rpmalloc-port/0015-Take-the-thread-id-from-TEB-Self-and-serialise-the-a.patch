@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 24 Sep 2026 06:32:02 +0800
+Subject: [PATCH] Take the thread id from TEB->Self and serialise the allocator
+ on iOS
+
+NtCurrentTeb() is a raw read of x18. On iOS the kernel can zero x18 and the
+exception handler only restores it on the next TEB-relative load that faults,
+so reading the register directly could return 0. rpmalloc keys heap ownership
+and its global heap lock on that id: with 0, the lock CAS succeeded without
+locking, two threads adopted the same orphan heap, and frees went into foreign
+heaps through the lock-free owner path. Load TEB->Self instead; with x18 zero
+the load faults, the handler repairs x18 and the instruction re-executes, so
+the value is always the real TEB.
+
+Also add a recursive lock around the allocator entry points (FEX_IOS_HOST
+only), which rules out the shared-heap race class entirely.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Madeira-commit: 044436f4ba4736a596a70555c7ddeb1a99ac0919
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 81 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 80 insertions(+), 1 deletion(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 67b27b6..89b546e 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -673,7 +673,36 @@ heap_page_free_decommit(heap_t* heap, uint32_t page_type, uint32_t page_retain_c
+ //! Fast thread ID
+ static inline uintptr_t
+ get_thread_id(void) {
+-#if defined(_WIN32)
++#if defined(_WIN32) && defined(FEX_IOS_HOST)
++	/* ml1046: THE THREAD ID MUST COME FROM A LOAD, NEVER FROM THE RAW REGISTER.
++	 *
++	 * NtCurrentTeb() on ARM64 is "read x18". On iOS the kernel zeroes x18 behind
++	 * our back and the Mach exception handler repairs it LAZILY -- on the next
++	 * TEB-relative load that faults (x18_fixes=2300+ per run). Reading the
++	 * register never faults, so between the clobber and the repair this function
++	 * returned 0, silently, and rpmalloc builds everything on it:
++	 *
++	 *   heap_lock_acquire():  CAS(global_heap_lock, 0 -> 0) "succeeds" and leaves
++	 *                         the lock UNLOCKED, so a second thread walks in and
++	 *                         both adopt the same orphan heap;
++	 *   set_thread_heap():    owner_thread = 0 -- the old_owner=0x0 in every
++	 *                         RPMALLOC-REPAIR breadcrumb since ml416;
++	 *   page_is_thread_heap(): owner == id is 0 == 0 for ANY thread whose x18 is
++	 *                         momentarily zero, which then frees into a foreign
++	 *                         heap through the lock-free owner path.
++	 *
++	 * That is the writer behind the FEX-arena corruption family open since
++	 * ml606/ml610 (DFE containers, a libc++ tree, page_available[], and on the
++	 * iPhone 18 Pro rpfree+0x38 and a deque block pointer going NULL mid-pass).
++	 * It also wedged ml1044/45's allocator lock: taken under one identity,
++	 * released under another.
++	 *
++	 * TEB->Self lives at +0x30. With x18 == 0 the load touches address 0x30,
++	 * faults, the handler restores x18 and the instruction re-executes -- so the
++	 * value that comes back is always the real TEB. `volatile` keeps the compiler
++	 * from folding it back into a register read. */
++	return (uintptr_t)(*(void* volatile*)((char*)NtCurrentTeb() + 0x30));
++#elif defined(_WIN32)
+ 	return (uintptr_t)((void*)NtCurrentTeb());
+ #elif !defined(__APPLE__) && !defined(__CYGWIN__) &&                                                \
+     ((defined(__clang__) && (__clang_major__ >= 7)) || ((defined(__GNUC__) && (__GNUC__ >= 5)))) && \
+@@ -2928,6 +2957,56 @@ rpmalloc_is_thread_initialized(void) {
+ 	return (get_thread_heap() != global_heap_default) ? 1 : 0;
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* ml1044: ONE RECURSIVE LOCK AROUND THE WHOLE ALLOCATOR -- an experiment with a
++ * clear verdict either way.
++ *
++ * Two consecutive runs died inside FEX's own heap: rpfree+0x38 dereferencing a
++ * page header whose `heap` field held 0x400F70000, then a fextl::deque in the
++ * DFE pass whose block pointer had become NULL between two reads. Both are the
++ * container/metadata corruption family that has been open since ml606/ml610,
++ * and the ml463 comment above already names the suspect: heaps that more than
++ * one thread believes it owns ("the fallback-heap sharing itself needs a lock,
++ * a bigger fix"). rpmalloc's fast paths are lock-free BECAUSE a heap has one
++ * owner; with two, local_free[] and the page counters are mutated concurrently.
++ *
++ * Serialising every entry point makes that class of race impossible. If the
++ * corruption stops, shared ownership is proven and the real fix is a proper
++ * ownership model; if it continues, the writer is outside the allocator and
++ * this lock is exonerated as a cause. Owner-aware and recursive on purpose: a
++ * fault taken mid-allocation re-enters the allocator from the exception path,
++ * and a plain spinlock there is the IosMigrateLock self-deadlock all over again
++ * (ml1035). */
++static _Atomic(uintptr_t) fex_ios_rpm_owner;
++static unsigned fex_ios_rpm_depth;
++static int fex_ios_rpm_enabled = -1;
++void fex_ios_rpm_lock(void) {
++	uintptr_t self, expected = 0;
++	/* ml1045: NO getenv() HERE. ml1044 read an off-switch from the environment on
++	 * first use, and the first use is during early thread setup -- before the CRT
++	 * is usable on that thread (x18 was still 0). Calling into ucrtbase from there
++	 * recursed until the launcher generation's main thread ran off its stack
++	 * (BUS at ucrtbase+0x3a138, write to the guard page at sp=0x702f323fc0); the
++	 * thread was killed and every process waiting on it hung at boot. An allocator
++	 * entry point must not call anything that can allocate or touch per-thread
++	 * CRT state. The lock is unconditional; build without it to turn it off. */
++	fex_ios_rpm_enabled = 1;
++	self = get_thread_id() | 1;
++	if (atomic_load_explicit(&fex_ios_rpm_owner, memory_order_acquire) == self) { ++fex_ios_rpm_depth; return; }
++	while (!atomic_compare_exchange_weak_explicit(&fex_ios_rpm_owner, &expected, self, memory_order_acquire,
++	                                              memory_order_relaxed)) {
++		expected = 0;
++		wait_spin();
++	}
++	fex_ios_rpm_depth = 1;
++}
++void fex_ios_rpm_unlock(void) {
++	if (fex_ios_rpm_enabled <= 0) return;
++	if (atomic_load_explicit(&fex_ios_rpm_owner, memory_order_acquire) != (get_thread_id() | 1)) return;
++	if (--fex_ios_rpm_depth == 0) atomic_store_explicit(&fex_ios_rpm_owner, 0, memory_order_release);
++}
++#endif
++
+ extern inline RPMALLOC_ALLOCATOR void*
+ rpmalloc(size_t size) {
+ #if ENABLE_VALIDATE_ARGS

@@ -1,0 +1,200 @@
+{
+  "schema": 1,
+  "about": "What `pp source` packs as an IPA's Corresponding Source (build/source-bundle.py; docs/DISTRIBUTION.md, section 2). Every git source is archived from its exact commit with its submodules expanded in place; a submodule that is not packed is named here with its reason. A path is dropped only by a `drop` rule with its reason, and a `keep` rule wins over a drop. A member that looks like a prebuilt binary fails packing unless an `allow_binary` rule names it. `missing` lists what the bundle is known to lack: while it is not empty, the bundle is labelled incomplete.",
+  "git": [
+    {
+      "name": "playport",
+      "pin": "superproject",
+      "why": "the app, the build scripts, every patch series, pins.lock and the build records",
+      "submodules": {"upstream/madeira": "packed as the madeira component, from its pin"},
+      "allow_binary": {}
+    },
+    {
+      "name": "madeira",
+      "pin": "madeira",
+      "why": "Madeira's host source and build scripts (build/, app/Madeira/Winios, IOSDisplayShim), with the GnuTLS, Nettle and GMP release tarballs in build/gnutls-ios/src",
+      "local": ["repo:upstream/madeira"],
+      "keep": {
+        "app/Madeira/Winios/*": "built into the app (build/stages/unix-gaps.sh)",
+        "app/Madeira/IOSDisplayShim.[hm]": "built into the app",
+        "app/Madeira/legal/*": "Madeira's licence texts",
+        "app/Madeira/licenses/*": "Madeira's licence texts"
+      },
+      "drop": {
+        "app/*": "Madeira's own Xcode app, its prebuilt Windows DLLs and Apple's metal shader converter library, none of which the build uses; the converter is not redistributable",
+        "build/*-tests/*.exe": "Madeira's prebuilt test programs; the build does not use them",
+        "build/tftrace/*.dll": "a prebuilt tracing DLL; the build does not use it"
+      },
+      "submodules": {
+        "FEX": "the build uses the fex pin with patches/fex-port (decision 0008), packed as the fex component",
+        "wine": "the build uses the wine pin with patches/wine-port (decision 0013), packed as the wine component",
+        "research/dxmt": "the build uses the dxmt pin with patches/dxmt-port (decision 0007), packed as the dxmt component"
+      },
+      "allow_binary": {}
+    },
+    {
+      "name": "wine",
+      "pin": "wine",
+      "why": "WineHQ's release commit; patches/wine-port, wine-valve, wine-unix and wine-pe are in the playport archive",
+      "local": ["cache:wine.git", "run:pe/wine", "run:unix/wine"],
+      "allow_binary": {
+        "nls/*.nls": "Wine's committed codepage, locale, normalization and sorting data, not executable code; nls/Makefile.in installs it and tools/make_unicode generates it; preserve these build/runtime inputs with their generator"
+      }
+    },
+    {
+      "name": "fex",
+      "pin": "fex",
+      "why": "FEX-Emu with its libraries; patches/fex-port and rpmalloc-port are in the playport archive",
+      "local": ["cache:fex.git", "run:fex"],
+      "submodules": {
+        "External/fex-posixtest-bins": "prebuilt test binaries; build/stages/fex.sh does not check them out",
+        "External/fex-gvisor-tests-bins": "prebuilt test binaries; build/stages/fex.sh does not check them out",
+        "External/fex-gcc-target-tests-bins": "prebuilt test binaries; build/stages/fex.sh does not check them out"
+      },
+      "allow_binary": {}
+    },
+    {
+      "name": "dxmt",
+      "pin": "dxmt",
+      "why": "DXMT with nvapi and the DirectX headers; patches/dxmt and dxmt-port are in the playport archive",
+      "local": ["cache:dxmt.git", "run:dxmt-run/dxmt"],
+      "drop": {
+        "external/nvapi/*.lib": "NVIDIA's prebuilt MSVC import libraries; DXMT's nvapi DLL (enable_nvapi, off) uses only the headers"
+      },
+      "allow_binary": {
+        "tests/dx11/cube.obj": "a Wavefront mesh for DXMT's cube test, not object code"
+      }
+    },
+    {
+      "name": "mesa",
+      "pin": "mesa",
+      "why": "Mesa, for KosmicKrisp; patches/mesa is in the playport archive",
+      "local": ["run:mesa/mesa"],
+      "allow_binary": {}
+    },
+    {
+      "name": "dxvk",
+      "pin": "dxvk",
+      "why": "DXVK with its headers and subprojects, unmodified",
+      "local": ["run:vulkan-pe/dxvk"],
+      "allow_binary": {}
+    },
+    {
+      "name": "vkd3d-proton",
+      "pin": "vkd3d-proton",
+      "why": "vkd3d-proton with dxil-spirv and its headers; patches/vkd3d-proton is in the playport archive",
+      "local": ["run:vulkan-pe/vkd3d-proton"],
+      "allow_binary": {
+        "subprojects/dxil-spirv/third_party/SPIRV-Cross/*.asm.lib": "SPIRV-Cross's test shaders, SPIR-V assembly text"
+      }
+    },
+    {
+      "name": "gbe_fork",
+      "pin": "gbe",
+      "why": "the Steam API emulator with the dependency archives it builds from; patches/gbe is in the playport archive",
+      "local": ["cache:gbe.git", "run:steamapi/gbe"],
+      "submodules": {
+        "third-party/build/win": "prebuilt Windows build tools; build/stages/steamapi.sh does not check them out",
+        "third-party/build/linux": "prebuilt Linux build tools; build/stages/steamapi.sh does not check them out",
+        "third-party/common/win": "Windows-host helpers; build/stages/steamapi.sh does not check them out",
+        "third-party/deps/win": "prebuilt Windows dependencies; build/stages/steamapi.sh does not check them out",
+        "third-party/deps/linux": "prebuilt Linux dependencies; build/stages/steamapi.sh does not check them out",
+        "third-party/deps/linux-arm": "prebuilt Linux arm dependencies; build/stages/steamapi.sh does not check them out"
+      },
+      "drop": {
+        "resources/win/file_dos_stub/*.exe": "prebuilt stubs for gbe's Windows tools; the steam_api build does not use them",
+        "third-party/common/linux/premake/premake5": "prebuilt x86-64 general-purpose host build tool, not runtime source (a general-purpose tool the recipient installs, decision 0042); retain SOURCE.txt licence/source references",
+        "third-party/common/linux/premake-arm/premake5": "prebuilt ARM64 general-purpose host build tool, not runtime source (a general-purpose tool the recipient installs, decision 0042); retain SOURCE.txt licence/source references",
+        "third-party/common/linux/premake/libluasocket.so": "prebuilt host library for the omitted premake tool, not runtime source (decision 0042); retain SOURCE.txt licence/source references"
+      },
+      "allow_binary": {
+        "post_build/win/ColdClientLoader.EXAMPLE/extra_dlls.EXAMPLE/*.dll": "empty placeholder files in an example"
+      }
+    },
+    {
+      "name": "abseil-cpp",
+      "pin": "abseil-cpp",
+      "tag": "20250512.1",
+      "commit": "76bb24329e8bf5f39704eb10d21b9a80befa7c81",
+      "why": "the Abseil release gbe's protobuf builds with",
+      "local": ["cache:abseil-cpp.git"],
+      "allow_binary": {}
+    },
+    {
+      "name": "freetype",
+      "pin": "freetype",
+      "tag": "VER-2-13-3",
+      "commit": "42608f77f20749dd6ddc9e0536788eaad70ea4b5",
+      "why": "FreeType, linked into Wine's unix side",
+      "local": ["run:unix/mythic/research/freetype"],
+      "allow_binary": {}
+    },
+    {
+      "name": "idevice",
+      "pin": "idevice",
+      "why": "idevice's C FFI, built into the app (build/stages/idevice.sh); patches/idevice is in the playport archive; its locked crates are the idevice-crates archive",
+      "local": ["cache:idevice-{commit}"],
+      "allow_binary": {}
+    },
+    {
+      "name": "stikjit",
+      "pin": "stikjit",
+      "tag": "1.6.0",
+      "commit": "e6bbfe0399de0b839869356dc02b2ad8214ac5bd",
+      "why": "the MPL-2.0 source of the prebuilt StikJIT.framework in the JIT helper extension",
+      "drop": {
+        "idevice/libidevice_ffi.a": "StikJIT commits idevice's FFI as a prebuilt library (blob 3fb7e2dbfdb9db3d47bd6364a435bbc10d5581f9) that records no revision; idevice is MIT, so its notice is owed, not its source (decision 0042)"
+      },
+      "allow_binary": {}
+    },
+    {
+      "name": "xtool",
+      "pin": "xtool",
+      "tag": "1.20.1",
+      "commit": "916cdffba86c7661e450a98eb76bfad5f824a4d6",
+      "why": "the build and signing tool; build/toolchain/xtool-1.20.1-increased-memory-limit.diff, in the playport archive, is Playport's change to it",
+      "allow_binary": {}
+    }
+  ],
+  "files": [
+    {
+      "name": "llvm-project",
+      "pin": "llvm-project",
+      "tag": "llvmorg-15.0.7",
+      "file": "llvm-project-15.0.7.src.tar.xz",
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/llvm-project-15.0.7.src.tar.xz",
+      "sha256": "8b5fcb24b4128cf04df1b0b9410ce8b1a729cb3c544e6da885d234280dedeac6",
+      "why": "LLVM, linked into DXMT's shader converter (build/stages/dxmt-base.sh); the sha256 is of the release asset as downloaded on 2026-09-30, its detached signature not yet checked"
+    },
+    {
+      "name": "rust-src",
+      "pin": "rust",
+      "lock": "build/rust-dist.lock.json",
+      "component": "rust-src",
+      "why": "the Rust standard library's source, linked into libidevice_ffi.a"
+    },
+    {
+      "name": "gstreamer",
+      "pin": "gstreamer",
+      "gstreamer_lock": "build/gstreamer-notices.sources.json",
+      "stage": "build/stages/gstreamer.sh",
+      "why": "GStreamer's iOS release, prelinked into winegstreamer's unix side (build/stages/gstreamer.sh): Cerbero's 1.28.7 recipes and the 17 source archives of what its registered plugins reach, each checked against the lock's sha256"
+    }
+  ],
+  "crates": {
+    "name": "idevice-crates",
+    "from": "idevice",
+    "lockfile": "Cargo.lock",
+    "registry": "registry+https://github.com/rust-lang/crates.io-index",
+    "url": "https://static.crates.io/crates/{name}/{name}-{version}.crate",
+    "why": "every crate idevice's Cargo.lock names, as the .crate archive its checksum names: a superset of what the app links"
+  },
+  "run_files": [
+    {
+      "name": "wine-build-macos-config.h",
+      "path": "unix/wine/build-macos/include/config.h",
+      "why": "the generated configuration of Wine's unix side, with Playport's two GnuTLS defines"
+    }
+  ],
+  "missing": []
+}

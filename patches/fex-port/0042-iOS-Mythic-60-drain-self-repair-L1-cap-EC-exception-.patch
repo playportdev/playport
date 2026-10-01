@@ -1,0 +1,357 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 2 Aug 2026 23:56:38 +0800
+Subject: [PATCH] iOS-Mythic: #60 drain self-repair + L1 cap + EC exception
+ hardening (ml389-ml417)
+
+- WritePriorityMutex: drain self-repair restamps owner=self, closing the
+  rpmalloc ownership-identity livelock (#60)
+- LookupCache: L1 cap 1M -> 128K (VA diet)
+- Module.cpp: EC exception-path hardening
+- External/rpmalloc: VirtualAlloc2 exact-aligned 64MB spans (#62, db 5392)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: 90a30158427309fc550fc9b3d88e19fc5a977067
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/LookupCache.h   |  10 +-
+ .../FEXCore/Utils/WritePriorityMutex.h        | 149 +++++++++++++++++-
+ Source/Windows/ARM64EC/Module.cpp             |  56 ++++++-
+ 3 files changed, 202 insertions(+), 13 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.h b/FEXCore/Source/Interface/Core/LookupCache.h
+index af47e3f..4057786 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.h
++++ b/FEXCore/Source/Interface/Core/LookupCache.h
+@@ -484,8 +484,14 @@ private:
+   /* iOS-Mythic: halve the per-thread block-backing arena — it's committed
+    * upfront on iOS (see LookupCache.cpp) and 128MB × ~19 threads was OOM-ing
+    * the process. 64MB still backs 1024 guest code pages per thread; on
+-   * overflow AllocateBackingForPage returns 0 → clean ClearCodeCache. */
+-  constexpr static size_t CODE_SIZE = 64 * 1024 * 1024;
++   * overflow AllocateBackingForPage returns 0 → clean ClearCodeCache.
++   *
++   * ml387: halved again 64→32MB — VA, not footprint, is now the wall: the
++   * guest band hit 38MB free with ~50 live lookupcaches at 82MB each
++   * (0x5200000). 32MB still backs 512 guest code pages per thread; overflow
++   * remains a clean ClearCodeCache. New [TI-IC] lookupcache-alloc marker:
++   * 0x3200000. */
++  constexpr static size_t CODE_SIZE = 32 * 1024 * 1024;
+ #else
+   constexpr static size_t CODE_SIZE = 128 * 1024 * 1024;
+ #endif
+diff --git a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+index 56038cb..75995c5 100644
+--- a/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
++++ b/FEXCore/include/FEXCore/Utils/WritePriorityMutex.h
+@@ -51,11 +51,13 @@ public:
+   void lock() {
+     // Try a non-blocking lock first.
+     if (try_lock()) {
++      NoteWriteAcquired();
+       return;
+     }
+ 
+     // Try a quick WFE write-lock.
+     if (Attempt_WFE_WriteLock()) {
++      NoteWriteAcquired();
+       return;
+     }
+ 
+@@ -108,6 +110,7 @@ public:
+       if (!Sleep) {
+         // Acquired early.
+         LOGMAN_THROW_A_FMT((Desired & WRITE_OWNED_BIT) == WRITE_OWNED_BIT, "Somehow acquired a write-lock without it being set!");
++        NoteWriteAcquired();
+         return;
+       }
+ 
+@@ -160,6 +163,7 @@ public:
+       if (!Sleep) {
+         // Acquired early.
+         LOGMAN_THROW_A_FMT((Desired & WRITE_OWNED_BIT) != WRITE_OWNED_BIT, "Somehow read-locked and got a write lock!");
++        NoteReadAcquired();
+         return;
+       }
+ 
+@@ -178,6 +182,8 @@ public:
+   void unlock() {
+     auto AtomicFutex = std::atomic_ref<uint32_t>(Futex);
+ 
++    NoteWriteReleased();
++
+     uint32_t Expected = AtomicFutex.load(std::memory_order_relaxed);
+     uint32_t Desired {};
+     do {
+@@ -209,6 +215,8 @@ public:
+   void unlock_shared() {
+     auto AtomicFutex = std::atomic_ref<uint32_t>(Futex);
+ 
++    NoteReadReleased();
++
+     uint32_t Desired {};
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+     uint32_t Expected = AtomicFutex.load(std::memory_order_relaxed);
+@@ -261,7 +269,11 @@ public:
+     LOGMAN_THROW_A_FMT((Desired & READ_OWNER_COUNT_MASK) != 0, "Overflow in read-owners!");
+ 
+     // Uncontended mutex check
+-    return AtomicFutex.compare_exchange_strong(Expected, Desired, std::memory_order_acq_rel, std::memory_order_acquire);
++    const bool Acquired = AtomicFutex.compare_exchange_strong(Expected, Desired, std::memory_order_acq_rel, std::memory_order_acquire);
++    if (Acquired) {
++      NoteReadAcquired();
++    }
++    return Acquired;
+   }
+ 
+ #if !defined(_WIN32)
+@@ -312,16 +324,56 @@ private:
+     // No-op: spin-waiters will see the change
+   }
+ #else
++  /* iOS-Mythic ml411: an INFINITE wait here is unobservable — a thread parked
++   * on a never-released lock looks identical to an idle one, and this mutex is
++   * anonymous (no owner is recorded). Wait in 1s slices instead and, past a few
++   * seconds, name the write-owner from the ring below. Semantics are unchanged:
++   * both callers already loop and re-check state, and spurious wake-ups are
++   * explicitly tolerated. */
++  void IosStuckReport(const char* Which, uint32_t Expected) {
++    LogMan::Msg::EFmt("[fexlock] STUCK {} on mutex {} word={:08x} (write-owned={} read-waiter={} "
++                      "write-waiters={} read-owners={}) expected={:08x} | owner teb={:x} tid={:04x} depth={}",
++                      Which, static_cast<void*>(&Futex), Futex, !!(Futex & WRITE_OWNED_BIT), !!(Futex & READ_WAITER_BIT),
++                      (Futex & WRITE_WAITER_COUNT_MASK) >> WRITE_WAITER_OFFSET, Futex & READ_OWNER_COUNT_MASK, Expected,
++                      OwnerTeb, OwnerTid, OwnerDepth);
++    /* ml413: a parked writer means live read holds are the blockers — name them.
++     * ml414: dump from READ-wait reports too — ml414 died before any write
++     * waiter reached its report and the ring never printed. Global cap keeps
++     * the spam bounded instead. */
++    static std::atomic<int> HolderDumps {0};
++    if (HolderDumps.fetch_add(1, std::memory_order_relaxed) < 12) {
++      for (size_t i = 0; i < 16; i++) {
++        if (ReadHolderTeb[i]) {
++          LogMan::Msg::EFmt("[fexlock]   read-holder[{}] teb={:x} tid={:04x}", i, ReadHolderTeb[i], ReadHolderTid[i]);
++        }
++      }
++    }
++  }
++
+   // Writers wait for the full 32-bit futex.
+   void FutexWaitForWriteAvailable(uint32_t Expected) {
+-    WaitOnAddress(&Futex, &Expected, sizeof(Futex), INFINITE);
++    for (uint32_t i = 0;; i++) {
++      if (WaitOnAddress(&Futex, &Expected, sizeof(Futex), 1000)) {
++        return;
++      }
++      if (i == 4 || i == 60) {
++        IosStuckReport("write-wait", Expected);
++      }
++    }
+   }
+ 
+   // Readers wait for Futex bits [31:16] to be zero.
+   void FutexWaitForReadAvailable(uint32_t Expected) {
+     auto ReadWaiterAddress = reinterpret_cast<uint8_t*>(&Futex) + 2;
+     uint16_t smol_Expected = Expected >> 16;
+-    WaitOnAddress(ReadWaiterAddress, &smol_Expected, sizeof(smol_Expected), INFINITE);
++    for (uint32_t i = 0;; i++) {
++      if (WaitOnAddress(ReadWaiterAddress, &smol_Expected, sizeof(smol_Expected), 1000)) {
++        return;
++      }
++      if (i == 4 || i == 60) {
++        IosStuckReport("read-wait", Expected);
++      }
++    }
+   }
+ 
+   void FutexWakeWriter() {
+@@ -388,6 +440,7 @@ private:
+         Desired = Expected + READ_OWNER_INCREMENT;
+         LOGMAN_THROW_A_FMT((Desired & READ_OWNER_COUNT_MASK) != 0, "Overflow in read-owners!");
+         if (AtomicFutex.compare_exchange_strong(Expected, Desired, std::memory_order_acq_rel, std::memory_order_acquire)) {
++          NoteReadAcquired();
+           return true;
+         }
+       }
+@@ -426,5 +479,95 @@ private:
+   // Bits[29:16]: Write-waiter count.
+   //  Bits[15:0]: Read-owner count.
+   uint32_t Futex {};
++
++#if defined(_WIN32)
++  /* iOS-Mythic ml411: who holds it exclusive. Written after every successful
++   * write-acquire and cleared on release, so a stuck waiter can name the
++   * thread instead of guessing. TEB comes from x18 (the ARM64 platform
++   * register) and the tid from TEB.ClientId.UniqueThread at +0x48; both are
++   * logged so they cross-check against the [cpu-area] lines, which print the
++   * same pair. Plain stores — the lock word itself is the synchronisation. */
++  uint64_t OwnerTeb {};
++  uint32_t OwnerTid {};
++  uint32_t OwnerDepth {};
++
++  void NoteWriteAcquired() {
++    uint64_t Teb = 0;
++#ifdef ARCHITECTURE_arm64
++    __asm volatile("mov %0, x18" : "=r"(Teb));
++#endif
++    OwnerTeb = Teb;
++    OwnerTid = Teb ? *reinterpret_cast<uint32_t*>(Teb + 0x48) : 0;
++    OwnerDepth++;
++  }
++
++  void NoteWriteReleased() {
++    OwnerTeb = 0;
++    OwnerTid = 0;
++  }
++
++  /* iOS-Mythic ml413: the ml413 wedge was read-owners=1 with the writer parked
++   * behind it — the WRITE stamp above can't name a leaked READ hold. Ring of
++   * live shared holds: acquire claims a zero slot, release clears one of the
++   * caller's slots. Additionally each holder stamps TEB Instrumentation[8]
++   * (0x16f8) with the mutex address while it holds the lock, so the unix-side
++   * exception-delivery and thread-exit paths can spot "this thread holds a FEX
++   * shared lock" and log the leak-in-progress ([deliver-hold]/[exit-hold]).
++   * Slot 9 (0x1700) is the NotifyReadFile flag, slot 10 the wine PUMP beacon. */
++  uint64_t ReadHolderTeb[16] {};
++  uint32_t ReadHolderTid[16] {};
++
++  static uint64_t IosSelfTeb() {
++    uint64_t Teb = 0;
++#ifdef ARCHITECTURE_arm64
++    __asm volatile("mov %0, x18" : "=r"(Teb));
++#endif
++    return Teb;
++  }
++
++  void NoteReadAcquired() {
++    const uint64_t Teb = IosSelfTeb();
++    if (!Teb) {
++      return;
++    }
++    /* ml415: slot 7 (0x16f0) = per-thread shared-hold depth. Without it, a
++     * nested acquire+release pair wiped slot 8 while the outer hold remained,
++     * blinding [census-hold]/[deliver-hold] (the ml414 false-negatives). */
++    auto* Depth = reinterpret_cast<uint32_t*>(Teb + 0x16f0);
++    if (++*Depth == 1) {
++      *reinterpret_cast<uint64_t*>(Teb + 0x16f8) = reinterpret_cast<uint64_t>(&Futex);
++    }
++    for (size_t i = 0; i < 16; i++) {
++      uint64_t ExpectedSlot = 0;
++      if (std::atomic_ref<uint64_t>(ReadHolderTeb[i]).compare_exchange_strong(ExpectedSlot, Teb, std::memory_order_acq_rel)) {
++        ReadHolderTid[i] = *reinterpret_cast<uint32_t*>(Teb + 0x48);
++        return;
++      }
++    }
++  }
++
++  void NoteReadReleased() {
++    const uint64_t Teb = IosSelfTeb();
++    if (!Teb) {
++      return;
++    }
++    auto* Depth = reinterpret_cast<uint32_t*>(Teb + 0x16f0);
++    if (*Depth && --*Depth == 0) {
++      *reinterpret_cast<uint64_t*>(Teb + 0x16f8) = 0;
++    }
++    for (size_t i = 0; i < 16; i++) {
++      if (std::atomic_ref<uint64_t>(ReadHolderTeb[i]).load(std::memory_order_relaxed) == Teb) {
++        ReadHolderTid[i] = 0;
++        std::atomic_ref<uint64_t>(ReadHolderTeb[i]).store(0, std::memory_order_release);
++        return;
++      }
++    }
++  }
++#else
++  void NoteWriteAcquired() {}
++  void NoteWriteReleased() {}
++  void NoteReadAcquired() {}
++  void NoteReadReleased() {}
++#endif
+ };
+ } // namespace FEXCore::Utils::WritePriorityMutex
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index b225bf9..4939d25 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1254,8 +1254,53 @@ void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {
+   InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
+ }
+ 
++/* iOS-Mythic ml411 (#60/#66): the release half must never be gated on state
++ * that can change between the paired calls.
++ *
++ * Upstream returns early when `!InvalidationTracker || !ThreadState`, and
++ * reads the "do I hold the locks" flag out of ThreadState's frontend data.
++ * Wine calls this before AND after every NtReadFile, but if ThreadState (or
++ * the tracker) is gone by the "after" call, the early return skips the
++ * unlock and CodeInvalidationMutex stays WRITE-OWNED FOREVER. Every other
++ * thread that read-locks it then parks in WaitOnAddress with no waker —
++ * which is exactly the ml411 webhelper stall: the chrome_ipc pump receives
++ * Steam's hello, tries to take this lock, and never returns, so the reply is
++ * never written and Steam shows the "webhelper is not responding" dialog.
++ *
++ * Mirror the flag somewhere reachable with no dependency on ThreadState, and
++ * check it before any early return.
++ *
++ * ml412: that mirror must NOT be a thread_local — mingw TLS access loads
++ * TEB->ThreadLocalStoragePointer ([x18+0x58]), which is still NULL when the
++ * loader issues the first NtReadFile of the first process (crashed at
++ * BTCpu64NotifyReadFile+0x3c, addr=0). Use a raw TEB slot instead:
++ * Instrumentation[9] is dead space we own for the whole thread lifetime and
++ * is zero-initialized with the TEB. (Slot 10 is the wine chrome-ipc PUMP
++ * beacon; keep clear of it.) */
++static bool* IosInLockedRWXReadSlot() {
++  /* TEB->Instrumentation[9] = 0x16b8 + 9*8. mingw's _TEB doesn't expose the
++   * field, so address it by offset; wine's EC ntdll stamps Instrumentation[10]
++   * (0x1708) as the PUMP beacon, pinning this layout on device. */
++  return reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(NtCurrentTeb()) + 0x1700);
++}
++
+ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After, NTSTATUS Status) {
+   auto* ThreadState = GetCPUArea().ThreadState();
++  bool* InLockedRead = IosInLockedRWXReadSlot();
++
++  // Only upstream's locked (P5R) path below holds the locks across the read;
++  // release them before any early return. The unlocked after-read
++  // invalidation further down must still run for every other read.
++  if (After && *InLockedRead) {
++    *InLockedRead = false;
++    if (ThreadState) {
++      GetFrontendThreadData(ThreadState)->InLockedRWXRead = false;
++    }
++    CTX->GetCodeInvalidationMutex().unlock();
++    ThreadCreationMutex.unlock();
++    return;
++  }
++
+   if (!InvalidationTracker || !ThreadState) {
+     return;
+   }
+@@ -1280,22 +1325,17 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+ 
+   if (AppConfigName == "P5R.exe") {
+     // Use the locking mechanism for (Persona 5 Royal AppID 1687950) which does exactly the problem described above.
+-    auto& InLockedRWXRead = GetFrontendThreadData(ThreadState)->InLockedRWXRead;
++    // The release half ran at the top of this function (iOS-Mythic ml411).
+     if (!After) {
+       ThreadCreationMutex.lock();
+       CTX->GetCodeInvalidationMutex().lock();
+       if (InvalidationTracker->BeginUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size))) {
+-        InLockedRWXRead = true;
++        GetFrontendThreadData(ThreadState)->InLockedRWXRead = true;
++        *InLockedRead = true;
+       } else {
+         CTX->GetCodeInvalidationMutex().unlock();
+         ThreadCreationMutex.unlock();
+       }
+-    } else {
+-      if (InLockedRWXRead) {
+-        InLockedRWXRead = false;
+-        CTX->GetCodeInvalidationMutex().unlock();
+-        ThreadCreationMutex.unlock();
+-      }
+     }
+ 
+     return;

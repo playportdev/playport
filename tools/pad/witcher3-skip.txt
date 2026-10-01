@@ -1,0 +1,14 @@
+# Witcher 3: skip the opening cinematic that the first start plays (evidence
+# record §13; on the host it shows "Space Skip", and a pad press moves the prompt
+# to the pad's button). A then rest, five times over 10 s. If the main menu is
+# already up, the first A opens New Game, which new-game.txt then continues.
+150 A
+1850 -
+150 A
+1850 -
+150 A
+1850 -
+150 A
+1850 -
+150 A
+1850 -

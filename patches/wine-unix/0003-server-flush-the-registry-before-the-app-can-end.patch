@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] server: flush the registry before the app can end
+
+The server is a thread of the app, which can end at any moment after a
+guest returns. Registry saving was a no-op, so changes were lost.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ server/process.c  | 6 ++++++
+ server/registry.c | 7 +++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/server/process.c b/server/process.c
+index 731fdc4a..bd9f9042 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -621,6 +621,12 @@ static void process_died( struct process *process )
+     {
+         if (!--user_processes && !shutdown_stage && master_socket_timeout != TIMEOUT_INFINITE)
+             shutdown_timeout = add_timeout_user( master_socket_timeout, server_shutdown_timeout, NULL );
++#ifdef WINE_IOS
++        /* Playport: the server is a thread of the app, which may end as soon
++         * as the last guest process has; save the registry now rather than at
++         * a shutdown that never comes. */
++        if (!user_processes) flush_registry();
++#endif
+     }
+     release_object( process );
+     if (!--running_processes && shutdown_stage) close_master_socket( 0 );
+diff --git a/server/registry.c b/server/registry.c
+index 9642116d..d03b5120 100644
+--- a/server/registry.c
++++ b/server/registry.c
+@@ -2233,7 +2233,14 @@ DECL_HANDLER(flush_key)
+     struct key *key = get_hkey_obj( req->hkey, 0 );
+     if (key)
+     {
++#ifdef WINE_IOS
++        /* Playport: the app can end at any moment after a guest returns (or be
++         * killed), long before the 30 s periodic save or the server's shutdown
++         * flush. RegFlushKey must put the key on disk, as Windows guarantees. */
++        flush_registry();
++#else
+         /* we don't need to do anything here with the current implementation */
++#endif
+         release_object( key );
+     }
+ }

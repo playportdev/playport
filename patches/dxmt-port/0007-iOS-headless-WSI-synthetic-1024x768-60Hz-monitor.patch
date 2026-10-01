@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 13 May 2026 10:30:36 +0800
+Subject: [PATCH] =?UTF-8?q?iOS:=20headless=20WSI=20=E2=80=94=20synthetic?=
+ =?UTF-8?q?=201024x768=20@=2060Hz=20monitor?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+iPhone has no NSScreen/CGDirectDisplay; previously WSI returned all
+NULLs and IDXGIAdapter::EnumOutputs returned DXGI_ERROR_NOT_FOUND.
+Games then crashed sampling vtable[7] (GetDesc) on a NULL output.
+
+Implement a single synthetic HMONITOR with "\\.\DISPLAY1" name,
+0,0,1024,768 desktop coords, and one mode (1024x768 @ 60Hz / 32bpp /
+non-interlaced). Window-side fullscreen ops (setWindowMode /
+enterFullscreen / leaveFullscreen / restoreDisplayMode) return
+no-op-success since there's nothing to switch on a fixed display;
+getWindowMonitor returns the synthetic monitor.
+
+Matches Wine's sysparams_ios.c + driver_ios.c which advertise
+1024x768. Also adds build-arm64ec-win.txt meson cross-file used to
+produce the ARM64EC PE DLLs that Wine loads on iOS.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: 88d032664df3e9fc3c145d31e6710a6135e8f0d2
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ build-arm64ec-win.txt             | 15 +++++++++
+ src/util/wsi_monitor_headless.cpp | 52 +++++++++++++++++++++++++++----
+ src/util/wsi_window_headless.cpp  | 23 ++++++++++----
+ 3 files changed, 78 insertions(+), 12 deletions(-)
+ create mode 100644 build-arm64ec-win.txt
+
+diff --git a/build-arm64ec-win.txt b/build-arm64ec-win.txt
+new file mode 100644
+index 0000000..518e76f
+--- /dev/null
++++ b/build-arm64ec-win.txt
+@@ -0,0 +1,15 @@
++[binaries]
++c = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/arm64ec-w64-mingw32-clang'
++cpp = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/arm64ec-w64-mingw32-clang++'
++ar = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/arm64ec-w64-mingw32-ar'
++strip = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/arm64ec-w64-mingw32-strip'
++windres = '@GLOBAL_SOURCE_ROOT@' / 'toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/arm64ec-w64-mingw32-windres'
++
++[properties]
++needs_exe_wrapper = true
++
++[host_machine]
++system = 'windows'
++cpu_family = 'aarch64'
++cpu = 'aarch64'
++endian = 'little'
+diff --git a/src/util/wsi_monitor_headless.cpp b/src/util/wsi_monitor_headless.cpp
+index 2aaa61c..a15db08 100644
+--- a/src/util/wsi_monitor_headless.cpp
++++ b/src/util/wsi_monitor_headless.cpp
+@@ -6,34 +6,74 @@
+  * Copyright (c) 2019 Joshua Ashton
+  *
+  * See <https://github.com/doitsujin/dxvk/blob/master/LICENSE>
++ *
++ * iOS-Mythic note 2026-05-13: Was all-nullptr stub which caused
++ * IDXGIAdapter::EnumOutputs to return DXGI_ERROR_NOT_FOUND. Thumper
++ * then stored NULL in a global IDXGIOutput slot and crashed calling
++ * vtable[7] (GetDesc) through NULL. Implements a synthetic single
++ * 1024x768 @ 60Hz monitor so the DXGI output chain succeeds.
+  */
+ 
+ #include "wsi_monitor.hpp"
+ 
+ namespace dxmt::wsi {
+ 
++/* Synthetic singleton monitor handle. Non-NULL so EnumOutputs sees a
++ * monitor exists; opaque value (1) since headless code paths never
++ * dereference HMONITOR. */
++static HMONITOR const kSyntheticMonitor = reinterpret_cast<HMONITOR>(1);
++
+ HMONITOR getDefaultMonitor() {
+-  return nullptr;
++  return kSyntheticMonitor;
+ }
+ 
+ HMONITOR enumMonitors(uint32_t index) {
+-  return nullptr;
++  /* Only one synthetic monitor exists. */
++  if (index != 0)
++    return nullptr;
++  return kSyntheticMonitor;
+ }
+ 
+ bool getDisplayName(HMONITOR hMonitor, WCHAR (&Name)[32]) {
+-  return false;
++  if (hMonitor != kSyntheticMonitor)
++    return false;
++  /* Standard Windows display device name "\\.\DISPLAY1". */
++  static const WCHAR kName[] = {'\\','\\','.','\\','D','I','S','P','L','A','Y','1', 0};
++  for (size_t i = 0; i < 32; i++)
++    Name[i] = (i < sizeof(kName)/sizeof(WCHAR)) ? kName[i] : (WCHAR)0;
++  return true;
+ }
+ 
+ bool getDesktopCoordinates(HMONITOR hMonitor, RECT *pRect) {
+-  return false;
++  if (hMonitor != kSyntheticMonitor || !pRect)
++    return false;
++  /* 1024x768 at origin — matches Wine iOS sysparams_ios.c + driver_ios.c
++   * which advertise 1024x768. Mismatch caused NtUserChangeDisplaySettings
++   * to return DISP_CHANGE_BADMODE and a downstream fault loop. */
++  pRect->left = 0;
++  pRect->top = 0;
++  pRect->right = 1024;
++  pRect->bottom = 768;
++  return true;
+ }
+ 
++/* Single supported mode: 1024x768 @ 60Hz, 32bpp, non-interlaced. */
+ static inline bool retrieveDisplayMode(HMONITOR hMonitor, DWORD modeNumber,
+                                        WsiMode *pMode) {
+-  return false;
++  if (hMonitor != kSyntheticMonitor || !pMode)
++    return false;
++  pMode->width = 1024;
++  pMode->height = 768;
++  pMode->refreshRate.numerator = 60;
++  pMode->refreshRate.denominator = 1;
++  pMode->bitsPerPixel = 32;
++  pMode->interlaced = false;
++  return true;
+ }
+ 
+ bool getDisplayMode(HMONITOR hMonitor, uint32_t modeNumber, WsiMode *pMode) {
++  if (modeNumber != 0)
++    return false;  /* only one mode exposed */
+   return retrieveDisplayMode(hMonitor, modeNumber, pMode);
+ }
+ 
+@@ -45,4 +85,4 @@ bool getDesktopDisplayMode(HMONITOR hMonitor, WsiMode *pMode) {
+   return retrieveDisplayMode(hMonitor, ENUM_REGISTRY_SETTINGS, pMode);
+ }
+ 
+-} // namespace dxmt::wsi
+\ No newline at end of file
++} // namespace dxmt::wsi
+diff --git a/src/util/wsi_window_headless.cpp b/src/util/wsi_window_headless.cpp
+index 382e150..f8cf78d 100644
+--- a/src/util/wsi_window_headless.cpp
++++ b/src/util/wsi_window_headless.cpp
+@@ -6,6 +6,10 @@
+  * Copyright (c) 2019 Joshua Ashton
+  *
+  * See <https://github.com/doitsujin/dxvk/blob/master/LICENSE>
++ *
++ * iOS-Mythic 2026-05-13: Synthetic monitor / no-op fullscreen so Thumper-
++ * style games can negotiate display mode without DISP_CHANGE_BADMODE.
++ * Pairs with wsi_monitor_headless.cpp (1024x768 @ 60Hz synthetic monitor).
+  */
+ 
+ #include "wsi_window.hpp"
+@@ -16,39 +20,46 @@
+ 
+ namespace dxmt::wsi {
+ 
++/* Same synthetic handle as wsi_monitor_headless.cpp — must match. */
++static HMONITOR const kSyntheticMonitor = reinterpret_cast<HMONITOR>(1);
++
+ void getWindowSize(HWND hWindow, uint32_t *pWidth, uint32_t *pHeight) {
+   if (pWidth)
+     *pWidth = 1024;
+ 
+   if (pHeight)
+-    *pHeight = 1024;
++    *pHeight = 768;
+ }
+ 
+ void resizeWindow(HWND hWindow, DXMTWindowState *pState, uint32_t width,
+                   uint32_t height) {
+ }
+ 
++/* Headless no-op fullscreen success. Games negotiate a mode and expect
++ * setWindowMode/enterFullscreenMode to return true; failing here makes
++ * games abort with DISP_CHANGE_BADMODE-equivalent error paths. */
+ bool setWindowMode(HMONITOR hMonitor, HWND hWindow, const WsiMode &mode) {
+-  return false;
++  return true;
+ }
+ 
+ bool enterFullscreenMode(HMONITOR hMonitor, HWND hWindow,
+                          DXMTWindowState *pState,
+                          [[maybe_unused]] bool modeSwitch) {
+-  return false;
++  return true;
+ }
+ 
+ bool leaveFullscreenMode(HWND hWindow, DXMTWindowState *pState,
+                          bool restoreCoordinates) {
+-  return false;
++  return true;
+ }
+ 
+ bool restoreDisplayMode(HMONITOR hMonitor) {
+-  return false;
++  return true;
+ }
+ 
+ HMONITOR getWindowMonitor(HWND hWindow) {
+-  return 0;
++  /* Return the same synthetic monitor everything else uses. */
++  return kSyntheticMonitor;
+ }
+ 
+ bool isWindow(HWND hWindow) { return true; }

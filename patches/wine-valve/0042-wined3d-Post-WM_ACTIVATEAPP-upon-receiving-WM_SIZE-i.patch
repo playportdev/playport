@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 8 Apr 2022 20:35:03 +0300
+Subject: [PATCH] wined3d: Post WM_ACTIVATEAPP upon receiving WM_SIZE in
+ device_process_message().
+
+CW-Bug-Id: #20422
+Valve-commit: d8bc459248b3f9d24ba71b235b7b1e1fbb8b871a
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/wined3d/device.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/dlls/wined3d/device.c b/dlls/wined3d/device.c
+index f26578a..41a296d 100644
+--- a/dlls/wined3d/device.c
++++ b/dlls/wined3d/device.c
+@@ -5734,6 +5734,11 @@ LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL
+                 DefWindowProcA(window, message, wparam, lparam);
+         }
+     }
++    else if (message == WM_SIZE)
++    {
++        if (!IsIconic(window))
++            PostMessageW(window, WM_ACTIVATEAPP, 1, GetCurrentThreadId());
++    }
+ 
+     if (unicode)
+         return CallWindowProcW(proc, window, message, wparam, lparam);

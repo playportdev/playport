@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Tue, 26 Nov 2024 20:46:05 -0600
+Subject: [PATCH] ddraw: HACK: Blit to fullscreen window instead of desktop
+ window in ddraw_surface_update_frontbuffer().
+
+CW-Bug-Id: #24494
+CW-Bug-Id: #23872
+Valve-commit: 1f6a7f3099acd7c1c2967c78070ae2ccd50ead6f
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ddraw/surface.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/ddraw/surface.c b/dlls/ddraw/surface.c
+index 1b351e7..774d097 100644
+--- a/dlls/ddraw/surface.c
++++ b/dlls/ddraw/surface.c
+@@ -76,6 +76,7 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
+     struct wined3d_texture *dst_texture, *wined3d_texture;
+     struct ddraw *ddraw = surface->ddraw;
+     HDC surface_dc, screen_dc;
++    HWND dest_window = NULL;
+     int x, y, w, h;
+     HRESULT hr;
+     BOOL ret;
+@@ -177,7 +178,9 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
+     if (surface->palette)
+         wined3d_palette_apply_to_dc(surface->palette->wined3d_palette, surface_dc);
+ 
+-    if (!(screen_dc = GetDC(NULL)))
++    if (ddraw->cooperative_level & DDSCL_EXCLUSIVE && ddraw->dest_window)
++        dest_window = ddraw->dest_window;
++    if (!(screen_dc = GetDCEx(dest_window, NULL, DCX_WINDOW | DCX_CACHE)))
+     {
+         wined3d_texture_release_dc(wined3d_texture, surface->sub_resource_idx, surface_dc);
+         ERR("Failed to get screen DC.\n");
+@@ -191,7 +194,7 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
+         ret = BitBlt(screen_dc, x, y, w, h,
+                 surface_dc, x, y, SRCCOPY);
+ 
+-    ReleaseDC(NULL, screen_dc);
++    ReleaseDC(dest_window, screen_dc);
+     wined3d_texture_release_dc(wined3d_texture, surface->sub_resource_idx, surface_dc);
+ 
+     if (!ret)
+@@ -4800,7 +4803,6 @@ static HRESULT WINAPI ddraw_surface7_SetClipper(IDirectDrawSurface7 *iface,
+             ddraw_set_swapchain_window(This->ddraw, This->ddraw->dest_window);
+         }
+     }
+-
+     wined3d_mutex_unlock();
+ 
+     return DD_OK;

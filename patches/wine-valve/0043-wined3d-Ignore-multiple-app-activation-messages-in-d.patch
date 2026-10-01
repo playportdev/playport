@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 8 Apr 2022 20:34:07 +0300
+Subject: [PATCH] wined3d: Ignore multiple app activation messages in
+ device_process_message().
+
+CW-Bug-Id: #20422
+CW-Bug-Id: #21462
+Valve-commit: 4e7cbb10191eeeb7f7eba7e9cc50eea3c4fc7f49
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/wined3d/device.c          | 13 +++++--
+ dlls/wined3d/wined3d_main.c    | 71 ++++++++++++++++++++++++++++++++++
+ dlls/wined3d/wined3d_private.h |  4 ++
+ 3 files changed, 85 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/wined3d/device.c b/dlls/wined3d/device.c
+index 41a296d..bf5046d 100644
+--- a/dlls/wined3d/device.c
++++ b/dlls/wined3d/device.c
+@@ -5711,7 +5711,10 @@ LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL
+     }
+     else if (message == WM_DISPLAYCHANGE)
+     {
++        BOOL inside_mode_change = wined3d_set_inside_mode_change(window, TRUE);
++
+         device->device_parent->ops->mode_changed(device->device_parent);
++        wined3d_set_inside_mode_change(window, inside_mode_change);
+     }
+     else if (message == WM_ACTIVATEAPP)
+     {
+@@ -5721,8 +5724,12 @@ LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL
+          * (e.g. Deus Ex: GOTY) to destroy the device, so take care to
+          * deactivate the implicit swapchain last, and to avoid accessing the
+          * "device" pointer afterwards. */
+-        while (i--)
+-            wined3d_swapchain_activate(device->swapchains[i], wparam);
++        if (!wparam || !wined3d_get_activate_processed(window))
++        {
++            wined3d_set_activate_processed(window, !!wparam);
++            while (i--)
++                wined3d_swapchain_activate(device->swapchains[i], wparam);
++        }
+     }
+     else if (message == WM_SYSCOMMAND)
+     {
+@@ -5734,7 +5741,7 @@ LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL
+                 DefWindowProcA(window, message, wparam, lparam);
+         }
+     }
+-    else if (message == WM_SIZE)
++    else if (message == WM_SIZE && !wined3d_get_inside_mode_change(window))
+     {
+         if (!IsIconic(window))
+             PostMessageW(window, WM_ACTIVATEAPP, 1, GetCurrentThreadId());
+diff --git a/dlls/wined3d/wined3d_main.c b/dlls/wined3d/wined3d_main.c
+index 8dff23e..e8daaec 100644
+--- a/dlls/wined3d/wined3d_main.c
++++ b/dlls/wined3d/wined3d_main.c
+@@ -44,6 +44,8 @@ struct wined3d_wndproc
+     HWND window;
+     BOOL unicode;
+     BOOL filter;
++    BOOL activate_processed;
++    BOOL inside_mode_change;
+     WNDPROC proc;
+     struct wined3d_device *device;
+     uint32_t flags;
+@@ -639,6 +641,73 @@ BOOL wined3d_filter_messages(HWND window, BOOL filter)
+     return ret;
+ }
+ 
++BOOL wined3d_get_activate_processed(HWND window)
++{
++    struct wined3d_wndproc *entry;
++    BOOL ret;
++
++    wined3d_wndproc_mutex_lock();
++
++    if (!(entry = wined3d_find_wndproc(window, NULL)))
++    {
++        wined3d_wndproc_mutex_unlock();
++        return FALSE;
++    }
++    ret = entry->activate_processed;
++    wined3d_wndproc_mutex_unlock();
++    return ret;
++}
++
++void wined3d_set_activate_processed(HWND window, BOOL activate_processed)
++{
++    struct wined3d_wndproc *entry;
++
++    wined3d_wndproc_mutex_lock();
++
++    if (!(entry = wined3d_find_wndproc(window, NULL)))
++    {
++        wined3d_wndproc_mutex_unlock();
++        return;
++    }
++    entry->activate_processed = activate_processed;
++    wined3d_wndproc_mutex_unlock();
++}
++
++BOOL wined3d_get_inside_mode_change(HWND window)
++{
++    struct wined3d_wndproc *entry;
++    BOOL ret;
++
++    wined3d_wndproc_mutex_lock();
++
++    if (!(entry = wined3d_find_wndproc(window, NULL)))
++    {
++        wined3d_wndproc_mutex_unlock();
++        return FALSE;
++    }
++    ret = entry->inside_mode_change;
++    wined3d_wndproc_mutex_unlock();
++    return ret;
++}
++
++BOOL wined3d_set_inside_mode_change(HWND window, BOOL inside_mode_change)
++{
++    struct wined3d_wndproc *entry;
++    BOOL ret;
++
++    wined3d_wndproc_mutex_lock();
++
++    if (!(entry = wined3d_find_wndproc(window, NULL)))
++    {
++        wined3d_wndproc_mutex_unlock();
++        return FALSE;
++    }
++    ret = entry->inside_mode_change;
++    entry->inside_mode_change = inside_mode_change;
++    wined3d_wndproc_mutex_unlock();
++    return ret;
++}
++
+ static LRESULT CALLBACK wined3d_wndproc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+ {
+     struct wined3d_wndproc *entry;
+@@ -775,6 +844,8 @@ BOOL CDECL wined3d_register_window(struct wined3d *wined3d, HWND window,
+     entry->device = device;
+     entry->wined3d = wined3d;
+     entry->flags = flags;
++    entry->activate_processed = FALSE;
++    entry->inside_mode_change = FALSE;
+ 
+     wined3d_wndproc_mutex_unlock();
+ 
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index 42d4136..47abdab 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -2772,6 +2772,10 @@ struct wined3d
+ BOOL wined3d_filter_messages(HWND window, BOOL filter);
+ HRESULT wined3d_init(struct wined3d *wined3d, uint32_t flags);
+ void wined3d_unregister_window(HWND window);
++BOOL wined3d_get_activate_processed(HWND window);
++void wined3d_set_activate_processed(HWND window, BOOL activate_processed);
++BOOL wined3d_get_inside_mode_change(HWND window);
++BOOL wined3d_set_inside_mode_change(HWND window, BOOL inside_mode_change);
+ 
+ BOOL wined3d_get_app_name(char *app_name, unsigned int app_name_size);
+ 

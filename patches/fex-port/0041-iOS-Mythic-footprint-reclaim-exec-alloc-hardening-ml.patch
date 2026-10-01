@@ -1,0 +1,216 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 1 Aug 2026 02:54:12 +0800
+Subject: [PATCH] iOS-Mythic: footprint reclaim + exec-alloc hardening
+ (ml362-ml364)
+
+Three iOS-only changes found by the [phys-map]/[footprint] probes while
+chasing the jetsam wall, plus the fix for what turned out to be the real
+wall behind it.
+
+ZeroScrub (AllocatorHooks.h): the defensive full memsets guarding against
+stale content (LookupCache L2+L1, CallRetStack) committed 48MB of private-
+dirty pages per guest thread, ~1.9GB at ~40 threads against a 4096MB jetsam
+limit. Verify by read instead -- untouched anonymous pages map the shared
+zero page and cost no footprint -- and memset only pages holding stale
+bytes. Same zero guarantee. The per-thread stale counts are the probe:
+ml362 reported stale=0 on all 42 threads, so the 0x69-quirk hazard these
+memsets were written for does not occur at thread construction.
+
+MAX_L1_ENTRIES 1M -> 128K on iOS (LookupCache.h): the memsets were not the
+real driver -- a hot thread's L1 hash-scatters across the whole array, so
+use alone dirties nearly every page of whatever the ceiling allows (~29MB
+per cache measured). Capping the ceiling bounds the fleet at ~80MB instead
+of ~640MB. Measured: fex band 1072 -> 733MB, peak footprint 3804 -> 3190MB.
+Hit rate was 77% at the 8K minimum, so the ceiling cut should cost little.
+
+CodeBuffer exec-alloc hardening (CPUBackend.cpp): exec allocations come from
+a finite JIT pool on iOS, and the ctor's only guard is a LOGMAN_THROW that
+is compiled out. When the pool exhausted, VirtualAlloc's result was used
+anyway and ClearCache wrote the detection string through a wild pointer
+(seen twice, in Arm64JITCore::ClearCache on Chrome's GPU thread). Degrade
+instead: halve the request down to 1MB, which freelist gaps often satisfy,
+and fault at a recognizable address if even that fails so the honest-fault
+pipeline reports it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: b8368fe0a2d5de9e364cf01b9b81d906895069a7
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/LookupCache.cpp | 21 +++++++-----
+ FEXCore/Source/Interface/Core/LookupCache.h   | 15 +++++++++
+ .../Core/SharedCodeBufferManager.cpp          | 22 +++++++++++++
+ .../include/FEXCore/Utils/AllocatorHooks.h    | 33 +++++++++++++++++++
+ Source/Windows/Common/CallRetStack.h          | 12 +++++--
+ 5 files changed, 92 insertions(+), 11 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.cpp b/FEXCore/Source/Interface/Core/LookupCache.cpp
+index a46d2e0..1f84bf2 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.cpp
++++ b/FEXCore/Source/Interface/Core/LookupCache.cpp
+@@ -85,15 +85,18 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+   }
+ 
+ #ifdef FEX_IOS_HOST
+-  /* iOS-Mythic: explicitly memset PageMemory (L2) and L1 to 0. iOS demand-faults
+-   * fresh pages with a 0x69 byte at the start of every iOS page (a kernel quirk
+-   * we observed during JIT-pool dumps). If FEX's L2/L1 lookup hits one of those
+-   * bytes via the page-shift arithmetic, cbz fails to fire and the dispatcher
+-   * BRs to a nonzero stale pointer (= empty pool space → SIGILL). The memset
+-   * touches every iOS page so we end up with zero-filled, fully-committed L2/L1. */
+-  std::memset(reinterpret_cast<void*>(PageMemory),
+-              0, ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8);
+-  std::memset(reinterpret_cast<void*>(L1Pointer), 0, MAX_L1_SIZE);
++  /* iOS-Mythic: L2/L1 must start all-zero — nonzero stale bytes (the 0x69
++   * pattern observed during JIT-pool dumps, or recycled-arena content) make
++   * the dispatcher's cbz miss and BR to garbage. The original fix was two
++   * unconditional memsets, but those commit 32MB of private-dirty pages per
++   * guest thread — ~1.3GB at 40 threads (ml361 [phys-map]), against a 4096MB
++   * jetsam limit. ZeroScrub verifies by read (untouched anon pages map the
++   * shared zero page, no footprint) and memsets only stale pages. The stale
++   * counts double as the probe for whether the hazard still exists at all. */
++  size_t StaleL2 = FEXCore::Allocator::ZeroScrub(reinterpret_cast<void*>(PageMemory),
++                                                 ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8);
++  size_t StaleL1 = FEXCore::Allocator::ZeroScrub(reinterpret_cast<void*>(L1Pointer), MAX_L1_SIZE);
++  LogMan::Msg::EFmt("[TI-IC] zero-scrub rev=ml362 l2-stale=0x{:x} l1-stale=0x{:x}", StaleL2, StaleL1);
+ #endif
+ }
+ 
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.h b/FEXCore/Source/Interface/Core/LookupCache.h
+index 0051f08..af47e3f 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.h
++++ b/FEXCore/Source/Interface/Core/LookupCache.h
+@@ -463,7 +463,22 @@ private:
+   // Start with 8k entries in L1 to give 128KB of L1 cache to each thread.
+   // Max out at 1 million entries to give each thread 16MB of L1 cache maximum.
+   constexpr static size_t MIN_L1_ENTRIES = 8 * 1024;        // Must be a power of 2
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic ml363: cap the dynamic-L1 growth ceiling at 128K entries (2MB)
++   * instead of 1M (16MB). A hot thread's L1 inserts hash-scatter across the
++   * whole array, so a few thousand cached blocks dirty nearly every 16KB page
++   * of whatever the ceiling allows — ml362 [phys-map] measured ~29MB dirty
++   * per thread cache with ~40 guest threads ≈ 1GB against the 4096MB jetsam
++   * limit, even with construction memsets removed (zero-scrub stale=0 on all
++   * 42 threads). 2MB bounds that at ~80MB fleet-wide; hot threads fall back
++   * to L2 more often (hit rate was 77% at the 8K MINIMUM, so the ceiling cut
++   * is expected to cost little). Also shrinks each per-thread allocation by
++   * 14MB ([TI-IC] lookupcache-alloc size drops 0x6000000 → 0x5200000, which
++   * doubles as the deploy marker). */
++  constexpr static size_t MAX_L1_ENTRIES = 128 * 1024; // Must be a power of 2
++#else
+   constexpr static size_t MAX_L1_ENTRIES = 1 * 1024 * 1024; // Must be a power of 2
++#endif
+ 
+ #ifdef FEX_IOS_HOST
+   /* iOS-Mythic: halve the per-thread block-backing arena — it's committed
+diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+index ffad00d..e4c92a2 100644
+--- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
++++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+@@ -19,6 +19,28 @@ static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 128;
+ CodeBuffer::CodeBuffer(size_t Size)
+   : AllocatedSize(Size) {
+   Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic ml364: exec allocations come from the finite JIT pool, and
++   * ml363 died exactly here — the pool was exhausted (bump 858/896MB,
++   * freelist 0), VirtualAlloc returned garbage/NULL with LOGMAN_THROW
++   * compiled out, and ClearCache scribbled the detection string through a
++   * wild pointer on Chrome's GPU thread. Degrade before dying: halve the
++   * request down to 1MB (freelist gaps often satisfy small carves), and if
++   * even that fails force a fault at a recognizable address so the honest-
++   * fault pipeline reports it instead of a random-looking wild write. */
++  while (!Ptr && Size > 0x100000) {
++    Size >>= 1;
++    Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
++  }
++  if (Ptr && Size != AllocatedSize) {
++    LogMan::Msg::EFmt("[code-buffer] rev=ml364 exec alloc degraded 0x{:x} -> 0x{:x} (pool pressure)", AllocatedSize, Size);
++    AllocatedSize = Size;
++  }
++  if (!Ptr) {
++    LogMan::Msg::EFmt("[code-buffer] rev=ml364 EXEC ALLOC FAILED even at 0x{:x} — JIT pool exhausted; forcing honest fault at 0xdead", Size);
++    *reinterpret_cast<volatile uint64_t*>(0xdeadULL) = Size;
++  }
++#endif
+   LOGMAN_THROW_A_FMT(!!Ptr, "Couldn't allocate code buffer");
+ 
+   // Protect the last page of the allocated buffer to trigger SIGSEGV on write access
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index 6ace0f6..2b5cf17 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -24,6 +24,7 @@
+ #include <new>
+ #include <cstddef>
+ #include <cstdint>
++#include <cstring>
+ #include <sys/types.h>
+ 
+ namespace FEXCore::Allocator {
+@@ -205,6 +206,38 @@ inline void VirtualTHPControl(const void* Ptr, size_t Size, THPControl Control)
+ 
+ #endif
+ 
++/* iOS-Mythic ml362: zero a region without dirtying pages that are already
++ * zero. The defensive full memsets added for stale-content bugs (LookupCache
++ * L2/L1, CallRetStack) each commit their whole range as private-dirty pages;
++ * at ~40 guest threads that is ~1.9GB of phys_footprint against the 4096MB
++ * jetsam limit (measured, ml361 [phys-map]). Reading an untouched anonymous
++ * page maps the shared zero page instead — no footprint — so verify by read
++ * and memset only pages that hold stale bytes. Returns the number of bytes
++ * actually scrubbed: a nonzero return is the proof the stale-content hazard
++ * is real for that allocation (and it was scrubbed); zero means the memset
++ * was pure footprint waste. */
++inline size_t ZeroScrub(void* Base, size_t Size) {
++  const size_t Page = 16384;
++  char* P = static_cast<char*>(Base);
++  size_t Scrubbed = 0;
++  for (size_t Off = 0; Off < Size; Off += Page) {
++    const size_t Chunk = (Size - Off < Page) ? (Size - Off) : Page;
++    const uint64_t* Q = reinterpret_cast<const uint64_t*>(P + Off);
++    bool Zero = true;
++    for (size_t i = 0; i < Chunk / 8; i++) {
++      if (Q[i]) {
++        Zero = false;
++        break;
++      }
++    }
++    if (!Zero) {
++      memset(P + Off, 0, Chunk);
++      Scrubbed += Chunk;
++    }
++  }
++  return Scrubbed;
++}
++
+ // Memory allocation routines to be defined externally.
+ // This allows to use jemalloc for emulation while using the normal allocator
+ // for host tools without building FEXCore twice.
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 7599919..1883813 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -61,9 +61,17 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   /* iOS-Mythic: VirtualAlloc(MEM_COMMIT) on a previously-MEM_RESERVE'd
+    * PAGE_NOACCESS region might not zero-initialize the pages on iOS. The
+    * dispatcher uses callret_sp to BLR via stored values; uninit content
+-   * (e.g. 0x55 poison from prior wine activity) would BLR to garbage. */
++   * (e.g. 0x55 poison from prior wine activity) would BLR to garbage.
++   * ml362: the unconditional memset committed the full 16MB as private-dirty
++   * per thread (~670MB at 40 threads, ml361 [phys-map] showed these regions
++   * fully dirty). ZeroScrub keeps the zero guarantee but only dirties pages
++   * that actually hold stale bytes; the stale count is the probe for whether
++   * wine's commit really hands back nonzero pages. */
+ #ifdef FEX_IOS_HOST
+-  memset(Thread->CallRetStackBase, 0, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++  {
++    size_t Stale = FEXCore::Allocator::ZeroScrub(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++    LogMan::Msg::EFmt("[callret] zero-scrub rev=ml362 stale=0x{:x}", Stale);
++  }
+ #endif
+ 
+   Thread->CurrentFrame->State.callret_sp = GetInfoThread(Thread).DefaultLocation;

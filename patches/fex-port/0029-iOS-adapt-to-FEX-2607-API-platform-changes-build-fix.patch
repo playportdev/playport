@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 8 Jul 2026 14:12:28 +0800
+Subject: [PATCH] iOS: adapt to FEX-2607 API/platform changes (build fixes)
+
+Post-rebase build adaptations for new upstream code that used Linux/MS-isms:
+- AllocatorHooks.h: guard VirtualTHPControl madvise (MADV_HUGEPAGE absent on Darwin)
+- Allocator.cpp: add the _WIN32 hook-pointer branch (VirtualNamePtr/VirtualTHPPtr/
+  SetupHooks(size_t,HookPtrs)) that FEX-2607 introduced; EC PE needs it (WriteOffset
+  stays in Module.cpp to avoid a duplicate).
+- Config.cpp: _WIN32-guard the NtTerminateProcess/__declspec bisect tags (no-op on
+  the native iOS host build; Apple clang has no __declspec).
+- CodeCache.cpp: route Apple past the mremap(MREMAP_*) staging path (absent on Darwin)
+  to the in-place relocation branch; persistent code cache is unused on iOS anyway.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Madeira-commit: c78110486b5efdb855f922cb15cf254b8e855479
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Config/Config.cpp     | 8 +++++++-
+ FEXCore/Source/Interface/Core/CodeCache.cpp    | 5 ++++-
+ FEXCore/Source/Utils/Allocator.cpp             | 5 ++++-
+ FEXCore/include/FEXCore/Utils/AllocatorHooks.h | 7 +++++++
+ 4 files changed, 22 insertions(+), 3 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Config/Config.cpp b/FEXCore/Source/Interface/Config/Config.cpp
+index a6391a3..c9eea2f 100644
+--- a/FEXCore/Source/Interface/Config/Config.cpp
++++ b/FEXCore/Source/Interface/Config/Config.cpp
+@@ -260,9 +260,15 @@ void MetaLayer::MergeConfigMap(const LayerOptions& Options) {
+   }
+ }
+ 
+-/* iOS-Mythic bisect tags. */
++/* iOS-Mythic bisect tags. NtTerminateProcess + __declspec are ntdll/MS-only,
++ * so they're available on the ARM64EC PE (llvm-mingw) build but not the native
++ * iOS-host build (Apple clang has no __declspec / no ntdll). No-op there. */
++#if defined(_WIN32)
+ extern "C" __declspec(dllimport) long __stdcall NtTerminateProcess(void *hProcess, long ExitStatus);
+ #define INIT_TAG_EXIT(id) NtTerminateProcess((void*)-1, (long)(0xCC700000 | (id)))
++#else
++#define INIT_TAG_EXIT(id) ((void)0)
++#endif
+ 
+ void Initialize() {
+   AddLayer(fextl::make_unique<MetaLayer>(FEXCore::Config::LayerType::LAYER_TOP));
+diff --git a/FEXCore/Source/Interface/Core/CodeCache.cpp b/FEXCore/Source/Interface/Core/CodeCache.cpp
+index d19f745..7d42e6498 100644
+--- a/FEXCore/Source/Interface/Core/CodeCache.cpp
++++ b/FEXCore/Source/Interface/Core/CodeCache.cpp
+@@ -953,7 +953,10 @@ void CodeCache::FinalizeCodePages(MappedCodeCacheFile& Code, std::span<std::byte
+ 
+   FEXCORE_PROFILE_SCOPED("FinalizeCodePages");
+ 
+-#ifndef _WIN32
++// Apple/iOS has no mremap(MREMAP_*); the persistent code cache isn't used on
++// the iOS host anyway, so fall through to the direct in-place relocation path
++// below (same as the Windows branch) rather than the mremap staging dance.
++#if !defined(_WIN32) && !defined(__APPLE__)
+   // Atomicity is critical when making the finalized code data visible.
+   // We ensure this by remapping a temporary buffer onto the PROT_NONE
+   // placeholder page in CodeBuffer. Some constraints to keep in mind are:
+diff --git a/FEXCore/Source/Utils/Allocator.cpp b/FEXCore/Source/Utils/Allocator.cpp
+index 8fc66ec..fdd5962 100644
+--- a/FEXCore/Source/Utils/Allocator.cpp
++++ b/FEXCore/Source/Utils/Allocator.cpp
+@@ -358,6 +358,10 @@ void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) {}
+ 
+ } // namespace FEXCore::Allocator
+ #else
++// _WIN32 (incl. the ARM64EC PE / WoW64 builds): upstream's hook-pointer
++// allocator API (VirtualTHPControl + the HookPtrs SetupHooks signature).
++// DualMap::WriteOffset is intentionally NOT defined here — the EC PE gets it
++// from Source/Windows/ARM64EC/Module.cpp (defining it here would duplicate).
+ namespace FEXCore::Allocator {
+ 
+ void VirtualNameNOP(const char*, const void*, size_t) {}
+@@ -371,6 +375,5 @@ void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
+   VirtualTHPControl = Ptrs.VirtualTHPControl;
+   SetupAllocatorHooks(VirtualName);
+ }
+-
+ } // namespace FEXCore::Allocator
+ #endif
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index 72d09bc..388dde4 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -151,7 +151,14 @@ inline bool VirtualProtect(void* Ptr, size_t Size, ProtectOptions options) {
+ }
+ 
+ inline void VirtualTHPControl(const void* Ptr, size_t Size, THPControl Control) {
++#if defined(MADV_HUGEPAGE) && defined(MADV_NOHUGEPAGE)
+   ::madvise(const_cast<void*>(Ptr), Size, Control == THPControl::Enable ? MADV_HUGEPAGE : MADV_NOHUGEPAGE);
++#else
++  // Darwin/iOS has no transparent-hugepage madvise advice; no-op.
++  (void)Ptr;
++  (void)Size;
++  (void)Control;
++#endif
+ }
+ 
+ #endif

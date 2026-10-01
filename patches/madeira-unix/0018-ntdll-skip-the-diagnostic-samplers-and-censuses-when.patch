@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: skip the diagnostic samplers and censuses when
+ MADEIRA_NO_DIAGNOSTICS is set
+
+The first process start arms three samplers for the whole session: the
+[thread-sample] bursts every 20 s (which suspend every thread), the [xp]
+CPU and clock census every 250 ms and the [wprof] guest profile every
+15 s. The virtual-memory layer adds the [span-census] lines, which never
+stop, and the first 3000 [valloc] and [vfree] lines of a session: about
+1.5 MB of log within a minute of a Hollow Knight start. All of it only
+measures, and MADEIRA_QUIET stops none of it (perf-run.py reads the [xp]
+lines under it). With MADEIRA_NO_DIAGNOSTICS set, the samplers are not
+started and those census lines are not printed; the lines that report an
+anomaly (a watched address, a limit violation, a low-limited request)
+still are. The host app's release build sets it; without it nothing
+changes.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-25-release-build.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c  |  6 +++++-
+ build/ntdll-unix/virtual_ios.c | 17 ++++++++++++++---
+ 2 files changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 8a61a7b..c02df4f 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -4069,7 +4069,11 @@ void server_init_process_done(void)
+         /* ml875 [thread-sample]: ONE task-wide sampler (ml873 armed seven, one
+          * per pseudo-process, each suspending the others' threads). Body in
+          * ios_thread_sampler_main() above. */
+-        if (__sync_bool_compare_and_swap(&ios_ts_armed, 0, 1))
++        /* Playport: MADEIRA_NO_DIAGNOSTICS=1 (the host app's release build)
++         * arms none of the three: they measure, they change nothing, and
++         * each wakes on a timer for the whole session (the [xp] census every
++         * 250 ms) and writes to the log. */
++        if (!getenv("MADEIRA_NO_DIAGNOSTICS") && __sync_bool_compare_and_swap(&ios_ts_armed, 0, 1))
+         {
+             dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ ios_thread_sampler_main(); });
+             dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ ios_xprobe_main(); });   /* ml1128 */
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index ca3287c..ec086d2 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -1523,6 +1523,17 @@ static void ios_bigres_commit( void *addr, size_t size )
+  * "rpmalloc heaps recycle but demand outgrew 16GB" and "exited threads' spans
+  * leak" is the ALLOC vs FREE count for >=16MB band regions. Pairs with the
+  * [thr-term] probes in xtajit64 (same rev). */
++/* Playport: MADEIRA_NO_DIAGNOSTICS=1 (the host app's release build) prints
++ * none of the measurement-only census lines below ([span-census], and the
++ * first 3000 [valloc] and [vfree] of a session). Lines that report an anomaly
++ * (a watched address, a limit violation, a low-limited request) still print. */
++static int ios_no_diagnostics( void )
++{
++    static int state = -1;
++    if (state < 0) state = getenv( "MADEIRA_NO_DIAGNOSTICS" ) != NULL;
++    return state;
++}
++
+ static unsigned ios_span_alloc_n, ios_span_free_n;
+ static void ios_span_census( void *base, size_t size, int is_free )
+ {
+@@ -1530,7 +1541,7 @@ static void ios_span_census( void *base, size_t size, int is_free )
+     unsigned n;
+     if (a < 0x7c00000000ULL || a >= 0x8000000000ULL || size < 0x1000000) return;
+     n = is_free ? ++ios_span_free_n : ++ios_span_alloc_n;
+-    if (n <= 40 || !(n & 15))
++    if ((n <= 40 || !(n & 15)) && !ios_no_diagnostics())
+         dprintf(2, "[span-census] %s #%u %p+0x%lx tid=%04x live=%d rev=ml435\n",
+                 is_free ? "FREE" : "ALLOC", n, base, (unsigned long)size,
+                 NtCurrentTeb() ? (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread : 0,
+@@ -16415,7 +16426,7 @@ static void ios_vm_note_alloc( void *base, SIZE_T size, ULONG type, ULONG protec
+      * request, regardless of the census budget. */
+     int viol = (lim && b > lim);
+     if (b < 0x100000000ull && !viol && !zbits) return;
+-    if (covers || viol || zbits || ios_vm_alloc_logged < 3000)
++    if (covers || viol || zbits || (ios_vm_alloc_logged < 3000 && !ios_no_diagnostics()))
+     {
+         ios_vm_alloc_logged++;
+         dprintf( 2, "[valloc] ml959 %s base=0x%llx size=0x%llx type=0x%x prot=0x%x tid=%04x"
+@@ -16435,7 +16446,7 @@ static void ios_vm_note_free( void *base, SIZE_T size, ULONG type )
+     UINT64 b = (UINT64)(ULONG_PTR)base, w = ios_vm_watch();
+     int hits = (w && b <= w && (size == 0 || w < b + size));
+     if (b < 0x100000000ull) return;
+-    if (hits || ios_vm_free_logged < 3000)
++    if (hits || (ios_vm_free_logged < 3000 && !ios_no_diagnostics()))
+     {
+         ios_vm_free_logged++;
+         dprintf( 2, "[vfree] ml842 %s base=0x%llx size=0x%llx type=0x%x tid=%04x\n",

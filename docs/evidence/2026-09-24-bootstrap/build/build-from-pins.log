@@ -1,0 +1,25 @@
+14:04:41  == inputs
+14:04:41    clang: clang version 22.1.8
+14:04:41    llvm-mingw: clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb) ($LLVM_MINGW)
+14:04:41    ld64: @(#)PROGRAM:ld  PROJECT:ld64-956.6
+14:04:41    xtool: xtool 1.20.1 (dirty)
+14:04:41    swift: Swift version 6.4 (swift-6.4-RELEASE)
+14:04:41    sdk: iPhoneOS26.5.sdk MacOSX26.5.sdk
+14:04:41  == sources
+14:04:41    madeira 5a82d392ecd9ba7b85dc0b30034f8205a05009cf, wine e828644329967ec9d411b0025f6ca57ff9d04d85, fex 0f8edf8f6383ae8085e0ffac511c789cdae97514, dxmt 0cb976618700b0a5348879b943caffa0c2cd1432, rpmalloc 1f271c0c3202663801a0aec32bdb57e5241d6a0e
+14:04:41  == unix
+14:06:15    LINK FAIL $PLAYPORT_BUILD/run/unix/mythic/app/Madeira/libwineserver.a: duplicate symbol: native_machine duplicate symbol: server_start_time duplicate symbol: supported_machines duplicate symbol: supported_machines_count
+14:06:15    LINK OK   $PLAYPORT_BUILD/run/unix/linktest/libwineserver-ws4.a (1001 gnutls_* functions linked)
+14:06:15  == pe
+14:10:14    wine-pe aarch64 manifest unchanged
+14:10:14    wine-pe arm64ec manifest unchanged
+14:10:14  == fex
+14:10:26    5388800 56a7fe80928116ccb9c8c27901b0d45fd9342967751591dd6e01a39bd9f1bfc1 $PLAYPORT_BUILD/run/fex/build-arm64ec/Bin/libarm64ecfex.dll
+14:10:26  == dxmt
+14:11:13    44bb9b3c48d43b0d  libdxmt_combined.a
+14:11:13  == xinput
+14:11:15  == stage
+14:11:16    staged 279 artifacts (2 gaps); all sizes and sha256 match
+14:11:16  == guests
+14:12:15  == app
+14:12:31  == verify

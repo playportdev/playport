@@ -1,0 +1,1289 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 16 Sep 2026 09:26:09 +0800
+Subject: [PATCH] Allocator and call-return stack hardening for the iOS port
+
+Allocate, check, then construct (ml790); name a failed container
+allocation and stop instead of dereferencing NULL, which is how VA
+exhaustion used to present (ml798); the VA band written by ntdll is read
+rather than assumed (ml797); call-return stack instrumentation in
+CallRetStack.h; rpmalloc submodule pointer update.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Madeira-commit: 38dddb32035c5b3adb898d84c869f7b40cbf9ab9
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp        |  44 +-
+ FEXCore/Source/Utils/Allocator.cpp            |  63 +++
+ .../include/FEXCore/Utils/AllocatorHooks.h    |  15 +-
+ FEXCore/include/FEXCore/fextl/allocator.h     |  25 +-
+ Source/Windows/ARM64EC/Module.cpp             |  66 ++-
+ Source/Windows/ARM64EC/libarm64ecfex.def      |   6 +
+ Source/Windows/Common/ArenaManager.cpp        | 399 ++++++++++++++++++
+ Source/Windows/Common/ArenaManager.h          | 105 +++++
+ Source/Windows/Common/ArenaSelfTest.cpp       | 272 ++++++++++++
+ Source/Windows/Common/CallRetStack.h          | 103 ++++-
+ 10 files changed, 1089 insertions(+), 9 deletions(-)
+ create mode 100644 Source/Windows/Common/ArenaManager.cpp
+ create mode 100644 Source/Windows/Common/ArenaManager.h
+ create mode 100644 Source/Windows/Common/ArenaSelfTest.cpp
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 0176bcf..7a6056d 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -8,6 +8,7 @@ desc: Glues Frontend, OpDispatcher and IR Opts & Compilation, LookupCache, Dispa
+ $end_info$
+ */
+ 
++#include <new>
+ #include <cstdint>
+ #ifdef ZYDIS_DISASSEMBLER
+ #include <Zydis/Zydis.h>
+@@ -532,7 +533,48 @@ void ContextImpl::InitializeCompiler(FEXCore::Core::InternalThreadState* Thread)
+ 
+ FEXCore::Core::InternalThreadState* ContextImpl::CreateThread(const FEXCore::Core::CPUState* NewThreadState) {
+   LogMan::Msg::EFmt("[TI-IC] createthread-enter");
+-  FEXCore::Core::InternalThreadState* Thread = new FEXCore::Core::InternalThreadState {
++
++  /* ml790: ALLOCATE, CHECK, THEN CONSTRUCT.
++   *
++   * `new InternalThreadState{...}` cannot be made safe by checking its result:
++   * when the aligned allocation returns null the aggregate initialisation
++   * writes `.CTX` THROUGH THAT NULL before this function can return, so the
++   * caller never gets a chance. That is a store to address zero on a thread
++   * with no state yet, and the fault then recurses through the exception path
++   * until the stack is gone -- with the thread still owning the loader lock.
++   *
++   * The band is finite and a title with enough threads exhausts it, so this is
++   * an ordinary outcome, not a theoretical one. Placement-new after an explicit
++   * check makes the failure returnable. */
++  void* ThreadMem = FEXCore::Allocator::aligned_alloc(alignof(FEXCore::Core::InternalThreadState),
++                                                      sizeof(FEXCore::Core::InternalThreadState));
++#ifdef FEX_IOS_HOST
++  /* MADEIRA_FEX_FAIL_CALLRET=threadstate:N fails the Nth thread-state
++   * allocation, so this containment path can be proven rather than assumed --
++   * it only occurs naturally once the band is exhausted. */
++  {
++    static std::atomic<unsigned> TSCount {0};
++    const unsigned ThisTS = ++TSCount;
++    const char* Env = getenv("MADEIRA_FEX_FAIL_CALLRET");
++    if (Env && !strncmp(Env, "threadstate:", 12) && ThisTS == (unsigned)atoi(Env + 12)) {
++      LogMan::Msg::EFmt("[TI-IC] INJECTED thread-state allocation failure on call #{}", ThisTS);
++      if (ThreadMem) {
++        FEXCore::Allocator::aligned_free(ThreadMem);
++        ThreadMem = nullptr;
++      }
++    }
++  }
++#endif
++  if (!ThreadMem) {
++    LogMan::Msg::EFmt("[TI-IC] THREADSTATE ALLOC FAILED: {} bytes, {} alignment -- the emulator "
++                      "address band is exhausted; refusing to start this thread",
++                      sizeof(FEXCore::Core::InternalThreadState),
++                      alignof(FEXCore::Core::InternalThreadState));
++    return nullptr;
++  }
++  /* ::new -- the class inherits its own operator new overloads, which hide the
++   * global placement form. */
++  FEXCore::Core::InternalThreadState* Thread = ::new (ThreadMem) FEXCore::Core::InternalThreadState {
+     .CTX = this,
+   };
+   LogMan::Msg::EFmt("[TI-IC] threadstate-alloc");
+diff --git a/FEXCore/Source/Utils/Allocator.cpp b/FEXCore/Source/Utils/Allocator.cpp
+index fdd5962..4d49155 100644
+--- a/FEXCore/Source/Utils/Allocator.cpp
++++ b/FEXCore/Source/Utils/Allocator.cpp
+@@ -377,3 +377,66 @@ void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
+ }
+ } // namespace FEXCore::Allocator
+ #endif
++
++#ifdef FEX_IOS_HOST
++extern "C" {
++extern uintptr_t ios_fex_band_base;
++extern uintptr_t ios_fex_band_end;
++}
++#endif
++
++namespace fextl {
++/* iOS-Madeira ml798: name a failed container allocation, then stop.
++ *
++ * Deliberately allocation-free and format-free. This runs BECAUSE an allocation
++ * just failed, so anything that allocates to describe the failure can fail in
++ * turn -- an earlier probe died formatting its own log text and reported the
++ * message as an exception code. Everything here is a fixed stack buffer and
++ * manual hex, in the same style the VA band selector uses for the same reason.
++ *
++ * The band is reported alongside the request because the two together are the
++ * whole diagnosis: a request that fits comfortably inside an exhausted band is
++ * a different bug from a request larger than the band ever was. */
++[[noreturn]] void ReportAllocationFailure(std::size_t Alignment, std::size_t Bytes) {
++  char Buf[224];
++  size_t i = 0;
++  auto Cat = [&](const char* S) {
++    while (*S && i < sizeof(Buf) - 1) {
++      Buf[i++] = *S++;
++    }
++  };
++  auto Hex = [&](unsigned long long V) {
++    const char* D = "0123456789abcdef";
++    Cat("0x");
++    int Shift = 60, Started = 0;
++    for (; Shift >= 0; Shift -= 4) {
++      int Nib = (int)((V >> Shift) & 0xf);
++      if (Nib || Started || !Shift) {
++        if (i < sizeof(Buf) - 1) {
++          Buf[i++] = D[Nib];
++        }
++        Started = 1;
++      }
++    }
++  };
++
++  Cat("[alloc-fail] ml798 FEXAlloc could not allocate bytes=");
++  Hex(Bytes);
++  Cat(" align=");
++  Hex(Alignment);
++#ifdef FEX_IOS_HOST
++  Cat(" band=");
++  Hex((unsigned long long)ios_fex_band_base);
++  Cat("..");
++  Hex((unsigned long long)ios_fex_band_end);
++#endif
++  Cat(" -- no value can be returned that a caller could act on (FEXCore is "
++      "-fno-exceptions), so stopping here instead of letting the NULL be "
++      "written through\n");
++  Buf[i] = 0;
++
++  LogMan::Msg::EFmt("{}", Buf);
++  FEX_TRAP_EXECUTION;
++  __builtin_unreachable();
++}
++} // namespace fextl
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index 6c9ddce..a9a9293 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -120,8 +120,19 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
+     if (Ret) {
+       return Ret;
+     }
+-    /* Band exists but is exhausted: a different failure from "no band", and
+-     * the pre-existing ml321 hardening (#43) still applies below. */
++    /* ml799: an exhausted arena must FAIL, not fall through.
++     *
++     * The unconstrained VirtualAlloc2 below places the allocation wherever the
++     * kernel likes -- which, once the arena exists, means FEX memory landing
++     * outside the range Wine is holding for it, i.e. in guest address space.
++     * That is the collision the arena was built to end, and it would reappear
++     * only under exhaustion: the hardest case to reproduce and the easiest to
++     * misread as corruption.
++     *
++     * Callers already handle nullptr (see the thread-state and call/ret-stack
++     * paths, which report and refuse to start a thread), so failing here is
++     * both honest and survivable. */
++    return nullptr;
+   }
+ #endif
+   MEM_EXTENDED_PARAMETER Parameter {};
+diff --git a/FEXCore/include/FEXCore/fextl/allocator.h b/FEXCore/include/FEXCore/fextl/allocator.h
+index 552211a..9aee013 100644
+--- a/FEXCore/include/FEXCore/fextl/allocator.h
++++ b/FEXCore/include/FEXCore/fextl/allocator.h
+@@ -5,6 +5,10 @@
+ #include <memory>
+ 
+ namespace fextl {
++/* Reports an allocation failure and terminates. Out-of-line and allocation-free;
++ * see the call site in FEXAlloc::allocate. */
++[[noreturn]] FEX_DEFAULT_VISIBILITY void ReportAllocationFailure(std::size_t Alignment, std::size_t Bytes);
++
+ /**
+  * @brief C++ allocator class interface in to FEXCore::Allocator for memory allocations.
+  */
+@@ -19,7 +23,26 @@ public:
+   FEXAlloc(const FEXAlloc<U>&) noexcept {}
+ 
+   inline value_type* allocate(std::size_t n) {
+-    return reinterpret_cast<value_type*>(::FEXCore::Allocator::aligned_alloc(alignof(value_type), n * sizeof(value_type)));
++    auto* Ret = reinterpret_cast<value_type*>(::FEXCore::Allocator::aligned_alloc(alignof(value_type), n * sizeof(value_type)));
++    if (!Ret) [[unlikely]] {
++      /* iOS-Madeira ml798: an unchecked NULL here is how VA exhaustion presented
++       * as an unattributable crash.
++       *
++       * FEXCore builds with -fno-exceptions, so this allocator cannot throw and
++       * the standard's "succeed or throw" contract collapses to "return NULL".
++       * std::vector then value-initialises over that NULL, and the process dies
++       * in memset() with no indication of which allocation failed. That is the
++       * crash we spent a run diagnosing: guest window creation succeeded, the
++       * band filled, and DeadFlagCalculationEliminination::Run's BlockMap.resize
++       * came back NULL inside the JIT compile path.
++       *
++       * There is nothing to return here that a caller could act on, so name the
++       * failure at the point of truth and stop. Reporting is out-of-line and
++       * allocation-free on purpose: formatting inside a failed-allocation path
++       * is how an earlier probe died on its own log text. */
++      ::fextl::ReportAllocationFailure(alignof(value_type), n * sizeof(value_type));
++    }
++    return Ret;
+   }
+ 
+   inline void deallocate(value_type* p, size_t) noexcept {
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 12311be..b429243 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -6,6 +6,7 @@ desc: Implements the ARM64EC BT module API using FEXCore
+ $end_info$
+ */
+ 
++#include "../Common/ArenaManager.h"
+ #include <FEXCore/fextl/fmt.h>
+ #include <FEXCore/Core/X86Enums.h>
+ #include <FEXCore/Core/SignalDelegator.h>
+@@ -858,6 +859,21 @@ NTSTATUS ProcessInit() {
+   FEX::Windows::Logging::Init();
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_FILENAME, ExecutablePath);
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, AppConfigName);
++
++#if defined(FEX_IOS_HOST) && defined(MADEIRA_ARENA_SELFTEST)
++  /* Runs only when MADEIRA_ARENA_TEST is set, and only in builds that link the
++   * self-test (ArenaSelfTest.cpp is not in CMakeLists, so this is compiled out
++   * by default and the carver has NEVER executed on device).
++   *
++   * ml798 correction: an earlier version of this comment blamed the test's
++   * std::thread/std::vector CRT constructors for the _lock(17) recursion that
++   * killed every launch. The ml796 A/B REFUTED that -- unlinking the test
++   * changed nothing. The real cause was three getenv() calls added to
++   * rpmalloc's band selector, which runs before ucrtbase's DllMain; see the
++   * ml797 note in ios_fex_band_select(). Keeping the false attribution here
++   * would send the next reader to exonerated code. */
++  FEX::Windows::Arena::SelfTest();
++#endif
+ #ifdef FEX_IOS_HOST
+   /* iOS-Madeira ml278: announce the atomic-alias geometry UNCONDITIONALLY, AFTER
+    * Logging::Init().
+@@ -896,7 +912,7 @@ NTSTATUS ProcessInit() {
+  * __DATE__/__TIME__ below is compiler-generated and therefore the
+  * authoritative identity; if the two disagree, the tag is wrong, not the
+  * build. */
+-#define MADEIRA_REV "ml755"
++#define MADEIRA_REV "ml908"
+   LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MADEIRA_REV " compiled " __DATE__ " " __TIME__);
+ #ifdef FEX_IOS_HOST
+   /* ml751: flush the VA band selector's beacons.
+@@ -1686,6 +1702,22 @@ NTSTATUS ThreadInit() {
+ #endif
+ 
+   auto* Thread = CTX->CreateThread();
++  if (!Thread) {
++    /* The emulator could not allocate this thread's state. Unwind what this
++     * function has already built and hand the failure back; the loader releases
++     * loader_section and ends only this thread, so the process survives to
++     * report it rather than wedging on a lock owned by a dead thread. */
++    LogMan::Msg::EFmt("[FEX-iOS] ThreadInit: thread state unavailable -- unwinding thread {:#x} "
++                      "and returning STATUS_NO_MEMORY", (unsigned long long)GetCurrentThreadId());
++    CPUArea.StateFrame() = nullptr;
++    CPUArea.EmulatorStackLimit() = 0;
++    CPUArea.EmulatorStackBase() = 0;
++    if (EmulatorStack) {
++      ::VirtualFree(reinterpret_cast<void*>(EmulatorStack), 0, MEM_RELEASE);
++    }
++    FEX::Windows::DeinitCRTThread();
++    return STATUS_NO_MEMORY;
++  }
+ #ifdef FEX_IOS_HOST
+   IosTiLog("[FEX-iOS] TI:createthread\n");
+ #endif
+@@ -1741,7 +1773,37 @@ NTSTATUS ThreadInit() {
+   }
+ #endif
+ 
+-  FEX::Windows::CallRetStack::InitializeThread(Thread);
++  if (!FEX::Windows::CallRetStack::InitializeThread(Thread)) {
++    /* Unwind everything this function built for this thread, in reverse.
++     *
++     * Returning early without unwinding leaves the CPU area pointing at a
++     * half-built thread, and the emulator stack and segment table leaked -- on
++     * a band that just proved it has nothing left to give. The caller releases
++     * the loader lock and terminates only this thread, so the process survives
++     * to report the failure instead of wedging. */
++    LogMan::Msg::EFmt("[FEX-iOS] ThreadInit: call-ret stack unavailable (band [{:#x},{:#x}]) "
++                      "-- unwinding thread {:#x} and returning STATUS_NO_MEMORY",
++                      (unsigned long long)ios_fex_band_base, (unsigned long long)ios_fex_band_end,
++                      (unsigned long long)GetCurrentThreadId());
++
++    Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_GDT] = nullptr;
++    Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_LDT] = nullptr;
++    delete[] NewSegments;
++
++    CTX->DestroyThread(Thread);
++
++    /* Clear the CPU-area fields before freeing what they point at, so nothing
++     * can observe a stale pointer while the thread winds down. */
++    CPUArea.StateFrame() = nullptr;
++    CPUArea.EmulatorStackLimit() = 0;
++    CPUArea.EmulatorStackBase() = 0;
++    if (EmulatorStack) {
++      ::VirtualFree(reinterpret_cast<void*>(EmulatorStack), 0, MEM_RELEASE);
++    }
++
++    FEX::Windows::DeinitCRTThread();
++    return STATUS_NO_MEMORY;
++  }
+ #ifdef FEX_IOS_HOST
+   IosTiLog("[FEX-iOS] TI:callret\n");
+ #endif
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index d8ced1d..2d961fb 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -33,3 +33,9 @@ EXPORTS
+   ; the selector finds NO BAND -- exactly the failure that needs explaining.
+   ios_va_log DATA
+   ios_va_log_len DATA
++  ; ml797: the VA band, written by ntdll from arm64ec_process_init_dispatchers()
++  ; BEFORE the selector runs. The selector cannot read an environment for itself
++  ; -- it runs before the ARM64EC TEB and before ucrtbase's DllMain, where
++  ; getenv() recurses in _lock(17) and GetEnvironmentVariableA faults on the TEB.
++  ios_fex_band_base DATA
++  ios_fex_band_end DATA
+diff --git a/Source/Windows/Common/ArenaManager.cpp b/Source/Windows/Common/ArenaManager.cpp
+new file mode 100644
+index 0000000..27cae42
+--- /dev/null
++++ b/Source/Windows/Common/ArenaManager.cpp
+@@ -0,0 +1,399 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// ⛔ NOT BUILT. Superseded by Wine's reserved-area machinery (ml799-ml802).
++//
++// The shipping arena is a FEX_ONLY reserved area owned by ntdll-unix: Wine holds
++// the range natively as PROT_NONE, carves views from it for address-constrained
++// requests only, and restores PROT_NONE on free. That is task-wide by
++// construction, which this manager is not -- its tables are static inside the
++// FEX image, and pseudo-processes carry separate libarm64ecfex mappings, so two
++// x64 processes would have kept independent hole tables for one reservation.
++//
++// Kept as a tested reference (37 host checks in research/arena-tests), not as a
++// second owner. Adopting it again would reintroduce the two-owner bug the arena
++// exists to remove.
++#include "ArenaManager.h"
++
++#include <FEXCore/Utils/LogManager.h>
++
++#include <atomic>
++#include <mutex>
++#include <windows.h>
++
++namespace FEX {
++namespace Windows {
++namespace Arena {
++
++namespace {
++
++constexpr size_t GRAN = 0x10000; /* 64K: the placeholder split granularity */
++
++/* Fixed capacity, statically stored. See the header: growing a container here
++ * would re-enter Alloc through the heap and deadlock under our own lock. */
++constexpr unsigned MAX_HOLES = 4096;
++constexpr unsigned MAX_LIVE = 8192;
++
++struct Span {
++  uintptr_t Base;
++  size_t Size;
++};
++
++std::mutex Lock;
++uintptr_t ArenaBase = 0;
++uintptr_t ArenaEnd = 0;
++
++Span Holes[MAX_HOLES]; /* sorted by Base, disjoint, coalesced */
++unsigned HoleCount = 0;
++Span Live[MAX_LIVE]; /* live carves, sorted by Base */
++unsigned LiveCount = 0;
++
++Inject InjectMode = Inject::None;
++unsigned InjectAt = 0;
++std::atomic<unsigned> InjectCounter {0};
++
++bool ShouldInject(Inject Want) {
++  if (InjectMode != Want) {
++    return false;
++  }
++  return (++InjectCounter == InjectAt);
++}
++
++size_t RoundUp(size_t V, size_t A) {
++  return (V + A - 1) & ~(A - 1);
++}
++
++/* --- fixed-table helpers. All callers hold Lock. --- */
++
++bool HoleInsert(unsigned At, uintptr_t B, size_t S) {
++  if (HoleCount >= MAX_HOLES) {
++    return false;
++  }
++  for (unsigned i = HoleCount; i > At; --i) {
++    Holes[i] = Holes[i - 1];
++  }
++  Holes[At] = {B, S};
++  ++HoleCount;
++  return true;
++}
++
++void HoleErase(unsigned At) {
++  for (unsigned i = At; i + 1 < HoleCount; ++i) {
++    Holes[i] = Holes[i + 1];
++  }
++  --HoleCount;
++}
++
++unsigned HoleLowerBound(uintptr_t B) {
++  unsigned Lo = 0, Hi = HoleCount;
++  while (Lo < Hi) {
++    unsigned Mid = (Lo + Hi) / 2;
++    if (Holes[Mid].Base < B) {
++      Lo = Mid + 1;
++    } else {
++      Hi = Mid;
++    }
++  }
++  return Lo;
++}
++
++unsigned LiveFind(uintptr_t B) {
++  unsigned Lo = 0, Hi = LiveCount;
++  while (Lo < Hi) {
++    unsigned Mid = (Lo + Hi) / 2;
++    if (Live[Mid].Base < B) {
++      Lo = Mid + 1;
++    } else {
++      Hi = Mid;
++    }
++  }
++  return Lo;
++}
++
++bool LiveInsert(uintptr_t B, size_t S) {
++  if (LiveCount >= MAX_LIVE) {
++    return false;
++  }
++  unsigned At = LiveFind(B);
++  for (unsigned i = LiveCount; i > At; --i) {
++    Live[i] = Live[i - 1];
++  }
++  Live[At] = {B, S};
++  ++LiveCount;
++  return true;
++}
++
++void LiveErase(unsigned At) {
++  for (unsigned i = At; i + 1 < LiveCount; ++i) {
++    Live[i] = Live[i + 1];
++  }
++  --LiveCount;
++}
++
++/* --- kernel placeholder operations --- */
++
++bool SplitPlaceholder(uintptr_t B, size_t S) {
++  if (ShouldInject(Inject::SplitFails)) {
++    LogMan::Msg::EFmt("[arena] INJECTED split failure at {:#x} size={:#x}", B, S);
++    return false;
++  }
++  return ::VirtualFree(reinterpret_cast<void*>(B), S, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) != 0;
++}
++
++/* Merge neighbouring placeholders IN THE KERNEL. Coalescing only the
++ * bookkeeping leaves the kernel with separate placeholders, and a later
++ * allocation spanning the boundary then fails for no visible reason. */
++bool CoalescePlaceholders(uintptr_t B, size_t S) {
++  return ::VirtualFree(reinterpret_cast<void*>(B), S, MEM_RELEASE | MEM_COALESCE_PLACEHOLDERS) != 0;
++}
++
++} // namespace
++
++bool IsActive() {
++  return ArenaBase != 0;
++}
++uintptr_t Base() {
++  return ArenaBase;
++}
++uintptr_t End() {
++  return ArenaEnd;
++}
++
++void SetInject(Inject I, unsigned NthCall) {
++  std::lock_guard<std::mutex> G {Lock};
++  InjectMode = I;
++  InjectAt = NthCall;
++  InjectCounter = 0;
++}
++
++bool Adopt(uintptr_t base, uintptr_t end) {
++  std::lock_guard<std::mutex> G {Lock};
++  if (!base || end <= base || (base & (GRAN - 1)) || (end & (GRAN - 1))) {
++    LogMan::Msg::EFmt("[arena] REJECTED publication [{:#x},{:#x}) -- unaligned, empty or inverted; "
++                      "refusing to run with a range we cannot own",
++                      base, end);
++    return false;
++  }
++  ArenaBase = base;
++  ArenaEnd = end;
++  HoleCount = 0;
++  LiveCount = 0;
++  HoleInsert(0, base, static_cast<size_t>(end - base));
++  LogMan::Msg::EFmt("[arena] ADOPTED [{:#x},{:#x}) size={:#x} -- one hole, placeholder backed", base, end,
++                    static_cast<size_t>(end - base));
++  return true;
++}
++
++void* Alloc(size_t Size, size_t Alignment, Policy P) {
++  if (!ArenaBase || !Size) {
++    return nullptr;
++  }
++  if (Alignment < GRAN) {
++    Alignment = GRAN;
++  }
++  const size_t Want = RoundUp(Size, GRAN);
++  if (Want < Size) { /* overflow */
++    return nullptr;
++  }
++
++  std::lock_guard<std::mutex> G {Lock};
++  for (unsigned i = 0; i < HoleCount; ++i) {
++    const uintptr_t HB = Holes[i].Base;
++    const size_t HS = Holes[i].Size;
++    const uintptr_t Aligned = (HB + Alignment - 1) & ~(uintptr_t)(Alignment - 1);
++    if (Aligned < HB) {
++      continue;
++    }
++    const size_t Lead = Aligned - HB;
++    if (HS < Lead || HS - Lead < Want) {
++      continue;
++    }
++    const size_t Trail = HS - Lead - Want;
++
++    /* Split only when the carve does not consume the hole exactly. */
++    const bool NeedSplit = (Lead || Trail);
++    if (NeedSplit && !SplitPlaceholder(Aligned, Want)) {
++      LogMan::Msg::EFmt("[arena] split refused at {:#x} size={:#x} -- hole left intact", Aligned, Want);
++      continue;
++    }
++
++    ULONG Type = MEM_RESERVE | MEM_REPLACE_PLACEHOLDER;
++    ULONG Prot = PAGE_NOACCESS;
++    if (P == Policy::CommittedRW) {
++      Type |= MEM_COMMIT;
++      Prot = PAGE_READWRITE;
++    }
++
++    void* Got = nullptr;
++    if (!ShouldInject(Inject::ReplaceFails)) {
++      Got = ::VirtualAlloc(reinterpret_cast<void*>(Aligned), Want, Type, Prot);
++    } else {
++      LogMan::Msg::EFmt("[arena] INJECTED replace failure at {:#x} size={:#x}", Aligned, Want);
++    }
++
++    if (!Got) {
++      /* ROLL BACK THE SPLIT. The kernel has already divided the placeholder,
++       * so simply keeping the old logical hole would describe a state that no
++       * longer exists -- a later carve spanning the boundary would then fail
++       * inexplicably. Put the pieces back together before giving up. */
++      if (NeedSplit) {
++        if (!CoalescePlaceholders(HB, HS)) {
++          /* Cannot restore the original shape: record the pieces truthfully
++           * rather than claim a hole that is no longer whole. */
++          LogMan::Msg::EFmt("[arena] replace failed at {:#x} AND the split could not be rolled back "
++                            "-- recording {} fragment(s) instead of one hole",
++                            Aligned, (Lead ? 1 : 0) + 1 + (Trail ? 1 : 0));
++          HoleErase(i);
++          unsigned At = i;
++          if (Lead) {
++            HoleInsert(At++, HB, Lead);
++          }
++          HoleInsert(At++, Aligned, Want);
++          if (Trail) {
++            HoleInsert(At, Aligned + Want, Trail);
++          }
++          return nullptr;
++        }
++      }
++      LogMan::Msg::EFmt("[arena] replace refused at {:#x} size={:#x} -- rolled back", Aligned, Want);
++      continue;
++    }
++
++    if (P == Policy::GuardedRW) {
++      /* Commit everything but the first and last page, which must fault. */
++      if (Want > 2 * GRAN) {
++        ::VirtualAlloc(reinterpret_cast<void*>(Aligned + GRAN), Want - 2 * GRAN, MEM_COMMIT, PAGE_READWRITE);
++      }
++    }
++
++    if (!LiveInsert(Aligned, Want)) {
++      /* Without a live record Free() cannot validate, and an unvalidated free
++       * corrupts the placeholder map. Refuse the allocation instead. */
++      LogMan::Msg::EFmt("[arena] live table full ({} entries) -- refusing the carve at {:#x}", MAX_LIVE, Aligned);
++      ::VirtualFree(reinterpret_cast<void*>(Aligned), Want, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
++      if (NeedSplit) {
++        CoalescePlaceholders(HB, HS);
++      }
++      return nullptr;
++    }
++
++    /* The hole shrinks to its lead and trail. */
++    HoleErase(i);
++    unsigned At = i;
++    if (Lead) {
++      HoleInsert(At++, HB, Lead);
++    }
++    if (Trail) {
++      HoleInsert(At, Aligned + Want, Trail);
++    }
++    return Got;
++  }
++  return nullptr;
++}
++
++bool Free(void* Ptr, size_t Size) {
++  if (!ArenaBase) {
++    return false;
++  }
++  const uintptr_t P = reinterpret_cast<uintptr_t>(Ptr);
++  if (!Ptr || !Size) {
++    LogMan::Msg::EFmt("[arena] Free({:#x},{:#x}) rejected -- null pointer or zero size", P, Size);
++    return false;
++  }
++  if (P & (GRAN - 1)) {
++    LogMan::Msg::EFmt("[arena] Free({:#x}) rejected -- not 64K aligned", P);
++    return false;
++  }
++  const size_t Want = RoundUp(Size, GRAN);
++  if (Want < Size || P + Want < P) {
++    LogMan::Msg::EFmt("[arena] Free({:#x},{:#x}) rejected -- size overflows", P, Size);
++    return false;
++  }
++  if (P < ArenaBase || P + Want > ArenaEnd) {
++    LogMan::Msg::EFmt("[arena] Free({:#x},{:#x}) rejected -- outside [{:#x},{:#x})", P, Want, ArenaBase, ArenaEnd);
++    return false;
++  }
++
++  std::lock_guard<std::mutex> G {Lock};
++
++  /* Must match a live carve EXACTLY. A partial or double free would hand the
++   * kernel a placeholder operation describing a range we do not own. */
++  const unsigned At = LiveFind(P);
++  if (At >= LiveCount || Live[At].Base != P) {
++    LogMan::Msg::EFmt("[arena] Free({:#x},{:#x}) rejected -- not a live carve (double free, or a "
++                      "pointer into the middle of one)",
++                      P, Want);
++    return false;
++  }
++  if (Live[At].Size != Want) {
++    LogMan::Msg::EFmt("[arena] Free({:#x},{:#x}) rejected -- live size is {:#x}", P, Want, Live[At].Size);
++    return false;
++  }
++
++  bool Preserved;
++  if (ShouldInject(Inject::PreserveFails)) {
++    LogMan::Msg::EFmt("[arena] INJECTED preserve failure at {:#x}", P);
++    Preserved = false;
++  } else {
++    Preserved = ::VirtualFree(Ptr, Want, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) != 0;
++  }
++  if (!Preserved) {
++    LogMan::Msg::EFmt("[arena] Free({:#x},{:#x}) could not preserve the placeholder -- that address "
++                      "space is now at risk of being taken by something else; keeping it live",
++                      P, Want);
++    return false;
++  }
++
++  LiveErase(At);
++
++  unsigned Pos = HoleLowerBound(P);
++  if (!HoleInsert(Pos, P, Want)) {
++    LogMan::Msg::EFmt("[arena] hole table full -- {:#x} is placeholder-backed but untracked", P);
++    return false;
++  }
++
++  /* Coalesce with both neighbours, in the kernel as well as here. Without this
++   * a create/destroy churn leaves the arena in ever smaller pieces and capacity
++   * shrinks though nothing leaked -- exactly what the churn test looks for. */
++  if (Pos + 1 < HoleCount && Holes[Pos].Base + Holes[Pos].Size == Holes[Pos + 1].Base) {
++    const size_t Merged = Holes[Pos].Size + Holes[Pos + 1].Size;
++    if (CoalescePlaceholders(Holes[Pos].Base, Merged)) {
++      Holes[Pos].Size = Merged;
++      HoleErase(Pos + 1);
++    }
++  }
++  if (Pos > 0 && Holes[Pos - 1].Base + Holes[Pos - 1].Size == Holes[Pos].Base) {
++    const size_t Merged = Holes[Pos - 1].Size + Holes[Pos].Size;
++    if (CoalescePlaceholders(Holes[Pos - 1].Base, Merged)) {
++      Holes[Pos - 1].Size = Merged;
++      HoleErase(Pos);
++    }
++  }
++  return true;
++}
++
++void Stats(size_t* LargestHole, size_t* TotalFree, unsigned* FreeSlices, unsigned* LiveOut) {
++  std::lock_guard<std::mutex> G {Lock};
++  size_t Largest = 0, Total = 0;
++  for (unsigned i = 0; i < HoleCount; ++i) {
++    if (Holes[i].Size > Largest) {
++      Largest = Holes[i].Size;
++    }
++    Total += Holes[i].Size;
++  }
++  if (LargestHole) {
++    *LargestHole = Largest;
++  }
++  if (TotalFree) {
++    *TotalFree = Total;
++  }
++  if (FreeSlices) {
++    *FreeSlices = HoleCount;
++  }
++  if (LiveOut) {
++    *LiveOut = LiveCount;
++  }
++}
++
++} // namespace Arena
++} // namespace Windows
++} // namespace FEX
+diff --git a/Source/Windows/Common/ArenaManager.h b/Source/Windows/Common/ArenaManager.h
+new file mode 100644
+index 0000000..d2571cc
+--- /dev/null
++++ b/Source/Windows/Common/ArenaManager.h
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// ⛔ NOT BUILT. Superseded by Wine's reserved-area machinery (ml799-ml802).
++//
++// The shipping arena is a FEX_ONLY reserved area owned by ntdll-unix: Wine holds
++// the range natively as PROT_NONE, carves views from it for address-constrained
++// requests only, and restores PROT_NONE on free. That is task-wide by
++// construction, which this manager is not -- its tables are static inside the
++// FEX image, and pseudo-processes carry separate libarm64ecfex mappings, so two
++// x64 processes would have kept independent hole tables for one reservation.
++//
++// Kept as a tested reference (37 host checks in research/arena-tests), not as a
++// second owner. Adopting it again would reintroduce the two-owner bug the arena
++// exists to remove.
++#pragma once
++/*
++ * The single owner of the published arena.
++ *
++ * The host process reserves one contiguous range as a PLACEHOLDER and publishes
++ * it. Every emulator allocation that must live inside that range carves from
++ * here -- allocator spans, thread state, call/return stacks -- rather than each
++ * growing its own suballocator. That is the point: the previous arrangement had
++ * two parties choosing address space independently and they chose differently.
++ * A second independent carver inside the arena would reproduce the same class
++ * of bug one level down.
++ *
++ * Why placeholders rather than plain reservation: a placeholder can be SPLIT,
++ * so a slice can be handed out as real memory while the rest of the range stays
++ * reserved and unavailable to anything else. On free the slice returns as a
++ * placeholder (MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) instead of becoming free
++ * address space that guest modules could take, and neighbouring placeholders
++ * are coalesced IN THE KERNEL (MEM_COALESCE_PLACEHOLDERS) -- merging only the
++ * bookkeeping would leave a later allocation unable to span the boundary.
++ *
++ * ⛔ NOTHING HERE MAY ALLOCATE FROM THE HEAP.
++ *
++ * The heap in this DLL ultimately reaches the allocator that calls into this
++ * manager, so a container growing while the lock is held would re-enter Alloc
++ * and deadlock. All state is fixed-capacity and statically stored. Running out
++ * of table entries is reported as an allocation failure, which callers already
++ * handle, rather than grown into.
++ */
++
++#include <cstddef>
++#include <cstdint>
++
++namespace FEX {
++namespace Windows {
++namespace Arena {
++
++/* What a carve is for. The manager reserves address space identically for all
++ * of them; the difference is what gets committed and with what protection,
++ * which is the caller's business and not something one RW default can serve. */
++enum class Policy {
++  /* Whole slice committed read-write. */
++  CommittedRW,
++  /* Reserved only. The caller commits and protects what it needs -- JIT
++   * regions and anything wanting RX/RW aliasing. */
++  ReserveOnly,
++  /* Committed read-write EXCEPT the first and last page, which stay
++   * inaccessible. Call/return stacks need the guard pages to fault. */
++  GuardedRW,
++};
++
++/* Half-open [Base, End). Zero Base means no arena was published. */
++bool IsActive();
++uintptr_t Base();
++uintptr_t End();
++
++/* Adopt a published range. Returns false if it does not validate, in which case
++ * the caller must FAIL rather than fall back to selecting its own band. */
++bool Adopt(uintptr_t base, uintptr_t end);
++
++/* Carve Size bytes at the given alignment. Returns nullptr when no hole is
++ * large enough or the tables are full -- an ordinary outcome once a title
++ * creates enough threads, so callers must report it, not dereference it. */
++void* Alloc(size_t Size, size_t Alignment, Policy P);
++
++/* Return a slice. Address and size must match a live carve exactly; anything
++ * else is refused and reported rather than acted on. */
++bool Free(void* Ptr, size_t Size);
++
++/* Largest contiguous hole, total free bytes, free-slice count, live count.
++ * The churn test compares these before and after, so they must be exact. */
++void Stats(size_t* LargestHole, size_t* TotalFree, unsigned* FreeSlices, unsigned* Live);
++
++/* Deterministic failure injection for the paths that only occur under
++ * exhaustion or kernel refusal, which no ordinary run reaches. */
++enum class Inject {
++  None,
++  SplitFails,   /* the placeholder split refuses */
++  ReplaceFails, /* the split succeeds, the replacement refuses -- the rollback path */
++  PreserveFails /* free cannot preserve the placeholder */
++};
++void SetInject(Inject I, unsigned NthCall);
++
++/* Exercise the carver against the REAL placeholder implementation, under its
++ * own flag (MADEIRA_ARENA_TEST). Separate from the feature switch on purpose:
++ * a test that only runs when the feature is on cannot decide whether to turn
++ * the feature on. No-op unless the flag is set. */
++void SelfTest();
++
++} // namespace Arena
++} // namespace Windows
++} // namespace FEX
+diff --git a/Source/Windows/Common/ArenaSelfTest.cpp b/Source/Windows/Common/ArenaSelfTest.cpp
+new file mode 100644
+index 0000000..7fcdba1
+--- /dev/null
++++ b/Source/Windows/Common/ArenaSelfTest.cpp
+@@ -0,0 +1,272 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++/*
++ * On-device exercise of the arena carver against the REAL placeholder
++ * implementation.
++ *
++ * The host-side suite runs the same carver against a mock. That proves the
++ * interval arithmetic and the rollback logic, but it cannot prove that this
++ * kernel splits, replaces, preserves and coalesces the way the mock assumes --
++ * and that assumption is the whole design. So this runs on the device, against
++ * the actual implementation, before any allocator is made to depend on it.
++ *
++ * Deliberately gated by its OWN flag, separate from the feature switch: a test
++ * that only runs when the feature is enabled cannot be used to decide whether
++ * to enable the feature.
++ *
++ *   MADEIRA_ARENA_TEST=churn:N   N sequential create/destroy cycles; free space
++ *                                and largest hole must return EXACTLY
++ *   MADEIRA_ARENA_TEST=ramp:N    up to N concurrent threads; hitting capacity
++ *                                is a RESULT, not a failure
++ *   MADEIRA_ARENA_TEST=random:N  N randomized size/alignment/free-order rounds
++ */
++
++#include "ArenaManager.h"
++
++#include <FEXCore/Utils/LogManager.h>
++
++#include <atomic>
++#include <cstdlib>
++#include <cstring>
++#include <thread>
++#include <vector>
++#include <windows.h>
++
++namespace FEX {
++namespace Windows {
++namespace Arena {
++
++namespace {
++
++constexpr size_t TEST_ARENA = 256ull << 20; /* 256MB: enough to be meaningful, small enough to be quick */
++constexpr size_t GRAN = 0x10000;
++/* Carves per round. Each one costs a split, a replace, a preserve and up to two
++ * coalesces against the real kernel, so this multiplies quickly. */
++constexpr unsigned PER_ROUND = 8;
++
++/* A cheap deterministic generator -- the run must be reproducible, and this
++ * must not pull in anything that allocates. */
++uint32_t Rand(uint32_t& S) {
++  S ^= S << 13;
++  S ^= S >> 17;
++  S ^= S << 5;
++  return S;
++}
++
++uintptr_t ReserveTestArena(size_t Size) {
++  using VA2 = PVOID(WINAPI*)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
++  HMODULE KB = GetModuleHandleA("kernelbase.dll");
++  auto pVA2 = KB ? reinterpret_cast<VA2>(reinterpret_cast<void*>(GetProcAddress(KB, "VirtualAlloc2"))) : nullptr;
++  if (!pVA2) {
++    LogMan::Msg::EFmt("[arena-test] VirtualAlloc2 unavailable -- cannot reserve a test arena");
++    return 0;
++  }
++  MEM_ADDRESS_REQUIREMENTS Req {};
++  MEM_EXTENDED_PARAMETER Param {};
++  Req.LowestStartingAddress = reinterpret_cast<PVOID>(0x0200000000ull);
++  Req.HighestEndingAddress = reinterpret_cast<PVOID>(0x0fbfffffffull);
++  Req.Alignment = GRAN;
++  Param.Type = MemExtendedParameterAddressRequirements;
++  Param.Pointer = &Req;
++  void* Base = pVA2(GetCurrentProcess(), nullptr, Size, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, &Param, 1);
++  return reinterpret_cast<uintptr_t>(Base);
++}
++
++struct Rec {
++  void* P;
++  size_t S;
++};
++
++int Failures = 0;
++void Expect(bool Cond, const char* What) {
++  if (Cond) {
++    LogMan::Msg::EFmt("[arena-test]   ok   {}", What);
++  } else {
++    ++Failures;
++    LogMan::Msg::EFmt("[arena-test]   FAIL {}", What);
++  }
++}
++
++void RunChurn(unsigned N) {
++  size_t Free0 = 0, Largest0 = 0;
++  Stats(&Largest0, &Free0, nullptr, nullptr);
++  LogMan::Msg::EFmt("[arena-test] churn x{}: start free={:#x} largest={:#x}", N, Free0, Largest0);
++
++  /* Every carve is several VM operations against the real kernel, so the total
++   * is announced up front: a long silent run is indistinguishable from a hang,
++   * which is exactly how the first attempt looked. */
++  LogMan::Msg::EFmt("[arena-test] {} rounds x {} carves = ~{} VM operations; progress every 20 rounds", N, PER_ROUND,
++                    (unsigned)(N * PER_ROUND * 5));
++  for (unsigned round = 0; round < N; ++round) {
++    if (round && (round % 20) == 0) {
++      size_t F = 0;
++      Stats(nullptr, &F, nullptr, nullptr);
++      LogMan::Msg::EFmt("[arena-test]   round {}/{} free={:#x}", round, N, F);
++    }
++    Rec Held[PER_ROUND];
++    unsigned Got = 0;
++    for (unsigned i = 0; i < PER_ROUND; ++i) {
++      const size_t S = GRAN * (1 + (i % 4));
++      void* P = Alloc(S, GRAN, Policy::CommittedRW);
++      if (!P) {
++        break;
++      }
++      Held[Got++] = {P, S};
++    }
++    for (unsigned i = 0; i < Got; ++i) {
++      Free(Held[i].P, Held[i].S);
++    }
++  }
++
++  size_t Free1 = 0, Largest1 = 0;
++  unsigned Slices = 0, Live = 0;
++  Stats(&Largest1, &Free1, &Slices, &Live);
++  LogMan::Msg::EFmt("[arena-test] churn done: free={:#x} largest={:#x} slices={} live={}", Free1, Largest1, Slices, Live);
++  Expect(Free1 == Free0, "total free returns EXACTLY after churn");
++  Expect(Largest1 == Largest0, "largest hole returns EXACTLY (capacity did not shrink)");
++  Expect(Live == 0, "no carve leaked");
++  Expect(Slices == 1, "arena is a single hole again");
++}
++
++void RunRamp(unsigned MaxThreads) {
++  size_t Free0 = 0, Largest0 = 0;
++  Stats(&Largest0, &Free0, nullptr, nullptr);
++  std::atomic<unsigned> Succeeded {0}, Refused {0};
++
++  std::vector<std::thread> T;
++  for (unsigned t = 0; t < MaxThreads; ++t) {
++    T.emplace_back([&, t] {
++      uint32_t S = t * 2654435761u + 1;
++      for (unsigned i = 0; i < 64; ++i) {
++        const size_t Sz = GRAN * (1 + (Rand(S) % 4));
++        void* P = Alloc(Sz, GRAN, Policy::CommittedRW);
++        if (P) {
++          ++Succeeded;
++          Free(P, Sz);
++        } else {
++          ++Refused;
++        }
++      }
++    });
++  }
++  for (auto& th : T) {
++    th.join();
++  }
++
++  size_t Free1 = 0, Largest1 = 0;
++  unsigned Slices = 0, Live = 0;
++  Stats(&Largest1, &Free1, &Slices, &Live);
++  /* A refusal under a concurrency ramp means the arena was momentarily full.
++   * That is CAPACITY, not fragmentation, and must not be read as a failure --
++   * the failure would be capacity that does not come back. */
++  LogMan::Msg::EFmt("[arena-test] ramp x{}: {} carves, {} refused (refusals mean capacity, not breakage)", MaxThreads,
++                    Succeeded.load(), Refused.load());
++  Expect(Free1 == Free0, "total free returns EXACTLY after the ramp");
++  Expect(Largest1 == Largest0, "largest hole returns EXACTLY after the ramp");
++  Expect(Live == 0, "no carve leaked under concurrency");
++  Expect(Slices == 1, "no fragmentation left after concurrent churn");
++}
++
++void RunRandom(unsigned N) {
++  size_t Free0 = 0, Largest0 = 0;
++  Stats(&Largest0, &Free0, nullptr, nullptr);
++  uint32_t S = 20260829u;
++  std::vector<Rec> Held;
++  for (unsigned i = 0; i < N; ++i) {
++    if (Held.empty() || (Rand(S) % 100) < 60) {
++      const size_t Sz = GRAN * (1 + (Rand(S) % 8));
++      const size_t A = GRAN << (Rand(S) % 3);
++      void* P = Alloc(Sz, A, Policy::CommittedRW);
++      if (P) {
++        Held.push_back({P, Sz});
++      }
++    } else {
++      const size_t k = Rand(S) % Held.size();
++      Free(Held[k].P, Held[k].S);
++      Held.erase(Held.begin() + k);
++    }
++  }
++  for (auto& H : Held) {
++    Free(H.P, H.S);
++  }
++  size_t Free1 = 0, Largest1 = 0;
++  unsigned Slices = 0, Live = 0;
++  Stats(&Largest1, &Free1, &Slices, &Live);
++  LogMan::Msg::EFmt("[arena-test] random x{}: free={:#x} largest={:#x} slices={} live={}", N, Free1, Largest1, Slices, Live);
++  Expect(Free1 == Free0, "total free returns EXACTLY after random churn");
++  Expect(Largest1 == Largest0, "largest hole returns EXACTLY after random churn");
++  Expect(Live == 0, "no carve leaked");
++}
++
++void RunInjection() {
++  /* The rollback path never executes in an ordinary run, so it is exercised
++   * here or it is untested. The proof is not that the call failed -- it is
++   * that a later carve SPANNING the rolled-back boundary still succeeds. */
++  size_t Free0 = 0;
++  Stats(nullptr, &Free0, nullptr, nullptr);
++
++  SetInject(Inject::ReplaceFails, 1);
++  void* p = Alloc(GRAN * 4, GRAN, Policy::CommittedRW);
++  SetInject(Inject::None, 0);
++  Expect(p == nullptr, "injected replacement failure refuses the carve");
++
++  size_t Free1 = 0;
++  Stats(nullptr, &Free1, nullptr, nullptr);
++  Expect(Free1 == Free0, "a failed replacement leaks no address space");
++
++  void* big = Alloc(GRAN * 8, GRAN, Policy::CommittedRW);
++  Expect(big != nullptr, "a carve spanning the rolled-back split still succeeds");
++  if (big) {
++    Free(big, GRAN * 8);
++  }
++}
++
++} // namespace
++
++void SelfTest() {
++  const char* Env = getenv("MADEIRA_ARENA_TEST");
++  if (!Env || !*Env) {
++    return;
++  }
++
++  const char* Colon = strchr(Env, ':');
++  const unsigned N = Colon ? (unsigned)atoi(Colon + 1) : 0;
++  if (!N) {
++    LogMan::Msg::EFmt("[arena-test] MADEIRA_ARENA_TEST={} has no count -- expected churn:N, ramp:N or random:N", Env);
++    return;
++  }
++
++  const uintptr_t Base = ReserveTestArena(TEST_ARENA);
++  if (!Base) {
++    LogMan::Msg::EFmt("[arena-test] could not reserve a {}MB test arena -- REAL placeholder support is "
++                      "unproven on this device; do NOT enable the feature",
++                      TEST_ARENA >> 20);
++    return;
++  }
++  LogMan::Msg::EFmt("[arena-test] reserved test arena [{:#x},{:#x}) -- exercising the REAL placeholder "
++                    "implementation, not a mock",
++                    Base, Base + TEST_ARENA);
++
++  if (!Adopt(Base, Base + TEST_ARENA)) {
++    LogMan::Msg::EFmt("[arena-test] Adopt refused the test arena");
++    return;
++  }
++
++  Failures = 0;
++  if (!strncmp(Env, "churn:", 6)) {
++    RunChurn(N);
++  } else if (!strncmp(Env, "ramp:", 5)) {
++    RunRamp(N);
++  } else if (!strncmp(Env, "random:", 7)) {
++    RunRandom(N);
++  } else {
++    LogMan::Msg::EFmt("[arena-test] unknown mode {}", Env);
++    return;
++  }
++  RunInjection();
++
++  LogMan::Msg::EFmt("[arena-test] ===== {} FAILURE(S) against the real placeholder implementation =====", Failures);
++}
++
++} // namespace Arena
++} // namespace Windows
++} // namespace FEX
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index fb604c9..2b1ae18 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -28,7 +28,65 @@ CallRetStackInfo GetInfoThread(FEXCore::Core::InternalThreadState* Thread) {
+           Base + FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE / 4};
+ }
+ 
+-void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
++/* Returns false if the call-ret stack could not be placed.
++ *
++ * This region has no unconstrained fallback ON PURPOSE (see below), so failure
++ * is a real outcome, not a theoretical one -- a title that creates enough
++ * threads exhausts the band and the 37th thread gets nothing. Previously the
++ * nullptr was carried straight into arithmetic: base + one guard page = 0x1000,
++ * dereferenced immediately, and the resulting fault recursed through the
++ * exception path until the thread's stack was gone. The thread then died
++ * OWNING wine's loader_section, so the next module load blocked forever and the
++ * process sat inert with no error anywhere. Report it and let the caller
++ * unwind. */
++#ifdef FEX_IOS_HOST
++/* Deterministic failure injection for the call-ret stack, default OFF.
++ *
++ *   MADEIRA_FEX_FAIL_CALLRET=reserve:N   fail the Nth reservation
++ *   MADEIRA_FEX_FAIL_CALLRET=commit:N    let the Nth reservation succeed, then
++ *                                        fail its commit
++ *
++ * Both paths exist in the field -- a title that creates enough threads
++ * exhausts the band -- but only the reserve path reproduces naturally, and a
++ * containment path that has never executed is an assumption. One-shot and
++ * counted, so a single run exercises exactly one failure and everything after
++ * it proceeds normally, which is what proves the process SURVIVES rather than
++ * merely fails. */
++enum class CallRetInject { None, Reserve, Commit, ThreadState };
++
++static CallRetInject GetInjectMode(unsigned& TargetOut) {
++  static CallRetInject Mode = CallRetInject::None;
++  static unsigned Target = 0;
++  static std::once_flag Once;
++  std::call_once(Once, [] {
++    const char* Env = getenv("MADEIRA_FEX_FAIL_CALLRET");
++    if (!Env) return;
++    const char* Colon = strchr(Env, ':');
++    if (!Colon) return;
++    Target = (unsigned)atoi(Colon + 1);
++    if (!Target) return;
++    if (!strncmp(Env, "reserve:", 8)) Mode = CallRetInject::Reserve;
++    else if (!strncmp(Env, "commit:", 7)) Mode = CallRetInject::Commit;
++    else if (!strncmp(Env, "threadstate:", 12)) Mode = CallRetInject::ThreadState;
++    if (Mode != CallRetInject::None) {
++      LogMan::Msg::EFmt("[callret] INJECTION ARMED: {} -- will fail call #{}", Env, Target);
++    }
++  });
++  TargetOut = Target;
++  return Mode;
++}
++#endif
++
++bool InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
++#ifdef FEX_IOS_HOST
++  unsigned InjectTarget = 0;
++  const CallRetInject InjectMode = GetInjectMode(InjectTarget);
++  static std::atomic<unsigned> CallCount {0};
++  const unsigned ThisCall = ++CallCount;
++  const bool InjectReserve = (InjectMode == CallRetInject::Reserve && ThisCall == InjectTarget);
++  const bool InjectCommit  = (InjectMode == CallRetInject::Commit  && ThisCall == InjectTarget);
++#endif
++
+   // Allocate the call-ret stack with guard pages on both sides
+   const size_t CallRetStackAllocSize = FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE;
+   const void* CallRetStackAlloc = nullptr;
+@@ -52,7 +110,10 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+     AddrReq.HighestEndingAddress = reinterpret_cast<void*>(ios_fex_band_end);
+     AddrParam.Type = MemExtendedParameterAddressRequirements;
+     AddrParam.Pointer = &AddrReq;
+-    if (ios_fex_band_base) {
++      if (InjectReserve) {
++        LogMan::Msg::EFmt("[callret] INJECTED reserve failure on call #{} -- taking the real "
++                          "containment path", ThisCall);
++      } else if (ios_fex_band_base) {
+       CallRetStackAlloc = ::VirtualAlloc2(nullptr, nullptr, CallRetStackAllocSize, MEM_RESERVE, PAGE_NOACCESS, &AddrParam, 1);
+     }
+   }
+@@ -65,13 +126,47 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   }
+ #endif
+ 
++  if (!CallRetStackAlloc) {
++    /* No unconstrained fallback exists here BY DESIGN (see above), so this is
++     * a real outcome once the band fills: a title that creates enough threads
++     * exhausts it and a later thread gets nothing. Carrying the nullptr on
++     * meant base + one guard page = 0x1000, dereferenced at once, and the
++     * fault recursed until the stack was gone -- with the thread still owning
++     * the loader lock. */
++    LogMan::Msg::EFmt("[callret] RESERVE FAILED: {:#x} bytes in band [{:#x},{:#x}] -- thread cannot start",
++                      (unsigned long long)CallRetStackAllocSize,
++                      (unsigned long long)ios_fex_band_base, (unsigned long long)ios_fex_band_end);
++    return false;
++  }
++
+   FEXCore::Allocator::VirtualName("FEXMem_CallRetStacks", CallRetStackAlloc,
+                                   FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE);
+   FEXCore::Allocator::VirtualTHPControl(CallRetStackAlloc, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE,
+                                         FEXCore::Allocator::THPControl::Disable);
+ 
+   Thread->CallRetStackBase = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(CallRetStackAlloc) + FEXCore::Utils::FEX_PAGE_SIZE);
+-  ::VirtualAlloc(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE, MEM_COMMIT, PAGE_READWRITE);
++  /* The COMMIT can fail on its own: the reservation only claims addresses.
++   * Hand the reservation back rather than leaking a 16MB hole in a band that
++   * is already too small to satisfy the next thread. */
++#ifdef FEX_IOS_HOST
++  if (InjectCommit) {
++    LogMan::Msg::EFmt("[callret] INJECTED commit failure on call #{} -- the reservation succeeded "
++                      "and must now be released", ThisCall);
++  }
++#endif
++  if (
++#ifdef FEX_IOS_HOST
++      InjectCommit ||
++#endif
++      !::VirtualAlloc(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE, MEM_COMMIT,
++                      PAGE_READWRITE)) {
++    LogMan::Msg::EFmt("[callret] COMMIT FAILED: {:#x} bytes at {} -- releasing the reservation",
++                      (unsigned long long)FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE,
++                      Thread->CallRetStackBase);
++    ::VirtualFree(const_cast<void*>(CallRetStackAlloc), 0, MEM_RELEASE);
++    Thread->CallRetStackBase = nullptr;
++    return false;
++  }
+ 
+   /* iOS-Madeira: VirtualAlloc(MEM_COMMIT) on a previously-MEM_RESERVE'd
+    * PAGE_NOACCESS region might not zero-initialize the pages on iOS. The
+@@ -132,6 +227,8 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+     }
+   }
+ #endif
++
++  return true;
+ }
+ 
+ void DestroyThread(FEXCore::Core::InternalThreadState* Thread) {

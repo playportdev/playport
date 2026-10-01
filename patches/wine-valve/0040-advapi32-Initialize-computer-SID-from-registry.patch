@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Tue, 4 Jan 2022 17:41:46 +0300
+Subject: [PATCH] advapi32: Initialize computer SID from registry.
+
+CW-Bug-Id: #19702
+Valve-commit: f65cec8dadaf437d9d06ae243339c1a35fad5242
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/advapi32/security.c | 35 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/advapi32/security.c b/dlls/advapi32/security.c
+index 8310a4a..6b2499f 100644
+--- a/dlls/advapi32/security.c
++++ b/dlls/advapi32/security.c
+@@ -244,12 +244,42 @@ BOOL ADVAPI_IsLocalComputer(LPCWSTR ServerName)
+     return Result;
+ }
+ 
++static BOOL WINAPI init_computer_sid( INIT_ONCE *init_once, void *parameter, void **context )
++{
++    DWORD *sub_authority = parameter;
++    unsigned int i, count;
++    DWORD len, index;
++    BOOL found = FALSE;
++    DWORD values[3];
++    char buffer[64];
++    LSTATUS status;
++
++    len = ARRAY_SIZE(buffer);
++    index = 0;
++    while (!(status = RegEnumKeyExA( HKEY_USERS, index, buffer, &len, NULL, NULL, NULL, NULL )))
++    {
++        count = sscanf(buffer, "S-1-5-21-%lu-%lu-%lu", &values[0], &values[1], &values[2]);
++        if (count == 3)
++        {
++            if (found)
++                ERR( "Multiple users are not supported.\n" );
++            for (i = 0; i < 3; ++i)
++                sub_authority[i] = values[i];
++            found = TRUE;
++        }
++        ++index;
++        len = ARRAY_SIZE(buffer);
++    }
++    return found;
++}
++
+ /************************************************************
+  *                ADVAPI_GetComputerSid
+  */
+ BOOL ADVAPI_GetComputerSid(PSID sid)
+ {
+-    static const struct /* same fields as struct SID */
++    static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
++    static struct /* same fields as struct SID */
+     {
+         BYTE Revision;
+         BYTE SubAuthorityCount;
+@@ -258,6 +288,9 @@ BOOL ADVAPI_GetComputerSid(PSID sid)
+     } computer_sid =
+     { SID_REVISION, 4, { SECURITY_NT_AUTHORITY }, { SECURITY_NT_NON_UNIQUE, 0, 0, 0 } };
+ 
++    if (!InitOnceExecuteOnce( &init_once, init_computer_sid, computer_sid.SubAuthority + 1, NULL ))
++        ERR( "Could not initialize computer sid.\n" );
++
+     memcpy( sid, &computer_sid, sizeof(computer_sid) );
+     return TRUE;
+ }

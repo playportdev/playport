@@ -1,0 +1,389 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Jul 2026 17:02:49 +0800
+Subject: [PATCH] iOS: guard bulk non-exec protect notifications on all three
+ paths
+
+FEX removes a range's executable intervals when told it is no longer
+executable, so a >=1GB non-exec notification wipes the exec interval of
+every module inside it. Suppress those before they reach the BTCpu module.
+
+Guarded at all three call sites via one helper: NtProtectVirtualMemory's
+pre and post notifications, and the ARM64EC cross-process work-list replay.
+The replay path matters here specifically because our pseudo-processes
+share one address space, so RtlIsCurrentProcess() is FALSE for a sibling
+handle and the notification is queued rather than issued inline.
+
+Defence in depth -- the real fix for the observed CEF failure is in FEX,
+since that wipe arrived via NotifyMemoryAlloc (a pool reservation), not
+via any protect call. A 16GB VirtualProtect would be equally bogus, so
+this stays.
+
+Also here: ec_code_map_limit() bounding the EC code bitmap, and the
+[map-notify]/[unexec] probes used during the investigation.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+(cherry picked from commit 71b042a5b63cc4b8cdd15e9f3bd91aea284c8271)
+Madeira-commit: 0b041df9450ef3d3eba1706fa97c4802c999af2c
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 247 ++++++++++++++++++++++++++++++++++--
+ dlls/rpcrt4/ndr_stubless.c  |  26 ++++
+ 2 files changed, 265 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 5c104a7a6d1..e36c77917f1 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -999,15 +999,91 @@ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
+     return status;
+ }
+ 
++/* iOS-Mythic ml188: SELF-TARGETING FILTER.
++ *
++ * A global cap is the wrong design when the event of interest is LATE: the ml187/ml188
++ * probes burned their whole budget on early loader traffic (unexec #400 at log line 3048)
++ * and went blind 2100 lines BEFORE libcef was even mapped (line 5176), so "0 events
++ * touching libcef" was a blind spot, not a result.
++ *
++ * Instead: remember the range of any BIG image as it is mapped (libcef is 0xD3CA000; no
++ * Wine DLL comes close), then log protect/unmap events ONLY when they fall inside one.
++ * That is immune to ordering and keeps the log small. */
++#define IOS_BIGIMG_MAX 4
++static struct { ULONG_PTR base, size; } ios_bigimg[IOS_BIGIMG_MAX];
++static unsigned ios_bigimg_n;
++
++static void ios_note_big_image( void *addr, SIZE_T size )
++{
++    if (size < 0x1000000 || ios_bigimg_n >= IOS_BIGIMG_MAX) return;
++    ios_bigimg[ios_bigimg_n].base = (ULONG_PTR)addr;
++    ios_bigimg[ios_bigimg_n].size = size;
++    ios_bigimg_n++;
++    ERR( "[bigimg] tracking %p +%p for protect/unmap events\n", addr, (void *)size );
++}
++
++static int ios_in_big_image( ULONG_PTR a )
++{
++    unsigned i;
++    for (i = 0; i < ios_bigimg_n; i++)
++        if (a >= ios_bigimg[i].base && a < ios_bigimg[i].base + ios_bigimg[i].size) return 1;
++    return 0;
++}
++
++/* iOS-Mythic ml187: unmap ALSO removes executable intervals
++ * (InvalidationTracker::InvalidateContainingSection -> XIntervals.Remove), and this port
++ * purges stale image mappings (#33). If libcef's view is unmapped and not re-notified, its
++ * .text leaves XIntervals and every later decode there is NOEXEC. Log unmaps in the guest
++ * PE band so they can be correlated against libcef's base. */
++static void ios_log_unmap( void *addr )
++{
++    static int unmap_n;
++    if (ios_in_big_image( (ULONG_PTR)addr ) && unmap_n < 200)
++    {
++        unmap_n++;
++        ERR( "[unmap] #%d addr=%p\n", unmap_n, addr );
++    }
++}
++
+ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size, ULONG alloc,
+                                         ULONG protect, NTSTATUS *ret_status )
+ {
+     SECTION_IMAGE_INFORMATION info;
+     NTSTATUS status;
+ 
++    /* iOS-Mythic ml184 PROBE. FEX only treats a guest range as executable if
++     * InvalidationTracker::XIntervals covers it, and that is populated ONLY from
++     * HandleImageMap(), which runs off this notification. A skipped notify means every
++     * later decode in that image returns NOEXEC -> NoExecOp -> FAULT_SIGSEGV -> the
++     * GuestSignal_SIGSEGV trampoline -> dead thread. libcef.dll+0x1900733 and +0x3b508f0
++     * still hit that trampoline after relaxing FEX's own ThreadState guard, so log which
++     * of these three gates is dropping it. */
++    {
++        static int notify_probe;
++        if (notify_probe < 40)
++        {
++            notify_probe++;
++            ERR( "[map-notify] addr=%p size=%p alloc=%x prot=%x pfn=%d aup=%p\n",
++                 addr, (void *)size, alloc, protect, !!pNotifyMapViewOfSection,
++                 NtCurrentTeb()->Tib.ArbitraryUserPointer );
++        }
++    }
+     if (!pNotifyMapViewOfSection) return;
+-    if (!NtCurrentTeb()->Tib.ArbitraryUserPointer) return;
+-    if (NtQuerySection( handle, SectionImageInformation, &info, sizeof(info), NULL )) return;
++    if (!NtCurrentTeb()->Tib.ArbitraryUserPointer)
++    {
++        static int skip_aup;
++        if (skip_aup < 20)
++        { skip_aup++; ERR( "[map-notify] SKIP (no ArbitraryUserPointer) addr=%p size=%p\n", addr, (void *)size ); }
++        return;
++    }
++    if (NtQuerySection( handle, SectionImageInformation, &info, sizeof(info), NULL ))
++    {
++        static int skip_qs;
++        if (skip_qs < 20)
++        { skip_qs++; ERR( "[map-notify] SKIP (not an image section) addr=%p size=%p\n", addr, (void *)size ); }
++        return;
++    }
++    ios_note_big_image( addr, size );
+     status = pNotifyMapViewOfSection( NULL, addr, NULL, size, alloc, protect );
+     if (NT_SUCCESS(status)) return;
+     NtUnmapViewOfSection( GetCurrentProcess(), addr );
+@@ -1045,6 +1121,33 @@ NTSTATUS SYSCALL_API NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID
+     return status;
+ }
+ 
++/* iOS-Mythic ml206: shared guard for ALL THREE NotifyMemoryProtect paths.
++ *
++ * A protect spanning >= 1GB is never a code-permission change; it is an allocator managing
++ * a reservation. FEX, however, treats any protect without EXEC as "this range is no longer
++ * executable" and REMOVES it from InvalidationTracker::XIntervals
++ * (InvalidationTracker.cpp:69-71), so forwarding one 16GB PartitionAlloc protect
++ *   [iOS-xrem] via=protect 0x7000000000-0x7400000000
++ * wipes the executable interval of EVERY module inside the range. Modules keep their own
++ * real mappings and protections, so suppressing the notification cannot lose a genuine
++ * executability transition — whereas forwarding it loses all of them at once. */
++static BOOL ios_bulk_protect_suppressed( const char *via, void *addr, SIZE_T size, ULONG prot )
++{
++    static int suppressed;
++
++    if (size < (1ull << 30)) return FALSE;
++    if (prot & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
++        return FALSE;
++
++    if (suppressed < 20)
++    {
++        suppressed++;
++        ERR( "[protect-wall] SUPPRESSED via=%s %p+%p prot=%x (>=1GB non-exec would nuke all "
++             "module exec intervals in range)\n", via, addr, (void *)size, prot );
++    }
++    return TRUE;
++}
++
+ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *size_ptr,
+                                              ULONG new_prot, ULONG *old_prot )
+ {
+@@ -1056,13 +1159,56 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
+ 
+     if (!is_current) send_cross_process_notification( process, CrossProcessPreVirtualProtect,
+                                                       *addr_ptr, *size_ptr, 2, new_prot, 0 );
+-    else if (pNotifyMemoryProtect) pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, FALSE, 0 );
++    else if (pNotifyMemoryProtect)
++    {
++        /* iOS-Mythic ml203 ROOT-CAUSE FIX. FEX treats a protect notification without EXEC
++         * as "this range is no longer executable" and REMOVES it from
++         * InvalidationTracker::XIntervals (InvalidationTracker.cpp:69-71). A single
++         * PartitionAlloc protect over its own 16GB soft pool
++         *   [iOS-xrem] via=protect 0x7000000000-0x7400000000
++         * therefore wiped the executable intervals of EVERY module in the furniture window
++         * — libcef included (mapped at 0x73858d0000) — after which the decoder reported
++         * NOEXEC at libcef code addresses, raised FAULT_SIGSEGV, branched to the
++         * GuestSignal_SIGSEGV trampoline, and killed webhelper threads. That is the whole
++         * chain we have been chasing, and it is a consequence of our lazy-reservation
++         * geometry: soft-pool slot 0 aliases the region where PE modules are mapped.
++         *
++         * A protect spanning >= 1GB is never a code-permission change; it is an allocator
++         * managing a reservation. Modules inside it keep their own real mappings and their
++         * own protections, so suppressing the notification cannot lose a genuine
++         * executability transition — whereas forwarding it loses ALL of them. */
++        if (!ios_bulk_protect_suppressed( "cur-pre", *addr_ptr, *size_ptr, new_prot ))
++            pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, FALSE, 0 );
++    }
++
++    /* iOS-Mythic ml186 PROBE. libcef IS registered at map time ([map-notify] addr=...
++     * size=0xD3CA000 pfn=1), so its .text reaches InvalidationTracker::XIntervals — yet
++     * the decoder still reports NOEXEC at libcef+0x1900733 / +0x3b508f0. The only thing
++     * that REMOVES an XInterval is HandleMemoryProtectionNotification being told a
++     * protection without EXEC (InvalidationTracker.cpp:69-71). We forward the REQUESTED
++     * prot here, which is correct emulation — so log every non-exec protect landing in the
++     * guest PE band, whoever the caller is (Chromium, Wine's loader, or our own JIT-pool
++     * machinery touching the PE mapping). Correlate the address against the [jit-pool]
++     * image lines to see if it covers libcef .text. */
++    if (is_current && ios_in_big_image( (ULONG_PTR)*addr_ptr )
++        && !(new_prot & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
++    {
++        static int unexec_n;
++        if (unexec_n < 200)
++        {
++            unexec_n++;
++            ERR( "[unexec] #%d addr=%p size=%p new_prot=%x\n",
++                 unexec_n, *addr_ptr, (void *)*size_ptr, new_prot );
++        }
++    }
+ 
+     status = syscall_NtProtectVirtualMemory( process, addr_ptr, size_ptr, new_prot, old_prot );
+ 
+     if (!is_current) send_cross_process_notification( process, CrossProcessPostVirtualProtect,
+                                                       *addr_ptr, *size_ptr, 2, new_prot, status );
+-    else if (pNotifyMemoryProtect) pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, TRUE, status );
++    else if (pNotifyMemoryProtect
++             && !ios_bulk_protect_suppressed( "cur-post", *addr_ptr, *size_ptr, new_prot ))
++        pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, TRUE, status );
+ 
+     leave_syscall_callback();
+     return status;
+@@ -1148,6 +1294,7 @@ NTSTATUS SYSCALL_API NtUnmapViewOfSection( HANDLE process, void *addr )
+ 
+     if (is_current && pNotifyUnmapViewOfSection && enter_syscall_callback())
+     {
++        ios_log_unmap( addr );
+         pNotifyUnmapViewOfSection( addr, FALSE, 0 );
+         status = syscall_NtUnmapViewOfSection( process, addr );
+         pNotifyUnmapViewOfSection( addr, TRUE, status );
+@@ -1164,6 +1311,7 @@ NTSTATUS SYSCALL_API NtUnmapViewOfSectionEx( HANDLE process, void *addr, ULONG f
+ 
+     if (is_current && pNotifyUnmapViewOfSection && enter_syscall_callback())
+     {
++        ios_log_unmap( addr );
+         pNotifyUnmapViewOfSection( addr, FALSE, 0 );
+         status = syscall_NtUnmapViewOfSectionEx( process, addr, flags );
+         pNotifyUnmapViewOfSection( addr, TRUE, status );
+@@ -1273,6 +1421,13 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
+         case CrossProcessPreVirtualProtect:
+         case CrossProcessPostVirtualProtect:
+             if (!pNotifyMemoryProtect) break;
++            /* iOS-Mythic ml206: THE path the 16GB wipe actually arrived on. Our
++             * pseudo-processes share one address space, so RtlIsCurrentProcess() is FALSE
++             * for a sibling handle and the protect is queued here rather than taking the
++             * is_current branch ml203 guarded — which is why that fix logged nothing while
++             * the wipe still happened. Guard it identically. */
++            if (ios_bulk_protect_suppressed( "xproc", (void *)entry->addr, entry->size,
++                                             entry->args[0] )) break;
+             pNotifyMemoryProtect( (void *)entry->addr, entry->size, entry->args[0],
+                                   entry->id == CrossProcessPostVirtualProtect, entry->args[1] );
+             break;
+@@ -1738,14 +1893,90 @@ __ASM_GLOBAL_FUNC( "#KiUserCallbackDispatcher",
+ /**************************************************************************
+  *              RtlIsEcCode (NTDLL.@)
+  */
++/* iOS-Mythic: highest address the EcCodeBitMap can actually represent.
++ *
++ * The 0x800000000000 (48-bit) bound below was WRONG for this port. alloc_arm64ec_map()
++ * sizes the bitmap from min(address_space_limit, host_addr_space_limit) rather than
++ * Windows' theoretical 128TB, because at one bit per 4KB page the full range costs a
++ * 4.06GB reservation — the single largest tenant of a VA window we cannot spare. On
++ * iOS that yields 0x8000000000 (512GB) of coverage, i.e. a 16MB view.
++ *
++ * That sizing was justified with "every other bitmap user derives its index from the
++ * ADDRESS being marked, so none can index past the smaller view". RtlIsEcCode breaks
++ * the assumption: it is a READER, and it is handed addresses that never came from our
++ * allocator — guest/unwind contexts carry legal *Windows* pointers far above our VA.
++ * Steam hit exactly that: RtlIsEcCode(0x7300ffffffff) passed the 128TB check, indexed
++ * 0x74d6ddfff8 (past the 16MB view) and segfaulted, killing the thread 5 times per
++ * spawn and looping ~9 times (ml161).
++ *
++ * Derive the bound from the view's ACTUAL size so it can never disagree with the
++ * allocation, whatever the ceiling does later. Wine answers this query from its own
++ * view list, so RegionSize is the exact view size (no host adjacent-region merging).
++ * Coverage = bytes * 8 bits * page_size. */
++static ULONG_PTR ec_code_map_limit( void )
++{
++    static ULONG_PTR cached;   /* benign race: all racers compute the same value */
++
++    if (!cached)
++    {
++        MEMORY_BASIC_INFORMATION mbi;
++        const char *map = NtCurrentTeb()->Peb->EcCodeBitMap;
++        ULONG_PTR limit = 0x800000000000ULL;
++        SIZE_T total = 0, len = 0;
++        const char *p = map;
++        unsigned int guard;
++
++        /* Walk the WHOLE allocation. A single MemoryBasicInformation query returns only
++           the first run of uniform protection, and this view is a patchwork: pages that
++           get marked are committed RW by set_vprot while the rest stay RO. ml163 measured
++           RegionSize = 0x24000 (144KB) for a view that [ec-map] reports as 0x1000000
++           (16MB) — a 116x under-estimate that failed the self-check below. Accumulate
++           every sub-region sharing our AllocationBase to recover the true size. */
++        for (guard = 0; map && guard < 4096; guard++)
++        {
++            if (NtQueryVirtualMemory( NtCurrentProcess(), p, MemoryBasicInformation,
++                                      &mbi, sizeof(mbi), &len )) break;
++            if (len < sizeof(mbi) || !mbi.RegionSize) break;
++            if (mbi.AllocationBase != (void *)map) break;
++            total += mbi.RegionSize;
++            p += mbi.RegionSize;
++        }
++
++        if (total)
++        {
++            ULONG_PTR cover = (ULONG_PTR)total * 8 * page_size;
++
++            /* SELF-CHECK before trusting the query. Reporting a genuinely-EC address as
++               non-EC is far worse than the OOB read this bound exists to prevent: the
++               caller would dispatch EC code through the x64 path and jump wild (the
++               "BUS EXEC in JIT .data" signature). This very function is EC code, so a
++               correct limit must cover it. If the query says otherwise, distrust it and
++               keep the old 48-bit bound rather than break dispatch.
++
++               Two floors, because &RtlIsEcCode resolves to the JIT-POOL copy (~0x1xxxxxxxx)
++               and would be satisfied by a coverage still far too small for the PE module
++               range (~0x73xxxxxxxx). The bitmap is itself allocated in that high region,
++               so a correct coverage must also exceed its own address. */
++            if (cover > (ULONG_PTR)&RtlIsEcCode && cover > (ULONG_PTR)map && cover < limit)
++                limit = cover;
++            else if (cover)
++                ERR( "EcCodeBitMap coverage %p too small (own code %p, map %p) — keeping %p\n",
++                     (void *)cover, (void *)&RtlIsEcCode, map, (void *)limit );
++        }
++        TRACE( "EcCodeBitMap map=%p limit=%p\n", map, (void *)limit );
++        cached = limit;
++    }
++    return cached;
++}
++
+ BOOLEAN WINAPI RtlIsEcCode( ULONG_PTR ptr )
+ {
+     const UINT64 *map = (const UINT64 *)NtCurrentTeb()->Peb->EcCodeBitMap;
+     ULONG_PTR page = ptr / page_size;
+-    /* The EcCodeBitMap covers only the canonical 48-bit user-space range. Querying
+-       a non-canonical / corrupted pointer (e.g. from a damaged unwind context) must
+-       not segfault — return FALSE for any pointer the bitmap can't represent. */
+-    if (!map || ptr >= 0x800000000000ULL) return FALSE;
++    /* The EcCodeBitMap covers only what alloc_arm64ec_map actually reserved. Querying
++       any pointer beyond that — a legal Windows address above our VA, or a corrupted
++       one from a damaged unwind context — must not segfault. */
++    if (!map || ptr >= ec_code_map_limit()) return FALSE;
+     return (map[page / 64] >> (page & 63)) & 1;
+ }
+ 
+diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
+index ec09fefc0d7..1ff09f628ce 100644
+--- a/dlls/rpcrt4/ndr_stubless.c
++++ b/dlls/rpcrt4/ndr_stubless.c
+@@ -483,6 +483,32 @@ void client_do_args( PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat, enum s
+     const NDR_PARAM_OIF *params = (const NDR_PARAM_OIF *)pFormat;
+     unsigned int i;
+ 
++    /* iOS-Mythic ml175 PROBE: Steam dies at ndr_marshall.c:7024 `*ccontext = NULL` with
++     * ccontext == 0x10, and pArg is computed below as StackTop + stack_offset — so a
++     * StackTop of 0 or 0x10 explains the value exactly.
++     *
++     * Suspected cause: NdrClientCall2/3 are __attribute__((naked)) variadic ARM64EC
++     * functions whose thunk does `stp x2,x3,[x4,#-0x10]!; mov x2,x4`, i.e. it REQUIRES x4
++     * to point at the caller's stack-argument area. x4 is R10 in the EC register map, and
++     * only the x64->EC entry thunk establishes it. llvm-nm shows NdrClientCall2,
++     * NdrClientCall3, NdrAsyncClientCall and Ndr64AsyncClientCall all have ZERO
++     * $ientry_thunk bindings (rpcrt4 has 23 for other functions), so a call arriving from
++     * emulated x64 code would run with x4 = whatever R10 held.
++     *
++     * Log any implausible StackTop. If StackTop is tiny here, the thunk/ABI path is
++     * confirmed and the fix belongs at the EC entry, not in the NDR layer. */
++    if ((ULONG_PTR)pStubMsg->StackTop < 0x10000)
++    {
++        static int reported;
++        if (reported < 8)
++        {
++            reported++;
++            ERR("[ec-stacktop] BAD StackTop=%p phase=%d nparams=%u first_offset=0x%x\n",
++                pStubMsg->StackTop, phase, number_of_params,
++                number_of_params ? params[0].stack_offset : 0);
++        }
++    }
++
+     for (i = 0; i < number_of_params; i++)
+     {
+         unsigned char *pArg = pStubMsg->StackTop + params[i].stack_offset;

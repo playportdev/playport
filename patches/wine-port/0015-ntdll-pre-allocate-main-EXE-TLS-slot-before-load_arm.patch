@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 9 May 2026 05:59:40 +0800
+Subject: [PATCH] ntdll: pre-allocate main EXE TLS slot before
+ load_arm64ec_module
+
+MSVC-compiled main executables routinely hardcode `TLS[0]` reads in
+their compiler-generated magic-static / __declspec(thread) guards,
+relying on the standard Windows convention that the main EXE always
+gets TLS slot 0. Wine's loader_init currently runs in the order:
+
+  build_main_module();
+  build_ntdll_module();
+  load_arm64ec_module();   <-- xtajit64.dll claims TLS slot 0 here
+  ...
+  fixup_imports(main);     <-- main EXE only now allocs a slot, gets 1
+
+so the main EXE's hardcoded `TLS[0]` reads see xtajit64.dll's TLS
+data instead of its own. The values found there happen to satisfy
+"already initialized" sentinel comparisons, so the game's static
+constructors are skipped, leaving zero-initialized registries that
+then crash on later virtual calls.
+
+Pre-allocate the main EXE's slot immediately after build_main_module
+so it claims slot 0 before any other module. Add a TlsIndex==-1
+guard in fixup_imports to avoid double-allocation on the second pass.
+
+Verified on iOS x86_64 game startup: log now shows
+  alloc_tls_slot module 0x140000000 -> slot 0   (main EXE)
+  alloc_tls_slot module 0xebf6a0000 -> slot 1   (xtajit64.dll)
+and the magic-static guard's NULL-allocator crash that previously
+fired in the CRT init chain no longer occurs. Game proceeds through
+DllMain for fmod64/d3d11/dxmt, registers a window, and starts polling
+its real-game init paths.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+(cherry picked from commit 06e9dcc7822ee8157377e4bd36e60d03ce184be6)
+Madeira-commit: a052a7f8e3c7e813fa2f00f702a4ce578cc090fc
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 3ffa73830e8..a89abcce82c 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1531,7 +1531,12 @@ static NTSTATUS fixup_imports( WINE_MODREF *wm, LPCWSTR load_path )
+     if (!(wm->ldr.Flags & LDR_DONT_RESOLVE_REFS)) return STATUS_SUCCESS;  /* already done */
+     wm->ldr.Flags &= ~LDR_DONT_RESOLVE_REFS;
+ 
+-    if (alloc_tls_slot( &wm->ldr )) wm->ldr.TlsIndex = -1;
++    /* iOS-Mythic: TlsIndex == -1 marks "alloc_tls_slot already done for this
++     * module" (set below). loader_init pre-allocates the main EXE's slot
++     * before load_arm64ec_module() so the EXE claims slot 0 instead of
++     * xtajit64.dll — Thumper-style games have compiler-generated magic-static
++     * guards that read `TLS[0]` hardcoded, assuming the main EXE is slot 0. */
++    if (wm->ldr.TlsIndex != -1 && alloc_tls_slot( &wm->ldr )) wm->ldr.TlsIndex = -1;
+ 
+     if (!(imports = RtlImageDirectoryEntryToData( wm->ldr.DllBase, TRUE,
+                                                   IMAGE_DIRECTORY_ENTRY_IMPORT, &size )))
+@@ -4587,6 +4592,18 @@ void loader_init( CONTEXT *context, void **entry )
+         wm = build_main_module();
+         build_ntdll_module();
+ #ifdef __arm64ec__
++        /* iOS-Mythic: pre-allocate the main EXE's TLS slot BEFORE
++         * load_arm64ec_module() so the main EXE claims slot 0 instead of
++         * xtajit64.dll. Compiler-emitted magic-static / __declspec(thread)
++         * code in main EXEs frequently hardcodes `TLS[0]`, assuming the
++         * normal Windows convention that the EXE always gets slot 0. With
++         * xtajit64 in slot 0, those reads see the wrong module's TLS data
++         * and treat magic-static state as already-initialized when it
++         * isn't, leaving zero-initialized registries that later get virt-
++         * called and crash. fixup_imports() guards against double-alloc
++         * via the TlsIndex == -1 marker. */
++        if (alloc_tls_slot( &wm->ldr )) wm->ldr.TlsIndex = -1;
++        ERR( "loader_init: pre-allocated main EXE TLS slot (TlsIndex=%ld)\n", wm->ldr.TlsIndex );
+         ERR( "loader_init: calling load_arm64ec_module\n" );
+         load_arm64ec_module();
+         ERR( "loader_init: load_arm64ec_module returned, calling update_load_config\n" );

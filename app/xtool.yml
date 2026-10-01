@@ -1,0 +1,48 @@
+version: 1
+# The app's one identity (docs/BUILDING.md, "Signing"): each build, dev or
+# release, installs over this one slot. The display name comes from
+# Info.plist. This file builds the dev variant, whose executable stays
+# S1Probe; build/stages/stage-artifacts.py release generates the release variant's
+# copy from it, with product Playport and Runtime/ at its package root
+# (docs/BUILDING.md, "Variants").
+bundleID: dev.playport.app
+product: S1Probe
+# The JIT helper (docs/ARCHITECTURE.md, "Built-in JIT"): PlugIns/PlayportJIT.appex,
+# bundle ID dev.playport.app.PlayportJIT, its own free-team App ID
+# and profile. It takes no device slot. Its resource is Playport's JIT protocol
+# script, copied to the .appex root.
+extensions:
+  - product: PlayportJIT
+    infoPath: PlayportJIT-Info.plist
+    resources:
+      - PlayportJIT/playport-universal.js
+infoPath: Info.plist
+# The home-screen icon (app/Icon/AppIcon.svg, rendered by app/Icon/render.sh):
+# xtool copies it to the app root and names it CFBundleIconFile. The dev app's
+# carries a DEV tab; the release package's xtool.yml names Icon/AppIcon.png.
+iconPath: Icon/AppIcon-dev.png
+# The reference signs with this entitlement. xtool 1.20.1 drops it for a free
+# team; build with the locally patched xtool (build/toolchain/xtool-1.20.1-increased-memory-limit.diff).
+entitlementsPath: S1Probe.entitlements
+# The staged Runtime/ ships at the app root, the reference bundle layout:
+# ntdll's unix side resolves nls/ and <arch>-windows/ (ntdll.dll,
+# apisetschema.dll) against the executable's directory (Madeira loader_ios.c
+# init_paths, load_ntdll), not against a resource bundle.
+resources:
+  - Sources/S1Probe/Runtime/arm64ec-windows
+  - Sources/S1Probe/Runtime/aarch64-windows
+  - Sources/S1Probe/Runtime/nls
+  # The builtins' registrations, seeded into the prefix by wine_host.c (app/tools/prefix-registry.py).
+  - Sources/S1Probe/Runtime/registry
+  # The Vulkan Direct3D backend's DLLs (DXVK, vkd3d-proton), first on WINEDLLPATH
+  # for a launch set to Vulkan (decision 0014; wine_host.c PLAYPORT_DLL_OVERLAY).
+  - Sources/S1Probe/Runtime/vulkan
+  # The Steam API emulator (gbe_fork's steam_api DLLs), copied into a game's folder
+  # in place of its own steam_api(64).dll (SteamClientKit SteamAPISwap).
+  - Sources/S1Probe/Runtime/steamapi
+  - Sources/S1Probe/Runtime/artifacts.tsv
+  # The pinned title cohort and its checksum lists, which the library adopts and verifies (app/PlayportKit).
+  - PlayportKit/Titles
+  # The licences and notices of everything in the app (docs/NOTICES.md, "The app's
+  # selection"), staged by the pipeline's notices stage; both variants carry it.
+  - Staged/Licenses

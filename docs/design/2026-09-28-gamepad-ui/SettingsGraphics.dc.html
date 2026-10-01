@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Graphics settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+a.leg{padding:4px 8px;margin:0 -8px;border-radius:14px;color:#C9D1DC}a.leg:hover{background:#1D242E;color:#EEF1F5}
+.nav{display:flex;align-items:center;height:37px;padding:0 14px;border-radius:10px;font:500 15px 'Barlow';color:#C9D1DC}
+.nav.on{background:#EEF1F5;color:#0B0E13;font-weight:600}
+.item{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:50px;padding:6px 14px;box-sizing:border-box;border-radius:10px;background:#151A21}
+.it{display:flex;flex-direction:column;font-size:15px}
+.is{font-size:12px;color:#9AA5B4}
+.val{display:flex;align-items:center;gap:8px;font:600 14px 'Barlow';color:#EEF1F5}
+.arr{color:#9AA5B4;font-weight:400}
+.focus{outline:3px solid #F5B544;outline-offset:3px}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13; display: flex; flex-direction: column">
+<div style="flex-grow: 1; display: flex; gap: 22px; padding: 22px 44px 0">
+<div style="width: 190px; display: flex; flex-direction: column; gap: 3px">
+<div class="d" style="font-size: 26px; font-weight: 700; padding: 0 14px 10px">Settings</div>
+<div class="nav">Steam account</div>
+<div class="nav on">Graphics</div>
+<a class="nav" href="Settings.dc.html">Downloads</a>
+<div class="nav">Controllers</div>
+<div class="nav">Storage</div>
+<div class="nav">Setup check</div>
+<div class="nav">About</div>
+</div>
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px; padding-top: 12px">
+<div style="font-size: 13px; line-height: 1.4; color: #9AA5B4; padding: 0 2px 6px">What every game uses unless you change it on the game's page.</div>
+<div class="item focus"><div class="it">Resolution<span class="is">Higher is sharper, lower saves battery</span></div><span class="val"><span class="arr">‹</span>720p<span class="arr">›</span></span></div>
+<div class="item"><div class="it">Frame rate limit<span class="is">Lower saves battery and heat</span></div><span class="val"><span class="arr">‹</span>60 fps<span class="arr">›</span></span></div>
+<div class="item"><div class="it">Direct3D<span class="is">Vulkan is experimental</span></div><span class="val"><span class="arr">‹</span>DXMT (recommended)<span class="arr">›</span></span></div>
+</div>
+</div>
+<div style="height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 18px; padding: 0 44px; border-top: 1px solid #1D242E">
+<a class="leg" href="Main.dc.html"><span class="g">B</span>Back</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

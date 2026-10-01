@@ -1,0 +1,596 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 3 Jul 2026 14:06:04 +0800
+Subject: [PATCH] iOS: dual-map fast-write infra (trap-mode default) + iOS 27
+ hardening
+
+- Buffer.h/DualMap.h/JIT.cpp/Dispatcher.cpp: FEX_IOS_HOST dual-map
+  WritePtr machinery + inline dc/ic flush helpers. Runtime-disabled:
+  ProcessInit forces WriteOffset=0 (trap-mode - writes fault to Wine's
+  Mach emulator, which also handles icache). The direct-write path
+  corrupted x86->EC transitions (msvcp140 DllMain EH, Goldberg
+  steam_api64 init) and needs a rework (NtFlushInstructionCache)
+  before enabling. Bisect-verified: trap-mode reaches the 3D menu on
+  iOS 27; fast-write dies pre-splash.
+- Module.cpp: read pool geometry from WINE_IOS_JIT_RW/RX env (RW alias
+  is not guaranteed at RX+0x10000000 on iOS 27); IOSLoadTEB()
+  (TPIDRRO_EL0/TSD-275) replaces raw-x18 NtCurrentTeb in GetCPUArea +
+  LoadStateFromECContext (iOS 27 clobbers x18 aggressively).
+- Dispatcher.cpp: dispatcher entry derives STATE via the TPIDRRO chain
+  instead of trusting caller x0 (exit-linker reached entry with x0=0;
+  page-0 Mach emulation masked the null state until the
+  ReturningStackLocation store at +0x5c0 faulted).
+- Core.cpp: silence per-block IR logging (perf).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: 61f11e3cc726a14418f2414e358ce7baa61a021b
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ CodeEmitter/CodeEmitter/Buffer.h              |  17 +-
+ FEXCore/Source/Interface/Core/Core.cpp        |  10 +-
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  |  37 ++++
+ FEXCore/Source/Interface/Core/JIT/JIT.cpp     |  90 +++++++++-
+ FEXCore/include/FEXCore/Utils/DualMap.h       |   8 +-
+ Source/Windows/ARM64EC/Module.cpp             | 161 +++++++++++++++++-
+ 6 files changed, 298 insertions(+), 25 deletions(-)
+
+diff --git a/CodeEmitter/CodeEmitter/Buffer.h b/CodeEmitter/CodeEmitter/Buffer.h
+index 979b1f7..af8c9d3 100644
+--- a/CodeEmitter/CodeEmitter/Buffer.h
++++ b/CodeEmitter/CodeEmitter/Buffer.h
+@@ -22,10 +22,15 @@ public:
+     Size = BaseSize;
+   }
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(FEX_IOS_HOST)
+   // iOS dual-mapping support: BufferBase/CurrentOffset are RX (executable) addresses.
+   // Actual writes go to (address + WriteOffset) which points to the RW mirror.
+   // On non-Apple platforms this is always 0 and optimizes away.
++  //
++  // FEX_IOS_HOST: enables the same machinery for the ARM64EC PE build
++  // (xtajit64.dll) running on iOS. The PE targets Windows so __APPLE__
++  // is undefined, but the JIT pool it writes to is still iOS-allocated
++  // dual-mapped memory and the per-Buffer offset semantics are identical.
+   void SetWriteOffset(int64_t Offset) { WriteOffset = Offset; }
+   int64_t GetWriteOffset() const { return WriteOffset; }
+ #else
+@@ -105,8 +110,14 @@ public:
+ protected:
+   // Convert an RX (executable) address to the RW (writable) address for memory writes.
+   // On non-Apple platforms, WriteOffset is 0 and this is identity.
++  //
++  // iOS-Mythic 2026-05-19: ARM64EC PE builds (xtajit64.dll) target Windows
++  // so __APPLE__ is undefined, but they still need the dual-map offset
++  // because the JIT pool they write to is iOS-allocated dual-mapped memory.
++  // FEX_IOS_HOST is defined for those PE builds and switches in a global
++  // WriteOffset that Module.cpp::ProcessInit sets at module init.
+   uint8_t* WritePtr(uint8_t* RXAddr) const {
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(FEX_IOS_HOST)
+     return RXAddr + WriteOffset;
+ #else
+     return RXAddr;
+@@ -116,7 +127,7 @@ protected:
+   uint8_t* BufferBase;
+   uint8_t* CurrentOffset;
+   uint64_t Size;
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(FEX_IOS_HOST)
+   int64_t WriteOffset = 0;
+ #endif
+ };
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 9749e6f..05140c9 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -570,18 +570,16 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+   if (!HasCustomIR) {
+     const auto* GuestCode = reinterpret_cast<const uint8_t*>(GuestRIP);
+ 
+-    LogMan::Msg::IFmt("[iOS] GenerateIR: GuestCode={} first bytes: {:02x} {:02x} {:02x} {:02x} {:02x}",
+-                      fmt::ptr(GuestCode), GuestCode[0], GuestCode[1], GuestCode[2], GuestCode[3], GuestCode[4]);
++    /* perf-silenced GenerateIR GuestCode log */
+ 
+-    LogMan::Msg::IFmt("[iOS] GenerateIR: Calling DecodeLoop...");
++    /* perf-silenced */ // LogMan::Msg::IFmt("[iOS] GenerateIR: Calling DecodeLoop...");
+     Thread->FrontendDecoder->DecodeLoop(GuestCode);
+-    LogMan::Msg::IFmt("[iOS] GenerateIR: DecodeLoop returned");
++    /* perf-silenced */ // LogMan::Msg::IFmt("[iOS] GenerateIR: DecodeLoop returned");
+ 
+     const auto* BlockInfo = Thread->FrontendDecoder->GetDecodedBlockInfo();
+     const auto& CodeBlocks = BlockInfo->Blocks;
+ 
+-    LogMan::Msg::IFmt("[iOS] GenerateIR: Blocks={} TotalInsts={} Is64Bit={}",
+-                      CodeBlocks.size(), BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode);
++    /* perf-silenced GenerateIR Blocks log */
+ 
+     Thread->OpDispatcher->BeginFunction(GuestRIP, &CodeBlocks, BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode,
+                                         AreMonoHacksActive() && MonoBackpatcherBlock.load(std::memory_order_relaxed) == GuestRIP);
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index b6281c2..6b6606b 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -91,7 +91,24 @@ void Dispatcher::EmitDispatcher() {
+   // Push our memory base to the correct register
+   // Move our thread pointer to the correct register
+   // This is passed in to parameter 0 (x0)
++#if defined(ARCHITECTURE_arm64ec) && defined(FEX_IOS_HOST)
++  /* iOS-Mythic 2026-07-03: derive STATE from the thread's CPU area instead
++   * of trusting the caller's x0. Observed on iOS 27: the exit-linker path
++   * reached DispatchPtr with x0=0 (x28 had been zeroed after an EC call and
++   * every spill store was silently absorbed by the Wine page-0 Mach
++   * emulation), so the ReturningStackLocation store below dereferenced
++   * NULL+0x5c0 and derailed the thread into a NoExec loop. FillStaticRegs
++   * re-derives STATE from TPIDRRO_EL0 immediately after this prologue
++   * anyway — x0 was only ever used for this one store, so deriving here is
++   * strictly safer and matches the rest of the iOS dispatcher. */
++  mrs(TMP1, ARMEmitter::SystemRegister::TPIDRRO_EL0);
++  and_(ARMEmitter::Size::i64Bit, TMP1, TMP1, ~7ULL);
++  ldr(TMP1, TMP1, IOS_TEB_TSD_OFFSET);
++  ldr(TMP1, TMP1, TEB_CPU_AREA_OFFSET);
++  ldr(STATE, TMP1, CPU_AREA_EMULATOR_DATA_OFFSET);
++#else
+   mov(STATE, ARMEmitter::XReg::x0);
++#endif
+ 
+   // Save this stack pointer so we can cleanly shutdown the emulation with a long jump
+   // regardless of where we were in the stack
+@@ -678,6 +695,26 @@ void Dispatcher::EmitDispatcher() {
+     __builtin___clear_cache(reinterpret_cast<char*>(RWPtr), reinterpret_cast<char*>(RWPtr) + DispatchSize);
+     sys_icache_invalidate(reinterpret_cast<void*>(DispatchPtr), DispatchSize);
+   }
++#elif defined(FEX_IOS_HOST)
++  // Same dual-map I-cache flush as JIT.cpp for the ARM64EC PE build.
++  // Uses inline asm — sys_icache_invalidate isn't available in PE builds.
++  // 2026-07-02: stride hardcoded to 64 bytes (true for all Apple Silicon).
++  // Reading CTR_EL0 faults on iOS 27 when executed from JIT-pool memory —
++  // see the matching comment in JIT.cpp.
++  {
++    auto DispatchSize = End - reinterpret_cast<uint64_t>(DispatchPtr);
++    auto* RWPtr = WritePtr(reinterpret_cast<uint8_t*>(DispatchPtr));
++    auto* RXPtr = reinterpret_cast<uint8_t*>(DispatchPtr);
++    constexpr size_t kCacheLine = 64;
++    for (size_t off = 0; off < DispatchSize; off += kCacheLine) {
++      __asm__ volatile("dc cvau, %0" :: "r"(RWPtr + off) : "memory");
++    }
++    __asm__ volatile("dsb ish" ::: "memory");
++    for (size_t off = 0; off < DispatchSize; off += kCacheLine) {
++      __asm__ volatile("ic ivau, %0" :: "r"(RXPtr + off) : "memory");
++    }
++    __asm__ volatile("dsb ish; isb" ::: "memory");
++  }
+ #else
+   ClearICache(reinterpret_cast<void*>(DispatchPtr), End - reinterpret_cast<uint64_t>(DispatchPtr));
+ #endif
+diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+index 70c9602..ed5a69a 100644
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -15,6 +15,21 @@ $end_info$
+ #include <libkern/OSCacheControl.h>
+ #endif
+ 
++#if defined(FEX_IOS_HOST) && !defined(__APPLE__)
++// iOS-Mythic 2026-05-19: helper to flush a single ARM64 instruction (4 bytes)
++// from the block-linking backpatch sites below. dc cvau on the RW alias
++// (read access OK), ic ivau on the RX alias (XO OK on Apple silicon).
++// dsb/isb provide ordering.
++namespace {
++inline void IOSFlushOneInstr(void* RWAddr, void* RXAddr) {
++  __asm__ volatile("dc cvau, %0" :: "r"(RWAddr) : "memory");
++  __asm__ volatile("dsb ish" ::: "memory");
++  __asm__ volatile("ic ivau, %0" :: "r"(RXAddr) : "memory");
++  __asm__ volatile("dsb ish; isb" ::: "memory");
++}
++}  // namespace
++#endif
++
+ #include "Interface/Context/Context.h"
+ #include "Interface/Core/LookupCache.h"
+ #include "Interface/Core/Dispatcher/Dispatcher.h"
+@@ -521,6 +536,9 @@ static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record,
+   __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))),
+                           reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))) + 4);
+   sys_icache_invalidate(reinterpret_cast<void*>(CallerAddress), 4);
++#elif defined(FEX_IOS_HOST)
++  IOSFlushOneInstr(FEXCore::DualMap::WriteAddr(reinterpret_cast<void*>(CallerAddress)),
++                   reinterpret_cast<void*>(CallerAddress));
+ #else
+   ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(CallerAddress), 4);
+ #endif
+@@ -538,6 +556,9 @@ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record
+   __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))),
+                           reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))) + 4);
+   sys_icache_invalidate(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
++#elif defined(FEX_IOS_HOST)
++  IOSFlushOneInstr(FEXCore::DualMap::WriteAddr(reinterpret_cast<void*>(JumpThunkStartAddress)),
++                   reinterpret_cast<void*>(JumpThunkStartAddress));
+ #else
+   ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
+ #endif
+@@ -611,6 +632,9 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+     __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))),
+                             reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(CallerAddress))) + 4);
+     sys_icache_invalidate(reinterpret_cast<void*>(CallerAddress), 4);
++#elif defined(FEX_IOS_HOST)
++    IOSFlushOneInstr(FEXCore::DualMap::WriteAddr(reinterpret_cast<void*>(CallerAddress)),
++                     reinterpret_cast<void*>(CallerAddress));
+ #else
+     ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(CallerAddress), 4);
+ #endif
+@@ -630,6 +654,9 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+     __builtin___clear_cache(reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))),
+                             reinterpret_cast<char*>(FEXCore::DualMap::WriteAddr(reinterpret_cast<uint8_t*>(JumpThunkStartAddress))) + 4);
+     sys_icache_invalidate(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
++#elif defined(FEX_IOS_HOST)
++    IOSFlushOneInstr(FEXCore::DualMap::WriteAddr(reinterpret_cast<void*>(JumpThunkStartAddress)),
++                     reinterpret_cast<void*>(JumpThunkStartAddress));
+ #else
+     ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
+ #endif
+@@ -874,7 +901,7 @@ CodeBuffer::CodeBufferAllocation Arm64JITCore::AllocateCodeBufferInSharedCache(s
+ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size, bool SingleInst, const FEXCore::IR::IRListView* IR,
+                                                    FEXCore::Core::DebugData* DebugData, bool CheckTF) {
+   FEXCORE_PROFILE_SCOPED("Arm64::CompileCode");
+-  LogMan::Msg::IFmt("[iOS] Arm64JIT::CompileCode: Entry={:#x} Size={} SingleInst={}", Entry, Size, SingleInst);
++  /* perf-silenced */ // LogMan::Msg::IFmt("[iOS] Arm64JIT::CompileCode: Entry={:#x} Size={} SingleInst={}", Entry, Size, SingleInst);
+ 
+   const auto PrevNumAllocations = Relocations.size();
+ 
+@@ -920,9 +947,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+   const uint32_t UsableBufferRange = TempCodeBufferInfo.Size - FEXCore::Utils::FEX_PAGE_SIZE;
+ 
+   SetBuffer(TempCodeBuffer, UsableBufferRange);
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(FEX_IOS_HOST)
+   // TempCodeBuffer is regular heap memory, not dual-mapped. Disable WriteOffset
+   // so dc32/dcn writes go to the actual buffer, not buffer+WriteOffset.
++  // (FEX_IOS_HOST: same logic for ARM64EC PE build — temp buffer is heap.)
+   SetWriteOffset(0);
+ #endif
+ 
+@@ -1043,7 +1071,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+                                     static_cast<uint32_t>(GetCursorAddress<uint8_t*>() - BlockStartHostCode)});
+   }
+ 
+-  LogMan::Msg::IFmt("[iOS] Arm64JIT: IR block loop done, emitting final branches...");
++  /* perf-silenced */ // LogMan::Msg::IFmt("[iOS] Arm64JIT: IR block loop done, emitting final branches...");
+   // Make sure last branch is generated. It certainly can't be eliminated here.
+   if (PendingTargetLabel) {
+     if (PendingTargetLabel->Backward.Location) {
+@@ -1163,8 +1191,9 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+     // NOTE: 16-byte alignment of the new cursor offset must be preserved for block linking records
+     LOGMAN_THROW_A_FMT((reinterpret_cast<uintptr_t>(AllocatedInfo.BufferAllocationOffset) % 16) == 0, "Allocated buffer wasn't 16B "
+                                                                                                       "aligned?");
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(FEX_IOS_HOST)
+     // Restore WriteOffset for dual-mapped JIT pool (CodeBuffer is RX, writes go to RW mirror).
++    // (FEX_IOS_HOST: same logic for ARM64EC PE build — CodeBuffer is iOS-allocated dual-mapped.)
+     SetWriteOffset(FEXCore::DualMap::WriteOffset);
+ #endif
+ 
+@@ -1178,10 +1207,31 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+     CodeData.HostCodeOffset = CodeData.BlockBegin - CurrentCodeBuffer->GetBufferBase();
+ 
+     // Copy over CodeBuffer contents (write to RW mirror on iOS)
+-    LogMan::Msg::IFmt("[iOS] Arm64JIT: Copying {} bytes to CodeBuffer at RX={:#x}", CodeData.Size, (uintptr_t)AllocatedInfo.BufferAllocationOffset);
++#if defined(FEX_IOS_HOST)
++    /* iOS-Mythic 2026-05-19 sanity log: one-shot diagnostic on first 2 JIT
++     * copies to verify the per-Buffer dual-map wiring is correct.
++     * Expect: TempCodeBuffer != RXCursor (temp is heap, offset 0), and
++     * RWCursor = RXCursor + WriteOffset where WriteOffset is the real
++     * runtime RX→RW distance (from MYTHIC_JIT_WRITE_OFFSET — NOT a fixed
++     * 0x10000000; the RW alias is placed with VM_FLAGS_ANYWHERE). */
++    {
++      static volatile int dual_map_log_count = 0;
++      int n = __sync_add_and_fetch(&dual_map_log_count, 1);
++      if (n <= 2) {
++        auto* RXCursor = AllocatedInfo.BufferAllocationOffset;
++        auto* RWCursor = WritePtr(RXCursor);
++        LogMan::Msg::EFmt("[DUAL_MAP_SANITY #{}] TempCodeBuffer=0x{:x} RXCursor=0x{:x} "
++                          "RWCursor=0x{:x} WriteOffset=0x{:x} TempSize=0x{:x}",
++                          n, reinterpret_cast<uintptr_t>(TempCodeBuffer),
++                          reinterpret_cast<uintptr_t>(RXCursor),
++                          reinterpret_cast<uintptr_t>(RWCursor),
++                          (int64_t)GetWriteOffset(), (size_t)CodeData.Size);
++      }
++    }
++#endif
+     memcpy(WritePtr(AllocatedInfo.BufferAllocationOffset), TempCodeBuffer, CodeData.Size);
+   }
+-  LogMan::Msg::IFmt("[iOS] Arm64JIT: CompileCode done, returning");
++  /* perf-silenced */ // LogMan::Msg::IFmt("[iOS] Arm64JIT: CompileCode done, returning");
+ 
+   TempCodeBufferAllocator.DelayedDisownBuffer();
+ 
+@@ -1197,6 +1247,34 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+     // Invalidate instruction cache for the RX view
+     sys_icache_invalidate(CodeBegin, CodeOnlySize);
+   }
++#elif defined(FEX_IOS_HOST)
++  // Same logic as __APPLE__ for ARM64EC PE running on iOS, but without
++  // Darwin libsystem (sys_icache_invalidate not available). Use inline
++  // ARM64 asm: dc cvau (clean to PoU) on RW alias where we have read
++  // access, then ic ivau (invalidate to PoU) on RX alias which works on
++  // XO pages on Apple Silicon. dsb ish / isb provide the required
++  // ordering.
++  //
++  // 2026-07-02: cache-line stride is hardcoded to 64 bytes. It was
++  // previously read from CTR_EL0, but on iOS 27 that `mrs` raises an
++  // illegal-instruction fault when executed from JIT-pool memory
++  // (confirmed: C000001D exactly on the mrs at pool+0x8eeaac, killing
++  // Thumper's main thread ~31s in). 64 bytes is the true I/D cache line
++  // size on all Apple Silicon (A-series and M-series), so this is
++  // correct, not approximate.
++  {
++    auto* RWBegin = WritePtr(CodeBegin);
++    auto* RXBegin = CodeBegin;
++    constexpr size_t kCacheLine = 64;
++    for (size_t off = 0; off < CodeOnlySize; off += kCacheLine) {
++      __asm__ volatile("dc cvau, %0" :: "r"(RWBegin + off) : "memory");
++    }
++    __asm__ volatile("dsb ish" ::: "memory");
++    for (size_t off = 0; off < CodeOnlySize; off += kCacheLine) {
++      __asm__ volatile("ic ivau, %0" :: "r"(RXBegin + off) : "memory");
++    }
++    __asm__ volatile("dsb ish; isb" ::: "memory");
++  }
+ #else
+   ClearICache(CodeBegin, CodeOnlySize);
+ #endif
+diff --git a/FEXCore/include/FEXCore/Utils/DualMap.h b/FEXCore/include/FEXCore/Utils/DualMap.h
+index bb07c88..4bc880d 100644
+--- a/FEXCore/include/FEXCore/Utils/DualMap.h
++++ b/FEXCore/include/FEXCore/Utils/DualMap.h
+@@ -4,11 +4,17 @@
+ 
+ namespace FEXCore::DualMap {
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(FEX_IOS_HOST)
+ // Global write offset for iOS dual-mapped JIT memory.
+ // RX (executable) addresses are canonical. To write to JIT memory,
+ // add this offset to convert RX→RW.
+ // Set by the host application before FEXCore initialization.
++//
++// FEX_IOS_HOST: also enabled for the ARM64EC PE (xtajit64.dll) build —
++// that PE has its own statically-linked copy of FEXCore separate from
++// the iOS app's libFEXCore_Base.a. Its WriteOffset definition lives in
++// Source/Windows/ARM64EC/Module.cpp and is set early in ProcessInit
++// (before InitCore, so dispatcher emit picks it up).
+ extern int64_t WriteOffset;
+ 
+ inline void* WriteAddr(void* RXAddr) {
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 4e97870..b1249dd 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -181,8 +181,38 @@ std::pair<NTSTATUS, ThreadCPUArea> GetThreadCPUArea(HANDLE Thread) {
+   return {Err, ThreadCPUArea(reinterpret_cast<_TEB*>(Info.TebBaseAddress))};
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* iOS-Mythic 2026-05-19: NtCurrentTeb() compiles to a read of x18 on
++ * ARM64EC, but x18 is clobbered by Apple runtime calls (libobjc, mach
++ * syscalls, pthread, etc.). Reading it after any such call returns
++ * garbage — typically 0 in cold-start paths. This is the documented
++ * iOS quirk we already handle in Module.S via the IOS_LOAD_TEB macro
++ * (TPIDRRO_EL0 & ~7 + TSD slot 275). This helper is the C++ equivalent.
++ *
++ * Use this instead of NtCurrentTeb() anywhere we're reading TEB after
++ * having gone through any Apple/Wine/CRT runtime call. The asm has no
++ * dependency on x18, so it's safe across clobber boundaries. */
++static inline _TEB* IOSLoadTEB() {
++  uintptr_t tpidrro;
++  __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
++  tpidrro &= ~uintptr_t(7);
++  _TEB* via_tsd = *reinterpret_cast<_TEB**>(tpidrro + 0x898);  // IOS_TEB_TSD_OFFSET
++  if (via_tsd) return via_tsd;
++  /* 2026-05-19: TSD slot 275 isn't always populated by the time ThreadInit
++   * runs on FMOD worker threads (Wine thread bootstrap race). Fall back to
++   * NtCurrentTeb() which reads x18 — works if x18 hasn't been clobbered on
++   * this thread's setup path. Better than returning nullptr (which would
++   * set gs_cached=0 and cause every guest gs:[N] read to fault). */
++  return NtCurrentTeb();
++}
++#endif
++
+ ThreadCPUArea GetCPUArea() {
++#ifdef FEX_IOS_HOST
++  return ThreadCPUArea(IOSLoadTEB());
++#else
+   return ThreadCPUArea(NtCurrentTeb());
++#endif
+ }
+ 
+ FrontendThreadData* GetFrontendThreadData(FEXCore::Core::InternalThreadState* Thread) {
+@@ -381,7 +411,20 @@ static void LoadStateFromECContext(FEXCore::Core::InternalThreadState* Thread, C
+     State.gs_idx = Context.SegGs & 0xffff;
+ 
+     // The TEB is the only populated GDT entry by default
++    //
++    // iOS-Mythic 2026-07-02: use IOSLoadTEB() (TPIDRRO_EL0 + TSD slot 275)
++    // instead of NtCurrentTeb() (raw x18 read). This function runs late in
++    // ThreadInit and on every EC->x86 context restore; on threads whose x18
++    // has been clobbered by Apple runtime calls, NtCurrentTeb() returns 0
++    // and gs_cached gets zeroed — overwriting the correct value ThreadInit
++    // set earlier. Confirmed on iOS 27 beta: 2 of 8 Thumper worker threads
++    // ended ThreadInit with gs_cached=0 via this path, causing gs:[N] fault
++    // loops when MSVC TLS guard code ran on those threads.
++#ifdef FEX_IOS_HOST
++    const auto TEB = reinterpret_cast<uint64_t>(IOSLoadTEB());
++#else
+     const auto TEB = reinterpret_cast<uint64_t>(NtCurrentTeb());
++#endif
+     auto GDT = State.GetSegmentFromIndex(State, (Context.SegGs & 0xffff));
+     State.SetGDTBase(GDT, TEB);
+     State.SetGDTLimit(GDT, 0xF'FFFFU);
+@@ -632,7 +675,27 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
+   Exception::LoadStateFromECContext(Thread, *Context);
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* iOS-Mythic 2026-05-19: define FEXCore::DualMap::WriteOffset for THIS PE.
++ * xtajit64.dll has its own statically-linked copy of FEXCore separate from
++ * the iOS Mythic app's libFEXCore_Base.a — so we need our own storage for
++ * the variable. Set early in ProcessInit (before InitCore + dispatcher emit).
++ * Convention is +0x10000000 (RX→RW alias separation), matching the iOS JIT
++ * pool layout established in virtual_ios.c. */
++namespace FEXCore::DualMap {
++int64_t WriteOffset = 0;
++} // namespace FEXCore::DualMap
++#endif
++
+ NTSTATUS ProcessInit() {
++  /* iOS-Mythic: DualMap::WriteOffset (RX→RW alias distance) is set below,
++   * after InitCRTProcess() populates the environment, and BEFORE InitCore().
++   * It is read from MYTHIC_JIT_WRITE_OFFSET rather than hardcoded, because
++   * the app creates the RW alias with VM_FLAGS_ANYWHERE — the alias is NOT
++   * guaranteed to land at RX+0x10000000 (observed +0x105a4000 on iOS 27).
++   * The old hardcode corrupted the JIT pool on runs where the offset
++   * differed. See FEXBridge.mm (setenv) + env_ios.c (forwarding). */
++
+   InitSyscalls();
+ 
+   FEX::Windows::InitCRTProcess();
+@@ -671,6 +734,55 @@ NTSTATUS ProcessInit() {
+ 
+   CTX->SetSignalDelegator(SignalDelegator.get());
+   CTX->SetSyscallHandler(SyscallHandler.get());
++
++#ifdef FEX_IOS_HOST
++  /* Set DualMap::WriteOffset BEFORE InitCore (the dispatcher's emit path
++   * reads it via the JIT class constructor). Compute it from the SAME
++   * env vars the app already publishes for the unix side's JIT pool —
++   * WINE_IOS_JIT_RW / WINE_IOS_JIT_RX (set in ContentView.swift before
++   * Wine launches, forwarded through get_initial_environment because they
++   * are WINE-prefixed and non-special). offset = RW_base - RX_base.
++   *
++   * This replaces the earlier MYTHIC_JIT_WRITE_OFFSET attempt, which read
++   * an uninitialized FEXBridge pool (the guest's real pool is owned by
++   * StikJITHelper, not FEXBridge) and always came back null. Fail LOUD if
++   * the vars are missing — a wrong/zero offset corrupts the JIT pool. */
++  {
++    const char *rw_env = getenv("WINE_IOS_JIT_RW");
++    const char *rx_env = getenv("WINE_IOS_JIT_RX");
++    uint64_t rw = rw_env ? strtoull(rw_env, nullptr, 16) : 0;
++    uint64_t rx = rx_env ? strtoull(rx_env, nullptr, 16) : 0;
++    int64_t off = (rw && rx) ? (int64_t)(rw - rx) : 0;
++    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
++        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
++              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
++        : nullptr;
++    char buf[160];
++    if (off != 0) {
++      /* iOS-Mythic 2026-07-03: TRAP-MODE writes are the shipping config.
++       * WriteOffset stays 0 so WritePtr is identity — every JIT-pool write
++       * faults and the Wine Mach STR emulator redirects it through the RW
++       * alias AND invalidates icache. The direct-RW fast-write path
++       * (WriteOffset = off) corrupted x86→EC transitions (msvcp140 DllMain
++       * EH via RtlPcToFileHeader; Goldberg steam_api64 init) — root cause
++       * inside it unproven, suspected inline dc/ic flush. Bisect-verified
++       * 2026-07-03: trap-mode reaches the 3D menu; fast-write dies pre-
++       * splash. Before re-enabling, rework the flush to
++       * NtFlushInstructionCache and re-verify those two crash sites. */
++      FEXCore::DualMap::WriteOffset = 0;
++      int n = snprintf(buf, sizeof(buf),
++          "[FEX-iOS] trap-mode writes (WriteOffset=0; real off=0x%llx RW=0x%llx RX=0x%llx)\n",
++          (unsigned long long)off, (unsigned long long)rw, (unsigned long long)rx);
++      if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
++    } else {
++      int n = snprintf(buf, sizeof(buf),
++          "[FEX-iOS] FATAL: WINE_IOS_JIT_RW/RX missing (RW=%s RX=%s) — JIT pool writes will corrupt!\n",
++          rw_env ? rw_env : "(null)", rx_env ? rx_env : "(null)");
++      if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
++    }
++  }
++#endif
++
+   CTX->InitCore();
+   Exception::HandlerConfig.emplace(*CTX);
+   InvalidationTracker.emplace(*CTX, Threads);
+@@ -1073,12 +1185,29 @@ NTSTATUS ThreadInit() {
+    * the path where x86 code starts running before any CONTEXT-load happens
+    * (e.g. Thumper's startup invoking thread-local guards before its first
+    * exception-driven context restore), gs_cached stays 0 and gs:[N] hits
+-   * SEGV at addr=N.                                                       */
++   * SEGV at addr=N.
++   *
++   * 2026-05-19: use IOSLoadTEB() (TPIDRRO_EL0 + TSD slot 275) instead of
++   * NtCurrentTeb(). The latter reads x18, which is clobbered by Apple
++   * runtime calls earlier in ThreadInit (InitCRTThread, VirtualAlloc,
++   * CreateThread). With x18=0, gs_cached was getting set to 0 — confirmed
++   * regression that broke boot intermittently. Use the TSD-slot path
++   * which is x18-independent. */
+   {
+-    const uint64_t TEB = reinterpret_cast<uint64_t>(NtCurrentTeb());
++    const uint64_t TEB = reinterpret_cast<uint64_t>(IOSLoadTEB());
+     Frame->State.gs_cached = TEB;
+     Frame->State.fs_cached = 0;
+   }
++  /* Hard guard: if somehow STILL zero, log loudly so we catch it. */
++  if (Frame->State.gs_cached == 0) {
++    HANDLE stderr_h_g = NtCurrentTeb() ? (HANDLE)reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
++        NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError : nullptr;
++    if (stderr_h_g) {
++      const char *msg = "[FEX-iOS] FATAL: gs_cached STILL 0 after IOSLoadTEB!\n";
++      ULONG written = 0;
++      WriteFile(stderr_h_g, msg, 53, &written, nullptr);
++    }
++  }
+ #endif
+ 
+   FEX::Windows::CallRetStack::InitializeThread(Thread);
+@@ -1140,7 +1269,18 @@ NTSTATUS ThreadInit() {
+       bool      nop_after_pair7; // need a NOP just past pair-7?
+     };
+     static constexpr PatchSite kSites[] = {
+-      { 0x164, true  },  // first site: shift left, NOP at +0x180
++      // 2026-05-19: The hardcoded {0x164, true} site has been removed.
++      // With the per-Buffer dual-map fix in place, FEX's dispatcher emit
++      // now produces correct stp instructions at +0x164 directly (GPT
++      // diagnosed: pair0 at +0x158, pair1 at +0x15c, pair2 at +0x160 —
++      // valid code, not the broken pattern). The hardcoded patch was
++      // OVERWRITING valid code with stp's that didn't belong there,
++      // corrupting the dispatcher layout and causing st1 faults later.
++      //
++      // The generic uniformity-based scanner below correctly handles the
++      // REAL broken sites (where pair-0 stp is followed by 7 uniform-class
++      // garbage words). If the scanner reports 0 patched, the dispatcher
++      // came out correct.
+       // All other sites are scanned/patched dynamically below — the FEX
+       // emitter produces the same broken 7-word pattern at MANY offsets
+       // (24+ sites in Thumper, growing with each new code path). Iterating
+@@ -1196,10 +1336,12 @@ NTSTATUS ThreadInit() {
+          * page-protection quirk where ThreadInit's STRs to RX from xtajit64.dll
+          * neither succeed natively nor trap.
+          *
+-         * Bypass entirely by writing to the RW alias. RX→RW offset is the
+-         * fixed 256MB pool size — same convention used everywhere else in
+-         * the iOS JIT pool code. */
+-        constexpr uintptr_t kRwOffset = 0x10000000;  // 256MB JIT pool size
++         * Bypass entirely by writing to the RW alias. RX→RW offset comes
++         * from DualMap::WriteOffset (set in ProcessInit from the app's real
++         * runtime mapping) — NOT a hardcoded 0x10000000, since the RW alias
++         * is placed with VM_FLAGS_ANYWHERE and isn't guaranteed to sit at
++         * RX+256MB. */
++        const int64_t kRwOffset = FEXCore::DualMap::WriteOffset;
+         uint32_t* patch_rw = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(patch_rx) + kRwOffset);
+         for (int i = 0; i < 7; i++) {
+           patch_rw[i] = expected[i];
+@@ -1254,8 +1396,9 @@ NTSTATUS ThreadInit() {
+           if ((base[i + j] & kStpMask) != top0) { uniform = false; break; }
+         }
+         if (!uniform) continue;  /* legit code following pair-0 — leave alone */
+-        /* Write to RW alias (RX + 256MB). See hardcoded-site comment for why. */
+-        constexpr uintptr_t kRwOffset = 0x10000000;
++        /* Write to RW alias via the real runtime offset (DualMap::WriteOffset),
++         * not a hardcoded 0x10000000. See the other patch site for rationale. */
++        const int64_t kRwOffset = FEXCore::DualMap::WriteOffset;
+         uint32_t* rw_base = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(&base[i + 1]) + kRwOffset);
+         for (int j = 0; j < 7; j++) {
+           rw_base[j] = expected[j];

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Wed, 31 Jan 2024 17:30:20 +0100
+Subject: [PATCH] explorer: Create the standalone systray window with
+ WS_EX_NOACTIVATE.
+
+CW-Bug-Id: #23341
+Valve-commit: 7a1bb106047e8874b32daf6e4119220ce6e96a35
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ programs/explorer/systray.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/programs/explorer/systray.c b/programs/explorer/systray.c
+index 69d3ec6..8fd9ea4 100644
+--- a/programs/explorer/systray.c
++++ b/programs/explorer/systray.c
+@@ -1259,7 +1259,7 @@ void initialize_systray( BOOL arg_using_root, BOOL arg_enable_shell, BOOL arg_sh
+     else
+     {
+         SIZE size = get_window_size();
+-        tray_window = CreateWindowExW( 0, shell_traywnd_class.lpszClassName, L"", WS_CAPTION | WS_SYSMENU,
++        tray_window = CreateWindowExW( WS_EX_NOACTIVATE, shell_traywnd_class.lpszClassName, L"", WS_CAPTION | WS_SYSMENU,
+                                        CW_USEDEFAULT, CW_USEDEFAULT, size.cx, size.cy, 0, 0, 0, 0 );
+         NtUserMessageCall( tray_window, WINE_SYSTRAY_DOCK_INIT, 0, 0, NULL, NtUserSystemTrayCall, FALSE );
+     }

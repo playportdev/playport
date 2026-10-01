@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Resolution for one game</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+a.leg{padding:4px 8px;margin:0 -8px;border-radius:14px;color:#C9D1DC}a.leg:hover{background:#1D242E;color:#EEF1F5}
+.opt{display:flex;align-items:center;gap:12px;height:42px;padding:0 14px;box-sizing:border-box;border-radius:10px;font:500 15px 'Barlow';color:#EEF1F5}
+.opt .s{margin-left:auto;font-size:12px;color:#9AA5B4}
+.sel{background:#EEF1F5;color:#0B0E13}
+.sel .s{color:#3A4452}
+.radio{width:16px;height:16px;border-radius:8px;border:2px solid #4A5667;box-sizing:border-box;flex-shrink:0}
+.radio.on{border:5px solid #F5B544}
+.sel .radio{border-color:#3A4452}
+.sel .radio.on{border-color:#0B0E13}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13">
+<div style="position: absolute; left: 0; top: 0; width: 874px; height: 230px; background: #1E2A3F"></div>
+<div style="position: absolute; inset: 0; background: rgba(5,7,10,.72)"></div>
+<div style="position: absolute; top: 0; right: 0; width: 410px; height: 402px; background: #151A21; border-left: 1px solid #2A3340; padding: 18px 28px 0 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px">
+<div style="font-size: 12px; color: #9AA5B4; padding: 0 14px">Hollow Knight · Graphics</div>
+<div class="d" style="font-size: 22px; font-weight: 700; padding: 0 14px 8px">Resolution</div>
+<div class="opt sel"><span class="radio on"></span>Default<span class="s">720p, from Settings</span></div>
+<div class="opt"><span class="radio"></span>Native<span class="s">Sharpest, most power</span></div>
+<div class="opt"><span class="radio"></span>1080p</div>
+<div class="opt"><span class="radio"></span>900p</div>
+<div class="opt"><span class="radio"></span>720p<span class="s">Longest battery</span></div>
+<div style="font-size: 12px; line-height: 1.4; color: #9AA5B4; padding: 10px 14px 0">Takes effect the next time the game starts.</div>
+</div>
+<div style="position: absolute; left: 0; bottom: 0; width: 464px; height: 36px; display: flex; align-items: center; gap: 18px; padding: 0 44px; box-sizing: border-box">
+<a class="leg" href="GameOptions.dc.html"><span class="g">A</span>Choose</a>
+<a class="leg" href="GameOptions.dc.html"><span class="g">B</span>Back</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

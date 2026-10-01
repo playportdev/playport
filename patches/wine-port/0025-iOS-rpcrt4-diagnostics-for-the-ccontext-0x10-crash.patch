@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Jul 2026 18:28:49 +0800
+Subject: [PATCH] iOS: rpcrt4 diagnostics for the ccontext == 0x10 crash
+
+Steam dies in NdrContextHandleUnmarshall (ndr_marshall.c:7024) writing
+through a context handle of 0x10. Two probes, and the answer they gave.
+
+[ndr-shift] in client_do_args tested "the argument window is shifted by
+one 8-byte slot". It fired -- but on a heuristic (a small value sitting
+next to a pointer), and that was a FALSE POSITIVE: plenty of RPC params
+are legitimately small integers.
+
+[ctxh] reports from the actual failure site and prints the facts that
+discriminate rather than a verdict:
+
+  [ctxh] BAD ccontext=0x10 flags=0xa0 via_ptr=1 ppMemory=0x703CD5EC08
+         slot=0x10 StackTop=0x703CD5EBF0 mod16=0 IsClient=1
+
+via_ptr=1 with slot=0x10 means the value was LOADED OUT of the argument
+slot, so it is what the caller supplied -- the bug is upstream of NDR.
+mod16=0 shows the call takes the aligned ARM64EC entry path, where
+StackTop is already correct, which independently rules out the shift
+theory (the misaligned path would give mod16=8 after the FEX fix).
+
+Kept in place: this is still an open bug, and these are the lines that
+will identify the caller.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+(cherry picked from commit 46a77d60990240b4ec1c94b1f7b7a027f8df6ba5)
+Madeira-commit: a38fc583c38c92209ffab0f7249c610336dbd906
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/rpcrt4/ndr_marshall.c | 28 ++++++++++++++++++++++++++
+ dlls/rpcrt4/ndr_stubless.c | 40 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 68 insertions(+)
+
+diff --git a/dlls/rpcrt4/ndr_marshall.c b/dlls/rpcrt4/ndr_marshall.c
+index 7b49e0e3f4b..5e813ef6eb9 100644
+--- a/dlls/rpcrt4/ndr_marshall.c
++++ b/dlls/rpcrt4/ndr_marshall.c
+@@ -7019,6 +7019,34 @@ static unsigned char *WINAPI NdrContextHandleUnmarshall(
+             ccontext = *(NDR_CCONTEXT **)ppMemory;
+         else
+             ccontext = (NDR_CCONTEXT *)ppMemory;
++        /* iOS-Mythic ml219 PROBE: this is where Steam dies, with ccontext == 0x10.
++         *
++         * An earlier probe in client_do_args flagged "argument window shifted by one slot"
++         * from a heuristic -- a small value sitting next to a pointer -- and that was a
++         * FALSE POSITIVE: plenty of RPC parameters are legitimately small integers, and
++         * StackTop mod 16 shows the failing call takes the ALIGNED entry path, where
++         * StackTop is already correct. So report from the actual failure site instead, and
++         * print the facts that discriminate rather than a verdict:
++         *   via_ptr  -- whether ccontext was LOADED from the arg slot or IS the slot
++         *   *ppMemory-- the raw value sitting in that slot
++         *   mod16    -- which ARM64EC entry path produced StackTop (0 = aligned/correct,
++         *               8 = the ret_sp_misaligned path)
++         * If via_ptr is set, 0x10 is a value the caller supplied and the bug is upstream of
++         * NDR entirely; if it is clear, ppMemory itself is 0x10 and the arg base is wrong. */
++        if ((ULONG_PTR)ccontext < 0x10000)
++        {
++            static int ctxh_reports;
++
++            if (ctxh_reports < 8)
++            {
++                ctxh_reports++;
++                ERR( "[ctxh] BAD ccontext=%p flags=0x%02x via_ptr=%d ppMemory=%p slot=%p "
++                     "StackTop=%p mod16=%u IsClient=%d\n",
++                     ccontext, pFormat[1], !!(pFormat[1] & HANDLE_PARAM_IS_VIA_PTR),
++                     ppMemory, (void *)*(ULONG_PTR *)ppMemory, pStubMsg->StackTop,
++                     (unsigned)((ULONG_PTR)pStubMsg->StackTop & 15), pStubMsg->IsClient );
++            }
++        }
+         /* [out]-only or [ret] param */
+         if ((pFormat[1] & (HANDLE_PARAM_IS_IN|HANDLE_PARAM_IS_OUT)) == HANDLE_PARAM_IS_OUT)
+             *ccontext = NULL;
+diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
+index 1ff09f628ce..1c166951218 100644
+--- a/dlls/rpcrt4/ndr_stubless.c
++++ b/dlls/rpcrt4/ndr_stubless.c
+@@ -509,6 +509,46 @@ void client_do_args( PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat, enum s
+         }
+     }
+ 
++    /* iOS-Mythic ml216 PROBE: is the argument window shifted by exactly one 8-byte slot?
++     *
++     * Steam faults in #NdrContextHandleUnmarshall+0xcc (ndr_marshall.c:7024) with
++     * ccontext == 0x10. The [ec-stacktop] probe above tested "StackTop is tiny" and
++     * correctly stayed silent -- StackTop is a large, valid pointer. The surviving
++     * hypothesis is a SHIFT, not a bogus base: FEX's ARM64EC entry path takes
++     *   ret_sp_misaligned:  adrp lr, X64ReturnInstr ; br x17
++     * without popping the return address, so the entry thunk's `add x4, x4, #0x20` lands
++     * on RSP+0x20 instead of RSP+0x28 -- every stack argument off by one slot. The normal
++     * path pops first (`ldr lr,[x4],#0x8`) and is correct.
++     *
++     * Test it directly: a shifted window shows an implausible tiny value where we read AND
++     * a plausible pointer one slot away. Self-targeting on that signature rather than a
++     * first-N cap, so early boot RPC traffic cannot exhaust the budget before the failing
++     * call. Neighbours are printed either way, so "not shifted" is a real answer rather
++     * than silence. Diagnostic only -- no behaviour change. */
++    {
++        static int shift_reports;
++        unsigned int j;
++
++        for (j = 0; pStubMsg->StackTop && j < number_of_params && shift_reports < 10; j++)
++        {
++            const ULONG_PTR *slot = (const ULONG_PTR *)(pStubMsg->StackTop + params[j].stack_offset);
++            ULONG_PTR here = slot[0];
++
++            if (here == 0 || here >= 0x10000) continue;   /* plausible -- not our signature */
++
++            shift_reports++;
++            ERR( "[ndr-shift] param%u off=0x%x phase=%d StackTop=%p | prev=%p HERE=%p "
++                 "next=%p next2=%p => %s\n",
++                 j, params[j].stack_offset, phase, pStubMsg->StackTop,
++                 (void *)slot[-1], (void *)here, (void *)slot[1], (void *)slot[2],
++                 (slot[1] >= 0x10000 && slot[1] < 0x8000000000ull)
++                     ? "SHIFT: real pointer is ONE SLOT LATER (+8)"
++                     : (slot[-1] >= 0x10000 && slot[-1] < 0x8000000000ull)
++                           ? "SHIFT: real pointer is ONE SLOT EARLIER (-8)"
++                           : "no neighbouring pointer -- shift NOT indicated" );
++        }
++    }
++
+     for (i = 0; i < number_of_params; i++)
+     {
+         unsigned char *pArg = pStubMsg->StackTop + params[i].stack_offset;

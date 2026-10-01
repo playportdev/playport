@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Lesho <dlesho@codeweavers.com>
+Date: Fri, 21 Jan 2022 14:42:12 -0500
+Subject: [PATCH] kernelbase: Add stub for GetConsoleSelectionInfo.
+
+Signed-off-by: Derek Lesho <dlesho@codeweavers.com>
+Valve-commit: 7883e46ab599b0f88a90d57928b6b9c9a8ff4850
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernel32/kernel32.spec     | 2 +-
+ dlls/kernelbase/console.c       | 8 ++++++++
+ dlls/kernelbase/kernelbase.spec | 1 +
+ 3 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/kernel32/kernel32.spec b/dlls/kernel32/kernel32.spec
+index 49bdaa8..b92a119 100644
+--- a/dlls/kernel32/kernel32.spec
++++ b/dlls/kernel32/kernel32.spec
+@@ -624,7 +624,7 @@
+ @ stdcall -import GetConsoleProcessList(ptr long)
+ @ stdcall -import GetConsoleScreenBufferInfo(long ptr)
+ @ stdcall -import GetConsoleScreenBufferInfoEx(long ptr)
+-# @ stub GetConsoleSelectionInfo
++@ stdcall -import GetConsoleSelectionInfo(ptr)
+ @ stdcall -import GetConsoleTitleA(ptr long)
+ @ stdcall -import GetConsoleTitleW(ptr long)
+ @ stdcall -import GetConsoleWindow()
+diff --git a/dlls/kernelbase/console.c b/dlls/kernelbase/console.c
+index 8f9fa58..82f390e 100644
+--- a/dlls/kernelbase/console.c
++++ b/dlls/kernelbase/console.c
+@@ -1080,6 +1080,14 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleScreenBufferInfoEx( HANDLE handle,
+ }
+ 
+ 
++BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleSelectionInfo(CONSOLE_SELECTION_INFO *info)
++{
++    FIXME("stub (%p)\n", info);
++    info->dwFlags = CONSOLE_NO_SELECTION;
++    return TRUE;
++}
++
++
+ /******************************************************************************
+  *	GetConsoleTitleA   (kernelbase.@)
+  */
+diff --git a/dlls/kernelbase/kernelbase.spec b/dlls/kernelbase/kernelbase.spec
+index 97e3897..e4d8a4c 100644
+--- a/dlls/kernelbase/kernelbase.spec
++++ b/dlls/kernelbase/kernelbase.spec
+@@ -476,6 +476,7 @@
+ @ stdcall GetConsoleProcessList(ptr long)
+ @ stdcall GetConsoleScreenBufferInfo(long ptr)
+ @ stdcall GetConsoleScreenBufferInfoEx(long ptr)
++@ stdcall GetConsoleSelectionInfo(ptr)
+ @ stdcall GetConsoleTitleA(ptr long)
+ @ stdcall GetConsoleTitleW(ptr long)
+ @ stdcall GetConsoleWindow()

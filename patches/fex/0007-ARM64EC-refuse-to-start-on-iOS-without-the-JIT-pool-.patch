@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 05:28:24 +0200
+Subject: [PATCH] ARM64EC: refuse to start on iOS without the JIT pool's RW
+ alias
+
+ProcessInit reads the RW alias distance (DualMap::WriteOffset) from
+WINE_IOS_JIT_RW and WINE_IOS_JIT_RX. When either was missing it logged
+"FATAL ... JIT pool writes will corrupt!" and went on with WriteOffset 0:
+every instruction, literal and label fixup the emitter wrote then went to
+the RX address and relied on ntdll's Mach store emulator to replay it
+through the RW alias. That trap path lost stores when it was the only
+one: the dispatcher's CompileBlock literal read zero and the first
+dispatch branched to 0 ("mode A", which the reference kept away from with
+a pool floor at 0x119000000), and SpillStaticRegs sites kept stale words.
+Return STATUS_UNSUCCESSFUL instead, as the TEB slot import above does, so
+the process fails at start with the reason in the log.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-mode-a.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 79ea245..41aab2d 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1074,10 +1074,18 @@ NTSTATUS ProcessInit() {
+           (unsigned long long)off, (unsigned long long)rw, (unsigned long long)rx);
+       if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
+     } else {
++      /* Playport: refuse to start. With WriteOffset 0 every emitted
++       * instruction, literal and fixup is stored to the RX address and has to
++       * be replayed through the RW alias by ntdll's Mach store emulator
++       * ("trap mode"), which lost stores: the dispatcher's CompileBlock
++       * literal read zero ("mode A", Playport docs/ARCHITECTURE.md, JIT pool
++       * placement) and SpillStaticRegs kept stale words. Failing here is
++       * loud; running on is not. */
+       int n = snprintf(buf, sizeof(buf),
+-          "[FEX-iOS] FATAL: WINE_IOS_JIT_RW/RX missing (RW=%s RX=%s) — JIT pool writes will corrupt!\n",
++          "[FEX-iOS] FATAL: WINE_IOS_JIT_RW/RX missing (RW=%s RX=%s): no RW alias for the JIT pool, refusing to start\n",
+           rw_env ? rw_env : "(null)", rx_env ? rx_env : "(null)");
+       if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
++      return STATUS_UNSUCCESSFUL;
+     }
+   }
+ #endif

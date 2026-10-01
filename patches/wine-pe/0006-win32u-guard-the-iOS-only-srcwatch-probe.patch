@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] win32u: guard the iOS-only srcwatch probe
+
+The darwin win32u.so has no weak fallback for the probe, so the Linux
+cross link failed.
+
+Class: linux-build
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ dlls/win32u/dibdrv/bitblt.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/dlls/win32u/dibdrv/bitblt.c b/dlls/win32u/dibdrv/bitblt.c
+index fa1f8420..f8b9f94c 100644
+--- a/dlls/win32u/dibdrv/bitblt.c
++++ b/dlls/win32u/dibdrv/bitblt.c
+@@ -1012,6 +1012,7 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
+      * one that already carries the displaced panel. Watching it names the
+      * GUEST code that wrote each region. Only the big paint qualifies; the
+      * watch itself is one-shot and env-gated (MADEIRA_SRCWATCH). */
++#ifdef WINE_IOS  /* the srcwatch/srcbits hooks are defined only in the out-of-tree iOS layer */
+     if (dst && bits && bits->ptr && dst->visrect.right - dst->visrect.left >= 640
+         && dst->visrect.bottom - dst->visrect.top >= 400)
+     {
+@@ -1070,6 +1071,7 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
+                                               (dst->visrect.bottom - dst->visrect.top)) );
+         }
+     }
++#endif  /* WINE_IOS */
+ 
+     if (dst && src && dst->visrect.right - dst->visrect.left >= 24)
+     {

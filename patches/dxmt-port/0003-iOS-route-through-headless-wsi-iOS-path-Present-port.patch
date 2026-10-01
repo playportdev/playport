@@ -1,0 +1,382 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <contact@volta.audio>
+Date: Fri, 24 Apr 2026 16:23:28 +0800
+Subject: [PATCH] iOS: route through headless wsi + iOS-path Present + portable
+ test fixes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+1. Headless wsi on our aarch64-windows target
+   src/util/meson.build: select wsi_{window,monitor}_headless.cpp for the
+   aarch64-windows cross-build (same files dxmt_native already uses on
+   macOS). Keeps wsi_platform_win32.cpp for Windows-ABI aligned_malloc.
+   Without this, every wsi::* call lands in user32 and returns garbage on
+   our Wine (no real window manager) — getClientRect gives uninitialized
+   stack data, isMinimized says yes, etc.
+
+2. iOS Present path
+   src/d3d11/d3d11_swapchain.cpp Present1: under DXMT_IOS, treat the
+   single iOS Metal surface as always visible + foregrounded. Without
+   this, wsi::isMinimized(hWnd) returned true for our fake HWND, Present
+   short-circuited with DXGI_STATUS_OCCLUDED (0x087A0001), and no frames
+   ever reached the CAMetalLayer.
+
+3. Test portability (applies everywhere, not just iOS)
+   tests/dx11/*.cpp: LoadIconW/LoadCursorW took `0` for HINSTANCE and
+   `IDI_APPLICATION`/`IDC_ARROW` for the name arg. MSVC accepts the
+   implicit conversions; clang++ does not. Cast to `(HINSTANCE)nullptr`
+   and `(LPCWSTR)IDI_APPLICATION` / `(LPCWSTR)IDC_ARROW`.
+
+4. iOS-specific test scaffolding (dx11_cube.cpp only for now)
+   - Skip the PeekMessageW loop — no real message queue on iOS, our
+     Wine's user32 has no backing driver.
+   - Hardcode 1024x768 swapchain + viewport — GetClientRect on our
+     fake HWND returns uninitialized stack data; at Width/Height=0
+     DXGI uses GetClientRect which made the backbuffer invalid.
+   - Replace OutputDebugStringA/W with fprintf — OutputDebugString
+     blocked on our Wine without the DBG_PRINTEXCEPTION_C path wired.
+
+Validated on iPhone: dx11_cube renders the RGB-gradient spinning cube
+at 60fps with depth testing, constant-buffer transform, index buffer,
+interpolated vertex colors. Full D3D11 feature coverage well beyond
+the earlier triangle.
+
+Real games will still need a proper winios.drv to replace Wine's
+missing display driver — these per-test patches are test-scaffold
+fixes only.
+
+Madeira-commit: 77f5d3f4c9d786b83b4466f68cc80e4120afac40
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_swapchain.cpp  | 11 ++++++++
+ src/util/meson.build           |  9 ++++++
+ tests/dx11/dx11_animated.cpp   |  6 ++--
+ tests/dx11/dx11_bpl.cpp        |  6 ++--
+ tests/dx11/dx11_camera.cpp     |  6 ++--
+ tests/dx11/dx11_cbuffer.cpp    |  6 ++--
+ tests/dx11/dx11_cube.cpp       | 50 +++++++++++++---------------------
+ tests/dx11/dx11_hdr_linear.cpp |  6 ++--
+ tests/dx11/dx11_hdr_pq.cpp     |  6 ++--
+ tests/dx11/dx11_obj.cpp        |  6 ++--
+ tests/dx11/dx11_texquad.cpp    |  6 ++--
+ tests/dx11/dx11_triangle.cpp   |  6 ++--
+ 12 files changed, 66 insertions(+), 58 deletions(-)
+
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index 35570f9..7b792fe 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -741,13 +741,24 @@ public:
+       return DXGI_ERROR_INVALID_CALL;
+ 
+     HRESULT hr = S_OK;
++#ifdef DXMT_IOS
++    // iOS has no real window manager, so wsi::isMinimized / isForeground
++    // return meaningless values. Treat the single iOS surface as always
++    // visible + foregrounded.
++    bool window_minimized = false;
++#else
+     bool window_minimized = wsi::isMinimized(hWnd);
++#endif
+     if ((window_minimized || desc_.Width == 0 || desc_.Height == 0)
+         // MSDN: You will not receive DXGI_STATUS_OCCLUDED if you're using a flip model swap chain.
+         && desc_.SwapEffect <= DXGI_SWAP_EFFECT_SEQUENTIAL)
+       hr = DXGI_STATUS_OCCLUDED;
++#ifdef DXMT_IOS
++    bool should_exit_fs = false;
++#else
+     bool should_exit_fs = handle_alt_tab_ // At the moment this is still broken for certain games
+                           && !fullscreen_desc_.Windowed && !window_minimized && !wsi::isForeground(hWnd);
++#endif
+     if (hr == S_OK && should_exit_fs)
+       hr = DXGI_STATUS_OCCLUDED;
+     if (PresentFlags & DXGI_PRESENT_TEST)
+diff --git a/src/util/meson.build b/src/util/meson.build
+index 93dd7bc..10bdb97 100644
+--- a/src/util/meson.build
++++ b/src/util/meson.build
+@@ -30,6 +30,15 @@ if not dxmt_crossbuild
+     'wsi_window_headless.cpp',
+     'wsi_platform_darwin.cpp',
+   ])
++elif host_machine.cpu_family() == 'aarch64' and host_machine.system() == 'windows'
++  # Mythic iOS target: aarch64-windows PE, but running inside our iOS Wine
++  # with no real window manager. Use headless wsi to stop user32 calls from
++  # returning garbage.
++  util_src += files([
++    'wsi_monitor_headless.cpp',
++    'wsi_window_headless.cpp',
++    'wsi_platform_win32.cpp',
++  ])
+ else
+   util_src += files([
+     'wsi_monitor_win32.cpp',
+diff --git a/tests/dx11/dx11_animated.cpp b/tests/dx11/dx11_animated.cpp
+index b24ff08..ff89e40 100644
+--- a/tests/dx11/dx11_animated.cpp
++++ b/tests/dx11/dx11_animated.cpp
+@@ -48,10 +48,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_bpl.cpp b/tests/dx11/dx11_bpl.cpp
+index 31d9177..6a44a0b 100644
+--- a/tests/dx11/dx11_bpl.cpp
++++ b/tests/dx11/dx11_bpl.cpp
+@@ -433,10 +433,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
+     winClass.style = CS_HREDRAW | CS_VREDRAW;
+     winClass.lpfnWndProc = &WndProc;
+     winClass.hInstance = hInstance;
+-    winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-    winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++    winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++    winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+     winClass.lpszClassName = L"MyWindowClass";
+-    winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++    winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+     if (!RegisterClassExW(&winClass)) {
+       MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_camera.cpp b/tests/dx11/dx11_camera.cpp
+index 08eb1ab..6e13c0f 100644
+--- a/tests/dx11/dx11_camera.cpp
++++ b/tests/dx11/dx11_camera.cpp
+@@ -89,10 +89,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_cbuffer.cpp b/tests/dx11/dx11_cbuffer.cpp
+index 67d92ba..943f953 100644
+--- a/tests/dx11/dx11_cbuffer.cpp
++++ b/tests/dx11/dx11_cbuffer.cpp
+@@ -48,10 +48,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_cube.cpp b/tests/dx11/dx11_cube.cpp
+index fde02f6..1215d5a 100644
+--- a/tests/dx11/dx11_cube.cpp
++++ b/tests/dx11/dx11_cube.cpp
+@@ -114,10 +114,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+@@ -156,16 +156,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         creationFlags |= D3D11_CREATE_DEVICE_DEBUG;
+         #endif
+ 
+-        HRESULT hResult = D3D11CreateDevice(0, D3D_DRIVER_TYPE_HARDWARE, 
+-                                            0, creationFlags, 
+-                                            featureLevels, ARRAYSIZE(featureLevels), 
+-                                            D3D11_SDK_VERSION, &baseDevice, 
++        HRESULT hResult = D3D11CreateDevice(0, D3D_DRIVER_TYPE_HARDWARE,
++                                            0, creationFlags,
++                                            featureLevels, ARRAYSIZE(featureLevels),
++                                            D3D11_SDK_VERSION, &baseDevice,
+                                             0, &baseDeviceContext);
+         if(FAILED(hResult)){
+             MessageBoxA(0, "D3D11CreateDevice() failed", "Fatal Error", MB_OK);
+             return GetLastError();
+         }
+-        
++
+         // Get 1.1 interface of D3D11 Device and Context
+         hResult = baseDevice->QueryInterface(__uuidof(ID3D11Device1), (void**)&d3d11Device);
+         assert(SUCCEEDED(hResult));
+@@ -211,8 +211,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+             DXGI_ADAPTER_DESC adapterDesc;
+             dxgiAdapter->GetDesc(&adapterDesc);
+ 
+-            OutputDebugStringA("Graphics Device: ");
+-            OutputDebugStringW(adapterDesc.Description);
++            for (int i = 0; i < 128 && adapterDesc.Description[i]; i++)
+ 
+             hResult = dxgiAdapter->GetParent(__uuidof(IDXGIFactory2), (void**)&dxgiFactory);
+             assert(SUCCEEDED(hResult));
+@@ -220,8 +219,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         }
+         
+         DXGI_SWAP_CHAIN_DESC1 d3d11SwapChainDesc = {};
+-        d3d11SwapChainDesc.Width = 0; // use window width
+-        d3d11SwapChainDesc.Height = 0; // use window height
++        d3d11SwapChainDesc.Width = 1024;   // iOS: explicit (no real window)
++        d3d11SwapChainDesc.Height = 768;
+         d3d11SwapChainDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+         d3d11SwapChainDesc.SampleDesc.Count = 1;
+         d3d11SwapChainDesc.SampleDesc.Quality = 0;
+@@ -445,25 +444,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+                 dt = (1.f / 60.f);
+         }
+ 
+-        MSG msg = {};
+-        while(PeekMessageW(&msg, 0, 0, 0, PM_REMOVE))
+-        {
+-            if(msg.message == WM_QUIT)
+-                isRunning = false;
+-            TranslateMessage(&msg);
+-            DispatchMessageW(&msg);
+-        }
++        // Skip PeekMessageW on iOS — no real window manager; our Wine
++        // build blocks here. Just never deliver input messages.
++        (void)0;
+ 
+-        // Get window dimensions
+-        int windowWidth, windowHeight;
+-        float windowAspectRatio;
+-        {
+-            RECT clientRect;
+-            GetClientRect(hwnd, &clientRect);
+-            windowWidth = clientRect.right - clientRect.left;
+-            windowHeight = clientRect.bottom - clientRect.top;
+-            windowAspectRatio = (float)windowWidth / (float)windowHeight;
+-        }
++        // Get window dimensions (hardcoded on iOS — our Wine has no real
++        // window manager, GetClientRect returns uninitialized garbage).
++        int windowWidth = 1024, windowHeight = 768;
++        float windowAspectRatio = (float)windowWidth / (float)windowHeight;
+ 
+         if(global_windowDidResize)
+         {
+@@ -573,7 +561,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         d3d11DeviceContext->IASetIndexBuffer(indexBuffer, DXGI_FORMAT_R16_UINT, 0);
+ 
+         d3d11DeviceContext->DrawIndexed(numIndices, 0, 0);
+-    
++
+         d3d11SwapChain->Present(1, 0);
+     }
+ 
+diff --git a/tests/dx11/dx11_hdr_linear.cpp b/tests/dx11/dx11_hdr_linear.cpp
+index 3e545ee..8388d04 100644
+--- a/tests/dx11/dx11_hdr_linear.cpp
++++ b/tests/dx11/dx11_hdr_linear.cpp
+@@ -51,10 +51,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_hdr_pq.cpp b/tests/dx11/dx11_hdr_pq.cpp
+index fcb2600..7d355f8 100644
+--- a/tests/dx11/dx11_hdr_pq.cpp
++++ b/tests/dx11/dx11_hdr_pq.cpp
+@@ -51,10 +51,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_obj.cpp b/tests/dx11/dx11_obj.cpp
+index 23d9a5c..9956196 100644
+--- a/tests/dx11/dx11_obj.cpp
++++ b/tests/dx11/dx11_obj.cpp
+@@ -432,10 +432,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
+     winClass.style = CS_HREDRAW | CS_VREDRAW;
+     winClass.lpfnWndProc = &WndProc;
+     winClass.hInstance = hInstance;
+-    winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-    winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++    winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++    winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+     winClass.lpszClassName = L"MyWindowClass";
+-    winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++    winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+     if (!RegisterClassExW(&winClass)) {
+       MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_texquad.cpp b/tests/dx11/dx11_texquad.cpp
+index 9f05141..efd36f7 100644
+--- a/tests/dx11/dx11_texquad.cpp
++++ b/tests/dx11/dx11_texquad.cpp
+@@ -49,10 +49,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);
+diff --git a/tests/dx11/dx11_triangle.cpp b/tests/dx11/dx11_triangle.cpp
+index 6a2fb43..aa4cead 100644
+--- a/tests/dx11/dx11_triangle.cpp
++++ b/tests/dx11/dx11_triangle.cpp
+@@ -47,10 +47,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         winClass.style = CS_HREDRAW | CS_VREDRAW;
+         winClass.lpfnWndProc = &WndProc;
+         winClass.hInstance = hInstance;
+-        winClass.hIcon = LoadIconW(0, IDI_APPLICATION);
+-        winClass.hCursor = LoadCursorW(0, IDC_ARROW);
++        winClass.hIcon = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
++        winClass.hCursor = LoadCursorW((HINSTANCE)nullptr, (LPCWSTR)IDC_ARROW);
+         winClass.lpszClassName = L"MyWindowClass";
+-        winClass.hIconSm = LoadIconW(0, IDI_APPLICATION);
++        winClass.hIconSm = LoadIconW((HINSTANCE)nullptr, (LPCWSTR)IDI_APPLICATION);
+ 
+         if(!RegisterClassExW(&winClass)) {
+             MessageBoxA(0, "RegisterClassEx failed", "Fatal Error", MB_OK);

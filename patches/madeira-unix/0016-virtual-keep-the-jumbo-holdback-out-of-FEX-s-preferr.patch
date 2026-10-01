@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 12:00:00 +0200
+Subject: [PATCH] virtual: keep the jumbo holdback out of FEX's preferred band
+
+The opt-in holdback (jumbo-mb) reserves its size at the top of the largest
+free hole. On a device whose address space ends at 0x8000000000 that hole
+is the top tail, so the holdback covers [0x7c00000000, 0x8000000000),
+the band rpmalloc's selector tries first. Its other candidates lie below
+64 GB, which such a device refuses, so any holdback there leaves FEX with
+no band and x64 code cannot start. The hole walk now stops at
+0x7c00000000; a device whose ceiling is at or below it is unchanged.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-25-witcher3-setup.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index cff7b23..5453230 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -1958,6 +1958,23 @@ void ios_jumbo_holdback_init( void )
+         ceiling = (unsigned long long)vmi.max_address;
+     if (!ceiling) ceiling = 0x1000000000ull;
+ 
++    /* Playport: keep the holdback out of FEX's preferred host band.
++     *
++     * rpmalloc's band selector tries [0x7c00000000, 0x7fffffffff] first and
++     * runs only after this holdback exists. On a device whose ceiling is
++     * 0x8000000000 the largest hole is the top tail, so a holdback placed at
++     * its top covers that whole band. The selector's other candidates all lie
++     * below 64 GB, which such a device refuses (kr=3), so FEX would get no
++     * band at all ("ml755 FATAL: no FEX arena"). Cap the walk at the band's
++     * base instead. A device whose ceiling is at or below the band is
++     * unchanged. */
++    if (ceiling > 0x7c00000000ull)
++    {
++        dprintf( 2, "[jumbo-hold] ceiling 0x%llx capped at 0x7c00000000: the holdback stays "
++                 "below FEX's preferred band\n", ceiling );
++        ceiling = 0x7c00000000ull;
++    }
++
+     /* largest free hole below the ceiling */
+     while (addr < ceiling)
+     {

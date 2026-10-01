@@ -1,0 +1,1158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 4 Aug 2026 10:52:29 +0800
+Subject: [PATCH] iOS-Mythic: #79 TCP state numbering, NSI bypass, minidump
+ gate, alert-probe TEB guard
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+#79 SOLVED+VERIFIED (ml479): Steam's WebUITransport authenticates its loopback
+peer via GetExtendedTcpTable(AF_INET, OWNER_PID_CONNECTIONS) — matching
+row.localport == peer.remoteport, requiring state == ESTAB, then comparing
+dwOwningPid. Every connection was rejected because config_ios.h undefines
+HAVE_NETINET_TCP_FSM_H (the iOS SDK ships no netinet/tcp_fsm.h), so sock.c fell
+back to LINUX-numbered TCPS_* while Darwin's TCP_CONNECTION_INFO reports BSD
+numbering: LISTEN(1) matched TCPS_ESTABLISHED(1) and ESTABLISHED(4) matched
+TCPS_FIN_WAIT_1(4). The ESTAB table therefore held exactly the three listeners
+and none of the real connections.
+
+server/sock.c: BSD-numbered TCPS_* under __APPLE__ (Linux block kept in #else).
+Verified — listeners now report LISTEN, real pairs report ESTAB with both pids,
+and "Connection rejected" went 11/11 -> 0.
+
+Also in this stack:
+- dlls/nsi/nsi.c: NsiEnumerateObjectsAllParametersEx falls back to a unix call
+  when \\.\Nsi won't open (nsiproxy.sys is absent on iOS and its service is
+  disabled), so the TCP tables can be served in-process.
+- dlls/dbghelp/minidump.c: header-only MiniDumpWriteDump — Valve's dump-buffer
+  ratchet was the #79-era death cause.
+- dlls/ntdll/unix/sync.c (ml482): NtAlertThreadByThreadId needs no TEB, but its
+  two iOS diagnostics read NtCurrentTeb()->ClientId.UniqueThread (TEB+0x48).
+  Threads created directly by CEF/FEX have no TEB, so the PROBE null-dereffed
+  and killed the app the moment the login-window popup brought new threads onto
+  that path. Read the tid defensively.
+- dlls/ntdll/signal_arm64ec.c: #81 finding preserved in comments; the xlate
+  wraps are reverted (they are needed only with jitless off, and they crashed
+  the shipping config).
+- socket.c / system.c / sync.c: supporting iOS fixes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit 73fc9ef2e261ccdbfc55886509320f8523d46e4e)
+Madeira-commit: d3d5a179a53b2968de243a6ff4a381d87a892dfa
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/dbghelp/minidump.c     |  29 +++
+ dlls/nsi/nsi.c              |  37 +++-
+ dlls/ntdll/signal_arm64ec.c |  25 +++
+ dlls/ntdll/sync.c           |  33 ++-
+ dlls/ntdll/unix/socket.c    | 184 ++++++++++++++++
+ dlls/ntdll/unix/sync.c      | 418 +++++++++++++++++++++++++++++++++++-
+ dlls/ntdll/unix/system.c    |  12 ++
+ server/sock.c               | 120 +++++++++++
+ 8 files changed, 850 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/dbghelp/minidump.c b/dlls/dbghelp/minidump.c
+index 2ed2d0d9a29..5dd94cca95f 100644
+--- a/dlls/dbghelp/minidump.c
++++ b/dlls/dbghelp/minidump.c
+@@ -1032,6 +1032,35 @@ BOOL WINAPI MiniDumpWriteDump(HANDLE hProcess, DWORD pid, HANDLE hFile,
+     TRACE("(%p, %lu, %p, %u, %p, %p, %p)\n",
+           hProcess, pid, hFile, DumpType, ExceptionParam, UserStreamParam, CallbackParam);
+ 
++    /* iOS-Mythic ml467 (wall #79, run ml466): Steam's crashhandler64 writes a
++     * minidump whenever its watchdog sees steamwebhelper "not responding".
++     * Under FEX the dump takes minutes — it walks the whole single-process
++     * address space and suspends every thread of the target pseudo-process on
++     * the way (breaking the steam<->webhelper transport) — so Steam's watchdog
++     * TerminateThread()s the dump worker mid-dump.  That orphans the
++     * write_minidump thread spawned below with dc pointing into the dead
++     * worker's freed stack (a live UAF writer), leaks Valve's reserve-then-
++     * commit dump buffers (0xef20000 -> 0x166b0000, 1.5x growth) on every
++     * retry, and the retry spiral ends in jetsam at 4096MB.  A dump of this
++     * process is useless to us anyway: write a header-only file and report
++     * success so the worker finishes instantly and frees its buffers. */
++    {
++        MINIDUMP_HEADER hdr;
++        DWORD           written;
++
++        ERR("[minidump-gate] rev=ml467 refusing dump pid=%lu type=%#x hFile=%p — header-only fast success\n",
++            pid, DumpType, hFile);
++        memset(&hdr, 0, sizeof(hdr));
++        hdr.Signature = MINIDUMP_SIGNATURE;
++        hdr.Version = MINIDUMP_VERSION;
++        hdr.NumberOfStreams = 0;
++        hdr.StreamDirectoryRva = sizeof(hdr);
++        hdr.TimeDateStamp = time(NULL);
++        hdr.Flags = DumpType;
++        WriteFile(hFile, &hdr, sizeof(hdr), &written, NULL);
++        return TRUE;
++    }
++
+     if (!(dc.process = process_find_by_handle(hProcess)))
+     {
+         if (!(sym_initialized = SymInitializeW(hProcess, NULL, TRUE)))
+diff --git a/dlls/nsi/nsi.c b/dlls/nsi/nsi.c
+index 14be842871a..56a287af65d 100644
+--- a/dlls/nsi/nsi.c
++++ b/dlls/nsi/nsi.c
+@@ -17,6 +17,8 @@
+  * License along with this library; if not, write to the Free Software
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+  */
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
+ #include "winsock2.h"
+ #include "winternl.h"
+ #include "ws2ipdef.h"
+@@ -26,12 +28,29 @@
+ #include "netiodef.h"
+ #include "wine/nsi.h"
+ #include "wine/debug.h"
++#include "wine/unixlib.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(nsi);
+ 
+ static HANDLE nsi_device = INVALID_HANDLE_VALUE;
+ static HANDLE nsi_device_async = INVALID_HANDLE_VALUE;
+ 
++/* iOS-Mythic 2026-08-03 rev=ml470 (#79 transport): nsiproxy.sys is not
++ * shipped on iOS, so \\.\Nsi never exists and every NSI table read
++ * fails — Steam's loopback peer authentication (GetExtendedTcpTable pid
++ * lookup) dies before any pid compare and each CEF connection is
++ * rejected as "unknown source". When the device is absent, service the
++ * enumerate from a statically linked unixlib (TCP connection tables via
++ * the in-process wineserver; see build/ntdll-unix/nsi_unixlib_ios.c).
++ * On platforms with a real nsiproxy the device opens and this path
++ * never runs. */
++static BOOL nsi_unix_fallback( void )
++{
++    static int available = -1;
++    if (available == -1) available = !__wine_init_unix_call();
++    return available == 1;
++}
++
+ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, void *reserved)
+ {
+     switch (reason)
+@@ -168,7 +187,23 @@ DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *pa
+     struct nsiproxy_enumerate_all in;
+     BYTE *out, *ptr;
+ 
+-    if (device == INVALID_HANDLE_VALUE) return GetLastError();
++    if (device == INVALID_HANDLE_VALUE)
++    {
++        DWORD device_err = GetLastError();
++        NTSTATUS status;
++        static LONG logged;
++
++        if (!nsi_unix_fallback()) return device_err;
++        status = WINE_UNIX_CALL( 0, params );
++        if (!InterlockedExchange( &logged, 1 ))
++            ERR( "no \\\\.\\Nsi (err %lu); serviced in-process, status %#lx rev=ml472\n",
++                 device_err, status );
++        if (status == STATUS_BUFFER_OVERFLOW) return ERROR_MORE_DATA;
++        /* ml472: unserviced tables keep the exact pre-fallback error so callers
++         * see the same failure (2) they always did, not NOT_SUPPORTED (50) */
++        if (status == STATUS_NOT_SUPPORTED) return device_err;
++        return RtlNtStatusToDosError( status );
++    }
+ 
+     out_size = sizeof(DWORD) +
+         (params->key_size + params->rw_size + params->dynamic_size + params->static_size) * params->count;
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index b2769355e6d..466b333a836 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -2390,6 +2390,31 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+         {
+             TRACE( "calling handler %p (rec=%p, frame=%I64x context=%p, dispatch=%p)\n",
+                    dispatch.LanguageHandler, rec, dispatch.EstablisherFrame, orig_context, &dispatch );
++            /* iOS-Mythic #81 (ml475 fix, REVERTED ml477 — do not re-land
++             * without gating).  LanguageHandler is ImageBase + unwind handler
++             * RVA, i.e. a PE VA, and PE .text is non-executable here, so
++             * call_seh_handler's `blr x11` faults on instruction fetch.  The
++             * Mach handler redirects it correctly every time, but the pointer
++             * is recomputed from unwind data on every dispatch, so the
++             * stale-VA healer can never fix it — one kernel round-trip per
++             * SEH handler call, forever.  Wrapping the handler in
++             * xlate_ios_jit() here provably eliminated that (ml475: 786k
++             * faults -> 0, [seh-xlate] verified live in 3 processes).
++             *
++             * REVERTED anyway, on evidence: the storm ONLY occurs with
++             * --js-flags=--jitless OFF (ml474e 186 storm samples; ml473d /
++             * ml474a / ml476 with jitless ON = 0), and jitless-off is itself
++             * convicted (it parks CrBrowserMain right after BrowserReady).
++             * So in the shipping config the fix buys nothing, while ml476
++             * (jitless ON + this wrap) crashed repeatedly ~3s after
++             * BrowserReady in the libcef/chrome_elf SEH path — the wrap was
++             * the only new variable.  Suspected mechanism: translating a
++             * handler that is x86-64 GUEST code defeats the
++             * __os_arm64x_dispatch_icall classification, which keys off PE
++             * space (see #52), so the emulator never gets it.  If this is
++             * ever re-landed, gate it on the target being EC/native code and
++             * log EVERY translation, not the first 4 per process — that cap
++             * is why the guest-handler case stayed invisible. */
+             res = call_seh_handler( rec, dispatch.EstablisherFrame, orig_context,
+                                     &dispatch, dispatch.LanguageHandler );
+             rec->ExceptionFlags &= EXCEPTION_NONCONTINUABLE;
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index 88d882bd702..e0119c20d20 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -893,6 +893,31 @@ struct futex_queue
+ 
+ static struct futex_queue futex_queues[256];
+ 
++/* iOS-Mythic ml441 (#74): futex_queues is per-ntdll-COPY .data, and our
++ * pseudo-processes carry multiple ntdll copies (native + EC), so a waker
++ * walking this copy's array never finds a waiter registered through another
++ * copy — the wake dies here and the waiter parks forever (the post-
++ * BrowserReady stall: ml440 proved every >60s parker was an addr=NULL
++ * RtlWaitOnAddress park with zero alerts delivered).  Fix: every copy uses
++ * the ONE table in the unix dylib's .data, fetched once via a private
++ * NtQuerySystemInformation class.  Falls back to the private array only if
++ * the query fails (never expected on iOS builds). */
++static struct futex_queue *ios_shared_queues;
++static const char ios_futex_shared_pe_marker[] __attribute__((used)) = "ios-futex-shared-pe rev=ml441";
++
++static struct futex_queue *ios_get_futex_table(void)
++{
++    void *ptr = NULL;
++    ULONG len;
++
++    if (ios_shared_queues) return ios_shared_queues;
++    if (!NtQuerySystemInformation( (SYSTEM_INFORMATION_CLASS)0xf00d, &ptr, sizeof(ptr), &len ) && ptr)
++        ios_shared_queues = ptr;
++    else
++        ios_shared_queues = futex_queues;
++    return ios_shared_queues;
++}
++
+ /* iOS-Mythic ml407 (task #60): the chrome_ipc pump parks in RtlWaitOnAddress
+  * immediately after its master-event wake and is never alerted ([alert-unix]:
+  * one WAIT, no ALERTED, while its sibling server thread cycles normally).
+@@ -920,7 +945,8 @@ static struct futex_queue *get_futex_queue( const void *addr )
+ {
+     ULONG_PTR val = (ULONG_PTR)addr;
+ 
+-    return &futex_queues[(val >> 4) % ARRAY_SIZE(futex_queues)];
++    /* ml441: index the SHARED table, not this copy's private array */
++    return &ios_get_futex_table()[(val >> 4) % ARRAY_SIZE(futex_queues)];
+ }
+ 
+ static void spin_lock( LONG *lock )
+@@ -1000,7 +1026,10 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
+         if (size == 2 && !timeout) ios_srw_dump_park( addr );
+     }
+ 
+-    ret = NtWaitForAlertByThreadId( NULL, timeout );
++    /* ml441: pass the real address — the unix layer ignores it functionally
++     * but the [waiters] registry (ml440) records it, so long parks are now
++     * attributable to a named lock word. */
++    ret = NtWaitForAlertByThreadId( addr, timeout );
+ 
+     if (NtCurrentTeb()->Instrumentation[10] == (void *)(ULONG_PTR)0x504d5550)
+     {
+diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
+index 2b487347089..173fc4b5a49 100644
+--- a/dlls/ntdll/unix/socket.c
++++ b/dlls/ntdll/unix/socket.c
+@@ -786,6 +786,169 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
+     return recv_len;
+ }
+ 
++#ifdef __APPLE__
++/* iOS-Mythic ml464 [sock-big] (#78): steamui's login boot died on
++ * "ChunkLoadError: missing steamloopback.host/libraries/libraries~....js" —
++ * a 1.99MB file that EXISTS on disk, served by steam.exe's loopback HTTP
++ * server, while a 678KB file served fine seconds earlier. Prime suspect is a
++ * large-transfer failure somewhere in this layer. Trace every TCP socket's
++ * cumulative send/recv bytes (milestone log at 128KB, then every 512KB, with
++ * the peer port to identify the HTTP server's socket) plus every hard error.
++ * A transfer that STOPS at a byte count without an error implicates the
++ * file-read side of TransmitFile instead; an errno names the socket layer.
++ * Racy counters are acceptable — fixed array, no pointers, probe-only. */
++static void ios_sock_big_note( int fd, int is_send, long ret_bytes, int err )
++{
++    static struct { int fd; unsigned long long tot[2]; unsigned long long next[2]; } tab[64];
++    static int err_logs;
++    int i, slot = -1;
++
++    if (err)
++    {
++        if (err != EWOULDBLOCK && err != EAGAIN && err != EINTR && err_logs < 64)
++        {
++            err_logs++;
++            dprintf( 2, "[sock-big] %s ERROR fd=%d errno=%d rev=ml464\n", is_send ? "send" : "recv", fd, err );
++        }
++        return;
++    }
++    if (ret_bytes <= 0) return;
++    for (i = 0; i < 64; i++)
++    {
++        if (tab[i].fd == fd) { slot = i; break; }
++        if (slot < 0 && !tab[i].fd) slot = i;
++    }
++    if (slot < 0) return;
++    if (tab[slot].fd != fd)
++    {
++        tab[slot].fd = fd;
++        tab[slot].tot[0] = tab[slot].tot[1] = 0;
++        tab[slot].next[0] = tab[slot].next[1] = 0x20000;
++    }
++    tab[slot].tot[is_send] += (unsigned long long)ret_bytes;
++    if (tab[slot].tot[is_send] >= tab[slot].next[is_send])
++    {
++        union unix_sockaddr peer;
++        socklen_t plen = sizeof(peer);
++        int pport = -1;
++        if (!getpeername( fd, &peer.addr, &plen ) && peer.addr.sa_family == AF_INET)
++            pport = ntohs( peer.in.sin_port );
++        dprintf( 2, "[sock-big] %s fd=%d total=%lluKB peer_port=%d rev=ml464\n",
++                 is_send ? "send" : "recv", fd, tab[slot].tot[is_send] >> 10, pport );
++        tab[slot].next[is_send] = tab[slot].tot[is_send] + 0x80000;
++    }
++}
++/* iOS-Mythic ml469 (wall #79 transport): the ml468 run showed steamwebhelper
++ * re-dialing ws://localhost:6252x/transportsocket/ every ~5s forever, with the
++ * only connect evidence being IPv6 EHOSTUNREACH + IPv4 EINPROGRESS and no
++ * completion, while steam.exe's own connectivity test reported NoLAN.  Nothing
++ * on record proves TCP loopback works AT ALL under this port, so measure it
++ * directly, below wine: bind a listener on 127.0.0.1:0, non-blocking connect
++ * to it, poll for writability, read SO_ERROR, accept, and pass one byte each
++ * way.  Whatever step fails names the layer.  IPv6 ::1 is probed too, since
++ * the guest's first choice is what returned EHOSTUNREACH. */
++#include <poll.h>
++#include <fcntl.h>
++#include <arpa/inet.h>
++void ios_loopback_selftest(void)
++{
++    struct sockaddr_in a4 = { 0 };
++    socklen_t len = sizeof(a4);
++    int ls = -1, cs = -1, as = -1, err = 0, flags, port = 0;
++    socklen_t elen = sizeof(err);
++    struct pollfd pfd;
++    char tx = 0x5a, rx = 0;
++    ssize_t n;
++
++    if ((ls = socket( AF_INET, SOCK_STREAM, 0 )) < 0)
++    { dprintf( 2, "[loopback] FAIL socket errno=%d rev=ml469\n", errno ); return; }
++    a4.sin_family = AF_INET;
++    a4.sin_addr.s_addr = htonl( INADDR_LOOPBACK );
++    a4.sin_port = 0;
++    if (bind( ls, (struct sockaddr *)&a4, sizeof(a4) ) < 0)
++    { dprintf( 2, "[loopback] FAIL bind errno=%d rev=ml469\n", errno ); goto done; }
++    if (listen( ls, 1 ) < 0)
++    { dprintf( 2, "[loopback] FAIL listen errno=%d rev=ml469\n", errno ); goto done; }
++    if (getsockname( ls, (struct sockaddr *)&a4, &len ) < 0)
++    { dprintf( 2, "[loopback] FAIL getsockname errno=%d rev=ml469\n", errno ); goto done; }
++    port = ntohs( a4.sin_port );
++
++    if ((cs = socket( AF_INET, SOCK_STREAM, 0 )) < 0)
++    { dprintf( 2, "[loopback] FAIL socket2 errno=%d rev=ml469\n", errno ); goto done; }
++    flags = fcntl( cs, F_GETFL, 0 );
++    fcntl( cs, F_SETFL, flags | O_NONBLOCK );
++    if (connect( cs, (struct sockaddr *)&a4, sizeof(a4) ) < 0 && errno != EINPROGRESS)
++    { dprintf( 2, "[loopback] FAIL connect port=%d errno=%d rev=ml469\n", port, errno ); goto done; }
++
++    pfd.fd = cs; pfd.events = POLLOUT; pfd.revents = 0;
++    n = poll( &pfd, 1, 2000 );
++    if (n <= 0)
++    { dprintf( 2, "[loopback] FAIL connect-poll port=%d ret=%d errno=%d (never writable in 2s) rev=ml469\n",
++               port, (int)n, errno ); goto done; }
++    if (getsockopt( cs, SOL_SOCKET, SO_ERROR, &err, &elen ) < 0 || err)
++    { dprintf( 2, "[loopback] FAIL connect-so_error port=%d so_error=%d revents=0x%x rev=ml469\n",
++               port, err, pfd.revents ); goto done; }
++
++    if ((as = accept( ls, NULL, NULL )) < 0)
++    { dprintf( 2, "[loopback] FAIL accept port=%d errno=%d rev=ml469\n", port, errno ); goto done; }
++    if ((n = send( cs, &tx, 1, 0 )) != 1)
++    { dprintf( 2, "[loopback] FAIL send port=%d ret=%d errno=%d rev=ml469\n", port, (int)n, errno ); goto done; }
++    pfd.fd = as; pfd.events = POLLIN; pfd.revents = 0;
++    if (poll( &pfd, 1, 2000 ) <= 0)
++    { dprintf( 2, "[loopback] FAIL recv-poll port=%d (byte never arrived in 2s) rev=ml469\n", port ); goto done; }
++    if ((n = recv( as, &rx, 1, 0 )) != 1 || rx != tx)
++    { dprintf( 2, "[loopback] FAIL recv port=%d ret=%d byte=0x%02x errno=%d rev=ml469\n",
++               port, (int)n, rx, errno ); goto done; }
++    dprintf( 2, "[loopback] OK ipv4 127.0.0.1:%d connect+accept+1-byte roundtrip rev=ml469\n", port );
++
++done:
++    if (as >= 0) close( as );
++    if (cs >= 0) close( cs );
++    if (ls >= 0) close( ls );
++
++#ifdef AF_INET6
++    {
++        struct sockaddr_in6 a6 = { 0 };
++        int l6 = -1, c6 = -1;
++        socklen_t l6len = sizeof(a6);
++        a6.sin6_family = AF_INET6;
++        a6.sin6_addr = in6addr_loopback;
++        if ((l6 = socket( AF_INET6, SOCK_STREAM, 0 )) < 0)
++        { dprintf( 2, "[loopback] ipv6 no socket errno=%d rev=ml469\n", errno ); return; }
++        if (bind( l6, (struct sockaddr *)&a6, sizeof(a6) ) < 0 || listen( l6, 1 ) < 0 ||
++            getsockname( l6, (struct sockaddr *)&a6, &l6len ) < 0)
++        { dprintf( 2, "[loopback] ipv6 bind/listen FAIL errno=%d rev=ml469\n", errno ); close( l6 ); return; }
++        if ((c6 = socket( AF_INET6, SOCK_STREAM, 0 )) >= 0)
++        {
++            /* non-blocking like the v4 leg: a blackholed SYN must cost 2s,
++             * not the platform connect timeout, on the monitor thread */
++            int f6 = fcntl( c6, F_GETFL, 0 );
++            int r, e6 = 0;
++            socklen_t e6len = sizeof(e6);
++            fcntl( c6, F_SETFL, f6 | O_NONBLOCK );
++            r = connect( c6, (struct sockaddr *)&a6, sizeof(a6) );
++            if (r < 0 && errno == EINPROGRESS)
++            {
++                struct pollfd p6;
++                p6.fd = c6; p6.events = POLLOUT; p6.revents = 0;
++                if (poll( &p6, 1, 2000 ) <= 0) e6 = ETIMEDOUT;
++                else if (getsockopt( c6, SOL_SOCKET, SO_ERROR, &e6, &e6len ) < 0) e6 = errno;
++                r = e6 ? -1 : 0;
++            }
++            else if (r < 0) e6 = errno;
++            dprintf( 2, "[loopback] ipv6 [::1]:%d connect ret=%d errno=%d rev=ml469\n",
++                     ntohs( a6.sin6_port ), r, e6 );
++            close( c6 );
++        }
++        close( l6 );
++    }
++#endif
++}
++
++#else
++#define ios_sock_big_note( fd, is_send, ret_bytes, err ) do { } while (0)
++#endif
++
+ static NTSTATUS try_recv( int fd, struct async_recv_ioctl *async, ULONG_PTR *size )
+ {
+     char control_buffer[512];
+@@ -815,8 +978,10 @@ static NTSTATUS try_recv( int fd, struct async_recv_ioctl *async, ULONG_PTR *siz
+             errno = EWOULDBLOCK;
+ 
+         if (errno != EWOULDBLOCK) WARN( "recvmsg: %s\n", strerror( errno ) );
++        ios_sock_big_note( fd, 0, 0, errno );
+         return sock_errno_to_status( errno );
+     }
++    ios_sock_big_note( fd, 0, ret, 0 );
+ 
+     status = (hdr.msg_flags & MSG_TRUNC) ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+     if (async->icmp_over_dgram)
+@@ -1113,11 +1278,13 @@ static NTSTATUS try_send( int fd, struct async_send_ioctl *async )
+                 continue;
+             }
+ 
++            ios_sock_big_note( fd, 1, 0, errno );
+             return sock_errno_to_status( errno );
+         }
+     }
+ 
+     async->sent_len += ret;
++    ios_sock_big_note( fd, 1, ret, 0 );
+ 
+     while (async->iov_cursor < async->count && ret >= async->iov[async->iov_cursor].iov_len)
+         ret -= async->iov[async->iov_cursor++].iov_len;
+@@ -1365,6 +1532,9 @@ static ssize_t do_send( int fd, const void *buffer, size_t len, int flags )
+     ssize_t ret;
+     while ((ret = send( fd, buffer, len, flags )) < 0 && errno == EINTR);
+     if (ret < 0 && errno != EWOULDBLOCK) WARN( "send: %s\n", strerror( errno ) );
++    /* ml464: this is the TransmitFile data path — steam's HTTP server serving
++     * static steamui files lands here. */
++    ios_sock_big_note( fd, 1, ret < 0 ? 0 : ret, ret < 0 ? errno : 0 );
+     return ret;
+ }
+ 
+@@ -1408,6 +1578,20 @@ static NTSTATUS try_transmit( int sock_fd, int file_fd, struct async_transmit_io
+             else
+                 ret = pread( file_fd, async->buffer, read_size, async->offset.QuadPart );
+         } while (ret < 0 && errno == EINTR);
++#ifdef __APPLE__
++        /* ml464 (#78): a TransmitFile whose SOCKET sends look clean but whose
++         * transfer stops implicates this read — name it. */
++        if (ret < 0)
++        {
++            static int xmit_read_logs;
++            if (xmit_read_logs < 16)
++            {
++                xmit_read_logs++;
++                dprintf( 2, "[sock-big] transmit FILE-READ ERROR file_fd=%d errno=%d read_size=%u file_cursor=%u rev=ml464\n",
++                         file_fd, errno, read_size, (unsigned)async->file_cursor );
++            }
++        }
++#endif
+         if (ret < 0) return errno_to_status( errno );
+         TRACE( "read returned %zd\n", ret );
+ 
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 3eb25640f15..3511233f111 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -3528,6 +3528,389 @@ static unsigned int ios_alert_ring[IOS_ALERT_RING];
+ static LONG ios_alert_ring_pos;
+ static HANDLE ios_pump_alert_tid;   /* ml407: beacon thread's tid, set on its wait */
+ 
++/* ml439 (#74): periodic alert-flow dump, called from the monitor thread.
++ * The ml438 stall shows dozens of threads parked in NtWaitForAlertByThreadId
++ * with their alert futexes ALL reading 0 — the wakes were never delivered.
++ * Discriminator: if the send-side ring goes STATIC during the stall (pos not
++ * advancing) while waiters accumulate, RtlWakeAddress* is not finding the
++ * waiters at all — the PE-side addr_waiters table is split across ntdll
++ * copies (per-copy .data, the pseudo-process globals family) and the wake
++ * dies before reaching the unix layer. If the ring KEEPS advancing, delivery
++ * or tid-resolution is at fault instead. */
++void ios_alert_ring_dump(void)
++{
++    static LONG last_pos = -1;
++    LONG pos = ios_alert_ring_pos;
++    dprintf( 2, "[alert-ring] pos=%d (%+d since last) last8:"
++             " %04x->%04x %04x->%04x %04x->%04x %04x->%04x"
++             " %04x->%04x %04x->%04x %04x->%04x %04x->%04x rev=ml439\n",
++             (int)pos, (int)(last_pos < 0 ? 0 : pos - last_pos),
++             ios_alert_ring[(pos-0)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-0)&(IOS_ALERT_RING-1)] & 0xffff,
++             ios_alert_ring[(pos-1)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-1)&(IOS_ALERT_RING-1)] & 0xffff,
++             ios_alert_ring[(pos-2)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-2)&(IOS_ALERT_RING-1)] & 0xffff,
++             ios_alert_ring[(pos-3)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-3)&(IOS_ALERT_RING-1)] & 0xffff,
++             ios_alert_ring[(pos-4)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-4)&(IOS_ALERT_RING-1)] & 0xffff,
++             ios_alert_ring[(pos-5)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-5)&(IOS_ALERT_RING-1)] & 0xffff,
++             ios_alert_ring[(pos-6)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-6)&(IOS_ALERT_RING-1)] & 0xffff,
++             ios_alert_ring[(pos-7)&(IOS_ALERT_RING-1)] >> 16, ios_alert_ring[(pos-7)&(IOS_ALERT_RING-1)] & 0xffff );
++    last_pos = pos;
++}
++
++/* ml441 (#74): THE FIX for the lost-wake stall.  PE ntdll's RtlWaitOnAddress/
++ * RtlWakeAddress* (which back SRW locks and condition variables too) keep
++ * their waiter lists in `futex_queues[256]` — a static array in each ntdll
++ * COPY's .data.  Our pseudo-processes carry multiple ntdll copies (native +
++ * EC per pseudo-proc), so a waker walking copy B's array never finds a waiter
++ * registered in copy A: the wake dies PE-side, the futex stays 0, the waiter
++ * parks forever (ml440: every >60s parker was an addr=NULL RtlWaitOnAddress
++ * park).  Fix: ONE table in the unix dylib's .data — single copy per real
++ * process by construction — published to every PE copy via a private
++ * NtQuerySystemInformation class (0xf00d, system.c).  Layout mirrors PE
++ * struct futex_queue { struct list queue; LONG lock; } == 24 bytes; sharing
++ * across pseudo-procs is semantically correct because they share one address
++ * space (same VA == same memory). */
++struct ios_shared_futex_queue
++{
++    void *next, *prev;
++    LONG lock;
++};
++static struct ios_shared_futex_queue ios_shared_futex_queues[256];
++static const char ios_futex_shared_marker[] __attribute__((used)) = "ios-futex-shared rev=ml441";
++void *ios_get_shared_futex_queues(void)
++{
++    return ios_shared_futex_queues;
++}
++
++/* ml445 (#74): DEAD-HOLDER REAPER.  Steam's watchdog TerminateThread()s
++ * threads at arbitrary points ([thr-term] CROSS-TERM, ml444) — a victim
++ * holding FEX's WritePriorityMutex shared (TEB Instrumentation[7]=depth,
++ * [8]=&Futex, stamped by the fork's NoteReadAcquired) leaks the hold and the
++ * whole JIT machinery cascades to a standstill behind it (#74's stall family).
++ * The monitor census spots dead ports whose TEB stamp is still set; when NO
++ * live thread shares that TEB (recycling guard — stamps belong to the live
++ * generation when one exists), repair the lock word directly and deliver the
++ * writer/reader wakes through the ml441 SHARED futex table (single table =
++ * unix side can wake PE waiters).  WPM layout (WritePriorityMutex.h):
++ * bit31 write-owned, bit30 read-waiter, 29:16 write-waiters, 15:0 read-owners;
++ * writers wait on &Futex, readers on &Futex+2. */
++static void ios_shared_futex_wake( const void *addr, int all )
++{
++    struct ios_q { void *next, *prev; LONG lock; } *q;
++    struct ios_e { void *next, *prev; const void *addr; unsigned int tid; } *e;
++    void *head, *cur;
++    unsigned int tids[64];
++    int n = 0, i;
++    q = (struct ios_q *)&ios_shared_futex_queues[(((ULONG_PTR)addr) >> 4) % 256];
++    while (InterlockedCompareExchange( &q->lock, -1, 0 )) YieldProcessor();
++    head = (void *)q;
++    if (q->next)
++    {
++        for (cur = q->next; cur != head && n < 64; )
++        {
++            e = (struct ios_e *)cur;
++            cur = e->next;
++            if (e->addr == addr)
++            {
++                tids[n++] = e->tid;
++                if (!all) break;
++            }
++        }
++    }
++    InterlockedExchange( &q->lock, 0 );
++    for (i = 0; i < n; i++)
++        NtAlertThreadByThreadId( (HANDLE)(ULONG_PTR)tids[i] );
++}
++
++void ios_wpm_reap_shared( unsigned long long mutex_addr, unsigned int depth, unsigned long long dead_teb )
++{
++    volatile LONG *futex = (volatile LONG *)(ULONG_PTR)mutex_addr;
++    LONG old, desired;
++    unsigned int owners;
++    if (!mutex_addr || (mutex_addr & 3) || mutex_addr >= 0x8000000000ULL) return;
++    {
++        char *page = (char *)((ULONG_PTR)mutex_addr & ~0x3fffULL);
++        if (msync( page, 0x4000, MS_ASYNC )) return;
++    }
++    do
++    {
++        old = *futex;
++        owners = (unsigned int)old & 0xffff;
++        if (!owners) { depth = 0; break; }
++        if (depth > owners) depth = owners;
++        desired = old - (LONG)depth;
++    } while (InterlockedCompareExchange( (LONG *)futex, desired, old ) != old);
++    if (!depth) return;
++    dprintf( 2, "[lock-reap] WPM %#llx dead_teb=%#llx released %u shared (word %08x -> %08x) rev=ml445\n",
++             mutex_addr, dead_teb, depth, (unsigned int)old, (unsigned int)desired );
++    /* mirrors unlock_shared: last reader out with writers queued wakes ONE
++     * writer (they wait on the full word at +0); if no writers but the
++     * read-waiter bit is set, wake the readers at +2 */
++    if ((desired & 0xffff) == 0)
++    {
++        if (desired & 0x3fff0000) ios_shared_futex_wake( (const void *)(ULONG_PTR)mutex_addr, 0 );
++        else if (desired & 0x40000000) ios_shared_futex_wake( (const void *)(ULONG_PTR)(mutex_addr + 2), 1 );
++    }
++}
++
++/* ml446 (#74): reap a DEAD EXCLUSIVE owner of a wine-SRW-backed std::mutex
++ * (FEX's CodeBufferWriteMutex, stamped in TEB Instrumentation[6] while held —
++ * JIT.cpp).  Mirrors RtlReleaseSRWLockExclusive: owners=0, clear held bit;
++ * wake one exclusive waiter at lock+2 if any remain, else wake-all at lock.
++ * srw_lock layout: {short exclusive_waiters (bit0=held); ushort owners}. */
++void ios_srw_reap_exclusive( unsigned long long lock_addr, unsigned long long dead_teb )
++{
++    volatile LONG *word = (volatile LONG *)(ULONG_PTR)lock_addr;
++    LONG old, desired;
++    unsigned int excl;
++    if (!lock_addr || (lock_addr & 3) || lock_addr >= 0x8000000000ULL) return;
++    {
++        char *page = (char *)((ULONG_PTR)lock_addr & ~0x3fffULL);
++        if (msync( page, 0x4000, MS_ASYNC )) return;
++    }
++    do
++    {
++        old = *word;
++        excl = (unsigned int)old & 0xffff;
++        if (!(excl & 1)) return;   /* not exclusively held — nothing to reap */
++        desired = (LONG)(excl & ~1u);   /* owners := 0, held bit cleared, waiters kept */
++    } while (InterlockedCompareExchange( (LONG *)word, desired, old ) != old);
++    dprintf( 2, "[lock-reap] SRW %#llx dead_teb=%#llx released exclusive (word %08x -> %08x) rev=ml446\n",
++             lock_addr, dead_teb, (unsigned int)old, (unsigned int)desired );
++    if (desired & 0xffff)
++        ios_shared_futex_wake( (const void *)(ULONG_PTR)(lock_addr + 2), 0 );
++    else
++        ios_shared_futex_wake( (const void *)(ULONG_PTR)lock_addr, 1 );
++}
++
++/* ml440 (#74): waiter-address registry — name the lock everyone is parked on.
++ * ml439 proved the parked crowd receives ZERO alerts while a device-poll trio
++ * monopolizes the ring, so the wakes are never SENT for them.  Both surviving
++ * theories (dead SRW-lock holder vs per-ntdll-copy addr_waiters split) are
++ * discriminated by the WAIT ADDRESS: RtlWaitOnAddress passes the lock word's
++ * address as the cookie here.  Record it per parked thread; the monitor dumps
++ * every >60s parker with the word at its address.  Decode offline:
++ *   wine srw_lock = { short exclusive_waiters; ushort owners }
++ *   FEX WritePriorityMutex = bit31 write-owned, bit30 read-waiter,
++ *                            29:16 write-waiters, 15:0 read-owners
++ * Many threads on ONE address = one poisoned lock; owners!=0 with no live
++ * owner thread = dead holder confirmed. */
++#define IOS_ALERT_WAITER_MAX 512
++static struct
++{
++    void *tid;          /* slot owner; sticky across waits (lock-free claim) */
++    const void *addr;   /* wait-on-address cookie; NULL = not currently parked */
++    ULONGLONG since;    /* NtQuerySystemTime at park entry */
++    int inf;            /* 1 = INFINITE wait */
++} ios_alert_waiters[IOS_ALERT_WAITER_MAX];
++
++static int ios_alert_waiter_slot( void *tid )
++{
++    int i, free_i;
++    for (;;)
++    {
++        free_i = -1;
++        for (i = 0; i < IOS_ALERT_WAITER_MAX; i++)
++        {
++            if (ios_alert_waiters[i].tid == tid) return i;
++            if (free_i < 0 && !ios_alert_waiters[i].tid) free_i = i;
++        }
++        if (free_i < 0) return -1;
++        if (!InterlockedCompareExchangePointer( &ios_alert_waiters[free_i].tid, tid, NULL ))
++            return free_i;
++        /* lost the race for free_i to another thread; rescan */
++    }
++}
++
++/* ml443: x-ref for [census-hold] — return a thread's CURRENT alert-wait
++ * registration even when younger than the 60s dump bar (ml442 showed the
++ * stuck CodeInvalidationMutex holder cycling wake→recheck→re-park, so its
++ * age never accumulates; the address is the discriminator we need). */
++int ios_alert_waiter_lookup( unsigned int tid, const void **addr, int *age_s, int *inf )
++{
++    LARGE_INTEGER now;
++    int i;
++    for (i = 0; i < IOS_ALERT_WAITER_MAX; i++)
++    {
++        if (((unsigned int)(ULONG_PTR)ios_alert_waiters[i].tid & 0xffff) == (tid & 0xffff) &&
++            ios_alert_waiters[i].addr)
++        {
++            NtQuerySystemTime( &now );
++            *addr = ios_alert_waiters[i].addr;
++            *age_s = (int)((now.QuadPart - (LONGLONG)ios_alert_waiters[i].since) / 10000000);
++            *inf = ios_alert_waiters[i].inf;
++            return 1;
++        }
++    }
++    return 0;
++}
++
++void ios_alert_waiter_dump(void)
++{
++    LARGE_INTEGER now;
++    int i, parked = 0, over = 0, shown = 0;
++    NtQuerySystemTime( &now );
++    for (i = 0; i < IOS_ALERT_WAITER_MAX; i++)
++    {
++        if (!ios_alert_waiters[i].addr) continue;
++        parked++;
++        if ((now.QuadPart - (LONGLONG)ios_alert_waiters[i].since) / 10000000 >= 60) over++;
++    }
++    dprintf( 2, "[waiters] parked=%d over60s=%d rev=ml444\n", parked, over );
++
++    /* ml444: an address with >=3 concurrent waiters is a contended lock whose
++     * owning OBJECT we can't name offline (ml443: S=0x7c530f0098, 13 SRW-style
++     * exclusive waiters, neighbor allocation of a GuestToHostMap).  Dump the
++     * 0x140 bytes around it once per cycle — vtables/pointers inside identify
++     * the object type offline. */
++    {
++        static int hot_dumps;
++        const void *done[2] = { NULL, NULL };
++        int d = 0;
++        for (i = 0; i < IOS_ALERT_WAITER_MAX && d < 2 && hot_dumps < 12; i++)
++        {
++            const void *a = ios_alert_waiters[i].addr;
++            int j, nsame = 0;
++            if (!a || (ULONG_PTR)a <= 0x10000 || a == done[0] || a == done[1]) continue;
++            for (j = 0; j < IOS_ALERT_WAITER_MAX; j++)
++                if (ios_alert_waiters[j].addr == a) nsame++;
++            if (nsame < 3) continue;
++            done[d++] = a;
++            hot_dumps++;
++            {
++                ULONG_PTR base = ((ULONG_PTR)a & ~0xfULL) - 0x100;
++                int line;
++                dprintf( 2, "[hot-lock] addr=%p waiters=%d dumping [%p,%p) rev=ml444\n",
++                         a, nsame, (void *)base, (void *)(base + 0x140) );
++                for (line = 0; line < 5; line++)
++                {
++                    ULONG_PTR row = base + line * 0x40;
++                    unsigned long long w[8] = { 0 };
++                    char *page = (char *)(row & ~0x3fffULL);
++                    if (msync( page, 0x4000, MS_ASYNC )) continue;
++                    if ((((row + 0x38) & ~0x3fffULL) != (ULONG_PTR)page) &&
++                        msync( (char *)((row + 0x38) & ~0x3fffULL), 0x4000, MS_ASYNC )) continue;
++                    memcpy( w, (void *)row, 0x40 );
++                    dprintf( 2, "[hot-lock]  %p: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n",
++                             (void *)row, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7] );
++                }
++            }
++        }
++    }
++    for (i = 0; i < IOS_ALERT_WAITER_MAX && shown < 32; i++)
++    {
++        const void *a = ios_alert_waiters[i].addr;
++        void *tid = ios_alert_waiters[i].tid;
++        LONGLONG age;
++        unsigned int w0 = 0xdeaddead, w1 = 0xdeaddead;
++        if (!a) continue;
++        age = (now.QuadPart - (LONGLONG)ios_alert_waiters[i].since) / 10000000;
++        if (age < 60) continue;
++        shown++;
++        /* safe-probe the lock word: msync rejects unmapped pages (Darwin
++         * returns ENOMEM).  ml442: read the CONTAINING aligned word — SRW and
++         * FEX WritePriorityMutex read-waits pass lock+2 (2-aligned), which the
++         * old 4-aligned-only guard refused (ml441's deaddead trio). */
++        if (!((ULONG_PTR)a & 1) && (ULONG_PTR)a > 0x10000 && (ULONG_PTR)a < 0x8000000000ULL)
++        {
++            ULONG_PTR al = (ULONG_PTR)a & ~3ULL;
++            char *page = (char *)(al & ~0x3fffULL);
++            if (!msync( page, 0x4000, MS_ASYNC ))
++            {
++                w0 = *(volatile unsigned int *)al;
++                if (((al + 4) & ~0x3fffULL) == (ULONG_PTR)page)
++                    w1 = *(volatile unsigned int *)(al + 4);
++            }
++        }
++        dprintf( 2, "[waiters]  tid=%04x addr=%p age=%ds %s w0=%08x w1=%08x\n",
++                 (int)(ULONG_PTR)tid, a, (int)age,
++                 ios_alert_waiters[i].inf ? "INF" : "TMO", w0, w1 );
++    }
++}
++
++/* ml447 (#74): ORPHAN-LOCK detector.  ml446 proved the dead S-owner vanishes
++ * entirely (registry row + TEB recycled) before the census can see the corpse
++ * — so detect the ORPHANED LOCK instead of the dead owner: an SRW-backed
++ * std::mutex that is (a) held-exclusive, (b) has >=3 parked exclusive waiters
++ * (2-misaligned wait addrs = lock+2), and (c) is stamped by NO LIVE thread's
++ * TEB Instrumentation[6] (every acquire stamps since ml446), for 3 consecutive
++ * monitor cycles, has a dead owner with certainty — reap it.  The live-stamp
++ * set is built by the monitor (registry + Mach liveness) and passed in. */
++void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
++{
++    static struct { unsigned long long lock; int strikes; } susp[8];
++    int i, j, k;
++    for (i = 0; i < IOS_ALERT_WAITER_MAX; i++)
++    {
++        const void *a = ios_alert_waiters[i].addr;
++        unsigned long long lock;
++        unsigned int word;
++        int nsame = 0, stamped = 0;
++        if (!a || ((ULONG_PTR)a & 3) != 2 || (ULONG_PTR)a < 0x10000 || (ULONG_PTR)a >= 0x8000000000ULL) continue;
++        lock = (unsigned long long)(ULONG_PTR)a - 2;
++        for (j = 0; j < IOS_ALERT_WAITER_MAX; j++)
++            if (ios_alert_waiters[j].addr == a) nsame++;
++        if (nsame < 3) continue;
++        {
++            char *page = (char *)((ULONG_PTR)lock & ~0x3fffULL);
++            if (msync( page, 0x4000, MS_ASYNC )) continue;
++            word = *(volatile unsigned int *)(ULONG_PTR)lock;
++        }
++        if (!(word & 1))
++        {
++            /* released legitimately — clear any stale suspicion */
++            for (j = 0; j < 8; j++)
++                if (susp[j].lock == lock) { susp[j].lock = 0; susp[j].strikes = 0; }
++            continue;
++        }
++        /* ml468: the word must be a COHERENT exclusively-held wine SRW before
++         * we may reap it as one.  RtlAcquireSRWLockExclusive sets owners
++         * (high 16) to exactly 1 and bit0 of exclusive_waiters; parked
++         * exclusive waiters occupy bits 15:1 in steps of 2, so >=3 parked
++         * threads imply a non-empty queue.  The ml467 run reaped 0x40010001
++         * here — not an SRW at all but a live shared-owned FEX
++         * WritePriorityMutex (read-owners=1, write-waiter=1; its read-waiters
++         * park at lock+2 too, the lock-ID-rule trap) held by a running sweep
++         * thread; zeroing it killed the run within a second. */
++        if ((word >> 16) != 1 || ((word & 0xffff) >> 1) == 0)
++        {
++            static int incoherent_logs;
++            if (incoherent_logs < 8)
++            {
++                incoherent_logs++;
++                dprintf( 2, "[lock-orphan] SKIP %#llx word=%08x waiters=%d incoherent-as-SRW (FEX lock?) rev=ml468\n",
++                         lock, word, nsame );
++            }
++            for (j = 0; j < 8; j++)
++                if (susp[j].lock == lock) { susp[j].lock = 0; susp[j].strikes = 0; }
++            continue;
++        }
++        for (k = 0; k < nstamps; k++) if (live_stamps[k] == lock) stamped = 1;
++        for (j = 0; j < 8; j++) if (susp[j].lock == lock) break;
++        if (stamped)
++        {
++            if (j < 8) { susp[j].lock = 0; susp[j].strikes = 0; }
++            continue;
++        }
++        if (j == 8)   /* new suspect: claim a free slot */
++        {
++            for (j = 0; j < 8 && susp[j].lock; j++) ;
++            if (j == 8) continue;
++            susp[j].lock = lock;
++            susp[j].strikes = 0;
++        }
++        susp[j].strikes++;
++        dprintf( 2, "[lock-orphan] SRW %#llx word=%08x waiters=%d no-live-stamp strike=%d/3 rev=ml447\n",
++                 lock, word, nsame, susp[j].strikes );
++        if (susp[j].strikes >= 3)
++        {
++            ios_srw_reap_exclusive( lock, 0xDEADull );
++            susp[j].lock = 0;
++            susp[j].strikes = 0;
++        }
++    }
++}
++
++
+ /***********************************************************************
+  *             NtAlertThreadByThreadId (NTDLL.@)
+  */
+@@ -3542,21 +3925,30 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+ #ifdef USE_FUTEX
+     {
+         LONG *futex = &entry->futex;
++        /* iOS-Mythic ml482 (#86): NtAlertThreadByThreadId itself needs no TEB —
++         * it wakes a TARGET tid — but the two probes below read
++         * NtCurrentTeb()->ClientId.UniqueThread, i.e. TEB+0x48. Threads created
++         * directly by CEF/FEX have no TEB, so on those the probe (not the
++         * function) null-dereferenced and killed the app at exactly the moment
++         * the login-window popup brought new threads into this path (ml481:
++         * [host-fault] sig=11 addr=0x48 at NtAlertThreadByThreadId+0x10c, the
++         * last line of the log). Read the tid defensively; 0 means "unknown
++         * sender", which is all the diagnostics ever needed. */
++        TEB *self_teb = NtCurrentTeb();
++        unsigned int self_tid = self_teb ? (unsigned int)(ULONG_PTR)self_teb->ClientId.UniqueThread : 0;
+         /* iOS-Mythic ml400 (task #60): ring of recent alerts so a storming
+          * waiter can name its pounder — see [alert-storm] in
+          * NtWaitForAlertByThreadId. */
+         LONG pos = InterlockedIncrement( &ios_alert_ring_pos );
+         ios_alert_ring[pos & (IOS_ALERT_RING - 1)] =
+-            ((unsigned int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread << 16) |
+-            ((unsigned int)(ULONG_PTR)tid & 0xffff);
++            (self_tid << 16) | ((unsigned int)(ULONG_PTR)tid & 0xffff);
+         /* ml407: did ANYONE (any ntdll copy) ever try to wake the parked pump? */
+         if (tid && tid == ios_pump_alert_tid)
+         {
+             static LONG n;
+             if (n < 40) { InterlockedIncrement( &n );
+-                ERR( "[alert-unix] ALERT-SENT from=%04x -> pump tid=%04x futex=%p\n",
+-                     (int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread,
+-                     (int)(ULONG_PTR)tid, entry ); }
++                ERR( "[alert-unix] ALERT-SENT from=%04x -> pump tid=%04x futex=%p rev=ml482\n",
++                     (int)self_tid, (int)(ULONG_PTR)tid, entry ); }
+         }
+         if (!InterlockedExchange( futex, 1 ))
+             futex_wake_one( futex );
+@@ -3644,6 +4036,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+         LONG *futex = &entry->futex;
+         ULONGLONG end;
+         int ret;
++        int ios_wslot;
+ 
+         if (timeout)
+         {
+@@ -3653,6 +4046,19 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+                 end = get_absolute_timeout( timeout );
+         }
+ 
++        /* ml440 (#74): register this park; addr NULL uses sentinel 0x1 so the
++         * park still counts.  Registered after INFINITE normalization so inf
++         * is accurate. */
++        ios_wslot = ios_alert_waiter_slot( NtCurrentTeb()->ClientId.UniqueThread );
++        if (ios_wslot >= 0)
++        {
++            LARGE_INTEGER ios_wnow;
++            NtQuerySystemTime( &ios_wnow );
++            ios_alert_waiters[ios_wslot].since = ios_wnow.QuadPart;
++            ios_alert_waiters[ios_wslot].inf = !timeout;
++            ios_alert_waiters[ios_wslot].addr = address ? address : (const void *)0x1;
++        }
++
+         while (!InterlockedExchange( futex, 0 ))
+         {
+             if (timeout)
+@@ -3669,12 +4075,14 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+ 
+             if (ret == -1 && errno == ETIMEDOUT)
+             {
++                if (ios_wslot >= 0) ios_alert_waiters[ios_wslot].addr = NULL;
+                 if (ios_marked && ios_alert_unix_n < 120) { InterlockedIncrement( &ios_alert_unix_n );
+                     ERR( "[alert-unix] tid=%04x -> TIMEOUT\n",
+                          (int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread ); }
+                 return STATUS_TIMEOUT;
+             }
+         }
++        if (ios_wslot >= 0) ios_alert_waiters[ios_wslot].addr = NULL;
+         if (ios_marked && ios_alert_unix_n < 120) { InterlockedIncrement( &ios_alert_unix_n );
+             ERR( "[alert-unix] tid=%04x -> ALERTED\n",
+                  (int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread ); }
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index aaae9a2fd8e..50bd0575b33 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -3357,6 +3357,18 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
+ 
+     TRACE( "(0x%08x,%p,0x%08x,%p)\n", class, info, size, ret_size );
+ 
++    /* iOS-Mythic ml441 (#74): private class — hands every PE ntdll copy the
++     * address of the ONE process-wide futex queue table (unix sync.c), fixing
++     * the per-copy futex_queues split that lost RtlWakeAddress* wakes. */
++    if ((unsigned int)class == 0xf00d && size == sizeof(void *))
++    {
++        extern void *ios_get_shared_futex_queues(void);
++        if (!info) return STATUS_ACCESS_VIOLATION;
++        *(void **)info = ios_get_shared_futex_queues();
++        if (ret_size) *ret_size = sizeof(void *);
++        return STATUS_SUCCESS;
++    }
++
+     switch (class)
+     {
+     case SystemNativeBasicInformation:  /* 114 */
+diff --git a/server/sock.c b/server/sock.c
+index caa32a32df1..226a305e75a 100644
+--- a/server/sock.c
++++ b/server/sock.c
+@@ -124,6 +124,25 @@
+ #endif
+ 
+ #ifndef HAVE_NETINET_TCP_FSM_H
++#ifdef __APPLE__
++/* iOS-Mythic ml478 (#79 root cause): Darwin's TCP_CONNECTION_INFO reports
++ * BSD-numbered FSM states (LISTEN=1, ESTABLISHED=4), but the iOS SDK ships
++ * no netinet/tcp_fsm.h, so the Linux-numbered fallback below was used:
++ * every listener (1) matched TCPS_ESTABLISHED and every live connection (4)
++ * matched TCPS_FIN_WAIT_1, so the ESTAB TCP table held exactly the wrong
++ * rows and Steam's loopback peer authentication could never succeed. */
++#define TCPS_CLOSED       0
++#define TCPS_LISTEN       1
++#define TCPS_SYN_SENT     2
++#define TCPS_SYN_RECEIVED 3
++#define TCPS_ESTABLISHED  4
++#define TCPS_CLOSE_WAIT   5
++#define TCPS_FIN_WAIT_1   6
++#define TCPS_CLOSING      7
++#define TCPS_LAST_ACK     8
++#define TCPS_FIN_WAIT_2   9
++#define TCPS_TIME_WAIT   10
++#else
+ #define TCPS_ESTABLISHED  1
+ #define TCPS_SYN_SENT     2
+ #define TCPS_SYN_RECEIVED 3
+@@ -136,6 +155,22 @@
+ #define TCPS_LISTEN      10
+ #define TCPS_CLOSING     11
+ #endif
++#endif
++
++/* iOS-Mythic ml480 (#84): accept-latency instrument. Steam's WebUITransport
++ * only drains its listen backlog every 2-3 minutes (11-13 connections logged
++ * in one second, then nothing), so CEF's ~12s websocket handshake always times
++ * out and the login window never appears. [acc-ready] stamps the moment the
++ * SERVER sees a pending connection on a listener; [acc-take] stamps the moment
++ * the GUEST actually accepts it. ready-prompt + take-late ⇒ Steam's thread is
++ * the laggard (frame stalls); no [acc-ready] at all ⇒ our poll registration is.
++ * Wall-clock ms, since mythic-log lines carry no timestamps after boot. */
++static unsigned long long ios_acc_now_ms(void)
++{
++    struct timeval tv;
++    gettimeofday( &tv, NULL );
++    return (unsigned long long)tv.tv_sec * 1000ull + (unsigned long long)tv.tv_usec / 1000ull;
++}
+ 
+ static const char magic_loopback_addr[] = {127, 12, 34, 56};
+ 
+@@ -1421,6 +1456,19 @@ static void sock_poll_event( struct fd *fd, int event )
+         break;
+ 
+     case SOCK_LISTENING:
++        /* iOS-Mythic ml480 (#84): see accept_socket — stamp when the SERVER
++         * first sees a pending connection, so [acc-take] can be differenced
++         * against it. */
++        if (event & POLLIN)
++        {
++            static int acc_ready_logged;
++            if (acc_ready_logged < 48)
++            {
++                acc_ready_logged++;
++                fprintf( stderr, "[acc-ready] lport=%u t=%llums rev=ml480\n",
++                         (unsigned int)ntohs( sock->addr.in.sin_port ), ios_acc_now_ms() );
++            }
++        }
+         break;
+ 
+     case SOCK_CONNECTED:
+@@ -2074,6 +2122,18 @@ static struct sock *accept_socket( struct sock *sock )
+ 
+     if (get_unix_fd( sock->fd ) == -1) return NULL;
+ 
++    {
++        static int acc_take_logged;
++        if (acc_take_logged < 48)
++        {
++            acc_take_logged++;
++            fprintf( stderr, "[acc-take] lport=%u owner=%u t=%llums deferred=%d rev=ml480\n",
++                     (unsigned int)ntohs( sock->addr.in.sin_port ),
++                     current ? (unsigned int)current->process->id : 0,
++                     ios_acc_now_ms(), sock->deferred ? 1 : 0 );
++        }
++    }
++
+     if ( sock->deferred )
+     {
+         acceptsock = sock->deferred;
+@@ -2777,6 +2837,28 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+         sock->addr_len = sockaddr_from_unix( &unix_addr, &sock->addr.addr, sizeof(sock->addr) );
+         sock->peer_addr_len = sockaddr_from_unix( &peer_addr, &sock->peer_addr.addr, sizeof(sock->peer_addr));
+ 
++        /* iOS-Mythic ml474 (#79): connect census. The transport reject loop
++         * hinges on the connecting socket's row appearing in the AF_INET
++         * table SteamUI authenticates from — a dial that lands on the v6
++         * family can never appear there. One line per stream connect names
++         * the owner, both families, the ports, and whether peer_addr stuck. */
++        if (sock->type == WS_SOCK_STREAM)
++        {
++            static int conns_logged;
++            if (conns_logged < 64)
++            {
++                unsigned short lport = 0, dport = 0;
++                conns_logged++;
++                if (peer_addr.addr.sa_family == AF_INET) dport = ntohs( peer_addr.in.sin_port );
++                else if (peer_addr.addr.sa_family == AF_INET6) dport = ntohs( peer_addr.in6.sin6_port );
++                if (sock->addr.addr.sa_family == WS_AF_INET) lport = ntohs( sock->addr.in.sin_port );
++                else if (sock->addr.addr.sa_family == WS_AF_INET6) lport = ntohs( sock->addr.in6.sin6_port );
++                fprintf( stderr, "[srv-conn] owner=%u wsfam=%u ufam=%u lport=%u dport=%u nb=%d ret=%d plen=%u rev=ml478\n",
++                         current->process->id, sock->family, peer_addr.addr.sa_family,
++                         lport, dport, sock->nonblocking, ret, sock->peer_addr_len );
++            }
++        }
++
+         sock->bound = 1;
+ 
+         if (!ret)
+@@ -4234,6 +4316,18 @@ static MIB_TCP_STATE get_tcp_socket_state( int fd )
+     if (getsockopt( fd, IPPROTO_TCP, TCP_INFO, &info, &info_len ) == 0)
+         return tcp_state_to_mib_state( info.tcpi_state );
+ 
++    /* iOS-Mythic ml474 (#79): the ESTAB fallback below can lie a listener
++     * into the ESTAB table (observed: port 27060 with no peer at state=5) —
++     * record why it fired so honest states can be told from fallbacks. */
++    {
++        static int fails_logged;
++        if (fails_logged < 32)
++        {
++            fails_logged++;
++            fprintf( stderr, "[tcp-state] TCP_INFO fd=%d errno=%d -> fallback ESTAB rev=ml478\n", fd, errno );
++        }
++    }
++
+     if (debug_level)
+         fprintf( stderr, "getsockopt TCP_INFO failed: %s\n", strerror( errno ) );
+ 
+@@ -4260,6 +4354,32 @@ static int enum_tcp_connections( struct process *process, struct object *obj, vo
+         return 0;
+ 
+     socket_state = get_tcp_socket_state( get_unix_fd(sock->fd) );
++
++    /* iOS-Mythic ml474 (#79): census of every visited socket on the count
++     * pass — the ml473 run's table froze at 3 rows while the webhelper's
++     * dialing client socket (and steam's accepted peers) never appeared.
++     * This names every socket the walk actually reaches, pre-filter, so
++     * "visited but filtered" separates from "never visited". */
++    if (!info->conn)
++    {
++        static int visits_logged;
++        if (visits_logged < 96)
++        {
++            unsigned short lport = 0, pport = 0;
++            visits_logged++;
++            if (sock->addr.addr.sa_family == WS_AF_INET) lport = ntohs( sock->addr.in.sin_port );
++            else if (sock->addr.addr.sa_family == WS_AF_INET6) lport = ntohs( sock->addr.in6.sin6_port );
++            if (sock->peer_addr_len)
++            {
++                if (sock->peer_addr.addr.sa_family == WS_AF_INET) pport = ntohs( sock->peer_addr.in.sin_port );
++                else if (sock->peer_addr.addr.sa_family == WS_AF_INET6) pport = ntohs( sock->peer_addr.in6.sin6_port );
++            }
++            fprintf( stderr, "[tcp-enum] owner=%u wsfam=%u state=%u lport=%u pport=%u plen=%u filter=%u rev=ml478\n",
++                     process->id, sock->family, socket_state, lport, pport,
++                     sock->peer_addr_len, info->state_filter );
++        }
++    }
++
+     if (info->state_filter && socket_state != info->state_filter)
+         return 0;
+ 

@@ -1,0 +1,95 @@
+# Hollow Knight, King's Pass, from where hk-new-game leaves the Knight (just
+# landed at the start): right through the two vine walls (four slashes each),
+# over the first crawlid and into the pit, the held jump out of it (the game's
+# "HOLD A Jump" prompt), and on down into the room with the lumaflies and the
+# floating platforms. Played once; hk-roam then loops in that room. Each part
+# brings code and effects the game has not run yet: wall breaks, the first
+# kill and geo, the first damage, a held jump, a new stretch of the level.
+# Checked step by step with screenshots on 2026-09-26 (evidence
+# 2026-09-26-first-run-stutter.md). The Knight can take up to three hits here.
+2000 RIGHT
+2000 RIGHT   # to the first vine wall
+100 RIGHT X
+400 -
+100 RIGHT X
+400 -
+100 RIGHT X
+400 -
+100 RIGHT X
+600 -        # the wall breaks
+2500 RIGHT   # to the second vine wall
+100 RIGHT X
+400 -
+100 RIGHT X
+400 -
+100 RIGHT X
+400 -
+100 RIGHT X
+400 -
+2500 RIGHT
+300 RIGHT    # walk and slash: the crawlid, then into the pit
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+300 RIGHT
+120 RIGHT X
+250 RIGHT
+550 RIGHT A  # the held jump out of the pit
+600 RIGHT
+120 RIGHT X
+300 RIGHT
+120 RIGHT X
+800 RIGHT
+350 RIGHT    # down into the lumafly room
+120 RIGHT X
+200 RIGHT
+350 RIGHT
+120 RIGHT X
+200 RIGHT
+350 RIGHT
+120 RIGHT X
+200 RIGHT
+350 RIGHT
+120 RIGHT X
+200 RIGHT
+350 RIGHT
+120 RIGHT X
+200 RIGHT
+350 RIGHT
+120 RIGHT X
+200 RIGHT
+350 RIGHT
+120 RIGHT X
+200 RIGHT
+350 RIGHT
+120 RIGHT X
+200 RIGHT

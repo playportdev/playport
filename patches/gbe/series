@@ -1,0 +1,5 @@
+# gbe: applied in this order with `git am -3` onto the gbe pin in pins.lock.
+# gbe_fork's regular steam_api for x86-64 and i386 (build/stages/steamapi.sh).
+0001-crash_printer-include-dbghelp.h-in-lower-case.patch
+0002-premake-build-the-Windows-DLLs-with-llvm-mingw-on-Li.patch
+0003-sdk-dll-return-interface-structs-the-way-MSVC-s-memb.patch

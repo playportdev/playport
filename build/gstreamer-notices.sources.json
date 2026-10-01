@@ -1,0 +1,247 @@
+{
+  "binary_archive_sha256": "2b1233ba3d1f8166bfa85f664709ee5ff36b81e82b9652a1d3e79c1783da9584",
+  "cerbero": {
+    "archive": "cerbero.tar.gz",
+    "commit": "e0e7007e210dab3e2f3e898939e2cfe1fd02f123",
+    "review_files": {
+      "cerbero/bootstrap/rust.py": "8f88284d085c3399d518f794abb176926da381078d932c24db5f06113c585925",
+      "cerbero/build/source.py": "118ddc1fc99865b3b64c39f6066d66d5213aa061ab74da735dfe925e4e84b559",
+      "cerbero/enums.py": "b9f07d55e3b9b816c3f5dcb95023b51d9952c14c1231197afa145df3645af81b",
+      "config/ios.config": "883837c806d115e470f2e3c82a540778a2f1d518c07128fdf8fb73d245e56f93",
+      "recipes/custom.py": "d65579ff67e9ae48c5f021b9cbdfb779137364bef0eeeecaf31987b7c4ec14bb",
+      "recipes/gst-plugins-rs.recipe": "bb942e22f0346c16f11258ace4ec8d6b18199f85454d680785bd055af4864f5a",
+      "recipes/moltenvk.recipe": "e7ca192a86e49ddac60c2ad855894d71f2581545fee7bca5e84f908a4ab01155"
+    },
+    "root": "cerbero-e0e7007e210dab3e2f3e898939e2cfe1fd02f123",
+    "sha256": "f55907635c6edcd1448bad0e3bda1f346ae707a61ec66ad2d1dd854f7e0df16e",
+    "tag_object": "264e80df17fb52de1a9750764334b246aeae586a",
+    "url": "https://gitlab.freedesktop.org/gstreamer/cerbero/-/archive/e0e7007e210dab3e2f3e898939e2cfe1fd02f123/cerbero-e0e7007e210dab3e2f3e898939e2cfe1fd02f123.tar.gz"
+  },
+  "components": {
+    "bzip2": {
+      "archive": "bzip2-1.0.8.tar.gz",
+      "recipe": "recipes/bzip2.recipe",
+      "recipe_sha256": "db3c9a4a6aee33f7d09f13dab18bbd08bbe47bb37b9878033466bbdf9197ed34",
+      "required_notices": [
+        "LICENSE"
+      ],
+      "reviewed_download_url": "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+      "root": "bzip2-1.0.8",
+      "sha256": "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269",
+      "version": "1.0.8"
+    },
+    "ffmpeg": {
+      "archive": "ffmpeg-7.1.tar.xz",
+      "recipe": "recipes/ffmpeg.recipe",
+      "recipe_sha256": "2289ae45d65d4f0a8265f2c4a69933b53bcad88be0e712558159810d43c57e85",
+      "required_notices": [
+        "LICENSE.md",
+        "COPYING.LGPLv2.1",
+        "doc/authors.texi",
+        "libavcodec/jfdctfst.c",
+        "libavcodec/jfdctint.c",
+        "libavcodec/jfdctint_template.c",
+        "libavcodec/jrevdct.c"
+      ],
+      "reviewed_download_url": "https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz",
+      "root": "ffmpeg-7.1",
+      "sha256": "40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6",
+      "version": "7.1"
+    },
+    "glib": {
+      "archive": "glib-2.82.4.tar.xz",
+      "recipe": "recipes/glib.recipe",
+      "recipe_sha256": "7fc465d9370fd726e2331ad464c1b15f04dbc25a7700578491030d8de9d22ad0",
+      "required_notices": [
+        "COPYING",
+        "LICENSES/LGPL-2.1-or-later.txt",
+        "subprojects/gvdb/COPYING"
+      ],
+      "reviewed_download_url": "https://download.gnome.org/sources/glib/2.82/glib-2.82.4.tar.xz",
+      "root": "glib-2.82.4",
+      "sha256": "37dd0877fe964cd15e9a2710b044a1830fb1bd93652a6d0cb6b8b2dff187c709",
+      "version": "2.82.4"
+    },
+    "gst-libav-1.0": {
+      "archive": "gst-libav-1.28.7.tar.xz",
+      "recipe": "recipes/gst-libav-1.0.recipe",
+      "recipe_sha256": "f7ee590fd82c90c3df8af7b070b8e238f705fafab4b9f6f38b208a3164e422ac",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.28.7.tar.xz",
+      "root": "gst-libav-1.28.7",
+      "sha256": "58da51dd39ecf1cf6faade34cc6412001be2e2e145bca8ae0f45336f60a36ab2",
+      "version": "1.28.7"
+    },
+    "gst-plugins-bad-1.0": {
+      "archive": "gst-plugins-bad-1.28.7.tar.xz",
+      "recipe": "recipes/gst-plugins-bad-1.0.recipe",
+      "recipe_sha256": "5eabde938004951879a238420f854c01604d9cdcdeb6ad65eaa2a6872252b32c",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-1.28.7.tar.xz",
+      "root": "gst-plugins-bad-1.28.7",
+      "sha256": "dc525383c18b2c265bbe6a43d498656cd918aaa130aa4e3abeabcdaa741c3ffe",
+      "version": "1.28.7"
+    },
+    "gst-plugins-base-1.0": {
+      "archive": "gst-plugins-base-1.28.7.tar.xz",
+      "recipe": "recipes/gst-plugins-base-1.0.recipe",
+      "recipe_sha256": "92cc89d69a18d8547d70cbf75bf97053600e0916a819071e33afba320dc33e5c",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.28.7.tar.xz",
+      "root": "gst-plugins-base-1.28.7",
+      "sha256": "ed6e5410f496d171818763af2265e7977154bc7f9b827e98acf8c5bed21dd5a7",
+      "version": "1.28.7"
+    },
+    "gst-plugins-good-1.0": {
+      "archive": "gst-plugins-good-1.28.7.tar.xz",
+      "recipe": "recipes/gst-plugins-good-1.0.recipe",
+      "recipe_sha256": "65a4ab01cd1fe44aa3e7d8815330dfeb8ab08a5899c64f88ea74b02ed20bb620",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.28.7.tar.xz",
+      "root": "gst-plugins-good-1.28.7",
+      "sha256": "87256969c82cf3bc8574301f3e7044a90de0ac500a5a27d8ba38c4dde894dd8b",
+      "version": "1.28.7"
+    },
+    "gstreamer-1.0": {
+      "archive": "gstreamer-1.28.7.tar.xz",
+      "recipe": "recipes/gstreamer-1.0.recipe",
+      "recipe_sha256": "ca319ac8fb1cf5161b70f060fc32975e1d5a2f119750318ef848b8d6df618ee5",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-1.28.7.tar.xz",
+      "root": "gstreamer-1.28.7",
+      "sha256": "787329b2c5758e228a71d926a6dcf960bceaacca3cadd63874ba665dfcda013e",
+      "version": "1.28.7"
+    },
+    "libffi": {
+      "archive": "libffi-meson-3.2.9999.5.tar.bz2",
+      "recipe": "recipes/libffi.recipe",
+      "recipe_sha256": "dda01768646f7dc441850342eb0343f843d6ede78115e2e54e78113e00a19cc5",
+      "required_notices": [
+        "LICENSE"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/mirror/libffi/libffi-meson-3.2.9999.5.tar.bz2",
+      "root": "libffi-meson-3.2.9999.5",
+      "sha256": "b4d403932a8860589e571300e807e40bb4f7d9d2630c8ec19c29fb9e7b0fd227",
+      "version": "3.2.9999.5"
+    },
+    "libogg": {
+      "archive": "libogg-1.3.5.tar.xz",
+      "recipe": "recipes/libogg.recipe",
+      "recipe_sha256": "87379a13d772fc1bd7cb763a410fcdcd702967e0989567b53c9d57399003ac5c",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/mirror/libogg/libogg-1.3.5.tar.xz",
+      "root": "libogg-1.3.5",
+      "sha256": "c4d91be36fc8e54deae7575241e03f4211eb102afb3fc0775fbbc1b740016705",
+      "version": "1.3.5"
+    },
+    "libvorbis": {
+      "archive": "libvorbis-1.3.7.tar.xz",
+      "recipe": "recipes/libvorbis.recipe",
+      "recipe_sha256": "3a55edeaf66bbda56a71edb5a3033d47ec88b1d7abd0553854315967c9e58410",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/mirror/libvorbis/libvorbis-1.3.7.tar.xz",
+      "root": "libvorbis-1.3.7",
+      "sha256": "b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b",
+      "version": "1.3.7"
+    },
+    "libvpx": {
+      "archive": "v1.14.1.tar.gz",
+      "recipe": "recipes/libvpx.recipe",
+      "recipe_sha256": "8fbf73c7cb302c8d30f95106d602d905922f517554ff5cde54b06fa784e09905",
+      "required_notices": [
+        "LICENSE",
+        "PATENTS"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/mirror/libvpx/v1.14.1.tar.gz",
+      "root": "libvpx-1.14.1",
+      "sha256": "901747254d80a7937c933d03bd7c5d41e8e6c883e0665fadcb172542167c7977",
+      "version": "v1.14.1"
+    },
+    "opus": {
+      "archive": "opus-1.5.2.tar.gz",
+      "recipe": "recipes/opus.recipe",
+      "recipe_sha256": "d5113e1fec551afa92067114368049113559b812ef2652eb28903c429038e405",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/mirror/opus/opus-1.5.2.tar.gz",
+      "root": "opus-1.5.2",
+      "sha256": "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1",
+      "version": "1.5.2"
+    },
+    "orc": {
+      "archive": "orc-0.4.42.tar.xz",
+      "recipe": "recipes/orc.recipe",
+      "recipe_sha256": "4ad51966e5855effda8220658b1d1923f7f525aadff39543d78cf143d4c3b261",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/orc/orc-0.4.42.tar.xz",
+      "root": "orc-0.4.42",
+      "sha256": "7ec912ab59af3cc97874c456a56a8ae1eec520c385ec447e8a102b2bd122c90c",
+      "version": "0.4.42"
+    },
+    "pcre2": {
+      "archive": "pcre2-10.42.tar.bz2",
+      "recipe": "recipes/pcre2.recipe",
+      "recipe_sha256": "6889a7278809c99bd36a0ea04d725da66b443b6aa6d90b5e2a0c9dffa17e96f1",
+      "required_notices": [
+        "LICENCE"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/mirror/pcre2/pcre2-10.42.tar.bz2",
+      "root": "pcre2-10.42",
+      "sha256": "8d36cd8cb6ea2a4c2bb358ff6411b0c788633a2a45dabbf1aeb4b701d1b5e840",
+      "version": "10.42"
+    },
+    "proxy-libintl": {
+      "archive": "0.5.tar.gz",
+      "recipe": "recipes/proxy-libintl.recipe",
+      "recipe_sha256": "123fd69100d658d1719aff4da4de0df46f8fc32dfda9334bd5efbb711050b208",
+      "required_notices": [
+        "COPYING"
+      ],
+      "reviewed_download_url": "https://gstreamer.freedesktop.org/src/mirror/proxy-libintl/0.5.tar.gz",
+      "root": "proxy-libintl-0.5",
+      "sha256": "f7a1cbd7579baaf575c66f9d99fb6295e9b0684a28b095967cfda17857595303",
+      "version": "0.5"
+    },
+    "zlib": {
+      "archive": "zlib-1.3.1.tar.gz",
+      "recipe": "recipes/zlib.recipe",
+      "recipe_sha256": "0d656e46af8adbfc997409d0530a0613adb498fb65832cedafc201e3b8903641",
+      "required_notices": [
+        "README",
+        "LICENSE"
+      ],
+      "reviewed_download_url": "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+      "root": "zlib-1.3.1",
+      "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+      "version": "1.3.1"
+    }
+  },
+  "gstreamer_tag_commit": "070125524a8422e29d3b69a372ed4f62fd343ffa",
+  "release": "1.28.7",
+  "schema": 1,
+  "stage_sha256": "be9b77fd24c0f7948d85c64a864fca9a95eda9590bfedf71bfb4b87fedbc12ef",
+  "status": "preparatory-source-review-not-binary-build-lock",
+  "unresolved": [
+    "Exact Cerbero build commit/configuration/manifest associated with binary archive",
+    "GStreamer Rust demangler/std/crates: recipe Rust 1.96.0 and gst-plugins-rs 0.15.3 are candidates, not embedded provenance",
+    "MoltenVK: recipe 1.3.283.0 is Vulkan SDK version, not verified MoltenVK source revision or nested notices",
+    "Per-file/header credits and patch applicability; exact final-IPA linked-member map"
+  ]
+}

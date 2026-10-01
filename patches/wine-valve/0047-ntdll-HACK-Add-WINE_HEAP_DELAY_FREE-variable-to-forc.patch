@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 15 Mar 2021 13:10:16 -0500
+Subject: [PATCH] ntdll: HACK: Add WINE_HEAP_DELAY_FREE variable to force the
+ use of pending free buffer.
+
+CW-Bug-Id: #20334
+Valve-commit: baf7cf6aec605c8ca9daff2cf1612141c431d726
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/heap.c       |  8 +++++---
+ dlls/ntdll/loader.c     | 26 ++++++++++++++++++++++++++
+ dlls/ntdll/ntdll_misc.h |  2 ++
+ 3 files changed, 33 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/ntdll/heap.c b/dlls/ntdll/heap.c
+index feee54e..81281f0 100644
+--- a/dlls/ntdll/heap.c
++++ b/dlls/ntdll/heap.c
+@@ -328,6 +328,8 @@ C_ASSERT( HEAP_MIN_LARGE_BLOCK_SIZE <= HEAP_INITIAL_GROW_SIZE );
+ #define HEAP_VALIDATE_PARAMS  0x40000000
+ #define HEAP_CHECKING_ENABLED 0x80000000
+ 
++BOOL delay_heap_free = FALSE;
++
+ static struct heap *process_heap;  /* main process heap */
+ 
+ static NTSTATUS heap_free_block_lfh( struct heap *heap, ULONG flags, struct block *block );
+@@ -1483,8 +1485,8 @@ static void heap_set_debug_flags( HANDLE handle )
+         }
+     }
+ 
+-    if ((heap->flags & HEAP_GROWABLE) && !heap->pending_free &&
+-        ((flags & HEAP_FREE_CHECKING_ENABLED) || RUNNING_ON_VALGRIND))
++    if (delay_heap_free || ((heap->flags & HEAP_GROWABLE) && !heap->pending_free &&
++        ((flags & HEAP_FREE_CHECKING_ENABLED) || RUNNING_ON_VALGRIND)))
+     {
+         heap->pending_free = RtlAllocateHeap( handle, HEAP_ZERO_MEMORY,
+                                               MAX_FREE_PENDING * sizeof(*heap->pending_free) );
+@@ -2614,7 +2616,7 @@ NTSTATUS WINAPI RtlSetHeapInformation( HANDLE handle, HEAP_INFORMATION_CLASS inf
+             FIXME( "HeapCompatibilityInformation %lu not implemented!\n", compat_info );
+             return STATUS_UNSUCCESSFUL;
+         }
+-        if (InterlockedCompareExchange( &heap->compat_info, compat_info, HEAP_STD ) != HEAP_STD)
++        if (!delay_heap_free && InterlockedCompareExchange( &heap->compat_info, compat_info, HEAP_STD ) != HEAP_STD)
+             return STATUS_UNSUCCESSFUL;
+         return STATUS_SUCCESS;
+     }
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 0297390..82eeac2 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -225,6 +225,21 @@ static inline BOOL contains_path( LPCWSTR name )
+     return ((*name && (name[1] == ':')) || wcschr(name, '/') || wcschr(name, '\\'));
+ }
+ 
++static BOOL get_env( const WCHAR *var, WCHAR *val, unsigned int len )
++{
++    UNICODE_STRING name, value;
++
++    name.Length = wcslen( var ) * sizeof(WCHAR);
++    name.MaximumLength = name.Length + sizeof(WCHAR);
++    name.Buffer = (WCHAR *)var;
++
++    value.Length = 0;
++    value.MaximumLength = len;
++    value.Buffer = val;
++
++    return !RtlQueryEnvironmentVariable_U( NULL, &name, &value );
++}
++
+ #define RTL_UNLOAD_EVENT_TRACE_NUMBER 64
+ 
+ typedef struct _RTL_UNLOAD_EVENT_TRACE
+@@ -5623,6 +5638,7 @@ void loader_init( CONTEXT *context, void **entry )
+         ANSI_STRING ctrl_routine = RTL_CONSTANT_STRING( "CtrlRoutine" );
+         WINE_MODREF *kernel32;
+         PEB *peb = NtCurrentTeb()->Peb;
++        WCHAR env_str[16];
+         unsigned int i;
+ 
+         peb->LdrData            = &ldr;
+@@ -5630,6 +5646,16 @@ void loader_init( CONTEXT *context, void **entry )
+         peb->TlsBitmap          = &tls_bitmap;
+         peb->TlsExpansionBitmap = &tls_expansion_bitmap;
+         peb->LoaderLock         = &loader_section;
++
++        if (get_env( L"WINE_HEAP_DELAY_FREE", env_str, sizeof(env_str)) )
++        {
++            if (env_str[0] == L'1')
++            {
++                ERR( "Enabling heap free delay hack.\n" );
++                delay_heap_free = TRUE;
++            }
++        }
++
+         peb->ProcessHeap        = RtlCreateHeap( HEAP_GROWABLE, NULL, 0, 0, NULL, NULL );
+ 
+         RtlInitializeBitMap( &tls_bitmap, peb->TlsBitmapBits, sizeof(peb->TlsBitmapBits) * 8 );
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index ea42483..9567f45 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -51,6 +51,8 @@ static const USHORT current_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+ 
+ static const UINT_PTR page_size = 0x1000;
+ 
++extern BOOL delay_heap_free;
++
+ /* exceptions */
+ extern NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *context );
+ extern NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context );

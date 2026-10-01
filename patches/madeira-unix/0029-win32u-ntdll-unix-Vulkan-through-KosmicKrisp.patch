@@ -1,0 +1,220 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 20:11:22 +0200
+Subject: [PATCH] win32u, ntdll-unix: Vulkan through KosmicKrisp
+
+win32u's Vulkan was compiled out (SONAME_LIBVULKAN undefined), and
+winevulkan had no unix side, so any Vulkan call from a game or from a
+Direct3D layer on Vulkan failed. For the Vulkan Direct3D backend
+(Playport decision 0014):
+
+- config_ios.h names KosmicKrisp, embedded in the app as a framework,
+  as the Vulkan library; vulkan_init_once dlopens it by its install name.
+- driver_ios.c gives the iOS user driver a VulkanInit: a window's
+  surface is a VK_EXT_metal_surface on the CAMetalLayer IOSDisplayShim
+  gives DXMT for that window (the game layer, or the window's own in
+  desktop mode), found with dlsym as DXMT finds it.
+- build.sh compiles winevulkan's unix side (vulkan.c, vulkan_thunks.c)
+  into libntdll_unix.a as winevulkan_unix_call_funcs, and virtual_ios.c
+  hands that table to winevulkan.dll.
+
+A launch set to DXMT loads no Vulkan: win32u dlopens the driver on the
+first Vulkan call only.
+
+Class: feature
+Evidence: docs/evidence/2026-09-26-vulkan-backend-build.md
+Offered-upstream: no
+---
+ build/ntdll-unix/build.sh      |  7 +++
+ build/ntdll-unix/virtual_ios.c |  9 ++++
+ build/win32u-unix/build.sh     |  5 +--
+ build/win32u-unix/config_ios.h |  3 ++
+ build/win32u-unix/driver_ios.c | 79 ++++++++++++++++++++++++++++++++++
+ 5 files changed, 100 insertions(+), 3 deletions(-)
+
+diff --git a/build/ntdll-unix/build.sh b/build/ntdll-unix/build.sh
+index 3679a92..8c7e94d 100755
+--- a/build/ntdll-unix/build.sh
++++ b/build/ntdll-unix/build.sh
+@@ -115,6 +115,12 @@ compile_unixlib "$CRYPTO_DIR/crypt32_unixlib_ios.c" "crypt32_unixlib" "crypt32"
+ # iOS-Madeira 2026-08-03 (#79 transport): in-process NSI TCP connection
+ # tables (nsiproxy.sys is not shipped; PE nsi.dll falls back to this).
+ compile_one "$BUILD_DIR/nsi_unixlib_ios.c" "nsi_unixlib_ios"
++# Playport: winevulkan's unix side (the Vulkan thunks between the PE
++# winevulkan.dll and win32u's Vulkan, which dlopens KosmicKrisp).
++compile_unixlib "$WINE_SRC/dlls/winevulkan/vulkan.c" "winevulkan_unixlib" "winevulkan" \
++    -I"$WINE_SRC/dlls/winevulkan"
++compile_unixlib "$WINE_SRC/dlls/winevulkan/vulkan_thunks.c" "winevulkan_thunks" "winevulkan" \
++    -I"$WINE_SRC/dlls/winevulkan"
+ 
+ for src in $WINE_SRC/dlls/ntdll/unix/*.c; do
+     name=$(basename "$src" .c)
+@@ -164,6 +170,7 @@ ar rcs "$OBJ_DIR/libntdll_unix.a" \
+     "$OBJ_DIR/gnutls_symtab_ios.o" "$OBJ_DIR/ws2_32_unixlib.o" \
+     "$OBJ_DIR/secur32_unixlib.o" "$OBJ_DIR/crypt32_unixlib.o" \
+     "$OBJ_DIR/dwrite_unixlib.o" \
++    "$OBJ_DIR/winevulkan_unixlib.o" "$OBJ_DIR/winevulkan_thunks.o" \
+     "$OBJ_DIR/alpc.o" "$OBJ_DIR/cdrom.o" "$OBJ_DIR/debug.o" "$OBJ_DIR/env.o" "$OBJ_DIR/file.o" \
+     "$OBJ_DIR/loader.o" "$OBJ_DIR/loadorder.o" "$OBJ_DIR/process.o" "$OBJ_DIR/registry.o" \
+     "$OBJ_DIR/security.o" "$OBJ_DIR/serial.o" "$OBJ_DIR/server.o" \
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 4bfca7e..fb08d2e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -6990,6 +6990,10 @@ extern const void *nsi_unix_call_funcs[];
+  * never called). Chromium drew no text anywhere as a result. */
+ extern const void *dwrite_unix_call_funcs[];
+ 
++/* Playport: winevulkan's unix side, compiled into libntdll_unix.a with
++ * -D__wine_unix_call_funcs=winevulkan_unix_call_funcs (build.sh). */
++extern const void *winevulkan_unix_call_funcs[];
++
+ /* win32u's unix init, statically linked via libwin32u_unix.a. Renamed
+  * from __wine_unix_lib_init in build/win32u-unix/build.sh so future
+  * statically-linked unix libs can keep their own init without colliding.
+@@ -7076,6 +7080,11 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             dprintf(2, "[unixlib] module %p (%s) -> dwrite_unix_call_funcs (%p) rev=ml494\n",
+                 module, match, (void *)dwrite_unix_call_funcs);
+             status = STATUS_SUCCESS;
++        } else if (match && strstr(match, "winevulkan")) {
++            *funcs = (const void *)winevulkan_unix_call_funcs;
++            dprintf(2, "[unixlib] module %p (%s) -> winevulkan_unix_call_funcs (%p)\n",
++                module, match, (void *)winevulkan_unix_call_funcs);
++            status = STATUS_SUCCESS;
+         } else if (match && strstr(match, "nsi.dll")) {
+             *funcs = (const void *)nsi_unix_call_funcs;
+             dprintf(2, "[unixlib] module %p (%s) -> nsi_unix_call_funcs (%p) rev=ml472\n",
+diff --git a/build/win32u-unix/build.sh b/build/win32u-unix/build.sh
+index 1b70aa6..4cbfd5b 100755
+--- a/build/win32u-unix/build.sh
++++ b/build/win32u-unix/build.sh
+@@ -4,8 +4,8 @@
+ # with iOS clang, per-file overrides go in this dir.
+ #
+ # Phase 3D step 1: just get every file compiling. All SONAME_LIB*
+-# deps (freetype, fontconfig, egl, vulkan) forced undefined for now;
+-# those code paths fall back to stubs.
++# deps (freetype, fontconfig, egl) forced undefined for now; those code
++# paths fall back to stubs. Vulkan is KosmicKrisp (config_ios.h).
+ set -e
+ 
+ BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
+@@ -50,7 +50,6 @@ compile_one() {
+         -USONAME_LIBFREETYPE \
+         -USONAME_LIBFONTCONFIG \
+         -USONAME_LIBEGL \
+-        -USONAME_LIBVULKAN \
+         -USONAME_LIBGNUTLS \
+         -UHAVE_FT2BUILD_H \
+         "$@" \
+diff --git a/build/win32u-unix/config_ios.h b/build/win32u-unix/config_ios.h
+index a7927f2..cc324d2 100644
+--- a/build/win32u-unix/config_ios.h
++++ b/build/win32u-unix/config_ios.h
+@@ -17,6 +17,9 @@
+ #undef SONAME_LIBFONTCONFIG
+ #undef SONAME_LIBEGL
+ #undef SONAME_LIBVULKAN
++/* Playport: the Vulkan driver is KosmicKrisp (Mesa's Vulkan on Metal),
++ * embedded as a framework in the app; vulkan_init_once dlopens it. */
++#define SONAME_LIBVULKAN "@rpath/KosmicKrisp.framework/KosmicKrisp"
+ #undef SONAME_LIBGNUTLS
+ 
+ #endif
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index d7dc097..2dd2a29 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -1498,6 +1498,84 @@ static UINT nulldrv_VulkanInit( UINT version, void *vulkan_handle, const struct
+     return STATUS_NOT_IMPLEMENTED;
+ }
+ 
++#ifdef WINE_IOS
++/* Playport: Vulkan on iOS. win32u dlopens KosmicKrisp (config_ios.h) and asks
++ * the user driver for window surfaces. A window's surface is a
++ * VK_EXT_metal_surface on the CAMetalLayer IOSDisplayShim gives DXMT for the
++ * same window: the game layer, or in desktop mode the window's own layer. The
++ * shim's exports are found at run time, as DXMT finds them. */
++#include <dlfcn.h>
++#include "wine/vulkan.h"
++#include "wine/vulkan_driver.h"
++
++typedef void *(*winios_create_metal_view_fn)( void *view, void *device );
++typedef void *(*winios_get_metal_layer_fn)( void *metal_view );
++
++static VkResult winios_vulkan_surface_create( struct client_surface *client, const struct vulkan_instance *instance,
++                                              VkSurfaceKHR *handle )
++{
++    static winios_create_metal_view_fn create_view;
++    static winios_get_metal_layer_fn get_layer;
++    VkMetalSurfaceCreateInfoEXT info = {.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
++    void *view;
++    VkResult res;
++
++    if (!create_view) create_view = (winios_create_metal_view_fn)dlsym( RTLD_DEFAULT, "macdrv_view_create_metal_view" );
++    if (!get_layer) get_layer = (winios_get_metal_layer_fn)dlsym( RTLD_DEFAULT, "macdrv_view_get_metal_layer" );
++    if (!create_view || !get_layer || !instance->p_vkCreateMetalSurfaceEXT)
++    {
++        ERR( "no Metal layer source or no vkCreateMetalSurfaceEXT\n" );
++        return VK_ERROR_INCOMPATIBLE_DRIVER;
++    }
++    /* The shim's view carries the HWND (IOSDisplayShim my_get_win_data); the
++     * view it returns is a retained CAMetalLayer, kept for the surface's life. */
++    if (!(view = create_view( (void *)client->hwnd, (void *)1 )))
++    {
++        ERR( "no Metal layer for hwnd %p\n", client->hwnd );
++        return VK_ERROR_INITIALIZATION_FAILED;
++    }
++    info.pLayer = get_layer( view );
++    res = instance->p_vkCreateMetalSurfaceEXT( instance->host.instance, &info, NULL, handle );
++    dprintf( 2, "[winios] vulkan: metal surface for hwnd %p layer %p -> %d\n", client->hwnd, info.pLayer, res );
++    return res;
++}
++
++static VkBool32 winios_vulkan_presentation_support( struct vulkan_physical_device *physical_device, uint32_t index )
++{
++    return VK_TRUE;
++}
++
++static void winios_vulkan_map_instance_extensions( struct vulkan_instance_extensions *extensions )
++{
++    if (extensions->has_VK_KHR_win32_surface) extensions->has_VK_EXT_metal_surface = 1;
++    if (extensions->has_VK_EXT_metal_surface) extensions->has_VK_KHR_win32_surface = 1;
++}
++
++static void winios_vulkan_map_device_extensions( struct vulkan_device_extensions *extensions )
++{
++}
++
++static const struct vulkan_driver_funcs winios_vulkan_driver_funcs =
++{
++    .p_vulkan_surface_create = winios_vulkan_surface_create,
++    .p_get_physical_device_presentation_support = winios_vulkan_presentation_support,
++    .p_map_instance_extensions = winios_vulkan_map_instance_extensions,
++    .p_map_device_extensions = winios_vulkan_map_device_extensions,
++};
++
++static UINT winios_VulkanInit( UINT version, void *vulkan_handle, const struct vulkan_driver_funcs **driver_funcs )
++{
++    if (version != WINE_VULKAN_DRIVER_VERSION)
++    {
++        ERR( "version mismatch, win32u wants %u but driver has %u\n", version, WINE_VULKAN_DRIVER_VERSION );
++        return STATUS_INVALID_PARAMETER;
++    }
++    *driver_funcs = &winios_vulkan_driver_funcs;
++    dprintf( 2, "[winios] vulkan: driver ready (%p)\n", vulkan_handle );
++    return STATUS_SUCCESS;
++}
++#endif
++
+ static UINT nulldrv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
+ {
+     return STATUS_NOT_IMPLEMENTED;
+@@ -1639,6 +1717,7 @@ static void load_display_driver(void)
+             dprintf( 2, "[winios] desktop mode: window-surface compositing ENABLED\n" );
+         }
+         winios_user_driver.pUpdateDisplayDevices = winios_UpdateDisplayDevices;
++        winios_user_driver.pVulkanInit = winios_VulkanInit;
+         __wine_set_user_driver( &winios_user_driver, WINE_GDI_DRIVER_VERSION );
+ #else
+         __wine_set_user_driver( &null_user_driver, WINE_GDI_DRIVER_VERSION );

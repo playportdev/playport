@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 31 Jul 2026 17:51:00 +0800
+Subject: [PATCH] iOS-Mythic: exception-path pool-alias RIP fix + rpmalloc 64MB
+ spans
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RethrowGuestException packed the reconstructed guest rip straight into the
+context handed to KiUserExceptionDispatcher. When that rip is a module
+POOL-COPY alias (ml341: 0x1529b9290, uxtheme's pool copy), guest SEH sees an
+address outside every module, cannot resolve the fault, and an otherwise
+survivable exception kills the process. Reverse-translate through the alias
+table (IosJitReverseTranslate — the only valid discriminator) before the
+guest sees it; logs [exc-pool-rip] when it fires. Same gap as #52, which
+covered only CompileBlock.
+
+Also bumps External/rpmalloc for the SPAN_SIZE 256MB->64MB VA fix (ml332:
+record 71,838 unix calls, 4/4 PA pools).
+
+MYTHIC_REV ml341-excrip.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: b64c4c252a3b8e9b1ecdbb099bb15569b6aefa17
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 0abf615..b225bf9 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -628,6 +628,22 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   ARM64_NT_CONTEXT GuestContext = StoreStateToPackedECContext(Thread, Context.Fpcr, Context.Fpsr);
+   LogMan::Msg::DFmt("pc: {:X} rip: {:X}", Context.Pc, GuestContext.Pc);
+ 
++  // ml341: same gap as #52 but on the exception path — the reconstructed rip can be a
++  // module POOL-COPY alias (block metadata predating the CompileBlock redirect, or a
++  // branch target captured mid-lookup). Handing a pool-band rip to KiUserExceptionDispatcher
++  // makes the fault unresolvable for guest SEH (Steam's handlers see an address outside
++  // every module) and the process dies on an otherwise-survivable fault. Reverse-translate
++  // via the alias table (the only valid discriminator — never a band test).
++  {
++    const uint64_t PeRip = IosJitReverseTranslate(GuestContext.Pc);
++    if (PeRip != GuestContext.Pc) {
++      LogMan::Msg::EFmt("[exc-pool-rip] rev=ml341 reconstructed guest rip {:#x} is a POOL-COPY alias of PE {:#x} "
++                        "-- rewriting so guest SEH can resolve the faulting module",
++                        GuestContext.Pc, PeRip);
++      GuestContext.Pc = PeRip;
++    }
++  }
++
+   // X64 Windows always clears TF, DF and AF when handling an exception, restoring after.
+   // Current ARM64EC windows can only restore NZCV+SS when returning from an exception and other flags are left untouched from the handler context.
+   // TODO: Can extend wine to support this by mapping the remaining EFlags into reserved cpsr members.
+@@ -817,7 +833,7 @@ NTSTATUS ProcessInit() {
+    * compile time, so changing only another .cpp leaves the stamp stale and the ambiguity
+    * half-returns. The MYTHIC_REV tag below fixes that: bump it for every deploy, which
+    * necessarily edits this file and so refreshes the timestamp too. Self-enforcing. */
+-#define MYTHIC_REV "ml326-bandfix"
++#define MYTHIC_REV "ml341-excrip"
+   LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MYTHIC_REV " compiled " __DATE__ " " __TIME__);
+ #endif
+ 

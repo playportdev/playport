@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 05:13:14 +0200
+Subject: [PATCH] virtual: count the JIT pool's use and refusals for the host
+
+The pool's use was only in scattered [jit-pool] lines, and nothing told the
+host that a launch had run out of it. ios_jit_pool_stats() now reports the
+head's bump cursor, what the head's live and freed ranges hold, the tail
+reserved for FEX's code buffers and the part of it in use, the
+anonymous-alias table's live entries and used slots against its size, the
+image mappings, the private ntdll copies pseudo-processes made, and four
+counts of refusals a guest sees as a failure: an image, anonymous RWX block
+or child ntdll copy the head had no room for, a code buffer the tail refused,
+one of 1 MiB or less (after which FEX faults at 0xdead), and a guest JIT
+region the alias table had no slot for. wine_host_pool_stats passes it to
+the app, which logs it as `pool:` lines and shows a launch that ran out as
+its own outcome. Nothing the pool does changes.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-28-jit-pool.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 73 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 73 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 394d50d..4b8af47 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -174,6 +174,16 @@ static int ios_jit_mapping_count = 0;
+  * collision risk. */
+ static size_t jit_pool_offset = 0;
+ 
++/* Playport: what the pool ran out of, for the host (ios_jit_pool_stats). Each
++ * counts one refusal that the guest sees as a failure: an image, anonymous RWX
++ * block or child ntdll copy the head had no room for, a FEX code buffer the
++ * tail refused (tail_fatal: one of 1 MiB or less, the smallest FEX asks for
++ * before it faults at 0xdead), and a guest JIT region the anonymous-alias
++ * table had no slot for. child_copies and child_copy_bytes count the private
++ * ntdll copies pseudo-processes made. */
++static volatile unsigned long ios_pool_head_exhausted, ios_pool_tail_refused, ios_pool_tail_fatal,
++                              ios_pool_alias_full, ios_pool_child_copies, ios_pool_child_copy_bytes;
++
+ /* ---- Pool reclamation (task #25) ----------------------------------------
+  * The bump allocator never freed anything: 8 pseudo-processes consumed
+  * 368.9/384MB (2026-07-07) and the 9th BUS-loop-locked the session. Every
+@@ -2785,6 +2795,61 @@ static int ios_tail_carve_occupied( const void *base, size_t size )
+ static unsigned ios_tail_carve_n;
+ static pthread_mutex_t ios_tail_carve_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
++/* Playport: the pool's use, for the host (wine_host_pool_stats, which a launch
++ * logs as `pool:` lines). v[] gets, in this order and in bytes or counts:
++ *    0 size          the pool
++ *    1 head          the head's bump cursor: the most it has ever reached
++ *    2 head_live     head ranges a live module or block holds (the ledger)
++ *    3 head_free     head ranges freed by dead processes, for reuse
++ *    4 tail          the tail reserved from the top for FEX code buffers
++ *    5 tail_live     tail carves in use (the rest is free for reuse)
++ *    6 alias_live    anonymous-alias table entries in use (guest JITs: Mono, V8)
++ *    7 alias_slots   table slots ever used (the table's own high-water mark)
++ *    8 alias_cap     the table's size
++ *    9 images        image mappings in the pool (a child's ntdll copy is one)
++ *   10 child_copies  private ntdll copies made for pseudo-processes
++ *   11 child_bytes   the pool those copies took
++ *   12 head_exhausted, 13 tail_refused, 14 tail_fatal, 15 alias_full: refusals
++ * Returns how many it wrote (at most n); 0 before the pool is set up. */
++int ios_jit_pool_stats( unsigned long long *v, int n )
++{
++    extern size_t ios_jit_pool_size_global;
++    unsigned long long f[16];
++    size_t live = 0, freed = 0, tail_live = 0;
++    int i, alias = 0, images = 0, k;
++
++    if (!v || n <= 0 || !ios_jit_pool_size_global) return 0;
++    pthread_mutex_lock( &ios_pool_lock );
++    for (i = 0; i < ios_pool_ledger_count; i++) live += ios_pool_ledger[i].size;
++    for (i = 0; i < ios_pool_free_count; i++) freed += ios_pool_freelist[i].size;
++    for (i = 0; i < ios_jit_anon_alias_count; i++) if (ios_jit_anon_aliases[i].user_va) alias++;
++    pthread_mutex_unlock( &ios_pool_lock );
++    for (i = 0; i < ios_jit_mapping_count; i++) if (ios_jit_mappings[i].pe_base) images++;
++    pthread_mutex_lock( &ios_tail_carve_lock );
++    for (i = 0; i < (int)ios_tail_carve_n; i++) if (!ios_tail_carves[i].free) tail_live += ios_tail_carves[i].size;
++    pthread_mutex_unlock( &ios_tail_carve_lock );
++
++    f[0] = ios_jit_pool_size_global;
++    f[1] = jit_pool_offset;
++    f[2] = live;
++    f[3] = freed;
++    f[4] = ios_jit_tail_reserved;
++    f[5] = tail_live;
++    f[6] = alias;
++    f[7] = ios_jit_anon_alias_count;
++    f[8] = IOS_JIT_MAX_ANON_ALIASES;
++    f[9] = images;
++    f[10] = ios_pool_child_copies;
++    f[11] = ios_pool_child_copy_bytes;
++    f[12] = ios_pool_head_exhausted;
++    f[13] = ios_pool_tail_refused;
++    f[14] = ios_pool_tail_fatal;
++    f[15] = ios_pool_alias_full;
++    k = n < 16 ? n : 16;
++    for (i = 0; i < k; i++) v[i] = f[i];
++    return k;
++}
++
+ /* iOS-Madeira ml613: WHICH TAIL CARVE DOES THIS HOST PC LIVE IN, AND IS IT FREE?
+  *
+  * ml612's crash faulted at host pc 0x15361d6d0, which is +0x496d0 into the 16MB
+@@ -3564,6 +3629,7 @@ int ios_jit_anon_alias_add(void *user_va, size_t size, void *jit_rw_alias)
+     {
+         if (ios_jit_anon_alias_count >= IOS_JIT_MAX_ANON_ALIASES) {
+             pthread_mutex_unlock( &ios_pool_lock );
++            __sync_fetch_and_add( &ios_pool_alias_full, 1 );
+             ERR("iOS JIT: anon alias table full (%d)\n", ios_jit_anon_alias_count);
+             dprintf(2, "[jit-pool] anon alias table FULL (%d slots) — writes to %p will NOT route! "
+                        "live=%d tombstones=%d hiwater=%d rev=ml630\n",
+@@ -9899,6 +9965,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                 {
+                     ERR("iOS JIT: pool exhausted for anon RWX %p+0x%lx\n",
+                         base, (unsigned long)size);
++                    __sync_fetch_and_add( &ios_pool_head_exhausted, 1 );
+                     dprintf(2, "[jit-pool] EXHAUSTED (anon RWX): want=0x%lx bump=0x%lx/0x%lx tail_resv=0x%lx freelist=%d — FAILING allocation\n",
+                             (unsigned long)alloc_size, (unsigned long)jit_pool_offset, (unsigned long)jit_pool_size,
+                             (unsigned long)ios_jit_tail_reserved, ios_pool_free_count);
+@@ -10109,6 +10176,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                  * call into the module BUS-fault-looped, locking the whole
+                  * session. -1/ENOMEM propagates up as a failed module load /
+                  * failed process start, which the shell reports and survives. */
++                __sync_fetch_and_add( &ios_pool_head_exhausted, 1 );
+                 dprintf(2, "[jit-pool] EXHAUSTED (image %p+0x%lx): want=0x%lx bump=0x%lx/0x%lx tail_resv=0x%lx freelist=%d — FAILING the load (was: silent BUS loop)\n",
+                         image_base, (unsigned long)image_size, (unsigned long)alloc_size,
+                         (unsigned long)jit_pool_offset, (unsigned long)jit_pool_size,
+@@ -10851,6 +10919,7 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+     }
+     if (offset == (size_t)-1)
+     {
++        __sync_fetch_and_add( &ios_pool_head_exhausted, 1 );
+         dprintf(2, "[child-ntdll] JIT pool exhausted (need 0x%lx, bump=0x%lx of 0x%lx, tail_resv=0x%lx, freelist=%d)\n",
+                 (unsigned long)alloc_size, (unsigned long)jit_pool_offset,
+                 (unsigned long)ios_jit_pool_size_global,
+@@ -11004,6 +11073,8 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+         if (slot == ios_jit_mapping_count) ios_jit_mapping_count++;
+     }
+ 
++    __sync_fetch_and_add( &ios_pool_child_copies, 1 );
++    __sync_fetch_and_add( &ios_pool_child_copy_bytes, alloc_size );
+     dprintf(2, "[child-ntdll] copied %p+0x%lx -> %p (pool+0x%lx) owner_peb=%p\n",
+             m->pe_base, (unsigned long)m->size, rx_dest, (unsigned long)offset, child_peb);
+     return 0;
+@@ -18933,6 +19004,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+              * fits forces the diagnosable 0xdead fault. Also roll back the
+              * tail reservation — the old path leaked it on every refusal. */
+             __sync_fetch_and_sub(&ios_jit_tail_reserved, alloc_size);
++            __sync_fetch_and_add( &ios_pool_tail_refused, 1 );
++            if (alloc_size <= 0x100000) __sync_fetch_and_add( &ios_pool_tail_fatal, 1 );
+             ERR("NtAllocateVirtualMemoryEx iOS: JIT-pool tail exhausted for FEX EC_CODE %zu bytes\n",
+                 (size_t)*size_ptr);
+             /* ml459 (#75): dump the carve table on the FIRST refusal — the

@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Thu, 27 Jan 2022 13:24:44 +0100
+Subject: [PATCH] strmbase: Return S_OK from strmbase_filter
+ IPropertyBag_Write.
+
+Required for Final Fantasy XIV intro video.
+
+CW-Bug-Id: #19624
+Valve-commit: 893c173671cb3567c9323f003f3c9a86f00cb498
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ libs/strmbase/filter.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libs/strmbase/filter.c b/libs/strmbase/filter.c
+index c8dcb33..1f7e7d8 100644
+--- a/libs/strmbase/filter.c
++++ b/libs/strmbase/filter.c
+@@ -546,7 +546,7 @@ static HRESULT WINAPI property_bag_Read(IPropertyBag *iface, const WCHAR *prop_n
+ static HRESULT WINAPI property_bag_Write(IPropertyBag *iface, const WCHAR *prop_name, VARIANT *value)
+ {
+     FIXME("iface %p, prop_name %s, value %p stub!\n", iface, debugstr_w(prop_name), value);
+-    return E_NOTIMPL;
++    return S_OK;
+ }
+ 
+ static const IPropertyBagVtbl property_bag_vtbl =

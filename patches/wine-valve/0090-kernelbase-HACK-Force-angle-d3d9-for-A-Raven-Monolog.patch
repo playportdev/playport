@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Tue, 30 Apr 2024 14:17:26 -0600
+Subject: [PATCH] kernelbase: HACK: Force angle d3d9 for A Raven Monologue.
+
+CW-Bug-Id: #23740
+Valve-commit: d913b7f8852cab8470e39e9f27a898c27a27b94a
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index fcff63f..2533645 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -511,6 +511,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     }
+     options[] =
+     {
++        {L"A Raven Monologue.exe", L" --use-angle=d3d9"},
+         {L"antenna\\antenna.exe", L" --use-angle=d3d9"},
+         {L"Bloody Walls\\game.exe", L" --disable_direct_composition=1"},
+         {L"Insanitys Blade\\nw.exe", L" --use-gl=swiftshader"},

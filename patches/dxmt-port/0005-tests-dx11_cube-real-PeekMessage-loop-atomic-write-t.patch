@@ -1,0 +1,292 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Apr 2026 00:24:59 +0800
+Subject: [PATCH] tests/dx11_cube: real PeekMessage loop + atomic-write traces
+ + bitmap-font overlay
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WndProc now logs WM_MOUSEMOVE/DOWN/UP via WriteFile(STD_ERROR_HANDLE) — single
+syscall keeps lines coherent even when sharing fd 2 with ntdll's per-syscall
+trace channel on iOS. Adds an in-frame text overlay rendering the latest mouse
+event line in top-left via the cube's existing pipeline (identity MVP + depth
+disabled + a 5x7 bitmap font). Used to validate end-to-end input on iOS:
+UIKit touches → winios.drv → wineserver → cube WndProc.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: c3e8451feb8f87c0b84c2f78f377ec109078bed1
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ tests/dx11/dx11_cube.cpp | 223 ++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 220 insertions(+), 3 deletions(-)
+
+diff --git a/tests/dx11/dx11_cube.cpp b/tests/dx11/dx11_cube.cpp
+index 1215d5a..000d75a 100644
+--- a/tests/dx11/dx11_cube.cpp
++++ b/tests/dx11/dx11_cube.cpp
+@@ -8,10 +8,103 @@
+ #include <assert.h>
+ #include <stdint.h>
+ 
++/* Atomic single-syscall trace: format then issue ONE WriteFile to stderr.
++ * fprintf+fflush gets interleaved on iOS where ntdll's syscall trace
++ * shares fd 2 with our stdout via dup2, and stdio buffering boundaries
++ * don't match write() atomicity. */
++#define ATOMIC_TRACE(...) do { \
++    char _buf[256]; \
++    int _n = snprintf(_buf, sizeof(_buf), __VA_ARGS__); \
++    if (_n > 0) { \
++        DWORD _written = 0; \
++        WriteFile(GetStdHandle(STD_ERROR_HANDLE), _buf, \
++                  (DWORD)(_n < (int)sizeof(_buf) ? _n : (int)sizeof(_buf)), \
++                  &_written, NULL); \
++    } \
++} while(0)
++
+ #include "3DMaths.h"
+ 
+ static bool global_windowDidResize = false;
+ 
++// Latest mouse text — rendered as a top-left overlay each frame.
++static char global_mouse_text[128] = "(no input yet)";
++
++/* 5x7 bitmap font for the chars used in the mouse text overlay. Each entry
++ * is 7 bytes: 5 bits per row, top-aligned. Bit 0x10 = leftmost column. */
++struct GlyphRow { unsigned char rows[7]; };
++static const struct {
++    char ch;
++    GlyphRow g;
++} kGlyphs[] = {
++    {' ', {{0x00,0x00,0x00,0x00,0x00,0x00,0x00}}},
++    {'(', {{0x04,0x08,0x10,0x10,0x10,0x08,0x04}}},
++    {')', {{0x10,0x08,0x04,0x04,0x04,0x08,0x10}}},
++    {'[', {{0x1C,0x10,0x10,0x10,0x10,0x10,0x1C}}},
++    {']', {{0x1C,0x04,0x04,0x04,0x04,0x04,0x1C}}},
++    {'=', {{0x00,0x00,0x1F,0x00,0x1F,0x00,0x00}}},
++    {',', {{0x00,0x00,0x00,0x00,0x00,0x08,0x10}}},
++    {'.', {{0x00,0x00,0x00,0x00,0x00,0x00,0x08}}},
++    {'-', {{0x00,0x00,0x00,0x1F,0x00,0x00,0x00}}},
++    {'0', {{0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}}},
++    {'1', {{0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}}},
++    {'2', {{0x0E,0x11,0x01,0x06,0x08,0x10,0x1F}}},
++    {'3', {{0x0E,0x11,0x01,0x06,0x01,0x11,0x0E}}},
++    {'4', {{0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}}},
++    {'5', {{0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}}},
++    {'6', {{0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}}},
++    {'7', {{0x1F,0x01,0x02,0x04,0x08,0x08,0x08}}},
++    {'8', {{0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}}},
++    {'9', {{0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}}},
++    {'A', {{0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}}},
++    {'B', {{0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}}},
++    {'C', {{0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}}},
++    {'D', {{0x1E,0x09,0x09,0x09,0x09,0x09,0x1E}}},
++    {'E', {{0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}}},
++    {'F', {{0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}}},
++    {'G', {{0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}}},
++    {'H', {{0x11,0x11,0x11,0x1F,0x11,0x11,0x11}}},
++    {'I', {{0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}}},
++    {'K', {{0x11,0x12,0x14,0x18,0x14,0x12,0x11}}},
++    {'L', {{0x10,0x10,0x10,0x10,0x10,0x10,0x1F}}},
++    {'M', {{0x11,0x1B,0x15,0x15,0x11,0x11,0x11}}},
++    {'N', {{0x11,0x11,0x19,0x15,0x13,0x11,0x11}}},
++    {'O', {{0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}}},
++    {'P', {{0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}}},
++    {'R', {{0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}}},
++    {'S', {{0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}}},
++    {'T', {{0x1F,0x04,0x04,0x04,0x04,0x04,0x04}}},
++    {'U', {{0x11,0x11,0x11,0x11,0x11,0x11,0x0E}}},
++    {'V', {{0x11,0x11,0x11,0x11,0x11,0x0A,0x04}}},
++    {'W', {{0x11,0x11,0x11,0x15,0x15,0x15,0x0A}}},
++    {'X', {{0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}}},
++    {'Y', {{0x11,0x11,0x0A,0x04,0x04,0x04,0x04}}},
++    {'a', {{0x00,0x00,0x0E,0x01,0x0F,0x11,0x0F}}},
++    {'b', {{0x10,0x10,0x16,0x19,0x11,0x11,0x1E}}},
++    {'c', {{0x00,0x00,0x0E,0x10,0x10,0x10,0x0E}}},
++    {'d', {{0x01,0x01,0x0D,0x13,0x11,0x11,0x0F}}},
++    {'e', {{0x00,0x00,0x0E,0x11,0x1F,0x10,0x0E}}},
++    {'h', {{0x10,0x10,0x16,0x19,0x11,0x11,0x11}}},
++    {'l', {{0x0C,0x04,0x04,0x04,0x04,0x04,0x0E}}},
++    {'m', {{0x00,0x00,0x1A,0x15,0x15,0x15,0x15}}},
++    {'n', {{0x00,0x00,0x16,0x19,0x11,0x11,0x11}}},
++    {'o', {{0x00,0x00,0x0E,0x11,0x11,0x11,0x0E}}},
++    {'p', {{0x00,0x00,0x16,0x19,0x1E,0x10,0x10}}},
++    {'r', {{0x00,0x00,0x16,0x19,0x10,0x10,0x10}}},
++    {'s', {{0x00,0x00,0x0E,0x10,0x0E,0x01,0x1E}}},
++    {'t', {{0x10,0x10,0x1E,0x10,0x10,0x10,0x0E}}},
++    {'u', {{0x00,0x00,0x11,0x11,0x11,0x13,0x0D}}},
++    {'w', {{0x00,0x00,0x11,0x11,0x15,0x15,0x0A}}},
++    {'x', {{0x00,0x00,0x11,0x0A,0x04,0x0A,0x11}}},
++    {'y', {{0x00,0x00,0x11,0x11,0x0F,0x01,0x0E}}},
++};
++
++static const GlyphRow* glyph_for(char c) {
++    for (size_t i = 0; i < sizeof(kGlyphs)/sizeof(kGlyphs[0]); i++)
++        if (kGlyphs[i].ch == c) return &kGlyphs[i].g;
++    return &kGlyphs[0].g; // unknown -> space
++}
++
+ // Input
+ enum GameAction {
+     GameActionMoveCamFwd,
+@@ -98,6 +191,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+             global_windowDidResize = true;
+             break;
+         }
++        case WM_MOUSEMOVE:
++        case WM_LBUTTONDOWN:
++        case WM_LBUTTONUP:
++        {
++            const int x = (int)(short)LOWORD(lparam);
++            const int y = (int)(short)HIWORD(lparam);
++            const char *what = (msg == WM_LBUTTONDOWN) ? "DOWN" :
++                               (msg == WM_LBUTTONUP)   ? "UP"   : "MOVE";
++            ATOMIC_TRACE("[cube] mouse %s x=%d y=%d wparam=0x%lx\n",
++                         what, x, y, (unsigned long)wparam);
++            snprintf(global_mouse_text, sizeof(global_mouse_text),
++                     "mouse %s x=%d y=%d wparam=0x%lx",
++                     what, x, y, (unsigned long)wparam);
++            break;
++        }
+         default:
+             result = DefWindowProcW(hwnd, msg, wparam, lparam);
+     }
+@@ -406,6 +514,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         d3d11Device->CreateDepthStencilState(&depthStencilDesc, &depthStencilState);
+     }
+ 
++    // Overlay state: depth-disabled DSS + dynamic vertex buffer for text quads.
++    // Reuses the cube's existing pipeline (input layout / VS / PS / cbuffer);
++    // we just rewrite the cbuffer with an identity MVP so positions pass
++    // through to clip space directly. Each on-pixel of bitmap-font text is
++    // a single screen-space quad.
++    ID3D11DepthStencilState* overlayDSS;
++    {
++        D3D11_DEPTH_STENCIL_DESC desc = {};
++        desc.DepthEnable = FALSE;
++        d3d11Device->CreateDepthStencilState(&desc, &overlayDSS);
++    }
++    // 128 chars × 5 cols × 7 rows × 6 verts/quad × 12 bytes/vert ~= 322KB max
++    const UINT kOverlayMaxVerts = 128 * 5 * 7 * 6;
++    ID3D11Buffer* overlayVB;
++    {
++        D3D11_BUFFER_DESC desc = {};
++        desc.ByteWidth      = kOverlayMaxVerts * sizeof(float) * 3;
++        desc.Usage          = D3D11_USAGE_DYNAMIC;
++        desc.BindFlags      = D3D11_BIND_VERTEX_BUFFER;
++        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
++        d3d11Device->CreateBuffer(&desc, nullptr, &overlayVB);
++    }
++
+     // Camera
+     float3 cameraPos = {0, 0, 2};
+     float3 cameraFwd = {0, 0, -1};
+@@ -444,9 +575,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+                 dt = (1.f / 60.f);
+         }
+ 
+-        // Skip PeekMessageW on iOS — no real window manager; our Wine
+-        // build blocks here. Just never deliver input messages.
+-        (void)0;
++        // Pump messages — winios.drv now bridges UIKit touches into the
++        // Wine queue, so PeekMessage delivers WM_LBUTTONDOWN etc.
++        {
++            static int peek_call_count = 0;
++            static int peek_hit_count = 0;
++            peek_call_count++;
++            MSG msg = {};
++            while(PeekMessageW(&msg, 0, 0, 0, PM_REMOVE))
++            {
++                peek_hit_count++;
++                ATOMIC_TRACE("[cube] PeekMessage got msg=0x%x hwnd=%p (call=%d hit=%d)\n",
++                             msg.message, msg.hwnd, peek_call_count, peek_hit_count);
++                if(msg.message == WM_QUIT) isRunning = false;
++                TranslateMessage(&msg);
++                DispatchMessageW(&msg);
++            }
++            if ((peek_call_count % 600) == 0) {
++                ATOMIC_TRACE("[cube] PeekMessage stats: call=%d hit=%d\n",
++                             peek_call_count, peek_hit_count);
++            }
++        }
+ 
+         // Get window dimensions (hardcoded on iOS — our Wine has no real
+         // window manager, GetClientRect returns uninitialized garbage).
+@@ -562,6 +711,74 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+ 
+         d3d11DeviceContext->DrawIndexed(numIndices, 0, 0);
+ 
++        // ---- Text overlay: draw global_mouse_text in top-left corner ----
++        {
++            // Rasterize text into the dynamic overlay vertex buffer. Each
++            // bitmap-font on-pixel becomes one quad (6 verts) in NDC.
++            const float pixel_w = 6.0f / (float)windowWidth;   // glyph col in NDC
++            const float pixel_h = 6.0f / (float)windowHeight;  // glyph row in NDC
++            const float origin_x = -1.0f + pixel_w * 1.0f;     // a little inset
++            const float origin_y =  1.0f - pixel_h * 1.0f;
++            const float char_step_x = pixel_w * 6.0f;          // 5 cols + 1 gap
++
++            D3D11_MAPPED_SUBRESOURCE m;
++            if (SUCCEEDED(d3d11DeviceContext->Map(overlayVB, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
++            {
++                float* p = (float*)m.pData;
++                UINT vert_count = 0;
++                const char *s = global_mouse_text;
++                int char_idx = 0;
++                while (*s && vert_count + 6 * 5 * 7 <= kOverlayMaxVerts)
++                {
++                    char c = *s++;
++                    const GlyphRow *g = glyph_for(c);
++                    float gx = origin_x + char_step_x * (float)char_idx;
++                    for (int row = 0; row < 7; row++)
++                    {
++                        unsigned char bits = g->rows[row];
++                        for (int col = 0; col < 5; col++)
++                        {
++                            if (!(bits & (0x10 >> col))) continue;
++                            float x0 = gx + pixel_w * (float)col;
++                            float y0 = origin_y - pixel_h * (float)row;
++                            float x1 = x0 + pixel_w * 0.95f;
++                            float y1 = y0 - pixel_h * 0.95f;
++                            // Two triangles, 6 verts (pos.xyz only). Cube
++                            // uses FrontCounterClockwise=TRUE + cull-back,
++                            // so wind these CCW in NDC (y-up).
++                            float quad[18] = {
++                                x0, y0, 0.0f,  x0, y1, 0.0f,  x1, y0, 0.0f,
++                                x1, y0, 0.0f,  x0, y1, 0.0f,  x1, y1, 0.0f,
++                            };
++                            for (int k = 0; k < 18; k++) p[k] = quad[k];
++                            p += 18;
++                            vert_count += 6;
++                        }
++                    }
++                    char_idx++;
++                }
++                d3d11DeviceContext->Unmap(overlayVB, 0);
++
++                if (vert_count > 0)
++                {
++                    // Write identity MVP so vertex positions pass straight to clip space.
++                    D3D11_MAPPED_SUBRESOURCE cm;
++                    if (SUCCEEDED(d3d11DeviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &cm)))
++                    {
++                        float4x4 identity = {};
++                        identity.m[0][0] = 1.0f; identity.m[1][1] = 1.0f;
++                        identity.m[2][2] = 1.0f; identity.m[3][3] = 1.0f;
++                        ((Constants*)cm.pData)->modelViewProj = identity;
++                        d3d11DeviceContext->Unmap(constantBuffer, 0);
++                    }
++                    d3d11DeviceContext->OMSetDepthStencilState(overlayDSS, 0);
++                    UINT ovStride = sizeof(float) * 3, ovOffset = 0;
++                    d3d11DeviceContext->IASetVertexBuffers(0, 1, &overlayVB, &ovStride, &ovOffset);
++                    d3d11DeviceContext->Draw(vert_count, 0);
++                }
++            }
++        }
++
+         d3d11SwapChain->Present(1, 0);
+     }
+ 

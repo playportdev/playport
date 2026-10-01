@@ -1,0 +1,794 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 8 Aug 2026 16:42:28 +0800
+Subject: [PATCH] Mythic: free_async_queue UAF fix + wineserver
+ fd-ownership/kill tracing
+
+server/async.c -- free_async_queue: unlink the queue entry AND list_init it.
+The saga cost two runs: a bare list_remove crashed ml580 in req_cancel_async,
+but REMOVING it was worse -- ml581 took the first c0000020 in 227 logs, because
+surviving asyncs stayed linked into the dying struct fd's queue head, a sibling
+unlink then clobbered the recycled fd's unix_fd, and the short PE-header pread
+surfaced as "failed to load steamui.dll" (the mixed-arch fallback never fires
+on c0000020). list_remove + list_init makes the node a singleton so a later
+unlink only writes to itself. Disasm-verified in the shipped dylib.
+
+server/thread.c, server/process.c -- ml586 [srv-kill]/[srv-own] tracing for the
+0060-family kills, where one pseudo-process's teardown takes down another's
+wineserver comm fds (services.exe loses its rpcrt4 listener -> SCM RPC dies ->
+explorer wedges in OpenSCManagerW -> no Start menu; 8/8 run correlation).
+Four previously SILENT paths now log: thread_poll_event's single-thread HUP
+kill, kill_thread, kill_process (with its full thread list), and
+process_poll_event; plus new_thread/init_thread ownership (which process a
+thread files under, and the client-fd -> server-dup mapping).
+
+Also carries the earlier #79 TCP-state and render-probe work.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+(cherry picked from commit f2fa8d3b883bb59ae2bacc3d16cb6bf5d193d099)
+Madeira-commit: d0c56b04ebfaf5194ccb0ba0512c62d2918dd288
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/file.c      |  71 +++++++++++++++--
+ dlls/ntdll/unix/socket.c    | 100 ++++++++++++++++++++++++
+ dlls/win32u/dibdrv/bitblt.c |  48 ++++++++++++
+ server/async.c              |  63 ++++++++++++++-
+ server/object.c             | 152 ++++++++++++++++++++++++++++++++++++
+ server/process.c            |  22 +++++-
+ server/sock.c               |  44 +++++++++--
+ server/thread.c             |  29 ++++++-
+ 8 files changed, 509 insertions(+), 20 deletions(-)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 0412b4a09b4..4711fd3f542 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -6121,7 +6121,13 @@ static unsigned int set_pending_write( HANDLE device )
+  * with fstat() on the unix fd at read time, so a recycled handle can never be
+  * mistaken for the file we meant to watch. */
+ #define IOS_JSTRACK_MAX 64
+-static struct { HANDLE handle; dev_t dev; ino_t ino; char name[40]; } ios_js_track[IOS_JSTRACK_MAX];
++/* ml530 (#78): + the fields needed to arm srcwatch on the ASSEMBLED buffer.
++ * Arming on a single read is useless — Steam reads this file in ~31 chunks, so
++ * the first chunk's buffer is either refilled (noise) or only covers 1/31 of the
++ * source. What we want is the whole thing, once the last byte has landed. */
++static struct { HANDLE handle; dev_t dev; ino_t ino; char name[40];
++                off_t size, got; uintptr_t lo, hi, last_end;
++                int gaps, armed; } ios_js_track[IOS_JSTRACK_MAX];
+ static unsigned int ios_js_track_n;
+ static int ios_js_track_any;
+ static pthread_mutex_t ios_js_track_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -6147,6 +6153,10 @@ static void ios_js_track_add( HANDLE handle, const char *unix_name )
+         ios_js_track[i].handle = handle;
+         ios_js_track[i].dev = st.st_dev;
+         ios_js_track[i].ino = st.st_ino;
++        ios_js_track[i].size = st.st_size;
++        ios_js_track[i].got = 0;
++        ios_js_track[i].gaps = 0;
++        ios_js_track[i].armed = 0;
+         snprintf( ios_js_track[i].name, sizeof(ios_js_track[i].name), "%s", base );
+         ios_js_track_n = i + 1;
+         ios_js_track_any = 1;
+@@ -6157,16 +6167,16 @@ static void ios_js_track_add( HANDLE handle, const char *unix_name )
+ }
+ 
+ /* Returns the tracked name only when the fd STILL refers to the same file. */
+-static const char *ios_js_track_find( HANDLE handle, int unix_fd )
++static int ios_js_track_find( HANDLE handle, int unix_fd )
+ {
+     struct stat st;
+     unsigned int i;
+ 
+-    if (!ios_js_track_any) return NULL;   /* fast path: costs one load per read */
++    if (!ios_js_track_any) return -1;   /* fast path: costs one load per read */
+     for (i = 0; i < ios_js_track_n; i++)
+     {
+         if (ios_js_track[i].handle != handle) continue;
+-        if (unix_fd < 0 || fstat( unix_fd, &st ) == -1) return NULL;
++        if (unix_fd < 0 || fstat( unix_fd, &st ) == -1) return -1;
+         if (st.st_dev != ios_js_track[i].dev || st.st_ino != ios_js_track[i].ino)
+         {
+             static int recycled_logged;
+@@ -6176,11 +6186,11 @@ static const char *ios_js_track_find( HANDLE handle, int unix_fd )
+                 dprintf( 2, "[js-recycle] handle=%p was %s, now ino=%llu — not logging (rev=ml488)\n",
+                          handle, ios_js_track[i].name, (unsigned long long)st.st_ino );
+             }
+-            return NULL;
++            return -1;
+         }
+-        return ios_js_track[i].name;
++        return (int)i;
+     }
+-    return NULL;
++    return -1;
+ }
+ 
+ static void ios_js_read_note( HANDLE handle, int unix_fd, const void *buffer, ULONG want, UINT got,
+@@ -6191,9 +6201,54 @@ static void ios_js_read_note( HANDLE handle, int unix_fd, const void *buffer, UL
+     const char *name;
+     unsigned int sum = 2166136261u;
+     UINT i;
++    int idx;
+ 
+     if (!got) return;
+-    if (!(name = ios_js_track_find( handle, unix_fd ))) return;
++    if ((idx = ios_js_track_find( handle, unix_fd )) < 0) return;
++    name = ios_js_track[idx].name;
++
++    /* ml530 (#78): accumulate this file's reads and, once the last byte has
++     * landed, write-protect the assembled buffer so the next writer to it
++     * identifies itself. Our reads deliver this file byte-perfect (ml489:
++     * 73/73 MATCH, the failing file 100% verified) yet V8 reports
++     * `SyntaxError: Invalid or unexpected token` on it — so the damage happens
++     * after the read, and any write here is the corrupter.
++     *
++     * Only arm on a genuinely CONTIGUOUS assembly (gaps==0 and span==size):
++     * if Steam read into a reused chunk buffer, lo..hi would be a small window
++     * that later reads legitimately rewrite, and every fault would be noise. */
++    {
++        uintptr_t b0 = (uintptr_t)buffer, b1 = b0 + got;
++        if (!ios_js_track[idx].got) { ios_js_track[idx].lo = b0; ios_js_track[idx].hi = b1; }
++        else
++        {
++            if (b0 < ios_js_track[idx].lo) ios_js_track[idx].lo = b0;
++            if (b1 > ios_js_track[idx].hi) ios_js_track[idx].hi = b1;
++            if (b0 != ios_js_track[idx].last_end) ios_js_track[idx].gaps++;
++        }
++        ios_js_track[idx].last_end = b1;
++        ios_js_track[idx].got += got;
++
++        if (!ios_js_track[idx].armed && ios_js_track[idx].size &&
++            ios_js_track[idx].got >= ios_js_track[idx].size)
++        {
++            unsigned long long span = (unsigned long long)(ios_js_track[idx].hi - ios_js_track[idx].lo);
++            ios_js_track[idx].armed = 1;
++            if (!ios_js_track[idx].gaps && span == (unsigned long long)ios_js_track[idx].size)
++            {
++                extern void ios_srcwatch_arm_for( const void *bits, unsigned long len, const char *tag );
++                dprintf( 2, "[js-watch] %s fully read (%llu B, contiguous at %p) — arming srcwatch rev=ml530\n",
++                         name, span, (void *)ios_js_track[idx].lo );
++                ios_srcwatch_arm_for( (const void *)ios_js_track[idx].lo, (unsigned long)span, "js" );
++            }
++            else
++                dprintf( 2, "[js-watch] %s fully read but NOT contiguous (gaps=%d span=%llu size=%llu) "
++                            "— chunk buffer reused, not arming rev=ml530\n",
++                         name, ios_js_track[idx].gaps, span,
++                         (unsigned long long)ios_js_track[idx].size );
++        }
++    }
++
+     if (reads_logged >= 512) return;
+     reads_logged++;
+ 
+diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
+index 173fc4b5a49..43391a58748 100644
+--- a/dlls/ntdll/unix/socket.c
++++ b/dlls/ntdll/unix/socket.c
+@@ -797,6 +797,101 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
+  * A transfer that STOPS at a byte count without an error implicates the
+  * file-read side of TransmitFile instead; an errno names the socket layer.
+  * Racy counters are acceptable — fixed array, no pointers, probe-only. */
++/* iOS-Mythic ml578: TRACE THE FIRST BYTES ON EXTERNAL TCP SOCKETS.
++ *
++ * State of the hunt: the Shenzhen network is EXONERATED — from the same phone,
++ * Safari got 91 CM endpoints from the directory API, loaded /cmping/ on 443, and
++ * got a real 403 from cmp1-tyo3:27019 (so TCP+TLS+HTTP all complete on the odd CM
++ * ports too). Our own probe shows CM TCP connects genuinely complete
++ * (getpeername succeeds). Yet every PingWebSocketCM fails.
++ *
++ * The poll-cache theory is dead (0 stale in 18.4M classifications), but that only
++ * exonerated fd CLASSIFICATION — not readiness-mask translation, wake delivery,
++ * or async completion. And the single [schannel-ios] gnutls handshake is NOT a
++ * measure of Steam's TLS: steamclient64.dll carries Valve's own statically-linked
++ * OpenSSL, so its CM handshakes never touch Wine's SChannel at all. Counting
++ * record types on the wire is the only reliable way to see them. (Both points
++ * from Sol; the gnutls misreading was mine.)
++ *
++ * Five bytes is all we take — enough to classify a TLS record, not enough to log
++ * anything sensitive:
++ *     16 03 xx = handshake    15 03 xx = alert    17 03 xx = application data
++ *
++ * Per-socket budget, not one global counter: a chatty local socket must not be
++ * able to starve the CM sockets, which is the trap that has invalidated three
++ * probes in this investigation already. Loopback is skipped so the steamloopback
++ * traffic cannot drown the census. */
++static void ios_sock_wire( int fd, int is_send, const void *buf, long ret_bytes, int err )
++{
++    static struct { int fd; unsigned short port; int n; int wouldblock; } tab[64];
++    static int used, announced;
++    int i, slot = -1;
++    struct sockaddr_storage pa;
++    socklen_t pl = sizeof(pa);
++    unsigned short port = 0;
++    const unsigned char *b = (const unsigned char *)buf;
++
++    /* ml579: OFF for the timing run. Each call costs a getpeername(), and this
++     * fires on every send/recv — Steam's CM ping budget is 1000 ms total.
++     *
++     * Also note before re-enabling: the 0x17 classifier below is WRONG FOR TLS
++     * 1.3. Everything after ServerHello — EncryptedExtensions, Certificate,
++     * CertificateVerify, Finished, NewSessionTicket — uses record type 0x17, so
++     * "TLS-APPDATA" cannot distinguish handshake from payload. That is what led
++     * me to wrongly conclude Steam had received and rejected application data;
++     * the 606-byte read was in fact 2 x (5 + 298) = two NewSessionTickets, and
++     * Steam never sent its request at all. A useful version must track handshake
++     * state, not record type. (Caught by Sol.) */
++    { static int off = -1;
++      if (off < 0) { const char *e = getenv( "MYTHIC_SOCK_WIRE" ); off = !(e && *e && *e != '0'); }
++      if (off) return; }
++    if (getpeername( fd, (struct sockaddr *)&pa, &pl ) != 0) return;   /* not connected */
++    if (pa.ss_family == AF_INET)
++    {
++        const struct sockaddr_in *s4 = (const struct sockaddr_in *)&pa;
++        if ((ntohl( s4->sin_addr.s_addr ) >> 24) == 127) return;        /* loopback */
++        port = ntohs( s4->sin_port );
++    }
++    else if (pa.ss_family == AF_INET6) port = ntohs( ((const struct sockaddr_in6 *)&pa)->sin6_port );
++    else return;                                                        /* not INET */
++
++    for (i = 0; i < used; i++) if (tab[i].fd == fd && tab[i].port == port) { slot = i; break; }
++    if (slot < 0)
++    {
++        if (used >= 64) return;
++        slot = used++;
++        tab[slot].fd = fd; tab[slot].port = port; tab[slot].n = 0; tab[slot].wouldblock = 0;
++    }
++    if (!announced++)
++        dprintf( 2, "[sock-wire] rev=ml578 armed (external TCP only, 5-byte peek, 12/socket)\n" );
++
++    if (err == EWOULDBLOCK || err == EAGAIN)
++    {
++        if (++tab[slot].wouldblock <= 3 || (tab[slot].wouldblock % 500) == 0)
++            dprintf( 2, "[sock-wire] fd=%d dport=%u %s EWOULDBLOCK #%d rev=ml578\n",
++                     fd, port, is_send ? "send" : "recv", tab[slot].wouldblock );
++        return;
++    }
++    if (tab[slot].n >= 12) return;
++    tab[slot].n++;
++    {
++        const char *kind = "-";
++        if (ret_bytes >= 3 && b)
++        {
++            if (b[0] == 0x16) kind = "TLS-HANDSHAKE";
++            else if (b[0] == 0x15) kind = "TLS-ALERT";
++            else if (b[0] == 0x17) kind = "TLS-APPDATA";
++            else if (b[0] == 0x14) kind = "TLS-CCS";
++            else if (b[0] == 'H' || b[0] == 'G' || b[0] == 'P') kind = "HTTP-ish";
++        }
++        dprintf( 2, "[sock-wire] fd=%d dport=%u %s ret=%ld errno=%d first5=%02x %02x %02x %02x %02x %s rev=ml578\n",
++                 fd, port, is_send ? "SEND" : "RECV", ret_bytes, err,
++                 (ret_bytes > 0 && b) ? b[0] : 0, (ret_bytes > 1 && b) ? b[1] : 0,
++                 (ret_bytes > 2 && b) ? b[2] : 0, (ret_bytes > 3 && b) ? b[3] : 0,
++                 (ret_bytes > 4 && b) ? b[4] : 0, kind );
++    }
++}
++
+ static void ios_sock_big_note( int fd, int is_send, long ret_bytes, int err )
+ {
+     static struct { int fd; unsigned long long tot[2]; unsigned long long next[2]; } tab[64];
+@@ -947,6 +1042,7 @@ done:
+ 
+ #else
+ #define ios_sock_big_note( fd, is_send, ret_bytes, err ) do { } while (0)
++#define ios_sock_wire( fd, is_send, buf, ret_bytes, err ) do { } while (0)
+ #endif
+ 
+ static NTSTATUS try_recv( int fd, struct async_recv_ioctl *async, ULONG_PTR *size )
+@@ -979,9 +1075,11 @@ static NTSTATUS try_recv( int fd, struct async_recv_ioctl *async, ULONG_PTR *siz
+ 
+         if (errno != EWOULDBLOCK) WARN( "recvmsg: %s\n", strerror( errno ) );
+         ios_sock_big_note( fd, 0, 0, errno );
++        ios_sock_wire( fd, 0, NULL, 0, errno );
+         return sock_errno_to_status( errno );
+     }
+     ios_sock_big_note( fd, 0, ret, 0 );
++    ios_sock_wire( fd, 0, (async->count && async->iov) ? async->iov[0].iov_base : NULL, ret, 0 );
+ 
+     status = (hdr.msg_flags & MSG_TRUNC) ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+     if (async->icmp_over_dgram)
+@@ -1279,12 +1377,14 @@ static NTSTATUS try_send( int fd, struct async_send_ioctl *async )
+             }
+ 
+             ios_sock_big_note( fd, 1, 0, errno );
++            ios_sock_wire( fd, 1, NULL, 0, errno );
+             return sock_errno_to_status( errno );
+         }
+     }
+ 
+     async->sent_len += ret;
+     ios_sock_big_note( fd, 1, ret, 0 );
++    ios_sock_wire( fd, 1, (async->count && async->iov) ? async->iov[0].iov_base : NULL, ret, 0 );
+ 
+     while (async->iov_cursor < async->count && ret >= async->iov[async->iov_cursor].iov_len)
+         ret -= async->iov[async->iov_cursor++].iov_len;
+diff --git a/dlls/win32u/dibdrv/bitblt.c b/dlls/win32u/dibdrv/bitblt.c
+index 3e4f1430da9..5b71585c391 100644
+--- a/dlls/win32u/dibdrv/bitblt.c
++++ b/dlls/win32u/dibdrv/bitblt.c
+@@ -1015,12 +1015,60 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
+     if (dst && bits && bits->ptr && dst->visrect.right - dst->visrect.left >= 640
+         && dst->visrect.bottom - dst->visrect.top >= 400)
+     {
++        /* ml536: DUMP CHROMIUM'S SOURCE BITMAP ITSELF.
++         *
++         * This settles a question that has been circular since the start. The
++         * compositor was "exonerated" on the grounds that surfdump matches what
++         * is displayed — but winios_surface_present and winios_dump_surface_png
++         * take the SAME stride from the SAME caller, so they agree whether or not
++         * that stride is right. Nothing has ever compared Chromium's INPUT to our
++         * OUTPUT.
++         *
++         * ml535 makes the comparison worth making: every writer into this buffer
++         * used a correct, self-consistent geometry (stride 0xaf0=2800 across all
++         * three, destinations matching their own row/col arithmetic). If Chromium
++         * fills the bitmap correctly and the screen is still wrong, the defect is
++         * downstream — in this blit or in our present path — and that is OURS.
++         *
++         *   src PNG corrupted, surface PNG corrupted  => Chromium computed it wrong
++         *   src PNG CLEAN,     surface PNG corrupted  => the blit/present is wrong
++         *
++         * One variable, one comparison, no runs wasted on either answer. */
++        {
++            extern void winios_dump_srcbits( const void *bits, int w, int h, int stride )
++                __attribute__((weak));
++            if (winios_dump_srcbits)
++                winios_dump_srcbits( bits->ptr,
++                                     dst->visrect.right - dst->visrect.left,
++                                     dst->visrect.bottom - dst->visrect.top,
++                                     (dst->visrect.right - dst->visrect.left) * 4 );
++        }
++
++        /* ml548: hand srcwatch the image geometry so it can (a) restrict the
++         * watch to a row band via MYTHIC_SRCWATCH_ROWS and (b) report faults as
++         * (x,y,tile_col) instead of raw byte offsets. Falls back to the whole
++         * buffer when the env var is unset. */
++        extern void ios_srcwatch_arm_geom( const void *bits, unsigned long len,
++                                           unsigned w, unsigned h, unsigned stride )
++            __attribute__((weak));
++        if (ios_srcwatch_arm_geom)
++        {
++            unsigned gw = dst->visrect.right - dst->visrect.left;
++            unsigned gh = dst->visrect.bottom - dst->visrect.top;
++            ios_srcwatch_arm_geom( bits->ptr,
++                                   (unsigned long)info->bmiHeader.biSizeImage ?
++                                       (unsigned long)info->bmiHeader.biSizeImage :
++                                       (unsigned long)gw * gh * 4,
++                                   gw, gh, gw * 4 );
++        }
++        else {
+         extern void ios_srcwatch_arm( const void *bits, unsigned long len );
+         ios_srcwatch_arm( bits->ptr,
+                           (unsigned long)info->bmiHeader.biSizeImage ?
+                               (unsigned long)info->bmiHeader.biSizeImage :
+                               (unsigned long)((dst->visrect.right - dst->visrect.left) * 4 *
+                                               (dst->visrect.bottom - dst->visrect.top)) );
++        }
+     }
+ 
+     if (dst && src && dst->visrect.right - dst->visrect.left >= 24)
+diff --git a/server/async.c b/server/async.c
+index ae51b2f72b0..5ae20d70018 100644
+--- a/server/async.c
++++ b/server/async.c
+@@ -275,11 +275,70 @@ void free_async_queue( struct async_queue *queue )
+ 
+     LIST_FOR_EACH_ENTRY_SAFE( async, next, &queue->queue, struct async, queue_entry )
+     {
++        /* iOS-Mythic ml575: USE-AFTER-FREE FIX (upstream Wine bug).
++         *
++         * async_terminate() can free this async before it returns. It documents
++         * the hazard itself — it grabs a temporary reference because
++         * thread_queue_apc() may reach async_set_result(), which dequeues the
++         * async and drops the QUEUE-OWNED reference. When that happens,
++         * async_terminate's own release is the last one and the object dies
++         * inside the call. The original code then wrote `async->queue = NULL`
++         * and called release_object() on freed memory — decrementing the first
++         * word of a block already on libmalloc's freelist by exactly 1, which is
++         * the corruption ml573 measured (expected0 ...2942 vs actual0 ...2941)
++         * and ml574's [dead-release] caught in the act:
++         *     free_async_queue+0x3c -> async_terminate+0x114 -> release_object
++         *     free_async_queue+0x48 -> release_object   (same object, freed)
++         *
++         * A bare keepalive is NOT enough: it would LEAK a reference whenever APC
++         * delivery succeeds and the queue reference is still outstanding. The
++         * queue reference must be released explicitly, and only if it still
++         * exists. Diagnosis and this accounting by Sol.
++         *
++         * Historical fingerprint: Wine 1356afed5a2 added a keepalive here for
++         * exactly this reason; e4a2bca47b0 removed it in 2021 while moving the
++         * dequeue into async_set_result() — the reentrant path that now frees
++         * the object. Our async.c is otherwise unmodified upstream. */
++        grab_object( async );                   /* local keepalive across terminate */
++
+         if (!async->completion) async->completion = fd_get_completion( async->fd, &async->comp_key );
+         async->fd = NULL;
+         async_terminate( async, STATUS_HANDLES_CLOSED );
+-        async->queue = NULL;
+-        release_object( &async->obj );
++
++        if (async->queue == queue)              /* still ours => queue ref outstanding */
++        {
++            /* ml581: unlink, then make the node a SINGLETON.
++             *
++             * Both of my previous attempts here were wrong, in opposite ways.
++             *
++             * Unlinking without re-initialising (ml575-ml580) leaves a node
++             * whose neighbours were already spliced out reachable for a second
++             * list_remove -- ml580 crashed in req_cancel_async walking the
++             * wreckage, first time in ten runs, once Start Menu directories
++             * gave explorer real ReadDirectoryChangesW watches.
++             *
++             * NOT unlinking at all (ml581) is worse. async_destroy() only
++             * unlinks when async->queue is set, and we clear it here, so any
++             * async that outlives this loop (someone else still holds a ref)
++             * stays linked into a list whose head lives inside the struct fd
++             * that fd_destroy() is about to free (fd.c:1598-1600). The next
++             * list_remove by a sibling writes two pointers into that freed --
++             * and by then recycled -- fd. ml581 is the first run in 227 logs
++             * to report STATUS_INVALID_FILE_FOR_SECTION: the server's pread of
++             * a PE header came up short because the struct fd's unix_fd had
++             * been overwritten. Steam died with "failed to load steamui.dll".
++             *
++             * list_init() after list_remove() satisfies both: the node leaves
++             * the queue exactly once, and every later unlink -- from
++             * async_destroy or anywhere else -- writes only to the node
++             * itself. */
++            list_remove( &async->queue_entry );
++            list_init( &async->queue_entry );
++            async->queue = NULL;
++            release_object( async );            /* queue-owned reference */
++        }
++
++        release_object( async );                /* local keepalive */
+     }
+ }
+ 
+diff --git a/server/object.c b/server/object.c
+index e977b894806..db4799d5658 100644
+--- a/server/object.c
++++ b/server/object.c
+@@ -270,6 +270,141 @@ WCHAR *default_get_full_name( struct object *obj, data_size_t max, data_size_t *
+     return (WCHAR *)ret;
+ }
+ 
++/* iOS-Mythic ml574: DEAD-RELEASE DETECTOR (diagnostic, opt-in).
++ *
++ * ml573 proved something decrements the first 32-bit word of an already-freed
++ * 320-byte block by exactly 1 (expected0 0x...2942 vs actual0 0x...2941, byte 0
++ * only). struct object's first field is `refcount`, and release_object() compiles
++ * to ldr/subs/str on it — so an over-release here is the leading hypothesis. It
++ * is NOT proven: the malloc trap fires later, in an unrelated allocation, with no
++ * PC from the decrement itself.
++ *
++ * This catches the writer in the act. Two rules from Sol, both load-bearing:
++ *   - NEVER dereference the suspect before proving liveness. For a dead pointer
++ *     obj->ops / refcount are freed memory and may fault or lie. We compare
++ *     ADDRESSES only, walking list nodes that live inside known-live objects.
++ *   - Record free provenance, or a hit proves the over-release without naming the
++ *     ownership bug. ml573's ops=0x230 was allocator metadata; the object's real
++ *     identity was already gone.
++ *
++ * Everything here is allocation-free (fixed buffers, raw write) because the host
++ * allocator is exactly what is suspect. Enable with MYTHIC_DEAD_RELEASE=1. */
++#define IOS_FREE_RING 1024
++static struct ios_free_rec {
++    const void *obj;
++    const void *ops;
++    unsigned long size;
++    const void *freed_from;
++    const void *fp[5];
++    unsigned long seq;
++} ios_free_ring[IOS_FREE_RING];
++static unsigned long ios_free_seq;
++
++/* AArch64 frame: [fp]=caller fp, [fp+8]=saved LR. Hand-rolled because
++ * backtrace() is allocator-backed. */
++static void ios_grab_fp( const void **out, int n )
++{
++    void **fp = (void **)__builtin_frame_address(0);
++    int i = 0;
++    while (i < n && fp && !((unsigned long)fp & 7))
++    {
++        void **next;
++        out[i++] = fp[1];
++        next = (void **)fp[0];
++        if (next <= fp) break;
++        fp = next;
++    }
++    while (i < n) out[i++] = 0;
++}
++
++static int ios_dead_release_on(void)
++{
++    static int cached = -1;                 /* getenv once, not per release */
++    if (cached < 0)
++    {
++        const char *e = getenv( "MYTHIC_DEAD_RELEASE" );
++        cached = (e && *e && *e != '0') ? 1 : 0;
++        if (cached)
++        {
++            char b[96];
++            int n = snprintf( b, sizeof(b),
++                              "[dead-release] armed (ring=%d) rev=ml574\n", IOS_FREE_RING );
++            write( 2, b, n );
++        }
++    }
++    return cached;
++}
++
++static void ios_note_free( const struct object *obj )
++{
++    struct ios_free_rec *r = &ios_free_ring[ios_free_seq % IOS_FREE_RING];
++    r->obj = obj;
++    r->ops = obj->ops;
++    r->size = obj->ops ? (unsigned long)obj->ops->size : 0;
++    r->freed_from = __builtin_return_address(0);
++    ios_grab_fp( r->fp, 5 );
++    r->seq = ++ios_free_seq;
++}
++
++/* Address-only liveness test. Bounded so corrupt links cannot hang the server.
++ * Returns 1 live, 0 not found, -1 could not decide (traversal blew its bound). */
++static int ios_object_is_live( const struct object *obj )
++{
++    const struct list *it = object_list.next;
++    unsigned long n = 0;
++    while (it && it != &object_list)
++    {
++        if (LIST_ENTRY( it, struct object, obj_list ) == obj) return 1;
++        if (++n > 400000) return -1;        /* undecidable, fail OPEN */
++        it = it->next;
++    }
++    return 0;
++}
++
++static void ios_report_dead_release( const struct object *obj, const void *from )
++{
++    char b[1024];
++    const void *fp[8];
++    int n, i, k, found = 0;
++
++    ios_grab_fp( fp, 8 );
++    n = snprintf( b, sizeof(b),
++                  "\n[dead-release] *** RELEASE OF A NON-LIVE OBJECT *** obj=%p\n"
++                  "[dead-release] released_from=%p  release fpchain:", obj, from );
++    for (i = 0; i < 8 && n < (int)sizeof(b) - 24; i++)
++        n += snprintf( b + n, sizeof(b) - n, " %p", fp[i] );
++    n += snprintf( b + n, sizeof(b) - n, "\n" );
++    write( 2, b, n );
++
++    /* free provenance: who freed it, and what it was */
++    for (k = 0, found = 0; k < IOS_FREE_RING; k++)
++    {
++        const struct ios_free_rec *r = &ios_free_ring[k];
++        if (r->obj != obj || !r->seq) continue;
++        if (!found++ ) { /* newest record is the relevant one; older are address reuse */ }
++        n = snprintf( b, sizeof(b),
++                      "[dead-release]   PREVIOUSLY FREED seq=%lu ops=%p size=%lu freed_from=%p"
++                      "  free fpchain:", r->seq, r->ops, r->size, r->freed_from );
++        for (i = 0; i < 5 && n < (int)sizeof(b) - 24; i++)
++            n += snprintf( b + n, sizeof(b) - n, " %p", r->fp[i] );
++        n += snprintf( b + n, sizeof(b) - n, "\n" );
++        write( 2, b, n );
++    }
++    /* ml575: only claim "no record" when there genuinely was none — it used to
++     * print unconditionally, contradicting the records listed right above it.
++     * Multiple records for one address are ADDRESS REUSE; the highest seq is the
++     * relevant free. */
++    n = snprintf( b, sizeof(b),
++                  "[dead-release] %s\n"
++                  "[dead-release] terminating NOW so this stack is the last thing in the log; "
++                  "not using a breakpoint because the task exception path mishandles native "
++                  "BRK and manufactures a downstream UIKit crash. rev=ml575\n",
++                  found ? "(records above are address reuse; highest seq = the relevant free)"
++                        : "(NO free record => never freed by free_object, or aged out of the ring)" );
++    write( 2, b, n );
++    _exit( 0xDE );
++}
++
+ /* allocate and initialize an object */
+ void *alloc_object( const struct object_ops *ops )
+ {
+@@ -298,6 +433,8 @@ static void free_object( struct object *obj )
+ {
+     free( obj->sd );
+     obj->ops->type->obj_count--;
++    /* ml574: capture identity BEFORE list_remove/memset erase it. */
++    if (ios_dead_release_on()) ios_note_free( obj );
+ #ifdef DEBUG_OBJECTS
+     list_remove( &obj->obj_list );
+     memset( obj, 0xaa, obj->ops->size );
+@@ -563,6 +700,21 @@ struct object *grab_object( void *ptr )
+ void release_object( void *ptr )
+ {
+     struct object *obj = (struct object *)ptr;
++    /* ml574: is this pointer still a LIVE object, checked BEFORE we touch it?
++     *
++     * Address comparison only — no deref of `obj`. On a dead pointer the fields
++     * below (refcount, ops, handle_count) are freed memory: reading them can
++     * fault or return allocator metadata that lies. The one thing we can trust
++     * is whether this address is still linked into object_list.
++     *
++     * Fail OPEN by design: only a definite "not found" (0) traps. If the walk
++     * cannot decide (-1, blown bound => corrupt links) we let the release run.
++     * The previous attempt at a guard here failed CLOSED and bricked startup. */
++    if (ios_dead_release_on())
++    {
++        int live = ios_object_is_live( obj );
++        if (live == 0) ios_report_dead_release( obj, __builtin_return_address(0) );
++    }
+     assert( obj->refcount );
+     if (!--obj->refcount)
+     {
+diff --git a/server/process.c b/server/process.c
+index d668ffb13f1..5e8a1c9300e 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -828,7 +828,14 @@ static void process_poll_event( struct fd *fd, int event )
+     struct process *process = get_fd_user( fd );
+     assert( process->obj.ops == &process_ops );
+ 
+-    if (event & (POLLERR | POLLHUP)) kill_process( process, !process->is_terminating );
++    if (event & (POLLERR | POLLHUP))
++    {
++#ifdef WINE_IOS
++        fprintf( stderr, "[srv-kill] process_poll_event pid=%04x event=0x%x msg_unixfd=%d rev=ml586\n",
++                 process->id, event, get_unix_fd( fd ) );
++#endif
++        kill_process( process, !process->is_terminating );
++    }
+     else if (event & POLLIN) receive_fd( process );
+ }
+ 
+@@ -1029,6 +1036,19 @@ void resume_process( struct process *process )
+ /* kill a process on the spot */
+ void kill_process( struct process *process, int violent_death )
+ {
++#ifdef WINE_IOS
++    /* ml586: name every thread this kill will take down */
++    {
++        struct thread *fdt_t;
++        char fdt_buf[256];
++        int fdt_off = 0;
++        LIST_FOR_EACH_ENTRY( fdt_t, &process->thread_list, struct thread, proc_entry )
++            if (fdt_off < (int)sizeof(fdt_buf) - 8)
++                fdt_off += snprintf( fdt_buf + fdt_off, sizeof(fdt_buf) - fdt_off, " %04x", fdt_t->id );
++        fprintf( stderr, "[srv-kill] kill_process pid=%04x violent=%d threads:%s rev=ml586\n",
++                 process->id, violent_death, fdt_off ? fdt_buf : " none" );
++    }
++#endif
+     if (!violent_death && process->msg_fd)  /* normal termination on pipe close */
+     {
+         release_object( process->msg_fd );
+diff --git a/server/sock.c b/server/sock.c
+index 30df1c2acd7..af57b0380ab 100644
+--- a/server/sock.c
++++ b/server/sock.c
+@@ -1399,20 +1399,48 @@ static void sock_dispatch_events( struct sock *sock, enum connection_state prevs
+          * (TLS/WebSocket) rejected it, or the handshake never landed at all.
+          * One line per connecting socket's first event decides that. */
+         {
+-            static int done_logged;
+-            if (done_logged < 96)
++            /* iOS-Mythic ml576: this probe had TWO defects that made ml575's data
++             * unusable, both fixed here.
++             *
++             * (1) ONE shared 96-event cap. Port-80 traffic consumed the entire
++             *     budget, so not a single CM socket (443/2701x) was ever recorded
++             *     and "only port 80 completes" was an artefact, not a finding.
++             *     Ports now get separate budgets.
++             * (2) It could not tell a REAL kernel completion from a FABRICATED
++             *     one. fd_ios.c's synthesis branch sets POLLOUT unconditionally
++             *     for anything it classifies non-INET, and a stale (user,fd)
++             *     cache entry misroutes live TCP sockets there. So an
++             *     "OUT err=0" line may never have been a completion at all.
++             *     getpeername() settles it: a socket the kernel actually
++             *     connected has a peer; one still in progress does not.
++             *
++             * Also skip zero-event calls entirely — they carry no information
++             * and were diluting the census. */
++            static int done_cm, done_other;
++            int is_cm;
++            unsigned short dport = 0;
++            if (sock->peer_addr.addr.sa_family == WS_AF_INET) dport = ntohs( sock->peer_addr.in.sin_port );
++            else if (sock->peer_addr.addr.sa_family == WS_AF_INET6) dport = ntohs( sock->peer_addr.in6.sin6_port );
++            is_cm = (dport == 443 || (dport >= 27015 && dport <= 27040));
++
++            if ((event & (POLLOUT | POLLERR | POLLHUP)) &&
++                (is_cm ? (done_cm < 64) : (done_other < 16)))
+             {
+-                unsigned short dport = 0;
+-                if (sock->peer_addr.addr.sa_family == WS_AF_INET) dport = ntohs( sock->peer_addr.in.sin_port );
+-                else if (sock->peer_addr.addr.sa_family == WS_AF_INET6) dport = ntohs( sock->peer_addr.in6.sin6_port );
+-                done_logged++;
+-                fprintf( stderr, "[srv-conn-done] dport=%u event=%s%s%s%s err=%d rev=ml493\n",
++                struct sockaddr_storage pa;
++                socklen_t pl = sizeof(pa);
++                int ufd = get_unix_fd( sock->fd );
++                int has_peer = (ufd != -1 && getpeername( ufd, (struct sockaddr *)&pa, &pl ) == 0);
++                if (is_cm) done_cm++; else done_other++;
++                fprintf( stderr, "[srv-conn-done] dport=%u event=%s%s%s%s err=%d fd=%d "
++                                 "peer=%s path=%s rev=ml576\n",
+                          dport,
+                          (event & POLLOUT) ? "OUT" : "",
+                          (event & POLLERR) ? "|ERR" : "",
+                          (event & POLLHUP) ? "|HUP" : "",
+                          (event & POLLIN) ? "|IN" : "",
+-                         sock->errors[AFD_POLL_BIT_CONNECT_ERR] );
++                         sock->errors[AFD_POLL_BIT_CONNECT_ERR], ufd,
++                         has_peer ? "YES" : "NO",
++                         has_peer ? "REAL-kernel-completion" : "SYNTHESIZED-or-still-connecting" );
+             }
+         }
+         break;
+diff --git a/server/thread.c b/server/thread.c
+index 34c1f0adfc6..2d685198e74 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -542,7 +542,16 @@ static void thread_poll_event( struct fd *fd, int event )
+     assert( thread->obj.ops == &thread_ops );
+ 
+     grab_object( thread );
+-    if (event & (POLLERR | POLLHUP)) kill_thread( thread, 0 );
++    if (event & (POLLERR | POLLHUP))
++    {
++#ifdef WINE_IOS
++        /* ml586: single-thread kill on request-channel HUP — the exact shape
++         * of the 0060-family deaths; log which unix fd delivered the event */
++        fprintf( stderr, "[srv-kill] thread_poll_event tid=%04x event=0x%x request_unixfd=%d rev=ml586\n",
++                 thread->id, event, thread->request_fd ? get_unix_fd( thread->request_fd ) : -1 );
++#endif
++        kill_thread( thread, 0 );
++    }
+     else if (event & POLLIN) read_request( thread );
+     else if (event & POLLOUT) write_reply( thread );
+     release_object( thread );
+@@ -1588,6 +1597,10 @@ int thread_get_inflight_fd( struct thread *thread, int client )
+ void kill_thread( struct thread *thread, int violent_death )
+ {
+     if (thread->state == TERMINATED) return;  /* already killed */
++#ifdef WINE_IOS
++    fprintf( stderr, "[srv-kill] kill_thread tid=%04x pid=%04x violent=%d rev=ml586\n",
++             thread->id, thread->process->id, violent_death );
++#endif
+     thread->state = TERMINATED;
+     thread->exit_time = current_time;
+     if (current == thread) current = NULL;
+@@ -1684,6 +1697,12 @@ DECL_HANDLER(new_thread)
+ 
+     if ((thread = create_thread( request_fd, process, params.sd )))
+     {
++#ifdef WINE_IOS
++        /* ml586: which process a new thread gets filed under, and by whom —
++         * a misfiled thread dies with its false parent's teardown */
++        fprintf( stderr, "[srv-own] new_thread tid=%04x pid=%04x requester=%04x request_unixfd=%d rev=ml586\n",
++                 thread->id, process->id, current->id, request_fd );
++#endif
+         thread->system_regs = current->system_regs;
+         if (req->flags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) thread->suspend++;
+         thread->is_system = req->is_system;
+@@ -1705,6 +1724,9 @@ done:
+ 
+ static int init_thread( struct thread *thread, int reply_fd, int wait_fd )
+ {
++#ifdef WINE_IOS
++    int fdt_client_reply = reply_fd, fdt_client_wait = wait_fd;
++#endif
+     if ((reply_fd = thread_get_inflight_fd( thread, reply_fd )) == -1)
+     {
+         set_error( STATUS_TOO_MANY_OPENED_FILES );
+@@ -1724,6 +1746,11 @@ static int init_thread( struct thread *thread, int reply_fd, int wait_fd )
+ 
+     if (fcntl( reply_fd, F_SETFL, O_NONBLOCK ) == -1) goto error;
+ 
++#ifdef WINE_IOS
++    /* ml586: client fd number -> server-side dup number mapping per thread */
++    fprintf( stderr, "[srv-own] init_thread tid=%04x pid=%04x reply=%d->srv%d wait=%d->srv%d rev=ml586\n",
++             thread->id, thread->process->id, fdt_client_reply, reply_fd, fdt_client_wait, wait_fd );
++#endif
+     thread->reply_fd = create_anonymous_fd( &thread_fd_ops, reply_fd, &thread->obj, 0 );
+     thread->wait_fd  = create_anonymous_fd( &thread_fd_ops, wait_fd, &thread->obj, 0 );
+     return thread->reply_fd && thread->wait_fd;

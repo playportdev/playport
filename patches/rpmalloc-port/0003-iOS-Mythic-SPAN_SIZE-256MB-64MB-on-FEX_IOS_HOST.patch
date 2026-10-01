@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 31 Jul 2026 17:50:46 +0800
+Subject: [PATCH] iOS-Mythic: SPAN_SIZE 256MB -> 64MB on FEX_IOS_HOST
+
+os_mmap reserves size + alignment per span, so every 256MB span cost 512MB
+of VA in a 64GB budget. 64MB is the floor (SPAN_SIZE / LARGE_PAGE_SIZE must
+stay >= 1) and cuts per-span VA cost 4x. ml332: record 71,838 unix calls,
+spans no longer dominate the VA census, CEF's 4 PartitionAlloc pools intact.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: 4cf481201be8efef231995a9906f4c006d5e5815
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 13a2b8d..cf0c066 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -185,7 +185,23 @@ madvise(caddr_t, size_t, int);
+ #define LARGE_PAGE_SIZE (1 << LARGE_PAGE_SIZE_SHIFT)
+ #define LARGE_PAGE_MASK (~((uintptr_t)LARGE_PAGE_SIZE - 1))
+ 
++#ifdef FEX_IOS_HOST
++/* iOS-Mythic ml332: 256MB spans are unaffordable in a 39-bit shared address space.
++ *
++ * os_mmap reserves size+alignment, so every span costs 512MB of VA, and rpmalloc's
++ * per-thread heaps map one span per page type -- ml330 measured 69 spans / 35GB
++ * reserved (~1% committed) inside the same 64GB window that CEF's PartitionAlloc
++ * needs, until FEXCore CreateThread's aligned_alloc returned NULL (#43). Releasing
++ * dead threads' spans is NOT the fix: the heap is shared across threads, and doing
++ * so corrupted live containers (#54, ml329/ml331).
++ *
++ * 64MB is the floor (SPAN_SIZE / LARGE_PAGE_SIZE must be >= 1; LARGE_PAGE_SIZE_SHIFT
++ * is 26) and cuts per-span VA 4x to 128MB. SPAN_MASK derives, span lookup arithmetic
++ * is unchanged. */
++#define SPAN_SIZE (64 * 1024 * 1024)
++#else
+ #define SPAN_SIZE (256 * 1024 * 1024)
++#endif
+ #define SPAN_MASK (~((uintptr_t)(SPAN_SIZE - 1)))
+ 
+ ////////////

@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 20:16:10 -0700
+Subject: [PATCH] Census which wmtcmd command types a workload actually emits
+
+Counts per render, compute and blit opcode, records and batches per encoder,
+setBytes call and byte totals, viewport and scissor counts, and the shape of
+the first batch. Counters only, reported at exit; logging every command would
+change the timing of the thing being measured. Gated on DXMT_CMD_CENSUS=1.
+
+This exists because wmtcmd_* lists must be serialised into contiguous records
+before they can cross a machine boundary, and there are 59 command types.
+Knowing which subset a real workload emits, and how large its sidecar data
+gets, decides how much of that schema is worth writing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01M1HvfVX2Y29TgJbFWbahdt
+Madeira-commit: 0bf1fa2c467087050b7df7f12833764e08a47775
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 101 ++++++++++++++++++++++++++++
+ 1 file changed, 101 insertions(+)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index e3eb6bb..4a1de7c 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -854,10 +854,105 @@ _MTLDevice_newMeshRenderPipelineState(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* ---- ml758: wmtcmd census ----------------------------------------------
++ *
++ * Before wmtcmd_* lists can be serialised for the remote Metal transport, we
++ * need to know which of the 59 command types a real workload actually emits,
++ * and how large their sidecar data gets. Serialising all 59 on speculation
++ * would be weeks of schema work for commands no title may ever issue.
++ *
++ * Counters only -- logging every command would change the timing of the thing
++ * being measured. Enabled with DXMT_CMD_CENSUS=1; costs one predictable branch
++ * per command otherwise.
++ */
++#define WMT_CENSUS_RENDER 40
++#define WMT_CENSUS_COMPUTE 16
++#define WMT_CENSUS_BLIT 12
++
++static int wmt_census_on = -1;
++static unsigned long wmt_c_render[WMT_CENSUS_RENDER];
++static unsigned long wmt_c_compute[WMT_CENSUS_COMPUTE];
++static unsigned long wmt_c_blit[WMT_CENSUS_BLIT];
++static unsigned long wmt_batches_render, wmt_batches_compute, wmt_batches_blit;
++static unsigned long wmt_records_total, wmt_records_max;
++static unsigned long wmt_setbytes_calls, wmt_setbytes_bytes, wmt_setbytes_max;
++static unsigned long wmt_viewport_calls, wmt_viewport_max;
++static unsigned long wmt_scissor_calls, wmt_scissor_max;
++/* first bounded opcode sequence, to show the SHAPE of a batch */
++static unsigned short wmt_first_seq[64];
++static unsigned wmt_first_len;
++static int wmt_first_kind = -1;
++
++static void wmt_census_report(void) {
++    if (wmt_census_on != 1) return;
++    fprintf(stderr, "\n[cmd-census] ml758 batches render=%lu compute=%lu blit=%lu\n",
++            wmt_batches_render, wmt_batches_compute, wmt_batches_blit);
++    fprintf(stderr, "[cmd-census] records total=%lu max-per-batch=%lu\n",
++            wmt_records_total, wmt_records_max);
++    fprintf(stderr, "[cmd-census] setBytes calls=%lu bytes=%lu max=%lu\n",
++            wmt_setbytes_calls, wmt_setbytes_bytes, wmt_setbytes_max);
++    fprintf(stderr, "[cmd-census] viewports calls=%lu max-count=%lu | scissors calls=%lu max-count=%lu\n",
++            wmt_viewport_calls, wmt_viewport_max, wmt_scissor_calls, wmt_scissor_max);
++    for (int i = 0; i < WMT_CENSUS_RENDER; i++)
++        if (wmt_c_render[i]) fprintf(stderr, "[cmd-census]   render[%2d] %lu\n", i, wmt_c_render[i]);
++    for (int i = 0; i < WMT_CENSUS_COMPUTE; i++)
++        if (wmt_c_compute[i]) fprintf(stderr, "[cmd-census]   compute[%2d] %lu\n", i, wmt_c_compute[i]);
++    for (int i = 0; i < WMT_CENSUS_BLIT; i++)
++        if (wmt_c_blit[i]) fprintf(stderr, "[cmd-census]   blit[%2d] %lu\n", i, wmt_c_blit[i]);
++    if (wmt_first_len) {
++        fprintf(stderr, "[cmd-census] first %s batch shape:", 
++                wmt_first_kind == 0 ? "render" : wmt_first_kind == 1 ? "compute" : "blit");
++        for (unsigned i = 0; i < wmt_first_len; i++) fprintf(stderr, " %u", wmt_first_seq[i]);
++        fprintf(stderr, "\n");
++    }
++}
++
++static void wmt_census_init(void) {
++    const char *e = getenv("DXMT_CMD_CENSUS");
++    wmt_census_on = (e && e[0] == '1') ? 1 : 0;
++    if (wmt_census_on) { fprintf(stderr, "[cmd-census] ml758 armed\n"); atexit(wmt_census_report); }
++}
++
++/* kind: 0 render, 1 compute, 2 blit */
++static inline void wmt_census_batch(const struct wmtcmd_base *head, int kind) {
++    if (__builtin_expect(wmt_census_on < 0, 0)) wmt_census_init();
++    if (__builtin_expect(wmt_census_on != 1, 1)) return;
++    unsigned long n = 0;
++    int capture = (wmt_first_len == 0);
++    if (kind == 0) wmt_batches_render++; else if (kind == 1) wmt_batches_compute++; else wmt_batches_blit++;
++    for (const struct wmtcmd_base *c = head; c; ) {
++        unsigned t = c->type;
++        if (kind == 0 && t < WMT_CENSUS_RENDER) wmt_c_render[t]++;
++        else if (kind == 1 && t < WMT_CENSUS_COMPUTE) wmt_c_compute[t]++;
++        else if (kind == 2 && t < WMT_CENSUS_BLIT) wmt_c_blit[t]++;
++        if (capture && n < 64) { wmt_first_seq[n] = (unsigned short)t; wmt_first_kind = kind; }
++        n++;
++        c = (const struct wmtcmd_base *)c->next.ptr;
++    }
++    if (capture) wmt_first_len = (unsigned)(n < 64 ? n : 64);
++    wmt_records_total += n;
++    if (n > wmt_records_max) wmt_records_max = n;
++}
++
++static inline void wmt_census_sidecar_bytes(unsigned long len) {
++    if (wmt_census_on != 1) return;
++    wmt_setbytes_calls++; wmt_setbytes_bytes += len;
++    if (len > wmt_setbytes_max) wmt_setbytes_max = len;
++}
++static inline void wmt_census_viewports(unsigned long n) {
++    if (wmt_census_on != 1) return;
++    wmt_viewport_calls++; if (n > wmt_viewport_max) wmt_viewport_max = n;
++}
++static inline void wmt_census_scissors(unsigned long n) {
++    if (wmt_census_on != 1) return;
++    wmt_scissor_calls++; if (n > wmt_scissor_max) wmt_scissor_max = n;
++}
++
+ static NTSTATUS
+ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
++  wmt_census_batch(next, 2);
+   id<MTLBlitCommandEncoder> encoder = (id<MTLBlitCommandEncoder>)params->encoder;
+   while (next) {
+     switch ((enum WMTBlitCommandType)next->type) {
+@@ -1000,6 +1095,7 @@ static NTSTATUS
+ _MTLComputeCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
++  wmt_census_batch(next, 1);
+   id<MTLComputeCommandEncoder> encoder = (id<MTLComputeCommandEncoder>)params->encoder;
+   MTLSize threadgroup_size = {0, 0, 0};
+   while (next) {
+@@ -1051,6 +1147,7 @@ _MTLComputeCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTComputeCommandSetBytes: {
+       struct wmtcmd_compute_setbytes *body = (struct wmtcmd_compute_setbytes *)next;
++      wmt_census_sidecar_bytes(body->length);
+       [encoder setBytes:body->bytes.ptr length:body->length atIndex:body->index];
+       break;
+     }
+@@ -1091,6 +1188,7 @@ static NTSTATUS
+ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
++  wmt_census_batch(next, 0);
+   id<MTLRenderCommandEncoder> encoder = (id<MTLRenderCommandEncoder>)params->encoder;
+   while (next) {
+     switch ((enum WMTRenderCommandType)next->type) {
+@@ -1148,6 +1246,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTRenderCommandSetFragmentBytes: {
+       struct wmtcmd_render_setbytes *body = (struct wmtcmd_render_setbytes *)next;
++      wmt_census_sidecar_bytes(body->length);
+       [encoder setFragmentBytes:body->bytes.ptr length:body->length atIndex:body->index];
+       break;
+     }
+@@ -1167,11 +1266,13 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTRenderCommandSetViewports: {
+       struct wmtcmd_render_setviewports *body = (struct wmtcmd_render_setviewports *)next;
++      wmt_census_viewports(body->viewport_count);
+       [encoder setViewports:(const MTLViewport *)body->viewports.ptr count:body->viewport_count];
+       break;
+     }
+     case WMTRenderCommandSetScissorRects: {
+       struct wmtcmd_render_setscissorrects *body = (struct wmtcmd_render_setscissorrects *)next;
++      wmt_census_scissors(body->rect_count);
+       [encoder setScissorRects:(const MTLScissorRect *)body->scissor_rects.ptr count:body->rect_count];
+       break;
+     }

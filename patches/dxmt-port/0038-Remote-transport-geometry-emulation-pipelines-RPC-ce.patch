@@ -1,0 +1,2336 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 16 Sep 2026 09:25:22 +0800
+Subject: [PATCH] Remote transport: geometry-emulation pipelines, RPC census,
+ batching, fence tracing
+
+winemetal gains slot 133, MTLDevice_newGeometryEmulationPipelineState:
+attachments as a WMTMeshRenderPipelineInfo plus a WMTGeometryEmulationInfo
+naming the stage-in, vertex, geometry and fragment libraries; the remote
+host builds the object/mesh functions with their function constants and
+links the stage-in function. Remote guard regenerated, API count 134.
+
+Also carried since the last commit: the remote client's per-opcode RPC
+census and call batching (ml819-ml821), residency-set routing, the
+D3D11 mesh-binding and tessellation fixes (ml754, ml867), the buffer
+release ordering fix (ml789), fence path tracing (ml805) and the shared
+port availability check (ml866).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Madeira-commit: 5925f5d4e91417f31241c9e532b62474ddd8dddb
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_context_impl.cpp       |  20 +
+ src/d3d11/d3d11_fence.cpp              |  13 +
+ src/d3d11/d3d11_pipeline_gs.cpp        |  18 +
+ src/d3d11/d3d11_pipeline_ts.cpp        |  15 +
+ src/d3d11/d3d11_resource_helper.cpp    |  23 +-
+ src/d3d11/d3d11_texture_device.cpp     |  14 +-
+ src/dxmt/dxmt_ring_bump_allocator.hpp  |  11 +
+ src/winemetal/gen_remote_guard.py      |   9 +-
+ src/winemetal/unix/winemetal_unix.c    | 494 ++++++++++++++++++++-
+ src/winemetal/unix/wmt_remote_client.h | 584 +++++++++++++++++++++++--
+ src/winemetal/unix/wmt_remote_guard.h  |  39 --
+ src/winemetal/unix/wmt_remote_pack.h   | 196 ++++++++-
+ src/winemetal/winemetal.h              |  68 ++-
+ src/winemetal/winemetal_thunks.c       |  50 +++
+ src/winemetal/winemetal_thunks.h       |  16 +
+ src/winemetal/wmt_api_names.h          |  79 ++--
+ 16 files changed, 1505 insertions(+), 144 deletions(-)
+
+diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
+index 623e02e..659f23b 100644
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -21,6 +21,7 @@
+  */
+ 
+ #include "Metal.hpp"
++#include "config/config.hpp"   /* ml869 */
+ #include "d3d11_annotation.hpp"
+ #include "d3d11_context.hpp"
+ #include "d3d11_device_child.hpp"
+@@ -63,6 +64,23 @@ inline unsigned int BCCensusFormatOf(ID3D11Resource *r) {
+ 
+ namespace dxmt {
+ 
++/* ml869: with d3d11.noMeshShaders=1 a geometry-shader or tessellated draw is
++ * dropped before anything is encoded. ml754 skipped the mesh BINDINGS and
++ * ml867 the mesh PIPELINE COMPILE, but the mesh draw record itself still went
++ * out with an ordinary pipeline bound, and Metal's driver dereferenced the
++ * mesh pipeline it never had (host SIGSEGV in drawMeshThreadgroups). Reported
++ * once; real devices keep the default and are untouched. */
++static inline bool dxmt_no_mesh_draws() {
++  static const int no_mesh = Config::getInstance().getOption<int>("d3d11.noMeshShaders", 0);
++  if (!no_mesh) return false;
++  static std::atomic<uint32_t> dropped{0};
++  uint32_t n = dropped.fetch_add(1, std::memory_order_relaxed) + 1;
++  if (n == 1 || (n & 0x3FF) == 0)
++    ERR("[mesh-skip] ml869 dropped ", n, " geometry/tessellation draw(s) (d3d11.noMeshShaders=1)");
++  return true;
++}
++
++
+ template<typename Object> Rc<Object> forward_rc(Rc<Object>& obj);
+ 
+ inline bool
+@@ -4938,6 +4956,7 @@ public:
+   template <bool IndexedDraw>
+   DrawCallStatus
+   FinalizeTessellationRenderPipeline() {
++    if (dxmt_no_mesh_draws()) return DrawCallStatus::Invalid;   /* ml869 */
+     if (cmdbuf_state == CommandBufferState::TessellationRenderPipelineReady)
+       return DrawCallStatus::Tessellation;
+     auto HS = GetManagedShader<PipelineStage::Hull>();
+@@ -5019,6 +5038,7 @@ public:
+   template <bool IndexedDraw>
+   DrawCallStatus
+   FinalizeGeometryRenderPipeline() {
++    if (dxmt_no_mesh_draws()) return DrawCallStatus::Invalid;   /* ml869 */
+     if (cmdbuf_state == CommandBufferState::GeometryRenderPipelineReady)
+       return DrawCallStatus::Geometry;
+     if (!SwitchToRenderEncoder()) {
+diff --git a/src/d3d11/d3d11_fence.cpp b/src/d3d11/d3d11_fence.cpp
+index 0bdce7b..e0e6e4d 100644
+--- a/src/d3d11/d3d11_fence.cpp
++++ b/src/d3d11/d3d11_fence.cpp
+@@ -1,3 +1,4 @@
++#include <cstdio>
+ #include "d3d11_fence.hpp"
+ #include "d3d11_device_child.hpp"
+ #include "d3d11_resource.hpp"
+@@ -83,6 +84,18 @@ public:
+   HRESULT STDMETHODCALLTYPE SetEventOnCompletion(UINT64 Value,
+                                                  HANDLE Event) final {
+     auto shared_event_listener = this->m_parent->GetDXMTDevice().queue().GetSharedEventListener();
++    /* ml805: trace the fence path so its SILENCE is evidence.
++     *
++     * In remote mode MTLSharedEvent_setWin32EventAtValue is unimplemented
++     * (wmt_remote_guard.h) and its result is discarded below, so a caller is
++     * told S_OK while nothing will ever signal the event -- a credible way to
++     * strand a waiter forever. The run under investigation shows no
++     * "unrouted: MTLSharedEvent_setWin32EventAtValue" marker, which suggests
++     * this path is never taken, but absence of one probe's string is not proof.
++     * This line makes the branch report itself either way. */
++    fprintf(stderr, "[fence] ml805 SetEventOnCompletion event=%p value=%llu win32=%p listener=%p\n",
++            (void *)event.handle, (unsigned long long)Value, (void *)Event,
++            (void *)shared_event_listener);
+     MTLSharedEvent_setWin32EventAtValue(event.handle, shared_event_listener, Event, Value);
+     return S_OK;
+   };
+diff --git a/src/d3d11/d3d11_pipeline_gs.cpp b/src/d3d11/d3d11_pipeline_gs.cpp
+index e26785f..fd5b2d5 100644
+--- a/src/d3d11/d3d11_pipeline_gs.cpp
++++ b/src/d3d11/d3d11_pipeline_gs.cpp
+@@ -21,6 +21,8 @@
+ #include "d3d11_device.hpp"
+ #include "d3d11_pipeline.hpp"
+ #include "log/log.hpp"
++#include "config/config.hpp"   /* ml754 */
++#include <atomic>
+ 
+ namespace dxmt {
+ 
+@@ -131,6 +133,22 @@ public:
+ 
+     info.raster_sample_count = SampleCount;
+ 
++    /* ml867: with d3d11.noMeshShaders=1 the mesh pipeline is never compiled.
++     * Apple's shader compiler aborted the remote host (SIGABRT inside AGX
++     * while compiling the object program of one of these), which kills every
++     * other pipeline with it. Leaving the state null takes the existing
++     * mesh-fail path: the draws that needed it are skipped, everything else
++     * renders. Real devices keep the default and compile as before. */
++    {
++      static const int no_mesh = Config::getInstance().getOption<int>("d3d11.noMeshShaders", 0);
++      if (no_mesh) {
++        static std::atomic<uint32_t> suppressed{0};
++        uint32_t n = suppressed.fetch_add(1, std::memory_order_relaxed) + 1;
++        if (n == 1 || (n & 0x3F) == 0)
++          ERR("[mesh-skip] ml867 suppressed ", n, " GEOMETRY mesh pipeline compile(s) (d3d11.noMeshShaders=1)");
++        return this;
++      }
++    }
+     state_mesh_ = device_->GetMTLDevice().newRenderPipelineState(info, err);
+ 
+     if (state_mesh_ == nullptr) {
+diff --git a/src/d3d11/d3d11_pipeline_ts.cpp b/src/d3d11/d3d11_pipeline_ts.cpp
+index 099bd1e..e1054f9 100644
+--- a/src/d3d11/d3d11_pipeline_ts.cpp
++++ b/src/d3d11/d3d11_pipeline_ts.cpp
+@@ -23,6 +23,8 @@
+ #include "d3d11_pipeline.hpp"
+ #include "d3d11_shader.hpp"
+ #include "log/log.hpp"
++#include "config/config.hpp"   /* ml867 */
++#include <atomic>
+ #include "thread.hpp"
+ 
+ namespace dxmt {
+@@ -173,6 +175,19 @@ public:
+ 
+     {
+       std::lock_guard<dxmt::mutex> lock(ts_global_mutex);
++      /* ml867: see d3d11_pipeline_gs.cpp -- with d3d11.noMeshShaders=1 the mesh
++       * pipeline is never compiled, so a driver-compiler abort on the host
++       * cannot take the process down; the draws that needed it are skipped. */
++      {
++        static const int no_mesh = Config::getInstance().getOption<int>("d3d11.noMeshShaders", 0);
++        if (no_mesh) {
++          static std::atomic<uint32_t> suppressed{0};
++          uint32_t n = suppressed.fetch_add(1, std::memory_order_relaxed) + 1;
++          if (n == 1 || (n & 0x3F) == 0)
++            ERR("[mesh-skip] ml867 suppressed ", n, " TESSELLATION mesh pipeline compile(s) (d3d11.noMeshShaders=1)");
++          return this;
++        }
++      }
+       state_rasterization_ =
+           device_->GetMTLDevice().newRenderPipelineState(info, err);
+     }
+diff --git a/src/d3d11/d3d11_resource_helper.cpp b/src/d3d11/d3d11_resource_helper.cpp
+index 6624ed6..edea275 100644
+--- a/src/d3d11/d3d11_resource_helper.cpp
++++ b/src/d3d11/d3d11_resource_helper.cpp
+@@ -433,9 +433,26 @@ CreateMTLTextureDescriptorInternal(
+     } else {
+       if (SampleCount > 1) {
+         if (!pDevice->GetMTLDevice().supportsTextureSampleCount(SampleCount)) {
+-          ERR("CreateMTLTextureDescriptorInternal: sample count ", SampleCount,
+-              " is not supported.");
+-          return E_INVALIDARG;
++          /* ml868: Apple GPUs stop at 4 samples and an engine may ask for 8
++           * without consulting CheckMultisampleQualityLevels (UE5 did, and
++           * the E_INVALIDARG became a fatal on its rendering thread). Clamp
++           * to the largest count the device has, the way a driver would; only
++           * a device with no multisampling at all still refuses. */
++          UINT alt = SampleCount;
++          while (alt > 1 && !pDevice->GetMTLDevice().supportsTextureSampleCount(alt))
++            alt >>= 1;
++          if (alt <= 1) {
++            ERR("CreateMTLTextureDescriptorInternal: sample count ", SampleCount,
++                " is not supported.");
++            return E_INVALIDARG;
++          }
++          static bool said = false;
++          if (!said) {
++            said = true;
++            ERR("CreateMTLTextureDescriptorInternal: sample count ", SampleCount,
++                " is not supported; using ", alt, " (reported once)");
++          }
++          SampleCount = alt;
+         }
+         if (ArraySize > 1) {
+           pDescOut->type = WMTTextureType2DMultisampleArray;
+diff --git a/src/d3d11/d3d11_texture_device.cpp b/src/d3d11/d3d11_texture_device.cpp
+index d7ee7c0..07bf510 100644
+--- a/src/d3d11/d3d11_texture_device.cpp
++++ b/src/d3d11/d3d11_texture_device.cpp
+@@ -528,8 +528,18 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
+ 
+     mach_port_t mach_port = allocation->machPort;
+     if (!mach_port) {
+-      ERR("DeviceTexture: Failed to get mach port for shared texture");
+-      return E_FAIL;
++      /* ml866: no shareable port means sharing is unavailable here (the
++       * remote backend cannot pass IOSurfaces between machines). The texture
++       * itself exists, so keep it and carry on unshared: an engine asking for
++       * a shared flag it will never exercise loses nothing, while E_FAIL was
++       * a fatal in the caller. */
++      static bool said = false;
++      if (!said) { said = true; ERR("DeviceTexture: no mach port for a shared texture; continuing unshared"); }
++      initialize(std::move(allocation));
++      auto *tex = ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), pDevice));
++      tex->SetMipBias(mip_bias);
++      *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(tex);
++      return S_OK;
+     }
+     SharedResourceData runtimeData;
+     MakeUniqueSharedName(runtimeData.mach_port_name);
+diff --git a/src/dxmt/dxmt_ring_bump_allocator.hpp b/src/dxmt/dxmt_ring_bump_allocator.hpp
+index b43970b..c53bcf0 100644
+--- a/src/dxmt/dxmt_ring_bump_allocator.hpp
++++ b/src/dxmt/dxmt_ring_bump_allocator.hpp
+@@ -99,6 +99,17 @@ public:
+     ~Block() {
+       mem_census_sub(MEMOWN_STAGING_RING, census_bytes);   /* ml677 */
+       census_bytes = 0;
++      /* ml789: RELEASE THE BUFFER BEFORE FREEING ITS MEMORY.
++       *
++       * mapped_address is handed to newBuffer as WMTBufferInfo.memory, so a
++       * backend may hold it for the buffer's whole lifetime -- the remote
++       * backend keeps it as the shadow it uploads from, and hashes it every
++       * frame. Freeing it first left that backend reading a dead allocation
++       * from another thread, which faulted mid-frame on an unmapped address.
++       *
++       * Member destruction would release `buffer` AFTER this body runs, which
++       * is exactly the wrong order, so release it explicitly first. */
++      buffer = nullptr;
+       if (mapped_address) {
+         free(mapped_address);
+         mapped_address = nullptr;
+diff --git a/src/winemetal/gen_remote_guard.py b/src/winemetal/gen_remote_guard.py
+index 2d1b672..ae367b4 100644
+--- a/src/winemetal/gen_remote_guard.py
++++ b/src/winemetal/gen_remote_guard.py
+@@ -74,7 +74,14 @@ ROUTED = {
+     '_MTLCommandBuffer_blitCommandEncoder', '_MTLBlitCommandEncoder_encodeCommands',
+     '_MTLDevice_minimumLinearTextureAlignmentForPixelFormat',
+     '_MTLDevice_supportsTextureSampleCount', '_MTLBuffer_newTexture',
++    '_MTLCommandBuffer_computeCommandEncoder', '_MTLComputeCommandEncoder_encodeCommands',
++    '_MTLTexture_mipmapLevelCount', '_MTLDevice_newMeshRenderPipelineState',
+     '_MTLCommandEncoder_setLabel',
++    '_MTLDevice_newRenderPipelineStateVD',
++    '_MTLDevice_newSharedTexture',
++    '_MTLDevice_newResidencySet', '_MTLResidencySet_addAllocation',
++    '_MTLResidencySet_commit', '_MTLCommandQueue_addResidencySet',
++    '_MTLDevice_newGeometryEmulationPipelineState',
+ }
+ 
+ # Deliberately NOT guarded -- these belong on whichever machine runs the guest.
+@@ -104,7 +111,7 @@ ROUTED = {
+ # a version that changes at random makes DXMT reconfigure presentation
+ # repeatedly. Their layer dereferences are all inside `#if !TARGET_OS_IOS`, so
+ # running them locally never touches a host handle.
+-LOCAL_OK = re.compile(r'^(thunk_SM50|CacheReader_|CacheWriter_|DispatchData_|'
++LOCAL_OK = re.compile(r'^(madeira_ir_|thunk_SM50|CacheReader_|CacheWriter_|DispatchData_|'
+                       r'NSAutoreleasePool_|SharedEventListener_|NSString_|'
+                       r'WMTSetMetalShaderCachePath|WMTQueryDisplaySettingForLayer|'
+                       r'MetalLayer_getEDRValue|DeveloperHUDProperties_|'
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 1a347cd..f3a7eca 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1,4 +1,8 @@
+ #include <stdatomic.h>
++#include <sys/mman.h>
++#include <mach/vm_statistics.h>
++#include <errno.h>
++#include <string.h>
+ #include <stdlib.h>
+ #include <dlfcn.h>
+ #include <TargetConditionals.h>
+@@ -68,6 +72,7 @@ _NSObject_retain(NSObject **obj) {
+   if (wmtr_enabled() && RM_IS_REMOTE((uint64_t)(uintptr_t)*obj)) {
+     struct rm_arg_handle a = { (uint64_t)(uintptr_t)*obj };
+     struct rm_ret_handle r;
++    wmtr_buf_retain(a.handle);   /* ml820: no-op unless it is a registered buffer */
+     /* The host returns the SAME handle; identity must not change under retain. */
+     wmtr_call(RM_OP_RETAIN, &a, sizeof a, &r, sizeof r, 0);
+     return STATUS_SUCCESS;
+@@ -80,10 +85,13 @@ static NTSTATUS
+ _NSObject_release(NSObject **obj) {
+   if (wmtr_enabled() && RM_IS_REMOTE((uint64_t)(uintptr_t)*obj)) {
+     struct rm_arg_handle a = { (uint64_t)(uintptr_t)*obj };
+-    wmtr_buf_remove(a.handle);   /* no-op unless it was a registered buffer */
++    wmtr_buf_remove(a.handle);   /* ml820: retires only on the LAST guest reference */
+     wmtr_call(RM_OP_RELEASE, &a, sizeof a, 0, 0, 0);
+     return STATUS_SUCCESS;
+   }
++  /* ml820: a guest-local autorelease pool going away is the moment the host
++   * objects it mirrored (command buffers, encoders) are released too. */
++  if (wmtr_enabled() && [*obj isKindOfClass:[NSAutoreleasePool class]]) wmtr_pool_drain();
+   [*obj release];
+   return STATUS_SUCCESS;
+ }
+@@ -196,6 +204,7 @@ _MTLDevice_newCommandQueue(void *obj) {
+ static NTSTATUS
+ _NSAutoreleasePool_alloc_init(void *obj) {
+   struct unixcall_generic_obj_ret *params = obj;
++  if (wmtr_enabled()) wmtr_pool_begin();   /* ml820 */
+   params->ret = (obj_handle_t)[[NSAutoreleasePool alloc] init];
+   return STATUS_SUCCESS;
+ }
+@@ -207,6 +216,7 @@ _MTLCommandQueue_commandBuffer(void *obj) {
+     struct rm_arg_handle a = { params->handle };
+     struct rm_ret_handle r;
+     params->ret = (wmtr_call(RM_OP_COMMAND_BUFFER, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    wmtr_pool_push(params->ret);   /* ml820: autoreleased natively */
+     return STATUS_SUCCESS;
+   }
+   params->ret = (obj_handle_t)[(id<MTLCommandQueue>)params->handle commandBuffer];
+@@ -235,6 +245,7 @@ _MTLCommandBuffer_waitUntilCompleted(void *obj) {
+   if (wmtr_enabled()) {
+     struct rm_arg_handle a = { params->handle };
+     wmtr_call(RM_OP_WAIT_COMPLETED, &a, sizeof a, 0, 0, 0);
++    wmtr_rb_drain(params->handle);   /* ml820: GPU results back before the guest reads them */
+     return STATUS_SUCCESS;
+   }
+   [(id<MTLCommandBuffer>)params->handle waitUntilCompleted];
+@@ -248,6 +259,7 @@ _MTLCommandBuffer_status(void *obj) {
+     struct rm_arg_handle a = { params->handle };
+     struct rm_ret_u64 r;
+     params->ret = (wmtr_call(RM_OP_CMDBUF_STATUS, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
++    if (params->ret >= WMTCommandBufferStatusCompleted) wmtr_rb_drain(params->handle);   /* ml820 */
+     return STATUS_SUCCESS;
+   }
+   params->ret = [(id<MTLCommandBuffer>)params->handle status];
+@@ -319,11 +331,77 @@ _MTLDevice_newBuffer(void *obj) {
+       void *shadow = bi->memory.ptr;
+       int owned = 0;
+       if (cpu && !shadow) {
+-        shadow = calloc(1, bi->length ? bi->length : 1);
++        const size_t want = bi->length ? (size_t)bi->length : 1;
++        errno = 0;
++        shadow = calloc(1, want);
+         owned = 1;
+-        if (!shadow)
+-          fprintf(stderr, "[wmt-remote] no shadow for a %llu byte buffer -- its writes "
+-                          "will NOT reach the host\n", (unsigned long long)bi->length);
++        if (!shadow) {
++          /* ml816: retry as a TAGGED anonymous mapping.
++           *
++           * ml803 already tried a plain mmap here and it failed exactly like the
++           * calloc, so I removed it as useless. That was the wrong conclusion:
++           * ml815 showed the deciding factor is the allocation TAG, not the
++           * call. This kernel picks an address RANGE from the tag and size, so
++           * an untagged mapping can be refused while heap-tagged space is free
++           * -- 78 otherwise-fatal allocations were recovered that way, with none
++           * failing.
++           *
++           * These are the buffers that matter for what actually renders: the 14
++           * failures in the first successful run were 3MB-128MB CPU-visible
++           * buffers, ~406MB in total. A shadowless buffer still serves explicit
++           * updateContents, but anything the game writes through its MAPPED
++           * pointer has nothing to diff, so those bytes never reach the host and
++           * the geometry they describe draws as nothing.
++           *
++           * mmap is zero-filled, so this keeps calloc's semantics. owned==2
++           * routes the release through munmap. */
++          void *m = mmap(NULL, want, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
++                         VM_MAKE_TAG(VM_MEMORY_MALLOC), 0);
++          if (m != MAP_FAILED) {
++            shadow = m;
++            owned = 2;
++            static unsigned long tagn;
++            if (++tagn <= 32)
++              fprintf(stderr, "[wmt-remote] ml816 shadow RECOVERED by tagged mmap: %zu bytes "
++                              "options 0x%x at %p (calloc failed) -- range placement, not "
++                              "exhaustion\n", want, bi->options, m);
++          }
++        }
++        if (!shadow) {
++          /* ml802: say everything needed to act on this.
++           *
++           * The old line reported only the size and carried on, registering a
++           * NULL shadow -- so the buffer got a valid host handle while every
++           * write to it was discarded. An explicit updateContents now uploads
++           * directly and does not need this allocation at all; what still breaks
++           * is a buffer the app writes through its MAPPED pointer, because there
++           * is then nothing to diff and nothing to send. That case is reported
++             * above; this buffer never takes a mapped pointer (see ml804). */
++          fprintf(stderr, "[wmt-remote] shadow alloc FAILED: %llu bytes, options 0x%x, "
++                          "errno %d (%s). ml804: KEEPING the buffer registered shadowless -- "
++                          "explicit updateContents upload directly; only writes through a "
++                          "MAPPED pointer would be lost, and this allocation takes none\n",
++                  (unsigned long long)bi->length, bi->options, errno, strerror(errno));
++          /* ml804: KEEP the buffer. Register it shadowless and upload directly.
++           *
++           * ml803 released the host buffer and returned handle 0 on the theory
++           * that a caller cannot use a buffer with a NULL CPU pointer. That was
++           * wrong for the allocation that actually fails here. It is
++           * ResourceInitializer's staging ring, which builds its allocator with
++           * placed_buffer=false, never takes a mapped address, and fills the
++           * resource entirely through explicit updateContents calls
++           * (dxmt_resource_initializer.cpp:553). Those calls carry the source,
++           * offset and length, so the direct-upload path serves them completely.
++           *
++           * Returning 0 made it strictly worse: DXMT ignored the failure and
++           * issued updateContents against handle 0, which were then dropped, so
++           * the resource never initialised and the frame never completed.
++           *
++           * A shadow is needed only for writes through a MAPPED pointer, which
++           * this buffer never does. Registering with the real length and options
++           * is what makes the direct-upload path's range check pass. */
++          owned = 0;
++        }
+         bi->memory.ptr = shadow;   /* only when the caller supplied none */
+       }
+       wmtr_buf_add(r.handle, shadow, bi->length, bi->options,
+@@ -727,10 +805,17 @@ static NTSTATUS
+ _MTLTexture_newTextureView(void *obj) {
+   struct unixcall_mtltexture_newtextureview *params = obj;
+   if (wmtr_enabled()) {
++    /* ml820: the swizzle was sent as 0 and the host built the view without
++     * one, so every channel remap DXMT relies on (forced alpha, R001, GBAR,
++     * DXGI format flags) was silently dropped. Send the four EFFECTIVE
++     * channels exactly as the local path computes them. */
++    MTLTextureSwizzleChannels sw = to_metal_swizzle(params->swizzle, params->format);
++    uint32_t packed = (uint32_t)sw.red | ((uint32_t)sw.green << 8) |
++                      ((uint32_t)sw.blue << 16) | ((uint32_t)sw.alpha << 24);
+     struct rm_tex_view a = { params->texture, (uint32_t)params->format,
+                              (uint32_t)params->texture_type,
+                              params->level_start, params->level_count,
+-                             params->slice_start, params->slice_count, 0 };
++                             params->slice_start, params->slice_count, packed };
+     struct rm_ret_handle_u64 r;
+     if (wmtr_call(RM_OP_NEW_TEXTURE_VIEW, &a, sizeof a, &r, sizeof r, 0) == RM_OK) {
+       params->ret = r.handle; params->gpu_resource_id = r.value;
+@@ -894,6 +979,8 @@ _MTLCommandBuffer_blitCommandEncoder(void *obj) {
+     struct rm_arg_handle a = { params->handle };
+     struct rm_ret_handle r;
+     params->ret = (wmtr_call(RM_OP_BLIT_ENCODER, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    wmtr_pool_push(params->ret);                 /* ml820: autoreleased natively */
++    wmtr_enc_note(params->ret, params->handle);  /* ml820: blit destinations read back per cmdbuf */
+     return STATUS_SUCCESS;
+   }
+   params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle blitCommandEncoder];
+@@ -903,6 +990,16 @@ _MTLCommandBuffer_blitCommandEncoder(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_computeCommandEncoder(void *obj) {
+   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
++  if (wmtr_enabled()) {
++    /* arg selects concurrent vs serial dispatch; it changes how Metal may
++     * reorder the work, so it travels rather than being defaulted. */
++    struct rm_arg_handle_u64 a = { params->handle, params->arg };
++    struct rm_ret_handle r;
++    params->ret = (wmtr_call(RM_OP_COMPUTE_ENCODER, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    wmtr_pool_push(params->ret);   /* ml820 */
++    if (!params->ret) fprintf(stderr, "[wmt-remote] host refused a compute encoder\n");
++    return STATUS_SUCCESS;
++  }
+   params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle
+       computeCommandEncoderWithDispatchType:params->arg ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial];
+   return STATUS_SUCCESS;
+@@ -922,6 +1019,9 @@ _MTLCommandBuffer_renderCommandEncoder(void *obj) {
+     memcpy(buf + sizeof *w, info, sizeof(struct WMTRenderPassInfo));
+     struct rm_ret_handle r;
+     params->ret = (wmtr_call(RM_OP_RENDER_ENCODER, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    wmtr_pool_push(params->ret);   /* ml820 */
++    /* ml820: the GPU writes occlusion counts here; they must come back. */
++    if (params->ret && info->visibility_buffer) wmtr_rb_add(params->handle, info->visibility_buffer);
+     if (!params->ret) fprintf(stderr, "[wmt-remote] host refused a render encoder\n");
+     return STATUS_SUCCESS;
+   }
+@@ -1109,9 +1209,124 @@ _MTLDevice_newRenderPipelineState(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++static NTSTATUS
++_MTLDevice_newRenderPipelineStateVD(void *obj) {
++  struct unixcall_mtldevice_newrenderpso_vd *params = obj;
++  const struct WMTVertexDescriptorInfo *vdi = params->vd.ptr;
++  if (wmtr_enabled()) {
++    /* The WHOLE descriptor crosses: eight colour attachments, blend factors,
++     * write masks, depth/stencil formats, sample count, topology and
++     * tessellation. A hand-picked subset is how this became a toy before. */
++    /* The vertex descriptor rides after the pipeline info; info_len says so. */
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTRenderPipelineInfo) + sizeof(struct WMTVertexDescriptorInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device;
++    w->info_len = sizeof(struct WMTRenderPipelineInfo) + sizeof(struct WMTVertexDescriptorInfo);
++    w->extra_count = 0;
++    memcpy(buf + sizeof *w, params->info.ptr, sizeof(struct WMTRenderPipelineInfo));
++    memcpy(buf + sizeof *w + sizeof(struct WMTRenderPipelineInfo), vdi, sizeof(struct WMTVertexDescriptorInfo));
++    struct rm_ret_handle r;
++    params->ret_error = 0;
++    params->ret_pso = (wmtr_call(RM_OP_NEW_RENDER_PSO_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    return STATUS_SUCCESS;
++  }
++  const struct WMTRenderPipelineInfo *info = params->info.ptr;
++  MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
++
++  for (unsigned i = 0; i < 8; i++) {
++    descriptor.colorAttachments[i].pixelFormat = to_metal_pixel_format(info->colors[i].pixel_format);
++    descriptor.colorAttachments[i].blendingEnabled = info->colors[i].blending_enabled;
++    descriptor.colorAttachments[i].writeMask = (MTLColorWriteMask)info->colors[i].write_mask;
++
++    descriptor.colorAttachments[i].alphaBlendOperation = (MTLBlendOperation)info->colors[i].alpha_blend_operation;
++    descriptor.colorAttachments[i].rgbBlendOperation = (MTLBlendOperation)info->colors[i].rgb_blend_operation;
++
++    descriptor.colorAttachments[i].sourceRGBBlendFactor = (MTLBlendFactor)info->colors[i].src_rgb_blend_factor;
++    descriptor.colorAttachments[i].sourceAlphaBlendFactor = (MTLBlendFactor)info->colors[i].src_alpha_blend_factor;
++    descriptor.colorAttachments[i].destinationRGBBlendFactor = (MTLBlendFactor)info->colors[i].dst_rgb_blend_factor;
++    descriptor.colorAttachments[i].destinationAlphaBlendFactor = (MTLBlendFactor)info->colors[i].dst_alpha_blend_factor;
++  }
++
++  for (unsigned i = 0; i < 31; i++) {
++    if (info->immutable_fragment_buffers & (1 << i))
++      descriptor.fragmentBuffers[i].mutability = MTLMutabilityImmutable;
++    if (info->immutable_vertex_buffers & (1 << i))
++      descriptor.vertexBuffers[i].mutability = MTLMutabilityImmutable;
++  }
++
++#ifndef DXMT_NO_PRIVATE_API
++  [descriptor setLogicOperationEnabled:info->logic_operation_enabled];
++  [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
++#endif
++  descriptor.depthAttachmentPixelFormat = to_metal_pixel_format(info->depth_pixel_format);
++  descriptor.stencilAttachmentPixelFormat = to_metal_pixel_format(info->stencil_pixel_format);
++  descriptor.alphaToCoverageEnabled = info->alpha_to_coverage_enabled;
++  descriptor.rasterizationEnabled = info->rasterization_enabled;
++  descriptor.rasterSampleCount = info->raster_sample_count;
++  descriptor.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)info->input_primitive_topology;
++  descriptor.tessellationPartitionMode = (MTLTessellationPartitionMode)info->tessellation_partition_mode;
++  descriptor.tessellationFactorStepFunction = (MTLTessellationFactorStepFunction)info->tessellation_factor_step;
++  descriptor.tessellationOutputWindingOrder = (MTLWinding)info->tessellation_output_winding_order;
++  descriptor.maxTessellationFactor = info->max_tessellation_factor;
++  {
++    MTLVertexDescriptor *vdesc = [[MTLVertexDescriptor alloc] init];
++    for (unsigned i = 0; i < 31; i++) {
++      if (vdi->attribute_mask & (1u << i)) {
++        vdesc.attributes[i].format = (MTLVertexFormat)vdi->attributes[i].format;
++        vdesc.attributes[i].offset = vdi->attributes[i].offset;
++        vdesc.attributes[i].bufferIndex = vdi->attributes[i].buffer_index;
++      }
++      if (vdi->layout_mask & (1u << i)) {
++        vdesc.layouts[i].stride = vdi->layouts[i].stride;
++        vdesc.layouts[i].stepFunction = (MTLVertexStepFunction)vdi->layouts[i].step_function;
++        /* ml905: Metal requires stepRate 0 for a constant-step layout; 1 otherwise when unset. */
++        vdesc.layouts[i].stepRate = vdi->layouts[i].step_function == 0 ? 0 : (vdi->layouts[i].step_rate ? vdi->layouts[i].step_rate : 1);
++      }
++    }
++    descriptor.vertexDescriptor = vdesc;
++  }
++
++  descriptor.vertexFunction = (id<MTLFunction>)info->vertex_function;
++  descriptor.fragmentFunction = (id<MTLFunction>)info->fragment_function;
++
++  if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
++    descriptor.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
++                                                    count:info->num_binary_archives_for_lookup];
++  NSError *err = NULL;
++  MTLPipelineOption options =
++      info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
++  params->ret_pso = (obj_handle_t)[(id<MTLDevice>)params->device newRenderPipelineStateWithDescriptor:descriptor
++                                                                                              options:options
++                                                                                           reflection:nil
++                                                                                                error:&err];
++  params->ret_error = (obj_handle_t)err;
++  if (!err && info->binary_archive_for_serialization) {
++    [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addRenderPipelineFunctionsWithDescriptor:descriptor
++                                                                                                     error:&err];
++  }
++  [descriptor release];
++  return STATUS_SUCCESS;
++}
++
+ static NTSTATUS
+ _MTLDevice_newMeshRenderPipelineState(void *obj) {
+   struct unixcall_mtldevice_newmeshrenderpso *params = obj;
++  if (wmtr_enabled()) {
++    /* The whole descriptor crosses, as the render one does: object/mesh/fragment
++     * functions, eight colour attachments, payload length and the immutable
++     * buffer masks for all three stages. */
++    const struct WMTMeshRenderPipelineInfo *mi = params->info.ptr;
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTMeshRenderPipelineInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof *mi; w->extra_count = 0;
++    memcpy(buf + sizeof *w, mi, sizeof *mi);
++    struct rm_ret_handle r;
++    params->ret_error = 0;
++    params->ret_pso = (wmtr_call(RM_OP_NEW_MESH_PSO_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    if (!params->ret_pso)
++      fprintf(stderr, "[wmt-remote] host refused a mesh pipeline\n");
++    return STATUS_SUCCESS;
++  }
+   const struct WMTMeshRenderPipelineInfo *info = params->info.ptr;
+   MTLMeshRenderPipelineDescriptor *descriptor = [[MTLMeshRenderPipelineDescriptor alloc] init];
+ 
+@@ -1411,6 +1626,14 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+         continue;
+       }
+       if (off + 8 + sz > WMTW_MAX_BATCH_BYTES) break;
++      /* ml820: a copy INTO a CPU-visible buffer is a readback the guest will
++       * consume after completion (staging Map, query resolve). */
++      if (c->type == WMTBlitCommandCopyFromTextureToBuffer)
++        wmtr_rb_add(wmtr_enc_cmdbuf(params->encoder),
++                    ((const struct wmtcmd_blit_copy_from_texture_to_buffer *)c)->dst);
++      else if (c->type == WMTBlitCommandCopyFromBufferToBuffer)
++        wmtr_rb_add(wmtr_enc_cmdbuf(params->encoder),
++                    ((const struct wmtcmd_blit_copy_from_buffer_to_buffer *)c)->dst);
+       *(uint32_t *)(bbuf + off) = c->type;
+       *(uint32_t *)(bbuf + off + 4) = sz;
+       memcpy(bbuf + off + 8, c, sz);
+@@ -1561,9 +1784,71 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* Size of one compute command struct, and how many inline bytes it carries.
++ * Zero size means "unknown" -- refused by name rather than guessed, since a
++ * wrong size copies the wrong bytes onto the wire. */
++static uint32_t wmt_compute_cmd_size(unsigned type, const struct wmtcmd_base *c, uint32_t *inline_len) {
++  *inline_len = 0;
++  switch (type) {
++  case WMTComputeCommandNop:               return sizeof(struct wmtcmd_compute_nop);
++  case WMTComputeCommandDispatch:
++  case WMTComputeCommandDispatchThreads:   return sizeof(struct wmtcmd_compute_dispatch);
++  case WMTComputeCommandDispatchIndirect:  return sizeof(struct wmtcmd_compute_dispatch_indirect);
++  case WMTComputeCommandSetPSO:            return sizeof(struct wmtcmd_compute_setpso);
++  case WMTComputeCommandSetBuffer:         return sizeof(struct wmtcmd_compute_setbuffer);
++  case WMTComputeCommandSetBufferOffset:   return sizeof(struct wmtcmd_compute_setbufferoffset);
++  case WMTComputeCommandUseResource:       return sizeof(struct wmtcmd_compute_useresource);
++  case WMTComputeCommandSetTexture:        return sizeof(struct wmtcmd_compute_settexture);
++  case WMTComputeCommandWaitForFence:
++  case WMTComputeCommandUpdateFence:       return sizeof(struct wmtcmd_compute_fence_op);
++  case WMTComputeCommandSetBytes: {
++    /* The only compute command holding a guest pointer: the bytes themselves
++     * must travel, not the address. */
++    const struct wmtcmd_compute_setbytes *b = (const void *)c;
++    *inline_len = (uint32_t)b->length;
++    return sizeof(struct wmtcmd_compute_setbytes);
++  }
++  default:                                 return 0;
++  }
++}
++
+ static NTSTATUS
+ _MTLComputeCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
++  if (wmtr_enabled()) {
++    static _Thread_local uint8_t *cbuf;
++    if (!cbuf) cbuf = malloc(WMTW_MAX_BATCH_BYTES);
++    if (!cbuf) return STATUS_SUCCESS;
++    struct rm_arg_handle *ha = (void *)cbuf;
++    ha->handle = params->encoder;
++    size_t off = sizeof *ha;
++    for (const struct wmtcmd_base *c = params->cmd_head.ptr; c; c = c->next.ptr) {
++      uint32_t inl = 0;
++      uint32_t sz = wmt_compute_cmd_size(c->type, c, &inl);
++      if (!sz) {
++        static unsigned told;
++        if (told++ < 8)
++          fprintf(stderr, "[wmt-remote] compute command type %u has no known size -- NOT sent\n",
++                  (unsigned)c->type);
++        continue;
++      }
++      if (off + 12 + sz + inl > WMTW_MAX_BATCH_BYTES) break;
++      *(uint32_t *)(cbuf + off)     = c->type;
++      *(uint32_t *)(cbuf + off + 4) = sz;
++      *(uint32_t *)(cbuf + off + 8) = inl;
++      memcpy(cbuf + off + 12, c, sz);
++      if (inl) {
++        const struct wmtcmd_compute_setbytes *b = (const void *)c;
++        memcpy(cbuf + off + 12 + sz, b->bytes.ptr, inl);
++      }
++      off += 12 + sz + inl;
++    }
++    if (off > sizeof *ha) {
++      struct rm_ret_u64 rr;
++      wmtr_call(RM_OP_COMPUTE_INTO, cbuf, (uint32_t)off, &rr, sizeof rr, 0);
++    }
++    return STATUS_SUCCESS;
++  }
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
+   wmt_census_batch(next, 1);
+   id<MTLComputeCommandEncoder> encoder = (id<MTLComputeCommandEncoder>)params->encoder;
+@@ -1680,6 +1965,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     struct wmtw_packer pk = { rec, WMTW_MAX_BATCH_BYTES, 0, side, WMTW_MAX_SIDECAR_BYTES, 0, 0 };
+     struct wmtw_pack_result pr;
++    wmtr_batches_packed++;
+     if (wmtw_pack_render(next, &pk, &pr) != WMTW_PACK_OK) {
+       /* Report each MISSING OPCODE once, not the first eight failures.
+        * A pack failure drops the whole batch, so one unsupported command
+@@ -1687,6 +1973,13 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+        * hides the rest behind it, costing a run per gap. */
+       static unsigned seen[64]; static unsigned seen_n; static unsigned long dropped;
+       dropped++;
++      wmtr_batches_dropped++;
++      /* ml817: the first-occurrence report above goes quiet after the last new
++       * opcode, which left the first in-game log unable to say how many
++       * batches were lost in total. Tally periodically as well. */
++      if ((dropped % 500) == 0)
++        fprintf(stderr, "[wmt-remote] pack: %lu batches dropped so far (last opcode %u, %s)\n",
++                dropped, pr.opcode, wmtw_pack_strerror(pr.status));
+       unsigned k = 0;
+       for (; k < seen_n; k++) if (seen[k] == pr.opcode) break;
+       if (k == seen_n && seen_n < 64) {
+@@ -2126,6 +2419,14 @@ _MTLTexture_arrayLength(void *obj) {
+ static NTSTATUS
+ _MTLTexture_mipmapLevelCount(void *obj) {
+   struct unixcall_generic_obj_uint64_ret *params = obj;
++  if (wmtr_enabled()) {
++    /* Mip count feeds subresource and format decisions, so a wrong answer is
++     * not cosmetic. */
++    struct rm_arg_handle a = { params->handle };
++    struct rm_ret_u64 r;
++    params->ret = (wmtr_call(RM_OP_TEXTURE_MIPLEVELS, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 1;
++    return STATUS_SUCCESS;
++  }
+   params->ret = [(id<MTLTexture>)params->handle mipmapLevelCount];
+   return STATUS_SUCCESS;
+ }
+@@ -3861,14 +4162,57 @@ static NTSTATUS
+ _MTLBuffer_updateContents(void *obj) {
+   struct unixcall_mtlbuffer_updatecontents *params = obj;
+   if (wmtr_enabled()) {
+-    struct wmtr_buf *b = wmtr_buf_find(params->buffer);
+-    if (b && b->shadow && params->offset + params->length <= b->length) {
+-      memcpy((char *)b->shadow + params->offset, params->data.ptr, params->length);
+-      wmtr_buf_upload(params->buffer, (const char *)b->shadow + params->offset,
++    /* Copy the entry out under the lock rather than holding a pointer into the
++     * table across a memcpy and an RPC. */
++    struct wmtr_buf b;
++    const int found = wmtr_buf_lookup(params->buffer, &b);
++    const int in_range = found && params->offset + params->length <= b.length;
++
++    if (found && b.shadow && in_range) {
++      memcpy((char *)b.shadow + params->offset, params->data.ptr, params->length);
++      /* ml822: send it now, always.
++       *
++       * ml821 skipped this and let the pre-submission flush carry the bytes,
++       * on the reasoning that the memcpy above is already the snapshot and the
++       * flush hashes this shadow before the GPU reads it. That removes a real
++       * duplicate -- these bytes were being sent twice, because this path never
++       * rebased the page checksums it dirtied -- but it makes delivery depend
++       * entirely on the hash noticing every write, and it lost a race with
++       * readback: a completing GPU write downloads host bytes over a shadow
++       * whose update had not been sent yet, and rebases the checksum, so the
++       * write disappears with nothing reporting it.
++       *
++       * Deduplicating this is still worth doing. It needs the checksum rebased
++       * here under the registry lock, and tests through the real entry points
++       * for the readback ordering -- not an inference. */
++      wmtr_buf_upload(params->buffer, (const char *)b.shadow + params->offset,
++                      params->offset, params->length);
++    } else if (found && !b.shadow && in_range) {
++      /* ml802: a registered-but-shadowless buffer uploads DIRECTLY.
++       *
++       * The shadow exists to diff a buffer the app writes through a mapped
++       * pointer, so the flush can find what changed. An explicit updateContents
++       * needs none of that: the caller has already told us the source, the
++       * offset and the length, which is exactly what the upload takes. Requiring
++       * a persistent shadow merely to service explicit uploads is what made a
++       * failed 32MB calloc silently discard every write to that buffer -- the
++       * staging ring's sixth block, whose contents then never reached the host. */
++      wmtr_buf_upload(params->buffer, (const char *)params->data.ptr,
+                       params->offset, params->length);
+-    } else if (!b) {
+-      fprintf(stderr, "[wmt-remote] updateContents on an unregistered buffer 0x%llx\n",
+-              (unsigned long long)params->buffer);
++    } else {
++      /* Rate limited: this used to log per update, and one run produced 75,525
++       * lines. Name WHICH failure it is -- "unregistered" covered three
++       * different causes and was wrong for two of them. */
++      static unsigned long unreg;
++      if (++unreg <= 4 || (unreg % 4096) == 0)
++        fprintf(stderr, "[wmt-remote] updateContents DROPPED on 0x%llx: %s "
++                        "(offset %llu length %llu, buffer length %llu) (%lu so far)\n",
++                (unsigned long long)params->buffer,
++                !found      ? "NOT_FOUND — never registered"
++                            : "OUT_OF_RANGE — write exceeds the buffer",
++                (unsigned long long)params->offset,
++                (unsigned long long)params->length,
++                (unsigned long long)(found ? b.length : 0), unreg);
+     }
+     return STATUS_SUCCESS;
+   }
+@@ -3952,6 +4296,24 @@ _DispatchData_alloc_init(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newSharedTexture(void *obj) {
+   struct unixcall_mtldevice_newtexture *params = obj;
++  if (wmtr_enabled()) {
++    /* A shared texture cannot cross machines; the host makes an ordinary one
++     * and no port comes back, which the caller treats as "unshared". */
++    struct WMTTextureInfo *ti = params->info.ptr;
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTTextureInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device; w->info_len = sizeof *ti; w->extra_count = 0;
++    memcpy(buf + sizeof *w, ti, sizeof *ti);
++    struct rm_ret_handle_u64 r;
++    if (wmtr_call(RM_OP_NEW_TEXTURE_FULL, buf, sizeof buf, &r, sizeof r, 0) == RM_OK && r.handle) {
++      params->ret = r.handle;
++      ti->gpu_resource_id = r.value;
++    } else {
++      params->ret = 0; ti->gpu_resource_id = 0;
++    }
++    ti->mach_port = 0;
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTTextureInfo *info = params->info.ptr;
+ 
+@@ -4200,6 +4562,14 @@ _MTLDevice_newTileRenderPipelineState(void *obj) {
+ static NTSTATUS
+ _MTLDevice_newResidencySet(void *obj) {
+   struct unixcall_mtldevice_newresidencyset *params = obj;
++  if (wmtr_enabled()) { /* ml880/ml881: Madeira's remote routing */
++    struct rm_arg_handle_u64 a = { params->device, params->init_capacity };
++    struct rm_ret_handle r;
++    uint32_t st = wmtr_call(RM_OP_NEW_RESIDENCY_SET, &a, sizeof a, &r, sizeof r, 0);
++    params->ret_set = (st == RM_OK) ? r.handle : 0;
++    params->ret_error = 0;
++    return STATUS_SUCCESS;
++  }
+   NSError *err = NULL;
+   MTLResidencySetDescriptor *descriptor = [[MTLResidencySetDescriptor alloc] init];
+   descriptor.initialCapacity = params->init_capacity;
+@@ -4212,6 +4582,14 @@ _MTLDevice_newResidencySet(void *obj) {
+ static NTSTATUS
+ _MTLResidencySet_addAllocations(void *obj) {
+   struct unixcall_mtlresidencyset_addallocations *params = obj;
++  if (wmtr_enabled()) { /* ml880: Madeira's remote routing, one allocation per call */
++    const obj_handle_t *allocations = (const obj_handle_t *)params->allocations.ptr;
++    for (uint64_t i = 0; i < params->count; i++) {
++      struct rm_arg_handle_u64 a = { params->set, allocations[i] };
++      wmtr_call(RM_OP_RESIDENCY_ADD, &a, sizeof a, 0, 0, 0);
++    }
++    return STATUS_SUCCESS;
++  }
+   id<MTLResidencySet> set = (id<MTLResidencySet>)params->set;
+   [set addAllocations:(id<MTLAllocation> const *)params->allocations.ptr count:params->count];
+   return STATUS_SUCCESS;
+@@ -4236,6 +4614,11 @@ _MTLResidencySet_removeAllAllocations(void *obj) {
+ static NTSTATUS
+ _MTLResidencySet_commit(void *obj) {
+   struct unixcall_generic_obj_noret *params = obj;
++  if (wmtr_enabled()) { /* ml880: Madeira's remote routing */
++    struct rm_arg_handle a = { params->handle };
++    wmtr_call(RM_OP_RESIDENCY_COMMIT, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   id<MTLResidencySet> set = (id<MTLResidencySet>)params->handle;
+   [set commit];
+   return STATUS_SUCCESS;
+@@ -4244,6 +4627,11 @@ _MTLResidencySet_commit(void *obj) {
+ static NTSTATUS
+ _MTLCommandQueue_addResidencySet(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;
++  if (wmtr_enabled()) { /* ml880: Madeira's remote routing */
++    struct rm_arg_handle_u64 a = { params->handle, params->arg };
++    wmtr_call(RM_OP_QUEUE_ADD_RESIDENCY, &a, sizeof a, 0, 0, 0);
++    return STATUS_SUCCESS;
++  }
+   id<MTLCommandQueue> queue = (id<MTLCommandQueue>)params->handle;
+   id<MTLResidencySet> set = (id<MTLResidencySet>)params->arg;
+   [queue addResidencySet:set];
+@@ -4413,6 +4801,21 @@ NTSTATUS _CacheWriter_alloc_init(void *obj);
+ NTSTATUS _CacheWriter_set(void *obj);
+ NTSTATUS _WMTSetMetalShaderCachePath(void *obj);
+ 
++/* madeira-d3d12's shader-converter service: runtime DXIL -> metallib. Defined
++ * in research/madeira-d3d12/src/unix/ and compiled into the same static
++ * library as the rest of this unix side. */
++extern int madeira_ir_convert(void *args);
++static NTSTATUS _madeira_ir_convert(void *args) { return (NTSTATUS)madeira_ir_convert(args); }
++
++/* The wow64 table must stay the SAME LENGTH as the native one, because the slot
++ * number is the ABI. A 32-bit guest would hand us narrowed pointers, so pointing
++ * this at the native handler would read the wrong addresses rather than fail.
++ * Our ARM64EC guests are 64-bit and never take this path; if one ever does, it
++ * gets a named refusal instead of silent corruption. */
++static NTSTATUS _madeira_ir_convert_wow64(void *args) { (void)args; return STATUS_NOT_IMPLEMENTED; }
++static NTSTATUS _MTLDevice_newRenderPipelineStateVD_wow64(void *args) { (void)args; return STATUS_NOT_IMPLEMENTED; }
++static NTSTATUS _MTLDevice_newGeometryEmulationPipelineState_wow64(void *args) { (void)args; return STATUS_NOT_IMPLEMENTED; }
++
+ #if TARGET_OS_IOS
+ /* On iOS we statically link DXMT's unix side into the host app (Madeira.app),
+  * alongside ntdll's own __wine_unix_call_funcs. Rename ours so the linker
+@@ -4421,6 +4824,37 @@ NTSTATUS _WMTSetMetalShaderCachePath(void *obj);
+ #define __wine_unix_call_funcs dxmt_winemetal_unix_call_funcs
+ #endif
+ 
++
++/* ml927: geometry-shader emulation pipeline (converter mesh emulation). The
++ * attachments cross as a WMTMeshRenderPipelineInfo and the libraries, names
++ * and configuration as a WMTGeometryEmulationInfo right after it; the host
++ * builds the functions (with their function constants and the linked stage-in
++ * function) itself. Local backend: not provided -- every device this runtime
++ * targets renders remotely, and the local paravirtual device has no mesh
++ * shaders anyway. */
++static NTSTATUS
++_MTLDevice_newGeometryEmulationPipelineState(void *obj) {
++  struct unixcall_mtldevice_newgeompso *params = obj;
++  params->ret_error = 0;
++  params->ret_pso = 0;
++  if (wmtr_enabled()) {
++    uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTMeshRenderPipelineInfo) + sizeof(struct WMTGeometryEmulationInfo)];
++    struct rm_wmt_info *w = (void *)buf;
++    w->owner = params->device;
++    w->info_len = sizeof(struct WMTMeshRenderPipelineInfo) + sizeof(struct WMTGeometryEmulationInfo);
++    w->extra_count = 0;
++    memcpy(buf + sizeof *w, params->info.ptr, sizeof(struct WMTMeshRenderPipelineInfo));
++    memcpy(buf + sizeof *w + sizeof(struct WMTMeshRenderPipelineInfo), params->ge.ptr, sizeof(struct WMTGeometryEmulationInfo));
++    struct rm_ret_handle r;
++    params->ret_pso = (wmtr_call(RM_OP_NEW_GEOM_PSO_INFO, buf, sizeof buf, &r, sizeof r, 0) == RM_OK) ? r.handle : 0;
++    if (!params->ret_pso)
++      fprintf(stderr, "[wmt-remote] host refused a geometry-emulation pipeline\n");
++    return STATUS_SUCCESS;
++  }
++  fprintf(stderr, "[winemetal] geometry-emulation pipelines are only implemented for the remote backend\n");
++  return STATUS_SUCCESS;
++}
++
+ #include "wmt_remote_guard.h"
+ 
+ const void *__wine_unix_call_funcs[] = {
+@@ -4455,20 +4889,20 @@ const void *__wine_unix_call_funcs[] = {
+     &_rmg_NSObject_description,
+     &_MTLDevice_newComputePipelineState,
+     &_MTLCommandBuffer_blitCommandEncoder,
+-    &_rmg_MTLCommandBuffer_computeCommandEncoder,
++    &_MTLCommandBuffer_computeCommandEncoder,
+     &_MTLCommandBuffer_renderCommandEncoder,
+     &_MTLCommandEncoder_endEncoding,
+     &_MTLDevice_newRenderPipelineState,
+-    &_rmg_MTLDevice_newMeshRenderPipelineState,
++    &_MTLDevice_newMeshRenderPipelineState,
+     &_MTLBlitCommandEncoder_encodeCommands,
+-    &_rmg_MTLComputeCommandEncoder_encodeCommands,
++    &_MTLComputeCommandEncoder_encodeCommands,
+     &_MTLRenderCommandEncoder_encodeCommands,
+     &_rmg_MTLTexture_pixelFormat,
+     &_MTLTexture_width,
+     &_MTLTexture_height,
+     &_rmg_MTLTexture_depth,
+     &_rmg_MTLTexture_arrayLength,
+-    &_rmg_MTLTexture_mipmapLevelCount,
++    &_MTLTexture_mipmapLevelCount,
+     &_MTLTexture_replaceRegion,
+     &_rmg_MTLBuffer_didModifyRange,
+     &_MTLCommandBuffer_presentDrawable,
+@@ -4544,7 +4978,7 @@ const void *__wine_unix_call_funcs[] = {
+     &_CacheWriter_alloc_init,
+     &_CacheWriter_set,
+     &_WMTSetMetalShaderCachePath,
+-    &_rmg_MTLDevice_newSharedTexture,
++    &_MTLDevice_newSharedTexture,
+     &_rmg_WMTBootstrapRegister,
+     &_rmg_WMTBootstrapLookUp,
+     &_rmg_MTLSharedEvent_createMachPort,
+@@ -4570,6 +5004,17 @@ const void *__wine_unix_call_funcs[] = {
+     &_MTLDevice_newIndirectCommandBuffer,
+     &_MTLDevice_newLibraryWithSource,
+     &_MTLTexture_getBytes,
++    /* Madeira's appended slots (madeira-d3d12 and the geometry-emulation
++     * pipeline). APPENDED after upstream's, never inserted: the slot number is
++     * the ABI. Madeira's own residency-set slots are not carried: upstream
++     * DXMT's residency-set calls above (slots 132-137) cover them.
++     *
++     * madeira_ir_convert is deliberately not remote-guarded. It is a pure byte
++     * transform that never dereferences a Metal handle, so it is safe on the
++     * guest even when rendering is remote. */
++    &_madeira_ir_convert,
++    &_MTLDevice_newRenderPipelineStateVD,
++    &_MTLDevice_newGeometryEmulationPipelineState,
+ };
+ 
+ #ifndef DXMT_NATIVE
+@@ -4605,20 +5050,20 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_rmg_NSObject_description,
+     &_MTLDevice_newComputePipelineState,
+     &_MTLCommandBuffer_blitCommandEncoder,
+-    &_rmg_MTLCommandBuffer_computeCommandEncoder,
++    &_MTLCommandBuffer_computeCommandEncoder,
+     &_MTLCommandBuffer_renderCommandEncoder,
+     &_MTLCommandEncoder_endEncoding,
+     &_MTLDevice_newRenderPipelineState,
+-    &_rmg_MTLDevice_newMeshRenderPipelineState,
++    &_MTLDevice_newMeshRenderPipelineState,
+     &_MTLBlitCommandEncoder_encodeCommands,
+-    &_rmg_MTLComputeCommandEncoder_encodeCommands,
++    &_MTLComputeCommandEncoder_encodeCommands,
+     &_MTLRenderCommandEncoder_encodeCommands,
+     &_rmg_MTLTexture_pixelFormat,
+     &_MTLTexture_width,
+     &_MTLTexture_height,
+     &_rmg_MTLTexture_depth,
+     &_rmg_MTLTexture_arrayLength,
+-    &_rmg_MTLTexture_mipmapLevelCount,
++    &_MTLTexture_mipmapLevelCount,
+     &_MTLTexture_replaceRegion,
+     &_rmg_MTLBuffer_didModifyRange,
+     &_MTLCommandBuffer_presentDrawable,
+@@ -4694,7 +5139,7 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_CacheWriter_alloc_init,
+     &_CacheWriter_set,
+     &_WMTSetMetalShaderCachePath,
+-    &_rmg_MTLDevice_newSharedTexture,
++    &_MTLDevice_newSharedTexture,
+     &_rmg_WMTBootstrapRegister,
+     &_rmg_WMTBootstrapLookUp,
+     &_rmg_MTLSharedEvent_createMachPort,
+@@ -4720,5 +5165,8 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_MTLDevice_newIndirectCommandBuffer,
+     &_MTLDevice_newLibraryWithSource,
+     &_MTLTexture_getBytes,
++    &_madeira_ir_convert_wow64,
++    &_MTLDevice_newRenderPipelineStateVD_wow64,
++    &_MTLDevice_newGeometryEmulationPipelineState_wow64,
+ };
+ #endif
+diff --git a/src/winemetal/unix/wmt_remote_client.h b/src/winemetal/unix/wmt_remote_client.h
+index 99b4812..f3c443c 100644
+--- a/src/winemetal/unix/wmt_remote_client.h
++++ b/src/winemetal/unix/wmt_remote_client.h
+@@ -19,6 +19,8 @@
+ #define WMT_REMOTE_CLIENT_H
+ 
+ #include <stdint.h>
++#include <sys/mman.h>
++#include <mach/vm_statistics.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -54,6 +56,12 @@ static int wmtr_wr(const void *p, size_t n) {
+ /* One synchronous call, serialised. The transport measured 0.06 ms per round
+  * trip and command count is nearly free once batched, so a lock here costs far
+  * less than the correctness it buys while the backend is being brought up. */
++/* ml819 RPC census (guarded by wmtr_lock) */
++static int wmtr_batch_on;   /* ml821 */
++static unsigned long wmtr_ub_msgs, wmtr_ub_ranges, wmtr_rel_msgs, wmtr_rel_handles;
++static unsigned long wmtr_op_n[256], wmtr_call_n;
++static double wmtr_op_ms[256], wmtr_call_ms;
++static uint32_t wmtr_last_upload_status;
+ static uint32_t wmtr_call(uint16_t op, const void *arg, uint32_t alen,
+                           void *out, uint32_t ocap, uint32_t *olen) {
+     if (out && ocap) memset(out, 0, ocap);
+@@ -110,6 +118,16 @@ out:
+                                 "winemetal call waited on it\n", op, dt);
+         }
+     }
++    /* ml819: per-opcode census. Every call is serialised and waits for its
++     * reply, so the frame rate ceiling is (calls per frame) x (round trip).
++     * Nothing measured that until now; 2-4 fps in-game had no attribution. */
++    {
++        struct timeval t_now; gettimeofday(&t_now, 0);
++        double ms = (t_now.tv_sec - t_begin.tv_sec) * 1000.0
++                  + (t_now.tv_usec - t_begin.tv_usec) / 1000.0;
++        wmtr_op_n[op & 255]++; wmtr_op_ms[op & 255] += ms;
++        wmtr_call_n++; wmtr_call_ms += ms;
++    }
+     pthread_mutex_unlock(&wmtr_lock);
+     return status;
+ }
+@@ -122,6 +140,9 @@ out:
+ static void wmtr_init(void) {
+     const char *host = getenv("DXMT_REMOTE_METAL");
+     const char *tok  = getenv("RMETAL_TOKEN");
++    /* ml821: coalescing is OPT-IN. With it off this build behaves exactly as
++     * ml820 did, which is what makes a matched baseline measurement possible. */
++    { const char *b = getenv("DXMT_REMOTE_BATCH"); wmtr_batch_on = b && *b == '1'; }
+     if (!host || !*host) { wmtr_mode = 0; return; }
+     if (!tok || !*tok) {
+         fprintf(stderr, "[wmt-remote] DXMT_REMOTE_METAL set but RMETAL_TOKEN missing -- staying local\n");
+@@ -246,6 +267,8 @@ struct wmtr_buf {
+     int      owned;       /* did WE allocate the shadow?       */
+     uint64_t *page_sum;   /* last-uploaded checksum per 64K page */
+     uint32_t  pages;
++    uint32_t  refs;       /* ml820: mirrors the guest's retain/release count */
++    uint32_t  rb_pending; /* ml821: a GPU readback for this buffer is outstanding */
+ };
+ 
+ /* Upload only what CHANGED.
+@@ -290,74 +313,482 @@ static uint64_t wmtr_page_sum(const uint8_t *p, size_t n) {
+ /* Bytes considered vs bytes actually sent, so the saving is measured. */
+ static unsigned long long wmtr_flush_seen, wmtr_flush_sent;
+ static unsigned long wmtr_flush_n;
+-#define WMTR_BUFS_MAX 4096
+-static struct wmtr_buf wmtr_bufs[WMTR_BUFS_MAX];
+-static unsigned wmtr_bufs_n;
++static unsigned long wmtr_batches_packed, wmtr_batches_dropped;   /* ml817 */
++static double wmtr_flush_ms, wmtr_flush_rpc_ms; static unsigned long wmtr_flush_rpcs;   /* ml819 */
++/* Chunked, stably addressed, and LOCKED.
++ *
++ * The previous table was a fixed 4096 entries: a large title exceeded it, every
++ * later buffer went unregistered, and 75,525 content updates had nowhere to go
++ * -- geometry with no data. It also handed out raw entry pointers from an
++ * UNLOCKED lookup, so an entry could be rewritten while a caller held it.
++ *
++ * Chunks rather than a growing array: entries must not move. A realloc would
++ * invalidate every pointer already handed out, which is the same class of bug
++ * as the one this replaces, only harder to see. Chunks are never freed while
++ * the process runs, so an entry's address is stable for its lifetime. */
++#define WMTR_BUF_CHUNK 1024
++
++struct wmtr_buf_chunk {
++    struct wmtr_buf entries[WMTR_BUF_CHUNK];
++    unsigned used;
++    struct wmtr_buf_chunk *next;
++};
++static struct wmtr_buf_chunk *wmtr_chunks;
++static unsigned long wmtr_bufs_live;
+ static pthread_mutex_t wmtr_bufs_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
++/* Caller must hold wmtr_bufs_lock. */
++static struct wmtr_buf *wmtr_buf_find_locked(uint64_t handle) {
++    for (struct wmtr_buf_chunk *c = wmtr_chunks; c; c = c->next)
++        for (unsigned i = 0; i < c->used; i++)
++            if (c->entries[i].handle == handle) return &c->entries[i];
++    return NULL;
++}
++
+ static void wmtr_buf_add(uint64_t handle, void *shadow, uint64_t len, uint32_t opts,
+                          int cpu, int owned) {
+     pthread_mutex_lock(&wmtr_bufs_lock);
+-    if (wmtr_bufs_n < WMTR_BUFS_MAX) {
+-        wmtr_bufs[wmtr_bufs_n++] = (struct wmtr_buf){ handle, shadow, len, opts, cpu, owned };
+-    } else {
+-        /* Never let a cap read as success: a buffer missing from the registry
+-         * is never uploaded, so its contents silently never reach the host. */
+-        static int warned;
+-        if (!warned) { warned = 1;
+-            fprintf(stderr, "[wmt-remote] buffer registry full at %d -- further buffers "
+-                            "will NOT be uploaded\n", WMTR_BUFS_MAX); }
++    struct wmtr_buf *slot = wmtr_buf_find_locked(handle);
++    if (!slot) {
++        /* Reuse a retired entry before growing. */
++        for (struct wmtr_buf_chunk *c = wmtr_chunks; c && !slot; c = c->next)
++            for (unsigned i = 0; i < c->used; i++)
++                if (!c->entries[i].handle) { slot = &c->entries[i]; break; }
+     }
++    if (!slot) {
++        struct wmtr_buf_chunk *c = wmtr_chunks;
++        if (!c || c->used == WMTR_BUF_CHUNK) {
++            struct wmtr_buf_chunk *n = calloc(1, sizeof *n);
++            if (!n) {
++                static int warned;
++                if (!warned) { warned = 1;
++                    fprintf(stderr, "[wmt-remote] out of memory growing the buffer registry -- "
++                                    "further buffers will NOT be uploaded\n"); }
++                pthread_mutex_unlock(&wmtr_bufs_lock);
++                return;
++            }
++            n->next = wmtr_chunks; wmtr_chunks = n; c = n;
++        }
++        slot = &c->entries[c->used++];
++    }
++    *slot = (struct wmtr_buf){ handle, shadow, len, opts, cpu, owned, NULL, 0, 1 };
++    wmtr_bufs_live++;
++    pthread_mutex_unlock(&wmtr_bufs_lock);
++}
++
++/* Retire a buffer. Its shadow may be memory the CALLER owns and is about to
++ * free, so this must happen before that free -- otherwise the flush hashes a
++ * dead allocation, which faulted mid-frame on an unmapped address. */
++static void wmtr_buf_retain(uint64_t handle) {
++    pthread_mutex_lock(&wmtr_bufs_lock);
++    struct wmtr_buf *b = wmtr_buf_find_locked(handle);
++    if (b) b->refs++;
+     pthread_mutex_unlock(&wmtr_bufs_lock);
+ }
+ 
+-/* Drop a buffer when its handle is released. Leaving it registered means the
+- * flush keeps uploading through a pointer whose owner has gone, and keeps a
+- * stale handle alive on the wire. Only memory WE allocated is freed. */
+ static void wmtr_buf_remove(uint64_t handle) {
+     pthread_mutex_lock(&wmtr_bufs_lock);
+-    for (unsigned i = 0; i < wmtr_bufs_n; i++) {
+-        if (wmtr_bufs[i].handle != handle) continue;
+-        if (wmtr_bufs[i].owned) free(wmtr_bufs[i].shadow);
+-        free(wmtr_bufs[i].page_sum);
+-        wmtr_bufs[i] = wmtr_bufs[--wmtr_bufs_n];
+-        break;
++    struct wmtr_buf *b = wmtr_buf_find_locked(handle);
++    /* ml820: ANY release used to retire the entry. DXMT copies owning
++     * references freely (the encoder keeps one per bound buffer), so the
++     * first of several releases dropped the shadow while the host object -- and
++     * the app's writes through the mapped pointer -- lived on. Mirror the count
++     * and retire only when the guest's last reference goes. */
++    if (b && b->refs > 1) { b->refs--; b = NULL; }
++    if (b) {
++        /* ml803: owned==1 came from calloc, owned==2 from mmap. The mmap
++         * fallback exists because a 32MB calloc failed with ENOMEM on the
++         * research VM while the process held only ~3GB -- libmalloc's zone
++         * could not place it, though the address space had room. Freeing an
++         * mmap'd shadow with free() would corrupt the heap. */
++        if (b->owned == 1) free(b->shadow);
++        else if (b->owned == 2 && b->shadow) munmap(b->shadow, b->length);
++        free(b->page_sum);
++        b->handle = 0; b->shadow = NULL; b->page_sum = NULL;
++        b->length = 0; b->cpu_visible = 0; b->owned = 0; b->pages = 0;
++        if (wmtr_bufs_live) wmtr_bufs_live--;
+     }
+     pthread_mutex_unlock(&wmtr_bufs_lock);
+ }
+ 
+-static struct wmtr_buf *wmtr_buf_find(uint64_t handle) {
+-    for (unsigned i = 0; i < wmtr_bufs_n; i++)
+-        if (wmtr_bufs[i].handle == handle) return &wmtr_bufs[i];
+-    return NULL;
++static int wmtr_buf_lookup(uint64_t handle, struct wmtr_buf *out);
++
++/* ---- ml820: host-object lifetime mirroring ------------------------------
++ *
++ * Metal returns command buffers and encoders AUTORELEASED. The host interns
++ * every returned object with one owning reference and nothing ever dropped
++ * it: DXMT ends encoders without releasing (borrowed objects) and the guest's
++ * NSAutoreleasePool drains only local objects. One session retired 57,604
++ * live handles at disconnect, and every intern searched that table linearly.
++ *
++ * Mirror the pool: handles the host hands back for autoreleased objects are
++ * pushed onto a per-thread list; the guest's pool release drains everything
++ * pushed since that pool was created. A retained copy (attached_cmdbuf) keeps
++ * the host object alive exactly as it would natively. */
++static __thread uint64_t *wmtr_pool_items;
++static __thread unsigned  wmtr_pool_n, wmtr_pool_cap;
++static __thread unsigned  wmtr_pool_marks[32];
++static __thread unsigned  wmtr_pool_depth;
++static unsigned long wmtr_pool_released;
++
++static void wmtr_pool_begin(void) {
++    if (wmtr_pool_depth < 32) wmtr_pool_marks[wmtr_pool_depth] = wmtr_pool_n;
++    wmtr_pool_depth++;
++}
++static void wmtr_pool_push(uint64_t handle) {
++    if (!handle) return;
++    if (wmtr_pool_n == wmtr_pool_cap) {
++        unsigned ncap = wmtr_pool_cap ? wmtr_pool_cap * 2 : 256;
++        uint64_t *ni = realloc(wmtr_pool_items, ncap * sizeof *ni);
++        if (!ni) return;                 /* leak this one rather than crash */
++        wmtr_pool_items = ni; wmtr_pool_cap = ncap;
++    }
++    wmtr_pool_items[wmtr_pool_n++] = handle;
++}
++static void wmtr_pool_drain(void) {
++    if (!wmtr_pool_depth) return;
++    wmtr_pool_depth--;
++    unsigned from = wmtr_pool_depth < 32 ? wmtr_pool_marks[wmtr_pool_depth] : 0;
++    if (from > wmtr_pool_n) from = 0;
++    if (wmtr_batch_on) {
++        /* ml821: one round trip per pool instead of one per object. The local
++         * registry retirement still runs per handle -- only the RPC coalesces. */
++        uint8_t msg[sizeof(struct rm_release_multi) + RM_MULTI_MAX_HANDLES * sizeof(uint64_t)];
++        struct rm_release_multi *m = (void *)msg;
++        uint64_t *hs = (uint64_t *)(msg + sizeof *m);
++        unsigned k = 0;
++        for (unsigned i = from; i < wmtr_pool_n; i++) {
++            wmtr_buf_remove(wmtr_pool_items[i]);
++            hs[k++] = wmtr_pool_items[i];
++            wmtr_pool_released++;
++            if (k == RM_MULTI_MAX_HANDLES) {
++                m->count = k; m->reserved = 0;
++                wmtr_call(RM_OP_RELEASE_MULTI, msg, (uint32_t)(sizeof *m + k * sizeof *hs), 0, 0, 0);
++                wmtr_rel_msgs++; wmtr_rel_handles += k; k = 0;
++            }
++        }
++        if (k) {
++            m->count = k; m->reserved = 0;
++            wmtr_call(RM_OP_RELEASE_MULTI, msg, (uint32_t)(sizeof *m + k * sizeof *hs), 0, 0, 0);
++            wmtr_rel_msgs++; wmtr_rel_handles += k;
++        }
++    } else
++    for (unsigned i = from; i < wmtr_pool_n; i++) {
++        struct rm_arg_handle a = { wmtr_pool_items[i] };
++        wmtr_buf_remove(a.handle);
++        wmtr_call(RM_OP_RELEASE, &a, sizeof a, 0, 0, 0);
++        wmtr_pool_released++;
++    }
++    wmtr_pool_n = from;
++}
++
++/* ---- ml820: GPU -> guest readback ------------------------------------------
++ *
++ * Nothing ever copied GPU-written bytes back into a guest shadow. Occlusion
++ * query results are read by DXMT from the visibility buffer's guest memory
++ * after completion; remotely that memory was never touched, so every query
++ * answered zero -- "occluded" -- and the geometry behind it was culled. The
++ * same applies to staging buffers filled by blit copies.
++ *
++ * Record, per command buffer, the CPU-visible buffers the GPU will write
++ * (visibility result buffer, blit destinations). When the guest observes
++ * completion -- an explicit wait, or a status poll answering Completed --
++ * download them into their shadows and reset the upload baseline so the
++ * bytes are not immediately pushed back as CPU edits. */
++#define WMTR_RB_SLOTS 64
++#define WMTR_RB_BUFS  32
++struct wmtr_rb { uint64_t cmdbuf; unsigned n; uint64_t bufs[WMTR_RB_BUFS]; };
++static struct wmtr_rb wmtr_rb_tab[WMTR_RB_SLOTS];
++static struct { uint64_t enc, cmdbuf; } wmtr_enc_map[256];
++static unsigned wmtr_enc_pos;
++static pthread_mutex_t wmtr_rb_lock = PTHREAD_MUTEX_INITIALIZER;
++static unsigned long wmtr_rb_downloads, wmtr_rb_bytes, wmtr_rb_failed, wmtr_rb_dropped;
++
++static void wmtr_enc_note(uint64_t enc, uint64_t cmdbuf) {
++    if (!enc) return;
++    pthread_mutex_lock(&wmtr_rb_lock);
++    wmtr_enc_map[wmtr_enc_pos & 255].enc = enc;
++    wmtr_enc_map[wmtr_enc_pos & 255].cmdbuf = cmdbuf;
++    wmtr_enc_pos++;
++    pthread_mutex_unlock(&wmtr_rb_lock);
++}
++static uint64_t wmtr_enc_cmdbuf(uint64_t enc) {
++    uint64_t r = 0;
++    pthread_mutex_lock(&wmtr_rb_lock);
++    for (unsigned i = 0; i < 256; i++)
++        if (wmtr_enc_map[i].enc == enc) { r = wmtr_enc_map[i].cmdbuf; break; }
++    pthread_mutex_unlock(&wmtr_rb_lock);
++    return r;
++}
++/* Only CPU-visible registered buffers matter; anything else is skipped. */
++static void wmtr_rb_add(uint64_t cmdbuf, uint64_t buf) {
++    if (!cmdbuf || !buf) return;
++    struct wmtr_buf b;
++    if (!wmtr_buf_lookup(buf, &b) || !b.cpu_visible || !b.shadow) return;
++    pthread_mutex_lock(&wmtr_rb_lock);
++    struct wmtr_rb *e = NULL, *free_e = NULL;
++    for (unsigned i = 0; i < WMTR_RB_SLOTS; i++) {
++        if (wmtr_rb_tab[i].cmdbuf == cmdbuf) { e = &wmtr_rb_tab[i]; break; }
++        if (!wmtr_rb_tab[i].cmdbuf && !free_e) free_e = &wmtr_rb_tab[i];
++    }
++    if (!e && free_e) { e = free_e; e->cmdbuf = cmdbuf; e->n = 0; }
++    if (e) {
++        unsigned i;
++        for (i = 0; i < e->n; i++) if (e->bufs[i] == buf) break;
++        if (i == e->n) {
++            if (e->n < WMTR_RB_BUFS) {
++                e->bufs[e->n++] = buf;
++                pthread_mutex_lock(&wmtr_bufs_lock);   /* ml821 */
++                struct wmtr_buf *rb = wmtr_buf_find_locked(buf);
++                if (rb) rb->rb_pending++;
++                pthread_mutex_unlock(&wmtr_bufs_lock);
++            } else wmtr_rb_dropped++;
++        }
++    } else wmtr_rb_dropped++;
++    pthread_mutex_unlock(&wmtr_rb_lock);
++}
++static int wmtr_buf_download(uint64_t handle) {
++    struct wmtr_buf b;
++    if (!wmtr_buf_lookup(handle, &b) || !b.shadow || !b.length) return -1;
++    uint64_t off = 0;
++    while (off < b.length) {
++        uint64_t n = b.length - off; if (n > RM_CHUNK_BYTES) n = RM_CHUNK_BYTES;
++        struct rm_buffer_range r = { handle, off, n };
++        uint32_t got = 0;
++        uint32_t st = wmtr_call(RM_OP_BUFFER_READ, &r, sizeof r, (uint8_t *)b.shadow + off,
++                                (uint32_t)n, &got);
++        if (st != RM_OK || got != n) {
++            wmtr_rb_failed++;
++            static unsigned told;
++            if (told++ < 8)
++                fprintf(stderr, "[wmt-remote] ml820 readback FAILED buffer 0x%llx off=%llu len=%llu "
++                                "status=%u got=%u\n", (unsigned long long)handle,
++                        (unsigned long long)off, (unsigned long long)n, st, got);
++            return -1;
++        }
++        off += n;
++    }
++    /* The bytes now in the shadow are the host's; rebase the upload checksums
++     * so the next flush does not push them straight back. */
++    pthread_mutex_lock(&wmtr_bufs_lock);
++    struct wmtr_buf *e = wmtr_buf_find_locked(handle);
++    if (e && e->shadow == b.shadow) {
++        if (!e->page_sum) {
++            e->pages = (uint32_t)((e->length + WMTR_PAGE - 1) / WMTR_PAGE);
++            e->page_sum = calloc(e->pages, sizeof *e->page_sum);
++        }
++        if (e->page_sum)
++            for (uint32_t p = 0; p < e->pages; p++) {
++                size_t o = (size_t)p * WMTR_PAGE;
++                size_t l = e->length - o < WMTR_PAGE ? (size_t)(e->length - o) : WMTR_PAGE;
++                e->page_sum[p] = wmtr_page_sum((const uint8_t *)e->shadow + o, l);
++            }
++    }
++    pthread_mutex_unlock(&wmtr_bufs_lock);
++    wmtr_rb_downloads++; wmtr_rb_bytes += b.length;
++    return 0;
++}
++static void wmtr_rb_drain(uint64_t cmdbuf) {
++    if (!cmdbuf) return;
++    struct wmtr_rb local; local.n = 0;
++    pthread_mutex_lock(&wmtr_rb_lock);
++    for (unsigned i = 0; i < WMTR_RB_SLOTS; i++)
++        if (wmtr_rb_tab[i].cmdbuf == cmdbuf) { local = wmtr_rb_tab[i]; wmtr_rb_tab[i].cmdbuf = 0; wmtr_rb_tab[i].n = 0; break; }
++    pthread_mutex_unlock(&wmtr_rb_lock);
++    for (unsigned i = 0; i < local.n; i++) {
++        wmtr_buf_download(local.bufs[i]);
++        pthread_mutex_lock(&wmtr_bufs_lock);           /* ml821 */
++        struct wmtr_buf *rb = wmtr_buf_find_locked(local.bufs[i]);
++        if (rb && rb->rb_pending) rb->rb_pending--;
++        pthread_mutex_unlock(&wmtr_bufs_lock);
++    }
++    static unsigned told;
++    if (local.n && told++ < 8)
++        fprintf(stderr, "[wmt-remote] ml820 readback: %u buffer(s) for cmdbuf 0x%llx "
++                        "(total %lu downloads, %lu MB, %lu failed, %lu dropped)\n", local.n,
++                (unsigned long long)cmdbuf, wmtr_rb_downloads, wmtr_rb_bytes >> 20,
++                wmtr_rb_failed, wmtr_rb_dropped);
++}
++
++/* Copy out what the caller needs instead of leaking a pointer into the table. */
++static int wmtr_buf_lookup(uint64_t handle, struct wmtr_buf *out) {
++    pthread_mutex_lock(&wmtr_bufs_lock);
++    struct wmtr_buf *b = wmtr_buf_find_locked(handle);
++    if (b) *out = *b;
++    pthread_mutex_unlock(&wmtr_bufs_lock);
++    return b != NULL;
+ }
+ 
+ /* Upload one range. Chunked: a single message is capped, and AAA buffers are
+  * far larger than that cap. */
++/* ml820: one reusable per-thread staging area instead of a malloc per chunk.
++ * The 8MB temporary failed under the same range pressure the shadows hit,
++ * and that failure was reported as status=0 -- indistinguishable from a
++ * host acknowledgement. Allocated once (with the tagged fallback), never freed. */
++static uint8_t *wmtr_upload_scratch(void) {
++    static __thread uint8_t *scratch;
++    if (scratch) return scratch;
++    scratch = malloc(RM_CHUNK_BYTES);
++    if (!scratch) {
++        void *m = mmap(NULL, RM_CHUNK_BYTES, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
++                       VM_MAKE_TAG(VM_MEMORY_MALLOC), 0);
++        if (m != MAP_FAILED) scratch = m;
++    }
++    if (!scratch) {
++        static unsigned told;
++        if (told++ < 4)
++            fprintf(stderr, "[wmt-remote] ml820 upload scratch allocation FAILED (errno %d) -- "
++                            "this thread cannot upload\n", errno);
++    }
++    return scratch;
++}
++
+ static int wmtr_buf_upload(uint64_t handle, const void *src, uint64_t off, uint64_t len) {
+     const uint8_t *p = src;
++    uint8_t *msg = wmtr_upload_scratch();
++    if (!msg) { wmtr_last_upload_status = 0xfffffffeu; return -1; }   /* local, not host */
+     while (len) {
+         uint64_t n = len > (RM_CHUNK_BYTES - sizeof(struct rm_buffer_range))
+                    ? (RM_CHUNK_BYTES - sizeof(struct rm_buffer_range)) : len;
+-        uint8_t *msg = malloc(sizeof(struct rm_buffer_range) + n);
+-        if (!msg) return -1;
+         struct rm_buffer_range *r = (void *)msg;
+         r->handle = handle; r->offset = off; r->length = n;
+         memcpy(msg + sizeof *r, p, n);
+         uint32_t st = wmtr_call(RM_OP_BUFFER_UPLOAD, msg, (uint32_t)(sizeof *r + n), 0, 0, 0);
+-        free(msg);
+-        if (st != RM_OK) return -1;
++        if (st != RM_OK) { wmtr_last_upload_status = st; return -1; }
+         p += n; off += n; len -= n;
+     }
+     return 0;
+ }
+ 
++/* ---- ml821: coalesce many ranges into one round trip --------------------
++ *
++ * The flush sent one message per changed run. In gameplay that was 104 upload
++ * calls per submission carrying 222 KB -- a mean payload of 1,179 bytes against
++ * an 8 MB cap -- and at ~6 submissions per displayed frame the call count, not
++ * the bytes, was the largest single cost in the frame.
++ *
++ * Bytes, ranges and validation are unchanged; only the framing differs. Failure
++ * is still per-message: if the one message fails, every run inside it is
++ * invalidated exactly as the single-range path did, so nothing is ever left
++ * marked delivered when it was not.
++ *
++ * Used only inside wmtr_flush_buffers, which holds wmtr_bufs_lock for its whole
++ * walk, so the state below is single-threaded and the wmtr_buf pointers it
++ * remembers cannot retire underneath it. */
++struct wmtr_ub {
++    uint8_t *buf;
++    uint32_t data_len, data_cap, count;
++    struct rm_buffer_range r[RM_MULTI_MAX_RANGES];
++    struct { struct wmtr_buf *b; uint32_t p0, p1; } pend[RM_MULTI_MAX_RANGES];
++};
++
++/* ml822: the batch MUST NOT share wmtr_upload_scratch().
++ *
++ * It did, and that silently corrupted every coalesced message that had a
++ * single-range upload run inside the same walk -- the oversized-run fallback
++ * below, and the whole-buffer path taken when a page_sum allocation failed.
++ * Both write their own header and payload at the start of that same per-thread
++ * buffer, overwriting bytes the batch had already accumulated. The descriptors
++ * and count live in this struct, not in the buffer, so the message stayed
++ * perfectly well formed: it passed every validator on both sides, the host
++ * reported success, and the wrong bytes landed in the wrong buffers. Zero
++ * errors, black screen. A separate allocation is the whole fix. */
++static uint8_t *wmtr_batch_scratch(void) {
++    /* One buffer, reused. Every user holds wmtr_bufs_lock for the whole walk. */
++    static uint8_t *b;
++    if (b) return b;
++    b = malloc(RM_CHUNK_BYTES);
++    if (!b) {
++        void *m = mmap(NULL, RM_CHUNK_BYTES, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
++                       VM_MAKE_TAG(VM_MEMORY_MALLOC), 0);
++        if (m != MAP_FAILED) b = m;
++    }
++    if (!b) fprintf(stderr, "[wmt-remote] ml822 batch buffer allocation FAILED -- "
++                            "coalescing disabled for this process\n");
++    return b;
++}
++
++static void wmtr_ub_init(struct wmtr_ub *u) {
++    u->buf = wmtr_batch_scratch();
++    u->count = u->data_len = 0;
++    u->data_cap = u->buf ? (uint32_t)(RM_CHUNK_BYTES - sizeof(struct rm_buffer_multi)
++                                      - RM_MULTI_MAX_RANGES * sizeof(struct rm_buffer_range))
++                         : 0;
++}
++
++/* Returns the number of runs that FAILED (0 on success). */
++static unsigned wmtr_ub_send(struct wmtr_ub *u) {
++    if (!u->count) return 0;
++    struct rm_buffer_multi *m = (void *)u->buf;
++    m->count = u->count; m->data_bytes = u->data_len;
++    uint8_t *tail = u->buf + sizeof *m + u->data_len;
++    memcpy(tail, u->r, u->count * sizeof u->r[0]);
++    uint32_t total = (uint32_t)(sizeof *m + u->data_len + u->count * sizeof u->r[0]);
++    uint32_t st = wmtr_call(RM_OP_BUFFER_UPLOAD_MULTI, u->buf, total, 0, 0, 0);
++    unsigned failed = 0;
++    if (st != RM_OK) {
++        wmtr_last_upload_status = st;
++        for (uint32_t i = 0; i < u->count; i++) {
++            struct wmtr_buf *b = u->pend[i].b;
++            if (b && b->page_sum)
++                for (uint32_t p = u->pend[i].p0; p < u->pend[i].p1 && p < b->pages; p++)
++                    b->page_sum[p] = 0;
++            failed++;
++        }
++        static unsigned told;
++        if (told++ < 8)
++            fprintf(stderr, "[wmt-remote] ml821 coalesced upload FAILED status=%u "
++                            "(%u ranges, %u bytes) -- all invalidated for retry\n",
++                    st, u->count, u->data_len);
++    } else {
++        wmtr_ub_msgs++; wmtr_ub_ranges += u->count;
++        wmtr_flush_sent += u->data_len;
++    }
++    u->count = u->data_len = 0;
++    return failed;
++}
++
++static unsigned wmtr_ub_add(struct wmtr_ub *u, struct wmtr_buf *b, uint32_t p0, uint32_t p1,
++                            uint64_t off, uint64_t len) {
++    unsigned failed = 0;
++    if (!u->buf || len > u->data_cap) {
++        /* Too large for one coalesced message: the chunked single-range path
++         * already handles this correctly, so use it rather than special-casing. */
++        if (wmtr_buf_upload(b->handle, (const uint8_t *)b->shadow + off, off, len) != 0) {
++            if (b->page_sum)
++                for (uint32_t p = p0; p < p1 && p < b->pages; p++) b->page_sum[p] = 0;
++            return 1;
++        }
++        wmtr_flush_sent += len;
++        return 0;
++    }
++    if (u->count == RM_MULTI_MAX_RANGES || u->data_len + len > u->data_cap)
++        failed = wmtr_ub_send(u);
++    memcpy(u->buf + sizeof(struct rm_buffer_multi) + u->data_len,
++           (const uint8_t *)b->shadow + off, (size_t)len);
++    u->r[u->count].handle = b->handle;
++    u->r[u->count].offset = off;
++    u->r[u->count].length = len;
++    u->pend[u->count].b = b; u->pend[u->count].p0 = p0; u->pend[u->count].p1 = p1;
++    u->count++; u->data_len += (uint32_t)len;
++    return failed;
++}
++
+ /* Push every CPU-visible shadow to the host. Called before submission. */
+ static void wmtr_flush_buffers(void) {
++    /* Held for the whole walk: an entry retiring mid-flush would otherwise let
++     * this hash a shadow the owner has already freed. */
+     pthread_mutex_lock(&wmtr_bufs_lock);
+-    unsigned n = wmtr_bufs_n, failed = 0;
+-    for (unsigned i = 0; i < n; i++) {
+-        struct wmtr_buf *b = &wmtr_bufs[i];
++    unsigned n = 0, failed = 0;
++    struct timeval t_f0; gettimeofday(&t_f0, 0);                 /* ml819 */
++    unsigned long rpc_before = wmtr_call_n; double rpc_ms_before = wmtr_call_ms;
++    static struct wmtr_ub ub;            /* ml821: safe -- the walk holds the lock */
++    if (wmtr_batch_on) wmtr_ub_init(&ub);
++    for (struct wmtr_buf_chunk *chunk = wmtr_chunks; chunk; chunk = chunk->next)
++    for (unsigned ci = 0; ci < chunk->used; ci++) {
++        struct wmtr_buf *b = &chunk->entries[ci];
++        if (!b->handle) continue;
++        n++;
+         if (!b->cpu_visible || !b->shadow || !b->length) continue;
+         wmtr_flush_seen += b->length;
+ 
+@@ -383,9 +814,36 @@ static void wmtr_flush_buffers(void) {
+                     if (p1 != p0 && s2 == b->page_sum[p1]) break;
+                     b->page_sum[p1] = s2; run += l2; p1++;
+                 }
++                if (wmtr_batch_on) {
++                    failed += wmtr_ub_add(&ub, b, p0, p1, off, run);
++                    p0 = p1;
++                    continue;
++                }
+                 if (wmtr_buf_upload(b->handle, (const uint8_t *)b->shadow + off,
+-                                    off, run) != 0) failed++;
+-                else wmtr_flush_sent += run;
++                                    off, run) != 0) {
++                    /* ml815: a FAILED upload must not leave these pages marked
++                     * as delivered.
++                     *
++                     * The checksums above are written BEFORE the transfer is
++                     * known to have succeeded. If it then fails, the next flush
++                     * compares the guest bytes against a checksum claiming the
++                     * host already has them, matches, and skips the range --
++                     * permanently. The bytes never arrive and nothing ever
++                     * retries, so the failure is silent and irreversible.
++                     *
++                     * wmtr_page_sum reserves 0 for "never hashed", so zeroing
++                     * the run is exactly the right invalidation: the next flush
++                     * recomputes, cannot match, and resends. */
++                    uint32_t inv;
++                    for (inv = p0; inv < p1; inv++) b->page_sum[inv] = 0;
++                    failed++;
++                    static unsigned told_pg;                       /* ml819 */
++                    if (told_pg++ < 8)
++                        fprintf(stderr, "[wmt-remote] ml819 page upload FAILED status=%u buffer 0x%llx "
++                                        "off=%zu run=%zu len=%llu options=0x%x\n",
++                                wmtr_last_upload_status, (unsigned long long)b->handle, off, run,
++                                (unsigned long long)b->length, b->options);
++                } else wmtr_flush_sent += run;
+                 p0 = p1;
+             }
+             continue;
+@@ -404,11 +862,63 @@ static void wmtr_flush_buffers(void) {
+                         b->options);
+         }
+     }
+-    if ((++wmtr_flush_n % 60) == 0)
++    if (wmtr_batch_on) failed += wmtr_ub_send(&ub);   /* ml821 */
++    {   /* ml819: where a flush spends its time, accumulated between reports */
++        struct timeval t_f1; gettimeofday(&t_f1, 0);
++        double fms = (t_f1.tv_sec - t_f0.tv_sec) * 1000.0 + (t_f1.tv_usec - t_f0.tv_usec) / 1000.0;
++        double rpcms = wmtr_call_ms - rpc_ms_before;
++        wmtr_flush_ms += fms; wmtr_flush_rpc_ms += rpcms; wmtr_flush_rpcs += wmtr_call_n - rpc_before;
++    }
++    if ((++wmtr_flush_n % 60) == 0) {
+         fprintf(stderr, "[wmt-remote] flush #%lu: %u buffers, %llu MB considered, "
+-                        "%llu MB sent (%.1f%%)\n", wmtr_flush_n, n,
++                        "%llu MB sent (%.1f%%) | batches packed=%lu dropped=%lu\n", wmtr_flush_n, n,
+                 wmtr_flush_seen >> 20, wmtr_flush_sent >> 20,
+-                wmtr_flush_seen ? 100.0 * wmtr_flush_sent / wmtr_flush_seen : 0.0);
++                wmtr_flush_seen ? 100.0 * wmtr_flush_sent / wmtr_flush_seen : 0.0,
++                wmtr_batches_packed, wmtr_batches_dropped);
++        fprintf(stderr, "[wmt-remote] ml820 lifetime: pool-released=%lu | readback downloads=%lu %lu MB "
++                        "failed=%lu dropped=%lu | registry live=%u\n", wmtr_pool_released,
++                wmtr_rb_downloads, wmtr_rb_bytes >> 20, wmtr_rb_failed, wmtr_rb_dropped, wmtr_bufs_live);
++        fprintf(stderr, "[wmt-remote] ml822 batching=%s (flush uploads + pool releases only) | "
++                        "upload msgs=%lu carrying %lu ranges (%.1f per msg) | "
++                        "release msgs=%lu carrying %lu\n",
++                wmtr_batch_on ? "ON" : "off", wmtr_ub_msgs, wmtr_ub_ranges,
++                wmtr_ub_msgs ? (double)wmtr_ub_ranges / wmtr_ub_msgs : 0.0,
++                wmtr_rel_msgs, wmtr_rel_handles);
++        /* ml819 census for the last 60 flushes: wall time inside flush, how much of
++         * it was upload RPCs (the rest is hashing), and every RPC in the process
++         * by opcode -- count, total ms, mean ms. Opcode numbers map to
++         * protocol.h; the frame count is the flush count since flushes run once
++         * per submission. */
++        static struct timeval t_rep; struct timeval t_now; gettimeofday(&t_now, 0);
++        double wall = t_rep.tv_sec ? (t_now.tv_sec - t_rep.tv_sec) * 1000.0
++                                   + (t_now.tv_usec - t_rep.tv_usec) / 1000.0 : 0.0;
++        t_rep = t_now;
++        static unsigned long last_n[256]; static double last_ms[256];
++        static unsigned long last_calls; static double last_calls_ms;
++        unsigned long dn = wmtr_call_n - last_calls; double dms = wmtr_call_ms - last_calls_ms;
++        fprintf(stderr, "[rpc-census] ml819 60 flushes in %.0f ms wall: flush=%.0f ms (upload rpc %.0f ms, "
++                        "%lu upload rpcs, hash+scan %.0f ms) | ALL rpcs=%lu %.0f ms (%.1f%% of wall, "
++                        "%.2f ms mean)\n", wall, wmtr_flush_ms, wmtr_flush_rpc_ms, wmtr_flush_rpcs,
++                wmtr_flush_ms - wmtr_flush_rpc_ms, dn, dms, wall > 0 ? 100.0 * dms / wall : 0.0,
++                dn ? dms / dn : 0.0);
++        wmtr_flush_ms = wmtr_flush_rpc_ms = 0; wmtr_flush_rpcs = 0;
++        /* top opcodes by time */
++        unsigned i, k;
++        for (k = 0; k < 10; k++) {
++            unsigned best = 256; double bms = -1;
++            for (i = 0; i < 256; i++) {
++                double d = wmtr_op_ms[i] - last_ms[i];
++                if (wmtr_op_n[i] - last_n[i] && d > bms) { bms = d; best = i; }
++            }
++            if (best == 256) break;
++            unsigned long cn = wmtr_op_n[best] - last_n[best];
++            fprintf(stderr, "[rpc-census]   op %3u: %8lu calls %8.0f ms %6.2f ms/call %6.1f calls/flush\n",
++                    best, cn, bms, bms / cn, cn / 60.0);
++            last_n[best] = wmtr_op_n[best]; last_ms[best] = wmtr_op_ms[best];
++        }
++        for (i = 0; i < 256; i++) { last_n[i] = wmtr_op_n[i]; last_ms[i] = wmtr_op_ms[i]; }
++        last_calls = wmtr_call_n; last_calls_ms = wmtr_call_ms;
++    }
+     pthread_mutex_unlock(&wmtr_bufs_lock);
+     if (failed) {
+         static unsigned reported;
+diff --git a/src/winemetal/unix/wmt_remote_guard.h b/src/winemetal/unix/wmt_remote_guard.h
+index 5339a1a..b386a96 100644
+--- a/src/winemetal/unix/wmt_remote_guard.h
++++ b/src/winemetal/unix/wmt_remote_guard.h
+@@ -10,29 +10,6 @@ static NTSTATUS _rmg_NSObject_description(void *obj) {
+   }
+   return _NSObject_description(obj);
+ }
+-static NTSTATUS _rmg_MTLCommandBuffer_computeCommandEncoder(void *obj) {
+-  if (wmtr_enabled()) {
+-    struct unixcall_generic_obj_uint64_obj_ret *p = obj;
+-    p->ret = 0;   /* never hand back uninitialised stack */
+-    return wmtr_unimplemented("MTLCommandBuffer_computeCommandEncoder");
+-  }
+-  return _MTLCommandBuffer_computeCommandEncoder(obj);
+-}
+-static NTSTATUS _rmg_MTLDevice_newMeshRenderPipelineState(void *obj) {
+-  if (wmtr_enabled()) {
+-    struct unixcall_mtldevice_newmeshrenderpso *p = obj;
+-    p->ret_error = 0;   /* never hand back uninitialised stack */
+-    p->ret_pso = 0;   /* never hand back uninitialised stack */
+-    return wmtr_unimplemented("MTLDevice_newMeshRenderPipelineState");
+-  }
+-  return _MTLDevice_newMeshRenderPipelineState(obj);
+-}
+-static NTSTATUS _rmg_MTLComputeCommandEncoder_encodeCommands(void *obj) {
+-  if (wmtr_enabled()) {
+-    return wmtr_unimplemented("MTLComputeCommandEncoder_encodeCommands");
+-  }
+-  return _MTLComputeCommandEncoder_encodeCommands(obj);
+-}
+ static NTSTATUS _rmg_MTLTexture_pixelFormat(void *obj) {
+   if (wmtr_enabled()) {
+     struct unixcall_generic_obj_uint64_ret *p = obj;
+@@ -57,14 +34,6 @@ static NTSTATUS _rmg_MTLTexture_arrayLength(void *obj) {
+   }
+   return _MTLTexture_arrayLength(obj);
+ }
+-static NTSTATUS _rmg_MTLTexture_mipmapLevelCount(void *obj) {
+-  if (wmtr_enabled()) {
+-    struct unixcall_generic_obj_uint64_ret *p = obj;
+-    p->ret = 0;   /* never hand back uninitialised stack */
+-    return wmtr_unimplemented("MTLTexture_mipmapLevelCount");
+-  }
+-  return _MTLTexture_mipmapLevelCount(obj);
+-}
+ static NTSTATUS _rmg_MTLBuffer_didModifyRange(void *obj) {
+   if (wmtr_enabled()) {
+     struct unixcall_generic_obj_uint64_uint64_ret *p = obj;
+@@ -252,14 +221,6 @@ static NTSTATUS _rmg_MTLBinaryArchive_serialize(void *obj) {
+   }
+   return _MTLBinaryArchive_serialize(obj);
+ }
+-static NTSTATUS _rmg_MTLDevice_newSharedTexture(void *obj) {
+-  if (wmtr_enabled()) {
+-    struct unixcall_mtldevice_newtexture *p = obj;
+-    p->ret = 0;   /* never hand back uninitialised stack */
+-    return wmtr_unimplemented("MTLDevice_newSharedTexture");
+-  }
+-  return _MTLDevice_newSharedTexture(obj);
+-}
+ static NTSTATUS _rmg_WMTBootstrapRegister(void *obj) {
+   if (wmtr_enabled()) {
+     return wmtr_unimplemented("WMTBootstrapRegister");
+diff --git a/src/winemetal/unix/wmt_remote_pack.h b/src/winemetal/unix/wmt_remote_pack.h
+index 0a28181..1cb6542 100644
+--- a/src/winemetal/unix/wmt_remote_pack.h
++++ b/src/winemetal/unix/wmt_remote_pack.h
+@@ -5,8 +5,8 @@
+  * survives a machine boundary, so every pointer becomes an offset into a
+  * sidecar region travelling with the records.
+  *
+- * Only the 15 render opcodes an ARM64 D3D11 cube actually emits are handled --
+- * measured, not assumed: 28,800 records over 12,288 batches, zero compute,
++ * Began as the 15 render opcodes an ARM64 D3D11 cube emits (measured, not
++ * assumed: 28,800 records over 12,288 batches, zero compute,
+  * zero blit. An unhandled opcode is a NAMED failure carrying the encoder kind,
+  * the opcode and the record index, because "packing failed" one machine away
+  * from the GPU is close to undebuggable.
+@@ -63,6 +63,62 @@ wmtw_pack_render(const struct wmtcmd_base *head, struct wmtw_packer *p,
+             w->offset = b->offset; w->index = b->index;
+             break;
+         }
++        case WMTRenderCommandSetMeshBuffer: {
++            const struct wmtcmd_render_setbuffer *b = (const void *)c;
++            ALLOC(setmeshbuffer, WMTW_OP_SetMeshBuffer);
++            w->buffer = b->buffer; w->offset = b->offset; w->index = b->index;
++            break;
++        }
++        case WMTRenderCommandSetMeshBufferOffset: {
++            const struct wmtcmd_render_setbufferoffset *b = (const void *)c;
++            ALLOC(setmeshbufferoffset, WMTW_OP_SetMeshBufferOffset);
++            w->offset = b->offset; w->index = b->index;
++            break;
++        }
++        case WMTRenderCommandSetObjectBuffer: {
++            const struct wmtcmd_render_setbuffer *b = (const void *)c;
++            ALLOC(setobjectbuffer, WMTW_OP_SetObjectBuffer);
++            w->buffer = b->buffer; w->offset = b->offset; w->index = b->index;
++            break;
++        }
++        case WMTRenderCommandDrawMeshThreadgroups: {
++            const struct wmtcmd_render_draw_meshthreadgroups *b = (const void *)c;
++            ALLOC(drawmeshthreadgroups, WMTW_OP_DrawMeshThreadgroups);
++            w->grid_w = b->threadgroup_per_grid.width;
++            w->grid_h = b->threadgroup_per_grid.height;
++            w->grid_d = b->threadgroup_per_grid.depth;
++            w->obj_w  = b->object_threadgroup_size.width;
++            w->obj_h  = b->object_threadgroup_size.height;
++            w->obj_d  = b->object_threadgroup_size.depth;
++            w->mesh_w = b->mesh_threadgroup_size.width;
++            w->mesh_h = b->mesh_threadgroup_size.height;
++            w->mesh_d = b->mesh_threadgroup_size.depth;
++            w->pad = 0;
++            break;
++        }
++        case WMTRenderCommandSetObjectBufferOffset: {
++            const struct wmtcmd_render_setbufferoffset *b = (const void *)c;
++            ALLOC(setobjectbufferoffset, WMTW_OP_SetObjectBufferOffset);
++            w->offset = b->offset; w->index = b->index;
++            break;
++        }
++        case WMTRenderCommandSetVisibilityMode: {
++            const struct wmtcmd_render_setvisibilitymode *b = (const void *)c;
++            ALLOC(setvisibilitymode, WMTW_OP_SetVisibilityMode);
++            w->offset = b->offset; w->mode = (uint32_t)b->mode; w->pad = 0;
++            break;
++        }
++        case WMTRenderCommandDrawIndexedIndirect: {
++            const struct wmtcmd_render_draw_indexed_indirect *b = (const void *)c;
++            ALLOC(drawindexedindirect, WMTW_OP_DrawIndexedIndirect);
++            w->index_buffer = b->index_buffer;
++            w->index_buffer_offset = b->index_buffer_offset;
++            w->indirect_args_buffer = b->indirect_args_buffer;
++            w->indirect_args_offset = b->indirect_args_offset;
++            w->primitive_type = (uint32_t)b->primitive_type;
++            w->index_type = (uint32_t)b->index_type;
++            break;
++        }
+         case WMTRenderCommandSetFragmentBufferOffset: {
+             const struct wmtcmd_render_setbufferoffset *b = (const void *)c;
+             ALLOC(setfragmentbufferoffset, WMTW_OP_SetFragmentBufferOffset);
+@@ -155,6 +211,142 @@ wmtw_pack_render(const struct wmtcmd_base *head, struct wmtw_packer *p,
+             w->base_instance = b->base_instance;
+             break;
+         }
++        /* ---- ml817: everything below was UNSUPPORTED in the first in-game run.
++         * A batch containing one unsupported command is dropped WHOLE, so the
++         * two geometry-shader draws alone removed 2,700+ batches: every draw in
++         * them, on top of the record-cap drops. Nothing here is a new Metal
++         * concept -- each one packs to what the native encoder does. */
++        case WMTRenderCommandDrawIndirect: {
++            const struct wmtcmd_render_draw_indirect *b = (const void *)c;
++            ALLOC(drawindirect, WMTW_OP_DrawIndirect);
++            w->indirect_buffer = b->indirect_args_buffer; w->indirect_offset = b->indirect_args_offset;
++            w->primitive = (uint32_t)b->primitive_type; w->pad0 = 0;
++            break;
++        }
++        case WMTRenderCommandDrawMeshThreadgroupsIndirect: {
++            const struct wmtcmd_render_draw_meshthreadgroups_indirect *b = (const void *)c;
++            ALLOC(drawmeshthreadgroupsindirect, WMTW_OP_DrawMeshThreadgroupsIndirect);
++            w->indirect_buffer = b->indirect_args_buffer; w->indirect_offset = b->indirect_args_offset;
++            w->obj_w = b->object_threadgroup_size.width;  w->obj_h = b->object_threadgroup_size.height;
++            w->obj_d = b->object_threadgroup_size.depth;
++            w->mesh_w = b->mesh_threadgroup_size.width;   w->mesh_h = b->mesh_threadgroup_size.height;
++            w->mesh_d = b->mesh_threadgroup_size.depth;
++            break;
++        }
++        case WMTRenderCommandMemoryBarrier: {
++            const struct wmtcmd_render_memory_barrier *b = (const void *)c;
++            ALLOC(memorybarrier, WMTW_OP_MemoryBarrier);
++            w->scope = (uint32_t)b->scope; w->stages_after = (uint32_t)b->stages_after;
++            w->stages_before = (uint32_t)b->stages_before; w->pad0 = 0;
++            break;
++        }
++        /* Single viewport / scissor: the array forms with count 1. */
++        case WMTRenderCommandSetViewport: {
++            const struct wmtcmd_render_setviewport *b = (const void *)c;
++            ALLOC(setviewports, WMTW_OP_SetViewports);
++            struct wmtw_viewport v = { b->viewport.originX, b->viewport.originY, b->viewport.width,
++                                       b->viewport.height, b->viewport.znear, b->viewport.zfar };
++            uint32_t off = wmtw_side_put(p, &v, sizeof v);
++            if (off == 0xffffffffu) FAIL(WMTW_PACK_SIDECAR_OVERFLOW);
++            w->viewports_offset = off; w->viewports_count = 1;
++            break;
++        }
++        case WMTRenderCommandSetScissorRect: {
++            const struct wmtcmd_render_setscissorrect *b = (const void *)c;
++            ALLOC(setscissorrects, WMTW_OP_SetScissorRects);
++            struct wmtw_scissor sc = { b->scissor_rect.x, b->scissor_rect.y,
++                                       b->scissor_rect.width, b->scissor_rect.height };
++            uint32_t off = wmtw_side_put(p, &sc, sizeof sc);
++            if (off == 0xffffffffu) FAIL(WMTW_PACK_SIDECAR_OVERFLOW);
++            w->scissors_offset = off; w->scissors_count = 1;
++            break;
++        }
++        /* DXMT geometry-shader emulation: an object/mesh pipeline whose draw
++         * arguments sit in a buffer already bound at object index 21 (and the
++         * index buffer at 20). Exactly what the native encoder issues. */
++#define MESH_DRAW(GW, GH, OW, OH, MW) do { \
++            ALLOC(drawmeshthreadgroups, WMTW_OP_DrawMeshThreadgroups); \
++            w->grid_w = (GW); w->grid_h = (GH); w->grid_d = 1; \
++            w->obj_w = (OW); w->obj_h = (OH); w->obj_d = 1; \
++            w->mesh_w = (MW); w->mesh_h = 1; w->mesh_d = 1; w->pad = 0; } while (0)
++#define OBJ_BUF(BUF, OFF, IDX) do { \
++            ALLOC(setobjectbuffer, WMTW_OP_SetObjectBuffer); \
++            w->buffer = (BUF); w->offset = (OFF); w->index = (IDX); } while (0)
++#define OBJ_OFF(OFF, IDX) do { \
++            ALLOC(setobjectbufferoffset, WMTW_OP_SetObjectBufferOffset); \
++            w->offset = (OFF); w->index = (IDX); } while (0)
++        case WMTRenderCommandDXMTGeometryDraw: {
++            const struct wmtcmd_render_dxmt_geometry_draw *b = (const void *)c;
++            { OBJ_OFF(b->draw_arguments_offset, 21); }
++            { MESH_DRAW(b->warp_count, b->instance_count, b->vertex_per_warp, 1, 1); }
++            break;
++        }
++        case WMTRenderCommandDXMTGeometryDrawIndexed: {
++            const struct wmtcmd_render_dxmt_geometry_draw_indexed *b = (const void *)c;
++            { OBJ_BUF(b->index_buffer, b->index_buffer_offset, 20); }
++            { OBJ_OFF(b->draw_arguments_offset, 21); }
++            { MESH_DRAW(b->warp_count, b->instance_count, b->vertex_per_warp, 1, 1); }
++            break;
++        }
++        case WMTRenderCommandDXMTGeometryDrawIndirect: {
++            const struct wmtcmd_render_dxmt_geometry_draw_indirect *b = (const void *)c;
++            { OBJ_BUF(b->indirect_args_buffer, b->indirect_args_offset, 21); }
++            { ALLOC(drawmeshthreadgroupsindirect, WMTW_OP_DrawMeshThreadgroupsIndirect);
++              w->indirect_buffer = b->dispatch_args_buffer; w->indirect_offset = b->dispatch_args_offset;
++              w->obj_w = b->vertex_per_warp; w->obj_h = 1; w->obj_d = 1;
++              w->mesh_w = 1; w->mesh_h = 1; w->mesh_d = 1; }
++            { OBJ_BUF(b->imm_draw_arguments, 0, 21); }
++            break;
++        }
++        case WMTRenderCommandDXMTGeometryDrawIndexedIndirect: {
++            const struct wmtcmd_render_dxmt_geometry_draw_indexed_indirect *b = (const void *)c;
++            { OBJ_BUF(b->index_buffer, b->index_buffer_offset, 20); }
++            { OBJ_BUF(b->indirect_args_buffer, b->indirect_args_offset, 21); }
++            { ALLOC(drawmeshthreadgroupsindirect, WMTW_OP_DrawMeshThreadgroupsIndirect);
++              w->indirect_buffer = b->dispatch_args_buffer; w->indirect_offset = b->dispatch_args_offset;
++              w->obj_w = b->vertex_per_warp; w->obj_h = 1; w->obj_d = 1;
++              w->mesh_w = 1; w->mesh_h = 1; w->mesh_d = 1; }
++            { OBJ_BUF(b->imm_draw_arguments, 0, 21); }
++            break;
++        }
++        /* DXMT tessellation emulation: same shape, mesh threadgroup of 32. */
++        case WMTRenderCommandDXMTTessellationMeshDraw: {
++            const struct wmtcmd_render_dxmt_tessellation_mesh_draw *b = (const void *)c;
++            { OBJ_OFF(b->draw_arguments_offset, 21); }
++            { MESH_DRAW(b->patch_per_mesh_instance, b->instance_count, b->threads_per_patch, b->patch_per_group, 32); }
++            break;
++        }
++        case WMTRenderCommandDXMTTessellationMeshDrawIndexed: {
++            const struct wmtcmd_render_dxmt_tessellation_mesh_draw_indexed *b = (const void *)c;
++            { OBJ_BUF(b->index_buffer, b->index_buffer_offset, 20); }
++            { OBJ_OFF(b->draw_arguments_offset, 21); }
++            { MESH_DRAW(b->patch_per_mesh_instance, b->instance_count, b->threads_per_patch, b->patch_per_group, 32); }
++            break;
++        }
++        case WMTRenderCommandDXMTTessellationMeshDrawIndirect: {
++            const struct wmtcmd_render_dxmt_tessellation_mesh_draw_indirect *b = (const void *)c;
++            { OBJ_BUF(b->indirect_args_buffer, b->indirect_args_offset, 21); }
++            { ALLOC(drawmeshthreadgroupsindirect, WMTW_OP_DrawMeshThreadgroupsIndirect);
++              w->indirect_buffer = b->dispatch_args_buffer; w->indirect_offset = b->dispatch_args_offset;
++              w->obj_w = b->threads_per_patch; w->obj_h = b->patch_per_group; w->obj_d = 1;
++              w->mesh_w = 32; w->mesh_h = 1; w->mesh_d = 1; }
++            { OBJ_BUF(b->imm_draw_arguments, 0, 21); }
++            break;
++        }
++        case WMTRenderCommandDXMTTessellationMeshDrawIndexedIndirect: {
++            const struct wmtcmd_render_dxmt_tessellation_mesh_draw_indexed_indirect *b = (const void *)c;
++            { OBJ_BUF(b->index_buffer, b->index_buffer_offset, 20); }
++            { OBJ_BUF(b->indirect_args_buffer, b->indirect_args_offset, 21); }
++            { ALLOC(drawmeshthreadgroupsindirect, WMTW_OP_DrawMeshThreadgroupsIndirect);
++              w->indirect_buffer = b->dispatch_args_buffer; w->indirect_offset = b->dispatch_args_offset;
++              w->obj_w = b->threads_per_patch; w->obj_h = b->patch_per_group; w->obj_d = 1;
++              w->mesh_w = 32; w->mesh_h = 1; w->mesh_d = 1; }
++            { OBJ_BUF(b->imm_draw_arguments, 0, 21); }
++            break;
++        }
++#undef MESH_DRAW
++#undef OBJ_BUF
++#undef OBJ_OFF
+         default:
+             /* Name it. A title needing a new command family should say which
+              * one, not fail anonymously on the far side of the wire. */
+diff --git a/src/winemetal/winemetal.h b/src/winemetal/winemetal.h
+index c9024f5..2223b97 100644
+--- a/src/winemetal/winemetal.h
++++ b/src/winemetal/winemetal.h
+@@ -2155,4 +2155,70 @@ WINEMETAL_API void MTLTexture_getBytes(
+     struct WMTMemoryPointer data, uint64_t bytes_per_row, uint64_t bytes_per_image
+ );
+ 
+-#endif
+\ No newline at end of file
++/* madeira-d3d12: convert application DXIL to a metallib on this machine.
++ * `args` is a struct madeira_ir_convert_args; see madeira_ir_abi.h. Runs
++ * locally in both backends because it touches no Metal object. */
++WINEMETAL_API void MadeiraIRConvert(void *args);
++
++/* madeira-d3d12 (ml859): a render pipeline with a Metal vertex descriptor.
++ * DXMT fetches vertices in shader code and never needed one; shaders from the
++ * Metal Shader Converter take vertex input through [[stage_in]], so the
++ * pipeline must describe the attributes. `format` is the raw MTLVertexFormat
++ * value, `step_function` the raw MTLVertexStepFunction value (0 constant,
++ * 1 per vertex, 2 per instance). Masks say which entries are populated.
++ * Slot 147 (Madeira slot 128 before the upstream rebase); remote mode carries the descriptor as a trailing block on the
++ * pipeline-info payload, which older hosts ignore. */
++struct WMTVertexAttributeInfo {
++  uint32_t format;
++  uint32_t offset;
++  uint32_t buffer_index;
++  uint32_t reserved;
++};
++struct WMTVertexBufferLayoutInfo {
++  uint32_t stride;
++  uint32_t step_function;
++  uint32_t step_rate;
++  uint32_t reserved;
++};
++struct WMTVertexDescriptorInfo {
++  struct WMTVertexAttributeInfo attributes[31];
++  struct WMTVertexBufferLayoutInfo layouts[31];
++  uint32_t attribute_mask;
++  uint32_t layout_mask;
++};
++WINEMETAL_API obj_handle_t
++MTLDevice_newRenderPipelineStateVD(obj_handle_t device, const struct WMTRenderPipelineInfo *info,
++                                   const struct WMTVertexDescriptorInfo *vd, obj_handle_t *err_out);
++
++/* ml880: residency sets. Upstream DXMT's residency-set calls (declared above)
++ * replace Madeira's slots 129-132; MTLDevice_newResidencySet,
++ * MTLResidencySet_commit and MTLCommandQueue_addResidencySet are upstream's,
++ * and the single-allocation form is kept as a PE-side wrapper over
++ * MTLResidencySet_addAllocations. */
++WINEMETAL_API void MTLResidencySet_addAllocation(obj_handle_t set, obj_handle_t allocation);
++
++/* ml927 (slot 148, Madeira slot 133 before the upstream rebase): a geometry-shader pipeline through the Metal Shader
++ * Converter's mesh emulation. The converter turns the vertex shader into an
++ * OBJECT function (named "<vertex_function>.dxil_irconverter_object_shader",
++ * function constant "tessellationEnabled" = false, with the synthesized
++ * stage-in function LINKED into the object stage) and the geometry shader into
++ * a MESH function (function constant "vertex_shader_output_size_fc" = the
++ * vertex shader's output size). `info` supplies the attachments exactly as for
++ * MTLDevice_newMeshRenderPipelineState; its function handles are ignored. */
++struct WMTGeometryEmulationInfo {
++  obj_handle_t stagein_library;
++  obj_handle_t vertex_library;
++  obj_handle_t geometry_library;
++  obj_handle_t fragment_library;
++  char vertex_function[64];
++  char geometry_function[64];
++  char fragment_function[64];
++  uint32_t gs_vertex_size_bytes;
++  uint32_t gs_max_input_primitives;
++  uint32_t reserved[6];
++};
++WINEMETAL_API obj_handle_t
++MTLDevice_newGeometryEmulationPipelineState(obj_handle_t device, const struct WMTMeshRenderPipelineInfo *info,
++                                            const struct WMTGeometryEmulationInfo *ge, obj_handle_t *err_out);
++
++#endif
+diff --git a/src/winemetal/winemetal_thunks.c b/src/winemetal/winemetal_thunks.c
+index 069b540..1de7493 100644
+--- a/src/winemetal/winemetal_thunks.c
++++ b/src/winemetal/winemetal_thunks.c
+@@ -1355,3 +1355,53 @@ MTLTexture_getBytes(
+   params.bytes_per_image = bytes_per_image;
+   UNIX_CALL(145, &params);
+ }
++
++/* madeira-d3d12: runtime DXIL -> metallib conversion.
++ *
++ * Slot 146 (Madeira slot 127 before the upstream rebase), appended. The argument block is described once in
++ * research/madeira-d3d12/src/madeira_ir_abi.h and passed straight through;
++ * winemetal does not interpret it, so the D3D12 runtime and the converter
++ * service are the only two places that need to agree on its shape. */
++WINEMETAL_API void
++MadeiraIRConvert(void *args) {
++  UNIX_CALL(146, args);
++}
++
++/* Slot 147: render pipeline with a vertex descriptor (see winemetal.h). */
++WINEMETAL_API obj_handle_t
++MTLDevice_newRenderPipelineStateVD(obj_handle_t device, const struct WMTRenderPipelineInfo *info,
++                                   const struct WMTVertexDescriptorInfo *vd, obj_handle_t *err_out) {
++  struct unixcall_mtldevice_newrenderpso_vd params;
++  params.device = device;
++  WMT_MEMPTR_SET(params.info, info);
++  WMT_MEMPTR_SET(params.vd, vd);
++  params.ret_error = 0;
++  params.ret_pso = 0;
++  UNIX_CALL(147, &params);
++  if (err_out)
++    *err_out = params.ret_error;
++  return params.ret_pso;
++}
++
++/* ml880: residency sets. Upstream's calls (slots 132-137) replace Madeira's
++ * slots 129-132; the single-allocation form stays as a wrapper. */
++WINEMETAL_API void
++MTLResidencySet_addAllocation(obj_handle_t set, obj_handle_t allocation) {
++  MTLResidencySet_addAllocations(set, &allocation, 1);
++}
++
++/* ml927: geometry-shader emulation pipeline, slot 148. */
++WINEMETAL_API obj_handle_t
++MTLDevice_newGeometryEmulationPipelineState(obj_handle_t device, const struct WMTMeshRenderPipelineInfo *info,
++                                            const struct WMTGeometryEmulationInfo *ge, obj_handle_t *err_out) {
++  struct unixcall_mtldevice_newgeompso params;
++  params.device = device;
++  WMT_MEMPTR_SET(params.info, info);
++  WMT_MEMPTR_SET(params.ge, ge);
++  params.ret_error = 0;
++  params.ret_pso = 0;
++  UNIX_CALL(148, &params);
++  if (err_out)
++    *err_out = params.ret_error;
++  return params.ret_pso;
++}
+diff --git a/src/winemetal/winemetal_thunks.h b/src/winemetal/winemetal_thunks.h
+index 37645c9..ba045ff 100644
+--- a/src/winemetal/winemetal_thunks.h
++++ b/src/winemetal/winemetal_thunks.h
+@@ -139,6 +139,14 @@ struct unixcall_mtldevice_newrenderpso {
+   obj_handle_t ret_pso;
+ };
+ 
++struct unixcall_mtldevice_newrenderpso_vd {
++  obj_handle_t device;
++  struct WMTConstMemoryPointer info;
++  struct WMTConstMemoryPointer vd;
++  obj_handle_t ret_error;
++  obj_handle_t ret_pso;
++};
++
+ struct unixcall_mtldevice_newmeshrenderpso {
+   obj_handle_t device;
+   struct WMTConstMemoryPointer info;
+@@ -146,6 +154,14 @@ struct unixcall_mtldevice_newmeshrenderpso {
+   obj_handle_t ret_pso;
+ };
+ 
++struct unixcall_mtldevice_newgeompso {   /* ml927 */
++  obj_handle_t device;
++  struct WMTConstMemoryPointer info;
++  struct WMTConstMemoryPointer ge;
++  obj_handle_t ret_error;
++  obj_handle_t ret_pso;
++};
++
+ struct unixcall_generic_obj_cmd_noret {
+   obj_handle_t encoder;
+   struct WMTConstMemoryPointer cmd_head;
+diff --git a/src/winemetal/wmt_api_names.h b/src/winemetal/wmt_api_names.h
+index f0bc7e7..9a65ef8 100644
+--- a/src/winemetal/wmt_api_names.h
++++ b/src/winemetal/wmt_api_names.h
+@@ -3,7 +3,7 @@
+ #ifndef WMT_API_NAMES_H
+ #define WMT_API_NAMES_H
+ 
+-#define WMT_API_COUNT 127
++#define WMT_API_COUNT 134
+ 
+ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "NSObject_retain",
+@@ -34,7 +34,7 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "MTLDevice_newLibrary",
+     "MTLLibrary_newFunction",
+     "NSString_lengthOfBytesUsingEncoding",
+-    "NSObject_description",
++    "rmg_NSObject_description",
+     "MTLDevice_newComputePipelineState",
+     "MTLCommandBuffer_blitCommandEncoder",
+     "MTLCommandBuffer_computeCommandEncoder",
+@@ -45,27 +45,27 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "MTLBlitCommandEncoder_encodeCommands",
+     "MTLComputeCommandEncoder_encodeCommands",
+     "MTLRenderCommandEncoder_encodeCommands",
+-    "MTLTexture_pixelFormat",
++    "rmg_MTLTexture_pixelFormat",
+     "MTLTexture_width",
+     "MTLTexture_height",
+-    "MTLTexture_depth",
+-    "MTLTexture_arrayLength",
++    "rmg_MTLTexture_depth",
++    "rmg_MTLTexture_arrayLength",
+     "MTLTexture_mipmapLevelCount",
+     "MTLTexture_replaceRegion",
+-    "MTLBuffer_didModifyRange",
++    "rmg_MTLBuffer_didModifyRange",
+     "MTLCommandBuffer_presentDrawable",
+-    "MTLCommandBuffer_presentDrawableAfterMinimumDuration",
++    "rmg_MTLCommandBuffer_presentDrawableAfterMinimumDuration",
+     "MTLDevice_supportsFamily",
+     "MTLDevice_supportsBCTextureCompression",
+     "MTLDevice_supportsTextureSampleCount",
+     "MTLDevice_hasUnifiedMemory",
+-    "MTLCaptureManager_sharedCaptureManager",
+-    "MTLCaptureManager_startCapture",
+-    "MTLCaptureManager_stopCapture",
+-    "MTLDevice_newTemporalScaler",
+-    "MTLDevice_newSpatialScaler",
+-    "MTLCommandBuffer_encodeTemporalScale",
+-    "MTLCommandBuffer_encodeSpatialScale",
++    "rmg_MTLCaptureManager_sharedCaptureManager",
++    "rmg_MTLCaptureManager_startCapture",
++    "rmg_MTLCaptureManager_stopCapture",
++    "rmg_MTLDevice_newTemporalScaler",
++    "rmg_MTLDevice_newSpatialScaler",
++    "rmg_MTLCommandBuffer_encodeTemporalScale",
++    "rmg_MTLCommandBuffer_encodeSpatialScale",
+     "NSString_string",
+     "NSString_alloc_init",
+     "DeveloperHUDProperties_instance",
+@@ -74,8 +74,8 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "DeveloperHUDProperties_remove",
+     "MetalDrawable_texture",
+     "MetalLayer_nextDrawable",
+-    "MTLDevice_supportsFXSpatialScaler",
+-    "MTLDevice_supportsFXTemporalScaler",
++    "rmg_MTLDevice_supportsFXSpatialScaler",
++    "rmg_MTLDevice_supportsFXTemporalScaler",
+     "MetalLayer_setProps",
+     "MetalLayer_getProps",
+     "CreateMetalViewFromHWND",
+@@ -95,44 +95,51 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "MTLCommandEncoder_setLabel",
+     "MTLDevice_setShouldMaximizeConcurrentCompilation",
+     "thunk_SM50GetArgumentsInfo",
+-    "MTLCommandBuffer_error",
+-    "MTLCommandBuffer_logs",
+-    "MTLLogContainer_enumerate",
+-    "CGColorSpace_checkColorSpaceSupported",
+-    "MetalLayer_setColorSpace",
++    "rmg_MTLCommandBuffer_error",
++    "rmg_MTLCommandBuffer_logs",
++    "rmg_MTLLogContainer_enumerate",
++    "rmg_CGColorSpace_checkColorSpaceSupported",
++    "rmg_MetalLayer_setColorSpace",
+     "WMTGetPrimaryDisplayId",
+-    "WMTGetSecondaryDisplayId",
++    "rmg_WMTGetSecondaryDisplayId",
+     "WMTGetDisplayDescription",
+     "MetalLayer_getEDRValue",
+     "MTLLibrary_newFunctionWithConstants",
+-    "WMTQueryDisplaySetting",
+-    "WMTUpdateDisplaySetting",
++    "rmg_WMTQueryDisplaySetting",
++    "rmg_WMTUpdateDisplaySetting",
+     "WMTQueryDisplaySettingForLayer",
+     "MTLCommandBuffer_encodeWaitForEvent",
+-    "MTLSharedEvent_signalValue",
+-    "MTLSharedEvent_setWin32EventAtValue",
+-    "MTLDevice_newFence",
+-    "MTLDevice_newEvent",
++    "rmg_MTLSharedEvent_signalValue",
++    "rmg_MTLSharedEvent_setWin32EventAtValue",
++    "rmg_MTLDevice_newFence",
++    "rmg_MTLDevice_newEvent",
+     "MTLBuffer_updateContents",
+     "SharedEventListener_create",
+     "SharedEventListener_start",
+     "SharedEventListener_destroy",
+     "WMTGetOSVersion",
+-    "MTLDevice_newBinaryArchive",
+-    "MTLBinaryArchive_serialize",
++    "rmg_MTLDevice_newBinaryArchive",
++    "rmg_MTLBinaryArchive_serialize",
+     "DispatchData_alloc_init",
+     "CacheReader_alloc_init",
+     "CacheReader_get",
+     "CacheWriter_alloc_init",
+     "CacheWriter_set",
+     "WMTSetMetalShaderCachePath",
+-    "MTLDevice_newSharedTexture",
+-    "WMTBootstrapRegister",
+-    "WMTBootstrapLookUp",
+-    "MTLSharedEvent_createMachPort",
+-    "MTLDevice_newSharedEventWithMachPort",
++    "rmg_MTLDevice_newSharedTexture",
++    "rmg_WMTBootstrapRegister",
++    "rmg_WMTBootstrapLookUp",
++    "rmg_MTLSharedEvent_createMachPort",
++    "rmg_MTLDevice_newSharedEventWithMachPort",
+     "MTLDevice_registryID",
+-    "MTLSharedEvent_waitUntilSignaledValue",
++    "rmg_MTLSharedEvent_waitUntilSignaledValue",
++    "madeira_ir_convert",
++    "MTLDevice_newRenderPipelineStateVD",
++    "MTLDevice_newResidencySet",
++    "MTLResidencySet_addAllocation",
++    "MTLResidencySet_commit",
++    "MTLCommandQueue_addResidencySet",
++    "MTLDevice_newGeometryEmulationPipelineState",
+ };
+ 
+ #endif

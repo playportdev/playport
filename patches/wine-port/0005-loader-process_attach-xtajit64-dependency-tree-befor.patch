@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 14:58:38 +0800
+Subject: [PATCH] loader: process_attach xtajit64 dependency tree before
+ arm64ec_process_init
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+arm64ec_process_init invokes FEX's BTCpu64 ProcessInit, which calls
+InitCRTProcess to run xtajit64's C++ static constructors. Those ctors
+use ucrtbase functions like _lock(N) — but at that point ucrtbase's
+DllMain has not been called, so its lock_table[17] (master init lock)
+remains zero. _lock(17) then recurses into itself indefinitely
+(infinite recursion is cbnz-checked on lock_table[17].first_word being
+non-zero, which DllMain is responsible for setting).
+
+Fix: in load_arm64ec_module, walk_node_dependencies(process_attach)
+on xtajit64's DdagNode before calling arm64ec_process_init. This runs
+DllMains in dependency order — ucrtbase, kernel32, kernelbase get
+their PROCESS_ATTACH callbacks first, so the CRT is initialized
+before FEX's ctors run.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+(cherry picked from commit 97a9308744063103f51a8889aa268623c06e50d2)
+Madeira-commit: 06143656ec77c287eea534aaab75eb56b05c6a2c
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index b3115fd7bdb..4dba3d010f9 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4328,12 +4328,28 @@ static void load_arm64ec_module(void)
+         NtClose( key );
+     }
+ 
+-    if ((status = load_dll( NULL, module, 0, &wm, FALSE )) ||
+-        (status = arm64ec_process_init( wm->ldr.DllBase )))
++    if ((status = load_dll( NULL, module, 0, &wm, FALSE )))
+     {
+         ERR( "could not load %s, status %lx\n", debugstr_w(module), status );
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
++
++    /* Run process_attach (DllMain) on xtajit64's dependency tree BEFORE calling
++     * arm64ec_process_init. arm64ec_process_init invokes FEX's ProcessInit,
++     * which runs C++ static constructors via InitCRTProcess. Those ctors call
++     * into ucrtbase (e.g. _lock); without ucrtbase's DllMain having run, its
++     * lock_table[17] is uninitialized and _lock(17) recurses infinitely. */
++    if ((status = walk_node_dependencies( wm->ldr.DdagNode, NULL, process_attach )))
++    {
++        ERR( "process_attach for %s deps failed, status %lx\n", debugstr_w(module), status );
++        NtTerminateProcess( GetCurrentProcess(), status );
++    }
++
++    if ((status = arm64ec_process_init( wm->ldr.DllBase )))
++    {
++        ERR( "arm64ec_process_init for %s failed, status %lx\n", debugstr_w(module), status );
++        NtTerminateProcess( GetCurrentProcess(), status );
++    }
+ }
+ 
+ #endif

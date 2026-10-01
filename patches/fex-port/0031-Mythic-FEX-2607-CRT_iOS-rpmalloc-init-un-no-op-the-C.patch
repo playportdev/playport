@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 9 Jul 2026 01:29:03 +0800
+Subject: [PATCH] =?UTF-8?q?Mythic:=20=F0=9F=8E=AE=20FEX-2607=20=E2=80=94?=
+ =?UTF-8?q?=20CRT=5FiOS=20rpmalloc=20init=20(un-no-op=20the=20CRT=20hooks)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+CRT_iOS.cpp was a full no-op that assumed "mingw's default startup ran ctors and
+initialized the heap." But FEX's rpmalloc allocator is enabled on this MinGW EC
+build (ENABLE_FEX_ALLOCATOR TRUE for MinGW; the _WIN32 branch of
+AllocatorHooks.cpp is a hard #error "without jemalloc"), and rpmalloc needs its
+own explicit process + per-thread init — which on the non-iOS path lives in
+CRT.cpp's InitCRTProcess/InitCRTThread. Leaving InitCRTThread a no-op left each
+FEX worker thread's rpmalloc heap uninitialized, so worker-thread allocations
+returned corrupt/garbage pointers (observed: the shared GuestToHostMap bucket
+array with a garbage base → LookupCache::FindBlock/ankerl do_find scanned off the
+end). Restore rpmalloc_initialize / rpmalloc_thread_initialize /
+rpmalloc_thread_finalize while still delegating C++ ctors/TLS to mingw.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Madeira-commit: acb015c250fb57644b5aae1fa7d0b0ad89b4187b
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/Common/CRT/CRT_iOS.cpp | 36 ++++++++++++++++++++-------
+ 1 file changed, 27 insertions(+), 9 deletions(-)
+
+diff --git a/Source/Windows/Common/CRT/CRT_iOS.cpp b/Source/Windows/Common/CRT/CRT_iOS.cpp
+index 46ed3d6..f5195e3 100644
+--- a/Source/Windows/Common/CRT/CRT_iOS.cpp
++++ b/Source/Windows/Common/CRT/CRT_iOS.cpp
+@@ -1,20 +1,38 @@
+ // SPDX-License-Identifier: MIT
+ // Minimal CRT lifecycle hooks for the iOS-host arm64ec build of libarm64ecfex.dll.
+-// The full CRT.cpp redefines _tls_index, DllMainCRTStartup, section markers,
+-// and runs rpmalloc — all of which conflict with mingw's default startup
+-// chain that we use on iOS-host builds (since llvm-mingw 22.1.4's arm64ec
+-// EC-mangling doesn't reconcile cleanly with -nostdlib + custom CRT). This
+-// stub provides ONLY the symbols Module.cpp's namespace FEX::Windows
+-// references, so the link succeeds.
++// The full CRT.cpp redefines _tls_index, DllMainCRTStartup, and the CRT section
++// markers, which conflict with mingw's default startup chain that we use on
++// iOS-host builds (llvm-mingw 22.1.4's arm64ec EC-mangling doesn't reconcile
++// cleanly with -nostdlib + custom CRT). So we let mingw's default
++// DllMainCRTStartup run the C++ constructors / TLS callbacks for us.
++//
++// BUT the FEX rpmalloc allocator still needs its explicit init. ENABLE_FEX_ALLOCATOR
++// is TRUE on this MinGW EC build (CMake: MinGW => TRUE; the _WIN32 branch of
++// AllocatorHooks.cpp is a hard #error "without jemalloc"), so every fextl/FEXAlloc
++// allocation goes through rpmalloc. On the non-iOS path that init lives in
++// CRT.cpp's InitCRTProcess (rpmalloc_initialize) and InitCRTThread
++// (rpmalloc_thread_initialize). Making those no-ops here left rpmalloc's
++// PER-THREAD heap uninitialized on FEX worker threads: such a thread would
++// allocate from a garbage thread-local heap and hand back a corrupt/truncated
++// pointer. Observed failure: the shared GuestToHostMap bucket array got a
++// garbage base (0xcf069bfd), so LookupCache::FindBlock -> ankerl do_find scanned
++// off the end into unmapped guest memory -> undispatchable fault -> terminate.
++// Restore the rpmalloc init here (mirroring CRT.cpp) while still delegating
++// ctors/TLS to mingw.
++#include <rpmalloc/rpmalloc.h>
+ 
+ namespace FEX::Windows {
+ void InitCRTProcess() {
+-  // No-op: mingw's default startup ran ctors and initialized the heap.
++  // mingw's default startup already ran the C++ ctors. Ensure the rpmalloc
++  // global heap is up (idempotent) before any per-thread init below.
++  rpmalloc_initialize(nullptr);
+ }
+ void InitCRTThread() {
+-  // No-op: mingw's default per-thread init handles TLS.
++  // The critical piece that was missing on iOS: give this thread its own
++  // rpmalloc heap. Without it, FEX worker-thread allocations are corrupt.
++  rpmalloc_thread_initialize();
+ }
+ void DeinitCRTThread() {
+-  // No-op: matches InitCRTThread.
++  rpmalloc_thread_finalize();
+ }
+ } // namespace FEX::Windows

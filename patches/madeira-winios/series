@@ -1,0 +1,4 @@
+# madeira-winios: applied in this order with `git am -3` onto the madeira pin in pins.lock
+0001-Winios-let-the-host-app-own-winios_phase.patch
+0002-Winios-accept-pointer-and-focus-events-posted-by-the.patch
+0003-Winios-deliver-focus-changes-on-the-window-s-owner-t.patch

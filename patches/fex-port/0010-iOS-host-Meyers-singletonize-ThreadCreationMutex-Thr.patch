@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 17:50:12 +0800
+Subject: [PATCH] iOS-host: Meyers-singletonize ThreadCreationMutex + Threads
+ map
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+arm64ec-mingw doesn't reliably run the global C++ static-ctor chain, so
+'std::recursive_mutex ThreadCreationMutex' and 'std::unordered_map<DWORD,...> Threads'
+stayed zero-initialized. The first call to ThreadCreationMutex.lock() then
+hung in NtWaitForAlertByThreadId because the mutex's internal CS had
+DebugInfo=NULL with LockCount in an invalid state — Wine's RtlpWaitForCriticalSection
+reported "section ? wait timed out, blocked by 0000".
+
+Wrap both as Meyers singletons (function-local statics) so they construct
+on first access regardless of the broken global-ctor chain. Macro aliases
+keep the call sites unchanged. Same fix pattern as ConfigLayers in
+FEXCore/Source/Interface/Config/Config.cpp.
+
+This unblocks the BTCpuNotifyMapViewOfSection callback in the load_arm64ec_module
+init path, which acquires ThreadCreationMutex before HandleImageMap.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Madeira-commit: 993d6e1e03b496dd9ef47b057ca9fe9d6c43f4ea
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 7b04692..e46eebe 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -149,9 +149,21 @@ std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
+ std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
+ std::optional<FEX::Windows::ImageTracker> ImageTracker;
+ 
+-std::recursive_mutex ThreadCreationMutex;
+-// Map of TIDs to their FEX thread state, `ThreadCreationMutex` must be locked when accessing
+-std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*> Threads;
++// iOS-Mythic: arm64ec-mingw doesn't reliably run global C++ ctors, so the
++// recursive_mutex / unordered_map below would be zero-init'd and any lock()
++// would hang in NtWaitForAlertByThreadId. Wrap as Meyers singletons so they
++// construct on first use regardless of the broken static-init chain.
++inline std::recursive_mutex& GetThreadCreationMutex() {
++  static std::recursive_mutex Mutex;
++  return Mutex;
++}
++#define ThreadCreationMutex GetThreadCreationMutex()
++
++inline std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& GetThreadsMap() {
++  static std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*> Map;
++  return Map;
++}
++#define Threads GetThreadsMap()
+ 
+ std::pair<NTSTATUS, ThreadCPUArea> GetThreadCPUArea(HANDLE Thread) {
+   THREAD_BASIC_INFORMATION Info;

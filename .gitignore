@@ -1,0 +1,11 @@
+# The build area ($PLAYPORT_BUILD, default .work/): run trees, caches, IPAs,
+# device state, run logs and secrets (the RP pairing file). Never committed.
+/.work/
+
+# Local agent and tool state
+/.backpass/
+/.pi/
+/.claude/settings.local.json
+
+__pycache__/
+.DS_Store

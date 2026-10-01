@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: guard the arm64ec-only IAT probe in the aarch64 build
+
+The probe references arm64ec-only symbols, so the plain aarch64 ntdll.dll
+did not link.
+
+Class: linux-build
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 9601ea02..9e2a5871 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4165,6 +4165,7 @@ NTSTATUS CDECL wine_server_handle_to_fd( HANDLE handle, unsigned int access, int
+ /******************************************************************
+  *		LdrLoadDll (NTDLL.@)
+  */
++#ifdef __arm64ec__
+ /*************************************************************************
+  *  iOS-Madeira ml701 [iat-life] - stage 2 of the IAT slot-lifecycle probe.
+  *
+@@ -4268,6 +4269,7 @@ static void iat_life_sweep( const char *when )
+         ERR( "[iat-life] ml701 sweep#%d after=%s modules=%d slots=%d pooled=%d pe0=%d pool0=%d\n",
+              sweeps, when, n_mod, n_slot, n_pool, n_pezero, n_poolzero );
+ }
++#endif  /* __arm64ec__ */
+ 
+ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_flags,
+                                              const UNICODE_STRING *libname, HMODULE* hModule)
+@@ -4311,6 +4313,7 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_fl
+         }
+         else
+         {
++#ifdef __arm64ec__
+             char tag[64];
+             const WCHAR *bn = wm->ldr.BaseDllName.Buffer;
+             unsigned int k = 0;
+@@ -4318,6 +4321,7 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_fl
+             while (bn && bn[k] && k < sizeof(tag) - 1) { tag[k] = (char)bn[k]; k++; }
+             tag[k] = 0;
+             iat_life_sweep( tag );   /* ml701 [iat-life] stage 2 */
++#endif
+         }
+     }
+     if (wm) *hModule = wm->ldr.DllBase;

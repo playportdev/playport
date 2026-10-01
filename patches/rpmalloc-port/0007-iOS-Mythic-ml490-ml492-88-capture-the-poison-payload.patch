@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 4 Aug 2026 18:35:00 +0800
+Subject: [PATCH] iOS-Mythic ml490/ml492 (#88): capture the poison payload to a
+ real file
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The poison notes went to the webhelper's console window via
+WriteFile(GetStdHandle(STD_ERROR)), which never reaches mythic-log — six
+runs showed zero hits including runs that crashed one instruction after
+the call, so "it never fired" was unfounded either way.
+
+Route them to C:\rpm-poison.log through CreateFileA and widen the note
+with ascii= (48 bytes of the holder block) and badascii= (the 8 bad
+pointer bytes), since the payload turned out to be ASCII text written
+over memory it does not own.
+
+ml492 moves the [rpm-sink] alive banner into rpmalloc_initialize(): ml491
+put it in rpmalloc_initialize_config(), which iOS never calls
+(CRT_iOS.cpp calls rpmalloc_initialize directly), so the probe proved
+nothing. With the banner on the common path three states are finally
+distinguishable: file missing = sink broken, banner only = clean run,
+banner + [rpm-poison] = payload captured.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Madeira-commit: 8eed7e7f4ab376550f63a2df49812842ba65117f
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 75 +++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 72 insertions(+), 3 deletions(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 53f0dc9..1b44564 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -1185,13 +1185,45 @@ ios_block_ptr_ok(void* p) {
+ 	return ((uintptr_t)p - 0x7c00000000ULL) < 0x400000000ULL;
+ }
+ 
++/* iOS-Mythic ml490 (corrupter hunt): route poison notes to a FILE.
++ *
++ * These have always gone to GetStdHandle(STD_ERROR), which for steamwebhelper
++ * is its CONSOLE WINDOW — invisible in mythic-log. That is why every #76/#88
++ * diagnostic since ml466 has been silently discarded: 0 hits across six runs,
++ * including two that crashed ONE INSTRUCTION after this call. Writing to
++ * C:\rpm-poison.log (pullable via devicectl) turns them on for the first time.
++ *
++ * Why this matters now: the bytes that overwrite rpmalloc's free-list pointer
++ * decode as ASCII — 0xa316531373030 is "0071e1\n", the tail of a hex address
++ * plus a newline, i.e. FORMATTED LOG TEXT. Something writes log output into a
++ * block it does not own. The note already dumps the holder block's leading
++ * qwords; rendering them as ASCII should show enough of the string to identify
++ * the writer by its format. */
++static void*
++ios_rpm_emit_handle(void) {
++	static void* h;
++	if (!h)
++		h = CreateFileA("C:\\rpm-poison.log", 4 /*FILE_APPEND_DATA*/, 1 | 2 /*share rw*/, 0,
++		                4 /*OPEN_ALWAYS*/, 0x80 /*NORMAL*/, 0);
++	return (h == (void*)(uintptr_t)-1) ? 0 : h;
++}
++
++static void
++ios_rpm_emit(const char* buf, int len) {
++	unsigned long w;
++	void* h = ios_rpm_emit_handle();
++	if (h)
++		WriteFile(h, buf, (unsigned long)len, &w, 0);
++	WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)len, &w, 0);
++}
++
+ static void
+ ios_rpm_poison_note(const char* tag, void* owner, void* bad, void* holder) {
+ 	static _Atomic(int) poison_logs;
+ 	if (atomic_fetch_add_explicit(&poison_logs, 1, memory_order_relaxed) >= 32)
+ 		return;
+ 	/* No printf in this TU (see [rpfree-skip]) — hand-format. */
+-	char buf[352];
++	char buf[640];
+ 	const char* hexd = "0123456789abcdef";
+ 	int i = 0, j;
+ 	unsigned long w;
+@@ -1224,9 +1256,29 @@ ios_rpm_poison_note(const char* tag, void* owner, void* bad, void* holder) {
+ 			buf[i++] = ' '; buf[i++] = 'q'; buf[i++] = hexd[k]; buf[i++] = '=';
+ 			for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(v >> j) & 0xf];
+ 		}
++		/* ml490: render the same bytes as ASCII — the payload is log text, and
++		 * the format string it came from names the writer. */
++		{
++			const unsigned char* c = (const unsigned char*)holder;
++			const char* s = " ascii=\"";
++			for (j = 0; s[j]; ++j) buf[i++] = s[j];
++			for (k = 0; k < 48; ++k)
++				buf[i++] = (c[k] >= 32 && c[k] < 127) ? (char)c[k] : '.';
++			buf[i++] = '"';
++		}
+ 	}
+-	buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 'l'; buf[i++] = '4'; buf[i++] = '6'; buf[i++] = '6'; buf[i++] = '\n';
+-	WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)i, &w, 0);
++	/* ml490: also dump the raw BAD value as ASCII — for heap-head/page-head the
++	 * poisoned slot IS the payload and there is no holder block to dump. */
++	{
++		const unsigned char* c = (const unsigned char*)&bad;
++		const char* s = " badascii=\"";
++		for (j = 0; s[j]; ++j) buf[i++] = s[j];
++		for (j = 0; j < 8; ++j)
++			buf[i++] = (c[j] >= 32 && c[j] < 127) ? (char)c[j] : '.';
++		buf[i++] = '"';
++	}
++	buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 'l'; buf[i++] = '4'; buf[i++] = '9'; buf[i++] = '0'; buf[i++] = '\n';
++	ios_rpm_emit(buf, i);
+ }
+ #endif
+ 
+@@ -2442,6 +2494,23 @@ rpmalloc_initialize(rpmalloc_interface_t* memory_interface) {
+ 
+ 	global_rpmalloc_initialized = 1;
+ 
++#ifdef FEX_IOS_HOST
++	/* ml492: prove the sink. C:\rpm-poison.log is created lazily on the first
++	 * poison note, so an ABSENT file was ambiguous — guard never fired, or the
++	 * write is broken? One banner at init disambiguates: file MISSING => sink
++	 * broken; banner ONLY => genuinely clean run; banner + [rpm-poison] =>
++	 * payload captured.
++	 * ml491 put this in rpmalloc_initialize_config(), which iOS never calls —
++	 * Source/Windows/Common/CRT/CRT_iOS.cpp calls rpmalloc_initialize(nullptr)
++	 * directly, so the banner never ran and the file stayed missing, which read
++	 * as "sink broken" when it was really "banner in the wrong function".
++	 * This is the common path: _config() delegates here too. */
++	{
++		static const char banner[] = "[rpm-sink] alive rev=ml492\n";
++		ios_rpm_emit(banner, (int)(sizeof(banner) - 1));
++	}
++#endif
++
+ 	global_memory_interface = memory_interface ? memory_interface : &global_memory_interface_default;
+ 	if (!global_memory_interface->memory_map || !global_memory_interface->memory_unmap) {
+ 		global_memory_interface->memory_map = trampoline_mmap;

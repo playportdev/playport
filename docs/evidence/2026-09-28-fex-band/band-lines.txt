@@ -1,0 +1,35 @@
+# [band] lines of the first three and the last thread start, and the title: band: lines
+
+## s1-dxmt (d5fc3c04)
+[band] ThreadInit tid=0x24: rpmalloc +16MB in +1 maps, callret 16392KB | live threads=1 rpmalloc=32MB in 4 maps callret=16MB
+[band] ThreadInit tid=0x28: rpmalloc +3728MB in +465 maps, callret 16392KB | live threads=2 rpmalloc=3808MB in 472 maps callret=32MB
+[band] ThreadInit tid=0x2c: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=3 rpmalloc=3856MB in 476 maps callret=48MB
+[band] ThreadInit tid=0xfc: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=53 rpmalloc=5729MB in 643 maps callret=848MB
+title: band: size_mb=16384 used_mb=6054 peak_mb=6054 free_mb=10330 largest_free_mb=9840 span_slots=615 threads=40 spans=320 l1=40 other_mb=214 views=720 refused=0
+title: band: size_mb=16384 used_mb=6819 peak_mb=6819 free_mb=9565 largest_free_mb=9007 span_slots=562 threads=49 spans=349 l1=49 other_mb=353 views=806 refused=0
+title: band: size_mb=16384 used_mb=7086 peak_mb=7086 free_mb=9298 largest_free_mb=8768 span_slots=548 threads=50 spans=356 l1=50 other_mb=489 views=830 refused=0
+
+## s9-dxmt (8ef67e3e)
+[band] ThreadInit tid=0x24: rpmalloc +16MB in +1 maps, callret 16392KB | live threads=1 rpmalloc=32MB in 4 maps callret=16MB | heaps made=2 spans mapped small=1 medium=1 large=0 huge=0 (0MB)
+[band] ThreadInit tid=0x28: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=2 rpmalloc=112MB in 10 maps callret=32MB | heaps made=3 spans mapped small=2 medium=4 large=1 huge=0 (0MB)
+[band] ThreadInit tid=0x2c: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=3 rpmalloc=160MB in 14 maps callret=48MB | heaps made=4 spans mapped small=3 medium=6 large=1 huge=0 (0MB)
+[band] ThreadInit tid=0xfc: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=53 rpmalloc=2032MB in 181 maps callret=848MB | heaps made=54 spans mapped small=53 medium=69 large=5 huge=0 (0MB)
+title: band: size_mb=16384 used_mb=2358 peak_mb=2358 free_mb=14026 largest_free_mb=14013 span_slots=875 threads=40 spans=93 l1=40 other_mb=149 views=262 refused=0
+title: band: size_mb=16384 used_mb=3325 peak_mb=3325 free_mb=13059 largest_free_mb=13052 span_slots=814 threads=50 spans=128 l1=50 other_mb=376 views=363 refused=0
+
+## final-dxmt (4aab2dd5)
+[band] ThreadInit tid=0x24: rpmalloc +16MB in +1 maps, callret 16392KB | live threads=1 rpmalloc=32MB in 4 maps callret=16MB | heaps made=2 spans mapped small=1 medium=1 large=0 huge=0 (0MB)
+[band] ThreadInit tid=0x28: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=2 rpmalloc=112MB in 10 maps callret=32MB | heaps made=3 spans mapped small=2 medium=4 large=1 huge=0 (0MB)
+[band] ThreadInit tid=0x2c: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=3 rpmalloc=160MB in 14 maps callret=48MB | heaps made=4 spans mapped small=3 medium=6 large=1 huge=0 (0MB)
+[band] ThreadInit tid=0xfc: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=53 rpmalloc=1984MB in 178 maps callret=848MB | heaps made=54 spans mapped small=53 medium=66 large=5 huge=0 (0MB)
+title: band: size_mb=16384 used_mb=2486 peak_mb=2486 free_mb=13898 largest_free_mb=13885 span_slots=867 threads=40 spans=98 l1=40 other_mb=198 views=275 refused=0
+title: band: size_mb=16384 used_mb=3325 peak_mb=3325 free_mb=13059 largest_free_mb=13052 span_slots=814 threads=50 spans=128 l1=50 other_mb=376 views=363 refused=0
+
+## final-vk2 (4aab2dd5)
+[band] ThreadInit tid=0x24: rpmalloc +16MB in +1 maps, callret 16392KB | live threads=1 rpmalloc=32MB in 4 maps callret=16MB | heaps made=2 spans mapped small=1 medium=1 large=0 huge=0 (0MB)
+[band] ThreadInit tid=0x28: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=2 rpmalloc=112MB in 10 maps callret=32MB | heaps made=3 spans mapped small=2 medium=4 large=1 huge=0 (0MB)
+[band] ThreadInit tid=0x2c: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=3 rpmalloc=160MB in 14 maps callret=48MB | heaps made=4 spans mapped small=3 medium=6 large=1 huge=0 (0MB)
+[band] ThreadInit tid=0x104: rpmalloc +32MB in +3 maps, callret 16392KB | live threads=55 rpmalloc=2048MB in 184 maps callret=880MB | heaps made=56 spans mapped small=55 medium=68 large=5 huge=0 (0MB)
+title: band: size_mb=16384 used_mb=2273 peak_mb=2273 free_mb=14111 largest_free_mb=14093 span_slots=880 threads=38 spans=87 l1=38 other_mb=197 views=252 refused=0
+title: band: size_mb=16384 used_mb=3109 peak_mb=3109 free_mb=13275 largest_free_mb=13268 span_slots=828 threads=46 spans=119 l1=46 other_mb=376 views=342 refused=0
+title: band: size_mb=16384 used_mb=3484 peak_mb=3484 free_mb=12900 largest_free_mb=12876 span_slots=804 threads=53 spans=133 l1=53 other_mb=401 views=379 refused=0

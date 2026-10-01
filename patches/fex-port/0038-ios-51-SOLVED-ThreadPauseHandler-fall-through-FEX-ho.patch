@@ -1,0 +1,195 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 31 Jul 2026 15:13:58 +0800
+Subject: [PATCH] ios: #51 SOLVED (ThreadPauseHandler fall-through) + FEX host
+ structures out of the guest VA band
+
+#51 was never a callback. ThreadPauseHandler ends in hlt(0) and upstream relies on
+the signal handler to match Pc == PauseReturnInstruction and resume via
+RestoreThreadState(TYPE_PAUSE) -- which exists only in LinuxEmulation. Our ARM64EC
+exception path never references it (on real Windows the block is unreachable;
+suspension goes through the SuspendDoorbell/brk path). On iOS we DO reach it: 269
+arrivals in one webhelper run. With no handler the hlt raised c000001d and execution
+resumed at pc+4 == CallbackPtr's prologue, so the 'ReentrantCallback' was FALLEN
+INTO, not called -- explaining the NULL x0(Frame), garbage LR, and the stale x1 that
+became State.rip and produced the recurring [iOS-bogusrip] band=host-heap
+<arena>+0x0?0080 reports (same 0x7ea00f0080 seen as bogus RIP in ml323 and as x1 at
+the phantom entry in ml324). Proven by disassembling the emitted code around the
+captured LR in the 896MB pool dump. Fix: on iOS resume through LoopTopFillSRA
+instead of faulting. ml325: cb-entry 269 -> 0, bogusrip -> 0.
+
+Host-structure steering: every FEXMem_* region allocated in the same VA band as
+guest memory (ml308 caught FEXMem_BlockLinks directly above a guest stack, where a
+guest over-read returns host code labels instead of faulting). Steer non-exec
+allocations via MemExtendedParameterAddressRequirements; CallRetStack.h needed its
+own copy because it calls ::VirtualAlloc directly and ml321 missed it.
+
+Band choice matters: the first cut used [0x74,0x78) and broke CEF -- PartitionAlloc's
+four 16GB jumbo pools live in [0x74,0x7c), fragmenting it yielded 2/4 pools and 23
+'jumbo fail's, the guest ignored STATUS_NO_MEMORY and dereferenced NULL, and depth
+fell 48k -> 18k calls. Final band is [0x7c,0x80), the FEX-private arena region.
+
+ml326 verified together: pools 4/4, jumbo-fail 0, cb-entry 0, bogusrip 0, ndr-shift 0.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Madeira-commit: e05e7b7f61412d7313346751de88c553c05a2b40
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  | 30 +++++++++++++
+ .../include/FEXCore/Utils/AllocatorHooks.h    | 42 +++++++++++++++++++
+ Source/Windows/ARM64EC/Module.cpp             |  2 +-
+ Source/Windows/Common/CallRetStack.h          | 29 ++++++++++++-
+ 4 files changed, 100 insertions(+), 3 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index fe3b9b9..e77a6ce 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -568,8 +568,38 @@ void Dispatcher::EmitDispatcher() {
+     }
+ 
+     PauseReturnInstruction = GetCursorAddress<uint64_t>();
++#ifdef FEX_IOS_HOST
++    /* iOS-Mythic ml325 -- THE #51 ROOT CAUSE.
++     *
++     * Upstream ends this block with hlt(0) and relies on the signal handler to notice
++     * Pc == PauseReturnInstruction and resume via RestoreThreadState(TYPE_PAUSE)
++     * (LinuxEmulation/SignalDelegator.cpp). That handler is Linux-only: the ARM64EC
++     * exception path in Source/Windows/ARM64EC/Module.cpp never references
++     * PauseReturnInstruction, because on real Windows this block is unreachable
++     * (suspension goes through the SuspendDoorbell / ExitFunctionSuspendPoint brk).
++     * On iOS we DO reach it -- ml324 counted 269 arrivals in one webhelper run.
++     *
++     * With no handler, the hlt raises c000001d and execution resumes at pc+4, which is
++     * the very next emitted byte: CallbackPtr's prologue. That is the entire "#51
++     * ReentrantCallback" mystery -- CallbackPtr was never CALLED, it was FALLEN INTO.
++     * The registers it captures are leftovers, which is why x0(Frame) was NULL, LR was
++     * garbage or 0, and x1 carried an arbitrary host-heap arena address -- and that
++     * address then became State.rip and produced the recurring
++     * [iOS-bogusrip] band=host-heap(0x7c-0x7f) GuestRIP=<arena>+0x0?0080 reports.
++     * ml323/ml324 tie the two together directly: the same 0x7ea00f0080 appears as the
++     * bogus GuestRIP and as x1 at the phantom callback entry.
++     *
++     * SleepThread has returned, so the correct action is simply to resume guest
++     * execution. Static registers were spilled by ThreadPauseHandlerAddressSpillSRA
++     * above, so re-enter through the FillSRA loop top: it refills them and dispatches
++     * to State.rip -- exactly "start running again", with no fault round trip.
++     * PauseReturnInstruction is still published so a future handler can match it. */
++    LoadConstant(ARMEmitter::Size::i64Bit, TMP1, AbsoluteLoopTopAddressFillSRA);
++    br(TMP1);
++#else
+     // Fault to start running again
+     hlt(0);
++#endif
+   }
+ 
+   {
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index 388dde4..6ace0f6 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -58,6 +58,48 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
+   // Allocate top-down to avoid polluting the lower VA space, as even on 64-bit some programs (i.e. LuaJIT) require allocations below 4GB.
+   DWORD Flags = (Commit ? MEM_COMMIT : 0) | MEM_RESERVE | MEM_TOP_DOWN;
+ #ifdef ARCHITECTURE_arm64ec
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic ml321: keep FEX's host structures OUT of the guest VA band.
++   *
++   * Every FEXMem_* region (Lookup/L1, BlockLinks, CallRetStacks, OpDispatcher,
++   * Frontend, ThreadState, ...) allocates through here, and by default wine's VA
++   * scanner places them in the same sub-ceiling band as guest allocations. ml308
++   * caught FEXMem_BlockLinks mapped DIRECTLY above a guest thread stack: a guest
++   * over-read there silently returns host JIT code labels instead of faulting,
++   * and ml316's webhelper died branching to exactly such a value ([iOS-bogusrip]
++   * band=FEX-CODE-BUFFER, "loaded from guest memory"). On Windows the space above
++   * a stack is a guard/unmapped region; here it was a table of host code pointers.
++   *
++   * Steer non-exec, any-address allocations into [0x7c00000000, 0x8000000000) --
++   * the band FEX's own jemalloc arenas already occupy, so it is host-only memory
++   * with no guest allocation in it.
++   *
++   * ml325 CORRECTION: the first cut used [0x7400000000, 0x7800000000), which broke
++   * CEF. PartitionAlloc reserves four 16GB jumbo pools and two of them land at
++   * 0x7400000000 / 0x77ffff0000; ~3.8GB of FEXMem reserves scattered through that
++   * window fragmented it, so only 2 of 4 pools were obtained ("jumbo fail" x23,
++   * ml320 got all four). The guest then hit STATUS_NO_MEMORY, ignored it, and
++   * dereferenced NULL -- run depth fell 48k -> 18k calls. Keep FEX out of
++   * [0x7400000000, 0x7c00000000): that whole span belongs to CEF's pools.
++   *
++   * On ANY failure fall through to the unconstrained path -- placement is a
++   * hardening, never a new fatal (#43).
++   * Exec allocations are excluded: EC_CODE buffers have their own JIT-pool
++   * steering that must keep control of placement. */
++  if (!Base && !Execute) {
++    MEM_ADDRESS_REQUIREMENTS AddrReq {};
++    MEM_EXTENDED_PARAMETER AddrParam {};
++    AddrReq.LowestStartingAddress = reinterpret_cast<void*>(0x7C00000000ULL);
++    AddrReq.HighestEndingAddress = reinterpret_cast<void*>(0x7FFFFFFFFFULL);
++    AddrParam.Type = MemExtendedParameterAddressRequirements;
++    AddrParam.Pointer = &AddrReq;
++    // No MEM_TOP_DOWN here: Windows rejects it in combination with address requirements.
++    void* Ret = ::VirtualAlloc2(nullptr, nullptr, Size, (Commit ? MEM_COMMIT : 0) | MEM_RESERVE, PAGE_READWRITE, &AddrParam, 1);
++    if (Ret) {
++      return Ret;
++    }
++  }
++#endif
+   MEM_EXTENDED_PARAMETER Parameter {};
+   if (Execute) {
+     Parameter.Type = MemExtendedParameterAttributeFlags;
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 0c510eb..0abf615 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -817,7 +817,7 @@ NTSTATUS ProcessInit() {
+    * compile time, so changing only another .cpp leaves the stamp stale and the ambiguity
+    * half-returns. The MYTHIC_REV tag below fixes that: bump it for every deploy, which
+    * necessarily edits this file and so refreshes the timestamp too. Self-enforcing. */
+-#define MYTHIC_REV "ml317-ffsxlate"
++#define MYTHIC_REV "ml326-bandfix"
+   LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MYTHIC_REV " compiled " __DATE__ " " __TIME__);
+ #endif
+ 
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 731ff24..7599919 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -22,8 +22,33 @@ CallRetStackInfo GetInfoThread(FEXCore::Core::InternalThreadState* Thread) {
+ 
+ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   // Allocate the call-ret stack with guard pages on both sides
+-  const void* CallRetStackAlloc = ::VirtualAlloc(nullptr, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE,
+-                                                 MEM_RESERVE | MEM_TOP_DOWN, PAGE_NOACCESS);
++  const size_t CallRetStackAllocSize = FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE;
++  const void* CallRetStackAlloc = nullptr;
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic ml324: steer the call-ret stack out of the guest VA band.
++   *
++   * This calls ::VirtualAlloc directly rather than FEXCore::Allocator::VirtualAlloc,
++   * so ml321's steering missed it -- ml323 confirmed every other FEXMem_* region moved
++   * to 0x74xx while FEXMem_CallRetStacks stayed at 0x73dx, interleaved with guest
++   * allocations. This is the worst region to leave there: each 16-byte frame holds a
++   * HOST code label (the intra-block adr(&l_CallReturn)), so a guest over-read lands on
++   * exactly the kind of value that has been showing up as a bogus branch target
++   * ("loaded from guest memory", ml316). Same window and same fallback discipline as
++   * AllocatorHooks.h -- see the ml325 correction there for why the band must stay
++   * clear of [0x7400000000, 0x7c00000000) (CEF's four 16GB PartitionAlloc pools). */
++  {
++    MEM_ADDRESS_REQUIREMENTS AddrReq {};
++    MEM_EXTENDED_PARAMETER AddrParam {};
++    AddrReq.LowestStartingAddress = reinterpret_cast<void*>(0x7C00000000ULL);
++    AddrReq.HighestEndingAddress = reinterpret_cast<void*>(0x7FFFFFFFFFULL);
++    AddrParam.Type = MemExtendedParameterAddressRequirements;
++    AddrParam.Pointer = &AddrReq;
++    CallRetStackAlloc = ::VirtualAlloc2(nullptr, nullptr, CallRetStackAllocSize, MEM_RESERVE, PAGE_NOACCESS, &AddrParam, 1);
++  }
++#endif
++  if (!CallRetStackAlloc) {
++    CallRetStackAlloc = ::VirtualAlloc(nullptr, CallRetStackAllocSize, MEM_RESERVE | MEM_TOP_DOWN, PAGE_NOACCESS);
++  }
+ 
+   FEXCore::Allocator::VirtualName("FEXMem_CallRetStacks", CallRetStackAlloc,
+                                   FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE);
