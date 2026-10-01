@@ -166,6 +166,8 @@ static void cases(size_t granule)
     BAD32(TABLE + 40 + 12, 0x1000, 0, G32_PE_FORMAT); /* section overlap */
     BAD32(OPTIONAL + 16, 0x2000, 0, G32_PE_FORMAT); /* Entry is not executable. */
     BAD32(OPTIONAL + 16, 0x5000, 0, G32_PE_FORMAT);
+    BAD32(OPTIONAL + 96, 0x2000, 0, G32_PE_FORMAT); /* unpaired exports */
+    BAD32(OPTIONAL + 100, 40, 0, G32_PE_FORMAT);
 #undef BAD32
     memcpy(f, original, sizeof(f)); p32(f + OPTIONAL + 28, 0);
     PE_OK(g32_pe_map(s, f, sizeof(f), PREFERRED, &output));
@@ -390,9 +392,165 @@ static void binding_cases(size_t granule)
     printf("pe32: granule=%zu transactional guest-import binding checks ok\n", granule);
 }
 
+/* Export directory fits before the independent relocation/import fixtures. */
+static void export_fixture(unsigned char *f)
+{
+    fixture(f);
+    p32(f + OPTIONAL + 96, 0x2000); p32(f + OPTIONAL + 100, 0x80);
+    p32(f + 0x410, 6); p32(f + 0x414, 5); p32(f + 0x418, 3);
+    p32(f + 0x41c, 0x2028); p32(f + 0x420, 0x2040); p32(f + 0x424, 0x204c);
+    p32(f + 0x428, 0x1000); p32(f + 0x42c, 0x3000); /* function and data */
+    p32(f + 0x430, 0); p32(f + 0x434, 0x2070); p32(f + 0x438, 0x1004);
+    p32(f + 0x440, 0x2052); p32(f + 0x444, 0x205f); p32(f + 0x448, 0x2064);
+    p16(f + 0x44c, 0); p16(f + 0x44e, 1); p16(f + 0x450, 0);
+    memcpy(f + 0x452, "GetTickCount", 13); memcpy(f + 0x45f, "Data", 5);
+    memcpy(f + 0x464, "Alias", 6); memcpy(f + 0x470, "OTHER.#7", 9);
+}
+
+static void export_rejected(g32_space *s, const g32_pe_image *image,
+                            const char *name, uint32_t ordinal, g32_pe_result error)
+{
+    g32_pe_export output, before;
+    memset(&output, 0xa5, sizeof(output)); memcpy(&before, &output, sizeof(before));
+    IS(g32_pe_find_export(s, image, name, ordinal, &output), error);
+    assert(memcmp(&output, &before, sizeof(output)) == 0);
+}
+
+typedef struct { g32_space *space; const g32_pe_image *dependency; unsigned calls; } export_resolver;
+static int resolve_export(void *context, const char *dll, const char *name,
+                          uint16_t ordinal, uint64_t *address)
+{
+    export_resolver *r = context;
+    assert(strcmp(dll, "KERNEL32.dll") == 0); ++r->calls;
+    g32_pe_export found;
+    if (g32_pe_find_export(r->space, r->dependency, name, ordinal, &found) != G32_PE_OK ||
+        found.kind != G32_PE_EXPORT_ADDRESS) return 0;
+    *address = found.address;
+    return 1;
+}
+
+static void export_cases(size_t granule)
+{
+    unsigned char original[FILE_SIZE], f[FILE_SIZE]; export_fixture(original);
+    g32_space *s, *other;
+    OK(g32_create(granule, &s)); OK(g32_create(granule, &other));
+    const uint32_t bases[] = { PREFERRED, 0x600000, 0xffff0000u };
+    for (unsigned n = 0; n < sizeof(bases) / sizeof(bases[0]); ++n) {
+        uint32_t base = bases[n];
+        g32_pe_image image; g32_pe_export found;
+        PE_OK(g32_pe_map(s, original, sizeof(original), base, &image));
+        PE_OK(g32_pe_find_export(s, &image, "GetTickCount", 99, &found));
+        assert(found.kind == G32_PE_EXPORT_ADDRESS && found.address == base + 0x1000 &&
+               found.ordinal == 6 && !found.forwarder[0]);
+        PE_OK(g32_pe_find_export(s, &image, "Alias", 0, &found));
+        assert(found.address == base + 0x1000 && found.ordinal == 6);
+        PE_OK(g32_pe_find_export(s, &image, "Data", 0, &found));
+        assert(found.address == base + 0x3000 && found.ordinal == 7);
+        PE_OK(g32_pe_find_export(s, &image, NULL, 7, &found));
+        assert(found.address == base + 0x3000);
+        PE_OK(g32_pe_find_export(s, &image, NULL, 10, &found));
+        assert(found.address == base + 0x1004 && found.ordinal == 10);
+        PE_OK(g32_pe_find_export(s, &image, NULL, 9, &found));
+        assert(found.kind == G32_PE_EXPORT_FORWARDER && !found.address && found.ordinal == 9 &&
+               strcmp(found.forwarder, "OTHER.#7") == 0);
+        const uint32_t absent[] = { 0, 5, 8, 11, UINT32_MAX };
+        for (unsigned a = 0; a < sizeof(absent) / sizeof(absent[0]); ++a)
+            export_rejected(s, &image, NULL, absent[a], G32_PE_NOT_FOUND);
+        export_rejected(s, &image, "gettickcount", 6, G32_PE_NOT_FOUND);
+        export_rejected(other, &image, "Data", 0, G32_PE_FORMAT);
+        IS(g32_pe_find_export(s, &image, NULL, 7, NULL), G32_PE_FORMAT);
+        OK(g32_protect(s, base + 0x1000, G32_PAGE, G32_EXEC));
+        PE_OK(g32_pe_find_export(s, &image, "Alias", 0, &found));
+        OK(g32_protect(s, base + 0x3000, G32_PAGE, 0));
+        export_rejected(s, &image, "Data", 0, G32_PE_FORMAT);
+        OK(g32_pe_unmap(s, &image));
+    }
+    /* Full guest-page checks, even when a neighbor shares native backing.
+     * A later name and the complete EAT span must remain readable. */
+    g32_pe_image boundary; g32_pe_export boundary_export;
+    PE_OK(g32_pe_map(s, original, sizeof(original), 0, &boundary));
+    OK(g32_protect(s, PREFERRED + 0x2000, G32_PAGE, G32_READ | G32_WRITE));
+    unsigned char pointer[4]; p32(pointer, 0x2fff);
+    OK(g32_write(s, PREFERRED + 0x2048, pointer, 4));
+    OK(g32_write(s, PREFERRED + 0x2fff, "Alias", 6));
+    PE_OK(g32_pe_find_export(s, &boundary, "GetTickCount", 0, &boundary_export));
+    OK(g32_protect(s, PREFERRED + 0x3000, G32_PAGE, 0));
+    export_rejected(s, &boundary, "GetTickCount", 0, G32_PE_FORMAT);
+    OK(g32_protect(s, PREFERRED + 0x3000, G32_PAGE, G32_READ | G32_WRITE));
+    p32(pointer, 0x2064); OK(g32_write(s, PREFERRED + 0x2048, pointer, 4));
+    p32(pointer, 0x2ffc); OK(g32_write(s, PREFERRED + 0x201c, pointer, 4));
+    OK(g32_write(s, PREFERRED + 0x2ffc, original + 0x428, 20));
+    PE_OK(g32_pe_find_export(s, &boundary, "GetTickCount", 0, &boundary_export));
+    OK(g32_protect(s, PREFERRED + 0x3000, G32_PAGE, 0));
+    export_rejected(s, &boundary, "GetTickCount", 0, G32_PE_FORMAT);
+    OK(g32_pe_unmap(s, &boundary));
+    const uint32_t bad[][2] = {
+        {OPTIONAL + 100, 39}, /* truncated directory */
+        {0x410, UINT32_MAX}, /* ordinal range overflow */
+        {0x41c, 0x4ffc}, {0x420, UINT32_MAX}, {0x424, 0x4000}, /* table spans/gaps */
+        {0x428, 0x4000}, {0x428, 0x5000}, {0x428, UINT32_MAX}, /* selected target */
+        {0x440, 0x4000}, {0x440, 0x4fff}, /* name pointer */
+        {0x448, 0x2052}, /* duplicate matching name */
+        {0x434, 0x207f}, /* forwarder NUL lies outside export directory */
+    };
+    for (unsigned n = 0; n < sizeof(bad) / sizeof(bad[0]); ++n) {
+        memcpy(f, original, sizeof(f)); p32(f + bad[n][0], bad[n][1]);
+        if (bad[n][0] == 0x434) f[0x47f] = 'X';
+        g32_pe_image image;
+        PE_OK(g32_pe_map(s, f, sizeof(f), 0, &image));
+        export_rejected(s, &image, bad[n][0] == 0x434 ? NULL : "GetTickCount", 9, G32_PE_FORMAT);
+        OK(g32_pe_unmap(s, &image));
+    }
+    for (unsigned n = 0; n < 10; ++n) {
+        memcpy(f, original, sizeof(f));
+        if (n == 0) p16(f + 0x450, 5); /* malformed later name ordinal after match */
+        if (n == 1) p32(f + 0x414, G32_PE_MAX_EXPORTS + 1);
+        if (n == 2) p32(f + 0x418, G32_PE_MAX_EXPORTS + 1);
+        if (n == 3) { p32(f + 0x440, 0x3000); memset(f + 0x600, 'X', 260); }
+        if (n == 4) { p32(f + 0x414, 0); p32(f + 0x418, 0); } /* empty exports */
+        if (n == 5) { p32(f + OPTIONAL + 96, 0); p32(f + OPTIONAL + 100, 0); }
+        if (n == 6) { p32(f + 0x410, 0x10000); } /* not limited to 16-bit ordinal */
+        if (n == 7) { /* named export forwarding to a name rather than ordinal */
+            memcpy(f + 0x470, "OTHER.Func", 11); p16(f + 0x450, 3);
+        }
+        if (n == 8) f[0x470] = 0; /* empty forwarder */
+        if (n == 9) { /* forwarder string has no NUL within the 260-byte limit */
+            p32(f + OPTIONAL + 100, 0x1200); p32(f + 0x434, 0x3000);
+            memset(f + 0x600, 'X', 260);
+        }
+        g32_pe_image image; g32_pe_export found;
+        PE_OK(g32_pe_map(s, f, sizeof(f), 0, &image));
+        if (n == 6) {
+            PE_OK(g32_pe_find_export(s, &image, NULL, 0x10001, &found));
+            assert(found.address == PREFERRED + 0x3000 && found.ordinal == 0x10001);
+        } else if (n == 7) {
+            PE_OK(g32_pe_find_export(s, &image, "Alias", 0, &found));
+            assert(found.kind == G32_PE_EXPORT_FORWARDER && !found.address &&
+                   strcmp(found.forwarder, "OTHER.Func") == 0);
+        } else if (n >= 8) export_rejected(s, &image, NULL, 9, G32_PE_FORMAT);
+        else export_rejected(s, &image, "GetTickCount", 0,
+                              n == 1 || n == 2 ? G32_PE_UNSUPPORTED :
+                              n == 4 || n == 5 ? G32_PE_NOT_FOUND : G32_PE_FORMAT);
+        OK(g32_pe_unmap(s, &image));
+    }
+    /* Named and ordinal exports supply actual synthetic dependency addresses
+     * to transactional binding; no hard-coded resolver targets. */
+    g32_pe_image dependency, importer;
+    PE_OK(g32_pe_map(s, original, sizeof(original), 0x600000, &dependency));
+    fixture(f); PE_OK(g32_pe_map(s, f, sizeof(f), 0, &importer));
+    OK(g32_protect(s, PREFERRED + 0x2000, G32_PAGE, G32_READ | G32_WRITE));
+    export_resolver resolver = { .space = s, .dependency = &dependency };
+    PE_OK(g32_pe_bind_imports(s, &importer, resolve_export, &resolver));
+    unsigned char slots[8]; OK(g32_read(s, PREFERRED + 0x2150, slots, sizeof(slots)));
+    assert(resolver.calls == 2 && u32(slots) == 0x601000 && u32(slots + 4) == 0x603000);
+    OK(g32_pe_unmap(s, &importer)); OK(g32_pe_unmap(s, &dependency));
+    g32_destroy(s); g32_destroy(other);
+    printf("pe32: granule=%zu checked guest-export lookup and binding checks ok\n", granule);
+}
+
 static void mutations(void)
 {
-    unsigned char original[FILE_SIZE], f[FILE_SIZE]; fixture(original);
+    unsigned char original[FILE_SIZE], f[FILE_SIZE]; export_fixture(original);
     g32_space *s;
     OK(g32_create(16384, &s));
     uint32_t random = 0x12345678;
@@ -408,6 +566,9 @@ static void mutations(void)
         if (g32_pe_map(s, f, sizeof(f), 0x500000, &image) == G32_PE_OK) {
             unsigned calls = 0;
             (void)g32_pe_imports(s, &image, count_import, &calls);
+            g32_pe_export found;
+            (void)g32_pe_find_export(s, &image, "GetTickCount", 0, &found);
+            (void)g32_pe_find_export(s, &image, NULL, 9, &found);
             OK(g32_pe_unmap(s, &image));
         }
         OK(g32_reserve(s, 0x500000, 0x5000)); OK(g32_release(s, 0x500000));
@@ -422,6 +583,87 @@ static int unresolved_import(void *context, const char *dll, const char *symbol,
     (void)dll; (void)symbol; (void)ordinal; (void)address;
     ++*(unsigned *)context;
     return 0; /* No game dependency is supplied by this test. */
+}
+
+/* Independent raw-file RVA conversion for the optional private fixtures.
+ * This does not call the mapper/parser to obtain the expected export RVAs. */
+static const unsigned char *file_rva(const unsigned char *f, size_t size,
+                                      uint32_t rva, size_t width)
+{
+    uint32_t nt = u32(f + 0x3c);
+    assert((uint64_t)nt + 24 + 96 <= size);
+    const unsigned char *o = f + nt + 24;
+    uint32_t headers = u32(o + 60);
+    if (rva < headers && width <= (uint64_t)headers - rva) {
+        assert((uint64_t)rva + width <= size); return f + rva;
+    }
+    unsigned count = f[nt + 6] | (unsigned)f[nt + 7] << 8;
+    unsigned optional_size = f[nt + 20] | (unsigned)f[nt + 21] << 8;
+    const unsigned char *table = o + optional_size;
+    assert((uint64_t)(table - f) + count * 40 <= size);
+    for (unsigned n = 0; n < count; ++n) {
+        const unsigned char *section = table + n * 40;
+        uint32_t start = u32(section + 12), raw = u32(section + 16), offset = u32(section + 20);
+        if (rva >= start && (uint64_t)rva - start + width <= raw) {
+            uint64_t position = (uint64_t)offset + rva - start;
+            assert(position + width <= size); return f + position;
+        }
+    }
+    assert(0 && "private fixture RVA has no raw file bytes"); return NULL;
+}
+
+static void private_exports(g32_space *s, const g32_pe_image *image,
+                            const unsigned char *f, size_t size)
+{
+    uint32_t optional = u32(f + 0x3c) + 24;
+    uint32_t rva = u32(f + optional + 96), extent = u32(f + optional + 100);
+    if (!rva) {
+        export_rejected(s, image, "CreateInterface", 0, G32_PE_NOT_FOUND);
+        puts("pe32: raw file has no exports; lookup reports not found"); return;
+    }
+    const unsigned char *d = file_rva(f, size, rva, 40);
+    uint32_t first = u32(d + 16), functions = u32(d + 20), names = u32(d + 24);
+    assert(functions <= G32_PE_MAX_EXPORTS && names <= G32_PE_MAX_EXPORTS);
+    const unsigned char *eat = file_rva(f, size, u32(d + 28), functions * 4);
+    for (uint32_t n = 0; n < functions; ++n) {
+        uint32_t target = u32(eat + n * 4);
+        if (!target) { export_rejected(s, image, NULL, first + n, G32_PE_NOT_FOUND); continue; }
+        g32_pe_export found;
+        PE_OK(g32_pe_find_export(s, image, NULL, first + n, &found));
+        assert(found.ordinal == first + n);
+        if (target >= rva && (uint64_t)target < (uint64_t)rva + extent) {
+            size_t capacity = (size_t)((uint64_t)rva + extent - target);
+            if (capacity > sizeof(found.forwarder)) capacity = sizeof(found.forwarder);
+            const char *forwarder = (const char *)file_rva(f, size, target, capacity);
+            assert(memchr(forwarder, 0, capacity));
+            assert(found.kind == G32_PE_EXPORT_FORWARDER && !found.address &&
+                   strcmp(found.forwarder, forwarder) == 0);
+        } else assert(found.kind == G32_PE_EXPORT_ADDRESS && found.address == image->base + target);
+    }
+    const unsigned char *name_table = file_rva(f, size, u32(d + 32), names * 4);
+    const unsigned char *ordinals = file_rva(f, size, u32(d + 36), names * 2);
+    for (uint32_t n = 0; n < names; ++n) {
+        uint32_t name_rva = u32(name_table + n * 4);
+        char name[260];
+        for (unsigned c = 0; c < sizeof(name); ++c) {
+            name[c] = (char)*file_rva(f, size, name_rva + c, 1);
+            if (!name[c]) break;
+            assert(c + 1 < sizeof(name));
+        }
+        uint32_t index = ordinals[n * 2] | (uint32_t)ordinals[n * 2 + 1] << 8;
+        assert(index < functions);
+        if (!u32(eat + index * 4)) {
+            export_rejected(s, image, name, 0, G32_PE_NOT_FOUND); continue;
+        }
+        g32_pe_export named, ordinal;
+        PE_OK(g32_pe_find_export(s, image, name, 0, &named));
+        PE_OK(g32_pe_find_export(s, image, NULL, first + index, &ordinal));
+        assert(named.kind == ordinal.kind && named.ordinal == ordinal.ordinal &&
+               named.address == ordinal.address && strcmp(named.forwarder, ordinal.forwarder) == 0);
+        printf("pe32: raw-file export matches name=%s ordinal=%u rva=%08x\n",
+               name, named.ordinal, u32(eat + index * 4));
+    }
+    printf("pe32: %u ordinal entries and %u named exports match independent raw-file tables\n", functions, names);
 }
 
 static void private_image(const char *path)
@@ -442,6 +684,7 @@ static void private_image(const char *path)
         unsigned char *before = malloc(image.size), *after = malloc(image.size);
         assert(before && after);
         OK(g32_read(s, image.base, before, image.size));
+        private_exports(s, &image, bytes, (size_t)length);
         unsigned unresolved = 0;
         IS(g32_pe_bind_imports(s, &image, unresolved_import, &unresolved), G32_PE_IMPORT);
         assert(unresolved == 1); /* Fully parsed, but deliberately NOT resolved. */
@@ -453,7 +696,7 @@ static void private_image(const char *path)
         printf("pe32: %s base=%08x size=%08x entry=%08x sections=%u relocations=%u imports=%u backing_above_4GiB=%s\n",
                path, image.base, image.size, image.entry, image.sections, image.relocations, calls,
                (uintptr_t)entry > UINT32_MAX ? "yes" : "no");
-        puts("pe32: unresolved real import rejected; entire mapped image unchanged");
+        puts("pe32: real exports inspected, unresolved import rejected; entire mapped image unchanged");
         OK(g32_pe_unmap(s, &image));
     }
     g32_destroy(s); free(bytes);
@@ -464,6 +707,7 @@ int main(int argc, char **argv)
     cases(0); cases(16384); cases(65536);
     relocations_and_imports();
     binding_cases(0); binding_cases(16384); binding_cases(65536);
+    export_cases(0); export_cases(16384); export_cases(65536);
     mutations();
     for (int n = 1; n < argc; ++n) private_image(argv[n]);
     puts("pe32: synthetic imports bound only; no game imports resolved or guest instructions executed");

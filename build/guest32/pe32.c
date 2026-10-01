@@ -7,6 +7,7 @@
 #define PE_WRITE UINT32_C(0x80000000)
 #define PE_EXEC UINT32_C(0x20000000)
 #define PE_RELOCS_STRIPPED 1u
+#define DIR_EXPORT 0u
 #define DIR_IMPORT 1u
 #define DIR_RELOC 5u
 
@@ -65,6 +66,10 @@ static g32_pe_result parse(const unsigned char *f, size_t size, layout *l)
     l->headers = headers;
     l->characteristics = le16(f + nt + 22);
     if (!(l->characteristics & 2) || l->image.entry >= image_size) return G32_PE_FORMAT;
+    if (directory_count > DIR_EXPORT) {
+        l->image.exports_rva = le32(o + 96 + DIR_EXPORT * 8);
+        l->image.exports_size = le32(o + 100 + DIR_EXPORT * 8);
+    }
     if (directory_count > DIR_IMPORT) {
         l->image.imports_rva = le32(o + 96 + DIR_IMPORT * 8);
         l->image.imports_size = le32(o + 100 + DIR_IMPORT * 8);
@@ -76,7 +81,9 @@ static g32_pe_result parse(const unsigned char *f, size_t size, layout *l)
     if ((!!l->reloc_rva != !!l->reloc_size) ||
         !span(l->reloc_rva, l->reloc_size, image_size) ||
         (!!l->image.imports_rva != !!l->image.imports_size) ||
-        !span(l->image.imports_rva, l->image.imports_size, image_size)) return G32_PE_FORMAT;
+        !span(l->image.imports_rva, l->image.imports_size, image_size) ||
+        (!!l->image.exports_rva != !!l->image.exports_size) ||
+        !span(l->image.exports_rva, l->image.exports_size, image_size)) return G32_PE_FORMAT;
     for (unsigned i = 0; i < count; ++i) {
         const unsigned char *s = f + table + i * 40;
         section *d = &l->sections[i];
@@ -261,6 +268,75 @@ g32_pe_result g32_pe_imports(g32_space *s, const g32_pe_image *image,
         }
     }
     return G32_PE_FORMAT; /* No terminating descriptor within the directory. */
+}
+
+static int image_table(g32_space *s, const g32_pe_image *image,
+                       uint32_t rva, uint32_t count, unsigned width)
+{
+    if (!count) return 1;
+    void *loan;
+    uint64_t bytes = (uint64_t)count * width;
+    return rva && span(rva, bytes, image->size) &&
+           g32_translate(s, image->base + rva, bytes, G32_READ, &loan) == G32_OK;
+}
+
+g32_pe_result g32_pe_find_export(g32_space *s, const g32_pe_image *image,
+                                 const char *symbol, uint32_t ordinal,
+                                 g32_pe_export *output)
+{
+    if (!s || !image || image->space != s || !output ||
+        !image->size || image->size > G32_PE_MAX_IMAGE ||
+        !span(image->base, image->size, UINT64_C(1) << 32)) return G32_PE_FORMAT;
+    if (!image->exports_rva && !image->exports_size) return G32_PE_NOT_FOUND;
+    if (!image->exports_rva || image->exports_size < 40 ||
+        !span(image->exports_rva, image->exports_size, image->size)) return G32_PE_FORMAT;
+    unsigned char directory[40];
+    if (!image_read(s, image, image->exports_rva, directory, sizeof(directory))) return G32_PE_FORMAT;
+    uint32_t first = le32(directory + 16), functions = le32(directory + 20);
+    uint32_t names = le32(directory + 24), eat = le32(directory + 28);
+    uint32_t name_table = le32(directory + 32), ordinal_table = le32(directory + 36);
+    if (functions > G32_PE_MAX_EXPORTS || names > G32_PE_MAX_EXPORTS) return G32_PE_UNSUPPORTED;
+    if (!span(first, functions, UINT64_C(1) << 32) ||
+        !image_table(s, image, eat, functions, 4) ||
+        !image_table(s, image, name_table, names, 4) ||
+        !image_table(s, image, ordinal_table, names, 2)) return G32_PE_FORMAT;
+    uint32_t index = UINT32_MAX;
+    if (!symbol && ordinal >= first && (uint64_t)ordinal - first < functions)
+        index = ordinal - first;
+    for (uint32_t n = 0; n < names; ++n) {
+        unsigned char name_rva[4], name_index[2];
+        char name[260];
+        if (!image_read(s, image, name_table + n * 4, name_rva, 4) ||
+            !image_read(s, image, ordinal_table + n * 2, name_index, 2) ||
+            le16(name_index) >= functions ||
+            !image_string(s, image, le32(name_rva), name, sizeof(name))) return G32_PE_FORMAT;
+        if (symbol && strcmp(symbol, name) == 0) {
+            if (index != UINT32_MAX) return G32_PE_FORMAT; /* Ambiguous duplicate name. */
+            index = le16(name_index);
+        }
+    }
+    if (index == UINT32_MAX) return G32_PE_NOT_FOUND;
+    unsigned char slot[4];
+    if (!image_read(s, image, eat + index * 4, slot, 4)) return G32_PE_FORMAT;
+    uint32_t rva = le32(slot);
+    if (!rva) return G32_PE_NOT_FOUND; /* EAT hole, never image.base. */
+    g32_pe_export result = { .ordinal = first + index };
+    if (rva >= image->exports_rva &&
+        (uint64_t)rva < (uint64_t)image->exports_rva + image->exports_size) {
+        result.kind = G32_PE_EXPORT_FORWARDER;
+        uint64_t remaining = (uint64_t)image->exports_rva + image->exports_size - rva;
+        size_t capacity = remaining < sizeof(result.forwarder) ? (size_t)remaining : sizeof(result.forwarder);
+        if (!image_string(s, image, rva, result.forwarder, capacity)) return G32_PE_FORMAT;
+    } else {
+        void *target;
+        if (!span(rva, 1, image->size) ||
+            (g32_translate(s, image->base + rva, 1, G32_READ, &target) != G32_OK &&
+             g32_translate(s, image->base + rva, 1, G32_EXEC, &target) != G32_OK)) return G32_PE_FORMAT;
+        result.kind = G32_PE_EXPORT_ADDRESS;
+        result.address = image->base + rva;
+    }
+    *output = result;
+    return G32_PE_OK;
 }
 
 typedef struct {

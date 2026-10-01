@@ -11,13 +11,14 @@
 
 typedef enum {
     G32_PE_OK, G32_PE_FORMAT, G32_PE_UNSUPPORTED, G32_PE_ADDRESS,
-    G32_PE_MEMORY, G32_PE_RELOCATION, G32_PE_IMPORT
+    G32_PE_MEMORY, G32_PE_RELOCATION, G32_PE_IMPORT, G32_PE_NOT_FOUND
 } g32_pe_result;
 
 typedef struct {
     g32_space *space; /* Native ownership metadata, never written into the guest. */
     uint32_t base, preferred_base, size, entry;
     uint32_t imports_rva, imports_size;
+    uint32_t exports_rva, exports_size;
     unsigned sections, relocations;
 } g32_pe_image;
 
@@ -59,4 +60,25 @@ typedef int (*g32_pe_import_resolver)(void *context, const char *dll,
                                      uint64_t *guest_address);
 g32_pe_result g32_pe_bind_imports(g32_space *space, const g32_pe_image *image,
                                   g32_pe_import_resolver resolver, void *context);
+/* Checked export lookup, NOT dependency loading or forwarder resolution.
+ * symbol!=NULL selects an exact case-sensitive name (ordinal ignored); NULL
+ * selects the full export ordinal, not an EAT index. Missing/zero EAT entries
+ * return NOT_FOUND. Output is unchanged on every failure. Function/data targets
+ * must be readable or fetchable within THIS image in THIS space. Forwarders
+ * return a bounded copy instead of a callable address; a future resolver must
+ * follow them with dependency/cycle checks. Names/forwarders are limited to
+ * 259 bytes plus NUL. Table spans and all name/ordinal pairs are checked before
+ * lookup completes, but unselected EAT targets are not validated. At most 65536
+ * function entries and 65536 names; aliases and unsorted name tables work.
+ * Metadata/addresses expire on unmap; calls require external serialization. */
+#define G32_PE_MAX_EXPORTS 65536u
+typedef enum { G32_PE_EXPORT_ADDRESS, G32_PE_EXPORT_FORWARDER } g32_pe_export_kind;
+typedef struct {
+    g32_pe_export_kind kind;
+    uint32_t ordinal, address; /* address=0 for a forwarder; never a host pointer. */
+    char forwarder[260];       /* empty for an address export. */
+} g32_pe_export;
+g32_pe_result g32_pe_find_export(g32_space *space, const g32_pe_image *image,
+                                 const char *symbol, uint32_t ordinal,
+                                 g32_pe_export *output);
 #endif

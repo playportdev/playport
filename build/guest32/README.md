@@ -1,6 +1,6 @@
 # Software-separated Win32 memory experiment
 
-This is a **host-tested memory, PE32 mapping and import-binding prototype**, not a shipped
+This is a **host-tested memory, PE32 mapping, import-binding and export-lookup prototype**, not a shipped
 runtime, complete Windows loader, WoW64 bridge or emulator. The dev app can
 exercise the memory contract from Settings; no game uses it. It cannot run
 Portal 2.
@@ -117,6 +117,37 @@ clang -std=c11 -O2 -Wall -Wextra -Werror \
 This is a host test, not another entry point into app functionality. The
 [real-file evidence](../../docs/evidence/2026-10-02-guest32-pe32.md) includes an
 independent full-image comparison at both preferred and relocated addresses.
+
+## PE32 export lookup
+
+`g32_pe_find_export` supplies the counterpart to external import binding. It
+looks up exact case-sensitive names or full export ordinals in a mapped image,
+returning a **guest** function/data address or a copied forwarder string. Export
+ordinals are not EAT indices; zero entries are holes (`G32_PE_NOT_FOUND`), never
+pointers to the image base. Unsorted names and aliases work. Table spans and
+all name/ordinal pairs are checked before returning, including later malformed
+names after a match; unselected EAT targets are not validated. Selected direct
+targets must remain readable or fetchable inside the owning image/space.
+Failure leaves output and guest memory/protections unchanged.
+
+Forwarder RVAs are recognized inside the export-directory range. Their nonempty
+NUL-terminated strings must fit both that range and 260 bytes. They return no
+address: dependency loading, forwarder parsing/following and cycle detection
+remain a future resolver's responsibility. Functions and names each have a
+65536-entry budget; names have a 260-byte bound including NUL. These are prototype
+limits, not complete Windows compatibility. All calls still require external
+serialization and live image metadata.
+
+Synthetic tests bind imports using real lookups in a synthetic dependency's
+export table, covering functions, data, ordinals, aliases, holes, forwarders,
+execute-only targets, malformed tables/strings, cross-guest-page accesses,
+wrong-space rejection, full-width ordinals and output preservation. The optional
+private-file test independently converts raw-file RVAs and checks **every** real
+named export and EAT entry at both preferred and relocated addresses, without
+calling or binding any game export. It also verifies the whole mapped image
+remains unchanged. The same test/sanitizer commands above exercise these checks.
+[Export evidence](../../docs/evidence/2026-10-02-guest32-export-lookup.md) records
+both engine exports and an independent `llvm-readobj` comparison.
 
 ## Still needed before a title launch
 
