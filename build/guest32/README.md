@@ -1,6 +1,6 @@
 # Software-separated Win32 memory experiment
 
-This is a **host-tested memory, PE32 mapping, import-binding and export-lookup prototype**, not a shipped
+This is a **host-tested memory, PE32 mapping, import-binding and mapped-dependency resolution prototype**, not a shipped
 runtime, complete Windows loader, WoW64 bridge or emulator. The dev app can
 exercise the memory contract from Settings; no game uses it. It cannot run
 Portal 2.
@@ -93,8 +93,9 @@ not a guest ABI structure; it expires when its reservation is released.
 The parser deliberately supports page-aligned sections (alignment at least
 4 KiB), at most 96 sections, 16 data directories and a 512 MiB image. Import
 inspection has a total one-million-thunk budget; binding stages at most 65536
-imports. Bound-address/delay imports and automatic export-forwarder resolution
-are not supported. These are experimental
+imports. Bound-address/delay imports are not supported. Export forwarders can
+be followed only through an explicitly supplied set of already-mapped modules.
+These are experimental
 resource/format limits, not a statement of full Windows loader compatibility.
 Guard pages, shared/write-copy mappings and discardable sections are not yet
 implemented. Headers retain the file's original preferred ImageBase; relocated
@@ -146,8 +147,9 @@ Failure leaves output and guest memory/protections unchanged.
 
 Forwarder RVAs are recognized inside the export-directory range. Their nonempty
 NUL-terminated strings must fit both that range and 260 bytes. They return no
-address: dependency loading, forwarder parsing/following and cycle detection
-remain a future resolver's responsibility. Functions and names each have a
+address: dependency loading remains absent; the separate mapped-dependency
+resolver below handles forwarder parsing/following and cycle detection.
+Functions and names each have a
 65536-entry budget; names have a 260-byte bound including NUL. These are prototype
 limits, not complete Windows compatibility. All calls still require external
 serialization and live image metadata.
@@ -162,6 +164,41 @@ calling or binding any game export. It also verifies the whole mapped image
 remains unchanged. The same test/sanitizer commands above exercise these checks.
 [Export evidence](../../docs/evidence/2026-10-02-guest32-export-lookup.md) records
 both engine exports and an independent `llvm-readobj` comparison.
+
+## Mapped-dependency resolution
+
+`g32_pe_modules_create` snapshots caller-supplied ASCII module basenames and
+image metadata into an immutable **native** table. All images must already be
+mapped in one guest space. Names compare case-insensitively, and names without
+any dot gain `.dll`; paths and ambiguous duplicate canonical names are rejected.
+Image aliases are permitted. Creation leaves output unchanged on failure;
+destroying a table frees only its metadata, never the guest images. Images must
+remain live throughout use: this is not reference counting or an unload protocol.
+
+`g32_pe_resolve_export` returns only a checked guest address. It follows named
+and strict decimal `#ordinal` forwarders, splitting at the last dot to allow an
+explicit module extension. Symbols remain case-sensitive. Cycle identity is the
+image base and selected export ordinal, not the spelling of a module/symbol:
+module and export aliases cannot disguise a repeated export. Missing modules or
+exports return `NOT_FOUND`, malformed input `FORMAT`, cycles `CYCLE` and a depth
+limit `UNSUPPORTED`. Failures preserve output and guest bytes/permissions.
+The limits are 256 modules, 32 selected exports per lookup and 259-byte names.
+Forwarded ordinals span `uint32_t`, including zero; ordinary import ordinals
+still have the PE32 thunk's 16-bit limit.
+
+`g32_pe_resolve_import` adapts this table to `g32_pe_bind_imports` or
+`g32_pe_map_bound`, treating every failed resolution as unresolved. It does not
+load files, manufacture placeholder targets, resolve API sets/search paths,
+attach DLLs or call game code. Tests cover multi-hop named/ordinal function/data
+resolution, module/name aliases, cycles, strict syntax, resource boundaries,
+metadata snapshots, inaccessible targets and transactional binding/rollback.
+The private-file tests also resolve every direct engine export at preferred and
+relocated addresses against independent raw-file tables, and reject real import
+binding with missing dependencies without changing any image byte.
+
+[Resolution evidence](../../docs/evidence/2026-10-02-guest32-forwarder-resolution.md)
+records checks and limits. The existing test and sanitizer commands include all
+these cases; this code is still not linked into the app or checked on the phone.
 
 ## Still needed before a title launch
 

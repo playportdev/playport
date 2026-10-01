@@ -655,6 +655,199 @@ static void export_cases(size_t granule)
     printf("pe32: granule=%zu checked guest-export lookup and binding checks ok\n", granule);
 }
 
+static void resolution_rejected(const g32_pe_modules *modules, const char *dll,
+                                 const char *name, uint32_t ordinal, g32_pe_result error)
+{
+    uint32_t address = 0xa5a5a5a5;
+    IS(g32_pe_resolve_export(modules, dll, name, ordinal, &address), error);
+    assert(address == 0xa5a5a5a5);
+    if (ordinal <= UINT16_MAX) {
+        uint64_t wide = UINT64_C(0xa5a5a5a5a5a5a5a5);
+        assert(!g32_pe_resolve_import((void *)modules, dll, name, (uint16_t)ordinal, &wide));
+        assert(wide == UINT64_C(0xa5a5a5a5a5a5a5a5));
+    }
+}
+
+/* Modify one synthetic EAT entry and its string, restoring READ-only access.
+ * Alias and GetTickCount select the SAME export, useful for alias-cycle tests. */
+static void forward_to(g32_space *s, const g32_pe_image *image, const char *forwarder)
+{
+    unsigned char rva[4]; p32(rva, 0x2200);
+    OK(g32_protect(s, image->base + 0x2000, G32_PAGE, G32_READ | G32_WRITE));
+    OK(g32_write(s, image->base + 0x2028, rva, 4));
+    OK(g32_write(s, image->base + 0x2200, forwarder, strlen(forwarder) + 1));
+    OK(g32_protect(s, image->base + 0x2000, G32_PAGE, G32_READ));
+}
+
+static void module_creation_rejected(g32_space *s, const g32_pe_module *modules,
+                                     size_t count, g32_pe_result error)
+{
+    g32_pe_modules *output = NULL;
+    IS(g32_pe_modules_create(s, modules, count, &output), error);
+    assert(output == NULL);
+}
+
+static void resolution_cases(size_t granule)
+{
+    g32_space *s, *other;
+    OK(g32_create(granule, &s)); OK(g32_create(granule, &other));
+    unsigned char f[FILE_SIZE]; export_fixture(f);
+    p32(f + OPTIONAL + 100, 0x400); /* Extra room for forwarders. */
+    g32_pe_image a, b, importer;
+    PE_OK(g32_pe_map(s, f, sizeof(f), 0x600000, &a));
+    PE_OK(g32_pe_map(s, f, sizeof(f), 0x700000, &b));
+    char mutable_name[] = "KERNEL32.dll";
+    g32_pe_image mutable_image = a;
+    g32_pe_module entries[] = {
+        {mutable_name, &mutable_image}, {"Other.DLL", &b}, {"ModuleAlias", &a}
+    };
+    g32_pe_modules *modules;
+    PE_OK(g32_pe_modules_create(s, entries, 3, &modules));
+    mutable_name[0] = 'X'; mutable_image.base = 0; /* Native metadata was copied. */
+    uint32_t address;
+    PE_OK(g32_pe_resolve_export(modules, "KeRnEl32", "GetTickCount", 0, &address));
+    assert(address == a.base + 0x1000);
+    PE_OK(g32_pe_resolve_export(modules, "OTHER.dll", NULL, 7, &address));
+    assert(address == b.base + 0x3000);
+    PE_OK(g32_pe_resolve_export(modules, "KERNEL32", NULL, 9, &address));
+    assert(address == b.base + 0x3000); /* Existing OTHER.#7 forwarder. */
+    forward_to(s, &a, "oThEr.dLl.GetTickCount"); /* Split at LAST dot. */
+    PE_OK(g32_pe_resolve_export(modules, "kernel32.dll", "Alias", 0, &address));
+    assert(address == b.base + 0x1000);
+    forward_to(s, &b, "ModuleAlias.#7"); /* Multi-hop to data in original module. */
+    PE_OK(g32_pe_resolve_export(modules, "kernel32", "GetTickCount", 0, &address));
+    assert(address == a.base + 0x3000);
+    /* The built-in adapter binds a new image to actual synthetic exports;
+     * forwarded and ordinary imports retain final READ-only IAT protection. */
+    fixture(f);
+    PE_OK(g32_pe_map_bound(s, f, sizeof(f), 0, g32_pe_resolve_import, modules, &importer));
+    unsigned char slots[8]; OK(g32_read(s, importer.base + 0x2150, slots, 8));
+    assert(u32(slots) == a.base + 0x3000 && u32(slots + 4) == a.base + 0x3000);
+    IS(g32_write(s, importer.base + 0x2150, slots, 8), G32_ACCESS);
+    OK(g32_pe_unmap(s, &importer));
+    resolution_rejected(modules, "absent", "Data", 0, G32_PE_NOT_FOUND);
+    resolution_rejected(modules, "other", "data", 0, G32_PE_NOT_FOUND);
+    resolution_rejected(modules, "other", NULL, 8, G32_PE_NOT_FOUND);
+    resolution_rejected(modules, "other", "", 0, G32_PE_FORMAT);
+    resolution_rejected(modules, "dir/other.dll", "Data", 0, G32_PE_FORMAT);
+    resolution_rejected(modules, NULL, "Data", 0, G32_PE_FORMAT);
+    resolution_rejected(NULL, "other", "Data", 0, G32_PE_FORMAT);
+    IS(g32_pe_resolve_export(modules, "other", "Data", 0, NULL), G32_PE_FORMAT);
+    assert(!g32_pe_resolve_import(modules, "other", "Data", 0, NULL));
+
+    const char *bad[] = {
+        "OTHER", ".Data", "OTHER.", "OTHER.#", "OTHER.#-1", "OTHER.#+7",
+        "OTHER.#7x", "OTHER.#4294967296", "OTHER.# 7", "../OTHER.Data",
+        "C:OTHER.Data", "dir\\OTHER.Data", "OTHER..Data", "\x80OTHER.Data"
+    };
+    for (unsigned n = 0; n < sizeof(bad) / sizeof(bad[0]); ++n) {
+        forward_to(s, &a, bad[n]);
+        resolution_rejected(modules, "kernel32", "Alias", 0, G32_PE_FORMAT);
+    }
+    forward_to(s, &a, "MISSING.Data");
+    resolution_rejected(modules, "kernel32", "Alias", 0, G32_PE_NOT_FOUND);
+    forward_to(s, &a, "OTHER.Missing");
+    resolution_rejected(modules, "kernel32", "Alias", 0, G32_PE_NOT_FOUND);
+    forward_to(s, &a, "OTHER.#0007");
+    PE_OK(g32_pe_resolve_export(modules, "kernel32", "Alias", 0, &address));
+    assert(address == b.base + 0x3000);
+    forward_to(s, &a, "OTHER.GetTickCount");
+    forward_to(s, &b, "ModuleAlias.Alias");
+    resolution_rejected(modules, "kernel32", "GetTickCount", 0, G32_PE_CYCLE);
+    forward_to(s, &a, "ModuleAlias.#6"); /* Module + name/ordinal aliases cycle. */
+    resolution_rejected(modules, "kernel32", "Alias", 0, G32_PE_CYCLE);
+    /* A cycle must fail map-bound transactionally and preserve dependencies. */
+    unsigned char before[0x4000], after[0x4000];
+    OK(g32_read(s, a.base, before, sizeof(before)));
+    g32_pe_image sentinel, unchanged;
+    memset(&sentinel, 0xa5, sizeof(sentinel)); memcpy(&unchanged, &sentinel, sizeof(sentinel));
+    IS(g32_pe_map_bound(s, f, sizeof(f), 0, g32_pe_resolve_import, modules, &sentinel), G32_PE_IMPORT);
+    assert(!memcmp(&sentinel, &unchanged, sizeof(sentinel)));
+    OK(g32_reserve(s, PREFERRED, 0x5000)); OK(g32_release(s, PREFERRED));
+    OK(g32_read(s, a.base, after, sizeof(after))); assert(!memcmp(before, after, sizeof(before)));
+    forward_to(s, &a, "OTHER.Data");
+    OK(g32_protect(s, b.base + 0x3000, G32_PAGE, 0));
+    resolution_rejected(modules, "kernel32", "Alias", 0, G32_PE_FORMAT);
+    OK(g32_protect(s, b.base + 0x3000, G32_PAGE, G32_READ | G32_WRITE));
+    /* Strict full-width forwarded ordinals, including zero and UINT32_MAX. */
+    OK(g32_protect(s, b.base + 0x2000, G32_PAGE, G32_READ | G32_WRITE));
+    unsigned char word[4]; p32(word, UINT32_MAX - 4);
+    OK(g32_write(s, b.base + 0x2010, word, 4));
+    forward_to(s, &a, "OTHER.#4294967295");
+    PE_OK(g32_pe_resolve_export(modules, "kernel32", "Alias", 0, &address));
+    assert(address == b.base + 0x1004);
+    p32(word, 0); OK(g32_write(s, b.base + 0x2010, word, 4));
+    OK(g32_protect(s, b.base + 0x2000, G32_PAGE, G32_READ));
+    forward_to(s, &b, "kernel32.Data"); forward_to(s, &a, "OTHER.#0");
+    PE_OK(g32_pe_resolve_export(modules, "kernel32", "Alias", 0, &address));
+    assert(address == a.base + 0x3000);
+    g32_pe_modules_destroy(modules);
+    OK(g32_read(s, a.base, after, 1)); /* Destruction never unmaps dependencies. */
+
+    g32_pe_module invalid[] = {{"OTHER", &a}, {"other.DLL", &b}};
+    module_creation_rejected(s, invalid, 2, G32_PE_FORMAT);
+    module_creation_rejected(other, invalid, 1, G32_PE_FORMAT);
+    module_creation_rejected(s, NULL, 1, G32_PE_FORMAT);
+    module_creation_rejected(s, invalid, G32_PE_MAX_MODULES + 1, G32_PE_UNSUPPORTED);
+    const char *bad_names[] = {NULL, "", "../other", "dir\\other", "other:", ".dll", "other.", "with space", "\x80"};
+    for (unsigned n = 0; n < sizeof(bad_names) / sizeof(bad_names[0]); ++n) {
+        invalid[0].name = bad_names[n];
+        module_creation_rejected(s, invalid, 1, G32_PE_FORMAT);
+    }
+    char long_name[261]; memset(long_name, 'x', sizeof(long_name)); long_name[260] = 0;
+    invalid[0].name = long_name;
+    module_creation_rejected(s, invalid, 1, G32_PE_FORMAT);
+    long_name[259] = 0; /* Appending .dll would exceed the bound. */
+    module_creation_rejected(s, invalid, 1, G32_PE_FORMAT);
+    long_name[255] = 0; /* Longest accepted bare name: 255 + .dll + NUL. */
+    PE_OK(g32_pe_modules_create(s, invalid, 1, &modules));
+    PE_OK(g32_pe_resolve_export(modules, long_name, "Data", 0, &address));
+    assert(address == a.base + 0x3000); g32_pe_modules_destroy(modules);
+    invalid[0].name = "OTHER"; invalid[0].image = NULL;
+    module_creation_rejected(s, invalid, 1, G32_PE_FORMAT);
+    OK(g32_pe_unmap(s, &a)); OK(g32_pe_unmap(s, &b));
+    invalid[0].image = &a; /* An unmapped image cannot enter a new table. */
+    module_creation_rejected(s, invalid, 1, G32_PE_FORMAT);
+    PE_OK(g32_pe_modules_create(s, NULL, 0, &modules));
+    resolution_rejected(modules, "other", "Data", 0, G32_PE_NOT_FOUND);
+    g32_pe_modules_destroy(modules); g32_pe_modules_destroy(NULL);
+    g32_destroy(s); g32_destroy(other);
+    printf("pe32: granule=%zu module/forwarder resolution and binding checks ok\n", granule);
+}
+
+static void resolution_depth(void)
+{
+    g32_space *s; OK(g32_create(16384, &s));
+    g32_pe_image images[G32_PE_MAX_RESOLVE_DEPTH + 1];
+    g32_pe_module entries[G32_PE_MAX_MODULES];
+    char names[G32_PE_MAX_MODULES][20];
+    unsigned char f[FILE_SIZE]; export_fixture(f); p32(f + OPTIONAL + 100, 0x400);
+    for (unsigned n = 0; n < G32_PE_MAX_MODULES; ++n) {
+        snprintf(names[n], sizeof(names[n]), "module%u", n);
+        entries[n].name = names[n];
+        if (n <= G32_PE_MAX_RESOLVE_DEPTH) {
+            PE_OK(g32_pe_map(s, f, sizeof(f), 0x600000 + n * G32_GRANULE, &images[n]));
+            entries[n].image = &images[n];
+        } else entries[n].image = &images[0]; /* Registry capacity uses aliases. */
+    }
+    g32_pe_modules *modules;
+    PE_OK(g32_pe_modules_create(s, entries, G32_PE_MAX_MODULES, &modules));
+    for (unsigned n = 0; n + 1 < G32_PE_MAX_RESOLVE_DEPTH; ++n) {
+        char forwarder[64]; snprintf(forwarder, sizeof(forwarder), "module%u.Alias", n + 1);
+        forward_to(s, &images[n], forwarder);
+    }
+    uint32_t address;
+    PE_OK(g32_pe_resolve_export(modules, names[0], "Alias", 0, &address));
+    assert(address == images[G32_PE_MAX_RESOLVE_DEPTH - 1].base + 0x1000);
+    char forwarder[64]; snprintf(forwarder, sizeof(forwarder), "module%u.Alias", G32_PE_MAX_RESOLVE_DEPTH);
+    forward_to(s, &images[G32_PE_MAX_RESOLVE_DEPTH - 1], forwarder);
+    resolution_rejected(modules, names[0], "Alias", 0, G32_PE_UNSUPPORTED);
+    g32_pe_modules_destroy(modules);
+    for (unsigned n = 0; n <= G32_PE_MAX_RESOLVE_DEPTH; ++n) OK(g32_pe_unmap(s, &images[n]));
+    g32_destroy(s);
+    puts("pe32: exact forwarder-depth and module-count resource bounds checked");
+}
+
 static void mutations(void)
 {
     unsigned char original[FILE_SIZE], f[FILE_SIZE]; export_fixture(original);
@@ -676,6 +869,13 @@ static void mutations(void)
             g32_pe_export found;
             (void)g32_pe_find_export(s, &image, "GetTickCount", 0, &found);
             (void)g32_pe_find_export(s, &image, NULL, 9, &found);
+            g32_pe_module entry = {"mutated", &image};
+            g32_pe_modules *modules;
+            PE_OK(g32_pe_modules_create(s, &entry, 1, &modules));
+            uint32_t address;
+            (void)g32_pe_resolve_export(modules, "mutated", "Alias", 0, &address);
+            (void)g32_pe_resolve_export(modules, "mutated", NULL, 9, &address);
+            g32_pe_modules_destroy(modules);
             OK(g32_pe_unmap(s, &image));
         }
         OK(g32_reserve(s, 0x500000, 0x5000)); OK(g32_release(s, 0x500000));
@@ -724,9 +924,14 @@ static void private_exports(g32_space *s, const g32_pe_image *image,
 {
     uint32_t optional = u32(f + 0x3c) + 24;
     uint32_t rva = u32(f + optional + 96), extent = u32(f + optional + 100);
+    g32_pe_module entry = {"inspected", image};
+    g32_pe_modules *modules;
+    PE_OK(g32_pe_modules_create(s, &entry, 1, &modules));
     if (!rva) {
         export_rejected(s, image, "CreateInterface", 0, G32_PE_NOT_FOUND);
-        puts("pe32: raw file has no exports; lookup reports not found"); return;
+        resolution_rejected(modules, "INSPECTED.dll", "CreateInterface", 0, G32_PE_NOT_FOUND);
+        g32_pe_modules_destroy(modules);
+        puts("pe32: raw file has no exports; lookup/resolution report not found"); return;
     }
     const unsigned char *d = file_rva(f, size, rva, 40);
     uint32_t first = u32(d + 16), functions = u32(d + 20), names = u32(d + 24);
@@ -745,7 +950,12 @@ static void private_exports(g32_space *s, const g32_pe_image *image,
             assert(memchr(forwarder, 0, capacity));
             assert(found.kind == G32_PE_EXPORT_FORWARDER && !found.address &&
                    strcmp(found.forwarder, forwarder) == 0);
-        } else assert(found.kind == G32_PE_EXPORT_ADDRESS && found.address == image->base + target);
+        } else {
+            assert(found.kind == G32_PE_EXPORT_ADDRESS && found.address == image->base + target);
+            uint32_t address;
+            PE_OK(g32_pe_resolve_export(modules, "INSPECTED.dll", NULL, first + n, &address));
+            assert(address == image->base + target);
+        }
     }
     const unsigned char *name_table = file_rva(f, size, u32(d + 32), names * 4);
     const unsigned char *ordinals = file_rva(f, size, u32(d + 36), names * 2);
@@ -767,10 +977,16 @@ static void private_exports(g32_space *s, const g32_pe_image *image,
         PE_OK(g32_pe_find_export(s, image, NULL, first + index, &ordinal));
         assert(named.kind == ordinal.kind && named.ordinal == ordinal.ordinal &&
                named.address == ordinal.address && strcmp(named.forwarder, ordinal.forwarder) == 0);
+        if (named.kind == G32_PE_EXPORT_ADDRESS) {
+            uint32_t address;
+            PE_OK(g32_pe_resolve_export(modules, "inspected", name, 0, &address));
+            assert(address == image->base + u32(eat + index * 4));
+        }
         printf("pe32: raw-file export matches name=%s ordinal=%u rva=%08x\n",
                name, named.ordinal, u32(eat + index * 4));
     }
-    printf("pe32: %u ordinal entries and %u named exports match independent raw-file tables\n", functions, names);
+    g32_pe_modules_destroy(modules);
+    printf("pe32: %u ordinal entries and %u named exports match independent raw-file tables; direct targets resolve through module snapshot\n", functions, names);
 }
 
 /* PRIVATE layout experiment only: the target is inert readable test data,
@@ -830,6 +1046,15 @@ static void private_image(const char *path)
         assert(unresolved == 1); /* Fully parsed, but deliberately NOT resolved. */
         OK(g32_read(s, image.base, after, image.size));
         assert(memcmp(before, after, image.size) == 0);
+        /* A registry containing only the inspected image cannot substitute for
+         * missing Windows dependencies; real IAT bytes must remain untouched. */
+        g32_pe_module module = {"inspected", &image};
+        g32_pe_modules *modules;
+        PE_OK(g32_pe_modules_create(s, &module, 1, &modules));
+        IS(g32_pe_bind_imports(s, &image, g32_pe_resolve_import, modules), G32_PE_IMPORT);
+        g32_pe_modules_destroy(modules);
+        OK(g32_read(s, image.base, after, image.size));
+        assert(memcmp(before, after, image.size) == 0);
         void *entry;
         OK(g32_translate(s, image.entry, 1, G32_EXEC, &entry));
         printf("pe32: %s base=%08x size=%08x entry=%08x sections=%u relocations=%u imports=%u backing_above_4GiB=%s\n",
@@ -870,6 +1095,8 @@ int main(int argc, char **argv)
     binding_cases(0); binding_cases(16384); binding_cases(65536);
     bound_mapping_cases(0); bound_mapping_cases(16384); bound_mapping_cases(65536);
     export_cases(0); export_cases(16384); export_cases(65536);
+    resolution_cases(0); resolution_cases(16384); resolution_cases(65536);
+    resolution_depth();
     mutations();
     for (int n = 1; n < argc; ++n) private_image(argv[n]);
     puts("pe32: synthetic dependencies bound; private IAT patches are inert layout tests; no game APIs or guest execution");

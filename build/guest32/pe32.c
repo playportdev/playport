@@ -365,6 +365,138 @@ g32_pe_result g32_pe_find_export(g32_space *s, const g32_pe_image *image,
 }
 
 typedef struct {
+    char name[260];
+    g32_pe_image image;
+} module_entry;
+
+struct g32_pe_modules {
+    g32_space *space;
+    size_t count;
+    module_entry entries[];
+};
+
+static int copy_name(const char *source, char destination[260])
+{
+    if (!source) return 0;
+    for (size_t n = 0; n < 260; ++n) {
+        destination[n] = source[n];
+        if (!source[n]) return n != 0;
+    }
+    return 0;
+}
+
+static int module_name(const char *source, char destination[260])
+{
+    if (!copy_name(source, destination)) return 0;
+    size_t length = strlen(destination);
+    if (destination[0] == '.' || destination[length - 1] == '.') return 0;
+    int dot = 0;
+    for (size_t n = 0; n < length; ++n) {
+        unsigned char c = (unsigned char)destination[n];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\' || c == ':') return 0;
+        if (c >= 'A' && c <= 'Z') destination[n] = (char)(c + ('a' - 'A'));
+        if (c == '.') dot = 1;
+    }
+    if (!dot) {
+        if (length + 4 >= 260) return 0;
+        memcpy(destination + length, ".dll", 5);
+    }
+    return 1;
+}
+
+g32_pe_result g32_pe_modules_create(g32_space *s, const g32_pe_module *modules,
+                                     size_t count, g32_pe_modules **output)
+{
+    if (!s || !output || (count && !modules)) return G32_PE_FORMAT;
+    if (count > G32_PE_MAX_MODULES) return G32_PE_UNSUPPORTED;
+    g32_pe_modules *table = calloc(1, sizeof(*table) + count * sizeof(module_entry));
+    if (!table) return G32_PE_MEMORY;
+    table->space = s;
+    table->count = count;
+    for (size_t n = 0; n < count; ++n) {
+        const g32_pe_image *image = modules[n].image;
+        void *header;
+        if (!module_name(modules[n].name, table->entries[n].name) || !image ||
+            image->space != s || image->base < G32_GRANULE || image->base % G32_GRANULE ||
+            !image->size || image->size > G32_PE_MAX_IMAGE ||
+            !span(image->base, image->size, UINT64_C(1) << 32) ||
+            g32_translate(s, image->base, 1, G32_READ, &header) != G32_OK) goto malformed;
+        for (size_t j = 0; j < n; ++j)
+            if (!strcmp(table->entries[j].name, table->entries[n].name)) goto malformed;
+        table->entries[n].image = *image;
+    }
+    *output = table;
+    return G32_PE_OK;
+malformed:
+    free(table);
+    return G32_PE_FORMAT;
+}
+
+void g32_pe_modules_destroy(g32_pe_modules *modules) { free(modules); }
+
+g32_pe_result g32_pe_resolve_export(const g32_pe_modules *modules, const char *dll,
+                                    const char *symbol, uint32_t ordinal,
+                                    uint32_t *guest_address)
+{
+    char module[260], name[260];
+    if (!modules || !guest_address || !module_name(dll, module) ||
+        (symbol && !copy_name(symbol, name))) return G32_PE_FORMAT;
+    int named = symbol != NULL;
+    struct { uint32_t base, ordinal; } visited[G32_PE_MAX_RESOLVE_DEPTH];
+    for (size_t depth = 0; depth < G32_PE_MAX_RESOLVE_DEPTH; ++depth) {
+        const g32_pe_image *image = NULL;
+        for (size_t n = 0; n < modules->count; ++n)
+            if (!strcmp(module, modules->entries[n].name)) {
+                image = &modules->entries[n].image;
+                break;
+            }
+        if (!image) return G32_PE_NOT_FOUND;
+        g32_pe_export found;
+        g32_pe_result result = g32_pe_find_export(modules->space, image,
+                                                  named ? name : NULL, ordinal, &found);
+        if (result != G32_PE_OK) return result;
+        for (size_t n = 0; n < depth; ++n)
+            if (visited[n].base == image->base && visited[n].ordinal == found.ordinal)
+                return G32_PE_CYCLE;
+        visited[depth].base = image->base;
+        visited[depth].ordinal = found.ordinal;
+        if (found.kind == G32_PE_EXPORT_ADDRESS) {
+            *guest_address = found.address;
+            return G32_PE_OK;
+        }
+        char *separator = strrchr(found.forwarder, '.');
+        if (!separator || !separator[1]) return G32_PE_FORMAT;
+        *separator = 0;
+        if (!module_name(found.forwarder, module)) return G32_PE_FORMAT;
+        const char *target = separator + 1;
+        named = *target != '#';
+        if (named) {
+            if (!copy_name(target, name)) return G32_PE_FORMAT;
+        } else {
+            if (!*++target) return G32_PE_FORMAT;
+            ordinal = 0;
+            for (; *target; ++target) {
+                if (*target < '0' || *target > '9') return G32_PE_FORMAT;
+                unsigned digit = (unsigned)(*target - '0');
+                if (ordinal > (UINT32_MAX - digit) / 10) return G32_PE_FORMAT;
+                ordinal = ordinal * 10 + digit;
+            }
+        }
+    }
+    return G32_PE_UNSUPPORTED;
+}
+
+int g32_pe_resolve_import(void *context, const char *dll, const char *symbol,
+                          uint16_t ordinal, uint64_t *guest_address)
+{
+    uint32_t address;
+    if (!guest_address || g32_pe_resolve_export(context, dll, symbol, ordinal, &address) != G32_PE_OK)
+        return 0;
+    *guest_address = address;
+    return 1;
+}
+
+typedef struct {
     char dll[260], symbol[260];
     uint16_t ordinal;
     int named;

@@ -11,7 +11,8 @@
 
 typedef enum {
     G32_PE_OK, G32_PE_FORMAT, G32_PE_UNSUPPORTED, G32_PE_ADDRESS,
-    G32_PE_MEMORY, G32_PE_RELOCATION, G32_PE_IMPORT, G32_PE_NOT_FOUND
+    G32_PE_MEMORY, G32_PE_RELOCATION, G32_PE_IMPORT, G32_PE_NOT_FOUND,
+    G32_PE_CYCLE
 } g32_pe_result;
 
 typedef struct {
@@ -52,7 +53,8 @@ g32_pe_result g32_pe_imports(g32_space *space, const g32_pe_image *image,
  * resolver-side effects are not rolled back. IAT slots must already be writable:
  * this API never broadens guest protections. Overlapping slots are rejected.
  * FirstThunk fallback works once, but cannot be rebound without restoring lookup
- * data. Bound-address/delay imports and automatic forwarder resolution are absent.
+ * data. Bound-address/delay imports are absent. resolve_import below can follow
+ * forwarders through already-mapped dependencies.
  * At most 65536 imports per binding; use remains externally serialized. */
 #define G32_PE_MAX_BIND_IMPORTS 65536u
 typedef int (*g32_pe_import_resolver)(void *context, const char *dll,
@@ -78,7 +80,7 @@ g32_pe_result g32_pe_map_bound(g32_space *space, const void *file, size_t file_s
  * selects the full export ordinal, not an EAT index. Missing/zero EAT entries
  * return NOT_FOUND. Output is unchanged on every failure. Function/data targets
  * must be readable or fetchable within THIS image in THIS space. Forwarders
- * return a bounded copy instead of a callable address; a future resolver must
+ * return a bounded copy instead of a callable address; resolve_export below can
  * follow them with dependency/cycle checks. Names/forwarders are limited to
  * 259 bytes plus NUL. Table spans and all name/ordinal pairs are checked before
  * lookup completes, but unselected EAT targets are not validated. At most 65536
@@ -94,4 +96,34 @@ typedef struct {
 g32_pe_result g32_pe_find_export(g32_space *space, const g32_pe_image *image,
                                  const char *symbol, uint32_t ordinal,
                                  g32_pe_export *output);
+
+/* Immutable native snapshot of ALREADY mapped module names/image metadata.
+ * Not dependency loading: no files, API sets, search paths, TLS or DllMain.
+ * Names are ASCII basenames, case-insensitive; a name without any dot gains
+ * .dll. Paths, empty names, leading/trailing dots and nonprintable/non-ASCII
+ * bytes are rejected. Names (including appended suffix) fit 259 bytes + NUL.
+ * Duplicate canonical names are rejected, but aliases of one image are allowed.
+ * All images must belong to space and remain live and externally serialized
+ * until table destruction. Destroying the table does NOT unmap its images.
+ * Creation and resolution leave outputs unchanged on failure. No guest writes.
+ * At most 256 modules and 32 selected exports per resolution. Forwarders split
+ * at their LAST dot; #ordinals must be strict decimal uint32_t (zero allowed).
+ * Symbols are bounded, nonempty, case-sensitive. Cycles are detected by image
+ * base + export ordinal, including name/module aliases. Missing modules/exports
+ * return NOT_FOUND, malformed syntax FORMAT, cycles CYCLE, depth UNSUPPORTED.
+ * Resolution returns only a checked guest address, never a forwarder string. */
+#define G32_PE_MAX_MODULES 256u
+#define G32_PE_MAX_RESOLVE_DEPTH 32u
+typedef struct { const char *name; const g32_pe_image *image; } g32_pe_module;
+typedef struct g32_pe_modules g32_pe_modules;
+g32_pe_result g32_pe_modules_create(g32_space *space, const g32_pe_module *modules,
+                                     size_t count, g32_pe_modules **output);
+void g32_pe_modules_destroy(g32_pe_modules *modules);
+g32_pe_result g32_pe_resolve_export(const g32_pe_modules *modules, const char *dll,
+                                    const char *symbol, uint32_t ordinal,
+                                    uint32_t *guest_address);
+/* Adapter for bind_imports/map_bound: context is a live g32_pe_modules table.
+ * All non-OK results become unresolved (zero); output is unchanged on failure. */
+int g32_pe_resolve_import(void *context, const char *dll, const char *symbol,
+                          uint16_t ordinal, uint64_t *guest_address);
 #endif
