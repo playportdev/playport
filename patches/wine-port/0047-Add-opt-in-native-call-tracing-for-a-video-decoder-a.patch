@@ -1,0 +1,291 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 25 Aug 2026 11:20:59 +0900
+Subject: [PATCH] Add opt-in native-call tracing for a video decoder and its
+ stream
+
+Two diagnostics for a wall where a title decodes and displays its intro
+cutscene at 60 FPS and then sits on a black screen forever without loading
+the next context, raising no exception and consuming no CPU.
+
+The first tracks the stream through the file layer. Every byte the decoder
+consumes passes through NtReadFile, so counting reads and, crucially, always
+reporting a zero-byte read or a non-success status says whether the decoder
+finishes, stalls, or errors -- without needing to see the decoder itself. It
+answered immediately: 37,530 sequential reads, about 147 MB, then a clean
+STATUS_END_OF_FILE and no further reads. The filesystem layer was exonerated
+in one run.
+
+File EOF is not decoder end-of-stream though, so the second hooks the
+decoder's own exports. LdrGetProcedureAddress substitutes wrappers that call
+the original and capture its RETURN value, because a call counter cannot
+distinguish "reports not-finished forever" from "reports finished and the
+caller ignores it" -- only the returned value separates those. Interception
+happens at name resolution rather than by rewriting the export address table:
+an EAT entry is a UINT32 RVA resolved as base+rva and so cannot address a
+wrapper in another module below it, and the alternative -- hand-built stubs in
+a raw executable allocation -- would not be registered with the emulator and
+would fault on first use.
+
+The wrappers are compiled C, not hand-encoded. Shadow space, alignment and
+which registers survive the inner call are easy to get subtly wrong by hand
+and expensive to debug on a device.
+
+Ordering matters and is deliberate: the real resolver runs first and its
+pointer is captured before any substitution, so a failed resolve cannot leave
+a wrapper pointing at nothing. The tracer is loaded and pinned when its target
+module loads -- never from inside the resolver, which would re-enter the
+loader. Only an exact module and exact export name are substituted; ordinal
+lookups and every other module are untouched. Installation emits unconditional
+beacons, so "the hook never installed" can never be mistaken for "it installed
+and observed nothing" -- a distinction that cost a run when the wrappers ran
+correctly and their output was filtered out by a debug channel.
+
+Both are opt-in and inert unless enabled.
+
+(cherry picked from commit daeb4ee6bb675a8faec7d0c557e6e5aa6ea9ae80)
+Madeira-commit: fd6c85189585b030ca9162be134d882614886cbc
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c    | 117 +++++++++++++++++++++++++++++++++++++++++
+ dlls/ntdll/unix/file.c |  68 ++++++++++++++++++++++++
+ 2 files changed, 185 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 087db976699..02bfe7089a7 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -2420,6 +2420,97 @@ NTSTATUS WINAPI LdrUnlockLoaderLock( ULONG flags, ULONG_PTR magic )
+ /******************************************************************
+  *		LdrGetProcedureAddress  (NTDLL.@)
+  */
++#ifdef __arm64ec__
++/* ml734: Theorafile call tracer.
++ *
++ * The intro decodes and plays, the stream reaches a clean end of file after
++ * 37,530 reads and the decoder stops reading -- yet the game never leaves
++ * VideoContext. File EOF is not decoder EOS, so the open question is whether
++ * tf_eos() is called at all, and what it returns. A call counter cannot answer
++ * that: "called 900 times" fits both "returns false forever" and "returns true
++ * and the managed side ignores it". Only the return value separates them, so
++ * the wrappers in tftrace-x64.dll call through and capture RAX.
++ *
++ * Interception happens here rather than by rewriting libtheorafile's export
++ * address table, because an EAT entry is a UINT32 RVA resolved as base+rva and
++ * therefore cannot address a wrapper that lives in another module below it.
++ * Here the substitution is an absolute pointer with no such constraint, needs
++ * no hand-built stubs, and no raw executable allocation that FEX never
++ * registered.
++ *
++ * Opt-in. With MYTHIC_TF_TRACE unset this file behaves exactly as before. */
++static const char * const tft_names[5] =
++    { "tf_fopen", "tf_readvideo", "tf_readaudio", "tf_eos", "tf_close" };
++static const char * const tft_wrap_names[5] =
++    { "tft_tf_fopen", "tft_tf_readvideo", "tft_tf_readaudio", "tft_tf_eos", "tft_tf_close" };
++
++static HMODULE tft_target;             /* libtheorafile.dll base, 0 until seen */
++static void  **tft_real_slots;         /* tracer's tft_real[] */
++static void   *tft_wrappers[5];
++static int     tft_ready, tft_beaconed[5];
++
++static int tft_enabled(void)
++{
++    static int on = -1;
++    if (on < 0)
++    {
++        UNICODE_STRING nm, val;
++        WCHAR buf[8];
++        RtlInitUnicodeString( &nm, L"MYTHIC_TF_TRACE" );
++        val.Buffer = buf; val.Length = 0; val.MaximumLength = sizeof(buf);
++        on = (!RtlQueryEnvironmentVariable_U( NULL, &nm, &val ) && val.Length && buf[0] == '1');
++    }
++    return on;
++}
++
++/* Called once libtheorafile has finished loading -- never from inside
++ * LdrGetProcedureAddress, so the loader is not re-entered while resolving. */
++static void tft_attach( HMODULE tf_base )
++{
++    UNICODE_STRING dll;
++    HMODULE tracer = NULL;
++    unsigned int st;
++    int i;
++
++    if (!tft_enabled() || tft_ready) return;
++    tft_target = tf_base;
++
++    RtlInitUnicodeString( &dll, L"tftrace-x64.dll" );
++    if ((st = LdrLoadDll( NULL, 0, &dll, &tracer )) || !tracer)
++    {
++        ERR( "[tf-trace] ml734 tracer FAILED to load: %08x -- tracing OFF\n", st );
++        return;
++    }
++    /* Pinned for the life of the process: the wrappers hold pointers into it. */
++    LdrAddRefDll( LDR_ADDREF_DLL_PIN, tracer );
++
++    for (i = 0; i < 5; i++)
++    {
++        ANSI_STRING an;
++        RtlInitAnsiString( &an, tft_wrap_names[i] );
++        if (LdrGetProcedureAddress( tracer, &an, 0, &tft_wrappers[i] ))
++        {
++            ERR( "[tf-trace] ml734 missing wrapper %s -- tracing OFF\n", tft_wrap_names[i] );
++            return;
++        }
++    }
++    {
++        ANSI_STRING an;
++        void *p = NULL;
++        RtlInitAnsiString( &an, "tft_real" );
++        if (LdrGetProcedureAddress( tracer, &an, 0, &p ) || !p)
++        {
++            ERR( "[tf-trace] ml734 missing tft_real -- tracing OFF\n" );
++            return;
++        }
++        tft_real_slots = p;
++    }
++    tft_ready = 1;
++    ERR( "[tf-trace] ml734 ARMED target=%p tracer=%p tft_real=%p\n",
++         tf_base, tracer, tft_real_slots );
++}
++#endif  /* __arm64ec__ */
++
+ NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
+                                        ULONG ord, PVOID *address)
+ {
+@@ -2441,6 +2532,26 @@ NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
+         {
+             *address = proc;
+             ret = STATUS_SUCCESS;
++#ifdef __arm64ec__
++            /* Substitute only for the exact module and exact export name;
++             * ordinal lookups and every other module are untouched. The real
++             * pointer is captured first, so a failed resolve can never leave a
++             * wrapper pointing at nothing. */
++            if (tft_ready && name && name->Buffer && module == tft_target)
++            {
++                int i;
++                for (i = 0; i < 5; i++)
++                {
++                    if (strcmp( name->Buffer, tft_names[i] )) continue;
++                    tft_real_slots[i] = proc;
++                    *address = tft_wrappers[i];
++                    if (!tft_beaconed[i]++)
++                        ERR( "[tf-trace] ml734 REDIRECT %s real=%p -> wrapper=%p\n",
++                             tft_names[i], proc, tft_wrappers[i] );
++                    break;
++                }
++            }
++#endif
+         }
+         else
+         {
+@@ -3207,6 +3318,12 @@ static NTSTATUS load_native_dll( LPCWSTR load_path, const UNICODE_STRING *nt_nam
+      * point where mapping, relocation and imports have all succeeded and no DllMain has
+      * run yet. See arm64ec_notify_image_map(). */
+     if (NT_SUCCESS(status) && *pwm) arm64ec_notify_image_map( (*pwm)->ldr.DllBase );
++    /* ml734: arm the Theorafile tracer once its target has finished loading.
++     * Done here, not inside LdrGetProcedureAddress, so loading the tracer never
++     * re-enters the resolver. */
++    if (NT_SUCCESS(status) && *pwm && (*pwm)->ldr.BaseDllName.Buffer &&
++        !wcsnicmp( (*pwm)->ldr.BaseDllName.Buffer, L"libtheorafile", 13 ))
++        tft_attach( (*pwm)->ldr.DllBase );
+ #endif
+     if (status && module) NtUnmapViewOfSection( NtCurrentProcess(), module );
+     return status;
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 59445703c3e..352f2c92671 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -4654,6 +4654,48 @@ static int ios_file_fail_logged;
+ static int ios_file_wfail_logged;   /* ml669: separate budget for write/create opens */
+ #endif
+ 
++#ifdef WINE_IOS
++/* ml733: video-stream read tracking. See the call site in NtCreateFile. */
++static HANDLE ios_video_handles[4];
++static unsigned int ios_video_reads[4], ios_video_bytes[4];
++
++static void ios_video_track_open( HANDLE h, const WCHAR *name, int len )
++{
++    int i;
++    char nm[160];
++    for (i = 0; i < 4; i++) if (!ios_video_handles[i]) break;
++    if (i == 4) return;                       /* only ever a few streams */
++    ios_video_handles[i] = h;
++    ios_video_reads[i] = ios_video_bytes[i] = 0;
++    {
++        int k, o = 0;
++        for (k = (len > 60 ? len - 60 : 0); k < len && o < (int)sizeof(nm) - 1; k++)
++            nm[o++] = (name[k] >= 0x20 && name[k] < 0x7f) ? (char)name[k] : '?';
++        nm[o] = 0;
++    }
++    ERR( "[video-io] ml733 OPEN slot=%d handle=%p ...%s\n", i, h, nm );
++}
++
++/* Called from the single read choke point for EVERY status, because end of
++ * stream and a stalled decoder are exactly the cases we need to tell apart. */
++static void ios_video_read_note( HANDLE h, unsigned int status, UINT got, LARGE_INTEGER *offset )
++{
++    int i;
++    for (i = 0; i < 4; i++) if (ios_video_handles[i] == h) break;
++    if (i == 4) return;
++    ios_video_reads[i]++;
++    ios_video_bytes[i] += got;
++    /* Log the first few, then only every 512th, but ALWAYS log a short read,
++     * a zero-byte read or a non-success status -- those are the end-of-stream
++     * signals, and sampling them away would defeat the whole probe. */
++    if (ios_video_reads[i] <= 8 || !(ios_video_reads[i] % 512) || !got || status)
++        ERR( "[video-io] ml733 slot=%d read#%u got=%u total=%uKB off=%lld status=%08x%s\n",
++             i, ios_video_reads[i], got, ios_video_bytes[i] / 1024,
++             offset ? (long long)offset->QuadPart : -1LL, status,
++             (!got || status) ? "  <-- END/ERROR" : "" );
++}
++#endif
++
+ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr,
+                               IO_STATUS_BLOCK *io, LARGE_INTEGER *alloc_size,
+                               ULONG attributes, ULONG sharing, ULONG disposition,
+@@ -4759,6 +4801,31 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
+ 
+  done:
+ #ifdef WINE_IOS
++    /* ml733: track the video stream the cutscene decoder reads.
++     *
++     * The game plays its intro and then sits on a black screen at 60 FPS
++     * without ever loading the next context. The decoder is a native x86-64
++     * library reached by P/Invoke, so we cannot see its return values without
++     * building call-level tracing -- but every byte it consumes comes through
++     * this file layer, which we already own. Whether reads continue forever,
++     * stop at end of stream, or stop early separates "the decoder never
++     * finishes" from "it finished and the transition never ran", and that is
++     * the split worth one run.
++     *
++     * Name match only, so nothing else pays for it. */
++    if (!status && handle && *handle && attr && attr->ObjectName && attr->ObjectName->Buffer)
++    {
++        const WCHAR *b = attr->ObjectName->Buffer;
++        int n = attr->ObjectName->Length / (int)sizeof(WCHAR);
++        if (n >= 4)
++        {
++            WCHAR e3 = b[n-3] | 0x20, e2 = b[n-2] | 0x20, e1 = b[n-1] | 0x20;
++            if (b[n-4] == '.' && e3 == 'o' && e2 == 'g' && (e1 == 'v' || e1 == 'g'))
++            {
++                ios_video_track_open( *handle, b, n );
++            }
++        }
++    }
+     /* iOS-Mythic ml665: [file-fail] — we have NEVER logged a failing guest file
+      * open, and that blind spot cost several runs on Book of the Dead.
+      *
+@@ -6502,6 +6569,7 @@ done:
+     /* ml487 (#78): single choke point — every read path above reaches here. */
+     if (status == STATUS_SUCCESS && total)
+         ios_js_read_note( handle, unix_handle, buffer, length, total, offset );
++    ios_video_read_note( handle, status, total, offset );
+ #endif
+     send_completion = cvalue != 0;
+ 

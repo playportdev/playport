@@ -1,0 +1,15 @@
+# Witcher 3: from the legal/intro screens to the last save. Push it about 10 s
+# after the first frame (pp perf --pad first-frame+10:witcher3-continue). The
+# stick nudge makes the game switch its prompts to the pad; X skips the intro
+# videos ("X Skip"); the main menu then has Continue highlighted, which A
+# takes. The save loads in about 25 s; push witcher3-walk after that.
+300 LY=1
+300 -
+150 X
+1500 -
+150 X
+1500 -
+150 X
+4000 -
+150 A
+1000 -

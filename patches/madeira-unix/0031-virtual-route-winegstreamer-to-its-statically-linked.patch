@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 27 Sep 2026 09:58:24 +0200
+Subject: [PATCH] virtual: route winegstreamer to its statically linked unix
+ side
+
+Hollow Knight's cinematics are H.264/AAC MP4 clips that Unity plays through
+Media Foundation. Wine's Media Foundation opens and decodes them only through
+winegstreamer, whose unix side the app never had: every video a title opened
+failed with MF_E_UNSUPPORTED_BYTESTREAM_TYPE and the screen stayed black.
+
+The unix side is compiled into its own archive with its call table renamed
+to winegstreamer_unix_call_funcs, like the network and crypto unixlibs, and
+load_builtin_unixlib hands it to winegstreamer.dll by name.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-26-hk-video.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 9d134b6..9f08770 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -6994,6 +6994,13 @@ extern const void *dwrite_unix_call_funcs[];
+  * -D__wine_unix_call_funcs=winevulkan_unix_call_funcs (build.sh). */
+ extern const void *winevulkan_unix_call_funcs[];
+ 
++/* Playport: winegstreamer's unix side (Media Foundation and DirectShow media
++ * sources and decoders over GStreamer), compiled with
++ * -D__wine_unix_call_funcs=winegstreamer_unix_call_funcs into
++ * libwinegstreamer_unix.a together with a statically registered plugin set
++ * (Playport build/stages/gstreamer.sh). */
++extern const void *winegstreamer_unix_call_funcs[];
++
+ /* win32u's unix init, statically linked via libwin32u_unix.a. Renamed
+  * from __wine_unix_lib_init in build/win32u-unix/build.sh so future
+  * statically-linked unix libs can keep their own init without colliding.
+@@ -7085,6 +7092,11 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             dprintf(2, "[unixlib] module %p (%s) -> winevulkan_unix_call_funcs (%p)\n",
+                 module, match, (void *)winevulkan_unix_call_funcs);
+             status = STATUS_SUCCESS;
++        } else if (match && strstr(match, "winegstreamer")) {
++            *funcs = (const void *)winegstreamer_unix_call_funcs;
++            dprintf(2, "[unixlib] module %p (%s) -> winegstreamer_unix_call_funcs (%p)\n",
++                module, match, (void *)winegstreamer_unix_call_funcs);
++            status = STATUS_SUCCESS;
+         } else if (match && strstr(match, "nsi.dll")) {
+             *funcs = (const void *)nsi_unix_call_funcs;
+             dprintf(2, "[unixlib] module %p (%s) -> nsi_unix_call_funcs (%p) rev=ml472\n",

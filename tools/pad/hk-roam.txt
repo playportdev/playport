@@ -1,0 +1,16 @@
+# Hollow Knight, King's Pass: the lumafly room that hk-walk ends in, right of
+# the floating platforms. Back left a little, then right into the geo rock's
+# nook with a jump and slashes, forever. Each loop goes further right than
+# left, so the nook's wall holds the Knight and he cannot drift back up the
+# room (a loop that went as far left as right took him back to the start);
+# it keeps the camera, the Knight's animations and the particles busy.
+1000 LEFT
+120 LEFT X
+300 -
+1500 RIGHT
+120 RIGHT X
+450 RIGHT A
+600 RIGHT
+120 RIGHT X
+400 -
+loop

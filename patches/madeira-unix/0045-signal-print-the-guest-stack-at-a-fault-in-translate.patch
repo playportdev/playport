@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 00:30:54 +0200
+Subject: [PATCH] signal: print the guest stack at a fault in translated x86
+ code
+
+The guest state names the faulting instruction but not its callers: an
+x86-64 frame keeps no frame-pointer chain, and FEX's callret stack is not
+the guest's. 64 qwords from RSP hold the return addresses.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-30-en-garde.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 207d00d..e6d325d 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -9375,6 +9375,34 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+                         if (cs[1+i] >= 0x100000000ull && cs[1+i] < 0x8000000000ull) plausible++;
+                     ERR("  [guest-state] plausible-ptr gregs=%d/16 (low => uninitialised frame, "
+                         "high => only rsp clobbered)\n", plausible);
++                    /* The guest stack from RSP, 64 qwords: the return addresses in it
++                     * name the callers of the faulting function (an x86-64 frame keeps
++                     * no frame pointer chain, and the callret stack is FEX's, not the
++                     * guest's). Failure-returning reads, as above. */
++                    {
++                        uint64_t stk[8];
++                        int row;
++
++                        for (row = 0; row < 8; row++)
++                        {
++                            mach_vm_size_t got = 0;
++                            mach_vm_address_t at = (mach_vm_address_t)(cs[5] + row * sizeof(stk));
++
++                            if (mach_vm_read_overwrite( mach_task_self(), at, sizeof(stk),
++                                                        (mach_vm_address_t)stk, &got ) != KERN_SUCCESS
++                                || got != sizeof(stk))
++                            {
++                                ERR("  [guest-stack] rsp+%#x unreadable\n", row * (int)sizeof(stk));
++                                break;
++                            }
++                            ERR("  [guest-stack] rsp+%#05x: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n",
++                                row * (int)sizeof(stk),
++                                (unsigned long long)stk[0], (unsigned long long)stk[1],
++                                (unsigned long long)stk[2], (unsigned long long)stk[3],
++                                (unsigned long long)stk[4], (unsigned long long)stk[5],
++                                (unsigned long long)stk[6], (unsigned long long)stk[7]);
++                        }
++                    }
+ 
+                     /* ml962 (Astra step 3): capture the OPERAND, not the innocent
+                      * final load.

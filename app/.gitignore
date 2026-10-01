@@ -1,0 +1,19 @@
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+
+/xtool
+.bsp/
+
+# Staged by build/stages/stage-artifacts.py (recorded in artifacts.tsv, never committed)
+/Staged/
+/Sources/S1Probe/Runtime/
+/Sources/WinIOS/
+
+# The release variant's package, made by build/stages/stage-artifacts.py release
+/.release/

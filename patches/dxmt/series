@@ -1,0 +1,11 @@
+# dxmt: applied in this order with `git am -3` onto the dxmt pin in pins.lock,
+# after patches/dxmt-port
+0002-winemetal-hold-Metal-commits-while-the-app-is-in-the.patch
+0003-Compile-dxmt_command.metal-on-the-device.patch
+0004-winemetal-find-madeira_cfg.h-beside-the-fork.patch
+0005-Log-shader-and-pipeline-compile-times-and-pipeline-w.patch
+0006-dxmt-initialize-the-encoding-context-s-device-before.patch
+0007-dxmt-report-no-memory-census-when-MADEIRA_NO_DIAGNOS.patch
+0008-winemetal-per-render-pass-GPU-profile-with-DXMT_PASS.patch
+0009-d3d11-keep-lossless-compression-on-colour-typeless-t.patch
+0010-d3d11-share-textures-within-the-process.patch

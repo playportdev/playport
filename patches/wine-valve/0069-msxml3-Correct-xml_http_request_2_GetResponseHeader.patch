@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 12 Jan 2023 08:21:48 +1100
+Subject: [PATCH] msxml3: Correct xml_http_request_2_GetResponseHeader
+
+CW-Bug-Id: #22822
+Valve-commit: d2204974b2807261b679ed82a3d3594ce0d5f0ec
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/msxml3/httprequest.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/dlls/msxml3/httprequest.c b/dlls/msxml3/httprequest.c
+index f54415b..42728af 100644
+--- a/dlls/msxml3/httprequest.c
++++ b/dlls/msxml3/httprequest.c
+@@ -2311,8 +2311,7 @@ static HRESULT WINAPI xml_http_request_2_GetResponseHeader(IXMLHTTPRequest3 *ifa
+ 
+     TRACE("(%p)->(%s %p)\n", This, debugstr_w(header), value);
+ 
+-    if (FAILED(hr = httprequest_getResponseHeader(&This->req, (BSTR)header, value)))
+-        return hr;
++    hr = httprequest_getResponseHeader(&This->req, (BSTR)header, value);
+ 
+ #define E_FILE_NOT_FOUND                                   _HRESULT_TYPEDEF_(0x80070002)
+ 

@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <contact@volta.audio>
+Date: Fri, 24 Apr 2026 16:41:11 +0800
+Subject: [PATCH] tests/dx11_texquad: iOS patches + dedicated shader
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+dx11_texquad referenced shaders.hlsl but that file actually contains
+triangle's POS+COL shader, not the POS+TEX + texture sampling test
+needs. Upstream this appears to be a shared-file-with-different-
+contents-per-test pattern; for us it's cleaner to split.
+
+- shader_texquad.hlsl: new, proper Texture2D.Sample() pixel shader
+  (POS+TEX input, single Texture2D + SamplerState bound to t0/s0).
+- dx11_texquad.cpp:
+    * D3DCompileFromFile -> shader_texquad.hlsl.
+    * Same iOS patches as dx11_cube: skip PeekMessageW, hardcode
+      1024x768 viewport + swapchain dims, fprintf in place of
+      OutputDebugString.
+    * stbi_load replaced with an inline 128x128 procedural
+      checkerboard — avoids shipping testTexture.png into the iOS
+      prefix. Checker color uses (x*2, y*2, 80) on non-white tiles
+      so the gradient is visually obvious.
+
+Validated on iPhone: sRGB-formatted texture, SRV + sampler binding,
+Texture2D.Sample() in pixel shader, bilinear-interpolated output all
+rendering correctly through airconv -> Metal.
+
+Madeira-commit: 88630ae10b7696b15b5ff322d4134ac5aa21a544
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ tests/dx11/dx11_texquad.cpp    | 50 ++++++++++++++++++----------------
+ tests/dx11/shader_texquad.hlsl | 18 ++++++++++++
+ 2 files changed, 45 insertions(+), 23 deletions(-)
+ create mode 100644 tests/dx11/shader_texquad.hlsl
+
+diff --git a/tests/dx11/dx11_texquad.cpp b/tests/dx11/dx11_texquad.cpp
+index efd36f7..cc97cb0 100644
+--- a/tests/dx11/dx11_texquad.cpp
++++ b/tests/dx11/dx11_texquad.cpp
+@@ -146,8 +146,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+             DXGI_ADAPTER_DESC adapterDesc;
+             dxgiAdapter->GetDesc(&adapterDesc);
+ 
+-            OutputDebugStringA("Graphics Device: ");
+-            OutputDebugStringW(adapterDesc.Description);
++            fprintf(stderr, "[texquad] Graphics Device: "); fflush(stderr);
++            for (int i = 0; i < 128 && adapterDesc.Description[i]; i++)
++                fputc((char)adapterDesc.Description[i], stderr);
++            fputc('\n', stderr); fflush(stderr);
+ 
+             hResult = dxgiAdapter->GetParent(__uuidof(IDXGIFactory2), (void**)&dxgiFactory);
+             assert(SUCCEEDED(hResult));
+@@ -155,8 +157,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         }
+ 
+         DXGI_SWAP_CHAIN_DESC1 d3d11SwapChainDesc = {};
+-        d3d11SwapChainDesc.Width = 0; // use window width
+-        d3d11SwapChainDesc.Height = 0; // use window height
++        d3d11SwapChainDesc.Width = 1024;   // iOS: explicit
++        d3d11SwapChainDesc.Height = 768;
+         d3d11SwapChainDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+         d3d11SwapChainDesc.SampleDesc.Count = 1;
+         d3d11SwapChainDesc.SampleDesc.Quality = 0;
+@@ -190,7 +192,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+     ID3D11VertexShader* vertexShader;
+     {
+         ID3DBlob* shaderCompileErrorsBlob;
+-        HRESULT hResult = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "vs_main", "vs_5_0", 0, 0, &vsBlob, &shaderCompileErrorsBlob);
++        HRESULT hResult = D3DCompileFromFile(L"shader_texquad.hlsl", nullptr, nullptr, "vs_main", "vs_5_0", 0, 0, &vsBlob, &shaderCompileErrorsBlob);
+         if(FAILED(hResult))
+         {
+             const char* errorString = NULL;
+@@ -213,7 +215,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+     {
+         ID3DBlob* psBlob;
+         ID3DBlob* shaderCompileErrorsBlob;
+-        HRESULT hResult = D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "ps_main", "ps_5_0", 0, 0, &psBlob, &shaderCompileErrorsBlob);
++        HRESULT hResult = D3DCompileFromFile(L"shader_texquad.hlsl", nullptr, nullptr, "ps_main", "ps_5_0", 0, 0, &psBlob, &shaderCompileErrorsBlob);
+         if(FAILED(hResult))
+         {
+             const char* errorString = NULL;
+@@ -290,13 +292,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+     ID3D11SamplerState* samplerState;
+     d3d11Device->CreateSamplerState(&samplerDesc, &samplerState);
+ 
+-    // Load Image
+-    int texWidth, texHeight, texNumChannels;
+-    int texForceNumChannels = 4;
+-    unsigned char* testTextureBytes = stbi_load("testTexture.png", &texWidth, &texHeight,
+-                                                &texNumChannels, texForceNumChannels);
+-    assert(testTextureBytes);
++    // Generate a procedural 128x128 checkerboard — avoids shipping a PNG
++    // into the Wine prefix filesystem. 16x16 tiles, alternating colors.
++    int texWidth = 128, texHeight = 128;
+     int texBytesPerRow = 4 * texWidth;
++    unsigned char* testTextureBytes = (unsigned char*)malloc(texBytesPerRow * texHeight);
++    for (int y = 0; y < texHeight; y++) {
++        for (int x = 0; x < texWidth; x++) {
++            bool on = ((x / 16) ^ (y / 16)) & 1;
++            unsigned char *p = testTextureBytes + y*texBytesPerRow + x*4;
++            // Checker pattern with a bit of color based on position.
++            p[0] = on ? 255 : (unsigned char)(x * 2);        // R
++            p[1] = on ? 255 : (unsigned char)(y * 2);        // G
++            p[2] = on ? 255 : 80;                            // B
++            p[3] = 255;                                      // A
++        }
++    }
+ 
+     // Create Texture
+     D3D11_TEXTURE2D_DESC textureDesc = {};
+@@ -325,14 +336,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+     bool isRunning = true;
+     while(isRunning)
+     {
+-        MSG msg = {};
+-        while(PeekMessageW(&msg, 0, 0, 0, PM_REMOVE))
+-        {
+-            if(msg.message == WM_QUIT)
+-                isRunning = false;
+-            TranslateMessage(&msg);
+-            DispatchMessageW(&msg);
+-        }
++        // Skip PeekMessageW on iOS — no real window manager.
++        (void)0;
+ 
+         if(global_windowDidResize)
+         {
+@@ -357,9 +362,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
+         FLOAT backgroundColor[4] = { 0.1f, 0.2f, 0.6f, 1.0f };
+         d3d11DeviceContext->ClearRenderTargetView(d3d11FrameBufferView, backgroundColor);
+ 
+-        RECT winRect;
+-        GetClientRect(hwnd, &winRect);
+-        D3D11_VIEWPORT viewport = { 0.0f, 0.0f, (FLOAT)(winRect.right - winRect.left), (FLOAT)(winRect.bottom - winRect.top), 0.0f, 1.0f };
++        // iOS: hardcode dims (GetClientRect returns uninitialized data here).
++        D3D11_VIEWPORT viewport = { 0.0f, 0.0f, 1024.0f, 768.0f, 0.0f, 1.0f };
+         d3d11DeviceContext->RSSetViewports(1, &viewport);
+ 
+         d3d11DeviceContext->OMSetRenderTargets(1, &d3d11FrameBufferView, nullptr);
+diff --git a/tests/dx11/shader_texquad.hlsl b/tests/dx11/shader_texquad.hlsl
+new file mode 100644
+index 0000000..c4f0be0
+--- /dev/null
++++ b/tests/dx11/shader_texquad.hlsl
+@@ -0,0 +1,18 @@
++struct VS_Input  { float2 pos : POS; float2 uv : TEX; };
++struct VS_Output { float4 pos : SV_POSITION; float2 uv : TEX; };
++
++Texture2D    tex  : register(t0);
++SamplerState samp : register(s0);
++
++VS_Output vs_main(VS_Input i)
++{
++    VS_Output o;
++    o.pos = float4(i.pos, 0.0f, 1.0f);
++    o.uv  = i.uv;
++    return o;
++}
++
++float4 ps_main(VS_Output i) : SV_TARGET
++{
++    return tex.Sample(samp, i.uv);
++}

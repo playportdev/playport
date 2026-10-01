@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 29 Sep 2026 19:30:12 +0200
+Subject: [PATCH] ntdll: count the sync and alert census only while the
+ counters are on
+
+wine-port 0054's counters on NtSetEvent/ResetEvent/PulseEvent, the waits,
+yields, delays, the slow QPC and the thread alerts (with the alert's
+timestamp and the waiter's wake-latency histogram) are read only by the
+samplers' [xp-api] and [sync-census] lines. MADEIRA_NO_DIAGNOSTICS stops
+those samplers, so the release app paid a global atomic, and on each alert
+two timer reads, for counts nobody read. ios_counters_on, set once by
+__wine_main (ios_counters_init), now gates them: it is off under
+MADEIRA_NO_DIAGNOSTICS, and MADEIRA_NO_COUNTERS turns it off alone, keeping
+the samplers, so a dev build can measure the counters' cost. The adaptive
+yield's streak, the ECO QoS poll and the alert spin are behaviour and stay.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-29-release-counters.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/sync.c | 45 ++++++++++++++++++++++++++++--------------
+ 1 file changed, 30 insertions(+), 15 deletions(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index cb07966..aeb7830 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -1232,6 +1232,20 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT
+ /******************************************************************************
+  *              NtSetEvent (NTDLL.@)
+  */
++/* Playport: the measurement-only counters on these paths run only while
++ * ios_counters_on is set. Their only readers are the samplers' lines ([xp-api],
++ * [sync-census], [srv]), which MADEIRA_NO_DIAGNOSTICS does not start, so the
++ * release app cleared the flag and paid for counts nobody read. MADEIRA_NO_COUNTERS
++ * clears it alone, which keeps the samplers: a dev build can then measure what
++ * the counters cost. __wine_main sets it once, before any thread but its own
++ * exists (ios_counters_init); the loader hands it to each PE ntdll. */
++int ios_counters_on = 1;
++void ios_counters_init(void)
++{
++    ios_counters_on = !getenv( "MADEIRA_NO_COUNTERS" ) && !getenv( "MADEIRA_NO_DIAGNOSTICS" );
++}
++#define IOS_COUNT(x) do { if (ios_counters_on) { x; } } while (0)
++
+ /* ml1131: [xp-api] counters for the sync syscalls (read by server_ios.c). */
+ volatile long long ios_xp_set_event, ios_xp_reset_event, ios_xp_pulse_event;
+ volatile long long ios_xp_wait_single, ios_xp_wait_multi, ios_xp_wait_zero, ios_xp_wait_zero_timeout;
+@@ -1294,7 +1308,7 @@ NTSTATUS WINAPI NtSetEvent( HANDLE handle, LONG *prev_state )
+     unsigned int ret;
+ 
+     TRACE( "handle %p, prev_state %p\n", handle, prev_state );
+-    __sync_fetch_and_add( &ios_xp_set_event, 1 );   /* ml1131 */
++    IOS_COUNT( __sync_fetch_and_add( &ios_xp_set_event, 1 ) );   /* ml1131 */
+ 
+     if ((ret = inproc_set_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
+@@ -1328,7 +1342,7 @@ NTSTATUS WINAPI NtResetEvent( HANDLE handle, LONG *prev_state )
+     unsigned int ret;
+ 
+     TRACE( "handle %p, prev_state %p\n", handle, prev_state );
+-    __sync_fetch_and_add( &ios_xp_reset_event, 1 );   /* ml1131 */
++    IOS_COUNT( __sync_fetch_and_add( &ios_xp_reset_event, 1 ) );   /* ml1131 */
+ 
+     if ((ret = inproc_reset_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
+@@ -1363,7 +1377,7 @@ NTSTATUS WINAPI NtPulseEvent( HANDLE handle, LONG *prev_state )
+     unsigned int ret;
+ 
+     TRACE( "handle %p, prev_state %p\n", handle, prev_state );
+-    __sync_fetch_and_add( &ios_xp_pulse_event, 1 );   /* ml1131 */
++    IOS_COUNT( __sync_fetch_and_add( &ios_xp_pulse_event, 1 ) );   /* ml1131 */
+ 
+     if ((ret = inproc_pulse_event( handle, prev_state )) != STATUS_NOT_IMPLEMENTED)
+         return ret;
+@@ -2469,10 +2483,10 @@ NTSTATUS WINAPI NtWaitForMultipleObjects( DWORD count, const HANDLE *handles, WA
+         if (is_pseudo_handle( handles[i] )) return STATUS_INVALID_HANDLE;
+     }
+ 
+-    __sync_fetch_and_add( &ios_xp_wait_multi, 1 );   /* ml1131 */
++    IOS_COUNT( __sync_fetch_and_add( &ios_xp_wait_multi, 1 ) );   /* ml1131 */
+     if ((ret = inproc_wait( count, handles, type, alertable, timeout )) != STATUS_NOT_IMPLEMENTED)
+     {
+-        if (timeout && !timeout->QuadPart)   /* ml1131: a poll */
++        if (ios_counters_on && timeout && !timeout->QuadPart)   /* ml1131: a poll */
+         {
+             __sync_fetch_and_add( &ios_xp_wait_zero, 1 );
+             if (ret == STATUS_TIMEOUT) __sync_fetch_and_add( &ios_xp_wait_zero_timeout, 1 );
+@@ -2503,10 +2517,10 @@ NTSTATUS WINAPI NtWaitForSingleObject( HANDLE handle, BOOLEAN alertable, const L
+ 
+     TRACE( "handle %p, alertable %u, timeout %s\n", handle, alertable, debugstr_timeout(timeout) );
+ 
+-    __sync_fetch_and_add( &ios_xp_wait_single, 1 );   /* ml1131 */
++    IOS_COUNT( __sync_fetch_and_add( &ios_xp_wait_single, 1 ) );   /* ml1131 */
+     if ((ret = inproc_wait( 1, &handle, WaitAny, alertable, timeout )) != STATUS_NOT_IMPLEMENTED)
+     {
+-        if (timeout && !timeout->QuadPart)   /* ml1131: a poll */
++        if (ios_counters_on && timeout && !timeout->QuadPart)   /* ml1131: a poll */
+         {
+             __sync_fetch_and_add( &ios_xp_wait_zero, 1 );
+             if (ret == STATUS_TIMEOUT) __sync_fetch_and_add( &ios_xp_wait_zero_timeout, 1 );
+@@ -2583,10 +2597,10 @@ NTSTATUS WINAPI NtYieldExecution(void)
+         }
+         if (now - ios_last_yield_ns < 2000000ull) ios_yield_streak++; else ios_yield_streak = 0;
+         ios_last_yield_ns = now;
+-        __sync_fetch_and_add( &ios_xp_yield, 1 );   /* ml1131 */
++        IOS_COUNT( __sync_fetch_and_add( &ios_xp_yield, 1 ) );   /* ml1131 */
+         if (ios_ysleep && ios_yield_streak > ios_ystreak)
+         {
+-            __sync_fetch_and_add( &ios_xp_yield_slept, 1 );
++            IOS_COUNT( __sync_fetch_and_add( &ios_xp_yield_slept, 1 ) );
+             usleep( (useconds_t)ios_ysleep );
+             return STATUS_SUCCESS;
+         }
+@@ -2620,6 +2634,7 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+ 
+     IOS_ECO_POLL();   /* ml1133 */
+ 
++    if (ios_counters_on)
+     {   /* ml1131: requested delay: 0, < 1 ms, < 5 ms, < 20 ms, >= 20 ms, infinite */
+         long long d = (!timeout || timeout->QuadPart == TIMEOUT_INFINITE) ? -1
+                       : timeout->QuadPart < 0 ? -timeout->QuadPart : 0;   /* relative in 100 ns; absolute counted as 0 */
+@@ -2678,7 +2693,7 @@ NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeou
+ volatile long long ios_qpc_syscalls;   /* ml1117 */
+ NTSTATUS WINAPI NtQueryPerformanceCounter( LARGE_INTEGER *counter, LARGE_INTEGER *frequency )
+ {
+-    __sync_fetch_and_add( &ios_qpc_syscalls, 1 );
++    IOS_COUNT( __sync_fetch_and_add( &ios_qpc_syscalls, 1 ) );
+     counter->QuadPart = monotonic_counter();
+     if (frequency) frequency->QuadPart = TICKSPERSEC;
+     return STATUS_SUCCESS;
+@@ -4142,7 +4157,7 @@ static double ios_ticks_per_us(void)
+ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+ {
+     union tid_alert_entry *entry = get_tid_alert_entry( tid );
+-    __sync_fetch_and_add( &ios_alert_wakes, 1 );
++    IOS_COUNT( __sync_fetch_and_add( &ios_alert_wakes, 1 ) );
+ 
+     TRACE( "%p\n", tid );
+ 
+@@ -4176,7 +4191,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+                 ERR( "[alert-unix] ALERT-SENT from=%04x -> pump tid=%04x futex=%p rev=ml482\n",
+                      (int)self_tid, (int)(ULONG_PTR)tid, entry ); }
+         }
+-        ios_alert_stamp[ios_alert_slot( futex )] = mach_absolute_time();   /* ml1122 */
++        IOS_COUNT( ios_alert_stamp[ios_alert_slot( futex )] = mach_absolute_time() );   /* ml1122 */
+         if (!InterlockedExchange( futex, 1 ))
+             futex_wake_one( futex );
+         return STATUS_SUCCESS;
+@@ -4230,7 +4245,7 @@ static LONGLONG update_timeout( ULONGLONG end )
+ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEGER *timeout )
+ {
+     IOS_ECO_POLL();   /* ml1133 */
+-    __sync_fetch_and_add( &ios_alert_waits, 1 );   /* ml1115 */
++    IOS_COUNT( __sync_fetch_and_add( &ios_alert_waits, 1 ) );   /* ml1115 */
+     union tid_alert_entry *entry = get_tid_alert_entry( ULongToHandle(get_thread_data()->tid) );
+     /* iOS-Madeira ml406 (task #60): unix-side tap for beacon-marked threads
+      * (TEB->Instrumentation[10] == 'PUMP', stamped by the EC chrome-ipc
+@@ -4317,10 +4332,10 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+             }
+             else
+                 ret = futex_wait( futex, 0, NULL );
+-            ios_woke = mach_absolute_time();   /* ml1122 */
+-            if (*(volatile LONG *)futex)
++            if (ios_counters_on && *(volatile LONG *)futex)
+             {
+                 unsigned long long st = ios_alert_stamp[ios_alert_slot( futex )];
++                ios_woke = mach_absolute_time();   /* ml1122 */
+                 if (st && ios_woke > st)
+                 {
+                     unsigned long long d = ios_woke - st; double us = d / ios_ticks_per_us();

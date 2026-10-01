@@ -1,0 +1,214 @@
+ui: S1_MODE=ui nonce=197c90ca UI_ACTIONS=play:app-367520,back:library,play:app-367520
+ui: library: app-1654660 En Garde! [Ready], app-367520 Hollow Knight [Ready], dir-poolstress PoolStress [Untested], app-292030 The Witcher 3: Wild Hunt [Ready]
+title: in-app start Games\Hollow Knight\hollow_knight.exe -logFile C:\hollow_knight-player.log
+title: memory: limit 8192 MB, footprint 26 MB; the title needs 3200 MB (measured, 4000 MB recommended): fits
+ui: play app-367520: started
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: graphics: dxmt
+jit: helper started, pid 13187
+jit: helper: helper pid 13187 connected
+jit: helper: prepare: checking the tunnel
+jit: helper: prepare: checking the DDI mount
+jit: helper: prepare: device ready
+jit: helper: ready, TXM present
+title: steamapi: emulated: emulated (persona set, steamid set, 0 DLC)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: selfcheck: ok page=16384 tsd=key 293 slot 293
+title: display: screen 2736x1260 (the title's screen native) (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, no frame rate limit, guest monitor 120 Hz
+title: thermal: nominal at launch
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +0.62 s surface ready; asking for JIT
+jit: asking the built-in helper to attach to pid 13185
+jit: helper started, pid 13188
+jit: helper: helper pid 13188 connected
+jit: helper: enableJIT pid 13185
+jit: helper: prepare: checking the tunnel
+jit: helper: prepare: checking the DDI mount
+jit: helper: prepare: device ready
+jit: helper: Running playport-universal.js against pid 13185…
+jit: helper: attached to pid 13185
+jit: helper: Blessed 57344 JIT page(s) at 0x104954000
+jit: helper: prepared 0x104954000 (57344 pages)
+jit: helper: detached after 1 prepare(s)
+jit: helper: JIT script finished (region blessed, detached).
+jit: helper: enableJIT done
+jit: acquire(896 MiB) -> 0 after 2.99 s
+jit: built-in helper finished after 2.99 s
+title: selfcheck: ok page=16384 tsd=key 293 slot 293 pool=0x104954000+896MiB rw=0x7000000000
+title: runtime: pool 896 MiB; wine_host_init -> 0; session root -> 0, activation 2.99 s
+title: +3.85 s runtime started
+title: fex: ordering tso=1 halfbar=1 vector=0 memcpyset=0 (* the game's page; the rest Proton's defaults)
+title: environment: Steam's SteamAppId=367520, SteamGameId=367520, STEAM_COMPAT_APP_ID=367520
+title: wine_host_session_launch -> 0
+title: +3.91 s game started
+title: pool: size_mb=896 head_mb=187 head_live_mb=187 head_free_mb=0 tail_mb=161 tail_live_mb=145 room_mb=549 alias=12 alias_slots=12 alias_cap=4096 images=60 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=203 head_live_mb=203 head_free_mb=0 tail_mb=161 tail_live_mb=145 room_mb=533 alias=44 alias_slots=44 alias_cap=4096 images=64 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +9.14 s first frame
+title: +53.56 s pool: size_mb=896 head_mb=204 head_live_mb=39 head_free_mb=166 tail_mb=161 tail_live_mb=17 room_mb=532 alias=1 alias_slots=63 alias_cap=4096 images=14 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: done nonce=197c90ca exit=0x00000000 after_s=49
+ui: play app-367520: ended on the result screen
+ui: back to the library
+title: in-app start Games\Hollow Knight\hollow_knight.exe -logFile C:\hollow_knight-player.log
+title: memory: limit 8192 MB, footprint 1764 MB; the title needs 3200 MB (measured, 4000 MB recommended): fits
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: graphics: dxmt
+ui: play app-367520: started
+ui: done nonce=197c90ca ok actions=3
+title: steamapi: emulated: emulated (persona set, steamid set, 0 DLC)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: selfcheck: ok page=16384 tsd=key 298 slot 298
+title: display: screen 2736x1260 (the title's screen native) (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, no frame rate limit, guest monitor 120 Hz
+title: thermal: nominal at launch
+title: session: the runtime runs (pool 896 MiB); 676 MiB of it free for this title
+title: +0.51 s runtime running
+title: fex: ordering tso=1 halfbar=1 vector=0 memcpyset=0 (* the game's page; the rest Proton's defaults)
+title: environment: Steam's SteamAppId=367520, SteamGameId=367520, STEAM_COMPAT_APP_ID=367520
+title: wine_host_session_launch -> 0
+title: +0.57 s game started
+title: pool: size_mb=896 head_mb=354 head_live_mb=189 head_free_mb=4 tail_mb=161 tail_live_mb=145 room_mb=382 alias=15 alias_slots=63 alias_cap=4096 images=62 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=366 head_live_mb=203 head_free_mb=2 tail_mb=161 tail_live_mb=145 room_mb=370 alias=43 alias_slots=63 alias_cap=4096 images=64 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +5.64 s first frame
+title: thermal: fair
+title: +50.59 s pool: size_mb=896 head_mb=366 head_live_mb=39 head_free_mb=166 tail_mb=161 tail_live_mb=17 room_mb=370 alias=1 alias_slots=63 alias_cap=4096 images=14 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: done nonce=197c90ca exit=0x00000000 after_s=50
+
+ui: S1_MODE=ui nonce=c3370727 UI_ACTIONS=play:dir-poolstress,back:library,settings:dir-poolstress,play:app-367520
+jit: helper started, pid 13229
+jit: helper: helper pid 13229 connected
+jit: helper: prepare: checking the tunnel
+jit: helper: prepare: checking the DDI mount
+ui: library: app-1654660 En Garde! [Ready], app-367520 Hollow Knight [Ready], dir-poolstress PoolStress [Untested], app-292030 The Witcher 3: Wild Hunt [Ready]
+title: in-app start Games\PoolStress\pool-stress.exe 
+title: memory: limit 8192 MB, footprint 25 MB; the title needs 2048 MB (untested, 4096 MB recommended): fits
+title: resolve Games\PoolStress\pool-stress.exe -> 0 C:\Games\PoolStress\pool-stress.exe (working directory C:\Games\PoolStress)
+title: graphics: dxmt
+ui: play dir-poolstress: started
+title: selfcheck: ok page=16384 tsd=key 286 slot 286
+title: display: screen 2736x1260 (the title's screen native) (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, no frame rate limit, guest monitor 120 Hz
+title: thermal: fair at launch
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +0.02 s surface ready; asking for JIT
+jit: asking the built-in helper to attach to pid 13228
+jit: helper: prepare: device ready
+jit: helper: ready, TXM present
+jit: app active at +0.12 s (debugger not attached)
+jit: helper started, pid 13231
+jit: helper: helper pid 13231 connected
+jit: helper: enableJIT pid 13228
+jit: helper: prepare: checking the tunnel
+jit: helper: prepare: checking the DDI mount
+jit: helper: prepare: device ready
+jit: helper: Running playport-universal.js against pid 13228…
+jit: helper: attached to pid 13228
+jit: helper: Blessed 57344 JIT page(s) at 0x105d2c000
+jit: helper: prepared 0x105d2c000 (57344 pages)
+jit: helper: detached after 1 prepare(s)
+jit: helper: JIT script finished (region blessed, detached).
+jit: helper: enableJIT done
+jit: acquire(896 MiB) -> 0 after 3.65 s
+jit: built-in helper finished after 3.65 s
+title: selfcheck: ok page=16384 tsd=key 292 slot 292 pool=0x105d2c000+896MiB rw=0x7000000000
+title: runtime: pool 896 MiB; wine_host_init -> 0; session root -> 0, activation 3.65 s
+title: +3.86 s runtime started
+title: fex: ordering tso=1 halfbar=1 vector=0 memcpyset=0 (* the game's page; the rest Proton's defaults)
+title: wine_host_session_launch -> 0
+title: +3.93 s game started
+title: pool: size_mb=896 head_mb=58 head_live_mb=58 head_free_mb=0 tail_mb=33 tail_live_mb=33 room_mb=806 alias=3 alias_slots=3 alias_cap=4096 images=20 children=1 children_mb=5 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=78 head_live_mb=78 head_free_mb=0 tail_mb=49 tail_live_mb=49 room_mb=770 alias=5 alias_slots=5 alias_cap=4096 images=26 children=2 children_mb=9 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=98 head_live_mb=98 head_free_mb=0 tail_mb=65 tail_live_mb=65 room_mb=734 alias=7 alias_slots=7 alias_cap=4096 images=32 children=3 children_mb=13 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=117 head_live_mb=117 head_free_mb=0 tail_mb=81 tail_live_mb=81 room_mb=699 alias=9 alias_slots=9 alias_cap=4096 images=38 children=4 children_mb=17 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=137 head_live_mb=137 head_free_mb=0 tail_mb=97 tail_live_mb=97 room_mb=663 alias=11 alias_slots=11 alias_cap=4096 images=44 children=5 children_mb=21 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=157 head_live_mb=157 head_free_mb=0 tail_mb=113 tail_live_mb=113 room_mb=627 alias=13 alias_slots=13 alias_cap=4096 images=50 children=6 children_mb=25 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=176 head_live_mb=176 head_free_mb=0 tail_mb=129 tail_live_mb=129 room_mb=591 alias=15 alias_slots=15 alias_cap=4096 images=56 children=7 children_mb=29 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=196 head_live_mb=196 head_free_mb=0 tail_mb=145 tail_live_mb=145 room_mb=556 alias=17 alias_slots=17 alias_cap=4096 images=62 children=8 children_mb=33 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=216 head_live_mb=216 head_free_mb=0 tail_mb=161 tail_live_mb=161 room_mb=520 alias=19 alias_slots=19 alias_cap=4096 images=68 children=9 children_mb=37 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +30.01 s pool: size_mb=896 head_mb=216 head_live_mb=39 head_free_mb=178 tail_mb=161 tail_live_mb=17 room_mb=520 alias=1 alias_slots=19 alias_cap=4096 images=14 children=9 children_mb=37 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: done nonce=c3370727 exit=0x00000000 after_s=26
+ui: play dir-poolstress: ended on the result screen
+ui: back to the library
+ui: settings dir-poolstress: screen=native limit=0 graphics=dxmt arguments=["serial", "3", "1000"] ordering=[]
+title: in-app start Games\Hollow Knight\hollow_knight.exe -logFile C:\hollow_knight-player.log
+title: memory: limit 8192 MB, footprint 1568 MB; the title needs 3200 MB (measured, 4000 MB recommended): fits
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: graphics: dxmt
+ui: play app-367520: started
+ui: done nonce=c3370727 ok actions=4
+title: steamapi: emulated: emulated (persona set, steamid set, 0 DLC)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: selfcheck: ok page=16384 tsd=key 296 slot 296
+title: display: screen 2736x1260 (the title's screen native) (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, no frame rate limit, guest monitor 120 Hz
+title: thermal: fair at launch
+title: session: the runtime runs (pool 896 MiB); 664 MiB of it free for this title
+title: +0.50 s runtime running
+title: fex: ordering tso=1 halfbar=1 vector=0 memcpyset=0 (* the game's page; the rest Proton's defaults)
+title: environment: Steam's SteamAppId=367520, SteamGameId=367520, STEAM_COMPAT_APP_ID=367520
+title: wine_host_session_launch -> 0
+title: +0.54 s game started
+title: pool: size_mb=896 head_mb=366 head_live_mb=190 head_free_mb=1 tail_mb=289 tail_live_mb=145 room_mb=242 alias=26 alias_slots=26 alias_cap=4096 images=62 children=10 children_mb=41 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=379 head_live_mb=203 head_free_mb=1 tail_mb=289 tail_live_mb=145 room_mb=229 alias=50 alias_slots=50 alias_cap=4096 images=64 children=10 children_mb=41 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +6.40 s first frame
+
+ui: S1_MODE=ui nonce=46ee58eb UI_ACTIONS=set:jitPoolSimulatedMB=184,play:app-367520,back:library,play:app-367520
+jit: helper started, pid 13248
+jit: helper: helper pid 13248 connected
+jit: helper: prepare: checking the tunnel
+jit: helper: prepare: checking the DDI mount
+ui: library: app-1654660 En Garde! [Ready], app-367520 Hollow Knight [Ready], dir-poolstress PoolStress [Untested], app-292030 The Witcher 3: Wild Hunt [Ready]
+ui: set jitPoolSimulatedMB = 184
+title: in-app start Games\Hollow Knight\hollow_knight.exe -logFile C:\hollow_knight-player.log
+title: memory: limit 6144 MB, footprint 25 MB; the title needs 3200 MB (measured, 4000 MB recommended): fits
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: graphics: dxmt
+ui: play app-367520: started
+jit: helper: prepare: device ready
+jit: helper: ready, TXM present
+title: steamapi: emulated: emulated (persona set, steamid set, 0 DLC)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: selfcheck: ok page=16384 tsd=key 292 slot 292
+title: display: screen 2736x1260 (the title's screen native) (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, no frame rate limit, guest monitor 120 Hz
+title: thermal: fair at launch
+title: jit pool: 184 MiB for a memory limit of 6144 MB (simulated pool)
+title: +0.57 s surface ready; asking for JIT
+jit: asking the built-in helper to attach to pid 13247
+jit: helper started, pid 13250
+jit: helper: helper pid 13250 connected
+jit: helper: enableJIT pid 13247
+jit: helper: prepare: checking the tunnel
+jit: helper: prepare: checking the DDI mount
+jit: helper: prepare: device ready
+jit: helper: Running playport-universal.js against pid 13247…
+jit: helper: attached to pid 13247
+jit: helper: Blessed 11776 JIT page(s) at 0x1081f0000
+jit: helper: prepared 0x1081f0000 (11776 pages)
+jit: helper: detached after 1 prepare(s)
+jit: helper: JIT script finished (region blessed, detached).
+jit: helper: enableJIT done
+jit: acquire(184 MiB) -> 0 after 1.89 s
+jit: built-in helper finished after 1.89 s
+title: selfcheck: ok page=16384 tsd=key 292 slot 292 pool=0x1081f0000+184MiB rw=0x1139f0000
+title: runtime: pool 184 MiB; wine_host_init -> 0; session root -> 0, activation 1.90 s
+title: +2.62 s runtime started
+title: fex: ordering tso=1 halfbar=1 vector=0 memcpyset=0 (* the game's page; the rest Proton's defaults)
+title: environment: Steam's SteamAppId=367520, SteamGameId=367520, STEAM_COMPAT_APP_ID=367520
+title: wine_host_session_launch -> 0
+title: +2.69 s game started
+title: +2.88 s pool: size_mb=184 head_mb=152 head_live_mb=39 head_free_mb=114 tail_mb=33 tail_live_mb=17 room_mb=0 alias=1 alias_slots=2 alias_cap=4096 images=14 children=1 children_mb=5 head_exhausted=46 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: done nonce=46ee58eb pool=exhausted:head exit=0xc0000135 after_s=0
+ui: play app-367520: ended on the result screen
+ui: back to the library
+title: in-app start Games\Hollow Knight\hollow_knight.exe -logFile C:\hollow_knight-player.log
+title: memory: limit 8192 MB, footprint 498 MB; the title needs 3200 MB (measured, 4000 MB recommended): fits
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: graphics: dxmt
+ui: play app-367520: started
+ui: done nonce=46ee58eb ok actions=4
+title: steamapi: emulated: emulated (persona set, steamid set, 0 DLC)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: selfcheck: ok page=16384 tsd=key 296 slot 296
+title: display: screen 2736x1260 (the title's screen native) (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, no frame rate limit, guest monitor 120 Hz
+title: thermal: fair at launch
+title: session: the runtime runs (pool 184 MiB); 16 MiB of it free for this title
+title: session: too little JIT memory left for another title (room 0 MiB of 192, 16 of 256 with the tail given back); Playport must be relaunched
+title: done nonce=46ee58eb launch=refused pool=room room_mb=0
+title: thermal: nominal
+

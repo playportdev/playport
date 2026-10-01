@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 10 Apr 2023 20:30:22 -0600
+Subject: [PATCH] shell32: Don't use NULL as key value in
+ ShellExecute_GetClassKey().
+
+CW-Bug-Id: #22126
+Valve-commit: 72104fb9304d17b7a923c40b9a6c4caf669743ce
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/shell32/shlexec.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/shell32/shlexec.c b/dlls/shell32/shlexec.c
+index d2a6d57..0b1a719 100644
+--- a/dlls/shell32/shlexec.c
++++ b/dlls/shell32/shlexec.c
+@@ -1206,13 +1206,13 @@ static HKEY ShellExecute_GetClassKey( const SHELLEXECUTEINFOW *sei )
+         if (r != ERROR_SUCCESS )
+             return hkey;
+ 
+-        r = RegQueryValueExW( hkey, NULL, 0, &type, NULL, &sz );
++        r = RegQueryValueExW( hkey, L"", 0, &type, NULL, &sz );
+         if ( r == ERROR_SUCCESS && type == REG_SZ )
+         {
+             sz += sizeof (WCHAR);
+             cls = malloc( sz );
+             cls[0] = 0;
+-            RegQueryValueExW( hkey, NULL, 0, &type, (LPBYTE) cls, &sz );
++            RegQueryValueExW( hkey, L"", 0, &type, (LPBYTE) cls, &sz );
+         }
+ 
+         RegCloseKey( hkey );

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Public source/testing-only CI: no iOS build, signing, credentials, caches,
+# artifact uploads or releases. Review changes with test_release_ci.py.
+# Local build/device gates are separate (docs/BUILDING.md).
+name: checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Source-only workflow policy
+        run: python3 -m unittest discover -v -s tools/tests -p test_release_ci.py
+      # ThreadSanitizer (a C test) cannot map its shadow memory under the
+      # runner kernel's default address-space randomisation.
+      - name: Allow ThreadSanitizer
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: pp test --quick (the name gate, secrets, pin and patch series, tools/tests, the host C tests)
+        run: ./pp test --quick
+  licence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Converter exception adopted
+        run: |
+          grep -q '^Adopted on: [0-9]' LICENSE-EXCEPTION.md

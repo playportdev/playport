@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 06:59:19 +0200
+Subject: [PATCH] virtual: fail a W+X request that mprotect granted without
+ WRITE
+
+mprotect_exec's fast path returned success as soon as mprotect granted
+EXEC, even when the caller had also asked for WRITE and the kernel had
+dropped it (the ml999 report). The caller was told it had writable memory
+and faulted again on its next store.
+
+No title reached that report: none of the phone logs of Hollow Knight,
+The Witcher 3 and En Garde! has it, and on a TXM phone mprotect never
+grants EXEC, so a W+X request takes the JIT-pool path, which serves it
+through the pool's RW and RX aliases. A request that does reach the fast
+path now fails with EACCES, so NtProtectVirtualMemory returns
+STATUS_ACCESS_DENIED instead of a success whose WRITE is gone. The pages
+keep the RX protection mprotect gave them, and the launch's `limits:` line
+counts the request (wx_dropped).
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-runtime-limits.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 25 ++++++++++++++-----------
+ 1 file changed, 14 insertions(+), 11 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index ce1041b..3085ffe 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9635,20 +9635,23 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                  * retry loop she warned about, after the classification fix
+                  * removes the first one.
+                  *
+-                 * Report only; do NOT change the return here. Whether the right
+-                 * answer is to fail the request, to drop EXEC and keep WRITE
+-                 * (the ml957 "backing stays non-exec, pool copy keeps X"
+-                 * policy), or to leave it to the caller depends on who asked,
+-                 * and that is the next run's discriminator rather than a guess. */
++                 * Playport: fail it. No title reached this report
++                 * (docs/evidence/2026-09-28-runtime-limits.md): on a TXM phone
++                 * mprotect never grants EXEC, so a W+X request takes the JIT-pool
++                 * path below, which serves it through the pool's RW and RX
++                 * aliases. A request that does reach here now fails with EACCES,
++                 * so NtProtectVirtualMemory returns STATUS_ACCESS_DENIED instead
++                 * of a success whose WRITE is gone, and the launch's `limits:`
++                 * line counts it (wx_dropped). */
+                 if ((unix_prot & PROT_WRITE) && !(info.protection & VM_PROT_WRITE))
+                 {
+-                    static unsigned wsurv;
+-                    __sync_fetch_and_add( &ios_limit_wx_dropped, 1 );
+-                    if (wsurv++ < 16)
++                    unsigned long n = __sync_add_and_fetch( &ios_limit_wx_dropped, 1 );
++                    if (n <= 16 || !(n % 256))
+                         dprintf( 2, "ml999: mprotect_exec %p+%#lx asked for W+X but only "
+-                                 "prot=%#x survived -- returning SUCCESS with WRITE DROPPED. "
+-                                 "A caller expecting writable backing will fault again\n",
+-                                 base, (unsigned long)size, info.protection );
++                                 "prot=%#x survived -- FAILING the request (#%lu)\n",
++                                 base, (unsigned long)size, info.protection, n );
++                    errno = EACCES;
++                    return -1;
+                 }
+                 return 0;  /* genuinely RX/RWX — done */
+             }

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 10 Apr 2023 20:28:51 -0600
+Subject: [PATCH] combase: Don't use NULL as key value in
+ get_object_dll_path().
+
+CW-Bug-Id: #22126
+Valve-commit: 37ec351f8c46cbfd4ca4549106f2c34bb67037f8
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/combase/apartment.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/combase/apartment.c b/dlls/combase/apartment.c
+index 85e06a6..ce1fc72 100644
+--- a/dlls/combase/apartment.c
++++ b/dlls/combase/apartment.c
+@@ -719,7 +719,7 @@ static BOOL get_object_dll_path(const struct class_reg_data *regdata, WCHAR *dst
+         WCHAR src[MAX_PATH];
+         DWORD dwLength = dstlen * sizeof(WCHAR);
+ 
+-        if ((ret = RegQueryValueExW(regdata->u.hkey, NULL, NULL, &keytype, (BYTE*)src, &dwLength)) == ERROR_SUCCESS)
++        if ((ret = RegQueryValueExW(regdata->u.hkey, L"", NULL, &keytype, (BYTE*)src, &dwLength)) == ERROR_SUCCESS)
+         {
+             if (keytype == REG_EXPAND_SZ)
+             {

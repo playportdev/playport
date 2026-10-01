@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Aida=20Jonikien=C4=97?= <aidas957@gmail.com>
+Date: Thu, 19 Sep 2024 12:27:58 +0300
+Subject: [PATCH] dinput8: Prefer the native DLL.
+
+Many mod/ASI loaders hijack this DLL to do their work so accommodate
+this fairly common case by preferring their library.
+
+CW-Bug-Id: #24533
+Valve-commit: 91493b40ba5653ace2ddf680eebf5f44329a7808
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/dinput8/Makefile.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/dinput8/Makefile.in b/dlls/dinput8/Makefile.in
+index 875e968..a512f26 100644
+--- a/dlls/dinput8/Makefile.in
++++ b/dlls/dinput8/Makefile.in
+@@ -2,6 +2,7 @@ MODULE    = dinput8.dll
+ IMPORTLIB = dinput8
+ IMPORTS   = dinput8 cfgmgr32 dxguid uuid comctl32 ole32 user32 advapi32 hid
+ EXTRADEFS = -DDIRECTINPUT_VERSION=0x0800
++EXTRADLLFLAGS = -Wb,--prefer-native
+ PARENTSRC = ../dinput
+ 
+ VER_FILEDESCRIPTION_STR = "Wine DirectInput 8"

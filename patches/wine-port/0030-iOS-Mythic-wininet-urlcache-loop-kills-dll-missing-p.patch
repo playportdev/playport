@@ -1,0 +1,243 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 31 Jul 2026 17:51:16 +0800
+Subject: [PATCH] iOS-Mythic: wininet urlcache loop kills, [dll-missing] probe,
+ user32 GetPointerDevice
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+wininet/urlcache.c — three fixes for the URL-cache failure family (all rooted
+in iOS silently dropping mapped-file writes, so on-disk index.dat can never
+be healed or deleted):
+- cache_container_open_index: reinitialize a broken index.dat IN PLACE via
+  cache_container_set_size(MIN_BLOCK_NO) instead of recursing through
+  FreeUrlCacheSpaceW. The mutual recursion was unbounded when the delete
+  kept failing (sharing violation): 503 levels x ~2KB = exactly the 1MB
+  native stack, thread parked on the guard fault, app-wide msg-queue
+  deadlock (ml338/ml339). Verified ml340: recursion gone, webhelper spawns.
+- cache_container_clean_index: report the cache as full instead of growing
+  by close+reopen-at-2x. The reopen re-reads stale disk bytes, so growth
+  livelocked (ml342: 3,136 [cache-reinit] cycles); both callers break out
+  of their DISK_FULL retry loop on the error and fail the one entry.
+- cache_container_delete_dir: treat sharing violations as best-effort
+  success, matching Windows' FreeUrlCacheSpace semantics.
+
+ntdll/loader.c — [dll-missing] probe at the LdrLoadDll failure path (cap 60).
+Chromium's __delayLoadHelper2 is linked into libcef and calls LoadLibrary
+directly, so its failures never pass LdrResolveDelayLoadedAPI; this probe is
+what named wevtapi.dll (ml337) and api-ms-win-power-base -> powrprof (ml340)
+as the delay-loads whose failure hook killed the webhelper with 0xffff7001.
+
+user32 — add GetPointerDevice stub (one of libcef's 226 user32 delay-imports;
+genuinely missing, though not the crash cause).
+
+(cherry picked from commit c154286bf61fd11f1c36370946ea2d01b33f954b)
+Madeira-commit: fa5d7745d9ced870ee7f2e2320fa8ebfa1d5aa56
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c     | 61 +++++++++++++++++++++++++++++++++++++++++
+ dlls/user32/misc.c      | 33 ++++++++++++++++++++++
+ dlls/user32/user32.spec |  1 +
+ dlls/wininet/urlcache.c | 35 +++++++++++++++++++++--
+ 4 files changed, 128 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 89e253e922e..3cdd7e2d131 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3704,7 +3704,28 @@ done:
+     if (nts == STATUS_SUCCESS)
+         TRACE("Loaded module %s at %p\n", debugstr_us(&nt_name), (*pwm)->ldr.DllBase);
+     else
++    {
++        /* iOS-Mythic ml336: NAME THE DLL THAT ISN'T THERE.
++         *
++         * The webhelper dies in Chromium's delay-load FAILURE hook (int3; ud2 next to the
++         * "DelayLoad-ModuleName" crash key). ml335 ruled out the export theory: the farm
++         * relinked all 83 DLLs, so the new user32!GetPointerDevice IS deployed, and its
++         * FIXME never printed -- CEF never called it. So the failure is dliFailLoadLib, a
++         * DLL that cannot be LOADED. libcef delay-loads 45 DLLs and we ship only 20 of
++         * them; any of the other 25 could be the fatal one, and guessing among 25 is not a
++         * plan. Chromium's own helper (__delayLoadHelper2, linked into libcef) resolves
++         * these with LoadLibrary, which lands here, so this is the one funnel every
++         * candidate must pass through.
++         *
++         * Capped: apps probe optional DLLs constantly, so this is noisy by nature -- but
++         * the fatal one is whatever appears last before the crash. */
++        static int ldrfail_n;
++        if (ldrfail_n++ < 60)
++            ERR( "[dll-missing] rev=ml336 #%d %s status=%08x -- if the webhelper dies right"
++                 " after this, it is the delay-load Chromium kills the process over\n",
++                 ldrfail_n, debugstr_w(libname), (unsigned)nts );
+         WARN("Failed to load module %s; status=%lx\n", debugstr_w(libname), nts);
++    }
+ 
+     if (mapping) NtClose( mapping );
+     RtlFreeUnicodeString( &nt_name );
+@@ -4272,6 +4293,46 @@ void* WINAPI LdrResolveDelayLoadedAPI( void* base, const IMAGE_DELAYLOAD_DESCRIP
+     }
+ 
+ fail:
++    /* iOS-Mythic ml334: NAME THE FAILING DELAY-LOAD.
++     *
++     * ml332/ml333's fatal is libcef executing `int3; ud2` -- Chromium's IMMEDIATE_CRASH()
++     * -- from a routine that first stores the crash key string "DelayLoad-ModuleName"
++     * (identified by disassembling the device's own cef.win64/libcef.dll at the faulting
++     * RVA). That is Chromium's delay-load FAILURE hook: when a delay-load cannot be
++     * resolved it records the module name and deliberately kills the process. So CEF is
++     * not crashing on a translation bug -- it is telling us a DLL or export is missing.
++     *
++     * Nothing currently logs which one: the [ec-delay] probe above only fires on SUCCESS
++     * and only for rpcrt4, and ios_eager_delay_resolve reports failed=0 because it skips
++     * targets that are not already loaded. Log every failure with the importer, the target
++     * DLL, the specific import, and the status, so the missing piece is named instead of
++     * guessed at. Unconditional (no cap): these are fatal, so there will be very few. */
++    {
++        const char *imp = "?";
++        char ordbuf[24];
++
++        if (IMAGE_SNAP_BY_ORDINAL(pINT[id].u1.Ordinal))
++        {
++            unsigned int o = LOWORD(pINT[id].u1.Ordinal), p = 0;
++            ordbuf[p++] = '#';
++            if (o >= 10000) ordbuf[p++] = '0' + (o / 10000) % 10;
++            if (o >= 1000)  ordbuf[p++] = '0' + (o / 1000) % 10;
++            if (o >= 100)   ordbuf[p++] = '0' + (o / 100) % 10;
++            if (o >= 10)    ordbuf[p++] = '0' + (o / 10) % 10;
++            ordbuf[p++] = '0' + o % 10;
++            ordbuf[p] = 0;
++            imp = ordbuf;
++        }
++        else
++        {
++            const IMAGE_IMPORT_BY_NAME *iibn = get_rva( base, pINT[id].u1.AddressOfData );
++            imp = (const char *)iibn->Name;
++        }
++        ERR( "[delay-fail] rev=ml334 importer=%p target=%s import=%s status=%08x hmod=%p"
++             " -- Chromium's DelayLoad-ModuleName hook kills the process on this\n",
++             base, debugstr_a(name), debugstr_a(imp), nts, *phmod );
++    }
++
+     delayinfo.Size = sizeof(delayinfo);
+     delayinfo.DelayloadDescriptor = desc;
+     delayinfo.ThunkAddress = addr;
+diff --git a/dlls/user32/misc.c b/dlls/user32/misc.c
+index 0fa04b855da..4d6aace2f9f 100644
+--- a/dlls/user32/misc.c
++++ b/dlls/user32/misc.c
+@@ -467,6 +467,39 @@ BOOL WINAPI RegisterPointerDeviceNotifications(HWND hwnd, BOOL notifyrange)
+     return TRUE;
+ }
+ 
++/**********************************************************************
++ * GetPointerDevice [USER32.@]
++ *
++ * iOS-Mythic ml335: the ONE export CEF needs that wine's user32 lacked.
++ *
++ * ml332-ml334's fatal was steamwebhelper executing `int3; ud2` -- Chromium's
++ * IMMEDIATE_CRASH() -- inside its delay-load FAILURE hook (identified by the
++ * "DelayLoad-ModuleName" crash-key string next to the trap in the device's own
++ * libcef.dll). Chromium delay-loads 226 user32 functions and treats ANY unresolved
++ * one as fatal; diffing libcef's delay-import table against our user32 exports
++ * showed exactly one gap: GetPointerDevice. GetProcAddress returned NULL,
++ * __delayLoadHelper2 invoked the hook, and CEF killed itself -- deterministically,
++ * at the same point in startup, every run.
++ *
++ * Wine already stubs the rest of this family (GetPointerDevices,
++ * GetPointerDeviceProperties, GetPointerDeviceRects). Match GetPointerDevices'
++ * behaviour: report no device info. Returning FALSE is the documented result for
++ * an unknown device handle, and callers must already handle it because a machine
++ * with no pointer devices answers the same way.
++ */
++BOOL WINAPI GetPointerDevice(HANDLE device, POINTER_DEVICE_INFO *info)
++{
++    FIXME("(%p %p): stub\n", device, info);
++
++    if (!info)
++    {
++        SetLastError(ERROR_INVALID_PARAMETER);
++        return FALSE;
++    }
++    SetLastError(ERROR_NOT_SUPPORTED);
++    return FALSE;
++}
++
+ /**********************************************************************
+  * GetPointerDevices [USER32.@]
+  */
+diff --git a/dlls/user32/user32.spec b/dlls/user32/user32.spec
+index 241b40054b8..f4ed3cfeb05 100644
+--- a/dlls/user32/user32.spec
++++ b/dlls/user32/user32.spec
+@@ -629,6 +629,7 @@
+ # @ stub GetPointerDeviceCursors
+ # @ stub GetPointerDeviceInputSpace
+ # @ stub GetPointerDeviceOrientation
++@ stdcall GetPointerDevice(ptr ptr)
+ @ stdcall GetPointerDeviceProperties(ptr ptr ptr)
+ @ stdcall GetPointerDeviceRects(ptr ptr ptr) NtUserGetPointerDeviceRects
+ @ stdcall GetPointerDevices(ptr ptr)
+diff --git a/dlls/wininet/urlcache.c b/dlls/wininet/urlcache.c
+index 933e33e6834..bc623a3eb0b 100644
+--- a/dlls/wininet/urlcache.c
++++ b/dlls/wininet/urlcache.c
+@@ -636,7 +636,19 @@ static DWORD cache_container_open_index(cache_container *container, DWORD blocks
+         if(header && !cache_container_is_valid(header, file_size)) {
+             WARN("detected old or broken index.dat file\n");
+             UnmapViewOfFile(header);
+-            FreeUrlCacheSpaceW(container->path, 100, 0);
++            /* Recreating the cache via FreeUrlCacheSpaceW recurses back into
++             * this function; when the directory delete keeps failing (files
++             * held open -> sharing violation) the mutual recursion is
++             * unbounded and overflows the native stack (ml338/ml339: 503
++             * levels = 1MB).  Reinitialize index.dat in place instead. */
++            CloseHandle(container->mapping);
++            container->mapping = NULL;
++            file = CreateFileW(index_path, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
++            if(file != INVALID_HANDLE_VALUE) {
++                DWORD ret = cache_container_set_size(container, file, MIN_BLOCK_NO);
++                CloseHandle(file);
++                ERR("[cache-reinit] rev=ml340 broken index.dat reinitialized in place -> %lu\n", ret);
++            }
+         }else if(header) {
+             UnmapViewOfFile(header);
+         }else {
+@@ -1162,6 +1174,15 @@ static DWORD cache_container_clean_index(cache_container *container, urlcache_he
+     if(urlcache_clean_leaked_entries(container, header))
+         return ERROR_SUCCESS;
+ 
++    /* iOS: growing the index below (close_index + reopen at double capacity) can never
++     * work — mapped-file writes are silently lost (iOS mmap PROT_WRITE downgrade), so the
++     * reopen reads stale bytes, the reinitialized index is empty at minimum capacity, the
++     * entry still doesn't fit, and the caller's ERROR_HANDLE_DISK_FULL loop cycles forever
++     * (ml342: 3,136 iterations). Report the cache as full instead: both callers break out
++     * of their retry loop on this and fail the single entry gracefully. */
++    ERR("[cache-full] rev=ml342 refusing index growth (iOS: reopen cannot preserve content) — entry will not be cached\n");
++    return ERROR_NOT_ENOUGH_MEMORY;
++
+     if(header->size >= ALLOCATION_TABLE_SIZE*8*BLOCKSIZE + ENTRY_START_OFFSET) {
+         WARN("index file has maximal size\n");
+         return ERROR_NOT_ENOUGH_MEMORY;
+@@ -1718,7 +1739,17 @@ static BOOL cache_container_delete_dir(LPCWSTR lpszPath)
+     ret = SHFileOperationW(&shfos);
+     if (ret)
+         ERR("SHFileOperationW on %s returned %i\n", debugstr_w(path), ret);
+-    return !(ret || shfos.fAnyOperationsAborted);
++    /* Windows' FreeUrlCacheSpace evicts what it can and succeeds even when
++     * some cache files are held open (sharing violations); it never fails the
++     * whole call over them.  Steam's startup cache purge recursively re-calls
++     * it on FALSE until the native stack overflows (ml338: 503 levels = 1MB),
++     * so report best-effort deletion as success. */
++    if (ret == ERROR_SHARING_VIOLATION || shfos.fAnyOperationsAborted)
++    {
++        ERR("[cache-del] rev=ml339 tolerating in-use cache files (best-effort delete)\n");
++        return TRUE;
++    }
++    return !ret;
+ }
+ 
+ /***********************************************************************

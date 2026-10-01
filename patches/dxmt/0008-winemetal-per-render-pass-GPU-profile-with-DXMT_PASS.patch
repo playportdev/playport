@@ -1,0 +1,402 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 01:52:11 +0200
+Subject: [PATCH] winemetal: per-render-pass GPU profile with DXMT_PASS_PROF=1
+
+The Metal HUD gives one GPU time per frame. Hollow Knight's King's Pass
+takes 13 ms of GPU a frame at native resolution against 6.6 ms in its
+menu, and 120 FPS needs under 8.3 ms, so the frame has to be taken apart.
+With DXMT_PASS_PROF=1, winemetal samples the GPU timestamp counters at the
+stage boundaries of every render pass for two whole frames once every 1200
+presents (the first at present 600), and 12 presents later prints each
+pass: its size, sample count, colour and depth formats with load and store
+actions, the number of draws and primitives, and its vertex and fragment
+GPU times, then a per-frame total. Blit and compute encoders are timed too.
+Without the variable no descriptor is touched and each hook is one
+predictable branch.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-26-hk-gpu-passes.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 303 +++++++++++++++++++++++++++-
+ 1 file changed, 296 insertions(+), 7 deletions(-)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index bf660c1..9b570dc 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -5,6 +5,7 @@
+ #include <unistd.h>
+ #include <sys/mman.h>
+ #include <mach/vm_statistics.h>
++#include <mach/mach_time.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <sys/stat.h>
+@@ -189,6 +190,282 @@ execute_on_main(dispatch_block_t block) {
+   }
+ }
+ 
++/* ---- Playport: render-pass GPU profile (DXMT_PASS_PROF=1) ----------------
++ *
++ * Where does a frame's GPU time go? The Metal HUD gives one number per frame.
++ * With DXMT_PASS_PROF=1 this samples the GPU timestamp counters at the stage
++ * boundaries of every render pass in a window of PP_FRAMES whole frames, once
++ * every PP_PERIOD presents, and prints each pass: its size, attachment formats,
++ * load and store actions, draw count, and its vertex and fragment GPU times.
++ * Blit and compute encoders are timed too. Nothing is sampled, and no
++ * descriptor is touched, unless the variable is set.
++ */
++#define PP_MAXP 384
++#define PP_FRAMES 2
++#define PP_PERIOD 1200
++#define PP_FIRST 600
++#define PP_WAIT 12
++
++struct pp_pass {
++  obj_handle_t encoder;
++  char kind; uint16_t cb;
++  uint32_t w, h, frame;
++  uint16_t cfmt[8]; uint8_t cload[8], cstore[8], ncol;
++  uint16_t dfmt; uint8_t dload, dstore, sload, sstore, samples;
++  uint32_t draws; uint64_t prims;
++};
++static int pp_on = -1;
++static int pp_state;          /* 0 idle, 1 sampling, 2 waiting for the GPU */
++static unsigned long pp_presents, pp_next = PP_FIRST, pp_wait_until;
++static uint32_t pp_frame, pp_npass;
++static struct pp_pass pp_pass[PP_MAXP];
++static id<MTLCounterSampleBuffer> pp_sb;
++static MTLTimestamp pp_cpu0, pp_gpu0;
++static id<MTLDevice> pp_dev;
++static pthread_mutex_t pp_mu = PTHREAD_MUTEX_INITIALIZER;
++static unsigned long pp_reports, pp_waits;
++static void pp_setup(id<MTLDevice> dev);
++static obj_handle_t pp_last_cb;
++static uint16_t pp_ncb;
++
++/* Allocates the next slot in a sampling window; pp_mu held. */
++static struct pp_pass *pp_alloc(id<MTLCommandBuffer> cb, char kind, uint32_t *slot) {
++  *slot = ~0u;
++  if (!pp_sb) pp_setup(cb.device);
++  if (pp_state != 1 || !pp_sb || pp_npass >= PP_MAXP) return NULL;
++  uint32_t i = pp_npass++;
++  struct pp_pass *p = &pp_pass[i];
++  memset(p, 0, sizeof *p);
++  p->frame = pp_frame; p->kind = kind;
++  if ((obj_handle_t)cb != pp_last_cb) { pp_last_cb = (obj_handle_t)cb; pp_ncb++; }
++  p->cb = pp_ncb;
++  *slot = i;
++  return p;
++}
++
++/* A blit or compute encoder: returns a descriptor-made encoder when sampling. */
++static obj_handle_t pp_other_encoder(id<MTLCommandBuffer> cb, char kind, MTLDispatchType dt) {
++  if (__builtin_expect(pp_on != 1, 1) || pp_state != 1) return 0;
++  obj_handle_t ret = 0;
++  pthread_mutex_lock(&pp_mu);
++  uint32_t i;
++  struct pp_pass *p = pp_alloc(cb, kind, &i);
++  if (p) {
++    if (kind == 'B') {
++      MTLBlitPassDescriptor *d = [[MTLBlitPassDescriptor alloc] init];
++      d.sampleBufferAttachments[0].sampleBuffer = pp_sb;
++      d.sampleBufferAttachments[0].startOfEncoderSampleIndex = i * 4 + 2;
++      d.sampleBufferAttachments[0].endOfEncoderSampleIndex = i * 4 + 3;
++      ret = (obj_handle_t)[cb blitCommandEncoderWithDescriptor:d];
++      [d release];
++    } else {
++      MTLComputePassDescriptor *d = [[MTLComputePassDescriptor alloc] init];
++      d.dispatchType = dt;
++      d.sampleBufferAttachments[0].sampleBuffer = pp_sb;
++      d.sampleBufferAttachments[0].startOfEncoderSampleIndex = i * 4 + 2;
++      d.sampleBufferAttachments[0].endOfEncoderSampleIndex = i * 4 + 3;
++      ret = (obj_handle_t)[cb computeCommandEncoderWithDescriptor:d];
++      [d release];
++    }
++    p->encoder = ret;
++  }
++  pthread_mutex_unlock(&pp_mu);
++  return ret;
++}
++
++static int pp_enabled(void) {
++  if (__builtin_expect(pp_on < 0, 0)) {
++    const char *e = getenv("DXMT_PASS_PROF");
++    pp_on = (e && e[0] == '1') ? 1 : 0;
++    if (pp_on) fprintf(stderr, "[pass-prof] armed: %d frames every %d presents\n", PP_FRAMES, PP_PERIOD);
++  }
++  return pp_on == 1;
++}
++
++static void pp_setup(id<MTLDevice> dev) {
++  if (pp_sb || pp_on != 1) return;
++  if (![dev supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) {
++    fprintf(stderr, "[pass-prof] no stage-boundary counter sampling; off\n");
++    pp_on = 0; return;
++  }
++  id<MTLCounterSet> ts = nil;
++  for (id<MTLCounterSet> s in dev.counterSets)
++    if ([s.name isEqualToString:MTLCommonCounterSetTimestamp]) ts = s;
++  if (!ts) { fprintf(stderr, "[pass-prof] no timestamp counter set; off\n"); pp_on = 0; return; }
++  MTLCounterSampleBufferDescriptor *d = [[MTLCounterSampleBufferDescriptor alloc] init];
++  d.counterSet = ts;
++  d.storageMode = MTLStorageModeShared;
++  d.sampleCount = PP_MAXP * 4;
++  NSError *err = nil;
++  pp_sb = [dev newCounterSampleBufferWithDescriptor:d error:&err];
++  [d release];
++  if (!pp_sb) { fprintf(stderr, "[pass-prof] sample buffer failed; off\n"); pp_on = 0; return; }
++  pp_dev = [dev retain];
++}
++
++/* Called with the descriptor built; returns with sample attachments added
++ * when this pass is inside a sampling window. */
++static void pp_pass_begin(id<MTLCommandBuffer> cb, MTLRenderPassDescriptor *desc,
++                          const struct WMTRenderPassInfo *info, uint32_t *slot) {
++  *slot = ~0u;
++  if (__builtin_expect(pp_on != 1, 1)) return;
++  pthread_mutex_lock(&pp_mu);
++  uint32_t i;
++  struct pp_pass *p = pp_alloc(cb, 'R', &i);
++  if (p) {
++    p->w = info->render_target_width; p->h = info->render_target_height;
++    p->samples = info->default_raster_sample_count;
++    for (unsigned c = 0; c < 8; c++) {
++      id<MTLTexture> t = (id<MTLTexture>)info->colors[c].texture;
++      if (!t) continue;
++      p->ncol = c + 1;
++      p->cfmt[c] = (uint16_t)t.pixelFormat;
++      p->cload[c] = info->colors[c].load_action; p->cstore[c] = info->colors[c].store_action;
++      if (!p->w) { p->w = (uint32_t)t.width >> info->colors[c].level; p->h = (uint32_t)t.height >> info->colors[c].level; }
++      if (t.sampleCount > p->samples) p->samples = (uint8_t)t.sampleCount;
++    }
++    if (info->depth.texture) {
++      id<MTLTexture> t = (id<MTLTexture>)info->depth.texture;
++      p->dfmt = (uint16_t)t.pixelFormat; p->dload = info->depth.load_action; p->dstore = info->depth.store_action;
++      if (!p->w) { p->w = (uint32_t)t.width; p->h = (uint32_t)t.height; }
++    }
++    if (info->stencil.texture) { p->sload = info->stencil.load_action + 1; p->sstore = info->stencil.store_action + 1; }
++    MTLRenderPassSampleBufferAttachmentDescriptor *a = desc.sampleBufferAttachments[0];
++    a.sampleBuffer = pp_sb;
++    a.startOfVertexSampleIndex = i * 4;
++    a.endOfVertexSampleIndex = i * 4 + 1;
++    a.startOfFragmentSampleIndex = i * 4 + 2;
++    a.endOfFragmentSampleIndex = i * 4 + 3;
++    *slot = i;
++    (void)slot;
++  }
++  pthread_mutex_unlock(&pp_mu);
++}
++
++static void pp_pass_encoder(uint32_t slot, obj_handle_t enc) {
++  if (slot != ~0u) pp_pass[slot].encoder = enc;
++}
++
++static void pp_draws(obj_handle_t enc, const struct wmtcmd_base *c) {
++  if (__builtin_expect(pp_on != 1, 1) || pp_state != 1) return;
++  pthread_mutex_lock(&pp_mu);
++  struct pp_pass *p = NULL;
++  for (uint32_t i = pp_npass; i-- > 0;)
++    if (pp_pass[i].encoder == enc) { p = &pp_pass[i]; break; }
++  if (p) {
++    for (; c; c = (const struct wmtcmd_base *)c->next.ptr) {
++      switch (c->type) {
++      case WMTRenderCommandDraw: {
++        const struct wmtcmd_render_draw *d = (const void *)c;
++        p->draws++; p->prims += d->vertex_count * (d->instance_count ? d->instance_count : 1);
++        break; }
++      case WMTRenderCommandDrawIndexed: {
++        const struct wmtcmd_render_draw_indexed *d = (const void *)c;
++        p->draws++; p->prims += d->index_count * (d->instance_count ? d->instance_count : 1);
++        break; }
++      case WMTRenderCommandDrawIndirect: case WMTRenderCommandDrawIndexedIndirect:
++      case WMTRenderCommandDXMTGeometryDraw: case WMTRenderCommandDXMTGeometryDrawIndexed:
++      case WMTRenderCommandDXMTGeometryDrawIndirect: case WMTRenderCommandDXMTGeometryDrawIndexedIndirect:
++        p->draws++; break;
++      default: break;
++      }
++    }
++  }
++  pthread_mutex_unlock(&pp_mu);
++}
++
++static const char *pp_la(uint8_t a) { return a == 0 ? "x" : a == 1 ? "L" : a == 2 ? "C" : "?"; }
++static const char *pp_sa(uint8_t a) {
++  return a == 0 ? "x" : a == 1 ? "S" : a == 2 ? "R" : a == 3 ? "SR" : a == 4 ? "u" : "?";
++}
++
++static void pp_report(void) {
++  NSData *data = [pp_sb resolveCounterRange:NSMakeRange(0, pp_npass * 4)];
++  if (!data) { fprintf(stderr, "[pass-prof] resolve failed\n"); return; }
++  const MTLCounterResultTimestamp *r = data.bytes;
++  MTLTimestamp cpu1, gpu1;
++  [pp_dev sampleTimestamps:&cpu1 gpuTimestamp:&gpu1];
++  mach_timebase_info_data_t tb; mach_timebase_info(&tb);
++  double cpu_ns = (double)(cpu1 - pp_cpu0) * tb.numer / tb.denom;
++  double ns_per_tick = (gpu1 > pp_gpu0) ? cpu_ns / (double)(gpu1 - pp_gpu0) : 1.0;
++  pp_reports++;
++  /* On this GPU the resolved timestamps are nanoseconds, not the ticks
++   * sampleTimestamps reports (those are mach ticks): print both scales' ratio
++   * for the record and use nanoseconds. */
++  fprintf(stderr, "[pass-prof] report %lu at present %lu: %u encoders in %u frames, %u command buffers, "
++          "%lu waitUntilCompleted, sampleTimestamps ratio %.3f\n",
++          pp_reports, pp_presents, pp_npass, pp_frame, (unsigned)pp_ncb, pp_waits, ns_per_tick);
++  ns_per_tick = 1.0;
++  uint64_t f_first = 0, f_last = 0; uint32_t cur = ~0u; double f_frag = 0, f_vtx = 0; uint32_t f_draws = 0, f_n = 0;
++  for (uint32_t i = 0; i <= pp_npass; i++) {
++    if (i == pp_npass || pp_pass[i].frame != cur) {
++      if (cur != ~0u)
++        fprintf(stderr, "[pass-prof] frame %u: %u passes, %u draws, sum vtx %.3f ms, sum frag %.3f ms, span %.3f ms\n",
++                cur, f_n, f_draws, f_vtx, f_frag,
++                (f_last > f_first) ? (double)(f_last - f_first) * ns_per_tick / 1e6 : 0.0);
++      if (i == pp_npass) break;
++      cur = pp_pass[i].frame; f_first = 0; f_last = 0; f_frag = f_vtx = 0; f_draws = f_n = 0;
++    }
++    const struct pp_pass *p = &pp_pass[i];
++    if (!f_first) {
++      for (uint32_t j = i; j < pp_npass && pp_pass[j].frame == cur; j++)
++        for (unsigned k = 0; k < 4; k++) {
++          uint64_t t = r[j*4+k].timestamp;
++          if (t && t != MTLCounterErrorValue && (!f_first || t < f_first)) f_first = t;
++        }
++    }
++    uint64_t vs = r[i*4].timestamp, ve = r[i*4+1].timestamp, fs = r[i*4+2].timestamp, fe = r[i*4+3].timestamp;
++    int vok = vs && ve && vs != MTLCounterErrorValue && ve != MTLCounterErrorValue && ve >= vs;
++    int fok = fs && fe && fs != MTLCounterErrorValue && fe != MTLCounterErrorValue && fe >= fs;
++    double vms = vok ? (double)(ve - vs) * ns_per_tick / 1e6 : -1;
++    double fms = fok ? (double)(fe - fs) * ns_per_tick / 1e6 : -1;
++    uint64_t s = vok ? vs : fok ? fs : 0, e = fok ? fe : vok ? ve : 0;
++    if (s && (!f_first || s < f_first)) f_first = s;
++    if (e > f_last) f_last = e;
++    if (vms > 0) f_vtx += vms;
++    if (fms > 0) f_frag += fms;
++    f_draws += p->draws; f_n++;
++    char cols[160] = ""; size_t o = 0;
++    for (unsigned c = 0; c < p->ncol && o < sizeof cols - 24; c++)
++      if (p->cfmt[c])
++        o += snprintf(cols + o, sizeof cols - o, " c%u=%u/%s%s", c, p->cfmt[c], pp_la(p->cload[c]), pp_sa(p->cstore[c]));
++    char ds[48] = "";
++    if (p->dfmt) snprintf(ds, sizeof ds, " d=%u/%s%s", p->dfmt, pp_la(p->dload), pp_sa(p->dstore));
++    if (p->kind != 'R') {
++      fprintf(stderr, "[pass-prof]  f%u p%u cb%u %s gpu=%.3f at=%.3f..%.3f\n", p->frame, i, p->cb,
++              p->kind == 'B' ? "blit" : "compute", fms,
++              (fok && f_first) ? (double)(fs - f_first) / 1e6 : -1.0,
++              (fok && f_first) ? (double)(fe - f_first) / 1e6 : -1.0);
++      continue;
++    }
++    fprintf(stderr, "[pass-prof]  f%u p%u cb%u %ux%u x%u%s%s%s draws=%u prims=%llu vtx=%.3f frag=%.3f v@%.3f f@%.3f..%.3f\n",
++            p->frame, i, p->cb, p->w, p->h, p->samples ? p->samples : 1, cols, ds, p->sload ? " st" : "",
++            p->draws, (unsigned long long)p->prims, vms, fms,
++            (vok && f_first) ? (double)(vs - f_first) / 1e6 : -1.0,
++            (fok && f_first) ? (double)(fs - f_first) / 1e6 : -1.0,
++            (fok && f_first) ? (double)(fe - f_first) / 1e6 : -1.0);
++  }
++}
++
++/* Called once per present. */
++static void pp_present(void) {
++  if (__builtin_expect(pp_on != 1, 1)) return;
++  pthread_mutex_lock(&pp_mu);
++  pp_presents++;
++  if (pp_state == 0 && pp_sb && pp_presents >= pp_next) {
++    pp_state = 1; pp_frame = 0; pp_npass = 0; pp_waits = 0; pp_ncb = 0; pp_last_cb = 0;
++    [pp_dev sampleTimestamps:&pp_cpu0 gpuTimestamp:&pp_gpu0];
++  } else if (pp_state == 1) {
++    if (++pp_frame >= PP_FRAMES || pp_npass >= PP_MAXP) {
++      pp_state = 2; pp_wait_until = pp_presents + PP_WAIT;
++    }
++  } else if (pp_state == 2 && pp_presents >= pp_wait_until) {
++    @autoreleasepool { pp_report(); }
++    pp_state = 0; pp_next = pp_presents + PP_PERIOD;
++  }
++  pthread_mutex_unlock(&pp_mu);
++}
++
+ static NTSTATUS
+ _NSObject_retain(NSObject **obj) {
+   /* Dispatch by TAG, not by mode. Guest-local objects legitimately exist in
+@@ -535,6 +812,7 @@ _MTLCommandBuffer_waitUntilCompleted(void *obj) {
+     wmtr_rb_drain(params->handle);   /* ml820: GPU results back before the guest reads them */
+     return STATUS_SUCCESS;
+   }
++  if (pp_on == 1 && pp_state == 1) pp_waits++;
+   [(id<MTLCommandBuffer>)params->handle waitUntilCompleted];
+   return STATUS_SUCCESS;
+ }
+@@ -1275,7 +1553,10 @@ _MTLCommandBuffer_blitCommandEncoder(void *obj) {
+     wmtr_enc_note(params->ret, params->handle);  /* ml820: blit destinations read back per cmdbuf */
+     return STATUS_SUCCESS;
+   }
+-  params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle blitCommandEncoder];
++  pp_enabled();
++  params->ret = pp_other_encoder((id<MTLCommandBuffer>)params->handle, 'B', MTLDispatchTypeSerial);
++  if (!params->ret)
++    params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle blitCommandEncoder];
+   return STATUS_SUCCESS;
+ }
+ 
+@@ -1292,8 +1573,11 @@ _MTLCommandBuffer_computeCommandEncoder(void *obj) {
+     if (!params->ret) fprintf(stderr, "[wmt-remote] host refused a compute encoder\n");
+     return STATUS_SUCCESS;
+   }
+-  params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle
+-      computeCommandEncoderWithDispatchType:params->arg ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial];
++  params->ret = pp_other_encoder((id<MTLCommandBuffer>)params->handle, 'C',
++                                 params->arg ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial);
++  if (!params->ret)
++    params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle
++        computeCommandEncoderWithDispatchType:params->arg ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial];
+   return STATUS_SUCCESS;
+ }
+ 
+@@ -1366,7 +1650,11 @@ _MTLCommandBuffer_renderCommandEncoder(void *obj) {
+     descriptor.tileHeight = info->tile_height;
+   }
+ 
++  uint32_t pp_slot;
++  pp_enabled();
++  pp_pass_begin((id<MTLCommandBuffer>)params->handle, descriptor, info, &pp_slot);
+   params->ret = (obj_handle_t)[(id<MTLCommandBuffer>)params->handle renderCommandEncoderWithDescriptor:descriptor];
++  pp_pass_encoder(pp_slot, params->ret);
+ 
+   [descriptor release];
+   return STATUS_SUCCESS;
+@@ -2322,6 +2610,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+    * that either holds or reveals a real skip. */
+   wmt_shadow_batch(next);
+   wmt_census_batch(next, 0);
++  pp_draws(params->encoder, next);
+   id<MTLRenderCommandEncoder> encoder = (id<MTLRenderCommandEncoder>)params->encoder;
+   while (next) {
+     switch ((enum WMTRenderCommandType)next->type) {
+@@ -2916,16 +3205,16 @@ _MTLCommandBuffer_presentDrawable(void *obj) {
+   }
+   int mode = g_madeira_vsync_mode;
+   if (mode == 1) {
+-    madeira_log_present_cadence("presentDrawable60", 0.0);
++    madeira_log_present_cadence("presentDrawable60", 0.0); pp_present();
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg
+                                      afterMinimumDuration:(1.0 / 60.0)];
+   } else if (mode == 2) {
+     /* Frame-skip gating lives in _MetalLayer_nextDrawable (nil return);
+      * only real, ≥18ms-spaced frames reach here. */
+-    madeira_log_present_cadence("presentRaw", 0.0);
++    madeira_log_present_cadence("presentRaw", 0.0); pp_present();
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
+   } else {
+-    madeira_log_present_cadence("presentDrawable", 0.0);
++    madeira_log_present_cadence("presentDrawable", 0.0); pp_present();
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
+   }
+   return STATUS_SUCCESS;
+@@ -2934,7 +3223,7 @@ _MTLCommandBuffer_presentDrawable(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj) {
+   struct unixcall_generic_obj_obj_double_noret *params = obj;
+-  madeira_log_present_cadence("presentDrawableAfterMinDuration", params->arg1);
++  madeira_log_present_cadence("presentDrawableAfterMinDuration", params->arg1); pp_present();
+   [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg0
+                                    afterMinimumDuration:params->arg1];
+   return STATUS_SUCCESS;

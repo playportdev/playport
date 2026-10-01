@@ -1,0 +1,124 @@
+{
+  "backends": [
+    "madeira:fex-0f8edf8f6+wine-e82864432+madeira-5a82d392e"
+  ],
+  "rungs": [
+    {
+      "rung": "cpu-jit",
+      "steps": [
+        {
+          "step": "cpu-jit/1",
+          "probe_id": "ladder-cpujit-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:1"
+        }
+      ],
+      "checks": [],
+      "verdict": "pass"
+    },
+    {
+      "rung": "win32-core",
+      "steps": [
+        {
+          "step": "win32-core/1",
+          "probe_id": "ladder-w32core-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:2"
+        }
+      ],
+      "checks": [],
+      "verdict": "pass"
+    },
+    {
+      "rung": "concurrency",
+      "steps": [
+        {
+          "step": "concurrency/1",
+          "probe_id": "ladder-concurrency-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:3"
+        }
+      ],
+      "checks": [],
+      "verdict": "pass"
+    },
+    {
+      "rung": "process-model",
+      "steps": [
+        {
+          "step": "process-model/1",
+          "probe_id": "ladder-process-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:4"
+        }
+      ],
+      "checks": [],
+      "verdict": "pass"
+    },
+    {
+      "rung": "persistence",
+      "steps": [
+        {
+          "step": "persistence/1",
+          "probe_id": "ladder-persist-write-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:5"
+        },
+        {
+          "step": "persistence/2",
+          "probe_id": "ladder-persist-verify-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:6"
+        },
+        {
+          "step": "persistence/3",
+          "probe_id": "ladder-persist-write-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:7"
+        },
+        {
+          "step": "persistence/4",
+          "probe_id": "ladder-persist-verify-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:8"
+        }
+      ],
+      "checks": [],
+      "verdict": "pass"
+    },
+    {
+      "rung": "resource-envelope",
+      "steps": [
+        {
+          "step": "resource-envelope/1",
+          "probe_id": "ladder-envelope-coldstart-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:9"
+        },
+        {
+          "step": "resource-envelope/2",
+          "probe_id": "ladder-envelope-load-x86-64",
+          "verdict": "pass",
+          "record": "$PLAYPORT_BUILD/gates/ladder-1/w2-results.jsonl:10"
+        }
+      ],
+      "checks": [],
+      "measurements": {
+        "cold_start_s": 5.614,
+        "cold_start_excl_activation_s": 0.23,
+        "peak_rss_mb": 1235,
+        "steady_rss_mb": 1230.4,
+        "available_memory_min_mb": 6956,
+        "prefix_bytes_before": 1355776,
+        "prefix_bytes_after": 72564736,
+        "storage_amplification": 1.045,
+        "main_thread_max_stall_ms": 0.1
+      },
+      "verdict": "pass"
+    }
+  ],
+  "problems": [],
+  "findings": [],
+  "ladder_verdict": "pass",
+  "gate_evidence": true
+}

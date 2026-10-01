@@ -1,0 +1,2915 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 23:59:14 +0200
+Subject: [PATCH] win32u-unix: port the iOS replacements onto wine-11.18
+
+Three-way merge of each *_ios.c (base: the file at madeira-lgpl, theirs: the
+file at wine-port-11.18). class: upstream moved class data into server shared
+memory and dropped is_winproc_unicode; the per-PEB builtin winproc registry and
+the bounded class_list walk sit on upstream's code (is_local_class, fnid).
+driver: upstream's nulldrv client surface replaced ours; window_surface_funcs
+now carries .size; send_hardware_message is server_send_hardware_message.
+winstation: top_window is an HWND.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ build/win32u-unix/class_ios.c      | 657 ++++++++++++-----------------
+ build/win32u-unix/defwnd_ios.c     |  41 +-
+ build/win32u-unix/driver_ios.c     | 107 ++---
+ build/win32u-unix/message_ios.c    | 175 ++++----
+ build/win32u-unix/sysparams_ios.c  | 389 +++++++++++------
+ build/win32u-unix/winstation_ios.c |  93 ++--
+ 6 files changed, 757 insertions(+), 705 deletions(-)
+
+diff --git a/build/win32u-unix/class_ios.c b/build/win32u-unix/class_ios.c
+index f6d4e80..1a30ac6 100644
+--- a/build/win32u-unix/class_ios.c
++++ b/build/win32u-unix/class_ios.c
+@@ -46,15 +46,8 @@ SYSTEM_BASIC_INFORMATION system_info;
+ typedef struct tagCLASS
+ {
+     struct list  entry;         /* Entry in class list */
+-    BOOL         local;         /* Local class? */
+-    WNDPROC      winproc;       /* Window procedure */
+     struct dce  *dce;           /* Opaque pointer to class DCE */
+-    HICON        hIcon;         /* Default icon */
+-    HICON        hIconSm;       /* Default small icon */
+-    HICON        hIconSmIntern; /* Internal small icon, derived from hIcon */
+-    HCURSOR      hCursor;       /* Default cursor */
+-    HBRUSH       hbrBackground; /* Default background */
+-    struct client_menu_name menu_name; /* Default menu name */
++    HICON        icon_internal; /* internal small icon, derived from hIcon */
+     const shared_object_t *shared; /* class object in session shared memory */
+ } CLASS;
+ 
+@@ -66,9 +59,109 @@ struct builtin_class_descr
+     INT        extra;     /* window extra bytes */
+     ULONG_PTR  cursor;    /* cursor id */
+     HBRUSH     brush;     /* brush or system color */
+-    enum ntuser_client_procs proc;
++    ATOM       atom;      /* class atom */
+ };
+ 
++static struct builtin_class_descr builtin_classes[] =
++{
++    [NTUSER_WNDPROC_SCROLLBAR] =
++    {
++        .name = "ScrollBar",
++        .style = CS_DBLCLKS | CS_VREDRAW | CS_HREDRAW | CS_PARENTDC,
++        .extra = sizeof(struct scroll_info *),
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_MESSAGE] =
++    {
++        .name = "Message",
++    },
++    [NTUSER_WNDPROC_MENU] =
++    {
++        .name = "#32768", /* POPUPMENU_CLASS_ATOM */
++        .style = CS_DROPSHADOW | CS_SAVEBITS | CS_DBLCLKS,
++        .extra = sizeof(HMENU),
++        .cursor = IDC_ARROW,
++        .brush = (HBRUSH)(COLOR_MENU + 1),
++    },
++    [NTUSER_WNDPROC_DESKTOP] =
++    {
++        .name = "#32769", /* DESKTOP_CLASS_ATOM */
++        .style = CS_DBLCLKS,
++        .brush = (HBRUSH)(COLOR_BACKGROUND + 1),
++    },
++    [NTUSER_WNDPROC_DEFWND] = {0},
++    [NTUSER_WNDPROC_ICONTITLE] =
++    {
++        .name = "#32772", /* ICONTITLE_CLASS_ATOM */
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_UNKNOWN] = {0},
++    [NTUSER_WNDPROC_BUTTON] =
++    {
++        .name = "Button",
++        .style = CS_DBLCLKS | CS_VREDRAW | CS_HREDRAW | CS_PARENTDC,
++        .extra = sizeof(UINT) + 2 * sizeof(HANDLE),
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_COMBO] =
++    {
++        .name = "ComboBox",
++        .style = CS_PARENTDC | CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW,
++        .extra = sizeof(void *),
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_COMBOLBOX] =
++    {
++        .name = "ComboLBox",
++        .style = CS_DBLCLKS | CS_SAVEBITS,
++        .extra = sizeof(void *),
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_DIALOG] =
++    {
++        .name = "#32770", /* DIALOG_CLASS_ATOM */
++        .style = CS_SAVEBITS | CS_DBLCLKS,
++        .extra = DLGWINDOWEXTRA,
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_EDIT] =
++    {
++        .name = "Edit",
++        .style = CS_DBLCLKS | CS_PARENTDC,
++        .extra = sizeof(UINT64),
++        .cursor = IDC_IBEAM,
++    },
++    [NTUSER_WNDPROC_LISTBOX] =
++    {
++        .name = "ListBox",
++        .style = CS_DBLCLKS,
++        .extra = sizeof(void *),
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_MDICLIENT] =
++    {
++        .name = "MDIClient",
++        .extra = 2 * sizeof(void *),
++        .cursor = IDC_ARROW,
++        .brush = (HBRUSH)(COLOR_APPWORKSPACE + 1),
++    },
++    [NTUSER_WNDPROC_STATIC] =
++    {
++        .name = "Static",
++        .style = CS_DBLCLKS | CS_PARENTDC,
++        .extra = 2 * sizeof(HANDLE),
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_IME] =
++    {
++        .name = "IME",
++        .extra = 2 * sizeof(LONG_PTR),
++        .cursor = IDC_ARROW,
++    },
++    [NTUSER_WNDPROC_GHOST] = {0},
++};
++C_ASSERT( ARRAY_SIZE(builtin_classes) == NTUSER_NB_PROCS );
++
+ typedef struct tagWINDOWPROC
+ {
+     WNDPROC  procA;    /* ANSI window proc */
+@@ -169,18 +262,12 @@ static WINDOWPROC *find_winproc( WNDPROC func, BOOL ansi )
+ static WINDOWPROC *get_winproc_ptr( WNDPROC handle )
+ {
+     UINT index = LOWORD(handle);
+-    if ((ULONG_PTR)handle >> 16 != WINPROC_HANDLE) return NULL;
++    if (handle != MAKE_WNDPROC(index)) return NULL;
+     if (index >= MAX_WINPROCS) return WINPROC_PROC16;
+     if (index >= winproc_used) return NULL;
+     return &winproc_array[index];
+ }
+ 
+-/* create a handle for a given window proc */
+-static inline WNDPROC proc_to_handle( WINDOWPROC *proc )
+-{
+-    return (WNDPROC)(ULONG_PTR)((proc - winproc_array) | (WINPROC_HANDLE << 16));
+-}
+-
+ /* allocate and initialize a new winproc */
+ static inline WINDOWPROC *alloc_winproc_ptr( WNDPROC func, BOOL ansi )
+ {
+@@ -200,13 +287,12 @@ static inline WINDOWPROC *alloc_winproc_ptr( WNDPROC func, BOOL ansi )
+             proc = &winproc_array[winproc_used++];
+             if (ansi) proc->procA = func;
+             else proc->procW = func;
+-            TRACE_(win)( "allocated %p for %c %p (%d/%d used)\n",
+-                         proc_to_handle(proc), ansi ? 'A' : 'W', func,
+-                         winproc_used, MAX_WINPROCS );
++            TRACE_(win)( "allocated %p for %c %p (%d/%d used)\n", MAKE_WNDPROC(proc - winproc_array),
++                         ansi ? 'A' : 'W', func, winproc_used, MAX_WINPROCS );
+         }
+         else WARN_(win)( "too many winprocs, cannot allocate one for %p\n", func );
+     }
+-    else TRACE_(win)( "reusing %p for %p\n", proc_to_handle(proc), func );
++    else TRACE_(win)( "reusing %p for %p\n", MAKE_WNDPROC(proc - winproc_array), func );
+ 
+     pthread_mutex_unlock( &winproc_lock );
+     return proc;
+@@ -227,7 +313,7 @@ WNDPROC alloc_winproc( WNDPROC func, BOOL ansi )
+ 
+     if (!(proc = alloc_winproc_ptr( func, ansi ))) return func;
+     if (proc == WINPROC_PROC16) return func;
+-    return proc_to_handle( proc );
++    return MAKE_WNDPROC(proc - winproc_array);
+ }
+ 
+ /* Get a window procedure pointer that can be passed to the Windows program. */
+@@ -248,17 +334,6 @@ WNDPROC get_winproc( WNDPROC proc, BOOL ansi )
+     }
+ }
+ 
+-/* Return the window procedure type, or the default value if not a winproc handle. */
+-BOOL is_winproc_unicode( WNDPROC proc, BOOL def_val )
+-{
+-    WINDOWPROC *ptr = ios_resolve_builtin( get_winproc_ptr( proc ));
+-
+-    if (!ptr) return def_val;
+-    if (ptr == WINPROC_PROC16) return FALSE;  /* 16-bit is always A */
+-    if (ptr->procA && ptr->procW) return def_val;  /* can be both */
+-    return ptr->procW != NULL;
+-}
+-
+ void get_winproc_params( struct win_proc_params *params, BOOL fixup_ansi_dst )
+ {
+     /* iOS-Madeira: resolve builtin procs against the DISPATCHING
+@@ -548,6 +623,12 @@ static BOOL class_name_matches( CLASS *class, UNICODE_STRING *name )
+     return name->Length == len && !wcsnicmp( class_name, name->Buffer, len / sizeof(WCHAR) );
+ }
+ 
++static BOOL is_local_class( CLASS *class )
++{
++    /* class local flag is safe to read without shared object locking as it is constant */
++    return class->shared->shm.class.local;
++}
++
+ static UINT_PTR get_class_instance( CLASS *class )
+ {
+     struct object_lock lock = OBJECT_LOCK_INIT;
+@@ -556,7 +637,7 @@ static UINT_PTR get_class_instance( CLASS *class )
+     NTSTATUS status;
+ 
+     while ((status = get_shared_class( class, &lock, &class_shm )) == STATUS_PENDING)
+-        instance = class_shm->instance;
++        instance = class_shm->info.instance;
+     if (status) return 0;
+     return instance;
+ }
+@@ -594,7 +675,7 @@ static CLASS *find_class( HINSTANCE module, UNICODE_STRING *name )
+             UINT_PTR class_instance = get_class_instance( class );
+             if (!class_name_matches( class, name )) continue;
+             is_win16 = !(class_instance >> 16);
+-            if (!instance || !class->local || class_instance == instance ||
++            if (!instance || !is_local_class( class ) || class_instance == instance ||
+                 (!is_win16 && ((class_instance & ~0xffff) == (instance & ~0xffff))))
+             {
+                 TRACE( "%s %lx -> %p\n", debugstr_us(name), instance, class );
+@@ -606,14 +687,6 @@ static CLASS *find_class( HINSTANCE module, UNICODE_STRING *name )
+     return NULL;
+ }
+ 
+-/***********************************************************************
+- *           get_class_winproc
+- */
+-WNDPROC get_class_winproc( CLASS *class )
+-{
+-    return class->winproc;
+-}
+-
+ /***********************************************************************
+  *           get_class_dce
+  */
+@@ -636,28 +709,29 @@ struct dce *set_class_dce( CLASS *class, struct dce *dce )
+  *	     NtUserRegisterClassExWOW   (win32u.@)
+  */
+ ATOM WINAPI NtUserRegisterClassExWOW( const WNDCLASSEXW *wc, UNICODE_STRING *name, UNICODE_STRING *version,
+-                                      struct client_menu_name *client_menu_name, DWORD fnid,
+-                                      DWORD flags, DWORD *wow )
++                                      struct client_menu_name *menu_name, DWORD fnid, DWORD flags, DWORD *wow )
+ {
+-    const BOOL is_builtin = fnid, ansi = flags;
++    const BOOL ansi = flags;
+     const shared_object_t *shared;
+     struct obj_locator locator;
++    HICON icon_internal;
+     HINSTANCE instance;
+-    HICON sm_icon = 0;
++    WNDPROC wndproc;
+     CLASS *class;
+     ATOM atom;
+     BOOL ret;
+ 
+     /* create the desktop window to trigger builtin class registration */
+-    if (!is_builtin) get_desktop_window();
++    if (!fnid) get_desktop_window();
+ 
+     if (wc->cbSize != sizeof(*wc) || wc->cbClsExtra < 0 || wc->cbWndExtra < 0 ||
+-        (!is_builtin && wc->hInstance == ios_cur_user32_module()))  /* we can't register a class for user32 */
++        (!fnid && wc->hInstance == ios_cur_user32_module()))  /* we can't register a class for user32 */
+     {
+          RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
+          return 0;
+     }
+-    if (!(instance = wc->hInstance)) instance = NtCurrentTeb()->Peb->ImageBaseAddress;
++    if (!(instance = wc->hInstance)) instance = RtlGetCurrentPeb()->ImageBaseAddress;
++    wndproc = alloc_winproc( wc->lpfnWndProc, ansi );
+ 
+     TRACE( "name=%s hinst=%p style=0x%x clExtr=0x%x winExtr=0x%x\n",
+            debugstr_us(name), instance, wc->style, wc->cbClsExtra, wc->cbWndExtra );
+@@ -671,28 +745,37 @@ ATOM WINAPI NtUserRegisterClassExWOW( const WNDCLASSEXW *wc, UNICODE_STRING *nam
+ 
+     if (!(class = calloc( 1, sizeof(*class) ))) return 0;
+ 
+-    class->local      = !is_builtin && !(wc->style & CS_GLOBALCLASS);
++    /* Other non-null values must be set by caller */
++    icon_internal = wc->hIconSm ? 0 : create_small_icon( wc->hIcon );
+ 
++    user_lock();
+     SERVER_START_REQ( create_class )
+     {
+-        req->local      = class->local;
+-        req->style      = wc->style;
+-        req->instance   = wine_server_client_ptr( instance );
+-        req->cls_extra  = wc->cbClsExtra;
+-        req->win_extra  = wc->cbWndExtra;
++        struct class_info info =
++        {
++            .style      = wc->style,
++            .cls_extra  = wc->cbClsExtra,
++            .win_extra  = wc->cbWndExtra,
++            .cursor     = wine_server_user_handle( wc->hCursor ),
++            .background = wine_server_user_handle( wc->hbrBackground ),
++            .icon       = wine_server_user_handle( wc->hIcon ),
++            .icon_small = wine_server_user_handle( wc->hIconSm ),
++            .instance   = wine_server_client_ptr( instance ),
++            .wndproc    = wine_server_client_ptr( wndproc ),
++            .menu_name  = wine_server_client_ptr( menu_name ),
++        };
++        wine_server_add_data( req, &info, sizeof(info) );
+         req->client_ptr = wine_server_client_ptr( class );
+         req->atom       = wine_server_add_atom( req, name );
++        req->fnid       = fnid;
++        req->ansi       = ansi;
+         req->name_offset = version->Length / sizeof(WCHAR);
+         ret = !wine_server_call_err( req );
+         locator = reply->locator;
+         atom = reply->atom;
+     }
+     SERVER_END_REQ;
+-    if (!ret)
+-    {
+-        free( class );
+-        return 0;
+-    }
++    if (!ret) goto failed;
+ 
+     if (!(shared = find_shared_session_object( locator.id, locator.offset )))
+     {
+@@ -704,67 +787,68 @@ ATOM WINAPI NtUserRegisterClassExWOW( const WNDCLASSEXW *wc, UNICODE_STRING *nam
+             wine_server_call( req );
+         }
+         SERVER_END_REQ;
+-        free( class );
+-        return 0;
+-    }
+-
+-    /* Other non-null values must be set by caller */
+-    if (wc->hIcon && !wc->hIconSm)
+-        sm_icon = CopyImage( wc->hIcon, IMAGE_ICON,
+-                             get_system_metrics( SM_CXSMICON ),
+-                             get_system_metrics( SM_CYSMICON ),
+-                             LR_COPYFROMRESOURCE );
+ 
+-    user_lock();
+-    if (class->local) list_add_head( &class_list, &class->entry );
+-    else list_add_tail( &class_list, &class->entry );
++        goto failed;
++    }
+ 
+     TRACE( "name=%s->%s atom=%04x wndproc=%p hinst=%p bg=%p style=%08x clsExt=%d winExt=%d class=%p\n",
+            debugstr_w(wc->lpszClassName), debugstr_us(name), atom, wc->lpfnWndProc, instance,
+            wc->hbrBackground, wc->style, wc->cbClsExtra, wc->cbWndExtra, class );
+ 
+-    class->hIcon         = wc->hIcon;
+-    class->hIconSm       = wc->hIconSm;
+-    class->hIconSmIntern = sm_icon;
+-    class->hCursor       = wc->hCursor;
+-    class->hbrBackground = wc->hbrBackground;
+-    class->winproc       = alloc_winproc( wc->lpfnWndProc, ansi );
+-    if (client_menu_name) class->menu_name = *client_menu_name;
++    class->icon_internal = icon_internal;
+     class->shared        = shared;
++
++    if (is_local_class( class )) list_add_head( &class_list, &class->entry );
++    else list_add_tail( &class_list, &class->entry );
++
+     release_class_ptr( class );
+     return atom;
++
++failed:
++    user_unlock();
++    NtUserDestroyCursor( icon_internal, 0 );
++    free( class );
++    return 0;
++
+ }
+ 
+ /***********************************************************************
+  *	     NtUserUnregisterClass   (win32u.@)
+  */
+-BOOL WINAPI NtUserUnregisterClass( UNICODE_STRING *name, HINSTANCE instance,
+-                                   struct client_menu_name *client_menu_name )
++BOOL WINAPI NtUserUnregisterClass( UNICODE_STRING *name, HINSTANCE instance, struct client_menu_name **menu_name )
+ {
+     struct list drawables = LIST_INIT( drawables );
+     CLASS *class = NULL;
++    HBRUSH background;
+ 
+     /* create the desktop window to trigger builtin class registration */
+     get_desktop_window();
+ 
++    user_lock();
++
+     SERVER_START_REQ( destroy_class )
+     {
+         req->instance = wine_server_client_ptr( instance );
+         req->atom     = wine_server_add_atom( req, name );
+-        if (!wine_server_call_err( req )) class = wine_server_get_ptr( reply->client_ptr );
++        wine_server_call_err( req );
++        class = wine_server_get_ptr( reply->client_ptr );
++        background = wine_server_ptr_handle( reply->background );
++        *menu_name = wine_server_get_ptr( reply->menu_name );
+     }
+     SERVER_END_REQ;
+-    if (!class) return FALSE;
++    if (!class)
++    {
++        user_unlock();
++        return FALSE;
++    }
+ 
+     TRACE( "%p\n", class );
+ 
+-    user_lock();
+     if (class->dce) free_dce( class->dce, 0, &drawables );
+     list_remove( &class->entry );
+-    if (class->hbrBackground > (HBRUSH)(COLOR_GRADIENTINACTIVECAPTION + 1))
+-        NtGdiDeleteObjectApp( class->hbrBackground );
+-    *client_menu_name = class->menu_name;
+-    NtUserDestroyCursor( class->hIconSmIntern, 0 );
++    if (background > (HBRUSH)(COLOR_GRADIENTINACTIVECAPTION + 1))
++        NtGdiDeleteObjectApp( background );
++    NtUserDestroyCursor( class->icon_internal, 0 );
+     free( class );
+     user_unlock();
+ 
+@@ -776,7 +860,7 @@ BOOL WINAPI NtUserUnregisterClass( UNICODE_STRING *name, HINSTANCE instance,
+  *	     NtUserGetClassInfo   (win32u.@)
+  */
+ ATOM WINAPI NtUserGetClassInfoEx( HINSTANCE instance, UNICODE_STRING *name, WNDCLASSEXW *wc,
+-                                  struct client_menu_name *menu_name, BOOL ansi )
++                                  struct client_menu_name **menu_name, BOOL ansi )
+ {
+     struct object_lock lock = OBJECT_LOCK_INIT;
+     const class_shm_t *class_shm;
+@@ -793,25 +877,24 @@ ATOM WINAPI NtUserGetClassInfoEx( HINSTANCE instance, UNICODE_STRING *name, WNDC
+     {
+         if (wc)
+         {
+-            wc->style         = class_shm->style;
+-            wc->lpfnWndProc   = get_winproc( class->winproc, ansi );
+-            wc->cbClsExtra    = class_shm->cls_extra;
+-            wc->cbWndExtra    = class_shm->win_extra;
++            wc->style         = class_shm->info.style;
++            wc->lpfnWndProc   = get_winproc( wine_server_get_ptr( class_shm->info.wndproc ), ansi );
++            wc->cbClsExtra    = class_shm->info.cls_extra;
++            wc->cbWndExtra    = class_shm->info.win_extra;
+             wc->hInstance     = (instance == ios_cur_user32_module()) ? 0 : instance;
+-            wc->hIcon         = class->hIcon;
+-            wc->hIconSm       = class->hIconSm ? class->hIconSm : class->hIconSmIntern;
+-            wc->hCursor       = class->hCursor;
+-            wc->hbrBackground = class->hbrBackground;
+-            wc->lpszMenuName  = ansi ? (const WCHAR *)class->menu_name.nameA : class->menu_name.nameW;
++            wc->hIcon         = wine_server_ptr_handle( class_shm->info.icon );
++            wc->hIconSm       = wine_server_ptr_handle( class_shm->info.icon_small );
++            wc->hCursor       = wine_server_ptr_handle( class_shm->info.cursor );
++            wc->hbrBackground = wine_server_ptr_handle( class_shm->info.background );
++            wc->lpszMenuName  = wine_server_get_ptr( class_shm->info.menu_name );
+             wc->lpszClassName = name->Buffer;
++            *menu_name        = wine_server_get_ptr( class_shm->info.menu_name );
+         }
+-        atom = class_shm->atom;
++        atom = class_shm->info.atom;
+     }
+-    if (status) return 0;
+-
+-    if (menu_name) *menu_name = class->menu_name;
++    if (wc && !wc->hIconSm) wc->hIconSm = class->icon_internal;
+     release_class_ptr( class );
+-    return atom;
++    return status ? 0 : atom;
+ }
+ 
+ /***********************************************************************
+@@ -819,7 +902,7 @@ ATOM WINAPI NtUserGetClassInfoEx( HINSTANCE instance, UNICODE_STRING *name, WNDC
+  */
+ ULONG WINAPI NtUserGetAtomName( ATOM atom, UNICODE_STRING *name )
+ {
+-    WCHAR buffer[MAX_ATOM_LEN];
++    WCHAR buffer[MAX_ATOM_LEN + 1];
+     UINT size = 0;
+ 
+     if (atom < MAXINTATOM)
+@@ -903,6 +986,8 @@ INT WINAPI NtUserGetClassName( HWND hwnd, BOOL real, UNICODE_STRING *name )
+     WCHAR buffer[MAX_ATOM_LEN];
+     NTSTATUS status;
+     UINT len = 0;
++    ATOM atom;
++    WORD fnid;
+     int ret;
+ 
+     TRACE( "%p %x %p\n", hwnd, real, name );
+@@ -913,6 +998,13 @@ INT WINAPI NtUserGetClassName( HWND hwnd, BOOL real, UNICODE_STRING *name )
+         return 0;
+     }
+ 
++    if (real && (fnid = get_window_fnid( hwnd )) && (fnid & 0x7fff) < ARRAY_SIZE(builtin_classes))
++    {
++        get_desktop_window(); /* create the desktop window to trigger builtin class registration */
++        atom = builtin_classes[fnid & 0x7fff].atom;
++        return NtUserGetAtomName( atom, name );
++    }
++
+     while ((status = get_shared_window_class( hwnd, &lock, &class_shm )) == STATUS_PENDING)
+     {
+         len = class_shm->name_len - class_shm->name_offset * sizeof(WCHAR);
+@@ -926,7 +1018,7 @@ INT WINAPI NtUserGetClassName( HWND hwnd, BOOL real, UNICODE_STRING *name )
+ }
+ 
+ /* Set class info with the wine server. */
+-static BOOL set_server_info( HWND hwnd, INT offset, LONG_PTR newval, UINT size, ULONG_PTR *oldval )
++static BOOL server_set_class_info( HWND hwnd, INT offset, LONG_PTR newval, UINT size, ULONG_PTR *oldval, BOOL ansi )
+ {
+     BOOL ret;
+ 
+@@ -936,6 +1028,7 @@ static BOOL set_server_info( HWND hwnd, INT offset, LONG_PTR newval, UINT size,
+         req->offset = offset;
+         req->size = size;
+         req->new_info = newval;
++        req->ansi = ansi;
+         ret = !wine_server_call_err( req );
+         *oldval = reply->old_info;
+     }
+@@ -946,110 +1039,53 @@ static BOOL set_server_info( HWND hwnd, INT offset, LONG_PTR newval, UINT size,
+ static ULONG_PTR set_class_long_size( HWND hwnd, INT offset, LONG_PTR newval, UINT size, BOOL ansi )
+ {
+     ULONG_PTR retval = 0;
+-    HICON small_icon = 0;
+     CLASS *class;
+ 
+     if (!(class = get_class_ptr( hwnd, TRUE ))) return 0;
+ 
+     switch(offset)
+     {
+-    case GCLP_MENUNAME:
+-        {
+-            struct client_menu_name *menu_name = (void *)newval;
+-            struct client_menu_name prev = class->menu_name;
+-            class->menu_name = *menu_name;
+-            *menu_name = prev;
+-            retval = 0;  /* Old value is now meaningless anyway */
+-            break;
+-        }
+-    case GCLP_WNDPROC:
+-        retval = (ULONG_PTR)get_winproc( class->winproc, ansi );
+-        class->winproc = alloc_winproc( (WNDPROC)newval, ansi );
+-        break;
++    case GCL_CBWNDEXTRA:
++    case GCL_STYLE:
+     case GCLP_HBRBACKGROUND:
+-        retval = (ULONG_PTR)class->hbrBackground;
+-        class->hbrBackground = (HBRUSH)newval;
+-        break;
+     case GCLP_HCURSOR:
+-        retval = (ULONG_PTR)class->hCursor;
+-        class->hCursor = (HCURSOR)newval;
+-        break;
+     case GCLP_HICON:
+-        retval = (ULONG_PTR)class->hIcon;
+-        if (retval == newval) break;
+-        if (newval && !class->hIconSm)
+-        {
+-            release_class_ptr( class );
+-
+-            small_icon = CopyImage( (HICON)newval, IMAGE_ICON,
+-                                    get_system_metrics( SM_CXSMICON ),
+-                                    get_system_metrics( SM_CYSMICON ),
+-                                    LR_COPYFROMRESOURCE );
+-
+-            if (!(class = get_class_ptr( hwnd, TRUE )))
+-            {
+-                NtUserDestroyCursor( small_icon, 0 );
+-                return 0;
+-            }
+-            if (retval != HandleToUlong( class->hIcon ) || class->hIconSm)
+-            {
+-                /* someone beat us, restart */
+-                release_class_ptr( class );
+-                NtUserDestroyCursor( small_icon, 0 );
+-                return set_class_long_size( hwnd, offset, newval, size, ansi );
+-            }
+-        }
+-        if (class->hIconSmIntern) NtUserDestroyCursor( class->hIconSmIntern, 0 );
+-        class->hIcon = (HICON)newval;
+-        class->hIconSmIntern = small_icon;
+-        break;
+     case GCLP_HICONSM:
+-        retval = (ULONG_PTR)class->hIconSm;
+-        if (retval == newval) break;
+-        if (retval && !newval && class->hIcon)
+-        {
+-            HICON icon = class->hIcon;
+-            release_class_ptr( class );
+-
+-            small_icon = CopyImage( icon, IMAGE_ICON,
+-                                    get_system_metrics( SM_CXSMICON ),
+-                                    get_system_metrics( SM_CYSMICON ),
+-                                    LR_COPYFROMRESOURCE );
+-
+-            if (!(class = get_class_ptr( hwnd, TRUE )))
+-            {
+-                NtUserDestroyCursor( small_icon, 0 );
+-                return 0;
+-            }
+-            if (class->hIcon != icon || !class->hIconSm)
+-            {
+-                /* someone beat us, restart */
+-                release_class_ptr( class );
+-                NtUserDestroyCursor( small_icon, 0 );
+-                return set_class_long_size( hwnd, offset, newval, size, ansi );
+-            }
+-        }
+-        if (class->hIconSmIntern) NtUserDestroyCursor( class->hIconSmIntern, 0 );
+-        class->hIconSm = (HICON)newval;
+-        class->hIconSmIntern = small_icon;
+-        break;
+-    case GCL_STYLE:
+-        if (!set_server_info( hwnd, offset, newval, size, &retval )) break;
+-        break;
+-    case GCL_CBWNDEXTRA:
+-        if (!set_server_info( hwnd, offset, newval, size, &retval )) break;
+-        break;
+     case GCLP_HMODULE:
+-        if (!set_server_info( hwnd, offset, newval, size, &retval )) break;
++    case GCLP_MENUNAME:
++        server_set_class_info( hwnd, offset, newval, size, &retval, ansi );
++        break;
++    case GCLP_WNDPROC:
++        newval = (ULONG_PTR)alloc_winproc( (WNDPROC)newval, ansi );
++        if (!server_set_class_info( hwnd, offset, newval, size, &retval, ansi )) break;
++        retval = (ULONG_PTR)get_winproc( (WNDPROC)retval, ansi );
+         break;
+     case GCL_CBCLSEXTRA:  /* cannot change this one */
+         RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
+         break;
+     default:
+-        if (offset >= 0) set_server_info( hwnd, offset, newval, size, &retval );
++        if (offset >= 0) server_set_class_info( hwnd, offset, newval, size, &retval, ansi );
+         else RtlSetLastWin32Error( ERROR_INVALID_INDEX );
+         break;
+     }
++
++    if (offset == GCLP_HICON || offset == GCLP_HICONSM)
++    {
++        struct object_lock lock = OBJECT_LOCK_INIT;
++        HICON icon = 0, icon_small = 0;
++        const class_shm_t *class_shm;
++        NTSTATUS status;
++
++        while ((status = get_shared_class( class, &lock, &class_shm )) == STATUS_PENDING)
++        {
++            icon_small = wine_server_get_ptr( class_shm->info.icon_small );
++            icon = wine_server_get_ptr( class_shm->info.icon );
++        }
++
++        NtUserDestroyCursor( class->icon_internal, 0 );
++        class->icon_internal = icon_small ? 0 : create_small_icon( icon );
++    }
++
+     release_class_ptr( class );
+     return retval;
+ }
+@@ -1078,25 +1114,32 @@ WORD WINAPI NtUserSetClassWord( HWND hwnd, INT offset, WORD newval )
+     return set_class_long_size( hwnd, offset, newval, sizeof(WORD), TRUE );
+ }
+ 
+-static ULONG_PTR get_class_long_shm( HWND hwnd, INT offset, UINT size, BOOL ansi )
++static ULONG_PTR get_class_long_size( HWND hwnd, INT offset, UINT size, BOOL ansi )
+ {
+     struct object_lock lock = OBJECT_LOCK_INIT;
+     const class_shm_t *class_shm;
+     ULONG_PTR ret = 0;
+     BOOL valid = TRUE;
+     NTSTATUS status;
++    CLASS *class;
+ 
+     while ((status = get_shared_window_class( hwnd, &lock, &class_shm )) == STATUS_PENDING)
+     {
+         switch (offset)
+         {
+-        case GCW_ATOM:           ret = class_shm->atom; break;
+-        case GCL_STYLE:          ret = class_shm->style; break;
+-        case GCL_CBCLSEXTRA:     ret = class_shm->cls_extra; break;
+-        case GCL_CBWNDEXTRA:     ret = class_shm->win_extra; break;
+-        case GCLP_HMODULE:       ret = class_shm->instance; break;
++        case GCW_ATOM:           ret = class_shm->info.atom; break;
++        case GCL_STYLE:          ret = class_shm->info.style; break;
++        case GCLP_WNDPROC:       ret = class_shm->info.wndproc; break;
++        case GCL_CBCLSEXTRA:     ret = class_shm->info.cls_extra; break;
++        case GCL_CBWNDEXTRA:     ret = class_shm->info.win_extra; break;
++        case GCLP_HMODULE:       ret = class_shm->info.instance; break;
++        case GCLP_HICON:         ret = class_shm->info.icon; break;
++        case GCLP_HICONSM:       ret = class_shm->info.icon_small; break;
++        case GCLP_HCURSOR:       ret = class_shm->info.cursor; break;
++        case GCLP_HBRBACKGROUND: ret = class_shm->info.background; break;
++        case GCLP_MENUNAME:      ret = (ULONG_PTR)wine_server_get_ptr( class_shm->info.menu_name ); break;
+         default:
+-            valid = offset >= 0 && offset <= (INT)(class_shm->cls_extra - size);
++            valid = offset >= 0 && offset <= (INT)(class_shm->info.cls_extra - size);
+             if (valid) memcpy( &ret, (char *)class_shm->extra + offset, size );
+             break;
+         }
+@@ -1113,84 +1156,13 @@ static ULONG_PTR get_class_long_shm( HWND hwnd, INT offset, UINT size, BOOL ansi
+         return 0;
+     }
+ 
+-    return ret;
+-}
+-
+-static ULONG_PTR get_class_long_size( HWND hwnd, INT offset, UINT size, BOOL ansi )
+-{
+-    CLASS *class;
+-    ULONG_PTR retvalue = 0;
+-
+-    switch (offset)
++    if (offset == GCLP_WNDPROC) return (ULONG_PTR)get_winproc( (WNDPROC)ret, ansi );
++    if (offset == GCLP_HICONSM && !ret && (class = get_class_ptr( hwnd, FALSE )))
+     {
+-    case GCLP_HICONSM:
+-    case GCLP_WNDPROC:
+-    case GCLP_HICON:
+-    case GCLP_HCURSOR:
+-    case GCLP_HBRBACKGROUND:
+-    case GCLP_MENUNAME:
+-        break;
+-    default:
+-        return get_class_long_shm( hwnd, offset, size, ansi );
+-    }
+-
+-    if (!(class = get_class_ptr( hwnd, FALSE ))) return 0;
+-
+-    if (class == OBJ_OTHER_PROCESS)
+-    {
+-        SERVER_START_REQ( get_class_info )
+-        {
+-            req->window = wine_server_user_handle( hwnd );
+-            req->offset = offset;
+-            req->size = size;
+-            if (!wine_server_call_err( req ))
+-            {
+-                switch (offset)
+-                {
+-                case GCLP_HBRBACKGROUND:
+-                case GCLP_HCURSOR:
+-                case GCLP_HICON:
+-                case GCLP_HICONSM:
+-                case GCLP_WNDPROC:
+-                case GCLP_MENUNAME:
+-                    FIXME( "offset %d not supported on other process window %p\n", offset, hwnd );
+-                    break;
+-                default:
+-                    retvalue = reply->info;
+-                    break;
+-                }
+-            }
+-        }
+-        SERVER_END_REQ;
+-        return retvalue;
+-    }
+-
+-    switch(offset)
+-    {
+-    case GCLP_HBRBACKGROUND:
+-        retvalue = (ULONG_PTR)class->hbrBackground;
+-        break;
+-    case GCLP_HCURSOR:
+-        retvalue = (ULONG_PTR)class->hCursor;
+-        break;
+-    case GCLP_HICON:
+-        retvalue = (ULONG_PTR)class->hIcon;
+-        break;
+-    case GCLP_HICONSM:
+-        retvalue = (ULONG_PTR)(class->hIconSm ? class->hIconSm : class->hIconSmIntern);
+-        break;
+-    case GCLP_WNDPROC:
+-        retvalue = (ULONG_PTR)get_winproc( class->winproc, ansi );
+-        break;
+-    case GCLP_MENUNAME:
+-        retvalue = ansi ? (ULONG_PTR)class->menu_name.nameA : (ULONG_PTR)class->menu_name.nameW;
+-        break;
+-    default:
+-        RtlSetLastWin32Error( ERROR_INVALID_INDEX );
+-        break;
++        ret = (UINT_PTR)class->icon_internal;
++        release_class_ptr( class );
+     }
+-    release_class_ptr( class );
+-    return retvalue;
++    return ret;
+ }
+ 
+ DWORD get_class_long( HWND hwnd, INT offset, BOOL ansi )
+@@ -1208,109 +1180,11 @@ WORD get_class_word( HWND hwnd, INT offset )
+     return get_class_long_size( hwnd, offset, sizeof(WORD), TRUE );
+ }
+ 
+-static const struct builtin_class_descr desktop_builtin_class =
+-{
+-    .name = "#32769", /* DESKTOP_CLASS_ATOM */
+-    .style = CS_DBLCLKS,
+-    .proc = NTUSER_WNDPROC_DESKTOP,
+-    .brush = (HBRUSH)(COLOR_BACKGROUND + 1),
+-};
+-
+-static const struct builtin_class_descr message_builtin_class =
+-{
+-    .name = "Message",
+-    .proc = NTUSER_WNDPROC_MESSAGE,
+-};
+-
+-static const struct builtin_class_descr builtin_classes[] =
++ATOM get_builtin_class_atom( enum ntuser_client_procs proc )
+ {
+-    /* button */
+-    {
+-        .name = "Button",
+-        .style = CS_DBLCLKS | CS_VREDRAW | CS_HREDRAW | CS_PARENTDC,
+-        .proc = NTUSER_WNDPROC_BUTTON,
+-        .extra = sizeof(UINT) + 2 * sizeof(HANDLE),
+-        .cursor = IDC_ARROW,
+-    },
+-    /* combo  */
+-    {
+-        .name = "ComboBox",
+-        .style = CS_PARENTDC | CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW,
+-        .proc = NTUSER_WNDPROC_COMBO,
+-        .extra = sizeof(void *),
+-        .cursor = IDC_ARROW,
+-    },
+-    /* combolbox */
+-    {
+-        .name = "ComboLBox",
+-        .style = CS_DBLCLKS | CS_SAVEBITS,
+-        .proc = NTUSER_WNDPROC_COMBOLBOX,
+-        .extra = sizeof(void *),
+-        .cursor = IDC_ARROW,
+-    },
+-    /* dialog */
+-    {
+-        .name = "#32770", /* DIALOG_CLASS_ATOM */
+-        .style = CS_SAVEBITS | CS_DBLCLKS,
+-        .proc = NTUSER_WNDPROC_DIALOG,
+-        .extra = DLGWINDOWEXTRA,
+-        .cursor = IDC_ARROW,
+-    },
+-    /* icon title */
+-    {
+-        .name = "#32772", /* ICONTITLE_CLASS_ATOM */
+-        .proc = NTUSER_WNDPROC_ICONTITLE,
+-        .cursor = IDC_ARROW,
+-    },
+-    /* IME */
+-    {
+-        .name = "IME",
+-        .proc = NTUSER_WNDPROC_IME,
+-        .extra = 2 * sizeof(LONG_PTR),
+-        .cursor = IDC_ARROW,
+-    },
+-    /* listbox  */
+-    {
+-        .name = "ListBox",
+-        .style = CS_DBLCLKS,
+-        .proc = NTUSER_WNDPROC_LISTBOX,
+-        .extra = sizeof(void *),
+-        .cursor = IDC_ARROW,
+-    },
+-    /* menu */
+-    {
+-        .name = "#32768", /* POPUPMENU_CLASS_ATOM */
+-        .style = CS_DROPSHADOW | CS_SAVEBITS | CS_DBLCLKS,
+-        .proc = NTUSER_WNDPROC_MENU,
+-        .extra = sizeof(HMENU),
+-        .cursor = IDC_ARROW,
+-        .brush = (HBRUSH)(COLOR_MENU + 1),
+-    },
+-    /* MDIClient */
+-    {
+-        .name = "MDIClient",
+-        .proc = NTUSER_WNDPROC_MDICLIENT,
+-        .extra = 2 * sizeof(void *),
+-        .cursor = IDC_ARROW,
+-        .brush = (HBRUSH)(COLOR_APPWORKSPACE + 1),
+-    },
+-    /* scrollbar */
+-    {
+-        .name = "ScrollBar",
+-        .style = CS_DBLCLKS | CS_VREDRAW | CS_HREDRAW | CS_PARENTDC,
+-        .proc = NTUSER_WNDPROC_SCROLLBAR,
+-        .extra = sizeof(struct scroll_bar_win_data),
+-        .cursor = IDC_ARROW,
+-    },
+-    /* static */
+-    {
+-        .name = "Static",
+-        .style = CS_DBLCLKS | CS_PARENTDC,
+-        .proc = NTUSER_WNDPROC_STATIC,
+-        .extra = 2 * sizeof(HANDLE),
+-        .cursor = IDC_ARROW,
+-    },
+-};
++    get_desktop_window(); /* create the desktop window to trigger builtin class registration */
++    return builtin_classes[proc].atom;
++}
+ 
+ /***********************************************************************
+  *           register_builtin
+@@ -1318,20 +1192,22 @@ static const struct builtin_class_descr builtin_classes[] =
+  * Register a builtin control class.
+  * This allows having both ANSI and Unicode winprocs for the same class.
+  */
+-static void register_builtin( const struct builtin_class_descr *descr )
++static void register_builtin( enum ntuser_client_procs proc )
+ {
++    struct builtin_class_descr *descr = builtin_classes + proc;
+     UNICODE_STRING name, version = { .Length = 0 };
+-    struct client_menu_name menu_name = { 0 };
+     WCHAR nameW[64];
+-    WNDCLASSEXW class = {
++    WNDCLASSEXW class =
++    {
+         .cbSize = sizeof(class),
+         .hInstance = user32_module,
+         .style = descr->style,
+         .cbWndExtra = descr->extra,
+         .hbrBackground = descr->brush,
+-        .lpfnWndProc = BUILTIN_WINPROC( descr->proc ),
++        .lpfnWndProc = MAKE_WNDPROC( proc ),
+     };
+ 
++    if (descr->atom) return; /* already registered */
+     if (descr->cursor)
+         class.hCursor = LoadImageW( 0, (const WCHAR *)descr->cursor, IMAGE_CURSOR,
+                                     0, 0, LR_SHARED | LR_DEFAULTSIZE );
+@@ -1339,28 +1215,21 @@ static void register_builtin( const struct builtin_class_descr *descr )
+     asciiz_to_unicode( nameW, descr->name );
+     RtlInitUnicodeString( &name, nameW );
+ 
+-    if (!NtUserRegisterClassExWOW( &class, &name, &version, &menu_name, 1, 0, NULL ) && class.hCursor)
+-        NtUserDestroyCursor( class.hCursor, 0 );
++    if ((descr->atom = NtUserRegisterClassExWOW( &class, &name, &version, NULL, MAKE_FNID(proc), 0, NULL ))) return;
++    if (class.hCursor) NtUserDestroyCursor( class.hCursor, 0 );
+ }
+ 
+ static void register_builtins(void)
+ {
++    struct builtin_class_descr *edit_class = builtin_classes + NTUSER_WNDPROC_EDIT;
+     ULONG ret_len, i;
+     void *ret_ptr;
+ 
+     /* 64-bit Windows use sizeof(UINT64) for all processes, while 32-bit Windows use 6 for extra
+      * bytes size. Civilization II depends on the size being 6, so we use that even in wow64. */
+-    const struct builtin_class_descr edit_class =
+-    {
+-        .name = "Edit",
+-        .style = CS_DBLCLKS | CS_PARENTDC,
+-        .proc = NTUSER_WNDPROC_EDIT,
+-        .extra = sizeof(void *) == 4 || NtCurrentTeb()->WowTebOffset ? 6 : sizeof(UINT64),
+-        .cursor = IDC_IBEAM,
+-    };
++    if (sizeof(void *) == 4 || NtCurrentTeb()->WowTebOffset) edit_class->extra = 6;
+ 
+-    for (i = 0; i < ARRAYSIZE(builtin_classes); i++) register_builtin( &builtin_classes[i] );
+-    register_builtin( &edit_class );
++    for (i = 0; i < ARRAY_SIZE(builtin_classes); i++) if (builtin_classes[i].name) register_builtin( i );
+     KeUserModeCallback( NtUserInitBuiltinClasses, NULL, 0, &ret_ptr, &ret_len );
+ }
+ 
+@@ -1415,6 +1284,6 @@ void register_builtin_classes(void)
+  */
+ void register_desktop_class(void)
+ {
+-    register_builtin( &desktop_builtin_class );
+-    register_builtin( &message_builtin_class );
++    register_builtin( NTUSER_WNDPROC_DESKTOP );
++    register_builtin( NTUSER_WNDPROC_MESSAGE );
+ }
+diff --git a/build/win32u-unix/defwnd_ios.c b/build/win32u-unix/defwnd_ios.c
+index ad83ee2..875ec32 100644
+--- a/build/win32u-unix/defwnd_ios.c
++++ b/build/win32u-unix/defwnd_ios.c
+@@ -37,6 +37,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(win);
+ #define KEYDATA_ALT             0x2000
+ #define KEYDATA_PREVSTATE       0x4000
+ 
++static const struct ratio no_dpi;
+ static short f10_key = 0;
+ static short menu_sys_key = 0;
+ 
+@@ -695,7 +696,7 @@ static BOOL on_bottom_border( int hit )
+  */
+ static void sys_command_size_move( HWND hwnd, WPARAM wparam )
+ {
+-    DWORD msg_pos = NtUserGetThreadInfo()->message_pos;
++    DWORD msg_pos = NtUserGetMessagePos();
+     BOOL thickframe, drag_full_windows = TRUE, moved = FALSE;
+     RECT sizing_rect, mouse_rect, orig_rect;
+     UINT hittest = wparam & 0x0f;
+@@ -703,8 +704,8 @@ static void sys_command_size_move( HWND hwnd, WPARAM wparam )
+     UINT style = get_window_long( hwnd, GWL_STYLE );
+     POINT capture_point, pt;
+     MINMAXINFO minmax;
++    struct ratio dpi;
+     HWND parent;
+-    UINT dpi;
+     HDC hdc;
+     MSG msg;
+ 
+@@ -830,7 +831,7 @@ static void sys_command_size_move( HWND hwnd, WPARAM wparam )
+              * WM_LBUTTONUP. Detect that and terminate the loop as if we'd gotten it. */
+             if (!(NtUserGetKeyState( VK_LBUTTON ) & 0x8000))
+             {
+-                DWORD last_pos = NtUserGetThreadInfo()->message_pos;
++                DWORD last_pos = NtUserGetMessagePos();
+                 pt.x = ((int)(short)LOWORD( last_pos ));
+                 pt.y = ((int)(short)HIWORD( last_pos ));
+                 break;
+@@ -991,6 +992,7 @@ static void track_nc_scroll_bar( HWND hwnd, WPARAM wparam, POINT pt )
+ 
+ static LRESULT handle_sys_command( HWND hwnd, WPARAM wparam, LPARAM lparam )
+ {
++    DWORD msgpos;
+     POINT pos;
+     RECT rect;
+ 
+@@ -1001,11 +1003,12 @@ static LRESULT handle_sys_command( HWND hwnd, WPARAM wparam, LPARAM lparam )
+     if (call_hooks( WH_CBT, HCBT_SYSCOMMAND, wparam, lparam, 0 ))
+         return 0;
+ 
+-    pos.x = (short)LOWORD( NtUserGetThreadInfo()->message_pos );
+-    pos.y = (short)HIWORD( NtUserGetThreadInfo()->message_pos );
++    msgpos = NtUserGetMessagePos();
++    pos.x = (short)LOWORD( msgpos );
++    pos.y = (short)HIWORD( msgpos );
+     NtUserLogicalToPerMonitorDPIPhysicalPoint( hwnd, &pos );
+     SetRect( &rect, pos.x, pos.y, pos.x, pos.y );
+-    rect = map_rect_virt_to_raw( rect, 0 );
++    rect = map_rect_virt_to_raw( rect, no_dpi );
+     pos.x = rect.left;
+     pos.y = rect.top;
+ 
+@@ -1507,7 +1510,7 @@ static void draw_close_button( HWND hwnd, HDC hdc, BOOL down, BOOL grayed )
+     {
+         /* Windows does not use SM_CXSMSIZE and SM_CYSMSIZE
+          * it uses 11x11 for  the close button in tool window */
+-        int bmp_height = muldiv( 11, get_dpi_for_window( hwnd ), 96 );
++        int bmp_height = map_user_dpi( 11, get_dpi_for_window( hwnd ) );
+         int bmp_width = bmp_height;
+         int caption_height = get_system_metrics( SM_CYSMCAPTION );
+ 
+@@ -2885,25 +2888,39 @@ LRESULT default_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
+ 
+             if (lparam & PRF_CHILDREN)
+             {
++                HDC hdc = (HDC)wparam;
+                 HWND *list, *child;
++                HRGN clip_rgn;
++                int old_clip;
+                 POINT org;
+                 RECT rect;
+                 UINT dpi;
+ 
+                 if ((list = list_window_children( hwnd )))
+                 {
++                    clip_rgn = NtGdiCreateRectRgn( 0, 0, 0, 0 );
++
+                     for (child = list; *child; child++)
+                     {
+                         if (!(get_window_long( *child, GWL_STYLE ) & WS_VISIBLE))
+                             continue;
+ 
+                         dpi = NtUserGetDpiForWindow( *child );
+-                        NtUserGetClientRect( *child, &rect, dpi );
+-                        NtUserMapWindowPoints( *child, hwnd, (POINT *)&rect, 2, dpi );
+-                        offset_viewport_org( (HDC)wparam, rect.left, rect.top, &org );
++                        NtUserGetWindowRect( *child, &rect, dpi );
++                        NtUserMapWindowPoints( NULL, hwnd, (POINT *)&rect, 2, dpi );
++
++                        old_clip = NtGdiGetRandomRgn( hdc, clip_rgn, NTGDI_RGN_MIRROR_RTL | 1 );
++                        NtGdiIntersectClipRect( hdc, rect.left, rect.top, rect.right, rect.bottom );
++                        offset_viewport_org( hdc, rect.left, rect.top, &org );
+                         send_message( *child, WM_PRINT, wparam, PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN );
+-                        set_viewport_org( (HDC)wparam, org.x, org.y, NULL );
++                        set_viewport_org( hdc, org.x, org.y, NULL );
++                        if (old_clip == 0)
++                            NtGdiExtSelectClipRgn( hdc, NULL, RGN_COPY );
++                        else if (old_clip == 1)
++                            NtGdiExtSelectClipRgn( hdc, clip_rgn, RGN_COPY );
+                     }
++
++                    NtGdiDeleteObjectApp( clip_rgn );
+                     free( list );
+                 }
+             }
+@@ -3068,7 +3085,7 @@ LRESULT desktop_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
+     {
+         static RECT virtual_rect = {INT_MIN,INT_MIN,INT_MAX,INT_MAX};
+ 
+-        RECT new_rect = get_virtual_screen_rect( 0, MDT_DEFAULT ), old_rect = virtual_rect;
++        RECT new_rect = get_virtual_screen_rect( no_dpi, MDT_DEFAULT ), old_rect = virtual_rect;
+         UINT context, flags = 0;
+ 
+         if (EqualRect( &new_rect, &old_rect )) return TRUE;
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index fe85af3..d7dc097 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -36,6 +36,7 @@
+ WINE_DEFAULT_DEBUG_CHANNEL(driver);
+ WINE_DECLARE_DEBUG_CHANNEL(winediag);
+ 
++static const struct ratio no_dpi;
+ static const struct user_driver_funcs lazy_load_driver;
+ static struct user_driver_funcs null_user_driver;
+ static WCHAR driver_load_error[80];
+@@ -82,10 +83,10 @@ void winios_drv_post_mouse(int x, int y, unsigned int flags, unsigned int mouse_
+      * which walks the desktop's children (where the game's window lives).
+      * Passing the desktop handle goes through window_thread_from_point on
+      * the detached desktop window and returns NULL, dropping the message.
+-     * Call win32u's send_hardware_message directly (same library) instead
++     * Call win32u's server_send_hardware_message directly (same library) instead
+      * of the NtUserCallHwndParam inline — we get the raw NTSTATUS and skip
+      * a dispatch layer that can fail for its own reasons. */
+-    NTSTATUS st = send_hardware_message( NULL, 0, &input, 0 );
++    NTSTATUS st = server_send_hardware_message( NULL, 0, &input, 0 );
+     {
+         static unsigned cnt;
+         if (cnt++ < 40)
+@@ -136,7 +137,7 @@ void winios_drv_post_key(unsigned short vk, unsigned int flags)
+     input.ki.time        = 0;
+     input.ki.dwExtraInfo = 0;
+ 
+-    st = send_hardware_message( NULL, 0, &input, 0 );
++    st = server_send_hardware_message( NULL, 0, &input, 0 );
+     {
+         /* ml647: COUNT EVENTS, and never let a cap masquerade as absence. The
+          * old "first 40 lines" cap was exhausted by arrow keys early in the
+@@ -440,9 +441,10 @@ static void winios_surface_destroy( struct window_surface *surface )
+ 
+ static const struct window_surface_funcs winios_surface_funcs =
+ {
+-    winios_surface_set_clip,
+-    winios_surface_flush,
+-    winios_surface_destroy
++    .size = sizeof(struct window_surface),
++    .set_clip = winios_surface_set_clip,
++    .flush = winios_surface_flush,
++    .destroy = winios_surface_destroy,
+ };
+ 
+ static BOOL winios_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_rect,
+@@ -464,7 +466,7 @@ static BOOL winios_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *sur
+     info->bmiHeader.biSizeImage   = surface_rect->right * surface_rect->bottom * 4;
+     info->bmiHeader.biCompression = BI_RGB;
+ 
+-    *window_surface = window_surface_create( sizeof(struct window_surface), &winios_surface_funcs,
++    *window_surface = window_surface_create( &winios_surface_funcs,
+                                              hwnd, surface_rect, info, 0 );
+     if (previous) window_surface_release( previous );
+ 
+@@ -764,14 +766,14 @@ static INT nulldrv_GetDeviceCaps( PHYSDEV dev, INT cap )
+     case DESKTOPHORZRES:
+         if (NtGdiGetDeviceCaps( dev->hdc, TECHNOLOGY ) == DT_RASDISPLAY)
+         {
+-            RECT rect = get_virtual_screen_rect( 0, MDT_DEFAULT );
++            RECT rect = get_virtual_screen_rect( no_dpi, MDT_DEFAULT );
+             return rect.right - rect.left;
+         }
+         return NtGdiGetDeviceCaps( dev->hdc, HORZRES );
+     case DESKTOPVERTRES:
+         if (NtGdiGetDeviceCaps( dev->hdc, TECHNOLOGY ) == DT_RASDISPLAY)
+         {
+-            RECT rect = get_virtual_screen_rect( 0, MDT_DEFAULT );
++            RECT rect = get_virtual_screen_rect( no_dpi, MDT_DEFAULT );
+             return rect.bottom - rect.top;
+         }
+         return NtGdiGetDeviceCaps( dev->hdc, VERTRES );
+@@ -798,10 +800,9 @@ static INT nulldrv_GetDeviceCaps( PHYSDEV dev, INT cap )
+     }
+ }
+ 
+-static BOOL nulldrv_GetDeviceGammaRamp( PHYSDEV dev, void *ramp )
++static UINT nulldrv_GetDeviceGammaRamp( PHYSDEV dev, void *ramp )
+ {
+-    RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
+-    return FALSE;
++    return -1; /* use default implementation */
+ }
+ 
+ static DWORD nulldrv_GetFontData( PHYSDEV dev, DWORD table, DWORD offset, LPVOID buffer, DWORD length )
+@@ -997,10 +998,9 @@ static void nulldrv_SetDeviceClipping( PHYSDEV dev, HRGN rgn )
+ {
+ }
+ 
+-static BOOL nulldrv_SetDeviceGammaRamp( PHYSDEV dev, void *ramp )
++static UINT nulldrv_SetDeviceGammaRamp( PHYSDEV dev, void *ramp )
+ {
+-    RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
+-    return FALSE;
++    return -1; /* use default implementation */
+ }
+ 
+ static COLORREF nulldrv_SetPixel( PHYSDEV dev, INT x, INT y, COLORREF color )
+@@ -1182,9 +1182,9 @@ static void nulldrv_ReleaseKbdTables( const KBDTABLES *tables )
+ {
+ }
+ 
+-static UINT nulldrv_ImeProcessKey( HIMC himc, UINT wparam, UINT lparam, const BYTE *state )
++static UINT nulldrv_ImeToAsciiEx( UINT vkey, UINT vsc, const BYTE *state, HIMC himc )
+ {
+-    return 0;
++    return STATUS_NOT_IMPLEMENTED;
+ }
+ 
+ static void nulldrv_NotifyIMEStatus( HWND hwnd, UINT status )
+@@ -1324,7 +1324,7 @@ static BOOL nodrv_CreateWindow( HWND hwnd )
+     HWND parent = NtUserGetAncestor( hwnd, GA_PARENT );
+ 
+     /* HWND_MESSAGE windows don't need a graphics driver */
+-    if (!parent || parent == UlongToHandle( NtUserGetThreadInfo()->msg_window )) return TRUE;
++    if (!parent || parent == get_user_thread_info()->msg_window) return TRUE;
+     if (warned++) return FALSE;
+ 
+     ERR_(winediag)( "Application tried to create a window, but no driver could be loaded.\n" );
+@@ -1368,7 +1368,7 @@ static BOOL nulldrv_ScrollDC( HDC hdc, INT dx, INT dy, HRGN update )
+                         hdc, rect.left - dx, rect.top - dy, SRCCOPY, 0, 0 );
+ }
+ 
+-static void nulldrv_SetCapture( HWND hwnd, UINT flags )
++static void nulldrv_SetCapture( HWND hwnd, UINT flags, HWND previous )
+ {
+ }
+ 
+@@ -1438,6 +1438,36 @@ static BOOL nulldrv_GetWindowStateUpdates( HWND hwnd, UINT *state_cmd, UINT *swp
+     return FALSE;
+ }
+ 
++static void nulldrv_surface_destroy( struct client_surface *client )
++{
++}
++
++static void nulldrv_surface_detach( struct client_surface *client )
++{
++}
++
++static void nulldrv_surface_update( struct client_surface *client )
++{
++}
++
++static void nulldrv_surface_present( struct client_surface *client, HDC hdc )
++{
++}
++
++static const struct client_surface_funcs nulldrv_surface_funcs =
++{
++    .size = sizeof(struct client_surface),
++    .destroy = nulldrv_surface_destroy,
++    .detach = nulldrv_surface_detach,
++    .update = nulldrv_surface_update,
++    .present = nulldrv_surface_present,
++};
++
++static struct client_surface *nulldrv_CreateClientSurface( HWND hwnd, int pixel_format, BOOL raw )
++{
++    return client_surface_create( &nulldrv_surface_funcs, hwnd, pixel_format, raw );
++}
++
+ static BOOL nulldrv_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *surface_rect, struct window_surface **surface )
+ {
+     return FALSE;
+@@ -1693,9 +1723,9 @@ static void loaderdrv_ReleaseKbdTables( const KBDTABLES *tables )
+     return load_driver()->pReleaseKbdTables( tables );
+ }
+ 
+-static UINT loaderdrv_ImeProcessKey( HIMC himc, UINT wparam, UINT lparam, const BYTE *state )
++static UINT loaderdrv_ImeToAsciiEx( UINT vkey, UINT vsc,const BYTE *state, HIMC himc )
+ {
+-    return load_driver()->pImeProcessKey( himc, wparam, lparam, state );
++    return load_driver()->pImeToAsciiEx( vkey, vsc, state, himc );
+ }
+ 
+ static void loaderdrv_NotifyIMEStatus( HWND hwnd, UINT status )
+@@ -1850,7 +1880,7 @@ static const struct user_driver_funcs lazy_load_driver =
+     loaderdrv_VkKeyScanEx,
+     loaderdrv_KbdLayerDescriptor,
+     loaderdrv_ReleaseKbdTables,
+-    loaderdrv_ImeProcessKey,
++    loaderdrv_ImeToAsciiEx,
+     loaderdrv_NotifyIMEStatus,
+     loaderdrv_SetIMECompositionRect,
+     /* cursor/icon functions */
+@@ -1898,6 +1928,7 @@ static const struct user_driver_funcs lazy_load_driver =
+     nulldrv_WindowPosChanging,
+     nulldrv_GetWindowStyleMasks,
+     nulldrv_GetWindowStateUpdates,
++    nulldrv_CreateClientSurface,
+     nulldrv_CreateWindowSurface,
+     nulldrv_MoveWindowBits,
+     nulldrv_WindowPosChanged,
+@@ -1954,7 +1985,7 @@ void __wine_set_user_driver( const struct user_driver_funcs *funcs, UINT version
+     SET_USER_FUNC(VkKeyScanEx);
+     SET_USER_FUNC(KbdLayerDescriptor);
+     SET_USER_FUNC(ReleaseKbdTables);
+-    SET_USER_FUNC(ImeProcessKey);
++    SET_USER_FUNC(ImeToAsciiEx);
+     SET_USER_FUNC(NotifyIMEStatus);
+     SET_USER_FUNC(SetIMECompositionRect);
+     SET_USER_FUNC(DestroyCursorIcon);
+@@ -1997,6 +2028,7 @@ void __wine_set_user_driver( const struct user_driver_funcs *funcs, UINT version
+     SET_USER_FUNC(WindowPosChanging);
+     SET_USER_FUNC(GetWindowStyleMasks);
+     SET_USER_FUNC(GetWindowStateUpdates);
++    SET_USER_FUNC(CreateClientSurface);
+     SET_USER_FUNC(CreateWindowSurface);
+     SET_USER_FUNC(MoveWindowBits);
+     SET_USER_FUNC(WindowPosChanged);
+@@ -2036,35 +2068,6 @@ INT WINAPI NtGdiExtEscape( HDC hdc, WCHAR *driver, int driver_id, INT escape, IN
+     return ret;
+ }
+ 
+-static void nulldrv_surface_destroy( struct client_surface *client )
+-{
+-}
+-
+-static void nulldrv_surface_detach( struct client_surface *client )
+-{
+-}
+-
+-static void nulldrv_surface_update( struct client_surface *client )
+-{
+-}
+-
+-static void nulldrv_surface_present( struct client_surface *client, HDC hdc )
+-{
+-}
+-
+-static const struct client_surface_funcs nulldrv_surface_funcs =
+-{
+-    .destroy = nulldrv_surface_destroy,
+-    .detach = nulldrv_surface_detach,
+-    .update = nulldrv_surface_update,
+-    .present = nulldrv_surface_present,
+-};
+-
+-struct client_surface *nulldrv_client_surface_create( HWND hwnd )
+-{
+-    return client_surface_create( sizeof(struct client_surface), &nulldrv_surface_funcs, hwnd );
+-}
+-
+ /* ml1920: same-task controller snapshots supplied by the app. */
+ #include "../../app/Madeira/Winios/WiniosGamepad.h"
+ 
+diff --git a/build/win32u-unix/message_ios.c b/build/win32u-unix/message_ios.c
+index c03ae95..c1a8c64 100644
+--- a/build/win32u-unix/message_ios.c
++++ b/build/win32u-unix/message_ios.c
+@@ -68,6 +68,8 @@ static const struct _KUSER_SHARED_DATA *get_user_shared_data(void)
+ static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+ #endif
+ 
++static const struct ratio no_dpi;
++
+ static LONG atomic_load_long( const volatile LONG *ptr )
+ {
+ #if defined(__i386__) || defined(__x86_64__)
+@@ -455,7 +457,7 @@ static BOOL init_win_proc_params( struct win_proc_params *params, HWND hwnd, UIN
+ static BOOL init_window_call_params( struct win_proc_params *params, HWND hwnd, UINT msg, WPARAM wParam,
+                                      LPARAM lParam, BOOL ansi, enum wm_char_mapping mapping )
+ {
+-    BOOL is_dialog;
++    BOOL is_dialog, is_ansi;
+     WND *win;
+ 
+     user_check_not_lock();
+@@ -463,8 +465,8 @@ static BOOL init_window_call_params( struct win_proc_params *params, HWND hwnd,
+     if (!is_current_thread_window( hwnd )) return FALSE;
+     if (!(win = get_win_ptr( hwnd ))) return FALSE;
+     if (win == WND_OTHER_PROCESS || win == WND_DESKTOP) return FALSE;
+-    params->func = win->winproc;
+-    params->ansi_dst = !(win->flags & WIN_ISUNICODE);
++    params->func = get_window_wndproc_handle( hwnd, &is_ansi );
++    params->ansi_dst = is_ansi;
+     is_dialog = win->dlgInfo != NULL;
+     release_win_ptr( win );
+ 
+@@ -496,16 +498,16 @@ static BOOL init_window_call_params( struct win_proc_params *params, HWND hwnd,
+ static LRESULT dispatch_win_proc_params( struct win_proc_params *params, size_t size,
+                                          void **client_ret, size_t *client_ret_size )
+ {
+-    struct ntuser_thread_info *thread_info = NtUserGetThreadInfo();
++    struct user_thread_info *thread_info = get_user_thread_info();
+     LRESULT result = 0;
+     void *ret_ptr;
+     ULONG ret_len;
+     NTSTATUS status;
+ 
+-    if (thread_info->recursion_count > MAX_WINPROC_RECURSION) return 0;
+-    thread_info->recursion_count++;
++    if (thread_info->msg_call_depth > MAX_WINPROC_RECURSION) return 0;
++    thread_info->msg_call_depth++;
+     status = KeUserModeCallback( NtUserCallWinProc, params, size, &ret_ptr, &ret_len );
+-    thread_info->recursion_count--;
++    thread_info->msg_call_depth--;
+ 
+     if (status) return result;
+ 
+@@ -2128,6 +2130,15 @@ static void copy_user_result( void *buffer, size_t size, LRESULT result, UINT me
+     if (copy_size) memcpy( lparam_ptr, buffer, copy_size );
+ }
+ 
++/***********************************************************************
++ *           get_send_message_flags
++ */
++UINT get_send_message_flags(void)
++{
++    struct user_thread_info *thread_info = get_user_thread_info();
++    return thread_info->receive_info ? thread_info->receive_info->flags : ISMEX_NOSEND;
++}
++
+ /***********************************************************************
+  *           reply_message
+  *
+@@ -2144,8 +2155,6 @@ static void reply_message( struct received_message_info *info, LRESULT result, M
+ 
+     memset( &data, 0, sizeof(data) );
+     info->flags |= ISMEX_REPLIED;
+-    if (info == get_user_thread_info()->receive_info)
+-        NtUserGetThreadInfo()->receive_flags = info->flags;
+ 
+     if (info->type == MSG_OTHER_PROCESS && !replied)
+     {
+@@ -2198,7 +2207,6 @@ static BOOL reply_winproc_result( LRESULT result, HWND hwnd, UINT message, WPARA
+     reply_message( info, result, &msg );
+ 
+     thread_info->receive_info = info->prev;
+-    thread_info->client_info.receive_flags = info->prev ? info->prev->flags : ISMEX_NOSEND;
+     return TRUE;
+ }
+ 
+@@ -2262,17 +2270,21 @@ static LRESULT handle_internal_message( HWND hwnd, UINT msg, WPARAM wparam, LPAR
+         RECT window_rect;
+         HWND foreground;
+ 
+-        if (!user_driver->pGetWindowStateUpdates( hwnd, &state_cmd, &swp_flags, &window_rect, &foreground )) return 0;
++        if (!user_driver->pGetWindowStateUpdates( hwnd, &state_cmd, &swp_flags, &window_rect, &foreground )) goto unlock;
+         window_rect = map_rect_raw_to_virt( window_rect, get_thread_dpi() );
+ 
+         if (foreground) set_foreground_window( foreground, FALSE, TRUE );
+-        switch (state_cmd)
++        switch (LOWORD(state_cmd))
+         {
+         case SC_RESTORE:
+-            NtUserSetInternalWindowPos( hwnd, SW_SHOW, &window_rect, NULL );
++            if (HIWORD(state_cmd)) NtUserSetActiveWindow( hwnd );
++
++            /* make the win32 window restore to the current host window config */
++            set_window_normal_placement( hwnd, window_rect );
++
+             /* fallthrough */
+         default:
+-            send_message( hwnd, WM_SYSCOMMAND, state_cmd, 0 );
++            send_message( hwnd, WM_SYSCOMMAND, LOWORD(state_cmd), 0 );
+             break;
+         case 0:
+             if (!swp_flags) break;
+@@ -2281,6 +2293,8 @@ static LRESULT handle_internal_message( HWND hwnd, UINT msg, WPARAM wparam, LPAR
+             break;
+         }
+ 
++    unlock:
++        user_driver->pGetWindowStateUpdates( hwnd, NULL, NULL, NULL, NULL ); /* unlock the host state */
+         return 0;
+     }
+     case WM_WINE_UPDATEWINDOWSTATE:
+@@ -2361,6 +2375,8 @@ static LRESULT call_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
+                                  enum message_type type, BOOL same_thread,
+                                  enum wm_char_mapping mapping, BOOL ansi_dst )
+ {
++    struct user_thread_info *thread_info = get_user_thread_info();
++    INPUT_MESSAGE_SOURCE prev_source;
+     struct win_proc_params p, *params = &p;
+     BOOL ansi = ansi_dst && type == MSG_ASCII;
+     size_t packed_size = 0, offset = sizeof(*params), reply_size;
+@@ -2375,6 +2391,10 @@ static LRESULT call_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
+         return handle_internal_message( hwnd, msg, wparam, lparam );
+ 
+     if (!is_current_thread_window( hwnd )) return 0;
++    if (!thread_info->client_info) return 0;
++
++    prev_source = thread_info->client_info->msg_source;
++    thread_info->client_info->msg_source = msg_source_unavailable;
+ 
+     packed_size = user_message_size( hwnd, msg, wparam, lparam, type == MSG_OTHER_PROCESS, ansi, &reply_size );
+ 
+@@ -2389,13 +2409,13 @@ static LRESULT call_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
+     if (packed_size)
+     {
+         offset = (offset + 15) & ~15;
+-        if (!(params = malloc( offset + packed_size ))) return 0;
++        if (!(params = malloc( offset + packed_size ))) goto done;
+     }
+ 
+     if (!init_window_call_params( params, hwnd, msg, wparam, lparam, ansi_dst, mapping ))
+     {
+         if (params != &p) free( params );
+-        return 0;
++        goto done;
+     }
+ 
+     if (type == MSG_OTHER_PROCESS) params->ansi = FALSE;
+@@ -2417,6 +2437,8 @@ static LRESULT call_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
+     cwpret.hwnd    = hwnd;
+     call_message_hooks( WH_CALLWNDPROCRET, HC_ACTION, same_thread, (LPARAM)&cwpret, sizeof(cwpret),
+                         packed_size, ansi );
++ done:
++    thread_info->client_info->msg_source = prev_source;
+     return result;
+ }
+ 
+@@ -2491,17 +2513,6 @@ static void send_parent_notify( HWND hwnd, WORD event, WORD idChild, POINT pt )
+     }
+ }
+ 
+-/***********************************************************************
+- *          process_pointer_message
+- *
+- * returns TRUE if the contents of 'msg' should be passed to the application
+- */
+-static BOOL process_pointer_message( MSG *msg, UINT hw_id, const struct hardware_msg_data *msg_data )
+-{
+-    msg->pt = point_phys_to_win_dpi( msg->hwnd, msg->pt );
+-    return TRUE;
+-}
+-
+ /***********************************************************************
+  *          process_keyboard_message
+  *
+@@ -2712,7 +2723,21 @@ static BOOL process_mouse_message( MSG *msg, UINT hw_id, ULONG_PTR extra_info, H
+             break;
+         }
+ 
+-        if (message) send_message( msg->hwnd, message, MAKELONG( 1, flags ), MAKELONG( msg->pt.x, msg->pt.y ) );
++        if (message)
++        {
++            MSG pointer_msg =
++            {
++                .message = message,
++                .lParam = MAKELONG( msg->pt.x, msg->pt.y ),
++                .wParam = MAKELONG( 1, flags ),
++                .hwnd = msg->hwnd,
++                .time = msg->time,
++                .pt = msg->pt,
++            };
++
++            update_pointer_from_msg( PT_MOUSE, &pointer_msg );
++            send_message( msg->hwnd, message, pointer_msg.wParam, pointer_msg.lParam );
++        }
+     }
+ 
+     /* FIXME: is this really the right place for this hook? */
+@@ -2885,13 +2910,16 @@ static BOOL process_mouse_message( MSG *msg, UINT hw_id, ULONG_PTR extra_info, H
+ static BOOL process_hardware_message( MSG *msg, UINT hw_id, const struct hardware_msg_data *msg_data,
+                                       HWND hwnd_filter, UINT first, UINT last, BOOL remove )
+ {
+-    struct ntuser_thread_info *thread_info = NtUserGetThreadInfo();
++    struct user_thread_info *thread_info = get_user_thread_info();
++    INPUT_MESSAGE_SOURCE prev_source;
+     RECT rect = {msg->pt.x, msg->pt.y, msg->pt.x, msg->pt.y};
+     UINT context;
+     BOOL ret = FALSE;
+ 
+-    thread_info->msg_source.deviceType = msg_data->source.device;
+-    thread_info->msg_source.originId   = msg_data->source.origin;
++    if (!thread_info->client_info) return FALSE;
++    prev_source = thread_info->client_info->msg_source;
++    thread_info->client_info->msg_source.deviceType = msg_data->source.device;
++    thread_info->client_info->msg_source.originId   = msg_data->source.origin;
+ 
+     /* hardware messages are always in raw physical coords */
+     context = set_thread_dpi_awareness_context( NTUSER_DPI_PER_MONITOR_AWARE );
+@@ -2914,6 +2942,7 @@ static BOOL process_hardware_message( MSG *msg, UINT hw_id, const struct hardwar
+     else
+         ERR( "unknown message type %x\n", msg->message );
+     set_thread_dpi_awareness_context( context );
++    if (!ret) thread_info->client_info->msg_source = prev_source;
+     return ret;
+ }
+ 
+@@ -2965,7 +2994,6 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
+     HWND hwnd = filter->hwnd;
+     UINT first = filter->first, last = filter->last, flags = filter->flags;
+     struct user_thread_info *thread_info = get_user_thread_info();
+-    INPUT_MESSAGE_SOURCE prev_source = thread_info->client_info.msg_source;
+     HANDLE idle_event = thread_info->idle_event;
+     struct received_message_info info;
+     unsigned int hw_id = 0;  /* id of previous hardware message */
+@@ -2997,7 +3025,6 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
+         /* if filter includes QS_RAWINPUT we have to translate hardware messages */
+         if (signal_bits & QS_RAWINPUT) signal_bits |= QS_KEY | QS_MOUSEMOVE | QS_MOUSEBUTTON;
+ 
+-        thread_info->client_info.msg_source = prev_source;
+         wake_mask = filter->mask & (QS_SENDMESSAGE | QS_SMRESULT);
+ 
+         if (check_queue_bits( wake_mask, filter->mask, wake_mask | signal_bits, filter->mask | clear_bits,
+@@ -3131,7 +3158,7 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
+                 RECT rect = {info.msg.pt.x, info.msg.pt.y, info.msg.pt.x, info.msg.pt.y};
+                 MSLLHOOKSTRUCT hook;
+ 
+-                rect = map_rect_raw_to_virt( rect, 0 );
++                rect = map_rect_raw_to_virt( rect, no_dpi );
+                 info.msg.pt.x = rect.left;
+                 info.msg.pt.y = rect.top;
+ 
+@@ -3175,9 +3202,9 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
+                     continue;  /* ignore it */
+                 }
+                 *msg = info.msg;
+-                thread_info->client_info.message_pos   = MAKELONG( info.msg.pt.x, info.msg.pt.y );
+-                thread_info->client_info.message_time  = info.msg.time;
+-                thread_info->client_info.message_extra = msg_data->hardware.info;
++                thread_info->message_pos   = MAKELONG( info.msg.pt.x, info.msg.pt.y );
++                thread_info->message_time  = info.msg.time;
++                thread_info->message_extra = msg_data->hardware.info;
+                 if (buffer != buffer_init) free( buffer );
+                 call_hooks( WH_GETMESSAGE, HC_ACTION, flags & PM_REMOVE, (LPARAM)msg, sizeof(*msg) );
+                 return 1;
+@@ -3242,11 +3269,12 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
+             }
+             *msg = info.msg;
+             msg->pt = point_phys_to_win_dpi( info.msg.hwnd, info.msg.pt );
+-            thread_info->client_info.message_pos   = MAKELONG( msg->pt.x, msg->pt.y );
+-            thread_info->client_info.message_time  = info.msg.time;
+-            thread_info->client_info.message_extra = 0;
+-            thread_info->client_info.msg_source = msg_source_unavailable;
++            thread_info->message_pos   = MAKELONG( msg->pt.x, msg->pt.y );
++            thread_info->message_time  = info.msg.time;
++            thread_info->message_extra = 0;
+             if (buffer != buffer_init) free( buffer );
++            if (!thread_info->client_info) return 1;
++            thread_info->client_info->msg_source = msg_source_unavailable;
+             call_hooks( WH_GETMESSAGE, HC_ACTION, flags & PM_REMOVE, (LPARAM)msg, sizeof(*msg) );
+             return 1;
+         }
+@@ -3254,8 +3282,6 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
+         /* if we get here, we have a sent message; call the window procedure */
+         info.prev = thread_info->receive_info;
+         thread_info->receive_info = &info;
+-        thread_info->client_info.msg_source = msg_source_unavailable;
+-        thread_info->client_info.receive_flags = info.flags;
+         result = call_window_proc( info.msg.hwnd, info.msg.message, info.msg.wParam,
+                                    info.msg.lParam, info.type, FALSE, WMCHAR_MAP_RECVMESSAGE,
+                                    info.type == MSG_ASCII );
+@@ -3555,11 +3581,11 @@ static DWORD wait_objects( DWORD count, const HANDLE *handles, DWORD timeout,
+ static HANDLE normalize_std_handle( HANDLE handle )
+ {
+     if (handle == (HANDLE)STD_INPUT_HANDLE)
+-        return NtCurrentTeb()->Peb->ProcessParameters->hStdInput;
++        return RtlGetCurrentPeb()->ProcessParameters->hStdInput;
+     if (handle == (HANDLE)STD_OUTPUT_HANDLE)
+-        return NtCurrentTeb()->Peb->ProcessParameters->hStdOutput;
++        return RtlGetCurrentPeb()->ProcessParameters->hStdOutput;
+     if (handle == (HANDLE)STD_ERROR_HANDLE)
+-        return NtCurrentTeb()->Peb->ProcessParameters->hStdError;
++        return RtlGetCurrentPeb()->ProcessParameters->hStdError;
+ 
+     return handle;
+ }
+@@ -3997,9 +4023,9 @@ LRESULT send_internal_message_timeout( DWORD dest_pid, DWORD dest_tid,
+ }
+ 
+ /***********************************************************************
+- *		send_hardware_message
++ *		server_send_hardware_message
+  */
+-NTSTATUS send_hardware_message( HWND hwnd, UINT flags, const INPUT *input, LPARAM lparam )
++NTSTATUS server_send_hardware_message( HWND hwnd, UINT flags, const INPUT *input, LPARAM lparam )
+ {
+     struct send_message_info info;
+     int prev_x, prev_y, new_x, new_y;
+@@ -4030,30 +4056,40 @@ NTSTATUS send_hardware_message( HWND hwnd, UINT flags, const INPUT *input, LPARA
+             req->input.mouse.flags = input->mi.dwFlags;
+             req->input.mouse.time  = input->mi.time;
+             req->input.mouse.info  = input->mi.dwExtraInfo;
++            if (lparam)
++            {
++                struct raw_mouse *raw = (struct raw_mouse *)lparam;
++                req->input.mouse.raw_count = raw->count;
++                wine_server_add_data( req, raw->data, raw->count * sizeof(*raw->data) );
++            }
+             break;
+         case INPUT_KEYBOARD:
+-            if (input->ki.dwFlags & KEYEVENTF_SCANCODE)
++            req->input.kbd.vkey  = input->ki.wVk;
++            req->input.kbd.scan  = input->ki.wScan;
++            req->input.kbd.flags = input->ki.dwFlags;
++            req->input.kbd.time  = input->ki.time;
++            req->input.kbd.info  = input->ki.dwExtraInfo;
++
++            /* Handle the scancode resolution before sending data to wineserver, as it doesn't
++             * have access to keyboard layout tables and needs the vkey to start hook chain.
++             */
++            if (req->input.kbd.flags & KEYEVENTF_SCANCODE)
+             {
+-                UINT scan = input->ki.wScan;
++                UINT scan = input->ki.wScan, dummy;
+                 /* TODO: Use the keyboard layout of the target hwnd, once
+                  * NtUserGetKeyboardLayout supports non-current threads. */
+                 HKL layout = NtUserGetKeyboardLayout( 0 );
+-                if (flags & SEND_HWMSG_INJECTED)
+-                {
+-                    scan = scan & 0xff;
+-                    if (input->ki.dwFlags & KEYEVENTF_EXTENDEDKEY) scan |= 0xe000;
+-                }
+-                req->input.kbd.vkey = map_scan_to_kbd_vkey( scan, layout );
+-                req->input.kbd.scan = input->ki.wScan & 0xff;
+-            }
+-            else
+-            {
+-                req->input.kbd.vkey = input->ki.wVk;
+-                req->input.kbd.scan = input->ki.wScan;
++
++                if (flags & SEND_HWMSG_INJECTED) scan = scan & 0xff;
++                if (req->input.kbd.flags & KEYEVENTF_EXTENDEDKEY) scan |= 0xe000;
++
++                req->input.kbd.vkey = map_scan_to_kbd_vkey( scan, layout, (flags & SEND_HWMSG_INJECTED) ? &dummy : &scan );
++                if (scan & ~0xff) req->input.kbd.flags |= KEYEVENTF_EXTENDEDKEY;
++                else req->input.kbd.flags &= ~KEYEVENTF_EXTENDEDKEY;
++
++                req->input.kbd.scan = scan & 0xff;
++                req->input.kbd.flags &= ~KEYEVENTF_SCANCODE;
+             }
+-            req->input.kbd.flags = input->ki.dwFlags & ~KEYEVENTF_SCANCODE;
+-            req->input.kbd.time  = input->ki.time;
+-            req->input.kbd.info  = input->ki.dwExtraInfo;
+             break;
+         case INPUT_HARDWARE:
+             req->input.hw.msg    = input->hi.uMsg;
+@@ -4493,8 +4529,7 @@ static LRESULT call_messageAtoW( winproc_callback_t callback, HWND hwnd, UINT ms
+  */
+ static BOOL process_message( struct send_message_info *info, DWORD_PTR *res_ptr, BOOL ansi )
+ {
+-    struct ntuser_thread_info *thread_info = NtUserGetThreadInfo();
+-    INPUT_MESSAGE_SOURCE prev_source = thread_info->msg_source;
++    struct user_thread_info *thread_info = get_user_thread_info();
+     DWORD dest_pid;
+     BOOL ret;
+     LRESULT result = 0;
+@@ -4506,7 +4541,7 @@ static BOOL process_message( struct send_message_info *info, DWORD_PTR *res_ptr,
+ 
+     if (info->params && info->dest_tid == GetCurrentThreadId() &&
+         !is_hooked( WH_CALLWNDPROC ) && !is_hooked( WH_CALLWNDPROCRET ) &&
+-        thread_info->recursion_count <= MAX_WINPROC_RECURSION)
++        thread_info->msg_call_depth <= MAX_WINPROC_RECURSION)
+     {
+         /* if we're called from client side and need just a simple winproc call,
+          * just fill dispatch params and let user32 do the rest */
+@@ -4514,7 +4549,6 @@ static BOOL process_message( struct send_message_info *info, DWORD_PTR *res_ptr,
+                                         ansi, info->wm_char );
+     }
+ 
+-    thread_info->msg_source = msg_source_unavailable;
+     spy_enter_message( SPY_SENDMESSAGE, info->hwnd, info->msg, info->wparam, info->lparam );
+ 
+     if (info->dest_tid != GetCurrentThreadId() ||
+@@ -4541,7 +4575,6 @@ static BOOL process_message( struct send_message_info *info, DWORD_PTR *res_ptr,
+     }
+ 
+     spy_exit_message( SPY_RESULT_OK, info->hwnd, info->msg, result, info->wparam, info->lparam );
+-    thread_info->msg_source = prev_source;
+     if (ret && res_ptr) *res_ptr = result;
+     return ret;
+ }
+@@ -4980,6 +5013,6 @@ BOOL WINAPI NtUserGetCurrentInputMessageSource( INPUT_MESSAGE_SOURCE *source )
+         RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
+         return FALSE;
+     }
+-    *source = NtUserGetThreadInfo()->msg_source;
++    *source = get_user_thread_info()->client_info->msg_source;
+     return TRUE;
+ }
+diff --git a/build/win32u-unix/sysparams_ios.c b/build/win32u-unix/sysparams_ios.c
+index b2b6e84..49699a5 100644
+--- a/build/win32u-unix/sysparams_ios.c
++++ b/build/win32u-unix/sysparams_ios.c
+@@ -167,7 +167,7 @@ static INT64 last_query_display_time;
+ static UINT64 monitor_update_serial;
+ static pthread_mutex_t display_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+-static BOOL emulate_modeset;
++BOOL emulate_modeset = FALSE;
+ BOOL decorated_mode = TRUE;
+ UINT64 thunk_lock_callback = 0;
+ 
+@@ -327,7 +327,8 @@ union sysparam_all_entry
+     struct sysparam_pref_entry   pref;
+ };
+ 
+-static UINT system_dpi;
++static const struct ratio no_dpi;
++UINT system_dpi;
+ static RECT work_area;
+ static DWORD process_layout = ~0u;
+ 
+@@ -337,6 +338,34 @@ static pthread_mutex_t display_dc_lock = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_mutex_t user_mutex;
+ static unsigned int user_lock_thread, user_lock_rec;
+ 
++static UINT gcd( UINT a, UINT b )
++{
++    UINT r;
++
++    for (;;)
++    {
++        if (!a) return b;
++        if (!b) return a;
++        r = a % b;
++        a = b;
++        b = r;
++    }
++}
++
++static struct ratio make_ratio( UINT num, UINT den )
++{
++    UINT d = gcd( num, den );
++    struct ratio r = { num / d, den / d };
++    assert( num / d < 65536 );
++    assert( den / d < 65536 );
++    return r;
++}
++
++static struct ratio min_ratio( struct ratio x, struct ratio y )
++{
++    return x.num * y.den <= y.num * x.den ? x : y;
++}
++
+ void user_lock(void)
+ {
+     pthread_mutex_lock( &user_mutex );
+@@ -367,7 +396,7 @@ static HANDLE get_display_device_init_mutex( void )
+     HANDLE mutex;
+ 
+     snprintf( buffer, ARRAY_SIZE(buffer), "\\Sessions\\%u\\BaseNamedObjects\\display_device_init",
+-              NtCurrentTeb()->Peb->SessionId );
++              RtlGetCurrentPeb()->SessionId );
+     name.MaximumLength = asciiz_to_unicode( bufferW, buffer );
+     name.Length = name.MaximumLength - sizeof(WCHAR);
+ 
+@@ -1491,6 +1520,7 @@ const char *gpu_device_name( UINT16 vendor, UINT16 device, const char *default_n
+     case MAKELONG(0x8086, 0x193d): return "Intel(R) Iris(TM) Pro Graphics P580";
+     case MAKELONG(0x8086, 0x87c0): return "Intel(R) UHD Graphics 617";
+     case MAKELONG(0x8086, 0x3ea0): return "Intel(R) UHD Graphics 620";
++    case MAKELONG(0x8086, 0x5917): return "Intel(R) UHD Graphics 620";
+     case MAKELONG(0x8086, 0x591e): return "Intel(R) HD Graphics 615";
+     case MAKELONG(0x8086, 0x5916): return "Intel(R) HD Graphics 620";
+     case MAKELONG(0x8086, 0x5912): return "Intel(R) HD Graphics 630";
+@@ -1678,9 +1708,11 @@ static BOOL write_gpu_to_registry( const struct gpu *gpu, const struct pci_id *p
+         if (pci->vendor && pci->device)
+         {
+             asciiz_to_unicode( bufferW, "DeviceId" );
+-            set_reg_value( hkey, bufferW, REG_DWORD, &pci->device, sizeof(pci->device) );
++            value = pci->device;
++            set_reg_value( hkey, bufferW, REG_DWORD, &value, sizeof(value) );
+             asciiz_to_unicode( bufferW, "VendorId" );
+-            set_reg_value( hkey, bufferW, REG_DWORD, &pci->vendor, sizeof(pci->vendor) );
++            value = pci->vendor;
++            set_reg_value( hkey, bufferW, REG_DWORD, &value, sizeof(value) );
+         }
+         NtClose( hkey );
+     }
+@@ -2315,12 +2347,9 @@ static BOOL is_monitor_primary( struct monitor *monitor )
+ }
+ 
+ /* display_lock must be held */
+-static void monitor_virt_to_raw_ratio( struct monitor *monitor, UINT *num, UINT *den )
++static void source_virt_to_raw_ratio( struct source *source, UINT *num, UINT *den )
+ {
+-    struct source *source = monitor->source;
+-
+     *num = *den = 1;
+-    if (!source) return;
+ 
+     if (source->physical.dmPelsWidth * source->current.dmPelsHeight <=
+         source->physical.dmPelsHeight * source->current.dmPelsWidth)
+@@ -2336,48 +2365,52 @@ static void monitor_virt_to_raw_ratio( struct monitor *monitor, UINT *num, UINT
+ }
+ 
+ /* display_lock must be held */
+-static UINT monitor_get_dpi( struct monitor *monitor, MONITOR_DPI_TYPE type, UINT *dpi_x, UINT *dpi_y )
++static struct ratio monitor_get_dpi( struct monitor *monitor, MONITOR_DPI_TYPE type, struct ratio *dpi_x, struct ratio *dpi_y )
+ {
++    struct ratio scale_x = {1, 1}, scale_y = {1, 1};
+     struct source *source = monitor->source;
+-    float scale_x = 1.0, scale_y = 1.0;
+     UINT dpi;
+ 
+     if (!source || !(dpi = source->dpi)) dpi = system_dpi;
+-    if (source && type != MDT_EFFECTIVE_DPI)
++    if (source && type != MDT_EFFECTIVE_DPI && (source->state_flags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP))
+     {
+-        scale_x = source->physical.dmPelsWidth / (float)source->current.dmPelsWidth;
+-        scale_y = source->physical.dmPelsHeight / (float)source->current.dmPelsHeight;
++        scale_x.num = source->physical.dmPelsWidth;
++        scale_x.den = source->current.dmPelsWidth;
++        scale_y.num = source->physical.dmPelsHeight;
++        scale_y.den = source->current.dmPelsHeight;
+     }
+ 
+-    *dpi_x = round( dpi * scale_x );
+-    *dpi_y = round( dpi * scale_y );
+-    return min( *dpi_x, *dpi_y );
++    *dpi_x = make_ratio( dpi * scale_x.num, scale_x.den );
++    *dpi_y = make_ratio( dpi * scale_y.num, scale_y.den );
++    return min_ratio( *dpi_x, *dpi_y );
+ }
+ 
+ /* display_lock must be held */
+-static RECT map_monitor_rect( struct monitor *monitor, RECT rect, UINT dpi_from, MONITOR_DPI_TYPE type_from,
+-                              UINT dpi_to, MONITOR_DPI_TYPE type_to )
++static RECT map_monitor_rect( struct monitor *monitor, RECT rect, struct ratio dpi_from, MONITOR_DPI_TYPE type_from,
++                              struct ratio dpi_to, MONITOR_DPI_TYPE type_to )
+ {
+-    UINT x, y;
++    struct source *source;
++    struct ratio x, y;
+ 
+     assert( type_from != type_to );
+ 
+-    if (monitor->source)
++    if ((source = monitor->source) && (source->state_flags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP))
+     {
+         double points[4] = {rect.left, rect.top, rect.right, rect.bottom}, from[2], to[2];
+         DEVMODEW current_mode = {.dmSize = sizeof(DEVMODEW)}, physical_mode;
+-        UINT num, den, dpi;
++        struct ratio dpi;
++        UINT num, den;
+ 
+-        source_get_current_settings( monitor->source, &current_mode );
+-        physical_mode = monitor->source->physical;
++        source_get_current_settings( source, &current_mode );
++        physical_mode = source->physical;
+ 
+         dpi = monitor_get_dpi( monitor, MDT_DEFAULT, &x, &y );
+-        if (!dpi_from) dpi_from = dpi;
+-        if (!dpi_to) dpi_to = dpi;
++        if (!dpi_from.num) dpi_from = dpi;
++        if (!dpi_to.num) dpi_to = dpi;
+ 
+         if (type_from == MDT_RAW_DPI)
+         {
+-            monitor_virt_to_raw_ratio( monitor, &den, &num );
++            source_virt_to_raw_ratio( source, &den, &num );
+             from[0] = physical_mode.dmPosition.x + physical_mode.dmPelsWidth / 2.0;
+             from[1] = physical_mode.dmPosition.y + physical_mode.dmPelsHeight / 2.0;
+             to[0] = current_mode.dmPosition.x + current_mode.dmPelsWidth / 2.0;
+@@ -2385,7 +2418,7 @@ static RECT map_monitor_rect( struct monitor *monitor, RECT rect, UINT dpi_from,
+         }
+         else
+         {
+-            monitor_virt_to_raw_ratio( monitor, &num, &den );
++            source_virt_to_raw_ratio( source, &num, &den );
+             from[0] = current_mode.dmPosition.x + current_mode.dmPelsWidth / 2.0;
+             from[1] = current_mode.dmPosition.y + current_mode.dmPelsHeight / 2.0;
+             to[0] = physical_mode.dmPosition.x + physical_mode.dmPelsWidth / 2.0;
+@@ -2394,11 +2427,11 @@ static RECT map_monitor_rect( struct monitor *monitor, RECT rect, UINT dpi_from,
+ 
+         for (int i = 0; i < ARRAY_SIZE(points); i++)
+         {
+-            points[i] *= (double)dpi / dpi_from;
++            points[i] *= (double)dpi.num * dpi_from.den / (dpi_from.num * dpi.den);
+             points[i] -= from[i & 1];
+             points[i] *= (double)num / den;
+             points[i] += to[i & 1];
+-            points[i] *= (double)dpi_to / dpi;
++            points[i] *= (double)dpi_to.num * dpi.den / (dpi.num * dpi_to.den);
+             points[i] = roundf( points[i] );
+             points[i] = min( INT_MAX, max( INT_MIN, (INT64)points[i] ));
+         }
+@@ -2407,18 +2440,18 @@ static RECT map_monitor_rect( struct monitor *monitor, RECT rect, UINT dpi_from,
+         return rect;
+     }
+ 
+-    if (!dpi_from) dpi_from = monitor_get_dpi( monitor, type_from, &x, &y );
+-    if (!dpi_to) dpi_to = monitor_get_dpi( monitor, type_to, &x, &y );
++    if (!dpi_from.num) dpi_from = monitor_get_dpi( monitor, type_from, &x, &y );
++    if (!dpi_to.num) dpi_to = monitor_get_dpi( monitor, type_to, &x, &y );
+     return map_dpi_rect( rect, dpi_from, dpi_to );
+ }
+ 
+ /* display_lock must be held */
+-static RECT monitor_get_rect( struct monitor *monitor, UINT dpi, MONITOR_DPI_TYPE type )
++static RECT monitor_get_rect( struct monitor *monitor, struct ratio dpi, MONITOR_DPI_TYPE type )
+ {
+     DEVMODEW current_mode = {.dmSize = sizeof(DEVMODEW)};
+     RECT rect = {0, 0, 1024, 768};
++    struct ratio dpi_from, x, y;
+     struct source *source;
+-    UINT dpi_from, x, y;
+     DEVMODEW *mode;
+ 
+ #ifdef WINE_IOS
+@@ -2447,10 +2480,10 @@ static RECT monitor_get_rect( struct monitor *monitor, UINT dpi, MONITOR_DPI_TYP
+ }
+ 
+ /* display_lock must be held */
+-static void monitor_get_info( struct monitor *monitor, MONITORINFO *info, UINT dpi )
++static void monitor_get_info( struct monitor *monitor, MONITORINFO *info, struct ratio dpi )
+ {
+     info->rcMonitor = monitor_get_rect( monitor, dpi, MDT_DEFAULT );
+-    info->rcWork = map_monitor_rect( monitor, monitor->rc_work, 0, MDT_RAW_DPI, dpi, MDT_DEFAULT );
++    info->rcWork = map_monitor_rect( monitor, monitor->rc_work, no_dpi, MDT_RAW_DPI, dpi, MDT_DEFAULT );
+     intersect_rect( &info->rcWork, &info->rcWork, &info->rcMonitor );
+     info->dwFlags = is_monitor_primary( monitor ) ? MONITORINFOF_PRIMARY : 0;
+ 
+@@ -2468,19 +2501,24 @@ static void set_winstation_monitors( BOOL increment )
+ {
+     struct monitor_info *infos, *info;
+     struct monitor *monitor;
+-    UINT count, x, y;
++    struct ratio x, y;
++    UINT count;
+ 
+     if (!(count = list_count( &monitors ))) return;
+     if (!(info = infos = calloc( count, sizeof(*infos) ))) return;
+ 
++    TRACE( "increment %u\n", increment );
+     LIST_FOR_EACH_ENTRY( monitor, &monitors, struct monitor, entry )
+     {
+         if (is_monitor_primary( monitor )) info->flags |= MONITOR_FLAG_PRIMARY;
+         if (!is_monitor_active( monitor )) info->flags |= MONITOR_FLAG_INACTIVE;
+         if (monitor->is_clone) info->flags |= MONITOR_FLAG_CLONE;
+         info->dpi = monitor_get_dpi( monitor, MDT_EFFECTIVE_DPI, &x, &y );
+-        info->virt = wine_server_rectangle( monitor_get_rect( monitor, 0, MDT_EFFECTIVE_DPI ) );
+-        info->raw = wine_server_rectangle( monitor_get_rect( monitor, 0, MDT_RAW_DPI ) );
++        info->raw_dpi = monitor_get_dpi( monitor, MDT_RAW_DPI, &x, &y );
++        info->virt = wine_server_rectangle( monitor_get_rect( monitor, no_dpi, MDT_EFFECTIVE_DPI ) );
++        info->raw = wine_server_rectangle( monitor_get_rect( monitor, no_dpi, MDT_RAW_DPI ) );
++        TRACE( "  flags %#x virt %s dpi %s raw %s raw_dpi %s\n", info->flags, wine_dbgstr_rect( (RECT *)&info->virt ),
++               debugstr_ratio( info->dpi ), wine_dbgstr_rect( (RECT *)&info->raw ), debugstr_ratio( info->raw_dpi ) );
+         info++;
+     }
+ 
+@@ -2952,6 +2990,81 @@ BOOL update_display_cache( BOOL force )
+     return TRUE;
+ }
+ 
++#define GAMMA_RAMP_SIZE 256
++
++static WORD gamma_ramp_i[GAMMA_RAMP_SIZE * 3];
++static float gamma_ramp[GAMMA_RAMP_SIZE * 4];
++static LONG gamma_serial;
++
++BOOL use_default_gamma_ramp(void)
++{
++    BOOL ret;
++    pthread_mutex_lock( &display_lock );
++    ret = !gamma_serial;
++    pthread_mutex_unlock( &display_lock );
++    return ret;
++}
++
++BOOL get_float_gamma_ramp( float *data, LONG *serial )
++{
++    BOOL ret;
++
++    pthread_mutex_lock( &display_lock );
++    memcpy( data, gamma_ramp, sizeof(gamma_ramp) );
++    ret = *serial != gamma_serial;
++    *serial = gamma_serial;
++    pthread_mutex_unlock( &display_lock );
++
++    return ret;
++}
++
++BOOL get_global_gamma_ramp( void *data )
++{
++    pthread_mutex_lock( &display_lock );
++    memcpy( data, gamma_ramp_i, sizeof(gamma_ramp_i) );
++    pthread_mutex_unlock( &display_lock );
++    return TRUE;
++}
++
++BOOL set_global_gamma_ramp( void *data )
++{
++    const WORD *ramp = data;
++    int i;
++
++    pthread_mutex_lock( &display_lock );
++
++    if (!memcmp( gamma_ramp_i, ramp, sizeof(gamma_ramp_i) )) goto done;
++    for (i = 0; i < GAMMA_RAMP_SIZE; ++i)
++    {
++        gamma_ramp[i * 4] = ramp[i] / 65535.f;
++        gamma_ramp[i * 4 + 1] = ramp[i + GAMMA_RAMP_SIZE] / 65535.f;
++        gamma_ramp[i * 4 + 2] = ramp[i + 2 * GAMMA_RAMP_SIZE] / 65535.f;
++    }
++    memcpy( gamma_ramp_i, ramp, sizeof(gamma_ramp_i) );
++    if (!++gamma_serial) gamma_serial = 1;
++    TRACE( "new gamma serial: %u\n", gamma_serial );
++
++done:
++    pthread_mutex_unlock( &display_lock );
++    return TRUE;
++}
++
++static void init_default_gamma_ramp(void)
++{
++    unsigned int i;
++
++    for (i = 0; i < GAMMA_RAMP_SIZE; ++i)
++    {
++        int default_value = i * 65535 / (GAMMA_RAMP_SIZE - 1);
++        gamma_ramp_i[i] = default_value;
++        gamma_ramp_i[i + GAMMA_RAMP_SIZE] = default_value;
++        gamma_ramp_i[i + 2 * GAMMA_RAMP_SIZE] = default_value;
++        gamma_ramp[i * 4] = gamma_ramp_i[i] / 65535.f;
++        gamma_ramp[i * 4 + 1] = gamma_ramp_i[i + GAMMA_RAMP_SIZE] / 65535.f;
++        gamma_ramp[i * 4 + 2] = gamma_ramp_i[i + 2 * GAMMA_RAMP_SIZE] / 65535.f;
++    }
++}
++
+ static HDC get_display_dc(void)
+ {
+     pthread_mutex_lock( &display_dc_lock );
+@@ -2977,7 +3090,7 @@ HBITMAP get_display_bitmap(void)
+     RECT virtual_rect;
+     HBITMAP ret;
+ 
+-    virtual_rect = get_virtual_screen_rect( 0, MDT_DEFAULT );
++    virtual_rect = get_virtual_screen_rect( no_dpi, MDT_DEFAULT );
+     pthread_mutex_lock( &display_dc_lock );
+     if (!EqualRect( &old_virtual_rect, &virtual_rect ))
+     {
+@@ -2997,7 +3110,7 @@ static void release_display_dc( HDC hdc )
+ }
+ 
+ /* display_lock must be held, keep in sync with server/window.c */
+-static struct monitor *get_monitor_from_rect( RECT rect, UINT flags, UINT dpi, MONITOR_DPI_TYPE type )
++static struct monitor *get_monitor_from_rect( RECT rect, UINT flags, struct ratio dpi, MONITOR_DPI_TYPE type )
+ {
+     struct monitor *monitor, *primary = NULL, *nearest = NULL, *found = NULL;
+     UINT max_area = 0, min_distance = -1;
+@@ -3072,7 +3185,7 @@ static struct monitor *get_monitor_from_handle( HMONITOR handle )
+ }
+ 
+ /* display_lock must be held */
+-static RECT monitors_get_union_rect( UINT dpi, MONITOR_DPI_TYPE type )
++static RECT monitors_get_union_rect( struct ratio dpi, MONITOR_DPI_TYPE type )
+ {
+     struct monitor *monitor;
+     RECT rect = {0};
+@@ -3089,35 +3202,35 @@ static RECT monitors_get_union_rect( UINT dpi, MONITOR_DPI_TYPE type )
+ }
+ 
+ /* map a monitor rect from MDT_RAW_DPI to MDT_DEFAULT coordinates */
+-RECT map_rect_raw_to_virt( RECT rect, UINT dpi_to )
++RECT map_rect_raw_to_virt( RECT rect, struct ratio dpi_to )
+ {
+     RECT pos = {rect.left, rect.top, rect.left, rect.top};
+     struct monitor *monitor;
+ 
+     if (!lock_display_devices( FALSE )) return rect;
+-    if ((monitor = get_monitor_from_rect( pos, MONITOR_DEFAULTTONEAREST, 0, MDT_RAW_DPI )))
+-        rect = map_monitor_rect( monitor, rect, 0, MDT_RAW_DPI, dpi_to, MDT_DEFAULT );
++    if ((monitor = get_monitor_from_rect( pos, MONITOR_DEFAULTTONEAREST, no_dpi, MDT_RAW_DPI )))
++        rect = map_monitor_rect( monitor, rect, no_dpi, MDT_RAW_DPI, dpi_to, MDT_DEFAULT );
+     unlock_display_devices();
+ 
+     return rect;
+ }
+ 
+ /* map a monitor rect from MDT_DEFAULT to MDT_RAW_DPI coordinates */
+-RECT map_rect_virt_to_raw( RECT rect, UINT dpi_from )
++RECT map_rect_virt_to_raw( RECT rect, struct ratio dpi_from )
+ {
+     RECT pos = {rect.left, rect.top, rect.left, rect.top};
+     struct monitor *monitor;
+ 
+     if (!lock_display_devices( FALSE )) return rect;
+     if ((monitor = get_monitor_from_rect( pos, MONITOR_DEFAULTTONEAREST, dpi_from, MDT_DEFAULT )))
+-        rect = map_monitor_rect( monitor, rect, dpi_from, MDT_DEFAULT, 0, MDT_RAW_DPI );
++        rect = map_monitor_rect( monitor, rect, dpi_from, MDT_DEFAULT, no_dpi, MDT_RAW_DPI );
+     unlock_display_devices();
+ 
+     return rect;
+ }
+ 
+ /* map (absolute) window rects from MDT_DEFAULT to MDT_RAW_DPI coordinates */
+-struct window_rects map_window_rects_virt_to_raw( struct window_rects rects, UINT dpi_from )
++struct window_rects map_window_rects_virt_to_raw( struct window_rects rects, struct ratio dpi_from )
+ {
+     RECT rect, monitor_rect, virt_visible_rect = rects.visible;
+     struct monitor *monitor;
+@@ -3126,9 +3239,9 @@ struct window_rects map_window_rects_virt_to_raw( struct window_rects rects, UIN
+     if (!lock_display_devices( FALSE )) return rects;
+     if ((monitor = get_monitor_from_rect( rects.window, MONITOR_DEFAULTTONEAREST, dpi_from, MDT_DEFAULT )))
+     {
+-        rects.visible = map_monitor_rect( monitor, rects.visible, dpi_from, MDT_DEFAULT, 0, MDT_RAW_DPI );
+-        rects.window = map_monitor_rect( monitor, rects.window, dpi_from, MDT_DEFAULT, 0, MDT_RAW_DPI );
+-        rects.client = map_monitor_rect( monitor, rects.client, dpi_from, MDT_DEFAULT, 0, MDT_RAW_DPI );
++        rects.visible = map_monitor_rect( monitor, rects.visible, dpi_from, MDT_DEFAULT, no_dpi, MDT_RAW_DPI );
++        rects.window = map_monitor_rect( monitor, rects.window, dpi_from, MDT_DEFAULT, no_dpi, MDT_RAW_DPI );
++        rects.client = map_monitor_rect( monitor, rects.client, dpi_from, MDT_DEFAULT, no_dpi, MDT_RAW_DPI );
+     }
+     /* if the visible rect is fullscreen, make it cover the full raw monitor, regardless of aspect ratio */
+     LIST_FOR_EACH_ENTRY(monitor, &monitors, struct monitor, entry)
+@@ -3139,7 +3252,7 @@ struct window_rects map_window_rects_virt_to_raw( struct window_rects rects, UIN
+         is_fullscreen = intersect_rect( &rect, &monitor_rect, &virt_visible_rect ) && EqualRect( &rect, &monitor_rect );
+         if (is_fullscreen)
+         {
+-            rect = monitor_get_rect( monitor, 0, MDT_RAW_DPI );
++            rect = monitor_get_rect( monitor, no_dpi, MDT_RAW_DPI );
+             union_rect( &rects.visible, &rects.visible, &rect );
+         }
+     }
+@@ -3148,54 +3261,18 @@ struct window_rects map_window_rects_virt_to_raw( struct window_rects rects, UIN
+     return rects;
+ }
+ 
+-static UINT get_monitor_dpi( HMONITOR handle, UINT type, UINT *x, UINT *y )
++static struct ratio get_monitor_dpi( HMONITOR handle, UINT type, struct ratio *x, struct ratio *y )
+ {
++    struct ratio dpi = {system_dpi, 1};
+     struct monitor *monitor;
+-    UINT dpi = system_dpi;
+ 
+-    if (!lock_display_devices( FALSE )) return 0;
++    if (!lock_display_devices( FALSE )) return no_dpi;
+     if ((monitor = get_monitor_from_handle( handle ))) dpi = monitor_get_dpi( monitor, type, x, y );
+     unlock_display_devices();
+ 
+     return dpi;
+ }
+ 
+-/**********************************************************************
+- *              get_win_monitor_dpi
+- */
+-UINT get_win_monitor_dpi( HWND hwnd, UINT *raw_dpi )
+-{
+-    UINT dpi = NTUSER_DPI_CONTEXT_GET_DPI( get_window_dpi_awareness_context( hwnd ) );
+-    HWND parent = get_parent( hwnd );
+-    RECT rect = {0};
+-    WND *win;
+-
+-    if (!(win = get_win_ptr( hwnd )))
+-    {
+-        RtlSetLastWin32Error( ERROR_INVALID_WINDOW_HANDLE );
+-        return 0;
+-    }
+-
+-    if (win == WND_DESKTOP) return monitor_dpi_from_rect( rect, get_thread_dpi(), raw_dpi );
+-    if (win == WND_OTHER_PROCESS)
+-    {
+-        if (!get_window_rect( hwnd, &rect, dpi )) return 0;
+-    }
+-    /* avoid recursive calls from get_window_rects for the process windows */
+-    else if ((parent = win->parent) && parent != get_desktop_window())
+-    {
+-        release_win_ptr( win );
+-        return get_win_monitor_dpi( parent, raw_dpi );
+-    }
+-    else
+-    {
+-        rect = is_iconic( hwnd ) ? win->normal_rect : win->rects.window;
+-        release_win_ptr( win );
+-    }
+-
+-    return monitor_dpi_from_rect( rect, dpi, raw_dpi );
+-}
+-
+ /* keep in sync with user32 */
+ static BOOL is_valid_dpi_awareness_context( UINT context, UINT dpi )
+ {
+@@ -3227,10 +3304,11 @@ static BOOL is_valid_dpi_awareness_context( UINT context, UINT dpi )
+ 
+ UINT get_thread_dpi_awareness_context(void)
+ {
+-    struct ntuser_thread_info *info = NtUserGetThreadInfo();
++    struct user_thread_info *info = get_user_thread_info();
+     UINT context;
+ 
+-    if (!(context = info->dpi_context)) context = ReadNoFence( &dpi_context );
++    if (!info->client_info || !(context = info->client_info->dpi_context))
++        context = ReadNoFence( &dpi_context );
+     return context ? context : NTUSER_DPI_UNAWARE;
+ }
+ 
+@@ -3242,14 +3320,18 @@ DWORD get_process_layout(void)
+ /**********************************************************************
+  *              get_thread_dpi
+  */
+-UINT get_thread_dpi(void)
++struct ratio get_thread_dpi(void)
+ {
++    struct ratio dpi = {1, 1};
++
+     switch (NTUSER_DPI_CONTEXT_GET_AWARENESS( get_thread_dpi_awareness_context() ))
+     {
+-    case DPI_AWARENESS_UNAWARE:      return USER_DEFAULT_SCREEN_DPI;
+-    case DPI_AWARENESS_SYSTEM_AWARE: return system_dpi;
+-    default:                         return 0;  /* no scaling */
++    case DPI_AWARENESS_UNAWARE:      dpi.num = USER_DEFAULT_SCREEN_DPI; break;
++    case DPI_AWARENESS_SYSTEM_AWARE: dpi.num = system_dpi; break;
++    default: return no_dpi; /* no scaling */
+     }
++
++    return dpi;
+ }
+ 
+ /* see GetDpiForSystem */
+@@ -3263,7 +3345,7 @@ UINT get_system_dpi(void)
+ /* keep in sync with user32 */
+ UINT set_thread_dpi_awareness_context( UINT context )
+ {
+-    struct ntuser_thread_info *info = NtUserGetThreadInfo();
++    struct user_thread_info *info = get_user_thread_info();
+     UINT prev;
+ 
+     if (!is_valid_dpi_awareness_context( context, system_dpi ))
+@@ -3272,24 +3354,32 @@ UINT set_thread_dpi_awareness_context( UINT context )
+         return 0;
+     }
+ 
+-    if (!(prev = info->dpi_context)) prev = NtUserGetProcessDpiAwarenessContext( GetCurrentProcess() ) | NTUSER_DPI_CONTEXT_FLAG_PROCESS;
+-    if (NTUSER_DPI_CONTEXT_GET_FLAGS( context ) & NTUSER_DPI_CONTEXT_FLAG_PROCESS) info->dpi_context = 0;
+-    else info->dpi_context = context;
++    if (!info->client_info) return 0;
++    if (!(prev = info->client_info->dpi_context))
++        prev = NtUserGetProcessDpiAwarenessContext( GetCurrentProcess() ) | NTUSER_DPI_CONTEXT_FLAG_PROCESS;
++    if (NTUSER_DPI_CONTEXT_GET_FLAGS( context ) & NTUSER_DPI_CONTEXT_FLAG_PROCESS) info->client_info->dpi_context = 0;
++    else info->client_info->dpi_context = context;
+ 
+     return prev;
+ }
+ 
++static BOOL needs_dpi_mapping( struct ratio dpi_from, struct ratio dpi_to )
++{
++    return dpi_from.num && dpi_to.num && memcmp( &dpi_from, &dpi_to, sizeof(struct ratio) );
++}
++
+ /**********************************************************************
+  *              map_dpi_rect
+  */
+-RECT map_dpi_rect( RECT rect, UINT dpi_from, UINT dpi_to )
++RECT map_dpi_rect( RECT rect, struct ratio dpi_from, struct ratio dpi_to )
+ {
+-    if (dpi_from && dpi_to && dpi_from != dpi_to)
++    if (needs_dpi_mapping( dpi_from, dpi_to ))
+     {
+-        rect.left   = muldiv( rect.left, dpi_to, dpi_from );
+-        rect.top    = muldiv( rect.top, dpi_to, dpi_from );
+-        rect.right  = muldiv( rect.right, dpi_to, dpi_from );
+-        rect.bottom = muldiv( rect.bottom, dpi_to, dpi_from );
++        unsigned int num = dpi_to.num * dpi_from.den, den = dpi_from.num * dpi_to.den;
++        rect.left   = muldiv( rect.left, num, den );
++        rect.top    = muldiv( rect.top, num, den );
++        rect.right  = muldiv( rect.right, num, den );
++        rect.bottom = muldiv( rect.bottom, num, den );
+     }
+     return rect;
+ }
+@@ -3297,7 +3387,7 @@ RECT map_dpi_rect( RECT rect, UINT dpi_from, UINT dpi_to )
+ /**********************************************************************
+  *              map_dpi_region
+  */
+-HRGN map_dpi_region( HRGN hrgn, UINT dpi_from, UINT dpi_to )
++HRGN map_dpi_region( HRGN hrgn, struct ratio dpi_from, struct ratio dpi_to )
+ {
+     RGNDATA *data;
+     UINT i, size;
+@@ -3306,7 +3396,7 @@ HRGN map_dpi_region( HRGN hrgn, UINT dpi_from, UINT dpi_to )
+     if (!(data = malloc( size ))) return 0;
+     NtGdiGetRegionData( hrgn, size, data );
+ 
+-    if (dpi_from && dpi_to && dpi_from != dpi_to)
++    if (needs_dpi_mapping( dpi_from, dpi_to ))
+     {
+         RECT *rects = (RECT *)data->Buffer;
+         for (i = 0; i < data->rdh.nCount; i++) rects[i] = map_dpi_rect( rects[i], dpi_from, dpi_to );
+@@ -3320,7 +3410,7 @@ HRGN map_dpi_region( HRGN hrgn, UINT dpi_from, UINT dpi_to )
+ /**********************************************************************
+  *              map_dpi_window_rects
+  */
+-struct window_rects map_dpi_window_rects( struct window_rects rects, UINT dpi_from, UINT dpi_to )
++struct window_rects map_dpi_window_rects( struct window_rects rects, struct ratio dpi_from, struct ratio dpi_to )
+ {
+     rects.window = map_dpi_rect( rects.window, dpi_from, dpi_to );
+     rects.client = map_dpi_rect( rects.client, dpi_from, dpi_to );
+@@ -3328,15 +3418,22 @@ struct window_rects map_dpi_window_rects( struct window_rects rects, UINT dpi_fr
+     return rects;
+ }
+ 
++/* map value from given DPI to user default screen DPI */
++UINT map_user_dpi( UINT value, struct ratio dpi_from )
++{
++    return muldiv( value, dpi_from.num, USER_DEFAULT_SCREEN_DPI );
++}
++
+ /**********************************************************************
+  *              map_dpi_point
+  */
+-POINT map_dpi_point( POINT pt, UINT dpi_from, UINT dpi_to )
++POINT map_dpi_point( POINT pt, struct ratio dpi_from, struct ratio dpi_to )
+ {
+-    if (dpi_from && dpi_to && dpi_from != dpi_to)
++    if (needs_dpi_mapping( dpi_from, dpi_to ))
+     {
+-        pt.x = muldiv( pt.x, dpi_to, dpi_from );
+-        pt.y = muldiv( pt.y, dpi_to, dpi_from );
++        unsigned int num = dpi_to.num * dpi_from.den, den = dpi_from.num * dpi_to.den;
++        pt.x = muldiv( pt.x, num, den );
++        pt.y = muldiv( pt.y, num, den );
+     }
+     return pt;
+ }
+@@ -3346,7 +3443,7 @@ POINT map_dpi_point( POINT pt, UINT dpi_from, UINT dpi_to )
+  */
+ static POINT point_win_to_phys_dpi( HWND hwnd, POINT pt )
+ {
+-    UINT raw_dpi, dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
++    struct ratio raw_dpi, dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
+     return map_dpi_point( pt, get_dpi_for_window( hwnd ), dpi );
+ }
+ 
+@@ -3355,7 +3452,7 @@ static POINT point_win_to_phys_dpi( HWND hwnd, POINT pt )
+  */
+ POINT point_phys_to_win_dpi( HWND hwnd, POINT pt )
+ {
+-    UINT raw_dpi, dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
++    struct ratio raw_dpi, dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
+     return map_dpi_point( pt, dpi, get_dpi_for_window( hwnd ) );
+ }
+ 
+@@ -3364,8 +3461,8 @@ POINT point_phys_to_win_dpi( HWND hwnd, POINT pt )
+  */
+ POINT point_thread_to_win_dpi( HWND hwnd, POINT pt )
+ {
+-    UINT dpi = get_thread_dpi(), raw_dpi;
+-    if (!dpi) dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
++    struct ratio dpi = get_thread_dpi(), raw_dpi;
++    if (!dpi.num) dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
+     return map_dpi_point( pt, dpi, get_dpi_for_window( hwnd ));
+ }
+ 
+@@ -3374,8 +3471,8 @@ POINT point_thread_to_win_dpi( HWND hwnd, POINT pt )
+  */
+ RECT rect_thread_to_win_dpi( HWND hwnd, RECT rect )
+ {
+-    UINT dpi = get_thread_dpi(), raw_dpi;
+-    if (!dpi) dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
++    struct ratio dpi = get_thread_dpi(), raw_dpi;
++    if (!dpi.num) dpi = get_win_monitor_dpi( hwnd, &raw_dpi );
+     return map_dpi_rect( rect, dpi, get_dpi_for_window( hwnd ) );
+ }
+ 
+@@ -3392,7 +3489,7 @@ static int map_to_dpi( int val, UINT dpi )
+     return muldiv( val, dpi, USER_DEFAULT_SCREEN_DPI );
+ }
+ 
+-RECT get_virtual_screen_rect( UINT dpi, MONITOR_DPI_TYPE type )
++RECT get_virtual_screen_rect( struct ratio dpi, MONITOR_DPI_TYPE type )
+ {
+     RECT rect = {0};
+ 
+@@ -3417,10 +3514,11 @@ static UINT get_display_index( const UNICODE_STRING *name )
+ 
+ RECT get_display_rect( const WCHAR *display )
+ {
++    struct ratio dpi = get_thread_dpi();
+     struct monitor *monitor;
+     UNICODE_STRING name;
+     RECT rect = {0};
+-    UINT index, dpi = get_thread_dpi();
++    UINT index;
+ 
+     RtlInitUnicodeString( &name, display );
+     if (!(index = get_display_index( &name ))) return rect;
+@@ -3437,7 +3535,7 @@ RECT get_display_rect( const WCHAR *display )
+     return rect;
+ }
+ 
+-RECT get_primary_monitor_rect( UINT dpi )
++RECT get_primary_monitor_rect( struct ratio dpi )
+ {
+     struct monitor *monitor;
+     RECT rect = {0};
+@@ -5004,7 +5102,7 @@ BOOL WINAPI NtUserEnumDisplayMonitors( HDC hdc, RECT *rect, MONITORENUMPROC proc
+     return ret;
+ }
+ 
+-static BOOL get_monitor_info( HMONITOR handle, MONITORINFO *info, UINT dpi )
++static BOOL get_monitor_info( HMONITOR handle, MONITORINFO *info, struct ratio dpi )
+ {
+     struct monitor *monitor;
+ 
+@@ -5028,23 +5126,24 @@ static BOOL get_monitor_info( HMONITOR handle, MONITORINFO *info, UINT dpi )
+     return FALSE;
+ }
+ 
+-static HMONITOR monitor_from_rect( const RECT *rect, UINT flags, UINT dpi )
++static HMONITOR monitor_from_rect( const RECT *rect, UINT flags, struct ratio dpi_from )
+ {
++    struct ratio dpi = {system_dpi, 1};
+     struct monitor *monitor;
+     HMONITOR ret = 0;
+     RECT r;
+ 
+-    r = map_dpi_rect( *rect, dpi, system_dpi );
++    r = map_dpi_rect( *rect, dpi_from, dpi );
+ 
+     if (!lock_display_devices( FALSE )) return 0;
+-    if ((monitor = get_monitor_from_rect( r, flags, system_dpi, MDT_DEFAULT ))) ret = monitor->handle;
++    if ((monitor = get_monitor_from_rect( r, flags, dpi, MDT_DEFAULT ))) ret = monitor->handle;
+     unlock_display_devices();
+ 
+     TRACE( "%s flags %x returning %p\n", wine_dbgstr_rect(rect), flags, ret );
+     return ret;
+ }
+ 
+-MONITORINFO monitor_info_from_rect( RECT rect, UINT dpi )
++MONITORINFO monitor_info_from_rect( RECT rect, struct ratio dpi )
+ {
+     MONITORINFO info = {.cbSize = sizeof(info)};
+     struct monitor *monitor;
+@@ -5057,12 +5156,12 @@ MONITORINFO monitor_info_from_rect( RECT rect, UINT dpi )
+     return info;
+ }
+ 
+-UINT monitor_dpi_from_rect( RECT rect, UINT dpi, UINT *raw_dpi )
++struct ratio monitor_dpi_from_rect( RECT rect, struct ratio dpi, struct ratio *raw_dpi )
+ {
++    struct ratio ret = {system_dpi, 1}, x, y;
+     struct monitor *monitor;
+-    UINT ret = system_dpi, x, y;
+ 
+-    if (!lock_display_devices( FALSE )) return 0;
++    if (!lock_display_devices( FALSE )) return no_dpi;
+     if ((monitor = get_monitor_from_rect( rect, MONITOR_DEFAULTTONEAREST, dpi, MDT_DEFAULT )))
+     {
+         *raw_dpi = monitor_get_dpi( monitor, MDT_RAW_DPI, &x, &y );
+@@ -5074,7 +5173,7 @@ UINT monitor_dpi_from_rect( RECT rect, UINT dpi, UINT *raw_dpi )
+ }
+ 
+ /* see MonitorFromWindow */
+-HMONITOR monitor_from_window( HWND hwnd, UINT flags, UINT dpi )
++HMONITOR monitor_from_window( HWND hwnd, UINT flags, struct ratio dpi )
+ {
+     RECT rect;
+     WINDOWPLACEMENT wp;
+@@ -5082,7 +5181,7 @@ HMONITOR monitor_from_window( HWND hwnd, UINT flags, UINT dpi )
+     TRACE( "(%p, 0x%08x)\n", hwnd, flags );
+ 
+     wp.length = sizeof(wp);
+-    if (is_iconic( hwnd ) && NtUserGetWindowPlacement( hwnd, &wp ))
++    if (is_iconic( hwnd ) && get_window_placement( hwnd, &wp ))
+         return monitor_from_rect( &wp.rcNormalPosition, flags, dpi );
+ 
+     if (get_window_rect( hwnd, &rect, dpi ))
+@@ -5135,7 +5234,14 @@ BOOL WINAPI NtUserGetDpiForMonitor( HMONITOR monitor, UINT type, UINT *x, UINT *
+     {
+     case DPI_AWARENESS_UNAWARE:      *x = *y = USER_DEFAULT_SCREEN_DPI; break;
+     case DPI_AWARENESS_SYSTEM_AWARE: *x = *y = system_dpi; break;
+-    default:                         get_monitor_dpi( monitor, type, x, y ); break;
++    default:
++    {
++        struct ratio dpi_x, dpi_y;
++        get_monitor_dpi( monitor, type, &dpi_x, &dpi_y );
++        *x = round_dpi( dpi_x );
++        *y = round_dpi( dpi_y );
++        break;
++    }
+     }
+     return TRUE;
+ }
+@@ -5161,7 +5267,7 @@ BOOL WINAPI NtUserPerMonitorDPIPhysicalToLogicalPoint( HWND hwnd, POINT *pt )
+     RECT rect;
+     BOOL ret = FALSE;
+ 
+-    if (get_window_rect( hwnd, &rect, 0 ) &&
++    if (get_window_rect( hwnd, &rect, no_dpi ) &&
+         pt->x >= rect.left && pt->y >= rect.top && pt->x <= rect.right && pt->y <= rect.bottom)
+     {
+         *pt = point_phys_to_win_dpi( hwnd, *pt );
+@@ -6228,6 +6334,8 @@ void sysparams_init(void)
+     pthread_mutex_init( &user_mutex, &attr );
+     pthread_mutexattr_destroy( &attr );
+ 
++    init_default_gamma_ramp();
++
+     if ((hkey = reg_create_ascii_key( hkcu_key, "Keyboard Layout\\Preload", 0, NULL )))
+     {
+         if (NtUserGetKeyboardLayoutName( layout ))
+@@ -6280,7 +6388,7 @@ void sysparams_init(void)
+ 
+     /* open the app-specific key */
+ 
+-    appname = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
++    appname = RtlGetCurrentPeb()->ProcessParameters->ImagePathName.Buffer;
+     if ((p = wcsrchr( appname, '/' ))) appname = p + 1;
+     if ((p = wcsrchr( appname, '\\' ))) appname = p + 1;
+     len = lstrlenW( appname );
+@@ -6684,7 +6792,7 @@ BOOL WINAPI NtUserSystemParametersInfo( UINT action, UINT val, void *ptr, UINT w
+     case SPI_GETWORKAREA:
+     {
+         MONITORINFO info = {.cbSize = sizeof(info)};
+-        UINT dpi = get_thread_dpi();
++        struct ratio dpi = get_thread_dpi();
+ 
+         if (!ptr) return FALSE;
+ 
+@@ -7840,15 +7948,18 @@ static void thread_detach(void)
+     struct user_thread_info *thread_info = get_user_thread_info();
+ 
+     destroy_thread_windows();
++    destroy_thread_pointers();
+     user_driver->pThreadDetach();
+ 
+     free( thread_info->rawinput );
+ 
+     cleanup_imm_thread();
++    cleanup_opengl_thread();
+     NtClose( thread_info->server_queue );
+     if (thread_info->idle_event) NtClose( thread_info->idle_event );
+     free( thread_info->session_data );
+     free( thread_info->mouse_tracking_info );
++    free( thread_info );
+ 
+     exiting_thread_id = 0;
+ }
+@@ -7933,7 +8044,7 @@ ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code )
+         return get_sys_color( arg );
+ 
+     case NtUserCallOneParam_GetPrimaryMonitorRect:
+-        *(RECT *)arg = get_primary_monitor_rect( 0 );
++        *(RECT *)arg = get_primary_monitor_rect( no_dpi );
+         return 1;
+ 
+     case NtUserCallOneParam_GetSysColorBrush:
+@@ -8009,7 +8120,7 @@ ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code
+     }
+ 
+     case NtUserCallTwoParam_GetVirtualScreenRect:
+-        *(RECT *)arg1 = get_virtual_screen_rect( 0, arg2 );
++        *(RECT *)arg1 = get_virtual_screen_rect( no_dpi, arg2 );
+         return 1;
+ 
+     /* Madeira/iOS (ml668): the host gamepad slot. Body in
+diff --git a/build/win32u-unix/winstation_ios.c b/build/win32u-unix/winstation_ios.c
+index 53057a6..6722d9d 100644
+--- a/build/win32u-unix/winstation_ios.c
++++ b/build/win32u-unix/winstation_ios.c
+@@ -435,24 +435,31 @@ HWINSTA WINAPI NtUserCreateWindowStation( OBJECT_ATTRIBUTES *attr, ACCESS_MASK a
+                                           ULONG arg4, ULONG arg5, ULONG arg6, ULONG arg7 )
+ {
+     HANDLE ret;
++    NTSTATUS status;
++    data_size_t len;
++    struct object_attributes *objattr;
+ 
+     if (attr->ObjectName->Length >= MAX_PATH * sizeof(WCHAR))
+     {
+         RtlSetLastWin32Error( ERROR_FILENAME_EXCED_RANGE );
+         return 0;
+     }
++    if ((status = wine_server_alloc_object_attributes( attr, &objattr, &len )))
++    {
++        RtlSetLastWin32Error( RtlNtStatusToDosError(status) );
++        return 0;
++    }
+ 
+     SERVER_START_REQ( create_winstation )
+     {
+-        req->flags      = 0;
+-        req->access     = access;
+-        req->attributes = attr->Attributes;
+-        req->rootdir    = wine_server_obj_handle( attr->RootDirectory );
+-        wine_server_add_data( req, attr->ObjectName->Buffer, attr->ObjectName->Length );
++        req->access = access;
++        req->flags  = 0;
++        wine_server_add_data( req, objattr, len );
+         wine_server_call_err( req );
+         ret = wine_server_ptr_handle( reply->handle );
+     }
+     SERVER_END_REQ;
++    free( objattr );
+     return ret;
+ }
+ 
+@@ -533,6 +540,9 @@ HDESK WINAPI NtUserCreateDesktopEx( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *dev
+ {
+     WCHAR buffer[MAX_PATH];
+     HANDLE ret;
++    NTSTATUS status;
++    data_size_t len;
++    struct object_attributes *objattr;
+ 
+     if ((device && device->Length) || (devmode && !(flags & DF_WINE_VIRTUAL_DESKTOP)))
+     {
+@@ -544,16 +554,21 @@ HDESK WINAPI NtUserCreateDesktopEx( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *dev
+         RtlSetLastWin32Error( ERROR_FILENAME_EXCED_RANGE );
+         return 0;
+     }
++    if ((status = wine_server_alloc_object_attributes( attr, &objattr, &len )))
++    {
++        RtlSetLastWin32Error( RtlNtStatusToDosError(status) );
++        return 0;
++    }
+     SERVER_START_REQ( create_desktop )
+     {
+-        req->flags      = flags;
+-        req->access     = access;
+-        req->attributes = attr->Attributes;
+-        wine_server_add_data( req, attr->ObjectName->Buffer, attr->ObjectName->Length );
++        req->access = access;
++        req->flags  = flags;
++        wine_server_add_data( req, objattr, len );
+         wine_server_call_err( req );
+         ret = wine_server_ptr_handle( reply->handle );
+     }
+     SERVER_END_REQ;
++    free( objattr );
+     if (!devmode) return ret;
+ 
+     lstrcpynW( buffer, attr->ObjectName->Buffer, attr->ObjectName->Length / sizeof(WCHAR) + 1 );
+@@ -649,8 +664,8 @@ BOOL WINAPI NtUserSetThreadDesktop( HDESK handle )
+         struct session_thread_data *data = get_session_thread_data();
+         data->shared_desktop = find_shared_session_object( locator.id, locator.offset );
+         memset( &data->shared_foreground, 0, sizeof(data->shared_foreground) );
+-        thread_info->client_info.top_window = 0;
+-        thread_info->client_info.msg_window = 0;
++        thread_info->top_window = 0;
++        thread_info->msg_window = 0;
+         if (was_virtual_desktop != is_virtual_desktop()) update_display_cache( TRUE );
+     }
+     return ret;
+@@ -860,10 +875,10 @@ static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiB
+ 
+ HWND get_desktop_window(void)
+ {
+-    struct ntuser_thread_info *thread_info = NtUserGetThreadInfo();
++    struct user_thread_info *thread_info = get_user_thread_info();
+     BOOL is_service;
+ 
+-    if (thread_info->top_window) return UlongToHandle( thread_info->top_window );
++    if (thread_info->top_window) return thread_info->top_window;
+ 
+     /* don't create an actual explorer desktop window for services */
+     is_service = is_service_process();
+@@ -873,8 +888,8 @@ HWND get_desktop_window(void)
+         req->force = is_service;
+         if (!wine_server_call( req ))
+         {
+-            thread_info->top_window = reply->top_window;
+-            thread_info->msg_window = reply->msg_window;
++            thread_info->top_window = wine_server_ptr_handle( reply->top_window );
++            thread_info->msg_window = wine_server_ptr_handle( reply->msg_window );
+         }
+     }
+     SERVER_END_REQ;
+@@ -888,7 +903,7 @@ HWND get_desktop_window(void)
+     if (!thread_info->top_window)
+     {
+         ERR_(win)( "iOS: skipping explorer.exe launch; top_window stays 0\n" );
+-        return UlongToHandle( thread_info->top_window );
++        return thread_info->top_window;
+     }
+ 
+ #if 0  /* upstream explorer.exe launch path — disabled on iOS */
+@@ -902,11 +917,13 @@ HWND get_desktop_window(void)
+         static const WCHAR system_dir[] = {'C',':','\\','w','i','n','d','o','w','s','\\',
+             's','y','s','t','e','m','3','2','\\',0};
+         RTL_USER_PROCESS_PARAMETERS params = { sizeof(params), sizeof(params) };
+-        PS_ATTRIBUTE_LIST ps_attr;
++        ULONG_PTR attr_buffer[offsetof(PS_ATTRIBUTE_LIST,Attributes[2]) / sizeof(ULONG_PTR)];
++        SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION machines[8];
++        PS_ATTRIBUTE_LIST *ps_attr = (PS_ATTRIBUTE_LIST *)attr_buffer;
+         PS_CREATE_INFO create_info;
+         WCHAR desktop[MAX_PATH];
+-        PEB *peb = NtCurrentTeb()->Peb;
+-        HANDLE process, thread;
++        PEB *peb = RtlGetCurrentPeb();
++        HANDLE process = 0, thread;
+         unsigned int status;
+ 
+         SERVER_START_REQ( set_user_object_info )
+@@ -935,24 +952,28 @@ HWND get_desktop_window(void)
+         RtlInitUnicodeString( &params.WindowTitle, appnameW + 4 );
+         RtlInitUnicodeString( &params.Desktop, desktop );
+ 
+-        ps_attr.TotalLength = sizeof(ps_attr);
+-        ps_attr.Attributes[0].Attribute    = PS_ATTRIBUTE_IMAGE_NAME;
+-        ps_attr.Attributes[0].Size         = sizeof(appnameW) - sizeof(WCHAR);
+-        ps_attr.Attributes[0].ValuePtr     = (WCHAR *)appnameW;
+-        ps_attr.Attributes[0].ReturnLength = NULL;
++        NtQuerySystemInformationEx( SystemSupportedProcessorArchitectures, &process, sizeof(process),
++                                    machines, sizeof(machines), NULL );
++        ps_attr->TotalLength = sizeof(attr_buffer);
++        ps_attr->Attributes[0].Attribute    = PS_ATTRIBUTE_IMAGE_NAME;
++        ps_attr->Attributes[0].Size         = sizeof(appnameW) - sizeof(WCHAR);
++        ps_attr->Attributes[0].ValuePtr     = (WCHAR *)appnameW;
++        ps_attr->Attributes[0].ReturnLength = NULL;
++        ps_attr->Attributes[1].Attribute    = PS_ATTRIBUTE_MACHINE_TYPE;
++        ps_attr->Attributes[1].Value        = machines[0].Machine;
+ 
+         if (NtCurrentTeb64() && !NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR])
+         {
+             NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR] = TRUE;
+             status = NtCreateUserProcess( &process, &thread, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS,
+                                           NULL, NULL, 0, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, &params,
+-                                          &create_info, &ps_attr );
++                                          &create_info, ps_attr );
+             NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR] = FALSE;
+         }
+         else
+             status = NtCreateUserProcess( &process, &thread, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS,
+                                           NULL, NULL, 0, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, &params,
+-                                          &create_info, &ps_attr );
++                                          &create_info, ps_attr );
+         if (!status)
+         {
+             NtResumeThread( thread, NULL );
+@@ -968,8 +989,8 @@ HWND get_desktop_window(void)
+             req->force = 1;
+             if (!wine_server_call( req ))
+             {
+-                thread_info->top_window = reply->top_window;
+-                thread_info->msg_window = reply->msg_window;
++                thread_info->top_window = wine_server_ptr_handle( reply->top_window );
++                thread_info->msg_window = wine_server_ptr_handle( reply->msg_window );
+             }
+         }
+         SERVER_END_REQ;
+@@ -977,10 +998,10 @@ HWND get_desktop_window(void)
+ #endif  /* upstream explorer.exe launch path */
+ 
+     if (!thread_info->top_window) ERR_(win)( "failed to create desktop window\n" );
+-    else user_driver->pSetDesktopWindow( UlongToHandle( thread_info->top_window ));
++    else user_driver->pSetDesktopWindow( thread_info->top_window );
+ 
+     register_builtin_classes();
+-    return UlongToHandle( thread_info->top_window );
++    return thread_info->top_window;
+ }
+ 
+ static HANDLE get_winstations_dir_handle(void)
+@@ -992,7 +1013,7 @@ static HANDLE get_winstations_dir_handle(void)
+     NTSTATUS status;
+     HANDLE dir;
+ 
+-    snprintf( bufferA, sizeof(bufferA), "\\Sessions\\%u\\Windows\\WindowStations", NtCurrentTeb()->Peb->SessionId );
++    snprintf( bufferA, sizeof(bufferA), "\\Sessions\\%u\\Windows\\WindowStations", RtlGetCurrentPeb()->SessionId );
+     str.Buffer = buffer;
+     str.MaximumLength = asciiz_to_unicode( buffer, bufferA );
+     str.Length = str.MaximumLength - sizeof(WCHAR);
+@@ -1008,7 +1029,7 @@ static HANDLE get_winstations_dir_handle(void)
+  */
+ static const WCHAR *get_default_desktop( void *buf, size_t buf_size )
+ {
+-    const WCHAR *p, *appname = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
++    const WCHAR *p, *appname = RtlGetCurrentPeb()->ProcessParameters->ImagePathName.Buffer;
+     KEY_VALUE_PARTIAL_INFORMATION *info = buf;
+     WCHAR *buffer = buf;
+     HKEY tmpkey, appkey;
+@@ -1054,7 +1075,7 @@ static const WCHAR *get_default_desktop( void *buf, size_t buf_size )
+  */
+ void winstation_init(void)
+ {
+-    RTL_USER_PROCESS_PARAMETERS *params = NtCurrentTeb()->Peb->ProcessParameters;
++    RTL_USER_PROCESS_PARAMETERS *params = RtlGetCurrentPeb()->ProcessParameters;
+     WCHAR *winstation = NULL, *desktop = NULL, *buffer = NULL;
+     HANDLE handle, dir = NULL;
+     OBJECT_ATTRIBUTES attr;
+@@ -1076,7 +1097,7 @@ void winstation_init(void)
+     }
+ 
+     /* set winstation if explicitly specified, or if we don't have one yet */
+-    if (buffer || !NtUserGetProcessWindowStation())
++    if (buffer || !(handle = NtUserGetProcessWindowStation()))
+     {
+         str.Buffer = (WCHAR *)(winstation ? winstation : winsta0);
+         str.Length = str.MaximumLength = lstrlenW( str.Buffer ) * sizeof(WCHAR);
+@@ -1104,9 +1125,7 @@ void winstation_init(void)
+         char buffer[4096];
+         str.Buffer = (WCHAR *)(desktop ? desktop : get_default_desktop( buffer, sizeof(buffer) ));
+         str.Length = str.MaximumLength = lstrlenW( str.Buffer ) * sizeof(WCHAR);
+-        if (!dir) dir = get_winstations_dir_handle();
+-        InitializeObjectAttributes( &attr, &str, OBJ_CASE_INSENSITIVE | OBJ_OPENIF,
+-                                    dir, NULL );
++        InitializeObjectAttributes( &attr, &str, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, handle, NULL );
+ 
+         handle = NtUserCreateDesktopEx( &attr, NULL, NULL, 0, STANDARD_RIGHTS_REQUIRED | DESKTOP_ALL_ACCESS, 0 );
+         if (handle) NtUserSetThreadDesktop( handle );

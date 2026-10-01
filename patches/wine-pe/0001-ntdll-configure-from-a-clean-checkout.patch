@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: configure from a clean checkout
+
+loader.c includes arm64ec_x64_export_iat.c, which was never committed
+(willfaust/Madeira#20). A stub classifier that answers "not selected" is
+added, so every EC import resolves to its native target. unix/sync.c
+includes madeira_cfg.h before config.h, which makedep refuses.
+
+Class: build-fix
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+Upstream-issue: https://github.com/willfaust/Madeira/issues/20
+---
+ dlls/ntdll/arm64ec_x64_export_iat.c | 14 ++++++++++++++
+ dlls/ntdll/unix/sync.c              |  2 +-
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+ create mode 100644 dlls/ntdll/arm64ec_x64_export_iat.c
+
+diff --git a/dlls/ntdll/arm64ec_x64_export_iat.c b/dlls/ntdll/arm64ec_x64_export_iat.c
+new file mode 100644
+index 00000000..f4822d21
+--- /dev/null
++++ b/dlls/ntdll/arm64ec_x64_export_iat.c
+@@ -0,0 +1,14 @@
++/*
++ * Playport stand-in for the classifier madeira-lgpl e8286443 includes from
++ * loader.c but never committed (willfaust/Madeira issue #20). Upstream selects
++ * the IAT slots behind public x64 "FF 25" export stubs so a guest hook resolver
++ * sees the x64 thunk rather than the native body. Answering "not selected" for
++ * every slot keeps the import binding madeira-lgpl had before d88d55ee: every
++ * EC import is redirected to its native target.
++ */
++static BOOL arm64ec_iat_slot_is_x64_export( HMODULE module, ULONG size_of_image, ULONG_PTR slot_rva,
++                                            ULONG_PTR exports_rva, ULONG export_size,
++                                            ULONG code_map, ULONG code_map_count )
++{
++    return FALSE;
++}
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 9c9be7be..42299abe 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -25,8 +25,8 @@
+ #pragma makedep unix
+ #endif
+ 
+-#include "../../../../build/madeira_cfg.h"   /* ml1122: before the Wine headers, which ban strncpy by macro */
+ #include "config.h"
++#include "../../../../build/madeira_cfg.h"   /* ml1122: before the Wine headers, which ban strncpy by macro */
+ 
+ #include <assert.h>
+ #include <errno.h>

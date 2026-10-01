@@ -1,0 +1,395 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Jul 2026 17:02:34 +0800
+Subject: [PATCH] iOS: never remove exec intervals for a bulk non-exec range
+ (CEF NOEXEC wall)
+
+PartitionAlloc RESERVING its 16GB soft pool was wiping the executable
+interval of every module inside it. HandleMemoryProtectionNotification
+treats any non-exec notification as "this range is no longer executable"
+and removes it from XIntervals, so one call covering
+0x7000000000-0x7400000000 erased libcef's .text. The decoder then reported
+NOEXEC at libcef code addresses, raised FAULT_SIGSEGV, and killed
+webhelper threads -- 42 SEGV loop fatals in the run before this fix.
+
+The notification arrives via NotifyMemoryAlloc, NOT NotifyMemoryProtect,
+which is why guarding Wine's NtProtectVirtualMemory never fired: nothing
+was protecting anything. prot=0x1 (PAGE_NOACCESS) on the observed call
+confirms a pure reservation. The guard belongs at the single removal
+choke point all three callers share.
+
+Only the removal branch is guarded, so the insert path and DEP promotion
+are untouched. Modules keep their own mappings and issue their own
+per-section notifications, so ignoring a bulk range cannot lose a genuine
+executability transition.
+
+Measured on device: 4 PartitionAlloc pools land with zero interval loss;
+SEGV loop fatals 42 -> 0, iOS-noexec 3 -> 0, xquery misses 6 -> 0.
+libcef now executes deep into its own initialisation.
+
+Also here: route FEX LogMan through __wine_dbg_output. FEX's iOS path used
+::write(2,...), but xtajit64 is a PE, so fd 2 is the CRT's rather than the
+unix fd the app redirects -- all FEX logging was silently discarded. This
+is what made the above diagnosable at all.
+
+Plus NotifyMapViewOfSection ThreadState guard relaxation with pending-map
+replay, and the probes used to find this ([iOS-xins]/[iOS-xrem]/
+[iOS-xquery]/[iOS-noexec]).
+
+Madeira-commit: 53ab9a995985c60cafd27837ada4ff02f965b2f5
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp        | 40 ++++++++++
+ Source/Windows/ARM64EC/Module.cpp             | 78 ++++++++++++++++++-
+ Source/Windows/Common/InvalidationTracker.cpp | 48 ++++++++++++
+ Source/Windows/Common/Logging.cpp             | 45 ++++++++++-
+ 4 files changed, 208 insertions(+), 3 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 7afcca2..b6bfdd7 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -788,6 +788,17 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+             } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::UNIMPLEMENTED_INST) {
+               Thread->OpDispatcher->UnimplementedOp(DecodedInfo);
+             } else {
++              /* iOS-Mythic ml196: name the decode failure. The pre-existing
++               * "Invalid or Unknown instruction" message above cannot fire for this path
++               * because DecodeInstruction sets TableInfo = nullptr on exactly these
++               * errors. This branch (NOEXEC_INST / PARTIAL_DECODE_INST) is what raises
++               * FAULT_SIGSEGV -> GuestSignal_SIGSEGV -> the deliberate read of address 0
++               * that has been killing webhelper threads. Log which address failed and
++               * which status, so the guest RIP is stated rather than inferred. */
++              LogMan::Msg::EFmt("[iOS-noexec] status={} BlockEntry={:#x} GuestRIP={:#x}",
++                                Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::NOEXEC_INST ?
++                                  "NOEXEC" : "PARTIAL",
++                                Block.Entry, GuestRIP);
+               Thread->OpDispatcher->NoExecOp(DecodedInfo);
+             }
+           }
+@@ -943,6 +954,35 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     return 0;
+   }
+ 
++  /* iOS-Mythic ml197: NAME THE PRODUCER OF A HOST-ADDRESS "GUEST RIP".
++   *
++   * [iOS-noexec] showed FEX being asked to decode x86 at addresses that are not guest
++   * code at all:
++   *   GuestRIP=0x133f39a14   -> a JIT-POOL address (host code / module copies)
++   *   GuestRIP=0x7c600e0080  -> inside a steered 512MB FEX arena, at +0x0e0080 — the
++   *                             SAME offset seen in three runs across three arenas
++   * Decoding those yields NOEXEC/PARTIAL, which raises FAULT_SIGSEGV -> the
++   * GuestSignal_SIGSEGV trampoline -> the deliberate read of 0 that kills the thread.
++   * So the memory was never the problem; the POINTER is.
++   *
++   * ml198 CORRECTION: the first cut also flagged 0x1xxxxxxxx as "JIT pool", which was
++   * WRONG — guest PE IMAGES live in that band too (e.g. steamexe.exe maps at 0x15c800000,
++   * whose pool copy is at 0x127566000). That produced 17 false positives of perfectly
++   * legitimate RIPs. Only >= 0x7400000000 is unambiguous: that is steered-arena space and
++   * no guest image is ever placed there. Keep the check to that band only.
++   *
++   * Log the host return address (which lands in the dispatcher stub that supplied the
++   * RIP) plus State.rip, so the PRODUCER is named instead of the consumer. */
++  if (GuestRIP >= 0x7400000000ULL) {
++    static uint32_t BogusRIPCount = 0;
++    if (BogusRIPCount < 16) {
++      BogusRIPCount++;
++      LogMan::Msg::EFmt("[iOS-bogusrip] GuestRIP={:#x} State.rip={:#x} host_ret={} callret_sp={:#x}", GuestRIP,
++                        Frame ? Frame->State.rip : 0, __builtin_return_address(0),
++                        Frame ? Frame->State.callret_sp : 0);
++    }
++  }
++
+   /* iOS-Mythic 2026-05-18: CALLRET_SP bounds-validation + RESET.
+    *
+    * Initial diagnostic showed callret_sp going 0x10..0x70 BELOW
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index a047f8c..5ccb7b5 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -347,6 +347,33 @@ void HandleImageMap(uint64_t Address, bool MainImage = false) {
+   ImageTracker->HandleImageMap(ModulePath, Address, MainImage);
+ }
+ 
++/* iOS-Mythic ml190: REPLAY IMAGE MAPS THAT ARRIVE BEFORE THE TRACKERS EXIST.
++ *
++ * NotifyMapViewOfSection returns early when InvalidationTracker/ImageTracker are not yet
++ * constructed (they are created in ProcessInit), and that notification was previously lost
++ * forever. Any image mapped in that window never gets its executable sections inserted
++ * into InvalidationTracker::XIntervals, so every later decode inside it reports NOEXEC ->
++ * NoExecOp -> FAULT_SIGSEGV -> the GuestSignal_SIGSEGV trampoline -> dead thread.
++ *
++ * Evidence this is the remaining hole (ml190, self-targeting probe): libcef IS notified at
++ * map time, and NOTHING ever removes its interval — 0 unexec and 0 unmap touching its
++ * range — yet the decoder still reports NOEXEC at libcef+0x1900733 / +0x3b508f0. So the
++ * INSERT is what failed. Queue them and replay once the trackers are up. */
++constexpr size_t MaxPendingImageMaps = 64;
++uint64_t PendingImageMaps[MaxPendingImageMaps];
++size_t PendingImageMapCount = 0;
++
++void QueuePendingImageMap(uint64_t Address) {
++  for (size_t i = 0; i < PendingImageMapCount; i++) {
++    if (PendingImageMaps[i] == Address) {
++      return;
++    }
++  }
++  if (PendingImageMapCount < MaxPendingImageMaps) {
++    PendingImageMaps[PendingImageMapCount++] = Address;
++  }
++}
++
+ void HandleImageUnmap(uint64_t Address, uint64_t Size) {
+   ImageTracker->HandleImageUnmap(Address, Size);
+ }
+@@ -651,6 +678,14 @@ public:
+         }
+       }
+     }
++    if (Result.Size == 0) {
++      static uint32_t QueryFailCount = 0;
++      if (QueryFailCount < 12) {
++        QueryFailCount++;
++        LogMan::Msg::EFmt("[iOS-xquery] MISS tracker={} addr={:#x} rev={:#x}",
++                          static_cast<void*>(&*InvalidationTracker), Address, IosJitReverseTranslate(Address));
++      }
++    }
+ #endif
+     return Result;
+   }
+@@ -793,6 +828,12 @@ NTSTATUS ProcessInit() {
+ 
+   HandleImageMap(NtDllBase);
+ 
++  /* ml190: replay any image maps that arrived before the trackers existed. */
++  for (size_t i = 0; i < PendingImageMapCount; i++) {
++    HandleImageMap(PendingImageMaps[i]);
++  }
++  PendingImageMapCount = 0;
++
+   CPUFeatures.emplace(*CTX);
+ 
+   X64ReturnInstr = ::VirtualAlloc(nullptr, FEXCore::Utils::FEX_PAGE_SIZE, MEM_COMMIT | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
+@@ -800,6 +841,22 @@ NTSTATUS ProcessInit() {
+                                                           PAGE_EXECUTE_READ);
+   *reinterpret_cast<uint8_t*>(X64ReturnInstr) = 0xc3;
+ 
++  /* iOS-Mythic ml199: state this address explicitly.
++   *
++   * [iOS-noexec]/[iOS-bogusrip] show FEX being handed GuestRIP=0x7c200e0080 — page
++   * 0x7c200e0000 plus 0x80 — and the same +0x0e0080 offset has appeared across three
++   * different runs/arenas. This sentinel is a ONE-PAGE MEM_TOP_DOWN allocation holding a
++   * single 0xC3 at offset 0, which Module.S:168 loads into lr before entering the
++   * simulator, so guest returns out of simulation land on it. Top-down placement now puts
++   * it in the 0x7c.. band, which is also where the iOS VA steering places its 512MB
++   * reserve-only ranges — so log the address (and whether it is inside a steer slot) to
++   * confirm the failing RIP really is X64ReturnInstr+0x80 rather than a coincidence, and
++   * whether the sentinel is landing inside a steered reservation. */
++  LogMan::Msg::EFmt("[iOS-sentinel] X64ReturnInstr={:#x} page={:#x} in_steer_band={}",
++                    reinterpret_cast<uint64_t>(X64ReturnInstr),
++                    reinterpret_cast<uint64_t>(X64ReturnInstr) & ~0xfffULL,
++                    reinterpret_cast<uint64_t>(X64ReturnInstr) >= 0x7400000000ULL ? "YES" : "no");
++
+   const uintptr_t KiUserExceptionDispatcherFFS = reinterpret_cast<uintptr_t>(GetProcAddress(NtDll, "KiUserExceptionDispatcher"));
+   Exception::KiUserExceptionDispatcher = NtDllRedirectionLUT[KiUserExceptionDispatcherFFS - NtDllBase] + NtDllBase;
+ 
+@@ -1020,7 +1077,26 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
+ }
+ 
+ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
+-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
++  /* iOS-Mythic ml183: do NOT require GetCPUArea().ThreadState() here.
++   *
++   * HandleImageMap() only needs InvalidationTracker + ImageTracker — it never touches
++   * thread state. Requiring a live ThreadState silently DROPPED the notification whenever
++   * a module was mapped on a thread FEX had not initialised yet, so that image's
++   * executable sections were never inserted into InvalidationTracker::XIntervals.
++   *
++   * The consequence is severe and was the Steam/CEF blocker: Decoder::CheckRangeExecutable
++   * -> QueryGuestExecutableRange -> QueryExecutableRange returns Size==0 for the untracked
++   * range, the decoder sets HitNonExecutableRange, Core.cpp raises NoExecOp
++   * (FAULT_SIGSEGV / TRAPNO_PF / SEGV_ACCERR), and the JIT branches to the
++   * GuestSignal_SIGSEGV trampoline which deliberately reads address 0 to force a SIGSEGV.
++   * On iOS that lands in our Mach/segv handler as an unhandleable fault and kills the
++   * thread — observed 41x per run in the webhelper at libcef.dll function entries
++   * (+0x1900733, +0x3b508f0), which is why CEF never finished initialising.
++   *
++   * Keep the tracker null-checks; only the thread-state requirement is wrong. */
++  if (!InvalidationTracker || !ImageTracker) {
++    /* ml190: do not drop it — replay once ProcessInit has built the trackers. */
++    QueuePendingImageMap(reinterpret_cast<uint64_t>(Address));
+     return STATUS_SUCCESS;
+   }
+ 
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 155403d..9d0feae 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -67,6 +67,30 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
+       }
+       return true;
+     } else if (XIntervals.Intersect(ProtInterval)) {
++      /* iOS-Mythic ml208 ROOT-CAUSE FIX.
++       *
++       * A >=1GB non-executable range is an allocator reserving or managing a pool, never a
++       * code-permission change. Removing exec intervals for it wipes the executable range
++       * of EVERY module inside at once. Observed: PartitionAlloc reserving its 16GB soft
++       * pool 0x7000000000-0x7400000000 erased libcef's .text (0x7388f41000-0x7393f7cd23),
++       * after which the decoder reported NOEXEC at libcef code addresses, raised
++       * FAULT_SIGSEGV and killed 42 webhelper threads.
++       *
++       * Note this arrives via NotifyMemoryAlloc (ARM64EC/Module.cpp), NOT NotifyMemoryProtect
++       * — an earlier fix guarding Wine's NtProtectVirtualMemory therefore never fired. The
++       * guard belongs here, at the single choke point all three callers share.
++       *
++       * Only the REMOVAL branch is guarded: modules keep their own mappings and issue their
++       * own notifications, so ignoring a bulk range cannot lose a genuine executability
++       * transition, while the insert path above is left untouched so DEP promotion behaves
++       * exactly as before. */
++      if (AlignedSize >= (1ull << 30)) {
++        LogMan::Msg::EFmt("[iOS-xrem] SUPPRESSED bulk non-exec {:#x}-{:#x} ({} MB) prot={:#x}", ProtInterval.Offset,
++                          ProtInterval.End, AlignedSize >> 20, Prot);
++        return false;
++      }
++      LogMan::Msg::EFmt("[iOS-xrem] via=protect tracker={} {:#x}-{:#x}", static_cast<void*>(this),
++                        ProtInterval.Offset, ProtInterval.End);
+       XIntervals.Remove(ProtInterval);
+       RWXIntervals.Remove(ProtInterval);
+       if (DEPDisabled) {
+@@ -120,6 +144,8 @@ void InvalidationTracker::HandleProcessExecuteFlagsChange(ULONG Flags) {
+     }
+   } else {
+     for (const auto& Interval : DEPPromotedIntervals) {
++      LogMan::Msg::EFmt("[iOS-xrem] via=depflags tracker={} {:#x}-{:#x}", static_cast<void*>(this),
++                        Interval.Offset, Interval.End);
+       XIntervals.Remove(Interval);
+       RWXIntervals.Remove(Interval);
+     }
+@@ -144,6 +170,14 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
+       uint64_t SectionBase = Address + Section->VirtualAddress;
+       uint64_t SectionEnd = SectionBase + Section->Misc.VirtualSize;
+       XIntervals.Insert({SectionBase, SectionEnd});
++      /* iOS-Mythic ml200: FEX reports NOEXEC for libcef code addresses even though the
++       * ntdll side proves the map notification arrives and nothing ever removes the
++       * interval. So log the actual inserts (with `this`, since each pseudo-process runs
++       * its own xtajit64 copy and its own tracker) and pair it with the query-side log in
++       * QueryGuestExecutableRange. If the insert and the failing query name different
++       * `this`, the registration is landing in a different process's tracker. */
++      LogMan::Msg::EFmt("[iOS-xins] tracker={} {} sec={:#x}-{:#x}", static_cast<void*>(this), Name,
++                        SectionBase, SectionEnd);
+       LastExecutableSectionEnd = std::max(LastExecutableSectionEnd, SectionEnd);
+       if (Section->Characteristics & IMAGE_SCN_MEM_WRITE) {
+         LogMan::Msg::DFmt("Add image SMC interval: {:X} - {:X}", SectionBase, SectionBase + Section->Misc.VirtualSize);
+@@ -187,6 +221,8 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
+ 
+   if (Free) {
+     std::unique_lock Lock(IntervalsLock);
++    LogMan::Msg::EFmt("[iOS-xrem] via=section tracker={} {:#x}-{:#x}", static_cast<void*>(this),
++                      SectionBase, SectionBase + SectionSize);
+     XIntervals.Remove({SectionBase, SectionBase + SectionSize});
+     RWXIntervals.Remove({SectionBase, SectionBase + SectionSize});
+   }
+@@ -207,6 +243,8 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
+ 
+   if (Free) {
+     std::unique_lock Lock(IntervalsLock);
++    LogMan::Msg::EFmt("[iOS-xrem] via=aligned tracker={} {:#x}-{:#x}", static_cast<void*>(this),
++                      AlignedBase, AlignedBase + AlignedSize);
+     XIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
+     RWXIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
+   }
+@@ -248,6 +286,16 @@ bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t S
+   return ProtectRWXIntervalsInternal(Address, Size, true);
+ }
+ 
++/* iOS-Mythic ml201: log EVERY XIntervals removal, tagged by path.
++ *
++ * Proven this run: libcef's .text IS inserted (0x7385cf1000-0x7390d2cd23) into the SAME
++ * tracker (0x1229612c8) that later reports MISS for 0x73875f0733 and 0x73898408f0 — both
++ * inside that range. IntervalList::Query and ::Insert are correct for a sorted disjoint
++ * list, so a sub-range must be getting REMOVED. My ntdll-side probes only covered
++ * NtProtectVirtualMemory and unmap; Remove is also reachable from
++ * HandleProcessExecuteFlagsChange (DEP) and InvalidateAlignedInterval (via
++ * NotifyMemoryFree), neither of which was instrumented. Tag each site so the culprit
++ * path names itself. */
+ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint64_t Address) {
+   std::shared_lock Lock(IntervalsLock);
+   const auto XResult = XIntervals.Query(Address);
+diff --git a/Source/Windows/Common/Logging.cpp b/Source/Windows/Common/Logging.cpp
+index 5911b85..cdb8263 100644
+--- a/Source/Windows/Common/Logging.cpp
++++ b/Source/Windows/Common/Logging.cpp
+@@ -17,13 +17,50 @@ namespace {
+ void (*WineDbgOut)(const char* Message);
+ FILE* LogFile;
+ 
++/* iOS-Mythic ml194: FEX's log output was being DISCARDED, which is why no LogMan
++ * message (e.g. "[TI-IC] lookupcache-alloc") has ever appeared in mythic-log.txt and why
++ * every FEX-side question this session had to be answered indirectly from ntdll probes.
++ *
++ * Logging::Init() IS called (ARM64EC Module.cpp ProcessInit) and ProcessInit completes,
++ * yet even its own install trace never showed up. Cause: this is a PE module, so
++ * ::write(2, ...) goes through the CRT's descriptor table bound to the Windows stderr
++ * HANDLE — NOT the unix fd 2 that the app redirects into mythic-log.txt. Writing to the
++ * process's real hStdError is the path already proven to work here (see the FEX-iOS FATAL
++ * message in ARM64EC/Module.cpp). */
++static void IosLogWrite(const char* Str, size_t Len) {
++  /* ml195: hStdError is NULL in this context, so the WriteFile path produced nothing
++   * (which also means the pre-existing "[FEX-iOS] FATAL" message was never functional).
++   * Prefer __wine_dbg_output: it IS exported by our PE ntdll (export table ordinal 1464)
++   * and is exactly what that ntdll's own ERR() lines go through — those reach
++   * mythic-log.txt reliably. Keep WriteFile as a fallback. */
++  static int (__cdecl *DbgOut)(const char*);
++  static bool Resolved;
++  if (!Resolved) {
++    Resolved = true;
++    DbgOut = reinterpret_cast<decltype(DbgOut)>(
++        GetProcAddress(GetModuleHandleA("ntdll.dll"), "__wine_dbg_output"));
++  }
++  if (DbgOut) {
++    DbgOut(Str);
++    return;
++  }
++  HANDLE h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
++                 ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
++                       NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
++                 : nullptr;
++  if (h) {
++    ULONG Written = 0;
++    WriteFile(h, Str, static_cast<DWORD>(Len), &Written, nullptr);
++  }
++}
++
+ static void MsgHandler(LogMan::DebugLevels Level, const char* Message) {
+   const auto Output = fextl::fmt::format("{} {:X} {}\n", LogMan::DebugLevelStr(Level), GetCurrentThreadId(), Message);
+ #ifdef FEX_IOS_HOST
+   /* iOS-Mythic: route directly to stderr (which is dup2'd to mythic-log.txt
+    * by WineProcessBridge). __wine_dbg_output is exported but doesn't always
+    * resolve via GetProcAddress on our embedded ntdll, so go around it. */
+-  ::write(2, Output.c_str(), Output.size());
++  IosLogWrite(Output.c_str(), Output.size());
+   return;
+ #endif
+   if (WineDbgOut) {
+@@ -35,6 +72,10 @@ static void MsgHandler(LogMan::DebugLevels Level, const char* Message) {
+ 
+ static void AssertHandler(const char* Message) {
+   const auto Output = fextl::fmt::format("A {}\n", Message);
++#ifdef FEX_IOS_HOST
++  IosLogWrite(Output.c_str(), Output.size());
++  return;
++#endif
+   if (WineDbgOut) {
+     WineDbgOut(Output.c_str());
+   } else if (LogFile) {
+@@ -55,7 +96,7 @@ void Init() {
+ #ifdef FEX_IOS_HOST
+   /* iOS-Mythic: trace install via stderr directly to confirm Init() ran. */
+   const char *m = "[FEX-iOS] Logging::Init installing MsgHandler\n";
+-  ::write(2, m, 47);
++  IosLogWrite(m, __builtin_strlen(m));
+ #endif
+ 
+   WineDbgOut = reinterpret_cast<decltype(WineDbgOut)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "__wine_dbg_output"));

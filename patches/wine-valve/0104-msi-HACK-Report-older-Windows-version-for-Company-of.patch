@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Wed, 30 Jul 2025 12:05:23 -0600
+Subject: [PATCH] msi: HACK: Report older Windows version for Company of Heroes
+ 2 redists.
+
+CW-Bug-Id: #25520
+Valve-commit: 4220556b2dc2649f76a54c7bbe5302c5ff18d876
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/msi/package.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/msi/package.c b/dlls/msi/package.c
+index d0b546c..a07d2c7 100644
+--- a/dlls/msi/package.c
++++ b/dlls/msi/package.c
+@@ -633,6 +633,7 @@ static void fixup_winver(DWORD *verval)
+         cached = (s = getenv("STEAM_COMPAT_APP_ID")) &&
+                     (
+                         !strcmp(s, "976730")
++                        || !strcmp(s, "231430")
+                     );
+         if (cached)
+             ERR("HACK: setting winver 502.\n");

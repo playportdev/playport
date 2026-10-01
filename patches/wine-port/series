@@ -1,0 +1,65 @@
+# wine-port: Madeira's Wine fork (willfaust/wine madeira-lgpl at the pins.lock
+# wine-port commit, 56 commits on wine-11.4), rebased onto the pins.lock wine
+# commit (WineHQ wine-11.18). Applied in this order with `git am -3`, before
+# patches/wine-unix and patches/wine-pe. Each Madeira commit names its original
+# in Madeira-commit: and whether the rebase was clean; the last patch is
+# Playport's follow-up to the new base. Madeira's own *_ios.c replacements are
+# ported to this base by the madeira-port patches at the end of
+# patches/madeira-unix.
+0001-.gitignore-exclude-in-tree-build-dirs-build-macos-bu.patch
+0002-arm64ec_process_init-re-run-update_hybrid_metadata-a.patch
+0003-ntdll-loader-apply-arm64ec_redirect_ptr-to-imports-a.patch
+0004-EC5c-arm64ec_process_init-early-stash-iOS-skip-start.patch
+0005-loader-process_attach-xtajit64-dependency-tree-befor.patch
+0006-loader-redirect-ARM64EC-EntryPoint-via-arm64ec_redir.patch
+0007-arm64ec-split-process_init-into-dispatchers-ProcessI.patch
+0008-loader-trace-load_arm64ec_module-arm64ec_process_ini.patch
+0009-env-skip-start.exe-fallback-for-AMD64-main-on-ARM64E.patch
+0010-arm64ec-re-patch-all-ARM64EC-modules-hybrid-metadata.patch
+0011-ARM64EC-import-binding-3-iOS-port-fixes.patch
+0012-ARM64EC-iOS-translate-redirect_ptr-results-to-JIT-po.patch
+0013-ntdll-bounds-check-RtlIsEcCode-against-non-canonical.patch
+0014-ntdll-log-thread-TLS-allocation-once-for-iOS-bringup.patch
+0015-ntdll-pre-allocate-main-EXE-TLS-slot-before-load_arm.patch
+0016-ntdll-add-unix_ios_push_jit_aliases-bridge-for-iOS-F.patch
+0017-iOS-build-catch-up-commit-2-months-of-accumulated-fo.patch
+0018-iOS-WIP-CoreAudio-CoreMIDI-wineios.drv-experimental-.patch
+0019-Mythic-FEX-2607-EC-ntdll-fixes-xtajit64-ctor-init-NL.patch
+0020-Mythic-ntdll-ARM64EC-NULL-guard-the-KiUserExceptionD.patch
+0021-Mythic-iOS-Steam-S3-kernelbase-no-Win8-lie-arm64ec-r.patch
+0022-Mythic-iOS-task-32-stop_thread-via-Mach-context-capt.patch
+0023-iOS-EC-exception-dispatch-across-three-stacks-rtcs-g.patch
+0024-iOS-guard-bulk-non-exec-protect-notifications-on-all.patch
+0025-iOS-rpcrt4-diagnostics-for-the-ccontext-0x10-crash.patch
+0026-iOS-delay-load-ARM64EC-redirect-document-why-arm64x_.patch
+0027-iOS-end-of-stack-is-not-an-invalid-stack-make-guest-.patch
+0028-ios-delay-load-POOL-STALE-closed-dual-pool-side-slot.patch
+0029-ios-SEH-unwind-livelock-breaker.patch
+0030-iOS-Mythic-wininet-urlcache-loop-kills-dll-missing-p.patch
+0031-iOS-Crashpad-VEH-context-guard-EC-exception-hardenin.patch
+0032-iOS-Mythic-79-TCP-state-numbering-NSI-bypass-minidum.patch
+0033-iOS-Mythic-ml487-ml488-78-checksum-the-bytes-NtReadF.patch
+0034-iOS-Mythic-ml493-61-79-glyph-rasterisation-and-conne.patch
+0035-iOS-Mythic-ml506-ml508-blit-censuses-where-Chromium-.patch
+0036-Mythic-free_async_queue-UAF-fix-wineserver-fd-owners.patch
+0037-wine-ARM64EC-SEH-unwind-fixes-JIT-alias-three-view-p.patch
+0038-wine-hand-FEX-the-Mono-backpatcher-bridge.patch
+0039-ntdll-critical-section-and-failed-open-diagnostics-f.patch
+0040-server-add-ios_thread_wait_links-for-wait-chain-insp.patch
+0041-ntdll-arm64ec-fix-x64-setjmp-longjmp-by-unwinding-a-.patch
+0042-loader-tls-life-probe-for-TLS-slot-assignment-and-ca.patch
+0043-ntdll-export-ios_teb_tsd_offset-so-ARM64EC-modules-s.patch
+0044-ntdll-register-images-at-the-loader-boundary-so-chil.patch
+0045-Report-thread-context-from-the-syscall-frame-and-sto.patch
+0046-Suspend-threads-for-real-instead-of-only-snapshottin.patch
+0047-Add-opt-in-native-call-tracing-for-a-video-decoder-a.patch
+0048-Extend-native-call-tracing-to-the-audio-backend-and-.patch
+0049-Rename-the-project-from-Mythic-to-Madeira.patch
+0050-Print-the-arena-band-selector-s-deferred-log-from-di.patch
+0051-ntdll-ARM64EC-root-frame-unwinding-TLS-window-arena-.patch
+0052-Licensing-notes-for-the-LGPL-branch.patch
+0053-ntdll-server-iOS-loader-and-ARM64EC-signal-fixes-fil.patch
+0054-ntdll-iOS-sync-and-timer-census-counters-ECO-QoS-swi.patch
+0055-xinput-read-Madeira-host-controller-snapshots-throug.patch
+0056-LICENSE-MADEIRA-record-third-party-contributions-and.patch
+0057-ntdll-iOS-is_ec_code-reads-the-thread-s-peb-through-.patch

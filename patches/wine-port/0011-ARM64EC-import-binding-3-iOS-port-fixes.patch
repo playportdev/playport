@@ -1,0 +1,136 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 7 May 2026 19:33:47 +0800
+Subject: [PATCH] ARM64EC import binding: 3 iOS-port fixes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+1. loader.c — gate ARM64EC import redirection on the IMPORTER being
+   ARM64EC, not just the imported module. Pure x86_64 importers (cube-x64
+   under FEX) need their IAT pointed at .hexpthk thunks; redirecting them
+   to ARM64-native targets makes the x86 caller execute ARM64 instructions
+   as x86 → corrupted guest state → null-deref via dispatch_icall.
+
+2. signal_arm64ec.c — when chasing a `ff 25 ...` forwarder thunk in
+   arm64ec_redirect_ptr (pattern (a)), require *imp to look like a real
+   address (>= 0x10000000) before walking InLoadOrderModuleList. At
+   import-binding time the target module's IAT can still hold raw IBN
+   RVAs (small 32-bit values), and the existing `*imp != ptr` check
+   passes them through. The walk then finds no matching module and
+   `return target` stores the bare RVA in the IAT — causing later
+   indirect calls to crash inside arm64x_check_call(.Ljmp) with
+   x11=garbage.
+
+3. winstation.c — on iOS, explorer.exe launch is deferred (no
+   CreateProcess yet); always take the server-create path (force=1)
+   and skip the NtCreateUserProcess fallback. Mirrored in our
+   build/win32u-unix/winstation_ios.c (iOS override).
+
+Together these unblock cube-x64.exe past user32 PROCESS_ATTACH and
+into actual cube CRT execution under FEX. Next blocker:
+register_class fails with "Failed to get shared session object",
+preventing window creation.
+
+(cherry picked from commit 89992f5f76f5ac312cb7122403dbccb8ee81f47a)
+Madeira-commit: 710ec55e53d414de328528f8c5707e2edcb6128a
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         | 13 +++++++++++--
+ dlls/ntdll/signal_arm64ec.c | 13 +++++++++++--
+ dlls/win32u/winstation.c    | 21 +++++++++++++++++++++
+ 3 files changed, 43 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 92d2192a31d..b1cc90bf622 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1235,8 +1235,17 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+      * exported in the EXPORT directory. ARM64-host callers want the
+      * ARM64-native target instead. Apply RedirectionMetadata up front so
+      * IAT entries point directly to ARM64 code, avoiding the runtime
+-     * arm64x_check_call fast-forward dance. */
+-    const IMAGE_ARM64EC_METADATA *imp_metadata = arm64ec_get_module_metadata( imp_mod );
++     * arm64x_check_call fast-forward dance.
++     *
++     * IMPORTANT: only redirect when the IMPORTING module is also ARM64EC.
++     * A pure x86_64 importer (e.g. cube-x64.exe under FEX) MUST get the
++     * .hexpthk x86_64 thunk address — not the ARM64 native target — or its
++     * `call qword ptr [iat]` lands on ARM64 instructions interpreted as x86,
++     * corrupts the guest state, and crashes via dispatch_icall with
++     * x11=garbage. */
++    const IMAGE_ARM64EC_METADATA *imp_metadata = NULL;
++    if (arm64ec_get_module_metadata( module ))  /* importer is ARM64EC */
++        imp_metadata = arm64ec_get_module_metadata( imp_mod );
+ #endif
+ 
+     while (import_list->u1.Ordinal)
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 75970ecc9d7..cfee56e8ee4 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -206,11 +206,20 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+         {
+             LONG off = *(const LONG *)&bytes[2];
+             void **imp = (void **)(bytes + 6 + off);
+-            if (*imp && *imp != ptr)
++            void *target = *imp;
++            /* Only follow the forwarder if the IAT slot is actually bound to
++             * a usable pointer. At import-binding time the target module's
++             * IAT may still hold raw IBN RVAs (small 32-bit values) — chasing
++             * those returns a low integer that gets stored as a "function
++             * pointer" and crashes later when called. Require the value to
++             * look like a real address (above the lowest module DllBase).
++             * If it doesn't, fall through to `return ptr;` so the IAT entry
++             * gets the thunk address, and runtime arm64x_check_call handles
++             * the (now-bound) forwarder on first call. */
++            if (target && target != ptr && (ULONG_PTR)target >= 0x10000000)
+             {
+                 /* Find the module containing the target and redirect within
+                  * it. If the target is also a thunk, this recurses. */
+-                void *target = *imp;
+                 LDR_DATA_TABLE_ENTRY *mod_entry;
+                 LIST_ENTRY *list = &RtlGetCurrentPeb()->LdrData->InLoadOrderModuleList;
+                 LIST_ENTRY *entry;
+diff --git a/dlls/win32u/winstation.c b/dlls/win32u/winstation.c
+index 3c55a80c5e1..117ae3a8438 100644
+--- a/dlls/win32u/winstation.c
++++ b/dlls/win32u/winstation.c
+@@ -812,6 +812,13 @@ HWND get_desktop_window(void)
+     /* don't create an actual explorer desktop window for services */
+     is_service = is_service_process();
+ 
++#ifdef WINE_IOS
++    /* iOS: explorer.exe launch is deferred (no CreateProcess yet). Ask the
++     * server to create the desktop window directly (force=1, same path as
++     * service processes) and skip the NtCreateUserProcess fallback below. */
++    is_service = TRUE;
++#endif
++
+     SERVER_START_REQ( get_desktop_window )
+     {
+         req->force = is_service;
+@@ -823,6 +830,20 @@ HWND get_desktop_window(void)
+     }
+     SERVER_END_REQ;
+ 
++#ifdef WINE_IOS
++    /* iOS: explorer.exe launch is deferred (no CreateProcess yet). If the
++     * server didn't return a top_window above (e.g. shared_session not yet
++     * initialized when the very first builtin-class register fires), skip
++     * the launch entirely. We rely on the server-create path on subsequent
++     * calls (force=1) once init_user has finished. Better than spinning up
++     * a child thread that fails to load explorer.exe and kills the process. */
++    if (!thread_info->top_window)
++    {
++        ERR_(win)( "iOS: skipping explorer.exe launch; top_window stays 0\n" );
++        return UlongToHandle( thread_info->top_window );
++    }
++#endif
++
+     if (!thread_info->top_window)
+     {
+         static const WCHAR appnameW[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s',

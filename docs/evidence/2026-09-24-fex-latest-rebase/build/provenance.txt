@@ -1,0 +1,10 @@
+superproject af0e1c7a80e95d99de1424d746c924f4ef71597c (with local changes)
+series dxmt 1727f9db1c68b007
+series dxmt-port 207d64a518ce84a9
+series fex fbe84835353bccc1
+series fex-port 518dabe09176c148
+series madeira-unix 322ff8a3aadcfe6e
+series madeira-winios b3c2eb8e90381083
+series rpmalloc-port b78a53bfc5d63188
+series wine-pe 34152b1ca44141bd
+series wine-unix b932dd4d33e8f4fd

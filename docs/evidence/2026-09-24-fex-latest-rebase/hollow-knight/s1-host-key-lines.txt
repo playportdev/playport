@@ -1,0 +1,18 @@
+title: S1_MODE=title nonce=b7ff72f7 TITLE_EXE=Games\Hollow%20Knight\hollow_knight.exe TITLE_ARGS=-logFile,C:\hollow_knight-player.log
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: Unity title; added -screen-fullscreen 1 -screen-width 2736 -screen-height 1260
+title: display: screen 2736x1260 (panel 1260x2736 px), landscape, swap chain aspect-fitted, presents free-running, display link asks for up to 120 Hz, guest monitor 120 Hz
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 5.46 s
+title: wine_host_run_exe -> 0
+E 24 [build-id] xtajit64 rev=ml908 compiled Sep 24 2026 22:05:15
+E 24 [gen] alloc#1 size=0x1000000 prev_size=0x0 prev_use_count=0 rev=ml460
+E 24 [DUAL_MAP_SANITY #1] TempCodeBuffer=0x7c00a30000 RXCursor=0x14fffc000 RWCursor=0x7036ffc000 WriteOffset=0x6ee7000000 TempSize=0x210
+E 24 [DUAL_MAP_SANITY #2] TempCodeBuffer=0x7c00a30000 RXCursor=0x14fffc210 RWCursor=0x7036ffc210 WriteOffset=0x6ee7000000 TempSize=0x310
+[proc-gate] REFUSING spawn of L"C:\\Games\\Hollow Knight\\UnityCrashHandler64.exe" (unitycrashhandler64 gate)
+E 24 [gen] alloc#2 size=0x8000000 prev_size=0x1000000 prev_use_count=44 rev=ml460
+E 24 [gen-sweep] gen=2 threads=40 migrated=39 in_sim=1 sig_pin=0 raced=0 retry=0 left=256 rev=ml1106
+E C0 [gen-sweep] gen=2 threads=40 migrated=1 in_sim=1 sig_pin=0 raced=0 retry=1 left=255 rev=ml1106
+[iOS DXMT] Present #1 t=18374.782 after=0.0000 (draws_since_last=11 total_draws=11 machexc_delta=256227 srvw=50/0 w_ms=42.9 wreq_ms=0.0 reqs=6377) [presentDrawable]
+[iOS DXMT] Present #19408 t=18619.931 after=0.0000 (draws_since_last=1488 total_draws=912314 machexc_delta=82 srvw=32/0 w_ms=1.4 wreq_ms=0.0 reqs=234) [presentDrawable]
+E 78 [CB_SUMMARY] total=16384 real_compiles=7247 cache_hits=9137 hit_rate=55%  hottest_rip≈0x71fbc34226 repeats~0 L1ptr=0x7e05c10000 L1mask=0x1fff0 cacheL1=0x7e05c10000
+E 24 [CB_SUMMARY] total=15237120 real_compiles=142754 cache_hits=15094366 hit_rate=99%  hottest_rip≈0x71f492b671 repeats~18446744073694447186 L1ptr=0x7c00020000 L1mask=0x1ffff0 cacheL1=0x7c00020000

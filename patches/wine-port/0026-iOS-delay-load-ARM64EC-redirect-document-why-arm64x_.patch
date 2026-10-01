@@ -1,0 +1,490 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Jul 2026 16:08:08 +0800
+Subject: [PATCH] iOS: delay-load ARM64EC redirect; document why
+ arm64x_check_call keeps the x18 read
+
+import_dll redirects EC->EC imports from the x64 .hexpthk export thunk to the
+ARM64-native target. The DELAY-LOAD path never did, so it stored the thunk:
+measured fp = rpcrt4 base + 0x60800 with IsEcCode(fp)=0, i.e. NdrClientCall2's
+FFS thunk. Apply the same redirect in LdrResolveDelayLoadedAPI, gated on the
+importer being EC exactly as import_dll is. After the fix the same imports
+resolve to native pool addresses with IsEcCode=1.
+
+arm64x_check_call: the `ldr x16,[x18,#0x60]` PEB read is WRONG and is kept
+anyway, now documented in place. iOS clobbers x18 (every SEGV dump shows
+x18=0), so it fetches a garbage PEB and reports every target as non-EC.
+Correcting it to the TSD-slot-275 path was A/B-proven to break CEF:
+cef_log.txt went unwritten for 8 consecutive runs and returned the moment the
+x18 read was restored, with run depth also going 20-24k -> 28929 unix calls.
+Forcing everything through the x64 exit thunk is slow and breaks variadic
+callees, but that detour also absorbs whatever EcCodeBitMap false positive the
+correct version turns into a direct branch into x64 bytes run as ARM64.
+Correct-but-unlandable until that false positive is found.
+
+Also here: the probes that established the above ([ec-bind]/[ec-recheck]/
+[ec-delay] in loader.c, [ctxh] + stack window in ndr_marshall.c,
+[ndr-shift]/[ndr-param] in ndr_stubless.c, [unwind-trace] in signal_arm64ec.c).
+
+(cherry picked from commit 82bee4545509fb50448e2b92db86baa5962d5143)
+Madeira-commit: b003f3767603789a13b772936dbe3a928441dc17
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         | 156 ++++++++++++++++++++++++++++++++++++
+ dlls/ntdll/signal_arm64ec.c |  95 ++++++++++++++++++++--
+ dlls/rpcrt4/ndr_marshall.c  |  55 +++++++++++++
+ dlls/rpcrt4/ndr_stubless.c  |  40 +++++++--
+ 4 files changed, 334 insertions(+), 12 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 4b1266a2bbf..ef65b79aecd 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1148,6 +1148,35 @@ void * WINAPI RtlFindExportedRoutineByName( HMODULE module, const char *name )
+  * Import the dll specified by the given import descriptor.
+  * The loader_section must be locked while calling this function.
+  */
++#ifdef __arm64ec__
++/* ml233: slots recorded by the [ec-bind] probe, re-read after process init — see there. */
++static void *ec_recheck_slot[8];
++static void *ec_recheck_want[8];
++static unsigned int ec_recheck_n;
++static unsigned int ec_recheck_prints;
++void ios_ec_recheck_iat( const char *when );
++
++void ios_ec_recheck_iat( const char *when )
++{
++    extern void *xlate_ios_jit( void *ptr );
++    unsigned int i;
++
++    for (i = 0; i < ec_recheck_n; i++)
++    {
++        void *pslot = xlate_ios_jit( ec_recheck_slot[i] );
++        void *peval = *(void **)ec_recheck_slot[i];
++        void *pval = (pslot && pslot != ec_recheck_slot[i]) ? *(void **)pslot : (void *)-1;
++
++        if (ec_recheck_prints++ >= 24) return;
++        ERR( "[ec-recheck:%s] slot=%p pe_val=%p pool_val=%p want=%p %s\n",
++             when, ec_recheck_slot[i], peval, pval, ec_recheck_want[i],
++             pval == ec_recheck_want[i] ? "POOL OK"
++             : peval != ec_recheck_want[i] ? "PE ALSO CHANGED (rebound?)"
++             : "POOL STILL STALE  <== calls use the unbound entry" );
++    }
++}
++#endif
++
+ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
+ {
+     HMODULE module = wm->ldr.DllBase;
+@@ -1287,9 +1316,79 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+             }
+ #ifdef __arm64ec__
+             else if (imp_metadata)
++            {
++                void *pre = (void *)thunk_list->u1.Function;
++
+                 thunk_list->u1.Function = (ULONG_PTR)arm64ec_redirect_ptr( imp_mod,
+                                                                            (void *)thunk_list->u1.Function,
+                                                                            imp_metadata );
++                /* iOS-Mythic ml230: does the EC->EC import bind actually land on native
++                 * code, and is that code MARKED EC?
++                 *
++                 * sechost calls rpcrt4's NdrClientCall2 through $iexit_thunk$cdecl$i8$varargs
++                 * -- the EC->x64 path -- which double-thunks and displaces the caller's
++                 * STACK arguments by one slot (register args survive, which is why only
++                 * variadic calls break, i.e. only RPC). rpcrt4's redirection metadata is
++                 * correct (thunk 0x60800 -> native 0x2c3d8, verified against the shipped
++                 * binary), so either this redirect is not applied, or the redirected target
++                 * is not recognised as EC and the indirect-call check routes it to x64
++                 * anyway. Log both facts for the calls in question; RtlIsEcCode is the same
++                 * predicate that decision uses. */
++                if (!strcmp( (const char *)pe_name->Name, "NdrClientCall2" ) ||
++                    !strcmp( (const char *)pe_name->Name, "NdrClientCall3" ) ||
++                    !strcmp( (const char *)pe_name->Name, "NdrAsyncClientCall" ))
++                {
++                    /* iOS-Mythic ml231: the bind is CORRECT (redirected=1, IsEcCode=1,
++                     * native pool address) yet sechost still reached NdrClientCall2 via
++                     * $iexit_thunk$cdecl$i8$varargs -- the EC->x64 path. Both can only be
++                     * true if the EXECUTING copy reads a different IAT than the loader
++                     * wrote: the loader writes the PE image's .data, but code runs from the
++                     * JIT-pool copy, whose .data is CLONED (same class as the ntdll
++                     * dispatcher bug #33, and why the XLATE hooks need ios_jit_sync_write).
++                     *
++                     * Translate the IAT SLOT itself through the forward pool hook and read
++                     * the value the running code actually sees. Equal => this theory is
++                     * dead and the exit thunk has another cause; different => the pool
++                     * copy is stale and that is the bug. */
++                    /* ml232 FIX: call xlate_ios_jit, NOT the raw pointer. A direct call
++                     * through p_ios_jit_translate_addr goes via arm64x_check_call, which
++                     * sees a unix ARM64 function that is not marked EC and misroutes it
++                     * through x86 emulation -- ARM64 code executed as x86, dead at 182 unix
++                     * calls before any module loads. The naked thunk does `br x16` and
++                     * bypasses that check; its comment says so explicitly. */
++                    extern void *xlate_ios_jit( void *ptr );
++                    void *slot = &thunk_list->u1.Function;
++                    void *pslot = xlate_ios_jit( slot ), *pval = (void *)-1;
++
++                    if (pslot && pslot != slot) pval = *(void **)pslot;
++                    /* ml233: remember the slot so it can be RE-READ after process init.
++                     * The bind-time value is not the interesting one: the pool copy is
++                     * taken at MAP time, long before imports are bound (jit-pool line 257
++                     * vs ec-bind line >1519), so of course it still holds the unbound entry
++                     * here. If that were also true at CALL time nothing would work at all,
++                     * so the question is what the slot holds once init completes. */
++                    /* ml234: also re-read what was recorded earlier. This is guaranteed to
++                     * execute (unlike a hand-picked attach site) and each later bind gives a
++                     * progressively later reading of the earlier slots. */
++                    if (ec_recheck_n) ios_ec_recheck_iat( "later-bind" );
++                    if (ec_recheck_n < 8)
++                    {
++                        ec_recheck_slot[ec_recheck_n] = slot;
++                        ec_recheck_want[ec_recheck_n] = (void *)thunk_list->u1.Function;
++                        ec_recheck_n++;
++                    }
++                    ERR( "[ec-bind] %s.%s pre=%p post=%p redirected=%d IsEcCode(post)=%d importer=%p"
++                         " | slot=%p poolslot=%p poolval=%p %s (BIND TIME)\n",
++                         name, pe_name->Name, pre, (void *)thunk_list->u1.Function,
++                         pre != (void *)thunk_list->u1.Function,
++                         (int)RtlIsEcCode( thunk_list->u1.Function ), module,
++                         slot, pslot, pval,
++                         !pslot ? "(no pool copy / hook unset)"
++                                : pval == (void *)thunk_list->u1.Function
++                                      ? "POOL IN SYNC"
++                                      : "POOL STALE  <== executing copy sees the OLD x64 thunk" );
++                }
++            }
+ #endif
+             TRACE_(imports)("--- %s %s.%d = %p\n",
+                             pe_name->Name, name, pe_name->Hint, (void *)thunk_list->u1.Function);
+@@ -3588,6 +3687,13 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_fl
+ 
+     if (nts == STATUS_SUCCESS)
+     {
++#ifdef __arm64ec__
++        /* ml234: re-read recorded IAT slots here — this attach runs AFTER the module's
++         * imports are bound, so it is representative of call time. (The earlier call site
++         * was inside load_arm64ec_module(), which runs before sechost/rpcrt4 even load, so
++         * the list was empty and the probe printed nothing.) */
++        { void ios_ec_recheck_iat( const char * ); ios_ec_recheck_iat( "ldrload-attach" ); }
++#endif
+         nts = process_attach( wm->ldr.DdagNode, NULL );
+         if (nts != STATUS_SUCCESS)
+         {
+@@ -3989,7 +4095,57 @@ void* WINAPI LdrResolveDelayLoadedAPI( void* base, const IMAGE_DELAYLOAD_DESCRIP
+     }
+     if (!nts)
+     {
++#ifdef __arm64ec__
++        /* iOS-Mythic ml237 ROOT-CAUSE FIX. import_dll redirects EC->EC imports from the
++         * x64 .hexpthk export thunk to the ARM64-native target; the DELAY-LOAD path never
++         * did, so it stored the thunk. Measured: every rpcrt4 delay import resolved to
++         * base+0x60800 (NdrClientCall2's FFS thunk) with IsEcCode(fp)=0.
++         *
++         * Consequence: sechost's stub hands that address to __os_arm64x_check_icall, which
++         * correctly sees non-EC code and selects $iexit_thunk$cdecl$i8$varargs. That thunk
++         * does `stp x4,x5,[sp,#0x20]`, depositing the VARIADIC DESCRIPTOR (x4 = pointer to
++         * the stack args, x5 = their size) into the x64 arg5/arg6 home slots. NdrClientCall2
++         * then reads the descriptor as arguments, so ROpenSCManagerW saw dwDesiredAccess = a
++         * pointer and lpScHandle = 0x10 -- the SIZE -- and wrote through 0x10. That is the
++         * ccontext == 0x10 crash, livelocking 3500+ times and gating whether a run reaches
++         * CEF at all.
++         *
++         * Only variadic callees are affected: non-variadic entry thunks never read x4, so
++         * everything except RPC worked. Gate on the importer being EC, exactly as
++         * import_dll does. */
++        if (arm64ec_get_module_metadata( base ))
++        {
++            const IMAGE_ARM64EC_METADATA *tgt_metadata = arm64ec_get_module_metadata( *phmod );
++
++            if (tgt_metadata) fp = (FARPROC)arm64ec_redirect_ptr( *phmod, fp, tgt_metadata );
++        }
++#endif
+         pIAT[id].u1.Function = (ULONG_PTR)fp;
++#ifdef __arm64ec__
++        /* iOS-Mythic ml236: DELAY-LOAD is a separate binding path from import_dll, and the
++         * ARM64EC redirect lives in import_dll -- so this was never instrumented.
++         *
++         * sechost DELAY-loads rpcrt4. Its native stub does
++         *   ldr x16,[__imp_NdrClientCall2]; br x16   (.rdata, points at an icall stub)
++         * which loads x11 = this delay IAT entry, x10 = $iexit_thunk$cdecl$i8$varargs, and
++         * lets __os_arm64x_check_icall pick. If what we store here is NOT recognised as EC,
++         * check_icall selects the EXIT THUNK -- the EC->x64 path -- and that thunk does
++         * `stp x4,x5,[sp,#0x20]`, depositing the VARIADIC DESCRIPTOR (x4 = stack-arg
++         * pointer, x5 = size) into the x64 arg5/arg6 slots. NdrClientCall2 then reads the
++         * descriptor as if it were arguments: dwDesiredAccess becomes a pointer and
++         * lpScHandle becomes 0x10 (the size), which is the ccontext == 0x10 crash.
++         *
++         * Log what we actually stored and whether it counts as EC. */
++        {
++            static int dl_n;
++            if (dl_n < 12 && name && strstr( name, "rpcrt4" ))
++            {
++                dl_n++;
++                ERR( "[ec-delay] %s ord/name id=%d fp=%p IsEcCode(fp)=%d slot=%p\n",
++                     name, (int)id, fp, (int)RtlIsEcCode( (ULONG_PTR)fp ), &pIAT[id].u1.Function );
++            }
++        }
++#endif
+         return fp;
+     }
+ 
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index e36c77917f1..0281cf613bf 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -1635,6 +1635,15 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+     {
+         ULONG64 prev_pc = 0, prev_frame = 0;
+         unsigned int walk_steps = 0;
++        /* ml222: ring of the last few unwind steps, dumped ONLY if the walk ends badly.
++         * The failing dispatch reported ControlPc=0, which has two readings needing
++         * opposite fixes: the walk covered several sane frames and reached the genuine
++         * end of stack (so the exception really is unhandled, and the question is why no
++         * handler matched), or ControlPc was 0 from step 1 (the incoming context is
++         * broken). Recording the trajectory instead of the endpoint distinguishes them,
++         * and costs nothing on the paths that succeed. */
++        ULONG64 trace_pc[8] = { 0 }, trace_frame[8] = { 0 };
++        unsigned int trace_n = 0;
+ 
+     for (;;)
+     {
+@@ -1642,6 +1651,10 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+         if (status != STATUS_SUCCESS) return status;
+ 
+     unwind_done:
++        trace_pc[trace_n & 7] = dispatch.ControlPc;
++        trace_frame[trace_n & 7] = dispatch.EstablisherFrame;
++        trace_n++;
++
+         if (!dispatch.EstablisherFrame) break;
+ 
+         if ((dispatch.ControlPc == prev_pc && dispatch.EstablisherFrame == prev_frame) ||
+@@ -1657,8 +1670,32 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+ 
+         if (!is_valid_arm64ec_frame( dispatch.EstablisherFrame ))
+         {
+-            ERR( "invalid frame %I64x (%p-%p)\n", dispatch.EstablisherFrame,
+-                 NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
++            /* ml221: report WHY the walk produced this frame, not just that it did.
++             *
++             * The frame that killed the webhelper was 0x73c9f70008 -- 8 bytes into
++             * DWrite.dll's read-only headers, i.e. the walk had run off the end of the
++             * guest stack. That happens when ControlPc stays a JIT-pool VA: function
++             * tables are registered at PE VAs, so no unwind info is found and the frames
++             * are garbage. virtual_unwind reverse-translates via
++             * p_ios_jit_reverse_translate_addr, but that pointer lives in ntdll's .data
++             * and every pseudo-process gets a CLONED copy -- if a child's copy is NULL the
++             * translation silently degrades to identity. Print it, plus ControlPc, so the
++             * two cases are distinguishable instead of guessed at. */
++            ERR( "invalid frame %I64x (%p-%p) ControlPc=%I64x xlate_rev=%p%s\n",
++                 dispatch.EstablisherFrame,
++                 NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase,
++                 (ULONG64)dispatch.ControlPc, p_ios_jit_reverse_translate_addr,
++                 p_ios_jit_reverse_translate_addr ? "" : "  <-- NULL: unwind ran in POOL space" );
++            {
++                unsigned int k, shown = trace_n < 8 ? trace_n : 8;
++                ERR( "[unwind-trace] %u steps total, last %u:\n", trace_n, shown );
++                for (k = 0; k < shown; k++)
++                {
++                    unsigned int idx = (trace_n - shown + k) & 7;
++                    ERR( "[unwind-trace]   #%u pc=%I64x frame=%I64x\n",
++                         trace_n - shown + k, trace_pc[idx], trace_frame[idx] );
++                }
++            }
+             rec->ExceptionFlags |= EXCEPTION_STACK_INVALID;
+             break;
+         }
+@@ -2282,8 +2319,22 @@ void WINAPI RtlUnwindEx( PVOID end_frame, PVOID target_ip, EXCEPTION_RECORD *rec
+ 
+         if (!is_valid_arm64ec_frame( dispatch.EstablisherFrame ))
+         {
+-            ERR( "invalid frame %I64x (%p-%p)\n", dispatch.EstablisherFrame,
+-                 NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase );
++            /* ml221: report WHY the walk produced this frame, not just that it did.
++             *
++             * The frame that killed the webhelper was 0x73c9f70008 -- 8 bytes into
++             * DWrite.dll's read-only headers, i.e. the walk had run off the end of the
++             * guest stack. That happens when ControlPc stays a JIT-pool VA: function
++             * tables are registered at PE VAs, so no unwind info is found and the frames
++             * are garbage. virtual_unwind reverse-translates via
++             * p_ios_jit_reverse_translate_addr, but that pointer lives in ntdll's .data
++             * and every pseudo-process gets a CLONED copy -- if a child's copy is NULL the
++             * translation silently degrades to identity. Print it, plus ControlPc, so the
++             * two cases are distinguishable instead of guessed at. */
++            ERR( "invalid frame %I64x (%p-%p) ControlPc=%I64x xlate_rev=%p%s\n",
++                 dispatch.EstablisherFrame,
++                 NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase,
++                 (ULONG64)dispatch.ControlPc, p_ios_jit_reverse_translate_addr,
++                 p_ios_jit_reverse_translate_addr ? "" : "  <-- NULL: unwind ran in POOL space" );
+             rec->ExceptionFlags |= EXCEPTION_STACK_INVALID;
+             break;
+         }
+@@ -2497,7 +2548,41 @@ static void __attribute__((naked)) arm64x_check_call(void)
+     asm( ".seh_proc \"#arm64x_check_call\"\n\t"
+          ".seh_endprologue\n\t"
+          /* check for EC code */
+-         "ldr x16, [x18, #0x60]\n\t"        /* peb */
++         /* iOS-Mythic ml238 ROOT-CAUSE FIX: read the TEB from TPIDRRO_EL0 + TSD slot 275,
++          * NOT from x18. iOS clobbers x18 (every SEGV dump in this port shows x18=0), so
++          * `ldr x16,[x18,#0x60]` fetched a garbage PEB, the EcCodeBitMap pointer was
++          * garbage, the bit test read 0, and this function reported EVERY target as
++          * non-EC. __os_arm64x_check_icall then selected the EC->x64 exit thunk even for
++          * genuinely native targets -- while RtlIsEcCode (C, via NtCurrentTeb()'s TSD
++          * path) correctly said EC, which is exactly the contradiction we measured:
++          * IsEcCode(fp)=1 yet the exit thunk still ran.
++          *
++          * For variadic callees that thunk does `stp x4,x5,[sp,#0x20]`, flattening the
++          * ARM64EC variadic descriptor (x4 = stack-arg pointer, x5 = size) into the x64
++          * arg5/arg6 slots -- producing ROpenSCManagerW's dwDesiredAccess = a pointer and
++          * lpScHandle = 0x10 (the SIZE), i.e. the ccontext == 0x10 livelock.
++          *
++          * FEX's own check_target_ec already does this (IOS_LOAD_TEB); Wine's copy never
++          * did. x16 is scratch here, so the load is free of side effects. */
++         /* iOS-Mythic ml246: this x18 read IS WRONG, and is deliberately kept anyway.
++          *
++          * iOS clobbers x18 (every SEGV dump in this port shows x18=0), so this fetches a
++          * garbage PEB, the EcCodeBitMap pointer is garbage, the bit test reads 0, and this
++          * function reports EVERY target as non-EC. FEX's check_target_ec reads the TEB via
++          * TPIDRRO_EL0 + TSD slot 275 (IOS_LOAD_TEB) for exactly this reason.
++          *
++          * Correcting it (mrs TPIDRRO_EL0 / and #~7 / ldr [#0x898] / ldr [#0x60]) was tried
++          * and A/B-PROVEN to break CEF: cef_log.txt went unwritten for 8 consecutive runs
++          * and returned the moment this line was restored (ml246, run depth also 20-24k ->
++          * 28929 calls). Reporting everything non-EC forces all indirect calls through the
++          * x64 exit thunk, which is slow and breaks VARIADIC callees (the ccontext == 0x10
++          * RPC crash) -- but that detour also absorbs whatever EcCodeBitMap false positive
++          * the correct version turns into a direct branch into x64 bytes executed as ARM64.
++          *
++          * So: correct-but-unlandable until that false positive is found. The fixed version
++          * is preserved in the task notes. Do not "fix" this without re-running the CEF
++          * check -- verifying IsEcCode flips 0->1 does NOT prove the outcome still works. */
++         "ldr x16, [x18, #0x60]\n\t"        /* peb -- see above, intentionally x18 */
+          "lsr x17, x11, #18\n\t"            /* dest / page_size / 64 */
+          "ldr x16, [x16, #0x368]\n\t"       /* peb->EcCodeBitMap */
+          "lsr x9, x11, #12\n\t"             /* dest / page_size */
+diff --git a/dlls/rpcrt4/ndr_marshall.c b/dlls/rpcrt4/ndr_marshall.c
+index 5e813ef6eb9..5d6d89b6f4d 100644
+--- a/dlls/rpcrt4/ndr_marshall.c
++++ b/dlls/rpcrt4/ndr_marshall.c
+@@ -7040,11 +7040,66 @@ static unsigned char *WINAPI NdrContextHandleUnmarshall(
+             if (ctxh_reports < 8)
+             {
+                 ctxh_reports++;
++                /* ml227: name the INTERFACE. The fault address is 0x10 itself and it
++                 * livelocks 3500+ times at rpcrt4's fast-forward export thunk, so this is
++                 * the recurring wall rather than a side-issue -- it is why some runs never
++                 * reach CEF's crypt/network stage. Knowing which interface/proc is being
++                 * called separates "our marshalling mangled a good call" from "the wrong
++                 * stub is being invoked, so the format string does not match the arguments"
++                 * (in which case reading 0x10 as &handle is a symptom, not the bug). */
++                const RPC_SYNTAX_IDENTIFIER *iid = NULL;
++                if (pStubMsg->StubDesc && pStubMsg->StubDesc->RpcInterfaceInformation)
++                    iid = &((const RPC_CLIENT_INTERFACE *)
++                            pStubMsg->StubDesc->RpcInterfaceInformation)->InterfaceId;
++
+                 ERR( "[ctxh] BAD ccontext=%p flags=0x%02x via_ptr=%d ppMemory=%p slot=%p "
+                      "StackTop=%p mod16=%u IsClient=%d\n",
+                      ccontext, pFormat[1], !!(pFormat[1] & HANDLE_PARAM_IS_VIA_PTR),
+                      ppMemory, (void *)*(ULONG_PTR *)ppMemory, pStubMsg->StackTop,
+                      (unsigned)((ULONG_PTR)pStubMsg->StackTop & 15), pStubMsg->IsClient );
++                if (iid)
++                    ERR( "[ctxh]   iface=%08x-%04x-%04x-%02x%02x%02x%02x%02x%02x%02x%02x"
++                         " v%u.%u\n",
++                         iid->SyntaxGUID.Data1, iid->SyntaxGUID.Data2, iid->SyntaxGUID.Data3,
++                         iid->SyntaxGUID.Data4[0], iid->SyntaxGUID.Data4[1],
++                         iid->SyntaxGUID.Data4[2], iid->SyntaxGUID.Data4[3],
++                         iid->SyntaxGUID.Data4[4], iid->SyntaxGUID.Data4[5],
++                         iid->SyntaxGUID.Data4[6], iid->SyntaxGUID.Data4[7],
++                         iid->SyntaxVersion.MajorVersion, iid->SyntaxVersion.MinorVersion );
++                else ERR( "[ctxh]   iface=UNAVAILABLE (StubDesc=%p)\n", pStubMsg->StubDesc );
++
++                /* ml228: MEASURE StackTop - RSP instead of inferring it.
++                 *
++                 * The interface is svcctl and the proc is ROpenSCManagerW(machine, db,
++                 * dwDesiredAccess, SC_RPC_HANDLE *out). Argument TYPES say the window is
++                 * 8 bytes low: at +0x10 we read a pointer where a DWORD access mask
++                 * belongs, and at +0x18 we read 0x10 where the out-pointer belongs, while
++                 * shifting +8 makes BOTH type-correct. That is semantic evidence, unlike
++                 * the earlier "small value beside a pointer" heuristic which was a false
++                 * positive -- and note mod16 does NOT discriminate the two entry paths
++                 * (aligned RSP+0x18 with RSP=8, and pre-fix misaligned RSP+0x10 with
++                 * RSP=0, are both 0 mod 16), so my earlier use of it was wrong.
++                 *
++                 * The return address pinpoints RSP: the guest's CALL pushed it, so
++                 * whichever slot below StackTop holds a code pointer fixes RSP exactly.
++                 * StackTop should be RSP+0x18. Dump the window and let the arithmetic be
++                 * read off rather than argued. */
++                {
++                    /* ml235: extend past +0x28. The two slots NDR reads as params 2/3 look
++                     * exactly like the ARM64EC VARIADIC register pair rather than arguments:
++                     * a pointer (x4 = stack-args pointer) and 0x10 (x5 = size in bytes = two
++                     * 8-byte args). The EC->x64 exit thunk does `stp x4,x5,[sp,#0x20]`,
++                     * i.e. it deposits that pair into the arg5/arg6 home slots. If that is
++                     * what happened, the REAL arguments live AT the pointer -- around
++                     * StackTop+0x30 -- so dump far enough to see them and check whether a
++                     * plausible access mask and &handle appear there. */
++                    const ULONG_PTR *w = (const ULONG_PTR *)(pStubMsg->StackTop - 0x20);
++                    int k;
++
++                    for (k = 0; k < 16; k++)
++                        ERR( "[ctxh]   win[%+d] %p = %p\n", (int)(k * 8 - 0x20),
++                             (const void *)(w + k), (void *)w[k] );
++                }
+             }
+         }
+         /* [out]-only or [ret] param */
+diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
+index 1c166951218..dc45afc1f5f 100644
+--- a/dlls/rpcrt4/ndr_stubless.c
++++ b/dlls/rpcrt4/ndr_stubless.c
+@@ -538,14 +538,40 @@ void client_do_args( PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat, enum s
+ 
+             shift_reports++;
+             ERR( "[ndr-shift] param%u off=0x%x phase=%d StackTop=%p | prev=%p HERE=%p "
+-                 "next=%p next2=%p => %s\n",
++                 "next=%p next2=%p\n",
+                  j, params[j].stack_offset, phase, pStubMsg->StackTop,
+-                 (void *)slot[-1], (void *)here, (void *)slot[1], (void *)slot[2],
+-                 (slot[1] >= 0x10000 && slot[1] < 0x8000000000ull)
+-                     ? "SHIFT: real pointer is ONE SLOT LATER (+8)"
+-                     : (slot[-1] >= 0x10000 && slot[-1] < 0x8000000000ull)
+-                           ? "SHIFT: real pointer is ONE SLOT EARLIER (-8)"
+-                           : "no neighbouring pointer -- shift NOT indicated" );
++                 (void *)slot[-1], (void *)here, (void *)slot[1], (void *)slot[2] );
++
++            /* ml229: dump EVERY param with what the format string says about it.
++             *
++             * Established so far: the interface is svcctl / ROpenSCManagerW, the caller is
++             * sechost.dll, and the frame model is CORRECT (the return address sits at
++             * StackTop-0x18, so StackTop == RSP+0x18 exactly as designed -- there is no
++             * 8-byte shift; that earlier inference was wrong). Params 0 and 1, which the
++             * entry thunk spills from x2/x3, arrive correctly as NULL/NULL. Only params 2
++             * and 3 -- the ones passed on the CALLER'S STACK -- are wrong, and they look
++             * like each other's values.
++             *
++             * Rather than infer intent from value shapes again, print each param's declared
++             * offset and attribute bits next to the raw slot contents, so what NDR expects
++             * at each offset can be read directly instead of guessed. */
++            {
++                unsigned int q;
++
++                for (q = 0; q < number_of_params && q < 8; q++)
++                {
++                    const ULONG_PTR *s2 =
++                        (const ULONG_PTR *)(pStubMsg->StackTop + params[q].stack_offset);
++
++                    ERR( "[ndr-param]   [%u] off=0x%-4x val=%p | IsBasetype=%d IsSimpleRef=%d "
++                         "IsIn=%d IsOut=%d IsRet=%d ByValue=%d type_off=0x%x\n",
++                         q, params[q].stack_offset, (void *)s2[0],
++                         params[q].attr.IsBasetype, params[q].attr.IsSimpleRef,
++                         params[q].attr.IsIn, params[q].attr.IsOut,
++                         params[q].attr.IsReturn, params[q].attr.IsByValue,
++                         params[q].u.type_offset );
++                }
++            }
+         }
+     }
+ 

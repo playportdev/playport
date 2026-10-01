@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The README's and the site's logo: app/Icon/AppIcon.svg without the dev badge, in iOS's rounded mask. -->
+  <defs><clipPath id="mask"><rect width="1024" height="1024" rx="229"/></clipPath><clipPath id="window"><circle cx="512" cy="512" r="262"/></clipPath></defs>
+  <g clip-path="url(#mask)">
+  <rect width="1024" height="1024" fill="#0B0E13"/>
+
+  <!-- The porthole: amber ring, a darker inner lip, bolts. -->
+  <circle cx="512" cy="512" r="352" fill="#F5B544"/>
+  <circle cx="512" cy="512" r="288" fill="#B7822A"/>
+  <g fill="#FFD08A">
+    <circle cx="512" cy="192" r="18"/>
+    <circle cx="738" cy="286" r="18"/>
+    <circle cx="832" cy="512" r="18"/>
+    <circle cx="738" cy="738" r="18"/>
+    <circle cx="512" cy="832" r="18"/>
+    <circle cx="286" cy="738" r="18"/>
+    <circle cx="192" cy="512" r="18"/>
+    <circle cx="286" cy="286" r="18"/>
+  </g>
+
+  <!-- The glass, a sea line, the play button behind it, a glare. -->
+  <circle cx="512" cy="512" r="262" fill="#1D242E"/>
+  <g clip-path="url(#window)">
+    <path d="M240 640 C 330 604, 420 676, 512 640 S 694 604, 784 640 V784 H240 Z" fill="#24324A"/>
+    <path d="M240 690 C 330 654, 420 726, 512 690 S 694 654, 784 690 V784 H240 Z" fill="#151A21"/>
+  </g>
+  <!-- Optically centred: halfway between its box centre and its centroid sits on the glass centre. -->
+  <path fill="#EEF1F5" transform="translate(-34 0)"
+        d="M455 382 C 455 358, 480 344, 501 356 L 660 486 C 680 498, 680 526, 660 538 L 501 668 C 480 680, 455 666, 455 642 Z"/>
+  <path d="M332 424 A 196 196 0 0 1 468 296" fill="none" stroke="#2A3340" stroke-width="24" stroke-linecap="round"/>
+  <!-- A faint edge, so the dark tile stays visible on a dark page (GitHub's dark theme). -->
+  <rect width="1024" height="1024" rx="229" fill="none" stroke="#3A4656" stroke-width="20"/>
+</g>
+</svg>

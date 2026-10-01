@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 10 Jul 2026 16:15:46 +0800
+Subject: [PATCH] =?UTF-8?q?Mythic=20iOS:=20Steam=20S3=20=E2=80=94=20kernel?=
+ =?UTF-8?q?base=20no-Win8-lie=20+=20arm64ec=20redirect=20Destination-RVA?=
+ =?UTF-8?q?=20validation?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- version.c: never apply the Win8 6.2.9200 compatibility lie on iOS. Our
+  pseudo-process bootstrap builds no main-exe activation context, so the
+  compat-GUID escape hatch never fires and Steam's updater self-selected the
+  frozen 32-bit steam_client_legacy_win64 channel. Report the real prefix
+  version → Steam keeps the 64-bit client our no-WoW64 wine can run.
+
+- signal_arm64ec.c (arm64ec_redirect_ptr): validate the redirection-map
+  Destination RVA against SizeOfImage before xlate_ios_jit. A corrupt entry
+  produced module+0xC483974 (past image end); xlate then matched it against
+  another pseudo-process's pool mapping and a poison pointer landed in
+  kernelbase's IAT — the steamerrorreporter64 fault storm. Out-of-image →
+  treat as no-entry and let the runtime check_call resolve.
+
+(cherry picked from commit c58cf755c1173aabc18aefd37ba7a797246adc63)
+Madeira-commit: bcdbc98b7132c6e6485f200c49e1b958dab1d702
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/version.c   | 10 ++++++++++
+ dlls/ntdll/signal_arm64ec.c | 20 +++++++++++++++++++-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/kernelbase/version.c b/dlls/kernelbase/version.c
+index 809577afcfc..df579f1b12c 100644
+--- a/dlls/kernelbase/version.c
++++ b/dlls/kernelbase/version.c
+@@ -194,6 +194,16 @@ static BOOL CALLBACK init_current_version(PINIT_ONCE init_once, PVOID parameter,
+             break;
+ 
+     if (idx < 0) return TRUE;
++
++    /* iOS-Mythic (task #29, 2026-07-10): never apply the Win8 compatibility
++     * lie. Our pseudo-process bootstrap does not build the main exe's
++     * activation context, so the compat-GUID escape hatch below never fires
++     * and every modern app is told 6.2.9200 — Steam's updater then
++     * self-selects the frozen 32-bit steam_client_legacy_win64 channel
++     * (Win7/8 client) and "updates" the 64-bit client into one our
++     * no-WoW64 wine cannot run. Report the real prefix version instead. */
++    return TRUE;
++
+     ver = &windows8_version_info;
+ 
+     if (RtlQueryInformationActivationContext(0, NtCurrentTeb()->Peb->ActivationContextData, NULL,
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 5a7bf7ce6eb..02c8117ef59 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -232,7 +232,20 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+     while (min <= max)
+     {
+         int pos = (min + max) / 2;
+-        if (map[pos].Source == rva) return xlate_ios_jit( get_rva( module, map[pos].Destination ) );
++        if (map[pos].Source == rva)
++        {
++            /* iOS-Mythic 2026-07-10 (Steam S3 run 7): validate the Destination
++             * RVA before trusting it. A corrupt entry once produced
++             * module+0xC483974 (far past SizeOfImage); xlate_ios_jit then
++             * matched that VA against ANOTHER process's module mapping and a
++             * poison pool pointer landed in kernelbase's IAT — the
++             * steamerrorreporter64 2000-fault storm. Out-of-image → treat as
++             * no-entry and let the thunk-decode / runtime check_call resolve. */
++            const IMAGE_NT_HEADERS *nt = RtlImageNtHeader( module );
++            if (!nt || map[pos].Destination < nt->OptionalHeader.SizeOfImage)
++                return xlate_ios_jit( get_rva( module, map[pos].Destination ) );
++            break;
++        }
+         if (map[pos].Source < rva) min = pos + 1;
+         else max = pos - 1;
+     }
+@@ -297,6 +310,11 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
+                         return xlate_ios_jit( target );
+                     }
+                 }
++                /* NOTE (2026-07-10): do NOT reject targets missing from the
++                 * module list here — during early loader phases (hybrid
++                 * metadata patching) legit targets live in modules not yet
++                 * linked in, and returning `ptr` instead zeroed ucrtbase's
++                 * dispatch_call_no_redirect slot (blr x16=0 at boot). */
+                 return xlate_ios_jit( target );
+             }
+         }

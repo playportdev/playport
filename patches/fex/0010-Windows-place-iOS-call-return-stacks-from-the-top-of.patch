@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 16:16:23 +0200
+Subject: [PATCH 10/10] Windows: place iOS call-return stacks from the top of
+ the FEX band
+
+A call-return stack is 16MB and two guard pages, so on the band's 64KB
+granularity it ends 64KB past a 16MB boundary. Placed bottom-up among
+rpmalloc's 16MB-aligned spans, each one left a hole of nearly 16MB that
+no span could use, and each emulator thread took about 64MB of the 16GB
+band instead of 50 (its two spans, the stack and a 2MB L1 cache). They
+are now reserved with MEM_TOP_DOWN, so they pack next to each other at
+the band's top while the spans fill it from the bottom. Wine accepts
+MEM_TOP_DOWN together with address requirements; Windows does not, which
+is why FEXCore's own band allocations leave it out.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-fex-band.md
+Offered-upstream: no
+---
+ Source/Windows/Common/CallRetStack.h | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 2b1ae18..8d15f86 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -114,7 +114,15 @@ bool InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+         LogMan::Msg::EFmt("[callret] INJECTED reserve failure on call #{} -- taking the real "
+                           "containment path", ThisCall);
+       } else if (ios_fex_band_base) {
+-      CallRetStackAlloc = ::VirtualAlloc2(nullptr, nullptr, CallRetStackAllocSize, MEM_RESERVE, PAGE_NOACCESS, &AddrParam, 1);
++      /* Playport: from the top of the band down. The stack is 16MB and two
++       * guard pages, so on the band's 64KB granularity it ends 64KB past a
++       * 16MB boundary; placed bottom-up among rpmalloc's 16MB-aligned spans,
++       * each one left a hole of nearly 16MB that no span could use, and a
++       * thread cost about 64MB of the band instead of 50. Packed at the top
++       * they sit next to each other. Wine takes MEM_TOP_DOWN together with
++       * address requirements (Windows does not). */
++      CallRetStackAlloc = ::VirtualAlloc2(nullptr, nullptr, CallRetStackAllocSize, MEM_RESERVE | MEM_TOP_DOWN, PAGE_NOACCESS,
++                                          &AddrParam, 1);
+     }
+   }
+   /* ml706: NO unconstrained fallback here. Each 16-byte frame holds a HOST

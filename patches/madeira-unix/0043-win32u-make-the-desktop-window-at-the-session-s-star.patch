@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 29 Sep 2026 07:40:05 +0200
+Subject: [PATCH] win32u: make the desktop window at the session's start, and
+ register its classes in every pseudo-process
+
+A pseudo-process child could not create a window unless its parent had
+already drawn one: get_desktop_window in the child found no desktop
+window and could not make it, so NtUserCreateWindowEx failed with
+ERROR_ACCESS_DENIED. On a Wine host explorer makes the desktop window
+when the session starts; on iOS the first CreateWindowEx of the first
+process did. init_user (run once, for the session) now makes it right
+after registering the desktop classes. wineserver also keeps window
+classes per process, and init_user registered the desktop and message
+classes for the first process only: NtUserInitializeClientPfnArrays,
+which user32 calls once per process, now registers them for every later
+process, as register_builtin_classes already does for the controls.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-child-process.md
+Offered-upstream: no
+---
+ build/win32u-unix/class_ios.c | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/build/win32u-unix/class_ios.c b/build/win32u-unix/class_ios.c
+index 1a30ac6..bf802d6 100644
+--- a/build/win32u-unix/class_ios.c
++++ b/build/win32u-unix/class_ios.c
+@@ -391,6 +391,11 @@ static void init_user(void)
+     sysparams_init();
+     winstation_init();
+     register_desktop_class();
++    /* Playport: the session's first process makes the desktop window now, as
++     * explorer does at a Wine session's start. A pseudo-process child cannot
++     * make it (get_desktop_window failed there with ERROR_ACCESS_DENIED), so a
++     * child whose parent had drawn no window could create none. */
++    get_desktop_window();
+ }
+ 
+ /***********************************************************************
+@@ -446,7 +451,23 @@ NTSTATUS WINAPI NtUserInitializeClientPfnArrays( const ntuser_client_func_ptr *c
+     }
+     pthread_mutex_unlock( &winproc_lock );
+ 
+-    pthread_once( &init_once, init_user );
++    {
++        /* Playport: init_user runs once, for the session, and registers the
++         * desktop and message window classes with it; wineserver keeps window
++         * classes per process. A pseudo-process child had neither, so when no
++         * desktop window existed yet, get_desktop_window could not make one
++         * (grab_class) and NtUserCreateWindowEx failed with
++         * ERROR_ACCESS_DENIED. Every later process registers them itself, as
++         * register_builtin_classes already does for the controls. */
++        static void *init_peb;
++        if (!init_peb) init_peb = peb;
++        pthread_once( &init_once, init_user );
++        if (peb != init_peb)
++        {
++            register_desktop_class();
++            dprintf(2, "[pfn] peb=%p registered the desktop and message classes\n", peb);
++        }
++    }
+     return STATUS_SUCCESS;
+ }
+ 

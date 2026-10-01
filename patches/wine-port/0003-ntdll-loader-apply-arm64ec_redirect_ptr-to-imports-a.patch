@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Apr 2026 17:40:26 +0800
+Subject: [PATCH] ntdll/loader: apply arm64ec_redirect_ptr to imports at load
+ time
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When the importing module is ARM64EC and the target module has CHPE
+metadata, redirect every IAT entry from the .hexpthk x86_64 thunk
+address to the ARM64-native target. This avoids relying on the
+runtime arm64x_check_call fast-forward redirection — which is
+fragile for cross-module ARM64-host calls (ours had x86_64 thunk
+bytes interpreted as ARM64 land at zero padding).
+
+Required exporting arm64ec_redirect_ptr (was static).
+
+(cherry picked from commit e81b8060e753c0a557de816c76423ea3363778f7)
+Madeira-commit: 54ad685545d40726a5d6d90a2e77fa07f91728a6
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         | 21 +++++++++++++++++++++
+ dlls/ntdll/ntdll_misc.h     |  1 +
+ dlls/ntdll/signal_arm64ec.c |  2 +-
+ 3 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index b0b2392c504..b3115fd7bdb 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1221,6 +1221,15 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+         goto done;
+     }
+ 
++#ifdef __arm64ec__
++    /* For ARM64EC: imports normally resolve to the .hexpthk x86_64 thunks
++     * exported in the EXPORT directory. ARM64-host callers want the
++     * ARM64-native target instead. Apply RedirectionMetadata up front so
++     * IAT entries point directly to ARM64 code, avoiding the runtime
++     * arm64x_check_call fast-forward dance. */
++    const IMAGE_ARM64EC_METADATA *imp_metadata = arm64ec_get_module_metadata( imp_mod );
++#endif
++
+     while (import_list->u1.Ordinal)
+     {
+         if (IMAGE_SNAP_BY_ORDINAL(import_list->u1.Ordinal))
+@@ -1236,6 +1245,12 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+                      name, ordinal, debugstr_w(wm->ldr.FullDllName.Buffer),
+                      (void *)thunk_list->u1.Function );
+             }
++#ifdef __arm64ec__
++            else if (imp_metadata)
++                thunk_list->u1.Function = (ULONG_PTR)arm64ec_redirect_ptr( imp_mod,
++                                                                           (void *)thunk_list->u1.Function,
++                                                                           imp_metadata );
++#endif
+             TRACE_(imports)("--- Ordinal %s.%d = %p\n", name, ordinal, (void *)thunk_list->u1.Function );
+         }
+         else  /* import by name */
+@@ -1252,6 +1267,12 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+                      name, pe_name->Name, debugstr_w(wm->ldr.FullDllName.Buffer),
+                      (void *)thunk_list->u1.Function );
+             }
++#ifdef __arm64ec__
++            else if (imp_metadata)
++                thunk_list->u1.Function = (ULONG_PTR)arm64ec_redirect_ptr( imp_mod,
++                                                                           (void *)thunk_list->u1.Function,
++                                                                           imp_metadata );
++#endif
+             TRACE_(imports)("--- %s %s.%d = %p\n",
+                             pe_name->Name, name, pe_name->Hint, (void *)thunk_list->u1.Function);
+         }
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 2bf3cfaca32..4be99677f46 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -164,6 +164,7 @@ extern void heap_thread_detach(void);
+ extern NTSTATUS arm64ec_process_init( HMODULE module );
+ extern NTSTATUS arm64ec_thread_init(void);
+ extern IMAGE_ARM64EC_METADATA *arm64ec_get_module_metadata( HMODULE module );
++extern void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METADATA *metadata );
+ extern void arm64ec_update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,
+                                             const IMAGE_ARM64EC_METADATA *metadata );
+ extern void invoke_arm64ec_syscall(void);
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 66a79906e6c..26e4e78501b 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -163,7 +163,7 @@ static BOOL send_cross_process_notification( HANDLE process, UINT id, const void
+ }
+ 
+ 
+-static void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METADATA *metadata )
++void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METADATA *metadata )
+ {
+     const IMAGE_ARM64EC_REDIRECTION_ENTRY *map = get_rva( module, metadata->RedirectionMetadata );
+     int min = 0, max = metadata->RedirectionMetadataCount - 1;

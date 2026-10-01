@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 15:03:48 +0200
+Subject: [PATCH] winegstreamer: register a static plugin set on iOS
+
+An iOS app cannot load a GStreamer plugin from disk: the host links the
+plugins winegstreamer needs statically, and they must be registered after
+gst_init. The registry is disabled, so gst_init neither scans a plugin path
+nor reads or writes a registry cache in the app's container.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-26-hk-video.md
+Offered-upstream: no
+---
+ dlls/winegstreamer/unix_private.h |  4 ++++
+ dlls/winegstreamer/unixlib.c      | 12 ++++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/dlls/winegstreamer/unix_private.h b/dlls/winegstreamer/unix_private.h
+index 3199e362fe6..37158949db7 100644
+--- a/dlls/winegstreamer/unix_private.h
++++ b/dlls/winegstreamer/unix_private.h
+@@ -33,6 +33,10 @@ GST_DEBUG_CATEGORY_EXTERN(wine);
+ #define GST_CAT_DEFAULT wine
+ 
+ extern NTSTATUS wg_init_gstreamer(void *args);
++#ifdef WINE_IOS
++/* the host's static plugin set (no plugin is loaded from disk on iOS) */
++extern void winegstreamer_register_static_plugins(void);
++#endif
+ 
+ extern GstStreamType stream_type_from_caps(GstCaps *caps);
+ extern GstElement *create_element(const char *name, const char *plugin_set);
+diff --git a/dlls/winegstreamer/unixlib.c b/dlls/winegstreamer/unixlib.c
+index ac671bbb514..529e3fd41de 100644
+--- a/dlls/winegstreamer/unixlib.c
++++ b/dlls/winegstreamer/unixlib.c
+@@ -282,6 +282,14 @@ NTSTATUS wg_init_gstreamer(void *arg)
+      */
+     gst_segtrap_set_enabled(false);
+ 
++#ifdef WINE_IOS
++    /* iOS loads no plugin from disk: the host links a static plugin set and
++     * registers it after gst_init. Nothing is scanned or cached on disk. */
++    setenv("GST_REGISTRY_DISABLE", "yes", FALSE);
++    setenv("GST_PLUGIN_SYSTEM_PATH_1_0", "", FALSE);
++    setenv("GST_PLUGIN_PATH_1_0", "", FALSE);
++#endif
++
+     if (!gst_init_check(&argc, &argv, &err))
+     {
+         fprintf(stderr, "winegstreamer: failed to initialize GStreamer: %s\n", err->message);
+@@ -289,6 +297,10 @@ NTSTATUS wg_init_gstreamer(void *arg)
+         return STATUS_UNSUCCESSFUL;
+     }
+ 
++#ifdef WINE_IOS
++    winegstreamer_register_static_plugins();
++#endif
++
+     if (!NtQueryInformationProcess(GetCurrentProcess(),
+             ProcessAffinityMask, &process_mask, sizeof(process_mask), NULL))
+         thread_count = popcount(process_mask);

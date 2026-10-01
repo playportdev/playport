@@ -1,0 +1,12 @@
+Initialize engine version: 6000.0.61f1 (74a0adb02c31)
+Direct3D:
+    Version:  Direct3D 11.0 [level 11.1]
+    Renderer: Apple A19 Pro GPU (ID=0x0)
+    Vendor:   Unknown (ID=106b)
+[Physics::Module] SDK Version: 4.1.2
+[Physics::Module] Integration Version: 1.0.0
+GpuFence::Create(): Failed to create ID3D11Fence, error 0x80004005
+Windows.Gaming.Input failed to initialize (Might not be available), fallback to XInputUsing XInput
+Loaded saved language code 'EN'
+Direct3D: detected that using refresh rate causes time drift. Will stop trusting refresh rate until the game window is moved.
+Loaded saved language code 'EN'

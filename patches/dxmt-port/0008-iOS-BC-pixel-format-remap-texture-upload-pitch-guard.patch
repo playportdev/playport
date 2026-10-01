@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 13 May 2026 10:30:48 +0800
+Subject: [PATCH] iOS: BC pixel-format remap + texture upload pitch guard
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+iPhone GPUs (Apple7/8 = A14/A15) lack native BC (DXT/BPTC) texture
+support; that's Apple9 / Mac2 only. Games like Thumper unconditionally
+CreateTexture2D(BC1) on .pc cache files and crash Metal's MTL-
+TextureDescriptor validator with `pixelFormat=130`.
+
+Tier-1 fix: to_metal_pixel_format() remaps BC1/2/3/7 → RGBA8(Unorm|sRGB),
+BC4 → R8(Snorm|Unorm), BC5 → RG8(Snorm|Unorm), BC6H → RGBA16Float,
+gated on cached -[MTLDevice supportsBCTextureCompression]. Plus
+texture_upload_pitch_ok() helper covering 40+ MTLPixelFormat values,
+used by _MTLTexture_replaceRegion and blit encoder
+CopyFromBufferToTexture / CopyFromTextureToBuffer paths to detect BC-
+style row pitches and silently skip the upload (texture stays zero-
+initialized → black). Also adds Present cadence instrumentation
+(_MTLCommandBuffer_presentDrawable + presentDrawableAfterMinimum-
+Duration log "[iOS DXMT] Present #N (path)" at #1 then every 60
+frames) for diagnosing render-loop liveness.
+
+Tier-3 follow-up (CPU BC1/BC3 decode at upload) tracked separately.
+Geometry and non-BC textures render correctly; BC textures show black.
+
+First-frame milestone: enables Thumper's DROOL splash to render on
+iPhone via the full FEX→ARM64EC→Wine→DXMT→Metal stack.
+
+Madeira-commit: ec30e127bd532778e75fd7a82299fa863e2823c7
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 188 ++++++++++++++++++++++++++--
+ 1 file changed, 176 insertions(+), 12 deletions(-)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 332288d..2696f12 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -256,8 +256,146 @@ _MTLDevice_newDepthStencilState(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* iOS-Mythic 2026-05-13: iPhone GPUs (Apple7/Apple8 = A14/A15) lack native
++ * BC (DXT/BPTC) texture support — that's Apple9 / Mac2 only. Games like
++ * Thumper unconditionally CreateTexture2D(BC1) on their .pc cache files,
++ * which then dies in Metal's MTLTextureDescriptor validateWithDevice.
++ *
++ * Tier-1 fix: remap BC formats to RGBA8 (or matching narrower format) so
++ * the descriptor validates. The uploaded BC blob will be interpreted as
++ * RGBA8 garbage — black/noise textures with correct geometry. Acceptable
++ * for boot validation; tier-3 CPU decompression will follow once a first
++ * frame renders. */
++static enum WMTPixelFormat remap_unsupported_bc(enum WMTPixelFormat fmt, bool bc_supported) {
++  if (bc_supported)
++    return fmt;
++  switch (fmt) {
++  case WMTPixelFormatBC1_RGBA:
++  case WMTPixelFormatBC2_RGBA:
++  case WMTPixelFormatBC3_RGBA:
++  case WMTPixelFormatBC7_RGBAUnorm:
++    return WMTPixelFormatRGBA8Unorm;
++  case WMTPixelFormatBC1_RGBA_sRGB:
++  case WMTPixelFormatBC2_RGBA_sRGB:
++  case WMTPixelFormatBC3_RGBA_sRGB:
++  case WMTPixelFormatBC7_RGBAUnorm_sRGB:
++    return WMTPixelFormatRGBA8Unorm_sRGB;
++  case WMTPixelFormatBC4_RUnorm:
++    return WMTPixelFormatR8Unorm;
++  case WMTPixelFormatBC4_RSnorm:
++    return WMTPixelFormatR8Snorm;
++  case WMTPixelFormatBC5_RGUnorm:
++    return WMTPixelFormatRG8Unorm;
++  case WMTPixelFormatBC5_RGSnorm:
++    return WMTPixelFormatRG8Snorm;
++  case WMTPixelFormatBC6H_RGBFloat:
++  case WMTPixelFormatBC6H_RGBUfloat:
++    return WMTPixelFormatRGBA16Float;
++  default:
++    return fmt;
++  }
++}
++
++/* Cached per-device check — set on first to_metal_pixel_format call.
++ * Safe because Mythic runs a single MTLDevice. */
++static int g_bc_supported_cached = -1;
++static bool query_bc_support(void) {
++  if (__builtin_expect(g_bc_supported_cached >= 0, 1))
++    return g_bc_supported_cached != 0;
++  bool supported = false;
++  @autoreleasepool {
++    id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
++    if (dev) {
++      if ([dev respondsToSelector:@selector(supportsBCTextureCompression)])
++        supported = [dev supportsBCTextureCompression];
++      [dev release];
++    }
++  }
++  g_bc_supported_cached = supported ? 1 : 0;
++  return supported;
++}
++
+ MTLPixelFormat to_metal_pixel_format(enum WMTPixelFormat format) {
+-  return (MTLPixelFormat)ORIGINAL_FORMAT(format);
++  enum WMTPixelFormat stripped = (enum WMTPixelFormat)ORIGINAL_FORMAT(format);
++  stripped = remap_unsupported_bc(stripped, query_bc_support());
++  return (MTLPixelFormat)stripped;
++}
++
++/* iOS-Mythic 2026-05-13: When BC textures are remapped to RGBA8 by
++ * to_metal_pixel_format, the game continues to upload BC-compressed bytes
++ * with BC row pitch. Metal's replaceRegion/copyFromBuffer validators will
++ * abort if bytesPerRow < width * bytes_per_pixel for the (now RGBA8)
++ * destination. This helper returns false when the upload would trip that
++ * check, letting the call site skip rather than abort. The texture stays
++ * zero/garbage — fine for boot validation. */
++static bool format_bytes_per_pixel(MTLPixelFormat fmt, size_t *bpp_out) {
++  switch (fmt) {
++  case MTLPixelFormatA8Unorm:
++  case MTLPixelFormatR8Unorm:
++  case MTLPixelFormatR8Snorm:
++  case MTLPixelFormatR8Uint:
++  case MTLPixelFormatR8Sint:
++  case MTLPixelFormatStencil8:
++    *bpp_out = 1; return true;
++  case MTLPixelFormatR16Unorm:
++  case MTLPixelFormatR16Snorm:
++  case MTLPixelFormatR16Uint:
++  case MTLPixelFormatR16Sint:
++  case MTLPixelFormatR16Float:
++  case MTLPixelFormatRG8Unorm:
++  case MTLPixelFormatRG8Snorm:
++  case MTLPixelFormatRG8Uint:
++  case MTLPixelFormatRG8Sint:
++  case MTLPixelFormatDepth16Unorm:
++    *bpp_out = 2; return true;
++  case MTLPixelFormatRGBA8Unorm:
++  case MTLPixelFormatRGBA8Unorm_sRGB:
++  case MTLPixelFormatRGBA8Snorm:
++  case MTLPixelFormatRGBA8Uint:
++  case MTLPixelFormatRGBA8Sint:
++  case MTLPixelFormatBGRA8Unorm:
++  case MTLPixelFormatBGRA8Unorm_sRGB:
++  case MTLPixelFormatRG16Unorm:
++  case MTLPixelFormatRG16Snorm:
++  case MTLPixelFormatRG16Uint:
++  case MTLPixelFormatRG16Sint:
++  case MTLPixelFormatRG16Float:
++  case MTLPixelFormatR32Uint:
++  case MTLPixelFormatR32Sint:
++  case MTLPixelFormatR32Float:
++  case MTLPixelFormatDepth32Float:
++  case MTLPixelFormatRGB10A2Unorm:
++  case MTLPixelFormatRGB10A2Uint:
++  case MTLPixelFormatBGR10A2Unorm:
++  case MTLPixelFormatRG11B10Float:
++  case MTLPixelFormatRGB9E5Float:
++    *bpp_out = 4; return true;
++  case MTLPixelFormatRGBA16Unorm:
++  case MTLPixelFormatRGBA16Snorm:
++  case MTLPixelFormatRGBA16Uint:
++  case MTLPixelFormatRGBA16Sint:
++  case MTLPixelFormatRGBA16Float:
++  case MTLPixelFormatRG32Uint:
++  case MTLPixelFormatRG32Sint:
++  case MTLPixelFormatRG32Float:
++  case MTLPixelFormatDepth32Float_Stencil8:
++    *bpp_out = 8; return true;
++  case MTLPixelFormatRGBA32Uint:
++  case MTLPixelFormatRGBA32Sint:
++  case MTLPixelFormatRGBA32Float:
++    *bpp_out = 16; return true;
++  default:
++    return false;
++  }
++}
++
++static bool texture_upload_pitch_ok(id<MTLTexture> tex, size_t width, size_t bytes_per_row) {
++  if (bytes_per_row == 0)
++    return true;
++  size_t bpp;
++  if (!format_bytes_per_pixel([tex pixelFormat], &bpp))
++    return true;
++  return bytes_per_row >= width * bpp;
+ }
+ 
+ void
+@@ -702,12 +840,16 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTBlitCommandCopyFromBufferToTexture: {
+       struct wmtcmd_blit_copy_from_buffer_to_texture *body = (struct wmtcmd_blit_copy_from_buffer_to_texture *)next;
++      id<MTLTexture> dst = (id<MTLTexture>)body->dst;
++      /* iOS-Mythic: skip BC-pitch uploads to remapped RGBA8 textures. */
++      if (!texture_upload_pitch_ok(dst, body->size.width, body->bytes_per_row))
++        break;
+       [encoder copyFromBuffer:(id<MTLBuffer>)body->src
+                  sourceOffset:body->src_offset
+             sourceBytesPerRow:body->bytes_per_row
+           sourceBytesPerImage:body->bytes_per_image
+                    sourceSize:MTLSizeMake(body->size.width, body->size.height, body->size.depth)
+-                    toTexture:(id<MTLTexture>)body->dst
++                    toTexture:dst
+              destinationSlice:body->slice
+              destinationLevel:body->level
+             destinationOrigin:MTLOriginMake(body->origin.x, body->origin.y, body->origin.z)];
+@@ -730,7 +872,11 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTBlitCommandCopyFromTextureToBuffer: {
+       struct wmtcmd_blit_copy_from_texture_to_buffer *body = (struct wmtcmd_blit_copy_from_texture_to_buffer *)next;
+-      [encoder copyFromTexture:(id<MTLTexture>)body->src
++      id<MTLTexture> src = (id<MTLTexture>)body->src;
++      /* iOS-Mythic: skip BC-pitch readback to remapped RGBA8 textures. */
++      if (!texture_upload_pitch_ok(src, body->size.width, body->bytes_per_row))
++        break;
++      [encoder copyFromTexture:src
+                        sourceSlice:body->slice
+                        sourceLevel:body->level
+                       sourceOrigin:MTLOriginMake(body->origin.x, body->origin.y, body->origin.z)
+@@ -1303,15 +1449,19 @@ _MTLTexture_mipmapLevelCount(void *obj) {
+ static NTSTATUS
+ _MTLTexture_replaceRegion(void *obj) {
+   struct unixcall_mtltexture_replaceregion *params = obj;
+-  [(id<MTLTexture>)params->texture replaceRegion:MTLRegionMake3D(
+-                                                     params->origin.x, params->origin.y, params->origin.z,
+-                                                     params->size.width, params->size.height, params->size.depth
+-                                                 )
+-                                     mipmapLevel:params->level
+-                                           slice:params->slice
+-                                       withBytes:params->data.ptr
+-                                     bytesPerRow:params->bytes_per_row
+-                                   bytesPerImage:params->bytes_per_image];
++  id<MTLTexture> tex = (id<MTLTexture>)params->texture;
++  /* iOS-Mythic: skip BC-pitch uploads to remapped RGBA8 textures. */
++  if (!texture_upload_pitch_ok(tex, params->size.width, params->bytes_per_row))
++    return STATUS_SUCCESS;
++  [tex replaceRegion:MTLRegionMake3D(
++                         params->origin.x, params->origin.y, params->origin.z,
++                         params->size.width, params->size.height, params->size.depth
++                     )
++         mipmapLevel:params->level
++               slice:params->slice
++           withBytes:params->data.ptr
++         bytesPerRow:params->bytes_per_row
++       bytesPerImage:params->bytes_per_image];
+   return STATUS_SUCCESS;
+ }
+ 
+@@ -1326,9 +1476,22 @@ _MTLBuffer_didModifyRange(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* iOS-Mythic 2026-05-13: track Present cadence so we can tell whether the
++ * game's render loop is alive (continuous Presents → splash sustained via
++ * redraw) or wedged on first frame. Prints once per ~60 frames at ~1Hz. */
++static _Atomic uint64_t g_mythic_present_count = 0;
++static inline void mythic_log_present_cadence(const char *path) {
++  uint64_t n = atomic_fetch_add_explicit(&g_mythic_present_count, 1, memory_order_relaxed) + 1;
++  if (n == 1 || (n % 60) == 0) {
++    dprintf(STDERR_FILENO, "[iOS DXMT] Present #%llu (%s)\n",
++            (unsigned long long)n, path);
++  }
++}
++
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;
++  mythic_log_present_cadence("presentDrawable");
+   [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
+   return STATUS_SUCCESS;
+ }
+@@ -1336,6 +1499,7 @@ _MTLCommandBuffer_presentDrawable(void *obj) {
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawableAfterMinimumDuration(void *obj) {
+   struct unixcall_generic_obj_obj_double_noret *params = obj;
++  mythic_log_present_cadence("presentDrawableAfterMinDuration");
+   [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg0
+                                    afterMinimumDuration:params->arg1];
+   return STATUS_SUCCESS;

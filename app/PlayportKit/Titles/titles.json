@@ -1,0 +1,61 @@
+{
+  "comment": "The pinned title cohort (docs/decisions/0005-title-cohort.md), shipped at the app root as Titles/. The catalogue adopts a folder of C:\\Games whose name matches installDir (PlayportKit Adoption), so a title staged from the workstation shows up with no Steam session. checksums names a sha256sum list beside this file (also the list the workstation staging tools take). arguments are the default launch arguments, one item per argument. executable is relative to installDir. config holds madeira.cfg keys the title launches with over the shared file (PlayportKit TitleConfig). memoryMB is the memory footprint the title reached on the reference phone, the JIT pool included: a Play under a lower memory limit is refused, and one under a quarter more is warned about (PlayportKit MemoryNeed).",
+  "titles": [
+    {
+      "appID": 367520,
+      "name": "Hollow Knight",
+      "developer": "Team Cherry",
+      "installDir": "Hollow Knight",
+      "executable": "hollow_knight.exe",
+      "arguments": ["-logFile", "C:\\hollow_knight-player.log"],
+      "buildID": 22529139,
+      "depots": [{"depotID": 367521, "manifestGID": "257781644874438846"}],
+      "installedSize": 5231995691,
+      "files": 1785,
+      "checksums": "hollow-knight-367520-22529139.sha256",
+      "memoryMB": 3200,
+      "note": "Verified on the reference phone: x86-64 Unity, Direct3D 11. Saves live in the prefix, not the install folder."
+    },
+    {
+      "appID": 292030,
+      "name": "The Witcher 3: Wild Hunt",
+      "developer": "CD PROJEKT RED",
+      "installDir": "The Witcher 3",
+      "executable": "bin\\x64\\witcher3.exe",
+      "arguments": [],
+      "buildID": 3280809,
+      "depots": [
+        {"depotID": 292031, "manifestGID": "1383808000755504545"},
+        {"depotID": 292032, "manifestGID": "4005678493423036387"},
+        {"depotID": 292033, "manifestGID": "5639169236463762487"},
+        {"depotID": 292034, "manifestGID": "8408545504167686271"},
+        {"depotID": 292036, "manifestGID": "3165406379888910705"},
+        {"depotID": 292042, "manifestGID": "5386546338585218525"},
+        {"depotID": 370000, "manifestGID": "6754592371078633094"},
+        {"depotID": 370001, "manifestGID": "2123820691647700796"},
+        {"depotID": 370002, "manifestGID": "1183907436675245007"},
+        {"depotID": 370003, "manifestGID": "3783277845123100762"},
+        {"depotID": 370009, "manifestGID": "3498696915194240584"},
+        {"depotID": 373950, "manifestGID": "8036482907570547641"},
+        {"depotID": 373951, "manifestGID": "7393197967227681390"},
+        {"depotID": 376390, "manifestGID": "5457357262637939850"},
+        {"depotID": 376391, "manifestGID": "1174721699882428209"},
+        {"depotID": 378640, "manifestGID": "4194278256410465007"},
+        {"depotID": 378641, "manifestGID": "7947357952624525520"},
+        {"depotID": 378642, "manifestGID": "6120398453205415979"},
+        {"depotID": 378643, "manifestGID": "8757198111691945682"},
+        {"depotID": 378644, "manifestGID": "3953608334983921864"},
+        {"depotID": 378645, "manifestGID": "7330699567953797536"},
+        {"depotID": 378646, "manifestGID": "485010395064154329"},
+        {"depotID": 378647, "manifestGID": "6374504264360744096"}
+      ],
+      "installedSize": 41585389035,
+      "files": 2459,
+      "checksums": "witcher3-292030-3280809.sha256",
+      "config": {"jumbo-mb": "32768"},
+      "screen": "720",
+      "memoryMB": 6246,
+      "note": "Patch 1.32 (classic branch), x86-64, Direct3D 11. Not yet run on the phone with this runtime: jumbo-mb keeps a 32 GB hole free at boot for the game's 32 GB reservation, and the game renders at the panel's aspect at 720 rows, since 1.32 has no render scale (docs/evidence/2026-09-25-witcher3-setup.md)."
+    }
+  ]
+}

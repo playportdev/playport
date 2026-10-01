@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 29 Sep 2026 09:02:19 +0200
+Subject: [PATCH] virtual: give each pseudo-process's emulator its own JIT
+ aliases
+
+Every process that runs x86-64 code loads its own copy of the emulator,
+and each copy keeps its own alias table, through which ExitFunctionEC
+turns an x64->EC call's target (a PE VA) into the pool copy it branches
+to. The unix side kept one global callback for that table: the last
+process to load the emulator took every later alias, and its table was
+drained with the session's copies only, since a child's own ntdll copy
+shares its PE VA with the session's. A child's x86-64 code calling an
+ntdll export through its emulator (kernel32's RtlUnwindEx forwarder, as
+an MSVC __except handler does) therefore ran the session's ntdll copy
+with the session's loader data: the unwind found none of the child's
+modules, resumed at the target with the frame's registers lost, and
+the child faulted (Hollow Knight as a child, mono's thread-name
+exception). The callback also went on pointing into a dead child's
+emulator.
+
+Callbacks are now kept per PEB; a new image's alias goes to every
+process's emulator, a process's own copies go only to its own and in
+place of the session's at the same PE VA, and a dead process's
+callback is dropped before its pool ranges are reclaimed.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-29-several-games.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 90 ++++++++++++++++++++++++++++++----
+ 1 file changed, 80 insertions(+), 10 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 2561edc..846d530 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -3054,7 +3054,48 @@ uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base )
+  * too. Without this, late-loaded DLLs (e.g. dlopen after process init)
+  * would have unregistered alias ranges and FEX would emit NoExecOp for
+  * code in their copies. */
+-static void (*ios_jit_alias_pushback_cb)(unsigned long long, unsigned long long, unsigned long long) = NULL;
++/* Playport: one callback PER PSEUDO-PROCESS, keyed by its PEB. Every process
++ * that runs x86-64 code loads its own copy of the emulator, and each copy has
++ * its own alias table (FEX IosAliasEntries), which ExitFunctionEC uses to turn
++ * an x64->EC call's target (a PE VA) into the pool copy it branches to. With one
++ * global callback, the last process to load the emulator took every later push
++ * and its table was drained with the SESSION's copies only: a child's x64 code
++ * calling an ntdll export (kernel32's RtlUnwindEx forwarder, as an MSVC
++ * __except does) ran the parent's ntdll copy, with the parent's loader data, so
++ * the unwind found none of the child's own modules and resumed on garbage. The
++ * old global also went on pointing into a dead child's emulator. */
++typedef void (*ios_alias_cb_t)(unsigned long long, unsigned long long, unsigned long long);
++#define IOS_ALIAS_CB_MAX 64
++static struct { void *peb; ios_alias_cb_t cb; } ios_alias_cbs[IOS_ALIAS_CB_MAX];
++static int ios_alias_cb_count;
++static pthread_rwlock_t ios_alias_cb_lock = PTHREAD_RWLOCK_INITIALIZER;
++static ios_alias_cb_t ios_jit_alias_pushback_cb = NULL;   /* non-NULL once any process registered */
++
++/* Push one alias to every process's emulator: an image's PE range is unique in
++ * the shared address space, so a process that never loads it never asks. */
++static void ios_alias_push_all( unsigned long long pe, unsigned long long jit, unsigned long long size )
++{
++    int i;
++    pthread_rwlock_rdlock( &ios_alias_cb_lock );
++    for (i = 0; i < ios_alias_cb_count; i++)
++        if (ios_alias_cbs[i].cb) ios_alias_cbs[i].cb( pe, jit, size );
++    pthread_rwlock_unlock( &ios_alias_cb_lock );
++}
++
++/* A dead process's emulator is about to be freed with its pool ranges. */
++static void ios_alias_forget_process( void *peb )
++{
++    int i;
++    pthread_rwlock_wrlock( &ios_alias_cb_lock );
++    for (i = 0; i < ios_alias_cb_count; i++)
++        if (ios_alias_cbs[i].peb == peb)
++        {
++            dprintf( 2, "[jit-alias] process peb=%p gone: its emulator gets no more aliases\n", peb );
++            ios_alias_cbs[i] = ios_alias_cbs[--ios_alias_cb_count];
++            break;
++        }
++    pthread_rwlock_unlock( &ios_alias_cb_lock );
++}
+ 
+ void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size)
+ {
+@@ -3139,9 +3180,9 @@ void ios_jit_add_mapping(void *pe_base, void *jit_base, size_t size)
+      * mapping to it too. Early mappings (added before xtajit64 loads) are
+      * picked up by the iteration in unix_ios_push_jit_aliases. */
+     if (ios_jit_alias_pushback_cb)
+-        ios_jit_alias_pushback_cb((unsigned long long)(uintptr_t)pe_base,
+-                                  (unsigned long long)(uintptr_t)jit_base,
+-                                  (unsigned long long)size);
++        ios_alias_push_all((unsigned long long)(uintptr_t)pe_base,
++                           (unsigned long long)(uintptr_t)jit_base,
++                           (unsigned long long)size);
+ }
+ 
+ /* ml951: hand a sub-floor image window to FEX so QueryGuestExecutableRange can
+@@ -3171,7 +3212,7 @@ void ios_push_subfloor_window( unsigned long long low_base, unsigned long long r
+     if (!ios_jit_alias_pushback_cb) return;   /* pushed later by the catch-up loop */
+     fprintf( stderr, "ml951: pushing sub-floor window guest %#llx+%#llx -> real %#llx to FEX\n",
+              low_base, size, real_base );
+-    ios_jit_alias_pushback_cb( low_base, real_base, size );
++    ios_alias_push_all( low_base, real_base, size );
+ }
+ 
+ /* unix_ios_push_jit_aliases handler. Called from PE-side ntdll's
+@@ -3400,7 +3441,20 @@ NTSTATUS unixcall_ios_push_jit_aliases(void *args)
+      * both exports are resolved from the mapped module at the end of this call. */
+     struct ios_push_jit_aliases_args *params = args;
+     int i;
++    void *peb = ios_jit_current_peb();
+     if (!params || !params->callback) return STATUS_INVALID_PARAMETER;
++    pthread_rwlock_wrlock( &ios_alias_cb_lock );
++    for (i = 0; i < ios_alias_cb_count; i++)
++        if (ios_alias_cbs[i].peb == peb) break;
++    if (i == ios_alias_cb_count && ios_alias_cb_count < IOS_ALIAS_CB_MAX) ios_alias_cb_count++;
++    if (i < ios_alias_cb_count)
++    {
++        ios_alias_cbs[i].peb = peb;
++        ios_alias_cbs[i].cb = params->callback;
++    }
++    else dprintf( 2, "[jit-alias] callback table FULL (%d): peb=%p gets no later aliases\n",
++                  IOS_ALIAS_CB_MAX, peb );
++    pthread_rwlock_unlock( &ios_alias_cb_lock );
+     ios_jit_alias_pushback_cb = params->callback;
+ 
+     /* ml951: any sub-floor window registered before xtajit64 loaded has not been
+@@ -3415,13 +3469,27 @@ NTSTATUS unixcall_ios_push_jit_aliases(void *args)
+         for (i = 0; ios_subfloor_enum( i, &lo, &re, &sz ); i++)
+             ios_push_subfloor_window( lo, re, sz );
+     }
+-    /* Drain current table to the callback. Child-owned copies are skipped:
+-     * they share pe_base with the parent entry and pushing both would
+-     * double-register the alias range in FEX (x86-64 children under FEX
+-     * will need per-process alias routing — deferred to S3). */
++    /* Drain the current table to this process's emulator: its own copies (a
++     * child's ntdll) in place of the session's at the same PE VA, and no other
++     * process's own copies. Playport: this is the per-process alias routing
++     * Madeira deferred ("S3"); without it a child's x64->EC calls into ntdll
++     * ran the parent's copy. */
+     for (i = 0; i < ios_jit_mapping_count; i++)
+     {
+-        if (ios_jit_mappings[i].owner_peb) continue;
++        void *owner = ios_jit_mappings[i].owner_peb;
++        if (!ios_jit_mappings[i].pe_base || !ios_jit_mappings[i].size) continue;
++        if (owner && owner != peb) continue;
++        if (!owner && peb)
++        {
++            int j, own = 0;
++            for (j = 0; j < ios_jit_mapping_count && !own; j++)
++                own = ios_jit_mappings[j].owner_peb == peb && ios_jit_mappings[j].size &&
++                      ios_jit_mappings[j].pe_base == ios_jit_mappings[i].pe_base;
++            if (own) continue;
++        }
++        if (owner)
++            dprintf( 2, "[jit-alias] peb=%p: its own copy %p -> %p goes to its emulator\n",
++                     peb, ios_jit_mappings[i].pe_base, ios_jit_mappings[i].jit_base );
+         params->callback((unsigned long long)(uintptr_t)ios_jit_mappings[i].pe_base,
+                          (unsigned long long)(uintptr_t)ios_jit_mappings[i].jit_base,
+                          (unsigned long long)ios_jit_mappings[i].size);
+@@ -8062,6 +8130,8 @@ void ios_jit_reclaim_process( void *peb )
+ 
+     if (!peb || !rx_base) return;
+ 
++    ios_alias_forget_process( peb );
++
+     pthread_mutex_lock( &ios_pool_lock );
+ 
+     for (i = 0; i < ios_pool_ledger_count; )

@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] virtual: reclaim a dead process's FEX code buffers from the
+ JIT pool
+
+Tail carves of FEX code buffers owned by a pseudo-process that exited never
+returned to the pool, so a launch ran out of pool after a few child
+processes.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 45 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index fbcef90..50f8973 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2702,7 +2702,7 @@ static volatile size_t ios_jit_tail_reserved = 0;
+  * (1..32MB after the ml437 MAX_CODE_SIZE cap), so first-fit-larger waste is
+  * bounded and reuse is usually exact. */
+ #define IOS_TAIL_CARVE_MAX 256
+-static struct { size_t off; size_t size; int free; } ios_tail_carves[IOS_TAIL_CARVE_MAX];
++static struct { size_t off; size_t size; int free; void *owner; int reclaimed; } ios_tail_carves[IOS_TAIL_CARVE_MAX];
+ 
+ /* ml557 (#74 REGRESSION): is any thread's PC currently INSIDE this tail carve?
+  *
+@@ -7778,6 +7778,38 @@ void ios_jit_reclaim_process( void *peb )
+ 
+     pthread_mutex_unlock( &ios_pool_lock );
+ 
++    /* Playport: a dead process's FEX code buffers (tail carves) never reach
++     * FEX's own release, so they stayed LIVE and each process cost 16 MiB of
++     * tail for the rest of the launch. The carves are only ever written through
++     * the RW alias, so they stay executable and need no re-bless. Nothing of
++     * the dead process runs in them any more; a carve some thread's pc is still
++     * inside is left live, and ios_tail_carve_occupied() is asked again when a
++     * reclaimed carve is handed out. */
++    {
++        unsigned ci;
++        int carves = 0, kept = 0;
++        size_t carve_bytes = 0;
++        pthread_mutex_lock( &ios_tail_carve_lock );
++        for (ci = 0; ci < ios_tail_carve_n; ci++)
++        {
++            if (ios_tail_carves[ci].owner != peb || ios_tail_carves[ci].free) continue;
++            if (ios_tail_carve_occupied( rx_base + ios_tail_carves[ci].off, ios_tail_carves[ci].size ))
++            {
++                kept++;
++                continue;
++            }
++            ios_tail_carves[ci].free = 1;
++            ios_tail_carves[ci].reclaimed = 1;
++            ios_tail_carves[ci].owner = NULL;
++            carves++;
++            carve_bytes += ios_tail_carves[ci].size;
++        }
++        pthread_mutex_unlock( &ios_tail_carve_lock );
++        if (carves || kept)
++            dprintf(2, "[jit-pool] tail RECLAIM peb=%p: %d carve(s) 0x%lx bytes -> free-list, %d kept (a pc inside)\n",
++                    peb, carves, (unsigned long)carve_bytes, kept);
++    }
++
+     if (ranges || maps_killed)
+         dprintf(2, "[jit-pool] RECLAIM peb=%p: %d ranges 0x%lx bytes freed (grace %ds), "
+                 "%d mappings tombstoned, %d anon aliases cleared; bump=0x%lx freelist=%d\n",
+@@ -18513,7 +18545,12 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+             pthread_mutex_lock( &ios_tail_carve_lock );
+             for (i = 0; i < ios_tail_carve_n; i++)
+                 if (ios_tail_carves[i].free && ios_tail_carves[i].size >= alloc_size &&
+-                    (best == ~0u || ios_tail_carves[i].size < ios_tail_carves[best].size))
++                    (best == ~0u || ios_tail_carves[i].size < ios_tail_carves[best].size) &&
++                    /* Playport: a carve freed by a dead process's reclaim is
++                     * checked again at hand-out, as ml557 does at a FEX free */
++                    !(ios_tail_carves[i].reclaimed &&
++                      ios_tail_carve_occupied( (char *)ios_jit_rx_base_global + ios_tail_carves[i].off,
++                                               ios_tail_carves[i].size )))
+                     best = i;
+             if (best != ~0u)
+             {
+@@ -18521,6 +18558,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+                 void *jit_rw = (char *)ios_jit_rw_base_global + ios_tail_carves[best].off;
+                 size_t got = ios_tail_carves[best].size;
+                 ios_tail_carves[best].free = 0;
++                ios_tail_carves[best].reclaimed = 0;
++                ios_tail_carves[best].owner = ios_jit_current_peb();
+                 pthread_mutex_unlock( &ios_tail_carve_lock );
+                 {
+                     volatile uint32_t *rw_words = (volatile uint32_t *)jit_rw;
+@@ -18664,6 +18703,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+                 ios_tail_carves[ios_tail_carve_n].off = pool_tail_off;
+                 ios_tail_carves[ios_tail_carve_n].size = alloc_size;
+                 ios_tail_carves[ios_tail_carve_n].free = 0;
++                ios_tail_carves[ios_tail_carve_n].owner = ios_jit_current_peb();
++                ios_tail_carves[ios_tail_carve_n].reclaimed = 0;
+                 ios_tail_carve_n++;
+             }
+             pthread_mutex_unlock( &ios_tail_carve_lock );

@@ -1,0 +1,208 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 4 Aug 2026 13:04:07 +0800
+Subject: [PATCH] iOS-Mythic ml487/ml488 (#78): checksum the bytes NtReadFile
+ hands back for steamui *.js
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Steam's UI JavaScript arrives corrupt on roughly half of all runs — a full miss
+is `SyntaxError: Invalid or unexpected token` in library.js (whole run lost: no
+dial, no retry path), a partial one is `ChunkLoadError` with the login form
+rendering but showing NO TEXT. The files on disk are provably clean, so the
+corruption happens between the file and V8. This instruments the one boundary
+we own.
+
+NtCreateFile tags steamui *.js handles; NtReadFile logs, at its single `done:`
+choke point, an FNV-1a checksum of the bytes ACTUALLY returned plus head/tail
+bytes (head/tail catch an offset skew). Bounded to 512 reads; the fast path is
+one load per read, so nothing else pays for it.
+
+ml488 CORRECTION — identity is (st_dev, st_ino), not the HANDLE. Windows
+recycles handle numbers: in ml487's run a closed .js handle was reused for a
+Chromium SQLite db, and every read of THAT file was logged under the .js name.
+The verifier duly reported 8 "mismatches" (head 53514c69 = "SQLi", 4096-byte
+b-tree page reads, a JSON blob) which were nothing of the kind. stat() at open
+plus fstat() at read makes a recycled handle impossible to mistake, and emits a
+bounded [js-recycle] line instead.
+
+VERDICT REACHED (ml489, on a run where #78 actually fired): 73 reads, 73 match,
+0 mismatch — and libraries/libraries~2dcc5aaf7.js, the exact file V8 rejected,
+was read 100.0% through NtReadFile (31 reads, 1,992,788 bytes) byte-perfect.
+Our file read path is honest; the corruption is DOWNSTREAM, in the steamloopback
+scheme handler -> mojo/shared memory -> V8 source load.
+
+(cherry picked from commit 712d8e6f19150f88af5fa24badb12e51cb51ada9)
+Madeira-commit: a8c15406566cd7996936359702cbea7f383be61a
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/file.c | 131 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 131 insertions(+)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 1bfec7a4307..0412b4a09b4 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -4642,6 +4642,12 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
+ /******************************************************************************
+  *              NtCreateFile   (NTDLL.@)
+  */
++#ifdef WINE_IOS
++/* ml487 (#78): defined next to NtReadFile, used here — forward-declare so the
++ * call below doesn't become an implicit (non-static) declaration. */
++static void ios_js_track_add( HANDLE handle, const char *unix_name );
++#endif
++
+ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr,
+                               IO_STATUS_BLOCK *io, LARGE_INTEGER *alloc_size,
+                               ULONG attributes, ULONG sharing, ULONG disposition,
+@@ -4695,6 +4701,11 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
+         name_hidden = is_hidden_file( unix_name );
+         status = open_unix_file( handle, unix_name, access, &new_attr, attributes,
+                                  sharing, disposition, options, ea_buffer, ea_length );
++#ifdef WINE_IOS
++        /* ml487 (#78): remember which handles are steamui *.js so NtReadFile can
++         * checksum exactly those reads — see ios_js_track_add(). */
++        if (!status) ios_js_track_add( *handle, unix_name );
++#endif
+     }
+     else WARN( "%s not found (%x)\n", debugstr_us(attr->ObjectName), status );
+ 
+@@ -6082,6 +6093,121 @@ static unsigned int set_pending_write( HANDLE device )
+ /******************************************************************************
+  *              NtReadFile   (NTDLL.@)
+  */
++#ifdef WINE_IOS
++/* iOS-Mythic ml487 (#78): the steamloopback JS-boot lottery. Roughly half of all
++ * runs die because Steam's UI JavaScript arrives corrupt — `SyntaxError:
++ * Invalid or unexpected token` in library.js (whole run lost, no dial, no retry
++ * path), or a partial hit where a lazily-loaded chunk fails (`ChunkLoadError:
++ * Loading chunk 2664 failed`) and the login form renders with NO TEXT. The
++ * files on disk are provably clean (node --check, 0 NULs), so the corruption
++ * happens somewhere between the file and V8.
++ *
++ * This instruments the ONE boundary we own: the bytes NtReadFile hands back.
++ * Every read of a steamui *.js file logs offset/length/result, an FNV-1a
++ * checksum of the returned bytes, and the head/tail bytes (head/tail catch an
++ * offset skew, which is the shape a webpack 'NNNNN:' token error implies).
++ *
++ * Reading the result: re-read the same file offline, compute the same checksum
++ * per range, and compare. Checksums MATCH  => our read path is honest and the
++ * corruption is downstream (scheme handler -> mojo pipe -> V8). Checksums
++ * DIFFER, or head/tail are shifted => the defect is ours and this names the
++ * exact offset. Either way the coin-flip becomes an address. */
++/* ml488 CORRECTION: keying purely on HANDLE was WRONG — Windows recycles handle
++ * numbers, so after a tracked .js was closed its handle value was reused for a
++ * Chromium SQLite db and every read of THAT file was logged as library.js. The
++ * ml487 run produced 8 such lines (head=53514c69 = "SQLi", plus off=24 len=16
++ * header-field reads) and the verifier duly called them corruption. They were
++ * not. Identity is now (dev, ino), captured by stat() at open and re-checked
++ * with fstat() on the unix fd at read time, so a recycled handle can never be
++ * mistaken for the file we meant to watch. */
++#define IOS_JSTRACK_MAX 64
++static struct { HANDLE handle; dev_t dev; ino_t ino; char name[40]; } ios_js_track[IOS_JSTRACK_MAX];
++static unsigned int ios_js_track_n;
++static int ios_js_track_any;
++static pthread_mutex_t ios_js_track_lock = PTHREAD_MUTEX_INITIALIZER;
++
++static void ios_js_track_add( HANDLE handle, const char *unix_name )
++{
++    const char *base, *dot;
++    struct stat st;
++
++    if (!unix_name || !handle) return;
++    if (!strstr( unix_name, "steamui" )) return;
++    dot = strrchr( unix_name, '.' );
++    if (!dot || strcmp( dot, ".js" )) return;
++    if (stat( unix_name, &st ) == -1) return;
++
++    base = strrchr( unix_name, '/' );
++    base = base ? base + 1 : unix_name;
++
++    pthread_mutex_lock( &ios_js_track_lock );
++    if (ios_js_track_n < IOS_JSTRACK_MAX)
++    {
++        unsigned int i = ios_js_track_n;
++        ios_js_track[i].handle = handle;
++        ios_js_track[i].dev = st.st_dev;
++        ios_js_track[i].ino = st.st_ino;
++        snprintf( ios_js_track[i].name, sizeof(ios_js_track[i].name), "%s", base );
++        ios_js_track_n = i + 1;
++        ios_js_track_any = 1;
++        dprintf( 2, "[js-open] %s handle=%p ino=%llu size=%llu rev=ml488\n", ios_js_track[i].name,
++                 handle, (unsigned long long)st.st_ino, (unsigned long long)st.st_size );
++    }
++    pthread_mutex_unlock( &ios_js_track_lock );
++}
++
++/* Returns the tracked name only when the fd STILL refers to the same file. */
++static const char *ios_js_track_find( HANDLE handle, int unix_fd )
++{
++    struct stat st;
++    unsigned int i;
++
++    if (!ios_js_track_any) return NULL;   /* fast path: costs one load per read */
++    for (i = 0; i < ios_js_track_n; i++)
++    {
++        if (ios_js_track[i].handle != handle) continue;
++        if (unix_fd < 0 || fstat( unix_fd, &st ) == -1) return NULL;
++        if (st.st_dev != ios_js_track[i].dev || st.st_ino != ios_js_track[i].ino)
++        {
++            static int recycled_logged;
++            if (recycled_logged < 8)
++            {
++                recycled_logged++;
++                dprintf( 2, "[js-recycle] handle=%p was %s, now ino=%llu — not logging (rev=ml488)\n",
++                         handle, ios_js_track[i].name, (unsigned long long)st.st_ino );
++            }
++            return NULL;
++        }
++        return ios_js_track[i].name;
++    }
++    return NULL;
++}
++
++static void ios_js_read_note( HANDLE handle, int unix_fd, const void *buffer, ULONG want, UINT got,
++                              const LARGE_INTEGER *offset )
++{
++    static int reads_logged;
++    const unsigned char *p = buffer;
++    const char *name;
++    unsigned int sum = 2166136261u;
++    UINT i;
++
++    if (!got) return;
++    if (!(name = ios_js_track_find( handle, unix_fd ))) return;
++    if (reads_logged >= 512) return;
++    reads_logged++;
++
++    for (i = 0; i < got; i++) { sum ^= p[i]; sum *= 16777619u; }
++
++    dprintf( 2, "[js-read] %s off=%lld want=%u got=%u sum=%08x head=%02x%02x%02x%02x "
++                "tail=%02x%02x%02x%02x rev=ml488\n",
++             name, offset ? (long long)offset->QuadPart : -1LL, (unsigned)want, (unsigned)got, sum,
++             p[0], got > 1 ? p[1] : 0, got > 2 ? p[2] : 0, got > 3 ? p[3] : 0,
++             got >= 4 ? p[got-4] : 0, got >= 3 ? p[got-3] : 0,
++             got >= 2 ? p[got-2] : 0, p[got-1] );
++}
++#endif
++
+ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
+                             IO_STATUS_BLOCK *io, void *buffer, ULONG length,
+                             LARGE_INTEGER *offset, ULONG *key )
+@@ -6255,6 +6381,11 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
+     }
+ 
+ done:
++#ifdef WINE_IOS
++    /* ml487 (#78): single choke point — every read path above reaches here. */
++    if (status == STATUS_SUCCESS && total)
++        ios_js_read_note( handle, unix_handle, buffer, length, total, offset );
++#endif
+     send_completion = cvalue != 0;
+ 
+ err:

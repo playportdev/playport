@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 25 Aug 2026 13:11:43 +0900
+Subject: [PATCH] Extend native-call tracing to the audio backend and report
+ what the hook sees
+
+Adds a second traced module alongside the video decoder, wrapping source-voice
+creation, start, buffer submission and state queries so the queue depth and
+samples-played counter are visible per voice. Every record carries the voice
+pointer, because a title has several voices and conflating them makes the
+trace useless. State queries are polled every frame, so they are reported only
+when the queue depth changes or playback stalls; unfiltered they would become
+the thing being measured.
+
+Loading the tracer is now shared between both hooks rather than owned by the
+first one. The audio library loads roughly nine thousand log lines before the
+video decoder, so an earlier version that only loaded the tracer from the
+decoder's hook found nothing when the audio hook ran, bailed, and never
+retried -- the audio trace silently never armed.
+
+Also names every module the hook observes. When the audio hook produced no
+output at all, not even its own failure line, the question stopped being why
+it bailed and became whether this code path sees that module's load. Guessing
+at that had already cost two runs; the answer took one.
+
+All of it is opt-in and inert unless enabled.
+
+(cherry picked from commit fa8655ead45e77a96fd877add0bdd62ce530bbf5)
+Madeira-commit: 538f3e6f13af7869f13d79895a6ae45a68a5fa2a
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 111 ++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 103 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 02bfe7089a7..520900d508f 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -2444,7 +2444,23 @@ static const char * const tft_names[5] =
+ static const char * const tft_wrap_names[5] =
+     { "tft_tf_fopen", "tft_tf_readvideo", "tft_tf_readaudio", "tft_tf_eos", "tft_tf_close" };
+ 
++/* ml736: the same machinery, second target. FNA streams the cutscene's audio
++ * through FAudio, and the cutscene is silent while the splash is not, so the
++ * source-voice queue is where playback completion is decided. */
++static const char * const fa_names[6] =
++    { "FAudio_CreateSourceVoice", "FAudioSourceVoice_Start",
++      "FAudioSourceVoice_SubmitSourceBuffer", "FAudioSourceVoice_GetState",
++      "FAudioSourceVoice_Stop", "FAudioVoice_DestroyVoice" };
++static const char * const fa_wrap_names[6] =
++    { "fa_CreateSourceVoice", "fa_Start", "fa_SubmitSourceBuffer",
++      "fa_GetState", "fa_Stop", "fa_DestroyVoice" };
++static HMODULE fa_target;
++static void  **fa_real_slots;
++static void   *fa_wrappers[6];
++static int     fa_ready, fa_beaconed[6];
++
+ static HMODULE tft_target;             /* libtheorafile.dll base, 0 until seen */
++static HMODULE tft_tracer;             /* the pinned tracer module */
+ static void  **tft_real_slots;         /* tracer's tft_real[] */
+ static void   *tft_wrappers[5];
+ static int     tft_ready, tft_beaconed[5];
+@@ -2463,26 +2479,42 @@ static int tft_enabled(void)
+     return on;
+ }
+ 
+-/* Called once libtheorafile has finished loading -- never from inside
+- * LdrGetProcedureAddress, so the loader is not re-entered while resolving. */
+-static void tft_attach( HMODULE tf_base )
++/* ml736: loading the tracer is shared by both hooks and must not depend on
++ * which target module loads first. The audio library loads roughly 9,000 log
++ * lines BEFORE the video decoder, so an earlier version that only loaded the
++ * tracer from the decoder's hook found nothing when the audio hook ran, bailed,
++ * and never retried -- the audio trace silently never armed. Load on demand
++ * from whichever hook arrives first. */
++static HMODULE tft_ensure_tracer(void)
+ {
+     UNICODE_STRING dll;
+     HMODULE tracer = NULL;
+     unsigned int st;
+-    int i;
+-
+-    if (!tft_enabled() || tft_ready) return;
+-    tft_target = tf_base;
+ 
++    if (tft_tracer) return tft_tracer;
++    if (!tft_enabled()) return NULL;
+     RtlInitUnicodeString( &dll, L"tftrace-x64.dll" );
+     if ((st = LdrLoadDll( NULL, 0, &dll, &tracer )) || !tracer)
+     {
+         ERR( "[tf-trace] ml734 tracer FAILED to load: %08x -- tracing OFF\n", st );
+-        return;
++        return NULL;
+     }
+     /* Pinned for the life of the process: the wrappers hold pointers into it. */
+     LdrAddRefDll( LDR_ADDREF_DLL_PIN, tracer );
++    tft_tracer = tracer;
++    return tracer;
++}
++
++/* Called once libtheorafile has finished loading -- never from inside
++ * LdrGetProcedureAddress, so the loader is not re-entered while resolving. */
++static void tft_attach( HMODULE tf_base )
++{
++    HMODULE tracer;
++    int i;
++
++    if (!tft_enabled() || tft_ready) return;
++    tft_target = tf_base;
++    if (!(tracer = tft_ensure_tracer())) return;
+ 
+     for (i = 0; i < 5; i++)
+     {
+@@ -2509,6 +2541,40 @@ static void tft_attach( HMODULE tf_base )
+     ERR( "[tf-trace] ml734 ARMED target=%p tracer=%p tft_real=%p\n",
+          tf_base, tracer, tft_real_slots );
+ }
++
++/* Armed when FAudio loads, using the tracer the decoder hook already pinned.
++ * If the decoder never loads, the audio hook simply never arms -- both are
++ * diagnostics for the same wall. */
++static void fa_attach( HMODULE base )
++{
++    int i;
++    if (fa_ready) return;
++    if (!tft_ensure_tracer()) return;
++    fa_target = base;
++    for (i = 0; i < 6; i++)
++    {
++        ANSI_STRING an;
++        RtlInitAnsiString( &an, fa_wrap_names[i] );
++        if (LdrGetProcedureAddress( tft_tracer, &an, 0, &fa_wrappers[i] ))
++        {
++            ERR( "[fa-trace] ml736 missing wrapper %s -- audio tracing OFF\n", fa_wrap_names[i] );
++            return;
++        }
++    }
++    {
++        ANSI_STRING an;
++        void *p = NULL;
++        RtlInitAnsiString( &an, "fa_real" );
++        if (LdrGetProcedureAddress( tft_tracer, &an, 0, &p ) || !p)
++        {
++            ERR( "[fa-trace] ml736 missing fa_real -- audio tracing OFF\n" );
++            return;
++        }
++        fa_real_slots = p;
++    }
++    fa_ready = 1;
++    ERR( "[fa-trace] ml736 ARMED target=%p fa_real=%p\n", base, fa_real_slots );
++}
+ #endif  /* __arm64ec__ */
+ 
+ NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
+@@ -2551,6 +2617,20 @@ NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
+                     break;
+                 }
+             }
++            if (fa_ready && name && name->Buffer && module == fa_target)
++            {
++                int i;
++                for (i = 0; i < 6; i++)
++                {
++                    if (strcmp( name->Buffer, fa_names[i] )) continue;
++                    fa_real_slots[i] = proc;
++                    *address = fa_wrappers[i];
++                    if (!fa_beaconed[i]++)
++                        ERR( "[fa-trace] ml736 REDIRECT %s real=%p -> wrapper=%p\n",
++                             fa_names[i], proc, fa_wrappers[i] );
++                    break;
++                }
++            }
+ #endif
+         }
+         else
+@@ -3321,9 +3401,24 @@ static NTSTATUS load_native_dll( LPCWSTR load_path, const UNICODE_STRING *nt_nam
+     /* ml734: arm the Theorafile tracer once its target has finished loading.
+      * Done here, not inside LdrGetProcedureAddress, so loading the tracer never
+      * re-enters the resolver. */
++    /* ml737: name every module this hook actually observes. The audio hook
++     * never armed and never printed even its own failure line, which means
++     * fa_attach() was not reached at all -- so the question is no longer why it
++     * bailed but whether this code path sees that module's load. Guessing at
++     * that has already cost two runs. Bounded. */
++    if (NT_SUCCESS(status) && *pwm && (*pwm)->ldr.BaseDllName.Buffer && tft_enabled())
++    {
++        static int seen;
++        if (seen++ < 80)
++            ERR( "[ldr-see] ml737 #%d %s base=%p\n", seen,
++                 debugstr_w((*pwm)->ldr.BaseDllName.Buffer), (*pwm)->ldr.DllBase );
++    }
+     if (NT_SUCCESS(status) && *pwm && (*pwm)->ldr.BaseDllName.Buffer &&
+         !wcsnicmp( (*pwm)->ldr.BaseDllName.Buffer, L"libtheorafile", 13 ))
+         tft_attach( (*pwm)->ldr.DllBase );
++    if (NT_SUCCESS(status) && *pwm && (*pwm)->ldr.BaseDllName.Buffer &&
++        !wcsnicmp( (*pwm)->ldr.BaseDllName.Buffer, L"FAudio", 6 ))
++        fa_attach( (*pwm)->ldr.DllBase );
+ #endif
+     if (status && module) NtUnmapViewOfSection( NtCurrentProcess(), module );
+     return status;

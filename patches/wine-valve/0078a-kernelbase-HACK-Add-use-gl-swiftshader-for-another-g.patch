@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Arkadiusz Hiler <ahiler@codeweavers.com>
+Date: Tue, 30 Jan 2024 23:28:04 +0200
+Subject: [PATCH] kernelbase: HACK: Add --use-gl=swiftshader for another game.
+
+CW-Bug-Id: #23297
+Valve-commit: a20b0e65ebe87bc60e8dd9542352c6f71379b8c3
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-09-28-steam-game-id.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 45012999294..12b9cd95cdd 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -508,6 +508,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     {
+         const WCHAR *exe_name;
+         const WCHAR *append;
++        const char *steamgameid;
+     }
+     options[] =
+     {
+@@ -520,8 +521,10 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+         {L"PaladinLias\\Game.exe", L" --use-gl=desktop"},
+         {L"EverQuest 2\\LaunchPad.exe", L" --use-gl=swiftshader"},
+         {L"Everquest F2P\\LaunchPad.exe", L" --use-gl=swiftshader"},
++        {L"UnrealCEFSubProcess.exe", L" --use-gl=swiftshader", "2316580"},
+     };
+     unsigned int i;
++    char sgi[64];
+ 
+     if (!cmd) return NULL;
+ 
+@@ -529,6 +532,9 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     {
+         if (wcsstr( cmd, options[i].exe_name ))
+         {
++            if (options[i].steamgameid && !(GetEnvironmentVariableA( "SteamGameId", sgi, sizeof(sgi) )
++                && !strcmp( sgi, options[i].steamgameid )))
++                continue;
+             FIXME( "HACK: appending %s to command line.\n", debugstr_w(options[i].append) );
+             return options[i].append;
+         }

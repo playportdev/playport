@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 23:25:40 +0200
+Subject: [PATCH] virtual: put a data-aligned image's x18 trampolines on their
+ own page
+
+An image whose .data [data-align] shifted by less than a page has its
+x18 trampoline region at offset + image_alloc, which then starts inside
+the image's last page. The .data and .tls protections make that page RW,
+so the first trampoline call took an EXECUTE fault: vkd3d-proton's
+d3d12.dll (arm64ec, shifted +0x2000) crashed Hollow Knight at its first
+D3D12 call. Start the region on the page after the image's end; the
+allocation already has the extra page for the shift.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-26-vulkan-d3d11-d3d12.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index fb08d2e..9d134b6 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -10566,7 +10566,14 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                          * copy diverged from the source and patching it
+                          * would emit copy-specific branches — refuse (x18
+                          * insns degrade to recoverable runtime faults). */
+-                        size_t tramp_pool_off = offset + image_alloc;
++                        /* The page after the image's last one. offset + image_alloc
++                         * is that only when the image starts on a page: [data-align]
++                         * shifts it by less than a page, and the region then began
++                         * inside the image's last page, which the .data/.tls
++                         * protections below make RW, so the first x18 trampoline
++                         * took an EXECUTE fault (vkd3d-proton's d3d12.dll). The
++                         * allocation has the extra page for the shift. */
++                        size_t tramp_pool_off = (offset + image_size + page_size - 1) & ~(page_size - 1);
+                         if (tramp_alloc > tramp_prealloc)
+                         {
+                             dprintf(2, "[x18-tramp] REFUSED: budget 0x%lx > prealloc 0x%lx (source/copy divergence?)\n",

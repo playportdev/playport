@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 01:59:01 +0200
+Subject: [PATCH 3/4] vkd3d: place a resource where its Vulkan memory allows
+
+MultiVersus (Unreal Engine 5.1, Direct3D 12) places resources in its
+transient heaps at offsets that are not multiples of their 64 KiB
+placement alignment: a 256 KiB UAV buffer at 0x8000, a 1564x720
+depth-stencil texture at 0x48000. CreatePlacedResource returned
+E_INVALIDARG, and the engine stopped with "hr failed at
+D3D12Resources.cpp:391 with error E_INVALIDARG" (a GPUCrash in its crash
+report) at a random point, 45 to 80 s into the title screen or on its
+first button press.
+
+Place such a resource when the Vulkan memory allows the offset, with a
+fixme the first time: a buffer, a slice of the heap's own VkBuffer, at
+any multiple of the 256 bytes vkd3d-proton already gives a buffer with
+tight alignment; a single-sampled texture at a multiple of 4 KiB that
+its image's own memory alignment also divides (checked once the image
+exists, and the call still fails if not). Anything else still fails.
+
+Class: feature
+Evidence: docs/evidence/2026-09-30-d3d12-feature-level-12.md
+Offered-upstream: no
+---
+ libs/vkd3d/resource.c | 37 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/libs/vkd3d/resource.c b/libs/vkd3d/resource.c
+index a8fc26b..9c3d0ab 100644
+--- a/libs/vkd3d/resource.c
++++ b/libs/vkd3d/resource.c
+@@ -4645,6 +4645,7 @@ HRESULT d3d12_resource_create_placed(struct d3d12_device *device, const D3D12_RE
+     VKD3D_UNUSED VkDeviceSize required_size;
+     VkBindImageMemoryInfo bind_info;
+     struct d3d12_resource *object;
++    bool offset_relaxed;
+     VkResult vr;
+     HRESULT hr;
+ 
+@@ -4696,12 +4697,32 @@ HRESULT d3d12_resource_create_placed(struct d3d12_device *device, const D3D12_RE
+         goto fail;
+     }
+ 
++    /* Unreal Engine 5.1's transient allocator places resources at offsets that
++     * are not multiples of their 64 KiB placement alignment (MultiVersus: a
++     * 256 KiB UAV buffer at 0x8000, a 1564x720 depth-stencil texture at
++     * 0x48000), and treats the failed call as fatal. Where the Vulkan memory
++     * allows the offset, place the resource there instead: a buffer is a range
++     * of the heap's own buffer and needs the 256 bytes tight alignment gives
++     * buffers; a single-sampled texture needs its image's own alignment, which
++     * is checked below once the image exists. */
++    offset_relaxed = false;
+     if (heap_offset & (object->placed_alignment - 1u))
+     {
+-        WARN("Heap offset %#"PRIx64" not a multiple of resource alignment %#"PRIx64".\n",
+-                heap_offset, object->placed_alignment);
+-        hr = E_INVALIDARG;
+-        goto fail;
++        if ((d3d12_resource_is_buffer(object) && !(heap_offset & (VKD3D_MIN_BUFFER_ALIGNMENT - 1u))) ||
++                (d3d12_resource_is_texture(object) && desc->SampleDesc.Count == 1 &&
++                        !(heap_offset & (D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT - 1u))))
++        {
++            FIXME_ONCE("Placing a resource at heap offset %#"PRIx64", not a multiple of its alignment %#"PRIx64".\n",
++                    heap_offset, object->placed_alignment);
++            offset_relaxed = true;
++        }
++        else
++        {
++            WARN("Heap offset %#"PRIx64" not a multiple of resource alignment %#"PRIx64".\n",
++                    heap_offset, object->placed_alignment);
++            hr = E_INVALIDARG;
++            goto fail;
++        }
+     }
+ 
+     if (d3d12_resource_is_texture(object))
+@@ -4712,6 +4733,14 @@ HRESULT d3d12_resource_create_placed(struct d3d12_device *device, const D3D12_RE
+         /* Align manually. This works because we padded the required allocation size reported to the app. */
+         VK_CALL(vkGetImageMemoryRequirements(device->vk_device, object->res.vk_image, &memory_requirements));
+ 
++        if (offset_relaxed && ((heap->allocation.offset + heap_offset) & (memory_requirements.alignment - 1)))
++        {
++            WARN("Heap offset %#"PRIx64" not a multiple of image alignment %#"PRIx64".\n",
++                    heap_offset, (uint64_t)memory_requirements.alignment);
++            hr = E_INVALIDARG;
++            goto fail;
++        }
++
+         /* For SMALL_RESOURCE_PLACEMENT when we have workaround active,
+          * verify that application did in fact check alignment requirements.
+          * If application places 64k aligned, we will have made sure to leave room for padding below.

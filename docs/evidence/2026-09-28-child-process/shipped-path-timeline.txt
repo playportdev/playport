@@ -1,0 +1,8 @@
+title: in-app start Games\Hollow Knight\hollow_knight.exe -logFile C:\hollow_knight-player.log
+title: memory: limit 8192 MB, footprint 26 MB; the title needs 3200 MB (measured, 4000 MB recommended): fits
+title: resolve Games\Hollow Knight\hollow_knight.exe -> 0 C:\Games\Hollow Knight\hollow_knight.exe (working directory C:\Games\Hollow Knight)
+title: graphics: dxmt
+jit: helper started, pid 12577
+jit: helper: helper pid 12577 connected
+jit: helper: prepare: checking the tunnel
+jit: helper: prepare: checking the DDI mount

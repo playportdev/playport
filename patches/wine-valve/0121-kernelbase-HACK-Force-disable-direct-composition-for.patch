@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Wed, 1 Apr 2026 11:21:34 -0600
+Subject: [PATCH] kernelbase: HACK: Force disable direct composition for
+ Universe Generator: The Golden Sword.
+
+CW-Bug-Id: #26857
+Valve-commit: 5419e99b16295458f079049fc2bc63c7d9823cb7
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 444c7a4..56d6d56 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -511,6 +511,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     }
+     options[] =
+     {
++        {L"UniverseGenerator.exe", L" --disable_direct_composition=1"},
+         {L"Blaite\\nw.exe", L" --disable_direct_composition=1"},
+         {L"Click&Fight.exe", L" --disable_direct_composition=1"},
+         {L"Willful.exe", L" --disable_direct_composition=1"},

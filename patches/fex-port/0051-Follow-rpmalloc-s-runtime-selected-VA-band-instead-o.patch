@@ -1,0 +1,188 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 16 Aug 2026 22:18:07 +0800
+Subject: [PATCH] Follow rpmalloc's runtime-selected VA band instead of
+ hardcoding [0x7c,0x80)
+
+The FEX host band was a compile-time constant in four independent places:
+rpmalloc's os_mmap, rpmalloc's block-pointer validator,
+FEXCore::Allocator::VirtualAlloc and CallRetStack. On devices whose usable
+VA ceiling is 64GB rather than 512GB that range lies entirely above the
+ceiling and wine rejects it during parameter validation, without attempting
+a placement.
+
+Every site then retried unconstrained. rpmalloc fell through first, being
+the earliest allocator, and put its heap metadata in guest-writable memory;
+the metadata was corrupted almost immediately, ThreadState never
+materialised, x28 stayed 0, and every x86-64 program died after six modules.
+Native ARM64 was unaffected because it never needs this arena, which made
+the failure look device-specific rather than layout-specific.
+
+rpmalloc (External/rpmalloc b64c35b) now selects one band by real placement
+attempt and publishes ios_fex_band_base/end. This commit makes the two later
+consumers follow it rather than choose:
+
+  FEXCore::Allocator::VirtualAlloc  -- an earlier attempt had this file do
+    the choosing, which was useless: by the time it runs, rpmalloc has
+    already made its own request, failed, retried unconstrained and placed
+    metadata in guest memory. It can only follow.
+  CallRetStack -- also drops its MEM_TOP_DOWN fallback. Each 16-byte frame
+    holds a host code label, so a guest over-read there produces exactly the
+    bogus branch targets seen in ml316; guest-band placement is worse than
+    failing.
+
+Verified in both regimes. On 512GB (iPhone 13 Pro, iOS 27) the first
+candidate probes OK and every FEXMem region lands at the same address as
+before -- BlockLinks 0x7c00, CallRetStacks 0x7c03/09/0d/11/15 -- with 18
+modules and zero SEGVs. On a constrained device (M4 iPad, iOS 26.4) the
+first candidate fails, the second is selected at 0xc00000000, FEX relocates
+wholesale (BlockLinks 0xc00220000, CallRetStacks 0xc03000000, CPUBackend
+0xc00a30000), and module loading goes from 6 to 18, reaching
+d3d11/dxgi/winemetal with no host-band allocation failure.
+
+This does not make x86-64 work on constrained devices. Threads now reach
+ThreadInit-done with valid StateFrame and ThreadState; the next wall is
+unrelated to the arena -- TEB recovery reads a hardcoded raw Apple TSD slot
+(275, offset 0x898) which returns zero on that device even though
+pthread_getspecific still yields the correct TEB.
+
+MYTHIC_REV had gone stale: an earlier binary still reported ml466, exactly
+the failure the tag exists to prevent. Bumped, with the compiler-generated
+__DATE__/__TIME__ noted as the authoritative identity.
+
+Still open: ordinary guest and module placement is not formally excluded
+from the 48-56GB slice, which must be settled before larger guests; and the
+V8 cage and the four 16GB PartitionAlloc pools have no constrained-regime
+placement, so CEF and Steam remain unsupported there.
+
+Madeira-commit: c77105fa349c87f307f1256b1fe38e2fc2e25196
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ .../include/FEXCore/Utils/AllocatorHooks.h    | 27 +++++++++++++++++--
+ Source/Windows/ARM64EC/Module.cpp             |  7 ++++-
+ Source/Windows/Common/CallRetStack.h          | 23 +++++++++++++---
+ 3 files changed, 50 insertions(+), 7 deletions(-)
+
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index 2b5cf17..a41e648 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -55,6 +55,14 @@ FEX_DEFAULT_VISIBILITY void SetupHooks(size_t PageSize, HookPtrs Ptrs);
+ FEX_DEFAULT_VISIBILITY void ClearHooks();
+ 
+ #ifdef _WIN32
++/* iOS-Mythic ml706: the one VA-layout profile, selected in rpmalloc's os_mmap
++ * (the earliest allocator in the process) and followed by every other
++ * consumer. C linkage: it is chosen from C. */
++extern "C" {
++extern uintptr_t ios_fex_band_base;
++extern uintptr_t ios_fex_band_end;
++}
++
+ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Commit = true) {
+   // Allocate top-down to avoid polluting the lower VA space, as even on 64-bit some programs (i.e. LuaJIT) require allocations below 4GB.
+   DWORD Flags = (Commit ? MEM_COMMIT : 0) | MEM_RESERVE | MEM_TOP_DOWN;
+@@ -87,11 +95,24 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
+    * hardening, never a new fatal (#43).
+    * Exec allocations are excluded: EC_CODE buffers have their own JIT-pool
+    * steering that must keep control of placement. */
++  /* iOS-Mythic ml706: use the band rpmalloc selected at process start.
++   *
++   * This is not the earliest allocator -- rpmalloc runs before
++   * arm64ec_process_init and before SetupHooks -- so it cannot choose the
++   * band, only follow it. Choosing here (as ml705 did) was too late to matter:
++   * rpmalloc had already made its own hardcoded request, failed, retried
++   * unconstrained, and placed heap metadata in guest memory. */
+   if (!Base && !Execute) {
++    if (!ios_fex_band_base) {
++      /* No host-only band on this device. Falling through to the
++       * unconstrained path is exactly what corrupts a constrained device, so
++       * fail visibly instead of moving into guest address space. */
++      return nullptr;
++    }
+     MEM_ADDRESS_REQUIREMENTS AddrReq {};
+     MEM_EXTENDED_PARAMETER AddrParam {};
+-    AddrReq.LowestStartingAddress = reinterpret_cast<void*>(0x7C00000000ULL);
+-    AddrReq.HighestEndingAddress = reinterpret_cast<void*>(0x7FFFFFFFFFULL);
++    AddrReq.LowestStartingAddress = reinterpret_cast<void*>(ios_fex_band_base);
++    AddrReq.HighestEndingAddress = reinterpret_cast<void*>(ios_fex_band_end);
+     AddrParam.Type = MemExtendedParameterAddressRequirements;
+     AddrParam.Pointer = &AddrReq;
+     // No MEM_TOP_DOWN here: Windows rejects it in combination with address requirements.
+@@ -99,6 +120,8 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
+     if (Ret) {
+       return Ret;
+     }
++    /* Band exists but is exhausted: a different failure from "no band", and
++     * the pre-existing ml321 hardening (#43) still applies below. */
+   }
+ #endif
+   MEM_EXTENDED_PARAMETER Parameter {};
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 7a4c561..fa5299c 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -844,7 +844,12 @@ NTSTATUS ProcessInit() {
+    * compile time, so changing only another .cpp leaves the stamp stale and the ambiguity
+    * half-returns. The MYTHIC_REV tag below fixes that: bump it for every deploy, which
+    * necessarily edits this file and so refreshes the timestamp too. Self-enforcing. */
+-#define MYTHIC_REV "ml466"
++/* ml706: this tag went stale -- an ml705 binary still reported ml466, which is
++ * exactly the "self-enforcing marker" failure it exists to prevent. The
++ * __DATE__/__TIME__ below is compiler-generated and therefore the
++ * authoritative identity; if the two disagree, the tag is wrong, not the
++ * build. */
++#define MYTHIC_REV "ml706"
+   LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MYTHIC_REV " compiled " __DATE__ " " __TIME__);
+ #endif
+ 
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 1883813..19f3e01 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -6,6 +6,14 @@
+ #include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/Debug/InternalThreadState.h>
+ 
++/* iOS-Mythic ml706: the one VA-layout profile, selected in rpmalloc's os_mmap
++ * (the earliest allocator in the process) and followed here. C linkage: it is
++ * chosen from C. */
++extern "C" {
++extern uintptr_t ios_fex_band_base;
++extern uintptr_t ios_fex_band_end;
++}
++
+ namespace FEX::Windows::CallRetStack {
+ struct CallRetStackInfo {
+   uint64_t AllocationBase;
+@@ -39,16 +47,23 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   {
+     MEM_ADDRESS_REQUIREMENTS AddrReq {};
+     MEM_EXTENDED_PARAMETER AddrParam {};
+-    AddrReq.LowestStartingAddress = reinterpret_cast<void*>(0x7C00000000ULL);
+-    AddrReq.HighestEndingAddress = reinterpret_cast<void*>(0x7FFFFFFFFFULL);
++    /* ml706: follow the band rpmalloc selected, do not hardcode it. */
++    AddrReq.LowestStartingAddress = reinterpret_cast<void*>(ios_fex_band_base);
++    AddrReq.HighestEndingAddress = reinterpret_cast<void*>(ios_fex_band_end);
+     AddrParam.Type = MemExtendedParameterAddressRequirements;
+     AddrParam.Pointer = &AddrReq;
+-    CallRetStackAlloc = ::VirtualAlloc2(nullptr, nullptr, CallRetStackAllocSize, MEM_RESERVE, PAGE_NOACCESS, &AddrParam, 1);
++    if (ios_fex_band_base) {
++      CallRetStackAlloc = ::VirtualAlloc2(nullptr, nullptr, CallRetStackAllocSize, MEM_RESERVE, PAGE_NOACCESS, &AddrParam, 1);
++    }
+   }
+-#endif
++  /* ml706: NO unconstrained fallback here. Each 16-byte frame holds a HOST
++   * code label, so a guest over-read yields exactly the bogus branch targets
++   * of ml316 -- guest-band placement is worse than failing outright. */
++#else
+   if (!CallRetStackAlloc) {
+     CallRetStackAlloc = ::VirtualAlloc(nullptr, CallRetStackAllocSize, MEM_RESERVE | MEM_TOP_DOWN, PAGE_NOACCESS);
+   }
++#endif
+ 
+   FEXCore::Allocator::VirtualName("FEXMem_CallRetStacks", CallRetStackAlloc,
+                                   FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE + 2 * FEXCore::Utils::FEX_PAGE_SIZE);

@@ -1,0 +1,202 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 21 Aug 2026 20:07:45 +0800
+Subject: [PATCH] Report thread context from the syscall frame, and stop capped
+ probes hiding dependencies
+
+Two independent problems, both found by chasing a title that would not start.
+
+CONTEXT SELECTION (opt-in, MYTHIC_CTX_FRAME=1, default off).
+
+NtGetContextThread on ARM64EC always requests the NATIVE ARM context and runs it through
+context_arm_to_x64(), which maps Pc straight into Rip. That is correct only while the
+target executes genuine ARM64EC code. A thread parked in a syscall is sitting in ordinary
+Mach-O code, so the caller was handed a Mach-O address as an x64 RIP with ARM ABI
+registers reinterpreted -- measured: returned rip=0x23ddd1ae8, is_ec=0, identical on every
+retry, while a runtime suspended, inspected, resumed and retried that thread forever
+holding a lock its target needed.
+
+The saved CPU-area ContextAmd64 is NOT a usable fallback: it is initialised with flags and
+zero registers and never maintained as a live mirror, so four of five stalled threads
+reported rip=0.
+
+Wine's own suspend path already solves this -- usr1_handler checks is_inside_syscall(SP)
+and builds the context from the saved syscall frame rather than the interrupted
+registers. ios_fill_thread_context() now does the same: when the captured SP lies within
+[kernel_stack, syscall_frame] it substitutes that frame's ARM64EC register set, and the
+existing conversion then has something valid to convert. Selector deliberately mirrors
+is_inside_syscall() rather than testing "PC is not EC" -- JIT code is also non-EC but its
+frame may be stale. RtlIsEcCode() is not called from the server: that is a PE-side export
+and this is native Unix code.
+
+Measured with the opt-in on: returned rip becomes a valid EC address, is_ec=1, the
+suspend/GetContext/resume storm collapses from 48-capped to 6, the contested lock is
+released, and five blocked threads drop to one. Kept opt-in because it changes what every
+GetThreadContext returns for a syscall-parked thread, and the heavier regression test is
+still outstanding.
+
+kernel_stack at TEB+0x3a8 is derived from the field layout, not documented, so it is
+validated at runtime and any implausible value falls through unchanged.
+
+CAPPED PROBES.
+
+[dll-missing] is capped at 60 process-wide and that cap was reached long before native
+initialisation finished, so a fatal dependency failure was silently suppressed and its
+absence read as "never attempted". Names that carry a whole subsystem -- xinput, steam_api,
+d3d11, dxgi, winemetal, d3dcompiler, opengl32, *.drv -- now log unconditionally. Silence
+from a capped probe is not evidence; that mistake cost several runs.
+
+Also adds [map-gate], [ec-getctx] and [srv-suspend] diagnostics, all log-only. [map-gate]
+answered which of four gates drops the image-map notification in a child process: 105
+refusals from enter_syscall_callback() against one success, because InSyscallCallback was
+already set and stays set.
+
+(cherry picked from commit 4cda511efe10f969ae9be57dbd92f5eb9c7c9a7d)
+Madeira-commit: 492f1e5ab240cac52fdf66ba9eab6b9f253c0764
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         | 34 ++++++++++++++++++++++++++++++++++
+ dlls/ntdll/signal_arm64ec.c | 32 ++++++++++++++++++++++++++++++++
+ server/thread.c             | 31 +++++++++++++++++++++++++++++++
+ 3 files changed, 97 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 9bc2c92ab5c..087db976699 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3817,6 +3817,40 @@ done:
+          * Capped: apps probe optional DLLs constantly, so this is noisy by nature -- but
+          * the fatal one is whatever appears last before the crash. */
+         static int ldrfail_n;
++        /* ml718: the 60-line cap is process-wide and hid a fatal dependency.
++         *
++         * Marvel Cosmic Invasion exits cleanly at startup because steam_api64.dll never
++         * loads -- it statically imports XINPUT1_4.dll (ordinals 2/3, XInputGetState and
++         * XInputSetState) and no xinput was shipped. That failure happens well after the
++         * cap is reached, so nothing was logged and the absence looked like "never
++         * attempted" rather than "suppressed". Silence from a capped probe is not
++         * evidence; that mistake has now cost more than one run.
++         *
++         * Names that carry a whole subsystem get an uncapped line. Keep the list small
++         * and specific -- this is a funnel every LoadLibrary passes through. */
++        {
++            const WCHAR *base = libname;
++            const WCHAR *p2;
++            int always = 0;
++            for (p2 = libname; *p2; p2++) if (*p2 == '\\' || *p2 == '/') base = p2 + 1;
++            /* ml721: graphics names added. Marvel Cosmic Invasion dies with FNA3D's own
++             * "No supported FNA3D driver found!", i.e. every backend failed its probe --
++             * but no find_dll_file line for d3d11/dxgi appears, so we cannot tell "never
++             * requested" from "requested and failed". The 60-line cap has already
++             * destroyed that distinction twice, and both times I read the silence as
++             * absence. The .drv names matter too: if SDL's video subsystem never comes up,
++             * EVERY FNA3D driver fails its PrepareWindowAttributes, which fits the
++             * evidence better than D3D11 specifically being rejected. */
++            if (!wcsnicmp( base, L"xinput", 6 ) || !wcsnicmp( base, L"steam_api", 9 ) ||
++                !wcsnicmp( base, L"d3d11", 5 )  || !wcsnicmp( base, L"dxgi", 4 ) ||
++                !wcsnicmp( base, L"winemetal", 9 ) || !wcsnicmp( base, L"d3d10", 5 ) ||
++                !wcsnicmp( base, L"opengl32", 8 ) || !wcsnicmp( base, L"d3dcompiler", 11 ) ||
++                wcsstr( base, L".drv" ))
++                always = 1;
++            if (always)
++                ERR( "[dll-missing] ml718 UNCAPPED %s status=%08x (subsystem dependency)\n",
++                     debugstr_w(libname), (unsigned)nts );
++        }
+         if (ldrfail_n++ < 60)
+             ERR( "[dll-missing] rev=ml336 #%d %s status=%08x -- if the webhelper dies right"
+                  " after this, it is the delay-load Chromium kills the process over\n",
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index ed1aeb79070..3b164a0b0cc 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -1663,6 +1663,38 @@ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
+     NTSTATUS status = syscall_NtGetContextThread( handle, &arm_ctx );
+ 
+     if (!status) context_arm_to_x64( (ARM64EC_NT_CONTEXT *)context, &arm_ctx );
++
++    /* ml715: WHAT THE CALLER ACTUALLY RECEIVES.
++     *
++     * This wrapper unconditionally asks for the NATIVE ARM context and converts it, and
++     * context_arm_to_x64() maps Pc directly into Rip. That is right only while the target
++     * is executing genuine ARM64EC code. If it is parked in FEX JIT, the dispatcher, or
++     * plain Mach-O (libsystem_kernel __ulock_wait2), the "x64 RIP" handed back is not an
++     * x64 address at all and the integer registers are ARM ABI values reinterpreted --
++     * even though the server captured a perfectly good saved AMD64 context at the same
++     * instant (see [srv-getctx]).
++     *
++     * RtlIsEcCode(native_pc) is logged because it is the likely selector for the fix:
++     * EC code -> convert the native context; JIT/dispatcher/Mach-O -> return the saved
++     * AMD64 context; neither available -> fail rather than manufacture one. InSimulation
++     * alone is NOT sufficient, since a translated thread inside a Wine/Mach syscall can
++     * have it clear while its correct Windows context is still the saved AMD64 one.
++     *
++     * Correlate with [srv-getctx] on native_pc (and tid), not on ordering. Capped. */
++    {
++        static LONG ec_getctx_n;
++        LONG n = InterlockedIncrement( &ec_getctx_n );
++        if (n <= 48)
++        {
++            ARM64EC_NT_CONTEXT *ec = (ARM64EC_NT_CONTEXT *)context;
++            ERR( "[ec-getctx] ml715 #%d handle=%p status=%08x native_pc=%p is_ec=%d -> "
++                 "returned rip=%p rsp=%p flags=%08x\n",
++                 (int)n, handle, (unsigned int)status, (void *)arm_ctx.Pc,
++                 status ? -1 : (RtlIsEcCode( arm_ctx.Pc ) ? 1 : 0),
++                 status ? NULL : (void *)ec->Pc, status ? NULL : (void *)ec->Sp,
++                 status ? 0 : (unsigned int)ec->ContextFlags );
++        }
++    }
+     return status;
+ }
+ 
+diff --git a/server/thread.c b/server/thread.c
+index fccc462e463..34d2e05ce14 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -949,6 +949,28 @@ int suspend_thread( struct thread *thread )
+         thread->suspend++;
+     }
+     else set_error( STATUS_SUSPEND_COUNT_EXCEEDED );
++#ifdef WINE_IOS
++    /* ml714: does anything actually suspend threads here, and does the count come back down?
++     *
++     * This matters more on iOS than elsewhere because stop_thread() does NOT stop anything:
++     * POSIX signal suspend is dead (task #32), so it takes a Mach context SNAPSHOT and lets
++     * the target keep running. The server's suspend counter is still incremented though, and
++     * that counter gates two things -- wake_thread() returns -1 and lock acquisition returns 0
++     * for a thread that is_thread_suspended(). So a thread that is "suspended" in bookkeeping
++     * but still running can never be woken or granted a critical section, which is exactly the
++     * shape of the Marvel Cosmic Invasion stall: one thread owning a Mono critical section
++     * while six queue behind it and the owner polls for a thread-info record forever.
++     *
++     * Log-only, capped. If a suspend of one of the blocked tids appears here with no matching
++     * resume, that is the deadlock; if nothing appears at all, suspension is not involved and
++     * the theory is dead. */
++    {
++        static int n_susp;
++        if (n_susp++ < 64)
++            fprintf( stderr, "[srv-suspend] ml714 SUSPEND tid=%04x by=%04x count %d->%d rev=ml714\n",
++                     thread->id, current ? current->id : 0, old_count, thread->suspend );
++    }
++#endif
+     return old_count;
+ }
+ 
+@@ -956,6 +978,15 @@ int suspend_thread( struct thread *thread )
+ int resume_thread( struct thread *thread )
+ {
+     int old_count = thread->suspend;
++#ifdef WINE_IOS
++    {   /* ml714: pair with [srv-suspend] so an unmatched suspend is visible */
++        static int n_res;
++        if (n_res++ < 64)
++            fprintf( stderr, "[srv-suspend] ml714 RESUME  tid=%04x by=%04x count %d->%d rev=ml714\n",
++                     thread->id, current ? current->id : 0, old_count,
++                     old_count > 0 ? old_count - 1 : 0 );
++    }
++#endif
+     if (thread->suspend > 0)
+     {
+         if (!(--thread->suspend)) resume_delayed_debug_events( thread );

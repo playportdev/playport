@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 27 Sep 2026 21:50:00 +0200
+Subject: [PATCH 1/2] crash_printer: include dbghelp.h in lower case
+
+MinGW's headers are lower case (dbghelp.h), as they are in the Windows
+SDK on a case-insensitive file system. On Linux a cross build with
+llvm-mingw fails at <DbgHelp.h> with "file not found"; <dbghelp.h>
+finds the same header on every host.
+
+Class: linux-build
+Evidence: docs/evidence/2026-09-27-gbe-steam-api-build.md
+Offered-upstream: no
+---
+ crash_printer/win.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/crash_printer/win.cpp b/crash_printer/win.cpp
+index e3c303e..e86a03f 100644
+--- a/crash_printer/win.cpp
++++ b/crash_printer/win.cpp
+@@ -10,7 +10,7 @@
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
+ 
+-#include <DbgHelp.h>
++#include <dbghelp.h>
+ 
+ static LPTOP_LEVEL_EXCEPTION_FILTER originalExceptionFilter = nullptr;
+ 

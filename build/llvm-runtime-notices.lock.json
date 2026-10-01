@@ -1,0 +1,156 @@
+{
+  "evidence": "Exact Git commit/tree and blob bytes from isolated public source retrieval; no independently verified publisher signatures or binary derivation. Script defaults are environment-overridable.",
+  "llvm": {
+    "commit": "85ac560262434c9ccfc0c183ec22d4138ed647fb",
+    "repository": "https://github.com/llvm/llvm-project.git",
+    "tag": "llvmorg-23.1.2",
+    "tree": "4094c6b0ce5e10ade6a508505b6fbb4ca8da3a71"
+  },
+  "llvm_mingw": {
+    "commit": "0eca5ac93da14a74bc81c249e841356ececc5d95",
+    "release": "20260922",
+    "repository": "https://github.com/mstorsjo/llvm-mingw",
+    "tree": "a87876344eb7f65c3f6614ff96c8f45f1b32ee36"
+  },
+  "policy": "recursive-whole-file-credit-superset-v1",
+  "required_inputs": {
+    "LICENSE.TXT": {
+      "blob": "fa6ac540007032cbd0ec772a1c72e6cb5527a4fe",
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+      "size": 15141
+    },
+    "clang/lib/Headers/avxvnniintrin.h": {
+      "blob": "c92790b69ffbe26a62da03b0f8be7fd5823f91b2",
+      "sha256": "6dd83a9ffa1a5391b8def9e15a95554fd0f34638a048ea2b6a10ef07767a9d09",
+      "size": 11724
+    },
+    "clang/lib/Headers/cuda_wrappers/new": {
+      "blob": "9d3e31690e677c3c13372c9d1fa7218d89699e00",
+      "sha256": "5f77bd6bb7eebfce9e4c6575bf598a76349e18edefc6ce95fe4a921dd861d13b",
+      "size": 3739
+    },
+    "compiler-rt/CREDITS.TXT": {
+      "blob": "6964eba020b8aa7a08629b249e3b9aea3ce3e448",
+      "sha256": "a9901f47a089da41e4690682d00ce4cedaa2baf41fedbe79beee366d43ac2461",
+      "size": 1049
+    },
+    "compiler-rt/LICENSE.TXT": {
+      "blob": "5a79a1b9d5cb0af9a779751f07033e44ca3b14d8",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "size": 16708
+    },
+    "compiler-rt/lib/BlocksRuntime/Block.h": {
+      "blob": "e6cb142fd75534c12f97d727e729772ce01f3942",
+      "sha256": "b9865a1ced1d282626221af7bdb28c23378d788afeb43dfb80cd8014bb712034",
+      "size": 2007
+    },
+    "compiler-rt/lib/builtins/README.txt": {
+      "blob": "2d213d95f333af3dbdf252a0ec7a748938559230",
+      "sha256": "3f89383ae3699e369853e9d6b1140f5372da356b76e86e1c13252810c2b83a97",
+      "size": 15334
+    },
+    "compiler-rt/lib/profile/WindowsMMap.c": {
+      "blob": "9d7da835b1ed3811be30990f12e0d317852b92a7",
+      "sha256": "e9f3d4d52b497a3dd7e811474301bb52d11ba8144992005420bbed52dd788787",
+      "size": 4509
+    },
+    "libcxx/CREDITS.TXT": {
+      "blob": "6ed18072de9a56d97d8446b2b7be9d3178d9334d",
+      "sha256": "f39081875d1c5c35aab256b676e94003b453ecb2a1cae14026dfd23804dc97b2",
+      "size": 4175
+    },
+    "libcxx/LICENSE.TXT": {
+      "blob": "e159d283443f92ac78b964d2bccebe8f95d5d445",
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "size": 16703
+    },
+    "libcxx/include/__format/escaped_output_table.h": {
+      "blob": "7b6a03162c4905bb1e79e626c9ce659265760881",
+      "sha256": "2e34512233036ed1bcd3c11eefc5b30012b2698757f46164c3198ffe438c62ba",
+      "size": 42881
+    },
+    "libcxx/include/__format/extended_grapheme_cluster_table.h": {
+      "blob": "6da07862d41e66e0be9cc2bc5e1ca4fd16f69e5b",
+      "sha256": "8b02da912dcd81f79c0a73df48eab88a31596b0f7d1da8ab3d511e6b39d8a8c9",
+      "size": 30768
+    },
+    "libcxx/include/__format/indic_conjunct_break_table.h": {
+      "blob": "d85782d73286baf6ef8292ce9e0ece61b2bd6ad3",
+      "sha256": "911f01c38f727c8dcb445b31ba45521c3303868007eb799f1d6ec42ab30e1095",
+      "size": 12797
+    },
+    "libcxx/include/__format/width_estimation_table.h": {
+      "blob": "ae10a77a5b98011c74e12e4141de28e89b49de02",
+      "sha256": "8d11da3dfcc85884155533a8c757b454afc1ee6bc6e9b6e5794b2658ac6e509a",
+      "size": 13036
+    },
+    "libcxx/include/__mdspan/extents.h": {
+      "blob": "99366b9ca9cc48cfe9fd0c73626d1dda2b19dbdb",
+      "sha256": "67e42c6d0d25b0823bf48199b7b5e1fb1b186d37f4c9d3f3aef03b95b06b49f6",
+      "size": 23680
+    },
+    "libcxx/src/include/ryu/ryu.h": {
+      "blob": "4f64f4a6fe80f9c7ac13e8ecbf9f89b5ddd9ee4c",
+      "sha256": "baa8c84e3067543e771aaa909e21d53de99897dd186bd9658e52279b952bd0b6",
+      "size": 5056
+    },
+    "libcxx/src/include/to_chars_floating_point.h": {
+      "blob": "8877c252d0399624d6f5f1157c96918240b8fd11",
+      "sha256": "ad2ea029a9705d58260eb6206b8bc68dcbca87cbc4a37d9112d33bde444b8386",
+      "size": 53953
+    },
+    "libcxxabi/CREDITS.TXT": {
+      "blob": "fbb6cbf38baf60a05dcca9025e50f3a25c961b73",
+      "sha256": "a259fff28a51623f14917dd68f97f3af7804984087ddc1bfd8196d08ebb75b83",
+      "size": 1660
+    },
+    "libcxxabi/LICENSE.TXT": {
+      "blob": "b75c0441bcd5be32b5a07e2a1ffc7e67b6d99f16",
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c",
+      "size": 16706
+    },
+    "libunwind/LICENSE.TXT": {
+      "blob": "1e3120621caeb62648745a42f7a9a25d1e2731ab",
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+      "size": 16706
+    },
+    "libunwind/src/dwarf2.h": {
+      "blob": "68ad882347203ca193d05bcb2e3f34d4500edca0",
+      "sha256": "e10d240e2f19de7121a8afaf3d4841a65936723e69d636f7e3241e14802d0bfc",
+      "size": 10635
+    }
+  },
+  "schema": 1,
+  "scripts": {
+    "Dockerfile": {
+      "blob": "05237bc53a54477fb9cfad6de51d535e7750a2b4",
+      "sha256": "7b8264c3df5fc5f6e63982f71b06f8a93c86faca102397093c88f3cf87681b1a",
+      "size": 1768
+    },
+    "build-all.sh": {
+      "blob": "9294ed078eca14d1cc1b6fbecc2a3d185d30c113",
+      "sha256": "6217aa0016aeeedeb06cc49f7135a052c5c04df05f7e6d1480fa40dda4654191",
+      "size": 7907
+    },
+    "build-compiler-rt.sh": {
+      "blob": "b56aa489c8c6f6a2ef21b3290612ac48e9457f53",
+      "sha256": "090356aef7ddadaa597f5f8be51b3d3bec9aa0dc6846f55eb5d296653d945055",
+      "size": 6922
+    },
+    "build-libcxx.sh": {
+      "blob": "f37cc9dea406dd5ffa54b1f3a8c0dfd306d562f4",
+      "sha256": "8af09b1afb92659a976f38897e5cee7ee202428153b6dfc510da88b09079bf7c",
+      "size": 4334
+    },
+    "build-llvm.sh": {
+      "blob": "f2483d8121396c9b4ce88df1be45379e82845cf0",
+      "sha256": "d096c6b95ed7aab42dc61de03791454b9f8401f511d08fed916f9f7d627fc317",
+      "size": 14804
+    },
+    "release.sh": {
+      "blob": "a08dacc2b102aa20ddbf8a194665a4ff0c134971",
+      "sha256": "5b9485e7c97c913a53095859fc972b9b01cd10a24e9512cd2a7f851959d5fe7c",
+      "size": 2630
+    }
+  }
+}

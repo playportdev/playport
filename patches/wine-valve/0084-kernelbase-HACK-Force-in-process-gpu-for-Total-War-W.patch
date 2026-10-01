@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Tue, 2 Apr 2024 18:05:11 -0600
+Subject: [PATCH] kernelbase: HACK: Force in-process-gpu for Total War:
+ WARHAMMER II.
+
+CW-Bug-Id: #23579
+Valve-commit: b92770f1faaab27daf8253a3fd94bff04ea98905
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index ff09d51..7b15b3f 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -511,6 +511,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     }
+     options[] =
+     {
++        {L"Warhammer2.exe", L" --in-process-gpu"},
+         {L"SummerIslands.exe", L" --in-process-gpu"},
+         {L"Paradox Launcher.exe", L" --use-angle=gl"},
+         {L"Montaro\\nw.exe", L" --use-gl=swiftshader"},

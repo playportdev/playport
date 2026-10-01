@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: store each TLS index into the module's JIT-pool copy
+ too
+
+The TLS index was written only to the PE image, not to the JIT-pool copy
+the code actually runs from.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 9e2a5871..a600c3c6 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1764,6 +1764,17 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )
+     if (thread) NtClose( thread );
+ 
+     *(DWORD *)dir->AddressOfIndex = i;
++#ifdef __arm64ec__
++    {
++        /* iOS: the module's code runs from its JIT-pool copy, taken at map time,
++         * whose .data still holds the image's initial _tls_index (-1 in current
++         * mingw-w64 CRTs). Store the slot there too. */
++        extern void *xlate_ios_jit( void *ptr );
++        DWORD *pool_index = xlate_ios_jit( (void *)dir->AddressOfIndex );
++
++        if (pool_index && pool_index != (DWORD *)dir->AddressOfIndex) *pool_index = i;
++    }
++#endif
+     tls_dirs[i] = *dir;
+     {
+         /* iOS-Madeira ml704 [tls-life]: which TLS slot each module actually got.

@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 21 Aug 2026 12:23:48 +0800
+Subject: [PATCH] d3d11: report GPU capabilities once at device creation
+
+A15 cannot sample BC at all, which is why remap_unsupported_bc() swaps BC to
+RGBA8 and the upload is dropped. Whether newer Apple GPUs lift that is unknown
+to us, and guessing decides whether BCn transcode is mandatory or dead weight
+on those parts -- so log supportsBCTextureCompression and the Apple7/8/9
+family bits rather than infer them.
+
+At Logger::err so MYTHIC_QUIET does not eat it; one line, at device creation.
+
+Madeira-commit: 5a2cf914aba5674d69dc7fd919e8f29bb00197e4
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11.cpp | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/d3d11/d3d11.cpp b/src/d3d11/d3d11.cpp
+index 9d1122c..fc55df8 100644
+--- a/src/d3d11/d3d11.cpp
++++ b/src/d3d11/d3d11.cpp
+@@ -81,6 +81,21 @@ D3D11CoreCreateDevice(IDXGIFactory *pFactory, IDXGIAdapter *pAdapter,
+   Logger::info(
+       str::format("Maximum supported feature level: ", maxFeatureLevel));
+ 
++  /* iOS-Mythic ml709: report the GPU's real capabilities once, at device creation.
++   *
++   * A15 cannot sample BC at all (supportsBCTextureCompression = NO), which is why
++   * remap_unsupported_bc() swaps BC->RGBA8 and the upload is dropped. Whether newer
++   * Apple GPUs lift that is unknown to us, and guessing decides whether BCn transcode
++   * is mandatory or dead weight on those parts. Log it rather than infer it. */
++  {
++    auto dev = dxgi_adapter->GetMTLDevice();
++    Logger::err(str::format(
++        "[gpu-caps] ml709 BC=", dev.supportsBCTextureCompression() ? 1 : 0,
++        " Apple7=", dev.supportsFamily(WMTGPUFamilyApple7) ? 1 : 0,
++        " Apple8=", dev.supportsFamily(WMTGPUFamilyApple8) ? 1 : 0,
++        " Apple9=", dev.supportsFamily(WMTGPUFamilyApple9) ? 1 : 0));
++  }
++
+   for (uint32_t flId = 0; flId < FeatureLevels; flId++) {
+     minFeatureLevel = pFeatureLevels[flId];
+ 

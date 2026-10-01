@@ -1,0 +1,226 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "CloudConflict.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Cloud save conflict",
+      "w": 874,
+      "x": 3816,
+      "y": 702
+    },
+    "DownloadMode.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Download mode (screen dimmed)",
+      "w": 874,
+      "x": 2862,
+      "y": 702
+    },
+    "Downloads.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Downloads",
+      "w": 874,
+      "x": 1908,
+      "y": 702
+    },
+    "Game.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Game page · installed",
+      "w": 874,
+      "x": 1908,
+      "y": 0
+    },
+    "GameInstall.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Game page · not installed",
+      "w": 874,
+      "x": 954,
+      "y": 702
+    },
+    "GameOptions.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Game options (X)",
+      "w": 874,
+      "x": 2862,
+      "y": 0
+    },
+    "GameOptionsPicker.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Game options · a graphics picker",
+      "w": 874,
+      "x": 3816,
+      "y": 0
+    },
+    "Launch.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Starting a game",
+      "w": 874,
+      "x": 4770,
+      "y": 0
+    },
+    "Library.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Library",
+      "w": 874,
+      "x": 954,
+      "y": 0
+    },
+    "Main.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Home",
+      "w": 874,
+      "x": 0,
+      "y": 0
+    },
+    "QuickMenu.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "In-game Playport menu",
+      "w": 874,
+      "x": 5724,
+      "y": 0
+    },
+    "Settings.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Settings",
+      "w": 874,
+      "x": 954,
+      "y": 1404
+    },
+    "SettingsGraphics.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Settings · Graphics",
+      "w": 874,
+      "x": 1908,
+      "y": 1404
+    },
+    "Setup.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "First run",
+      "w": 874,
+      "x": 0,
+      "y": 1404
+    },
+    "SignIn.dc.html": {
+      "h": 402,
+      "is_interactive": true,
+      "radius": 28,
+      "title": "Steam sign-in",
+      "w": 874,
+      "x": 0,
+      "y": 702
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-09-28T12:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "nDefaults": {
+      "fill": "orange",
+      "maxH": 402,
+      "text": "Good defaults, knobs where they matter\n\nResolution, frame rate limit and Direct3D are set once in Settings › Graphics and can be changed per game. Out of the box every game runs at 720p, 60 fps, on DXMT. Launch arguments are per game only. Gone from the player's app: memory ordering, environment variables, Steam API choice. Y on a changed setting puts it back to the default.",
+      "w": 420,
+      "x": 2862,
+      "y": 1404
+    },
+    "nDownloads": {
+      "fill": "blue",
+      "maxH": 402,
+      "text": "Download rules\n\nOne queue: installs, updates and repairs. Updates for installed games queue themselves. Playing pauses the queue; returning to the library resumes it. A download needs Playport open: after a minute idle the screen dims to Download mode. Each job checks free space before it starts and says what it needs.",
+      "w": 420,
+      "x": 3362,
+      "y": 1404
+    },
+    "nPad": {
+      "fill": "purple",
+      "maxH": 402,
+      "text": "Gamepad model\n\nLB/RB switch Home, Library, Downloads. A select, B back, X options for the focused thing, Y search. The focus ring is the only selection cue. Touch still works everywhere. Holding the controller's Home button opens the Playport menu over a game. Quitting a game returns straight to Home.",
+      "w": 420,
+      "x": 4362,
+      "y": 1404
+    },
+    "nSteam": {
+      "fill": "teal",
+      "maxH": 402,
+      "text": "Steam, from the ground up\n\nOne library: what you own on Steam plus anything in C:\\Games. Filters, not tabs. Cloud saves sync by themselves; you are asked only on a real conflict, once per game.",
+      "w": 420,
+      "x": 3862,
+      "y": 1404
+    },
+    "rowPlay": {
+      "kind": "title1",
+      "maxW": 6598,
+      "text": "Play: browse, launch, come back",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "rowSetup": {
+      "kind": "title1",
+      "maxW": 2782,
+      "text": "Setup and settings",
+      "w": 240,
+      "x": 0,
+      "y": 1104
+    },
+    "rowSteam": {
+      "kind": "title1",
+      "maxW": 4690,
+      "text": "Steam, installs and downloads",
+      "w": 240,
+      "x": 0,
+      "y": 402
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Library.dc.html",
+    "Game.dc.html",
+    "GameOptions.dc.html",
+    "GameOptionsPicker.dc.html",
+    "Launch.dc.html",
+    "QuickMenu.dc.html",
+    "SignIn.dc.html",
+    "GameInstall.dc.html",
+    "Downloads.dc.html",
+    "DownloadMode.dc.html",
+    "CloudConflict.dc.html",
+    "Setup.dc.html",
+    "Settings.dc.html",
+    "SettingsGraphics.dc.html"
+  ],
+  "pages": [],
+  "title": "Playport Redesign"
+}

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Thu, 22 Sep 2022 15:50:33 -0500
+Subject: [PATCH] msvcrt: HACK: Disable SSE2 support for DarkStar One.
+
+CW-Bug-Id: #21330
+Valve-commit: 16b8cdb5a9682fc187ee7c5ee8c150aca6a241f3
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/msvcrt/math.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/msvcrt/math.c b/dlls/msvcrt/math.c
+index 23c3df3..8796ebc 100644
+--- a/dlls/msvcrt/math.c
++++ b/dlls/msvcrt/math.c
+@@ -76,7 +76,8 @@ void msvcrt_init_math( void *module )
+     {
+         char sgi[64];
+ 
+-        if (GetEnvironmentVariableA("SteamGameId", sgi, sizeof(sgi)) && !strcmp(sgi, "560430"))
++        if (GetEnvironmentVariableA("SteamGameId", sgi, sizeof(sgi))
++                && (!strcmp(sgi, "560430") || !strcmp(sgi, "12330")))
+         {
+             sse2_supported = FALSE;
+             FIXME("HACK: disabling sse2 support in msvcrt.\n");

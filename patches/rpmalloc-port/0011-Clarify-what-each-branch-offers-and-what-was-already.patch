@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 18:29:14 -0700
+Subject: [PATCH] Clarify what each branch offers, and what was already granted
+
+The notice said Madeira's commits are GPL while also saying earlier permissive
+grants stand, without reconciling the two. Both are true and the resolution is
+the branch split, which the notice did not explain.
+
+ios-mythic through 61f5b29 keeps its prior permissive grants; the same material
+is re-offered under the GPL on ios-madeira. The replayed commits are therefore
+available either way, which is an unavoidable consequence of having published
+them permissively first. Only contributions first published after the migration
+are GPL-only, because only those carry no earlier grant.
+
+Added at the tip rather than replayed through the history, since rewriting a
+branch again to fix prose would be more disruptive than the fix is worth.
+
+Madeira-commit: e60293eb1fac2e75c2e8524cc22de8ae2c0c23da
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ LICENSE-MADEIRA.md | 22 +++++++++++++++++++---
+ 1 file changed, 19 insertions(+), 3 deletions(-)
+
+diff --git a/LICENSE-MADEIRA.md b/LICENSE-MADEIRA.md
+index 785e025..8a32cda 100644
+--- a/LICENSE-MADEIRA.md
++++ b/LICENSE-MADEIRA.md
+@@ -11,7 +11,7 @@ public-domain-equivalent).
+ |---|---|
+ | Original rpmalloc, and all upstream FEX-Emu changes | as in `LICENSE` (0BSD) — unchanged |
+ | Commits authored by **Ryan Houdek** on the `ios-mythic` branch | as in `LICENSE` (0BSD) — **not** relicensed |
+-| Commits authored by **Will Faust** from 2026 onward, on `ios-mythic` and later branches | **GPL-3.0-or-later** |
++| Commits authored by **Will Faust**, as offered on the `ios-madeira` branch | **GPL-3.0-or-later** |
+ 
+ `git log --format='%an'` distinguishes them. Where a single file contains both,
+ the file as a whole may only be distributed under terms compatible with
+@@ -28,8 +28,24 @@ Two limits are worth stating honestly rather than leaving implied:
+ 
+ - The GPL constrains **distribution**, not private modification or use.
+ - Changes published earlier under a permissive licence were granted under it,
+-  and that grant cannot be revoked. Only the contributions covered above are
+-  GPL-only.
++  and that grant cannot be revoked. See the branch note below.
++
++## Branches, and what each one offers
++
++This distinction matters and is easy to get wrong:
++
++| Branch | Status |
++|---|---|
++| **`ios-mythic`** (through `61f5b29`) | The previously published history. It **retains its prior permissive grants** — anyone who has it keeps 0BSD/MIT rights to that material, and nothing here withdraws them. Kept unchanged because a published FEX gitlink references it. |
++| **`ios-madeira`** | The same material, **re-offered under GPL-3.0-or-later**, with the licensing boundary placed before the first Madeira-authored commit. |
++
++So the replayed commits are *dual-availability*: obtainable under their original
++permissive grant from `ios-mythic`, and under the GPL from `ios-madeira`. That
++is a consequence of having published them permissively first, and it cannot be
++undone.
++
++**Only contributions first published after this migration are GPL-only.** Those
++are the ones for which no permissive grant was ever made.
+ 
+ ## Contributing
+ 

@@ -1,0 +1,514 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 23 Sep 2026 03:13:15 +0800
+Subject: [PATCH] ntdll/server iOS: loader and ARM64EC signal fixes, file and
+ sync paths, inproc-sync and thread bookkeeping
+
+Loader and ARM64EC exception path changes for the native D3D12 runtime
+bring-up, file-path fixes on the sandboxed file system, sync fast path
+support, and wineserver-side inproc sync and thread bookkeeping.
+
+Madeira-commit: d88d55eee004943170cd92bda8dc9cc961121536
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         |  50 +++++++++++++++++-
+ dlls/ntdll/signal_arm64ec.c |  92 +++++++++++++++++++++++++++++---
+ dlls/ntdll/unix/file.c      |  68 ++++++++++++++++++++++--
+ dlls/ntdll/unix/sync.c      | 101 +++++++++++++++++++++++++++++++++++-
+ dlls/win32u/input.c         |   2 +-
+ server/inproc_sync.c        |   9 ++++
+ server/thread.c             |   7 +++
+ 7 files changed, 315 insertions(+), 14 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index f02613a255d..02973909470 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1334,6 +1334,52 @@ void ios_eager_delay_resolve( const char *when )
+ }
+ #endif
+ 
++#ifdef __arm64ec__
++/* Candidate: preserve the x64-facing side of public import forwarders.
++ * An EC image is mixed-ISA; its primary IAT is not necessarily native-only.
++ * The linker-provided auxiliary import checker remains available to EC callers.
++ * Keep this separate from any broad auxiliary-IAT or call-checker redesign.
++ */
++#include "arm64ec_x64_export_iat.c"
++
++static BOOL arm64ec_iat_is_exported_x64( HMODULE module, const IMAGE_THUNK_DATA *slot )
++{
++    const IMAGE_ARM64EC_METADATA *metadata = arm64ec_get_module_metadata( module );
++    const IMAGE_NT_HEADERS *nt = RtlImageNtHeader( module );
++    const IMAGE_EXPORT_DIRECTORY *exports;
++    ULONG export_size;
++    ULONG_PTR slot_rva = (ULONG_PTR)slot - (ULONG_PTR)module;
++
++    BOOL selected;
++
++    if (!metadata || !nt || slot_rva > nt->OptionalHeader.SizeOfImage) return FALSE;
++    exports = RtlImageDirectoryEntryToData( module, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &export_size );
++    if (!exports) return FALSE;
++    selected = arm64ec_iat_slot_is_x64_export( module, nt->OptionalHeader.SizeOfImage, slot_rva,
++                                               (const char *)exports - (const char *)module, export_size,
++                                               metadata->CodeMap, metadata->CodeMapCount );
++    /* ml943: this IS the canary Astra asked for, folded into the real run so one
++     * launch answers both questions. A selected slot must end up holding the
++     * x64-visible FFS of the imported export, NOT its native ARM64 body -- the
++     * body is what a hook resolver was reaching through the FF25 stub and
++     * overwriting with x64 instructions. Print the slot and the value we are
++     * preserving; cross-check the value against the [jit-pool] image lines to
++     * confirm it lands in .hexpthk and not in .text. Capped: import binding is
++     * hot and there are ~1565 selected slots across the shipped DLL set. */
++    if (selected)
++    {
++        static int x64_iat_log;
++        if (x64_iat_log < 40)
++        {
++            x64_iat_log++;
++            ERR( "ml943 [x64-iat] %p slot rva %#x: KEEPING x64 target %p (public FF25 export stub, no native redirect)\n",
++                 module, (unsigned int)slot_rva, (void *)slot->u1.Function );
++        }
++    }
++    return selected;
++}
++#endif
++
+ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
+ {
+     HMODULE module = wm->ldr.DllBase;
+@@ -1453,7 +1499,7 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+                      (void *)thunk_list->u1.Function );
+             }
+ #ifdef __arm64ec__
+-            else if (imp_metadata)
++            else if (imp_metadata && !arm64ec_iat_is_exported_x64( module, thunk_list ))
+                 thunk_list->u1.Function = (ULONG_PTR)arm64ec_redirect_ptr( imp_mod,
+                                                                            (void *)thunk_list->u1.Function,
+                                                                            imp_metadata );
+@@ -1476,7 +1522,7 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
+                      (void *)thunk_list->u1.Function );
+             }
+ #ifdef __arm64ec__
+-            else if (imp_metadata)
++            else if (imp_metadata && !arm64ec_iat_is_exported_x64( module, thunk_list ))
+             {
+                 void *pre = (void *)thunk_list->u1.Function;
+ 
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index f993e7d86c7..b9374b19b69 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -3704,16 +3704,56 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+                                 WINE_UNIX_CALL( unix_ios_jit_alias_probe, &pp );
+                             }
+                             {
++                                /* ml948: THIS DUMP USED TO CRASH THE HANDLER.
++                                 *
++                                 * It dereferenced (grip - 32) directly. `lim` was clipped only
++                                 * when the alias probe returned an `end`, so whenever the probe
++                                 * found NOTHING mapped -- exactly the case for a wild
++                                 * reconstructed RIP, which is when this telemetry matters most --
++                                 * it read 64 bytes from an unmapped address INSIDE exception
++                                 * dispatch and faulted recursively.
++                                 *
++                                 * Measured: a run whose guest RIP became 0x204d5241 then showed
++                                 * a native fault at 0x204d5221 = RIP-32, i.e. this loop, and the
++                                 * faulting `ldrb w2,[x25],#1` is the byte-formatting read. That
++                                 * artefact was mistaken for a guest string parser and cost a
++                                 * whole line of investigation. Same recurrence at 0x48d28a41-32.
++                                 *
++                                 * Copy through NtReadVirtualMemory instead: it returns a status
++                                 * and cannot fault us. An alias-probe hit is NOT a lifetime
++                                 * guarantee, so the probe's `end` is now only a clip hint, never
++                                 * the safety check -- do not go back to query-then-dereference.
++                                 * Underflow is handled explicitly. */
+                                 unsigned lim = 64;
++                                unsigned char buf[64];
++                                SIZE_T got = 0;
++                                NTSTATUS rst;
++
+                                 if (pp.end && grip - 32 < pp.end && pp.end - (grip - 32) < 64)
+                                     lim = (unsigned)(pp.end - (grip - 32));
+-                                for (i = 0; i < lim; i++)
+-                                    off += sprintf( line + off, "%02x ", rx[i] );
+-                                /* ml637: `lim - 32 - 1` wrapped when lim==32 and printed
+-                                 * "+4294967295". Print the byte count, not a signed range. */
+-                                ERR( "[guest-bytes] ml631 #%d RIP=0x%I64x RX from -32, %u bytes: %s%s\n",
+-                                     gb_n, grip, lim, line,
+-                                     lim < 64 ? "   (clipped at mapping end)" : "" );
++                                if (grip < 32)
++                                {
++                                    ERR( "[guest-bytes] ml948 #%d RIP=0x%I64x < 32 — no window to dump\n",
++                                         gb_n, grip );
++                                }
++                                else if (!NT_SUCCESS( (rst = NtReadVirtualMemory( GetCurrentProcess(),
++                                                                (const void *)(ULONG_PTR)(grip - 32),
++                                                                buf, lim, &got )) ) || !got)
++                                {
++                                    ERR( "[guest-bytes] ml948 #%d RIP=0x%I64x window [-32,+%u) UNREADABLE "
++                                         "(status %08x, got %u) — dump skipped, handler intact\n",
++                                         gb_n, grip, lim, (unsigned int)rst, (unsigned)got );
++                                }
++                                else
++                                {
++                                    for (i = 0; i < (unsigned)got; i++)
++                                        off += sprintf( line + off, "%02x ", buf[i] );
++                                    /* ml637: `lim - 32 - 1` wrapped when lim==32 and printed
++                                     * "+4294967295". Print the byte count, not a signed range. */
++                                    ERR( "[guest-bytes] ml631 #%d RIP=0x%I64x RX from -32, %u of %u bytes: %s%s\n",
++                                         gb_n, grip, (unsigned)got, lim, line,
++                                         (unsigned)got < 64 ? "   (short read / clipped)" : "" );
++                                }
+                             }
+                             if (pp.base)
+                             {
+@@ -4764,6 +4804,44 @@ static void __attribute__((naked)) arm64x_check_call(void)
+           * So: correct-but-unlandable until that false positive is found. The fixed version
+           * is preserved in the task notes. Do not "fix" this without re-running the CEF
+           * check -- verifying IsEcCode flips 0->1 does NOT prove the outcome still works. */
++         /* iOS-Madeira ml975: BOUNDS-CHECK THE TARGET BEFORE INDEXING THE BITMAP.
++          *
++          * RtlIsEcCode (the C reader, same file) already does this, and its comment
++          * records why: alloc_arm64ec_map() sizes EcCodeBitMap from
++          * min(address_space_limit, host_addr_space_limit) rather than Windows'
++          * 128TB, because one bit per 4KB page over the full range would cost a
++          * 4.06GB reservation. On iOS that yields 0x8000000000 (512GB) of coverage
++          * in a 16MB view. Steam hit the unchecked case in ml161:
++          * RtlIsEcCode(0x7300ffffffff) indexed 0x74d6ddfff8, past the view, and
++          * segfaulted. This asm fast path never received the same guard.
++          *
++          * rdr38/rdr39 is the same failure from a different caller: the guest made
++          * an indirect call to a garbage target (x11 = 0xc0be0f4800b60f00, eight
++          * bytes that disassemble as x86 -- read out of an instruction stream), the
++          * `ldr x16,[x16,x17,lsl #3]` below indexed 0x1817c1e900168 past the bitmap
++          * base and faulted at 0x1818775d80168. x18, the PEB and the bitmap pointer
++          * were all VALID; only the target was bad.
++          *
++          * iOS user VA is 39-bit (512GB), which is also exactly the bitmap's
++          * coverage, so one shift tests both: any bit at or above 2^39 means the
++          * address can be neither legitimate code nor representable in the map.
++          * Branch to .Lexit -- the "not EC code, use the x64 exit thunk" path, which
++          * is the same answer RtlIsEcCode gives for an out-of-range pointer, and the
++          * only exit that does NOT dereference x11 (both .Ljmp and the
++          * fast-forward/syscall checks load from [x11], so they would fault too).
++          * The guest's bad call then faults in the guest, attributed to the guest,
++          * instead of killing a thread inside ntdll.
++          *
++          * Deliberately does NOT touch the `ldr x16,[x18,#0x60]` line below: ml246
++          * A/B-proved over 8 runs that "correcting" that read breaks CEF. This only
++          * changes addresses that currently crash, and it moves them in the same
++          * direction ml246 documents as safe (more targets taking the exit thunk).
++          *
++          * Not covered, deliberately, to keep the scope to the observed fault: a
++          * NULL or small-but-invalid target still reaches `ldr x16,[x11]` below and
++          * faults there, which is what Windows would also do. */
++         "lsr x16, x11, #39\n\t"            /* ml975: beyond 39-bit VA / map coverage? */
++         "cbnz x16, .Lexit\n\t"             /*        -> not EC code, exit thunk */
+          "ldr x16, [x18, #0x60]\n\t"        /* peb -- see above, intentionally x18 */
+          "lsr x17, x11, #18\n\t"            /* dest / page_size / 64 */
+          "ldr x16, [x16, #0x368]\n\t"       /* peb->EcCodeBitMap */
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index e02e29c9862..1975cc69566 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -4859,9 +4859,17 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
+             if (w) while (k < wl && k < sizeof(nb) - 1) { nb[k] = (w[k] < 32 || w[k] > 126) ? '?' : (char)w[k]; k++; }
+             nb[k] = 0;
+             ios_file_wfail_logged++;
+-            dprintf( 2, "[file-wfail] ml669 #%d status=0x%08x disp=%u access=0x%08x options=0x%08x "
+-                     "unix=%s name=%s\n",
+-                     ios_file_wfail_logged, status, disposition, access, options,
++            /* ml959: log the SHARE MODE too. rdr23's real blocker is a
++             * STATUS_SHARING_VIOLATION (0xc0000043) on EMP.dll's own state file
++             * %APPDATA%\\EMPRESS\\15a3.bin, opened FILE_OVERWRITE_IF for write --
++             * which is why that file sits at 0 bytes on disk. A sharing
++             * violation means a conflicting open handle exists, and without the
++             * requested share mode there is no way to tell whether wineserver's
++             * verdict is correct (a genuinely exclusive holder) or whether we
++             * are rejecting an open Windows would allow. */
++            dprintf( 2, "[file-wfail] ml669 #%d status=0x%08x disp=%u access=0x%08x sharing=0x%08x "
++                     "options=0x%08x unix=%s name=%s\n",
++                     ios_file_wfail_logged, status, disposition, access, sharing, options,
+                      unix_name ? unix_name : "(none)", nb );
+         }
+     }
+@@ -6416,6 +6424,60 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
+ 
+     if (!virtual_check_buffer_for_write( buffer, length )) return STATUS_ACCESS_VIOLATION;
+ 
++#ifdef WINE_IOS
++    /* ml955: WHAT IS THE ANTI-TAMPER BLOCKING READ ON?
++     *
++     * Measured: with the sub-floor work in place a game's protection layer sits
++     * for the whole run in kernelbase!ReadFile+0xac at 0% CPU, called from its
++     * own low-address code. Its spawned launcher is still alive, so this is not
++     * a read on a dead peer's handle. The handle is the missing fact, and each
++     * answer points somewhere different -- a socket implies online
++     * authentication, a pipe implies launcher IPC, a plain file implies
++     * something about the install.
++     *
++     * server_get_unix_fd above already returns the SERVER'S object type, so the
++     * classification is free -- no extra round trip, no fstat.
++     *
++     * Keyed on the HANDLE, one line each, not a flat call cap: Wine performs
++     * thousands of reads during startup and a flat budget is spent long before
++     * the interesting handle appears. (That exact mistake cost a run earlier in
++     * this investigation -- probe the value in question, not the call count.) */
++    {
++        static HANDLE ml955_seen[48];
++        static int ml955_n;
++        int ml955_i, ml955_dup = 0;
++
++        for (ml955_i = 0; ml955_i < ml955_n; ml955_i++)
++            if (ml955_seen[ml955_i] == handle) { ml955_dup = 1; break; }
++        if (!ml955_dup && ml955_n < (int)(sizeof(ml955_seen)/sizeof(ml955_seen[0])))
++        {
++            /* ml955 fix: this table was invented, not read. enum server_fd_type
++             * (include/wine/server_protocol.h) has no PIPE and no MAILSLOT --
++             * it is INVALID, FILE, DIR, SOCKET, SERIAL, CHAR, DEVICE -- so the
++             * old table reported CHAR as "PIPE" and DEVICE as "MAILSLOT".
++             * Indexed by the enum constants so it cannot drift again. Note a
++             * named pipe end reports FD_TYPE_DEVICE (server/named_pipe.c), and
++             * an fd class names neither the peer nor any protocol. */
++            static const char *ml955_types[FD_TYPE_NB_TYPES];
++            ml955_types[FD_TYPE_INVALID] = "INVALID";
++            ml955_types[FD_TYPE_FILE]    = "FILE";
++            ml955_types[FD_TYPE_DIR]     = "DIR";
++            ml955_types[FD_TYPE_SOCKET]  = "SOCKET";
++            ml955_types[FD_TYPE_SERIAL]  = "SERIAL";
++            ml955_types[FD_TYPE_CHAR]    = "CHAR";
++            ml955_types[FD_TYPE_DEVICE]  = "DEVICE";
++            ml955_seen[ml955_n++] = handle;
++            ERR( "ml955 [read-src] #%d handle=%p type=%s(%d) options=%08x len=%u offset=%s%I64x async=%d\n",
++                 ml955_n, handle,
++                 ((int)type >= 0 && (int)type < FD_TYPE_NB_TYPES && ml955_types[(int)type])
++                     ? ml955_types[(int)type] : "?",
++                 (int)type, options, length,
++                 offset ? "" : "(none) ", offset ? offset->QuadPart : 0,
++                 !(options & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT)) );
++        }
++    }
++#endif
++
+     if (status == STATUS_BAD_DEVICE_TYPE)
+         return server_read_file( handle, event, apc, apc_user, io, buffer, length, offset, key );
+ 
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 55b3efed55c..5a08e5ce510 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -545,8 +545,69 @@ struct inproc_sync
+ #define INPROC_SYNC_CACHE_BLOCK_SIZE  (65536 / sizeof(struct inproc_sync))
+ #define INPROC_SYNC_CACHE_ENTRIES     128
+ 
++#ifdef WINE_IOS
++/* iOS-Madeira ml1058: this cache is indexed by HANDLE VALUE, and on iOS every
++ * pseudo-process shares this one copy of ntdll's unix side while owning its own
++ * handle table. One global cache would hand process B the object behind process
++ * A's handle 0x44. Same rule as the fd cache (ml571): one cache per PEB, dropped
++ * when that pseudo-process dies so a recycled PEB address starts clean. */
++struct ios_inproc_cache
++{
++    void *peb;
++    struct inproc_sync *blocks[INPROC_SYNC_CACHE_ENTRIES];
++    struct inproc_sync  initial[INPROC_SYNC_CACHE_BLOCK_SIZE];
++};
++#define IOS_MAX_INPROC_CACHES 64
++static struct ios_inproc_cache *ios_inproc_caches[IOS_MAX_INPROC_CACHES];
++static pthread_mutex_t ios_inproc_cache_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct ios_inproc_cache ios_inproc_cache_fallback;
++
++static struct ios_inproc_cache *ios_get_inproc_cache(void)
++{
++    void *peb = NtCurrentTeb()->Peb;
++    struct ios_inproc_cache *c = NULL;
++    int i, free_slot = -1;
++
++    for (i = 0; i < IOS_MAX_INPROC_CACHES; i++)      /* lock-free hit: entries only appear/disappear under the lock */
++    {
++        struct ios_inproc_cache *e = ios_inproc_caches[i];
++        if (e && e->peb == peb) return e;
++    }
++    pthread_mutex_lock( &ios_inproc_cache_lock );
++    for (i = 0; i < IOS_MAX_INPROC_CACHES; i++)
++    {
++        if (ios_inproc_caches[i] && ios_inproc_caches[i]->peb == peb) { c = ios_inproc_caches[i]; break; }
++        if (!ios_inproc_caches[i] && free_slot < 0) free_slot = i;
++    }
++    if (!c && free_slot >= 0 && (c = calloc( 1, sizeof(*c) )))
++    {
++        c->peb = peb;
++        ios_inproc_caches[free_slot] = c;
++    }
++    pthread_mutex_unlock( &ios_inproc_cache_lock );
++    return c ? c : &ios_inproc_cache_fallback;
++}
++
++/* Called when a pseudo-process dies (next to ios_fd_cache_release). The blocks
++ * are deliberately NOT freed: a laggard thread may still be inside a lookup. */
++void ios_inproc_cache_release( void *peb )
++{
++    int i;
++    pthread_mutex_lock( &ios_inproc_cache_lock );
++    for (i = 0; i < IOS_MAX_INPROC_CACHES; i++)
++        if (ios_inproc_caches[i] && ios_inproc_caches[i]->peb == peb)
++        {
++            ios_inproc_caches[i]->peb = (void *)~(uintptr_t)0;   /* never matches again */
++            ios_inproc_caches[i] = NULL;
++        }
++    pthread_mutex_unlock( &ios_inproc_cache_lock );
++}
++#define inproc_sync_cache               (ios_get_inproc_cache()->blocks)
++#define inproc_sync_cache_initial_block (ios_get_inproc_cache()->initial)
++#else
+ static struct inproc_sync *inproc_sync_cache[INPROC_SYNC_CACHE_ENTRIES];
+ static struct inproc_sync inproc_sync_cache_initial_block[INPROC_SYNC_CACHE_BLOCK_SIZE];
++#endif
+ 
+ static inline unsigned int inproc_sync_handle_to_index( HANDLE handle, unsigned int *entry )
+ {
+@@ -673,10 +734,17 @@ static NTSTATUS get_server_inproc_sync( HANDLE handle, struct inproc_sync *sync
+         req->handle = wine_server_obj_handle( handle );
+         if (!(ret = wine_server_call( req )))
+         {
+-            obj_handle_t fd_handle;
+             sync->refcount = 1;
++#ifdef WINE_IOS
++            /* ml1058: the descriptor is a pseudo fd handed over in-process; see
++             * build/madsync. Nothing travels over the socket. */
++            sync->fd = madsync_take( GetCurrentProcessId(), wine_server_obj_handle( handle ) );
++            if (sync->fd < 0) ret = STATUS_INVALID_HANDLE;
++#else
++            obj_handle_t fd_handle;
+             sync->fd = wine_server_receive_fd( &fd_handle );
+             assert( wine_server_ptr_handle(fd_handle) == handle );
++#endif
+             sync->access = reply->access;
+             sync->type = reply->type;
+             sync->closed = 0;
+@@ -884,8 +952,13 @@ static int get_inproc_alert_fd(void)
+         {
+             if (!server_call_unlocked( req ))
+             {
++#ifdef WINE_IOS
++                (void)token;
++                data->alert_fd = fd = madsync_take( GetCurrentProcessId(), reply->handle );
++#else
+                 data->alert_fd = fd = wine_server_receive_fd( &token );
+                 assert( token == reply->handle );
++#endif
+             }
+         }
+         SERVER_END_REQ;
+@@ -2394,6 +2467,32 @@ NTSTATUS WINAPI NtSignalAndWaitForSingleObject( HANDLE signal, HANDLE wait,
+  */
+ NTSTATUS WINAPI NtYieldExecution(void)
+ {
++#ifdef WINE_IOS
++    /* iOS-Madeira ml1063: ADAPTIVE YIELD. A game thread that spins
++     * WaitForSingleObject(h, 0) / SwitchToThread() waiting for work keeps a whole
++     * core at 100 % (sampled: one such thread pegged for the entire benchmark,
++     * ~290M empty polls in one run), because sched_yield with nothing else
++     * runnable returns at once. On a 16-thread desktop that is harmless; on a
++     * phone with two performance cores it takes one of them from the critical
++     * thread and heats the package into throttling. After a burst of back-to-back
++     * yields the thread is put to sleep for 100 us instead: the same forward
++     * progress with a bounded latency cost. Streaks reset after a 2 ms gap. */
++    {
++        static __thread unsigned long long ios_last_yield_ns;
++        static __thread unsigned ios_yield_streak;
++        struct timespec ts;
++        unsigned long long now;
++        clock_gettime( CLOCK_MONOTONIC, &ts );
++        now = (unsigned long long)ts.tv_sec * 1000000000ull + ts.tv_nsec;
++        if (now - ios_last_yield_ns < 2000000ull) ios_yield_streak++; else ios_yield_streak = 0;
++        ios_last_yield_ns = now;
++        if (ios_yield_streak > 256)
++        {
++            usleep( 100 );
++            return STATUS_SUCCESS;
++        }
++    }
++#endif
+ #ifdef HAVE_SCHED_YIELD
+ #ifdef RUSAGE_THREAD
+     struct rusage u1, u2;
+diff --git a/dlls/win32u/input.c b/dlls/win32u/input.c
+index c24bbab1d4a..0729744b680 100644
+--- a/dlls/win32u/input.c
++++ b/dlls/win32u/input.c
+@@ -1446,7 +1446,7 @@ HKL WINAPI NtUserActivateKeyboardLayout( HKL layout, UINT flags )
+ 
+     TRACE_(keyboard)( "layout %p, flags %x\n", layout, flags );
+ 
+-    if (flags) FIXME_(keyboard)( "flags %x not supported\n", flags );
++    if (flags) { static int once; if (!once++) FIXME_(keyboard)( "flags %x not supported (reported once)\n", flags ); }   /* iOS ml1051: 45,713 lines in one run */
+ 
+     if (layout == (HKL)HKL_NEXT || layout == (HKL)HKL_PREV)
+     {
+diff --git a/server/inproc_sync.c b/server/inproc_sync.c
+index 522d9a4e320..0c10f1c918c 100644
+--- a/server/inproc_sync.c
++++ b/server/inproc_sync.c
+@@ -31,6 +31,7 @@
+ #include "handle.h"
+ #include "request.h"
+ #include "thread.h"
++#include "process.h"
+ #include "user.h"
+ 
+ #ifdef HAVE_LINUX_NTSYNC_H
+@@ -47,7 +48,11 @@
+ int get_inproc_device_fd(void)
+ {
+     static int fd = -2;
++#ifdef WINE_IOS
++    if (fd == -2) fd = madsync_enabled() ? MADSYNC_DEVICE_FD : -1;   /* ml1058: the userspace "driver" */
++#else
+     if (fd == -2) fd = open( "/dev/ntsync", O_CLOEXEC | O_RDONLY );
++#endif
+     return fd;
+ }
+ 
+@@ -284,7 +289,11 @@ DECL_HANDLER(get_inproc_sync_fd)
+     reply->access = get_handle_access( current->process, req->handle );
+ 
+     if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
++#ifdef WINE_IOS
++    else madsync_post( get_process_id( current->process ), req->handle, fd );   /* ml1058: no SCM_RIGHTS for a pseudo fd */
++#else
+     else send_client_fd( current->process, fd, req->handle );
++#endif
+ 
+     release_object( obj );
+ }
+diff --git a/server/thread.c b/server/thread.c
+index 58bc7c20191..6c1ba76709a 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1902,7 +1902,9 @@ DECL_HANDLER(init_first_thread)
+     if ((fd = get_inproc_device_fd()) >= 0)
+     {
+         reply->inproc_device = get_process_id( process ) | 1;
++#ifndef WINE_IOS   /* ml1058: the device is a constant pseudo fd on iOS; nothing to send */
+         send_client_fd( process, fd, reply->inproc_device );
++#endif
+     }
+ }
+ 
+@@ -2539,6 +2541,11 @@ DECL_HANDLER(get_inproc_alert_fd)
+     else
+     {
+         reply->handle = get_thread_id( current ) | 1; /* arbitrary token */
++#ifdef WINE_IOS
++        { extern void madsync_post( unsigned int pid, unsigned int handle, int fd );
++          madsync_post( get_process_id( current->process ), reply->handle, fd ); }   /* ml1058 */
++#else
+         send_client_fd( current->process, fd, reply->handle );
++#endif
+     }
+ }

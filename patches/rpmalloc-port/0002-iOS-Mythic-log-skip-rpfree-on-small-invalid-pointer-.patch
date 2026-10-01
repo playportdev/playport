@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 17:49:30 +0800
+Subject: [PATCH] iOS-Mythic: log+skip rpfree on small/invalid pointer instead
+ of terminating
+
+If rpfree is called with ptr < 0x10000000 (typically a corrupted vector
+data field from a not-properly-initialized C++ static), print a "[rpfree-skip]"
+diagnostic to STD_ERROR_HANDLE and return without freeing, rather than
+calling NtTerminateProcess. The host environment captures stderr via dup2.
+
+Defensive guard for arm64ec-mingw builds where the global C++ ctor chain
+doesn't always run, so vectors/maps may have garbage data pointers.
+
+Madeira-commit: 110ee118beda09f5ab55accd188ba446a42b4787
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index eb416d9..13a2b8d 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -1928,10 +1928,36 @@ rpzalloc(size_t size) {
+ 	return heap_allocate_block(heap, size, 1);
+ }
+ 
++/* iOS-Mythic diagnostic: log+exit if called with an obviously bad pointer.
++ * On iOS we hit rpfree with x0=small (< 0x10000000) which faults inside
++ * block_deallocate. Encode the bad pointer's low 16 bits + caller's LR
++ * low 16 bits into exit status so we can identify the bug. */
+ extern inline void
+ rpfree(void* ptr) {
+ 	if (UNEXPECTED(ptr == 0))
+ 		return;
++	if (UNEXPECTED((unsigned long long)ptr < 0x10000000ULL)) {
++		/* iOS-Mythic: skip free for obviously-bad pointer (likely from
++		 * destructor of zero-initialized vector with non-null garbage data
++		 * pointer due to ARM64EC ABI mismatch on struct return). Log it but
++		 * continue execution so x86_64 PE can still print Hello World. */
++		unsigned long long _lr = (unsigned long long)__builtin_return_address(0);
++		unsigned long long _p = (unsigned long long)ptr;
++		char buf[80];
++		const char *hexd = "0123456789abcdef";
++		int i = 0;
++		const char *prefix = "[rpfree-skip] ptr=0x";
++		while (prefix[i]) { buf[i] = prefix[i]; i++; }
++		for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(_p >> j) & 0xf];
++		const char *lrstr = " lr=0x";
++		for (int k = 0; lrstr[k]; ++k) buf[i++] = lrstr[k];
++		for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(_lr >> j) & 0xf];
++		buf[i++] = '\n';
++		void *h = GetStdHandle((unsigned long)-12);
++		unsigned long w;
++		WriteFile(h, buf, (unsigned long)i, &w, 0);
++		return;
++	}
+ 	block_deallocate(ptr);
+ }
+ 

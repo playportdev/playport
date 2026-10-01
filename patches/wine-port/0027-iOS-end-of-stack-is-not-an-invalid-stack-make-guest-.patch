@@ -1,0 +1,274 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 30 Jul 2026 01:14:56 +0800
+Subject: [PATCH] =?UTF-8?q?iOS:=20end-of-stack=20is=20not=20an=20invalid?=
+ =?UTF-8?q?=20stack=20=E2=80=94=20make=20guest=20faults=20survivable?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+THE FIX (signal_arm64ec.c, call_seh_handlers). The ml246 guard lumped ControlPc == 0
+in with the degenerate cases and set EXCEPTION_STACK_INVALID. NtRaiseException turns
+that flag into "Exception frame is not in stack limits => unable to dispatch exception"
+followed by an IMMEDIATE NtTerminateProcess, short-circuiting both the debug event and
+second chance. But ControlPc == 0 is simply the END OF THE STACK: an unhandled
+exception, which is a normal outcome, not a broken stack.
+
+Proof the walk was ending legitimately (ml266): FEX did everything right —
+reconstructed the guest context, mapped host pc 0x157424650 -> guest rip 0x7E200E0080,
+rethrew onto the guest stack — then
+  call_seh_handlers unwind stuck: pc=0 frame=703f3ff350 steps=1
+with frame == ecRsp + 8, i.e. the leaf pop RAN and read a return address of ZERO. A
+guest that jumped to a bogus RIP has no caller. EXCEPTION_STACK_INVALID is now reserved
+for what it means: a walk with no forward progress, or a runaway walk.
+
+VERIFIED ml268 (before) -> ml269/ml270 (after):
+  unwind stuck: pc=0        1 -> 0
+  not in stack limits       1 -> 0
+  exit code            0xc0000005 (KILLED) -> 0x1 (Steam's own exit)
+  ml270: TWO separate guest faults survived; run reached a new depth record
+         (36,264 unix calls, 50 modules) and CEF init, with the terminating exception
+         going through the correct "Unhandled exception code c0000005" path.
+
+RtlVirtualUnwind2 leaf pop (unwind.c) — the read was unchecked, so an unwind past the
+top of the stack took a fatal SEGV instead of ending. Killed CEF in ml256:
+ntdll+0x69c50, insn f8408528 (ldr x8,[x9],#8), [fault-rgn] vprot prev/this/next=23/00/00
+— page below committed, this one not. Bounded, but by READABILITY rather than TEB
+membership: ml258 showed the unwinder legitimately walking the FEX guest stack
+(Rsp=0x73ca040000) which the TEB does not describe, so a membership test alone would
+silently truncate valid unwinds. Ends with Rip = 0, which composes with the
+ControlPc == 0 termination above.
+
+Probes: [guest-rip] classifies a faulting guest RIP as not-committed /
+committed-but-not-executable / valid-code-address; [unwind-why] dumps the x64
+nonvolatiles and UNWIND_INFO frame register when a garbage establisher frame appears.
+
+(cherry picked from commit 7b20a40df07966b52938a5c5c784cd132c169380)
+Madeira-commit: 7d134b81083e99f9e971923442b74cfbd42ac61b
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 122 ++++++++++++++++++++++++++++++++++++
+ dlls/ntdll/unwind.c         |  60 ++++++++++++++++++
+ 2 files changed, 182 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 0281cf613bf..16c304520b1 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -1657,6 +1657,45 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+ 
+         if (!dispatch.EstablisherFrame) break;
+ 
++        /* iOS-Mythic ml246: ControlPc == 0 is the END OF THE STACK -- there is nothing to
++         * unwind to, and continuing just walks memory until it faults.
++         *
++         * The existing no-progress guard needs BOTH pc and frame to repeat, so it cannot
++         * catch the observed degeneration: pc stays 0 while the frame creeps upward 8 bytes
++         * per step. Measured 2074 steps ending at a fresh SEGV in ntdll's own walk
++         * (ntdll+0x69c48) reading unmapped memory, which became SEGV LOOP FATAL and killed
++         * the process -- while unwinding an exception raised inside Steam's CEF surface
++         * (chromehtml.dll+0xdc70 via tier0_s64). Stopping here turns a process-killing walk
++         * into an ordinary unhandled exception. */
++        /* ml266 FIX: ControlPc == 0 is the NORMAL END OF THE STACK, not a broken one.
++         *
++         * The ml246 guard above lumped it in with the degenerate cases and set
++         * EXCEPTION_STACK_INVALID, which NtRaiseException turns into
++         *   "Exception frame is not in stack limits => unable to dispatch exception"
++         * followed by an IMMEDIATE NtTerminateProcess. That short-circuits second
++         * chance entirely -- so the process dies before the guest's unhandled-exception
++         * filter (SetUnhandledExceptionFilter, which Chromium installs for crash
++         * reporting) ever runs, and before the debugger event.
++         *
++         * Measured in ml266: FEX did everything right -- reconstructed the guest
++         * context, mapped host pc 0x157424650 -> guest rip 0x7E200E0080, and rethrew
++         * onto the guest stack -- then
++         *   call_seh_handlers unwind stuck: pc=0 frame=703f3ff350 steps=1
++         * with frame == ecRsp + 8, i.e. the leaf pop RAN and read a return address of
++         * ZERO. A guest that jumped to a bogus RIP simply has no caller. That is an
++         * unhandled exception, which is a normal outcome, NOT an invalid stack.
++         *
++         * So: end the search quietly and let the exception take the ordinary unhandled
++         * path. Keep EXCEPTION_STACK_INVALID for what it actually means -- a walk that
++         * degenerates (no forward progress) or runs away. */
++        if (!dispatch.ControlPc)
++        {
++            WARN( "unwind reached end of stack after %u steps (frame=%I64x) —"
++                  " exception is unhandled, dispatching normally\n",
++                  walk_steps, dispatch.EstablisherFrame );
++            break;
++        }
++
+         if ((dispatch.ControlPc == prev_pc && dispatch.EstablisherFrame == prev_frame) ||
+             ++walk_steps > 0x10000)
+         {
+@@ -1686,6 +1725,43 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+                  NtCurrentTeb()->Tib.StackLimit, NtCurrentTeb()->Tib.StackBase,
+                  (ULONG64)dispatch.ControlPc, p_ios_jit_reverse_translate_addr,
+                  p_ios_jit_reverse_translate_addr ? "" : "  <-- NULL: unwind ran in POOL space" );
++            /* ml260 (#38): name WHERE the garbage frame came from.
++             *
++             * Symbolised, the failing walk is our OWN dispatch stack:
++             *   #0 set_int_reg (unwind.c:1815)  <- the AV, *val on a garbage frame
++             *   #1 virtual_unwind  #2 call_seh_handlers  #3 dispatch_exception
++             *   #4 KiUserExceptionDispatcher   frame=0x40001131  <- garbage
++             * and the AV address 0x40001171 is exactly frame+0x40, i.e. a saved-register
++             * slot. 0x40001131 is not a corrupted pointer -- it has the shape of a FRAME
++             * REGISTER value, which matters because virtual_unwind above zeroes several
++             * ARM64EC nonvolatile slots (GpNvRegs[4], [5], [9] = 0): if the unwind info
++             * for this pc selects a frame register we do not populate, Rsp is set from
++             * junk and every subsequent slot read is wild.
++             *
++             * So print the x64 nonvolatiles plus the UNWIND_INFO's frame-register fields.
++             * If one of these registers equals the bad frame, the culprit is named
++             * outright; if none do, the frame came from an opcode instead and the fix is
++             * elsewhere. Fires only on this already-fatal path, so it costs nothing. */
++            {
++                CONTEXT *c = &context.AMD64_Context;
++                ERR( "[unwind-why] frame=%I64x | Rsp=%I64x Rbp=%I64x Rbx=%I64x Rsi=%I64x Rdi=%I64x\n",
++                     dispatch.EstablisherFrame, c->Rsp, c->Rbp, c->Rbx, c->Rsi, c->Rdi );
++                ERR( "[unwind-why]   R12=%I64x R13=%I64x R14=%I64x R15=%I64x ImageBase=%I64x FnEntry=%p\n",
++                     c->R12, c->R13, c->R14, c->R15, dispatch.ImageBase,
++                     (void *)dispatch.FunctionEntry );
++                if (dispatch.FunctionEntry && dispatch.ImageBase)
++                {
++                    const RUNTIME_FUNCTION *fn = (const RUNTIME_FUNCTION *)dispatch.FunctionEntry;
++                    const BYTE *info = (const BYTE *)dispatch.ImageBase + fn->UnwindData;
++                    /* UNWIND_INFO: [0]=Version:3|Flags:5, [1]=SizeOfProlog,
++                     * [2]=CountOfCodes, [3]=FrameRegister:4|FrameOffset:4 */
++                    ERR( "[unwind-why]   RUNTIME_FUNCTION begin=%x end=%x unwind=%x | ver/flags=%02x "
++                         "prolog=%02x ncodes=%02x framereg=%u frameoff=%u\n",
++                         (unsigned)fn->BeginAddress, (unsigned)fn->EndAddress,
++                         (unsigned)fn->UnwindData, info[0], info[1], info[2],
++                         info[3] & 0xf, (info[3] >> 4) & 0xf );
++                }
++            }
+             {
+                 unsigned int k, shown = trace_n < 8 ? trace_n : 8;
+                 ERR( "[unwind-trace] %u steps total, last %u:\n", trace_n, shown );
+@@ -1817,6 +1893,52 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+     {
+         static LONG rtcs_n;
+         if (rtcs_n < 40 && InterlockedIncrement( &rtcs_n ) <= 40)
++            /* ml266 (#47): WHY did the guest fault? Name the guest RIP's memory.
++             *
++             * FEX's side is correct -- it reconstructs the context and rethrows onto the
++             * guest stack -- so the fault is a genuine guest fault, and the interesting
++             * question is what the guest RIP points at. Across two runs the value is
++             * suspiciously structured, not random:
++             *   ml265 rip=0x7e600e0080
++             *   ml266 rip=0x7e200e0080
++             * identical low 32 bits (0x000e0080) with a high half differing by exactly
++             * 0x400000000 (16GB). A stable low half plus a 16GB-aligned high half is the
++             * shape of a CORRUPTED POINTER, not a wild jump -- and 16GB is exactly the
++             * PartitionAlloc pool granularity.
++             *
++             * Three outcomes need different fixes: the page is unmapped (the guest jumped
++             * into nothing), mapped but NOT executable (a permissions/exec-interval bug
++             * of the kind #36 fixed), or mapped+executable (then FEX's translation is at
++             * fault, not the memory). Query it instead of theorising. Capped, and only
++             * for access violations whose address IS the reported guest RIP. */
++            if (rec->ExceptionCode == STATUS_ACCESS_VIOLATION)
++            {
++                static int ripq;
++                ULONG64 grip = (ULONG64)(ULONG_PTR)rec->ExceptionAddress;
++
++                if (ripq < 8 && grip > 0x1000)
++                {
++                    MEMORY_BASIC_INFORMATION mbi;
++                    SIZE_T len = 0;
++                    ripq++;
++                    if (!NtQueryVirtualMemory( NtCurrentProcess(), (void *)(ULONG_PTR)grip,
++                                               MemoryBasicInformation, &mbi, sizeof(mbi), &len ))
++                        ERR( "[guest-rip] 0x%I64x -> base=%p alloc=%p size=%I64x state=%lx "
++                             "protect=%lx allocprot=%lx type=%lx %s\n",
++                             grip, mbi.BaseAddress, mbi.AllocationBase,
++                             (ULONG64)mbi.RegionSize, mbi.State, mbi.Protect,
++                             mbi.AllocationProtect, mbi.Type,
++                             mbi.State != MEM_COMMIT      ? "<-- NOT COMMITTED (jumped into nothing)" :
++                             !(mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
++                                              PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
++                                                          ? "<-- COMMITTED but NOT EXECUTABLE"
++                                                          : "<-- code address is VALID (fault is in the DATA the "
++                                                            "instruction touches, not the RIP)" );
++                    else
++                        ERR( "[guest-rip] 0x%I64x -> NtQueryVirtualMemory FAILED"
++                             " (address is not in this address space at all)\n", grip );
++                }
++            }
+             ERR( "[rtcs] pre: code=%08x addr=%p armPc=%p ecRip=%p rtcs=%p insim=%u\n",
+                  (unsigned int)rec->ExceptionCode, rec->ExceptionAddress,
+                  (void *)(ULONG_PTR)arm_ctx->Pc, (void *)(ULONG_PTR)context->AMD64_Context.Rip,
+diff --git a/dlls/ntdll/unwind.c b/dlls/ntdll/unwind.c
+index 4e61407b892..bb6aa949480 100644
+--- a/dlls/ntdll/unwind.c
++++ b/dlls/ntdll/unwind.c
+@@ -2107,6 +2107,66 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,
+ 
+     if (!function)  /* leaf function */
+     {
++        /* ml256: BOUND THE LEAF POP.
++         *
++         * This read is unchecked, and the FIXME above says the caller-supplied
++         * limits are ignored on this path -- so an unwind that walks past the top
++         * of the stack dereferences unmapped VA and takes a fatal SEGV instead of
++         * simply ending. That is what killed CEF: thread 0098 loaded libcef.dll,
++         * then died here with
++         *   pc=ntdll+0x69c50 addr=0x73d2110000, insn f8408528 (ldr x8,[x9],#8)
++         *   [fault-rgn] vprot prev/this/next=23/00/00, NO wine view
++         * i.e. the page BELOW is committed and this one is not -- Rsp one step past
++         * the stack base, every frame already unwound. Our SEGV-loop guard then
++         * force-exited the thread, so CEF never reached its own logging.
++         *
++         * limit_low/limit_high are OUT parameters here (ULONG_PTR *), not bounds the
++         * caller supplies -- which is what the FIXME above is really about -- so the
++         * TEB's stack bounds are the authority.
++         *
++         * Ending with Rip = 0 rather than an error status is deliberate: the unwind
++         * loops here already terminate on ControlPc == 0, so a walk that runs out of
++         * stack now stops the same way a normal one does. */
++        ULONG64 lo = (ULONG64)(ULONG_PTR)NtCurrentTeb()->Tib.StackLimit;
++        ULONG64 hi = (ULONG64)(ULONG_PTR)NtCurrentTeb()->Tib.StackBase;
++        BOOL ok = (lo && hi && context->Rsp >= lo && context->Rsp + sizeof(ULONG64) <= hi);
++
++        if (!ok)
++        {
++            /* ml258 CORRECTION: TEB membership alone is the WRONG test here.
++             *
++             * Under ARM64EC+FEX an unwind can legitimately be walking the GUEST x64
++             * stack, which the TEB does not describe -- measured:
++             *   Rsp=0x73ca040000 with TEB stack [0x703d028000,0x703d120000)
++             *   [term-stack] stack=[0x73ca000000..0x73ca040000]
++             * That Rsp really was off the end of the guest stack, so the guard gave
++             * the right answer, but for the wrong reason: as written it would also
++             * reject every VALID guest-stack unwind and silently truncate it.
++             *
++             * So fall back to asking the memory manager whether the slot is actually
++             * readable. Only on this slow path, so ordinary unwinds pay nothing. */
++            MEMORY_BASIC_INFORMATION mbi;
++            SIZE_T len = 0;
++
++            ok = (!NtQueryVirtualMemory( NtCurrentProcess(), (void *)(ULONG_PTR)context->Rsp,
++                                         MemoryBasicInformation, &mbi, sizeof(mbi), &len ) &&
++                  mbi.State == MEM_COMMIT &&
++                  !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) &&
++                  context->Rsp + sizeof(ULONG64) <=
++                      (ULONG64)(ULONG_PTR)mbi.BaseAddress + mbi.RegionSize);
++        }
++
++        if (!ok)
++        {
++            static int warned;
++            if (warned++ < 8)
++                ERR( "[unwind-bound] leaf pop unreadable: Rsp=%I64x (TEB stack [%I64x,%I64x)) rip=%I64x"
++                     " -- ending unwind instead of faulting\n", context->Rsp, lo, hi, pc );
++            context->Rip = 0;
++            *data = NULL;
++            *handler_ret = NULL;
++            return STATUS_SUCCESS;
++        }
+         context->Rip = *(ULONG64 *)context->Rsp;
+         context->Rsp += sizeof(ULONG64);
+         if (type) *data = NULL;

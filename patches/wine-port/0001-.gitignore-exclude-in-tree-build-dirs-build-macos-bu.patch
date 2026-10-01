@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Apr 2026 04:37:43 +0800
+Subject: [PATCH] .gitignore: exclude in-tree build dirs (build-macos,
+ build-arm64ec)
+
+Avoids GitHub Desktop / git status surfacing thousands of build artifacts
+(.o, .a, .dll, .res) inside the submodule. Doesn't affect upstream Wine
+since this is the willfaust/wine fork's ios-build branch.
+
+(cherry picked from commit e544ca5eda5118fdf470362d67ffaf4ab6133745)
+Madeira-commit: ad47a3d01ca3230f87ef0e4afe621db671b63d9c
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ .gitignore | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+ create mode 100644 .gitignore
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 00000000000..96c96f5e75b
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,9 @@
++# Local build directories — built artifacts (.o, .a, .dll, .res) end up here
++# and shouldn't be tracked. Wine recommends building out-of-tree but our
++# scripts use these in-tree paths.
++/build-macos/
++/build-arm64ec/
++
++# Other potential out-of-tree build dirs
++/build/
++/build-*/

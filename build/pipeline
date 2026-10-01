@@ -1,0 +1,537 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# One command from pins to a verified IPA: pins.lock + patches/ + the cached
+# external inputs (build/lib.sh) in, one IPA and its artifacts.tsv out.
+# docs/BUILDING.md describes each stage; this script is the only supported way
+# to run them in order.
+#
+#   pp build [--variant dev|release] [--unsigned] [--clean | --from STAGE] [--to STAGE] [--keep-outputs N] [--plan]
+#
+# By default only what changed is rebuilt: each tree stage (unix, pe, fex,
+# dxmt, vulkan, steamapi, idevice) records a digest of its inputs (its pins, patch series, build
+# scripts, build/lib.sh (not env.sh) and the toolchains: llvm-mingw, host clang, the SDK)
+# in $PLAYPORT_RUN/stamps/ and runs again only when that digest
+# changes (dxmt also after pe); stage and notices likewise, per checkout
+# (app/Staged/.stamps/; notices also after every tree and stage); app and verify
+# always run. A Swift-only change is about 20 s. --clean deletes the run
+# directory first and rebuilds every tree from its pin (a release for a tester, or a suspect tree). --from STAGE runs
+# STAGE and every stage after it unconditionally. --plan builds nothing: it
+# prints each stage it would run and why (which input of a tree changed),
+# ending with `plan: trees to build: ...` (pp check shows it before it builds).
+#
+# --variant (default: $PLAYPORT_VARIANT, else dev; docs/BUILDING.md,
+# "Variants"; decision 0009) picks the app built from the same trees:
+#   dev      the workstation's build: S1Probe.app, which the UI driver
+#            (pp ui) can drive
+#   release  what a player gets: Playport.app, no UI driver, a quiet runtime
+#            and one size-limited log
+#
+# --unsigned (release only; decision 0038) builds the IPA a release publishes:
+# xtool signs it ad hoc with its entitlements and no certificate, profile, team
+# or device, for the recipient to re-sign. It is named ...-release-unsigned-...
+# and pp install never picks it.
+#
+# Stages, in order:
+#   inputs   check the cached inputs and host tools, and log their versions
+#   sources  check pins.lock against the upstream/madeira gitlinks and make
+#            sure the submodules the build clones from are checked out
+#   unix     libntdll_unix.a, libwin32u_unix.a, libwineserver.a, crypto statics
+#   pe       the Wine PE DLL sets (aarch64-windows, arm64ec-windows)
+#   fex      libarm64ecfex.dll (xtajit64.dll)
+#   dxmt     the DXMT unix slice (libdxmt_combined.a) and PE DLLs, one patched tree
+#   vulkan   the Vulkan Direct3D backend (decision 0014): KosmicKrisp for iOS as
+#            app/Staged/KosmicKrisp.xcframework (build/stages/mesa.sh), DXVK and
+#            vkd3d-proton for arm64ec (build/stages/vulkan-pe.sh)
+#   steamapi the Steam API emulator a game loads in place of its steam_api(64).dll:
+#            gbe_fork's steam_api for x86-64 and i386 (build/stages/steamapi.sh)
+#   idevice  idevice's C FFI for iOS with the pins.lock Rust, prelinked into one object
+#            (build/stages/idevice.sh): how the app restarts itself after a game (decision 0029)
+#   stage    record app/artifacts.tsv from this run's trees, then stage them into app/,
+#            check the prefix registry seed against them (app/tools/prefix-registry.py),
+#            and StikJIT's framework for the JIT helper (build/stages/stikjit.sh)
+#   notices  the app's Licenses/, for both variants: build/notices-inputs.py prepares the
+#            locked collection inputs in the cache, pp notices collects every notice of
+#            this run's trees into run/notices, and the reviewed selection
+#            (build/app-notices.json, pp notices --app) is staged as app/Staged/Licenses.
+#            A notice file the selection does not classify stops the build here
+#            (docs/NOTICES.md, "The app's selection")
+#   app      xtool dev build --sign --ipa (--unsigned: no --sign), linked with ld64; a release build
+#            first makes its package in app/.release (stage-artifacts.py release)
+#   verify   build/verify-ipa.py, then the IPA, artifacts.tsv and logs go to out/
+#
+# Every tree is its pin with its series applied, checked by content
+# (build/lib.sh ensure_series), so a patch edited in place is reapplied. The run
+# directory is $PLAYPORT_RUN (default $PLAYPORT_BUILD/run); verified outputs go
+# to $PLAYPORT_OUT (default $PLAYPORT_BUILD/out). The LLVM 15.0.7 builds are
+# toolchain caches keyed by version ($PLAYPORT_BUILD/cache) and survive runs.
+#
+# The run rewrites two committed records when the build changes them:
+# app/artifacts.tsv and build/generated/wine-pe-*.tsv. The final summary
+# prints `git diff --stat` of both; a pin or series change is expected to
+# show there, and nothing else is. Only a run in the checkout's own .work/run
+# keeps them: elsewhere they go beside the IPA, or into the run directory
+# when the run ends before verify (keep_records).
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
+STAGES=(inputs sources unix pe fex dxmt vulkan steamapi idevice stage notices app verify)
+FROM=auto TO=verify KEEP=3 VARIANT=${PLAYPORT_VARIANT:-dev} PLAN=0 UNSIGNED=0
+while [ $# -gt 0 ]; do
+    case $1 in
+    --variant) VARIANT=$2; shift 2 ;;
+    --from) FROM=$2; shift 2 ;;
+    --clean) FROM=clean; shift ;;
+    --to) TO=$2; shift 2 ;;
+    --keep-outputs) KEEP=$2; shift 2 ;;
+    --plan) PLAN=1; shift ;;
+    --unsigned) UNSIGNED=1; shift ;;
+    -h|--help) sed -n '3,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+for s in "$FROM" "$TO"; do
+    [[ " auto clean ${STAGES[*]} " == *" $s "* ]] || { echo "no stage $s (stages: ${STAGES[*]})" >&2; exit 2; }
+done
+case $VARIANT in
+dev) PKG_DIR=app PRODUCT=S1Probe IPA_TAG="" ;;
+release) PKG_DIR=app/.release PRODUCT=Playport IPA_TAG=release- ;;
+*) echo "no variant $VARIANT (dev or release)" >&2; exit 2 ;;
+esac
+if [ "$UNSIGNED" = 1 ]; then
+    [ "$VARIANT" = release ] || { echo "--unsigned builds the release variant only" >&2; exit 2; }
+    IPA_TAG=release-unsigned-
+fi
+SIGN=--sign; [ "$UNSIGNED" = 1 ] && SIGN=
+
+RUN=${PLAYPORT_RUN:-$PLAYPORT_BUILD/run}
+CACHE=$PLAYPORT_BUILD/cache
+OUT=${PLAYPORT_OUT:-$PLAYPORT_BUILD/out}
+LLVM_VER=$(pin llvm-project); LLVM_VER=${LLVM_VER#llvmorg-}
+AIR=$CACHE/air-helpers-$LLVM_VER
+APP=$PLAYPORT_REPO/app
+PKG=$PLAYPORT_REPO/$PKG_DIR
+IPA=$PKG/xtool/$PRODUCT.ipa
+export JOBS=${JOBS:-$(nproc)}
+PLAYPORT_RUN=$RUN
+export PLAYPORT_BUILD PLAYPORT_RUN LLVM_MINGW
+
+# One build per run directory.
+if [ "$PLAN" = 0 ]; then
+    mkdir -p "$(dirname "$RUN")"
+    exec 8> "$RUN.lock"
+    flock -n 8 || { echo "another build is using $RUN" >&2; exit 1; }
+    [ "$FROM" = clean ] && rm -rf "$RUN"
+    mkdir -p "$RUN/logs" "$RUN/stamps" "$CACHE" "$OUT"
+fi
+# Paths in the summary are repo-relative: build.log goes into evidence.
+say() { local m="$*"; printf '%s  %s\n' "$(date +%H:%M:%S)" "${m//"$PLAYPORT_REPO/"/}" | tee -a "$RUN/logs/build.log"; }
+RECORDS=$RUN
+RECORDED=0   # set once this run's stage stage writes the records
+[ "$PLAN" = 1 ] || trap 'keep_records "$RECORDS"' EXIT
+# run STAGE-LOG cmd...: the command's output goes to its log; a failure prints the
+# error lines of that log and of the logs the command wrote beside its trees
+# (fex-build.log, ninja-*.log, make-*.log: a compiler error is there), then the tail.
+run() {
+    local log=$RUN/logs/$1.log mark; shift
+    mark=$(mktemp "$RUN/logs/.mark.XXXXXX")
+    if ! "$@" >> "$log" 2>&1; then
+        say "FAILED: $* (log: $log)"
+        find "$RUN" -maxdepth 3 -name '*.log' -newer "$mark" ! -name build.log -print0 |
+            xargs -0 -r grep -H -m 20 -E '(^|[^a-z_])(error|Error|fatal error):|FAILED:|\*\*\* ' 2>/dev/null |
+            sed "s|^$RUN/||" | head -20 >&2 || true
+        echo "--- last lines of $log:" >&2
+        tail -25 "$log" >&2; rm -f "$mark"; exit 1
+    fi
+    rm -f "$mark"
+}
+
+stage_inputs() {
+    local missing=0 t
+    for t in clang clang++ ld64.lld llvm-ar llvm-nm llvm-objdump llvm-objcopy llvm-lipo gcc make bison flex \
+             msgfmt cmake ninja meson python3 swift xxd openssl patch git rsync 7za; do
+        command -v "$t" >/dev/null || { say "missing host tool: $t"; missing=1; }
+    done
+    python3 -c 'import pefile' 2>/dev/null ||
+        { say "missing Python module pefile (app/tools/prefix-registry.py)"; missing=1; }
+    [ -n "$LLVM_MINGW" ] && [ -n "$DARWIN_SDK" ] ||
+        { say "LLVM_MINGW or DARWIN_SDK is not set: run ./pp setup"; exit 1; }
+    [ -x "$LLVM_MINGW/bin/aarch64-w64-mingw32-clang" ] || { say "missing LLVM_MINGW: $LLVM_MINGW"; missing=1; }
+    [ -f "$LLVM_MINGW/aarch64-w64-mingw32/lib/libgcc.a" ] ||
+        { say "LLVM_MINGW has no arm64ec CRT rebuild (docs/BUILDING.md, llvm-mingw)"; missing=1; }
+    [ -d "$IOSSDK" ] && [ -d "$MACSDK" ] || { say "missing SDKs under DARWIN_SDK: $DARWIN_SDK"; missing=1; }
+    # ld64 and the patched xtool are built on demand into their default
+    # places under $PLAYPORT_BUILD/inputs; an overridden path must exist.
+    if [ ! -x "$LD64" ] && [ "$LD64" = "$PLAYPORT_BUILD/inputs/apple-linker/prefix/bin/arm64-apple-darwin-ld" ]; then
+        say "building LD64 (build/toolchain/ld64.sh; log: $RUN/logs/ld64.log)"
+        bash "$HERE/toolchain/ld64.sh" > "$RUN/logs/ld64.log" 2>&1 || say "build/toolchain/ld64.sh failed"
+    fi
+    if [ ! -x "$XTOOL" ] && [ "$XTOOL" = "$PLAYPORT_BUILD/inputs/xtool-src/.build/release/xtool" ]; then
+        say "building XTOOL (build/toolchain/xtool.sh; log: $RUN/logs/xtool.log)"
+        bash "$HERE/toolchain/xtool.sh" > "$RUN/logs/xtool.log" 2>&1 || say "build/toolchain/xtool.sh failed"
+    fi
+    [ -x "$LD64" ] || { say "missing LD64: $LD64 (build/toolchain/ld64.sh)"; missing=1; }
+    [ -x "$XTOOL" ] || { say "missing XTOOL: $XTOOL (build/toolchain/xtool.sh)"; missing=1; }
+    # The pins.lock Rust with the iOS std, installed on demand into RUST_ROOT like ld64 and xtool.
+    if ! RUSTUP_HOME=$RUST_ROOT/rustup "$RUST_ROOT/cargo/bin/rustc" --version 2>/dev/null | grep -q "^rustc $(pin rust) "; then
+        say "installing Rust $(pin rust) (build/toolchain/rust.sh; log: $RUN/logs/rust.log)"
+        bash "$HERE/toolchain/rust.sh" > "$RUN/logs/rust.log" 2>&1 || { say "build/toolchain/rust.sh failed"; missing=1; }
+    fi
+    [ "$missing" = 0 ] || exit 1
+    # The Swift frontend needs the host's clang resource headers inside the SDK.
+    for d in /usr/lib/swift/lib/clang/*/include; do
+        v=$(basename "$(dirname "$d")")
+        inc=$DARWIN_SDK/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/$v/include
+        [ -f "$inc/arm_neon.h" ] ||
+            { say "copying clang $v resource headers into the SDK"; mkdir -p "$inc"; rsync -a --delete "$d/" "$inc/"; }
+    done
+    grep -q INCREASED_MEMORY_LIMIT "$XTOOL" ||
+        { say "XTOOL lacks the increased-memory-limit patch (build/toolchain/xtool.sh)"; exit 1; }
+    {
+        echo "clang: $(clang --version | head -1)"
+        echo "llvm-mingw: $("$LLVM_MINGW/bin/clang" --version | head -1)"
+        echo "ld64: $("$LD64" -v 2>&1 | head -1)"
+        echo "xtool: $("$XTOOL" --version 2>&1 | head -1)"
+        echo "rust: $(RUSTUP_HOME=$RUST_ROOT/rustup "$RUST_ROOT/cargo/bin/rustc" --version 2>&1 | head -1)"
+        echo "swift: $(swift --version 2>&1 | head -1)"
+        echo "sdk: $(ls -d "$IOSSDK" "$MACSDK" | xargs -n1 basename | tr '\n' ' ')"
+    } | tee "$RUN/logs/inputs.txt" | while read -r l; do say "  $l"; done
+}
+
+stage_sources() {
+    local m=$PLAYPORT_REPO/upstream/madeira want got name path
+    want=$(pin madeira)
+    got=$(git -C "$PLAYPORT_REPO" ls-files -s upstream/madeira | awk '{print $2}')
+    [ "$got" = "$want" ] || { say "upstream/madeira gitlink $got is not the pins.lock madeira $want"; exit 1; }
+    [ -e "$m/.git" ] || run sources git -C "$PLAYPORT_REPO" submodule update --init upstream/madeira
+    [ "$(git -C "$m" rev-parse HEAD)" = "$want" ] ||
+        { say "upstream/madeira is checked out at $(git -C "$m" rev-parse --short HEAD), not $want (git submodule update)"; exit 1; }
+    # wine, dxmt and fex are upstream commits (WineHQ, 3Shain/dxmt, FEX-Emu/FEX);
+    # Madeira's wine, research/dxmt and FEX must still be the commits
+    # patches/wine-port, patches/dxmt-port and patches/fex-port were rebased
+    # from (pins.lock, wine-port, dxmt-port and fex-port).
+    for name in wine-port:wine fex-port:FEX dxmt-port:research/dxmt; do
+        path=${name#*:}; name=${name%%:*}
+        got=$(git -C "$m" ls-tree "$want" "$path" | awk '{print $3}')
+        [ "$got" = "$(pin "$name")" ] ||
+            { say "Madeira $want pins $path at $got; pins.lock says $(pin "$name")"; exit 1; }
+    done
+    run sources git -C "$m" submodule update --init --depth 1
+    # Madeira's FEX pins its rpmalloc fork; patches/rpmalloc-port was rebased from it.
+    got=$(git -C "$m/FEX" ls-tree HEAD External/rpmalloc | awk '{print $3}')
+    [ "$got" = "$(pin rpmalloc-port)" ] ||
+        { say "Madeira's FEX pins rpmalloc at $got; pins.lock rpmalloc-port says $(pin rpmalloc-port)"; exit 1; }
+    # Madeira FEX's own submodules, except the test binaries, are a local object source for stages/fex.sh.
+    # shellcheck disable=SC2046
+    run sources git -C "$m/FEX" submodule update --init --depth 1 -- \
+        $(git -C "$m/FEX" config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}' | grep -v -- '-bins$')
+    say "  madeira $want, wine $(pin wine) + wine-port from $(pin wine-port) + wine-valve from $(pin wine-valve), fex $(pin fex) + fex-port from $(pin fex-port), dxmt $(pin dxmt) + dxmt-port from $(pin dxmt-port), rpmalloc $(pin rpmalloc) + rpmalloc-port from $(pin rpmalloc-port)"
+}
+
+stage_unix() {
+    run unix bash "$HERE/stages/unix.sh" "$RUN/unix" clones shims configure gnutls freetype widl ntdll win32u
+    run unix bash "$HERE/stages/unix-gaps.sh" "$RUN/unix"
+    run unix bash "$HERE/stages/gstreamer.sh" unix "$RUN/unix"
+    say "  $(tail -1 "$RUN/logs/unix.log" | cut -d' ' -f1-2 | awk '{print substr($2,1,16) "  libwinegstreamer_unix.a (" $1 " bytes)"}')"
+    # The link test's first line may be the expected lld duplicate report; the
+    # ws4 variant and ld64 (the app link) resolve it.
+    grep -E '^LINK (OK|FAIL)' "$RUN/logs/unix.log" | while read -r l; do say "  $l"; done
+}
+
+stage_pe() {
+    local w=$RUN/pe/wine src arch
+    mkdir -p "$RUN/pe"
+    # The wine pin is a WineHQ commit, from a mirror in the cache (build/lib.sh).
+    src=$(mirror wine "$(pin wine)")
+    # stages/wine-pe.sh checks out the pin and applies patches/wine-port,
+    # patches/wine-valve and patches/wine-pe when the tree is not already that.
+    [ -e "$w/.git" ] || run pe git clone -q --no-checkout "$src" "$w"
+    # A moved pin is not in a clone made before the move.
+    git -C "$w" cat-file -e "$(pin wine)^{commit}" 2>/dev/null || run pe git -C "$w" fetch -q "$src" "$(pin wine)"
+    # The wine tree includes ../../../../build/madeira_cfg.h: the pristine Madeira build/.
+    ln -sfn "$PLAYPORT_REPO/upstream/madeira/build" "$RUN/pe/build"
+    run pe env OUT="$RUN/pe" bash "$HERE/stages/wine-pe.sh"
+    # What the app stages is each image without its DWARF (stages/wine-pe-strip.py),
+    # so the manifests the records keep describe those copies.
+    run pe python3 "$HERE/stages/wine-pe-strip.py" "$w" "$RUN/pe/staged" "$LLVM_MINGW/bin/llvm-strip"
+    say "  $(grep '^wine-pe-strip:' "$RUN/logs/pe.log" | tail -1 | cut -d' ' -f2-)"
+    for arch in aarch64 arm64ec; do   # run logs a command's output: the manifest goes to its file inside it
+        run pe sh -c 'python3 "$1" "$2" "$3-windows" "$4" > "$5"' manifest "$HERE/stages/wine-pe-manifest.py" \
+            "$RUN/pe/staged/$([ $arch = aarch64 ] && echo build-macos || echo build-arm64ec)" $arch \
+            "$LLVM_MINGW/bin/llvm-readobj" "$RUN/pe/manifest-$arch.tsv"
+    done
+    sync_pe_manifests
+}
+
+stage_steamapi() {
+    run steamapi bash "$HERE/stages/steamapi.sh" "$RUN/steamapi"
+    say "  $(grep -c -- '-windows/steam_api' "$RUN/logs/steamapi.log") steam_api DLLs"
+}
+
+stage_idevice() {
+    run idevice bash "$HERE/stages/idevice.sh" "$RUN/idevice"
+    say "  $(tail -1 "$RUN/logs/idevice.log" | awk '{print substr($2,1,16) "  libidevice_ffi.a (" $1 " bytes)"}'), $(tail -2 "$RUN/logs/idevice.log" | head -1 | cut -d' ' -f1) crates"
+}
+
+# The committed wine-pe manifests follow the run's pe tree (also before staging,
+# so a reverted record never disagrees with the trees being staged).
+sync_pe_manifests() {
+    local arch
+    for arch in aarch64 arm64ec; do
+        if cmp -s "$RUN/pe/manifest-$arch.tsv" "$HERE/generated/wine-pe-$arch-windows.tsv"; then
+            say "  wine-pe $arch manifest unchanged"
+        else
+            cp "$RUN/pe/manifest-$arch.tsv" "$HERE/generated/wine-pe-$arch-windows.tsv"
+            say "  wine-pe $arch manifest CHANGED: build/generated/wine-pe-$arch-windows.tsv rewritten"
+        fi
+    done
+}
+
+stage_fex() {
+    run fex bash "$HERE/stages/fex.sh" "$RUN"
+    say "  $(tail -1 "$RUN/logs/fex.log")"
+}
+
+stage_dxmt() {
+    run dxmt bash "$HERE/stages/dxmt-base.sh" "$RUN/dxmt-run" clones llvm
+    # LLVM 15.0.7 host tools (llvm-as for the AIR helpers, llvm-tblgen for the
+    # iOS LLVM libraries) and the helper headers: cached by LLVM version.
+    run dxmt env DXMT_BUILD_ROOT="$RUN/dxmt-run" bash "$HERE/air-helpers/air-helper-port.sh" "$AIR" llvm air
+    run dxmt env DXMT_BUILD_ROOT="$RUN/dxmt-run" SHADER_HEADERS="$AIR/shader-headers" WINE="$RUN/pe/wine" \
+        bash "$HERE/stages/dxmt-patched.sh" "$RUN/dxmt-patched"
+    run dxmt env DXMT_UNIX="$RUN/dxmt-patched" TBLGEN="$AIR/llvm15/bin/llvm-tblgen" \
+        bash "$HERE/stages/dxmt-combined.sh" "$RUN/dxmt-combined"
+    say "  $(sha256sum "$RUN/dxmt-combined/libdxmt_combined.a" | cut -c1-16)  libdxmt_combined.a"
+}
+
+stage_vulkan() {
+    run vulkan bash "$HERE/stages/mesa.sh" "$RUN/mesa" src host ios check framework
+    say "  $(grep '^staged KosmicKrisp' "$RUN/logs/vulkan.log" | tail -1)"
+    run vulkan env WINEBUILD="$RUN/pe/wine/build-tools/tools/winebuild/winebuild" \
+        bash "$HERE/stages/vulkan-pe.sh" "$RUN/vulkan-pe"
+    say "  $(grep -c 'arm64ec-windows/' "$RUN/logs/vulkan.log") vulkan-pe DLLs"
+}
+
+stage_stage() {
+    RECORDED=1
+    # The session root (decision 0027): recorded and staged with the runtime's PE set below.
+    run stage bash "$HERE/stages/session-root.sh" "$RUN/session"
+    say "  $(tail -1 "$RUN/logs/stage.log")"
+    sync_pe_manifests
+    run stage python3 "$HERE/stages/stage-artifacts.py" record
+    run stage python3 "$HERE/stages/stage-artifacts.py" stage
+    say "  $(tail -1 "$RUN/logs/stage.log")"
+    # The committed prefix registry seed must be what the staged DLLs register.
+    run stage python3 "$APP/tools/prefix-registry.py" --check
+    run stage bash "$HERE/stages/stikjit.sh"
+    say "  $(tail -1 "$RUN/logs/stage.log")"
+}
+
+# The app's Licenses/ (docs/NOTICES.md): the whole collection of this run's trees, then
+# the reviewed selection from it, staged only when it is complete and checked. Its
+# status (unreviewed until build/app-notices.json records a review) travels with it;
+# pp verify reports it, and fails it only for --distribution.
+stage_notices() {
+    local cargo=$CACHE/rust-notice-cargo-$(pin idevice)
+    run notices python3 "$HERE/notices-inputs.py" "$CACHE"
+    say "  $(tail -1 "$RUN/logs/notices.log")"
+    # A separate, pristine copy of the locked crates' registry (NOTICES.md, "Rust registry
+    # notice selection"), per idevice pin; the build's own Cargo home is never read for notices.
+    [ -n "${RUST_NOTICE_CARGO_HOME:-}" ] || [ -d "$cargo" ] ||
+        run notices bash "$HERE/notices-assemble.sh" --prepare-rust-cache "$cargo"
+    rm -rf "$RUN/notices" "$RUN/licenses"
+    run notices env RUST_NOTICE_CARGO_HOME="${RUST_NOTICE_CARGO_HOME:-$cargo}" \
+        bash "$HERE/notices-assemble.sh" "$RUN/notices"
+    run notices python3 "$HERE/notices-app.py" select "$RUN/notices" "$RUN/licenses"
+    run notices python3 "$HERE/notices-bundle.py" stage "$RUN/licenses" "$APP/Staged/Licenses"
+    say "  $(tail -1 "$RUN/logs/notices.log")"
+}
+
+stage_app() {
+    if [ "$VARIANT" = release ]; then
+        run app python3 "$HERE/stages/stage-artifacts.py" release "$PKG"
+        say "  $(tail -1 "$RUN/logs/app.log")"
+    fi
+    rm -f "$IPA"
+    (cd "$PKG" && PLAYPORT_VARIANT=$VARIANT SWIFTPM_CUSTOM_BIN_DIR=$HERE/ld64 "$XTOOL" dev build $SIGN --ipa) >> "$RUN/logs/app.log" 2>&1 ||
+        { say "FAILED: xtool dev build (log: $RUN/logs/app.log)"
+          grep -E '(error|fatal error):' "$RUN/logs/app.log" | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -20 >&2
+          echo "--- last lines of $RUN/logs/app.log:" >&2; tail -25 "$RUN/logs/app.log" >&2; exit 1; }
+    [ -f "$IPA" ] || { say "xtool produced no $IPA"; exit 1; }
+}
+
+stage_verify() {
+    local sha short dest prev args=()
+    [ "$UNSIGNED" = 1 ] && args+=(--unsigned)
+    sha=$(sha256sum "$IPA" | cut -d' ' -f1); short=${sha:0:8}
+    # The phone's profile is compared with the newest signed IPA; an unsigned one has none.
+    prev=$(ls -t "$OUT"/*/Playport-*.ipa "$PLAYPORT_BUILD"/out/*/Playport-*.ipa 2>/dev/null | grep -v -- '-unsigned-' | head -1 || true)
+    [ -n "$prev" ] && [ "$UNSIGNED" = 0 ] && args+=(--same-device-as "$prev")
+    mkdir -p "$RUN/tmp"
+    run verify env TMPDIR="$RUN/tmp" python3 "$HERE/verify-ipa.py" "$IPA" --variant "$VARIANT" --sha256 "$sha" \
+        --dxmt-pe "$RUN/dxmt-patched/pe" --notices "$APP/Staged/Licenses" "${args[@]}"
+    dest=$OUT/$(date +%Y%m%d-%H%M%S)-$IPA_TAG$short
+    name=Playport-26.5-$IPA_TAG$short.ipa
+    mkdir -p "$dest"
+    cp "$IPA" "$dest/$name"
+    cp "$APP/artifacts.tsv" "$PLAYPORT_REPO/pins.lock" "$dest/"
+    cp -r "$RUN/logs" "$dest/logs"
+    (cd "$dest" && sha256sum "$name" artifacts.tsv > SHA256SUMS)
+    {
+        echo "variant $VARIANT$([ "$UNSIGNED" = 1 ] && echo ' unsigned')"
+        echo "superproject $(git -C "$PLAYPORT_REPO" rev-parse HEAD)$(git -C "$PLAYPORT_REPO" diff --quiet HEAD -- . ':!app/artifacts.tsv' ':!build/generated' || echo ' (with local changes)')"
+        bash "$HERE/series-provenance.sh" "$PLAYPORT_REPO/patches"
+    } > "$dest/provenance.txt"
+    # Keep the newest KEEP outputs; an IPA is ~650 MB.
+    ls -dt "$OUT"/*/ | tail -n +$((KEEP + 1)) | xargs -r rm -rf
+    say "IPA $dest/$name"
+    say "sha256 $sha"
+    say "verify-ipa: $(grep -c '^ok ' "$RUN/logs/verify.log" || true) checks passed, $(grep -c '^FAIL' "$RUN/logs/verify.log" || true) failed"
+    git -C "$PLAYPORT_REPO" --no-pager diff --stat -- app/artifacts.tsv build/generated | while read -r l; do say "  record: $l"; done
+    RECORDS=$dest
+}
+
+# keep_records DEST: Wine PE and DXMT hash their build directory, so only the
+# checkout's own .work/run records rows anyone commits. Elsewhere (a run directory
+# set by PLAYPORT_RUN, a pp sync candidate) every run ends, however it ends, with this build's
+# records in DEST/records (the IPA's directory, or the run directory before verify)
+# and the tracked files put back (the stage stage re-records them next time, in seconds).
+keep_records() {
+    # A run that never wrote the records (it stopped before the stage stage) leaves
+    # them alone: what is there is another run's, or a person's.
+    [ "$RECORDED" = 1 ] || return 0
+    [ "$(realpath -m "$RUN")" != "$(realpath -m "$PLAYPORT_REPO/.work/run")" ] || return 0
+    git -C "$PLAYPORT_REPO" diff --quiet -- app/artifacts.tsv build/generated && return 0
+    mkdir -p "$1/records"
+    cp "$APP/artifacts.tsv" "$PLAYPORT_REPO"/build/generated/wine-pe-*.tsv "$1/records/"
+    git -C "$PLAYPORT_REPO" checkout -- app/artifacts.tsv build/generated
+    say "  record: not kept (this run is not $PLAYPORT_REPO/.work/run): the tracked records are put back;"
+    say "  record: this build's are in $1/records, and a build in the checkout's own .work/run records the rows"
+}
+
+# --- What each stage depends on, for the default (auto) run.
+# digest STAGE: a hash of the stage's inputs, and of the trees it builds on.
+digest() { digest_inputs "$1" | sha256sum | cut -c1-16; }
+# parts STAGE: the same inputs, one "KIND NAME HASH" line each; kept beside the stamp
+# (STAMP.parts), so --plan can name the input that changed.
+parts() { local PARTS=1; digest_inputs "$1"; }
+digest_inputs() {
+    local s=$1
+    {
+        case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice) toolchain; files build/lib.sh ;; esac
+        case $s in
+        unix) pins madeira wine wine-port wine-valve freetype gstreamer; series_text madeira-unix wine-port wine-valve wine-unix
+              files build/stages/unix.sh build/stages/unix-gaps.sh build/stages/gstreamer.sh ;;
+        pe) pins wine wine-port wine-valve gstreamer; series_text wine-port wine-valve wine-pe
+            files build/stages/wine-pe.sh build/stages/wine-pe-manifest.py build/stages/wine-pe-strip.py
+            gst_release ;;
+        fex) pins fex fex-port rpmalloc rpmalloc-port; series_text fex-port fex rpmalloc-port rpmalloc
+             files build/stages/fex.sh ;;
+        dxmt) pins madeira dxmt dxmt-port llvm-project; series_text dxmt-port dxmt
+              files build/stages/dxmt-base.sh build/stages/dxmt-patched.sh build/stages/dxmt-combined.sh build/air-helpers
+              after pe ;;
+        vulkan) pins mesa dxvk vkd3d-proton; series_text mesa vkd3d-proton
+                files build/stages/mesa.sh build/stages/vulkan-pe.sh build/check-macho-imports.py
+                after pe ;;
+        steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh ;;
+        idevice) pins idevice rust; series_text idevice; files build/stages/idevice.sh build/idevice-crates.py ;;
+        stage) pins stikjit idevice; series_text madeira-winios
+               files build/stages/stage-artifacts.py build/stages/stikjit.sh app/registry app/artifacts.tsv \
+                     app/tools/prefix-registry.py \
+                     build/stages/session-root.sh app/SessionRoot app/Sources/WineHost/include/session_protocol.h
+               for t in unix pe fex dxmt vulkan steamapi idevice; do after "$t"; done ;;
+        notices) pins stikjit idevice rust; toolchain
+                 files LICENSE LICENSE-EXCEPTION.md app/SteamClient/LICENSE-JavaSteam.txt app/artifacts.tsv \
+                       'build/notices-*.py' 'build/notices-*.sh' 'build/*.lock.json' build/gstreamer-notices.sources.json \
+                       build/app-notices.json build/lib.sh
+                 for t in unix pe fex dxmt vulkan steamapi idevice stage; do after "$t"; done ;;
+        esac
+    }
+}
+# toolchain: what the trees are compiled with; a new llvm-mingw, host clang or SDK rebuilds them.
+toolchain() {
+    [ "${PARTS:-0}" = 0 ] || { echo "toolchain all $(raw toolchain | h)"; return; }
+    echo "llvm-mingw $LLVM_MINGW $("$LLVM_MINGW/bin/clang" --version 2>/dev/null | head -1)"
+    echo "clang $(clang --version 2>/dev/null | head -1)"
+    echo "sdk $IOSSDK $MACSDK"
+}
+pins() {
+    local n k=""
+    [ "${PARTS:-0}" = 0 ] || k="pin "
+    for n in "$@"; do echo "$k$n $(pin "$n")"; done
+}
+series_text() {
+    local t
+    for t in "$@"; do
+        if [ "${PARTS:-0}" = 1 ]; then echo "series $t $(series "$t" | xargs cat | h)"; else series "$t" | xargs cat; fi
+    done
+}
+# files PATH...: tracked content (index), local edits and new untracked files under PATHs.
+files() {
+    local p
+    if [ "${PARTS:-0}" = 1 ]; then for p in "$@"; do echo "file $p $(raw files "$p" | h)"; done; return; fi
+    (cd "$PLAYPORT_REPO" && git ls-files -s -- "$@" && git diff HEAD -- "$@" &&
+        git ls-files -o --exclude-standard -z -- "$@" | xargs -0 -r sha256sum)
+}
+# Trees live in the run directory; the stage stage writes into this checkout's app/.
+stamp_file() { case $1 in stage|notices) echo "$APP/Staged/.stamps/$1" ;; *) echo "$RUN/stamps/$1" ;; esac; }
+# A --plan run stamps nothing: a tree it would build counts as built with its new digest.
+declare -A PLANNED=()
+stamp() { [ -z "${PLANNED[$1]:-}" ] || { echo "${PLANNED[$1]}"; return; }; cat "$(stamp_file "$1")" 2>/dev/null || echo "none $1"; }
+# after STAGE: the digest of a tree this stage builds on.
+after() { if [ "${PARTS:-0}" = 1 ]; then echo "after $1 $(stamp "$1" | tr ' ' _)"; else stamp "$1"; fi; }
+# gst_release: the GStreamer release pe compiles winegstreamer's PE side against (its
+# headers, gstreamer.sh fetch); the rest of gstreamer.sh is the unix side's.
+gst_release() {
+    local l
+    l=$(grep '^SHA256=' "$PLAYPORT_REPO/build/stages/gstreamer.sh")
+    if [ "${PARTS:-0}" = 1 ]; then echo "gstreamer release $(echo "$l" | h)"; else echo "$l"; fi
+}
+raw() { local PARTS=0; "$@"; }
+h() { sha256sum | cut -c1-16; }
+# why STAGE WANT: why --plan runs STAGE.
+why() {
+    local f
+    f=$(stamp_file "$1")
+    if [ "$FROM" = clean ]; then echo " (--clean)"
+    elif [ "$FROM" != auto ]; then echo " (--from $FROM)"
+    elif [ -z "$2" ]; then echo " (always)"
+    elif [ ! -f "$f" ]; then echo ": not built in this build area yet"
+    elif [ ! -f "$f.parts" ]; then echo ": its inputs changed (which is recorded from its next build on)"
+    else
+        echo ": changed $(comm -13 <(sort "$f.parts") <(parts "$1" | sort) | awk '{print $1 " " $2}' |
+            head -6 | paste -sd, - | sed 's/,/, /g')"
+    fi
+}
+
+[ "$PLAN" = 1 ] || say "variant $VARIANT: $PKG_DIR, $PRODUCT.app"
+started=0 ran=" " trees=""
+for s in "${STAGES[@]}"; do
+    case $FROM in
+    auto|clean) started=1 ;;
+    *) [ "$s" = "$FROM" ] && started=1 ;;
+    esac
+    [ "$started" = 1 ] || continue
+    want=""
+    case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice|stage|notices) want=$(digest "$s") ;; esac
+    if [ "$FROM" = auto ] && [ -n "$want" ] && [ "$(stamp "$s")" = "$want" ]; then
+        if [ "$PLAN" = 1 ]; then echo "plan: $s unchanged"; else say "== $s: unchanged ($want)"; fi
+    elif [ "$PLAN" = 1 ]; then
+        echo "plan: $s runs$(why "$s" "$want")"
+        [ -z "$want" ] || PLANNED[$s]=$want
+        case $s in unix|pe|fex|dxmt|vulkan|steamapi|idevice) trees+="$s " ;; esac
+    else
+        say "== $s"
+        : > "$RUN/logs/$s.log"
+        "stage_$s"
+        ran+="$s "
+        if [ -n "$want" ]; then
+            mkdir -p "$(dirname "$(stamp_file "$s")")"
+            digest "$s" > "$(stamp_file "$s")"
+            parts "$s" > "$(stamp_file "$s").parts"
+        fi
+    fi
+    [ "$s" = "$TO" ] && break
+done
+[ "$PLAN" = 0 ] || { echo "plan: trees to build: ${trees:-none}"; exit 0; }
+say "done ($FROM..$TO, $VARIANT; ran:$ran)"

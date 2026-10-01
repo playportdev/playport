@@ -1,0 +1,611 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 8 Jul 2026 00:24:06 +0800
+Subject: [PATCH] =?UTF-8?q?iOS=20build:=20catch-up=20commit=20=E2=80=94=20?=
+ =?UTF-8?q?2=20months=20of=20accumulated=20fork=20work=20(S0=20TLS=20?=
+ =?UTF-8?q?=E2=86=92=20rpcss=20=E2=86=92=20task-21)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The ios-build branch had drifted: the last real commit was 519b098
+(2026-05-11), while ~2 months of iOS work lived only as uncommitted
+working-tree edits (backed up as parent-repo patches/*.patch). This
+restores real submodule history for all of it. Groups by milestone:
+
+S0 TLS stack (parent 2527f00):
+  dlls/secur32/schannel_gnutls.c  — GnuTLS schannel backend hooks
+  dlls/ws2_32/unixlib.c           — iOS wineserver INET poll fix
+
+rpcss / real COM milestone (parent dbebbd1):
+  dlls/ntdll/signal_arm64.c       — aarch64 SEH unwind pool→PE reverse-
+                                    translate (all native __TRY/__EXCEPT
+                                    was spinning forever without it)
+  dlls/ntdll/signal_arm64ec.c     — EC-side reverse-translate hook
+  dlls/ntdll/unwind.c, loader.c, ntdll.spec — plumbing/exports
+  dlls/combase/rpc.c              — start_rpcss SCM-boot retry
+  programs/services/services.c    — respect SERVICE_DISABLED for root
+                                    PnP services (upstream winebus bug)
+  server/winstation.c             — desktop auto-close suppressed under
+                                    WINE_IOS (+ earlier S2 desktop input)
+
+task #21 desktop-freeze-on-child-exit (2026-07-08):
+  dlls/win32u/window.c            — get_shared_window freed-object guard
+                                    (id==0 → break the STATUS_PENDING loop
+                                    instead of spinning under user_lock)
+
+Going forward: commit wine changes here directly; patches/*.patch revert
+to human-readable references rather than the load-bearing backup.
+
+(cherry picked from commit d19b1d24a4a6700841e47cd4b628ef9f6b363adc)
+Madeira-commit: 24fa95892bafde0e04bc7665298dc8b6d2f411ed
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/combase/rpc.c             | 13 +++++
+ dlls/ntdll/loader.c            | 34 +++++++++++++
+ dlls/ntdll/ntdll.spec          |  1 +
+ dlls/ntdll/signal_arm64.c      | 34 ++++++++++++-
+ dlls/ntdll/signal_arm64ec.c    | 90 +++++++++++++++++++++++++++++++++-
+ dlls/ntdll/unwind.c            | 17 +++++++
+ dlls/secur32/schannel_gnutls.c | 10 ++++
+ dlls/win32u/window.c           |  7 +++
+ dlls/ws2_32/unixlib.c          | 16 ++++++
+ programs/services/services.c   | 19 ++++++-
+ server/winstation.c            | 43 ++++++++++++++++
+ 11 files changed, 280 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/combase/rpc.c b/dlls/combase/rpc.c
+index dc33877825b..a620ddcb525 100644
+--- a/dlls/combase/rpc.c
++++ b/dlls/combase/rpc.c
+@@ -191,6 +191,19 @@ static BOOL start_rpcss(void)
+     TRACE("\n");
+ 
+     if (!(scm = OpenSCManagerW(NULL, NULL, 0)))
++    {
++        /* iOS: services.exe is launched alongside explorer rather than ahead
++         * of the shell, so the first COM call can race the SCM's RPC endpoint
++         * coming up. Retry briefly before giving up. */
++        int retries;
++        for (retries = 0; retries < 20 && !scm; retries++)
++        {
++            Sleep(250);
++            scm = OpenSCManagerW(NULL, NULL, 0);
++        }
++        if (scm) ERR("service manager came up after %d retries\n", retries);
++    }
++    if (!scm)
+     {
+         ERR("Failed to open service manager\n");
+         return FALSE;
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index a89abcce82c..15cabd6385c 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3396,6 +3396,40 @@ static NTSTATUS find_dll_file( const WCHAR *load_path, const WCHAR *libname, UNI
+ 
+     if (status == STATUS_NOT_SUPPORTED) status = STATUS_INVALID_IMAGE_FORMAT;
+ 
++#ifdef __arm64ec__
++    /* iOS-Mythic mixed-arch pseudo-processes: in a native-ARM64 session the
++     * shared system32 farm serves ARM64 binaries for colliding names, which
++     * an AMD64 child (running this EC ntdll privately) cannot load. Fall
++     * back to C:\windows\sysx64, a farm of the full ARM64EC DLL set —
++     * Windows' own SysWOW64 pattern. EC sessions' system32 already serves
++     * EC binaries, so the retry only ever fires in mixed mode. */
++    if (status == STATUS_INVALID_IMAGE_FORMAT || status == STATUS_DLL_NOT_FOUND)
++    {
++        static const WCHAR sysx64W[] = L"\\??\\C:\\windows\\sysx64\\";
++        WCHAR buf[MAX_PATH];
++        UNICODE_STRING alt;
++        const WCHAR *base = libname, *p;
++        for (p = libname; *p; p++) if (*p == '\\' || *p == '/') base = p + 1;
++        if (wcslen( base ) + ARRAY_SIZE( sysx64W ) + 4 < MAX_PATH)
++        {
++            wcscpy( buf, sysx64W );
++            wcscat( buf, base );
++            if (!wcschr( base, '.' )) wcscat( buf, L".dll" );
++            RtlInitUnicodeString( &alt, buf );
++            if (!open_dll_file( &alt, pwm, mapping, image_info, id ))
++            {
++                if (nt_name->Buffer) RtlFreeUnicodeString( nt_name );
++                if (RtlCreateUnicodeString( nt_name, buf ))
++                {
++                    ERR( "mixed-arch fallback: %s -> %s\n", debugstr_w(libname), debugstr_w(buf) );
++                    status = STATUS_SUCCESS;
++                }
++                else status = STATUS_NO_MEMORY;
++            }
++        }
++    }
++#endif
++
+     RtlFreeHeap( GetProcessHeap(), 0, fullname );
+     if (wow64_old_value) RtlWow64EnableFsRedirectionEx( 1, &wow64_old_value );
+     return status;
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 9f147d17741..579f8fa2f4a 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1771,6 +1771,7 @@
+ @ extern -private __wine_unix_call_dispatcher
+ @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
+ @ extern -private -arch=arm64ec p_ios_jit_translate_addr
++@ extern -private -arch=arm64,arm64ec p_ios_jit_reverse_translate_addr
+ @ extern -private __wine_unixlib_handle
+ 
+ # Debugging
+diff --git a/dlls/ntdll/signal_arm64.c b/dlls/ntdll/signal_arm64.c
+index e560718c770..e7c9d176c1a 100644
+--- a/dlls/ntdll/signal_arm64.c
++++ b/dlls/ntdll/signal_arm64.c
+@@ -106,6 +106,33 @@ __ASM_GLOBAL_FUNC( RtlCaptureContext,
+                     "ret" )
+ 
+ 
++/* iOS: pool→PE reverse-translate hook, aarch64 counterpart of the one in
++ * signal_arm64ec.c. Native ARM64 PE code executes from JIT-pool aliases,
++ * but function tables are registered at PE VAs — an unwind walk over pool
++ * PCs finds no tables, the leaf-frame fallback (pc = lr) cycles forever,
++ * and SEH handlers are never found (observed: combase RPCSS_CALL raise
++ * spinning in RtlLookupFunctionEntry's loader-CS per step, wedging
++ * explorer at CoRegisterClassObject). Unix-side loader_ios.c fills the
++ * pointer at ntdll load; NULL → identity. */
++#ifndef __arm64ec__
++void *p_ios_jit_reverse_translate_addr = NULL;
++
++void *__attribute__((naked)) xlate_ios_jit_rev( void *ptr )
++{
++    asm( ".seh_proc xlate_ios_jit_rev\n\t"
++         ".seh_endprologue\n\t"
++         "cbz x0, 1f\n\t"                                 /* NULL → return NULL */
++         "adrp x16, p_ios_jit_reverse_translate_addr\n\t"
++         "ldr x16, [x16, #:lo12:p_ios_jit_reverse_translate_addr]\n\t"
++         "cbz x16, 1f\n\t"                                /* fn-ptr unset → identity */
++         "br x16\n"                                       /* tail-call unix fn */
++         "1: ret\n\t"
++         ".seh_endproc" );
++}
++#else
++extern void *xlate_ios_jit_rev( void *ptr );
++#endif
++
+ /**********************************************************************
+  *           virtual_unwind
+  */
+@@ -115,6 +142,11 @@ static NTSTATUS virtual_unwind( ULONG type, DISPATCHER_CONTEXT *dispatch, CONTEX
+     DWORD64 pc = context->Pc;
+     int i;
+ 
++    /* iOS: pc is a JIT-pool VA when captured from executing code; the
++     * function tables live at PE VAs. Reverse-translate so the walk runs
++     * in PE space (identity for non-pool addresses / pre-init). */
++    pc = (DWORD64)xlate_ios_jit_rev( (void *)pc );
++
+     dispatch->ScopeIndex = 0;
+     dispatch->ControlPc  = pc;
+     dispatch->ControlPcIsUnwound = (context->ContextFlags & CONTEXT_UNWOUND_TO_CALL) != 0;
+@@ -691,7 +723,7 @@ ULONG WINAPI RtlWalkFrameChain( void **buffer, ULONG count, ULONG flags )
+ 
+     for (i = 0; i < count; i++)
+     {
+-        pc = context.Pc;
++        pc = (ULONG_PTR)xlate_ios_jit_rev( (void *)context.Pc );
+         if (context.ContextFlags & CONTEXT_UNWOUND_TO_CALL) pc -= 4;
+         func = RtlLookupFunctionEntry( pc, &base, &table );
+         if (RtlVirtualUnwind2( UNW_FLAG_NHANDLER, base, pc, func, &context, NULL,
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index ea4b929130e..0bfb10ff94e 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -198,6 +198,29 @@ void *__attribute__((naked)) xlate_ios_jit( void *ptr )
+          ".seh_endproc" );
+ }
+ 
++/* iOS: the reverse mapping (JIT-pool alias → original PE VA). Exception
++ * contexts capture POOL VAs (that's where code physically executes), but
++ * function tables / unwind info are registered for PE VAs — so unwinding a
++ * pool pc finds no tables, the leaf-frame fallback cycles, and SEH handlers
++ * are never found (one boot-time RPC raise spun 1.2e9 unwind steps on a
++ * pegged core; with the no-progress guard it became an unhandled-exception
++ * process death). virtual_unwind reverse-translates each step's pc through
++ * this hook so the walk runs in PE space and handlers resolve. */
++void *p_ios_jit_reverse_translate_addr = NULL;
++
++void *__attribute__((naked)) xlate_ios_jit_rev( void *ptr )
++{
++    asm( ".seh_proc \"#xlate_ios_jit_rev\"\n\t"
++         ".seh_endprologue\n\t"
++         "cbz x0, 1f\n\t"                                 /* NULL → return NULL */
++         "adrp x16, p_ios_jit_reverse_translate_addr\n\t"
++         "ldr x16, [x16, #:lo12:p_ios_jit_reverse_translate_addr]\n\t"
++         "cbz x16, 1f\n\t"                                /* fn-ptr unset → identity */
++         "br x16\n"                                       /* tail-call unix fn */
++         "1: ret\n\t"
++         ".seh_endproc" );
++}
++
+ 
+ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METADATA *metadata )
+ {
+@@ -424,13 +447,19 @@ NTSTATUS arm64ec_process_init( HMODULE module )
+ 
+     enter_syscall_callback();
+     if (pProcessInit) status = pProcessInit();
++    ERR( "arm64ec_process_init: pProcessInit -> %lx (info=%p)\n", status, info );
+     if (!status)
+     {
+         for (unsigned int i = 0; i < PROCESSOR_FEATURE_MAX; i++)
+             emulated_processor_features[i] = pBTCpu64IsProcessorFeaturePresent( i );
+         status = create_cross_process_work_list( info );
++        ERR( "arm64ec_process_init: create_cross_process_work_list -> %lx\n", status );
++    }
++    if (!status && pThreadInit)
++    {
++        status = pThreadInit();
++        ERR( "arm64ec_process_init: pThreadInit -> %lx\n", status );
+     }
+-    if (!status && pThreadInit) status = pThreadInit();
+     leave_syscall_callback();
+     __os_arm64x_check_call = arm64x_check_call;
+     __os_arm64x_check_icall = arm64x_check_call;
+@@ -1235,6 +1264,11 @@ static NTSTATUS virtual_unwind( ULONG type, DISPATCHER_CONTEXT_ARM64EC *dispatch
+     DWORD64 pc = context->Pc;
+     int i;
+ 
++    /* iOS: pc is a JIT-pool VA when captured from executing code; the
++     * function tables live at PE VAs. Reverse-translate so the walk runs
++     * in PE space (identity for non-pool addresses / pre-init). */
++    pc = (DWORD64)xlate_ios_jit_rev( (void *)pc );
++
+     dispatch->ScopeIndex = 0;
+     dispatch->ControlPc  = pc;
+     dispatch->ControlPcIsUnwound = (context->ContextFlags & CONTEXT_UNWOUND_TO_CALL) != 0;
+@@ -1370,6 +1404,21 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+     ULONG_PTR frame;
+     DWORD res;
+ 
++    /* iOS-Mythic 2026-07-04: [SEH_RATE] — the render worker burns ~75% of
++     * its frame in virtual_unwind/RtlVirtualUnwind2/memset below this
++     * function (PROF), yet nothing logs: these are HANDLED exceptions
++     * (likely software RaiseException/C++ throws — no Mach fault, TRACE
++     * muted). Sampled ERR every 1024 dispatches: total count + code +
++     * faulting address names the thrower and quantifies the rate. */
++    {
++        static LONG seh_dispatch_count;
++        LONG n = InterlockedIncrement( &seh_dispatch_count );
++        if (n == 1 || (n & 0x3FF) == 0)
++            ERR( "[SEH_RATE] n=%d code=%08x addr=%p flags=%x\n",
++                 (int)n, (int)rec->ExceptionCode, rec->ExceptionAddress,
++                 (int)rec->ExceptionFlags );
++    }
++
+     context.AMD64_Context = *orig_context;
+     context.ContextFlags &= ~0x40; /* Clear xstate flag. */
+ 
+@@ -1378,6 +1427,18 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+     dispatch.HistoryTable  = &table;
+     dispatch.NonVolatileRegisters = nonvol_regs.Buffer;
+ 
++    /* iOS-Mythic 2026-07-04: no-progress guard. A dispatch whose context
++     * holds JIT-pool VAs finds no unwind tables (function tables are
++     * registered for the PE VAs), so RtlVirtualUnwind2's leaf-frame
++     * fallback can cycle without advancing — measured: ONE stuck dispatch
++     * spun 1.2e9 unwind steps against the same RtlRaiseException frame,
++     * pegging a P-core since boot. If neither ControlPc nor the frame
++     * advances between iterations, or the walk exceeds a sane depth,
++     * bail with EXCEPTION_STACK_INVALID instead of spinning forever. */
++    {
++        ULONG64 prev_pc = 0, prev_frame = 0;
++        unsigned int walk_steps = 0;
++
+     for (;;)
+     {
+         status = virtual_unwind( UNW_FLAG_EHANDLER, &dispatch, &context );
+@@ -1386,6 +1447,17 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+     unwind_done:
+         if (!dispatch.EstablisherFrame) break;
+ 
++        if ((dispatch.ControlPc == prev_pc && dispatch.EstablisherFrame == prev_frame) ||
++            ++walk_steps > 0x10000)
++        {
++            ERR( "unwind stuck: pc=%I64x frame=%I64x steps=%u — abandoning walk\n",
++                 (ULONG64)dispatch.ControlPc, dispatch.EstablisherFrame, walk_steps );
++            rec->ExceptionFlags |= EXCEPTION_STACK_INVALID;
++            break;
++        }
++        prev_pc = dispatch.ControlPc;
++        prev_frame = dispatch.EstablisherFrame;
++
+         if (!is_valid_arm64ec_frame( dispatch.EstablisherFrame ))
+         {
+             ERR( "invalid frame %I64x (%p-%p)\n", dispatch.EstablisherFrame,
+@@ -1457,6 +1529,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+ 
+         if (context.Sp == (ULONG64)NtCurrentTeb()->Tib.StackBase) break;
+     }
++    } /* no-progress guard scope */
+     return STATUS_UNHANDLED_EXCEPTION;
+ }
+ 
+@@ -1869,6 +1942,21 @@ void WINAPI RtlUnwindEx( PVOID end_frame, PVOID target_ip, EXCEPTION_RECORD *rec
+ 
+     rec->ExceptionFlags |= EXCEPTION_UNWINDING | (end_frame ? 0 : EXCEPTION_EXIT_UNWIND);
+ 
++    /* iOS-Mythic 2026-07-04: [UNW_RATE] — [SEH_RATE] in call_seh_handlers
++     * stayed at zero while PROF shows the render worker living in
++     * virtual_unwind/RtlVirtualUnwind2, so THIS entry point (phase-2
++     * unwind without dispatch = longjmp / handled unwinds) must be the
++     * hot caller. code=STATUS_UNWIND (0xC0000027) with a synthesized
++     * record means a NULL-rec caller — longjmp's signature. Log first +
++     * every 1024th: rate, code, source Rip, target. */
++    {
++        static LONG unw_count;
++        LONG n = InterlockedIncrement( &unw_count );
++        if (n == 1 || (n & 0x3FF) == 0)
++            ERR( "[UNW_RATE] n=%d code=%08x from=%p target=%p\n",
++                 (int)n, (int)rec->ExceptionCode, rec->ExceptionAddress, target_ip );
++    }
++
+     TRACE( "code=%lx flags=%lx end_frame=%p target_ip=%p\n",
+            rec->ExceptionCode, rec->ExceptionFlags, end_frame, target_ip );
+     for (i = 0; i < min( EXCEPTION_MAXIMUM_PARAMETERS, rec->NumberParameters ); i++)
+diff --git a/dlls/ntdll/unwind.c b/dlls/ntdll/unwind.c
+index f0707346a35..4e61407b892 100644
+--- a/dlls/ntdll/unwind.c
++++ b/dlls/ntdll/unwind.c
+@@ -2066,6 +2066,23 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,
+     unsigned int i, prolog_offset;
+     BOOL mach_frame = FALSE, chained = FALSE;
+ 
++    /* iOS-Mythic 2026-07-04: [VU2_RATE] — the render worker lives in this
++     * function per PROF, yet BOTH exception-path callers (call_seh_handlers,
++     * RtlUnwindEx) measured cold. Someone calls the raw unwind API directly
++     * and constantly. Log first + every 4096th: rate, unwound pc, and the
++     * CALLER (return address) — that names the stack-walker. */
++    {
++        static LONG vu2_count;
++        LONG n = InterlockedIncrement( &vu2_count );
++        /* No n==1 log: the first call can land inside loader init where
++         * ERR isn't safe (n==1 version froze boot pre-splash, debugger
++         * never detached). n==256 is past early init; 4096-stride covers
++         * the steady state. */
++        if (n == 256 || (n & 0xFFF) == 0)
++            ERR( "[VU2_RATE] n=%d pc=%p caller=%p\n",
++                 (int)n, (void *)pc, __builtin_return_address(0) );
++    }
++
+ #ifdef __arm64ec__
+     if (RtlIsEcCode( pc ))
+     {
+diff --git a/dlls/secur32/schannel_gnutls.c b/dlls/secur32/schannel_gnutls.c
+index 83b9f8faf9d..7d0db522b95 100644
+--- a/dlls/secur32/schannel_gnutls.c
++++ b/dlls/secur32/schannel_gnutls.c
+@@ -657,6 +657,7 @@ static NTSTATUS schan_handshake( void *args )
+         err = pgnutls_handshake(s);
+         if (err == GNUTLS_E_SUCCESS)
+         {
++            dprintf(2, "[schannel-ios] gnutls_handshake COMPLETED\n");  /* Steam S0 diag */
+             TRACE("Handshake completed\n");
+             status = SEC_E_OK;
+         }
+@@ -669,6 +670,7 @@ static NTSTATUS schan_handshake( void *args )
+         {
+             gnutls_alert_description_t alert = pgnutls_alert_get(s);
+ 
++            dprintf(2, "[schannel-ios] handshake WARNING ALERT %d\n", alert);  /* Steam S0 diag */
+             WARN("WARNING ALERT: %d %s\n", alert, pgnutls_alert_get_name(alert));
+ 
+             if (alert == GNUTLS_A_UNRECOGNIZED_NAME)
+@@ -682,11 +684,13 @@ static NTSTATUS schan_handshake( void *args )
+         else if (err == GNUTLS_E_FATAL_ALERT_RECEIVED)
+         {
+             gnutls_alert_description_t alert = pgnutls_alert_get(s);
++            dprintf(2, "[schannel-ios] handshake FATAL ALERT %d\n", alert);  /* Steam S0 diag */
+             WARN("FATAL ALERT: %d %s\n", alert, pgnutls_alert_get_name(alert));
+             status = SEC_E_INTERNAL_ERROR;
+         }
+         else
+         {
++            dprintf(2, "[schannel-ios] gnutls_handshake FAILED err=%d\n", err);  /* Steam S0 diag */
+             pgnutls_perror(err);
+             status = SEC_E_INTERNAL_ERROR;
+         }
+@@ -1461,6 +1465,7 @@ static NTSTATUS process_attach( void *args )
+ {
+     int ret;
+ 
++    dprintf(2, "[schannel-ios] process_attach ENTER\n");  /* Steam S0 diag */
+     if ((system_priority_file = getenv("GNUTLS_SYSTEM_PRIORITY_FILE")))
+     {
+         TRACE("GNUTLS_SYSTEM_PRIORITY_FILE is %s.\n", debugstr_a(system_priority_file));
+@@ -1472,6 +1477,7 @@ static NTSTATUS process_attach( void *args )
+     }
+ 
+     libgnutls_handle = dlopen(SONAME_LIBGNUTLS, RTLD_NOW);
++    dprintf(2, "[schannel-ios] dlopen(gnutls) = %p\n", libgnutls_handle);  /* Steam S0 diag */
+     if (!libgnutls_handle)
+     {
+         ERR_(winediag)("Failed to load libgnutls, secure connections will not be available.\n");
+@@ -1481,6 +1487,7 @@ static NTSTATUS process_attach( void *args )
+ #define LOAD_FUNCPTR(f) \
+     if (!(p##f = dlsym(libgnutls_handle, #f))) \
+     { \
++        dprintf(2, "[schannel-ios] MISSING SYMBOL %s\n", #f); /* Steam S0 diag */ \
+         ERR("Failed to load %s\n", #f); \
+         goto fail; \
+     }
+@@ -1569,6 +1576,7 @@ static NTSTATUS process_attach( void *args )
+     }
+ 
+     ret = pgnutls_global_init();
++    dprintf(2, "[schannel-ios] gnutls_global_init = %d\n", ret);  /* Steam S0 diag */
+     if (ret != GNUTLS_E_SUCCESS)
+     {
+         pgnutls_perror(ret);
+@@ -1585,9 +1593,11 @@ static NTSTATUS process_attach( void *args )
+ 
+     check_supported_protocols(client_protocol_priority_flags, ARRAYSIZE(client_protocol_priority_flags), FALSE);
+     check_supported_protocols(server_protocol_priority_flags, ARRAYSIZE(server_protocol_priority_flags), TRUE);
++    dprintf(2, "[schannel-ios] process_attach SUCCESS\n");  /* Steam S0 diag */
+     return STATUS_SUCCESS;
+ 
+ fail:
++    dprintf(2, "[schannel-ios] process_attach FAIL -> STATUS_DLL_NOT_FOUND\n");  /* Steam S0 diag */
+     dlclose(libgnutls_handle);
+     libgnutls_handle = NULL;
+     return STATUS_DLL_NOT_FOUND;
+diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
+index 9a57c00cdbe..c031af9bbf9 100644
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -165,6 +165,13 @@ static NTSTATUS get_shared_window( HANDLE handle, struct object_lock *lock, cons
+     if (!lock->id || !shared_object_release_seqlock( object, lock->seq ))
+     {
+         shared_object_acquire_seqlock( object, &lock->seq );
++        /* iOS (task #21): a shared session object freed by a dying
++         * pseudo-process has id==0. Without this guard lock->id stays 0,
++         * `!lock->id` is forever true, and the caller's
++         * `while (== STATUS_PENDING)` loop spins forever holding user_lock —
++         * freezing the whole desktop (repro: close regedit, then any window
++         * op that reads a freed window object). Break the loop instead. */
++        if (!object->id) return STATUS_INVALID_HANDLE;
+         *window_shm = &object->shm.window;
+         lock->id = object->id;
+         return STATUS_PENDING;
+diff --git a/dlls/ws2_32/unixlib.c b/dlls/ws2_32/unixlib.c
+index d16107be1af..49219cab0c8 100644
+--- a/dlls/ws2_32/unixlib.c
++++ b/dlls/ws2_32/unixlib.c
+@@ -750,7 +750,23 @@ static NTSTATUS unix_getaddrinfo( void *args )
+         }
+     }
+ 
++#ifdef WINE_IOS
++    /* iOS-Mythic (Steam S0): getaddrinfo() goes through libsystem_info /
++     * mDNSResponder, which autoreleases internal Objective-C objects. On
++     * a Wine worker thread (no autorelease pool in place) those land in
++     * the implicit top-level pool that Apple's pthread_exit TSD cleanup
++     * drains — and it crashes there (objc_release on a stale object).
++     * Bracket the call in our own pool so nothing survives to thread
++     * exit. The returned unix_info is malloc'd (freeaddrinfo), not
++     * autoreleased, so the pop doesn't touch it. */
++    extern void *objc_autoreleasePoolPush(void);
++    extern void  objc_autoreleasePoolPop(void *);
++    void *ios_arpool = objc_autoreleasePoolPush();
+     ret = getaddrinfo( params->node, service, hints ? &unix_hints : NULL, &unix_info );
++    objc_autoreleasePoolPop( ios_arpool );
++#else
++    ret = getaddrinfo( params->node, service, hints ? &unix_hints : NULL, &unix_info );
++#endif
+     if (ret)
+         return addrinfo_err_from_unix( ret );
+ 
+diff --git a/programs/services/services.c b/programs/services/services.c
+index 0830a75016b..8e27c3dfad3 100644
+--- a/programs/services/services.c
++++ b/programs/services/services.c
+@@ -426,11 +426,24 @@ static void scmdatabase_autostart_services(struct scmdatabase *db)
+ 
+     LIST_FOR_EACH_ENTRY(service, &db->services, struct service_entry, entry)
+     {
+-        if (service->config.dwStartType == SERVICE_BOOT_START ||
++        /* iOS-Mythic (task #19): respect SERVICE_DISABLED even for
++         * root-PnP services — upstream's pnp branch overrode Start=4 and
++         * kept autostarting winebus (whose winedevice host wedges on iOS
++         * and starves every demand-start behind the startup lock). On
++         * Windows a disabled service never starts, period. */
++        if (service->config.dwStartType != SERVICE_DISABLED &&
++            (service->config.dwStartType == SERVICE_BOOT_START ||
+             service->config.dwStartType == SERVICE_SYSTEM_START ||
+             service->config.dwStartType == SERVICE_AUTO_START ||
+-            (set != INVALID_HANDLE_VALUE && is_root_pnp_service(set, service)))
++            (set != INVALID_HANDLE_VALUE && is_root_pnp_service(set, service))))
+         {
++            /* iOS-Mythic diagnostic (task #19): name every autostart
++             * candidate — a phantom kept spawning winedevice with all
++             * registry Start values at 4. */
++            WINE_ERR("autostart candidate %s (type %#lx start %lu pnp %d)\n",
++                     wine_dbgstr_w(service->name), service->config.dwServiceType,
++                     service->config.dwStartType,
++                     set != INVALID_HANDLE_VALUE && is_root_pnp_service(set, service));
+             if (i+1 >= size)
+             {
+                 struct service_entry **slist_new;
+@@ -459,7 +472,9 @@ static void scmdatabase_autostart_services(struct scmdatabase *db)
+             services_list[delayed_cnt++] = service;
+             continue;
+         }
++        WINE_ERR("autostart: starting %s\n", wine_dbgstr_w(service->name));
+         err = service_start(service, 0, NULL);
++        WINE_ERR("autostart: %s -> %lu\n", wine_dbgstr_w(service->name), err);
+         if (err != ERROR_SUCCESS)
+             WINE_FIXME("Auto-start service %s failed to start: %ld\n",
+                        wine_dbgstr_w(service->name), err);
+diff --git a/server/winstation.c b/server/winstation.c
+index e2aad1edeb1..61720b17f21 100644
+--- a/server/winstation.c
++++ b/server/winstation.c
+@@ -422,8 +422,20 @@ static void remove_desktop_user( struct desktop *desktop, struct thread *thread
+     desktop->users--;
+ 
+     /* if we have one remaining user, it has to be the manager of the desktop window */
++#ifdef WINE_IOS
++    /* iOS: the explorer desktop IS the app's whole UI — never auto-close it.
++     * Upstream closes a virtual desktop ~1s after the last non-explorer user
++     * leaves ("wine explorer /desktop=x cmd" feature). Here services/rpcss
++     * threads joining and leaving the inherited desktop tripped this, WM_CLOSE
++     * cleanly exited explorer, and the screen kept showing the stale taskbar
++     * surface (also the likely cause of the post-child-exit desktop freeze). */
++    static int logged;
++    if (!logged++ && (process = get_top_window_owner( desktop )) && desktop->users == process->running_threads)
++        fprintf( stderr, "[winsta] desktop auto-close suppressed (iOS), users=%u\n", desktop->users );
++#else
+     if ((process = get_top_window_owner( desktop )) && desktop->users == process->running_threads && !desktop->close_timeout)
+         desktop->close_timeout = add_timeout_user( -TICKS_PER_SEC, close_desktop_timeout, desktop );
++#endif
+ }
+ 
+ /* remove a thread from the list of threads attached to a desktop */
+@@ -704,6 +716,37 @@ DECL_HANDLER(create_desktop)
+             reply->handle = alloc_handle_no_access_check( current->process, desktop,
+                                                           req->access, params.attr );
+         }
++        /* iOS-Mythic (S2): a virtual desktop created by explorer must
++         * receive hardware input. Wine only marks WinSta0 WSF_VISIBLE,
++         * but is_service_process()=TRUE on iOS routes every process into
++         * a non-WinSta0 winstation — set_input_desktop then fails and
++         * send_hardware_message rejects ALL input with ACCESS_DENIED.
++         * Also init cursor.clip: monitors_get_union_rect is empty on iOS
++         * (no monitors reported), which clips every cursor coord to
++         * (0,0). Mirrors the detached-desktop hack in window_ios.c,
++         * which only covers the games path. */
++        if (req->flags & DF_WINE_VIRTUAL_DESKTOP)
++        {
++            const char *w_env = getenv( "MYTHIC_SCREEN_W" ), *h_env = getenv( "MYTHIC_SCREEN_H" );
++            int scr_w = (w_env && atoi( w_env ) > 0) ? atoi( w_env ) : 1024;
++            int scr_h = (h_env && atoi( h_env ) > 0) ? atoi( h_env ) : 768;
++            desktop_shm_t *desktop_shm = desktop->shared;
++
++            winstation->flags |= WSF_VISIBLE;
++            SHARED_WRITE_BEGIN( desktop_shm, desktop_shm_t )
++            {
++                shared->cursor.clip.left = 0;
++                shared->cursor.clip.top = 0;
++                shared->cursor.clip.right = scr_w;
++                shared->cursor.clip.bottom = scr_h;
++            }
++            SHARED_WRITE_END;
++            /* force: the games-path hack may have pointed input at the
++             * initial Default desktop earlier in boot */
++            set_input_desktop( winstation, desktop );
++            fprintf( stderr, "[srv-desktop] virtual desktop created: clip %dx%d, winstation visible, input desktop set\n",
++                     scr_w, scr_h );
++        }
+         if (!winstation->input_desktop) set_input_desktop( winstation, desktop );
+         release_object( desktop );
+     }

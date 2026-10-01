@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor McAdams <cmcadams@codeweavers.com>
+Date: Mon, 9 Dec 2024 08:14:10 -0500
+Subject: [PATCH] windowscodecs: Add support for encoding 16bpp grayscale TIFF
+ images.
+
+Signed-off-by: Connor McAdams <cmcadams@codeweavers.com>
+
+CW-Bug-Id: #20442
+CW-Bug-Id: #23084
+CW-Bug-Id: #23301
+Valve-commit: 41f4e830b533177c8878587f094e0124d0b8347f
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/windowscodecs/libtiff.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/windowscodecs/libtiff.c b/dlls/windowscodecs/libtiff.c
+index 7ee82e7..3b60480 100644
+--- a/dlls/windowscodecs/libtiff.c
++++ b/dlls/windowscodecs/libtiff.c
+@@ -1240,6 +1240,7 @@ static const struct tiff_encode_format formats[] = {
+     {&GUID_WICPixelFormatBlackWhite, 1, 1, 1, 1, 0, 0, 0},
+     {&GUID_WICPixelFormat4bppGray, 1, 4, 1, 4, 0, 0, 0},
+     {&GUID_WICPixelFormat8bppGray, 1, 8, 1, 8, 0, 0, 0},
++    {&GUID_WICPixelFormat16bppGray, 1, 16, 1, 16, 0, 0, 0},
+     {&GUID_WICPixelFormat32bppBGRA, 2, 8, 4, 32, 1, 2, 1},
+     {&GUID_WICPixelFormat32bppPBGRA, 2, 8, 4, 32, 1, 1, 1},
+     {&GUID_WICPixelFormat48bppRGB, 2, 16, 3, 48, 0, 0, 0},

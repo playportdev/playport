@@ -1,0 +1,28 @@
+[thr-qos] tid=0040 name="Job.Worker 0" qos=utility rc=0
+[thr-qos] tid=0044 name="Job.Worker 1" qos=utility rc=0
+[thr-qos] tid=0048 name="Job.Worker 2" qos=utility rc=0
+[thr-qos] tid=004c name="Job.Worker 3" qos=utility rc=0
+[thr-qos] tid=0050 name="Job.Worker 4" qos=utility rc=0
+[thr-qos] tid=0054 name="Background Job.Worker 0" qos=utility rc=0
+[thr-qos] tid=0058 name="Background Job.Worker 1" qos=utility rc=0
+[thr-qos] tid=005c name="Background Job.Worker 2" qos=utility rc=0
+[thr-qos] tid=0060 name="Background Job.Worker 3" qos=utility rc=0
+[thr-qos] tid=0064 name="Background Job.Worker 4" qos=utility rc=0
+[thr-qos] tid=0068 name="Background Job.Worker 5" qos=utility rc=0
+[thr-qos] tid=006c name="Background Job.Worker 6" qos=utility rc=0
+[thr-qos] tid=0070 name="Background Job.Worker 7" qos=utility rc=0
+[thr-qos] tid=0074 name="Background Job.Worker 8" qos=utility rc=0
+[thr-qos] tid=0078 name="Background Job.Worker 9" qos=utility rc=0
+[thr-qos] tid=007c name="Background Job.Worker 10" qos=utility rc=0
+[thr-qos] tid=0080 name="Background Job.Worker 11" qos=utility rc=0
+[thr-qos] tid=0084 name="Background Job.Worker 12" qos=utility rc=0
+[thr-qos] tid=0088 name="Background Job.Worker 13" qos=utility rc=0
+[thr-qos] tid=008c name="Background Job.Worker 14" qos=utility rc=0
+[thr-qos] tid=0090 name="Background Job.Worker 15" qos=utility rc=0
+[thr-qos] tid=0098 name="Loading.AsyncRead" qos=utility rc=0
+[thr-qos] tid=009c name="dxmt-encode-thr" qos=utility rc=0
+[thr-qos] tid=00a0 name="dxmt-finish-thr" qos=utility rc=0
+[thr-qos] tid=00b0 name="UnityGfxDeviceWorker" qos=utility rc=0
+[thr-qos] tid=00cc name="dxmt-encode-thr" qos=utility rc=0
+[thr-qos] tid=00d0 name="dxmt-finish-thr" qos=utility rc=0
+[thr-qos] tid=00ec name="Loading.PreloadManager" qos=utility rc=0

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Game options</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+a.leg{padding:4px 8px;margin:0 -8px;border-radius:14px;color:#C9D1DC}a.leg:hover{background:#1D242E;color:#EEF1F5}
+.item{display:flex;align-items:center;justify-content:space-between;gap:12px;height:38px;flex-shrink:0;padding:0 14px;box-sizing:border-box;border-radius:10px;font:500 15px 'Barlow',sans-serif;color:#EEF1F5}
+.v{font-size:13px;color:#9AA5B4;display:flex;align-items:center;gap:6px}
+.sel{background:#EEF1F5;color:#0B0E13}
+.sel .v{color:#3A4452}
+.h{font:600 11px 'Barlow';letter-spacing:.1em;text-transform:uppercase;color:#9AA5B4;padding:8px 14px 2px;flex-shrink:0}
+.mine{width:7px;height:7px;border-radius:4px;background:#F5B544}
+.scroll{scrollbar-width:none;-ms-overflow-style:none}.scroll::-webkit-scrollbar{display:none;width:0;height:0}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13">
+<div style="position: absolute; left: 0; top: 0; width: 874px; height: 230px; background: #1E2A3F"></div>
+<div class="d" style="position: absolute; left: 44px; top: 96px; font-size: 48px; font-weight: 700">Hollow Knight</div>
+<div style="position: absolute; inset: 0; background: rgba(5,7,10,.72)"></div>
+<div style="position: absolute; top: 0; right: 0; width: 410px; height: 402px; background: #151A21; border-left: 1px solid #2A3340; padding: 18px 28px 0 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; overflow: hidden">
+<div class="d" style="font-size: 22px; font-weight: 700; padding: 0 14px 2px; flex-shrink: 0">Game options</div>
+<div class="scroll" style="flex: 1 1 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 0 18px 0">
+<div class="h">Graphics</div>
+<a class="item sel" href="GameOptionsPicker.dc.html"><span>Resolution</span><span class="v">Default · 720p ›</span></a>
+<div class="item"><span>Frame rate limit</span><span class="v"><span class="mine"></span>30 fps ›</span></div>
+<div class="item"><span>Direct3D</span><span class="v">Default · DXMT ›</span></div>
+<div class="item"><span>Launch arguments</span><span class="v">None ›</span></div>
+<div class="h">Game</div>
+<div class="item"><span>Version</span><span class="v">Public ›</span></div>
+<div class="item"><span>Cloud saves</span><span class="v">On</span></div>
+<div class="item"><span>Check game files</span><span class="v">Last OK 3 days ago</span></div>
+<div class="item"><span>Achievements</span><span class="v">23 of 63 ›</span></div>
+<div class="item"><span>Report a problem</span><span class="v">Shares a log ›</span></div>
+<div class="item" style="color: #FF9A8A"><span>Uninstall</span><span class="v">Frees 9.2 GB</span></div>
+</div>
+</div>
+<div style="position: absolute; left: 0; bottom: 0; width: 464px; height: 36px; display: flex; align-items: center; gap: 18px; padding: 0 44px; box-sizing: border-box">
+<a class="leg" href="GameOptionsPicker.dc.html"><span class="g">A</span>Choose</a>
+<span class="leg"><span class="g">Y</span>Back to default</span>
+<a class="leg" href="Game.dc.html"><span class="g">B</span>Close</a>
+</div>
+<div style="position: absolute; left: 44px; top: 160px; width: 360px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #C9D1DC"><span class="mine"></span>Changed for this game. The rest follow Settings › Graphics.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

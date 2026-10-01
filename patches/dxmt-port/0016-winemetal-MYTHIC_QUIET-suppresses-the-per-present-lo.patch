@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 5 Jul 2026 03:17:44 +0800
+Subject: [PATCH] winemetal: MYTHIC_QUIET suppresses the per-present log line
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Counter always ticks (FPS overlay reads it); only the dprintf is
+skipped — at RAW rates the line fired 100+/s.
+
+Madeira-commit: ba63e11ea183ae7b81217811f1c130a6fa25f22a
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 9c877ac..c6470c8 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1,4 +1,5 @@
+ #include <stdatomic.h>
++#include <stdlib.h>
+ #include <dlfcn.h>
+ #include <TargetConditionals.h>
+ #if TARGET_OS_IOS
+@@ -1504,6 +1505,14 @@ static _Atomic uint64_t g_mythic_present_count = 0;
+ 
+ static inline void mythic_log_present_cadence(const char *path, double after) {
+   uint64_t n = atomic_fetch_add_explicit(&g_mythic_present_count, 1, memory_order_relaxed) + 1;
++  /* iOS-Mythic quiet mode: counter always ticks (FPS overlay reads it);
++   * only the log line is suppressed. At RAW rates this line fires 100+
++   * times/s — real I/O + heat. */
++  {
++    static int quiet = -1;
++    if (quiet < 0) quiet = getenv("MYTHIC_QUIET") != NULL;
++    if (quiet) return;
++  }
+   /* 2026-07-03: every-16 cadence (was 60) + monotonic timestamp + the
+    * `after` min-duration arg — measures the black-phase ~1 FPS pacing
+    * directly from the log (game-phase log lines carry no timestamps under

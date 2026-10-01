@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 00:44:15 +0200
+Subject: [PATCH] wineserver: link the injected client's first thread into its
+ process (wine-11.18 create_thread no longer does)
+
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+
+---
+ build/wineserver/request_ios.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/build/wineserver/request_ios.c b/build/wineserver/request_ios.c
+index 2aa26fc..f0ff721 100644
+--- a/build/wineserver/request_ios.c
++++ b/build/wineserver/request_ios.c
+@@ -658,8 +658,13 @@ void master_socket_handle_client(int client_fd)
+ 
+     if (process)
+     {
++        struct thread *thread;
+         ws_log("[wineserver] calling create_thread...");
+-        create_thread( -1, process, NULL );
++        /* wine-11.18: create_thread no longer links the thread into its
++         * process; the caller does, as upstream's accept path does. Without
++         * it get_process_first_thread() is NULL and receive_fd faults. */
++        thread = create_thread( -1, process, NULL );
++        if (thread) add_process_thread( process, thread );
+         ws_log("[wineserver] create_thread done, releasing...");
+         release_object( process );
+         ws_log("[wineserver] client fully connected!");

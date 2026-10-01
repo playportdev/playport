@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 15:59:52 +0800
+Subject: [PATCH] windows-common: encode UNIMPLEMENTED location in exit status;
+ stub GetFileAttributes{A,W}
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+UNIMPLEMENTED() previously called NtTerminateProcess(0), which loses the
+information about which stub was hit. Encode __LINE__ in the low 16 bits
+and a single-byte hash of __FILE__'s basename in the next 8 bits, with
+0xFE in the high byte as a sentinel. Now the exit status (e.g.
+0xFE4F00FF) tells us "IO.cpp:255" which uniquely identifies
+GetFileAttributesA.
+
+Stub GetFileAttributesA/W to return INVALID_FILE_ATTRIBUTES with
+ERROR_FILE_NOT_FOUND. FEX::Config::LoadConfig probes config files via
+these and the missing-file path is fine — FEX falls back to defaults.
+Long-term we should implement these properly via NtQueryAttributesFile.
+
+Madeira-commit: f7a255603238fc6ab352f5c1775e17dd3a8e6e5a
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/Common/Priv.h        | 16 ++++++++++++----
+ Source/Windows/Common/WinAPI/IO.cpp |  8 ++++++--
+ 2 files changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/Source/Windows/Common/Priv.h b/Source/Windows/Common/Priv.h
+index ea702b4..7dc0042 100644
+--- a/Source/Windows/Common/Priv.h
++++ b/Source/Windows/Common/Priv.h
+@@ -56,10 +56,18 @@ public:
+ };
+ 
+ 
+-#define UNIMPLEMENTED()                        \
+-  do {                                         \
+-    NtTerminateProcess(NtCurrentProcess(), 0); \
+-    __fastfail(0);                             \
++/* Encode the stub's source location in the exit status so we can identify
++ * which UNIMPLEMENTED was hit. The 16 LSBs of __LINE__ go into bits 0-15;
++ * the next 8 bits hash the basename (mostly first letter for disambiguation
++ * between IO.cpp/String.cpp/Misc.cpp); 0xFE marks "FEX UNIMPLEMENTED" exits. */
++#define UNIMPLEMENTED()                                                       \
++  do {                                                                        \
++    /* Use __FILE__'s last byte before the extension as a discriminator. */   \
++    unsigned _file_tag = (unsigned char)(__FILE__[sizeof(__FILE__) - 6]);     \
++    NtTerminateProcess(NtCurrentProcess(),                                    \
++        (NTSTATUS)(0xFE000000u | ((_file_tag & 0xFFu) << 16) |                \
++                   (__LINE__ & 0xFFFFu)));                                    \
++    __fastfail(0);                                                            \
+   } while (0)
+ 
+ #define DLLEXPORT_FUNC(Ret, Name, Args) \
+diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
+index ac96055..6d0d7c2 100644
+--- a/Source/Windows/Common/WinAPI/IO.cpp
++++ b/Source/Windows/Common/WinAPI/IO.cpp
+@@ -317,11 +317,15 @@ DLLEXPORT_FUNC(WINBOOL, SetEndOfFile, (HANDLE hFile)) {
+ }
+ 
+ DLLEXPORT_FUNC(DWORD, GetFileAttributesA, (LPCSTR lpFileName)) {
+-  UNIMPLEMENTED();
++  /* iOS-Mythic stub: pretend the file doesn't exist so FEX's config-file
++   * lookups (FEX::Config::LoadConfig etc.) skip cleanly. */
++  SetLastError(ERROR_FILE_NOT_FOUND);
++  return INVALID_FILE_ATTRIBUTES;
+ }
+ 
+ DLLEXPORT_FUNC(DWORD, GetFileAttributesW, (LPCWSTR lpFileName)) {
+-  UNIMPLEMENTED();
++  SetLastError(ERROR_FILE_NOT_FOUND);
++  return INVALID_FILE_ATTRIBUTES;
+ }
+ 
+ DLLEXPORT_FUNC(WINBOOL, SetFileAttributesA, (LPCSTR lpFileName, DWORD dwFileAttributes)) {

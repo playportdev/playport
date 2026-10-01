@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 8 May 2026 22:10:17 +0800
+Subject: [PATCH] ntdll: log thread-TLS allocation once for iOS bringup
+ diagnostics
+
+Right after alloc_thread_tls writes NtCurrentTeb()->ThreadLocalStoragePointer,
+log the TEB, the new TLS array, the first four slot pointers, and the
+total module count. Lets us confirm Wine's side of the TLS chain at a
+glance when debugging guest-side gs:[0x58] accesses on iOS without
+having to instrument the JIT every bringup.
+
+(cherry picked from commit e7048eee391623bafc2139d932c1000d6b2dffb4)
+Madeira-commit: cf9ea4ac434c2517ee6c8e1f157d2d72de5e7d04
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index b1cc90bf622..3ffa73830e8 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1689,6 +1689,13 @@ static NTSTATUS alloc_thread_tls(void)
+         TRACE( "slot %u: %u/%lu bytes at %p\n", i, size, dir->SizeOfZeroFill, pointers[i] );
+     }
+     NtCurrentTeb()->ThreadLocalStoragePointer = pointers;
++    ERR( "iOS-Mythic alloc_thread_tls: TEB=%p TEB->TLS=%p TLS[0]=%p TLS[1]=%p TLS[2]=%p TLS[3]=%p (count=%u)\n",
++         NtCurrentTeb(), pointers,
++         tls_module_count > 0 ? pointers[0] : NULL,
++         tls_module_count > 1 ? pointers[1] : NULL,
++         tls_module_count > 2 ? pointers[2] : NULL,
++         tls_module_count > 3 ? pointers[3] : NULL,
++         tls_module_count );
+     return STATUS_SUCCESS;
+ }
+ 

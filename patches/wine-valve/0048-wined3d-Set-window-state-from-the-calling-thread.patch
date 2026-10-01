@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 7 Apr 2023 19:59:49 -0600
+Subject: [PATCH] wined3d: Set window state from the calling thread.
+
+This effectively reverts commit 1765c4594f6a11fe0df1aed7261cfafdb7514c43.
+
+CW-Bug-Id: #22121
+Valve-commit: ddec74a65c0c69f4de71a465efd9d0a15e6baddb
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/wined3d/swapchain.c | 13 +------------
+ 1 file changed, 1 insertion(+), 12 deletions(-)
+
+diff --git a/dlls/wined3d/swapchain.c b/dlls/wined3d/swapchain.c
+index 6d602b5..07a23f6 100644
+--- a/dlls/wined3d/swapchain.c
++++ b/dlls/wined3d/swapchain.c
+@@ -2330,7 +2330,6 @@ static void set_window_state(struct wined3d_window_state *s)
+     static const UINT timeout = 1500;
+     DWORD window_tid = GetWindowThreadProcessId(s->window, NULL);
+     DWORD tid = GetCurrentThreadId();
+-    HANDLE thread;
+ 
+     TRACE("Window %p belongs to thread %#lx.\n", s->window, window_tid);
+     /* If the window belongs to a different thread, modifying the style and/or
+@@ -2348,18 +2347,8 @@ static void set_window_state(struct wined3d_window_state *s)
+             else
+                 KillTimer(s->window, WINED3D_WINDOW_TOPMOST_TIMER_ID);
+         }
+-
+-        set_window_state_thread(s);
+-    }
+-    else if ((thread = CreateThread(NULL, 0, set_window_state_thread, s, 0, NULL)))
+-    {
+-        SetThreadDescription(thread, L"wined3d_set_window_state");
+-        CloseHandle(thread);
+-    }
+-    else
+-    {
+-        ERR("Failed to create thread.\n");
+     }
++    set_window_state_thread(s);
+ }
+ 
+ HRESULT wined3d_swapchain_state_setup_fullscreen(struct wined3d_swapchain_state *state,

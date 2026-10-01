@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Thu, 5 Oct 2023 12:02:44 -0600
+Subject: [PATCH] msxml3: Don't fail
+ xml_http_request_2_IRtwqAsyncCallback_Invoke() on stream read failures.
+
+CW-Bug-Id: #22822
+Valve-commit: 44e5494591e312e85f3b1802e1bb56941a18b02a
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/msxml3/httprequest.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/msxml3/httprequest.c b/dlls/msxml3/httprequest.c
+index a3b3385..7dcc31e 100644
+--- a/dlls/msxml3/httprequest.c
++++ b/dlls/msxml3/httprequest.c
+@@ -2449,8 +2449,12 @@ static HRESULT WINAPI xml_http_request_2_IRtwqAsyncCallback_Invoke(IRtwqAsyncCal
+         SafeArrayUnaccessData(sa);
+         if (FAILED(hr) || read < body_size)
+         {
+-            ERR("Failed to read from stream, hr %#lx\n", hr);
+-            goto done;
++            /* Windows doesn't send the body in this case but still sends request with Content-Length
++             * set to requested body size. */
++            ERR("Failed to read from stream, hr %#lx, read %lu\n", hr, read);
++            SafeArrayDestroy(sa);
++            sa = NULL;
++            V_VT(&body_v) = VT_NULL;
+         }
+ 
+         ISequentialStream_Release(This->request_body);

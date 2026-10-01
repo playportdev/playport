@@ -1,0 +1,27 @@
+[ec-map] EcCodeBitMap=0x71feef0000 size=0x1000000 (16 MB) (no PEB yet: the first TEB gets it)
+[childtest] pid=0020 tid=0024 parent: start C:\childtest-arm64ec.exe, 9 arguments
+[childtest] pid=0020 tid=0024 parent: starting window child 1
+[childtest] pid=0020 tid=0024 parent: window child 1 is pid 0028; waiting
+[childtest] pid=0028 tid=002c child: start, exit code will be 41; peb image=0000000134500000
+[childtest] pid=0028 tid=002c child: desktop 0000000000000008 (Default), winstation 0000000000000004, GetDesktopWindow 0000000000010020 (error 0)
+[childtest] pid=0028 tid=002c WM_CREATE hwnd=0000000000010028
+[childtest] pid=0028 tid=002c child: CreateWindowExW -> 0000000000010028 (error 0)
+[childtest] pid=0028 tid=002c WM_TIMER
+[childtest] pid=0028 tid=002c WM_DESTROY
+[childtest] pid=0028 tid=002c child: message loop done after 2 messages; exiting with 41
+[childtest] pid=0020 tid=0024 parent: window child 1 wait=0 after 2088 ms, exit code 41 (0x29)
+[childtest] pid=0020 tid=0024 parent: starting window child 2
+[childtest] pid=0020 tid=0024 parent: window child 2 is pid 0030; waiting
+[childtest] pid=0030 tid=0034 child: start, exit code will be 42; peb image=0000000134FA0000
+[childtest] pid=0030 tid=0034 child: desktop 0000000000000008 (Default), winstation 0000000000000004, GetDesktopWindow 0000000000010020 (error 0)
+[childtest] pid=0030 tid=0034 WM_CREATE hwnd=0000000000020032
+[childtest] pid=0030 tid=0034 child: CreateWindowExW -> 0000000000020032 (error 0)
+[childtest] pid=0030 tid=0034 WM_TIMER
+[childtest] pid=0030 tid=0034 WM_DESTROY
+[childtest] pid=0030 tid=0034 child: message loop done after 2 messages; exiting with 42
+[childtest] pid=0020 tid=0024 parent: window child 2 wait=0 after 2101 ms, exit code 42 (0x2a)
+[childtest] pid=0020 tid=0024 parent: window children PASS
+[childtest] pid=0020 tid=0024 parent: starting the title
+[childtest] pid=0020 tid=0024 parent: the title is pid 0038; waiting
+[childtest] pid=0020 tid=0024 parent: the title wait=0 after 919 ms, exit code 3221225477 (0xc0000005)
+[childtest] pid=0020 tid=0024 parent: done

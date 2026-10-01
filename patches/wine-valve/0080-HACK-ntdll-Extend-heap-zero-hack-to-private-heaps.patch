@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Mon, 4 Mar 2024 09:47:32 +0800
+Subject: [PATCH] HACK: ntdll: Extend heap zero hack to private heaps.
+
+Call of Juarez: Bound in Blood (21980) uses uninitialized memory from msvcr80.operator_new(), which
+allocates memory from a private heap created specifically for MSVC runtime.
+
+CW-Bug-Id: #23466
+Valve-commit: 870373c99ae553dea449f1ff14a9c14caf630c36
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/heap.c       | 4 ++++
+ dlls/ntdll/loader.c     | 2 +-
+ dlls/ntdll/ntdll_misc.h | 1 +
+ 3 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/heap.c b/dlls/ntdll/heap.c
+index 81281f0..1f72376 100644
+--- a/dlls/ntdll/heap.c
++++ b/dlls/ntdll/heap.c
+@@ -329,6 +329,7 @@ C_ASSERT( HEAP_MIN_LARGE_BLOCK_SIZE <= HEAP_INITIAL_GROW_SIZE );
+ #define HEAP_CHECKING_ENABLED 0x80000000
+ 
+ BOOL delay_heap_free = FALSE;
++BOOL heap_zero_hack = FALSE;
+ 
+ static struct heap *process_heap;  /* main process heap */
+ 
+@@ -1510,6 +1511,9 @@ HANDLE WINAPI RtlCreateHeap( ULONG flags, void *addr, SIZE_T total_size, SIZE_T
+     TRACE( "flags %#lx, addr %p, total_size %#Ix, commit_size %#Ix, lock %p, params %p\n",
+            flags, addr, total_size, commit_size, lock, params );
+ 
++    if (heap_zero_hack)
++        flags |= HEAP_ZERO_MEMORY;
++
+     flags &= ~(HEAP_TAIL_CHECKING_ENABLED|HEAP_FREE_CHECKING_ENABLED);
+     if (process_heap) flags |= HEAP_PRIVATE;
+     if (!process_heap || !total_size || (flags & HEAP_SHARED)) flags |= HEAP_GROWABLE;
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index aebd77a..e5afd69 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -5668,7 +5668,7 @@ void loader_init( CONTEXT *context, void **entry )
+         if (get_env( L"WINE_HEAP_ZERO_MEMORY", env_str, sizeof(env_str)) && env_str[0] == L'1')
+         {
+             ERR( "Enabling heap zero hack.\n" );
+-            heap_flags |= HEAP_ZERO_MEMORY;
++            heap_zero_hack = TRUE;
+         }
+ 
+         peb->ProcessHeap        = RtlCreateHeap( heap_flags, NULL, 0, 0, NULL, NULL );
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 9567f45..c77ca61 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -52,6 +52,7 @@ static const USHORT current_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+ static const UINT_PTR page_size = 0x1000;
+ 
+ extern BOOL delay_heap_free;
++extern BOOL heap_zero_hack;
+ 
+ /* exceptions */
+ extern NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *context );

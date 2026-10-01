@@ -1,0 +1,2162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sat, 15 Aug 2026 02:31:39 +0800
+Subject: [PATCH] Full BCn decode and Book of the Dead steady-state retention
+ fix
+
+Trim was gated on census_id_ < DYN_CENSUS_SLOTS, so allocator behaviour
+depended on whether an object fit a diagnostic table. With the table at
+512 it only saw tiny constant buffers and freed nothing. Ungating it,
+plus raising the table to 8192, drops DynamicBuffer retention from
+1029MB / 7098 allocations to 145MB / 1003.
+
+Measured over two long runs: steady state 2791-3282MB (mean 3015) vs a
+prior 4034MB pinned just under the 4096MB jetsam limit. Trim regret 0.
+Peak still reaches 3896MB, so the transient is improved but not solved.
+
+Trim releases only entries with will_free_at <= coherent_seq_id and
+stops at the first fenced entry; a blanket depth cap would be a
+use-after-free.
+
+BCn: real BC1/BC2/BC3/BC4/BC5/BC7 decoders (BC7 all 8 modes, tables
+verified offline against the 128-bit-per-mode invariant). Undecodable
+formats now get deterministic fills instead of raw compressed bytes
+uploaded as uncompressed texels, which was an out-of-bounds staging
+read. BC6H is still a synthetic fill.
+
+Also behavioural for rendering: configurable BC mip clamp (mipClampBC),
+with the logical descriptor preserved so GetDesc does not lie.
+
+Instrumentation: owner census reconciled against Metal
+currentAllocatedSize, labelled creation sites, live-object counters,
+per-instance FIFO stats, trim regret, sequence-triggered reporting.
+
+Madeira-commit: d6bd546dc685189f4434f87fd15ea7b21009e64f
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_device.cpp             | 147 ++-----------
+ src/d3d11/d3d11_texture_device.cpp     | 139 ++++++++++--
+ src/d3d11/d3d11_texture_dynamic.cpp    |   2 +-
+ src/dxmt/dxmt_bcn.cpp                  | 220 +++++++++++++++++++
+ src/dxmt/dxmt_bcn.hpp                  | 137 ++++++++++++
+ src/dxmt/dxmt_buffer.cpp               |  30 ++-
+ src/dxmt/dxmt_buffer.hpp               |  12 +-
+ src/dxmt/dxmt_context.cpp              |   2 +
+ src/dxmt/dxmt_dynamic.cpp              | 146 ++++++++++++-
+ src/dxmt/dxmt_dynamic.hpp              |  14 +-
+ src/dxmt/dxmt_mem_census.cpp           | 220 +++++++++++++++++++
+ src/dxmt/dxmt_mem_census.hpp           | 280 +++++++++++++++++++++++++
+ src/dxmt/dxmt_presenter.cpp            |   2 +
+ src/dxmt/dxmt_resource_initializer.cpp | 180 ++++++++++++++--
+ src/dxmt/dxmt_ring_bump_allocator.hpp  |   8 +
+ src/dxmt/dxmt_staging.cpp              |   2 +-
+ src/dxmt/dxmt_texture.cpp              |  14 +-
+ src/dxmt/dxmt_texture.hpp              |   5 +
+ src/dxmt/meson.build                   |   2 +
+ src/winemetal/unix/winemetal_unix.c    |  24 ++-
+ 20 files changed, 1402 insertions(+), 184 deletions(-)
+ create mode 100644 src/dxmt/dxmt_bcn.cpp
+ create mode 100644 src/dxmt/dxmt_bcn.hpp
+ create mode 100644 src/dxmt/dxmt_mem_census.cpp
+ create mode 100644 src/dxmt/dxmt_mem_census.hpp
+
+diff --git a/src/d3d11/d3d11_device.cpp b/src/d3d11/d3d11_device.cpp
+index 0f193b2..0404f6f 100644
+--- a/src/d3d11/d3d11_device.cpp
++++ b/src/d3d11/d3d11_device.cpp
+@@ -171,75 +171,15 @@ void BCCensusRecord(const D3D11_TEXTURE2D_DESC1 *d, const D3D11_SUBRESOURCE_DATA
+ 
+ } // namespace
+ 
+-/* ---- ml670: PHYSICAL MIP CLAMP for BC textures -------------------------
+- *
+- * A15 cannot sample BC, so DXMT remaps BC -> RGBA8 and decodes at upload. That
+- * is lossless but costs 4-8x the memory: Book of the Dead's census reaches
+- * 351,197 KB of LOGICAL BC, which lands as ~1.79 GB of RGBA8 backing and
+- * jetsams the app mid-load.
+- *
+- * Dropping the top mip leaves 1/4 of the pixels, so that backing falls to
+- * ~0.45 GB. The texture keeps its full logical identity from the app's point of
+- * view -- we shrink the PHYSICAL resource and then translate views so shader
+- * mip indices still mean what the app intended.
+- *
+- * Eligibility is deliberately narrow. Anything that could observe the physical
+- * layout (render target, UAV, CPU access, staging/dynamic, no initial data,
+- * single mip) is left completely alone.
+- *
+- * ⚠️ D3D11 subresource index = mip + slice * MipLevels. Dropping a mip shifts
+- * EVERY index, so initial data must be repacked per array slice -- a plain
+- * pointer bump silently corrupts slice 1 onward. Cubes are just ArraySize 6 and
+- * fall out of the same per-slice loop.
+- *
+- * ⚠️ USAGE_DEFAULT permits UpdateSubresource/CopySubresourceRegion, whose
+- * indices we do NOT translate. This game's census shows zero such calls, but a
+- * different one could, so those paths LOUDLY report a clamped target instead of
+- * silently writing the wrong mip. Restricting to IMMUTABLE instead would be
+- * safe by contract but would clamp nothing -- all 128 observed textures are
+- * DEFAULT. */
+-namespace {
+-
+-std::mutex g_mipclamp_mutex;
+-std::unordered_map<const void *, uint32_t> g_mipclamp;   /* resource -> levels dropped */
+-uint64_t g_mipclamp_saved_kb = 0;
+-uint32_t g_mipclamp_count = 0;
++/* ml675: the ml670 mip clamp used to live here and was wrong twice over -- it
++ * handed the shrunken descriptor to the resource (so GetDesc reported 512x512
++ * for a logical 2048x2048 texture) and stored the bias in a process-global map
++ * keyed by COM pointer that was never erased on destroy, so a reused address
++ * inherited a stale clamp. Both defects are gone rather than patched: the clamp
++ * now happens in CreateDeviceTextureInternal, which already separates the
++ * logical descriptor from the Metal texture, and the bias is owned by the
++ * DeviceTexture. Runtime-op protection moved with it (TranslateSubresource). */
+ 
+-uint32_t MipClampLevels() {
+-  static int cached = -1;
+-  if (cached < 0)
+-    cached = std::max(0, std::min(4, Config::getInstance().getOption<int>("d3d11.mipClampBC", 0)));
+-  return (uint32_t)cached;
+-}
+-
+-bool MipClampEligible(const D3D11_TEXTURE2D_DESC1 *d, const D3D11_SUBRESOURCE_DATA *data) {
+-  if (!MipClampLevels() || !data) return false;
+-  if (!IsBCFormat((uint32_t)d->Format)) return false;
+-  if (d->Usage != D3D11_USAGE_DEFAULT && d->Usage != D3D11_USAGE_IMMUTABLE) return false;
+-  if (d->BindFlags != D3D11_BIND_SHADER_RESOURCE) return false;   /* no RT/UAV/DS */
+-  if (d->CPUAccessFlags) return false;
+-  if (d->MipLevels < 2) return false;              /* MipLevels==0 means "generate"; also excluded */
+-  if (d->SampleDesc.Count > 1) return false;
+-  if (d->Width < 8 || d->Height < 8) return false; /* keep the clamped top >= one 4x4 block */
+-  return true;
+-}
+-
+-uint32_t MipClampFor(const void *res) {
+-  std::lock_guard<std::mutex> lk(g_mipclamp_mutex);
+-  auto it = g_mipclamp.find(res);
+-  return it == g_mipclamp.end() ? 0 : it->second;
+-}
+-
+-} // namespace
+-
+-extern "C" void MipClampWarnRuntimeOp(const void *res, const char *op) {
+-  if (!MipClampFor(res)) return;
+-  static int warned;
+-  if (warned++ < 16)
+-    ERR("[mip-clamp] ml670 ", op, " on a CLAMPED resource ", res,
+-        " -- subresource indices are NOT translated on this path; expect a wrong mip. "
+-        "Add index translation or widen the eligibility exclusion.");
+-}
+ 
+ /* ml653: reachable from d3d11_context_impl.cpp (different TU). */
+ extern "C" void BCCensusRecordSRV(unsigned int fmt) {
+@@ -1075,51 +1015,11 @@ public:
+ 
+     BCCensusRecord(pDesc, pInitialData);   /* ml652: read-only, no behaviour change */
+ 
+-    /* ml670: shrink the PHYSICAL resource by dropping top mips. */
+-    D3D11_TEXTURE2D_DESC1 clamped_desc;
+-    std::vector<D3D11_SUBRESOURCE_DATA> clamped_data;
+-    uint32_t clamp = 0;
+-    if (MipClampEligible(pDesc, pInitialData)) {
+-      const uint32_t mips = pDesc->MipLevels;
+-      const uint32_t arr = pDesc->ArraySize ? pDesc->ArraySize : 1;
+-      clamp = std::min(MipClampLevels(), mips - 1);          /* always keep >= 1 mip */
+-      while (clamp && ((pDesc->Width >> clamp) < 4 || (pDesc->Height >> clamp) < 4))
+-        clamp--;                                             /* never go below one block */
+-      if (clamp) {
+-        clamped_desc = *pDesc;
+-        clamped_desc.Width  = std::max(1u, pDesc->Width  >> clamp);
+-        clamped_desc.Height = std::max(1u, pDesc->Height >> clamp);
+-        clamped_desc.MipLevels = mips - clamp;
+-        /* index = mip + slice * MipLevels, so repack per slice -- a flat
+-         * pointer bump would corrupt every slice after the first. */
+-        clamped_data.resize((size_t)clamped_desc.MipLevels * arr);
+-        for (uint32_t a = 0; a < arr; a++)
+-          for (uint32_t m = 0; m < clamped_desc.MipLevels; m++)
+-            clamped_data[m + (size_t)a * clamped_desc.MipLevels] =
+-                pInitialData[(m + clamp) + (size_t)a * mips];
+-        pDesc = &clamped_desc;
+-        pInitialData = clamped_data.data();
+-      }
+-    }
+-
+     try {
+       switch (pDesc->Usage) {
+       case D3D11_USAGE_DEFAULT:
+-      case D3D11_USAGE_IMMUTABLE: {
+-        HRESULT hr = CreateDeviceTexture2D(this, pDesc, pInitialData, ppTexture2D);
+-        if (SUCCEEDED(hr) && clamp && ppTexture2D && *ppTexture2D) {
+-          std::lock_guard<std::mutex> lk(g_mipclamp_mutex);
+-          g_mipclamp[(const void *)*ppTexture2D] = clamp;
+-          g_mipclamp_count++;
+-          if (g_mipclamp_count <= 8 || (g_mipclamp_count % 64) == 0)
+-            ERR("[mip-clamp] ml670 #", g_mipclamp_count, " dropped ", clamp,
+-                " mip(s): ", clamped_desc.Width << clamp, "x", clamped_desc.Height << clamp,
+-                " -> ", clamped_desc.Width, "x", clamped_desc.Height,
+-                " mips ", clamped_desc.MipLevels + clamp, "->", clamped_desc.MipLevels,
+-                " arr=", clamped_desc.ArraySize);
+-        }
+-        return hr;
+-      }
++      case D3D11_USAGE_IMMUTABLE:
++        return CreateDeviceTexture2D(this, pDesc, pInitialData, ppTexture2D);
+       case D3D11_USAGE_DYNAMIC: {
+         HRESULT hr = CreateDynamicLinearTexture2D(this, pDesc, pInitialData, ppTexture2D);
+         if (SUCCEEDED(hr))
+@@ -1193,31 +1093,8 @@ public:
+     if (!ppSRView)
+       return S_FALSE;
+ 
+-    /* ml670: the app still describes views in LOGICAL mip numbers, but the
+-     * physical resource lost its top level(s). Shift MostDetailedMip down and
+-     * shrink MipLevels to match. A null pDesc needs nothing -- the default view
+-     * already spans exactly the mips the resource physically has. */
+-    D3D11_SHADER_RESOURCE_VIEW_DESC1 xlated;
+-    if (pDesc) {
+-      uint32_t clamp = MipClampFor((const void *)pResource);
+-      if (clamp && (pDesc->ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D ||
+-                    pDesc->ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DARRAY ||
+-                    pDesc->ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBE ||
+-                    pDesc->ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBEARRAY)) {
+-        xlated = *pDesc;
+-        /* every dimension above keeps MostDetailedMip/MipLevels at the same
+-         * offsets in the union, so Texture2D is a valid accessor for all. */
+-        uint32_t most = xlated.Texture2D.MostDetailedMip;
+-        uint32_t count = xlated.Texture2D.MipLevels;
+-        xlated.Texture2D.MostDetailedMip = most > clamp ? most - clamp : 0;
+-        if (count != (uint32_t)-1) {
+-          uint32_t drop = most < clamp ? clamp - most : 0;
+-          xlated.Texture2D.MipLevels = count > drop ? count - drop : 1;
+-        }
+-        pDesc = &xlated;
+-      }
+-    }
+-
++    /* ml675: SRV mip translation now happens inside DeviceTexture, where the
++     * bias is owned and both a logical and a physical descriptor are kept. */
+     return static_cast<D3D11ResourceCommon *>(pResource)->CreateShaderResourceView(pDesc, ppSRView);
+   }
+ 
+diff --git a/src/d3d11/d3d11_texture_device.cpp b/src/d3d11/d3d11_texture_device.cpp
+index 1faf496..fbd1825 100644
+--- a/src/d3d11/d3d11_texture_device.cpp
++++ b/src/d3d11/d3d11_texture_device.cpp
+@@ -26,6 +26,7 @@
+ #include "dxmt_texture.hpp"
+ #include "d3d11_resource.hpp"
+ #include "util_win32_compat.h"
++#include "config/config.hpp"   /* ml675: d3d11.mipClampBC */
+ 
+ namespace dxmt {
+ 
+@@ -35,6 +36,12 @@ template <typename tag_texture>
+ class DeviceTexture : public TResourceBase<tag_texture, IMTLMinLODClampable> {
+ private:
+   Rc<RenamableTexturePool> renamable_;
++  /* ml675: top mip levels dropped from the PHYSICAL Metal texture. The D3D
++   * descriptor this object reports stays LOGICAL, so GetDesc keeps telling the
++   * application the size it asked for. ml670 got this wrong -- it handed the
++   * shrunken descriptor to the resource, so a 2048x2048 texture reported itself
++   * as 512x512 and any UI computing layout from GetDesc came out wrong. */
++  uint32_t mip_bias_ = 0;
+   float min_lod = 0.0;
+   D3DKMT_HANDLE local_kmt_ = 0;
+   D3DKMT_HANDLE global_kmt_ = 0;
+@@ -155,6 +162,24 @@ public:
+         this->keyed_mutex_ = std::move(keyed_mutex);
+       }
+ 
++  /* ml675: the bias lives on the resource, not in a process-global pointer map.
++   * ml670 keyed it on the COM pointer and never erased on destruction, so a
++   * reused address inherited a stale clamp. Ownership here makes that
++   * impossible by construction. */
++  uint32_t MipBias() const { return mip_bias_; }
++  void SetMipBias(uint32_t bias) { mip_bias_ = bias; }
++
++  /* Logical subresource -> physical, or ~0u when the level was clamped away.
++   * USAGE_DEFAULT legally permits UpdateSubresource/CopySubresourceRegion, and
++   * those indices shift when mips are dropped. Book of the Dead measured zero
++   * such calls, but "measured zero" is not "cannot happen". */
++  uint32_t TranslateSubresource(uint32_t logical, uint32_t logicalMips) const {
++    if (!mip_bias_) return logical;
++    uint32_t mip = logical % logicalMips, slice = logical / logicalMips;
++    if (mip < mip_bias_) return ~0u;                 /* level does not exist physically */
++    return (mip - mip_bias_) + slice * (logicalMips - mip_bias_);
++  }
++
+   ~DeviceTexture() {
+     if (local_kmt_) {
+       D3DKMT_DESTROYALLOCATION destroy = {};
+@@ -242,8 +267,36 @@ public:
+     } else {
+       arraySize = this->desc.ArraySize;
+     }
++    /* ml675: TWO descriptors. finalDesc is LOGICAL and is what the view reports
++     * from GetDesc; physDesc is the translated copy that addresses the smaller
++     * Metal texture. Storing the translated one in the COM view would just move
++     * ml670's abstraction leak from resource GetDesc to SRV GetDesc.
++     *
++     * A null caller descriptor has already been expanded by
++     * ExtractEntireResourceViewDescription into a full LOGICAL view, so it needs
++     * translating too -- it is not a pass-through case. */
++    D3D11_SHADER_RESOURCE_VIEW_DESC1 physDesc = finalDesc;
++    uint32_t physMips = this->desc.MipLevels;
++    if (mip_bias_) {
++      physMips = this->desc.MipLevels > mip_bias_ ? this->desc.MipLevels - mip_bias_ : 1;
++      uint32_t most = physDesc.Texture2D.MostDetailedMip;
++      uint32_t count = physDesc.Texture2D.MipLevels;
++      physDesc.Texture2D.MostDetailedMip = most > mip_bias_ ? most - mip_bias_ : 0;
++      if (count != (uint32_t)-1) {
++        uint32_t drop = most < mip_bias_ ? mip_bias_ - most : 0;
++        physDesc.Texture2D.MipLevels = count > drop ? count - drop : 1;
++      }
++      if (physDesc.Texture2D.MostDetailedMip >= physMips) {
++        static uint32_t oob_n;
++        if (oob_n++ < 8)
++          ERR("[mip-clamp] ml675 SRV MostDetailedMip ", physDesc.Texture2D.MostDetailedMip,
++              " >= physical mips ", physMips, " after bias ", mip_bias_, " -- clamping");
++        physDesc.Texture2D.MostDetailedMip = physMips - 1;
++        physDesc.Texture2D.MipLevels = 1;
++      }
++    }
+     if (FAILED(InitializeAndNormalizeViewDescriptor(
+-            this->m_parent, this->desc.MipLevels, arraySize, this->texture_.ptr(), finalDesc, descriptor
++            this->m_parent, physMips, arraySize, this->texture_.ptr(), physDesc, descriptor
+         ))) {
+       ERR("DeviceTexture: Failed to create texture SRV");
+       return E_FAIL;
+@@ -354,6 +407,14 @@ struct SharedResourceData {
+   D3DKMT_HANDLE mutex_handle;
+ };
+ 
++
++/* ml675: BC formats DXGI-wise. Kept local -- the census copy in d3d11_device.cpp
++ * lives in an anonymous namespace and is not linkable from here. */
++static inline bool IsBCFormatForClamp(uint32_t f) {
++  return (f >= 70 && f <= 84) ||    /* BC1..BC5 incl. typeless/sRGB */
++         (f >= 94 && f <= 99);      /* BC6H, BC7 */
++}
++
+ template <typename tag>
+ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
+                                     const typename tag::DESC1 *pDesc,
+@@ -364,8 +425,50 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
+   if (FAILED(CreateMTLTextureDescriptor(pDevice, pDesc, &finalDesc, &info))) {
+     return E_INVALIDARG;
+   }
++
++  /* ---- ml675: PHYSICAL mip clamp, decided here rather than in the device ----
++   *
++   * A15 cannot sample BC, so BC formats are decoded to RGBA8 at upload and cost
++   * 4-8x their compressed size. Dropping top mips is the cheapest way back under
++   * the jetsam limit.
++   *
++   * This function already had the right abstraction: finalDesc is the LOGICAL
++   * normalised descriptor the resource reports, and `info` describes the Metal
++   * texture. ml670 clamped one layer up in CreateTexture2D1 and passed the
++   * shrunken descriptor onward, which made GetDesc lie to the application.
++   * Eligibility and the clamp amount are computed from the normalised LOGICAL
++   * descriptor; only `info` and the upload loop see reduced numbers. */
++  uint32_t mip_bias = 0;
++  typename tag::DESC1 physDesc = finalDesc;
++  if constexpr (std::is_same_v<typename tag::DESC1, D3D11_TEXTURE2D_DESC1>) {
++    static int cached_clamp = -1;
++    if (cached_clamp < 0)
++      cached_clamp = std::max(0, std::min(4, Config::getInstance().getOption<int>("d3d11.mipClampBC", 0)));
++    if (cached_clamp && pInitialData && IsBCFormatForClamp((uint32_t)finalDesc.Format) &&
++        (finalDesc.Usage == D3D11_USAGE_DEFAULT || finalDesc.Usage == D3D11_USAGE_IMMUTABLE) &&
++        finalDesc.BindFlags == D3D11_BIND_SHADER_RESOURCE && !finalDesc.CPUAccessFlags &&
++        finalDesc.MipLevels >= 2 && finalDesc.SampleDesc.Count <= 1 &&
++        finalDesc.Width >= 8 && finalDesc.Height >= 8) {
++      mip_bias = std::min((uint32_t)cached_clamp, finalDesc.MipLevels - 1);
++      while (mip_bias && ((finalDesc.Width >> mip_bias) < 4 || (finalDesc.Height >> mip_bias) < 4))
++        mip_bias--;
++      if (mip_bias) {
++        physDesc.Width     = std::max(1u, finalDesc.Width  >> mip_bias);
++        physDesc.Height    = std::max(1u, finalDesc.Height >> mip_bias);
++        physDesc.MipLevels = finalDesc.MipLevels - mip_bias;
++        info.width              = physDesc.Width;
++        info.height             = physDesc.Height;
++        info.mipmap_level_count = physDesc.MipLevels;
++        static uint32_t clamp_n;
++        if (++clamp_n <= 8 || (clamp_n % 256) == 0)
++          ERR("[mip-clamp] ml675 #", clamp_n, " logical ", finalDesc.Width, "x", finalDesc.Height,
++              " mips ", finalDesc.MipLevels, " -> physical ", physDesc.Width, "x", physDesc.Height,
++              " mips ", physDesc.MipLevels, " arr=", finalDesc.ArraySize);
++      }
++    }
++  }
+   bool single_subresource = info.mipmap_level_count == 1 && info.array_length == 1 &&
+-                            !(finalDesc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE);
++                            !(physDesc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE);
+   auto texture = Rc<Texture>(new Texture(info, pDevice->GetMTLDevice()));
+ 
+   MTL_DXGI_FORMAT_DESC format_desc;
+@@ -376,12 +479,18 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
+   auto initialize = [&](Rc<TextureAllocation> &&allocation) {
+     texture->rename(std::move(allocation));
+     if (!pInitialData) {
+-      for (auto sub : EnumerateSubresources(finalDesc)) {
++      for (auto sub : EnumerateSubresources(physDesc)) {
+         initializer.initWithZero(texture.ptr(), texture->current(), sub.ArraySlice, sub.MipLevel);
+       }
+     } else {
+-      for (auto sub : EnumerateSubresources(finalDesc)) {
+-        auto &data = pInitialData[sub.SubresourceId];
++      for (auto sub : EnumerateSubresources(physDesc)) {
++        /* ml675: subresource index is mip + slice * MipLevels, so a clamp shifts
++         * EVERY index. Walk the PHYSICAL subresources but read the caller's
++         * LOGICAL array -- correct for arrays and cubes alike, since D3D counts
++         * cube faces in ArraySize. A flat pointer bump would corrupt every slice
++         * after the first. */
++        auto &data = pInitialData[(sub.MipLevel + mip_bias) +
++                                  (size_t)sub.ArraySlice * finalDesc.MipLevels];
+         initializer.initWithData(
+             texture.ptr(), texture->current(), sub.ArraySlice, sub.MipLevel, data.pSysMem, data.SysMemPitch,
+             data.SysMemSlicePitch, format_desc.Flag
+@@ -451,10 +560,12 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
+     }
+ 
+     initialize(std::move(allocation));
+-    *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(
+-        ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), create.hResource,
+-                                   create.hGlobalShare, std::move(keyed_mutex), pDevice))
+-    );
++    {
++      auto *tex = ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), create.hResource,
++                                             create.hGlobalShare, std::move(keyed_mutex), pDevice));
++      tex->SetMipBias(mip_bias);
++      *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(tex);
++    }
+     return S_OK;
+   }
+ 
+@@ -467,12 +578,14 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
+   if (single_subresource && (finalDesc.BindFlags & D3D11_BIND_DEPTH_STENCIL)) {
+     Rc<RenamableTexturePool> renamable = new RenamableTexturePool(texture.ptr(), 32, flags);
+     initialize(renamable->getNext(0));
+-    *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(
+-        ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), std::move(renamable), pDevice)));
++    auto *tex = ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), std::move(renamable), pDevice));
++    tex->SetMipBias(mip_bias);
++    *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(tex);
+   } else {
+     initialize(texture->allocate(flags));
+-    *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(
+-        ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), pDevice)));
++    auto *tex = ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), pDevice));
++    tex->SetMipBias(mip_bias);
++    *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(tex);
+   }
+   return S_OK;
+ }
+diff --git a/src/d3d11/d3d11_texture_dynamic.cpp b/src/d3d11/d3d11_texture_dynamic.cpp
+index da9a7cc..daafba9 100644
+--- a/src/d3d11/d3d11_texture_dynamic.cpp
++++ b/src/d3d11/d3d11_texture_dynamic.cpp
+@@ -123,7 +123,7 @@ HRESULT CreateDynamicTextureInternal(MTLD3D11Device *pDevice,
+ #endif
+     Subresource subresource;
+     subresource.buffer = new Buffer(buf_len, pDevice->GetMTLDevice());
+-    subresource.buffer->rename(subresource.buffer->allocate(buffer_flags));
++    subresource.buffer->rename(subresource.buffer->allocate(buffer_flags, "tex_dynamic:subresource"));
+     subresource.dynamic = new DynamicBuffer(subresource.buffer.ptr(), buffer_flags);
+     subresource.bytes_per_row = bpr;
+     subresource.bytes_per_depth = bpi;
+diff --git a/src/dxmt/dxmt_bcn.cpp b/src/dxmt/dxmt_bcn.cpp
+new file mode 100644
+index 0000000..b2a68ee
+--- /dev/null
++++ b/src/dxmt/dxmt_bcn.cpp
+@@ -0,0 +1,220 @@
++#include "dxmt_bcn.hpp"
++
++namespace dxmt {
++
++/* BC7 partition tables, verbatim from the D3D BC7 specification. */
++static const uint8_t kPart2[64][16] = {
++{0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1},{0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1},
++{0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1},{0,0,0,1,0,0,1,1,0,0,1,1,0,1,1,1},
++{0,0,0,0,0,0,0,1,0,0,0,1,0,0,1,1},{0,0,1,1,0,1,1,1,0,1,1,1,1,1,1,1},
++{0,0,0,1,0,0,1,1,0,1,1,1,1,1,1,1},{0,0,0,0,0,0,0,1,0,0,1,1,0,1,1,1},
++{0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1},{0,0,1,1,0,1,1,1,1,1,1,1,1,1,1,1},
++{0,0,0,0,0,0,0,1,0,1,1,1,1,1,1,1},{0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,1},
++{0,0,0,1,0,1,1,1,1,1,1,1,1,1,1,1},{0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1},
++{0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1},{0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1},
++{0,0,0,0,1,0,0,0,1,1,1,0,1,1,1,1},{0,1,1,1,0,0,0,1,0,0,0,0,0,0,0,0},
++{0,0,0,0,0,0,0,0,1,0,0,0,1,1,1,0},{0,1,1,1,0,0,1,1,0,0,0,1,0,0,0,0},
++{0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0},{0,0,0,0,1,0,0,0,1,1,0,0,1,1,1,0},
++{0,0,0,0,0,0,0,0,1,0,0,0,1,1,0,0},{0,1,1,1,0,0,1,1,0,0,1,1,0,0,0,1},
++{0,0,1,1,0,0,0,1,0,0,0,1,0,0,0,0},{0,0,0,0,1,0,0,0,1,0,0,0,1,1,0,0},
++{0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0},{0,0,1,1,0,1,1,0,0,1,1,0,1,1,0,0},
++{0,0,0,1,0,1,1,1,1,1,1,0,1,0,0,0},{0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
++{0,1,1,1,0,0,0,1,1,0,0,0,1,1,1,0},{0,0,1,1,1,0,0,1,1,0,0,1,1,1,0,0},
++{0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},{0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1},
++{0,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0},{0,0,1,1,0,0,1,1,1,1,0,0,1,1,0,0},
++{0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0},{0,1,0,1,0,1,0,1,1,0,1,0,1,0,1,0},
++{0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1},{0,1,0,1,1,0,1,0,1,0,1,0,0,1,0,1},
++{0,1,1,1,0,0,1,1,1,1,0,0,1,1,1,0},{0,0,0,1,0,0,1,1,1,1,0,0,1,0,0,0},
++{0,0,1,1,0,0,1,0,0,1,0,0,1,1,0,0},{0,0,1,1,1,0,1,1,1,1,0,1,1,1,0,0},
++{0,1,1,0,1,0,0,1,1,0,0,1,0,1,1,0},{0,0,1,1,1,1,0,0,1,1,0,0,0,0,1,1},
++{0,1,1,0,0,1,1,0,1,0,0,1,1,0,0,1},{0,0,0,0,0,1,1,0,0,1,1,0,0,0,0,0},
++{0,1,0,0,1,1,1,0,0,1,0,0,0,0,0,0},{0,0,1,0,0,1,1,1,0,0,1,0,0,0,0,0},
++{0,0,0,0,0,0,1,0,0,1,1,1,0,0,1,0},{0,0,0,0,0,1,0,0,1,1,1,0,0,1,0,0},
++{0,1,1,0,1,1,0,0,1,0,0,1,0,0,1,1},{0,0,1,1,0,1,1,0,1,1,0,0,1,0,0,1},
++{0,1,1,0,0,0,1,1,1,0,0,1,1,1,0,0},{0,0,1,1,1,0,0,1,1,1,0,0,0,1,1,0},
++{0,1,1,0,1,1,0,0,1,1,0,0,1,0,0,1},{0,1,1,0,0,0,1,1,0,0,1,1,1,0,0,1},
++{0,1,1,1,1,1,1,0,1,0,0,0,0,0,0,1},{0,0,0,1,1,0,0,0,1,1,1,0,0,1,1,1},
++{0,0,0,0,1,1,1,1,0,0,1,1,0,0,1,1},{0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0},
++{0,0,1,0,0,0,1,0,1,1,1,0,1,1,1,0},{0,1,0,0,0,1,0,0,0,1,1,1,0,1,1,1}};
++
++static const uint8_t kPart3[64][16] = {
++{0,0,1,1,0,0,1,1,0,2,2,1,2,2,2,2},{0,0,0,1,0,0,1,1,2,2,1,1,2,2,2,1},
++{0,0,0,0,2,0,0,1,2,2,1,1,2,2,1,1},{0,2,2,2,0,0,2,2,0,0,1,1,0,1,1,1},
++{0,0,0,0,0,0,0,0,1,1,2,2,1,1,2,2},{0,0,1,1,0,0,1,1,0,0,2,2,0,0,2,2},
++{0,0,2,2,0,0,2,2,1,1,1,1,1,1,1,1},{0,0,1,1,0,0,1,1,2,2,1,1,2,2,1,1},
++{0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2},{0,0,0,0,1,1,1,1,1,1,1,1,2,2,2,2},
++{0,0,0,0,1,1,1,1,2,2,2,2,2,2,2,2},{0,0,1,2,0,0,1,2,0,0,1,2,0,0,1,2},
++{0,1,1,2,0,1,1,2,0,1,1,2,0,1,1,2},{0,1,2,2,0,1,2,2,0,1,2,2,0,1,2,2},
++{0,0,1,1,0,1,1,2,1,1,2,2,1,2,2,2},{0,0,1,1,2,0,0,1,2,2,0,0,2,2,2,0},
++{0,0,0,1,0,0,1,1,0,1,1,2,1,1,2,2},{0,1,1,1,0,0,1,1,2,0,0,1,2,2,0,0},
++{0,0,0,0,1,1,2,2,1,1,2,2,1,1,2,2},{0,0,2,2,0,0,2,2,0,0,2,2,1,1,1,1},
++{0,1,1,1,0,1,1,1,0,2,2,2,0,2,2,2},{0,0,0,1,0,0,0,1,2,2,2,1,2,2,2,1},
++{0,0,0,0,0,0,1,1,0,1,2,2,0,1,2,2},{0,0,0,0,1,1,0,0,2,2,1,0,2,2,1,0},
++{0,1,2,2,0,1,2,2,0,0,1,1,0,0,0,0},{0,0,1,2,0,0,1,2,1,1,2,2,2,2,2,2},
++{0,1,1,0,1,2,2,1,1,2,2,1,0,1,1,0},{0,0,0,0,0,1,1,0,1,2,2,1,1,2,2,1},
++{0,0,2,2,1,1,0,2,1,1,0,2,0,0,2,2},{0,1,1,0,0,1,1,0,2,0,0,2,2,2,2,2},
++{0,0,1,1,0,1,2,2,0,1,2,2,0,0,1,1},{0,0,0,0,2,0,0,0,2,2,1,1,2,2,2,1},
++{0,0,0,0,0,0,0,2,1,1,2,2,1,2,2,2},{0,2,2,2,0,0,2,2,0,0,1,2,0,0,1,1},
++{0,0,1,1,0,0,1,2,0,0,2,2,0,2,2,2},{0,1,2,0,0,1,2,0,0,1,2,0,0,1,2,0},
++{0,0,0,0,1,1,1,1,2,2,2,2,0,0,0,0},{0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0},
++{0,1,2,0,2,0,1,2,1,2,0,1,0,1,2,0},{0,0,1,1,2,2,0,0,1,1,2,2,0,0,1,1},
++{0,0,1,1,1,1,2,2,2,2,0,0,0,0,1,1},{0,1,0,1,0,1,0,1,2,2,2,2,2,2,2,2},
++{0,0,0,0,0,0,0,0,2,1,2,1,2,1,2,1},{0,0,2,2,1,1,2,2,0,0,2,2,1,1,2,2},
++{0,0,2,2,0,0,1,1,0,0,2,2,0,0,1,1},{0,2,2,0,1,2,2,1,0,2,2,0,1,2,2,1},
++{0,1,0,1,2,2,2,2,2,2,2,2,0,1,0,1},{0,0,0,0,2,1,2,1,2,1,2,1,2,1,2,1},
++{0,1,0,1,0,1,0,1,0,1,0,1,2,2,2,2},{0,2,2,2,0,1,1,1,0,2,2,2,0,1,1,1},
++{0,0,0,2,1,1,1,2,0,0,0,2,1,1,1,2},{0,0,0,0,2,1,1,2,2,1,1,2,2,1,1,2},
++{0,2,2,2,0,1,1,1,0,1,1,1,0,2,2,2},{0,0,0,2,1,1,1,2,1,1,1,2,0,0,0,2},
++{0,1,1,0,0,1,1,0,0,1,1,0,2,2,2,2},{0,0,0,0,0,0,0,0,2,1,1,2,2,1,1,2},
++{0,1,1,0,0,1,1,0,2,2,2,2,2,2,2,2},{0,0,2,2,0,0,1,1,0,0,1,1,0,0,2,2},
++{0,0,2,2,1,1,2,2,1,1,2,2,0,0,2,2},{0,0,0,0,0,0,0,0,0,0,0,0,2,1,1,2},
++{0,0,0,2,0,0,0,1,0,0,0,2,0,0,0,1},{0,2,2,2,1,2,2,2,0,2,2,2,1,2,2,2},
++{0,1,0,1,2,2,2,2,2,2,2,2,2,2,2,2},{0,1,1,1,2,0,1,1,2,2,0,1,2,2,2,0}};
++
++static const uint8_t kAnchor2[64] = {
++15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,
++15, 2, 8, 2, 2, 8, 8,15, 2, 8, 2, 2, 8, 8, 2, 2,
++15,15, 6, 8, 2, 8,15,15, 2, 8, 2, 2, 2,15,15, 6,
++ 6, 2, 6, 8,15,15, 2, 2,15,15,15,15,15, 2, 2,15};
++static const uint8_t kAnchor3a[64] = {
++ 3, 3,15,15, 8, 3,15,15, 8, 8, 6, 6, 6, 5, 3, 3,
++ 3, 3, 8,15, 3, 3, 6,10, 5, 8, 8, 6, 8, 5,15,15,
++ 8,15, 3, 5, 6,10, 8,15,15, 3,15, 5,15,15,15,15,
++ 3,15, 5, 5, 5, 8, 5,10, 5,10, 8,13,15,12, 3, 3};
++static const uint8_t kAnchor3b[64] = {
++15, 8, 8, 3,15,15, 3, 8,15,15,15,15,15,15,15, 8,
++15, 8,15, 3,15, 8,15, 8, 3,15, 6,10,15,15,10, 8,
++15, 3,15,10,10, 8, 9,10, 6,15, 8,15, 3, 6, 6, 8,
++15, 3,15,15,15,15,15,15,15,15,15,15, 3,15,15, 8};
++
++static const uint16_t kW2[4]  = {0, 21, 43, 64};
++static const uint16_t kW3[8]  = {0, 9, 18, 27, 37, 46, 55, 64};
++static const uint16_t kW4[16] = {0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64};
++
++struct Bc7Mode { uint8_t ns, pb, rb, isb, cb, ab, epb, spb, ib, ib2; };
++/* ns=subsets pb=partition bits rb=rotation bits isb=index-select bits
++ * cb/ab=colour/alpha endpoint bits epb=per-endpoint P-bit spb=shared P-bit
++ * ib/ib2=index bits */
++static const Bc7Mode kModes[8] = {
++  {3, 4, 0, 0, 4, 0, 1, 0, 3, 0},
++  {2, 6, 0, 0, 6, 0, 0, 1, 3, 0},
++  {3, 6, 0, 0, 5, 0, 0, 0, 2, 0},
++  {2, 6, 0, 0, 7, 0, 1, 0, 2, 0},
++  {1, 0, 2, 1, 5, 6, 0, 0, 2, 3},
++  {1, 0, 2, 0, 7, 8, 0, 0, 2, 2},
++  {1, 0, 0, 0, 7, 7, 1, 0, 4, 0},
++  {2, 6, 0, 0, 5, 5, 1, 0, 2, 0},
++};
++
++namespace {
++struct BitReader {
++  const uint8_t *b; uint32_t pos;
++  explicit BitReader(const uint8_t *p) : b(p), pos(0) {}
++  uint32_t get(uint32_t n) {
++    uint32_t v = 0;
++    for (uint32_t i = 0; i < n; i++) {
++      v |= (uint32_t)((b[pos >> 3] >> (pos & 7)) & 1) << i;
++      pos++;
++    }
++    return v;
++  }
++};
++inline uint8_t expand(uint32_t v, uint32_t bits) {
++  /* replicate high bits into the low ones, per the spec's unquantise */
++  return (uint8_t)((v << (8 - bits)) | (v >> (2 * bits - 8)));
++}
++inline uint8_t interp(uint8_t e0, uint8_t e1, uint16_t w) {
++  return (uint8_t)(((64 - w) * (uint32_t)e0 + w * (uint32_t)e1 + 32) >> 6);
++}
++} // namespace
++
++void
++bcn_bc7_block(const uint8_t *blk, uint8_t out[64]) {
++  BitReader br(blk);
++  uint32_t mode = 0;
++  while (mode < 8 && br.get(1) == 0) mode++;
++  if (mode >= 8) {                 /* reserved: the spec mandates opaque black */
++    memset(out, 0, 64);
++    for (int t = 0; t < 16; t++) out[t * 4 + 3] = 255;
++    return;
++  }
++  const Bc7Mode &m = kModes[mode];
++  const uint32_t nep = (uint32_t)m.ns * 2;
++
++  uint32_t part = m.pb ? br.get(m.pb) : 0;
++  uint32_t rot  = m.rb ? br.get(m.rb) : 0;
++  uint32_t isel = m.isb ? br.get(m.isb) : 0;
++
++  uint8_t ep[6][4];
++  uint32_t rawc[6][3], rawa[6];
++  for (int c = 0; c < 3; c++) for (uint32_t e = 0; e < nep; e++) rawc[e][c] = br.get(m.cb);
++  for (uint32_t e = 0; e < nep; e++) rawa[e] = m.ab ? br.get(m.ab) : 0;
++
++  uint32_t pbit[6] = {0,0,0,0,0,0};
++  if (m.epb) for (uint32_t e = 0; e < nep; e++) pbit[e] = br.get(1);
++  else if (m.spb) for (uint32_t s = 0; s < m.ns; s++) {
++    uint32_t p = br.get(1); pbit[s * 2] = pbit[s * 2 + 1] = p;
++  }
++
++  for (uint32_t e = 0; e < nep; e++) {
++    uint32_t cb = m.cb, ab = m.ab;
++    for (int c = 0; c < 3; c++) {
++      uint32_t v = rawc[e][c];
++      if (m.epb || m.spb) { v = (v << 1) | pbit[e]; ep[e][c] = expand(v, cb + 1); }
++      else                 ep[e][c] = expand(v, cb);
++    }
++    if (ab) {
++      uint32_t v = rawa[e];
++      if (m.epb || m.spb) { v = (v << 1) | pbit[e]; ep[e][3] = expand(v, ab + 1); }
++      else                 ep[e][3] = expand(v, ab);
++    } else ep[e][3] = 255;
++  }
++
++  /* Index bits. The anchor index of each subset is stored one bit short. */
++  uint8_t idx[16], idx2[16];
++  const uint8_t *ptab = (m.ns == 2) ? kPart2[part] : (m.ns == 3 ? kPart3[part] : nullptr);
++  uint32_t a1 = 0, a2 = 0;
++  if (m.ns == 2) a1 = kAnchor2[part];
++  else if (m.ns == 3) { a1 = kAnchor3a[part]; a2 = kAnchor3b[part]; }
++
++  for (int t = 0; t < 16; t++) {
++    uint32_t sub = ptab ? ptab[t] : 0;
++    (void)sub;
++    /* Subset 0's anchor is always texel 0; subsets 1 and 2 take theirs from the
++     * anchor tables. An anchor's index is stored with one bit fewer because its
++     * high bit is implied zero -- miscount this and every later index shifts. */
++    bool anchor = (t == 0) || (m.ns >= 2 && (uint32_t)t == a1) || (m.ns == 3 && (uint32_t)t == a2);
++    idx[t] = (uint8_t)br.get(anchor ? m.ib - 1u : m.ib);
++  }
++  if (m.ib2) {
++    for (int t = 0; t < 16; t++)
++      idx2[t] = (uint8_t)br.get((t == 0) ? m.ib2 - 1u : m.ib2);
++  }
++
++  const uint16_t *wc = (m.ib == 2) ? kW2 : (m.ib == 3 ? kW3 : kW4);
++  const uint16_t *wa = (m.ib2 == 2) ? kW2 : (m.ib2 == 3 ? kW3 : kW4);
++
++  for (int t = 0; t < 16; t++) {
++    uint32_t sub = ptab ? ptab[t] : 0;
++    const uint8_t *e0 = ep[sub * 2], *e1 = ep[sub * 2 + 1];
++    uint8_t px[4];
++    if (m.ib2) {
++      /* two index sets: one drives colour, the other alpha, swapped by isel */
++      const uint8_t ci = isel ? idx2[t] : idx[t];
++      const uint8_t ai = isel ? idx[t]  : idx2[t];
++      const uint16_t cw = isel ? wa[ci] : wc[ci];
++      const uint16_t aw = isel ? wc[ai] : wa[ai];
++      for (int c = 0; c < 3; c++) px[c] = interp(e0[c], e1[c], cw);
++      px[3] = interp(e0[3], e1[3], aw);
++    } else {
++      for (int c = 0; c < 4; c++) px[c] = interp(e0[c], e1[c], wc[idx[t]]);
++    }
++    if (rot == 1)      { uint8_t v = px[0]; px[0] = px[3]; px[3] = v; }
++    else if (rot == 2) { uint8_t v = px[1]; px[1] = px[3]; px[3] = v; }
++    else if (rot == 3) { uint8_t v = px[2]; px[2] = px[3]; px[3] = v; }
++    out[t * 4 + 0] = px[0]; out[t * 4 + 1] = px[1];
++    out[t * 4 + 2] = px[2]; out[t * 4 + 3] = px[3];
++  }
++}
++
++} // namespace dxmt
+diff --git a/src/dxmt/dxmt_bcn.hpp b/src/dxmt/dxmt_bcn.hpp
+new file mode 100644
+index 0000000..9c63652
+--- /dev/null
++++ b/src/dxmt/dxmt_bcn.hpp
+@@ -0,0 +1,137 @@
++#pragma once
++/* ============================================================================
++ * ml679 -- complete, spec-accurate BCn block decoders.
++ *
++ * A15 cannot sample any BC format (supportsBCTextureCompression = NO), so every
++ * BC resource is remapped to an uncompressed one and we must supply the texels.
++ * BC1 and BC3 already decoded; BC2/BC4/BC5/BC7 were being filled with synthetic
++ * patterns, which is why foliage alpha masks (BC4) came out as checkerboards and
++ * normals (BC5) as flat blue.
++ *
++ * Layout follows D3D's BCn spec exactly, including the cases that are easy to
++ * get subtly wrong and that show up as edge artefacts:
++ *   - BC1 3-colour (punch-through) mode when c0 <= c1: index 3 is transparent
++ *     BLACK, and the third colour is a 1/2 blend, not 1/3-2/3.
++ *   - BC4/BC5 6-interpolant mode when a0 <= a1: indices 6 and 7 are hard 0 and 1.
++ *   - Signed BC4/BC5 (-1..1) are distinct formats from unsigned; -128 clamps to
++ *     -127 so the range stays symmetric.
++ *   - BC7 anchor indices: the first index of each subset is stored with one bit
++ *     fewer, because its high bit is implied zero.
++ * ==========================================================================*/
++#include <cstdint>
++#include <cstring>
++
++namespace dxmt {
++
++/* ---- shared helpers ---------------------------------------------------- */
++
++static inline void bcn_rgb565(uint16_t c, uint8_t *out) {
++  uint8_t r = (uint8_t)((c >> 11) & 0x1F), g = (uint8_t)((c >> 5) & 0x3F), b = (uint8_t)(c & 0x1F);
++  out[0] = (uint8_t)((r << 3) | (r >> 2));
++  out[1] = (uint8_t)((g << 2) | (g >> 4));
++  out[2] = (uint8_t)((b << 3) | (b >> 2));
++}
++
++/* The BC4/BC5 alpha/scalar sub-block, shared by BC3's alpha too. */
++static inline void bcn_scalar_block(const uint8_t *blk, uint8_t out[16]) {
++  uint8_t a[8];
++  a[0] = blk[0]; a[1] = blk[1];
++  if (a[0] > a[1]) {
++    for (int i = 1; i < 7; i++) a[i + 1] = (uint8_t)(((7 - i) * a[0] + i * a[1] + 3) / 7);
++  } else {
++    for (int i = 1; i < 5; i++) a[i + 1] = (uint8_t)(((5 - i) * a[0] + i * a[1] + 2) / 5);
++    a[6] = 0; a[7] = 255;          /* 6-interpolant mode: hard endpoints */
++  }
++  uint64_t bits = 0;
++  for (int i = 0; i < 6; i++) bits |= (uint64_t)blk[2 + i] << (8 * i);
++  for (int t = 0; t < 16; t++) out[t] = a[(bits >> (t * 3)) & 7];
++}
++
++/* Signed variant: endpoints are int8 in -127..127, output re-biased to 0..255
++ * so it can live in an R8Snorm/RG8Snorm texture unchanged. */
++static inline void bcn_scalar_block_signed(const uint8_t *blk, int8_t out[16]) {
++  int8_t a[8];
++  int8_t e0 = (int8_t)blk[0], e1 = (int8_t)blk[1];
++  if (e0 == -128) e0 = -127;
++  if (e1 == -128) e1 = -127;
++  a[0] = e0; a[1] = e1;
++  if (e0 > e1) {
++    for (int i = 1; i < 7; i++) a[i + 1] = (int8_t)(((7 - i) * e0 + i * e1) / 7);
++  } else {
++    for (int i = 1; i < 5; i++) a[i + 1] = (int8_t)(((5 - i) * e0 + i * e1) / 5);
++    a[6] = -127; a[7] = 127;
++  }
++  uint64_t bits = 0;
++  for (int i = 0; i < 6; i++) bits |= (uint64_t)blk[2 + i] << (8 * i);
++  for (int t = 0; t < 16; t++) out[t] = a[(bits >> (t * 3)) & 7];
++}
++
++/* ---- BC1 / BC2 / BC3 ---------------------------------------------------- */
++
++static inline void bcn_bc1_block(const uint8_t *blk, uint8_t out[64], bool punchthrough) {
++  uint16_t c0 = (uint16_t)(blk[0] | (blk[1] << 8));
++  uint16_t c1 = (uint16_t)(blk[2] | (blk[3] << 8));
++  uint8_t p[4][4];
++  bcn_rgb565(c0, p[0]); p[0][3] = 255;
++  bcn_rgb565(c1, p[1]); p[1][3] = 255;
++  if (!punchthrough || c0 > c1) {
++    for (int i = 0; i < 3; i++) {
++      p[2][i] = (uint8_t)((2 * p[0][i] + p[1][i] + 1) / 3);
++      p[3][i] = (uint8_t)((p[0][i] + 2 * p[1][i] + 1) / 3);
++    }
++    p[2][3] = p[3][3] = 255;
++  } else {
++    for (int i = 0; i < 3; i++) {
++      p[2][i] = (uint8_t)((p[0][i] + p[1][i] + 1) / 2);
++      p[3][i] = 0;
++    }
++    p[2][3] = 255;
++    p[3][3] = 0;
++  }
++  uint32_t idx = (uint32_t)(blk[4] | (blk[5] << 8) | (blk[6] << 16) | ((uint32_t)blk[7] << 24));
++  for (int t = 0; t < 16; t++) {
++    const uint8_t *s = p[(idx >> (t * 2)) & 3];
++    out[t * 4 + 0] = s[0]; out[t * 4 + 1] = s[1]; out[t * 4 + 2] = s[2]; out[t * 4 + 3] = s[3];
++  }
++}
++
++/* BC2 = 4-bit explicit alpha + a BC1 colour block always in 4-colour mode. */
++static inline void bcn_bc2_block(const uint8_t *blk, uint8_t out[64]) {
++  bcn_bc1_block(blk + 8, out, false);
++  for (int t = 0; t < 16; t++) {
++    uint8_t nib = (uint8_t)((blk[t >> 1] >> ((t & 1) * 4)) & 0xF);
++    out[t * 4 + 3] = (uint8_t)((nib << 4) | nib);
++  }
++}
++
++static inline void bcn_bc3_block(const uint8_t *blk, uint8_t out[64]) {
++  bcn_bc1_block(blk + 8, out, false);
++  uint8_t a[16];
++  bcn_scalar_block(blk, a);
++  for (int t = 0; t < 16; t++) out[t * 4 + 3] = a[t];
++}
++
++/* ---- BC4 / BC5 ---------------------------------------------------------- */
++
++static inline void bcn_bc4_block(const uint8_t *blk, uint8_t out[16], bool is_signed) {
++  if (is_signed) {
++    int8_t s[16];
++    bcn_scalar_block_signed(blk, s);
++    for (int t = 0; t < 16; t++) out[t] = (uint8_t)s[t];
++  } else {
++    bcn_scalar_block(blk, out);
++  }
++}
++
++static inline void bcn_bc5_block(const uint8_t *blk, uint8_t out[32], bool is_signed) {
++  uint8_t r[16], g[16];
++  bcn_bc4_block(blk, r, is_signed);
++  bcn_bc4_block(blk + 8, g, is_signed);
++  for (int t = 0; t < 16; t++) { out[t * 2 + 0] = r[t]; out[t * 2 + 1] = g[t]; }
++}
++
++/* ---- BC7 ---------------------------------------------------------------- */
++
++void bcn_bc7_block(const uint8_t *blk, uint8_t out[64]);
++
++} // namespace dxmt
+diff --git a/src/dxmt/dxmt_buffer.cpp b/src/dxmt/dxmt_buffer.cpp
+index 9a4139d..0f4a16d 100644
+--- a/src/dxmt/dxmt_buffer.cpp
++++ b/src/dxmt/dxmt_buffer.cpp
+@@ -24,6 +24,7 @@
+ #include "wsi_platform.hpp"
+ #include <cassert>
+ #include <mutex>
++#include "dxmt_mem_census.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -46,6 +47,18 @@ BufferAllocation::BufferAllocation(WMT::Device device, const WMTBufferInfo &info
+     info_.memory.set(placed_buffer);
+   }
+   obj_ = device.newBuffer(info_);
++  g_live_bufalloc.created.fetch_add(1, std::memory_order_relaxed);   /* ml684 */
++  census_bytes_ = info_.length;                            /* ml677 */
++  census_storage_ = ((uint32_t)info_.options >> 4) & 3;    /* ml678 storage mode */
++  census_flags_ = flags_.raw();
++  /* ml682: level 1 = whoever called Buffer::allocate, which is the interesting
++   * frame (level 0 would just be Buffer::allocate itself, identical for all). */
++  /* ml683: charging moved to Buffer::allocate, where the SITE LABEL is known.
++   * Allocations created outside that path stay uncharged and show up as the
++   * gap between mem-census buffer live and the sum of the site rows. */
++  mem_census_add(MEMOWN_BUFFER, census_bytes_);
++  mem_census_buffer_detail(census_bytes_, census_storage_, census_flags_, 1);
++  mem_census_set_device(&device);
+   gpuAddress_ = info_.gpu_address;
+   mappedMemory_ = info_.memory.get_accessible_or_null();
+ };
+@@ -72,6 +85,13 @@ BufferAllocation::BufferAllocation(
+ 
+ void
+ BufferAllocation::free() {
++  /* heap-placed allocations (the second constructor) are not charged */
++  if (!flags_.test(BufferAllocationFlag::AllocatedOnHeap)) {
++    g_live_bufalloc.destroyed.fetch_add(1, std::memory_order_relaxed);  /* ml684 */
++    mem_census_sub(MEMOWN_BUFFER, census_bytes_);            /* ml677 */
++    if (census_site_) buf_site_sub((uint64_t)(uintptr_t)census_site_, census_bytes_);  /* ml683 */
++    mem_census_buffer_detail(census_bytes_, census_storage_, census_flags_, 0);  /* ml678 */
++  }
+   if (placed_buffer) {
+     wsi::aligned_free(placed_buffer);
+     placed_buffer = nullptr;
+@@ -169,7 +189,7 @@ Buffer::createView(BufferViewDescriptor const &descriptor) {
+ }
+ 
+ Rc<BufferAllocation>
+-Buffer::allocate(Flags<BufferAllocationFlag> flags) {
++Buffer::allocate(Flags<BufferAllocationFlag> flags, const char *site) {
+   WMTResourceOptions options = WMTResourceHazardTrackingModeUntracked;
+   if (flags.test(BufferAllocationFlag::CpuWriteCombined)) {
+     options |= WMTResourceOptionCPUCacheModeWriteCombined;
+@@ -184,7 +204,12 @@ Buffer::allocate(Flags<BufferAllocationFlag> flags) {
+   info.memory.set(0);
+   info.length = length_;
+   info.options = options;
+-  return new BufferAllocation(device_, info, flags);
++  {
++    auto *ba = new BufferAllocation(device_, info, flags);
++    ba->census_site_ = site;                       /* ml683 */
++    buf_site_add((uint64_t)(uintptr_t)site, ba->census_bytes_);
++    return ba;
++  }
+ };
+ 
+ Rc<BufferAllocation>
+@@ -209,6 +234,7 @@ Buffer::allocate(Flags<BufferAllocationFlag> flags, WMT::Heap heap, uint64_t hea
+ 
+ Rc<BufferAllocation>
+ Buffer::rename(Rc<BufferAllocation> &&newAllocation) {
++  g_mem_census.buf_renames.fetch_add(1, std::memory_order_relaxed);   /* ml678 */
+   Rc<BufferAllocation> old = std::move(current_);
+   current_ = std::move(newAllocation);
+   return old;
+diff --git a/src/dxmt/dxmt_buffer.hpp b/src/dxmt/dxmt_buffer.hpp
+index 057e767..75fd088 100644
+--- a/src/dxmt/dxmt_buffer.hpp
++++ b/src/dxmt/dxmt_buffer.hpp
+@@ -86,6 +86,12 @@ struct BufferView {
+ };
+ 
+ class BufferAllocation final : public Allocation {
++public:
++  uint64_t census_bytes_ = 0;   /* ml677 */
++  uint32_t census_storage_ = 0; /* ml678 */
++  uint32_t census_flags_ = 0;   /* ml678 */
++  const char *census_site_ = nullptr;   /* ml683: creation site label */
++
+   friend class Buffer;
+ 
+ public:
+@@ -183,7 +189,11 @@ public:
+     return current_.ptr();
+   }
+ 
+-  Rc<BufferAllocation> allocate(Flags<BufferAllocationFlag> flags);
++  /* ml683: __builtin_return_address(1) gave systematic but UNVERIFIABLE
++   * addresses -- nearest-symbol resolved 998MB to a pipeline constructor,
++   * which makes no sense. An explicit literal at each call site removes the
++   * guesswork entirely. */
++  Rc<BufferAllocation> allocate(Flags<BufferAllocationFlag> flags, const char *site = "?");
+   Rc<BufferAllocation> allocate(Flags<BufferAllocationFlag> flags, WMT::Heap heap, uint64_t heap_offset);
+ 
+   Rc<BufferAllocation> rename(Rc<BufferAllocation> &&newAllocation);
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index 5832bde..fc237fe 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -26,6 +26,7 @@
+ #include "wsi_platform.hpp"
+ #include <cstdint>
+ #include <cfloat>
++#include "dxmt_mem_census.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -61,6 +62,7 @@ ArgumentEncodingContext::ArgumentEncodingContext(CommandQueue &queue, WMT::Devic
+   dummy_cbuffer_info_.options = WMTResourceOptionCPUCacheModeWriteCombined | WMTResourceStorageModeShared |
+                                 WMTResourceHazardTrackingModeUntracked;
+   dummy_cbuffer_ = device.newBuffer(dummy_cbuffer_info_);
++  mem_census_add(MEMOWN_CONTEXT, dummy_cbuffer_info_.length);  /* ml677 */
+   std::memset(dummy_cbuffer_info_.memory.get(), 0, 65536);
+   cpu_buffer_chunks_.emplace_back();
+   barrier_event_ = device_.newEvent();
+diff --git a/src/dxmt/dxmt_dynamic.cpp b/src/dxmt/dxmt_dynamic.cpp
+index ce7941e..0c4f1eb 100644
+--- a/src/dxmt/dxmt_dynamic.cpp
++++ b/src/dxmt/dxmt_dynamic.cpp
+@@ -1,11 +1,18 @@
+ #include "dxmt_dynamic.hpp"
+ #include "dxmt_texture.hpp"
++#include "dxmt_mem_census.hpp"
+ 
+ namespace dxmt {
+ DynamicBuffer::DynamicBuffer(Buffer *buffer, Flags<BufferAllocationFlag> flags) :
+     buffer(buffer),
+     flags_(flags),
+-    name_(buffer->current()) {}
++    name_(buffer->current()) {
++  /* ml681 */
++  g_live_dynbuf.created.fetch_add(1, std::memory_order_relaxed);   /* ml684 */
++  census_id_ = g_dyn_next_id.fetch_add(1, std::memory_order_relaxed);
++  if (census_id_ < DYN_CENSUS_SLOTS)
++    g_dyn_stats[census_id_].length.store(buffer ? buffer->length() : 0, std::memory_order_relaxed);
++}
+ 
+ void
+ DynamicBuffer::incRef() {
+@@ -14,13 +21,20 @@ DynamicBuffer::incRef() {
+ 
+ void
+ DynamicBuffer::decRef() {
+-  if (refcount_.fetch_sub(1u, std::memory_order_release) == 1u)
++  if (refcount_.fetch_sub(1u, std::memory_order_release) == 1u) {
++    g_live_dynbuf.destroyed.fetch_add(1, std::memory_order_relaxed);   /* ml684 */
+     delete this;
++  }
+ };
+ 
+ Rc<BufferAllocation>
+ DynamicBuffer::allocate(uint64_t coherent_seq_id) {
+   std::lock_guard<dxmt::mutex> lock(mutex_);
++  /* ml685 TRIM REGRET: did we release something and then immediately have to
++   * allocate again? That -- not the raw churn count -- is what says the 64-entry
++   * reserve is too tight. Cleared every call, set only by an actual trim. */
++  const bool was_trimmed = trimmed_last_;
++  trimmed_last_ = false;
+   Rc<BufferAllocation> ret;
+   for (;;) {
+     if (fifo.empty()) {
+@@ -31,19 +45,129 @@ DynamicBuffer::allocate(uint64_t coherent_seq_id) {
+       break;
+     }
+     ret = std::move(entry.allocation);
+-    fifo.pop();
++    fifo.pop_front();
+     break;
+   }
+-  if (!ret.ptr())
+-    ret = buffer->allocate(flags_);
++  /* ml681: walk the retained set while we already hold the lock. eligible vs
++   * ineligible is the discriminator; min/max will_free_at shows whether the
++   * tail is fenced by one burst or spread across many sequences. */
++  /* ml685 DESIGN BUG, found by accident: this whole block -- INCLUDING THE TRIM
++   * -- used to sit behind `census_id_ < DYN_CENSUS_SLOTS`. Allocator behaviour
++   * was therefore decided by whether an object happened to fit in a DIAGNOSTIC
++   * table. With the table at 512 the trim only ever saw tiny constant buffers,
++   * freed nothing, and I read that as "nothing to free". Raising the table to
++   * 8192 for observability silently switched the trim on for the instances that
++   * held ~1GB, which is the entire reason memory dropped.
++   *
++   * The walk and the trim now run for EVERY instance; only the statistics are
++   * gated. Behaviour must never depend on diagnostic capacity. */
++  {
++    const bool stats = census_id_ < DYN_CENSUS_SLOTS;
++    uint64_t en = 0, eb = 0, in_n = 0, in_b = 0, lo = ~0ull, hi = 0, dup = 0;
++    const void *prev_seen[8] = {nullptr};
++    unsigned pi = 0;
++    for (const auto &e : fifo) {
++      uint64_t bytes = e.allocation.ptr() ? e.allocation->census_bytes_ : 0;
++      if (e.will_free_at <= coherent_seq_id) { en++; eb += bytes; }
++      else                                   { in_n++; in_b += bytes; }
++      if (e.will_free_at < lo) lo = e.will_free_at;
++      if (e.will_free_at > hi) hi = e.will_free_at;
++      for (unsigned k = 0; k < 8; k++)
++        if (prev_seen[k] && prev_seen[k] == (const void *)e.allocation.ptr()) { dup++; break; }
++      prev_seen[pi++ & 7] = (const void *)e.allocation.ptr();
++    }
++    if (stats) {
++      DynStat &st = g_dyn_stats[census_id_];
++      st.depth.store(fifo.size(), std::memory_order_relaxed);
++      st.eligible_n.store(en, std::memory_order_relaxed);
++      st.eligible_bytes.store(eb, std::memory_order_relaxed);
++      st.inelig_n.store(in_n, std::memory_order_relaxed);
++      st.inelig_bytes.store(in_b, std::memory_order_relaxed);
++      st.wfa_min.store(lo == ~0ull ? 0 : lo, std::memory_order_relaxed);
++      st.wfa_max.store(hi, std::memory_order_relaxed);
++      if (dup) st.dup_ptrs.fetch_add(dup, std::memory_order_relaxed);
++    }
++
++    /* ml681 SAFE TRIM. Release only entries the GPU has demonstrably finished
++     * with (will_free_at <= coherent_seq_id), and only the surplus beyond a
++     * working reserve. Entries are pushed in non-decreasing will_free_at order,
++     * so the eligible ones are exactly the front run -- stopping at the first
++     * ineligible entry is what makes this safe.
++     *
++     * A blanket depth cap would be a use-after-free: an entry whose
++     * will_free_at still exceeds coherent_seq_id can be in GPU use right now. */
++    enum { DYN_KEEP_ELIGIBLE = 64 };
++    if (en > DYN_KEEP_ELIGIBLE) {
++      uint64_t drop = en - DYN_KEEP_ELIGIBLE, freed = 0, freed_n = 0;
++      while (drop && !fifo.empty()) {
++        const QueueEntry &f = fifo.front();
++        if (f.will_free_at > coherent_seq_id) break;   /* never touch fenced */
++        freed += f.allocation.ptr() ? f.allocation->census_bytes_ : 0;
++        freed_n++;
++        fifo.pop_front();
++        drop--;
++      }
++      if (freed_n) {
++        trimmed_last_ = true;                  /* ml685: for trim-regret */
++        g_trim_total_n.fetch_add(freed_n, std::memory_order_relaxed);
++        g_trim_total_bytes.fetch_add(freed, std::memory_order_relaxed);
++        if (stats) {
++          DynStat &st = g_dyn_stats[census_id_];
++          st.trimmed_n.fetch_add(freed_n, std::memory_order_relaxed);
++          st.trimmed_bytes.fetch_add(freed, std::memory_order_relaxed);
++        }
++      }
++    }
++  }
++
++  /* ml684: report on SEQUENCE ADVANCEMENT, not only on memory high-water marks.
++   * Every prior census fired on a rising HWM, so once the footprint plateaued
++   * near jetsam the reports stopped -- exactly when the retained set was most
++   * interesting. Sampling on the fence means the burst is observed while it is
++   * happening. */
++  {
++    static std::atomic<uint64_t> last_reported{0};
++    uint64_t lr = last_reported.load(std::memory_order_relaxed);
++    if (coherent_seq_id >= lr + 30 &&
++        last_reported.compare_exchange_strong(lr, coherent_seq_id, std::memory_order_relaxed))
++      mem_census_report("seq");
++  }
++
++  /* ml680 */
++  g_mem_census.dyn_seq_coherent.store(coherent_seq_id, std::memory_order_relaxed);
++  g_mem_census.dyn_fifo_depth.store(fifo.size(), std::memory_order_relaxed);
++  {
++    uint64_t d = fifo.size(), mx = g_mem_census.dyn_fifo_depth_max.load(std::memory_order_relaxed);
++    while (d > mx && !g_mem_census.dyn_fifo_depth_max.compare_exchange_weak(mx, d, std::memory_order_relaxed)) {}
++    uint64_t cur = g_mem_census.dyn_seq_current.load(std::memory_order_relaxed);
++    if (cur > coherent_seq_id) {
++      uint64_t lag = cur - coherent_seq_id, lm = g_mem_census.dyn_seq_lag_max.load(std::memory_order_relaxed);
++      while (lag > lm && !g_mem_census.dyn_seq_lag_max.compare_exchange_weak(lm, lag, std::memory_order_relaxed)) {}
++    }
++  }
++  if (!ret.ptr()) {
++    g_mem_census.dyn_reuse_miss.fetch_add(1, std::memory_order_relaxed);
++    if (was_trimmed) g_trim_regret.fetch_add(1, std::memory_order_relaxed);   /* ml685 */
++    if (census_id_ < DYN_CENSUS_SLOTS) g_dyn_stats[census_id_].reuse_miss.fetch_add(1, std::memory_order_relaxed);
++    ret = buffer->allocate(flags_, "DynamicBuffer::allocate");
++  } else {
++    g_mem_census.dyn_reuse_hit.fetch_add(1, std::memory_order_relaxed);
++    if (census_id_ < DYN_CENSUS_SLOTS) {
++      g_dyn_stats[census_id_].reuse_hit.fetch_add(1, std::memory_order_relaxed);
++      g_dyn_stats[census_id_].pops.fetch_add(1, std::memory_order_relaxed);
++    }
++  }
+   return ret;
+ }
+ 
+ void
+ DynamicBuffer::updateImmediateName(uint64_t current_seq_id, Rc<BufferAllocation> &&allocation, uint32_t suballocation, bool owned_by_command_list) {
+   std::lock_guard<dxmt::mutex> lock(mutex_);
++  g_mem_census.dyn_seq_current.store(current_seq_id, std::memory_order_relaxed);   /* ml680 */
++  if (!owned_by_command_list_ && census_id_ < DYN_CENSUS_SLOTS)
++    g_dyn_stats[census_id_].push_update.fetch_add(1, std::memory_order_relaxed);   /* ml681 */
+   if (!owned_by_command_list_)
+-    fifo.push(QueueEntry{.allocation = std::move(name_), .will_free_at = current_seq_id});
++    fifo.push_back(QueueEntry{.allocation = std::move(name_), .will_free_at = current_seq_id});
+   name_ = std::move(allocation);
+   name_suballocation_ = suballocation;
+   owned_by_command_list_ = owned_by_command_list;
+@@ -59,7 +183,9 @@ DynamicBuffer::recycle(uint64_t current_seq_id, Rc<BufferAllocation> &&allocatio
+       return;
+     }
+   }
+-  fifo.push(QueueEntry{.allocation = std::move(allocation), .will_free_at = current_seq_id});
++  if (census_id_ < DYN_CENSUS_SLOTS)
++    g_dyn_stats[census_id_].push_recycle.fetch_add(1, std::memory_order_relaxed);   /* ml681 */
++  fifo.push_back(QueueEntry{.allocation = std::move(allocation), .will_free_at = current_seq_id});
+ }
+ 
+ uint32_t
+@@ -99,7 +225,7 @@ DynamicLinearTexture::allocate(uint64_t coherent_seq_id) {
+       break;
+     }
+     ret = std::move(entry.allocation);
+-    fifo.pop();
++    fifo.pop_front();
+     break;
+   }
+   if (!ret.ptr())
+@@ -111,7 +237,7 @@ void
+ DynamicLinearTexture::updateImmediateName(uint64_t current_seq_id, Rc<TextureAllocation> &&allocation, bool owned_by_command_list) {
+   std::lock_guard<dxmt::mutex> lock(mutex_);
+   if (!owned_by_command_list_)
+-    fifo.push(QueueEntry{.allocation = std::move(name_), .will_free_at = current_seq_id});
++    fifo.push_back(QueueEntry{.allocation = std::move(name_), .will_free_at = current_seq_id});
+   name_ = std::move(allocation);
+   owned_by_command_list_ = owned_by_command_list;
+ }
+@@ -126,7 +252,7 @@ DynamicLinearTexture::recycle(uint64_t current_seq_id, Rc<TextureAllocation> &&a
+       return;
+     }
+   }
+-  fifo.push(QueueEntry{.allocation = std::move(allocation), .will_free_at = current_seq_id});
++  fifo.push_back(QueueEntry{.allocation = std::move(allocation), .will_free_at = current_seq_id});
+ }
+ 
+ } // namespace dxmt
+diff --git a/src/dxmt/dxmt_dynamic.hpp b/src/dxmt/dxmt_dynamic.hpp
+index 9ee3b1d..38c9da3 100644
+--- a/src/dxmt/dxmt_dynamic.hpp
++++ b/src/dxmt/dxmt_dynamic.hpp
+@@ -1,7 +1,7 @@
+ #pragma once
+ #include "dxmt_buffer.hpp"
+ #include "dxmt_texture.hpp"
+-#include <queue>
++#include <deque>
+ 
+ namespace dxmt {
+ 
+@@ -45,11 +45,19 @@ public:
+ private:
+   Flags<BufferAllocationFlag> flags_;
+   std::atomic<uint32_t> refcount_ = {0u};
+-  std::queue<QueueEntry> fifo;
++  /* ml681: a deque, not a queue, purely so the retained set can be WALKED --
++   * eligible vs ineligible cannot be separated without iterating, and that
++   * distinction is the whole question. FIFO discipline is unchanged
++   * (push_back / pop_front). */
++  std::deque<QueueEntry> fifo;
++public:
++  uint32_t census_id_ = 0;      /* ml681: index into the per-instance stats */
++private:
+   dxmt::mutex mutex_;
+   Rc<BufferAllocation> name_;
+   uint32_t name_suballocation_ = 0;
+   bool owned_by_command_list_ = false;
++  bool trimmed_last_ = false;      /* ml685: trim-regret latch */
+ };
+ 
+ class DynamicLinearTexture {
+@@ -85,7 +93,7 @@ public:
+ private:
+   Flags<TextureAllocationFlag> flags_;
+   std::atomic<uint32_t> refcount_ = {0u};
+-  std::queue<QueueEntry> fifo;
++  std::deque<QueueEntry> fifo;
+   dxmt::mutex mutex_;
+   Rc<TextureAllocation> name_;
+   bool owned_by_command_list_ = false;
+diff --git a/src/dxmt/dxmt_mem_census.cpp b/src/dxmt/dxmt_mem_census.cpp
+new file mode 100644
+index 0000000..6fef2bf
+--- /dev/null
++++ b/src/dxmt/dxmt_mem_census.cpp
+@@ -0,0 +1,220 @@
++#include "dxmt_mem_census.hpp"
++#include "log/log.hpp"
++
++namespace dxmt {
++
++MemCensus g_mem_census{};
++DynStat g_dyn_stats[DYN_CENSUS_SLOTS]{};
++BufSite g_buf_sites[BSITE_SLOTS]{};
++LiveCount g_live_dynbuf{}, g_live_buffer{}, g_live_bufalloc{};
++std::atomic<uint64_t> g_trim_total_n{0}, g_trim_total_bytes{0}, g_trim_regret{0};
++
++static BufSite *
++buf_site_find(uint64_t ra) {
++  for (int i = 0; i < BSITE_SLOTS; i++) {
++    uint64_t cur = g_buf_sites[i].ra.load(std::memory_order_relaxed);
++    if (cur == ra) return &g_buf_sites[i];
++    if (cur == 0) {
++      uint64_t expect = 0;
++      if (g_buf_sites[i].ra.compare_exchange_strong(expect, ra, std::memory_order_relaxed))
++        return &g_buf_sites[i];
++      if (g_buf_sites[i].ra.load(std::memory_order_relaxed) == ra) return &g_buf_sites[i];
++    }
++  }
++  return nullptr;   /* more than 64 distinct sites: report says so via overflow */
++}
++
++void
++buf_site_add(uint64_t ra, uint64_t bytes) {
++  BufSite *s = buf_site_find(ra);
++  if (!s) return;
++  s->live_bytes.fetch_add(bytes, std::memory_order_relaxed);
++  s->live_n.fetch_add(1, std::memory_order_relaxed);
++  s->total_n.fetch_add(1, std::memory_order_relaxed);
++  s->total_bytes.fetch_add(bytes, std::memory_order_relaxed);
++}
++
++void
++buf_site_sub(uint64_t ra, uint64_t bytes) {
++  BufSite *s = buf_site_find(ra);
++  if (!s) return;
++  s->live_bytes.fetch_sub(bytes, std::memory_order_relaxed);
++  s->live_n.fetch_sub(1, std::memory_order_relaxed);
++}
++std::atomic<uint32_t> g_dyn_next_id{0};
++
++/* ml681: top-N by RETAINED ELIGIBLE bytes -- the only category that is both
++ * reclaimable and safe to reclaim. Ineligible bytes are reported beside it so
++ * "fenced by a burst" is visibly distinguishable from "stranded cache", but
++ * they are never candidates for release: an entry with
++ * will_free_at > coherent_seq_id may still be in GPU use. */
++void
++buf_site_report(void) {
++  {   /* ml683: sites are LABELS now, not return addresses. Also report what the
++       * site rows fail to account for -- if that gap is large, the memory is
++       * being created somewhere that never goes through Buffer::allocate. */
++    uint64_t sum = 0;
++    for (int i = 0; i < BSITE_SLOTS; i++)
++      if (g_buf_sites[i].ra.load()) sum += g_buf_sites[i].live_bytes.load();
++    uint64_t owner_live = g_mem_census.live[MEMOWN_BUFFER].load(std::memory_order_relaxed);
++    ERR("[buf-site] ml683 live buffer bytes by creation site -- sites total ", sum >> 20,
++        "MB vs owner census ", owner_live >> 20, "MB (unaccounted ",
++        owner_live > sum ? (owner_live - sum) >> 20 : 0, "MB)");
++  }
++  for (int rank = 0; rank < 10; rank++) {
++    int best = -1; uint64_t bestv = 0;
++    static int shown[10]; static int nshown;
++    if (rank == 0) nshown = 0;
++    for (int i = 0; i < BSITE_SLOTS; i++) {
++      bool dup = false;
++      for (int k = 0; k < nshown; k++) if (shown[k] == i) dup = true;
++      if (dup || !g_buf_sites[i].ra.load(std::memory_order_relaxed)) continue;
++      uint64_t v = g_buf_sites[i].live_bytes.load(std::memory_order_relaxed);
++      if (v > bestv) { bestv = v; best = i; }
++    }
++    if (best < 0 || !bestv) break;
++    shown[nshown++] = best;
++    BufSite &s = g_buf_sites[best];
++    const char *label = (const char *)(uintptr_t)s.ra.load();
++    ERR("[buf-site]   ", label ? label : "?", " live=", s.live_bytes.load() >> 20, "MB / ",
++        s.live_n.load(), " buffers  avg=",
++        s.live_n.load() ? (s.live_bytes.load() / s.live_n.load()) >> 10 : 0, "KB",
++        "  (ever: ", s.total_n.load(), " / ", s.total_bytes.load() >> 20, "MB)");
++  }
++}
++
++void
++dyn_census_report(void) {
++  uint32_t n = g_dyn_next_id.load(std::memory_order_relaxed);
++  if (n > DYN_CENSUS_SLOTS) n = DYN_CENSUS_SLOTS;
++  uint64_t tot_e = 0, tot_i = 0, tot_d = 0, tot_dup = 0, tot_tn = 0, tot_tb = 0;
++  for (uint32_t i = 0; i < n; i++) {
++    tot_e += g_dyn_stats[i].eligible_bytes.load(std::memory_order_relaxed);
++    tot_i += g_dyn_stats[i].inelig_bytes.load(std::memory_order_relaxed);
++    tot_d += g_dyn_stats[i].depth.load(std::memory_order_relaxed);
++    tot_dup += g_dyn_stats[i].dup_ptrs.load(std::memory_order_relaxed);
++    tot_tn += g_dyn_stats[i].trimmed_n.load(std::memory_order_relaxed);
++    tot_tb += g_dyn_stats[i].trimmed_bytes.load(std::memory_order_relaxed);
++  }
++  ERR("[live] ml684 DynamicBuffer created=", g_live_dynbuf.created.load(),
++      " destroyed=", g_live_dynbuf.destroyed.load(),
++      " LIVE=", g_live_dynbuf.created.load() - g_live_dynbuf.destroyed.load(),
++      " | Buffer created=", g_live_buffer.created.load(),
++      " destroyed=", g_live_buffer.destroyed.load(),
++      " LIVE=", g_live_buffer.created.load() - g_live_buffer.destroyed.load(),
++      " | BufferAllocation created=", g_live_bufalloc.created.load(),
++      " destroyed=", g_live_bufalloc.destroyed.load(),
++      " LIVE=", g_live_bufalloc.created.load() - g_live_bufalloc.destroyed.load());
++  {
++    uint64_t tn = g_trim_total_n.load(), tb = g_trim_total_bytes.load(), rg = g_trim_regret.load();
++    uint64_t miss = g_mem_census.dyn_reuse_miss.load(), hit = g_mem_census.dyn_reuse_hit.load();
++    ERR("[trim] ml685 ALL-instance totals: released ", tn, " entries / ", tb >> 20,
++        "MB | regret=", rg, " (allocations right after a trim on the same instance) = ",
++        miss ? (rg * 100 / miss) : 0, "% of misses | reuse ", hit, "/", hit + miss,
++        " = ", (hit + miss) ? (hit * 100 / (hit + miss)) : 0, "%");
++  }
++  ERR("[dyn-census] ml681 instances-tracked=", n, " instances-TOTAL=",
++      g_dyn_next_id.load(std::memory_order_relaxed),
++      " (ml682: the first number is CLAMPED to the table size -- ml681 printed"
++      " only the clamp and read as if it were the count)",
++      " retained entries=", tot_d,
++      " eligible=", tot_e >> 20, "MB ineligible=", tot_i >> 20,
++      "MB duplicate-ptrs=", tot_dup,
++      " | trimmed ", tot_tn, " entries / ", tot_tb >> 20, "MB");
++  /* top 8 by eligible bytes */
++  for (int rank = 0; rank < 8; rank++) {
++    uint32_t best = ~0u; uint64_t bestv = 0;
++    static uint32_t shown[8]; static int nshown;
++    if (rank == 0) nshown = 0;
++    for (uint32_t i = 0; i < n; i++) {
++      bool dup = false;
++      for (int k = 0; k < nshown; k++) if (shown[k] == i) dup = true;
++      if (dup) continue;
++      uint64_t v = g_dyn_stats[i].eligible_bytes.load(std::memory_order_relaxed);
++      if (v > bestv) { bestv = v; best = i; }
++    }
++    if (best == ~0u || !bestv) break;
++    shown[nshown++] = best;
++    DynStat &st = g_dyn_stats[best];
++    ERR("[dyn-census]   #", best, " len=", st.length.load(),
++        " depth=", st.depth.load(),
++        " eligible=", st.eligible_n.load(), "/", st.eligible_bytes.load() >> 20, "MB",
++        " inelig=", st.inelig_n.load(), "/", st.inelig_bytes.load() >> 20, "MB",
++        " wfa=[", st.wfa_min.load(), "..", st.wfa_max.load(), "]",
++        " push(update=", st.push_update.load(), " recycle=", st.push_recycle.load(), ")",
++        " reuse=", st.reuse_hit.load(), "/", st.reuse_hit.load() + st.reuse_miss.load(),
++        " dup=", st.dup_ptrs.load());
++  }
++}
++
++/* ml678: ml677's header claimed currentAllocatedSize would be printed "alongside"
++ * and then never implemented it, so the census reported REQUESTED capacity while
++ * reading as though it were physical footprint. Metal's own number is the only
++ * thing that reconciles our owner totals against tag 100. */
++static WMT::Device *g_census_device;
++
++void
++mem_census_set_device(WMT::Device *d) { g_census_device = d; }
++
++void
++mem_census_report(const char *why) {
++  uint64_t tl = 0, tp = 0, tr = 0;
++  for (int i = 0; i < MEMOWN_COUNT; i++) {
++    tl += g_mem_census.live[i].load(std::memory_order_relaxed);
++    tp += g_mem_census.peak[i].load(std::memory_order_relaxed);
++    tr += g_mem_census.requested[i].load(std::memory_order_relaxed);
++  }
++  uint64_t metal = g_census_device ? g_census_device->currentAllocatedSize() : 0;
++  ERR("[mem-census] ml678 why=", why, " LIVE=", tl >> 20, "MB peak-sum=", tp >> 20,
++      "MB requested=", tr >> 20, "MB | METAL currentAllocatedSize=", metal >> 20,
++      "MB (authoritative; our LIVE is requested capacity, not residency)");
++  for (int i = 0; i < MEMOWN_COUNT; i++) {
++    uint64_t l = g_mem_census.live[i].load(std::memory_order_relaxed);
++    uint64_t p = g_mem_census.peak[i].load(std::memory_order_relaxed);
++    if (!p) continue;
++    ERR("[mem-census]   ", kMemOwnerName[i],
++        " live=", l >> 20, "MB peak=", p >> 20,
++        "MB requested=", g_mem_census.requested[i].load(std::memory_order_relaxed) >> 20,
++        "MB allocs=", g_mem_census.allocs[i].load(std::memory_order_relaxed),
++        " frees=", g_mem_census.frees[i].load(std::memory_order_relaxed));
++  }
++
++  ERR("[mem-census]   buffers by size: ",
++      kBufBucketName[0], "=", g_mem_census.buf_bucket_live[0].load() >> 20, "MB/",
++      g_mem_census.buf_bucket_n[0].load(), "  ",
++      kBufBucketName[1], "=", g_mem_census.buf_bucket_live[1].load() >> 20, "MB/",
++      g_mem_census.buf_bucket_n[1].load(), "  ",
++      kBufBucketName[2], "=", g_mem_census.buf_bucket_live[2].load() >> 20, "MB/",
++      g_mem_census.buf_bucket_n[2].load(), "  ",
++      kBufBucketName[3], "=", g_mem_census.buf_bucket_live[3].load() >> 20, "MB/",
++      g_mem_census.buf_bucket_n[3].load(), "  ",
++      kBufBucketName[4], "=", g_mem_census.buf_bucket_live[4].load() >> 20, "MB/",
++      g_mem_census.buf_bucket_n[4].load());
++  ERR("[mem-census]   buffers by storage mode: ",
++      "shared=", g_mem_census.buf_storage_live[0].load() >> 20, "MB/", g_mem_census.buf_storage_n[0].load(),
++      "  managed=", g_mem_census.buf_storage_live[1].load() >> 20, "MB/", g_mem_census.buf_storage_n[1].load(),
++      "  private=", g_mem_census.buf_storage_live[2].load() >> 20, "MB/", g_mem_census.buf_storage_n[2].load(),
++      "  memoryless=", g_mem_census.buf_storage_live[3].load() >> 20, "MB/", g_mem_census.buf_storage_n[3].load());
++  ERR("[mem-census]   buffer flags n[GpuPrivate]=", g_mem_census.buf_flag_n[1].load(),
++      " n[CpuWriteCombined]=", g_mem_census.buf_flag_n[2].load(),
++      " n[OwnedByCommandList]=", g_mem_census.buf_flag_n[3].load(),
++      " n[GpuManaged]=", g_mem_census.buf_flag_n[4].load(),
++      " n[SuballocOnePage]=", g_mem_census.buf_flag_n[5].load(),
++      " n[CpuPlaced]=", g_mem_census.buf_flag_n[6].load(),
++      " | renames=", g_mem_census.buf_renames.load(),
++      " suballoc-padding=", g_mem_census.buf_suballoc_waste.load() >> 20, "MB");
++  dyn_census_report();
++  buf_site_report();
++  {
++    uint64_t hit = g_mem_census.dyn_reuse_hit.load(), miss = g_mem_census.dyn_reuse_miss.load();
++    ERR("[mem-census]   dynamic recycle: reuse-hit=", hit, " fresh=", miss,
++        " hit-rate=", (hit + miss) ? (hit * 100 / (hit + miss)) : 0, "%",
++        " | fifo depth=", g_mem_census.dyn_fifo_depth.load(),
++        " max=", g_mem_census.dyn_fifo_depth_max.load(),
++        " | seq current=", g_mem_census.dyn_seq_current.load(),
++        " coherent=", g_mem_census.dyn_seq_coherent.load(),
++        " lag-max=", g_mem_census.dyn_seq_lag_max.load());
++  }
++}
++
++} // namespace dxmt
+diff --git a/src/dxmt/dxmt_mem_census.hpp b/src/dxmt/dxmt_mem_census.hpp
+new file mode 100644
+index 0000000..03ccbdf
+--- /dev/null
++++ b/src/dxmt/dxmt_mem_census.hpp
+@@ -0,0 +1,280 @@
++#pragma once
++/* ============================================================================
++ * ml677 -- WHO OWNS THE GIGABYTE?
++ *
++ * The ml676 run reported `tag 100 total dirty=1380 MB` and I turned that into
++ * "1.38 GB of pinned GPU texture memory". Both halves were wrong:
++ *
++ *   - dirty is not residency, and
++ *   - tag 100 (VM_MEMORY_IOACCELERATOR) covers EVERY Metal allocation --
++ *     textures, buffers, ring blocks, upload heaps -- not textures alone.
++ *
++ * The BC textures cannot account for it either: under mip clamp 2 their whole
++ * physical backing is only ~210-250 MB. So something else holds the bulk, and
++ * until it is named, transcoding is a guess rather than a fix.
++ *
++ * This census attributes bytes to the DXMT owner that requested them, which is
++ * the one thing we can state exactly. Kernel residency is NOT attributable per
++ * owner here (Metal owns the pages), so it is deliberately not claimed --
++ * MTLDevice_currentAllocatedSize is printed alongside as Metal's own total, to
++ * reconcile the sum of our owners against the driver's view and against tag 100.
++ * ==========================================================================*/
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include "winemetal.h"
++#include "Metal.hpp"
++
++namespace dxmt {
++
++enum MemOwner {
++  MEMOWN_TEX_PRIVATE = 0,  /* device.newTexture / newSharedTexture   */
++  MEMOWN_TEX_LINEAR,       /* buffer-backed textures                 */
++  MEMOWN_BUFFER,           /* BufferAllocation (vertex/index/const)  */
++  MEMOWN_STAGING_RING,     /* RingBumpState 32MB staging blocks      */
++  MEMOWN_INIT_UPLOAD,      /* resource-initializer upload/zero heap  */
++  MEMOWN_PRESENTER,        /* gamma LUT etc.                         */
++  MEMOWN_CONTEXT,          /* dummy cbuffer etc.                     */
++  MEMOWN_COUNT
++};
++
++static const char *const kMemOwnerName[MEMOWN_COUNT] = {
++  "tex-private", "tex-linear", "buffer", "staging-ring",
++  "init-upload", "presenter", "context"
++};
++
++/* ml678: 16,597 buffer allocs against 4,802 frees, 1194MB live. That could be
++ * genuine geometry, suballocation rounding, or retained rename generations --
++ * the aggregate cannot tell them apart. Split by the axes that discriminate:
++ * storage mode (private/managed/shared decides WHERE the bytes live), the
++ * allocation flags, a size bucket, and how many of them are renames of an
++ * existing buffer rather than fresh resources. */
++enum BufSizeBucket {
++  BUFB_LE_4K = 0, BUFB_LE_64K, BUFB_LE_1M, BUFB_LE_16M, BUFB_GT_16M, BUFB_COUNT
++};
++static const char *const kBufBucketName[BUFB_COUNT] = {
++  "<=4K", "<=64K", "<=1M", "<=16M", ">16M"
++};
++
++struct MemCensus {
++  std::atomic<uint64_t> requested[MEMOWN_COUNT];  /* cumulative bytes ever asked for */
++  std::atomic<uint64_t> live[MEMOWN_COUNT];       /* bytes currently outstanding     */
++  std::atomic<uint64_t> peak[MEMOWN_COUNT];       /* high-water of live              */
++  std::atomic<uint64_t> allocs[MEMOWN_COUNT];     /* event counts, not log lines     */
++  std::atomic<uint64_t> frees[MEMOWN_COUNT];
++  std::atomic<uint64_t> report_hwm;               /* last total-live we reported at  */
++
++  /* buffer breakdown (ml678) */
++  std::atomic<uint64_t> buf_bucket_live[BUFB_COUNT];
++  std::atomic<uint64_t> buf_bucket_n[BUFB_COUNT];
++  std::atomic<uint64_t> buf_storage_live[4];     /* WMTResourceStorageMode 0..3 */
++  std::atomic<uint64_t> buf_storage_n[4];
++  std::atomic<uint64_t> buf_flag_n[8];           /* BufferAllocationFlag bits   */
++  std::atomic<uint64_t> buf_renames;             /* Buffer::rename() calls      */
++  std::atomic<uint64_t> buf_suballoc_waste;      /* padded bytes we asked for   */
++
++  /* ml680: DynamicBuffer recycling. allocs(16594) ~= renames(19063) says the
++   * FIFO almost never hands one back, but that alone cannot distinguish "the
++   * GPU is genuinely miles behind" from "the sequence ids are wired wrong".
++   * Measuring the lag directly separates them. */
++  std::atomic<uint64_t> dyn_reuse_hit;           /* popped a retired allocation */
++  std::atomic<uint64_t> dyn_reuse_miss;          /* had to allocate fresh       */
++  std::atomic<uint64_t> dyn_fifo_depth;          /* entries waiting             */
++  std::atomic<uint64_t> dyn_fifo_depth_max;
++  std::atomic<uint64_t> dyn_seq_current;         /* last current_seq_id seen    */
++  std::atomic<uint64_t> dyn_seq_coherent;        /* last coherent_seq_id seen   */
++  std::atomic<uint64_t> dyn_seq_lag_max;         /* worst current - coherent    */
++};
++
++/* ============================ ml681 ====================================
++ * ml680 showed the retained set is NOT a simple leak: the FIFO drained
++ * repeatedly early (814->125, 958->5, 209->0) and only later began climbing
++ * by exactly +204 per sample. So "pop one per call" is not the defect, and a
++ * blanket depth cap would be wrong -- an entry whose will_free_at exceeds
++ * coherent_seq_id may still be in GPU use, and dropping it is a use-after-free.
++ *
++ * The open question is WHICH of three shapes this is:
++ *   (a) the same allocation inserted twice (duplicate pointers),
++ *   (b) a legitimately large in-flight burst fenced by a 1-sequence lag,
++ *   (c) an eligible cache that never gets reused after the burst ends.
++ * Only (c) is safe to trim, and only the eligible part of it. These
++ * per-instance stats separate the three. */
++/* ml684: 512 was too small -- ml683 measured 4,659 DynamicBuffer instances, so
++ * the table only ever saw the first 512 (all tiny constant buffers) and I twice
++ * concluded "the FIFO holds 1MB" from a sample that structurally excluded the
++ * dominant instance. Size it above the observed population and report overflow
++ * explicitly so the clamp can never masquerade as a census again. */
++enum { DYN_CENSUS_SLOTS = 8192 };
++
++struct DynStat {
++  std::atomic<uint64_t> length;          /* per-allocation size            */
++  std::atomic<uint64_t> push_update;     /* from updateImmediateName()     */
++  std::atomic<uint64_t> push_recycle;    /* from recycle()                 */
++  std::atomic<uint64_t> pops;
++  std::atomic<uint64_t> reuse_hit;
++  std::atomic<uint64_t> reuse_miss;
++  std::atomic<uint64_t> depth;           /* entries retained now           */
++  std::atomic<uint64_t> eligible_n;      /* will_free_at <= coherent       */
++  std::atomic<uint64_t> eligible_bytes;
++  std::atomic<uint64_t> inelig_n;
++  std::atomic<uint64_t> inelig_bytes;
++  std::atomic<uint64_t> wfa_min;
++  std::atomic<uint64_t> wfa_max;
++  std::atomic<uint64_t> dup_ptrs;        /* same allocation seen twice     */
++  std::atomic<uint64_t> trimmed_n;       /* released by the eligible trim  */
++  std::atomic<uint64_t> trimmed_bytes;
++};
++
++/* ============================ ml682 ====================================
++ * The retained gigabyte is ~6,769 live buffers of ~165KB. It is NOT the
++ * DynamicBuffer recycle FIFOs (those hold 1MB of 16-1136 byte constant
++ * buffers) and NOT suballocation rounding (DXMT_PAGE_SIZE is 4096, so the
++ * 14,061 rounded buffers cost ~56MB). Two guesses at the owner, both wrong.
++ *
++ * So stop guessing: record WHERE each BufferAllocation was created from, by
++ * return address, and rank live bytes by site. The addresses symbolize offline
++ * against d3d11.dll, so this names the caller without threading an enum
++ * through every layer. */
++enum { BSITE_SLOTS = 64 };
++struct BufSite {
++  std::atomic<uint64_t> ra;          /* return address of the creator */
++  std::atomic<uint64_t> live_bytes;
++  std::atomic<uint64_t> live_n;
++  std::atomic<uint64_t> total_n;
++  std::atomic<uint64_t> total_bytes;
++};
++extern BufSite g_buf_sites[BSITE_SLOTS];
++
++/* Charge/refund a buffer against its creation site. Linear scan over 64 slots
++ * is fine: the number of distinct sites is tiny and fixed by the code. */
++void buf_site_add(uint64_t ra, uint64_t bytes);
++void buf_site_sub(uint64_t ra, uint64_t bytes);
++
++extern DynStat g_dyn_stats[DYN_CENSUS_SLOTS];
++extern std::atomic<uint32_t> g_dyn_next_id;
++
++/* ml684: created vs destroyed vs LIVE. ml683 could only report cumulative
++ * creations, which cannot distinguish "the game really has 4,659 dynamic
++ * buffers" from "we leak the objects". Those have opposite fixes. */
++struct LiveCount {
++  std::atomic<uint64_t> created;
++  std::atomic<uint64_t> destroyed;
++};
++extern LiveCount g_live_dynbuf, g_live_buffer, g_live_bufalloc;
++
++/* ml685: trim totals across ALL instances (the per-instance rows only cover the
++ * first DYN_CENSUS_SLOTS, and reading a clamped subtotal as a total is exactly
++ * how the last three wrong conclusions happened). g_trim_regret counts the
++ * allocations that immediately followed a trim on the same instance. */
++extern std::atomic<uint64_t> g_trim_total_n, g_trim_total_bytes, g_trim_regret;
++
++void dyn_census_report(void);
++void buf_site_report(void);
++
++extern MemCensus g_mem_census;
++
++inline BufSizeBucket
++mem_census_bucket(uint64_t n) {
++  if (n <= (4ull << 10))  return BUFB_LE_4K;
++  if (n <= (64ull << 10)) return BUFB_LE_64K;
++  if (n <= (1ull << 20))  return BUFB_LE_1M;
++  if (n <= (16ull << 20)) return BUFB_LE_16M;
++  return BUFB_GT_16M;
++}
++
++/* Charged alongside mem_census_add(MEMOWN_BUFFER, ...) so the split always
++ * reconciles against the owner total. */
++inline void
++mem_census_buffer_detail(uint64_t bytes, uint32_t storage_mode, uint32_t flag_bits, int add) {
++  BufSizeBucket b = mem_census_bucket(bytes);
++  if (add) {
++    g_mem_census.buf_bucket_live[b].fetch_add(bytes, std::memory_order_relaxed);
++    g_mem_census.buf_bucket_n[b].fetch_add(1, std::memory_order_relaxed);
++    g_mem_census.buf_storage_live[storage_mode & 3].fetch_add(bytes, std::memory_order_relaxed);
++    g_mem_census.buf_storage_n[storage_mode & 3].fetch_add(1, std::memory_order_relaxed);
++    for (int i = 0; i < 8; i++)
++      if (flag_bits & (1u << i)) g_mem_census.buf_flag_n[i].fetch_add(1, std::memory_order_relaxed);
++  } else {
++    g_mem_census.buf_bucket_live[b].fetch_sub(bytes, std::memory_order_relaxed);
++    g_mem_census.buf_storage_live[storage_mode & 3].fetch_sub(bytes, std::memory_order_relaxed);
++  }
++}
++
++void mem_census_report(const char *why);
++void mem_census_set_device(WMT::Device *d);   /* ml678 */
++
++inline void
++mem_census_add(MemOwner o, uint64_t bytes) {
++  if (!bytes) return;
++  g_mem_census.requested[o].fetch_add(bytes, std::memory_order_relaxed);
++  g_mem_census.allocs[o].fetch_add(1, std::memory_order_relaxed);
++  uint64_t now = g_mem_census.live[o].fetch_add(bytes, std::memory_order_relaxed) + bytes;
++  uint64_t prev = g_mem_census.peak[o].load(std::memory_order_relaxed);
++  while (now > prev && !g_mem_census.peak[o].compare_exchange_weak(prev, now, std::memory_order_relaxed)) {}
++
++  /* Report on a rising high-water mark so the census is guaranteed to be
++   * sampled NEAR THE PEAK -- ml664 quoted a stale lower bound because the run
++   * ended between fixed-interval samples. 64MB steps keep it quiet. */
++  uint64_t total = 0;
++  for (int i = 0; i < MEMOWN_COUNT; i++)
++    total += g_mem_census.live[i].load(std::memory_order_relaxed);
++  uint64_t hwm = g_mem_census.report_hwm.load(std::memory_order_relaxed);
++  if (total > hwm + (64ull << 20) &&
++      g_mem_census.report_hwm.compare_exchange_strong(hwm, total, std::memory_order_relaxed))
++    mem_census_report("hwm");
++}
++
++inline void
++mem_census_sub(MemOwner o, uint64_t bytes) {
++  if (!bytes) return;
++  g_mem_census.frees[o].fetch_add(1, std::memory_order_relaxed);
++  g_mem_census.live[o].fetch_sub(bytes, std::memory_order_relaxed);
++}
++
++/* Physical bytes a texture will actually occupy. On A15 every BC format is
++ * remapped by remap_unsupported_bc() before Metal ever sees it, so the cost is
++ * the DECODED size -- which is the entire point of measuring: BC1->RGBA8 is 8x,
++ * BC6H->RGBA16F is 8x, BC7->RGBA8 is 4x. Counting compressed bytes here would
++ * hide exactly the expansion we are hunting. */
++inline uint32_t
++mem_census_texel_bytes(enum WMTPixelFormat f) {
++  switch (f) {
++  case WMTPixelFormatBC4_RUnorm: case WMTPixelFormatBC4_RSnorm:
++  case WMTPixelFormatR8Unorm: case WMTPixelFormatR8Snorm:
++  case WMTPixelFormatA8Unorm: case WMTPixelFormatR8Uint: case WMTPixelFormatR8Sint:
++    return 1;
++  case WMTPixelFormatBC5_RGUnorm: case WMTPixelFormatBC5_RGSnorm:
++  case WMTPixelFormatRG8Unorm: case WMTPixelFormatRG8Snorm:
++  case WMTPixelFormatR16Float: case WMTPixelFormatR16Uint: case WMTPixelFormatR16Sint:
++  case WMTPixelFormatR16Unorm: case WMTPixelFormatR16Snorm:
++  case WMTPixelFormatDepth16Unorm:
++    return 2;
++  case WMTPixelFormatBC6H_RGBFloat: case WMTPixelFormatBC6H_RGBUfloat:
++  case WMTPixelFormatRGBA16Float: case WMTPixelFormatRGBA16Uint:
++  case WMTPixelFormatRGBA16Sint: case WMTPixelFormatRGBA16Unorm:
++  case WMTPixelFormatRG32Float: case WMTPixelFormatRG32Uint: case WMTPixelFormatRG32Sint:
++    return 8;
++  case WMTPixelFormatRGBA32Float: case WMTPixelFormatRGBA32Uint: case WMTPixelFormatRGBA32Sint:
++    return 16;
++  default:
++    return 4;   /* RGBA8/BGRA8/BC1/BC2/BC3/BC7-as-RGBA8/depth32/etc. */
++  }
++}
++
++inline uint64_t
++mem_census_texture_bytes(const WMTTextureInfo &info) {
++  const uint32_t bpp = mem_census_texel_bytes(info.pixel_format);
++  const uint32_t levels = info.mipmap_level_count ? info.mipmap_level_count : 1u;
++  const uint32_t slices = info.array_length ? info.array_length : 1u;
++  const uint32_t samples = info.sample_count ? info.sample_count : 1u;
++  uint64_t total = 0;
++  for (uint32_t l = 0; l < levels; l++) {
++    uint32_t w = info.width  >> l ? info.width  >> l : 1u;
++    uint32_t h = info.height >> l ? info.height >> l : 1u;
++    uint32_t d = info.depth  >> l ? info.depth  >> l : 1u;
++    total += (uint64_t)w * h * d * bpp;
++  }
++  return total * slices * samples;
++}
++
++} // namespace dxmt
+diff --git a/src/dxmt/dxmt_presenter.cpp b/src/dxmt/dxmt_presenter.cpp
+index 3184b7b..fab69d5 100644
+--- a/src/dxmt/dxmt_presenter.cpp
++++ b/src/dxmt/dxmt_presenter.cpp
+@@ -4,6 +4,7 @@
+ #include "dxmt_format.hpp"
+ #include "dxmt_presenter.hpp"
+ #include "util_likely.hpp"
++#include "dxmt_mem_census.hpp"
+ 
+ 
+ namespace dxmt {
+@@ -32,6 +33,7 @@ Presenter::Presenter(WMT::Device device, WMT::MetalLayer layer, InternalCommandL
+   texture_info.sample_count = 1;
+   texture_info.array_length = 1;
+   gamma_lut_texture_ = device.newTexture(texture_info);
++  mem_census_add(MEMOWN_PRESENTER, mem_census_texture_bytes(texture_info));  /* ml677 */
+ }
+ 
+ bool
+diff --git a/src/dxmt/dxmt_resource_initializer.cpp b/src/dxmt/dxmt_resource_initializer.cpp
+index 8064ed5..7742fe4 100644
+--- a/src/dxmt/dxmt_resource_initializer.cpp
++++ b/src/dxmt/dxmt_resource_initializer.cpp
+@@ -23,6 +23,8 @@
+ #include "util_math.hpp"
+ #include <cstdint>
+ #include <mutex>
++#include "dxmt_mem_census.hpp"
++#include "dxmt_bcn.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -308,37 +310,131 @@ static void bc3_block(const uint8_t *blk, uint8_t out[64]) {
+  * ROW OF BLOCKS); dst is tightly packed RGBA8 at width*4. Edge blocks are
+  * decoded in full and clipped, which is what the BC spec requires for
+  * non-multiple-of-4 dimensions. */
++/* Physical bytes per texel produced by each decode kind. */
++static inline uint32_t bc_decode_texel_size(int kind) {
++  switch (kind) {
++  case 4: case 14: return 1;   /* BC4 -> R8  */
++  case 5: case 15: return 2;   /* BC5 -> RG8 */
++  default:         return 4;   /* BC1/2/3/7 -> RGBA8 */
++  }
++}
++
+ static void bc_decode_image(const uint8_t *src, size_t src_pitch, uint8_t *dst, uint32_t width,
+-                            uint32_t height, bool is_bc3) {
++                            uint32_t height, int kind) {
+   const uint32_t bx_n = (width + 3) / 4, by_n = (height + 3) / 4;
+-  const size_t blk_bytes = is_bc3 ? 16 : 8;
+-  const size_t dst_pitch = (size_t)width * 4;
++  const size_t blk_bytes = (kind == 1 || kind == 4 || kind == 14) ? 8 : 16;
++  const uint32_t tsz = bc_decode_texel_size(kind);
++  const size_t dst_pitch = (size_t)width * tsz;
+   uint8_t texels[64];
+   for (uint32_t by = 0; by < by_n; by++) {
+     const uint8_t *row = src + (size_t)by * src_pitch;
+     for (uint32_t bx = 0; bx < bx_n; bx++) {
+-      if (is_bc3) bc3_block(row + bx * blk_bytes, texels);
+-      else        bc1_block(row + bx * blk_bytes, texels, /*punchthrough=*/true);
++      const uint8_t *b = row + bx * blk_bytes;
++      switch (kind) {
++      case 1:  bcn_bc1_block(b, texels, /*punchthrough=*/true); break;
++      case 2:  bcn_bc2_block(b, texels); break;
++      case 3:  bcn_bc3_block(b, texels); break;
++      case 4:  bcn_bc4_block(b, texels, false); break;
++      case 14: bcn_bc4_block(b, texels, true);  break;
++      case 5:  bcn_bc5_block(b, texels, false); break;
++      case 15: bcn_bc5_block(b, texels, true);  break;
++      case 7:  bcn_bc7_block(b, texels); break;
++      default: memset(texels, 0, sizeof(texels)); break;
++      }
+       for (uint32_t ty = 0; ty < 4; ty++) {
+         const uint32_t y = by * 4 + ty;
+         if (y >= height) break;
+         for (uint32_t tx = 0; tx < 4; tx++) {
+           const uint32_t x = bx * 4 + tx;
+           if (x >= width) break;
+-          memcpy(dst + (size_t)y * dst_pitch + (size_t)x * 4, texels + (ty * 4 + tx) * 4, 4);
++          memcpy(dst + (size_t)y * dst_pitch + (size_t)x * tsz,
++                 texels + (size_t)(ty * 4 + tx) * tsz, tsz);
+         }
+       }
+     }
+   }
+ }
+ 
++
++/* ml676: which REMAPPED formats came from a BC source we cannot decode yet, and
++ * what does one physical texel cost. Mirrors remap_unsupported_bc() in
++ * winemetal_unix.c -- BC4->R8, BC5->RG8, BC7->RGBA8, BC6H->RGBA16F. BC1/BC3
++ * also remap to RGBA8 but they DO decode, so they never reach here. */
++static inline bool bc_is_unsupported_src(enum WMTPixelFormat f) {
++  /* Test the SOURCE format: texture->pixelFormat() is still the BC format here
++   * (remap_unsupported_bc runs later, when the MTLTexture is created), which is
++   * exactly why bc_decode_kind can match on BC1/BC3 at all. */
++  switch (f) {
++  case WMTPixelFormatBC6H_RGBFloat: case WMTPixelFormatBC6H_RGBUfloat:
++    return true;                 /* ml679: the only format still synthesised */
++  default:
++    return false;
++  }
++}
++
++/* Physical texel size AFTER remap_unsupported_bc: BC4->R8, BC5->RG8,
++ * BC6H->RGBA16F, BC7/BC2->RGBA8. */
++static inline uint32_t bc_fill_texel_size(enum WMTPixelFormat f) {
++  switch (f) {
++  case WMTPixelFormatBC4_RUnorm:  case WMTPixelFormatBC4_RSnorm:    return 1;
++  case WMTPixelFormatBC5_RGUnorm: case WMTPixelFormatBC5_RGSnorm:   return 2;
++  case WMTPixelFormatBC6H_RGBFloat: case WMTPixelFormatBC6H_RGBUfloat: return 8;
++  default:                                                          return 4;
++  }
++}
++
++/* Deterministic, obviously-synthetic, and different per format so the screen
++ * names the culprit. Varies slightly per mip so mip selection is visible too. */
++static void bc_fill_pattern(enum WMTPixelFormat f, uint8_t *dst, uint32_t w, uint32_t h, uint32_t level) {
++  const uint32_t cell = 16u >> (level > 3 ? 3 : level);
++  for (uint32_t y = 0; y < h; y++) {
++    for (uint32_t x = 0; x < w; x++) {
++      const bool on = (((x / (cell ? cell : 1)) ^ (y / (cell ? cell : 1))) & 1u) != 0;
++      switch (f) {
++      case WMTPixelFormatBC4_RUnorm: case WMTPixelFormatBC4_RSnorm:
++        dst[(size_t)y * w + x] = on ? 0xC0 : 0x40;                    /* mid-grey mask */
++        break;
++      case WMTPixelFormatBC5_RGUnorm: case WMTPixelFormatBC5_RGSnorm: {
++        uint8_t *p = dst + ((size_t)y * w + x) * 2;
++        p[0] = 0x80; p[1] = 0x80;                                     /* flat normal */
++        break;
++      }
++      case WMTPixelFormatBC6H_RGBFloat: case WMTPixelFormatBC6H_RGBUfloat: {
++        /* ml677 A/B: was (0.125, 0.5, 1.0) -- a strong blue. BC6H is Unity's
++         * sky and reflection probes, so that fill became the ambient light for
++         * the whole scene and everything read blue. Neutral grey (0.25) tests
++         * that directly: if the blue cast goes away, BC6H was the cause; if it
++         * survives, the tint is coming from somewhere else entirely. */
++        uint16_t *p = (uint16_t *)(dst + ((size_t)y * w + x) * 8);
++        p[0] = 0x3400; p[1] = 0x3400; p[2] = 0x3400; p[3] = 0x3C00;   /* neutral grey 0.25 */
++        break;
++      }
++      default: {
++        uint8_t *p = dst + ((size_t)y * w + x) * 4;
++        p[0] = on ? 0xFF : 0x00; p[1] = 0x00; p[2] = on ? 0xFF : 0x00; p[3] = 0xFF; /* magenta checks */
++        break;
++      }
++      }
++    }
++  }
++}
++
++/* ml679: 1=BC1 2=BC2 3=BC3 4=BC4u 5=BC5u 7=BC7 14=BC4s 15=BC5s. BC6H returns 0
++ * and is still handled by the deterministic fill above. */
+ static inline int bc_decode_kind(enum WMTPixelFormat f) {
+   switch (f) {
+   case WMTPixelFormatBC1_RGBA: case WMTPixelFormatBC1_RGBA_sRGB: return 1;
++  case WMTPixelFormatBC2_RGBA: case WMTPixelFormatBC2_RGBA_sRGB: return 2;
+   case WMTPixelFormatBC3_RGBA: case WMTPixelFormatBC3_RGBA_sRGB: return 3;
++  case WMTPixelFormatBC4_RUnorm:  return 4;
++  case WMTPixelFormatBC4_RSnorm:  return 14;
++  case WMTPixelFormatBC5_RGUnorm: return 5;
++  case WMTPixelFormatBC5_RGSnorm: return 15;
++  case WMTPixelFormatBC7_RGBAUnorm: case WMTPixelFormatBC7_RGBAUnorm_sRGB: return 7;
+   default: return 0;
+   }
+ }
++
+ /* ===================== end ml654 BC1/BC3 -> RGBA8 DECODE ==================== */
+ 
+ uint64_t
+@@ -387,22 +483,75 @@ ResourceInitializer::initWithData(
+    * the upload gets dropped. 3D is excluded — no BC volume textures observed, and
+    * guessing at slice pitches here is how you get silent corruption. */
+   std::unique_ptr<uint8_t[]> decoded;
++  /* ---- ml676: NEVER UPLOAD RAW BC BYTES AS UNCOMPRESSED TEXELS ----------
++   *
++   * remap_unsupported_bc() swaps every BC format for an uncompressed one on
++   * A15, but bc_decode_kind() only knows BC1 and BC3. BC4/BC5/BC6H/BC7 fell
++   * straight through this branch and were uploaded ANYWAY -- compressed block
++   * bytes written into a texture that Metal now believes is RGBA8/R8/RG8/
++   * RGBA16F.
++   *
++   * That is not merely ugly. The staging suballocation is sized from the
++   * COMPRESSED byte count while the copy is issued for the DECODED extent, so
++   * Metal reads past the allocation: 4x over for BC7, 4x for BC4 (1 byte/px
++   * physical vs 0.5 compressed), 8x for BC6H. It stays inside the 32MB staging
++   * block, but it crosses into neighbouring or stale texture contents -- an
++   * out-of-bounds read, and the source of the striped garbage seen in Book of
++   * the Dead's control overlay (a BC7 block-row is exactly one RGBA8 pixel row,
++   * so the data filled full width at quarter height).
++   *
++   * Until each format has a real decoder, synthesise a full-size deterministic
++   * pattern in the CORRECT physical format. Bounded, obviously synthetic, and
++   * diagnostic: if geometry lights up in these colours then missing BC formats
++   * are the whole story, and if it stays black the problem is elsewhere. */
++  if (!is_3d_tex && !device_.supportsBCTextureCompression() &&
++      bc_decode_kind(texture->pixelFormat()) == 0 && bc_is_unsupported_src(texture->pixelFormat())) {
++    /* ml679: BC1/BC2/BC3/BC4/BC5/BC7 all decode for real now, so only BC6H
++     * still reaches this fill. Keeping the path (rather than deleting it) is
++     * what guarantees no raw BC bytes are ever uploaded for a format we have
++     * not yet implemented -- that was a memory-safety bug, not a cosmetic one. */
++    const uint32_t fill_texel = bc_fill_texel_size(texture->pixelFormat());
++    const size_t out_bytes = (size_t)width_sub * height_sub * fill_texel;
++    decoded.reset(new (std::nothrow) uint8_t[out_bytes]);
++    if (!decoded) {
++      ERR("[bc-fill] ml676 OOM for ", width_sub, "x", height_sub, " -- upload SKIPPED (was unsafe)");
++      return 0;
++    }
++    bc_fill_pattern(texture->pixelFormat(), decoded.get(), width_sub, height_sub, level);
++    data = decoded.get();
++    block_size = 1u;
++    texel_size = fill_texel;
++    row_pitch = (size_t)width_sub * fill_texel;
++    depth_pitch = out_bytes;
++    static unsigned fn;
++    if (fn < 6 || (fn & 0xff) == 0)
++      ERR("[bc-fill] ml676 #", fn, " unsupported BC fmt=", (unsigned)texture->pixelFormat(), " ",
++          width_sub, "x", height_sub, " level=", level, " -> ", fill_texel, "B/texel pattern (",
++          out_bytes, "B). Raw-BC upload suppressed.");
++    fn++;
++  }
++
+   const int bc_kind = bc_decode_kind(texture->pixelFormat());
+   if (bc_kind && !is_3d_tex && !device_.supportsBCTextureCompression()) {
+-    const size_t out_bytes = (size_t)width_sub * height_sub * 4;
++    const uint32_t out_texel = bc_decode_texel_size(bc_kind);
++    const size_t out_bytes = (size_t)width_sub * height_sub * out_texel;
+     decoded.reset(new (std::nothrow) uint8_t[out_bytes]);
+     if (decoded) {
+-      bc_decode_image((const uint8_t *)data, row_pitch, decoded.get(), width_sub, height_sub,
+-                      bc_kind == 3);
++      bc_decode_image((const uint8_t *)data, row_pitch, decoded.get(), width_sub, height_sub, bc_kind);
+       data = decoded.get();
+-      block_size = 1u;                 /* physical RGBA8 is not block-compressed */
+-      texel_size = 4u;
+-      row_pitch = (size_t)width_sub * 4;
++      block_size = 1u;                 /* decoded output is not block-compressed */
++      texel_size = out_texel;
++      row_pitch = (size_t)width_sub * out_texel;
+       depth_pitch = out_bytes;
++      static const char *const kName[] = {
++        "?", "BC1", "BC2", "BC3", "BC4u", "BC5u", "?", "BC7",
++        "?", "?", "?", "?", "?", "?", "BC4s", "BC5s"
++      };
+       static unsigned n;
+-      if (n < 4 || (n & 0x7f) == 0)
+-        ERR("[bc-decode] ml654 #", n, " ", (bc_kind == 3 ? "BC3" : "BC1"), " ", width_sub, "x",
+-            height_sub, " level=", level, " slice=", slice, " -> RGBA8 ", out_bytes, "B");
++      if (n < 6 || (n & 0x1ff) == 0)
++        ERR("[bc-decode] ml679 #", n, " ", kName[bc_kind & 15], " ", width_sub, "x",
++            height_sub, " level=", level, " slice=", slice, " -> ", out_texel, "B/texel ",
++            out_bytes, "B");
+       n++;
+     } else {
+       ERR("[bc-decode] ml654 OOM decoding ", width_sub, "x", height_sub, " — upload skipped");
+@@ -629,6 +778,7 @@ ResourceInitializer::allocateZeroBuffer(size_t size) {
+     buffer_info.memory.set(nullptr);
+     buffer_info.options = WMTResourceStorageModePrivate | WMTResourceHazardTrackingModeUntracked;
+     zero_buffer_ = device_.newBuffer(buffer_info);
++    mem_census_add(MEMOWN_INIT_UPLOAD, buffer_info.length);  /* ml677 */
+     zero_buffer_size_ = size;
+ 
+     fill->type = WMTBlitCommandFillBuffer;
+diff --git a/src/dxmt/dxmt_ring_bump_allocator.hpp b/src/dxmt/dxmt_ring_bump_allocator.hpp
+index 5c92d92..b43970b 100644
+--- a/src/dxmt/dxmt_ring_bump_allocator.hpp
++++ b/src/dxmt/dxmt_ring_bump_allocator.hpp
+@@ -6,6 +6,7 @@
+ #include "util_math.hpp"
+ #include <mutex>
+ #include <queue>
++#include "dxmt_mem_census.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -96,11 +97,14 @@ public:
+     void *mapped_address;
+ 
+     ~Block() {
++      mem_census_sub(MEMOWN_STAGING_RING, census_bytes);   /* ml677 */
++      census_bytes = 0;
+       if (mapped_address) {
+         free(mapped_address);
+         mapped_address = nullptr;
+       }
+     };
++    uint64_t census_bytes = 0;                             /* ml677 */
+ 
+     Block() = default;
+ 
+@@ -109,6 +113,8 @@ public:
+       buffer = std::move(move.buffer);
+       gpu_address = move.gpu_address;
+       mapped_address = move.mapped_address;
++      census_bytes = move.census_bytes;                    /* ml677: move the debt too */
++      move.census_bytes = 0;
+       move.mapped_address = nullptr;
+     };
+   };
+@@ -123,6 +129,8 @@ public:
+     info.length = block_size;
+     block.buffer = device_.newBuffer(info);
+     block.gpu_address = info.gpu_address;
++    block.census_bytes = block_size;                       /* ml677 */
++    mem_census_add(MEMOWN_STAGING_RING, block_size);
+     return block;
+   };
+ 
+diff --git a/src/dxmt/dxmt_staging.cpp b/src/dxmt/dxmt_staging.cpp
+index 80a3d62..1a86392 100644
+--- a/src/dxmt/dxmt_staging.cpp
++++ b/src/dxmt/dxmt_staging.cpp
+@@ -80,7 +80,7 @@ StagingResource::allocate(uint64_t coherent_seq_id) {
+ #ifdef __i386__
+     flags.set(BufferAllocationFlag::CpuPlaced);
+ #endif
+-    buffer_pool.push_back(buffer_->allocate(flags));
++    buffer_pool.push_back(buffer_->allocate(flags, "StagingResource::pool"));
+     ret = buffer_pool.size() - 1;
+   }
+   return ret;
+diff --git a/src/dxmt/dxmt_texture.cpp b/src/dxmt/dxmt_texture.cpp
+index 0e5b4bd..e367bc8 100644
+--- a/src/dxmt/dxmt_texture.cpp
++++ b/src/dxmt/dxmt_texture.cpp
+@@ -21,6 +21,7 @@
+ #include "wsi_platform.hpp"
+ #include <atomic>
+ #include <cassert>
++#include "dxmt_mem_census.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -90,6 +91,7 @@ TextureAllocation::TextureAllocation(
+ 
+ void
+ TextureAllocation::free(){
++  mem_census_sub((MemOwner)census_owner_, census_bytes_);   /* ml677 */
+ #ifdef __i386__
+   wsi::aligned_free(mappedMemory);
+ #endif
+@@ -197,10 +199,18 @@ Texture::allocate(Flags<TextureAllocationFlag> flags) {
+     buffer_info.memory.set(wsi::aligned_malloc(bytes_per_image_, DXMT_PAGE_SIZE));
+ #endif
+     auto buffer = device_.newBuffer(buffer_info);
+-    return new TextureAllocation(this, std::move(buffer), buffer_info.memory.get(), info, bytes_per_row_, flags);
++    auto *ta = new TextureAllocation(this, std::move(buffer), buffer_info.memory.get(), info, bytes_per_row_, flags);
++    ta->census_owner_ = MEMOWN_TEX_LINEAR;                 /* ml677 */
++    ta->census_bytes_ = bytes_per_image_;
++    mem_census_add(MEMOWN_TEX_LINEAR, ta->census_bytes_);
++    return ta;
+   }
+   auto texture = flags.test(TextureAllocationFlag::Shared) ? device_.newSharedTexture(info) : device_.newTexture(info);
+-  return new TextureAllocation(this, std::move(texture), info, flags);
++  auto *ta = new TextureAllocation(this, std::move(texture), info, flags);
++  ta->census_owner_ = MEMOWN_TEX_PRIVATE;                  /* ml677 */
++  ta->census_bytes_ = mem_census_texture_bytes(info);
++  mem_census_add(MEMOWN_TEX_PRIVATE, ta->census_bytes_);
++  return ta;
+ }
+ 
+ Rc<TextureAllocation>
+diff --git a/src/dxmt/dxmt_texture.hpp b/src/dxmt/dxmt_texture.hpp
+index ba57499..70d0f9b 100644
+--- a/src/dxmt/dxmt_texture.hpp
++++ b/src/dxmt/dxmt_texture.hpp
+@@ -129,6 +129,11 @@ public:
+ class TextureAllocation final : public Allocation {
+   friend class Texture;
+ 
++public:
++  uint32_t census_owner_ = 0;   /* ml677: MemOwner this allocation was charged to */
++  uint64_t census_bytes_ = 0;   /* ml677: bytes to refund on destruction          */
++
++
+   /**
+    * notes on thread-safety:
+    * all states in `TextureAllocation` is either immutable or only accessed by `dxmt-encode-thread`
+diff --git a/src/dxmt/meson.build b/src/dxmt/meson.build
+index 9d5bfe2..7beec11 100644
+--- a/src/dxmt/meson.build
++++ b/src/dxmt/meson.build
+@@ -16,6 +16,8 @@ dxmt_src = [
+   'dxmt_presenter.cpp',
+   'dxmt_sampler.cpp',
+   'dxmt_resource_initializer.cpp',
++  'dxmt_mem_census.cpp',
++  'dxmt_bcn.cpp',
+   'dxmt_shader_cache.cpp',
+   'dxmt_scaler.cpp',
+   'dxmt_subresource.cpp',
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index c6470c8..d29a400 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -330,7 +330,29 @@ static bool query_bc_support(void) {
+ 
+ MTLPixelFormat to_metal_pixel_format(enum WMTPixelFormat format) {
+   enum WMTPixelFormat stripped = (enum WMTPixelFormat)ORIGINAL_FORMAT(format);
+-  stripped = remap_unsupported_bc(stripped, query_bc_support());
++  {
++    /* ml678: prove sRGB survives the BC remap instead of reading the switch and
++     * assuming. A BC1_sRGB landing in a linear RGBA8 would wash every albedo
++     * out -- one candidate for the flat look that remains after the BC6H fix. */
++    enum WMTPixelFormat before = stripped;
++    stripped = remap_unsupported_bc(stripped, query_bc_support());
++    if (before != stripped) {
++      static struct { unsigned s, d, n; } tbl[24];
++      static unsigned tn;
++      unsigned i;
++      for (i = 0; i < tn; i++) if (tbl[i].s == before && tbl[i].d == stripped) break;
++      if (i == tn && tn < 24) { tbl[tn].s = before; tbl[tn].d = stripped; tbl[tn].n = 0; tn++; }
++      if (i < 24) {
++        tbl[i].n++;
++        if (tbl[i].n == 1 || (tbl[i].n % 512) == 0)
++          fprintf(stderr, "[bc-remap] ml678 %u -> %u  n=%u  (sRGB-in=%d sRGB-out=%d)\n",
++                  before, stripped, tbl[i].n,
++                  (int)(before == WMTPixelFormatBC1_RGBA_sRGB || before == WMTPixelFormatBC2_RGBA_sRGB ||
++                        before == WMTPixelFormatBC3_RGBA_sRGB || before == WMTPixelFormatBC7_RGBAUnorm_sRGB),
++                  (int)(stripped == WMTPixelFormatRGBA8Unorm_sRGB));
++      }
++    }
++  }
+   return (MTLPixelFormat)stripped;
+ }
+ 

@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 16:59:36 -0700
+Subject: [PATCH] Classify unsupported mesh pipelines, and allow suppressing
+ their bindings
+
+DXMT lowers D3D11 geometry shaders and tessellation onto Metal object/mesh
+shaders. A paravirtualised Metal device implements neither -- not merely
+hidden behind capability reporting: the device class has no mesh pipeline
+creation and the render encoder has no setObjectBuffer/setMeshBuffer, so the
+transport carries no mesh packets at all. setObjectBuffer therefore reaches
+Metal's abstract selector and raises NSInvalidArgumentException, which nobody
+catches and libc++abi turns into a process abort.
+
+respondsToSelector: answers YES because Metal DECLARES the selector even
+though the concrete class does not implement it, so runtime probing cannot
+gate this. Opt in with d3d11.noMeshShaders=1 instead, which leaves every real
+device untouched.
+
+Name which stage needed the pipeline. A geometry-shader compute fallback is a
+contained project; tessellation needs hull, tessellation-coordinate, domain
+and compaction stages. Which one a title actually requires decides the scope
+of that work, and nothing currently reports it.
+
+Madeira-commit: ee72717febfc89de961729d5142f923ef1a07a09
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_pipeline_gs.cpp | 19 ++++++++++++++++++-
+ src/d3d11/d3d11_pipeline_ts.cpp |  9 +++++++++
+ src/dxmt/dxmt_context.cpp       | 32 +++++++++++++++++++++++++++++++-
+ 3 files changed, 58 insertions(+), 2 deletions(-)
+
+diff --git a/src/d3d11/d3d11_pipeline_gs.cpp b/src/d3d11/d3d11_pipeline_gs.cpp
+index efa605e..e26785f 100644
+--- a/src/d3d11/d3d11_pipeline_gs.cpp
++++ b/src/d3d11/d3d11_pipeline_gs.cpp
+@@ -134,7 +134,24 @@ public:
+     state_mesh_ = device_->GetMTLDevice().newRenderPipelineState(info, err);
+ 
+     if (state_mesh_ == nullptr) {
+-      ERR("Failed to create mesh PSO: ", err.description().getUTF8String());
++      /* ml754: say WHICH stage needed the mesh pipeline.
++       *
++       * DXMT lowers D3D11 geometry shaders AND tessellation onto Metal
++       * object/mesh shaders, and the paravirtual Metal device in the research
++       * VM implements neither -- not merely hidden behind capability reporting:
++       * AppleParavirtDevice has no mesh PSO creation and
++       * AppleParavirtRenderCommandEncoder has no setObjectBuffer/setMeshBuffer,
++       * so the APV transport carries no mesh packets at all. respondsToSelector:
++       * answers YES because Metal DECLARES the selector, which is a metadata
++       * trap, not a capability.
++       *
++       * Whether that matters depends entirely on which stage a title actually
++       * needs: a geometry-shader compute fallback is a contained project, while
++       * tessellation needs hull/tess-coord/domain/compaction stages. This
++       * counter is what decides which one is worth building. */
++      static std::atomic<uint32_t> n{0};
++      ERR("[mesh-fail] ml754 kind=GEOMETRY #", n.fetch_add(1, std::memory_order_relaxed) + 1,
++          " -- ", err.description().getUTF8String());
+       return this;
+     }
+     return this;
+diff --git a/src/d3d11/d3d11_pipeline_ts.cpp b/src/d3d11/d3d11_pipeline_ts.cpp
+index 8b7f1f3..099bd1e 100644
+--- a/src/d3d11/d3d11_pipeline_ts.cpp
++++ b/src/d3d11/d3d11_pipeline_ts.cpp
+@@ -177,6 +177,15 @@ public:
+           device_->GetMTLDevice().newRenderPipelineState(info, err);
+     }
+     if (state_rasterization_ == nullptr) {
++      /* ml754: classify -- see the GEOMETRY counterpart in
++       * d3d11_pipeline_gs.cpp. Tessellation needs hull, tess-coord, domain and
++       * compaction stages, so it is a far larger fallback to build than the
++       * geometry path; this counter decides whether it is required at all. */
++      {
++        static std::atomic<uint32_t> n{0};
++        ERR("[mesh-fail] ml754 kind=TESSELLATION #",
++            n.fetch_add(1, std::memory_order_relaxed) + 1);
++      }
+       ERR("Failed to create tessellation raster PSO: ",
+           err.description().getUTF8String());
+     }
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index e7e7ffa..b323906 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -27,6 +27,7 @@
+ #include <cstdint>
+ #include <cfloat>
+ #include "dxmt_mem_census.hpp"
++#include "config/config.hpp"   /* ml754 */
+ 
+ namespace dxmt {
+ 
+@@ -988,7 +989,36 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
+         encoder.setVertexBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_STREAM_OUTPUT0);
+       encoder.setFragmentBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_CONSTANT_BUFFER);
+       encoder.setFragmentBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_ARGUMENT_TABLE);
+-      if (data->use_geometry || data->use_tessellation) {
++      /* ml754: SKIP MESH BINDINGS WHEN THE DEVICE HAS NO MESH TRANSPORT.
++       *
++       * setObjectBuffer/setMeshBuffer are how DXMT feeds its object/mesh
++       * lowering of D3D11 geometry shaders and tessellation. Apple's
++       * PARAVIRTUAL Metal device implements none of it -- no mesh PSO creation,
++       * no mesh encoder methods, no APV command packets -- so this line reaches
++       * Metal's abstract selector and raises NSInvalidArgumentException, which
++       * nobody catches and libc++abi turns into a process abort. That is what
++       * killed a UE4 title on the research VM after it had already loaded
++       * assets and gone to a black screen.
++       *
++       * ⚠️ respondsToSelector: answers YES here -- Metal DECLARES the selector
++       * even though the paravirtual class does not implement it -- so runtime
++       * probing cannot gate this. Opt in explicitly with
++       * d3d11.noMeshShaders=1 instead, which leaves every real device
++       * untouched.
++       *
++       * Skipping the BINDINGS stops the abort; the draw itself will render
++       * nothing useful, which is the point -- it tells us whether the affected
++       * draws even matter for reaching a menu before anyone invests in the
++       * compute fallback. */
++      static const int no_mesh =
++          Config::getInstance().getOption<int>("d3d11.noMeshShaders", 0);
++      if (no_mesh && (data->use_geometry || data->use_tessellation)) {
++        static std::atomic<uint32_t> skipped{0};
++        uint32_t n = skipped.fetch_add(1, std::memory_order_relaxed) + 1;
++        if (n == 1 || (n & 0x3FF) == 0)
++          ERR("[mesh-skip] ml754 suppressed ", n, " mesh-bound draw setups (",
++              data->use_tessellation ? "tessellation" : "geometry", ")");
++      } else if (data->use_geometry || data->use_tessellation) {
+         encoder.setObjectBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_VERTEX_BUFFER);
+         encoder.setObjectBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_DRAW_ARGUMENTS);
+         if (data->use_tessellation) {

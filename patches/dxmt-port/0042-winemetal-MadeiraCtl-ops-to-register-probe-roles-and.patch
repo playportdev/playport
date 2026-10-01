@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 24 Sep 2026 06:33:46 +0800
+Subject: [PATCH] winemetal: MadeiraCtl ops to register probe roles and publish
+ the runtime counter block
+
+Op 4 records the calling thread's role (submission worker, Present caller,
+ExecuteCommandLists caller) for the per-thread CPU probe; op 5 publishes the
+D3D12 runtime's counter block so the probe can read it.
+
+Madeira-commit: ac535fcd69b2a79940f12014902242833881435e
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index f288c3e..44fb5ae 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -4966,6 +4966,18 @@ static NTSTATUS _madeira_ctl(void *args) {
+     a->ret = 1;
+     break;
+   }
++  case 4: {   /* ml1128: probe role for the CALLING thread (runs on it); len = role char, ptr = Windows TID */
++    extern void ios_xp_set_role(int role, uint64_t wtid);
++    ios_xp_set_role((int)a->len, a->ptr);
++    a->ret = 1;
++    break;
++  }
++  case 5: {   /* ml1128: the PE counter block the probe samples */
++    extern volatile uint64_t ios_xp_pe_block, ios_xp_pe_len;
++    ios_xp_pe_len = a->len; ios_xp_pe_block = a->ptr;
++    a->ret = 1;
++    break;
++  }
+   case 2: {
+     char v[512];
+     if (madeira_cfg_get(a->name, v, sizeof v)) {

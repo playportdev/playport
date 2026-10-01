@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 5 Jul 2026 02:57:55 +0800
+Subject: [PATCH] =?UTF-8?q?winemetal/dxmt:=20three-mode=20present=20pacing?=
+ =?UTF-8?q?=20=E2=80=94=20locked=2060=20/=20display=20max=20/=20RAW=20mail?=
+ =?UTF-8?q?box?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+mythic_set_vsync_locked(mode), read per present, live-flippable:
+  1 = LOCKED: presentDrawable:afterMinimumDuration:(1/60) — exact 60.
+  0 = MAX: plain present, free-runs to display refresh (120 ProMotion).
+  2 = RAW: true mailbox — the frame-skip gate lives in the unix
+      nextDrawable thunk (nil return inside an 18ms window), so skipped
+      frames never acquire a drawable, never encode the present blit,
+      never touch the display pipeline. PE side skips on nil
+      (Presenter::encodeCommands early-return + flushCommands present
+      guard). First attempt gated at presentDrawable — too late: every
+      frame still consumed a drawable and a hot-capped 60Hz panel
+      exhausted the pool, throttling "unlocked" right back to 60.
+
+Skipped frames tick the present counter, so the FPS readout is true
+game rate. Measured: gameplay ~142 FPS median through the full stack
+(FEX x86 + Wine + D3D11->Metal + GPU, ~7ms/frame); loading screen
+peaks 2,286 FPS. Real presents pace at >=18ms so the pool can never
+exhaust even on a thermally-capped 60Hz panel.
+
+Madeira-commit: 3752dad18787d9f6597b5714f8177b3f34d0570b
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/dxmt/dxmt_context.cpp           |  4 +-
+ src/dxmt/dxmt_presenter.cpp         |  5 +++
+ src/winemetal/unix/winemetal_unix.c | 64 ++++++++++++++++++++++-------
+ 3 files changed, 58 insertions(+), 15 deletions(-)
+
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index a8c68dc..5832bde 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -1120,7 +1120,9 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
+        * stalled timeline. Revert to the conditional below if this doesn't
+        * discriminate. */
+       (void)data->after;
+-      cmdbuf.presentDrawable(drawable);
++      /* nil drawable = RAW-mode frame skip (mailbox) — nothing to present */
++      if (drawable)
++        cmdbuf.presentDrawable(drawable);
+       data->~PresentData();
+       break;
+     }
+diff --git a/src/dxmt/dxmt_presenter.cpp b/src/dxmt/dxmt_presenter.cpp
+index e5aec04..3184b7b 100644
+--- a/src/dxmt/dxmt_presenter.cpp
++++ b/src/dxmt/dxmt_presenter.cpp
+@@ -157,6 +157,11 @@ Presenter::encodeCommands(
+     std::function<void(WMT::RenderCommandEncoder)> &&update_fences
+ ) {
+   auto drawable = layer_.nextDrawable();
++  /* iOS-Mythic RAW mode: the unix thunk returns nil inside the
++   * frame-skip window (mailbox). Skip the blit — caller drops the
++   * present on a nil drawable. */
++  if (!drawable)
++    return drawable;
+ 
+   WMTRenderPassInfo info;
+   WMT::InitializeRenderPassInfo(info);
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 2380da5..9c877ac 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1563,27 +1563,38 @@ uint64_t mythic_get_present_count(void) {
+  * even for frames provably on glass (the splash), so it carries no signal
+  * for this layer. See project memory for the full postmortem. */
+ 
+-/* iOS-Mythic 2026-07-05: runtime vsync-lock toggle. iOS has no true
+- * "vsync off" (no displaySyncEnabled); the ceiling is the display
+- * refresh — 120Hz on ProMotion once Info.plist sets
+- * CADisableMinimumFrameDurationOnPhone. locked=1 (default) paces
+- * presents with afterMinimumDuration(1/60) = the shipped locked-60
+- * behavior; locked=0 presents immediately and free-runs up to the
+- * display max. Read per present — flip live from the Swift UI. */
+-static volatile int g_mythic_vsync_locked = 1;
+-void mythic_set_vsync_locked(int locked) {
+-  g_mythic_vsync_locked = locked ? 1 : 0;
+-  dprintf(STDERR_FILENO, "[iOS DXMT] vsync_locked=%d\n", g_mythic_vsync_locked);
+-}
+-int mythic_get_vsync_locked(void) { return g_mythic_vsync_locked; }
++/* iOS-Mythic 2026-07-05: runtime present-pacing mode, read per present
++ * (live-flippable from the Swift UI):
++ *   1 = LOCKED (default): afterMinimumDuration(1/60) — exact 60.
++ *   0 = MAX: present every frame, free-run to the display refresh
++ *       (120Hz ProMotion with CADisableMinimumFrameDurationOnPhone +
++ *       the app-side CADisplayLink intent; thermal governor may cap 60).
++ *   2 = RAW: mailbox/frame-skip — the game runs UNTHROTTLED; a real
++ *       drawable present is submitted at most every 8ms, other frames
++ *       release their drawable unpresented so the pool never blocks.
++ *       Measures raw stack throughput independent of the panel; the
++ *       present COUNTER counts every game present (incl. skipped) so
++ *       the FPS overlay reads true game rate. */
++static volatile int g_mythic_vsync_mode = 1;
++void mythic_set_vsync_locked(int mode) {
++  g_mythic_vsync_mode = mode;
++  dprintf(STDERR_FILENO, "[iOS DXMT] vsync_mode=%d (1=locked60 0=max 2=raw)\n", mode);
++}
++int mythic_get_vsync_locked(void) { return g_mythic_vsync_mode; }
+ 
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;
+-  if (g_mythic_vsync_locked) {
++  int mode = g_mythic_vsync_mode;
++  if (mode == 1) {
+     mythic_log_present_cadence("presentDrawable60", 0.0);
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg
+                                      afterMinimumDuration:(1.0 / 60.0)];
++  } else if (mode == 2) {
++    /* Frame-skip gating lives in _MetalLayer_nextDrawable (nil return);
++     * only real, ≥18ms-spaced frames reach here. */
++    mythic_log_present_cadence("presentRaw", 0.0);
++    [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
+   } else {
+     mythic_log_present_cadence("presentDrawable", 0.0);
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
+@@ -1887,6 +1898,31 @@ _MetalDrawable_texture(void *obj) {
+ static NTSTATUS
+ _MetalLayer_nextDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_ret *params = obj;
++  /* iOS-Mythic 2026-07-05 RAW mode (mode 2): the mailbox skip lives HERE,
++   * before any drawable is consumed. First attempt gated at the
++   * presentDrawable thunk — too late: every game frame had already
++   * acquired a drawable, and PRESENTED drawables are held until vsync,
++   * so a hot-capped 60Hz panel exhausted the 3-drawable pool and
++   * throttled "unlocked" RAW right back to 60 (observed 02:35 run).
++   * Returning nil here = no drawable touched, no block anywhere; the
++   * PE side (Presenter::encodeCommands / flushCommands) skips the blit
++   * and present on nil. Real acquires are spaced ≥18ms so presented
++   * drawables can never exhaust the pool even on a 60Hz-capped panel.
++   * Skipped frames tick the present counter so the FPS overlay shows
++   * TRUE game rate. */
++  if (g_mythic_vsync_mode == 2) {
++    static struct timespec last_acquire; /* encode-thread only */
++    struct timespec now;
++    double since;
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    since = (now.tv_sec - last_acquire.tv_sec) + (now.tv_nsec - last_acquire.tv_nsec) / 1e9;
++    if (since < 0.018) {
++      params->ret = 0;
++      mythic_log_present_cadence("presentSkipped", 0.0);
++      return STATUS_SUCCESS;
++    }
++    last_acquire = now;
++  }
+   /* 2026-07-03: measure blocking time. When queued presentations never
+    * complete (render server not compositing the layer), all 3 pool
+    * drawables stay owned by the presentation queue and this call blocks

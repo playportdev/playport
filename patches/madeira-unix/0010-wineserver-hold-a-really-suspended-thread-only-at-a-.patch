@@ -1,0 +1,312 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] wineserver: hold a really-suspended thread only at a safe
+ point
+
+A real thread suspend could freeze a thread inside a host syscall or dyld
+lock. The hold is deferred until the thread is in guest code or a known
+safe host range, as upstream Wine's suspend would stop it.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/wineserver/mach_ios.c | 211 ++++++++++++++++++++++++++++++++++--
+ 1 file changed, 200 insertions(+), 11 deletions(-)
+
+diff --git a/build/wineserver/mach_ios.c b/build/wineserver/mach_ios.c
+index fc2ac95..d09e7e2 100644
+--- a/build/wineserver/mach_ios.c
++++ b/build/wineserver/mach_ios.c
+@@ -49,6 +49,11 @@
+ #include <mach/thread_act.h>
+ #include <mach/mach_vm.h>
+ #include <servers/bootstrap.h>
++#ifdef WINE_IOS
++#include <stdlib.h>
++#include <mach-o/dyld.h>
++#include <mach-o/loader.h>
++#endif
+ 
+ static mach_port_t server_mach_port;
+ 
+@@ -508,6 +513,8 @@ static int ios_safe_read( uint64_t addr, void *buf, unsigned int size )
+  *
+  * Counters are AGGREGATE on purpose -- a per-event line would perturb exactly
+  * the timing this changes. Failures are always reported (capped). */
++static void rs_images_init(void);
++
+ int ios_real_suspend_enabled(void)
+ {
+     static int env = -1;
+@@ -516,18 +523,156 @@ int ios_real_suspend_enabled(void)
+         const char *e = getenv( "MADEIRA_REAL_SUSPEND" );
+         env = (e && e[0] == '1') ? 1 : 0;
+         fprintf( stderr, "[real-susp] ml730 MADEIRA_REAL_SUSPEND=%d\n", env );
++        /* safepoint: taken here, before the first hold exists, because dyld's
++         * image list takes locks that a held thread could own. */
++        if (env) rs_images_init();
+     }
+     return env;
+ }
+ 
+ static unsigned int rs_holds, rs_releases, rs_hold_fail, rs_release_fail, rs_ops;
++static unsigned int rs_deferred, rs_retries, rs_late_holds, rs_frame_unknown;
+ 
+ void ios_real_suspend_stats( const char *why )
+ {
+     fprintf( stderr, "[real-susp] ml730 %s: ops=%u holds=%u releases=%u "
+-             "outstanding=%d hold_fail=%u release_fail=%u\n",
++             "outstanding=%d hold_fail=%u release_fail=%u "
++             "deferred=%u retries=%u late_holds=%u frame_unknown=%u\n",
+              why, rs_ops, rs_holds, rs_releases,
+-             (int)rs_holds - (int)rs_releases, rs_hold_fail, rs_release_fail );
++             (int)rs_holds - (int)rs_releases, rs_hold_fail, rs_release_fail,
++             rs_deferred, rs_retries, rs_late_holds, rs_frame_unknown );
++}
++
++/* ================= safepoint: hold only where upstream Wine would stop =========
++ *
++ * ml730 freezes the target wherever the Mach suspend lands. Upstream Wine never
++ * stops a thread in two kinds of place, and here both can deadlock:
++ *
++ *  - inside a syscall. Wine blocks SIGUSR1 around every server call and every
++ *    server_enter_uninterrupted_section() (virtual_mutex, fd_cache_mutex, the
++ *    loader's sections: 41 sites in ntdll-unix), so a suspend is delivered only
++ *    once the thread is out of them. A thread frozen while it owns one of those
++ *    mutexes blocks the suspender's next NtGetContextThread/NtReadFile/virtual
++ *    call. Windows likewise suspends a thread in the kernel only on its way back
++ *    to user mode.
++ *  - in host (dyld-loaded) code: libmalloc, stdio's FILE locks, dyld. wineserver
++ *    is a thread of this same process and mallocs and fprintf()s on every request.
++ *
++ * So a hold is taken only when the target's pc is outside every dyld image and its
++ * sp is outside the syscall window (is_inside_syscall(): kernel_stack <= sp <=
++ * syscall_frame). Otherwise the hold is DEFERRED: the thread keeps running, and a
++ * server timeout retries every RS_RETRY_MS until it is at such a point, or until
++ * the logical suspend is gone. A thread blocked in a server wait needs no physical
++ * hold meanwhile: wake_thread() does not wake a suspended thread.
++ *
++ * ios_mach_suspended is 0 (none), 1 (held) or RS_PENDING (deferred, one timer). */
++#define RS_PENDING   2
++#define RS_RETRY_MS  1
++#define RS_MAX_IMG   4096
++
++static struct rs_range { uint64_t lo, hi; } rs_img[RS_MAX_IMG];
++static unsigned int rs_nimg;
++
++static int rs_range_cmp( const void *a, const void *b )
++{
++    const struct rs_range *x = a, *y = b;
++    return x->lo < y->lo ? -1 : x->lo > y->lo;
++}
++
++/* Executable segments of every image dyld has loaded so far, sorted and merged.
++ * Images loaded later are not covered (none is expected: the unix side is linked
++ * into the app). */
++static void rs_images_init(void)
++{
++    uint32_t i, j, n = _dyld_image_count();
++    unsigned int k, m;
++
++    for (i = 0; i < n && rs_nimg < RS_MAX_IMG; i++)
++    {
++        const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header( i );
++        const struct load_command *lc;
++        intptr_t slide = _dyld_get_image_vmaddr_slide( i );
++
++        if (!mh || mh->magic != MH_MAGIC_64) continue;
++        lc = (const struct load_command *)(mh + 1);
++        for (j = 0; j < mh->ncmds && rs_nimg < RS_MAX_IMG; j++)
++        {
++            if (lc->cmd == LC_SEGMENT_64)
++            {
++                const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
++                if ((seg->initprot & VM_PROT_EXECUTE) && seg->vmsize)
++                {
++                    rs_img[rs_nimg].lo = seg->vmaddr + slide;
++                    rs_img[rs_nimg].hi = seg->vmaddr + slide + seg->vmsize;
++                    rs_nimg++;
++                }
++            }
++            lc = (const struct load_command *)((const char *)lc + lc->cmdsize);
++        }
++    }
++    qsort( rs_img, rs_nimg, sizeof(rs_img[0]), rs_range_cmp );
++    for (k = 0, m = 0; k < rs_nimg; k++)
++    {
++        if (m && rs_img[k].lo <= rs_img[m - 1].hi)
++        {
++            if (rs_img[k].hi > rs_img[m - 1].hi) rs_img[m - 1].hi = rs_img[k].hi;
++        }
++        else rs_img[m++] = rs_img[k];
++    }
++    fprintf( stderr, "[real-susp] safepoint %u images -> %u host code ranges\n", n, m );
++    rs_nimg = m;
++}
++
++static int rs_pc_in_host( uint64_t pc )
++{
++    unsigned int lo = 0, hi = rs_nimg;
++    while (lo < hi)
++    {
++        unsigned int mid = (lo + hi) / 2;
++        if (pc < rs_img[mid].lo) hi = mid;
++        else if (pc >= rs_img[mid].hi) lo = mid + 1;
++        else return 1;
++    }
++    return 0;
++}
++
++/* The target is stopped. Is this a point where upstream Wine would suspend it? */
++static int rs_at_safe_point( struct thread *thread, uint64_t pc, uint64_t sp )
++{
++    uint64_t frame = 0, kstack = 0;
++
++    if (rs_pc_in_host( pc )) return 0;
++    if (thread->teb &&
++        ios_safe_read( (uint64_t)thread->teb + IOS_TEB_SYSCALL_FRAME_OFF, &frame, 8 ) &&
++        ios_safe_read( (uint64_t)thread->teb + IOS_TEB_KERNEL_STACK_OFF, &kstack, 8 ) &&
++        frame && kstack && kstack < frame)
++        return !(sp >= kstack && sp <= frame);
++    rs_frame_unknown++;   /* no usable window: judge by pc alone */
++    return 1;
++}
++
++static int rs_port_at_safe_point( struct thread *thread, mach_port_t port )
++{
++    arm_thread_state64_t arm;
++    mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
++
++    if (thread_get_state( port, ARM_THREAD_STATE64, (thread_state_t)&arm, &count )) return 0;
++    return rs_at_safe_point( thread, arm.__pc, arm.__sp );
++}
++
++static void rs_retry( void *private );
++
++/* Mark the hold deferred and arm the retry, once per pending hold. */
++static void rs_defer( struct thread *thread )
++{
++    if (thread->ios_mach_suspended == RS_PENDING) return;
++    thread->ios_mach_suspended = RS_PENDING;
++    rs_deferred++;
++    if (!add_timeout_user( -(timeout_t)RS_RETRY_MS * 10000, rs_retry, grab_object( thread ) ))
++    {
++        thread->ios_mach_suspended = 0;
++        release_object( thread );
++    }
+ }
+ 
+ static void rs_tick(void)
+@@ -546,7 +691,7 @@ static unsigned int rs_flag_bad;
+ static int rs_flag_ok( struct thread *thread, const char *who )
+ {
+     int v = thread->ios_mach_suspended;
+-    if (v == 0 || v == 1) return 1;
++    if (v == 0 || v == 1 || v == RS_PENDING) return 1;
+     if (rs_flag_bad++ < 16)
+         fprintf( stderr, "[real-susp] ml730b CORRUPT HOLD FLAG tid=%04x %s value=0x%x "
+                  "-- refusing to act (uninitialized?)\n", thread->id, who, (unsigned)v );
+@@ -554,34 +699,72 @@ static int rs_flag_ok( struct thread *thread, const char *who )
+     return 0;
+ }
+ 
+-/* Apply ONE persistent Mach hold. Idempotent per thread. */
+-int ios_thread_mach_hold( struct thread *thread )
++/* Try to take the one persistent Mach hold now: 1 held, 0 failed, -1 not at a
++ * safe point (safepoint; the thread was let go again). */
++static int rs_try_hold( struct thread *thread )
+ {
+     mach_msg_type_name_t type;
+     mach_port_t port;
+     kern_return_t kr;
++    int safe;
+ 
+-    rs_tick();
+-    if (!ios_real_suspend_enabled()) return 0;
+-    if (!rs_flag_ok( thread, "hold" )) return 0;
+-    if (thread->ios_mach_suspended) return 1;          /* nested: counter only */
+     if (thread->unix_pid == -1 || thread->unix_tid == (unsigned int)-1) return 0;
+     if (mach_port_extract_right( mach_task_self(), thread->unix_tid,
+                                  MACH_MSG_TYPE_COPY_SEND, &port, &type ))
+         return 0;
+     kr = thread_suspend( port );
+-    mach_port_deallocate( mach_task_self(), port );
+     if (kr)
+     {
++        mach_port_deallocate( mach_task_self(), port );
+         if (rs_hold_fail++ < 16)
+             fprintf( stderr, "[real-susp] ml730 HOLD FAILED tid=%04x kr=%d\n", thread->id, kr );
+         return 0;
+     }
++    safe = rs_port_at_safe_point( thread, port );
++    if (!safe) thread_resume( port );
++    mach_port_deallocate( mach_task_self(), port );
++    if (!safe) return -1;
+     thread->ios_mach_suspended = 1;
+     rs_holds++;
+     return 1;
+ }
+ 
++/* Apply ONE persistent Mach hold. Idempotent per thread. */
++int ios_thread_mach_hold( struct thread *thread )
++{
++    int ret;
++
++    rs_tick();
++    if (!ios_real_suspend_enabled()) return 0;
++    if (!rs_flag_ok( thread, "hold" )) return 0;
++    if (thread->ios_mach_suspended == 1) return 1;     /* nested: counter only */
++    ret = rs_try_hold( thread );
++    if (ret < 0) rs_defer( thread );
++    return ret > 0;
++}
++
++/* safepoint: the deferred hold's retry. Holds a reference on the thread. */
++static void rs_retry( void *private )
++{
++    struct thread *thread = private;
++
++    if (thread->ios_mach_suspended == RS_PENDING)
++    {
++        int ret = 0;
++
++        if (thread->suspend > 0 && thread->state != TERMINATED)
++        {
++            rs_retries++;
++            ret = rs_try_hold( thread );
++        }
++        if (ret > 0) rs_late_holds++;
++        else if (ret < 0 && add_timeout_user( -(timeout_t)RS_RETRY_MS * 10000, rs_retry, thread ))
++            return;                                    /* keep the reference for the next try */
++        else if (thread->ios_mach_suspended == RS_PENDING) thread->ios_mach_suspended = 0;
++    }
++    release_object( thread );
++}
++
+ /* Release the one persistent Mach hold, if we hold it. */
+ int ios_thread_mach_release( struct thread *thread )
+ {
+@@ -592,6 +775,11 @@ int ios_thread_mach_release( struct thread *thread )
+     rs_tick();
+     if (!rs_flag_ok( thread, "release" )) return 0;
+     if (!thread->ios_mach_suspended) return 0;
++    if (thread->ios_mach_suspended == RS_PENDING)      /* never held: the timer sees 0 and stops */
++    {
++        thread->ios_mach_suspended = 0;
++        return 0;
++    }
+     thread->ios_mach_suspended = 0;                    /* clear first: never double-release */
+     if (thread->unix_pid == -1 || thread->unix_tid == (unsigned int)-1) return 0;
+     if (mach_port_extract_right( mach_task_self(), thread->unix_tid,
+@@ -801,7 +989,8 @@ int ios_fill_thread_context( struct thread *thread,
+      * capture (ios_pending_persistent_hold == NULL) resumes as it always did,
+      * and never releases a hold established by an earlier suspend. */
+     if (ios_pending_persistent_hold == thread && ios_real_suspend_enabled() &&
+-        rs_flag_ok( thread, "capture" ) && !thread->ios_mach_suspended)
++        rs_flag_ok( thread, "capture" ) && thread->ios_mach_suspended != 1 &&
++        !kr && rs_at_safe_point( thread, arm.__pc, arm.__sp ))
+     {
+         thread->ios_mach_suspended = 1;   /* inherit THIS thread_suspend(): do not resume */
+         rs_holds++;

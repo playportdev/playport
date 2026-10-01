@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# What Playport builds from. pp build reads this file and nothing
+# else to decide which upstream commits to check out.
+#
+# madeira is the pin: it must equal the upstream/madeira gitlink.
+#
+# Wine is taken from its own upstream, not from Madeira (decision 0013): wine
+# is a WineHQ release commit (the wine-11.18 tag), and patches/wine-port
+# carries Madeira's Wine fork rebased onto it. wine-port is the madeira-lgpl
+# commit that series was rebased from; it must equal Madeira's wine gitlink,
+# so a Madeira update that moves its Wine stops the build until the port
+# series is refreshed.
+#
+# The base stays WineHQ's latest development release; Valve's Wine is not the
+# base (decision 0018, which weighed it). wine-valve is the ValveSoftware/wine
+# proton_11.0 commit that patches/wine-valve, the Valve commits Playport takes,
+# was cherry-picked from; the series is applied after patches/wine-port in
+# both Wine trees. It moves by hand, when Valve moves proton_11.0 (each Proton
+# 11 point release) or opens the next branch, never through pp sync; each
+# pp sync lists Valve's commits past it in $PLAYPORT_BUILD/sync/wine-valve-new.tsv.
+#
+# DXMT is taken from its own upstream, not from Madeira: dxmt is a 3Shain/dxmt
+# commit, and patches/dxmt-port carries Madeira's DXMT port rebased onto it.
+# dxmt-port is the Madeira DXMT commit that series was rebased from; it must
+# equal Madeira's research/dxmt gitlink, so a Madeira update that moves its
+# DXMT stops the build until the port series is refreshed.
+#
+# FEX is the same (decision 0008): fex is a FEX-Emu/FEX release commit (the
+# FEX-2609.1 tag, head of the FEX-2609_1 release branch) and
+# patches/fex-port carries Madeira's FEX port rebased onto it; fex-port must
+# equal Madeira's FEX gitlink. rpmalloc is that FEX commit's External/rpmalloc
+# gitlink (FEX-Emu/rpmalloc) and patches/rpmalloc-port carries Madeira's
+# rpmalloc changes rebased onto it; rpmalloc-port must equal the External/
+# rpmalloc gitlink of Madeira's FEX.
+#
+# mesa is a Mesa main commit with patches/mesa on it: KosmicKrisp, Mesa's
+# Vulkan driver on Metal, built for iOS by build/stages/mesa.sh; every IPA
+# carries it (decision 0015). dxvk and vkd3d-proton are the Vulkan
+# backend's Direct3D layers, built by build/stages/vulkan-pe.sh: dxvk
+# unmodified, vkd3d-proton with patches/vkd3d-proton.
+#
+# gbe is gbe_fork (Detanup01/gbe_fork, LGPL-3.0), the Steam API emulator a game
+# loads in place of its steam_api(64).dll: its release-2026_09_27 tag, with
+# patches/gbe, built by build/stages/steamapi.sh (x86-64 and i386 steam_api).
+#
+# name       commit                                    repository                                    branch
+madeira      8c050d03f4d89096e1e2e2c8bb44479fffd86619  https://github.com/willfaust/Madeira.git      main
+wine         7b3fff76fa5178f6ce0141b2c776afa2a822f101  https://gitlab.winehq.org/wine/wine.git       master
+wine-port    723d1bf5132768276cea9bc35ab59c83557bb5fb  https://github.com/willfaust/wine.git         madeira-lgpl
+wine-valve   dc26e61847081a1b5cb0733dc30feba6ee575482  https://github.com/ValveSoftware/wine.git     proton_11.0
+fex          9fbdc00bd6401aff3b32d79e78ff98b8a13e4dcf  https://github.com/FEX-Emu/FEX.git            FEX-2609_1
+dxmt         7c8dee1c2d73415301ceb7d1fa810861cef4cd67  https://github.com/3Shain/dxmt.git           main
+dxmt-port    ca8a2516d819e7e1f366981825ad1f0d26f80fdd  https://github.com/willfaust/dxmt.git         ios-port
+fex-port     0f8edf8f6383ae8085e0ffac511c789cdae97514  https://github.com/willfaust/FEX.git          ios-port-2607
+rpmalloc     09142d726429416bfa7b459151515fe3ab7622dd  https://github.com/FEX-Emu/rpmalloc.git       fex
+rpmalloc-port 1f271c0c3202663801a0aec32bdb57e5241d6a0e  https://github.com/willfaust/rpmalloc.git     ios-madeira
+mesa         82d4f86a0a1e9f76b2de4fa77c6c8e6acaf06aa9  https://gitlab.freedesktop.org/mesa/mesa.git main
+dxvk         52fe923ca1496c8e44789b613fab8611dfcb5c4a  https://github.com/doitsujin/dxvk.git         master
+vkd3d-proton 472989aabdcf3e343e16d13c402feae3815008aa  https://github.com/HansKristian-Work/vkd3d-proton.git master
+gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
+#
+# Build-time sources that are not Madeira components, fetched by tag.
+freetype     VER-2-13-3                                https://github.com/freetype/freetype.git      -
+llvm-project llvmorg-15.0.7                            https://github.com/llvm/llvm-project.git      -
+# the Abseil release gbe's protobuf (third-party/deps/common) names in cmake/dependencies.cmake
+abseil-cpp   20250512.1                                https://github.com/abseil/abseil-cpp.git      -
+xtool        1.20.1                                    https://github.com/xtool-org/xtool.git        -
+#
+# A prebuilt release asset the app embeds, fetched by tag; its sha256 is in
+# build/stages/stikjit.sh.
+stikjit      1.6.0                                     https://github.com/StikDebug/StikJIT.git      -
+#
+# GStreamer's own binary release for iOS, fetched by version; its sha256 is in
+# build/stages/gstreamer.sh (winegstreamer's unix side, statically linked).
+gstreamer    1.28.7                                    https://gstreamer.freedesktop.org/data/pkg/ios -
+#
+# idevice (MIT) is built from this commit into the app by build/stages/idevice.sh:
+# its C FFI, with which Playport restarts itself after a game (decision 0029).
+# The idevice static library inside StikJIT's binary does not record its
+# revision, so that copy's MIT notice is taken from this commit too
+# (build/stages/stikjit.sh; LICENSE.txt's sha256 is there).
+idevice      d32c8189c51c2789496b0768039419c3705498c3  https://github.com/jkcoxson/idevice.git       -
+#
+# The Rust release idevice is compiled with (build/toolchain/rust.sh, with the
+# aarch64-apple-ios standard library), fetched by version through rustup.
+rust         1.98.1                                    https://static.rust-lang.org                  -

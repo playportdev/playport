@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 16 Sep 2026 09:52:28 +0800
+Subject: [PATCH] Licensing notes for the LGPL branch
+
+Madeira-commit: a1e4a0404849e948dc64e2b1f47b0615118d1abb
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ CONTRIBUTING.md    |  7 +++++++
+ LICENSE-MADEIRA.md | 23 +++++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+ create mode 100644 CONTRIBUTING.md
+ create mode 100644 LICENSE-MADEIRA.md
+
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+new file mode 100644
+index 00000000000..0a2060cf084
+--- /dev/null
++++ b/CONTRIBUTING.md
+@@ -0,0 +1,7 @@
++# Contributing to the Madeira Wine fork (LGPL branch)
++
++Contributions to this fork are accepted under **LGPL-2.1-or-later**, the
++same licence as upstream Wine, per the Developer Certificate of Origin
++(https://developercertificate.org/). Do not remove or alter upstream
++copyright or licence notices. Changes suitable for upstream should go to
++WineHQ first.
+diff --git a/LICENSE-MADEIRA.md b/LICENSE-MADEIRA.md
+new file mode 100644
+index 00000000000..9a7301e6784
+--- /dev/null
++++ b/LICENSE-MADEIRA.md
+@@ -0,0 +1,23 @@
++# Licensing of this Wine fork (LGPL branch `madeira-lgpl`)
++
++This repository is a fork of [Wine](https://www.winehq.org/), which upstream
++distributes under **LGPL-2.1-or-later**. This branch keeps that licence.
++
++- Upstream code: LGPL-2.1-or-later, all upstream copyright and licence
++  notices unchanged. Baseline: upstream tag `wine-11.4`.
++- Modifications and new files authored for
++  [Madeira](https://github.com/willfaust/Madeira): **LGPL-2.1-or-later**,
++  Copyright (C) 2026 Will Faust. The new `dlls/wineios.drv` files are
++  derived from upstream `winecoreaudio.drv` and keep its CodeWeavers and
++  Huw Davies copyright notices.
++- Provenance: every downstream change is one of the 51 commits listed in
++  the Madeira repository's `docs/wine-lgpl-provenance.md`, cherry-picked
++  from the earlier GPL-converted branch with `-x` (each commit message
++  names its origin). The earlier branch's LGPL-section-3 conversion to
++  GPL-3.0 is NOT applied here; that conversion is irreversible for that
++  copy, which is why this branch was rebuilt from the upstream baseline
++  instead.
++
++The LGPL permits combining this library with proprietary components (such
++as Apple's Metal Shader Converter) subject to LGPL-2.1 section 6; see the
++Madeira repository's `docs/LICENSING.md`.

@@ -1,0 +1,2025 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 00:37:12 +0200
+Subject: [PATCH] sdk, dll: return interface structs the way MSVC's member
+ functions do
+
+An MSVC-built game calls an interface method that returns a struct
+(CSteamID, SteamIPAddress_t, the controller action data) with the result's
+address after this and reads that address back from RAX. A MinGW build
+returns an 8-byte struct in RAX instead, and the SDK's MinGW declarations
+(STEAMWORKS_STRUCT_RETURN) return void: either way the game dereferences
+garbage. En Garde! (Unreal Engine 5.1) faulted reading address
+0x011000010c1bb449, its own Steam ID, right after ISteamUser::GetSteamID.
+
+Every struct-returning pure virtual in sdk/steam now goes through
+STEAMWORKS_STRUCT_RETURN, whose MinGW form takes the result first and
+returns a reference to it (the MSVC layout), and each implementation
+provides that overload.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-30-en-garde.md
+Offered-upstream: no
+---
+ dll/dll/steam_apps.h             |  1 +
+ dll/dll/steam_controller.h       |  3 +++
+ dll/dll/steam_friends.h          | 17 +++++++++--------
+ dll/dll/steam_gameserver.h       |  3 +++
+ dll/dll/steam_matchmaking.h      |  6 +++---
+ dll/dll/steam_remoteplay.h       |  1 +
+ dll/dll/steam_user.h             |  1 +
+ dll/steam_friends.cpp            | 24 ++++++++++++++++--------
+ dll/steam_matchmaking.cpp        |  9 ++++++---
+ sdk/steam/isteamapps.h           |  2 +-
+ sdk/steam/isteamapps006.h        |  2 +-
+ sdk/steam/isteamapps007.h        |  2 +-
+ sdk/steam/isteamapps008.h        |  2 +-
+ sdk/steam/isteamcontroller.h     |  6 +++---
+ sdk/steam/isteamcontroller003.h  |  4 ++--
+ sdk/steam/isteamcontroller004.h  |  6 +++---
+ sdk/steam/isteamcontroller005.h  |  6 +++---
+ sdk/steam/isteamcontroller006.h  |  6 +++---
+ sdk/steam/isteamcontroller007.h  |  6 +++---
+ sdk/steam/isteamfriends.h        | 14 +++++++-------
+ sdk/steam/isteamfriends001.h     |  2 +-
+ sdk/steam/isteamfriends002.h     |  6 +++---
+ sdk/steam/isteamfriends003.h     |  6 +++---
+ sdk/steam/isteamfriends014.h     | 14 +++++++-------
+ sdk/steam/isteamfriends015.h     | 14 +++++++-------
+ sdk/steam/isteamfriends016.h     | 14 +++++++-------
+ sdk/steam/isteamfriends017.h     | 14 +++++++-------
+ sdk/steam/isteamgameserver.h     |  6 +++---
+ sdk/steam/isteamgameserver002.h  |  2 +-
+ sdk/steam/isteamgameserver003.h  |  2 +-
+ sdk/steam/isteamgameserver004.h  |  4 ++--
+ sdk/steam/isteamgameserver005.h  |  4 ++--
+ sdk/steam/isteamgameserver008.h  |  4 ++--
+ sdk/steam/isteamgameserver009.h  |  4 ++--
+ sdk/steam/isteamgameserver010.h  |  4 ++--
+ sdk/steam/isteamgameserver011.h  |  4 ++--
+ sdk/steam/isteamgameserver012.h  |  4 ++--
+ sdk/steam/isteamgameserver013.h  |  6 +++---
+ sdk/steam/isteamgameserver014.h  |  6 +++---
+ sdk/steam/isteaminput.h          |  6 +++---
+ sdk/steam/isteaminput001.h       |  6 +++---
+ sdk/steam/isteaminput002.h       |  6 +++---
+ sdk/steam/isteaminput005.h       |  6 +++---
+ sdk/steam/isteaminput006.h       |  6 +++---
+ sdk/steam/isteammatchmaking.h    |  6 +++---
+ sdk/steam/isteammatchmaking001.h |  4 ++--
+ sdk/steam/isteammatchmaking002.h |  4 ++--
+ sdk/steam/isteammatchmaking003.h |  4 ++--
+ sdk/steam/isteammatchmaking004.h |  4 ++--
+ sdk/steam/isteammatchmaking005.h |  6 +++---
+ sdk/steam/isteamremoteplay.h     |  2 +-
+ sdk/steam/isteamremoteplay001.h  |  2 +-
+ sdk/steam/isteamremoteplay002.h  |  2 +-
+ sdk/steam/isteamremoteplay003.h  |  2 +-
+ sdk/steam/isteamuser.h           |  2 +-
+ sdk/steam/isteamuser004.h        |  2 +-
+ sdk/steam/isteamuser004_old.h    |  2 +-
+ sdk/steam/isteamuser005.h        |  2 +-
+ sdk/steam/isteamuser006.h        |  2 +-
+ sdk/steam/isteamuser007.h        |  2 +-
+ sdk/steam/isteamuser008.h        |  2 +-
+ sdk/steam/isteamuser009.h        |  2 +-
+ sdk/steam/isteamuser010.h        |  2 +-
+ sdk/steam/isteamuser011.h        |  2 +-
+ sdk/steam/isteamuser012.h        |  2 +-
+ sdk/steam/isteamuser013.h        |  2 +-
+ sdk/steam/isteamuser014.h        |  2 +-
+ sdk/steam/isteamuser015.h        |  2 +-
+ sdk/steam/isteamuser016.h        |  2 +-
+ sdk/steam/isteamuser017.h        |  2 +-
+ sdk/steam/isteamuser018.h        |  2 +-
+ sdk/steam/isteamuser019.h        |  2 +-
+ sdk/steam/isteamuser020.h        |  2 +-
+ sdk/steam/isteamuser021.h        |  2 +-
+ sdk/steam/isteamuser022.h        |  2 +-
+ sdk/steam/steamtypes.h           |  8 ++++----
+ 76 files changed, 189 insertions(+), 168 deletions(-)
+
+diff --git a/dll/dll/steam_apps.h b/dll/dll/steam_apps.h
+index b6ea28b..eb3c9bd 100644
+--- a/dll/dll/steam_apps.h
++++ b/dll/dll/steam_apps.h
+@@ -99,6 +99,7 @@ public:
+ 	bool BIsAppInstalled( AppId_t appID ); // returns true if that app is installed (not necessarily owned)
+ 
+ 	CSteamID GetAppOwner(); // returns the SteamID of the original owner. If different from current user, it's borrowed
++	CSteamID &GetAppOwner(CSteamID &ret) { ret = GetAppOwner(); return ret; } // MSVC return convention (MinGW build)
+ 
+ 	// Returns the associated launch param if the game is run via steam://run/<appid>//?param1=value1;param2=value2;param3=value3 etc.
+ 	// Parameter names starting with the character '@' are reserved for internal use and will always return and empty string.
+diff --git a/dll/dll/steam_controller.h b/dll/dll/steam_controller.h
+index 3188b78..4f93b0a 100644
+--- a/dll/dll/steam_controller.h
++++ b/dll/dll/steam_controller.h
+@@ -203,6 +203,7 @@ public:
+ 
+     // Returns the current state of the supplied digital game action
+     ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle );
++    ControllerDigitalActionData_t &GetDigitalActionData(ControllerDigitalActionData_t &ret, ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle) { ret = GetDigitalActionData(controllerHandle, digitalActionHandle); return ret; } // MSVC return convention (MinGW build)
+ 
+ 
+     // Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+@@ -220,6 +221,7 @@ public:
+ 
+     // Returns the current state of these supplied analog game action
+     ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle );
++    ControllerAnalogActionData_t &GetAnalogActionData(ControllerAnalogActionData_t &ret, ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle) { ret = GetAnalogActionData(controllerHandle, analogActionHandle); return ret; } // MSVC return convention (MinGW build)
+ 
+ 
+     // Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+@@ -270,6 +272,7 @@ public:
+ 
+     // Returns raw motion data from the specified controller
+     ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle );
++    ControllerMotionData_t &GetMotionData(ControllerMotionData_t &ret, ControllerHandle_t controllerHandle) { ret = GetMotionData(controllerHandle); return ret; } // MSVC return convention (MinGW build)
+ 
+ 
+     // Attempt to display origins of given action in the controller HUD, for the currently active action set
+diff --git a/dll/dll/steam_friends.h b/dll/dll/steam_friends.h
+index 34b09eb..9cdff6a 100644
+--- a/dll/dll/steam_friends.h
++++ b/dll/dll/steam_friends.h
+@@ -131,11 +131,11 @@ public:
+     // the returned CSteamID can then be used by all the functions below to access details about the user
+     CSteamID GetFriendByIndex( int iFriend, int iFriendFlags );
+ 
+-    void GetFriendByIndex(CSteamID& res, int iFriend, int iFriendFlags );
++    CSteamID& GetFriendByIndex(CSteamID& res, int iFriend, int iFriendFlags );
+ 
+     CSteamID GetFriendByIndex( int iFriend, EFriendFlags eFriendFlags );
+ 
+-    void GetFriendByIndex(CSteamID& result, int iFriend, EFriendFlags eFriendFlags);
++    CSteamID& GetFriendByIndex(CSteamID& result, int iFriend, EFriendFlags eFriendFlags);
+ 
+     // returns a relationship to a user
+     EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend );
+@@ -157,6 +157,7 @@ public:
+ 	int32 AddFriendByName( const char *pchEmailOrAccountName );
+ 	int GetFriendCount();
+ 	CSteamID GetFriendByIndex( int iFriend );
++	CSteamID &GetFriendByIndex(CSteamID &ret, int iFriend) { ret = GetFriendByIndex(iFriend); return ret; } // MSVC return convention (MinGW build)
+ 	void SendMsgToFriend( CSteamID steamIDFriend, EChatEntryType eChatEntryType, const char *pchMsgBody );
+ 	void SetFriendRegValue( CSteamID steamIDFriend, const char *pchKey, const char *pchValue );
+ 	const char *GetFriendRegValue( CSteamID steamIDFriend, const char *pchKey );
+@@ -216,7 +217,7 @@ public:
+ 
+     CSteamID GetClanByIndex( int iClan );
+ 
+-    void GetClanByIndex(CSteamID& result, int iClan );
++    CSteamID& GetClanByIndex(CSteamID& result, int iClan );
+ 
+     const char *GetClanName( CSteamID steamIDClan );
+ 
+@@ -240,7 +241,7 @@ public:
+ 
+     CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend );
+ 
+-    void GetFriendFromSourceByIndex(CSteamID& res, CSteamID steamIDSource, int iFriend);
++    CSteamID& GetFriendFromSourceByIndex(CSteamID& res, CSteamID steamIDSource, int iFriend);
+ 
+ 
+     // returns true if the local user can see that steamIDUser is a member or in steamIDSource
+@@ -328,7 +329,7 @@ public:
+     // returns the steamID of the clan owner
+     CSteamID GetClanOwner( CSteamID steamIDClan );
+ 
+-    void GetClanOwner(CSteamID& res, CSteamID steamIDClan );
++    CSteamID& GetClanOwner(CSteamID& res, CSteamID steamIDClan );
+ 
+     // returns the number of officers in a clan (including the owner)
+     int GetClanOfficerCount( CSteamID steamIDClan );
+@@ -336,7 +337,7 @@ public:
+     // returns the steamID of a clan officer, by index, of range [0,GetClanOfficerCount)
+     CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer );
+ 
+-    void GetClanOfficerByIndex(CSteamID& res, CSteamID steamIDClan, int iOfficer );
++    CSteamID& GetClanOfficerByIndex(CSteamID& res, CSteamID steamIDClan, int iOfficer );
+ 
+     // if current user is chat restricted, he can't send or receive any text/voice chat messages.
+     // the user can't see custom avatars. But the user can be online and send/recv game invites.
+@@ -386,7 +387,7 @@ public:
+ 
+     CSteamID GetCoplayFriend( int iCoplayFriend );
+     
+-    void GetCoplayFriend(CSteamID& res, int iCoplayFriend );
++    CSteamID& GetCoplayFriend(CSteamID& res, int iCoplayFriend );
+ 
+     int GetFriendCoplayTime( CSteamID steamIDFriend );
+ 
+@@ -406,7 +407,7 @@ public:
+ 
+     CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser );
+     
+-    void GetChatMemberByIndex(CSteamID& res, CSteamID steamIDClan, int iUser );
++    CSteamID& GetChatMemberByIndex(CSteamID& res, CSteamID steamIDClan, int iUser );
+ 
+     bool SendClanChatMessage( CSteamID steamIDClanChat, const char *pchText );
+ 
+diff --git a/dll/dll/steam_gameserver.h b/dll/dll/steam_gameserver.h
+index 411dfe0..f548eda 100644
+--- a/dll/dll/steam_gameserver.h
++++ b/dll/dll/steam_gameserver.h
+@@ -139,6 +139,7 @@ public:
+     bool BLoggedOn();
+     bool BSecure(); 
+     CSteamID GetSteamID();
++    CSteamID &GetSteamID(CSteamID &ret) { ret = GetSteamID(); return ret; } // MSVC return convention (MinGW build)
+ 
+     /// Returns true if the master server has requested a restart.
+     /// Only returns true once per request.
+@@ -220,6 +221,7 @@ public:
+     // Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+     // when this user leaves the server just like you would for a real user.
+     CSteamID CreateUnauthenticatedUserConnection();
++    CSteamID &CreateUnauthenticatedUserConnection(CSteamID &ret) { ret = CreateUnauthenticatedUserConnection(); return ret; } // MSVC return convention (MinGW build)
+ 
+     // Should be called whenever a user leaves our game server, this lets Steam internally
+     // track which users are currently on which servers for the purposes of preventing a single
+@@ -310,6 +312,7 @@ public:
+     // connect to
+     uint32 GetPublicIP_old();
+     SteamIPAddress_t GetPublicIP();
++    SteamIPAddress_t &GetPublicIP(SteamIPAddress_t &ret) { ret = GetPublicIP(); return ret; } // MSVC return convention (MinGW build)
+     void GetPublicIP_fix(SteamIPAddress_t *out);
+ 
+ // These are in GameSocketShare mode, where instead of ISteamGameServer creating its own
+diff --git a/dll/dll/steam_matchmaking.h b/dll/dll/steam_matchmaking.h
+index fa5da50..9fbc9a9 100644
+--- a/dll/dll/steam_matchmaking.h
++++ b/dll/dll/steam_matchmaking.h
+@@ -218,7 +218,7 @@ public:
+     // the returned CSteamID::IsValid() will be false if iLobby is out of range
+     CSteamID GetLobbyByIndex( int iLobby );
+ 
+-    void GetLobbyByIndex(CSteamID& res, int iLobby );
++    CSteamID& GetLobbyByIndex(CSteamID& res, int iLobby );
+ 
+ 
+     // Create a lobby on the Steam servers.
+@@ -272,7 +272,7 @@ public:
+     // note that the current user must be in a lobby to retrieve CSteamIDs of other users in that lobby
+     CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember );
+ 
+-    void GetLobbyMemberByIndex(CSteamID& res, CSteamID steamIDLobby, int iMember );
++    CSteamID& GetLobbyMemberByIndex(CSteamID& res, CSteamID steamIDLobby, int iMember );
+ 
+ 
+     // Get data associated with this lobby
+@@ -364,7 +364,7 @@ public:
+     // it is possible (bur rare) to join a lobby just as the owner is leaving, thus entering a lobby with self as the owner
+     CSteamID GetLobbyOwner( CSteamID steamIDLobby );
+ 
+-    void GetLobbyOwner(CSteamID& res, CSteamID steamIDLobby );
++    CSteamID& GetLobbyOwner(CSteamID& res, CSteamID steamIDLobby );
+ 
+     // asks the Steam servers for a list of lobbies that friends are in
+     // returns results by posting one RequestFriendsLobbiesResponse_t callback per friend/lobby pair
+diff --git a/dll/dll/steam_remoteplay.h b/dll/dll/steam_remoteplay.h
+index 750c774..8e37a5d 100644
+--- a/dll/dll/steam_remoteplay.h
++++ b/dll/dll/steam_remoteplay.h
+@@ -53,6 +53,7 @@ public:
+ 
+     // Get the SteamID of the connected user
+     CSteamID GetSessionSteamID( uint32 unSessionID );
++    CSteamID &GetSessionSteamID(CSteamID &ret, uint32 unSessionID) { ret = GetSessionSteamID(unSessionID); return ret; } // MSVC return convention (MinGW build)
+ 
+     // Get the guest ID of the connected user if they are a Remote Play Together guest
+     // This returns 0 if the sessionID isn't valid or the session isn't a Remote Play Together guest
+diff --git a/dll/dll/steam_user.h b/dll/dll/steam_user.h
+index e21c87d..0f41cf2 100644
+--- a/dll/dll/steam_user.h
++++ b/dll/dll/steam_user.h
+@@ -91,6 +91,7 @@ public:
+     // returns the CSteamID of the account currently logged into the Steam client
+     // a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+     CSteamID GetSteamID();
++    CSteamID &GetSteamID(CSteamID &ret) { ret = GetSteamID(); return ret; } // MSVC return convention (MinGW build)
+ 
+ 	bool IsVACBanned( int nGameID );
+ 	bool RequireShowVACBannedMessage( int nGameID );
+diff --git a/dll/steam_friends.cpp b/dll/steam_friends.cpp
+index 27f640f..6c75e32 100644
+--- a/dll/steam_friends.cpp
++++ b/dll/steam_friends.cpp
+@@ -311,11 +311,12 @@ CSteamID Steam_Friends::GetFriendByIndex( int iFriend, int iFriendFlags )
+     return id;
+ }
+ 
+-void Steam_Friends::GetFriendByIndex(CSteamID& res, int iFriend, int iFriendFlags )
++CSteamID& Steam_Friends::GetFriendByIndex(CSteamID& res, int iFriend, int iFriendFlags )
+ {
+ 	PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+ 	res = GetFriendByIndex(iFriend, iFriendFlags );
++    return res;
+ }
+ 
+ CSteamID Steam_Friends::GetFriendByIndex( int iFriend, EFriendFlags eFriendFlags )
+@@ -326,11 +327,12 @@ CSteamID Steam_Friends::GetFriendByIndex( int iFriend, EFriendFlags eFriendFlags
+ }
+ 
+ 
+-void Steam_Friends::GetFriendByIndex(CSteamID& result, int iFriend, EFriendFlags eFriendFlags)
++CSteamID& Steam_Friends::GetFriendByIndex(CSteamID& result, int iFriend, EFriendFlags eFriendFlags)
+ {
+ 	PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+ 	result = GetFriendByIndex(iFriend, eFriendFlags );
++    return result;
+ }
+ 
+ 
+@@ -671,11 +673,12 @@ CSteamID Steam_Friends::GetClanByIndex( int iClan )
+     return k_steamIDNil;
+ }
+ 
+-void Steam_Friends::GetClanByIndex( CSteamID& result, int iClan )
++CSteamID& Steam_Friends::GetClanByIndex( CSteamID& result, int iClan )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     result = GetClanByIndex(iClan);
++    return result;
+ }
+ 
+ const char* Steam_Friends::GetClanName( CSteamID steamIDClan )
+@@ -746,11 +749,12 @@ CSteamID Steam_Friends::GetFriendFromSourceByIndex( CSteamID steamIDSource, int
+     return k_steamIDNil;
+ }
+ 
+-void Steam_Friends::GetFriendFromSourceByIndex( CSteamID& res, CSteamID steamIDSource, int iFriend )
++CSteamID& Steam_Friends::GetFriendFromSourceByIndex( CSteamID& res, CSteamID steamIDSource, int iFriend )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetFriendFromSourceByIndex( steamIDSource, iFriend );
++    return res;
+ }
+ 
+ 
+@@ -975,11 +979,12 @@ CSteamID Steam_Friends::GetClanOwner( CSteamID steamIDClan )
+     return k_steamIDNil;
+ }
+ 
+-void Steam_Friends::GetClanOwner(CSteamID& res, CSteamID steamIDClan )
++CSteamID& Steam_Friends::GetClanOwner(CSteamID& res, CSteamID steamIDClan )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetClanOwner( steamIDClan );
++    return res;
+ }
+ 
+ // returns the number of officers in a clan (including the owner)
+@@ -998,11 +1003,12 @@ CSteamID Steam_Friends::GetClanOfficerByIndex( CSteamID steamIDClan, int iOffice
+     return k_steamIDNil;
+ }
+ 
+-void Steam_Friends::GetClanOfficerByIndex(CSteamID& res, CSteamID steamIDClan, int iOfficer )
++CSteamID& Steam_Friends::GetClanOfficerByIndex(CSteamID& res, CSteamID steamIDClan, int iOfficer )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetClanOfficerByIndex( steamIDClan, iOfficer );
++    return res;
+ }
+ 
+ // if current user is chat restricted, he can't send or receive any text/voice chat messages.
+@@ -1185,11 +1191,12 @@ CSteamID Steam_Friends::GetCoplayFriend( int iCoplayFriend )
+     return k_steamIDNil;
+ }
+ 
+-void Steam_Friends::GetCoplayFriend( CSteamID& res, int iCoplayFriend )
++CSteamID& Steam_Friends::GetCoplayFriend( CSteamID& res, int iCoplayFriend )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetCoplayFriend( iCoplayFriend );
++    return res;
+ }
+ 
+ int Steam_Friends::GetFriendCoplayTime( CSteamID steamIDFriend )
+@@ -1247,11 +1254,12 @@ CSteamID Steam_Friends::GetChatMemberByIndex( CSteamID steamIDClan, int iUser )
+     return k_steamIDNil;
+ }
+ 
+-void Steam_Friends::GetChatMemberByIndex(CSteamID& res, CSteamID steamIDClan, int iUser )
++CSteamID& Steam_Friends::GetChatMemberByIndex(CSteamID& res, CSteamID steamIDClan, int iUser )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetChatMemberByIndex( steamIDClan, iUser );
++    return res;
+ }
+ 
+ bool Steam_Friends::SendClanChatMessage( CSteamID steamIDClanChat, const char *pchText )
+diff --git a/dll/steam_matchmaking.cpp b/dll/steam_matchmaking.cpp
+index 7660206..f38c726 100644
+--- a/dll/steam_matchmaking.cpp
++++ b/dll/steam_matchmaking.cpp
+@@ -601,11 +601,12 @@ CSteamID Steam_Matchmaking::GetLobbyByIndex( int iLobby )
+     return id;
+ }
+ 
+-void Steam_Matchmaking::GetLobbyByIndex(CSteamID& res, int iLobby )
++CSteamID& Steam_Matchmaking::GetLobbyByIndex(CSteamID& res, int iLobby )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetLobbyByIndex(iLobby );
++    return res;
+ }
+ 
+ // Create a lobby on the Steam servers.
+@@ -776,11 +777,12 @@ CSteamID Steam_Matchmaking::GetLobbyMemberByIndex( CSteamID steamIDLobby, int iM
+     return id;
+ }
+ 
+-void Steam_Matchmaking::GetLobbyMemberByIndex(CSteamID&res, CSteamID steamIDLobby, int iMember )
++CSteamID& Steam_Matchmaking::GetLobbyMemberByIndex(CSteamID&res, CSteamID steamIDLobby, int iMember )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetLobbyMemberByIndex( steamIDLobby, iMember );
++    return res;
+ }
+ 
+ 
+@@ -1194,11 +1196,12 @@ CSteamID Steam_Matchmaking::GetLobbyOwner( CSteamID steamIDLobby )
+     return (uint64)lobby->owner();
+ }
+ 
+-void Steam_Matchmaking::GetLobbyOwner(CSteamID& res, CSteamID steamIDLobby )
++CSteamID& Steam_Matchmaking::GetLobbyOwner(CSteamID& res, CSteamID steamIDLobby )
+ {
+     PRINT_DEBUG_GNU_WIN();
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+     res = GetLobbyOwner( steamIDLobby );
++    return res;
+ }
+ 
+ // asks the Steam servers for a list of lobbies that friends are in
+diff --git a/sdk/steam/isteamapps.h b/sdk/steam/isteamapps.h
+index c0f4dcf..f3812c6 100644
+--- a/sdk/steam/isteamapps.h
++++ b/sdk/steam/isteamapps.h
+@@ -80,7 +80,7 @@ public:
+ 
+ 	// returns the SteamID of the original owner. If this CSteamID is different from ISteamUser::GetSteamID(),
+ 	// the user has a temporary license borrowed via Family Sharing
+-	virtual CSteamID GetAppOwner() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetAppOwner) /*virtual CSteamID GetAppOwner() = 0;*/
+ 
+ 	// Returns the associated launch param if the game is run via steam://run/<appid>//?param1=value1&param2=value2&param3=value3 etc.
+ 	// Parameter names starting with the character '@' are reserved for internal use and will always return and empty string.
+diff --git a/sdk/steam/isteamapps006.h b/sdk/steam/isteamapps006.h
+index 9f35cd7..2248312 100644
+--- a/sdk/steam/isteamapps006.h
++++ b/sdk/steam/isteamapps006.h
+@@ -54,7 +54,7 @@ public:
+ 	virtual uint32 GetAppInstallDir( AppId_t appID, char *pchFolder, uint32 cchFolderBufferSize ) = 0;
+ 	virtual bool BIsAppInstalled( AppId_t appID ) = 0; // returns true if that app is installed (not necessarily owned)
+ 	
+-	virtual CSteamID GetAppOwner() = 0; // returns the SteamID of the original owner. If different from current user, it's borrowed
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetAppOwner) /*virtual CSteamID GetAppOwner() = 0;*/ // returns the SteamID of the original owner. If different from current user, it's borrowed
+ 
+ 	// Returns the associated launch param if the game is run via steam://run/<appid>//?param1=value1;param2=value2;param3=value3 etc.
+ 	// Parameter names starting with the character '@' are reserved for internal use and will always return and empty string.
+diff --git a/sdk/steam/isteamapps007.h b/sdk/steam/isteamapps007.h
+index 5ebd001..5a8a8b5 100644
+--- a/sdk/steam/isteamapps007.h
++++ b/sdk/steam/isteamapps007.h
+@@ -54,7 +54,7 @@ public:
+ 	virtual uint32 GetAppInstallDir( AppId_t appID, char *pchFolder, uint32 cchFolderBufferSize ) = 0;
+ 	virtual bool BIsAppInstalled( AppId_t appID ) = 0; // returns true if that app is installed (not necessarily owned)
+ 	
+-	virtual CSteamID GetAppOwner() = 0; // returns the SteamID of the original owner. If different from current user, it's borrowed
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetAppOwner) /*virtual CSteamID GetAppOwner() = 0;*/ // returns the SteamID of the original owner. If different from current user, it's borrowed
+ 
+ 	// Returns the associated launch param if the game is run via steam://run/<appid>//?param1=value1;param2=value2;param3=value3 etc.
+ 	// Parameter names starting with the character '@' are reserved for internal use and will always return and empty string.
+diff --git a/sdk/steam/isteamapps008.h b/sdk/steam/isteamapps008.h
+index 17aa65e..67b8cfe 100644
+--- a/sdk/steam/isteamapps008.h
++++ b/sdk/steam/isteamapps008.h
+@@ -56,7 +56,7 @@ public:
+ 
+     // returns the SteamID of the original owner. If this CSteamID is different from ISteamUser::GetSteamID(),
+     // the user has a temporary license borrowed via Family Sharing
+-    virtual CSteamID GetAppOwner() = 0;
++    STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetAppOwner) /*virtual CSteamID GetAppOwner() = 0;*/
+ 
+     // Returns the associated launch param if the game is run via steam://run/<appid>//?param1=value1&param2=value2&param3=value3 etc.
+     // Parameter names starting with the character '@' are reserved for internal use and will always return and empty string.
+diff --git a/sdk/steam/isteamcontroller.h b/sdk/steam/isteamcontroller.h
+index 3b15630..4097823 100644
+--- a/sdk/steam/isteamcontroller.h
++++ b/sdk/steam/isteamcontroller.h
+@@ -975,7 +975,7 @@ public:
+ 	virtual ControllerDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 
+ 	// Returns the current state of the supplied digital game action
+-	virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerDigitalActionData_t, GetDigitalActionData, ControllerHandle_t, controllerHandle, ControllerDigitalActionHandle_t, digitalActionHandle) /*virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles. The EControllerActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -986,7 +986,7 @@ public:
+ 	virtual ControllerAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 
+ 	// Returns the current state of these supplied analog game action
+-	virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerAnalogActionData_t, GetAnalogActionData, ControllerHandle_t, controllerHandle, ControllerAnalogActionHandle_t, analogActionHandle) /*virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles. The EControllerActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -1002,7 +1002,7 @@ public:
+ 	virtual void StopAnalogActionMomentum( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t eAction ) = 0;
+ 
+ 	// Returns raw motion data from the specified controller
+-	virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(ControllerMotionData_t, GetMotionData, ControllerHandle_t, controllerHandle) /*virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;*/
+ 
+ 	//-----------------------------------------------------------------------------
+ 	// OUTPUTS
+diff --git a/sdk/steam/isteamcontroller003.h b/sdk/steam/isteamcontroller003.h
+index 1ba7cd2..d9000a7 100644
+--- a/sdk/steam/isteamcontroller003.h
++++ b/sdk/steam/isteamcontroller003.h
+@@ -43,7 +43,7 @@ public:
+ 	virtual ControllerDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerDigitalActionData_t, GetDigitalActionData, ControllerHandle_t, controllerHandle, ControllerDigitalActionHandle_t, digitalActionHandle) /*virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+@@ -53,7 +53,7 @@ public:
+ 	virtual ControllerAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerAnalogActionData_t, GetAnalogActionData, ControllerHandle_t, controllerHandle, ControllerAnalogActionHandle_t, analogActionHandle) /*virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+diff --git a/sdk/steam/isteamcontroller004.h b/sdk/steam/isteamcontroller004.h
+index c8fd507..8d76cb9 100644
+--- a/sdk/steam/isteamcontroller004.h
++++ b/sdk/steam/isteamcontroller004.h
+@@ -42,7 +42,7 @@ public:
+ 	virtual ControllerDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerDigitalActionData_t, GetDigitalActionData, ControllerHandle_t, controllerHandle, ControllerDigitalActionHandle_t, digitalActionHandle) /*virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+@@ -52,7 +52,7 @@ public:
+ 	virtual ControllerAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerAnalogActionData_t, GetAnalogActionData, ControllerHandle_t, controllerHandle, ControllerAnalogActionHandle_t, analogActionHandle) /*virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+@@ -74,7 +74,7 @@ public:
+ 	virtual ControllerHandle_t GetControllerForGamepadIndex( int nIndex ) = 0;
+ 	
+ 	// Returns raw motion data from the specified controller
+-	virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(ControllerMotionData_t, GetMotionData, ControllerHandle_t, controllerHandle) /*virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;*/
+ 	
+ 	// Attempt to display origins of given action in the controller HUD, for the currently active action set
+ 	// Returns false is overlay is disabled / unavailable, or the user is not in Big Picture mode
+diff --git a/sdk/steam/isteamcontroller005.h b/sdk/steam/isteamcontroller005.h
+index 5e7bab7..991b966 100644
+--- a/sdk/steam/isteamcontroller005.h
++++ b/sdk/steam/isteamcontroller005.h
+@@ -41,7 +41,7 @@ public:
+ 	virtual ControllerDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerDigitalActionData_t, GetDigitalActionData, ControllerHandle_t, controllerHandle, ControllerDigitalActionHandle_t, digitalActionHandle) /*virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+@@ -51,7 +51,7 @@ public:
+ 	virtual ControllerAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerAnalogActionData_t, GetAnalogActionData, ControllerHandle_t, controllerHandle, ControllerAnalogActionHandle_t, analogActionHandle) /*virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+@@ -79,7 +79,7 @@ public:
+ 	virtual ControllerHandle_t GetControllerForGamepadIndex( int nIndex ) = 0;
+ 	
+ 	// Returns raw motion data from the specified controller
+-	virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(ControllerMotionData_t, GetMotionData, ControllerHandle_t, controllerHandle) /*virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;*/
+ 	
+ 	// Attempt to display origins of given action in the controller HUD, for the currently active action set
+ 	// Returns false is overlay is disabled / unavailable, or the user is not in Big Picture mode
+diff --git a/sdk/steam/isteamcontroller006.h b/sdk/steam/isteamcontroller006.h
+index d82215f..0f6d704 100644
+--- a/sdk/steam/isteamcontroller006.h
++++ b/sdk/steam/isteamcontroller006.h
+@@ -48,7 +48,7 @@ public:
+ 	virtual ControllerDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerDigitalActionData_t, GetDigitalActionData, ControllerHandle_t, controllerHandle, ControllerDigitalActionHandle_t, digitalActionHandle) /*virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+@@ -58,7 +58,7 @@ public:
+ 	virtual ControllerAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerAnalogActionData_t, GetAnalogActionData, ControllerHandle_t, controllerHandle, ControllerAnalogActionHandle_t, analogActionHandle) /*virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles
+@@ -86,7 +86,7 @@ public:
+ 	virtual ControllerHandle_t GetControllerForGamepadIndex( int nIndex ) = 0;
+ 	
+ 	// Returns raw motion data from the specified controller
+-	virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(ControllerMotionData_t, GetMotionData, ControllerHandle_t, controllerHandle) /*virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;*/
+ 	
+ 	// Attempt to display origins of given action in the controller HUD, for the currently active action set
+ 	// Returns false is overlay is disabled / unavailable, or the user is not in Big Picture mode
+diff --git a/sdk/steam/isteamcontroller007.h b/sdk/steam/isteamcontroller007.h
+index 76c401c..5f495ed 100644
+--- a/sdk/steam/isteamcontroller007.h
++++ b/sdk/steam/isteamcontroller007.h
+@@ -54,7 +54,7 @@ public:
+ 	virtual ControllerDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerDigitalActionData_t, GetDigitalActionData, ControllerHandle_t, controllerHandle, ControllerDigitalActionHandle_t, digitalActionHandle) /*virtual ControllerDigitalActionData_t GetDigitalActionData( ControllerHandle_t controllerHandle, ControllerDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles. The EControllerActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -65,7 +65,7 @@ public:
+ 	virtual ControllerAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(ControllerAnalogActionData_t, GetAnalogActionData, ControllerHandle_t, controllerHandle, ControllerAnalogActionHandle_t, analogActionHandle) /*virtual ControllerAnalogActionData_t GetAnalogActionData( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_CONTROLLER_MAX_ORIGINS sized array of EControllerActionOrigin handles. The EControllerActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -81,7 +81,7 @@ public:
+ 	virtual void StopAnalogActionMomentum( ControllerHandle_t controllerHandle, ControllerAnalogActionHandle_t eAction ) = 0;
+ 
+ 	// Returns raw motion data from the specified controller
+-	virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(ControllerMotionData_t, GetMotionData, ControllerHandle_t, controllerHandle) /*virtual ControllerMotionData_t GetMotionData( ControllerHandle_t controllerHandle ) = 0;*/
+ 
+ 	//-----------------------------------------------------------------------------
+ 	// OUTPUTS
+diff --git a/sdk/steam/isteamfriends.h b/sdk/steam/isteamfriends.h
+index 1877e22..9598140 100644
+--- a/sdk/steam/isteamfriends.h
++++ b/sdk/steam/isteamfriends.h
+@@ -225,7 +225,7 @@ public:
+ 	// iFriend is a index of range [0, GetFriendCount())
+ 	// iFriendsFlags must be the same value as used in GetFriendCount()
+ 	// the returned CSteamID can then be used by all the functions below to access details about the user
+-	virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendByIndex, int, iFriend, int, iFriendFlags) /*virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;*/
+ 
+ 	// returns a relationship to a user
+ 	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
+@@ -269,7 +269,7 @@ public:
+ 
+ 	// clan (group) iteration and access functions
+ 	virtual int GetClanCount() = 0;
+-	virtual CSteamID GetClanByIndex( int iClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanByIndex, int, iClan) /*virtual CSteamID GetClanByIndex( int iClan ) = 0;*/
+ 	virtual const char *GetClanName( CSteamID steamIDClan ) = 0;
+ 	virtual const char *GetClanTag( CSteamID steamIDClan ) = 0;
+ 	// returns the most recent information we have about what's happening in a clan
+@@ -284,7 +284,7 @@ public:
+ 	// note that the current user must be in a lobby to retrieve CSteamIDs of other users in that lobby
+ 	// steamIDSource can be the steamID of a group, game server, lobby or chat room
+ 	virtual int GetFriendCountFromSource( CSteamID steamIDSource ) = 0;
+-	virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendFromSourceByIndex, CSteamID, steamIDSource, int, iFriend) /*virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;*/
+ 
+ 	// returns true if the local user can see that steamIDUser is a member or in steamIDSource
+ 	virtual bool IsUserInSource( CSteamID steamIDUser, CSteamID steamIDSource ) = 0;
+@@ -353,11 +353,11 @@ public:
+ 	// iteration of clan officers - can only be done when a RequestClanOfficerList() call has completed
+ 	
+ 	// returns the steamID of the clan owner
+-	virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanOwner, CSteamID, steamIDClan) /*virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;*/
+ 	// returns the number of officers in a clan (including the owner)
+ 	virtual int GetClanOfficerCount( CSteamID steamIDClan ) = 0;
+ 	// returns the steamID of a clan officer, by index, of range [0,GetClanOfficerCount)
+-	virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetClanOfficerByIndex, CSteamID, steamIDClan, int, iOfficer) /*virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;*/
+ 
+ 	// Rich Presence data is automatically shared between friends who are in the same game
+ 	// Each user has a set of Key/Value pairs
+@@ -392,7 +392,7 @@ public:
+ 	// this iterates the entire list of users recently played with, across games
+ 	// GetFriendCoplayTime() returns as a unix time
+ 	virtual int GetCoplayFriendCount() = 0;
+-	virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetCoplayFriend, int, iCoplayFriend) /*virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;*/
+ 	virtual int GetFriendCoplayTime( CSteamID steamIDFriend ) = 0;
+ 	virtual AppId_t GetFriendCoplayGame( CSteamID steamIDFriend ) = 0;
+ 
+@@ -404,7 +404,7 @@ public:
+ 	virtual SteamAPICall_t JoinClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual bool LeaveClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual int GetClanChatMemberCount( CSteamID steamIDClan ) = 0;
+-	virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetChatMemberByIndex, CSteamID, steamIDClan, int, iUser) /*virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;*/
+ 	virtual bool SendClanChatMessage( CSteamID steamIDClanChat, const char *pchText ) = 0;
+ 	virtual int GetClanChatMessage( CSteamID steamIDClanChat, int iMessage, void *prgchText, int cchTextMax, EChatEntryType *peChatEntryType, STEAM_OUT_STRUCT() CSteamID *psteamidChatter ) = 0;
+ 	virtual bool IsClanChatAdmin( CSteamID steamIDClanChat, CSteamID steamIDUser ) = 0;
+diff --git a/sdk/steam/isteamfriends001.h b/sdk/steam/isteamfriends001.h
+index a82ed0c..2732d49 100644
+--- a/sdk/steam/isteamfriends001.h
++++ b/sdk/steam/isteamfriends001.h
+@@ -31,7 +31,7 @@ public:
+ 	virtual const char *GetFriendPersonaName( CSteamID steamIDFriend ) = 0;
+ 	virtual int32 AddFriendByName( const char *pchEmailOrAccountName ) = 0;
+ 	virtual int GetFriendCount() = 0;
+-	virtual CSteamID GetFriendByIndex( int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetFriendByIndex, int, iFriend) /*virtual CSteamID GetFriendByIndex( int iFriend ) = 0;*/
+ 	virtual void SendMsgToFriend( CSteamID steamIDFriend, EChatEntryType eChatEntryType, const char *pchMsgBody ) = 0;
+ 	virtual void SetFriendRegValue( CSteamID steamIDFriend, const char *pchKey, const char *pchValue ) = 0;
+ 	virtual const char *GetFriendRegValue( CSteamID steamIDFriend, const char *pchKey ) = 0;
+diff --git a/sdk/steam/isteamfriends002.h b/sdk/steam/isteamfriends002.h
+index 2e055e7..3ecb4bb 100644
+--- a/sdk/steam/isteamfriends002.h
++++ b/sdk/steam/isteamfriends002.h
+@@ -37,7 +37,7 @@ public:
+ 	// iFriend is a index of range [0, GetFriendCount())
+ 	// iFriendsFlags must be the same value as used in GetFriendCount()
+ 	// the returned CSteamID can then be used by all the functions below to access details about the user
+-	virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendByIndex, int, iFriend, int, iFriendFlags) /*virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;*/
+ 
+ 	// returns a relationship to a user
+ 	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
+@@ -76,7 +76,7 @@ public:
+ 
+ 	// clan (group) iteration and access functions
+ 	virtual int GetClanCount() = 0;
+-	virtual CSteamID GetClanByIndex( int iClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanByIndex, int, iClan) /*virtual CSteamID GetClanByIndex( int iClan ) = 0;*/
+ 	virtual const char *GetClanName( CSteamID steamIDClan ) = 0;
+ 
+ 	virtual bool InviteFriendToClan( CSteamID steamIDFriend, CSteamID steamIDClan ) = 0;
+@@ -86,7 +86,7 @@ public:
+ 	// note that large clans that cannot be iterated by the local user
+ 	// steamIDSource can be the steamID of a group, game server, lobby or chat room
+ 	virtual int GetFriendCountFromSource( CSteamID steamIDSource ) = 0;
+-	virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendFromSourceByIndex, CSteamID, steamIDSource, int, iFriend) /*virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;*/
+ };
+ 
+ 
+diff --git a/sdk/steam/isteamfriends003.h b/sdk/steam/isteamfriends003.h
+index 148aaa8..3ed9a87 100644
+--- a/sdk/steam/isteamfriends003.h
++++ b/sdk/steam/isteamfriends003.h
+@@ -31,7 +31,7 @@ public:
+ 	// iFriend is a index of range [0, GetFriendCount())
+ 	// iFriendsFlags must be the same value as used in GetFriendCount()
+ 	// the returned CSteamID can then be used by all the functions below to access details about the user
+-	virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendByIndex, int, iFriend, int, iFriendFlags) /*virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;*/
+ 
+ 	// returns a relationship to a user
+ 	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
+@@ -59,14 +59,14 @@ public:
+ 
+ 	// clan (group) iteration and access functions
+ 	virtual int GetClanCount() = 0;
+-	virtual CSteamID GetClanByIndex( int iClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanByIndex, int, iClan) /*virtual CSteamID GetClanByIndex( int iClan ) = 0;*/
+ 	virtual const char *GetClanName( CSteamID steamIDClan ) = 0;
+ 
+ 	// iterators for getting users in a chat room, lobby, game server or clan
+ 	// note that large clans that cannot be iterated by the local user
+ 	// steamIDSource can be the steamID of a group, game server, lobby or chat room
+ 	virtual int GetFriendCountFromSource( CSteamID steamIDSource ) = 0;
+-	virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendFromSourceByIndex, CSteamID, steamIDSource, int, iFriend) /*virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;*/
+ 
+ 	// returns true if the local user can see that steamIDUser is a member or in steamIDSource
+ 	virtual bool IsUserInSource( CSteamID steamIDUser, CSteamID steamIDSource ) = 0;
+diff --git a/sdk/steam/isteamfriends014.h b/sdk/steam/isteamfriends014.h
+index b423e66..eae7527 100644
+--- a/sdk/steam/isteamfriends014.h
++++ b/sdk/steam/isteamfriends014.h
+@@ -41,7 +41,7 @@ public:
+ 	// iFriend is a index of range [0, GetFriendCount())
+ 	// iFriendsFlags must be the same value as used in GetFriendCount()
+ 	// the returned CSteamID can then be used by all the functions below to access details about the user
+-	virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendByIndex, int, iFriend, int, iFriendFlags) /*virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;*/
+ 
+ 	// returns a relationship to a user
+ 	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
+@@ -70,7 +70,7 @@ public:
+ 
+ 	// clan (group) iteration and access functions
+ 	virtual int GetClanCount() = 0;
+-	virtual CSteamID GetClanByIndex( int iClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanByIndex, int, iClan) /*virtual CSteamID GetClanByIndex( int iClan ) = 0;*/
+ 	virtual const char *GetClanName( CSteamID steamIDClan ) = 0;
+ 	virtual const char *GetClanTag( CSteamID steamIDClan ) = 0;
+ 	// returns the most recent information we have about what's happening in a clan
+@@ -83,7 +83,7 @@ public:
+ 	// note that the current user must be in a lobby to retrieve CSteamIDs of other users in that lobby
+ 	// steamIDSource can be the steamID of a group, game server, lobby or chat room
+ 	virtual int GetFriendCountFromSource( CSteamID steamIDSource ) = 0;
+-	virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendFromSourceByIndex, CSteamID, steamIDSource, int, iFriend) /*virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;*/
+ 
+ 	// returns true if the local user can see that steamIDUser is a member or in steamIDSource
+ 	virtual bool IsUserInSource( CSteamID steamIDUser, CSteamID steamIDSource ) = 0;
+@@ -150,11 +150,11 @@ public:
+ 	// iteration of clan officers - can only be done when a RequestClanOfficerList() call has completed
+ 	
+ 	// returns the steamID of the clan owner
+-	virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanOwner, CSteamID, steamIDClan) /*virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;*/
+ 	// returns the number of officers in a clan (including the owner)
+ 	virtual int GetClanOfficerCount( CSteamID steamIDClan ) = 0;
+ 	// returns the steamID of a clan officer, by index, of range [0,GetClanOfficerCount)
+-	virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetClanOfficerByIndex, CSteamID, steamIDClan, int, iOfficer) /*virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;*/
+ 	// if current user is chat restricted, he can't send or receive any text/voice chat messages.
+ 	// the user can't see custom avatars. But the user can be online and send/recv game invites.
+ 	// a chat restricted user can't add friends or join any groups.
+@@ -188,7 +188,7 @@ public:
+ 	// this iterates the entire list of users recently played with, across games
+ 	// GetFriendCoplayTime() returns as a unix time
+ 	virtual int GetCoplayFriendCount() = 0;
+-	virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetCoplayFriend, int, iCoplayFriend) /*virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;*/
+ 	virtual int GetFriendCoplayTime( CSteamID steamIDFriend ) = 0;
+ 	virtual AppId_t GetFriendCoplayGame( CSteamID steamIDFriend ) = 0;
+ 
+@@ -199,7 +199,7 @@ public:
+ 	virtual SteamAPICall_t JoinClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual bool LeaveClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual int GetClanChatMemberCount( CSteamID steamIDClan ) = 0;
+-	virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetChatMemberByIndex, CSteamID, steamIDClan, int, iUser) /*virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;*/
+ 	virtual bool SendClanChatMessage( CSteamID steamIDClanChat, const char *pchText ) = 0;
+ 	virtual int GetClanChatMessage( CSteamID steamIDClanChat, int iMessage, void *prgchText, int cchTextMax, EChatEntryType *peChatEntryType, CSteamID *psteamidChatter ) = 0;
+ 	virtual bool IsClanChatAdmin( CSteamID steamIDClanChat, CSteamID steamIDUser ) = 0;
+diff --git a/sdk/steam/isteamfriends015.h b/sdk/steam/isteamfriends015.h
+index 5384116..7dd382e 100644
+--- a/sdk/steam/isteamfriends015.h
++++ b/sdk/steam/isteamfriends015.h
+@@ -42,7 +42,7 @@ public:
+ 	// iFriend is a index of range [0, GetFriendCount())
+ 	// iFriendsFlags must be the same value as used in GetFriendCount()
+ 	// the returned CSteamID can then be used by all the functions below to access details about the user
+-	virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendByIndex, int, iFriend, int, iFriendFlags) /*virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;*/
+ 
+ 	// returns a relationship to a user
+ 	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
+@@ -85,7 +85,7 @@ public:
+ 
+ 	// clan (group) iteration and access functions
+ 	virtual int GetClanCount() = 0;
+-	virtual CSteamID GetClanByIndex( int iClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanByIndex, int, iClan) /*virtual CSteamID GetClanByIndex( int iClan ) = 0;*/
+ 	virtual const char *GetClanName( CSteamID steamIDClan ) = 0;
+ 	virtual const char *GetClanTag( CSteamID steamIDClan ) = 0;
+ 	// returns the most recent information we have about what's happening in a clan
+@@ -98,7 +98,7 @@ public:
+ 	// note that the current user must be in a lobby to retrieve CSteamIDs of other users in that lobby
+ 	// steamIDSource can be the steamID of a group, game server, lobby or chat room
+ 	virtual int GetFriendCountFromSource( CSteamID steamIDSource ) = 0;
+-	virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendFromSourceByIndex, CSteamID, steamIDSource, int, iFriend) /*virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;*/
+ 
+ 	// returns true if the local user can see that steamIDUser is a member or in steamIDSource
+ 	virtual bool IsUserInSource( CSteamID steamIDUser, CSteamID steamIDSource ) = 0;
+@@ -166,11 +166,11 @@ public:
+ 	// iteration of clan officers - can only be done when a RequestClanOfficerList() call has completed
+ 	
+ 	// returns the steamID of the clan owner
+-	virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanOwner, CSteamID, steamIDClan) /*virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;*/
+ 	// returns the number of officers in a clan (including the owner)
+ 	virtual int GetClanOfficerCount( CSteamID steamIDClan ) = 0;
+ 	// returns the steamID of a clan officer, by index, of range [0,GetClanOfficerCount)
+-	virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetClanOfficerByIndex, CSteamID, steamIDClan, int, iOfficer) /*virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;*/
+ 	// if current user is chat restricted, he can't send or receive any text/voice chat messages.
+ 	// the user can't see custom avatars. But the user can be online and send/recv game invites.
+ 	// a chat restricted user can't add friends or join any groups.
+@@ -204,7 +204,7 @@ public:
+ 	// this iterates the entire list of users recently played with, across games
+ 	// GetFriendCoplayTime() returns as a unix time
+ 	virtual int GetCoplayFriendCount() = 0;
+-	virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetCoplayFriend, int, iCoplayFriend) /*virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;*/
+ 	virtual int GetFriendCoplayTime( CSteamID steamIDFriend ) = 0;
+ 	virtual AppId_t GetFriendCoplayGame( CSteamID steamIDFriend ) = 0;
+ 
+@@ -216,7 +216,7 @@ public:
+ 	virtual SteamAPICall_t JoinClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual bool LeaveClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual int GetClanChatMemberCount( CSteamID steamIDClan ) = 0;
+-	virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetChatMemberByIndex, CSteamID, steamIDClan, int, iUser) /*virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;*/
+ 	virtual bool SendClanChatMessage( CSteamID steamIDClanChat, const char *pchText ) = 0;
+ 	virtual int GetClanChatMessage( CSteamID steamIDClanChat, int iMessage, void *prgchText, int cchTextMax, EChatEntryType *peChatEntryType, STEAM_OUT_STRUCT() CSteamID *psteamidChatter ) = 0;
+ 	virtual bool IsClanChatAdmin( CSteamID steamIDClanChat, CSteamID steamIDUser ) = 0;
+diff --git a/sdk/steam/isteamfriends016.h b/sdk/steam/isteamfriends016.h
+index ac8678c..ac39510 100644
+--- a/sdk/steam/isteamfriends016.h
++++ b/sdk/steam/isteamfriends016.h
+@@ -41,7 +41,7 @@ public:
+ 	// iFriend is a index of range [0, GetFriendCount())
+ 	// iFriendsFlags must be the same value as used in GetFriendCount()
+ 	// the returned CSteamID can then be used by all the functions below to access details about the user
+-	virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendByIndex, int, iFriend, int, iFriendFlags) /*virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;*/
+ 
+ 	// returns a relationship to a user
+ 	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
+@@ -85,7 +85,7 @@ public:
+ 
+ 	// clan (group) iteration and access functions
+ 	virtual int GetClanCount() = 0;
+-	virtual CSteamID GetClanByIndex( int iClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanByIndex, int, iClan) /*virtual CSteamID GetClanByIndex( int iClan ) = 0;*/
+ 	virtual const char *GetClanName( CSteamID steamIDClan ) = 0;
+ 	virtual const char *GetClanTag( CSteamID steamIDClan ) = 0;
+ 	// returns the most recent information we have about what's happening in a clan
+@@ -98,7 +98,7 @@ public:
+ 	// note that the current user must be in a lobby to retrieve CSteamIDs of other users in that lobby
+ 	// steamIDSource can be the steamID of a group, game server, lobby or chat room
+ 	virtual int GetFriendCountFromSource( CSteamID steamIDSource ) = 0;
+-	virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendFromSourceByIndex, CSteamID, steamIDSource, int, iFriend) /*virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;*/
+ 
+ 	// returns true if the local user can see that steamIDUser is a member or in steamIDSource
+ 	virtual bool IsUserInSource( CSteamID steamIDUser, CSteamID steamIDSource ) = 0;
+@@ -167,11 +167,11 @@ public:
+ 	// iteration of clan officers - can only be done when a RequestClanOfficerList() call has completed
+ 	
+ 	// returns the steamID of the clan owner
+-	virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanOwner, CSteamID, steamIDClan) /*virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;*/
+ 	// returns the number of officers in a clan (including the owner)
+ 	virtual int GetClanOfficerCount( CSteamID steamIDClan ) = 0;
+ 	// returns the steamID of a clan officer, by index, of range [0,GetClanOfficerCount)
+-	virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetClanOfficerByIndex, CSteamID, steamIDClan, int, iOfficer) /*virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;*/
+ 	// if current user is chat restricted, he can't send or receive any text/voice chat messages.
+ 	// the user can't see custom avatars. But the user can be online and send/recv game invites.
+ 	// a chat restricted user can't add friends or join any groups.
+@@ -205,7 +205,7 @@ public:
+ 	// this iterates the entire list of users recently played with, across games
+ 	// GetFriendCoplayTime() returns as a unix time
+ 	virtual int GetCoplayFriendCount() = 0;
+-	virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetCoplayFriend, int, iCoplayFriend) /*virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;*/
+ 	virtual int GetFriendCoplayTime( CSteamID steamIDFriend ) = 0;
+ 	virtual AppId_t GetFriendCoplayGame( CSteamID steamIDFriend ) = 0;
+ 
+@@ -217,7 +217,7 @@ public:
+ 	virtual SteamAPICall_t JoinClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual bool LeaveClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual int GetClanChatMemberCount( CSteamID steamIDClan ) = 0;
+-	virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetChatMemberByIndex, CSteamID, steamIDClan, int, iUser) /*virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;*/
+ 	virtual bool SendClanChatMessage( CSteamID steamIDClanChat, const char *pchText ) = 0;
+ 	virtual int GetClanChatMessage( CSteamID steamIDClanChat, int iMessage, void *prgchText, int cchTextMax, EChatEntryType *peChatEntryType, STEAM_OUT_STRUCT() CSteamID *psteamidChatter ) = 0;
+ 	virtual bool IsClanChatAdmin( CSteamID steamIDClanChat, CSteamID steamIDUser ) = 0;
+diff --git a/sdk/steam/isteamfriends017.h b/sdk/steam/isteamfriends017.h
+index 702916e..1078e06 100644
+--- a/sdk/steam/isteamfriends017.h
++++ b/sdk/steam/isteamfriends017.h
+@@ -41,7 +41,7 @@ public:
+ 	// iFriend is a index of range [0, GetFriendCount())
+ 	// iFriendsFlags must be the same value as used in GetFriendCount()
+ 	// the returned CSteamID can then be used by all the functions below to access details about the user
+-	virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendByIndex, int, iFriend, int, iFriendFlags) /*virtual CSteamID GetFriendByIndex( int iFriend, int iFriendFlags ) = 0;*/
+ 
+ 	// returns a relationship to a user
+ 	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
+@@ -85,7 +85,7 @@ public:
+ 
+ 	// clan (group) iteration and access functions
+ 	virtual int GetClanCount() = 0;
+-	virtual CSteamID GetClanByIndex( int iClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanByIndex, int, iClan) /*virtual CSteamID GetClanByIndex( int iClan ) = 0;*/
+ 	virtual const char *GetClanName( CSteamID steamIDClan ) = 0;
+ 	virtual const char *GetClanTag( CSteamID steamIDClan ) = 0;
+ 	// returns the most recent information we have about what's happening in a clan
+@@ -100,7 +100,7 @@ public:
+ 	// note that the current user must be in a lobby to retrieve CSteamIDs of other users in that lobby
+ 	// steamIDSource can be the steamID of a group, game server, lobby or chat room
+ 	virtual int GetFriendCountFromSource( CSteamID steamIDSource ) = 0;
+-	virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetFriendFromSourceByIndex, CSteamID, steamIDSource, int, iFriend) /*virtual CSteamID GetFriendFromSourceByIndex( CSteamID steamIDSource, int iFriend ) = 0;*/
+ 
+ 	// returns true if the local user can see that steamIDUser is a member or in steamIDSource
+ 	virtual bool IsUserInSource( CSteamID steamIDUser, CSteamID steamIDSource ) = 0;
+@@ -169,11 +169,11 @@ public:
+ 	// iteration of clan officers - can only be done when a RequestClanOfficerList() call has completed
+ 	
+ 	// returns the steamID of the clan owner
+-	virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetClanOwner, CSteamID, steamIDClan) /*virtual CSteamID GetClanOwner( CSteamID steamIDClan ) = 0;*/
+ 	// returns the number of officers in a clan (including the owner)
+ 	virtual int GetClanOfficerCount( CSteamID steamIDClan ) = 0;
+ 	// returns the steamID of a clan officer, by index, of range [0,GetClanOfficerCount)
+-	virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetClanOfficerByIndex, CSteamID, steamIDClan, int, iOfficer) /*virtual CSteamID GetClanOfficerByIndex( CSteamID steamIDClan, int iOfficer ) = 0;*/
+ 	// if current user is chat restricted, he can't send or receive any text/voice chat messages.
+ 	// the user can't see custom avatars. But the user can be online and send/recv game invites.
+ 	// a chat restricted user can't add friends or join any groups.
+@@ -212,7 +212,7 @@ public:
+ 	// this iterates the entire list of users recently played with, across games
+ 	// GetFriendCoplayTime() returns as a unix time
+ 	virtual int GetCoplayFriendCount() = 0;
+-	virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetCoplayFriend, int, iCoplayFriend) /*virtual CSteamID GetCoplayFriend( int iCoplayFriend ) = 0;*/
+ 	virtual int GetFriendCoplayTime( CSteamID steamIDFriend ) = 0;
+ 	virtual AppId_t GetFriendCoplayGame( CSteamID steamIDFriend ) = 0;
+ 
+@@ -224,7 +224,7 @@ public:
+ 	virtual SteamAPICall_t JoinClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual bool LeaveClanChatRoom( CSteamID steamIDClan ) = 0;
+ 	virtual int GetClanChatMemberCount( CSteamID steamIDClan ) = 0;
+-	virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetChatMemberByIndex, CSteamID, steamIDClan, int, iUser) /*virtual CSteamID GetChatMemberByIndex( CSteamID steamIDClan, int iUser ) = 0;*/
+ 	virtual bool SendClanChatMessage( CSteamID steamIDClanChat, const char *pchText ) = 0;
+ 	virtual int GetClanChatMessage( CSteamID steamIDClanChat, int iMessage, void *prgchText, int cchTextMax, EChatEntryType *peChatEntryType, STEAM_OUT_STRUCT() CSteamID *psteamidChatter ) = 0;
+ 	virtual bool IsClanChatAdmin( CSteamID steamIDClanChat, CSteamID steamIDUser ) = 0;
+diff --git a/sdk/steam/isteamgameserver.h b/sdk/steam/isteamgameserver.h
+index 7e8bc5b..b4d28e2 100644
+--- a/sdk/steam/isteamgameserver.h
++++ b/sdk/steam/isteamgameserver.h
+@@ -68,7 +68,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	/// Returns true if the master server has requested a restart.
+ 	/// Only returns true once per request.
+@@ -184,7 +184,7 @@ public:
+ 	// Returns the public IP of the server according to Steam, useful when the server is 
+ 	// behind NAT and you want to advertise its IP in a lobby for other clients to directly
+ 	// connect to
+-	virtual SteamIPAddress_t GetPublicIP() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(SteamIPAddress_t, GetPublicIP) /*virtual SteamIPAddress_t GetPublicIP() = 0;*/
+ 
+ // Server browser related query packet processing for shared socket mode.  These are used
+ // when you pass STEAMGAMESERVER_QUERY_PORT_SHARED as the query port to SteamGameServer_Init.
+@@ -240,7 +240,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call EndAuthSession()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver002.h b/sdk/steam/isteamgameserver002.h
+index 3c6c8fa..8613158 100644
+--- a/sdk/steam/isteamgameserver002.h
++++ b/sdk/steam/isteamgameserver002.h
+@@ -23,7 +23,7 @@ public:
+ 	virtual bool Obsolete_GSSetStatus( int32 nAppIdServed, uint32 unServerFlags, int cPlayers, int cPlayersMax, int cBotPlayers, int unGamePort, const char *pchServerName, const char *pchGameDir, const char *pchMapName, const char *pchVersion ) = 0;
+ 	virtual bool GSUpdateStatus( int cPlayers, int cPlayersMax, int cBotPlayers, const char *pchServerName, const char *pchMapName ) = 0;
+ 	virtual bool BSecure() = 0;
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 	virtual bool GSSetServerType( int32 nGameAppId, uint32 unServerFlags, uint32 unGameIP, uint32 unGamePort, const char *pchGameDir, const char *pchVersion ) = 0;
+ 	virtual bool GSSetServerType2( int32 nGameAppId, uint32 unServerFlags, uint32 unGameIP, uint16 unGamePort, uint16 unSpectatorPort, uint16 usQueryPort, const char *pchGameDir, const char *pchVersion, bool bLANMode ) = 0;
+ 	virtual bool GSUpdateStatus2( int cPlayers, int cPlayersMax, int cBotPlayers, const char *pchServerName, const char *pSpectatorServerName, const char *pchMapName ) = 0;
+diff --git a/sdk/steam/isteamgameserver003.h b/sdk/steam/isteamgameserver003.h
+index d012fd6..6e555f0 100644
+--- a/sdk/steam/isteamgameserver003.h
++++ b/sdk/steam/isteamgameserver003.h
+@@ -17,7 +17,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	virtual bool GSGetSteam2GetEncryptionKeyToSendToNewClient( void *pvEncryptionKey, uint32 *pcbEncryptionKey, uint32 cbMaxEncryptionKey ) = 0;
+ 	virtual bool GSSendUserConnect( uint32 unUserID, uint32 unIPPublic, uint16 usPort, const void *pvCookie, uint32 cubCookie ) = 0;
+diff --git a/sdk/steam/isteamgameserver004.h b/sdk/steam/isteamgameserver004.h
+index de2f764..dc8c8b7 100644
+--- a/sdk/steam/isteamgameserver004.h
++++ b/sdk/steam/isteamgameserver004.h
+@@ -15,7 +15,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Handles receiving a new connection from a Steam user.  This call will ask the Steam
+ 	// servers to validate the users identity, app ownership, and VAC status.  If the Steam servers 
+@@ -32,7 +32,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver005.h b/sdk/steam/isteamgameserver005.h
+index dc365d0..2966efa 100644
+--- a/sdk/steam/isteamgameserver005.h
++++ b/sdk/steam/isteamgameserver005.h
+@@ -15,7 +15,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Handles receiving a new connection from a Steam user.  This call will ask the Steam
+ 	// servers to validate the users identity, app ownership, and VAC status.  If the Steam servers 
+@@ -32,7 +32,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver008.h b/sdk/steam/isteamgameserver008.h
+index d056bbc..f252854 100644
+--- a/sdk/steam/isteamgameserver008.h
++++ b/sdk/steam/isteamgameserver008.h
+@@ -15,7 +15,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Handles receiving a new connection from a Steam user.  This call will ask the Steam
+ 	// servers to validate the users identity, app ownership, and VAC status.  If the Steam servers 
+@@ -32,7 +32,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver009.h b/sdk/steam/isteamgameserver009.h
+index 1d9611b..31da7b1 100644
+--- a/sdk/steam/isteamgameserver009.h
++++ b/sdk/steam/isteamgameserver009.h
+@@ -15,7 +15,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Handles receiving a new connection from a Steam user.  This call will ask the Steam
+ 	// servers to validate the users identity, app ownership, and VAC status.  If the Steam servers 
+@@ -32,7 +32,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver010.h b/sdk/steam/isteamgameserver010.h
+index 86ade03..5b76fdf 100644
+--- a/sdk/steam/isteamgameserver010.h
++++ b/sdk/steam/isteamgameserver010.h
+@@ -15,7 +15,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Handles receiving a new connection from a Steam user.  This call will ask the Steam
+ 	// servers to validate the users identity, app ownership, and VAC status.  If the Steam servers 
+@@ -32,7 +32,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver011.h b/sdk/steam/isteamgameserver011.h
+index a77c6b2..e6aea19 100644
+--- a/sdk/steam/isteamgameserver011.h
++++ b/sdk/steam/isteamgameserver011.h
+@@ -61,7 +61,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	/// Returns true if the master server has requested a restart.
+ 	/// Only returns true once per request.
+@@ -141,7 +141,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver012.h b/sdk/steam/isteamgameserver012.h
+index 26f7385..5b6afdf 100644
+--- a/sdk/steam/isteamgameserver012.h
++++ b/sdk/steam/isteamgameserver012.h
+@@ -59,7 +59,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	/// Returns true if the master server has requested a restart.
+ 	/// Only returns true once per request.
+@@ -139,7 +139,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteamgameserver013.h b/sdk/steam/isteamgameserver013.h
+index fdd7711..d41017c 100644
+--- a/sdk/steam/isteamgameserver013.h
++++ b/sdk/steam/isteamgameserver013.h
+@@ -57,7 +57,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	/// Returns true if the master server has requested a restart.
+ 	/// Only returns true once per request.
+@@ -137,7 +137,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call HandleUserDisconnect()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+@@ -186,7 +186,7 @@ public:
+ 	// Returns the public IP of the server according to Steam, useful when the server is 
+ 	// behind NAT and you want to advertise its IP in a lobby for other clients to directly
+ 	// connect to
+-	virtual SteamIPAddress_t GetPublicIP() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(SteamIPAddress_t, GetPublicIP) /*virtual SteamIPAddress_t GetPublicIP() = 0;*/
+ 
+ // These are in GameSocketShare mode, where instead of ISteamGameServer creating its own
+ // socket to talk to the master server on, it lets the game use its socket to forward messages
+diff --git a/sdk/steam/isteamgameserver014.h b/sdk/steam/isteamgameserver014.h
+index d220945..7b526ed 100644
+--- a/sdk/steam/isteamgameserver014.h
++++ b/sdk/steam/isteamgameserver014.h
+@@ -58,7 +58,7 @@ public:
+ 	// status functions
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual bool BSecure() = 0; 
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	/// Returns true if the master server has requested a restart.
+ 	/// Only returns true once per request.
+@@ -172,7 +172,7 @@ public:
+ 	// Returns the public IP of the server according to Steam, useful when the server is 
+ 	// behind NAT and you want to advertise its IP in a lobby for other clients to directly
+ 	// connect to
+-	virtual SteamIPAddress_t GetPublicIP() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(SteamIPAddress_t, GetPublicIP) /*virtual SteamIPAddress_t GetPublicIP() = 0;*/
+ 
+ // Server browser related query packet processing for shared socket mode.  These are used
+ // when you pass STEAMGAMESERVER_QUERY_PORT_SHARED as the query port to SteamGameServer_Init.
+@@ -228,7 +228,7 @@ public:
+ 	// 
+ 	// Return Value: Returns a SteamID for the user to be tracked with, you should call EndAuthSession()
+ 	// when this user leaves the server just like you would for a real user.
+-	virtual CSteamID CreateUnauthenticatedUserConnection() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, CreateUnauthenticatedUserConnection) /*virtual CSteamID CreateUnauthenticatedUserConnection() = 0;*/
+ 
+ 	// Should be called whenever a user leaves our game server, this lets Steam internally
+ 	// track which users are currently on which servers for the purposes of preventing a single
+diff --git a/sdk/steam/isteaminput.h b/sdk/steam/isteaminput.h
+index ca13f51..817ca0a 100644
+--- a/sdk/steam/isteaminput.h
++++ b/sdk/steam/isteaminput.h
+@@ -1194,7 +1194,7 @@ public:
+ 	virtual InputDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 
+ 	// Returns the current state of the supplied digital game action
+-	virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputDigitalActionData_t, GetDigitalActionData, InputHandle_t, inputHandle, InputDigitalActionHandle_t, digitalActionHandle) /*virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -1208,7 +1208,7 @@ public:
+ 	virtual InputAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 
+ 	// Returns the current state of these supplied analog game action
+-	virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputAnalogActionData_t, GetAnalogActionData, InputHandle_t, inputHandle, InputAnalogActionHandle_t, analogActionHandle) /*virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -1234,7 +1234,7 @@ public:
+ 	virtual void StopAnalogActionMomentum( InputHandle_t inputHandle, InputAnalogActionHandle_t eAction ) = 0;
+ 
+ 	// Returns raw motion data from the specified device
+-	virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(InputMotionData_t, GetMotionData, InputHandle_t, inputHandle) /*virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;*/
+ 
+ 	//-----------------------------------------------------------------------------
+ 	// OUTPUTS
+diff --git a/sdk/steam/isteaminput001.h b/sdk/steam/isteaminput001.h
+index 372f754..ebbbef7 100644
+--- a/sdk/steam/isteaminput001.h
++++ b/sdk/steam/isteaminput001.h
+@@ -55,7 +55,7 @@ public:
+ 	virtual InputDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputDigitalActionData_t, GetDigitalActionData, InputHandle_t, inputHandle, InputDigitalActionHandle_t, digitalActionHandle) /*virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -66,7 +66,7 @@ public:
+ 	virtual InputAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputAnalogActionData_t, GetAnalogActionData, InputHandle_t, inputHandle, InputAnalogActionHandle_t, analogActionHandle) /*virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -83,7 +83,7 @@ public:
+ 	virtual void StopAnalogActionMomentum( InputHandle_t inputHandle, InputAnalogActionHandle_t eAction ) = 0;
+ 
+ 	// Returns raw motion data from the specified device
+-	virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(InputMotionData_t, GetMotionData, InputHandle_t, inputHandle) /*virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;*/
+ 
+ 	//-----------------------------------------------------------------------------
+ 	// OUTPUTS
+diff --git a/sdk/steam/isteaminput002.h b/sdk/steam/isteaminput002.h
+index dc16b0d..5799cf1 100644
+--- a/sdk/steam/isteaminput002.h
++++ b/sdk/steam/isteaminput002.h
+@@ -55,7 +55,7 @@ public:
+ 	virtual InputDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputDigitalActionData_t, GetDigitalActionData, InputHandle_t, inputHandle, InputDigitalActionHandle_t, digitalActionHandle) /*virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -66,7 +66,7 @@ public:
+ 	virtual InputAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputAnalogActionData_t, GetAnalogActionData, InputHandle_t, inputHandle, InputAnalogActionHandle_t, analogActionHandle) /*virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -83,7 +83,7 @@ public:
+ 	virtual void StopAnalogActionMomentum( InputHandle_t inputHandle, InputAnalogActionHandle_t eAction ) = 0;
+ 
+ 	// Returns raw motion data from the specified device
+-	virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(InputMotionData_t, GetMotionData, InputHandle_t, inputHandle) /*virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;*/
+ 
+ 	//-----------------------------------------------------------------------------
+ 	// OUTPUTS
+diff --git a/sdk/steam/isteaminput005.h b/sdk/steam/isteaminput005.h
+index 3298ce1..8fb5c48 100644
+--- a/sdk/steam/isteaminput005.h
++++ b/sdk/steam/isteaminput005.h
+@@ -100,7 +100,7 @@ public:
+ 	virtual InputDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of the supplied digital game action
+-	virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputDigitalActionData_t, GetDigitalActionData, InputHandle_t, inputHandle, InputDigitalActionHandle_t, digitalActionHandle) /*virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 	
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -114,7 +114,7 @@ public:
+ 	virtual InputAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 	
+ 	// Returns the current state of these supplied analog game action
+-	virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputAnalogActionData_t, GetAnalogActionData, InputHandle_t, inputHandle, InputAnalogActionHandle_t, analogActionHandle) /*virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -140,7 +140,7 @@ public:
+ 	virtual void StopAnalogActionMomentum( InputHandle_t inputHandle, InputAnalogActionHandle_t eAction ) = 0;
+ 
+ 	// Returns raw motion data from the specified device
+-	virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(InputMotionData_t, GetMotionData, InputHandle_t, inputHandle) /*virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;*/
+ 
+ 	//-----------------------------------------------------------------------------
+ 	// OUTPUTS
+diff --git a/sdk/steam/isteaminput006.h b/sdk/steam/isteaminput006.h
+index 7906720..bdb826b 100644
+--- a/sdk/steam/isteaminput006.h
++++ b/sdk/steam/isteaminput006.h
+@@ -106,7 +106,7 @@ public:
+ 	virtual InputDigitalActionHandle_t GetDigitalActionHandle( const char *pszActionName ) = 0;
+ 
+ 	// Returns the current state of the supplied digital game action
+-	virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputDigitalActionData_t, GetDigitalActionData, InputHandle_t, inputHandle, InputDigitalActionHandle_t, digitalActionHandle) /*virtual InputDigitalActionData_t GetDigitalActionData( InputHandle_t inputHandle, InputDigitalActionHandle_t digitalActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for a digital action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -120,7 +120,7 @@ public:
+ 	virtual InputAnalogActionHandle_t GetAnalogActionHandle( const char *pszActionName ) = 0;
+ 
+ 	// Returns the current state of these supplied analog game action
+-	virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(InputAnalogActionData_t, GetAnalogActionData, InputHandle_t, inputHandle, InputAnalogActionHandle_t, analogActionHandle) /*virtual InputAnalogActionData_t GetAnalogActionData( InputHandle_t inputHandle, InputAnalogActionHandle_t analogActionHandle ) = 0;*/
+ 
+ 	// Get the origin(s) for an analog action within an action set. Returns the number of origins supplied in originsOut. Use this to display the appropriate on-screen prompt for the action.
+ 	// originsOut should point to a STEAM_INPUT_MAX_ORIGINS sized array of EInputActionOrigin handles. The EInputActionOrigin enum will get extended as support for new controller controllers gets added to
+@@ -146,7 +146,7 @@ public:
+ 	virtual void StopAnalogActionMomentum( InputHandle_t inputHandle, InputAnalogActionHandle_t eAction ) = 0;
+ 
+ 	// Returns raw motion data from the specified device
+-	virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(InputMotionData_t, GetMotionData, InputHandle_t, inputHandle) /*virtual InputMotionData_t GetMotionData( InputHandle_t inputHandle ) = 0;*/
+ 
+ 	//-----------------------------------------------------------------------------
+ 	// OUTPUTS
+diff --git a/sdk/steam/isteammatchmaking.h b/sdk/steam/isteammatchmaking.h
+index 471e796..8a2effa 100644
+--- a/sdk/steam/isteammatchmaking.h
++++ b/sdk/steam/isteammatchmaking.h
+@@ -126,7 +126,7 @@ public:
+ 	// should only be called after a LobbyMatchList_t callback is received
+ 	// iLobby is of the range [0, LobbyMatchList_t::m_nLobbiesMatching)
+ 	// the returned CSteamID::IsValid() will be false if iLobby is out of range
+-	virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyByIndex, int, iLobby) /*virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;*/
+ 
+ 	// Create a lobby on the Steam servers.
+ 	// If private, then the lobby will not be returned by any RequestLobbyList() call; the CSteamID
+@@ -166,7 +166,7 @@ public:
+ 	// returns the CSteamID of a user in the lobby
+ 	// iMember is of range [0,GetNumLobbyMembers())
+ 	// note that the current user must be in a lobby to retrieve CSteamIDs of other users in that lobby
+-	virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetLobbyMemberByIndex, CSteamID, steamIDLobby, int, iMember) /*virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;*/
+ 
+ 	// Get data associated with this lobby
+ 	// takes a simple key, and returns the string associated with it
+@@ -239,7 +239,7 @@ public:
+ 	// you must be a member of the lobby to access this
+ 	// there always one lobby owner - if the current owner leaves, another user will become the owner
+ 	// it is possible (bur rare) to join a lobby just as the owner is leaving, thus entering a lobby with self as the owner
+-	virtual CSteamID GetLobbyOwner( CSteamID steamIDLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyOwner, CSteamID, steamIDLobby) /*virtual CSteamID GetLobbyOwner( CSteamID steamIDLobby ) = 0;*/
+ 
+ 	// changes who the lobby owner is
+ 	// you must be the lobby owner for this to succeed, and steamIDNewOwner must be in the lobby
+diff --git a/sdk/steam/isteammatchmaking001.h b/sdk/steam/isteammatchmaking001.h
+index 48f70f2..be577fb 100644
+--- a/sdk/steam/isteammatchmaking001.h
++++ b/sdk/steam/isteammatchmaking001.h
+@@ -40,13 +40,13 @@ public:
+ 	// Game lobby functions
+ 	virtual void RequestLobbyList( uint64 ulGameID, MatchMakingKeyValuePair_t *pFilters, uint32 nFilters ) = 0;
+ 
+-	virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyByIndex, int, iLobby) /*virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;*/
+ 	virtual void CreateLobby( uint64 ulGameID, bool bPrivate ) = 0;
+ 	virtual void JoinLobby_OLD( CSteamID steamIDLobby ) = 0;
+ 	virtual void LeaveLobby( CSteamID steamIDLobby ) = 0;
+ 	virtual bool InviteUserToLobby( CSteamID steamIDLobby, CSteamID steamIDInvitee ) = 0;
+ 	virtual int GetNumLobbyMembers( CSteamID steamIDLobby ) = 0;
+-	virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetLobbyMemberByIndex, CSteamID, steamIDLobby, int, iMember) /*virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;*/
+ 
+ 	virtual const char *GetLobbyData( CSteamID SteamIDLobby, const char *pchKey ) = 0;
+ 
+diff --git a/sdk/steam/isteammatchmaking002.h b/sdk/steam/isteammatchmaking002.h
+index 4929aa8..891b468 100644
+--- a/sdk/steam/isteammatchmaking002.h
++++ b/sdk/steam/isteammatchmaking002.h
+@@ -45,7 +45,7 @@ public:
+ 	// should only be called after a LobbyMatchList_t callback is received
+ 	// iLobby is of the range [0, LobbyMatchList_t::m_nLobbiesMatching)
+ 	// the returned CSteamID::IsValid() will be false if iLobby is out of range
+-	virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyByIndex, int, iLobby) /*virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;*/
+ 
+ 	// Create a lobby on the Steam servers.
+ 	// If bPrivate is true, then the lobby will not be returned by any RequestLobbyList() call; the CSteamID
+@@ -80,7 +80,7 @@ public:
+ 	virtual int GetNumLobbyMembers( CSteamID steamIDLobby ) = 0;
+ 	// returns the CSteamID of a user in the lobby
+ 	// iMember is of range [0,GetNumLobbyMembers())
+-	virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetLobbyMemberByIndex, CSteamID, steamIDLobby, int, iMember) /*virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;*/
+ 
+ 	// Get data associated with this lobby
+ 	// takes a simple key, and returns the string associated with it
+diff --git a/sdk/steam/isteammatchmaking003.h b/sdk/steam/isteammatchmaking003.h
+index c5507e5..f822b73 100644
+--- a/sdk/steam/isteammatchmaking003.h
++++ b/sdk/steam/isteammatchmaking003.h
+@@ -54,7 +54,7 @@ public:
+ 	// should only be called after a LobbyMatchList_t callback is received
+ 	// iLobby is of the range [0, LobbyMatchList_t::m_nLobbiesMatching)
+ 	// the returned CSteamID::IsValid() will be false if iLobby is out of range
+-	virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyByIndex, int, iLobby) /*virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;*/
+ 
+ 	// Create a lobby on the Steam servers.
+ 	// If bPrivate is true, then the lobby will not be returned by any RequestLobbyList() call; the CSteamID
+@@ -90,7 +90,7 @@ public:
+ 	virtual int GetNumLobbyMembers( CSteamID steamIDLobby ) = 0;
+ 	// returns the CSteamID of a user in the lobby
+ 	// iMember is of range [0,GetNumLobbyMembers())
+-	virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetLobbyMemberByIndex, CSteamID, steamIDLobby, int, iMember) /*virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;*/
+ 
+ 	// Get data associated with this lobby
+ 	// takes a simple key, and returns the string associated with it
+diff --git a/sdk/steam/isteammatchmaking004.h b/sdk/steam/isteammatchmaking004.h
+index e9facd6..92e95d1 100644
+--- a/sdk/steam/isteammatchmaking004.h
++++ b/sdk/steam/isteammatchmaking004.h
+@@ -54,7 +54,7 @@ public:
+ 	// should only be called after a LobbyMatchList_t callback is received
+ 	// iLobby is of the range [0, LobbyMatchList_t::m_nLobbiesMatching)
+ 	// the returned CSteamID::IsValid() will be false if iLobby is out of range
+-	virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyByIndex, int, iLobby) /*virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;*/
+ 
+ 	// Create a lobby on the Steam servers.
+ 	// If bPrivate is true, then the lobby will not be returned by any RequestLobbyList() call; the CSteamID
+@@ -90,7 +90,7 @@ public:
+ 	virtual int GetNumLobbyMembers( CSteamID steamIDLobby ) = 0;
+ 	// returns the CSteamID of a user in the lobby
+ 	// iMember is of range [0,GetNumLobbyMembers())
+-	virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetLobbyMemberByIndex, CSteamID, steamIDLobby, int, iMember) /*virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;*/
+ 
+ 	// Get data associated with this lobby
+ 	// takes a simple key, and returns the string associated with it
+diff --git a/sdk/steam/isteammatchmaking005.h b/sdk/steam/isteammatchmaking005.h
+index 95bfe32..52982aa 100644
+--- a/sdk/steam/isteammatchmaking005.h
++++ b/sdk/steam/isteammatchmaking005.h
+@@ -73,7 +73,7 @@ public:
+ 	// should only be called after a LobbyMatchList_t callback is received
+ 	// iLobby is of the range [0, LobbyMatchList_t::m_nLobbiesMatching)
+ 	// the returned CSteamID::IsValid() will be false if iLobby is out of range
+-	virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyByIndex, int, iLobby) /*virtual CSteamID GetLobbyByIndex( int iLobby ) = 0;*/
+ 
+ 	// Create a lobby on the Steam servers.
+ 	// If private, then the lobby will not be returned by any RequestLobbyList() call; the CSteamID
+@@ -108,7 +108,7 @@ public:
+ 	virtual int GetNumLobbyMembers( CSteamID steamIDLobby ) = 0;
+ 	// returns the CSteamID of a user in the lobby
+ 	// iMember is of range [0,GetNumLobbyMembers())
+-	virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;
++	STEAMWORKS_STRUCT_RETURN_2(CSteamID, GetLobbyMemberByIndex, CSteamID, steamIDLobby, int, iMember) /*virtual CSteamID GetLobbyMemberByIndex( CSteamID steamIDLobby, int iMember ) = 0;*/
+ 
+ 	// Get data associated with this lobby
+ 	// takes a simple key, and returns the string associated with it
+@@ -169,7 +169,7 @@ public:
+ 	// you must be a member of the lobby to access this
+ 	// there always one lobby owner - if the current owner leaves, another user will become the owner
+ 	// it is possible (bur rare) to join a lobby just as the owner is leaving, thus entering a lobby with self as the owner
+-	virtual CSteamID GetLobbyOwner( CSteamID steamIDLobby ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetLobbyOwner, CSteamID, steamIDLobby) /*virtual CSteamID GetLobbyOwner( CSteamID steamIDLobby ) = 0;*/
+ 
+ 	virtual float GetLobbyDistance( CSteamID steamIDLobby ) = 0;
+ };
+diff --git a/sdk/steam/isteamremoteplay.h b/sdk/steam/isteamremoteplay.h
+index b966fae..e7bd57b 100644
+--- a/sdk/steam/isteamremoteplay.h
++++ b/sdk/steam/isteamremoteplay.h
+@@ -286,7 +286,7 @@ public:
+ 	virtual bool BSessionRemotePlayTogether( RemotePlaySessionID_t unSessionID ) = 0;
+ 
+ 	// Get the SteamID of the connected user
+-	virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetSessionSteamID, RemotePlaySessionID_t, unSessionID) /*virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;*/
+ 
+ 	// Get the guest ID of the connected user if they are a Remote Play Together guest
+ 	// This returns 0 if the sessionID isn't valid or the session isn't a Remote Play Together guest
+diff --git a/sdk/steam/isteamremoteplay001.h b/sdk/steam/isteamremoteplay001.h
+index ef8a521..006b7d3 100644
+--- a/sdk/steam/isteamremoteplay001.h
++++ b/sdk/steam/isteamremoteplay001.h
+@@ -16,7 +16,7 @@ public:
+ 	virtual RemotePlaySessionID_t GetSessionID( int iSessionIndex ) = 0;
+ 
+ 	// Get the SteamID of the connected user
+-	virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetSessionSteamID, RemotePlaySessionID_t, unSessionID) /*virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;*/
+ 
+ 	// Get the name of the session client device
+ 	// This returns NULL if the sessionID is not valid
+diff --git a/sdk/steam/isteamremoteplay002.h b/sdk/steam/isteamremoteplay002.h
+index f1939f1..f31f20a 100644
+--- a/sdk/steam/isteamremoteplay002.h
++++ b/sdk/steam/isteamremoteplay002.h
+@@ -18,7 +18,7 @@ public:
+ 	virtual RemotePlaySessionID_t GetSessionID( int iSessionIndex ) = 0;
+ 
+ 	// Get the SteamID of the connected user
+-	virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetSessionSteamID, RemotePlaySessionID_t, unSessionID) /*virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;*/
+ 
+ 	// Get the name of the session client device
+ 	// This returns NULL if the sessionID is not valid
+diff --git a/sdk/steam/isteamremoteplay003.h b/sdk/steam/isteamremoteplay003.h
+index 06e0d8d..c2b661b 100644
+--- a/sdk/steam/isteamremoteplay003.h
++++ b/sdk/steam/isteamremoteplay003.h
+@@ -18,7 +18,7 @@ public:
+ 	virtual RemotePlaySessionID_t GetSessionID( int iSessionIndex ) = 0;
+ 
+ 	// Get the SteamID of the connected user
+-	virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;
++	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetSessionSteamID, RemotePlaySessionID_t, unSessionID) /*virtual CSteamID GetSessionSteamID( RemotePlaySessionID_t unSessionID ) = 0;*/
+ 
+ 	// Get the name of the session client device
+ 	// This returns NULL if the sessionID is not valid
+diff --git a/sdk/steam/isteamuser.h b/sdk/steam/isteamuser.h
+index 387d3d3..19e1129 100644
+--- a/sdk/steam/isteamuser.h
++++ b/sdk/steam/isteamuser.h
+@@ -30,7 +30,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser004.h b/sdk/steam/isteamuser004.h
+index 9bceb8a..4aa6d73 100644
+--- a/sdk/steam/isteamuser004.h
++++ b/sdk/steam/isteamuser004.h
+@@ -24,7 +24,7 @@ public:
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual ELogonState GetLogonState() = 0;
+ 	virtual bool BConnected() = 0;
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 	virtual bool IsVACBanned( int nGameID ) = 0;
+ 	virtual bool RequireShowVACBannedMessage( int nGameID ) = 0;
+ 	virtual void AcknowledgeVACBanning( int nGameID ) = 0;
+diff --git a/sdk/steam/isteamuser004_old.h b/sdk/steam/isteamuser004_old.h
+index 0944add..f050d07 100644
+--- a/sdk/steam/isteamuser004_old.h
++++ b/sdk/steam/isteamuser004_old.h
+@@ -20,7 +20,7 @@ public:
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual ELogonState GetLogonState() = 0;
+ 	virtual bool BConnected() = 0;
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 	virtual bool IsVACBanned( int nGameID ) = 0;
+ 	virtual bool RequireShowVACBannedMessage( int nGameID ) = 0;
+ 	virtual void AcknowledgeVACBanning( int nGameID ) = 0;
+diff --git a/sdk/steam/isteamuser005.h b/sdk/steam/isteamuser005.h
+index b422049..472078d 100644
+--- a/sdk/steam/isteamuser005.h
++++ b/sdk/steam/isteamuser005.h
+@@ -18,7 +18,7 @@ public:
+ 	virtual bool BLoggedOn() = 0;
+ 	virtual ELogonState GetLogonState() = 0;
+ 	virtual bool BConnected() = 0;
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 	virtual bool IsVACBanned( int nGameID ) = 0;
+ 	virtual bool RequireShowVACBannedMessage( int nAppID ) = 0;
+ 	virtual void AcknowledgeVACBanning( int nAppID ) = 0;
+diff --git a/sdk/steam/isteamuser006.h b/sdk/steam/isteamuser006.h
+index 5a0955f..d1cb83a 100644
+--- a/sdk/steam/isteamuser006.h
++++ b/sdk/steam/isteamuser006.h
+@@ -26,7 +26,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	virtual bool SetRegistryString( ERegistrySubTree eRegistrySubTree, const char *pchKey, const char *pchValue ) = 0;
+ 	virtual bool GetRegistryString( ERegistrySubTree eRegistrySubTree, const char *pchKey, char *pchValue, int cbValue ) = 0;
+diff --git a/sdk/steam/isteamuser007.h b/sdk/steam/isteamuser007.h
+index c728105..33816b0 100644
+--- a/sdk/steam/isteamuser007.h
++++ b/sdk/steam/isteamuser007.h
+@@ -26,7 +26,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	virtual bool SetRegistryString( ERegistrySubTree eRegistrySubTree, const char *pchKey, const char *pchValue ) = 0;
+ 	virtual bool GetRegistryString( ERegistrySubTree eRegistrySubTree, const char *pchKey, char *pchValue, int cbValue ) = 0;
+diff --git a/sdk/steam/isteamuser008.h b/sdk/steam/isteamuser008.h
+index 5e93c9a..da91915 100644
+--- a/sdk/steam/isteamuser008.h
++++ b/sdk/steam/isteamuser008.h
+@@ -23,7 +23,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser009.h b/sdk/steam/isteamuser009.h
+index 2254abe..dee7a14 100644
+--- a/sdk/steam/isteamuser009.h
++++ b/sdk/steam/isteamuser009.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser010.h b/sdk/steam/isteamuser010.h
+index a0eef23..1f7a8b2 100644
+--- a/sdk/steam/isteamuser010.h
++++ b/sdk/steam/isteamuser010.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser011.h b/sdk/steam/isteamuser011.h
+index 3114652..083f1cc 100644
+--- a/sdk/steam/isteamuser011.h
++++ b/sdk/steam/isteamuser011.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser012.h b/sdk/steam/isteamuser012.h
+index 27b95b2..183c51d 100644
+--- a/sdk/steam/isteamuser012.h
++++ b/sdk/steam/isteamuser012.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser013.h b/sdk/steam/isteamuser013.h
+index 0dbb0f2..4b223e3 100644
+--- a/sdk/steam/isteamuser013.h
++++ b/sdk/steam/isteamuser013.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser014.h b/sdk/steam/isteamuser014.h
+index 11a18aa..d2669b6 100644
+--- a/sdk/steam/isteamuser014.h
++++ b/sdk/steam/isteamuser014.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser015.h b/sdk/steam/isteamuser015.h
+index 9ee5fde..91927ef 100644
+--- a/sdk/steam/isteamuser015.h
++++ b/sdk/steam/isteamuser015.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser016.h b/sdk/steam/isteamuser016.h
+index 65630c5..e914ea3 100644
+--- a/sdk/steam/isteamuser016.h
++++ b/sdk/steam/isteamuser016.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser017.h b/sdk/steam/isteamuser017.h
+index 2f35ec0..8bc1e0a 100644
+--- a/sdk/steam/isteamuser017.h
++++ b/sdk/steam/isteamuser017.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser018.h b/sdk/steam/isteamuser018.h
+index 7e992ff..6561453 100644
+--- a/sdk/steam/isteamuser018.h
++++ b/sdk/steam/isteamuser018.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser019.h b/sdk/steam/isteamuser019.h
+index 3f81743..98ece7b 100644
+--- a/sdk/steam/isteamuser019.h
++++ b/sdk/steam/isteamuser019.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser020.h b/sdk/steam/isteamuser020.h
+index 994a2fe..9990641 100644
+--- a/sdk/steam/isteamuser020.h
++++ b/sdk/steam/isteamuser020.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser021.h b/sdk/steam/isteamuser021.h
+index bb1df24..e762912 100644
+--- a/sdk/steam/isteamuser021.h
++++ b/sdk/steam/isteamuser021.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/isteamuser022.h b/sdk/steam/isteamuser022.h
+index bbb2b23..557c212 100644
+--- a/sdk/steam/isteamuser022.h
++++ b/sdk/steam/isteamuser022.h
+@@ -20,7 +20,7 @@ public:
+ 
+ 	// returns the CSteamID of the account currently logged into the Steam client
+ 	// a CSteamID is a unique identifier for an account, and used to differentiate users in all parts of the Steamworks API
+-	virtual CSteamID GetSteamID() = 0;
++	STEAMWORKS_STRUCT_RETURN_0(CSteamID, GetSteamID) /*virtual CSteamID GetSteamID() = 0;*/
+ 
+ 	// Multiplayer Authentication functions
+ 	
+diff --git a/sdk/steam/steamtypes.h b/sdk/steam/steamtypes.h
+index 9cc644e..3df32b1 100644
+--- a/sdk/steam/steamtypes.h
++++ b/sdk/steam/steamtypes.h
+@@ -186,7 +186,7 @@ const SiteId_t k_ulSiteIdInvalid = 0;
+ 
+ #if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
+ 	#define STEAMWORKS_STRUCT_RETURN_0(returnType, functionName)	\
+-		virtual void functionName( returnType& ret ) = 0;			\
++		virtual returnType& functionName( returnType& ret ) = 0;			\
+ 		inline returnType functionName()							\
+ 		{															\
+ 			returnType ret;											\
+@@ -194,7 +194,7 @@ const SiteId_t k_ulSiteIdInvalid = 0;
+ 			return ret;												\
+ 		}
+ 	#define STEAMWORKS_STRUCT_RETURN_1(returnType, functionName, arg1Type, arg1Name)	\
+-		virtual void functionName( returnType& ret, arg1Type arg1Name ) = 0;			\
++		virtual returnType& functionName( returnType& ret, arg1Type arg1Name ) = 0;			\
+ 		inline returnType functionName( arg1Type arg1Name )								\
+ 		{																				\
+ 			returnType ret;																\
+@@ -202,7 +202,7 @@ const SiteId_t k_ulSiteIdInvalid = 0;
+ 			return ret;																	\
+ 		}
+ 	#define STEAMWORKS_STRUCT_RETURN_2(returnType, functionName, arg1Type, arg1Name, arg2Type, arg2Name)	\
+-		virtual void functionName( returnType& ret, arg1Type arg1Name, arg2Type arg2Name ) = 0;				\
++		virtual returnType& functionName( returnType& ret, arg1Type arg1Name, arg2Type arg2Name ) = 0;				\
+ 		inline returnType functionName( arg1Type arg1Name, arg2Type arg2Name )								\
+ 		{																									\
+ 			returnType ret;																					\
+@@ -210,7 +210,7 @@ const SiteId_t k_ulSiteIdInvalid = 0;
+ 			return ret;																						\
+ 		}
+ 	#define STEAMWORKS_STRUCT_RETURN_3(returnType, functionName, arg1Type, arg1Name, arg2Type, arg2Name, arg3Type, arg3Name)	\
+-		virtual void functionName( returnType& ret, arg1Type arg1Name, arg2Type arg2Name, arg3Type arg3Name ) = 0;				\
++		virtual returnType& functionName( returnType& ret, arg1Type arg1Name, arg2Type arg2Name, arg3Type arg3Name ) = 0;				\
+ 		inline returnType functionName( arg1Type arg1Name, arg2Type arg2Name, arg3Type arg3Name )								\
+ 		{																														\
+ 			returnType ret;																										\

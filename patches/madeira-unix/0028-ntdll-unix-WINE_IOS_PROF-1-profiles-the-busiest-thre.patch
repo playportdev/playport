@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 14:05:28 +0200
+Subject: [PATCH] ntdll-unix: WINE_IOS_PROF=1 profiles the busiest threads of
+ any kind
+
+The ml1129 worker profiler samples only RDR2's D3D12 submission worker
+(role W), so for any other title it never ran, and the ml979/ml1123 rip
+profile takes about 200 samples a minute with the JIT's host pcs left
+unnamed. With WINE_IOS_PROF=1 each 3 s burst at about 1 kHz samples the
+six busiest threads (5 % of a core or more when the burst starts), Wine
+or native, walking the frame-pointer chain as before, and prints three
+more tables: the thread, the first PE frame on the chain (the DLL
+function the time is spent under), and for x64 code the guest module and
+rva from the FEX frame's RIP (block granular). Without the variable
+nothing changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-26-witcher3-profile.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 67 +++++++++++++++++++++++++++++++----
+ 1 file changed, 60 insertions(+), 7 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 3b60236..08cc64c 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1609,15 +1609,54 @@ static int ios_wp_desc( uint64_t a, struct ios_ts_map *mp, char *out, size_t cap
+ }
+ static void ios_wprof_main( void )
+ {
+-    static struct ios_wp_b leaf[400], inc[300], unx[200], cls[8];
++    static struct ios_wp_b leaf[400], inc[300], unx[200], cls[8], pein[300], thr[16];
++    /* Playport: WINE_IOS_PROF=1 samples the busiest threads of any kind (up to
++     * WP_MAXT, each at 5 % of a core or more when the burst starts), not only
++     * RDR2's submission worker, and adds three tables: the thread, the first
++     * PE frame on the chain (which DLL function the time is under), and for
++     * x64 code the guest's module+rva (x64:<module>+<rva/256>). Symbolise the
++     * PE rvas offline against the built DLLs (tools/sampleprof.py). */
++    enum { WP_MAXT = 6 };
++    const char *prof_env = getenv( "WINE_IOS_PROF" );
++    int busy = prof_env && *prof_env == '1';
+     if (ios_ts_tsd_off < 0) ios_ts_calibrate();
++    if (busy) wine_log_write( "[wprof] Playport busiest-thread profile armed: a 3 s burst at ~1 kHz every 15 s" );
+     for (;;)
+     {
+         thread_act_array_t th = NULL; mach_msg_type_number_t nth = 0, k;
+-        mach_port_t tw[4]; uint64_t tw_teb[4]; int ntw = 0, s, i;
+-        int nleaf = 0, ninc = 0, nunx = 0, ncls = 0; unsigned total = 0, walked = 0;
++        mach_port_t tw[WP_MAXT]; uint64_t tw_teb[WP_MAXT]; char tw_name[WP_MAXT][24]; int ntw = 0, s, i;
++        int nleaf = 0, ninc = 0, nunx = 0, ncls = 0, npein = 0, nthr = 0; unsigned total = 0, walked = 0;
+         sleep( 15 );
+         if (task_threads( mach_task_self(), &th, &nth ) != KERN_SUCCESS) continue;
++        if (busy)
++        {
++            /* the WP_MAXT threads with the highest cpu_usage (scaled to 1000 = a core) */
++            int use[WP_MAXT]; mach_port_t self_port = pthread_mach_thread_np( pthread_self() );
++            for (k = 0; k < nth; k++)
++            {
++                thread_basic_info_data_t bi; mach_msg_type_number_t bic = THREAD_BASIC_INFO_COUNT; int slot = -1;
++                if (th[k] != self_port && thread_info( th[k], THREAD_BASIC_INFO, (thread_info_t)&bi, &bic ) == KERN_SUCCESS
++                    && !(bi.flags & TH_FLAGS_IDLE) && bi.cpu_usage >= 50)
++                {
++                    if (ntw < WP_MAXT) slot = ntw++;
++                    else { int m = 0; for (i = 1; i < ntw; i++) if (use[i] < use[m]) m = i;
++                           if (use[m] < bi.cpu_usage) { mach_port_deallocate( mach_task_self(), tw[m] ); slot = m; } }
++                }
++                if (slot < 0) { mach_port_deallocate( mach_task_self(), th[k] ); continue; }
++                {
++                    pthread_t pt = pthread_from_mach_thread_np( th[k] );
++                    thread_identifier_info_data_t idi; mach_msg_type_number_t cnt = THREAD_IDENTIFIER_INFO_COUNT;
++                    tw[slot] = th[k]; use[slot] = bi.cpu_usage; tw_teb[slot] = pt ? ios_ts_teb( pt ) : 0;
++                    tw_name[slot][0] = 0;
++                    if (pt) pthread_getname_np( pt, tw_name[slot], sizeof(tw_name[slot]) );
++                    if (!tw_name[slot][0])
++                        snprintf( tw_name[slot], sizeof(tw_name[slot]), "%s%llu", tw_teb[slot] ? "w" : "m",
++                                  thread_info( th[k], THREAD_IDENTIFIER_INFO, (thread_info_t)&idi, &cnt ) == KERN_SUCCESS
++                                  ? (unsigned long long)idi.thread_id : 0ull );
++                }
++            }
++        }
++        else
+         for (k = 0; k < nth; k++)
+         {
+             thread_identifier_info_data_t idi; mach_msg_type_number_t cnt = THREAD_IDENTIFIER_INFO_COUNT; int keep = 0;
+@@ -1626,7 +1665,8 @@ static void ios_wprof_main( void )
+                     if (ios_xp_roles[i].tid == idi.thread_id && strchr( ios_xp_roles[i].role, 'W' ))
+                     {
+                         pthread_t pt = pthread_from_mach_thread_np( th[k] );
+-                        tw[ntw] = th[k]; tw_teb[ntw] = pt ? ios_ts_teb( pt ) : 0; ntw++; keep = 1; break;
++                        tw[ntw] = th[k]; tw_teb[ntw] = pt ? ios_ts_teb( pt ) : 0; snprintf( tw_name[ntw], sizeof(tw_name[ntw]), "W" );
++                        ntw++; keep = 1; break;
+                     }
+             if (!keep) mach_port_deallocate( mach_task_self(), th[k] );
+         }
+@@ -1639,13 +1679,14 @@ static void ios_wprof_main( void )
+             {
+                 arm_thread_state64_t st; mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+                 thread_basic_info_data_t bi; mach_msg_type_number_t bic = THREAD_BASIC_INFO_COUNT;
+-                uint64_t chain[16]; int nch = 0, f, kind, have_inc = 0, have_unx = 0; char key[96];
++                uint64_t chain[16], grip = 0; int nch = 0, f, kind, have_inc = 0, have_unx = 0, have_pe = 0; char key[96];
+                 struct ios_ts_map *mp = ios_ts_map_for_teb( tw_teb[t] );
+                 if (thread_info( tw[t], THREAD_BASIC_INFO, (thread_info_t)&bi, &bic ) != KERN_SUCCESS || bi.run_state != TH_STATE_RUNNING) continue;
+                 if (thread_suspend( tw[t] ) != KERN_SUCCESS) continue;
+                 if (thread_get_state( tw[t], ARM_THREAD_STATE64, (thread_state_t)&st, &cnt ) == KERN_SUCCESS)
+                 {
+                     uint64_t fp = st.__fp, lr = st.__lr;
++                    if (busy) ios_ts_read( st.__x[28] + 0x18, &grip, 8 );   /* the FEX frame's guest RIP (block granular) */
+                     chain[nch++] = st.__pc;
+                     if (lr) chain[nch++] = lr;
+                     for (f = 0; f < 14 && fp && !(fp & 7) && nch < 16; f++)
+@@ -1661,7 +1702,13 @@ static void ios_wprof_main( void )
+                 if (!nch) continue;
+                 total++;
+                 ios_wp_desc( chain[0], mp, key, sizeof(key), &kind, NULL );
++                if (busy && kind == 3)
++                {   /* x64 code: name the guest module (the RIP is the block's, not the exact instruction's) */
++                    uint64_t grva; const char *gm = (grip > 0x10000 && grip < 0x8000000000ull) ? ios_ts_mod_for( mp, grip, &grva ) : NULL;
++                    if (gm) snprintf( key, sizeof(key), "x64:%s+%llx", gm, (unsigned long long)(grva & ~0xffull) );
++                }
+                 ios_wp_add( leaf, &nleaf, 400, key );
++                if (busy) ios_wp_add( thr, &nthr, 16, tw_name[t] );
+                 {
+                     static const char *cn[7] = { "?", "PE-other", "madeira_d3d12", "x64-JIT", "Madeira-dylib", "system-lib", "unknown" };
+                     const char *c = cn[kind < 7 ? kind : 6]; char ck[96];
+@@ -1674,6 +1721,7 @@ static void ios_wprof_main( void )
+                     char k2[96]; int kd;
+                     ios_wp_desc( chain[f], mp, k2, sizeof(k2), &kd, NULL );
+                     if (!have_inc && kd == 2) { ios_wp_add( inc, &ninc, 300, k2 ); have_inc = 1; }
++                    if (busy && !have_pe && (kd == 1 || kd == 2)) { ios_wp_add( pein, &npein, 300, k2 ); have_pe = 1; }
+                     if (!have_unx && kd == 4) { ios_wp_add( unx, &nunx, 200, k2 ); have_unx = 1; }
+                 }
+                 if (nch > 2) walked++;
+@@ -1681,11 +1729,16 @@ static void ios_wprof_main( void )
+             usleep( 1000 );
+         }
+         for (i = 0; i < ntw; i++) mach_port_deallocate( mach_task_self(), tw[i] );
+-        wine_log_write( "[wprof] ml1129 burst: %u running samples over %d W thread(s), %u with a frame chain", total, ntw, walked );
++        wine_log_write( "[wprof] ml1129 burst: %u running samples over %d %s thread(s), %u with a frame chain", total, ntw, busy ? "busiest" : "W", walked );
+         if (!total) continue;
+         ios_wp_print( "class", cls, ncls, total, 8 );
+         ios_wp_print( "leaf", leaf, nleaf, total, 45 );
+-        ios_wp_print( "d3d12-inclusive", inc, ninc, total, 45 );
++        if (busy)
++        {
++            ios_wp_print( "thread", thr, nthr, total, 16 );
++            ios_wp_print( "pe-inclusive", pein, npein, total, 45 );
++        }
++        else ios_wp_print( "d3d12-inclusive", inc, ninc, total, 45 );
+         ios_wp_print( "unix-inclusive", unx, nunx, total, 30 );
+     }
+ }

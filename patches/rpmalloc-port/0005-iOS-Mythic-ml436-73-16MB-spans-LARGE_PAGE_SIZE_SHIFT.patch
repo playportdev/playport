@@ -1,0 +1,360 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 4 Aug 2026 10:51:54 +0800
+Subject: [PATCH] =?UTF-8?q?iOS-Mythic=20ml436=20(#73):=2016MB=20spans=20?=
+ =?UTF-8?q?=E2=80=94=20LARGE=5FPAGE=5FSIZE=5FSHIFT=2026->24=20+=20SPAN=5FS?=
+ =?UTF-8?q?IZE=2064MB->16MB?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ml435's [span-census] proved the 16GB FEX band fills by LIVE DEMAND, not leaks:
+~74 live guest threads x ~200MB (2-3 x 64MB spans + code buffers) consumed the
+whole band, after which code-buffer allocation failed and Crashpad killed the
+webhelper right after BrowserReady.
+
+16MB spans cut the per-thread span footprint 4x (~48MB worst case); with the
+ml389 VA diet and exact-aligned maps this puts 74 threads at ~3.5GB.
+LARGE_PAGE_SIZE_SHIFT drops to 24 to keep SPAN_SIZE / LARGE_PAGE_SIZE >= 1;
+blocks in (16MB, 64MB] shift to the huge path, which maps them at exact size —
+a VA improvement over carving them from a 64MB span.
+
+Verified ml436: zero failed band scans.
+
+Madeira-commit: d57338f252880659c469b389ae6d122ce9174d9f
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 236 ++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 217 insertions(+), 19 deletions(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 955222c..171a352 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -181,7 +181,15 @@ madvise(caddr_t, size_t, int);
+ #define MEDIUM_PAGE_SIZE_SHIFT 22
+ #define MEDIUM_PAGE_SIZE (1 << MEDIUM_PAGE_SIZE_SHIFT)
+ #define MEDIUM_PAGE_MASK (~((uintptr_t)MEDIUM_PAGE_SIZE - 1))
++#ifdef FEX_IOS_HOST
++/* iOS-Mythic ml436 (#73): dropped 26 -> 24 to legalise 16MB spans (see the
++ * SPAN_SIZE note below). Large-class ceiling falls 64MB -> 16MB; blocks in
++ * (16MB, 64MB] shift to the huge path, which maps them at exact size — a VA
++ * IMPROVEMENT over carving them from a 64MB span. */
++#define LARGE_PAGE_SIZE_SHIFT 24
++#else
+ #define LARGE_PAGE_SIZE_SHIFT 26
++#endif
+ #define LARGE_PAGE_SIZE (1 << LARGE_PAGE_SIZE_SHIFT)
+ #define LARGE_PAGE_MASK (~((uintptr_t)LARGE_PAGE_SIZE - 1))
+ 
+@@ -198,7 +206,16 @@ madvise(caddr_t, size_t, int);
+  * 64MB is the floor (SPAN_SIZE / LARGE_PAGE_SIZE must be >= 1; LARGE_PAGE_SIZE_SHIFT
+  * is 26) and cuts per-span VA 4x to 128MB. SPAN_MASK derives, span lookup arithmetic
+  * is unchanged. */
+-#define SPAN_SIZE (64 * 1024 * 1024)
++/* iOS-Mythic ml436 (#73): 64MB -> 16MB, paired with LARGE_PAGE_SIZE_SHIFT 26 -> 24
++ * above to keep SPAN_SIZE / LARGE_PAGE_SIZE >= 1. ml435's [span-census] proved the
++ * FEX band fills by LIVE DEMAND, not leaks: 74 live guest threads x ~200MB
++ * (2-3 x 64MB spans + code buffers) ~= the whole 16GB band, code-buffer allocation
++ * then fails and Crashpad kills the webhelper AFTER BrowserReady. 16MB spans cut
++ * the per-thread span footprint 4x (~48MB worst case); with the ml389 VA diet and
++ * db 5392 exact-aligned maps this puts 74 threads at ~3.5GB. Exit-leak (12 heaps,
++ * ~2GB) is secondary and partially covered by the ml435 ThreadTerm hardening. */
++static const char ios_span16_marker[] __attribute__((used)) = "rpmalloc-span16 rev=ml436";
++#define SPAN_SIZE (16 * 1024 * 1024)
+ #else
+ #define SPAN_SIZE (256 * 1024 * 1024)
+ #endif
+@@ -822,7 +839,21 @@ os_mmap(size_t size, size_t alignment, size_t* offset, size_t* mapped_size) {
+ 	 * Requirements (the iOS va-scan is alignment-aware), so ask for an exact
+ 	 * aligned reservation first: a 64MB span then costs 64MB. Fall through to
+ 	 * the legacy over-reserve on any failure. */
+-	if (alignment) {
++	/* iOS-Mythic ml465 (#76): this was gated on `if (alignment)`, which is TRUE
++	 * for spans (SPAN_SIZE-aligned) and FALSE for heap_allocate_new — so heap_t
++	 * METADATA fell through to the plain VirtualAlloc below and landed in the
++	 * GUEST band (0x7047860000, 0x70544d0000, 0x7089180000 across ml460/462/464),
++	 * i.e. guest-writable memory, while the spans it manages sat safely in the
++	 * FEX band. That is the #76 corrupter: three separate runs died reading a
++	 * poisoned heap->local_free[1], twice holding x86 INSTRUCTION BYTES
++	 * (0x8b4c2877d1394507, 0x0fc72e0f66000002) — a guest write, not a data race
++	 * (the ml463 CAS proved that: zero lost-claim markers this run, corruption
++	 * unchanged). The ml420 comment above even predicted "ml419 shows heaps in
++	 * the GUEST band" but the fix only ever covered the aligned span path.
++	 * Pin EVERY rpmalloc mapping to the FEX band; unaligned callers just get the
++	 * 64KB Windows allocation granularity. */
++	{
++		size_t band_alignment = alignment ? alignment : 0x10000;
+ 		typedef PVOID(WINAPI* VirtualAlloc2_t)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
+ 		static VirtualAlloc2_t pVirtualAlloc2 = (VirtualAlloc2_t)(uintptr_t)-1;
+ 		if (pVirtualAlloc2 == (VirtualAlloc2_t)(uintptr_t)-1) {
+@@ -834,7 +865,7 @@ os_mmap(size_t size, size_t alignment, size_t* offset, size_t* mapped_size) {
+ 			MEM_EXTENDED_PARAMETER param;
+ 			memset(&req, 0, sizeof(req));
+ 			memset(&param, 0, sizeof(param));
+-			req.Alignment = alignment;
++			req.Alignment = band_alignment;
+ 			/* iOS-Mythic ml420 (#69/#62): without an address range the spans
+ 			 * land wherever wine finds aligned VA — ml419 shows heaps in the
+ 			 * GUEST band (0x703d860000, 0x70873f0000), violating the VA map
+@@ -863,6 +894,36 @@ os_mmap(size_t size, size_t alignment, size_t* offset, size_t* mapped_size) {
+ #endif
+ 	if (!ptr)
+ 		ptr = VirtualAlloc(0, map_size, (os_huge_pages ? MEM_LARGE_PAGES : 0) | MEM_RESERVE | do_commit | MEM_TOP_DOWN, PAGE_READWRITE);
++#ifdef FEX_IOS_HOST
++	/* ml465 (#76): verdict line. Anything rpmalloc owns that lands BELOW the
++	 * FEX band is guest-writable and can be scribbled (that is exactly how the
++	 * heap metadata got poisoned three runs running). A clean run prints
++	 * nothing here; any [rpm-band] line names a mapping still at risk.
++	 * ml466 UPDATE: the ml465 run printed nothing here (pin verified) and a
++	 * FEX-band heap was poisoned anyway — the guest-band framing above is
++	 * REFUTED as the root cause. Keep the pin as VA-map hygiene; the corrupter
++	 * is pointer-mediated (see ios_block_ptr_ok / [rpm-poison]). */
++	if (ptr && (uintptr_t)ptr < 0x7c00000000ULL) {
++		static _Atomic(int) band_logs;
++		if (atomic_fetch_add_explicit(&band_logs, 1, memory_order_relaxed) < 24) {
++			/* No printf in this TU (see [rpfree-skip] below) — hand-format. */
++			char buf[96];
++			const char *hexd = "0123456789abcdef";
++			const char *pre = "[rpm-band] GUEST-BAND ptr=0x";
++			const char *szs = " size=0x";
++			unsigned long long _p = (unsigned long long)(uintptr_t)ptr, _s = (unsigned long long)size;
++			int i = 0, j;
++			unsigned long w;
++			while (pre[i]) { buf[i] = pre[i]; i++; }
++			for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(_p >> j) & 0xf];
++			for (j = 0; szs[j]; ++j) buf[i++] = szs[j];
++			for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(_s >> j) & 0xf];
++			buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 'l'; buf[i++] = '4';
++			buf[i++] = '6'; buf[i++] = '5'; buf[i++] = '\n';
++			WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)i, &w, 0);
++		}
++	}
++#endif
+ 	os_set_page_name(ptr, map_size);
+ #else
+ 	int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_UNINITIALIZED;
+@@ -1104,6 +1165,71 @@ page_block_to_thread_free_list(page_t* page, uint32_t block_index, uint32_t list
+ 	return ((uint64_t)list_count << 32ULL) | (uint64_t)block_index;
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* iOS-Mythic ml466 (#76): the ml465 run REFUTED the guest-band framing — the
++ * band-pin held ([rpm-band] silent, every heap at 0x7c...) and local_free[1]
++ * of FEX-band heap 0x7c08720000 was STILL poisoned (0x26750000000090be),
++ * identical shape to the three guest-band runs. Four heaps, two bands, same
++ * struct slot ⇒ the writer holds a genuine pointer to the block, it is not a
++ * spatial wild write. The poison values are live-object leading bytes
++ * (ml462: {u32 0x1df, u32 0x1e6} — a refcount pair; ml464/465: x86 code
++ * bytes) landing where a free block's `next` field lives — a use-after-free
++ * or double-free of a size-class-1 block whose content then propagates into
++ * the list head on pop. Every legitimate block lives in the FEX span band
++ * [0x7c00000000, 0x8000000000), so validate at every list deref: amputate a
++ * poisoned chain (leak a few blocks) instead of dereferencing garbage, and
++ * dump the holder block's leading qwords — the content names the corrupter's
++ * object type. A clean run prints no [rpm-poison] lines. */
++static inline int
++ios_block_ptr_ok(void* p) {
++	return ((uintptr_t)p - 0x7c00000000ULL) < 0x400000000ULL;
++}
++
++static void
++ios_rpm_poison_note(const char* tag, void* owner, void* bad, void* holder) {
++	static _Atomic(int) poison_logs;
++	if (atomic_fetch_add_explicit(&poison_logs, 1, memory_order_relaxed) >= 32)
++		return;
++	/* No printf in this TU (see [rpfree-skip]) — hand-format. */
++	char buf[352];
++	const char* hexd = "0123456789abcdef";
++	int i = 0, j;
++	unsigned long w;
++	const char* pre = "[rpm-poison] ";
++	while (pre[i]) { buf[i] = pre[i]; i++; }
++	for (j = 0; tag[j] && j < 12; ++j) buf[i++] = tag[j];
++	{
++		const char* s = " owner=0x";
++		unsigned long long v = (unsigned long long)(uintptr_t)owner;
++		for (j = 0; s[j]; ++j) buf[i++] = s[j];
++		for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(v >> j) & 0xf];
++	}
++	{
++		const char* s = " bad=0x";
++		unsigned long long v = (unsigned long long)(uintptr_t)bad;
++		for (j = 0; s[j]; ++j) buf[i++] = s[j];
++		for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(v >> j) & 0xf];
++	}
++	{
++		const char* s = " holder=0x";
++		unsigned long long v = (unsigned long long)(uintptr_t)holder;
++		for (j = 0; s[j]; ++j) buf[i++] = s[j];
++		for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(v >> j) & 0xf];
++	}
++	if (holder && ios_block_ptr_ok(holder)) {
++		unsigned long long* q = (unsigned long long*)holder;
++		int k;
++		for (k = 0; k < 4; ++k) {
++			unsigned long long v = q[k];
++			buf[i++] = ' '; buf[i++] = 'q'; buf[i++] = hexd[k]; buf[i++] = '=';
++			for (j = 60; j >= 0; j -= 4) buf[i++] = hexd[(v >> j) & 0xf];
++		}
++	}
++	buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 'l'; buf[i++] = '4'; buf[i++] = '6'; buf[i++] = '6'; buf[i++] = '\n';
++	WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)i, &w, 0);
++}
++#endif
++
+ static inline block_t*
+ page_block_realign(page_t* page, block_t* block) {
+ 	void* blocks_start = page_block_start(page);
+@@ -1114,7 +1240,27 @@ page_block_realign(page_t* page, block_t* block) {
+ static block_t*
+ page_get_local_free_block(page_t* page) {
+ 	block_t* block = page->local_free;
++#ifdef FEX_IOS_HOST
++	/* ml466 (#76): poisoned head — drop the whole chain, report empty. */
++	if (UNEXPECTED(!ios_block_ptr_ok(block))) {
++		ios_rpm_poison_note("page-head", page, block, 0);
++		page->local_free = 0;
++		page->local_free_count = 0;
++		return 0;
++	}
++	{
++		block_t* next = block->next;
++		/* ml466 (#76): scribbled `next` — truncate before it becomes the head. */
++		if (UNEXPECTED(next && !ios_block_ptr_ok(next))) {
++			ios_rpm_poison_note("page-next", page, next, block);
++			next = 0;
++			page->local_free_count = 1;
++		}
++		page->local_free = next;
++	}
++#else
+ 	page->local_free = block->next;
++#endif
+ 	--page->local_free_count;
+ 	++page->block_used;
+ 	return block;
+@@ -1665,36 +1811,67 @@ heap_get_page_generic(heap_t* heap, uint32_t size_class) {
+ 	// Check if there is a free page from multithreaded deallocations
+ 	uintptr_t block_mt = atomic_load_explicit(&heap->thread_free[page_type], memory_order_acquire);
+ 	if (UNEXPECTED(block_mt != 0)) {
+-		while (!atomic_compare_exchange_weak_explicit(&heap->thread_free[page_type], &block_mt, 0, memory_order_release,
+-		                                              memory_order_relaxed)) {
+-			wait_spin();
+-		}
+-		block_t* block = (void*)block_mt;
+ #ifdef FEX_IOS_HOST
+ 		/* iOS-Mythic ml416 (#60): if heap->owner_thread != this thread's TEB,
+ 		 * every block_deallocate below classifies the block as remote
+ 		 * (page_is_thread_heap fails) and page_put_thread_free_block pushes it
+ 		 * straight back onto the list being drained — the drain never
+-		 * converges. Sampled live twice (ml415 shared-hold, ml416 write-hold):
+-		 * the thread spins at this walk forever with CodeInvalidationMutex
+-		 * held and the whole process wedges behind it. This drain is only
+-		 * reached from the draining thread's own allocation path, so
+-		 * ownership here is by-construction this thread's: repair the stamp
+-		 * (which makes the frees local and the walk converge) and leave the
+-		 * old owner in TEB Instrumentation[4]/heap in [5] for the unix-side
+-		 * census to report. */
++		 * converges. Repairing the stamp makes the frees local and the walk
++		 * converge.
++		 *
++		 * ml463 (#76): the ml416 repair was a PLAIN STORE, and "ownership is
++		 * by-construction this thread's" is FALSE for the TLS-less/orphan
++		 * heaps it actually fires on (both ml460 and ml462 breadcrumbs show
++		 * old_owner=0): several threads can reach this drain on the SAME heap
++		 * and all claim it, after which each treats remote frees as local and
++		 * they mutate local_free[]/page counters concurrently — the ml460 run
++		 * died with x86 payload bytes over local_free[1], the ml462 run with
++		 * a torn u32 counter pair in the same slot, both on repaired heaps
++		 * ([census-hold] RPMALLOC-REPAIR breadcrumbs on the exact heap).
++		 * Claim by CAS instead, BEFORE consuming the thread_free list (the
++		 * old order took the list first — a losing claimant would have leaked
++		 * every block on it). The loser leaves the list for the winner and
++		 * falls through to the non-drain paths. This closes the ownership
++		 * ping-pong; [rpm-clash] visibility tells us how often contention
++		 * actually happens (frequent hits = the fallback-heap sharing itself
++		 * needs a lock, a bigger fix). */
+ 		{
+ 			uintptr_t self_teb = get_thread_id();
+-			if (heap->owner_thread != self_teb) {
++			uintptr_t cur_owner = heap->owner_thread;
++			if (cur_owner != self_teb) {
++				if (!__atomic_compare_exchange_n(&heap->owner_thread, &cur_owner, self_teb, 0,
++				                                 __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
++					static _Atomic(int) clash_count;
++					int cc = atomic_fetch_add_explicit(&clash_count, 1, memory_order_relaxed);
++					if (cc < 16) {
++						if (self_teb > 0x10000 && !(self_teb & 0xfff)) {
++							((void**)self_teb)[0x16d8 / 8] = (void*)cur_owner;
++							((void**)self_teb)[0x16e0 / 8] = (void*)((uintptr_t)heap | 1); /* low bit = lost claim */
++						}
++					}
++					goto ios_skip_thread_free_drain;
++				}
+ 				if (self_teb > 0x10000 && !(self_teb & 0xfff)) {
+-					((void**)self_teb)[0x16d8 / 8] = (void*)heap->owner_thread;
++					((void**)self_teb)[0x16d8 / 8] = (void*)cur_owner;
+ 					((void**)self_teb)[0x16e0 / 8] = (void*)heap;
+ 				}
+-				heap->owner_thread = self_teb;
+ 			}
+ 		}
+ #endif
++		while (!atomic_compare_exchange_weak_explicit(&heap->thread_free[page_type], &block_mt, 0, memory_order_release,
++		                                              memory_order_relaxed)) {
++			wait_spin();
++		}
++		block_t* block = (void*)block_mt;
+ 		while (block) {
++#ifdef FEX_IOS_HOST
++			/* ml466 (#76): poisoned node in the deferred-free chain — stop the
++			 * walk before dereferencing it; the truncated tail leaks. */
++			if (UNEXPECTED(!ios_block_ptr_ok(block))) {
++				ios_rpm_poison_note("hdrain", heap, block, 0);
++				break;
++			}
++#endif
+ 			block_t* next_block = block->next;
+ 			block_deallocate(block);
+ 			block = next_block;
+@@ -1702,6 +1879,9 @@ heap_get_page_generic(heap_t* heap, uint32_t size_class) {
+ 		// Retry after processing deferred thread frees
+ 		return heap_get_page(heap, size_class);
+ 	}
++#ifdef FEX_IOS_HOST
++ios_skip_thread_free_drain:;
++#endif
+ 
+ 	// Check if there is a free page
+ 	page_t* page = heap->page_free[page_type];
+@@ -1750,8 +1930,26 @@ static inline RPMALLOC_ALLOCATOR void*
+ heap_pop_local_free(heap_t* heap, uint32_t size_class) {
+ 	block_t** free_list = heap->local_free + size_class;
+ 	block_t* block = *free_list;
++#ifdef FEX_IOS_HOST
++	/* ml466 (#76): all four crashes were THIS pop dereferencing a poisoned
++	 * local_free slot. Amputate instead of faulting. */
++	if (EXPECTED(block != 0)) {
++		if (UNEXPECTED(!ios_block_ptr_ok(block))) {
++			ios_rpm_poison_note("heap-head", heap, block, 0);
++			*free_list = 0;
++			return 0;
++		}
++		block_t* next = block->next;
++		if (UNEXPECTED(next && !ios_block_ptr_ok(next))) {
++			ios_rpm_poison_note("heap-next", heap, next, block);
++			next = 0;
++		}
++		*free_list = next;
++	}
++#else
+ 	if (EXPECTED(block != 0))
+ 		*free_list = block->next;
++#endif
+ 	return block;
+ }
+ 

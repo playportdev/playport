@@ -1,0 +1,295 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 15:48:33 +0200
+Subject: [PATCH] virtual: count the FEX arena's use for the host, and map it
+
+Every emulator thread keeps host state in the FEX arena (its rpmalloc
+heap's spans, its call-return stack, its L1 lookup cache), and a title
+with enough threads filled it: Hollow Knight's video threads, and DXVK's
+compiler pool, could not start. Nothing reported how full it was.
+ios_fex_band_stats() now walks the views inside the arena and reports its
+size, what the views hold and the most any reading saw, their number, the
+largest free range, the free 16 MiB-aligned 16 MiB blocks (what a new
+rpmalloc span needs), the spans, call-return stacks and L1 caches by
+their shape, the bytes of the rest, and the requests inside the arena it
+could not serve. ios_fex_band_dump() logs the arena's map as runs of
+same-sized views, as `[band-map]` lines; the first refused request dumps
+it too. The host reads both through wine_host. The census takes
+virtual_mutex with a bounded trylock, so a host reading at a launch's
+end cannot hang on a thread that died holding it. Nothing the arena does
+changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-28-fex-band.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 249 +++++++++++++++++++++++++++++++++
+ 1 file changed, 249 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 3085ffe..f68e69a 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5035,6 +5035,246 @@ static struct wine_rb_tree views_tree;
+ static pthread_mutex_t virtual_mutex;
+ pthread_key_t thread_data_key = 0;
+ 
++/* Playport: the FEX arena's use, for the host (ios_fex_band_stats, which a
++ * launch logs as `band:` lines) and for the log (ios_fex_band_dump). Every
++ * emulator thread carries host state in the arena (its rpmalloc heap's spans,
++ * its call-return stack, its L1 lookup cache), so the arena, not the pool or
++ * the memory limit, is what the thread count runs out of first. A census walks
++ * the views inside the arena; it changes nothing.
++ *
++ * ios_band_refused counts requests contained in the arena that it could not
++ * serve (the caller sees STATUS_NO_MEMORY: a thread that cannot start, an
++ * allocation FEX cannot make). The first one dumps the arena's map. */
++static volatile unsigned long ios_band_refused;
++static unsigned long long ios_band_used_peak;
++
++struct ios_band_census
++{
++    unsigned long long used, views, largest_free, span_slots;
++    unsigned long long spans, callret, l1, other_bytes;
++};
++
++#define IOS_BAND_SPAN 0x1000000ULL   /* rpmalloc's span: 16 MiB, 16 MiB-aligned */
++
++static void ios_band_gap( struct ios_band_census *c, ULONG_PTR b, ULONG_PTR e )
++{
++    ULONG_PTR sb = (b + IOS_BAND_SPAN - 1) & ~(IOS_BAND_SPAN - 1), se = e & ~(IOS_BAND_SPAN - 1);
++
++    if (e - b > c->largest_free) c->largest_free = e - b;
++    if (se > sb) c->span_slots += (se - sb) / IOS_BAND_SPAN;
++}
++
++/* The first view that ends above lo, found by descending the tree as
++ * find_view does, so a walk of the arena skips the views below it.
++ * virtual_mutex must be held. */
++static struct wine_rb_entry *ios_band_first_locked( ULONG_PTR lo )
++{
++    struct wine_rb_entry *first = NULL, *ptr = views_tree.root;
++
++    while (ptr)
++    {
++        struct file_view *view = WINE_RB_ENTRY_VALUE( ptr, struct file_view, entry );
++
++        if ((ULONG_PTR)view->base + view->size > lo)
++        {
++            first = ptr;
++            ptr = ptr->left;
++        }
++        else ptr = ptr->right;
++    }
++    return first;
++}
++
++/* What each view is, by its shape: an rpmalloc span is exactly 16 MiB on a
++ * 16 MiB boundary, a call-return stack is 16 MiB plus its two guard pages, an
++ * L1 lookup cache is 2 MiB; the rest (rpmalloc heap metadata and large blocks,
++ * FEX's pooled buffers) is counted in bytes. virtual_mutex must be held. */
++static void ios_band_census_locked( struct ios_band_census *c )
++{
++    ULONG_PTR lo = ios_fex_arena_base_unix, hi = ios_fex_arena_end_unix, cursor = lo;
++    struct wine_rb_entry *ptr;
++
++    memset( c, 0, sizeof(*c) );
++    if (!lo || hi <= lo) return;
++    for (ptr = ios_band_first_locked( lo ); ptr; ptr = rb_next( ptr ))
++    {
++        struct file_view *view = WINE_RB_ENTRY_VALUE( ptr, struct file_view, entry );
++        ULONG_PTR b = (ULONG_PTR)view->base, e = b + view->size;
++
++        if (b >= hi) break;
++        if (b < lo) b = lo;
++        if (e > hi) e = hi;
++        if (b > cursor) ios_band_gap( c, cursor, b );
++        c->used += e - b;
++        c->views++;
++        if (view->size == IOS_BAND_SPAN && !(b & (IOS_BAND_SPAN - 1))) c->spans++;
++        else if (view->size > IOS_BAND_SPAN && view->size <= IOS_BAND_SPAN + 0x10000) c->callret++;
++        else if (view->size == 0x200000) c->l1++;
++        else c->other_bytes += e - b;
++        if (e > cursor) cursor = e;
++    }
++    if (hi > cursor) ios_band_gap( c, cursor, hi );
++    if (c->used > ios_band_used_peak) ios_band_used_peak = c->used;
++}
++
++/* The arena's map, for the log: its views are copied under virtual_mutex and
++ * printed after, as runs of same-sized views (neighbours at most one 64 KiB
++ * granule apart), one line each with the free space before the run. */
++#define IOS_BAND_MAP_MAX 8192
++struct ios_band_view { ULONG_PTR base, size; };
++
++/* virtual_mutex must be held. Returns how many views it copied (at most max). */
++static int ios_band_collect_locked( struct ios_band_view *out, int max )
++{
++    ULONG_PTR lo = ios_fex_arena_base_unix, hi = ios_fex_arena_end_unix;
++    struct wine_rb_entry *ptr;
++    int n = 0;
++
++    for (ptr = ios_band_first_locked( lo ); ptr; ptr = rb_next( ptr ))
++    {
++        struct file_view *view = WINE_RB_ENTRY_VALUE( ptr, struct file_view, entry );
++        ULONG_PTR b = (ULONG_PTR)view->base;
++
++        if (b >= hi || n >= max) break;
++        out[n].base = b;
++        out[n].size = view->size;
++        n++;
++    }
++    return n;
++}
++
++static void ios_band_print( const char *why, const struct ios_band_census *c,
++                            const struct ios_band_view *v, int n )
++{
++    ULONG_PTR lo = ios_fex_arena_base_unix, hi = ios_fex_arena_end_unix, cursor = lo, run_end = lo;
++    int i = 0, lines = 0;
++
++    dprintf( 2, "[band-map] %s: arena 0x%lx..0x%lx used=%lluMB views=%llu largest_free=%lluMB "
++                "span_slots=%llu spans=%llu callret=%llu l1=%llu other=%lluMB refused=%lu\n",
++             why, (unsigned long)lo, (unsigned long)hi, c->used >> 20, c->views, c->largest_free >> 20,
++             c->span_slots, c->spans, c->callret, c->l1, c->other_bytes >> 20, ios_band_refused );
++    while (i < n)
++    {
++        ULONG_PTR base = v[i].base, size = v[i].size, gap = base > cursor ? base - cursor : 0;
++        unsigned count = 1;
++
++        run_end = base + size;
++        while (i + (int)count < n && v[i + count].size == size && v[i + count].base >= run_end &&
++               v[i + count].base - run_end < 0x10000)
++            run_end = v[i + count++].base + size;
++        if (lines++ < 256)
++            dprintf( 2, "[band-map]   0x%lx: %luMB free, then %u x 0x%lx (%luMB)\n", (unsigned long)base,
++                     (unsigned long)(gap >> 20), count, (unsigned long)size,
++                     (unsigned long)((run_end - base) >> 20) );
++        cursor = run_end;
++        i += count;
++    }
++    dprintf( 2, "[band-map] end: %luMB free at the top, %d runs%s\n",
++             (unsigned long)(hi > cursor ? (hi - cursor) >> 20 : 0), lines,
++             n >= IOS_BAND_MAP_MAX ? " (views past the copy's end not shown)" : "" );
++}
++
++/* The map while virtual_mutex is held (the first refusal, inside map_view). */
++static void ios_band_dump_locked( const char *why )
++{
++    struct ios_band_view *v;
++    struct ios_band_census c;
++    int n;
++
++    if (!ios_fex_arena_base_unix) return;
++    if (!(v = malloc( IOS_BAND_MAP_MAX * sizeof(*v) ))) return;
++    ios_band_census_locked( &c );
++    n = ios_band_collect_locked( v, IOS_BAND_MAP_MAX );
++    ios_band_print( why, &c, v, n );
++    free( v );
++}
++
++/* The host calls these from its own threads, also after the guest ended,
++ * when a thread that died inside the allocator could still hold
++ * virtual_mutex: wait for it at most a second, and read nothing if it stays
++ * held, rather than hang the launch's end. */
++static int ios_band_lock( sigset_t *sigset )
++{
++    int i;
++
++    pthread_sigmask( SIG_BLOCK, &server_block_set, sigset );
++    for (i = 0; i < 1000; i++)
++    {
++        if (!pthread_mutex_trylock( &virtual_mutex )) return 1;
++        usleep( 1000 );
++    }
++    pthread_sigmask( SIG_SETMASK, sigset, NULL );
++    return 0;
++}
++
++static void ios_band_unlock( sigset_t *sigset )
++{
++    pthread_mutex_unlock( &virtual_mutex );
++    pthread_sigmask( SIG_SETMASK, sigset, NULL );
++}
++
++/* v[] gets, in this order, in bytes or counts:
++ *    0 size          the arena
++ *    1 used          bytes in views inside it
++ *    2 peak          the most `used` any census or refusal saw
++ *    3 views         views inside it
++ *    4 largest_free  the largest free range
++ *    5 span_slots    free 16 MiB-aligned 16 MiB blocks: new rpmalloc spans that fit
++ *    6 spans         rpmalloc spans
++ *    7 callret       call-return stacks (one per live emulator thread)
++ *    8 l1            L1 lookup caches (one per live emulator thread)
++ *    9 other         bytes in other views
++ *   10 refused       requests inside the arena it could not serve
++ * Returns how many it wrote (at most n); 0 when there is no arena. */
++int ios_fex_band_stats( unsigned long long *v, int n )
++{
++    struct ios_band_census c;
++    unsigned long long f[11];
++    sigset_t sigset;
++    int i, k;
++
++    if (!v || n <= 0 || !ios_fex_arena_base_unix) return 0;
++    if (!ios_band_lock( &sigset )) return 0;
++    ios_band_census_locked( &c );
++    f[2] = ios_band_used_peak;
++    ios_band_unlock( &sigset );
++    f[0] = ios_fex_arena_end_unix - ios_fex_arena_base_unix;
++    f[1] = c.used;
++    f[3] = c.views;
++    f[4] = c.largest_free;
++    f[5] = c.span_slots;
++    f[6] = c.spans;
++    f[7] = c.callret;
++    f[8] = c.l1;
++    f[9] = c.other_bytes;
++    f[10] = ios_band_refused;
++    k = n < 11 ? n : 11;
++    for (i = 0; i < k; i++) v[i] = f[i];
++    return k;
++}
++
++/* The arena's map into the log, for the host at the end of a launch. */
++void ios_fex_band_dump( const char *why )
++{
++    struct ios_band_view *v;
++    struct ios_band_census c;
++    sigset_t sigset;
++    int n;
++
++    if (!ios_fex_arena_base_unix) return;
++    if (!(v = malloc( IOS_BAND_MAP_MAX * sizeof(*v) ))) return;
++    if (!ios_band_lock( &sigset ))
++    {
++        free( v );
++        return;
++    }
++    ios_band_census_locked( &c );
++    n = ios_band_collect_locked( v, IOS_BAND_MAP_MAX );
++    ios_band_unlock( &sigset );
++    ios_band_print( why ? why : "host", &c, v, n );
++    free( v );
++}
++
+ static const UINT page_shift = 12;
+ static const UINT_PTR page_mask = 0xfff;
+ static const UINT_PTR granularity_mask = 0xffff;
+@@ -11838,6 +12078,15 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+             if (!ceiling_relaxable)
+             {
+                 ios_af_set( 2, ios_scan_fail_errno, ios_scan_fail_addr, size );
++                /* Playport: a request inside the FEX arena that it cannot serve. */
++                if (fex_arena_covers( (void *)limit_low, (void *)limit_high ) &&
++                    __sync_fetch_and_add( &ios_band_refused, 1 ) == 0)
++                {
++                    char why[96];
++                    snprintf( why, sizeof(why), "first refusal size=0x%lx align=0x%lx",
++                              (unsigned long)size, (unsigned long)(align_mask + 1) );
++                    ios_band_dump_locked( why );
++                }
+                 return STATUS_NO_MEMORY;
+             }
+             start = address_space_start;

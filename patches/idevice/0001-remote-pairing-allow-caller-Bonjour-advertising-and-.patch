@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 14:48:42 +0200
+Subject: [PATCH] remote pairing: allow caller Bonjour advertising and an early
+ setup PIN
+
+Mobile hosts must publish through platform Bonjour and show a PIN before the user leaves the foreground. Add a blocking cancellable FFI with borrowed advertising and credential callbacks; keep existing APIs unchanged.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-30-on-device-pairing.md (iOS 27.0 24A437: same-phone pairing, readiness, Hollow Knight first-frame+10)
+Offered-upstream: no; to be offered to jkcoxson/idevice
+---
+ ffi/Cargo.toml                          |  2 +-
+ ffi/src/pairable_host.rs                | 74 +++++++++++++++++++++++++
+ idevice/src/remote_pairing/responder.rs | 23 +++++++-
+ 3 files changed, 95 insertions(+), 4 deletions(-)
+
+diff --git a/ffi/Cargo.toml b/ffi/Cargo.toml
+index 93d2ca8..58bacda 100644
+--- a/ffi/Cargo.toml
++++ b/ffi/Cargo.toml
+@@ -65,7 +65,7 @@ obfuscate = ["idevice/obfuscate"]
+ restore = ["idevice/restore", "dep:futures"]
+ restore_recovery = ["restore", "idevice/restore_recovery"]
+ restore_service = ["idevice/restore_service", "rsd"]
+-remote_pairing = ["idevice/remote_pairing", "dep:mdns-sd"]
++remote_pairing = ["idevice/remote_pairing", "dep:mdns-sd", "dep:serde_json"]
+ rsd = ["idevice/rsd"]
+ syslog_relay = ["idevice/syslog_relay"]
+ tcp = ["idevice/tcp"]
+diff --git a/ffi/src/pairable_host.rs b/ffi/src/pairable_host.rs
+index 534ffc7..1fa4b09 100644
+--- a/ffi/src/pairable_host.rs
++++ b/ffi/src/pairable_host.rs
+@@ -112,6 +112,80 @@ pub unsafe extern "C" fn pairable_host_cancel_free(cancel: *mut PairableHostCanc
+     let _ = unsafe { Box::from_raw(cancel) };
+ }
+ 
++/// Accept a pairing using caller-provided service advertising (e.g. Apple's
++/// Bonjour on iOS, where raw multicast sockets need a restricted entitlement).
++///
++/// `advertise` is called after binding, with the service instance identifier,
++/// JSON TXT dictionary and listening port. The caller publishes exactly these
++/// values until this function returns. `paired` receives temporary XML plist
++/// bytes on success; copy them into secure storage before the callback returns.
++/// This call blocks; run it off the UI thread. A cancel token is required.
++/// The caller generates and displays the six-digit PIN before starting.
++///
++/// # Safety
++/// Strings must be valid NUL-terminated UTF-8. Callbacks and context must remain
++/// live until return. cancel must be a live pairable_host_cancel_new token.
++/// Callback strings/bytes are borrowed only for the duration of the callback.
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn pairable_host_accept_bonjour(
++    name: *const c_char,
++    setup_pin: *const c_char,
++    advertise: Option<extern "C" fn(identifier: *const c_char, txt_json: *const c_char, port: u16, context: *mut c_void)>,
++    paired: Option<extern "C" fn(data: *const u8, len: usize, context: *mut c_void)>,
++    context: *mut c_void,
++    cancel: *const PairableHostCancel,
++) -> *mut IdeviceFfiError {
++    if name.is_null() || setup_pin.is_null() || cancel.is_null() || advertise.is_none() || paired.is_none() {
++        return ffi_err!(IdeviceError::FfiInvalidArg);
++    }
++    let name = match unsafe { CStr::from_ptr(name) }.to_str() {
++        Ok(s) => s.to_owned(),
++        Err(_) => return ffi_err!(IdeviceError::FfiInvalidString),
++    };
++    let pin = match unsafe { CStr::from_ptr(setup_pin) }.to_str() {
++        Ok(s) if s.len() == 6 && s.bytes().all(|b| b.is_ascii_digit()) => s.to_owned(),
++        _ => return ffi_err!(IdeviceError::FfiInvalidArg),
++    };
++    let cancel = unsafe { &*cancel }.0.clone();
++    let ctx = PinCtx(context);
++    let result = run_sync_local(async move {
++        if cancel.is_canceled() {
++            return Err(IdeviceError::CanceledByUser);
++        }
++        let listener = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
++            .await.map_err(|e| IdeviceError::InternalError(format!("bind: {e}")))?;
++        let port = listener.local_addr()
++            .map_err(|e| IdeviceError::InternalError(format!("address: {e}")))?.port();
++        let mut file = RpPairingFile::generate(&name);
++        let info = PairableHostInfo::generate(&name, "Mac17,7");
++        let identifier = CString::new(file.identifier.as_str())
++            .map_err(|_| IdeviceError::FfiInvalidString)?;
++        let records: std::collections::BTreeMap<_, _> = info.mdns_txt_records(&file.identifier).into_iter().collect();
++        let txt = CString::new(serde_json::to_string(&records)
++            .map_err(|e| IdeviceError::InternalError(e.to_string()))?)
++            .map_err(|_| IdeviceError::FfiInvalidString)?;
++        advertise.unwrap()(identifier.as_ptr(), txt.as_ptr(), port, ctx.0);
++        let pair = async {
++            let (stream, _) = listener.accept().await
++                .map_err(|e| IdeviceError::InternalError(format!("accept: {e}")))?;
++            let mut host = PairableHost::new(RpPairingSocket::new_device(stream), info);
++            host.accept_with_pin(&mut file, Some(pin), |_| async {}).await?;
++            let bytes = file.to_bytes();
++            paired.unwrap()(bytes.as_ptr(), bytes.len(), ctx.0);
++            Ok::<(), IdeviceError>(())
++        };
++        tokio::select! {
++            biased;
++            _ = cancel.canceled() => Err(IdeviceError::CanceledByUser),
++            r = pair => r,
++        }
++    });
++    match result {
++        Ok(()) => null_mut(),
++        Err(e) => ffi_err!(e),
++    }
++}
++
+ /// Advertises this computer as a pairable host and accepts a single device-initiated
+ /// pairing.
+ ///
+diff --git a/idevice/src/remote_pairing/responder.rs b/idevice/src/remote_pairing/responder.rs
+index 891cfdb..d932da4 100644
+--- a/idevice/src/remote_pairing/responder.rs
++++ b/idevice/src/remote_pairing/responder.rs
+@@ -172,9 +172,25 @@ impl<R: super::RpPairingSocketProvider> PairableHost<R> {
+     where
+         Fut: std::future::Future<Output = ()>,
+     {
++        self.accept_with_pin(pairing_file, None, pin_callback).await
++    }
++
++    /// Accept with a caller-generated six-digit PIN, so a mobile host can show
++    /// it before the user leaves for Settings. None preserves random generation.
++    pub async fn accept_with_pin<Fut>(
++        &mut self,
++        pairing_file: &mut RpPairingFile,
++        setup_pin: Option<String>,
++        pin_callback: impl FnOnce(String) -> Fut,
++    ) -> Result<PeerDevice, IdeviceError>
++    where
++        Fut: std::future::Future<Output = ()>,
++    {
++        if setup_pin.as_ref().is_some_and(|p| p.len() != 6 || !p.bytes().all(|b| b.is_ascii_digit())) {
++            return Err(IdeviceError::FfiInvalidArg);
++        }
+         self.handshake().await?;
+-        let peer_device = self.pair_setup(pairing_file, pin_callback).await?;
+-        Ok(peer_device)
++        self.pair_setup(pairing_file, setup_pin, pin_callback).await
+     }
+ 
+     /// Receive the device's handshake request and reply with our device info.
+@@ -249,6 +265,7 @@ impl<R: super::RpPairingSocketProvider> PairableHost<R> {
+     async fn pair_setup<Fut>(
+         &mut self,
+         pairing_file: &mut RpPairingFile,
++        setup_pin: Option<String>,
+         pin_callback: impl FnOnce(String) -> Fut,
+     ) -> Result<PeerDevice, IdeviceError>
+     where
+@@ -268,7 +285,7 @@ impl<R: super::RpPairingSocketProvider> PairableHost<R> {
+         let pin = if self.host_info.allows_pinless_pairing {
+             "000000".to_string()
+         } else {
+-            format!("{:06}", rand::rng().random_range(0..1_000_000))
++            setup_pin.unwrap_or_else(|| format!("{:06}", rand::rng().random_range(0..1_000_000)))
+         };
+         let verifier = srp_client.compute_verifier(SRP_USERNAME, pin.as_bytes(), &salt);
+ 

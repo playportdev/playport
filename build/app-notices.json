@@ -1,0 +1,316 @@
+{
+  "schema": 1,
+  "about": "Which files of a `pp notices` output the app carries as Licenses/ (build/notices-app.py; docs/NOTICES.md, \"The app's selection\"). Every collected file is either included by a component or excluded by a group with its reason; a new collected file fails selection until it is classified here. An include wins over an exclude.",
+  "review": {
+    "status": "release-reviewed",
+    "reviewed_by": "the Playport authors (copyright holder)",
+    "date": "2026-09-30",
+    "decision": "docs/decisions/0039-owners-licensing-review.md",
+    "answers": [
+      "LLVM runtime: accepted. The llvm-mingw runtime code embedded by compiling needs no attribution under the LLVM exception (4(a), 4(b), 4(d) waived); the app carries LLVM's root licence and credit files, the source bundle the full set.",
+      "FreeType: FTL, with its credit line.",
+      "Rust: ns-keyed-archive, plist-macro and plist_ffi have no licence file upstream; the app carries notices Playport writes from their Cargo.toml (MIT; ns-keyed-archive MIT OR Apache-2.0, taken as MIT) with 'Copyright (c) Jackson Coxson' from their authors field, labelled as such. plist_ffi compiles no libplist code.",
+      "StikJIT and GStreamer: shipped with best-effort notices from matching versions (StikJIT's MPL-2.0 text and idevice's notices; GStreamer's recipe-associated set), labelled best effort on the licences page.",
+      "GStreamer's MoltenVK (Apache-2.0): its licence at the SDK's MoltenVK tag, decision 0042.",
+      "mingw-w64 Cephes: answered by Moshier's own grants.",
+      "Supersets carried whole: accepted; over-inclusion cannot miss a notice.",
+      "Madeira: its un-headered build/*-unix files are taken under the stricter reading, GPL-3.0-or-later, and its Wine commits under its published licence; no upstream request is sent."
+    ],
+    "open": []
+  },
+  "parts": {
+    "app": "Playport's Swift app, PlayportKit, HostIOKit and the JIT helper extension's own code",
+    "SteamClient": "app/SteamClient, with protocol schema tables derived from JavaSteam",
+    "KosmicKrisp": "Frameworks/KosmicKrisp.framework (Mesa, build/stages/mesa.sh)",
+    "StikJIT": "PlugIns/PlayportJIT.appex/Frameworks/StikJIT.framework (prebuilt StikJIT 1.6.0)",
+    "rust-std": "the Rust standard library linked into libidevice_ffi.a (P10-idevice)",
+    "llvm-mingw-runtime": "llvm-mingw's libc++, libc++abi, libunwind and compiler-rt code in every PE DLL built with it",
+    "mingw-crt": "the mingw-w64 CRT and headers in every PE DLL built with llvm-mingw"
+  },
+  "components": [
+    {
+      "name": "Playport",
+      "covers": [
+        "app",
+        "P9-session",
+        "P7-reg"
+      ],
+      "licence": "GPL-3.0-or-later with Playport's converter exception",
+      "include": [
+        "Playport-LICENSE.txt",
+        "Playport-LICENSE-EXCEPTION.md"
+      ]
+    },
+    {
+      "name": "JavaSteam (protocol schema tables)",
+      "covers": [
+        "SteamClient"
+      ],
+      "licence": "MIT",
+      "include": [
+        "JavaSteam-LICENSE.txt"
+      ]
+    },
+    {
+      "name": "Wine",
+      "covers": [
+        "P2",
+        "P2-ec",
+        "nls",
+        "P3",
+        "P4-win32u",
+        "P4-server",
+        "P6-gst"
+      ],
+      "licence": "LGPL-2.1-or-later, and the licences of the libraries in its libs/",
+      "include": [
+        "LGPL-2.1.txt",
+        "wine-*"
+      ]
+    },
+    {
+      "name": "Madeira",
+      "covers": [
+        "P3",
+        "P4-win32u",
+        "P4-server",
+        "P5-winios",
+        "P5-dxshim"
+      ],
+      "licence": "GPL-3.0-or-later with Madeira's converter exception; Wine-derived files LGPL-2.1-or-later",
+      "include": [
+        "Madeira-*"
+      ]
+    },
+    {
+      "name": "FEX",
+      "covers": [
+        "P1-de"
+      ],
+      "licence": "MIT; Madeira's port GPL-3.0-or-later with its exception; bundled libraries as listed",
+      "include": [
+        "FEX-*",
+        "rpmalloc-*",
+        "fmt-LICENSE.txt",
+        "xxHash-LICENSE.txt",
+        "cephes-LICENSE.txt",
+        "SoftFloat-3e-LICENSE.txt",
+        "tiny-json-LICENSE.txt",
+        "cpp-optparse-LICENSE.txt",
+        "unordered_dense-LICENSE.txt"
+      ]
+    },
+    {
+      "name": "DXMT",
+      "covers": [
+        "P5-dxmt",
+        "P5-dxmt-pe"
+      ],
+      "licence": "LGPL-2.1-or-later (formerly MIT); Madeira's port GPL-3.0-or-later with its exception",
+      "include": [
+        "LGPL-2.1.txt",
+        "DXMT-*",
+        "DXBCParser-header.txt",
+        "DXBCParser-LICENSE-Microsoft.txt",
+        "mingw-directx-headers-COPYING.MinGW-w64.txt"
+      ]
+    },
+    {
+      "name": "LLVM 15 (DXMT's shader converter)",
+      "covers": [
+        "P5-dxmt"
+      ],
+      "licence": "Apache-2.0 WITH LLVM-exception and the legacy LLVM licence; Henry Spencer's regex; Unicode's ConvertUTF",
+      "include": [
+        "LLVM-*"
+      ]
+    },
+    {
+      "name": "FreeType",
+      "covers": [
+        "P4-win32u"
+      ],
+      "licence": "FreeType License (FTL)",
+      "include": [
+        "FreeType-*"
+      ]
+    },
+    {
+      "name": "GnuTLS, Nettle and GMP",
+      "covers": [
+        "P4-crypto"
+      ],
+      "licence": "LGPL-2.1-or-later (GnuTLS); LGPL-3.0-or-later or GPL-2.0-or-later (Nettle, GMP)",
+      "include": [
+        "GnuTLS-*",
+        "Nettle-*",
+        "GPL-2.0.txt",
+        "LGPL-3.0.txt"
+      ]
+    },
+    {
+      "name": "GStreamer and its libraries",
+      "covers": [
+        "P6-gst"
+      ],
+      "licence": "LGPL-2.1-or-later (GStreamer, GLib, FFmpeg as configured) and the permissive licences of its dependencies; notices are best effort from the release's recipe versions",
+      "include": [
+        "gstreamer-source-*",
+        "MoltenVK-LICENSE.txt"
+      ],
+      "except": [
+        "gstreamer-source-inventory.json"
+      ]
+    },
+    {
+      "name": "Mesa (KosmicKrisp)",
+      "covers": [
+        "KosmicKrisp"
+      ],
+      "licence": "MIT and the licences Mesa's files name; Khronos headers Apache-2.0 OR MIT",
+      "include": [
+        "Mesa-*",
+        "mesa-header-superset-*"
+      ]
+    },
+    {
+      "name": "DXVK",
+      "covers": [
+        "P6-vulkan-pe"
+      ],
+      "licence": "zlib/libpng; bundled libraries MIT; Khronos headers Apache-2.0 OR MIT",
+      "include": [
+        "DXVK-*",
+        "khronos-dxvk-*"
+      ]
+    },
+    {
+      "name": "vkd3d-proton",
+      "covers": [
+        "P6-vulkan-pe"
+      ],
+      "licence": "LGPL-2.1-or-later; dxil-spirv MIT; Khronos headers Apache-2.0 OR MIT",
+      "include": [
+        "vkd3d-proton-*",
+        "dxil-spirv-*",
+        "khronos-vkd3d-*",
+        "LGPL-2.1.txt"
+      ]
+    },
+    {
+      "name": "gbe_fork (Steam API emulator)",
+      "covers": [
+        "P8-steamapi"
+      ],
+      "licence": "LGPL-3.0; bundled and linked libraries as listed",
+      "include": [
+        "gbe_fork-*",
+        "abseil-cpp-LICENSE.txt",
+        "LGPL-3.0.txt"
+      ]
+    },
+    {
+      "name": "StikJIT",
+      "covers": [
+        "StikJIT"
+      ],
+      "licence": "MPL-2.0 (source: docs/LICENSING.md, \"StikJIT\"); its embedded dependencies' notices are best effort from matching versions",
+      "include": [
+        "StikJIT-LICENSE.txt"
+      ]
+    },
+    {
+      "name": "idevice and its Rust crates",
+      "covers": [
+        "P10-idevice"
+      ],
+      "licence": "MIT; each crate's licence as listed in rust-crates.tsv",
+      "include": [
+        "idevice-LICENSE.txt",
+        "rust-crates.tsv",
+        "rust-crates-without-licence-files.txt",
+        "rust-*-[0-9]*",
+        "crate-notice-from-metadata-ns-keyed-archive.txt",
+        "crate-notice-from-metadata-plist-macro.txt",
+        "crate-notice-from-metadata-plist_ffi.txt"
+      ],
+      "except": [
+        "rust-source-*",
+        "rust-licenses-*",
+        "rust-COPYRIGHT-*",
+        "rust-ns-keyed-archive-*",
+        "rust-plist-macro-*",
+        "rust-plist_ffi-*"
+      ]
+    },
+    {
+      "name": "Rust standard library",
+      "covers": [
+        "rust-std"
+      ],
+      "licence": "MIT OR Apache-2.0, and the texts its COPYRIGHT file names",
+      "include": [
+        "rust-COPYRIGHT-library.html",
+        "rust-licenses-*",
+        "rust-source-*"
+      ]
+    },
+    {
+      "name": "LLVM runtime libraries (llvm-mingw)",
+      "covers": [
+        "llvm-mingw-runtime"
+      ],
+      "licence": "Apache-2.0 WITH LLVM-exception; legacy NCSA code as LICENSE.TXT names",
+      "include": [
+        "llvm-runtime/llvm-runtime-LICENSE.TXT",
+        "llvm-runtime/llvm-runtime-libcxx-LICENSE.TXT",
+        "llvm-runtime/llvm-runtime-libcxx-CREDITS.TXT",
+        "llvm-runtime/llvm-runtime-libcxxabi-LICENSE.TXT",
+        "llvm-runtime/llvm-runtime-libcxxabi-CREDITS.TXT",
+        "llvm-runtime/llvm-runtime-libunwind-LICENSE.TXT",
+        "llvm-runtime/llvm-runtime-compiler-rt-LICENSE.TXT",
+        "llvm-runtime/llvm-runtime-compiler-rt-CREDITS.TXT"
+      ]
+    },
+    {
+      "name": "mingw-w64 runtime",
+      "covers": [
+        "mingw-crt"
+      ],
+      "licence": "the mingw-w64 runtime licence (ZPL and the permissive notices it collects); Cephes-derived math functions BSD by their author's permission",
+      "include": [
+        "mingw-source-*",
+        "cephes-LICENSE.txt"
+      ]
+    }
+  ],
+  "exclude": [
+    {
+      "why": "collection records for audit, not notices; path-independent and kept with the full collection",
+      "patterns": [
+        "*-provenance.json",
+        "*-origins.json",
+        "gstreamer-source-inventory.json"
+      ]
+    },
+    {
+      "why": "the rest of the LLVM runtime source superset (code, tests, tools, other platforms): the LLVM exception waives attribution for runtime code embedded by compiling; it stays in the full collection and the source bundle",
+      "patterns": [
+        "llvm-runtime/*"
+      ]
+    },
+    {
+      "why": "attribution evidence (whole source files) for three crates without licence files; an open review item, kept in the full collection",
+      "patterns": [
+        "rust-ns-keyed-archive-*",
+        "rust-plist-macro-*",
+        "rust-plist_ffi-*"
+      ]
+    }
+  ],
+  "credits": [
+    "This software is based in part on the work of the Independent JPEG Group.",
+    "Regular-expression code: copyright 1992, 1993, 1994 Henry Spencer, and copyright 1992, 1993, 1994 The Regents of the University of California. This is an altered version of the original software (see LLVM-Support-COPYRIGHT.regex.txt).",
+    "Portions of this software are copyright © 2024 The FreeType Project (www.freetype.org). All rights reserved."
+  ]
+}

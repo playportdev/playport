@@ -1,0 +1,26 @@
+[ladder 15:32:42] run directory $PLAYPORT_BUILD/ladder-runs/ios-20260924T153242Z; backend ios
+[ladder 15:32:58] rung cpu-jit: pass
+[ladder 15:33:13] rung win32-core: pass
+[ladder 15:33:32] rung concurrency: pass
+[ladder 15:33:51] rung process-model: pass
+[ladder 15:34:51] rung persistence: pass
+[ladder 15:35:48] rung resource-envelope: pass
+backend: madeira:fex-0f8edf8f6+wine-e82864432+madeira-5a82d392e
+  cpu-jit            pass
+      cpu-jit/1              ladder-cpujit-x86-64               pass
+  win32-core         pass
+      win32-core/1           ladder-w32core-x86-64              pass
+  concurrency        pass
+      concurrency/1          ladder-concurrency-x86-64          pass
+  process-model      pass
+      process-model/1        ladder-process-x86-64              pass
+  persistence        pass
+      persistence/1          ladder-persist-write-x86-64        pass
+      persistence/2          ladder-persist-verify-x86-64       pass
+      persistence/3          ladder-persist-write-x86-64        pass
+      persistence/4          ladder-persist-verify-x86-64       pass
+  resource-envelope  pass
+      resource-envelope/1    ladder-envelope-coldstart-x86-64   pass
+      resource-envelope/2    ladder-envelope-load-x86-64        pass
+      measurements: cold_start_s=5.493, cold_start_excl_activation_s=0.237, peak_rss_mb=1235, steady_rss_mb=1230.6, available_memory_min_mb=6956, prefix_bytes_before=5308436480, prefix_bytes_after=5308436480, storage_amplification=0, main_thread_max_stall_ms=0.1
+ladder: pass; gate evidence: yes

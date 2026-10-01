@@ -1,0 +1,272 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 24 Sep 2026 06:33:37 +0800
+Subject: [PATCH] ARM64EC transition counters, last-hit alias cache, L1-miss
+ rate log on iOS
+
+- Module.S / Module.cpp / libarm64ecfex.def: an exported IosXpFex counter
+  block (sharded by stack address, LSE stadd) counts x64->EC calls, FPCR
+  writes and EC->x64 exits, plus a sampled ring of call targets, so a probe
+  can measure transition rates and name the hottest imports.
+- IosJitAlias.cpp / Module.S: remember the alias entry that satisfied the last
+  translation and check it before the walk, and walk newest-first; the images
+  called most are registered late.
+- LookupCache.h: log the process-wide L1 lookup-cache miss rate every 2^20
+  misses.
+- Advance rpmalloc: thread id from TEB->Self, allocator lock.
+
+Madeira-commit: 2cf88d6757553571b653c14b1640ae3c56699734
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/LookupCache.h | 14 ++++
+ Source/Windows/ARM64EC/IosJitAlias.cpp      |  8 ++
+ Source/Windows/ARM64EC/Module.S             | 91 ++++++++++++++++++---
+ Source/Windows/ARM64EC/Module.cpp           | 12 +++
+ Source/Windows/ARM64EC/libarm64ecfex.def    |  2 +
+ 5 files changed, 117 insertions(+), 10 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.h b/FEXCore/Source/Interface/Core/LookupCache.h
+index e213e5d..be19ce2 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.h
++++ b/FEXCore/Source/Interface/Core/LookupCache.h
+@@ -1,5 +1,7 @@
+ // SPDX-License-Identifier: MIT
+ #pragma once
++#include <atomic>
++#include <chrono>
+ #include "Interface/Context/Context.h"
+ #include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/Utils/SHMStats.h>
+@@ -257,6 +259,18 @@ public:
+     // If host pointer was found in L2 or L3, then add it to the counter.
+     // Keeping track not L1 misses, but specifically L2/L3 hits.
+     ++L2L3CacheHits;
++#ifdef FEX_IOS_HOST
++    {   /* ml1124: process-wide L1-miss rate (every 2^20 misses, with the time) */
++      static std::atomic<uint64_t> IosL1Misses {0};
++      static std::atomic<int64_t> IosL1LastNs {0};
++      const uint64_t M = IosL1Misses.fetch_add(1, std::memory_order_relaxed) + 1;
++      if ((M & 0xfffff) == 0) {
++        const int64_t Now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++        const int64_t Last = IosL1LastNs.exchange(Now, std::memory_order_relaxed);
++        if (Last) LogMan::Msg::EFmt("[l1-miss] ml1124 {} L1 misses total, {:.0f}/s over the last 2^20", M, 1048576.0 * 1e9 / double(Now - Last));
++      }
++    }
++#endif
+ 
+ #ifdef FEX_IOS_HOST
+     /* ml1059: this runs on EVERY L1 miss, and system_clock::now() is a call through a
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index d835780..5e07b36 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -41,6 +41,14 @@ constexpr int kMaxEntries = 256;
+ extern "C" {
+ IosAliasEntry IosAliasEntries[kMaxEntries];
+ volatile int IosAliasCount = 0;
++/* ml1116: the entry that satisfied the last translation, checked first by
++ * Module.S before the walk. A pointer (one atomic 8-byte store) rather than a
++ * copy of the fields, so a reader can never see a torn entry; a retired entry
++ * has Size 0 and simply misses. The walk itself now runs NEWEST-FIRST: the
++ * images the game calls (its own EC ntdll/kernel32/kernelbase, the D3D12
++ * runtime) are registered late, so oldest-first cost ~150 iterations per
++ * x64->EC call at up to a million calls a second. */
++IosAliasEntry* volatile IosAliasLast = nullptr;
+ }
+ 
+ namespace {
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 5e96f35..5f6a69e 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -18,6 +18,18 @@
+ // registers, and an unmatched sequence silently keeps reading the wrong slot.
+ // The JIT emitters read the same offset at runtime via IosTebTsdOffset.
+ #ifdef FEX_IOS_HOST
++.arch_extension lse   // ml1131: stadd/ldadd for the transition probe counters
++// ml1131: add 1 to the sp-sharded counter at IosXpFex + \off. Clobbers \a, \b.
++.macro IOS_XP_COUNT off, a, b
++  adrp \a, IosXpFex
++  add \a, \a, #:lo12:IosXpFex
++  mov \b, sp
++  ubfx \b, \b, #16, #4
++  add \a, \a, \b, lsl #6
++  add \a, \a, #\off
++  mov \b, #1
++  stadd \b, [\a]
++.endm
+ .macro IOS_LOAD_TEB reg
+   mrs \reg, TPIDRRO_EL0
+   and \reg, \reg, #~7
+@@ -113,20 +125,34 @@ ExitToX64:
+   // x4/x9 are spilled to free loop registers; restored on every exit path.
+   // (Native EC callers keep sp 16-aligned at call boundaries per AAPCS.)
+   stp x4, x9, [sp, #-16]!
+-  adrp x16, IosAliasEntries
+-  add x16, x16, #:lo12:IosAliasEntries
++  // ml1116: last-hit entry first, then the table newest-first.
++  adrp x16, IosAliasLast
++  ldr x16, [x16, #:lo12:IosAliasLast]
++  cbz x16, ios_ffs_xlate_walk
++  ldr x4, [x16, #8]      // Entry.JitBase
++  sub x4, x17, x4
++  ldr x23, [x16, #16]    // Entry.Size
++  cmp x4, x23
++  b.lo ios_ffs_xlate_hit
++ios_ffs_xlate_walk:
+   adrp x9, IosAliasCount
+   ldr w9, [x9, #:lo12:IosAliasCount]
++  adrp x16, IosAliasEntries
++  add x16, x16, #:lo12:IosAliasEntries
++  add x16, x16, x9, lsl #5   // one past the last entry
+ ios_ffs_xlate_loop:
+   cbz w9, ios_ffs_xlate_done
++  sub x16, x16, #32
++  sub w9, w9, #1
+   ldr x4, [x16, #8]      // Entry.JitBase
+   sub x4, x17, x4
+   ldr x23, [x16, #16]    // Entry.Size
+   cmp x4, x23
+-  b.lo ios_ffs_xlate_hit
+-  add x16, x16, #32
+-  sub w9, w9, #1
++  b.lo ios_ffs_xlate_hit_walk
+   b ios_ffs_xlate_loop
++ios_ffs_xlate_hit_walk:
++  adrp x23, IosAliasLast
++  str x16, [x23, #:lo12:IosAliasLast]
+ ios_ffs_xlate_hit:
+   ldr x23, [x16]         // Entry.PeBase
+   add x17, x23, x4       // target in PE space
+@@ -161,6 +187,7 @@ ios_ffs_reject:
+   str x23, [x16, #16]    // [2] = matched-but-rejected count
+   str x17, [x16, #24]    // [3] = last rejected (PE-space) target
+ ios_ffs_no_bypass:
++  IOS_XP_COUNT 2112, x16, x17   // ml1131: EC->x64 call (callback) emulated
+ #endif
+   str lr, [sp, #-8]! // Push return address to stack, this will be popped by the x86 RET instr.
+ 
+@@ -240,10 +267,40 @@ BeginSimulation:
+ .global ExitFunctionEC
+ ExitFunctionEC:
+   // Clear any the AFP NEP and AH bits in FPCR as native code won't expect their behaviour.
++  // ml1125: only WRITE FPCR when a bit actually has to change. An FPCR write is
++  // expensive on Apple cores (the samples pile up on the instruction after it,
++  // ph-rdr74/75), and with AFP disabled (FEX_HOSTFEATURES=disableafp) the bits
++  // are never set, so every x64->EC call paid for a no-op write. NZCV is free
++  // here: the cmp at check_thunk clobbers it on every path anyway.
+   mrs x17, fpcr
++  tst x17, #6
++  b.eq 1f
+   and x17, x17, #~6 // NEP + AH
+   msr fpcr, x17
+ #ifdef FEX_IOS_HOST
++  IOS_XP_COUNT 1088, x16, x23   // ml1131: FPCR writes actually performed
++#endif
++1:
++#ifdef FEX_IOS_HOST
++  // ml1131: count this x64->EC call (x9 = target as the caller addressed it) and
++  // append every 64th target of a shard to the ring. x4 (x64 R10, volatile at a
++  // call boundary), x16, x17 and x23 are clobbered on every path below anyway.
++  adrp x16, IosXpFex
++  add x16, x16, #:lo12:IosXpFex
++  mov x23, sp
++  ubfx x23, x23, #16, #4
++  add x17, x16, x23, lsl #6
++  add x17, x17, #64
++  mov x4, #1
++  ldadd x4, x23, [x17]
++  tst x23, #63
++  b.ne 2f
++  add x17, x16, #3136
++  ldadd x4, x23, [x17]
++  and x23, x23, #4095
++  add x17, x16, #3200
++  str x9, [x17, x23, lsl #3]
++2:
+   IOS_LOAD_TEB x17
+   ldr x17, [x17, #0x1788] // TEB->ChpeV2CpuAreaInfo
+ #else
+@@ -267,20 +324,34 @@ ExitFunctionSuspendResumePoint:
+   // x64 R10 (volatile at this call/ret boundary) and is clobbered by the
+   // entry-thunk path below. NZCV is clobbered by the cmp at check_thunk
+   // regardless.
+-  adrp x16, IosAliasEntries
+-  add x16, x16, #:lo12:IosAliasEntries
++  // ml1116: last-hit entry first, then the table newest-first.
++  adrp x16, IosAliasLast
++  ldr x16, [x16, #:lo12:IosAliasLast]
++  cbz x16, ios_ec_xlate_walk
++  ldr x23, [x16]        // Entry.PeBase
++  sub x23, x9, x23
++  ldr x4, [x16, #16]    // Entry.Size
++  cmp x23, x4
++  b.lo ios_ec_xlate_hit
++ios_ec_xlate_walk:
+   adrp x17, IosAliasCount
+   ldr w17, [x17, #:lo12:IosAliasCount]
++  adrp x16, IosAliasEntries
++  add x16, x16, #:lo12:IosAliasEntries
++  add x16, x16, x17, lsl #5   // one past the last entry
+ ios_ec_xlate_loop:
+   cbz w17, ios_ec_xlate_done
++  sub x16, x16, #32
++  sub w17, w17, #1
+   ldr x23, [x16]        // Entry.PeBase
+   sub x23, x9, x23      // offset into image (unsigned-wraps huge if below base)
+   ldr x4, [x16, #16]    // Entry.Size
+   cmp x23, x4
+-  b.lo ios_ec_xlate_hit
+-  add x16, x16, #32
+-  sub w17, w17, #1
++  b.lo ios_ec_xlate_hit_walk
+   b ios_ec_xlate_loop
++ios_ec_xlate_hit_walk:
++  adrp x4, IosAliasLast
++  str x16, [x4, #:lo12:IosAliasLast]
+ ios_ec_xlate_hit:
+   ldr x4, [x16, #8]     // Entry.JitBase
+   add x9, x4, x23
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 40b40b1..8cdaee6 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -96,6 +96,17 @@ extern "C" uint32_t IosTebTsdOffset;
+  * lld generates for the neighbouring word ("misaligned ldr/str offset"). */
+ static uint32_t IosTebTsdImportFound = 0;
+ uint64_t IosFfsBypassLog[4] {};
++/* ml1131: transition probe, written by Module.S and read by wine's ntdll-unix
++ * sampler through this DATA export (libarm64ecfex.def). Layout in bytes:
++ *   0     magic 'MADXPFEX' (set in ProcessInit)
++ *   64    x64->EC calls, 16 shards x 64 bytes (shard = bits 16..19 of sp), LSE add
++ *   1088  FPCR writes actually performed in ExitFunctionEC, 16 shards
++ *   2112  EC->x64 calls through ExitToX64 (not the FFS bypass), 16 shards
++ *   3136  ring index (every 64th x64->EC call of a shard appends its target)
++ *   3200  ring[4096] of target addresses (as the x64 caller called them)
++ * Keep in sync with Module.S and build/ntdll-unix/server_ios.c (ios_xp_fex_*). */
++extern "C" __attribute__((aligned(64))) uint64_t IosXpFex[4496];
++__attribute__((aligned(64))) uint64_t IosXpFex[4496] {};
+ #endif // FEX_IOS_HOST
+ 
+ namespace Exception {
+@@ -876,6 +887,7 @@ NTSTATUS ProcessInit() {
+     if (!IosTebTsdOffset) {
+       return STATUS_UNSUCCESSFUL;
+     }
++    IosXpFex[0] = 0x5845465058444d41ull;   /* ml1131 'AMDXPFEX' little-endian magic */
+   }
+ #endif
+ 
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index 2d961fb..d3bd98e 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -39,3 +39,5 @@ EXPORTS
+   ; getenv() recurses in _lock(17) and GetEnvironmentVariableA faults on the TEB.
+   ios_fex_band_base DATA
+   ios_fex_band_end DATA
++  ; ml1131: transition probe counters (Module.S), read by ntdll-unix's [xp-api] sampler.
++  IosXpFex DATA

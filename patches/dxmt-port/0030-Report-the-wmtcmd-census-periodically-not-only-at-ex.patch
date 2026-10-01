@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 20:35:33 -0700
+Subject: [PATCH] Report the wmtcmd census periodically, not only at exit
+
+An atexit-only summary never fires on iOS, where apps are killed or
+backgrounded rather than cleanly exited: the first armed run counted 12,288
+render batches and printed nothing. Report on the first batch, then every 512,
+then at exit. The first report proves the census is live and shows a real batch
+shape immediately, which is what a run is for.
+
+Madeira-commit: da6214c821d7dd2668299482f907f47059ce86ca
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 4a1de7c..f29d5c2 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -883,6 +883,11 @@ static unsigned short wmt_first_seq[64];
+ static unsigned wmt_first_len;
+ static int wmt_first_kind = -1;
+ 
++/* Report PERIODICALLY, not only at exit. iOS apps are killed or backgrounded,
++ * not cleanly exited, so an atexit-only summary never fires -- the first run
++ * armed the census, counted commands, and printed nothing. */
++static void wmt_census_report(void);
++
+ static void wmt_census_report(void) {
+     if (wmt_census_on != 1) return;
+     fprintf(stderr, "\n[cmd-census] ml758 batches render=%lu compute=%lu blit=%lu\n",
+@@ -932,6 +937,15 @@ static inline void wmt_census_batch(const struct wmtcmd_base *head, int kind) {
+     if (capture) wmt_first_len = (unsigned)(n < 64 ? n : 64);
+     wmt_records_total += n;
+     if (n > wmt_records_max) wmt_records_max = n;
++
++    /* First batch, then every 512, then at exit. The first tells us the census
++     * is live and shows a real batch shape immediately; the cadence keeps a
++     * long-running app reporting without flooding the log. */
++    {
++        static unsigned long ticks;
++        unsigned long t = ++ticks;
++        if (t == 1 || (t & 0x1FF) == 0) wmt_census_report();
++    }
+ }
+ 
+ static inline void wmt_census_sidecar_bytes(unsigned long len) {

@@ -1,0 +1,8 @@
+{
+  "chunk_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "mixed_sha1": "32124f3f9b6c1ea3a24b821bd029919b18b1a73c",
+  "plain_adler32_seed0": 655768423,
+  "plain_len": 150000,
+  "plain_sha1": "78acb7f0b996545c9b846fe01bbc300175d2a0ac",
+  "small_sha1": "3b2fcf183ed0a42c0d4b2a20603f0ddc08e103f9"
+}

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Wed, 15 Feb 2023 21:00:47 -0600
+Subject: [PATCH] kernelbase: Do not attempt to start winedbg if logging is
+ disabled.
+
+CW-Bug-Id: #20812
+Valve-commit: 98f696837ebdb2bf58268b604177e05c5926035a
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/debug.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/dlls/kernelbase/debug.c b/dlls/kernelbase/debug.c
+index 3f728b8..1f1c309 100644
+--- a/dlls/kernelbase/debug.c
++++ b/dlls/kernelbase/debug.c
+@@ -611,6 +611,8 @@ static BOOL start_debugger_atomic( EXCEPTION_POINTERS *epointers )
+ {
+     static HANDLE once;
+ 
++    if (!ERR_ON(seh)) return FALSE;
++
+     if (once == 0)
+     {
+ 	OBJECT_ATTRIBUTES attr;

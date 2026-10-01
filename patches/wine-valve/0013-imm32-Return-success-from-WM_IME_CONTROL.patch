@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Tue, 8 Aug 2023 17:55:31 +0200
+Subject: [PATCH] imm32: Return success from WM_IME_CONTROL.
+
+CW-Bug-Id: #22569
+Valve-commit: 06a9b3848d0a29348b57dfa727b81aec36ba8313
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/imm32/ime.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/imm32/ime.c b/dlls/imm32/ime.c
+index 37c4d07..fce8151 100644
+--- a/dlls/imm32/ime.c
++++ b/dlls/imm32/ime.c
+@@ -464,7 +464,7 @@ static LRESULT WINAPI ime_ui_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LP
+     case WM_IME_CONTROL:
+         FIXME( "hwnd %p, himc %p, msg %s, wparam %s, lparam %#Ix stub!\n", hwnd, himc,
+                debugstr_wm_ime(msg), debugstr_imc(wparam), lparam );
+-        return 1;
++        return 0;
+     }
+ 
+     return DefWindowProcW( hwnd, msg, wparam, lparam );

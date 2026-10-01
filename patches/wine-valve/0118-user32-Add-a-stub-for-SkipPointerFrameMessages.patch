@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 20 Mar 2026 11:34:38 -0600
+Subject: [PATCH] user32: Add a stub for SkipPointerFrameMessages().
+
+CW-Bug-Id: #26805
+Valve-commit: 06e63ed967a853d7c91dbd840f1fa0e91317a2d4
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/user32/input.c     | 5 +++++
+ dlls/user32/user32.spec | 2 +-
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/user32/input.c b/dlls/user32/input.c
+index aad3da5..6048276 100644
+--- a/dlls/user32/input.c
++++ b/dlls/user32/input.c
+@@ -827,6 +827,11 @@ BOOL WINAPI GetPointerFramePenInfoHistory( UINT32 id, UINT32 *entries, UINT32 *p
+     return NtUserGetPointerInfoList( id, PT_PEN, 0, 0, sizeof(*info), entries, pointers, info );
+ }
+ 
++BOOL WINAPI SkipPointerFrameMessages( UINT32 id )
++{
++    FIXME( "id %u stub.\n", id );
++    return TRUE;
++}
+ 
+ /*******************************************************************
+  *           GetActiveWindow  (USER32.@)
+diff --git a/dlls/user32/user32.spec b/dlls/user32/user32.spec
+index f4ed3cf..d818e0f 100644
+--- a/dlls/user32/user32.spec
++++ b/dlls/user32/user32.spec
+@@ -1140,7 +1140,7 @@
+ @ stdcall ShutdownBlockReasonDestroy(long)
+ # @ stub ShutdownBlockReasonQuery
+ # @ stub SignalRedirectionStartComplete
+-# @ stub SkipPointerFrameMessages
++@ stdcall SkipPointerFrameMessages(long)
+ # @ stub SoftModalMessageBox
+ # @ stub SoundSentry
+ @ stdcall SubtractRect(ptr ptr ptr)

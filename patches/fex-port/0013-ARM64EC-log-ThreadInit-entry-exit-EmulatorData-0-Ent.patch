@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 19:11:58 +0800
+Subject: [PATCH] ARM64EC: log ThreadInit() entry/exit +
+ EmulatorData[0]/EnterEC values
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Diagnostic dprintf hooks at the start and end of ThreadInit() so we can
+confirm Wine is calling BTCpu64ThreadInit for the main x86_64 thread
+before the dispatcher is invoked, and verify the per-thread state
+pointer + dispatcher entry are populated.
+
+Without these logs we were chasing a "EmulatorData[0] not initialized"
+hypothesis that turned out to be wrong — ThreadInit() does run and
+EmulatorData[0]=0x300001180, EnterEC=0x11bbfc130 are correctly set.
+
+Madeira-commit: a52945e491f62e6575ed44d0d084c0136afba4a2
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 41 +++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index e46eebe..390d423 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -956,6 +956,23 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+ }
+ 
+ NTSTATUS ThreadInit() {
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic diagnostic: log entry to thread-init so we can confirm Wine
++   * is calling BTCpu64ThreadInit for the main x86_64 thread before the
++   * dispatcher is invoked. Without this, EmulatorData[0] is garbage and
++   * the dispatcher BLR's into uninitialized memory. */
++  {
++    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
++        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
++              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
++        : nullptr;
++    if (stderr_h) {
++      const char *msg = "[FEX-iOS] ThreadInit() entered\n";
++      ULONG written = 0;
++      WriteFile(stderr_h, msg, 32, &written, nullptr);
++    }
++  }
++#endif
+   std::scoped_lock Lock(ThreadCreationMutex);
+   FEX::Windows::InitCRTThread();
+   const auto CPUArea = GetCPUArea();
+@@ -1021,6 +1038,30 @@ NTSTATUS ThreadInit() {
+ 
+   CPUArea.ThreadState() = Thread;
+   CPUArea.Area->SuspendDoorbell = reinterpret_cast<ULONG*>(&Thread->CurrentFrame->SuspendDoorbell);
++#ifdef FEX_IOS_HOST
++  {
++    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
++        ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
++              NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
++        : nullptr;
++    if (stderr_h) {
++      char buf[256];
++      const char *hexd = "0123456789abcdef";
++      const char *prefix = "[FEX-iOS] ThreadInit() done: EmulatorData[0]=0x";
++      int i = 0;
++      while (prefix[i]) { buf[i] = prefix[i]; i++; }
++      unsigned long long ed0 = (unsigned long long)CPUArea.Area->EmulatorData[0];
++      for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(ed0 >> j) & 0xf];
++      const char *p2 = " EnterEC=0x";
++      for (int k = 0; p2[k]; ++k) buf[i++] = p2[k];
++      unsigned long long enter_ec = (unsigned long long)CPUArea.DispatcherLoopTopEnterEC();
++      for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(enter_ec >> j) & 0xf];
++      buf[i++] = '\n';
++      ULONG written = 0;
++      WriteFile(stderr_h, buf, i, &written, nullptr);
++    }
++  }
++#endif
+   return STATUS_SUCCESS;
+ }
+ 

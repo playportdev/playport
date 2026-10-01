@@ -1,0 +1,68 @@
+== r6-hk
+ui: done nonce=aad0fb28 ok actions=1
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+jit: helper: enableJIT done
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.09 s
+title: pool: size_mb=896 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=603 alias=6 alias_slots=6 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=164 head_live_mb=164 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=588 alias=33 alias_slots=33 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +10.60 s first frame
+== r2-pool128
+ui: done nonce=eafb00de ok actions=2
+title: jit pool: 128 MiB for a memory limit of 8192 MB (simulated pool)
+jit: helper: enableJIT done
+title: runtime: pool 128 MiB; wine_host_init -> 0, activation 1.93 s
+title: +2.82 s pool: size_mb=128 head_mb=112 head_live_mb=112 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=0 alias=1 alias_slots=1 alias_cap=4096 images=29 children=0 children_mb=0 head_exhausted=40 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: done nonce=eafb00de pool=exhausted:head exit=0xc0000135 after_s=0
+== r2-pool256
+ui: done nonce=d199e694 ok actions=2
+title: jit pool: 256 MiB for a memory limit of 8192 MB (simulated pool)
+jit: helper: enableJIT done
+title: runtime: pool 256 MiB; wine_host_init -> 0, activation 2.04 s
+title: pool: size_mb=256 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=49 tail_live_mb=33 room_mb=59 alias=8 alias_slots=8 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=256 head_mb=165 head_live_mb=164 head_free_mb=0 tail_mb=49 tail_live_mb=33 room_mb=43 alias=40 alias_slots=40 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +7.49 s first frame
+== r3-pool192
+ui: done nonce=45cbeb5e ok actions=2
+title: jit pool: 192 MiB for a memory limit of 8192 MB (simulated pool)
+jit: helper: enableJIT done
+title: runtime: pool 192 MiB; wine_host_init -> 0, activation 1.95 s
+title: pool: size_mb=192 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=33 tail_live_mb=17 room_mb=11 alias=11 alias_slots=11 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: ran out of JIT memory (head)
+title: pool: size_mb=192 head_mb=160 head_live_mb=160 head_free_mb=0 tail_mb=33 tail_live_mb=17 room_mb=0 alias=32 alias_slots=32 alias_cap=4096 images=49 children=0 children_mb=0 head_exhausted=13 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: +7.35 s first frame
+title: pool: size_mb=192 head_mb=160 head_live_mb=160 head_free_mb=0 tail_mb=33 tail_live_mb=17 room_mb=0 alias=33 alias_slots=33 alias_cap=4096 images=49 children=0 children_mb=0 head_exhausted=14 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+== r5-limit3379
+title: jit pool: 512 MiB for a memory limit of 3379 MB
+jit: helper: enableJIT done
+title: runtime: pool 512 MiB; wine_host_init -> 0, activation 2.54 s
+title: pool: size_mb=512 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=219 alias=6 alias_slots=6 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=512 head_mb=164 head_live_mb=164 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=204 alias=28 alias_slots=28 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +9.79 s first frame
+ui: done nonce=d8079fe7 ok actions=3
+== r6-pool184
+ui: done nonce=b44c5b84 ok actions=2
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+jit: helper: enableJIT done
+title: runtime: pool 184 MiB; wine_host_init -> 0, activation 1.98 s
+title: pool: size_mb=184 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=33 tail_live_mb=17 room_mb=3 alias=7 alias_slots=7 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: ran out of JIT memory (head)
+title: pool: size_mb=184 head_mb=152 head_live_mb=152 head_free_mb=0 tail_mb=33 tail_live_mb=17 room_mb=0 alias=32 alias_slots=32 alias_cap=4096 images=48 children=0 children_mb=0 head_exhausted=12 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: +8.36 s first frame
+title: pool: size_mb=184 head_mb=152 head_live_mb=152 head_free_mb=0 tail_mb=33 tail_live_mb=17 room_mb=0 alias=33 alias_slots=33 alias_cap=4096 images=48 children=0 children_mb=0 head_exhausted=16 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: pool: the game is still running 10 s after it ran out of JIT memory; the launch ends
+title: +16.66 s pool: size_mb=184 head_mb=152 head_live_mb=152 head_free_mb=0 tail_mb=33 tail_live_mb=17 room_mb=0 alias=33 alias_slots=33 alias_cap=4096 images=48 children=0 children_mb=0 head_exhausted=16 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=head
+title: done nonce=b44c5b84 pool=exhausted:head still-running after_s=14
+== perf w3-pool
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.20 s
+title: pool: size_mb=896 head_mb=193 head_live_mb=193 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=687 alias=1 alias_slots=1 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=206 head_live_mb=206 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=674 alias=1 alias_slots=1 alias_cap=4096 images=54 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=206 head_live_mb=206 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=546 alias=1 alias_slots=1 alias_cap=4096 images=54 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +18.84 s first frame
+== perf hk-pool
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: runtime: pool 896 MiB; wine_host_init -> 0, activation 3.28 s
+title: pool: size_mb=896 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=603 alias=7 alias_slots=7 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=164 head_live_mb=164 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=588 alias=36 alias_slots=36 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +10.68 s first frame
+title: pool: size_mb=896 head_mb=187 head_live_mb=187 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=565 alias=61 alias_slots=61 alias_cap=4096 images=60 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none

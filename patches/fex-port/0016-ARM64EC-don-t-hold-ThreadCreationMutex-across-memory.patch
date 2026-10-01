@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 7 May 2026 20:14:38 +0800
+Subject: [PATCH] ARM64EC: don't hold ThreadCreationMutex across memory ops
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On Wine-on-iOS, holding ThreadCreationMutex across the entire
+NtAllocateVirtualMemory/NtFreeVirtualMemory/NtProtectVirtualMemory
+call (BEFORE → AFTER) creates an AB-BA deadlock against Wine's heap
+mutex:
+
+  Worker thread:  Notify(BEFORE) takes ThreadCreationMutex → Wine's
+                  alloc proceeds → InvalidationTracker eventually
+                  needs heap for an internal allocation → blocks.
+  Main thread:    RtlAllocateHeap takes heap mutex → arena full,
+                  calls NtAllocateVirtualMemory → Notify(BEFORE) →
+                  wants ThreadCreationMutex → blocks.
+
+The InvalidationTracker has internal locking (IntervalsLock,
+CodeInvalidationMutex), so the external mutex isn't strictly
+needed. Drop the BEFORE-lock entirely and only do the tracker
+work on the AFTER side.
+
+Unblocks DXMT command-queue worker threads (encode/finish/event
+listener) on iOS — they spawn 3 threads that all do dozens of
+NtAllocateVirtualMemory calls during init, and the AB-BA deadlock
+hits within seconds. With this fix, cube-x64.exe runs through
+D3D11CreateDevice + DXMT init + first Present and renders the
+spinning cube on iOS via FEX (x86_64 → ARM64) + Wine + DXMT
+(D3D11 → Metal) + ARM64EC.
+
+Madeira-commit: 0dd45c3a29cfe09434e1a84c8250b3ef9cc1e18f
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 40 +++++++++++++++++--------------
+ 1 file changed, 22 insertions(+), 18 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 02cc68f..7b54fc0 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -799,19 +799,29 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
+   return STATUS_SUCCESS;
+ }
+ 
++/* iOS-port note: previously this took ThreadCreationMutex on the BEFORE
++ * call and released it on the AFTER call, holding the lock across the
++ * actual memory operation. On Wine-on-iOS that creates an AB-BA deadlock:
++ * Wine's RtlAllocateHeap (heap mutex) may grow its arena via
++ * NtAllocateVirtualMemory, which calls NotifyMemoryAlloc(BEFORE) → wants
++ * ThreadCreationMutex; meanwhile a worker thread holds ThreadCreationMutex
++ * (taken in its own NotifyMemoryAlloc(BEFORE)) and needs heap for an
++ * InvalidationTracker allocation.
++ *
++ * The InvalidationTracker has its own internal locking (IntervalsLock,
++ * CodeInvalidationMutex), so external serialization isn't strictly
++ * required for its correctness. Drop the BEFORE/AFTER mutex entirely
++ * and just call into the tracker directly on AFTER. */
+ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL After, NTSTATUS Status) {
+   if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+     return;
+   }
+ 
+-  if (!After) {
+-    ThreadCreationMutex.lock();
+-  } else {
++  if (After) {
+     // MEM_RESET(_UNDO) ignores the passed permissions
+     if (!Status && !(Type & (MEM_RESET | MEM_RESET_UNDO))) {
+       InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
+     }
+-    ThreadCreationMutex.unlock();
+   }
+ }
+ 
+@@ -820,13 +830,10 @@ void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NT
+     return;
+   }
+ 
+-  if (!After) {
+-    ThreadCreationMutex.lock();
+-  } else {
++  if (After) {
+     if (!Status) {
+       InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
+     }
+-    ThreadCreationMutex.unlock();
+   }
+ }
+ 
+@@ -835,13 +842,10 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
+     return;
+   }
+ 
+-  if (!After) {
+-    ThreadCreationMutex.lock();
+-  } else {
++  if (After) {
+     if (!Status) {
+       InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
+     }
+-    ThreadCreationMutex.unlock();
+   }
+ }
+ 
+@@ -1045,7 +1049,6 @@ NTSTATUS ThreadInit() {
+       0x168,  // ExitFunctionLink path SpillStaticRegs's pair-1 onwards
+       0x268,  // NoBlock path SpillStaticRegs's pair-1 onwards
+     };
+-    constexpr uintptr_t kPoolSize = 0x8000000;  // 128MB
+ 
+     HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
+         ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
+@@ -1066,8 +1069,12 @@ NTSTATUS ThreadInit() {
+ 
+     log_hex("[FEX-iOS] DispatcherPatch: EnterEC=", EnterEC);
+     for (auto patch_off : kPatchOffsets) {
++      /* Write directly to RX address. iOS doesn't allow RX writes — but the
++       * ntdll-unix Mach STR emulator catches the resulting page fault and
++       * redirects each store to the correct RW alias (which iOS placed at
++       * a runtime-chosen address, NOT a fixed +128MB offset). This is the
++       * same path FEX itself uses for its compile-time block emit. */
+       uint32_t* patch_rx = reinterpret_cast<uint32_t*>(EnterEC + patch_off);
+-      uint32_t* patch_rw = reinterpret_cast<uint32_t*>(EnterEC + patch_off + kPoolSize);
+ 
+       bool already_ok = true;
+       for (int i = 0; i < 7; i++) {
+@@ -1077,11 +1084,8 @@ NTSTATUS ThreadInit() {
+       if (!already_ok) {
+         log_hex("[FEX-iOS]   site offset=", patch_off);
+         for (int i = 0; i < 7; i++) {
+-          patch_rw[i] = expected[i];
++          patch_rx[i] = expected[i];  // faults → STR emulator → real RW alias
+         }
+-        /* Use NtFlushInstructionCache instead of __builtin___clear_cache.
+-         * The latter emits `dc cvau` instructions which fault on iOS JIT-pool
+-         * RX pages. NtFlushInstructionCache uses the iOS-aware syscall path. */
+         NtFlushInstructionCache(NtCurrentProcess(), patch_rx, sizeof(expected));
+       } else {
+         log_hex("[FEX-iOS]   already OK at offset=", patch_off);

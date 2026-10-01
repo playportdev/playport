@@ -1,0 +1,44 @@
+== ui-runs/rr8-hk
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +0.65 s surface ready; asking for JIT
+title: +3.77 s runtime started
+title: +3.79 s game started
+title: limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: pool: size_mb=896 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=603 alias=6 alias_slots=6 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=164 head_live_mb=164 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=588 alias=34 alias_slots=34 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +10.31 s first frame
+== ui-runs/rr8-w3
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +0.62 s surface ready; asking for JIT
+title: +3.53 s runtime started
+title: +3.55 s game started
+title: limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: pool: size_mb=896 head_mb=191 head_live_mb=191 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=689 alias=1 alias_slots=1 alias_cap=4096 images=51 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=206 head_live_mb=206 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=674 alias=1 alias_slots=1 alias_cap=4096 images=54 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=206 head_live_mb=206 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=546 alias=1 alias_slots=1 alias_cap=4096 images=54 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +19.10 s first frame
+== ui-runs/rr8-eg
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +0.15 s surface ready; asking for JIT
+title: +3.67 s runtime started
+title: +3.69 s game started
+== perf-runs/rr8-hk
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +0.58 s surface ready; asking for JIT
+title: +3.88 s runtime started
+title: +3.90 s game started
+title: limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: pool: size_mb=896 head_mb=149 head_live_mb=149 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=603 alias=6 alias_slots=6 alias_cap=4096 images=46 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=164 head_live_mb=164 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=588 alias=35 alias_slots=35 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +10.68 s first frame
+title: pool: size_mb=896 head_mb=187 head_live_mb=187 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=565 alias=61 alias_slots=61 alias_cap=4096 images=60 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+== perf-runs/rr8-w3
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +0.65 s surface ready; asking for JIT
+title: +3.84 s runtime started
+title: +3.86 s game started
+title: limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0
+title: pool: size_mb=896 head_mb=193 head_live_mb=193 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=687 alias=1 alias_slots=1 alias_cap=4096 images=50 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=206 head_live_mb=206 head_free_mb=0 tail_mb=17 tail_live_mb=17 room_mb=674 alias=1 alias_slots=1 alias_cap=4096 images=54 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: pool: size_mb=896 head_mb=206 head_live_mb=206 head_free_mb=0 tail_mb=145 tail_live_mb=129 room_mb=546 alias=1 alias_slots=1 alias_cap=4096 images=54 children=0 children_mb=0 head_exhausted=0 tail_refused=0 tail_fatal=0 alias_full=0 exhausted=none
+title: +18.94 s first frame

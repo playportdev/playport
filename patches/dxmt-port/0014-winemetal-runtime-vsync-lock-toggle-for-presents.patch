@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 5 Jul 2026 02:18:26 +0800
+Subject: [PATCH] winemetal: runtime vsync-lock toggle for presents
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+mythic_set/get_vsync_locked, read per present: locked (default) paces
+via presentDrawable:afterMinimumDuration:(1/60) — preserves the locked-60
+behavior even once the app raises the display ceiling to 120Hz ProMotion
+(CADisableMinimumFrameDurationOnPhone); unlocked presents immediately and
+free-runs to display max. Live-flippable from the Swift FPS overlay.
+
+Madeira-commit: 4b2d9b6dc09015331c7783dece6ee04430309507
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 24 ++++++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index b929d72..2380da5 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1563,11 +1563,31 @@ uint64_t mythic_get_present_count(void) {
+  * even for frames provably on glass (the splash), so it carries no signal
+  * for this layer. See project memory for the full postmortem. */
+ 
++/* iOS-Mythic 2026-07-05: runtime vsync-lock toggle. iOS has no true
++ * "vsync off" (no displaySyncEnabled); the ceiling is the display
++ * refresh — 120Hz on ProMotion once Info.plist sets
++ * CADisableMinimumFrameDurationOnPhone. locked=1 (default) paces
++ * presents with afterMinimumDuration(1/60) = the shipped locked-60
++ * behavior; locked=0 presents immediately and free-runs up to the
++ * display max. Read per present — flip live from the Swift UI. */
++static volatile int g_mythic_vsync_locked = 1;
++void mythic_set_vsync_locked(int locked) {
++  g_mythic_vsync_locked = locked ? 1 : 0;
++  dprintf(STDERR_FILENO, "[iOS DXMT] vsync_locked=%d\n", g_mythic_vsync_locked);
++}
++int mythic_get_vsync_locked(void) { return g_mythic_vsync_locked; }
++
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;
+-  mythic_log_present_cadence("presentDrawable", 0.0);
+-  [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
++  if (g_mythic_vsync_locked) {
++    mythic_log_present_cadence("presentDrawable60", 0.0);
++    [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg
++                                     afterMinimumDuration:(1.0 / 60.0)];
++  } else {
++    mythic_log_present_cadence("presentDrawable", 0.0);
++    [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
++  }
+   return STATUS_SUCCESS;
+ }
+ 

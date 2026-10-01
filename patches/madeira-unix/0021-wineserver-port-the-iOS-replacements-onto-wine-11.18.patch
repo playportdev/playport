@@ -1,0 +1,2921 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 00:01:52 +0200
+Subject: [PATCH] wineserver: port the iOS replacements onto wine-11.18
+
+request: create_thread's thread is now added with add_process_thread.
+mapping: image data directories go through GET_DATA_DIR (ml936's reloc_dir
+is the BASERELOC directory's presence); the user-data mapping is a
+create_named_object with mapping_init_data. mach: the arm64 integer block is
+x0[18] and x19[12] (x18 moved to the TLS block, not reported). window: the
+iOS desktop auto-create passes create_window's dpi arguments as the force
+path does.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ build/wineserver/fd_ios.c      | 261 +++++++------------
+ build/wineserver/mach_ios.c    |  20 +-
+ build/wineserver/mapping_ios.c | 444 ++++++++++++++++-----------------
+ build/wineserver/queue_ios.c   | 432 ++++++++++++++++----------------
+ build/wineserver/request_ios.c |  76 +++---
+ build/wineserver/window_ios.c  | 414 +++++++++++++++++-------------
+ 6 files changed, 810 insertions(+), 837 deletions(-)
+
+diff --git a/build/wineserver/fd_ios.c b/build/wineserver/fd_ios.c
+index 424ff6f..86d460c 100644
+--- a/build/wineserver/fd_ios.c
++++ b/build/wineserver/fd_ios.c
+@@ -210,27 +210,11 @@ static void fd_destroy( struct object *obj );
+ 
+ static const struct object_ops fd_ops =
+ {
+-    sizeof(struct fd),        /* size */
+-    &no_type,                 /* type */
+-    fd_dump,                  /* dump */
+-    NULL,                     /* add_queue */
+-    NULL,                     /* remove_queue */
+-    NULL,                     /* signaled */
+-    NULL,                     /* satisfied */
+-    no_signal,                /* signal */
+-    no_get_fd,                /* get_fd */
+-    fd_get_sync,              /* get_sync */
+-    default_map_access,       /* map_access */
+-    default_get_sd,           /* get_sd */
+-    default_set_sd,           /* set_sd */
+-    no_get_full_name,         /* get_full_name */
+-    no_lookup_name,           /* lookup_name */
+-    no_link_name,             /* link_name */
+-    NULL,                     /* unlink_name */
+-    no_open_file,             /* open_file */
+-    no_kernel_obj_list,       /* get_kernel_obj_list */
+-    no_close_handle,          /* close_handle */
+-    fd_destroy                /* destroy */
++    .size     = sizeof(struct fd),
++    .type     = &no_type,
++    .dump     = fd_dump,
++    .get_sync = fd_get_sync,
++    .destroy  = fd_destroy,
+ };
+ 
+ /* device object */
+@@ -252,27 +236,10 @@ static void device_destroy( struct object *obj );
+ 
+ static const struct object_ops device_ops =
+ {
+-    sizeof(struct device),    /* size */
+-    &no_type,                 /* type */
+-    device_dump,              /* dump */
+-    no_add_queue,             /* add_queue */
+-    NULL,                     /* remove_queue */
+-    NULL,                     /* signaled */
+-    NULL,                     /* satisfied */
+-    no_signal,                /* signal */
+-    no_get_fd,                /* get_fd */
+-    default_get_sync,         /* get_sync */
+-    default_map_access,       /* map_access */
+-    default_get_sd,           /* get_sd */
+-    default_set_sd,           /* set_sd */
+-    no_get_full_name,         /* get_full_name */
+-    no_lookup_name,           /* lookup_name */
+-    no_link_name,             /* link_name */
+-    NULL,                     /* unlink_name */
+-    no_open_file,             /* open_file */
+-    no_kernel_obj_list,       /* get_kernel_obj_list */
+-    no_close_handle,          /* close_handle */
+-    device_destroy            /* destroy */
++    .size    = sizeof(struct device),
++    .type    = &no_type,
++    .dump    = device_dump,
++    .destroy = device_destroy,
+ };
+ 
+ /* inode object */
+@@ -293,27 +260,10 @@ static void inode_destroy( struct object *obj );
+ 
+ static const struct object_ops inode_ops =
+ {
+-    sizeof(struct inode),     /* size */
+-    &no_type,                 /* type */
+-    inode_dump,               /* dump */
+-    no_add_queue,             /* add_queue */
+-    NULL,                     /* remove_queue */
+-    NULL,                     /* signaled */
+-    NULL,                     /* satisfied */
+-    no_signal,                /* signal */
+-    no_get_fd,                /* get_fd */
+-    default_get_sync,         /* get_sync */
+-    default_map_access,       /* map_access */
+-    default_get_sd,           /* get_sd */
+-    default_set_sd,           /* set_sd */
+-    no_get_full_name,         /* get_full_name */
+-    no_lookup_name,           /* lookup_name */
+-    no_link_name,             /* link_name */
+-    NULL,                     /* unlink_name */
+-    no_open_file,             /* open_file */
+-    no_kernel_obj_list,       /* get_kernel_obj_list */
+-    no_close_handle,          /* close_handle */
+-    inode_destroy             /* destroy */
++    .size    = sizeof(struct inode),
++    .type    = &no_type,
++    .dump    = inode_dump,
++    .destroy = inode_destroy,
+ };
+ 
+ /* file lock object */
+@@ -338,27 +288,11 @@ static void file_lock_destroy( struct object *obj );
+ 
+ static const struct object_ops file_lock_ops =
+ {
+-    sizeof(struct file_lock),   /* size */
+-    &no_type,                   /* type */
+-    file_lock_dump,             /* dump */
+-    NULL,                       /* add_queue */
+-    NULL,                       /* remove_queue */
+-    NULL,                       /* signaled */
+-    NULL,                       /* satisfied */
+-    no_signal,                  /* signal */
+-    no_get_fd,                  /* get_fd */
+-    file_lock_get_sync,         /* get_sync */
+-    default_map_access,         /* map_access */
+-    default_get_sd,             /* get_sd */
+-    default_set_sd,             /* set_sd */
+-    no_get_full_name,           /* get_full_name */
+-    no_lookup_name,             /* lookup_name */
+-    no_link_name,               /* link_name */
+-    NULL,                       /* unlink_name */
+-    no_open_file,               /* open_file */
+-    no_kernel_obj_list,         /* get_kernel_obj_list */
+-    no_close_handle,            /* close_handle */
+-    file_lock_destroy,          /* destroy */
++    .size     = sizeof(struct file_lock),
++    .type     = &no_type,
++    .dump     = file_lock_dump,
++    .get_sync = file_lock_get_sync,
++    .destroy  = file_lock_destroy,
+ };
+ 
+ 
+@@ -468,7 +402,8 @@ void ios_usd_report_alias( void *ptr, size_t size, const char *when )
+ static void set_user_shared_data_time(void)
+ {
+     timeout_t tick_count = monotonic_time / 10000;
+-    static timeout_t last_timezone_update;
++    static timeout_t last_timezone_update, last_timezone_bias = 65535, adjusted_timezone_bias;
++    static int current_year = -1;
+     timeout_t timezone_bias;
+     struct tm *tm, tm1, tm2;
+     time_t now;
+@@ -479,13 +414,19 @@ static void set_user_shared_data_time(void)
+         tm = gmtime( &now );
+         timezone_bias = mktime( tm ) - now;
+         tm = localtime( &now );
+-        if (tm->tm_isdst)
++        if (current_year != tm->tm_year || last_timezone_bias != timezone_bias)
+         {
+-            tm1 = tm2 = *tm;
+-            tm1.tm_isdst = 0;
+-            tm2.tm_isdst = 1;
+-            timezone_bias += mktime(&tm1) < mktime(&tm2) ? 3600 : -3600;
++            current_year = tm->tm_year;
++            last_timezone_bias = adjusted_timezone_bias = timezone_bias;
++            if (tm->tm_isdst)
++            {
++                tm1 = tm2 = *tm;
++                tm1.tm_isdst = 0;
++                tm2.tm_isdst = 1;
++                adjusted_timezone_bias += mktime(&tm1) < mktime(&tm2) ? 3600 : -3600;
++            }
+         }
++        timezone_bias = adjusted_timezone_bias;
+         timezone_bias *= TICKS_PER_SEC;
+ 
+         atomic_store_long(&user_shared_data->TimeZoneBias.High2Time, timezone_bias >> 32);
+@@ -679,7 +620,8 @@ static int get_next_timeout( struct timespec *ts );
+ 
+ static inline void fd_poll_event( struct fd *fd, int event )
+ {
+-    fd->fd_ops->poll_event( fd, event );
++    if (fd->fd_ops->poll_event) fd->fd_ops->poll_event( fd, event );
++    else default_poll_event( fd, event );
+ }
+ 
+ #ifdef USE_EPOLL
+@@ -2159,7 +2101,7 @@ void unlock_fd( struct fd *fd, file_pos_t start, file_pos_t count )
+             return;
+         }
+     }
+-    set_error( STATUS_FILE_LOCK_CONFLICT );
++    set_error( STATUS_RANGE_NOT_LOCKED );
+ }
+ 
+ 
+@@ -2336,6 +2278,13 @@ void set_fd_events( struct fd *fd, int events )
+     }
+ }
+ 
++/* get the events we want to poll() for */
++static int get_poll_events( struct fd *fd )
++{
++    if (fd->fd_ops->get_poll_events) return fd->fd_ops->get_poll_events( fd );
++    return default_fd_get_poll_events( fd );
++}
++
+ /* prepare an fd for unmounting its corresponding device */
+ static inline void unmount_fd( struct fd *fd )
+ {
+@@ -2574,10 +2523,10 @@ static WCHAR *dup_nt_name( struct fd *root, struct unicode_str name, data_size_t
+     return ret;
+ }
+ 
+-void get_nt_name( struct fd *fd, struct unicode_str *name )
++struct unicode_str get_nt_name( struct fd *fd )
+ {
+-    name->str = fd->nt_name;
+-    name->len = fd->nt_namelen;
++    struct unicode_str name = { .str = fd->nt_name, .len = fd->nt_namelen };
++    return name;
+ }
+ 
+ /* open() wrapper that returns a struct fd with no fd user set */
+@@ -2926,7 +2875,7 @@ void default_poll_event( struct fd *fd, int event )
+ 
+     /* if an error occurred, stop polling this fd to avoid busy-looping */
+     if (event & (POLLERR | POLLHUP)) set_fd_events( fd, -1 );
+-    else if (!fd->inode) set_fd_events( fd, fd->fd_ops->get_poll_events( fd ) );
++    else if (!fd->inode) set_fd_events( fd, get_poll_events( fd ) );
+ }
+ 
+ void fd_queue_async( struct fd *fd, struct async *async, int type )
+@@ -2954,7 +2903,7 @@ void fd_queue_async( struct fd *fd, struct async *async, int type )
+     if (type != ASYNC_TYPE_WAIT)
+     {
+         if (!fd->inode)
+-            set_fd_events( fd, fd->fd_ops->get_poll_events( fd ) );
++            set_fd_events( fd, get_poll_events( fd ) );
+         else  /* regular files are always ready for read and write */
+             async_wake_up( queue, STATUS_ALERTED );
+     }
+@@ -2980,22 +2929,14 @@ void fd_async_wake_up( struct fd *fd, int type, unsigned int status )
+ 
+ void fd_cancel_async( struct fd *fd, struct async *async )
+ {
+-    fd->fd_ops->cancel_async( fd, async );
++    if (fd->fd_ops->cancel_async) fd->fd_ops->cancel_async( fd, async );
++    else async_terminate( async, STATUS_CANCELLED );
+ }
+ 
+ void fd_reselect_async( struct fd *fd, struct async_queue *queue )
+ {
+-    fd->fd_ops->reselect_async( fd, queue );
+-}
+-
+-void no_fd_queue_async( struct fd *fd, struct async *async, int type, int count )
+-{
+-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
+-}
+-
+-void default_fd_cancel_async( struct fd *fd, struct async *async )
+-{
+-    async_terminate( async, STATUS_CANCELLED );
++    if (fd->fd_ops->reselect_async) fd->fd_ops->reselect_async( fd, queue );
++    else default_fd_reselect_async( fd, queue );
+ }
+ 
+ void default_fd_queue_async( struct fd *fd, struct async *async, int type, int count )
+@@ -3009,9 +2950,9 @@ void default_fd_reselect_async( struct fd *fd, struct async_queue *queue )
+ {
+     if (queue == &fd->read_q || queue == &fd->write_q)
+     {
+-        int poll_events = fd->fd_ops->get_poll_events( fd );
++        int poll_events = get_poll_events( fd );
+         int events = check_fd_events( fd, poll_events );
+-        if (events) fd->fd_ops->poll_event( fd, events );
++        if (events) fd_poll_event( fd, events );
+         else set_fd_events( fd, poll_events );
+     }
+ }
+@@ -3031,6 +2972,7 @@ static int is_dir_empty( int fd )
+         return -1;
+     }
+ 
++    rewinddir( dir );
+     empty = 1;
+     while (empty && (de = readdir( dir )))
+     {
+@@ -3296,30 +3238,6 @@ static void delete_reparse_point( struct fd *fd, struct async *async )
+     xattr_fremove( fd->unix_fd, XATTR_REPARSE );
+ }
+ 
+-/* default read() routine */
+-void no_fd_read( struct fd *fd, struct async *async, file_pos_t pos )
+-{
+-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
+-}
+-
+-/* default write() routine */
+-void no_fd_write( struct fd *fd, struct async *async, file_pos_t pos )
+-{
+-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
+-}
+-
+-/* default flush() routine */
+-void no_fd_flush( struct fd *fd, struct async *async )
+-{
+-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
+-}
+-
+-/* default get_file_info() routine */
+-void no_fd_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class )
+-{
+-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
+-}
+-
+ /* default get_file_info() routine */
+ void default_fd_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int info_class )
+ {
+@@ -3393,18 +3311,6 @@ void default_fd_get_file_info( struct fd *fd, obj_handle_t handle, unsigned int
+     }
+ }
+ 
+-/* default get_volume_info() routine */
+-void no_fd_get_volume_info( struct fd *fd, struct async *async, unsigned int info_class )
+-{
+-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
+-}
+-
+-/* default ioctl() routine */
+-void no_fd_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+-{
+-    set_error( STATUS_OBJECT_TYPE_MISMATCH );
+-}
+-
+ /* default ioctl() routine */
+ void default_fd_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+ {
+@@ -3730,9 +3636,10 @@ DECL_HANDLER(flush)
+ 
+     if (!fd) return;
+ 
+-    if ((async = create_request_async( fd, fd->comp_flags, &req->async, 0 )))
++    if ((async = create_request_async( fd, &req->async, 0 )))
+     {
+-        fd->fd_ops->flush( fd, async );
++        if (fd->fd_ops->flush) fd->fd_ops->flush( fd, async );
++        else set_error( STATUS_OBJECT_TYPE_MISMATCH );
+         reply->event = async_handoff( async, NULL, 1 );
+         release_object( async );
+     }
+@@ -3746,7 +3653,8 @@ DECL_HANDLER(get_file_info)
+ 
+     if (fd)
+     {
+-        fd->fd_ops->get_file_info( fd, req->handle, req->info_class );
++        if (fd->fd_ops->get_file_info) fd->fd_ops->get_file_info( fd, req->handle, req->info_class );
++        else set_error( STATUS_OBJECT_TYPE_MISMATCH );
+         release_object( fd );
+     }
+ }
+@@ -3759,9 +3667,10 @@ DECL_HANDLER(get_volume_info)
+ 
+     if (!fd) return;
+ 
+-    if ((async = create_request_async( fd, fd->comp_flags, &req->async, 0 )))
++    if ((async = create_request_async( fd, &req->async, 0 )))
+     {
+-        fd->fd_ops->get_volume_info( fd, async, req->info_class );
++        if (fd->fd_ops->get_volume_info) fd->fd_ops->get_volume_info( fd, async, req->info_class );
++        else set_error( STATUS_OBJECT_TYPE_MISMATCH );
+         reply->wait = async_handoff( async, NULL, 1 );
+         release_object( async );
+     }
+@@ -3771,18 +3680,36 @@ DECL_HANDLER(get_volume_info)
+ /* open a file object */
+ DECL_HANDLER(open_file_object)
+ {
+-    struct unicode_str name = get_req_unicode_str();
+-    struct object *obj, *result, *root = NULL;
++    struct object *obj, *result;
++    struct object_params params = { .name = get_req_unicode_str(), .attr = req->attributes };
++    struct fd *fd;
++    struct async *async;
+ 
+-    if (req->rootdir && !(root = get_handle_obj( current->process, req->rootdir, 0, NULL ))) return;
++    if (req->rootdir && !(params.root = get_handle_obj( current->process, req->rootdir, 0, NULL ))) return;
+ 
+-    obj = open_named_object( root, NULL, &name, req->attributes );
+-    if (root) release_object( root );
++    obj = open_named_object( &params );
++    if (params.root) release_object( params.root );
+     if (!obj) return;
+ 
+-    if ((result = obj->ops->open_file( obj, req->access, req->sharing, req->options )))
++    if (!obj->ops->open_file) set_error( STATUS_OBJECT_TYPE_MISMATCH );
++    else if ((result = obj->ops->open_file( obj, req->access, req->sharing, req->options )))
+     {
++        struct async_data async_data = {.user = req->async_user};
++
+         reply->handle = alloc_handle( current->process, result, req->access, req->attributes );
++        async_data.handle = reply->handle;
++
++        if (reply->handle && (fd = get_obj_fd( result )))
++        {
++            if (fd->fd_ops->create && (async = create_request_async( fd, &async_data, 1 )))
++            {
++                fd->fd_ops->create( fd, async, req->access, req->sharing, req->options );
++                reply->wait = async_handoff( async, NULL, 1 );
++                release_object( async );
++            }
++            release_object( fd );
++        }
++
+         release_object( result );
+     }
+     release_object( obj );
+@@ -3835,9 +3762,10 @@ DECL_HANDLER(read)
+ 
+     if (!fd) return;
+ 
+-    if ((async = create_request_async( fd, fd->comp_flags, &req->async, 0 )))
++    if ((async = create_request_async( fd, &req->async, 0 )))
+     {
+-        fd->fd_ops->read( fd, async, req->pos );
++        if (fd->fd_ops->read) fd->fd_ops->read( fd, async, req->pos );
++        else set_error( STATUS_OBJECT_TYPE_MISMATCH );
+         reply->wait = async_handoff( async, NULL, 0 );
+         reply->options = fd->options;
+         release_object( async );
+@@ -3853,9 +3781,10 @@ DECL_HANDLER(write)
+ 
+     if (!fd) return;
+ 
+-    if ((async = create_request_async( fd, fd->comp_flags, &req->async, 0 )))
++    if ((async = create_request_async( fd, &req->async, 0 )))
+     {
+-        fd->fd_ops->write( fd, async, req->pos );
++        if (fd->fd_ops->write) fd->fd_ops->write( fd, async, req->pos );
++        else set_error( STATUS_OBJECT_TYPE_MISMATCH );
+         reply->wait = async_handoff( async, &reply->size, 0 );
+         reply->options = fd->options;
+         release_object( async );
+@@ -3872,9 +3801,10 @@ DECL_HANDLER(ioctl)
+ 
+     if (!fd) return;
+ 
+-    if ((async = create_request_async( fd, fd->comp_flags, &req->async, 0 )))
++    if ((async = create_request_async( fd, &req->async, 0 )))
+     {
+-        fd->fd_ops->ioctl( fd, req->code, async );
++        if (fd->fd_ops->ioctl) fd->fd_ops->ioctl( fd, req->code, async );
++        else set_error( STATUS_OBJECT_TYPE_MISMATCH );
+         reply->wait = async_handoff( async, NULL, 0 );
+         reply->options = fd->options;
+         release_object( async );
+@@ -3904,7 +3834,8 @@ DECL_HANDLER(register_async)
+ 
+     if ((fd = get_handle_fd_obj( current->process, req->async.handle, access )))
+     {
+-        if (get_unix_fd( fd ) != -1 && (async = create_async( fd, current, &req->async, NULL )))
++        if (!fd->fd_ops->queue_async) set_error( STATUS_OBJECT_TYPE_MISMATCH );
++        else if (get_unix_fd( fd ) != -1 && (async = create_async( fd, current, &req->async, NULL )))
+         {
+             fd->fd_ops->queue_async( fd, async, req->type, req->count );
+             release_object( async );
+diff --git a/build/wineserver/mach_ios.c b/build/wineserver/mach_ios.c
+index d09e7e2..8ca905e 100644
+--- a/build/wineserver/mach_ios.c
++++ b/build/wineserver/mach_ios.c
+@@ -829,9 +829,13 @@ int ios_fill_thread_context( struct thread *thread,
+         native->ctl.arm64_regs.sp     = arm.__sp;
+         native->ctl.arm64_regs.pc     = arm.__pc;
+         native->ctl.arm64_regs.pstate = arm.__cpsr;
+-        for (i = 0; i < 29; i++) native->integer.arm64_regs.x[i] = arm.__x[i];
+-        native->integer.arm64_regs.x[29] = arm.__fp;
+-        native->integer.arm64_regs.x[30] = arm.__lr;
++        /* wine-11.18 split the integer block around x18 (x0[18], x19[12]:
++         * x19-x28, fp, lr); x18 moved to the TLS block, which is not
++         * reported here (iOS owns x18). */
++        for (i = 0; i < 18; i++) native->integer.arm64_regs.x0[i] = arm.__x[i];
++        for (i = 19; i < 29; i++) native->integer.arm64_regs.x19[i - 19] = arm.__x[i];
++        native->integer.arm64_regs.x19[10] = arm.__fp;
++        native->integer.arm64_regs.x19[11] = arm.__lr;
+         have_native = 1;
+     }
+ 
+@@ -886,10 +890,12 @@ int ios_fill_thread_context( struct thread *thread,
+                     {
+                         unsigned int i;
+                         static int n_sub;
+-                        for (i = 0; i < 29; i++)
+-                            native->integer.arm64_regs.x[i] = *(uint64_t *)(f + i * 8);
+-                        native->integer.arm64_regs.x[29] = *(uint64_t *)(f + IOS_SCF_FP);
+-                        native->integer.arm64_regs.x[30] = *(uint64_t *)(f + IOS_SCF_LR);
++                        for (i = 0; i < 18; i++)
++                            native->integer.arm64_regs.x0[i] = *(uint64_t *)(f + i * 8);
++                        for (i = 19; i < 29; i++)
++                            native->integer.arm64_regs.x19[i - 19] = *(uint64_t *)(f + i * 8);
++                        native->integer.arm64_regs.x19[10] = *(uint64_t *)(f + IOS_SCF_FP);
++                        native->integer.arm64_regs.x19[11] = *(uint64_t *)(f + IOS_SCF_LR);
+                         native->ctl.arm64_regs.sp     = fsp;
+                         native->ctl.arm64_regs.pc     = fpc;
+                         native->ctl.arm64_regs.pstate = *(uint32_t *)(f + IOS_SCF_CPSR);
+diff --git a/build/wineserver/mapping_ios.c b/build/wineserver/mapping_ios.c
+index 983dc3c..b6451fc 100644
+--- a/build/wineserver/mapping_ios.c
++++ b/build/wineserver/mapping_ios.c
+@@ -73,27 +73,10 @@ static void ranges_destroy( struct object *obj );
+ 
+ static const struct object_ops ranges_ops =
+ {
+-    sizeof(struct ranges),     /* size */
+-    &no_type,                  /* type */
+-    ranges_dump,               /* dump */
+-    no_add_queue,              /* add_queue */
+-    NULL,                      /* remove_queue */
+-    NULL,                      /* signaled */
+-    NULL,                      /* satisfied */
+-    no_signal,                 /* signal */
+-    no_get_fd,                 /* get_fd */
+-    default_get_sync,          /* get_sync */
+-    default_map_access,        /* map_access */
+-    default_get_sd,            /* get_sd */
+-    default_set_sd,            /* set_sd */
+-    no_get_full_name,          /* get_full_name */
+-    no_lookup_name,            /* lookup_name */
+-    no_link_name,              /* link_name */
+-    NULL,                      /* unlink_name */
+-    no_open_file,              /* open_file */
+-    no_kernel_obj_list,        /* get_kernel_obj_list */
+-    no_close_handle,           /* close_handle */
+-    ranges_destroy             /* destroy */
++    .size    = sizeof(struct ranges),
++    .type    = &no_type,
++    .dump    = ranges_dump,
++    .destroy = ranges_destroy,
+ };
+ 
+ /* file backing the shared sections of a PE image mapping */
+@@ -110,27 +93,10 @@ static void shared_map_destroy( struct object *obj );
+ 
+ static const struct object_ops shared_map_ops =
+ {
+-    sizeof(struct shared_map), /* size */
+-    &no_type,                  /* type */
+-    shared_map_dump,           /* dump */
+-    no_add_queue,              /* add_queue */
+-    NULL,                      /* remove_queue */
+-    NULL,                      /* signaled */
+-    NULL,                      /* satisfied */
+-    no_signal,                 /* signal */
+-    no_get_fd,                 /* get_fd */
+-    default_get_sync,          /* get_sync */
+-    default_map_access,        /* map_access */
+-    default_get_sd,            /* get_sd */
+-    default_set_sd,            /* set_sd */
+-    no_get_full_name,          /* get_full_name */
+-    no_lookup_name,            /* lookup_name */
+-    no_link_name,              /* link_name */
+-    NULL,                      /* unlink_name */
+-    no_open_file,              /* open_file */
+-    no_kernel_obj_list,        /* get_kernel_obj_list */
+-    no_close_handle,           /* close_handle */
+-    shared_map_destroy         /* destroy */
++    .size    = sizeof(struct shared_map),
++    .type    = &no_type,
++    .dump    = shared_map_dump,
++    .destroy = shared_map_destroy,
+ };
+ 
+ static struct list shared_map_list = LIST_INIT( shared_map_list );
+@@ -176,53 +142,38 @@ struct mapping
+     struct ranges       *committed;  /* list of committed ranges in this mapping */
+     struct shared_map   *shared;     /* temp file for shared PE mapping */
+     char                *exp_name;   /* export name (for PE image mapping) */
++    void                *ver_res;    /* version resource (for PE image mapping) */
+     data_size_t          exp_len;    /* length of export name (for PE image mapping) */
++    data_size_t          ver_len;    /* length of version resource (for PE image mapping) */
++};
++
++struct mapping_init_data
++{
++    mem_size_t   size;
++    unsigned int flags;
++    unsigned int file_access;
++    struct fd   *fd;
+ };
+ 
+ static void mapping_dump( struct object *obj, int verbose );
++static bool mapping_init( struct object *obj, const void *init_data );
+ static struct fd *mapping_get_fd( struct object *obj );
+ static void mapping_destroy( struct object *obj );
+ static enum server_fd_type mapping_get_fd_type( struct fd *fd );
+ 
+ static const struct object_ops mapping_ops =
+ {
+-    sizeof(struct mapping),      /* size */
+-    &mapping_type,               /* type */
+-    mapping_dump,                /* dump */
+-    no_add_queue,                /* add_queue */
+-    NULL,                        /* remove_queue */
+-    NULL,                        /* signaled */
+-    NULL,                        /* satisfied */
+-    no_signal,                   /* signal */
+-    mapping_get_fd,              /* get_fd */
+-    default_get_sync,            /* get_sync */
+-    default_map_access,          /* map_access */
+-    default_get_sd,              /* get_sd */
+-    default_set_sd,              /* set_sd */
+-    default_get_full_name,       /* get_full_name */
+-    no_lookup_name,              /* lookup_name */
+-    directory_link_name,         /* link_name */
+-    default_unlink_name,         /* unlink_name */
+-    no_open_file,                /* open_file */
+-    no_kernel_obj_list,          /* get_kernel_obj_list */
+-    no_close_handle,             /* close_handle */
+-    mapping_destroy              /* destroy */
++    .size    = sizeof(struct mapping),
++    .type    = &mapping_type,
++    .dump    = mapping_dump,
++    .init    = mapping_init,
++    .get_fd  = mapping_get_fd,
++    .destroy = mapping_destroy,
+ };
+ 
+ static const struct fd_ops mapping_fd_ops =
+ {
+-    default_fd_get_poll_events,   /* get_poll_events */
+-    default_poll_event,           /* poll_event */
+-    mapping_get_fd_type,          /* get_fd_type */
+-    no_fd_read,                   /* read */
+-    no_fd_write,                  /* write */
+-    no_fd_flush,                  /* flush */
+-    no_fd_get_file_info,          /* get_file_info */
+-    no_fd_get_volume_info,        /* get_volume_info */
+-    no_fd_ioctl,                  /* ioctl */
+-    default_fd_cancel_async,      /* cancel_async */
+-    no_fd_queue_async,            /* queue_async */
+-    default_fd_reselect_async     /* reselect_async */
++    .get_fd_type = mapping_get_fd_type,
+ };
+ 
+ /* free address ranges for PE image mappings */
+@@ -444,7 +395,7 @@ static int is_valid_view_addr( struct process *process, client_ptr_t addr, mem_s
+     struct memory_view *view;
+ 
+     if (!size) return 0;
+-    if (addr & host_page_mask) return 0;
++    if (addr & (process->page_size - 1)) return 0;
+     if (addr + size < addr) return 0;  /* overflow */
+ 
+     /* check for overlapping view */
+@@ -742,11 +693,12 @@ static int load_data_dir( void *dir, size_t dir_size, size_t va, size_t size, si
+ }
+ 
+ /* load EXPORT_DIRECTORY.Name from its section */
+-static int load_export_name( char **ret_buf, size_t va, size_t size, size_t align_mask,
++static int load_export_name( char **ret_buf, IMAGE_DATA_DIRECTORY *data, size_t align_mask,
+                              int unix_fd, IMAGE_SECTION_HEADER *sec, unsigned int nb_sec )
+ {
+     char *end, buffer[1024];
+     IMAGE_EXPORT_DIRECTORY exp;
++    size_t va = data->VirtualAddress, size = data->Size;
+     int ret = load_data_dir( &exp, sizeof(exp), va, size, align_mask, unix_fd, sec, nb_sec );
+ 
+     if (ret != sizeof(exp)) return 0;
+@@ -760,11 +712,86 @@ static int load_export_name( char **ret_buf, size_t va, size_t size, size_t alig
+     return end - buffer;
+ }
+ 
++/* find a resource entry by id */
++static size_t find_resource_id( const IMAGE_RESOURCE_DIRECTORY_ENTRY *entries, unsigned int count,
++                                unsigned int id, int want_dir )
++{
++    for (unsigned int i = 0; i < count; i++)
++        if (entries[i].Id == id && !entries[i].DataIsDirectory == !want_dir)
++            return entries[i].OffsetToDirectory;
++    return 0;
++}
++
++/* find a resource entry in a directory */
++static size_t find_resource_entry( unsigned int id, IMAGE_DATA_DIRECTORY *data,
++                                   size_t offset, size_t align_mask, int unix_fd,
++                                   IMAGE_SECTION_HEADER *sec, unsigned int nb_sec )
++{
++    IMAGE_RESOURCE_DIRECTORY_ENTRY *entries;
++    IMAGE_RESOURCE_DIRECTORY res;
++    size_t size;
++    int ret;
++
++    if (offset >= data->Size) return 0;
++    ret = load_data_dir( &res, sizeof(res), data->VirtualAddress + offset, data->Size - offset,
++                         align_mask, unix_fd, sec, nb_sec );
++    if (ret != sizeof(res)) return 0;
++    offset += ret + res.NumberOfNamedEntries * sizeof(*entries);
++    if (offset >= data->Size) return 0;
++    size = res.NumberOfIdEntries * sizeof(*entries);
++    if (!(entries = malloc( size ))) return 0;
++    ret = load_data_dir( entries, size, data->VirtualAddress + offset, data->Size - offset,
++                         align_mask, unix_fd, sec, nb_sec );
++    offset = 0;
++    if (ret >= sizeof(*entries))
++    {
++        unsigned int count = ret / sizeof(*entries);
++        if (!id)  /* try various languages */
++        {
++            if (!(offset = find_resource_id( entries, count, 0x0409, 0 )) &&
++                !(offset = find_resource_id( entries, count, 0x0000, 0 )) &&
++                !entries[0].DataIsDirectory)
++                offset = entries[0].OffsetToData;
++        }
++        else offset = find_resource_id( entries, count, id, 1 );
++    }
++    free( entries );
++    return offset;
++}
++
++/* load the version resource */
++static int load_version_resource( void **ret_buf, IMAGE_DATA_DIRECTORY *data, size_t align_mask,
++                                  int unix_fd, IMAGE_SECTION_HEADER *sec, unsigned int nb_sec )
++{
++    IMAGE_RESOURCE_DATA_ENTRY entry;
++    size_t offset;
++    int ret;
++
++    if (!(offset = find_resource_entry( RT_VERSION, data, 0, align_mask, unix_fd, sec, nb_sec ))) return 0;
++    if (!(offset = find_resource_entry( 1, data, offset, align_mask, unix_fd, sec, nb_sec ))) return 0;
++    if (!(offset = find_resource_entry( 0, data, offset, align_mask, unix_fd, sec, nb_sec ))) return 0;
++    if (offset >= data->Size) return 0;
++    ret = load_data_dir( &entry, sizeof(entry), data->VirtualAddress + offset, data->Size - offset,
++                         align_mask, unix_fd, sec, nb_sec );
++    if (ret != sizeof(entry)) return 0;
++    if (!(*ret_buf = malloc( entry.Size + 3 ))) return 0;
++    if ((ret = load_data_dir( *ret_buf, entry.Size, entry.OffsetToData, entry.Size,
++                              align_mask, unix_fd, sec, nb_sec )) > 0)
++    {
++        if (ret % 4) memset( (char *)*ret_buf + ret, 0, 4 - ret % 4 );
++        return (ret + 3) & ~3;
++    }
++    free( *ret_buf );
++    *ret_buf = NULL;
++    return 0;
++}
++
+ /* load the CLR header from its section */
+-static int load_clr_header( IMAGE_COR20_HEADER *hdr, size_t va, size_t size, size_t align_mask,
++static int load_clr_header( IMAGE_COR20_HEADER *hdr, IMAGE_DATA_DIRECTORY *data, size_t align_mask,
+                             int unix_fd, IMAGE_SECTION_HEADER *sec, unsigned int nb_sec )
+ {
+-    int ret = load_data_dir( hdr, sizeof(*hdr), va, size, align_mask, unix_fd, sec, nb_sec );
++    int ret = load_data_dir( hdr, sizeof(*hdr), data->VirtualAddress, data->Size,
++                             align_mask, unix_fd, sec, nb_sec );
+ 
+     if (ret <= 0) return 0;
+     if (ret < sizeof(*hdr)) memset( (char *)hdr + ret, 0, sizeof(*hdr) - ret );
+@@ -774,11 +801,12 @@ static int load_clr_header( IMAGE_COR20_HEADER *hdr, size_t va, size_t size, siz
+ }
+ 
+ /* load the LOAD_CONFIG header from its section */
+-static int load_cfg_header( IMAGE_LOAD_CONFIG_DIRECTORY64 *cfg, size_t va, size_t size, size_t align_mask,
++static int load_cfg_header( IMAGE_LOAD_CONFIG_DIRECTORY64 *cfg, IMAGE_DATA_DIRECTORY *data, size_t align_mask,
+                             int unix_fd, IMAGE_SECTION_HEADER *sec, unsigned int nb_sec )
+ {
+     unsigned int cfg_size;
+-    int ret = load_data_dir( cfg, sizeof(*cfg), va, size, align_mask, unix_fd, sec, nb_sec );
++    int ret = load_data_dir( cfg, sizeof(*cfg), data->VirtualAddress, data->Size,
++                             align_mask, unix_fd, sec, nb_sec );
+ 
+     if (ret <= 0) return 0;
+     cfg_size = ret;
+@@ -818,9 +846,10 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+     } cfg;
+     off_t pos;
+     int size, has_relocs;
++    IMAGE_DATA_DIRECTORY *data_dirs, *exp_dir, *res_dir, *cfg_dir, *clr_dir;
+     int reloc_dir = 0;   /* ml936: directory PRESENCE alone, ignoring RELOCS_STRIPPED */
+-    size_t mz_size, clr_va = 0, clr_size = 0, exp_va, exp_size, cfg_va, cfg_size, align_mask;
+-    unsigned int i, ret;
++    size_t mz_size, align_mask;
++    unsigned int i, ret, nb_data_dirs;
+ 
+     /* load the headers */
+ 
+@@ -858,16 +887,6 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+             if (!(nt.opt.hdr32.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE))
+                 return STATUS_INVALID_IMAGE_FORMAT;
+         }
+-        if (nt.opt.hdr32.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR)
+-        {
+-            clr_va = nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].VirtualAddress;
+-            clr_size = nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].Size;
+-        }
+-        exp_va = nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+-        exp_size = nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+-        cfg_va = nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress;
+-        cfg_size = nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].Size;
+-
+         mapping->image.base            = nt.opt.hdr32.ImageBase;
+         mapping->image.entry_point     = nt.opt.hdr32.AddressOfEntryPoint;
+         mapping->image.map_size        = nt.opt.hdr32.SizeOfImage;
+@@ -885,11 +904,8 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+                                           nt.opt.hdr32.SectionAlignment & page_mask);
+         mapping->image.header_size     = nt.opt.hdr32.SizeOfHeaders;
+         mapping->image.checksum        = nt.opt.hdr32.CheckSum;
+-
+-        reloc_dir  = (nt.opt.hdr32.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_BASERELOC &&
+-                      nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress &&
+-                      nt.opt.hdr32.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size);
+-        has_relocs = (reloc_dir && !(nt.FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED));
++        nb_data_dirs                   = nt.opt.hdr32.NumberOfRvaAndSizes;
++        data_dirs                      = nt.opt.hdr32.DataDirectory;
+         break;
+ 
+     case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
+@@ -906,16 +922,6 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+             if (!(nt.opt.hdr64.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE))
+                 return STATUS_INVALID_IMAGE_FORMAT;
+         }
+-        if (nt.opt.hdr64.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR)
+-        {
+-            clr_va = nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].VirtualAddress;
+-            clr_size = nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].Size;
+-        }
+-        exp_va = nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+-        exp_size = nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+-        cfg_va = nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress;
+-        cfg_size = nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].Size;
+-
+         mapping->image.base            = nt.opt.hdr64.ImageBase;
+         mapping->image.entry_point     = nt.opt.hdr64.AddressOfEntryPoint;
+         mapping->image.map_size        = nt.opt.hdr64.SizeOfImage;
+@@ -933,17 +939,25 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+                                           nt.opt.hdr64.SectionAlignment & page_mask);
+         mapping->image.header_size     = nt.opt.hdr64.SizeOfHeaders;
+         mapping->image.checksum        = nt.opt.hdr64.CheckSum;
+-
+-        reloc_dir  = (nt.opt.hdr64.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_BASERELOC &&
+-                      nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress &&
+-                      nt.opt.hdr64.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size);
+-        has_relocs = (reloc_dir && !(nt.FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED));
++        nb_data_dirs                   = nt.opt.hdr64.NumberOfRvaAndSizes;
++        data_dirs                      = nt.opt.hdr64.DataDirectory;
+         break;
+ 
+     default:
+         return STATUS_INVALID_IMAGE_FORMAT;
+     }
+ 
++#define GET_DATA_DIR(dir) \
++    (dir < nb_data_dirs && data_dirs[dir].VirtualAddress && data_dirs[dir].Size ? &data_dirs[dir] : NULL)
++
++    exp_dir = GET_DATA_DIR( IMAGE_DIRECTORY_ENTRY_EXPORT );
++    res_dir = GET_DATA_DIR( IMAGE_DIRECTORY_ENTRY_RESOURCE );
++    cfg_dir = GET_DATA_DIR( IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG );
++    clr_dir = GET_DATA_DIR( IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR );
++    reloc_dir  = !!GET_DATA_DIR( IMAGE_DIRECTORY_ENTRY_BASERELOC );
++    has_relocs = (reloc_dir && !(nt.FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED));
++#undef GET_DATA_DIR
++
+     mapping->image.is_hybrid     = 0;
+     mapping->image.padding       = 0;
+     mapping->image.map_addr      = get_fd_map_address( mapping->fd );
+@@ -954,7 +968,7 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+     mapping->image.zerobits      = 0; /* FIXME */
+     mapping->image.file_size     = file_size;
+     mapping->image.image_flags   = 0;
+-    mapping->image.loader_flags  = clr_va && clr_size;
++    mapping->image.loader_flags  = !!clr_dir;
+     mapping->image.wine_builtin  = (mz_size == sizeof(mz) &&
+                                     !memcmp( mz.buffer, builtin_signature, sizeof(builtin_signature) ));
+     mapping->image.wine_fakedll  = (mz_size == sizeof(mz) &&
+@@ -963,7 +977,7 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+     if (mapping->image.alignment & page_mask)
+         mapping->image.image_flags |= IMAGE_FLAGS_ImageMappedFlat;
+     else if ((mapping->image.dll_charact & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) &&
+-             (has_relocs || mapping->image.contains_code) && !(clr_va && clr_size))
++             (has_relocs || mapping->image.contains_code) && !clr_dir)
+         mapping->image.image_flags |= IMAGE_FLAGS_ImageDynamicallyRelocated;
+     /* ml936: an image whose preferred base is below PE_LOW_BASE_FLOOR can never
+      * be mapped there -- for it the choice is not "preferred base or relocated",
+@@ -1009,11 +1023,16 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+     }
+ 
+     if (mapping->image.wine_builtin || mapping->image.wine_fakedll)
+-        mapping->exp_len = load_export_name( &mapping->exp_name, exp_va, exp_size, align_mask,
+-                                             unix_fd, sec, nt.FileHeader.NumberOfSections );
++    {
++        if (exp_dir) mapping->exp_len = load_export_name( &mapping->exp_name, exp_dir, align_mask,
++                                                          unix_fd, sec, nt.FileHeader.NumberOfSections );
++    }
++    else if (res_dir)
++        mapping->ver_len = load_version_resource( &mapping->ver_res, res_dir, align_mask,
++                                                  unix_fd, sec, nt.FileHeader.NumberOfSections );
+ 
+-    if (load_clr_header( &clr, clr_va, clr_size, align_mask,
+-                         unix_fd, sec, nt.FileHeader.NumberOfSections ) &&
++    if (clr_dir &&
++        load_clr_header( &clr, clr_dir, align_mask, unix_fd, sec, nt.FileHeader.NumberOfSections ) &&
+         (clr.Flags & COMIMAGE_FLAGS_ILONLY))
+     {
+         mapping->image.image_flags |= IMAGE_FLAGS_ComPlusILOnly;
+@@ -1026,8 +1045,8 @@ static unsigned int get_image_params( struct mapping *mapping, file_pos_t file_s
+         }
+     }
+ 
+-    if (load_cfg_header( &cfg.cfg64, cfg_va, cfg_size, align_mask,
+-                         unix_fd, sec, nt.FileHeader.NumberOfSections ))
++    if (cfg_dir && load_cfg_header( &cfg.cfg64, cfg_dir, align_mask,
++                                    unix_fd, sec, nt.FileHeader.NumberOfSections ))
+     {
+         if (nt.opt.hdr32.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+             mapping->image.is_hybrid = !!cfg.cfg32.CHPEMetadataPointer;
+@@ -1079,52 +1098,38 @@ static unsigned int get_mapping_flags( obj_handle_t handle, unsigned int flags )
+     return 0;
+ }
+ 
+-
+-static struct mapping *create_mapping( struct object *root, const struct unicode_str *name,
+-                                       unsigned int attr, mem_size_t size, unsigned int flags,
+-                                       obj_handle_t handle, unsigned int file_access,
+-                                       const struct security_descriptor *sd )
++static bool mapping_init( struct object *obj, const void *init_data )
+ {
+-    struct mapping *mapping;
+-    struct file *file;
+-    struct fd *fd;
++    struct mapping *mapping = (struct mapping *)obj;
++    const struct mapping_init_data *data = init_data;
+     int unix_fd;
+     struct stat st;
+ 
+-    if (!(mapping = create_named_object( root, &mapping_ops, name, attr, sd )))
+-        return NULL;
+-    if (get_error() == STATUS_OBJECT_NAME_EXISTS)
+-        return mapping;  /* Nothing else to do */
+-
+-    mapping->size        = size;
++    mapping->size        = data->size;
++    mapping->flags       = data->flags;
+     mapping->fd          = NULL;
+     mapping->shared      = NULL;
+     mapping->committed   = NULL;
+     mapping->exp_name    = NULL;
++    mapping->ver_res     = NULL;
+     mapping->exp_len     = 0;
++    mapping->ver_len     = 0;
+ 
+-    if (!(mapping->flags = get_mapping_flags( handle, flags ))) goto error;
+-
+-    if (handle)
++    if (data->fd)
+     {
+         const unsigned int sharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+         unsigned int mapping_access = FILE_MAPPING_ACCESS;
+ 
+-        if (!(file = get_file_obj( current->process, handle, file_access ))) goto error;
+-        fd = get_obj_fd( (struct object *)file );
+-
+         /* file sharing rules for mappings are different so we use magic the access rights */
+-        if (flags & SEC_IMAGE) mapping_access |= FILE_MAPPING_IMAGE;
+-        else if (file_access & FILE_WRITE_DATA) mapping_access |= FILE_MAPPING_WRITE;
++        if (data->flags & SEC_IMAGE) mapping_access |= FILE_MAPPING_IMAGE;
++        else if (data->file_access & FILE_WRITE_DATA) mapping_access |= FILE_MAPPING_WRITE;
+ 
+-        if (!(mapping->fd = get_fd_object_for_mapping( fd, mapping_access, sharing )))
++        if (!(mapping->fd = get_fd_object_for_mapping( data->fd, mapping_access, sharing )))
+         {
+-            mapping->fd = dup_fd_object( fd, mapping_access, sharing, FILE_SYNCHRONOUS_IO_NONALERT );
++            mapping->fd = dup_fd_object( data->fd, mapping_access, sharing, FILE_SYNCHRONOUS_IO_NONALERT );
+             if (mapping->fd) set_fd_user( mapping->fd, &mapping_fd_ops, NULL );
+         }
+-        release_object( file );
+-        release_object( fd );
+-        if (!mapping->fd) goto error;
++        if (!mapping->fd) return false;
+ 
+         if ((unix_fd = get_unix_fd( mapping->fd )) == -1) goto error;
+         if (fstat( unix_fd, &st ) == -1)
+@@ -1132,10 +1137,10 @@ static struct mapping *create_mapping( struct object *root, const struct unicode
+             file_set_error();
+             goto error;
+         }
+-        if (flags & SEC_IMAGE)
++        if (data->flags & SEC_IMAGE)
+         {
+             unsigned int err = get_image_params( mapping, st.st_size, unix_fd );
+-            if (!err) return mapping;
++            if (!err) return true;
+             set_error( err );
+             goto error;
+         }
+@@ -1149,7 +1154,7 @@ static struct mapping *create_mapping( struct object *root, const struct unicode
+         }
+         else if (st.st_size < mapping->size)
+         {
+-            if (!(file_access & FILE_WRITE_DATA) || mapping->size >> 54 /* ntfs limit */)
++            if (!(data->file_access & FILE_WRITE_DATA) || mapping->size >> 54 /* ntfs limit */)
+             {
+                 set_error( STATUS_SECTION_TOO_BIG );
+                 goto error;
+@@ -1162,9 +1167,9 @@ static struct mapping *create_mapping( struct object *root, const struct unicode
+         if (!mapping->size)
+         {
+             set_error( STATUS_INVALID_PARAMETER );
+-            goto error;
++            return false;
+         }
+-        if ((flags & SEC_RESERVE) && !(mapping->committed = create_ranges())) goto error;
++        if ((data->flags & SEC_RESERVE) && !(mapping->committed = create_ranges())) return false;
+         mapping->size = round_size( mapping->size, page_mask );
+         if ((unix_fd = create_temp_file( mapping->size )) == -1) goto error;
+         if (!(mapping->fd = create_anonymous_fd( &mapping_fd_ops, unix_fd, &mapping->obj,
+@@ -1177,48 +1182,24 @@ static struct mapping *create_mapping( struct object *root, const struct unicode
+          * get the server round-trip back. */
+         allow_fd_caching( mapping->fd );
+     }
+-    return mapping;
++    return true;
+ 
+  error:
+-    release_object( mapping );
+-    return NULL;
++    if (mapping->fd) release_object( mapping->fd );
++    if (mapping->committed) release_object( mapping->committed );
++    if (mapping->shared) release_object( mapping->shared );
++    return false;
+ }
+ 
+ /* create a read-only file mapping for the specified fd */
+-struct mapping *create_fd_mapping( struct object *root, const struct unicode_str *name,
++struct mapping *create_fd_mapping( struct object *root, struct unicode_str name,
+                                    struct fd *fd, unsigned int attr, const struct security_descriptor *sd )
+ {
+-    struct mapping *mapping;
+-    int unix_fd;
+-    struct stat st;
+-
+-    if (!(mapping = create_named_object( root, &mapping_ops, name, attr, sd ))) return NULL;
+-    if (get_error() == STATUS_OBJECT_NAME_EXISTS) return mapping;  /* Nothing else to do */
+-
+-    mapping->shared    = NULL;
+-    mapping->committed = NULL;
+-    mapping->exp_name  = NULL;
+-    mapping->exp_len   = 0;
+-    mapping->flags     = SEC_FILE;
+-    mapping->fd        = (struct fd *)grab_object( fd );
+-    set_fd_user( mapping->fd, &mapping_fd_ops, NULL );
+-
+-    if ((unix_fd = get_unix_fd( mapping->fd )) == -1) goto error;
+-    if (fstat( unix_fd, &st ) == -1)
+-    {
+-        file_set_error();
+-        goto error;
+-    }
+-    if (!(mapping->size = st.st_size))
+-    {
+-        set_error( STATUS_MAPPED_FILE_SIZE_ZERO );
+-        goto error;
+-    }
+-    return mapping;
++    struct mapping_init_data data = { .fd = fd, .flags = SEC_FILE, .file_access = FILE_READ_DATA };
++    struct object_params params = { .ops = &mapping_ops, .root = root, .name = name,
++                                    .attr = attr, .sd = sd, .init_data = &data };
+ 
+- error:
+-    release_object( mapping );
+-    return NULL;
++    return create_named_object( &params );
+ }
+ 
+ static struct mapping *get_mapping_obj( struct process *process, obj_handle_t handle, unsigned int access )
+@@ -1254,7 +1235,7 @@ int get_view_nt_name( const struct memory_view *view, struct unicode_str *name )
+         return 1;
+     }
+     if (!view->fd) return 0;
+-    get_nt_name( view->fd, name );
++    *name = get_nt_name( view->fd );
+     return 1;
+ }
+ 
+@@ -1279,8 +1260,8 @@ void generate_startup_debug_events( struct process *process )
+     /* generate creation events */
+     LIST_FOR_EACH_ENTRY( thread, &process->thread_list, struct thread, proc_entry )
+     {
+-        if (thread != first_thread)
+-            generate_debug_event( thread, DbgCreateThreadStateChange, NULL );
++        if (thread->is_system) continue;
++        if (thread != first_thread) generate_debug_event( thread, DbgCreateThreadStateChange, NULL );
+     }
+ 
+     /* generate dll events (in loading order) */
+@@ -1314,6 +1295,7 @@ static void mapping_destroy( struct object *obj )
+     if (mapping->committed) release_object( mapping->committed );
+     if (mapping->shared) release_object( mapping->shared );
+     free( mapping->exp_name );
++    free( mapping->ver_res );
+ }
+ 
+ static enum server_fd_type mapping_get_fd_type( struct fd *fd )
+@@ -1390,14 +1372,16 @@ size_t get_page_size(void)
+     return host_page_mask + 1;
+ }
+ 
+-struct mapping *create_session_mapping( struct object *root, const struct unicode_str *name,
++struct mapping *create_session_mapping( struct object *root, struct unicode_str name,
+                                         unsigned int attr, const struct security_descriptor *sd )
+ {
+-    static const unsigned int access = FILE_READ_DATA | FILE_WRITE_DATA;
+     size_t size = max( sizeof(*shared_session) + sizeof(object_shm_t) * 512, 0x10000 );
++    struct mapping_init_data data = { .size = round_size( size, host_page_mask ), .flags = SEC_COMMIT,
++                                      .file_access = FILE_READ_DATA | FILE_WRITE_DATA };
++    struct object_params params = { .ops = &mapping_ops, .root = root, .name = name,
++                                    .attr = attr, .sd = sd, .init_data = &data };
+ 
+-    size = round_size( size, host_page_mask );
+-    return create_mapping( root, name, attr, size, SEC_COMMIT, 0, access, sd );
++    return create_named_object( &params );
+ }
+ 
+ void set_session_mapping( struct mapping *mapping )
+@@ -1556,14 +1540,17 @@ struct obj_locator get_shared_object_locator( volatile void *object_shm )
+     return locator;
+ }
+ 
+-struct object *create_user_data_mapping( struct object *root, const struct unicode_str *name,
++struct object *create_user_data_mapping( struct object *root, struct unicode_str name,
+                                         unsigned int attr, const struct security_descriptor *sd )
+ {
+     void *ptr;
+     struct mapping *mapping;
++    struct mapping_init_data data = { .size = sizeof(KUSER_SHARED_DATA), .flags = SEC_COMMIT,
++                                      .file_access = FILE_READ_DATA | FILE_WRITE_DATA };
++    struct object_params params = { .ops = &mapping_ops, .root = root, .name = name,
++                                    .attr = attr, .sd = sd, .init_data = &data };
+ 
+-    if (!(mapping = create_mapping( root, name, attr, sizeof(KUSER_SHARED_DATA),
+-                                    SEC_COMMIT, 0, FILE_READ_DATA | FILE_WRITE_DATA, sd ))) return NULL;
++    if (!(mapping = create_named_object( &params ))) return NULL;
+ #ifdef WINE_IOS
+     /* ml731c: EVERYTHING here is behind MADEIRA_USD_TIME. The previous attempt put
+      * only the risky write behind the switch and left the mapping change beside
+@@ -1623,37 +1610,41 @@ struct object *create_user_data_mapping( struct object *root, const struct unico
+ /* create a file mapping */
+ DECL_HANDLER(create_mapping)
+ {
+-    struct object *root;
+-    struct mapping *mapping;
+-    struct unicode_str name;
+-    const struct security_descriptor *sd;
+-    const struct object_attributes *objattr = get_req_object_attributes( &sd, &name, &root );
++    struct file *file = NULL;
++    struct mapping_init_data data = { .size = req->size, .file_access = req->file_access };
++    struct object_params params = { .ops = &mapping_ops, .access = req->access, .init_data = &data };
+ 
+-    if (!objattr) return;
++    if (!get_req_object_attributes( &params )) return;
+ 
+-    if ((mapping = create_mapping( root, &name, objattr->attributes, req->size, req->flags,
+-                                   req->file_handle, req->file_access, sd )))
++    if (!(data.flags = get_mapping_flags( req->file_handle, req->flags )))
+     {
+-        if (get_error() == STATUS_OBJECT_NAME_EXISTS)
+-            reply->handle = alloc_handle( current->process, &mapping->obj, req->access, objattr->attributes );
+-        else
+-            reply->handle = alloc_handle_no_access_check( current->process, &mapping->obj,
+-                                                          req->access, objattr->attributes );
+-        release_object( mapping );
++        if (params.root) release_object( params.root );
++        return;
++    }
++    if (req->file_handle)
++    {
++        if (!(file = get_file_obj( current->process, req->file_handle, req->file_access )))
++        {
++            if (params.root) release_object( params.root );
++            return;
++        }
++        data.fd = get_obj_fd( (struct object *)file );
+     }
+     else ws_log("[srv-map] create_mapping FAILED err=%08x flags=%08x size=%llu pid=%04x\n",
+                 get_error(), req->flags, (unsigned long long)req->size, current->process->id);
+ 
+-    if (root) release_object( root );
++    reply->handle = create_named_obj_handle( current->process, &params );
++
++    if (file) release_object( file );
++    if (data.fd) release_object( data.fd );
++    if (params.root) release_object( params.root );
+ }
+ 
+ /* open a handle to a mapping */
+ DECL_HANDLER(open_mapping)
+ {
+-    struct unicode_str name = get_req_unicode_str();
+-
+     reply->handle = open_object( current->process, req->rootdir, req->access,
+-                                 &mapping_ops, &name, req->attributes );
++                                 &mapping_ops, get_req_unicode_str(), req->attributes );
+ }
+ 
+ /* get a mapping information */
+@@ -1668,17 +1659,23 @@ DECL_HANDLER(get_mapping_info)
+ 
+     if (mapping->flags & SEC_IMAGE)
+     {
+-        struct unicode_str name = { NULL, 0 };
++        struct unicode_str name = mapping->fd ? get_nt_name( mapping->fd ) : empty_str;
+         data_size_t size;
+         void *data;
+ 
+-        if (mapping->fd) get_nt_name( mapping->fd, &name );
+-        reply->total = sizeof(struct pe_image_info) + name.len + mapping->exp_len;
+-        size = min( reply->total, get_reply_max_size() );
++        size = reply->total = sizeof(struct pe_image_info) + mapping->ver_len + name.len + mapping->exp_len;
++        if (size > get_reply_max_size()) size = sizeof(struct pe_image_info) + mapping->ver_len + name.len;
++        if (size > get_reply_max_size()) size = sizeof(struct pe_image_info) + mapping->ver_len;
++        if (size > get_reply_max_size()) size = sizeof(struct pe_image_info);
+         if ((data = set_reply_data_size( size )))
+         {
+             data = mem_append( data, &mapping->image, min( sizeof(struct pe_image_info), size ));
+-            if (size >= sizeof(struct pe_image_info) + name.len)
++            if (size >= sizeof(struct pe_image_info) + mapping->ver_len)
++            {
++                data = mem_append( data, mapping->ver_res, mapping->ver_len );
++                reply->ver_len = mapping->ver_len;
++            }
++            if (size >= sizeof(struct pe_image_info) + mapping->ver_len + name.len)
+             {
+                 data = mem_append( data, name.str, name.len );
+                 reply->name_len = name.len;
+@@ -1791,8 +1788,11 @@ DECL_HANDLER(map_image_view)
+         if (add_process_view( current, view ))
+         {
+             current->entry_point = view->base + req->entry;
+-            current->process->machine = (view->image.image_flags & IMAGE_FLAGS_ComPlusNativeReady) ?
+-                                         native_machine : req->machine;
++            if (view->image.image_flags & IMAGE_FLAGS_ComPlusNativeReady)
++                current->process->machine = is_machine_64bit( native_machine )
++                    ? IMAGE_FILE_MACHINE_AMD64 : native_machine;
++            else
++                current->process->machine = req->machine;
+         }
+ 
+         if (view->base != (mapping->image.map_addr ? mapping->image.map_addr : mapping->image.base) + req->offset)
+diff --git a/build/wineserver/queue_ios.c b/build/wineserver/queue_ios.c
+index edd4ce2..67cd024 100644
+--- a/build/wineserver/queue_ios.c
++++ b/build/wineserver/queue_ios.c
+@@ -91,6 +91,7 @@ struct message
+     unsigned int           data_size; /* size of message data */
+     unsigned int           unique_id; /* unique id for nested hw message waits */
+     struct message_result *result;    /* result in sender queue */
++    bool                   mergeable; /* message can be coalesced if eligible for that */
+ };
+ 
+ struct timer
+@@ -104,6 +105,13 @@ struct timer
+     lparam_t        lparam;    /* lparam for message */
+ };
+ 
++struct attachment
++{
++    struct list entry;
++    struct msg_queue *queue_from;
++    struct msg_queue *queue_to;
++};
++
+ struct thread_input
+ {
+     struct object          obj;           /* object header */
+@@ -111,6 +119,7 @@ struct thread_input
+     int                    caret_hide;    /* caret hide count */
+     int                    caret_state;   /* caret on/off state */
+     struct list            msg_list;      /* list of hardware messages */
++    struct list            attachments;
+     timeout_t              user_time;     /* time of last user input */
+     unsigned char          desktop_keystate[256]; /* desktop keystate when keystate was synced */
+     input_shm_t           *shared;        /* thread input in session shared memory */
+@@ -160,65 +169,25 @@ static void timer_callback( void *private );
+ 
+ static const struct object_ops msg_queue_ops =
+ {
+-    sizeof(struct msg_queue),  /* size */
+-    &no_type,                  /* type */
+-    msg_queue_dump,            /* dump */
+-    NULL,                      /* add_queue */
+-    NULL,                      /* remove_queue */
+-    NULL,                      /* signaled */
+-    NULL,                      /* satisfied */
+-    no_signal,                 /* signal */
+-    no_get_fd,                 /* get_fd */
+-    msg_queue_get_sync,        /* get_sync */
+-    default_map_access,        /* map_access */
+-    default_get_sd,            /* get_sd */
+-    default_set_sd,            /* set_sd */
+-    no_get_full_name,          /* get_full_name */
+-    no_lookup_name,            /* lookup_name */
+-    no_link_name,              /* link_name */
+-    NULL,                      /* unlink_name */
+-    no_open_file,              /* open_file */
+-    no_kernel_obj_list,        /* get_kernel_obj_list */
+-    no_close_handle,           /* close_handle */
+-    msg_queue_destroy          /* destroy */
++    .size     = sizeof(struct msg_queue),
++    .type     = &no_type,
++    .dump     = msg_queue_dump,
++    .get_sync = msg_queue_get_sync,
++    .destroy  = msg_queue_destroy,
+ };
+ 
+ static const struct fd_ops msg_queue_fd_ops =
+ {
+-    NULL,                        /* get_poll_events */
+-    msg_queue_poll_event,        /* poll_event */
+-    NULL,                        /* flush */
+-    NULL,                        /* get_fd_type */
+-    NULL,                        /* ioctl */
+-    NULL,                        /* queue_async */
+-    NULL,                        /* reselect_async */
+-    NULL                         /* cancel async */
++    .poll_event = msg_queue_poll_event,
+ };
+ 
+ 
+ static const struct object_ops thread_input_ops =
+ {
+-    sizeof(struct thread_input),  /* size */
+-    &no_type,                     /* type */
+-    thread_input_dump,            /* dump */
+-    no_add_queue,                 /* add_queue */
+-    NULL,                         /* remove_queue */
+-    NULL,                         /* signaled */
+-    NULL,                         /* satisfied */
+-    no_signal,                    /* signal */
+-    no_get_fd,                    /* get_fd */
+-    default_get_sync,             /* get_sync */
+-    default_map_access,           /* map_access */
+-    default_get_sd,               /* get_sd */
+-    default_set_sd,               /* set_sd */
+-    no_get_full_name,             /* get_full_name */
+-    no_lookup_name,               /* lookup_name */
+-    no_link_name,                 /* link_name */
+-    NULL,                         /* unlink_name */
+-    no_open_file,                 /* open_file */
+-    no_kernel_obj_list,           /* get_kernel_obj_list */
+-    no_close_handle,              /* close_handle */
+-    thread_input_destroy          /* destroy */
++    .size    = sizeof(struct thread_input),
++    .type    = &no_type,
++    .dump    = thread_input_dump,
++    .destroy = thread_input_destroy,
+ };
+ 
+ /* pointer to input structure of foreground thread */
+@@ -246,21 +215,18 @@ static void set_caret_window( struct thread_input *input, input_shm_t *shared, u
+ }
+ 
+ /* create a thread input object */
+-static struct thread_input *create_thread_input( struct thread *thread )
++static struct thread_input *create_thread_input( struct desktop *desktop )
+ {
+     struct thread_input *input;
+ 
+     if ((input = alloc_object( &thread_input_ops )))
+     {
++        input->desktop = (struct desktop *)grab_object( desktop );
+         list_init( &input->msg_list );
++        list_init( &input->attachments );
+         input->user_time = 0;
+         input->shared = NULL;
+ 
+-        if (!(input->desktop = get_thread_desktop( thread, 0 /* FIXME: access rights */ )))
+-        {
+-            release_object( input );
+-            return NULL;
+-        }
+         memcpy( input->desktop_keystate, (const void *)input->desktop->shared->keystate,
+                 sizeof(input->desktop_keystate) );
+ 
+@@ -298,9 +264,11 @@ static struct msg_queue *create_msg_queue( struct thread *thread, struct thread_
+     struct desktop *desktop;
+     int i;
+ 
++    if (!(desktop = get_thread_desktop( thread, 0 /* FIXME: access rights */ ))) return NULL;
++
+     if (!input)
+     {
+-        if (!(new_input = create_thread_input( thread ))) return NULL;
++        if (!(new_input = create_thread_input( desktop ))) return NULL;
+         input = new_input;
+     }
+ 
+@@ -344,14 +312,11 @@ static struct msg_queue *create_msg_queue( struct thread *thread, struct thread_
+         SHARED_WRITE_END;
+ 
+         thread->queue = queue;
+-
+-        if ((desktop = get_thread_desktop( thread, 0 )))
+-        {
+-            add_desktop_hook_count( desktop, thread, 1 );
+-            release_object( desktop );
+-        }
++        add_desktop_hook_count( desktop, thread, 1 );
+     }
++
+     if (new_input) release_object( new_input );
++    release_object( desktop );
+     return queue;
+ 
+ error:
+@@ -417,43 +382,59 @@ static void unlock_input_keystate( struct thread_input *input )
+ }
+ 
+ /* change the thread input data of a given thread */
+-static int assign_thread_input( struct thread *thread, struct thread_input *new_input )
++static void assign_thread_input( struct msg_queue *queue, struct thread_input *new_input )
+ {
+-    struct msg_queue *queue = thread->queue;
+-    input_shm_t *input_shm;
++    struct thread_input *old_input = queue->input;
++    user_handle_t new_focus = 0, new_active = 0;
++    struct thread *owner;
+ 
+-    if (!queue)
++    if (old_input == new_input) return;
++
++    if (old_input->shared->focus && (owner = get_window_thread( old_input->shared->focus )))
+     {
+-        thread->queue = create_msg_queue( thread, new_input );
+-        return thread->queue != NULL;
++        new_focus = owner->queue == queue ? old_input->shared->focus : 0;
++        release_object( owner );
+     }
+-    if (queue->input)
++    if (old_input->shared->active && (owner = get_window_thread( old_input->shared->active )))
+     {
+-        input_shm = queue->input->shared;
++        new_active = owner->queue == queue ? old_input->shared->active : 0;
++        release_object( owner );
++    }
+ 
+-        SHARED_WRITE_BEGIN( input_shm, input_shm_t )
++    SHARED_WRITE_BEGIN( old_input->shared, input_shm_t )
++    {
++        input_shm_t *old_shared = shared;
++
++        SHARED_WRITE_BEGIN( new_input->shared, input_shm_t )
+         {
+-            shared->cursor_count -= queue->cursor_count;
+-        }
+-        SHARED_WRITE_END;
++            input_shm_t *new_shared = shared;
+ 
+-        if (queue->keystate_lock) unlock_input_keystate( queue->input );
++            if (!new_shared->focus) new_shared->focus = new_focus;
++            if (new_focus) old_shared->focus = 0;
++            if (!new_shared->active) new_shared->active = new_active;
++            if (new_active) old_shared->active = 0;
+ 
+-        /* invalidate the old object to force clients to refresh their cached thread input */
+-        invalidate_shared_object( queue->input->shared );
+-        release_object( queue->input );
++            new_shared->cursor_count += queue->cursor_count;
++            old_shared->cursor_count -= queue->cursor_count;
++
++            memset( (void *)new_shared->keystate, 0, sizeof(new_shared->keystate) );
++            new_shared->keystate_serial = 1;
++        }
++        SHARED_WRITE_END;
+     }
+-    queue->input = (struct thread_input *)grab_object( new_input );
+-    if (queue->keystate_lock) lock_input_keystate( queue->input );
++    SHARED_WRITE_END;
+ 
+-    input_shm = new_input->shared;
+-    SHARED_WRITE_BEGIN( input_shm, input_shm_t )
++    if (queue->keystate_lock)
+     {
+-        shared->cursor_count += queue->cursor_count;
++        unlock_input_keystate( old_input );
++        lock_input_keystate( new_input );
+     }
+-    SHARED_WRITE_END;
+ 
+-    return 1;
++    /* invalidate the old object to force clients to refresh their cached thread input */
++    invalidate_shared_object( old_input->shared );
++    release_object( old_input );
++
++    queue->input = (struct thread_input *)grab_object( new_input );
+ }
+ 
+ /* allocate a hardware message and its data */
+@@ -590,7 +571,7 @@ static void set_cursor_pos( struct desktop *desktop, int x, int y )
+         return;
+     }
+ 
+-    if (!(msg = alloc_hardware_message( 0, source, get_tick_count(), 0 ))) return;
++    if (!(msg = alloc_hardware_message( 0xff515700, source, get_tick_count(), 0 ))) return;
+ 
+     msg->msg = WM_MOUSEMOVE;
+     msg->x   = x;
+@@ -880,12 +861,14 @@ static int merge_mousemove( struct thread_input *input, const struct message *ms
+     struct message *prev;
+ 
+     if (!(prev = find_mouse_message( input, msg ))) return 0;
++    if (!prev->mergeable) return 0;
+ 
+     prev->wparam  = msg->wparam;
+     prev->lparam  = msg->lparam;
+     prev->x       = msg->x;
+     prev->y       = msg->y;
+     prev->time    = msg->time;
++    prev->mergeable = msg->mergeable;
+     if (msg->type == MSG_HARDWARE && prev->data && msg->data)
+     {
+         struct hardware_msg_data *prev_data = prev->data;
+@@ -1308,6 +1291,7 @@ static void msg_queue_destroy( struct object *obj )
+     struct list *ptr;
+     struct hotkey *hotkey, *hotkey2;
+     input_shm_t *input_shm = queue->input->shared;
++    struct attachment *attach, *next;
+     int i;
+ 
+     cleanup_results( queue );
+@@ -1322,6 +1306,13 @@ static void msg_queue_destroy( struct object *obj )
+         }
+     }
+ 
++    LIST_FOR_EACH_ENTRY_SAFE( attach, next, &queue->input->attachments, struct attachment, entry )
++    {
++        if (attach->queue_from != queue && attach->queue_to != queue) continue;
++        list_remove( &attach->entry );
++        free( attach );
++    }
++
+     while ((ptr = list_head( &queue->pending_timers )))
+     {
+         struct timer *timer = LIST_ENTRY( ptr, struct timer, entry );
+@@ -1369,8 +1360,15 @@ static void thread_input_dump( struct object *obj, int verbose )
+ static void thread_input_destroy( struct object *obj )
+ {
+     struct thread_input *input = (struct thread_input *)obj;
++    struct attachment *attach, *next;
+     struct desktop *desktop;
+ 
++    LIST_FOR_EACH_ENTRY_SAFE( attach, next, &input->attachments, struct attachment, entry )
++    {
++        list_remove( &attach->entry );
++        free( attach );
++    }
++
+     empty_msg_list( &input->msg_list );
+     if ((desktop = input->desktop))
+     {
+@@ -1430,105 +1428,53 @@ int init_thread_queue( struct thread *thread )
+ }
+ 
+ /* attach two thread input data structures */
+-int attach_thread_input( struct thread *thread_from, struct thread *thread_to )
++void attach_thread_input( struct msg_queue *queue_from, struct msg_queue *queue_to )
+ {
+-    struct desktop *desktop;
+-    struct thread_input *input, *old_input;
+-    int ret;
+-
+-    if (!thread_to->queue && !(thread_to->queue = create_msg_queue( thread_to, NULL ))) return 0;
+-    if (!(desktop = get_thread_desktop( thread_from, 0 ))) return 0;
+-    input = (struct thread_input *)grab_object( thread_to->queue->input );
+-    if (input->desktop != desktop)
+-    {
+-        set_error( STATUS_ACCESS_DENIED );
+-        release_object( input );
+-        release_object( desktop );
+-        return 0;
+-    }
+-    release_object( desktop );
++    struct thread_input *old_input, *new_input = queue_to->input;
++    struct attachment *attach;
+ 
+-    if (thread_from->queue)
+-    {
+-        input_shm_t *old_input_shm, *input_shm;
+-        old_input = thread_from->queue->input;
+-        old_input_shm = old_input->shared;
+-        input_shm = input->shared;
++    if (!(attach = mem_alloc( sizeof(*attach) ))) return;
++    attach->queue_from = queue_from;
++    attach->queue_to = queue_to;
+ 
+-        SHARED_WRITE_BEGIN( input_shm, input_shm_t )
+-        {
+-            if (!shared->active) shared->active = old_input_shm->active;
+-            if (!shared->focus) shared->focus = old_input_shm->focus;
+-        }
+-        SHARED_WRITE_END;
+-    }
++    old_input = (struct thread_input *)grab_object( queue_from->input );
++    list_add_tail( &old_input->attachments, &attach->entry );
+ 
+-    ret = assign_thread_input( thread_from, input );
+-    if (ret)
++    LIST_FOR_EACH_ENTRY( attach, &old_input->attachments, struct attachment, entry )
+     {
+-        input_shm_t *input_shm = input->shared;
+-        SHARED_WRITE_BEGIN( input_shm, input_shm_t )
+-        {
+-            memset( (void *)shared->keystate, 0, sizeof(shared->keystate) );
+-            shared->keystate_serial = 1;
+-        }
+-        SHARED_WRITE_END;
++        assign_thread_input( attach->queue_from, new_input );
++        assign_thread_input( attach->queue_to, new_input );
+     }
+-    release_object( input );
+-    return ret;
++    if (old_input != new_input) list_move_tail( &new_input->attachments, &old_input->attachments );
++
++    release_object( old_input );
+ }
+ 
+ /* detach two thread input data structures */
+-void detach_thread_input( struct thread *thread_from )
++void detach_thread_input( struct msg_queue *queue_from, struct msg_queue *queue_to, struct desktop *desktop )
+ {
+-    struct thread *thread;
+-    struct thread_input *input, *old_input = thread_from->queue->input;
++    struct thread_input *old_input = queue_from->input, *new_input;
++    struct attachment *attach, *next;
++    int count = 0;
+ 
+-    if ((input = create_thread_input( thread_from )))
++    LIST_FOR_EACH_ENTRY_SAFE( attach, next, &old_input->attachments, struct attachment, entry )
+     {
+-        input_shm_t *old_input_shm, *input_shm;
+-        old_input_shm = old_input->shared;
+-        input_shm = input->shared;
+-
+-        if (old_input_shm->focus && (thread = get_window_thread( old_input_shm->focus )))
+-        {
+-            if (thread == thread_from)
+-            {
+-                SHARED_WRITE_BEGIN( old_input_shm, input_shm_t )
+-                {
+-                    input_shm_t *old_shared = shared;
+-                    SHARED_WRITE_BEGIN( input_shm, input_shm_t )
+-                    {
+-                        shared->focus = old_shared->focus;
+-                        old_shared->focus = 0;
+-                    }
+-                    SHARED_WRITE_END;
+-                }
+-                SHARED_WRITE_END;
+-            }
+-            release_object( thread );
+-        }
+-        if (old_input_shm->active && (thread = get_window_thread( old_input_shm->active )))
+-        {
+-            if (thread == thread_from)
+-            {
+-                SHARED_WRITE_BEGIN( old_input_shm, input_shm_t )
+-                {
+-                    input_shm_t *old_shared = shared;
+-                    SHARED_WRITE_BEGIN( input_shm, input_shm_t )
+-                    {
+-                        shared->active = old_shared->active;
+-                        old_shared->active = 0;
+-                    }
+-                    SHARED_WRITE_END;
+-                }
+-                SHARED_WRITE_END;
+-            }
+-            release_object( thread );
+-        }
+-        assign_thread_input( thread_from, input );
+-        release_object( input );
++        if (attach->queue_from != queue_from && (!queue_to || attach->queue_from != queue_to)) continue;
++        if (attach->queue_to != queue_from && (!queue_to || attach->queue_to != queue_to)) continue;
++        if (count++ && queue_to) break;
++        list_remove( &attach->entry );
++        free( attach );
++    }
++    if (queue_to)
++    {
++        if (!count) return set_error( STATUS_INVALID_PARAMETER );
++        if (count > 1) return;
+     }
++    /* TODO: detaching a thread may create two separate thread input graphs */
++
++    if (!(new_input = create_thread_input( desktop ))) return;
++    assign_thread_input( queue_from, new_input );
++    release_object( new_input );
+ }
+ 
+ 
+@@ -2028,7 +1974,7 @@ static int is_current_process_foreground( struct desktop *desktop )
+ #define WINE_MOUSE_HANDLE 1
+ #define WINE_KEYBOARD_HANDLE 2
+ 
+-static void rawmouse_init( struct rawinput *header, RAWMOUSE *rawmouse, int x, int y, unsigned int flags,
++static bool rawmouse_init( struct rawinput *header, RAWMOUSE *rawmouse, int x, int y, unsigned int flags,
+                            unsigned int buttons, lparam_t info )
+ {
+     static const unsigned int button_flags[] =
+@@ -2080,6 +2026,8 @@ static void rawmouse_init( struct rawinput *header, RAWMOUSE *rawmouse, int x, i
+     rawmouse->lLastX             = x;
+     rawmouse->lLastY             = y;
+     rawmouse->ulExtraInformation = info;
++
++    return x || y || rawmouse->usButtonFlags;
+ }
+ 
+ static void rawkeyboard_init( struct rawinput *rawinput, RAWKEYBOARD *keyboard, unsigned short scan, unsigned short vkey,
+@@ -2150,9 +2098,9 @@ struct rawinput_message
+ };
+ 
+ /* check if process is supposed to receive a WM_INPUT message and eventually queue it */
+-static void queue_rawinput_message( struct desktop *desktop, struct process *process, void *args )
++static void queue_rawinput_message( struct desktop *desktop, struct process *process,
++                                    const struct rawinput_message *raw_msg )
+ {
+-    const struct rawinput_message *raw_msg = args;
+     const struct rawinput_device *device;
+     struct hardware_msg_data *msg_data;
+     struct message *msg;
+@@ -2209,7 +2157,7 @@ static void queue_rawinput_message( struct desktop *desktop, struct process *pro
+     queue_hardware_message( desktop, msg, 1 );
+ }
+ 
+-static void dispatch_rawinput_message( struct desktop *desktop, struct rawinput_message *raw_msg )
++static void dispatch_rawinput_message( struct desktop *desktop, const struct rawinput_message *raw_msg )
+ {
+     struct process *process;
+ 
+@@ -2219,16 +2167,22 @@ static void dispatch_rawinput_message( struct desktop *desktop, struct rawinput_
+ 
+ /* queue a hardware message for a mouse event */
+ static int queue_mouse_message( struct desktop *desktop, user_handle_t win, const union hw_input *input,
+-                                unsigned int origin, struct msg_queue *sender )
++                                unsigned int origin, struct msg_queue *sender, bool rawinput )
+ {
++    static const POINT empty_raw = {0};
++
+     desktop_shm_t *desktop_shm = desktop->shared;
++    unsigned char state = desktop_shm->keystate[VK_LBUTTON] | desktop_shm->keystate[VK_MBUTTON] |
++                          desktop_shm->keystate[VK_RBUTTON] | desktop_shm->keystate[VK_XBUTTON1] |
++                          desktop_shm->keystate[VK_XBUTTON2];
+     struct hardware_msg_data *msg_data;
+     struct rawinput_message raw_msg;
+     struct message *msg;
+-    struct thread *foreground;
++    struct thread *foreground, *thread;
+     unsigned int i, time = get_tick_count(), flags;
+     struct hw_msg_source source = { IMDT_MOUSE, origin };
+     lparam_t wparam = input->mouse.data << 16;
++    const POINT *raw = &empty_raw;
+     int wait = 0, x, y;
+ 
+     static const unsigned int messages[] =
+@@ -2248,6 +2202,13 @@ static int queue_mouse_message( struct desktop *desktop, user_handle_t win, cons
+         WM_MOUSEHWHEEL   /* 0x1000 = MOUSEEVENTF_HWHEEL */
+     };
+ 
++    if (input->mouse.raw_count != get_req_data_size() / sizeof(*raw))
++    {
++        set_error( STATUS_INVALID_PARAMETER );
++        return 0;
++    }
++    if (input->mouse.raw_count) raw = get_req_data();
++
+     SHARED_WRITE_BEGIN( desktop_shm, desktop_shm_t )
+     {
+         shared->cursor.last_change = time;
+@@ -2258,6 +2219,15 @@ static int queue_mouse_message( struct desktop *desktop, user_handle_t win, cons
+     time  = input->mouse.time;
+     if (!time) time = desktop_shm->cursor.last_change;
+ 
++    if (win && origin == IMO_HARDWARE && flags == (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE) &&
++        !(state & 0x80) && (thread = get_window_thread( win )))
++    {
++        struct rectangle rect = { input->mouse.x, input->mouse.y, input->mouse.x + 1, input->mouse.y + 1 };
++        struct thread_input *input = thread->queue->input;
++        if (!input->shared->capture) set_window_rect_visible( win, rect );
++        release_object( thread );
++    }
++
+     if (flags & MOUSEEVENTF_MOVE)
+     {
+         if (flags & MOUSEEVENTF_ABSOLUTE)
+@@ -2287,10 +2257,19 @@ static int queue_mouse_message( struct desktop *desktop, user_handle_t win, cons
+         raw_msg.time       = time;
+         raw_msg.message    = WM_INPUT;
+         raw_msg.flags      = flags;
+-        rawmouse_init( &raw_msg.rawinput, &raw_msg.data.mouse, x - desktop_shm->cursor.x, y - desktop_shm->cursor.y,
+-                       raw_msg.flags, input->mouse.data, input->mouse.info );
+ 
+-        dispatch_rawinput_message( desktop, &raw_msg );
++        for (int i = 0, count = max( 1, input->mouse.raw_count ); i < count; i++)
++        {
++            int raw_x, raw_y;
++
++            raw_x = rawinput ? raw[i].x : x - desktop_shm->cursor.x;
++            raw_y = rawinput ? raw[i].y : y - desktop_shm->cursor.y;
++
++            if (rawmouse_init( &raw_msg.rawinput, &raw_msg.data.mouse, raw_x, raw_y,
++                               raw_msg.flags, input->mouse.data, input->mouse.info ))
++                dispatch_rawinput_message( desktop, &raw_msg );
++        }
++
+         release_object( foreground );
+     }
+ 
+@@ -2309,6 +2288,7 @@ static int queue_mouse_message( struct desktop *desktop, user_handle_t win, cons
+         msg->lparam    = 0;
+         msg->x         = x;
+         msg->y         = y;
++        msg->mergeable = !(flags & MOUSEEVENTF_MOVE_NOCOALESCE);
+         if (origin == IMO_INJECTED) msg_data->flags = LLMHF_INJECTED;
+ 
+         /* specify a sender only when sending the last message */
+@@ -2427,24 +2407,24 @@ static int queue_keyboard_message( struct desktop *desktop, user_handle_t win, c
+     }
+ 
+     /* send numpad vkeys if NumLock is active */
+-    if ((input->kbd.vkey & KBDNUMPAD) && (desktop->keystate[VK_NUMLOCK] & 0x01) &&
+-        !(desktop->keystate[VK_SHIFT] & 0x80))
+-    {
+-       switch (vkey)
+-       {
+-       case VK_INSERT: hook_vkey = vkey = VK_NUMPAD0; break;
+-       case VK_END:    hook_vkey = vkey = VK_NUMPAD1; break;
+-       case VK_DOWN:   hook_vkey = vkey = VK_NUMPAD2; break;
+-       case VK_NEXT:   hook_vkey = vkey = VK_NUMPAD3; break;
+-       case VK_LEFT:   hook_vkey = vkey = VK_NUMPAD4; break;
+-       case VK_CLEAR:  hook_vkey = vkey = VK_NUMPAD5; break;
+-       case VK_RIGHT:  hook_vkey = vkey = VK_NUMPAD6; break;
+-       case VK_HOME:   hook_vkey = vkey = VK_NUMPAD7; break;
+-       case VK_UP:     hook_vkey = vkey = VK_NUMPAD8; break;
+-       case VK_PRIOR:  hook_vkey = vkey = VK_NUMPAD9; break;
+-       case VK_DELETE: hook_vkey = vkey = VK_DECIMAL; break;
+-       default: break;
+-       }
++    if ((input->kbd.vkey & KBDNUMPAD) && (desktop_shm->keystate[VK_NUMLOCK] & 0x01) &&
++        !(desktop_shm->keystate[VK_SHIFT] & 0x80))
++    {
++        switch (vkey)
++        {
++        case VK_INSERT: hook_vkey = vkey = VK_NUMPAD0; break;
++        case VK_END:    hook_vkey = vkey = VK_NUMPAD1; break;
++        case VK_DOWN:   hook_vkey = vkey = VK_NUMPAD2; break;
++        case VK_NEXT:   hook_vkey = vkey = VK_NUMPAD3; break;
++        case VK_LEFT:   hook_vkey = vkey = VK_NUMPAD4; break;
++        case VK_CLEAR:  hook_vkey = vkey = VK_NUMPAD5; break;
++        case VK_RIGHT:  hook_vkey = vkey = VK_NUMPAD6; break;
++        case VK_HOME:   hook_vkey = vkey = VK_NUMPAD7; break;
++        case VK_UP:     hook_vkey = vkey = VK_NUMPAD8; break;
++        case VK_PRIOR:  hook_vkey = vkey = VK_NUMPAD9; break;
++        case VK_DELETE: hook_vkey = vkey = VK_DECIMAL; break;
++        default: break;
++        }
+     }
+ 
+     if (origin == IMO_HARDWARE)
+@@ -3247,6 +3227,7 @@ DECL_HANDLER(send_hardware_message)
+     struct desktop *desktop;
+     unsigned int origin = (req->flags & SEND_HWMSG_INJECTED ? IMO_INJECTED : IMO_HARDWARE);
+     struct msg_queue *sender = req->flags & SEND_HWMSG_INJECTED ? get_current_queue() : NULL;
++    bool rawinput = !!(req->flags & SEND_HWMSG_RAWINPUT);
+     desktop_shm_t *desktop_shm;
+     int wait = 0;
+ 
+@@ -3266,7 +3247,7 @@ DECL_HANDLER(send_hardware_message)
+     switch (req->input.type)
+     {
+     case INPUT_MOUSE:
+-        wait = queue_mouse_message( desktop, req->win, &req->input, origin, sender );
++        wait = queue_mouse_message( desktop, req->win, &req->input, origin, sender, rawinput );
+         break;
+     case INPUT_KEYBOARD:
+         wait = queue_keyboard_message( desktop, req->win, &req->input, origin, sender, 0 );
+@@ -3703,6 +3684,7 @@ DECL_HANDLER(attach_thread_input)
+ {
+     struct thread *thread_from = get_thread_from_id( req->tid_from );
+     struct thread *thread_to = get_thread_from_id( req->tid_to );
++    struct desktop *desktop_from = NULL, *desktop_to = NULL;
+ 
+     if (!thread_from || !thread_to)
+     {
+@@ -3710,26 +3692,22 @@ DECL_HANDLER(attach_thread_input)
+         if (thread_to) release_object( thread_to );
+         return;
+     }
+-    if (thread_from != thread_to)
+-    {
+-        if (req->attach)
+-        {
+-            if ((thread_to->queue || thread_to == current) &&
+-                (thread_from->queue || thread_from == current))
+-                attach_thread_input( thread_from, thread_to );
+-            else
+-                set_error( STATUS_INVALID_PARAMETER );
+-        }
+-        else
+-        {
+-            if (thread_from->queue && thread_to->queue &&
+-                thread_from->queue->input == thread_to->queue->input)
+-                detach_thread_input( thread_from );
+-            else
+-                set_error( STATUS_ACCESS_DENIED );
+-        }
+-    }
+-    else set_error( STATUS_ACCESS_DENIED );
++    if (!(desktop_from = get_thread_desktop( thread_from, 0 ))) goto failed;
++    if (!(desktop_to = get_thread_desktop( thread_to, 0 ))) goto failed;
++
++    if ((thread_to == current || thread_from == current) &&
++        !current->queue && !init_thread_queue( current ))
++        goto failed;
++
++    if (desktop_from != desktop_to) set_error( STATUS_INVALID_PARAMETER );
++    else if (!thread_to->queue || !thread_from->queue) set_error( STATUS_INVALID_PARAMETER );
++    else if (thread_from == thread_to) set_error( STATUS_ACCESS_DENIED );
++    else if (req->attach) attach_thread_input( thread_from->queue, thread_to->queue );
++    else detach_thread_input( thread_from->queue, thread_to->queue, desktop_from );
++
++failed:
++    if (desktop_to) release_object( desktop_to );
++    if (desktop_from) release_object( desktop_from );
+     release_object( thread_from );
+     release_object( thread_to );
+ }
+@@ -4009,9 +3987,17 @@ DECL_HANDLER(set_caret_info)
+ }
+ 
+ 
+-/* get the time of the last input event */
+-DECL_HANDLER(get_last_input_time)
++/* get/set the time of the last user input event */
++DECL_HANDLER(set_user_input_time)
+ {
++    struct msg_queue *queue;
++
++    if (req->set && (queue = current->queue))
++    {
++        queue->input->user_time = monotonic_time;
++        last_input_time = get_tick_count();
++    }
++
+     reply->time = last_input_time;
+ }
+ 
+diff --git a/build/wineserver/request_ios.c b/build/wineserver/request_ios.c
+index eabeaa4..2aa26fc 100644
+--- a/build/wineserver/request_ios.c
++++ b/build/wineserver/request_ios.c
+@@ -86,38 +86,15 @@ static void master_socket_poll_event( struct fd *fd, int event );
+ 
+ static const struct object_ops master_socket_ops =
+ {
+-    sizeof(struct master_socket),  /* size */
+-    &no_type,                      /* type */
+-    master_socket_dump,            /* dump */
+-    no_add_queue,                  /* add_queue */
+-    NULL,                          /* remove_queue */
+-    NULL,                          /* signaled */
+-    NULL,                          /* satisfied */
+-    no_signal,                     /* signal */
+-    no_get_fd,                     /* get_fd */
+-    default_get_sync,              /* get_sync */
+-    default_map_access,            /* map_access */
+-    default_get_sd,                /* get_sd */
+-    default_set_sd,                /* set_sd */
+-    no_get_full_name,              /* get_full_name */
+-    no_lookup_name,                /* lookup_name */
+-    no_link_name,                  /* link_name */
+-    NULL,                          /* unlink_name */
+-    no_open_file,                  /* open_file */
+-    no_kernel_obj_list,            /* get_kernel_obj_list */
+-    no_close_handle,               /* close_handle */
+-    master_socket_destroy          /* destroy */
++    .size    = sizeof(struct master_socket),
++    .type    = &no_type,
++    .dump    = master_socket_dump,
++    .destroy = master_socket_destroy,
+ };
+ 
+ static const struct fd_ops master_socket_fd_ops =
+ {
+-    NULL,                          /* get_poll_events */
+-    master_socket_poll_event,      /* poll_event */
+-    NULL,                          /* flush */
+-    NULL,                          /* get_fd_type */
+-    NULL,                          /* ioctl */
+-    NULL,                          /* queue_async */
+-    NULL                           /* reselect_async */
++    .poll_event = master_socket_poll_event,
+ };
+ 
+ 
+@@ -172,51 +149,54 @@ void *set_reply_data_size( data_size_t size )
+ static const struct object_attributes empty_attributes;
+ 
+ /* return object attributes from the current request */
+-const struct object_attributes *get_req_object_attributes( const struct security_descriptor **sd,
+-                                                           struct unicode_str *name,
+-                                                           struct object **root )
++bool get_req_object_attributes( struct object_params *params )
+ {
+     const struct object_attributes *attr = get_req_data();
+     data_size_t size = get_req_data_size();
+ 
+-    if (root) *root = NULL;
++    params->root = NULL;
++    params->sd   = NULL;
+ 
+     if (!size)
+     {
+-        *sd = NULL;
+-        name->len = 0;
+-        return &empty_attributes;
++        params->name.len = 0;
++        params->attr     = 0;
++        params->objattr  = &empty_attributes;
++        return true;
+     }
+-
+     if ((size < sizeof(*attr)) || (size - sizeof(*attr) < attr->sd_len) ||
+         (size - sizeof(*attr) - attr->sd_len < attr->name_len))
+     {
+         set_error( STATUS_ACCESS_VIOLATION );
+-        return NULL;
++        return false;
+     }
+     if (attr->sd_len && !sd_is_valid( (const struct security_descriptor *)(attr + 1), attr->sd_len ))
+     {
+         set_error( STATUS_INVALID_SECURITY_DESCR );
+-        return NULL;
++        return false;
+     }
+     if ((attr->name_len & (sizeof(WCHAR) - 1)) || attr->name_len >= 65534)
+     {
+         set_error( STATUS_OBJECT_NAME_INVALID );
+-        return NULL;
++        return false;
+     }
+-    if (root && attr->rootdir && attr->name_len)
++    if (attr->rootdir && attr->name_len)
+     {
+-        if (!(*root = get_handle_obj( current->process, attr->rootdir, 0, NULL ))) return NULL;
++        if (!(params->root = get_handle_obj( current->process, attr->rootdir, 0, NULL ))) return false;
+     }
+-    *sd = attr->sd_len ? (const struct security_descriptor *)(attr + 1) : NULL;
+-    name->len = attr->name_len;
+-    name->str = (const WCHAR *)(attr + 1) + attr->sd_len / sizeof(WCHAR);
+-    return attr;
++    if (attr->sd_len) params->sd = (const struct security_descriptor *)(attr + 1);
++
++    params->name.len = attr->name_len;
++    params->name.str = (const WCHAR *)(attr + 1) + attr->sd_len / sizeof(WCHAR);
++    params->attr     = attr->attributes;
++    params->objattr  = attr;
++    return true;
+ }
+ 
+ /* return a pointer to the request data following an object attributes structure */
+-const void *get_req_data_after_objattr( const struct object_attributes *attr, data_size_t *len )
++const void *get_req_data_after_objattr( const struct object_params *params, data_size_t *len )
+ {
++    const struct object_attributes *attr = params->objattr;
+     data_size_t size = (sizeof(*attr) + (attr->sd_len & ~1) + (attr->name_len & ~1) + 3) & ~3;
+ 
+     if (attr == &empty_attributes || size >= get_req_data_size())
+@@ -648,8 +628,10 @@ static void master_socket_poll_event( struct fd *fd, int event )
+         ws_log("[wineserver] create_process returned %p", (void*)process);
+         if (process)
+         {
++            struct thread *thread;
+             ws_log("[wineserver] calling create_thread...");
+-            create_thread( -1, process, NULL );
++            thread = create_thread( -1, process, NULL );
++            if (thread) add_process_thread( process, thread );
+             ws_log("[wineserver] create_thread done, releasing...");
+             release_object( process );
+             ws_log("[wineserver] client fully connected!");
+diff --git a/build/wineserver/window_ios.c b/build/wineserver/window_ios.c
+index f8ddb2e..5533152 100644
+--- a/build/wineserver/window_ios.c
++++ b/build/wineserver/window_ios.c
+@@ -36,6 +36,8 @@
+ #include "user.h"
+ #include "unicode.h"
+ 
++static const struct ratio no_dpi;
++
+ /* a window property */
+ struct property
+ {
+@@ -74,9 +76,6 @@ struct window
+     struct region   *update_region;   /* update region (relative to window rect) */
+     unsigned int     style;           /* window style */
+     unsigned int     ex_style;        /* window extended style */
+-    lparam_t         id;              /* window id */
+-    mod_handle_t     instance;        /* creator instance */
+-    unsigned int     is_unicode : 1;  /* ANSI or unicode */
+     unsigned int     is_linked : 1;   /* is it linked into the parent z-order list? */
+     unsigned int     is_layered : 1;  /* has layered info been set? */
+     unsigned int     is_orphan : 1;   /* is window orphaned */
+@@ -84,45 +83,26 @@ struct window
+     unsigned int     color_key;       /* color key for a layered window */
+     unsigned int     alpha;           /* alpha value for a layered window */
+     unsigned int     layered_flags;   /* flags for a layered window */
+-    unsigned int     monitor_dpi;     /* DPI of the window monitor */
+-    lparam_t         user_data;       /* user-specific data */
+     WCHAR           *text;            /* window caption text */
+     data_size_t      text_len;        /* length of window caption */
+     unsigned int     paint_flags;     /* various painting flags */
+     int              prop_inuse;      /* number of in-use window properties */
+     int              prop_alloc;      /* number of allocated window properties */
+     struct property *properties;      /* window properties array */
+-    int              nb_extra_bytes;  /* number of extra bytes */
+-    char            *extra_bytes;     /* extra bytes storage */
+     window_shm_t    *shared;          /* window in session shared memory */
+ };
+ 
++C_ASSERT( sizeof(window_shm_t) == offsetof(window_shm_t, extra[0]) );
++
+ static void window_dump( struct object *obj, int verbose );
+ static void window_destroy( struct object *obj );
+ 
+ static const struct object_ops window_ops =
+ {
+-    sizeof(struct window),    /* size */
+-    &no_type,                 /* type */
+-    window_dump,              /* dump */
+-    no_add_queue,             /* add_queue */
+-    NULL,                     /* remove_queue */
+-    NULL,                     /* signaled */
+-    NULL,                     /* satisfied */
+-    no_signal,                /* signal */
+-    no_get_fd,                /* get_fd */
+-    default_get_sync,         /* get_sync */
+-    default_map_access,       /* map_access */
+-    default_get_sd,           /* get_sd */
+-    default_set_sd,           /* set_sd */
+-    no_get_full_name,         /* get_full_name */
+-    no_lookup_name,           /* lookup_name */
+-    no_link_name,             /* link_name */
+-    NULL,                     /* unlink_name */
+-    no_open_file,             /* open_file */
+-    no_kernel_obj_list,       /* get_kernel_obj_list */
+-    no_close_handle,          /* close_handle */
+-    window_destroy            /* destroy */
++    .size    = sizeof(struct window),
++    .type    = &no_type,
++    .dump    = window_dump,
++    .destroy = window_destroy,
+ };
+ 
+ /* flags that can be set by the client */
+@@ -177,12 +157,6 @@ static void window_destroy( struct object *obj )
+     if (win->class) release_class( win->class );
+     free( win->text );
+ 
+-    if (win->nb_extra_bytes)
+-    {
+-        memset( win->extra_bytes, 0x55, win->nb_extra_bytes );
+-        free( win->extra_bytes );
+-    }
+-
+     if (win->shared) free_shared_object( win->shared );
+ }
+ 
+@@ -200,6 +174,12 @@ static inline int is_desktop_window( const struct window *win )
+     return !win->parent;  /* only desktop windows have no parent */
+ }
+ 
++/* check if window is a toplevel or desktop window */
++static bool is_toplevel( const struct window *win )
++{
++    return !win->parent || is_desktop_window( win->parent );
++}
++
+ /* check if window is orphaned */
+ static int is_orphan_window( struct window *win )
+ {
+@@ -329,16 +309,18 @@ static void map_point_raw_to_virt( struct desktop *desktop, int *x, int *y )
+ }
+ 
+ /* get the per-monitor DPI for a window */
+-static unsigned int get_monitor_dpi( struct window *win )
++static struct ratio get_monitor_dpi( struct window *win )
+ {
+-    while (win->parent && !is_desktop_window( win->parent )) win = win->parent;
+-    return win->monitor_dpi;
++    while (!is_toplevel( win )) win = win->parent;
++    return win->shared->dpi;
+ }
+ 
+-static unsigned int get_window_dpi( struct window *win )
++static struct ratio get_window_dpi( struct window *win )
+ {
++    struct ratio dpi = {1, 1};
+     if (NTUSER_DPI_CONTEXT_IS_MONITOR_AWARE( win->shared->dpi_context )) return get_monitor_dpi( win );
+-    return NTUSER_DPI_CONTEXT_GET_DPI( win->shared->dpi_context );
++    dpi.num = NTUSER_DPI_CONTEXT_GET_DPI( win->shared->dpi_context );
++    return dpi;
+ }
+ 
+ /* link a window at the right place in the siblings list */
+@@ -400,6 +382,32 @@ static int link_window( struct window *win, struct window *previous )
+     return old_prev != win->entry.prev;
+ }
+ 
++static void set_window_monitor_dpi( struct window *win )
++{
++    struct monitor_info *info;
++
++    if (!(info = get_monitor_from_rect( win->desktop->winstation, &win->window_rect, 0 ))) return;
++
++    SHARED_WRITE_BEGIN( win->shared, window_shm_t )
++    {
++        shared->dpi     = info->dpi;
++        shared->raw_dpi = info->raw_dpi;
++    }
++    SHARED_WRITE_END;
++}
++
++/* attach or detach the parent window thread input if necessary */
++static void attach_parent_thread( struct window *win, bool attach )
++{
++    struct thread *thread = win->thread, *parent;
++
++    if (is_toplevel( win ) || !(parent = win->parent->thread) || parent == thread) return;
++
++    /* if parent belongs to a different thread and the window isn't top-level, attach / detach the two threads */
++    if (attach) attach_thread_input( thread->queue, parent->queue );
++    else detach_thread_input( thread->queue, parent->queue, win->desktop );
++}
++
+ /* change the parent of a window (or unlink the window if the new parent is NULL) */
+ static int set_parent_window( struct window *win, struct window *parent )
+ {
+@@ -417,23 +425,19 @@ static int set_parent_window( struct window *win, struct window *parent )
+ 
+     if (parent)
+     {
++        attach_parent_thread( win, false );
+         if (win->parent) release_object( win->parent );
+         win->parent = (struct window *)grab_object( parent );
++        attach_parent_thread( win, true );
+         link_window( win, WINPTR_TOP );
+ 
+-        if (!is_desktop_window( parent ))
++        if (is_desktop_window( parent )) set_window_monitor_dpi( win );
++        else SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+         {
+-            SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+-            {
+-                shared->dpi_context = parent->shared->dpi_context;
+-            }
+-            SHARED_WRITE_END;
++            shared->dpi         = parent->shared->dpi;
++            shared->raw_dpi     = parent->shared->raw_dpi;
+         }
+-
+-        /* if parent belongs to a different thread and the window isn't */
+-        /* top-level, attach the two threads */
+-        if (parent->thread && parent->thread != win->thread && !is_desktop_window(parent))
+-            attach_thread_input( win->thread, parent->thread );
++        SHARED_WRITE_END;
+ 
+         if (win->paint_flags & (PAINT_HAS_PIXEL_FORMAT | PAINT_PIXEL_FORMAT_CHILD))
+             update_pixel_format_flags( win );
+@@ -614,21 +618,24 @@ void post_desktop_message( struct desktop *desktop, unsigned int message,
+ 
+ /* create a new window structure (note: the window is not linked in the window tree) */
+ static struct window *create_window( struct window *parent, struct window *owner, atom_t atom,
+-                                     mod_handle_t class_instance, mod_handle_t instance )
++                                     mod_handle_t class_instance, bool ansi, unsigned int dpi_context,
++                                     struct ratio dpi, struct ratio raw_dpi )
+ {
+-    int extra_bytes;
++    data_size_t extra_size, private_size;
+     struct window *win = NULL;
+     struct desktop *desktop;
+     struct window_class *class;
+     struct obj_locator class_locator;
++    unsigned int fnid;
+ 
+     if (!(desktop = get_thread_desktop( current, DESKTOP_CREATEWINDOW ))) return NULL;
+ 
+-    if (!(class = grab_class( current->process, atom, class_instance, &extra_bytes, &class_locator )))
++    if (!(class = grab_class( current->process, atom, class_instance, &class_locator )))
+     {
+         release_object( desktop );
+         return NULL;
+     }
++    fnid = get_class_fnid( class, &extra_size, &private_size );
+ 
+     if (!parent)  /* null parent is only allowed for desktop or HWND_MESSAGE top window */
+     {
+@@ -644,7 +651,13 @@ static struct window *create_window( struct window *parent, struct window *owner
+              * via get_desktop_window(force=1). Auto-create one here so
+              * apps' first CreateWindowEx works. Mirrors the force=1 path
+              * in DECL_HANDLER(get_desktop_window). */
+-            if ((desktop->top_window = create_window( NULL, NULL, DESKTOP_ATOM, 0, 0 )))
++            static const struct monitor_info default_info = { .dpi = { USER_DEFAULT_SCREEN_DPI, 1 }, .raw_dpi = { USER_DEFAULT_SCREEN_DPI, 1 } };
++            static const struct rectangle desktop_rect = { 0, 0, 1, 1 };
++            const struct monitor_info *info;
++
++            if (!(info = get_monitor_from_rect( desktop->winstation, &desktop_rect, false ))) info = &default_info;
++            if ((desktop->top_window = create_window( NULL, NULL, DESKTOP_ATOM, 0, false, NTUSER_DPI_PER_MONITOR_AWARE,
++                                                      info->dpi, info->raw_dpi )))
+             {
+                 detach_window_thread( desktop->top_window );
+                 desktop->top_window->style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+@@ -705,55 +718,46 @@ static struct window *create_window( struct window *parent, struct window *owner
+     win->update_region  = NULL;
+     win->style          = 0;
+     win->ex_style       = 0;
+-    win->id             = 0;
+-    win->instance       = instance;
+-    win->is_unicode     = 1;
+     win->is_linked      = 0;
+     win->is_layered     = 0;
+     win->is_orphan      = 0;
+     win->set_foreground = 0;
+-    win->monitor_dpi    = USER_DEFAULT_SCREEN_DPI;
+-    win->user_data      = 0;
+     win->text           = NULL;
+     win->text_len       = 0;
+     win->paint_flags    = 0;
+     win->prop_inuse     = 0;
+     win->prop_alloc     = 0;
+     win->properties     = NULL;
+-    win->nb_extra_bytes = 0;
+-    win->extra_bytes    = NULL;
+     win->shared         = NULL;
+     win->window_rect = win->visible_rect = win->surface_rect = win->client_rect = empty_rect;
+     list_init( &win->children );
+     list_init( &win->unlinked );
+ 
+-    if (!(win->shared = alloc_shared_object( sizeof(*win->shared) ))) goto failed;
++    if (!(win->shared = alloc_shared_object( offsetof(window_shm_t, extra[extra_size]) ))) goto failed;
+     SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+     {
+-        shared->class       = class_locator;
+-        shared->dpi_context = NTUSER_DPI_PER_MONITOR_AWARE;
++        shared->class           = class_locator;
++        shared->dpi_context     = is_toplevel( win ) ? dpi_context : parent->shared->dpi_context;
++        shared->fnid            = fnid;
++        shared->private_size    = private_size;
++        shared->dpi             = dpi;
++        shared->raw_dpi         = raw_dpi;
++        shared->extra_size      = extra_size;
++        memset( (void *)&shared->info, 0, sizeof(shared->info) );
++        memset( (void *)shared->extra, 0, extra_size );
++        shared->info.wndproc    = get_class_wndproc( win->class, &ansi );
++        shared->ansi            = ansi;
+     }
+     SHARED_WRITE_END;
+ 
+-    if (extra_bytes)
+-    {
+-        if (!(win->extra_bytes = mem_alloc( extra_bytes ))) goto failed;
+-        memset( win->extra_bytes, 0, extra_bytes );
+-        win->nb_extra_bytes = extra_bytes;
+-    }
+     if (!(win->handle = alloc_user_handle( win, win->shared, NTUSER_OBJ_WINDOW ))) goto failed;
+     win->last_active = win->handle;
+ 
+-    /* if parent belongs to a different thread and the window isn't */
+-    /* top-level, attach the two threads */
+-    if (parent && parent->thread && parent->thread != current && !is_desktop_window(parent))
+-    {
+-        if (!attach_thread_input( current, parent->thread )) goto failed;
+-    }
+-    else  /* otherwise just make sure that the thread has a message queue */
+-    {
+-        if (!current->queue && !init_thread_queue( current )) goto failed;
+-    }
++    /* make sure that the thread has a message queue */
++    if (!current->queue && !init_thread_queue( current )) goto failed;
++
++    /* attach the parent thread if necessary */
++    attach_parent_thread( win, true );
+ 
+     /* put it on parent unlinked list */
+     if (parent) list_add_head( &parent->unlinked, &win->entry );
+@@ -871,30 +875,30 @@ static inline void inc_window_paint_count( struct window *win, int incr )
+ }
+ 
+ /* map a point between different DPI scaling levels */
+-static void map_dpi_point( struct window *win, int *x, int *y, unsigned int from, unsigned int to )
++static void map_dpi_point( struct window *win, int *x, int *y, struct ratio from, struct ratio to )
+ {
+-    if (!from) from = get_monitor_dpi( win );
+-    if (!to) to = get_monitor_dpi( win );
+-    if (from == to) return;
++    if (!from.num) from = get_monitor_dpi( win );
++    if (!to.num) to = get_monitor_dpi( win );
++    if (from.num == to.num) return;
+     *x = scale_dpi( *x, from, to );
+     *y = scale_dpi( *y, from, to );
+ }
+ 
+ /* map a window rectangle between different DPI scaling levels */
+-static void map_dpi_rect( struct window *win, struct rectangle *rect, unsigned int from, unsigned int to )
++static void map_dpi_rect( struct window *win, struct rectangle *rect, struct ratio from, struct ratio to )
+ {
+-    if (!from) from = get_monitor_dpi( win );
+-    if (!to) to = get_monitor_dpi( win );
+-    if (from == to) return;
++    if (!from.num) from = get_monitor_dpi( win );
++    if (!to.num) to = get_monitor_dpi( win );
++    if (from.num == to.num) return;
+     scale_dpi_rect( rect, from, to );
+ }
+ 
+ /* map a region between different DPI scaling levels */
+-static void map_dpi_region( struct window *win, struct region *region, unsigned int from, unsigned int to )
++static void map_dpi_region( struct window *win, struct region *region, struct ratio from, struct ratio to )
+ {
+-    if (!from) from = get_monitor_dpi( win );
+-    if (!to) to = get_monitor_dpi( win );
+-    if (from == to) return;
++    if (!from.num) from = get_monitor_dpi( win );
++    if (!to.num) to = get_monitor_dpi( win );
++    if (from.num == to.num) return;
+     scale_region( region, from, to );
+ }
+ 
+@@ -909,7 +913,7 @@ static inline void client_to_screen( struct window *win, int *x, int *y )
+ }
+ 
+ /* convert coordinates from screen to client coords and dpi */
+-static void screen_to_client( struct window *win, int *x, int *y, unsigned int dpi )
++static void screen_to_client( struct window *win, int *x, int *y, struct ratio dpi )
+ {
+     int offset_x = 0, offset_y = 0;
+ 
+@@ -965,7 +969,7 @@ static int is_parent_composited( struct window *win )
+ }
+ 
+ /* check if point is inside the window, and map to window dpi */
+-static int is_point_in_window( struct window *win, int *x, int *y, unsigned int dpi )
++static int is_point_in_window( struct window *win, int *x, int *y, struct ratio dpi )
+ {
+     if (!(win->style & WS_VISIBLE)) return 0; /* not visible */
+     if ((win->style & (WS_POPUP|WS_CHILD|WS_DISABLED)) == (WS_CHILD|WS_DISABLED))
+@@ -1094,7 +1098,7 @@ user_handle_t shallow_window_from_point( struct desktop *desktop, int x, int y )
+     {
+         int x_child = x, y_child = y;
+ 
+-        if (!is_point_in_window( ptr, &x_child, &y_child, 0 )) continue;  /* skip it */
++        if (!is_point_in_window( ptr, &x_child, &y_child, no_dpi )) continue;  /* skip it */
+         return ptr->handle;
+     }
+     return desktop->top_window->handle;
+@@ -1109,14 +1113,14 @@ struct thread *window_thread_from_point( user_handle_t scope, int x, int y )
+ 
+     map_point_raw_to_virt( win->desktop, &x, &y );
+ 
+-    screen_to_client( win, &x, &y, 0 );
++    screen_to_client( win, &x, &y, no_dpi );
+     win = child_window_from_point( win, x, y );
+     if (!win->thread) return NULL;
+     return (struct thread *)grab_object( win->thread );
+ }
+ 
+ /* return list of all windows containing point (in absolute coords) */
+-static int all_windows_from_point( struct window *top, int x, int y, unsigned int dpi,
++static int all_windows_from_point( struct window *top, int x, int y, struct ratio dpi,
+                                    struct user_handle_array *array )
+ {
+     if (!is_desktop_window( top ) && !is_desktop_window( top->parent ))
+@@ -1950,7 +1954,7 @@ static struct region *expose_window( struct window *win, const struct rectangle
+         }
+     }
+ 
+-    if (win->parent && !is_desktop_window( win->parent ))
++    if (!is_toplevel( win ))
+     {
+         /* make it relative to the old window pos for subtracting */
+         offset_region( new_vis_rgn, win->window_rect.left - old_window_rect->left,
+@@ -2002,6 +2006,9 @@ static void set_window_pos( struct window *win, struct window *previous,
+     if (swp_flags & SWP_SHOWWINDOW) win->style |= WS_VISIBLE;
+     else if (swp_flags & SWP_HIDEWINDOW) win->style &= ~WS_VISIBLE;
+ 
++    /* update window monitor dpi for toplevel windows */
++    if (is_toplevel( win )) set_window_monitor_dpi( win );
++
+     /* keep children at the same position relative to top right corner when the parent is mirrored */
+     if (win->ex_style & WS_EX_LAYOUTRTL)
+     {
+@@ -2168,6 +2175,13 @@ static void set_window_region( struct window *win, struct region *region, int re
+     clear_error();  /* we ignore out of memory errors since the region has been set */
+ }
+ 
++/* check if DPI awareness contexts are compatible */
++static bool is_dpi_awareness_compatible( struct window *win, struct window *other )
++{
++    unsigned int awareness = NTUSER_DPI_CONTEXT_GET_AWARENESS( win->shared->dpi_context );
++    return awareness == NTUSER_DPI_CONTEXT_GET_AWARENESS( other->shared->dpi_context );
++}
++
+ 
+ /* destroy a window */
+ void free_window_handle( struct window *win )
+@@ -2200,7 +2214,7 @@ void free_window_handle( struct window *win )
+         else
+             send_notify_message( child->handle, WM_WINE_DESTROYWINDOW, 0, 0 );
+     }
+-    LIST_FOR_EACH_ENTRY_SAFE( child, next, &win->children, struct window, entry )
++    LIST_FOR_EACH_ENTRY_SAFE( child, next, &win->unlinked, struct window, entry )
+     {
+         if (!child->handle) continue;
+         if (!win->thread || !child->thread || win->thread == child->thread)
+@@ -2260,7 +2274,6 @@ DECL_HANDLER(create_window)
+     struct window *win, *parent = NULL, *owner = NULL;
+     struct unicode_str cls_name = get_req_unicode_str();
+     struct atom_table *table = get_user_atom_table();
+-    unsigned int dpi_context;
+     atom_t atom = req->atom;
+ 
+     reply->handle = 0;
+@@ -2289,20 +2302,20 @@ DECL_HANDLER(create_window)
+                 owner = owner->parent;
+     }
+ 
+-    if (!atom) atom = find_atom( table, &cls_name );
+-
+-    if (!(win = create_window( parent, owner, atom, req->class_instance, req->instance ))) return;
++    if (!atom) atom = find_atom( table, cls_name );
+ 
+-    if (parent && !is_desktop_window( parent ))
+-        dpi_context = parent->shared->dpi_context;
+-    else if (!parent || !NTUSER_DPI_CONTEXT_IS_MONITOR_AWARE( req->dpi_context ))
+-        dpi_context = req->dpi_context;
+-    else
+-        dpi_context = win->shared->dpi_context;
++    if (!(win = create_window( parent, owner, atom, req->class_instance, !!req->ansi,
++                               req->dpi_context, req->dpi, req->raw_dpi )))
++        return;
+ 
+     SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+     {
+-        shared->dpi_context = dpi_context;
++        shared->info.instance   = req->instance;
++        if (parent && !is_desktop_window( parent ))
++        {
++            shared->dpi         = parent->shared->dpi;
++            shared->raw_dpi     = parent->shared->raw_dpi;
++        }
+     }
+     SHARED_WRITE_END;
+ 
+@@ -2312,11 +2325,36 @@ DECL_HANDLER(create_window)
+     reply->handle      = win->handle;
+     reply->parent      = win->parent ? win->parent->handle : 0;
+     reply->owner       = win->owner;
+-    reply->extra       = win->nb_extra_bytes;
+     reply->class_ptr   = get_class_client_ptr( win->class );
+ }
+ 
+ 
++/* Set the window builtin class FNID */
++DECL_HANDLER(set_window_fnid)
++{
++    data_size_t extra_size, private_size;
++    struct obj_locator class_locator;
++    struct window_class *class;
++    struct window *win;
++    unsigned int fnid;
++
++    if (!(win = get_window( req->handle ))) return;
++    if (is_desktop_window( win ) && win->thread != current) return set_error( STATUS_ACCESS_DENIED );
++
++    if (!(class = grab_class( current->process, req->atom, 0, &class_locator ))) return;
++    fnid = get_class_fnid( class, &extra_size, &private_size );
++
++    if (win->shared->fnid && win->shared->fnid != fnid) set_error( STATUS_INVALID_PARAMETER );
++    else SHARED_WRITE_BEGIN( win->shared, window_shm_t )
++    {
++        shared->fnid            = fnid;
++        shared->private_size    = private_size;
++    }
++    SHARED_WRITE_END;
++    release_class( class );
++}
++
++
+ /* set the parent of a window */
+ DECL_HANDLER(set_parent)
+ {
+@@ -2325,6 +2363,10 @@ DECL_HANDLER(set_parent)
+     if (!(win = get_window( req->handle ))) return;
+     if (req->parent && !(parent = get_window( req->parent ))) return;
+ 
++    /* reparenting to a window with a different DPI awareness isn't allowed */
++    if (parent && !is_desktop_window( parent ) && !is_dpi_awareness_compatible( win, parent ))
++        return set_error( STATUS_INVALID_STATE_TRANSITION );
++
+     if (is_desktop_window(win) || is_orphan_window( win ) || (parent && is_orphan_window( parent )))
+     {
+         set_error( STATUS_INVALID_PARAMETER );
+@@ -2357,13 +2399,18 @@ DECL_HANDLER(destroy_window)
+ /* retrieve the desktop window for the current thread */
+ DECL_HANDLER(get_desktop_window)
+ {
++    static const struct monitor_info default_info = { .dpi = { USER_DEFAULT_SCREEN_DPI, 1 }, .raw_dpi = { USER_DEFAULT_SCREEN_DPI, 1 } };
++    static const struct rectangle desktop_rect = { 0, 0, 1, 1 };
++    const struct monitor_info *info = NULL;
++
+     struct desktop *desktop = get_thread_desktop( current, 0 );
+ 
+     if (!desktop) return;
+ 
+     if (!desktop->top_window && req->force)  /* create it */
+     {
+-        if ((desktop->top_window = create_window( NULL, NULL, DESKTOP_ATOM, 0, 0 )))
++        if (!(info = get_monitor_from_rect( desktop->winstation, &desktop_rect, false ))) info = &default_info;
++        if ((desktop->top_window = create_window( NULL, NULL, DESKTOP_ATOM, 0, false, NTUSER_DPI_PER_MONITOR_AWARE, info->dpi, info->raw_dpi )))
+         {
+             detach_window_thread( desktop->top_window );
+             desktop->top_window->style  = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+@@ -2400,8 +2447,10 @@ DECL_HANDLER(get_desktop_window)
+         static const WCHAR messageW[] = {'M','e','s','s','a','g','e'};
+         static const struct unicode_str name = { messageW, sizeof(messageW) };
+         struct atom_table *table = get_user_atom_table();
+-        atom_t atom = add_atom( table, &name );
+-        if (atom && (desktop->msg_window = create_window( NULL, NULL, atom, 0, 0 )))
++        atom_t atom = add_atom( table, name );
++
++        if (!info && !(info = get_monitor_from_rect( desktop->winstation, &desktop_rect, false ))) info = &default_info;
++        if (atom && (desktop->msg_window = create_window( NULL, NULL, atom, 0, false, NTUSER_DPI_PER_MONITOR_AWARE, info->dpi, info->raw_dpi )))
+         {
+             detach_window_thread( desktop->msg_window );
+             desktop->msg_window->style = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+@@ -2451,25 +2500,14 @@ DECL_HANDLER(get_window_info)
+     if (!(win = get_window( req->handle ))) return;
+ 
+     reply->last_active = win->handle;
+-    reply->is_unicode  = win->is_unicode;
+     if (get_user_object( win->last_active, NTUSER_OBJ_WINDOW )) reply->last_active = win->last_active;
+ 
+     switch (req->offset)
+     {
+     case GWL_STYLE:       reply->info = win->style;  break;
+     case GWL_EXSTYLE:     reply->info = win->ex_style;  break;
+-    case GWLP_ID:         reply->info = win->id;  break;
+-    case GWLP_HINSTANCE:  reply->info = win->instance;  break;
+-    case GWLP_WNDPROC:    reply->info = win->is_unicode;  break;
+-    case GWLP_USERDATA:   reply->info = win->user_data;  break;
+     default:
+-        if (req->size > sizeof(reply->info) || req->offset < 0 ||
+-            req->offset > win->nb_extra_bytes - (int)req->size)
+-        {
+-            set_win32_error( ERROR_INVALID_INDEX );
+-            break;
+-        }
+-        memcpy( &reply->info, win->extra_bytes + req->offset, req->size );
++        if (req->size) set_win32_error( ERROR_INVALID_INDEX );
+         break;
+     }
+ }
+@@ -2483,7 +2521,6 @@ DECL_HANDLER(init_window_info)
+     if (!(win = get_window( req->handle ))) return;
+     win->style = req->style;
+     win->ex_style = req->ex_style;
+-    win->is_unicode = req->is_unicode;
+ 
+     /* changing window style triggers a non-client paint */
+     win->paint_flags |= PAINT_NONCLIENT;
+@@ -2494,6 +2531,7 @@ DECL_HANDLER(init_window_info)
+ DECL_HANDLER(set_window_info)
+ {
+     struct window *win;
++    bool ansi;
+ 
+     if (!(win = get_window( req->handle ))) return;
+     if (is_desktop_window( win ) && win->thread != current)
+@@ -2502,46 +2540,55 @@ DECL_HANDLER(set_window_info)
+         return;
+     }
+ 
+-    switch (req->offset)
++    SHARED_WRITE_BEGIN( win->shared, window_shm_t )
+     {
+-    case GWL_STYLE:
+-        reply->old_info = win->style;
+-        win->style = req->new_info;
+-        fix_window_ex_style( win );
+-        /* changing window style triggers a non-client paint */
+-        win->paint_flags |= PAINT_NONCLIENT;
+-        break;
+-    case GWL_EXSTYLE:
+-        reply->old_info = win->ex_style;
+-        set_window_ex_style( win, req->new_info );
+-        break;
+-    case GWLP_ID:
+-        reply->old_info = win->id;
+-        win->id = req->new_info;
+-        break;
+-    case GWLP_HINSTANCE:
+-        reply->old_info = win->instance;
+-        win->instance = req->new_info;
+-        break;
+-    case GWLP_WNDPROC:
+-        reply->old_info = win->is_unicode;
+-        win->is_unicode = req->new_info;
+-        break;
+-    case GWLP_USERDATA:
+-        reply->old_info = win->user_data;
+-        win->user_data = req->new_info;
+-        break;
+-    default:
+-        if (req->size > sizeof(req->new_info) || req->offset < 0 ||
+-            req->offset > win->nb_extra_bytes - (int)req->size)
++        switch (req->offset)
+         {
+-            set_win32_error( ERROR_INVALID_INDEX );
++        case GWL_STYLE:
++            reply->old_info = win->style;
++            win->style = req->new_info;
++            fix_window_ex_style( win );
++            /* changing window style triggers a non-client paint */
++            win->paint_flags |= PAINT_NONCLIENT;
++            break;
++        case GWL_EXSTYLE:
++            reply->old_info = win->ex_style;
++            set_window_ex_style( win, req->new_info );
++            break;
++        case GWLP_ID:
++            reply->old_info = shared->info.id;
++            shared->info.id = req->new_info;
++            break;
++        case GWLP_HINSTANCE:
++            reply->old_info = shared->info.instance;
++            shared->info.instance = req->new_info;
++            break;
++        case GWLP_WNDPROC:
++            reply->old_info = shared->info.wndproc;
++            reply->old_ansi = shared->ansi;
++            if (req->new_info) shared->info.wndproc = req->new_info;
++            else shared->info.wndproc = get_class_wndproc( win->class, &ansi );
++            shared->ansi = req->new_ansi; /* class ansi is actually ignored */
++            break;
++        case GWLP_USERDATA:
++            reply->old_info = shared->info.user_data;
++            if (req->size > sizeof(WORD)) shared->info.user_data = req->new_info;
++            else shared->info.user_data = MAKELONG(req->new_info, shared->info.user_data >> 16);
++            break;
++        default:
++            if (req->size > sizeof(req->new_info) || req->offset < 0 ||
++                req->offset > shared->extra_size - (int)req->size ||
++                (!req->internal && req->offset < shared->private_size))
++            {
++                set_win32_error( ERROR_INVALID_INDEX );
++                break;
++            }
++            memcpy( &reply->old_info, (char *)shared->extra + req->offset, req->size );
++            memcpy( (char *)shared->extra + req->offset, &req->new_info, req->size );
+             break;
+         }
+-        memcpy( &reply->old_info, win->extra_bytes + req->offset, req->size );
+-        memcpy( win->extra_bytes + req->offset, &req->new_info, req->size );
+-        break;
+     }
++    SHARED_WRITE_END;
+ }
+ 
+ 
+@@ -2619,7 +2666,7 @@ DECL_HANDLER(get_class_windows)
+     user_handle_t *data;
+     unsigned int count = 0, max_count = get_reply_max_size() / sizeof(*data);
+ 
+-    if (!atom && cls_name.len && !(atom = find_atom( table, &cls_name ))) return;
++    if (!atom && cls_name.len && !(atom = find_atom( table, cls_name ))) return;
+     if (req->parent && !(parent = get_window( req->parent ))) return;
+ 
+     if (req->child)
+@@ -2789,7 +2836,6 @@ DECL_HANDLER(set_window_pos)
+     win->paint_flags = (win->paint_flags & ~PAINT_CLIENT_FLAGS) | (req->paint_flags & PAINT_CLIENT_FLAGS);
+     if (win->paint_flags & PAINT_HAS_PIXEL_FORMAT) update_pixel_format_flags( win );
+ 
+-    win->monitor_dpi = req->monitor_dpi;
+     old_style = win->style;
+     old_window = win->window_rect;
+     old_client = win->client_rect;
+@@ -2818,29 +2864,41 @@ DECL_HANDLER(get_window_rectangles)
+ 
+     reply->window  = win->window_rect;
+     reply->client  = win->client_rect;
++    reply->visible  = win->visible_rect;
+ 
+     switch (req->relative)
+     {
+     case COORDS_CLIENT:
+         offset_rect( &reply->window, -win->client_rect.left, -win->client_rect.top );
+         offset_rect( &reply->client, -win->client_rect.left, -win->client_rect.top );
+-        if (win->ex_style & WS_EX_LAYOUTRTL) mirror_rect( &win->client_rect, &reply->window );
++        offset_rect( &reply->visible, -win->client_rect.left, -win->client_rect.top );
++        if (win->ex_style & WS_EX_LAYOUTRTL)
++        {
++            mirror_rect( &win->client_rect, &reply->window );
++            mirror_rect( &win->client_rect, &reply->visible );
++        }
+         break;
+     case COORDS_WINDOW:
+         offset_rect( &reply->window, -win->window_rect.left, -win->window_rect.top );
+         offset_rect( &reply->client, -win->window_rect.left, -win->window_rect.top );
+-        if (win->ex_style & WS_EX_LAYOUTRTL) mirror_rect( &win->window_rect, &reply->client );
++        if (win->ex_style & WS_EX_LAYOUTRTL)
++        {
++            mirror_rect( &win->window_rect, &reply->client );
++            mirror_rect( &win->window_rect, &reply->visible );
++        }
+         break;
+     case COORDS_PARENT:
+         if (win->parent && win->parent->ex_style & WS_EX_LAYOUTRTL)
+         {
+             mirror_rect( &win->parent->client_rect, &reply->window );
+             mirror_rect( &win->parent->client_rect, &reply->client );
++            mirror_rect( &win->parent->client_rect, &reply->visible );
+         }
+         break;
+     case COORDS_SCREEN:
+         client_to_screen_rect( win->parent, &reply->window );
+         client_to_screen_rect( win->parent, &reply->client );
++        client_to_screen_rect( win->parent, &reply->visible );
+         break;
+     default:
+         set_error( STATUS_INVALID_PARAMETER );
+@@ -2848,6 +2906,7 @@ DECL_HANDLER(get_window_rectangles)
+     }
+     map_dpi_rect( win, &reply->window, get_window_dpi( win ), req->dpi );
+     map_dpi_rect( win, &reply->client, get_window_dpi( win ), req->dpi );
++    map_dpi_rect( win, &reply->visible, get_window_dpi( win ), req->dpi );
+ }
+ 
+ 
+@@ -3088,12 +3147,17 @@ DECL_HANDLER(get_update_region)
+ 
+ 
+ /* update the z order of a window so that a given rectangle is fully visible */
+-DECL_HANDLER(update_window_zorder)
++void set_window_rect_visible( user_handle_t window, struct rectangle rect )
+ {
+-    struct rectangle tmp, rect = req->rect;
+-    struct window *ptr, *win = get_window( req->window );
++    struct window *ptr, *win;
++    struct rectangle tmp;
++
++    if (!(win = get_window( window )) || !win->parent || !is_visible( win )) return;  /* nothing to do */
+ 
+-    if (!win || !win->parent || !is_visible( win )) return;  /* nothing to do */
++    map_point_raw_to_virt( win->desktop, &rect.left, &rect.top );
++    map_point_raw_to_virt( win->desktop, &rect.right, &rect.bottom );
++    rect.right = max( rect.left + 1, rect.right );
++    rect.bottom = max( rect.top + 1, rect.bottom );
+ 
+     LIST_FOR_EACH_ENTRY( ptr, &win->parent->children, struct window, entry )
+     {
+@@ -3120,6 +3184,10 @@ DECL_HANDLER(update_window_zorder)
+     }
+ }
+ 
++DECL_HANDLER(update_window_zorder)
++{
++    set_window_rect_visible( req->window, req->rect );
++}
+ 
+ /* mark parts of a window as needing a redraw */
+ DECL_HANDLER(redraw_window)
+@@ -3166,7 +3234,7 @@ DECL_HANDLER(set_window_property)
+ 
+     if (name.len)
+     {
+-        atom_t atom = add_atom( table, &name );
++        atom_t atom = add_atom( table, name );
+         if (atom)
+         {
+             set_property( win, atom, req->data, PROP_TYPE_STRING );
+@@ -3186,7 +3254,7 @@ DECL_HANDLER(remove_window_property)
+ 
+     if (win)
+     {
+-        atom_t atom = name.len ? find_atom( table, &name ) : req->atom;
++        atom_t atom = name.len ? find_atom( table, name ) : req->atom;
+         if (atom) reply->data = remove_property( win, atom );
+     }
+ }
+@@ -3201,7 +3269,7 @@ DECL_HANDLER(get_window_property)
+ 
+     if (win)
+     {
+-        atom_t atom = name.len ? find_atom( table, &name ) : req->atom;
++        atom_t atom = name.len ? find_atom( table, name ) : req->atom;
+         if (atom) reply->data = get_property( win, atom );
+     }
+ }

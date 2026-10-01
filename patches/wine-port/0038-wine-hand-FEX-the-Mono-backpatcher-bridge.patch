@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 12 Aug 2026 02:35:31 +0800
+Subject: [PATCH] wine: hand FEX the Mono backpatcher bridge
+
+Two hops, both in safe directions. PE to unix via WINE_UNIX_CALL obtains the
+shared struct's address; PE to PE via the arm64ec_redirect_ptr'd export hands it
+to FEX. Nothing here calls an ARM64EC export from native Mach-O code, which is
+what crashed every ml613 launch.
+
+The unixlib enum entry is APPENDED. Inserting one renumbers every later ordinal
+and silently misroutes existing calls.
+
+FEX publishes its struct offsets on receipt but leaves mono_base at zero, so the
+native Mach handler stays inert until InvalidationTracker recognises the Mono
+module - Mono is not loaded at process init, so the ordering falls out of the
+design rather than needing to be enforced. Off iOS the export is absent, the
+pointer is NULL, and this is silently skipped.
+
+(cherry picked from commit a8ac939b45f115df45ff2a2a4762a250c3c50534)
+Madeira-commit: 11fbb7b6dc5bff73a1ea48ca853796cb15278413
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 24 ++++++++++++++++++++++++
+ dlls/ntdll/unixlib.h        |  1 +
+ 2 files changed, 25 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 37f025dc990..d813a072da4 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -48,6 +48,7 @@ static BOOLEAN  (WINAPI *pBTCpu64IsProcessorFeaturePresent)(UINT);
+  * #ifdef guard because PE-side builds don't have an iOS-specific
+  * macro (target is arm64ec-windows in all cases). */
+ static void     (WINAPI *pBTCpu64IosAddAliasMapping)(unsigned long long, unsigned long long, unsigned long long);
++static void     (WINAPI *pBTCpu64IosSetMonoBridge)(unsigned long long);  /* ml648 */
+ /* ml618: iOS-only. MUST be obtained via GET_PTR (arm64ec_redirect_ptr), never via a
+  * raw base+RVA lookup — see the registration comment below. */
+ static unsigned int (WINAPI *pBTCpu64IosReleaseThreadHolds)(void*, unsigned long long*, unsigned int*, unsigned int*);
+@@ -620,6 +621,7 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+     GET_PTR( BTCpu64FlushInstructionCache );
+     GET_PTR( BTCpu64IosAddAliasMapping );  /* iOS-only; NULL on non-iOS hosts. */
+     GET_PTR( BTCpu64IosReleaseThreadHolds );  /* iOS-only; ml618 leaked-hold release. */
++    GET_PTR( BTCpu64IosSetMonoBridge );  /* iOS-only; ml648 Mono backpatcher bridge. */
+     GET_PTR( BTCpu64IsProcessorFeaturePresent );
+     GET_PTR( BTCpu64NotifyMemoryDirty );
+     GET_PTR( BTCpu64NotifyReadFile );
+@@ -661,6 +663,28 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+     /* No else — on non-iOS hosts pBTCpu64IosAddAliasMapping is naturally NULL,
+      * which is silent + correct: the bridge has nothing to do off-iOS. */
+ 
++    /* iOS-Mythic ml648: HAND FEX THE MONO-BACKPATCHER BRIDGE.
++     *
++     * Two hops, both in safe directions. PE -> unix via WINE_UNIX_CALL gets the
++     * shared struct's address; PE -> PE via the arm64ec_redirect_ptr'd export
++     * hands it to FEX. Nothing here calls an ARM64EC export from native Mach-O
++     * code, which is what crashed every ml613 launch.
++     *
++     * FEX publishes its struct offsets on receipt but leaves mono_base at 0, so
++     * the native Mach handler stays inert until InvalidationTracker recognises
++     * the Mono module. Off iOS the export is absent, the pointer is NULL, and
++     * this is silently skipped. */
++    if (pBTCpu64IosSetMonoBridge)
++    {
++        ULONG64 bridge = 0;
++        NTSTATUS st = WINE_UNIX_CALL( unix_ios_mono_bridge_ptr, &bridge );
++        if (!st && bridge)
++            pBTCpu64IosSetMonoBridge( bridge );
++        else
++            ERR( "ml648: mono bridge unavailable (status %lx, ptr %s)\n",
++                 st, bridge ? "set" : "NULL" );
++    }
++
+     /* iOS-Mythic ml618: REGISTER THE LEAKED-HOLD RELEASE CALLBACK.
+      *
+      * ml611/ml616/ml617 all froze the whole app the same way: a thread dies in
+diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
+index 80ae3093e4d..48f75344ce7 100644
+--- a/dlls/ntdll/unixlib.h
++++ b/dlls/ntdll/unixlib.h
+@@ -135,6 +135,7 @@ enum ntdll_unix_funcs
+      * ordinal and silently mismatches the PE and unix halves. */
+     unix_ios_register_hold_release,
+     unix_ios_jit_alias_probe,   /* ml631 — APPEND ONLY (see note above) */
++    unix_ios_mono_bridge_ptr,   /* ml648 — APPEND ONLY: inserting renumbers every later ordinal */
+ };
+ 
+ extern unixlib_handle_t __wine_unixlib_handle;

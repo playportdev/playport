@@ -1,0 +1,500 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: 125hz <nickfugitives@gmail.com>
+Date: Fri, 25 Sep 2026 00:37:48 -0500
+Subject: [PATCH] xinput: read Madeira host controller snapshots through win32u
+
+Extract the XInput portion of 6befa2ba20f without its DEP/backend changes.
+Add the host query, architecture-neutral state/capability payloads and WOW64
+pointer widening, preserving HID fallback. Serialize host keystroke edges,
+respect XInputEnable, validate output arguments and keep audio checks scoped
+to the requested user. Add a standalone Windows host-path API regression test.
+
+Requires the paired Madeira ios_gamepad_query implementation when WINE_IOS
+is enabled. No submodule, binary, or unrelated fork changes.
+
+Co-Authored-By: Codex <noreply@openai.com>
+Signed-off-by: 125hz <nickfugitives@gmail.com>
+Madeira-commit: feb96ad2be4c99a95b45b5e68d9e798f21b61bf2
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/win32u/sysparams.c    | 18 ++++++++
+ dlls/wow64win/user.c       |  5 +++
+ dlls/xinput1_1/Makefile.in |  2 +-
+ dlls/xinput1_2/Makefile.in |  2 +-
+ dlls/xinput1_3/Makefile.in |  2 +-
+ dlls/xinput1_3/main.c      | 92 +++++++++++++++++++++++++++++++++++---
+ dlls/xinput1_4/Makefile.in |  2 +-
+ dlls/xinputuap/Makefile.in |  2 +-
+ include/ntuser.h           | 29 ++++++++++++
+ tools/tests/xinput-host.c  | 82 +++++++++++++++++++++++++++++++++
+ tools/tests/xinput-host.md | 23 ++++++++++
+ 11 files changed, 249 insertions(+), 10 deletions(-)
+ create mode 100644 tools/tests/xinput-host.c
+ create mode 100644 tools/tests/xinput-host.md
+
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 6ed5b772320..e3fb4c72a58 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -7694,6 +7694,13 @@ ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code )
+     }
+ }
+ 
++/* ml668: the gamepad slot reader, in build/win32u-unix/driver_ios.c (same
++ * unix library). Declared rather than headered for the same reason every other
++ * winios bridge symbol in that file is. */
++#ifdef WINE_IOS
++extern ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer );
++#endif
++
+ /***********************************************************************
+  *	     NtUserCallTwoParam    (win32u.@)
+  */
+@@ -7732,6 +7739,17 @@ ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code
+         *(RECT *)arg1 = get_virtual_screen_rect( no_dpi, arg2 );
+         return 1;
+ 
++    /* Madeira/iOS (ml668): the host gamepad slot. Body in
++     * build/win32u-unix/driver_ios.c; arg1 packs the user index in its low
++     * byte and a NtUserGamepadOp_* selector above it, arg2 is the guest
++     * output buffer (translated by wow64win for a 32-bit caller). */
++    case NtUserCallTwoParam_GetGamepadState:
++#ifdef WINE_IOS
++        return ios_gamepad_query( arg1 & 0xff, (arg1 >> 8) & 0xff, (void *)arg2 );
++#else
++        return 0;   /* no host gamepad transport off iOS -- see ntuser.h */
++#endif
++
+     /* temporary exports */
+     case NtUserAllocWinProc:
+         return (UINT_PTR)alloc_winproc( (WNDPROC)arg1, arg2 );
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index 92c1877566b..e268a67f646 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -1825,6 +1825,11 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
+             return TRUE;
+         }
+ 
++    case NtUserCallTwoParam_GetGamepadState:
++        /* The state/capabilities payload contains no pointers and has the
++         * same layout on both architectures. Only widen the output pointer. */
++        return NtUserCallTwoParam( arg1, (UINT_PTR)UlongToPtr( arg2 ), code );
++
+     default:
+         return NtUserCallTwoParam( arg1, arg2, code );
+     }
+diff --git a/dlls/xinput1_1/Makefile.in b/dlls/xinput1_1/Makefile.in
+index d68c4cd8166..844bf4ced60 100644
+--- a/dlls/xinput1_1/Makefile.in
++++ b/dlls/xinput1_1/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE    = xinput1_1.dll
+-IMPORTS   = hid setupapi advapi32 user32
++IMPORTS   = hid setupapi advapi32 user32 win32u
+ PARENTSRC = ../xinput1_3
+ 
+ VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
+diff --git a/dlls/xinput1_2/Makefile.in b/dlls/xinput1_2/Makefile.in
+index 308e0c821c9..5df8c42eea7 100644
+--- a/dlls/xinput1_2/Makefile.in
++++ b/dlls/xinput1_2/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE    = xinput1_2.dll
+-IMPORTS   = hid setupapi advapi32 user32
++IMPORTS   = hid setupapi advapi32 user32 win32u
+ PARENTSRC = ../xinput1_3
+ 
+ VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
+diff --git a/dlls/xinput1_3/Makefile.in b/dlls/xinput1_3/Makefile.in
+index ade51bb5d29..ebc61aa8feb 100644
+--- a/dlls/xinput1_3/Makefile.in
++++ b/dlls/xinput1_3/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = xinput1_3.dll
+ IMPORTLIB = xinput
+-IMPORTS   = hid setupapi advapi32 user32
++IMPORTS   = hid setupapi advapi32 user32 win32u
+ 
+ VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
+ VER_PRODUCTVERSION      = 9,15,779,0000
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+index 8530b028d5e..01020e93d59 100644
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -42,6 +42,11 @@
+ #include "devguid.h"
+ #include "xinput.h"
+ 
++/* Madeira (ml668): NtUserCallTwoParam_GetGamepadState and its inline wrapper.
++ * win32u.dll is in IMPORTS for this module and for every module that shares
++ * this source through PARENTSRC (xinput1_1/1_2/1_4/xinputuap). */
++#include "ntuser.h"
++
+ #include "wine/debug.h"
+ 
+ DEFINE_GUID(GUID_DEVINTERFACE_WINEXINPUT,0x6c53d5fd,0x6480,0x440f,0xb6,0x18,0x47,0x67,0x50,0xc5,0xe1,0xa6);
+@@ -793,6 +798,34 @@ static void start_update_thread(void)
+     InitOnceExecuteOnce(&init_once, start_update_thread_once, NULL, NULL);
+ }
+ 
++/* Madeira/iOS: try the in-process host snapshot before starting the HID
++ * discovery thread. Other platforms return zero and retain the HID path. */
++static LONG host_enabled = TRUE;
++
++/* Fill state from the host slot. TRUE means a pad is connected there. */
++static BOOL host_pad_state(DWORD index, XINPUT_STATE *state)
++{
++    memset(state, 0, sizeof(*state));
++    if (index >= XUSER_MAX_COUNT) return FALSE;
++    if (!NtUserGetGamepadState(index, NtUserGamepadOp_State, state)) return FALSE;
++    if (!InterlockedCompareExchange(&host_enabled, 0, 0))
++        memset(&state->Gamepad, 0, sizeof(state->Gamepad));
++    return TRUE;
++}
++
++/* Is the host publishing ANY pad? Deliberately not cached: a controller can be
++ * paired halfway through a session, and four syscalls into a memory read is
++ * cheaper than the staleness bug a cache would buy. */
++static BOOL host_pad_any(void)
++{
++    XINPUT_STATE state;
++    DWORD i;
++
++    for (i = 0; i < XUSER_MAX_COUNT; i++)
++        if (host_pad_state(i, &state)) return TRUE;
++    return FALSE;
++}
++
+ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
+ {
+     TRACE("inst %p, reason %lu, reserved %p.\n", inst, reason, reserved);
+@@ -817,6 +850,9 @@ void WINAPI DECLSPEC_HOTPATCH XInputEnable(BOOL enable)
+     to the controllers. Setting to true will send the last vibration
+     value (sent to XInputSetState) to the controller and allow messages to
+     be sent */
++    InterlockedExchange(&host_enabled, !!enable);
++    if (host_pad_any()) return;
++
+     start_update_thread();
+ 
+     EnterCriticalSection(&xinput_cs);
+@@ -831,14 +867,19 @@ void WINAPI DECLSPEC_HOTPATCH XInputEnable(BOOL enable)
+ 
+ DWORD WINAPI DECLSPEC_HOTPATCH XInputSetState(DWORD index, XINPUT_VIBRATION *vibration)
+ {
++    XINPUT_STATE host_state;
+     DWORD ret;
+ 
+     TRACE("index %lu, vibration %p.\n", index, vibration);
+ 
+-    start_update_thread();
+-
+     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+ 
++    if (!vibration) return ERROR_BAD_ARGUMENTS;
++    /* Host capabilities do not advertise force feedback. */
++    if (host_pad_state(index, &host_state)) return ERROR_SUCCESS;
++
++    start_update_thread();
++
+     EnterCriticalSection(&xinput_cs);
+     if (!controllers[index].device) update_controller_list();
+     if (!controllers[index].device)
+@@ -857,10 +898,15 @@ static DWORD xinput_get_state(DWORD index, XINPUT_STATE *state)
+     DWORD ret;
+ 
+     if (!state) return ERROR_BAD_ARGUMENTS;
++    if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
++
++    /* ml668: the host pad first, and before start_update_thread() - see the
++     * banner above. This is the hot path: a game may call it once per frame per
++     * pad, or in a spin loop at 1 kHz. */
++    if (host_pad_state(index, state)) return ERROR_SUCCESS;
+ 
+     start_update_thread();
+ 
+-    if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+     if (get_current_state(index, state)) return ERROR_SUCCESS;
+ 
+     EnterCriticalSection(&xinput_cs);
+@@ -985,6 +1031,8 @@ static BOOL trigger_is_on(const BYTE value)
+     return value > 30;
+ }
+ 
++/* ml668: upstream reads the pad through xinput_get_state, which tries the host
++ * snapshot first, so the host path shares this edge detector and its state. */
+ static DWORD check_for_keystroke(const DWORD index, XINPUT_KEYSTROKE *keystroke)
+ {
+     static XINPUT_GAMEPAD last_state[XUSER_MAX_COUNT];
+@@ -1094,6 +1142,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetKeystroke(DWORD index, DWORD reserved, P
+ {
+     TRACE("index %lu, reserved %lu, keystroke %p.\n", index, reserved, keystroke);
+ 
++    if (!keystroke) return ERROR_BAD_ARGUMENTS;
+     if (index >= XUSER_MAX_COUNT && index != XUSER_INDEX_ANY) return ERROR_BAD_ARGUMENTS;
+ 
+     if (index == XUSER_INDEX_ANY)
+@@ -1113,6 +1162,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilities(DWORD index, DWORD flags, X
+     XINPUT_CAPABILITIES_EX caps_ex;
+     DWORD ret;
+ 
++    if (!capabilities) return ERROR_BAD_ARGUMENTS;
+     ret = XInputGetCapabilitiesEx(1, index, flags, &caps_ex);
+ 
+     if (!ret) *capabilities = caps_ex.Capabilities;
+@@ -1122,12 +1172,14 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilities(DWORD index, DWORD flags, X
+ 
+ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetDSoundAudioDeviceGuids(DWORD index, GUID *render_guid, GUID *capture_guid)
+ {
++    XINPUT_STATE host_state;
+     DWORD ret;
+ 
+     FIXME("index %lu, render_guid %s, capture_guid %s stub!\n", index, debugstr_guid(render_guid),
+           debugstr_guid(capture_guid));
+ 
+     if (index >= XUSER_MAX_COUNT || !render_guid || !capture_guid) return ERROR_BAD_ARGUMENTS;
++    if (host_pad_state(index, &host_state)) return ERROR_NOT_SUPPORTED;
+ 
+     EnterCriticalSection(&xinput_cs);
+     ret = controllers[index].device ? ERROR_NOT_SUPPORTED : ERROR_DEVICE_NOT_CONNECTED;
+@@ -1138,6 +1190,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetDSoundAudioDeviceGuids(DWORD index, GUID
+ 
+ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetBatteryInformation(DWORD index, BYTE type, XINPUT_BATTERY_INFORMATION* battery)
+ {
++    XINPUT_STATE host_state;
+     static int once;
+     DWORD ret;
+ 
+@@ -1145,6 +1198,16 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetBatteryInformation(DWORD index, BYTE typ
+ 
+     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+ 
++    /* Battery reporting is not part of the host snapshot. Do not invent a
++     * wired/full battery for a wireless controller. */
++    if (host_pad_state(index, &host_state))
++    {
++        if (!battery) return ERROR_BAD_ARGUMENTS;
++        battery->BatteryType = BATTERY_TYPE_UNKNOWN;
++        battery->BatteryLevel = BATTERY_LEVEL_EMPTY;
++        return ERROR_SUCCESS;
++    }
++
+     EnterCriticalSection(&xinput_cs);
+     ret = controllers[index].device ? ERROR_NOT_SUPPORTED : ERROR_DEVICE_NOT_CONNECTED;
+     LeaveCriticalSection(&xinput_cs);
+@@ -1159,9 +1222,28 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilitiesEx(DWORD unk, DWORD index, D
+ 
+     TRACE("unk %lu, index %lu, flags %#lx, capabilities %p.\n", unk, index, flags, caps);
+ 
+-    start_update_thread();
++    if (index >= XUSER_MAX_COUNT || !caps) return ERROR_BAD_ARGUMENTS;
++
++    /* ml668: the host pad's capability block is built in win32u
++     * (build/win32u-unix/driver_ios.c, ios_gamepad_query, NtUserGamepadOp_Caps)
++     * because that is where the shape of the device is known. The vendor and
++     * product reported here are the standard XInput pad's: a game that switches
++     * button glyphs on the VID/PID must see a device it recognises as one, and
++     * every controller iOS routes through GCExtendedGamepad presents exactly
++     * that layout regardless of what it says on the plastic. */
++    memset(caps, 0, sizeof(*caps));
++    if (NtUserGetGamepadState(index, NtUserGamepadOp_Caps, &caps->Capabilities))
++    {
++        if (flags & XINPUT_FLAG_GAMEPAD &&
++            caps->Capabilities.SubType != XINPUT_DEVSUBTYPE_GAMEPAD)
++            return ERROR_DEVICE_NOT_CONNECTED;
++        caps->VendorId = 0x045e;        /* Microsoft */
++        caps->ProductId = 0x028e;       /* Controller (XBOX 360 For Windows) */
++        caps->VersionNumber = 0x0114;
++        return ERROR_SUCCESS;
++    }
+ 
+-    if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
++    start_update_thread();
+ 
+     EnterCriticalSection(&xinput_cs);
+     if (!controllers[index].device) update_controller_list();
+diff --git a/dlls/xinput1_4/Makefile.in b/dlls/xinput1_4/Makefile.in
+index bcf67eb82d2..ede61fb57fb 100644
+--- a/dlls/xinput1_4/Makefile.in
++++ b/dlls/xinput1_4/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE    = xinput1_4.dll
+-IMPORTS   = hid setupapi advapi32 user32
++IMPORTS   = hid setupapi advapi32 user32 win32u
+ PARENTSRC = ../xinput1_3
+ 
+ VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
+diff --git a/dlls/xinputuap/Makefile.in b/dlls/xinputuap/Makefile.in
+index 23025ae52b5..7082b80215a 100644
+--- a/dlls/xinputuap/Makefile.in
++++ b/dlls/xinputuap/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE    = xinputuap.dll
+-IMPORTS   = hid setupapi advapi32 user32
++IMPORTS   = hid setupapi advapi32 user32 win32u
+ PARENTSRC = ../xinput1_3
+ 
+ VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
+diff --git a/include/ntuser.h b/include/ntuser.h
+index be41b33adfd..533f175b0f2 100644
+--- a/include/ntuser.h
++++ b/include/ntuser.h
+@@ -1217,8 +1217,37 @@ enum
+     NtUserCallTwoParam_GetVirtualScreenRect,
+     /* temporary exports */
+     NtUserAllocWinProc,
++    /* Madeira/iOS (ml668): read the host gamepad slot the app publishes. See
++     * build/win32u-unix/driver_ios.c ios_gamepad_query. APPENDED, never
++     * inserted — these codes are an ABI between win32u.dll and the win32u unix
++     * library, and the farms' prebuilt win32u.dll/wow64win.dll are not rebuilt
++     * in lockstep with every unix-side change.
++     *
++     * A win32u that does not know this code answers 0 (the `default:` FIXME
++     * arm), which is the same answer as "no pad in that slot" — so xinput1_3's
++     * probe needs no #ifdef and a stock Wine keeps its HID path. */
++    NtUserCallTwoParam_GetGamepadState,
++};
++
++/* `op` values for NtUserCallTwoParam_GetGamepadState, packed into arg1 above
++ * the user index. Both payloads are pointer-free structs with identical 32-
++ * and 64-bit layout, which is what lets the wow64 thunk pass them through
++ * with nothing but a pointer translation. */
++enum
++{
++    NtUserGamepadOp_State,   /* buffer: XINPUT_STATE        (16 bytes, out) */
++    NtUserGamepadOp_Caps,    /* buffer: XINPUT_CAPABILITIES (20 bytes, out) */
+ };
+ 
++/* Returns TRUE when a pad is connected in `index` and `buffer` was filled.
++ * One syscall into a host snapshot read, no
++ * allocation or server round trip — games poll this at up to 1 kHz. */
++static inline BOOL NtUserGetGamepadState( UINT index, UINT op, void *buffer )
++{
++    return NtUserCallTwoParam( index | (op << 8), (UINT_PTR)buffer,
++                               NtUserCallTwoParam_GetGamepadState );
++}
++
+ static inline DLGPROC NtUserGetDialogProc( DLGPROC proc, BOOL ansi )
+ {
+     return (DLGPROC)NtUserCallTwoParam( (UINT_PTR)proc, ansi, NtUserCallTwoParam_GetDialogProc );
+diff --git a/tools/tests/xinput-host.c b/tools/tests/xinput-host.c
+new file mode 100644
+index 00000000000..7c5d7a15fe9
+--- /dev/null
++++ b/tools/tests/xinput-host.c
+@@ -0,0 +1,82 @@
++/* Host-path regression test. LGPL-2.1-or-later, like the source under test.
++ * Standalone native Windows test: includes the production XInput implementation
++ * and supplies a synthetic NtUserCallTwoParam import. Never starts Wine or uses
++ * a physical controller. See xinput-host.md for build instructions. */
++#include "../../dlls/xinput1_3/main.c"
++#include <stdio.h>
++
++static XINPUT_STATE sample;
++static BOOL connected[XUSER_MAX_COUNT] = { TRUE, FALSE, FALSE, FALSE };
++
++static ULONG_PTR WINAPI query(ULONG_PTR arg1, ULONG_PTR arg2, ULONG code)
++{
++    UINT index = arg1 & 0xff, op = (arg1 >> 8) & 0xff;
++    assert(code == NtUserCallTwoParam_GetGamepadState);
++    assert(index < XUSER_MAX_COUNT && arg2);
++    if (!connected[index]) return 0;
++    if (op == NtUserGamepadOp_State) *(XINPUT_STATE *)arg2 = sample;
++    else if (op == NtUserGamepadOp_Caps)
++    {
++        XINPUT_CAPABILITIES *caps = (void *)arg2;
++        memset(caps, 0, sizeof(*caps));
++        caps->Type = XINPUT_DEVTYPE_GAMEPAD;
++        caps->SubType = XINPUT_DEVSUBTYPE_GAMEPAD;
++    }
++    else assert(0);
++    return 1;
++}
++
++/* Redirect only the test binary's import. No installed DLL is modified. */
++ULONG_PTR (WINAPI *__imp_NtUserCallTwoParam)(ULONG_PTR, ULONG_PTR, ULONG) = query;
++const char * __cdecl __wine_dbg_strdup(const char *str) { return str; }
++int __cdecl __wine_dbg_output(const char *str) { return 0; }
++int __cdecl __wine_dbg_header(enum __wine_debug_class cls,
++        struct __wine_debug_channel *channel, const char *function) { return -1; }
++
++int main(void)
++{
++    XINPUT_STATE state;
++    XINPUT_CAPABILITIES caps;
++    XINPUT_KEYSTROKE key;
++    XINPUT_VIBRATION vibration = {0};
++    XINPUT_BATTERY_INFORMATION battery;
++    GUID render, capture;
++
++    sample.dwPacketNumber = 42;
++    sample.Gamepad.wButtons = XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_GUIDE;
++    sample.Gamepad.sThumbLX = -32768;
++    sample.Gamepad.sThumbLY = 32767;
++    sample.Gamepad.bLeftTrigger = 255;
++    assert(XInputGetState(0, &state) == ERROR_SUCCESS);
++    assert(state.dwPacketNumber == 42 && state.Gamepad.wButtons == XINPUT_GAMEPAD_A);
++    assert(state.Gamepad.sThumbLX == -32768 && state.Gamepad.sThumbLY == 32767);
++    assert(XInputGetStateEx(0, &state) == ERROR_SUCCESS);
++    assert(state.Gamepad.wButtons & XINPUT_GAMEPAD_GUIDE);
++    assert(XInputGetState(4, &state) == ERROR_BAD_ARGUMENTS);
++    assert(XInputGetState(0, NULL) == ERROR_BAD_ARGUMENTS);
++    assert(XInputGetCapabilities(0, 0, &caps) == ERROR_SUCCESS && caps.Flags == 0);
++    assert(XInputGetCapabilities(0, 0, NULL) == ERROR_BAD_ARGUMENTS);
++    assert(XInputSetState(0, &vibration) == ERROR_SUCCESS);
++    assert(XInputSetState(0, NULL) == ERROR_BAD_ARGUMENTS);
++    assert(XInputGetKeystroke(0, 0, &key) == ERROR_SUCCESS);
++    assert(key.VirtualKey == VK_PAD_A && key.Flags == XINPUT_KEYSTROKE_KEYDOWN);
++    sample.Gamepad.wButtons = 0;
++    assert(XInputGetKeystroke(0, 0, &key) == ERROR_SUCCESS);
++    assert(key.VirtualKey == VK_PAD_A && key.Flags == XINPUT_KEYSTROKE_KEYUP);
++    assert(XInputGetKeystroke(0, 0, NULL) == ERROR_BAD_ARGUMENTS);
++    XInputEnable(FALSE);
++    assert(XInputGetState(0, &state) == ERROR_SUCCESS);
++    XINPUT_GAMEPAD zero = {0};
++    assert(!memcmp(&state.Gamepad, &zero, sizeof(zero)));
++    XInputEnable(TRUE);
++    assert(XInputGetState(0, &state) == ERROR_SUCCESS && state.Gamepad.bLeftTrigger == 255);
++    assert(XInputGetBatteryInformation(0, BATTERY_DEVTYPE_GAMEPAD, &battery) == ERROR_SUCCESS);
++    assert(battery.BatteryType == BATTERY_TYPE_UNKNOWN);
++    assert(XInputGetDSoundAudioDeviceGuids(0, &render, &capture) == ERROR_NOT_SUPPORTED);
++    assert(XInputGetDSoundAudioDeviceGuids(1, &render, &capture) == ERROR_DEVICE_NOT_CONNECTED);
++    connected[0] = FALSE;
++    assert(!host_pad_state(0, &state));
++    assert(!memcmp(&state.Gamepad, &zero, sizeof(zero)));
++    puts("PASS: host XInput state/caps/edges/disable, invalid arguments, battery and per-index audio");
++    return 0;
++}
+diff --git a/tools/tests/xinput-host.md b/tools/tests/xinput-host.md
+new file mode 100644
+index 00000000000..dcb2345a93a
+--- /dev/null
++++ b/tools/tests/xinput-host.md
+@@ -0,0 +1,23 @@
++# Host XInput regression test
++
++This standalone test includes the real XInput implementation and supplies a
++synthetic host-query import. It runs on Windows without Wine, an iOS device or
++a physical controller. It does not install or replace any DLL.
++
++From this repository, with llvm-mingw on PATH and Wine's generated headers in
++`build/include` (adjust that path for your configured build):
++
++```sh
++x86_64-w64-mingw32-clang -O2 -D__WINESRC__ -Iinclude -Ibuild/include \
++  tools/tests/xinput-host.c -lhid -lsetupapi -ladvapi32 -luser32 \
++  -o xinput-host-test.exe
++```
++
++Run `xinput-host-test.exe` on Windows. The test checks state/capability mapping,
++Guide-button filtering, keystroke edges, XInputEnable, invalid arguments,
++unknown battery reporting, and per-user audio/disconnect results. It does not
++exercise the HID fallback or prove device compatibility.
++
++The iOS `ios_gamepad_query` implementation is supplied by Madeira. The paired
++Madeira change must be built together with this Wine change, including the
++win32u and XInput PE DLLs; updating only the app does not update those DLLs.

@@ -1,0 +1,907 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 23 Sep 2026 03:13:14 +0800
+Subject: [PATCH] iOS JIT: retry code-generation sweeps while holders were
+ skipped, alias-table capacity diagnostic, pool placement fixes
+
+The once-per-generation sweep marked a generation swept even when it skipped
+threads that were in simulation or signal-pinned, so the outgoing 128 MB code
+buffer stayed pinned while every successor was refused to 16-32 MB and the
+JIT rotated (2.1 M recompiles in 90 s, 400-1000 ms frames). The same
+generation is now re-swept every 16th trigger while the last pass skipped
+anyone, at most 256 times; the gen-sweep log line reports each pass.
+
+Also: IosAliasEntries logs when it is full and refuses an image; exec-redirect
+census records the caller; the 0x140000000 window plug rule only plugs holes
+that end below the placeholder and only while the window is held; backpatch
+decline logging; self-modifying-write counters; CRT allocation hooks.
+
+Madeira-commit: 89db11f589b29a5ef06d9bc62be9726938dbbda0
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/CPUBackend.cpp  |  79 ++++++++-
+ FEXCore/Source/Interface/Core/CPUBackend.h    |   2 +-
+ FEXCore/Source/Interface/Core/Frontend.cpp    |  50 ++++++
+ FEXCore/Source/Interface/Core/LookupCache.h   |  11 ++
+ .../Interface/Core/OpcodeDispatcher.cpp       |  14 ++
+ .../Source/Interface/Core/OpcodeDispatcher.h  |  40 +++++
+ .../Core/SharedCodeBufferManager.cpp          |  13 +-
+ FEXCore/Source/Utils/AllocatorHooks.cpp       |  21 +++
+ Source/Windows/ARM64EC/IosJitAlias.cpp        | 151 ++++++++++++++++++
+ Source/Windows/ARM64EC/Module.cpp             | 138 +++++++++++++++-
+ Source/Windows/Common/CRT/Alloc.cpp           |  15 ++
+ 11 files changed, 521 insertions(+), 13 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+index 7a38de8..e9428e6 100644
+--- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
++++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
+@@ -314,16 +314,52 @@ namespace CPU {
+    * few pointer ops. NOT recursive: RegisterForSignalHandler is only called
+    * from already-guarded scopes and must not re-acquire. */
+   namespace {
++    /* ml1035: OWNER-AWARE. This was a plain non-recursive test-and-set, on the
++     * stated assumption that "all critical sections are a few pointer ops".
++     * GetEmptyCodeBuffer breaks that assumption: it holds the lock across
++     * StartLargerCodeBuffer() -- a pool allocation plus mprotect -- and across
++     * shared_ptr releases that free old buffers. On iOS those touch pool pages
++     * that FAULT as a matter of routine (W^X via Mach exceptions), and the
++     * exception path calls IsAddressInCodeBuffer(), which takes this same lock.
++     *
++     * iPhone 18 Pro, RDR2 loading screen: tid 00c8 sat at 100% CPU on ONE pc,
++     * CPUBackend::IsAddressInCodeBuffer+0x10 (the exchange loop below), same sp
++     * in every sample, while owning the JIT write lock at depth 7002. Every
++     * other thread queued behind it ([fexlock] STUCK x17), footprint went flat,
++     * and iOS eventually killed the app. A thread waiting for itself.
++     *
++     * The low word of the lock now carries the owner's TEB (x18, which is the
++     * TEB in ARM64EC PE code; 0 is never a valid owner because bit 0 is set on
++     * every held value). Re-entry by the owner neither spins nor releases: the
++     * interrupted critical section still owns the lock and will drop it. The
++     * re-entrant reader may see CurrentCodeBuffer mid-swap, which is the same
++     * best-effort answer an exception path got before ml460 added the lock --
++     * strictly better than never returning. */
+     struct IosMigrateLockGuard {
+-      std::atomic<uint32_t>& Lock;
+-      explicit IosMigrateLockGuard(std::atomic<uint32_t>& Lock)
++      std::atomic<uint64_t>& Lock;
++      bool Reentered {false};
++      static uint64_t Me() {
++        uint64_t Teb = 0;
++        __asm volatile("mov %0, x18" : "=r"(Teb));
++        return Teb | 1;   /* never 0, even for a thread with no TEB */
++      }
++      explicit IosMigrateLockGuard(std::atomic<uint64_t>& Lock)
+         : Lock(Lock) {
+-        while (Lock.exchange(1, std::memory_order_acquire) != 0) {
++        const uint64_t Self = Me();
++        if (Self != 1 && Lock.load(std::memory_order_acquire) == Self) {
++          Reentered = true;
++          return;
++        }
++        uint64_t Expected = 0;
++        while (!Lock.compare_exchange_weak(Expected, Self, std::memory_order_acquire, std::memory_order_relaxed)) {
++          Expected = 0;
+           __asm volatile("yield");
+         }
+       }
+       ~IosMigrateLockGuard() {
+-        Lock.store(0, std::memory_order_release);
++        if (!Reentered) {
++          Lock.store(0, std::memory_order_release);
++        }
+       }
+     };
+   } // namespace
+@@ -510,14 +546,40 @@ namespace CPU {
+     }
+   }
+ 
++  /* ml1106: BOUNDED RETRY. The sweep ran ONCE per generation and marked it
++   * swept even when it skipped threads that were in simulation or pinned by a
++   * signal frame. A thread that then ran only cached code never migrated, so it
++   * kept the outgoing generation's buffer alive -- ph-rdr59: the 128 MB
++   * generation stayed pinned (prev_use_count=63) for ~90 s while every
++   * successor was refused down to 16-32 MB and rotated (2.1 M recompiles,
++   * 400-900 ms frames); the moment it was freed (log line 95018) the next
++   * generation got 128 MB again and the frame rate recovered. Retry the sweep
++   * for the same generation while the last pass skipped anyone: every 16th
++   * trigger (a compile), at most 256 times per generation. Threads leave
++   * simulation on every syscall, so a retry catches them native-side. */
++  static std::atomic<uint32_t> IosSweepRetryLeft {0};
++  static std::atomic<uint32_t> IosSweepThrottle {0};
++  static std::atomic<int> IosSweepLastSkipped {0};
+   extern "C" void IosMaybeSweepCodeBuffers(FEXCore::Core::InternalThreadState* CallerThread) {
+     const uint64_t Gen = IosCodeBufferGeneration();
++    bool Retry = false;
+     if (Gen == IosSweepLastGen.load(std::memory_order_relaxed)) {
+-      return;
++      if (IosSweepLastSkipped.load(std::memory_order_relaxed) == 0 || IosSweepRetryLeft.load(std::memory_order_relaxed) == 0) {
++        return;
++      }
++      if ((IosSweepThrottle.fetch_add(1, std::memory_order_relaxed) & 15) != 15) {
++        return;
++      }
++      Retry = true;
++    } else {
++      IosSweepRetryLeft.store(256, std::memory_order_relaxed);
+     }
+     if (IosSweepBusy.exchange(1, std::memory_order_acq_rel) != 0) {
+       return; // another sweep in flight; it covers this generation or the next trigger will
+     }
++    if (Retry) {
++      IosSweepRetryLeft.fetch_sub(1, std::memory_order_relaxed);
++    }
+     auto Latest = CallerThread->CPUBackend->GetCodeBufferManager().GetLatest();
+ 
+     IosSweepSlot Snap[IosSweepSlotMax];
+@@ -551,12 +613,13 @@ namespace CPU {
+     std::atomic_thread_fence(std::memory_order_seq_cst);
+     __atomic_store_n(&IosCodeBufferSweepGate, 0, __ATOMIC_SEQ_CST);
+     IosSweepLastGen.store(Gen, std::memory_order_relaxed);
++    IosSweepLastSkipped.store(InSimSkip + SigPinSkip + Raced, std::memory_order_relaxed);   /* ml1106 */
+     IosSweepBusy.store(0, std::memory_order_release);
+ 
+     static std::atomic<int> SweepLogCount {0};
+-    if ((Migrated || SigPinSkip || Raced) && SweepLogCount.fetch_add(1, std::memory_order_relaxed) < 64) {
+-      LogMan::Msg::EFmt("[gen-sweep] gen={} threads={} migrated={} in_sim={} sig_pin={} raced={} rev=ml460", Gen, SnapCount, Migrated,
+-                        InSimSkip, SigPinSkip, Raced);
++    if ((Migrated || SigPinSkip || Raced) && SweepLogCount.fetch_add(1, std::memory_order_relaxed) < 128) {
++      LogMan::Msg::EFmt("[gen-sweep] gen={} threads={} migrated={} in_sim={} sig_pin={} raced={} retry={} left={} rev=ml1106", Gen, SnapCount, Migrated,
++                        InSimSkip, SigPinSkip, Raced, Retry ? 1 : 0, IosSweepRetryLeft.load(std::memory_order_relaxed));
+     }
+   }
+ #endif
+diff --git a/FEXCore/Source/Interface/Core/CPUBackend.h b/FEXCore/Source/Interface/Core/CPUBackend.h
+index 62db301..ac40dfa 100644
+--- a/FEXCore/Source/Interface/Core/CPUBackend.h
++++ b/FEXCore/Source/Interface/Core/CPUBackend.h
+@@ -161,7 +161,7 @@ namespace CPU {
+      * SignalHandlerCodeBuffers (self compile paths, exception-path queries,
+      * the sweeper). Lock order where nested: LookupCache write lock, THEN
+      * IosMigrateLock. LatestMutex is never held around either. */
+-    mutable std::atomic<uint32_t> IosMigrateLock {0};
++    mutable std::atomic<uint64_t> IosMigrateLock {0};   /* ml1035: holds the owner's TEB|1 */
+     // Returns 1 = migrated, 0 = nothing to do, -1 = skipped (signal frames
+     // in flight), -2 = raced out. Caller must have established via the sweep
+     // gate that this thread is outside emitted code (InSimulation == 0).
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index f61085d..cc74a29 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -1363,6 +1363,13 @@ void Decoder::AddBranchTarget(uint64_t Target) {
+   }
+ }
+ 
++#ifdef FEX_IOS_HOST
++/* ml954: defined in Source/Windows/ARM64EC/IosJitAlias.cpp (same DLL). Returns
++ * Addr unchanged when it is not inside a registered sub-floor window, so the
++ * fast path is one compare. */
++extern "C" uint64_t IosSubfloorToReal(uint64_t Addr);
++#endif
++
+ const Decoder::DecodeStream Decoder::AdjustAddrForSpecialRegion(const uint8_t* _InstStream, uint64_t EntryPoint, uint64_t RIP) {
+   constexpr uint64_t VSyscall_Base = 0xFFFF'FFFF'FF60'0000ULL;
+   constexpr uint64_t VSyscall_End = VSyscall_Base + 0x1000;
+@@ -1381,6 +1388,49 @@ const Decoder::DecodeStream Decoder::AdjustAddrForSpecialRegion(const uint8_t* _
+     };
+   }
+ 
++#ifdef FEX_IOS_HOST
++  /* ml954: read sub-floor code from its BACKING memory, not through faults.
++   *
++   * iOS reserves the low 4GB of every task, so a PE whose preferred base is
++   * below it is mapped high and Wine's Mach handler services accesses to the
++   * vacated low range. That made the code reachable, but the decoder was still
++   * reading it through the fault path: measured 598,000+ serviced accesses on a
++   * single block-decode burst, the last of them a `ldrb w0,[x8,xM]` byte-copy
++   * loop inside libarm64ecfex, ~3us per byte via a Mach round trip -- and the
++   * faulting thread holds fexlock throughout, so the JIT stops process-wide and
++   * the app presents as frozen (the documented CodeInvalidationMutex wedge
++   * shape: a blocking op under a shared hold).
++   *
++   * This is the same split AdjustAddrForSpecialRegion already performs for
++   * VSyscall: InstStream keeps the GUEST address, so RIP arithmetic, block
++   * identity, SMC tracking and every address the decoder reports are unchanged,
++   * while AdjustedInstStream -- the pointer the byte reads actually go through
++   * (see ReadByte/ReadData above) -- points at the real mapping. No faults, and
++   * no change to guest address semantics.
++   *
++   * Only the byte source moves. Executable-range classification still goes
++   * through the ml951 query translation, and data accesses still go through the
++   * fault handler. */
++  {
++    const uint64_t RealRIP = IosSubfloorToReal(RIP);
++    if (RealRIP != RIP) {
++      /* Capped, and it is the only way to confirm this path ran: the change
++       * itself emits no string, so without this the build carries no log
++       * fingerprint and "absence of evidence" becomes unreadable. Hot path --
++       * keep the cap small. */
++      static uint32_t SubfloorDecodeCount = 0;
++      if (SubfloorDecodeCount < 8) {
++        SubfloorDecodeCount++;
++        LogMan::Msg::EFmt("[iOS-subfloor-decode] ml954 reading block bytes from backing: guest RIP={:#x} -> {:#x}", RIP, RealRIP);
++      }
++      return DecodeStream {
++        .InstStream = _InstStream - EntryPoint + RIP,
++        .AdjustedInstStream = reinterpret_cast<const uint8_t*>(RealRIP),
++      };
++    }
++  }
++#endif
++
+   return DecodeStream {
+     .InstStream = _InstStream - EntryPoint + RIP,
+     .AdjustedInstStream = _InstStream - EntryPoint + RIP,
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.h b/FEXCore/Source/Interface/Core/LookupCache.h
+index 40025eb..e213e5d 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.h
++++ b/FEXCore/Source/Interface/Core/LookupCache.h
+@@ -258,6 +258,17 @@ public:
+     // Keeping track not L1 misses, but specifically L2/L3 hits.
+     ++L2L3CacheHits;
+ 
++#ifdef FEX_IOS_HOST
++    /* ml1059: this runs on EVERY L1 miss, and system_clock::now() is a call through a
++     * GetProcAddress'd kernelbase pointer. On iOS such a pointer names the image's
++     * non-executable backing, so each call is an exec fault -> Mach exception ->
++     * redirect to the pool copy: measured as the exception thread pinned at 32-54%
++     * CPU and the hottest guest threads stalling a kernel round trip per lookup miss
++     * (>= 1.38M redirects at this one pc in a 10-minute run). The heuristic only
++     * needs a coarse rate, so look at the clock once per 256 hits; the hit COUNT
++     * stays exact. */
++    if (L2L3CacheHits & 0xff) return;
++#endif
+     const auto CurrentTime = std::chrono::system_clock::now();
+     const auto Period = CurrentTime - LastPeriod;
+     if (Period >= SamplePeriod) {
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+index 9c4957f..ba95e16 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+@@ -3950,9 +3950,23 @@ void OpDispatchBuilder::CreateJumpBlocks(const fextl::vector<FEXCore::Frontend::
+   }
+ }
+ 
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++}  // namespace FEXCore::IR
++extern "C" int IosSubfloorWindowForCode(uint64_t Rip, uint64_t* Low, uint64_t* Size, uint64_t* Real);
++namespace FEXCore::IR {
++#endif
+ void OpDispatchBuilder::BeginFunction(uint64_t RIP, const fextl::vector<FEXCore::Frontend::Decoder::DecodedBlocks>* Blocks,
+                                       uint32_t NumInstructions, bool _Is64BitMode, bool MonoBackpatcherBlock) {
+   Entry = RIP;
++#if defined(FEX_IOS_HOST) && defined(_WIN32)
++  {
++    uint64_t Low = 0, Sz = 0, Real = 0;
++    IosXl.On = false;
++    if (IosSubfloorWindowForCode(RIP, &Low, &Sz, &Real) && Sz && Sz < (1ull << 40)) {
++      IosXl.On = true; IosXl.Low = Low; IosXl.Size = Sz; IosXl.Delta = Real - Low;
++    }
++  }
++#endif
+   Is64BitMode = _Is64BitMode;
+   LOGMAN_THROW_A_FMT(Is64BitMode == CTX->Config.Is64BitMode, "Expected operating mode to not change at runtime!");
+   IsMonoBackpatcherBlock = MonoBackpatcherBlock;
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
+index ff5c389..bc5e403 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
+@@ -2435,6 +2435,34 @@ private:
+   // XCHG ops that would patch code are replaced with a hook that performs the write and manually invalidates
+   // the target address.
+   bool IsMonoBackpatcherBlock {false};
++
++  /* iOS-Madeira ml1057: inline sub-floor address translation.
++   *
++   * An image whose preferred base is below 4 GB cannot be mapped there on iOS, so
++   * it runs from a high "real" mapping while its own absolute pointers still name
++   * the low window. Every access through one faulted and was emulated in the Mach
++   * exception handler: 12,029,953 of them in one 11-minute run (~18,000 a second,
++   * a fifth of all running CPU samples in mach_msg, and each one stalls the guest
++   * thread for a kernel round trip). The accessor is that image's own code, which
++   * the frontend already knows at compile time -- so for blocks that live in such
++   * an image, and only those, memory operands get
++   *     addr += ((addr - Low) < Size) ? (Real - Low) : 0
++   * computed without touching NZCV (guest flags live there). Blocks of every other
++   * image are untouched. Paths this does not cover (string ops, atomics) still
++   * fault into the old emulation, so partial coverage is slower, never wrong. */
++  struct {
++    bool On {false};
++    uint64_t Low {0}, Size {0}, Delta {0};
++  } IosXl;
++  Ref IosXlate(Ref EA) {
++    if (!IosXl.On) return EA;
++    Ref T = Sub(OpSize::i64Bit, EA, Constant(IosXl.Low));          // >= 2^63 when EA < Low
++    Ref U = Sub(OpSize::i64Bit, T, Constant(IosXl.Size));          // top bit set when T < Size (or T huge)
++    Ref M = _Andn(OpSize::i64Bit, U, T);                           // U & ~T: top bit set only for 0 <= T < Size
++    Ref S = _Ashr(OpSize::i64Bit, M, Constant(63));                // all ones inside the window, else zero
++    Ref D = _And(OpSize::i64Bit, S, Constant(IosXl.Delta));
++    return Add(OpSize::i64Bit, EA, D);
++  }
+   IROp_IRHeader* CurrentHeader {};
+ 
+   [[nodiscard]]
+@@ -2451,6 +2479,7 @@ private:
+   }
+ 
+   Ref _StoreMemAutoTSO(RegClass Class, OpSize Size, Ref Addr, Ref Value, OpSize Align = OpSize::i8Bit) {
++    Addr = IosXlate(Addr);
+     if (IsTSOEnabled(Class)) {
+       return _StoreMemTSO(Class, Size, Value, Addr, Invalid(), Align, MemOffsetType::SXTX, 1);
+     } else {
+@@ -2465,6 +2494,7 @@ private:
+   }
+ 
+   Ref _LoadMemAutoTSO(RegClass Class, OpSize Size, Ref ssa0, OpSize Align = OpSize::i8Bit) {
++    ssa0 = IosXlate(ssa0);
+     if (IsTSOEnabled(Class)) {
+       return _LoadMemTSO(Class, Size, ssa0, Invalid(), Align, MemOffsetType::SXTX, 1);
+     } else {
+@@ -2480,6 +2510,11 @@ private:
+ 
+   Ref _LoadMemAutoTSO(RegClass Class, OpSize Size, const AddressMode& A, OpSize Align = OpSize::i8Bit) {
+     const bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
++    if (IosXl.On) {   // ml1057: the window test needs the EFFECTIVE address, so materialise it
++      Ref EA = IosXlate(LoadEffectiveAddress(this, A, GetGPROpSize(), true));
++      return AtomicTSO ? _LoadMemTSO(Class, Size, EA, Invalid(), Align, MemOffsetType::SXTX, 1)
++                       : _LoadMem(Class, Size, EA, Invalid(), Align, MemOffsetType::SXTX, 1);
++    }
+     const auto B = SelectAddressMode(this, A, GetGPROpSize(), CTX->HostFeatures.SupportsTSOImm9, AtomicTSO, Class != RegClass::GPR, Size);
+ 
+     if (AtomicTSO) {
+@@ -2543,6 +2578,11 @@ private:
+ 
+   Ref _StoreMemAutoTSO(RegClass Class, OpSize Size, const AddressMode& A, Ref Value, OpSize Align = OpSize::i8Bit) {
+     const bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
++    if (IosXl.On) {   // ml1057
++      Ref EA = IosXlate(LoadEffectiveAddress(this, A, GetGPROpSize(), true));
++      return AtomicTSO ? _StoreMemTSO(Class, Size, Value, EA, Invalid(), Align, MemOffsetType::SXTX, 1)
++                       : _StoreMem(Class, Size, Value, EA, Invalid(), Align, MemOffsetType::SXTX, 1);
++    }
+     const auto B = SelectAddressMode(this, A, GetGPROpSize(), CTX->HostFeatures.SupportsTSOImm9, AtomicTSO, Class != RegClass::GPR, Size);
+ 
+     if (AtomicTSO) {
+diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+index bf610f3..484eddc 100644
+--- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
++++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
+@@ -19,7 +19,11 @@ static constexpr size_t INITIAL_CODE_SIZE = 1024 * 1024 * 16;
+ // exhausted it in ml436 (head 708MB of DLL copies + tail collided; 10 honest
+ // refusals, 123 degraded threads). Cap growth at 32MB — hot threads clear
+ // and recompile more often, but every thread gets a REAL buffer.
+-static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 32;
++// ml1052: 32MB made a large game retranslate forever (56% hit rate, 390
++// rotations of the one shared buffer). The pool-side allocator now grants
++// what the pool can afford and refuses the rest, and the ctor's halving
++// ladder handles a refusal, so the ceiling here is FEX's own branch range.
++static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 128;
+ #else
+ // We don't want to move above 128MB atm because that means we will have to encode longer jumps
+ static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 128;
+@@ -169,7 +173,14 @@ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::StartLargerCodeBuffer() {
+   }
+ 
+   auto NewCodeBufferSize = GetLatest()->TotalAllocationSize();
++#ifdef FEX_IOS_HOST
++  // ml1052: tail carves are fixed-size and never coalesce, so a 16->32->64->128
++  // ladder strands 112MB of odd-sized carves. A process that fills its first
++  // buffer is hot: go straight to the maximum (refusal halves it down).
++  NewCodeBufferSize = MAX_CODE_SIZE;
++#else
+   NewCodeBufferSize = std::min<size_t>(NewCodeBufferSize * 2, MAX_CODE_SIZE);
++#endif
+   return AllocateNew(NewCodeBufferSize);
+ }
+ 
+diff --git a/FEXCore/Source/Utils/AllocatorHooks.cpp b/FEXCore/Source/Utils/AllocatorHooks.cpp
+index 56b2b73..6414257 100644
+--- a/FEXCore/Source/Utils/AllocatorHooks.cpp
++++ b/FEXCore/Source/Utils/AllocatorHooks.cpp
+@@ -73,6 +73,16 @@ static rpmalloc_config_t global_config {
+ // -> c0000005 in ntdll memcpy, killing the child before the message it was
+ // formatting ever surfaced. Lazily initialize the thread heap at the hook
+ // boundary; rpmalloc_is_thread_initialized() is a cheap TLS read.
++
++#ifdef FEX_IOS_HOST
++extern "C" void fex_ios_rpm_lock(void);
++extern "C" void fex_ios_rpm_unlock(void);
++namespace { struct IosRpmGuard { IosRpmGuard() { fex_ios_rpm_lock(); } ~IosRpmGuard() { fex_ios_rpm_unlock(); } }; }
++#define IOS_RPM_GUARD() IosRpmGuard ios_rpm_guard_
++#else
++#define IOS_RPM_GUARD() ((void)0)
++#endif
++
+ static inline void EnsureThreadHeap() {
+   if (!::rpmalloc_is_thread_initialized()) {
+     ::rpmalloc_thread_initialize();
+@@ -80,44 +90,54 @@ static inline void EnsureThreadHeap() {
+ }
+ 
+ void* malloc(size_t size) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rpmalloc(size);
+ }
+ void* calloc(size_t n, size_t size) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rpcalloc(n, size);
+ }
+ void* memalign(size_t align, size_t s) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rpmemalign(align, s);
+ }
+ void* valloc(size_t size) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rpaligned_alloc(global_config.page_size, size);
+ }
+ int posix_memalign(void** r, size_t a, size_t s) {
+   void* ptr;
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   auto res = ::rpposix_memalign(&ptr, a, s);
+   *r = ptr;
+   return res;
+ }
+ void* realloc(void* ptr, size_t size) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rprealloc(ptr, size);
+ }
+ void free(void* ptr) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rpfree(ptr);
+ }
+ size_t malloc_usable_size(void* ptr) {
++  IOS_RPM_GUARD();
+   return ::rpmalloc_usable_size(ptr);
+ }
+ void* aligned_alloc(size_t a, size_t s) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rpaligned_alloc(a, s);
+ }
+ void aligned_free(void* ptr) {
++  IOS_RPM_GUARD();
+   EnsureThreadHeap();
+   return ::rpfree(ptr);
+ }
+@@ -270,6 +290,7 @@ void free(void* ptr) {
+   return ::free(ptr);
+ }
+ size_t malloc_usable_size(void* ptr) {
++  IOS_RPM_GUARD();
+ #ifdef __APPLE__
+   return ::malloc_size(ptr);
+ #else
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index 4a14f4a..d835780 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -18,6 +18,8 @@
+ // their own TU sidesteps the issue.
+ 
+ #include <cstdint>
++#include <atomic>
++#include <FEXCore/Utils/LogManager.h>
+ #include <windows.h>
+ #include <winternl.h>
+ #include "IosMonoBridge.h"
+@@ -208,7 +210,149 @@ void ios_fex_mono_count_helper(int Miss) {
+ }
+ /* ========================== end ml648 MONO BRIDGE ========================= */
+ 
++/* ========================= ml951 SUB-FLOOR WINDOWS =======================
++ *
++ * iOS reserves the low 4GB of every task, so a PE whose preferred base is below
++ * it cannot be mapped there (measured four ways -- see the ml938 block in
++ * ntdll-unix/signal_arm64_ios.c). Such an image is mapped high instead, and
++ * Wine's fault handler services data accesses to the vacated low range against
++ * the real mapping.
++ *
++ * That covers faults, but not QUESTIONS. FEX's QueryGuestExecutableRange asks
++ * the InvalidationTracker whether an address is executable; the tracker is
++ * built from actually-mapped sections, so a low address answers "no" and FEX
++ * refuses to build the entry block ("NoExec instruction in entry block"). No
++ * fault occurs, so there is nothing for the handler to service. This table
++ * lets that one lookup be answered.
++ *
++ * ⛔ DELIBERATELY SEPARATE FROM IosAliasEntries. Module.S's ExitFunctionEC
++ * translates branch targets PeBase -> JitBase through that table inline, so an
++ * entry there REWRITES CONTROL FLOW. Putting a sub-floor window in it would
++ * silently move the guest RIP to the high backing address, which is exactly
++ * what must not happen: the guest's address identity has to stay low. This
++ * table is query-only and Module.S never sees it.
++ *
++ * Registration reuses BTCpu64IosAddAliasMapping rather than adding an export,
++ * because a new export would need a PE-side binding and these are ARM64EC PE
++ * entry points -- NOT callable from native Mach-O code (ml613 armed such a
++ * call and crashed every launch). The discriminator is self-identifying and
++ * disjoint: a real JIT alias's PeBase is a mapped PE image base, which on iOS
++ * is always >= 4GB; a sub-floor window's low base is by definition < 4GB.
++ */
++static constexpr uint64_t kIosSubfloorFloor = 0x100000000ull;
++static constexpr int kMaxSubfloorEntries = 8;
++
++struct IosSubfloorEntry {
++  uint64_t LowBase;   // what the guest uses (below the floor)
++  uint64_t RealBase;  // where the image actually is
++  uint64_t Size;
++  uint64_t _Padding;
++};
++static IosSubfloorEntry g_Subfloor[kMaxSubfloorEntries];
++static int g_SubfloorCount;
++
++// low -> real, or Addr unchanged when it is not in a window.
++uint64_t IosSubfloorToReal(uint64_t Addr) {
++  if (Addr >= kIosSubfloorFloor) {
++    return Addr; // fast reject: the overwhelmingly common case
++  }
++  const int count = g_SubfloorCount;
++  for (int i = 0; i < count; i++) {
++    const uint64_t lb = g_Subfloor[i].LowBase;
++    const uint64_t sz = g_Subfloor[i].Size;
++    if (sz && Addr >= lb && Addr < lb + sz) {
++      return g_Subfloor[i].RealBase + (Addr - lb);
++    }
++  }
++  return Addr;
++}
++
++// ml1057: is this guest RIP code that belongs to a sub-floor image -- either at the
++// image's real (high) mapping, which is where it executes, or named by its low
++// address? If so report the window so the JIT can translate that image's own
++// memory operands inline instead of faulting on each one.
++extern "C" int IosSubfloorWindowForCode(uint64_t Rip, uint64_t* Low, uint64_t* Size, uint64_t* Real) {
++  const int count = g_SubfloorCount;
++  for (int i = 0; i < count; i++) {
++    const uint64_t lb = g_Subfloor[i].LowBase, rb = g_Subfloor[i].RealBase, sz = g_Subfloor[i].Size;
++    if (!sz || !rb) continue;
++    if ((Rip >= rb && Rip < rb + sz) || (Rip >= lb && Rip < lb + sz)) {
++      static std::atomic<int> Said {0};
++      if (Said.fetch_add(1, std::memory_order_relaxed) < 4) {
++        LogMan::Msg::EFmt("[iOS-subfloor-xlate] ml1057 block at {:#x} lives in window [{:#x},+{:#x}) -> {:#x}: translating its "
++                          "memory operands inline", Rip, lb, sz, rb);
++      }
++      *Low = lb; *Size = sz; *Real = rb;
++      return 1;
++    }
++  }
++  return 0;
++}
++
++// real -> low, or Addr unchanged. Used to map a tracker result back into the
++// guest's own address domain so the guest RIP is never moved high.
++uint64_t IosSubfloorToLow(uint64_t Addr) {
++  const int count = g_SubfloorCount;
++  for (int i = 0; i < count; i++) {
++    const uint64_t rb = g_Subfloor[i].RealBase;
++    const uint64_t sz = g_Subfloor[i].Size;
++    if (sz && Addr >= rb && Addr < rb + sz) {
++      return g_Subfloor[i].LowBase + (Addr - rb);
++    }
++  }
++  return Addr;
++}
++
++// Clip a range to the end of the window containing LowAddr, so a tracker range
++// can never be reported as extending past the window we actually back.
++uint64_t IosSubfloorClipSize(uint64_t LowAddr, uint64_t Size) {
++  const int count = g_SubfloorCount;
++  for (int i = 0; i < count; i++) {
++    const uint64_t lb = g_Subfloor[i].LowBase;
++    const uint64_t sz = g_Subfloor[i].Size;
++    if (sz && LowAddr >= lb && LowAddr < lb + sz) {
++      const uint64_t avail = (lb + sz) - LowAddr;
++      return Size < avail ? Size : avail;
++    }
++  }
++  return Size;
++}
++
++static bool IosSubfloorAdd(uint64_t LowBase, uint64_t RealBase, uint64_t Size) {
++  const int count = g_SubfloorCount;
++  for (int i = 0; i < count; i++) {
++    if (g_Subfloor[i].LowBase == LowBase) {
++      // Re-registration: a second pseudo-process mapped the same image. Last
++      // writer wins, which is unsafe with two live loaders -- see the ml938
++      // note; ownership is owed before this is durable.
++      g_Subfloor[i].RealBase = RealBase;
++      __sync_synchronize();
++      g_Subfloor[i].Size = Size;
++      return true;
++    }
++  }
++  if (count >= kMaxSubfloorEntries) {
++    return false;
++  }
++  g_Subfloor[count].LowBase = LowBase;
++  g_Subfloor[count].RealBase = RealBase;
++  __sync_synchronize();
++  g_Subfloor[count].Size = Size; // published last
++  g_SubfloorCount = count + 1;
++  return true;
++}
++/* ======================= end ml951 SUB-FLOOR WINDOWS ===================== */
++
+ void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
++  /* ml951: a sub-floor window arrives through this same entry point, marked by
++   * a below-4GB "PeBase" (no real PE base can be there on iOS). Route it to the
++   * query-only table and return -- it must NEVER land in IosAliasEntries, which
++   * Module.S uses to rewrite branch targets. */
++  if (PeBase < kIosSubfloorFloor) {
++    IosSubfloorAdd(PeBase, JitBase, Size);
++    return;
++  }
++
+   int count = g_EntryCount;
+ 
+   // Identical re-registration: nothing to do.
+@@ -244,6 +388,13 @@ void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size)
+   }
+ 
+   if (count >= kMaxEntries) {
++    /* ml1106: a silent refusal here means ExitFunctionEC never translates this
++     * image, so EVERY x64->EC call into it pays a Mach exec-fault redirect
++     * (ph-rdr59: 69k of every 100k redirects were one kernelbase export). */
++    static int said = 0;
++    if (said++ < 8) {
++      LogMan::Msg::EFmt("[jit-alias] ml1106 IosAliasEntries FULL ({} entries): image 0x{:x}+0x{:x} NOT registered -- its calls will fault-redirect", count, PeBase, Size);
++    }
+     return;
+   }
+   g_Entries[count].PeBase = PeBase;
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index b429243..40b40b1 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -79,6 +79,9 @@ extern "C" int ios_va_log_len;
+  * PE images are copied into the JIT pool. */
+ extern "C" uint64_t IosJitTranslate(uint64_t Addr);
+ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);
++extern "C" uint64_t IosSubfloorToReal(uint64_t Addr);   // ml951
++extern "C" uint64_t IosSubfloorToLow(uint64_t Addr);    // ml951
++extern "C" uint64_t IosSubfloorClipSize(uint64_t LowAddr, uint64_t Size);  // ml951
+ /* ml316: FFS-bypass diagnostics, written by ExitToX64's bypass path in Module.S:
+  * [0] = native short-circuits taken, [1] = last EC target,
+  * [2] = FFS matched but target not EC (fell through to emulation), [3] = last such
+@@ -766,6 +769,34 @@ public:
+         }
+       }
+     }
++    if (Result.Size == 0) {
++      /* ml951: sub-floor image window. The address is below iOS's 4GB floor, so
++       * nothing is mapped there and the tracker cannot know it -- but the image
++       * IS mapped high, and its executable sections are already recorded for
++       * that mapping. Translate low -> real, ask about the real address, then
++       * report the range back in the GUEST's own low domain so the guest RIP is
++       * never moved to the backing address. Permissions come from the tracker
++       * unchanged, and the size is clipped to the registered window. Inert when
++       * no window is registered (the table is empty), which is also the runtime
++       * off switch: ntdll skips pushing windows when MADEIRA_NO_SUBFLOOR_XQUERY
++       * is set. */
++      const uint64_t RealAddr = IosSubfloorToReal(Address);
++      if (RealAddr != Address) {
++        auto Inner = InvalidationTracker->QueryExecutableRange(RealAddr);
++        if (Inner.Size != 0) {
++          const uint64_t LowBase = IosSubfloorToLow(Inner.Base);
++          if (LowBase != Inner.Base) {
++            static uint32_t SubfloorHitCount = 0;
++            if (SubfloorHitCount < 8) {
++              SubfloorHitCount++;
++              LogMan::Msg::EFmt("[iOS-subfloor-xquery] ml951 addr={:#x} -> real={:#x} exec range low={:#x} size={:#x} writable={}",
++                                Address, RealAddr, LowBase, IosSubfloorClipSize(LowBase, Inner.Size), Inner.Writable);
++            }
++            return {LowBase, IosSubfloorClipSize(LowBase, Inner.Size), Inner.Writable};
++          }
++        }
++      }
++    }
+     if (Result.Size == 0) {
+       static uint32_t QueryFailCount = 0;
+       if (QueryFailCount < 12) {
+@@ -1098,7 +1129,28 @@ public:
+ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* Exception, CONTEXT* GuestContext, ARM64_NT_CONTEXT* NativeContext) {
+   auto Thread = CPUArea.ThreadState();
+   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedSignalTime);
+-  LogMan::Msg::DFmt("Exception: Code: {:X} Address: {:X}", Exception->ExceptionCode, reinterpret_cast<uintptr_t>(Exception->ExceptionAddress));
++  /* ml1039: an access violation is only diagnosable with its DATA address. "Address" is the faulting PC; the
++   * operand lives in ExceptionInformation[0]=read/write/execute and [1]=address, and leaving them out cost a
++   * whole run on a fault inside a decompressor whose target could not be determined afterwards. */
++  /* ml1055: a write into tracked code is ROUTINE here (a protector rewrites its image tens of thousands of times a
++   * run) and each one printed two lines, which our log pipeline then spent a core digesting. The line is deferred
++   * for AV writes: sampled when the fault turns out to be handled SMC, printed in full on every other outcome, so
++   * no genuine access violation loses its data address. */
++  const bool IosDeferAvLog = Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && Exception->NumberParameters >= 2 &&
++                             Exception->ExceptionInformation[0] == 1;
++  auto IosLogAv = [&]() {
++    LogMan::Msg::DFmt("Exception: Code: {:X} Address: {:X} AV {} of {:X}", Exception->ExceptionCode,
++                      reinterpret_cast<uintptr_t>(Exception->ExceptionAddress),
++                      Exception->ExceptionInformation[0] == 0 ? "READ" : Exception->ExceptionInformation[0] == 1 ? "WRITE" : "EXEC",
++                      static_cast<uint64_t>(Exception->ExceptionInformation[1]));
++  };
++  if (IosDeferAvLog) {
++    /* printed below */
++  } else if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && Exception->NumberParameters >= 2) {
++    IosLogAv();
++  } else {
++    LogMan::Msg::DFmt("Exception: Code: {:X} Address: {:X}", Exception->ExceptionCode, reinterpret_cast<uintptr_t>(Exception->ExceptionAddress));
++  }
+ 
+   if (NativeContext->Pc == reinterpret_cast<uint64_t>(&ExitFunctionSuspendPoint)) {
+     // A suspend interrupt can occur in ExitFunctionEC before InSimulation is unset and set SuspendDoorbell. If this
+@@ -1113,16 +1165,26 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+     const auto FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
+ 
+     if (FEX::Windows::CallRetStack::HandleAccessViolation(Thread, FaultAddress, NativeContext->X17)) {
++      if (IosDeferAvLog) IosLogAv();
+       return true;
+     }
+ 
+     if (FEX::Windows::JITGuardPage::HandleJITGuardPage(Thread, reinterpret_cast<void*>(FaultAddress), NativeContext->X,
+                                                        reinterpret_cast<__uint128_t*>(NativeContext->V), &NativeContext->Pc)) {
++      if (IosDeferAvLog) IosLogAv();
+       return true;
+     }
+ 
+     std::scoped_lock Lock(ThreadCreationMutex);
++    static std::atomic<uint64_t> IosSmcHandled {0};
++    bool IosSmcSay = true;
+     if (InvalidationTracker && InvalidationTracker->HandleRWXAccessViolation(Thread, NativeContext->Pc, FaultAddress)) {
++      {
++        const uint64_t N = IosSmcHandled.fetch_add(1, std::memory_order_relaxed) + 1;
++        IosSmcSay = N <= 40 || (N % 1000) == 0;
++        if (IosDeferAvLog && IosSmcSay) IosLogAv();
++        if (IosSmcSay && N > 40) LogMan::Msg::DFmt("[smc] ml1055 {} self-modifying writes handled so far (lines sampled 1 in 1000)", N);
++      }
+       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
+       if (CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc) && !CTX->IsCurrentBlockSingleInst(CPUArea.ThreadState()) &&
+           CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
+@@ -1135,7 +1197,7 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+         NativeContext->X11 = 1;                                        // Set ENTRY_FILL_SRA_SINGLE_INST_REG to force a single step
+         NativeContext->X17 = reinterpret_cast<uint64_t>(CPUArea.Area); // Set EC_ENTRY_CPUAREA_REG
+       } else {
+-        LogMan::Msg::DFmt("Handled self-modifying code: pc: {:X} fault: {:X}", NativeContext->Pc, FaultAddress);
++        if (IosSmcSay) LogMan::Msg::DFmt("Handled self-modifying code: pc: {:X} fault: {:X}", NativeContext->Pc, FaultAddress);
+ #ifdef FEX_IOS_HOST
+         /* ml657: ON iOS THE SMC RETRY CAN NEVER SUCCEED, SO PERFORM THE ACCESS HERE.
+          *
+@@ -1163,7 +1225,76 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+          * unchanged. ⚠️ An ALIGNED store trapped by SMC would still loop — not observed,
+          * and it would need a different fix rather than a wider net here. */
+         const uint64_t SmcPc = NativeContext->Pc;
+-        if (Exception::HandleUnalignedAccess(CPUArea, *NativeContext, CTX->IsAddressInCodeBuffer(Thread, SmcPc))) {
++
++        /* ml1018: A BYTE RELEASE STORE MUST NEVER ENTER THE BACKPATCHER.
++         *
++         * ml657 hands this fault to HandleUnalignedAccess. For an STLR/STLUR that
++         * helper writes a half-barrier over PC[-1] and returns -4. For 16/32/64-bit
++         * that slot is a nop the emitter reserves ("Half-barrier once back-patched",
++         * MemoryOps.cpp), but for 8-bit the emitter deliberately reserves NOTHING --
++         * `stlrb` is emitted bare, because "8bit load is always aligned to natural
++         * alignment". So PC[-1] is a LIVE INSTRUCTION and the backpatch destroys it.
++         *
++         * Wine's own Mach path already refuses byte accesses for exactly this reason
++         * (ml624, signal_arm64_ios.c), which is where the ULTRAKILL wall was: a live
++         * `add x6, x0, #2` computing the ADDRESS was replaced by `dmb ish`, so the
++         * store went to a stale x6. This SMC path was never given that guard, and
++         * ml657's own comment flagged the hole -- "an ALIGNED store trapped by SMC
++         * would still loop" -- a byte store is ALWAYS aligned.
++         *
++         * Measured on RDR2 (rdr85-87, three runs): STLRB 0x089ffc28 at guest
++         * 0x1460eb66a, ml657 returning pc-4, and afterwards a deterministic bad read
++         * of 0xf91a47d1 from a block on that same page.
++         *
++         * A byte access cannot be misaligned, so this was never an unaligned atomic
++         * -- it is a write to a page we map RX. HandleRWXAccessViolation above has
++         * already accepted the write and unprotected the interval, so returning
++         * WITHOUT advancing Pc retries the ORIGINAL instruction with PC[-1] intact.
++         * If the unprotect did not make the backing writable this re-faults instead
++         * of corrupting code, and the existing 2000-redelivery guard reports it --
++         * a diagnosable loop is strictly better than silent instruction loss. */
++        constexpr uint32_t Ml1018LdaxrMask = 0x3F'FF'FC'00;
++        constexpr uint32_t Ml1018StlrInst  = 0x08'9F'FC'00;
++        constexpr uint32_t Ml1018Rcpc2Mask = 0x3F'E0'0C'00;
++        constexpr uint32_t Ml1018StlurInst = 0x19'00'00'00;
++        const uint32_t* Ml1018Pc = reinterpret_cast<const uint32_t*>(SmcPc);
++        const uint32_t Ml1018Insn = Ml1018Pc[0];
++        const bool Ml1018IsByteRelStore =
++            ((Ml1018Insn >> 30) & 0x3) == 0 &&
++            (((Ml1018Insn & Ml1018LdaxrMask) == Ml1018StlrInst) ||
++             ((Ml1018Insn & Ml1018Rcpc2Mask) == Ml1018StlurInst));
++
++        if (Ml1018IsByteRelStore) {
++          /* ml1065: ml1018 retried the SAME stlrb and relied on the page having become
++           * writable. On iOS it never does (the mapping stays RX; plain stores into it
++           * are emulated by Wine's Mach handler, but that emulator covers STR/STRB, not
++           * the release forms). Result: ph-rdr31/32 -- 2000 identical redeliveries of
++           * a byte store to 0x14011b2c7 on the way back to the menu, then termination.
++           * Rewrite the instruction IN PLACE to the plain byte store with the same
++           * registers and offset (stlrb -> strb [Rn], stlurb -> sturb [Rn,#imm9]):
++           * nothing at PC[-1] is touched, the retry faults as an ordinary store and
++           * Wine completes it. What is given up is release ordering on a byte written
++           * into a code page, which no reader depends on. */
++          const uint32_t Ml1018Rt = Ml1018Insn & 0x1f, Ml1018Rn = (Ml1018Insn >> 5) & 0x1f;
++          uint32_t Ml1065New;
++          if ((Ml1018Insn & Ml1018LdaxrMask) == Ml1018StlrInst) {
++            Ml1065New = 0x39000000u | (Ml1018Rn << 5) | Ml1018Rt;                        /* STRB Wt, [Xn] */
++          } else {
++            const uint32_t Imm9 = (Ml1018Insn >> 12) & 0x1ff;
++            Ml1065New = 0x38000000u | (Imm9 << 12) | (Ml1018Rn << 5) | Ml1018Rt;         /* STURB Wt, [Xn, #imm9] */
++          }
++          *reinterpret_cast<volatile uint32_t*>(SmcPc) = Ml1065New;   /* the write itself goes through Wine's emulated-store path */
++          __builtin___clear_cache(reinterpret_cast<char*>(SmcPc), reinterpret_cast<char*>(SmcPc) + 4);
++          static unsigned Ml1018Count;
++          if (Ml1018Count < 16) {
++            /* Capture PC[-1] BEFORE anything can patch it -- the one piece of
++             * evidence the diagnosis was missing, i.e. which live instruction the
++             * old path was destroying. */
++            LogMan::Msg::EFmt("[smc-byte] ml1018 #{} DECLINED backpatch: insn {:08X} at pc {:X} is a BYTE release "
++                              "store (fault {:X}); preserved PC[-1]={:08X} PC[+1]={:08X}; retrying at the same pc",
++                              ++Ml1018Count, Ml1018Insn, SmcPc, FaultAddress, Ml1018Pc[-1], Ml1018Pc[1]);
++          }
++        } else if (Exception::HandleUnalignedAccess(CPUArea, *NativeContext, CTX->IsAddressInCodeBuffer(Thread, SmcPc))) {
+           static unsigned SmcAtomicCount;
+           if (SmcAtomicCount < 16) {
+             LogMan::Msg::EFmt("[smc-atomic] ml657 #{} handled pc {:X} -> {:X} fault {:X}", ++SmcAtomicCount, SmcPc,
+@@ -1175,6 +1306,7 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+ 
+       return true;
+     }
++    if (IosDeferAvLog) IosLogAv();   /* ml1055: NOT self-modifying code -- a real fault, always logged */
+   }
+ 
+   bool IsJIT = CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc);
+diff --git a/Source/Windows/Common/CRT/Alloc.cpp b/Source/Windows/Common/CRT/Alloc.cpp
+index 0e11be2..4f5e968 100644
+--- a/Source/Windows/Common/CRT/Alloc.cpp
++++ b/Source/Windows/Common/CRT/Alloc.cpp
+@@ -6,26 +6,41 @@
+ #include "../Priv.h"
+ #include <rpmalloc/rpmalloc.h>
+ 
++#ifdef FEX_IOS_HOST
++extern "C" void fex_ios_rpm_lock(void);
++extern "C" void fex_ios_rpm_unlock(void);
++namespace { struct IosRpmGuard { IosRpmGuard() { fex_ios_rpm_lock(); } ~IosRpmGuard() { fex_ios_rpm_unlock(); } }; }
++#define IOS_RPM_GUARD() IosRpmGuard ios_rpm_guard_
++#else
++#define IOS_RPM_GUARD() ((void)0)
++#endif
++
+ void* calloc(size_t NumOfElements, size_t SizeOfElements) {
++  IOS_RPM_GUARD();
+   return ::rpcalloc(NumOfElements, SizeOfElements);
+ }
+ 
+ void free(void* Memory) {
++  IOS_RPM_GUARD();
+   ::rpfree(Memory);
+ }
+ 
+ void* malloc(size_t Size) {
++  IOS_RPM_GUARD();
+   return ::rpmalloc(Size);
+ }
+ 
+ void* realloc(void* Memory, size_t NewSize) {
++  IOS_RPM_GUARD();
+   return ::rprealloc(Memory, NewSize);
+ }
+ 
+ DLLEXPORT_FUNC(void*, _aligned_malloc, (size_t Size, size_t Alignment)) {
++  IOS_RPM_GUARD();
+   return ::rpaligned_alloc(Alignment, Size);
+ }
+ 
+ DLLEXPORT_FUNC(void, _aligned_free, (void* Memory)) {
++  IOS_RPM_GUARD();
+   ::rpfree(Memory);
+ }

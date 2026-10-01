@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Eikum <aeikum@codeweavers.com>
+Date: Thu, 3 Feb 2022 11:35:13 -0600
+Subject: [PATCH] HACK: shell32: Preserve duplicated Documents/Stuff
+ directories
+Valve-commit: 3979d95d1eb0da4485f3d311ae3c2ea2280d4837
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/shell32/shellpath.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/dlls/shell32/shellpath.c b/dlls/shell32/shellpath.c
+index 419057f..fbe181f 100644
+--- a/dlls/shell32/shellpath.c
++++ b/dlls/shell32/shellpath.c
+@@ -3335,6 +3335,23 @@ static HRESULT create_extra_folders(void)
+         hr = SHGetFolderPathAndSubDirW(0, CSIDL_MYPICTURES | CSIDL_FLAG_CREATE, NULL,
+                                        SHGFP_TYPE_DEFAULT, L"Screenshots", path);
+     }
++
++
++    /* Proton HACK: In older Proton versions, duplicate Stuff directories were
++     * created at both %PROFILE%\Music and %PROFILE\Documents\Music. Due to
++     * some bugs when downgrading to those older Proton versions, create those
++     * missing Documents directories here, too. */
++    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
++                                   SHGFP_TYPE_DEFAULT, L"Downloads", path);
++    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
++                                   SHGFP_TYPE_DEFAULT, L"Music", path);
++    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
++                                   SHGFP_TYPE_DEFAULT, L"Pictures", path);
++    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
++                                   SHGFP_TYPE_DEFAULT, L"Templates", path);
++    SHGetFolderPathAndSubDirW(0, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, NULL,
++                                   SHGFP_TYPE_DEFAULT, L"Videos", path);
++
+     return hr;
+ }
+ 

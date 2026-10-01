@@ -1,0 +1,34 @@
+{
+  "about": "Licence texts a pinned tree needs but does not carry: copies of an upstream file (repository, commit, path) or, where no upstream text exists, a notice written from the component's own metadata (derived_from). build/notices-assemble.sh collects them; tools/tests/test_notices_extra.py checks the bytes.",
+  "files": {
+    "D3D12TranslationLayer-LICENSE": {
+      "for": "DXMT's libs/DXBCParser: its files say 'Copyright (c) Microsoft Corporation. Licensed under the MIT License' and come from microsoft/D3D12TranslationLayer (BlobContainer, DXBCUtils, ShaderBinary) and microsoft/DirectX-Headers (d3d12tokenizedprogramformat.hpp), whose LICENSE texts are identical",
+      "repository": "https://github.com/microsoft/D3D12TranslationLayer",
+      "commit": "aa4db554af2da6fb60dfeb06c6560f4f251199d6",
+      "path": "LICENSE",
+      "sha256": "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c"
+    },
+    "MoltenVK-LICENSE": {
+      "for": "MoltenVK inside GStreamer's iOS release (libGStreamer.a carries libMoltenVK's master object; Vulkan SDK 1.3.283.0 ships MoltenVK v1.2.9); Apache-2.0, notice only (decision 0042)",
+      "repository": "https://github.com/KhronosGroup/MoltenVK",
+      "commit": "bf097edc74ec3b6dfafdcd5a38d3ce14b11952d6",
+      "path": "LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "ns-keyed-archive-NOTICE-from-metadata": {
+      "for": "the ns-keyed-archive 0.1.5 crate, which has no licence file anywhere (docs/release-audits/stikjit-rust.md, 2026-09-30); owner's decision 0039",
+      "derived_from": "the crate's Cargo.toml license and authors fields",
+      "sha256": "03deb0fb56a23bb541600ce285cab92154a63bbf3293ac603229fea7d913b517"
+    },
+    "plist-macro-NOTICE-from-metadata": {
+      "for": "the plist-macro 0.1.6 crate, which has no licence file anywhere (docs/release-audits/stikjit-rust.md, 2026-09-30); owner's decision 0039",
+      "derived_from": "the crate's Cargo.toml license and authors fields",
+      "sha256": "e05d9bb5e772a85af135f436ace22b92c79fbd8d8a94e291c1d140c418e16221"
+    },
+    "plist_ffi-NOTICE-from-metadata": {
+      "for": "the plist_ffi 0.1.6 crate, which has no licence file anywhere (docs/release-audits/stikjit-rust.md, 2026-09-30); owner's decision 0039",
+      "derived_from": "the crate's Cargo.toml license and authors fields",
+      "sha256": "8c3d4429551e42f691f4ea29e14743ed31ae18d7728227b20e0c219673ab49a0"
+    }
+  }
+}

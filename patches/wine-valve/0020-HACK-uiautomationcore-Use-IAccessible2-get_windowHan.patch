@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor McAdams <cmcadams@codeweavers.com>
+Date: Wed, 13 Dec 2023 07:29:44 -0500
+Subject: [PATCH] HACK: uiautomationcore: Use IAccessible2::get_windowHandle
+ method to get HWND when possible.
+
+MSAA proxy providers require an HWND for creation, this is usually
+retrieved via WindowFromAccessibleObject. However,
+WindowFromAccessibleObject requires navigating up to the root
+IAccessible in CEF applications, which due to cross-process calls can
+end up taking over a second for focus change events to be delivered.
+Using the IA2 method here gets this down to around 350ms, which isn't
+great but is better than before. Native does not use the get_windowHandle
+method, but it likely uses hooks which would negate the cross-process
+call performance hit.
+Valve-commit: a10408af11a4d8553b8c03769ea7df4190eeea17
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/uiautomationcore/uia_provider.c | 35 ++++++++++++++++++++++------
+ 1 file changed, 28 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/uiautomationcore/uia_provider.c b/dlls/uiautomationcore/uia_provider.c
+index aa930e7..ca3de7e 100644
+--- a/dlls/uiautomationcore/uia_provider.c
++++ b/dlls/uiautomationcore/uia_provider.c
+@@ -1141,16 +1141,28 @@ static HRESULT msaa_acc_get_focus(struct msaa_provider *prov, struct msaa_provid
+ 
+     if (V_VT(&v) == VT_DISPATCH)
+     {
++        IAccessible2 *ia2 = NULL;
++
+         hr = IDispatch_QueryInterface(V_DISPATCH(&v), &IID_IAccessible, (void **)&focus_acc);
+         VariantClear(&v);
+         if (FAILED(hr))
+             return hr;
+ 
+-        hr = WindowFromAccessibleObject(focus_acc, &hwnd);
+-        if (FAILED(hr) || !hwnd)
++        if ((ia2 = msaa_acc_get_ia2(focus_acc)))
+         {
+-            IAccessible_Release(focus_acc);
+-            return hr;
++            hr = IAccessible2_get_windowHandle(ia2, &hwnd);
++            if (FAILED(hr))
++                WARN("IA2 get_windowHandle failed with hr %#lx\n", hr);
++            IAccessible2_Release(ia2);
++        }
++        if (!hwnd)
++        {
++            hr = WindowFromAccessibleObject(focus_acc, &hwnd);
++            if (FAILED(hr) || !hwnd)
++            {
++                IAccessible_Release(focus_acc);
++                return hr;
++            }
+         }
+     }
+ 
+@@ -1463,9 +1475,18 @@ HRESULT create_msaa_provider(IAccessible *acc, LONG child_id, HWND hwnd, BOOL ro
+     {
+         HRESULT hr;
+ 
+-        hr = WindowFromAccessibleObject(acc, &msaa_prov->hwnd);
+-        if (FAILED(hr))
+-            WARN("WindowFromAccessibleObject failed with hr %#lx\n", hr);
++        if (msaa_prov->ia2)
++        {
++            hr = IAccessible2_get_windowHandle(msaa_prov->ia2, &msaa_prov->hwnd);
++            if (FAILED(hr))
++                WARN("IA2 get_windowHandle failed with hr %#lx\n", hr);
++        }
++        if (!msaa_prov->hwnd)
++        {
++            hr = WindowFromAccessibleObject(acc, &msaa_prov->hwnd);
++            if (FAILED(hr))
++                WARN("WindowFromAccessibleObject failed with hr %#lx\n", hr);
++        }
+     }
+     else
+         msaa_prov->hwnd = hwnd;

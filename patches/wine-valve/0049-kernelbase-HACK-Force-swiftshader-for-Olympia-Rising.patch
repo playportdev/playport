@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 27 Mar 2023 10:44:52 -0600
+Subject: [PATCH] kernelbase: HACK: Force swiftshader for Olympia Rising.
+
+CW-Bug-Id: #22076
+Valve-commit: 3d3274f56032d07b97381c8793443a8f91c225f1
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 0a3e10b..13d9f42 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -513,6 +513,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     {
+         {L"Paradox Launcher.exe", L" --use-gl=swiftshader --in-process-gpu"},
+         {L"Montaro\\nw.exe", L" --use-gl=swiftshader"},
++        {L"OlympiaRising.exe", L" --use-gl=swiftshader"},
+     };
+     unsigned int i;
+ 

@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 29 Sep 2026 19:31:06 +0200
+Subject: [PATCH] ntdll: time the wineserver requests only while the counters
+ are on
+
+madeira-unix 0037's [srv] census reads the clock twice around every
+wineserver request and around every select that blocks, and finds the
+calling thread's slot, for the [srv] and [srv-t] lines the xprobe sampler
+prints; MADEIRA_NO_DIAGNOSTICS does not start that sampler, so the release
+app timed every request for nothing. The requests' census, and the request
+total [sync-census] prints, now run only while ntdll-unix's
+ios_counters_on is set (off under MADEIRA_NO_DIAGNOSTICS or
+MADEIRA_NO_COUNTERS). __wine_main sets it first (ios_counters_init), and
+the loader writes it into each ntdll's new ios_counters_on export, the
+session's and each ARM64EC pseudo-process's, before that process runs any
+code, so the PE census and FEX follow it.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-29-release-counters.md
+Offered-upstream: no
+---
+ build/ntdll-unix/loader_ios.c | 24 ++++++++++++++++++++++++
+ build/ntdll-unix/server_ios.c | 14 +++++++++-----
+ 2 files changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index 07ee93b..edf564a 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -2032,6 +2032,15 @@ static void load_ntdll_functions( HMODULE module )
+                 *pios_teb_tsd_offset, pios_teb_tsd_offset);
+         }
+     }
++    /* Playport: the PE side's census counters follow ntdll-unix's
++     * (ios_counters_on, unix/sync.c): off under MADEIRA_NO_DIAGNOSTICS or
++     * MADEIRA_NO_COUNTERS. Written before the process runs any code. */
++    {
++        extern int ios_counters_on;
++        unsigned int *pon = (unsigned int *)find_named_export( module, exports, "ios_counters_on" );
++        if (pon) *pon = ios_counters_on ? 1 : 0;
++        else ERR( "[counters] ntdll export ios_counters_on not found: the PE census stays on\n" );
++    }
+     /* ml797: hand the FEX arena to the PE side as plain data. It cannot travel
+      * as an environment variable -- its consumer runs before any CRT or TEB
+      * exists. Publishing zero is normal and means "no arena"; the emulator then
+@@ -2395,6 +2404,15 @@ static int ios_load_child_ec_ntdll( PEB *child_peb )
+             }
+             else dprintf(2, "[teb-tsd] ec-child export ios_teb_tsd_offset NOT FOUND\n");
+         }
++        /* Playport: the PE side's census counters follow ntdll-unix's
++         * (ios_counters_on, unix/sync.c): off under MADEIRA_NO_DIAGNOSTICS or
++         * MADEIRA_NO_COUNTERS. Written before the process runs any code. */
++        {
++            extern int ios_counters_on;
++            unsigned int *pon = (unsigned int *)find_named_export( module, exports, "ios_counters_on" );
++            if (pon) *pon = ios_counters_on ? 1 : 0;
++            else dprintf( 2, "[counters] ec-child ntdll export ios_counters_on not found: the PE census stays on\n" );
++        }
+         {
+             /* ml797: same arena hand-off for a pseudo-process's own ntdll. */
+             extern ULONG_PTR ios_fex_arena_base_unix, ios_fex_arena_end_unix;
+@@ -3329,6 +3347,12 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
+ {
+     main_argc = argc;
+     main_argv = argv;
++#ifdef WINE_IOS
++    {   /* Playport: whether the measurement-only counters run (unix/sync.c) */
++        extern void ios_counters_init(void);
++        ios_counters_init();
++    }
++#endif
+ 
+     init_paths();
+ #ifndef WINE_IOS
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 331c0f7..e4c5f07 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -2014,10 +2014,12 @@ unsigned int server_call_unlocked( void *req_ptr )
+     struct __server_request_info * const req = req_ptr;
+     unsigned int ret;
+ 
++    extern int ios_counters_on;   /* Playport: unix/sync.c */
++    const int counting = ios_counters_on;
+     unsigned int type = req->u.req.request_header.req;   /* the reply overwrites it */
+-    unsigned long long t0 = mach_absolute_time();
++    unsigned long long t0 = counting ? mach_absolute_time() : 0;
+ 
+-    ios_srv_req_count++;
++    if (counting) ios_srv_req_count++;
+     if ((ret = send_request( data->request_fd, req ))) return ret;
+     /* iOS-Madeira 2026-07-05: kick the in-process server loop out of its
+      * tick sleep so the request is picked up in ~50us instead of waiting
+@@ -2027,7 +2029,7 @@ unsigned int server_call_unlocked( void *req_ptr )
+         ios_wineserver_wake();
+     }
+     ret = wait_reply( data->reply_fd, req );
+-    ios_srv_note_call( type, mach_absolute_time() - t0 );   /* Playport: [srv] census */
++    if (counting) ios_srv_note_call( type, mach_absolute_time() - t0 );   /* Playport: [srv] census */
+     return ret;
+ }
+ 
+@@ -2581,9 +2583,11 @@ unsigned int server_select( const union select_op *select_op, data_size_t size,
+         if (signaled) break;
+ 
+         {
+-            unsigned long long t0 = mach_absolute_time();
++            extern int ios_counters_on;   /* Playport: unix/sync.c */
++            const int counting = ios_counters_on;
++            unsigned long long t0 = counting ? mach_absolute_time() : 0;
+             ret = wait_select_reply( data->wait_fd, &cookie );
+-            ios_srv_note_block( mach_absolute_time() - t0 );   /* Playport: [srv] census */
++            if (counting) ios_srv_note_block( mach_absolute_time() - t0 );   /* Playport: [srv] census */
+         }
+     }
+     while (ret == STATUS_USER_APC || ret == STATUS_KERNEL_APC);

@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Sun, 16 Aug 2026 20:30:25 +0800
+Subject: [PATCH] loader: [tls-life] probe for TLS slot assignment and callback
+ invocation
+
+Reports the slot index each module actually receives from alloc_tls_slot,
+and whether call_tls_callbacks runs plus how many callbacks it invokes.
+
+Added to test whether MSVC dynamic initialisers were failing to run: this
+file's own comment warns that magic statics hardcode TLS[0] on the Windows
+convention that the EXE owns slot 0, and that a non-zero slot leaves
+"zero-initialized registries that later get virt-called and crash" -- a
+near-exact description of an Eden crash reading a NULL table pointer.
+
+The probe refuted that: eden.exe gets slot 0, xtajit64 slot 1, and both of
+eden's TLS callbacks run. Kept because the question recurs for every
+MSVC-built guest and the answer is otherwise invisible -- the existing
+report was a muted TRACE, and TlsIndex == -1 is only a marker, not the
+real index, which is written to *dir->AddressOfIndex.
+
+(cherry picked from commit 7f458f5b2e702b49c9ef9d81744a45cd9a20c0fc)
+Madeira-commit: d8168f156238b21c60ed194bb135853a80655e67
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index a70a32c5529..ff6d4a44f6f 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1700,6 +1700,27 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )
+ 
+     *(DWORD *)dir->AddressOfIndex = i;
+     tls_dirs[i] = *dir;
++    {
++        /* iOS-Mythic ml704 [tls-life]: which TLS slot each module actually got.
++         *
++         * Compiler-emitted magic statics in main EXEs commonly hardcode TLS[0]
++         * on the Windows convention that the EXE owns slot 0.  If xtajit64 (or
++         * anything else) takes slot 0 first, those reads land in the wrong
++         * module's TLS block and the guest concludes its registries are already
++         * initialised, leaving them zero -- which is exactly what a NULL table
++         * pointer in a settings registry looks like.  Print the assignment so
++         * the ordering is a measured fact rather than an assumption. */
++        static int n_slot;
++        if (n_slot < 24)
++        {
++            n_slot++;
++            ERR( "[tls-life] ml704 slot=%lu module=%s base=%p callbacks=%p rawsize=%lu zerofill=%lu\n",
++                 i, debugstr_w(mod->BaseDllName.Buffer), mod->DllBase,
++                 (void *)dir->AddressOfCallBacks,
++                 (ULONG)(dir->EndAddressOfRawData - dir->StartAddressOfRawData),
++                 dir->SizeOfZeroFill );
++        }
++    }
+     return TRUE;
+ }
+ 
+@@ -1967,6 +1988,22 @@ static void call_tls_callbacks( HMODULE module, UINT reason )
+     dir = RtlImageDirectoryEntryToData( module, TRUE, IMAGE_DIRECTORY_ENTRY_TLS, &dirsize );
+     if (!dir || !dir->AddressOfCallBacks) return;
+ 
++    {   /* ml704 [tls-life]: prove the callbacks actually run, and how many.
++         * MSVC images register dynamic initialisers here; if these never fire,
++         * globals stay zero and the failure surfaces far away. */
++        static int n_cb;
++        if (n_cb < 24)
++        {
++            const PIMAGE_TLS_CALLBACK *c = (const PIMAGE_TLS_CALLBACK *)dir->AddressOfCallBacks;
++            int cnt = 0;
++
++            while (c[cnt]) cnt++;
++            n_cb++;
++            ERR( "[tls-life] ml704 RUN callbacks module=%p reason=%u count=%d first=%p\n",
++                 module, reason, cnt, cnt ? (void *)c[0] : NULL );
++        }
++    }
++
+     for (callback = (const PIMAGE_TLS_CALLBACK *)dir->AddressOfCallBacks; *callback; callback++)
+     {
+         TRACE_(relay)("\1Call TLS callback (proc=%p,module=%p,reason=%s,reserved=0)\n",

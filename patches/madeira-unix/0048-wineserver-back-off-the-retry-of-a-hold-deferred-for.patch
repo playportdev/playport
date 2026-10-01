@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 21:21:14 +0200
+Subject: [PATCH] wineserver: back off the retry of a hold deferred for long
+
+madeira-unix 0010 defers a real suspend's Mach hold until the thread is at
+a safe point and retries it every millisecond. A thread that stays in a
+server wait or in host code keeps that timer firing for as long as it is
+suspended. Playport's in-game menu pauses a game by suspending every one
+of its threads until Resume, and most of them wait in server calls: on
+the phone the 51 threads of Hollow Knight made the wineserver thread do
+some 28000 suspend, get-state and resume rounds a second for as long as
+the menu was up ([real-susp] retries=627791 after two ten-second pauses).
+
+A hold still deferred after 20 tries now retries after 2, 4, 8, 16 and
+then every 32 ms. The first 20 ms are unchanged, so a stop-the-world
+(Mono's collector suspends every thread and waits for their contexts),
+whose threads return to guest code within milliseconds, is held as fast
+as before. The tries are counted in a small record the retry timer owns
+with its reference on the thread.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-30-in-game-menu.md
+Offered-upstream: no
+---
+ build/wineserver/mach_ios.c | 49 ++++++++++++++++++++++++++++++++++---
+ 1 file changed, 46 insertions(+), 3 deletions(-)
+
+diff --git a/build/wineserver/mach_ios.c b/build/wineserver/mach_ios.c
+index 8ca905e..a154e5b 100644
+--- a/build/wineserver/mach_ios.c
++++ b/build/wineserver/mach_ios.c
+@@ -565,9 +565,19 @@ void ios_real_suspend_stats( const char *why )
+  * the logical suspend is gone. A thread blocked in a server wait needs no physical
+  * hold meanwhile: wake_thread() does not wake a suspended thread.
+  *
++ * A hold still deferred after RS_FAST_TRIES retries is at a thread that stays in
++ * a server wait or in host code: an idle thread of a game the host app paused
++ * (its in-game menu suspends every thread of the game until Resume), not one a
++ * stop-the-world is waiting for, which returns to guest code within a few
++ * milliseconds. Its retries back off, doubling up to RS_SLOW_MS: at 1 ms, the
++ * fifty-odd threads of a paused game kept this thread making some 28000
++ * suspend/state/resume rounds a second for as long as the pause lasted.
++ *
+  * ios_mach_suspended is 0 (none), 1 (held) or RS_PENDING (deferred, one timer). */
+ #define RS_PENDING   2
+ #define RS_RETRY_MS  1
++#define RS_FAST_TRIES 20
++#define RS_SLOW_MS   32
+ #define RS_MAX_IMG   4096
+ 
+ static struct rs_range { uint64_t lo, hi; } rs_img[RS_MAX_IMG];
+@@ -662,16 +672,47 @@ static int rs_port_at_safe_point( struct thread *thread, mach_port_t port )
+ 
+ static void rs_retry( void *private );
+ 
++/* A deferred hold's retry: its thread (a reference) and the tries so far. */
++struct rs_pending
++{
++    struct thread *thread;
++    unsigned int   tries;
++};
++
++/* RS_RETRY_MS for the first RS_FAST_TRIES tries, then doubling up to RS_SLOW_MS. */
++static timeout_t rs_retry_delay( unsigned int tries )
++{
++    unsigned int ms = RS_RETRY_MS;
++
++    if (tries > RS_FAST_TRIES)
++    {
++        unsigned int shift = tries - RS_FAST_TRIES;
++        ms = shift >= 5 ? RS_SLOW_MS : RS_RETRY_MS << shift;
++        if (ms > RS_SLOW_MS) ms = RS_SLOW_MS;
++    }
++    return -(timeout_t)ms * 10000;
++}
++
+ /* Mark the hold deferred and arm the retry, once per pending hold. */
+ static void rs_defer( struct thread *thread )
+ {
++    struct rs_pending *p;
++
+     if (thread->ios_mach_suspended == RS_PENDING) return;
+     thread->ios_mach_suspended = RS_PENDING;
+     rs_deferred++;
+-    if (!add_timeout_user( -(timeout_t)RS_RETRY_MS * 10000, rs_retry, grab_object( thread ) ))
++    if (!(p = malloc( sizeof(*p) )))
++    {
++        thread->ios_mach_suspended = 0;
++        return;
++    }
++    p->thread = (struct thread *)grab_object( thread );
++    p->tries = 0;
++    if (!add_timeout_user( rs_retry_delay( 0 ), rs_retry, p ))
+     {
+         thread->ios_mach_suspended = 0;
+         release_object( thread );
++        free( p );
+     }
+ }
+ 
+@@ -746,7 +787,8 @@ int ios_thread_mach_hold( struct thread *thread )
+ /* safepoint: the deferred hold's retry. Holds a reference on the thread. */
+ static void rs_retry( void *private )
+ {
+-    struct thread *thread = private;
++    struct rs_pending *p = private;
++    struct thread *thread = p->thread;
+ 
+     if (thread->ios_mach_suspended == RS_PENDING)
+     {
+@@ -758,11 +800,12 @@ static void rs_retry( void *private )
+             ret = rs_try_hold( thread );
+         }
+         if (ret > 0) rs_late_holds++;
+-        else if (ret < 0 && add_timeout_user( -(timeout_t)RS_RETRY_MS * 10000, rs_retry, thread ))
++        else if (ret < 0 && add_timeout_user( rs_retry_delay( ++p->tries ), rs_retry, p ))
+             return;                                    /* keep the reference for the next try */
+         else if (thread->ios_mach_suspended == RS_PENDING) thread->ios_mach_suspended = 0;
+     }
+     release_object( thread );
++    free( p );
+ }
+ 
+ /* Release the one persistent Mach hold, if we hold it. */

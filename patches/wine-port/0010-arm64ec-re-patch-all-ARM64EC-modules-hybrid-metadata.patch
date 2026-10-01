@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 30 Apr 2026 06:30:52 +0800
+Subject: [PATCH] arm64ec: re-patch all ARM64EC modules' hybrid metadata after
+ dispatcher globals are set
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When kernel32/ucrtbase/kernelbase load (as dependencies of xtajit64),
+their arm64ec_update_hybrid_metadata runs while the dispatcher globals
+__os_arm64x_dispatch_call_no_redirect / _fptr / _ret are still 0
+(they're only set inside arm64ec_process_init_dispatchers, which runs
+AFTER xtajit64 finishes loading its dependency chain). Consequently
+those modules' .data slots end up holding 0, and their EC→x64 exit
+thunks `blr x16` to NULL when EC code calls into x86 — manifesting as
+e.g. kernel32's $iexit_thunk$cdecl$i8$i8 faulting at PC=0 immediately
+after FEX-translated x86 code hands control back to EC.
+
+Walk InLoadOrderModuleList after setting the globals and re-run
+arm64ec_update_hybrid_metadata for every loaded ARM64EC module — but
+skip ntdll itself: re-patching ntdll triggers our iOS NtProtect-sync
+path (in ntdll-unix/virtual_ios.c) which over-aggressively translates
+one ntdll data pointer to a JIT-pool address, breaking ntdll's own
+internals immediately afterwards. ntdll's slots happen to already be
+functional via a different path.
+
+After this fix, hello-x64.exe (a pure x86_64 PE) runs end-to-end via
+FEX on iOS and successfully prints its "Hello from x86_64 PE under
+ARM64EC + FEX on iOS!" message via WriteFile → NtWriteFile.
+
+(cherry picked from commit 1da757ad07f67ac5f3833ac64575b3c84c8e5d8a)
+Madeira-commit: d7c576059ca82565a1cc88d7ec1422e6865438eb
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 49 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 44 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index b78b21efebc..75970ecc9d7 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -267,11 +267,50 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+     __os_arm64x_dispatch_fptr = RtlFindExportedRoutineByName( module, "DispatchJump" );
+     __os_arm64x_dispatch_ret = RtlFindExportedRoutineByName( module, "RetToEntryThunk" );
+ 
+-    /* The dispatcher globals were 0 when xtajit64's process_module ran
+-     * arm64ec_update_hybrid_metadata, so xtajit64's hybrid pointer slots
+-     * still hold 0. Re-run the metadata update with the now-populated
+-     * globals so xtajit64's exit thunks read real dispatcher addresses. */
+-    arm64ec_update_hybrid_metadata( module, RtlImageNtHeader( module ), (IMAGE_ARM64EC_METADATA *)metadata );
++    /* The dispatcher globals were 0 when EVERY ARM64EC module's
++     * arm64ec_update_hybrid_metadata ran (because the globals only get set
++     * here, AFTER xtajit64 finishes loading — but kernel32/ucrtbase/kernelbase
++     * are loaded BEFORE xtajit64 finishes). So every loaded ARM64EC module's
++     * hybrid pointer slots currently hold 0. Without this re-patch,
++     * kernel32's exit thunks would `blr x16` with x16=0 → branch to NULL.
++     *
++     * Walk loaded modules and re-patch their hybrid metadata. SKIP ntdll
++     * itself: re-running arm64ec_update_hybrid_metadata on ntdll's .data
++     * triggers the iOS NtProtect IAT-sync path (in our virtual_ios.c) which
++     * over-aggressively rewrites one pointer in ntdll's .data to a JIT-pool
++     * address, breaking ntdll's own internals immediately after. ntdll's
++     * slots happen to already be functional (the EC dispatcher slots that
++     * matter for ntdll are written elsewhere during ntdll's special
++     * loader-init path, not via arm64ec_update_hybrid_metadata). */
++    {
++        LIST_ENTRY *list = &RtlGetCurrentPeb()->LdrData->InLoadOrderModuleList;
++        LIST_ENTRY *entry;
++        void *self_module = (void *)NtCurrentTeb()->Peb->ImageBaseAddress;  /* unused but harmless */
++        (void)self_module;
++        void *ntdll_base = (void *)RtlGetCurrentPeb();
++        (void)ntdll_base;
++        for (entry = list->Flink; entry != list; entry = entry->Flink)
++        {
++            LDR_DATA_TABLE_ENTRY *mod_entry =
++                CONTAINING_RECORD( entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
++            const IMAGE_ARM64EC_METADATA *mod_metadata =
++                arm64ec_get_module_metadata( mod_entry->DllBase );
++            if (!mod_metadata) continue;
++            /* Skip ntdll — re-patch breaks it via iOS NtProtect-sync side
++             * effects, and ntdll doesn't need it anyway. Match by base name. */
++            if (mod_entry->BaseDllName.Buffer &&
++                !wcscmp( mod_entry->BaseDllName.Buffer, L"ntdll.dll" ))
++            {
++                ERR( "arm64ec_process_init_dispatchers: SKIP ntdll re-patch\n" );
++                continue;
++            }
++            ERR( "arm64ec_process_init_dispatchers: re-patching %s metadata\n",
++                 debugstr_w(mod_entry->BaseDllName.Buffer) );
++            arm64ec_update_hybrid_metadata( mod_entry->DllBase,
++                                            RtlImageNtHeader( mod_entry->DllBase ),
++                                            (IMAGE_ARM64EC_METADATA *)mod_metadata );
++        }
++    }
+ 
+ #define GET_PTR(name) p ## name = arm64ec_redirect_ptr( module, \
+                                       RtlFindExportedRoutineByName( module, #name ), metadata )

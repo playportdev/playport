@@ -1,0 +1,136 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 29 Sep 2026 19:30:38 +0200
+Subject: [PATCH] ntdll: count the lock, wait-on-address and QPC census only
+ while the counters are on
+
+wine-port 0054's PE-side census (contended critical sections with their
+wait timing and ring, spin acquisitions, wakes, WaitOnAddress and its
+wakes, and the per-thread QueryPerformanceCounter gap histogram) is read
+only by the [xp-api] sampler, which MADEIRA_NO_DIAGNOSTICS does not start.
+A new ntdll export, ios_counters_on (1 until the unix loader writes
+ntdll-unix's value before the process's code runs), now gates them all.
+QueryPerformanceCounter keeps its CNTVCT fast path and every lock and wait
+behaves as before.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-29-release-counters.md
+Offered-upstream: no
+---
+ dlls/ntdll/ntdll.spec   |  2 ++
+ dlls/ntdll/ntdll_misc.h |  1 +
+ dlls/ntdll/sync.c       | 20 +++++++++++++-------
+ dlls/ntdll/time.c       |  1 +
+ 4 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 254de86..81c7310 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1776,6 +1776,8 @@
+ @ extern -private ios_teb_tsd_offset
+ # ml1131: [xp-api] probe counters (sync.c), read by ntdll-unix
+ @ extern -private ios_xp_nt
++# Playport: the loader clears it when the counters are off (sync.c)
++@ extern -private ios_counters_on
+ @ extern -private ios_fex_arena_base
+ @ extern -private ios_fex_arena_end
+ @ extern -private __wine_unixlib_handle
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 281d746..58ad9ca 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -214,6 +214,7 @@ struct ios_xp_nt
+     struct ios_xp_nt_qpc qpc[256];   /* per-thread slot (tid hash): gap between QPC reads */
+ };
+ extern struct ios_xp_nt ios_xp_nt;
++extern unsigned int ios_counters_on;
+ extern void ios_xp_nt_init(void);
+ 
+ #endif
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index c17b955..f42ef5c 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -44,6 +44,12 @@
+  * slow paths already); call RATES come from FEX's x64->EC call sampler. Layout
+  * is mirrored in server_ios.c (struct ios_xp_nt_view): append only. */
+ struct ios_xp_nt ios_xp_nt;   /* layout: ntdll_misc.h */
++/* Playport: the counters below run only while this is set. The unix loader
++ * writes ntdll-unix's ios_counters_on here before any code of the process
++ * runs (load_ntdll_functions and the ec-child start), and clears it under
++ * MADEIRA_NO_DIAGNOSTICS, whose samplers are the counters' only readers, or
++ * MADEIRA_NO_COUNTERS. unsigned int, as ios_teb_tsd_offset, for FEX to read. */
++unsigned int ios_counters_on = 1;
+ 
+ static inline ULONGLONG ios_xp_ticks(void)
+ {
+@@ -699,7 +705,7 @@ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
+             {
+                 if (InterlockedCompareExchange( &crit->LockCount, 0, -1 ) == -1)
+                 {
+-                    InterlockedIncrement64( &ios_xp_nt.cs_spin_acquired );   /* ml1131 */
++                    if (ios_counters_on) InterlockedIncrement64( &ios_xp_nt.cs_spin_acquired );   /* ml1131 */
+                     goto done;
+                 }
+             }
+@@ -720,9 +726,9 @@ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
+         /* Now wait for it */
+         ios_cs_check_transition( crit, "Enter" );
+         {   /* ml1131: time the contended wait */
+-            ULONGLONG xp_t0 = ios_xp_ticks();
++            ULONGLONG xp_t0 = ios_counters_on ? ios_xp_ticks() : 0;
+             status = RtlpWaitForCriticalSection( crit );
+-            ios_xp_cs_waited( crit, xp_t0 );
++            if (ios_counters_on) ios_xp_cs_waited( crit, xp_t0 );
+         }
+         if (status)
+         {
+@@ -804,7 +810,7 @@ NTSTATUS WINAPI RtlLeaveCriticalSection( RTL_CRITICAL_SECTION *crit )
+         if (InterlockedDecrement( &crit->LockCount ) >= 0)
+         {
+             /* someone is waiting */
+-            InterlockedIncrement64( &ios_xp_nt.cs_wakes );   /* ml1131 */
++            if (ios_counters_on) InterlockedIncrement64( &ios_xp_nt.cs_wakes );   /* ml1131 */
+             RtlpUnWaitCriticalSection( crit );
+         }
+     }
+@@ -1350,7 +1356,7 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
+     NTSTATUS ret;
+ 
+     TRACE("addr %p cmp %p size %#Ix timeout %s\n", addr, cmp, size, debugstr_timeout( timeout ));
+-    InterlockedIncrement64( &ios_xp_nt.woa_waits );   /* ml1131 */
++    if (ios_counters_on) InterlockedIncrement64( &ios_xp_nt.woa_waits );   /* ml1131 */
+ 
+     if (size != 1 && size != 2 && size != 4 && size != 8)
+         return STATUS_INVALID_PARAMETER;
+@@ -1427,7 +1433,7 @@ void WINAPI RtlWakeAddressAll( const void *addr )
+     unsigned int count = 0;
+     HANDLE tids[256];
+ 
+-    InterlockedIncrement64( &ios_xp_nt.woa_wake_all );   /* ml1131 */
++    if (ios_counters_on) InterlockedIncrement64( &ios_xp_nt.woa_wake_all );   /* ml1131 */
+ 
+     TRACE("%p\n", addr);
+ 
+@@ -1470,7 +1476,7 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
+     struct futex_entry *entry;
+     DWORD tid = 0;
+ 
+-    InterlockedIncrement64( &ios_xp_nt.woa_wake_single );   /* ml1131 */
++    if (ios_counters_on) InterlockedIncrement64( &ios_xp_nt.woa_wake_single );   /* ml1131 */
+ 
+     TRACE("%p\n", addr);
+ 
+diff --git a/dlls/ntdll/time.c b/dlls/ntdll/time.c
+index 9945e28..2fbda1a 100644
+--- a/dlls/ntdll/time.c
++++ b/dlls/ntdll/time.c
+@@ -434,6 +434,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH RtlQueryPerformanceCounter( LARGE_INTEGER *counter
+         c = c1;
+     }
+     counter->QuadPart = (LONGLONG)qpc_to_ticks( c ) + qpc_offset;
++    if (ios_counters_on)
+     {   /* ml1131: per-thread gap between successive reads (spin loop or not?).
+          * Plain stores into the calling thread's slot; a tid-hash collision only
+          * blurs the histogram. Buckets: < 1, 10, 100 us, < 1 ms, >= 1 ms. */

@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 12:00:00 +0200
+Subject: [PATCH] kernelbase: pass the WCHAR count to GetEnvironmentVariableW
+ in hack_shrink_environment
+
+Valve's WINE_SHRINK_ENV hack (patches/wine-valve 0059) reads
+WINE_SHRINK_ENV and SteamGameId into a WCHAR str[40] but passes
+sizeof(str), 80, as its size in characters. A value of 41 to 79
+characters, which the player can set for either variable on a game's
+page, is copied whole and overruns the buffer on the stack, in every
+process of a Steam game on its first GetEnvironmentStringsW call. Pass
+ARRAY_SIZE(str): a longer value then leaves str empty.
+Proton ships the same code.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-steam-game-id.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index b53abdca597..761480ce51c 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -1674,9 +1674,9 @@ static void hack_shrink_environment( WCHAR *env, SIZE_T len )
+         WCHAR str[40];
+ 
+         *str = 0;
+-        if (GetEnvironmentVariableW( L"WINE_SHRINK_ENV", str, sizeof(str)) )
++        if (GetEnvironmentVariableW( L"WINE_SHRINK_ENV", str, ARRAY_SIZE(str)) )
+             enabled = *str != '0';
+-        else if (GetEnvironmentVariableW( L"SteamGameId", str, sizeof(str)) )
++        else if (GetEnvironmentVariableW( L"SteamGameId", str, ARRAY_SIZE(str)) )
+             enabled = !wcscmp( str, L"431590" );
+         else
+             enabled = 0;
+-- 
+2.55.0
+

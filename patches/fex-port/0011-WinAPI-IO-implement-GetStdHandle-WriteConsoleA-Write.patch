@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 17:50:25 +0800
+Subject: [PATCH] WinAPI/IO: implement GetStdHandle, WriteConsoleA,
+ WriteConsoleW
+
+x86_64 PE code translated by FEX dispatches Win32 console APIs through
+xtajit64's runtime thunks; previously these were UNIMPLEMENTED.
+
+GetStdHandle: read PEB->ProcessParameters->hStd{Input,Output,Error}.
+WriteConsoleA: forward bytes verbatim to NtWriteFile.
+WriteConsoleW: convert UTF-16 to UTF-8 via RtlUnicodeToUTF8N then NtWriteFile.
+
+Also adds a temporary stderr-mirror diagnostic in WriteFile that prints
+"[WriteFile h=... bytes=<text>]" so we can verify x86_64 PE writes regardless
+of where hFile points; should be removed once Hello World works.
+
+Madeira-commit: f37a518d366b04377515c452a82ed74d32d304fc
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/Common/WinAPI/IO.cpp | 71 +++++++++++++++++++++++++++--
+ 1 file changed, 68 insertions(+), 3 deletions(-)
+
+diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
+index 6d0d7c2..e5e84bc 100644
+--- a/Source/Windows/Common/WinAPI/IO.cpp
++++ b/Source/Windows/Common/WinAPI/IO.cpp
+@@ -120,6 +120,39 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,
+     ByteOffset.QuadPart = (static_cast<LONGLONG>(lpOverlapped->OffsetHigh) << 32) | lpOverlapped->Offset;
+     ByteOffsetPtr = &ByteOffset;
+   }
++  /* iOS-Mythic: also dprintf to stderr (= mythic-log.txt) so we can SEE
++   * what x86_64 PE writes regardless of where hFile actually points. */
++  {
++    char dbg[8 + 64 + 16];
++    const char *hexd = "0123456789abcdef";
++    int i = 0;
++    const char *p = "[WriteFile h=0x";
++    while (p[i]) { dbg[i] = p[i]; i++; }
++    unsigned long long h = (unsigned long long)hFile;
++    for (int j = 60; j >= 0; j -= 4) dbg[i++] = hexd[(h >> j) & 0xf];
++    dbg[i++] = ' ';
++    dbg[i++] = 'b';
++    dbg[i++] = 'y';
++    dbg[i++] = 't';
++    dbg[i++] = 'e';
++    dbg[i++] = 's';
++    dbg[i++] = '=';
++    unsigned long n = nNumberOfBytesToWrite > 64 ? 64 : nNumberOfBytesToWrite;
++    for (unsigned long k = 0; k < n; ++k) {
++      unsigned char c = ((const unsigned char*)lpBuffer)[k];
++      if (c >= 0x20 && c < 0x7f) dbg[i++] = (char)c;
++      else if (c == '\n') { dbg[i++] = '\\'; dbg[i++] = 'n'; }
++      else { dbg[i++] = '?'; }
++    }
++    dbg[i++] = '\n';
++    HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
++                          ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters)->hStdError)
++                          : nullptr;
++    if (stderr_h && stderr_h != hFile) {
++      IO_STATUS_BLOCK sb;
++      NtWriteFile(stderr_h, nullptr, nullptr, nullptr, &sb, dbg, (ULONG)i, nullptr, nullptr);
++    }
++  }
+   NTSTATUS Status = NtWriteFile(hFile, nullptr, nullptr, nullptr, &IOSB, lpBuffer, nNumberOfBytesToWrite, ByteOffsetPtr, nullptr);
+   if (lpNumberOfBytesWritten) {
+     *lpNumberOfBytesWritten = static_cast<DWORD>(IOSB.Information);
+@@ -128,17 +161,49 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,
+ }
+ 
+ DLLEXPORT_FUNC(HANDLE, GetStdHandle, (DWORD nStdHandle)) {
+-  UNIMPLEMENTED();
++  auto* Params = reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters);
++  switch (nStdHandle) {
++  case STD_INPUT_HANDLE: return reinterpret_cast<HANDLE>(Params->hStdInput);
++  case STD_OUTPUT_HANDLE: return reinterpret_cast<HANDLE>(Params->hStdOutput);
++  case STD_ERROR_HANDLE: return reinterpret_cast<HANDLE>(Params->hStdError);
++  default:
++    SetLastError(ERROR_INVALID_HANDLE);
++    return INVALID_HANDLE_VALUE;
++  }
+ }
+ 
+ DLLEXPORT_FUNC(WINBOOL, WriteConsoleA,
+                (HANDLE hConsoleOutput, CONST void* lpBuffer, DWORD nNumberOfCharsToWrite, LPDWORD lpNumberOfCharsWritten, void* lpReserved)) {
+-  UNIMPLEMENTED();
++  IO_STATUS_BLOCK IOSB;
++  NTSTATUS Status = NtWriteFile(hConsoleOutput, nullptr, nullptr, nullptr, &IOSB, lpBuffer, nNumberOfCharsToWrite, nullptr, nullptr);
++  if (lpNumberOfCharsWritten) {
++    *lpNumberOfCharsWritten = static_cast<DWORD>(IOSB.Information);
++  }
++  return WinAPIReturn(Status);
+ }
+ 
++extern "C" NTSTATUS NTAPI RtlUnicodeToUTF8N(char* dst, ULONG dstlen, ULONG* reslen, const WCHAR* src, ULONG srclen);
++
+ DLLEXPORT_FUNC(WINBOOL, WriteConsoleW,
+                (HANDLE hConsoleOutput, CONST void* lpBuffer, DWORD nNumberOfCharsToWrite, LPDWORD lpNumberOfCharsWritten, void* lpReserved)) {
+-  UNIMPLEMENTED();
++  ULONG utf8_len = 0;
++  RtlUnicodeToUTF8N(nullptr, 0, &utf8_len, static_cast<const WCHAR*>(lpBuffer), nNumberOfCharsToWrite * sizeof(WCHAR));
++  if (utf8_len == 0) {
++    if (lpNumberOfCharsWritten) *lpNumberOfCharsWritten = 0;
++    return TRUE;
++  }
++  auto* utf8 = static_cast<char*>(RtlAllocateHeap(GetProcessHeap(), 0, utf8_len));
++  if (!utf8) return FALSE;
++  ULONG written = 0;
++  RtlUnicodeToUTF8N(utf8, utf8_len, &written, static_cast<const WCHAR*>(lpBuffer), nNumberOfCharsToWrite * sizeof(WCHAR));
++
++  IO_STATUS_BLOCK IOSB;
++  NTSTATUS Status = NtWriteFile(hConsoleOutput, nullptr, nullptr, nullptr, &IOSB, utf8, written, nullptr, nullptr);
++  RtlFreeHeap(GetProcessHeap(), 0, utf8);
++  if (lpNumberOfCharsWritten) {
++    *lpNumberOfCharsWritten = nNumberOfCharsToWrite;
++  }
++  return WinAPIReturn(Status);
+ }
+ 
+ DLLEXPORT_FUNC(WINBOOL, GetFileSizeEx, (HANDLE hFile, PLARGE_INTEGER lpFileSize)) {

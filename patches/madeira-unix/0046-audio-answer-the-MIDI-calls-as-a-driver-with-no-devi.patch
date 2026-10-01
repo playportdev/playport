@@ -1,0 +1,157 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 01:44:17 +0200
+Subject: [PATCH] audio: answer the MIDI calls as a driver with no devices
+
+The iOS audio table answered every MIDI unix call with a stub that set
+nothing, while mmdevapi reads each call's result from its params. So
+midi_init left DRV_SUCCESS and mmdevapi started its MIDI notify thread,
+and midi_notify_wait left quit and send_notify as the stack had them:
+the thread (mmdevapi_midi_notify) spun at 100% of a core and called
+DriverCallback with stack garbage. midMessage and modMessage handed
+the same garbage to notify_client. Any game that touches the winmm
+MIDI API got this; MultiVersus (Wwise) does at start.
+
+midi_init now fails DRV_LOAD, so there is no notify thread. Out, in and
+aux messages answer 0 devices for GETNUMDEVS, success for the driver
+messages and MMSYSERR_BADDEVICEID for anything else, and never notify.
+midi_notify_wait tells a notify thread to quit.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-30-d3d12-feature-level-12.md
+Offered-upstream: no
+---
+ build/ntdll-unix/audio_null_ios.c | 107 ++++++++++++++++++++++++++++--
+ 1 file changed, 102 insertions(+), 5 deletions(-)
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index c667ac4..b4d1600 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -1331,11 +1331,108 @@ static NTSTATUS ios_get_prop_value(void *args) {
+     return STATUS_SUCCESS;
+ }
+ 
++/* No MIDI on iOS. The MIDI calls still have to answer the way a driver
++ * with no devices does: mmdevapi reads the result out of each call's
++ * params (wine/dlls/mmdevapi/main.c), and a call that leaves them unset
++ * hands it stack garbage. midi_init used to leave DRV_SUCCESS, so the
++ * notify thread started, and midi_notify_wait set neither quit nor
++ * send_notify: the thread spun at 100% of a core calling DriverCallback
++ * with whatever was on its stack. */
++struct midi_init_params { UINT *err; };
++struct midi_notify_context {
++    BOOL send_notify;
++    WORD dev_id;
++    WORD msg;
++    UINT_PTR param_1;
++    UINT_PTR param_2;
++    UINT_PTR callback;
++    UINT flags;
++    HANDLE device;
++    UINT_PTR instance;
++};
++struct midi_message_params {       /* midi_out_message and midi_in_message */
++    UINT dev_id;
++    UINT msg;
++    UINT_PTR user;
++    UINT_PTR param_1;
++    UINT_PTR param_2;
++    UINT *err;
++    struct midi_notify_context *notify;
++};
++struct midi_notify_wait_params { BOOL *quit; struct midi_notify_context *notify; };
++struct aux_message_params {
++    UINT dev_id;
++    UINT msg;
++    UINT_PTR user;
++    UINT_PTR param_1;
++    UINT_PTR param_2;
++    UINT *err;
++};
++
++#define DRV_FAILURE 0
++#define MMSYSERR_NOERROR 0
++#define MMSYSERR_BADDEVICEID 2
++#define DRVM_INIT 100
++#define DRVM_EXIT 101
++#define DRVM_DISABLE 102
++#define DRVM_ENABLE 103
++#define MODM_GETNUMDEVS 1
++#define MIDM_GETNUMDEVS 53
++#define AUXDM_GETNUMDEVS 3
++
++/* midi_get_driver: mmdevapi's buffer stays empty, so it keeps this driver
++ * for MIDI. midi_release: nothing to release. */
+ static NTSTATUS ios_midi_stub(void *args) {
+     (void)args;
+     return STATUS_SUCCESS;
+ }
+ 
++/* Fail DRV_LOAD, so mmdevapi starts no notify thread. */
++static NTSTATUS ios_midi_init(void *args) {
++    struct midi_init_params *params = args;
++    *params->err = DRV_FAILURE;
++    return STATUS_SUCCESS;
++}
++
++/* No devices: GETNUMDEVS answers 0, driver messages succeed, anything
++ * addressed to a device is a bad device ID; nothing is ever notified. */
++static UINT ios_midi_message(UINT msg, UINT getnumdevs) {
++    if (msg == getnumdevs) return 0;
++    switch (msg) {
++    case DRVM_INIT: case DRVM_EXIT: case DRVM_ENABLE: case DRVM_DISABLE:
++        return MMSYSERR_NOERROR;
++    }
++    return MMSYSERR_BADDEVICEID;
++}
++
++static NTSTATUS ios_midi_out_message(void *args) {
++    struct midi_message_params *params = args;
++    params->notify->send_notify = 0;
++    *params->err = ios_midi_message(params->msg, MODM_GETNUMDEVS);
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS ios_midi_in_message(void *args) {
++    struct midi_message_params *params = args;
++    params->notify->send_notify = 0;
++    *params->err = ios_midi_message(params->msg, MIDM_GETNUMDEVS);
++    return STATUS_SUCCESS;
++}
++
++/* Only reached if a notify thread was started after all: tell it to quit. */
++static NTSTATUS ios_midi_notify_wait(void *args) {
++    struct midi_notify_wait_params *params = args;
++    params->notify->send_notify = 0;
++    *params->quit = 1;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS ios_aux_message(void *args) {
++    struct aux_message_params *params = args;
++    *params->err = ios_midi_message(params->msg, AUXDM_GETNUMDEVS);
++    return STATUS_SUCCESS;
++}
++
+ /* Table indexed by enum unix_funcs in mmdevapi's unixlib.h (37 entries).
+  * Order MUST match the enum exactly. */
+ const void *audio_null_ios_unix_call_funcs[] = {
+@@ -1370,12 +1467,12 @@ const void *audio_null_ios_unix_call_funcs[] = {
+     ios_is_started,                    /* is_started */
+     ios_get_prop_value,                /* get_prop_value */
+     ios_midi_stub,                     /* midi_get_driver */
+-    ios_midi_stub,                     /* midi_init */
++    ios_midi_init,                     /* midi_init */
+     ios_midi_stub,                     /* midi_release */
+-    ios_midi_stub,                     /* midi_out_message */
+-    ios_midi_stub,                     /* midi_in_message */
+-    ios_midi_stub,                     /* midi_notify_wait */
+-    ios_midi_stub,                     /* aux_message */
++    ios_midi_out_message,              /* midi_out_message */
++    ios_midi_in_message,               /* midi_in_message */
++    ios_midi_notify_wait,              /* midi_notify_wait */
++    ios_aux_message,                   /* aux_message */
+ };
+ 
+ /* wine-11.18 kept the count at 37 while shifting indices 2..9 (main_loop split,

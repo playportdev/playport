@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 9 Sep 2024 19:19:37 -0600
+Subject: [PATCH] d2d1: HACK: Ignore text rendering params for Spell Force 3.
+
+CW-Bug-Id: #24212
+Valve-commit: a814afa831574eacea45c1af4a46643d589feb72
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/d2d1/device.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dlls/d2d1/device.c b/dlls/d2d1/device.c
+index 552d6d4..5f4f7ab 100644
+--- a/dlls/d2d1/device.c
++++ b/dlls/d2d1/device.c
+@@ -1786,6 +1786,15 @@ static void STDMETHODCALLTYPE d2d_device_context_SetTextRenderingParams(ID2D1Dev
+ 
+     TRACE("iface %p, text_rendering_params %p.\n", iface, text_rendering_params);
+ 
++    {
++        const char *sgi = getenv("SteamGameId");
++        if (sgi && !strcmp(sgi, "1416260"))
++        {
++            FIXME("HACK: ignoring params.\n");
++            return;
++        }
++    }
++
+     if (context->target.type == D2D_TARGET_COMMAND_LIST)
+         d2d_command_list_set_text_rendering_params(context->target.command_list, text_rendering_params);
+ 

@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Thu, 29 Jun 2023 16:01:39 +0200
+Subject: [PATCH] winhttp: Handle SEC_I_RENEGOTIATE after DecryptMessage.
+
+By performing renegotiation as we should, instead of incorrectly
+returning ERROR_WINHTTP_CLIENT_AUTH_CERT_NEEDED.
+
+MSDN says we should pass returned SECBUFFER_EXTRA as SECBUFFER_TOKEN,
+so we also do that, although it's usually empty.
+
+CW-Bug-Id: #18449
+CW-Bug-Id: #22371
+Valve-commit: 377075a4df1481913cc426a7ae3e98cf4663f4fc
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/winhttp/net.c | 24 ++++++++++++++++++++----
+ 1 file changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/winhttp/net.c b/dlls/winhttp/net.c
+index 2eb6783..4d7a203 100644
+--- a/dlls/winhttp/net.c
++++ b/dlls/winhttp/net.c
+@@ -310,7 +310,7 @@ void netconn_release( struct netconn *conn )
+ }
+ 
+ static DWORD netconn_negotiate( struct netconn *conn, WCHAR *hostname, CredHandle *cred_handle,
+-                                CtxtHandle *ctx )
++                                CtxtHandle *prev_ctx, SecBufferDesc *prev_buf, CtxtHandle *ctx )
+ {
+     SecBuffer out_buf = {0, SECBUFFER_TOKEN, NULL}, in_bufs[2] = {{0, SECBUFFER_TOKEN}, {0, SECBUFFER_EMPTY}};
+     SecBufferDesc out_desc = {SECBUFFER_VERSION, 1, &out_buf}, in_desc = {SECBUFFER_VERSION, 2, in_bufs};
+@@ -325,8 +325,9 @@ static DWORD netconn_negotiate( struct netconn *conn, WCHAR *hostname, CredHandl
+ 
+     if (!(read_buf = malloc( read_buf_size ))) return ERROR_OUTOFMEMORY;
+ 
+-    status = InitializeSecurityContextW(cred_handle, NULL, hostname, isc_req_flags, 0, 0, NULL, 0,
++    status = InitializeSecurityContextW(cred_handle, prev_ctx, hostname, isc_req_flags, 0, 0, prev_buf, 0,
+             ctx, &out_desc, &attrs, NULL);
++    if (!ctx) ctx = prev_ctx;
+ 
+     assert(status != SEC_E_OK);
+ 
+@@ -403,7 +404,7 @@ DWORD netconn_secure_connect( struct netconn *conn, WCHAR *hostname, DWORD secur
+     SECURITY_STATUS status;
+     DWORD res = ERROR_SUCCESS;
+ 
+-    status = netconn_negotiate(conn, hostname, cred_handle, &ctx);
++    status = netconn_negotiate(conn, hostname, cred_handle, NULL, NULL, &ctx);
+     if(status != SEC_E_OK || res != ERROR_SUCCESS)
+         goto failed;
+ 
+@@ -564,8 +565,23 @@ static DWORD read_ssl_chunk( struct netconn *conn, void *buf, SIZE_T buf_size, S
+             break;
+ 
+         case SEC_I_RENEGOTIATE:
++        {
++            SecBuffer out_buf = {0, SECBUFFER_TOKEN, NULL};
++            SecBufferDesc out_desc = {SECBUFFER_VERSION, 1, &out_buf};
++
+             TRACE("renegotiate\n");
+-            return ERROR_WINHTTP_CLIENT_AUTH_CERT_NEEDED;
++
++            for(i = 0; i < ARRAY_SIZE(bufs); i++) {
++                if(bufs[i].BufferType == SECBUFFER_EXTRA) {
++                    out_buf.cbBuffer = bufs[i].cbBuffer;
++                    out_buf.pvBuffer = bufs[i].pvBuffer;
++                }
++            }
++
++            res = netconn_negotiate(conn, conn->host->hostname, NULL, &conn->ssl_ctx, &out_desc, NULL);
++            if (res != SEC_E_OK) return res;
++            continue;
++        }
+ 
+         case SEC_I_CONTEXT_EXPIRED:
+             TRACE("context expired\n");

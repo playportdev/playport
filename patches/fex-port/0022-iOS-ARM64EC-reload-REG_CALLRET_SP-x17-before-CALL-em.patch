@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 13 May 2026 10:30:09 +0800
+Subject: [PATCH] iOS ARM64EC: reload REG_CALLRET_SP (x17) before CALL emit
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Native ARM64EC returns clobber x17 (the callret stack pointer). When
+FEX falls through to the next CALL emit without first reloading x17
+from State.callret_sp, the stp pushing the call-return frame writes
+to whatever RX page x17 was left at — a thousand-fault loop in
+cross-arch dispatch.
+
+Fix: emit `ldr REG_CALLRET_SP, [STATE, offsetof(callret_sp)]` before
+each `stp ..., [x17, -0x10]!` at both CALL emit sites in BranchOps.cpp
+(linked-branch path with CallReturnBlock, and SkipFullLookup non-linked
+path), guarded #ifdef ARCHITECTURE_arm64ec.
+
+Effect on Thumper iOS port: exception count thousands → 1; reaches
+DXMT shader compile, BC texture creation, and FMOD-init code paths
+not previously reachable.
+
+Madeira-commit: 48f7eb4130d6f108bf2e7d943d112504f03ceef6
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/JIT/BranchOps.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+index 4cbf45c..bbc59f4 100644
+--- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+@@ -165,6 +165,13 @@ DEF_OP(ExitFunction) {
+       ARMEmitter::ForwardLabel l_BranchHost;
+       ARMEmitter::ForwardLabel l_CallReturn;
+       if (Op->Hint == IR::BranchHint::Call) {
++#ifdef ARCHITECTURE_arm64ec
++        // iOS-Mythic 2026-05-13: REG_CALLRET_SP (x17) gets clobbered when a
++        // previous BLR returns from native ARM64EC code (DXMT vtable methods,
++        // ARM64EC entry thunks). Reload from State.callret_sp before pushing
++        // the call-return frame so we don't stp to wherever x17 was left.
++        ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++#endif
+         if (!Op->CallReturnBlock.IsInvalid()) {
+           auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
+           PendingCallReturnTargetLabel = &CallReturnTargets.try_emplace(Op->CallReturnBlock.ID()).first->second;
+@@ -220,6 +227,12 @@ DEF_OP(ExitFunction) {
+     (void)Bind(&SkipFullLookup);
+     if (Op->Hint == IR::BranchHint::Call) {
+       ARMEmitter::ForwardLabel l_CallReturn;
++#ifdef ARCHITECTURE_arm64ec
++      // iOS-Mythic 2026-05-13: see note above — reload REG_CALLRET_SP (x17)
++      // from State.callret_sp before pushing the call-return frame, since
++      // native ARM64EC returns leave x17 pointing at an arbitrary RX page.
++      ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++#endif
+       if (!Op->CallReturnBlock.IsInvalid()) {
+         auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
+         PendingCallReturnTargetLabel = &CallReturnTargets.try_emplace(Op->CallReturnBlock.ID()).first->second;

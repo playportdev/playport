@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Wed, 5 Apr 2023 12:38:11 +0200
+Subject: [PATCH] ddraw: Remove topmost from the previous window when releasing
+ exclusive cooperative level.
+
+Fixes The Binding of Isaac staying topmost, regression after upstream
+commit e44afcd8bf17eb628fcb1ea0b012970b6e611da4.
+
+Note: this is possibly a hack and maybe we should use exclusive_window
+instead, but it is cleared when focus is lost in device_parent_activate,
+and removing topmost there as well is a bigger, riskier change.
+
+CW-Bug-Id: #22108
+Valve-commit: 14d3bdbb42c066df08921555351d624039b1385b
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ddraw/ddraw.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/ddraw/ddraw.c b/dlls/ddraw/ddraw.c
+index 8814c32..b7ed9cb 100644
+--- a/dlls/ddraw/ddraw.c
++++ b/dlls/ddraw/ddraw.c
+@@ -968,7 +968,7 @@ static HRESULT ddraw_set_cooperative_level(struct ddraw *ddraw, HWND window,
+            topmost bit unless the DDSCL_NOWINDOWCHANGES flag is set in
+            this call that sets it to normal, not in the old coop level. */
+         if (!(cooplevel & DDSCL_NOWINDOWCHANGES))
+-            SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
++            SetWindowPos(ddraw->dest_window, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+ 
+         if (restore_mode_on_normal && FAILED(ddraw7_RestoreDisplayMode(&ddraw->IDirectDraw7_iface)))
+             ERR("RestoreDisplayMode failed\n");

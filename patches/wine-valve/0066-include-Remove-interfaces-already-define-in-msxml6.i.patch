@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Fri, 11 Sep 2020 17:55:59 +1000
+Subject: [PATCH] include: Remove interfaces already define in msxml6.idl
+
+Signed-off-by: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Valve-commit: ef00a3fb2c2f591bc95ef2efb9a3b2275534db41
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/msxml3/factory.c         |  3 +--
+ dlls/msxml3/tests/saxreader.c |  1 +
+ dlls/msxml3/tests/schema.c    |  5 +++++
+ include/msxml6.idl            | 24 ++++++++++++------------
+ 4 files changed, 19 insertions(+), 14 deletions(-)
+
+diff --git a/dlls/msxml3/factory.c b/dlls/msxml3/factory.c
+index 5847752..3a198d4 100644
+--- a/dlls/msxml3/factory.c
++++ b/dlls/msxml3/factory.c
+@@ -31,6 +31,7 @@
+ #include "ole2.h"
+ #include "msxml.h"
+ #include "msxml2.h"
++#include "msxml6.h"
+ #include "xmlparser.h"
+ 
+ /* undef the #define in msxml2 so that we can access the v.2 version
+@@ -53,8 +54,6 @@ DEFINE_GUID(CLSID_XSLTemplate60, 0x88d96a08, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(msxml);
+ 
+-extern GUID CLSID_XMLSchemaCache60;
+-
+ typedef HRESULT (*ClassFactoryCreateInstanceFunc)(void**);
+ typedef HRESULT (*DOMFactoryCreateInstanceFunc)(MSXML_VERSION, void**);
+ 
+diff --git a/dlls/msxml3/tests/saxreader.c b/dlls/msxml3/tests/saxreader.c
+index 53c5702..a382006 100644
+--- a/dlls/msxml3/tests/saxreader.c
++++ b/dlls/msxml3/tests/saxreader.c
+@@ -30,6 +30,7 @@
+ #include "windows.h"
+ #include "ole2.h"
+ #include "msxml2.h"
++#include "msxml6.h"
+ #include "msxml2did.h"
+ #include "ocidl.h"
+ #include "dispex.h"
+diff --git a/dlls/msxml3/tests/schema.c b/dlls/msxml3/tests/schema.c
+index 50e5a74..c83e72e 100644
+--- a/dlls/msxml3/tests/schema.c
++++ b/dlls/msxml3/tests/schema.c
+@@ -32,6 +32,11 @@
+ #include "dispex.h"
+ #include "cguid.h"
+ 
++DEFINE_GUID(CLSID_MXXMLWriter60, 0x88d96a0f, 0xf192, 0x11d4, 0xa6,0x5f, 0x00,0x40,0x96,0x32,0x51,0xe5);
++DEFINE_GUID(CLSID_SAXAttributes60, 0x88d96a0e, 0xf192, 0x11d4, 0xa6,0x5f, 0x00,0x40,0x96,0x32,0x51,0xe5);
++DEFINE_GUID(CLSID_SAXXMLReader60, 0x88d96a0c, 0xf192, 0x11d4, 0xa6,0x5f, 0x00,0x40,0x96,0x32,0x51,0xe5);
++DEFINE_GUID(CLSID_XMLSchemaCache60, 0x88d96a07, 0xf192, 0x11d4, 0xa6,0x5f, 0x00,0x40,0x96,0x32,0x51,0xe5);
++
+ #include "wine/test.h"
+ 
+ static const WCHAR xdr_schema1_uri[] = L"x-schema:test1.xdr";
+diff --git a/include/msxml6.idl b/include/msxml6.idl
+index ead87be..bf7e090 100644
+--- a/include/msxml6.idl
++++ b/include/msxml6.idl
+@@ -3065,18 +3065,6 @@ coclass DOMDocument60
+     [default, source] dispinterface XMLDOMDocumentEvents;
+ }
+ 
+-[
+-    helpstring("Free threaded XML DOM Document 6.0"),
+-    progid("Msxml2.FreeThreadedDOMDocument.6.0"),
+-    threading(both),
+-    uuid(88d96a06-f192-11d4-a65f-0040963251e5),
+-]
+-coclass FreeThreadedDOMDocument60
+-{
+-    [default] interface IXMLDOMDocument3;
+-    [default, source] dispinterface XMLDOMDocumentEvents;
+-}
+-
+ [
+     helpstring("SAX XML Reader 6.0"),
+     progid("Msxml2.SAXXMLReader.6.0"),
+@@ -3182,6 +3170,18 @@ coclass XSLTemplate60
+     [default] interface IXSLTemplate;
+ }
+ 
++[
++    helpstring("Free threaded XML DOM Document 6.0"),
++    progid("Msxml2.FreeThreadedDOMDocument.6.0"),
++    threading(both),
++    uuid(88d96a06-f192-11d4-a65f-0040963251e5),
++]
++coclass FreeThreadedDOMDocument60
++{
++    [default] interface IXMLDOMDocument3;
++    [default, source] dispinterface XMLDOMDocumentEvents;
++}
++
+ [
+     helpstring("XML HTTP 6.0"),
+     progid("Msxml2.XMLHTTP.6.0"),

@@ -1,0 +1,15 @@
+# mesa: applied in this order with `git am -3` onto the mesa pin in pins.lock.
+# KosmicKrisp (Mesa's Vulkan driver on Metal) for iOS; build/stages/mesa.sh.
+0001-wsi-metal-no-displaySyncEnabled-on-iOS.patch
+0002-vulkan-link-CoreGraphics-for-the-Metal-WSI.patch
+0003-kk-use-the-vm_-calls-on-iOS-for-placed-maps.patch
+0004-util-available-memory-on-iOS-is-the-process-s-limit.patch
+0005-kk-geometry-shaders-and-fillModeNonSolid.patch
+0006-kk-transform-feedback.patch
+0007-kk-texel-buffer-views-at-any-texel.patch
+0008-kk-export-vkGetInstanceProcAddr-and-vkGetDeviceProcA.patch
+0009-wsi-metal-make-the-layer-s-drawables-resident-on-iOS.patch
+0010-wsi-metal-kk-a-present-wait-no-longer-hangs-on-a-mis.patch
+0011-wsi-metal-on-iOS-a-swap-chain-the-layer-scales-is-no.patch
+0012-wsi-metal-an-opaque-swap-chain-s-layer-is-opaque-on-.patch
+0013-kk-split-a-large-timestamp-query-pool-over-several-c.patch

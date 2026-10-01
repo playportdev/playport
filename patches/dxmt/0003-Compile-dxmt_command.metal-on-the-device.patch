@@ -1,0 +1,323 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 15:16:59 +0200
+Subject: [PATCH] Compile dxmt_command.metal on the device
+
+The shader library needed Apple's metal/metallib at build time. It is
+compiled from source on the device through upstream's winemetal slot 144
+(MTLDevice_newLibraryWithSource), with the options Apple's offline
+`metal -c` records for it (Metal 3.2, fast math), UTF-8 decoding (the file
+is not ASCII) and the remote-mode route. A runtime source compile has no
+include path, so the build inlines the file's quoted includes
+(dxmt_command_constants.hpp) before embedding it. Without Apple's
+toolchain the native macOS airconv and winemetal.so are not configured
+(upstream now builds them for aarch64 cross builds too); the iOS unix slice
+is built outside meson.
+
+Class: linux-build
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ libs/DXBCParser/meson.build           |  3 +-
+ meson.build                           |  4 ++-
+ src/airconv/meson.build               | 13 +++++++--
+ src/dxmt/dxmt_command.cpp             | 11 +++++--
+ src/dxmt/inline_metal_includes.py     | 26 +++++++++++++++++
+ src/dxmt/meson.build                  | 13 ++++++---
+ src/winemetal/gen_remote_guard.py     |  2 +-
+ src/winemetal/meson.build             |  3 +-
+ src/winemetal/unix/winemetal_unix.c   | 42 +++++++++++++++++++++++----
+ src/winemetal/unix/wmt_remote_guard.h |  9 ------
+ src/winemetal/wmt_api_names.h         |  2 +-
+ 11 files changed, 98 insertions(+), 30 deletions(-)
+ create mode 100644 src/dxmt/inline_metal_includes.py
+
+diff --git a/libs/DXBCParser/meson.build b/libs/DXBCParser/meson.build
+index 616d59b..f35aca5 100644
+--- a/libs/DXBCParser/meson.build
++++ b/libs/DXBCParser/meson.build
+@@ -19,7 +19,8 @@ dxbc_parser_dep = declare_dependency(
+   include_directories : [ dxmt_include_path ],
+ )
+ 
+-if cpu_family == 'x86_64' or cpu_family == 'aarch64' or not dxmt_crossbuild
++# the native macOS parser is only for the native airconv; see src/airconv/meson.build
++if xcrun.found() and (cpu_family == 'x86_64' or cpu_family == 'aarch64' or not dxmt_crossbuild)
+ 
+ dxbc_parser_native_lib = static_library('DXBCParserNative', dxbc_parser_src,
+   include_directories : [ dxmt_native_include_path ],
+diff --git a/meson.build b/meson.build
+index e2ce0f0..3728101 100644
+--- a/meson.build
++++ b/meson.build
+@@ -122,8 +122,9 @@ else
+   wrc_generator = generator(wrc, output : [ '@BASENAME@_ignored.h' ], arguments : [ '@OUTPUT@' ] )
+ endif
+ 
+-xcrun = find_program('xcrun')
++xcrun = find_program('xcrun', required : false)
+ 
++if xcrun.found()
+ metalir_generator = generator(xcrun,
+   output    : [ '@BASENAME@.air'],
+   arguments : [ '-sdk', 'macosx', 'metal', '-o', '@OUTPUT@', '-c', '@INPUT@', '@EXTRA_ARGS@'],
+@@ -133,6 +134,7 @@ metallib_generator = generator(xcrun,
+   output    : [ '@BASENAME@.metallib'],
+   arguments : [ '-sdk', 'macosx', 'metallib', '-o', '@OUTPUT@', '@INPUT@'],
+ )
++endif
+ 
+ xxd = find_program('xxd')
+ 
+diff --git a/src/airconv/meson.build b/src/airconv/meson.build
+index 8e0c8be..9cb4503 100644
+--- a/src/airconv/meson.build
++++ b/src/airconv/meson.build
+@@ -68,6 +68,10 @@ airconv_shaders = [
+   'shaders/air_tessellation.metal',
+ ]
+ 
++build_airconv_for_windows = get_option('build_airconv_for_windows')
++
++# Only airconv links these helpers; the PE DLLs do not need xcrun.
++if xcrun.found()
+ airconv_shaders_ir = metalir_generator.process(
+   airconv_shaders,
+   extra_args: ['-std=metal3.1', '--target=air64-apple-macos14.0'],
+@@ -75,8 +79,9 @@ airconv_shaders_ir = metalir_generator.process(
+ airconv_shaders_header = hexdump_generator.process(airconv_shaders_ir)
+ 
+ airconv_src += airconv_shaders_header
+-
+-build_airconv_for_windows = get_option('build_airconv_for_windows')
++elif build_airconv_for_windows or cpu_family == 'x86_64' or not dxmt_crossbuild
++  error('airconv\'s AIR helpers need xcrun (metal)')
++endif
+ 
+ if build_airconv_for_windows
+ 
+@@ -106,6 +111,8 @@ executable('airconv', airconv_src + airconv_cli_src,
+ 
+ endif
+ 
+-if cpu_family == 'x86_64' or cpu_family == 'aarch64' or not dxmt_crossbuild
++# Without Apple's toolchain the native macOS airconv cannot be built; the iOS
++# unix slice is built outside meson (Playport build/dxmt-build.sh).
++if xcrun.found() and (cpu_family == 'x86_64' or cpu_family == 'aarch64' or not dxmt_crossbuild)
+   subdir('darwin')
+ endif
+\ No newline at end of file
+diff --git a/src/dxmt/dxmt_command.cpp b/src/dxmt/dxmt_command.cpp
+index 6498ae1..5fc991f 100644
+--- a/src/dxmt/dxmt_command.cpp
++++ b/src/dxmt/dxmt_command.cpp
+@@ -13,12 +13,17 @@ namespace dxmt {
+ 
+ InternalCommandLibrary::InternalCommandLibrary(WMT::Device device) {
+   WMT::Reference<WMT::Error> error;
+-  library_ = device.newLibrary(dxmt_command, dxmt_command_len, error);
++  library_ = device.newLibraryWithSource(std::string_view((const char *)dxmt_command, dxmt_command_len), error);
+ 
+-  if (error) {
+-    ERR("Failed to create internal command library: ", error.description().getUTF8String());
++  // A source compile can return a library together with an error that only
++  // carries warnings, so failure is a missing library.
++  if (!library_) {
++    ERR("Failed to create internal command library: ",
++        error ? error.description().getUTF8String() : "no error returned");
+     abort();
+   }
++  if (error)
++    WARN("Internal command library compiled with: ", error.description().getUTF8String());
+ };
+ 
+ EmulatedCommandContext::EmulatedCommandContext(WMT::Device device, InternalCommandLibrary &lib, ArgumentEncodingContext &ctx): ctx(ctx) {
+diff --git a/src/dxmt/inline_metal_includes.py b/src/dxmt/inline_metal_includes.py
+new file mode 100644
+index 0000000..b272f44
+--- /dev/null
++++ b/src/dxmt/inline_metal_includes.py
+@@ -0,0 +1,26 @@
++#!/usr/bin/env python3
++# Inline the quoted #include lines of a Metal source file (from its own
++# directory), so the result compiles with MTLDevice newLibraryWithSource,
++# which has no include path. System includes (<metal_stdlib>) stay as they are.
++import os, re, sys
++
++def expand(path, seen):
++    out = []
++    for line in open(path, encoding='utf-8'):
++        m = re.match(r'\s*#\s*include\s+"([^"]+)"', line)
++        if not m:
++            out.append(line)
++            continue
++        inc = os.path.join(os.path.dirname(path), m.group(1))
++        if inc in seen:
++            continue
++        seen.add(inc)
++        out.append('// begin %s\n' % m.group(1))
++        # the inlined header is no longer a separate file
++        out.extend(l for l in expand(inc, seen) if not re.match(r'\s*#\s*pragma\s+once', l))
++        out.append('// end %s\n' % m.group(1))
++    return out
++
++src, dst = sys.argv[1], sys.argv[2]
++with open(dst, 'w', encoding='utf-8') as f:
++    f.writelines(expand(src, set()))
+diff --git a/src/dxmt/meson.build b/src/dxmt/meson.build
+index 7beec11..9f2ea57 100644
+--- a/src/dxmt/meson.build
++++ b/src/dxmt/meson.build
+@@ -31,11 +31,16 @@ dxmt_shaders = [
+   'dxmt_command.metal'
+ ]
+ 
+-dxmt_shaders_ir = metalir_generator.process(dxmt_shaders)
+-
+-dxmt_shaders_lib = metallib_generator.process(dxmt_shaders_ir)
++# Embedded as MSL source and compiled by Metal at device creation
++# (MTLDevice_newLibraryWithSource), so building it needs no Apple tool. A
++# runtime source compile cannot resolve quoted includes, so they are inlined.
++dxmt_shaders_src = custom_target('dxmt_command_source',
++  input   : dxmt_shaders,
++  output  : 'dxmt_command.metal',
++  command : [ find_program('python3'), files('inline_metal_includes.py'), '@INPUT@', '@OUTPUT@' ],
++)
+ 
+-dxmt_shaders_header = hexdump_generator.process(dxmt_shaders_lib)
++dxmt_shaders_header = hexdump_generator.process(dxmt_shaders_src)
+ 
+ dxmt_lib = static_library('dxmt', dxmt_src, dxmt_shaders_header, dxmt_version,
+   dependencies        : [ util_dep, airconv_forward_dep, winemetal_dep ],
+diff --git a/src/winemetal/gen_remote_guard.py b/src/winemetal/gen_remote_guard.py
+index 49f60aa..3a54664 100644
+--- a/src/winemetal/gen_remote_guard.py
++++ b/src/winemetal/gen_remote_guard.py
+@@ -49,7 +49,7 @@ ROUTED = {
+     '_MTLDevice_setShouldMaximizeConcurrentCompilation',
+     # shader path: metallib BYTES cross, the DispatchData container does not
+     '_MTLDevice_newLibrary', '_MTLLibrary_newFunction',
+-    '_MTLLibrary_newFunctionWithConstants',
++    '_MTLLibrary_newFunctionWithConstants', '_MTLDevice_newLibraryWithSource',
+     # descriptors travel verbatim; the host builds the real Metal objects
+     '_MTLDevice_newRenderPipelineState', '_MTLDevice_newComputePipelineState',
+     '_MTLDevice_newDepthStencilState', '_MTLDevice_newSamplerState',
+diff --git a/src/winemetal/meson.build b/src/winemetal/meson.build
+index 299df82..5bfdd97 100644
+--- a/src/winemetal/meson.build
++++ b/src/winemetal/meson.build
+@@ -58,6 +58,7 @@ custom_target('postprocess_lib',
+   build_by_default : true
+ )
+ 
+-if cpu_family == 'x86_64' or cpu_family == 'aarch64'
++# winemetal.so links the native airconv above; see src/airconv/meson.build
++if xcrun.found() and (cpu_family == 'x86_64' or cpu_family == 'aarch64')
+   subdir('unix')
+ endif
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 1d418c1..5105e26 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -4954,16 +4954,46 @@ _MTLDevice_newIndirectCommandBuffer(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* Playport: dxmt_command.metal is compiled here on the device instead of with
++ * Apple's offline tools. The options match what `metal -c` records for it
++ * (Metal 3.2, fast math); the source is UTF-8, which ASCII decoding rejects. */
+ static NTSTATUS
+ _MTLDevice_newLibraryWithSource(void *obj) {
+   struct unixcall_mtldevice_newlibrarywithsource *params = obj;
++  const char *source = params->source.ptr;
++  uint64_t length = params->length;
++  params->ret_error = 0;
++  params->ret_library = 0;
++  if (wmtr_enabled()) {
++    /* The host's RM_OP_NEW_LIBRARY compiles the source with default options. */
++    if (length && length <= RM_CHUNK_BYTES - sizeof(struct rm_arg_handle)) {
++      uint8_t *msg = malloc(sizeof(struct rm_arg_handle) + length);
++      if (msg) {
++        struct rm_arg_handle *a = (void *)msg;
++        a->handle = params->device;
++        memcpy(msg + sizeof *a, source, length);
++        struct rm_ret_handle r;
++        if (wmtr_call(RM_OP_NEW_LIBRARY, msg, (uint32_t)(sizeof *a + length), &r, sizeof r, 0) == RM_OK)
++          params->ret_library = r.handle;
++        free(msg);
++      }
++    }
++    return STATUS_SUCCESS;
++  }
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+-  NSString *source =
+-      [[NSString alloc] initWithBytes:params->source.ptr length:params->length encoding:NSASCIIStringEncoding];
++  NSString *str = [[NSString alloc] initWithBytes:source length:length encoding:NSUTF8StringEncoding];
++  MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
++  if (@available(macOS 15.0, iOS 18.0, *)) {
++    options.languageVersion = MTLLanguageVersion3_2;
++    options.mathMode = MTLMathModeFast;
++    options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsFast;
++  }
+   NSError *err = NULL;
+-  params->ret_library = (obj_handle_t)[device newLibraryWithSource:source options:nil error:&err];
++  if (str)
++    params->ret_library = (obj_handle_t)[device newLibraryWithSource:str options:options error:&err];
+   params->ret_error = (obj_handle_t)err;
+-  [source release];
++  [options release];
++  [str release];
+   return STATUS_SUCCESS;
+ }
+ 
+@@ -5263,7 +5293,7 @@ const void *__wine_unix_call_funcs[] = {
+     &_rmg_MTLHeap_newBuffer,
+     &_MTLHeap_newTexture,
+     &_rmg_MTLDevice_newIndirectCommandBuffer,
+-    &_rmg_MTLDevice_newLibraryWithSource,
++    &_MTLDevice_newLibraryWithSource,
+     &_rmg_MTLTexture_getBytes,
+     /* Madeira's appended slots (madeira-d3d12 and the geometry-emulation
+      * pipeline). APPENDED after upstream's, never inserted: the slot number is
+@@ -5425,7 +5455,7 @@ const void *__wine_unix_call_wow64_funcs[] = {
+     &_rmg_MTLHeap_newBuffer,
+     &_MTLHeap_newTexture,
+     &_rmg_MTLDevice_newIndirectCommandBuffer,
+-    &_rmg_MTLDevice_newLibraryWithSource,
++    &_MTLDevice_newLibraryWithSource,
+     &_rmg_MTLTexture_getBytes,
+     &_madeira_ir_convert_wow64,
+     &_MTLDevice_newRenderPipelineStateVD_wow64,
+diff --git a/src/winemetal/unix/wmt_remote_guard.h b/src/winemetal/unix/wmt_remote_guard.h
+index 1baea14..f0f5d2a 100644
+--- a/src/winemetal/unix/wmt_remote_guard.h
++++ b/src/winemetal/unix/wmt_remote_guard.h
+@@ -327,15 +327,6 @@ static NTSTATUS _rmg_MTLDevice_newIndirectCommandBuffer(void *obj) {
+   }
+   return _MTLDevice_newIndirectCommandBuffer(obj);
+ }
+-static NTSTATUS _rmg_MTLDevice_newLibraryWithSource(void *obj) {
+-  if (wmtr_enabled()) {
+-    struct unixcall_mtldevice_newlibrarywithsource *p = obj;
+-    p->ret_error = 0;   /* never hand back uninitialised stack */
+-    p->ret_library = 0;   /* never hand back uninitialised stack */
+-    return wmtr_unimplemented("MTLDevice_newLibraryWithSource");
+-  }
+-  return _MTLDevice_newLibraryWithSource(obj);
+-}
+ static NTSTATUS _rmg_MTLTexture_getBytes(void *obj) {
+   if (wmtr_enabled()) {
+     return wmtr_unimplemented("MTLTexture_getBytes");
+diff --git a/src/winemetal/wmt_api_names.h b/src/winemetal/wmt_api_names.h
+index bc77ab1..f68a35d 100644
+--- a/src/winemetal/wmt_api_names.h
++++ b/src/winemetal/wmt_api_names.h
+@@ -150,7 +150,7 @@ static const char *const wmt_api_names[WMT_API_COUNT] = {
+     "rmg_MTLHeap_newBuffer",
+     "MTLHeap_newTexture",
+     "rmg_MTLDevice_newIndirectCommandBuffer",
+-    "rmg_MTLDevice_newLibraryWithSource",
++    "MTLDevice_newLibraryWithSource",
+     "rmg_MTLTexture_getBytes",
+     "madeira_ir_convert",
+     "MTLDevice_newRenderPipelineStateVD",

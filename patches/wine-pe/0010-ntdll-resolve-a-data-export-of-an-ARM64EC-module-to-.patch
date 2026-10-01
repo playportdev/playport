@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 00:16:05 +0200
+Subject: [PATCH] ntdll: resolve a data export of an ARM64EC module to its
+ JIT-pool copy
+
+The module's code runs from its JIT-pool copy, whose writable sections
+are its own: msvcp140's DllMain constructs std::cout there, and an x64
+game that imported the PE image's address read it unconstructed (En
+Garde!'s static initialisers fault reading its vbtable).
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-30-en-garde.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 43 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 41d068e..1893982 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1079,6 +1079,46 @@ static FARPROC find_forwarded_export( HMODULE module, const char *forward, LPCWS
+ }
+ 
+ 
++#ifdef __arm64ec__
++/* iOS: an ARM64EC module's code runs from its JIT-pool copy, whose writable
++ * sections are its own, not the PE image's. An export that names data in such
++ * a section (msvcp140's std::cout, which its DllMain constructs) must resolve
++ * to the pool copy, where that code writes it; the PE image's copy stays as
++ * the file had it. Code exports are left alone. */
++static void *ios_pool_data_export( HMODULE module, const IMAGE_EXPORT_DIRECTORY *exports, void *proc )
++{
++    extern void *xlate_ios_jit( void *ptr );
++    const IMAGE_NT_HEADERS *nt = RtlImageNtHeader( module );
++    const IMAGE_SECTION_HEADER *sec;
++    ULONG_PTR rva = (ULONG_PTR)proc - (ULONG_PTR)module;
++    void *pool;
++    unsigned int i;
++
++    if (!nt || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || !arm64ec_get_module_metadata( module ))
++        return proc;
++    /* ntdll's own copy is private to each process and kept by other means. */
++    if (exports->Name && !_stricmp( get_rva( module, exports->Name ), "ntdll.dll" )) return proc;
++    sec = IMAGE_FIRST_SECTION( nt );
++    for (i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++)
++    {
++        if (rva < sec->VirtualAddress || rva >= sec->VirtualAddress + max( sec->Misc.VirtualSize, sec->SizeOfRawData ))
++            continue;
++        if ((sec->Characteristics & (IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE)) != IMAGE_SCN_MEM_WRITE)
++            return proc;
++        pool = xlate_ios_jit( proc );
++        if (!pool || pool == proc) return proc;
++        {
++            static int n;
++            if (n++ < 32)
++                ERR( "[data-export] %p (%.8s+%#Ix) -> pool %p\n", proc, sec->Name,
++                     rva - sec->VirtualAddress, pool );
++        }
++        return pool;
++    }
++    return proc;
++}
++#endif
++
+ /*************************************************************************
+  *		find_ordinal_export
+  *
+@@ -1107,6 +1147,9 @@ static FARPROC find_ordinal_export( HMODULE module, const IMAGE_EXPORT_DIRECTORY
+         ((const char *)proc < (const char *)exports + exp_size))
+         return find_forwarded_export( module, (const char *)proc, load_path, importer, is_dynamic );
+ 
++#ifdef __arm64ec__
++    proc = ios_pool_data_export( module, exports, proc );
++#endif
+     if (TRACE_ON(snoop))
+     {
+         const WCHAR *user = !is_dynamic ? importer->ldr.BaseDllName.Buffer : NULL;

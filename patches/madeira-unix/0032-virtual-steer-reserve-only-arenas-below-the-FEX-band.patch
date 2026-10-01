@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 27 Sep 2026 10:23:27 +0200
+Subject: [PATCH] virtual: steer reserve-only arenas below the FEX band first
+
+The steering valve moves large reserve-only, unhinted guest reserves out
+of the guest band once VA pressure is latched. It tried the FEX host band
+[0x7c00000000, 0x8000000000) first and the 0x7400000000 slot second. The
+FEX band is the only place rpmalloc maps FEX's per-thread heaps, so every
+steered arena there is taken from the threads a title can start.
+
+Hollow Knight latches the pressure at startup (a bottom-up scan grinding
+the low VA iOS occupies) and its main thread then steers 17 x 512MB = 8.5GB
+into the FEX band while the 0x7400000000 slot stays empty. When a cinematic
+starts Media Foundation's work-queue threads, the band has no 16MB block
+left: arm64ec_thread_init fails with STATUS_NO_MEMORY and the game freezes.
+
+Try the 0x7400000000 slot first and fall back to the FEX band, in the
+first attempt and after reclaiming dead threads' arenas alike.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-26-hk-video.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 26 ++++++++++++++++----------
+ 1 file changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 9f08770..394d50d 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -17719,21 +17719,27 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                  * described the EMPTY range [ios_spill_cap, 0) and every steer failed with
+                  * *ret = 0x0. The upper bound has to be a real address: use the host VA
+                  * ceiling, which is_beyond_limit treats as EXCLUSIVE. */
++                /* Playport: the 0x7400000000 slot first, the FEX band second. The
++                 * FEX band is where every FEX thread's rpmalloc spans must fit
++                 * (rpmalloc maps nowhere else, by design), and Hollow Knight's
++                 * main thread alone steered 17 x 512MB reserves = 8.5GB into it
++                 * while the 0x7400000000 slot stayed CLEAR: when Media
++                 * Foundation's work queues started a cinematic's threads, their
++                 * arm64ec_thread_init failed with STATUS_NO_MEMORY (va-scan
++                 * FAILED in [0x7c00000000,0x8000000000) maxgap=0x10000) and the
++                 * game froze. */
+                 NTSTATUS sst = allocate_virtual_memory( ret, size_ptr, type, protect,
+-                                                        ios_steer_slot,
+-                                                        (ULONG_PTR)host_addr_space_limit,
+-                                                        0, 0 );
++                                                        0x7400000000ULL, ios_spill_cap, 0, 0 );
+                 /* ml171: 16GB is not enough. Surviving longer spawns more threads, so
+                  * the reserve count went 27 -> 55 (28160MB) and BOTH the steer slot and
+                  * furniture reported va-scan FAILED maxgap=0 before the NULL deref.
+-                 * Fall back to the 0x7400000000 slot, which this run left UNGRANTED —
+-                 * pools landed on 0x7000000000, 0x73ffff0000 and 0x7800000000, matching
+-                 * the 3-pool census. That doubles steer capacity to ~32GB. */
++                 * Fall back to the other slot. That doubles steer capacity to ~32GB. */
+                 if (sst)
+                 {
+                     *ret = saved; *size_ptr = want;
+                     sst = allocate_virtual_memory( ret, size_ptr, type, protect,
+-                                                   0x7400000000ULL, ios_spill_cap, 0, 0 );
++                                                   ios_steer_slot,
++                                                   (ULONG_PTR)host_addr_space_limit, 0, 0 );
+                 }
+                 /* ml173: both steer slots full -> reclaim ranges owned by threads that
+                  * have since exited, then retry once. This is what makes the steer
+@@ -17743,13 +17749,13 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                 {
+                     *ret = saved; *size_ptr = want;
+                     sst = allocate_virtual_memory( ret, size_ptr, type, protect,
+-                                                   ios_steer_slot,
+-                                                   (ULONG_PTR)host_addr_space_limit, 0, 0 );
++                                                   0x7400000000ULL, ios_spill_cap, 0, 0 );
+                     if (sst)
+                     {
+                         *ret = saved; *size_ptr = want;
+                         sst = allocate_virtual_memory( ret, size_ptr, type, protect,
+-                                                       0x7400000000ULL, ios_spill_cap, 0, 0 );
++                                                       ios_steer_slot,
++                                                       (ULONG_PTR)host_addr_space_limit, 0, 0 );
+                     }
+                 }
+                 if (!sst && ios_steer_n < IOS_STEER_MAX)

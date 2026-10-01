@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 17:10:00 +0200
+Subject: [PATCH] virtual: map a guest's own code pages without host EXEC
+
+In an ARM64EC process the code a guest writes into its own anonymous
+executable memory (Unity's Mono JIT, a browser's V8) is x86-64, which FEX
+reads and translates; the host never runs it. Such a range still went to
+the JIT pool as an RX view of a pool slot, so every guest store to it
+faulted and was emulated through the RW alias on the one Mach exception
+thread: about 250,000 stores before Hollow Knight's first frame, most of
+its 9 s start.
+
+The range is still backed by a pool slot and its alias is still recorded,
+so the store emulator and the exec redirect work as before, but the
+guest's view is mapped from the pool's RW side without EXEC, and each 16 KB
+host page is writable only while all of its committed 4 KB pages are. A
+page FEX has translated from (it sets PAGE_EXECUTE_READ on it) stays
+read-only and its stores are emulated as before; stores to pages FEX has
+not translated from run at full speed. MADEIRA_ANON_EXEC_POOL=1 restores
+the RX view.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-25-launch-startup-profile.md
+Offered-upstream: no
+---
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index ec086d2..4aa41d7 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9105,6 +9105,70 @@ static void *ios_share_probe_thread(void *arg)
+  * legitimately log on normal threads stay silent on that one. */
+ volatile int ios_in_mach_exc;
+ 
++/* Playport: a guest's own code pages are not executed by the host.
++ *
++ * In an ARM64EC process the code a guest writes into its anonymous memory (a
++ * managed runtime's JIT: Unity's Mono, a browser's V8) is x86-64, which FEX
++ * reads and translates. The pool path below still backs such a range with a
++ * pool slot and records the alias, so the store emulator and the exec
++ * redirect keep working, but the guest's view is mapped from the pool's RW
++ * side with no EXEC, and each host page gets write only while all of its
++ * committed 4 KB pages are writable: a page FEX has translated from (it sets
++ * PAGE_EXECUTE_READ on it) stays read-only, and its stores are emulated as
++ * before. Hollow Knight emitted about 250,000 bytes of Mono code through
++ * emulated stores before its first frame, each a Mach exception on the one
++ * handler thread; stores to pages FEX has not translated from now run at
++ * full speed. A native jump into such a page takes the exec fault and the
++ * redirect to the pool's RX view. MADEIRA_ANON_EXEC_POOL=1 restores the RX
++ * view for every range. */
++static int ios_anon_plain_view( void )
++{
++    static int enabled = -1;
++
++    if (enabled < 0)
++    {
++        const char *e = getenv( "MADEIRA_ANON_EXEC_POOL" );
++        enabled = !(e && e[0] == '1') && arm64ec_view;
++        dprintf( 2, "[anon-view] guest code ranges: %s (MADEIRA_ANON_EXEC_POOL=%s, arm64ec=%d)\n",
++                 enabled ? "RW view, write per host page" : "RX view", e ? e : "(unset)", arm64ec_view != NULL );
++    }
++    return enabled;
++}
++
++static kern_return_t ios_anon_view_protect( char *base, size_t size )
++{
++    char *p = ROUND_ADDR( base, host_page_mask ), *end = base + size;
++    kern_return_t kr = KERN_SUCCESS;
++
++    for (; p < end; p += host_page_size)
++    {
++        vm_prot_t prot = VM_PROT_READ;
++        BOOL write = TRUE, committed = FALSE;
++        size_t i;
++
++        for (i = 0; i < host_page_size; i += page_size)
++        {
++            BYTE v = get_page_vprot( p + i );
++            if (!(v & VPROT_COMMITTED)) continue;
++            committed = TRUE;
++            if (!(v & VPROT_WRITE) || (v & (VPROT_GUARD | VPROT_WRITECOPY | VPROT_WRITEWATCH))) write = FALSE;
++        }
++        if (committed && write) prot |= VM_PROT_WRITE;
++        if (vm_protect( mach_task_self(), (vm_address_t)p, host_page_size, FALSE, prot ) != KERN_SUCCESS)
++            kr = KERN_PROTECTION_FAILURE;
++        {
++            static int logged;
++            if (logged < 16 || kr != KERN_SUCCESS)
++            {
++                logged++;
++                dprintf( 2, "[anon-view] %p %s%s\n", p, prot & VM_PROT_WRITE ? "rw" : "r-",
++                         kr == KERN_SUCCESS ? "" : " vm_protect FAILED" );
++            }
++        }
++    }
++    return kr;
++}
++
+ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+ {
+     /* ml247: catch WHO narrows maxprot on pool pages.
+@@ -9675,7 +9739,9 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                     void *ex_rw = NULL, *ex_rx = NULL;
+                     if (ios_jit_anon_alias_find_cover(base, alloc_size, &ex_rw, &ex_rx))
+                     {
+-                        kern_return_t pkr = vm_protect(mach_task_self(),
++                        kern_return_t pkr = ios_anon_plain_view()
++                            ? ios_anon_view_protect( (char *)base, alloc_size )
++                            : vm_protect(mach_task_self(),
+                             (vm_address_t)base, alloc_size, FALSE,
+                             VM_PROT_READ | VM_PROT_EXECUTE);
+                         TEB *cur_teb = NtCurrentTeb();
+@@ -9813,7 +9879,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                     &target, alloc_size, 0,
+                     VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                     mach_task_self(),
+-                    (vm_address_t)((char *)jit_rx_base + offset),
++                    (vm_address_t)((char *)(ios_anon_plain_view() ? jit_rw_base : jit_rx_base) + offset),
+                     FALSE,
+                     &cur_prot, &max_prot,
+                     VM_INHERIT_DEFAULT);
+@@ -9830,7 +9896,9 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                  * but the kernel doesn't actually grant exec permission until
+                  * we explicitly request it. */
+                 {
+-                    kern_return_t pkr = vm_protect(mach_task_self(),
++                    kern_return_t pkr = ios_anon_plain_view()
++                        ? ios_anon_view_protect( (char *)base, alloc_size )
++                        : vm_protect(mach_task_self(),
+                         (vm_address_t)base, alloc_size, FALSE,
+                         VM_PROT_READ | VM_PROT_EXECUTE);
+                     if (pkr != KERN_SUCCESS)
+-- 
+2.51.0
+

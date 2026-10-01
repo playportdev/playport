@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Playport's app icon: a ship's porthole with a play button behind the glass, drawn
+       flat in the gamepad UI's palette (docs/design/2026-09-28-gamepad-ui): background
+       #0B0E13, surfaces #151A21/#1D242E/#24324A, accent #F5B544 and its tint #FFD08A,
+       text #EEF1F5. Full-bleed square: iOS applies the rounded mask. The group #dev is
+       the dev variant's badge; render.sh hides it for the release icon. -->
+  <defs><clipPath id="window"><circle cx="512" cy="512" r="262"/></clipPath></defs>
+  <rect width="1024" height="1024" fill="#0B0E13"/>
+
+  <!-- The porthole: amber ring, a darker inner lip, bolts. -->
+  <circle cx="512" cy="512" r="352" fill="#F5B544"/>
+  <circle cx="512" cy="512" r="288" fill="#B7822A"/>
+  <g fill="#FFD08A">
+    <circle cx="512" cy="192" r="18"/>
+    <circle cx="738" cy="286" r="18"/>
+    <circle cx="832" cy="512" r="18"/>
+    <circle cx="738" cy="738" r="18"/>
+    <circle cx="512" cy="832" r="18"/>
+    <circle cx="286" cy="738" r="18"/>
+    <circle cx="192" cy="512" r="18"/>
+    <circle cx="286" cy="286" r="18"/>
+  </g>
+
+  <!-- The glass, a sea line, the play button behind it, a glare. -->
+  <circle cx="512" cy="512" r="262" fill="#1D242E"/>
+  <g clip-path="url(#window)">
+    <path d="M240 640 C 330 604, 420 676, 512 640 S 694 604, 784 640 V784 H240 Z" fill="#24324A"/>
+    <path d="M240 690 C 330 654, 420 726, 512 690 S 694 654, 784 690 V784 H240 Z" fill="#151A21"/>
+  </g>
+  <!-- Optically centred: halfway between its box centre and its centroid sits on the glass centre. -->
+  <path fill="#EEF1F5" transform="translate(-34 0)"
+        d="M455 382 C 455 358, 480 344, 501 356 L 660 486 C 680 498, 680 526, 660 538 L 501 668 C 480 680, 455 666, 455 642 Z"/>
+  <path d="M332 424 A 196 196 0 0 1 468 296" fill="none" stroke="#2A3340" stroke-width="24" stroke-linecap="round"/>
+
+  <!-- Dev variant badge: DEV in drawn strokes (no font), a light pill like the UI's button glyphs. -->
+  <g id="dev">
+    <rect x="396" y="894" width="232" height="76" rx="38" fill="#EEF1F5"/>
+    <g transform="translate(0 26)" fill="none" stroke="#0B0E13" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M438 885 L438 927 L452 927 C 470 927, 480 917, 480 906 C 480 895, 470 885, 452 885 Z"/>
+      <path d="M534 885 L500 885 L500 927 L534 927 M500 906 L528 906"/>
+      <path d="M552 885 L569 927 L586 885"/>
+    </g>
+  </g>
+</svg>

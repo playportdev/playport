@@ -1,0 +1,13 @@
+# Witcher 3: walk Geralt around wherever the game left him, forever. Forward
+# with the left stick, turning the camera with the right stick in both
+# directions, so new parts of the scene come into view and stream in. No
+# buttons: a press could open a menu or start a fight.
+3000 LY=1
+1500 LY=1 RX=0.6
+3000 LY=1
+1200 LY=1 RX=-0.6
+2000 LY=1 LX=0.5
+1500 RX=1
+3000 LY=1
+1500 LY=1 RX=-0.7
+loop

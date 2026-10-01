@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 21 Aug 2026 20:07:59 +0800
+Subject: [PATCH] shader_cache: two fixed slots instead of a hash map in
+ getInstance
+
+getInstance used a function-local static std::unordered_map keyed by Metal version and
+faulted inside it with a null dereference:
+
+    adrp x12, <caches>            ; the static
+    ldr  x12, [x12, #0x830]       ; __bucket_list_ pointer
+    ldr  x12, [x12, x10, lsl #3]  ; <-- NULL, addr=0x0
+
+i.e. the bucket array pointer was null while the map otherwise looked populated. This
+reproduced immediately after device creation, in a process where d3d11.dll is loaded,
+unloaded, and reloaded at a different base.
+
+Instrumentation ruled out the obvious cause: each load gets its own fresh static, and
+find/insert both succeed and read back consistently (bucket_count=2 size=1), so the
+statics are NOT surviving a reload incorrectly. The exact corruption mechanism is still
+unexplained -- a probe read a healthy map moments before the locked find() faulted.
+
+WMTMetalVersion has exactly two values. A hash table with heap-allocated buckets, a rehash
+path and a static destructor is a lot of failure surface for a two-entry lookup that can
+be two pointers, and function-local statics with non-trivial constructors also carry a
+guard variable and an atexit destructor -- more state to get wrong across this port's
+load/unload/reload cycle. So: two slots, no allocation, no rehash, no destructor; the
+mutex still serialises first construction.
+
+This removes the failing construct rather than explaining it, which is stated at the call
+site so it is not mistaken for a root-cause fix.
+
+Madeira-commit: 917ab245bf4ef0230caaf8156847361949045dba
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/dxmt/dxmt_shader_cache.cpp | 41 ++++++++++++++++++++++++++++------
+ 1 file changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/src/dxmt/dxmt_shader_cache.cpp b/src/dxmt/dxmt_shader_cache.cpp
+index 7b04986..02840ae 100644
+--- a/src/dxmt/dxmt_shader_cache.cpp
++++ b/src/dxmt/dxmt_shader_cache.cpp
+@@ -1,21 +1,48 @@
+ #include "dxmt_shader_cache.hpp"
+ #include "util_env.hpp"
+ #include "util_string.hpp"
++#include "log/log.hpp"
++#include <atomic>
+ 
+ namespace dxmt {
+ 
+ ShaderCache &
+ ShaderCache::getInstance(WMTMetalVersion version) {
++  /* ml724: two fixed slots instead of a hash map.
++   *
++   * This function used a function-local static std::unordered_map keyed by Metal version.
++   * Marvel Cosmic Invasion faulted inside it at getInstance+0x174:
++   *
++   *   adrp x12, <caches>            ; the static
++   *   ldr  x12, [x12, #0x830]       ; __bucket_list_ pointer
++   *   ldr  x12, [x12, x10, lsl #3]  ; <-- NULL dereference, addr=0x0
++   *
++   * i.e. the bucket array pointer was null while the map otherwise looked populated.
++   * Instrumentation (ml723) showed each DLL load gets its own fresh static and that
++   * find/insert both succeed and read back consistently, so this is NOT the statics
++   * surviving a reload incorrectly -- d3d11.dll is loaded, unloaded and reloaded at a
++   * different base here, which was the obvious suspicion and is now ruled out.
++   *
++   * WMTMetalVersion has exactly two values, WMTMetal310 and WMTMetal320. A hash table
++   * with heap-allocated buckets, a rehash path and a static destructor is a lot of
++   * machinery -- and a lot of failure surface -- for a two-entry lookup that can be two
++   * pointers. Function-local statics with non-trivial constructors also need a guard
++   * variable and register an atexit destructor, both of which are extra state to get
++   * wrong across this port's load/unload/reload cycle.
++   *
++   * So: two slots, no allocation, no rehash, no destructor. The mutex still serialises
++   * first-use construction. This removes the failing construct rather than papering over
++   * a container whose exact corruption mechanism is still unexplained -- which is stated
++   * plainly because it IS still unexplained. */
+   static dxmt::mutex mutex;
+-  static std::unordered_map<WMTMetalVersion, std::unique_ptr<ShaderCache>> caches;
++  static std::unique_ptr<ShaderCache> cache_310;
++  static std::unique_ptr<ShaderCache> cache_320;
+ 
+   std::lock_guard<dxmt::mutex> lock(mutex);
+-  auto iter = caches.find(version);
+-  if (iter == caches.end()) {
+-    auto inserted = caches.insert({version, std::make_unique<ShaderCache>(version)});
+-    return *inserted.first->second;
+-  }
+-  return *iter->second;
++  std::unique_ptr<ShaderCache> &slot = (version == WMTMetal310) ? cache_310 : cache_320;
++  if (!slot)
++    slot = std::make_unique<ShaderCache>(version);
++  return *slot;
+ }
+ 
+ ShaderCache::ShaderCache(WMTMetalVersion metal_version) {

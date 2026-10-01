@@ -1,0 +1,136 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 21:27:34 -0700
+Subject: [PATCH] Shadow-pack every live render batch and validate it
+
+Packs each real batch through the production packer and validator, then
+discards the result and renders locally as before. This exercises the packer
+against live traffic where being wrong costs nothing, before anything depends
+on it.
+
+The check that matters is packed counts equalling census counts. A silently
+skipped command would otherwise surface as a subtly wrong frame on another
+machine, with nothing pointing at the cause. Shadow now runs before the census
+because the census report is emitted from inside itself: with the old order it
+had counted the current batch while shadow had not, so the totals differed by
+exactly one batch forever and the comparison could never be an exact equality.
+
+First live run: 19,967 batches packed, 46,799 records, zero pack failures and
+zero validation failures. Maxima were 520 record bytes, 80 sidecar bytes and 18
+records per batch -- comfortably inside the negotiated limits.
+
+Madeira-commit: 7e5b33b415a92b748cf9de326ef0b9a6ccd7cdfa
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/winemetal_unix.c | 81 +++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index f29d5c2..29def03 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -854,6 +854,80 @@ _MTLDevice_newMeshRenderPipelineState(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* ---- ml760: shadow mode -------------------------------------------------
++ *
++ * Pack and validate every real batch, then throw the result away and render
++ * locally as usual. The point is to exercise the packer against live traffic
++ * where being wrong costs nothing, before anything depends on it.
++ *
++ * The check that matters is that packed counts equal census counts. If the
++ * packer silently skips a command, the two diverge -- which is the failure a
++ * remote replay would otherwise show as a subtly wrong frame on another
++ * machine, with nothing pointing at the cause.
++ */
++#include "wmt_remote_pack.h"
++#include "../../../../remote-metal/host/wmt_decode.h"
++
++static int wmt_shadow_on = -1;
++static unsigned long wmt_sh_ok, wmt_sh_packfail, wmt_sh_valfail, wmt_sh_records;
++static unsigned long wmt_sh_max_recbytes, wmt_sh_max_sidebytes, wmt_sh_max_records;
++static unsigned wmt_sh_last_packerr, wmt_sh_last_valerr, wmt_sh_last_opcode;
++
++static void wmt_shadow_report(void) {
++    if (wmt_shadow_on != 1) return;
++    fprintf(stderr, "[shadow] ml760 packed=%lu packfail=%lu valfail=%lu records=%lu\n",
++            wmt_sh_ok, wmt_sh_packfail, wmt_sh_valfail, wmt_sh_records);
++    fprintf(stderr, "[shadow] max record-bytes=%lu sidecar-bytes=%lu records/batch=%lu\n",
++            wmt_sh_max_recbytes, wmt_sh_max_sidebytes, wmt_sh_max_records);
++    if (wmt_sh_packfail)
++        fprintf(stderr, "[shadow] last pack failure: %s (opcode %u)\n",
++                wmtw_pack_strerror((enum wmtw_pack_status)wmt_sh_last_packerr), wmt_sh_last_opcode);
++    if (wmt_sh_valfail)
++        fprintf(stderr, "[shadow] last validate failure: %s\n",
++                wmtw_dec_strerror((enum wmtw_dec_status)wmt_sh_last_valerr));
++}
++
++static void wmt_shadow_batch(const struct wmtcmd_base *head) {
++    if (__builtin_expect(wmt_shadow_on < 0, 0)) {
++        const char *e = getenv("DXMT_SHADOW_PACK");
++        wmt_shadow_on = (e && e[0] == '1') ? 1 : 0;
++        if (wmt_shadow_on) fprintf(stderr, "[shadow] ml760 armed\n");
++    }
++    if (__builtin_expect(wmt_shadow_on != 1, 1)) return;
++
++    /* Static: this runs per batch and must not allocate. Single-threaded use
++     * is assumed here because it is a diagnostic, not a shipping path. */
++    static uint8_t recbuf[WMTW_MAX_BATCH_BYTES];
++    static uint8_t sidebuf[WMTW_MAX_SIDECAR_BYTES];
++    static uint8_t payload[sizeof(struct wmtw_batch) + WMTW_MAX_BATCH_BYTES + WMTW_MAX_SIDECAR_BYTES];
++
++    struct wmtw_packer p = { recbuf, sizeof recbuf, 0, sidebuf, sizeof sidebuf, 0, 0 };
++    struct wmtw_pack_result pr;
++    if (wmtw_pack_render(head, &p, &pr) != WMTW_PACK_OK) {
++        wmt_sh_packfail++;
++        wmt_sh_last_packerr = pr.status; wmt_sh_last_opcode = pr.opcode;
++        return;
++    }
++    struct wmtw_batch *b = (void *)payload;
++    b->magic = WMTW_BATCH_MAGIC; b->version = WMTW_VERSION; b->encoder_kind = 0;
++    b->record_bytes = p.rec_len; b->record_count = p.count;
++    b->sidecar_bytes = p.side_len; b->reserved = 0;
++    memcpy(payload + sizeof *b, recbuf, p.rec_len);
++    if (p.side_len) memcpy(payload + sizeof *b + p.rec_len, sidebuf, p.side_len);
++
++    struct wmtw_dec_result dr; struct wmtw_view v;
++    uint32_t plen = (uint32_t)(sizeof *b + p.rec_len + p.side_len);
++    if (wmtw_validate_batch(payload, plen, &v, &dr) != WMTW_DEC_OK) {
++        wmt_sh_valfail++; wmt_sh_last_valerr = dr.status;
++        return;
++    }
++    wmt_sh_ok++;
++    wmt_sh_records += p.count;
++    if (p.rec_len  > wmt_sh_max_recbytes)  wmt_sh_max_recbytes  = p.rec_len;
++    if (p.side_len > wmt_sh_max_sidebytes) wmt_sh_max_sidebytes = p.side_len;
++    if (p.count    > wmt_sh_max_records)   wmt_sh_max_records   = p.count;
++}
++
+ /* ---- ml758: wmtcmd census ----------------------------------------------
+  *
+  * Before wmtcmd_* lists can be serialised for the remote Metal transport, we
+@@ -904,6 +978,7 @@ static void wmt_census_report(void) {
+         if (wmt_c_compute[i]) fprintf(stderr, "[cmd-census]   compute[%2d] %lu\n", i, wmt_c_compute[i]);
+     for (int i = 0; i < WMT_CENSUS_BLIT; i++)
+         if (wmt_c_blit[i]) fprintf(stderr, "[cmd-census]   blit[%2d] %lu\n", i, wmt_c_blit[i]);
++    wmt_shadow_report();
+     if (wmt_first_len) {
+         fprintf(stderr, "[cmd-census] first %s batch shape:", 
+                 wmt_first_kind == 0 ? "render" : wmt_first_kind == 1 ? "compute" : "blit");
+@@ -1202,6 +1277,12 @@ static NTSTATUS
+ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
++  /* Shadow BEFORE census: the census report is emitted from inside
++   * wmt_census_batch, so with the old order it had counted the current batch
++   * while shadow had not, and the two totals differed by exactly one batch
++   * forever. Ordering it this way makes "packed == batches" an exact equality
++   * that either holds or reveals a real skip. */
++  wmt_shadow_batch(next);
+   wmt_census_batch(next, 0);
+   id<MTLRenderCommandEncoder> encoder = (id<MTLRenderCommandEncoder>)params->encoder;
+   while (next) {

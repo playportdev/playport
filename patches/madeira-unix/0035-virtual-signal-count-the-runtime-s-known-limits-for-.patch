@@ -1,0 +1,219 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 06:58:57 +0200
+Subject: [PATCH] virtual, signal: count the runtime's known limits for the
+ host
+
+Four limits of the runtime were only in log lines, most of them capped, and
+nothing said which title reached one: a W+X request that mprotect granted
+without WRITE (ml999), an image whose x18 patching was refused or cut short
+(its trampolines out of B/BL reach of its .text, a trampoline budget that
+did not fit, the trampoline space run out), the x18 sites such images and
+the patcher's register conflicts leave to fault at run time, and the
+misaligned exclusives and CAS in native ARM64EC code that the Mach
+exception handler emulates one at a time (ml431), which are not atomic
+against plain stores from other threads.
+
+ios_runtime_limit_stats() now reports the four counts; the host logs them
+as `limits:` lines, so a launch's result names the title that reached one.
+The [x18-patch] line gains `unpatched`, since `skipped` also counts the
+MOV xzr, x18 no-ops the patcher replaces with a NOP (ntdll's two), which
+are handled. Nothing the runtime does changes.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-28-runtime-limits.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c |  9 ++++
+ build/ntdll-unix/virtual_ios.c      | 79 ++++++++++++++++++++++++++---
+ 2 files changed, 82 insertions(+), 6 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 04f1b78..207d00d 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1343,6 +1343,13 @@ static int ios_fault_read_insn( uint64_t fault_pc, uint32_t *out )
+  * Mach exception-server thread touches it. */
+ static int ios_deliver_first_fault;
+ 
++/* Playport: misaligned exclusives (LDXR/LDAXR) and CAS in native ARM64EC code
++ * that the handler below emulated one at a time (ml431), for the host
++ * (virtual_ios.c ios_runtime_limit_stats). Such an atomic is serialized with
++ * the other emulated ones but not with plain stores from other threads: a known
++ * limit, like a split lock that tears. */
++volatile unsigned long ios_limit_split_lock;
++
+ static void *ios_mach_exception_thread( void *arg )
+ {
+     mach_port_t port = (mach_port_t)(uintptr_t)arg;
+@@ -2715,6 +2722,7 @@ static void *ios_mach_exception_thread( void *arg )
+                                 state, (void *)(uintptr_t)(fault_pc + 4));
+                             static volatile int ex_count;
+                             int n = __sync_add_and_fetch(&ex_count, 1);
++                            __sync_fetch_and_add( &ios_limit_split_lock, 1 );
+                             if (n <= 8 || (n % 256) == 0)
+                                 dprintf(STDERR_FILENO,
+                                         "[mach_exc] UNALIGNED-EXCL rev=ml431 #%d LDAXR pc=0x%llx addr=0x%llx "
+@@ -2800,6 +2808,7 @@ static void *ios_mach_exception_thread( void *arg )
+                                 state, (void *)(uintptr_t)(fault_pc + 4));
+                             static volatile int cas_count;
+                             int n = __sync_add_and_fetch(&cas_count, 1);
++                            __sync_fetch_and_add( &ios_limit_split_lock, 1 );
+                             if (n <= 8 || (n % 256) == 0)
+                                 dprintf(STDERR_FILENO,
+                                         "[mach_exc] UNALIGNED-EXCL rev=ml431 #%d CAS pc=0x%llx addr=0x%llx "
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 4b8af47..ce1041b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -184,6 +184,17 @@ static size_t jit_pool_offset = 0;
+ static volatile unsigned long ios_pool_head_exhausted, ios_pool_tail_refused, ios_pool_tail_fatal,
+                               ios_pool_alias_full, ios_pool_child_copies, ios_pool_child_copy_bytes;
+ 
++/* Playport: the runtime's known limits that no measured title reaches, counted
++ * so a title that does shows up in its launch's result (ios_runtime_limit_stats):
++ * a W+X request that came back without WRITE (ml999), an image whose x18
++ * patching was refused or cut short (its trampolines out of B/BL reach of its
++ * .text, a budget that did not fit, the trampoline space run out), and the x18
++ * sites left to fault at run time (those of refused images, sites whose
++ * operands left no scratch register, and sites past the end of the trampoline
++ * space). Misaligned exclusives and CAS emulated
++ * by the Mach exception handler are counted in signal_arm64_ios.c. */
++static volatile unsigned long ios_limit_wx_dropped, ios_limit_x18_images, ios_limit_x18_sites;
++
+ /* ---- Pool reclamation (task #25) ----------------------------------------
+  * The bump allocator never freed anything: 8 pseudo-processes consumed
+  * 368.9/384MB (2026-07-07) and the 9th BUS-loop-locked the session. Every
+@@ -2850,6 +2861,29 @@ int ios_jit_pool_stats( unsigned long long *v, int n )
+     return k;
+ }
+ 
++/* Playport: the runtime's known limits, for the host (wine_host_limit_stats,
++ * which a launch logs as `limits:` lines). v[] gets, in this order:
++ *    0 wx_dropped    W+X requests the kernel granted without WRITE
++ *    1 x18_images    images whose x18 patching was refused or cut short
++ *    2 x18_sites     x18 sites left to fault at run time
++ *    3 split_lock    misaligned exclusives and CAS emulated one at a time
++ * Returns how many it wrote (at most n). */
++int ios_runtime_limit_stats( unsigned long long *v, int n )
++{
++    extern volatile unsigned long ios_limit_split_lock;
++    unsigned long long f[4];
++    int i, k;
++
++    if (!v || n <= 0) return 0;
++    f[0] = ios_limit_wx_dropped;
++    f[1] = ios_limit_x18_images;
++    f[2] = ios_limit_x18_sites;
++    f[3] = ios_limit_split_lock;
++    k = n < 4 ? n : 4;
++    for (i = 0; i < k; i++) v[i] = f[i];
++    return k;
++}
++
+ /* iOS-Madeira ml613: WHICH TAIL CARVE DOES THIS HOST PC LIVE IN, AND IS IT FREE?
+  *
+  * ml612's crash faulted at host pc 0x15361d6d0, which is +0x496d0 into the 16MB
+@@ -4546,6 +4580,11 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
+     int lit_skipped = 0;
+     unsigned char *data_map = NULL;
+     extern int ios_teb_tls_slot_offset;
++    /* Playport: x18 sites this run leaves to fault (skipped also counts the
++     * MOV xzr, x18 no-ops replaced by a NOP), and where the trampoline space ran
++     * out, if it did. */
++    int unpatched = 0;
++    size_t out_of_space = (size_t)-1;
+ 
+     /* B/BL reach guard (Steam S3 run 11 root cause): imm26 spans ±128MB.
+      * The patcher used to encode out-of-range tramp offsets silently
+@@ -4559,8 +4598,15 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
+         intptr_t d2 = tramp_rx - (text_rx + text_size);
+         if (d1 > 0x7C00000 || d1 < -0x7C00000 || d2 > 0x7C00000 || d2 < -0x7C00000)
+         {
+-            dprintf(2, "[x18-tramp] REFUSED: tramp %p+0x%lx out of B/BL reach of text %p+0x%lx\n",
+-                    tramp_rx, (unsigned long)tramp_size, text_rx, (unsigned long)text_size);
++            /* Playport: count the image and the sites it leaves to fault (the
++             * budget is 32 bytes a site plus one page of slack). */
++            size_t sites = (ios_jit_x18_tramp_need( text_rw, text_size ) - 0x1000) / 32;
++            __sync_fetch_and_add( &ios_limit_x18_images, 1 );
++            __sync_fetch_and_add( &ios_limit_x18_sites, sites );
++            dprintf(2, "[x18-tramp] REFUSED: tramp %p+0x%lx out of B/BL reach of text %p+0x%lx "
++                    "(%lu x18 site(s) left to fault)\n",
++                    tramp_rx, (unsigned long)tramp_size, text_rx, (unsigned long)text_size,
++                    (unsigned long)sites);
+             return 0;
+         }
+     }
+@@ -4676,6 +4722,7 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
+         if (scratch == 16 && (rt == 16 || rn == 16 || rm == 16))
+         {
+             skipped++;
++            unpatched++;
+             continue;
+         }
+ 
+@@ -4683,6 +4730,7 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
+         if (tramp_off + 24 > tramp_size)
+         {
+             ERR("x18 patcher: out of trampoline space at %d patches\n", count);
++            out_of_space = i;
+             break;
+         }
+ 
+@@ -4732,6 +4780,7 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
+             if (tramp_off + 32 > tramp_size)
+             {
+                 ERR("x18 patcher: out of trampoline space at %d patches\n", count);
++                out_of_space = i;
+                 break;
+             }
+             /* str xSCRATCH, [sp, #-16]! */
+@@ -4790,10 +4839,23 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
+      * pseudo-process gets its own copy (007c=0x12349e200, 0084=0x12701a200,
+      * 008c=0x12ef9a200). Whether a patcher run ever covered that address is
+      * exactly what the counts alone cannot say. */
++    if (out_of_space != (size_t)-1)
++    {
++        for (size_t i = out_of_space; i < text_size; i += 4)
++        {
++            if (data_map && (data_map[(i / 4) >> 3] & (1 << ((i / 4) & 7)))) continue;
++            if (ios_insn_x18_role( *(uint32_t *)(text_rw + i) ) != X18_ROLE_NONE) unpatched++;
++        }
++    }
++    if (unpatched)
++    {
++        __sync_fetch_and_add( &ios_limit_x18_sites, unpatched );
++        if (out_of_space != (size_t)-1) __sync_fetch_and_add( &ios_limit_x18_images, 1 );
++    }
+     if (count > 0 || skipped > 0 || text_size)
+-        dprintf(2, "[x18-patch] ml1005 text=%p+%#lx (rw=%p) patched=%d skipped=%d "
++        dprintf(2, "[x18-patch] ml1005 text=%p+%#lx (rw=%p) patched=%d skipped=%d unpatched=%d "
+                 "tramp=%p+%#lx used=%lu\n",
+-                text_rx, (unsigned long)text_size, text_rw, count, skipped,
++                text_rx, (unsigned long)text_size, text_rw, count, skipped, unpatched,
+                 tramp_rx, (unsigned long)tramp_size, (unsigned long)tramp_off);
+     /* dprintf, not ERR (err-virtual muted): literal words the x18 matcher
+      * WOULD have clobbered — nonzero = a dodged conhost-class boot death. */
+@@ -9581,6 +9643,7 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                 if ((unix_prot & PROT_WRITE) && !(info.protection & VM_PROT_WRITE))
+                 {
+                     static unsigned wsurv;
++                    __sync_fetch_and_add( &ios_limit_wx_dropped, 1 );
+                     if (wsurv++ < 16)
+                         dprintf( 2, "ml999: mprotect_exec %p+%#lx asked for W+X but only "
+                                  "prot=%#x survived -- returning SUCCESS with WRITE DROPPED. "
+@@ -10656,8 +10719,12 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                         size_t tramp_pool_off = (offset + image_size + page_size - 1) & ~(page_size - 1);
+                         if (tramp_alloc > tramp_prealloc)
+                         {
+-                            dprintf(2, "[x18-tramp] REFUSED: budget 0x%lx > prealloc 0x%lx (source/copy divergence?)\n",
+-                                    (unsigned long)tramp_alloc, (unsigned long)tramp_prealloc);
++                            __sync_fetch_and_add( &ios_limit_x18_images, 1 );
++                            __sync_fetch_and_add( &ios_limit_x18_sites, (tramp_budget - 0x1000) / 32 );
++                            dprintf(2, "[x18-tramp] REFUSED: budget 0x%lx > prealloc 0x%lx (source/copy divergence?), "
++                                    "%lu x18 site(s) left to fault\n",
++                                    (unsigned long)tramp_alloc, (unsigned long)tramp_prealloc,
++                                    (unsigned long)((tramp_budget - 0x1000) / 32));
+                             tramp_pool_off = (size_t)-1;
+                         }
+                         if (!tramp_alloc) tramp_pool_off = (size_t)-1;  /* no x18 refs — nothing to patch */

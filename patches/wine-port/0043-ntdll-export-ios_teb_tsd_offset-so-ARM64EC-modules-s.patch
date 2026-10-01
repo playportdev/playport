@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 17 Aug 2026 00:45:30 +0800
+Subject: [PATCH] ntdll: export ios_teb_tsd_offset so ARM64EC modules stop
+ hardcoding a TSD slot
+
+On iOS the TEB is recovered through TPIDRRO_EL0 plus a raw Apple TSD slot,
+because x18 is clobbered across context switches. Which slot that is cannot
+be known at build time: it is whichever one backs the pthread key ntdll-unix
+creates for the TEB, and that key number depends on how many keys the process
+has already handed out, which varies by device and by load order. Four
+different slots have been observed on real devices (275, 276, 280, 284).
+
+The unix side discovers the slot at process init and publishes it here. FEX
+imports this as a data export, exactly as it already does for
+__wine_syscall_dispatcher, rather than rediscovering it independently -- one
+authoritative value, one place that can be wrong.
+
+Zero means "not yet discovered" and is never a usable offset.
+
+(cherry picked from commit ae1335b3d091cb8cf06392f6fd1d009b74428d82)
+Madeira-commit: a4cf1f58a1cb31e65626e1920deed76a70559174
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c   | 7 +++++++
+ dlls/ntdll/ntdll.spec | 1 +
+ 2 files changed, 8 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index ff6d4a44f6f..4de99f5149f 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -77,6 +77,13 @@ static DWORD (WINAPI *pCtrlRoutine)(void *);
+ SYSTEM_DLL_INIT_BLOCK LdrSystemDllInitBlock = { 0xf0 };
+ 
+ void *__wine_syscall_dispatcher = NULL;
++
++/* iOS-Mythic: byte offset from (TPIDRRO_EL0 & ~7) to the raw Apple TSD slot
++ * backing ios_teb_tls_key, discovered at process init by the unix loader and
++ * published here so ARM64EC modules (FEX) can import one authoritative value
++ * instead of hardcoding a slot they do not own. Zero means "not yet
++ * discovered" and must never be used as an offset. */
++unsigned int ios_teb_tsd_offset = 0;
+ unixlib_handle_t __wine_unixlib_handle = 0;
+ 
+ /* windows directory */
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 579f8fa2f4a..0f21e4e0819 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1772,6 +1772,7 @@
+ @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
+ @ extern -private -arch=arm64ec p_ios_jit_translate_addr
+ @ extern -private -arch=arm64,arm64ec p_ios_jit_reverse_translate_addr
++@ extern -private ios_teb_tsd_offset
+ @ extern -private __wine_unixlib_handle
+ 
+ # Debugging

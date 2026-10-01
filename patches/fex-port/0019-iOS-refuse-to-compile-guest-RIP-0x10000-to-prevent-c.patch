@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 8 May 2026 23:58:45 +0800
+Subject: [PATCH] iOS: refuse to compile guest RIP < 0x10000 to prevent cascade
+ noise
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+After a NULL-vtable virtual call (`call qword ptr [rax+8]` with rax=0),
+the guest's control flow lands at RIP=0x8. Without a guard, FEX
+compiles a block at RIP=0x8, the block faults, FEX reconstructs an
+exception, queues it on the guest stack, then immediately tries to
+compile RIP=0x8 again — producing thousands of CompileBlock log
+entries before SEH unwinds. Returning 0 from CompileBlock for RIPs
+below 0x10000 raises C0000005 to the guest immediately so the first
+AV is the only AV in the log.
+
+Madeira-commit: 2c8a3fa32fd9a2f183e3b04069824f78269bbccb
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 8043dc5..334b3d7 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -892,6 +892,16 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   FEXCORE_PROFILE_SCOPED("CompileBlock");
+   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedJITTime);
+ 
++  /* iOS-Mythic: refuse to compile obviously-invalid guest RIPs. After a
++   * NULL-vtable virtual call (`call [rax+8]` with rax=0), control flow
++   * lands at RIP=0x8, which then loops compiling thousands of garbage
++   * blocks before SEH unwinds. Returning 0 here raises C0000005 to the
++   * guest immediately so the first AV is the only AV. */
++  if (GuestRIP < 0x10000) {
++    LogMan::Msg::IFmt("[iOS] CompileBlock: REFUSING low/invalid RIP={:#x}", GuestRIP);
++    return 0;
++  }
++
+   LogMan::Msg::IFmt("[iOS] CompileBlock: RIP={:#x} MaxInst={}", GuestRIP, MaxInst);
+ 
+   static_cast<ContextImpl*>(Thread->CTX)->SyscallHandler->PreCompile();

@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 8 May 2026 22:10:03 +0800
+Subject: [PATCH] iOS ARM64EC: set gs_cached = TEB in ThreadInit
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+LoadStateFromECContext sets State.gs_cached = (uint64_t)NtCurrentTeb()
+when transitioning from EC to x86 mode via a CONTEXT load, but
+ThreadInit() never set it. For threads that start running x86_64 code
+before any EC->x86 transition (e.g. game startup hitting MSVC's TLS
+guards before the first exception-driven context restore), gs_cached
+stayed 0 and the FEX-emitted code for `mov rax, gs:[N]` translated to
+`ldr xRAX, [0 + N]` — a SEGV at addr=N.
+
+Mirror LoadStateFromECContext's setup in ThreadInit: gs_cached = TEB,
+fs_cached = 0. Matches Windows x64 user-mode convention (GS base = TEB).
+
+Verified on iOS x86_64 game startup: gs:[0x58] now reads the live
+TEB->ThreadLocalStoragePointer correctly (cross-checked with TEB[0x58]
+read from the same fault context — they match). The first-real-fault
+moves further into guest code as expected.
+
+Also extend the existing ThreadInit-done log line to print gs_cached so
+future bringups can confirm it at a glance.
+
+Madeira-commit: 4cc0b431fab857f0782934aecd9447e21cf00144
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/Module.cpp | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 3c08358..27ecd54 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1007,6 +1007,22 @@ NTSTATUS ThreadInit() {
+   Frame->State.cs_idx = FEXCore::Core::CPUState::DEFAULT_USER_CS << 3;
+   Frame->State.cs_cached = FEXCore::Core::CPUState::CalculateGDTBase(GDT);
+ 
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: set up GS base for x86_64 TLS access. On Windows x64 the
++   * convention is GS-base = TEB pointer, and MSVC-emitted code uses
++   * `mov rax, gs:[0x58]` to reach TEB->ThreadLocalStoragePointer.
++   * LoadStateFromECContext() at the EC->x86 transition sets this, but for
++   * the path where x86 code starts running before any CONTEXT-load happens
++   * (e.g. Thumper's startup invoking thread-local guards before its first
++   * exception-driven context restore), gs_cached stays 0 and gs:[N] hits
++   * SEGV at addr=N.                                                       */
++  {
++    const uint64_t TEB = reinterpret_cast<uint64_t>(NtCurrentTeb());
++    Frame->State.gs_cached = TEB;
++    Frame->State.fs_cached = 0;
++  }
++#endif
++
+   FEX::Windows::CallRetStack::InitializeThread(Thread);
+   Thread->CurrentFrame->Pointers.ExitFunctionEC = reinterpret_cast<uintptr_t>(&ExitFunctionEC);
+   CPUArea.StateFrame() = Thread->CurrentFrame;
+@@ -1172,6 +1188,10 @@ NTSTATUS ThreadInit() {
+       for (int k = 0; p2[k]; ++k) buf[i++] = p2[k];
+       unsigned long long enter_ec = (unsigned long long)CPUArea.DispatcherLoopTopEnterEC();
+       for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(enter_ec >> j) & 0xf];
++      const char *p3 = " gs_cached=0x";
++      for (int k = 0; p3[k]; ++k) buf[i++] = p3[k];
++      unsigned long long gs = (unsigned long long)Frame->State.gs_cached;
++      for (int j = 60; j >= 0; j -= 4) buf[i++] = hexd[(gs >> j) & 0xf];
+       buf[i++] = '\n';
+       ULONG written = 0;
+       WriteFile(stderr_h, buf, i, &written, nullptr);

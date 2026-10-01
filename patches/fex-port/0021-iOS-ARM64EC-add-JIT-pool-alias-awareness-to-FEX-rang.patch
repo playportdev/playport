@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 11 May 2026 16:42:44 +0800
+Subject: [PATCH] iOS ARM64EC: add JIT-pool alias awareness to FEX range
+ trackers
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When ARM64EC PE images are copied into the iOS JIT pool (so they can
+actually be marked RX — iOS rejects mprotect(RX) on file-backed mmaps),
+the copy lives at a different address than the original PE load address.
+FEX's InvalidationTracker and ImageTracker only know the original PE
+address ranges, so any query for a JIT-alias address (e.g.
+0x11fc225fe = sechost-copy's offset 0x1e5fe) returns "not executable"
+→ FEX emits NoExecOp → the translation traps when executed.
+
+This commit adds the FEX-side infrastructure to handle this:
+
+1. New export BTCpu64IosAddAliasMapping(PeBase, JitBase, Size) — added
+   to the def file and BTInterface so Wine ntdll can bind and call it.
+   Stores entries in a static table (256 entries × 32B = 8KB; struct
+   padded to 32B so the array stride is a power of 2, keeping ADRP+LDR
+   relocations alignment-clean).
+
+2. IosJitTranslate / IosJitReverseTranslate helpers — forward/reverse
+   alias-to-PE coordinate translation against the table.
+
+3. ECSyscallHandler overrides for QueryGuestExecutableRange and
+   LookupExecutableFileSection now do: query tracker; if miss, reverse-
+   translate alias→PE, query again, forward-translate result back to
+   alias coords. Wrapped in #ifdef FEX_IOS_HOST.
+
+The table + accessors live in IosJitAlias.cpp rather than Module.cpp —
+accessing the static array directly from class-method overrides in
+Module.cpp triggered "misaligned ldr/str offset" link errors, almost
+certainly an ADRP+LDR page-offset issue specific to ARM64EC hybrid
+emit in class-method contexts. Putting the data + accessors in their
+own TU and accessing them via plain extern "C" function calls is clean.
+
+NOTE: the table is not yet populated by Wine ntdll-unix. Without the
+Wine PE→unix bridge to push the iOS JIT mappings through
+BTCpu64IosAddAliasMapping, this code is dormant — it falls through to
+the existing tracker behavior. That bridge is the next work item.
+
+Madeira-commit: 981b08522dccc459290496ceb9700d74da85a35f
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ Source/Windows/ARM64EC/CMakeLists.txt    |  1 +
+ Source/Windows/ARM64EC/IosJitAlias.cpp   | 78 ++++++++++++++++++++++++
+ Source/Windows/ARM64EC/Module.cpp        | 45 +++++++++++++-
+ Source/Windows/ARM64EC/libarm64ecfex.def |  1 +
+ 4 files changed, 123 insertions(+), 2 deletions(-)
+ create mode 100644 Source/Windows/ARM64EC/IosJitAlias.cpp
+
+diff --git a/Source/Windows/ARM64EC/CMakeLists.txt b/Source/Windows/ARM64EC/CMakeLists.txt
+index 49e8e11..c527c28 100644
+--- a/Source/Windows/ARM64EC/CMakeLists.txt
++++ b/Source/Windows/ARM64EC/CMakeLists.txt
+@@ -1,6 +1,7 @@
+ add_library(arm64ecfex SHARED
+   Module.cpp
+   Module.S
++  IosJitAlias.cpp
+   libarm64ecfex.def
+   $<TARGET_OBJECTS:FEXCore_object>)
+ 
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+new file mode 100644
+index 0000000..def6cb1
+--- /dev/null
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -0,0 +1,78 @@
++// SPDX-License-Identifier: MIT
++// iOS JIT-pool alias table.
++//
++// On iOS, ARM64EC PE images cannot run from their loaded address (iOS rejects
++// mprotect(RX) on file-backed mmaps). Wine's ntdll-unix copies each PE image
++// into the dual-mapped JIT pool. Code in the copied image executes from the
++// alias address, not the original PE address.
++//
++// FEX's range trackers only know the ORIGINAL PE address ranges, so they
++// report alias addresses as non-executable. The lookup wrappers in
++// Module.cpp call IosJitReverseTranslate to map alias → PE-original for
++// the tracker query, then IosJitTranslate to map the result back.
++//
++// Lives in a separate TU from Module.cpp because accessing the table's
++// global storage directly from ARM64EC class methods in Module.cpp produced
++// a "misaligned ldr/str offset" link error — probably an ADRP+LDR
++// page-offset issue in the hybrid emit. Putting the data + accessors in
++// their own TU sidesteps the issue.
++
++#include <cstdint>
++
++#ifdef FEX_IOS_HOST
++
++namespace {
++struct Entry {
++  uint64_t PeBase;
++  uint64_t JitBase;
++  uint64_t Size;
++  uint64_t _Padding;  // Keeps the struct 32-byte to make array stride a power of 2.
++};
++constexpr int kMaxEntries = 256;
++Entry g_Entries[kMaxEntries];
++volatile int g_EntryCount = 0;
++}  // namespace
++
++extern "C" {
++
++void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size) {
++  int idx = g_EntryCount;
++  // De-dupe: same PE base = already registered.
++  for (int i = 0; i < idx; i++) {
++    if (g_Entries[i].PeBase == PeBase) return;
++  }
++  if (idx >= kMaxEntries) return;
++  g_Entries[idx].PeBase = PeBase;
++  g_Entries[idx].JitBase = JitBase;
++  g_Entries[idx].Size = Size;
++  __sync_synchronize();
++  g_EntryCount = idx + 1;
++}
++
++uint64_t IosJitTranslate(uint64_t Addr) {
++  int count = g_EntryCount;
++  for (int i = 0; i < count; i++) {
++    uint64_t pb = g_Entries[i].PeBase;
++    uint64_t sz = g_Entries[i].Size;
++    if (Addr >= pb && Addr < pb + sz) {
++      return g_Entries[i].JitBase + (Addr - pb);
++    }
++  }
++  return Addr;
++}
++
++uint64_t IosJitReverseTranslate(uint64_t Addr) {
++  int count = g_EntryCount;
++  for (int i = 0; i < count; i++) {
++    uint64_t jb = g_Entries[i].JitBase;
++    uint64_t sz = g_Entries[i].Size;
++    if (Addr >= jb && Addr < jb + sz) {
++      return g_Entries[i].PeBase + (Addr - jb);
++    }
++  }
++  return Addr;
++}
++
++}  // extern "C"
++
++#endif  // FEX_IOS_HOST
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 88c8ae7..3b859b5 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -63,6 +63,16 @@ $end_info$
+ #include <winnt.h>
+ #include <wine/debug.h>
+ 
++#ifdef FEX_IOS_HOST
++/* iOS JIT-pool alias resolution. Implemented in IosJitAlias.cpp (separate
++ * TU because ARM64EC class-method access to the static table directly from
++ * this TU triggered "misaligned ldr/str offset" link errors). The
++ * BTCpu64IosAddAliasMapping export is populated by Wine ntdll-unix when
++ * PE images are copied into the JIT pool. */
++extern "C" uint64_t IosJitTranslate(uint64_t Addr);
++extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);
++#endif // FEX_IOS_HOST
++
+ namespace Exception {
+ class ECSyscallHandler;
+ }
+@@ -548,7 +558,24 @@ public:
+   }
+ 
+   std::optional<FEXCore::ExecutableFileSectionInfo> LookupExecutableFileSection(FEXCore::Core::InternalThreadState*, uint64_t Address) override {
+-    return ImageTracker->LookupExecutableFileSection(Address);
++    auto Result = ImageTracker->LookupExecutableFileSection(Address);
++#ifdef FEX_IOS_HOST
++    if (!Result.has_value()) {
++      /* iOS JIT-alias-aware: same pattern as QueryGuestExecutableRange. */
++      uint64_t OrigAddr = IosJitReverseTranslate(Address);
++      if (OrigAddr != Address) {
++        auto Inner = ImageTracker->LookupExecutableFileSection(OrigAddr);
++        if (Inner.has_value()) {
++          FEXCore::ExecutableFileSectionInfo Aliased = *Inner;
++          Aliased.FileStartVA = IosJitTranslate(Inner->FileStartVA);
++          Aliased.BeginVA = IosJitTranslate(Inner->BeginVA);
++          Aliased.EndVA = IosJitTranslate(Inner->EndVA - 1) + 1;
++          return Aliased;
++        }
++      }
++    }
++#endif
++    return Result;
+   }
+ 
+   void MarkGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override {
+@@ -568,7 +595,21 @@ public:
+   }
+ 
+   FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Address) override {
+-    return InvalidationTracker->QueryExecutableRange(Address);
++    auto Result = InvalidationTracker->QueryExecutableRange(Address);
++#ifdef FEX_IOS_HOST
++    if (Result.Size == 0) {
++      /* iOS JIT-alias-aware: reverse-translate alias → PE-original, query
++       * tracker with that, then forward-translate the result base back. */
++      uint64_t OrigAddr = IosJitReverseTranslate(Address);
++      if (OrigAddr != Address) {
++        auto Inner = InvalidationTracker->QueryExecutableRange(OrigAddr);
++        if (Inner.Size != 0) {
++          return {IosJitTranslate(Inner.Base), Inner.Size, Inner.Writable};
++        }
++      }
++    }
++#endif
++    return Result;
+   }
+ 
+   void PreCompile() override {
+diff --git a/Source/Windows/ARM64EC/libarm64ecfex.def b/Source/Windows/ARM64EC/libarm64ecfex.def
+index bb51ca8..a19cc62 100644
+--- a/Source/Windows/ARM64EC/libarm64ecfex.def
++++ b/Source/Windows/ARM64EC/libarm64ecfex.def
+@@ -2,6 +2,7 @@ LIBRARY libarm64ecfex.dll
+ 
+ EXPORTS
+   BTCpu64FlushInstructionCache
++  BTCpu64IosAddAliasMapping
+   BTCpu64IsProcessorFeaturePresent
+   BTCpu64NotifyMemoryDirty
+   BTCpu64NotifyReadFile

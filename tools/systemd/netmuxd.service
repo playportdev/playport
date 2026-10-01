@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Install: cp -r tools/systemd/netmuxd.service* ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now netmuxd
+[Unit]
+Description=netmuxd — usbmux over Wi-Fi for the paired phone (Playport docs/DEVICE.md)
+Documentation=https://github.com/jkcoxson/netmuxd
+After=network-online.target avahi-daemon.service
+
+[Service]
+Environment=RUST_LOG=info
+ExecStart=/usr/bin/netmuxd \
+    --socket-path %h/.local/share/port22/nm.sock \
+    --disable-usb \
+    --plist-storage /var/lib/lockdown
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

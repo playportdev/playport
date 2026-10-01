@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 17 Sep 2021 21:49:11 +0300
+Subject: [PATCH] advapi32: HACK: Don't free provider library in
+ CryptReleaseContext() for DeathLoop.
+
+CW-Bug-Id: #19427
+
+Avoids a lockup in DeathLoop. To be dropped once we have a
+GetModuleHandle() not blocking on the loader lock.
+Valve-commit: 70409daaac8ce32997d1567f11e93668522a8e24
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/advapi32/crypt.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/advapi32/crypt.c b/dlls/advapi32/crypt.c
+index b2b1be3..afaf31f 100644
+--- a/dlls/advapi32/crypt.c
++++ b/dlls/advapi32/crypt.c
+@@ -633,9 +633,19 @@ BOOL WINAPI CryptReleaseContext (HCRYPTPROV hProv, DWORD dwFlags)
+ 
+ 	if (InterlockedDecrement(&pProv->refcount) == 0)
+ 	{
++		static unsigned int once;
++		char sgi[64];
++
+ 		ret = pProv->pFuncs->pCPReleaseContext(pProv->hPrivate, dwFlags);
+ 		pProv->dwMagic = 0;
+-		FreeLibrary(pProv->hModule);
++		if(GetEnvironmentVariableA("SteamGameId", sgi, sizeof(sgi)) && !strcmp(sgi, "1252330"))
++		{
++			if (!once++) FIXME("HACK: not freeing provider library.\n");
++		}
++		else
++		{
++			FreeLibrary(pProv->hModule);
++		}
+ #if 0
+ 		CRYPT_Free(pProv->pVTable->pContextInfo);
+ #endif

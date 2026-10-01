@@ -1,0 +1,6 @@
+clang: clang version 22.1.8
+llvm-mingw: clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb) ($LLVM_MINGW)
+ld64: @(#)PROGRAM:ld  PROJECT:ld64-956.6
+xtool: xtool 1.20.1 (dirty)
+swift: Swift version 6.4 (swift-6.4-RELEASE)
+sdk: iPhoneOS26.5.sdk MacOSX26.5.sdk 

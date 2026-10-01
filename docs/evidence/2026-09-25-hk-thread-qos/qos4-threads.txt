@@ -1,0 +1,144 @@
+t=   0 fps=  98.4 cpu=  89% all threads 43.9 Mi/f
+         0024                              cpu   34%  P 0.43   18.15 Mi/f
+      m522282                              cpu    6%  P 0.81    7.18 Mi/f
+         00ec Loading.PreloadManager       cpu   11%  P 0.00    6.03 Mi/f
+      m522279                              cpu    7%  P 0.31    2.92 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu    8%  P 0.00     2.6 Mi/f
+      m522281                              cpu    1%  P 0.76    1.12 Mi/f
+         009c dxmt-encode-thr              cpu    5%  P 0.00    1.03 Mi/f
+      m522428                              cpu    3%  P 0.15    0.68 Mi/f
+t=  15 fps= 118.5 cpu= 112% all threads 34.4 Mi/f
+         0024                              cpu   24%  P 0.99    8.55 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   18%  P 0.00    5.77 Mi/f
+         009c dxmt-encode-thr              cpu   22%  P 0.00    5.42 Mi/f
+      m522279                              cpu    7%  P 0.92    2.94 Mi/f
+      m522281                              cpu    3%  P 0.92    2.56 Mi/f
+         00c0                              cpu    3%  P 0.99    2.53 Mi/f
+      m522428                              cpu    4%  P 0.73    1.28 Mi/f
+      m522374                              cpu    4%  P 0.74    1.09 Mi/f
+t=  30 fps= 114.3 cpu= 118% all threads 46.2 Mi/f
+         00ec Loading.PreloadManager       cpu   21%  P 0.00   10.37 Mi/f
+         0024                              cpu   22%  P 0.98    9.76 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   15%  P 0.00    4.98 Mi/f
+         009c dxmt-encode-thr              cpu   17%  P 0.00    3.95 Mi/f
+      m522279                              cpu    7%  P 0.90    3.66 Mi/f
+         00c0                              cpu    4%  P 0.98    3.43 Mi/f
+      m522282                              cpu    2%  P 0.90     1.6 Mi/f
+      m522281                              cpu    1%  P 0.93    1.06 Mi/f
+t=  45 fps= 119.4 cpu=  88% all threads 25.2 Mi/f
+         0024                              cpu   21%  P 0.98     5.8 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   12%  P 0.00    3.44 Mi/f
+         00c0                              cpu    5%  P 0.99    2.98 Mi/f
+      m522279                              cpu    8%  P 0.87    2.77 Mi/f
+         009c dxmt-encode-thr              cpu   14%  P 0.00    2.59 Mi/f
+      m522281                              cpu    2%  P 0.96    2.43 Mi/f
+      m522282                              cpu    2%  P 0.83    0.75 Mi/f
+      m522375                              cpu    3%  P 0.64    0.72 Mi/f
+t=  60 fps= 119.6 cpu=  89% all threads 24.5 Mi/f
+         0024                              cpu   22%  P 0.97     5.8 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   13%  P 0.00    3.71 Mi/f
+         00c0                              cpu    5%  P 0.97    3.14 Mi/f
+      m522279                              cpu    9%  P 0.87    2.92 Mi/f
+         009c dxmt-encode-thr              cpu   15%  P 0.00    2.76 Mi/f
+      m522281                              cpu    1%  P 0.95    0.99 Mi/f
+      m522198                              cpu    4%  P 0.63    0.84 Mi/f
+      m522777                              cpu    3%  P 0.63    0.69 Mi/f
+t=  75 fps= 119.7 cpu=  89% all threads 26.5 Mi/f
+         0024                              cpu   22%  P 0.97    5.94 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   12%  P 0.00    3.71 Mi/f
+         00c0                              cpu    5%  P 0.98    3.14 Mi/f
+      m522279                              cpu    9%  P 0.86    2.93 Mi/f
+         009c dxmt-encode-thr              cpu   14%  P 0.00    2.77 Mi/f
+      m522281                              cpu    2%  P 0.96    2.57 Mi/f
+      m522198                              cpu    4%  P 0.64    0.81 Mi/f
+      m522428                              cpu    4%  P 0.64     0.8 Mi/f
+t=  90 fps=  98.9 cpu= 114% all threads 57.5 Mi/f
+         0024                              cpu   38%  P 0.97   26.41 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   20%  P 0.00    6.66 Mi/f
+         00c0                              cpu    5%  P 0.92    5.35 Mi/f
+         009c dxmt-encode-thr              cpu   15%  P 0.00    4.21 Mi/f
+      m522279                              cpu    6%  P 0.82    3.39 Mi/f
+      m522282                              cpu    3%  P 0.92    3.09 Mi/f
+      m522281                              cpu    1%  P 0.91    1.16 Mi/f
+      m522429                              cpu    3%  P 0.67     1.0 Mi/f
+t= 105 fps= 119.1 cpu= 158% all threads 60.7 Mi/f
+         0024                              cpu   42%  P 0.99   22.55 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   40%  P 0.00   11.76 Mi/f
+         00c0                              cpu    6%  P 0.99    6.66 Mi/f
+         009c dxmt-encode-thr              cpu   21%  P 0.00    6.14 Mi/f
+      m522279                              cpu    5%  P 0.87    2.98 Mi/f
+      m522281                              cpu    3%  P 0.90     2.6 Mi/f
+      m522375                              cpu    4%  P 0.75    1.26 Mi/f
+      m522428                              cpu    3%  P 0.72     1.1 Mi/f
+t= 120 fps= 119.6 cpu= 156% all threads 55.5 Mi/f
+         0024                              cpu   41%  P 0.99   20.95 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   42%  P 0.00    11.4 Mi/f
+         00c0                              cpu    6%  P 0.99    6.26 Mi/f
+         009c dxmt-encode-thr              cpu   21%  P 0.00    5.82 Mi/f
+      m522279                              cpu    5%  P 0.87     2.8 Mi/f
+      m522374                              cpu    3%  P 0.70    0.98 Mi/f
+      m522375                              cpu    3%  P 0.70    0.97 Mi/f
+      m522429                              cpu    3%  P 0.71    0.96 Mi/f
+t= 135 fps= 119.2 cpu= 165% all threads 60.9 Mi/f
+         0024                              cpu   42%  P 0.99   22.35 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   44%  P 0.00   12.18 Mi/f
+         00c0                              cpu    6%  P 0.98    6.77 Mi/f
+         009c dxmt-encode-thr              cpu   22%  P 0.00    6.23 Mi/f
+      m522279                              cpu    5%  P 0.85    3.01 Mi/f
+      m522281                              cpu    3%  P 0.92    2.59 Mi/f
+      m522428                              cpu    3%  P 0.70    1.16 Mi/f
+      m522198                              cpu    3%  P 0.69    1.12 Mi/f
+t= 150 fps= 119.8 cpu= 186% all threads 58.5 Mi/f
+         0024                              cpu   50%  P 0.99    21.7 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   48%  P 0.00   12.26 Mi/f
+         00c0                              cpu    8%  P 0.97    6.51 Mi/f
+         009c dxmt-encode-thr              cpu   25%  P 0.00    6.17 Mi/f
+      m522279                              cpu    6%  P 0.80    2.95 Mi/f
+      m522198                              cpu    4%  P 0.68     1.1 Mi/f
+      m522429                              cpu    4%  P 0.66    1.02 Mi/f
+      m522428                              cpu    4%  P 0.68     1.0 Mi/f
+t= 165 fps= 119.9 cpu= 193% all threads 57.4 Mi/f
+         0024                              cpu   52%  P 0.99   20.58 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   48%  P 0.00   11.77 Mi/f
+         00c0                              cpu    8%  P 0.97    6.29 Mi/f
+         009c dxmt-encode-thr              cpu   25%  P 0.00    5.87 Mi/f
+      m522279                              cpu    6%  P 0.78     2.8 Mi/f
+      m522281                              cpu    4%  P 0.84    2.46 Mi/f
+      m522375                              cpu    5%  P 0.67    1.14 Mi/f
+      m522429                              cpu    4%  P 0.67    1.03 Mi/f
+t= 180 fps= 119.2 cpu= 215% all threads 58.7 Mi/f
+         0024                              cpu   66%  P 0.99   21.36 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   50%  P 0.00   12.42 Mi/f
+         00c0                              cpu   11%  P 0.97    6.62 Mi/f
+         009c dxmt-encode-thr              cpu   25%  P 0.00    6.16 Mi/f
+      m522279                              cpu    8%  P 0.77    2.93 Mi/f
+      m522429                              cpu    5%  P 0.63    1.24 Mi/f
+      m522428                              cpu    5%  P 0.62    1.18 Mi/f
+         0048 Job.Worker 2                 cpu    9%  P 0.00    1.03 Mi/f
+t= 195 fps= 116.0 cpu= 261% all threads 62.6 Mi/f
+         0024                              cpu   85%  P 0.98   21.85 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   55%  P 0.00    12.8 Mi/f
+         00c0                              cpu   16%  P 0.93    7.01 Mi/f
+         009c dxmt-encode-thr              cpu   26%  P 0.00    6.35 Mi/f
+      m522279                              cpu   10%  P 0.68    3.07 Mi/f
+      m522281                              cpu    8%  P 0.51    2.79 Mi/f
+      m522198                              cpu    6%  P 0.51    1.25 Mi/f
+      m522777                              cpu    6%  P 0.50    1.25 Mi/f
+t= 210 fps= 115.3 cpu= 263% all threads 57.0 Mi/f
+         0024                              cpu   85%  P 0.95   20.53 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   57%  P 0.00   11.85 Mi/f
+         00c0                              cpu   16%  P 0.88    6.74 Mi/f
+         009c dxmt-encode-thr              cpu   27%  P 0.00    5.95 Mi/f
+      m522279                              cpu   11%  P 0.59    2.87 Mi/f
+      m522375                              cpu    6%  P 0.43    1.15 Mi/f
+         0048 Job.Worker 2                 cpu   11%  P 0.00    1.07 Mi/f
+         0044 Job.Worker 1                 cpu   14%  P 0.00    1.03 Mi/f
+t= 225 fps= 115.9 cpu= 260% all threads 56.9 Mi/f
+         0024                              cpu   84%  P 0.99   20.27 Mi/f
+         00b0 UnityGfxDeviceWorker         cpu   56%  P 0.00   11.75 Mi/f
+         00c0                              cpu   16%  P 0.96    6.53 Mi/f
+         009c dxmt-encode-thr              cpu   27%  P 0.00    5.89 Mi/f
+      m522279                              cpu   10%  P 0.72    2.85 Mi/f
+      m522281                              cpu    5%  P 0.46    1.62 Mi/f
+      m522198                              cpu    6%  P 0.53    1.11 Mi/f
+      m522429                              cpu    6%  P 0.55    1.11 Mi/f

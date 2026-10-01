@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 11:20:35 +0800
+Subject: [PATCH] EC5c: arm64ec_process_init early-stash + iOS skip start.exe
+ fallback
+
+- arm64ec_process_init stashes arm64x_check_call's address in
+  PEB.WerRegistrationData (unused on iOS) BEFORE pProcessInit runs, so
+  ntdll-unix's SEGV handler can dump arm64x_check_call's first
+  instructions even if FEX's ProcessInit crashes mid-init.
+
+- env.c skips the start.exe fallback when is_arm64ec() on iOS
+  (WINE_IOS): load_arm64ec_module loads xtajit64 directly, so start.exe
+  (not bundled for arm64ec) isn't needed and was causing
+  STATUS_DLL_NOT_FOUND on hello-x64.exe launch.
+
+- ERR trace in arm64ec_update_hybrid_metadata for diagnostic.
+
+(cherry picked from commit 3d1a183912dc25539b8961e3fe6bf91869fb414b)
+Madeira-commit: 61ec8b3e2ce15538d5ec22d481d217ed0fe2cc77
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 8 ++++++++
+ dlls/ntdll/unix/env.c       | 7 +++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 26e4e78501b..25d776f7b35 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -191,6 +191,12 @@ NTSTATUS arm64ec_process_init( HMODULE module )
+     CHPEV2_PROCESS_INFO *info = (CHPEV2_PROCESS_INFO *)(RtlGetCurrentPeb() + 1);
+     const IMAGE_ARM64EC_METADATA *metadata = arm64ec_get_module_metadata( module );
+ 
++    /* Stash arm64x_check_call's address in PEB.WerRegistrationData (unused
++     * on iOS) BEFORE pProcessInit runs, so ntdll-unix's SEGV handler can
++     * dump arm64x_check_call's first instructions if FEX's ProcessInit
++     * crashes inside arm64x_check_call. */
++    RtlGetCurrentPeb()->WerRegistrationData = arm64x_check_call;
++
+     __os_arm64x_dispatch_call_no_redirect = RtlFindExportedRoutineByName( module, "ExitToX64" );
+     __os_arm64x_dispatch_fptr = RtlFindExportedRoutineByName( module, "DispatchJump" );
+     __os_arm64x_dispatch_ret = RtlFindExportedRoutineByName( module, "RetToEntryThunk" );
+@@ -297,6 +303,8 @@ void arm64ec_update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,
+     const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION( nt );
+ 
+     /* assume that all pointers are in the same section */
++    ERR( "arm64ec_update_hybrid_metadata: module=%p dispatch_call_rva=%lx check_call=%p\n",
++         module, (unsigned long)metadata->__os_arm64x_dispatch_call, arm64x_check_call );
+ 
+     for (i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++)
+     {
+diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+index bd888b9928b..ae74a7b8417 100644
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -1929,6 +1929,13 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params(void)
+             free( loader );
+             status = STATUS_INVALID_IMAGE_FORMAT;
+         }
++#ifdef WINE_IOS
++        /* iOS arm64ec: AMD64 main exe is dispatched via xtajit64 directly
++         * (loaded by load_arm64ec_module in PE-side loader_init). start.exe
++         * is not bundled and not needed — skip the fallback. */
++        if (status == STATUS_INVALID_IMAGE_FORMAT && is_arm64ec())
++            status = STATUS_SUCCESS;
++#endif
+     }
+ 
+     if (status)  /* try launching it through start.exe */

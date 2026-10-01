@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Tue, 5 Dec 2023 17:29:39 +0100
+Subject: [PATCH] secur32: Perform TLS re-handshake after SEC_I_RENEGOTIATE was
+ returned.
+
+Even if input buffer is empty, as this is often the case.
+
+CW-Bug-Id: #18449
+CW-Bug-Id: #22371
+Valve-commit: e8dbda3727d852383b41a116902b4e952ac5696e
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/secur32/schannel.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/secur32/schannel.c b/dlls/secur32/schannel.c
+index 1e149d7..5b1b9fd 100644
+--- a/dlls/secur32/schannel.c
++++ b/dlls/secur32/schannel.c
+@@ -67,6 +67,7 @@ struct schan_context
+     enum control_token control_token;
+     unsigned int alert_type;
+     unsigned int alert_number;
++    BOOL rehandshake_requested;
+ };
+ 
+ static struct schan_handle *schan_handle_table;
+@@ -1028,7 +1029,7 @@ static SECURITY_STATUS establish_context(
+             buffer = &pInput->pBuffers[idx];
+             ptr = buffer->pvBuffer;
+ 
+-            if (buffer->cbBuffer < ctx->header_size)
++            if (buffer->cbBuffer < ctx->header_size && !ctx->rehandshake_requested)
+             {
+                 TRACE("Expected at least %Iu bytes, but buffer only contains %lu bytes.\n",
+                       ctx->header_size, buffer->cbBuffer);
+@@ -1053,7 +1054,7 @@ static SECURITY_STATUS establish_context(
+                 ptr += record_size;
+             }
+ 
+-            if (!expected_size)
++            if (!expected_size && !ctx->rehandshake_requested)
+             {
+                 TRACE("Expected at least %Iu bytes, but buffer only contains %lu bytes.\n",
+                       max(ctx->header_size, record_size), buffer->cbBuffer);
+@@ -1105,6 +1106,7 @@ static SECURITY_STATUS establish_context(
+     params.alert_type = ctx->alert_type;
+     params.alert_number = ctx->alert_number;
+     ctx->control_token = CONTROL_TOKEN_NONE;
++    ctx->rehandshake_requested = FALSE;
+     ret = GNUTLS_CALL( handshake, &params );
+ 
+     if (output_buffer_idx != -1)
+@@ -1736,6 +1738,7 @@ static SECURITY_STATUS SEC_ENTRY schan_DecryptMessage(PCtxtHandle context_handle
+     buffer->BufferType = SECBUFFER_STREAM_HEADER;
+     buffer->cbBuffer = ctx->header_size;
+ 
++    if (status == SEC_I_RENEGOTIATE) ctx->rehandshake_requested = TRUE;
+     return status;
+ }
+ 

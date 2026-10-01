@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 8 May 2026 20:19:03 +0800
+Subject: [PATCH] build: detect ARM64EC and route install dirs to
+ arm64ec-windows
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The arm64ec-w64-mingw32-clang toolchain reports cpu_family() as
+'aarch64' but generates ARM64EC hybrid PEs that need to live in
+arm64ec-windows/ alongside other ARM64EC system DLLs (ntdll, kernel32,
+ucrtbase, etc.) — installing them under aarch64-windows/ would conflict
+with the pure-ARM64 builds.
+
+Detect ARM64EC via the __arm64ec__ / _M_ARM64EC predefines and route
+windows_native_install_dir / windows_builtin_install_dir to
+arm64ec-windows/ when those are set.
+
+Also fix util_bit.hpp: the toolchain defines BOTH __x86_64__ and
+__arm64ec__, so x86 intrinsic detection must check ARM64EC first
+(generated code is ARM64, not x86 — x86 intrinsics aren't usable).
+
+Madeira-commit: 7ffb6827fd446cb05b73f91dc9694b243753d927
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ meson.build | 27 +++++++++++++++++++++++----
+ 1 file changed, 23 insertions(+), 4 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 0bddfcc..e2ce0f0 100644
+--- a/meson.build
++++ b/meson.build
+@@ -16,6 +16,16 @@ clangpp = meson.get_compiler('cpp', native: true)
+ 
+ cpu_family = host_machine.cpu_family()
+ 
++# ARM64EC: arm64ec-w64-mingw32-clang reports cpu_family() = 'aarch64' but is
++# really an x86_64-callable hybrid PE — we need to install to arm64ec-windows
++# (matches our wine/build-arm64ec layout) rather than aarch64-windows.
++is_arm64ec = false
++if cpu_family == 'aarch64'
++  is_arm64ec = cpp.compiles(
++    '#if !defined(__arm64ec__) && !defined(_M_ARM64EC)\n#error not arm64ec\n#endif\nint main(void){return 0;}',
++    name: 'arm64ec target')
++endif
++
+ dxmt_include_dirs = [
+   './include',
+   './libs'
+@@ -180,12 +190,21 @@ if dxmt_crossbuild
+     endif
+     windows_builtin_install_dir = 'x86_64-windows'
+   elif cpu_family == 'aarch64'
+-    if wine_builtin_dll
+-      windows_native_install_dir = 'aarch64-windows'
++    if is_arm64ec
++      if wine_builtin_dll
++        windows_native_install_dir = 'arm64ec-windows'
++      else
++        windows_native_install_dir = 'system32'
++      endif
++      windows_builtin_install_dir = 'arm64ec-windows'
+     else
+-      windows_native_install_dir = 'system32'
++      if wine_builtin_dll
++        windows_native_install_dir = 'aarch64-windows'
++      else
++        windows_native_install_dir = 'system32'
++      endif
++      windows_builtin_install_dir = 'aarch64-windows'
+     endif
+-    windows_builtin_install_dir = 'aarch64-windows'
+   else
+     error('invalid cpu family')
+   endif

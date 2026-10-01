@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Jul 2026 16:08:23 +0800
+Subject: [PATCH] iOS: probe unimplemented 128-bit CASPAL with its target
+ region
+
+RunCASPAL implements only Size==0 (32-bit pairs); Size==1 -- a 128-bit CAS from
+x86 LOCK CMPXCHG16B -- falls through to `return false`, which callers report as
+"Unhandled JIT SIGBUS CASPAL" and escalate to a fatal
+STATUS_DATATYPE_MISALIGNMENT. Steam/CEF reaches that path.
+
+Before implementing a 128-bit unaligned CAS, establish whether the address is
+even unaligned. It is not: measured misalign=0 every time, so the alignment
+path was never the problem. The region query added here then showed the real
+shape -- state=0x10000 (MEM_FREE), prot=PAGE_NOACCESS, inside the JIT pool's
+span. The atomic targets pool VA that has already been released, i.e. a
+use-after-free of pool memory, not an alignment fault. Implementing the
+Size==1 path would have fixed nothing.
+
+Madeira-commit: 8c0e1a87abaef7af70d8e9cb696b85525f6cce8d
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Utils/ArchHelpers/Arm64.cpp | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+index 4c8ae32..a92aced 100644
+--- a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
++++ b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+@@ -540,10 +540,24 @@ static void IosLogUnimplementedCASPAL(uint32_t Size, uint64_t* GPRs, uint32_t Ad
+     return;
+   }
+   reports++;
++
++  /* ml223: the address came back 16-byte ALIGNED (misalign=0), so this is not the
++   * unaligned-CAS case the Size==0 path exists for -- implementing a 128-bit unaligned
++   * CAS would not have fixed it. An aligned LSE atomic that still faults points at the
++   * MEMORY rather than the instruction, and the address sits inside the JIT pool's range,
++   * which we DUAL-MAP (RW alias + RX alias). Aliased mappings are exactly where atomics
++   * can fault despite correct alignment. Report what the region actually is, so "guest
++   * data in a dual-mapped pool page" is distinguishable from ordinary private memory. */
++  MEMORY_BASIC_INFORMATION mbi {};
++  const char* type = "?";
++  if (VirtualQuery(reinterpret_cast<LPCVOID>(GPRs[AddressReg]), &mbi, sizeof(mbi))) {
++    type = mbi.Type == MEM_IMAGE ? "MEM_IMAGE" : mbi.Type == MEM_MAPPED ? "MEM_MAPPED" : "MEM_PRIVATE";
++  }
+   LogMan::Msg::EFmt("[caspal128] UNIMPLEMENTED Size={} addrReg=x{} addr={:#x} misalign={} "
+-                    "crosses16B={}",
++                    "crosses16B={} | region base={} size={:#x} prot={:#x} type={} state={:#x}",
+                     Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
+-                    (GPRs[AddressReg] & 15) ? "yes" : "no");
++                    (GPRs[AddressReg] & 15) ? "yes" : "no", mbi.BaseAddress, mbi.RegionSize,
++                    mbi.Protect, type, mbi.State);
+ }
+ 
+ static bool HandleCASPAL(uint32_t Instr, uint64_t* GPRs, uint32_t* StrictSplitLockMutex) {

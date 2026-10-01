@@ -1,0 +1,176 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Thu, 30 Apr 2026 02:27:05 +0800
+Subject: [PATCH] iOS dispatcher fixes: skip EC-mark for block CodeBuffer,
+ route LogMan to stderr, defensive zero-init
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Four small but load-bearing fixes that together unblocked end-to-end x86_64 → ARM64
+translation on iOS. Without these, the dispatcher BR'd into uninitialized JIT pool
+memory before reaching CompileBlock; with them, FEX successfully decodes 51 x86
+instructions across 14 basic blocks from hello-x64.exe's mainCRTStartup and emits
+184 ARM64 instructions of real translation.
+
+* Dispatcher.cpp: on iOS, skip the opportunistic call-ret-stack early return at
+  the top of EnterEC. The optimistic `ret x11` path can jump to garbage if the
+  call-ret stack hasn't been zero-initialized correctly under iOS demand-fault
+  semantics; force unconditional `b LoopTop` instead.
+
+* LookupCache.cpp: explicitly memset PageMemory (L2) and L1Pointer to 0 in the
+  iOS branch. iOS's demand-fault behavior leaves a 0x69 byte at the start of
+  every iOS page (observed via JIT-pool dumps); if FEX's L2/L1 lookup picks up
+  one of those bytes via page-shift arithmetic, cbz fails to fire and the
+  dispatcher BRs to a stale non-zero pointer.
+
+* CallRetStack.h: memset(0) the call-ret stack on iOS after MEM_COMMIT.
+  VirtualAlloc(MEM_COMMIT) on a previously-MEM_RESERVE'd PAGE_NOACCESS region
+  doesn't reliably zero on iOS, so the dispatcher's `ldp [callret_sp]` could
+  read poison and BLR to garbage.
+
+* Logging.cpp: route LogMan output directly to stderr on iOS regardless of the
+  SilentLog config. SilentLog defaults to true, so the MsgHandler was never
+  installed and every LogMan::Msg::IFmt was discarded — making FEX-side
+  diagnostics invisible. Bypass on iOS via direct write(2).
+
+Madeira-commit: 82097d0ae2c19cec8f45965dd849c0a01872c864
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  | 10 ++++++++++
+ FEXCore/Source/Interface/Core/LookupCache.cpp | 16 ++++++++++++++++
+ Source/Windows/Common/CallRetStack.h          |  8 ++++++++
+ Source/Windows/Common/Logging.cpp             | 19 +++++++++++++++++++
+ 4 files changed, 53 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index c14e7d5..12bc7b1 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -135,6 +135,15 @@ void Dispatcher::EmitDispatcher() {
+ 
+   FillSpecialRegs(TMP1, TMP2, {.SetFIZ = false, .SetPredRegs = true});
+ 
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: skip the opportunistic call-ret-stack return on iOS. The
++   * call-ret stack is zero-initialized via memset (CallRetStack.h iOS branch),
++   * so the LDP loads (0,0) and cbnz takes us to LoopTop anyway. But if the
++   * memset somehow misses (iOS demand-fault quirks on the previously-NOACCESS
++   * region), the `ret x11` would jump to garbage. Force unconditional branch
++   * to LoopTop. */
++  (void)b(&LoopTop);
++#else
+   // As ARM64EC uses this as an entrypoint for both guest calls and host returns, opportunistically try to return
+   // using the call-ret stack to avoid unbalancing it.
+   ldp<ARMEmitter::IndexType::OFFSET>(TMP1, TMP2, REG_CALLRET_SP);
+@@ -145,6 +154,7 @@ void Dispatcher::EmitDispatcher() {
+   // If the entry at the TOS is for the target address, pop it and return to the JIT code
+   add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x10);
+   ret(TMP2);
++#endif
+ 
+   // Enter JIT
+ #endif
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.cpp b/FEXCore/Source/Interface/Core/LookupCache.cpp
+index b9761c8..370a62c 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.cpp
++++ b/FEXCore/Source/Interface/Core/LookupCache.cpp
+@@ -13,6 +13,10 @@ $end_info$
+ #include "Interface/Context/Context.h"
+ #include "Interface/Core/LookupCache.h"
+ 
++#ifdef FEX_IOS_HOST
++#include <cstring>
++#endif
++
+ namespace FEXCore {
+ GuestToHostMap::GuestToHostMap()
+   : BlockLinks_mbr {"FEXMem_BlockLinks"} {
+@@ -77,6 +81,18 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+     // Start at maximum instead.
+     L1PointerMask = MAX_L1_ENTRIES - 1;
+   }
++
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: explicitly memset PageMemory (L2) and L1 to 0. iOS demand-faults
++   * fresh pages with a 0x69 byte at the start of every iOS page (a kernel quirk
++   * we observed during JIT-pool dumps). If FEX's L2/L1 lookup hits one of those
++   * bytes via the page-shift arithmetic, cbz fails to fire and the dispatcher
++   * BRs to a nonzero stale pointer (= empty pool space → SIGILL). The memset
++   * touches every iOS page so we end up with zero-filled, fully-committed L2/L1. */
++  std::memset(reinterpret_cast<void*>(PageMemory),
++              0, ctx->Config.VirtualMemSize / FEXCore::Utils::FEX_PAGE_SIZE * 8);
++  std::memset(reinterpret_cast<void*>(L1Pointer), 0, MAX_L1_SIZE);
++#endif
+ }
+ 
+ LookupCache::~LookupCache() {
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 215591b..112e01f 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -33,6 +33,14 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+   Thread->CallRetStackBase = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(CallRetStackAlloc) + FEXCore::Utils::FEX_PAGE_SIZE);
+   ::VirtualAlloc(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE, MEM_COMMIT, PAGE_READWRITE);
+ 
++  /* iOS-Mythic: VirtualAlloc(MEM_COMMIT) on a previously-MEM_RESERVE'd
++   * PAGE_NOACCESS region might not zero-initialize the pages on iOS. The
++   * dispatcher uses callret_sp to BLR via stored values; uninit content
++   * (e.g. 0x55 poison from prior wine activity) would BLR to garbage. */
++#ifdef FEX_IOS_HOST
++  memset(Thread->CallRetStackBase, 0, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
++#endif
++
+   Thread->CurrentFrame->State.callret_sp = GetInfoThread(Thread).DefaultLocation;
+ }
+ 
+diff --git a/Source/Windows/Common/Logging.cpp b/Source/Windows/Common/Logging.cpp
+index 8980bda..5911b85 100644
+--- a/Source/Windows/Common/Logging.cpp
++++ b/Source/Windows/Common/Logging.cpp
+@@ -9,12 +9,23 @@
+ #include <winternl.h>
+ #include <winnt.h>
+ 
++#ifdef FEX_IOS_HOST
++#include <unistd.h>
++#endif
++
+ namespace {
+ void (*WineDbgOut)(const char* Message);
+ FILE* LogFile;
+ 
+ static void MsgHandler(LogMan::DebugLevels Level, const char* Message) {
+   const auto Output = fextl::fmt::format("{} {:X} {}\n", LogMan::DebugLevelStr(Level), GetCurrentThreadId(), Message);
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: route directly to stderr (which is dup2'd to mythic-log.txt
++   * by WineProcessBridge). __wine_dbg_output is exported but doesn't always
++   * resolve via GetProcAddress on our embedded ntdll, so go around it. */
++  ::write(2, Output.c_str(), Output.size());
++  return;
++#endif
+   if (WineDbgOut) {
+     WineDbgOut(Output.c_str());
+   } else if (LogFile) {
+@@ -34,10 +45,18 @@ static void AssertHandler(const char* Message) {
+ 
+ namespace FEX::Windows::Logging {
+ void Init() {
++#ifndef FEX_IOS_HOST
+   FEX_CONFIG_OPT(SilentLog, SILENTLOG);
+   if (SilentLog()) {
+     return;
+   }
++#endif
++
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: trace install via stderr directly to confirm Init() ran. */
++  const char *m = "[FEX-iOS] Logging::Init installing MsgHandler\n";
++  ::write(2, m, 47);
++#endif
+ 
+   WineDbgOut = reinterpret_cast<decltype(WineDbgOut)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "__wine_dbg_output"));
+   if (!WineDbgOut) {

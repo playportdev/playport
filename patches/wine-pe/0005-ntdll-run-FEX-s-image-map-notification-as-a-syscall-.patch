@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: run FEX's image-map notification as a syscall callback
+
+NotifyImageMap could deadlock; the syscall-callback guard is now held
+across the call, as every other callback does.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 030137b9..148a8b96 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -1971,6 +1971,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
+ void arm64ec_notify_image_map( void *base )
+ {
+     static unsigned int n_map;
++    BOOL guarded;
+ 
+     /* ml710: must be the intervals-only entry point, NEVER NotifyMapViewOfSection.
+      * The latter also drives ImageTracker, which takes FEX's CodeInvalidationMutex
+@@ -1980,10 +1981,20 @@ void arm64ec_notify_image_map( void *base )
+      * loader lock held. If pNotifyImageMap is absent, do nothing: the syscall path is
+      * still authoritative, and a wedge is far worse than a missed registration. */
+     if (!base || !pNotifyImageMap) return;
++    /* image-map-guard: hold the syscall-callback guard across the call, as every
++     * other FEX notification does. NotifyImageMap holds FEX's IntervalsLock
++     * exclusively while it allocates, frees and logs; unguarded, a nested
++     * NtFreeVirtualMemory or NtProtectVirtualMemory notifies FEX again and
++     * InvalidateAlignedInterval() waits on that same lock on the same thread,
++     * forever (every child pseudo-process on the rung-4 device run). When the guard
++     * is already set (ml710's stuck-InSyscallCallback case) the call is made as
++     * before, so that fallback is kept. */
++    guarded = enter_syscall_callback();
+     n_map++;
+     if (n_map <= 64)
+         ERR( "[ldr-image] ml710 MAP #%u base=%p peb=%p\n", n_map, base, RtlGetCurrentPeb() );
+     pNotifyImageMap( base );
++    if (guarded) leave_syscall_callback();
+ }
+ 
+ /* ml709b: UNUSED, deliberately. The loader must not call this -- see the long comment

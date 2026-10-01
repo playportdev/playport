@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 21:46:52 +0200
+Subject: [PATCH] server: give back a dying thread's uninterrupted sections
+
+On a Unix host a thread that wineserver kills gets SIGQUIT, which the
+uninterrupted sections block, so it dies outside them. iOS delivers no
+such signal: a killed thread runs on until its next server call finds
+its request pipe closed and calls abort_thread, and that call is often
+inside a section (NtClose holds fd_cache_mutex around close_handle). The
+thread ended holding a mutex every pseudo-process shares. When a child
+faulted and terminated itself, wineserver killed its other threads, one
+of them died that way, and the parent's thread that woke from
+WaitForSingleObject on the child blocked in fd_cache_mutex for good: the
+host waited for ever.
+
+server_enter_uninterrupted_section now records the section's mutex per
+thread, and abort_thread, abort_process and process_exit_wrapper leave
+every section the thread is still in, with a [section] line naming the
+mutex, before the thread or process ends.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-child-process.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 52 +++++++++++++++++++++++++++++++++++
+ build/ntdll-unix/thread_ios.c |  5 ++++
+ 2 files changed, 57 insertions(+)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 15ad99a..331c0f7 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -2063,10 +2063,46 @@ NTSTATUS unixcall_wine_server_call( void *args )
+ /***********************************************************************
+  *           server_enter_uninterrupted_section
+  */
++#ifdef WINE_IOS
++/* Playport: the uninterrupted sections the calling thread is in, innermost
++ * last. On a Unix host a killed thread gets SIGQUIT, which these sections
++ * block, so it dies outside them. iOS delivers no such signal: a thread
++ * that wineserver killed runs on until its next server call finds the
++ * request pipe closed, and that call is often inside a section (NtClose
++ * holds fd_cache_mutex around close_handle). The thread then ended holding
++ * a session-wide mutex, and every other pseudo-process waited on it for
++ * ever: the parent of a child that faulted stuck in fd_cache_mutex and
++ * never saw its WaitForSingleObject return. ios_leave_sections_at_exit()
++ * gives them back on the way out. */
++#define IOS_SECTION_MAX 16
++static __thread pthread_mutex_t *ios_sections[IOS_SECTION_MAX];
++static __thread unsigned int ios_section_depth;
++
++void ios_leave_sections_at_exit( const char *why )
++{
++    while (ios_section_depth)
++    {
++        pthread_mutex_t *mutex;
++
++        if (--ios_section_depth >= IOS_SECTION_MAX) continue;
++        mutex = ios_sections[ios_section_depth];
++        ios_sections[ios_section_depth] = NULL;
++        dprintf( STDERR_FILENO, "[section] %s: tid=%04x leaves the section of mutex %p%s it holds\n",
++                 why, get_thread_data() ? get_thread_data()->tid : 0, (void *)mutex,
++                 mutex == &fd_cache_mutex ? " (fd_cache_mutex)" : "" );
++        mutex_unlock( mutex );
++    }
++}
++#endif
++
+ void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset )
+ {
+     pthread_sigmask( SIG_BLOCK, &server_block_set, sigset );
+     mutex_lock( mutex );
++#ifdef WINE_IOS
++    if (ios_section_depth < IOS_SECTION_MAX) ios_sections[ios_section_depth] = mutex;
++    ios_section_depth++;
++#endif
+ }
+ 
+ 
+@@ -2075,6 +2111,21 @@ void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigse
+  */
+ void server_leave_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset )
+ {
++#ifdef WINE_IOS
++    if (ios_section_depth)
++    {
++        unsigned int i = --ios_section_depth;
++
++        /* sections nest; find this mutex's entry from the innermost out */
++        if (i < IOS_SECTION_MAX && ios_sections[i] != mutex)
++        {
++            unsigned int j = i;
++            while (j-- > 0) if (ios_sections[j] == mutex) break;
++            if (j < i) ios_sections[j] = ios_sections[i];
++        }
++        if (i < IOS_SECTION_MAX) ios_sections[i] = NULL;
++    }
++#endif
+     mutex_unlock( mutex );
+     pthread_sigmask( SIG_SETMASK, sigset, NULL );
+ }
+@@ -3770,6 +3821,7 @@ static int ios_peb_is_dead_child( void *peb )
+ void process_exit_wrapper( int status )
+ {
+ #ifdef WINE_IOS
++    ios_leave_sections_at_exit( "process exit" );
+     /* Close THIS pseudo-process's master socket — the EOF is how wineserver
+      * learns the process died (signals its process object, wakes waiters).
+      * Clear the registry slot so a stray second call can't double-close. */
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 2b67cb0..6e35ac4 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -83,6 +83,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(thread);
+ 
+ #ifdef WINE_IOS
+ extern DWORD ios_current_pid(void);   /* env_ios.c: the calling thread's pseudo-process */
++extern void ios_leave_sections_at_exit( const char *why );   /* server_ios.c */
+ #endif
+ WINE_DECLARE_DEBUG_CHANNEL(seh);
+ WINE_DECLARE_DEBUG_CHANNEL(threadname);
+@@ -1736,6 +1737,9 @@ NTSTATUS WINAPI PsCreateSystemThread( HANDLE *handle, ACCESS_MASK access, OBJECT
+ void abort_thread( int status )
+ {
+     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
++#ifdef WINE_IOS
++    ios_leave_sections_at_exit( "thread abort" );
++#endif
+     if (InterlockedDecrement( &nb_threads ) <= 0) abort_process( status );
+     pthread_exit_wrapper( status );
+ }
+@@ -1778,6 +1782,7 @@ void abort_process( int status )
+      * reclaimed pool. That hole predates this change and is shared with
+      * exit_process. */
+     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
++    ios_leave_sections_at_exit( "process abort" );
+     ERR( "abort_process: status=0x%x — tearing down this pseudo-process only (ml937; was _exit, which killed the app)\n",
+          (unsigned int)status );
+     process_exit_wrapper( get_unix_exit_code( status ));

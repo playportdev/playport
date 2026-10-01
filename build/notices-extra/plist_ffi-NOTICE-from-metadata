@@ -1,0 +1,31 @@
+plist_ffi 0.1.6 (https://github.com/jkcoxson/plist_ffi)
+
+NOTE: this crate ships no licence file. This notice is written by Playport
+from the crate's own metadata: its Cargo.toml declares `license = "MIT"`
+and `authors = ["Jackson Coxson"]`, and its source files carry
+"// Jackson Coxson". The text below is the standard MIT licence
+that declaration names; the copyright line is taken from the authors field.
+
+Its README keeps libplist's copied headers, C++ and tests under their original
+LGPL-2.1-or-later licence; its build compiles none of them (only the Rust code
+and src/shims.c), so none of that code is in Playport's executable.
+
+Copyright (c) Jackson Coxson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

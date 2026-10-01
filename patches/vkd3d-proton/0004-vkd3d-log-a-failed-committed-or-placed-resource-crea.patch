@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 02:24:37 +0200
+Subject: [PATCH 4/4] vkd3d: log a failed committed or placed resource creation
+
+Unreal Engine treats a failed CreateCommittedResource or
+CreatePlacedResource as fatal ("hr failed at D3D12Resources.cpp:391 with
+error E_INVALIDARG"), and vkd3d-proton gives the reason at warn level,
+which a default log leaves out, or not at all. Log each such failure as
+an error with the resource's description, and for a placed resource its
+heap and offset. Nothing else changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-30-d3d12-feature-level-12.md
+Offered-upstream: no
+---
+ libs/vkd3d/resource.c | 46 +++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 44 insertions(+), 2 deletions(-)
+
+diff --git a/libs/vkd3d/resource.c b/libs/vkd3d/resource.c
+index 9c3d0ab..8623936 100644
+--- a/libs/vkd3d/resource.c
++++ b/libs/vkd3d/resource.c
+@@ -4370,7 +4370,7 @@ HRESULT d3d12_resource_create_borrowed(struct d3d12_device *device, const D3D12_
+     return hr;
+ }
+ 
+-HRESULT d3d12_resource_create_committed(struct d3d12_device *device, const D3D12_RESOURCE_DESC1 *desc,
++static HRESULT d3d12_resource_create_committed_impl(struct d3d12_device *device, const D3D12_RESOURCE_DESC1 *desc,
+         const D3D12_HEAP_PROPERTIES *heap_properties, D3D12_HEAP_FLAGS heap_flags, D3D12_RESOURCE_STATES initial_state,
+         const D3D12_CLEAR_VALUE *optimized_clear_value,
+         UINT num_castable_formats, const DXGI_FORMAT *castable_formats,
+@@ -4633,7 +4633,7 @@ static HRESULT d3d12_resource_validate_heap(const D3D12_RESOURCE_DESC1 *resource
+     return S_OK;
+ }
+ 
+-HRESULT d3d12_resource_create_placed(struct d3d12_device *device, const D3D12_RESOURCE_DESC1 *desc,
++static HRESULT d3d12_resource_create_placed_impl(struct d3d12_device *device, const D3D12_RESOURCE_DESC1 *desc,
+         struct d3d12_heap *heap, uint64_t heap_offset, D3D12_RESOURCE_STATES initial_state,
+         const D3D12_CLEAR_VALUE *optimized_clear_value,
+         UINT num_castable_formats, const DXGI_FORMAT *castable_formats,
+@@ -4881,6 +4881,48 @@ fail:
+     return hr;
+ }
+ 
++/* A failed resource creation is often fatal to the game (Unreal Engine stops
++ * with "hr failed ... E_INVALIDARG"), and the reason is logged at warn level
++ * or not at all: say which resource it was. */
++static void d3d12_resource_log_failure(const char *what, HRESULT hr, const D3D12_RESOURCE_DESC1 *desc,
++        const struct d3d12_heap *heap, uint64_t heap_offset)
++{
++    ERR("%s resource failed, hr %#x: dim %u, %"PRIu64" x %u x %u, %u levels, %u samples, fmt %#x, "
++            "layout %u, align %#"PRIx64", flags %#x; heap align %#"PRIx64", size %#"PRIx64", flags %#x, offset %#"PRIx64".\n",
++            what, (int)hr, desc->Dimension, desc->Width, desc->Height, desc->DepthOrArraySize, desc->MipLevels,
++            desc->SampleDesc.Count, desc->Format, desc->Layout, desc->Alignment, desc->Flags,
++            heap ? heap->desc.Alignment : 0, heap ? heap->desc.SizeInBytes : 0, heap ? heap->desc.Flags : 0,
++            heap_offset);
++}
++
++HRESULT d3d12_resource_create_committed(struct d3d12_device *device, const D3D12_RESOURCE_DESC1 *desc,
++        const D3D12_HEAP_PROPERTIES *heap_properties, D3D12_HEAP_FLAGS heap_flags, D3D12_RESOURCE_STATES initial_state,
++        const D3D12_CLEAR_VALUE *optimized_clear_value,
++        UINT num_castable_formats, const DXGI_FORMAT *castable_formats,
++        HANDLE shared_handle, struct d3d12_resource **resource)
++{
++    HRESULT hr = d3d12_resource_create_committed_impl(device, desc, heap_properties, heap_flags, initial_state,
++            optimized_clear_value, num_castable_formats, castable_formats, shared_handle, resource);
++
++    if (FAILED(hr))
++        d3d12_resource_log_failure("Committed", hr, desc, NULL, 0);
++    return hr;
++}
++
++HRESULT d3d12_resource_create_placed(struct d3d12_device *device, const D3D12_RESOURCE_DESC1 *desc,
++        struct d3d12_heap *heap, uint64_t heap_offset, D3D12_RESOURCE_STATES initial_state,
++        const D3D12_CLEAR_VALUE *optimized_clear_value,
++        UINT num_castable_formats, const DXGI_FORMAT *castable_formats,
++        struct d3d12_resource **resource)
++{
++    HRESULT hr = d3d12_resource_create_placed_impl(device, desc, heap, heap_offset, initial_state,
++            optimized_clear_value, num_castable_formats, castable_formats, resource);
++
++    if (FAILED(hr))
++        d3d12_resource_log_failure("Placed", hr, desc, heap, heap_offset);
++    return hr;
++}
++
+ static HRESULT d3d12_resource_create_reserved_fallback(
+         struct d3d12_device *device,
+         const D3D12_RESOURCE_DESC1 *desc, D3D12_RESOURCE_STATES initial_state,

@@ -1,0 +1,24 @@
+# Witcher 3: from the main menu into a new game with the default choices
+# (New Game, the highlighted difficulty, then the prompts after it). A every
+# 3 s for 30 s: each press takes the highlighted entry, so the defaults are
+# chosen in turn; presses that land on a loading screen do nothing.
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -
+150 A
+2850 -

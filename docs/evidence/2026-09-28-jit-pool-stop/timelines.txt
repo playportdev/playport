@@ -1,0 +1,104 @@
+== stop-184
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.55 s runtime started
+title: pool: ran out of JIT memory (head)
+title: +8.14 s first frame
+title: pool: the game is still running 10 s after it ran out of JIT memory; stopping it
+title: stop: the game has not ended 10 s later and goes on running; before: 67 threads, 81 % CPU, footprint 1704 MB
+title: done nonce=1b0e907f pool=exhausted:head still-running after_s=14
+== hk-normal
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.66 s runtime started
+title: pool: ran out of JIT memory (head)
+title: +7.88 s first frame
+title: pool: the game is still running 10 s after it ran out of JIT memory; stopping it
+[srv-kill] kill_process pid=0020 violent=0 threads: 0024 0028 002c 0030 …
+title: stop: the game ended 0.00 s after it was stopped; before: 68 threads, 77 % CPU, footprint 1695 MB; after: 51 threads, 2 % CPU, footprint 1695 MB
+title: done nonce=453e51a4 pool=exhausted:head stopped after_s=14
+== s2-stop-184-1
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.51 s runtime started
+title: pool: ran out of JIT memory (head)
+title: +8.12 s first frame
+title: pool: the game is still running 10 s after it ran out of JIT memory; stopping it
+[08:18:32.373] [wine_host] stop: shut down the guest's server socket (fd 28, inode 5); the wineserver ends its threads
+[srv-kill] kill_process pid=0020 violent=0 threads: 0024 0028 002c 0030 …
+[08:18:32.374] [wine_host] guest main thread ended through pthread_exit (stopped)
+[08:18:32.374] [wine_host] stop: the guest has ended
+[08:18:32.374] [wine_host] shutdown: stopping wineserver
+[08:18:32.376] [wine_host] shutdown: wineserver joined
+title: stop: the game ended 0.00 s after it was stopped; before: 68 threads, 77 % CPU, footprint 1709 MB; after: 53 threads, 2 % CPU, footprint 1709 MB
+title: done nonce=ae2f2aa3 pool=exhausted:head stopped after_s=14
+title: stop: 5 s after: 52 threads, 6 % CPU, footprint 1677 MB
+== s2-stop-184-2
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.43 s runtime started
+title: pool: ran out of JIT memory (head)
+title: +7.35 s first frame
+title: pool: the game is still running 10 s after it ran out of JIT memory; stopping it
+[08:19:57.478] [wine_host] stop: shut down the guest's server socket (fd 28, inode 6); the wineserver ends its threads
+[srv-kill] kill_process pid=0020 violent=0 threads: 0024 0028 002c 0030 …
+[08:19:57.478] [wine_host] guest main thread ended through pthread_exit (stopped)
+[08:19:57.479] [wine_host] stop: the guest has ended
+[08:19:57.479] [wine_host] shutdown: stopping wineserver
+[08:19:57.480] [wine_host] shutdown: wineserver joined
+title: stop: the game ended 0.00 s after it was stopped; before: 67 threads, 77 % CPU, footprint 1669 MB; after: 50 threads, 2 % CPU, footprint 1669 MB
+title: done nonce=9dc40a44 pool=exhausted:head stopped after_s=14
+title: stop: 5 s after: 49 threads, 6 % CPU, footprint 1637 MB
+== s2-stop-184-3
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.46 s runtime started
+title: pool: ran out of JIT memory (head)
+title: +7.34 s first frame
+title: pool: the game is still running 10 s after it ran out of JIT memory; stopping it
+[08:21:21.506] [wine_host] stop: shut down the guest's server socket (fd 28, inode 7); the wineserver ends its threads
+[srv-kill] kill_process pid=0020 violent=0 threads: 0024 0028 002c 0030 …
+[08:21:21.506] [wine_host] guest main thread ended through pthread_exit (stopped)
+[08:21:21.507] [wine_host] stop: the guest has ended
+[08:21:21.507] [wine_host] shutdown: stopping wineserver
+[08:21:21.509] [wine_host] shutdown: wineserver joined
+title: stop: the game ended 0.00 s after it was stopped; before: 67 threads, 81 % CPU, footprint 1676 MB; after: 50 threads, 2 % CPU, footprint 1676 MB
+title: done nonce=5cb745fe pool=exhausted:head stopped after_s=14
+title: stop: 5 s after: 49 threads, 6 % CPU, footprint 1644 MB
+== s4-hk-normal
+title: jit pool: 896 MiB for a memory limit of 8192 MB
+title: +3.57 s runtime started
+title: +8.63 s first frame
+== s4-stop-184-1
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.32 s runtime started
+title: pool: ran out of JIT memory (head)
+title: +7.24 s first frame
+title: pool: the game is still running 10 s after it ran out of JIT memory; stopping it
+[10:38:12.151] [wine_host] stop: shut down the guest end (fd 28, inode 10) of the guest's server socket
+[srv-kill] kill_process pid=0020 violent=0 threads: 0024 0028 002c 0030 …
+[10:38:12.152] [wine_host] guest main thread ended through pthread_exit (stopped)
+[10:38:12.152] [wine_host] stop: the guest has ended
+[10:38:12.152] [wine_host] shutdown: stopping wineserver
+[10:38:12.154] [wine_host] shutdown: wineserver joined
+title: stop: the game ended 0.00 s after it was stopped; before: 67 threads, 74 % CPU, footprint 1679 MB (60 started by the launch); after: 50 threads, 2 % CPU, footprint 1679 MB
+title: done nonce=4ba52ea6 pool=exhausted:head stopped after_s=14
+title: stop: 5 s after: 49 threads, 5 % CPU, footprint 1647 MB; of the launch's threads 43 are left: unnamed ×13, dxmt-finish-thr ×2, AURemoteIO::IOThread, Background Job.Worker 0, Background Job.Worker 1, Background Job.Worker 10, Background Job.Worker 11, Background Job.Worker 12, Background Job.Worker 13, Background Job.Worker 14, Background Job.Worker 15, Background Job.Worker 2, Background Job.Worker 3, Background Job.Worker 4, Background Job.Worker 5, Background Job.Worker 6, Background Job.Worker 7, Background Job.Worker 8, Background Job.Worker 9, BatchDeleteObjects, Job.Worker 0, Job.Worker 1, Job.Worker 2, Job.Worker 3, Job.Worker 4, Loading.AsyncRead, Loading.PreloadManager, dxmt-encode-thr, wine-stale-heal, wine-x18-exc
+== s4-stop-184-2
+title: jit pool: 184 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.39 s runtime started
+title: pool: ran out of JIT memory (head)
+title: +7.16 s first frame
+title: pool: the game is still running 10 s after it ran out of JIT memory; stopping it
+[srv-kill] kill_process pid=0020 violent=0 threads: 0024 0028 002c 0030 …
+[10:39:34.153] [wine_host] stop: shut down the guest end (fd 28, inode 12) of the guest's server socket
+[10:39:34.153] [wine_host] guest main thread ended through pthread_exit (stopped)
+[10:39:34.153] [wine_host] stop: the guest has ended
+[10:39:34.154] [wine_host] shutdown: stopping wineserver
+[10:39:34.155] [wine_host] shutdown: wineserver joined
+title: stop: the game ended 0.00 s after it was stopped; before: 68 threads, 74 % CPU, footprint 1674 MB (59 started by the launch); after: 51 threads, 2 % CPU, footprint 1674 MB
+title: done nonce=bbe134a9 pool=exhausted:head stopped after_s=14
+title: stop: 5 s after: 50 threads, 5 % CPU, footprint 1642 MB; of the launch's threads 42 are left: unnamed ×12, dxmt-finish-thr ×2, AURemoteIO::IOThread, Background Job.Worker 0, Background Job.Worker 1, Background Job.Worker 10, Background Job.Worker 11, Background Job.Worker 12, Background Job.Worker 13, Background Job.Worker 14, Background Job.Worker 15, Background Job.Worker 2, Background Job.Worker 3, Background Job.Worker 4, Background Job.Worker 5, Background Job.Worker 6, Background Job.Worker 7, Background Job.Worker 8, Background Job.Worker 9, BatchDeleteObjects, Job.Worker 0, Job.Worker 1, Job.Worker 2, Job.Worker 3, Job.Worker 4, Loading.AsyncRead, Loading.PreloadManager, dxmt-encode-thr, wine-stale-heal, wine-x18-exc
+== s4-stop-128
+title: jit pool: 128 MiB for a memory limit of 8192 MB (simulated pool)
+title: +2.19 s runtime started
+[10:40:41.909] [wine_host] guest exit code -1073741515
+[10:40:41.909] [wine_host] shutdown: stopping wineserver
+[srv-kill] kill_process pid=0020 violent=0 threads: 0024 rev=ml586
+[10:40:41.910] [wine_host] shutdown: wineserver joined
+title: done nonce=ef71399e pool=exhausted:head exit=0xc0000135 after_s=0

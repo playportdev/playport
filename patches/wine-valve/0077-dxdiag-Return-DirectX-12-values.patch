@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LeonTheo02 <57302337+LeonTheo02@users.noreply.github.com>
+Date: Thu, 23 Feb 2023 13:32:14 +0100
+Subject: [PATCH] dxdiag: Return DirectX 12 values
+
+Changed the values DxDiag returns to reflect values taken from a modern
+DirectX 12 capable system via Windows DxDiag. This will allow games that
+check these values to detect the DirectX Version correctly.
+
+Fixes DX11 Open Beta of RAID : World War II.
+
+Link: https://github.com/ValveSoftware/wine/pull/178
+Valve-commit: 402575ea66a9d58a76e3153b57c9c3e1e595a89c
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/dxdiagn/provider.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/dxdiagn/provider.c b/dlls/dxdiagn/provider.c
+index 88011ac..48167f1 100644
+--- a/dlls/dxdiagn/provider.c
++++ b/dlls/dxdiagn/provider.c
+@@ -613,7 +613,7 @@ static HRESULT build_systeminfo_tree(IDxDiagContainerImpl_Container *node)
+     WCHAR buffer[MAX_PATH], computer_name[MAX_COMPUTERNAME_LENGTH + 1], print_buf[200], localized_pagefile_fmt[200];
+     DWORD_PTR args[2];
+ 
+-    hr = add_ui4_property(node, L"dwDirectXVersionMajor", 9);
++    hr = add_ui4_property(node, L"dwDirectXVersionMajor", 12);
+     if (FAILED(hr))
+         return hr;
+ 
+@@ -621,15 +621,15 @@ static HRESULT build_systeminfo_tree(IDxDiagContainerImpl_Container *node)
+     if (FAILED(hr))
+         return hr;
+ 
+-    hr = add_bstr_property(node, L"szDirectXVersionLetter", L"c");
++    hr = add_bstr_property(node, L"szDirectXVersionLetter", L" ");
+     if (FAILED(hr))
+         return hr;
+ 
+-    hr = add_bstr_property(node, L"szDirectXVersionEnglish", L"4.09.0000.0904");
++    hr = add_bstr_property(node, L"szDirectXVersionEnglish", L"");
+     if (FAILED(hr))
+         return hr;
+ 
+-    hr = add_bstr_property(node, L"szDirectXVersionLongEnglish", L"= \"DirectX 9.0c (4.09.0000.0904)");
++    hr = add_bstr_property(node, L"szDirectXVersionLongEnglish", L"DirectX 12");
+     if (FAILED(hr))
+         return hr;
+ 

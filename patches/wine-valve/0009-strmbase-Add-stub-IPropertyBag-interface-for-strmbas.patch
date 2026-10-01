@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Thu, 27 Jan 2022 13:21:24 +0100
+Subject: [PATCH] strmbase: Add stub IPropertyBag interface for
+ strmbase_filter.
+
+Required for Final Fantasy XIV intro video.
+
+CW-Bug-Id: #19624
+Valve-commit: 7eca6eade182416aa8f062934aea1aa0dd9e71c4
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ include/wine/strmbase.h |  1 +
+ libs/strmbase/filter.c  | 48 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 49 insertions(+)
+
+diff --git a/include/wine/strmbase.h b/include/wine/strmbase.h
+index a8b8527..dff690d 100644
+--- a/include/wine/strmbase.h
++++ b/include/wine/strmbase.h
+@@ -143,6 +143,7 @@ void strmbase_sink_cleanup(struct strmbase_sink *pin);
+ struct strmbase_filter
+ {
+     IBaseFilter IBaseFilter_iface;
++    IPropertyBag IPropertyBag_iface;
+     IUnknown IUnknown_inner;
+     IUnknown *outer_unk;
+     LONG refcount;
+diff --git a/libs/strmbase/filter.c b/libs/strmbase/filter.c
+index 62cfaf9..c8dcb33 100644
+--- a/libs/strmbase/filter.c
++++ b/libs/strmbase/filter.c
+@@ -228,6 +228,8 @@ static HRESULT WINAPI filter_inner_QueryInterface(IUnknown *iface, REFIID iid, v
+     {
+         *out = &filter->IBaseFilter_iface;
+     }
++    else if (IsEqualIID(iid, &IID_IPropertyBag))
++        *out = &filter->IPropertyBag_iface;
+     else
+     {
+         WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid));
+@@ -511,6 +513,51 @@ static const IBaseFilterVtbl filter_vtbl =
+     filter_QueryVendorInfo,
+ };
+ 
++static inline struct strmbase_filter *impl_from_IPropertyBag(IPropertyBag *iface)
++{
++    return CONTAINING_RECORD(iface, struct strmbase_filter, IPropertyBag_iface);
++}
++
++static HRESULT WINAPI property_bag_QueryInterface(IPropertyBag *iface, REFIID iid, void **out)
++{
++    struct strmbase_filter *filter = impl_from_IPropertyBag(iface);
++    return IUnknown_QueryInterface(filter->outer_unk, iid, out);
++}
++
++static ULONG WINAPI property_bag_AddRef(IPropertyBag *iface)
++{
++    struct strmbase_filter *filter = impl_from_IPropertyBag(iface);
++    return IUnknown_AddRef(filter->outer_unk);
++}
++
++static ULONG WINAPI property_bag_Release(IPropertyBag *iface)
++{
++    struct strmbase_filter *filter = impl_from_IPropertyBag(iface);
++    return IUnknown_Release(filter->outer_unk);
++}
++
++static HRESULT WINAPI property_bag_Read(IPropertyBag *iface, const WCHAR *prop_name, VARIANT *value,
++        IErrorLog *error_log)
++{
++    FIXME("iface %p, prop_name %s, value %p, error_log %p stub!\n", iface, debugstr_w(prop_name), value, error_log);
++    return E_NOTIMPL;
++}
++
++static HRESULT WINAPI property_bag_Write(IPropertyBag *iface, const WCHAR *prop_name, VARIANT *value)
++{
++    FIXME("iface %p, prop_name %s, value %p stub!\n", iface, debugstr_w(prop_name), value);
++    return E_NOTIMPL;
++}
++
++static const IPropertyBagVtbl property_bag_vtbl =
++{
++    property_bag_QueryInterface,
++    property_bag_AddRef,
++    property_bag_Release,
++    property_bag_Read,
++    property_bag_Write,
++};
++
+ VOID WINAPI BaseFilterImpl_IncrementPinVersion(struct strmbase_filter *filter)
+ {
+     InterlockedIncrement(&filter->pin_version);
+@@ -522,6 +569,7 @@ void strmbase_filter_init(struct strmbase_filter *filter, IUnknown *outer,
+     memset(filter, 0, sizeof(*filter));
+ 
+     filter->IBaseFilter_iface.lpVtbl = &filter_vtbl;
++    filter->IPropertyBag_iface.lpVtbl = &property_bag_vtbl;
+     filter->IUnknown_inner.lpVtbl = &filter_inner_vtbl;
+     filter->outer_unk = outer ? outer : &filter->IUnknown_inner;
+     filter->refcount = 1;

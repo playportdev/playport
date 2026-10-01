@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 28 Jul 2026 18:28:32 +0800
+Subject: [PATCH] iOS: fix off-by-8 in ret_sp_misaligned for variadic ARM64EC
+ entry thunks
+
+An ARM64EC variadic entry thunk reads x4 as its input -- the x64 caller's
+stack pointer -- and advances it past the 32-byte home space:
+
+  $ientry_thunk$cdecl$i8$varargs:  add x4, x4, #0x20 ; mov x5, xzr ; blr x9
+
+The normal path pops the return address first (`ldr lr, [x4], #0x8`),
+leaving x4 = RSP+8, so the thunk lands on the first stack argument.
+ret_sp_misaligned deliberately LEAVES the return address on the stack to
+preserve 16-byte alignment, but still passed x4 = RSP -- one slot short,
+shifting every stack argument by 8 bytes.
+
+Only variadic callees are affected, since non-variadic entry thunks never
+read x4, which is why this stayed hidden outside RPC.
+
+Not iOS-specific: any variadic ARM64EC function called from x64 with a
+16-byte-aligned RSP would hit it.
+
+Also adds a probe naming why an unaligned 128-bit CAS is fatal. RunCASPAL
+implements ONLY Size==0 (32-bit pairs); Size==1 (a 128-bit CAS from x86
+LOCK CMPXCHG16B) falls through to `return false`, which callers report as
+"Unhandled JIT SIGBUS CASPAL" and escalate to STATUS_DATATYPE_MISALIGNMENT.
+Steam/CEF now reaches that path. Before implementing a 128-bit unaligned
+CAS the probe establishes whether the address is genuinely misaligned --
+a correct x86 program cannot issue an unaligned LOCK CMPXCHG16B, so a
+computed-wrong address is the competing explanation and needs a different
+fix entirely.
+
+Madeira-commit: fdf361f0ec3e0f86b8313a8c3fad360146a1bd90
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Utils/ArchHelpers/Arm64.cpp | 26 ++++++++++++++++++++++
+ Source/Windows/ARM64EC/Module.S            | 13 +++++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+index 01e5bb2..4c8ae32 100644
+--- a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
++++ b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+@@ -521,6 +521,31 @@ static bool RunCASPAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg1, uint3
+   return false;
+ }
+ 
++/* iOS-Mythic ml220 PROBE. RunCASPAL implements ONLY Size==0 (32-bit pairs); Size==1
++ * (64-bit pairs, i.e. a 128-bit CAS from x86 LOCK CMPXCHG16B) falls straight through to
++ * `return false`, which callers report as "Unhandled JIT SIGBUS CASPAL" and escalate to a
++ * fatal STATUS_DATATYPE_MISALIGNMENT. Steam/CEF hits this
++ *   Unhandled JIT SIGBUS CASPAL: PC: 0x120e53c00 Instruction: 0x4866fd64
++ *     = CASPAL x6,x7, x4,x5, [x11]   (sz=1)
++ *
++ * Implementing a 128-bit unaligned CAS is real work, so establish WHY the address is
++ * unaligned first: a correct x86 program cannot issue an unaligned LOCK CMPXCHG16B (it
++ * #GPs on hardware), so either the guest really does it -- and we must emulate -- or the
++ * address we computed is wrong, which is a different bug entirely and would make the
++ * emulation pointless. Print the address and its misalignment so the next run decides. */
++static void IosLogUnimplementedCASPAL(uint32_t Size, uint64_t* GPRs, uint32_t AddressReg) {
++  static int reports;
++
++  if (Size == 0 || reports >= 8) {
++    return;
++  }
++  reports++;
++  LogMan::Msg::EFmt("[caspal128] UNIMPLEMENTED Size={} addrReg=x{} addr={:#x} misalign={} "
++                    "crosses16B={}",
++                    Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
++                    (GPRs[AddressReg] & 15) ? "yes" : "no");
++}
++
+ static bool HandleCASPAL(uint32_t Instr, uint64_t* GPRs, uint32_t* StrictSplitLockMutex) {
+   uint32_t Size = (Instr >> 30) & 1;
+ 
+@@ -530,6 +555,7 @@ static bool HandleCASPAL(uint32_t Instr, uint64_t* GPRs, uint32_t* StrictSplitLo
+   uint32_t ExpectedReg2 = ExpectedReg1 + 1;
+   uint32_t AddressReg = (Instr >> 5) & 0b11111;
+ 
++  IosLogUnimplementedCASPAL(Size, GPRs, AddressReg);
+   return RunCASPAL(GPRs, Size, DesiredReg1, DesiredReg2, ExpectedReg1, ExpectedReg2, AddressReg, StrictSplitLockMutex);
+ }
+ 
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index acaf029..0076cac 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -165,6 +165,19 @@ ret_sp_misaligned:
+   // In the case of the x64 caller leaving sp only 8-byte aligned, leave the return address on the stack to keep 16-byte
+   // alignment and have the callee return to an x86 ret instruction. FEX can then return to the actual caller keeping
+   // the misaligned RSP.
++  //
++  // ml218: x4 must still point PAST the return address. On the path above the address is
++  // popped (`ldr lr, [x4], #0x8`), leaving x4 = RSP+8 -- the base of the x64 home space,
++  // which a variadic entry thunk then advances by 0x20 to reach the first stack argument:
++  //   $ientry_thunk$cdecl$i8$varargs:  add x4, x4, #0x20
++  // Here the address is deliberately LEFT on the stack, so x4 = RSP is one slot short and
++  // every stack argument is read 8 bytes early. Measured directly in a Steam RPC call:
++  //   [ndr-shift] param3 off=0x18 StackTop=0x703CD5EBF0 HERE=0x10 next=0x703CD5EC88
++  //               => SHIFT: real pointer is ONE SLOT LATER (+8)
++  // which is how ccontext arrived as 0x10 and faulted in #NdrContextHandleUnmarshall+0xcc.
++  // Only variadic callees are affected -- non-variadic entry thunks never read x4 -- which
++  // is why this stayed hidden outside RPC. sp is intentionally left untouched.
++  add x4, x4, #0x8
+   adrp lr, X64ReturnInstr
+   ldr lr, [lr, #:lo12:X64ReturnInstr]
+   br x17

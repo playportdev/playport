@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Esme Povirk <esme@codeweavers.com>
+Date: Wed, 31 Jul 2024 18:32:18 +0000
+Subject: [PATCH] user32: Handle WM_GETOBJECT in buttons.
+
+This is a hack. We should implement RealGetWindowClass instead.
+Valve-commit: e9d991c4cb199390ab7c89fb660355fa4d1df6b2
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/user32/button.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/dlls/user32/button.c b/dlls/user32/button.c
+index 2c4bf10..eab0fc0 100644
+--- a/dlls/user32/button.c
++++ b/dlls/user32/button.c
+@@ -381,6 +381,11 @@ LRESULT ButtonWndProc_common(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+     case WM_GETFONT:
+         return (LRESULT)get_button_font( hWnd );
+ 
++    case WM_GETOBJECT:
++      if ((LONG)lParam == OBJID_QUERYCLASSNAMEIDX)
++        return 0x10002;
++      break;
++
+     case WM_SETFOCUS:
+         TRACE("WM_SETFOCUS %p\n",hWnd);
+         set_button_state( hWnd, get_button_state(hWnd) | BST_FOCUS );

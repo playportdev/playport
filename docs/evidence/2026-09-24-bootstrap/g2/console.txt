@@ -1,0 +1,9 @@
+[g2 12:17:48] run directory $PLAYPORT_BUILD/gates/g2-1; backend ios
+backend: madeira:fex-0f8edf8f6+wine-e82864432+madeira-5a82d392e
+  g2-graphics/1    g2-d3d11-x86-64      pass
+  g2-audio/1       g2-audio-x86-64      pass
+  g2-input/1       g2-input-x86-64      pass
+  g2-session/1     g2-session-x86-64    not tested
+  g2-pad/1         g2-pad-x86-64        not tested (supplementary)
+g2 probes: not tested; gate evidence: yes
+exit=1

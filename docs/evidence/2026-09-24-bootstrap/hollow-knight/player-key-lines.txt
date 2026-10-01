@@ -1,0 +1,23 @@
+Input System module state changed to: Initialized.
+Initialize engine version: 6000.0.61f1 (74a0adb02c31)
+GfxDevice: creating device client; kGfxThreadingModeThreaded
+Direct3D:
+    Version:  Direct3D 11.0 [level 11.1]
+    Renderer: Apple A19 Pro GPU (ID=0x0)
+    Vendor:   Unknown (ID=106b)
+Windows.Gaming.Input failed to initialize (Might not be available), fallback to XInputUsing XInput
+Input System polling thread started.
+<RI> Input initialized.
+Unloading 5 Unused Serialized files (Serialized files now loaded: 0)
+Loaded saved language code 'EN'
+Unloading 49 unused Assets to reduce memory usage. Loaded Objects now: 4274.
+Direct3D: detected that using refresh rate causes time drift. Will stop trusting refresh rate until the game window is moved.
+Unloading 5 Unused Serialized files (Serialized files now loaded: 0)
+SaveSettings - ControllerNONE Saved ({"gamepadType":0,"jump":19,"attack":21,"dash":16,"cast":20,"superDash":15,"dreamNail":22,"quickMap":17,"quickCast":18})
+  at JsonSharedData.Save () [0x0005a] in <3a907e0e6b454ce4a276a8885caacff4>:0 
+JsonSharedData:Save()
+UpgradedSharedData:Save()
+Loaded saved language code 'EN'
+Unloading 66 unused Assets to reduce memory usage. Loaded Objects now: 47187.
+Unloading 6 Unused Serialized files (Serialized files now loaded: 0)
+Unloading 280 unused Assets to reduce memory usage. Loaded Objects now: 63361.

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 10 Apr 2023 20:27:49 -0600
+Subject: [PATCH] setupapi: Don't use NULL as key value in
+ get_device_property().
+
+CW-Bug-Id: #22126
+Valve-commit: e3c38b90f96027dd8c829bde6e7c08edb6ab5428
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/setupapi/devinst.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/setupapi/devinst.c b/dlls/setupapi/devinst.c
+index 4500a2c..74891e6 100644
+--- a/dlls/setupapi/devinst.c
++++ b/dlls/setupapi/devinst.c
+@@ -2754,7 +2754,7 @@ static DWORD get_device_reg_property( HKEY base_key, const DEVPROPKEY *prop_key,
+     if (!(ret = RegOpenKeyExW( base_key, prop_path, 0, KEY_QUERY_VALUE, &property )))
+     {
+         size = buf_size;
+-        ret = RegQueryValueExW( property, NULL, NULL, &val_type, buf, &size );
++        ret = RegQueryValueExW( property, L"", NULL, &val_type, buf, &size );
+         RegCloseKey( property );
+     }
+ 

@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] audio: let the host app suspend and resume the process-wide
+ audio unit
+
+The host app owns the iOS audio session (interruptions, background). It
+stops the single RemoteIO unit under g_dev_lock while it holds the session;
+a stream start in that window leaves the unit stopped, and resume restarts
+it only if a client is still started.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ build/ntdll-unix/audio_null_ios.c | 53 ++++++++++++++++++++++++++-----
+ 1 file changed, 45 insertions(+), 8 deletions(-)
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index bdbd0fc..dbcab98 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -710,10 +710,53 @@ static void ios_dev_detach(struct ios_stream *s)
+ 
+ /* Start/stop the shared endpoint. It runs while at least one client is
+  * started; with none it is stopped rather than rendering silence. */
++/* Playport (app HostIO): the host app's audio-session lifecycle.
++ * An AVAudioSession interruption, or the app leaving the foreground, stops the
++ * shared RemoteIO endpoint; ios_audio_host_suspend(0) restarts it once the
++ * session is active again, if a client is still started. While it is held the
++ * WASAPI positions do not advance, so a game sees its clock stall, which is
++ * what a real device loss looks like to it. g_dev_lock serialises it with
++ * every endpoint start and stop. */
++static int g_host_suspended;
++
++static int ios_dev_any_started(void)
++{
++    int i;
++    for (i = 0; i < IOS_MAX_STREAMS; i++) {
++        struct ios_stream *m = atomic_load_explicit(&g_mix[i], memory_order_relaxed);
++        if (m && m->started) return 1;
++    }
++    return 0;
++}
++
++/* suspend != 0 stops the endpoint (an interruption began, or the app is
++ * leaving the foreground); suspend == 0 restarts it when a client is still
++ * started. Returns the number of units stopped or restarted (0 or 1). Any app
++ * thread; never the render callback. */
++int ios_audio_host_suspend(int suspend)
++{
++    int n = 0;
++    pthread_mutex_lock(&g_dev_lock);
++    g_host_suspended = suspend != 0;
++    if (suspend && g_dev.au && g_dev.running) {
++        AudioOutputUnitStop(g_dev.au);
++        g_dev.running = 0;
++        n = 1;
++    } else if (!suspend && g_dev.au && !g_dev.running && ios_dev_any_started()) {
++        OSStatus err = AudioOutputUnitStart(g_dev.au);
++        if (err) fprintf(stderr, "[ios_audio] host restart: AudioOutputUnitStart %d\n", (int)err);
++        else { g_dev.running = 1; n = 1; }
++    }
++    pthread_mutex_unlock(&g_dev_lock);
++    fprintf(stderr, "[ios_audio] host %s: %d unit(s)\n", suspend ? "suspend" : "resume", n);
++    return n;
++}
++
+ static void ios_dev_start(void)
+ {
+     pthread_mutex_lock(&g_dev_lock);
+-    if (g_dev.au && !g_dev.running) {
++    /* Playport: while the host holds the session, the resume starts it. */
++    if (g_dev.au && !g_dev.running && !g_host_suspended) {
+         OSStatus err = AudioOutputUnitStart(g_dev.au);
+         if (err) fprintf(stderr, "[ios_audio] ml1026 AudioOutputUnitStart: %d -- null-mode\n", (int)err);
+         else g_dev.running = 1;
+@@ -723,14 +766,8 @@ static void ios_dev_start(void)
+ 
+ static void ios_dev_stop_if_idle(void)
+ {
+-    int i, any = 0;
+-
+     pthread_mutex_lock(&g_dev_lock);
+-    for (i = 0; i < IOS_MAX_STREAMS; i++) {
+-        struct ios_stream *m = atomic_load_explicit(&g_mix[i], memory_order_relaxed);
+-        if (m && m->started) { any = 1; break; }
+-    }
+-    if (!any && g_dev.au && g_dev.running) {
++    if (!ios_dev_any_started() && g_dev.au && g_dev.running) {
+         AudioOutputUnitStop(g_dev.au);
+         g_dev.running = 0;
+     }

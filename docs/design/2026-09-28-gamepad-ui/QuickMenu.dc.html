@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Playport menu in game</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+.item{display:flex;align-items:center;justify-content:space-between;gap:12px;height:42px;padding:0 14px;box-sizing:border-box;border-radius:10px;font:500 15px 'Barlow',sans-serif;color:#EEF1F5}
+.v{font-size:13px;color:#9AA5B4}
+.sel{background:#EEF1F5;color:#0B0E13}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13">
+<div style="position: absolute; inset: 0; background: #1B2436; display: flex; align-items: center; justify-content: center; font: 600 12px 'Barlow'; letter-spacing: .08em; color: #5E6F8C">[THE GAME, PAUSED BEHIND THE MENU]</div>
+<div style="position: absolute; inset: 0; background: rgba(5,7,10,.6)"></div>
+<div style="position: absolute; top: 0; left: 0; width: 330px; height: 402px; background: #151A21; border-right: 1px solid #2A3340; padding: 22px 20px 0 44px; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px">
+<div style="font: 600 11px 'Barlow'; letter-spacing: .1em; text-transform: uppercase; color: #9AA5B4; padding: 0 14px">Playing · 42 min</div>
+<div class="d" style="font-size: 24px; font-weight: 700; padding: 0 14px 10px">Hollow Knight</div>
+<div class="item sel"><span>Resume</span></div>
+<div class="item"><span>Screenshot</span><span class="v">Saved to Photos</span></div>
+<div class="item"><span>Performance overlay</span><span class="v">Off</span></div>
+<div class="item"><span>Controller</span><span class="v">Xbox · 80%</span></div>
+<a class="item" href="Main.dc.html" style="color: #FF9A8A"><span>Quit game</span><span class="v">Saves first</span></a>
+</div>
+<div style="position: absolute; right: 44px; top: 22px; display: flex; align-items: center; gap: 8px; background: #151A21; border-radius: 16px; padding: 6px 12px; font-size: 13px; color: #C9D1DC"><span style="width: 8px; height: 8px; border-radius: 4px; background: #9AA5B4"></span>Downloads paused while you play</div>
+<div style="position: absolute; right: 44px; bottom: 0; height: 36px; display: flex; align-items: center; gap: 18px">
+<span class="leg"><span class="g">A</span>Choose</span>
+<span class="leg"><span class="g">B</span>Back to game</span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

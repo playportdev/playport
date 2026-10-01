@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 5 Aug 2026 10:40:32 +0800
+Subject: [PATCH] =?UTF-8?q?iOS-Mythic=20ml506-ml508:=20blit=20censuses=20?=
+ =?UTF-8?q?=E2=80=94=20where=20Chromium's=20pixels=20do=20NOT=20come=20fro?=
+ =?UTF-8?q?m?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three censuses added while hunting a render corruption in which a whole
+panel is written at a constant offset (~-550,-97) with its true location
+left black. Their value so far is entirely negative, and that is worth
+keeping: each one eliminates a path, and eliminations are invisible in a
+diff and expensive to rediscover.
+
+  bitblt.c        [blit]      NtGdiStretchBlt (NtGdiBitBlt routes here)
+  dib.c           [dib-blit]  StretchDIBits + SetDIBitsToDevice
+  dibdrv/bitblt.c [put-image] dibdrv_PutImage — where EVERY GDI path
+                              finally deposits image data into a DIB
+
+Results across ml506/ml507/ml509: BitBlt/StretchBlt carry only 480x400
+VGUI sprite-sheet blits (the 49 SRC!=DST hits are innocent image-list
+lookups); StretchDIBits carries only 32x32/16x16 icons;
+SetDIBitsToDevice fired once at 128x66. Not one window-sized paint
+through any of them, across runs containing hundreds of presents.
+
+PutImage then caught the real transport: 11 full 700x440 paints, every
+one SRC{0,0,700,440} -> DST{0,0,700,440}. So GDI is sane and the
+corruption is already inside the bitmap Chromium hands us — which,
+together with the Steam VGUI dialog rendering perfectly through the same
+surface, exonerates every layer we own.
+
+Lesson worth carrying: probing NtGdi entry points one at a time is a
+losing game when a dozen exist. Instrument the choke point they all
+funnel through instead.
+
+(cherry picked from commit e07db484d3a134926d76a07510dc4d770056ae9a)
+Madeira-commit: 18c256cd96c07675920e1611739813ab0334460a
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/win32u/bitblt.c        | 33 ++++++++++++++++++++++++++
+ dlls/win32u/dib.c           | 27 +++++++++++++++++++++
+ dlls/win32u/dibdrv/bitblt.c | 47 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 107 insertions(+)
+
+diff --git a/dlls/win32u/bitblt.c b/dlls/win32u/bitblt.c
+index c6021dde98f..d69bf94351a 100644
+--- a/dlls/win32u/bitblt.c
++++ b/dlls/win32u/bitblt.c
+@@ -22,6 +22,7 @@
+ #pragma makedep unix
+ #endif
+ 
++#include <unistd.h>   /* iOS-Mythic ml506: dprintf for the blit census */
+ #include <stdarg.h>
+ #include <limits.h>
+ #include <math.h>
+@@ -620,6 +621,38 @@ BOOL WINAPI NtGdiStretchBlt( HDC hdcDst, INT xDst, INT yDst, INT widthDst, INT h
+         }
+         ret = !get_vis_rectangles( dcDst, &dst, dcSrc, &src );
+ 
++        /* iOS-Mythic ml506: blit census.
++         *
++         * The Steam login surface contains DUPLICATED 256x256 tiles — the
++         * same tile content composited into two different slots, with other
++         * slots left black. Every write into that DIB is serialised under
++         * window_surface_lock and our read is too, so the duplication is
++         * genuinely IN the bitmap: either the blits carry wrong destination
++         * coordinates, or Chromium's own backing store already holds it.
++         *
++         * This separates those two. A blit whose dst lands in one tile slot
++         * while its src comes from a different one is the defect; blits whose
++         * src and dst agree mean the source bitmap was already wrong and the
++         * fault is upstream of GDI entirely.
++         *
++         * Filtered to >=64px blits so cursor/glyph traffic doesn't bury it. */
++        if (dst.width >= 64 && dst.height >= 64)
++        {
++            static unsigned blit_n;
++            unsigned n = ++blit_n;
++            if (n <= 300 || (n % 512) == 0)
++                dprintf( 2, "[blit] #%u rop=%06x  SRC phys=%d,%d %dx%d vis={%d,%d,%d,%d}"
++                         "  DST phys=%d,%d %dx%d vis={%d,%d,%d,%d}%s rev=ml506\n",
++                         n, (unsigned)rop,
++                         src.x, src.y, src.width, src.height,
++                         (int)src.visrect.left, (int)src.visrect.top,
++                         (int)src.visrect.right, (int)src.visrect.bottom,
++                         dst.x, dst.y, dst.width, dst.height,
++                         (int)dst.visrect.left, (int)dst.visrect.top,
++                         (int)dst.visrect.right, (int)dst.visrect.bottom,
++                         (src.x != dst.x || src.y != dst.y) ? "  <<< SRC!=DST OFFSET" : "" );
++        }
++
+         TRACE("src %p log=%d,%d %dx%d phys=%d,%d %dx%d vis=%s  dst %p log=%d,%d %dx%d phys=%d,%d %dx%d vis=%s  rop=%06x\n",
+               hdcSrc, src.log_x, src.log_y, src.log_width, src.log_height,
+               src.x, src.y, src.width, src.height, wine_dbgstr_rect(&src.visrect),
+diff --git a/dlls/win32u/dib.c b/dlls/win32u/dib.c
+index 6151e8312f0..e92a51929f1 100644
+--- a/dlls/win32u/dib.c
++++ b/dlls/win32u/dib.c
+@@ -63,6 +63,7 @@
+ #pragma makedep unix
+ #endif
+ 
++#include <unistd.h>   /* iOS-Mythic ml507 */
+ #include <stdarg.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -629,6 +630,21 @@ INT WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT xDst, INT yDst, INT widthDst
+                                        const void *bits, const BITMAPINFO *bmi, UINT coloruse,
+                                        DWORD rop, UINT max_info, UINT max_bits, HANDLE xform )
+ {
++    /* iOS-Mythic ml507: the ml506 census watched NtGdiBitBlt/StretchBlt and
++     * caught only 480x400 VGUI sprite blits — not one full-window paint,
++     * though the CEF window presented hundreds of times. So Chromium reaches
++     * the window through a DIB-to-device path instead. Cover those too.
++     * The surface shows a whole panel MOVED by a constant offset with the
++     * source left black, so the destination coordinates are the thing to
++     * watch. */
++    {
++        static unsigned n_sdib;
++        unsigned n = ++n_sdib;
++        if (n <= 200 || (n % 512) == 0)
++            dprintf( 2, "[dib-blit] StretchDIBits #%u dst=%d,%d %dx%d  src=%d,%d %dx%d rev=ml507\n",
++                     n, xDst, yDst, widthDst, heightDst, xSrc, ySrc, widthSrc, heightSrc );
++    }
++
+     char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+     BITMAPINFO *info = (BITMAPINFO *)buffer;
+     PHYSDEV physdev;
+@@ -889,6 +905,17 @@ INT WINAPI NtGdiSetDIBitsToDeviceInternal( HDC hdc, INT xDest, INT yDest, DWORD
+                                            UINT coloruse, UINT max_bits, UINT max_info,
+                                            BOOL xform_coords, HANDLE xform )
+ {
++    /* iOS-Mythic ml507: see StretchDIBits above. */
++    {
++        static unsigned n_setdib;
++        unsigned n = ++n_setdib;
++        if (n <= 200 || (n % 512) == 0)
++            dprintf( 2, "[dib-blit] SetDIBitsToDevice #%u dst=%d,%d %ux%u  src=%d,%d "
++                     "startscan=%u lines=%u rev=ml507\n",
++                     n, xDest, yDest, (unsigned)cx, (unsigned)cy, xSrc, ySrc,
++                     (unsigned)startscan, (unsigned)lines );
++    }
++
+     char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+     BITMAPINFO *info = (BITMAPINFO *)buffer;
+     PHYSDEV physdev;
+diff --git a/dlls/win32u/dibdrv/bitblt.c b/dlls/win32u/dibdrv/bitblt.c
+index 0a6916d1651..3e4f1430da9 100644
+--- a/dlls/win32u/dibdrv/bitblt.c
++++ b/dlls/win32u/dibdrv/bitblt.c
+@@ -22,6 +22,7 @@
+ #pragma makedep unix
+ #endif
+ 
++#include <unistd.h>   /* iOS-Mythic ml508 */
+ #include <assert.h>
+ 
+ #include "ntgdi_private.h"
+@@ -992,6 +993,52 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
+                        const struct gdi_image_bits *bits, struct bitblt_coords *src,
+                        struct bitblt_coords *dst, DWORD rop )
+ {
++    /* iOS-Mythic ml508: the real pixel-landing choke point.
++     *
++     * ml506/ml507 eliminated FOUR entry points — NtGdiBitBlt, StretchBlt,
++     * StretchDIBits and SetDIBitsToDevice never carry a window-sized paint
++     * for the CEF window (only 480x400 VGUI sprites and 32x32 icons). So
++     * probing NtGdi entries one at a time is the wrong strategy: this is
++     * where EVERY GDI path deposits image data into a DIB, whichever entry
++     * it came through.
++     *
++     * The surface shows a panel written at a constant wrong offset
++     * (~-550,-97) with its true location left black, and the halo moving
++     * independently of the QR it surrounds — a per-draw-op destination
++     * error. dst->visrect is that destination. Logging src alongside it
++     * shows whether the offset is introduced here or arrives already wrong. */
++    /* ml514: arm the source-bitmap watch on Chromium's full-window paint.
++     * `bits->ptr` is the buffer Chromium composited into and hands us — the
++     * one that already carries the displaced panel. Watching it names the
++     * GUEST code that wrote each region. Only the big paint qualifies; the
++     * watch itself is one-shot and env-gated (MYTHIC_SRCWATCH). */
++    if (dst && bits && bits->ptr && dst->visrect.right - dst->visrect.left >= 640
++        && dst->visrect.bottom - dst->visrect.top >= 400)
++    {
++        extern void ios_srcwatch_arm( const void *bits, unsigned long len );
++        ios_srcwatch_arm( bits->ptr,
++                          (unsigned long)info->bmiHeader.biSizeImage ?
++                              (unsigned long)info->bmiHeader.biSizeImage :
++                              (unsigned long)((dst->visrect.right - dst->visrect.left) * 4 *
++                                              (dst->visrect.bottom - dst->visrect.top)) );
++    }
++
++    if (dst && src && dst->visrect.right - dst->visrect.left >= 24)
++    {
++        static unsigned n_put;
++        unsigned n = ++n_put;
++        if (n <= 400 || (n % 512) == 0)
++            dprintf( 2, "[put-image] #%u SRC vis={%d,%d,%d,%d} %dx%d  DST vis={%d,%d,%d,%d} %dx%d"
++                     "  rop=%08x%s rev=ml508\n", n,
++                     (int)src->visrect.left, (int)src->visrect.top,
++                     (int)src->visrect.right, (int)src->visrect.bottom, src->width, src->height,
++                     (int)dst->visrect.left, (int)dst->visrect.top,
++                     (int)dst->visrect.right, (int)dst->visrect.bottom, dst->width, dst->height,
++                     (unsigned)rop,
++                     (src->visrect.left != dst->visrect.left ||
++                      src->visrect.top  != dst->visrect.top) ? "  <<< OFFSET" : "" );
++    }
++
+     DC *dc = get_physdev_dc( dev );
+     struct clipped_rects clipped_rects;
+     DWORD ret = ERROR_SUCCESS;

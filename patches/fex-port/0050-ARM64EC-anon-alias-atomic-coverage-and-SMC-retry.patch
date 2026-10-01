@@ -1,0 +1,184 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 14 Aug 2026 17:55:51 +0800
+Subject: [PATCH] ARM64EC: anon-alias atomic coverage and SMC retry
+
+IosAtomicWritableAlias() only resolved addresses inside the fixed JIT pool, so
+an atomic landing in a Mono anon-RWX alias found no writable view and fell
+through. It now falls back to IosMonoResolveRW(), and all seven call sites pass
+a real access size instead of assuming 16 bytes (the last derives it from the
+instruction's size field).
+
+Module.cpp: on iOS the SMC path returned without advancing PC when the faulting
+instruction was an unaligned atomic, so the guest re-executed it forever. Run
+Exception::HandleUnalignedAccess() first and resume at the next instruction.
+
+Madeira-commit: 04cbb90c715519136da771af3cc8f1dac9b821a6
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Utils/ArchHelpers/Arm64.cpp | 53 +++++++++++++++++-----
+ Source/Windows/ARM64EC/Module.cpp          | 35 ++++++++++++++
+ 2 files changed, 76 insertions(+), 12 deletions(-)
+
+diff --git a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+index 3cc1fa3..7fb119c 100644
+--- a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
++++ b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+@@ -361,7 +361,27 @@ static __uint128_t DoLoad128(uint64_t Addr) {
+  * change. Both aliases map the same physical memory, and ARM64 exclusive monitors track
+  * physical addresses, so the atomic stays correct through either view. Cost is one
+  * VirtualQuery on an already-faulted slow path, never on the fast path. */
+-static uint64_t IosAtomicWritableAlias(uint64_t Addr) {
++/* ml656: ANONYMOUS JIT ALIASES ARE THE OTHER HALF OF THIS.
++ *
++ * The pool-bounds test below only knows the FIXED 896MB JIT pool. Anonymous
++ * RX/RW aliases — Mono's, and Unity 2018's job-system arenas — live outside it,
++ * so this returned the address untouched and the atomic was re-issued against
++ * the non-writable RX view, faulting inside the recovery helper forever.
++ *
++ * Book of the Dead died exactly this way: a genuinely unaligned
++ * `SWPAL x25,x25,[x6]` at ...0056 is correctly REFUSED by the Mach emulator (it
++ * cannot be faked non-atomically), FEX's unaligned-atomic recovery takes over
++ * and implements it with aligned CASPAL over the surrounding region, and those
++ * CASPALs then hit the RX view — 1,999 identical redeliveries until the guard
++ * killed the process.
++ *
++ * The table to consult already exists: every anonymous alias is published into
++ * the generation-safe table added for the Mono bridge, so this is alias
++ * COVERAGE, not new atomic machinery. Size is passed so the resolver can reject
++ * an access that would straddle the end of an alias. */
++extern "C" uint64_t IosMonoResolveRW(uint64_t GuestAddr, uint64_t Size);
++
++static uint64_t IosAtomicWritableAlias(uint64_t Addr, uint64_t Size = 16) {
+   const int64_t WriteOffset = FEXCore::DualMap::WriteOffset;
+   if (!WriteOffset || !Addr) {
+     return Addr;
+@@ -388,11 +408,18 @@ static uint64_t IosAtomicWritableAlias(uint64_t Addr) {
+     RxBase = RxEnv ? strtoull(RxEnv, nullptr, 16) : 0;
+     RxSize = SzEnv ? strtoull(SzEnv, nullptr, 16) : 0;
+   }
+-  if (!RxBase || !RxSize) {
+-    return Addr;
+-  }
+-  if (Addr < RxBase || Addr >= RxBase + RxSize) {
+-    return Addr; // not the pool's execute alias -- leave it alone
++  /* ml656: not the fixed pool -> try the anonymous alias table before giving up. */
++  if (!RxBase || !RxSize || Addr < RxBase || Addr >= RxBase + RxSize) {
++    const uint64_t Rw = IosMonoResolveRW(Addr, Size ? Size : 16);
++    if (Rw) {
++      static unsigned n;
++      if (n < 16) {
++        LogMan::Msg::EFmt("[atomic-anon] ml656 #{} anon RX->RW {:#x} -> {:#x} size={} align={}", ++n, Addr, Rw,
++                          Size, (Addr & (Size ? Size - 1 : 15)) == 0 ? "ok" : "UNALIGNED");
++      }
++      return Rw;
++    }
++    return Addr; // neither the pool nor a live anonymous alias -- leave it alone
+   }
+ 
+   /* Inside the pool's RX alias. The RW alias maps the same physical memory, and ARM64
+@@ -416,7 +443,7 @@ static bool RunCASPAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg1, uint3
+     // 32bit
+     uint64_t Addr = GPRs[AddressReg];
+ #ifdef FEX_IOS_HOST
+-    Addr = IosAtomicWritableAlias(Addr);
++    Addr = IosAtomicWritableAlias(Addr, Size);
+ #endif
+ 
+     // Lower register must be even, so only upper register can be 31.
+@@ -603,7 +630,7 @@ static bool RunCASPAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg1, uint3
+     // (misalign=0, crosses16B=no) -- so nothing exotic, simply unimplemented.
+     uint64_t Addr = GPRs[AddressReg];
+ #ifdef FEX_IOS_HOST
+-    Addr = IosAtomicWritableAlias(Addr);
++    Addr = IosAtomicWritableAlias(Addr, Size);
+ #endif
+ 
+     // Lower register must be even, so only the upper register can be 31.
+@@ -1525,7 +1552,7 @@ static bool RunCASAL(uint64_t* GPRs, uint32_t Size, uint32_t DesiredReg, uint32_
+   uint64_t Desired = DesiredReg == 31 ? 0 : GPRs[DesiredReg];
+   uint64_t Expected = ExpectedReg == 31 ? 0 : GPRs[ExpectedReg];
+ #ifdef FEX_IOS_HOST
+-  std::optional<uint64_t> Res = DoCAS(Size, Desired, Expected, IosAtomicWritableAlias(GPRs[AddressReg]), StrictSplitLockMutex);
++  std::optional<uint64_t> Res = DoCAS(Size, Desired, Expected, IosAtomicWritableAlias(GPRs[AddressReg], Size), StrictSplitLockMutex);
+ #else
+   std::optional<uint64_t> Res = DoCAS(Size, Desired, Expected, GPRs[AddressReg], StrictSplitLockMutex);
+ #endif
+@@ -1558,7 +1585,7 @@ static bool HandleAtomicMemOp(uint32_t Instr, uint64_t* GPRs, uint32_t* StrictSp
+ 
+   uint64_t Addr = GPRs[AddressReg];
+ #ifdef FEX_IOS_HOST
+-  Addr = IosAtomicWritableAlias(Addr);   /* ml275: see IosAtomicWritableAlias */
++  Addr = IosAtomicWritableAlias(Addr, Size);   /* ml275/ml656: see IosAtomicWritableAlias */
+ #endif
+ 
+   uint8_t Op = (Instr >> 12) & 0xF;
+@@ -1752,7 +1779,7 @@ static bool HandleAtomicStore(uint32_t Instr, uint64_t* GPRs, int64_t Offset, ui
+ 
+   uint64_t Addr = GPRs[AddressReg] + Offset;
+ #ifdef FEX_IOS_HOST
+-  Addr = IosAtomicWritableAlias(Addr);   /* ml275: see IosAtomicWritableAlias */
++  Addr = IosAtomicWritableAlias(Addr, Size);   /* ml275/ml656 */
+ #endif
+ 
+   constexpr bool DoRetry = false;
+@@ -1896,7 +1923,9 @@ static uint64_t HandleAtomicLoadstoreExclusive(uintptr_t ProgramCounter, uint64_
+   uint32_t AddressReg = GetRnReg(Instr);
+   uint64_t Addr = GPRs[AddressReg];
+ #ifdef FEX_IOS_HOST
+-  Addr = IosAtomicWritableAlias(Addr);   /* ml275: see IosAtomicWritableAlias */
++  /* ml656: exclusives encode their width in bits 31:30 exactly as the atomic-store
++   * path does; derive it rather than defaulting, so the alias bounds check is real. */
++  Addr = IosAtomicWritableAlias(Addr, (uint64_t)1 << (Instr >> 30));
+ #endif
+ 
+   size_t NumInstructionsToSkip = 0;
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index c0b7c3f..7a4c561 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1041,6 +1041,41 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+         NativeContext->X17 = reinterpret_cast<uint64_t>(CPUArea.Area); // Set EC_ENTRY_CPUAREA_REG
+       } else {
+         LogMan::Msg::DFmt("Handled self-modifying code: pc: {:X} fault: {:X}", NativeContext->Pc, FaultAddress);
++#ifdef FEX_IOS_HOST
++        /* ml657: ON iOS THE SMC RETRY CAN NEVER SUCCEED, SO PERFORM THE ACCESS HERE.
++         *
++         * This path claims the fault and returns without advancing Pc, because on
++         * Windows HandleRWXAccessViolation has just unprotected the page and the
++         * re-executed store will land. On iOS the guest mapping stays RX BY DESIGN —
++         * that is the whole reason the RW alias exists — so the retry re-faults at the
++         * identical Pc forever.
++         *
++         * Book of the Dead died exactly here: 1,999 iterations of
++         *   Detected mono backpatcher at: 71F7680F64
++         *   Handled self-modifying code: pc: 154839E18 fault: 7045F901E6
++         * until the 2,000-redelivery guard killed the process. Note the unaligned
++         * handler below at the EXCEPTION_DATATYPE_MISALIGNMENT check is unreachable in
++         * this state, because SMC claims the fault first.
++         *
++         * So run the atomic through the RW alias here and let Pc advance. That also
++         * un-wedges the Mono optimisation: MarkMonoBackpatcherBlock has already marked
++         * this block, but a marked block is only recompiled once execution LEAVES it,
++         * and execution never left. Advancing past the store is what lets the
++         * MonoBackpatcherWrite recompile actually happen.
++         *
++         * Safe by construction: HandleUnalignedAccess only claims encodings it
++         * recognises. If it declines we fall through to the previous behaviour
++         * unchanged. ⚠️ An ALIGNED store trapped by SMC would still loop — not observed,
++         * and it would need a different fix rather than a wider net here. */
++        const uint64_t SmcPc = NativeContext->Pc;
++        if (Exception::HandleUnalignedAccess(CPUArea, *NativeContext, CTX->IsAddressInCodeBuffer(Thread, SmcPc))) {
++          static unsigned SmcAtomicCount;
++          if (SmcAtomicCount < 16) {
++            LogMan::Msg::EFmt("[smc-atomic] ml657 #{} handled pc {:X} -> {:X} fault {:X}", ++SmcAtomicCount, SmcPc,
++                              NativeContext->Pc, FaultAddress);
++          }
++        }
++#endif
+       }
+ 
+       return true;

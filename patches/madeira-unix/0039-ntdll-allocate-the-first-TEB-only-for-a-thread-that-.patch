@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 28 Sep 2026 21:45:41 +0200
+Subject: [PATCH] ntdll: allocate the first TEB only for a thread that has none
+
+wine-11.18 allocates the first TEB and the PEB in init_startup_info.
+A pseudo-process child runs that function too, from wine_ios_child_main,
+after it gave the child's thread a TEB, a stack and a PEB of its own:
+the child's thread data then pointed at a fresh TEB with no stack, the
+session's peb global moved to a new block, and the child's first thread
+faulted in init_syscall_frame (a memmove to StackBase 0 - 0x3a0).
+virtual_alloc_first_teb now returns when the calling thread already
+has a TEB, which only a child's has; the session's first process
+allocates them as before.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-28-child-process.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 8e13106..242974b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15361,6 +15361,15 @@ void virtual_alloc_first_teb(void)
+     struct thread_data *data = get_thread_data();
+     ULONG_PTR limit_low = 0, limit_high = 0;
+ 
++#ifdef WINE_IOS
++    /* Playport: the first TEB and the PEB beside it are made once, for the
++     * session's first process. A pseudo-process child runs init_startup_info
++     * too (wine_ios_child_main), on a thread that already has its TEB, stack
++     * and PEB; allocating here replaced that TEB with a stackless one and
++     * moved the peb global to a fresh block, and the child's first thread
++     * faulted in init_syscall_frame. A thread that has a TEB keeps it. */
++    if (data->teb) return;
++#endif
+     set_large_address_space();
+ 
+     teb_block_size = ROUND_SIZE( 0, sizeof(TEB), page_mask );

@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 27 Sep 2026 20:04:40 +0200
+Subject: [PATCH] ntdll-unix, win32u-unix: build the unix archives afresh
+
+build.sh ran `ar rcs` into the archive the previous build left. For
+libwin32u_unix.a it then merged libfreetype.a into it again, so each
+rebuild of the tree added another copy of every freetype member (about
+0.9 MB a build), and for both archives an object that a build no longer
+produces or names stayed in them. The archives, and their rows in
+Playport's artifacts.tsv, changed on every incremental build: a clean
+build's libwin32u_unix.a is 7.5 MB where the incremental one had grown
+to 9.3 MB. Remove each archive before it is made.
+
+Class: build-fix
+Evidence: docs/evidence/2026-09-27-reproducible-build.md
+Offered-upstream: no
+---
+ build/ntdll-unix/build.sh  | 3 +++
+ build/win32u-unix/build.sh | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/build/ntdll-unix/build.sh b/build/ntdll-unix/build.sh
+index 8c7e94d..685f7ce 100755
+--- a/build/ntdll-unix/build.sh
++++ b/build/ntdll-unix/build.sh
+@@ -165,6 +165,9 @@ fi
+ 
+ echo ""
+ echo "=== Building libntdll_unix.a ==="
++# A fresh archive: ar keeps the members of the previous one that this list
++# no longer names.
++rm -f "$OBJ_DIR/libntdll_unix.a"
+ ar rcs "$OBJ_DIR/libntdll_unix.a" \
+     "$OBJ_DIR/audio_null_ios.o" "$OBJ_DIR/madsync.o" "$OBJ_DIR/nsi_unixlib_ios.o" \
+     "$OBJ_DIR/gnutls_symtab_ios.o" "$OBJ_DIR/ws2_32_unixlib.o" \
+diff --git a/build/win32u-unix/build.sh b/build/win32u-unix/build.sh
+index 4cbfd5b..3306fab 100755
+--- a/build/win32u-unix/build.sh
++++ b/build/win32u-unix/build.sh
+@@ -132,6 +132,9 @@ fi
+ 
+ echo ""
+ echo "=== Building libwin32u_unix.a ==="
++# A fresh archive: ar adds to an existing one, and the freetype merge below
++# would add its members again on every build.
++rm -f "$OBJ_DIR/libwin32u_unix.a"
+ ar rcs "$OBJ_DIR/libwin32u_unix.a" "$OBJ_DIR"/*.o
+ 
+ # Merge the static freetype so the app link needs no project changes.

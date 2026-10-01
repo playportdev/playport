@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 30 Sep 2026 01:25:42 +0200
+Subject: [PATCH] user32: log each message box's caption and text
+
+A game that cannot start often says why in a message box and then
+exits. On the phone nobody may be looking, and the runs the workstation
+drives see only the log. MessageBoxIndirectW, which every MessageBox
+call reaches, now logs the style, caption and text as an err line
+([msgbox]) before it shows the box, and the button it returned after.
+Nothing else changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-30-d3d12-feature-level-12.md
+Offered-upstream: no
+---
+ dlls/user32/msgbox.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/dlls/user32/msgbox.c b/dlls/user32/msgbox.c
+index 009f385..db5e540 100644
+--- a/dlls/user32/msgbox.c
++++ b/dlls/user32/msgbox.c
+@@ -523,6 +523,12 @@ INT WINAPI MessageBoxIndirectW( LPMSGBOXPARAMSW msgbox )
+     UINT i;
+     struct ThreadWindows threadWindows;
+ 
++    /* A game that stops with a message box says why in it; the log keeps it
++     * where no one is looking at the screen. */
++    ERR( "[msgbox] style %#lx caption %s text %s\n", msgbox->dwStyle,
++         IS_INTRESOURCE(msgbox->lpszCaption) ? wine_dbgstr_a( "(resource)" ) : debugstr_w( msgbox->lpszCaption ),
++         IS_INTRESOURCE(msgbox->lpszText) ? wine_dbgstr_a( "(resource)" ) : debugstr_w( msgbox->lpszText ) );
++
+     if (!(hRes = FindResourceExW(user32_module, (LPWSTR)RT_DIALOG, L"MSGBOX", msgbox->dwLanguageId)))
+     {
+         if (!msgbox->dwLanguageId ||
+@@ -543,6 +549,7 @@ INT WINAPI MessageBoxIndirectW( LPMSGBOXPARAMSW msgbox )
+     NtUserModifyUserStartupInfoFlags( STARTF_USESHOWWINDOW, 0 );
+     ret=DialogBoxIndirectParamW(msgbox->hInstance, tmplate,
+                                 msgbox->hwndOwner, MSGBOX_DlgProc, (LPARAM)msgbox);
++    ERR( "[msgbox] returned %d\n", ret );
+ 
+     if ((msgbox->dwStyle & MB_TASKMODAL) && (msgbox->hwndOwner==NULL))
+     {

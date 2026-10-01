@@ -1,0 +1,49 @@
+# dxmt-port: Madeira's iOS port of DXMT (willfaust/dxmt at the pins.lock dxmt-port
+# commit), rebased onto the pins.lock dxmt commit of 3Shain/dxmt. Applied in
+# this order with `git am -3`, before patches/dxmt. Each Madeira commit names
+# its original in Madeira-commit: and whether the rebase was clean.
+0001-iOS-port-build-DXMT-for-aarch64-windows-PE-and-aarch.patch
+0002-iOS-remap-MTLStorageModeManaged-Shared-iOS-has-no-Ma.patch
+0003-iOS-route-through-headless-wsi-iOS-path-Present-port.patch
+0004-tests-dx11_texquad-iOS-patches-dedicated-shader.patch
+0005-tests-dx11_cube-real-PeekMessage-loop-atomic-write-t.patch
+0006-build-detect-ARM64EC-and-route-install-dirs-to-arm64.patch
+0007-iOS-headless-WSI-synthetic-1024x768-60Hz-monitor.patch
+0008-iOS-BC-pixel-format-remap-texture-upload-pitch-guard.patch
+0009-iOS-DXMT-boot-time-BC-support-log-present-counter-ac.patch
+0010-iOS-autorelease-pool-per-flushCommands-present-instr.patch
+0011-iOS-FRAME_STATS-breakdown-machexc_delta-in-present-c.patch
+0012-iOS-PRESENT_GAP-Present1-instrumentation-gap-vs-insi.patch
+0013-winemetal-Present-line-frame-anatomy-srvw-w_ms-wreq_.patch
+0014-winemetal-runtime-vsync-lock-toggle-for-presents.patch
+0015-winemetal-dxmt-three-mode-present-pacing-locked-60-d.patch
+0016-winemetal-MYTHIC_QUIET-suppresses-the-per-present-lo.patch
+0017-wsi-headless-report-the-real-desktop-size-instead-of.patch
+0018-dxmt-decode-BC1-BC3-to-RGBA8-on-GPUs-without-BC-supp.patch
+0019-d3d11-configurable-physical-mip-clamp-for-BC-texture.patch
+0020-Full-BCn-decode-and-Book-of-the-Dead-steady-state-re.patch
+0021-Fix-dangling-Metal-device-pointer-in-the-memory-cens.patch
+0022-d3d11-report-GPU-capabilities-once-at-device-creatio.patch
+0023-shader_cache-two-fixed-slots-instead-of-a-hash-map-i.patch
+0024-Rename-the-project-from-Mythic-to-Madeira.patch
+0025-Establish-the-licensing-boundary-for-Madeira-s-modif.patch
+0026-Decode-block-compressed-uploads-and-translate-mip-in.patch
+0027-Accept-a-Metal-device-that-reports-no-GPU-family-and.patch
+0028-Classify-unsupported-mesh-pipelines-and-allow-suppre.patch
+0029-Census-which-wmtcmd-command-types-a-workload-actuall.patch
+0030-Report-the-wmtcmd-census-periodically-not-only-at-ex.patch
+0031-Pack-winemetal-render-batches-into-the-remote-wire-f.patch
+0032-Fix-the-cycle-detector-reporting-every-multi-node-li.patch
+0033-Shadow-pack-every-live-render-batch-and-validate-it.patch
+0034-Census-the-top-level-winemetal-API-and-zero-sidecar-.patch
+0035-Fix-the-API-census-classifier-mislabelling-every-pro.patch
+0036-Route-winemetal-to-a-remote-Metal-daemon-behind-a-ru.patch
+0037-Route-the-resource-blit-and-frame-paths-to-the-remot.patch
+0038-Remote-transport-geometry-emulation-pipelines-RPC-ce.patch
+0039-Licensing-draft-converter-exception-for-the-Madeira-.patch
+0040-Licensing-the-exception-takes-effect-at-the-adoption.patch
+0041-winemetal-airconv-runtime-control-bridge-capture-asp.patch
+0042-winemetal-MadeiraCtl-ops-to-register-probe-roles-and.patch
+0043-Licensing-the-converter-exception-is-adopted-2026-09.patch
+0044-winemetal-regenerate-the-dispatch-guards-and-census-.patch
+0045-winemetal-placement-heap-buffers-a-released-object-r.patch

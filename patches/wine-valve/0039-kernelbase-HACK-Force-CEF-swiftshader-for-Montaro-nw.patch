@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 11 Mar 2022 15:46:11 +0300
+Subject: [PATCH] kernelbase: HACK: Force CEF swiftshader for Montaro/nw.exe.
+
+CW-Bug-Id: #20284
+Valve-commit: 7e164a81811d6be93426b5b338c877b5e511bf7e
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 0eba461..0a3e10b 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -512,6 +512,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     options[] =
+     {
+         {L"Paradox Launcher.exe", L" --use-gl=swiftshader --in-process-gpu"},
++        {L"Montaro\\nw.exe", L" --use-gl=swiftshader"},
+     };
+     unsigned int i;
+ 

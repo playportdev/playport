@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Eikum <aeikum@codeweavers.com>
+Date: Thu, 22 Jul 2021 16:11:18 -0500
+Subject: [PATCH] HACK: shell32: Update knownfolder paths in the registry
+
+Guilty Gear Strive requires that the path be in the new format. Since we
+haven't yet found a game that has a problem with the new format, let's
+just use that in all cases.
+
+For Steam cloud sync failures.
+
+CW-Bug-Id: #18905
+Valve-commit: fc2a62cf6ee97e56feb7af88e8dde2a0e090704d
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/shell32/shellpath.c | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/shell32/shellpath.c b/dlls/shell32/shellpath.c
+index bf13a73..419057f 100644
+--- a/dlls/shell32/shellpath.c
++++ b/dlls/shell32/shellpath.c
+@@ -3095,6 +3095,8 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
+  LPCWSTR szUserShellFolderPath, LPCWSTR szShellFolderPath, const UINT folders[],
+  UINT foldersLen)
+ {
++    static const WCHAR WineVistaPathsW[] = {'_','_','W','i','n','e','V','i','s','t','a','P','a','t','h','s',0};
++
+     const WCHAR *szValueName;
+     WCHAR buffer[40];
+     UINT i;
+@@ -3103,6 +3105,7 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
+     HKEY hUserKey = NULL, hKey = NULL;
+     DWORD dwType, dwPathLen;
+     LONG ret;
++    DWORD already_vista_paths = 0;
+ 
+     TRACE("%p,%p,%s,%p,%u\n", hRootKey, hToken,
+      debugstr_w(szUserShellFolderPath), folders, foldersLen);
+@@ -3116,6 +3119,12 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
+         if (ret)
+             hr = HRESULT_FROM_WIN32(ret);
+     }
++
++    /* check if the registry has already been updated to the vista+ style paths */
++    dwPathLen = sizeof(already_vista_paths);
++    RegQueryValueExW(hUserKey, WineVistaPathsW, NULL, &dwType,
++            (LPBYTE)&already_vista_paths, &dwPathLen);
++
+     for (i = 0; SUCCEEDED(hr) && i < foldersLen; i++)
+     {
+         dwPathLen = MAX_PATH * sizeof(WCHAR);
+@@ -3128,9 +3137,10 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
+             szValueName = &buffer[0];
+         }
+ 
+-        if (RegQueryValueExW(hUserKey, szValueName, NULL,
+-         &dwType, (LPBYTE)path, &dwPathLen) || (dwType != REG_SZ &&
+-         dwType != REG_EXPAND_SZ))
++        if (!already_vista_paths ||
++                RegQueryValueExW(hUserKey, szValueName, NULL, &dwType,
++                    (LPBYTE)path, &dwPathLen) ||
++                (dwType != REG_SZ && dwType != REG_EXPAND_SZ))
+         {
+             *path = '\0';
+             if (CSIDL_Data[folders[i]].type == CSIDL_Type_User)
+@@ -3171,6 +3181,11 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
+              hToken, SHGFP_TYPE_DEFAULT, path);
+         }
+     }
++
++    already_vista_paths = 1;
++    RegSetValueExW(hUserKey, WineVistaPathsW, 0, REG_DWORD,
++            (LPBYTE)&already_vista_paths, sizeof(already_vista_paths));
++
+     if (hUserKey)
+         RegCloseKey(hUserKey);
+     if (hKey)

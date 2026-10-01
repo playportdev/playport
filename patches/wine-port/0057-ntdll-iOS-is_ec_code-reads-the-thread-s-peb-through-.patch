@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 00:21:23 +0200
+Subject: [PATCH] ntdll: iOS is_ec_code reads the thread's peb through
+ get_thread_data (teb_key is gone in 11.18)
+
+The rebase kept the unix-side is_ec_code under WINE_IOS for the iOS
+signal and thread replacements, but wine-11.18 has no teb_key: the thread's
+peb is reached through get_thread_data()->teb, and the dead extern goes.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/unix_private.h | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 72bb0ad5da4..1962c6c5a83 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -494,8 +494,6 @@ static inline CLIENT_ID make_client_id( ULONG pid, ULONG tid )
+ }
+ 
+ #ifdef WINE_IOS
+-extern pthread_key_t teb_key;  /* upstream 11.18 dropped it; the iOS thread_ios.c keeps it */
+-
+ /* Upstream moved the unix-side EC check into the syscall dispatcher (f12bd89a,
+  * 2f69c014); the iOS signal_arm64 replacement still uses it. */
+ static inline BOOL is_ec_code( ULONG_PTR ptr )
+@@ -504,9 +502,11 @@ static inline BOOL is_ec_code( ULONG_PTR ptr )
+      * global `peb` drifts to whichever process last ran, so a WORKER thread of
+      * one process (e.g. a cube-x64 / Steam render thread) can read a SIBLING
+      * process's peb whose EcCodeBitMap is null -> is_ec_code faults on a null
+-     * bitmap during context restore. Use THIS thread's peb via the TEB TSD,
+-     * which is reliable even when x18 is clobbered (0) in a signal context. */
+-    TEB *cur_teb = (TEB *)pthread_getspecific( teb_key );
++     * bitmap during context restore. Use THIS thread's peb via its thread data
++     * (pthread TSD), which is reliable even when x18 is clobbered (0) in a
++     * signal context. */
++    struct thread_data *cur_data = get_thread_data();
++    TEB *cur_teb = cur_data ? cur_data->teb : NULL;
+     PEB *cur_peb = cur_teb ? (PEB *)cur_teb->Peb : peb;
+     const UINT64 *map = cur_peb ? (const UINT64 *)cur_peb->EcCodeBitMap : NULL;
+     ULONG_PTR page = ptr / page_size;

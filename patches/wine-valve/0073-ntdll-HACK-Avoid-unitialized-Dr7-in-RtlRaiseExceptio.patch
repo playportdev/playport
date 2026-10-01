@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Thu, 12 Oct 2023 21:38:46 -0600
+Subject: [PATCH] ntdll: HACK: Avoid unitialized Dr7 in RtlRaiseException on
+ x64.
+
+CW-Bug-Id: #22848
+Valve-commit: 1908cdc075920bc67ef8aa59f9c4943f1804efc0
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_x86_64.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/dlls/ntdll/signal_x86_64.c b/dlls/ntdll/signal_x86_64.c
+index b94e4a2..0acbd68 100644
+--- a/dlls/ntdll/signal_x86_64.c
++++ b/dlls/ntdll/signal_x86_64.c
+@@ -838,6 +838,8 @@ __ASM_GLOBAL_FUNC( RtlRaiseException,
+                    "movq 0x4f8(%rsp),%rax\n\t"  /* return address */
+                    "movq %rax,0xf8(%rdx)\n\t"   /* context->Rip */
+                    "movq %rax,0x10(%rcx)\n\t"   /* rec->ExceptionAddress */
++                   "xor %rax,%rax\n\t"
++                   "movq %rax,0x70(%rdx)\n\t"   /* Context->Dr7 */
+                    "movl $1,%r8d\n\t"
+                    "movq %gs:0x60,%rax\n\t"     /* Peb */
+                    "cmpb $0,0x02(%rax)\n\t"     /* BeingDebugged */

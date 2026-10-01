@@ -1,0 +1,14 @@
+# Kingdom Come: Deliverance: walk Henry around wherever the save left him,
+# forever. The camera turns first and between legs (right stick), so a walk
+# that meets a wall turns away from it, and new parts of the town come into
+# view and stream in. Forward with the left stick. No buttons: a press could
+# start a conversation or draw a weapon.
+1400 RX=1
+4000 LY=1
+900 LY=1 RX=0.8
+3000 LY=1
+1400 RX=-1
+4000 LY=1
+700 RX=1
+3000 LY=1 LX=0.4
+loop

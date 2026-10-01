@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] Winios: let the host app own winios_phase
+
+The host app (WineHost) drives the phase; the driver no longer defines it.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ app/Madeira/Winios/Winios.m | 14 +++-----------
+ 1 file changed, 3 insertions(+), 11 deletions(-)
+
+diff --git a/app/Madeira/Winios/Winios.m b/app/Madeira/Winios/Winios.m
+index ae32870..088b8c6 100644
+--- a/app/Madeira/Winios/Winios.m
++++ b/app/Madeira/Winios/Winios.m
+@@ -133,17 +133,9 @@ static unsigned winios_resident_mb(void) {
+  * Callable from Swift, from ntdll-unix (same Mach-O), and from here. Passive —
+  * it changes no behaviour, so it can ship alongside an experiment without
+  * violating one-variable-per-run. */
+-static double wph_t0;
+-static pthread_mutex_t wph_lock = PTHREAD_MUTEX_INITIALIZER;
+-void winios_phase(const char *name)
+-{
+-    double now = winios_now_mono(), first;
+-    pthread_mutex_lock( &wph_lock );
+-    if (wph_t0 == 0.0) wph_t0 = now;
+-    first = wph_t0;
+-    pthread_mutex_unlock( &wph_lock );
+-    dprintf(STDERR_FILENO, "[phase] %-22s t+%7.3fs rev=ml526\n", name ? name : "(null)", now - first);
+-}
++/* Playport: winios_phase is owned by the host (app WineHost, which
++ * routes it to the wine_host log sink), so the reference definition is
++ * dropped here to avoid a duplicate symbol. */
+ 
+ /* ml522: is the debugger relationship still alive?
+  *

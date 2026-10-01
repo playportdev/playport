@@ -1,0 +1,450 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Tue, 11 Aug 2026 20:00:59 +0800
+Subject: [PATCH] rpmalloc: page-list guard + CAS livelock quarantine (ml615,
+ ml621-ml622)
+
+Route 2 of the CodeInvalidationMutex wedge: page_put_thread_free_block spun
+forever in a CAS livelock while holding a shared lock, which queues a writer,
+and write-priority then blocks every reader so JIT compilation stops
+process-wide. Quarantine the block instead of spinning.
+
+Neither guard has ever fired in a passing run; both are behavioural changes.
+
+Madeira-commit: 971b454f31901de75acb8d9a6c1964944ca8c79f
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ rpmalloc/rpmalloc.c | 337 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 333 insertions(+), 4 deletions(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 1b44564..2e5141c 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -343,6 +343,28 @@ wait_spin(void) {
+ 
+ #endif
+ 
++/* iOS-Mythic ml611: allocation watch hook (see FEXCore/Source/Utils/AllocWatch.h).
++ *
++ * ml610's DFE crash traced to predecessor vectors holding the low 32 bits of
++ * FEX-arena pointers — the shape of a freelist link written into storage that was
++ * freed or re-issued while the CFG still referenced it. A canary cannot see that,
++ * because rpmalloc writes the link into the block's CONTENTS. Only the allocator
++ * knows, so the allocator has to say.
++ *
++ * ⚠️ This runs INSIDE malloc/free: FEX_AllocWatch_Event must never allocate, lock,
++ * or format (it doesn't — fixed table, fixed ring, POD writes only). The gate is a
++ * single predictable load that is zero unless something is actively watched, so
++ * the ordinary path pays essentially nothing. */
++extern volatile int FEX_AllocWatch_Armed;
++extern void FEX_AllocWatch_Event(const void* ptr, unsigned int event);
++#define FEX_WATCH_ALLOC 1u
++#define FEX_WATCH_FREE 2u
++#define FEX_WATCH_NOTE(p, e)                             \
++	do {                                                 \
++		if (UNEXPECTED(FEX_AllocWatch_Armed) && (p))     \
++			FEX_AllocWatch_Event((p), (e));              \
++	} while (0)
++
+ #if defined(__GNUC__) || defined(__clang__)
+ #ifdef __has_builtin
+ #if __has_builtin(__builtin_memcpy_inline)
+@@ -1360,12 +1382,178 @@ page_commit_memory_pages(page_t* page) {
+ #endif
+ }
+ 
++/* iOS-Mythic ml607: page_available[] INVARIANT TRAP.
++ *
++ * ml606 crashed in rpmalloc with an entry that was not a page at all:
++ *     x20 (page)      = 0x7c00000298   <- 0x298 INTO the default heap_t at 0x7c00000000,
++ *                                         i.e. a pointer into its own local_free[] array
++ *     x8  (size_class)= 0x07c06080     <- valid range is 0..SIZE_CLASS_COUNT-1 (0..116)
++ *     ldr x10,[x9,x8,lsl #3] -> 0x8 + 0x7c06080*8 = 0x3e030408 = the exact fault address
++ *
++ * So page_available[] held a pointer into rpmalloc's own metadata. A narrow
++ * "non-head page with prev == NULL" check would MISS this case entirely, which
++ * is why the checks below are broader. This traps at the first observation of a
++ * corrupt entry — at the mutation sites as well as the consumer — so we catch
++ * the state closer to whoever wrote it.
++ *
++ * NOTE: catching a bad entry here does NOT prove rpmalloc wrote it. A wild
++ * foreign writer or an overlapping mapping produces identical symptoms; that is
++ * what the caller/owner fields in the dump are for.
++ *
++ * Report only — no repair. Repairing would erase the evidence and the protected
++ * structures may be half-mutated anyway.
++ */
++/* ml615: RETURNS the bad-mask so callers can REFUSE TO MUTATE a corrupt list.
++ * 0 = clean. Previously void ("report only"), which meant ml614 detected nothing
++ * and then walked straight into the faulting store. */
++static unsigned
++rpm_avail_check(heap_t* heap, size_t size_class, page_t* page, int is_head, const char* op) {
++	if (!heap)
++		return 0;
++
++	unsigned bad = 0;
++	if (size_class >= SIZE_CLASS_COUNT)
++		bad |= 1u;
++
++	if (page) {
++		/* ml607b: establish the pointer is PLAUSIBLE before touching any field.
++		 * The previous version dereferenced page->size_class immediately, which
++		 * on the ml606 signature would fault inside the probe itself — the trap
++		 * would die before it could report. Pointer-plausibility first, fields
++		 * only after. */
++		const uintptr_t p = (uintptr_t)page;
++		const int inside_heap = (p >= (uintptr_t)heap && p < ((uintptr_t)heap + sizeof(heap_t)));
++		if (inside_heap)
++			bad |= 2u; /* the exact ml606 signature: 0x298 into the heap_t */
++		if (p & 0xfULL)
++			bad |= 128u; /* page headers are at least 16-byte aligned */
++
++		if (!bad) {
++			if (page->size_class >= SIZE_CLASS_COUNT)
++				bad |= 4u;
++			if (!(bad & 1u) && page->size_class != (uint32_t)size_class)
++				bad |= 8u;
++			if (page->heap != heap)
++				bad |= 16u;
++			/* ml615: DERIVE the head instead of trusting the caller's promise.
++			 *
++			 * ml607b removed the prev check for page_available_to_free() because
++			 * `is_head=0` callers legitimately have a non-NULL prev — but that
++			 * threw away the invariant that actually matters, and ml614 crashed on
++			 * exactly the case it would have caught:
++			 *
++			 *   head != page  &&  page->prev == NULL
++			 *     -> page_available_to_free() takes the else-branch and executes
++			 *        `page->prev->next = page->next`, i.e. STR x9,[x10,#0x30]
++			 *        with x10 == 0  ->  fatal write to 0x30.
++			 *
++			 * `is_head` means "the caller promises this IS the head", never "a NULL
++			 * prev is legitimate here". The real condition is positional, so
++			 * compute the position. */
++			page_t* head = (size_class < SIZE_CLASS_COUNT) ? heap->page_available[size_class] : 0;
++			if (head == page) {
++				if (page->prev)
++					bad |= 32u; /* head must have no prev */
++			} else if (!page->prev) {
++				bad |= 256u; /* NOT head but no prev => the ml614 fatal shape */
++			}
++			if (is_head && head != page)
++				bad |= 512u; /* caller promised head; list disagrees */
++
++			/* Link reciprocity + alignment, both directions. Validate the pointer
++			 * before dereferencing it — a corrupt link must not fault the probe. */
++			if (page->next) {
++				if ((uintptr_t)page->next & 0xfULL)
++					bad |= 1024u;
++				else if (page->next->prev != page)
++					bad |= 64u;
++			}
++			if (page->prev) {
++				if ((uintptr_t)page->prev & 0xfULL)
++					bad |= 2048u;
++				else if (page->prev->next != page)
++					bad |= 4096u;
++			}
++			if (page->next == page || page->prev == page)
++				bad |= 8192u; /* self-link: ml614 had next pointing inside itself */
++		}
++	}
++	if (!bad)
++		return 0;
++
++	static _Atomic(int) avail_logs;
++	/* ml615: still return the mask when the log cap is hit — the CALLER must
++	 * refuse to mutate regardless of whether we had budget to print. */
++	if (atomic_fetch_add_explicit(&avail_logs, 1, memory_order_relaxed) >= 16)
++		return bad;
++
++	{
++		char buf[256];
++		const char* hexd = "0123456789abcdef";
++		int i = 0, j;
++		unsigned long w;
++#define RPM_STR(s)                                     \
++	do {                                               \
++		const char* _s = (s);                          \
++		while (*_s)                                    \
++			buf[i++] = *_s++;                          \
++	} while (0)
++#define RPM_HEX(v)                                     \
++	do {                                               \
++		unsigned long long _v = (unsigned long long)(v); \
++		for (j = 60; j >= 0; j -= 4)                   \
++			buf[i++] = hexd[(_v >> j) & 0xf];          \
++	} while (0)
++		RPM_STR("[rpm-avail] ml607 CORRUPT op=");
++		RPM_STR(op);
++		RPM_STR(" bad=0x");
++		RPM_HEX(bad);
++		RPM_STR(" class=0x");
++		RPM_HEX(size_class);
++		RPM_STR(" page=0x");
++		RPM_HEX((uintptr_t)page);
++		RPM_STR(" heap=0x");
++		RPM_HEX((uintptr_t)heap);
++		if (page) {
++			RPM_STR(" p.class=0x");
++			RPM_HEX(page->size_class);
++			RPM_STR(" p.heap=0x");
++			RPM_HEX((uintptr_t)page->heap);
++			RPM_STR(" p.prev=0x");
++			RPM_HEX((uintptr_t)page->prev);
++			RPM_STR(" p.next=0x");
++			RPM_HEX((uintptr_t)page->next);
++		}
++		RPM_STR(" ra=0x");
++		RPM_HEX((uintptr_t)__builtin_return_address(0));
++		buf[i++] = '\n';
++#undef RPM_STR
++#undef RPM_HEX
++		WriteFile(GetStdHandle((unsigned long)-12), buf, (unsigned long)i, &w, 0);
++	}
++	return bad;
++}
++
+ static void
+ page_available_to_free(page_t* page) {
++	/* ml615: TRAP BEFORE MUTATION. ml614 checked, ignored the answer, and then
++	 * executed `page->prev->next = ...` with prev == NULL — a fatal store to 0x30
++	 * that killed the whole app. Continuing into a known-corrupt allocator list
++	 * cannot do anything useful, so on any detected corruption we UNLINK NOTHING:
++	 * the page is dropped from the available list without touching neighbours.
++	 * That leaks one page. A leaked page is unambiguously better than a wild
++	 * write through a corrupt link, and the [rpm-avail] dump above has already
++	 * recorded the state for diagnosis. */
++	unsigned bad = rpm_avail_check(page->heap, page->size_class, page, /*is_head=*/0, "to_free");
+ 	rpmalloc_assert(page->is_full == 0, "Page full flag internal failure");
+ 	rpmalloc_assert(page->is_decommitted == 0, "Page decommitted flag internal failure");
+ 	heap_t* heap = page->heap;
+-	if (heap->page_available[page->size_class] == page) {
++	if (bad) {
++		/* Only detach the head if this page genuinely is it; otherwise leave the
++		 * list alone entirely rather than trust either link. */
++		if (page->size_class < SIZE_CLASS_COUNT && heap->page_available[page->size_class] == page)
++			heap->page_available[page->size_class] = 0;
++	} else if (heap->page_available[page->size_class] == page) {
+ 		heap->page_available[page->size_class] = page->next;
+ 	} else {
+ 		page->prev->next = page->next;
+@@ -1452,6 +1640,93 @@ page_adopt_thread_free_block_list(page_t* page) {
+ 	}
+ }
+ 
++/* iOS-Mythic ml622: REMOTE-FREE CAS WATCHDOG.
++ *
++ * ml621 froze with two threads burning CPU forever in this function's CAS loops:
++ *   CrBrowserMain cpu=908  PC=libarm64ecfex+0x1b999c  atomic=0x7c35630040
++ *   Compositor    cpu=991  PC=libarm64ecfex+0x1b9940  atomic=0x7c35610040
++ * on NEIGHBOURING rpmalloc pages. CrBrowserMain entered this loop holding the
++ * shared CodeInvalidationMutex, so a writer queued behind it, write-priority
++ * blocked every later reader, and ALL JIT compilation stopped process-wide. Same
++ * visible wedge as ml611/ml617 but a completely different cause — nothing died,
++ * nothing leaked a hold; a live thread simply never left the allocator.
++ *
++ * ⛔⛔ NOTHING HERE MAY FORMAT OR EMIT. LogMan/fmt/dprintf/stdio can allocate or
++ * lock, which would re-enter rpmalloc at exactly the point it is already
++ * compromised. ml620 died because a probe formatted inside a corruption path.
++ * So: copy scalars into ONE fixed POD, publish with an atomic ready flag, and let
++ * an out-of-band sampler print it later. No ring, no allocator-backed storage.
++ *
++ * The counters split the three causes, which need different fixes:
++ *   changed   — the atomic really changed under us: real contention, page reuse,
++ *               OR a foreign writer. NOT automatically "legitimate contention".
++ *   unchanged — expected value identical across the failure: spurious LDAXR/STLXR
++ *               exclusive-monitor loss (weak-CAS livelock).
++ *   invalid   — decoded index/count or block address does not fit the page:
++ *               stale/duplicate page lifetime.
++ * ⛔ Do NOT jump to a strong CAS on this evidence: the two spinning threads were
++ * on DIFFERENT atomics, so they were not contending with each other. */
++struct rpm_cas_snapshot {
++	unsigned long long page_addr, block_addr, heap_addr, owner_teb;
++	unsigned long long prev_token, cur_token, ret_addr, atomic_addr;
++	unsigned int size_class, page_type, block_index, list_size;
++	unsigned int fail_changed, fail_unchanged, fail_invalid, quarantined;
++	unsigned int block_count, block_used, is_full, which_loop;
++};
++static struct rpm_cas_snapshot rpm_cas_snap;
++static _Atomic(int) rpm_cas_snap_ready;
++static _Atomic(int) rpm_cas_snap_taken;
++
++/* Drained by the periodic sampler OUTSIDE rpmalloc. Returns 1 if a snapshot was
++ * copied out. Caller formats; this function must stay allocation-free. */
++int
++rpm_cas_snapshot_take(struct rpm_cas_snapshot* out) {
++	if (!atomic_load_explicit(&rpm_cas_snap_ready, memory_order_acquire))
++		return 0;
++	*out = rpm_cas_snap;
++	atomic_store_explicit(&rpm_cas_snap_ready, 0, memory_order_release);
++	return 1;
++}
++
++/* One publish per run by default: the first extreme spin is the informative one,
++ * and a second would overwrite it while the sampler is copying. */
++static void
++rpm_cas_publish(page_t* page, block_t* block, unsigned long long prev, unsigned long long cur,
++                unsigned int idx, unsigned int lsize, unsigned int changed, unsigned int unchanged,
++                unsigned int invalid, unsigned int quarantined, unsigned int which, const void* atomic_addr) {
++	int expected = 0;
++	if (!atomic_compare_exchange_strong_explicit(&rpm_cas_snap_taken, &expected, 1, memory_order_acq_rel,
++	                                             memory_order_relaxed))
++		return;
++	rpm_cas_snap.page_addr   = (unsigned long long)(uintptr_t)page;
++	rpm_cas_snap.block_addr  = (unsigned long long)(uintptr_t)block;
++	rpm_cas_snap.heap_addr   = (unsigned long long)(uintptr_t)(page ? page->heap : 0);
++	rpm_cas_snap.owner_teb   = 0;
++#if defined(__aarch64__) || defined(_M_ARM64)
++	{ unsigned long long t = 0; __asm__ volatile("mov %0, x18" : "=r"(t)); rpm_cas_snap.owner_teb = t; }
++#endif
++	rpm_cas_snap.prev_token  = prev;
++	rpm_cas_snap.cur_token   = cur;
++	rpm_cas_snap.ret_addr    = (unsigned long long)(uintptr_t)__builtin_return_address(0);
++	rpm_cas_snap.atomic_addr = (unsigned long long)(uintptr_t)atomic_addr;
++	rpm_cas_snap.size_class  = page ? (unsigned int)page->size_class : 0u;
++	rpm_cas_snap.page_type   = page ? (unsigned int)page->page_type : 0u;
++	rpm_cas_snap.block_index = idx;
++	rpm_cas_snap.list_size   = lsize;
++	rpm_cas_snap.fail_changed   = changed;
++	rpm_cas_snap.fail_unchanged = unchanged;
++	rpm_cas_snap.fail_invalid   = invalid;
++	rpm_cas_snap.quarantined    = quarantined;
++	rpm_cas_snap.block_count = page ? (unsigned int)page->block_count : 0u;
++	rpm_cas_snap.block_used  = page ? (unsigned int)page->block_used : 0u;
++	rpm_cas_snap.is_full     = page ? (unsigned int)page->is_full : 0u;
++	rpm_cas_snap.which_loop  = which;
++	atomic_store_explicit(&rpm_cas_snap_ready, 1, memory_order_release);
++}
++
++#define RPM_CAS_REPORT_AT   (1u << 22)  /* ~4M failures: far past any real contention */
++#define RPM_CAS_QUARANTINE  (1u << 24)  /* ~16M: give up, leak this one block */
++
+ static NOINLINE void
+ page_put_thread_free_block(page_t* page, block_t* block) {
+ 	atomic_thread_fence(memory_order_acquire);
+@@ -1460,9 +1735,28 @@ page_put_thread_free_block(page_t* page, block_t* block) {
+ 		// the heap will not pick up the free blocks until a thread local free happens
+ 		heap_t* heap = page->heap;
+ 		uintptr_t prev_head = atomic_load_explicit(&heap->thread_free[page->page_type], memory_order_relaxed);
++		unsigned int f_changed = 0, f_unchanged = 0, f_total = 0;
+ 		block->next = (void*)prev_head;
+ 		while (!atomic_compare_exchange_weak_explicit(&heap->thread_free[page->page_type], &prev_head, (uintptr_t)block,
+ 		                                              memory_order_release, memory_order_relaxed)) {
++			/* ml622: classify BEFORE re-reading — prev_head has already been updated
++			 * by the failed CAS, so compare it against what we last tried. */
++			uintptr_t was = (uintptr_t)block->next;
++			if (prev_head != was)
++				++f_changed;
++			else
++				++f_unchanged;
++			if (++f_total == RPM_CAS_REPORT_AT)
++				rpm_cas_publish(page, block, (unsigned long long)was, (unsigned long long)prev_head, 0u, 0u,
++				                f_changed, f_unchanged, 0u, 0u, 1u, &heap->thread_free[page->page_type]);
++			if (f_total >= RPM_CAS_QUARANTINE) {
++				/* Containment: never published, so the block is simply LEAKED — it is
++				 * not exposed for reuse. Vastly preferable to spinning forever while
++				 * holding CodeInvalidationMutex and stopping all JIT (ml621). */
++				rpm_cas_publish(page, block, (unsigned long long)was, (unsigned long long)prev_head, 0u, 0u,
++				                f_changed, f_unchanged, 0u, 1u, 1u, &heap->thread_free[page->page_type]);
++				return;
++			}
+ 			block->next = (void*)prev_head;
+ 			wait_spin();
+ 		}
+@@ -1472,8 +1766,28 @@ page_put_thread_free_block(page_t* page, block_t* block) {
+ 		rpmalloc_assert(page_block(page, block_index) == block, "Block pointer is not aligned to start of block");
+ 		uint32_t list_size = page_block_from_thread_free_list(page, prev_thread_free, &block->next) + 1;
+ 		uint64_t thread_free = page_block_to_thread_free_list(page, block_index, list_size);
++		unsigned int f_changed = 0, f_unchanged = 0, f_invalid = 0, f_total = 0;
+ 		while (!atomic_compare_exchange_weak_explicit(&page->thread_free, &prev_thread_free, thread_free,
+ 		                                              memory_order_release, memory_order_relaxed)) {
++			/* ml622: prev_thread_free now holds what was ACTUALLY there. */
++			unsigned long long seen = (unsigned long long)prev_thread_free;
++			if (seen != (unsigned long long)thread_free)
++				++f_changed;
++			else
++				++f_unchanged;
++			/* Validate the decoded token against the page before trusting it: a
++			 * list_size past block_count, or an index outside the page, means stale
++			 * or duplicate page lifetime rather than contention. */
++			if ((block_index >= page->block_count) || (list_size > page->block_count))
++				++f_invalid;
++			if (++f_total == RPM_CAS_REPORT_AT)
++				rpm_cas_publish(page, block, seen, (unsigned long long)thread_free, block_index, list_size,
++				                f_changed, f_unchanged, f_invalid, 0u, 2u, &page->thread_free);
++			if (f_total >= RPM_CAS_QUARANTINE) {
++				rpm_cas_publish(page, block, seen, (unsigned long long)thread_free, block_index, list_size,
++				                f_changed, f_unchanged, f_invalid, 1u, 2u, &page->thread_free);
++				return; /* leak this one block; see loop-1 comment */
++			}
+ 			list_size = page_block_from_thread_free_list(page, prev_thread_free, &block->next) + 1;
+ 			thread_free = page_block_to_thread_free_list(page, block_index, list_size);
+ 			wait_spin();
+@@ -1806,6 +2120,7 @@ heap_make_free_page_available(heap_t* heap, uint32_t size_class, page_t* page) {
+ 	page->has_aligned_block = 0;
+ 	page->generic_free = 0;
+ 	page->heap = heap;
++	rpm_avail_check(heap, size_class, heap->page_available[size_class], /*is_head=*/1, "head-read");
+ 	page_t* head = heap->page_available[size_class];
+ 	page->next = head;
+ 	page->prev = 0;
+@@ -1984,6 +2299,7 @@ static page_t*
+ heap_get_page(heap_t* heap, uint32_t size_class) {
+ 	// Fast path, available page for given size class
+ 	page_t* page = heap->page_available[size_class];
++	rpm_avail_check(heap, size_class, page, /*is_head=*/1, "consume");
+ 	if (EXPECTED(page != 0))
+ 		return page;
+ 	return heap_get_page_generic(heap, size_class);
+@@ -2296,7 +2612,9 @@ rpmalloc(size_t size) {
+ 	}
+ #endif
+ 	heap_t* heap = get_thread_heap();
+-	return heap_allocate_block(heap, size, 0);
++	void* _fex_p = heap_allocate_block(heap, size, 0);
++	FEX_WATCH_NOTE(_fex_p, FEX_WATCH_ALLOC);
++	return _fex_p;
+ }
+ 
+ extern inline RPMALLOC_ALLOCATOR void*
+@@ -2308,7 +2626,9 @@ rpzalloc(size_t size) {
+ 	}
+ #endif
+ 	heap_t* heap = get_thread_heap();
+-	return heap_allocate_block(heap, size, 1);
++	void* _fex_p = heap_allocate_block(heap, size, 1);
++	FEX_WATCH_NOTE(_fex_p, FEX_WATCH_ALLOC);
++	return _fex_p;
+ }
+ 
+ /* iOS-Mythic diagnostic: log+exit if called with an obviously bad pointer.
+@@ -2319,6 +2639,9 @@ extern inline void
+ rpfree(void* ptr) {
+ 	if (UNEXPECTED(ptr == 0))
+ 		return;
++	/* ml611: recorded BEFORE the block goes back, so the log shows the free of a
++	 * buffer the CFG still holds — the decisive use-after-free evidence. */
++	FEX_WATCH_NOTE(ptr, FEX_WATCH_FREE);
+ 	if (UNEXPECTED((unsigned long long)ptr < 0x10000000ULL)) {
+ 		/* iOS-Mythic: skip free for obviously-bad pointer (likely from
+ 		 * destructor of zero-initialized vector with non-null garbage data
+@@ -2377,7 +2700,13 @@ rprealloc(void* ptr, size_t size) {
+ 	}
+ #endif
+ 	heap_t* heap = get_thread_heap();
+-	return heap_reallocate_block(heap, ptr, size, 0, 0);
++	/* ml611: a vector growing past capacity comes through here — the OLD buffer is
++	 * released and a NEW one handed out, which is exactly the transition that can
++	 * strand a stale data() pointer. Record both sides. */
++	FEX_WATCH_NOTE(ptr, FEX_WATCH_FREE);
++	void* _fex_p = heap_reallocate_block(heap, ptr, size, 0, 0);
++	FEX_WATCH_NOTE(_fex_p, FEX_WATCH_ALLOC);
++	return _fex_p;
+ }
+ 
+ extern RPMALLOC_ALLOCATOR void*

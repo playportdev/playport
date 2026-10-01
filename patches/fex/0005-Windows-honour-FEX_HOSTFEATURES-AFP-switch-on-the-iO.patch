@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 26 Sep 2026 14:21:59 +0200
+Subject: [PATCH] Windows: honour FEX_HOSTFEATURES' AFP switch on the iOS host
+
+The iOS branch of CPUFeatures::FetchHostFeatures builds the feature set
+by hand and returns before FEX::FetchHostFeatures, so OverrideFeatures
+never runs: FEX_HOSTFEATURES was read (the TSO config line prints it)
+and ignored. With AFP, every x64 -> ARM64EC call and its return write
+FPCR (ExitFunctionEC clears NEP/AH, the dispatcher sets them again),
+and an FPCR write stalls Apple cores: in The Witcher 3 8.8 % of the
+busiest threads' samples sit on ExitFunctionEC's msr FPCR. Honour
+DISABLEAFP there and log the AFP state the JIT uses.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-26-witcher3-profile.md
+Offered-upstream: no
+---
+ Source/Windows/Common/CPUFeatures.cpp | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
+index 25f5544c2..460e78044 100644
+--- a/Source/Windows/Common/CPUFeatures.cpp
++++ b/Source/Windows/Common/CPUFeatures.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include <FEXCore/Core/Context.h>
+ #include <FEXCore/Core/HostFeatures.h>
++#include <FEXCore/Config/Config.h>
++#include <FEXCore/Utils/LogManager.h>
+ #include <FEXCore/fextl/fmt.h>
+ 
+ #include <windows.h>
+@@ -74,6 +76,19 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+   HostFeatures.SupportsFlagM = true;
+   HostFeatures.SupportsFlagM2 = true;
+   HostFeatures.SupportsAFP = true;
++  {
++    /* Playport: the iOS branch returns before FEX::FetchHostFeatures, so
++     * OverrideFeatures never ran and FEX_HOSTFEATURES was read but ignored.
++     * Honour its AFP switch: with AFP, every x64 -> ARM64EC call and every
++     * return writes FPCR (ExitFunctionEC clears NEP/AH, the dispatcher sets
++     * them again), and an FPCR write stalls Apple cores. Without it, scalar
++     * SSE ops take a few more instructions and MXCSR.DAZ is not applied. */
++    FEX_CONFIG_OPT(HostFeatureControl, HOSTFEATURES);
++    if (HostFeatureControl() & FEXCore::Config::HostFeatures::DISABLEAFP) {
++      HostFeatures.SupportsAFP = false;
++    }
++    LogMan::Msg::IFmt("FEX: iOS host AFP={} (FEX_HOSTFEATURES={})", HostFeatures.SupportsAFP, HostFeatureControl());
++  }
+   HostFeatures.CPUMIDRs.push_back(0u);
+   HostFeatures.HostType = HostType;
+   return HostFeatures;

@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 12:00:00 +0200
+Subject: [PATCH] server: queue system APCs on iOS without a signal
+
+The server has no task port for the app on iOS and no SIGUSR1 is
+delivered, so a system APC was refused and a named-pipe read returned
+STATUS_ALERTED. The APC is queued for the thread's next server wait.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-09-24-bootstrap.md
+Offered-upstream: no
+---
+ server/thread.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/server/thread.c b/server/thread.c
+index 55cf4947..3fadb789 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1549,6 +1549,25 @@ static inline int is_in_apc_wait( struct thread *thread )
+     return (is_thread_suspended( thread ) || (thread->wait && (thread->wait->flags & SELECT_INTERRUPTIBLE)));
+ }
+ 
++#ifdef WINE_IOS
++/* Playport: on iOS the server has no task port for the app (trace_data is 0),
++ * so send_thread_signal() always fails, and SIGUSR1 would never run a handler
++ * anyway (see ios_fill_thread_context in mach_ios.c). Upstream then refuses to
++ * queue a system APC for a thread that is not already in an APC wait, and the
++ * APC's destructor completes its async with the call's own status: a pipe read
++ * that another pseudo-process completes just before the reader enters its wait
++ * returns STATUS_ALERTED with no data. Queue the APC regardless; the thread
++ * takes it at its next server wait, which for a synchronous I/O is the wait
++ * that follows at once. */
++static void ios_apc_without_signal( struct thread *thread, struct thread_apc *apc )
++{
++    static unsigned int count;
++    if (count++ < 32)
++        fprintf( stderr, "[apc-nosignal] #%u tid=%04x type=%d queued without a signal\n",
++                 count, thread->id, apc->call.type );
++}
++#endif
++
+ /* queue an existing APC to a given thread */
+ static int queue_apc( struct process *process, struct thread *thread, struct thread_apc *apc )
+ {
+@@ -1576,11 +1595,20 @@ static int queue_apc( struct process *process, struct thread *thread, struct thr
+             /* then use the first one that accepts a signal */
+             LIST_FOR_EACH_ENTRY( candidate, &process->thread_list, struct thread, proc_entry )
+             {
++#ifdef WINE_IOS
++                /* Playport: see ios_apc_without_signal() */
++                if (candidate->state == TERMINATED) continue;
++                send_thread_signal( candidate, SIGUSR1 );
++                ios_apc_without_signal( candidate, apc );
++                thread = candidate;
++                break;
++#else
+                 if (send_thread_signal( candidate, SIGUSR1 ))
+                 {
+                     thread = candidate;
+                     break;
+                 }
++#endif
+             }
+         }
+         if (!thread) return 0;  /* nothing found */
+@@ -1593,7 +1621,11 @@ static int queue_apc( struct process *process, struct thread *thread, struct thr
+         /* send signal for system APCs if needed */
+         if (queue == &thread->system_apc && list_empty( queue ) && !is_in_apc_wait( thread ))
+         {
++#ifdef WINE_IOS
++            if (!send_thread_signal( thread, SIGUSR1 )) ios_apc_without_signal( thread, apc );
++#else
+             if (!send_thread_signal( thread, SIGUSR1 )) return 0;
++#endif
+         }
+         /* cancel a possible previous APC with the same owner */
+         if (apc->owner) thread_cancel_apc( thread, apc->owner, apc->call.type );

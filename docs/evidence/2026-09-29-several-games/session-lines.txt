@@ -1,0 +1,33 @@
+20260929T095008 session: desktop window 10020, GDI handle table 7039210000
+20260929T095008 session: ready, pid 32
+20260929T095008 session: title 1: C:\Games\Hollow Knight\hollow_knight.exe in C:\Games\Hollow Knight, 8 arguments, 8 variables
+20260929T095008 session: title 1: started, pid 40
+20260929T095008 session: title 1: ended, exit code 0 after 49668 ms
+20260929T095008 session: title 2: C:\Games\Hollow Knight\hollow_knight.exe in C:\Games\Hollow Knight, 8 arguments, 8 variables
+20260929T095008 session: title 2: started, pid 284
+20260929T095008 session: title 2: ended, exit code 0 after 50020 ms
+20260929T095221 session: desktop window 10020, GDI handle table 7039210000
+20260929T095221 session: ready, pid 32
+20260929T095221 session: title 1: C:\Games\PoolStress\pool-stress.exe in C:\Games\PoolStress, 0 arguments, 5 variables
+20260929T095221 session: title 1: started, pid 40
+20260929T095221 pool-stress: p baseline regions=1/1 bad=0 (seh included)
+20260929T095221 pool-stress: c1 ready pid=52 regions=1/1 bad=0 seh_bad=0 work_ms=8
+20260929T095221 pool-stress: p child 1 ready pid=52 spawn_ms=109 alive=1
+20260929T095221 pool-stress: c2 ready pid=64 regions=1/1 bad=0 seh_bad=0 work_ms=8
+20260929T095221 pool-stress: p child 2 ready pid=64 spawn_ms=108 alive=2
+20260929T095221 pool-stress: c3 ready pid=76 regions=1/1 bad=0 seh_bad=0 work_ms=8
+20260929T095221 pool-stress: p child 3 ready pid=76 spawn_ms=111 alive=3
+20260929T095221 pool-stress: c4 ready pid=88 regions=1/1 bad=0 seh_bad=0 work_ms=8
+20260929T095221 pool-stress: p child 4 ready pid=88 spawn_ms=110 alive=4
+20260929T095221 pool-stress: c5 ready pid=100 regions=1/1 bad=0 seh_bad=0 work_ms=7
+20260929T095221 pool-stress: p child 5 ready pid=100 spawn_ms=112 alive=5
+20260929T095221 pool-stress: c6 ready pid=112 regions=1/1 bad=0 seh_bad=0 work_ms=7
+20260929T095221 pool-stress: p child 6 ready pid=112 spawn_ms=112 alive=6
+20260929T095221 pool-stress: c7 ready pid=124 regions=1/1 bad=0 seh_bad=0 work_ms=7
+20260929T095221 pool-stress: p child 7 ready pid=124 spawn_ms=115 alive=7
+20260929T095221 pool-stress: c8 ready pid=136 regions=1/1 bad=0 seh_bad=0 work_ms=7
+20260929T095221 pool-stress: p child 8 ready pid=136 spawn_ms=114 alive=8
+20260929T095221 pool-stress: p done started=8 ready=8 of 8 failed=0 total_ms=23512
+20260929T095221 session: title 1: ended, exit code 0 after 26071 ms
+20260929T095221 session: title 2: C:\Games\Hollow Knight\hollow_knight.exe in C:\Games\Hollow Knight, 8 arguments, 8 variables
+20260929T095221 session: title 2: started, pid 148

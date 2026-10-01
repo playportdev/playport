@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 28 Aug 2026 21:00:46 -0700
+Subject: [PATCH] Fix the cycle detector reporting every multi-node list as
+ cyclic
+
+The tortoise and hare both started at the head and both advanced on the first
+step, so after one record they compared equal and any list of two or more
+nodes returned WMTW_PACK_CYCLE. Every real batch would have failed
+immediately. The tortoise now advances on alternate steps only.
+
+The bug survived a green 63-check suite because none of those checks called
+wmtw_pack_render at all -- they exercised a private walker in the test. The
+new suite drives the real packer over empty, single, two-node acyclic, 500-node
+acyclic, self-cycle, two-node cycle and a 300-node ring, and asserts an
+unsupported opcode is named with its opcode and record index.
+
+Madeira-commit: 107d4e1a327ded3766428e7c7ac583fa8c07992b
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ src/winemetal/unix/wmt_remote_pack.h | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/src/winemetal/unix/wmt_remote_pack.h b/src/winemetal/unix/wmt_remote_pack.h
+index 2bc72a1..290b4ea 100644
+--- a/src/winemetal/unix/wmt_remote_pack.h
++++ b/src/winemetal/unix/wmt_remote_pack.h
+@@ -25,7 +25,12 @@ static inline enum wmtw_pack_status
+ wmtw_pack_render(const struct wmtcmd_base *head, struct wmtw_packer *p,
+                  struct wmtw_pack_result *res)
+ {
++    /* Tortoise and hare. The tortoise must NOT advance on the first step:
++     * starting both at head and advancing both immediately makes them equal
++     * after one step, which reports every list of two or more nodes as
++     * cyclic. */
+     const struct wmtcmd_base *slow = head;
++    int advance_slow = 0;
+     uint32_t idx = 0;
+     res->encoder_kind = 0;
+ 
+@@ -152,8 +157,8 @@ wmtw_pack_render(const struct wmtcmd_base *head, struct wmtw_packer *p,
+ 
+         c = (const struct wmtcmd_base *)c->next.ptr;
+         idx++;
+-        /* Floyd: advance the slow pointer every other step. */
+-        if (idx & 1) { if (slow) slow = (const struct wmtcmd_base *)slow->next.ptr; }
++        if (advance_slow && slow) slow = (const struct wmtcmd_base *)slow->next.ptr;
++        advance_slow = !advance_slow;
+         if (c && c == slow) { res->status = WMTW_PACK_CYCLE; res->record_index = idx;
+                               res->opcode = c->type; return WMTW_PACK_CYCLE; }
+     }

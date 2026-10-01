@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 04:09:13 +0200
+Subject: [PATCH] Log shader and pipeline compile times and pipeline waits
+
+A frame hitch in a title can come from pipeline compiles, from the CPU
+emulator translating code it has not run before, or from asset loads.
+To tell them apart from a pulled log:
+
+- the unix side logs, per call, the wall time and duration of every
+  DXBC-to-AIR conversion (SM50Compile), MTLLibrary, MTLFunction and
+  render or compute pipeline-state creation:
+    [shader-time] HH:MM:SS.mmm <op> <ms> ms
+- the d3d11 side logs each draw or dispatch that had to wait for its
+  pipeline to finish compiling, and for how long, for graphics, compute,
+  geometry-emulation and tessellation pipelines:
+    [pso-wait] graphics|compute|geometry|tessellation <ms> ms
+  A pipeline that is already compiled costs one atomic load, as before.
+
+tools/perf.py reads both. The host app's release build logs neither:
+[pso-wait] is at info level, below its DXMT_LOG_LEVEL=error, and
+[shader-time], a bare stderr line, is skipped when MADEIRA_NO_DIAGNOSTICS is
+set.
+
+No unix call slot changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-09-25-hk-hitch-attribution.md
+Offered-upstream: no
+---
+ src/d3d11/d3d11_pipeline.cpp        | 16 +++++++++--
+ src/d3d11/d3d11_pipeline.hpp        |  9 +++++++
+ src/d3d11/d3d11_pipeline_gs.cpp     |  2 +-
+ src/d3d11/d3d11_pipeline_ts.cpp     |  2 +-
+ src/winemetal/unix/winemetal_unix.c | 41 +++++++++++++++++++++++++++++
+ 5 files changed, 66 insertions(+), 4 deletions(-)
+
+diff --git a/src/d3d11/d3d11_pipeline.cpp b/src/d3d11/d3d11_pipeline.cpp
+index 8ea32be..72544d8 100644
+--- a/src/d3d11/d3d11_pipeline.cpp
++++ b/src/d3d11/d3d11_pipeline.cpp
+@@ -5,9 +5,21 @@
+ #include "d3d11_shader.hpp"
+ #include "log/log.hpp"
+ #include <atomic>
++#include <chrono>
+ 
+ namespace dxmt {
+ 
++/* Playport: see d3d11_pipeline.hpp. */
++void
++WaitReadyTimed(std::atomic_bool &ready, const char *kind) {
++  if (ready.load(std::memory_order_acquire))
++    return;
++  auto t0 = std::chrono::steady_clock::now();
++  ready.wait(false, std::memory_order_acquire);
++  auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
++  Logger::info(str::format("[pso-wait] ", kind, " ", us / 1000.0, " ms"));
++}
++
+ class MTLCompiledGraphicsPipelineImpl
+     : public MTLCompiledGraphicsPipeline {
+ public:
+@@ -47,7 +59,7 @@ public:
+   }
+ 
+   void GetPipeline(MTL_COMPILED_GRAPHICS_PIPELINE *pPipeline) final {
+-    ready_.wait(false, std::memory_order_acquire);
++    WaitReadyTimed(ready_, "graphics");
+     *pPipeline = {state_};
+   }
+ 
+@@ -151,7 +163,7 @@ public:
+   }
+ 
+   void GetPipeline(MTL_COMPILED_COMPUTE_PIPELINE *pPipeline) final {
+-    ready_.wait(false, std::memory_order_acquire);
++    WaitReadyTimed(ready_, "compute");
+     *pPipeline = {state_};
+   }
+ 
+diff --git a/src/d3d11/d3d11_pipeline.hpp b/src/d3d11/d3d11_pipeline.hpp
+index 1a9c4f4..7757c9b 100644
+--- a/src/d3d11/d3d11_pipeline.hpp
++++ b/src/d3d11/d3d11_pipeline.hpp
+@@ -6,6 +6,7 @@
+ #include "d3d11_shader.hpp"
+ #include "d3d11_state_object.hpp"
+ #include "util_hash.hpp"
++#include <atomic>
+ 
+ struct MTL_GRAPHICS_PIPELINE_DESC {
+   ManagedShader VertexShader;
+@@ -140,6 +141,14 @@ template <> struct equal_to<MTL_GRAPHICS_PIPELINE_DESC> {
+ 
+ namespace dxmt {
+ 
++/* Playport: a draw or dispatch whose pipeline is still compiling blocks the
++ * thread that encodes it until the compile ends. Log each such wait at info
++ * level, so a frame hitch can be told apart from other stalls (tools/perf.py
++ * counts these lines):
++ *   [pso-wait] graphics|compute|geometry|tessellation <ms> ms
++ * A pipeline that was ready costs one atomic load, as before. */
++void WaitReadyTimed(std::atomic_bool &ready, const char *kind);
++
+ class MTLCompiledGraphicsPipeline : public ThreadpoolWork {
+ public:
+   /**
+diff --git a/src/d3d11/d3d11_pipeline_gs.cpp b/src/d3d11/d3d11_pipeline_gs.cpp
+index fd5b2d5..3061549 100644
+--- a/src/d3d11/d3d11_pipeline_gs.cpp
++++ b/src/d3d11/d3d11_pipeline_gs.cpp
+@@ -65,7 +65,7 @@ public:
+   }
+ 
+   void GetPipeline(MTL_COMPILED_GRAPHICS_PIPELINE *pPipeline) final {
+-    ready_.wait(false, std::memory_order_acquire);
++    WaitReadyTimed(ready_, "geometry");
+     *pPipeline = {state_mesh_};
+   }
+ 
+diff --git a/src/d3d11/d3d11_pipeline_ts.cpp b/src/d3d11/d3d11_pipeline_ts.cpp
+index e1054f9..8b84709 100644
+--- a/src/d3d11/d3d11_pipeline_ts.cpp
++++ b/src/d3d11/d3d11_pipeline_ts.cpp
+@@ -93,7 +93,7 @@ public:
+   }
+ 
+   void GetPipeline(MTL_COMPILED_TESSELLATION_MESH_PIPELINE *pPipeline) final {
+-    ready_.wait(false, std::memory_order_acquire);
++    WaitReadyTimed(ready_, "tessellation");
+     *pPipeline = {state_rasterization_, hull_reflection.NumOutputElement,
+                   hull_reflection.ThreadsPerPatch};
+   }
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index eb79842..bf660c1 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -62,6 +62,42 @@ typedef int NTSTATUS;
+  * down, past every handler this routes. */
+ #include "wmt_remote_client.h"
+ 
++/* Playport: shader and pipeline compile timing. Every DXBC-to-AIR conversion,
++ * library, function and pipeline-state creation logs one line on stderr
++ * (s1-host.log) with the wall time it ended, so a frame hitch can be matched
++ * against compile work by time (tools/perf.py):
++ *   [shader-time] HH:MM:SS.mmm <op> <ms> ms
++ * A few hundred per title launch; the conversions only on a DXMT shader-cache
++ * miss. MADEIRA_NO_DIAGNOSTICS (the host app's release build) logs none: this
++ * is a bare stderr line, which DXMT_LOG_LEVEL does not reach. */
++#include <sys/time.h>
++struct shc_timer { const char *op; uint64_t t0; };
++static inline uint64_t shc_now_ns(void) {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
++}
++static inline struct shc_timer shc_timer_begin(const char *op) {
++  struct shc_timer t = { op, shc_now_ns() };
++  return t;
++}
++static void shc_timer_end(struct shc_timer *t) {
++  static int quiet = -1;
++  if (quiet < 0) {
++    const char *v = getenv("MADEIRA_NO_DIAGNOSTICS");
++    quiet = v && *v;
++  }
++  if (quiet)
++    return;
++  uint64_t ns = shc_now_ns() - t->t0;
++  struct timeval tv; struct tm tm;
++  gettimeofday(&tv, NULL);
++  localtime_r(&tv.tv_sec, &tm);
++  fprintf(stderr, "[shader-time] %02d:%02d:%02d.%03d %s %.3f ms\n", tm.tm_hour, tm.tm_min, tm.tm_sec,
++          (int)(tv.tv_usec / 1000), t->op, ns / 1e6);
++}
++#define SHC_TIMED(op) struct shc_timer _shc __attribute__((cleanup(shc_timer_end))) = shc_timer_begin(op)
++
+ /* Playport: the background GPU gate
+  * (docs/ARCHITECTURE.md, "Background GPU gate").
+  * iOS refuses GPU work from an app in the background: a command buffer
+@@ -1103,6 +1139,7 @@ _MTLDevice_minimumLinearTextureAlignmentForPixelFormat(void *obj) {
+ 
+ static NTSTATUS
+ _MTLDevice_newLibrary(void *obj) {
++  SHC_TIMED("newLibrary");
+   struct unixcall_mtldevice_newlibrary *params = obj;
+   if (wmtr_enabled()) {
+     /* DispatchData stays guest-local (it is a byte container, not an identity),
+@@ -1145,6 +1182,7 @@ _MTLDevice_newLibrary(void *obj) {
+ 
+ static NTSTATUS
+ _MTLLibrary_newFunction(void *obj) {
++  SHC_TIMED("newFunction");
+   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
+   if (wmtr_enabled()) {
+     /* arg is a guest pointer to a C string; the NAME crosses, never the pointer. */
+@@ -1187,6 +1225,7 @@ _NSObject_description(void *obj) {
+ 
+ static NTSTATUS
+ _MTLDevice_newComputePipelineState(void *obj) {
++  SHC_TIMED("newComputePSO");
+   struct unixcall_mtldevice_newcomputepso *params = obj;
+   if (wmtr_enabled()) {
+     uint8_t buf[sizeof(struct rm_wmt_info) + sizeof(struct WMTComputePipelineInfo)];
+@@ -1386,6 +1425,7 @@ MTLMeshRenderPipelineDescriptor ()
+ 
+ static NTSTATUS
+ _MTLDevice_newRenderPipelineState(void *obj) {
++  SHC_TIMED("newRenderPSO");
+   struct unixcall_mtldevice_newrenderpso *params = obj;
+   if (wmtr_enabled()) {
+     /* The WHOLE descriptor crosses: eight colour attachments, blend factors,
+@@ -3479,6 +3519,7 @@ thunk_SM50Destroy(void *args) {
+ 
+ static NTSTATUS
+ thunk_SM50Compile(void *args) {
++  SHC_TIMED("SM50Compile");
+   struct sm50_compile_params *params = args;
+ 
+   params->ret = SM50Compile(params->shader, params->args, params->func_name, params->bitcode, params->error);

@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 11 May 2026 19:01:07 +0800
+Subject: [PATCH] ntdll: add unix_ios_push_jit_aliases bridge for iOS FEX alias
+ awareness
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On iOS, ARM64EC PE images cannot run from their loaded address (iOS
+rejects mprotect(RX) on file-backed mmaps), so Wine ntdll-unix copies
+each image into the dual-mapped JIT pool and code runs from the alias
+address. FEX's range trackers only know the ORIGINAL PE address ranges,
+so calls into x86 code at JIT-alias addresses were emitted as NoExecOp
+and trapped at execution.
+
+This commit adds the PE-side end of the bridge:
+
+- pBTCpu64IosAddAliasMapping: new (iOS-only) xtajit64 export bound via
+  GET_PTR alongside the existing BTCpu64 function pointers. NULL on
+  non-iOS hosts (the export doesn't exist there), so no #ifdef needed
+  around the call site — the null check is enough.
+
+- unix_ios_push_jit_aliases: new ntdll unix-call code. PE-side
+  arm64ec_process_init_dispatchers invokes it after binding
+  pBTCpu64IosAddAliasMapping, passing the function pointer to the unix
+  side. Unix side (in build/ntdll-unix/virtual_ios.c) drains its
+  ios_jit_mappings table through the callback and registers it for
+  future late-loaded DLLs.
+
+Empirical: on iOS, this pushes the 6 startup mappings (Thumper, ntdll,
+xtajit64, ucrtbase, kernel32, kernelbase) + 35 late mappings (sechost,
+msvcrt, msvcp140, etc.) — covers every ARM64EC PE that gets copied.
+
+After this lands, NoExec count on Thumper goes from 1+ to 0 — FEX
+recognizes alias addresses as executable and translates code there
+normally instead of emitting traps.
+
+(cherry picked from commit 519b098579eac92f2fb36823770c8f87b1dd7d60)
+Madeira-commit: 9dff575ed6db39fd14ebfd584f3062d1033a7d08
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/signal_arm64ec.c | 26 ++++++++++++++++++++++++++
+ dlls/ntdll/unixlib.h        | 14 ++++++++++++++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 893c6cf81c2..ea4b929130e 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -31,6 +31,7 @@
+ #include "wine/exception.h"
+ #include "wine/list.h"
+ #include "ntdll_misc.h"
++#include "unixlib.h"
+ #include "unwind.h"
+ #include "wine/debug.h"
+ #include "ntsyscalls.h"
+@@ -41,6 +42,12 @@ WINE_DECLARE_DEBUG_CHANNEL(relay);
+ /* xtajit64.dll functions */
+ static void     (WINAPI *pBTCpu64FlushInstructionCache)(const void*,SIZE_T);
+ static BOOLEAN  (WINAPI *pBTCpu64IsProcessorFeaturePresent)(UINT);
++/* iOS-only xtajit64 export — see BTInterface.h. On non-iOS hosts the
++ * export doesn't exist and the GET_PTR call below returns NULL; the
++ * pointer-null check around the unix-call invocation skips it. No
++ * #ifdef guard because PE-side builds don't have an iOS-specific
++ * macro (target is arm64ec-windows in all cases). */
++static void     (WINAPI *pBTCpu64IosAddAliasMapping)(unsigned long long, unsigned long long, unsigned long long);
+ static void     (WINAPI *pBTCpu64NotifyMemoryDirty)(void*,SIZE_T);
+ static void     (WINAPI *pBTCpu64NotifyReadFile)(HANDLE,void*,SIZE_T,BOOL,NTSTATUS);
+ static void     (WINAPI *pBeginSimulation)(void);
+@@ -355,6 +362,7 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+ #define GET_PTR(name) p ## name = arm64ec_redirect_ptr( module, \
+                                       RtlFindExportedRoutineByName( module, #name ), metadata )
+     GET_PTR( BTCpu64FlushInstructionCache );
++    GET_PTR( BTCpu64IosAddAliasMapping );  /* iOS-only; NULL on non-iOS hosts. */
+     GET_PTR( BTCpu64IsProcessorFeaturePresent );
+     GET_PTR( BTCpu64NotifyMemoryDirty );
+     GET_PTR( BTCpu64NotifyReadFile );
+@@ -378,6 +386,24 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+     info->EmulatedMachineType = IMAGE_FILE_MACHINE_AMD64;
+     memcpy( KiUserExceptionDispatcher_orig, KiUserExceptionDispatcher_thunk, sizeof(KiUserExceptionDispatcher_orig) );
+ 
++    /* iOS-only: push the iOS JIT-pool alias table to xtajit64 so FEX can
++     * recognize alias addresses as executable. Without this, x86 sub-ranges
++     * inside any copied ARM64EC DLL (sechost, msvcrt, msvcp140, etc.) hit
++     * NoExecOp during translation and trap when executed.
++     *
++     * No #ifdef guard — on non-iOS hosts, pBTCpu64IosAddAliasMapping is NULL
++     * (export doesn't exist) and we skip silently. The unix-side handler
++     * also returns success with zero mappings on non-iOS. */
++    if (pBTCpu64IosAddAliasMapping)
++    {
++        struct ios_push_jit_aliases_params params = { (void *)pBTCpu64IosAddAliasMapping };
++        NTSTATUS push_status = WINE_UNIX_CALL( unix_ios_push_jit_aliases, &params );
++        if (push_status)
++            ERR( "arm64ec_process_init_dispatchers: unix_ios_push_jit_aliases failed: %lx\n", push_status );
++    }
++    /* No else — on non-iOS hosts pBTCpu64IosAddAliasMapping is naturally NULL,
++     * which is silent + correct: the bridge has nothing to do off-iOS. */
++
+     return STATUS_SUCCESS;
+ }
+ 
+diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
+index 9cb444342fe..de79d602d9f 100644
+--- a/dlls/ntdll/unixlib.h
++++ b/dlls/ntdll/unixlib.h
+@@ -66,6 +66,19 @@ struct unwind_builtin_dll_params
+     CONTEXT                    *context;
+ };
+ 
++/* iOS only: push the iOS JIT-pool alias table to FEX/xtajit64. Wine
++ * ntdll-unix knows the (PE_base, JIT_alias_base, size) tuples for every
++ * ARM64EC PE image that got copied into the JIT pool (required because
++ * iOS rejects mprotect(RX) on file-backed mmaps). PE-side ntdll calls
++ * this after binding xtajit64's BTCpu64IosAddAliasMapping export so FEX
++ * can resolve alias addresses as executable. */
++struct ios_push_jit_aliases_params
++{
++    void (*callback)(unsigned long long pe_base,
++                     unsigned long long jit_base,
++                     unsigned long long size);
++};
++
+ enum ntdll_unix_funcs
+ {
+     unix_load_so_dll,
+@@ -76,6 +89,7 @@ enum ntdll_unix_funcs
+     unix_wine_server_handle_to_fd,
+     unix_wine_spawnvp,
+     unix_system_time_precise,
++    unix_ios_push_jit_aliases,
+ };
+ 
+ extern unixlib_handle_t __wine_unixlib_handle;

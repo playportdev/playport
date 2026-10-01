@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Fri, 3 Jul 2026 19:00:51 +0800
+Subject: [PATCH] =?UTF-8?q?iOS=20ARM64EC:=20translate=20x64=E2=86=92EC=20t?=
+ =?UTF-8?q?argets=20PE=E2=86=92pool=20in=20ExitFunctionEC=20+=20L1=20loop-?=
+ =?UTF-8?q?top=20probe?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two frame-time fixes:
+
+1. ExitFunctionEC (Module.S) now translates the branch target through the
+   iOS alias table before jumping to native EC code. PE images can't
+   execute at their mapped address on iOS — the only runnable copy is in
+   the dual-mapped JIT pool — so every x64→EC call was landing on the PE
+   VA and eating a ~33us Mach exec-fault redirect. Measured ~40K faults
+   per frame in Thumper's menu/gameplay (= the entire 1.4s frame time);
+   after this, ~165/present. Menu+gameplay went 1.x → 15-20 FPS on
+   iPhone 13 Pro. IosJitAlias.cpp storage is now extern "C"
+   (IosAliasEntries/IosAliasCount) so the asm can reach it via adrp/lo12.
+
+2. Dispatcher loop-top now probes the L1 lookup cache before the L2 page
+   table (Dispatcher.cpp). L2 masks to VirtualMemSize (64GB) and Wine
+   maps DLLs at ~0x7EExxxxxxxxx, so every DLL-code lookup aliased, failed
+   the compare, and fell into the ~60us C++ CompileBlock path (~15K per
+   menu frame). The warm L1 (full 64-bit compare) turns those into ~ns
+   hits.
+
+Also: CB_SUMMARY now logs L1Pointer/L1Mask/LookupCache-L1 for cache
+diagnostics; per-block IR logging silenced (Core.cpp).
+
+Madeira-commit: 3228ed587bcfe52e5ce4e0d53bd77c17c6b1a974
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp        | 17 +++++++++--
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  | 30 +++++++++++++++++++
+ Source/Windows/ARM64EC/IosJitAlias.cpp        | 18 ++++++++---
+ Source/Windows/ARM64EC/Module.S               | 30 +++++++++++++++++++
+ 4 files changed, 89 insertions(+), 6 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 05140c9..d642b9c 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -1049,12 +1049,25 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     if ((total - g_cb_last_summary_total) >= 16384) {
+       g_cb_last_summary_total = total;
+       uint64_t reals = g_cb_real_compiles;
++      /* iOS-Mythic 2026-07-03 perf hunt: also print the JIT-visible L1
++       * lookup fields. The emitted dispatcher L1 probe reads
++       * State.L1Pointer/L1Mask; the measured ~15K CompileBlock calls per
++       * frame (~60us each = the whole frame time) with 99% cache hits mean
++       * that probe is missing for blocks the C++ path finds instantly. If
++       * State.L1Pointer here is 0 (or differs from the LookupCache's own
++       * pointer), the emitted probe reads the iOS-emulated zero page and
++       * silently misses every time — no crash, pure 60us tax per lookup. */
++      auto* T = Frame ? Frame->Thread : nullptr;
+       LogMan::Msg::EFmt("[CB_SUMMARY] total={} real_compiles={} cache_hits={} "
+-                        "hit_rate={}%  hottest_rip≈0x{:x} repeats~{}",
++                        "hit_rate={}%  hottest_rip≈0x{:x} repeats~{} "
++                        "L1ptr=0x{:x} L1mask=0x{:x} cacheL1=0x{:x}",
+                         total, reals,
+                         total - reals,
+                         (total > 0) ? (100 * (total - reals) / total) : 0,
+-                        g_cb_hot_rip, g_cb_hot_rip_count);
++                        g_cb_hot_rip, g_cb_hot_rip_count,
++                        Frame ? Frame->State.L1Pointer : 0,
++                        Frame ? Frame->State.L1Mask : 0,
++                        (T && T->LookupCache) ? T->LookupCache->GetL1Pointer() : 0);
+     }
+   }
+ 
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index 6b6606b..a18b7ed 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -227,6 +227,36 @@ void Dispatcher::EmitDispatcher() {
+ 
+   ARMEmitter::ForwardLabel NoBlock;
+ 
++  /* iOS-Mythic 2026-07-03 perf: probe the L1 cache FIRST at loop top.
++   *
++   * Upstream's loop-top lookup goes straight to the L2 page table, which
++   * masks addresses to Config.VirtualMemSize (64GB). Wine on iOS maps PE
++   * DLLs at ~0x7EEx_xxxx_xxxx (~500GB): every DLL-code lookup aliases in
++   * L2, fails the entry compare, and falls through to the ~60us C++
++   * CompileBlock path. Measured: ~15K such fallbacks per menu frame
++   * (~0.9s/frame = the whole frame time), while the L1 — full 64-bit
++   * compare, populated by every C++ hit via CacheBlockMapping — sat warm
++   * and unread on this path (only indirect-branch sites probe it).
++   * Probing L1 here turns those fallbacks into ~ns hits. Thumper's exe at
++   * 0x140000000 fits inside VirtualMemSize, which is why the exe-heavy
++   * loading screen already ran at 60 FPS while DLL-heavy phases crawled.
++   *
++   * Register use mirrors the L2 sequence below (TMP1/2/4 scratch, RipReg
++   * preserved); no flag-setting instructions (NZCV must survive here). */
++  {
++    ARMEmitter::ForwardLabel L1Miss;
++    ldp<ARMEmitter::IndexType::OFFSET>(TMP1, TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.L1Pointer));
++    // Entry address = L1Pointer + ((RIP << ilog2(entry size)) & pre-scaled mask)
++    and_(ARMEmitter::Size::i64Bit, TMP2, TMP2, RipReg, ARMEmitter::ShiftType::LSL, FEXCore::ilog2(sizeof(LookupCache::LookupCacheEntry)));
++    add(TMP1, TMP1, TMP2);
++    ldp<ARMEmitter::IndexType::OFFSET>(TMP4, TMP2, TMP1, 0);
++    sub(TMP2, TMP2, RipReg);
++    (void)cbnz(ARMEmitter::Size::i64Bit, TMP2, &L1Miss);
++    (void)cbz(ARMEmitter::Size::i64Bit, TMP4, &L1Miss);
++    br(TMP4);
++    (void)Bind(&L1Miss);
++  }
++
+   if (DisableL2Cache()) {
+     (void)b(&NoBlock);
+   } else {
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index def6cb1..50cf006 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -21,16 +21,26 @@
+ 
+ #ifdef FEX_IOS_HOST
+ 
+-namespace {
+-struct Entry {
++struct IosAliasEntry {
+   uint64_t PeBase;
+   uint64_t JitBase;
+   uint64_t Size;
+   uint64_t _Padding;  // Keeps the struct 32-byte to make array stride a power of 2.
+ };
+ constexpr int kMaxEntries = 256;
+-Entry g_Entries[kMaxEntries];
+-volatile int g_EntryCount = 0;
++
++// extern "C" storage (not anonymous-namespace) so Module.S's ExitFunctionEC
++// can reach the table via adrp/:lo12: — it translates the branch target
++// PE VA → pool VA inline before jumping to native EC code. That asm relies
++// on the 32-byte stride and the PeBase/JitBase/Size field order.
++extern "C" {
++IosAliasEntry IosAliasEntries[kMaxEntries];
++volatile int IosAliasCount = 0;
++}
++
++namespace {
++IosAliasEntry* const g_Entries = IosAliasEntries;
++volatile int& g_EntryCount = IosAliasCount;
+ }  // namespace
+ 
+ extern "C" {
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index b3c1c83..acaf029 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -110,6 +110,36 @@ ExitFunctionEC:
+ 
+ .global ExitFunctionSuspendResumePoint
+ ExitFunctionSuspendResumePoint:
++#ifdef FEX_IOS_HOST
++  // iOS: PE images can't execute at their mapped address (no mprotect(RX) on
++  // file-backed mmaps); the only runnable copy lives in the dual-mapped JIT
++  // pool. Translate the target through the alias table (IosJitAlias.cpp)
++  // before branching — otherwise every x64→EC call lands on the PE VA and
++  // costs a Mach exec-fault redirect (~33us each, measured ~40K/frame in
++  // Thumper's menu = the entire frame budget).
++  // x16/x17/x23 are already clobbered on all downstream paths; x4 maps to
++  // x64 R10 (volatile at this call/ret boundary) and is clobbered by the
++  // entry-thunk path below. NZCV is clobbered by the cmp at check_thunk
++  // regardless.
++  adrp x16, IosAliasEntries
++  add x16, x16, #:lo12:IosAliasEntries
++  adrp x17, IosAliasCount
++  ldr w17, [x17, #:lo12:IosAliasCount]
++ios_ec_xlate_loop:
++  cbz w17, ios_ec_xlate_done
++  ldr x23, [x16]        // Entry.PeBase
++  sub x23, x9, x23      // offset into image (unsigned-wraps huge if below base)
++  ldr x4, [x16, #16]    // Entry.Size
++  cmp x23, x4
++  b.lo ios_ec_xlate_hit
++  add x16, x16, #32
++  sub w17, w17, #1
++  b ios_ec_xlate_loop
++ios_ec_xlate_hit:
++  ldr x4, [x16, #8]     // Entry.JitBase
++  add x9, x4, x23
++ios_ec_xlate_done:
++#endif
+   // Either return to an exit thunk (return to ARM64EC function) or call an entry thunk (call to ARM64EC function).
+   // It is assumed that a 'blr x16' instruction is only ever used to call into x86 code from an exit thunk, and that all
+   // exported ARM64EC functions have a 4-byte offset to their entry thunk immediately before their first instruction.

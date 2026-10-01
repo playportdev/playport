@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The release version (pp release VERSION checks it; decision 0036). Keep both plists equal. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<!-- Device-initiated pairing: publish through Bonjour, not raw multicast (decision 0033). -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Playport saves the screenshots you take from its in-game menu to Photos.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Playport advertises a pairing host so this iPhone can set up game debugging without a computer.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_remotepairing-pairable-host._tcp</string>
+	</array>
+	<!-- The pairing code's picture-in-picture window over Settings (PairingCodeWindow.swift);
+	     picture in picture requires this mode. The app plays no audio of its own there. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>CFBundleDisplayName</key>
+	<string>Playport</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<!-- The app delegate narrows these per launch: landscape for a title, portrait otherwise. -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- iOS Game Mode (Metal HUD "Game Mode"): the system engages it for an app in the games category. -->
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.games</string>
+	<key>GCSupportsGameMode</key>
+	<true/>
+	<!-- ProMotion above 60 Hz for a title's presents (TitleScreen.swift). -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<!-- LocalDevVPN's way back after Playport turns it on (Sources/S1Probe/LocalDevVPN.swift):
+	     localdevvpn://enable?scheme=playport opens playport://, which only brings Playport to the front. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.playport.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>playport</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

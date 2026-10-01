@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "llvm_mingw": {
+    "release": "20260922",
+    "repository": "https://github.com/mstorsjo/llvm-mingw",
+    "commit": "0eca5ac93da14a74bc81c249e841356ececc5d95",
+    "script": "build-mingw-w64.sh",
+    "script_sha256": "42a14441279351f1d76114a346261e45d6458e5dbe8eb84dd9ffaf3691d4c854"
+  },
+  "mingw_w64": {
+    "repository": "https://github.com/mingw-w64/mingw-w64",
+    "commit": "57b595039040eaa15bece85b7cc71d952281b269"
+  }
+}

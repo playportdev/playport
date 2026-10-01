@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sign in to Steam</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0E13;font-family:'Barlow',system-ui,sans-serif;color:#EEF1F5}
+a{color:#F5B544;text-decoration:none}a:hover{color:#FFD08A}
+.d{font-family:'Barlow Semi Condensed','Barlow',sans-serif}
+.g{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:10px;background:#EEF1F5;color:#0B0E13;font:700 11px 'Barlow',sans-serif}
+.leg{display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1DC}
+.focus{outline:3px solid #F5B544;outline-offset:3px}
+.card{background:#151A21;border-radius:16px;padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:10px}
+.step{display:flex;gap:10px;font-size:13px;line-height:1.4;color:#C9D1DC}
+.n{flex-shrink:0;width:20px;height:20px;border-radius:10px;background:#2A3340;color:#EEF1F5;font:700 11px 'Barlow';display:flex;align-items:center;justify-content:center}
+</style>
+</helmet>
+<div style="width: 874px; height: 402px; position: relative; overflow: hidden; background: #0B0E13; display: flex; flex-direction: column">
+<div style="padding: 20px 44px 12px; display: flex; align-items: baseline; gap: 14px">
+<div class="d" style="font-size: 28px; font-weight: 700">Sign in to Steam</div>
+<div style="font-size: 13px; color: #9AA5B4">Your games, cloud saves and achievements. Playport never sees your password.</div>
+</div>
+<div style="flex-grow: 1; display: flex; gap: 16px; padding: 0 44px">
+<div class="card focus" style="flex-grow: 1">
+<div style="font: 600 11px 'Barlow'; letter-spacing: .1em; text-transform: uppercase; color: #F5B544">On this phone</div>
+<div class="d" style="font-size: 21px; font-weight: 700">Approve in the Steam app</div>
+<div class="step"><span class="n">1</span><span>Type your Steam account name with the controller keyboard.</span></div>
+<div class="step"><span class="n">2</span><span>Steam sends a sign-in request to the Steam Mobile app. Approve it there, then come back.</span></div>
+<div style="height: 40px; border-radius: 10px; background: #0B0E13; border: 1px solid #4A5667; display: flex; align-items: center; padding: 0 12px; font-size: 14px; color: #9AA5B4; margin-top: 4px">Account name</div>
+</div>
+<div class="card" style="width: 330px; flex-direction: row; gap: 16px; align-items: center">
+<div style="width: 132px; height: 132px; flex-shrink: 0; background: #EEF1F5; border-radius: 10px; display: flex; align-items: center; justify-content: center; font: 700 12px 'Barlow'; color: #3A4452">[QR CODE]</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="font: 600 11px 'Barlow'; letter-spacing: .1em; text-transform: uppercase; color: #9AA5B4">Another device</div>
+<div class="d" style="font-size: 19px; font-weight: 700; line-height: 1.1">Scan with the Steam app</div>
+<div style="font-size: 12px; line-height: 1.4; color: #9AA5B4">Steam app › Steam Guard › Scan a QR code. New code in 0:42.</div>
+</div>
+</div>
+</div>
+<div style="height: 36px; flex-shrink: 0; margin-top: 14px; display: flex; align-items: center; gap: 18px; padding: 0 44px; border-top: 1px solid #1D242E">
+<span style="font-size: 12px; color: #9AA5B4">Games already in C:\Games play without Steam</span>
+<div style="flex-grow: 1"></div>
+<span class="leg"><span class="g">A</span>Continue</span>
+<span class="leg"><span class="g">RB</span>Use QR code</span>
+<a class="leg" href="Main.dc.html"><span class="g">B</span>Not now</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":874,"height":402}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

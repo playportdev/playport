@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 29 Apr 2026 18:19:36 +0800
+Subject: [PATCH] =?UTF-8?q?LookupCache:=20pre-commit=20guest-RIP=E2=86=92h?=
+ =?UTF-8?q?ost-block=20region=20on=20iOS?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The 272MB MEM_RESERVE region for the FEX block-pointer table relies on
+auto-commit-on-access-violation through OvercommitTracker. On iOS that
+path doesn't take effect cleanly — pages keep faulting after VirtualAlloc(MEM_COMMIT)
+returns — so pre-commit the whole region upfront. iOS still demand-faults
+physical pages on first touch, so the upfront cost is just VA reservation.
+
+Madeira-commit: 763d4573dd0e0b45fb2ae963000c7c5cd4a22d94
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/LookupCache.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.cpp b/FEXCore/Source/Interface/Core/LookupCache.cpp
+index 0b23030..b9761c8 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.cpp
++++ b/FEXCore/Source/Interface/Core/LookupCache.cpp
+@@ -38,7 +38,16 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+   // Allocate a region of memory that we can use to back our block pointers
+   // We need one pointer per page of virtual memory
+   // At 64GB of virtual memory this will allocate 128MB of virtual memory space
++#ifdef FEX_IOS_HOST
++  /* iOS-Mythic: commit upfront. The auto-commit-on-access-violation path
++   * (OvercommitTracker.HandleAccessViolation) doesn't take effect cleanly
++   * on iOS — pages stay faulting after VirtualAlloc(MEM_COMMIT) returns.
++   * Pre-commit the whole region; physical pages are still demand-faulted
++   * by the kernel. */
++  PagePointer = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, true));
++#else
+   PagePointer = reinterpret_cast<uintptr_t>(FEXCore::Allocator::VirtualAlloc(TotalCacheSize, false, false));
++#endif
+   LOGMAN_THROW_A_FMT(PagePointer != -1ULL, "Failed to allocate PagePointer");
+ 
+   // Disable THP on the Lookup cache.

@@ -1,0 +1,42 @@
+{
+  "backends": [
+    "madeira:fex-0f8edf8f6+wine-e82864432+madeira-5a82d392e"
+  ],
+  "steps": [
+    {
+      "step": "g2-graphics/1",
+      "probe_id": "g2-d3d11-x86-64",
+      "failed_required": [],
+      "main_thread_max_stall_ms": 5.7,
+      "verdict": "pass"
+    },
+    {
+      "step": "g2-audio/1",
+      "probe_id": "g2-audio-x86-64",
+      "failed_required": [],
+      "main_thread_max_stall_ms": 8,
+      "verdict": "pass"
+    },
+    {
+      "step": "g2-input/1",
+      "probe_id": "g2-input-x86-64",
+      "failed_required": [],
+      "main_thread_max_stall_ms": 0,
+      "verdict": "pass"
+    },
+    {
+      "step": "g2-session/1",
+      "probe_id": "g2-session-x86-64",
+      "verdict": "not tested"
+    },
+    {
+      "step": "g2-pad/1",
+      "probe_id": "g2-pad-x86-64",
+      "verdict": "not tested (supplementary)"
+    }
+  ],
+  "findings": [],
+  "problems": [],
+  "g2_probes": "not tested",
+  "gate_evidence": true
+}

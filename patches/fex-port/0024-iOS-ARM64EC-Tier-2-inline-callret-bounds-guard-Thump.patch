@@ -1,0 +1,736 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Mon, 18 May 2026 15:44:38 +0800
+Subject: [PATCH] =?UTF-8?q?iOS=20ARM64EC:=20Tier-2=20inline=20callret=20bo?=
+ =?UTF-8?q?unds-guard=20=E2=80=94=20Thumper=20crosses=20splash?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Closes the post-first-frame fault-loop class (C000001D, Mach UNHANDLED,
+JIT-pool host-PC leakage) by emitting a 3-instruction bounds check
+before every callret stack push/pop in the ARM64EC JIT. Required
+because iOS Wine's VirtualAlloc(PAGE_NOACCESS) doesn't enforce the
+guard pages around the callret allocation, so the SEH-driven
+HandleAccessViolation reset never fires on underflow — the stack
+drifts silently into "guard" memory until JIT code corrupts itself.
+
+Architecture:
+- New CPUState::callret_sp_base (repurposes _pad1, same offset/size),
+  populated from Thread->CallRetStackBase in CallRetStack::InitializeThread.
+- Inline guard at 4 emit sites:
+    BranchOps.cpp ~146 — linked-path CALL push
+    BranchOps.cpp ~192 — RET pop
+    BranchOps.cpp ~245 — Skip-path CALL push (after L1 cache miss)
+    Dispatcher.cpp ~549 — JITCallback sentinel push
+  Each emits: ldr base from State; sub sp-base; lsr #24; cbz skip;
+  ldr base again; add #0x400000 (= SIZE/4 DefaultLocation). Steady-state
+  overhead is 3 ARM64 instructions per CALL/RET emit.
+
+Diagnostics (log-only, no behavior change):
+- JITPOOL_RIP detector in Core.cpp CompileBlock when GuestRIP is in
+  the JIT RX pool — tells us when host PCs leak into State.rip.
+- CALLRET_OOB reset-on-compile-entry as a catch-net for the rare case
+  where the JIT-side guard doesn't catch it.
+- CB_SUMMARY periodic counter (every 16K invocations) separating
+  total invocations from real cache misses. Settled the 180K-compile
+  hot RIP question: 99% are cache hits, real_compiles is ~7K total.
+
+Log-volume reductions:
+- Suppressed per-CompileBlock RIP log (was 6× amplified by Wine's
+  file trace, dwarfing real signal).
+- Suppressed per-IR-op Arm64JIT dispatch logs.
+- Suppressed all Frontend Decoder per-block logs.
+Result: ~5-10× smaller log files at no visibility cost; iOS log
+capacity now covers ~10 min of Thumper runtime cleanly.
+
+Verified result on Thumper:
+- Splash (Present #1) rendered consistently
+- 360+ Presents over 6+ seconds before next wall
+- Zero C000001D, zero C0000005, zero NtTerminateProcess
+- "Splash → black" transition matches Windows reference behavior
+- New wall is an FMOD worker NULL-deref loop at fmod64+0x7c400,
+  unrelated to dispatcher health
+
+Madeira-commit: 707f213f5a7aae3796f2f866e9fe991b35dd0ca8
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp        | 300 +++++++++++++++++-
+ .../Interface/Core/Dispatcher/Dispatcher.cpp  |  25 +-
+ FEXCore/Source/Interface/Core/Frontend.cpp    |  12 +-
+ .../Source/Interface/Core/JIT/BranchOps.cpp   |  62 ++++
+ FEXCore/Source/Interface/Core/JIT/JIT.cpp     |  19 +-
+ FEXCore/include/FEXCore/Core/CoreState.h      |   6 +-
+ Source/Windows/Common/CallRetStack.h          |   5 +
+ 7 files changed, 399 insertions(+), 30 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 334b3d7..9749e6f 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -80,6 +80,34 @@ $end_info$
+ #include <arm_acle.h>
+ #endif
+ 
++/* iOS-Mythic HOTRIP telemetry — plain globals (no constructors/guard vars).
++ * 2026-05-14: per-thread callret tracking (GPT diagnosis: FMOD worker
++ * thread leaks callret entries; need to confirm WHICH thread leaks and
++ * separate game-thread vs render-thread vs FMOD-worker activity). 4 thread
++ * slots hashed by Frame pointer. */
++static volatile uint64_t g_mythic_hot_count[12] = {0,0,0,0,0,0,0,0,0,0,0,0};
++static volatile uint64_t g_mythic_max_alloc_size = 0;
++static volatile uint64_t g_mythic_last_str = 0;
++static volatile uint64_t g_mythic_last_vt = 0;
++static volatile uint64_t g_mythic_last_vt2 = 0;
++static volatile uint64_t g_mythic_callret_max = 0;
++static volatile uint64_t g_mythic_callret_min = ~(uint64_t)0;
++static volatile uint64_t g_mythic_callret_last = 0;
++
++/* Per-thread tracking (4 slots). Key = Frame ptr (unique per FEX thread).
++ * Records callret_sp range, block-dispatch count, and last guest RIP seen
++ * to localize WHICH thread is leaking callret entries. */
++static volatile uint64_t g_mythic_thr_key[4] = {0,0,0,0};
++static volatile uint64_t g_mythic_thr_crsp_min[4] = {~(uint64_t)0, ~(uint64_t)0, ~(uint64_t)0, ~(uint64_t)0};
++static volatile uint64_t g_mythic_thr_crsp_max[4] = {0,0,0,0};
++static volatile uint64_t g_mythic_thr_crsp_last[4] = {0,0,0,0};
++static volatile uint64_t g_mythic_thr_count[4] = {0,0,0,0};
++static volatile uint64_t g_mythic_thr_last_rip[4] = {0,0,0,0};
++
++/* iOS-Mythic 2026-05-18 low-noise CompileBlock instrumentation counters. */
++static volatile uint64_t g_cb_total = 0;
++static volatile uint64_t g_cb_real_compiles = 0;
++
+ namespace FEXCore::Context {
+ ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
+   : HostFeatures {Features}
+@@ -812,7 +840,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+ }
+ 
+ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst) {
+-  LogMan::Msg::IFmt("[iOS] CompileCode: RIP={:#x}", GuestRIP);
++  // [iOS-Mythic] verbose CompileCode logs suppressed — flooding log faster than splash
+ 
+   if (SourcecodeResolver && Config.GDBSymbols()) {
+     auto MappedSection = SyscallHandler->LookupExecutableFileSection(Thread, GuestRIP);
+@@ -823,10 +851,8 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+   }
+ 
+   // Generate IR + Meta Info
+-  LogMan::Msg::IFmt("[iOS] CompileCode: Calling GenerateIR...");
+   auto [IRView, TotalInstructions, TotalInstructionsLength, StartAddr, Length, NeedsAddGuestCodeRanges] =
+     GenerateIR(Thread, GuestRIP, Config.GDBSymbols(), MaxInst);
+-  LogMan::Msg::IFmt("[iOS] CompileCode: GenerateIR returned, TotalInsts={} Length={}", TotalInstructions, Length);
+   if (!IRView) {
+     Thread->FrontendDecoder->ValidateDisownedOrFree();
+     Thread->OpDispatcher->ValidateDisownedOrFree();
+@@ -858,9 +884,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+   // If the trap flag is set we generate single instruction blocks that each check to generate a single step exception.
+   bool TFSet = Thread->CurrentFrame->State.flags[X86State::RFLAG_TF_RAW_LOC];
+ 
+-  LogMan::Msg::IFmt("[iOS] CompileCode: Calling CPUBackend->CompileCode...");
+   auto CompiledCode = Thread->CPUBackend->CompileCode(GuestRIP, Length, TotalInstructions == 1, &*IRView, DebugData.get(), TFSet);
+-  LogMan::Msg::IFmt("[iOS] CompileCode: CPUBackend->CompileCode returned");
+ 
+   // Release the IR
+   Thread->OpDispatcher->DelayedDisownBuffer();
+@@ -902,22 +926,277 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     return 0;
+   }
+ 
+-  LogMan::Msg::IFmt("[iOS] CompileBlock: RIP={:#x} MaxInst={}", GuestRIP, MaxInst);
++  /* iOS-Mythic 2026-05-18: CALLRET_SP bounds-validation + RESET.
++   *
++   * Initial diagnostic showed callret_sp going 0x10..0x70 BELOW
++   * Thread->CallRetStackBase — underflow of the FEX prediction stack into
++   * the lower guard page. On iOS, Wine's VirtualAlloc(MEM_RESERVE,
++   * PAGE_NOACCESS) doesn't actually enforce NOACCESS on the guard, so the
++   * guard-page SEGV that would normally trigger CallRetStack::HandleAccessViolation
++   * never fires, and the existing reset-to-DefaultLocation logic doesn't kick
++   * in. Result: the stack drifts further into "guard" memory each iteration
++   * of Thumper's hot dispatch loop.
++   *
++   * GPT's Tier-1 fix: replicate HandleAccessViolation's reset proactively
++   * in C++, triggered at CompileBlock entry whenever we detect callret_sp
++   * outside the real [base, base+SIZE) range. The callret stack is a
++   * prediction/fast-return cache, not architectural state — resetting it
++   * degrades to slower lookup, doesn't change x86 semantics.
++   *
++   * Stack direction (per GPT): CALL push uses `stp [sp, -0x10]!`, so
++   * sp decreases. RET pop uses `ldp [sp], 0x10`, so sp increases.
++   * sp < base = too many CALL pushes (likely ARM64EC return paths that
++   * push via the dispatcher sentinel but bypass the FEX RET pop path).
++   * sp >= end = too many RET pops. Both reset to DefaultLocation. */
++  {
++    auto *Thread = Frame ? Frame->Thread : nullptr;
++    uint64_t crsp = Frame ? Frame->State.callret_sp : 0;
++    uint64_t crbase = Thread ? reinterpret_cast<uint64_t>(Thread->CallRetStackBase) : 0;
++    uint64_t crend = crbase + FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE;
++    if (crbase != 0 && (crsp < crbase || crsp >= crend)) {
++      static volatile uint32_t oob_cnt = 0;
++      uint32_t n = __sync_add_and_fetch(&oob_cnt, 1);
++      uint64_t default_loc = crbase + FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE / 4;
++      const char *kind = (crsp < crbase) ? "UNDERFLOW" : "OVERFLOW";
++      if (n <= 16) {
++        LogMan::Msg::EFmt("[CALLRET_OOB #{}] {} callret_sp=0x{:x}  "
++                          "base=0x{:x} end=0x{:x} delta=0x{:x}  "
++                          "GuestRIP=0x{:x} State.rip=0x{:x} Frame=0x{:x}  "
++                          "RESET→0x{:x}",
++                          n, kind, crsp, crbase, crend,
++                          (crsp < crbase) ? (crbase - crsp) : (crsp - crend),
++                          GuestRIP, Frame->State.rip,
++                          reinterpret_cast<uintptr_t>(Frame),
++                          default_loc);
++        /* Dump top 4 pseudo-entries before reset (mostly stale; useful to
++         * see if anyone wrote real callret pairs into the guard page). */
++        if (crsp >= 0x10000) {
++          for (int i = 0; i < 4; i++) {
++            uint64_t *pair = reinterpret_cast<uint64_t*>(crsp + i * 0x10);
++            LogMan::Msg::EFmt("[CALLRET_OOB #{}]   [+0x{:x}] = {{0x{:x}, 0x{:x}}}",
++                              n, i * 0x10, pair[0], pair[1]);
++          }
++        }
++      }
++      /* Tier-1 reset to DefaultLocation, matching CallRetStack::HandleAccessViolation. */
++      Frame->State.callret_sp = default_loc;
++    }
++  }
++
++  /* iOS-Mythic 2026-05-15: JIT-pool RIP detector — LOG-ONLY.
++   *
++   * Earlier attempt to "recover" by setting State.rip = callret[0].pc and
++   * compiling that as guest x86 produced a livelock: the recovered code
++   * (e.g. FMOD at 0xeaa2f060d, `mov [rbx+0xc0], rdi`) faulted on RBX=0
++   * because callret pairs are {guest_pc, host_jit_ret_target}, NOT CPU
++   * register snapshots. Setting RIP without restoring RBX/RSP/flags is
++   * not equivalent to ARM64EC opportunistic-return.
++   *
++   * Going forward: log occurrences so we can see when host PCs leak into
++   * State.rip, but do NOT mutate state. The real fix belongs in the
++   * dispatcher's EnterEC path. */
++  {
++    /* JIT pool observed at RX=0x11cc00000+0x10000000 across runs. Tighten
++     * the detector to the actual pool range so we don't false-positive on
++     * other 0x1XXXXXXXX guest addresses. ASLR jitter is ~16MB so widen by
++     * 32MB on each side. */
++    constexpr uint64_t pool_lo = 0x11c000000ULL;
++    constexpr uint64_t pool_hi = 0x12e000000ULL;
++    if (GuestRIP >= pool_lo && GuestRIP < pool_hi) {
++      uint64_t crsp = Frame ? Frame->State.callret_sp : 0;
++      static volatile uint32_t jit_rip_dump_count = 0;
++      uint32_t dn = __sync_add_and_fetch(&jit_rip_dump_count, 1);
++      if (dn <= 8) {
++        LogMan::Msg::EFmt("[JITPOOL_RIP #{}] GuestRIP=0x{:x} (HOST PC LEAKED INTO STATE.RIP)  "
++                          "State.rip=0x{:x} callret_sp=0x{:x} Frame=0x{:x}  "
++                          "pool=0x{:x}..0x{:x}",
++                          dn, GuestRIP,
++                          Frame ? Frame->State.rip : 0, crsp,
++                          reinterpret_cast<uintptr_t>(Frame),
++                          pool_lo, pool_hi);
++        if (crsp != 0 && crsp >= 0x10000) {
++          for (int i = 0; i < 8; i++) {
++            uint64_t *pair = reinterpret_cast<uint64_t*>(crsp + i * 0x10);
++            LogMan::Msg::EFmt("[JITPOOL_RIP #{}]   callret[+0x{:x}] = {{pc=0x{:x}, ret=0x{:x}}}",
++                              dn, i * 0x10, pair[0], pair[1]);
++          }
++        }
++      }
++      /* Log-only — no state mutation. Fall through to normal compile path.
++       * If FEX subsequently faults trying to decode the JIT pool bytes as
++       * x86, we'll see that in the Mach handler — at least we know the
++       * exact RIP that leaked. */
++    }
++  }
++
++  /* iOS-Mythic 2026-05-18 low-noise summary. Replaces per-call log (which
++   * was producing ~180K lines/run for hot RIP 0x140028d46 alone, each
++   * amplified ~6× by Wine's file trace). Counters: g_cb_total bumped
++   * every CompileBlock call; g_cb_real_compiles bumped after cache miss
++   * proves we actually compile (see below at LookupCache fallthrough).
++   * Boyer-Moore-style 1-slot hot-RIP estimator. Summary every 16K calls. */
++  {
++    static volatile uint64_t g_cb_last_summary_total = 0;
++    static volatile uint64_t g_cb_hot_rip = 0;
++    static volatile uint64_t g_cb_hot_rip_count = 0;
++    if (GuestRIP == g_cb_hot_rip) {
++      __sync_add_and_fetch(&g_cb_hot_rip_count, 1);
++    } else if (g_cb_hot_rip_count == 0) {
++      g_cb_hot_rip = GuestRIP;
++      __sync_add_and_fetch(&g_cb_hot_rip_count, 1);
++    } else {
++      __sync_sub_and_fetch(&g_cb_hot_rip_count, 1);
++    }
++    uint64_t total = __sync_add_and_fetch(&g_cb_total, 1);
++    if ((total - g_cb_last_summary_total) >= 16384) {
++      g_cb_last_summary_total = total;
++      uint64_t reals = g_cb_real_compiles;
++      LogMan::Msg::EFmt("[CB_SUMMARY] total={} real_compiles={} cache_hits={} "
++                        "hit_rate={}%  hottest_rip≈0x{:x} repeats~{}",
++                        total, reals,
++                        total - reals,
++                        (total > 0) ? (100 * (total - reals) / total) : 0,
++                        g_cb_hot_rip, g_cb_hot_rip_count);
++    }
++  }
++
++  /* iOS-Mythic 2026-05-14: per-thread callret tracking (runs for EVERY
++   * block dispatch, not just hot RIPs). 4-slot hash table keyed by Frame
++   * pointer (unique per FEX thread). Identifies WHICH thread is leaking
++   * callret entries vs healthy. */
++  {
++    uintptr_t fk = reinterpret_cast<uintptr_t>(Frame);
++    int slot = (int)((fk >> 6) & 3);
++    /* Claim the slot if empty, or use if matches; ignore on collision. */
++    if (g_mythic_thr_key[slot] == 0 || g_mythic_thr_key[slot] == fk) {
++      g_mythic_thr_key[slot] = fk;
++      uint64_t crsp = Frame->State.callret_sp;
++      g_mythic_thr_crsp_last[slot] = crsp;
++      g_mythic_thr_last_rip[slot] = GuestRIP;
++      g_mythic_thr_count[slot]++;
++      if (crsp != 0) {
++        if (crsp < g_mythic_thr_crsp_min[slot]) g_mythic_thr_crsp_min[slot] = crsp;
++        if (crsp > g_mythic_thr_crsp_max[slot]) g_mythic_thr_crsp_max[slot] = crsp;
++      }
++    }
++  }
++
++  /* iOS-Mythic 2026-05-13 lightweight HOTRIP instrumentation (v3): use
++   * plain volatile globals to avoid __cxa_guard_acquire on static-local
++   * initialization, which appears to trip a stack-cookie check on
++   * ARM64EC mingw. POD types only — no constructors. Atomicity isn't
++   * critical for telemetry; occasional torn reads are fine. */
++  {
++    /* RIPs depend on FMOD's mapped base (0xeaa1d0000 in current runs).
++     * The two critsection wrappers GPT identified live at fmod+0xba27a
++     * and fmod+0xba2fa. Match on the FMOD-relative range rather than
++     * absolute address so this works across ASLR runs. */
++    int idx = -1;
++    uint64_t fmod_off = GuestRIP - 0xeaa1d0000ull;
++    switch (GuestRIP) {
++      case 0x140006fe6ull: idx = 0; break;
++      case 0x140006febull: idx = 1; break;
++      case 0x140028d20ull: idx = 2; break;
++      case 0x140028d41ull: idx = 3; break;
++      case 0x140028d46ull: idx = 4; break;
++      case 0x1400687f0ull: idx = 5; break;
++      case 0x140068816ull: idx = 6; break;
++      default:
++        /* FMOD critsection wrappers — relative to current fmod64 base. */
++        if (GuestRIP == 0xeaa28a27aull) idx = 7;       /* EnterCriticalSection wrapper */
++        else if (GuestRIP == 0xeaa28a2faull) idx = 8;  /* LeaveCriticalSection wrapper */
++        else if (GuestRIP == 0xeaa28a9d4ull) idx = 9;  /* GPT-mentioned wrapper */
++        else if (GuestRIP == 0xeaa28a9e3ull) idx = 10; /* GPT-mentioned wrapper */
++        else if (fmod_off >= 0xba000 && fmod_off < 0xbb000) idx = 11; /* any other near these */
++        break;
++    }
++    if (idx >= 0) {
++      uint64_t n = ++g_mythic_hot_count[idx];
++
++      /* Track callret_sp range — answers "leak (monotonic) vs boundary (oscillating)". */
++      uint64_t crsp = Frame->State.callret_sp;
++      g_mythic_callret_last = crsp;
++      if (crsp > g_mythic_callret_max) g_mythic_callret_max = crsp;
++      if (crsp != 0 && crsp < g_mythic_callret_min) g_mythic_callret_min = crsp;
++
++      if (idx == 5 || idx == 6) {
++        uint64_t sz = Frame->State.gregs[FEXCore::X86State::REG_RDI];
++        if (sz > g_mythic_max_alloc_size) g_mythic_max_alloc_size = sz;
++      }
++
++      if (idx == 1) {
++        uint64_t rbx = Frame->State.gregs[FEXCore::X86State::REG_RBX];
++        uint64_t rcx = Frame->State.gregs[FEXCore::X86State::REG_RCX];
++        if (rbx >= 0x10000ull && rbx < 0x800000000000ull) {
++          uint64_t rbx_0 = *reinterpret_cast<uint64_t*>(rbx);
++          if (rbx_0 >= 0x10000ull && rbx_0 < 0x800000000000ull) {
++            uint64_t vt = *reinterpret_cast<uint64_t*>(rbx_0);
++            if (vt >= 0x10000ull && vt < 0x800000000000ull) {
++              g_mythic_last_vt = vt;
++              g_mythic_last_vt2 = *reinterpret_cast<uint64_t*>(vt + 0x10);
++            }
++          }
++        }
++        if (rcx >= 0x10000ull && rcx < 0x800000000000ull) {
++          uint64_t bytes = *reinterpret_cast<uint64_t*>(rcx);
++          uint8_t b0 = bytes & 0xff;
++          if (b0 >= 0x20 && b0 <= 0x7e) g_mythic_last_str = bytes;
++        }
++      }
++
++      if ((n & 0xFFF) == 0) {
++        /* Wall-clock elapsed since first HOT sum — answers "is the game
++         * still alive at minute N?" Uses time(NULL) for second resolution. */
++        static volatile uint64_t s_start_secs = 0;
++        uint64_t now = (uint64_t)time(NULL);
++        if (s_start_secs == 0) s_start_secs = now;
++        uint64_t elapsed = now - s_start_secs;
++        LogMan::Msg::EFmt("[HOT sum t={}s] 6fe6={} 6feb={} 28d20={} 28d41={} 28d46={} 687f0={} 68816={} "
++                           "fmod27a={} fmod2fa={} fmod9d4={} fmod9e3={} fmodNear={} "
++                           "max_alloc=0x{:x} crsp[min..last..max]=0x{:x}..0x{:x}..0x{:x} "
++                           "last_vt=0x{:x} vt2=0x{:x} last_str=0x{:x}",
++                           elapsed,
++                           g_mythic_hot_count[0], g_mythic_hot_count[1], g_mythic_hot_count[2],
++                           g_mythic_hot_count[3], g_mythic_hot_count[4], g_mythic_hot_count[5],
++                           g_mythic_hot_count[6],
++                           g_mythic_hot_count[7], g_mythic_hot_count[8],
++                           g_mythic_hot_count[9], g_mythic_hot_count[10], g_mythic_hot_count[11],
++                           g_mythic_max_alloc_size,
++                           g_mythic_callret_min, g_mythic_callret_last, g_mythic_callret_max,
++                           g_mythic_last_vt, g_mythic_last_vt2, g_mythic_last_str);
++        /* Per-thread breakdown — dump all 4 slots so we can see which
++         * thread is leaking callret entries. Distance min→last is the
++         * "depth below high-water" — for the leaking thread this grows. */
++        for (int s = 0; s < 4; s++) {
++          if (g_mythic_thr_key[s] == 0) continue;
++          uint64_t mn = g_mythic_thr_crsp_min[s];
++          uint64_t la = g_mythic_thr_crsp_last[s];
++          uint64_t mx = g_mythic_thr_crsp_max[s];
++          uint64_t span = (la <= mx) ? (mx - la) : 0;
++          LogMan::Msg::EFmt("[HOT thr{} t={}s] frame=0x{:x} blocks={} "
++                             "crsp[min..last..max]=0x{:x}..0x{:x}..0x{:x} "
++                             "leak_depth=0x{:x} last_rip=0x{:x}",
++                             s, elapsed, g_mythic_thr_key[s],
++                             g_mythic_thr_count[s], mn, la, mx, span,
++                             g_mythic_thr_last_rip[s]);
++        }
++      }
++    }
++  }
+ 
+   static_cast<ContextImpl*>(Thread->CTX)->SyscallHandler->PreCompile();
+-  LogMan::Msg::IFmt("[iOS] CompileBlock: PreCompile done");
+ 
+   // Invalidate might take a unique lock on this, to guarantee that during invalidation no code gets compiled
+   auto lk = GuardSignalDeferringSection<std::shared_lock>(CodeInvalidationMutex, Thread);
+-  LogMan::Msg::IFmt("[iOS] CompileBlock: Lock acquired");
+ 
+   // Is the code in the cache?
+   // The backends only check L1 and L2, not L3
+   if (auto HostCode = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
+-    LogMan::Msg::IFmt("[iOS] CompileBlock: Found in cache at {:#x}", HostCode);
+     return HostCode;
+   }
+-  LogMan::Msg::IFmt("[iOS] CompileBlock: Not in cache, compiling...");
++
++  // iOS-Mythic: cache miss reached — count as true compile.
++  __sync_add_and_fetch(&g_cb_real_compiles, 1);
+ 
+   Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, MaxInst);
+ 
+@@ -964,7 +1243,6 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedJITCount, 1);
+ 
+   auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
+-  LogMan::Msg::IFmt("[iOS] CompileBlock: CompileCode returned, Length={}", Length);
+   auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
+   if (CodePtr == nullptr) {
+     return 0;
+diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+index 12bc7b1..b6281c2 100644
+--- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
+@@ -141,7 +141,13 @@ void Dispatcher::EmitDispatcher() {
+    * so the LDP loads (0,0) and cbnz takes us to LoopTop anyway. But if the
+    * memset somehow misses (iOS demand-fault quirks on the previously-NOACCESS
+    * region), the `ret x11` would jump to garbage. Force unconditional branch
+-   * to LoopTop. */
++   * to LoopTop.
++   *
++   * 2026-05-15: tried to re-enable this path with cbz TMP2 + state writeback
++   * guards to address the host-PC-leaking-into-State.rip bug; broke MSVCP140
++   * DllMain at unix_calls=4523 (same shape as the dispatcher-guard regression
++   * in feedback_fex_dispatcher_guard_regression.md). Reverted. The host-PC
++   * leak needs a different angle. */
+   (void)b(&LoopTop);
+ #else
+   // As ARM64EC uses this as an entrypoint for both guest calls and host returns, opportunistically try to return
+@@ -546,6 +552,23 @@ void Dispatcher::EmitDispatcher() {
+ 
+     // load static regs
+     FillStaticRegs();
++#ifdef ARCHITECTURE_arm64ec
++    // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2). The JITCallback
++    // sentinel push uses REG_CALLRET_SP after FillStaticRegs, which on iOS
++    // ARM64EC reloads x17 from State.callret_sp. If State has drifted OOB
++    // (e.g. underflow during prior dispatch), reset before stp to avoid
++    // writing the sentinel into JIT code memory.
++    {
++      ARMEmitter::ForwardLabel l_callret_ok;
++      ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++      sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
++      lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 24);
++      (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &l_callret_ok);
++      ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++      add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x400000);
++      (void)Bind(&l_callret_ok);
++    }
++#endif
+     stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
+ 
+     // Now go back to the regular dispatcher loop
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index 5885da7..b0084b0 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -1510,7 +1510,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+ 
+       // Do a bit of pointer math to figure out where we are in code
+       InstStream = AdjustAddrForSpecialRegion(_InstStream, EntryPoint, RIPToDecode);
+-      LogMan::Msg::IFmt("[iOS] Decoder: Block RIP={:#x}, InstStream={}, entering inner loop", RIPToDecode, (void*)InstStream);
++      /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Block RIP={:#x}, InstStream={}, entering inner loop", RIPToDecode, (void*)InstStream);
+     } else if (BlockResume != -1) {
+       BlockIt = BlockInfo.Blocks.begin() + BlockResume;
+       BlockResume = -1;
+@@ -1546,7 +1546,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+ 
+       LastFieldReadSize = 0;
+       if (TotalInstructions == 0) {
+-        LogMan::Msg::IFmt("[iOS] Decoder: About to decode first instruction at {:#x}, byte={:#x}", OpAddress, InstStream[0]);
++        /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: About to decode first instruction at {:#x}, byte={:#x}", OpAddress, InstStream[0]);
+       }
+       BlockIt->BlockStatus = DecodeInstruction(OpAddress);
+       if (HitBadRelocation) {
+@@ -1672,7 +1672,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+   }
+ 
+   BlockInfo.TotalInstructionCount = TotalInstructions;
+-  LogMan::Msg::IFmt("[iOS] Decoder: Done! TotalInstructions={}, Blocks={}", TotalInstructions, BlockInfo.Blocks.size());
++  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Done! TotalInstructions={}, Blocks={}", TotalInstructions, BlockInfo.Blocks.size());
+ 
+   for (auto& Block : BlockInfo.Blocks) {
+     Block.IsEntryPoint = BlockInfo.EntryPoints.contains(Block.Entry);
+@@ -1704,9 +1704,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+   // Decode operating mode from thread's CS segment.
+   const auto CSSegment = Core::CPUState::GetSegmentFromIndex(Thread->CurrentFrame->State, Thread->CurrentFrame->State.cs_idx);
+   BlockInfo.Is64BitMode = CSSegment->L == 1;
+-  LogMan::Msg::IFmt("[iOS] Decoder: CSSegment->L={}, Is64BitMode={}, Config.Is64BitMode={}", CSSegment->L, BlockInfo.Is64BitMode, (bool)CTX->Config.Is64BitMode);
++  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: CSSegment->L={}, Is64BitMode={}, Config.Is64BitMode={}", CSSegment->L, BlockInfo.Is64BitMode, (bool)CTX->Config.Is64BitMode);
+   LOGMAN_THROW_A_FMT(BlockInfo.Is64BitMode == CTX->Config.Is64BitMode, "Expected operating mode to not change at runtime!");
+-  LogMan::Msg::IFmt("[iOS] Decoder: Assertion passed OK");
++  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: Assertion passed OK");
+ 
+   EntryPoint = PC;
+   BlockInfo.EntryPoints = {PC};
+@@ -1738,7 +1738,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+ 
+   EntryBlock = true;
+   FinalInstruction = false;
+-  LogMan::Msg::IFmt("[iOS] Decoder: MaxInst={}, entering decode loop...", MaxInst);
++  /* [iOS-Mythic] verbose Decoder log suppressed */ // LogMan::Msg::IFmt("[iOS] Decoder: MaxInst={}, entering decode loop...", MaxInst);
+ }
+ 
+ } // namespace FEXCore::Frontend
+diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+index bbc59f4..232adb4 100644
+--- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
+@@ -171,6 +171,21 @@ DEF_OP(ExitFunction) {
+         // ARM64EC entry thunks). Reload from State.callret_sp before pushing
+         // the call-return frame so we don't stp to wherever x17 was left.
+         ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++        // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2). iOS doesn't
++        // honor PAGE_NOACCESS on the callret stack's guard pages, so the
++        // SEH-driven HandleAccessViolation never resets the stack on
++        // underflow. Detect-and-reset inline before the `stp` to keep stack
++        // pointer in-range. Uses TMP1 as scratch; adr below re-initializes it.
++        {
++          ARMEmitter::ForwardLabel l_callret_ok;
++          ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++          sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
++          lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 24);
++          (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &l_callret_ok);
++          ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++          add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x400000);
++          (void)Bind(&l_callret_ok);
++        }
+ #endif
+         if (!Op->CallReturnBlock.IsInvalid()) {
+           auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
+@@ -180,6 +195,12 @@ DEF_OP(ExitFunction) {
+         } else {
+           stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
+         }
++#ifdef ARCHITECTURE_arm64ec
++        /* Write back post-push x17 so dispatcher LoopTop's reload picks
++         * up the new top. Without this, in-register PUSH changes get
++         * lost on next dispatcher iteration and the entry leaks. */
++        str(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++#endif
+       } else if (Op->Hint == IR::BranchHint::CheckTF) {
+         ARMEmitter::ForwardLabel TFUnset;
+         ldrb(TMP1, STATE_PTR(CpuStateFrame, State.flags[X86State::RFLAG_TF_RAW_LOC]));
+@@ -203,7 +224,32 @@ DEF_OP(ExitFunction) {
+ 
+     if (Op->Hint == IR::BranchHint::Return) {
+       // First try to pop from the call-ret stack, otherwise follow the normal path (but ending in a ret)
++#ifdef ARCHITECTURE_arm64ec
++      // iOS-Mythic 2026-05-15: POP-side x17 reload + state sync. ARM64EC
++      // native returns clobber x17, so we reload from State.callret_sp
++      // before popping. AND we write back the post-pop value to State so
++      // the dispatcher LoopTop's reload (line 134 of Dispatcher.cpp) sees
++      // the updated stack pointer. Without this writeback, in-register
++      // pop changes are lost on next dispatcher iteration — quantified
++      // as ~1 leaked callret entry per block dispatch on Thumper FMOD.
++      ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++      // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2) — see CALL push
++      // site for rationale. Reset to DefaultLocation if OOB before ldp.
++      {
++        ARMEmitter::ForwardLabel l_callret_ok;
++        ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++        sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
++        lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 24);
++        (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &l_callret_ok);
++        ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++        add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x400000);
++        (void)Bind(&l_callret_ok);
++      }
++#endif
+       ldp<ARMEmitter::IndexType::POST>(TMP1, TMP2, REG_CALLRET_SP, 0x10);
++#ifdef ARCHITECTURE_arm64ec
++      str(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++#endif
+       sub(TMP1, TMP1, RipReg.X());
+       (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &SkipFullLookup);
+     }
+@@ -232,6 +278,18 @@ DEF_OP(ExitFunction) {
+       // from State.callret_sp before pushing the call-return frame, since
+       // native ARM64EC returns leave x17 pointing at an arbitrary RX page.
+       ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++      // iOS-Mythic 2026-05-18: inline bounds-guard (Tier-2). Same as
++      // linked-path CALL push.
++      {
++        ARMEmitter::ForwardLabel l_callret_ok;
++        ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++        sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
++        lsr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 24);
++        (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &l_callret_ok);
++        ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
++        add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x400000);
++        (void)Bind(&l_callret_ok);
++      }
+ #endif
+       if (!Op->CallReturnBlock.IsInvalid()) {
+         auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
+@@ -241,6 +299,10 @@ DEF_OP(ExitFunction) {
+       } else {
+         stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
+       }
++#ifdef ARCHITECTURE_arm64ec
++      /* Write back post-push x17 so dispatcher LoopTop reload sees it. */
++      str(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
++#endif
+       blr(TMP2);
+       (void)Bind(&l_CallReturn);
+     } else if (Op->Hint == IR::BranchHint::Return) {
+diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+index 19f94ae..70c9602 100644
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -914,11 +914,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ 
+   // JIT output is first written to a temporary buffer and later relocated to the CodeBuffer.
+   // This minimizes lock contention of CodeBufferWriteMutex.
+-  LogMan::Msg::IFmt("[iOS] Arm64JIT: SSACount={} DesiredRange={}", SSACount, DesiredBufferRange);
++  // [iOS-Mythic] verbose SSACount/TempBuf logs suppressed
+   auto TempCodeBufferInfo = TempCodeBufferAllocator.ReownOrClaimBufferWithSize(DesiredBufferRange);
+   auto TempCodeBuffer = TempCodeBufferInfo.Ptr;
+   const uint32_t UsableBufferRange = TempCodeBufferInfo.Size - FEXCore::Utils::FEX_PAGE_SIZE;
+-  LogMan::Msg::IFmt("[iOS] Arm64JIT: TempBuf={:#x} size={} usable={}", (uintptr_t)TempCodeBuffer, TempCodeBufferInfo.Size, UsableBufferRange);
+ 
+   SetBuffer(TempCodeBuffer, UsableBufferRange);
+ #ifdef __APPLE__
+@@ -966,14 +965,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+   PendingTargetLabel = nullptr;
+   PendingCallReturnTargetLabel = nullptr;
+ 
+-  LogMan::Msg::IFmt("[iOS] Arm64JIT: Entering IR block loop, BlockCount={}", IR->GetHeader()->BlockCount);
++  // [iOS-Mythic] verbose IR block loop entry log suppressed
+   for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
+     auto BlockIROp = BlockHeader->CW<FEXCore::IR::IROp_CodeBlock>();
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+     LOGMAN_THROW_A_FMT(BlockIROp->Header.Op == IR::OP_CODEBLOCK, "IR type failed to be a code block");
+ #endif
+ 
+-    LogMan::Msg::IFmt("[iOS] Arm64JIT: Block header start, EntryPoint={}", BlockIROp->EntryPoint);
++    // [iOS-Mythic] verbose per-block log suppressed — was flooding 100MB log in 20m before splash.
+     auto BlockStartHostCode = GetCursorAddress<uint8_t*>();
+     {
+       const auto Node = IR->GetID(BlockNode);
+@@ -990,7 +989,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+ 
+       if (BlockIROp->EntryPoint) {
+         uint64_t BlockStartRIP = Entry + BlockIROp->GuestEntryOffset;
+-        LogMan::Msg::IFmt("[iOS] Arm64JIT: EmitEntryPoint for RIP={:#x}", BlockStartRIP);
++        // [iOS-Mythic] verbose EntryPoint log suppressed
+ 
+         const auto IsReturnTarget = CallReturnTargets.try_emplace(Node).first;
+         if (PendingTargetLabel) {
+@@ -1007,7 +1006,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+         DebugData->GuestOpcodes.push_back({BlockIROp->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
+ 
+         EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
+-        LogMan::Msg::IFmt("[iOS] Arm64JIT: EmitEntryPoint done");
++        // [iOS-Mythic] verbose EmitEntryPoint-done log suppressed
+       }
+ 
+       if (PendingCallReturnTargetLabel) {
+@@ -1020,13 +1019,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+       BindOrRestart(Target);
+     }
+ 
+-    LogMan::Msg::IFmt("[iOS] Arm64JIT: Block header done, entering op dispatch");
++    // [iOS-Mythic] verbose block-header-done log suppressed
+     {
+       int OpIdx = 0;
+       for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+-        if (OpIdx < 5 || OpIdx % 10 == 0) {
+-          LogMan::Msg::IFmt("[iOS] Arm64JIT: Dispatching Op[{}] = {}", OpIdx, FEXCore::IR::GetName(IROp->Op));
+-        }
++        // [iOS-Mythic] verbose per-op dispatch log suppressed
+         switch (IROp->Op) {
+ #define REGISTER_OP(op, x) \
+   case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
+@@ -1039,7 +1036,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+         }
+         OpIdx++;
+       }
+-      LogMan::Msg::IFmt("[iOS] Arm64JIT: Block done, dispatched {} ops", OpIdx);
++      // [iOS-Mythic] verbose block-done log suppressed
+     }
+ 
+     DebugData->Subblocks.push_back({static_cast<uint32_t>(BlockStartHostCode - CodeData.BlockBegin),
+diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
+index 7c64dd8..65c83d2 100644
+--- a/FEXCore/include/FEXCore/Core/CoreState.h
++++ b/FEXCore/include/FEXCore/Core/CoreState.h
+@@ -107,7 +107,11 @@ struct alignas(64) CPUState {
+   uint64_t L1Pointer {};
+   uint64_t L1Mask {};
+   uint64_t callret_sp {};
+-  uint64_t _pad1 {};
++  // iOS-Mythic 2026-05-18: callret_sp_base = Thread->CallRetStackBase, mirrored
++  // here so JIT code can emit inline bounds checks against it. Initialized by
++  // CallRetStack::InitializeThread alongside callret_sp. Repurposes _pad1
++  // (same offset, same size — was alignment padding).
++  uint64_t callret_sp_base {};
+ 
+   // Cacheline: 1,2,3,4
+   // The high 128-bits of AVX registers when not being emulated by SVE256.
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 112e01f..532738a 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -42,6 +42,11 @@ void InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+ #endif
+ 
+   Thread->CurrentFrame->State.callret_sp = GetInfoThread(Thread).DefaultLocation;
++  // iOS-Mythic 2026-05-18: mirror CallRetStackBase into CpuStateFrame so JIT
++  // code can emit inline bounds checks. Needed because iOS Wine doesn't honor
++  // PAGE_NOACCESS on the guard pages, so the SEH-driven HandleAccessViolation
++  // never fires — JIT code has to detect-and-reset proactively.
++  Thread->CurrentFrame->State.callret_sp_base = reinterpret_cast<uint64_t>(Thread->CallRetStackBase);
+ }
+ 
+ void DestroyThread(FEXCore::Core::InternalThreadState* Thread) {

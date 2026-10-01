@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Gabriel=20Iv=C4=83ncescu?= <gabrielopcode@gmail.com>
+Date: Mon, 15 Dec 2025 22:22:34 +0200
+Subject: [PATCH] dwmapi: Add DWMWA_CLOAKED stub for DwmGetWindowAttribute.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Gabriel Ivăncescu <gabrielopcode@gmail.com>
+Valve-commit: 9111025543bc338c74fc9d4b2b0b253907f1840a
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-09-28-wine-proton-rebase.md
+Offered-upstream: no
+---
+ dlls/dwmapi/dwmapi_main.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dlls/dwmapi/dwmapi_main.c b/dlls/dwmapi/dwmapi_main.c
+index bcda7a8..566afa8 100644
+--- a/dlls/dwmapi/dwmapi_main.c
++++ b/dlls/dwmapi/dwmapi_main.c
+@@ -226,6 +226,15 @@ HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attrib
+         SetThreadDpiAwarenessContext(context);
+         break;
+     }
++    case DWMWA_CLOAKED:
++        if (size < sizeof(DWORD))
++            return E_INVALIDARG;
++
++        FIXME("DWMWA_CLOAKED: always returning 0.\n");
++        *(DWORD*)(pv_attribute) = 0;
++        hr = S_OK;
++        break;
++
+     default:
+         FIXME("attribute %ld not implemented.\n", attribute);
+         hr = E_NOTIMPL;

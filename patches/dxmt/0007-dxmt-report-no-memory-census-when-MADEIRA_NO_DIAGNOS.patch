@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 25 Sep 2026 12:00:00 +0200
+Subject: [PATCH] dxmt: report no memory census when MADEIRA_NO_DIAGNOSTICS is
+ set
+
+The memory census Madeira's port added reports at error level, on every
+rising 64 MB high-water mark and every 30 dynamic-buffer sequences: about
+590 reports, 1.4 MB of log, in 90 s of a Hollow Knight menu. It only
+measures, and DXMT_LOG_LEVEL=error cannot hold it back. With
+MADEIRA_NO_DIAGNOSTICS set, mem_census_report (which also runs the
+dynamic-buffer and creation-site reports) returns at once; the counters
+keep counting. The host app's release build sets it; without it nothing
+changes.
+
+Class: host-app
+Evidence: docs/evidence/2026-09-25-release-build.md
+Offered-upstream: no
+---
+ src/dxmt/dxmt_mem_census.cpp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/dxmt/dxmt_mem_census.cpp b/src/dxmt/dxmt_mem_census.cpp
+index 5799585..d261232 100644
+--- a/src/dxmt/dxmt_mem_census.cpp
++++ b/src/dxmt/dxmt_mem_census.cpp
+@@ -1,5 +1,6 @@
+ #include "dxmt_mem_census.hpp"
+ #include "log/log.hpp"
++#include "util_env.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -165,6 +166,13 @@ mem_census_set_device(WMT::Device d) { g_census_device = d; g_census_device_vali
+ 
+ void
+ mem_census_report(const char *why) {
++  /* Playport: MADEIRA_NO_DIAGNOSTICS (the host app's release build) reports
++   * nothing. The census only measures, and its reports come on every rising
++   * high-water mark and every 30 dynamic-buffer sequences, at error level, so
++   * DXMT_LOG_LEVEL cannot hold them back. The counters keep counting. */
++  static const bool quiet = !env::getEnvVar("MADEIRA_NO_DIAGNOSTICS").empty();
++  if (quiet)
++    return;
+   uint64_t tl = 0, tp = 0, tr = 0;
+   for (int i = 0; i < MEMOWN_COUNT; i++) {
+     tl += g_mem_census.live[i].load(std::memory_order_relaxed);

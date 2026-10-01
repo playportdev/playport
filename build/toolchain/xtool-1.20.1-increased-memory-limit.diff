@@ -1,0 +1,44 @@
+diff --git a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift
+index 2dca463..bff7b72 100644
+--- a/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
++++ b/Sources/XKit/DeveloperServices/App IDs/Entitlements/DeveloperServicesCapability.swift	
+@@ -139,6 +139,13 @@ extension WirelessAccessoryEntitlement: EntitlementWithCapability {
+     }
+ }
+ 
++extension IncreasedMemoryLimitEntitlement: EntitlementWithCapability {
++    var capability: DeveloperServicesCapability {
++        // Playport local patch: the reference Madeira app signs with this entitlement.
++        DeveloperServicesCapability(rawName: "INCREASED_MEMORY_LIMIT", isFree: true)
++    }
++}
++
+ extension WiFiAwareEntitlement: EntitlementWithCapability {
+     var capability: DeveloperServicesCapability {
+         DeveloperServicesCapability(rawName: "WIFI_AWARE", isFree: false)
+diff --git a/Sources/XKit/Model/Entitlements/EntitlementTypes.swift b/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
+index 1d65a04..d67e40d 100644
+--- a/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
++++ b/Sources/XKit/Model/Entitlements/EntitlementTypes.swift
+@@ -27,6 +27,7 @@ extension EntitlementContainer {
+         InterAppAudioEntitlement.self,
+         WirelessAccessoryEntitlement.self,
+         WiFiAwareEntitlement.self,
++        IncreasedMemoryLimitEntitlement.self,
+         HomeKitEntitlement.self,
+         HealthKitEntitlement.self,
+     ]
+@@ -156,6 +157,13 @@ public struct WirelessAccessoryEntitlement: Entitlement, RawRepresentable {
+     public init(rawValue: Bool) { self.rawValue = rawValue }
+ }
+ 
++public struct IncreasedMemoryLimitEntitlement: Entitlement, RawRepresentable {
++    public static let identifier = "com.apple.developer.kernel.increased-memory-limit"
++
++    public var rawValue: Bool
++    public init(rawValue: Bool) { self.rawValue = rawValue }
++}
++
+ public struct WiFiAwareEntitlement: Entitlement, RawRepresentable {
+     public static let identifier = "com.apple.developer.wifi-aware"
+ 

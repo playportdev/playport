@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <contact@volta.audio>
+Date: Fri, 24 Apr 2026 15:01:23 +0800
+Subject: [PATCH] iOS: remap MTLStorageModeManaged -> Shared (iOS has no
+ Managed)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+iOS's Metal doesn't implement MTLStorageModeManaged — attempting to create
+a buffer with storage mode 1 raises:
+
+    -[IOGPUMetalBuffer initWithDevice:...]:219:
+        failed assertion `Invalid storageMode 1'
+
+This crashes DXMT immediately after the first shader is created (the
+staging buffer / argument-buffer allocators request Managed storage).
+
+iOS has unified CPU/GPU memory, so Shared gives the same CPU+GPU
+read/write semantics without the didModifyRange: sync step Managed
+requires on macOS. Remap at the symbol level in winemetal.h:
+
+    #ifdef DXMT_IOS
+    #define WMTResourceStorageModeManaged WMTResourceStorageModeShared
+    #endif
+
+which transforms every existing call-site's \`WMTResourceStorageModeManaged\`
+into \`WMTResourceStorageModeShared\` without touching each one.
+
+DXMT_IOS is auto-defined in meson.build when host_machine is
+aarch64-windows (our Mythic iOS PE target).
+
+Madeira-commit: d7ffd0820d1c9961350278ecbb17e7c9208d39bd
+Rebased: clean
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-dxmt-latest-rebase.md
+Offered-upstream: no
+---
+ meson.build               | 8 ++++++++
+ src/winemetal/winemetal.h | 7 +++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/meson.build b/meson.build
+index e10c901..0bddfcc 100644
+--- a/meson.build
++++ b/meson.build
+@@ -139,6 +139,14 @@ endif
+ 
+ add_project_arguments('-DDXMT_PAGE_SIZE=4096', language: 'cpp')
+ 
++# On iOS all Metal storage modes that are Managed on macOS must become
++# Shared — iOS has unified memory and raises an assertion for storageMode 1
++# (Managed). Enable for aarch64-windows cross-build which is our iOS target.
++if host_machine.cpu_family() == 'aarch64' and host_machine.system() == 'windows'
++  add_project_arguments('-DDXMT_IOS=1', language: 'cpp')
++  add_project_arguments('-DDXMT_IOS=1', language: 'c')
++endif
++
+ dxmt_version = vcs_tag(
+   command: ['git', 'describe', '--always'],
+   input:  'version.h.in',
+diff --git a/src/winemetal/winemetal.h b/src/winemetal/winemetal.h
+index 97fffc7..c9024f5 100644
+--- a/src/winemetal/winemetal.h
++++ b/src/winemetal/winemetal.h
+@@ -122,6 +122,13 @@ enum WMTResourceOptions : uint64_t {
+   WMTResourceOptionCPUCacheModeWriteCombined = 1,
+ };
+ 
++#ifdef DXMT_IOS
++/* iOS Metal has no Managed storage mode — unified memory means Shared gives
++ * the same CPU+GPU read/write semantics without needing didModifyRange:.
++ * Remap at the symbol level so all existing DXMT call sites just work. */
++#define WMTResourceStorageModeManaged WMTResourceStorageModeShared
++#endif
++
+ struct WMTMemoryPointer {
+   void *ptr;
+ #if defined(__i386__)

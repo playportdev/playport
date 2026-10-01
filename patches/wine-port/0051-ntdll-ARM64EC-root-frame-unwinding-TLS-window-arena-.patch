@@ -1,0 +1,1227 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 16 Sep 2026 09:26:09 +0800
+Subject: [PATCH] ntdll ARM64EC: root-frame unwinding, TLS window, arena
+ hand-over and loader traces
+
+Terminal root frame accepted once per walk (ml633), the static TLS window
+(ml617), the arena hand-over from the loader (ml797), scanner and loader
+diagnostics that name what failed (ml660, ml757, ml793), plus the
+wineserver thread bookkeeping these rely on.
+
+(cherry picked from commit abf22e09603014b8f55bb79bd1cf6badf96c34ca)
+Madeira-commit: 90455e38c0162a111397cb48e9d20d6d8eb50e6c
+Rebased: resolved
+Class: madeira-port
+Evidence: docs/evidence/2026-09-26-wine-latest-rebase.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c         |  92 ++++++-
+ dlls/ntdll/ntdll.spec       |   2 +
+ dlls/ntdll/signal_arm64ec.c | 489 +++++++++++++++++++++++++++++++++++-
+ dlls/ntdll/sync.c           |  86 +++++++
+ dlls/ntdll/thread.c         |  14 ++
+ dlls/ntdll/unixlib.h        |  15 ++
+ server/event.c              | 227 ++++++++++++++++-
+ server/handle.c             |  17 ++
+ server/thread.c             |  10 +
+ 9 files changed, 948 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 3a09ef92c91..f02613a255d 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -84,6 +84,19 @@ void *__wine_syscall_dispatcher = NULL;
+  * instead of hardcoding a slot they do not own. Zero means "not yet
+  * discovered" and must never be used as an offset. */
+ unsigned int ios_teb_tsd_offset = 0;
++
++/* iOS-Madeira ml797: the FEX arena, published by ntdll-unix and handed to the
++ * emulator from arm64ec_process_init_dispatchers().
++ *
++ * It cannot travel as an environment variable. The consumer is rpmalloc's band
++ * selector, which runs before the ARM64EC TEB exists and before ucrtbase's
++ * DllMain -- so getenv() recurses in _lock(17) and GetEnvironmentVariableA
++ * faults reading the TEB. Both were shipped and both killed every launch. A
++ * plain data export is the only channel that costs no call at all.
++ *
++ * Zero means "no arena published"; the emulator then selects its own band. */
++ULONG_PTR ios_fex_arena_base = 0;
++ULONG_PTR ios_fex_arena_end = 0;   /* exclusive */
+ unixlib_handle_t __wine_unixlib_handle = 0;
+ 
+ /* windows directory */
+@@ -4859,6 +4872,69 @@ void WINAPI LdrShutdownThread(void)
+     /* don't do any detach calls if process is exiting */
+     if (process_detaching) return;
+ 
++    /* iOS-Madeira ml843 [detach-probe]: is the FEX emulator stack top already
++     * sitting in this thread's TLS BEFORE any detach cleanup runs?
++     *
++     * Two fresh UE5 runs died in the engine allocator freeing exactly this
++     * thread's EmulatorStackBase during thread detach. If the value is already
++     * in a TLS slot, an FLS slot or the static TLS block here, the allocator was
++     * handed it by whoever wrote that slot; if it is absent here and present at
++     * the fatal, the detach path itself introduced it. Placed ABOVE the FLS
++     * pass on purpose: that is the first cleanup that runs per-thread
++     * destructors. Passive, bounded, fault-safe reads only. */
++    {
++        static LONG probed;
++        if (InterlockedIncrement( &probed ) <= 12)
++        {
++            CHPE_V2_CPU_AREA_INFO *area = NtCurrentTeb()->ChpeV2CpuAreaInfo;
++            ULONG_PTR top = area ? (ULONG_PTR)area->EmulatorStackBase : 0;
++            ULONG_PTR alo = (ULONG_PTR)area, ahi = alo + 0x58;
++            unsigned hits = 0, k, b;
++            void **blocks = NtCurrentTeb()->ThreadLocalStoragePointer;
++
++#define IOS_DP_CHECK(val, fmt, ...) do { ULONG_PTR v_ = (ULONG_PTR)(val); \
++                if (v_ && (v_ == top || (area && v_ >= alo && v_ < ahi))) { hits++; \
++                    ERR( "[detach-probe] ml843   " fmt " = %p %s\n", __VA_ARGS__, (void *)v_, \
++                         v_ == top ? "== EMULATOR STACK TOP" : "points INTO the CPU area" ); } } while (0)
++
++            for (k = 0; k < 64; k++) IOS_DP_CHECK( NtCurrentTeb()->TlsSlots[k], "TlsSlots[%u]", k );
++            if (NtCurrentTeb()->TlsExpansionSlots)
++                for (k = 0; k < 1024; k++)
++                    IOS_DP_CHECK( NtCurrentTeb()->TlsExpansionSlots[k], "TlsExpansionSlots[%u]", k );
++            if (NtCurrentTeb()->FlsSlots)
++                for (k = 0; k < 128; k++)
++                    IOS_DP_CHECK( ((void **)NtCurrentTeb()->FlsSlots)[k], "FlsSlots[%u]", k );
++            for (b = 0; blocks && b < tls_module_count && b < 8; b++)
++            {
++                ULONG_PTR blk[128];
++                SIZE_T got = 0;
++                if (!blocks[b]) continue;
++                if (NtReadVirtualMemory( GetCurrentProcess(), blocks[b], blk, sizeof(blk), &got ))
++                    continue;
++                for (k = 0; k < got / sizeof(ULONG_PTR); k++)
++                    IOS_DP_CHECK( blk[k], "static TLS block %u +0x%x", b, (unsigned)(k * 8) );
++            }
++#undef IOS_DP_CHECK
++            ERR( "[detach-probe] ml843 tid=%04x top=%p area=%p tls-blocks=%u hits=%u (before FLS/detach cleanup)\n",
++                 (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, (void *)top, (void *)area,
++                 blocks ? (unsigned)tls_module_count : 0u, hits );
++            /* ml844: the object at +0x38 is 16 bytes with a destructor that frees
++             * its first word. If +0x40 carries a small count pair the engine's own
++             * array growth stored the pointer (the allocator RETURNED it); if it
++             * is zero, only the pointer word was written -- a stray write. */
++            if (blocks && blocks[0])
++            {
++                ULONG64 q[12]; SIZE_T got = 0;
++                if (!NtReadVirtualMemory( GetCurrentProcess(), blocks[0], q, sizeof(q), &got ) && got == sizeof(q))
++                    ERR( "[detach-probe] ml844   tls0[+00..+58] = %llx %llx %llx %llx %llx %llx | %llx %llx %llx | %llx %llx %llx\n",
++                         (unsigned long long)q[0], (unsigned long long)q[1], (unsigned long long)q[2],
++                         (unsigned long long)q[3], (unsigned long long)q[4], (unsigned long long)q[5],
++                         (unsigned long long)q[6], (unsigned long long)q[7], (unsigned long long)q[8],
++                         (unsigned long long)q[9], (unsigned long long)q[10], (unsigned long long)q[11] );
++            }
++        }
++    }
++
+     RtlProcessFlsData( NtCurrentTeb()->FlsSlots, 1 );
+ 
+     RtlEnterCriticalSection( &loader_section );
+@@ -5601,7 +5677,21 @@ void loader_init( CONTEXT *context, void **entry )
+         if (NtCurrentTeb()->WowTebOffset) init_wow64( context );
+ #endif
+ #ifdef __arm64ec__
+-        arm64ec_thread_init();
++        {
++            /* The emulator can fail to start a thread -- its address band is
++             * finite, and a title with enough threads exhausts it. This status
++             * used to be discarded, and the emulator then faulted its way to a
++             * stack overflow and died HOLDING loader_section, so the next
++             * module load blocked forever and the process sat inert with
++             * nothing logged. Release the lock and end only this thread. */
++            NTSTATUS ec_status = arm64ec_thread_init();
++            if (ec_status)
++            {
++                ERR( "arm64ec_thread_init failed %lx -- terminating this thread only\n", ec_status );
++                RtlLeaveCriticalSection( &loader_section );
++                for (;;) NtTerminateThread( GetCurrentThread(), ec_status );
++            }
++        }
+ #endif
+ 
+         if (NtCurrentTeb()->SkipThreadAttach)
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 0f21e4e0819..8635bff6cea 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1773,6 +1773,8 @@
+ @ extern -private -arch=arm64ec p_ios_jit_translate_addr
+ @ extern -private -arch=arm64,arm64ec p_ios_jit_reverse_translate_addr
+ @ extern -private ios_teb_tsd_offset
++@ extern -private ios_fex_arena_base
++@ extern -private ios_fex_arena_end
+ @ extern -private __wine_unixlib_handle
+ 
+ # Debugging
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index a99fba82930..f993e7d86c7 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -108,7 +108,46 @@ struct ec_stack_window
+     ULONG     repeats;
+     BOOL      on_emu;      /* which segment the baseline refers to */
+ };
+-static __thread struct ec_stack_window ec_win;
++/* iOS-Madeira ml848: NOT a thread-local. THE FIX FOR THE UE5 THREAD-EXIT FATAL.
++ *
++ * ml617 declared this window as static TLS. An ntdll with static TLS is a
++ * design error on this port: the loader assigns TLS slots only to modules it
++ * maps through the normal path, never to ntdll itself, so ntdll's `_tls_index`
++ * stayed at its zero initial value and `ThreadLocalStoragePointer[0]` -- THE
++ * GAME EXECUTABLE'S OWN THREAD-LOCAL BLOCK -- was where this struct actually
++ * lived. Every exception dispatch zeroed and then filled it on top of the
++ * exe's thread-locals at +0x20..+0x60: `emu_hi` (the FEX emulator stack top)
++ * landed on a UE5 thread-local whose destructor frees its first word, and the
++ * engine allocator refused our stack top with "FMallocBinned2 Attempt to free
++ * an unrecognized block" at every thread exit. Six probe rounds, a page write
++ * watch and offline disassembly of the executable converged on the pool copy
++ * of ec_stack_window_begin as the writer.
++ *
++ * The TEB has no contiguous 64 free bytes (Instrumentation[1,6,7,8,9,10] are
++ * taken), and nothing may allocate in a fault path. What every EC thread does
++ * own is the CHPE CPU-area page: thread_ios.c places the 0x58-byte area at the
++ * base of a committed 0x40000 region with the x64 context inline at +0x50, and
++ * FEX then replaces that region's stack with its own, leaving the bytes after
++ * the context unused. The state lives there, aligned, never allocated, never
++ * aliased. A thread with no CPU area (not an EC thread) gets a static fallback,
++ * i.e. the pre-ml617 permissive behaviour. */
++struct ec_thread_state
++{
++    struct ec_stack_window win;
++    int root_used;          /* ml633: terminal root frame accepted once per walk */
++};
++static struct ec_thread_state ec_state_fallback;
++static inline struct ec_thread_state *ec_state( void )
++{
++    CHPE_V2_CPU_AREA_INFO *area = get_arm64ec_cpu_area();
++    ULONG_PTR p;
++    if (!area) return &ec_state_fallback;
++    p = (ULONG_PTR)area + FIELD_OFFSET( CHPE_V2_CPU_AREA_INFO, EmulatorDataInline ) + sizeof(ARM64EC_NT_CONTEXT);
++    p = (p + 15) & ~(ULONG_PTR)15;
++    return (struct ec_thread_state *)p;
++}
++#define ec_win          (ec_state()->win)
++#define ml633_root_used (ec_state()->root_used)
+ 
+ static void ec_stack_window_begin( ULONG_PTR rsp )
+ {
+@@ -645,6 +684,86 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )
+                  "(len=%p log=%p) -- band selection has not run yet\n", len, log );
+     }
+ 
++    /* ml797: hand the arena to the emulator's band selector as PLAIN DATA.
++     *
++     * The selector cannot fetch it for itself. It runs during rpmalloc init,
++     * before the ARM64EC TEB exists and before ucrtbase's DllMain, so getenv()
++     * recurses forever in _lock(17) and GetEnvironmentVariableA faults reading
++     * the TEB -- ml793 and its attempted fix each killed every launch, x64 cube
++     * included. Writing its globals from here costs the selector no call at all.
++     *
++     * This is the right site for it, for the same reason the log above is read
++     * here: it runs BEFORE the selector (the else-branch above says so), and it
++     * holds the module handle for THIS pseudo-process, which carries its own
++     * libarm64ecfex mapping inside the shared Mach task.
++     *
++     * Validation belongs here too, not in the selector -- this side can name the
++     * reason in the log. A published-but-invalid arena zeroes the band, which
++     * the selector reports as "no band" rather than silently selecting one and
++     * recreating the overlap the arena exists to prevent. */
++    {
++        /* ml800: ask the UNIX side, never an ntdll global.
++         *
++         * ml799 read `extern ULONG_PTR ios_fex_arena_base` here and got zero on
++         * every run, while the unix side had demonstrably published the right
++         * value moments earlier. ntdll's image is copied into the JIT pool
++         * BEFORE that publication -- the [jit-pool] line precedes it in the log
++         * -- so the linked read resolved inside a stale duplicate of ntdll's
++         * .data. FEX then selected its own band while an 8GB arena sat held,
++         * which is precisely the ml757 configuration, and rendering stopped.
++         *
++         * ios_teb_tsd_offset avoids this only because its reader goes through
++         * GetProcAddress on the live module. The unix side has one copy per
++         * Mach task and cannot be duplicated, so it is the authoritative source. */
++        struct ios_get_fex_arena_params arena_params = { 0, 0 };
++        ULONG_PTR ios_fex_arena_base = 0, ios_fex_arena_end = 0;
++        ULONG_PTR *band_base = RtlFindExportedRoutineByName( module, "ios_fex_band_base" );
++        ULONG_PTR *band_end  = RtlFindExportedRoutineByName( module, "ios_fex_band_end" );
++
++        if (!WINE_UNIX_CALL( unix_ios_get_fex_arena, &arena_params ))
++        {
++            ios_fex_arena_base = (ULONG_PTR)arena_params.base;
++            ios_fex_arena_end  = (ULONG_PTR)arena_params.end;
++        }
++        else
++            ERR( "[fex-arena] ml800 unix_ios_get_fex_arena FAILED -- cannot learn the arena; "
++                 "the emulator will select its own band\n" );
++
++        if (!band_base || !band_end)
++            ERR( "[fex-arena] ml797 emulator exports ios_fex_band_base/end NOT FOUND "
++                 "(base=%p end=%p) -- arena cannot be handed over\n", band_base, band_end );
++        else if (!ios_fex_arena_base && !ios_fex_arena_end)
++            ERR( "[fex-arena] ml797 no arena published this run -- emulator selects its own "
++                 "band, as before\n" );
++        else
++        {
++            const char *why = NULL;
++            ULONG_PTR b = ios_fex_arena_base, e = ios_fex_arena_end;
++
++            if (!b || !e)                     why = "zero base or end";
++            else if (e <= b)                  why = "end is not above base";
++            else if (b & 0xffff)              why = "base is not 64K aligned";
++            else if (e & 0xffff)              why = "end is not 64K aligned";
++            else if (e - b < 0x40000000ull)   why = "range is under the 1GB minimum";
++
++            if (why)
++            {
++                *band_base = 0;
++                *band_end  = 0;
++                ERR( "[fex-arena] ml797 PUBLISHED ARENA REJECTED [%p,%p): %s -- band zeroed; the "
++                     "emulator will report no band rather than select one\n",
++                     (void *)b, (void *)e, why );
++            }
++            else
++            {
++                *band_base = b;
++                *band_end  = e - 1;   /* the selector's end is INCLUSIVE */
++                ERR( "[fex-arena] ml797 ARENA HANDED OVER base=%p end=%p (inclusive) -- the "
++                     "selector must not run\n", (void *)*band_base, (void *)*band_end );
++            }
++        }
++    }
++
+ #define GET_PTR(name) p ## name = arm64ec_redirect_ptr( module, \
+                                       RtlFindExportedRoutineByName( module, #name ), metadata )
+     GET_PTR( BTCpu64FlushInstructionCache );
+@@ -2536,8 +2655,194 @@ static void ios_seh_xlate_note( PEXCEPTION_ROUTINE orig, PEXCEPTION_ROUTINE fina
+  *
+  * Call the SEH handlers.
+  */
++/* iOS-Madeira ml812: bounded, fault-safe string dump for exception parameters.
++ *
++ * ml811 proved the fatal arrives as a SOFTWARE exception, not a C++ throw:
++ * PoolThread 5 raised OutputDebugStringW (0x4001000a), then OutputDebugStringA
++ * (0x40010006), then the game's own report code 0x4000 -- and that same thread
++ * owns the deadlocked allocator lock. The failure TEXT is sitting in those
++ * parameters; ml811 logged that they existed but not what they said.
++ *
++ * Reads go through NtReadVirtualMemory so a bad pointer returns a status
++ * instead of faulting inside exception dispatch. No allocation, no locks. */
++static int ios_exc_dump_str( const char *what, ULONG_PTR addr, SIZE_T len, int wide )
++{
++    char out[224];
++    SIZE_T got = 0, n, i;
++
++    if (!addr || !len) return 0;
++    memset( out, 0, sizeof(out) );
++    n = len;
++    if (wide)
++    {
++        WCHAR wbuf[110];
++        if (n > 110) n = 110;
++        if (NtReadVirtualMemory( GetCurrentProcess(), (void *)addr, wbuf, n * sizeof(WCHAR), &got ) || !got)
++        {
++            ERR( "[exc] ml812   %s UNREADABLE at %p\n", what, (void *)addr );
++            return 0;
++        }
++        n = got / sizeof(WCHAR);
++        for (i = 0; i < n && i < sizeof(out) - 1; i++)
++        {
++            WCHAR c = wbuf[i];
++            if (!c) break;
++            out[i] = (c >= 32 && c < 127) ? (char)c : '.';
++        }
++        out[i] = 0;
++    }
++    else
++    {
++        if (n > sizeof(out) - 1) n = sizeof(out) - 1;
++        if (NtReadVirtualMemory( GetCurrentProcess(), (void *)addr, out, n, &got ) || !got)
++        {
++            ERR( "[exc] ml812   %s UNREADABLE at %p\n", what, (void *)addr );
++            return 0;
++        }
++        for (i = 0; i < got && i < sizeof(out) - 1; i++)
++        {
++            if (!out[i]) break;
++            if (out[i] < 32 || (unsigned char)out[i] >= 127) out[i] = '.';
++        }
++        out[i] = 0;
++    }
++    ERR( "[exc] ml812   %s: \"%s\"\n", what, out );
++    return strstr( out, "LowLevelFatalError" ) != NULL;
++}
++
++/* ---------------------------------------------------------------------------
++ * iOS-Madeira ml843 [fatal-probe]: WHO handed the emulator stack top to the
++ * engine allocator?
++ *
++ * Two fresh UE5 runs both died in FMallocBinned2::Free with a pointer that was
++ * exactly the failing thread's own FEX EmulatorStackBase (CPU area +0x8),
++ * during thread-detach cleanup. Provenance is settled; the PATH is not. The
++ * fatal reaches us as a debug-string exception with the guest context intact,
++ * so this is the one place the guest call chain can still be read.
++ *
++ * Reads are bounded and go through NtReadVirtualMemory; the module list is
++ * walked WITHOUT the loader lock because the failing thread is mid-detach and
++ * may hold it, or be blocked on it -- a probe that deadlocks the thread it is
++ * observing tells us nothing. Return addresses are CALL-validated the way the
++ * unix-side ml660 scanner does it, so a code-like value that merely sits on
++ * the stack is marked '?' rather than reported as a frame. */
++static const char *ios_probe_module( ULONG_PTR addr, ULONG_PTR *base, char *buf, size_t buflen )
++{
++    LIST_ENTRY *mark, *e;
++    unsigned n = 0;
++    PEB *peb = NtCurrentTeb()->Peb;
++
++    if (!peb || !peb->LdrData) return NULL;
++    mark = &peb->LdrData->InLoadOrderModuleList;
++    for (e = mark->Flink; e && e != mark && n < 512; e = e->Flink, n++)
++    {
++        LDR_DATA_TABLE_ENTRY *m = CONTAINING_RECORD( e, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
++        ULONG_PTR b = (ULONG_PTR)m->DllBase;
++        if (addr >= b && addr < b + m->SizeOfImage)
++        {
++            unsigned i;
++            for (i = 0; i + 1 < buflen && i < m->BaseDllName.Length / sizeof(WCHAR); i++)
++            {
++                WCHAR c = m->BaseDllName.Buffer[i];
++                buf[i] = (c >= 32 && c < 127) ? (char)c : '?';
++            }
++            buf[i] = 0;
++            *base = b;
++            return buf;
++        }
++    }
++    return NULL;
++}
++
++static void ios_fatal_probe( const CONTEXT *ctx )
++{
++    static LONG fired;
++    CHPE_V2_CPU_AREA_INFO *area;
++    ULONG_PTR top, lim, sp;
++    ULONG_PTR stk[256];
++    SIZE_T got = 0, i;
++    unsigned printed = 0, hits = 0;
++
++    if (InterlockedIncrement( &fired ) > 2) return;
++    area = get_arm64ec_cpu_area();
++    top = area ? (ULONG_PTR)area->EmulatorStackBase : 0;
++    lim = area ? (ULONG_PTR)area->EmulatorStackLimit : 0;
++    sp = ctx ? (ULONG_PTR)ctx->Rsp : 0;
++
++    ERR( "[fatal-probe] ml843 tid=%04x Rip=%p Rsp=%p emulator-stack=[%p..%p) area=%p\n",
++         (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread,
++         ctx ? (void *)ctx->Rip : NULL, (void *)sp, (void *)lim, (void *)top, (void *)area );
++    if (ctx)
++        ERR( "[fatal-probe]   Rcx=%p Rdx=%p R8=%p Rax=%p Rbx=%p Rsi=%p Rdi=%p\n",
++             (void *)ctx->Rcx, (void *)ctx->Rdx, (void *)ctx->R8, (void *)ctx->Rax,
++             (void *)ctx->Rbx, (void *)ctx->Rsi, (void *)ctx->Rdi );
++
++    /* Is the stack-top value sitting in a TLS slot right now? */
++    for (i = 0; i < 64; i++)
++    {
++        ULONG_PTR v = (ULONG_PTR)NtCurrentTeb()->TlsSlots[i];
++        if (!v) continue;
++        if (v == top)
++            ERR( "[fatal-probe]   TlsSlots[%u] = %p == EMULATOR STACK TOP\n", (unsigned)i, (void *)v );
++        else if (area && v >= (ULONG_PTR)area && v < (ULONG_PTR)area + 0x58)
++            ERR( "[fatal-probe]   TlsSlots[%u] = %p points INTO the CPU area (+0x%x)\n",
++                 (unsigned)i, (void *)v, (unsigned)(v - (ULONG_PTR)area) );
++    }
++    if (NtCurrentTeb()->TlsExpansionSlots)
++        for (i = 0; i < 1024; i++)
++        {
++            ULONG_PTR v = (ULONG_PTR)NtCurrentTeb()->TlsExpansionSlots[i];
++            if (v && (v == top || (area && v >= (ULONG_PTR)area && v < (ULONG_PTR)area + 0x58)))
++                ERR( "[fatal-probe]   TlsExpansionSlots[%u] = %p %s\n", (unsigned)i, (void *)v,
++                     v == top ? "== EMULATOR STACK TOP" : "points INTO the CPU area" );
++        }
++    else
++        ERR( "[fatal-probe]   TlsExpansionSlots = NULL\n" );
++
++    /* Guest stack: the argument to the failing free was spilled somewhere
++     * between FMallocBinned2::Free and the fatal, and the return addresses
++     * name the callers. */
++    if (!sp || NtReadVirtualMemory( GetCurrentProcess(), (void *)sp, stk, sizeof(stk), &got ) || got < 8)
++    {
++        ERR( "[fatal-probe]   guest stack at %p unreadable\n", (void *)sp );
++        return;
++    }
++    for (i = 0; i < got / sizeof(ULONG_PTR) && printed < 48; i++)
++    {
++        ULONG_PTR v = stk[i], base = 0;
++        char name[40];
++        if (v == top)
++        {
++            ERR( "[fatal-probe]   sp+%03x = %p  <== EMULATOR STACK TOP on the guest stack\n",
++                 (unsigned)(i * 8), (void *)v );
++            hits++; printed++;
++            continue;
++        }
++        if (v < 0x10000 || !ios_probe_module( v, &base, name, sizeof(name) )) continue;
++        {
++            unsigned char b[6];
++            SIZE_T g2 = 0;
++            const char *tag = "?";
++            if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)(v - 6), b, sizeof(b), &g2 ) && g2 == 6)
++            {
++                if (b[1] == 0xE8) tag = "CALL";                                   /* E8 rel32      */
++                else if (b[0] == 0xFF && b[1] == 0x15) tag = "CALL";              /* FF 15 disp32  */
++                else if (b[4] == 0xFF && (b[5] & 0xF8) == 0xD0) tag = "CALL";     /* FF D0..D7     */
++                else if (b[3] == 0xFF && (b[4] & 0xF8) == 0x50) tag = "CALL";     /* FF 50..57 d8  */
++            }
++            ERR( "[fatal-probe]   sp+%03x: %-4s %s+0x%llx\n", (unsigned)(i * 8), tag, name,
++                 (unsigned long long)(v - base) );
++            printed++;
++        }
++    }
++    ERR( "[fatal-probe]   scanned %u qwords, %u stack-top hit(s), %u code-like\n",
++         (unsigned)(got / sizeof(ULONG_PTR)), hits, printed - hits );
++}
++
++static void ios_tlswatch_pe_arm( const char *where );
+ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+ {
++    if (rec && rec->ExceptionCode == 0x406D1388) ios_tlswatch_pe_arm( "call_seh_handlers entry" );
+     EXCEPTION_REGISTRATION_RECORD *teb_frame = NtCurrentTeb()->Tib.ExceptionList;
+     DISPATCHER_CONTEXT_NONVOLREG_ARM64 nonvol_regs;
+     UNWIND_HISTORY_TABLE table;
+@@ -2595,6 +2900,155 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+                  (int)rec->ExceptionFlags );
+     }
+ 
++    /* iOS-Madeira ml811: name EVERY non-benign exception, and decode C++ throws.
++     *
++     * A game died with "Unhandled Exception: 0x20474343" -- the LLVM/mingw C++
++     * exception code -- raised from inside our own d3d11.dll's unwinder. Nothing
++     * in our logs showed it: [SEH_RATE] above prints only dispatch #1 and every
++     * 1024th, so the only exception ever logged was the benign thread-naming
++     * one. This closes that gap.
++     *
++     * Deliberately NOT limited to 0x20474343: the run that produced that code is
++     * not necessarily the run being diagnosed, and a fatal error may arrive
++     * under a different code entirely. Rate limiting is PER CODE so a storm of
++     * one kind cannot hide a single occurrence of another.
++     *
++     * ⛔ This runs inside exception dispatch. It must not allocate, must not
++     * lock, must not recurse, and must not fault -- an earlier probe died
++     * formatting its own log text. Every guest pointer is read through
++     * NtReadVirtualMemory, which returns a status instead of faulting. */
++    if (rec->ExceptionCode != 0x406d1388)   /* thread naming: genuinely benign, and constant */
++    {
++        static LONG seen_code[16], seen_hits[16];
++        static LONG seen_n, in_probe;
++        LONG i, slot = -1;
++
++        /* Recursion guard: if decoding ever raises, do not decode again. */
++        if (InterlockedCompareExchange( &in_probe, 1, 0 ) == 0)
++        {
++            for (i = 0; i < seen_n && i < 16; i++)
++                if (seen_code[i] == (LONG)rec->ExceptionCode) { slot = i; break; }
++            if (slot < 0 && seen_n < 16)
++            {
++                slot = seen_n++;
++                seen_code[slot] = (LONG)rec->ExceptionCode;
++            }
++            if (slot >= 0 && ++seen_hits[slot] <= 4)
++            {
++                ERR( "[exc] ml811 code=%08x addr=%p flags=%x nparams=%u tid=%04x hit=%d\n",
++                     (int)rec->ExceptionCode, rec->ExceptionAddress, (int)rec->ExceptionFlags,
++                     (unsigned)rec->NumberParameters,
++                     (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread,
++                     (int)seen_hits[slot] );
++
++                /* 0x20474343 == 'GCC ' is the code BOTH libstdc++ and LLVM's
++                 * libunwind raise for a C++ throw on Windows. The runtime that
++                 * threw is identified by the 8-byte exception_class, not by the
++                 * status code -- this build is libc++abi, whose class is
++                 * "CLNGC++\0"; a GNUCC++-only check would reject exactly the
++                 * exception we need to see. */
++                /* ml812: OutputDebugString carries UE4's failure text verbatim.
++                 * ANSI form is (len, ptr); the wide form appends (len, ptr). */
++                if (rec->ExceptionCode == 0x40010006 && rec->NumberParameters >= 2)
++                {
++                    if (ios_exc_dump_str( "OutputDebugStringA", rec->ExceptionInformation[1],
++                                          rec->ExceptionInformation[0], 0 ))
++                        ios_fatal_probe( orig_context );
++                }
++                if (rec->ExceptionCode == 0x4001000a && rec->NumberParameters >= 4)
++                {
++                    ios_exc_dump_str( "OutputDebugStringA", rec->ExceptionInformation[1],
++                                      rec->ExceptionInformation[0], 0 );
++                    ios_exc_dump_str( "OutputDebugStringW", rec->ExceptionInformation[3],
++                                      rec->ExceptionInformation[2], 1 );
++                }
++                /* ml812: the game's own software-report codes. Its reporter reads
++                 * the single parameter as a pointer to { const WCHAR *msg; int
++                 * skip; } -- so the parameter is NOT the string, and printing it
++                 * as one would show garbage. Follow both levels safely. */
++                if ((rec->ExceptionCode == 0x00004000 || rec->ExceptionCode == 0x00008000)
++                    && rec->NumberParameters >= 1)
++                {
++                    ULONG_PTR msg = 0;
++                    SIZE_T g2 = 0;
++                    if (!NtReadVirtualMemory( GetCurrentProcess(),
++                                              (void *)rec->ExceptionInformation[0],
++                                              &msg, sizeof(msg), &g2 )
++                        && g2 == sizeof(msg) && msg)
++                        ios_exc_dump_str( "FATAL report message", msg, 200, 1 );
++                    else
++                        ERR( "[exc] ml812   report struct at %p unreadable\n",
++                             (void *)rec->ExceptionInformation[0] );
++                }
++
++                if (rec->ExceptionCode == 0x20474343 && rec->NumberParameters >= 1)
++                {
++                    ULONG_PTR ue = rec->ExceptionInformation[0];
++                    ULONG64 cls = 0;
++                    SIZE_T got = 0;
++
++                    if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)ue, &cls, sizeof(cls), &got )
++                        && got == sizeof(cls))
++                    {
++                        char cbuf[9];
++                        int k;
++                        for (k = 0; k < 8; k++)
++                        {
++                            unsigned char c = (unsigned char)(cls >> (56 - 8 * k));
++                            cbuf[k] = (c >= 32 && c < 127) ? (char)c : '.';
++                        }
++                        cbuf[8] = 0;
++
++                        /* Layout verified against BOTH the libc++abi source and
++                         * the shipped binary: unwindHeader sits at the END of
++                         * __cxa_exception (+0x60), so exceptionType is at
++                         * unwind-0x50. Do NOT subtract sizeof(__cxa_exception). */
++                        if ((cls >> 8) == (0x434C4E47432B2Bull) ||    /* CLNGC++ */
++                            (cls >> 8) == (0x474E5543432B2Bull))      /* GNUCC++ */
++                        {
++                            ULONG_PTR ti = 0, namep = 0;
++                            char nm[96];
++
++                            if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)(ue - 0x50),
++                                                      &ti, sizeof(ti), &got ) && got == sizeof(ti) && ti
++                                && !NtReadVirtualMemory( GetCurrentProcess(), (void *)(ti + 8),
++                                                         &namep, sizeof(namep), &got ) && got == sizeof(namep)
++                                && namep)
++                            {
++                                memset( nm, 0, sizeof(nm) );
++                                if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)namep,
++                                                          nm, sizeof(nm) - 1, &got ) && got)
++                                {
++                                    SIZE_T j;
++                                    for (j = 0; j < sizeof(nm) - 1; j++)
++                                        if (nm[j] && (nm[j] < 32 || (unsigned char)nm[j] >= 127)) { nm[j] = 0; break; }
++                                    nm[sizeof(nm) - 1] = 0;
++                                    ERR( "[exc] ml811   C++ throw class=\"%s\" type=\"%s\" "
++                                         "(mangled; _ZSt9bad_alloc etc) unwind=%p\n",
++                                         cbuf, nm, (void *)ue );
++                                }
++                                else
++                                    ERR( "[exc] ml811   C++ throw class=\"%s\" type-name UNREADABLE "
++                                         "(ti=%p namep=%p)\n", cbuf, (void *)ti, (void *)namep );
++                            }
++                            else
++                                ERR( "[exc] ml811   C++ throw class=\"%s\" but exceptionType "
++                                     "UNREADABLE at unwind-0x50 (ue=%p)\n", cbuf, (void *)ue );
++                        }
++                        else
++                            ERR( "[exc] ml811   C++-coded exception with UNKNOWN runtime class "
++                                 "\"%s\" (%016llx) -- not decoding its layout\n",
++                                 cbuf, (unsigned long long)cls );
++                    }
++                    else
++                        ERR( "[exc] ml811   param[0]=%p is not readable as an unwind header\n",
++                             (void *)ue );
++                }
++            }
++            InterlockedExchange( &in_probe, 0 );
++        }
++    }
++
+     context.AMD64_Context = *orig_context;
+     context.ContextFlags &= ~0x40; /* Clear xstate flag. */
+ 
+@@ -2740,7 +3194,6 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+          * the frame must be EXACTLY hi, the unwound Rsp must ALSO be exactly hi, and it
+          * is honoured at most once per walk, so a loop cannot exploit it. */
+         {
+-            static __thread int ml633_root_used;
+             if (walk_steps <= 1) ml633_root_used = 0;   /* new walk */
+             if (ec_win.hi && !ml633_root_used &&
+                 dispatch.EstablisherFrame == (ULONG64)ec_win.hi &&
+@@ -3921,6 +4374,36 @@ void CDECL RtlRestoreContext( CONTEXT *context, EXCEPTION_RECORD *rec )
+ }
+ 
+ 
++/* iOS-Madeira ml846 [tlswatch]: arm the unix-side write watch from PE code.
++ * The engine's thread-naming exception is dispatched entirely PE-side, so the
++ * unix NtRaiseException hook never saw it (ml845: zero arm lines). The one
++ * channel from here into the unix fault handler that needs no new syscall is
++ * NtProtectVirtualMemory itself: a size no real caller could pass marks the
++ * request, and the unix side arms the watch on the block instead of
++ * protecting anything. Idle unless the slot is still zero. */
++static void ios_tlswatch_pe_arm( const char *where )
++{
++    static LONG lines;
++    void **blocks = NtCurrentTeb()->ThreadLocalStoragePointer;
++    void *addr; SIZE_T size = 0x0BAD0038; ULONG old = 0; ULONG_PTR now; NTSTATUS st;
++    if (!blocks || !blocks[0]) return;
++    now = ((ULONG_PTR *)blocks[0])[7];
++    if (now)
++    {
++        /* ml847: say so. ml846 returned silently here, which made "the write
++         * came earlier" indistinguishable from "the mark never arrived". */
++        if (InterlockedIncrement( &lines ) <= 24)
++            ERR( "[tlswatch-pe] ml847 %s: slot ALREADY SET (%p) tid=%04x -- the write precedes this point\n",
++                 where, (void *)now, (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread );
++        return;
++    }
++    addr = blocks[0];
++    st = NtProtectVirtualMemory( GetCurrentProcess(), &addr, &size, PAGE_READONLY, &old );
++    if (InterlockedIncrement( &lines ) <= 24)
++        ERR( "[tlswatch-pe] ml847 %s: slot=0, sent mark for block %p -> status %08x tid=%04x\n",
++             where, blocks[0], (int)st, (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread );
++}
++
+ /*******************************************************************
+  *		RtlUnwindEx (NTDLL.@)
+  */
+@@ -3939,6 +4422,7 @@ void WINAPI RtlUnwindEx( PVOID end_frame, PVOID target_ip, EXCEPTION_RECORD *rec
+ 
+     RtlCaptureContext( context );
+     new_context.AMD64_Context = *context;
++    if (rec && rec->ExceptionCode == 0x406D1388) ios_tlswatch_pe_arm( "RtlUnwindEx entry" );
+ 
+     /* build an exception record, if we do not have one */
+     if (!rec)
+@@ -3993,6 +4477,7 @@ void WINAPI RtlUnwindEx( PVOID end_frame, PVOID target_ip, EXCEPTION_RECORD *rec
+         if (!dispatch.EstablisherFrame) break;
+ 
+         {
++            if (rec && rec->ExceptionCode == 0x406D1388) ios_tlswatch_pe_arm( "RtlUnwindEx step" );
+             const char *why = ec_stack_window_step( dispatch.EstablisherFrame,
+                                                     (ULONG_PTR)dispatch.ControlPc );
+             if (why)
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index a485e212554..165631eb063 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -473,6 +473,76 @@ static void ios_cs_report_bad( RTL_CRITICAL_SECTION *crit, const char *where )
+         ERR( "[cs-bad] ml672   RW view: (not in any anon-RWX alias -- plain guest memory)\n" );
+ }
+ 
++/* iOS-Madeira ml810: per-thread critical-section acquire/release history.
++ *
++ * PoolThread 1 owns a section (LockCount=7, RecursionCount=1) and then waits
++ * indefinitely on its own private worker event, while six other pool threads
++ * block on that section forever. Nothing so far says WHY it went to sleep still
++ * holding it. The three candidates need different fixes:
++ *
++ *   - the guest genuinely waits inside the locked region (engine behaviour)
++ *   - a RtlLeaveCriticalSection was lost or skipped (our bug)
++ *   - the section bookkeeping was corrupted (different bug again)
++ *
++ * A record of the acquire, its guest caller, and whether a matching leave ever
++ * happened separates them.
++ *
++ * ⛔ THIS IS THE HOTTEST PATH IN THE PROCESS. ml807 instrumented the server's
++ * wait_on/end_wait and wedged startup before FEX even initialised. So: fixed
++ * storage, no allocation, no locks, no stdio, and a bucket per thread id. Two
++ * threads sharing a bucket can interleave and lose a record; they cannot
++ * corrupt anything, because every write is a whole fixed-size slot. */
++#define IOS_CS_BUCKETS 256
++#define IOS_CS_DEPTH   8
++struct ios_cs_rec
++{
++    void         *crit;
++    void         *caller;
++    unsigned int  tid;
++    int           lock_count;
++    int           recursion;
++    unsigned int  seq;
++    unsigned char op;        /* 1 = enter, 2 = leave */
++};
++static struct ios_cs_rec ios_cs_hist[IOS_CS_BUCKETS][IOS_CS_DEPTH];
++static unsigned char ios_cs_next[IOS_CS_BUCKETS];
++static LONG ios_cs_seq;
++
++static void ios_cs_note( RTL_CRITICAL_SECTION *crit, int op, void *caller )
++{
++    unsigned int tid = GetCurrentThreadId();
++    unsigned int b = tid & (IOS_CS_BUCKETS - 1);
++    unsigned char slot = ios_cs_next[b];
++    struct ios_cs_rec *r = &ios_cs_hist[b][slot & (IOS_CS_DEPTH - 1)];
++
++    r->crit = crit;
++    r->caller = caller;
++    r->tid = tid;
++    r->lock_count = crit->LockCount;
++    r->recursion = crit->RecursionCount;
++    r->seq = (unsigned int)InterlockedIncrement( &ios_cs_seq );
++    r->op = (unsigned char)op;
++    ios_cs_next[b] = (unsigned char)(slot + 1);
++}
++
++/* Print one thread's recorded acquires/releases, oldest first. */
++static void ios_cs_dump( unsigned int tid, const char *what )
++{
++    unsigned int b = tid & (IOS_CS_BUCKETS - 1);
++    unsigned int i;
++
++    for (i = 0; i < IOS_CS_DEPTH; i++)
++    {
++        struct ios_cs_rec *r = &ios_cs_hist[b][(ios_cs_next[b] + i) & (IOS_CS_DEPTH - 1)];
++        if (!r->seq) continue;
++        /* The bucket is shared by tid & 0xff, so say whose record this is. */
++        ERR( "[cs-hist] %s bucket=%02x seq=%u tid=%04x %s crit=%p caller=%p lock=%d recursion=%d%s\n",
++             what, b, r->seq, r->tid, r->op == 1 ? "ENTER" : "leave",
++             r->crit, r->caller, r->lock_count, r->recursion,
++             r->tid == tid ? "" : "   (different thread, same bucket)" );
++    }
++}
++
+ /******************************************************************************
+  *      RtlpWaitForCriticalSection   (NTDLL.@)
+  */
+@@ -497,6 +567,19 @@ NTSTATUS WINAPI RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit )
+ 
+         timeout = (TRACE_ON(relay) ? 300 : 60);
+ 
++        /* ml810: whoever owns this has been holding it for a minute. Dump its
++         * acquire/release history and ours -- the owner's last ENTER names the
++         * guest caller that took the lock, and the absence of a matching leave
++         * is what distinguishes a lost release from a deliberate wait inside
++         * the locked region. */
++        {
++            static LONG dumped;
++            if (InterlockedIncrement( &dumped ) <= 8)
++            {
++                ios_cs_dump( HandleToULong(crit->OwningThread), "owner" );
++                ios_cs_dump( GetCurrentThreadId(), "waiter" );
++            }
++        }
+         ERR( "section %p %s wait timed out in thread %04lx, blocked by %04lx, retrying (%u sec)\n",
+              crit, debugstr_a(crit_section_get_name(crit)), GetCurrentThreadId(), HandleToULong(crit->OwningThread), timeout );
+     }
+@@ -599,6 +682,7 @@ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
+ done:
+     crit->OwningThread   = ULongToHandle(GetCurrentThreadId());
+     crit->RecursionCount = 1;
++    ios_cs_note( crit, 1, __builtin_return_address(0) );   /* ml810 */
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -613,6 +697,7 @@ BOOL WINAPI RtlTryEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
+     {
+         crit->OwningThread   = ULongToHandle(GetCurrentThreadId());
+         crit->RecursionCount = 1;
++        ios_cs_note( crit, 1, __builtin_return_address(0) );   /* ml810 */
+         ret = TRUE;
+     }
+     else if (crit->OwningThread == ULongToHandle(GetCurrentThreadId()))
+@@ -656,6 +741,7 @@ NTSTATUS WINAPI RtlLeaveCriticalSection( RTL_CRITICAL_SECTION *crit )
+     }
+     else
+     {
++        ios_cs_note( crit, 2, __builtin_return_address(0) );   /* ml810 */
+         crit->OwningThread = 0;
+         if (InterlockedDecrement( &crit->LockCount ) >= 0)
+         {
+diff --git a/dlls/ntdll/thread.c b/dlls/ntdll/thread.c
+index afb3eeddd52..bfecc071f4d 100644
+--- a/dlls/ntdll/thread.c
++++ b/dlls/ntdll/thread.c
+@@ -239,6 +239,20 @@ void WINAPI RtlExitUserThread( ULONG status )
+ {
+     ULONG last;
+ 
++    /* iOS-Madeira ml806: name the SELF-shutdown path.
++     *
++     * A render thread exits while still owning a critical section and eight
++     * threads deadlock behind it permanently. The unix-side NtTerminateThread
++     * probe sees the tail of this (line below, with self=1), but only here are
++     * the exit STATUS and the CALLER visible -- and only here is it before
++     * LdrShutdownThread, which is the last point at which anything could still
++     * release what this thread holds. "It shut itself down after a timeout" and
++     * "something told it to stop" need different fixes, and the wineserver's
++     * violent=0 distinguishes neither. */
++    ERR( "[thr-exit] ml806 RtlExitUserThread tid=%04x status=%08x caller=%p\n",
++         (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread,
++         (unsigned)status, __builtin_return_address(0) );
++
+     NtQueryInformationThread( GetCurrentThread(), ThreadAmILastThread, &last, sizeof(last), NULL );
+     if (last) RtlExitUserProcess( status );
+     LdrShutdownThread();
+diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
+index 112ddd2cd06..58ce1383ef3 100644
+--- a/dlls/ntdll/unixlib.h
++++ b/dlls/ntdll/unixlib.h
+@@ -120,6 +120,20 @@ struct ios_jit_alias_probe_params
+     unsigned int dup_end;     /* OUT: ml639 live entries sharing this end */
+ };
+ 
++/* ml800: the FEX arena, fetched from the unix side.
++ *
++ * It cannot be read from an ntdll global. ntdll's image is copied into the JIT
++ * pool BEFORE the unix side publishes into it (the [jit-pool] line precedes the
++ * publication in every log), so a linked-global read resolves inside a stale
++ * copy and returns zero -- which is exactly what ml799 did, silently, leaving
++ * FEX to select its own band while an 8GB arena sat held. ntdll-unix has one
++ * copy per Mach task and no image duplicates, so ask it directly. */
++struct ios_get_fex_arena_params
++{
++    ULONG64 base;   /* OUT: 0 when no arena was reserved */
++    ULONG64 end;    /* OUT: exclusive */
++};
++
+ enum ntdll_unix_funcs
+ {
+     unix_load_so_dll,
+@@ -136,6 +150,7 @@ enum ntdll_unix_funcs
+     unix_ios_register_hold_release,
+     unix_ios_jit_alias_probe,   /* ml631 — APPEND ONLY (see note above) */
+     unix_ios_mono_bridge_ptr,   /* ml648 — APPEND ONLY: inserting renumbers every later ordinal */
++    unix_ios_get_fex_arena,     /* ml800 — APPEND ONLY */
+ };
+ 
+ extern unixlib_handle_t __wine_unixlib_handle;
+diff --git a/server/event.c b/server/event.c
+index b0cb6b182b8..682b13110e7 100644
+--- a/server/event.c
++++ b/server/event.c
+@@ -22,6 +22,8 @@
+ 
+ #include <assert.h>
+ #include <stdio.h>
++#include <string.h>
++#include <unistd.h>
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <sys/types.h>
+@@ -136,11 +138,38 @@ static int event_sync_signal( struct object *obj, unsigned int access, int signa
+     return 1;
+ }
+ 
++/* iOS-Madeira ml807: per-object history.
++ *
++ * The global ring answers cross-object ordering but WRAPS: a run produced 478
++ * "no operations" verdicts that were all unsafe, because traffic on unrelated
++ * events had overwritten the only history that mattered. Lifetime counters
++ * cannot be overwritten at all, so "was this event EVER signalled" is answerable
++ * however long the run goes; the small per-object ring adds detail for the
++ * recent past. */
++#define IOS_EVT_OBJ_RING 16
++struct ios_evt_obj_rec
++{
++    unsigned int seq;
++    unsigned int tid;
++    unsigned int status;      /* wait-end status, else 0 */
++    unsigned char op;
++};
++struct ios_evt_stats
++{
++    unsigned int n_create, n_set, n_reset, n_pulse;
++    unsigned int n_wait_begin, n_wait_end, n_wait_timeout, n_wait_success;
++    unsigned int last_set_tid, last_set_seq;
++    unsigned int last_reset_tid, last_reset_seq;
++    unsigned int ring_pos, ring_wrapped;
++    struct ios_evt_obj_rec ring[IOS_EVT_OBJ_RING];
++};
++
+ struct event
+ {
+     struct object      obj;             /* object header */
+     struct object     *sync;            /* event sync object */
+     struct list        kernel_object;   /* list of kernel object pointers */
++    struct ios_evt_stats ios;           /* ml807: never-overwritten lifetime history */
+ };
+ 
+ struct event_init_data
+@@ -218,13 +247,193 @@ struct event *get_event_obj( struct process *process, obj_handle_t handle, unsig
+     return (struct event *)get_handle_obj( process, handle, access, &event_ops );
+ }
+ 
++
++/* iOS-Madeira ml805: a bounded history of what happens to each event object.
++ *
++ * The question this exists to answer: RenderThread 0 waits ~60s on a manual
++ * event that is never signalled, then exits while still owning a critical
++ * section, and eight threads deadlock behind it forever. Nothing so far
++ * distinguishes "the producer never ran" from "it signalled a different object"
++ * from "the event was reset or closed underneath the waiter".
++ *
++ * Keyed by OBJECT IDENTITY, never by handle or by a pointer captured from a
++ * previous run -- both change. queue_ios.c's [srv-stuck] already resolves the
++ * object a stuck thread waits on, and latches onto whatever that turns out to
++ * be, so this needs no prior knowledge of which event matters.
++ *
++ * Bounded and overwriting: a hang produces unbounded operations on OTHER
++ * events, and a probe that allocates or grows under a fault is how an earlier
++ * one died on its own log text. */
++#define IOS_EVT_RING_N 1024
++struct ios_evt_rec
++{
++    void         *obj;        /* event wrapper -- the identity queue_ios.c resolves */
++    void         *sync;       /* its sync object, which is what waiters queue on */
++    unsigned int  tid;        /* thread that performed the operation */
++    unsigned int  seq;
++    unsigned char op;         /* ios_evt_op */
++    signed char   state;      /* signalled state BEFORE the op, -1 unknown */
++};
++enum ios_evt_op { IOS_EVT_CREATE = 0, IOS_EVT_SET, IOS_EVT_RESET, IOS_EVT_PULSE,
++                  IOS_EVT_DUP, IOS_EVT_CLOSE, IOS_EVT_WAIT_BEGIN, IOS_EVT_WAIT_END };
++static const char * const ios_evt_op_name[] = { "create", "SET", "reset", "pulse", "dup", "close",
++                                                "wait-begin", "wait-end" };
++
++static struct ios_evt_rec ios_evt_ring[IOS_EVT_RING_N];
++static unsigned int ios_evt_pos, ios_evt_seq, ios_evt_wrapped;
++
++void ios_evt_record( void *obj, void *sync, int op, int state );   /* ml807: fwd decl */
++
++/* ml807: called from thread.c's wait_on/end_wait.
++ *
++ * This is the record Sol asked for and the one most likely to settle the case:
++ * when the first lock timeouts appear the render thread's CURRENT event wait is
++ * only 8.7s old, while other threads have already blocked 60s on the section it
++ * holds. Either it times out and re-enters the wait repeatedly, or this wait is
++ * downstream of an earlier stall. A begin/end count with statuses separates
++ * those; a single age sample cannot. */
++void ios_evt_note_wait( struct object *obj, int begin, unsigned int status )
++{
++    if (!obj || obj->ops != &event_ops) return;
++    ios_evt_record( obj, ((struct event *)obj)->sync,
++                    begin ? IOS_EVT_WAIT_BEGIN : IOS_EVT_WAIT_END, (int)status );
++}
++
++/* ml805: identity test for handle.c, which cannot see event_ops. */
++int ios_obj_is_event( struct object *obj )
++{
++    return obj && obj->ops == &event_ops;
++}
++
++/* ml805: the sync object a waiter would actually queue on. */
++void *ios_evt_sync_of( struct object *obj )
++{
++    return ios_obj_is_event( obj ) ? ((struct event *)obj)->sync : NULL;
++}
++
++/* ml807: update the per-object stats that cannot be overwritten. */
++static void ios_evt_stat( struct event *event, int op, unsigned int status, unsigned int seq )
++{
++    struct ios_evt_stats *st;
++    struct ios_evt_obj_rec *rec;
++    unsigned int tid = current ? current->id : 0;
++
++    if (!event) return;
++    st = &event->ios;
++    switch (op)
++    {
++    case IOS_EVT_CREATE:     st->n_create++; break;
++    case IOS_EVT_SET:        st->n_set++;   st->last_set_tid = tid;   st->last_set_seq = seq;   break;
++    case IOS_EVT_RESET:      st->n_reset++; st->last_reset_tid = tid; st->last_reset_seq = seq; break;
++    case IOS_EVT_PULSE:      st->n_pulse++; break;
++    case IOS_EVT_WAIT_BEGIN: st->n_wait_begin++; break;
++    case IOS_EVT_WAIT_END:
++        st->n_wait_end++;
++        if (status == STATUS_TIMEOUT) st->n_wait_timeout++; else st->n_wait_success++;
++        break;
++    default: break;
++    }
++    /* ml809: belt and braces. The out-of-bounds write above cost a build and a
++     * run to find; a bounds check here makes any future uninitialised path
++     * merely lose a record instead of corrupting the server heap. */
++    if (st->ring_pos >= IOS_EVT_OBJ_RING) st->ring_pos = 0;
++    rec = &st->ring[st->ring_pos];
++    rec->seq = seq; rec->tid = tid; rec->status = status; rec->op = (unsigned char)op;
++    if (++st->ring_pos == IOS_EVT_OBJ_RING) { st->ring_pos = 0; st->ring_wrapped = 1; }
++}
++
++void ios_evt_record( void *obj, void *sync, int op, int state )
++{
++    struct ios_evt_rec *r = &ios_evt_ring[ios_evt_pos];
++
++    r->obj   = obj;
++    r->sync  = sync;
++    r->tid   = current ? current->id : 0;
++    r->seq   = ++ios_evt_seq;
++    r->op    = (unsigned char)op;
++    r->state = (signed char)state;
++    if (++ios_evt_pos == IOS_EVT_RING_N) { ios_evt_pos = 0; ios_evt_wrapped = 1; }
++    ios_evt_stat( (struct event *)obj, op, (unsigned int)(state < 0 ? 0 : state), r->seq );
++}
++
++/* Print every recorded operation on ONE object, oldest first. Called from
++ * [srv-stuck] with the object it independently resolved. */
++int ios_evt_dump_for( void *obj )
++{
++    unsigned int i, n = 0;
++
++    /* ml806: raw write, not stdio. The ml805 build proved (by disassembly) that
++     * this function is CALLED, yet not one of its fprintf lines reached the log
++     * while [srv-stuck]'s fprintfs from the same thread did. Until that is
++     * explained, nothing here may depend on stdio: write(2) has no buffer, no
++     * lock of its own and no FILE* to be wrong about. */
++    { static const char m[] = "[evt-entry]\n"; ssize_t w = write( 2, m, sizeof(m) - 1 ); (void)w; }
++
++    for (i = 0; i < IOS_EVT_RING_N; i++)
++    {
++        unsigned int idx = (ios_evt_pos + i) % IOS_EVT_RING_N;
++        struct ios_evt_rec *r = &ios_evt_ring[idx];
++
++        if (!r->seq || r->obj != obj) continue;
++        fprintf( stderr, "[evt-hist] obj=%p sync=%p seq=%u tid=%04x %s state_before=%d\n",
++                 r->obj, r->sync, r->seq, r->tid,
++                 r->op < 6 ? ios_evt_op_name[r->op] : "?", r->state );
++        n++;
++    }
++    /* ml807: lifetime counters FIRST -- these cannot wrap, so they answer
++     * "was this event ever signalled" regardless of how long the run went. */
++    if (((struct object *)obj)->ops == &event_ops)
++    {
++        struct ios_evt_stats *st = &((struct event *)obj)->ios;
++        unsigned int k, shown = 0;
++
++        fprintf( stderr, "[evt-life] obj=%p create=%u SET=%u reset=%u pulse=%u | "
++                         "wait begin=%u end=%u timeout=%u success=%u | "
++                         "last_set tid=%04x seq=%u | last_reset tid=%04x seq=%u%s\n",
++                 obj, st->n_create, st->n_set, st->n_reset, st->n_pulse,
++                 st->n_wait_begin, st->n_wait_end, st->n_wait_timeout, st->n_wait_success,
++                 st->last_set_tid, st->last_set_seq, st->last_reset_tid, st->last_reset_seq,
++                 st->n_set ? "" : "   <-- NEVER SET BY ANYONE, for the whole life of this object" );
++
++        for (k = 0; k < IOS_EVT_OBJ_RING; k++)
++        {
++            unsigned int idx = (st->ring_pos + k) % IOS_EVT_OBJ_RING;
++            struct ios_evt_obj_rec *rec = &st->ring[idx];
++            if (!rec->seq) continue;
++            fprintf( stderr, "[evt-life]   seq=%u tid=%04x %s status=%08x\n",
++                     rec->seq, rec->tid,
++                     rec->op < 8 ? ios_evt_op_name[rec->op] : "?", rec->status );
++            shown++;
++        }
++        if (shown && st->ring_wrapped)
++            fprintf( stderr, "[evt-life]   (per-object ring wrapped; counters above are still exact)\n" );
++    }
++
++    if (!n)
++        fprintf( stderr, "[evt-hist] obj=%p: no recorded operations in the GLOBAL ring (%u entries%s). "
++                         "%s\n",
++                 obj, ios_evt_wrapped ? IOS_EVT_RING_N : ios_evt_pos,
++                 ios_evt_wrapped ? ", WRAPPED" : "",
++                 ios_evt_wrapped
++                     ? "The ring WRAPPED, so this does NOT mean the producer never ran -- older "
++                       "operations were overwritten and this verdict is UNSAFE"
++                     : "The ring never wrapped, so this event genuinely was never set, reset, "
++                       "duplicated or closed by anyone" );
++    else
++        fprintf( stderr, "[evt-hist] obj=%p: %u operations above%s\n", obj, n,
++                 ios_evt_wrapped ? " (ring WRAPPED -- older history lost)" : "" );
++    return (int)n;
++}
++
+ void set_event( struct event *event )
+ {
++    ios_evt_record( event, event->sync, IOS_EVT_SET, -1 );
+     signal_sync( event->sync );
+ }
+ 
+ void reset_event( struct event *event )
+ {
++    ios_evt_record( event, event->sync, IOS_EVT_RESET, -1 );
+     reset_sync( event->sync );
+ }
+ 
+@@ -241,7 +450,23 @@ static bool event_init( struct object *obj, const void *init_data )
+     const struct event_init_data *data = init_data;
+ 
+     list_init( &event->kernel_object );
+-    return !!(event->sync = create_event_sync( data->manual_reset, data->initial_state ));
++    /* ml809: MUST zero the stats block here.
++     *
++     * alloc_object() uses mem_alloc(), not calloc, and initialises only
++     * the struct object header -- everything a subclass adds is garbage
++     * until it assigns it. ml807/ml808 left this block uninitialised, so
++     * ring_pos started as a random value and the first recorded
++     * operation wrote ring[garbage], off the end of the object and into
++     * the server heap. The wineserver then stopped answering and every
++     * client blocked forever in wine_server_call, the first being
++     * NtCreateEvent in unix_init_startup_info -- i.e. the desktop never
++     * came up, which looked nothing like an event-probe bug. */
++    memset( &event->ios, 0, sizeof(event->ios) );
++    if (!(event->sync = create_event_sync( data->manual_reset, data->initial_state ))) return false;
++    /* ml805: record identity at birth, so a later [evt-hist] dump can say
++     * whether the object a stuck waiter is queued on was ever touched. */
++    ios_evt_record( event, event->sync, IOS_EVT_CREATE, data->initial_state );
++    return true;
+ }
+ 
+ static struct object *event_get_sync( struct object *obj )
+diff --git a/server/handle.c b/server/handle.c
+index 1933b2f6a43..daea27f00d4 100644
+--- a/server/handle.c
++++ b/server/handle.c
+@@ -38,6 +38,16 @@
+ #include "security.h"
+ #include "request.h"
+ 
++/* iOS-Madeira ml805: events are wrappers whose close_handle is no_close_handle,
++ * so event.c cannot see duplicate or close. Record them from here, where they
++ * actually happen, or the [evt-hist] history would silently omit exactly the
++ * two operations that could explain a waiter left on a dead object. */
++extern void ios_evt_record( void *obj, void *sync, int op, int state );
++extern int ios_obj_is_event( struct object *obj );
++extern void *ios_evt_sync_of( struct object *obj );
++#define IOS_EVT_DUP   4
++#define IOS_EVT_CLOSE 5
++
+ struct handle_entry
+ {
+     struct object *ptr;       /* object */
+@@ -416,6 +426,9 @@ unsigned int close_handle( struct process *process, obj_handle_t handle )
+     if (!(entry = get_handle( process, handle ))) return STATUS_INVALID_HANDLE;
+     if (entry->access & RESERVED_CLOSE_PROTECT) return STATUS_HANDLE_NOT_CLOSABLE;
+     obj = entry->ptr;
++    /* ml805: a close is one of the two ways a waiter can be left on an object
++     * nobody will ever signal again, and event.c cannot observe it. */
++    if (ios_obj_is_event( obj )) ios_evt_record( obj, ios_evt_sync_of( obj ), IOS_EVT_CLOSE, -1 );
+     if (obj->ops->close_handle && !obj->ops->close_handle( obj, process, handle ))
+         return STATUS_HANDLE_NOT_CLOSABLE;
+ 
+@@ -561,6 +574,10 @@ obj_handle_t duplicate_handle( struct process *src, obj_handle_t src_handle, str
+     unsigned int src_access, src_flags;
+     struct object *obj = get_handle_obj( src, src_handle, 0, NULL );
+ 
++    /* ml805: record duplication too -- a duplicated handle means the producer
++     * may be signalling through a different handle than the waiter holds. */
++    if (ios_obj_is_event( obj )) ios_evt_record( obj, ios_evt_sync_of( obj ), IOS_EVT_DUP, -1 );
++
+     if (!obj) return 0;
+     if ((entry = get_handle( src, src_handle )))
+         src_access = entry->access;
+diff --git a/server/thread.c b/server/thread.c
+index 9972c4963e5..58bc7c20191 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1137,6 +1137,16 @@ void reset_sync( struct object *obj )
+ }
+ 
+ /* finish waiting */
++/* iOS-Madeira ml808: the ml807 wait-begin/end hooks were REMOVED from here.
++ *
++ * wait_on/end_wait are the hottest and earliest paths in the server -- they run
++ * long before any guest code -- and instrumenting them wedged startup outright:
++ * FEX never reached ProcessInit, the log stopped after the first send_client_fd,
++ * and the app sat at 8 threads. The per-object SET/reset counters in event.c
++ * answer the primary question ("was this event ever signalled") without
++ * touching this path at all. If wait timing is needed later it must be
++ * collected somewhere cold, not here. */
++
+ static unsigned int end_wait( struct thread *thread, unsigned int status )
+ {
+     struct thread_wait *wait = thread->wait;

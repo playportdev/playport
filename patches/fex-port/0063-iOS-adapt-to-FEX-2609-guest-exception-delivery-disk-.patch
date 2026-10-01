@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 24 Sep 2026 18:49:01 +0200
+Subject: [PATCH] iOS: adapt to FEX-2609 (guest exception delivery, disk-cache
+ code writes)
+
+Upstream 064a6e96c raises every guest exception through NtRaiseException.
+The iOS ntdll and Madeira's exception-path fixes were built around returning
+into KiUserExceptionDispatcher, so first-chance delivery keeps that path on
+FEX_IOS_HOST; only d704bd3ce's non-continuable raise uses the syscall.
+
+Upstream's DiskCache (off by default) copies cached host code into the code
+buffer directly; on iOS that buffer is the RX view of the dual-mapped pool,
+so LoadCachedCode writes through the RW alias and flushes with
+NtFlushInstructionCache like CompileCode.
+
+Upstream's new NtRaiseExceptionNative wrapper gets the same unprefixed
+alias the other native syscall wrappers carry on iOS, so C references bind
+to it rather than to a linker-synthesised exit thunk.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/JIT/JIT.cpp |  8 ++++++++
+ Source/Windows/ARM64EC/Module.S           |  4 ++++
+ Source/Windows/ARM64EC/Module.cpp         | 21 +++++++++++++++++++++
+ 3 files changed, 33 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+index 5c2598b..c00303e 100644
+--- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
+@@ -1391,8 +1391,16 @@ CPUBackend::CompiledCode Arm64JITCore::LoadCachedCode(std::span<const uint8_t> H
+   auto AllocatedInfo = AllocateCodeBufferInSharedCache(HostBytes.size());
+ 
+   uint8_t* Dest = AllocatedInfo.BufferAllocationOffset;
++#if defined(FEX_IOS_HOST)
++  // The code buffer is the RX view of the dual-mapped JIT pool: write through
++  // the RW alias and flush the way CompileCode does. (DiskCache is off by
++  // default; this keeps the path correct if it is enabled.)
++  memcpy(FEXCore::DualMap::WriteAddr(Dest), HostBytes.data(), HostBytes.size());
++  NtFlushInstructionCache(reinterpret_cast<void*>(~0ull), Dest, HostBytes.size());
++#else
+   memcpy(Dest, HostBytes.data(), HostBytes.size());
+   ClearICache(Dest, HostBytes.size());
++#endif
+ 
+   CPUBackend::CompiledCode Result;
+   Result.BlockBegin = Dest;
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 5f6a69e..9f58bd4 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -431,6 +431,10 @@ ExitFunctionSuspendPoint:
+ NtContinueNative:
+ #endif
+ DIRECT_SYSCALL_WRAPPER("#NtContinueNative", WineNtContinueSyscallId, 0x43)
++#ifdef FEX_IOS_HOST
++.global NtRaiseExceptionNative
++NtRaiseExceptionNative:
++#endif
+ DIRECT_SYSCALL_WRAPPER("#NtRaiseExceptionNative", WineNtRaiseExceptionSyscallId, 0x174)
+ 
+   // Both of these are wrapped as FEX needs them to setup its call checker at startup time and their NTDLL thunks could
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 8cdaee6..79ea245 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -704,6 +704,27 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+     GuestContext.Pc -= 1;
+   }
+ 
++#ifdef FEX_IOS_HOST
++  /* Upstream 064a6e96c raises every guest exception through the
++   * NtRaiseException syscall so that Windows sends a debug event. The iOS
++   * ntdll (Madeira's replaced signal/thread code on wine-11.4) and every
++   * exception-path fix above were built and verified around returning into
++   * KiUserExceptionDispatcher with the packed EC context on the guest stack,
++   * and no debugger attaches on the phone, so first-chance delivery keeps that
++   * path. Only a non-continuable raise (d704bd3ce, __fastfail's
++   * STATUS_STACK_BUFFER_OVERRUN) goes through the syscall, so the guest cannot
++   * continue past it. */
++  if (FirstChance) {
++    const auto& Config = SignalDelegator->GetConfig();
++    uint64_t GuestSp = Context.X[Config.SRAGPRMapping[static_cast<size_t>(FEXCore::X86State::REG_RSP)]];
++    auto* Args = reinterpret_cast<KiUserExceptionDispatcherStackLayout*>(FEXCore::AlignDown(GuestSp, 64)) - 1;
++    Args->Context = GuestContext;
++    Args->Rec = GuestRec;
++    Context.Sp = reinterpret_cast<uint64_t>(Args);
++    Context.Pc = KiUserExceptionDispatcher;
++    return;
++  }
++#endif
+   NtRaiseExceptionNative(&GuestRec, &GuestContext, FirstChance);
+ }
+ 
