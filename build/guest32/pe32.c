@@ -262,3 +262,93 @@ g32_pe_result g32_pe_imports(g32_space *s, const g32_pe_image *image,
     }
     return G32_PE_FORMAT; /* No terminating descriptor within the directory. */
 }
+
+typedef struct {
+    char dll[260], symbol[260];
+    uint16_t ordinal;
+    int named;
+    uint32_t iat, address;
+    void *write_loan;
+} binding;
+
+typedef struct {
+    binding *items;
+    size_t count, capacity;
+    g32_pe_result result;
+} bindings;
+
+static int collect_binding(void *context, const char *dll, const char *symbol,
+                           uint16_t ordinal, uint32_t iat)
+{
+    bindings *b = context;
+    if (b->count == G32_PE_MAX_BIND_IMPORTS) {
+        b->result = G32_PE_UNSUPPORTED;
+        return 1;
+    }
+    if (b->count == b->capacity) {
+        size_t capacity = b->capacity ? b->capacity * 2 : 16;
+        binding *items = realloc(b->items, capacity * sizeof(*items));
+        if (!items) { b->result = G32_PE_MEMORY; return 1; }
+        b->items = items;
+        b->capacity = capacity;
+    }
+    binding *item = &b->items[b->count++];
+    memset(item, 0, sizeof(*item));
+    memcpy(item->dll, dll, strlen(dll) + 1);
+    if (symbol) memcpy(item->symbol, symbol, strlen(symbol) + 1);
+    item->named = symbol != NULL;
+    item->ordinal = ordinal;
+    item->iat = iat;
+    return 0;
+}
+
+static int binding_order(const void *a, const void *b)
+{
+    const binding *left = a, *right = b;
+    return (left->iat > right->iat) - (left->iat < right->iat);
+}
+
+g32_pe_result g32_pe_bind_imports(g32_space *s, const g32_pe_image *image,
+                                  g32_pe_import_resolver resolver, void *context)
+{
+    if (!resolver) return G32_PE_FORMAT;
+    bindings b = { .result = G32_PE_OK };
+    g32_pe_result result = g32_pe_imports(s, image, collect_binding, &b);
+    if (result != G32_PE_OK) goto done;
+    result = b.result;
+    if (result != G32_PE_OK) goto done;
+    /* No guest writes during lookup traversal, including FirstThunk fallback
+     * and IAT slots aliasing lookup strings. Reject conflicting writes. */
+    if (b.count) qsort(b.items, b.count, sizeof(*b.items), binding_order);
+    for (size_t n = 0; n < b.count; ++n) {
+        if (n && (uint64_t)b.items[n - 1].iat + 4 > b.items[n].iat) {
+            result = G32_PE_FORMAT;
+            goto done;
+        }
+    }
+    result = G32_PE_IMPORT;
+    for (size_t n = 0; n < b.count; ++n) {
+        binding *item = &b.items[n];
+        uint64_t address = 0;
+        if (!resolver(context, item->dll, item->named ? item->symbol : NULL,
+                      item->ordinal, &address) || address > UINT32_MAX)
+            goto done;
+        item->address = (uint32_t)address;
+    }
+    /* Validate after all callbacks, then retain checked write loans until the
+     * serialized commit. There are no fallible operations in the write phase. */
+    for (size_t n = 0; n < b.count; ++n) {
+        binding *item = &b.items[n];
+        void *target;
+        if ((g32_translate(s, item->address, 1, G32_READ, &target) != G32_OK &&
+             g32_translate(s, item->address, 1, G32_EXEC, &target) != G32_OK) ||
+            g32_translate(s, item->iat, 4, G32_WRITE, &item->write_loan) != G32_OK)
+            goto done;
+    }
+    for (size_t n = 0; n < b.count; ++n)
+        put32(b.items[n].write_loan, b.items[n].address);
+    result = G32_PE_OK;
+done:
+    free(b.items);
+    return result;
+}

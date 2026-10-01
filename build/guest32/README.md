@@ -1,6 +1,6 @@
 # Software-separated Win32 memory experiment
 
-This is a **host-tested memory and PE32 image-mapping prototype**, not a shipped
+This is a **host-tested memory, PE32 mapping and import-binding prototype**, not a shipped
 runtime, complete Windows loader, WoW64 bridge or emulator. The dev app can
 exercise the memory contract from Settings; no game uses it. It cannot run
 Portal 2.
@@ -65,14 +65,30 @@ release only the reservation obtained by that call, never a conflicting one.
 
 Import inspection reads bounded descriptors, lookup tables, IAT slots, DLL and
 symbol names through checked guest reads, including ordinal imports and the
-FirstThunk fallback. It does **not** bind imports, load dependencies, initialise
-TLS, construct Windows process state, call DllMain or execute an entry point.
-Image metadata is native ownership state, not a guest ABI structure; it expires
-when the image's reservation is released. Only serialized use is supported.
+FirstThunk fallback. `g32_pe_bind_imports` snapshots those names and guest IAT
+addresses, then uses a caller-supplied resolver to stage guest target addresses.
+It validates every target and writable IAT slot before writing any slot. Targets
+may be readable data or fetchable code in the same space; wide resolver output
+rejects native pointers rather than truncating them. Duplicate/byte-overlapping
+IAT slots are rejected, and binding failures preserve guest bytes/protections.
+Resolver-side effects cannot be rolled back: callbacks must not modify guest
+memory, change mappings or reenter the API. Only serialized use is supported.
+
+Binding requires already-writable IAT pages and does not broaden permissions.
+The installed launcher and engine each have all IAT slots in one **read-only**
+guest page, so a future loader must bind before final protections (or explicitly
+manage temporary page permissions). This experiment does not do that for games.
+The FirstThunk fallback is snapshotted before writes but cannot be rebound after
+its lookup data is overwritten. Import inspection/binding does **not** load or
+resolve dependencies itself, initialise TLS, construct Windows process state,
+call DllMain or execute an entry point. Image metadata is native ownership state,
+not a guest ABI structure; it expires when its reservation is released.
 
 The parser deliberately supports page-aligned sections (alignment at least
 4 KiB), at most 96 sections, 16 data directories and a 512 MiB image. Import
-inspection has a total one-million-thunk budget. These are experimental
+inspection has a total one-million-thunk budget; binding stages at most 65536
+imports. Bound-address/delay imports and automatic export-forwarder resolution
+are not supported. These are experimental
 resource/format limits, not a statement of full Windows loader compatibility.
 Guard pages, shared/write-copy mappings and discardable sections are not yet
 implemented. Headers retain the file's original preferred ImageBase; relocated
@@ -81,7 +97,14 @@ guest addresses are returned separately in `g32_pe_image`.
 `pp test --quick` also runs `pe32_test.c`: synthetic images at native, 16 KiB and
 64 KiB host granules, every truncated input length, malformed headers/sections,
 relocations, imports, reservation conflicts, rollback and 4096 deterministic
-file mutations. Real game's files are private and are **not** CI fixtures.
+file mutations. Binding checks exercise synthetic function/data imports, ordinal
+and FirstThunk lookup, rebind with a separate lookup table, high native-pointer
+rejection, wrong-space/unmapped/inaccessible targets, read-only and cross-page
+IAT refusal, malformed later imports before resolver callbacks, overlapping
+slots, resource limits and no-import images. Real game files are private and
+are **not** CI fixtures. Their binding test deliberately rejects an unresolved
+import and verifies the entire mapped image is unchanged; no game import is
+resolved. [Binding evidence](../../docs/evidence/2026-10-02-guest32-import-binding.md).
 Their read-only local inspection can run through the same test executable:
 
 ```sh
