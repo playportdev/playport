@@ -392,6 +392,107 @@ static void binding_cases(size_t granule)
     printf("pe32: granule=%zu transactional guest-import binding checks ok\n", granule);
 }
 
+static void bound_rejected(g32_space *s, const unsigned char *f, size_t size,
+                            uint32_t base, resolver_state *state, g32_pe_result error)
+{
+    g32_pe_image output, before;
+    memset(&output, 0xa5, sizeof(output)); memcpy(&before, &output, sizeof(before));
+    IS(g32_pe_map_bound(s, f, size, base, resolve_fixture, state, &output), error);
+    assert(memcmp(&output, &before, sizeof(output)) == 0);
+    OK(g32_reserve(s, base ? base : PREFERRED, 0x5000));
+    OK(g32_release(s, base ? base : PREFERRED));
+}
+
+static void bound_mapping_cases(size_t granule)
+{
+    unsigned char original[FILE_SIZE], f[FILE_SIZE], source[FILE_SIZE], slots[8]; fixture(original);
+    g32_space *s; OK(g32_create(granule, &s));
+    g32_pe_image dependency, image;
+    const uint32_t dep = 0x600000;
+    PE_OK(g32_pe_map(s, original, sizeof(original), dep, &dependency));
+    for (unsigned n = 0; n < 6; ++n) {
+        memcpy(f, original, sizeof(f));
+        uint32_t base = n & 1 ? 0x500000 : PREFERRED;
+        uint32_t iat = n & 4 ? 0x2ffe : 0x2150;
+        if (n & 2) p32(f + IMPORT_FILE, 0); /* FirstThunk-only snapshot. */
+        if (n & 4) {
+            p32(f + IMPORT_FILE + 16, iat);
+            /* An unaligned slot spans two guest pages within one host granule.
+             * Both pages will be read-only again after binding. */
+            p32(f + TABLE + 80 + 36, 0x40000040);
+        }
+        memcpy(source, f, sizeof(source));
+        resolver_state state = { .named = dep + 0x1000, .ordinal = dep + 0x3000 };
+        PE_OK(g32_pe_map_bound(s, f, sizeof(f), base == PREFERRED ? 0 : base,
+                               resolve_fixture, &state, &image));
+        assert(memcmp(source, f, sizeof(source)) == 0);
+        assert(state.calls == 2 && image.base == base && image.entry == base + 0x1000 &&
+               image.relocations == (base != PREFERRED));
+        OK(g32_read(s, base + iat, slots, sizeof(slots)));
+        assert(u32(slots) == dep + 0x1000 && u32(slots + 4) == dep + 0x3000);
+        IS(g32_write(s, base + iat, slots, sizeof(slots)), G32_ACCESS);
+        IS(g32_write(s, base, slots, 1), G32_ACCESS);
+        IS(g32_write(s, base + 0x1000, slots, 1), G32_ACCESS);
+        OK(g32_fetch(s, base + 0x1000, slots, 1)); assert(slots[0] == 0xc3);
+        IS(g32_fetch(s, base + 0x2000, slots, 1), G32_ACCESS);
+        IS(g32_read(s, base + 0x4000, slots, 1), G32_ACCESS);
+        if (!(n & 4)) OK(g32_write(s, base + 0x3000, slots, 1));
+        OK(g32_pe_unmap(s, &image));
+    }
+    const uint32_t base = 0x500000;
+    /* Self-targets are checked under final permissions, not just initial RW.
+     * An execute-only function remains valid; no-access data cannot escape. */
+    memcpy(f, original, sizeof(f)); p32(f + TABLE + 36, 0x20000020);
+    resolver_state state = { .named = base + 0x1000, .ordinal = base + 0x3000 };
+    PE_OK(g32_pe_map_bound(s, f, sizeof(f), base, resolve_fixture, &state, &image));
+    OK(g32_read(s, base + 0x2150, slots, sizeof(slots)));
+    assert(u32(slots) == base + 0x1000 && u32(slots + 4) == base + 0x3000);
+    IS(g32_read(s, base + 0x1000, slots, 1), G32_ACCESS);
+    OK(g32_fetch(s, base + 0x1000, slots, 1)); OK(g32_pe_unmap(s, &image));
+    p32(f + TABLE + 80 + 36, 0); state.calls = 0;
+    bound_rejected(s, f, sizeof(f), base, &state, G32_PE_IMPORT); assert(state.calls == 2);
+    /* Failure after binding/finalization must also discard the reservation. */
+    memcpy(f, original, sizeof(f)); p32(f + OPTIONAL + 16, 0x2000); state.calls = 0;
+    bound_rejected(s, f, sizeof(f), base, &state, G32_PE_FORMAT); assert(state.calls == 2);
+    const uint64_t bad[] = { 0, base + 0x4000, UINT64_C(1) << 32,
+                             g32_backing_base(s) + dep + 0x1000 };
+    for (unsigned n = 0; n <= sizeof(bad) / sizeof(bad[0]); ++n) {
+        state = (resolver_state){ .named = dep + 0x1000, .ordinal = dep + 0x3000 };
+        if (!n) state.fail_at = 2; else state.ordinal = bad[n - 1];
+        bound_rejected(s, original, sizeof(original), base, &state, G32_PE_IMPORT);
+        assert(state.calls == 2);
+    }
+    /* Import snapshot, parsing and relocation failures happen before callbacks. */
+    memcpy(f, original, sizeof(f)); p32(f + 0x544, 0xffffffffu); state.calls = 0;
+    bound_rejected(s, f, sizeof(f), base, &state, G32_PE_FORMAT); assert(!state.calls);
+    memcpy(f, original, sizeof(f)); p16(f + RELOC_FILE + 8, 0xa004);
+    bound_rejected(s, f, sizeof(f), base, &state, G32_PE_UNSUPPORTED); assert(!state.calls);
+    bound_rejected(s, original, 63, base, &state, G32_PE_FORMAT); assert(!state.calls);
+    /* No-import images still finalize, with no resolver callbacks. */
+    memcpy(f, original, sizeof(f)); p32(f + OPTIONAL + 96 + 8, 0); p32(f + OPTIONAL + 100 + 8, 0);
+    PE_OK(g32_pe_map_bound(s, f, sizeof(f), base, resolve_fixture, &state, &image));
+    assert(!state.calls); IS(g32_write(s, base + 0x2150, slots, 4), G32_ACCESS);
+    OK(g32_pe_unmap(s, &image));
+    g32_pe_image output, before;
+    memset(&output, 0xa5, sizeof(output)); memcpy(&before, &output, sizeof(before));
+    IS(g32_pe_map_bound(s, original, sizeof(original), base, NULL, NULL, &output), G32_PE_FORMAT);
+    assert(memcmp(&output, &before, sizeof(output)) == 0);
+    /* A conflict must not release or alter a previously mapped dependency. */
+    state.calls = 0;
+    IS(g32_pe_map_bound(s, original, sizeof(original), dep, resolve_fixture, &state, &output),
+       G32_PE_ADDRESS);
+    assert(!state.calls && memcmp(&output, &before, sizeof(output)) == 0);
+    unsigned char unchanged[0x4000], expected[0x4000];
+    OK(g32_read(s, dep, unchanged, 0x4000));
+    OK(g32_pe_unmap(s, &dependency));
+    PE_OK(g32_pe_map(s, original, sizeof(original), dep, &dependency));
+    OK(g32_read(s, dep, expected, 0x4000)); assert(memcmp(unchanged, expected, 0x4000) == 0);
+    OK(g32_pe_unmap(s, &dependency));
+    fixture(f); assert(memcmp(f, original, sizeof(f)) == 0);
+    g32_destroy(s);
+    printf("pe32: granule=%zu map-bind-finalize and rollback checks ok\n", granule);
+}
+
 /* Export directory fits before the independent relocation/import fixtures. */
 static void export_fixture(unsigned char *f)
 {
@@ -543,6 +644,12 @@ static void export_cases(size_t granule)
     PE_OK(g32_pe_bind_imports(s, &importer, resolve_export, &resolver));
     unsigned char slots[8]; OK(g32_read(s, PREFERRED + 0x2150, slots, sizeof(slots)));
     assert(resolver.calls == 2 && u32(slots) == 0x601000 && u32(slots + 4) == 0x603000);
+    OK(g32_pe_unmap(s, &importer));
+    resolver.calls = 0;
+    PE_OK(g32_pe_map_bound(s, f, sizeof(f), 0, resolve_export, &resolver, &importer));
+    OK(g32_read(s, PREFERRED + 0x2150, slots, sizeof(slots)));
+    assert(resolver.calls == 2 && u32(slots) == 0x601000 && u32(slots + 4) == 0x603000);
+    IS(g32_write(s, PREFERRED + 0x2150, slots, sizeof(slots)), G32_ACCESS);
     OK(g32_pe_unmap(s, &importer)); OK(g32_pe_unmap(s, &dependency));
     g32_destroy(s); g32_destroy(other);
     printf("pe32: granule=%zu checked guest-export lookup and binding checks ok\n", granule);
@@ -666,6 +773,36 @@ static void private_exports(g32_space *s, const g32_pe_image *image,
     printf("pe32: %u ordinal entries and %u named exports match independent raw-file tables\n", functions, names);
 }
 
+/* PRIVATE layout experiment only: the target is inert readable test data,
+ * NOT a Windows API implementation. Never execute any of these IAT entries. */
+typedef struct {
+    g32_space *space;
+    uint32_t base, target;
+    unsigned char *expected;
+    unsigned inspected, resolved;
+} private_layout;
+
+static int placeholder_import(void *context, const char *dll, const char *symbol,
+                               uint16_t ordinal, uint64_t *address)
+{
+    (void)dll; (void)symbol; (void)ordinal;
+    private_layout *layout = context;
+    ++layout->resolved; *address = layout->target;
+    return 1;
+}
+
+static int readonly_slot(void *context, const char *dll, const char *symbol,
+                         uint16_t ordinal, uint32_t iat)
+{
+    (void)dll; (void)symbol; (void)ordinal;
+    private_layout *layout = context;
+    void *loan;
+    IS(g32_translate(layout->space, iat, 4, G32_WRITE, &loan), G32_ACCESS);
+    if (layout->expected) p32(layout->expected + iat - layout->base, layout->target);
+    ++layout->inspected;
+    return 0;
+}
+
 static void private_image(const char *path)
 {
     FILE *file = fopen(path, "rb"); assert(file);
@@ -676,6 +813,9 @@ static void private_image(const char *path)
     assert(fread(bytes, 1, (size_t)length, file) == (size_t)length); fclose(file);
     g32_space *s;
     OK(g32_create(16384, &s));
+    const uint32_t placeholder = 0x30000000;
+    OK(g32_reserve(s, placeholder, G32_PAGE));
+    OK(g32_commit(s, placeholder, G32_PAGE, G32_READ));
     for (unsigned relocated = 0; relocated < 2; ++relocated) {
         g32_pe_image image;
         PE_OK(g32_pe_map(s, bytes, (size_t)length, relocated ? 0x20000000 : 0, &image));
@@ -690,15 +830,36 @@ static void private_image(const char *path)
         assert(unresolved == 1); /* Fully parsed, but deliberately NOT resolved. */
         OK(g32_read(s, image.base, after, image.size));
         assert(memcmp(before, after, image.size) == 0);
-        free(before); free(after);
         void *entry;
         OK(g32_translate(s, image.entry, 1, G32_EXEC, &entry));
         printf("pe32: %s base=%08x size=%08x entry=%08x sections=%u relocations=%u imports=%u backing_above_4GiB=%s\n",
                path, image.base, image.size, image.entry, image.sections, image.relocations, calls,
                (uintptr_t)entry > UINT32_MAX ? "yes" : "no");
         puts("pe32: real exports inspected, unresolved import rejected; entire mapped image unchanged");
+        private_layout layout = { .space = s, .base = image.base, .target = placeholder,
+                                  .expected = before };
+        PE_OK(g32_pe_imports(s, &image, readonly_slot, &layout));
+        assert(layout.inspected == calls);
+        uint32_t base = image.base, image_size = image.size;
         OK(g32_pe_unmap(s, &image));
+        g32_pe_image output, sentinel;
+        memset(&output, 0xa5, sizeof(output)); memcpy(&sentinel, &output, sizeof(sentinel));
+        unresolved = 0;
+        IS(g32_pe_map_bound(s, bytes, (size_t)length, base, unresolved_import, &unresolved, &output),
+           G32_PE_IMPORT);
+        assert(unresolved == 1 && memcmp(&output, &sentinel, sizeof(output)) == 0);
+        OK(g32_reserve(s, base, image_size)); OK(g32_release(s, base));
+        PE_OK(g32_pe_map_bound(s, bytes, (size_t)length, base, placeholder_import, &layout, &image));
+        assert(layout.resolved == calls);
+        OK(g32_read(s, base, after, image.size));
+        assert(memcmp(before, after, image.size) == 0); /* Only IAT words differ. */
+        layout.expected = NULL; layout.inspected = 0;
+        PE_OK(g32_pe_imports(s, &image, readonly_slot, &layout)); assert(layout.inspected == calls);
+        printf("pe32: private layout only: %u IAT words patched to inert test DATA; final slots read-only; unresolved map rolled back\n", calls);
+        OK(g32_pe_unmap(s, &image));
+        free(before); free(after);
     }
+    OK(g32_release(s, placeholder));
     g32_destroy(s); free(bytes);
 }
 
@@ -707,9 +868,10 @@ int main(int argc, char **argv)
     cases(0); cases(16384); cases(65536);
     relocations_and_imports();
     binding_cases(0); binding_cases(16384); binding_cases(65536);
+    bound_mapping_cases(0); bound_mapping_cases(16384); bound_mapping_cases(65536);
     export_cases(0); export_cases(16384); export_cases(65536);
     mutations();
     for (int n = 1; n < argc; ++n) private_image(argv[n]);
-    puts("pe32: synthetic imports bound only; no game imports resolved or guest instructions executed");
+    puts("pe32: synthetic dependencies bound; private IAT patches are inert layout tests; no game APIs or guest execution");
     return 0;
 }

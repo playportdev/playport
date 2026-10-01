@@ -60,6 +60,19 @@ typedef int (*g32_pe_import_resolver)(void *context, const char *dll,
                                      uint64_t *guest_address);
 g32_pe_result g32_pe_bind_imports(g32_space *space, const g32_pe_image *image,
                                   g32_pe_import_resolver resolver, void *context);
+/* Map, relocate and bind a NEW image before applying final PE permissions.
+ * Unlike bind_imports on an existing image, read-only IAT sections work without
+ * leaving them writable. Resolver is required, even for a no-import image;
+ * dependencies must already exist. No native execution or dependency loading.
+ * Same callback/resource restrictions as bind_imports. The unpublished image
+ * is RW (not guest executable) during callbacks; do not read/modify it or retain
+ * loans into it. Targets are checked again AFTER final permissions, including
+ * self-import targets. Failure leaves output unchanged and releases only this
+ * call's image, not dependencies; resolver-side effects are not rolled back.
+ * Native VM failure may poison the space, as for map. */
+g32_pe_result g32_pe_map_bound(g32_space *space, const void *file, size_t file_size,
+                               uint32_t base, g32_pe_import_resolver resolver,
+                               void *context, g32_pe_image *output);
 /* Checked export lookup, NOT dependency loading or forwarder resolution.
  * symbol!=NULL selects an exact case-sensitive name (ordinal ignored); NULL
  * selects the full export ordinal, not an EAT index. Missing/zero EAT entries

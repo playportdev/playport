@@ -74,10 +74,16 @@ IAT slots are rejected, and binding failures preserve guest bytes/protections.
 Resolver-side effects cannot be rolled back: callbacks must not modify guest
 memory, change mappings or reenter the API. Only serialized use is supported.
 
-Binding requires already-writable IAT pages and does not broaden permissions.
-The installed launcher and engine each have all IAT slots in one **read-only**
-guest page, so a future loader must bind before final protections (or explicitly
-manage temporary page permissions). This experiment does not do that for games.
+Binding an existing image requires already-writable IAT pages and does not
+broaden permissions. `g32_pe_map_bound` instead maps/relocates a **new** image,
+then binds before applying final PE permissions. The installed launcher and
+engine have read-only IAT pages; this path leaves them read-only after binding.
+Dependencies must already be mapped, and a resolver is required. The unpublished
+image is initially guest RW/non-executable; resolver callbacks must not access
+it or retain loans into it. Targets are rechecked after final protections so
+self-targets cannot retain access granted only during image construction.
+Any failure (even after IAT writes) discards only the new image, leaves output
+unchanged and preserves dependencies. This still does not implement game APIs.
 The FirstThunk fallback is snapshotted before writes but cannot be rebound after
 its lookup data is overwritten. Import inspection/binding does **not** load or
 resolve dependencies itself, initialise TLS, construct Windows process state,
@@ -103,9 +109,17 @@ rejection, wrong-space/unmapped/inaccessible targets, read-only and cross-page
 IAT refusal, malformed later imports before resolver callbacks, overlapping
 slots, resource limits and no-import images. Real game files are private and
 are **not** CI fixtures. Their binding test deliberately rejects an unresolved
-import and verifies the entire mapped image is unchanged; no game import is
-resolved. [Binding evidence](../../docs/evidence/2026-10-02-guest32-import-binding.md).
-Their read-only local inspection can run through the same test executable:
+import and verifies the entire mapped image is unchanged; no Windows API is
+implemented. [Binding evidence](../../docs/evidence/2026-10-02-guest32-import-binding.md).
+Map-and-bind tests additionally cover read-only/unaligned cross-page IAT slots,
+FirstThunk snapshots, self-targets under final permissions, failed finalization,
+reservation rollback, dependency preservation and export-resolver integration.
+The optional private-file test also rejects unresolved map-and-bind, then patches
+all IAT slots to **inert readable test data**, comparing every image byte against
+an IAT-only overlay and checking that every slot remains read-only. This is a
+layout/permission experiment, not real game dependency resolution or execution.
+[Map-and-bind evidence](../../docs/evidence/2026-10-02-guest32-map-bound.md).
+The local host inspection can run through the same test executable:
 
 ```sh
 clang -std=c11 -O2 -Wall -Wextra -Werror \

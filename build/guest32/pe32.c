@@ -23,6 +23,10 @@ typedef struct {
     section sections[G32_PE_MAX_SECTIONS];
 } layout;
 
+static g32_pe_result bind_imports(g32_space *s, const g32_pe_image *image,
+                                  g32_pe_import_resolver resolver, void *context,
+                                  layout *unpublished);
+
 static uint16_t le16(const unsigned char *p)
 { return (uint16_t)(p[0] | (uint16_t)p[1] << 8); }
 static uint32_t le32(const unsigned char *p)
@@ -156,8 +160,27 @@ done:
     return result;
 }
 
-g32_pe_result g32_pe_map(g32_space *s, const void *file, size_t size,
-                         uint32_t base, g32_pe_image *output)
+static g32_pe_result finalize(g32_space *s, layout *l)
+{
+    if (g32_protect(s, l->image.base, page_up(l->headers), G32_READ) != G32_OK)
+        return G32_PE_MEMORY;
+    for (unsigned n = 0; n < l->image.sections; ++n) {
+        const section *d = &l->sections[n];
+        if (d->extent && g32_protect(s, l->image.base + d->rva, d->extent, d->permissions) != G32_OK)
+            return G32_PE_MEMORY;
+    }
+    if (l->image.entry) {
+        void *instruction;
+        if (g32_translate(s, l->image.base + l->image.entry, 1, G32_EXEC, &instruction) != G32_OK)
+            return G32_PE_FORMAT;
+        l->image.entry += l->image.base;
+    }
+    return G32_PE_OK;
+}
+
+static g32_pe_result map_image(g32_space *s, const void *file, size_t size,
+                               uint32_t base, g32_pe_import_resolver resolver,
+                               void *context, g32_pe_image *output)
 {
     if (!s || !output) return G32_PE_FORMAT;
     layout l;
@@ -184,25 +207,27 @@ g32_pe_result g32_pe_map(g32_space *s, const void *file, size_t size,
     }
     result = relocate(s, &l);
     if (result != G32_PE_OK) goto failed;
-    result = G32_PE_MEMORY;
-    if (g32_protect(s, base, page_up(l.headers), G32_READ) != G32_OK) goto failed;
-    for (unsigned n = 0; n < l.image.sections; ++n) {
-        const section *d = &l.sections[n];
-        if (d->extent && g32_protect(s, base + d->rva, d->extent, d->permissions) != G32_OK) goto failed;
-    }
-    if (l.image.entry) {
-        void *instruction;
-        if (g32_translate(s, base + l.image.entry, 1, G32_EXEC, &instruction) != G32_OK) {
-            result = G32_PE_FORMAT;
-            goto failed;
-        }
-        l.image.entry += base;
-    }
+    result = resolver ? bind_imports(s, &l.image, resolver, context, &l) : finalize(s, &l);
+    if (result != G32_PE_OK) goto failed;
     *output = l.image;
     return G32_PE_OK;
 failed:
     if (g32_release(s, base) == G32_SYSTEM) return G32_PE_MEMORY;
     return result;
+}
+
+g32_pe_result g32_pe_map(g32_space *s, const void *file, size_t size,
+                         uint32_t base, g32_pe_image *output)
+{
+    return map_image(s, file, size, base, NULL, NULL, output);
+}
+
+g32_pe_result g32_pe_map_bound(g32_space *s, const void *file, size_t size,
+                               uint32_t base, g32_pe_import_resolver resolver,
+                               void *context, g32_pe_image *output)
+{
+    if (!resolver) return G32_PE_FORMAT;
+    return map_image(s, file, size, base, resolver, context, output);
 }
 
 g32_result g32_pe_unmap(g32_space *s, const g32_pe_image *image)
@@ -384,8 +409,16 @@ static int binding_order(const void *a, const void *b)
     return (left->iat > right->iat) - (left->iat < right->iat);
 }
 
-g32_pe_result g32_pe_bind_imports(g32_space *s, const g32_pe_image *image,
-                                  g32_pe_import_resolver resolver, void *context)
+static int accessible_target(g32_space *s, uint32_t address)
+{
+    void *target;
+    return g32_translate(s, address, 1, G32_READ, &target) == G32_OK ||
+           g32_translate(s, address, 1, G32_EXEC, &target) == G32_OK;
+}
+
+static g32_pe_result bind_imports(g32_space *s, const g32_pe_image *image,
+                                  g32_pe_import_resolver resolver, void *context,
+                                  layout *unpublished)
 {
     if (!resolver) return G32_PE_FORMAT;
     bindings b = { .result = G32_PE_OK };
@@ -415,16 +448,29 @@ g32_pe_result g32_pe_bind_imports(g32_space *s, const g32_pe_image *image,
      * serialized commit. There are no fallible operations in the write phase. */
     for (size_t n = 0; n < b.count; ++n) {
         binding *item = &b.items[n];
-        void *target;
-        if ((g32_translate(s, item->address, 1, G32_READ, &target) != G32_OK &&
-             g32_translate(s, item->address, 1, G32_EXEC, &target) != G32_OK) ||
+        if (!accessible_target(s, item->address) ||
             g32_translate(s, item->iat, 4, G32_WRITE, &item->write_loan) != G32_OK)
             goto done;
     }
     for (size_t n = 0; n < b.count; ++n)
         put32(b.items[n].write_loan, b.items[n].address);
+    if (unpublished) {
+        /* Only a new image can be discarded after a post-write failure. Never
+         * use the now-expired write loans after changing guest permissions. */
+        result = finalize(s, unpublished);
+        if (result != G32_PE_OK) goto done;
+        result = G32_PE_IMPORT;
+        for (size_t n = 0; n < b.count; ++n)
+            if (!accessible_target(s, b.items[n].address)) goto done;
+    }
     result = G32_PE_OK;
 done:
     free(b.items);
     return result;
+}
+
+g32_pe_result g32_pe_bind_imports(g32_space *s, const g32_pe_image *image,
+                                  g32_pe_import_resolver resolver, void *context)
+{
+    return bind_imports(s, image, resolver, context, NULL);
 }
