@@ -84,6 +84,8 @@ C_TESTS = [
     ("self-check", ["app/tests/selfcheck_test.c", "app/Sources/WineHost/selfcheck.c"], []),
     ("session protocol", ["app/tests/session_protocol_test.c"], []),
     ("guest32 memory experiment", ["build/guest32/guest32_test.c", "build/guest32/guest32.c"], []),
+    ("guest32 PE32 mapping experiment", ["build/guest32/pe32_test.c", "build/guest32/pe32.c",
+                                          "build/guest32/guest32.c"], []),
 ]
 
 

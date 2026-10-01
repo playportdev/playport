@@ -1,7 +1,8 @@
 # Software-separated Win32 memory experiment
 
-This is a **host-tested memory prototype**, not a shipped runtime, PE loader,
-WoW64 bridge or emulator. Nothing in the app calls it. It cannot run Portal 2.
+This is a **host-tested memory and PE32 image-mapping prototype**, not a shipped
+runtime, complete Windows loader, WoW64 bridge or emulator. Nothing in the app
+calls it. It cannot run Portal 2.
 It establishes the first memory contract from
 [the Portal 2 investigation](../../docs/evidence/2026-10-01-portal2-32-bit.md).
 The app remains x86-64-only; no runtime decision or pin is changed.
@@ -50,6 +51,48 @@ clang -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
   -o .work/guest32/test-sanitized
 .work/guest32/test-sanitized
 ```
+
+## PE32 image materialization
+
+`pe32.{h,c}` maps i386 PE32 file buffers into guest reservations, copies headers
+and sections, zeroes BSS, applies HIGHLOW/ABSOLUTE relocations and sets per-guest-
+page permissions. All guest addresses, including the returned entry point and
+IAT slots, remain 32-bit values. It never executes backing natively. Relocation
+records are snapshotted before applying fixups, so a fixup cannot mutate a later
+record while it is being parsed. Mapping failures leave output unchanged and
+release only the reservation obtained by that call, never a conflicting one.
+
+Import inspection reads bounded descriptors, lookup tables, IAT slots, DLL and
+symbol names through checked guest reads, including ordinal imports and the
+FirstThunk fallback. It does **not** bind imports, load dependencies, initialise
+TLS, construct Windows process state, call DllMain or execute an entry point.
+Image metadata is native ownership state, not a guest ABI structure; it expires
+when the image's reservation is released. Only serialized use is supported.
+
+The parser deliberately supports page-aligned sections (alignment at least
+4 KiB), at most 96 sections, 16 data directories and a 512 MiB image. Import
+inspection has a total one-million-thunk budget. These are experimental
+resource/format limits, not a statement of full Windows loader compatibility.
+Guard pages, shared/write-copy mappings and discardable sections are not yet
+implemented. Headers retain the file's original preferred ImageBase; relocated
+guest addresses are returned separately in `g32_pe_image`.
+
+`pp test --quick` also runs `pe32_test.c`: synthetic images at native, 16 KiB and
+64 KiB host granules, every truncated input length, malformed headers/sections,
+relocations, imports, reservation conflicts, rollback and 4096 deterministic
+file mutations. Real game's files are private and are **not** CI fixtures.
+Their read-only local inspection can run through the same test executable:
+
+```sh
+clang -std=c11 -O2 -Wall -Wextra -Werror \
+  build/guest32/guest32.c build/guest32/pe32.c build/guest32/pe32_test.c \
+  -o .work/guest32/pe32-test
+.work/guest32/pe32-test .work/portal2-files/portal2.exe .work/portal2-files/engine.dll
+```
+
+This is a host test, not another entry point into app functionality. The
+[real-file evidence](../../docs/evidence/2026-10-02-guest32-pe32.md) includes an
+independent full-image comparison at both preferred and relocated addresses.
 
 ## Still needed before a title launch
 
