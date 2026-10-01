@@ -367,7 +367,11 @@ build) and repairs, one at a time, in an order Y changes. The queue is written t
 container after every change; a launch holds every job, and the process after the
 restart ([decision 0029](decisions/0029-restart-after-each-game.md)) lets go of every hold
 but the player's Pause and runs it once Steam is signed in. A release build compiles none of `Dev/`
-([decision 0009](decisions/0009-dev-and-release-builds.md)).
+([decision 0009](decisions/0009-dev-and-release-builds.md)). Its Developer probes
+include a software Win32 memory experiment (`Guest32Experiment`),
+[tested on the phone](evidence/2026-10-02-guest32-device-memory.md): temporary
+high-backed windows, no Wine/JIT/game execution. That target is omitted in
+release and does not change the x86-64-only runtime.
 
 - **Catalogue** (`app/PlayportKit`, tested on Linux): rebuilt by *adoption*
   each time the app comes to the front, from the prefix's `C:\Games`. A folder

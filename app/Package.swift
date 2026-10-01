@@ -149,7 +149,7 @@ let package = Package(
                            .product(name: "HostIOKit", package: "HostIOKit"),
                            .product(name: "SteamClientKit", package: "SteamClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
-                + ["Relaunch"],
+                + ["Relaunch"] + (release ? [] : ["Guest32Experiment"]),
             path: "Sources/S1Probe",
             // Runtime/ ships at the app root through xtool.yml `resources`, not
             // as a SwiftPM resource bundle: ntdll resolves nls/ and <arch>-windows/
@@ -169,5 +169,9 @@ let package = Package(
             name: "Relaunch",
             linkerSettings: [.unsafeFlags(["-L\(lib)", "-lidevice_ffi"])]
         ),
-    ]
+    ] + (release ? [] : [
+        // Settings' software Win32 memory diagnostic; never linked in release.
+        // Source/header symlinks use the same implementation as the host tests.
+        .target(name: "Guest32Experiment"),
+    ])
 )

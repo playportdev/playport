@@ -45,6 +45,7 @@
 //                              Settings' helper-lifetime probe (HelperLifetimeProbe.swift):
 //                              the run ends with ui-done, and the app ends itself 2 s later;
 //                              -hold turns on its Helper holds on
+//   probe:guest32-memory       Settings' software Win32 memory test (no guest execution)
 //   probe:helper-report        Reads that probe's report back (at the next launch)
 //   probe:pairing              Settings' on-device pairing experiment (iOS 27)
 //   probe:pairing-cancel | probe:pairing-use
@@ -297,6 +298,15 @@ enum UIDriver {
                 case "probe":
                     let probe = HelperLifetimeProbe.shared
                     switch id {
+                    case "guest32-memory":
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        try? await Task.sleep(for: .milliseconds(300))
+                        PadFocus.shared.ring("set:dev:guest32")
+                        guard await Guest32Probe.shared.run() else {
+                            return finish("action=\(action) failed: \(Guest32Probe.shared.status)")
+                        }
+                        log("guest32 probe: \(Guest32Probe.shared.status)")
                     case "helper-exit", "helper-kill", "helper-exit-hold", "helper-kill-hold":
                         guard done + 1 == actions.count else { return finish("action=\(action) refused: it must be the last action") }
                         if let failure = await probe.run(id.hasPrefix("helper-exit") ? .exit : .kill, hold: id.hasSuffix("-hold")) {

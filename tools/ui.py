@@ -82,6 +82,7 @@ model calls: each --action in order, then --settings, --verify, --play:
                          helper ticks, then the app ends itself by exit(0) or SIGKILL 2 s after
                          the run's done (use --leave-running); must be the last action. -hold:
                          the helper takes its own xpc transaction and ignores SIGTERM
+  probe:guest32-memory   Settings' Win32 memory experiment (software VM checks; no guest execution)
   probe:helper-report    read that probe's report back into s1-host.log (a later run, --keep-log)
   jit:setup | jit:pair   Open the product setup (Pair again keeps old credentials until verified)
   jit:continue | jit:open-settings | jit:cancel | jit:wait
@@ -229,7 +230,7 @@ class EndOnTerm:
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|(?:uninstall|verify|play):[a-z]+-[a-z0-9 ._-]+"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[a-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:guest32-memory|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
 
 
 def in_game(actions, start):
@@ -341,7 +342,7 @@ def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
                    help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, uninstall:ID, "
-                        "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
+                        "verify:ID, play:ID, probe:helper-exit|kill|report, probe:guest32-memory, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; {} clears them)')
@@ -377,7 +378,7 @@ def parse(argv=None):
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences",)):
             p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
-                    "queue:APP, downloading:APP, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
+                    "queue:APP, downloading:APP, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:guest32-memory, probe:relaunch or probe:pairing[-cancel|-use]")
     a.settings_pair = None
     if a.settings:
         sid, _, js = a.settings.partition(":")

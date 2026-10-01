@@ -86,6 +86,8 @@ C_TESTS = [
     ("guest32 memory experiment", ["build/guest32/guest32_test.c", "build/guest32/guest32.c"], []),
     ("guest32 PE32 mapping experiment", ["build/guest32/pe32_test.c", "build/guest32/pe32.c",
                                           "build/guest32/guest32.c"], []),
+    ("guest32 native Settings probe", ["build/guest32/probe_test.c", "app/Sources/Guest32Experiment/probe.c",
+                                       "build/guest32/guest32.c"], ["-Iapp/Sources/Guest32Experiment/include"]),
 ]
 
 

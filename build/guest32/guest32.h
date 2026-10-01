@@ -5,7 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Host-side experiment, NOT the app's memory manager. All calls and borrowed
+/* Memory experiment (host tests/dev Settings), NOT the game's memory manager.
+ * All calls and borrowed
  * pointers require external serialization. No Windows ABI types cross this API.
  * Guests have 4 KiB pages and 64 KiB allocation granularity, even on a 16 KiB
  * host. Permissions must be checked in software for EVERY guest access. */

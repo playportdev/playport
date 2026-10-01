@@ -64,6 +64,14 @@ class UiEnvTest(unittest.TestCase):
         for bad in ("pad:", "pad:start", "pad:a+", "pad:a b", "pad:A"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_guest32_probe_is_an_explicit_ui_action(self):
+        m = load()
+        self.assertTrue(m.ACTION_RE.fullmatch("probe:guest32-memory"))
+        for bad in ("probe:guest32", "probe:guest32-execute", "probe:guest32-memory-extra"):
+            self.assertFalse(m.ACTION_RE.fullmatch(bad), bad)
+        text = self.dry("--action", "probe:guest32-memory")
+        self.assertIn("UI_ACTIONS=probe:guest32-memory", text)
+
     def test_queue_and_downloading_take_an_app_id(self):
         m = load()
         for ok in ("queue:2494780", "downloading:2494780", "install:367520"):

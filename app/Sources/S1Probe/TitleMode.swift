@@ -60,6 +60,11 @@ final class TitleLaunch: ObservableObject {
                fex: FEXProfile.Launch? = nil, steamAPI: LaunchCoordinator.SteamAPI? = nil,
                memory: MemoryNeed? = nil) -> Bool {
         guard !running, !spent else { return false }
+        #if !PLAYPORT_RELEASE
+        // The diagnostic's software windows may occupy Wine's future fixed
+        // bands. They must be gone before the runtime reserves those bands.
+        guard !Guest32Probe.shared.busy else { return false }
+        #endif
         self.title = title
         self.titleID = titleID
         appID = steamAppID

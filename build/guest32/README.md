@@ -1,8 +1,9 @@
 # Software-separated Win32 memory experiment
 
 This is a **host-tested memory and PE32 image-mapping prototype**, not a shipped
-runtime, complete Windows loader, WoW64 bridge or emulator. Nothing in the app
-calls it. It cannot run Portal 2.
+runtime, complete Windows loader, WoW64 bridge or emulator. The dev app can
+exercise the memory contract from Settings; no game uses it. It cannot run
+Portal 2.
 It establishes the first memory contract from
 [the Portal 2 investigation](../../docs/evidence/2026-10-01-portal2-32-bit.md).
 The app remains x86-64-only; no runtime decision or pin is changed.
@@ -108,6 +109,20 @@ independent full-image comparison at both preferred and relocated addresses.
 - Integration only via patch series and the product UI. First a Portal 2 menu,
   then gameplay, save/reload and Hollow Knight regression plays on the phone.
 
-This window proves software backing is possible on the Linux host. It does not
-prove the 4 GiB reservation works in the iOS process or that a checked FEX/Wine
-bridge is complete or fast enough for gameplay.
+## Phone-side memory gate
+
+Dev Settings › Developer › Probes has **Win32 memory experiment**, also driven
+with `pp ui --action probe:guest32-memory --shot-each-action`. The button runs
+36 checks on a worker, frees both 4 GiB windows and reports its result in the
+row and host log. It uses the very same C sources as the host tests, through
+repo-relative source/header symlinks in `app/Sources/Guest32Experiment/`.
+No Wine session, JIT acquisition, title/file modification or guest execution
+is performed. The probe and a title launch refuse to run concurrently, and a
+spent runtime must restart first: these windows can temporarily occupy the
+bands Wine will later reserve. The target is not declared or linked in release.
+
+[Device evidence](../../docs/evidence/2026-10-02-guest32-device-memory.md) shows
+36/36 checks twice in one iOS process with real 16 KiB host pages. Software
+backing is therefore possible in this app on the phone as well as the host.
+This does not prove a checked FEX/Wine bridge is complete or fast enough for
+gameplay.

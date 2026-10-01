@@ -18,6 +18,7 @@ struct DeveloperSettings: View {
     @AppStorage(RuntimeCounters.key) private var countersOff = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
+    @ObservedObject private var guest32 = Guest32Probe.shared
     @ObservedObject private var probe = HelperLifetimeProbe.shared
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var pairing = OnDevicePairing.shared
@@ -96,6 +97,9 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var probes: some View {
         PadSectionHeader(text: "Probes").id("probes")
+        PadRow(id: "set:dev:guest32", title: "Win32 memory experiment", subtitle: guest32.status, hint: "Run") {
+            if !guest32.busy { Task { _ = await guest32.run() } }
+        }
         PadRow(id: "set:dev:helperExit", title: "Helper lifetime: end by exit", subtitle: probe.status, hint: "Run") {
             if !probe.busy { Task { _ = await probe.run(.exit, hold: hold) } }
         }
