@@ -50,6 +50,20 @@ PC, no cloud, no stream.
 
 <p align="center"><sub>On an A19 Pro iPhone, iOS 27.0, with Metal's performance HUD.</sub></p>
 
+## Quickstart
+
+Playport is not on the App Store: you sideload the `.ipa` yourself.
+
+1. Download the `.ipa` from [Releases](https://github.com/playportdev/playport/releases).
+2. Sideload it onto your iPhone with your own Apple ID.
+3. Turn on Developer Mode (Settings › Privacy & Security), and install
+   LocalDevVPN from the App Store for JIT.
+4. Open Playport and follow its first-run checklist: controller, pairing,
+   LocalDevVPN and Steam.
+
+A free Apple ID signs the app for seven days, so re-sign it once a week; your
+games and saves stay on the phone.
+
 ## Why it's different
 
 - **The real games, on the phone.** Wine, the FEX x86-64 translator and DXMT
