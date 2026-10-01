@@ -111,6 +111,35 @@ g32_result g32_reserve(g32_space *s, uint32_t address, uint64_t size)
     return G32_OK;
 }
 
+g32_result g32_reserve_any(g32_space *s, uint32_t lower, uint64_t upper,
+                           uint64_t size, uint32_t *allocation_base)
+{
+    if (!s || s->poisoned) return G32_SYSTEM;
+    if (!allocation_base || !size || upper > G32_LIMIT || upper <= lower ||
+        size > G32_LIMIT - G32_GRANULE) return G32_RANGE;
+    if (size % G32_PAGE) return G32_ALIGNMENT;
+    uint64_t candidate = ((uint64_t)lower + G32_GRANULE - 1) &
+                         ~(uint64_t)(G32_GRANULE - 1);
+    if (candidate < G32_GRANULE) candidate = G32_GRANULE;
+    while (candidate < upper && size <= upper - candidate) {
+        uint64_t first = candidate / G32_PAGE, end = first + size / G32_PAGE;
+        uint64_t p = first;
+        while (p < end && !s->owner[p]) ++p;
+        if (p == end) {
+            /* Selection and reservation are one externally serialized call.
+             * No native VM operation (and thus no partial system failure). */
+            for (p = first; p < end; ++p) s->owner[p] = (uint32_t)first + 1;
+            *allocation_base = (uint32_t)candidate;
+            return G32_OK;
+        }
+        /* Every base up to this occupied page would also overlap it. Jump
+         * beyond it, then align in wide arithmetic (never wrap at 2^32). */
+        candidate = ((p + 1) * G32_PAGE + G32_GRANULE - 1) &
+                    ~(uint64_t)(G32_GRANULE - 1);
+    }
+    return G32_NO_SPACE;
+}
+
 g32_result g32_commit(g32_space *s, uint32_t address, uint64_t size, unsigned permissions)
 {
     if (permissions & ~PERMISSIONS) return G32_ACCESS;

@@ -19,7 +19,7 @@
 typedef struct g32_space g32_space;
 typedef enum {
     G32_OK, G32_RANGE, G32_ALIGNMENT, G32_CONFLICT, G32_NOT_RESERVED,
-    G32_ACCESS, G32_SYSTEM
+    G32_ACCESS, G32_SYSTEM, G32_NO_SPACE
 } g32_result;
 
 /* host_granule=0 uses the real host page size. A larger power-of-two multiple
@@ -30,6 +30,16 @@ void g32_destroy(g32_space *space);
 uintptr_t g32_backing_base(const g32_space *space);
 
 g32_result g32_reserve(g32_space *space, uint32_t address, uint64_t size);
+/* First-fit reservation within [lower, upper), upper may be 2^32. Bases are
+ * rounded UP to 64 KiB; size must be a nonzero multiple of 4 KiB (not rounded).
+ * The low 64 KiB remains unavailable even when lower=0. No commit or permission
+ * change occurs. Occupied pages, including decommitted reservations, are skipped.
+ * NO_SPACE means valid bounds/size but no fit; invalid bounds return RANGE.
+ * Failure leaves output and all reservations unchanged. External serialization
+ * is required between selection and publication, as for every other VM call.
+ * This is native metadata, not a Windows VirtualAlloc/WoW64 implementation. */
+g32_result g32_reserve_any(g32_space *space, uint32_t lower, uint64_t upper,
+                           uint64_t size, uint32_t *allocation_base);
 g32_result g32_commit(g32_space *space, uint32_t address, uint64_t size, unsigned permissions);
 g32_result g32_protect(g32_space *space, uint32_t address, uint64_t size, unsigned permissions);
 g32_result g32_decommit(g32_space *space, uint32_t address, uint64_t size);

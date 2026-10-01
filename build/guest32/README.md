@@ -21,6 +21,16 @@ Reservations begin at 64 KiB boundaries; guest pages are 4 KiB. The low 64 KiB
 is inaccessible. Commit zeroes only new pages; recommit preserves data. Decommit
 and release zero discarded guest pages and leave committed neighbors intact.
 An unused whole host page becomes `PROT_NONE` and is advised for reclamation.
+`g32_reserve_any` adds deterministic first-fit reservation within a caller's
+half-open guest-address interval, whose exclusive upper bound may be 2^32.
+It rounds bases up to 64 KiB, requires a nonzero 4 KiB-aligned size, skips all
+occupied pages (including decommitted reservations), and never commits backing.
+Selection and reservation occur in one externally serialized call. Invalid
+input and exhaustion are distinct; failures leave output and memory metadata
+unchanged. This supplies bounded allocation groundwork for future dependencies,
+heaps and stacks, not Windows VirtualAlloc or automatic PE loading. The current
+PE mapper still requires an explicit or preferred base; no loader behavior changes.
+
 Release accepts only an allocation's original base. A VM operation cannot span
 two reservations; an ordinary memory access can when both permit it.
 
@@ -42,6 +52,14 @@ launcher's preferred address (`0x400000`) and image extent (`0x5c000`), **not it
 PE contents or execution**; ownership, native/guest pointer conversion,
 null/uncommitted/protected pages, access across pages and reservations, upper
 address overflow, all-or-nothing permission validation, recommit and zeroing.
+
+Automatic reservation tests additionally compare 2048 deterministic mixed
+allocation/release attempts against an independent brute-force page oracle at
+each host granule. They cover partial granules, tight byte bounds, decommitted
+ownership, occupied later pages, intact neighboring data, exhaustion, rollback,
+release/reuse, the upper address boundary and the launcher's preferred-base
+collision. No guest image or instruction executes in these allocation tests.
+[Allocation evidence](../../docs/evidence/2026-10-01-guest32-bounded-allocation.md).
 
 For sanitizers:
 
@@ -202,7 +220,7 @@ these cases; this code is still not linked into the app or checked on the phone.
 
 ## Still needed before a title launch
 
-- Automatic allocation/address queries, Windows guard/write-copy semantics,
+- Memory/address queries, Windows allocation rounding/guard/write-copy semantics,
   concurrent VM changes and safe translated-code invalidation.
 - FEX instruction decode/fetch, every memory emitter and atomic/string path
   translated and checked; exceptions reported with guest addresses; tests of
