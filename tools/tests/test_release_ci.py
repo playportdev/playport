@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Fail-closed public CI regression policy, using only the Python standard library.
 
-Approve the entire executable workflow, not an upload-command/suffix denylist.
+Approve each entire executable workflow, not an upload-command/suffix denylist.
 New jobs/actions/scripts/permissions must be reviewed here as well as in YAML.
+checks.yml tests the source; pages.yml publishes site/ (the landing page) and
+nothing else.
 This cannot defend against changes to this test or uploads hidden in tested code.
 """
 
@@ -47,6 +49,35 @@ jobs:
           grep -q '^Adopted on: [0-9]' LICENSE-EXCEPTION.md
 """
 
+APPROVED_PAGES = """name: pages
+on:
+  push:
+    branches: [main]
+    paths: [site/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+"""
+APPROVED = {"checks.yml": APPROVED_CHECKS, "pages.yml": APPROVED_PAGES}
+
 
 def executable_lines(text):
     """Only full-line comments and blank lines may change without review."""
@@ -59,17 +90,18 @@ def workflow_problems(directory):
     if directory.is_symlink() or not directory.is_dir():
         return ["workflow directory must be a regular directory"]
     entries = sorted(directory.iterdir())
-    if [entry.name for entry in entries] != ["checks.yml"]:
-        return ["only the reviewed checks.yml workflow is allowed"]
-    workflow = entries[0]
-    if workflow.is_symlink() or not workflow.is_file():
-        return ["checks.yml must be a regular file"]
-    try:
-        text = workflow.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return ["checks.yml must be readable UTF-8"]
-    if executable_lines(text) != executable_lines(APPROVED_CHECKS):
-        return ["checks.yml differs from the reviewed source/testing-only policy"]
+    if [entry.name for entry in entries] != sorted(APPROVED):
+        return ["only the reviewed checks.yml and pages.yml workflows are allowed"]
+    for workflow in entries:
+        name = workflow.name
+        if workflow.is_symlink() or not workflow.is_file():
+            return [f"{name} must be a regular file"]
+        try:
+            text = workflow.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return [f"{name} must be readable UTF-8"]
+        if executable_lines(text) != executable_lines(APPROVED[name]):
+            return [f"{name} differs from the reviewed policy"]
     return []
 
 
@@ -88,6 +120,8 @@ class PolicyRegressions(unittest.TestCase):
         self.directory.mkdir()
         self.workflow = self.directory / "checks.yml"
         self.workflow.write_text(APPROVED_CHECKS, encoding="utf-8")
+        self.pages = self.directory / "pages.yml"
+        self.pages.write_text(APPROVED_PAGES, encoding="utf-8")
 
     def reject(self, text):
         self.workflow.write_text(text, encoding="utf-8")
@@ -145,6 +179,23 @@ class PolicyRegressions(unittest.TestCase):
                       "defaults:\n  run:\n    shell: python\n"):
             with self.subTest(extra=extra):
                 self.reject(APPROVED_CHECKS + extra)
+
+    def test_pages_publishes_only_the_site(self):
+        changes = (
+            ("path: site", "path: ."),
+            ("path: site", "path: .work/out"),
+            ("contents: read", "contents: write"),
+            ("    paths: [site/**, .github/workflows/pages.yml]\n", ""),
+            ("runs-on: ubuntu-latest", "runs-on: self-hosted"),
+            ("      - id: deploy", "      - run: ./pp build\n      - id: deploy"),
+        )
+        for old, new in changes:
+            with self.subTest(change=new):
+                self.assertIn(old, APPROVED_PAGES)
+                self.pages.write_text(APPROVED_PAGES.replace(old, new), encoding="utf-8")
+                self.assertTrue(workflow_problems(self.directory))
+        self.pages.unlink()
+        self.assertTrue(workflow_problems(self.directory))
 
     def test_new_or_renamed_workflows_and_nested_entries_are_rejected(self):
         for name in ("release.yml", "publish.yaml", "checks.yaml", "hidden.txt"):
