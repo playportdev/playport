@@ -61,7 +61,9 @@ moved. The owner explicitly approved keeping this experimental toolchain in
 `.work/inputs/`, an exception to the usual system-tool location rule.
 
 The baseline unix build compiled ntdll, win32u and wineserver. Its first
-GStreamer archive download exceeded the foreground timeout; this is not a
-runtime failure or a completed IPA. The phone's existing app has a different
-bundle identity, so it was left untouched. Resolving installation and checking
-JIT and actual guest execution on the phone remain necessary.
+GStreamer archive download exceeded the foreground timeout; this was not a
+runtime failure. The subsequent download and interrupted build were resumed
+without a clean rebuild and produced a
+[verified baseline IPA](2026-10-02-build-restored.md). The phone's existing app
+has a different bundle identity, so it was left untouched. Resolving installation
+and checking JIT and actual guest execution on the phone remain necessary.
