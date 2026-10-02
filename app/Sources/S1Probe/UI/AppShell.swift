@@ -50,12 +50,18 @@ struct AppShell: View {
                 // A picker or the keyboard draws its own footer; this one would show
                 // through its scrim beside it. Hidden, not removed, so the page keeps its height.
                 .opacity(modal.isUp ? 0 : 1)
+                .padding(.bottom, Self.footerBottom)
             }
         }
+        // The footer sits low, in the home indicator's inset, on every page.
+        .ignoresSafeArea(.container, edges: .bottom)
         // Under a game page's panel the footer sits at the left, beside it (GameOptions.dc.html).
         .overlay(alignment: .bottomLeading) {
             // A picker over it draws its own there.
-            if panelUp, !modal.isUp { PadFooter(hints: hints, leading: true).frame(maxWidth: .infinity).padding(.trailing, 410) }
+            if panelUp, !modal.isUp {
+                PadFooter(hints: hints, leading: true).frame(maxWidth: .infinity).padding(.trailing, 410)
+                    .padding(.bottom, Self.footerBottom)
+            }
         }
         .background(PP.background.ignoresSafeArea())
         // The controller keyboard or a picker, over everything with its own footer.
@@ -112,6 +118,9 @@ struct AppShell: View {
             }
         }
     }
+
+    /// The footer's distance from the screen's bottom edge, inside the home indicator's inset.
+    static let footerBottom: CGFloat = 9
 
     /// Game options or the achievements over a game page: the panel runs to the bottom.
     private var panelUp: Bool { nav.onGamePage && !nav.gamePanels.isEmpty }

@@ -54,7 +54,10 @@ struct SettingsView: View {
             sidebar.frame(width: 190)
             content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .padding(.horizontal, 44).padding(.top, 22)
+        .padding(.horizontal, 44).padding(.top, 12)
+        // The height the shell offers, from the top: a sidebar a few points taller must
+        // not push the shell's footer off its place.
+        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
         .task(id: navigation.pageSection) {
             // A dev build's `open:settings#SECTION`.
             guard navigation.settings, let name = navigation.pageSection else { return }

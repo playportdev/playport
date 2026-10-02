@@ -170,7 +170,7 @@ private struct GameDetailPage: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .font(.system(size: 13)).foregroundStyle(PP.soft)
-                            .padding(.bottom, 36 + 12)
+                            .padding(.bottom, AppShell.footerBottom + 36 + 12)
                         }
                     }
                     .allowsHitTesting(false)
