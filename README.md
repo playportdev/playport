@@ -23,12 +23,12 @@ a game from your library onto the phone, pick up a controller and press Play. Th
 PC, no cloud, no stream.
 
 <p align="center">
-  <img src="site/screenshots/home.webp" width="100%" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games">
+  <img src="site/screenshots/home-0.2.webp" width="100%" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games">
 </p>
 
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/library.webp" alt="Playport's Library: All, Installed and Steam filters over Steam games, installed and not"></td>
+    <td width="50%"><img src="site/screenshots/library-0.2.webp" alt="Playport's Library: All, Installed and Steam filters over Steam games, installed and not"></td>
     <td width="50%"><img src="site/screenshots/downloads.webp" alt="Playport's Downloads: a game downloading from Steam, free storage, the games finished today"></td>
   </tr>
   <tr>
