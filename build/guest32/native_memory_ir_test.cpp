@@ -11,6 +11,10 @@
 #include "Interface/IR/Passes/RegisterAllocationPass.h"
 #include "Interface/Core/ArchHelpers/Arm64Emitter.h"
 #endif
+#ifdef FEX_AUDIT_EMIT
+#include "Interface/Core/JIT/JITClass.h"
+#include "Interface/Core/JIT/DebugData.h"
+#endif
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 #include "native_audit_adapter.h"
@@ -23,6 +27,10 @@
 using namespace FEXCore::IR;
 using Registers = std::array<uint32_t, 8>;
 static unsigned Controls, AllocatedControls;
+#ifdef FEX_AUDIT_EXPORT
+static std::FILE* ExportFile;
+static size_t ExportGranule;
+#endif
 
 static void require(bool condition, const char* message) {
   if (!condition) {
@@ -41,6 +49,15 @@ public:
     pass.AddRegisters(RegClass::FPRFixed, StaticFPRegisters.size());
     pass.SetNumPairRegs(PairRegisters);
   }
+#ifdef FEX_AUDIT_EMIT
+  std::array<unsigned, 8> guest_map() const {
+    std::array<unsigned, 8> result;
+    for (unsigned i = 0; i < result.size(); ++i) {
+      result[i] = StaticRegisters[i].Idx();
+    }
+    return result;
+  }
+#endif
   bool accepts_vector(PhysicalRegister reg) const {
     return reg.AsRegClass() == RegClass::FPR && reg.Reg < GeneralFPRegisters.size();
   }
@@ -98,6 +115,10 @@ static uint32_t expected_address(const Case& test, const Registers& regs, uint32
   }
   std::abort();
 }
+
+#ifdef FEX_AUDIT_EXPORT
+#include "native_memory_export.h"
+#endif
 
 struct Access {
   uint32_t Address;
@@ -457,11 +478,19 @@ audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::InternalThreadState
     }
   }
 #ifdef FEX_AUDIT_ALLOCATE
+#ifdef FEX_AUDIT_EMIT
+  auto& manager = *thread.PassManager;
+#else
   PassManager manager {&context};
+#endif
   auto* allocation = manager.GetPass<RegisterAllocationPass>("RA");
   require(allocation && manager.HasPass("IRValidation"), "real default pipeline");
   RegisterBudget budget {context};
+#ifdef FEX_AUDIT_EMIT
+  FEXCore::CPU::Arm64JITCore backend {&context, &thread};
+#else
   budget.configure(*allocation);
+#endif
   ActiveBudget = &budget;
   manager.Finalize();
   manager.Run(&builder);
@@ -520,6 +549,13 @@ audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::InternalThreadState
                       "native stack effective address", check);
     }
   }
+#ifdef FEX_AUDIT_EXPORT
+  if (!test.NativeSwap) {
+    FEXCore::Core::DebugData debug;
+    auto code = backend.CompileCode(pc, test.Bytes.size(), true, &allocated_ir, &debug, false);
+    export_memory_code(context, code, debug, pc, test, inputs, budget);
+  }
+#endif
   ActiveBudget = nullptr;
 #endif
   std::vector<uint8_t> unchanged(test.Bytes.size());
@@ -534,6 +570,9 @@ audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::InternalThreadState
 
 static void cases(size_t granule) {
   Controls = AllocatedControls = 0;
+#ifdef FEX_AUDIT_EXPORT
+  ExportGranule = granule;
+#endif
   g32_space* space;
   assert(g32_create(granule, &space) == G32_OK);
   ActiveSpace = space;
@@ -541,7 +580,14 @@ static void cases(size_t granule) {
   FEXCore::Context::ContextImpl context {features};
   Handler handler {space};
   context.SyscallHandler = &handler;
+#ifdef FEX_AUDIT_EMIT
+  context.Dispatcher = FEXCore::CPU::Dispatcher::Create(&context);
+#endif
   FEXCore::Core::InternalThreadState thread {.CTX = &context};
+#ifdef FEX_AUDIT_EMIT
+  thread.LookupCache = fextl::make_unique<FEXCore::LookupCache>(&context);
+  thread.PassManager = fextl::make_unique<PassManager>(&context);
+#endif
   FEXCore::Core::CPUState::gdt_segment gdt[1] {};
   gdt[0].D = 1;
   thread.CurrentFrame->State.segment_arrays[0] = gdt;
@@ -596,7 +642,15 @@ static void cases(size_t granule) {
   ActiveSpace = nullptr;
   g32_destroy(space);
 }
-int main() {
+int main(int argc, char** argv) {
+#ifdef FEX_AUDIT_EXPORT
+  require(argc == 2, "requires export path");
+  ExportFile = std::fopen(argv[1], "w");
+  require(ExportFile, "cannot open export");
+#else
+  (void)argc;
+  (void)argv;
+#endif
   FEXCore::Config::Initialize();
   FEXCore::Config::Load();
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_IS64BIT_MODE, "0");
@@ -609,4 +663,7 @@ int main() {
   cases(0);
   cases(16384);
   cases(65536);
+#ifdef FEX_AUDIT_EXPORT
+  require(std::fclose(ExportFile) == 0, "cannot close export");
+#endif
 }

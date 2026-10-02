@@ -483,6 +483,43 @@ families, Wine bridges and real ARM64EC/iOS execution.
 [Allocated-memory evidence](../../docs/evidence/2026-10-02-fex-allocated-memory-ir.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
+## Raw scalar ARM emission gate (host simulator only)
+
+```sh
+PYTHONPATH="$PWD/.work/guest32/arm-simulator/deps" python3 \
+  build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --memory-simulate
+# Add --sanitize for the host exporter/frontend/g32, not archives/simulator.
+```
+
+Use the optional hash-pinned simulator installation documented above.
+`--memory-simulate` implies `--memory-allocate` and retains its scalar and FXCH
+IR controls. The real native ARM backend emits the 153 scalar blocks; FXCH
+remains an **IR-only** counterexample. The separate simulator validates 19584
+inputs against independent x86 address/value/partial-register formulas,
+including wrapping SIB/FS and address-size-16 arithmetic. Native FS/FCW loads,
+header publication and linker reads stay in disjoint high mappings. Exact
+access sequences, widths, values, complete byte canaries, SP/NZCV and unlinked
+exit capture are checked. Only the native linker literal is adapted.
+
+**Raw emission is not checked access.** Disposable mappings at each guest
+number let the unmodified loads/stores run even at null, inaccessible pages or
+across 4 GiB. The decoder's backing is separated, but simulated data is
+identity-addressed: there is no g32 translation inside emitted code. Base-only
+memory operands also rely on zero-extended static guest GPRs, unlike computed
+addresses whose W-register arithmetic clears upper bits. Three deliberately
+poisoned-upper-bit trials establish this precondition; 38 post-export corruption
+controls validate the other observations. None establishes runtime fault
+handling or preservation on rejected accesses.
+
+Optimized, ASan/UBSan, scalar IR/RA and register simulator regressions pass.
+Exports stay in `.work/guest32/separated-memory-emission/` and can be rerun with
+`arm_memory_simulator_audit.py FILE`. This optional audit changes no shipped
+emitter, patch/pin, app entry point or ABI. A checked scalar helper/lowering gate
+must still validate the complete width before accessing translated backing,
+preserve native pointers and prove transactional rejection paths.
+[Raw-emission evidence](../../docs/evidence/2026-10-02-fex-scalar-arm-emission.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
+
 ## Native FEX link prerequisite (host audit only)
 
 After configuring a series-applied native FEX build with the disabled allocator,
