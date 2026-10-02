@@ -146,7 +146,7 @@ struct AppShell: View {
         }
         if nav.page == .downloads {
             h += DownloadsPage.hints(model.installs, focused: focus.focused)
-            h.append(PadHint(button: .b, label: "Back") { _ = nav.back() })
+            // Main sections switch with LB/RB; B never leaves this page.
             return h + [PadHint(button: .menu, label: "Settings") { _ = nav.open("settings") }]
         }
         if !nav.settings, nav.page == .library {

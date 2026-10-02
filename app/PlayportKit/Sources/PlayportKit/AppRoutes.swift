@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Product navigation without SwiftUI: every screen transition remembers the
-// screen (including its section/panels) and focus that opened it. Back unwinds
-// local panels first, then that history; it never guesses an origin from a tab.
+// Product navigation without SwiftUI: nested screens remember the screen
+// (including its section/panels) and focus that opened them. Back unwinds local
+// panels and that history; main sections are roots, switched with LB/RB.
 
 public enum GameRef: Hashable {
     case title(String)
@@ -71,7 +71,7 @@ public struct AppRoutes {
     public var onGamePage: Bool {
         !settings && !setup && !signIn && !gamePath.isEmpty
     }
-    public var canGoBack: Bool { !history.isEmpty || onGamePage || settings || setup || signIn || page != .home }
+    public var canGoBack: Bool { onGamePage || settings || setup || signIn }
     public var gameBackLabel: String {
         guard let origin = history.last else { return "Library" }
         if origin.signIn { return "Sign in" }
@@ -87,12 +87,13 @@ public struct AppRoutes {
         screen.focus = nil
     }
 
-    /// Explicit tab selection or a Home card/search link. Reopening the visible
-    /// page is a no-op, not a history entry; leaving a game clears its old path.
+    /// Explicit tab selection or a Home card/search link starts a new root,
+    /// not Back history. Reopening the visible page is a no-op.
     @discardableResult
     public mutating func show(_ page: Page, focus: String?) -> Bool {
         guard screen.page != page || settings || setup || signIn || !gamePath.isEmpty else { return false }
-        remember(focus)
+        history.removeAll()
+        screen.focus = nil
         screen.signIn = false
         screen.settings = false
         screen.licences = []
@@ -166,6 +167,7 @@ public struct AppRoutes {
 
     @discardableResult
     public mutating func back() -> Bool {
+        guard canGoBack else { return false }
         if settings && !signIn && !licences.isEmpty {
             _ = closeLicence()
             return true
@@ -181,7 +183,6 @@ public struct AppRoutes {
             screen = previous
             return true
         }
-        guard canGoBack else { return false }
         screen = Screen()
         return true
     }

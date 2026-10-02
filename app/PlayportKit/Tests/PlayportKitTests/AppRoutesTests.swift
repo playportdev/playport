@@ -165,24 +165,46 @@ final class AppRoutesTests: XCTestCase {
         XCTAssertEqual(nav.settingsSection, .setup)
     }
 
-    func testTabsAndHomeLinksUnwindActualHistoryWithoutResurrectingOldGame() {
+    func testMainSectionsDoNotOfferBack() {
+        var nav = AppRoutes()
+        for page in [AppRoutes.Page.library, .downloads, .home, .downloads, .library] {
+            XCTAssertTrue(nav.show(page, focus: "previous-page-item"))
+            XCTAssertFalse(nav.canGoBack)
+            XCTAssertFalse(nav.back())
+            XCTAssertEqual(nav.page, page)
+            XCTAssertNil(nav.focusStart)
+        }
+    }
+
+    func testGameReturnsToLibraryButCannotUnwindEarlierSections() {
         var nav = AppRoutes()
         nav.show(.downloads, focus: "download")
         nav.show(.library, focus: "download-job")
         XCTAssertFalse(nav.show(.library, focus: "wrong"))
         nav.openGame(game, focus: "lib:app-367520")
-        nav.back()
+        XCTAssertTrue(nav.back())
         XCTAssertEqual(nav.page, .library)
-        nav.back()
-        XCTAssertEqual(nav.page, .downloads)
-        XCTAssertTrue(nav.gamePath.isEmpty)
-        XCTAssertEqual(nav.focusStart, "download-job")
-        nav.back()
-        XCTAssertEqual(nav.page, .home)
-        XCTAssertEqual(nav.focusStart, "download")
+        XCTAssertEqual(nav.focusStart, "lib:app-367520")
         XCTAssertFalse(nav.canGoBack)
-        nav.show(.library, focus: nil)
+        XCTAssertFalse(nav.back())
+        XCTAssertEqual(nav.page, .library)
         XCTAssertTrue(nav.gamePath.isEmpty)
+    }
+
+    func testSectionSelectionDiscardsNestedHistory() {
+        var nav = AppRoutes()
+        nav.openGame(game, focus: "hero")
+        nav.gamePanels = [.options]
+        nav.openSettings(section: .storage, focus: "options-row")
+        nav.show(.downloads, focus: "storage-row")
+        nav.openSignIn(focus: "download-row")
+        XCTAssertTrue(nav.back())
+        XCTAssertEqual(nav.page, .downloads)
+        XCTAssertEqual(nav.focusStart, "download-row")
+        XCTAssertFalse(nav.settings)
+        XCTAssertTrue(nav.gamePath.isEmpty)
+        XCTAssertTrue(nav.gamePanels.isEmpty)
+        XCTAssertFalse(nav.back())
     }
 
     func testNativeGamePopRestoresStorageAndSkipsPanels() {
