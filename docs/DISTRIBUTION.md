@@ -227,9 +227,26 @@ release` (or without `--variant` for the dev build, which the workstation
 drivers need). The `app` stage signs `app/.release/xtool/Playport.ipa`
 (dev: `app/xtool/S1Probe.ipa`) with the Apple ID that `xtool auth` holds
 and prefixes the bundle ID with `XTL-<their team>.`. To relink only a
-library, use section 3 and add `--sign`. Re-signing a received IPA without
-rebuilding it has no tested command here; a re-signer must keep the
-memory entitlement ([section 6](#6-signing-tools-and-the-memory-limit)).
+library, use section 3 and add `--sign`. **Re-sign a received IPA without rebuilding.** The patched xtool's
+`install` command provisions and signs the supplied IPA, including its helper,
+then installs it. This route passed the 0.1.0 reference-phone play
+([evidence](evidence/2026-10-02-release-010-resign.md)); other re-signers are not
+validated by that test. After the host setup above, close a running Playport
+first, keep the phone unlocked, and run:
+
+```sh
+. build/env.sh                   # selects the patched $XTOOL and the recorded socket
+mkdir -p "$PLAYPORT_BUILD/resign-tmp"
+./pp phone lock -- env USBMUXD_SOCKET_ADDRESS="UNIX:$PLAYPORT_USBMUX_SOCKET" \
+  XTL_TMPDIR="$PLAYPORT_BUILD/resign-tmp" TMPDIR="$PLAYPORT_BUILD/resign-tmp" \
+  "$XTOOL" install --network RECEIVED.ipa
+```
+
+This upgrades an existing app under the same team in place; do not uninstall
+it. Signing output and any retained signed IPA contain private device/profile
+information: do not publish them. Check Settings › Memory afterward; a
+re-signer must keep the memory entitlement
+([section 6](#6-signing-tools-and-the-memory-limit)).
 
 **Install.**
 
