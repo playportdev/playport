@@ -191,6 +191,13 @@ final class CatalogTests: XCTestCase {
         XCTAssertEqual(hk.sizeBytes, 5_231_995_691)
         XCTAssertEqual(hk.source, .cohort)
         XCTAssertEqual(hk.badge, .ready)
+        var steamReceipt = try receipt(app: 367520, dir: hk.installDir)
+        steamReceipt.buildID = hk.buildID
+        let installed = try XCTUnwrap(Adoption.scan(games: games, cohort: cohort, receipts: [steamReceipt], previous: c)
+            .title(id: hk.id))
+        XCTAssertEqual(installed.source, .installed)
+        XCTAssertNil(installed.checksums)
+        XCTAssertEqual(try installed.launchPlan(cohort: cohort), try hk.launchPlan(cohort: cohort))
         XCTAssertEqual(try hk.launchPlan(cohort: cohort).exe, #"Games\Hollow Knight\hollow_knight.exe"#)
         XCTAssertEqual(try hk.launchPlan(cohort: cohort).args, ["-logFile", #"C:\hollow_knight-player.log"#])
         XCTAssertNil(try hk.launchPlan(cohort: cohort).screen)   // native pixels
@@ -218,6 +225,78 @@ final class CatalogTests: XCTestCase {
         let again = Adoption.scan(games: games, cohort: cohort, receipts: [], previous: c)
         XCTAssertNil(again.title(id: "app-292030")?.executable)
         XCTAssertEqual(again.title(id: "app-292030")?.badge, .incomplete)
+    }
+
+    func testSteamReceiptOverridesTheCohortPinAndBypassesREDprelauncher() throws {
+        let cohort = try Cohort.load(directory: titlesDir)
+        try file("The Witcher 3/REDprelauncher.exe")
+        try file("The Witcher 3/bin/x64/witcher3.exe")
+        var previous = Adoption.scan(games: games, cohort: cohort, receipts: [], previous: Catalog(),
+                                     now: Date(timeIntervalSince1970: 1))
+        let played = Date(timeIntervalSince1970: 50)
+        previous.update("app-292030") {
+            $0.lastPlayed = played
+            $0.playSeconds = 120
+            $0.lastVerification = .init(date: played, files: 2459, bad: 0, unlisted: 0)
+        }
+        try FileManager.default.removeItem(at: games.appendingPathComponent("The Witcher 3/bin/x64"))
+        try file("The Witcher 3/bin/x64_dx12/Witcher3.EXE")
+        try Direct3D12Tests.pe(delay: true).write(to: games.appendingPathComponent("The Witcher 3/bin/x64_dx12/Witcher3.EXE"))
+        var r = try receipt(app: 292030, dir: "the witcher 3")
+        r.name = "The Witcher 3: Wild Hunt — Remastered"
+        r.buildID = 25646871
+        r.executable = "redprelauncher.exe"
+        r.branch = "public"
+        let c = Adoption.scan(games: games, cohort: cohort, receipts: [r], previous: previous)
+        let w3 = try XCTUnwrap(c.title(id: "app-292030"))
+        XCTAssertEqual(w3.source, .installed)
+        XCTAssertEqual(w3.name, r.name)
+        XCTAssertEqual(w3.buildID, r.buildID)
+        XCTAssertEqual(w3.branch, r.branch)
+        XCTAssertEqual(w3.depots, [.init(depotID: 292031, manifestGID: "42")])
+        XCTAssertEqual(w3.sizeBytes, r.bytes)
+        XCTAssertNil(w3.checksums, "never verify a newer build against the classic pin")
+        XCTAssertNil(w3.note)
+        XCTAssertNil(w3.lastVerification)
+        XCTAssertEqual(w3.addedAt, previous.title(id: w3.id)?.addedAt)
+        XCTAssertEqual(w3.lastPlayed, played)
+        XCTAssertEqual(w3.playSeconds, 120)
+        XCTAssertEqual(w3.executable, #"bin\x64_dx12\Witcher3.EXE"#)
+        XCTAssertEqual(w3.badge, .ready)
+        XCTAssertEqual(w3.importsDirect3D12, true)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(),
+                                             importsDirect3D12: w3.importsDirect3D12 == true).graphics, .vulkan)
+        let plan = try w3.launchPlan(cohort: cohort)
+        XCTAssertEqual(plan.exe, #"Games\The Witcher 3\bin\x64_dx12\Witcher3.EXE"#)
+        XCTAssertTrue(plan.config.isEmpty, "classic's runtime keys do not belong to the new build")
+        XCTAssertTrue(plan.args.isEmpty)
+        XCTAssertNil(plan.screen)
+
+        // Old receipts with no executable also bypass the launcher, and a launcher
+        // alone never makes a missing game playable.
+        r.executable = nil
+        XCTAssertEqual(Adoption.scan(games: games, cohort: cohort, receipts: [r], previous: c)
+            .title(id: w3.id)?.executable, w3.executable)
+        try FileManager.default.removeItem(at: games.appendingPathComponent("The Witcher 3/bin/x64_dx12"))
+        r.executable = #".\REDprelauncher.EXE"#
+        let missing = Adoption.scan(games: games, cohort: cohort, receipts: [r], previous: c)
+        XCTAssertEqual(missing.title(id: w3.id)?.badge, .incomplete)
+
+        // The classic branch installed by Steam is still a Steam install, with its
+        // own receipt and manifests; without a receipt it is the staged cohort pin.
+        try file("The Witcher 3/bin/x64/witcher3.exe")
+        r.branch = "classic"
+        r.buildID = 3280809
+        let classic = Adoption.scan(games: games, cohort: cohort, receipts: [r], previous: c)
+        XCTAssertEqual(classic.title(id: w3.id)?.source, .installed)
+        XCTAssertEqual(classic.title(id: w3.id)?.branch, "classic")
+        XCTAssertEqual(classic.title(id: w3.id)?.executable, #"bin\x64\witcher3.exe"#)
+        XCTAssertNil(classic.title(id: w3.id)?.checksums)
+        let classicPlan = try XCTUnwrap(classic.title(id: w3.id)).launchPlan(cohort: cohort)
+        XCTAssertEqual(classicPlan.config, ["jumbo-mb": "32768"], "keep the exact pinned build's launch requirements")
+        XCTAssertEqual(classicPlan.screen, "720")
+        XCTAssertEqual(Adoption.scan(games: games, cohort: cohort, receipts: [], previous: classic)
+            .title(id: w3.id)?.source, .cohort)
     }
 
     func testAdoptionClassifiesInstalledFoundAndIncompleteFolders() throws {

@@ -51,7 +51,7 @@ resource	Runtime/arm64ec-windows/cryptbase.dll	655360	761ee66c35f117eb3eae98a54c
 resource	Runtime/arm64ec-windows/cryptnet.dll	655360	ab3094f6e02199478f7065c3ee7810a1bf06c5ef7c5762382f452a20c33af5dd	wine-build	build-arm64ec/dlls/cryptnet/arm64ec-windows/cryptnet.dll	P2
 resource	Runtime/arm64ec-windows/cryptui.dll	1835008	2816454db81ca1b75eb483d428582345c39eabd47294c2b3e78b11788c831984	wine-build	build-arm64ec/dlls/cryptui/arm64ec-windows/cryptui.dll	P2
 resource	Runtime/arm64ec-windows/d3d10core.dll	1253376	1087b584a71ec2bc3ba403ef3717fe2c5ac2a2b525391b41a7e13e041c9689d8	dxmt-pe	arm64ec-windows/d3d10core.dll	P5-dxmt-pe
-resource	Runtime/arm64ec-windows/d3d11.dll	5242880	ba708a5fed5adffcdb55c21aa1605eafe80875634d4ec1ff5a910f8a6265e668	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/d3d11.dll	5242880	14f2b1f6d1f2df7cb1f7ade05d3586dec5a44f7a2404f4e761062458879e6e35	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/d3d12.dll	851968	dcfdba25633f4f9bb87ef200b814ff37e28ef27423cc89a7a26d9da7d368df1a	wine-build	build-arm64ec/dlls/d3d12/arm64ec-windows/d3d12.dll	P2
 resource	Runtime/arm64ec-windows/d3d9.dll	983040	487f11252f0a10e5064ca2bcc29240306a65b10d1d57f7a1c6f72090032d9186	wine-build	build-arm64ec/dlls/d3d9/arm64ec-windows/d3d9.dll	P2
 resource	Runtime/arm64ec-windows/d3dcompiler_43.dll	851968	c66859cd69fe171065fab6e2856317a9647a1b98e680356fb46e5d346d9d4ec6	wine-build	build-arm64ec/dlls/d3dcompiler_43/arm64ec-windows/d3dcompiler_43.dll	P2
@@ -190,7 +190,7 @@ resource	Runtime/aarch64-windows/cryptbase.dll	458752	4f98f12580b4c2c4199a7c2124
 resource	Runtime/aarch64-windows/cryptnet.dll	458752	0299e2de518dca59976fd9796ca2f24c444a756e8b07a6bc147e7e8a8132d0be	wine-build	build-macos/dlls/cryptnet/aarch64-windows/cryptnet.dll	P2
 resource	Runtime/aarch64-windows/cryptui.dll	1638400	bc30b9d46bac88c92445812d57bf721c204b15698f1402ca0aa4a6b822792d93	wine-build	build-macos/dlls/cryptui/aarch64-windows/cryptui.dll	P2
 resource	Runtime/aarch64-windows/d3d10core.dll	524288	32bf8bba1b6806e3bed99e2db9255db4ffe54265bb6f7a8ad116a9b735c072b8	wine-build	build-macos/dlls/d3d10core/aarch64-windows/d3d10core.dll	P2
-resource	Runtime/aarch64-windows/d3d11.dll	4612096	7b46bf8d09581f7255533af18aff8012dcd0c103df58fcd4b1a55713ecffe59a	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/aarch64-windows/d3d11.dll	4612096	7ab44676e04f0950ae2cb535d0ed07879c2443ebef5b7bf9584f8bf527ba3ca3	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/d3d12.dll	589824	5060591366fa822b89932c17bd79eec1a7f94dd0fdde5b1e4561007dbe2ea330	wine-build	build-macos/dlls/d3d12/aarch64-windows/d3d12.dll	P2
 resource	Runtime/aarch64-windows/d3d9.dll	655360	2cf5ed73f6e1dfe2e06b8bcbae0b228434aec7624b012a6027a3dbd5cb79ca3b	wine-build	build-macos/dlls/d3d9/aarch64-windows/d3d9.dll	P2
 resource	Runtime/aarch64-windows/dbghelp.dll	1048576	8b5dc7ac1c652387ede79a68ef7f5d1d13570c9c0f57825d0fc2015a10af1305	wine-build	build-macos/dlls/dbghelp/aarch64-windows/dbghelp.dll	P2

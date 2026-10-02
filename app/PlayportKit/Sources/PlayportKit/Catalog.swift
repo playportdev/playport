@@ -3,8 +3,8 @@
 // not a secret. It is rebuilt by adoption, a scan of the prefix's C:\Games,
 // every time the library opens, so it never disagrees with what is on disk:
 //
-//   cohort     a folder named as a titles.json entry: that pin, Ready
-//   installed  a folder the install engine wrote (its receipt under installs/)
+//   installed  a folder the install engine wrote (its receipt under installs/ wins)
+//   cohort     a folder without a receipt named as a titles.json entry: that pin, Ready
 //   found      any other folder with a Windows executable: Ready too
 //
 // What the scan cannot see is carried over from the previous catalogue: when
@@ -76,10 +76,14 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
 
     public var canPlay: Bool { executable != nil }
 
-    /// A cohort title runs with its pinned arguments, madeira.cfg keys and screen; any other with none.
+    /// A staged cohort title, or a Steam receipt for that exact app and build,
+    /// runs with its pinned arguments, madeira.cfg keys and screen; other builds with none.
     public func launchPlan(cohort: Cohort) throws -> LaunchPlan {
         guard let executable else { throw LaunchPlanError.badPath(installDir) }
-        let pin = source == .cohort ? cohort.title(installDir: installDir) : nil
+        let candidate = cohort.title(installDir: installDir)
+        let pin = candidate.flatMap {
+            source == .cohort || (source == .installed && appID == $0.appID && buildID == $0.buildID) ? $0 : nil
+        }
         return try LaunchPlan.make(installDir: installDir, executable: executable, arguments: pin?.arguments ?? [],
                                    config: pin?.config ?? [:], screen: pin?.screen)
     }
@@ -169,20 +173,23 @@ public enum Adoption {
             let dir = games.appendingPathComponent(folder, isDirectory: true)
             let exes = executables(in: dir)
             var t: InstalledTitle
-            if let c = cohort.title(installDir: folder) {
-                t = InstalledTitle(id: "app-\(c.appID)", appID: c.appID, name: c.name, developer: c.developer,
-                                   installDir: folder, executable: locate(c.executable, in: dir),
-                                   buildID: c.buildID, depots: c.depots, sizeBytes: c.installedSize, source: .cohort,
-                                   checksums: c.checksums, note: c.note, addedAt: now, lastPlayed: nil,
-                                   lastVerification: nil)
-            } else if let r = receipts.first(where: { $0.installDir.lowercased() == folder.lowercased() }) {
+            // A Steam install can reuse a cohort folder with a different build or branch.
+            // Its receipt, not the folder name, identifies what is actually installed.
+            if let r = receipts.first(where: { $0.installDir.lowercased() == folder.lowercased() }) {
                 t = InstalledTitle(id: "app-\(r.appID)", appID: r.appID, name: r.name, developer: nil, installDir: folder,
-                                   executable: r.executable.flatMap { locate($0, in: dir) } ?? pick(exes, folder: folder, in: dir),
+                                   executable: r.executable.flatMap { isPrelauncher($0) ? nil : locate($0, in: dir) }
+                                       ?? pick(exes, folder: folder, in: dir),
                                    buildID: r.buildID,
                                    depots: r.depots.map { .init(depotID: $0.depotID, manifestGID: String($0.gid)) },
                                    sizeBytes: r.bytes, source: .installed, checksums: nil, note: nil, addedAt: now,
                                    lastPlayed: nil, lastVerification: nil)
                 t.branch = r.branch
+            } else if let c = cohort.title(installDir: folder) {
+                t = InstalledTitle(id: "app-\(c.appID)", appID: c.appID, name: c.name, developer: c.developer,
+                                   installDir: folder, executable: locate(c.executable, in: dir),
+                                   buildID: c.buildID, depots: c.depots, sizeBytes: c.installedSize, source: .cohort,
+                                   checksums: c.checksums, note: c.note, addedAt: now, lastPlayed: nil,
+                                   lastVerification: nil)
             } else {
                 t = InstalledTitle(id: "dir-\(folder.lowercased())", appID: nil, name: folder, developer: nil,
                                    installDir: folder, executable: pick(exes, folder: folder, in: dir), buildID: nil, depots: [],
@@ -219,11 +226,18 @@ public enum Adoption {
         }
     }
 
+    /// REDprelauncher starts the game in another process, which the runtime
+    /// cannot run. Discover the game's own executable instead, even when Steam
+    /// names the launcher in its receipt (also handles older receipts without a path).
+    static func isPrelauncher(_ path: String) -> Bool {
+        path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last?.lowercased() == "redprelauncher.exe"
+    }
+
     /// The Windows executables directly in a folder, without Unity's crash
-    /// handler, which is not the game.
+    /// handler or REDprelauncher, which are not the game.
     static func executables(in dir: URL) -> [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
-            .filter { $0.lowercased().hasSuffix(".exe") && !$0.lowercased().hasPrefix("unitycrashhandler") }
+            .filter { $0.lowercased().hasSuffix(".exe") && !$0.lowercased().hasPrefix("unitycrashhandler") && !isPrelauncher($0) }
             .sorted()
     }
 
@@ -268,7 +282,7 @@ public enum Adoption {
     /// redistributables, installers, crash reporters, anti-cheat, tools.
     static let notTheGame = ["redist", "directx", "dxsetup", "vcredist", "vc_redist", "dotnet", "physx", "setup",
                              "install", "unins", "crash", "reporter", "easyanticheat", "battleye", "uninstall",
-                             "support", "tools", "editor", "sdk", "benchmark", "helper", "unitycrashhandler"]
+                             "support", "tools", "editor", "sdk", "benchmark", "helper", "unitycrashhandler", "redprelauncher"]
 
     /// A Windows executable up to three folders below `dir`, for a title
     /// whose executable is not at its top (Kingdom Come's `Bin\Win64\KingdomCome.exe`):

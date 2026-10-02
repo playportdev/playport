@@ -366,16 +366,20 @@ but the player's Pause and runs it once Steam is signed in. A release build comp
 
 - **Catalogue** (`app/PlayportKit`, tested on Linux): rebuilt by *adoption*
   each time the app comes to the front, from the prefix's `C:\Games`. A folder
-  named as an entry of the bundled cohort list (`Titles/titles.json`) gets
-  that pin and is *Ready* ([decision 0005](decisions/0005-title-cohort.md)); a
-  folder with an install receipt is that Steam app; any other folder with a
+  with an install receipt is that Steam app and build, even if its name matches
+  the bundled cohort list (`Titles/titles.json`). Without a receipt, a folder
+  named as a cohort entry gets that pin ([decision 0005](decisions/0005-title-cohort.md));
+  any other folder with a
   Windows executable is found, and reads *Ready* too (no compatibility labels,
   [decision 0034](decisions/0034-a-gamepad-first-ui.md)). A cohort entry also gives the launch
-  arguments and `madeira.cfg` keys; its screen no longer sets a launch's. A
+  arguments and `madeira.cfg` keys for the staged pin or a Steam receipt for that exact
+  app and build, never a newer build sharing the folder; its screen no longer sets a launch's. A
   launch's screen, frame limit and Direct3D come from the game's own launch
   settings (its Game options), else the global Settings; with none, 720 rows
   at 60 FPS, on Vulkan for detected DX12 games and DXMT otherwise
   (`LaunchSettings.defaultScreen`, `defaultFrameLimit`, `GraphicsBackend.default`).
+  Steam installs naming `REDprelauncher.exe` launch the game's nested executable
+  instead: the launcher starts a second process, which the runtime cannot run.
   Adoption checks the selected executable's normal and delay imports for
   `d3d12.dll`; launch API flags take precedence over that inference, and explicit
   graphics choices still win ([decision 0044](decisions/0044-vulkan-default-for-dx12.md)).
