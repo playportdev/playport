@@ -38,7 +38,7 @@ final class LaunchSettingsStore: ObservableObject {
         if inheritingGraphics { game?.graphics = nil }
         let arguments = (try? title.launchPlan(cohort: LibraryModel.cohort))?.args ?? []
         return LaunchSettings.resolve(game: game, global: global,
-                                      importsDirect3D12: title.importsDirect3D12 == true, arguments: arguments)
+                                      importsDirect3D12: title.detectsDirect3D12, arguments: arguments)
     }
 
     private func save<T: Encodable>(_ value: T, _ key: String) {
@@ -99,6 +99,13 @@ enum LaunchSettingsText {
         } else {
             Text(graphics(g) + " (not in this build)").foregroundStyle(.secondary)
         }
+    }
+
+    static func graphicsDetection(_ title: InstalledTitle) -> String {
+        guard let detection = title.direct3D, !detection.apis.isEmpty else {
+            return "The game's Direct3D version could not be detected."
+        }
+        return "Found references to \(detection.summary). This does not identify a dual-renderer game's active API."
     }
 
     static let graphicsFooter = "DXMT runs Direct3D 10 and 11 on Metal. The default is Vulkan for detected Direct3D 12 games, DXMT otherwise. "

@@ -639,7 +639,7 @@ private struct GameDetailPage: View {
                style: .plain, reset: d3d.changed ? { settings.wrappedValue.graphics = nil } : nil) {
             PadModal.shared.picker(
                 title: "Direct3D", context: "\(context) · Graphics",
-                note: LaunchSettingsText.nextStart + " " + LaunchSettingsText.graphicsFooter,
+                note: LaunchSettingsText.nextStart + " " + LaunchSettingsText.graphicsDetection(t) + " " + LaunchSettingsText.graphicsFooter,
                 options: [PadOption(id: "", label: "Default", detail: "\(LaunchSettingsText.graphics(inheritedGraphics)), from Settings or game detection")]
                     + GraphicsBackend.allCases.filter { Manifest.has($0) || own.graphics == $0 }.map {
                         PadOption(id: $0.rawValue, label: LaunchSettingsText.graphics($0), detail: LaunchSettingsText.graphicsDetail($0))

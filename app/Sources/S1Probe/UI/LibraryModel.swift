@@ -189,6 +189,12 @@ final class LibraryModel: ObservableObject {
         catalog.update(id) { $0.lastPlayed = Date() }
         save()
         PlayClock.shared.begin(id)
+        if let detection = t.direct3D {
+            Self.log("Direct3D evidence for \(t.id): \(detection.summary), modules=\(detection.modulesScanned) limited=\(detection.limited)")
+            for evidence in detection.evidence {
+                Self.log("Direct3D \(evidence.api.rawValue): \(evidence.module) \(evidence.kind.rawValue) \(evidence.name)")
+            }
+        }
         Self.log("play \(t.name) (\(t.id)) on \(settings.graphics.rawValue): \(plan.exe) \((plan.args + settings.arguments).joined(separator: " "))")
         return true
     }

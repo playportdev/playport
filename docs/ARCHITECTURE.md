@@ -385,9 +385,14 @@ but the player's Pause and runs it once Steam is signed in. A release build comp
   (`LaunchSettings.defaultScreen`, `defaultFrameLimit`, `GraphicsBackend.default`).
   Steam installs naming `REDprelauncher.exe` launch the game's nested executable
   instead: the launcher starts a second process, which the runtime cannot run.
-  Adoption checks the selected executable's normal and delay imports for
-  `d3d12.dll`; launch API flags take precedence over that inference, and explicit
-  graphics choices still win ([decision 0044](decisions/0044-vulkan-default-for-dx12.md)).
+  Adoption records best-effort Direct3D 8–12 evidence from the selected EXE's
+  normal/delay library and API-function imports (including interposers), its
+  reachable local DLLs and guarded dynamic-loading references. The bounded scan
+  does not count unrelated shipped renderers or read launcher-specific metadata
+  ([decision 0046](decisions/0046-static-direct3d-evidence.md)). Unknown is not
+  DX11; multiple detected APIs do not identify the active renderer. Launch API
+  flags take precedence over inference, and explicit graphics choices still win
+  ([decision 0044](decisions/0044-vulkan-default-for-dx12.md)).
   Game options show the same inherited backend as Play. Native and no limit are a player's choice. FEX's memory
   ordering comes from a dev build's Game options over the game's profile (the
   release app runs the profile, and the Steam API emulator), Proton's FEX

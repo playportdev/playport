@@ -58,9 +58,13 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     public var lastVerification: Verification?
     /// The Steam branch a Steam install follows; nil is public.
     public var branch: String? = nil
-    /// The selected executable imports d3d12.dll (normal or delay-loaded).
-    /// Rebuilt by adoption; nil in older catalogues.
+    /// Legacy routing flag, also written for older catalogue readers. Detection
+    /// now includes API function imports, reachable DLLs and dynamic references.
     public var importsDirect3D12: Bool? = nil
+    /// Best-effort evidence for available APIs, not the active renderer. Rebuilt
+    /// on adoption; nil in older catalogues. Explicit launch settings still win.
+    public var direct3D: Direct3D.Detection? = nil
+    public var detectsDirect3D12: Bool { direct3D?.hasDirect3D12 ?? (importsDirect3D12 == true) }
 
     public enum Badge: String, Sendable {
         case ready = "Ready"
@@ -205,9 +209,10 @@ public enum Adoption {
                 if old.buildID == t.buildID { t.lastVerification = old.lastVerification }
                 if t.source == .found, old.source == .found { t.sizeBytes = old.sizeBytes }
             }
-            t.importsDirect3D12 = t.executable.map {
-                Direct3D12.imports(in: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")))
-            } ?? false
+            t.direct3D = t.executable.map {
+                Direct3D.detect(executable: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")), root: dir)
+            }
+            t.importsDirect3D12 = t.direct3D?.hasDirect3D12 ?? false
             if t.sizeBytes == nil { t.sizeBytes = directorySize(dir) }
             out.append(t)
         }
