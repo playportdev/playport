@@ -11,3 +11,4 @@
 0010-Windows-place-iOS-call-return-stacks-from-the-top-of.patch
 0011-ARM64EC-count-the-transitions-only-while-the-runtime.patch
 0012-Core-keep-native-builds-free-of-platform-only-diagnostics.patch
+0013-AllocatorHooks-do-not-lock-rpmalloc-for-libc-size-queries.patch

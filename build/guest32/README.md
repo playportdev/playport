@@ -285,6 +285,17 @@ paths require explicit coverage. [Fetch-boundary evidence and source
 inventory](../../docs/evidence/2026-10-01-guest32-fetch-boundary.md) define the
 next gate: a series-applied isolated full 32-bit decoder test, before execution.
 
+## Native FEX link prerequisite (host audit only)
+
+After configuring a series-applied native FEX build with the disabled allocator,
+run `python3 build/guest32/native_link_audit.py .work/guest32/decode-audit/native`.
+It builds and links real FEXCore, FEXCore_Base and JemallocDummy, exercises libc
+allocator hooks and verifies full predictor clearing and reset census. It uses
+the real compilation database, not synthetic replacement implementations.
+[Configuration and evidence](../../docs/evidence/2026-10-01-fex-native-allocator.md).
+This is an optional prerequisite test, **not full decoding or guest execution**;
+section garbage collection limits the link check to reachable native code.
+
 ## Still needed before a title launch
 
 - Windows memory-query structures/classification and allocation
