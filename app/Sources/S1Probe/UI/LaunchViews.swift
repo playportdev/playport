@@ -36,7 +36,6 @@ struct LaunchScreen: View {
             let elapsed = ctx.date.timeIntervalSince(launch.stageSince)
             let slow = LaunchProgress.showsSteps(launch.stage, elapsed: elapsed)
             ZStack {
-                LaunchBackdrop(art: launch.art.map { .image($0) } ?? .tile(launch.title))
                 VStack(spacing: 18) {
                     LaunchTitle(name: launch.title)
                     LaunchBar(fraction: LaunchProgress.fraction(launch.stage, elapsed: elapsed))
@@ -68,6 +67,12 @@ struct LaunchScreen: View {
                     }
                     LaunchTip().padding(.bottom, 26)
                 }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                // Aspect-fill art must not widen the foreground's layout proposal:
+                // long titles need the screen's width to wrap and scale to fit.
+                LaunchBackdrop(art: launch.art.map { .image($0) } ?? .tile(launch.title))
             }
         }
         .foregroundStyle(PP.text)
@@ -120,14 +125,17 @@ struct LaunchBackdrop: View {
 }
 
 /// Over the game surface (which ignores the safe area) the name keeps clear
-/// of the Dynamic Island on whichever side it is (WindowInsets).
+/// of the Dynamic Island on whichever side it is (WindowInsets). Long names
+/// wrap to two centred lines before shrinking, rather than running off-screen.
 struct LaunchTitle: View {
     let name: String
     @ObservedObject private var safe = WindowInsets.shared
 
     var body: some View {
         let side = max(safe.side(44, safe.insets.leading), safe.side(44, safe.insets.trailing))
-        Text(name.uppercased()).font(PP.display(56)).tracking(1.1).lineLimit(1).minimumScaleFactor(0.5)
+        Text(name.uppercased()).font(PP.display(56)).tracking(1.1)
+            .lineLimit(2).minimumScaleFactor(0.5).multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, side)
     }
 }
