@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Audit the real FEX decoder and optional register-only IR/RA/ARM emission.
+"""Audit the real FEX decoder and optional register-only IR/RA/ARM emission/simulation.
 
 Requires the native configuration documented in the allocator evidence. Only
 Frontend.cpp alone enables its ABI-neutral test byte-source seam; the test
@@ -28,7 +28,10 @@ def main():
                         help="audit register-only IR through the default optimizer/RA pipeline; implies --ir")
     parser.add_argument("--emit", action="store_true",
                         help="audit real ARM emission and register/exit semantics offline; implies --allocate")
+    parser.add_argument("--simulate", action="store_true",
+                        help="execute exported ARM blocks in the optional host simulator; implies --emit")
     args = parser.parse_args()
+    args.emit = args.emit or args.simulate
     args.allocate = args.allocate or args.emit
     args.ir = args.ir or args.allocate
     build = args.build.resolve()
@@ -50,7 +53,10 @@ def main():
         parser.error("requires a native non-iOS base build")
     if 'FEXTestDecoderByteSource' not in frontend.read_text():
         parser.error("requires the series-applied decoder byte-source test seam")
-    audit = ("separated-emission" if args.emit else "separated-ra" if args.allocate
+    if args.simulate:
+        from arm_simulator_audit import check_dependency
+        check_dependency()
+    audit = ("separated-execution" if args.simulate else "separated-emission" if args.emit else "separated-ra" if args.allocate
              else "separated-ir" if args.ir else "separated-decoder")
     output = ROOT / ".work/guest32" / audit / ("sanitized" if args.sanitize else "optimized")
     output.mkdir(parents=True, exist_ok=True)
@@ -65,6 +71,9 @@ def main():
                   build / "External/SoftFloat-3e/libsoftfloat_3e.a"]
     adapter = ROOT / "build/guest32/native_audit_adapter.h"
     extra_sources = [ROOT / "build/guest32/native_code_oracle.h"] if args.emit else []
+    if args.simulate:
+        extra_sources += [ROOT / "build/guest32/arm_simulator_audit.py",
+                          ROOT / "build/guest32/arm_simulator_requirements.txt"]
     for path in [test, adapter, memory, frontend, *extra_sources, *libraries]:
         print(f"sha256 {hashlib.sha256(path.read_bytes()).hexdigest()} {path.relative_to(ROOT)}",
               flush=True)
@@ -74,6 +83,8 @@ def main():
         flags += ["-DFEX_AUDIT_ALLOCATE=1"]
     if args.emit:
         flags += ["-DFEX_AUDIT_EMIT=1"]
+    if args.simulate:
+        flags += ["-DFEX_AUDIT_EXPORT=1"]
     frontend_object = output / "frontend.o"
     memory_object = output / "guest32.o"
     # Compile the complete series-applied frontend with ONLY the test seam on.
@@ -90,7 +101,11 @@ def main():
     ]
     for command in commands:
         subprocess.run(command, cwd=entry["directory"], check=True, timeout=120)
-    subprocess.run([str(executable)], check=True, timeout=60)
+    exported = output / "blocks.jsonl"
+    subprocess.run([str(executable), *([str(exported)] if args.simulate else [])], check=True, timeout=60)
+    if args.simulate:
+        from arm_simulator_audit import audit_file
+        audit_file(exported)
 
 
 if __name__ == "__main__":

@@ -377,10 +377,46 @@ archives remain uninstrumented. All earlier decoder/IR/RA modes pass in both
 builds. Outputs stay in `.work/guest32/separated-emission/`; the prepared native
 build is required and this is not a CI gate or an app entry point.
 [Emission evidence](../../docs/evidence/2026-10-02-fex-register-arm-emission.md).
-The next bounded gate is real execution of these register-only blocks on an
-ARM target or simulator, with explicit static-register input and exit capture.
-An eventual phone experiment must enter through the developer UI. **No phone
-validation occurred; Portal 2 remains unplayable.**
+The optional simulator execution gate below now passes. Native hardware,
+ARM64EC ABI and real dispatcher/linker execution remain untested. An eventual
+phone experiment must enter through the developer UI. **No phone validation
+occurred; Portal 2 remains unplayable.**
+
+## Register-only ARM simulator execution gate (host audit only)
+
+Install the optional hash-locked Linux x86-64 simulator wheel inside `.work`:
+
+```sh
+mkdir -p .work/guest32/arm-simulator/tmp
+TMPDIR="$PWD/.work/guest32/arm-simulator/tmp" python3 -m pip install \
+  --target .work/guest32/arm-simulator/deps --no-cache-dir --require-hashes \
+  --only-binary=:all: --no-deps -r build/guest32/arm_simulator_requirements.txt
+PYTHONPATH="$PWD/.work/guest32/arm-simulator/deps" python3 \
+  build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --simulate
+# Repeat with --simulate --sanitize for the instrumented host audit.
+```
+
+`--simulate` implies `--emit` and retains every independent IR/machine check.
+The C++ audit exports the unmodified blocks, native register map and independent
+x86 register outcomes. `arm_simulator_audit.py` executes the entry prologue,
+register body and initial unlinked thunk using Unicorn 2.1.4. It replaces only
+the native linker-address literal in a private copy with a high simulator exit
+capture address; **the real linker/dispatcher do not execute**. All 144 blocks
+and 18432 inputs pass, with poisoned temporary/upper registers, exact bounded
+instruction paths, unchanged SP/NZCV, CPU-state canaries, checked header writes,
+exit LR and guest-PC records. No guest memory is mapped into the simulator;
+unexpected data accesses fail. Eight post-export corruption controls fail as
+expected. Saved exports can be rerun using `arm_simulator_audit.py FILE`.
+
+Logs/exports stay in `.work/guest32/separated-execution/`. This optional test
+requires the prepared native build; neither simulator nor exported code is
+bundled into the app or added to CI. ASan/UBSan cover the host audit/frontend/g32,
+not FEX archives or the simulator. This is simulated instruction execution,
+**not native ARM/iOS execution**, ABI validation, cache publication, concurrent
+invalidation or a Win32 memory bridge. The next memory gate must distinguish
+native CPU-state pointers from guest effective addresses before exercising
+checked scalar loads/stores. [Simulator evidence and remaining boundaries](../../docs/evidence/2026-10-02-fex-register-arm-simulation.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
 
 ## Native FEX link prerequisite (host audit only)
 

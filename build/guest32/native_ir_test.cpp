@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Real decode/dispatch audit, optionally through RA/ARM emission. No execution.
+// Real decode/dispatch audit, optionally through RA/ARM emission.
+// Optional export is executed only by the separate host simulator, not here.
 #include "Interface/Context/Context.h"
 #include "Interface/Core/Frontend.h"
 #include "Interface/Core/OpcodeDispatcher.h"
@@ -36,6 +37,11 @@ struct Instruction {
   uint32_t Value; // Independently specified literal or source-register index.
 };
 using Sequence = std::vector<Instruction>;
+
+#ifdef FEX_AUDIT_EXPORT
+static std::FILE* ExportFile;
+static size_t ExportGranule;
+#endif
 
 #ifdef FEX_AUDIT_ALLOCATE
 // Obtain the real native ARM backend's 32-bit register budget without creating
@@ -359,6 +365,45 @@ static void verify_code(const FEXCore::Context::ContextImpl& context, const FEXC
     }
     assert(CodeOracle::analyze(words, input, map, allowed) == expected);
   }
+#ifdef FEX_AUDIT_EXPORT
+  // Export the checked, UNMODIFIED block and independent x86 oracle results.
+  // The simulator changes only the native linker pointer in its private copy.
+  assert(ExportFile);
+  std::fprintf(ExportFile,
+               "{\"version\":1,\"granule\":%zu,\"pc\":%u,\"next_pc\":%llu,\"entry\":%zu,\"branch\":%zu,\"thunk\":%zu,"
+               "\"state_register\":%u,\"header_slot\":%zu,\"map\":[",
+               ExportGranule, pc, static_cast<unsigned long long>(uint64_t(pc) + guest_size), entry, branch, thunk,
+               FEXCore::CPU::STATE.Idx(), state_offset);
+  for (size_t i = 0; i < map.size(); ++i) {
+    std::fprintf(ExportFile, "%s%u", i ? "," : "", map[i]);
+  }
+  std::fputs("],\"allowed\":[", ExportFile);
+  for (size_t i = 0; i < allowed.size(); ++i) {
+    std::fprintf(ExportFile, "%s%s", i ? "," : "", allowed[i] ? "true" : "false");
+  }
+  std::fputs("],\"code\":\"", ExportFile);
+  for (size_t i = 0; i < code.Size; ++i) {
+    std::fprintf(ExportFile, "%02x", static_cast<unsigned char>(code.BlockBegin[i]));
+  }
+  std::fputs("\",\"trials\":[", ExportFile);
+  for (size_t trial = 0; trial < inputs.size(); ++trial) {
+    Registers expected = inputs[trial];
+    for (const auto& inst : sequence) {
+      expected_effect(expected, inst);
+    }
+    std::fprintf(ExportFile, "%s{\"input\":[", trial ? "," : "");
+    for (size_t i = 0; i < expected.size(); ++i) {
+      std::fprintf(ExportFile, "%s%u", i ? "," : "", inputs[trial][i]);
+    }
+    std::fputs("],\"expected\":[", ExportFile);
+    for (size_t i = 0; i < expected.size(); ++i) {
+      std::fprintf(ExportFile, "%s%u", i ? "," : "", expected[i]);
+    }
+    std::fputs("]}", ExportFile);
+  }
+  std::fputs("]}\n", ExportFile);
+  assert(!std::ferror(ExportFile));
+#endif
 }
 #endif
 
@@ -474,6 +519,9 @@ static void audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::Interna
 }
 
 static void cases(size_t granule) {
+#ifdef FEX_AUDIT_EXPORT
+  ExportGranule = granule;
+#endif
   g32_space* space;
   assert(g32_create(granule, &space) == G32_OK);
   assert(!ActiveSpace);
@@ -540,7 +588,15 @@ static void cases(size_t granule) {
   g32_destroy(space);
 }
 
-int main() {
+int main(int argc, char** argv) {
+#ifdef FEX_AUDIT_EXPORT
+  assert(argc == 2);
+  ExportFile = std::fopen(argv[1], "w");
+  assert(ExportFile);
+#else
+  (void)argc;
+  (void)argv;
+#endif
   FEXCore::Config::Initialize();
   FEXCore::Config::Load();
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_IS64BIT_MODE, "0");
@@ -552,4 +608,7 @@ int main() {
   cases(0);
   cases(16384);
   cases(65536);
+#ifdef FEX_AUDIT_EXPORT
+  assert(std::fclose(ExportFile) == 0);
+#endif
 }
