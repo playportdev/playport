@@ -101,6 +101,9 @@
   .shot figcaption strong { display: block; color: var(--text); font-size: 17px; }
   .shots { display: grid; gap: 28px; }
   .shots-2 { grid-template-columns: repeat(2, 1fr); }
+  .shots-3 { grid-template-columns: repeat(3, 1fr); }
+  .shot video { display: block; width: 100%; height: auto; aspect-ratio: 1280 / 590; border-radius: 17px; background: var(--surface); }
+  .shot .frame { border-radius: 22px; padding: 6px; background: linear-gradient(160deg, #2A3340, #10141A 60%); border: 1px solid var(--line); box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.8); }
   .shots + .shots { margin-top: 44px; }
 
   /* Stats */
@@ -171,7 +174,7 @@
     .grid, .steps { grid-template-columns: 1fr 1fr; }
     .card.wide { grid-column: span 2; }
     .stats { grid-template-columns: 1fr 1fr; }
-    .shots-2 { grid-template-columns: 1fr; }
+    .shots-2, .shots-3 { grid-template-columns: 1fr; }
     .lane { grid-template-columns: 1fr; gap: 8px; }
     .lane-label { text-align: left; }
   }
@@ -250,14 +253,18 @@
     <p class="sub">A gamepad-first app for the games you own: browse, download and play, all on the phone.</p>
     <div class="shots">
       <figure class="shot">
-        <a href="screenshots/home.webp"><img src="screenshots/home.webp" width="2000" height="921" alt="Playport's Home page: Continue playing Portal 2, a download in progress, and recent games"></a>
+        <a href="screenshots/home.webp"><img src="screenshots/home.webp" width="2000" height="921" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download in progress, and recent games"></a>
         <figcaption><strong>Home</strong>Pick up where you left off, and watch your downloads.</figcaption>
       </figure>
     </div>
-    <div class="shots shots-2">
+    <div class="shots shots-3">
       <figure class="shot">
-        <a href="screenshots/library.webp"><img src="screenshots/library.webp" width="2000" height="921" loading="lazy" alt="Playport's Library page: installed, downloading and not-installed Steam games in a grid"></a>
+        <a href="screenshots/library.webp"><img src="screenshots/library.webp" width="2000" height="921" loading="lazy" alt="Playport's Library page: All, Installed and Steam filters over a grid of installed and not-installed Steam games"></a>
         <figcaption><strong>Library</strong>Everything you own on Steam, installed or not.</figcaption>
+      </figure>
+      <figure class="shot">
+        <a href="screenshots/downloads.webp"><img src="screenshots/downloads.webp" width="2000" height="921" loading="lazy" alt="Playport's Downloads page: a game downloading at 23.6 MB/s, free storage, and the games finished today"></a>
+        <figcaption><strong>Downloads</strong>Install straight from Steam onto the phone.</figcaption>
       </figure>
       <figure class="shot">
         <a href="screenshots/game-page.webp"><img src="screenshots/game-page.webp" width="2000" height="921" loading="lazy" alt="Hollow Knight's game page in Playport: Play, achievements, options, play time and cloud saves"></a>
@@ -434,7 +441,19 @@
   <div class="wrap">
     <p class="kicker">On the phone</p>
     <h2>Running on an iPhone, right now.</h2>
-    <p class="sub">Screenshots from an A19 Pro iPhone on iOS 27.0, with Metal's performance HUD on. Every frame is rendered on the phone.</p>
+    <p class="sub">A screen recording and screenshots from an A19 Pro iPhone on iOS 27.0, with Metal's performance HUD on. Every frame is rendered on the phone.</p>
+    <div class="shots" id="video">
+      <figure class="shot">
+        <div class="frame"><video src="video/hollow-knight.mp4" poster="video/hollow-knight-poster.webp" width="1280" height="590" controls playsinline preload="none" aria-label="Screen recording: from Playport's Library to Hollow Knight's game options, then Play, about a minute of Hollow Knight at 60 fps, and Quit back to Home"></video></div>
+        <figcaption><strong>Library to gameplay, uncut</strong>Hollow Knight from the Play button: Direct3D 11 through DXMT, 60 fps capped at 720 rows, then Quit back to Home.</figcaption>
+      </figure>
+    </div>
+    <div class="shots">
+      <figure class="shot">
+        <a href="screenshots/kingdom-come.webp"><img src="screenshots/kingdom-come.webp" width="2000" height="921" loading="lazy" alt="Kingdom Come: Deliverance: a street in Rattay, with Metal's HUD showing about 29 frames per second at 1564 by 720 through DXMT's Direct3D 11, Game Mode on"></a>
+        <figcaption><strong>Kingdom Come: Deliverance</strong>Walking Rattay through DXMT's Direct3D 11, about 29 fps at 720 rows, with Game Mode on.</figcaption>
+      </figure>
+    </div>
     <div class="shots shots-2">
       <figure class="shot">
         <a href="screenshots/witcher3.webp"><img src="screenshots/witcher3.webp" width="2000" height="921" loading="lazy" alt="The Witcher 3: Geralt in Kaer Morhen, with Metal's HUD showing about 36 frames per second through DXMT's Direct3D 11"></a>
@@ -442,7 +461,7 @@
       </figure>
       <figure class="shot">
         <a href="screenshots/hollow-knight.webp"><img src="screenshots/hollow-knight.webp" width="2000" height="921" loading="lazy" alt="Hollow Knight: the Knight resting on a bench in Dirtmouth, with Metal's HUD showing 120 frames per second at 2736 by 1260"></a>
-        <figcaption><strong>Hollow Knight</strong>At the screen's full 2736&times;1260, a steady 120 fps.</figcaption>
+        <figcaption><strong>Hollow Knight</strong>At the screen's full 2736&times;1260, up to 120 fps.</figcaption>
       </figure>
     </div>
   </div>

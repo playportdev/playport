@@ -23,19 +23,29 @@ a game from your library onto the phone, pick up a controller and press Play. Th
 PC, no cloud, no stream.
 
 <p align="center">
-  <img src="site/screenshots/home.webp" width="100%" alt="Playport's Home page: Continue playing Portal 2, a download, recent games">
+  <img src="site/screenshots/home.webp" width="100%" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games">
 </p>
 
 <table>
   <tr>
-    <td width="50%"><img src="site/screenshots/library.webp" alt="Playport's Library: Steam games installed, downloading and not installed"></td>
-    <td width="50%"><img src="site/screenshots/game-page.webp" alt="Hollow Knight's game page: Play, achievements, options, cloud saves"></td>
+    <td width="50%"><img src="site/screenshots/library.webp" alt="Playport's Library: All, Installed and Steam filters over Steam games, installed and not"></td>
+    <td width="50%"><img src="site/screenshots/downloads.webp" alt="Playport's Downloads: a game downloading from Steam, free storage, the games finished today"></td>
   </tr>
   <tr>
     <td align="center"><b>Library</b>: everything you own, installed or not</td>
-    <td align="center"><b>Game page</b>: achievements, options, cloud saves</td>
+    <td align="center"><b>Downloads</b>: straight from Steam onto the phone</td>
   </tr>
 </table>
+
+<p align="center">
+  <a href="https://playport.dev/#video"><img src="site/video/hollow-knight-poster.webp" width="100%" alt="Screen recording: Hollow Knight in Playport, from the Library to gameplay and back. Click to watch on playport.dev"></a>
+  <br><sub><b>Watch the uncut recording</b>: Library to Play to Hollow Knight at 60 fps, then Quit back to Home (<a href="site/video/hollow-knight.mp4">MP4</a>).</sub>
+</p>
+
+<p align="center">
+  <img src="site/screenshots/kingdom-come.webp" width="100%" alt="Kingdom Come: Deliverance running on an iPhone in Playport, walking Rattay at about 29 fps through DXMT's Direct3D 11">
+  <br><b>Kingdom Come: Deliverance</b>: Rattay through DXMT's Direct3D 11, about 29 fps at 720 rows
+</p>
 
 <table>
   <tr>
@@ -44,7 +54,7 @@ PC, no cloud, no stream.
   </tr>
   <tr>
     <td align="center"><b>The Witcher 3: Wild Hunt</b>: Direct3D 11 through DXMT, about 36 fps</td>
-    <td align="center"><b>Hollow Knight</b>: the full 2736×1260, a steady 120 fps</td>
+    <td align="center"><b>Hollow Knight</b>: the full 2736×1260, up to 120 fps</td>
   </tr>
 </table>
 
