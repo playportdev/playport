@@ -14,3 +14,4 @@
 0013-AllocatorHooks-do-not-lock-rpmalloc-for-libc-size-queries.patch
 0014-Core-only-drain-rpmalloc-diagnostics-with-its-allocator.patch
 0015-Frontend-add-an-isolated-decoder-byte-source-test-seam.patch
+0016-JIT-add-an-isolated-checked-dword-load-test-seam.patch

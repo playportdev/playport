@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 2 Oct 2026 21:30:00 +0200
+Subject: [PATCH] JIT: add an isolated checked dword-load test seam
+
+Exercise a bounded allocated guest scalar load using real backend dispatch,
+spill/fill emission and a compiled ordinary-ABI helper. The single-instruction
+host audit validates its closed IR graph before compiling. No layout changes,
+CMake target or shipped runtime enable the seam. Native generic memory paths
+stay unchanged. Rejection records the block's guest PC and stops at a native
+capture; this is deliberately not a guest exception or a general memory port.
+
+Class: feature
+Evidence: docs/evidence/2026-10-02-fex-checked-load-lowering.md
+Offered-upstream: no
+---
+
+diff --git a/FEXCore/Source/Interface/Core/JIT/MemoryOps.cpp b/FEXCore/Source/Interface/Core/JIT/MemoryOps.cpp
+--- a/FEXCore/Source/Interface/Core/JIT/MemoryOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MemoryOps.cpp
+@@ -14,6 +14,15 @@
+ #include "Interface/IR/RegisterAllocationData.h"
+ #include <FEXCore/Utils/CompilerDefs.h>
+ #include <FEXCore/Utils/MathUtils.h>
++
++#ifdef FEX_TEST_CHECKED_SCALAR_LOAD
++#if defined(FEX_IOS_HOST) || defined(_M_ARM64EC) || defined(ARCHITECTURE_arm64ec)
++#error "The isolated checked-load seam is not a product ABI"
++#endif
++// Emission-time configuration for a serialized host audit only. No target
++// enables this macro. Slots: native descriptor, compiled helper, fault capture.
++extern "C" uint64_t FEXTestCheckedScalarLoadConfig(unsigned Slot);
++#endif
+ 
+ namespace FEXCore::CPU {
+ 
+@@ -769,6 +778,49 @@
+   const auto OpSize = IROp->Size;
+ 
+   const auto MemReg = GetReg(Op->Addr);
++
++#ifdef FEX_TEST_CHECKED_SCALAR_LOAD
++  // Closed single-instruction gate: MOV EAX,[EBX] is checked by the caller's
++  // IR audit. This is not general pointer-provenance classification. Generic
++  // LoadMem/StoreMem and implicit native context accesses remain unchanged.
++  LOGMAN_THROW_A_FMT(!CTX->Config.Is64BitMode() && IR->GetHeader()->NumHostInstructions == 1 && Op->Class == IR::RegClass::GPR &&
++                       OpSize == IR::OpSize::i32Bit && Op->Offset.IsInvalid() && Op->OffsetScale == 1 && Op->OffsetType == IR::MemOffsetType::SXTX,
++                     "unsupported isolated checked load");
++  const auto Descriptor = FEXTestCheckedScalarLoadConfig(0);
++  const auto Helper = FEXTestCheckedScalarLoadConfig(1);
++  const auto Capture = FEXTestCheckedScalarLoadConfig(2);
++  LOGMAN_THROW_A_FMT(Descriptor && Helper && Capture, "missing isolated checked-load configuration");
++  SpillStaticRegs(TMP1, {.FPRs = true});
++  PushDynamicRegs(TMP1);
++  // Preserve full address bits so a native pointer cannot silently truncate.
++  mov(ARMEmitter::Size::i64Bit, TMP2, MemReg);
++  LoadConstant(ARMEmitter::Size::i64Bit, TMP4, Descriptor);
++  ldr(TMP1, TMP4, 0); // native g32_space; never a guest operand
++  mov(ARMEmitter::Size::i64Bit, TMP3, 4);
++  mov(ARMEmitter::Size::i64Bit, TMP4, 0); // no partial destination for a dword load
++  LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::r16, Helper);
++  blr(ARMEmitter::Reg::r16);
++  LoadConstant(ARMEmitter::Size::i64Bit, TMP2, Descriptor);
++  str(TMP1, TMP2, 24); // packed status/value observation, not guest state
++  mov(ARMEmitter::Size::i64Bit, TMP4, TMP1);
++  PopDynamicRegs();
++  FillStaticRegs({.FPRs = true, .NZCV = true});
++  lsr(ARMEmitter::Size::i64Bit, TMP1, TMP4, 32);
++  ARMEmitter::ForwardLabel Success;
++  LOGMAN_THROW_A_FMT(cbz(ARMEmitter::Size::i64Bit, TMP1, &Success) == ARMEmitter::BranchEncodeSucceeded::Success, "checked-load branch "
++                                                                                                                  "failed");
++  LoadConstant(ARMEmitter::Size::i64Bit, TMP2, Descriptor);
++  LoadConstant(ARMEmitter::Size::i64Bit, TMP1, IR->GetHeader()->OriginalRIP);
++  str(TMP1, TMP2, 32); // native fault record; NOT guest exception delivery
++  LoadConstant(ARMEmitter::Size::i64Bit, TMP1, Capture);
++  br(TMP1);
++  LOGMAN_THROW_A_FMT(Bind(&Success), "checked-load label failed");
++  mov(ARMEmitter::Size::i32Bit, GetReg(Node), TMP4);
++  LoadConstant(ARMEmitter::Size::i64Bit, TMP2, Descriptor);
++  mov(ARMEmitter::Size::i64Bit, TMP1, 1);
++  str(TMP1, TMP2, 40); // test-only continuation observation
++  return;
++#endif
+ 
+   if (Op->Class == IR::RegClass::GPR) {
+     LOGMAN_THROW_A_FMT(Op->Offset.IsInvalid() || CTX->HostFeatures.SupportsTSOImm9, "unexpected offset");

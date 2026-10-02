@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Execute compiled scalar helper + real g32 checks, not FEX IR lowering.
+"""Execute compiled scalar helper + real g32 checks, not a general memory port.
 
-The optional call_block is a separately emitted FEX call-ABI fixture.
+The optional call_block is a FEX call fixture or a closed decoded dword load.
+A decoded block supplies pc/entry/branch/thunk/ebx metadata; it uses the same
+independent helper, backing and live-state checks, with no low guest mappings.
 
 Uses the optional hash-locked Unicorn installation. No data hook fabricates
 results, maps a faulting access, or implements a g32 operation. OS VM setup is
@@ -138,8 +140,19 @@ def audit(path, call_block=None):
     machine = uc.Uc(uc.UC_ARCH_ARM64, uc.UC_MODE_ARM)
     symbols, segments, executable = load_elf(machine, uc, path)
     code, caller_state, descriptor = 0x900000000, 0x400000000, 0x700000000
+    decoded = call_block is not None and "pc" in call_block
     if call_block is not None:
         emitted = bytes.fromhex(call_block["code"])
+        if decoded:
+            adapted = bytearray(emitted)
+            require(call_block["entry"] == 4 and call_block["entry"] < call_block["branch"] < call_block["thunk"]
+                    and call_block["thunk"] + 48 <= len(emitted), "decoded block layout")
+            require(struct.unpack_from("<Q", emitted, call_block["thunk"] + 24)[0] == call_block["pc"] + 2,
+                    "decoded guest exit mismatch")
+            # Only the unlinked exit-linker literal is adapted; real dispatcher
+            # execution remains outside this gate. Fault capture is emitted.
+            struct.pack_into("<Q", adapted, call_block["thunk"] + 40, CAPTURE)
+            emitted = bytes(adapted)
         require(0 < len(emitted) < 4096 and len(emitted) % 4 == 0, "caller emission bounds")
         machine.mem_map(code, 4096, uc.UC_PROT_READ | uc.UC_PROT_EXEC)
         machine.mem_write(code, emitted)
@@ -165,6 +178,7 @@ def audit(path, call_block=None):
     helper_calls = 0
     accesses, errors = [], []
     trace = set()
+    caller_trace = set()
 
     def in_range(address, size, ranges):
         return any(start <= address and address + size <= end for start, end in ranges)
@@ -179,6 +193,8 @@ def audit(path, call_block=None):
             emulator.emu_stop()
         elif active:
             trace.add(address)
+            if decoded and code <= address < code + len(emitted):
+                caller_trace.add(address - code)
             if address == symbols["g32_scalar_access"]:
                 helper_calls += 1
             if call_block is not None and address == symbols["g32_scalar_access"]:
@@ -205,10 +221,12 @@ def audit(path, call_block=None):
             if write and not in_range(address, size, [(descriptor + 24, descriptor + 48)]):
                 errors.append("caller wrote native arguments")
                 emulator.emu_stop()
+        elif decoded and not write and address == code + call_block["thunk"] + 40 and size == 8:
+            pass
         elif not write and in_range(address, size, [(start, end) for start, end, _ in segments]):
             pass
         else:
-            errors.append("forbidden native/metadata access")
+            errors.append(f"forbidden native/metadata access {address:#x}+{size}, write={write}")
             emulator.emu_stop()
 
     def invalid(_emulator, _access, _address, _size, _value, _):
@@ -238,7 +256,11 @@ def audit(path, call_block=None):
                         symbols["g32_scalar_access"], STACK, CAPTURE)
     if call_block is not None:
         native_addresses += (code, caller_state, descriptor)
-    for count, (granule, left, right, address, operation, poisoned, null) in enumerate(cases(native_addresses), 1):
+    scenarios = cases(native_addresses)
+    if decoded:
+        require(call_block["ebx"] == 6, "decoded guest address register")
+        scenarios = (case for case in scenarios if case[4] == 4)
+    for count, (granule, left, right, address, operation, poisoned, null) in enumerate(scenarios, 1):
         active = False
         errors.clear()
         for register, value in zip(xregs, (BACKING, granule, left, right, int(poisoned))):
@@ -248,7 +270,7 @@ def audit(path, call_block=None):
         for (start, _), buffer in zip(backing_ranges, buffers):
             machine.mem_write(start, bytes(buffer))
         value = (count * 0x9e3779b9) & 0xffffffff
-        expected, status = value, 0
+        expected, status = (0 if decoded else value), 0
         width, store = operation & ~0x100, bool(operation & 0x100)
         if width not in (1, 2, 4) or address > 0xffffffff:
             status = 1
@@ -272,11 +294,15 @@ def audit(path, call_block=None):
                     expected = (value & ~mask) | int.from_bytes(buffers[index][offset:offset + width], "little")
         initial = [(0x9e3779b97f4a7c15 * (i + count * 31)) & MASK64 for i in range(31)]
         vectors = [((v << 64) | (v ^ MASK64)) for v in initial] + [1]
-        arguments = [0 if null else symbols["audit_space"], address, operation, value]
+        arguments = [0 if null else symbols["audit_space"], address, operation, 0 if decoded else value]
         if call_block is not None:
             for i in (4, 5, 6, 7, 8, 9, 10, 11, 26, 27):
                 initial[i] &= 0xffffffff
             initial[call_block["eax"]] = value
+            if decoded:
+                # Wide/native addresses deliberately violate the ordinary
+                # zero-extended guest invariant to verify rejection, not truncation.
+                initial[call_block["ebx"]] = address
             initial[28] = caller_state
             machine.mem_write(caller_state, bytes([0x5a]) * call_block["state_size"])
             machine.mem_write(descriptor, struct.pack("<QQIIQQQ", *arguments, 0, 0, 0))
@@ -291,9 +317,10 @@ def audit(path, call_block=None):
         flags = (count & 15) << 28
         machine.reg_write(arm.UC_ARM64_REG_NZCV, flags)
         accesses.clear()
+        caller_trace.clear()
         helper_calls = 0
         active = True
-        run(code if call_block is not None else symbols["g32_scalar_access"])
+        run(code + (call_block["entry"] if decoded else 0) if call_block is not None else symbols["g32_scalar_access"])
         require(helper_calls == 1, "compiled helper entry census")
         if call_block is None:
             require(machine.reg_read(xregs[0]) == (status << 32) | expected, "packed status/value mismatch")
@@ -302,13 +329,23 @@ def audit(path, call_block=None):
         else:
             result, fault_pc, continued = struct.unpack("<QQQ", machine.mem_read(descriptor + 24, 24))
             require(result == (status << 32) | expected, "caller packed result mismatch")
-            require((fault_pc, continued) == ((0x401234, 0) if status else (0, 1)),
+            require((fault_pc, continued) == (((call_block["pc"] if decoded else 0x401234), 0) if status else (0, 1)),
                     "caller rejection/continuation/guest-PC mismatch")
             wanted = initial.copy()
             if not status:
                 wanted[call_block["eax"]] = expected
-            require(all(machine.reg_read(xregs[i]) == wanted[i]
-                        for i in {*call_block["gprs"], 25, 28}), "live FEX GPR mismatch")
+                if decoded:
+                    wanted[30] = code + call_block["thunk"] + 16
+            if decoded:
+                require((call_block["branch"] in caller_trace) == (status == 0)
+                        and (call_block["thunk"] in caller_trace) == (status == 0),
+                        "decoded load rejection reached normal exit")
+                header_slot = call_block["spills"][-1][0]
+                require(struct.unpack("<Q", machine.mem_read(caller_state + header_slot, 8))[0] == code,
+                        "decoded native prologue mismatch")
+            mismatches = [(i, hex(machine.reg_read(xregs[i])), hex(wanted[i]))
+                          for i in {*call_block["gprs"], 25, 28} if machine.reg_read(xregs[i]) != wanted[i]]
+            require(not mismatches, f"live FEX GPR mismatch case={count} status={status}: {mismatches}")
             require(all(machine.reg_read(vregs[i]) == vectors[i] for i in call_block["fprs"]),
                     "live FEX SIMD mismatch")
             require(machine.reg_read(arm.UC_ARM64_REG_NZCV) == flags, "live FEX NZCV mismatch")
@@ -331,7 +368,7 @@ def audit(path, call_block=None):
             require(sorted(touched) == list(range(BACKING + address, BACKING + address + width)), "full-width backing census")
         for (start, _), buffer in zip(backing_ranges, buffers):
             require(machine.mem_read(start, 8192) == buffer, "backing byte canary mismatch")
-    require(count == (6381 if call_block is not None else 6327), "compiled helper coverage census")
+    require(count == (1065 if decoded else 6381 if call_block is not None else 6327), "compiled helper coverage census")
     require(symbols["memmove"] in trace and symbols["g32_scalar_access"] in trace, "real compiled copy/helper never executed")
     observed = {key: sorted(value) for key, value in volatile_changes.items()}
     print(f"observed volatile GPR changes {observed}; NZCV changes {flag_changes}", flush=True)

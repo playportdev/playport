@@ -622,10 +622,46 @@ dynamic, SIMD or flag preservation, premature destination publication,
 unchecked continuation and wrong guest PC.
 
 Outputs stay in `.work/guest32/scalar-call/` and `.work/guest32/scalar-arm/`.
-This gate is non-EC ARM64 simulation with SVE/AFP disabled. Effective-address
-lowering, provenance classification, real fault delivery, concurrent VM lifetime,
-ARM64EC/iOS execution and product integration remain unimplemented.
+This gate is non-EC ARM64 simulation with SVE/AFP disabled. The closed decoded load gate below now exercises one real memory handler;
+general effective-address lowering, provenance classification, real fault
+delivery, concurrent VM lifetime, ARM64EC/iOS execution and product integration
+remain unimplemented.
 [Call-preservation evidence](../../docs/evidence/2026-10-02-fex-checked-scalar-call.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
+
+## Closed checked scalar-load lowering gate (host simulator only)
+
+```sh
+PYTHONPATH="$PWD/.work/guest32/arm-simulator/deps" python3 \
+  build/guest32/scalar_lowering_audit.py .work/guest32/decode-audit/native
+# --sanitize covers test/frontend/memory-handler/g32 TUs, not other archives.
+```
+
+Patch `fex/0016` supplies an ABI-neutral, test-only branch in the real
+LoadMemTSO handler, never enabled by a shipped target. The audit decodes
+`MOV EAX,[EBX]` from execute-only separated backing at three page-crossing
+PCs, runs the default optimizer/RA/validation pipeline, strictly checks its
+closed allocated graph and compiles the complete real backend block. Only
+this single i32 load without an offset is supported. Generic native memory
+paths remain untouched, not automatically provenance-classified.
+
+6390 simulated loads pass with the compiled helper and adversarial AAPCS64
+wrapper, plus five lowering corruption controls. Sparse high backing has no
+low guest-number mappings. Complete-width/permission checks, all live
+GPR/full SIMD/NZCV preservation, backing/native canaries, helper arguments,
+status-before-EAX publication and normal-exit reachability are checked.
+Rejection preserves EAX, records the decoded block PC and stops before the
+normal exit. Wide/native EBX values reject without truncation; real 32-bit
+static spills preserve even these deliberately invalid upper bits. Only the
+normal exit-linker literal is adapted to capture, not a memory instruction.
+
+This is a **closed single-instruction host gate**, not general pointer
+provenance, multi-instruction PC tracking, guest fault delivery, guest TSO
+ordering or a production memory bridge. Dynamic addresses/destinations,
+scalar stores/partial loads, other memory families, concurrent VM lifetime,
+ARM64EC/iOS and Wine integration remain unresolved. Outputs stay in
+`.work/guest32/scalar-lowering/`; this optional experiment is not part of CI.
+[Lowering evidence](../../docs/evidence/2026-10-02-fex-checked-load-lowering.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
 ## Native FEX link prerequisite (host audit only)
