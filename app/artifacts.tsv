@@ -50,8 +50,8 @@ resource	Runtime/arm64ec-windows/crypt32.dll	1507328	c7944b22c71288be48c349868bb
 resource	Runtime/arm64ec-windows/cryptbase.dll	655360	761ee66c35f117eb3eae98a54ccc8eabc76476b8d8807c902506223537659a20	wine-build	build-arm64ec/dlls/cryptbase/arm64ec-windows/cryptbase.dll	P2
 resource	Runtime/arm64ec-windows/cryptnet.dll	655360	ab3094f6e02199478f7065c3ee7810a1bf06c5ef7c5762382f452a20c33af5dd	wine-build	build-arm64ec/dlls/cryptnet/arm64ec-windows/cryptnet.dll	P2
 resource	Runtime/arm64ec-windows/cryptui.dll	1835008	2816454db81ca1b75eb483d428582345c39eabd47294c2b3e78b11788c831984	wine-build	build-arm64ec/dlls/cryptui/arm64ec-windows/cryptui.dll	P2
-resource	Runtime/arm64ec-windows/d3d10core.dll	1253376	5e7af51c1a4c546982f45e94afb7c538191a2fffc9d3aa4554dd0719112d46f7	dxmt-pe	arm64ec-windows/d3d10core.dll	P5-dxmt-pe
-resource	Runtime/arm64ec-windows/d3d11.dll	5242880	7248544b06fc8c585cbc8564f35bf3fb854332361416c6cc40ab13ebcc44aa2e	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/d3d10core.dll	1253376	1087b584a71ec2bc3ba403ef3717fe2c5ac2a2b525391b41a7e13e041c9689d8	dxmt-pe	arm64ec-windows/d3d10core.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/d3d11.dll	5242880	ba708a5fed5adffcdb55c21aa1605eafe80875634d4ec1ff5a910f8a6265e668	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/d3d12.dll	851968	dcfdba25633f4f9bb87ef200b814ff37e28ef27423cc89a7a26d9da7d368df1a	wine-build	build-arm64ec/dlls/d3d12/arm64ec-windows/d3d12.dll	P2
 resource	Runtime/arm64ec-windows/d3d9.dll	983040	487f11252f0a10e5064ca2bcc29240306a65b10d1d57f7a1c6f72090032d9186	wine-build	build-arm64ec/dlls/d3d9/arm64ec-windows/d3d9.dll	P2
 resource	Runtime/arm64ec-windows/d3dcompiler_43.dll	851968	c66859cd69fe171065fab6e2856317a9647a1b98e680356fb46e5d346d9d4ec6	wine-build	build-arm64ec/dlls/d3dcompiler_43/arm64ec-windows/d3dcompiler_43.dll	P2
@@ -65,7 +65,7 @@ resource	Runtime/arm64ec-windows/dnsapi.dll	720896	9bc6319c0208a5b9a742061ed79a5
 resource	Runtime/arm64ec-windows/dsound.dll	1048576	575e1fa25f066db39920eef17fdc4a020ce934fe43cb682dd069641f49779525	wine-build	build-arm64ec/dlls/dsound/arm64ec-windows/dsound.dll	P2
 resource	Runtime/arm64ec-windows/dwmapi.dll	720896	170695234609c060bb8a79cbe0a8a5812e61a763fe1a24cfe9d8c3f3a318af1f	wine-build	build-arm64ec/dlls/dwmapi/arm64ec-windows/dwmapi.dll	P2
 resource	Runtime/arm64ec-windows/dwrite.dll	1114112	ee79042a9c6416dc680b5ac414aeeee110357f85e7e567dcea8cb5efaccc6a01	wine-build	build-arm64ec/dlls/dwrite/arm64ec-windows/dwrite.dll	P2
-resource	Runtime/arm64ec-windows/dxgi.dll	1581056	bc73d0058d52b8fdb89d990356202cab7c70b2885c228c9c71f8249658d466a7	dxmt-pe	arm64ec-windows/dxgi.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/dxgi.dll	1581056	16123d69a9fe159efba7ee7a542719ab3feaa223624bb10be8c6e9d74b3db331	dxmt-pe	arm64ec-windows/dxgi.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/dxva2.dll	851968	724cb8323db799afe9cc290ffe4c6a5ec947b3f8bd20a970e0d7cae98fd9ad06	wine-build	build-arm64ec/dlls/dxva2/arm64ec-windows/dxva2.dll	P2
 resource	Runtime/arm64ec-windows/esent.dll	655360	2b832904a8f8ff81d6cc2ec6424a592cc5a269cda5672f541112d0a78874e77e	wine-build	build-arm64ec/dlls/esent/arm64ec-windows/esent.dll	P2
 resource	Runtime/arm64ec-windows/fontsub.dll	655360	ae8092f182bb8d5323430d021457372d6d0c3fb9ade89a170e09de85c7d3984d	wine-build	build-arm64ec/dlls/fontsub/arm64ec-windows/fontsub.dll	P2
@@ -148,7 +148,7 @@ resource	Runtime/arm64ec-windows/windowscodecs.dll	2490368	af2bfbcfdcd59ac1e072a
 resource	Runtime/arm64ec-windows/wined3d.dll	5177344	bee09a1af9fb3e94fb37e9bcf3c9350fdfb8b46c2aebba78b9614f2d8811f977	wine-build	build-arm64ec/dlls/wined3d/arm64ec-windows/wined3d.dll	P2
 resource	Runtime/arm64ec-windows/winedmo.dll	589824	f5265cb7ae5c961d4395813ed1c68a37186ceeef36c33b8682b547bb662ab146	wine-build	build-arm64ec/dlls/winedmo/arm64ec-windows/winedmo.dll	P2
 resource	Runtime/arm64ec-windows/winegstreamer.dll	1179648	b7ce54348867a113580f6df6a9afb576cc2ca70ac646b45254c5bedb569339cb	wine-build	build-arm64ec/dlls/winegstreamer/arm64ec-windows/winegstreamer.dll	P2
-resource	Runtime/arm64ec-windows/winemetal.dll	110592	f7c18f82b586484d56ccbbc3029f6ef5c6b3a5fb7c0f026aa4b30cf69792f420	dxmt-pe	arm64ec-windows/winemetal.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/winemetal.dll	110592	ac7b1a98bdfd511a755e714bc62a3f5313dbd22bcc4f8bf2362061e9f05df76a	dxmt-pe	arm64ec-windows/winemetal.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/winevulkan.dll	983040	05024f584b98a71e4103a794b6fef36ee3394dbf96b13af223165d45fbcfbea4	wine-build	build-arm64ec/dlls/winevulkan/arm64ec-windows/winevulkan.dll	P2
 resource	Runtime/arm64ec-windows/winhttp.dll	1048576	71e21b450c90b052b10754868b93c3f125c2d8c6121751a105040e934f982002	wine-build	build-arm64ec/dlls/winhttp/arm64ec-windows/winhttp.dll	P2
 resource	Runtime/arm64ec-windows/wininet.dll	1245184	188ea1852f9df00405e76b10dd5bd3c88a722a26f672e2ce9d60610a46e53a48	wine-build	build-arm64ec/dlls/wininet/arm64ec-windows/wininet.dll	P2
@@ -166,7 +166,7 @@ resource	Runtime/arm64ec-windows/xinput1_2.dll	655360	5dba9126987f2742777e63af4b
 resource	Runtime/arm64ec-windows/xinput1_3.dll	655360	7b95cf1ccf978b4c5dff744064295396bcecde9a18902449d2a1cc30088978eb	wine-build	build-arm64ec/dlls/xinput1_3/arm64ec-windows/xinput1_3.dll	P2
 resource	Runtime/arm64ec-windows/xinput1_4.dll	720896	7d5f7350238a2a5bce401c9d06126b406fd793b115831faf11c027cd47c8b42e	wine-build	build-arm64ec/dlls/xinput1_4/arm64ec-windows/xinput1_4.dll	P2
 resource	Runtime/arm64ec-windows/xinput9_1_0.dll	655360	45e614763443d977fe70fd917abc8d64c3386b39fd5e158819286c1c09ee1cd1	wine-build	build-arm64ec/dlls/xinput9_1_0/arm64ec-windows/xinput9_1_0.dll	P2
-resource	Runtime/arm64ec-windows/xtajit64.dll	5362688	2bdcd281dbe47ae65a4213b1ada231c50c8826db54e82a78239a6f26357120f4	fex	libarm64ecfex.dll	P1-de
+resource	Runtime/arm64ec-windows/xtajit64.dll	5362688	ab74245a5f7c4e535c392ac97b555f745112d0cacca210faf625a20b03781b6e	fex	libarm64ecfex.dll	P1-de
 resource	Runtime/aarch64-windows/actxprxy.dll	786432	03761f8a13e28edd51c9b5bfb8119682a7b0f51c2c4b50464498117a1e9a6157	wine-build	build-macos/dlls/actxprxy/aarch64-windows/actxprxy.dll	P2
 resource	Runtime/aarch64-windows/advapi32.dll	786432	6587145ce55d10dca54cf89ca77324006213885af25fd3638041addab7a0ff1c	wine-build	build-macos/dlls/advapi32/aarch64-windows/advapi32.dll	P2
 resource	Runtime/aarch64-windows/apisetschema.dll	196608	678533718e811293367b8d82374d7dee3673cdf25f179e06d0152011425d0d19	wine-build	build-macos/dlls/apisetschema/aarch64-windows/apisetschema.dll	P2
@@ -190,7 +190,7 @@ resource	Runtime/aarch64-windows/cryptbase.dll	458752	4f98f12580b4c2c4199a7c2124
 resource	Runtime/aarch64-windows/cryptnet.dll	458752	0299e2de518dca59976fd9796ca2f24c444a756e8b07a6bc147e7e8a8132d0be	wine-build	build-macos/dlls/cryptnet/aarch64-windows/cryptnet.dll	P2
 resource	Runtime/aarch64-windows/cryptui.dll	1638400	bc30b9d46bac88c92445812d57bf721c204b15698f1402ca0aa4a6b822792d93	wine-build	build-macos/dlls/cryptui/aarch64-windows/cryptui.dll	P2
 resource	Runtime/aarch64-windows/d3d10core.dll	524288	32bf8bba1b6806e3bed99e2db9255db4ffe54265bb6f7a8ad116a9b735c072b8	wine-build	build-macos/dlls/d3d10core/aarch64-windows/d3d10core.dll	P2
-resource	Runtime/aarch64-windows/d3d11.dll	4612096	cdf4284e4079c136b87a4af3c322a45d122451e2e68c60bc239a514de3d79570	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/aarch64-windows/d3d11.dll	4612096	7b46bf8d09581f7255533af18aff8012dcd0c103df58fcd4b1a55713ecffe59a	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/d3d12.dll	589824	5060591366fa822b89932c17bd79eec1a7f94dd0fdde5b1e4561007dbe2ea330	wine-build	build-macos/dlls/d3d12/aarch64-windows/d3d12.dll	P2
 resource	Runtime/aarch64-windows/d3d9.dll	655360	2cf5ed73f6e1dfe2e06b8bcbae0b228434aec7624b012a6027a3dbd5cb79ca3b	wine-build	build-macos/dlls/d3d9/aarch64-windows/d3d9.dll	P2
 resource	Runtime/aarch64-windows/dbghelp.dll	1048576	8b5dc7ac1c652387ede79a68ef7f5d1d13570c9c0f57825d0fc2015a10af1305	wine-build	build-macos/dlls/dbghelp/aarch64-windows/dbghelp.dll	P2
@@ -201,7 +201,7 @@ resource	Runtime/aarch64-windows/dsound.dll	917504	38ffb8ece0df16bddc10742c5e093
 resource	Runtime/aarch64-windows/dssenh.dll	589824	4d29248beb02a1547d13b2abb7e19b0b89e78fae8eae09ef36baac4c8a5be231	wine-build	build-macos/dlls/dssenh/aarch64-windows/dssenh.dll	P2
 resource	Runtime/aarch64-windows/dwmapi.dll	524288	a3aaa7fbbc90643073d223b902a030782899d103fad1c639694d542e463e3412	wine-build	build-macos/dlls/dwmapi/aarch64-windows/dwmapi.dll	P2
 resource	Runtime/aarch64-windows/dwrite.dll	917504	495fb817cfa9f8e59f2220f0c21d3cd87dc5d6e14a7fb8b462b1edc3c592f190	wine-build	build-macos/dlls/dwrite/aarch64-windows/dwrite.dll	P2
-resource	Runtime/aarch64-windows/dxgi.dll	1372160	046c8bf456f46535d18585b3c997a6087fe3d2742a3e23d8f76dedb0b6d64178	dxmt-pe	aarch64-windows/dxgi.dll	P5-dxmt-pe
+resource	Runtime/aarch64-windows/dxgi.dll	1372160	958c324fa5486bc79b0c3f598e8e2c92ccb4de1d0468314023a3651ed989562c	dxmt-pe	aarch64-windows/dxgi.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/esent.dll	458752	cdc8c17ab8954f81deb0f8ddf2d07bc3f23b7dfa855ae88f2900cb20c6ce0e9d	wine-build	build-macos/dlls/esent/aarch64-windows/esent.dll	P2
 resource	Runtime/aarch64-windows/explorer.exe	589824	5ba43adc343d9d12199eb9c79952ccebde9b0fcfa0875b954e8e584f6be611e2	wine-build	build-macos/programs/explorer/aarch64-windows/explorer.exe	P2
 resource	Runtime/aarch64-windows/fontsub.dll	458752	472e814ae702bdcb85601c0d5a756aa57e57179df064f92ae4a8821182cc67ce	wine-build	build-macos/dlls/fontsub/aarch64-windows/fontsub.dll	P2
@@ -281,7 +281,7 @@ resource	Runtime/aarch64-windows/windowscodecs.dll	2162688	2280cb8c6f38d161ec5f8
 resource	Runtime/aarch64-windows/wineboot.exe	720896	24bff17a5ed98259655dca838f6c4ad3b3947d2ca4f734d4856c508bf2becb42	wine-build	build-macos/programs/wineboot/aarch64-windows/wineboot.exe	P2
 resource	Runtime/aarch64-windows/winecfg.exe	1376256	9d0dedcbb3c5e0d41d7dc1e014654eaf5057e502568a1f7a2fac6cee358116ce	wine-build	build-macos/programs/winecfg/aarch64-windows/winecfg.exe	P2
 resource	Runtime/aarch64-windows/wined3d.dll	4653056	461de7df0e705e477e0c453e1d44c6f089d7f73cede59d2e5dd475ffbdead42a	wine-build	build-macos/dlls/wined3d/aarch64-windows/wined3d.dll	P2
-resource	Runtime/aarch64-windows/winemetal.dll	69632	d918ff27d862d824b97d2ae6e6f7e5193f9000ff32135010b104fc2a65f105bd	dxmt-pe	aarch64-windows/winemetal.dll	P5-dxmt-pe
+resource	Runtime/aarch64-windows/winemetal.dll	69632	cd5cc6223a7c00ad2ce216926bd41da0edb5c33233b9e7cfeb1038e4cbf892bd	dxmt-pe	aarch64-windows/winemetal.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/winemine.exe	655360	5aab219fa604609a2daae58561b8377e89b2c044944b028b460ba9faacf5bb4d	wine-build	build-macos/programs/winemine/aarch64-windows/winemine.exe	P2
 resource	Runtime/aarch64-windows/winhttp.dll	851968	c6daccd92e3c50990a70b0b67047dac52d7ecebeb5100a5156058c64fe67fe42	wine-build	build-macos/dlls/winhttp/aarch64-windows/winhttp.dll	P2
 resource	Runtime/aarch64-windows/wininet.dll	1048576	2ec918f3a217eb2022ddecd79fdd1320831296aecbfdbb9942240a19425a73a7	wine-build	build-macos/dlls/wininet/aarch64-windows/wininet.dll	P2
@@ -292,13 +292,13 @@ resource	Runtime/aarch64-windows/wlanapi.dll	458752	084d52fd07207841b3f23beedd5b
 resource	Runtime/aarch64-windows/ws2_32.dll	589824	b251a58223d0ce6fb9109b01342890eda9253267acc242ef7e5053aa0f51bfbd	wine-build	build-macos/dlls/ws2_32/aarch64-windows/ws2_32.dll	P2
 resource	Runtime/aarch64-windows/wsock32.dll	524288	9329d1286b1be6b9686f12fa0460aa8313b858145bd2cd21124e8bd505aa92f8	wine-build	build-macos/dlls/wsock32/aarch64-windows/wsock32.dll	P2
 resource	Runtime/aarch64-windows/wtsapi32.dll	458752	827ed29ab59e85397a510c51f6c44cb7004ee2acb0f373462475b59cf896d883	wine-build	build-macos/dlls/wtsapi32/aarch64-windows/wtsapi32.dll	P2
-resource	Runtime/vulkan/arm64ec-windows/d3d8.dll	1830912	bd192f2ef358354f6d041384686fa32b576d1808f270920ea6cf568f2b000384	vulkan-pe	arm64ec-windows/d3d8.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/d3d9.dll	7397376	a2018470c4067c5eceef44b8a77e79798cb9c652078c998c7dbfbd9ce13818e4	vulkan-pe	arm64ec-windows/d3d9.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/d3d10core.dll	430080	78f325c893229735ba8986baf465ad9340ac6cd6e6646fe733a4c859980b7203	vulkan-pe	arm64ec-windows/d3d10core.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/d3d11.dll	8343552	21ff8d01ed00f58b0406dc0fc7de1607ed58a6850064fc929b29ced7dd81dbbf	vulkan-pe	arm64ec-windows/d3d11.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/dxgi.dll	5509120	c644a6fcaa83f18f7d20957404b16db92e3d3e8589b2fea46f7e2cf413162f8d	vulkan-pe	arm64ec-windows/dxgi.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/d3d12.dll	196608	c5c11a95bd4e1052831d9a54cf8e9abfd10431e08e9270fd291f735d8631f93a	vulkan-pe	arm64ec-windows/d3d12.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6340608	7f56ce9a8cd9d68dc67111dbf8cbf3130ba3a3c570be3eff214f190826aca53a	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d8.dll	1830912	652ee9d114fe7684a02d44e0a8662705f04080071273413e3dc75cbdf5bad36c	vulkan-pe	arm64ec-windows/d3d8.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d9.dll	7397376	d9cda9e0b0deba0b87f58b15639fe54d875417f25916597f11681d2f3c259a38	vulkan-pe	arm64ec-windows/d3d9.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d10core.dll	430080	bd784fc0f7da1724374bdeeb14a771eb5101938c6c23a3e893b5b8c316a0c6fd	vulkan-pe	arm64ec-windows/d3d10core.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d11.dll	8343552	a5ccf55370b90dca02f69710432a814eb46755724013f8548d975684c68a08d9	vulkan-pe	arm64ec-windows/d3d11.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/dxgi.dll	5509120	3eceb576e42ab2ecc2e599a2b1bfcc4da74a43a2253adf47f9fdbcc22fecea89	vulkan-pe	arm64ec-windows/dxgi.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d12.dll	196608	36e1555ac92da8faa7c28d63008693b601ff34d364860e58891dacfe4e7a1b34	vulkan-pe	arm64ec-windows/d3d12.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6340608	aac684cecb314bfa8e7d61e8745c47adac9a0fc4a318c3ac1579bb45043b6ea3	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8348672	a001578d1f41a34f8a180f70a83f7d792f0df7b0110fbff0888e1d7dae4a80d2	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8663040	599666b7bd21122ec25b8309693f1c3f3b0e89b7a3299c02a625dbd1f33d1832	steamapi	i386-windows/steam_api.dll	P8-steamapi
 resource	Runtime/arm64ec-windows/playport-session.exe	18944	911b219564c65f507c5c8e68393709f56e9b281ab6765914479495cb88821126	session	playport-session.exe	P9-session
