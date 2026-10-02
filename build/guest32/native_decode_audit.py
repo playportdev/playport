@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Audit the real FEX decoder and optional register-only IR/RA in separated memory.
+"""Audit the real FEX decoder and optional register-only IR/RA/ARM emission.
 
 Requires the native configuration documented in the allocator evidence. Only
 Frontend.cpp alone enables its ABI-neutral test byte-source seam; the test
@@ -21,12 +21,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path, help="configured native FEX build directory")
     parser.add_argument("--sanitize", action="store_true",
-                        help="ASan/UBSan for frontend, adapter and g32 (other FEX archives uninstrumented)")
+                        help="ASan/UBSan for audit, frontend and g32 (other FEX archives uninstrumented)")
     parser.add_argument("--ir", action="store_true",
                         help="audit register-only decode-to-IR before optimization/RA; no execution")
     parser.add_argument("--allocate", action="store_true",
                         help="audit register-only IR through the default optimizer/RA pipeline; implies --ir")
+    parser.add_argument("--emit", action="store_true",
+                        help="audit real ARM emission and register/exit semantics offline; implies --allocate")
     args = parser.parse_args()
+    args.allocate = args.allocate or args.emit
     args.ir = args.ir or args.allocate
     build = args.build.resolve()
     if not build.is_relative_to(ROOT / ".work"):
@@ -47,7 +50,8 @@ def main():
         parser.error("requires a native non-iOS base build")
     if 'FEXTestDecoderByteSource' not in frontend.read_text():
         parser.error("requires the series-applied decoder byte-source test seam")
-    audit = "separated-ra" if args.allocate else "separated-ir" if args.ir else "separated-decoder"
+    audit = ("separated-emission" if args.emit else "separated-ra" if args.allocate
+             else "separated-ir" if args.ir else "separated-decoder")
     output = ROOT / ".work/guest32" / audit / ("sanitized" if args.sanitize else "optimized")
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run(["cmake", "--build", str(build), "--target", "FEXCore",
@@ -60,13 +64,16 @@ def main():
     libraries += [build / "External/cephes/libcephes_128bit.a",
                   build / "External/SoftFloat-3e/libsoftfloat_3e.a"]
     adapter = ROOT / "build/guest32/native_audit_adapter.h"
-    for path in [test, adapter, memory, frontend, *libraries]:
+    extra_sources = [ROOT / "build/guest32/native_code_oracle.h"] if args.emit else []
+    for path in [test, adapter, memory, frontend, *extra_sources, *libraries]:
         print(f"sha256 {hashlib.sha256(path.read_bytes()).hexdigest()} {path.relative_to(ROOT)}",
               flush=True)
     instrumentation = ["-g", "-fsanitize=address,undefined", "-fno-sanitize-recover=all"] if args.sanitize else []
     flags += instrumentation
     if args.allocate:
         flags += ["-DFEX_AUDIT_ALLOCATE=1"]
+    if args.emit:
+        flags += ["-DFEX_AUDIT_EMIT=1"]
     frontend_object = output / "frontend.o"
     memory_object = output / "guest32.o"
     # Compile the complete series-applied frontend with ONLY the test seam on.

@@ -343,11 +343,44 @@ pass after sharing `native_audit_adapter.h`. Outputs and hashes stay in
 `.work/guest32/separated-ir/`. This optional test needs the prepared native build
 above and is not a CI gate. [IR evidence](../../docs/evidence/2026-10-02-fex-register-ir.md).
 
-The next bounded gate is the same sequences through optimizer/register
-allocation with semantic verification before ARM code generation/execution.
+The optional `--allocate` audit now checks every nonempty sequence prefix
+through the real default optimizer/RA pipeline against the same register
+oracle. [Allocated IR evidence](../../docs/evidence/2026-10-02-fex-allocated-register-ir.md).
 Scalar/stack/vector/string/atomic memory checks, concurrent invalidation,
 auxiliary code readers and Wine marshalling remain untouched. No phone run or
 game launch occurred; Portal 2 remains unplayable.
+
+## Register-only ARM emission gate (host audit only)
+
+```sh
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --emit
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --emit --sanitize
+```
+
+`--emit` implies `--allocate` and retains its independent pre/post-RA checks.
+The real native Arm64JITCore configures RA, emits all 144 prefix blocks and
+copies them into its real shared code buffer. Real Dispatcher and LookupCache
+objects are constructed, but **no emitted instruction is executed**. This
+checks the native non-EC backend, not the shipped ARM64EC calling convention.
+
+`native_code_oracle.h` independently analyzes a strict register-only AArch64
+machine-word subset: MOVN/Z/K, MOV register/bitmask aliases, BFI and UBFX.
+Unknown instructions, uninitialized temporaries and non-budget register
+accesses fail. All 18432 low-32-bit register outcomes match the x86 oracle.
+The entry prologue, branch/thunk layout, exit guest-RIP literal, real linker
+address, tail and packed RIP metadata are checked separately. No guest-memory
+operation or dispatcher/linker execution is covered. Six private post-emission
+negative controls are rejected.
+
+Optimized and ASan/UBSan runs pass, including ownership/leak checks; backend
+archives remain uninstrumented. All earlier decoder/IR/RA modes pass in both
+builds. Outputs stay in `.work/guest32/separated-emission/`; the prepared native
+build is required and this is not a CI gate or an app entry point.
+[Emission evidence](../../docs/evidence/2026-10-02-fex-register-arm-emission.md).
+The next bounded gate is real execution of these register-only blocks on an
+ARM target or simulator, with explicit static-register input and exit capture.
+An eventual phone experiment must enter through the developer UI. **No phone
+validation occurred; Portal 2 remains unplayable.**
 
 ## Native FEX link prerequisite (host audit only)
 
