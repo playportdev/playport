@@ -261,6 +261,137 @@ static int resolve_fixture(void *context, const char *dll, const char *symbol,
     return 1;
 }
 
+static void auto_rejected(g32_space *s, const unsigned char *f,
+                           uint32_t lower, uint64_t upper, g32_pe_result expected,
+                           uint32_t free_base)
+{
+    g32_pe_image image, sentinel;
+    memset(&image, 0xa5, sizeof(image)); memcpy(&sentinel, &image, sizeof(image));
+    IS(g32_pe_map_auto(s, f, FILE_SIZE, lower, upper, &image), expected);
+    assert(memcmp(&image, &sentinel, sizeof(image)) == 0);
+    if (free_base) { OK(g32_reserve(s, free_base, 0x5000)); OK(g32_release(s, free_base)); }
+}
+
+static void auto_mapping_cases(size_t granule)
+{
+    g32_space *s;
+    OK(g32_create(granule, &s));
+    unsigned char original[FILE_SIZE], f[FILE_SIZE], value[8]; fixture(original);
+    const uint64_t limit = UINT64_C(1) << 32;
+    g32_pe_image first, second;
+    /* Preferred base wins even when lower addresses are free. */
+    PE_OK(g32_pe_map_auto(s, original, sizeof(original), 0, limit, &first));
+    assert(first.base == PREFERRED && first.relocations == 0);
+    PE_OK(g32_pe_map_auto(s, original, sizeof(original), PREFERRED, limit, &second));
+    assert(second.base == PREFERRED + G32_GRANULE && second.relocations == 1);
+    OK(g32_read(s, second.base + 0x1004, value, 4));
+    assert(u32(value) == second.base + 0x3000);
+    OK(g32_read(s, first.base + 0x1004, value, 4));
+    assert(u32(value) == first.base + 0x3000);
+    OK(g32_pe_unmap(s, &second));
+    /* No relocations needed at the preferred base, even when stripped. */
+    memcpy(f, original, sizeof(f)); p16(f + 0x96, 0x103);
+    auto_rejected(s, f, PREFERRED, limit, G32_PE_RELOCATION, PREFERRED + G32_GRANULE);
+    OK(g32_pe_unmap(s, &first));
+    PE_OK(g32_pe_map_auto(s, f, sizeof(f), 0, limit, &first));
+    assert(first.base == PREFERRED && !first.relocations);
+    OK(g32_pe_unmap(s, &first));
+    p16(f + 0x96, 0x102); /* Not stripped, but no relocation directory. */
+    p32(f + OPTIONAL + 96 + 5 * 8, 0); p32(f + OPTIONAL + 100 + 5 * 8, 0);
+    PE_OK(g32_pe_map_auto(s, f, sizeof(f), 0, limit, &first));
+    assert(first.base == PREFERRED && !first.relocations); OK(g32_pe_unmap(s, &first));
+    auto_rejected(s, f, PREFERRED + 1, limit, G32_PE_RELOCATION, PREFERRED + G32_GRANULE);
+
+    /* Decommit preserves ownership, and must not free preferred placement. */
+    OK(g32_reserve(s, PREFERRED, 0x2000));
+    OK(g32_commit(s, PREFERRED, 0x2000, G32_READ | G32_WRITE));
+    unsigned char marker = 0x77;
+    OK(g32_write(s, PREFERRED, &marker, 1));
+    OK(g32_decommit(s, PREFERRED + G32_PAGE, G32_PAGE));
+    OK(g32_reserve(s, PREFERRED + G32_GRANULE, 0x5000));
+    PE_OK(g32_pe_map_auto(s, original, sizeof(original), PREFERRED, limit, &second));
+    assert(second.base == PREFERRED + 2 * G32_GRANULE);
+    OK(g32_pe_unmap(s, &second));
+    auto_rejected(s, original, PREFERRED, PREFERRED + 2 * G32_GRANULE,
+                  G32_PE_NO_SPACE, PREFERRED + 2 * G32_GRANULE);
+    OK(g32_release(s, PREFERRED + G32_GRANULE));
+    OK(g32_reserve(s, PREFERRED + G32_GRANULE, G32_PAGE));
+    OK(g32_commit(s, PREFERRED + G32_GRANULE, G32_PAGE, G32_READ));
+    OK(g32_decommit(s, PREFERRED + G32_GRANULE, G32_PAGE));
+    PE_OK(g32_pe_map_auto(s, original, sizeof(original), PREFERRED, limit, &second));
+    assert(second.base == PREFERRED + 2 * G32_GRANULE);
+    OK(g32_pe_unmap(s, &second));
+    OK(g32_release(s, PREFERRED + G32_GRANULE));
+
+    /* A malformed relocation or failed finalization rolls back the chosen
+     * fallback, preserving the live blocker and output. No retry at later bases. */
+    memcpy(f, original, sizeof(f)); p32(f + RELOC_FILE + 4, 7);
+    auto_rejected(s, f, PREFERRED, limit, G32_PE_RELOCATION, PREFERRED + G32_GRANULE);
+    memcpy(f, original, sizeof(f)); p32(f + OPTIONAL + 16, 0x2000);
+    auto_rejected(s, f, PREFERRED, limit, G32_PE_FORMAT, PREFERRED + G32_GRANULE);
+    memcpy(f, original, sizeof(f)); p16(f + RELOC_FILE + 8, 0xa004);
+    auto_rejected(s, f, PREFERRED, limit, G32_PE_UNSUPPORTED, PREFERRED + G32_GRANULE);
+
+    resolver_state state = { .named = PREFERRED, .ordinal = PREFERRED };
+    PE_OK(g32_pe_map_bound_auto(s, original, sizeof(original), PREFERRED, limit,
+                               resolve_fixture, &state, &second));
+    assert(second.base == PREFERRED + G32_GRANULE && state.calls == 2);
+    OK(g32_read(s, second.base + 0x2150, value, 8));
+    assert(u32(value) == PREFERRED && u32(value + 4) == PREFERRED);
+    IS(g32_write(s, second.base + 0x2150, value, 4), G32_ACCESS);
+    OK(g32_pe_unmap(s, &second));
+    g32_pe_image sentinel; memset(&sentinel, 0xa5, sizeof(sentinel));
+    memcpy(&second, &sentinel, sizeof(second));
+    state.calls = 0; state.fail_at = 2;
+    IS(g32_pe_map_bound_auto(s, original, sizeof(original), PREFERRED, limit,
+                            resolve_fixture, &state, &second), G32_PE_IMPORT);
+    assert(state.calls == 2 && memcmp(&second, &sentinel, sizeof(second)) == 0);
+    OK(g32_reserve(s, PREFERRED + G32_GRANULE, 0x5000));
+    OK(g32_release(s, PREFERRED + G32_GRANULE));
+    IS(g32_pe_map_bound_auto(s, original, sizeof(original), 0, limit, NULL, NULL, &second),
+       G32_PE_FORMAT);
+    assert(memcmp(&second, &sentinel, sizeof(second)) == 0);
+    OK(g32_read(s, PREFERRED, value, 1)); assert(value[0] == marker);
+    IS(g32_read(s, PREFERRED + G32_PAGE, value, 1), G32_ACCESS);
+    OK(g32_release(s, PREFERRED));
+
+    /* Collision at a later page in a larger image, not just its first page. */
+    memcpy(f, original, sizeof(f)); p32(f + OPTIONAL + 56, 0x25000);
+    OK(g32_reserve(s, PREFERRED + G32_GRANULE, G32_PAGE));
+    PE_OK(g32_pe_map_auto(s, f, sizeof(f), PREFERRED, limit, &first));
+    assert(first.base == PREFERRED + 2 * G32_GRANULE); OK(g32_pe_unmap(s, &first));
+    OK(g32_release(s, PREFERRED + G32_GRANULE));
+
+    /* Tight half-open bounds, unaligned lower bounds and exact top-of-space fit. */
+    PE_OK(g32_pe_map_auto(s, original, sizeof(original), PREFERRED + 1,
+                         PREFERRED + G32_GRANULE + 0x5000, &first));
+    assert(first.base == PREFERRED + G32_GRANULE); OK(g32_pe_unmap(s, &first));
+    auto_rejected(s, original, PREFERRED + 1, PREFERRED + G32_GRANULE + 0x4fff,
+                  G32_PE_NO_SPACE, PREFERRED + G32_GRANULE);
+    auto_rejected(s, original, 0, G32_GRANULE, G32_PE_NO_SPACE, PREFERRED);
+    auto_rejected(s, original, PREFERRED, PREFERRED, G32_PE_ADDRESS, PREFERRED);
+    auto_rejected(s, original, PREFERRED + 1, PREFERRED, G32_PE_ADDRESS, PREFERRED);
+    auto_rejected(s, original, 0, limit + 1, G32_PE_ADDRESS, PREFERRED);
+    auto_rejected(s, original, UINT32_MAX, limit, G32_PE_NO_SPACE, PREFERRED);
+    memcpy(f, original, sizeof(f)); p32(f + OPTIONAL + 56, 0x10000);
+    PE_OK(g32_pe_map_auto(s, f, sizeof(f), 0xffff0000u, limit, &first));
+    assert(first.base == 0xffff0000u); OK(g32_pe_unmap(s, &first));
+    p32(f + OPTIONAL + 56, 0x11000);
+    auto_rejected(s, f, 0xffff0000u, limit, G32_PE_NO_SPACE, 0xffff0000u);
+    /* Invalid preferred addresses may be overridden only with relocations. */
+    memcpy(f, original, sizeof(f)); p32(f + OPTIONAL + 28, 0x400001);
+    PE_OK(g32_pe_map_auto(s, f, sizeof(f), PREFERRED, limit, &first));
+    assert(first.base == PREFERRED && first.relocations == 1); OK(g32_pe_unmap(s, &first));
+    p16(f + 0x96, 0x103);
+    auto_rejected(s, f, PREFERRED, limit, G32_PE_RELOCATION, PREFERRED);
+    IS(g32_pe_map_auto(NULL, original, sizeof(original), 0, limit, &first), G32_PE_FORMAT);
+    IS(g32_pe_map_auto(s, original, sizeof(original), 0, limit, NULL), G32_PE_FORMAT);
+    IS(g32_pe_map_auto(s, original, 0, 0, limit, &first), G32_PE_FORMAT);
+    assert(memcmp(original + 0x204, "\0\x30\x40\0", 4) == 0);
+    g32_destroy(s);
+    printf("pe32: granule=%zu automatic placement and rollback checks ok\n", granule);
+}
+
 static void binding_cases(size_t granule)
 {
     g32_space *s, *other;
@@ -1032,9 +1163,32 @@ static void private_image(const char *path)
     const uint32_t placeholder = 0x30000000;
     OK(g32_reserve(s, placeholder, G32_PAGE));
     OK(g32_commit(s, placeholder, G32_PAGE, G32_READ));
-    for (unsigned relocated = 0; relocated < 2; ++relocated) {
+    uint32_t optional = u32(bytes + 0x3c) + 24;
+    uint32_t preferred = u32(bytes + optional + 28), extent = u32(bytes + optional + 56);
+    for (unsigned relocated = 0; relocated < 3; ++relocated) {
         g32_pe_image image;
-        PE_OK(g32_pe_map(s, bytes, (size_t)length, relocated ? 0x20000000 : 0, &image));
+        if (relocated == 2) {
+            OK(g32_reserve(s, preferred, extent));
+            OK(g32_commit(s, preferred, G32_PAGE, G32_READ | G32_WRITE));
+            unsigned char marker = 0x77; OK(g32_write(s, preferred, &marker, 1));
+            PE_OK(g32_pe_map_auto(s, bytes, (size_t)length, preferred, UINT64_C(1) << 32, &image));
+            uint32_t expected = (uint32_t)(((uint64_t)preferred + extent + G32_GRANULE - 1) &
+                                         ~(uint64_t)(G32_GRANULE - 1));
+            assert(image.base == expected && image.relocations);
+            /* Separate space, explicit same-base reference: compare every byte,
+             * not just entry/export addresses or a handful of relocation slots. */
+            g32_space *reference; g32_pe_image explicit_image;
+            OK(g32_create(16384, &reference));
+            PE_OK(g32_pe_map(reference, bytes, (size_t)length, expected, &explicit_image));
+            unsigned char *a = malloc(extent), *b = malloc(extent); assert(a && b);
+            OK(g32_read(s, expected, a, extent)); OK(g32_read(reference, expected, b, extent));
+            assert(memcmp(a, b, extent) == 0 && image.entry == explicit_image.entry &&
+                   image.relocations == explicit_image.relocations);
+            free(a); free(b); g32_destroy(reference);
+            puts("pe32: automatic collision placement matches explicit same-base mapping byte-for-byte");
+        } else {
+            PE_OK(g32_pe_map(s, bytes, (size_t)length, relocated ? 0x20000000 : 0, &image));
+        }
         unsigned calls = 0;
         PE_OK(g32_pe_imports(s, &image, count_import, &calls));
         unsigned char *before = malloc(image.size), *after = malloc(image.size);
@@ -1070,11 +1224,20 @@ static void private_image(const char *path)
         g32_pe_image output, sentinel;
         memset(&output, 0xa5, sizeof(output)); memcpy(&sentinel, &output, sizeof(sentinel));
         unresolved = 0;
-        IS(g32_pe_map_bound(s, bytes, (size_t)length, base, unresolved_import, &unresolved, &output),
-           G32_PE_IMPORT);
+        g32_pe_result rejected_result = relocated == 2 ?
+            g32_pe_map_bound_auto(s, bytes, (size_t)length, preferred, UINT64_C(1) << 32,
+                                  unresolved_import, &unresolved, &output) :
+            g32_pe_map_bound(s, bytes, (size_t)length, base, unresolved_import, &unresolved, &output);
+        IS(rejected_result, G32_PE_IMPORT);
         assert(unresolved == 1 && memcmp(&output, &sentinel, sizeof(output)) == 0);
         OK(g32_reserve(s, base, image_size)); OK(g32_release(s, base));
-        PE_OK(g32_pe_map_bound(s, bytes, (size_t)length, base, placeholder_import, &layout, &image));
+        if (relocated == 2) {
+            PE_OK(g32_pe_map_bound_auto(s, bytes, (size_t)length, preferred, UINT64_C(1) << 32,
+                                        placeholder_import, &layout, &image));
+            assert(image.base == base);
+        } else {
+            PE_OK(g32_pe_map_bound(s, bytes, (size_t)length, base, placeholder_import, &layout, &image));
+        }
         assert(layout.resolved == calls);
         OK(g32_read(s, base, after, image.size));
         assert(memcmp(before, after, image.size) == 0); /* Only IAT words differ. */
@@ -1083,6 +1246,10 @@ static void private_image(const char *path)
         printf("pe32: private layout only: %u IAT words patched to inert test DATA; final slots read-only; unresolved map rolled back\n", calls);
         OK(g32_pe_unmap(s, &image));
         free(before); free(after);
+        if (relocated == 2) {
+            unsigned char marker; OK(g32_read(s, preferred, &marker, 1)); assert(marker == 0x77);
+            OK(g32_release(s, preferred));
+        }
     }
     OK(g32_release(s, placeholder));
     g32_destroy(s); free(bytes);
@@ -1092,6 +1259,7 @@ int main(int argc, char **argv)
 {
     cases(0); cases(16384); cases(65536);
     relocations_and_imports();
+    auto_mapping_cases(0); auto_mapping_cases(16384); auto_mapping_cases(65536);
     binding_cases(0); binding_cases(16384); binding_cases(65536);
     bound_mapping_cases(0); bound_mapping_cases(16384); bound_mapping_cases(65536);
     export_cases(0); export_cases(16384); export_cases(65536);

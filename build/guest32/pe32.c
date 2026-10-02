@@ -178,20 +178,45 @@ static g32_pe_result finalize(g32_space *s, layout *l)
     return G32_PE_OK;
 }
 
+/* Acquire exactly once; materialization/rollback below owns this reservation.
+ * A preferred-base conflict is not a format error or permission decision. */
+static g32_pe_result reserve_image(g32_space *s, layout *l, uint32_t base,
+                                    int automatic, uint32_t lower, uint64_t upper)
+{
+    if (automatic && (lower >= upper || upper > (UINT64_C(1) << 32)))
+        return G32_PE_ADDRESS;
+    if (!base) base = l->image.preferred_base;
+    int valid = base >= G32_GRANULE && !(base % G32_GRANULE) &&
+                span(base, l->image.size, UINT64_C(1) << 32);
+    g32_result vm = G32_CONFLICT;
+    if (valid && (!automatic || (base >= lower && span(base, l->image.size, upper)))) {
+        vm = g32_reserve(s, base, l->image.size);
+        if (vm == G32_OK) { l->image.base = base; return G32_PE_OK; }
+        if (vm != G32_CONFLICT) return vm == G32_SYSTEM ? G32_PE_MEMORY : G32_PE_ADDRESS;
+    }
+    if (!automatic) return G32_PE_ADDRESS;
+    /* Never relocate a fixed-base image merely because allocation succeeds. */
+    if ((l->characteristics & PE_RELOCS_STRIPPED) || !l->reloc_size)
+        return G32_PE_RELOCATION;
+    vm = g32_reserve_any(s, lower, upper, l->image.size, &base);
+    if (vm != G32_OK) return vm == G32_NO_SPACE ? G32_PE_NO_SPACE :
+                             vm == G32_SYSTEM ? G32_PE_MEMORY : G32_PE_ADDRESS;
+    l->image.base = base;
+    return G32_PE_OK;
+}
+
 static g32_pe_result map_image(g32_space *s, const void *file, size_t size,
-                               uint32_t base, g32_pe_import_resolver resolver,
+                               uint32_t base, int automatic, uint32_t lower,
+                               uint64_t upper, g32_pe_import_resolver resolver,
                                void *context, g32_pe_image *output)
 {
     if (!s || !output) return G32_PE_FORMAT;
     layout l;
     g32_pe_result result = parse(file, size, &l);
     if (result != G32_PE_OK) return result;
-    if (!base) base = l.image.preferred_base;
-    if (base < G32_GRANULE || base % G32_GRANULE ||
-        !span(base, l.image.size, UINT64_C(1) << 32)) return G32_PE_ADDRESS;
-    g32_result vm = g32_reserve(s, base, l.image.size);
-    if (vm != G32_OK) return vm == G32_SYSTEM ? G32_PE_MEMORY : G32_PE_ADDRESS;
-    l.image.base = base;
+    result = reserve_image(s, &l, base, automatic, lower, upper);
+    if (result != G32_PE_OK) return result;
+    base = l.image.base;
     l.image.space = s;
     result = G32_PE_MEMORY;
     unsigned initial = G32_READ | G32_WRITE;
@@ -219,7 +244,7 @@ failed:
 g32_pe_result g32_pe_map(g32_space *s, const void *file, size_t size,
                          uint32_t base, g32_pe_image *output)
 {
-    return map_image(s, file, size, base, NULL, NULL, output);
+    return map_image(s, file, size, base, 0, 0, 0, NULL, NULL, output);
 }
 
 g32_pe_result g32_pe_map_bound(g32_space *s, const void *file, size_t size,
@@ -227,7 +252,22 @@ g32_pe_result g32_pe_map_bound(g32_space *s, const void *file, size_t size,
                                void *context, g32_pe_image *output)
 {
     if (!resolver) return G32_PE_FORMAT;
-    return map_image(s, file, size, base, resolver, context, output);
+    return map_image(s, file, size, base, 0, 0, 0, resolver, context, output);
+}
+
+g32_pe_result g32_pe_map_auto(g32_space *s, const void *file, size_t size,
+                              uint32_t lower, uint64_t upper, g32_pe_image *output)
+{
+    return map_image(s, file, size, 0, 1, lower, upper, NULL, NULL, output);
+}
+
+g32_pe_result g32_pe_map_bound_auto(g32_space *s, const void *file, size_t size,
+                                    uint32_t lower, uint64_t upper,
+                                    g32_pe_import_resolver resolver, void *context,
+                                    g32_pe_image *output)
+{
+    if (!resolver) return G32_PE_FORMAT;
+    return map_image(s, file, size, 0, 1, lower, upper, resolver, context, output);
 }
 
 g32_result g32_pe_unmap(g32_space *s, const g32_pe_image *image)

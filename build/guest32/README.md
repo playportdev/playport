@@ -28,8 +28,8 @@ occupied pages (including decommitted reservations), and never commits backing.
 Selection and reservation occur in one externally serialized call. Invalid
 input and exhaustion are distinct; failures leave output and memory metadata
 unchanged. This supplies bounded allocation groundwork for future dependencies,
-heaps and stacks, not Windows VirtualAlloc or automatic PE loading. The current
-PE mapper still requires an explicit or preferred base; no loader behavior changes.
+heaps and stacks, not Windows VirtualAlloc. The PE mapper can now use it for
+bounded automatic image placement (below); no game runtime behavior changes.
 
 Release accepts only an allocation's original base. A VM operation cannot span
 two reservations; an ordinary memory access can when both permit it.
@@ -107,6 +107,26 @@ its lookup data is overwritten. Import inspection/binding does **not** load or
 resolve dependencies itself, initialise TLS, construct Windows process state,
 call DllMain or execute an entry point. Image metadata is native ownership state,
 not a guest ABI structure; it expires when its reservation is released.
+
+`g32_pe_map_auto` and `g32_pe_map_bound_auto` place images within a supplied
+half-open `[lower, upper)` window (upper may be 2^32). They prefer the file's
+ImageBase if valid, wholly in bounds and unoccupied, otherwise choose the first
+free 64 KiB-aligned base. Fallback requires non-stripped relocation records;
+malformed fixups fail without retrying later bases. Reservation happens exactly
+once before the existing materialization/binding/finalization transaction.
+Invalid bounds return `ADDRESS`, exhausted relocatable windows `NO_SPACE`, and
+fixed-base fallback `RELOCATION`. Failure preserves output and other allocations.
+This is not dependency discovery/loading or Windows ASLR policy; callbacks and
+image lifetimes retain the same restrictions as the explicit-base APIs.
+
+Automatic-placement tests cover preferred-base priority, collisions (including
+later pages and decommitted reservations), relocated fixups, nonrelocatable
+images, tight bounds, alignment, exact top-of-space fits, exhaustion and rollback
+after malformed fixups, finalization or unresolved imports. The private files
+also undergo automatic collision placement and a whole-image comparison with
+explicit same-base mapping in a separate space. Auto map-and-bind retains the
+read-only IAT and inert-placeholder limitations of the explicit tests above.
+[Automatic-placement evidence](../../docs/evidence/2026-10-01-guest32-auto-mapping.md).
 
 The parser deliberately supports page-aligned sections (alignment at least
 4 KiB), at most 96 sections, 16 data directories and a 512 MiB image. Import

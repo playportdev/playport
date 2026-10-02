@@ -12,7 +12,7 @@
 typedef enum {
     G32_PE_OK, G32_PE_FORMAT, G32_PE_UNSUPPORTED, G32_PE_ADDRESS,
     G32_PE_MEMORY, G32_PE_RELOCATION, G32_PE_IMPORT, G32_PE_NOT_FOUND,
-    G32_PE_CYCLE
+    G32_PE_CYCLE, G32_PE_NO_SPACE
 } g32_pe_result;
 
 typedef struct {
@@ -75,6 +75,21 @@ g32_pe_result g32_pe_bind_imports(g32_space *space, const g32_pe_image *image,
 g32_pe_result g32_pe_map_bound(g32_space *space, const void *file, size_t file_size,
                                uint32_t base, g32_pe_import_resolver resolver,
                                void *context, g32_pe_image *output);
+/* Automatic placement in [lower, upper), upper may be 2^32. Prefer the file's
+ * ImageBase if valid, wholly in bounds and unoccupied; otherwise first-fit at
+ * 64 KiB alignment. Fallback requires non-stripped relocation records; malformed
+ * fixups fail transactionally, not by trying another base. Invalid bounds return
+ * ADDRESS, exhausted relocatable windows NO_SPACE, fixed-base fallback RELOCATION.
+ * Low 64 KiB remains unavailable. Reserve exactly once, then use the same mapping,
+ * protections and rollback contract as map/map_bound. No dependency loading or
+ * Windows ASLR policy. Bound form requires a resolver and already-live dependencies.
+ * Failures preserve output and other allocations. Externally serialized use only. */
+g32_pe_result g32_pe_map_auto(g32_space *space, const void *file, size_t file_size,
+                              uint32_t lower, uint64_t upper, g32_pe_image *output);
+g32_pe_result g32_pe_map_bound_auto(g32_space *space, const void *file, size_t file_size,
+                                    uint32_t lower, uint64_t upper,
+                                    g32_pe_import_resolver resolver, void *context,
+                                    g32_pe_image *output);
 /* Checked export lookup, NOT dependency loading or forwarder resolution.
  * symbol!=NULL selects an exact case-sensitive name (ordinal ignored); NULL
  * selects the full export ordinal, not an EAT index. Missing/zero EAT entries
