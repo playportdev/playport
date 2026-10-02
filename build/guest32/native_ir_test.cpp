@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Real decode/dispatch audit BEFORE optimization/RA. No JIT or guest execution.
+// Real decode/dispatch audit, optionally through optimization/RA. No guest execution.
 #include "Interface/Context/Context.h"
 #include "Interface/Core/Frontend.h"
 #include "Interface/Core/OpcodeDispatcher.h"
 #include "Interface/IR/PassManager.h"
 #include "Interface/IR/Passes.h"
+#ifdef FEX_AUDIT_ALLOCATE
+#include "Interface/IR/Passes/RegisterAllocationPass.h"
+#include "Interface/Core/ArchHelpers/Arm64Emitter.h"
+#endif
 #include "Interface/Core/LookupCache.h"
 #include "Interface/Core/Dispatcher/Dispatcher.h"
 #include <FEXCore/Config/Config.h>
@@ -26,6 +30,27 @@ struct Instruction {
   uint32_t Value; // Independently specified literal or source-register index.
 };
 using Sequence = std::vector<Instruction>;
+
+#ifdef FEX_AUDIT_ALLOCATE
+// Obtain the real native ARM backend's 32-bit register budget without creating
+// a JIT, emitting code, or hardcoding counts from another platform's ABI.
+class RegisterBudget final : public FEXCore::CPU::Arm64Emitter {
+public:
+  explicit RegisterBudget(FEXCore::Context::ContextImpl& context)
+    : Arm64Emitter(&context) { }
+  void configure(RegisterAllocationPass& pass) const {
+    pass.AddRegisters(RegClass::GPR, GeneralRegisters.size());
+    pass.AddRegisters(RegClass::GPRFixed, StaticRegisters.size());
+    pass.AddRegisters(RegClass::FPR, GeneralFPRegisters.size());
+    pass.AddRegisters(RegClass::FPRFixed, StaticFPRegisters.size());
+    pass.SetNumPairRegs(PairRegisters);
+  }
+  bool accepts(PhysicalRegister reg) const {
+    return (reg.AsRegClass() == RegClass::GPR && reg.Reg < GeneralRegisters.size()) || (reg.AsRegClass() == RegClass::GPRFixed && reg.Reg < 8);
+  }
+};
+static const RegisterBudget* ActiveBudget;
+#endif
 
 // An independent x86 register oracle, NOT a decoder or FEX implementation.
 static void expected_effect(Registers& regs, const Instruction& inst) {
@@ -52,14 +77,45 @@ static void expected_effect(Registers& regs, const Instruction& inst) {
 // no memory, flags, helper, syscall, branch or native pointer operation is
 // silently ignored. This is NOT a FEX interpreter or guest execution backend.
 static void verify_ir(const IRListView& ir, uint32_t pc, const Sequence& sequence, const Registers& input) {
-  assert(!ir.PostRA());
+  const bool allocated = ir.PostRA();
+#ifndef FEX_AUDIT_ALLOCATE
+  assert(!allocated);
+#endif
   assert(ir.GetHeader()->OriginalRIP == pc);
   assert(ir.GetHeader()->NumHostInstructions == sequence.size());
   Registers actual = input;
   Registers expected = input;
   std::vector<uint64_t> values(ir.GetSSACount());
   std::vector<bool> valid(ir.GetSSACount());
+  // SSA before RA; a bounded physical register file after RA. Fixed registers
+  // start with architectural input, while temporary registers start invalid.
+  std::array<uint64_t, 256> physical {};
+  std::array<bool, 256> initialized {};
+  for (unsigned reg = 0; reg < input.size(); ++reg) {
+    auto index = PhysicalRegister(RegClass::GPRFixed, reg).Raw;
+    physical[index] = input[reg];
+    initialized[index] = true;
+  }
+  auto physical_index = [&](PhysicalRegister reg) {
+#ifdef FEX_AUDIT_ALLOCATE
+    assert(ActiveBudget && ActiveBudget->accepts(reg));
+#else
+    (void)reg;
+    std::abort();
+#endif
+    return reg.Raw;
+  };
   auto read = [&](OrderedNodeWrapper wrapper) {
+    if (allocated && wrapper.IsImmediate()) {
+      assert(!wrapper.IsInvalid());
+      auto index = physical_index(PhysicalRegister(wrapper));
+      assert(initialized[index]);
+      return physical[index];
+    }
+    if (allocated) {
+      // Inline guest-PC literals stay IR references, not physical registers.
+      assert(ir.GetOp<IROp_Header>(ir.GetNode(wrapper))->Op == OP_INLINEENTRYPOINTOFFSET);
+    }
     auto id = ir.GetID(ir.GetNode(wrapper)).Value;
     assert(id < values.size() && valid[id]);
     return values[id];
@@ -73,7 +129,11 @@ static void verify_ir(const IRListView& ir, uint32_t pc, const Sequence& sequenc
     case OP_BEGINBLOCK: ++begins; break;
     case OP_ENDBLOCK: ++ends; break;
     case OP_GUESTOPCODE: {
-      assert(actual == expected); // Every previous instruction, not just final registers.
+      // RA can coalesce/hoist stores across debug markers. Check complete
+      // prefixes at ExitFunction instead; retain every boundary check pre-RA.
+      if (!allocated) {
+        assert(actual == expected);
+      }
       assert(markers < sequence.size());
       const auto* op = ir.GetOp<IROp_GuestOpcode>(node);
       assert(op->GuestEntryOffset == offset);
@@ -101,9 +161,21 @@ static void verify_ir(const IRListView& ir, uint32_t pc, const Sequence& sequenc
       PhysicalRegister dest {node};
       assert(dest.AsRegClass() == RegClass::GPRFixed && dest.Reg < actual.size());
       assert(header->Size == OpSize::i32Bit);
-      assert(markers && stores + 1 == markers && dest.Reg == sequence[markers - 1].Dest);
+      if (!allocated) {
+        assert(markers && stores + 1 == markers && dest.Reg == sequence[markers - 1].Dest);
+      }
       actual[dest.Reg] = static_cast<uint32_t>(read(op->Value));
+      if (allocated) {
+        physical[dest.Raw] = actual[dest.Reg];
+        initialized[dest.Raw] = true;
+      }
       ++stores;
+      break;
+    }
+    case OP_COPY: {
+      assert(allocated && header->Size == OpSize::i64Bit);
+      values[id] = read(ir.GetOp<IROp_Copy>(node)->Source);
+      valid[id] = true;
       break;
     }
     case OP_BFI: {
@@ -136,7 +208,7 @@ static void verify_ir(const IRListView& ir, uint32_t pc, const Sequence& sequenc
       assert(header->Size == OpSize::i32Bit && read(op->NewRIP) == uint64_t(pc) + offset);
       assert(op->Hint == BranchHint::None && op->CallReturnAddress.IsInvalid() && op->CallReturnBlock.IsInvalid());
       assert(op->PatchSiteAddress == 0 && op->PatchSiteSize == 0);
-      assert(actual == expected && stores == sequence.size());
+      assert(actual == expected && (allocated || stores == sequence.size()));
       ++exits;
       break;
     }
@@ -145,8 +217,18 @@ static void verify_ir(const IRListView& ir, uint32_t pc, const Sequence& sequenc
       std::fprintf(stderr, "Unexpected IR op: %.*s\n", int(name.size()), name.data());
       std::abort();
     }
+    if (allocated && valid[id] && GetHasDest(header->Op)) {
+      auto index = physical_index(PhysicalRegister(node));
+      // i32 ARM register writes zero-extend; i64 bit-inserts retain all bits.
+      physical[index] = header->Size == OpSize::i32Bit ? uint32_t(values[id]) : values[id];
+      initialized[index] = true;
+      auto reg = PhysicalRegister(node);
+      if (reg.AsRegClass() == RegClass::GPRFixed) {
+        actual[reg.Reg] = uint32_t(physical[index]);
+      }
+    }
   }
-  assert(actual == expected && markers == sequence.size() && stores == sequence.size());
+  assert(actual == expected && markers == sequence.size() && (allocated || stores == sequence.size()));
   assert(blocks == 1 && begins == 1 && ends == 1 && exits == 1);
 }
 
@@ -194,6 +276,7 @@ static void audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::Interna
   auto validation = Validation::CreateIRValidation();
   validation->Run(&builder);
   auto ir = builder.ViewIR();
+  std::vector<Registers> inputs;
   uint32_t random = 0x1badf00d;
   for (unsigned trial = 0; trial < 128; ++trial) {
     Registers input;
@@ -204,7 +287,37 @@ static void audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::Interna
       value = trial == 0 ? 0 : trial == 1 ? UINT32_MAX : random;
     }
     verify_ir(ir, pc, sequence, input);
+    inputs.push_back(input);
   }
+#ifdef FEX_AUDIT_ALLOCATE
+  auto register_ops = [](const IRListView& view) {
+    size_t count = 0;
+    for (auto [node, header] : view.GetAllCode()) {
+      (void)node;
+      count += header->Op == OP_LOADREGISTER || header->Op == OP_STOREREGISTER;
+    }
+    return count;
+  };
+  const auto original_register_ops = register_ops(ir);
+  assert(original_register_ops >= sequence.size());
+  PassManager manager {&context};
+  auto* allocation = manager.GetPass<RegisterAllocationPass>("RA");
+  assert(allocation && manager.HasPass("IRValidation"));
+  RegisterBudget budget {context};
+  budget.configure(*allocation);
+  ActiveBudget = &budget;
+  manager.Finalize();
+  manager.Run(&builder);
+  auto allocated_ir = builder.ViewIR();
+  assert(allocated_ir.PostRA());
+  // Every prefix must actually exercise static-register coalescing, not just
+  // relabel an unchanged SSA graph as post-RA and accidentally recheck it.
+  assert(register_ops(allocated_ir) < original_register_ops);
+  for (const auto& input : inputs) {
+    verify_ir(allocated_ir, pc, sequence, input);
+  }
+  ActiveBudget = nullptr;
+#endif
   std::vector<uint8_t> unchanged(bytes.size());
   assert(g32_fetch(space, pc, unchanged.data(), unchanged.size()) == G32_OK && bytes == unchanged);
   assert(g32_read(space, pc, unchanged.data(), unchanged.size()) == G32_ACCESS);
@@ -251,11 +364,22 @@ static void cases(size_t granule) {
     {{0x66, 0xbd, 0xcd, 0xab}, Effect::Immediate16, 5, 0xabcd},
   };
   for (uint32_t pc : {0x400ffeU, 0x900ffeU, 0xffff0ffeU}) {
-    audit(context, thread, space, pc, all_gprs);
-    audit(context, thread, space, pc, partial);
+    for (const auto* sequence : {&all_gprs, &partial}) {
+#ifdef FEX_AUDIT_ALLOCATE
+      for (size_t length = 1; length <= sequence->size(); ++length) {
+        audit(context, thread, space, pc, Sequence(sequence->begin(), sequence->begin() + length));
+      }
+#else
+      audit(context, thread, space, pc, *sequence);
+#endif
+    }
   }
   assert(ByteLoans > 0 && handler.Queries > 0);
+#ifdef FEX_AUDIT_ALLOCATE
+  std::printf("PASS: optimized/allocated register IR granule=%zu 3 guest PCs/16 prefixes/128 inputs/pre-and-post-RA oracle\n", granule);
+#else
   std::printf("PASS: register-only decode-to-IR granule=%zu 3 guest PCs/2 sequences/128 inputs/per-instruction oracle\n", granule);
+#endif
   ActiveSpace = nullptr;
   g32_destroy(space);
 }
@@ -267,6 +391,8 @@ int main() {
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_MULTIBLOCK, "0");
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_ENABLECODECACHEVALIDATION, "0");
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_SMCCHECKS, "0");
+  FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_O0, "0");
+  assert(!std::getenv("MADEIRA_NO_DFE"));
   cases(0);
   cases(16384);
   cases(65536);

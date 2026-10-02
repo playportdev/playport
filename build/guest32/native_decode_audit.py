@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Audit the real FEX decoder (optionally register-only IR) in separated memory.
+"""Audit the real FEX decoder and optional register-only IR/RA in separated memory.
 
 Requires the native configuration documented in the allocator evidence. Only
 Frontend.cpp alone enables its ABI-neutral test byte-source seam; the test
@@ -24,7 +24,10 @@ def main():
                         help="ASan/UBSan for frontend, adapter and g32 (other FEX archives uninstrumented)")
     parser.add_argument("--ir", action="store_true",
                         help="audit register-only decode-to-IR before optimization/RA; no execution")
+    parser.add_argument("--allocate", action="store_true",
+                        help="audit register-only IR through the default optimizer/RA pipeline; implies --ir")
     args = parser.parse_args()
+    args.ir = args.ir or args.allocate
     build = args.build.resolve()
     if not build.is_relative_to(ROOT / ".work"):
         parser.error("build must be inside the repository's .work directory")
@@ -44,7 +47,7 @@ def main():
         parser.error("requires a native non-iOS base build")
     if 'FEXTestDecoderByteSource' not in frontend.read_text():
         parser.error("requires the series-applied decoder byte-source test seam")
-    audit = "separated-ir" if args.ir else "separated-decoder"
+    audit = "separated-ra" if args.allocate else "separated-ir" if args.ir else "separated-decoder"
     output = ROOT / ".work/guest32" / audit / ("sanitized" if args.sanitize else "optimized")
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run(["cmake", "--build", str(build), "--target", "FEXCore",
@@ -62,6 +65,8 @@ def main():
               flush=True)
     instrumentation = ["-g", "-fsanitize=address,undefined", "-fno-sanitize-recover=all"] if args.sanitize else []
     flags += instrumentation
+    if args.allocate:
+        flags += ["-DFEX_AUDIT_ALLOCATE=1"]
     frontend_object = output / "frontend.o"
     memory_object = output / "guest32.o"
     # Compile the complete series-applied frontend with ONLY the test seam on.

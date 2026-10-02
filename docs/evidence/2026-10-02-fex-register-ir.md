@@ -117,7 +117,8 @@ value or every register operation as a guest address.
 
 The next bounded gate is the same register-only sequences through real
 optimization and register allocation with semantic verification, before ARM
-code generation/execution. The host is not an ARM execution target. An eventual
+code generation/execution. That gate is now recorded in
+[the allocated-register audit](2026-10-02-fex-allocated-register-ir.md). The host is not an ARM execution target. An eventual
 phone execution experiment must enter through the product's developer UI.
 Scalar/stack/vector/string/atomic memory checking, concurrent VM invalidation,
 SMC/disk-cache/diagnostic readers, Wine nested-pointer marshalling and i386
