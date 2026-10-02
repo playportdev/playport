@@ -4,7 +4,7 @@
 // download running, with its time left, and the one after it; and the
 // four other games played last from the whole Library, installed or not (dimmed),
 // the never played by name. Every card takes the focus ring; A opens its details.
-// Y searches every Steam game in the Library (AppShell's footer).
+// Search belongs to Library; game options belong to each game's details.
 
 import PlayportKit
 import SteamClientKit
@@ -181,7 +181,7 @@ struct HomeView: View {
         appID.map { app in model.games.contains { $0.id == app } } ?? false
     }
 
-    /// An installed game is `tile:ID` (X opens its Game options); one not installed is
+    /// An installed game is `tile:ID` and opens its details; one not installed is
     /// `game:APPID`, dimmed, and opens its Steam page.
     private func tile(_ entry: LibraryEntry) -> some View {
         let job = entry.appID.flatMap { installs.jobs[$0] }

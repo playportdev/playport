@@ -134,16 +134,6 @@ struct AppShell: View {
             // Settings.dc.html: A on the ringed row, B back to the list, then out.
             return h + [PadHint(button: .b, label: SettingsRing.backLabel) { _ = SettingsRing.press(.b) }]
         }
-        if !nav.settings, nav.page == .home, let id = focus.focused, let title = Self.title(inItem: id) {
-            h.append(PadHint(button: .x, label: "Options") { nav.openTitle(title, options: true) })
-        }
-        if !nav.settings, nav.page == .home {
-            // Main.dc.html: Y searches every Steam game, on the Library's controller keyboard.
-            h.append(PadHint(button: .y, label: "Search") {
-                _ = nav.open("games")
-                LibraryGrid.shared.openSearch()
-            })
-        }
         if nav.page == .downloads {
             h += DownloadsPage.hints(model.installs, focused: focus.focused)
             // Main sections switch with LB/RB; B never leaves this page.
@@ -186,12 +176,6 @@ struct AppShell: View {
             h.append(PadHint(button: .b, label: nav.gameBackLabel) { _ = nav.back() })
         }
         return h
-    }
-
-    /// The title a Home item stands for: `hero:ID`, `tile:ID`.
-    private static func title(inItem id: String) -> String? {
-        let parts = id.split(separator: ":", maxSplits: 1)
-        return parts.count == 2 && ["hero", "tile"].contains(parts[0]) ? String(parts[1]) : nil
     }
 
     private func press(_ b: NavButton) {
