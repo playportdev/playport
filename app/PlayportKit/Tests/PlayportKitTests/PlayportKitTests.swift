@@ -157,6 +157,26 @@ final class CatalogTests: XCTestCase {
         return try JSONDecoder().decode(InstallReceipt.self, from: Data(json.utf8))
     }
 
+    func testAdoptionDetectsDX12AndRefreshesItAfterAnUpdate() throws {
+        try file("DX Game/game/Binaries/Win64/game-Win64-Shipping.exe")
+        let exe = games.appendingPathComponent("DX Game/game/Binaries/Win64/game-Win64-Shipping.exe")
+        try Direct3D12Tests.pe(delay: true).write(to: exe)
+        let cohort = Cohort(titles: [])
+        let first = Adoption.scan(games: games, cohort: cohort, receipts: [], previous: Catalog())
+        XCTAssertEqual(first.titles.first?.importsDirect3D12, true)
+        let round = try JSONDecoder().decode(Catalog.self, from: JSONEncoder().encode(first))
+        XCTAssertEqual(round.titles.first?.importsDirect3D12, true)
+        try Direct3D12Tests.pe(name: "d3d11.dll").write(to: exe)
+        let next = Adoption.scan(games: games, cohort: cohort, receipts: [], previous: first)
+        XCTAssertEqual(next.titles.first?.importsDirect3D12, false)
+        var oldJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(first)) as? [String: Any])
+        var titles = try XCTUnwrap(oldJSON["titles"] as? [[String: Any]])
+        titles[0].removeValue(forKey: "importsDirect3D12")
+        oldJSON["titles"] = titles
+        let old = try JSONDecoder().decode(Catalog.self, from: JSONSerialization.data(withJSONObject: oldJSON))
+        XCTAssertNil(old.titles.first?.importsDirect3D12)
+    }
+
     func testAdoptionFindsTheStagedCohortTitleReady() throws {
         let cohort = try Cohort.load(directory: titlesDir)
         try file("Hollow Knight/hollow_knight.exe")

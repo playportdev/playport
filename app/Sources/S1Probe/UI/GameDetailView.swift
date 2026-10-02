@@ -623,7 +623,8 @@ private struct GameDetailPage: View {
         let screenName: (String?) -> String = { LaunchSettingsText.screen($0, pixels: false) }
         let screen = OptionValue.of(own: own.screen.map(Optional.some), inherited: inherited.screen, name: screenName)
         let limit = OptionValue.of(own: own.frameLimit, inherited: inherited.frameLimit, name: LaunchSettingsText.frameLimit)
-        let d3d = OptionValue.of(own: own.graphics, inherited: inherited.graphics, name: LaunchSettingsText.graphics)
+        let inheritedGraphics = launchSettings.effective(for: t, inheritingGraphics: true).graphics
+        let d3d = OptionValue.of(own: own.graphics, inherited: inheritedGraphics, name: LaunchSettingsText.graphics)
         PadSectionHeader(text: "Graphics").id("graphics")
         PadRow(id: "opt:screen", title: "Resolution", value: screen.text, accessory: .chevron, changed: screen.changed,
                style: .plain, reset: screen.changed ? { settings.wrappedValue.screen = nil } : nil) {
@@ -652,7 +653,7 @@ private struct GameDetailPage: View {
             PadModal.shared.picker(
                 title: "Direct3D", context: "\(context) · Graphics",
                 note: LaunchSettingsText.nextStart + " " + LaunchSettingsText.graphicsFooter,
-                options: [PadOption(id: "", label: "Default", detail: "\(LaunchSettingsText.graphics(inherited.graphics)), from Settings")]
+                options: [PadOption(id: "", label: "Default", detail: "\(LaunchSettingsText.graphics(inheritedGraphics)), from Settings or game detection")]
                     + GraphicsBackend.allCases.filter { Manifest.has($0) || own.graphics == $0 }.map {
                         PadOption(id: $0.rawValue, label: LaunchSettingsText.graphics($0), detail: LaunchSettingsText.graphicsDetail($0))
                     },

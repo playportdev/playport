@@ -4,7 +4,7 @@
 // command-line arguments, which steam_api it loads, FEX's x86 memory
 // ordering over the game's profile and FEX's block size (FEXProfile).
 // A game's own value wins over the global one, which wins over the defaults:
-// 720 rows at 60 FPS on DXMT (`defaultScreen`, `defaultFrameLimit`,
+// 720 rows at 60 FPS on DXMT (Vulkan for detected DX12 games; `defaultScreen`, `defaultFrameLimit`,
 // GraphicsBackend.default). A cohort title's screen (LaunchPlan.screen) no
 // longer sets it (decision 0034). Native and no limit are a
 // choice in Settings or on a game's page. A limit of 0 runs presents free, with
@@ -146,13 +146,17 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     public static let defaultFrameLimit = 60
 
     /// The game's value, else the global one, else the defaults (720 rows,
-    /// 60 FPS) and GraphicsBackend.default. Invalid values are skipped as if
-    /// unset. With `game` nil it is what a game inherits: its options' "Default · X".
-    public static func resolve(game: LaunchSettings?, global: LaunchSettings) -> Effective {
+    /// 60 FPS, Vulkan for DX12 and DXMT otherwise). Explicit graphics choices
+    /// still win. `arguments` are the title's base arguments, before the player's.
+    /// Invalid values are skipped as if unset.
+    public static func resolve(game: LaunchSettings?, global: LaunchSettings,
+                               importsDirect3D12: Bool = false, arguments: [String] = []) -> Effective {
         let screen = [game?.screen, global.screen, defaultScreen].lazy.compactMap { $0 }
             .first(where: LaunchPlan.validScreen)
         let limit = [game?.frameLimit, global.frameLimit].lazy.compactMap { $0 }.first { $0 >= 0 } ?? defaultFrameLimit
-        let graphics = game?.graphics ?? global.graphics ?? .default
+        let dx12 = Direct3D12.requested(arguments: arguments + splitArguments(game?.arguments ?? ""),
+                                       imported: importsDirect3D12)
+        let graphics = game?.graphics ?? global.graphics ?? (dx12 ? .vulkan : .default)
         return Effective(screen: screen, frameLimit: limit, graphics: graphics,
                          arguments: splitArguments(game?.arguments ?? ""), steamAPI: game?.steamAPI ?? .emulated,
                          ordering: game?.ordering ?? MemoryOrdering(),

@@ -160,9 +160,9 @@ final class LibraryModel: ObservableObject {
               !TitleLaunch.shared.running, !TitleLaunch.shared.spent,
               t.appID.flatMap({ SteamAccountModel.current?.installs.jobs[$0] }) == nil else { return false }
         let plan = try t.launchPlan(cohort: Self.cohort)
-        // The player's settings (Settings, the game's options) over the defaults: 720p, 60 fps, DXMT.
+        // The player's settings over 720p, 60 fps, Vulkan for DX12 and DXMT otherwise.
         #if PLAYPORT_RELEASE
-        var settings = LaunchSettingsStore.shared.effective(for: t.id)
+        var settings = LaunchSettingsStore.shared.effective(for: t)
         // Memory ordering, block size, the Steam API choice and runtime keys are a dev build's (decision 0034): the
         // player's app runs the game's profile and the emulator, whatever a dev build left stored.
         settings.ordering = MemoryOrdering()
@@ -170,7 +170,7 @@ final class LibraryModel: ObservableObject {
         settings.steamAPI = .emulated
         settings.runtime = [:]
         #else
-        let settings = LaunchSettingsStore.shared.effective(for: t.id)
+        let settings = LaunchSettingsStore.shared.effective(for: t)
         #endif
         // A Steam app's steam_api: the emulator told about the paired account, or the game's own.
         let service = SteamAccountModel.current?.service

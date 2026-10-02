@@ -58,6 +58,9 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     public var lastVerification: Verification?
     /// The Steam branch a Steam install follows; nil is public.
     public var branch: String? = nil
+    /// The selected executable imports d3d12.dll (normal or delay-loaded).
+    /// Rebuilt by adoption; nil in older catalogues.
+    public var importsDirect3D12: Bool? = nil
 
     public enum Badge: String, Sendable {
         case ready = "Ready"
@@ -195,6 +198,9 @@ public enum Adoption {
                 if old.buildID == t.buildID { t.lastVerification = old.lastVerification }
                 if t.source == .found, old.source == .found { t.sizeBytes = old.sizeBytes }
             }
+            t.importsDirect3D12 = t.executable.map {
+                Direct3D12.imports(in: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")))
+            } ?? false
             if t.sizeBytes == nil { t.sizeBytes = directorySize(dir) }
             out.append(t)
         }

@@ -374,8 +374,12 @@ but the player's Pause and runs it once Steam is signed in. A release build comp
   arguments and `madeira.cfg` keys; its screen no longer sets a launch's. A
   launch's screen, frame limit and Direct3D come from the game's own launch
   settings (its Game options), else the global Settings; with none, 720 rows
-  at 60 FPS on DXMT (`LaunchSettings.defaultScreen`, `defaultFrameLimit`,
-  `GraphicsBackend.default`). Native and no limit are a player's choice. FEX's memory
+  at 60 FPS, on Vulkan for detected DX12 games and DXMT otherwise
+  (`LaunchSettings.defaultScreen`, `defaultFrameLimit`, `GraphicsBackend.default`).
+  Adoption checks the selected executable's normal and delay imports for
+  `d3d12.dll`; launch API flags take precedence over that inference, and explicit
+  graphics choices still win ([decision 0044](decisions/0044-vulkan-default-for-dx12.md)).
+  Game options show the same inherited backend as Play. Native and no limit are a player's choice. FEX's memory
   ordering comes from a dev build's Game options over the game's profile (the
   release app runs the profile, and the Steam API emulator), Proton's FEX
   settings for its Steam app ID and executable (PlayportKit `FEXProfile`,

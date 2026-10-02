@@ -33,8 +33,12 @@ final class LaunchSettingsStore: ObservableObject {
                 set: { self.games[id] = $0.isEmpty ? nil : $0 })
     }
 
-    func effective(for id: String) -> LaunchSettings.Effective {
-        LaunchSettings.resolve(game: games[id], global: global)
+    func effective(for title: InstalledTitle, inheritingGraphics: Bool = false) -> LaunchSettings.Effective {
+        var game = games[title.id]
+        if inheritingGraphics { game?.graphics = nil }
+        let arguments = (try? title.launchPlan(cohort: LibraryModel.cohort))?.args ?? []
+        return LaunchSettings.resolve(game: game, global: global,
+                                      importsDirect3D12: title.importsDirect3D12 == true, arguments: arguments)
     }
 
     private func save<T: Encodable>(_ value: T, _ key: String) {
@@ -97,7 +101,7 @@ enum LaunchSettingsText {
         }
     }
 
-    static let graphicsFooter = "DXMT runs Direct3D 10 and 11 on Metal, and is the default. "
+    static let graphicsFooter = "DXMT runs Direct3D 10 and 11 on Metal. The default is Vulkan for detected Direct3D 12 games, DXMT otherwise. "
         + "Vulkan runs Direct3D 8 to 11 through DXVK and Direct3D 12 through vkd3d-proton, on Mesa's "
         + "KosmicKrisp driver; it is experimental."
 
