@@ -158,8 +158,8 @@ struct AppShell: View {
                 return h + [PadHint(button: .menu, label: "Settings") { _ = nav.open("settings") }]
             }
         }
-        if nav.settings || nav.page != .home {
-            h.append(PadHint(button: .b, label: nav.settings ? "Back" : "Home") { _ = nav.back() })
+        if nav.canGoBack {
+            h.append(PadHint(button: .b, label: "Back") { _ = nav.back() })
         }
         if !nav.settings {
             h.append(PadHint(button: .menu, label: "Settings") { _ = nav.open("settings") })
@@ -168,7 +168,7 @@ struct AppShell: View {
     }
 
     /// The game page's footer (Game.dc.html, GameOptions.dc.html): A on the ringed control, X
-    /// its Game options (or the version, for a game not installed), B the Library; in the
+    /// its Game options (or the version, for a game not installed), B its origin; in the
     /// options panel Y puts the ringed setting back to its default and B closes it.
     private var gamePageHints: [PadHint] {
         var h: [PadHint] = []
@@ -183,7 +183,7 @@ struct AppShell: View {
             h.append(PadHint(button: .b, label: nav.gamePanels.count > 1 ? "Game options" : "Close") { _ = nav.back() })
         case nil:
             if let x = gamePage.x { h.append(PadHint(button: .x, label: x.label, action: x.action)) }
-            h.append(PadHint(button: .b, label: "Library") { _ = nav.back() })
+            h.append(PadHint(button: .b, label: nav.gameBackLabel) { _ = nav.back() })
         }
         return h
     }

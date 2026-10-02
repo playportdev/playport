@@ -33,7 +33,7 @@ struct SetupCheckSettings: View {
                subtitle: "The four steps a first run shows",
                value: "\(SetupChecklist.doneCount(state.facts)) of \(SetupStep.allCases.count) done", accessory: .chevron,
                hint: "Open") {
-            AppNavigation.shared.openSetup(fromSettings: true)
+            AppNavigation.shared.openSetup()
         }
         #if !PLAYPORT_RELEASE
         // A dev build sees the checklist as a first run shows it, without deleting the
@@ -66,7 +66,7 @@ struct SetupCheckSettings: View {
     private func preview(onPhone: Bool) {
         SetupState.log("preview a first run" + (onPhone ? "" : " on iOS 26"))
         state.preview = SetupFacts(controller: nil, pairing: false, pairsOnPhone: onPhone, tunnelUp: false, steamSignedIn: false)
-        AppNavigation.shared.openSetup(on: .controller, fromSettings: true)
+        AppNavigation.shared.openSetup(on: .controller)
     }
     #endif
 
@@ -75,8 +75,7 @@ struct SetupCheckSettings: View {
         let item = SetupChecklist.item(.steam, state.facts)
         return PadRow(id: "set:setup:steam", title: "Steam", subtitle: item.done ? nil : "Optional: your library, cloud saves and achievements",
                       value: item.done ? "Signed in" : "Signed out", accessory: .chevron, hint: "Open") {
-            AppNavigation.shared.settingsSection = .steam
-            PadFocus.shared.ring(SettingsSection.steam.navItem)
+            AppNavigation.shared.openSettings(section: .steam)
         }
     }
 

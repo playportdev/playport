@@ -1,217 +1,160 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Where the product UI is (UI/AppShell.swift): Home, Library or Downloads,
-// switched with LB and RB; Settings over them, behind ≡ or the gear; and the
-// game page open over the Library, with its Game options panel and the
-// achievements list over it (`gamePanels`); Sign in to Steam over any of
-// them (`signIn`); Settings › About › Licences' pages over the About section
-// (`licences`). The Library's chips, sort and search are LibraryGrid's. The views bind to it; a dev build's
-// UIDriver sets it (`open:` actions, `open(_:)`).
+// SwiftUI/focus adapter for PlayportKit.AppRoutes. The shell, controller and
+// dev UI driver all use these transitions; origins are owned by the router,
+// never by a destination view's onDisappear.
 
 import PlayportKit
 import SwiftUI
 
 @MainActor
 final class AppNavigation: ObservableObject {
-    enum GamePanel: String, Hashable {
-        case options, achievements
+    typealias Page = AppRoutes.Page
+    typealias GamePanel = AppRoutes.GamePanel
+
+    static let shared = AppNavigation()
+    @Published private var routes = AppRoutes()
+    /// A dev driver's game-options section or Settings section to reveal.
+    @Published var pageSection: String?
+
+    var page: Page { routes.page }
+    var settings: Bool { routes.settings }
+    var setup: Bool { routes.setup }
+    var signIn: Bool { routes.signIn }
+    var licences: [LicencePage] { routes.licences }
+    var onGamePage: Bool { routes.onGamePage }
+    var canGoBack: Bool { routes.canGoBack }
+    var gameBackLabel: String { routes.gameBackLabel }
+    var focusStart: String? { routes.focusStart }
+    var settingsSection: SettingsSection {
+        get { routes.settingsSection }
+        set { routes.settingsSection = newValue }
     }
-
-    enum Page: String, Hashable, CaseIterable {
-        case home, library, downloads
-
-        var title: String {
-            switch self {
-            case .home: "Home"
-            case .library: "Library"
-            case .downloads: "Downloads"
+    var gamePanels: [GamePanel] {
+        get { routes.gamePanels }
+        set { routes.gamePanels = newValue }
+    }
+    /// Bound to the Library's NavigationStack; a native pop restores the same
+    /// origin as the controller/footer Back, including Home or Settings.
+    var gamePath: [GameRef] {
+        get { routes.gamePath }
+        set {
+            guard newValue != routes.gamePath else { return }
+            if newValue.isEmpty {
+                let wasSetup = setup
+                routes.closeGame()
+                transitioned(wasSetup: wasSetup)
+            } else if let ref = newValue.last {
+                openGame(ref)
             }
         }
     }
 
-    static let shared = AppNavigation()
-
-    // Another screen starts its focus ring afresh, reset here before the new
-    // screen reports its items (an onChange runs after they came).
-    @Published var page = Page.home { didSet { if page != oldValue { PadFocus.shared.reset() } } }
-    /// Settings, over whichever page was showing; B or Back closes it.
-    /// It opens with the ring on the list's entry for `settingsSection`.
-    @Published var settings = false {
-        didSet {
-            guard settings != oldValue else { return }
-            if !settings { closeLicences() }
-            PadFocus.shared.reset(start: settings ? settingsSection.navItem : nil)
-        }
-    }
-    /// The Settings section shown at the right (SettingsView.swift); the ring on its
-    /// entry in the list down the left picks it.
-    @Published var settingsSection = SettingsSection.steam { didSet { if settingsSection != oldValue { closeLicences() } } }
-    /// Settings › About › Licences (UI/LicencesView.swift): the pages shown in place of
-    /// the About section, the top one last. B on one of their rows closes the top one;
-    /// another section, and Settings closing, close them all.
-    @Published private(set) var licences: [LicencePage] = []
-    /// The first-run checklist (UI/SetupView.swift) in place of the pages; Settings
-    /// can open over it (its Steam step). Leaving it once keeps it from opening by itself.
-    @Published var setup = false {
-        didSet {
-            guard setup != oldValue else { return }
-            PadFocus.shared.reset(start: setup ? setupStart.item : nil)
-            if !setup { UserDefaults.standard.set(true, forKey: SetupState.leftKey) }
-        }
-    }
-    /// Sign in to Steam (UI/SignInView.swift) over whatever opened it: Settings ›
-    /// Steam account, the checklist's Steam step, or `open:signin`. B, a sign-in
-    /// that ends signed in, and Not now go back there.
-    @Published private(set) var signIn = false {
-        didSet { if signIn != oldValue { PadFocus.shared.reset(start: signIn ? SignInView.startItem : signInReturn) } }
-    }
-    /// The ring's item to go back to when the sign-in closes.
-    private var signInReturn: String?
-    /// Where the checklist's ring starts, and whether B goes back to Settings › Setup check.
-    private var setupStart = SetupStep.controller
-    private var setupFromSettings = false
-    /// The Library's navigation stack: the game page open over the grid.
-    @Published var gamePath: [GameRef] = [] { didSet { if gamePath != oldValue { gamePanels = [] } } }
-    /// The panels over the game page, the top one last: Game options, and the
-    /// achievements list (from Game options or the page's button). B closes the top one.
-    @Published var gamePanels: [GamePanel] = []
-    /// A section of the open game page's options (graphics, game, files, developer; in a dev
-    /// build also ordering, steam) to scroll to, or of Settings to show (SettingsSection.named);
-    /// a dev build's `open:ID#SECTION` sets it.
-    @Published var pageSection: String?
-
-    /// The screens `open:` names in a dev build: the three pages, the Library on
-    /// its All Steam games chip (`games`), Settings and its Steam account (`account`), and
-    /// the first-run checklist (`setup`, as Settings › Setup check's first row opens it), and
-    /// Sign in to Steam (`signin`: its preview while Steam is signed in, SignInState.open).
-    /// Settings opens on the section it showed last (Steam account at first).
     static let screens = ["home", "library", "games", "downloads", "settings", "account", "setup", "signin"]
 
-    /// Shows a screen `screens` names; false for any other name.
+    @discardableResult
     func open(_ screen: String) -> Bool {
         switch screen {
         case "games":
             show(.library)
-            gamePath = []
             LibraryGrid.shared.filter = .steam
         case "settings", "account":
-            if screen == "account" { settingsSection = .steam }
-            settings = true
+            openSettings(section: screen == "account" ? .steam : nil)
         case "setup":
-            openSetup(fromSettings: settings)
+            openSetup()
         case "signin":
             SignInState.shared.open(preview: SteamAccountModel.current?.state.account != nil)
         default:
             guard let p = Page(rawValue: screen) else { return false }
             show(p)
-            if p == .library {
-                gamePath = []
-                LibraryGrid.shared.filter = .installed
-            }
+            if p == .library { LibraryGrid.shared.filter = .installed }
         }
         return true
     }
 
-    /// A licences page over the About section (or the page before it), the ring on its first row.
     func openLicence(_ page: LicencePage) {
-        licences.append(page)
+        routes.openLicence(page)
         PadFocus.shared.reset(start: page.firstItem)
     }
 
-    /// B on a licences page: the page under it, the ring back on the row that opened this one.
     func closeLicence() {
-        guard let page = licences.popLast() else { return }
+        guard let page = routes.closeLicence() else { return }
         PadFocus.shared.reset(start: page.row)
     }
 
-    func closeLicences() { licences = [] }
+    func closeLicences() { routes.closeLicences() }
 
-    /// A dev build's `open:licences`: Settings › About › Licences, then `pages` over it
-    /// (a component's files).
     func showLicences(_ pages: [LicencePage] = []) {
-        signIn = false
-        settingsSection = .about
-        settings = true
+        if signIn { closeSignIn() }
+        openSettings(section: .about)
         closeLicences()
         for page in [LicencePage.list] + pages { openLicence(page) }
     }
 
-    /// A page, with Settings and the checklist closed.
     func show(_ p: Page) {
-        signIn = false
-        settings = false
-        setup = false
-        page = p
+        let wasSetup = setup
+        if routes.show(p, focus: PadFocus.shared.focused) { transitioned(wasSetup: wasSetup) }
     }
 
-    /// The first-run checklist, the ring on `step` (else the first step not done);
-    /// `fromSettings`: B goes back to Settings › Setup check.
-    func openSetup(on step: SetupStep? = nil, fromSettings: Bool = false) {
-        setupFromSettings = fromSettings
-        setupStart = step ?? SetupChecklist.firstTodo(SetupState.shared.facts)
-        gamePath = []
-        settings = false
-        if setup { PadFocus.shared.ring(setupStart.item) } else { setup = true }
+    /// Also used for a link from one Settings section to another, so Back can
+    /// return to the section/row that opened it (unlike choosing the sidebar).
+    func openSettings(section: SettingsSection? = nil) {
+        let wasSetup = setup
+        if routes.openSettings(section: section, focus: PadFocus.shared.focused) { transitioned(wasSetup: wasSetup) }
     }
 
-    /// A catalogued title's page, over the Library; `options` opens its Game options too.
+    func openSetup(on step: SetupStep? = nil) {
+        let wasSetup = setup
+        let start = step ?? SetupChecklist.firstTodo(SetupState.shared.facts)
+        if routes.openSetup(on: start, focus: PadFocus.shared.focused) {
+            transitioned(wasSetup: wasSetup)
+        } else {
+            PadFocus.shared.ring(start.item)
+        }
+    }
+
     func openTitle(_ id: String, options: Bool = false) {
         openGame(.title(id))
         if options { gamePanels = [.options] }
     }
 
     func openGame(_ ref: GameRef) {
-        show(.library)
-        gamePath = [ref]
+        let wasSetup = setup
+        if routes.openGame(ref, focus: PadFocus.shared.focused) { transitioned(wasSetup: wasSetup) }
     }
 
-    /// LB and RB: the page before or after this one, wrapping round.
     func step(_ by: Int) {
         let all = Page.allCases
         let i = all.firstIndex(of: page) ?? 0
         show(all[(i + by + all.count) % all.count])
     }
 
-    /// Sign in to Steam over this screen; the ring comes back to the item it is on.
     func openSignIn() {
-        guard !signIn else { return }
-        signInReturn = PadFocus.shared.focused
-        signIn = true
+        let wasSetup = setup
+        if routes.openSignIn(focus: PadFocus.shared.focused) { transitioned(wasSetup: wasSetup) }
     }
 
-    func closeSignIn() { signIn = false }
+    func closeSignIn() { if signIn { _ = back() } }
 
-    /// B: one screen back. False when there is nothing to go back from.
+    @discardableResult
     func back() -> Bool {
-        if signIn {
-            signIn = false
+        if settings && !signIn && !licences.isEmpty {
+            closeLicence()
             return true
         }
-        if settings {
-            settings = false
-            // Back to the checklist it was opened from (its Steam step).
-            if setup { PadFocus.shared.reset(start: SetupStep.steam.item) }
-            return true
-        }
-        if setup {
-            setup = false
-            if setupFromSettings {
-                settingsSection = .setup
-                settings = true
-                PadFocus.shared.reset(start: "set:setup:checklist")
-            }
-            return true
-        }
-        switch page {
-        case .library where !gamePath.isEmpty && !gamePanels.isEmpty: gamePanels.removeLast()
-        case .library where !gamePath.isEmpty: gamePath.removeLast()
-        case .library, .downloads: page = .home
-        case .home: return false
-        }
+        // GameDetailView restores focus within its panels itself.
+        if onGamePage && !gamePanels.isEmpty { return routes.back() }
+        let wasSetup = setup
+        guard routes.back() else { return false }
+        transitioned(wasSetup: wasSetup)
         return true
     }
 
-    /// A game page is open over the Library.
-    var onGamePage: Bool {
-        page == .library && !settings && !setup && !signIn && !gamePath.isEmpty
+    private func transitioned(wasSetup: Bool) {
+        pageSection = nil
+        if wasSetup && !setup { UserDefaults.standard.set(true, forKey: SetupState.leftKey) }
+        let start = routes.focusStart ?? (signIn ? SignInView.startItem
+            : settings ? settingsSection.navItem
+            : setup ? routes.setupStart.item : nil)
+        PadFocus.shared.reset(start: start)
     }
 }

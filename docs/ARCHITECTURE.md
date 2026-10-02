@@ -347,9 +347,14 @@ starts, when HostIO takes it for the guest. Text is typed on the
 controller keyboard and choices made in pickers (`UI/Pad/PadModal.swift`,
 the key layout and cursor in PlayportKit `PadKeyboard`), which take every
 press while they are up; the system keyboard is not used. The current page and screen are
-`AppNavigation`, which a dev build's UI driver (`Dev/UIDriver.swift`,
-`S1_MODE=ui`) sets through the same model calls the buttons make; its `pad:`
-action sends presses into the same router a controller feeds. A game's page
+`AppNavigation`, a SwiftUI/focus adapter for PlayportKit `AppRoutes` (host-tested).
+Each screen transition remembers its origin, section/panels and focused item;
+Back closes local panels first, then restores that origin. A game opened from
+Home returns to Home, and one opened from Settings › Storage returns to that
+section and row, not Library. This history lasts for the UI process, not across
+the restart after a game. A dev build's UI driver (`Dev/UIDriver.swift`,
+`S1_MODE=ui`) uses the same model calls the buttons make; its `pad:` action
+sends presses into the same router a controller feeds. A game's page
 (`UI/GameDetailView.swift`) has Play or Install, the achievements and
 Options on the ring, and its Game options panel over it (`AppNavigation.gamePanels`),
 where Y puts a setting back to its default (`PadFocus.resetFocused`). Settings

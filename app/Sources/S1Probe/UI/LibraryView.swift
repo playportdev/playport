@@ -130,7 +130,7 @@ private struct LibraryGridView: View {
         }
         // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
         // Back from a game page the ring is still on its tile, and stays there.
-        .onAppear { if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: firstTile()) } }
+        .onAppear { if focus.focused?.hasPrefix("lib:") != true { PadFocus.shared.reset(start: nav.focusStart ?? firstTile()) } }
         .onChange(of: grid.filter) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.sort) { _, _ in PadFocus.shared.reset(start: firstTile()) }
         .onChange(of: grid.search) { _, _ in PadFocus.shared.reset(start: firstTile()) }

@@ -39,12 +39,6 @@ import SteamClientKit
 import SwiftUI
 import UIKit
 
-/// Which game a page is for: a catalogued title, or an owned Steam app (`app-<id>` also finds one not installed).
-enum GameRef: Hashable {
-    case title(String)
-    case steam(UInt32)
-}
-
 /// What X does on the game page now, for the shell's footer (AppShell.gamePageHints).
 @MainActor
 final class GamePageState: ObservableObject {
@@ -83,8 +77,6 @@ private struct GameDetailPage: View {
     @State private var steamAPIState: SteamAPISwap.State?
     /// Its executables wrapped in Steam's DRM (SteamStub), and whether it is off them.
     @State private var steamStubs: [SteamStub.Site] = []
-    /// Where the ring was before the page opened (a Library tile), to go back to.
-    @State private var returnFocus: String?
 
     /// The game in C:\Games, if it is there now.
     private var installed: InstalledTitle? {
@@ -149,14 +141,8 @@ private struct GameDetailPage: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear {
-            returnFocus = focus.focused
-            focus.reset(start: primaryID)
-        }
-        .onDisappear {
-            GamePageState.shared.x = nil
-            if let returnFocus { focus.ring(returnFocus) } else { focus.reset() }
-        }
+        .onAppear { focus.reset(start: navigation.focusStart ?? primaryID) }
+        .onDisappear { GamePageState.shared.x = nil }
     }
 
     // MARK: page

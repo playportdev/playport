@@ -13,13 +13,7 @@
 import PlayportKit
 import SwiftUI
 
-/// A page of Settings › About › Licences.
-enum LicencePage: Hashable {
-    case list
-    case component(String)
-    /// A file of Licenses/, by its name there.
-    case text(String)
-
+extension LicencePage {
     /// The row that opens this page on the page under it; the ring goes back to it.
     var row: String {
         switch self {
