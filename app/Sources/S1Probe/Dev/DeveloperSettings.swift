@@ -18,6 +18,7 @@ struct DeveloperSettings: View {
     @AppStorage(MetalValidation.key) private var validation = MetalValidation.Level.off.rawValue
     @AppStorage(RuntimeCounters.key) private var countersOff = false
     @AppStorage(Fastsync.offKey) private var fastsyncOff = false
+    @AppStorage(SharedMemoryBroker.key) private var helperOwnedMemory = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
     @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
@@ -64,6 +65,8 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var memory: some View {
         PadSectionHeader(text: "Memory").id("memory")
+        SettingsSwitchRow(id: "dev:helperMemory", title: "Extra FEX RAM (experiment)",
+                          subtitle: "Next Play: helper-owned data, not extra physical RAM", on: $helperOwnedMemory)
         // 2 GB refuses every tested game; 3.3 GB is what a copy without the entitlement gets.
         let limits = Self.choices([2048, 3379, 4096], with: simulated)
         choice("dev:simulatedLimit", "Simulated limit", subtitle: "What every Play is checked against",
@@ -102,6 +105,9 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var probes: some View {
         PadSectionHeader(text: "Probes").id("probes")
+        PadRow(id: "set:dev:memoryStatus", title: "Extra FEX RAM: read usage", subtitle: sharedMemory.status, hint: "Read") {
+            if !sharedMemory.busy { Task { await sharedMemory.reportRuntime() } }
+        }
         ForEach([64, 2048, 4096], id: \.self) { mb in
             PadRow(id: "set:dev:memoryBroker:\(mb)", title: "Shared RAM: \(mb) MiB", subtitle: sharedMemory.status, hint: "Measure") {
                 if !sharedMemory.busy { Task { _ = await sharedMemory.run(mb: mb) } }

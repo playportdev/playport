@@ -1,0 +1,48 @@
+From 9495281d8078afde41baf7b46c66c58c71a11cdf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sat, 3 Oct 2026 00:22:17 +0200
+Subject: [PATCH] virtual: let the host back large committed FEX data mappings
+
+A weak, bounded host hook can supply anonymous memory charged to a helper. Keep placement and all Wine protection/decommit operations unchanged; executable mappings and reservations keep the original path. Refusals fall back to mmap.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-03-helper-owned-memory.md; docs/evidence/2026-10-03-fex-helper-memory.md
+Offered-upstream: no; optional iOS host integration
+---
+ build/ntdll-unix/virtual_ios.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 846d530..940cec3 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5990,6 +5990,13 @@ static inline BOOL use_aslr(void)
+            (main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE);
+ }
+ 
++/* Optional host backing for committed FEX data. A missing/rejecting host hook
++ * leaves the original mmap path untouched, including release builds. The host
++ * maps a helper-owned anonymous object at this exact address; Wine still owns
++ * all protection, decommit and unmap operations. Never send code, reservations,
++ * low guest memory or image mappings through this path. */
++extern int playport_memory_backing( void *, size_t, int ) __attribute__((weak_import));
++
+ /* mmap() anonymous memory at a fixed address */
+ void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
+ {
+@@ -5998,6 +6005,12 @@ void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
+     assert( !(size & host_page_mask) );
+ 
+     ios_jit_range_tripwire( "anon_mmap_fixed", start, size, prot, __builtin_return_address(0) );
++    if (prot == (PROT_READ | PROT_WRITE) && !flags &&
++        size >= 0x100000 && size <= 0x10000000 && !(size & (size - 1)) &&
++        (uintptr_t)start >= 0x7c00000000ULL &&
++        (uintptr_t)start <= 0x8000000000ULL - size &&
++        playport_memory_backing && playport_memory_backing( start, size, prot ))
++        return start;
+     return mmap( start, size, prot, MAP_PRIVATE | MAP_ANON | MAP_FIXED | flags, -1, 0 );
+ }
+ 
+-- 
+2.55.0
+

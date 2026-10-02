@@ -550,6 +550,9 @@ enum UIDriver {
                         }
                     case "helper-report":
                         log("probe report: \(await probe.report())")
+                    case "memory-status":
+                        await SharedMemoryProbe.shared.reportRuntime()
+                        log("shared RAM runtime: \(SharedMemoryProbe.shared.status)")
                     case "memory-64", "memory-2048", "memory-4096":
                         _ = AppNavigation.shared.open("settings")
                         AppNavigation.shared.pageSection = "probes"
@@ -612,7 +615,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
-            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:")
+            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:") || action == "probe:memory-status"
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

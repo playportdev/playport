@@ -9,6 +9,8 @@ extern kern_return_t mach_memory_entry_ownership(mach_port_t, mach_port_t, int, 
 #include <mach/vm_statistics.h>
 #include <os/proc.h>
 #include <xpc/xpc.h>
+#include <stdatomic.h>
+#include <sys/mman.h>
 
 // An individually transported object is bounded; larger arenas use chunks.
 static const uint64_t maxBytes = 256ULL << 20;
@@ -20,6 +22,7 @@ static NSError *failure(kern_return_t code, NSString *operation) {
 @interface PPMemoryRegion ()
 - (instancetype)initWithPort:(mach_port_t)port bytes:(uint64_t)bytes token:(uint64_t)token;
 - (int)requestNoFootprint;
+- (bool)mapBackingAt:(void *)address protection:(int)protection;
 @end
 @implementation PPMemoryRegion {
     mach_port_t _entry;
@@ -74,6 +77,15 @@ static NSError *failure(kern_return_t code, NSString *operation) {
     return @{@"kr": @(kr), @"resident": @(resident * vm_page_size),
              @"dirty": @(dirty * vm_page_size), @"swapped": @(swapped * vm_page_size)};
 }
+- (bool)mapBackingAt:(void *)address protection:(int)protection {
+    if (!address || (uintptr_t)address % vm_page_size || protection != (PROT_READ | PROT_WRITE)) { return false; }
+    vm_address_t target = (vm_address_t)address;
+    kern_return_t kr = vm_map(mach_task_self(), &target, _byteCount, 0,
+        VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, _entry, 0, FALSE,
+        VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    // Deliberately do not record target in _address: Wine owns this mapping.
+    return kr == KERN_SUCCESS && target == (vm_address_t)address;
+}
 - (int)requestNoFootprint {
     return mach_memory_entry_ownership(_entry, MACH_PORT_NULL, VM_LEDGER_TAG_DEFAULT, VM_LEDGER_FLAG_NO_FOOTPRINT);
 }
@@ -99,6 +111,18 @@ PPMemoryRegion *pp_memory_create(uint64_t bytes, uint64_t token, NSError **error
         return nil;
     }
     return [[PPMemoryRegion alloc] initWithPort:entry bytes:bytes token:token];
+}
+
+bool pp_memory_map_backing(PPMemoryRegion *region, void *address, int protection) {
+    return [region mapBackingAt:address protection:protection];
+}
+static _Atomic(PPMemoryBackingProvider) backingProvider;
+void pp_memory_set_backing_provider(PPMemoryBackingProvider provider) {
+    atomic_store_explicit(&backingProvider, provider, memory_order_release);
+}
+int playport_memory_backing(void *address, size_t bytes, int protection) {
+    PPMemoryBackingProvider provider = atomic_load_explicit(&backingProvider, memory_order_acquire);
+    return provider ? provider(address, bytes, protection) : 0;
 }
 
 NSDictionary *pp_memory_snapshot(void) {

@@ -27,6 +27,15 @@ final class SharedMemoryProbe: ObservableObject {
         return result.0
     }
 
+    func reportRuntime() async {
+        guard !busy else { return }
+        busy = true
+        status = await withCheckedContinuation { done in
+            DispatchQueue.global().async { done.resume(returning: SharedMemoryBroker.report()) }
+        }
+        busy = false
+    }
+
     private nonisolated static func describe(_ value: Any) -> String {
         let state = value as? [String: NSNumber] ?? [:]
         return ["pid", "kr", "footprint", "resident", "compressed", "internal", "external", "available"].map {
