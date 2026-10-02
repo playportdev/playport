@@ -81,12 +81,15 @@ def main():
     test = ROOT / "build/guest32" / ("native_memory_ir_test.cpp" if args.memory_ir else
                                      "native_ir_test.cpp" if args.ir else "native_decode_test.cpp")
     memory = ROOT / "build/guest32/guest32.c"
+    scalar = ROOT / "build/guest32/scalar_access.c"
     libraries = [build / "FEXCore/Source" / f"lib{name}.a"
                  for name in ("FEXCore", "FEXCore_Base", "JemallocDummy")]
     libraries += [build / "External/cephes/libcephes_128bit.a",
                   build / "External/SoftFloat-3e/libsoftfloat_3e.a"]
     adapter = ROOT / "build/guest32/native_audit_adapter.h"
     extra_sources = [ROOT / "build/guest32/native_code_oracle.h"] if args.emit else []
+    if args.memory_ir:
+        extra_sources += [scalar, ROOT / "build/guest32/scalar_access.h"]
     if args.memory_allocate:
         extra_sources += [ROOT / "build/guest32/native_context_ir_oracle.h"]
     if args.memory_simulate:
@@ -120,9 +123,13 @@ def main():
         # no exception unwinds through FEX, whose build flags remain unchanged.
         [*flags, *(["-fexceptions"] if args.memory_ir else []), "-UNDEBUG", "-Werror",
          str(test), str(frontend_object), str(memory_object),
+         *([str(output / "scalar_access.o")] if args.memory_ir else []),
          "-Wl,--gc-sections", "-Wl,--start-group", *map(str, libraries),
          "-Wl,--end-group", "-lfmt", "-lxxhash", "-o", str(executable)],
     ]
+    if args.memory_ir:
+        commands.insert(2, ["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", *instrumentation,
+                            "-c", str(scalar), "-o", str(output / "scalar_access.o")])
     for command in commands:
         subprocess.run(command, cwd=entry["directory"], check=True, timeout=120)
     exported = output / "blocks.jsonl"

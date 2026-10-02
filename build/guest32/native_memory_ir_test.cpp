@@ -18,6 +18,7 @@
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 #include "native_audit_adapter.h"
+#include "scalar_access.h"
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -329,8 +330,9 @@ static Access inspect(const IRListView& ir, uint32_t pc, const Case& test, const
   return access;
 }
 
-// The IR address is handed to the EXISTING checked C memory API only here,
-// outside FEX. The expected denial is independently computed for this fixture.
+// The IR address is handed to the candidate scalar helper ABI only here,
+// outside FEX. This does NOT emit a helper call or deliver a guest exception.
+// The expected denial is independently computed for this fixture.
 static void check_access(g32_space* space, const Access& access) {
   constexpr uint32_t base = 0x200000;
   auto expected = G32_ACCESS;
@@ -342,15 +344,12 @@ static void check_access(g32_space* space, const Access& access) {
   }
   std::array<uint8_t, 2 * G32_PAGE> before, after;
   assert(g32_read(space, base, before.data(), before.size()) == G32_OK);
-  uint32_t value = 0xa5a5a5a5;
-  g32_result result;
-  if (access.Store) {
-    value = access.Value;
-    result = g32_write(space, access.Address, &value, access.Width);
-  } else {
-    result = g32_read(space, access.Address, &value, access.Width);
-  }
-  require(result == expected, "checked adapter access result");
+  const uint32_t input = access.Store ? access.Value : 0xa5a5a5a5;
+  const auto packed = g32_scalar_access(space, access.Address, access.Width | (access.Store ? G32_SCALAR_STORE : 0), input);
+  const auto result = g32_scalar_status(packed);
+  const auto value = g32_scalar_value(packed);
+  require(result == expected, "checked scalar helper access result");
+  require(!access.Store || value == input, "store helper changed input value");
   assert(g32_read(space, base, after.data(), after.size()) == G32_OK);
   if (result != G32_OK) {
     require(before == after && (access.Store || value == 0xa5a5a5a5), "failed access changed bytes/output");
@@ -636,7 +635,7 @@ static void cases(size_t granule) {
               granule, Controls, AllocatedControls);
 #else
   std::printf("PASS: scalar memory IR granule=%zu 3 PCs/17 forms/128 inputs; guest address/width/value, native context classification, "
-              "checked C adapter and corrupted-IR controls; NO JIT execution\n",
+              "checked scalar helper ABI and corrupted-IR controls; NO JIT execution\n",
               granule);
 #endif
   ActiveSpace = nullptr;

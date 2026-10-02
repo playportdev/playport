@@ -436,7 +436,7 @@ Unknown IR fails; loaded data is a sentinel, not an interpreted game load.
 Native CPU-state storage remains above 4 GiB and is accessed only by validated
 `LoadContext` offsets. Its FS base/control word are guest **values**, not native
 pointers. Only the independently verified guest effective address goes to the
-existing checked C memory API, **outside FEX**. That adapter tests successful
+candidate checked scalar helper below, **outside FEX**. That adapter tests successful
 reads/writes, cross-page read-only rejection, uncommitted/execute-only pages,
 low-address blocking, end-of-space overflow and unchanged bytes/output on
 failure. It is NOT evidence of a checked FEX emitter: no JIT block executes.
@@ -462,7 +462,7 @@ python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native -
 The real default optimizer/RA pipeline and IRValidation run with native ARM
 register budgets. A strict physical-register inspector verifies the same 19584
 scalar inputs after optimization, including addresses, widths, values, partial
-register writes, exits and the existing checked C adapter. No JIT is created.
+register writes, exits and the candidate checked scalar helper. No JIT is created.
 
 Nine real FXCH ST(1) graphs provide a native-memory counterexample: x87 lowering
 introduces two FormContextAddress pointers and generic i128 FPR loads/stores
@@ -478,8 +478,9 @@ post-RA fields are mutated alignment-safely and rechecked after restoration.
 Optimized, ASan/UBSan, pre-RA and ARM-simulator regressions pass. Outputs stay in
 `.work/guest32/separated-memory-ra/`; source/archive hashes are printed. This
 optional gate requires the prepared native build, not CI or the app.
-A checked scalar emitter/helper ABI is still absent, as are other guest-memory
-families, Wine bridges and real ARM64EC/iOS execution.
+A candidate C scalar helper ABI is tested below, but checked FEX call emission
+is still absent, as are other guest-memory families, Wine bridges and real
+ARM64EC/iOS execution.
 [Allocated-memory evidence](../../docs/evidence/2026-10-02-fex-allocated-memory-ir.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
@@ -514,10 +515,48 @@ handling or preservation on rejected accesses.
 Optimized, ASan/UBSan, scalar IR/RA and register simulator regressions pass.
 Exports stay in `.work/guest32/separated-memory-emission/` and can be rerun with
 `arm_memory_simulator_audit.py FILE`. This optional audit changes no shipped
-emitter, patch/pin, app entry point or ABI. A checked scalar helper/lowering gate
-must still validate the complete width before accessing translated backing,
-preserve native pointers and prove transactional rejection paths.
+emitter, patch/pin, app entry point or ABI. The candidate C helper below now
+validates full widths and transactional rejection outside FEX; a checked
+lowering must still call it correctly from emitted code, preserve native/live
+state and handle fault returns before continuing.
 [Raw-emission evidence](../../docs/evidence/2026-10-02-fex-scalar-arm-emission.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
+
+## Candidate checked scalar helper ABI (host only)
+
+`scalar_access.{h,c}` supplies an ordinary native C ABI for future bounded
+scalar lowering, not a FEX preserve-all convention. Its only pointer argument
+is the native `g32_space`; other inputs are a **64-bit** effective address, a
+byte/word/dword width with optional store bit, and a 32-bit old destination or
+store value. High address bits are rejected, not truncated; guest arithmetic
+must wrap before calling. Complete widths/permissions are validated by g32
+before reading/writing little-endian bytes. No native CPU-state/buffer pointer
+or translated-pointer loan crosses the operand/result boundary.
+
+The packed 64-bit return contains `g32_result` in the upper half and a 32-bit
+value in the lower half. Successful loads replace only the low width bytes;
+stores and all rejected calls retain the input value. Rejection changes no
+guest bytes or VM metadata. The pre/post-RA audits above now exercise this
+helper **from the host inspector**, not an emitted FEX call. Native FXCH pointers
+continue to bypass it. The helper is not linked into the app or FEX.
+
+`./pp test --quick` includes 7203 helper calls across native/16 KiB/64 KiB host
+granules, every guest permission pair, page/top-of-space boundaries, uncommitted
+and execute-only memory, malformed operations, wide/native addresses, native
+state canaries and isolated spaces. The optional standalone audit repeats with
+ASan/UBSan and rejects six private helper mutations:
+
+```sh
+python3 build/guest32/scalar_access_audit.py
+```
+
+Outputs stay in `.work/guest32/scalar-helper/`. This audit needs only Clang,
+not FEX or the simulator. An iOS ARM64 object compiles, but no ARM helper call
+executes here. A future lowering must preserve all live caller-clobbered
+registers/flags, branch on status before publishing a destination/continuing,
+and deliver the guest-PC fault. Other instructions, atomics, concurrent VM
+changes and ARM64EC interop are outside this contract.
+[Helper evidence](../../docs/evidence/2026-10-02-guest32-scalar-helper.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
 ## Native FEX link prerequisite (host audit only)
