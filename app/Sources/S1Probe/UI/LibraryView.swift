@@ -89,6 +89,8 @@ struct LibraryView: View {
                 // Under a game page the stack keeps the grid: its tiles leave the ring.
                 .transformPreference(PadItemsKey.self) { if !nav.gamePath.isEmpty { $0 = [:] } }
                 .toolbar(.hidden, for: .navigationBar)
+                // The stack draws the system background otherwise, not the app's.
+                .containerBackground(PP.background, for: .navigation)
                 .navigationDestination(for: GameRef.self) { GameDetailView(ref: $0) }
         }
     }

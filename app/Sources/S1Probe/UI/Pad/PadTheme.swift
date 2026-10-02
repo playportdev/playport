@@ -103,7 +103,10 @@ struct PadFooter: View {
             if leading { Spacer(minLength: 0) }
         }
         .frame(height: 36)
-        .overlay(alignment: .top) { if !leading { Rectangle().fill(PP.raised).frame(height: 1) } }
+        .overlay(alignment: .top) {
+            // The rule runs to the screen's edges, past the landscape safe area.
+            if !leading { Rectangle().fill(PP.raised).frame(height: 1).ignoresSafeArea(edges: .horizontal) }
+        }
     }
 }
 
