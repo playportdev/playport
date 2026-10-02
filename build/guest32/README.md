@@ -593,6 +593,41 @@ classify native CPU-state memory IR, deliver a guest fault or run a title.
 [Compiled-helper evidence](../../docs/evidence/2026-10-02-guest32-scalar-arm-helper.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
+## Checked scalar call preservation gate (host simulator only)
+
+```sh
+PYTHONPATH="$PWD/.work/guest32/arm-simulator/deps" python3 \
+  build/guest32/scalar_call_audit.py .work/guest32/decode-audit/native
+# --sanitize instruments the C++ fixture, not the FEX archives or simulator.
+```
+
+`scalar_call_emit.cpp` uses the **real** FEX Arm64Emitter's static spill/fill and
+ordinary-ABI dynamic push/pop methods around a compiled helper call. This is a
+manually constructed call-ABI fixture, **not a memory IR handler, decoded x86
+block or runtime integration**. A native argument descriptor supplies already
+computed wide addresses; native CPU-state pointers remain native spill targets.
+The result survives restoration in FEX's x3 temporary. Status is tested without
+altering NZCV before EAX publication or a test-only continuation marker; rejection
+records the fixed guest PC in a native descriptor and stops, not a guest exception.
+
+Both the real helper and an adversarial AAPCS64 assembly wrapper pass 6381
+calls each. The wrapper runs the real helper before clobbering every permitted
+live GPR/vector register and NZCV, including the upper halves of v8-v15.
+Checks cover all 24 allocated GPRs, all 30 allocated full SIMD registers,
+STATE/call-return stack register, SP, NZCV, helper arguments/entry count, backing
+accesses, native spill-write bounds and byte canaries. Only EAX on success may
+change; rejected calls touch no guest bytes and cannot take the success marker.
+Seven independently emitted broken callers are rejected for missing static,
+dynamic, SIMD or flag preservation, premature destination publication,
+unchecked continuation and wrong guest PC.
+
+Outputs stay in `.work/guest32/scalar-call/` and `.work/guest32/scalar-arm/`.
+This gate is non-EC ARM64 simulation with SVE/AFP disabled. Effective-address
+lowering, provenance classification, real fault delivery, concurrent VM lifetime,
+ARM64EC/iOS execution and product integration remain unimplemented.
+[Call-preservation evidence](../../docs/evidence/2026-10-02-fex-checked-scalar-call.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
+
 ## Native FEX link prerequisite (host audit only)
 
 After configuring a series-applied native FEX build with the disabled allocator,
