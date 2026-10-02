@@ -418,6 +418,40 @@ native CPU-state pointers from guest effective addresses before exercising
 checked scalar loads/stores. [Simulator evidence and remaining boundaries](../../docs/evidence/2026-10-02-fex-register-arm-simulation.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
+## Scalar guest-address IR gate (host audit only)
+
+```sh
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --memory-ir
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --memory-ir --sanitize
+```
+
+This separate **pre-optimization/RA** gate decodes and dispatches 17 real scalar
+load/store forms at three guest PCs and three backing granules. A strict SSA
+inspector compares addresses, access widths/directions, store values and
+synthetic load-result register writes with independent x86 formulas for 19584
+inputs. It covers base/displacement, scaled SIB, 16-bit address truncation,
+absolute addresses, FS segment wrapping, byte/word/dword MOV and FNSTCW.
+Unknown IR fails; loaded data is a sentinel, not an interpreted game load.
+
+Native CPU-state storage remains above 4 GiB and is accessed only by validated
+`LoadContext` offsets. Its FS base/control word are guest **values**, not native
+pointers. Only the independently verified guest effective address goes to the
+existing checked C memory API, **outside FEX**. That adapter tests successful
+reads/writes, cross-page read-only rejection, uncommitted/execute-only pages,
+low-address blocking, end-of-space overflow and unchanged bytes/output on
+failure. It is NOT evidence of a checked FEX emitter: no JIT block executes.
+225 private post-generation IR corruptions are rejected for their intended
+reasons (register source, scale, access width, native-context offset).
+
+Optimized host builds and ASan/UBSan pass; FEX archives are uninstrumented.
+Logs stay in `.work/guest32/separated-memory-ir/` (capture runner stdout there
+when reproducing). This optional audit requires the prepared native build and
+is not shipped or part of CI. Post-optimization provenance must still distinguish
+native addresses introduced by x87 stack lowering from guest scalar addresses
+before a checked-memory ARM emitter can be tested.
+[Scalar IR evidence](../../docs/evidence/2026-10-02-fex-scalar-memory-ir.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
+
 ## Native FEX link prerequisite (host audit only)
 
 After configuring a series-applied native FEX build with the disabled allocator,

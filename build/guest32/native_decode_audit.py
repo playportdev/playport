@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Audit the real FEX decoder and optional register-only IR/RA/ARM emission/simulation.
+"""Audit real FEX decoding, scalar-memory IR or register-only IR/RA/ARM emission/simulation.
 
 Requires the native configuration documented in the allocator evidence. Only
 Frontend.cpp alone enables its ABI-neutral test byte-source seam; the test
@@ -30,7 +30,11 @@ def main():
                         help="audit real ARM emission and register/exit semantics offline; implies --allocate")
     parser.add_argument("--simulate", action="store_true",
                         help="execute exported ARM blocks in the optional host simulator; implies --emit")
+    parser.add_argument("--memory-ir", action="store_true",
+                        help="audit scalar guest-address IR before optimization/RA; no JIT execution")
     args = parser.parse_args()
+    if args.memory_ir and (args.ir or args.allocate or args.emit or args.simulate):
+        parser.error("--memory-ir is a separate pre-RA gate")
     args.emit = args.emit or args.simulate
     args.allocate = args.allocate or args.emit
     args.ir = args.ir or args.allocate
@@ -56,14 +60,15 @@ def main():
     if args.simulate:
         from arm_simulator_audit import check_dependency
         check_dependency()
-    audit = ("separated-execution" if args.simulate else "separated-emission" if args.emit else "separated-ra" if args.allocate
+    audit = ("separated-memory-ir" if args.memory_ir else "separated-execution" if args.simulate else "separated-emission" if args.emit else "separated-ra" if args.allocate
              else "separated-ir" if args.ir else "separated-decoder")
     output = ROOT / ".work/guest32" / audit / ("sanitized" if args.sanitize else "optimized")
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run(["cmake", "--build", str(build), "--target", "FEXCore",
                     "FEXCore_Base", "JemallocDummy", "cephes_128bit", "softfloat_3e",
                     "-j", "6"], check=True, timeout=600)
-    test = ROOT / "build/guest32" / ("native_ir_test.cpp" if args.ir else "native_decode_test.cpp")
+    test = ROOT / "build/guest32" / ("native_memory_ir_test.cpp" if args.memory_ir else
+                                     "native_ir_test.cpp" if args.ir else "native_decode_test.cpp")
     memory = ROOT / "build/guest32/guest32.c"
     libraries = [build / "FEXCore/Source" / f"lib{name}.a"
                  for name in ("FEXCore", "FEXCore_Base", "JemallocDummy")]
@@ -90,12 +95,15 @@ def main():
     # Compile the complete series-applied frontend with ONLY the test seam on.
     # All context/thread layout flags match the archives and the test TU.
     # The object precedes libFEXCore so the archive's ordinary frontend is unused.
-    executable = output / ("ir-test" if args.ir else "decode-test")
+    executable = output / ("memory-ir-test" if args.memory_ir else "ir-test" if args.ir else "decode-test")
     commands = [
         [*flags, "-DFEX_TEST_DECODER_BYTE_SOURCE=1", "-c", str(frontend), "-o", str(frontend_object)],
         ["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", *instrumentation,
          "-c", str(memory), "-o", str(memory_object)],
-        [*flags, "-UNDEBUG", "-Werror", str(test), str(frontend_object), str(memory_object),
+        # Exceptions are local to the memory inspector's negative controls;
+        # no exception unwinds through FEX, whose build flags remain unchanged.
+        [*flags, *(["-fexceptions"] if args.memory_ir else []), "-UNDEBUG", "-Werror",
+         str(test), str(frontend_object), str(memory_object),
          "-Wl,--gc-sections", "-Wl,--start-group", *map(str, libraries),
          "-Wl,--end-group", "-lfmt", "-lxxhash", "-o", str(executable)],
     ]
