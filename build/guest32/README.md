@@ -446,10 +446,41 @@ reasons (register source, scale, access width, native-context offset).
 Optimized host builds and ASan/UBSan pass; FEX archives are uninstrumented.
 Logs stay in `.work/guest32/separated-memory-ir/` (capture runner stdout there
 when reproducing). This optional audit requires the prepared native build and
-is not shipped or part of CI. Post-optimization provenance must still distinguish
-native addresses introduced by x87 stack lowering from guest scalar addresses
-before a checked-memory ARM emitter can be tested.
+is not shipped or part of CI. The optional post-RA gate below now distinguishes
+native addresses introduced by x87 stack lowering from these guest scalars.
 [Scalar IR evidence](../../docs/evidence/2026-10-02-fex-scalar-memory-ir.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
+
+## Allocated scalar-memory / native-provenance gate (host audit only)
+
+```sh
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --memory-allocate
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --memory-allocate --sanitize
+```
+
+`--memory-allocate` implies `--memory-ir`, retaining all existing pre-RA checks.
+The real default optimizer/RA pipeline and IRValidation run with native ARM
+register budgets. A strict physical-register inspector verifies the same 19584
+scalar inputs after optimization, including addresses, widths, values, partial
+register writes, exits and the existing checked C adapter. No JIT is created.
+
+Nine real FXCH ST(1) graphs provide a native-memory counterexample: x87 lowering
+introduces two FormContextAddress pointers and generic i128 FPR loads/stores
+that were absent before optimization. The oracle checks all eight TOP values
+and 256 tag patterns using native pointers above 4 GiB and vector slot-identity
+tokens. Pointer/data tags follow physical-register writes, including reuse;
+native addresses never reach g32 or an unchecked native dereference. This is
+bounded lowering/provenance verification, **not floating-point computation or
+x87 stack-fault correctness**. FEX itself gains no new provenance metadata.
+
+All 585 private pre/post-RA corruption controls fail for their intended reasons;
+post-RA fields are mutated alignment-safely and rechecked after restoration.
+Optimized, ASan/UBSan, pre-RA and ARM-simulator regressions pass. Outputs stay in
+`.work/guest32/separated-memory-ra/`; source/archive hashes are printed. This
+optional gate requires the prepared native build, not CI or the app.
+A checked scalar emitter/helper ABI is still absent, as are other guest-memory
+families, Wine bridges and real ARM64EC/iOS execution.
+[Allocated-memory evidence](../../docs/evidence/2026-10-02-fex-allocated-memory-ir.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
 ## Native FEX link prerequisite (host audit only)

@@ -7,6 +7,10 @@
 #include "Interface/Core/Dispatcher/Dispatcher.h"
 #include "Interface/IR/Passes.h"
 #include "Interface/IR/PassManager.h"
+#ifdef FEX_AUDIT_ALLOCATE
+#include "Interface/IR/Passes/RegisterAllocationPass.h"
+#include "Interface/Core/ArchHelpers/Arm64Emitter.h"
+#endif
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 #include "native_audit_adapter.h"
@@ -18,13 +22,61 @@
 #include <vector>
 using namespace FEXCore::IR;
 using Registers = std::array<uint32_t, 8>;
-static unsigned Controls;
+static unsigned Controls, AllocatedControls;
 
 static void require(bool condition, const char* message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
 }
+#ifdef FEX_AUDIT_ALLOCATE
+class RegisterBudget final : public FEXCore::CPU::Arm64Emitter {
+public:
+  explicit RegisterBudget(FEXCore::Context::ContextImpl& context)
+    : Arm64Emitter(&context) { }
+  void configure(RegisterAllocationPass& pass) const {
+    pass.AddRegisters(RegClass::GPR, GeneralRegisters.size());
+    pass.AddRegisters(RegClass::GPRFixed, StaticRegisters.size());
+    pass.AddRegisters(RegClass::FPR, GeneralFPRegisters.size());
+    pass.AddRegisters(RegClass::FPRFixed, StaticFPRegisters.size());
+    pass.SetNumPairRegs(PairRegisters);
+  }
+  bool accepts_vector(PhysicalRegister reg) const {
+    return reg.AsRegClass() == RegClass::FPR && reg.Reg < GeneralFPRegisters.size();
+  }
+  bool accepts(PhysicalRegister reg) const {
+    return (reg.AsRegClass() == RegClass::GPR && reg.Reg < GeneralRegisters.size()) || (reg.AsRegClass() == RegClass::GPRFixed && reg.Reg < 8);
+  }
+};
+static const RegisterBudget* ActiveBudget;
+#endif
+#include "native_context_ir_oracle.h"
+
+template<typename Field>
+static Field packed_read(const void* field) {
+  Field value;
+  std::memcpy(&value, field, sizeof(value));
+  return value;
+}
+
+template<typename Field, typename Check>
+static void reject_mutation(void* field, Field replacement, const char* expected_error, Check check) {
+  // IROps are packed; after RA some fields are not naturally aligned. Never
+  // bind them to a typed reference or dereference a pointer outside the struct.
+  const auto saved = packed_read<Field>(field);
+  std::memcpy(field, &replacement, sizeof(replacement));
+  bool rejected = false;
+  try {
+    check();
+  } catch (const std::runtime_error& error) {
+    rejected = std::strcmp(error.what(), expected_error) == 0;
+  }
+  std::memcpy(field, &saved, sizeof(saved));
+  require(rejected, "accepted post-RA corruption or wrong rejection");
+  check(); // Prove restoration, not just rejection.
+  ++AllocatedControls;
+}
+
 enum class Address { Base, Displacement, SIB, Narrow16, FS, Absolute };
 struct Case {
   std::vector<uint8_t> Bytes;
@@ -32,6 +84,7 @@ struct Case {
   unsigned Width;
   bool Store;
   bool ControlWord = false;
+  bool NativeSwap = false;
 };
 // Independently specified x86 formulas, not derived from FEX operands/IR.
 static uint32_t expected_address(const Case& test, const Registers& regs, uint32_t fs) {
@@ -57,7 +110,8 @@ struct Access {
 // LoadContext denotes implicit NATIVE CPU-state storage; its loaded segment
 // base/control word is guest DATA, not a native pointer to translate.
 static Access inspect(const IRListView& ir, uint32_t pc, const Case& test, const Registers& input, uint32_t fs) {
-  require(!ir.PostRA() && ir.GetHeader()->OriginalRIP == pc && ir.GetHeader()->NumHostInstructions == 1, "IR header");
+  const bool allocated = ir.PostRA();
+  require(ir.GetHeader()->OriginalRIP == pc && ir.GetHeader()->NumHostInstructions == 1, "IR header");
   std::vector<uint64_t> values(ir.GetSSACount());
   std::vector<bool> valid(ir.GetSSACount());
   Registers regs = input;
@@ -65,8 +119,31 @@ static Access inspect(const IRListView& ir, uint32_t pc, const Case& test, const
   native_state.fs_cached = fs;
   native_state.FCW = 0x037f;
   require(reinterpret_cast<uintptr_t>(&native_state) > UINT32_MAX, "native CPU-state storage must stay high");
+  std::array<uint64_t, 256> physical {};
+  std::array<bool, 256> initialized {};
+  for (unsigned reg = 0; reg < input.size(); ++reg) {
+    auto index = PhysicalRegister(RegClass::GPRFixed, reg).Raw;
+    physical[index] = input[reg];
+    initialized[index] = true;
+  }
+  auto physical_index = [&](PhysicalRegister reg) {
+#ifdef FEX_AUDIT_ALLOCATE
+    require(ActiveBudget && ActiveBudget->accepts(reg), "physical register budget");
+    return reg.Raw;
+#else
+    (void)reg;
+    throw std::runtime_error("unexpected physical register");
+    return uint8_t {};
+#endif
+  };
   auto read = [&](OrderedNodeWrapper ref) {
-    require(!ref.IsInvalid() && !ref.IsImmediate(), "invalid SSA operand");
+    require(!ref.IsInvalid(), "invalid SSA operand");
+    if (allocated && ref.IsImmediate()) {
+      auto index = physical_index(PhysicalRegister(ref));
+      require(initialized[index], "uninitialized physical register");
+      return physical[index];
+    }
+    require(!ref.IsImmediate(), "unexpected immediate operand");
     auto id = ir.GetID(ir.GetNode(ref)).Value;
     require(id < values.size() && valid[id], "uninitialized SSA operand");
     return values[id];
@@ -91,6 +168,10 @@ static Access inspect(const IRListView& ir, uint32_t pc, const Case& test, const
       break;
     case OP_CONSTANT: set(ir.GetOp<IROp_Constant>(node)->Constant); break;
     case OP_INLINECONSTANT: set(ir.GetOp<IROp_InlineConstant>(node)->Constant); break;
+    case OP_COPY:
+      require(allocated && header->Size == OpSize::i64Bit, "register copy");
+      set(read(ir.GetOp<IROp_Copy>(node)->Source));
+      break;
     case OP_LOADREGISTER: {
       auto* op = ir.GetOp<IROp_LoadRegister>(node);
       require(op->Class == RegClass::GPR && op->Reg < regs.size() && header->Size == OpSize::i32Bit, "register load");
@@ -180,6 +261,10 @@ static Access inspect(const IRListView& ir, uint32_t pc, const Case& test, const
       require(!test.Store && dest.AsRegClass() == RegClass::GPRFixed && dest.Reg == 0 && header->Size == OpSize::i32Bit, "load "
                                                                                                                          "destination");
       regs[0] = read(op->Value);
+      if (allocated) {
+        physical[dest.Raw] = regs[0];
+        initialized[dest.Raw] = true;
+      }
       ++stores;
       break;
     }
@@ -197,7 +282,18 @@ static Access inspect(const IRListView& ir, uint32_t pc, const Case& test, const
       ++exits;
       break;
     }
-    default: throw std::runtime_error("unclassified IR operation");
+    default:
+      std::fprintf(stderr, "unclassified IR operation: %.*s\n", int(GetName(header->Op).size()), GetName(header->Op).data());
+      throw std::runtime_error("unclassified IR operation");
+    }
+    if (allocated && valid[id] && GetHasDest(header->Op)) {
+      auto index = physical_index(PhysicalRegister(node));
+      physical[index] = header->Size == OpSize::i32Bit ? uint32_t(values[id]) : values[id];
+      initialized[index] = true;
+      auto reg = PhysicalRegister(node);
+      if (reg.AsRegClass() == RegClass::GPRFixed) {
+        regs[reg.Reg] = uint32_t(physical[index]);
+      }
     }
   }
   Registers expected = input;
@@ -205,8 +301,8 @@ static Access inspect(const IRListView& ir, uint32_t pc, const Case& test, const
     auto mask = UINT32_MAX >> ((4 - test.Width) * 8);
     expected[0] = (input[0] & ~mask) | (loaded & mask);
   }
-  require(regs == expected && stores == unsigned(!test.Store), "load register result");
-  const unsigned expected_contexts = test.Form == Address::FS ? (test.Store ? 2 : 1) : unsigned(test.ControlWord);
+  require(regs == expected && (allocated || stores == unsigned(!test.Store)), "load register result");
+  const unsigned expected_contexts = test.Form == Address::FS ? (!allocated && test.Store ? 2 : 1) : unsigned(test.ControlWord);
   require(memory == 1 && contexts == expected_contexts && exits == 1 && markers == 1 && blocks == 1 && begins == 1 && ends == 1, "IR "
                                                                                                                                  "census");
   return access;
@@ -284,6 +380,18 @@ audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::InternalThreadState
   auto validation = Validation::CreateIRValidation();
   validation->Run(&builder);
   auto ir = builder.ViewIR();
+#ifdef FEX_AUDIT_ALLOCATE
+  if (test.NativeSwap) {
+    unsigned exchanges = 0, memory = 0;
+    for (auto [node, header] : ir.GetAllCode()) {
+      (void)node;
+      exchanges += header->Op == OP_F80STACKXCHANGE;
+      memory += header->Op == OP_LOADMEM || header->Op == OP_STOREMEM || header->Op == OP_FORMCONTEXTADDRESS;
+    }
+    require(exchanges == 1 && memory == 0, "native memory must be introduced by lowering");
+  }
+#endif
+  std::vector<std::pair<Registers, uint32_t>> inputs;
   uint32_t random = 0x1badf00d;
   constexpr std::array<uint32_t, 13> targets {0,        0xffff,   0x200000, 0x200fff,   0x201000,   0x201ffd,  0x201ffe,
                                               0x201fff, 0x202000, 0x400ffe, 0xfffffffd, 0xfffffffe, 0xffffffff};
@@ -309,11 +417,17 @@ audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::InternalThreadState
       case Address::Absolute: break;
       }
     }
-    check_access(space, inspect(ir, pc, test, input, fs));
+    if (!test.NativeSwap) {
+      check_access(space, inspect(ir, pc, test, input, fs));
+    }
+    inputs.emplace_back(input, fs);
   }
   // Corrupt genuine generated IR AFTER normal inspection, restore every field.
   // No upstream source tree or emitted/runtime code is modified.
   for (auto [node, header] : ir.GetAllCode()) {
+    if (test.NativeSwap) {
+      break;
+    }
     auto reject = [&](auto& field, auto replacement, const char* expected_error) {
       const auto saved = field;
       field = replacement;
@@ -342,6 +456,72 @@ audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::InternalThreadState
       reject(mutable_header->Size, test.Width == 4 ? OpSize::i16Bit : OpSize::i32Bit, "guest access width/direction");
     }
   }
+#ifdef FEX_AUDIT_ALLOCATE
+  PassManager manager {&context};
+  auto* allocation = manager.GetPass<RegisterAllocationPass>("RA");
+  require(allocation && manager.HasPass("IRValidation"), "real default pipeline");
+  RegisterBudget budget {context};
+  budget.configure(*allocation);
+  ActiveBudget = &budget;
+  manager.Finalize();
+  manager.Run(&builder);
+  auto allocated_ir = builder.ViewIR();
+  require(allocated_ir.PostRA(), "pipeline must allocate");
+  if (test.NativeSwap) {
+    for (unsigned top = 0; top < 8; ++top) {
+      for (unsigned ftw = 0; ftw < 256; ++ftw) {
+        inspect_native_swap(allocated_ir, pc, top, ftw);
+      }
+    }
+  } else {
+    for (const auto& [input, fs] : inputs) {
+      check_access(space, inspect(allocated_ir, pc, test, input, fs));
+    }
+  }
+  // Mutate the allocated representation too: pre-RA controls cannot validate
+  // physical operands, native pointer tags or the optimizer's new memory IR.
+  for (auto [node, header] : allocated_ir.GetAllCode()) {
+    auto check = [&] {
+      if (test.NativeSwap) {
+        inspect_native_swap(allocated_ir, pc, 7, 0x12);
+      } else {
+        Registers input {0x12345678, 1, 2, 0x200ff0, 4, 5, 7, 8};
+        inspect(allocated_ir, pc, test, input, 0xffff0000);
+      }
+    };
+    auto* mutable_header = const_cast<IROp_Header*>(header);
+    if (header->Op == OP_LOADMEMTSO || header->Op == OP_STOREMEMTSO) {
+      reject_mutation(&mutable_header->Size, test.Width == 4 ? OpSize::i16Bit : OpSize::i32Bit, "guest access width/direction", check);
+      if (test.Form == Address::Base && test.Width == 4) {
+        auto* addr = header->Op == OP_LOADMEMTSO ? &const_cast<IROp_LoadMemTSO*>(allocated_ir.GetOp<IROp_LoadMemTSO>(node))->Addr :
+                                                   &const_cast<IROp_StoreMemTSO*>(allocated_ir.GetOp<IROp_StoreMemTSO>(node))->Addr;
+        reject_mutation(addr, OrderedNodeWrapper::FromImmediate(PhysicalRegister(RegClass::GPRFixed, 2).Raw), "guest effective address", check);
+      }
+    } else if (header->Op == OP_LOADCONTEXT || (test.NativeSwap && header->Op == OP_STORECONTEXT)) {
+      auto* offset = header->Op == OP_LOADCONTEXT ? &const_cast<IROp_LoadContext*>(allocated_ir.GetOp<IROp_LoadContext>(node))->Offset :
+                                                    &const_cast<IROp_StoreContext*>(allocated_ir.GetOp<IROp_StoreContext>(node))->Offset;
+      reject_mutation(offset, uint32_t(packed_read<uint32_t>(offset) + 4),
+                      test.NativeSwap  ? "native stack context" :
+                      test.ControlWord ? "native control-word context" :
+                                         "native segment context",
+                      check);
+    } else if (header->Op == OP_FORMCONTEXTADDRESS) {
+      auto* op = const_cast<IROp_FormContextAddress*>(allocated_ir.GetOp<IROp_FormContextAddress>(node));
+      reject_mutation(reinterpret_cast<uint8_t*>(op) + offsetof(IROp_FormContextAddress, Stride), uint32_t(8), "native pointer construction", check);
+    } else if (header->Op == OP_LOADMEM || header->Op == OP_STOREMEM) {
+      reject_mutation(&mutable_header->Size, OpSize::i64Bit, "native stack memory width", check);
+      auto* addr = header->Op == OP_LOADMEM ? &const_cast<IROp_LoadMem*>(allocated_ir.GetOp<IROp_LoadMem>(node))->Addr :
+                                              &const_cast<IROp_StoreMem*>(allocated_ir.GetOp<IROp_StoreMem>(node))->Addr;
+      reject_mutation(addr, OrderedNodeWrapper::FromImmediate(PhysicalRegister(RegClass::GPRFixed, 3).Raw), "native pointer provenance", check);
+    } else if (header->Op == OP_INLINECONSTANT && test.NativeSwap &&
+               allocated_ir.GetOp<IROp_InlineConstant>(node)->Constant == offsetof(FEXCore::Core::CPUState, mm)) {
+      auto* op = const_cast<IROp_InlineConstant*>(allocated_ir.GetOp<IROp_InlineConstant>(node));
+      reject_mutation(reinterpret_cast<uint8_t*>(op) + offsetof(IROp_InlineConstant, Constant), op->Constant + 16,
+                      "native stack effective address", check);
+    }
+  }
+  ActiveBudget = nullptr;
+#endif
   std::vector<uint8_t> unchanged(test.Bytes.size());
   assert(g32_fetch(space, pc, unchanged.data(), unchanged.size()) == G32_OK && unchanged == test.Bytes);
   assert(g32_read(space, pc, unchanged.data(), unchanged.size()) == G32_ACCESS);
@@ -353,7 +533,7 @@ audit(FEXCore::Context::ContextImpl& context, FEXCore::Core::InternalThreadState
 }
 
 static void cases(size_t granule) {
-  Controls = 0;
+  Controls = AllocatedControls = 0;
   g32_space* space;
   assert(g32_create(granule, &space) == G32_OK);
   ActiveSpace = space;
@@ -393,6 +573,9 @@ static void cases(size_t granule) {
     {{0x66, 0x8b, 0x03}, Address::Base, 2, false},
     {{0x66, 0x89, 0x03}, Address::Base, 2, true},
     {{0xd9, 0x3b}, Address::Base, 2, true, true}, // FNSTCW [EBX]: native context -> guest scalar store
+#ifdef FEX_AUDIT_ALLOCATE
+    {{0xd9, 0xc9}, Address::Base, 0, false, false, true}, // FXCH ST(1): native stack-memory counterexample
+#endif
   };
   for (uint32_t pc : {0x400ffeU, 0x900ffeU, 0xffff0ffeU}) {
     for (const auto& test : tests) {
@@ -400,9 +583,16 @@ static void cases(size_t granule) {
     }
   }
   assert(ByteLoans && handler.Queries && Controls == 75);
+#ifdef FEX_AUDIT_ALLOCATE
+  require(AllocatedControls == 120, "allocated corruption census");
+  std::printf("PASS: optimized/allocated scalar memory granule=%zu 3 PCs/17 forms/128 inputs, plus native FXCH lowering 8 TOPs/256 tags; "
+              "pre/post-RA guest addresses, native pointer provenance and %u+%u corruption controls; NO JIT execution\n",
+              granule, Controls, AllocatedControls);
+#else
   std::printf("PASS: scalar memory IR granule=%zu 3 PCs/17 forms/128 inputs; guest address/width/value, native context classification, "
               "checked C adapter and corrupted-IR controls; NO JIT execution\n",
               granule);
+#endif
   ActiveSpace = nullptr;
   g32_destroy(space);
 }
@@ -413,6 +603,8 @@ int main() {
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_MULTIBLOCK, "0");
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_ENABLECODECACHEVALIDATION, "0");
   FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_SMCCHECKS, "0");
+  FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_O0, "0");
+  FEXCore::Config::Set(FEXCore::Config::ConfigOption::CONFIG_DUMPIR, "no");
   assert(!std::getenv("MADEIRA_NO_DFE"));
   cases(0);
   cases(16384);

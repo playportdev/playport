@@ -32,9 +32,12 @@ def main():
                         help="execute exported ARM blocks in the optional host simulator; implies --emit")
     parser.add_argument("--memory-ir", action="store_true",
                         help="audit scalar guest-address IR before optimization/RA; no JIT execution")
+    parser.add_argument("--memory-allocate", action="store_true",
+                        help="audit scalar guest-address IR through optimization/RA; implies --memory-ir")
     args = parser.parse_args()
+    args.memory_ir = args.memory_ir or args.memory_allocate
     if args.memory_ir and (args.ir or args.allocate or args.emit or args.simulate):
-        parser.error("--memory-ir is a separate pre-RA gate")
+        parser.error("memory modes are separate from the register-only gates")
     args.emit = args.emit or args.simulate
     args.allocate = args.allocate or args.emit
     args.ir = args.ir or args.allocate
@@ -60,8 +63,12 @@ def main():
     if args.simulate:
         from arm_simulator_audit import check_dependency
         check_dependency()
-    audit = ("separated-memory-ir" if args.memory_ir else "separated-execution" if args.simulate else "separated-emission" if args.emit else "separated-ra" if args.allocate
-             else "separated-ir" if args.ir else "separated-decoder")
+    audit = ("separated-memory-ra" if args.memory_allocate else
+             "separated-memory-ir" if args.memory_ir else
+             "separated-execution" if args.simulate else
+             "separated-emission" if args.emit else
+             "separated-ra" if args.allocate else
+             "separated-ir" if args.ir else "separated-decoder")
     output = ROOT / ".work/guest32" / audit / ("sanitized" if args.sanitize else "optimized")
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run(["cmake", "--build", str(build), "--target", "FEXCore",
@@ -76,6 +83,8 @@ def main():
                   build / "External/SoftFloat-3e/libsoftfloat_3e.a"]
     adapter = ROOT / "build/guest32/native_audit_adapter.h"
     extra_sources = [ROOT / "build/guest32/native_code_oracle.h"] if args.emit else []
+    if args.memory_allocate:
+        extra_sources += [ROOT / "build/guest32/native_context_ir_oracle.h"]
     if args.simulate:
         extra_sources += [ROOT / "build/guest32/arm_simulator_audit.py",
                           ROOT / "build/guest32/arm_simulator_requirements.txt"]
@@ -84,7 +93,7 @@ def main():
               flush=True)
     instrumentation = ["-g", "-fsanitize=address,undefined", "-fno-sanitize-recover=all"] if args.sanitize else []
     flags += instrumentation
-    if args.allocate:
+    if args.allocate or args.memory_allocate:
         flags += ["-DFEX_AUDIT_ALLOCATE=1"]
     if args.emit:
         flags += ["-DFEX_AUDIT_EMIT=1"]
