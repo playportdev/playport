@@ -20,6 +20,7 @@ struct DeveloperSettings: View {
     @AppStorage(Fastsync.offKey) private var fastsyncOff = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
+    @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
     @ObservedObject private var probe = HelperLifetimeProbe.shared
     @ObservedObject private var authProbe = NativeAuthProbe.shared
     @ObservedObject private var restart = AppRestart.shared
@@ -101,6 +102,11 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var probes: some View {
         PadSectionHeader(text: "Probes").id("probes")
+        ForEach([64, 2048, 4096], id: \.self) { mb in
+            PadRow(id: "set:dev:memoryBroker:\(mb)", title: "Shared RAM: \(mb) MiB", subtitle: sharedMemory.status, hint: "Measure") {
+                if !sharedMemory.busy { Task { _ = await sharedMemory.run(mb: mb) } }
+            }
+        }
         PadRow(id: "set:dev:nativeAuth", title: "Native authentication", subtitle: authProbe.status,
                hint: "Run") {
             if !authProbe.busy { Task { _ = await authProbe.run() } }
