@@ -119,7 +119,15 @@ final class AppNavigation: ObservableObject {
 
     func openGame(_ ref: GameRef) {
         let wasSetup = setup
-        if routes.openGame(ref, focus: PadFocus.shared.focused) { transitioned(wasSetup: wasSetup) }
+        // The game page appears in place: no NavigationStack slide.
+        if Self.instant({ routes.openGame(ref, focus: PadFocus.shared.focused) }) { transitioned(wasSetup: wasSetup) }
+    }
+
+    /// A route change with no animation (the game page's push and pop).
+    private static func instant<T>(_ change: () -> T) -> T {
+        var t = Transaction()
+        t.disablesAnimations = true
+        return withTransaction(t, change)
     }
 
     func step(_ by: Int) {
@@ -144,7 +152,7 @@ final class AppNavigation: ObservableObject {
         // GameDetailView restores focus within its panels itself.
         if onGamePage && !gamePanels.isEmpty { return routes.back() }
         let wasSetup = setup
-        guard routes.back() else { return false }
+        guard onGamePage ? Self.instant({ routes.back() }) : routes.back() else { return false }
         transitioned(wasSetup: wasSetup)
         return true
     }
