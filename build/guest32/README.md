@@ -309,9 +309,45 @@ and hashes stay in `.work/guest32/separated-decoder/`. This optional experiment
 requires a prepared native FEX build and is not part of CI.
 
 **No guest execution, IR/JIT, Wine bridge or game launch occurs.** Disk cache,
-SMC and auxiliary code readers are outside this gate. The next gate is a
-register-only decode-to-IR audit; the guest/native memory provenance and runtime
-blockers remain. [Full decoder evidence](../../docs/evidence/2026-10-02-fex-separated-decoder.md).
+SMC and auxiliary code readers are outside this gate. The register-only
+pre-optimization decode-to-IR gate below now passes; guest/native memory
+provenance and runtime blockers remain.
+[Full decoder evidence](../../docs/evidence/2026-10-02-fex-separated-decoder.md).
+
+## Register-only decode-to-IR gate (host audit only)
+
+```sh
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --ir
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --ir --sanitize
+```
+
+`native_ir_test.cpp` uses the same serialized byte-source adapter as the decoder
+and calls real opcode-table handlers, OpDispatchBuilder and IRValidation. It
+stops **before optimization/register allocation**, not through the complete
+ContextImpl::GenerateIR pipeline. No FEX method is replaced, and no new upstream
+patch, runtime switch or app entry point is introduced.
+
+Two MOV/MOVZX sequences cover all eight 32-bit GPRs, register copies, AX/AL/AH
+partial writes and high-byte zero extension. Execute-only instructions cross a
+guest page boundary at three guest PCs, including `0xffff0ffe`, at each host
+granule. An independent register oracle compares every instruction boundary for
+128 input states per graph. A strict SSA whitelist rejects memory/flag/helper
+operations and checks guest-valued metadata/exit PCs and i32 fixed-register
+loads/stores; i64 constants/bit inserts are pure values, not native addresses.
+This is bounded offline graph analysis, **not guest execution or an interpreter
+backend**. Guest instruction bytes remain unchanged and unreadable as data.
+
+Optimized and ASan/UBSan builds pass; archives containing the opcode handlers
+and validation pass are uninstrumented. The existing decoder regressions also
+pass after sharing `native_audit_adapter.h`. Outputs and hashes stay in
+`.work/guest32/separated-ir/`. This optional test needs the prepared native build
+above and is not a CI gate. [IR evidence](../../docs/evidence/2026-10-02-fex-register-ir.md).
+
+The next bounded gate is the same sequences through optimizer/register
+allocation with semantic verification before ARM code generation/execution.
+Scalar/stack/vector/string/atomic memory checks, concurrent invalidation,
+auxiliary code readers and Wine marshalling remain untouched. No phone run or
+game launch occurred; Portal 2 remains unplayable.
 
 ## Native FEX link prerequisite (host audit only)
 
