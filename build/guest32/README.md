@@ -551,12 +551,46 @@ python3 build/guest32/scalar_access_audit.py
 ```
 
 Outputs stay in `.work/guest32/scalar-helper/`. This audit needs only Clang,
-not FEX or the simulator. An iOS ARM64 object compiles, but no ARM helper call
-executes here. A future lowering must preserve all live caller-clobbered
+not FEX or the simulator. An iOS ARM64 object compiles; the separate simulated
+ARM64 helper gate below now executes the compiled C access path. A future
+FEX lowering must preserve all live caller-clobbered
 registers/flags, branch on status before publishing a destination/continuing,
 and deliver the guest-PC fault. Other instructions, atomics, concurrent VM
 changes and ARM64EC interop are outside this contract.
 [Helper evidence](../../docs/evidence/2026-10-02-guest32-scalar-helper.md).
+**Not checked on the phone; Portal 2 remains unplayable.**
+
+## Compiled scalar ARM64 helper gate (host simulator only)
+
+With the optional hash-locked simulator above, Clang, LLD and llvm-nm:
+
+```sh
+PYTHONPATH="$PWD/.work/guest32/arm-simulator/deps" python3 \
+  build/guest32/scalar_arm_audit.py
+```
+
+This compiles the **unchanged** helper and g32 implementation as freestanding
+AArch64 ELF, then executes their actual machine instructions. No simulator hook
+implements an access check, produces a return value or rescues a bad address.
+`scalar_arm_fixture.c` initializes private metadata in C and supplies a native
+byte-copy routine. Declaration-only OS headers and section garbage collection
+exclude allocation/protection/syscalls: this is not testing g32_create or a
+native VM. Sparse simulator backing is above 4 GiB, RW even on guest-denied
+pages; no low guest-number mapping exists. Artifacts stay in
+`.work/guest32/scalar-arm/`; this optional test is not a CI/app dependency.
+
+All 6327 calls pass across three granule values, every committed permission
+pair, decommitted neighbors, unaligned/page/top-of-space boundaries, malformed
+operations, poisoned/null spaces and actual native code/state/stack addresses.
+An independent byte/status oracle, backing access census, metadata-write guard,
+complete backing canaries, SP and AAPCS64 callee-saved GPR/SIMD checks accompany
+seven compiled corruption controls. Both successful and rejected calls really
+clobber volatile registers and NZCV: FEX must save live values **before** entry.
+
+This is ordinary non-EC ARM64 **simulation**, not iOS hardware or the shipped
+ARM64EC ABI. It does not preserve caller-clobbered state, emit a FEX call site,
+classify native CPU-state memory IR, deliver a guest fault or run a title.
+[Compiled-helper evidence](../../docs/evidence/2026-10-02-guest32-scalar-arm-helper.md).
 **Not checked on the phone; Portal 2 remains unplayable.**
 
 ## Native FEX link prerequisite (host audit only)
