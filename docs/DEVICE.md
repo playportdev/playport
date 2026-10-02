@@ -69,12 +69,21 @@ opens LocalDevVPN once to allow its VPN configuration. On iOS 27, Play and
 the driver's `play:` action both await the root-owned setup flow before the
 runtime starts.
 
-A first run (no pairing, and the checklist never left) opens the first-run
-checklist (`UI/SetupView.swift`): controller, pairing, LocalDevVPN and Steam
-(optional), each with what A does. Settings › Setup check's first row opens it
-afterwards (`pp ui --action open:setup`); a dev build's *Preview a first run*
-rows there show it as a phone with nothing set up (iOS 27, or iOS 26 with the
-file import), display only. The same checks run before every Play (`setup:
+A first run opens the checklist (`UI/SetupView.swift`): pairing, LocalDevVPN
+and Steam (optional), each with what A does. Steps can be visited in any order,
+but B cannot leave until pairing and LocalDevVPN are ready and Steam is signed
+in or put off with **X Not now** (also a tap in the footer). Then **You're all
+set** appears over the dimmed steps: **Continue** (tap or A) leaves setup; B
+closes only the overlay, and B on the settled steps leaves. An unfinished first
+run resumes on the next launch, even after pairing has been stored. Existing
+paired phones keep their setup. A controller is not a setup step.
+
+Settings › Setup check's first row opens it afterwards (`pp ui --action
+open:setup`); these later visits can always leave with B. A dev build's
+*Preview a first run* rows show the same gate and completion overlay with
+simulated facts (iOS 27, or iOS 26 with the file import). A completes the ringed
+step; X on Steam puts it off. Nothing changes in the phone's pairing, VPN or
+Steam session, and the preview ends on leaving. The same checks run before every Play (`setup:
 before play …` in the log): a missing pairing on iOS 27 or LocalDevVPN down
 starts the setup below and the Play goes on; a missing pairing file on iOS 26
 opens the checklist on that step and the Play does not start; no controller or

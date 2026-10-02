@@ -6,7 +6,7 @@
 // Playport turns on (LocalDevVPN.swift); and the memory iOS lets Playport use
 // (MemoryLimit), with the JIT memory a Play gets from it; Steam, optional. Its
 // first row opens the first-run checklist (SetupView.swift), which shows the
-// same checks (PlayportKit SetupChecklist) as four steps.
+// pairing, LocalDevVPN and Steam (PlayportKit SetupChecklist) as three steps.
 //
 // A dev build's JIT rows are the full panel (the helper's raw readiness and
 // reason, the disk image reset); a release build's show what a player acts
@@ -30,15 +30,15 @@ struct SetupCheckSettings: View {
     var body: some View {
         SettingsNote(text: "What a game needs from this phone. Playport checks it again by itself before every game.")
         PadRow(id: "set:setup:checklist", title: "Setup checklist",
-               subtitle: "The four steps a first run shows",
+               subtitle: "The three steps a first run shows",
                value: "\(SetupChecklist.doneCount(state.facts)) of \(SetupStep.allCases.count) done", accessory: .chevron,
                hint: "Open") {
             AppNavigation.shared.openSetup()
         }
         #if !PLAYPORT_RELEASE
         // A dev build sees the checklist as a first run shows it, without deleting the
-        // pairing or the Steam session: display only, its steps do nothing.
-        PadRow(id: "set:setup:preview", title: "Preview a first run", subtitle: "Dev: nothing set up; the steps do nothing",
+        // pairing or the Steam session: A completes each simulated step.
+        PadRow(id: "set:setup:preview", title: "Preview a first run", subtitle: "Dev: A completes simulated steps; nothing changes on the phone",
                accessory: .chevron, hint: "Preview") { preview(onPhone: SetupState.pairsOnPhone) }
         PadRow(id: "set:setup:preview26", title: "Preview a first run on iOS 26", subtitle: "Dev: a pairing file from Files",
                accessory: .chevron, hint: "Preview") { preview(onPhone: false) }
@@ -65,16 +65,15 @@ struct SetupCheckSettings: View {
     #if !PLAYPORT_RELEASE
     private func preview(onPhone: Bool) {
         SetupState.log("preview a first run" + (onPhone ? "" : " on iOS 26"))
-        state.preview = SetupFacts(controller: nil, pairing: false, pairsOnPhone: onPhone, tunnelUp: false, steamSignedIn: false)
-        AppNavigation.shared.openSetup(on: .controller)
+        state.previewFirstRun(onPhone: onPhone)
     }
     #endif
 
     /// Steam, optional: A opens Settings › Steam account.
     private var steamRow: some View {
-        let item = SetupChecklist.item(.steam, state.facts)
-        return PadRow(id: "set:setup:steam", title: "Steam", subtitle: item.done ? nil : "Optional: your library, cloud saves and achievements",
-                      value: item.done ? "Signed in" : "Signed out", accessory: .chevron, hint: "Open") {
+        let signedIn = state.facts.steamSignedIn == true
+        return PadRow(id: "set:setup:steam", title: "Steam", subtitle: signedIn ? nil : "Optional: your library, cloud saves and achievements",
+                      value: signedIn ? "Signed in" : "Signed out", accessory: .chevron, hint: "Open") {
             AppNavigation.shared.openSettings(section: .steam)
         }
     }

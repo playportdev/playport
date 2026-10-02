@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // First run (docs/design/2026-09-28-gamepad-ui/Setup.dc.html): "Let's get
-// you playing", four steps side by side (PlayportKit SetupChecklist): the
-// controller; the pairing JIT uses (on iOS 27 made on this iPhone, JitSetup
+// you playing", three steps side by side (PlayportKit SetupChecklist): the
+// pairing JIT uses (on iOS 27 made on this iPhone, JitSetup
 // and decision 0033; on iOS 26 a file chosen from Files, by touch); LocalDevVPN's
 // tunnel, which A turns on (LocalDevVPN.swift); and Steam, optional, whose A
 // opens Sign in to Steam (SignInView.swift). A done step has a green tick.
@@ -10,8 +10,11 @@
 // run (no pairing, and the checklist never left), and from Settings › Setup
 // check's first row afterwards. The ring moves along the steps with left and
 // right or LB and RB (the design's "RB Next"); A does the ringed step; Y (iOS
-// 26) says how a pairing file is made; B leaves, back to Settings when it
-// came from there.
+// 26) says how a pairing file is made. A first run cannot leave until pairing
+// and LocalDevVPN are ready, and Steam is signed in or put off with X (Not now).
+// Then a dimmed checklist says "You're all set": A/tap Continue leaves, B
+// dismisses only the overlay; B on the settled checklist leaves. Later visits
+// can always leave, back to Settings when they came from there.
 //
 // The same facts are checked before every launch (`SetupState.beforePlay`,
 // called by LibraryModel.play): a missing pairing on iOS 27 or LocalDevVPN
@@ -29,8 +32,13 @@ import SwiftUI
 final class SetupState: ObservableObject {
     static let shared = SetupState()
 
-    /// Set once the player has left the checklist: it no longer opens by itself.
+    /// A first run stays pending across restarts until the settled checklist is left.
     static let leftKey = "setup.left"
+    private static let startedKey = "setup.started"
+    private static let steamSkippedKey = "setup.steamSkipped"
+    @Published private(set) var firstRun = false
+    @Published private(set) var steamSkipped = UserDefaults.standard.bool(forKey: steamSkippedKey)
+    private var completionShown = false
 
     /// LocalDevVPN's tunnel; nil before the first read.
     @Published private(set) var tunnelUp: Bool?
@@ -39,7 +47,8 @@ final class SetupState: ObservableObject {
     /// What a launch's screen names: no controller, Steam signed out (SetupChecklist.notes).
     @Published private(set) var launchNotes: [String] = []
     /// A dev build's preview of a first run (Setup check's dev rows): the checklist shows
-    /// these facts and its steps do nothing. Launches never read it; leaving the checklist ends it.
+    /// these facts; A completes a simulated step without changing the phone or Steam.
+    /// Launches never read it; leaving the checklist ends it.
     @Published var preview: SetupFacts?
     private var clock: Timer?
 
@@ -60,11 +69,64 @@ final class SetupState: ObservableObject {
         case .signedOut?, .pairing?, .expired?: signedIn = false
         }
         return SetupFacts(controller: PadRouter.shared.controller?.name, pairing: BuiltInJitStatus.shared.pairingFile,
-                          pairsOnPhone: Self.pairsOnPhone, tunnelUp: tunnelUp, steamSignedIn: signedIn)
+                          pairsOnPhone: Self.pairsOnPhone, tunnelUp: tunnelUp, steamSignedIn: signedIn,
+                          steamSkipped: steamSkipped)
     }
 
     /// What the checklist shows: the facts, or a dev build's preview.
     var shown: SetupFacts { preview ?? facts }
+    var inFirstRun: Bool { firstRun || preview != nil }
+    var canLeave: Bool { SetupChecklist.canLeave(shown, firstRun: inFirstRun) }
+
+    func skipSteam() {
+        guard SetupChecklist.offersNotNow(shown, firstRun: inFirstRun) else { return }
+        if preview != nil {
+            preview?.steamSkipped = true
+        } else {
+            steamSkipped = true
+            UserDefaults.standard.set(true, forKey: Self.steamSkippedKey)
+        }
+        Self.log("Steam: not now")
+    }
+
+    /// Only once per visit, on the steps screen (including after Steam sign-in
+    /// returns). Never replace another modal; the view checks again when it closes.
+    func showCompletionIfReady() {
+        let nav = AppNavigation.shared
+        guard inFirstRun, canLeave, !completionShown, nav.setup, !nav.signIn, !nav.settings,
+              !PadModal.shared.isUp else { return }
+        completionShown = true
+        Self.log("all set")
+        PadModal.shared.setupComplete()
+    }
+
+    /// Navigation calls this only when leaving the checklist, not while signing in.
+    func leftChecklist() {
+        if firstRun {
+            UserDefaults.standard.set(true, forKey: Self.leftKey)
+            firstRun = false
+        }
+        preview = nil
+        completionShown = false
+    }
+
+    #if !PLAYPORT_RELEASE
+    func previewFirstRun(onPhone: Bool) {
+        completionShown = false
+        preview = SetupFacts(pairsOnPhone: onPhone, tunnelUp: false)
+        AppNavigation.shared.openSetup(on: .pairing)
+    }
+
+    func completePreviewStep(_ step: SetupStep) {
+        guard preview != nil else { return }
+        switch step {
+        case .pairing: preview?.pairing = true
+        case .vpn: preview?.tunnelUp = true
+        case .steam: preview?.steamSignedIn = true
+        }
+        Self.log("preview: completed \(step.rawValue)")
+    }
+    #endif
 
     func readTunnel() {
         Task.detached {
@@ -90,7 +152,11 @@ final class SetupState: ObservableObject {
     /// When the shell first appears: the checklist on a first run.
     func showAtStartIfFirstRun() {
         let left = UserDefaults.standard.bool(forKey: Self.leftKey)
-        guard SetupChecklist.showsAtStart(left: left, pairing: BuiltInJitStatus.shared.pairingFile) else { return }
+        let started = UserDefaults.standard.bool(forKey: Self.startedKey)
+        guard SetupChecklist.showsAtStart(left: left, pairing: BuiltInJitStatus.shared.pairingFile,
+                                         started: started) else { return }
+        UserDefaults.standard.set(true, forKey: Self.startedKey)
+        firstRun = true
         Self.log("first run: the checklist")
         AppNavigation.shared.openSetup()
     }
@@ -131,6 +197,7 @@ struct SetupView: View {
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var builtIn = BuiltInJitStatus.shared
     @ObservedObject private var router = PadRouter.shared
+    @ObservedObject private var modal = PadModal.shared
     @EnvironmentObject private var model: SteamAccountModel
 
     var body: some View {
@@ -138,7 +205,7 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Let's get you playing").font(PP.display(30))
-                Text("Four steps, once. Playport checks them again by itself before every game.")
+                Text("Three steps, once. Playport checks them again by itself before every game.")
                     .font(.system(size: 13)).foregroundStyle(PP.muted)
                 if let m = state.message {
                     Text(m).font(.system(size: 13, weight: .semibold)).foregroundStyle(PP.accent)
@@ -158,12 +225,16 @@ struct SetupView: View {
         .foregroundStyle(PP.text)
         .padding(.horizontal, 44)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { state.follow() }
+        .onAppear {
+            state.follow()
+            state.showCompletionIfReady()
+        }
         .onDisappear {
             state.stopFollowing()
             state.message = nil
-            state.preview = nil
         }
+        .onChange(of: SetupChecklist.complete(f)) { _, _ in state.showCompletionIfReady() }
+        .onChange(of: modal.isUp) { _, up in if !up { state.showCompletionIfReady() } }
         // `pad:` log lines name the steps' states (a dev build's driver reads them).
         .onChange(of: SetupChecklist.summary(f)) { _, s in SetupState.log("checklist: " + s) }
     }
@@ -204,11 +275,11 @@ struct SetupView: View {
 
     private func run(_ item: SetupItem) {
         guard item.action != nil else { return }
-        guard SetupState.shared.preview == nil else { return SetupState.log("preview: \(item.step.rawValue) does nothing") }
+        #if !PLAYPORT_RELEASE
+        if state.preview != nil { return state.completePreviewStep(item.step) }
+        #endif
         SetupState.log("do \(item.step.rawValue)")
         switch item.step {
-        case .controller:
-            break
         case .pairing:
             guard !builtIn.busy, !OnDevicePairing.shared.busy, !TitleLaunch.shared.spent else { return }
             if SetupState.pairsOnPhone {
@@ -235,14 +306,23 @@ struct SetupView: View {
         if let a = focus.hint, !a.isEmpty { h.append(PadHint(button: .a, label: a) { focus.activate() }) }
         h.append(PadHint(button: .rb, label: "Next") { _ = SetupRing.press(.rb) })
         if !SetupState.shared.shown.pairsOnPhone { h.append(PadHint(button: .y, label: "How to make the file") { SetupRing.howTo() }) }
-        let ready = SetupChecklist.beforeLaunch(SetupState.shared.shown) == .go
-        h.append(PadHint(button: .b, label: ready ? "Done" : "Later") { _ = AppNavigation.shared.back() })
+        let state = SetupState.shared
+        if focus.focused == SetupStep.steam.item,
+           SetupChecklist.offersNotNow(state.shown, firstRun: state.inFirstRun) {
+            h.append(PadHint(button: .x, label: "Not now") { state.skipSteam() })
+        }
+        if state.canLeave {
+            h.append(PadHint(button: .b, label: SetupChecklist.complete(state.shown) ? "Done" : "Back") {
+                _ = AppNavigation.shared.back()
+            })
+        }
         return h
     }
 
     /// The footer's grey note at the left.
     static var footerNote: String {
-        SetupState.shared.shown.pairsOnPhone ? "Pairing asks for your approval in iOS Settings" : "Choosing a file uses touch"
+        if SetupState.shared.preview != nil { return "Preview: A completes a step; nothing changes on the phone" }
+        return SetupState.shared.shown.pairsOnPhone ? "Pairing asks for your approval in iOS Settings" : "Choosing a file uses touch"
     }
 }
 
@@ -257,8 +337,10 @@ enum SetupRing {
         case .up, .down: break
         case .a: focus.activate()
         case .y: if !SetupState.shared.shown.pairsOnPhone { howTo() }
-        case .b, .menu: _ = AppNavigation.shared.back()
-        case .x, .view: break
+        case .b: _ = AppNavigation.shared.back()
+        case .x:
+            if focus.focused == SetupStep.steam.item { SetupState.shared.skipSteam() }
+        case .menu, .view: break
         }
         return true
     }

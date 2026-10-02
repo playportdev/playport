@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// First run (Setup.dc.html): what a game needs from this phone, as four
-// steps: a controller, the pairing JIT uses (on iOS 27 made on the phone,
-// decision 0033; on iOS 26 a file chosen from Files), LocalDevVPN's tunnel,
-// and Steam (optional). The app shows them once, on a first run, and in
+// First run (Setup.dc.html): what a game needs from this phone, as three
+// steps: the pairing JIT uses (on iOS 27 made on the phone, decision 0033;
+// on iOS 26 a file chosen from Files), LocalDevVPN's tunnel, and Steam
+// (optional: signed in, or "Not now"). The app shows them once, on a first
+// run, which cannot be left until every step is settled (`complete`), and in
 // Settings › Setup check; the same facts are checked by themselves before
-// every launch (`beforeLaunch`), which names the fix when one fails.
+// every launch (`beforeLaunch`), which names the fix when one fails. A
+// controller is no step: a launch only notes its absence (`notes`).
 //
 // The app reads the facts (UI/SetupView.swift); this is what they mean.
 
 import Foundation
 
 public enum SetupStep: String, CaseIterable, Sendable {
-    case controller, pairing, vpn, steam
+    case pairing, vpn, steam
 }
 
 /// What the app reads from the phone for the checks.
@@ -26,14 +28,17 @@ public struct SetupFacts: Equatable, Sendable {
     public var tunnelUp: Bool?
     /// Paired with Steam; nil while the stored session is still being read.
     public var steamSignedIn: Bool?
+    /// The player chose "Not now" on the Steam step.
+    public var steamSkipped: Bool
 
     public init(controller: String? = nil, pairing: Bool = false, pairsOnPhone: Bool = true,
-                tunnelUp: Bool? = nil, steamSignedIn: Bool? = false) {
+                tunnelUp: Bool? = nil, steamSignedIn: Bool? = false, steamSkipped: Bool = false) {
         self.controller = controller
         self.pairing = pairing
         self.pairsOnPhone = pairsOnPhone
         self.tunnelUp = tunnelUp
         self.steamSignedIn = steamSignedIn
+        self.steamSkipped = steamSkipped
     }
 }
 
@@ -49,12 +54,6 @@ public struct SetupItem: Equatable, Sendable {
 public enum SetupChecklist {
     public static func item(_ step: SetupStep, _ f: SetupFacts) -> SetupItem {
         switch step {
-        case .controller:
-            if let name = f.controller {
-                return SetupItem(step: step, done: true, title: "Controller", detail: "\(name) connected.", action: nil)
-            }
-            return SetupItem(step: step, done: false, title: "Controller",
-                             detail: "Turn it on and pair it in the iPhone's Bluetooth settings. Touch works too.", action: nil)
         case .pairing:
             if f.pairsOnPhone {
                 return SetupItem(step: step, done: f.pairing, title: "Pairing",
@@ -74,8 +73,9 @@ public enum SetupChecklist {
                              action: up ? nil : "Turn it on")
         case .steam:
             let done = f.steamSignedIn == true
-            return SetupItem(step: step, done: done, title: "Steam",
+            return SetupItem(step: step, done: done || f.steamSkipped, title: "Steam",
                              detail: done ? "Signed in: your library, cloud saves and achievements."
+                                 : f.steamSkipped ? "Not now. Sign in any time for your library, cloud saves and achievements."
                                  : "Optional. Sign in for your library, cloud saves and achievements.",
                              action: done ? nil : "Sign in")
         }
@@ -85,16 +85,34 @@ public enum SetupChecklist {
 
     /// Where the ring starts: the first step not done, else the first.
     public static func firstTodo(_ f: SetupFacts) -> SetupStep {
-        items(f).first { !$0.done }?.step ?? .controller
+        items(f).first { !$0.done }?.step ?? .pairing
     }
 
-    /// Steps done, for Settings' summary ("3 of 4 done").
+    /// Every step settled: the pairing and LocalDevVPN done, Steam signed in or
+    /// put off ("Not now"). A first run's checklist cannot be left before this.
+    public static func complete(_ f: SetupFacts) -> Bool {
+        f.pairing && f.tunnelUp == true && (f.steamSignedIn == true || f.steamSkipped)
+    }
+
+    /// Later visits can always leave; a first run must settle every step first.
+    public static func canLeave(_ f: SetupFacts, firstRun: Bool) -> Bool {
+        !firstRun || complete(f)
+    }
+
+    /// Whether the Steam step offers "Not now": on a first run, while signed out and not put off.
+    public static func offersNotNow(_ f: SetupFacts, firstRun: Bool) -> Bool {
+        firstRun && f.steamSignedIn != true && !f.steamSkipped
+    }
+
+    /// Steps done, for Settings' summary ("2 of 3 done").
     public static func doneCount(_ f: SetupFacts) -> Int { items(f).filter(\.done).count }
 
-    /// Whether the checklist opens by itself when the app starts: a first run is
-    /// one with no pairing that has not left the checklist before. A phone paired
-    /// already has been set up, and a tunnel that is down is not a first run.
-    public static func showsAtStart(left: Bool, pairing: Bool) -> Bool { !left && !pairing }
+    /// Start on an unpaired phone, and resume an unfinished first run even if
+    /// pairing was completed before the app closed. Already-paired phones that
+    /// never started this flow keep their existing setup.
+    public static func showsAtStart(left: Bool, pairing: Bool, started: Bool = false) -> Bool {
+        !left && (started || !pairing)
+    }
 
     /// What the check before a launch finds.
     public enum LaunchCheck: Equatable, Sendable {
@@ -134,5 +152,6 @@ public enum SetupChecklist {
         "controller=\(f.controller ?? "none") pairing=\(f.pairing ? (f.pairsOnPhone ? "on-phone" : "file") : "missing")"
             + " vpn=\(f.tunnelUp.map { $0 ? "up" : "down" } ?? "unknown")"
             + " steam=\(f.steamSignedIn.map { $0 ? "signed-in" : "signed-out" } ?? "unknown")"
+            + (f.steamSkipped ? " (not now)" : "")
     }
 }

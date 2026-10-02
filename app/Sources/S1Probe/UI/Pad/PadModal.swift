@@ -22,6 +22,7 @@ final class PadModal: ObservableObject {
         case picker(PadPickerSession)
         case cloud(CloudConflictSession)
         case launchFailure(LaunchFailureSession)
+        case setupComplete
     }
 
     @Published private(set) var content: Content?
@@ -61,6 +62,9 @@ final class PadModal: ObservableObject {
     /// A launch that stopped at a step: the steps, and the fix.
     func launchFailure(_ message: LaunchMessage) { content = .launchFailure(LaunchFailureSession(message)) }
 
+    /// The first-run checklist has settled every step. B closes just this modal.
+    func setupComplete() { content = .setupComplete }
+
     func close() { content = nil }
 
     /// A press while a modal is up: the modal's, whatever it is.
@@ -70,6 +74,14 @@ final class PadModal: ObservableObject {
         case .picker(let p): p.press(b)
         case .cloud(let c): c.press(b)
         case .launchFailure(let f): f.press(b)
+        case .setupComplete:
+            switch b {
+            case .a:
+                close()
+                _ = AppNavigation.shared.back()
+            case .b: close()
+            default: break
+            }
         case nil: break
         }
     }
@@ -83,6 +95,7 @@ final class PadModal: ObservableObject {
         case .picker(let p): "picker \(p.title) on \(p.options.indices.contains(p.cursor) ? p.options[p.cursor].id : "none")"
         case .cloud(let c): "cloud conflict \(c.titleID): \(c.conflicts.count) file(s)" + (c.settling.map { ", keeping \($0.rawValue)" } ?? "")
         case .launchFailure(let f): "launch failed at \(f.message.step.map(LaunchProgress.stepName) ?? "?"): \(f.message.title)"
+        case .setupComplete: "setup complete"
         case nil: nil
         }
     }
@@ -98,6 +111,7 @@ struct PadModalHost: View {
         case .picker(let p): PadPickerPanel(session: p).transition(.opacity)
         case .cloud(let c): CloudConflictView(session: c).transition(.opacity)
         case .launchFailure(let f): LaunchFailureView(session: f).transition(.opacity)
+        case .setupComplete: SetupCompletionView().transition(.opacity)
         case nil: EmptyView()
         }
     }

@@ -1411,11 +1411,10 @@ final class SetupChecklistTests: XCTestCase {
     func testTheStepsAndWhereTheRingStarts() {
         var f = SetupFacts(controller: "Xbox Wireless Controller", pairing: false, pairsOnPhone: false, tunnelUp: false)
         let items = SetupChecklist.items(f)
-        XCTAssertEqual(items.map(\.step), [.controller, .pairing, .vpn, .steam])
-        XCTAssertEqual(items.map(\.done), [true, false, false, false])
-        XCTAssertEqual(items[0].detail, "Xbox Wireless Controller connected.")
-        XCTAssertEqual(items[1].title, "Pairing file")
-        XCTAssertEqual(items[1].action, "Choose file")
+        XCTAssertEqual(items.map(\.step), [.pairing, .vpn, .steam])
+        XCTAssertEqual(items.map(\.done), [false, false, false])
+        XCTAssertEqual(items[0].title, "Pairing file")
+        XCTAssertEqual(items[0].action, "Choose file")
         XCTAssertEqual(SetupChecklist.firstTodo(f), .pairing)
         f.pairsOnPhone = true
         XCTAssertEqual(SetupChecklist.item(.pairing, f).action, "Pair this iPhone")
@@ -1424,10 +1423,10 @@ final class SetupChecklistTests: XCTestCase {
         XCTAssertEqual(SetupChecklist.item(.pairing, f).action, "Pair again")
         XCTAssertNil(SetupChecklist.item(.vpn, f).action)
         XCTAssertEqual(SetupChecklist.firstTodo(f), .steam)
-        XCTAssertEqual(SetupChecklist.doneCount(f), 3)
+        XCTAssertEqual(SetupChecklist.doneCount(f), 2)
         f.steamSignedIn = true
-        XCTAssertEqual(SetupChecklist.firstTodo(f), .controller)
-        XCTAssertEqual(SetupChecklist.doneCount(f), 4)
+        XCTAssertEqual(SetupChecklist.firstTodo(f), .pairing)
+        XCTAssertEqual(SetupChecklist.doneCount(f), 3)
         XCTAssertEqual(SetupChecklist.item(.vpn, SetupFacts(tunnelUp: nil)).detail, "Checking…")
     }
 
@@ -1435,6 +1434,51 @@ final class SetupChecklistTests: XCTestCase {
         XCTAssertTrue(SetupChecklist.showsAtStart(left: false, pairing: false))
         XCTAssertFalse(SetupChecklist.showsAtStart(left: true, pairing: false))
         XCTAssertFalse(SetupChecklist.showsAtStart(left: false, pairing: true))
+        // Completing pairing is not an escape if the app closes mid-setup.
+        XCTAssertTrue(SetupChecklist.showsAtStart(left: false, pairing: true, started: true))
+        XCTAssertFalse(SetupChecklist.showsAtStart(left: true, pairing: true, started: true))
+    }
+
+    func testFirstRunCannotLeaveUntilEveryStepIsSettled() {
+        // Both versions of pairing, with no controller required. Steam may be
+        // done first: steps are freely navigable, only leaving is gated.
+        for onPhone in [false, true] {
+            var f = SetupFacts(pairsOnPhone: onPhone, tunnelUp: false, steamSignedIn: true)
+            XCTAssertFalse(SetupChecklist.complete(f))
+            XCTAssertFalse(SetupChecklist.canLeave(f, firstRun: true))
+            XCTAssertTrue(SetupChecklist.canLeave(f, firstRun: false))
+            f.pairing = true
+            XCTAssertFalse(SetupChecklist.canLeave(f, firstRun: true))
+            f.tunnelUp = nil
+            XCTAssertFalse(SetupChecklist.canLeave(f, firstRun: true))
+            f.tunnelUp = true
+            XCTAssertTrue(SetupChecklist.complete(f))
+            XCTAssertTrue(SetupChecklist.canLeave(f, firstRun: true))
+            f.steamSignedIn = nil
+            XCTAssertFalse(SetupChecklist.canLeave(f, firstRun: true))
+        }
+    }
+
+    func testNotNowSettlesOnlyTheOptionalSteamStep() {
+        var f = SetupFacts(steamSkipped: true)
+        XCTAssertFalse(SetupChecklist.complete(f))
+        f.pairing = true
+        f.tunnelUp = true
+        XCTAssertTrue(SetupChecklist.complete(f))
+        XCTAssertTrue(SetupChecklist.canLeave(f, firstRun: true))
+        XCTAssertEqual(SetupChecklist.doneCount(f), 3)
+        XCTAssertTrue(SetupChecklist.item(.steam, f).done)
+        // Not now never claims to be signed in or disables later sign-in.
+        XCTAssertTrue(SetupChecklist.item(.steam, f).detail.hasPrefix("Not now."))
+        XCTAssertEqual(SetupChecklist.item(.steam, f).action, "Sign in")
+        XCTAssertEqual(SetupChecklist.notes(f, steamGame: true).count, 2)
+        XCTAssertFalse(SetupChecklist.offersNotNow(f, firstRun: true))
+        f.steamSkipped = false
+        XCTAssertFalse(SetupChecklist.complete(f))
+        XCTAssertTrue(SetupChecklist.offersNotNow(f, firstRun: true))
+        XCTAssertFalse(SetupChecklist.offersNotNow(f, firstRun: false))
+        f.steamSignedIn = true
+        XCTAssertFalse(SetupChecklist.offersNotNow(f, firstRun: true))
     }
 
     func testTheCheckBeforeALaunch() {

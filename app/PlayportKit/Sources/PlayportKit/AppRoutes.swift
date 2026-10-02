@@ -37,7 +37,7 @@ public struct AppRoutes {
         var settingsSection = SettingsSection.steam
         var licences: [LicencePage] = []
         var setup = false
-        var setupStart = SetupStep.controller
+        var setupStart = SetupStep.pairing
         var signIn = false
         var gamePath: [GameRef] = []
         var gamePanels: [GamePanel] = []

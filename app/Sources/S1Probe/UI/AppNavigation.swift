@@ -22,7 +22,8 @@ final class AppNavigation: ObservableObject {
     var signIn: Bool { routes.signIn }
     var licences: [LicencePage] { routes.licences }
     var onGamePage: Bool { routes.onGamePage }
-    var canGoBack: Bool { routes.canGoBack }
+    var canGoBack: Bool { routes.canGoBack && (signIn || !setupBlocksLeaving) }
+    private var setupBlocksLeaving: Bool { setup && !SetupState.shared.canLeave }
     var gameBackLabel: String { routes.gameBackLabel }
     var focusStart: String? { routes.focusStart }
     var settingsSection: SettingsSection {
@@ -91,6 +92,7 @@ final class AppNavigation: ObservableObject {
     }
 
     func show(_ p: Page) {
+        guard !setupBlocksLeaving else { return }
         let wasSetup = setup
         if routes.show(p, focus: PadFocus.shared.focused) { transitioned(wasSetup: wasSetup) }
     }
@@ -98,13 +100,14 @@ final class AppNavigation: ObservableObject {
     /// Also used for a link from one Settings section to another, so Back can
     /// return to the section/row that opened it (unlike choosing the sidebar).
     func openSettings(section: SettingsSection? = nil) {
+        guard !setupBlocksLeaving else { return }
         let wasSetup = setup
         if routes.openSettings(section: section, focus: PadFocus.shared.focused) { transitioned(wasSetup: wasSetup) }
     }
 
     func openSetup(on step: SetupStep? = nil) {
         let wasSetup = setup
-        let start = step ?? SetupChecklist.firstTodo(SetupState.shared.facts)
+        let start = step ?? SetupChecklist.firstTodo(SetupState.shared.shown)
         if routes.openSetup(on: start, focus: PadFocus.shared.focused) {
             transitioned(wasSetup: wasSetup)
         } else {
@@ -118,6 +121,7 @@ final class AppNavigation: ObservableObject {
     }
 
     func openGame(_ ref: GameRef) {
+        guard !setupBlocksLeaving else { return }
         let wasSetup = setup
         // The game page appears in place: no NavigationStack slide.
         if Self.instant({ routes.openGame(ref, focus: PadFocus.shared.focused) }) { transitioned(wasSetup: wasSetup) }
@@ -145,6 +149,9 @@ final class AppNavigation: ObservableObject {
 
     @discardableResult
     func back() -> Bool {
+        // Steam can always cancel/return to setup, but an unfinished first run
+        // cannot pop the checklist itself (footer, controller or native Back).
+        guard signIn || !setupBlocksLeaving else { return false }
         if settings && !signIn && !licences.isEmpty {
             closeLicence()
             return true
@@ -159,7 +166,7 @@ final class AppNavigation: ObservableObject {
 
     private func transitioned(wasSetup: Bool) {
         pageSection = nil
-        if wasSetup && !setup { UserDefaults.standard.set(true, forKey: SetupState.leftKey) }
+        if wasSetup && !setup { SetupState.shared.leftChecklist() }
         let start = routes.focusStart ?? (signIn ? SignInView.startItem
             : settings ? settingsSection.navItem
             : setup ? routes.setupStart.item : nil)

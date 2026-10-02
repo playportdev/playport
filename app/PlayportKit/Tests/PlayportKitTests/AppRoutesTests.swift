@@ -95,7 +95,7 @@ final class AppRoutesTests: XCTestCase {
     func testSetupFromSettingsRestoresExactSectionAndRow() {
         var nav = AppRoutes()
         nav.openSettings(section: .setup, focus: "home-item")
-        nav.openSetup(on: .controller, focus: "set:setup:preview")
+        nav.openSetup(on: .pairing, focus: "set:setup:preview")
         nav.openSignIn(focus: "setup:step:steam")
         nav.back()
         XCTAssertTrue(nav.setup)
