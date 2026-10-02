@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 2 Oct 2026 03:30:00 +0200
+Subject: [PATCH] Frontend: add an isolated decoder byte-source test seam
+
+A native separated-memory decoder audit cannot enable FEX_IOS_HOST for
+Frontend.cpp alone: that macro also changes ContextImpl's layout. Provide
+an opt-in, translation-unit-only byte-source seam instead. It retains guest
+PCs and leaves permission checks to the real decoder. The test serializes
+VM changes and supplies contiguous backing; this is not a runtime VM API.
+No CMake target enables it and shipped native/iOS code is unchanged.
+
+Class: feature
+Evidence: docs/evidence/2026-10-02-fex-separated-decoder.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Frontend.cpp | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
+index cc74a29..e521ca9 100644
+--- a/FEXCore/Source/Interface/Core/Frontend.cpp
++++ b/FEXCore/Source/Interface/Core/Frontend.cpp
+@@ -1370,7 +1370,21 @@ void Decoder::AddBranchTarget(uint64_t Target) {
+ extern "C" uint64_t IosSubfloorToReal(uint64_t Addr);
+ #endif
+ 
++#ifdef FEX_TEST_DECODER_BYTE_SOURCE
++// Host-isolated test only; never define the platform macro just for this TU.
++// The caller serializes VM changes and provides contiguous backing. Real
++// CheckRangeExecutable still checks guest permissions for each read width.
++extern "C" const uint8_t* FEXTestDecoderByteSource(uint64_t RIP);
++#endif
++
+ const Decoder::DecodeStream Decoder::AdjustAddrForSpecialRegion(const uint8_t* _InstStream, uint64_t EntryPoint, uint64_t RIP) {
++#ifdef FEX_TEST_DECODER_BYTE_SOURCE
++  return DecodeStream {
++    .InstStream = reinterpret_cast<const uint8_t*>(RIP),
++    .AdjustedInstStream = FEXTestDecoderByteSource(RIP),
++  };
++#endif
++
+   constexpr uint64_t VSyscall_Base = 0xFFFF'FFFF'FF60'0000ULL;
+   constexpr uint64_t VSyscall_End = VSyscall_Base + 0x1000;
+ 

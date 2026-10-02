@@ -13,3 +13,4 @@
 0012-Core-keep-native-builds-free-of-platform-only-diagnostics.patch
 0013-AllocatorHooks-do-not-lock-rpmalloc-for-libc-size-queries.patch
 0014-Core-only-drain-rpmalloc-diagnostics-with-its-allocator.patch
+0015-Frontend-add-an-isolated-decoder-byte-source-test-seam.patch

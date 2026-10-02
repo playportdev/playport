@@ -285,6 +285,34 @@ paths require explicit coverage. [Fetch-boundary evidence and source
 inventory](../../docs/evidence/2026-10-01-guest32-fetch-boundary.md) define the
 next gate: a series-applied isolated full 32-bit decoder test, before execution.
 
+## Full 32-bit decoder gate (host audit only)
+
+After the native link prerequisite below, run:
+
+```sh
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native
+python3 build/guest32/native_decode_audit.py .work/guest32/decode-audit/native --sanitize
+```
+
+This links the real context and complete frontend/opcode tables. Patch
+`fex/0015` provides a test-only byte-source seam: only the frontend enables
+`FEX_TEST_DECODER_BYTE_SOURCE`, without enabling FEX_IOS_HOST or changing native
+layouts. No shipped target enables the seam. Guest PCs stay low while a serialized
+`g32_translate` callback supplies high contiguous backing; real PeekByte/ReadData
+retain full-width execute checks. This is not a concurrent VM port.
+
+All three host granules pass immediate operands, a cross-page MOV with an
+execute-only neighbor, native-readable/no-execute rejection, multi-block guest
+PCs, explicit cache reset after VM changes and end-of-32-bit-space rejection.
+ASan/UBSan cover frontend, adapter and g32, not the other FEX archives. Outputs
+and hashes stay in `.work/guest32/separated-decoder/`. This optional experiment
+requires a prepared native FEX build and is not part of CI.
+
+**No guest execution, IR/JIT, Wine bridge or game launch occurs.** Disk cache,
+SMC and auxiliary code readers are outside this gate. The next gate is a
+register-only decode-to-IR audit; the guest/native memory provenance and runtime
+blockers remain. [Full decoder evidence](../../docs/evidence/2026-10-02-fex-separated-decoder.md).
+
 ## Native FEX link prerequisite (host audit only)
 
 After configuring a series-applied native FEX build with the disabled allocator,
