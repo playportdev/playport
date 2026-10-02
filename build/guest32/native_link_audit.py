@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Link/run real native FEX allocator and reset hooks; not guest execution.
+"""Link/run real native FEX context, allocator and reset hooks; not guest execution.
 
 Requires the series-applied native build documented in the evidence record.
 Generated files stay under .work; this is not an app entry point.
@@ -35,17 +35,21 @@ def main():
     output = ROOT / ".work/guest32/native-link-audit"
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run(["cmake", "--build", str(build), "--target", "FEXCore",
-                    "FEXCore_Base", "JemallocDummy", "-j", "6"], check=True, timeout=600)
+                    "FEXCore_Base", "JemallocDummy", "cephes_128bit", "softfloat_3e",
+                    "-j", "6"], check=True, timeout=600)
     test = ROOT / "build/guest32/native_link_test.cpp"
     libraries = [build / "FEXCore/Source" / f"lib{name}.a"
                  for name in ("FEXCore", "FEXCore_Base", "JemallocDummy")]
+    libraries += [build / "External/cephes/libcephes_128bit.a",
+                  build / "External/SoftFloat-3e/libsoftfloat_3e.a"]
     for path in [test, Path(entry["file"]), *libraries]:
         print(f"sha256 {hashlib.sha256(path.read_bytes()).hexdigest()} {path.relative_to(ROOT)}",
               flush=True)
     binary = output / "native-link-test"
     # Keep the real Core.cpp ABI flags, but turn C assert back on for the test.
     command = [*flags, "-UNDEBUG", str(test), "-Wl,--gc-sections",
-               *map(str, libraries), "-lfmt", "-o", str(binary)]
+               "-Wl,--start-group", *map(str, libraries), "-Wl,--end-group",
+               "-lfmt", "-lxxhash", "-o", str(binary)]
     subprocess.run(command, cwd=entry["directory"], check=True, timeout=120)
     subprocess.run([str(binary)], check=True, timeout=60)
 

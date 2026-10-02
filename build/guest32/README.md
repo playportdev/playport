@@ -289,12 +289,15 @@ next gate: a series-applied isolated full 32-bit decoder test, before execution.
 
 After configuring a series-applied native FEX build with the disabled allocator,
 run `python3 build/guest32/native_link_audit.py .work/guest32/decode-audit/native`.
-It builds and links real FEXCore, FEXCore_Base and JemallocDummy, exercises libc
-allocator hooks and verifies full predictor clearing and reset census. It uses
-the real compilation database, not synthetic replacement implementations.
-[Configuration and evidence](../../docs/evidence/2026-10-01-fex-native-allocator.md).
+It constructs and destroys a real ContextImpl, exercises libc allocator hooks
+and verifies full predictor clearing and reset census. It links real FEXCore,
+FEXCore_Base, JemallocDummy, cephes and softfloat with fmt and xxhash, using the
+real compilation database, not synthetic replacement implementations.
+[Configuration](../../docs/evidence/2026-10-01-fex-native-allocator.md) and
+[real-context link evidence](../../docs/evidence/2026-10-01-fex-native-context.md).
 This is an optional prerequisite test, **not full decoding or guest execution**;
-section garbage collection limits the link check to reachable native code.
+section garbage collection limits the link check to reachable native code,
+now including ContextImpl's virtual methods such as CompileBlock.
 
 ## Still needed before a title launch
 
