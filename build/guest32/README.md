@@ -258,6 +258,33 @@ binding with missing dependencies without changing any image byte.
 records checks and limits. The existing test and sanitizer commands include all
 these cases; this code is still not linked into the app or checked on the phone.
 
+## Decoder fetch boundary (host audit only)
+
+`fetch_audit.py` extracts two unmodified methods from a repository-local FEX
+source tree (`CheckRangeExecutable`, `PeekByte`) and compiles them against a
+synthetic `g32_query` adapter and separated backing:
+
+```sh
+python3 build/guest32/fetch_audit.py .work/run/fex
+python3 build/guest32/fetch_audit.py .work/run/fex --sanitize
+```
+
+This optional experiment needs a prepared source tree, not a FEX build. It
+checks execute-only bytes, cross-page denial, native-accessible non-executable
+neighbors, decommit/null and the end of 32-bit space at all three host granules.
+It reproduces cached execute permission after revocation and verifies a reset
+restores rejection. Integration must join FEX's code-invalidation protocol;
+`g32_query` cannot reset decoder caches by itself. The runner prints source and
+method hashes; generated files stay in `.work/guest32/fetch-audit/`.
+
+**No full instruction decode or execution occurs.** The experiment does not
+port immediate reads, IR, JIT or Wine. Generic IR memory operations also serve
+native CPU-state storage, so blindly translating every `LoadMem`/`StoreMem`
+would be wrong. Separate stack, pair, vector, string, atomic and code-reader
+paths require explicit coverage. [Fetch-boundary evidence and source
+inventory](../../docs/evidence/2026-10-01-guest32-fetch-boundary.md) define the
+next gate: a series-applied isolated full 32-bit decoder test, before execution.
+
 ## Still needed before a title launch
 
 - Windows memory-query structures/classification and allocation
