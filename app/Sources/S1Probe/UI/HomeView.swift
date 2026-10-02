@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Home (docs/design/2026-09-28-gamepad-ui/Main.dc.html): the game played
-// last, with Play, when and how long in all (PlayportKit PlayTime.swift); the
+// last, with its details, when and how long in all (PlayportKit PlayTime.swift); the
 // download running, with its time left, and the one after it; and the
-// four games played last from the whole Library, installed or not (dimmed),
-// the never played by name. Every card takes the focus ring; A plays the big card and opens the
-// others. Y searches every Steam game in the Library (AppShell's footer).
+// four other games played last from the whole Library, installed or not (dimmed),
+// the never played by name. Every card takes the focus ring; A opens its details.
+// Y searches every Steam game in the Library (AppShell's footer).
 
 import PlayportKit
 import SteamClientKit
@@ -14,10 +14,8 @@ struct HomeView: View {
     @ObservedObject var installs: SteamInstalls
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
-    @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var nav = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
-    @State private var playError: String?
 
     /// The game played last, else the first installed one.
     private var continueTitle: InstalledTitle? {
@@ -40,12 +38,6 @@ struct HomeView: View {
             recentRow
         }
         .padding(.top, 8)
-        .alert("Can't start \(continueTitle?.name ?? "the game")",
-               isPresented: Binding(get: { playError != nil }, set: { if !$0 { playError = nil } })) {
-            Button("OK") {}
-        } message: {
-            Text(playError ?? "")
-        }
     }
 
     // MARK: Continue playing
@@ -62,25 +54,16 @@ struct HomeView: View {
                         .font(.system(size: 12, weight: .semibold)).tracking(1.2).textCase(.uppercase)
                         .foregroundStyle(PP.accent)
                     Text(t.name).font(PP.display(34)).foregroundStyle(PP.text).lineLimit(1).minimumScaleFactor(0.6)
-                    HStack(spacing: 14) {
-                        HStack(spacing: 6) {
-                            PadGlyph(button: .a, inverted: true)
-                            Text("Play").font(.system(size: 13, weight: .bold))
-                        }
-                        .padding(.leading, 6).padding(.trailing, 12).padding(.vertical, 5)
-                        .foregroundStyle(PP.onAccent)
-                        .background(PP.accent, in: Capsule())
-                        if let played = Self.played(t) {
-                            Text(played).font(.system(size: 13)).foregroundStyle(PP.soft).lineLimit(1)
-                        }
+                    if let played = Self.played(t) {
+                        Text(played).font(.system(size: 13)).foregroundStyle(PP.soft).lineLimit(1)
+                            .padding(.top, 6)
                     }
-                    .padding(.top, 6)
                 }
                 .padding(.horizontal, 20).padding(.vertical, 16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .padItem("hero:\(t.id)", hint: "Play", cornerRadius: 14) { play(t) }
+            .padItem("hero:\(t.id)", hint: "Open", cornerRadius: 14) { nav.openTitle(t.id) }
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Text("No games yet").font(PP.display(30)).foregroundStyle(PP.text)
@@ -99,25 +82,6 @@ struct HomeView: View {
         let total = t.playSeconds.map { PlayTime.format($0) + " total" }
         let parts = [when, total].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private func play(_ t: InstalledTitle) {
-        Task {
-            do {
-                if !(try await library.play(t.id)), !launch.running, !PadModal.shared.isUp {
-                    // Refused without a reason of its own (a download, setup cancelled): the game's page says why.
-                    // A cloud save conflict asks over Home instead (UI/CloudConflictView.swift).
-                    nav.openTitle(t.id)
-                }
-            } catch {
-                #if PLAYPORT_RELEASE
-                LibraryModel.log("play \(t.id) refused: \(error)")
-                playError = "Playport could not prepare this game's launch."
-                #else
-                playError = "\(error)"
-                #endif
-            }
-        }
     }
 
     // MARK: downloads
@@ -178,10 +142,11 @@ struct HomeView: View {
 
     // MARK: Recent
 
-    /// The four games played last from the whole Library, installed or not; the
+    /// The four games played last other than the hero, installed or not; the
     /// installed games never played fill the rest by name, then the others by name.
     private var recent: [LibraryEntry] {
-        LibraryList.recent(LibraryList.entries(titles: library.catalog.titles, owned: model.games), count: 4)
+        LibraryList.recent(LibraryList.entries(titles: library.catalog.titles, owned: model.games),
+                           count: 4, excluding: continueTitle?.id)
     }
 
     /// Five tiles across (Main.dc.html), the ring's room at each end included.

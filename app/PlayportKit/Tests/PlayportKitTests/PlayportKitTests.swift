@@ -939,6 +939,14 @@ final class LibraryListTests: XCTestCase {
                        ["dir-my game", "app-367520", "app-1", "app-504230"],
                        "played newest first, then installed by name, then the rest by name")
         XCTAssertEqual(LibraryList.recent(e, count: 9).last?.id, "app-588650")
+        XCTAssertEqual(LibraryList.recent(e, count: 4, excluding: "dir-my game").map(\.id),
+                       ["app-367520", "app-1", "app-504230", "app-588650"],
+                       "exclude the local hero before limiting, filling all four tiles")
+        XCTAssertEqual(LibraryList.recent(e, count: 4, excluding: "app-367520").map(\.id),
+                       ["dir-my game", "app-1", "app-504230", "app-588650"],
+                       "exclude the Steam hero, including its merged owned entry")
+        XCTAssertEqual(LibraryList.recent(e, count: 4, excluding: nil), LibraryList.recent(e, count: 4))
+        XCTAssertEqual(LibraryList.recent(e, count: 0, excluding: "dir-my game"), [])
     }
 
     func testTileFramesAreRowByRow() {

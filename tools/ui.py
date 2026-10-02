@@ -68,8 +68,8 @@ model calls: each --action in order, then --settings, --verify, --play:
                          actions after it run in the new process, under this run
                          (Dev/DriverContinuation.swift); the run follows it across the restart.
                          A game whose cloud saves conflict is refused with the Cloud save
-                         conflict screen up (the run ends there): open:home, pad:a plays from
-                         Home's card instead, and pad:a / pad:x / pad:b on that screen keep the
+                         conflict screen up (the run ends there): open:ID, pad:a plays from
+                         the game's page instead, and pad:a / pad:x / pad:b on that screen keep the
                          phone's saves, keep Steam's (either starts the game), or decide later.
                          Game options' Developer section has "Forget the cloud sync" (a first
                          sync next: a save that differs from Steam's becomes a conflict)

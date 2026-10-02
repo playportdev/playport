@@ -137,10 +137,10 @@ public enum LibraryList {
             }
     }
 
-    /// Home's Recent row: the `count` games played last, newest first, then the
-    /// installed games never played by name, then the rest by name.
-    public static func recent(_ entries: [LibraryEntry], count: Int) -> [LibraryEntry] {
-        Array(entries.sorted { lhs, rhs in
+    /// Home's Recent row: excluding the hero, the `count` games played last, newest
+    /// first, then installed games never played by name, then the rest by name.
+    public static func recent(_ entries: [LibraryEntry], count: Int, excluding heroID: String? = nil) -> [LibraryEntry] {
+        Array(entries.filter { $0.id != heroID }.sorted { lhs, rhs in
             if lhs.lastPlayed != rhs.lastPlayed {
                 guard let left = lhs.lastPlayed else { return false }
                 guard let right = rhs.lastPlayed else { return true }
