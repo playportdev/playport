@@ -246,7 +246,22 @@ class Release(unittest.TestCase):
         self.assertEqual(release.version_problems("0.1.0", self.repo), [])
         self.assertIn("not x.y.z", release.version_problems("v0.1", self.repo)[0])
         self.assertEqual(len(release.version_problems("0.2.0", self.repo)), 2)
-        self.assertEqual(release.version_problems("0.1.0", REPO), [], "the committed plists name 0.1.0")
+
+    def test_each_plist_version_mismatch_is_reported(self):
+        for rel in release.PLISTS:
+            with self.subTest(plist=rel):
+                path = self.repo / rel
+                original = path.read_bytes()
+                path.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "0.2.0"}))
+                self.assertEqual(release.version_problems("0.1.0", self.repo), [
+                    f"{rel} CFBundleShortVersionString is '0.2.0', not '0.1.0'"
+                ])
+                path.write_bytes(original)
+
+    def test_committed_plists_have_matching_release_versions(self):
+        # Follow the app's version so a release bump does not stale this check.
+        version = plistlib.loads((REPO / release.PLISTS[0]).read_bytes())["CFBundleShortVersionString"]
+        self.assertEqual(release.version_problems(version, REPO), [])
 
     def test_a_clean_release_assembles_every_file_and_builds_clean_unsigned(self):
         dest = self.release()
