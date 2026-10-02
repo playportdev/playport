@@ -11,7 +11,7 @@ The app starts as a Home Screen launch does, shows the
 library, and does what a person would do with its buttons, through the same
 model calls: each --action in order, then --settings, --verify, --play:
 
-  open:SCREEN | open:ID  show a screen (home, library, games: the Library on All Steam games, downloads,
+  open:SCREEN | open:ID  show a screen (home, library, games: the Library on Steam, downloads,
                          settings, account: Settings' Steam account, setup: the first-run checklist as
                          Settings › Setup check's first row opens it, signin: Sign in to Steam, a preview
                          that sends nothing to Steam while Steam is signed in) or a title's page;

@@ -67,7 +67,7 @@ final class AppNavigation: ObservableObject {
         default:
             guard let p = Page(rawValue: screen) else { return false }
             show(p)
-            if p == .library { LibraryGrid.shared.filter = .installed }
+            if p == .library { LibraryGrid.shared.filter = .all }
         }
         return true
     }

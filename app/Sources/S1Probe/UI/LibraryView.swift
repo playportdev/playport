@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The Library (docs/design/2026-09-28-gamepad-ui/Library.dc.html): the games
 // in C:\Games and the paired account's owned games in one grid
-// (PlayportKit.LibraryList), with the chips Installed, All Steam games and
-// Recently played and a sort, both in one list picker on the View button
+// (PlayportKit.LibraryList), with the chips All (default), Installed and Steam,
+// then future stores, and a sort, both in one list picker on the View button
 // (⧉), and search on Y with the controller keyboard (UI/Pad/PadKeyboardView.swift). The ring
 // moves among the tiles only: the chips and the sort take a tap or their button. Each tile
 // says whether the game is ready and when it was last played, its download or
@@ -24,7 +24,7 @@ import SwiftUI
 final class LibraryGrid: ObservableObject {
     static let shared = LibraryGrid()
 
-    @Published var filter = LibraryFilter.installed
+    @Published var filter = LibraryFilter.all
     @Published var sort = LibrarySort.recent
     @Published var search = ""
     /// The controller keyboard is up for the search (Y).
@@ -63,11 +63,7 @@ final class LibraryGrid: ObservableObject {
     }
 
     static func label(_ filter: LibraryFilter) -> String {
-        switch filter {
-        case .installed: "Installed"
-        case .steam: "All Steam games"
-        case .recent: "Recently played"
-        }
+        filter.label
     }
 
     static func label(_ sort: LibrarySort) -> String {
@@ -127,7 +123,7 @@ private struct LibraryGridView: View {
             if shown.isEmpty {
                 empty
             } else {
-                tiles(shown)
+                tiles(shown, duplicateIDs: LibraryList.duplicateSourceIDs(all))
             }
         }
         // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
@@ -149,16 +145,21 @@ private struct LibraryGridView: View {
 
     private func chips(_ all: [LibraryEntry], downloading: Set<UInt32>) -> some View {
         HStack(spacing: 8) {
-            ForEach(LibraryFilter.allCases, id: \.self) { chip in
-                let count = all.filter { LibraryList.matches($0, chip, downloading: downloading) }.count
-                // Not in the ring: ⧉ picks one; a tap here.
-                Button { grid.filter = chip } label: {
-                    Chip(text: chip == .recent ? LibraryGrid.label(chip) : "\(LibraryGrid.label(chip)) · \(count)", on: grid.filter == chip)
+            // Store chips can grow without pushing search and sort off screen.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(LibraryFilter.allCases, id: \.self) { chip in
+                        let count = all.filter { LibraryList.matches($0, chip, downloading: downloading) }.count
+                        // Not in the ring: ⧉ picks one; a tap here.
+                        Button { grid.filter = chip } label: {
+                            Chip(text: "\(LibraryGrid.label(chip)) · \(count)", on: grid.filter == chip)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("chip-\(chip.rawValue)")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("chip-\(chip.rawValue)")
             }
-            Spacer(minLength: 8)
+            .fixedSize(horizontal: false, vertical: true)
             if grid.searching || !grid.search.isEmpty {
                 // What the keyboard typed; a tap brings the keyboard back.
                 Button { grid.openSearch() } label: {
@@ -191,7 +192,7 @@ private struct LibraryGridView: View {
 
     // MARK: tiles
 
-    private func tiles(_ shown: [LibraryEntry]) -> some View {
+    private func tiles(_ shown: [LibraryEntry], duplicateIDs: Set<String>) -> some View {
         GeometryReader { outer in
             let width = outer.size.width - 2 * Self.inset
             let tile = CGSize(width: (width - CGFloat(Self.columns - 1) * Self.spacing.width) / CGFloat(Self.columns),
@@ -203,8 +204,9 @@ private struct LibraryGridView: View {
                                              count: Self.columns),
                               alignment: .leading, spacing: Self.spacing.height) {
                         ForEach(shown) { entry in
-                            LibraryTile(entry: entry, game: entry.appID.flatMap { games[$0] }, installs: installs, width: tile.width,
-                                        artHeight: Self.artHeight, metaGap: Self.metaGap, metaHeight: Self.metaHeight)
+                            LibraryTile(entry: entry, game: entry.appID.flatMap { games[$0] }, installs: installs,
+                                        showSource: LibraryList.showsSourceBadge(entry, filter: grid.filter, duplicateIDs: duplicateIDs),
+                                        width: tile.width, artHeight: Self.artHeight, metaGap: Self.metaGap, metaHeight: Self.metaHeight)
                         }
                     }
                     .padding(Self.inset)
@@ -275,7 +277,7 @@ private struct LibraryGridView: View {
                     .padItem("signin", hint: "Open", cornerRadius: 14) { _ = nav.open("account") }
                     .padding(.top, 6)
             } else if grid.filter == .installed, !model.games.isEmpty, grid.search.isEmpty {
-                Text("All Steam games")
+                Text(LibrarySource.steam.label)
                     .font(.system(size: 13, weight: .bold)).foregroundStyle(PP.onAccent)
                     .padding(.horizontal, 14).padding(.vertical, 6)
                     .background(PP.accent, in: Capsule())
@@ -290,21 +292,25 @@ private struct LibraryGridView: View {
     }
 
     private var needsSignIn: Bool {
-        grid.filter == .steam && model.games.isEmpty && (model.state.account == nil || model.state == .expired)
+        let hasInstalled = library.catalog.titles.contains { grid.filter == .all || $0.appID != nil }
+        return (grid.filter == .all || grid.filter == .steam) && !hasInstalled && model.games.isEmpty
+            && (model.state.account == nil || model.state == .expired)
     }
 
     private var emptyTitle: String {
         if !grid.search.isEmpty { return "No games match “\(grid.search)”" }
         switch grid.filter {
+        case .all: return "No games yet"
         case .installed: return "No games installed"
         case .steam: return needsSignIn ? "Sign in to Steam" : (model.gamesLoading ? "Loading your games…" : "No Steam games")
-        case .recent: return "Nothing played yet"
         }
     }
 
     private var emptyText: String {
         if !grid.search.isEmpty { return "Press B to clear the search." }
         switch grid.filter {
+        case .all:
+            return model.gamesError ?? "Your installed games and games from connected stores appear here. Sign in to Steam or add a local game to get started."
         case .installed:
             #if PLAYPORT_RELEASE
             return "Install one from your Steam games, or copy one into Playport."
@@ -314,7 +320,6 @@ private struct LibraryGridView: View {
         case .steam:
             if needsSignIn { return model.state == .expired ? AccountCopy.status(.expired) : "Pair Playport with your Steam account to see your games." }
             return model.gamesError ?? "Your Steam account owns no games."
-        case .recent: return "Games you play show up here."
         }
     }
 }
@@ -340,6 +345,7 @@ private struct LibraryTile: View {
     @ObservedObject var installs: SteamInstalls
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var nav = AppNavigation.shared
+    let showSource: Bool
     let width: CGFloat
     let artHeight: CGFloat
     let metaGap: CGFloat
@@ -364,6 +370,9 @@ private struct LibraryTile: View {
                 }
             }
             .frame(width: width, height: artHeight)
+            .overlay(alignment: .topTrailing) {
+                if showSource { GameSourceBadge(source: entry.source).padding(6) }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .padItem("lib:\(entry.id)", hint: "Open", cornerRadius: 10) { nav.openGame(.title(entry.id)) }
             meta
@@ -415,6 +424,21 @@ private struct LibraryTile: View {
 
     private func played(_ when: Date?) -> String? {
         when.map { "Played " + $0.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)) }
+    }
+}
+
+/// Quiet, readable over any artwork; not a separate tap or controller focus target.
+struct GameSourceBadge: View {
+    let source: LibrarySource
+
+    var body: some View {
+        Text(source.label)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.white.opacity(0.9))
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(.black.opacity(0.65), in: Capsule())
+            .accessibilityLabel("Source: \(source.label)")
+            .allowsHitTesting(false)
     }
 }
 

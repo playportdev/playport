@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The Library's one grid (docs/design/2026-09-28-gamepad-ui/Library.dc.html):
 // the games in C:\Games and the paired account's owned games as one list,
-// the filter chips (Installed, All Steam games, Recently played), the sort,
+// the filter chips (All, Installed, then stores), the sort,
 // the search, and where each tile sits on the grid, so the focus ring can
 // move to a tile the lazy grid has not drawn yet (UI/LibraryView.swift).
 
@@ -11,12 +11,28 @@ import CoreGraphics
 #endif
 import SteamClientKit
 
+/// The origin of a library copy, independent of ownership and installation.
+/// Add each store here when its catalogue adapter is available; Local is not a store filter.
+public enum LibrarySource: String, CaseIterable, Sendable {
+    case local
+    case steam
+
+    public var label: String {
+        switch self {
+        case .local: "Local"
+        case .steam: "Steam"
+        }
+    }
+}
+
 /// One tile: a catalogued title, an owned game, or both at once.
 public struct LibraryEntry: Equatable, Identifiable, Sendable {
     /// The catalogue's id (`app-<appID>`, `dir-<folder>`); `app-<appID>` for an owned game not in C:\Games.
     public var id: String
     public var name: String
     public var appID: UInt32?
+    /// Today a Steam app ID is the catalogue's store identity; never infer origin from the name.
+    public var source: LibrarySource { appID == nil ? .local : .steam }
     /// In C:\Games: the catalogue has it.
     public var installed: Bool
     /// The paired account owns it.
@@ -38,12 +54,20 @@ public struct LibraryEntry: Equatable, Identifiable, Sendable {
 }
 
 public enum LibraryFilter: String, CaseIterable, Sendable {
+    /// Every known copy, including local games and store games not installed.
+    case all
     /// In C:\Games, or downloading into it.
     case installed
-    /// Every game the paired account owns.
+    /// Every Steam copy, including installed games outside the paired account.
     case steam
-    /// Played at least once.
-    case recent
+
+    public var label: String {
+        switch self {
+        case .all: "All"
+        case .installed: "Installed"
+        case .steam: LibrarySource.steam.label
+        }
+    }
 
     /// The next chip, wrapping round.
     public var next: LibraryFilter {
@@ -83,8 +107,9 @@ public enum LibraryList {
         entries(titles: titles, owned: owned.map { Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) })
     }
 
-    /// The catalogue's titles, each joined with the owned game of its app ID, then every
-    /// other owned game.
+    /// The catalogue's titles, each joined with the owned Steam game of its Steam app ID,
+    /// then every other owned game. Names are not identities: copies from different sources
+    /// stay separate. Future adapters must join on (store, store game ID), not name or bare ID.
     public static func entries(titles: [InstalledTitle], owned: [Owned]) -> [LibraryEntry] {
         let byApp = Dictionary(owned.map { ($0.appID, $0) }, uniquingKeysWith: { first, _ in first })
         var seen = Set<UInt32>()
@@ -101,12 +126,29 @@ public enum LibraryList {
         return out
     }
 
+    /// Badge targets from the full library, before filtering: same display name but
+    /// different sources. An installed/owned merge and copies within one source do not qualify.
+    /// Until stores provide a shared game identity, use case/accent-insensitive names.
+    public static func duplicateSourceIDs(_ entries: [LibraryEntry]) -> Set<String> {
+        let groups = Dictionary(grouping: entries) {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        }
+        return Set(groups.filter { !$0.key.isEmpty && Set($0.value.map(\.source)).count > 1 }
+            .values.flatMap { $0.map(\.id) })
+    }
+
+    /// Duplicate source badges only help in mixed-source views.
+    public static func showsSourceBadge(_ entry: LibraryEntry, filter: LibraryFilter, duplicateIDs: Set<String>) -> Bool {
+        (filter == .all || filter == .installed) && duplicateIDs.contains(entry.id)
+    }
+
     /// `downloading`: the app IDs with a download, update or repair queued or running.
     public static func matches(_ entry: LibraryEntry, _ filter: LibraryFilter, downloading: Set<UInt32> = []) -> Bool {
         switch filter {
+        case .all: true
         case .installed: entry.installed || entry.appID.map(downloading.contains) == true
-        case .steam: entry.owned
-        case .recent: entry.lastPlayed != nil
+        case .steam: entry.source == .steam
         }
     }
 

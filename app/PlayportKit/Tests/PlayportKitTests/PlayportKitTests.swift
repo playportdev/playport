@@ -907,6 +907,9 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(e[1].owned, false)
         XCTAssertEqual(e[2].installed, false)
         XCTAssertEqual(e[2].sizeBytes, 1_200)
+        XCTAssertEqual(e.map(\.source), [.steam, .local, .steam, .steam])
+        XCTAssertEqual(LibrarySource.steam.label, "Steam")
+        XCTAssertEqual(LibrarySource.local.label, "Local")
     }
 
     func testChipsFilter() {
@@ -917,8 +920,66 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(ids(.installed, downloading: [588650]), ["app-588650", "app-367520", "dir-my game"],
                        "a download counts as installed")
         XCTAssertEqual(ids(.steam), ["app-504230", "app-588650", "app-367520"])
-        XCTAssertEqual(ids(.recent), ["app-367520", "dir-my game"])
-        XCTAssertEqual(LibraryFilter.recent.next, .installed)
+        XCTAssertEqual(ids(.all), ["app-504230", "app-588650", "app-367520", "dir-my game"])
+        XCTAssertEqual(LibraryFilter.allCases, [.all, .installed, .steam])
+        XCTAssertEqual(LibraryFilter.allCases.map(\.label), ["All", "Installed", "Steam"])
+        XCTAssertEqual(LibraryFilter.all.next, .installed)
+        XCTAssertEqual(LibraryFilter.installed.next, .steam)
+        XCTAssertEqual(LibraryFilter.steam.next, .all)
+    }
+
+    func testSameNameFromDifferentSourcesStaysSeparate() {
+        let e = LibraryList.entries(titles: [title("Celeste", app: nil)], owned: owned)
+        let copies = LibraryList.shown(e, filter: .all, sort: .name, search: "Celeste")
+        XCTAssertEqual(copies.map(\.id), ["app-504230", "dir-celeste"])
+        XCTAssertEqual(copies.map(\.source), [.steam, .local])
+        XCTAssertFalse(copies[0].installed, "the local copy does not mark the Steam copy installed")
+        XCTAssertFalse(copies[1].owned, "the local copy does not inherit Steam ownership")
+        XCTAssertEqual(LibraryList.shown(e, filter: .installed, sort: .name).map(\.id), ["dir-celeste"])
+        XCTAssertEqual(LibraryList.shown(e, filter: .steam, sort: .name, search: "Celeste").map(\.id), ["app-504230"])
+    }
+
+    func testSourceBadgesOnlyForDuplicatesInMixedSourceFilters() {
+        let e = LibraryList.entries(titles: [title("Celeste", app: nil)], owned: owned)
+        let duplicates = LibraryList.duplicateSourceIDs(e)
+        XCTAssertEqual(duplicates, ["app-504230", "dir-celeste"])
+        for entry in e {
+            XCTAssertEqual(LibraryList.showsSourceBadge(entry, filter: .all, duplicateIDs: duplicates),
+                           duplicates.contains(entry.id))
+            XCTAssertEqual(LibraryList.showsSourceBadge(entry, filter: .installed, duplicateIDs: duplicates),
+                           duplicates.contains(entry.id))
+            XCTAssertFalse(LibraryList.showsSourceBadge(entry, filter: .steam, duplicateIDs: duplicates))
+        }
+        let installed = LibraryList.shown(e, filter: .installed, sort: .name)
+        XCTAssertEqual(installed.map(\.id), ["dir-celeste"])
+        XCTAssertTrue(LibraryList.showsSourceBadge(installed[0], filter: .installed, duplicateIDs: duplicates),
+                      "the other copy need not be visible or installed")
+        XCTAssertEqual(LibraryList.duplicateSourceIDs(entries), [], "an installed/owned Steam merge is not a duplicate")
+    }
+
+    func testDuplicateNameMatchingIgnoresCaseAccentsAndEdgeWhitespace() {
+        let e = LibraryList.entries(titles: [title("  CÉLESTE\n", app: nil)], owned: owned)
+        XCTAssertEqual(LibraryList.duplicateSourceIDs(e), ["app-504230", "dir-  céleste\n"])
+    }
+
+    func testSameSourceOrEmptyNamesDoNotNeedBadges() {
+        let sameStore = [
+            LibraryEntry(id: "app-1", name: "Game", appID: 1, installed: true, owned: true),
+            LibraryEntry(id: "app-2", name: "Game", appID: 2, installed: false, owned: true),
+        ]
+        XCTAssertEqual(LibraryList.duplicateSourceIDs(sameStore), [])
+        let empty = [
+            LibraryEntry(id: "app-1", name: "", appID: 1, installed: true, owned: true),
+            LibraryEntry(id: "dir-empty", name: "  ", appID: nil, installed: true, owned: false),
+        ]
+        XCTAssertEqual(LibraryList.duplicateSourceIDs(empty), [])
+    }
+
+    func testSteamFilterIncludesInstalledCopyWithoutOwnership() {
+        let e = LibraryList.entries(titles: [title("Offline Steam game", app: 1)], owned: [LibraryList.Owned]())
+        XCTAssertFalse(e[0].owned)
+        XCTAssertEqual(e[0].source, .steam)
+        XCTAssertEqual(LibraryList.shown(e, filter: .steam, sort: .name), e)
     }
 
     func testSortsAndSearch() {

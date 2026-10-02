@@ -468,7 +468,8 @@ private struct GameDetailPage: View {
     }
 
     private func facts(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
-        var rows: [(String, String, Color?)] = []
+        let source: LibrarySource = appID == nil ? .local : .steam
+        var rows: [(String, String, Color?)] = [("Store", source.label, nil)]
         if let t {
             if t.badge != .ready { rows.append(("State", t.badge.rawValue, .orange)) }
             rows.append(("Last played", t.lastPlayed.map { $0.formatted(.relative(presentation: .named)) } ?? "Never", nil))

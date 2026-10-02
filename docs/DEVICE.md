@@ -197,7 +197,7 @@ comes out within a day of it. What a move from 1.6.0 to 1.9.0 costs was measured
 ## Driving a title
 
 - **The app's screens** ([decision 0034](decisions/0034-a-gamepad-first-ui.md)).
-  `open:SCREEN` shows Home, Library (`games`: on All Steam games), Downloads,
+  `open:SCREEN` shows Home, Library (`library`: on All, `games`: on Steam), Downloads,
   Settings (`settings#SECTION`), the checklist (`setup`), Sign in to Steam
   (`signin`) or a game's page (`open:ID`, `open:ID#SECTION` with its Game
   options open); `pad:` presses then move the one focus ring and press the
