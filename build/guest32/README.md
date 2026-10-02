@@ -34,6 +34,26 @@ bounded automatic image placement (below); no game runtime behavior changes.
 Release accepts only an allocation's original base. A VM operation cannot span
 two reservations; an ordinary memory access can when both permit it.
 
+`g32_query` snapshots guest metadata without reading backing or granting access.
+It accepts any byte address and returns the rounded-down 4 KiB page plus the
+**forward** run of matching state, permissions and allocation ownership. It
+never searches backward or merges adjacent reservations. Region size is 64-bit
+so the exclusive end can be 2^32. The low 64 KiB reports `BLOCKED`, not reusable
+`FREE`; reservations report their original allocation base. `COMMITTED` with
+zero access is distinct from `RESERVED`, even though both reject translation.
+Host `mprotect` state is deliberately ignored. Invalid calls preserve output;
+query results expire at the next VM change and require external serialization.
+This is not Windows `MEMORY_BASIC_INFORMATION`: allocation protection, image vs
+private classification, guard/write-copy and a Wine syscall adapter are absent.
+A worst-case query scans all guest pages; it is not a JIT access fast path.
+
+Query tests cover byte/page rounding, forward-only runs, every permission
+combination, allocation boundaries, release/decommit/protect/recommit, separate
+spaces, intact live bytes, nearly-4-GiB metadata-only runs and the last byte of
+the address space. At each host granule, an independent 256-page oracle checks
+every page after 1024 deterministic mixed VM operations, including failed
+protection changes. [Query evidence](../../docs/evidence/2026-10-01-guest32-memory-query.md).
+
 A 16 KiB host page can contain four guest pages with different permissions.
 **Native `mprotect` cannot enforce their permissions independently.** Committed
 backing is RW, never executable; `G32_EXEC` permits instruction-byte fetch only.
@@ -240,8 +260,9 @@ these cases; this code is still not linked into the app or checked on the phone.
 
 ## Still needed before a title launch
 
-- Memory/address queries, Windows allocation rounding/guard/write-copy semantics,
-  concurrent VM changes and safe translated-code invalidation.
+- Windows memory-query structures/classification and allocation
+  rounding/guard/write-copy semantics, concurrent VM changes and safe
+  translated-code invalidation. The guest metadata query above is not an ABI bridge.
 - FEX instruction decode/fetch, every memory emitter and atomic/string path
   translated and checked; exceptions reported with guest addresses; tests of
   real x86 instructions, not just this C API.

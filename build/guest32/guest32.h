@@ -46,6 +46,27 @@ g32_result g32_decommit(g32_space *space, uint32_t address, uint64_t size);
 /* Release accepts only the original allocation base; never a subrange. */
 g32_result g32_release(g32_space *space, uint32_t allocation_base);
 
+/* Read-only guest metadata query, NOT Windows MEMORY_BASIC_INFORMATION.
+ * Accepts any byte address, including the inaccessible low 64 KiB. region_base
+ * is address rounded DOWN to a guest page; size scans FORWARD through matching
+ * state/permissions/ownership, never across reservations. size is wide so a
+ * region can end at 2^32. FREE and BLOCKED have allocation_base=permissions=0;
+ * RESERVED reports its allocation base with permissions=0. COMMITTED with zero
+ * permissions is distinct from RESERVED. No native pointer/host protection is
+ * returned or consulted. Failure leaves output unchanged. Serialized snapshot
+ * only: it grants no access or lifetime, and expires at the next VM change.
+ * Worst-case scan is the guest page count; no concurrent VM protocol. */
+typedef enum {
+    G32_REGION_BLOCKED, G32_REGION_FREE, G32_REGION_RESERVED, G32_REGION_COMMITTED
+} g32_region_state;
+typedef struct {
+    uint32_t region_base, allocation_base;
+    uint64_t size;
+    g32_region_state state;
+    unsigned permissions;
+} g32_region;
+g32_result g32_query(g32_space *space, uint32_t address, g32_region *output);
+
 /* Translation never truncates a native pointer into a guest pointer. A loan is
  * valid only until a mapping changes; callers must not dereference it with
  * permissions/width other than those checked here. Crossing 2^32 faults (not

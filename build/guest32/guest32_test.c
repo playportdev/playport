@@ -140,6 +140,156 @@ static void allocation(size_t granule)
     printf("guest32: allocation granule=%zu ok\n", granule);
 }
 
+static void region_is(g32_space *s, uint32_t address, uint32_t base,
+                      uint64_t size, uint32_t allocation_base,
+                      g32_region_state state, unsigned permissions)
+{
+    g32_region region;
+    OK(g32_query(s, address, &region));
+    assert(region.region_base == base && region.size == size);
+    assert(region.allocation_base == allocation_base && region.state == state);
+    assert(region.permissions == permissions);
+}
+
+static void queries(size_t granule)
+{
+    const uint64_t limit = UINT64_C(1) << 32;
+    g32_space *s, *other;
+    OK(g32_create(granule, &s));
+    OK(g32_create(granule, &other));
+    g32_region output, saved;
+    memset(&output, 0xa5, sizeof(output));
+    memcpy(&saved, &output, sizeof(saved));
+    IS(g32_query(NULL, 0, &output), G32_SYSTEM);
+    assert(!memcmp(&output, &saved, sizeof(output)));
+    IS(g32_query(s, 0, NULL), G32_RANGE);
+    region_is(s, 0, 0, G32_GRANULE, 0, G32_REGION_BLOCKED, 0);
+    region_is(s, 0xffff, 0xf000, G32_PAGE, 0, G32_REGION_BLOCKED, 0);
+    region_is(s, G32_GRANULE, G32_GRANULE, limit - G32_GRANULE,
+              0, G32_REGION_FREE, 0);
+    region_is(s, UINT32_MAX, 0xfffff000u, G32_PAGE, 0, G32_REGION_FREE, 0);
+
+    const uint32_t base = 0x400000;
+    OK(g32_reserve(s, base, G32_GRANULE));
+    OK(g32_reserve(s, base + G32_GRANULE, G32_GRANULE));
+    region_is(s, base - 1, base - G32_PAGE, G32_PAGE, 0, G32_REGION_FREE, 0);
+    region_is(s, base + 1, base, G32_GRANULE, base, G32_REGION_RESERVED, 0);
+    region_is(s, base + G32_GRANULE - 1, base + G32_GRANULE - G32_PAGE,
+              G32_PAGE, base, G32_REGION_RESERVED, 0);
+    region_is(s, base + G32_GRANULE, base + G32_GRANULE, G32_GRANULE,
+              base + G32_GRANULE, G32_REGION_RESERVED, 0);
+    OK(g32_commit(s, base, G32_GRANULE, G32_READ | G32_WRITE));
+    OK(g32_commit(s, base + G32_GRANULE, G32_GRANULE, G32_READ | G32_WRITE));
+    /* Identical access permissions still must not hide ownership boundaries. */
+    region_is(s, base + 7, base, G32_GRANULE, base,
+              G32_REGION_COMMITTED, G32_READ | G32_WRITE);
+    unsigned char byte = 0x62, readback = 0;
+    OK(g32_write(s, base, &byte, 1));
+    for (unsigned permission = 0; permission < 8; ++permission) {
+        OK(g32_protect(s, base + G32_PAGE, G32_PAGE, permission));
+        region_is(s, base + G32_PAGE + 19, base + G32_PAGE,
+                  permission == (G32_READ | G32_WRITE) ? G32_GRANULE - G32_PAGE : G32_PAGE,
+                  base, G32_REGION_COMMITTED, permission);
+    }
+    OK(g32_protect(s, base + G32_PAGE, G32_PAGE, 0));
+    region_is(s, base, base, G32_PAGE, base, G32_REGION_COMMITTED, G32_READ | G32_WRITE);
+    void *host = NULL;
+    IS(g32_translate(s, base + G32_PAGE, 1, G32_READ, &host), G32_ACCESS);
+    OK(g32_decommit(s, base + 2 * G32_PAGE, G32_PAGE));
+    region_is(s, base + G32_PAGE, base + G32_PAGE, G32_PAGE, base, G32_REGION_COMMITTED, 0);
+    region_is(s, base + 2 * G32_PAGE, base + 2 * G32_PAGE, G32_PAGE, base, G32_REGION_RESERVED, 0);
+    region_is(s, base + 3 * G32_PAGE + 1, base + 3 * G32_PAGE,
+              G32_GRANULE - 3 * G32_PAGE, base, G32_REGION_COMMITTED, G32_READ | G32_WRITE);
+    OK(g32_read(s, base, &readback, 1));
+    assert(readback == byte);
+    region_is(other, base, base, limit - base, 0, G32_REGION_FREE, 0);
+    OK(g32_release(s, base));
+    region_is(s, base, base, G32_GRANULE, 0, G32_REGION_FREE, 0);
+    region_is(s, base + G32_GRANULE, base + G32_GRANULE, G32_GRANULE,
+              base + G32_GRANULE, G32_REGION_COMMITTED, G32_READ | G32_WRITE);
+    OK(g32_release(s, base + G32_GRANULE));
+    region_is(s, base, base, limit - base, 0, G32_REGION_FREE, 0);
+
+    OK(g32_reserve(s, 0xffff0000u, G32_GRANULE));
+    OK(g32_commit(s, 0xfffff000u, G32_PAGE, G32_EXEC));
+    region_is(s, 0xffff0001u, 0xffff0000u, G32_GRANULE - G32_PAGE,
+              0xffff0000u, G32_REGION_RESERVED, 0);
+    region_is(s, UINT32_MAX, 0xfffff000u, G32_PAGE, 0xffff0000u,
+              G32_REGION_COMMITTED, G32_EXEC);
+    OK(g32_release(s, 0xffff0000u));
+    /* Full metadata-only reservation: no native backing access is needed. */
+    OK(g32_reserve(s, G32_GRANULE, limit - G32_GRANULE));
+    region_is(s, G32_GRANULE, G32_GRANULE, limit - G32_GRANULE,
+              G32_GRANULE, G32_REGION_RESERVED, 0);
+    OK(g32_release(s, G32_GRANULE));
+    g32_destroy(other);
+    g32_destroy(s);
+    printf("guest32: queries granule=%zu ok\n", granule);
+}
+
+static void query_oracle(size_t granule)
+{
+    enum { N = 256, SLOT = G32_GRANULE / G32_PAGE };
+    const uint32_t origin = 0x100000;
+    g32_space *s;
+    OK(g32_create(granule, &s));
+    /* Bound free runs without borrowing implementation metadata. */
+    OK(g32_reserve(s, origin + N * G32_PAGE, G32_PAGE));
+    uint32_t owners[N] = {0}, rng = 0x620;
+    int permissions[N]; /* -1 is reserved/uncommitted; >=0 is committed. */
+    for (unsigned p = 0; p < N; ++p) permissions[p] = -1;
+    unsigned operations[5] = {0}, states[3] = {0};
+    for (unsigned step = 0; step < 1024; ++step) {
+        unsigned slot = (random_word(&rng) >> 16) % (N / SLOT);
+        unsigned first = slot * SLOT, op = (random_word(&rng) >> 16) % 5;
+        uint32_t address = origin + first * G32_PAGE;
+        if (op == 0 && !owners[first]) {
+            OK(g32_reserve(s, address, G32_GRANULE));
+            for (unsigned p = first; p < first + SLOT; ++p) owners[p] = address;
+            ++operations[op];
+        } else if (op == 1 && owners[first]) {
+            OK(g32_release(s, address));
+            for (unsigned p = first; p < first + SLOT; ++p) {
+                owners[p] = 0;
+                permissions[p] = -1;
+            }
+            ++operations[op];
+        } else if (op >= 2 && owners[first]) {
+            unsigned p = first + (random_word(&rng) >> 16) % SLOT;
+            unsigned count = 1 + (random_word(&rng) >> 16) % (first + SLOT - p);
+            unsigned perm = (random_word(&rng) >> 16) % 8;
+            int committed = 1;
+            for (unsigned q = p; q < p + count; ++q)
+                if (permissions[q] < 0) committed = 0;
+            address = origin + p * G32_PAGE;
+            if (op == 2) OK(g32_commit(s, address, count * G32_PAGE, perm));
+            if (op == 3) OK(g32_decommit(s, address, count * G32_PAGE));
+            if (op == 4) {
+                IS(g32_protect(s, address, count * G32_PAGE, perm),
+                   committed ? G32_OK : G32_ACCESS);
+            }
+            if (op != 4 || committed)
+                for (unsigned q = p; q < p + count; ++q)
+                    permissions[q] = op == 3 ? -1 : (int)perm;
+            ++operations[op];
+        }
+        for (unsigned p = 0; p < N; ++p) {
+            unsigned end = p + 1;
+            while (end < N && owners[end] == owners[p] && permissions[end] == permissions[p]) ++end;
+            g32_region_state state = !owners[p] ? G32_REGION_FREE :
+                permissions[p] < 0 ? G32_REGION_RESERVED : G32_REGION_COMMITTED;
+            ++states[state - G32_REGION_FREE];
+            region_is(s, origin + p * G32_PAGE + (step * 17 + p * 31) % G32_PAGE,
+                      origin + p * G32_PAGE, (end - p) * G32_PAGE,
+                      owners[p], state, permissions[p] < 0 ? 0 : (unsigned)permissions[p]);
+        }
+    }
+    for (unsigned op = 0; op < 5; ++op) assert(operations[op] > 10);
+    for (unsigned state = 0; state < 3; ++state) assert(states[state] > 100);
+    g32_destroy(s);
+    printf("guest32: query oracle granule=%zu ok\n", granule);
+}
+
 static void exercise(size_t granule)
 {
     g32_space *a, *b;
@@ -277,6 +427,12 @@ int main(void)
     allocation(0);
     allocation(16384);
     allocation(65536);
+    queries(0);
+    queries(16384);
+    queries(65536);
+    query_oracle(0);
+    query_oracle(16384);
+    query_oracle(65536);
     exercise(0);
     exercise(16384);
     exercise(65536);

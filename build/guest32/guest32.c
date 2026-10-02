@@ -209,6 +209,31 @@ g32_result g32_release(g32_space *s, uint32_t address)
     return discard(s, address, (end - first) * G32_PAGE, 1);
 }
 
+g32_result g32_query(g32_space *s, uint32_t address, g32_region *output)
+{
+    if (!s || s->poisoned) return G32_SYSTEM;
+    if (!output) return G32_RANGE;
+    uint64_t first = address / G32_PAGE, end = first + 1;
+    g32_region region = {0};
+    region.region_base = (uint32_t)(first * G32_PAGE);
+    if (address < G32_GRANULE) {
+        region.state = G32_REGION_BLOCKED;
+        end = G32_GRANULE / G32_PAGE;
+    } else {
+        uint32_t owner = s->owner[first];
+        unsigned state = s->state[first];
+        region.state = !owner ? G32_REGION_FREE :
+            (state & COMMITTED) ? G32_REGION_COMMITTED : G32_REGION_RESERVED;
+        if (owner) region.allocation_base = (owner - 1) * G32_PAGE;
+        region.permissions = state & PERMISSIONS;
+        while (end < G32_PAGES && s->owner[end] == owner && s->state[end] == state)
+            ++end;
+    }
+    region.size = (end - first) * G32_PAGE;
+    *output = region;
+    return G32_OK;
+}
+
 g32_result g32_translate(g32_space *s, uint32_t address, uint64_t width,
                          unsigned permissions, void **host)
 {
