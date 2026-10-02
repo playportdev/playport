@@ -384,7 +384,11 @@ but the player's Pause and runs it once Steam is signed in. A release build comp
   at 60 FPS, on Vulkan for detected DX12 games and DXMT otherwise
   (`LaunchSettings.defaultScreen`, `defaultFrameLimit`, `GraphicsBackend.default`).
   Steam installs naming `REDprelauncher.exe` launch the game's nested executable
-  instead: the launcher starts a second process, which the runtime cannot run.
+  instead; Unreal bootstraps also prefer the shipping EXE. This avoids unvalidated
+  launcher install/UI chains and extra JIT cost, not an inability to start children:
+  the session root and job support them (0030). GUI launcher support still needs
+  GDI presentation/first-frame integration and validation of its dependencies
+  ([launcher feasibility](evidence/2026-10-02-launcher-feasibility.md)).
   Adoption records best-effort Direct3D 8–12 evidence from the selected EXE's
   normal/delay library and API-function imports (including interposers), its
   reachable local DLLs and guarded dynamic-loading references. The bounded scan

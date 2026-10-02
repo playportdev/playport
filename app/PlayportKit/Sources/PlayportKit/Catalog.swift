@@ -231,9 +231,10 @@ public enum Adoption {
         }
     }
 
-    /// REDprelauncher starts the game in another process, which the runtime
-    /// cannot run. Discover the game's own executable instead, even when Steam
-    /// names the launcher in its receipt (also handles older receipts without a path).
+    /// Prefer the game over REDprelauncher's unvalidated install/UI chain,
+    /// even when Steam names the launcher (including older receipts with no path).
+    /// This is selection policy, not a ban on children: the session supports
+    /// child pseudo-processes (decision 0030; launcher-feasibility evidence).
     static func isPrelauncher(_ path: String) -> Bool {
         path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last?.lowercased() == "redprelauncher.exe"
     }
@@ -269,8 +270,8 @@ public enum Adoption {
     /// one below it (`nested`). An Unreal Engine game's
     /// `<Project>.exe` is a bootstrap that only starts
     /// `<Project>\Binaries\Win64\<Project>-Win64-Shipping.exe` as a second
-    /// process, which the one-process runtime does not do: the shipping
-    /// executable is picked instead when it is there.
+    /// process. Prefer the shipping executable when present, avoiding an extra
+    /// unvalidated bootstrap and its JIT cost; the runtime does support children.
     static func pick(_ exes: [String], folder: String, in dir: URL? = nil) -> String? {
         let key = { (s: String) in s.lowercased().filter { $0.isLetter || $0.isNumber } }
         guard let exe = exes.first(where: { key(String($0.dropLast(4))) == key(folder) }) ?? exes.first else {

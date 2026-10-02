@@ -38,9 +38,15 @@ receipt for the exact pinned app and build (preserving Hollow Knight's log
 argument and classic Witcher 3's reservation requirement).
 
 Steam's REDprelauncher is also skipped in receipt resolution and executable
-discovery. It starts the game as another process, which this runtime cannot
-run; discovery selects the nested game executable instead. A launcher alone
-never makes the title playable. No cohort pin was moved.
+discovery; discovery selects the nested game executable instead. A launcher
+alone never makes the title playable. No cohort pin was moved.
+
+**Follow-up correction:** the original explanation said the runtime could not
+run a second process. That was incorrect: decisions 0027/0030 and the child
+fixes already support child pseudo-processes. The bypass is conservative
+selection policy, not a process limitation. The launcher's install/UI chain
+was not tested here; [the feasibility audit](2026-10-02-launcher-feasibility.md)
+separates actual support from the remaining launcher-specific gaps.
 
 ## Checks
 
