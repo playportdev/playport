@@ -944,7 +944,7 @@ resource	Runtime/nls/normnfkd.nls	76294	da1a3cd3b79d995a0ea0298d842e7e49be71bb88
 resource	Runtime/nls/sortdefault.nls	3394804	93577599d1b0335d6b2b3560d2bc6bf3681193daae2a32b28cbd2612bc2b1d09	unix	wine/nls/sortdefault.nls	nls
 resource	Runtime/registry/system.reg	482589	a7243a86a08786bdaba078d1f79bd55db7234cccf95249c0421f5729da9bb35b	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	1599	e534357e8ae05068ac00258faf0b3e6086f77c1170b502a9fd46b59052c9ebd6	registry	user.reg	P7-reg
-link	lib/libntdll_unix.a	2757392	12859eaa59b20235bc238400b3dc53648b5d0ec43fbe225d7e7d3e5d0cc1ef39	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	2760072	8695687e1a4617fcb3035e4ecb29d48aaab4f75011cf3cf627ca25eb0e41beb2	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4764752	f54113cf66a757c2c0326537c00fdeeb73d3889d119ea1a99f2e41c4e0b873c2	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1205616	21d5d3e1bccc25770c2b4dee0698acbe56d43f49d8d0ad847179a6d0dc6b2a38	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto

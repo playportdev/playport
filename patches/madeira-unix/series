@@ -50,3 +50,4 @@
 0049-ntdll-reserve-an-owned-i386-address-window.patch
 0050-ntdll-isolate-child-startup-image-identity.patch
 0051-ntdll-suballocate-owned-WoW64-window-views.patch
+0052-ntdll-bootstrap-owner-local-window-backed-TEB-pairs.patch

@@ -7,10 +7,12 @@ reserves an owned, uncommitted 4 GiB window on the phone before attempting the
 i386 main image. The owner-identity follow-up below isolates child startup
 image state from the session and makes unix-side WoW64 identity owner-aware.
 The suballocation follow-up prepares owner-local PEB32 storage inside the
-window. Address arithmetic, startup-state selection and view splitting are
-host-tested from the actual patches. **Portal 2 still fails at its
-low-address image mapping; no TEB32/PEB32 pairing exists and no i386 code
-executes. Step 2 and milestone 1 are not complete.**
+window; the initial-thread follow-up pairs it with window-backed native and
+32-bit TEBs. Address arithmetic, startup-state selection, view splitting and
+pairing helpers are host-tested from the actual patches. **Portal 2 still
+fails at its low-address image mapping; PEB32 has bootstrap scalars only,
+no image is mapped in the window and no i386 code executes. Step 2 and
+milestone 1 are not complete.**
 
 Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
 IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).
@@ -210,6 +212,79 @@ commit's `git show --check` and the superproject's non-patch whitespace check
 pass. `pp build --plan` reports no trees to rebuild. Logs/screenshots stay
 under `.work/portal2-suballoc` and `.work/ui-runs/`.
 
+## Initial TEB-pair follow-up (same step)
+
+Latest source at build: `41b38b0` plus madeira-unix 0052.
+Dev IPA: `.work/out/20261003-125233-3ea1b61a/Playport-26.5-3ea1b61a.ipa`.
+SHA256: `3ea1b61a1f411ed26661c2aea45c4209234272879d2a5ccbc76d15c8175cc405`.
+Only `libntdll_unix.a` changes in the committed build records; pins and PE,
+FEX and DXMT outputs are unchanged.
+
+**madeira-unix 0052** bootstraps the initial thread, not general WoW64:
+
+- The old native TEB is near 4 GiB, while the window is around `0x7000000000`.
+  A signed 32-bit `WowTebOffset` cannot span that distance. Claim one 16 KiB
+  RW view at guest `0x7fe00000` and move the pristine native TEB there, beside
+  TEB32 at guest `0x7fe02000`. Offsets are ±`0x2000`; Wine's debug-info page
+  fits after TEB32. Production compile-time assertions check the real layouts.
+- Copy native state, preserving stack/external pointers and GdiTebBatch's
+  syscall table/frame. Rebase its self, empty activation-list and Unicode
+  pointers. Reject a source with an existing pair, CPU area, live activation
+  list or nonstandard self-references. This is before child PE code executes.
+- Native pointers stay host-relative. TEB32's self, PEB, activation-list,
+  Unicode buffer and native backlink (`GdiBatchCount`) are guest addresses.
+  Client IDs remain integers. PEB32 receives selected bootstrap scalars from
+  the owner and parsed image; loader, heap, image and process parameters stay
+  NULL. No native PEB-layout copy and no global `wow_peb` assignment.
+- `thread_data` and its thread-list entry do not move. Under the window and
+  virtual locks, publish the new TEB through the patcher pthread TLS key and
+  `data->teb`, preserving signal/kernel-stack storage. The loader refreshes its
+  local TEB after startup. No extra `signal_alloc_thread` call is needed: it
+  is a no-op at this pin. The phone's pre-PE syscall frame is still NULL;
+  the host test separately exercises preservation of a non-NULL frame.
+- Retain the old native TEB outside the session free list. Restore it and its
+  TLS pointer **before** deleting the window, since exit logging and the
+  process-thread longjmp still need a valid TEB. Refuse teardown from the
+  wrong thread or after TLS publication failure rather than unmapping a live
+  pointer. This is initial-thread-only lifetime management, not a solution
+  for arbitrary live sibling threads. Secondary WoW64 thread allocation
+  explicitly returns `STATUS_NOT_SUPPORTED` until that path is implemented.
+
+`build/wow64/pair_test.c` uses the production `wow64_pair.h` and pairing/
+restore functions extracted from the patch, with **mock Wine types and view
+claims**, real 4 GiB host mappings and pthread TLS, under UBSan. It checks
+self/PEB/backlink and embedded-buffer conversion round trips; offset symmetry;
+IDs; scalar-only PEB32; native syscall/stack state and list-entry preservation;
+missing/wrong owner and incompatible source rejection; view/TLS failure before
+publication; wrong-thread/TLS-failed restoration; restoration before protecting
+the old pair inaccessible; and two concurrent owners with identical guest
+addresses. It does not test Wine's actual rbtree, signal masking, Mach exception
+handling, full PEB initialization or execution after a successful image map.
+The build compiles the actual Wine layouts and the phone checks the lifecycle.
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected nonzero result. Both result events name the SHA256 above:
+
+- `.work/ui-runs/portal2-pair`: B=`0x7038010000`, native TEB
+  `0x70b7e10000`, TEB32 `0x70b7e12000`, PEB32 `0x70b7f10000`.
+  Logs show self32=`0x7fe02000`, PEB32=`0x7ff00000`, native backlink32=
+  `0x7fe00000`, reverse offset -8192, OS 10.0, subsystem 2 and NULL image/
+  parameters. Child `Machine=0x14c` remains separate from session `0x8664`;
+  `wow_teb` is now non-NULL. TLS publication matches, then the unchanged image
+  map fails `c0000017`. Exit restores the old native TEB (`tls_match=1`) and
+  releases the window. UI result `launch=failed run_exe=-7`, exit 1; screenshot
+  still shows **Portal 2 could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-pair-hk`: `first-frame+10`, exit 0; first frame
+  **8.13 s**, JIT **2.35 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and all runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, C tests including four WoW64 UBSan tests, all three Swift
+packages), and `pp slots` passes (150 slots, 149 calls). The source commit's
+`git show --check` and the superproject's non-patch whitespace check pass.
+`pp build --plan` reports no trees to rebuild. Logs/screenshots stay under
+`.work/portal2-pair` and `.work/ui-runs/`.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -252,17 +327,17 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: owner-local paired TEB32/PEB32 setup for the child's
-already allocated native TEB; PEB32 storage is available but not populated or
-linked. The native TEB/paired offsets, TLS slot, thread list and signal state
-must remain coherent; the session's allocator must not acquire this child's
-layout. The fixed-view suballocator does not yet implement general VM routing,
-free/reuse or image mapping. WoW64 identity is owner-aware, but the legacy
-`wow_peb`, TEB free lists and WoW64 allocation limits remain global. Other
-startup globals (`peb`, argv, startup info) still rely on serialization.
-Then image/VM mapping inside the window; guest-relative image metadata/relocations;
-PE-visible base query and file-by-file pointer/return-value conversion;
-stack/context/callback/APC/exception setup; and target-owned whole-window
-Mach fault servicing with a count. The existing global sub-floor image table
-cannot represent the same guest address in two different process windows.
-Do not advance to step 3 or mark step 2 done from this reservation test.
+Next in this same step: image/VM mapping inside the window and guest-relative
+image metadata/relocations, then window-backed process parameters and full
+PEB32 population. Only the initial TEB is paired; general paired thread
+allocation, reuse/free and multi-thread teardown are pending, and secondary
+WoW64 threads are explicitly rejected. The fixed-view suballocator does not
+yet implement general VM routing, free/reuse or image mapping. WoW64 identity
+is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation
+limits remain global; this bootstrap leaves them unchanged. Other startup
+globals (`peb`, argv, startup info) still rely on serialization. Then PE-visible
+base query and file-by-file pointer/return-value conversion; stack/context/
+callback/APC/exception setup; and target-owned whole-window Mach fault servicing
+with a count. The existing global sub-floor image table cannot represent the
+same guest address in two different process windows. Do not advance to step 3
+or mark step 2 done from this bootstrap test.

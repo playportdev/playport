@@ -178,12 +178,27 @@ phone confirms the bootstrap view and teardown; Portal 2 still fails
 `first-frame+10` (8.29 s first frame, menu visible). The same step-2 evidence
 record holds the IPA and runs.
 
-**Next, still step 2:** owner-local paired TEB32/PEB32 setup for the child's
-already allocated native TEB, then image/VM mapping and guest-relative
-metadata. Suballocation currently supports fixed reserved/RW views only:
-no general VM routing, free/reuse, image or executable views. The legacy
-`wow_peb`, TEB free lists and WoW64 limits are still global; other startup
-globals (`peb`, argv, startup info) still rely on serialization. Route pointer
+**Initial TEB-pair follow-up, 2026-10-03:** madeira-unix 0052 moves the
+pristine initial native TEB beside TEB32 in the owner's window: guest
+`0x7fe00000` / `0x7fe02000`, paired offsets ±`0x2000`. Native pointers stay
+host-relative; TEB32 self, PEB and native backlink are guest-relative. PEB32
+gets bootstrap scalars only, not native loader/heap/parameter pointers. The
+phone confirms pairing, TLS publication and restoration of the original TEB
+before window release. Portal 2 still fails `c0000017`, with no mapped image
+or i386 execution. Hollow Knight passes `first-frame+10` (8.13 s first frame,
+menu visible). Production-helper host tests cover state preservation, failures,
+restoration and concurrent disjoint owners with mock Wine layouts/views and
+real mappings/TLS; the same step-2 evidence record holds the IPA and runs.
+
+**Next, still step 2:** image/VM mapping and guest-relative metadata, then
+window-backed process parameters and full PEB32 population. Only the initial
+TEB is paired; secondary WoW64 thread allocation explicitly returns
+`STATUS_NOT_SUPPORTED` rather than borrowing the session's native layout.
+Suballocation still supports fixed reserved/RW views only: no general VM
+routing, free/reuse, image or executable views. The legacy `wow_peb`, TEB
+free lists and WoW64 limits remain global but this bootstrap does not mutate
+them; other startup globals (`peb`, argv, startup info) still rely on
+serialization. Extend paired thread allocation/lifetime, route pointer
 conversions, expose the base to PE code and integrate whole-window faults
 for the Mach handler's target process. The locked native base/allocation
 queries must not be called from a signal handler. Do not advance to step 3 yet.

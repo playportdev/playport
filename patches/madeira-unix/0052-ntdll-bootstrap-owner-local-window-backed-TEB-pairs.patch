@@ -1,0 +1,312 @@
+From 1693b6258ced274e38831f64dd9c19558d183a2b Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 3 Oct 2026 12:50:12 +0200
+Subject: [PATCH] ntdll: bootstrap owner-local window-backed TEB pairs
+
+Move only the pristine initial child thread into adjacent native and guest layouts; preserve syscall state, publish its TLS pointer and restore the original TEB before window teardown. Seed PEB32 scalar fields without borrowing native pointers. Reject secondary WoW64 threads until their allocator is implemented.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no
+---
+ build/ntdll-unix/loader_ios.c  |   3 +
+ build/ntdll-unix/virtual_ios.c | 124 ++++++++++++++++++++++++++++++---
+ build/ntdll-unix/wow64_pair.h  |  88 +++++++++++++++++++++++
+ 3 files changed, 205 insertions(+), 10 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_pair.h
+
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index eef1c51..6da2da5 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -3248,6 +3248,9 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+             return;
+         }
+         unix_init_startup_info();
++        /* WoW64 bootstrap can move this initial thread to a window-backed
++         * native/32-bit pair. Never pass the pre-startup TEB to stack setup. */
++        teb = data->teb;
+         if (!ios_register_proc_ident( child_peb, &startup_image.info ))
+         {
+             NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 7f67870..eb7a62c 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15108,14 +15108,25 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+ 
+ 
+ /* Playport: owner-local WoW64 windows. Split holdback views into allocations
+- * and PROT_NONE gaps without dropping the host reservation. PEB32 storage is
+- * allocated here but NOT paired with the inherited native TEB yet: image/VM
+- * translation and paired-TEB setup remain separate work. Never set wow_peb or
+- * session allocation limits from this path.
++ * and PROT_NONE gaps without dropping the host reservation. Bootstrap the
++ * initial thread's native/32-bit TEB pair in its own window, never setting
++ * wow_peb, the session TEB free lists or session allocation limits.
++ * General WoW64 thread allocation and image/VM translation remain pending.
+  * Lock order: windows -> virtual_mutex; queries only take windows. */
+ #include "wow64_views.h"
++#include "wow64_pair.h"
++C_ASSERT( sizeof(TEB) <= IOS_WOW64_TEB_OFFSET );
++C_ASSERT( sizeof(TEB32) <= 0x1000 );
++C_ASSERT( sizeof(PEB32) <= IOS_WOW64_PAIR_SIZE );
++C_ASSERT( IOS_WOW64_TEB_OFFSET + 2 * 0x1000 <= IOS_WOW64_PAIR_SIZE );
+ #define IOS_WOW64_WINDOWS_MAX 64
+-static struct { void *owner; uintptr_t base; PEB32 *peb32; } ios_wow64_windows[IOS_WOW64_WINDOWS_MAX];
++static struct
++{
++    void *owner;
++    uintptr_t base;
++    PEB32 *peb32;
++    TEB *original_teb, *paired_teb;
++} ios_wow64_windows[IOS_WOW64_WINDOWS_MAX];
+ static pthread_mutex_t ios_wow64_windows_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ uintptr_t ios_wow64_base_for_peb( void *owner )
+@@ -15177,6 +15188,52 @@ static void ios_wow64_delete_views( uintptr_t base )
+     }
+ }
+ 
++/* Initial child thread only. Called with windows and virtual_mutex held,
++ * before any child PE code/stack/context exists. thread_data and its list
++ * entry do not move; GdiTebBatch's syscall state survives the native copy.
++ * Keep the old TEB out of the free list until exit restores it. */
++static NTSTATUS ios_wow64_pair_initial_teb( unsigned int slot )
++{
++    struct thread_data *data = get_thread_data();
++    struct file_view *view;
++    TEB *old = data ? data->teb : NULL;
++    TEB *teb;
++    NTSTATUS status;
++    extern pthread_key_t ios_teb_tls_key;
++
++    if (!old || old->Peb != ios_wow64_windows[slot].owner ||
++        !ios_wow64_can_move_teb( old )) return STATUS_NOT_SUPPORTED;
++    if ((status = ios_wow64_claim_view( ios_wow64_windows[slot].base,
++                                       IOS_WOW64_TEB_GUEST, IOS_WOW64_PAIR_SIZE,
++                                       VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, &view )))
++        return status;
++    teb = view->base;
++    ios_wow64_move_native_teb( teb, old );
++    ios_wow64_init_teb32( teb, IOS_WOW64_TEB_GUEST );
++    ios_wow64_init_peb32( ios_wow64_windows[slot].peb32, old->Peb, ios_cur_image_info() );
++    if (pthread_setspecific( ios_teb_tls_key, teb )) return STATUS_NO_MEMORY;
++    ios_wow64_windows[slot].original_teb = old;
++    ios_wow64_windows[slot].paired_teb = teb;
++    data->teb = teb;
++    dprintf( 2, "[wow64-pair] owner=%p old=%p native=%p teb32=%p "
++             "native_guest=%#x teb32_guest=%#x peb32_guest=%#x offset=%#x "
++             "tid=%lu tls_match=%d list_preserved=1 syscall_frame=%p\n",
++             teb->Peb, old, teb, get_wow_teb( teb ), IOS_WOW64_TEB_GUEST,
++             IOS_WOW64_TEB_GUEST + IOS_WOW64_TEB_OFFSET, IOS_WOW64_PEB_GUEST,
++             teb->WowTebOffset, (unsigned long)data->tid,
++             pthread_getspecific( ios_teb_tls_key ) == data->teb, get_syscall_frame( data ) );
++    dprintf( 2, "[wow64-pair] self32=%#x peb32=%#x backlink32=%#x reverse_offset=%d "
++             "peb32_os=%u.%u subsystem=%u image32=%#x params32=%#x\n",
++             get_wow_teb( teb )->Tib.Self, get_wow_teb( teb )->Peb,
++             get_wow_teb( teb )->GdiBatchCount, get_wow_teb( teb )->WowTebOffset,
++             ios_wow64_windows[slot].peb32->OSMajorVersion,
++             ios_wow64_windows[slot].peb32->OSMinorVersion,
++             ios_wow64_windows[slot].peb32->ImageSubSystem,
++             ios_wow64_windows[slot].peb32->ImageBaseAddress,
++             ios_wow64_windows[slot].peb32->ProcessParameters );
++    return STATUS_SUCCESS;
++}
++
+ static NTSTATUS ios_wow64_reserve_window( void *owner )
+ {
+     unsigned int i, slot = IOS_WOW64_WINDOWS_MAX;
+@@ -15207,9 +15264,8 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+         struct file_view *peb_view;
+         view->protect = VPROT_WOW64_HOLE;
+         /* Bootstrap storage below 2G; a host page, not just sizeof(PEB32).
+-         * Never copy the native PEB (different layout/pointer representation).
+-         * Populate and expose it only when the paired TEB path is ready. */
+-        status = ios_wow64_claim_view( base, 0x7ff00000, host_page_mask + 1,
++         * Never copy the native PEB (different layout/pointer representation). */
++        status = ios_wow64_claim_view( base, IOS_WOW64_PEB_GUEST, host_page_mask + 1,
+                                       VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, &peb_view );
+         if (status)
+         {
+@@ -15219,8 +15275,17 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+         ios_wow64_windows[slot].base = base;
+         ios_wow64_windows[slot].peb32 = peb_view->base;
+         ios_wow64_windows[slot].owner = owner;
++        status = ios_wow64_pair_initial_teb( slot );
++        if (status)
++        {
++            ios_wow64_windows[slot].owner = NULL;
++            ios_wow64_windows[slot].base = 0;
++            ios_wow64_windows[slot].peb32 = NULL;
++            ios_wow64_delete_views( base );
++            goto unlock_virtual;
++        }
+         dprintf( 2, "[wow64-window] bootstrap peb32_host=%p peb32_guest=0x7ff00000 "
+-                 "bytes=%#lx paired=0\n", peb_view->base, (unsigned long)(host_page_mask + 1) );
++                 "bytes=%#lx paired=1 scalar_only=1\n", peb_view->base, (unsigned long)(host_page_mask + 1) );
+         /* Exercise the production conversion rules on the actual reservation,
+          * without dereferencing it or pretending the image was mapped there. */
+         ios_wow64_guest_addr( base, ios_wow64_host_addr( base, 0x400000 ), &guest );
+@@ -15241,6 +15306,33 @@ done:
+     return status;
+ }
+ 
++/* Restore before deleting views; called under both locks. Kept separate so
++ * host tests can exercise the production publication/restore lifecycle. */
++static BOOL ios_wow64_restore_initial_teb( unsigned int slot )
++{
++    struct thread_data *data = get_thread_data();
++    TEB *old = ios_wow64_windows[slot].original_teb;
++    void *exception_list;
++    extern pthread_key_t ios_teb_tls_key;
++
++    if (!old || !data || data->teb != ios_wow64_windows[slot].paired_teb)
++    {
++        dprintf( 2, "[wow64-pair] refusing teardown from wrong thread owner=%p\n",
++                 ios_wow64_windows[slot].owner );
++        return FALSE;
++    }
++    exception_list = old->Tib.ExceptionList;
++    ios_wow64_move_native_teb( old, data->teb );
++    old->WowTebOffset = 0;
++    old->Tib.ExceptionList = exception_list;
++    if (pthread_setspecific( ios_teb_tls_key, old ))
++        return FALSE;  /* retain window rather than leave dangling TLS */
++    data->teb = old;
++    dprintf( 2, "[wow64-pair] restored owner=%p native=%p tls_match=%d\n",
++             old->Peb, old, pthread_getspecific( ios_teb_tls_key ) == data->teb );
++    return TRUE;
++}
++
+ static void ios_wow64_release_window( void *owner )
+ {
+     unsigned int i;
+@@ -15251,10 +15343,19 @@ static void ios_wow64_release_window( void *owner )
+         {
+             uintptr_t base = ios_wow64_windows[i].base;
+             dprintf( 2, "[wow64-window] release peb=%p base=%p\n", owner, (void *)base );
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            /* The dying thread still needs its TEB for exit logging/longjmp.
++             * No secondary WoW64 thread exists yet (allocation rejects it). */
++            if (!ios_wow64_restore_initial_teb( i ))
++            {
++                server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++                break;
++            }
+             ios_wow64_windows[i].owner = NULL;
+             ios_wow64_windows[i].base = 0;
+             ios_wow64_windows[i].peb32 = NULL;
+-            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            ios_wow64_windows[i].original_teb = NULL;
++            ios_wow64_windows[i].paired_teb = NULL;
+             ios_wow64_delete_views( base );
+             server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+             break;
+@@ -15692,6 +15793,9 @@ NTSTATUS virtual_alloc_teb( struct thread_data *data )
+     SIZE_T size;
+     NTSTATUS status = STATUS_SUCCESS;
+ 
++    /* Do not hand a WoW64 owner the session's unpaired native layout. General
++     * paired-thread allocation/free is not implemented by this bootstrap. */
++    if (ios_wow64_current_base()) return STATUS_NOT_SUPPORTED;
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+     if (next_free_teb)
+     {
+diff --git a/build/ntdll-unix/wow64_pair.h b/build/ntdll-unix/wow64_pair.h
+new file mode 100644
+index 0000000..6294435
+--- /dev/null
++++ b/build/ntdll-unix/wow64_pair.h
+@@ -0,0 +1,88 @@
++/* Playport: bootstrap layouts for a window-backed WoW64 initial thread.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Wine types and wow64_window.h must be included first.
++ */
++#ifndef IOS_WOW64_PAIR_H
++#define IOS_WOW64_PAIR_H
++
++#define IOS_WOW64_PEB_GUEST  0x7ff00000u
++#define IOS_WOW64_TEB_GUEST  0x7fe00000u
++#define IOS_WOW64_TEB_OFFSET 0x2000
++#define IOS_WOW64_PAIR_SIZE  0x4000
++
++/* A native TEB cannot retain a signed LONG offset to a distant window. Move
++ * it beside TEB32, retaining syscall/frame state and all external pointers.
++ * Only the pristine initial-thread layout may be moved; no live PE frames.
++ * Rebase the native self-references, never truncate them to guest addresses.
++ */
++static int ios_wow64_can_move_teb( const TEB *teb )
++{
++    const LIST_ENTRY *head = &teb->ActivationContextStack.FrameListCache;
++    return !teb->WowTebOffset && !teb->ChpeV2CpuAreaInfo &&
++           !teb->TlsSlots[WOW64_TLS_CPURESERVED] &&
++           teb->Tib.Self == &teb->Tib &&
++           teb->ActivationContextStackPointer == &teb->ActivationContextStack &&
++           head->Flink == head && head->Blink == head &&
++           teb->StaticUnicodeString.Buffer == teb->StaticUnicodeBuffer;
++}
++
++static void ios_wow64_move_native_teb( TEB *dst, const TEB *src )
++{
++    *dst = *src;
++    dst->Tib.Self = &dst->Tib;
++    dst->ActivationContextStackPointer = &dst->ActivationContextStack;
++    dst->ActivationContextStack.FrameListCache.Flink =
++        dst->ActivationContextStack.FrameListCache.Blink =
++            &dst->ActivationContextStack.FrameListCache;
++    dst->StaticUnicodeString.Buffer = dst->StaticUnicodeBuffer;
++}
++
++/* Every address stored in TEB32 is guest-relative, including the native TEB
++ * backlink. Native TEB pointers (PEB, ExceptionList, self) remain host pointers.
++ * Storage is zeroed by the allocator; the native PEB is NOT copied to PEB32.
++ */
++static void ios_wow64_init_teb32( TEB *teb, uint32_t guest )
++{
++    TEB32 *teb32 = (TEB32 *)((char *)teb + IOS_WOW64_TEB_OFFSET);
++    uint32_t g32 = guest + IOS_WOW64_TEB_OFFSET;
++
++    teb32->Peb = IOS_WOW64_PEB_GUEST;
++    teb32->Tib.Self = g32;
++    teb32->Tib.ExceptionList = ~0u;
++    teb32->Tib.FiberData = 0x1e00;
++    teb32->ClientId.UniqueProcess = (ULONG_PTR)teb->ClientId.UniqueProcess;
++    teb32->ClientId.UniqueThread = (ULONG_PTR)teb->ClientId.UniqueThread;
++    teb32->RealClientId = teb32->ClientId;
++    teb32->ActivationContextStackPointer = g32 + offsetof(TEB32, ActivationContextStack);
++    teb32->ActivationContextStack.FrameListCache.Flink =
++        teb32->ActivationContextStack.FrameListCache.Blink =
++            g32 + offsetof(TEB32, ActivationContextStack.FrameListCache);
++    teb32->StaticUnicodeString.Buffer = g32 + offsetof(TEB32, StaticUnicodeBuffer);
++    teb32->StaticUnicodeString.MaximumLength = sizeof(teb32->StaticUnicodeBuffer);
++    teb32->GdiBatchCount = guest;
++    teb32->WowTebOffset = -IOS_WOW64_TEB_OFFSET;
++    teb->Tib.ExceptionList = (void *)teb32;
++    teb->WowTebOffset = IOS_WOW64_TEB_OFFSET;
++}
++
++/* Bootstrap scalar fields only. Loader, heap, image, parameters and other
++ * pointer fields stay NULL until their window-backed setup is implemented.
++ * Never lend the i386 child the session's native heap or loader structures.
++ */
++static void ios_wow64_init_peb32( PEB32 *dst, const PEB *src,
++                                 const SECTION_IMAGE_INFORMATION *image )
++{
++    dst->BeingDebugged = src->BeingDebugged;
++    dst->NumberOfProcessors = src->NumberOfProcessors;
++    dst->NtGlobalFlag = src->NtGlobalFlag;
++    dst->OSMajorVersion = src->OSMajorVersion;
++    dst->OSMinorVersion = src->OSMinorVersion;
++    dst->OSBuildNumber = src->OSBuildNumber;
++    dst->OSPlatformId = src->OSPlatformId;
++    dst->ImageSubSystem = image->SubSystemType;
++    dst->ImageSubSystemMajorVersion = image->MajorSubsystemVersion;
++    dst->ImageSubSystemMinorVersion = image->MinorSubsystemVersion;
++    dst->SessionId = src->SessionId;
++}
++
++#endif
+-- 
+2.55.0
+

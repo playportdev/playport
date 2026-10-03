@@ -14,6 +14,8 @@ OWNER_PATCH = REPO / "patches/madeira-unix/0050-ntdll-isolate-child-startup-imag
 IDENTITY_PATCH = REPO / "patches/wine-unix/0008-ntdll-query-owner-WoW64-identity-on-iOS.patch"
 VIEWS_HEADER = "build/ntdll-unix/wow64_views.h"
 VIEWS_PATCH = REPO / "patches/madeira-unix/0051-ntdll-suballocate-owned-WoW64-window-views.patch"
+PAIR_HEADER = "build/ntdll-unix/wow64_pair.h"
+PAIR_PATCH = REPO / "patches/madeira-unix/0052-ntdll-bootstrap-owner-local-window-backed-TEB-pairs.patch"
 
 
 def patched_function(patch, signature):
@@ -80,6 +82,17 @@ def main():
                         "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/views_test.c"), "-o", str(views_exe)], check=True)
         subprocess.run([str(views_exe)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", f"--include={PAIR_HEADER}",
+                        str(PAIR_PATCH)], check=True)
+        (root / "pair_api.h").write_text(
+            patched_function(PAIR_PATCH, "static NTSTATUS ios_wow64_pair_initial_teb( unsigned int slot )") +
+            patched_function(PAIR_PATCH, "static BOOL ios_wow64_restore_initial_teb( unsigned int slot )"))
+        pair_exe = root / "pair-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / PAIR_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/pair_test.c"), "-o", str(pair_exe)], check=True)
+        subprocess.run([str(pair_exe)], check=True)
     return 0
 
 
