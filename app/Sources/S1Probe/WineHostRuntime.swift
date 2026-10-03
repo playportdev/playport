@@ -12,6 +12,10 @@ import WineHost
 // SharedMemory transport or dev broker; explicitly retain the ordinary mmap.
 @_cdecl("playport_memory_backing")
 func playportMemoryBackingDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt, _ protection: Int32) -> Int32 { 0 }
+@_cdecl("playport_guest_memory_backing")
+func playportGuestMemoryBackingDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt) -> Int32 { 0 }
+@_cdecl("playport_guest_memory_released")
+func playportGuestMemoryReleasedDisabled(_ bytes: UInt) {}
 #endif
 
 /// The app process's one Wine session (decisions 0027, 0030). A Play acquires

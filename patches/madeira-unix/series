@@ -48,3 +48,4 @@
 0047-ntdll-time-the-wineserver-requests-only-while-the-co.patch
 0048-wineserver-back-off-the-retry-of-a-hold-deferred-for.patch
 0049-virtual-allow-host-backing-for-committed-FEX-data.patch
+0050-virtual-back-bounded-fresh-guest-data-through-the-host.patch
