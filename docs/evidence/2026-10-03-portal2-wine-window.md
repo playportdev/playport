@@ -19,8 +19,11 @@ relocation kernel, not yet exercised on the phone. Explicit native host-window
 pointers now route to owner-checked anonymous VM operations; parameter
 allocation uses that path on the phone. Guest-constrained NULL requests now
 search owner-local gaps, with guest limits/zero-bits and top-down selection;
-parameter allocation validates the NULL path on the phone. Decommit/release/
-reuse and top-down/collision placement are host-tested only. Startup explicitly stops
+parameter allocation validates the NULL path on the phone. Native
+`MemoryBasicInformation` now reports owner-local logical regions with host
+pointers; normal parameter bootstrap validates its storage through this query
+on the phone. Other query cases, decommit/release/reuse and top-down/collision
+placement are host-tested only. Startup explicitly stops
 before the unwired native WoW64-loader paths. **No i386 code executes. Step 2
 and milestone 1 are not complete.**
 
@@ -611,6 +614,111 @@ Swift packages); `pp slots` passes (150 slots, 149 calls). Source
 (the latter reports no tree rebuilds). Logs/screenshots remain under
 `.work/portal2-gap` and `.work/ui-runs/`.
 
+## Native basic-query follow-up (same step)
+
+Source at build: `fb4516d` plus madeira-unix 0058 and host tests.
+Scratch source commit:
+`a16cfc63365d6e86a43d00a7553086fdca8ddd13`,
+`.work/portal2-query/source`.
+Dev IPA: `.work/out/20261003-152911-988968b0/Playport-26.5-988968b0.ipa`.
+SHA256: `988968b0d888f81df71b2ffcfefbafaa74ef477e52b2bae2d6b916475f98c043`.
+Only `libntdll_unix.a` changes in `app/artifacts.tsv`; pins, PE manifests,
+FEX and DXMT remain unchanged.
+
+**madeira-unix 0058** implements native **host-address** basic queries, not
+PE32 pointer conversion or section mapping:
+
+- Intercept `NtQueryVirtualMemory` before JIT reverse translation/low aliases;
+  gate the internal/APC basic-info filler too. Select the registered window by
+  address, check current TEB->PEB ownership and current-process handle, then hold
+  registry -> virtual locks through lookup/output. Foreign/missing owners and
+  remote window-address requests get `STATUS_ACCESS_DENIED`, not native/global
+  view results. These queries are not signal-safe.
+- Round `BaseAddress` to Wine's logical 4 KiB page. Return a forward region to
+  the next state/logical protection change or allocation/window edge, never
+  merge distinct allocations. Original `AllocationProtect` and allocation base
+  survive commit/decommit/protect splitting. Logical EXEC remains visible even
+  though physical storage is NX. Guard/writecopy/cache flags remain logical;
+  writewatch/guest-RO bookkeeping does not split otherwise identical results.
+  Reserved pages report Protect=0. Images are `MEM_IMAGE`; bootstrap/anonymous
+  views are `MEM_PRIVATE`.
+- Free holdbacks report `MEM_FREE`, NULL allocation base, zero allocation
+  protection/type and Wine's native free-region `PAGE_NOACCESS`; adjacent free
+  descriptors merge. The low 64 KiB is separately `MEM_RESERVE`, allocation
+  base B, allocation protection `PAGE_NOACCESS`, Protect=0, `MEM_PRIVATE`.
+  It cannot merge with allocatable free space. Every region stays below B+4G.
+  Missing/out-of-window/corrupt descriptors fail without publishing partial info.
+- Success writes exactly the native basic-info structure and, when supplied,
+  its return length. Short buffers, NULL output, unsupported classes and other
+  failures leave caller output/return length unchanged. Other window-address
+  classes return `STATUS_NOT_SUPPORTED`. Local WorkingSetEx arrays containing
+  any window address are rejected before attributes are cleared, even when the
+  API's addr is NULL/native. The unchanged native remote WorkingSetEx path
+  rejects the class without reading its array. Non-window queries fall through.
+- Normal bootstrap queries the parameter allocation **before** packing/publishing
+  it; require the expected allocation base, committed private RW region and
+  native return length. Query failure/mismatch rolls back the unpublished
+  allocation. This is normal validation, not a mode, UI action or test title.
+  The existing fail-closed native-loader boundary is unchanged.
+
+`build/wow64/query_test.c` compiles the actual new header and extracted router,
+reusing the production VM helpers under UBSan. Real mappings and mutexes back
+**mock Wine view/page metadata, owner identity, protection conversion and layouts**.
+It covers owners/remote handles, 4 KiB forward-region rounding, low guard,
+coalesced/adjacent holes, reserve/partial commit/protect/decommit/recommit,
+separate allocations, image/bootstrap/private types, logical EXEC/guard/writecopy/
+cache and ignored bookkeeping, region/window edges, missing/corrupt descriptors,
+all short lengths, NULL/optional outputs, untouched failure outputs, WorkingSetEx
+arrays, non-window fall-through and concurrent query/protection changes. The
+bootstrap fixture seeds page bytes because the reused splitter mock only counts
+its metadata updates. The parameter-publication test mocks query replies and
+checks query failure/mismatch rollback; it is not a second query implementation.
+Extracted query/router/parameter functions and the query header match built
+production source byte-for-byte (`.work/portal2-query/extraction.log`). Tests do
+not execute Wine's rbtree, wineserver/APC delivery, Mach faults, alias translation,
+PE thunks, full Wine layouts or concurrent teardown. The iOS build compiles real
+layouts; the Portal 2 Play exercises the actual native entry/core/private query.
+
+The final phone-lock session installed in place and ran both titles, continuing
+past Portal 2's expected exit 1 only after its query and retained boundary were
+confirmed. Battery was **52%, externally powered and charging**. Both result
+events name the SHA256 above. Commands retained the existing UI entry:
+
+```sh
+./pp install --no-build --ipa .work/out/20261003-152911-988968b0/Playport-26.5-988968b0.ipa
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-query-final
+./pp ui --play app-367520 --until first-frame+10 --shot --out .work/ui-runs/portal2-query-final-hk
+```
+
+- **Portal 2:** B=`0x7038010000`, guest image `0x400000`, transfer `0x4017d1`.
+  `[wow64-query]` reports host/allocation `0x7038020000`, size `0x4000`,
+  `state=0x1000 protect=0x4 allocation_protect=0x4 type=0x20000 returned=48
+  validated=1`. Parameters still publish guest `0x10000`, command `0x104e8`,
+  environment `0x10568` (5,670 bytes); loader/heap remain NULL. Startup stops
+  at `STATUS_NOT_SUPPORTED` (`c00000bb`), restores the original TEB and releases
+  the window. UI result `launch=failed run_exe=-7`, exit 1. Screenshot
+  `screen-stop.png` shows **Portal 2 could not start**, JIT/Runtime passed and
+  Game failed. **No i386 execution, DLL loading, or phone validation of other
+  query regions, protection changes, holes or image-query type is claimed.**
+- **Hollow Knight:** exit 0, `first-frame+10`, first frame **10.01 s**, JIT
+  **2.61 s**. Pool exhaustion, FEX-band refusals and runtime-limit counters
+  remain zero. The captured `screen-stop.png` is **black**, not a menu image:
+  this run proves the logged first-frame milestone and continued run, not visual
+  menu/gameplay correctness.
+
+`pp test` full passes (483 Python tests, all C tests including nine WoW64 UBSan
+executables, all three Swift packages); `pp build` and explicit `pp verify`
+pass 77 IPA checks; `pp slots` passes (150 slots, 149 calls). Source
+`git show --check`, non-patch `git diff --check` and the new test's whitespace
+check pass; final `pp names` and `pp secrets` are clean. `pp build --plan`
+reports no tree rebuilds. Final logs are under `.work/portal2-query/`:
+`host-final.log`, `test-final.log`, `build-final.log`, `verify-final.log`,
+`slots-final.log`, `plan-final.log`, `phone-final.log`. Screenshots/logs stay
+in the run directories.
+An earlier development IPA/run in `.work/ui-runs/portal2-query*` was superseded
+by these final results after preserving remote WorkingSetEx buffer handling.
+**Step 2 and milestone 1 remain in progress.**
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -653,13 +761,13 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: query and section/image VM routing, then remaining
-PEB32 loader/heap initialization and phone validation of nonzero image
-relocations when the loader can reach an image needing them. Explicit
+Next in this same step: section/image VM routing and remaining query classes,
+then remaining PEB32 loader/heap initialization and phone validation of nonzero
+image relocations when the loader can reach an image needing them. Explicit
 host-pointer anonymous VM release/reuse and guest-constrained NULL allocation
-exist; PE-facing constraint/pointer/return conversion and the other VM paths
-do not. Only the initial
-TEB is paired. General paired thread allocation, reuse/free and multi-thread
+exist, as do native host-pointer basic queries; PE-facing constraint/pointer/
+return conversion (including query results) and the other VM paths do not.
+Only the initial TEB is paired. General paired thread allocation, reuse/free and multi-thread
 teardown are pending, and secondary WoW64 threads are explicitly rejected.
 Remove the fail-closed startup boundary only after its downstream paths are
 wired. WoW64 identity is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation

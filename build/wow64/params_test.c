@@ -16,6 +16,7 @@
 #define STATUS_INVALID_PARAMETER 0xc000000du
 #define STATUS_NOT_SUPPORTED 0xc00000bbu
 #define STATUS_NO_MEMORY 0xc0000017u
+#define STATUS_INVALID_ADDRESS 0xc0000141u
 #define HandleToULong(h) ((uint32_t)(uintptr_t)(h))
 typedef uint32_t NTSTATUS;
 typedef uint16_t WCHAR;
@@ -63,6 +64,16 @@ typedef struct {
 typedef struct { uint32_t Peb; } TEB32;
 typedef struct { PEB *Peb; } TEB;
 typedef int BOOL;
+typedef size_t SIZE_T;
+typedef struct {
+    void *BaseAddress, *AllocationBase;
+    uint32_t AllocationProtect;
+    size_t RegionSize;
+    uint32_t State, Protect, Type;
+} MEMORY_BASIC_INFORMATION;
+#define MemoryBasicInformation 0
+#define MEM_PRIVATE 0x20000
+static int query_fail, query_bad, release_calls;
 static TEB current;
 static TEB32 pair;
 static uintptr_t active_window;
@@ -87,10 +98,24 @@ static NTSTATUS NtAllocateVirtualMemory(void *process, void **host, uintptr_t ze
     assert(!mprotect(*host, *size, PROT_READ | PROT_WRITE));
     return 0;
 }
+/* Publication tests mock the query response; query_test.c separately compiles
+ * and tests the actual query core/router with the real VM helper allocation. */
+static NTSTATUS NtQueryVirtualMemory(void *process, const void *host, int cls,
+                                    MEMORY_BASIC_INFORMATION *info, size_t len, size_t *returned)
+{
+    assert(process == NtCurrentProcess() && cls == MemoryBasicInformation && len == sizeof(*info));
+    if (query_fail) return STATUS_NO_MEMORY;
+    *info = (MEMORY_BASIC_INFORMATION){(void *)host, (void *)host, PAGE_READWRITE,
+                                      len + IOS_WOW64_PARAMS_MAX, MEM_COMMIT, PAGE_READWRITE, MEM_PRIVATE};
+    if (query_bad) info->Type = 0;
+    *returned = sizeof(*info);
+    return 0;
+}
 static NTSTATUS NtFreeVirtualMemory(void *process, void **host, size_t *size, unsigned int type)
 {
     assert(process == NtCurrentProcess() && !*size && type == MEM_RELEASE);
     assert(*host == (void *)ios_wow64_host_addr(active_window, TEST_PARAMS_GUEST));
+    release_calls++;
     return 0;
 }
 /* Suppress diagnostic output only; the extracted publication function is unchanged. */
@@ -186,6 +211,13 @@ int main(void)
     assert(ios_wow64_init_parameters(&owner, a, &src, 1) == STATUS_NO_MEMORY);
     assert(!p32->ProcessParameters);
     alloc_fail = 0;
+    query_fail = 1;
+    assert(ios_wow64_init_parameters(&owner, a, &src, 1) == STATUS_NO_MEMORY);
+    assert(!p32->ProcessParameters && release_calls == 1);
+    query_fail = 0; query_bad = 1;
+    assert(ios_wow64_init_parameters(&owner, a, &src, 1) == STATUS_INVALID_ADDRESS);
+    assert(!p32->ProcessParameters && release_calls == 2);
+    query_bad = 0;
     assert(!ios_wow64_init_parameters(&owner, a, &src, 1));
     assert(p32->ProcessParameters == TEST_PARAMS_GUEST && p32->ImageBaseAddress == 0x400000);
     assert(p32->BeingDebugged == 1 && p32->NtGlobalFlag == 0x123 && p32->NumberOfProcessors == 6);

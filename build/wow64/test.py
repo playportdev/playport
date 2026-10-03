@@ -23,6 +23,7 @@ PARAMS_PATCH = REPO / "patches/madeira-unix/0054-ntdll-build-owner-local-window-
 PLACEMENT_PATCH = REPO / "patches/madeira-unix/0055-ntdll-place-and-relocate-i386-images-in-guest-space.patch"
 VM_PATCH = REPO / "patches/madeira-unix/0056-ntdll-route-owned-window-anonymous-VM-operations.patch"
 GAP_PATCH = REPO / "patches/madeira-unix/0057-ntdll-allocate-guest-constrained-VM-in-owner-local-gaps.patch"
+QUERY_PATCH = REPO / "patches/madeira-unix/0058-ntdll-query-owner-local-WoW64-window-memory.patch"
 
 
 def patched_function(patch, signature):
@@ -160,7 +161,7 @@ def main():
         subprocess.run(["git", "-C", tmp, "apply", f"--include={PARAMS_HEADER}",
                         str(GAP_PATCH)], check=True)
         (root / "params_api.h").write_text(
-            evolved_function(PARAMS_PATCH, [VM_PATCH, GAP_PATCH], "static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,"))
+            evolved_function(PARAMS_PATCH, [VM_PATCH, GAP_PATCH, QUERY_PATCH], "static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,"))
         params_exe = root / "params-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-fsanitize=undefined", "-fno-sanitize-recover=all",
@@ -191,6 +192,16 @@ def main():
                         "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/vm_test.c"), "-o", str(vm_exe)], check=True)
         subprocess.run([str(vm_exe)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_query.h",
+                        str(QUERY_PATCH)], check=True)
+        (root / "query_api.h").write_text(
+            patched_function(QUERY_PATCH, "static BOOL ios_wow64_route_query( HANDLE process, const void *addr,"))
+        query_exe = root / "query-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/query_test.c"), "-o", str(query_exe)], check=True)
+        subprocess.run([str(query_exe)], check=True)
     return 0
 
 

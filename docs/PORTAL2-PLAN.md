@@ -247,14 +247,29 @@ with **no i386 execution**. Top-down/collision selection and other limits are
 host-tested, not phone-validated. Hollow Knight passes `first-frame+10`
 (9.26 s first frame, menu visible); details remain in the step-2 evidence record.
 
-**Next, still step 2:** query/section/image VM routing, then the remaining
-PEB32 loader/heap initialization; validate nonzero image relocation on the
-phone when the loader can reach an image needing it. Native VM returns
+**Native basic-query follow-up, 2026-10-03:** madeira-unix 0058 routes native
+host-window `MemoryBasicInformation` through owner checks under registry then
+virtual locking. Logical state/protection/type, allocation identity, forward
+regions, free holdbacks and the reserved low guard stay window-bounded; results
+remain **host pointers**. Unsupported window query classes fail closed, including
+local WorkingSetEx arrays containing window addresses. Normal parameter bootstrap
+validates its allocation through `NtQueryVirtualMemory` before publication, and
+Portal 2's phone log confirms a private/RW/committed 16 KiB region and 48-byte
+return. Startup still stops before the loader (`c00000bb`), with **no i386
+execution**. Other query cases are host-tested with mock Wine metadata. Hollow
+Knight passes `first-frame+10` (10.01 s first frame); its captured screenshot is
+black, not visual evidence of a menu. Details and the latest IPA remain in the
+same step-2 evidence record.
+
+**Next, still step 2:** section/image VM routing and remaining query classes,
+then the remaining PEB32 loader/heap initialization; validate nonzero image
+relocation on the phone when the loader can reach an image needing it. Native VM returns
 **host** pointers: raw guest pointers are not converted, and NULL requests
 without a guest constraint (or with a wider native constraint) still use the
 native allocator. PE-facing constraint/return conversion remains unwired.
-Ex window allocations, special protections/types, partial release and
-bootstrap/image free are refused. Only the initial TEB is paired;
+PE-facing query-result conversion is also pending. Ex window allocations,
+special protections/types, partial release and bootstrap/image free are refused.
+Only the initial TEB is paired;
 secondary WoW64 thread allocation explicitly returns `STATUS_NOT_SUPPORTED`.
 The legacy `wow_peb`,
 TEB free lists and WoW64 limits remain global but this bootstrap does not

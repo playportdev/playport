@@ -126,7 +126,11 @@ static void inaccessible(void *addr, int execute)
     assert(waitpid(child, &status, 0) == child);
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
 }
+#ifdef WOW64_VM_HELPERS_ONLY
+int vm_test_main(void)
+#else
 int main(void)
+#endif
 {
     struct rlimit core = {0, 0};
     assert(!setrlimit(RLIMIT_CORE, &core));

@@ -1,0 +1,250 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 15:15:26 +0200
+Subject: [PATCH] ntdll: query owner-local WoW64 window memory
+
+Report logical native MemoryBasicInformation before native alias/global routing. Keep host pointers, guard and free holdbacks bounded, allocation identity and page protection/state runs intact. Reject unsupported window classes, including WorkingSetEx input arrays. Validate parameter storage through the normal query entry before publication.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no (iOS pseudo-process window integration)
+---
+ build/ntdll-unix/env_ios.c     | 20 +++++++-
+ build/ntdll-unix/virtual_ios.c | 65 +++++++++++++++++++++++++
+ build/ntdll-unix/wow64_query.h | 86 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 170 insertions(+), 1 deletion(-)
+ create mode 100644 build/ntdll-unix/wow64_query.h
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 7baf98d..33037df 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -1981,6 +1981,8 @@ static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,
+     size_t size;
+     uint32_t guest;
+     NTSTATUS status;
++    MEMORY_BASIC_INFORMATION info;
++    SIZE_T returned = 0;
+ 
+     if (!owner || owner != NtCurrentTeb()->Peb || !teb32 ||
+         !(p32 = (PEB32 *)ios_wow64_host_addr( window, teb32->Peb )) || p32->ProcessParameters)
+@@ -1994,13 +1996,29 @@ static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,
+      * Unconstrained native allocations must stay outside the window. */
+     if ((status = NtAllocateVirtualMemory( NtCurrentProcess(), &host, UINT32_MAX, &size,
+                                           MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))) return status;
+-    if ((status = ios_wow64_pack_params( window, params, host, size, &guest )))
++    /* Verify the owned allocation before writing/publishing guest parameters.
++     * This is normal bootstrap validation through the native query entry, not
++     * a probe mode. A mismatch fails closed and releases the unpublished view. */
++    status = NtQueryVirtualMemory( NtCurrentProcess(), host, MemoryBasicInformation,
++                                   &info, sizeof(info), &returned );
++    if (!status && (returned != sizeof(info) || info.BaseAddress != host ||
++                   info.AllocationBase != host || info.RegionSize < size ||
++                   info.State != MEM_COMMIT || info.Type != MEM_PRIVATE ||
++                   info.Protect != PAGE_READWRITE || info.AllocationProtect != PAGE_READWRITE))
++        status = STATUS_INVALID_ADDRESS;
++    if (!status) status = ios_wow64_pack_params( window, params, host, size, &guest );
++    if (status)
+     {
+         size_t release_size = 0;
+         NTSTATUS release = NtFreeVirtualMemory( NtCurrentProcess(), &host, &release_size, MEM_RELEASE );
+         if (release) dprintf(2, "[wow64-vm] parameter rollback failed status=%x\n", release);
+         return status;
+     }
++    dprintf(2, "[wow64-query] parameters host=%p allocation=%p bytes=%#lx state=%#x "
++               "protect=%#x allocation_protect=%#x type=%#x returned=%lu validated=1\n",
++            info.BaseAddress, info.AllocationBase, (unsigned long)info.RegionSize,
++            (unsigned int)info.State, (unsigned int)info.Protect,
++            (unsigned int)info.AllocationProtect, (unsigned int)info.Type, (unsigned long)returned );
+     p32->BeingDebugged = debugged;
+     p32->NumberOfProcessors = owner->NumberOfProcessors;
+     p32->NtGlobalFlag = owner->NtGlobalFlag;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 4896532..92bd990 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -13789,6 +13789,7 @@ static IMAGE_DATA_DIRECTORY *get_data_dir( IMAGE_NT_HEADERS *nt, SIZE_T total_si
+ #include "wow64_image.h"
+ #include "wow64_placement.h"
+ #include "wow64_vm.h"
++#include "wow64_query.h"
+ 
+ 
+ /***********************************************************************
+@@ -15248,6 +15249,62 @@ static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **a
+     return routed;
+ }
+ 
++/* Intercept before native/JIT/low-alias query paths. WorkingSetEx addresses
++ * are in the input array, not just addr; reject a mixed array atomically before
++ * the native helper zeros attributes or walks the global view tree. */
++static BOOL ios_wow64_route_query( HANDLE process, const void *addr,
++                                   MEMORY_INFORMATION_CLASS info_class, void *buffer,
++                                   SIZE_T len, SIZE_T *res_len, NTSTATUS *status )
++{
++    unsigned int i;
++    SIZE_T j;
++    BOOL routed = FALSE;
++    void *owner = ios_jit_current_peb();
++    sigset_t sigset;
++    uintptr_t value = (uintptr_t)addr;
++
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        uintptr_t base = ios_wow64_windows[i].base;
++        BOOL inside;
++        if (!ios_wow64_windows[i].owner) continue;
++        inside = value >= base && value - base < IOS_WOW64_WINDOW_SIZE;
++        /* The native remote WorkingSetEx path rejects the class before reading
++         * its buffer. Preserve that behavior for non-window addr arguments. */
++        if (!inside && process == NtCurrentProcess() &&
++            info_class == MemoryWorkingSetExInformation && buffer)
++        {
++            const MEMORY_WORKING_SET_EX_INFORMATION *entries = buffer;
++            for (j = 0; j < len / sizeof(*entries); j++)
++            {
++                uintptr_t entry = (uintptr_t)entries[j].VirtualAddress;
++                if (entry >= base && entry - base < IOS_WOW64_WINDOW_SIZE)
++                {
++                    inside = TRUE;
++                    break;
++                }
++            }
++        }
++        if (!inside) continue;
++        routed = TRUE;
++        if (process != NtCurrentProcess() || owner != ios_wow64_windows[i].owner)
++            *status = STATUS_ACCESS_DENIED;
++        else if (info_class != MemoryBasicInformation) *status = STATUS_NOT_SUPPORTED;
++        else if (len < sizeof(MEMORY_BASIC_INFORMATION)) *status = STATUS_INFO_LENGTH_MISMATCH;
++        else
++        {
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            *status = ios_wow64_query_basic( base, addr, buffer );
++            if (!*status && res_len) *res_len = sizeof(MEMORY_BASIC_INFORMATION);
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        }
++        break;
++    }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return routed;
++}
++
+ static void ios_wow64_delete_views( uintptr_t base )
+ {
+     struct file_view *view;
+@@ -20946,6 +21003,12 @@ static unsigned int fill_basic_memory_info( const void *addr, MEMORY_BASIC_INFOR
+     BOOL fake_reserved;
+     sigset_t sigset;
+ 
++#ifdef WINE_IOS
++    NTSTATUS status;
++    /* APC/internal callers must obey the same owner check as NtQuery. */
++    if (ios_wow64_route_query( NtCurrentProcess(), addr, MemoryBasicInformation,
++                              info, sizeof(*info), NULL, &status )) return status;
++#endif
+     base = ROUND_ADDR( addr, page_mask );
+ 
+     if (is_beyond_limit( base, 1, working_set_limit )) return STATUS_INVALID_PARAMETER;
+@@ -21415,6 +21478,8 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+     NTSTATUS status;
+ 
+ #ifdef WINE_IOS
++    if (ios_wow64_route_query( process, addr, info_class, buffer, len, res_len, &status ))
++        return status;
+     /* PE code in JIT pool computes addresses via ADRP relative to JIT PC.
+      * Translate JIT addresses back to original PE addresses for VM queries. */
+     addr = ios_jit_reverse_translate_addr(addr);
+diff --git a/build/ntdll-unix/wow64_query.h b/build/ntdll-unix/wow64_query.h
+new file mode 100644
+index 0000000..d2b90ac
+--- /dev/null
++++ b/build/ntdll-unix/wow64_query.h
+@@ -0,0 +1,86 @@
++/* Native MemoryBasicInformation for an owned i386 window.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included after Wine's view/page helpers. Registry then virtual_mutex must
++ * remain held: neither the view tree nor the selected owner may change.
++ */
++#ifndef IOS_WOW64_QUERY_H
++#define IOS_WOW64_QUERY_H
++
++static struct file_view *ios_wow64_query_view( uintptr_t window, uintptr_t addr )
++{
++    struct file_view *view = find_view( (void *)addr, 1 );
++    uintptr_t start;
++    if (!view) return NULL;
++    start = (uintptr_t)view->base;
++    if (start < window || start - window >= IOS_WOW64_WINDOW_SIZE ||
++        (start & page_mask) || !view->size || (view->size & page_mask) ||
++        view->size > IOS_WOW64_WINDOW_SIZE - (start - window)) return NULL;
++    return view;
++}
++
++/* Return the forward region from the Wine-page-rounded query, not the start
++ * of an earlier equal-protection run. Allocations never merge across views;
++ * free holdbacks do, regardless of how their descriptors were split. The low
++ * 64 KiB is a distinct reserved/no-access guard, not allocatable free space.
++ * Use logical page bytes, not host protections (i386 EXEC is native NX).
++ */
++static NTSTATUS ios_wow64_query_basic( uintptr_t window, const void *addr,
++                                     MEMORY_BASIC_INFORMATION *info )
++{
++    MEMORY_BASIC_INFORMATION result = {0};
++    struct file_view *view;
++    uintptr_t base = (uintptr_t)addr & ~(uintptr_t)page_mask, end, pos;
++    unsigned int vprot, next;
++
++    if (!info) return STATUS_ACCESS_VIOLATION;
++    if (!ios_wow64_valid_base( window ) || base < window ||
++        base - window >= IOS_WOW64_WINDOW_SIZE) return STATUS_INVALID_PARAMETER;
++    if (!(view = ios_wow64_query_view( window, base ))) return STATUS_INVALID_ADDRESS;
++    end = (uintptr_t)view->base + view->size;
++    result.BaseAddress = (void *)base;
++    if (base - window < IOS_WOW64_NULL_GUARD)
++    {
++        if (view->protect != VPROT_WOW64_HOLE || end < window + IOS_WOW64_NULL_GUARD)
++            return STATUS_INVALID_ADDRESS;
++        end = window + IOS_WOW64_NULL_GUARD;
++        result.AllocationBase = (void *)window;
++        result.AllocationProtect = PAGE_NOACCESS;
++        result.State = MEM_RESERVE;
++        result.Type = MEM_PRIVATE;
++    }
++    else if (view->protect == VPROT_WOW64_HOLE)
++    {
++        result.State = MEM_FREE;
++        result.Protect = PAGE_NOACCESS; /* match Wine's native free-region result */
++        while (end < window + IOS_WOW64_WINDOW_SIZE)
++        {
++            if (!(view = ios_wow64_query_view( window, end ))) return STATUS_INVALID_ADDRESS;
++            if (view->protect != VPROT_WOW64_HOLE) break;
++            end = (uintptr_t)view->base + view->size;
++        }
++    }
++    else
++    {
++        /* Section VM is not wired. Do not consult shared/global section state. */
++        if (!(view->protect & SEC_IMAGE) &&
++            (view->protect & (SEC_FILE | SEC_RESERVE | SEC_COMMIT))) return STATUS_NOT_SUPPORTED;
++        result.AllocationBase = view->base;
++        result.AllocationProtect = get_win32_prot( view->protect, view->protect );
++        result.Type = (view->protect & SEC_IMAGE) ? MEM_IMAGE : MEM_PRIVATE;
++        vprot = get_page_vprot( (void *)base );
++        result.State = (vprot & VPROT_COMMITTED) ? MEM_COMMIT : MEM_RESERVE;
++        result.Protect = (vprot & VPROT_COMMITTED) ? get_win32_prot( vprot, view->protect ) : 0;
++        for (pos = base + page_size; pos < end; pos += page_size)
++        {
++            next = get_page_vprot( (void *)pos );
++            if ((next ^ vprot) & VPROT_COMMITTED) break;
++            if ((next & VPROT_COMMITTED) &&
++                get_win32_prot( next, view->protect ) != result.Protect) break;
++        }
++        end = pos;
++    }
++    result.RegionSize = end - base;
++    *info = result; /* no partial output on a failed query */
++    return STATUS_SUCCESS;
++}
++#endif
