@@ -115,7 +115,19 @@ mark:…+5`) shows in `s1-host.log`:
 A Hollow Knight play to `first-frame+10` must still pass. No graphics and no
 menu are required yet.
 
-### Step 1: build the pieces (host only)
+### Step 1: build the pieces (done 2026-10-03)
+
+[Build and regression evidence](evidence/2026-10-03-portal2-runtime-build.md):
+625 i386 Wine DLLs/drivers, aarch64 `wow64.dll`, `wow64win.dll` and FEX's
+`xtajit.dll` are staged and verified. The dev IPA is 657,326,047 bytes;
+new runtime resources add 196,526,080 bytes (187.4 MiB). Hollow Knight reaches
+its first frame at 9.63 s and passes `first-frame+10`.
+
+**Build scaffolding, not working WoW64.** FEX's aarch64 configuration uses the
+mingw CRT link recipe but leaves `FEX_IOS_HOST` off: turning it on needs the
+module's missing JIT/alias/arena bindings from step 3, not dummy symbols.
+No Portal 2 play or i386 execution is claimed. **Next: step 2**, the per-process
+Wine window and conversion audit.
 
 - `build/stages/wine-pe.sh`: add `i386` to the aarch64 tree
   (`--enable-archs=i386,aarch64`). This adds a manifest

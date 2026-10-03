@@ -81,8 +81,8 @@ repository, with this build area: its inputs, caches and the phone's lock);
 | `inputs` | | tools and inputs checked, their versions in `run/logs/inputs.txt` |
 | `sources` | | `pins.lock` checked against the Madeira gitlinks; submodules initialised |
 | `unix` | `stages/unix.sh`, `stages/unix-gaps.sh`, `stages/gstreamer.sh` | `libntdll_unix.a`, `libwin32u_unix.a`, `libwineserver.a`, the crypto statics, `libwinegstreamer_unix.a` (winegstreamer's unix side prelinked with GStreamer's iOS release, cached under `cache/gstreamer-<version>/`) |
-| `pe` | `stages/wine-pe.sh`, `stages/wine-pe-strip.py` | the Wine PE DLL sets, `aarch64-windows` and `arm64ec-windows` (configure sees GStreamer's headers, so `winegstreamer.dll` is built). The app stages them from `pe/staged`, each image without its `.debug_*` sections: every image the runtime maps is copied whole into the JIT pool. The COFF symbol table stays (`pp perf --profile` symbolises from it); the full images stay in `pe/wine` |
-| `fex` | `stages/fex.sh` | `libarm64ecfex.dll`, shipped as `xtajit64.dll` |
+| `pe` | `stages/wine-pe.sh`, `stages/wine-pe-strip.py` | the Wine PE DLL sets, `i386-windows`, `aarch64-windows` and `arm64ec-windows` (the first two share the new-WoW64 `build-macos` tree; configure sees GStreamer's headers, so `winegstreamer.dll` is built). The app stages them from `pe/staged`, each image without its `.debug_*` sections: every image the runtime maps is copied whole into the JIT pool. The COFF symbol table stays (`pp perf --profile` symbolises from it); the full images stay in `pe/wine` |
+| `fex` | `stages/fex.sh` | `libarm64ecfex.dll`, shipped as `xtajit64.dll`, and aarch64 `libwow64fex.dll`, shipped as `xtajit.dll` (build-only WoW64 scaffolding; iOS execution is not ported yet) |
 | `dxmt` | `stages/dxmt-*.sh`, `air-helpers/` | DXMT's unix slice (`libdxmt_combined.a`) and PE DLLs, from one patched tree |
 | `vulkan` | `stages/mesa.sh`, `stages/vulkan-pe.sh` | the Vulkan backend (decision 0014): KosmicKrisp as `app/Staged/KosmicKrisp.xcframework`, DXVK and vkd3d-proton (with `patches/vkd3d-proton`) for `arm64ec-windows` |
 | `steamapi` | `stages/steamapi.sh` | the Steam API emulator: gbe_fork's `steam_api64.dll` and `steam_api.dll` with their static dependencies, a host `protoc` of the same protobuf release, and Abseil at its pin; native DLLs the app copies into a game's folder at launch (`Runtime/steamapi/`) |
@@ -106,9 +106,14 @@ not a failure, and what must hold:
   (`undefined symbol: #__chkstk_arm64ec`), which are not shipped. Any other
   `***` line is a real failure.
 - **fex.** `-stdlib=libc++` is mandatory (the `-gnu` default `-lstdc++` does
-  not exist in llvm-mingw); the DLL must read back as ARM64EC. Its debug
-  info, which only the locally rebuilt CRT carries, is stripped. Its build
-  date is its pin's commit time, so its row in `app/artifacts.tsv` stays put.
+  not exist in llvm-mingw); the DLLs must read back as ARM64EC (`xtajit64`)
+  and ARM64 (`xtajit`). Debug info is stripped. ARM64EC's build date is its
+  pin's commit time. WoW64 uses the same mingw CRT link recipe but does not
+  define `FEX_IOS_HOST` yet: its module lacks the iOS JIT/alias/arena bindings
+  ([Portal 2 step 3](PORTAL2-PLAN.md#step-3-fexs-wow64-module-on-ios-patchesfex)).
+  The complete built i386 DLL/driver set, excluding tests and programs, is
+  staged alongside aarch64 `wow64.dll` and `wow64win.dll`; neither packaging
+  nor the machine checks prove 32-bit execution works.
 - **dxmt.** The unix slice and the PE DLLs must come from the same patched
   tree: the winemetal unix-call table has 150 slots (upstream's, then the
   port's 146-149), and a DLL next to another tree's table calls the wrong
