@@ -62,3 +62,4 @@
 0061-ntdll-start-the-WoW64-child-s-native-loader.patch
 0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch
 0063-ntdll-give-a-windowed-WoW64-child-its-32-bit-limits-.patch
+0064-ntdll-alias-the-GDI-shared-handle-table-into-a-WoW64.patch

@@ -1,4 +1,4 @@
-From 9142afa72c9fec4fd8960671f95af503927b288d Mon Sep 17 00:00:00 2001
+From e5951ae7be53a85074157d73a03838b2d2aca403 Mon Sep 17 00:00:00 2001
 From: Playport <dev@playport.invalid>
 Date: Sat, 3 Oct 2026 20:42:23 +0200
 Subject: [PATCH] wow64: convert guest pointers through the iOS guest window
@@ -25,22 +25,22 @@ and the guest gets 0.
 
 wow64win.dll does not convert yet: a guest win32u call ends the
 process with STATUS_NOT_SUPPORTED. Failed guest system calls, the
-guest's NtTerminateProcess and the images it maps (by the name its
-loader passes) are logged.
+guest's NtTerminateProcess with its last 32 calls and callbacks, and
+the images it maps (by the name its loader passes) are logged.
 
 Class: feature
 Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
 Offered-upstream: no; the window exists only on the iOS port
 ---
- dlls/wow64/process.c       |  44 +++++++------
- dlls/wow64/security.c      |  16 ++---
- dlls/wow64/sync.c          |  12 ++--
- dlls/wow64/syscall.c       | 124 +++++++++++++++++++++++++++----------
+ dlls/wow64/process.c       |  44 ++++++-----
+ dlls/wow64/security.c      |  16 ++--
+ dlls/wow64/sync.c          |  12 +--
+ dlls/wow64/syscall.c       | 153 +++++++++++++++++++++++++++++--------
  dlls/wow64/system.c        |   2 +-
- dlls/wow64/virtual.c       |  64 +++++++++++--------
- dlls/wow64/wow64_private.h |  67 ++++++++++++++------
- dlls/wow64/wow64_window.h  |  69 +++++++++++++++++++++
- 8 files changed, 286 insertions(+), 112 deletions(-)
+ dlls/wow64/virtual.c       |  64 +++++++++-------
+ dlls/wow64/wow64_private.h |  67 +++++++++++-----
+ dlls/wow64/wow64_window.h  |  69 +++++++++++++++++
+ 8 files changed, 315 insertions(+), 112 deletions(-)
  create mode 100644 dlls/wow64/wow64_window.h
 
 diff --git a/dlls/wow64/process.c b/dlls/wow64/process.c
@@ -331,7 +331,7 @@ index d5b52a5c815..dcee554191d 100644
              info32->Size        = info.Size;
              ret_size = sizeof(*info32);
 diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
-index d6fea09cec8..59e31f81be4 100644
+index d6fea09cec8..501a2bc663b 100644
 --- a/dlls/wow64/syscall.c
 +++ b/dlls/wow64/syscall.c
 @@ -90,6 +90,9 @@ struct user_apc_frame
@@ -528,7 +528,38 @@ index d6fea09cec8..59e31f81be4 100644
              ctx.Pc = pLdrSystemDllInitBlock->pLdrInitializeThunk;
              pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
          }
-@@ -1210,8 +1250,28 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
+@@ -1196,6 +1236,30 @@ __ASM_GLOBAL_FUNC( wow64_syscall_handler,
+ #endif
+ 
+ 
++/* Playport (iOS): the guest's last system calls and user callbacks, which
++ * its NtTerminateProcess logs: the calls that led to a guest-side failure. */
++static struct { ULONG num; NTSTATUS status; } recent_calls[32];
++static LONG recent_count;
++
++static void record_call( ULONG num, NTSTATUS status )
++{
++    LONG i = InterlockedIncrement( &recent_count ) - 1;
++
++    recent_calls[i % ARRAY_SIZE(recent_calls)].num = num;
++    recent_calls[i % ARRAY_SIZE(recent_calls)].status = status;
++}
++
++static void log_recent_calls(void)
++{
++    LONG i, end = recent_count, start = max( 0, end - (LONG)ARRAY_SIZE(recent_calls) );
++
++    for (i = start; i < end; i++)
++        ERR( "Playport: recent i386 %s %04lx -> %08lx\n",
++             recent_calls[i % ARRAY_SIZE(recent_calls)].num & 0x10000 ? "callback" : "call",
++             recent_calls[i % ARRAY_SIZE(recent_calls)].num & 0xffff,
++             recent_calls[i % ARRAY_SIZE(recent_calls)].status );
++}
++
+ /**********************************************************************
+  *           Wow64SystemServiceEx  (wow64.@)
+  */
+@@ -1210,8 +1274,32 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
          ERR( "unsupported syscall %04x\n", num );
          return STATUS_INVALID_SYSTEM_SERVICE;
      }
@@ -542,9 +573,13 @@ index d6fea09cec8..59e31f81be4 100644
 +        NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
 +    }
 +    if (wow64_window_base && table->ServiceTable[id] == (ULONG_PTR)wow64_NtTerminateProcess)
++    {
 +        ERR( "Playport: i386 NtTerminateProcess( %08x, %08x )\n", args[0], args[1] );
++        log_recent_calls();
++    }
      status = wow64_syscall( args, table->ServiceTable[id] );
      free_temp_data();
++    if (wow64_window_base) record_call( num, status );
 +    if (wow64_window_base && NT_ERROR(status))
 +    {
 +        static LONG failed;
@@ -557,7 +592,7 @@ index d6fea09cec8..59e31f81be4 100644
      return status;
  }
  
-@@ -1333,7 +1393,7 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
+@@ -1333,7 +1421,7 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
  
              pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
  
@@ -566,7 +601,7 @@ index d6fea09cec8..59e31f81be4 100644
              stack->func      = arg1 >> 32;
              stack->arg1      = arg1;
              stack->arg2      = arg2;
-@@ -1347,7 +1407,7 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
+@@ -1347,7 +1435,7 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
              stack->xctx.XState.Offset = 25;
              stack->xctx.XState.Length = 0;
  
@@ -575,7 +610,7 @@ index d6fea09cec8..59e31f81be4 100644
              ctx.Eip = pLdrSystemDllInitBlock->pKiUserApcDispatcher;
              frame.wow_context = &stack->context;
              pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
-@@ -1366,12 +1426,12 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
+@@ -1366,12 +1454,12 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
              ARM_CONTEXT ctx = { CONTEXT_ARM_FULL };
  
              pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
@@ -591,7 +626,15 @@ index d6fea09cec8..59e31f81be4 100644
              ctx.R1 = arg1;
              ctx.R2 = arg2;
              ctx.R3 = arg3;
-@@ -1427,15 +1487,15 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
+@@ -1396,6 +1484,7 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
+     struct user_callback_frame frame;
+     USHORT flags = cpu->Flags;
+ 
++    if (wow64_window_base) record_call( 0x10000 | id, 0 );
+     frame.prev_frame = NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA];
+     frame.temp_list  = NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST];
+     frame.ret_ptr    = ret_ptr;
+@@ -1427,15 +1516,15 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
              pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
              orig_ctx = ctx;
  
@@ -610,7 +653,7 @@ index d6fea09cec8..59e31f81be4 100644
              ctx.Eip = pLdrSystemDllInitBlock->pKiUserCallbackDispatcher;
              pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
  
-@@ -1454,13 +1514,13 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
+@@ -1454,13 +1543,13 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
              pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
              orig_ctx = ctx;
  

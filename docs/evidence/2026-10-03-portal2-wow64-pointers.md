@@ -2,23 +2,35 @@
 
 ## Result
 
-wow64.dll now converts the guest's pointers through the window base, so the
-i386 guest's system calls work. On the phone, Portal 2's i386 child gets past
-its first system call. The i386 ntdll's loader then loads the i386 `kernel32`,
-`kernelbase`, `user32`, `gdi32`, `advapi32`, `sechost`, `ucrtbase`, `msvcrt`
-and `win32u`, and maps its NLS tables into the window. It stops at its first
-win32u system call, `NtUserInitializeClientPfnArrays` (`0x147a`, user32's
-init), because wow64win.dll does not convert pointers yet. That is the new
-boundary (`c00000bb`).
+wow64.dll and the audited part of wow64win.dll now convert the guest's
+pointers through the window base. On the phone, Portal 2's i386 child gets
+through its i386 loader and user32's initialization and runs `portal2.exe`'s
+entry point: the launcher loads `bin\launcher.dll`, which loads `steam_api`,
+`tier0` and `vstdlib` among 36 i386 images. The child then ends with a guest
+access violation (`c0000005`). The cause is gdi32 reading a DC's
+attributes (`DC_ATTR`) through the handle table's `UserPointer`, which is a
+truncated session address (`0x7021380000`). win32u keeps DC attributes in
+native memory, outside the window. That is the next boundary.
 
-Done, out of the milestone's markers: `portal2.exe` mapped at `0x400000`, and
-the i386 `kernel32` and `ntdll` loaded. Not reached yet: the entry point and
-`bin/engine.dll`.
+Milestone markers:
 
-IPA: `.work/out/20261003-210213-1da4bde0/Playport-26.5-1da4bde0.ipa` (dev).
-SHA256: `1da4bde0e5b898df266895559154527311f167ad28cc2475d058cbccb8c1d637`.
-Source: `2d23a35` plus the changes below. `pp build` passed (78 IPA checks),
-and so did `pp test`.
+- reached: `portal2.exe` at `0x400000`, the i386 `kernel32` and `ntdll`
+  loaded, and the entry point executed;
+- not reached: `bin/engine.dll`.
+
+IPA: `.work/out/20261003-220140-70d803f5/Playport-26.5-70d803f5.ipa` (dev).
+SHA256: `70d803f5024f42a8fd7a1b33456de32374d7256ba37f174e53338d9d3dbce2df`.
+Source: the first commit of this step (`d54b41a`, the wow64.dll part below)
+plus the wow64win/GDI follow-up. `pp build` passed (78 IPA checks), and so
+did `pp test`. The commit's own build
+(`.work/out/20261003-221200-cf03bbdd/`) differs only in the patches' commit
+messages. Its `artifacts.tsv` is identical to the tested IPA's.
+
+The first commit stopped at the first win32u call
+(`NtUserInitializeClientPfnArrays`). Its IPA is
+`.work/out/20261003-210213-1da4bde0/Playport-26.5-1da4bde0.ipa`, SHA256
+`1da4bde0e5b898df266895559154527311f167ad28cc2475d058cbccb8c1d637`. Hollow Knight
+passed `first-frame+10` on it (8.37 s, menu).
 
 ## Changes
 
@@ -43,9 +55,10 @@ and so did `pp test`.
     - exception and code addresses;
     - the CPU module's bridge addresses (FEX returns guest ones);
     - `NtContinueEx`'s small "alertable" flag.
-  - A guest win32u call ends the process. The log also shows failed guest
-    calls (the first 256), the guest's `NtTerminateProcess`, and each image
-    the guest maps, by the name its loader puts in TEB32.
+  - A guest win32u call ended the process; 0018 replaces that stop with
+    wow64win's audit. The log also shows failed guest calls (the first 256),
+    the guest's `NtTerminateProcess`, and each image the guest maps, by the
+    name its loader puts in TEB32.
 - **wine-pe 0017**: the i386 locale setup skips the PEB64 copy when TEB64's
   `Peb` is above 4 GiB, which it is here. Without this it would truncate the
   pointer and write there.
@@ -75,6 +88,41 @@ and so did `pp test`.
   - the TEB32/PEB32 base pair, including mismatched, low and misaligned
     pairs.
 
+- **wine-pe 0018** (wow64win.dll):
+  - It takes the same base from the TEB32/PEB32 pair and has the same
+    helpers. Two more cover names and parameters that are either a pointer
+    or a small integer: `wow64_intres_to_host` and `wow64_intres_to_guest`
+    (atoms, resource ids, `SystemParametersInfo` values).
+  - Converted: `get_ptr`, `put_addr` and the string, object-attribute and
+    security helpers, where a string buffer may be an atom.
+  - Converted, the `NtUserCall*` codes that take pointers:
+    - `CallOneParam`: primary monitor rect, keyboard state, D3DKMT name,
+      desk pattern;
+    - `CallTwoParam`: menu and monitor info, IME rect, monitor from rect,
+      virtual screen, adjust window rect;
+    - `CallHwndParam`: client/screen point, child rect, window info, window
+      thread, present rect.
+  - Converted: class registration and lookup names, cursor and icon data
+    and names, `bmBits` and the packed names in callbacks.
+  - Left as raw guest values: procedures, instances, `lpCreateParams`,
+    resource handles and the DIB brush's client pointer. Two handles that
+    were read with `get_ptr` now use `get_handle`.
+  - Only audited thunks run in a windowed process
+    (`dlls/wow64win/window_audited.h`, 398 of the win32u calls). Those are
+    every thunk whose arguments are handles, integers or plain-data pointers
+    (found by script, then read), plus the ones converted above. The rest,
+    such as `NtUserMessageCall`, the message loop and D3DKMT, stop the
+    process and name the call. Callbacks are all converted.
+  - The guest's last 32 system calls and callbacks are logged at its
+    `NtTerminateProcess`.
+- **wine-pe 0017** (extended): i386 gdi32 takes the GDI shared handle table
+  from its own PEB32 when the native PEB is above 4 GiB.
+- **madeira-unix 0064**: win32u's GDI shared handle table is allocated once
+  per Mach process, and a child's PEB copies the session's. At window
+  reservation, the table is aliased read-only into the window, at guest
+  `0x7fc80000` (`vm_remap`, `0x180000` bytes). PEB32 gets that guest
+  address.
+
 ### Conversion list (wine-pe 0016)
 
 Grep on the patched tree: `rg -n 'get_ptr|ULongToPtr|UlongToPtr|PtrToUlong|wow64_to_(host|guest)' dlls/wow64`.
@@ -93,12 +141,14 @@ Grep on the patched tree: `rg -n 'get_ptr|ULongToPtr|UlongToPtr|PtrToUlong|wow64
 The ARM32 guest paths in `syscall.c` are converted the same way but never
 run here. Not converted:
 
-- `wow64win.dll` (the boundary);
+- `wow64win.dll` beyond its audited thunks (0018);
 - the unix side's wow64 unix calls (`wow64_wine_dbg_write` and others, so
   the i386 guest's own debug output is lost);
 - operations on another process's memory, which use this process's window.
 
 ## Phone runs
+
+### First commit (wow64.dll only)
 
 All in one lock session (75% battery):
 
@@ -145,16 +195,64 @@ err:wow:Wow64SystemServiceEx Playport: i386 win32u system call 147a (args 000000
 **Hollow Knight** (`.work/ui-runs/p2ptr-4-hk`): exit 0 at `first-frame+10`.
 The first frame came at 8.37 s, and the screenshot shows the main menu.
 
+### wow64win follow-up run
+
+Same lock rules (62% battery). `.work/ui-runs/p2win-10` is Portal 2 and
+`.work/ui-runs/p2win-10-hk` is Hollow Knight, after `pp install`:
+
+```text
+[wow64-window] GDI shared table 0x7021200000 aliased read-only at guest 0x7fc80000 (0x180000 bytes)
+err:wow:wow64_NtMapViewOfSection Playport: i386 image C:\Games\Portal 2\bin\launcher.dll at 7b6e0000
+err:wow:wow64_NtMapViewOfSection Playport: i386 image C:\Games\Portal 2\bin\steam_api.dll at 7a1d0000
+err:wow:wow64_NtMapViewOfSection Playport: i386 image C:\Games\Portal 2\bin\tier0.dll at 79e60000
+err:wow:wow64_NtMapViewOfSection Playport: i386 image C:\Games\Portal 2\bin\vstdlib.dll at 79e10000
+[mach_exc] UNHANDLED #1 pc=0x124def150 addr=0x70593900c4 ...
+err:wow:Wow64SystemServiceEx Playport: i386 NtTerminateProcess( ffffffff, c0000005 )
+err:wow:log_recent_calls Playport: recent i386 call 13eb -> 0301003a      (NtUserGetDC)
+err:wow:log_recent_calls Playport: recent i386 call 15cb -> 00000001      (NtUserSystemParametersInfo)
+err:wow:log_recent_calls Playport: recent i386 call 1233 -> 040a0043      (NtGdiHfontCreate)
+[wow64-window] release peb=0x1276d0000 base=0x7038010000 serviced_low_faults=742010
+```
+
+- 36 i386 images load. After the system DLLs, `imm32`, `bin\launcher.dll`,
+  then `shell32`, `ole32`, `ws2_32` and others for the launcher.
+  `bin\steam_api.dll` (gbe), `bin\tier0.dll`, `bin\vstdlib.dll` and
+  `uxtheme` load too. `launcher.dll` is loaded by `portal2.exe`'s own code
+  after its CRT startup, so the entry point ran.
+- The faulting read is at guest `0x213800c4`. That is the low half of win32u's
+  DC-attribute bucket `0x7021380000` (allocated by the session, right after
+  the GDI table) plus a `DC_ATTR` offset. gdi32 reached it through the
+  `UserPointer` of the HDC from `NtUserGetDC`. FEX delivers the access
+  violation to the guest, its handler continues, the access faults again,
+  and the guest ends.
+- Failed guest calls, 232 in all:
+  - 214 are DLL search probes (`NtOpenFile`, `c0000034` or `c000003a`);
+  - registry misses;
+  - the two standard-handle queries and the class `0xf00d` query from
+    before;
+  - one `NtFreeVirtualMemory` with `c000000d` (not investigated).
+- No font is found (`select_font can't find a single appropriate font`).
+  The Wine prefix has no fonts for i386 GDI yet.
+- 742,010 serviced low faults by the end.
+
+**Hollow Knight** (`.work/ui-runs/p2win-10-hk`): exit 0 at `first-frame+10`.
+The first frame came at 9.15 s, and the screenshot shows the main menu.
+
 ## Open
 
-- **wow64win.dll** is the next boundary:
-  - about 365 `get_ptr` uses and about 190 direct conversions;
-  - user32's callbacks (the `KiUserCallbackDispatcher` frames are already
-    converted, but their parameters are not);
-  - window procedures and message parameters.
+- **DC attributes** (next): win32u allocates `DC_ATTR` buckets once per
+  Mach process and publishes them through `UserPointer`. A windowed child
+  needs its own buckets in its window and the guest address in
+  `UserPointer`, with the buckets dropped when the child exits.
+- **wow64win.dll**: the thunks not audited yet stop the process. These
+  include `NtUserMessageCall` (message parameters, by message), the message
+  loop calls and D3DKMT.
 - The unix side's wow64 unix calls (`ntdll`'s `wine_dbg_write`, server
-  calls) convert nothing yet.
+  calls) convert nothing yet, so the i386 guest's own debug output is lost.
 - File views in the window cannot be unmapped, protected or queried.
   Writable and anonymous sections are refused.
-- Serviced low faults are 259,688 for the loader alone. Step 4's inline
+- Serviced low faults reach 742,010 by the launcher. Step 4's inline
   translation must bring that down.
+- Values that win32u returns from session memory (for example
+  `GetClassInfoEx`'s menu name) are still truncated, as they are in Wine's
+  own WoW64.

@@ -14,4 +14,5 @@
 0013-ntdll-build-i386-with-native-diagnostics-guarded.patch
 0015-ntdll-take-a-WoW64-process-s-native-DLLs-from-sysarm.patch
 0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch
-0017-ntdll-leave-a-native-PEB-above-4-GiB-alone-in-the-i3.patch
+0017-ntdll-gdi32-leave-a-native-PEB-above-4-GiB-alone-in-.patch
+0018-wow64win-convert-audited-win32u-thunks-through-the-i.patch
