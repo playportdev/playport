@@ -15,7 +15,10 @@ image/entry addresses and publishing PEB32's image base. The parameter
 follow-up now publishes a normalized, window-backed PE32 parameter block and
 environment. Guest image placement now accepts in-range ASLR suggestions and
 searches window-local gaps; nonzero relocations are host-tested with Wine's
-relocation kernel, not yet exercised on the phone. Startup explicitly stops
+relocation kernel, not yet exercised on the phone. Explicit native host-window
+pointers now route to owner-checked anonymous VM operations; parameter
+allocation uses that path on the phone. Decommit/release/reuse are host-tested
+only. Startup explicitly stops
 before the unwired native WoW64-loader paths. **No i386 code executes. Step 2
 and milestone 1 are not complete.**
 
@@ -481,6 +484,69 @@ Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
 `git show --check` and the non-patch whitespace check pass. Logs/screenshots
 stay under `.work/portal2-placement` and `.work/ui-runs/`.
 
+## Native anonymous VM follow-up (same step)
+
+Source at build: `ac20ce6` plus madeira-unix 0056 and host tests.
+Dev IPA: `.work/out/20261003-144148-eeb2fca8/Playport-26.5-eeb2fca8.ipa`.
+SHA256: `eeb2fca8fac87e5f549734fffd68f14fc598008bda849e26aeb3cc3dce5e9a0d`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+outputs are unchanged.
+
+**madeira-unix 0056** routes explicit host-window pointers at native
+`NtAllocateVirtualMemory`, `NtFreeVirtualMemory` and `NtProtectVirtualMemory`
+entry, before Madeira's host/FEX steering and low-alias paths. Registry then
+virtual locking protects owner selection and lifetime through the operation;
+foreign-owner/remote requests are refused rather than reaching native unmap.
+Anonymous views retain logical EXEC but never native EXEC or pool copies,
+including through `mprotect_range`; execute-only pages stay physically readable
+for the decoder without changing their logical flags. Reserve/commit/protect
+round to 16 KiB.
+Decommit atomically replaces backing with PROT_NONE anonymous pages, clearing
+commit metadata and guaranteeing zero on recommit. Full release does the same,
+then coalesces neighboring holdbacks without unmapping the window. Bootstrap
+TEB/PEB and image views are not anonymous VM and cannot be freed by this path.
+Parameters now use native reserve+commit; packing failure attempts full release.
+
+This is **not complete guest VM routing**: NULL/raw-guest addresses still take
+existing native paths. Zero-bits requests and Ex allocations in a window,
+special protections/types and partial release fail closed. Gap allocation,
+queries, section/image free and PE pointer conversion remain unwired. The
+startup loader boundary remains closed.
+
+`build/wow64/vm_test.c` compiles the actual patch's core and routing function
+under UBSan, using real mappings and **mock Wine view/page metadata and
+identity**. Tests cover allocation/protection/replacement failure with unchanged
+outputs, partial/all decommit, zero recommit/reuse, gap coalescing, physical NX
+and no-access faults, 2/4 GiB/overflow/guard/cross-view bounds, owner/remote
+rejection, and bootstrap protection. The existing image test also checks the
+NX policy through the actual updated `mprotect_range`. Updated function
+extraction was compared byte-for-byte with the built source. These tests do
+not exercise Wine's rbtree, wineserver, PE thunks or concurrent teardown.
+
+The final phone-lock session upgraded in place and ran both titles again after
+adding execute-only decoder-read coverage. Before the initial VM tests, battery
+was 43%, not externally powered. Commands use the same options as previous
+runs; both final result events carry the SHA256 above:
+
+- `.work/ui-runs/portal2-vm-final`: B=`0x7038010000`, image guest `0x400000`,
+  entry `0x4017d1`, map success. `[wow64-vm]` confirms native parameter
+  reserve+commit at guest `0x7e000000`, host `0x70b6010000`, bytes `0x4000`,
+  native EXEC=0. Parameters/environment publish as before; loader/heap remain
+  NULL. Startup deliberately returns `c00000bb`, restores the original TEB
+  and releases the window. **No i386 DLL loading or instruction execution;
+  no phone validation of protection/decommit/release/reuse.** UI exit 1;
+  screenshot shows **Portal 2 could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-vm-final-hk`: `first-frame+10`, exit 0; first frame
+  **8.20 s**, JIT **2.49 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks); `pp test` passes
+(483 Python tests, all C tests including eight WoW64 UBSan tests, all three
+Swift packages); `pp slots` passes (150 slots, 149 calls). Source
+`git show --check`, the non-patch whitespace check and `pp build --plan` pass
+(the latter reports no tree rebuilds). Logs/screenshots stay under
+`.work/portal2-vm` and `.work/ui-runs/`.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -523,15 +589,15 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: general VM routing and remaining PEB32 loader/heap
-initialization, then phone validation of nonzero image relocations when the
-loader can reach an image needing them. Startup parameters are window-backed,
-not a general allocator; only the initial TEB is paired.
-General paired thread allocation, reuse/free and multi-thread teardown are
-pending, and secondary WoW64 threads are explicitly rejected. Remove the
-fail-closed startup boundary only after its downstream paths are wired.
-The fixed-view suballocator does not yet implement general VM or free/reuse. WoW64 identity
-is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation
+Next in this same step: NULL/gap allocation, guest limits/zero-bits, query and
+section/image VM routing, then remaining PEB32 loader/heap initialization and
+phone validation of nonzero image relocations when the loader can reach an
+image needing them. Explicit host-pointer anonymous VM release/reuse exists;
+PE-facing allocation/conversion and the other VM paths do not. Only the initial
+TEB is paired. General paired thread allocation, reuse/free and multi-thread
+teardown are pending, and secondary WoW64 threads are explicitly rejected.
+Remove the fail-closed startup boundary only after its downstream paths are
+wired. WoW64 identity is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation
 limits remain global; this bootstrap leaves them unchanged. Other startup
 globals (`peb`, argv, startup info) still rely on serialization. Then PE-visible
 base query and file-by-file pointer/return-value conversion; stack/context/

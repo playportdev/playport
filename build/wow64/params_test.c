@@ -68,16 +68,27 @@ static uintptr_t active_window;
 static int alloc_fail, alloc_calls;
 static TEB *NtCurrentTeb(void) { return &current; }
 static void *get_wow_teb(TEB *teb) { assert(teb == &current); return &pair; }
-static NTSTATUS ios_wow64_allocate_for_peb(void *owner, uint32_t guest, size_t size,
-                                         unsigned int vprot, void **result)
+#define NtCurrentProcess() ((void *)(intptr_t)-1)
+#define MEM_RESERVE 0x2000
+#define MEM_COMMIT 0x1000
+#define MEM_RELEASE 0x8000
+#define PAGE_READWRITE 4
+static NTSTATUS NtAllocateVirtualMemory(void *process, void **host, uintptr_t zero_bits,
+                                       size_t *size, unsigned int type, unsigned int protect)
 {
-    assert(owner == current.Peb && vprot == 0x23);
-    assert(size <= IOS_WOW64_PARAMS_MAX);
+    assert(process == NtCurrentProcess() && !zero_bits);
+    assert(type == (MEM_RESERVE | MEM_COMMIT) && protect == PAGE_READWRITE);
+    assert(*host == (void *)ios_wow64_host_addr(active_window, IOS_WOW64_PARAMS_GUEST));
+    assert(*size <= IOS_WOW64_PARAMS_MAX);
     alloc_calls++;
     if (alloc_fail) return STATUS_NO_MEMORY;
-    void *host = (void *)ios_wow64_host_addr(active_window, guest);
-    assert(!mprotect(host, size, PROT_READ | PROT_WRITE));
-    *result = host;
+    assert(!mprotect(*host, *size, PROT_READ | PROT_WRITE));
+    return 0;
+}
+static NTSTATUS NtFreeVirtualMemory(void *process, void **host, size_t *size, unsigned int type)
+{
+    assert(process == NtCurrentProcess() && !*size && type == MEM_RELEASE);
+    assert(*host == (void *)ios_wow64_host_addr(active_window, IOS_WOW64_PARAMS_GUEST));
     return 0;
 }
 /* Suppress diagnostic output only; the extracted publication function is unchanged. */

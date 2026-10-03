@@ -21,6 +21,7 @@ IMAGE_PATCH = REPO / "patches/madeira-unix/0053-ntdll-map-fixed-i386-images-into
 PARAMS_HEADER = "build/ntdll-unix/wow64_params.h"
 PARAMS_PATCH = REPO / "patches/madeira-unix/0054-ntdll-build-owner-local-window-backed-startup-parame.patch"
 PLACEMENT_PATCH = REPO / "patches/madeira-unix/0055-ntdll-place-and-relocate-i386-images-in-guest-space.patch"
+VM_PATCH = REPO / "patches/madeira-unix/0056-ntdll-route-owned-window-anonymous-VM-operations.patch"
 
 
 def patched_function(patch, signature):
@@ -45,6 +46,44 @@ def patched_function(patch, signature):
     if "/* hunk boundary */" in body:
         raise ValueError(f"{signature}: function split across patch hunks")
     return "\n".join(body) + "\n"
+
+
+def evolved_function(original, update, signature):
+    """Apply the update's exact edit blocks to a recovered production function.
+
+    Format-patches must keep default context for the pipeline's patch-id gate.
+    Later edits need not contain the whole original function in one hunk.
+    Require unique, context-anchored matches; unrelated file edits are skipped.
+    """
+    body = patched_function(original, signature)
+    lines = update.read_text().splitlines()
+    applied = 0
+    i = 0
+    in_hunk = False
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("@@ "):
+            in_hunk = True
+        elif line.startswith(("diff --git ", "-- ")):
+            in_hunk = False
+        elif in_hunk and line.startswith(("+", "-")):
+            before = lines[i - 1][1:] + "\n" if lines[i - 1].startswith(" ") else ""
+            old, new = [], []
+            while i < len(lines) and lines[i].startswith(("+", "-")):
+                (new if lines[i][0] == "+" else old).append(lines[i][1:] + "\n")
+                i += 1
+            after = lines[i][1:] + "\n" if i < len(lines) and lines[i].startswith(" ") else ""
+            old_text = before + "".join(old) + after
+            if old_text and old_text in body:
+                if body.count(old_text) != 1:
+                    raise ValueError(f"{signature}: ambiguous update block")
+                body = body.replace(old_text, before + "".join(new) + after, 1)
+                applied += 1
+            continue
+        i += 1
+    if not applied:
+        raise ValueError(f"{signature}: no update blocks matched")
+    return body
 
 
 def main():
@@ -101,7 +140,7 @@ def main():
         subprocess.run(["git", "-C", tmp, "apply", f"--include={IMAGE_HEADER}",
                         str(IMAGE_PATCH)], check=True)
         (root / "image_api.h").write_text(
-            patched_function(IMAGE_PATCH, "static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )"))
+            evolved_function(IMAGE_PATCH, VM_PATCH, "static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )"))
         image_exe = root / "image-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-pthread", "-DWINE_IOS", "-fsanitize=undefined", "-fno-sanitize-recover=all",
@@ -111,7 +150,7 @@ def main():
         subprocess.run(["git", "-C", tmp, "apply", f"--include={PARAMS_HEADER}",
                         str(PARAMS_PATCH)], check=True)
         (root / "params_api.h").write_text(
-            patched_function(PARAMS_PATCH, "static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,"))
+            evolved_function(PARAMS_PATCH, VM_PATCH, "static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,"))
         params_exe = root / "params-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-fsanitize=undefined", "-fno-sanitize-recover=all",
@@ -127,6 +166,16 @@ def main():
                         "-I", str((root / IMAGE_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/placement_test.c"), "-o", str(placement_exe)], check=True)
         subprocess.run([str(placement_exe)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_vm.h",
+                        str(VM_PATCH)], check=True)
+        (root / "vm_api.h").write_text(
+            patched_function(VM_PATCH, "static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **addr,"))
+        vm_exe = root / "vm-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/vm_test.c"), "-o", str(vm_exe)], check=True)
+        subprocess.run([str(vm_exe)], check=True)
     return 0
 
 

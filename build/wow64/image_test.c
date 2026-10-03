@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #define VPROT_WOW64_IMAGE 0x2000
+#define VPROT_WOW64_VM 0x4000
 #define VPROT_EXEC 0x04
 #define VPROT_WRITECOPY 0x08
 #define SEC_IMAGE 0x1000000
@@ -182,9 +183,20 @@ int IMAGE_TEST_ENTRY(void)
     assert(!ios_wow64_claim_image(a, &image, 0x8000, &va));
     assert(!*(uint32_t *)va->base); /* file/private bytes not reused */
     assert(*(uint32_t *)vb->base == 0x12345678);
-    /* Non-window native mappings still take the old mprotect_exec path. */
+    /* Anonymous window VM has the same NX policy, including fault/protection
+     * helper calls, not only the explicit native NtProtect route. */
     page_base = (uintptr_t)vb->base;
-    vb->protect &= ~VPROT_WOW64_IMAGE;
+    vb->protect = VPROT_WOW64_VM;
+    page_bytes[0] = VPROT_COMMITTED | VPROT_EXEC; /* execute-only guest page */
+    assert(!mprotect_range(vb->base, vb->size, 0, 0));
+    assert(*(uint32_t *)vb->base == 0x12345678); /* readable by FEX's decoder */
+    assert(!mprotect_range(vb->base, vb->size, VPROT_EXEC, 0));
+    assert(!native_exec_calls);
+    check_inaccessible(vb->base, 0);
+    check_inaccessible(vb->base, 1);
+    /* Non-window native mappings still take the old mprotect_exec path. */
+    vb->protect = 0;
+    page_bytes[0] |= VPROT_READ;
     assert(!mprotect_range(vb->base, vb->size, 0, VPROT_EXEC));
     assert(native_exec_calls == 2);
     check_guard(a); check_guard(b);

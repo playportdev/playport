@@ -226,11 +226,25 @@ the retained native-loader boundary (`c00000bb`): **no i386 execution and no
 phone check of nonzero relocations**. Hollow Knight passes `first-frame+10`
 (9.26 s first frame, menu visible). Details remain in the step-2 evidence record.
 
-**Next, still step 2:** general VM routing and the remaining PEB32 loader/heap
-initialization; validate nonzero image relocation on the phone when the loader
-can reach an image needing it. Only the initial TEB is paired; secondary WoW64
-thread allocation explicitly returns
-`STATUS_NOT_SUPPORTED`. General free/reuse is absent. The legacy `wow_peb`,
+**Native VM follow-up, 2026-10-03:** madeira-unix 0056 routes explicit
+host-window pointers through owner-checked anonymous reserve/commit/protect/
+decommit/full-release operations. Release retains and coalesces protected
+holdbacks; decommit guarantees zero on recommit. Logical EXEC stays native-NX.
+Portal 2's phone play confirms parameter allocation through this path, but still
+stops before the native loader (`c00000bb`), with **no i386 execution**.
+Protection/decommit/release/reuse are host-tested, not phone-validated. Hollow
+Knight passes `first-frame+10` (8.20 s first frame, menu visible); details remain
+in the step-2 evidence record.
+
+**Next, still step 2:** NULL/gap allocation, guest-limit/zero-bits and query/
+section/image VM routing, then the remaining PEB32 loader/heap initialization;
+validate nonzero image relocation on the phone when the loader can reach an
+image needing it. Native VM currently accepts explicit **host** pointers only:
+raw guest pointers are not converted and NULL allocations still use the native
+allocator. Ex window allocations, special protections/types, partial release
+and bootstrap/image free are refused. Only the initial TEB is paired;
+secondary WoW64 thread allocation explicitly returns `STATUS_NOT_SUPPORTED`.
+The legacy `wow_peb`,
 TEB free lists and WoW64 limits remain global but this bootstrap does not
 mutate them; other startup globals (`peb`, argv, startup info) still rely on
 serialization. Extend paired thread allocation/lifetime, route pointer
