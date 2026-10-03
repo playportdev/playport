@@ -22,6 +22,7 @@ PARAMS_HEADER = "build/ntdll-unix/wow64_params.h"
 PARAMS_PATCH = REPO / "patches/madeira-unix/0054-ntdll-build-owner-local-window-backed-startup-parame.patch"
 PLACEMENT_PATCH = REPO / "patches/madeira-unix/0055-ntdll-place-and-relocate-i386-images-in-guest-space.patch"
 VM_PATCH = REPO / "patches/madeira-unix/0056-ntdll-route-owned-window-anonymous-VM-operations.patch"
+GAP_PATCH = REPO / "patches/madeira-unix/0057-ntdll-allocate-guest-constrained-VM-in-owner-local-gaps.patch"
 
 
 def patched_function(patch, signature):
@@ -56,6 +57,13 @@ def evolved_function(original, update, signature):
     Require unique, context-anchored matches; unrelated file edits are skipped.
     """
     body = patched_function(original, signature)
+    for patch in update if isinstance(update, list) else [update]:
+        body = evolve_body(body, patch, signature)
+    return body
+
+
+def evolve_body(body, update, signature):
+    """Apply one later patch to an already reconstructed function."""
     lines = update.read_text().splitlines()
     applied = 0
     i = 0
@@ -149,8 +157,10 @@ def main():
         subprocess.run([str(image_exe)], check=True)
         subprocess.run(["git", "-C", tmp, "apply", f"--include={PARAMS_HEADER}",
                         str(PARAMS_PATCH)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", f"--include={PARAMS_HEADER}",
+                        str(GAP_PATCH)], check=True)
         (root / "params_api.h").write_text(
-            evolved_function(PARAMS_PATCH, VM_PATCH, "static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,"))
+            evolved_function(PARAMS_PATCH, [VM_PATCH, GAP_PATCH], "static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,"))
         params_exe = root / "params-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-fsanitize=undefined", "-fno-sanitize-recover=all",
@@ -160,6 +170,9 @@ def main():
         subprocess.run(["git", "-C", tmp, "apply",
                         "--include=build/ntdll-unix/wow64_placement.h",
                         "--include=build/ntdll-unix/image_reloc.h", str(PLACEMENT_PATCH)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply",
+                        "--include=build/ntdll-unix/wow64_placement.h",
+                        "--include=build/ntdll-unix/wow64_gap.h", str(GAP_PATCH)], check=True)
         placement_exe = root / "placement-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-pthread", "-DWINE_IOS", "-fsanitize=undefined", "-fno-sanitize-recover=all",
@@ -168,8 +181,10 @@ def main():
         subprocess.run([str(placement_exe)], check=True)
         subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_vm.h",
                         str(VM_PATCH)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_vm.h",
+                        str(GAP_PATCH)], check=True)
         (root / "vm_api.h").write_text(
-            patched_function(VM_PATCH, "static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **addr,"))
+            evolved_function(VM_PATCH, GAP_PATCH, "static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **addr,"))
         vm_exe = root / "vm-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",

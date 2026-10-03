@@ -11,11 +11,13 @@
 
 typedef int BOOL;
 typedef uint32_t ULONG;
+typedef uintptr_t ULONG_PTR;
 typedef size_t SIZE_T;
 typedef void *HANDLE;
 #define TRUE 1
 #define FALSE 0
 #define STATUS_NOT_COMMITTED 6
+#define STATUS_INVALID_PARAMETER_3 7
 #define PAGE_NOACCESS 1
 #define PAGE_READONLY 2
 #define PAGE_READWRITE 4
@@ -26,6 +28,7 @@ typedef void *HANDLE;
 #define MEM_RESERVE 0x2000
 #define MEM_DECOMMIT 0x4000
 #define MEM_RELEASE 0x8000
+#define MEM_TOP_DOWN 0x100000
 #define VPROT_EXEC 4
 #define VPROT_WOW64_VM 0x4000
 #define IMAGE_FILE_LARGE_ADDRESS_AWARE 0x20
@@ -97,11 +100,16 @@ static void *test_mmap(void *addr, size_t size, int prot, int flags, int fd, off
 #include "vm_api.h"
 #undef dprintf
 
-static NTSTATUS routed(unsigned op, void **addr, size_t *size, ULONG type, ULONG prot, ULONG *old)
+static NTSTATUS routed_bits(unsigned op, void **addr, size_t *size, ULONG type, ULONG prot,
+                            uintptr_t bits, ULONG *old)
 {
     NTSTATUS status = -1;
-    assert(ios_wow64_route_vm(op, NtCurrentProcess(), addr, size, type, prot, old, &status));
+    assert(ios_wow64_route_vm(op, NtCurrentProcess(), addr, size, type, prot, bits, old, &status));
     return status;
+}
+static NTSTATUS routed(unsigned op, void **addr, size_t *size, ULONG type, ULONG prot, ULONG *old)
+{
+    return routed_bits(op, addr, size, type, prot, 0, old);
 }
 static void inaccessible(void *addr, int execute)
 {
@@ -127,6 +135,100 @@ int main(void)
     ios_wow64_windows[0].owner = &owner_a; ios_wow64_windows[0].base = bases[0];
     ios_wow64_windows[1].owner = &owner_b; ios_wow64_windows[1].base = bases[1];
     current_owner = &owner_a;
+    /* Guest limits are independent of the high base and count/mask form. */
+    uint64_t end;
+    for (unsigned bits = 1; bits <= 21; ++bits)
+    {
+        end = IOS_WOW64_WINDOW_SIZE;
+        assert(!ios_wow64_vm_limit(bits, &end));
+        assert(end == (UINT64_C(1) << (32 - bits)));
+    }
+    const uintptr_t masks[] = {32, 0xffff, 0x10001, 0x7fffffff, 0x80000000, UINT32_MAX,
+                              UINT64_C(0x1ffffffff), UINTPTR_MAX};
+    const uint64_t ends[] = {64, 0x10000, 0x20000, 0x80000000, 0x100000000,
+                             0x100000000, 0x100000000, 0x100000000};
+    for (unsigned i = 0; i < sizeof(masks) / sizeof(*masks); ++i)
+    {
+        end = IOS_WOW64_WINDOW_SIZE;
+        assert(!ios_wow64_vm_limit(masks[i], &end) && end == ends[i]);
+    }
+    for (unsigned bits = 22; bits < 32; ++bits)
+    {
+        end = IOS_WOW64_WINDOW_SIZE;
+        assert(ios_wow64_vm_limit(bits, &end) == STATUS_INVALID_PARAMETER_3);
+        assert(end == IOS_WOW64_WINDOW_SIZE);
+    }
+    end = IOS_WOW64_WINDOW_SIZE;
+    assert(ios_wow64_vm_limit(33, &end) == STATUS_INVALID_PARAMETER_3 && end == IOS_WOW64_WINDOW_SIZE);
+    void *slots[3] = {0};
+    size_t lengths[3] = {1, 1, 1};
+    unsigned gap_updates = page_updates;
+    int gap_descriptors = descriptor_count;
+    fail_after = 0;
+    assert(routed_bits(0, &slots[0], &lengths[0], MEM_COMMIT, PAGE_READWRITE, 14, NULL) == STATUS_NO_MEMORY);
+    assert(!slots[0] && lengths[0] == 1 && page_updates == gap_updates && descriptor_count == gap_descriptors);
+    fail_after = -1; fail_protect = 1;
+    assert(routed_bits(0, &slots[0], &lengths[0], MEM_COMMIT, PAGE_READWRITE, 14, NULL) == STATUS_ACCESS_DENIED);
+    assert(!slots[0] && lengths[0] == 1 && descriptor_count == gap_descriptors);
+    fail_protect = 0;
+    assert(!routed_bits(0, &slots[0], &lengths[0], MEM_COMMIT, PAGE_READWRITE, 14, NULL));
+    assert(!routed_bits(0, &slots[1], &lengths[1], MEM_RESERVE, PAGE_READWRITE, 14, NULL));
+    assert(!routed_bits(0, &slots[2], &lengths[2], MEM_COMMIT | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE, 14, NULL));
+    assert(slots[0] == (void *)(bases[0] + 0x10000) && slots[1] == (void *)(bases[0] + 0x20000));
+    assert(slots[2] == (void *)(bases[0] + 0x30000));
+    assert(lengths[0] == 0x4000 && lengths[1] == 0x4000 && lengths[2] == 0x4000);
+    *(int *)slots[0] = 11; *(int *)slots[2] = 22;
+    inaccessible(slots[1], 0); inaccessible(slots[2], 1);
+    void *gap = NULL;
+    size_t gap_size = 1;
+    assert(routed_bits(0, &gap, &gap_size, MEM_RESERVE, PAGE_READWRITE, 14, NULL) == STATUS_CONFLICTING_ADDRESSES);
+    assert(!gap && gap_size == 1);
+    assert(routed_bits(0, &gap, &gap_size, MEM_COMMIT, PAGE_READWRITE, 16, NULL) == STATUS_CONFLICTING_ADDRESSES);
+    assert(routed_bits(0, &gap, &gap_size, MEM_COMMIT, PAGE_READWRITE, 22, NULL) == STATUS_INVALID_PARAMETER_3);
+    assert(routed_bits(0, &gap, &gap_size, MEM_COMMIT, PAGE_READWRITE, 33, NULL) == STATUS_INVALID_PARAMETER_3);
+    assert(routed_bits(0, &gap, &gap_size, MEM_COMMIT | MEM_TOP_DOWN | 0x400000, PAGE_READWRITE, 14, NULL) == STATUS_NOT_SUPPORTED);
+    gap_size = SIZE_MAX;
+    assert(routed_bits(0, &gap, &gap_size, MEM_COMMIT, PAGE_READWRITE, 14, NULL) == STATUS_INVALID_PARAMETER);
+    assert(!gap && gap_size == SIZE_MAX);
+    NTSTATUS remote_status = -1;
+    gap_size = 1;
+    assert(ios_wow64_route_vm(0, (HANDLE)123, &gap, &gap_size, MEM_COMMIT, PAGE_READWRITE, 14, NULL, &remote_status));
+    assert(remote_status == STATUS_ACCESS_DENIED && !gap && gap_size == 1);
+    /* Same logical allocation in a disjoint owner cannot see these contents. */
+    current_owner = &owner_b;
+    assert(!routed_bits(0, &gap, &gap_size, MEM_COMMIT, PAGE_READWRITE, 14, NULL));
+    assert(gap == (void *)(bases[1] + 0x10000) && !*(int *)gap);
+    *(int *)gap = 33;
+    current_owner = &owner_a;
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        size_t release = 0;
+        assert(!routed(1, &slots[i], &release, MEM_RELEASE, 0, NULL));
+    }
+    assert(*(int *)gap == 33);
+    current_owner = &owner_b;
+    size_t release = 0;
+    assert(!routed(1, &gap, &release, MEM_RELEASE, 0, NULL));
+    current_owner = &owner_a;
+    assert(descriptor_count == gap_descriptors);
+    assert(find_view((void *)bases[0], IOS_WOW64_WINDOW_SIZE)->protect == VPROT_WOW64_HOLE);
+    /* Counts/masks apply to explicit host-window storage as guest offsets. */
+    gap = (void *)(bases[0] + 0x10000); gap_size = 1;
+    assert(!routed_bits(0, &gap, &gap_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE, 15, NULL));
+    void *past = (void *)(bases[0] + 0x1ffff); size_t past_size = 2;
+    assert(routed_bits(0, &past, &past_size, MEM_COMMIT, PAGE_READWRITE, 15, NULL) == STATUS_INVALID_PARAMETER);
+    release = 0;
+    assert(!routed(1, &gap, &release, MEM_RELEASE, 0, NULL));
+    gap = (void *)(bases[0] + 0x7fffffff); gap_size = 2;
+    assert(routed(0, &gap, &gap_size, MEM_RESERVE, PAGE_READWRITE, NULL) == STATUS_INVALID_PARAMETER);
+    /* LAA NULL top-down allocation can reach the final host page below 4 GiB. */
+    image.ImageCharacteristics = IMAGE_FILE_LARGE_ADDRESS_AWARE;
+    gap = NULL; gap_size = 0x10000;
+    assert(!routed_bits(0, &gap, &gap_size, MEM_COMMIT | MEM_TOP_DOWN, PAGE_READWRITE, UINT32_MAX, NULL));
+    assert(gap == (void *)(bases[0] + 0xffff0000) && gap_size == 0x10000);
+    release = 0;
+    assert(!routed(1, &gap, &release, MEM_RELEASE, 0, NULL));
+    image.ImageCharacteristics = 0;
     void *addr = (void *)(bases[0] + 0x410003), *orig = addr;
     size_t size = 0x8001;
     int descriptors = descriptor_count;
@@ -179,7 +281,7 @@ int main(void)
     size_t other_size = 0x4000;
     assert(routed(0, &other, &other_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE, NULL) == STATUS_ACCESS_DENIED);
     NTSTATUS status = -1;
-    assert(ios_wow64_route_vm(1, (HANDLE)123, &addr, &size, MEM_RELEASE, 0, NULL, &status));
+    assert(ios_wow64_route_vm(1, (HANDLE)123, &addr, &size, MEM_RELEASE, 0, 0, NULL, &status));
     assert(status == STATUS_ACCESS_DENIED);
     current_owner = NULL;
     assert(routed(1, &addr, &size, MEM_RELEASE, 0, NULL) == STATUS_ACCESS_DENIED);
@@ -188,7 +290,7 @@ int main(void)
     *(int *)other = 42;
     current_owner = &owner_a;
     assert(routed(3, &addr, &size, 0, 0, NULL) == STATUS_NOT_SUPPORTED);
-    assert(routed(0, &sub, &subsize, MEM_COMMIT | 0x100000, PAGE_READWRITE, NULL) == STATUS_NOT_SUPPORTED);
+    assert(routed(0, &sub, &subsize, MEM_COMMIT | 0x400000, PAGE_READWRITE, NULL) == STATUS_NOT_SUPPORTED);
     assert(routed(0, &sub, &subsize, MEM_COMMIT, PAGE_READWRITE | 0x100, NULL) == STATUS_INVALID_PARAMETER);
     assert(routed(1, &addr, &size, MEM_RELEASE, 0, NULL) == STATUS_INVALID_PARAMETER);
     size_t zero = 0;
@@ -235,9 +337,13 @@ int main(void)
     assert(routed(0, &bad, &n, MEM_COMMIT, PAGE_READWRITE, NULL) == STATUS_CONFLICTING_ADDRESSES);
     void *native = (void *)0x100000000, *guest = (void *)0x400000, *null = NULL;
     status = -1;
-    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &native, &n, 0, 0, NULL, &status));
-    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &guest, &n, 0, 0, NULL, &status));
-    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &null, &n, 0, 0, NULL, &status));
+    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &native, &n, 0, 0, 0, NULL, &status));
+    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &guest, &n, 0, 0, UINT32_MAX, NULL, &status));
+    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &null, &n, 0, 0, 0, NULL, &status));
+    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &null, &n, 0, 0, UINT64_C(0x1ffffffff), NULL, &status));
+    current_owner = NULL;
+    assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &null, &n, 0, 0, UINT32_MAX, NULL, &status));
+    current_owner = &owner_a;
     assert(status == -1);
     check_cover(bases[0]); check_cover(bases[1]);
     check_guard(bases[0]); check_guard(bases[1]);
@@ -245,6 +351,6 @@ int main(void)
     assert(*(int *)other == 42);
     ios_wow64_delete_views(bases[1]);
     assert(!descriptor_count);
-    puts("WoW64 native VM: reserve/commit/protect/decommit/release, NX, zero/reuse and owner routing pass");
+    puts("WoW64 VM: constrained NULL/gap/top-down, zero-bits/limits, NX, zero/reuse and owner routing pass");
     return 0;
 }

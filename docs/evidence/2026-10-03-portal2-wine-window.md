@@ -17,8 +17,10 @@ environment. Guest image placement now accepts in-range ASLR suggestions and
 searches window-local gaps; nonzero relocations are host-tested with Wine's
 relocation kernel, not yet exercised on the phone. Explicit native host-window
 pointers now route to owner-checked anonymous VM operations; parameter
-allocation uses that path on the phone. Decommit/release/reuse are host-tested
-only. Startup explicitly stops
+allocation uses that path on the phone. Guest-constrained NULL requests now
+search owner-local gaps, with guest limits/zero-bits and top-down selection;
+parameter allocation validates the NULL path on the phone. Decommit/release/
+reuse and top-down/collision placement are host-tested only. Startup explicitly stops
 before the unwired native WoW64-loader paths. **No i386 code executes. Step 2
 and milestone 1 are not complete.**
 
@@ -547,6 +549,68 @@ Swift packages); `pp slots` passes (150 slots, 149 calls). Source
 (the latter reports no tree rebuilds). Logs/screenshots stay under
 `.work/portal2-vm` and `.work/ui-runs/`.
 
+## Guest-constrained NULL allocation follow-up (same step)
+
+Source at build: `dd3966d` plus madeira-unix 0057 and host tests.
+Dev IPA: `.work/out/20261003-145749-b2805633/Playport-26.5-b2805633.ipa`.
+SHA256: `b28056338b4bc081906ea077eba5ae861a1b948ff834809859a73e7b068157f3`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+outputs are unchanged.
+
+**madeira-unix 0057** shares image/anonymous gap search through `wow64_gap.h`.
+A NULL native allocation with a nonzero <=32-bit guest constraint selects only
+its owner's window. NULL commit implicitly reserves; `MEM_TOP_DOWN` chooses
+from the high end. Explicit host-window requests also accept zero-bits.
+Counts 1–21 and masks >=32 follow Wine's highest-set-bit limit convention,
+not sparse allowed-bit masks. Limits refer to guest offsets, capped by the
+owner's large-address-aware 2/4 GiB limit; guard, alignment and rounded extent
+are checked before claiming. Failed selection/claim/protection leaves caller
+outputs unchanged. No fallback to native allocation after a routed failure.
+Registry/virtual lock order, NX storage and release/coalescing are unchanged.
+
+Unconstrained native NULL requests, and wider native constraints, remain native:
+using WoW64 identity alone would incorrectly capture native loader heaps and
+FEX storage. Raw guest pointers still require PE-boundary conversion, and the
+returned pointer is **host storage**, not a PE32 return value. Remote routed
+allocations are refused. Ex attributes, query/section/image VM paths and the
+native-loader boundary are unchanged. Bootstrap parameters now request NULL
+with `UINT32_MAX`, removing their fixed guest placement; PEB32 publishes the
+checked inverse of the selected host address.
+
+The eight existing UBSan tests compile the updated production headers and
+reconstructed routing/parameter functions. Added cases cover count/mask limits,
+malformed constraints, bottom/top-down selection, collision/exhaustion, NULL
+commit, 16 KiB rounding, 2/4 GiB edges, unchanged failure outputs, physical NX,
+release/coalescing and disjoint-owner contents. Unconstrained/wide-native NULL
+and raw guest pointers stay unrouted. The parameter test mocks gap selection;
+the VM test uses real mappings with **mock Wine view/page metadata/identity**.
+Neither exercises Wine's rbtree, PE thunks or concurrent teardown. Extracted
+functions and changed headers were compared byte-for-byte with built source.
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected failure. Before testing, battery was 37%, not externally
+powered. Both result events carry the SHA256 above:
+
+- `.work/ui-runs/portal2-gap`: B=`0x7038010000`, main image/entry unchanged,
+  map success. Parameters allocate at host `0x7038020000`, guest `0x10000`,
+  bytes `0x4000`; the VM log records `null=1 top_down=0 zero_bits=0xffffffff
+  native_exec=0`. Command/environment pointers are `0x104e8`/`0x10568`,
+  environment 5,670 bytes; normalized=1, loader/heap remain NULL. Startup
+  returns the retained `c00000bb`, restores the TEB and releases the window.
+  **No i386 DLL loading or execution; no phone validation of top-down,
+  collision placement or nonzero relocation.** UI exit 1; screenshot shows
+  **Portal 2 could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-gap-hk`: exit 0, `first-frame+10`; first frame
+  **9.26 s**, JIT **2.47 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks); `pp test` passes
+(483 Python tests, all C tests including eight WoW64 UBSan tests, all three
+Swift packages); `pp slots` passes (150 slots, 149 calls). Source
+`git show --check`, the non-patch whitespace check and `pp build --plan` pass
+(the latter reports no tree rebuilds). Logs/screenshots remain under
+`.work/portal2-gap` and `.work/ui-runs/`.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -589,11 +653,12 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: NULL/gap allocation, guest limits/zero-bits, query and
-section/image VM routing, then remaining PEB32 loader/heap initialization and
-phone validation of nonzero image relocations when the loader can reach an
-image needing them. Explicit host-pointer anonymous VM release/reuse exists;
-PE-facing allocation/conversion and the other VM paths do not. Only the initial
+Next in this same step: query and section/image VM routing, then remaining
+PEB32 loader/heap initialization and phone validation of nonzero image
+relocations when the loader can reach an image needing them. Explicit
+host-pointer anonymous VM release/reuse and guest-constrained NULL allocation
+exist; PE-facing constraint/pointer/return conversion and the other VM paths
+do not. Only the initial
 TEB is paired. General paired thread allocation, reuse/free and multi-thread
 teardown are pending, and secondary WoW64 threads are explicitly rejected.
 Remove the fail-closed startup boundary only after its downstream paths are

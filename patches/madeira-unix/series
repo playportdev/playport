@@ -55,3 +55,4 @@
 0054-ntdll-build-owner-local-window-backed-startup-parame.patch
 0055-ntdll-place-and-relocate-i386-images-in-guest-space.patch
 0056-ntdll-route-owned-window-anonymous-VM-operations.patch
+0057-ntdll-allocate-guest-constrained-VM-in-owner-local-gaps.patch

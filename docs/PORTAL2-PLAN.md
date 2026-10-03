@@ -236,13 +236,25 @@ Protection/decommit/release/reuse are host-tested, not phone-validated. Hollow
 Knight passes `first-frame+10` (8.20 s first frame, menu visible); details remain
 in the step-2 evidence record.
 
-**Next, still step 2:** NULL/gap allocation, guest-limit/zero-bits and query/
-section/image VM routing, then the remaining PEB32 loader/heap initialization;
-validate nonzero image relocation on the phone when the loader can reach an
-image needing it. Native VM currently accepts explicit **host** pointers only:
-raw guest pointers are not converted and NULL allocations still use the native
-allocator. Ex window allocations, special protections/types, partial release
-and bootstrap/image free are refused. Only the initial TEB is paired;
+**Guest-constrained NULL allocation follow-up, 2026-10-03:** madeira-unix
+0057 shares owner-local gap search between images and anonymous VM. NULL
+requests with a <=32-bit zero-bits constraint reserve/commit in the owner's
+window; counts/masks, large-address-aware limits, rounding and top-down
+selection use guest offsets. Unconstrained native NULL requests remain native.
+The phone confirms parameters at guest `0x10000`, `null=1`,
+`zero_bits=0xffffffff`; startup still stops before the loader (`c00000bb`),
+with **no i386 execution**. Top-down/collision selection and other limits are
+host-tested, not phone-validated. Hollow Knight passes `first-frame+10`
+(9.26 s first frame, menu visible); details remain in the step-2 evidence record.
+
+**Next, still step 2:** query/section/image VM routing, then the remaining
+PEB32 loader/heap initialization; validate nonzero image relocation on the
+phone when the loader can reach an image needing it. Native VM returns
+**host** pointers: raw guest pointers are not converted, and NULL requests
+without a guest constraint (or with a wider native constraint) still use the
+native allocator. PE-facing constraint/return conversion remains unwired.
+Ex window allocations, special protections/types, partial release and
+bootstrap/image free are refused. Only the initial TEB is paired;
 secondary WoW64 thread allocation explicitly returns `STATUS_NOT_SUPPORTED`.
 The legacy `wow_peb`,
 TEB free lists and WoW64 limits remain global but this bootstrap does not

@@ -45,6 +45,7 @@ typedef struct {
     struct { uint16_t Flags, Length; uint32_t TimeStamp; UNICODE_STRING32 DosPath; } DLCurrentDirectory[32];
 } RTL_USER_PROCESS_PARAMETERS32;
 #include "wow64_params.h"
+#define TEST_PARAMS_GUEST 0x10000u /* Mock gap selection, not a runtime fixed address. */
 
 typedef struct { int64_t QuadPart; } LARGE_INTEGER;
 #define PEB_SCALARS \
@@ -76,19 +77,20 @@ static void *get_wow_teb(TEB *teb) { assert(teb == &current); return &pair; }
 static NTSTATUS NtAllocateVirtualMemory(void *process, void **host, uintptr_t zero_bits,
                                        size_t *size, unsigned int type, unsigned int protect)
 {
-    assert(process == NtCurrentProcess() && !zero_bits);
+    assert(process == NtCurrentProcess() && zero_bits == UINT32_MAX);
     assert(type == (MEM_RESERVE | MEM_COMMIT) && protect == PAGE_READWRITE);
-    assert(*host == (void *)ios_wow64_host_addr(active_window, IOS_WOW64_PARAMS_GUEST));
+    assert(!*host);
     assert(*size <= IOS_WOW64_PARAMS_MAX);
     alloc_calls++;
     if (alloc_fail) return STATUS_NO_MEMORY;
+    *host = (void *)ios_wow64_host_addr(active_window, TEST_PARAMS_GUEST);
     assert(!mprotect(*host, *size, PROT_READ | PROT_WRITE));
     return 0;
 }
 static NTSTATUS NtFreeVirtualMemory(void *process, void **host, size_t *size, unsigned int type)
 {
     assert(process == NtCurrentProcess() && !*size && type == MEM_RELEASE);
-    assert(*host == (void *)ios_wow64_host_addr(active_window, IOS_WOW64_PARAMS_GUEST));
+    assert(*host == (void *)ios_wow64_host_addr(active_window, TEST_PARAMS_GUEST));
     return 0;
 }
 /* Suppress diagnostic output only; the extracted publication function is unchanged. */
@@ -185,7 +187,7 @@ int main(void)
     assert(!p32->ProcessParameters);
     alloc_fail = 0;
     assert(!ios_wow64_init_parameters(&owner, a, &src, 1));
-    assert(p32->ProcessParameters == IOS_WOW64_PARAMS_GUEST && p32->ImageBaseAddress == 0x400000);
+    assert(p32->ProcessParameters == TEST_PARAMS_GUEST && p32->ImageBaseAddress == 0x400000);
     assert(p32->BeingDebugged == 1 && p32->NtGlobalFlag == 0x123 && p32->NumberOfProcessors == 6);
     assert(p32->HeapSegmentReserve == 0x100000 && !p32->LdrData && !p32->ProcessHeap);
     check(a, p32->ProcessParameters, &src);
@@ -195,7 +197,7 @@ int main(void)
     assert(ios_wow64_init_parameters(&wrong, a, &src, 0) == STATUS_INVALID_PARAMETER);
     assert(alloc_calls == calls);
 
-    void *host = (void *)ios_wow64_host_addr(b, IOS_WOW64_PARAMS_GUEST);
+    void *host = (void *)ios_wow64_host_addr(b, TEST_PARAMS_GUEST);
     assert(!mprotect(host, 0x4000, PROT_READ | PROT_WRITE));
     memset(host, 0xaa, 0x4000);
 #define REJECT(change, code) do { \
