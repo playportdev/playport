@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:23:11 +0200
+Subject: [PATCH] ntdll: share win32u's DC_ATTR arena with every WoW64 window
+
+win32u keeps DC_ATTRs in process-global buckets, and its DC cache hands a
+cached DC to whichever process asks next, so an i386 child gets DCs whose
+attributes lie outside its window (gdi32 truncated the session address
+and faulted), and per-child buckets would leave the session holding a
+dead child's freed attributes. Make one 1 MiB arena, created by the first
+window or the first bucket and kept for the life of the Mach process,
+with its host base and size in its first granule. win32u takes its
+buckets from the rest (wine-unix 0009). Each window aliases the arena
+read-write at guest 0x7fa00000, claimed at reservation beside the other
+bootstrap views, and PEB32's GdiDCAttributeList names it for i386 gdi32
+(wine-pe 0019). Teardown removes only the alias. A failed alias leaves
+the gap protected and the list empty.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c   | 50 ++++++++++++++++++++++++++++
+ build/ntdll-unix/wow64_dc_attr.h | 56 ++++++++++++++++++++++++++++++++
+ 2 files changed, 106 insertions(+)
+ create mode 100644 build/ntdll-unix/wow64_dc_attr.h
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 76c29f2..9706772 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -14918,6 +14918,7 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+  * General WoW64 thread allocation and VM translation remain pending.
+  * Lock order: windows -> virtual_mutex; queries only take windows. */
+ #include "wow64_pair.h"
++#include "wow64_dc_attr.h"
+ C_ASSERT( sizeof(TEB) <= IOS_WOW64_TEB_OFFSET );
+ C_ASSERT( sizeof(TEB32) <= 0x1000 );
+ C_ASSERT( sizeof(PEB32) <= IOS_WOW64_PAIR_SIZE );
+@@ -15489,6 +15490,48 @@ static NTSTATUS ios_wow64_pair_initial_teb( unsigned int slot )
+     return STATUS_SUCCESS;
+ }
+ 
++/* The DC_ATTR arena (wow64_dc_attr.h): one native view for the life of the
++ * Mach process, made by the first window or the first DC_ATTR bucket. Both
++ * locks are held. */
++static void *ios_wow64_dc_attr_host;
++
++static void *ios_wow64_dc_attr_create(void)
++{
++    struct ios_wow64_dc_attr_header *header;
++    struct file_view *view;
++    NTSTATUS status;
++
++    if (ios_wow64_dc_attr_host) return ios_wow64_dc_attr_host;
++    if ((status = map_view( &view, NULL, IOS_WOW64_DC_ATTR_SIZE, 0,
++                            VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, 0, 0, 0 )))
++    {
++        dprintf( 2, "[wow64-window] DC_ATTR arena allocation failed %#x\n", (int)status );
++        return NULL;
++    }
++    header = view->base;
++    header->host = (uintptr_t)view->base;
++    header->size = IOS_WOW64_DC_ATTR_SIZE;
++    ios_wow64_dc_attr_host = view->base;
++    dprintf( 2, "[wow64-window] DC_ATTR arena at %p (%#x bytes)\n", view->base, IOS_WOW64_DC_ATTR_SIZE );
++    return ios_wow64_dc_attr_host;
++}
++
++/* win32u's DC_ATTR buckets (wine-unix 0009): the arena after its header, or
++ * NULL when it could not be made. */
++void *ios_wow64_dc_attr_arena( SIZE_T *size )
++{
++    sigset_t sigset;
++    void *arena;
++
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    arena = ios_wow64_dc_attr_create();
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    *size = arena ? IOS_WOW64_DC_ATTR_SIZE - IOS_WOW64_DC_ATTR_HEADER : 0;
++    return arena ? (char *)arena + IOS_WOW64_DC_ATTR_HEADER : NULL;
++}
++
+ /* GDI's shared handle table is the session's: win32u allocates it once per
+  * Mach process, and a child's PEB is a copy of the session's. i386 gdi32
+  * reads it, so alias it read-only into the window and give PEB32 its guest
+@@ -15588,6 +15631,13 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+             ios_wow64_delete_views( base );
+             goto unlock_virtual;
+         }
++        if ((ios_wow64_windows[slot].peb32->GdiDCAttributeList =
++             ios_wow64_alias_dc_attr( base, ios_wow64_dc_attr_create() )))
++            dprintf( 2, "[wow64-window] DC_ATTR arena %p aliased at guest %#x (%#x bytes)\n",
++                     ios_wow64_dc_attr_host, IOS_WOW64_DC_ATTR_GUEST, IOS_WOW64_DC_ATTR_SIZE );
++        else
++            dprintf( 2, "[wow64-window] DC_ATTR arena %p not aliased: the guest gets no DC attributes\n",
++                     ios_wow64_dc_attr_host );
+         ios_wow64_alias_gdi_shared( base, ios_wow64_windows[slot].peb32, owner );
+         dprintf( 2, "[wow64-window] bootstrap peb32_host=%p peb32_guest=0x7ff00000 "
+                  "bytes=%#lx paired=1 scalar_only=1\n", peb_view->base, (unsigned long)(host_page_mask + 1) );
+diff --git a/build/ntdll-unix/wow64_dc_attr.h b/build/ntdll-unix/wow64_dc_attr.h
+new file mode 100644
+index 0000000..e1ddd0b
+--- /dev/null
++++ b/build/ntdll-unix/wow64_dc_attr.h
+@@ -0,0 +1,56 @@
++/* Playport: win32u's DC_ATTR arena, shared by the session and every window.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included after wow64_views.h and wow64_vm.h; both locks are held.
++ *
++ * win32u's DC cache hands a cached DC to whichever process asks next, so a
++ * per-child bucket would leave a child holding a session DC it cannot reach,
++ * and the session a dead child's freed one. One arena outlives every child:
++ * win32u takes all its DC_ATTR buckets from it, and each window aliases it at
++ * one fixed guest address. UserPointer stays a host pointer; i386 gdi32 maps
++ * it through the header at the arena's start (wine-pe 0019).
++ */
++#ifndef IOS_WOW64_DC_ATTR_H
++#define IOS_WOW64_DC_ATTR_H
++
++#define IOS_WOW64_DC_ATTR_GUEST  0x7fa00000u  /* below the GDI table alias and the TEB pair */
++#define IOS_WOW64_DC_ATTR_SIZE   0x100000u    /* 15 buckets of about 300 DC_ATTRs */
++#define IOS_WOW64_DC_ATTR_HEADER 0x10000u     /* one allocation granule; buckets follow */
++
++struct ios_wow64_dc_attr_header
++{
++    uint64_t host;  /* the arena's host base */
++    uint64_t size;  /* the arena's size, header included */
++};
++
++/* Alias the arena read-write at IOS_WOW64_DC_ATTR_GUEST in the window and
++ * return that guest address, or 0 with the window unchanged. */
++static uint32_t ios_wow64_alias_dc_attr( uintptr_t window, void *arena )
++{
++    struct file_view *view;
++    vm_address_t target;
++    vm_prot_t cur, max;
++    kern_return_t kr;
++
++    if (!arena || ios_wow64_claim_view( window, IOS_WOW64_DC_ATTR_GUEST, IOS_WOW64_DC_ATTR_SIZE,
++                                        VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, &view ))
++        return 0;
++    target = (vm_address_t)view->base;
++    kr = vm_remap( mach_task_self(), &target, IOS_WOW64_DC_ATTR_SIZE, 0,
++                   VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)arena,
++                   FALSE, &cur, &max, VM_INHERIT_NONE );
++    if (kr == KERN_SUCCESS)
++        kr = vm_protect( mach_task_self(), target, IOS_WOW64_DC_ATTR_SIZE, FALSE,
++                         VM_PROT_READ | VM_PROT_WRITE );
++    if (kr != KERN_SUCCESS)
++    {
++        /* back to a protected window gap */
++        mmap( view->base, IOS_WOW64_DC_ATTR_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0 );
++        view->protect = VPROT_WOW64_HOLE;
++        set_page_vprot( view->base, IOS_WOW64_DC_ATTR_SIZE, 0 );
++        ios_wow64_vm_coalesce( window, view );
++        return 0;
++    }
++    return IOS_WOW64_DC_ATTR_GUEST;
++}
++
++#endif

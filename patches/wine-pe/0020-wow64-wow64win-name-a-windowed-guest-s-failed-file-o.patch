@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:34:37 +0200
+Subject: [PATCH] wow64, wow64win: name a windowed guest's failed file opens
+ and windows
+
+On iOS, a windowed i386 guest's failed system calls are logged with their
+raw arguments only. Add the file name to a failed NtOpenFile,
+NtCreateFile or file attribute query, and log a failed
+NtUserCreateWindowEx with its class, name, styles, parent, instance and
+last error, so that a launcher that gives up can be followed in the log.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/wow64/syscall.c | 32 ++++++++++++++++++++++++++++++--
+ dlls/wow64win/user.c | 19 +++++++++++++++++++
+ 2 files changed, 49 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
+index 0869c07..8a9bffc 100644
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -1260,6 +1260,33 @@ static void log_recent_calls(void)
+              recent_calls[i % ARRAY_SIZE(recent_calls)].status );
+ }
+ 
++/* Playport (iOS): a guest string for the log, without IsBadStringPtrW (no kernel32 here). */
++static const char *debugstr_guest_wn( const WCHAR *str, unsigned int len )
++{
++    char buffer[200];
++    unsigned int i;
++
++    if (!str) return "(null)";
++    for (i = 0; i < len && i < sizeof(buffer) - 1; i++) buffer[i] = str[i] >= 0x20 && str[i] < 0x7f ? str[i] : '?';
++    buffer[i] = 0;
++    return wine_dbg_sprintf( "\"%s\"", buffer );
++}
++
++/* Playport (iOS): the file a failed guest open or attribute query named. */
++static const char *debugstr_guest_file( ULONG_PTR func, const UINT *args )
++{
++    const OBJECT_ATTRIBUTES32 *attr;
++    const UNICODE_STRING32 *name;
++    ULONG attr32;
++
++    if (func == (ULONG_PTR)wow64_NtOpenFile || func == (ULONG_PTR)wow64_NtCreateFile) attr32 = args[2];
++    else if (func == (ULONG_PTR)wow64_NtQueryAttributesFile ||
++             func == (ULONG_PTR)wow64_NtQueryFullAttributesFile) attr32 = args[0];
++    else return "";
++    if (!(attr = wow64_to_host( attr32 )) || !(name = wow64_to_host( attr->ObjectName ))) return "";
++    return wine_dbg_sprintf( " %s", debugstr_guest_wn( wow64_to_host( name->Buffer ), name->Length / sizeof(WCHAR) ));
++}
++
+ /**********************************************************************
+  *           Wow64SystemServiceEx  (wow64.@)
+  */
+@@ -1288,8 +1315,9 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
+         LONG count = InterlockedIncrement( &failed );
+ 
+         if (count <= 256)
+-            ERR( "Playport: i386 system call %04x (args %08x %08x %08x %08x) failed %08lx [%ld]\n",
+-                 num, args[0], args[1], args[2], args[3], status, count );
++            ERR( "Playport: i386 system call %04x (args %08x %08x %08x %08x) failed %08lx [%ld]%s\n",
++                 num, args[0], args[1], args[2], args[3], status, count,
++                 debugstr_guest_file( table->ServiceTable[id], args ));
+     }
+     return status;
+ }
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index 1fb63b9..e69788a 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -1998,6 +1998,18 @@ NTSTATUS WINAPI wow64_NtUserCreatePopupMenu( UINT *args )
+     return HandleToUlong( NtUserCreatePopupMenu() );
+ }
+ 
++/* Playport (iOS): a guest string for the log, without IsBadStringPtrW (no kernel32 here). */
++static const char *debugstr_guest_wn( const WCHAR *str, unsigned int len )
++{
++    char buffer[200];
++    unsigned int i;
++
++    if (!str) return "(null)";
++    for (i = 0; i < len && i < sizeof(buffer) - 1; i++) buffer[i] = str[i] >= 0x20 && str[i] < 0x7f ? str[i] : '?';
++    buffer[i] = 0;
++    return wine_dbg_sprintf( "\"%s\"", buffer );
++}
++
+ NTSTATUS WINAPI wow64_NtUserCreateWindowEx( UINT *args )
+ {
+     DWORD ex_style = get_ulong( &args );
+@@ -2027,6 +2039,13 @@ NTSTATUS WINAPI wow64_NtUserCreateWindowEx( UINT *args )
+                                 unicode_str_32to64( &window_name, window_name32 ),
+                                 style, x, y, width, height, parent, menu,
+                                 instance, params, flags, client_instance, class, ansi );
++    if (!ret)
++        ERR( "Playport: i386 NtUserCreateWindowEx( class %s, name %s, style %08lx, ex_style %08lx, "
++             "parent %p, instance %p ) failed, error %lu\n",
++             !class_name32 ? "NULL" : !IS_INTRESOURCE(class_name.Buffer) ?
++                 debugstr_guest_wn( class_name.Buffer, class_name.Length / sizeof(WCHAR) ) : wine_dbg_sprintf( "#%p", class_name.Buffer ),
++             window_name32 ? debugstr_guest_wn( window_name.Buffer, window_name.Length / sizeof(WCHAR) ) : "NULL", style, ex_style, parent, instance,
++             RtlGetLastWin32Error() );
+     return HandleToUlong( ret );
+ }
+ 

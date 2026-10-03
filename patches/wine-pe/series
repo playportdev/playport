@@ -16,3 +16,5 @@
 0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch
 0017-ntdll-gdi32-leave-a-native-PEB-above-4-GiB-alone-in-.patch
 0018-wow64win-convert-audited-win32u-thunks-through-the-i.patch
+0019-gdi32-reach-a-native-DC_ATTR-through-the-WoW64-windo.patch
+0020-wow64-wow64win-name-a-windowed-guest-s-failed-file-o.patch

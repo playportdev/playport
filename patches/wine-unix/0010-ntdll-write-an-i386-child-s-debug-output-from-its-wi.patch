@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:49:31 +0200
+Subject: [PATCH] ntdll: write an i386 child's debug output from its window on
+ iOS
+
+wow64_wine_dbg_write took the guest string's address as a host one, so
+write() failed with EFAULT and every line an i386 child of the iOS
+session printed was lost. Add the caller's window base (madeira-unix
+0049) when it has one.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/ntdll/unix/debug.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dlls/ntdll/unix/debug.c b/dlls/ntdll/unix/debug.c
+index 53516b9..ac4c2b7 100644
+--- a/dlls/ntdll/unix/debug.c
++++ b/dlls/ntdll/unix/debug.c
+@@ -289,7 +289,13 @@ NTSTATUS wow64_wine_dbg_write( void *args )
+         ULONG        str;
+         unsigned int len;
+     } const *params32 = args;
++#ifdef WINE_IOS
++    /* an i386 child's string is in its window, not at the guest address */
++    extern uintptr_t ios_wow64_current_base(void);
++    uintptr_t base = ios_wow64_current_base();
+ 
++    if (base && params32->str) return write( 2, (char *)base + params32->str, params32->len );
++#endif
+     return write( 2, ULongToPtr(params32->str), params32->len );
+ }
+ #endif

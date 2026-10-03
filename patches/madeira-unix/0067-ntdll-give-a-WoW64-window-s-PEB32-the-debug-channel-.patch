@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:49:31 +0200
+Subject: [PATCH] ntdll: give a WoW64 window's PEB32 the debug channel table
+
+i386 ntdll reads its debug channels at PEB32 plus one page, as the native
+one reads them at PEB plus two. PEB32 is fresh storage in the window, so
+the guest saw no channel and a default of 0: every i386 err and fixme was
+silent. Copy the owner's table there at reservation, terminator (the
+default flags) included, bounded by the PEB32 view.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 25f0a70..96cc242 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15633,6 +15633,17 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+             ios_wow64_delete_views( base );
+             goto unlock_virtual;
+         }
++        {
++            /* i386 ntdll reads its debug channels at PEB32 + one page, as the
++             * native one does at PEB + two (a child's copy, loader_ios.c);
++             * the terminator holds the default flags. */
++            struct dbg_channel { unsigned char flags; char name[15]; };
++            const struct dbg_channel *src = (const struct dbg_channel *)((char *)owner + 0x2000);
++            unsigned int nb = 0, max = (host_page_mask + 1 - 0x1000) / sizeof(*src) - 1;
++            while (nb < max && src[nb].name[0]) nb++;
++            memcpy( (char *)ios_wow64_windows[slot].peb32 + 0x1000, src, (nb + 1) * sizeof(*src) );
++            dprintf( 2, "[wow64-window] PEB32 debug channels: %u, default flags %#x\n", nb, src[nb].flags );
++        }
+         ios_wow64_alias_session_view( base, user_shared_data, 0x7ffe0000, "KUSER_SHARED_DATA" );
+         if ((ios_wow64_windows[slot].peb32->GdiDCAttributeList =
+              ios_wow64_alias_dc_attr( base, ios_wow64_dc_attr_create() )))

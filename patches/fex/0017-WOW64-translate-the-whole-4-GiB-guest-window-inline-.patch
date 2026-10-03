@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 23:03:50 +0200
+Subject: [PATCH] WOW64: translate the whole 4 GiB guest window inline on the
+ iOS host
+
+Wine now aliases KUSER_SHARED_DATA into the window at its guest address
+0x7ffe0000 (Playport madeira-unix 0066). Leaving 0x7ffe0000 and up
+untranslated sent those accesses to Wine's x86-64 KUSER_SHARED_DATA
+redirect, which rewrites every host register holding 0x7ffexxxx to the
+session's page: an i386 guest register then held that host address
+truncated to 32 bits (0x38000000), and RtlGetEnabledExtendedFeatures
+faulted in Portal 2's i386 child. Translate the whole window inline.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ Source/Windows/WOW64/Module.cpp | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index 8e178d5..a121dea 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -137,9 +137,10 @@ class WowSyscallHandler;
+  * the bridge addresses the guest jumps to) stays guest. */
+ namespace Window {
+ constexpr uint64_t Size = 1ULL << 32;
+-// KUSER_SHARED_DATA is the session's, at guest 0x7ffe0000: accesses from there
+-// up fault low and Wine resolves the shared page before the window.
+-constexpr uint64_t InlineLimit = 0x7ffe0000;
++// Wine aliases KUSER_SHARED_DATA into the window at its guest address 0x7ffe0000,
++// so the whole 4 GiB translates inline: a low fault there would meet Wine's x86-64
++// KUSER_SHARED_DATA redirect, which rewrites the registers holding 0x7ffexxxx.
++constexpr uint64_t InlineLimit = Size;
+ uint64_t Base;
+ 
+ uint64_t ToHost(uint64_t Address) {

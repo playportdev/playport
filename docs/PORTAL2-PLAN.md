@@ -326,22 +326,27 @@ Details are in the same step-2 evidence record.
 - On the phone, the i386 loader and user32 initialize, and `portal2.exe`'s
   entry point runs. It loads `bin\launcher.dll`, which loads `steam_api`,
   `tier0` and `vstdlib`.
-- The child then ends with a guest `c0000005`: gdi32 reads a DC's
-  attributes through a truncated session address (742,010 serviced low
-  faults by then).
-- Hollow Knight passes `first-frame+10` (9.15 s, menu visible).
+- Follow-up: one DC_ATTR arena that every window aliases (win32u's DC cache
+  moves DCs between processes, so per-child buckets cannot work); the
+  apiset map and KUSER_SHARED_DATA aliased into the window; FEX translating
+  the whole window inline (fex 0017); i386 unix libraries with their WoW64
+  tables; the guest's own debug output.
+- On the phone `bin\launcher.dll` now runs its own code: `gameinfo.txt`,
+  the Steam overlay probe, `bin\filesystem_stdio.dll` (37 i386 images). It
+  then asks for a second thread, which the window refuses (`c00000bb`), and
+  waits forever (2.49 million serviced low faults by then).
+- Hollow Knight passes `first-frame+10` (8.26 s, menu visible).
 
 Still open in step 2:
 
-- per-child DC attributes in the window (next);
+- secondary WoW64 threads (next: the launcher's stop);
 - wow64win's remaining thunks, starting with `NtUserMessageCall`;
-- the unix side's wow64 unix calls;
+- pointers inside the unix libraries' WoW64 parameter blocks;
+- fonts for i386 GDI;
 - other query classes;
 - writable and anonymous section views, and unmap of file views;
-- secondary WoW64 threads (refused);
 - the global `wow_peb`, TEB free lists and limits (unused by this path);
-- startup globals that rely on serialization;
-- `KUSER_SHARED_DATA` in the window.
+- startup globals that rely on serialization.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"
@@ -380,9 +385,9 @@ stops (`c00000bb`). Questions 1 and 2 are answered: WoW64 runs beside the ARM64E
 session, and FEX's WoW64 module runs on iOS. Hollow Knight passes
 `first-frame+10` (9.61 s, menu visible).
 
-**Next:** win32u's DC attributes in each windowed child's window (the
-current stop), then wow64win's remaining thunks as Portal 2 reaches them,
-toward the milestone's last marker, `bin/engine.dll`.
+**Next:** secondary WoW64 threads (the launcher's stop), then the
+remaining blockers as Portal 2 reaches them, toward the milestone's last
+marker, `bin/engine.dll`.
 
 - Port the iOS JIT plumbing from `ARM64EC/Module.cpp` into `WOW64/Module.cpp`:
   pool allocation, aliases, call-return stacks and the transition hooks. Share

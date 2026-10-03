@@ -2,21 +2,22 @@
 
 ## Result
 
-wow64.dll and the audited part of wow64win.dll now convert the guest's
-pointers through the window base. On the phone, Portal 2's i386 child gets
-through its i386 loader and user32's initialization and runs `portal2.exe`'s
-entry point: the launcher loads `bin\launcher.dll`, which loads `steam_api`,
-`tier0` and `vstdlib` among 36 i386 images. The child then ends with a guest
-access violation (`c0000005`). The cause is gdi32 reading a DC's
-attributes (`DC_ATTR`) through the handle table's `UserPointer`, which is a
-truncated session address (`0x7021380000`). win32u keeps DC attributes in
-native memory, outside the window. That is the next boundary.
+wow64.dll and the audited part of wow64win.dll convert the guest's pointers
+through the window base. With the follow-up below (DC attributes, the apiset
+map, KUSER_SHARED_DATA, i386 unix libraries), Portal 2's i386 child runs
+`bin\launcher.dll`'s own code: it reads `gameinfo.txt`, probes for the
+Steam overlay and `steam.dll`, and loads `bin\filesystem_stdio.dll` (37
+i386 images). It then asks for a second thread (`NtCreateThreadEx`), which
+the window still refuses (`c00000bb`), and waits for it forever.
 
 Milestone markers:
 
 - reached: `portal2.exe` at `0x400000`, the i386 `kernel32` and `ntdll`
-  loaded, and the entry point executed;
+  loaded, the entry point executed, serviced low faults logged;
 - not reached: `bin/engine.dll`.
+
+The latest IPA and runs are under "Follow-up runs". The earlier IPAs of
+this step, whose child stopped at a DC attribute read (`c0000005`):
 
 IPA: `.work/out/20261003-220140-70d803f5/Playport-26.5-70d803f5.ipa` (dev).
 SHA256: `70d803f5024f42a8fd7a1b33456de32374d7256ba37f174e53338d9d3dbce2df`.
@@ -122,6 +123,65 @@ passed `first-frame+10` on it (8.37 s, menu).
   reservation, the table is aliased read-only into the window, at guest
   `0x7fc80000` (`vm_remap`, `0x180000` bytes). PEB32 gets that guest
   address.
+
+### DC attributes, apisets and unix libraries (follow-up)
+
+- **madeira-unix 0065, wine-unix 0009, wine-pe 0019**: one DC_ATTR arena.
+  win32u keeps DC attributes in process-global buckets, and its DC cache
+  (`dce.c`) hands a cached DC to whichever process asks next. Buckets per
+  child would give a child a session DC it cannot reach, and leave the
+  session a dead child's freed attributes. So ntdll makes one 1 MiB arena
+  for the life of the Mach process (by the first window or the first bucket),
+  with its host base and size in its first 64 KiB. win32u takes every
+  bucket from the rest (15 buckets of about 300 DC_ATTRs; Hollow Knight and
+  Portal 2 each use one), then falls back to ordinary buckets and logs once
+  that i386 children cannot use them. Each window aliases the arena
+  read-write at guest `0x7fa00000`, claimed at reservation like the other
+  bootstrap views, and PEB32's `GdiDCAttributeList` names it. UserPointer
+  stays the host pointer, so the session's path changes only in where its
+  buckets live. i386 gdi32 maps a UserPointer above 4 GiB into the alias
+  through the arena header; one outside the arena gives NULL (an invalid
+  handle for the guest, not a truncated address). Teardown removes the
+  alias only. The host low half of the address (the first plan) needed a
+  host address with chosen low 32 bits, which the 16 GiB furniture band
+  cannot promise.
+- **madeira-unix 0066**: PEB32's `ApiSetMap` was 0, so the i386 loader
+  probed every directory for `api-ms-win-crt-*` as files and failed the
+  imports. The session's apiset map is aliased read-only into the window
+  (one helper with the GDI table now). KUSER_SHARED_DATA is aliased
+  read-only at its guest address `0x7ffe0000` first; a top-down alias had
+  landed there.
+- **fex 0017**: FEX left guest `0x7ffe0000` and up untranslated, so those
+  accesses faulted low and met Wine's x86-64 KUSER_SHARED_DATA redirect,
+  which rewrites every host register holding `0x7ffexxxx`. The guest's
+  `user_shared_data` register became the session page's address truncated
+  to `0x38000000`, and `RtlGetEnabledExtendedFeatures` faulted. The whole
+  window now translates inline.
+- **madeira-unix 0068**: the window query router refused
+  `MemoryWineLoadUnixLibWow64`, so ws2_32's DllMain failed and with it
+  `bin\launcher.dll` ("DLL initialization failed"). The query now takes
+  NtQueryVirtualMemory's own path, which names the module from its export
+  directory (read as PE32), and returns the library's WoW64 table (ws2_32,
+  secur32, crypt32, dwrite, winevulkan) or the stub table (dnsapi here),
+  never the 64-bit one.
+- **madeira-unix 0067, wine-unix 0010** (diagnostics): the guest's debug
+  output was lost twice over. PEB32 had no debug channel table (default
+  flags 0), and `wow64_wine_dbg_write` wrote from the guest address. The
+  owner's table is copied to PEB32 + 0x1000, and the write adds the
+  window base. i386 `err`/`fixme` lines now reach `s1-host.log`; that is
+  how the launcher's message box text below was found.
+- **wine-pe 0020** (diagnostics): a failed guest file open or attribute
+  query logs the file name; a failed `NtUserCreateWindowEx` logs its class,
+  name, styles and last error.
+- **Host test**: `build/wow64/dc_attr_test.c` (in `build/wow64/test.py`)
+  compiles the arena creation, win32u's entry and the window alias from
+  0065, and gdi32's mapping from 0019, with real 4 GiB windows and a mock
+  view tree (vm_remap stands in as Linux `mremap` of a shared mapping). It
+  checks one arena for every caller, the guest range below the TEB pair,
+  header and data coherence between the arena and two windows, gdi32's
+  bounds, the claimed range refusing a second claim, a failed remap rolled
+  back to a protected gap, and a child's teardown leaving the arena and the
+  other window intact.
 
 ### Conversion list (wine-pe 0016)
 
@@ -238,21 +298,71 @@ err:wow:log_recent_calls Playport: recent i386 call 1233 -> 040a0043      (NtGdi
 **Hollow Knight** (`.work/ui-runs/p2win-10-hk`): exit 0 at `first-frame+10`.
 The first frame came at 9.15 s, and the screenshot shows the main menu.
 
+### Follow-up runs
+
+IPA: `.work/out/20261003-230508-8fad5988/Playport-26.5-8fad5988.ipa` (dev),
+SHA256 `8fad5988747950f85bb8f805383c022dcfd7ce0f28fece271ce741400ad17a47`.
+`pp build` passed (78 IPA checks), and so did `pp test`. Each run below
+is `pp install` then `pp ui --play app-620 --until done --wait 120 --shot`
+(62% to 54% battery); each fix was found from the run before it.
+
+- `p2dc-1` (arena only): no `c0000005`. gdi32 uses the HDC, and the
+  launcher's `NtUserCreateWindowEx` of a `#32770` dialog fails; the
+  child exits 0.
+- `p2dc-2` (0020): the failed calls name `api-ms-win-crt-*` probes in every
+  search directory, and the dialog fails with error 6.
+- `p2dc-5` (0066, 0067, 0010): no apiset probes. The guest's own log
+  says `[msgbox] caption L"Launcher Error" text L"Failed to load the
+  launcher DLL:\n\nDLL initialization failed."`, after ws2_32's unix
+  library query failed `c00000bb`.
+- `p2dc-7` (0068): the same box with "No access to memory location", from
+  a fault at guest `0x380003dc` in `RtlGetEnabledExtendedFeatures`.
+- `p2dc-8` (fex 0017), `.work/ui-runs/p2dc-8`:
+
+```text
+[wow64-window] KUSER_SHARED_DATA 0x7038000000 aliased read-only at guest 0x7ffe0000 (0x4000 bytes)
+[wow64-window] DC_ATTR arena 0x7021380000 aliased at guest 0x7fa00000 (0x100000 bytes)
+[wow64-window] GDI shared table 0x7021200000 aliased read-only at guest 0x7fc80000 (0x180000 bytes)
+[wow64-window] apiset map 0x7020820000 aliased read-only at guest 0x7ffc0000 (0x20000 bytes)
+[unixlib] module 0x70b2ae0000 (ws2_32.dll) WoW64 -> 0x1045dac28
+[unixlib] module 0x70b2a70000 (dnsapi.dll) WoW64 -> 0x140b1c1d8 (stub table)
+... i386 system call 003d ... failed c000003a [54] "\??\C:\Games\Portal 2\portal2_sixense\gameinfo.txt"
+... i386 system call 0033 ... failed c0000034 [55] "\??\C:\Games\Portal 2\bin\GameOverlayRenderer.dll"
+err:wow:wow64_NtMapViewOfSection Playport: i386 image C:\Games\Portal 2\bin\filesystem_stdio.dll at 79da0000
+err:wow:wow64_guest_rejected host pointer 0000000000002000 (from 0000000105C7B314) is outside the guest window at 0x7038010000, giving the guest 0
+err:wow:Wow64SystemServiceEx Playport: i386 system call 008b (args 00c5e42c 001fffff 00c5e40c ffffffff) failed c00000bb [60]
+```
+
+  The launcher no longer shows its error box. Call `008b` is
+  `NtCreateThreadEx`: a second WoW64 thread is refused. The child then
+  waits with no thread running until the UI run's 300 s limit ends the app
+  (no window release line). By then 2,490,368 low accesses were serviced,
+  most of them stack accesses by FEX's untranslated paths. One DC_ATTR
+  bucket was used.
+
+**Hollow Knight** (`.work/ui-runs/p2dc-8-hk`, same IPA, after fex 0017):
+exit 0 at `first-frame+10`. The first frame came at 8.26 s, and the
+screenshot shows the main menu. It used one DC_ATTR bucket from the arena.
+
 ## Open
 
-- **DC attributes** (next): win32u allocates `DC_ATTR` buckets once per
-  Mach process and publishes them through `UserPointer`. A windowed child
-  needs its own buckets in its window and the guest address in
-  `UserPointer`, with the buckets dropped when the child exits.
+- **Secondary WoW64 threads** (next): `NtCreateThreadEx` in a windowed
+  child is refused, and the launcher waits for that thread forever. A new
+  thread needs its TEB pair, 32-bit stack and FEX thread state in the
+  window.
 - **wow64win.dll**: the thunks not audited yet stop the process. These
   include `NtUserMessageCall` (message parameters, by message), the message
   loop calls and D3DKMT.
-- The unix side's wow64 unix calls (`ntdll`'s `wine_dbg_write`, server
-  calls) convert nothing yet, so the i386 guest's own debug output is lost.
+- The WoW64 thunks of the unix libraries pass guest pointers inside their
+  parameter blocks; a system call given one fails with `EFAULT`.
+  Libraries without a WoW64 table (dnsapi, nsi, audio, gstreamer) get the
+  stub table.
+- No fonts for i386 GDI (`select_font can't find a single appropriate font`).
+- The guest's metafile DCs would write UserPointer into the read-only GDI
+  table alias.
 - File views in the window cannot be unmapped, protected or queried.
   Writable and anonymous sections are refused.
-- Serviced low faults reach 742,010 by the launcher. Step 4's inline
-  translation must bring that down.
+- Serviced low faults: 2.49 million by the launcher's wait. Step 4's
+  inline translation must bring that down.
 - Values that win32u returns from session memory (for example
-  `GetClassInfoEx`'s menu name) are still truncated, as they are in Wine's
-  own WoW64.
+  `GetClassInfoEx`'s menu name) are still truncated, as in Wine's own WoW64.

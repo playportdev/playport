@@ -28,6 +28,8 @@ SECTION_PATCH = REPO / "patches/madeira-unix/0059-ntdll-route-owned-window-image
 PROTECT_PATCH = REPO / "patches/madeira-unix/0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch"
 LOADER_PATCH = REPO / "patches/madeira-unix/0061-ntdll-start-the-WoW64-child-s-native-loader.patch"
 FAULT_PATCH = REPO / "patches/madeira-unix/0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch"
+DC_ATTR_PATCH = REPO / "patches/madeira-unix/0065-ntdll-share-win32u-s-DC_ATTR-arena-with-every-WoW64-.patch"
+GDI32_DC_ATTR_PATCH = REPO / "patches/wine-pe/0019-gdi32-reach-a-native-DC_ATTR-through-the-WoW64-windo.patch"
 GUEST_HEADER = "dlls/wow64/wow64_window.h"
 GUEST_PATCH = REPO / "patches/wine-pe/0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch"
 
@@ -246,6 +248,23 @@ def main():
                         "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
                         "-I", str(root), str(REPO / "build/wow64/fault_test.c"), "-o", str(fault_exe)], check=True)
         subprocess.run([str(fault_exe)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_dc_attr.h",
+                        str(DC_ATTR_PATCH)], check=True)
+        (root / "pair_layout.h").write_text("".join(
+            line + "\n" for line in (root / PAIR_HEADER).read_text().splitlines()
+            if line.startswith("#define IOS_WOW64_") and not line.startswith("#define IOS_WOW64_PAIR_H")))
+        (root / "dc_attr_api.h").write_text(
+            patched_function(VIEWS_PATCH, "static void ios_wow64_delete_views( uintptr_t base )") +
+            patched_function(DC_ATTR_PATCH, "static void *ios_wow64_dc_attr_create(void)") +
+            patched_function(DC_ATTR_PATCH, "void *ios_wow64_dc_attr_arena( SIZE_T *size )") +
+            patched_function(GDI32_DC_ATTR_PATCH,
+                             "static void *client_ptr_from_dc_attr_arena( const UINT64 *arena, UINT64 ptr )"))
+        dc_attr_exe = root / "dc-attr-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/dc_attr_test.c"), "-o", str(dc_attr_exe)], check=True)
+        subprocess.run([str(dc_attr_exe)], check=True)
         # wow64.dll's PE-side conversions, from the wine-pe patch.
         subprocess.run(["git", "-C", tmp, "apply", f"--include={GUEST_HEADER}",
                         str(GUEST_PATCH)], check=True)

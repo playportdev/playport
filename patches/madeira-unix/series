@@ -63,3 +63,7 @@
 0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch
 0063-ntdll-give-a-windowed-WoW64-child-its-32-bit-limits-.patch
 0064-ntdll-alias-the-GDI-shared-handle-table-into-a-WoW64.patch
+0065-ntdll-share-win32u-s-DC_ATTR-arena-with-every-WoW64-.patch
+0066-ntdll-alias-the-apiset-map-and-KUSER_SHARED_DATA-int.patch
+0067-ntdll-give-a-WoW64-window-s-PEB32-the-debug-channel-.patch
+0068-ntdll-load-an-i386-child-s-unix-libraries-with-their.patch
