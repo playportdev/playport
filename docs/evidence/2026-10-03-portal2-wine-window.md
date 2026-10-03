@@ -34,6 +34,8 @@ The native-loader follow-up removes the startup stop: the child runs its own
 aarch64 ntdll's loader into wow64.dll's process init, with the i386 ntdll mapped
 (and relocated) in the window, and stops before loading FEX's CPU module.
 **No i386 code executes. Step 2 and milestone 1 are not complete.**
+Step 3 ([its record](2026-10-03-portal2-fex-wow64.md)) runs i386 code past this
+record's last boundary; wine-pe 0014 below is the earlier version of its stop.
 
 Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
 IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).

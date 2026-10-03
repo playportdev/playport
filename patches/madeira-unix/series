@@ -60,3 +60,4 @@
 0059-ntdll-route-owned-window-image-sections.patch
 0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch
 0061-ntdll-start-the-WoW64-child-s-native-loader.patch
+0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch

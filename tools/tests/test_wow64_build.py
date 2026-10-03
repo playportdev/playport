@@ -72,15 +72,21 @@ class WoW64Build(unittest.TestCase):
                 p.write_bytes(pe() if name in guest else pe(0xaa64, 0x20b))
             rows = [("resource", name) for name in guest + host]
             exports = {"BTCpuProcessInit", "BTCpuThreadInit", "BTCpuSimulate"}
+            imports = {"ntdll.dll", "wow64.dll"}
 
             def run():
                 checks = []
                 with patch.object(verify, "check", side_effect=lambda ok, _: checks.append(bool(ok))), \
-                     patch.object(verify, "pe_table", return_value=exports):
+                     patch.object(verify, "pe_table", return_value=exports), \
+                     patch.object(verify, "pe_import_dlls", side_effect=lambda _: set(imports)):
                     verify.wow64_checks(lambda name: root / name, rows)
                 return checks
 
             self.assertTrue(all(run()))
+            # A CRT import would load kernelbase.dll into the WoW64 process.
+            imports.add("api-ms-win-crt-runtime-l1-1-0.dll")
+            self.assertFalse(all(run()))
+            imports.discard("api-ms-win-crt-runtime-l1-1-0.dll")
             for wrong in (pe(0x8664, 0x20b), pe(0x14c, 0x20b)):
                 (root / guest[0]).write_bytes(wrong)
                 self.assertFalse(all(run()))

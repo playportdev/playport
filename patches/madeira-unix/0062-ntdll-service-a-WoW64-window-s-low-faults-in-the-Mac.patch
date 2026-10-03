@@ -1,0 +1,205 @@
+From 3122daf24bf8310a7b231ba13ce1661354b85e57 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 19:44:05 +0200
+Subject: [PATCH] ntdll: service a WoW64 window's low faults in the Mach
+ handler
+
+A WoW64 process's guest address g is host address base + g in its
+window, and iOS has no low 4 GB. An access to a guest address that was
+not translated (FEX's untranslated stack and string operations, wow64's
+unconverted guest pointers) faults on the low address. The Mach handler
+now finds the faulting thread's owner through its TEB, reads the
+owner's window base without the windows lock (reservation publishes the
+base before the owner, release clears the owner first), and emulates
+the access against base + g with the existing sub-floor emulators; a
+fixed sub-floor image (KUSER_SHARED_DATA) still resolves first. It
+counts the serviced accesses ([wow64-fault], and in the window's
+release line).
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-fex-wow64.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 49 ++++++++++++++++++++++++-----
+ build/ntdll-unix/virtual_ios.c      | 25 ++++++++++++---
+ 2 files changed, 62 insertions(+), 12 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 4077d24..f6f8f96 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1286,7 +1286,8 @@ static int ios_mach_emulate_cas(uint32_t insn, uintptr_t rw_addr, uint64_t gpr[2
+  * Declared here because the Mach exception thread is the primary caller and
+  * sits earlier in the file. */
+ static uintptr_t ios_subfloor_translate( uint64_t addr );
+-static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, const char *via );
++static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t window_base,
++                                 const char *via );
+ 
+ /* ml974: is the ucontext's NEON state real?
+  *
+@@ -1923,7 +1924,17 @@ static void *ios_mach_exception_thread( void *arg )
+                 int sf_low = 0;
+                 /* literal because IOS_SUBFLOOR_FLOOR is defined further down
+                  * this file; same value (0x100000000). */
+-                if (!sf_real && (uint64_t)fault_addr < 0x100000000ull)
++                /* Playport: a WoW64 process's low 4 GB is its window at
++                 * base + guest (virtual_ios.c). The faulting thread's TEB names
++                 * the owner; a fixed sub-floor image (KUSER_SHARED_DATA) still
++                 * resolves first. */
++                uintptr_t sf_window = 0;
++                if (!sf_real && (uint64_t)fault_addr < 0x100000000ull && thread_teb)
++                {
++                    extern uintptr_t ios_wow64_fault_base_for_peb( void *owner );
++                    sf_window = ios_wow64_fault_base_for_peb( ((TEB *)thread_teb)->Peb );
++                }
++                if (!sf_real && !sf_window && (uint64_t)fault_addr < 0x100000000ull)
+                 {
+                     extern int ios_lowalloc_translate( unsigned long long addr,
+                                                        unsigned long long len,
+@@ -1932,7 +1943,7 @@ static void *ios_mach_exception_thread( void *arg )
+                     sf_low = ios_lowalloc_translate( (uint64_t)fault_addr, 1, NULL, NULL );
+                 }
+ 
+-                if (sf_real || sf_low)
++                if (sf_real || sf_low || sf_window)
+                 {
+                     /* The emulators take a ucontext. arm_thread_state64_t IS the
+                      * struct a ucontext's mcontext embeds as __ss, and
+@@ -1961,7 +1972,7 @@ static void *ios_mach_exception_thread( void *arg )
+                                      (unsigned long long)fault_addr );
+                     }
+ 
+-                    if (ios_subfloor_service( &sf_uc, (void *)fault_addr, "mach" ))
++                    if (ios_subfloor_service( &sf_uc, (void *)fault_addr, sf_window, "mach" ))
+                     {
+                         uint64_t sf_pc;
+ 
+@@ -8801,7 +8812,8 @@ static int ios_tlswatch_fault( const void *addr, const void *pc, const char *whi
+ 
+ #ifdef WINE_IOS
+ /* ml938: defined below next to the store emulator it reuses. */
+-static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, const char *via );
++static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t window_base,
++                                 const char *via );
+ #endif
+ 
+ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+@@ -10067,7 +10079,7 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+          * corruption -- measured in ml938. Those come through the Mach handler
+          * instead, which sets thread state directly. */
+         if (!(sg_rx && sg_pc >= sg_rx && sg_pc < sg_rx + sg_sz) &&
+-            ios_subfloor_service( context, siginfo->si_addr, "segv" ))
++            ios_subfloor_service( context, siginfo->si_addr, 0, "segv" ))
+         {
+             PC_sig(context) = PC_sig(context) + 4;
+             ios_fixup_x18_for_return( context );
+@@ -11245,7 +11257,12 @@ static int ios_subfloor_backing_probe( uintptr_t real, unsigned bytes, int need_
+     return 1;
+ }
+ 
+-static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, const char *via )
++/* Playport: WoW64 window accesses serviced here, for the guest's fault count
++ * (virtual_ios.c reports it when a window is released). */
++unsigned long long ios_wow64_window_serviced;
++
++static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, uintptr_t window_base,
++                                 const char *via )
+ {
+     uint64_t addr = (uint64_t)(uintptr_t)fault_addr;
+     uintptr_t real = ios_subfloor_translate( addr );
+@@ -11309,7 +11326,14 @@ static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, const char *
+      * enforced on the allocate/free paths, which run on the guest's own thread.
+      * Sound for a single-owner experiment; a general mechanism would need the
+      * faulting thread's identity plumbed through. */
+-    if (!real)
++    /* Playport: the faulting thread's WoW64 window covers its whole low 4 GB;
++     * the span must stay inside it. */
++    if (!real && window_base && addr < IOS_SUBFLOOR_FLOOR)
++    {
++        if (addr + span > IOS_SUBFLOOR_FLOOR) return 0;
++        real = window_base + addr;
++    }
++    else if (!real)
+     {
+         extern int ios_lowalloc_translate( unsigned long long addr, unsigned long long len,
+                                            unsigned long long *real_out, void **owner_out );
+@@ -11499,6 +11523,15 @@ static int ios_subfloor_service( ucontext_t *ctx, void *fault_addr, const char *
+                      ios_subfloor_hits + 1, no_frame, n ? line : " (none above 2000)" );
+         }
+     }
++    if (window_base && real == window_base + addr)
++    {
++        unsigned long long n = ++ios_wow64_window_serviced;
++        if (n <= 8 || !(n & 0xFFF))
++            dprintf( 2, "[wow64-fault] serviced %llu window access(es); latest guest %#llx -> host %#llx "
++                     "%s %u byte(s) insn=%#010x pc=%#llx\n", n, (unsigned long long)addr,
++                     (unsigned long long)real, is_write ? "write" : "read", bytes, insn,
++                     (unsigned long long)PC_sig(ctx) );
++    }
+     if ((++ios_subfloor_hits & 0xFFF) == 1)
+         dprintf( 2, "[subfloor] ml956 serviced %llu access(es) (%llu unhandled, %llu refused) via=%s; "
+                  "latest guest %#llx -> real %#llx insn=%#010x\n",
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index b1bbc8a..9a37c75 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -14948,6 +14948,21 @@ uintptr_t ios_wow64_current_base(void)
+     return ios_wow64_base_for_peb( ios_jit_current_peb() );
+ }
+ 
++/* The Mach exception thread's query. It must not take the windows lock (the
++ * faulting thread may hold it), so it reads the published pairs: reservation
++ * stores the base before releasing the owner, and release clears the owner
++ * first. A window is released only by its owner's own thread, which cannot be
++ * faulting at the same time. */
++uintptr_t ios_wow64_fault_base_for_peb( void *owner )
++{
++    unsigned int i;
++    if (!owner) return 0;
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (__atomic_load_n( &ios_wow64_windows[i].owner, __ATOMIC_ACQUIRE ) == owner)
++            return __atomic_load_n( &ios_wow64_windows[i].base, __ATOMIC_RELAXED );
++    return 0;
++}
++
+ /* Native allocation entry point. Fixed guest addresses only; no PE ABI and
+  * no signal-handler callers. Output is unchanged on rejection/failure. */
+ NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
+@@ -15420,11 +15435,11 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+         }
+         ios_wow64_windows[slot].base = base;
+         ios_wow64_windows[slot].peb32 = peb_view->base;
+-        ios_wow64_windows[slot].owner = owner;
++        __atomic_store_n( &ios_wow64_windows[slot].owner, owner, __ATOMIC_RELEASE );
+         status = ios_wow64_pair_initial_teb( slot );
+         if (status)
+         {
+-            ios_wow64_windows[slot].owner = NULL;
++            __atomic_store_n( &ios_wow64_windows[slot].owner, NULL, __ATOMIC_RELEASE );
+             ios_wow64_windows[slot].base = 0;
+             ios_wow64_windows[slot].peb32 = NULL;
+             ios_wow64_delete_views( base );
+@@ -15488,7 +15503,9 @@ static void ios_wow64_release_window( void *owner )
+         if (ios_wow64_windows[i].owner == owner)
+         {
+             uintptr_t base = ios_wow64_windows[i].base;
+-            dprintf( 2, "[wow64-window] release peb=%p base=%p\n", owner, (void *)base );
++            extern unsigned long long ios_wow64_window_serviced;
++            dprintf( 2, "[wow64-window] release peb=%p base=%p serviced_low_faults=%llu\n", owner,
++                     (void *)base, ios_wow64_window_serviced );
+             server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+             /* The dying thread still needs its TEB for exit logging/longjmp.
+              * No secondary WoW64 thread exists yet (allocation rejects it). */
+@@ -15497,7 +15514,7 @@ static void ios_wow64_release_window( void *owner )
+                 server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+                 break;
+             }
+-            ios_wow64_windows[i].owner = NULL;
++            __atomic_store_n( &ios_wow64_windows[i].owner, NULL, __ATOMIC_RELEASE );
+             ios_wow64_windows[i].base = 0;
+             ios_wow64_windows[i].peb32 = NULL;
+             ios_wow64_windows[i].original_teb = NULL;
+-- 
+2.55.0
+

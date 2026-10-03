@@ -252,6 +252,12 @@ def pe_table(path, kind):
     return set(re.findall(r"^\s+\S+\s+\S+\s+(\S+)$" if kind == "export" else r"^\s+\d+\s+(\S+)$", out, re.M))
 
 
+def pe_import_dlls(path):
+    objdump = Path(os.environ.get("MINGW") or inputs.need("LLVM_MINGW")) / "bin/llvm-objdump"
+    out = subprocess.run([str(objdump), "-p", str(path)], capture_output=True, text=True, check=True).stdout
+    return {n.lower() for n in re.findall(r"DLL Name: (\S+)", out)}
+
+
 def signed_checks(a, app, info, m, tmp):
     """Signature and profile: only an IPA from `xtool dev build --sign` has them."""
     so, blobs = signature(m)
@@ -483,6 +489,10 @@ def wow64_checks(rt, rows):
         if name == "xtajit.dll" and path.is_file():
             check({"BTCpuProcessInit", "BTCpuThreadInit", "BTCpuSimulate"} <= pe_table(path, "export"),
                   "wow64: xtajit.dll exports BTCpuProcessInit, BTCpuThreadInit and BTCpuSimulate")
+            # A CRT import loads kernelbase.dll into the WoW64 process before its NLS tables exist.
+            dlls = pe_import_dlls(path)
+            check(dlls == {"ntdll.dll", "wow64.dll"},
+                  f"wow64: xtajit.dll imports only ntdll.dll and wow64.dll (imports {', '.join(sorted(dlls))})")
 
 
 def host_io_checks(exe, rt, rows):

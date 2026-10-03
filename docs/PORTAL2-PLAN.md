@@ -310,17 +310,12 @@ through its CRT imports and faulted the app. **No i386 instruction runs yet.**
 Hollow Knight passes `first-frame+10` (9.06 s first frame, menu visible).
 Details are in the same step-2 evidence record.
 
-**Next: step 3**, with the step-2 work it needs. Link `xtajit.dll` without CRT
-imports into the native WoW64 process (upstream links it `-nostdlib`), port its
-iOS JIT plumbing, and move the wine-pe 0014 boundary past `BTCpuProcessInit`;
-the check is the first i386 instruction in `LdrInitializeThunk`. Before i386
-code makes its first syscall, wire the PE-visible base and wow64's
-`get_ptr`/`PtrToUlong` conversions, and the whole-window fault service for the
-Mach handler's target process (the locked base queries must not run in a signal
-handler). Still open in step 2: other query classes, file/anonymous section VM
-(shared backing), PE-facing allocation/query conversion, secondary WoW64
-threads (refused), the global `wow_peb`/TEB free lists/limits (unused by this
-path), and startup globals that rely on serialization.
+Step 3 below now runs the child past this boundary. Still open in step 2: wow64's
+`get_ptr`/`PtrToUlong` conversions (next), other query classes, file/anonymous
+section VM (shared backing), PE-facing allocation/query conversion, secondary
+WoW64 threads (refused), the global `wow_peb`/TEB free lists/limits (unused by
+this path), startup globals that rely on serialization, and `KUSER_SHARED_DATA`
+in the window.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"
@@ -347,6 +342,23 @@ path), and startup globals that rely on serialization.
   for everything not yet translated.
 
 ### Step 3: FEX's WOW64 module on iOS (patches/fex)
+
+**Check passed, 2026-10-03** ([evidence](evidence/2026-10-03-portal2-fex-wow64.md)):
+fex 0015/0016, rpmalloc 0003 and madeira-unix 0062 load `xtajit.dll` (FEX's own
+CRT, imports only ntdll and wow64) with the JIT pool, the host band and the
+guest window (base from the paired TEB32; code decoded from the window, memory
+operands translated inline, the rest serviced by the Mach handler in the window:
+1,072 low faults). On the phone FEX runs i386 code from `LdrInitializeThunk` to
+the guest's first system call, `NtAllocateVirtualMemory`, where wine-pe 0014 now
+stops (`c00000bb`). Questions 1 and 2 are answered: WoW64 runs beside the ARM64EC
+session, and FEX's WoW64 module runs on iOS. Hollow Knight passes
+`first-frame+10` (9.61 s, menu visible).
+
+**Next:** wow64's pointer conversions (step 2's conversion list: `get_ptr`,
+`PtrToUlong` of returned host pointers, `env.c`, callback/APC/exception frames)
+through the window base, file by file, then move the wine-pe 0014 stop to the
+first system call it cannot convert; Portal 2's `kernel32` load is the next
+milestone item.
 
 - Port the iOS JIT plumbing from `ARM64EC/Module.cpp` into `WOW64/Module.cpp`:
   pool allocation, aliases, call-return stacks and the transition hooks. Share

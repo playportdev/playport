@@ -63,10 +63,9 @@ export SOURCE_DATE_EPOCH=$(git -C "$F" log -1 --format=%ct "$PIN")
 MAP="$MAP -DPLAYPORT_SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
 for mode in arm64ec wow64; do
     target=arm64ec; dllname=arm64ecfex; machine=ARM64EC; ios_flags=-DFEX_IOS_HOST=1
-    # Build-only WoW64 scaffolding. Its module does not yet supply the iOS
-    # JIT/mono/arena bindings shared FEXCore needs: milestone 1 step 3 ports
-    # those before enabling FEX_IOS_HOST here. Do not link no-op bindings.
-    if [ "$mode" = wow64 ]; then target=aarch64; dllname=wow64fex; machine=ARM64; ios_flags=; fi
+    # The WoW64 module runs on the iOS host too (fex 0016: JIT pool write
+    # offset, the guest window); it links FEX's own CRT, not mingw's (fex 0015).
+    if [ "$mode" = wow64 ]; then target=aarch64; dllname=wow64fex; machine=ARM64; fi
 cmake -S "$F" -B "$F/build-$mode" -G Ninja \
     -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR="$target" \
     -DCMAKE_FIND_ROOT_PATH="$M" -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \

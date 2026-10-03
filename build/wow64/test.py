@@ -27,6 +27,7 @@ QUERY_PATCH = REPO / "patches/madeira-unix/0058-ntdll-query-owner-local-WoW64-wi
 SECTION_PATCH = REPO / "patches/madeira-unix/0059-ntdll-route-owned-window-image-sections.patch"
 PROTECT_PATCH = REPO / "patches/madeira-unix/0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch"
 LOADER_PATCH = REPO / "patches/madeira-unix/0061-ntdll-start-the-WoW64-child-s-native-loader.patch"
+FAULT_PATCH = REPO / "patches/madeira-unix/0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch"
 
 
 def patched_function(patch, signature):
@@ -236,6 +237,13 @@ def main():
                         "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/protect_test.c"), "-o", str(protect_exe)], check=True)
         subprocess.run([str(protect_exe), str(root)], check=True)
+        (root / "fault_api.h").write_text(
+            patched_function(FAULT_PATCH, "uintptr_t ios_wow64_fault_base_for_peb( void *owner )"))
+        fault_exe = root / "fault-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str(root), str(REPO / "build/wow64/fault_test.c"), "-o", str(fault_exe)], check=True)
+        subprocess.run([str(fault_exe)], check=True)
     return 0
 
 
