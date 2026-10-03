@@ -156,12 +156,25 @@ has been mapped in the window and no i386 code executes**. Hollow Knight
 passes `first-frame+10` (9.40 s first frame, menu visible). Phone tests ran
 despite the 18% battery warning.
 
-**Next, still step 2:** make WoW64 identity and TEB/PEB allocation owner-aware,
-then image/VM suballocation within the window and guest-relative metadata.
-Route the pointer conversions, expose the base to PE code and integrate
+**Owner identity follow-up, 2026-10-03:** madeira-unix 0050 and wine-unix
+0008 isolate unpublished child image/module state in its `thread_data` and
+make `is_wow64()` owner-aware, even before a failed main-image map. Native
+TEBs inherit the creator's PEB; CPU-area queries use the target TEB's owner.
+Portal 2's phone log shows child `Machine=0x14c`, `is_wow64=1`, alongside
+session `Machine=0x8664`, `session_is_wow64=0`. Its `wow_teb` is still NULL
+and the map still fails `c0000017`: **no paired TEB/PEB or i386 execution**.
+Concurrent-startup host tests pass; Hollow Knight passes `first-frame+10`
+(9.69 s first frame, menu visible). The same step-2 evidence record holds
+the latest IPA and runs.
+
+**Next, still step 2:** implement window suballocation and owner-local paired
+TEB32/PEB32 allocation, then image/VM mapping and guest-relative metadata.
+The legacy `wow_peb`, TEB free lists and WoW64 limits are still global; other
+startup globals (`peb`, argv, startup info) still rely on serialization.
+Route pointer conversions, expose the base to PE code and integrate
 whole-window faults for the Mach handler's target process. The current
-holdback view is not yet a suballocator; the locked native queries must not
-be called from a signal handler. Do not advance to step 3 yet.
+holdback view is not yet a suballocator; the locked native base queries must
+not be called from a signal handler. Do not advance to step 3 yet.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"

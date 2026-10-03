@@ -1,0 +1,49 @@
+From 74ba7c987af09768a98aa80bf8cb93103b6a3d81 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 3 Oct 2026 12:10:42 +0200
+Subject: [PATCH] ntdll: query the owning pseudo-process for WoW64 identity on
+ iOS
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/unix_private.h | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 1962c6c5a83..a7edaef883f 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -83,9 +83,18 @@ static inline WOW_TEB *get_wow_teb( TEB *teb )
+     return teb->WowTebOffset ? (WOW_TEB *)((char *)teb + teb->WowTebOffset) : NULL;
+ }
+ 
++#ifdef WINE_IOS
++extern const SECTION_IMAGE_INFORMATION *ios_cur_image_info(void);
++extern const SECTION_IMAGE_INFORMATION *ios_image_info_for_peb( void *owner );
++#endif
++
+ static inline BOOL is_wow64(void)
+ {
++#ifdef WINE_IOS
++    if (is_win64) return !is_machine_64bit( ios_cur_image_info()->Machine );
++#else
+     if (is_win64) return !is_machine_64bit( main_image_info.Machine ); /* 64-bit ntdll, 32-bit image */
++#endif
+     else return is_machine_64bit( native_machine );  /* 32-bit ntdll, 64-bit wineserver */
+ }
+ 
+@@ -126,6 +135,9 @@ struct thread_data
+     void        *start;             /* thread entry point */
+     void        *param;             /* thread entry point parameter */
+     struct list  entry;             /* entry in TEB list */
++#ifdef WINE_IOS
++    void        *ios_startup_image; /* unpublished pseudo-process image, only during child init */
++#endif
+     char         debug_info[0x800]; /* debug_info structure */
+     char         signal_stack[];    /* signal stack */
+     /* char kernel_stack[] */
+-- 
+2.55.0
+
