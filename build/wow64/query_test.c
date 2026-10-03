@@ -1,13 +1,13 @@
-/* Production query core and registry router, using the VM tests' real mappings
- * and mock Wine views/page bytes/owner identity. No wineserver/rbtree, actual
- * Wine layouts, APC delivery, alias translator or PE thunk execution.
+/* Production query core and registry router, using the VM tests' real mappings,
+ * Wine's real protection conversions and mock Wine views/page bytes/owner
+ * identity. No wineserver/rbtree, actual Wine layouts, APC delivery, alias
+ * translator or PE thunk execution.
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #define WOW64_VM_HELPERS_ONLY
 #include "vm_test.c"
 
 #define STATUS_INVALID_ADDRESS 8
-#define STATUS_ACCESS_VIOLATION 9
 #define STATUS_INFO_LENGTH_MISMATCH 10
 #define MEM_FREE 0x10000
 #define MEM_PRIVATE 0x20000
@@ -26,7 +26,6 @@
 #define VPROT_WRITEWATCH 0x40
 #define VPROT_GUEST_RO 0x80
 #define VPROT_WOW64_IMAGE 0x2000
-static const size_t page_mask = 0xfff;
 typedef struct {
     void *BaseAddress, *AllocationBase;
     ULONG AllocationProtect;
@@ -40,18 +39,8 @@ typedef enum {
     MemoryBasicInformation, MemoryWorkingSetExInformation, MemoryRegionInformation,
     MemoryImageInformation, MemoryMappedFilenameInformation, MemoryWineLoadUnixLib
 } MEMORY_INFORMATION_CLASS;
-/* Mock protection table, including flags absent from anonymous VM requests. */
-static ULONG query_prot(unsigned int p, unsigned int map)
-{
-    ULONG prot = get_win32_prot(p, map);
-    if (p & VPROT_WRITECOPY) prot = p & VPROT_EXEC ? PAGE_EXECUTE_WRITECOPY : PAGE_WRITECOPY;
-    if (p & VPROT_GUARD) prot |= PAGE_GUARD;
-    if (map & SEC_NOCACHE) prot |= PAGE_NOCACHE;
-    return prot;
-}
-#define get_win32_prot query_prot
+/* Wine's own protection table (wow64_vprot.h), not a mock. */
 #include "wow64_query.h"
-#undef get_win32_prot
 #include "query_api.h"
 
 static MEMORY_BASIC_INFORMATION query(uintptr_t address)
@@ -100,7 +89,11 @@ static void *concurrent_query(void *arg)
     }
     return NULL;
 }
+#ifdef WOW64_QUERY_HELPERS_ONLY
+int query_test_main(void)
+#else
 int main(void)
+#endif
 {
     int a, b, missing;
     bases[0] = reserve(); bases[1] = reserve();

@@ -23,7 +23,6 @@
 #define STATUS_INVALID_PAGE_PROTECTION 14
 #define STATUS_INVALID_PARAMETER_4 15
 #define STATUS_INVALID_ADDRESS 16
-#define STATUS_ACCESS_VIOLATION 17
 #define PAGE_WRITECOPY 8
 #define PAGE_EXECUTE_WRITECOPY 0x80
 #define SECTION_MAP_READ 1
@@ -155,7 +154,6 @@ static void free_pe_mapping_info(struct pe_mapping_info *p) { free(p); }
 #include "section_route_api.h"
 #undef dprintf
 
-static const size_t page_mask = 0xfff;
 #define MEM_FREE 0x10000
 #define MEM_PRIVATE 0x20000
 #define MEM_IMAGE SEC_IMAGE
@@ -225,6 +223,16 @@ int main(void)
     mapping_info.image.machine = 0xaa64; fail_map(NULL, 0, UINT32_MAX, 0, STATUS_NOT_SUPPORTED); mapping_info.image.machine = IMAGE_FILE_MACHINE_I386;
     mapping_info.image.is_hybrid=1; fail_map(NULL,0,UINT32_MAX,0,STATUS_NOT_SUPPORTED); mapping_info.image.is_hybrid=0;
     mapping_info.image.image_flags=0x10; fail_map(NULL,0,UINT32_MAX,0,STATUS_NOT_SUPPORTED); mapping_info.image.image_flags=0;
+    /* Shared writable sections are MAP_SHARED: WRITECOPY there could not stay
+     * private. The router and the mapper both refuse them before any work. */
+    mapping_info.shared_file=(HANDLE)12; fail_map(NULL,0,UINT32_MAX,0,STATUS_NOT_SUPPORTED);
+    {
+        void *direct=NULL; SIZE_T dn=0; mapper_calls=0;
+        assert(virtual_map_image((HANDLE)10,&direct,&dn,0x10000,0x7fffffff,0,&mapping_info,
+                                 IMAGE_FILE_MACHINE_I386,FALSE,0,bases[0])==STATUS_NOT_SUPPORTED);
+        assert(!direct && !dn && !mapper_calls && !server_views && !live_handles);
+    }
+    mapping_info.shared_file=0;
     fd_error = STATUS_ACCESS_DENIED; fail_map(NULL,0,UINT32_MAX,0,fd_error); fd_error=0;
     fail_after = 0; fail_map(NULL,0,UINT32_MAX,0,STATUS_NO_MEMORY); fail_after = -1;
     fail_protect=1; fail_map(NULL,0,UINT32_MAX,0,STATUS_ACCESS_DENIED); fail_protect=0;

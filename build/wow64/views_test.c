@@ -33,6 +33,9 @@ struct file_view {
 };
 static struct file_view *views[128];
 static int fail_after = -1, fail_protect, descriptor_count;
+/* Count mprotect calls; fail call number fail_protect_call, or every call
+ * from fail_protect_from on (1-based; 0 disables). */
+static unsigned int protect_calls, fail_protect_call, fail_protect_from;
 static unsigned int page_updates;
 static struct file_view *alloc_view(void)
 {
@@ -96,7 +99,9 @@ static int get_unix_prot(unsigned int p)
 }
 static int test_mprotect(void *p, size_t size, int prot)
 {
-    if (fail_protect) return -1;
+    ++protect_calls;
+    if (fail_protect || protect_calls == fail_protect_call ||
+        (fail_protect_from && protect_calls >= fail_protect_from)) return -1;
     return mprotect(p, size, prot);
 }
 static void set_page_vprot(void *p, size_t size, unsigned int prot)

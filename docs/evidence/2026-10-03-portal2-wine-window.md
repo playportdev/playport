@@ -25,7 +25,10 @@ pointers; normal parameter bootstrap validates its storage through this query
 on the phone. Complete ordinary i386 image sections now map through native
 `NtMapViewOfSection` into owner-local storage, reusing Wine's mapper and server
 bookkeeping. Portal 2's normal main image exercises that entry; native image
-queries and transactional section unmap are host-tested only. Other query cases,
+queries and transactional section unmap are host-tested only. Native
+`NtProtectVirtualMemory` now changes window image and anonymous VM pages per
+4 KiB Wine page through one transaction that Wine's image setup also uses;
+that follow-up is host-tested only, its phone runs are still to do. Other query cases,
 decommit/release/reuse and top-down/collision placement are host-tested only.
 Startup explicitly stops
 before the unwired native WoW64-loader paths. **No i386 code executes. Step 2
@@ -863,6 +866,123 @@ were superseded by the final results after preserving unsupported section
 attributes and the exact server image extent. **Step 2/milestone 1 remain in
 progress; the fail-closed startup boundary is unchanged.**
 
+## Native protection follow-up (same step)
+
+Source at build: `1fc8f23` plus madeira-unix 0060 and host tests.
+Scratch source: `.work/portal2-protect/source`, commit
+`fd7a5e8` (on `c59b79c`, the 0059 scratch commit).
+Dev IPA: `.work/out/20261003-183553-455fa113/Playport-26.5-455fa113.ipa`.
+SHA256: `455fa1132f9298bdae5d13bb1f3d4d0c56ef7dd58db20cd18ade98ac6790a407`.
+Only `libntdll_unix.a` changes in `app/artifacts.tsv`; pins, PE manifests,
+FEX and DXMT are unchanged.
+
+**madeira-unix 0060** gives window image and anonymous VM views one protection
+transaction (`wow64_protect.h`), used by the native `NtProtectVirtualMemory`
+route, anonymous commit and Wine's own image setup (`set_vprot`):
+
+- **Logical pages, physical union.** Each 4 KiB Wine page keeps its logical
+  protection, including EXEC, WRITECOPY and GUARD; queries report it per page.
+  A 16 KiB host page gets the union of its pages' native permissions, Wine's
+  own 16 KiB-host policy, and never native EXEC: execute-only pages stay
+  readable for the decoder. **Limit:** a stricter page beside a more permissive
+  one in the same host page is enforced only logically (for example a read-only
+  page next to a writable one stays natively writable) until the window has a
+  fault service.
+- **Guard pages are enforced or refused.** A host page holding a committed
+  guard page is `PROT_NONE`. A change that would leave a guard page beside an
+  accessible page in its host page returns `STATUS_NOT_SUPPORTED`.
+- **Writecopy.** Image pages take `PAGE_READWRITE` as WRITECOPY, as Wine does;
+  anonymous VM refuses WRITECOPY (`STATUS_INVALID_PAGE_PROTECTION`). Backing is
+  never replaced: a private image page becomes writable `MAP_PRIVATE` file or
+  anonymous memory, so writes are private copies. Images with shared writable
+  sections (`MAP_SHARED`) are now refused at map time, in the router and in
+  `virtual_map_image`.
+- **No partial change.** Every host page is checked first, then changed by
+  its own `mprotect`. A failure restores the pages already changed to the
+  protection of their unchanged page bytes; page bytes and caller outputs
+  change only on success. If a restore itself fails (the protection is one the
+  mapping already had, so only a kernel fault could cause it), the process
+  stops (`abort`) rather than run on with an undescribed protection.
+- **Wine semantics.** Ranges round to whole Wine pages; every page must be
+  committed (`STATUS_NOT_COMMITTED`); the old protection is the first page's,
+  including `PAGE_GUARD`; NULL old-protection is `STATUS_ACCESS_VIOLATION`.
+- **Exact unsupported or invalid cases.** `STATUS_INVALID_PARAMETER`: size 0,
+  the low 64 KiB guard, free space, a range leaving its allocation or the window.
+  `STATUS_NOT_SUPPORTED`: bootstrap TEB/PEB views, quarantined (unregistered or
+  handle-less) images, host-page padding past the server's image extent, the
+  guard case above, and modifiers that page bytes cannot hold (`PAGE_NOCACHE`,
+  `PAGE_WRITECOMBINE`, CFG target flags); they are not silently dropped.
+  Other owners, a missing owner and remote processes get `STATUS_ACCESS_DENIED`;
+  non-window addresses fall through unchanged. PE-facing (guest pointer)
+  protection is not wired.
+- Wine's image setup now fails a window image map when a protection cannot be
+  applied, instead of continuing with stale physical protection; the failed map
+  rolls back as before. `mprotect_range` (fault and helper paths) uses the same
+  per-page policy for window views. Wine's protection conversions move
+  unchanged into `wow64_vprot.h` so host tests compile them; the extraction
+  check shows the moved text identical and present once.
+
+`build/wow64/protect_test.c` compiles the production transaction, the native
+route, Wine's conversions and the window query under UBSan, with real mappings,
+real faults (read, write and execute, with a positive control that the harness
+detects native EXEC) and a real `MAP_PRIVATE` file. It covers all 100
+transitions among 10 protections (including guard forms) with old values, page
+bytes, queries and native permissions; partial ranges and four Wine pages in a
+host page; the union limit; guard acceptance and refusal; image setup, image
+READWRITE as WRITECOPY, private copies with the file unchanged; padding,
+quarantine, cross-section and cross-allocation ranges; failure at the first and
+a later host page with outputs, bytes and protections unchanged; abort on a
+failed restore; commit through the transaction; owners, remote, bootstrap and
+non-window fall-through. Section tests now check shared-section refusal; query
+tests use Wine's real protection table instead of a mock. **Mocked:** the Wine
+view tree, page bytes, owner identity, and the image fixture's setup (a claimed
+view with the file mapped over it, Wine's `set_vprot` calls replayed through
+the transaction; not Wine's PE mapper or `set_vprot` itself). The host kernel's
+4 KiB pages stand in for 16 KiB ones (each `mprotect` covers a whole 16 KiB host
+page). No Mach fault service, signal masking, wineserver or PE thunks. Changed
+headers and extracted functions match the built source byte for byte
+(`.work/portal2-protect/extraction.log`).
+
+`pp build` passed (77 IPA checks); explicit `pp verify` of the IPA above has 0
+failures; full `pp test` passes (483 Python tests, all C tests including
+**eleven** WoW64 UBSan executables, all three Swift packages); `pp slots`
+passes (150 slots, 149 calls); `pp names` and `pp secrets` are clean; source
+`git show --check` and the non-patch whitespace checks pass; `pp build --plan`
+reports no tree rebuilds. Logs: `.work/portal2-protect/` (`build-final.log`,
+`verify.log`, `test.log`, `host.log`, `slots.log`, `names.log`, `secrets.log`,
+`plan.log`, `extraction.log`).
+
+One phone-lock session installed the IPA above in place and played both titles.
+Both `installed` and `result` events name its SHA256. The phone was on battery,
+not charging:
+
+```sh
+./pp install --no-build --ipa .work/out/20261003-183553-455fa113/Playport-26.5-455fa113.ipa
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-protect
+./pp ui --play app-367520 --until first-frame+30 --shot --out .work/ui-runs/portal2-protect-hk
+```
+
+- **Portal 2** (`.work/ui-runs/portal2-protect`):
+  - Wine's own image setup for the main image (host `0x7038410000`, guest
+    `0x400000`) goes through the new transaction. It logs six
+    `[wow64-protect] set_vprot` lines, all with `status=0 native_exec=0`.
+  - Those include the header (`c-r--`, R), the code (`c-r-x`, native R only)
+    and the data (`c-rW-`, RW).
+  - The map then succeeds, and startup stops at the retained `c00000bb`. The
+    window is released.
+  - UI exit 1, `launch=failed run_exe=-7`. The screenshot shows **Portal 2
+    could not start**, with JIT and Runtime passed and Game failed.
+- **Hollow Knight** (`.work/ui-runs/portal2-protect-hk`):
+  - Exit 0 at `first-frame+30`. The first frame comes at **9.71 s** from Play,
+    and JIT takes **2.56 s**.
+  - Pool exhaustion, FEX-band refusals and runtime-limit counters are zero.
+  - The screenshot shows the main menu.
+
+No normal bootstrap step calls `NtProtectVirtualMemory` before the `c00000bb`
+stop. The native protection route itself therefore stays **host-validated
+only**; the phone validates the shared transaction through image setup.
+**No i386 execution. Step 2 and milestone 1 remain in progress.**
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -912,8 +1032,10 @@ pending until the loader can reach an image needing them. Explicit
 host-pointer anonymous VM release/reuse and guest-constrained NULL allocation
 exist, as do native host-pointer basic queries; PE-facing constraint/pointer/
 return conversion (including query results) and other section forms do not.
-Complete ordinary image mapping/unmapping and native image queries now exist;
-other query classes and image protection changes remain fail-closed.
+Complete ordinary image mapping/unmapping, native image queries and native
+image/anonymous protection changes now exist; other query classes, shared image
+sections and the protection cases listed in the protection follow-up remain
+fail-closed.
 Only the initial TEB is paired. General paired thread allocation, reuse/free and multi-thread
 teardown are pending, and secondary WoW64 threads are explicitly rejected.
 Remove the fail-closed startup boundary only after its downstream paths are

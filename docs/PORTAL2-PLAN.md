@@ -276,6 +276,26 @@ are host-tested only. Hollow Knight passes through `first-frame+30` (9.41 s
 first frame), with a reviewed main-menu screenshot. Details and exact unsupported
 cases remain in the same step-2 evidence record.
 
+**Native protection follow-up, 2026-10-03:** madeira-unix 0060 routes owner-local
+native `NtProtectVirtualMemory` for window image and anonymous VM pages through one
+transaction that Wine's image setup and anonymous commit also use. Each 4 KiB Wine
+page keeps its logical protection (EXEC, WRITECOPY, GUARD) and query result; a 16 KiB
+host page gets the union of native permissions, never EXEC, so a stricter page beside
+a permissive one is enforced only logically. Guard pages are enforced or refused.
+Image READWRITE is WRITECOPY on private backing; images with shared writable sections
+are now refused. Failure changes no page, byte or output. Bootstrap views,
+quarantined images, image padding and cache/CFG modifiers fail closed. Host tests
+cover transitions, old values, partial pages, writecopy with the file unchanged, NX,
+rollback and owners.
+
+On the phone, Wine's image setup for Portal 2's main image applies six section
+protections through the transaction, all with status 0 and native EXEC off. The
+map then succeeds, and startup stops at `c00000bb`. No normal bootstrap step reaches
+the native `NtProtectVirtualMemory` route before that stop, so that route itself is
+host-tested only. There is no i386 execution. Hollow Knight passes
+`first-frame+30` (9.71 s first frame, menu visible). Details are in the same
+step-2 evidence record.
+
 **Next, still step 2:** remaining query classes and PEB32 loader/heap initialization;
 ordinary file/anonymous section VM needs separate shared-backing/commit semantics
 before it can be supported. Validate nonzero image relocation on the phone when
@@ -284,8 +304,10 @@ the loader can reach an image needing it. Native VM returns
 without a guest constraint (or with a wider native constraint) still use the
 native allocator. PE-facing constraint/return conversion remains unwired.
 PE-facing query-result conversion is also pending. Ex window allocations,
-special protections/types, partial release, bootstrap free and anonymous-VM
-image free/protect are refused (supported images unmap through section VM).
+special allocation types, partial release, bootstrap free/protect and
+anonymous-VM image free are refused (supported images unmap through section VM).
+Window protection is logical per 4 KiB page; enforcing a stricter page inside a
+16 KiB host page needs the window fault service below.
 Only the initial TEB is paired;
 secondary WoW64 thread allocation explicitly returns `STATUS_NOT_SUPPORTED`.
 The legacy `wow_peb`,

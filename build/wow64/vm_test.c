@@ -1,16 +1,20 @@
-/* Production native VM core and routing, real mappings, mock Wine view/page
- * metadata. No wineserver/rbtree/Mach handler or PE thunk execution.
+/* Production native VM core, routing, protection transaction and Wine's
+ * protection conversions; real mappings, mock Wine view/page metadata.
+ * No wineserver/rbtree/Mach handler or PE thunk execution.
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #define main views_test_main
 #define set_page_vprot views_set_page_vprot
+#define get_unix_prot views_get_unix_prot
 #include "views_test.c"
 #undef main
 #undef set_page_vprot
+#undef get_unix_prot
 #include <string.h>
 
 typedef int BOOL;
-typedef uint32_t ULONG;
+typedef uint32_t ULONG, DWORD;
+typedef unsigned char BYTE;
 typedef uintptr_t ULONG_PTR;
 typedef size_t SIZE_T;
 typedef void *HANDLE;
@@ -24,6 +28,18 @@ typedef void *HANDLE;
 #define PAGE_EXECUTE 0x10
 #define PAGE_EXECUTE_READ 0x20
 #define PAGE_EXECUTE_READWRITE 0x40
+#define PAGE_WRITECOPY 8
+#define PAGE_EXECUTE_WRITECOPY 0x80
+#define PAGE_GUARD 0x100
+#define PAGE_NOCACHE 0x200
+#define SEC_IMAGE 0x1000000
+#define SEC_NOCACHE 0x10000000
+#define VPROT_WOW64_IMAGE 0x2000
+#define VPROT_WRITECOPY 8
+#define VPROT_GUARD 0x10
+#define VPROT_WRITEWATCH 0x40
+#define STATUS_INVALID_PAGE_PROTECTION 14
+#define STATUS_ACCESS_VIOLATION 17
 #define MEM_COMMIT 0x1000
 #define MEM_RESERVE 0x2000
 #define MEM_DECOMMIT 0x4000
@@ -34,7 +50,7 @@ typedef void *HANDLE;
 #define IMAGE_FILE_LARGE_ADDRESS_AWARE 0x20
 #define max(a,b) ((a) > (b) ? (a) : (b))
 #define min(a,b) ((a) < (b) ? (a) : (b))
-static const size_t page_size = 0x1000;
+static const size_t page_size = 0x1000, page_mask = 0xfff, host_page_size = 0x4000;
 static uintptr_t bases[2];
 static unsigned char pages[2][0x100000];
 static int fail_replace;
@@ -64,28 +80,7 @@ static unsigned int get_page_vprot(const void *addr)
             return pages[i][(p - bases[i]) / page_size];
     abort();
 }
-static NTSTATUS get_vprot_flags(ULONG protect, unsigned int *vprot, BOOL is_image)
-{
-    assert(!is_image);
-    switch (protect)
-    {
-    case PAGE_NOACCESS: *vprot = 0; break;
-    case PAGE_READONLY: *vprot = VPROT_READ; break;
-    case PAGE_READWRITE: *vprot = VPROT_READ | VPROT_WRITE; break;
-    case PAGE_EXECUTE: *vprot = VPROT_EXEC; break;
-    case PAGE_EXECUTE_READ: *vprot = VPROT_READ | VPROT_EXEC; break;
-    case PAGE_EXECUTE_READWRITE: *vprot = VPROT_READ | VPROT_WRITE | VPROT_EXEC; break;
-    default: return STATUS_INVALID_PARAMETER;
-    }
-    return 0;
-}
-static ULONG get_win32_prot(unsigned int vprot, unsigned int map_prot)
-{
-    (void)map_prot;
-    return vprot & VPROT_EXEC ? (vprot & VPROT_WRITE ? PAGE_EXECUTE_READWRITE :
-                                      vprot & VPROT_READ ? PAGE_EXECUTE_READ : PAGE_EXECUTE) :
-           vprot & VPROT_WRITE ? PAGE_READWRITE : vprot & VPROT_READ ? PAGE_READONLY : PAGE_NOACCESS;
-}
+#include "wow64_vprot.h"
 static void *test_mmap(void *addr, size_t size, int prot, int flags, int fd, off_t off)
 {
     if (fail_replace) return MAP_FAILED;
@@ -295,7 +290,7 @@ int main(void)
     current_owner = &owner_a;
     assert(routed(3, &addr, &size, 0, 0, NULL) == STATUS_NOT_SUPPORTED);
     assert(routed(0, &sub, &subsize, MEM_COMMIT | 0x400000, PAGE_READWRITE, NULL) == STATUS_NOT_SUPPORTED);
-    assert(routed(0, &sub, &subsize, MEM_COMMIT, PAGE_READWRITE | 0x100, NULL) == STATUS_INVALID_PARAMETER);
+    assert(routed(0, &sub, &subsize, MEM_COMMIT, PAGE_READWRITE | PAGE_GUARD, NULL) == STATUS_NOT_SUPPORTED);
     assert(routed(1, &addr, &size, MEM_RELEASE, 0, NULL) == STATUS_INVALID_PARAMETER);
     size_t zero = 0;
     assert(routed(1, &sub, &zero, MEM_RELEASE, 0, NULL) == STATUS_INVALID_PARAMETER && !zero);

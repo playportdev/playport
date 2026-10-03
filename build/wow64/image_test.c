@@ -6,6 +6,8 @@
 #define VPROT_WOW64_VM 0x4000
 #define VPROT_EXEC 0x04
 #define VPROT_WRITECOPY 0x08
+#define VPROT_GUARD 0x10
+#define STATUS_INVALID_PAGE_PROTECTION 14
 #define SEC_IMAGE 0x1000000
 #define SEC_FILE 0x800000
 #define IMAGE_FILE_MACHINE_I386 0x14c
@@ -32,7 +34,7 @@ static void *image_mmap(void *addr, size_t size, int prot, int flags, int fd, of
 
 #define ROUND_ADDR(addr,mask) ((void *)((uintptr_t)(addr) & ~(uintptr_t)(mask)))
 #define ROUND_SIZE(addr,size,mask) (((size) + ((uintptr_t)(addr) & (mask)) + (mask)) & ~(size_t)(mask))
-static const size_t host_page_size = 0x4000;
+static const size_t host_page_size = 0x4000, page_size = 0x1000, page_mask = 0xfff;
 static uintptr_t page_base;
 static BYTE page_bytes[16];
 static unsigned int native_exec_calls;
@@ -41,6 +43,10 @@ static BYTE get_host_page_vprot(void *addr)
     size_t idx = ((uintptr_t)addr - page_base) / host_page_size;
     assert(idx < 16);
     return page_bytes[idx];
+}
+static BYTE get_page_vprot(const void *addr)
+{
+    return get_host_page_vprot((void *)addr);
 }
 /* The baseline's get_unix_prot only needs RW. For this test use the actual
  * committed/EXEC/WRITECOPY meaning, without Wine's writewatch machinery. */
@@ -58,6 +64,7 @@ static int mprotect_exec(void *addr, size_t size, int prot)
     return mprotect(addr, size, prot);
 }
 #define get_unix_prot image_unix_prot
+#include "wow64_protect.h"
 #include "image_api.h"
 #undef get_unix_prot
 
@@ -89,6 +96,7 @@ static void check_inaccessible(void *host, int execute)
 #endif
 int IMAGE_TEST_ENTRY(void)
 {
+    assert(ios_wow64_apply_protection(NULL, NULL, 0, 0) == STATUS_INVALID_PARAMETER);
     /* Run all original splitter/owner regressions too. */
     assert(!views_baseline_main());
     uintptr_t a = reserve(), b = reserve();
