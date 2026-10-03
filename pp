@@ -244,6 +244,7 @@ def cmd_test(args):
         step(f"C test {name}", ["sh", "-c", 'clang -std=c11 -O2 -Wall -Wextra -Werror "$@" && { TMPDIR="$T" "$X" > "$X.log" 2>&1 || { tail -20 "$X.log"; exit 1; }; }', "cc",
                                 "-Iapp/Sources/HostIO/include", "-Iapp/Sources/WineHost/include", *flags, "-o", exe,
                                 *sources], env=dict(os.environ, T=scratch, X=exe))
+    step("C test WoW64 window", [sys.executable, os.path.join(REPO, "build/wow64/test.py")])
     if "--quick" not in args:
         for pkg in SWIFT_PACKAGES:
             step(f"swift test {pkg}", swift_test(pkg), cwd=os.path.join(REPO, pkg))
