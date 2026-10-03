@@ -1,0 +1,353 @@
+From 91d1f5d20ec7b16f2adfefa4a9dd3aff1c25356d Mon Sep 17 00:00:00 2001
+From: Playport contributors <playport@users.noreply.github.com>
+Date: Sat, 3 Oct 2026 13:17:53 +0200
+Subject: [PATCH] ntdll: map fixed i386 images into the owned window
+
+Keep host storage separate from guest image identity and relocation delta. Retain logical execute permissions without native execution or JIT-pool copies. Roll back failed images to protected holdbacks. Stop before the unwired parameter/ARM64EC loader paths.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no (iOS pseudo-process window port)
+---
+ build/ntdll-unix/env_ios.c     | 16 ++++++
+ build/ntdll-unix/virtual_ios.c | 95 +++++++++++++++++++++++++++++-----
+ build/ntdll-unix/wow64_image.h | 69 ++++++++++++++++++++++++
+ 3 files changed, 166 insertions(+), 14 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_image.h
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index d340d7a..3166274 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -2279,6 +2279,22 @@ void unix_init_startup_info(void)
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
+ 
++#ifdef WINE_IOS
++    /* The owned image now maps, but the legacy parameter builder truncates
++     * host pointers and the session's ARM64EC PE loader cannot bootstrap i386.
++     * Stop before either path until window parameters/native WoW64 are wired.
++     * This is a temporary fail-closed bootstrap boundary, not a launch mode. */
++    {
++        extern uintptr_t ios_wow64_current_base(void);
++        if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386 && ios_wow64_current_base())
++        {
++            dprintf(2, "[wow64-startup] image mapped; window process parameters and native WoW64 loader "
++                       "not implemented -> STATUS_NOT_SUPPORTED (no i386 execution)\n");
++            NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
++            return;
++        }
++    }
++#endif
+     virtual_alloc_first_teb();
+ 
+     size = (sizeof(*params)
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index eb7a62c..5b4bed1 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -116,6 +116,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #include "wine/rbtree.h"
+ #include "unix_private.h"
+ #include "wow64_window.h"
++#define VPROT_WOW64_IMAGE 0x2000 /* i386 bytes, never native/pool executable */
+ #include "ios_process_image.h"
+ #include "wine/debug.h"
+ 
+@@ -11475,33 +11476,40 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+  */
+ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ {
++    struct file_view *view = find_view( base, size );
++    BOOL guest_image = view && (view->protect & VPROT_WOW64_IMAGE);
+     size_t i, count;
+     char *addr = ROUND_ADDR( base, host_page_mask );
+     int prot, next;
+     BYTE vprot;
+ 
++    /* Logical EXEC belongs to FEX, not ARM64. Never give i386 image bytes
++     * native execution permission or consume pool space copying them. */
++    if (guest_image) { clear |= VPROT_EXEC; set &= ~VPROT_EXEC; }
+     size = ROUND_SIZE( base, size, host_page_mask );
+ 
+     vprot = get_host_page_vprot( addr );
+     prot = get_unix_prot( (vprot & ~clear) | set );
+ #ifdef WINE_IOS
+-    if (!set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
++    if (!guest_image && !set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
+ #endif
+     for (count = i = 1; i < size / host_page_size; i++, count++)
+     {
+         vprot = get_host_page_vprot( addr + count * host_page_size );
+         next = get_unix_prot( (vprot & ~clear) | set );
+ #ifdef WINE_IOS
+-        if (!set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
++        if (!guest_image && !set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
+             next &= ~PROT_WRITE;
+ #endif
+         if (next == prot) continue;
+-        if (mprotect_exec( addr, count * host_page_size, prot )) return -1;
++        if (guest_image ? mprotect( addr, count * host_page_size, prot ) :
++                          mprotect_exec( addr, count * host_page_size, prot )) return -1;
+         addr += count * host_page_size;
+         prot = next;
+         count = 0;
+     }
+-    return mprotect_exec( addr, count * host_page_size, prot );
++    return guest_image ? mprotect( addr, count * host_page_size, prot ) :
++                         mprotect_exec( addr, count * host_page_size, prot );
+ }
+ 
+ 
+@@ -13854,7 +13862,8 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+      * (image_info->map_addr - image_info->base) for delta — that produces the
+      * WRONG delta if map_addr disagrees with ptr. Force them to match so all
+      * ARM64 PC-relative relocations (ADRP/ADR/BRANCH26) target real addresses. */
+-    if (image_info->map_addr && (uintptr_t)ptr != image_info->map_addr)
++    if (!(view->protect & VPROT_WOW64_IMAGE) &&
++        image_info->map_addr && (uintptr_t)ptr != image_info->map_addr)
+     {
+         ERR("iOS: forcing map_addr 0x%lx -> %p (actual view base) so reloc delta is correct\n",
+             (unsigned long)image_info->map_addr, ptr);
+@@ -14117,7 +14126,8 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+      * Register the window so the Mach fault handler can service accesses to
+      * it against THIS mapping -- same memory, so the two views cannot diverge.
+      * Registered after relocation so real_base is final. */
+-    if (image_info->base && image_info->base < 0x100000000ull)
++    if (!(view->protect & VPROT_WOW64_IMAGE) &&
++        image_info->base && image_info->base < 0x100000000ull)
+     {
+         extern void ios_register_subfloor_image( unsigned long long pref_base,
+                                                  unsigned long long size,
+@@ -14167,6 +14177,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+     /* Eagerly JIT-copy all EXEC sections right here — every PE load goes
+      * through map_image_into_view, regardless of whether it's via
+      * virtual_map_image (builtin flag) or any alternate path. */
++    if (view->protect & VPROT_WOW64_IMAGE) goto done;
+     ERR("iOS map_image_into_view: view=%p EXEC fixup\n", ptr);
+     for (int si = 0; si < nt->FileHeader.NumberOfSections; si++)
+     {
+@@ -14267,8 +14278,12 @@ static unsigned int get_mapping_info( HANDLE handle, ACCESS_MASK access, unsigne
+  *
+  * Map a view for a PE image at an appropriate address.
+  */
++#include "wow64_views.h"
++#include "wow64_image.h"
++
+ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_info *image_info, SIZE_T size,
+-                                ULONG_PTR limit_low, ULONG_PTR limit_high, ULONG alloc_type )
++                                ULONG_PTR limit_low, ULONG_PTR limit_high, ULONG alloc_type,
++                                uintptr_t wow64_window )
+ {
+     unsigned int vprot = SEC_IMAGE | SEC_FILE | VPROT_COMMITTED | VPROT_READ | VPROT_EXEC | VPROT_WRITECOPY;
+     void *base;
+@@ -14277,6 +14292,12 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+     BOOL top_down = (image_info->image_charact & IMAGE_FILE_DLL) &&
+                     (image_info->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated);
+ 
++    if (image_info->machine == IMAGE_FILE_MACHINE_I386 && wow64_window)
++    {
++        if (alloc_type) return STATUS_NOT_SUPPORTED;
++        return ios_wow64_claim_image( wow64_window, image_info, size, view_ret );
++    }
++
+     limit_low = max( limit_low, (ULONG_PTR)address_space_start );  /* make sure the DOS area remains free */
+     /* task #35 furniture ceiling: images pack below it (inclusive limit).
+      * Disabled while ios_furniture_ceiling == 0 — see its definition. */
+@@ -14389,12 +14410,17 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+     int unix_fd = -1, needs_close;
+     int shared_fd = -1, shared_needs_close = 0;
+     SIZE_T size = pe_mapping->image.map_size;
++    /* Query before virtual_mutex: registry lock order is windows -> virtual.
++     * This thread owns the window's lifetime throughout startup. */
++    uintptr_t wow64_window = pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386 ?
++                             ios_wow64_current_base() : 0;
+     struct file_view *view;
+     unsigned int status;
+     sigset_t sigset;
+ 
+     if (offset >= size)
+         return STATUS_INVALID_PARAMETER;
++    if (wow64_window && offset) return STATUS_NOT_SUPPORTED;
+ 
+     if ((status = server_get_unix_fd( mapping, 0, &unix_fd, &needs_close, NULL, NULL )))
+         return status;
+@@ -14421,7 +14447,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+ 
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+ 
+-    status = map_image_view( &view, &pe_mapping->image, size, limit_low, limit_high, alloc_type );
++    status = map_image_view( &view, &pe_mapping->image, size, limit_low, limit_high, alloc_type, wow64_window );
+     /* ml366: NAME the image whose placement failed. ml365's mmdevapi load
+      * returned c0000017 with zero attributable evidence — the [va-scan]
+      * FAILED line was storm-gated and nothing tied a placement failure to a
+@@ -14445,11 +14471,23 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+             size -= offset;
+         }
+ 
+-        pe_mapping->image.base = wine_server_client_ptr( view->base );
++        if (view->protect & VPROT_WOW64_IMAGE)
++        {
++            uint32_t guest;
++            if (offset || !ios_wow64_image_guest( wow64_window, view->base, size, &guest ))
++            {
++                status = STATUS_NOT_SUPPORTED;
++                goto failed_view;
++            }
++            pe_mapping->image.base = guest;
++        }
++        else pe_mapping->image.base = wine_server_client_ptr( view->base );
+         SERVER_START_REQ( map_image_view )
+         {
+             req->mapping = wine_server_obj_handle( mapping );
+-            req->base    = pe_mapping->image.base;
++            /* Server VM views describe actual host storage. Returned image
++             * info above describes guest identity, not this storage address. */
++            req->base    = wine_server_client_ptr( view->base );
+             req->size    = size;
+             req->entry   = pe_mapping->image.entry_point;
+             req->machine = pe_mapping->image.machine;
+@@ -14474,7 +14512,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+          * EXEC). Without the JIT copy, triangle.exe's .text isn't executable
+          * and we bus-fault on its first instruction.
+          */
+-        if (is_builtin && !offset)
++        if (is_builtin && !offset && !(view->protect & VPROT_WOW64_IMAGE))
+         {
+             IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)view->base;
+             if (dos && dos->e_magic == IMAGE_DOS_SIGNATURE)
+@@ -14505,7 +14543,16 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+         *size_ptr = size;
+         VIRTUAL_DEBUG_DUMP_VIEW( view );
+     }
+-    else delete_view( view );
++    else
++    {
++failed_view:
++        if (view->protect & VPROT_WOW64_IMAGE)
++        {
++            NTSTATUS rollback = ios_wow64_rollback_image( view );
++            if (rollback) ERR("WoW64 image rollback failed: %x (retained until owner exit)\n", rollback);
++        }
++        else delete_view( view );
++    }
+ 
+ done:
+     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+@@ -15111,9 +15158,8 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+  * and PROT_NONE gaps without dropping the host reservation. Bootstrap the
+  * initial thread's native/32-bit TEB pair in its own window, never setting
+  * wow_peb, the session TEB free lists or session allocation limits.
+- * General WoW64 thread allocation and image/VM translation remain pending.
++ * General WoW64 thread allocation and VM translation remain pending.
+  * Lock order: windows -> virtual_mutex; queries only take windows. */
+-#include "wow64_views.h"
+ #include "wow64_pair.h"
+ C_ASSERT( sizeof(TEB) <= IOS_WOW64_TEB_OFFSET );
+ C_ASSERT( sizeof(TEB32) <= 0x1000 );
+@@ -15400,6 +15446,27 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
+                                     pe_mapping, machine, FALSE, 0 );
+         virtual_fill_image_information( &pe_mapping->image, ios_main_image_info_slot() );
+     }
++    if (NT_SUCCESS(status) && pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386)
++    {
++        uintptr_t window = ios_wow64_current_base();
++        uint32_t guest;
++        TEB32 *teb32 = (TEB32 *)get_wow_teb( NtCurrentTeb() );
++        PEB32 *peb32 = teb32 ? (PEB32 *)ios_wow64_host_addr( window, teb32->Peb ) : NULL;
++        if (!peb32 || !ios_wow64_image_guest( window, *ios_main_module_slot(), size, &guest ))
++            status = STATUS_INVALID_PARAMETER;
++        else
++        {
++            IMAGE_DOS_HEADER *dos = *ios_main_module_slot();
++            IMAGE_NT_HEADERS32 *nt = (void *)((char *)dos + dos->e_lfanew);
++            peb32->ImageBaseAddress = guest;
++            dprintf(2, "[wow64-image] owner=%p host=%p guest=%#x size=%#lx header_base=%#x "
++                       "transfer=%p peb32_image=%#x delta=%#llx native_exec=0 pool_copy=0\n",
++                    ios_jit_current_peb(), dos, guest, (unsigned long)size,
++                    nt->OptionalHeader.ImageBase, ios_cur_image_info()->TransferAddress,
++                    peb32->ImageBaseAddress,
++                    (unsigned long long)(pe_mapping->image.map_addr - pe_mapping->image.base));
++        }
++    }
+     free_pe_mapping_info( pe_mapping );
+     return status;
+ }
+diff --git a/build/ntdll-unix/wow64_image.h b/build/ntdll-unix/wow64_image.h
+new file mode 100644
+index 0000000..48ddd2c
+--- /dev/null
++++ b/build/ntdll-unix/wow64_image.h
+@@ -0,0 +1,69 @@
++/* Window-backed i386 images: host storage, guest relocation identity.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Wine types, wow64_window.h and wow64_views.h must be included first.
++ * virtual_mutex must be held for claim/rollback.
++ */
++#ifndef IOS_WOW64_IMAGE_H
++#define IOS_WOW64_IMAGE_H
++
++/* Fixed preferred placement only. Do not relocate by the host window base:
++ * PE32 absolute pointers must stay in the guest address space. ASLR/free-gap
++ * selection will need a guest-space allocator, not Wine's host allocator.
++ */
++static NTSTATUS ios_wow64_claim_image( uintptr_t window, struct pe_image_info *image,
++                                      size_t size, struct file_view **result )
++{
++    struct file_view *view;
++    NTSTATUS status;
++    uint64_t limit;
++
++    if (!image || !result) return STATUS_INVALID_PARAMETER;
++    limit = (image->image_charact & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++            IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
++    if (image->machine != IMAGE_FILE_MACHINE_I386 ||
++        image->base < IOS_WOW64_NULL_GUARD || image->base >= limit ||
++        !size || size > limit - image->base || size > SIZE_MAX - host_page_mask)
++        return STATUS_INVALID_PARAMETER;
++    size = (size + host_page_mask) & ~host_page_mask;
++    if (size > limit - image->base) return STATUS_INVALID_PARAMETER;
++    status = ios_wow64_claim_view( window, image->base, size,
++                                  VPROT_COMMITTED | VPROT_READ | VPROT_WRITE, &view );
++    if (status) return status;
++    view->protect = VPROT_WOW64_IMAGE | SEC_IMAGE | SEC_FILE | VPROT_COMMITTED |
++                    VPROT_READ | VPROT_WRITECOPY | VPROT_EXEC;
++    /* Discard the server's ASLR suggestion, but never the preferred base.
++     * Both ImageBase and relocation delta stay guest-relative. */
++    image->map_addr = image->base;
++    *result = view;
++    return STATUS_SUCCESS;
++}
++
++/* Replace any file-backed pages with an inaccessible anonymous holdback.
++ * MAP_FIXED atomically replaces backing; no munmap/reservation-loss interval.
++ * Failure leaves the image descriptor intact for owner teardown, not a free
++ * host range that some unrelated allocation could steal.
++ */
++static NTSTATUS ios_wow64_rollback_image( struct file_view *view )
++{
++    if (!view || !(view->protect & VPROT_WOW64_IMAGE)) return STATUS_INVALID_PARAMETER;
++    if (mmap( view->base, view->size, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON,
++              -1, 0 ) == MAP_FAILED) return STATUS_NO_MEMORY;
++    view->protect = VPROT_WOW64_HOLE;
++    set_page_vprot( view->base, view->size, 0 );
++    return STATUS_SUCCESS;
++}
++
++/* Unix module pointers address the host mapping, while SECTION_IMAGE_INFORMATION
++ * and the PEB32 must name the guest image. Refuse rather than truncate. */
++static BOOL ios_wow64_image_guest( uintptr_t window, const void *host, size_t size,
++                                  uint32_t *guest )
++{
++    uint32_t value;
++    if (!guest || !host || !ios_wow64_guest_addr( window, (uintptr_t)host, &value ) ||
++        value < IOS_WOW64_NULL_GUARD || !size || size > IOS_WOW64_WINDOW_SIZE - value)
++        return FALSE;
++    *guest = value;
++    return TRUE;
++}
++
++#endif
+-- 
+2.55.0
+

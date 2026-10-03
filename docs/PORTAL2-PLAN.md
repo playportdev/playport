@@ -190,18 +190,31 @@ menu visible). Production-helper host tests cover state preservation, failures,
 restoration and concurrent disjoint owners with mock Wine layouts/views and
 real mappings/TLS; the same step-2 evidence record holds the IPA and runs.
 
-**Next, still step 2:** image/VM mapping and guest-relative metadata, then
-window-backed process parameters and full PEB32 population. Only the initial
-TEB is paired; secondary WoW64 thread allocation explicitly returns
-`STATUS_NOT_SUPPORTED` rather than borrowing the session's native layout.
-Suballocation still supports fixed reserved/RW views only: no general VM
-routing, free/reuse, image or executable views. The legacy `wow_peb`, TEB
-free lists and WoW64 limits remain global but this bootstrap does not mutate
-them; other startup globals (`peb`, argv, startup info) still rely on
+**Fixed-image follow-up, 2026-10-03:** madeira-unix 0053 maps Portal 2's
+main image at host `B+0x400000`, with guest ImageBase/PEB32 image `0x400000`,
+entry `0x4017d1` and relocation delta 0. Wine's existing PE mapper loads the
+sections; i386 bytes keep logical EXEC but are native-NX and get no pool copy
+or global sub-floor registration. Failed maps roll back to protected gaps.
+Host tests cover placement, bounds, NX/protection and rollback/retry with
+real mappings and mock Wine views/page metadata. The phone now passes the
+image map, then explicitly stops at the unwired process-parameter/native
+WoW64-loader boundary (`c00000bb`), restoring the TEB and releasing the window.
+**No i386 code executes.** Hollow Knight passes `first-frame+10` (8.24 s first
+frame, menu visible); details remain in the same step-2 evidence record.
+
+**Next, still step 2:** window-backed process parameters/full PEB32, general
+VM routing and guest-space image placement/relocations (only fixed preferred
+bases work now; server ASLR suggestions are ignored). Only the initial TEB
+is paired; secondary WoW64 thread allocation explicitly returns
+`STATUS_NOT_SUPPORTED`. General free/reuse is absent. The legacy `wow_peb`,
+TEB free lists and WoW64 limits remain global but this bootstrap does not
+mutate them; other startup globals (`peb`, argv, startup info) still rely on
 serialization. Extend paired thread allocation/lifetime, route pointer
 conversions, expose the base to PE code and integrate whole-window faults
 for the Mach handler's target process. The locked native base/allocation
-queries must not be called from a signal handler. Do not advance to step 3 yet.
+queries must not be called from a signal handler. Remove the fail-closed
+startup boundary only when its downstream paths are wired; do not advance
+to step 3 yet.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"

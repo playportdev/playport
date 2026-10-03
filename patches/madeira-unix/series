@@ -51,3 +51,4 @@
 0050-ntdll-isolate-child-startup-image-identity.patch
 0051-ntdll-suballocate-owned-WoW64-window-views.patch
 0052-ntdll-bootstrap-owner-local-window-backed-TEB-pairs.patch
+0053-ntdll-map-fixed-i386-images-into-the-owned-window.patch

@@ -9,10 +9,11 @@ image state from the session and makes unix-side WoW64 identity owner-aware.
 The suballocation follow-up prepares owner-local PEB32 storage inside the
 window; the initial-thread follow-up pairs it with window-backed native and
 32-bit TEBs. Address arithmetic, startup-state selection, view splitting and
-pairing helpers are host-tested from the actual patches. **Portal 2 still
-fails at its low-address image mapping; PEB32 has bootstrap scalars only,
-no image is mapped in the window and no i386 code executes. Step 2 and
-milestone 1 are not complete.**
+pairing helpers are host-tested from the actual patches. The fixed-image
+follow-up below now maps Portal 2's main image in the window, retaining guest
+image/entry addresses and publishing PEB32's image base. Startup explicitly
+stops before the unwired parameter/native WoW64-loader paths. **No i386 code
+executes. Step 2 and milestone 1 are not complete.**
 
 Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
 IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).
@@ -285,6 +286,65 @@ packages), and `pp slots` passes (150 slots, 149 calls). The source commit's
 `pp build --plan` reports no trees to rebuild. Logs/screenshots stay under
 `.work/portal2-pair` and `.work/ui-runs/`.
 
+## Fixed-image follow-up (same step)
+
+Source at build: `37e9394` plus madeira-unix 0053 and host tests.
+Dev IPA: `.work/out/20261003-133126-6da1d49c/Playport-26.5-6da1d49c.ipa`.
+SHA256: `6da1d49c614ab6045e8d3a6a5604d308bddc59967c898696f4a9b7881c0e4e5f`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+are unchanged.
+
+**madeira-unix 0053** uses Wine's existing PE header/section mapper, not a
+second loader. The owner base is queried before taking `virtual_mutex`,
+preserving registry lock order. Fixed preferred guest placement is claimed
+inside that window, respecting the low guard, 16 KiB rounding and the
+image's 2/4 GiB large-address-aware limit. Server ASLR suggestions are ignored
+for now; collisions fail rather than falling back to a host allocation.
+
+Unix module pointers and wineserver VM views name **host storage**; returned
+image info, the PE header and PEB32's image base name **guest identity**.
+Relocation delta is zero at the preferred guest base, never B. A new view flag
+retains logical EXEC while host protection drops native EXEC and bypasses
+pool copies; these images do not enter the global sub-floor image table.
+On mapping failure, anonymous PROT_NONE backing atomically replaces any file
+pages, leaving a reusable holdback rather than unmapping the reservation.
+A replacement failure retains the descriptor until owner teardown.
+
+`build/wow64/image_test.c` compiles `wow64_image.h` and the actual modified
+`mprotect_range` recovered from the patch. UBSan tests use real mappings,
+private file backing, and **mock Wine views/page bytes/protection conversion**:
+NULL/invalid inputs, rounded 2/4 GiB edges, wide-address rejection, untouched
+failure outputs, descriptor/protection failure, identical guest addresses in
+disjoint windows, logical EXEC with physical NX/read-only/RW pages, rollback
+failure, zero-filled retry, guard and teardown isolation. Non-window views
+still take `mprotect_exec`. This does not test Wine's full rbtree, server VM
+queries, nonzero guest relocations, general VM or FEX execution.
+
+One phone-lock session upgraded in place and ran both titles. Both result
+events name the SHA256 above:
+
+- `.work/ui-runs/portal2-image-final`: B=`0x7038010000`, image host
+  `0x7038410000`, guest/header/PEB32 image `0x400000`, size `0x5c000`,
+  transfer address `0x4017d1`, delta 0. `virtual_map_main_module` returns
+  informational `STATUS_IMAGE_NOT_AT_BASE` (`40000003`) because the server
+  records high host storage. Startup then deliberately terminates with
+  `STATUS_NOT_SUPPORTED` (`c00000bb`), before the old parameter builder or
+  session ARM64EC PE loader can consume incompatible pointers/layouts.
+  TEB restoration and window release still succeed. **No i386 DLL load or
+  instruction execution is claimed.** UI result remains
+  `launch=failed run_exe=-7`, exit 1; screenshot shows **Portal 2 could not
+  start**, JIT/Runtime passed and Game failed.
+- `.work/ui-runs/portal2-image-final-hk`: `first-frame+10`, exit 0; first
+  frame **8.24 s**, JIT **2.51 s**. Screenshot shows the main menu. Pool
+  exhaustion, FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, all C tests including five WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
+`git show --check` and the non-patch whitespace check pass; `pp build --plan`
+reports no trees to rebuild. Logs/screenshots stay under `.work/portal2-image`
+and `.work/ui-runs/`.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -327,12 +387,13 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: image/VM mapping inside the window and guest-relative
-image metadata/relocations, then window-backed process parameters and full
-PEB32 population. Only the initial TEB is paired; general paired thread
-allocation, reuse/free and multi-thread teardown are pending, and secondary
-WoW64 threads are explicitly rejected. The fixed-view suballocator does not
-yet implement general VM routing, free/reuse or image mapping. WoW64 identity
+Next in this same step: window-backed process parameters and full PEB32,
+then general VM routing and guest-space image placement/nonzero relocations.
+Only fixed preferred image bases work; only the initial TEB is paired.
+General paired thread allocation, reuse/free and multi-thread teardown are
+pending, and secondary WoW64 threads are explicitly rejected. Remove the
+fail-closed startup boundary only after its downstream paths are wired.
+The fixed-view suballocator does not yet implement general VM or free/reuse. WoW64 identity
 is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation
 limits remain global; this bootstrap leaves them unchanged. Other startup
 globals (`peb`, argv, startup info) still rely on serialization. Then PE-visible
