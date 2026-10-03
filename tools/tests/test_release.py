@@ -246,7 +246,9 @@ class Release(unittest.TestCase):
         self.assertEqual(release.version_problems("0.1.0", self.repo), [])
         self.assertIn("not x.y.z", release.version_problems("v0.1", self.repo)[0])
         self.assertEqual(len(release.version_problems("0.2.0", self.repo)), 2)
-        self.assertEqual(release.version_problems("0.1.0", REPO), [], "the committed plists name 0.1.0")
+        current = plistlib.loads((REPO / "app/Info.plist").read_bytes())["CFBundleShortVersionString"]
+        self.assertEqual(release.version_problems(current, REPO), [],
+                         "the committed app and helper versions agree and are semver")
 
     def test_a_clean_release_assembles_every_file_and_builds_clean_unsigned(self):
         dest = self.release()
