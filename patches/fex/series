@@ -16,3 +16,5 @@
 0015-WOW64-build-with-FEX-s-own-CRT-on-the-iOS-host.patch
 0016-WOW64-run-the-WoW64-module-on-the-iOS-host.patch
 0017-WOW64-translate-the-whole-4-GiB-guest-window-inline-.patch
+0018-WOW64-address-a-32-bit-guest-s-memory-through-its-wi.patch
+0019-WOW64-let-a-32-bit-guest-s-jump-below-64-KiB-fault-i.patch

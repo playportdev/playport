@@ -105,6 +105,14 @@ loop should take milestone 1's steps as its instructions.
 
 ## Milestone 1: Portal 2's launcher runs its own code
 
+**Done, 2026-10-04.** Every marker below shows on the phone with 3 serviced low
+faults, and Hollow Knight passes on the same IPA
+([step 4 evidence](evidence/2026-10-04-portal2-inline-translation.md)). The
+items still open in step 2 carry over to milestone 2. **Next:**
+[milestone 2](#after-milestone-1-outline-only), starting with the i386 D3D9
+path: the engine stops where `materialsystem.dll` calls the shader API's
+factory, which is null because i386 `opengl32` has no GL.
+
 **Done when** a Portal 2 Play through the UI (`pp ui --play app-620 --until
 mark:…+5`) shows in `s1-host.log`:
 
@@ -340,9 +348,8 @@ Details are in the same step-2 evidence record.
   helper and the child hangs (18.8 million serviced low faults by then).
 - Hollow Knight passes `first-frame+10` (8.76 s, menu visible).
 
-Still open in step 2:
+Still open in step 2 (carried to milestone 2):
 
-- the null helper call after `localize.dll`;
 - wow64win's remaining unaudited thunks (D3DKMT, raw input, hooks);
 - freeing a secondary thread's pair and 32-bit stack before process exit;
 - pointers inside the unix libraries' WoW64 parameter blocks;
@@ -395,9 +402,6 @@ session, and FEX's WoW64 module runs on iOS. Hollow Knight passes
 passes `first-frame+10` on the same IPA
 ([evidence](evidence/2026-10-03-portal2-wow64-pointers.md)).
 
-**Next:** step 4, inline translation, to cut the 18.8 million serviced low
-faults; then the null helper call after `localize.dll`.
-
 - Port the iOS JIT plumbing from `ARM64EC/Module.cpp` into `WOW64/Module.cpp`:
   pool allocation, aliases, call-return stacks and the transition hooks. Share
   code through `Source/Windows/Common` where the ARM64EC patches allow it.
@@ -410,6 +414,24 @@ faults; then the null helper call after `localize.dll`.
   up before going further.
 
 ### Step 4: inline translation in FEX (patches/fex)
+
+**Check passed, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-inline-translation.md)):
+
+- fex 0018 emits every guest load and store as `[B, wEA, uxtw]`, the TSO
+  forms included. Push and pop become such an access plus an ESP update.
+  Atomics, pairs, vector-element, x87, state-save and string ops use
+  `B + zext32(EA)`.
+- Sampling showed that push, pop, call and return caused 97.8% of the
+  18.8 million faults.
+- The coverage test (`build/guest32/window_coverage_audit.py`) passes on 174
+  i386 instructions in four configurations. A control without a window is
+  rejected.
+- The milestone run has 3 serviced low faults. They are native ntdll reads of
+  the i386 ntdll image, not FEX code.
+- fex 0019 turns the "null helper call" (the dispatcher branching to
+  `CompileBlock`'s refusal of EIP 0) into the guest's access violation. The
+  child now exits with `c0000005` instead of hanging.
+- Hollow Knight passes `first-frame+10` (9.59 s, menu visible).
 
 - In 32-bit mode, apply `B + zext32(EA)` at the `IosXlate` sites. Emit it as the
   `MemOffsetType::UXTW` register-offset form so that the backend produces
