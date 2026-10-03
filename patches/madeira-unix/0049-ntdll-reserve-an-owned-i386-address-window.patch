@@ -1,0 +1,217 @@
+From 5063effc6f1b0de35e7d336f2c0a6bef361e34a7 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 3 Oct 2026 11:51:08 +0200
+Subject: [PATCH] ntdll: reserve an owned i386 address window before image
+ loading
+
+Reserve one uncommitted 4 GiB Wine view per PEB, with no session-wide WoW64 switch. Add checked, host-testable address arithmetic and retire the reservation on process exit. Keep the low-image rejection while mapping and WoW64 bootstrap remain incomplete; this is the first part of Portal 2 step 2, not working i386 execution.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c  | 108 +++++++++++++++++++++++++++++++-
+ build/ntdll-unix/wow64_window.h |  44 +++++++++++++
+ 2 files changed, 151 insertions(+), 1 deletion(-)
+ create mode 100644 build/ntdll-unix/wow64_window.h
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 846d530..46fe10b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -115,6 +115,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #include "wine/list.h"
+ #include "wine/rbtree.h"
+ #include "unix_private.h"
++#include "wow64_window.h"
+ #include "wine/debug.h"
+ 
+ /* ml648: the Mono-bridge alias table is defined further down, but the anon-alias
+@@ -8121,6 +8122,8 @@ static void clear_arm64ec_range( const void *addr, size_t size );
+  * (size=0 → matches nothing; pe_base=NULL → slot reusable); anon RWX
+  * aliases (FEX CodeBuffers) in freed ranges are cleared; EC bitmap bits
+  * are cleared so a reused range starts with a clean call-routing slate. */
++static void ios_wow64_release_window( void *owner );
++
+ void ios_jit_reclaim_process( void *peb )
+ {
+     size_t total = 0;
+@@ -8128,7 +8131,9 @@ void ios_jit_reclaim_process( void *peb )
+     int i, j;
+     char *rx_base = (char *)ios_jit_rx_base_global;
+ 
+-    if (!peb || !rx_base) return;
++    if (!peb) return;
++    ios_wow64_release_window( peb );
++    if (!rx_base) return;
+ 
+     ios_alias_forget_process( peb );
+ 
+@@ -15101,6 +15106,101 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+ }
+ 
+ 
++/* Playport: first reserve an isolated address window for an i386 child.
++ * A file_view makes the entire PROT_NONE range unavailable to every ordinary
++ * Wine allocation, including concurrent ARM64EC processes. No guest page is
++ * committed here, especially not the low 64K. Mapping images/suballocations
++ * inside this view and bootstrapping WoW64 are subsequent work: deliberately
++ * keep the existing low-image rejection until that path is ready.
++ * Lock order: windows -> virtual_mutex; queries only take windows. */
++#define IOS_WOW64_WINDOWS_MAX 64
++static struct { void *owner; struct file_view *view; } ios_wow64_windows[IOS_WOW64_WINDOWS_MAX];
++static pthread_mutex_t ios_wow64_windows_lock = PTHREAD_MUTEX_INITIALIZER;
++
++uintptr_t ios_wow64_base_for_peb( void *owner )
++{
++    uintptr_t base = 0;
++    unsigned int i;
++    if (!owner) return 0;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (ios_wow64_windows[i].owner == owner)
++        {
++            base = (uintptr_t)ios_wow64_windows[i].view->base;
++            break;
++        }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return base;
++}
++
++uintptr_t ios_wow64_current_base(void)
++{
++    return ios_wow64_base_for_peb( ios_jit_current_peb() );
++}
++
++static NTSTATUS ios_wow64_reserve_window( void *owner )
++{
++    unsigned int i, slot = IOS_WOW64_WINDOWS_MAX;
++    NTSTATUS status = STATUS_NO_MEMORY;
++    sigset_t sigset;
++    struct file_view *view;
++
++    if (!owner) return STATUS_NOT_SUPPORTED; /* no process identity, no shared fallback */
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        if (ios_wow64_windows[i].owner == owner) { status = STATUS_SUCCESS; goto done; }
++        if (!ios_wow64_windows[i].owner && slot == IOS_WOW64_WINDOWS_MAX) slot = i;
++    }
++    if (slot == IOS_WOW64_WINDOWS_MAX) goto done;
++
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    status = map_view( &view, NULL, IOS_WOW64_WINDOW_SIZE, 0, 0, 0, 0, 0 );
++    if (!status && !ios_wow64_valid_base( (uintptr_t)view->base ))
++    {
++        delete_view( view );
++        status = STATUS_CONFLICTING_ADDRESSES;
++    }
++    if (!status)
++    {
++        uint32_t guest = 0;
++        uintptr_t base = (uintptr_t)view->base;
++        ios_wow64_windows[slot].view = view;
++        ios_wow64_windows[slot].owner = owner;
++        /* Exercise the production conversion rules on the actual reservation,
++         * without dereferencing it or pretending the image was mapped there. */
++        ios_wow64_guest_addr( base, ios_wow64_host_addr( base, 0x400000 ), &guest );
++        dprintf( 2, "[wow64-window] reserved peb=%p base=%#llx size=0x100000000 "
++                 "guard=0x10000 committed=0 roundtrip=%#x\n", owner,
++                 (unsigned long long)base, guest );
++    }
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++done:
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    if (status) dprintf( 2, "[wow64-window] reservation FAILED peb=%p status=%#x\n", owner, status );
++    return status;
++}
++
++static void ios_wow64_release_window( void *owner )
++{
++    unsigned int i;
++    sigset_t sigset;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (ios_wow64_windows[i].owner == owner)
++        {
++            struct file_view *view = ios_wow64_windows[i].view;
++            dprintf( 2, "[wow64-window] release peb=%p base=%p\n", owner, view->base );
++            ios_wow64_windows[i].owner = NULL;
++            ios_wow64_windows[i].view = NULL;
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            delete_view( view );
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++            break;
++        }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++}
++
+ /***********************************************************************
+  *           virtual_map_main_module
+  */
+@@ -15118,6 +15218,12 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
+ 
+     if (!pe_mapping) return STATUS_INVALID_PARAMETER;
+ 
++    if (pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386 &&
++        (status = ios_wow64_reserve_window( ios_jit_current_peb() )))
++    {
++        free_pe_mapping_info( pe_mapping );
++        return status;
++    }
+     if (!is_machine_64bit( pe_mapping->image.machine )) limit_high = (limit_2g - 1) & ~granularity_mask;
+     main_module = NULL;
+ 
+diff --git a/build/ntdll-unix/wow64_window.h b/build/ntdll-unix/wow64_window.h
+new file mode 100644
+index 0000000..7044cdb
+--- /dev/null
++++ b/build/ntdll-unix/wow64_window.h
+@@ -0,0 +1,44 @@
++/* Playport's iOS WoW64 address window.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Keep arithmetic independent of Wine so the host test uses this exact header.
++ */
++#ifndef IOS_WOW64_WINDOW_H
++#define IOS_WOW64_WINDOW_H
++
++#include <stdint.h>
++
++#define IOS_WOW64_WINDOW_SIZE UINT64_C(0x100000000)
++#define IOS_WOW64_NULL_GUARD UINT32_C(0x10000)
++
++static inline int ios_wow64_valid_base( uintptr_t base )
++{
++    return base >= IOS_WOW64_WINDOW_SIZE && !(base & (IOS_WOW64_NULL_GUARD - 1)) &&
++           base <= UINTPTR_MAX - (IOS_WOW64_WINDOW_SIZE - 1);
++}
++
++/* NULL is a pointer sentinel, not the window's inaccessible first byte.
++ * Nonzero addresses below 64K translate into the uncommitted guard region;
++ * conversion does not grant permission to access them. */
++static inline uintptr_t ios_wow64_host_addr( uintptr_t base, uint32_t guest )
++{
++    return guest && ios_wow64_valid_base( base ) ? base + guest : 0;
++}
++
++/* No truncation, and leave the output untouched on rejection. */
++static inline int ios_wow64_guest_addr( uintptr_t base, uintptr_t host, uint32_t *guest )
++{
++    if (!guest || !ios_wow64_valid_base( base )) return 0;
++    if (!host) { *guest = 0; return 1; }
++    if (host <= base || host - base >= IOS_WOW64_WINDOW_SIZE) return 0;
++    *guest = host - base;
++    return 1;
++}
++
++/* Native unix callers: identity is the owning TEB's PEB, never the global peb.
++ * The explicit-owner query is also for the Mach handler's target thread.
++ * These are NOT async-signal-safe (they take a lock). Fault integration and
++ * the PE-side export are separate work; do not call them from segv_handler. */
++extern uintptr_t ios_wow64_base_for_peb( void *owner );
++extern uintptr_t ios_wow64_current_base(void);
++
++#endif
+-- 
+2.55.0
+

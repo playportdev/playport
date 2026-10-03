@@ -61,9 +61,11 @@ Each milestone step is ordered to answer one of these as early as possible.
 1. **WoW64 beside ARM64EC in one Mach process.** Madeira has only run ARM64EC
    pseudo-processes. A WoW64 title would be a child of the x86-64 session root
    ([0027](decisions/0027-titles-as-children-of-a-session-root.md)), with an
-   aarch64 ntdll, `wow64.dll` and an i386 guest. Wine's unix-side `is_wow64()`
-   reads the TEB (`WowTebOffset`), so it works per thread. Any process-global
-   WoW64 state in the iOS patches would break this.
+   aarch64 ntdll, `wow64.dll` and an i386 guest. At the Wine pin, unix-side
+   `is_wow64()` reads **global `main_image_info.Machine`**, not the TEB;
+   `get_wow_teb()` reads `WowTebOffset`. Both identity and the iOS patches'
+   global WoW64 allocation state must become owner-aware. The child already
+   has an ARM64EC-session TEB, so the normal first-TEB setup cannot suffice.
 2. **FEX's WOW64 module on iOS.** Madeira's iOS JIT plumbing (the JIT pool,
    W^X aliases, call-return stacks, the mono bridge) is mostly in
    `Source/Windows/ARM64EC/Module.cpp`, which 30 fex-port patches touch. The
@@ -142,6 +144,24 @@ Wine window and conversion audit.
   unchanged. Commit, including the new build records.
 
 ### Step 2: the window in Wine (patches/madeira-unix or wine-port)
+
+**In progress, 2026-10-03:** madeira-unix 0049 reserves an uncommitted,
+PEB-owned 4 GiB Wine view before the i386 image load, exports native base
+queries, and releases it at child exit. The checked arithmetic header is
+host-tested directly from the patch, including inverse rejection, NULL,
+window edges and disjoint bases. [Evidence and conversion inventory](evidence/2026-10-03-portal2-wine-window.md).
+Portal 2's phone play proves reservation and release at `B=0x7038010000`,
+but still fails the unchanged low image mapping (`c0000017`); **no image
+has been mapped in the window and no i386 code executes**. Hollow Knight
+passes `first-frame+10` (9.40 s first frame, menu visible). Phone tests ran
+despite the 18% battery warning.
+
+**Next, still step 2:** make WoW64 identity and TEB/PEB allocation owner-aware,
+then image/VM suballocation within the window and guest-relative metadata.
+Route the pointer conversions, expose the base to PE code and integrate
+whole-window faults for the Mach handler's target process. The current
+holdback view is not yet a suballocator; the locked native queries must not
+be called from a signal handler. Do not advance to step 3 yet.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"
