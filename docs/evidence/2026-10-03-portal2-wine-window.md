@@ -6,10 +6,11 @@ The first part of [step 2](../PORTAL2-PLAN.md#step-2-the-window-in-wine-patchesm
 reserves an owned, uncommitted 4 GiB window on the phone before attempting the
 i386 main image. The owner-identity follow-up below isolates child startup
 image state from the session and makes unix-side WoW64 identity owner-aware.
-Address arithmetic and startup-state selection are host-tested from the
-actual patches. **Portal 2 still fails at its low-address image mapping;
-no paired TEB32/PEB32 is allocated and no i386 code executes. Step 2 and
-milestone 1 are not complete.**
+The suballocation follow-up prepares owner-local PEB32 storage inside the
+window. Address arithmetic, startup-state selection and view splitting are
+host-tested from the actual patches. **Portal 2 still fails at its
+low-address image mapping; no TEB32/PEB32 pairing exists and no i386 code
+executes. Step 2 and milestone 1 are not complete.**
 
 Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
 IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).
@@ -151,6 +152,64 @@ packages. `pp slots` passes (150 slots, 149 calls). Both source commits pass
 `git show --check`; the superproject diff outside format-patch files passes
 `git diff --check`. `pp build --plan` reports no trees to rebuild.
 
+## Suballocation follow-up (same step)
+
+Latest source at build: `f7e39b4` plus madeira-unix 0051 and host tests.
+Dev IPA: `.work/out/20261003-123557-40618838/Playport-26.5-40618838.ipa`.
+SHA256: `40618838186dcf025a9f4cb7727af7a7cc161401775205164842a89834b2c410`.
+Only `libntdll_unix.a` changes in the committed build records; pins and PE,
+FEX and DXMT outputs are unchanged.
+
+**madeira-unix 0051** replaces the registry's single view pointer with a
+stable base and owner-local PEB32 storage. `wow64_views.h` splits a holdback
+view into an allocation and up to two `VPROT_WOW64_HOLE` gaps. There is no
+unmap/remap interval or `MAP_FIXED`; host protection and all descriptors are
+obtained before modifying the tree. Invalid ranges, overlap, descriptor
+exhaustion and protection failure leave the tree and output unchanged. The
+native allocation wrapper selects the explicit owner under the window lock,
+then takes `virtual_mutex`; no missing-owner fallback or signal-safe API.
+Teardown walks every view inside the owner's disjoint range rather than
+following a stale descriptor after a split.
+
+Reservation now claims one RW/committed host page at guest `0x7ff00000` for
+PEB32. This is **storage only**: not a native PEB copy, not populated, and not
+linked through `wow_peb` or a paired TEB. The low 64 KiB and all other gaps
+remain PROT_NONE. The allocator currently supports fixed guest placements
+and reserved/RW views only; general VM routing, free/reuse, image/file and
+executable views are not implemented.
+
+`build/wow64/views_test.c` uses the production header, owner-selection wrapper
+and teardown function extracted from the patch. Real 4 GiB PROT_NONE host
+mappings back a **mock Wine view tree/page-metadata layer**; it does not test
+Wine's rbtree/free-range bookkeeping or signal masking. With UBSan it tests
+boundaries/overflow/alignment, untouched outputs on failure, both descriptor
+failure positions, protection failure, complete gap coverage, exact-fit reuse,
+zero-filled RW allocations, independent contents at identical guest addresses,
+unknown/NULL owners, eight concurrent claims (one success per owner), real
+SIGSEGV on the low guard, and teardown of one window leaving the other intact.
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected nonzero result. Both result events name the SHA256 above.
+The pre-run phone check reported 57% battery, not externally powered.
+
+- `.work/ui-runs/portal2-suballoc`: B=`0x7038010000`, PEB32 host
+  `0x70b7f10000`, guest `0x7ff00000`, bytes `0x4000`, `paired=0`.
+  Child `Machine=0x14c`, session `Machine=0x8664`, `wow_teb=0x0`.
+  Main-image mapping still fails `c0000017`, then the window is released;
+  UI result `launch=failed run_exe=-7`, exit 1. Screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed, Game failed. This checks allocation
+  and split-view teardown on Wine/iOS, not PEB contents or guest execution.
+- `.work/ui-runs/portal2-suballoc-hk`: `first-frame+10`, exit 0; first frame
+  **8.29 s**, JIT **2.50 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and all runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, C tests including the three WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). The source
+commit's `git show --check` and the superproject's non-patch whitespace check
+pass. `pp build --plan` reports no trees to rebuild. Logs/screenshots stay
+under `.work/portal2-suballoc` and `.work/ui-runs/`.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -193,12 +252,15 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: window suballocation and owner-local paired
-TEB32/PEB32 allocation. WoW64 identity is owner-aware now, but the legacy
+Next in this same step: owner-local paired TEB32/PEB32 setup for the child's
+already allocated native TEB; PEB32 storage is available but not populated or
+linked. The native TEB/paired offsets, TLS slot, thread list and signal state
+must remain coherent; the session's allocator must not acquire this child's
+layout. The fixed-view suballocator does not yet implement general VM routing,
+free/reuse or image mapping. WoW64 identity is owner-aware, but the legacy
 `wow_peb`, TEB free lists and WoW64 allocation limits remain global. Other
 startup globals (`peb`, argv, startup info) still rely on serialization.
-Then image/VM mapping inside the reserved window (currently a holdback, not
-a suballocator); guest-relative image metadata/relocations;
+Then image/VM mapping inside the window; guest-relative image metadata/relocations;
 PE-visible base query and file-by-file pointer/return-value conversion;
 stack/context/callback/APC/exception setup; and target-owned whole-window
 Mach fault servicing with a count. The existing global sub-floor image table

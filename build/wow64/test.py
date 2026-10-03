@@ -12,6 +12,8 @@ HEADER = "build/ntdll-unix/wow64_window.h"
 OWNER_HEADER = "build/ntdll-unix/ios_process_image.h"
 OWNER_PATCH = REPO / "patches/madeira-unix/0050-ntdll-isolate-child-startup-image-identity.patch"
 IDENTITY_PATCH = REPO / "patches/wine-unix/0008-ntdll-query-owner-WoW64-identity-on-iOS.patch"
+VIEWS_HEADER = "build/ntdll-unix/wow64_views.h"
+VIEWS_PATCH = REPO / "patches/madeira-unix/0051-ntdll-suballocate-owned-WoW64-window-views.patch"
 
 
 def patched_function(patch, signature):
@@ -67,6 +69,17 @@ def main():
                         "-I", str((root / OWNER_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/owner_test.c"), "-o", str(owner_exe)], check=True)
         subprocess.run([str(owner_exe)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", f"--include={VIEWS_HEADER}",
+                        str(VIEWS_PATCH)], check=True)
+        (root / "views_api.h").write_text(
+            patched_function(VIEWS_PATCH, "static void ios_wow64_delete_views( uintptr_t base )") +
+            patched_function(VIEWS_PATCH, "NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,"))
+        views_exe = root / "views-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/views_test.c"), "-o", str(views_exe)], check=True)
+        subprocess.run([str(views_exe)], check=True)
     return 0
 
 

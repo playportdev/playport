@@ -1,0 +1,240 @@
+From d1929ddbe8ac1d4eed4e18482664858c9871eef2 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 3 Oct 2026 12:31:44 +0200
+Subject: [PATCH] ntdll: suballocate owned WoW64 window views
+
+Keep PROT_NONE holdback gaps around fixed guest allocations, prepare private PEB32 storage without exposing an unpaired layout, and reclaim every split view at owner exit. Image mapping and paired TEB setup remain pending.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 83 ++++++++++++++++++++++++++++------
+ build/ntdll-unix/wow64_views.h | 77 +++++++++++++++++++++++++++++++
+ 2 files changed, 146 insertions(+), 14 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_views.h
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 4d97b5a..7f67870 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15107,15 +15107,15 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+ }
+ 
+ 
+-/* Playport: first reserve an isolated address window for an i386 child.
+- * A file_view makes the entire PROT_NONE range unavailable to every ordinary
+- * Wine allocation, including concurrent ARM64EC processes. No guest page is
+- * committed here, especially not the low 64K. Mapping images/suballocations
+- * inside this view and bootstrapping WoW64 are subsequent work: deliberately
+- * keep the existing low-image rejection until that path is ready.
++/* Playport: owner-local WoW64 windows. Split holdback views into allocations
++ * and PROT_NONE gaps without dropping the host reservation. PEB32 storage is
++ * allocated here but NOT paired with the inherited native TEB yet: image/VM
++ * translation and paired-TEB setup remain separate work. Never set wow_peb or
++ * session allocation limits from this path.
+  * Lock order: windows -> virtual_mutex; queries only take windows. */
++#include "wow64_views.h"
+ #define IOS_WOW64_WINDOWS_MAX 64
+-static struct { void *owner; struct file_view *view; } ios_wow64_windows[IOS_WOW64_WINDOWS_MAX];
++static struct { void *owner; uintptr_t base; PEB32 *peb32; } ios_wow64_windows[IOS_WOW64_WINDOWS_MAX];
+ static pthread_mutex_t ios_wow64_windows_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ uintptr_t ios_wow64_base_for_peb( void *owner )
+@@ -15127,7 +15127,7 @@ uintptr_t ios_wow64_base_for_peb( void *owner )
+     for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
+         if (ios_wow64_windows[i].owner == owner)
+         {
+-            base = (uintptr_t)ios_wow64_windows[i].view->base;
++            base = ios_wow64_windows[i].base;
+             break;
+         }
+     pthread_mutex_unlock( &ios_wow64_windows_lock );
+@@ -15139,6 +15139,44 @@ uintptr_t ios_wow64_current_base(void)
+     return ios_wow64_base_for_peb( ios_jit_current_peb() );
+ }
+ 
++/* Native allocation entry point. Fixed guest addresses only; no PE ABI and
++ * no signal-handler callers. Output is unchanged on rejection/failure. */
++NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
++                                    unsigned int vprot, void **host )
++{
++    unsigned int i;
++    sigset_t sigset;
++    struct file_view *view;
++    NTSTATUS status = STATUS_NOT_SUPPORTED;
++
++    if (!owner || !host) return STATUS_INVALID_PARAMETER;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (ios_wow64_windows[i].owner == owner)
++        {
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            status = ios_wow64_claim_view( ios_wow64_windows[i].base, guest, size, vprot, &view );
++            if (!status) *host = view->base;
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++            break;
++        }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return status;
++}
++
++static void ios_wow64_delete_views( uintptr_t base )
++{
++    struct file_view *view;
++    /* All views in this disjoint reservation belong to the owner. virtual_mutex
++     * is held; use the stable base, not a descriptor split by the allocator. */
++    while ((view = find_view_range( (void *)base, IOS_WOW64_WINDOW_SIZE )))
++    {
++        assert( (uintptr_t)view->base >= base &&
++                view->size <= IOS_WOW64_WINDOW_SIZE - ((uintptr_t)view->base - base) );
++        delete_view( view );
++    }
++}
++
+ static NTSTATUS ios_wow64_reserve_window( void *owner )
+ {
+     unsigned int i, slot = IOS_WOW64_WINDOWS_MAX;
+@@ -15166,13 +15204,28 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+     {
+         uint32_t guest = 0;
+         uintptr_t base = (uintptr_t)view->base;
+-        ios_wow64_windows[slot].view = view;
++        struct file_view *peb_view;
++        view->protect = VPROT_WOW64_HOLE;
++        /* Bootstrap storage below 2G; a host page, not just sizeof(PEB32).
++         * Never copy the native PEB (different layout/pointer representation).
++         * Populate and expose it only when the paired TEB path is ready. */
++        status = ios_wow64_claim_view( base, 0x7ff00000, host_page_mask + 1,
++                                      VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, &peb_view );
++        if (status)
++        {
++            ios_wow64_delete_views( base );
++            goto unlock_virtual;
++        }
++        ios_wow64_windows[slot].base = base;
++        ios_wow64_windows[slot].peb32 = peb_view->base;
+         ios_wow64_windows[slot].owner = owner;
++        dprintf( 2, "[wow64-window] bootstrap peb32_host=%p peb32_guest=0x7ff00000 "
++                 "bytes=%#lx paired=0\n", peb_view->base, (unsigned long)(host_page_mask + 1) );
+         /* Exercise the production conversion rules on the actual reservation,
+          * without dereferencing it or pretending the image was mapped there. */
+         ios_wow64_guest_addr( base, ios_wow64_host_addr( base, 0x400000 ), &guest );
+         dprintf( 2, "[wow64-window] reserved peb=%p base=%#llx size=0x100000000 "
+-                 "guard=0x10000 committed=0 roundtrip=%#x\n", owner,
++                 "guard=0x10000 roundtrip=%#x\n", owner,
+                  (unsigned long long)base, guest );
+         dprintf( 2, "[wow64-owner] peb=%p current_machine=%#x session_machine=%#x "
+                  "is_wow64=%d session_is_wow64=%d teb=%p wow_teb=%p\n", owner,
+@@ -15180,6 +15233,7 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+                  is_wow64(), !is_machine_64bit( main_image_info.Machine ),
+                  NtCurrentTeb(), get_wow_teb( NtCurrentTeb() ) );
+     }
++unlock_virtual:
+     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+ done:
+     pthread_mutex_unlock( &ios_wow64_windows_lock );
+@@ -15195,12 +15249,13 @@ static void ios_wow64_release_window( void *owner )
+     for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
+         if (ios_wow64_windows[i].owner == owner)
+         {
+-            struct file_view *view = ios_wow64_windows[i].view;
+-            dprintf( 2, "[wow64-window] release peb=%p base=%p\n", owner, view->base );
++            uintptr_t base = ios_wow64_windows[i].base;
++            dprintf( 2, "[wow64-window] release peb=%p base=%p\n", owner, (void *)base );
+             ios_wow64_windows[i].owner = NULL;
+-            ios_wow64_windows[i].view = NULL;
++            ios_wow64_windows[i].base = 0;
++            ios_wow64_windows[i].peb32 = NULL;
+             server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-            delete_view( view );
++            ios_wow64_delete_views( base );
+             server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+             break;
+         }
+diff --git a/build/ntdll-unix/wow64_views.h b/build/ntdll-unix/wow64_views.h
+new file mode 100644
+index 0000000..d6b0a36
+--- /dev/null
++++ b/build/ntdll-unix/wow64_views.h
+@@ -0,0 +1,77 @@
++/* Playport's Wine-view suballocator for an iOS WoW64 window.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included after Wine's view/protection helpers; virtual_mutex must be held.
++ */
++#ifndef IOS_WOW64_VIEWS_H
++#define IOS_WOW64_VIEWS_H
++
++#define VPROT_WOW64_HOLE 0x1000  /* reserved window gap, never an allocation */
++
++/* Fixed guest placement only for now. No MAP_FIXED or temporary unmap: keep
++ * the original PROT_NONE reservation and split its Wine metadata. Allocate
++ * all descriptors and establish host protection before changing the tree.
++ * Caller has selected the owner; another owner's window is never searched.
++ * No executable/writewatch/file views until their mapping path is integrated.
++ */
++static NTSTATUS ios_wow64_claim_view( uintptr_t window, uint32_t guest, size_t size,
++                                     unsigned int vprot, struct file_view **result )
++{
++    struct file_view *hole, *left = NULL, *right = NULL;
++    uintptr_t addr, end, hole_end;
++    size_t left_size, right_size;
++
++    if (!result || !ios_wow64_valid_base( window ) ||
++        window > UINTPTR_MAX - IOS_WOW64_WINDOW_SIZE || guest < IOS_WOW64_NULL_GUARD ||
++        (guest & granularity_mask) || !size || (size & host_page_mask) ||
++        size > IOS_WOW64_WINDOW_SIZE - guest ||
++        (vprot & ~(VPROT_READ | VPROT_WRITE | VPROT_COMMITTED)))
++        return STATUS_INVALID_PARAMETER;
++    addr = window + guest;
++    end = addr + size;
++    hole = find_view( (void *)addr, size );
++    if (!hole || hole->protect != VPROT_WOW64_HOLE ||
++        (uintptr_t)hole->base < window ||
++        (uintptr_t)hole->base - window >= IOS_WOW64_WINDOW_SIZE ||
++        hole->size > IOS_WOW64_WINDOW_SIZE - ((uintptr_t)hole->base - window))
++        return STATUS_CONFLICTING_ADDRESSES;
++    hole_end = (uintptr_t)hole->base + hole->size;
++    left_size = addr - (uintptr_t)hole->base;
++    right_size = hole_end - end;
++    if (left_size && !(left = alloc_view())) return STATUS_NO_MEMORY;
++    if (right_size && !(right = alloc_view()))
++    {
++        if (left) free_view( left );
++        return STATUS_NO_MEMORY;
++    }
++    if (mprotect( (void *)addr, size, get_unix_prot( vprot ) ))
++    {
++        if (left) free_view( left );
++        if (right) free_view( right );
++        return STATUS_ACCESS_DENIED;
++    }
++
++    unregister_view( hole );
++    if (left)
++    {
++        left->base = hole->base;
++        left->size = left_size;
++        left->protect = VPROT_WOW64_HOLE;
++        register_view( left );
++    }
++    hole->base = (void *)addr;
++    hole->size = size;
++    hole->protect = vprot;
++    set_page_vprot( hole->base, size, vprot );
++    register_view( hole );
++    if (right)
++    {
++        right->base = (void *)end;
++        right->size = right_size;
++        right->protect = VPROT_WOW64_HOLE;
++        register_view( right );
++    }
++    *result = hole;
++    return STATUS_SUCCESS;
++}
++
++#endif
+-- 
+2.55.0
+

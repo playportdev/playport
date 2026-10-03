@@ -167,14 +167,26 @@ Concurrent-startup host tests pass; Hollow Knight passes `first-frame+10`
 (9.69 s first frame, menu visible). The same step-2 evidence record holds
 the latest IPA and runs.
 
-**Next, still step 2:** implement window suballocation and owner-local paired
-TEB32/PEB32 allocation, then image/VM mapping and guest-relative metadata.
-The legacy `wow_peb`, TEB free lists and WoW64 limits are still global; other
-startup globals (`peb`, argv, startup info) still rely on serialization.
-Route pointer conversions, expose the base to PE code and integrate
-whole-window faults for the Mach handler's target process. The current
-holdback view is not yet a suballocator; the locked native base queries must
-not be called from a signal handler. Do not advance to step 3 yet.
+**Suballocation follow-up, 2026-10-03:** madeira-unix 0051 splits the reserved
+window into fixed-address allocation views and protected gaps without
+unmapping it. It allocates owner-local PEB32 **storage only**, at guest
+`0x7ff00000` (16 KiB); it is not populated or linked to a TEB. Host tests use
+the production splitter/owner wrapper with real mappings and a mocked Wine
+view tree, including failure rollback and concurrent disjoint owners. The
+phone confirms the bootstrap view and teardown; Portal 2 still fails
+`c0000017`, `wow_teb=NULL`, with no i386 execution. Hollow Knight passes
+`first-frame+10` (8.29 s first frame, menu visible). The same step-2 evidence
+record holds the IPA and runs.
+
+**Next, still step 2:** owner-local paired TEB32/PEB32 setup for the child's
+already allocated native TEB, then image/VM mapping and guest-relative
+metadata. Suballocation currently supports fixed reserved/RW views only:
+no general VM routing, free/reuse, image or executable views. The legacy
+`wow_peb`, TEB free lists and WoW64 limits are still global; other startup
+globals (`peb`, argv, startup info) still rely on serialization. Route pointer
+conversions, expose the base to PE code and integrate whole-window faults
+for the Mach handler's target process. The locked native base/allocation
+queries must not be called from a signal handler. Do not advance to step 3 yet.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"
