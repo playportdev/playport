@@ -296,29 +296,31 @@ host-tested only. There is no i386 execution. Hollow Knight passes
 `first-frame+30` (9.71 s first frame, menu visible). Details are in the same
 step-2 evidence record.
 
-**Next, still step 2:** remaining query classes and PEB32 loader/heap initialization;
-ordinary file/anonymous section VM needs separate shared-backing/commit semantics
-before it can be supported. Validate nonzero image relocation on the phone when
-the loader can reach an image needing it. Native VM returns
-**host** pointers: raw guest pointers are not converted, and NULL requests
-without a guest constraint (or with a wider native constraint) still use the
-native allocator. PE-facing constraint/return conversion remains unwired.
-PE-facing query-result conversion is also pending. Ex window allocations,
-special allocation types, partial release, bootstrap free/protect and
-anonymous-VM image free are refused (supported images unmap through section VM).
-Window protection is logical per 4 KiB page; enforcing a stricter page inside a
-16 KiB host page needs the window fault service below.
-Only the initial TEB is paired;
-secondary WoW64 thread allocation explicitly returns `STATUS_NOT_SUPPORTED`.
-The legacy `wow_peb`,
-TEB free lists and WoW64 limits remain global but this bootstrap does not
-mutate them; other startup globals (`peb`, argv, startup info) still rely on
-serialization. Extend paired thread allocation/lifetime, route pointer
-conversions, expose the base to PE code and integrate whole-window faults
-for the Mach handler's target process. The locked native base/allocation
-queries must not be called from a signal handler. Remove the fail-closed
-startup boundary only when its downstream paths are wired; do not advance
-to step 3 yet.
+**Native-loader follow-up, 2026-10-03:** madeira-unix 0061 removes the startup
+stop. The i386 child loads its own aarch64 ntdll (the session's ARM64EC one is no
+WoW64 host), maps the i386 ntdll in its window, gets a window 32-bit stack and its
+own guest init block, PEB32 and i386 context. wine-pe 0015 takes the native DLLs
+of a WoW64 process from `C:\windows\sysarm64` (an aarch64 farm the app links),
+since system32 is the ARM64EC set. On the phone the child runs native aarch64
+PE code through `loader_init` into wow64.dll's `process_init`, with the i386
+ntdll **relocated** to guest `0x7bf40000` (first phone check of a nonzero
+relocation); wine-pe 0014 stops there (`c00000bb`) before loading the CPU module.
+Loading FEX's `xtajit.dll` without that stop pulled the native kernelbase in
+through its CRT imports and faulted the app. **No i386 instruction runs yet.**
+Hollow Knight passes `first-frame+10` (9.06 s first frame, menu visible).
+Details are in the same step-2 evidence record.
+
+**Next: step 3**, with the step-2 work it needs. Link `xtajit.dll` without CRT
+imports into the native WoW64 process (upstream links it `-nostdlib`), port its
+iOS JIT plumbing, and move the wine-pe 0014 boundary past `BTCpuProcessInit`;
+the check is the first i386 instruction in `LdrInitializeThunk`. Before i386
+code makes its first syscall, wire the PE-visible base and wow64's
+`get_ptr`/`PtrToUlong` conversions, and the whole-window fault service for the
+Mach handler's target process (the locked base queries must not run in a signal
+handler). Still open in step 2: other query classes, file/anonymous section VM
+(shared backing), PE-facing allocation/query conversion, secondary WoW64
+threads (refused), the global `wow_peb`/TEB free lists/limits (unused by this
+path), and startup globals that rely on serialization.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"

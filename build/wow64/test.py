@@ -26,6 +26,7 @@ GAP_PATCH = REPO / "patches/madeira-unix/0057-ntdll-allocate-guest-constrained-V
 QUERY_PATCH = REPO / "patches/madeira-unix/0058-ntdll-query-owner-local-WoW64-window-memory.patch"
 SECTION_PATCH = REPO / "patches/madeira-unix/0059-ntdll-route-owned-window-image-sections.patch"
 PROTECT_PATCH = REPO / "patches/madeira-unix/0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch"
+LOADER_PATCH = REPO / "patches/madeira-unix/0061-ntdll-start-the-WoW64-child-s-native-loader.patch"
 
 
 def patched_function(patch, signature):
@@ -193,7 +194,8 @@ def main():
         subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_vm.h",
                         str(PROTECT_PATCH)], check=True)
         (root / "vm_api.h").write_text(
-            evolved_function(VM_PATCH, [GAP_PATCH, PROTECT_PATCH], "static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **addr,"))
+            evolved_function(VM_PATCH, [GAP_PATCH, PROTECT_PATCH], "static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **addr,") +
+            patched_function(LOADER_PATCH, "NTSTATUS ios_wow64_alloc_stack32( void *owner, SIZE_T reserve_size, SIZE_T commit_size,"))
         vm_exe = root / "vm-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",

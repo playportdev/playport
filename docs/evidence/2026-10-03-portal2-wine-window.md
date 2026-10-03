@@ -28,11 +28,12 @@ bookkeeping. Portal 2's normal main image exercises that entry; native image
 queries and transactional section unmap are host-tested only. Native
 `NtProtectVirtualMemory` now changes window image and anonymous VM pages per
 4 KiB Wine page through one transaction that Wine's image setup also uses;
-that follow-up is host-tested only, its phone runs are still to do. Other query cases,
+Other query cases,
 decommit/release/reuse and top-down/collision placement are host-tested only.
-Startup explicitly stops
-before the unwired native WoW64-loader paths. **No i386 code executes. Step 2
-and milestone 1 are not complete.**
+The native-loader follow-up removes the startup stop: the child runs its own
+aarch64 ntdll's loader into wow64.dll's process init, with the i386 ntdll mapped
+(and relocated) in the window, and stops before loading FEX's CPU module.
+**No i386 code executes. Step 2 and milestone 1 are not complete.**
 
 Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
 IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).
@@ -983,6 +984,73 @@ stop. The native protection route itself therefore stays **host-validated
 only**; the phone validates the shared transaction through image setup.
 **No i386 execution. Step 2 and milestone 1 remain in progress.**
 
+## Native-loader follow-up (same step)
+
+Source at build: `9cca82a` plus madeira-unix 0061, wine-pe 0014 and 0015, the
+`wine_host.c` farm and the host test. Scratch sources: `.work/portal2-loader/`.
+Dev IPA: `.work/out/20261003-192558-0c538d1c/Playport-26.5-0c538d1c.ipa`.
+SHA256: `0c538d1c0c478b62772f387efdf59aa4ef3489996183bd334cffc7f6ae77318d`.
+`libntdll_unix.a`, `wow64.dll` and the aarch64/ARM64EC/i386 `ntdll.dll` change
+(plus `winetest.exe`, which embeds the tests); pins are unchanged.
+
+- **madeira-unix 0061** removes the `c00000bb` stop after the image and
+  parameters. An i386 child loads its own native **aarch64** ntdll (the X3c
+  mechanism that gives an AMD64 child of an aarch64 session the ARM64EC
+  build; the session's ARM64EC ntdll is no WoW64 host), and maps the i386
+  ntdll from `i386-windows/` through the native section route with a guest
+  constraint. The child's own `LdrSystemDllInitBlock` gets guest entry points
+  and a host `ntdll_handle` (wow64.dll dereferences it); the i386 copy is all
+  guest. The session's `pLdrSystemDllInitBlock`, `wow_peb` and
+  `__wine_ctrl_routine` are untouched. The 32-bit stack is allocated in the
+  window with Wine's sizes and layout (no-access host page, guard host page,
+  committed RW), and the TEB32 holds guest values. The initial i386 context
+  takes the owner's PEB32 and init block. `ProcessWow64Information` returns
+  the owner's PEB32 (host) to native callers.
+- **wine-pe 0015**: `system32` is the session's ARM64EC set, and
+  `is_valid_binary` accepts any machine in a WoW64 process, so the aarch64
+  loader of a WoW64 process takes bare and system32 names from
+  `C:\windows\sysarm64` first. `wine_host.c` links that farm to the bundle's
+  `aarch64-windows` set at each launch (128 links).
+- **wine-pe 0014** is the new boundary: wow64.dll's `process_init` logs and
+  ends the process with `STATUS_NOT_SUPPORTED` before loading the CPU module.
+  A run without it loaded `xtajit.dll`, whose CRT imports (api-ms-win-crt,
+  ucrtbase) pulled the native `kernelbase.dll` into the process; its init
+  read the native NLS upcase table before `locale_init` and faulted at NULL,
+  taking the app down. That is step 3's link recipe, not Wine's loader.
+
+`build/wow64/vm_test.c` now also runs `ios_wow64_alloc_stack32`, extracted from
+0061: owner checks, outputs unchanged on refusal, 8 MiB size floor and a larger
+reserve, guest results, a no-access and a guard host page (real faults), a
+writable stack, NX, and the 2 GiB limit without large-address awareness. The
+init-block, ntdll and farm wiring has no host test; the phone run checks it.
+
+`pp build` passed (77 IPA checks); `pp test` passed. One lock session installed
+the IPA above and played both titles (93% battery):
+
+```sh
+./pp install --no-build
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-loader-final
+./pp ui --play app-367520 --until first-frame+10 --shot --out .work/ui-runs/portal2-loader-final-hk
+```
+
+- **Portal 2** (`.work/ui-runs/portal2-loader-final`): image at guest
+  `0x400000`, 32-bit stack at guest `0x460000`–`0xc60000` (limit `0x468000`).
+  The i386 ntdll maps at guest `0x7bf40000`, **relocated** from its preferred
+  `0x7bc00000` (delta `0x340000`, the first phone check of a nonzero window
+  relocation); `LdrInitializeThunk` is at guest `0x7bf8f420`. The private
+  aarch64 ntdll's `LdrInitializeThunk` runs **native aarch64 PE code in the
+  WoW64 child** through `loader_init` and `init_wow64`; wow64.dll loads from
+  sysarm64 into the JIT pool, and `process_init` logs PEB32 host
+  `0x70b7f10000`, i386 ntdll host `0x70b3f50000`, machines `014c/aa64`, then
+  stops (`c00000bb`); the window and TEB pair are released. The UI shows
+  *Portal 2 stopped unexpectedly*, code `0xC00000BB`; the app keeps running.
+- **Hollow Knight** (`.work/ui-runs/portal2-loader-final-hk`): exit 0 at
+  `first-frame+10`, first frame **9.06 s**, JIT 2.41 s, pool not exhausted;
+  the screenshot shows the main menu.
+
+**No i386 instruction has run** and no CPU module is loaded. Step 2 and
+milestone 1 remain in progress.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -1025,10 +1093,12 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: remaining query classes and PEB32 loader/heap
-initialization; ordinary file/anonymous section VM requires shared-backing/commit
-semantics before support. Phone validation of nonzero image relocations remains
-pending until the loader can reach an image needing them. Explicit
+Next: step 3's CPU module (an `xtajit.dll` without CRT imports into the native
+WoW64 process, then its iOS JIT plumbing), with the PE-visible base and wow64
+pointer conversion before the first i386 syscall. Remaining step-2 items:
+query classes; ordinary file/anonymous section VM requires shared-backing/commit
+semantics before support. Nonzero image relocation is now phone-checked (the
+i386 ntdll). Explicit
 host-pointer anonymous VM release/reuse and guest-constrained NULL allocation
 exist, as do native host-pointer basic queries; PE-facing constraint/pointer/
 return conversion (including query results) and other section forms do not.
@@ -1038,12 +1108,10 @@ sections and the protection cases listed in the protection follow-up remain
 fail-closed.
 Only the initial TEB is paired. General paired thread allocation, reuse/free and multi-thread
 teardown are pending, and secondary WoW64 threads are explicitly rejected.
-Remove the fail-closed startup boundary only after its downstream paths are
-wired. WoW64 identity is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation
+The startup stop is gone; the boundary is now wine-pe 0014. WoW64 identity is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation
 limits remain global; this bootstrap leaves them unchanged. Other startup
 globals (`peb`, argv, startup info) still rely on serialization. Then PE-visible
 base query and file-by-file pointer/return-value conversion; stack/context/
 callback/APC/exception setup; and target-owned whole-window Mach fault servicing
 with a count. The existing global sub-floor image table cannot represent the
-same guest address in two different process windows. Do not advance to step 3
-or mark step 2 done from this bootstrap test.
+same guest address in two different process windows. Step 2 is not done.

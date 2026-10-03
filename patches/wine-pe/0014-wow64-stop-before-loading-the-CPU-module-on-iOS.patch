@@ -1,0 +1,43 @@
+From 2f37d4734086d8e093b0e29a804599fdb4d53e12 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 19:00:20 +0200
+Subject: [PATCH 14/15] wow64: stop before loading the CPU module on iOS
+
+Portal 2's i386 child now runs the native aarch64 ntdll loader into
+wow64.dll's process_init. FEX's WoW64 CPU module (xtajit.dll) is not
+ported to iOS yet: it has none of the JIT pool, alias or call-return
+plumbing of its ARM64EC module, and its CRT imports pull the native
+kernelbase.dll into the process before the native NLS tables exist,
+which faults. Log what process_init has and end the process with
+STATUS_NOT_SUPPORTED before loading it.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no; a temporary boundary of the iOS port
+---
+ dlls/wow64/syscall.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
+index d6fea09cec8..f121992b9f0 100644
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -1008,6 +1008,15 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
+     LdrGetDllHandle( NULL, 0, &str, &module );
+     GET_PTR( LdrSystemDllInitBlock );
+ 
++    /* Playport: FEX's WoW64 CPU module is not ported to iOS yet (Portal 2
++     * milestone 1, step 3): it has no JIT pool, alias or call-return
++     * plumbing, and its CRT imports pull native kernelbase into this
++     * process before the native NLS tables exist. Stop before loading it. */
++    ERR( "Playport: WoW64 process init reached (PEB32 %p, i386 ntdll %p, machines %04x/%04x); "
++         "the CPU module is not ported to iOS, stopping\n", peb32,
++         (void *)(ULONG_PTR)pLdrSystemDllInitBlock->ntdll_handle, current_machine, native_machine );
++    NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
++
+     module = load_64bit_module( get_cpu_dll_name() );
+     GET_PTR( BTCpuGetBopCode );
+     GET_PTR( BTCpuGetContext );
+-- 
+2.55.0
+

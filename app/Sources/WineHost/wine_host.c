@@ -463,6 +463,21 @@ static void unlink_runtime_links(const char *sys32)
     free(names);
 }
 
+/* drive_c/windows/sysarm64: the aarch64 set, where the native loader of a
+ * WoW64 (i386) title takes its DLLs (wine-pe 0015), since system32 is the
+ * session's ARM64EC set. A failure is logged: only i386 titles need it. */
+static void link_sysarm64(void)
+{
+    char src_dir[1200], dir[1200];
+    snprintf(src_dir, sizeof(src_dir), "%s/aarch64-windows", g_runtime);
+    snprintf(dir, sizeof(dir), "%s/drive_c/windows/sysarm64", g_prefix);
+    if (mkdirs(dir)) {
+        host_log("cannot create %s: %s", dir, strerror(errno));
+        return;
+    }
+    host_log("sysarm64: %d links -> %s", link_dir_into(src_dir, dir), src_dir);
+}
+
 /* Point drive_c/windows/system32 at the bundle's PE set. The bundle path
  * changes on every reinstall, so the links are always recreated. A Direct3D
  * backend other than DXMT (PLAYPORT_DLL_OVERLAY, PlayportKit
@@ -505,6 +520,7 @@ static int link_system32(const char *pe_arch)
         host_log("system32: %d links from %s over them", m, over_dir);
         if (m <= 0) return -1;
     }
+    if (n > 0) link_sysarm64();
     return n > 0 ? 0 : -1;
 }
 

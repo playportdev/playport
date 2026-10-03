@@ -59,3 +59,4 @@
 0058-ntdll-query-owner-local-WoW64-window-memory.patch
 0059-ntdll-route-owned-window-image-sections.patch
 0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch
+0061-ntdll-start-the-WoW64-child-s-native-loader.patch

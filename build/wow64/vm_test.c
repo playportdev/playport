@@ -55,7 +55,12 @@ static uintptr_t bases[2];
 static unsigned char pages[2][0x100000];
 static int fail_replace;
 static void *current_owner;
-static struct { unsigned int ImageCharacteristics; } image;
+typedef struct
+{
+    unsigned int ImageCharacteristics;
+    SIZE_T MaximumStackSize, CommittedStackSize;
+} SECTION_IMAGE_INFORMATION;
+static SECTION_IMAGE_INFORMATION image;
 static void *ios_jit_current_peb(void) { return current_owner; }
 #define ios_cur_image_info() (&image)
 #define NtCurrentProcess() ((HANDLE)(intptr_t)-1)
@@ -344,12 +349,47 @@ int main(void)
     assert(!ios_wow64_route_vm(0, NtCurrentProcess(), &null, &n, 0, 0, UINT32_MAX, NULL, &status));
     current_owner = &owner_a;
     assert(status == -1);
+    /* The initial thread's 32-bit stack (ios_wow64_alloc_stack32): Wine's
+     * sizes and guard layout in the owner's window, guest results only. */
+    ULONG stack_base = 1, stack_limit = 2, stack_dealloc = 3;
+    image.ImageCharacteristics = 0;
+    image.MaximumStackSize = 0x100000; image.CommittedStackSize = 0x1000;
+    current_owner = &owner_b;
+    assert(ios_wow64_alloc_stack32(&owner_a, 0, 0, &stack_base, &stack_limit, &stack_dealloc) ==
+           STATUS_ACCESS_DENIED);
+    int owner_c;
+    current_owner = &owner_c;
+    assert(ios_wow64_alloc_stack32(&owner_c, 0, 0, &stack_base, &stack_limit, &stack_dealloc) ==
+           STATUS_NOT_SUPPORTED);
+    assert(stack_base == 1 && stack_limit == 2 && stack_dealloc == 3);
+    current_owner = &owner_a;
+    assert(!ios_wow64_alloc_stack32(&owner_a, 0, 0, &stack_base, &stack_limit, &stack_dealloc));
+    assert(stack_base - stack_dealloc == 0x800000 && stack_limit == stack_dealloc + 2 * host_page_size);
+    assert(!(stack_dealloc & granularity_mask) && stack_dealloc >= IOS_WOW64_NULL_GUARD &&
+           stack_base <= UINT32_C(0x80000000));
+    char *stack = (char *)(bases[0] + stack_dealloc);
+    for (size_t off = 0; off < host_page_size; off += page_size)
+    {
+        assert(!(get_page_vprot(stack + off) & (VPROT_READ | VPROT_WRITE | VPROT_GUARD)));
+        assert((get_page_vprot(stack + host_page_size + off) & (VPROT_GUARD | VPROT_READ | VPROT_WRITE)) ==
+               (VPROT_GUARD | VPROT_READ | VPROT_WRITE));
+    }
+    inaccessible(stack, 0);
+    inaccessible(stack + host_page_size, 0);
+    stack[stack_limit - stack_dealloc] = 1;
+    stack[stack_base - stack_dealloc - 1] = 1;
+    inaccessible(stack, 1);
+    /* A larger reserve keeps its size; LAA images may use the upper 2 GiB. */
+    ULONG big_base, big_limit, big_dealloc;
+    image.ImageCharacteristics = IMAGE_FILE_LARGE_ADDRESS_AWARE;
+    assert(!ios_wow64_alloc_stack32(&owner_a, 0x900000, 0x2000, &big_base, &big_limit, &big_dealloc));
+    assert(big_base - big_dealloc == 0x900000 && big_dealloc != stack_dealloc);
     check_cover(bases[0]); check_cover(bases[1]);
     check_guard(bases[0]); check_guard(bases[1]);
     ios_wow64_delete_views(bases[0]);
     assert(*(int *)other == 42);
     ios_wow64_delete_views(bases[1]);
     assert(!descriptor_count);
-    puts("WoW64 VM: constrained NULL/gap/top-down, zero-bits/limits, NX, zero/reuse and owner routing pass");
+    puts("WoW64 VM: constrained NULL/gap/top-down, zero-bits/limits, NX, zero/reuse, owner routing and 32-bit stacks pass");
     return 0;
 }
