@@ -24,6 +24,7 @@ PLACEMENT_PATCH = REPO / "patches/madeira-unix/0055-ntdll-place-and-relocate-i38
 VM_PATCH = REPO / "patches/madeira-unix/0056-ntdll-route-owned-window-anonymous-VM-operations.patch"
 GAP_PATCH = REPO / "patches/madeira-unix/0057-ntdll-allocate-guest-constrained-VM-in-owner-local-gaps.patch"
 QUERY_PATCH = REPO / "patches/madeira-unix/0058-ntdll-query-owner-local-WoW64-window-memory.patch"
+SECTION_PATCH = REPO / "patches/madeira-unix/0059-ntdll-route-owned-window-image-sections.patch"
 
 
 def patched_function(patch, signature):
@@ -174,6 +175,8 @@ def main():
         subprocess.run(["git", "-C", tmp, "apply",
                         "--include=build/ntdll-unix/wow64_placement.h",
                         "--include=build/ntdll-unix/wow64_gap.h", str(GAP_PATCH)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_placement.h",
+                        str(SECTION_PATCH)], check=True)
         placement_exe = root / "placement-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-pthread", "-DWINE_IOS", "-fsanitize=undefined", "-fno-sanitize-recover=all",
@@ -194,14 +197,30 @@ def main():
         subprocess.run([str(vm_exe)], check=True)
         subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_query.h",
                         str(QUERY_PATCH)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_query.h",
+                        "--include=build/ntdll-unix/wow64_section.h",
+                        "--include=build/ntdll-unix/wow64_image_mapper.h", str(SECTION_PATCH)], check=True)
         (root / "query_api.h").write_text(
-            patched_function(QUERY_PATCH, "static BOOL ios_wow64_route_query( HANDLE process, const void *addr,"))
+            evolved_function(QUERY_PATCH, SECTION_PATCH, "static BOOL ios_wow64_route_query( HANDLE process, const void *addr,"))
         query_exe = root / "query-test"
         subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
                         "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/query_test.c"), "-o", str(query_exe)], check=True)
         subprocess.run([str(query_exe)], check=True)
+        (root / "section_map_api.h").write_text('#include "wow64_image_mapper.h"\n')
+        (root / "section_server_api.h").write_text(
+            patched_function(SECTION_PATCH, "static NTSTATUS ios_wow64_server_map( struct file_view *view )") +
+            patched_function(SECTION_PATCH, "static NTSTATUS ios_wow64_server_unmap( struct file_view *view )"))
+        (root / "section_route_api.h").write_text(
+            patched_function(SECTION_PATCH, "static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr, SIZE_T *size,") +
+            patched_function(SECTION_PATCH, "static BOOL ios_wow64_route_unmap( HANDLE process, const void *addr, ULONG flags, NTSTATUS *status )"))
+        section_exe = root / "section-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/section_test.c"), "-o", str(section_exe)], check=True)
+        subprocess.run([str(section_exe)], check=True)
     return 0
 
 

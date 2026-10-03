@@ -261,14 +261,31 @@ Knight passes `first-frame+10` (10.01 s first frame); its captured screenshot is
 black, not visual evidence of a menu. Details and the latest IPA remain in the
 same step-2 evidence record.
 
-**Next, still step 2:** section/image VM routing and remaining query classes,
-then the remaining PEB32 loader/heap initialization; validate nonzero image
-relocation on the phone when the loader can reach an image needing it. Native VM returns
+**Native image-section follow-up, 2026-10-03:** madeira-unix 0059 routes
+owner-local native `NtMapViewOfSection` for complete, ordinary i386 `SEC_IMAGE`
+views, with host returns and guest placement/relocations. Explicit host addresses
+and guest-constrained NULLs use the existing Wine mapper, gap search and
+wineserver registration; unmap retains/coalesces holdbacks and never deletes
+bootstrap views. Native image queries report host base and exact image extent,
+not host-page padding. Other section forms/attributes and Ex/remote operations
+fail closed. Portal 2's normal main-image bootstrap now uses this native section
+entry, confirming guest `0x400000` and map success on the phone; startup still
+stops at the retained loader boundary (`c00000bb`), with **no i386 execution**.
+Unmap/failure rollback, collision/nonzero relocation, top-down and image queries
+are host-tested only. Hollow Knight passes through `first-frame+30` (9.41 s
+first frame), with a reviewed main-menu screenshot. Details and exact unsupported
+cases remain in the same step-2 evidence record.
+
+**Next, still step 2:** remaining query classes and PEB32 loader/heap initialization;
+ordinary file/anonymous section VM needs separate shared-backing/commit semantics
+before it can be supported. Validate nonzero image relocation on the phone when
+the loader can reach an image needing it. Native VM returns
 **host** pointers: raw guest pointers are not converted, and NULL requests
 without a guest constraint (or with a wider native constraint) still use the
 native allocator. PE-facing constraint/return conversion remains unwired.
 PE-facing query-result conversion is also pending. Ex window allocations,
-special protections/types, partial release and bootstrap/image free are refused.
+special protections/types, partial release, bootstrap free and anonymous-VM
+image free/protect are refused (supported images unmap through section VM).
 Only the initial TEB is paired;
 secondary WoW64 thread allocation explicitly returns `STATUS_NOT_SUPPORTED`.
 The legacy `wow_peb`,

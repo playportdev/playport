@@ -22,8 +22,12 @@ search owner-local gaps, with guest limits/zero-bits and top-down selection;
 parameter allocation validates the NULL path on the phone. Native
 `MemoryBasicInformation` now reports owner-local logical regions with host
 pointers; normal parameter bootstrap validates its storage through this query
-on the phone. Other query cases, decommit/release/reuse and top-down/collision
-placement are host-tested only. Startup explicitly stops
+on the phone. Complete ordinary i386 image sections now map through native
+`NtMapViewOfSection` into owner-local storage, reusing Wine's mapper and server
+bookkeeping. Portal 2's normal main image exercises that entry; native image
+queries and transactional section unmap are host-tested only. Other query cases,
+decommit/release/reuse and top-down/collision placement are host-tested only.
+Startup explicitly stops
 before the unwired native WoW64-loader paths. **No i386 code executes. Step 2
 and milestone 1 are not complete.**
 
@@ -719,6 +723,146 @@ An earlier development IPA/run in `.work/ui-runs/portal2-query*` was superseded
 by these final results after preserving remote WorkingSetEx buffer handling.
 **Step 2 and milestone 1 remain in progress.**
 
+## Native image-section follow-up (same step)
+
+Source at build: `e3ed6e7` plus madeira-unix 0059 and host tests.
+Scratch source: `.work/portal2-section/source`, commit
+`c59b79c54647ad1e89d9e37759a7c5e2662a88a4`, tree
+`3865fe5c4ba175080b3b2e8f87c80f6cd66e9605`.
+Dev IPA: `.work/out/20261003-161440-9dea6209/Playport-26.5-9dea6209.ipa`.
+SHA256: `9dea62091968b7a7cdb42ef420b958c4423f5da06d3ad86be557adaba8130768`.
+`libntdll_unix.a` and `libwineserver.a` change in `app/artifacts.tsv`; pins,
+PE manifests, FEX and DXMT are unchanged.
+
+**madeira-unix 0059** supports a narrow native section path, not a new loader:
+
+- Before native bounds/alias steering or remote APCs, select the registered
+  window by explicit **host** address, or the current owner's window for NULL
+  with a nonzero <=32-bit zero-bits constraint. Hold registry -> virtual locks
+  through mapping/unmapping, including wineserver requests. Foreign owners and
+  remote routed requests are denied. Remote constrained NULLs are denied even
+  without a window in the caller, so an APC cannot silently become a local map
+  in the target. Unconstrained/wider-constraint NULL and non-window native
+  addresses remain native; raw guest pointers are still not converted.
+- Accept only complete, ordinary i386 `SEC_IMAGE | SEC_FILE` views, offset 0,
+  commit size 0, `ViewUnmap` and allocation type 0 or `MEM_TOP_DOWN`. Obtain
+  protection-derived section access and PE metadata from Wine/wineserver. Do
+  not substitute a builtin with another machine or implement imports/loading.
+  Bounds intersect owner and image large-address-aware limits, zero-bits and
+  host-page-rounded extent. Explicit addresses force guest placement; stripped/
+  flat images cannot move. NULL tries Wine's image hints/preferred address and
+  shared owner-local gap search, including top-down fallback on collision.
+- Reuse the existing `map_image_into_view`, PE sections and guest relocation
+  kernel. The existing `virtual_map_image` orchestration moves into a private
+  header so host tests compile the **whole function**, not a parallel lifecycle.
+  Window selection is now explicit; unconstrained i386 native requests no longer
+  implicitly acquire a window merely because of their machine type. Guest
+  relocations/PE ImageBase and host storage remain separate; logical EXEC is
+  physically NX, without JIT copies or global sub-floor registration. Successful
+  window maps normalize the server's host/guest NOT_AT_BASE warning as before.
+- Retain a private duplicate section handle and exact server extent/entry RVA/
+  machine in the view. The server forbids a size greater than its image map size:
+  registration, return size and image queries use that **exact** extent, while
+  the holdback descriptor owns the host-page-rounded storage. Map failures leave
+  outputs unchanged and replace backing with a protected, coalesced holdback.
+  Replacement failure retains the descriptor/handle, preventing reuse until exit.
+- Unmap accepts an interior host image address, not just its base. Remove the
+  existing server image view, then atomically replace all owned backing with
+  PROT_NONE anonymous pages and coalesce adjacent holdbacks; never `delete_view`
+  a live window. A server failure changes neither bytes nor descriptor. A
+  replacement failure leaves bytes/protection intact and re-registers the exact
+  server view with the retained handle. If re-registration fails too, keep the
+  descriptor/handle quarantined until owner teardown; image query/unmap refuse
+  it. Teardown closes retained handles via the normal descriptor free. Bootstrap
+  PEB/TEB, parameter/private VM and holes cannot be released by section unmap.
+- `MemoryBasicInformation` already describes supported images logically.
+  `MemoryImageInformation` now returns **host** base, exact image extent, zero
+  unsupported signing/flag claims, with owner checks and unchanged failure
+  output/length. Host-page padding outside the server image extent is not an
+  image-query address. Other window classes still fail closed rather than
+  returning native/global answers. PE32 query-result conversion remains unwired.
+- Madeira's iOS server preserves image section attribute flags rather than
+  erasing them at creation, so the router can refuse `SEC_IMAGE_NO_EXECUTE`,
+  protected/other attribute variants instead of silently treating them as a
+  supported executable image. Non-iOS behavior is unchanged.
+
+**Exact unsupported cases:** ordinary file-backed data and anonymous/shared
+sections (including `SEC_RESERVE`/`SEC_COMMIT`) are not routed into a window:
+shared-backing coherence and server commit tracking need a separate design.
+Also refused are non-i386, hybrid/managed/unknown-image-flag forms; image attribute
+variants; nonzero/negative offsets; nonzero commit size; partial requested image
+sizes; `ViewShare`; placeholder/large-page/round-to-page/other allocation flags;
+special protection flags; Ex mappings/attributes; and remote window operations.
+Unmap flags/placeholder preservation and anonymous-VM image free/protect remain
+unsupported. Full main-image unmap is supported, but bootstrap views are not.
+Mapped filename/region/working-set/Unix-lib window queries remain unsupported.
+No general file/anonymous section support, secondary-thread pairing, PE-facing
+conversion, native WoW64 loader or i386 execution is claimed.
+
+`build/wow64/section_test.c` compiles production bounds, router, complete
+`virtual_map_image`, server request functions and unmap transaction, using the
+existing production view splitter, gap allocator and Wine relocation kernel.
+Real disjoint mappings, native page protections and SIGSEGV checks back **mock
+Wine layouts/view tree/page bytes, handle/FD/server transport, builtin bookkeeping
+and PE section population**. The population fixture writes a relocation block;
+it is not another PE mapper and does not test Wine's file/header/section parsing.
+Transport mocks now enforce the real server's exact-size rule. Tests cover
+ownership/remote/unsupported forms, 2/4 GiB rounded bounds/zero-bits/alignment,
+unchanged failure outputs, preferred collisions/explicit relocation/top-down,
+logical EXEC with physical NX, handle/FD/claim/protection/population/server map
+failures, map rollback failure quarantine, server-unmap and replacement failure
+rollback, double-failure quarantine, complete release/coalescing, bootstrap
+preservation, independent owners and native fall-through. Image/basic queries
+use supported views and check exact extent versus padding. Query tests also
+cover routed image queries, short buffers and unregistered views. Double-failed
+fixtures have explicit **test-only cleanup**, not a production recovery path.
+Tests do not execute the real wineserver, Wine rbtree, actual PE population,
+Darwin signal masking/Mach faults, PE thunks or concurrent teardown. Other
+existing owner/VM/query tests still check concurrent disjoint owners and locking.
+New headers/functions and evolved query extraction match built source byte-for-
+byte (`.work/portal2-section/extraction.log`), including complete source-file
+comparisons for `virtual_ios.c` and the server override.
+
+The final **one phone-lock session** installed in place and ran both titles,
+continuing past Portal 2's expected exit 1 only after confirming the new section
+map and retained `c00000bb` boundary. No app uninstall or alternate entry point.
+Battery was 74%, externally powered/charging at initial preflight, and 85% after
+final runs. Both final results name the IPA SHA256 above:
+
+```sh
+./pp install --no-build --ipa .work/out/20261003-161440-9dea6209/Playport-26.5-9dea6209.ipa
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-section-reviewed
+./pp ui --play app-367520 --until first-frame+30 --shot --out .work/ui-runs/portal2-section-reviewed-hk
+```
+
+- **Portal 2:** normal main-image startup calls `NtMapViewOfSection` with NULL,
+  zero-bits `0xffffffff`. `[wow64-section]` confirms B=`0x7038010000`, host
+  `0x7038410000`, guest `0x400000`, bytes `0x5c000`, server registration and
+  native EXEC=0. Header/PEB32 image and entry remain `0x400000`/`0x4017d1`,
+  delta 0, map success. Parameters publish as before; the retained native-loader
+  boundary returns `c00000bb`, restores the original TEB and releases the window.
+  UI exit 1, `launch=failed run_exe=-7`; reviewed screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed, Game failed. This validates the normal
+  production section mapping entry, **not DLL loading, unmap/query transactions,
+  collision/nonzero relocation, top-down or any i386 execution on the phone**.
+- **Hollow Knight:** first frame **9.41 s**, JIT **2.22 s**, exit 0 through
+  `first-frame+30` (includes the required +10 continuation). The longer unchanged
+  UI play avoids relying on the previous black capture; reviewed screenshot
+  visibly shows the main menu. Pool exhaustion, FEX refusals and runtime-limit
+  counters remain zero. No gameplay claim.
+
+Full `pp test` passes (483 Python tests, all C tests including **ten** WoW64
+UBSan executables, all three Swift packages). `pp build` and explicit `pp verify`
+pass 77 IPA checks; `pp slots` passes 150 slots/149 calls; names/secrets and
+source/non-patch/new-test whitespace checks pass. `pp build --plan` reports no
+tree rebuilds. Final logs are under `.work/portal2-section/`: `host-final.log`,
+`test-final.log`, `build-final.log`, `verify-final.log`, `slots-final.log`,
+`plan-final.log`, `phone-final.log`, `extraction.log`, `source-check.log`,
+`whitespace.log`, `names-final.log`, `secrets-final.log`. Earlier section IPAs/runs
+were superseded by the final results after preserving unsupported section
+attributes and the exact server image extent. **Step 2/milestone 1 remain in
+progress; the fail-closed startup boundary is unchanged.**
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -761,12 +905,15 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: section/image VM routing and remaining query classes,
-then remaining PEB32 loader/heap initialization and phone validation of nonzero
-image relocations when the loader can reach an image needing them. Explicit
+Next in this same step: remaining query classes and PEB32 loader/heap
+initialization; ordinary file/anonymous section VM requires shared-backing/commit
+semantics before support. Phone validation of nonzero image relocations remains
+pending until the loader can reach an image needing them. Explicit
 host-pointer anonymous VM release/reuse and guest-constrained NULL allocation
 exist, as do native host-pointer basic queries; PE-facing constraint/pointer/
-return conversion (including query results) and the other VM paths do not.
+return conversion (including query results) and other section forms do not.
+Complete ordinary image mapping/unmapping and native image queries now exist;
+other query classes and image protection changes remain fail-closed.
 Only the initial TEB is paired. General paired thread allocation, reuse/free and multi-thread
 teardown are pending, and secondary WoW64 threads are explicitly rejected.
 Remove the fail-closed startup boundary only after its downstream paths are

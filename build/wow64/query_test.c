@@ -35,6 +35,7 @@ typedef struct {
     ULONG State, Protect, Type;
 } MEMORY_BASIC_INFORMATION;
 typedef struct { void *VirtualAddress; uintptr_t VirtualAttributes; } MEMORY_WORKING_SET_EX_INFORMATION;
+typedef struct { void *ImageBase; size_t SizeOfImage; unsigned int ImageSigningLevel; } MEMORY_IMAGE_INFORMATION;
 typedef enum {
     MemoryBasicInformation, MemoryWorkingSetExInformation, MemoryRegionInformation,
     MemoryImageInformation, MemoryMappedFilenameInformation, MemoryWineLoadUnixLib
@@ -159,8 +160,21 @@ int main(void)
     region(w + 0x7ff00000, v->base, 0x4000, MEM_COMMIT, PAGE_READWRITE, PAGE_READWRITE, MEM_PRIVATE);
     assert(!ios_wow64_claim_view(w, 0x600000, 0x8000, VPROT_READ | VPROT_COMMITTED, &v));
     v->protect |= SEC_IMAGE | SEC_FILE | VPROT_WOW64_IMAGE;
+    v->wow64_registered = TRUE;
+    v->wow64_size = v->size;
     set_page_vprot(v->base, 0x8000, VPROT_READ | VPROT_EXEC | VPROT_COMMITTED);
     region(w + 0x600001, v->base, 0x8000, MEM_COMMIT, PAGE_EXECUTE_READ, PAGE_READONLY, MEM_IMAGE);
+    MEMORY_IMAGE_INFORMATION ii = {0}; size_t ilen = 0; NTSTATUS istatus;
+    assert(ios_wow64_route_query(NtCurrentProcess(), (char *)v->base + 1, MemoryImageInformation,
+                                &ii, sizeof(ii), &ilen, &istatus));
+    assert(!istatus && ilen == sizeof(ii) && ii.ImageBase == v->base &&
+           ii.SizeOfImage == v->size && !ii.ImageSigningLevel);
+    for (size_t short_len = 0; short_len < sizeof(ii); ++short_len)
+        reject(NtCurrentProcess(), (uintptr_t)v->base, MemoryImageInformation,
+               short_len, STATUS_INFO_LENGTH_MISMATCH);
+    v->wow64_registered = FALSE;
+    reject(NtCurrentProcess(), (uintptr_t)v->base, MemoryImageInformation, sizeof(ii), STATUS_INVALID_ADDRESS);
+    v->wow64_registered = TRUE;
     v->protect |= SEC_NOCACHE;
     region(w + 0x600001, v->base, 0x8000, MEM_COMMIT, PAGE_EXECUTE_READ | PAGE_NOCACHE, PAGE_READONLY | PAGE_NOCACHE, MEM_IMAGE);
     set_page_vprot((char *)v->base + 0x4000, 0x4000, 0);
@@ -184,7 +198,8 @@ int main(void)
                                  sizeof(MEMORY_BASIC_INFORMATION), &returned, &status));
     assert(status == STATUS_ACCESS_VIOLATION && returned == 0xdead);
     for (unsigned cls = MemoryRegionInformation; cls <= MemoryWineLoadUnixLib; ++cls)
-        reject(NtCurrentProcess(), w, cls, sizeof(MEMORY_BASIC_INFORMATION), STATUS_NOT_SUPPORTED);
+        reject(NtCurrentProcess(), w, cls, sizeof(MEMORY_BASIC_INFORMATION),
+               cls == MemoryImageInformation ? STATUS_INVALID_ADDRESS : STATUS_NOT_SUPPORTED);
     reject((HANDLE)123, w, MemoryBasicInformation, sizeof(MEMORY_BASIC_INFORMATION), STATUS_ACCESS_DENIED);
     current_owner = NULL;
     reject(NtCurrentProcess(), w, MemoryBasicInformation, sizeof(MEMORY_BASIC_INFORMATION), STATUS_ACCESS_DENIED);

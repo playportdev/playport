@@ -26,7 +26,11 @@ typedef int NTSTATUS;
 #define VPROT_WRITE 2
 #define VPROT_COMMITTED 0x20
 static const size_t granularity_mask = 0xffff, host_page_mask = 0x3fff;
-struct file_view { void *base; size_t size; unsigned int protect; int registered; };
+struct file_view {
+    void *base; size_t size; unsigned int protect; int registered;
+    void *wow64_mapping; uint64_t wow64_entry; size_t wow64_size; unsigned short wow64_machine;
+    int wow64_registered;
+};
 static struct file_view *views[128];
 static int fail_after = -1, fail_protect, descriptor_count;
 static unsigned int page_updates;

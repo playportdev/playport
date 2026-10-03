@@ -57,3 +57,4 @@
 0056-ntdll-route-owned-window-anonymous-VM-operations.patch
 0057-ntdll-allocate-guest-constrained-VM-in-owner-local-gaps.patch
 0058-ntdll-query-owner-local-WoW64-window-memory.patch
+0059-ntdll-route-owned-window-image-sections.patch
