@@ -1,0 +1,463 @@
+From b08d0f2547962b64518b557d72d849db8c62f985 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 3 Oct 2026 12:10:42 +0200
+Subject: [PATCH] ntdll: isolate child startup image identity from the session
+
+Keep unpublished image and module state in the starting thread_data, keyed by its PEB, including failed startups. Avoid lazily allocated Darwin TLV state in fault-handler readers. Read WoW64 identity and CPU-area machine from the target owner; native TEBs inherit the creator PEB. Paired window-backed TEB/PEB allocation remains pending the suballocator.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no
+---
+ build/ntdll-unix/env_ios.c           | 26 ++++-----
+ build/ntdll-unix/ios_process_image.h | 52 +++++++++++++++++
+ build/ntdll-unix/loader_ios.c        | 87 ++++++++++++++++++----------
+ build/ntdll-unix/thread_ios.c        | 12 ++--
+ build/ntdll-unix/virtual_ios.c       | 25 +++++---
+ 5 files changed, 147 insertions(+), 55 deletions(-)
+ create mode 100644 build/ntdll-unix/ios_process_image.h
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 32b5952..d340d7a 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -59,6 +59,7 @@
+ #include "wine/debug.h"
+ #include "unix_private.h"
+ #include "locale_private.h"
++#include "ios_process_image.h"
+ #include "error.h"
+ 
+ #ifdef WINE_IOS
+@@ -1433,7 +1434,7 @@ static void get_initial_console( RTL_USER_PROCESS_PARAMETERS *params )
+     wine_server_fd_to_handle( 1, GENERIC_WRITE|SYNCHRONIZE, OBJ_INHERIT, &params->hStdOutput );
+     wine_server_fd_to_handle( 2, GENERIC_WRITE|SYNCHRONIZE, OBJ_INHERIT, &params->hStdError );
+ 
+-    if (main_image_info.SubSystemType != IMAGE_SUBSYSTEM_WINDOWS_CUI)
++    if (ios_cur_image_info()->SubSystemType != IMAGE_SUBSYSTEM_WINDOWS_CUI)
+         return;
+ 
+     /* mark tty handles for kernelbase, see init_console */
+@@ -2000,9 +2001,9 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, BOOL debugged, void *
+     peb->OSMinorVersion             = 0;
+     peb->OSBuildNumber              = 19045;
+     peb->OSPlatformId               = VER_PLATFORM_WIN32_NT;
+-    peb->ImageSubSystem             = main_image_info.SubSystemType;
+-    peb->ImageSubSystemMajorVersion = main_image_info.MajorSubsystemVersion;
+-    peb->ImageSubSystemMinorVersion = main_image_info.MinorSubsystemVersion;
++    peb->ImageSubSystem             = ios_cur_image_info()->SubSystemType;
++    peb->ImageSubSystemMajorVersion = ios_cur_image_info()->MajorSubsystemVersion;
++    peb->ImageSubSystemMinorVersion = ios_cur_image_info()->MinorSubsystemVersion;
+     peb->SessionId                  = session_id;
+ 
+     load_global_options( &params->ImagePathName, debugged );
+@@ -2110,14 +2111,14 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params(void)
+     }
+ 
+     dprintf(2, "[main-exe] load_main_exe = 0x%x Machine=0x%x chars=0x%x\n",
+-            (unsigned)status, main_image_info.Machine, main_image_info.ImageCharacteristics);
++            (unsigned)status, ios_cur_image_info()->Machine, ios_cur_image_info()->ImageCharacteristics);
+     if (NT_SUCCESS(status))
+     {
+         char *loader;
+ 
+-        if (main_image_info.ImageCharacteristics & IMAGE_FILE_DLL) status = STATUS_INVALID_IMAGE_FORMAT;
++        if (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_DLL) status = STATUS_INVALID_IMAGE_FORMAT;
+         /* if we have to use a different loader, fall back to start.exe */
+-        if ((loader = get_alternate_wineloader( main_image_info.Machine )))
++        if ((loader = get_alternate_wineloader( ios_cur_image_info()->Machine )))
+         {
+             dprintf(2, "[main-exe] get_alternate_wineloader returned '%s' -> forcing start.exe\n", loader);
+             free( loader );
+@@ -2143,7 +2144,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params(void)
+         dprintf(2, "[main-exe] falling back to start.exe (status=0x%x)\n", (unsigned)status);
+         static const char *args[] = { "start.exe", "/exec" };
+         free( nt_name.Buffer );
+-        if (main_module) NtUnmapViewOfSection( GetCurrentProcess(), main_module );
++        if (*ios_main_module_slot()) NtUnmapViewOfSection( GetCurrentProcess(), *ios_main_module_slot() );
+         load_start_exe( &nt_name );
+         prepend_argv( args, 2 );
+     }
+@@ -2239,7 +2240,7 @@ void unix_init_startup_info(void)
+ #ifdef WINE_IOS
+         os_log(OS_LOG_DEFAULT, "[Wine] init_startup_info: build_initial_params returned, calling init_peb...");
+ #endif
+-        init_peb( params, FALSE, main_module );
++        init_peb( params, FALSE, *ios_main_module_slot() );
+ #ifdef WINE_IOS
+         os_log(OS_LOG_DEFAULT, "[Wine] init_startup_info: done!");
+ #endif
+@@ -2270,11 +2271,8 @@ void unix_init_startup_info(void)
+     nt_name.Buffer = (WCHAR *)(info + 1);
+     nt_name.Length = info->imagepath_len;
+     status = load_main_exe( &nt_name, machine );
+-    /* iOS (wine-11.18 port): upstream keeps the main image in the main_module
+-     * global. Pseudo-process children boot in this same Mach process, so take
+-     * this child's image while it is still ours; init_peb must not read the
+-     * global later. */
+-    module = main_module;
++    /* Child startup owns its image slot; never read the session's module. */
++    module = *ios_main_module_slot();
+     if (!NT_SUCCESS(status))
+     {
+         MESSAGE( "wine: failed to start %s: %x\n", debugstr_us(&nt_name), status );
+diff --git a/build/ntdll-unix/ios_process_image.h b/build/ntdll-unix/ios_process_image.h
+new file mode 100644
+index 0000000..ca23929
+--- /dev/null
++++ b/build/ntdll-unix/ios_process_image.h
+@@ -0,0 +1,52 @@
++/* Playport: private main-image state while a pseudo-process starts.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * SECTION_IMAGE_INFORMATION is supplied by the including Wine translation unit.
++ */
++#ifndef IOS_PROCESS_IMAGE_H
++#define IOS_PROCESS_IMAGE_H
++
++struct ios_startup_image
++{
++    void *owner;
++    SECTION_IMAGE_INFORMATION info;
++    void *module;
++};
++/* Stored in the already allocated Wine thread_data, not Darwin TLV storage:
++ * identity reads also run in fault handlers and must not lazily allocate TLS. */
++extern struct ios_startup_image *ios_get_startup_image(void);
++
++/* Only the starting thread can see an unpublished image. Explicit-owner
++ * lookups must not leak it to a different process, even on that thread. */
++static inline struct ios_startup_image *ios_startup_image_for_owner( void *owner )
++{
++    struct ios_startup_image *startup = ios_get_startup_image();
++    return owner && startup && owner == startup->owner ? startup : NULL;
++}
++
++static inline int ios_begin_startup_image( void *owner, const SECTION_IMAGE_INFORMATION *session )
++{
++    struct ios_startup_image *startup = ios_get_startup_image();
++    if (!owner || !startup || startup->owner) return 0;
++    startup->info = *session;
++    startup->module = NULL;
++    startup->owner = owner;
++    return 1;
++}
++
++static inline void ios_end_startup_image(void)
++{
++    struct ios_startup_image *startup = ios_get_startup_image();
++    if (!startup) return;
++    startup->owner = NULL;
++    startup->module = NULL;
++}
++
++/* Write slots: private during child startup, session globals at initial boot.
++ * Completed children read the immutable identity registry through ios_cur_image_info.
++ * No signal handler may write through these slots. */
++extern SECTION_IMAGE_INFORMATION *ios_main_image_info_slot(void);
++extern void **ios_main_module_slot(void);
++extern const SECTION_IMAGE_INFORMATION *ios_cur_image_info(void);
++extern const SECTION_IMAGE_INFORMATION *ios_image_info_for_peb( void *owner );
++
++#endif
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index edf564a..eef1c51 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -294,17 +294,37 @@ static const char *get_so_dir( WORD machine )
+  * desktop session must see is_arm64ec()=TRUE (arm64ec-windows pe_dir,
+  * CHPE cpu_area on its threads, EC fault dispatch) while the parent and
+  * its siblings keep seeing FALSE. Worse, unix_init_startup_info()
+- * OVERWRITES the main_image_info global with each child's exe info,
+- * retroactively flipping the whole session's identity — parent threads
+- * run concurrently, so that flip poisons their fault handling and DLL
+- * resolution. wine_ios_child_main registers the child's info here and
+- * restores the global (S1 registry pattern, same as fd_socket).
++ * used to OVERWRITE main_image_info during child startup. A restore after
++ * startup cannot protect concurrent session threads, and never runs after
++ * a failed image map terminates the child. Keep unpublished child image
++ * state in the starting thread_data and owner-keyed; publish after startup.
+  *
+  * Readers are lock-free (fault handlers call this): slots are fully
+  * written before the count is published. Audit 2026-07-06: every
+  * is_arm64ec/main_image_info consumer lives in forked files; unforked
+  * wine unix files have zero users. */
+ #include "ios_mixed.h"
++#include "ios_process_image.h"
++
++extern void *ios_jit_current_peb(void);
++
++struct ios_startup_image *ios_get_startup_image(void)
++{
++    struct thread_data *data = get_thread_data();
++    return data ? data->ios_startup_image : NULL;
++}
++
++SECTION_IMAGE_INFORMATION *ios_main_image_info_slot(void)
++{
++    struct ios_startup_image *startup = ios_startup_image_for_owner( ios_jit_current_peb() );
++    return startup ? &startup->info : &main_image_info;
++}
++
++void **ios_main_module_slot(void)
++{
++    struct ios_startup_image *startup = ios_startup_image_for_owner( ios_jit_current_peb() );
++    return startup ? &startup->module : &main_module;
++}
+ 
+ #define IOS_MAX_PROC_IDENTS 64
+ struct ios_proc_ident
+@@ -323,7 +343,9 @@ extern void *ios_jit_current_peb(void);
+ 
+ const SECTION_IMAGE_INFORMATION *ios_image_info_for_peb( void *peb_id )
+ {
++    struct ios_startup_image *startup = ios_startup_image_for_owner( peb_id );
+     int i, n = ios_proc_ident_count;
++    if (startup) return &startup->info;
+     if (peb_id)
+         for (i = 0; i < n; i++)
+             if (ios_proc_idents[i].peb == peb_id) return &ios_proc_idents[i].info;
+@@ -341,13 +363,13 @@ int ios_is_arm64ec_cur(void)
+            ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_AMD64;
+ }
+ 
+-void ios_register_proc_ident( void *peb_id, const SECTION_IMAGE_INFORMATION *info )
++static BOOL ios_register_proc_ident( void *peb_id, const SECTION_IMAGE_INFORMATION *info )
+ {
+     int idx = ios_proc_ident_count;
+     if (idx >= IOS_MAX_PROC_IDENTS)
+     {
+-        dprintf(2, "[proc-ident] registry FULL — %p keeps session identity\n", peb_id);
+-        return;
++        dprintf(2, "[proc-ident] registry FULL — refusing child %p\n", peb_id);
++        return FALSE;
+     }
+     ios_proc_idents[idx].info = *info;
+     ios_proc_idents[idx].peb = peb_id;
+@@ -355,6 +377,7 @@ void ios_register_proc_ident( void *peb_id, const SECTION_IMAGE_INFORMATION *inf
+     ios_proc_ident_count = idx + 1;
+     dprintf(2, "[proc-ident] peb=%p Machine=0x%x (slot %d)\n",
+             peb_id, info->Machine, idx);
++    return TRUE;
+ }
+ 
+ /* X3c: attach a private ntdll image + entry points to a registered ident. */
+@@ -1264,8 +1287,8 @@ static NTSTATUS open_main_image_so_file( const char *name, UNICODE_STRING *nt_na
+             nt_name->Length -= 3 * sizeof(WCHAR);
+         }
+     }
+-    status = dlopen_dll( name, nt_name, &main_module, &pe_info, FALSE );
+-    if (!status) virtual_fill_image_information( &pe_info, &main_image_info );
++    status = dlopen_dll( name, nt_name, ios_main_module_slot(), &pe_info, FALSE );
++    if (!status) virtual_fill_image_information( &pe_info, ios_main_image_info_slot() );
+     return status;
+ }
+ 
+@@ -1857,10 +1880,10 @@ NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine )
+     {
+         status = virtual_map_main_module( mapping, load_machine );
+         dprintf(2, "[main-exe] virtual_map_main_module = 0x%x Machine=0x%x chars=0x%x\n",
+-                (unsigned)status, main_image_info.Machine, main_image_info.ImageCharacteristics);
+-        if (status == STATUS_IMAGE_MACHINE_TYPE_MISMATCH && main_image_info.ComPlusNativeReady)
++                (unsigned)status, ios_cur_image_info()->Machine, ios_cur_image_info()->ImageCharacteristics);
++        if (status == STATUS_IMAGE_MACHINE_TYPE_MISMATCH && ios_cur_image_info()->ComPlusNativeReady)
+         {
+-            main_image_info.Machine = is_machine_64bit( native_machine ) ? IMAGE_FILE_MACHINE_AMD64 : native_machine;
++            ios_main_image_info_slot()->Machine = is_machine_64bit( native_machine ) ? IMAGE_FILE_MACHINE_AMD64 : native_machine;
+             status = STATUS_SUCCESS;
+         }
+         NtClose( mapping );
+@@ -1886,10 +1909,10 @@ NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine )
+         if (loadorder != LO_NATIVE && is_prefix_bootstrap && is_system_dir)
+ #endif
+         {
+-            status = find_builtin_dll( nt_name, NULL, &main_module, &size, &main_image_info, 0, 0,
++            status = find_builtin_dll( nt_name, NULL, ios_main_module_slot(), &size, ios_main_image_info_slot(), 0, 0,
+                                        search_machine, load_machine, FALSE, 0 );
+             dprintf(2, "[main-exe] builtin-path retry: find_builtin_dll(search_machine=0x%x) = 0x%x Machine=0x%x\n",
+-                    search_machine, (unsigned)status, main_image_info.Machine);
++                    search_machine, (unsigned)status, ios_cur_image_info()->Machine);
+         }
+         break;
+     }
+@@ -1912,8 +1935,8 @@ NTSTATUS load_start_exe( UNICODE_STRING *nt_name )
+     wcscpy( image, get_machine_wow64_dir( current_machine ));
+     wcscat( image, startW );
+     init_unicode_string( nt_name, image );
+-    status = find_builtin_dll( nt_name, NULL, &main_module, &size,
+-                               &main_image_info, 0, 0, current_machine, 0, FALSE, 0 );
++    status = find_builtin_dll( nt_name, NULL, ios_main_module_slot(), &size,
++                               ios_main_image_info_slot(), 0, 0, current_machine, 0, FALSE, 0 );
+     if (!NT_SUCCESS(status))
+     {
+         MESSAGE( "wine: failed to load start.exe: %x\n", status );
+@@ -3076,6 +3099,7 @@ extern size_t server_init_process_child( struct thread_data *data, int child_fd_
+ 
+ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_socket )
+ {
++    struct ios_startup_image startup_image = {0};
+     struct thread_data *data;
+     TEB *teb;
+     PEB *child_peb;
+@@ -3213,21 +3237,24 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+         /* Register with wineserver using the child's socketfd */
+         startup_info_size = server_init_process_child( data, child_fd_socket );
+ 
+-        /* init_startup_info — reads startup info from wineserver, loads the
+-         * child's PE. It OVERWRITES the main_image_info global with the
+-         * child's exe info; snapshot the session's and restore it after
+-         * registering the child's copy in the per-process identity registry
+-         * (X3: an AMD64 child must not flip is_arm64ec() for the whole
+-         * session — parent threads run concurrently). Everything on THIS
+-         * thread reads identity owner-aware from here on. */
++        /* Never lend the child the session's image globals, even briefly.
++         * Failed startup ends this pthread before publication; its private
++         * state dies with it and the session remains unchanged. Other globals
++         * (peb, argv and startup_info_size) are still serialized separately. */
++        data->ios_startup_image = &startup_image;
++        if (!ios_begin_startup_image( child_peb, &main_image_info ))
++        {
++            NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
++            return;
++        }
++        unix_init_startup_info();
++        if (!ios_register_proc_ident( child_peb, &startup_image.info ))
+         {
+-            SECTION_IMAGE_INFORMATION session_image_info = main_image_info;
+-            void *session_main_module = main_module;  /* wine-11.18: a global too */
+-            unix_init_startup_info();
+-            ios_register_proc_ident( child_peb, &main_image_info );
+-            main_image_info = session_image_info;
+-            main_module = session_main_module;
++            NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
++            return;
+         }
++        ios_end_startup_image();
++        data->ios_startup_image = NULL;
+         dprintf(STDERR_FILENO, "[Wine child] PE loaded: Machine=0x%x TransferAddress=%p ImageBase=%p\n",
+                 ios_cur_image_info()->Machine, ios_cur_image_info()->TransferAddress, peb->ImageBaseAddress);
+ 
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 6e35ac4..2e5073c 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -1297,13 +1297,16 @@ void *get_cpu_area( struct thread_data *data, USHORT machine )
+     WOW64_CPURESERVED *cpu;
+     ULONG align;
+ 
+-    if (!is_wow64()) return NULL;
++    if (!data->teb) return NULL;
++    if (is_win64 ? is_machine_64bit( ios_image_info_for_peb( data->teb->Peb )->Machine ) :
++                  !is_wow64()) return NULL;
+ #ifdef _WIN64
+     cpu = data->teb->TlsSlots[WOW64_TLS_CPURESERVED];
+ #else
+     cpu = ULongToPtr( get_teb64(data->teb)->TlsSlots[WOW64_TLS_CPURESERVED] );
+ #endif
+-    if (cpu->Machine != machine) return NULL;
++    /* Image identity can be known before the paired TEB/CPU area exists. */
++    if (!cpu || cpu->Machine != machine) return NULL;
+     switch (cpu->Machine)
+     {
+     case IMAGE_FILE_MACHINE_I386: align = TYPE_ALIGNMENT(I386_CONTEXT); break;
+@@ -1322,6 +1325,7 @@ void *get_cpu_area( struct thread_data *data, USHORT machine )
+ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE_T commit_size )
+ {
+     WOW_TEB *wow_teb = get_wow_teb( teb );
++    const SECTION_IMAGE_INFORMATION *image_info = ios_image_info_for_peb( teb->Peb );
+     INITIAL_TEB stack;
+     NTSTATUS status;
+ 
+@@ -1329,12 +1333,12 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
+     {
+         WOW64_CPURESERVED *cpu;
+         SIZE_T cpusize = sizeof(WOW64_CPURESERVED) +
+-            ((get_machine_context_size( main_image_info.Machine ) + 7) & ~7) + sizeof(ULONG64);
++            ((get_machine_context_size( image_info->Machine ) + 7) & ~7) + sizeof(ULONG64);
+ 
+         /* 64-bit stack */
+         if ((status = virtual_alloc_thread_stack( &stack, limit_4g, 0, 0x40000, 0x40000, TRUE ))) return status;
+         cpu = (WOW64_CPURESERVED *)(((ULONG_PTR)stack.StackBase - cpusize) & ~15);
+-        cpu->Machine = main_image_info.Machine;
++        cpu->Machine = image_info->Machine;
+ 
+ #ifdef _WIN64
+         teb->Tib.StackBase = teb->TlsSlots[WOW64_TLS_CPURESERVED] = cpu;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 46fe10b..4d97b5a 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -116,6 +116,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #include "wine/rbtree.h"
+ #include "unix_private.h"
+ #include "wow64_window.h"
++#include "ios_process_image.h"
+ #include "wine/debug.h"
+ 
+ /* ml648: the Mono-bridge alias table is defined further down, but the anon-alias
+@@ -5987,8 +5988,8 @@ static void ios_jit_range_tripwire( const char *tag, const void *addr, size_t si
+ /* address-space layout randomization */
+ static inline BOOL use_aslr(void)
+ {
+-    return (main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA) &&
+-           (main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE);
++    return (ios_cur_image_info()->DllCharacteristics & IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA) &&
++           (ios_cur_image_info()->DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE);
+ }
+ 
+ /* mmap() anonymous memory at a fixed address */
+@@ -15173,6 +15174,11 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+         dprintf( 2, "[wow64-window] reserved peb=%p base=%#llx size=0x100000000 "
+                  "guard=0x10000 committed=0 roundtrip=%#x\n", owner,
+                  (unsigned long long)base, guest );
++        dprintf( 2, "[wow64-owner] peb=%p current_machine=%#x session_machine=%#x "
++                 "is_wow64=%d session_is_wow64=%d teb=%p wow_teb=%p\n", owner,
++                 ios_cur_image_info()->Machine, main_image_info.Machine,
++                 is_wow64(), !is_machine_64bit( main_image_info.Machine ),
++                 NtCurrentTeb(), get_wow_teb( NtCurrentTeb() ) );
+     }
+     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+ done:
+@@ -15218,6 +15224,9 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
+ 
+     if (!pe_mapping) return STATUS_INVALID_PARAMETER;
+ 
++    /* Set the starting owner's identity before reservation or a failing map.
++     * Session threads continue to read the session's unchanged image info. */
++    virtual_fill_image_information( &pe_mapping->image, ios_main_image_info_slot() );
+     if (pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386 &&
+         (status = ios_wow64_reserve_window( ios_jit_current_peb() )))
+     {
+@@ -15225,15 +15234,15 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
+         return status;
+     }
+     if (!is_machine_64bit( pe_mapping->image.machine )) limit_high = (limit_2g - 1) & ~granularity_mask;
+-    main_module = NULL;
++    *ios_main_module_slot() = NULL;
+ 
+     /* check if we can replace that mapping with the builtin */
+-    status = load_builtin( pe_mapping, machine, &main_image_info, &main_module, &size, 0, limit_high, 0 );
++    status = load_builtin( pe_mapping, machine, ios_main_image_info_slot(), ios_main_module_slot(), &size, 0, limit_high, 0 );
+     if (status == STATUS_IMAGE_ALREADY_LOADED)
+     {
+-        status = virtual_map_image( mapping, &main_module, &size, 0, limit_high, 0,
++        status = virtual_map_image( mapping, ios_main_module_slot(), &size, 0, limit_high, 0,
+                                     pe_mapping, machine, FALSE, 0 );
+-        virtual_fill_image_information( &pe_mapping->image, &main_image_info );
++        virtual_fill_image_information( &pe_mapping->image, ios_main_image_info_slot() );
+     }
+     free_pe_mapping_info( pe_mapping );
+     return status;
+@@ -15426,7 +15435,9 @@ static void init_teb( struct thread_data *data, void *ptr )
+     }
+     teb->Tib.ExceptionList = (void *)~0u;
+ #endif
+-    teb->Peb = peb;
++    /* The creator's PEB, not the mutable last-child global. This is still
++     * the native TEB path; window-backed paired TEBs need the suballocator. */
++    teb->Peb = RtlGetCurrentPeb();
+     teb->Tib.Self = &teb->Tib;
+     teb->Tib.StackBase = (void *)~0ul;
+     teb->Tib.FiberData = (void *)0x1e00;
+-- 
+2.55.0
+

@@ -6,3 +6,4 @@
 0005-winegstreamer-register-a-static-plugin-set-on-iOS.patch
 0006-ntdll-no-in-process-sync-cache-before-a-process-s-TE.patch
 0007-ntdll-count-the-sync-and-alert-census-only-while-the.patch
+0008-ntdll-query-owner-WoW64-identity-on-iOS.patch

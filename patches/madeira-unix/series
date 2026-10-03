@@ -48,3 +48,4 @@
 0047-ntdll-time-the-wineserver-requests-only-while-the-co.patch
 0048-wineserver-back-off-the-retry-of-a-hold-deferred-for.patch
 0049-ntdll-reserve-an-owned-i386-address-window.patch
+0050-ntdll-isolate-child-startup-image-identity.patch
