@@ -150,6 +150,11 @@ explicit rejecting stub, no broker. The dev in-game menu shows both footprints.
 real game use, but only a modest footprint reduction in this title. Aggregate
 use above 8 GiB is not established. System-wide pressure still applies.
 
+**Extra guest RAM (experiment)**, also dev-only and off, sends fresh large RW
+guest data to the helper through madeira-unix 0050, up to 2 GiB live. It has not
+run on the phone; [the plan](plans/2026-10-03-extended-memory.md) has its known
+problems and the runs that decide whether this branch goes on.
+
 ### JIT pool placement
 
 FEX writes all translated code into one pool. The pool must lie in whole
