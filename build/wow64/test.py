@@ -20,6 +20,7 @@ IMAGE_HEADER = "build/ntdll-unix/wow64_image.h"
 IMAGE_PATCH = REPO / "patches/madeira-unix/0053-ntdll-map-fixed-i386-images-into-the-owned-window.patch"
 PARAMS_HEADER = "build/ntdll-unix/wow64_params.h"
 PARAMS_PATCH = REPO / "patches/madeira-unix/0054-ntdll-build-owner-local-window-backed-startup-parame.patch"
+PLACEMENT_PATCH = REPO / "patches/madeira-unix/0055-ntdll-place-and-relocate-i386-images-in-guest-space.patch"
 
 
 def patched_function(patch, signature):
@@ -117,6 +118,15 @@ def main():
                         "-I", str((root / PARAMS_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/params_test.c"), "-o", str(params_exe)], check=True)
         subprocess.run([str(params_exe)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply",
+                        "--include=build/ntdll-unix/wow64_placement.h",
+                        "--include=build/ntdll-unix/image_reloc.h", str(PLACEMENT_PATCH)], check=True)
+        placement_exe = root / "placement-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-pthread", "-DWINE_IOS", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / IMAGE_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/placement_test.c"), "-o", str(placement_exe)], check=True)
+        subprocess.run([str(placement_exe)], check=True)
     return 0
 
 

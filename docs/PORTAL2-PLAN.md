@@ -214,10 +214,22 @@ WoW64 loader (`c00000bb`), with **no i386 execution**. Hollow Knight passes
 `first-frame+10` (9.25 s first frame, menu visible). The same step-2 evidence
 record holds the IPA and runs.
 
-**Next, still step 2:** general VM routing, guest-space image placement/
-relocations and the remaining PEB32 loader/heap initialization (only fixed
-preferred bases work now; server ASLR suggestions are ignored). Only the initial TEB
-is paired; secondary WoW64 thread allocation explicitly returns
+**Guest-placement follow-up, 2026-10-03:** madeira-unix 0055 accepts in-range
+server ASLR hints and searches owner-local gaps on collision, respecting guest
+limits and fixed stripped/flat images. Window PE32 relocations use Wine's existing
+kernel with guest-only deltas and full-directory validation before mutation.
+Completed maps suppress the server's host-versus-guest `STATUS_IMAGE_NOT_AT_BASE`
+warning so the native loader cannot add B a second time. Host tests cover gap
+selection, failures, bounds and nonzero/negative/wrapping relocations. Portal 2
+still selects preferred guest `0x400000`, now returns map success, and stops at
+the retained native-loader boundary (`c00000bb`): **no i386 execution and no
+phone check of nonzero relocations**. Hollow Knight passes `first-frame+10`
+(9.26 s first frame, menu visible). Details remain in the step-2 evidence record.
+
+**Next, still step 2:** general VM routing and the remaining PEB32 loader/heap
+initialization; validate nonzero image relocation on the phone when the loader
+can reach an image needing it. Only the initial TEB is paired; secondary WoW64
+thread allocation explicitly returns
 `STATUS_NOT_SUPPORTED`. General free/reuse is absent. The legacy `wow_peb`,
 TEB free lists and WoW64 limits remain global but this bootstrap does not
 mutate them; other startup globals (`peb`, argv, startup info) still rely on

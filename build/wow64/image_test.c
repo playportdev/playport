@@ -18,7 +18,7 @@
 
 typedef int BOOL;
 typedef unsigned char BYTE;
-struct pe_image_info { uint64_t base, map_addr; unsigned int machine, image_charact; };
+struct pe_image_info { uint64_t base, map_addr; unsigned int machine, image_charact, image_flags; };
 static int fail_replace;
 static void *image_mmap(void *addr, size_t size, int prot, int flags, int fd, off_t offset)
 {
@@ -83,13 +83,16 @@ static void check_inaccessible(void *host, int execute)
     int status;
     assert(waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
 }
-int main(void)
+#ifndef IMAGE_TEST_ENTRY
+#define IMAGE_TEST_ENTRY main
+#endif
+int IMAGE_TEST_ENTRY(void)
 {
     /* Run all original splitter/owner regressions too. */
     assert(!views_baseline_main());
     uintptr_t a = reserve(), b = reserve();
     struct pe_image_info image = {0x400000, 0x7340000000, IMAGE_FILE_MACHINE_I386,
-                                  IMAGE_FILE_LARGE_ADDRESS_AWARE};
+                                  IMAGE_FILE_LARGE_ADDRESS_AWARE, 0};
     struct file_view *va, *vb;
     uint32_t guest = 0xdeadbeef;
     assert(ios_wow64_claim_image(a, NULL, 0x4000, &va) == STATUS_INVALID_PARAMETER);

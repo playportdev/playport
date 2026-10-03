@@ -13,8 +13,11 @@ pairing helpers are host-tested from the actual patches. The fixed-image
 follow-up below now maps Portal 2's main image in the window, retaining guest
 image/entry addresses and publishing PEB32's image base. The parameter
 follow-up now publishes a normalized, window-backed PE32 parameter block and
-environment. Startup explicitly stops before the unwired native WoW64-loader
-paths. **No i386 code executes. Step 2 and milestone 1 are not complete.**
+environment. Guest image placement now accepts in-range ASLR suggestions and
+searches window-local gaps; nonzero relocations are host-tested with Wine's
+relocation kernel, not yet exercised on the phone. Startup explicitly stops
+before the unwired native WoW64-loader paths. **No i386 code executes. Step 2
+and milestone 1 are not complete.**
 
 Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
 IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).
@@ -412,6 +415,72 @@ Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
 reports no trees to rebuild. Logs/screenshots stay under `.work/portal2-params`
 and `.work/ui-runs/`.
 
+## Guest-placement follow-up (same step)
+
+Source at build: `855eb14` plus madeira-unix 0055 and host tests.
+Dev IPA: `.work/out/20261003-141205-a3cac212/Playport-26.5-a3cac212.ipa`.
+SHA256: `a3cac212b94653f15de2f25062e2ebb6b308d5fc2479dce3b4a8af5ca5d9bb8c`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+outputs are unchanged.
+
+**madeira-unix 0055** adds guest-space placement around the existing fixed
+claim primitive, without changing Wine's PE section mapper:
+
+- In-range, aligned server ASLR suggestions are tried for movable dynamic-base
+  images, then the preferred base, then an owner-local gap. Dynamic DLLs search
+  top-down; others bottom-up. All candidates respect the guard, 64 KiB allocation
+  alignment, host-page rounding, large-address-aware 2/4 GiB limit and inclusive
+  caller bounds. Wide/unaligned hints are ignored, never truncated. Stripped or
+  flat images stay fixed. Descriptor/protection failures do not trigger fallback.
+- Gap search walks containing window views, not Wine's host free ranges, which
+  correctly consider the whole window unavailable. General VM/free routing and
+  coalescing adjacent holdbacks are still absent.
+- Host storage and preferred/selected guest identity stay separate. PE32 fixups
+  use only the selected-minus-preferred guest delta. Validate every block/type/
+  target before modifying any target, rejecting missing directories, unsupported
+  types, out-of-image targets and directory self-modification. Wine's existing
+  relocation-block kernel is moved into a shared header; HIGH/LOW/HIGHLOW use
+  memcpy and unsigned arithmetic for unaligned targets and modulo-2^16/32 adds.
+  Native DIR64/THUMB handling is unchanged. No new PE loader is implemented.
+- After completed mapping, normalize the server's `STATUS_IMAGE_NOT_AT_BASE`
+  warning for window images only. Its host VM base differs from guest ImageBase
+  even at the preferred guest base; passing this warning to the native loader
+  would make it apply the host window offset as a second relocation. Server
+  failures and non-window warnings remain unchanged.
+
+`build/wow64/placement_test.c` compiles both production headers from the patch,
+with UBSan, real disjoint window mappings and the existing **mock Wine view
+metadata**. It tests hints/collisions, bottom/top gap selection, inclusive bounds,
+2/4 GiB rounding, stripped/flat rejection, allocation/protection failures with
+unchanged outputs, isolated owners, rollback/retry, guest-only positive/negative/
+wrapping and unaligned HIGH/LOW/HIGHLOW fixups, malformed and bad-later-block
+rejection before any mutation, multiple valid blocks, native DIR64 and status
+normalization. It does not run the PE section mapper, wineserver or native loader.
+**Nonzero relocation and collision placement are not phone-validated yet.**
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected failure. Commands use the same options as previous runs;
+both result events carry the SHA256 above. Before testing, battery was 44%,
+not externally powered.
+
+- `.work/ui-runs/portal2-placement`: B=`0x7038010000`, preferred/selected
+  guest image `0x400000`, host `0x7038410000`, size `0x5c000`, transfer
+  `0x4017d1`, delta 0. `virtual_map_main_module` now returns **success (0)**,
+  not `40000003`; parameters remain published, loader/heap remain NULL.
+  The retained loader boundary returns `c00000bb`, restores the TEB and
+  releases the window. **No i386 DLL loading or instruction execution.**
+  UI result `launch=failed run_exe=-7`, exit 1; screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-placement-hk`: exit 0, `first-frame+10`; first frame
+  **9.26 s**, JIT **2.42 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, all C tests including seven WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
+`git show --check` and the non-patch whitespace check pass. Logs/screenshots
+stay under `.work/portal2-placement` and `.work/ui-runs/`.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -454,10 +523,10 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: general VM routing and guest-space image placement/
-nonzero relocations, plus remaining PEB32 loader/heap initialization.
-Startup parameters are window-backed, not a general allocator; only fixed
-preferred image bases work, and only the initial TEB is paired.
+Next in this same step: general VM routing and remaining PEB32 loader/heap
+initialization, then phone validation of nonzero image relocations when the
+loader can reach an image needing them. Startup parameters are window-backed,
+not a general allocator; only the initial TEB is paired.
 General paired thread allocation, reuse/free and multi-thread teardown are
 pending, and secondary WoW64 threads are explicitly rejected. Remove the
 fail-closed startup boundary only after its downstream paths are wired.
