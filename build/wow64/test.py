@@ -28,6 +28,8 @@ SECTION_PATCH = REPO / "patches/madeira-unix/0059-ntdll-route-owned-window-image
 PROTECT_PATCH = REPO / "patches/madeira-unix/0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch"
 LOADER_PATCH = REPO / "patches/madeira-unix/0061-ntdll-start-the-WoW64-child-s-native-loader.patch"
 FAULT_PATCH = REPO / "patches/madeira-unix/0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch"
+GUEST_HEADER = "dlls/wow64/wow64_window.h"
+GUEST_PATCH = REPO / "patches/wine-pe/0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch"
 
 
 def patched_function(patch, signature):
@@ -244,6 +246,15 @@ def main():
                         "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
                         "-I", str(root), str(REPO / "build/wow64/fault_test.c"), "-o", str(fault_exe)], check=True)
         subprocess.run([str(fault_exe)], check=True)
+        # wow64.dll's PE-side conversions, from the wine-pe patch.
+        subprocess.run(["git", "-C", tmp, "apply", f"--include={GUEST_HEADER}",
+                        str(GUEST_PATCH)], check=True)
+        guest_exe = root / "guest-ptr-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / GUEST_HEADER).parent),
+                        str(REPO / "build/wow64/guest_ptr_test.c"), "-o", str(guest_exe)], check=True)
+        subprocess.run([str(guest_exe)], check=True)
     return 0
 
 

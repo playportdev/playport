@@ -463,19 +463,21 @@ static void unlink_runtime_links(const char *sys32)
     free(names);
 }
 
-/* drive_c/windows/sysarm64: the aarch64 set, where the native loader of a
- * WoW64 (i386) title takes its DLLs (wine-pe 0015), since system32 is the
- * session's ARM64EC set. A failure is logged: only i386 titles need it. */
-static void link_sysarm64(void)
+/* The WoW64 (i386) title's farms, since system32 is the session's ARM64EC
+ * set: drive_c/windows/sysarm64, the aarch64 set its native loader takes
+ * (wine-pe 0015), and drive_c/windows/syswow64, the i386 set its guest loader
+ * reaches through wow64's system32 redirection. A failure is logged: only
+ * i386 titles need them. */
+static void link_wow64_farm(const char *name, const char *pe_arch)
 {
     char src_dir[1200], dir[1200];
-    snprintf(src_dir, sizeof(src_dir), "%s/aarch64-windows", g_runtime);
-    snprintf(dir, sizeof(dir), "%s/drive_c/windows/sysarm64", g_prefix);
+    snprintf(src_dir, sizeof(src_dir), "%s/%s-windows", g_runtime, pe_arch);
+    snprintf(dir, sizeof(dir), "%s/drive_c/windows/%s", g_prefix, name);
     if (mkdirs(dir)) {
         host_log("cannot create %s: %s", dir, strerror(errno));
         return;
     }
-    host_log("sysarm64: %d links -> %s", link_dir_into(src_dir, dir), src_dir);
+    host_log("%s: %d links -> %s", name, link_dir_into(src_dir, dir), src_dir);
 }
 
 /* Point drive_c/windows/system32 at the bundle's PE set. The bundle path
@@ -520,7 +522,10 @@ static int link_system32(const char *pe_arch)
         host_log("system32: %d links from %s over them", m, over_dir);
         if (m <= 0) return -1;
     }
-    if (n > 0) link_sysarm64();
+    if (n > 0) {
+        link_wow64_farm("sysarm64", "aarch64");
+        link_wow64_farm("syswow64", "i386");
+    }
     return n > 0 ? 0 : -1;
 }
 

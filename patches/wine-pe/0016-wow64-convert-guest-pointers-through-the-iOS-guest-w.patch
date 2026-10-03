@@ -1,0 +1,1129 @@
+From 9142afa72c9fec4fd8960671f95af503927b288d Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 20:42:23 +0200
+Subject: [PATCH] wow64: convert guest pointers through the iOS guest window
+
+iOS has no low 4 GiB, so a WoW64 process's 32-bit address space is a
+window at a host base: guest address g is host address base + g.
+wow64_window.h holds the arithmetic (no Wine headers, so a host test
+compiles it as is): guest to host keeps NULL, host to guest rejects a
+pointer outside the window instead of truncating it. process_init
+takes the base from the paired TEB32 and PEB32 (host address minus
+guest address, the same for both); without a window they name the same
+address and the base stays 0, which is Wine's usual identity.
+
+The thunks convert through wow64_to_host and wow64_to_guest:
+get_ptr and the 32-to-64 helpers (strings, object attributes, security
+descriptors, ALPC, tokens), put_addr and every PtrToUlong of a host
+pointer returned by a native call or into the guest's own buffer,
+memory queries (checked against the guest address), the initial
+thread context, and the exception, APC and callback frames. Values
+the native side keeps for the guest stay guest values: thread start
+and parameter, APC and completion contexts, exception and code
+addresses, and the CPU module's bridge. A rejected pointer is logged
+and the guest gets 0.
+
+wow64win.dll does not convert yet: a guest win32u call ends the
+process with STATUS_NOT_SUPPORTED. Failed guest system calls, the
+guest's NtTerminateProcess and the images it maps (by the name its
+loader passes) are logged.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/wow64/process.c       |  44 +++++++------
+ dlls/wow64/security.c      |  16 ++---
+ dlls/wow64/sync.c          |  12 ++--
+ dlls/wow64/syscall.c       | 124 +++++++++++++++++++++++++++----------
+ dlls/wow64/system.c        |   2 +-
+ dlls/wow64/virtual.c       |  64 +++++++++++--------
+ dlls/wow64/wow64_private.h |  67 ++++++++++++++------
+ dlls/wow64/wow64_window.h  |  69 +++++++++++++++++++++
+ 8 files changed, 286 insertions(+), 112 deletions(-)
+ create mode 100644 dlls/wow64/wow64_window.h
+
+diff --git a/dlls/wow64/process.c b/dlls/wow64/process.c
+index 16ea09808de..7c9fbf78a73 100644
+--- a/dlls/wow64/process.c
++++ b/dlls/wow64/process.c
+@@ -71,7 +71,7 @@ static RTL_USER_PROCESS_PARAMETERS *process_params_32to64( RTL_USER_PROCESS_PARA
+                                       unicode_str_32to64( &dllpath, &params32->DllPath ),
+                                       unicode_str_32to64( &curdir, &params32->CurrentDirectory.DosPath ),
+                                       unicode_str_32to64( &cmdline, &params32->CommandLine ),
+-                                      ULongToPtr( params32->Environment ),
++                                      wow64_to_host( params32->Environment ),
+                                       unicode_str_32to64( &title, &params32->WindowTitle ),
+                                       unicode_str_32to64( &desktop, &params32->Desktop ),
+                                       unicode_str_32to64( &shell, &params32->ShellInfo ),
+@@ -95,7 +95,7 @@ static RTL_USER_PROCESS_PARAMETERS *process_params_32to64( RTL_USER_PROCESS_PARA
+     ret->dwFlags               = params32->dwFlags;
+     ret->wShowWindow           = params32->wShowWindow;
+     ret->EnvironmentVersion    = params32->EnvironmentVersion;
+-    ret->PackageDependencyData = ULongToPtr( params32->PackageDependencyData );
++    ret->PackageDependencyData = wow64_to_host( params32->PackageDependencyData );
+     ret->ProcessGroupId        = params32->ProcessGroupId;
+     ret->LoaderThreads         = params32->LoaderThreads;
+     *params = ret;
+@@ -162,7 +162,7 @@ static PS_ATTRIBUTE_LIST *ps_attributes_32to64( PS_ATTRIBUTE_LIST **attr, const
+                 UNICODE_STRING path;
+ 
+                 path.Length = ret->Attributes[i].Size;
+-                path.Buffer = ret->Attributes[i].ValuePtr;
++                path.Buffer = ret->Attributes[i].ValuePtr = wow64_to_host( attr32->Attributes[i].Value );
+                 InitializeObjectAttributes( &attr, &path, OBJ_CASE_INSENSITIVE, 0, 0 );
+                 if (get_file_redirect( &attr ))
+                 {
+@@ -180,7 +180,7 @@ static PS_ATTRIBUTE_LIST *ps_attributes_32to64( PS_ATTRIBUTE_LIST **attr, const
+                 ret->Attributes[i].ValuePtr = Wow64AllocateTemp( ret->Attributes[i].Size );
+                 for (j = 0; j < handles_count; j++)
+                     ((HANDLE *)ret->Attributes[i].ValuePtr)[j] =
+-                        LongToHandle( ((LONG *)ULongToPtr(attr32->Attributes[i].Value))[j] );
++                        LongToHandle( ((LONG *)wow64_to_host(attr32->Attributes[i].Value))[j] );
+             }
+             break;
+         case PS_ATTRIBUTE_PARENT_PROCESS:
+@@ -203,7 +203,7 @@ static PS_ATTRIBUTE_LIST *ps_attributes_32to64( PS_ATTRIBUTE_LIST **attr, const
+             break;
+         case PS_ATTRIBUTE_GROUP_AFFINITY:
+             {
+-                GROUP_AFFINITY32 *aff32 = ret->Attributes[i].ValuePtr;
++                GROUP_AFFINITY32 *aff32 = wow64_to_host( attr32->Attributes[i].Value );
+                 GROUP_AFFINITY *aff64;
+                 ret->Attributes[i].Size     = sizeof(GROUP_AFFINITY);
+                 ret->Attributes[i].ValuePtr = Wow64AllocateTemp( ret->Attributes[i].Size );
+@@ -236,9 +236,9 @@ static void put_ps_attributes( PS_ATTRIBUTE_LIST32 *attr32, const PS_ATTRIBUTE_L
+             CLIENT_ID32 id32;
+             ULONG size = min( attr32->Attributes[i].Size, sizeof(id32) );
+             put_client_id( &id32, attr->Attributes[i].ValuePtr );
+-            memcpy( ULongToPtr( attr32->Attributes[i].Value ), &id32, size );
++            memcpy( wow64_to_host( attr32->Attributes[i].Value ), &id32, size );
+             if (attr32->Attributes[i].ReturnLength)
+-                *(ULONG *)ULongToPtr(attr32->Attributes[i].ReturnLength) = size;
++                *(ULONG *)wow64_to_host(attr32->Attributes[i].ReturnLength) = size;
+             break;
+         }
+         case PS_ATTRIBUTE_IMAGE_INFO:
+@@ -246,19 +246,19 @@ static void put_ps_attributes( PS_ATTRIBUTE_LIST32 *attr32, const PS_ATTRIBUTE_L
+             SECTION_IMAGE_INFORMATION32 info32;
+             ULONG size = min( attr32->Attributes[i].Size, sizeof(info32) );
+             put_section_image_info( &info32, attr->Attributes[i].ValuePtr );
+-            memcpy( ULongToPtr( attr32->Attributes[i].Value ), &info32, size );
++            memcpy( wow64_to_host( attr32->Attributes[i].Value ), &info32, size );
+             if (attr32->Attributes[i].ReturnLength)
+-                *(ULONG *)ULongToPtr(attr32->Attributes[i].ReturnLength) = size;
++                *(ULONG *)wow64_to_host(attr32->Attributes[i].ReturnLength) = size;
+             break;
+         }
+         case PS_ATTRIBUTE_TEB_ADDRESS:
+         {
+             TEB **teb = attr->Attributes[i].ValuePtr;
+-            ULONG teb32 = PtrToUlong( *teb ) + 0x2000;
++            ULONG teb32 = wow64_to_guest( (char *)*teb + 0x2000 );
+             ULONG size = min( attr->Attributes[i].Size, sizeof(teb32) );
+-            memcpy( ULongToPtr( attr32->Attributes[i].Value ), &teb32, size );
++            memcpy( wow64_to_host( attr32->Attributes[i].Value ), &teb32, size );
+             if (attr32->Attributes[i].ReturnLength)
+-                *(ULONG *)ULongToPtr(attr32->Attributes[i].ReturnLength) = size;
++                *(ULONG *)wow64_to_host(attr32->Attributes[i].ReturnLength) = size;
+             break;
+         }
+         }
+@@ -377,8 +377,9 @@ NTSTATUS WINAPI wow64_NtCreateThreadEx( UINT *args )
+     ACCESS_MASK access = get_ulong( &args );
+     OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+     HANDLE process = get_handle( &args );
+-    PRTL_THREAD_START_ROUTINE start = get_ptr( &args );
+-    void *param = get_ptr( &args );
++    /* stored for the new guest thread: guest values */
++    PRTL_THREAD_START_ROUTINE start = ULongToPtr( get_ulong( &args ) );
++    void *param = ULongToPtr( get_ulong( &args ) );
+     ULONG flags = get_ulong( &args );
+     ULONG_PTR zero_bits = get_ulong( &args );
+     SIZE_T stack_commit = get_ulong( &args );
+@@ -590,7 +591,10 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
+ 
+             if (!(status = NtQueryInformationProcess( handle, class, &info, sizeof(info), NULL )))
+             {
+-                if (is_process_wow64( handle ))
++                /* with a window, the current PEB32 is where TEB32 says, not beside the PEB */
++                if (wow64_window_base && RtlIsCurrentProcess( handle ))
++                    info32->PebBaseAddress = NtCurrentTeb32()->Peb;
++                else if (is_process_wow64( handle ))
+                     info32->PebBaseAddress = PtrToUlong( info.PebBaseAddress ) + 0x1000;
+                 else
+                     info32->PebBaseAddress = 0;
+@@ -691,7 +695,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
+             {
+                 str32->Length = str->Length;
+                 str32->MaximumLength = str->MaximumLength;
+-                str32->Buffer = PtrToUlong( str32 + 1 );
++                str32->Buffer = wow64_to_guest( str32 + 1 );
+                 memcpy( str32 + 1, str->Buffer, str->MaximumLength );
+             }
+             if (retlen) *retlen = retsize + sizeof(UNICODE_STRING32) - sizeof(UNICODE_STRING);
+@@ -746,7 +750,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
+         {
+             info32.ExitStatus = info.ExitStatus;
+             info32.TebBaseAddress = is_process_id_wow64( &info.ClientId ) && info.TebBaseAddress ?
+-                                    PtrToUlong(info.TebBaseAddress) + 0x2000 : 0;
++                                    wow64_to_guest( (char *)info.TebBaseAddress + 0x2000 ) : 0;
+             info32.ClientId.UniqueProcess = HandleToULong( info.ClientId.UniqueProcess );
+             info32.ClientId.UniqueThread = HandleToULong( info.ClientId.UniqueThread );
+             info32.AffinityMask = info.AffinityMask;
+@@ -819,7 +823,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
+             {
+                 info32->ThreadName.Length = info->ThreadName.Length;
+                 info32->ThreadName.MaximumLength = info->ThreadName.MaximumLength;
+-                info32->ThreadName.Buffer = PtrToUlong( info32 + 1 );
++                info32->ThreadName.Buffer = wow64_to_guest( info32 + 1 );
+                 memcpy( info32 + 1, info + 1, min( len, info->ThreadName.MaximumLength ));
+             }
+         }
+@@ -994,7 +998,7 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
+             info.AllocInfo.ReserveSize = stack->AllocInfo.ReserveSize;
+             info.AllocInfo.ZeroBits = get_zero_bits( stack->AllocInfo.ZeroBits );
+             if (!(status = NtSetInformationProcess( handle, class, &info, sizeof(info) )))
+-                stack->AllocInfo.StackBase = PtrToUlong( info.AllocInfo.StackBase );
++                stack->AllocInfo.StackBase = wow64_to_guest( info.AllocInfo.StackBase );
+             return status;
+         }
+         else if (len == sizeof(PROCESS_STACK_ALLOCATION_INFORMATION32))
+@@ -1005,7 +1009,7 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
+             info.ReserveSize = stack->ReserveSize;
+             info.ZeroBits = get_zero_bits( stack->ZeroBits );
+             if (!(status = NtSetInformationProcess( handle, class, &info, sizeof(info) )))
+-                stack->StackBase = PtrToUlong( info.StackBase );
++                stack->StackBase = wow64_to_guest( info.StackBase );
+             return status;
+         }
+         else return STATUS_INFO_LENGTH_MISMATCH;
+diff --git a/dlls/wow64/security.c b/dlls/wow64/security.c
+index 331e2978cdd..f75e7958042 100644
+--- a/dlls/wow64/security.c
++++ b/dlls/wow64/security.c
+@@ -41,7 +41,7 @@ static TOKEN_GROUPS *token_groups_32to64( const TOKEN_GROUPS32 *groups32 )
+     groups->GroupCount = groups32->GroupCount;
+     for (i = 0; i < groups->GroupCount; i++)
+     {
+-        groups->Groups[i].Sid = ULongToPtr( groups32->Groups[i].Sid );
++        groups->Groups[i].Sid = wow64_to_host( groups32->Groups[i].Sid );
+         groups->Groups[i].Attributes = groups32->Groups[i].Attributes;
+     }
+     return groups;
+@@ -52,7 +52,7 @@ static inline OBJECT_TYPE_LIST *objtypelist_32to64( OBJECT_TYPE_LIST *list, cons
+     if (!list32) return NULL;
+     list->Level      = list32->Level;
+     list->Sbz        = list32->Sbz;
+-    list->ObjectType = ULongToPtr( list32->ObjectType );
++    list->ObjectType = wow64_to_host( list32->ObjectType );
+     return list;
+ }
+ 
+@@ -453,7 +453,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
+         sid_len = offsetof( SID, SubAuthority[sid->SubAuthorityCount] );
+         if (len >= sizeof(*user32) + sid_len)
+         {
+-            user32->User.Sid = PtrToUlong( user32 + 1 );
++            user32->User.Sid = wow64_to_guest( user32 + 1 );
+             user32->User.Attributes = user->User.Attributes;
+             memcpy( user32 + 1, sid, sid_len );
+         }
+@@ -477,7 +477,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
+         sid_len = offsetof( SID, SubAuthority[sid->SubAuthorityCount] );
+         if (len >= sizeof(*owner32) + sid_len)
+         {
+-            owner32->Owner = PtrToUlong( owner32 + 1 );
++            owner32->Owner = wow64_to_guest( owner32 + 1 );
+             memcpy( owner32 + 1, sid, sid_len );
+         }
+         else status = STATUS_BUFFER_TOO_SMALL;
+@@ -510,7 +510,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
+             groups32->GroupCount = groups->GroupCount;
+             for (i = 0; i < groups->GroupCount; i++)
+             {
+-                groups32->Groups[i].Sid = PtrToUlong(sid32) + ((char *)groups->Groups[i].Sid - (char *)sid);
++                groups32->Groups[i].Sid = wow64_to_guest( sid32 ) + ((char *)groups->Groups[i].Sid - (char *)sid);
+                 groups32->Groups[i].Attributes = groups->Groups[i].Attributes;
+             }
+         }
+@@ -528,7 +528,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
+         status = NtQueryInformationToken( handle, class, dacl, size, &ret_size );
+         if (!status)
+         {
+-            dacl32->DefaultDacl = dacl->DefaultDacl ? PtrToUlong( dacl32 + 1 ) : 0;
++            dacl32->DefaultDacl = dacl->DefaultDacl ? wow64_to_guest( dacl32 + 1 ) : 0;
+             if (dacl->DefaultDacl) memcpy( dacl32 + 1, dacl->DefaultDacl, ret_size - sizeof(*dacl) );
+         }
+         if (retlen) *retlen = ret_size + sizeof(*dacl32) - sizeof(*dacl);
+@@ -586,7 +586,7 @@ NTSTATUS WINAPI wow64_NtSetInformationToken( UINT *args )
+             TOKEN_MANDATORY_LABEL32 *label32 = ptr;
+             TOKEN_MANDATORY_LABEL label;
+ 
+-            label.Label.Sid = ULongToPtr( label32->Label.Sid );
++            label.Label.Sid = wow64_to_host( label32->Label.Sid );
+             label.Label.Attributes = label32->Label.Attributes;
+             return NtSetInformationToken( handle, class, &label, sizeof(label) );
+         }
+@@ -599,7 +599,7 @@ NTSTATUS WINAPI wow64_NtSetInformationToken( UINT *args )
+         if (len >= sizeof(TOKEN_DEFAULT_DACL32))
+         {
+             TOKEN_DEFAULT_DACL32 *dacl32 = ptr;
+-            TOKEN_DEFAULT_DACL dacl = { ULongToPtr( dacl32->DefaultDacl ) };
++            TOKEN_DEFAULT_DACL dacl = { wow64_to_host( dacl32->DefaultDacl ) };
+ 
+             return NtSetInformationToken( handle, class, &dacl, sizeof(dacl) );
+         }
+diff --git a/dlls/wow64/sync.c b/dlls/wow64/sync.c
+index d5b52a5c815..dcee554191d 100644
+--- a/dlls/wow64/sync.c
++++ b/dlls/wow64/sync.c
+@@ -38,7 +38,7 @@ static void put_object_type_info( OBJECT_TYPE_INFORMATION32 *info32, const OBJEC
+         memcpy( info32 + 1, info->TypeName.Buffer, info->TypeName.Length + sizeof(WCHAR) );
+         info32->TypeName.Length        = info->TypeName.Length;
+         info32->TypeName.MaximumLength = info->TypeName.Length + sizeof(WCHAR);
+-        info32->TypeName.Buffer        = PtrToUlong( info32 + 1 );
++        info32->TypeName.Buffer        = wow64_to_guest( info32 + 1 );
+     }
+     else memset( &info32->TypeName, 0, sizeof(info32->TypeName) );
+     info32->TotalNumberOfObjects       = info->TotalNumberOfObjects;
+@@ -107,7 +107,7 @@ void put_section_image_info( SECTION_IMAGE_INFORMATION32 *info32, const SECTION_
+     }
+     else
+     {
+-        info32->TransferAddress    = PtrToUlong( info->TransferAddress );
++        info32->TransferAddress    = wow64_image_addr_to_guest( info->TransferAddress );
+         info32->MaximumStackSize   = info->MaximumStackSize;
+         info32->CommittedStackSize = info->CommittedStackSize;
+     }
+@@ -838,13 +838,13 @@ NTSTATUS WINAPI wow64_NtQueryDirectoryObject( UINT *args )
+         strpool_head = sizeof(*info32) * (used_count + 1);  /* after the "null terminator" entry */
+         for (i = 0; i < used_count; i++)
+         {
+-            info32[i].ObjectName.Buffer = PtrToUlong( (char *)info32 + strpool_head );
++            info32[i].ObjectName.Buffer = wow64_to_guest( (char *)info32 + strpool_head );
+             info32[i].ObjectName.Length = info[i].ObjectName.Length;
+             info32[i].ObjectName.MaximumLength = info[i].ObjectName.MaximumLength;
+             memcpy( (char *)info32 + strpool_head, info[i].ObjectName.Buffer, info[i].ObjectName.MaximumLength );
+             strpool_head += info[i].ObjectName.MaximumLength;
+ 
+-            info32[i].ObjectTypeName.Buffer = PtrToUlong( (char *)info32 + strpool_head );
++            info32[i].ObjectTypeName.Buffer = wow64_to_guest( (char *)info32 + strpool_head );
+             info32[i].ObjectTypeName.Length = info[i].ObjectTypeName.Length;
+             info32[i].ObjectTypeName.MaximumLength = info[i].ObjectTypeName.MaximumLength;
+             memcpy( (char *)info32 + strpool_head, info[i].ObjectTypeName.Buffer, info[i].ObjectTypeName.MaximumLength );
+@@ -1027,7 +1027,7 @@ NTSTATUS WINAPI wow64_NtQueryObject( UINT *args )
+                     memcpy( info32 + 1, info->Name.Buffer, info->Name.Length + sizeof(WCHAR) );
+                     info32->Name.Length = info->Name.Length;
+                     info32->Name.MaximumLength = info->Name.Length + sizeof(WCHAR);
+-                    info32->Name.Buffer = PtrToUlong( info32 + 1 );
++                    info32->Name.Buffer = wow64_to_guest( info32 + 1 );
+                 }
+                 else memset( &info32->Name, 0, sizeof(info32->Name) );
+             }
+@@ -1131,7 +1131,7 @@ NTSTATUS WINAPI wow64_NtQuerySection( UINT *args )
+         if (size < sizeof(*info32)) return STATUS_INFO_LENGTH_MISMATCH;
+         if (!(status = NtQuerySection( handle, class, &info, sizeof(info), &ret_size )))
+         {
+-            info32->BaseAddress = PtrToUlong( info.BaseAddress );
++            info32->BaseAddress = wow64_image_addr_to_guest( info.BaseAddress );
+             info32->Attributes  = info.Attributes;
+             info32->Size        = info.Size;
+             ret_size = sizeof(*info32);
+diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
+index d6fea09cec8..59e31f81be4 100644
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -90,6 +90,9 @@ struct user_apc_frame
+ 
+ SYSTEM_DLL_INIT_BLOCK *pLdrSystemDllInitBlock = NULL;
+ 
++/* the guest window's host base (wow64_window.h); 0 without a window */
++ULONG64 wow64_window_base = 0;
++
+ static WOW64INFO *wow64info;
+ static WORD ss32_sel;
+ 
+@@ -155,7 +158,8 @@ static EXCEPTION_RECORD *exception_record_32to64( const EXCEPTION_RECORD32 *rec3
+     rec = Wow64AllocateTemp( sizeof(*rec) );
+     rec->ExceptionCode = rec32->ExceptionCode;
+     rec->ExceptionFlags = rec32->ExceptionFlags;
+-    rec->ExceptionRecord = rec32->ExceptionRecord ? exception_record_32to64( ULongToPtr(rec32->ExceptionRecord) ) : NULL;
++    rec->ExceptionRecord = rec32->ExceptionRecord ? exception_record_32to64( wow64_to_host(rec32->ExceptionRecord) ) : NULL;
++    /* a guest code address, which the native side hands back to the guest */
+     rec->ExceptionAddress = ULongToPtr( rec32->ExceptionAddress );
+     rec->NumberParameters = rec32->NumberParameters;
+     for (i = 0; i < EXCEPTION_MAXIMUM_PARAMETERS; i++)
+@@ -170,7 +174,7 @@ static void exception_record_64to32( EXCEPTION_RECORD32 *rec32, const EXCEPTION_
+ 
+     rec32->ExceptionCode    = rec->ExceptionCode;
+     rec32->ExceptionFlags   = rec->ExceptionFlags;
+-    rec32->ExceptionRecord  = PtrToUlong( rec->ExceptionRecord );
++    rec32->ExceptionRecord  = wow64_to_guest( rec->ExceptionRecord );
+     rec32->ExceptionAddress = PtrToUlong( rec->ExceptionAddress );
+     rec32->NumberParameters = rec->NumberParameters;
+     for (i = 0; i < rec->NumberParameters; i++)
+@@ -240,9 +244,9 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
+             RtlGetExtendedContextLength( flags, &context_length );
+ 
+             esp = LOWORD(ctx.SegSs) != ss32_sel ? NtCurrentTeb32()->SystemReserved1[0] : ctx.Esp;
+-            stack = (struct exc_stack_layout32 *)ULongToPtr( (esp - offsetof(struct exc_stack_layout32, context) - context_length) & ~3 );
+-            stack->rec_ptr     = PtrToUlong( &stack->rec );
+-            stack->context_ptr = PtrToUlong( &stack->context );
++            stack = (struct exc_stack_layout32 *)wow64_to_host( (esp - offsetof(struct exc_stack_layout32, context) - context_length) & ~3 );
++            stack->rec_ptr     = wow64_to_guest( &stack->rec );
++            stack->context_ptr = wow64_to_guest( &stack->context );
+             stack->rec         = *rec;
+             stack->context     = ctx;
+             RtlInitializeExtendedContext( &stack->context, flags, &context_ex );
+@@ -252,7 +256,7 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
+             if (rec->ExceptionCode == EXCEPTION_BREAKPOINT && (wow64info->CpuFlags & WOW64_CPUFLAGS_SOFTWARE))
+                 stack->context.Eip--;
+ 
+-            ctx.Esp = PtrToUlong( stack );
++            ctx.Esp = wow64_to_guest( stack );
+             ctx.Eip = pLdrSystemDllInitBlock->pKiUserExceptionDispatcher;
+             ctx.EFlags &= ~(0x100|0x400|0x40000);
+             ctx.ContextFlags = CONTEXT_I386_CONTROL;
+@@ -273,13 +277,13 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
+             ARM_CONTEXT ctx = { CONTEXT_ARM_ALL };
+ 
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+-            stack = (struct stack_layout *)(ULONG_PTR)(ctx.Sp & ~3) - 1;
++            stack = (struct stack_layout *)wow64_to_host( ctx.Sp & ~3 ) - 1;
+             stack->rec = *rec;
+             stack->context = ctx;
+ 
+-            ctx.R0 = PtrToUlong( &stack->rec );     /* first arg for KiUserExceptionDispatcher */
+-            ctx.R1 = PtrToUlong( &stack->context ); /* second arg for KiUserExceptionDispatcher */
+-            ctx.Sp = PtrToUlong( stack );
++            ctx.R0 = wow64_to_guest( &stack->rec );     /* first arg for KiUserExceptionDispatcher */
++            ctx.R1 = wow64_to_guest( &stack->context ); /* second arg for KiUserExceptionDispatcher */
++            ctx.Sp = wow64_to_guest( stack );
+             ctx.Pc = pLdrSystemDllInitBlock->pKiUserExceptionDispatcher;
+             if (ctx.Pc & 1) ctx.Cpsr |= 0x20;
+             else ctx.Cpsr &= ~0x20;
+@@ -310,8 +314,8 @@ static void __attribute__((used)) call_raise_user_exception_dispatcher( ULONG co
+             ctx.ContextFlags = CONTEXT_I386_CONTROL;
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+             ctx.Esp -= sizeof(ULONG);
+-            *(ULONG *)ULongToPtr( ctx.Esp ) = ctx.Eip;
+-            ctx.Eip = (ULONG_PTR)pKiRaiseUserExceptionDispatcher;
++            *(ULONG *)wow64_to_host( ctx.Esp ) = ctx.Eip;
++            ctx.Eip = wow64_to_guest( pKiRaiseUserExceptionDispatcher );
+             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+         }
+         break;
+@@ -322,7 +326,7 @@ static void __attribute__((used)) call_raise_user_exception_dispatcher( ULONG co
+ 
+             ctx.ContextFlags = CONTEXT_ARM_CONTROL;
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+-            ctx.Pc = (ULONG_PTR)pKiRaiseUserExceptionDispatcher;
++            ctx.Pc = wow64_to_guest( pKiRaiseUserExceptionDispatcher );
+             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+         }
+         break;
+@@ -670,7 +674,9 @@ NTSTATUS WINAPI wow64_NtClose( UINT *args )
+ NTSTATUS WINAPI wow64_NtContinueEx( UINT *args )
+ {
+     void *context = get_ptr( &args );
+-    KCONTINUE_ARGUMENT *cont_args = get_ptr( &args );
++    ULONG cont_arg = get_ulong( &args );
++    /* a KCONTINUE_ARGUMENT pointer, or an alertable flag up to 0xff */
++    KCONTINUE_ARGUMENT *cont_args = cont_arg > 0xff ? wow64_to_host( cont_arg ) : ULongToPtr( cont_arg );
+ 
+     NTSTATUS status = get_context_return_value( context );
+     struct user_apc_frame *frame = NtCurrentTeb()->TlsSlots[WOW64_TLS_APCLIST];
+@@ -978,6 +984,38 @@ static NTSTATUS create_cross_process_work_list( WOW64INFO *wow64info )
+ }
+ 
+ 
++/**********************************************************************
++ *           wow64_guest_rejected
++ *
++ * A host pointer that should go to the guest but is not in its window.
++ */
++ULONG wow64_guest_rejected( const void *host )
++{
++    ERR( "host pointer %p (from %p) is outside the guest window at %#I64x, giving the guest 0\n",
++         host, __builtin_return_address(0), wow64_window_base );
++    return 0;
++}
++
++
++/**********************************************************************
++ *           init_window_base
++ *
++ * The guest window's base, from the paired TEB32 and PEB32 (iOS). They name
++ * the same address in a process without a window, and the base stays 0.
++ */
++static void init_window_base( PEB32 *peb32 )
++{
++    TEB32 *teb32 = NtCurrentTeb32();
++
++    if ((ULONG_PTR)teb32 == teb32->Tib.Self && (ULONG_PTR)peb32 == teb32->Peb) return;
++    wow64_window_base = wow64_window_base_from_pair( (ULONG_PTR)teb32, teb32->Tib.Self,
++                                                     (ULONG_PTR)peb32, teb32->Peb );
++    ERR( "Playport: guest window base %#I64x (teb32 %p guest %08lx, peb32 %p guest %08lx)\n",
++         wow64_window_base, teb32, teb32->Tib.Self, peb32, teb32->Peb );
++    if (!wow64_window_base) NtTerminateProcess( GetCurrentProcess(), STATUS_INVALID_ADDRESS );
++}
++
++
+ /**********************************************************************
+  *           process_init
+  */
+@@ -997,6 +1035,7 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
+     highest_user_address = (ULONG_PTR)info.HighestUserAddress;
+     default_zero_bits = (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
+     NtQueryInformationProcess( GetCurrentProcess(), ProcessWow64Information, &peb32, sizeof(peb32), NULL );
++    init_window_base( peb32 );
+     wow64info = (WOW64INFO *)(peb32 + 1);
+     wow64info->NativeSystemPageSize = 0x1000;
+     wow64info->NativeMachineType    = native_machine;
+@@ -1040,10 +1079,11 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
+ 
+     module = (HMODULE)(ULONG_PTR)pLdrSystemDllInitBlock->ntdll_handle;
+     init_image_mapping( module );
+-    GET_PTR( KiRaiseUserExceptionDispatcher );
++    GET_PTR( KiRaiseUserExceptionDispatcher );  /* host address of guest code */
+     GET_PTR( __wine_syscall_dispatcher );
+     GET_PTR( __wine_unix_call_dispatcher );
+ 
++    /* the CPU module gives the bridge's guest addresses */
+     *p__wine_syscall_dispatcher = PtrToUlong( pBTCpuGetBopCode() );
+     *p__wine_unix_call_dispatcher = PtrToUlong( p__wine_get_unix_opcode() );
+ 
+@@ -1081,15 +1121,15 @@ static void thread_init(void)
+             ULONG *stack;
+ 
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+-            ctx_ptr = (I386_CONTEXT *)ULongToPtr( ctx.Esp ) - 1;
++            ctx_ptr = (I386_CONTEXT *)wow64_to_host( ctx.Esp ) - 1;
+             *ctx_ptr = ctx;
+             stack = (ULONG *)ctx_ptr;
+             *(--stack) = 0;
+             *(--stack) = 0;
+             *(--stack) = 0;
+-            *(--stack) = PtrToUlong( ctx_ptr );
++            *(--stack) = wow64_to_guest( ctx_ptr );
+             *(--stack) = 0xdeadbabe;
+-            ctx.Esp = PtrToUlong( stack );
++            ctx.Esp = wow64_to_guest( stack );
+             ctx.Eip = pLdrSystemDllInitBlock->pLdrInitializeThunk;
+             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+         }
+@@ -1100,11 +1140,11 @@ static void thread_init(void)
+             ARM_CONTEXT *ctx_ptr, ctx = { CONTEXT_ARM_FULL };
+ 
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+-            ctx_ptr = (ARM_CONTEXT *)ULongToPtr( ctx.Sp & ~15 ) - 1;
++            ctx_ptr = (ARM_CONTEXT *)wow64_to_host( ctx.Sp & ~15 ) - 1;
+             *ctx_ptr = ctx;
+ 
+-            ctx.R0 = PtrToUlong( ctx_ptr );
+-            ctx.Sp = PtrToUlong( ctx_ptr );
++            ctx.R0 = wow64_to_guest( ctx_ptr );
++            ctx.Sp = wow64_to_guest( ctx_ptr );
+             ctx.Pc = pLdrSystemDllInitBlock->pLdrInitializeThunk;
+             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+         }
+@@ -1210,8 +1250,28 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
+         ERR( "unsupported syscall %04x\n", num );
+         return STATUS_INVALID_SYSTEM_SERVICE;
+     }
++    /* Playport (iOS): wow64win.dll's thunks do not convert guest pointers
++     * through the window yet. End the process at the first such call. */
++    if (wow64_window_base && table != syscall_tables)
++    {
++        ERR( "Playport: i386 win32u system call %04x (args %p: %08x %08x %08x %08x); "
++             "wow64win does not convert through the guest window, stopping\n", num, args,
++             args[0], args[1], args[2], args[3] );
++        NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
++    }
++    if (wow64_window_base && table->ServiceTable[id] == (ULONG_PTR)wow64_NtTerminateProcess)
++        ERR( "Playport: i386 NtTerminateProcess( %08x, %08x )\n", args[0], args[1] );
+     status = wow64_syscall( args, table->ServiceTable[id] );
+     free_temp_data();
++    if (wow64_window_base && NT_ERROR(status))
++    {
++        static LONG failed;
++        LONG count = InterlockedIncrement( &failed );
++
++        if (count <= 256)
++            ERR( "Playport: i386 system call %04x (args %08x %08x %08x %08x) failed %08lx [%ld]\n",
++                 num, args[0], args[1], args[2], args[3], status, count );
++    }
+     return status;
+ }
+ 
+@@ -1333,7 +1393,7 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
+ 
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+ 
+-            stack = (struct apc_stack_layout32 *)ULongToPtr( ctx.Esp & ~3 ) - 1;
++            stack = (struct apc_stack_layout32 *)wow64_to_host( ctx.Esp & ~3 ) - 1;
+             stack->func      = arg1 >> 32;
+             stack->arg1      = arg1;
+             stack->arg2      = arg2;
+@@ -1347,7 +1407,7 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
+             stack->xctx.XState.Offset = 25;
+             stack->xctx.XState.Length = 0;
+ 
+-            ctx.Esp = PtrToUlong( stack );
++            ctx.Esp = wow64_to_guest( stack );
+             ctx.Eip = pLdrSystemDllInitBlock->pKiUserApcDispatcher;
+             frame.wow_context = &stack->context;
+             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+@@ -1366,12 +1426,12 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
+             ARM_CONTEXT ctx = { CONTEXT_ARM_FULL };
+ 
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+-            stack = (struct apc_stack_layout *)ULongToPtr( ctx.Sp & ~15 ) - 1;
++            stack = (struct apc_stack_layout *)wow64_to_host( ctx.Sp & ~15 ) - 1;
+             stack->func = arg1 >> 32;
+             stack->context = ctx;
+-            ctx.Sp = PtrToUlong( stack );
++            ctx.Sp = wow64_to_guest( stack );
+             ctx.Pc = pLdrSystemDllInitBlock->pKiUserApcDispatcher;
+-            ctx.R0 = PtrToUlong( &stack->context );
++            ctx.R0 = wow64_to_guest( &stack->context );
+             ctx.R1 = arg1;
+             ctx.R2 = arg2;
+             ctx.R3 = arg3;
+@@ -1427,15 +1487,15 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+             orig_ctx = ctx;
+ 
+-            stack = ULongToPtr( (ctx.Esp - offsetof(struct callback_stack_layout32,args_data[len])) & ~15 );
++            stack = wow64_to_host( (ctx.Esp - offsetof(struct callback_stack_layout32,args_data[len])) & ~15 );
+             stack->eip  = ctx.Eip;
+             stack->id   = id;
+-            stack->args = PtrToUlong( stack->args_data );
++            stack->args = wow64_to_guest( stack->args_data );
+             stack->len  = len;
+             stack->esp  = ctx.Esp;
+             memcpy( stack->args_data, args, len );
+ 
+-            ctx.Esp = PtrToUlong( stack );
++            ctx.Esp = wow64_to_guest( stack );
+             ctx.Eip = pLdrSystemDllInitBlock->pKiUserCallbackDispatcher;
+             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+ 
+@@ -1454,13 +1514,13 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
+             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+             orig_ctx = ctx;
+ 
+-            args_data = ULongToPtr( (ctx.Sp - len) & ~15 );
++            args_data = wow64_to_host( (ctx.Sp - len) & ~15 );
+             memcpy( args_data, args, len );
+ 
+             ctx.R0 = id;
+-            ctx.R1 = PtrToUlong( args_data );
++            ctx.R1 = wow64_to_guest( args_data );
+             ctx.R2 = len;
+-            ctx.Sp = PtrToUlong( args_data );
++            ctx.Sp = wow64_to_guest( args_data );
+             ctx.Pc = pLdrSystemDllInitBlock->pKiUserCallbackDispatcher;
+             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+ 
+diff --git a/dlls/wow64/system.c b/dlls/wow64/system.c
+index eb57d35f41e..8e8f9605daa 100644
+--- a/dlls/wow64/system.c
++++ b/dlls/wow64/system.c
+@@ -134,7 +134,7 @@ static NTSTATUS put_system_proc_info( SYSTEM_PROCESS_INFORMATION32 *info32,
+             proc32->KernelTime                   = proc->KernelTime;
+             proc32->ProcessName.Length           = proc->ProcessName.Length;
+             proc32->ProcessName.MaximumLength    = proc->ProcessName.MaximumLength;
+-            proc32->ProcessName.Buffer           = PtrToUlong( (char *)proc32 + proc_len );
++            proc32->ProcessName.Buffer           = wow64_to_guest( (char *)proc32 + proc_len );
+             proc32->dwBasePriority               = proc->dwBasePriority;
+             proc32->UniqueProcessId              = HandleToULong( proc->UniqueProcessId );
+             proc32->ParentProcessId              = HandleToULong( proc->ParentProcessId );
+diff --git a/dlls/wow64/virtual.c b/dlls/wow64/virtual.c
+index 605abe1804c..4f1fb5d7287 100644
+--- a/dlls/wow64/virtual.c
++++ b/dlls/wow64/virtual.c
+@@ -70,7 +70,7 @@ static MEMORY_RANGE_ENTRY *memory_range_entry_array_32to64( const MEMORY_RANGE_E
+ 
+     for (i = 0; i < count; i++)
+     {
+-        addresses[i].VirtualAddress = ULongToPtr( addresses32[i].VirtualAddress );
++        addresses[i].VirtualAddress = wow64_to_host( addresses32[i].VirtualAddress );
+         addresses[i].NumberOfBytes = addresses32[i].NumberOfBytes;
+     }
+ 
+@@ -98,7 +98,7 @@ static NTSTATUS mem_extended_parameters_32to64( MEM_EXTENDED_PARAMETER **ret_par
+         switch (params[i].Type)
+         {
+         case MemExtendedParameterAddressRequirements:
+-            req32 = ULongToPtr( params32[i].Pointer );
++            req32 = wow64_to_host( params32[i].Pointer );
+             params[i].Pointer = req;
+             break;
+         case MemExtendedParameterAttributeFlags:
+@@ -117,14 +117,14 @@ static NTSTATUS mem_extended_parameters_32to64( MEM_EXTENDED_PARAMETER **ret_par
+     {
+         if (req32->LowestStartingAddress > highest_user_address) return STATUS_INVALID_PARAMETER;
+         if (req32->HighestEndingAddress > highest_user_address) return STATUS_INVALID_PARAMETER;
+-        req->LowestStartingAddress = ULongToPtr( req32->LowestStartingAddress );
+-        req->HighestEndingAddress  = ULongToPtr( req32->HighestEndingAddress );
++        req->LowestStartingAddress = wow64_to_host( req32->LowestStartingAddress );
++        req->HighestEndingAddress  = wow64_to_host( req32->HighestEndingAddress );
+         req->Alignment             = req32->Alignment;
+     }
+     else if (set_limit)
+     {
+         req->LowestStartingAddress = NULL;
+-        req->HighestEndingAddress  = (void *)highest_user_address;
++        req->HighestEndingAddress  = wow64_to_host( highest_user_address );
+         req->Alignment             = 0;
+ 
+         params[i].Type = MemExtendedParameterAddressRequirements;
+@@ -148,7 +148,7 @@ NTSTATUS WINAPI wow64_NtAllocateVirtualMemory( UINT *args )
+     ULONG type = get_ulong( &args );
+     ULONG protect = get_ulong( &args );
+ 
+-    void *addr = ULongToPtr( *addr32 );
++    void *addr = wow64_to_host( *addr32 );
+     SIZE_T size = *size32;
+     BOOL is_current = RtlIsCurrentProcess( process );
+     NTSTATUS status;
+@@ -189,7 +189,7 @@ NTSTATUS WINAPI wow64_NtAllocateVirtualMemoryEx( UINT *args )
+     MEM_EXTENDED_PARAMETER32 *params32 = get_ptr( &args );
+     ULONG count = get_ulong( &args );
+ 
+-    void *addr = ULongToPtr( *addr32 );
++    void *addr = wow64_to_host( *addr32 );
+     SIZE_T size = *size32;
+     NTSTATUS status;
+     MEM_EXTENDED_PARAMETER *params64;
+@@ -318,7 +318,7 @@ NTSTATUS WINAPI wow64_NtFreeVirtualMemory( UINT *args )
+     ULONG *size32 = get_ptr( &args );
+     ULONG type = get_ulong( &args );
+ 
+-    void *addr = ULongToPtr( *addr32 );
++    void *addr = wow64_to_host( *addr32 );
+     SIZE_T size = *size32;
+     BOOL is_current = RtlIsCurrentProcess( process );
+     NTSTATUS status;
+@@ -392,7 +392,7 @@ NTSTATUS WINAPI wow64_NtGetWriteWatch( UINT *args )
+     addresses = Wow64AllocateTemp( count * sizeof(*addresses) );
+     if (!(status = NtGetWriteWatch( handle, flags, base, size, addresses, &count, granularity )))
+     {
+-        for (i = 0; i < count; i++) addr_ptr[i] = PtrToUlong( addresses[i] );
++        for (i = 0; i < count; i++) addr_ptr[i] = wow64_to_guest( addresses[i] );
+         *count_ptr = count;
+     }
+     return status;
+@@ -485,7 +485,7 @@ NTSTATUS WINAPI wow64_NtMapViewOfSection( UINT *args )
+         if (*addr32 > highest_user_address) return STATUS_INVALID_PARAMETER;
+         if (size32 && *addr32 + (SIZE_T)*size32 > highest_user_address + 1) return STATUS_CONFLICTING_ADDRESSES;
+     }
+-    NtCurrentTeb()->Tib.ArbitraryUserPointer = ULongToPtr( NtCurrentTeb32()->Tib.ArbitraryUserPointer );
++    NtCurrentTeb()->Tib.ArbitraryUserPointer = wow64_to_host( NtCurrentTeb32()->Tib.ArbitraryUserPointer );
+     status = NtMapViewOfSection( handle, process, addr_32to64( &addr, addr32 ), get_zero_bits( zero_bits ),
+                                  commit, offset, size_32to64( &size, size32 ), inherit, alloc, protect );
+     if (NT_SUCCESS(status))
+@@ -494,6 +494,17 @@ NTSTATUS WINAPI wow64_NtMapViewOfSection( UINT *args )
+         put_size( size32, size );
+         if (RtlIsCurrentProcess( process ))
+             notify_map_view_of_section( handle, addr, size, alloc, protect, &status );
++        /* Playport (iOS): name the guest's images, which the loader passes in its TEB */
++        if (wow64_window_base && NtCurrentTeb()->Tib.ArbitraryUserPointer && addr32)
++        {
++            const WCHAR *name = NtCurrentTeb()->Tib.ArbitraryUserPointer;
++            char buf[160];
++            unsigned int i;
++
++            for (i = 0; i < sizeof(buf) - 1 && name[i]; i++) buf[i] = name[i] < 0x80 ? name[i] : '?';
++            buf[i] = 0;
++            ERR( "Playport: i386 image %s at %08lx\n", buf, *addr32 );
++        }
+     }
+     NtCurrentTeb()->Tib.ArbitraryUserPointer = prev;
+     return status;
+@@ -529,7 +540,7 @@ NTSTATUS WINAPI wow64_NtMapViewOfSectionEx( UINT *args )
+     }
+     if ((status = mem_extended_parameters_32to64( &params64, params32, &count, set_limit ))) return status;
+ 
+-    NtCurrentTeb()->Tib.ArbitraryUserPointer = ULongToPtr( NtCurrentTeb32()->Tib.ArbitraryUserPointer );
++    NtCurrentTeb()->Tib.ArbitraryUserPointer = wow64_to_host( NtCurrentTeb32()->Tib.ArbitraryUserPointer );
+     status = NtMapViewOfSectionEx( handle, process, addr_32to64( &addr, addr32 ), offset,
+                                    size_32to64( &size, size32 ), alloc, protect, params64, count );
+     if (NT_SUCCESS(status))
+@@ -553,7 +564,7 @@ NTSTATUS WINAPI wow64_NtProtectVirtualMemory( UINT *args )
+     ULONG new_prot = get_ulong( &args );
+     ULONG *old_prot = get_ptr( &args );
+ 
+-    void *addr = ULongToPtr( *addr32 );
++    void *addr = wow64_to_host( *addr32 );
+     SIZE_T size = *size32;
+     BOOL is_current = RtlIsCurrentProcess( process );
+     NTSTATUS status;
+@@ -583,12 +594,13 @@ NTSTATUS WINAPI wow64_NtProtectVirtualMemory( UINT *args )
+ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+ {
+     HANDLE handle = get_handle( &args );
+-    void *addr = get_ptr( &args );
++    ULONG addr32 = get_ulong( &args );
+     MEMORY_INFORMATION_CLASS class = get_ulong( &args );
+     void *ptr = get_ptr( &args );
+     ULONG len = get_ulong( &args );
+     ULONG *retlen = get_ptr( &args );
+ 
++    void *addr = wow64_to_host( addr32 );
+     SIZE_T res_len = 0;
+     NTSTATUS status;
+ 
+@@ -597,7 +609,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+     case MemoryBasicInformation:  /* MEMORY_BASIC_INFORMATION */
+         if (len < sizeof(MEMORY_BASIC_INFORMATION32))
+             status = STATUS_INFO_LENGTH_MISMATCH;
+-        else if ((ULONG_PTR)addr > highest_user_address)
++        else if (addr32 > highest_user_address)
+             status = STATUS_INVALID_PARAMETER;
+         else
+         {
+@@ -606,15 +618,15 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+ 
+             if (!(status = NtQueryVirtualMemory( handle, addr, class, &info, sizeof(info), &res_len )))
+             {
+-                info32->BaseAddress = PtrToUlong( info.BaseAddress );
+-                info32->AllocationBase = PtrToUlong( info.AllocationBase );
++                info32->BaseAddress = wow64_to_guest( info.BaseAddress );
++                info32->AllocationBase = wow64_to_guest( info.AllocationBase );
+                 info32->AllocationProtect = info.AllocationProtect;
+                 info32->RegionSize = info.RegionSize;
+                 info32->State = info.State;
+                 info32->Protect = info.Protect;
+                 info32->Type = info.Type;
+-                if ((ULONG_PTR)info.BaseAddress + info.RegionSize > highest_user_address)
+-                    info32->RegionSize = highest_user_address - (ULONG_PTR)info.BaseAddress + 1;
++                if (info32->BaseAddress + info.RegionSize > highest_user_address)
++                    info32->RegionSize = highest_user_address - info32->BaseAddress + 1;
+             }
+         }
+         res_len = sizeof(MEMORY_BASIC_INFORMATION32);
+@@ -631,7 +643,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+         {
+             info32->SectionFileName.Length = info->SectionFileName.Length;
+             info32->SectionFileName.MaximumLength = info->SectionFileName.MaximumLength;
+-            info32->SectionFileName.Buffer = PtrToUlong( info32 + 1 );
++            info32->SectionFileName.Buffer = wow64_to_guest( info32 + 1 );
+             memcpy( info32 + 1, info->SectionFileName.Buffer, info->SectionFileName.MaximumLength );
+         }
+         res_len += sizeof(*info32) - sizeof(*info);
+@@ -642,7 +654,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+     {
+         if (len < sizeof(MEMORY_REGION_INFORMATION32))
+             status = STATUS_INFO_LENGTH_MISMATCH;
+-        else if ((ULONG_PTR)addr > highest_user_address)
++        else if (addr32 > highest_user_address)
+             status = STATUS_INVALID_PARAMETER;
+         else
+         {
+@@ -651,15 +663,15 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+ 
+             if (!(status = NtQueryVirtualMemory( handle, addr, class, &info, sizeof(info), &res_len )))
+             {
+-                info32->AllocationBase = PtrToUlong( info.AllocationBase );
++                info32->AllocationBase = wow64_to_guest( info.AllocationBase );
+                 info32->AllocationProtect = info.AllocationProtect;
+                 info32->RegionType = info.RegionType;
+                 info32->RegionSize = info.RegionSize;
+                 info32->CommitSize = info.CommitSize;
+                 info32->PartitionId = info.PartitionId;
+                 info32->NodePreference = info.NodePreference;
+-                if ((ULONG_PTR)info.AllocationBase + info.RegionSize > highest_user_address)
+-                    info32->RegionSize = highest_user_address - (ULONG_PTR)info.AllocationBase + 1;
++                if (info32->AllocationBase + info.RegionSize > highest_user_address)
++                    info32->RegionSize = highest_user_address - info32->AllocationBase + 1;
+             }
+         }
+         res_len = sizeof(MEMORY_REGION_INFORMATION32);
+@@ -675,7 +687,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+         if (len < sizeof(*info32)) return STATUS_INFO_LENGTH_MISMATCH;
+ 
+         info = Wow64AllocateTemp( count * sizeof(*info) );
+-        for (i = 0; i < count; i++) info[i].VirtualAddress = ULongToPtr( info32[i].VirtualAddress );
++        for (i = 0; i < count; i++) info[i].VirtualAddress = wow64_to_host( info32[i].VirtualAddress );
+         if (!(status = NtQueryVirtualMemory( handle, addr, class, info, count * sizeof(*info), &res_len )))
+         {
+             count = res_len / sizeof(*info);
+@@ -689,7 +701,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+     {
+         if (len < sizeof(MEMORY_IMAGE_INFORMATION32)) return STATUS_INFO_LENGTH_MISMATCH;
+ 
+-        if ((ULONG_PTR)addr > highest_user_address) status = STATUS_INVALID_PARAMETER;
++        if (addr32 > highest_user_address) status = STATUS_INVALID_PARAMETER;
+         else
+         {
+             MEMORY_IMAGE_INFORMATION info;
+@@ -697,7 +709,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
+ 
+             if (!(status = NtQueryVirtualMemory( handle, addr, class, &info, sizeof(info), &res_len )))
+             {
+-                info32->ImageBase   = PtrToUlong( info.ImageBase );
++                info32->ImageBase   = wow64_to_guest( info.ImageBase );
+                 info32->SizeOfImage = info.SizeOfImage;
+                 info32->ImageFlags  = info.ImageFlags;
+             }
+diff --git a/dlls/wow64/wow64_private.h b/dlls/wow64/wow64_private.h
+index b3ea679cda6..8225b966d45 100644
+--- a/dlls/wow64/wow64_private.h
++++ b/dlls/wow64/wow64_private.h
+@@ -23,6 +23,7 @@
+ 
+ #include "../ntdll/ntsyscalls.h"
+ #include "struct32.h"
++#include "wow64_window.h"
+ 
+ #define SYSCALL_ENTRY(id,name,_args) extern NTSTATUS WINAPI wow64_ ## name( UINT *args );
+ ALL_SYSCALLS32
+@@ -38,6 +39,8 @@ extern ULONG_PTR args_alignment;
+ extern ULONG_PTR highest_user_address;
+ extern ULONG_PTR default_zero_bits;
+ extern SYSTEM_DLL_INIT_BLOCK *pLdrSystemDllInitBlock;
++extern ULONG64 wow64_window_base;
++extern ULONG wow64_guest_rejected( const void *host );
+ 
+ extern void     (WINAPI *pBTCpuFlushInstructionCache2)( const void *, SIZE_T );
+ extern void     (WINAPI *pBTCpuFlushInstructionCacheHeavy)( const void *, SIZE_T );
+@@ -77,9 +80,35 @@ static inline TEB32 *NtCurrentTeb32(void)
+     return (TEB32 *)((char *)NtCurrentTeb() + NtCurrentTeb()->WowTebOffset);
+ }
+ 
++/* A guest pointer the native side dereferences, as a host pointer in the window. */
++static inline void *wow64_to_host( ULONG guest )
++{
++    return wow64_window_to_host( wow64_window_base, guest );
++}
++
++/* A host pointer into the window, as the guest address. A pointer outside the
++ * window is logged and becomes 0, never a truncated address. */
++static inline ULONG wow64_to_guest( const void *host )
++{
++    uint32_t guest;
++
++    if (wow64_window_to_guest( wow64_window_base, host, &guest )) return guest;
++    return wow64_guest_rejected( host );
++}
++
++/* An image address the native side reports either from the image header
++ * (the guest's preferred address) or from the image's host mapping. */
++static inline ULONG wow64_image_addr_to_guest( const void *addr )
++{
++    return (ULONG_PTR)addr >> 32 ? wow64_to_guest( addr ) : PtrToUlong( addr );
++}
++
+ static inline ULONG get_ulong( UINT **args ) { return *(*args)++; }
+ static inline HANDLE get_handle( UINT **args ) { return LongToHandle( *(*args)++ ); }
+-static inline void *get_ptr( UINT **args ) { return ULongToPtr( *(*args)++ ); }
++/* Pointer arguments only: a value the native side stores for the guest
++ * (thread start and parameter, APC and completion contexts) stays a guest
++ * value, through ULongToPtr( get_ulong( args )). */
++static inline void *get_ptr( UINT **args ) { return wow64_to_host( *(*args)++ ); }
+ 
+ static inline ULONG64 get_ulong64( UINT **args )
+ {
+@@ -99,7 +128,7 @@ static inline ULONG_PTR get_zero_bits( ULONG_PTR zero_bits )
+ static inline void **addr_32to64( void **addr, ULONG *addr32 )
+ {
+     if (!addr32) return NULL;
+-    *addr = ULongToPtr( *addr32 );
++    *addr = wow64_to_host( *addr32 );
+     return addr;
+ }
+ 
+@@ -133,7 +162,7 @@ static inline UNICODE_STRING *unicode_str_32to64( UNICODE_STRING *str, const UNI
+     if (!str32) return NULL;
+     str->Length = str32->Length;
+     str->MaximumLength = str32->MaximumLength;
+-    str->Buffer = ULongToPtr( str32->Buffer );
++    str->Buffer = wow64_to_host( str32->Buffer );
+     return str;
+ }
+ 
+@@ -163,10 +192,10 @@ static inline SECURITY_DESCRIPTOR *secdesc_32to64( SECURITY_DESCRIPTOR *out, con
+     }
+     else
+     {
+-        out->Owner = ULongToPtr( sd->Owner );
+-        out->Group = ULongToPtr( sd->Group );
+-        out->Sacl = (sd->Control & SE_SACL_PRESENT) ? ULongToPtr( sd->Sacl ) : NULL;
+-        out->Dacl = (sd->Control & SE_DACL_PRESENT) ? ULongToPtr( sd->Dacl ) : NULL;
++        out->Owner = wow64_to_host( sd->Owner );
++        out->Group = wow64_to_host( sd->Group );
++        out->Sacl = (sd->Control & SE_SACL_PRESENT) ? wow64_to_host( sd->Sacl ) : NULL;
++        out->Dacl = (sd->Control & SE_DACL_PRESENT) ? wow64_to_host( sd->Dacl ) : NULL;
+     }
+     return out;
+ }
+@@ -180,9 +209,9 @@ static inline OBJECT_ATTRIBUTES *objattr_32to64( struct object_attr64 *out, cons
+     out->attr.Length = sizeof(out->attr);
+     out->attr.RootDirectory = LongToHandle( in->RootDirectory );
+     out->attr.Attributes = in->Attributes;
+-    out->attr.ObjectName = unicode_str_32to64( &out->str, ULongToPtr( in->ObjectName ));
+-    out->attr.SecurityQualityOfService = ULongToPtr( in->SecurityQualityOfService );
+-    out->attr.SecurityDescriptor = secdesc_32to64( &out->sd, ULongToPtr( in->SecurityDescriptor ));
++    out->attr.ObjectName = unicode_str_32to64( &out->str, wow64_to_host( in->ObjectName ));
++    out->attr.SecurityQualityOfService = wow64_to_host( in->SecurityQualityOfService );
++    out->attr.SecurityDescriptor = secdesc_32to64( &out->sd, wow64_to_host( in->SecurityDescriptor ));
+     return &out->attr;
+ }
+ 
+@@ -276,7 +305,7 @@ static inline ALPC_MESSAGE_ATTRIBUTES *alpc_port_message_attributes_32to64( ALPC
+         to_attr->ContextHandle = UlongToHandle( from_attr->ContextHandle );
+         if (from_attr->QoSPointer)
+         {
+-            SECURITY_QUALITY_OF_SERVICE32 *qos32 = (SECURITY_QUALITY_OF_SERVICE32 *)ULongToPtr( from_attr->QoSPointer );
++            SECURITY_QUALITY_OF_SERVICE32 *qos32 = wow64_to_host( from_attr->QoSPointer );
+             SECURITY_QUALITY_OF_SERVICE *qos = Wow64AllocateTemp( sizeof(*qos) );
+ 
+             to_attr->QoS = qos;
+@@ -300,7 +329,7 @@ static inline ALPC_MESSAGE_ATTRIBUTES *alpc_port_message_attributes_32to64( ALPC
+ 
+         to_attr->Flags = from_attr->Flags;
+         to_attr->SectionHandle = UlongToHandle( from_attr->SectionHandle );
+-        to_attr->ViewBase = UlongToPtr( from_attr->ViewBase );
++        to_attr->ViewBase = wow64_to_host( from_attr->ViewBase );
+         to_attr->ViewSize = from_attr->ViewSize;
+     }
+     if (in->AllocatedAttributes & ALPC_MESSAGE_VIEW_ATTRIBUTE)
+@@ -405,7 +434,7 @@ static inline ALPC_MESSAGE_ATTRIBUTES32 *alpc_port_message_attributes_64to32( AL
+         to_attr->ContextHandle = HandleToUlong( from_attr->ContextHandle );
+         if (to_attr->QoSPointer && from_attr->QoS)
+         {
+-            SECURITY_QUALITY_OF_SERVICE32 *qos32 = ULongToPtr( to_attr->QoSPointer );
++            SECURITY_QUALITY_OF_SERVICE32 *qos32 = wow64_to_host( to_attr->QoSPointer );
+             qos32->ImpersonationLevel = from_attr->QoS->ImpersonationLevel;
+             qos32->ContextTrackingMode = from_attr->QoS->ContextTrackingMode;
+             qos32->EffectiveOnly = from_attr->QoS->EffectiveOnly;
+@@ -421,7 +450,7 @@ static inline ALPC_MESSAGE_ATTRIBUTES32 *alpc_port_message_attributes_64to32( AL
+ 
+         to_attr->Flags = from_attr->Flags;
+         to_attr->SectionHandle = HandleToUlong( from_attr->SectionHandle );
+-        to_attr->ViewBase = PtrToUlong( from_attr->ViewBase );
++        to_attr->ViewBase = wow64_to_guest( from_attr->ViewBase );
+         to_attr->ViewSize = from_attr->ViewSize;
+     }
+     if (out->AllocatedAttributes & ALPC_MESSAGE_VIEW_ATTRIBUTE)
+@@ -490,26 +519,26 @@ static inline ALPC_MESSAGE_ATTRIBUTES32 *alpc_port_message_attributes_64to32( AL
+ 
+ static inline TOKEN_USER *token_user_32to64( TOKEN_USER *out, const TOKEN_USER32 *in )
+ {
+-    out->User.Sid = ULongToPtr( in->User.Sid );
++    out->User.Sid = wow64_to_host( in->User.Sid );
+     out->User.Attributes = in->User.Attributes;
+     return out;
+ }
+ 
+ static inline TOKEN_OWNER *token_owner_32to64( TOKEN_OWNER *out, const TOKEN_OWNER32 *in )
+ {
+-    out->Owner = ULongToPtr( in->Owner );
++    out->Owner = wow64_to_host( in->Owner );
+     return out;
+ }
+ 
+ static inline TOKEN_PRIMARY_GROUP *token_primary_group_32to64( TOKEN_PRIMARY_GROUP *out, const TOKEN_PRIMARY_GROUP32 *in )
+ {
+-    out->PrimaryGroup = ULongToPtr( in->PrimaryGroup );
++    out->PrimaryGroup = wow64_to_host( in->PrimaryGroup );
+     return out;
+ }
+ 
+ static inline TOKEN_DEFAULT_DACL *token_default_dacl_32to64( TOKEN_DEFAULT_DACL *out, const TOKEN_DEFAULT_DACL32 *in )
+ {
+-    out->DefaultDacl = ULongToPtr( in->DefaultDacl );
++    out->DefaultDacl = wow64_to_host( in->DefaultDacl );
+     return out;
+ }
+ 
+@@ -520,7 +549,7 @@ static inline void put_handle( ULONG *handle32, HANDLE handle )
+ 
+ static inline void put_addr( ULONG *addr32, void *addr )
+ {
+-    if (addr32) *addr32 = PtrToUlong( addr );
++    if (addr32) *addr32 = wow64_to_guest( addr );
+ }
+ 
+ static inline void put_size( ULONG *size32, SIZE_T size )
+diff --git a/dlls/wow64/wow64_window.h b/dlls/wow64/wow64_window.h
+new file mode 100644
+index 00000000000..239549107ee
+--- /dev/null
++++ b/dlls/wow64/wow64_window.h
+@@ -0,0 +1,69 @@
++/*
++ * WoW64 guest address window (iOS)
++ *
++ * iOS has no low 4 GiB, so the 32-bit address space of a WoW64 process lives
++ * in a window at a host base: guest address g is host address base + g. The
++ * unix side reserves the window and pairs the TEB32 and PEB32 in it; wow64.dll
++ * takes the base from that pair at process init. Base 0 means no window (the
++ * guest address is the host address, as in Wine elsewhere).
++ *
++ * This header uses no Wine header, so the host test compiles this exact file.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ */
++
++#ifndef __WOW64_WINDOW_H
++#define __WOW64_WINDOW_H
++
++#include <stdint.h>
++
++#define WOW64_WINDOW_SIZE  ((uint64_t)0x100000000)
++#define WOW64_WINDOW_ALIGN ((uint64_t)0x10000)
++
++/* A window base: above the first 4 GiB, 64 KiB aligned, and the whole window addressable. */
++static inline int wow64_window_valid_base( uint64_t base )
++{
++    return base >= WOW64_WINDOW_SIZE && !(base & (WOW64_WINDOW_ALIGN - 1)) &&
++           base <= UINT64_MAX - (WOW64_WINDOW_SIZE - 1);
++}
++
++/* The base named by the paired TEB32 (host address and guest self pointer)
++ * and PEB32 (host address and the guest pointer TEB32 holds). 0 when they do
++ * not name one valid window. */
++static inline uint64_t wow64_window_base_from_pair( uint64_t host_teb32, uint32_t guest_teb32,
++                                                    uint64_t host_peb32, uint32_t guest_peb32 )
++{
++    uint64_t base = host_teb32 - guest_teb32;
++
++    if (!guest_teb32 || !guest_peb32 || host_peb32 - guest_peb32 != base) return 0;
++    return wow64_window_valid_base( base ) ? base : 0;
++}
++
++/* Guest NULL stays NULL. A nonzero guest address below 64 KiB lands in the
++ * window's inaccessible guard: conversion grants no access. */
++static inline void *wow64_window_to_host( uint64_t base, uint32_t guest )
++{
++    return guest ? (void *)(uintptr_t)(base + guest) : (void *)0;
++}
++
++/* NULL, or a host pointer inside the window above its base, gives the guest
++ * address. Anything else is rejected, without truncation, leaving *guest as
++ * it was. */
++static inline int wow64_window_to_guest( uint64_t base, const void *host, uint32_t *guest )
++{
++    uint64_t addr = (uintptr_t)host;
++
++    if (!addr)
++    {
++        *guest = 0;
++        return 1;
++    }
++    if (addr <= base || addr - base >= WOW64_WINDOW_SIZE) return 0;
++    *guest = (uint32_t)(addr - base);
++    return 1;
++}
++
++#endif /* __WOW64_WINDOW_H */
+-- 
+2.55.0
+

@@ -12,5 +12,6 @@
 0011-user32-log-each-message-box-s-caption-and-text.patch
 0012-ntdll-count-the-lock-wait-on-address-and-QPC-census-.patch
 0013-ntdll-build-i386-with-native-diagnostics-guarded.patch
-0014-wow64-stop-at-the-first-i386-system-call-on-iOS.patch
 0015-ntdll-take-a-WoW64-process-s-native-DLLs-from-sysarm.patch
+0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch
+0017-ntdll-leave-a-native-PEB-above-4-GiB-alone-in-the-i3.patch

@@ -310,12 +310,28 @@ through its CRT imports and faulted the app. **No i386 instruction runs yet.**
 Hollow Knight passes `first-frame+10` (9.06 s first frame, menu visible).
 Details are in the same step-2 evidence record.
 
-Step 3 below now runs the child past this boundary. Still open in step 2: wow64's
-`get_ptr`/`PtrToUlong` conversions (next), other query classes, file/anonymous
-section VM (shared backing), PE-facing allocation/query conversion, secondary
-WoW64 threads (refused), the global `wow_peb`/TEB free lists/limits (unused by
-this path), startup globals that rely on serialization, and `KUSER_SHARED_DATA`
-in the window.
+**wow64 conversion follow-up, 2026-10-03** ([evidence](evidence/2026-10-03-portal2-wow64-pointers.md)):
+wine-pe 0016 converts wow64.dll's pointers through the window: a
+`wow64_window.h` with `wow64_to_host`/`wow64_to_guest` (rejection, never
+truncation; host-tested), the base taken from the TEB32/PEB32 pair, every
+thunk file audited, and the exception/APC/callback frames and the initial
+context. madeira-unix 0063 gives the child its 32-bit limits and maps its NLS
+tables read-only into the window; `wine_host.c` links `syswow64`. On the phone,
+the i386 loader loads `kernel32`, `kernelbase`, `user32`, `gdi32`, `advapi32`
+and others and stops at the first win32u call (`NtUserInitializeClientPfnArrays`),
+because wow64win.dll does not convert yet (`c00000bb`; 259,688 serviced low
+faults). Hollow Knight passes `first-frame+10` (8.37 s, menu visible).
+
+Still open in step 2:
+
+- wow64win.dll's conversions (next);
+- the unix side's wow64 unix calls;
+- other query classes;
+- writable and anonymous section views, and unmap of file views;
+- secondary WoW64 threads (refused);
+- the global `wow_peb`, TEB free lists and limits (unused by this path);
+- startup globals that rely on serialization;
+- `KUSER_SHARED_DATA` in the window.
 
 - In `ntdll/unix/virtual.c`, for a WoW64 pseudo-process, reserve a 4 GiB window
   at `B` at process start. Every limit that means "the 32-bit address space"
@@ -354,11 +370,9 @@ stops (`c00000bb`). Questions 1 and 2 are answered: WoW64 runs beside the ARM64E
 session, and FEX's WoW64 module runs on iOS. Hollow Knight passes
 `first-frame+10` (9.61 s, menu visible).
 
-**Next:** wow64's pointer conversions (step 2's conversion list: `get_ptr`,
-`PtrToUlong` of returned host pointers, `env.c`, callback/APC/exception frames)
-through the window base, file by file, then move the wine-pe 0014 stop to the
-first system call it cannot convert; Portal 2's `kernel32` load is the next
-milestone item.
+**Next:** step 2's wow64win.dll conversions (win32u thunks, user32 callbacks,
+message parameters), so that user32 initializes. Then the milestone's
+remaining markers: the entry point and `bin/engine.dll`.
 
 - Port the iOS JIT plumbing from `ARM64EC/Module.cpp` into `WOW64/Module.cpp`:
   pool allocation, aliases, call-return stacks and the transition hooks. Share
