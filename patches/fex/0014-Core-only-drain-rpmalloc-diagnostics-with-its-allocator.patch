@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 2 Oct 2026 02:50:10 +0200
+Subject: [PATCH] Core: only drain rpmalloc diagnostics with its allocator
+
+The real ContextImpl vtable keeps CompileBlock reachable in native decoder tests. Its unconditional snapshot reference prevents disabled-allocator links, where the rpmalloc provider is absent. Guard both the POD declaration and diagnostic consumer with ENABLE_FEX_ALLOCATOR. Supply the configured macro to Core.cpp only: previously it was private to JemallocLibs. Retain the existing summary and enabled-allocator diagnostics unchanged. This does not provide guest execution support.
+
+Class: build-fix
+Evidence: docs/evidence/2026-10-01-fex-native-context.md
+Offered-upstream: no
+---
+ FEXCore/Source/CMakeLists.txt          | 6 ++++++
+ FEXCore/Source/Interface/Core/Core.cpp | 4 ++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
+index e7963a9..d3819a3 100644
+--- a/FEXCore/Source/CMakeLists.txt
++++ b/FEXCore/Source/CMakeLists.txt
+@@ -290,6 +290,12 @@ function(AddLibrary Name Type)
+   AddDefaultOptionsToTarget(${Name})
+ endfunction()
+ 
++# Core's rpmalloc diagnostic must follow the configured allocator provider.
++# Keep this source-local: the allocator hooks define the macro independently.
++if (ENABLE_FEX_ALLOCATOR)
++  set_property(SOURCE Interface/Core/Core.cpp APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_FEX_ALLOCATOR=1)
++endif()
++
+ AddObject(${PROJECT_NAME}_object)
+ AddLibrary(${PROJECT_NAME} STATIC)
+ # iOS-Madeira: on the arm64ec Windows target the shipped artifact is
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 3c2fe1b..de2e7bd 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -64,6 +64,7 @@ $end_info$
+ #include <chrono>
+ #include <cstring>
+ 
++#ifdef ENABLE_FEX_ALLOCATOR
+ /* iOS-Madeira ml622: mirror of rpmalloc's POD snapshot (rpmalloc.c). Declared here
+  * rather than in a shared header because rpmalloc is C and vendored; keep the two
+  * definitions in sync — the drain below is the only consumer. */
+@@ -77,6 +78,7 @@ struct rpm_cas_snapshot {
+ };
+ int rpm_cas_snapshot_take(struct rpm_cas_snapshot* out);
+ }
++#endif
+ #include <condition_variable>
+ #include <fcntl.h>
+ #include <functional>
+@@ -2007,6 +2009,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+                         Frame ? Frame->State.L1Mask : 0,
+                         (T && T->LookupCache) ? T->LookupCache->GetL1Pointer() : 0);
+ 
++#ifdef ENABLE_FEX_ALLOCATOR
+       /* iOS-Madeira ml622: drain the rpmalloc remote-free CAS snapshot HERE —
+        * outside rpmalloc, where formatting is safe. The allocator side only ever
+        * copies scalars into a POD and sets a flag; it must never format, because
+@@ -2031,6 +2034,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+                             Snap.fail_changed, Snap.fail_unchanged, Snap.fail_invalid);
+         }
+       }
++#endif
+     }
+   }
+ 
