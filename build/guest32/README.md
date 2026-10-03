@@ -1,5 +1,8 @@
 # Software-separated Win32 memory experiment
 
+**Superseded in direction** by [the Portal 2 plan](../../docs/PORTAL2-PLAN.md):
+milestone 0 there removes most of this directory. Do not extend it further.
+
 This is a **host-tested memory, PE32 mapping, import-binding and mapped-dependency resolution prototype**, not a shipped
 runtime, complete Windows loader, WoW64 bridge or emulator. The dev app can
 exercise the memory contract from Settings; no game uses it. It cannot run
