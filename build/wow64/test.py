@@ -18,6 +18,8 @@ PAIR_HEADER = "build/ntdll-unix/wow64_pair.h"
 PAIR_PATCH = REPO / "patches/madeira-unix/0052-ntdll-bootstrap-owner-local-window-backed-TEB-pairs.patch"
 IMAGE_HEADER = "build/ntdll-unix/wow64_image.h"
 IMAGE_PATCH = REPO / "patches/madeira-unix/0053-ntdll-map-fixed-i386-images-into-the-owned-window.patch"
+PARAMS_HEADER = "build/ntdll-unix/wow64_params.h"
+PARAMS_PATCH = REPO / "patches/madeira-unix/0054-ntdll-build-owner-local-window-backed-startup-parame.patch"
 
 
 def patched_function(patch, signature):
@@ -105,6 +107,16 @@ def main():
                         "-I", str((root / IMAGE_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/image_test.c"), "-o", str(image_exe)], check=True)
         subprocess.run([str(image_exe)], check=True)
+        subprocess.run(["git", "-C", tmp, "apply", f"--include={PARAMS_HEADER}",
+                        str(PARAMS_PATCH)], check=True)
+        (root / "params_api.h").write_text(
+            patched_function(PARAMS_PATCH, "static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,"))
+        params_exe = root / "params-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / PARAMS_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/params_test.c"), "-o", str(params_exe)], check=True)
+        subprocess.run([str(params_exe)], check=True)
     return 0
 
 

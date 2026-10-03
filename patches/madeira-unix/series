@@ -52,3 +52,4 @@
 0051-ntdll-suballocate-owned-WoW64-window-views.patch
 0052-ntdll-bootstrap-owner-local-window-backed-TEB-pairs.patch
 0053-ntdll-map-fixed-i386-images-into-the-owned-window.patch
+0054-ntdll-build-owner-local-window-backed-startup-parame.patch

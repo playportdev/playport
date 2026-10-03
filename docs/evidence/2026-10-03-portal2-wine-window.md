@@ -11,9 +11,10 @@ window; the initial-thread follow-up pairs it with window-backed native and
 32-bit TEBs. Address arithmetic, startup-state selection, view splitting and
 pairing helpers are host-tested from the actual patches. The fixed-image
 follow-up below now maps Portal 2's main image in the window, retaining guest
-image/entry addresses and publishing PEB32's image base. Startup explicitly
-stops before the unwired parameter/native WoW64-loader paths. **No i386 code
-executes. Step 2 and milestone 1 are not complete.**
+image/entry addresses and publishing PEB32's image base. The parameter
+follow-up now publishes a normalized, window-backed PE32 parameter block and
+environment. Startup explicitly stops before the unwired native WoW64-loader
+paths. **No i386 code executes. Step 2 and milestone 1 are not complete.**
 
 Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
 IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).
@@ -345,6 +346,72 @@ Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
 reports no trees to rebuild. Logs/screenshots stay under `.work/portal2-image`
 and `.work/ui-runs/`.
 
+## Process-parameter follow-up (same step)
+
+Source at build: `31f0b9c` plus madeira-unix 0054 and host tests.
+Dev IPA: `.work/out/20261003-135019-5390ca2b/Playport-26.5-5390ca2b.ipa`.
+SHA256: `5390ca2bb181754cd7f9aeaf39043d7fc75b59ab9fc8addca289c24444aa34c8`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+are unchanged.
+
+**madeira-unix 0054** uses Wine's existing native startup-data builder, then
+packs a PE32 copy into one owner-local RW view at guest `0x7e000000`. The
+bootstrap placement is fixed and capped at 16 MiB; it is not a general process-
+parameter allocator. All eight string buffers and the environment live in
+that same view. Addresses are checked guest offsets, not truncated host
+pointers; standard/console/current-directory handles remain plain integers.
+RuntimeInfo remains an opaque byte blob, including odd byte lengths. String
+capacity padding is zeroed; environment size and double-NUL termination are
+validated. Unsupported drive-directory/package pointers and overflowing
+scalar fields fail explicitly, before allocation/publication.
+
+PEB32's parameter pointer is published only after packing succeeds. Heap
+option scalars, processor count, debug/global flags and critical-section
+timeout are taken from the **owner**, not the session. `load_global_options`
+now receives the current PEB explicitly: it previously wrote the mutable
+file-scope `peb` despite `init_peb`'s owner-local shadow. The global `wow_peb`
+is still untouched. PEB32 loader/heap pointers remain NULL; this is **not full
+PEB/loader initialization**. The temporary native parameter allocation is
+released at the retained fail-closed boundary, before the session's ARM64EC
+loader can run on this i386 child. The window view lives until owner teardown.
+
+`build/wow64/params_test.c` compiles the production packing header and the
+publication function extracted from the patch, with UBSan, **mock Wine
+layouts/allocation and real disjoint window mappings**. It checks invalid/
+NULL inputs, normalized flags, malformed strings/environments, binary and
+empty fields, padding, unchanged outputs/storage on rejection, allocation
+failure and duplicate/wrong-owner publication, oversized heap options,
+integer handles, a 16 MiB size limit, exact top-of-window bounds, unchanged
+source parameters and independent contents at identical guest addresses.
+It does not test Wine's actual layouts/rbtree, server serialization, general
+VM, native WoW64 loader, guest heap creation or i386 execution. The build
+compiles Wine's actual layouts, and the phone checks publication/lifetime.
+
+One phone-lock session upgraded in place and ran both titles, continuing
+past Portal 2's expected nonzero exit. Both result events name the SHA256
+above. The pre-run phone check reported 48% battery, not externally powered.
+Commands are as above, with output directories:
+
+- `.work/ui-runs/portal2-params`: B=`0x7038010000`, parameter host
+  `0x70b6010000`, guest `0x7e000000`, size `0x4000`; PEB32 image remains
+  `0x400000`. Command-line buffer is guest `0x7e0004e8`, environment is
+  guest `0x7e000568`, 5,670 bytes; normalized=1, loader=0, heap=0. Startup
+  then deliberately terminates with `STATUS_NOT_SUPPORTED` (`c00000bb`)
+  before the native WoW64 loader. TEB restoration and window release still
+  succeed. **No i386 DLL loading or code execution is claimed.** UI result
+  remains `launch=failed run_exe=-7`, exit 1; screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed and Game failed.
+- `.work/ui-runs/portal2-params-hk`: `first-frame+10`, exit 0; first frame
+  **9.25 s**, JIT **2.44 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, all C tests including six WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
+`git show --check` and the non-patch whitespace check pass; `pp build --plan`
+reports no trees to rebuild. Logs/screenshots stay under `.work/portal2-params`
+and `.work/ui-runs/`.
+
 ## Conversion inventory and remaining work
 
 The initial inventory found that the plan's original assumption about
@@ -387,9 +454,10 @@ handles or integers, and raw casts/helpers add more. No sites have been
 routed yet. In particular, callbacks/APCs pack guest addresses in integers;
 blind macro replacement would change their ABI.
 
-Next in this same step: window-backed process parameters and full PEB32,
-then general VM routing and guest-space image placement/nonzero relocations.
-Only fixed preferred image bases work; only the initial TEB is paired.
+Next in this same step: general VM routing and guest-space image placement/
+nonzero relocations, plus remaining PEB32 loader/heap initialization.
+Startup parameters are window-backed, not a general allocator; only fixed
+preferred image bases work, and only the initial TEB is paired.
 General paired thread allocation, reuse/free and multi-thread teardown are
 pending, and secondary WoW64 threads are explicitly rejected. Remove the
 fail-closed startup boundary only after its downstream paths are wired.

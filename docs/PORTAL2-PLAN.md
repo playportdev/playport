@@ -202,9 +202,21 @@ WoW64-loader boundary (`c00000bb`), restoring the TEB and releasing the window.
 **No i386 code executes.** Hollow Knight passes `first-frame+10` (8.24 s first
 frame, menu visible); details remain in the same step-2 evidence record.
 
-**Next, still step 2:** window-backed process parameters/full PEB32, general
-VM routing and guest-space image placement/relocations (only fixed preferred
-bases work now; server ASLR suggestions are ignored). Only the initial TEB
+**Process-parameter follow-up, 2026-10-03:** madeira-unix 0054 packs normalized
+PE32 parameters, all eight startup strings (including opaque RuntimeInfo) and
+the environment into one owned view at guest `0x7e000000`. PEB32 publishes
+that guest pointer and the owner's heap-option scalars, without borrowing
+native heap/loader pointers. Global-option writes now target the current PEB.
+Host tests cover validation, failure-before-publication, handles, empty/binary
+fields, size/window edges and disjoint storage. The phone confirms the
+parameters and environment; startup still deliberately stops before the native
+WoW64 loader (`c00000bb`), with **no i386 execution**. Hollow Knight passes
+`first-frame+10` (9.25 s first frame, menu visible). The same step-2 evidence
+record holds the IPA and runs.
+
+**Next, still step 2:** general VM routing, guest-space image placement/
+relocations and the remaining PEB32 loader/heap initialization (only fixed
+preferred bases work now; server ASLR suggestions are ignored). Only the initial TEB
 is paired; secondary WoW64 thread allocation explicitly returns
 `STATUS_NOT_SUPPORTED`. General free/reuse is absent. The legacy `wow_peb`,
 TEB free lists and WoW64 limits remain global but this bootstrap does not
