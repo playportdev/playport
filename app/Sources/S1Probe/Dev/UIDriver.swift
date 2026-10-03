@@ -344,6 +344,13 @@ enum UIDriver {
                         log("settings link \(n) \(SettingsLink.probed[n].absoluteString): opened=\(opened)")
                     case "helper-report":
                         log("probe report: \(await probe.report())")
+                    case "memory-64", "memory-2048", "memory-4096":
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        guard let mb = Int(id.dropFirst("memory-".count)), await SharedMemoryProbe.shared.run(mb: mb) else {
+                            return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
+                        }
+                        log("shared RAM probe: \(SharedMemoryProbe.shared.status)")
                     default:
                         return finish("action=\(action) refused: unknown probe")
                     }

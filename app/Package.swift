@@ -130,11 +130,13 @@ let package = Package(
         // the Vulkan Direct3D backend (decision 0014): embedded in the app's
         // Frameworks/ and loaded by win32u with dlopen.
         .binaryTarget(name: "KosmicKrisp", path: "Staged/KosmicKrisp.xcframework"),
-        .target(name: "JITHelperXPC", swiftSettings: release ? [.define("PLAYPORT_RELEASE")] : []),
+        .target(name: "SharedMemory", cSettings: [.unsafeFlags(["-fobjc-arc", "-O2"])]),
+        .target(name: "JITHelperXPC", dependencies: release ? [] : ["SharedMemory"],
+                swiftSettings: release ? [.define("PLAYPORT_RELEASE")] : []),
         .target(name: "PlayportJITEntry"),
         .target(
             name: "PlayportJIT",
-            dependencies: ["StikJIT", "JITHelperXPC", "PlayportJITEntry"],
+            dependencies: ["StikJIT", "JITHelperXPC", "PlayportJITEntry"] + (release ? [] : ["SharedMemory"]),
             swiftSettings: [.swiftLanguageMode(.v5)] + (release ? [.define("PLAYPORT_RELEASE")] : []),
             linkerSettings: [
                 // Nothing references the principal class but the Objective-C
@@ -149,7 +151,7 @@ let package = Package(
                            .product(name: "HostIOKit", package: "HostIOKit"),
                            .product(name: "SteamClientKit", package: "SteamClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
-                + ["Relaunch"],
+                + ["Relaunch"] + (release ? [] : ["SharedMemory"]),
             path: "Sources/S1Probe",
             // Runtime/ ships at the app root through xtool.yml `resources`, not
             // as a SwiftPM resource bundle: ntdll resolves nls/ and <arch>-windows/

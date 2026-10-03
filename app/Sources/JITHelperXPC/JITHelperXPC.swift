@@ -6,6 +6,9 @@
 // connects back, exports JITHelping and calls JITHost for progress.
 
 import Foundation
+#if !PLAYPORT_RELEASE
+import SharedMemory
+#endif
 
 public let jitHelperEndpointKey = "PlayportJITEndpoint"
 
@@ -35,6 +38,10 @@ public protocol JITHelping {
     /// hold: the helper also takes its own xpc transaction and ignores SIGTERM
     /// (logging it), to see whether that keeps it alive once the host is gone.
     func lifetimeProbe(intervalMs: Int, capS: Int, hold: Bool, pairingFile: Data, reply: @escaping (Int32) -> Void)
+    /// A bounded non-executable RAM object owned by this helper, transported as a Mach send right.
+    func memoryAllocate(bytes: UInt64, token: UInt64, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void)
+    func memoryReport(seed: UInt64, verify: Bool, reply: @escaping (NSDictionary, Bool) -> Void)
+    func memoryRelease(reply: @escaping (NSDictionary) -> Void)
     /// Dev builds: the last probe's file, deleted as it is read (empty if none).
     func lifetimeReport(reply: @escaping (String) -> Void)
     #endif

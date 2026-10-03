@@ -18,6 +18,7 @@ struct DeveloperSettings: View {
     @AppStorage(RuntimeCounters.key) private var countersOff = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
+    @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
     @ObservedObject private var probe = HelperLifetimeProbe.shared
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var pairing = OnDevicePairing.shared
@@ -96,6 +97,11 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var probes: some View {
         PadSectionHeader(text: "Probes").id("probes")
+        ForEach([64, 2048, 4096], id: \.self) { mb in
+            PadRow(id: "set:dev:memoryBroker:\(mb)", title: "Shared RAM: \(mb) MiB", subtitle: sharedMemory.status, hint: "Measure") {
+                if !sharedMemory.busy { Task { _ = await sharedMemory.run(mb: mb) } }
+            }
+        }
         PadRow(id: "set:dev:helperExit", title: "Helper lifetime: end by exit", subtitle: probe.status, hint: "Run") {
             if !probe.busy { Task { _ = await probe.run(.exit, hold: hold) } }
         }

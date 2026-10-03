@@ -166,7 +166,7 @@ resource	Runtime/arm64ec-windows/xinput1_2.dll	655360	5dba9126987f2742777e63af4b
 resource	Runtime/arm64ec-windows/xinput1_3.dll	655360	7b95cf1ccf978b4c5dff744064295396bcecde9a18902449d2a1cc30088978eb	wine-build	build-arm64ec/dlls/xinput1_3/arm64ec-windows/xinput1_3.dll	P2
 resource	Runtime/arm64ec-windows/xinput1_4.dll	720896	7d5f7350238a2a5bce401c9d06126b406fd793b115831faf11c027cd47c8b42e	wine-build	build-arm64ec/dlls/xinput1_4/arm64ec-windows/xinput1_4.dll	P2
 resource	Runtime/arm64ec-windows/xinput9_1_0.dll	655360	45e614763443d977fe70fd917abc8d64c3386b39fd5e158819286c1c09ee1cd1	wine-build	build-arm64ec/dlls/xinput9_1_0/arm64ec-windows/xinput9_1_0.dll	P2
-resource	Runtime/arm64ec-windows/xtajit64.dll	5362688	d6c8b4e64d76d93379561c5792817a60d69ff2b44fb5f7f74e9460431bf367a2	fex	libarm64ecfex.dll	P1-de
+resource	Runtime/arm64ec-windows/xtajit64.dll	5362688	d69ddba4e4eeeab46bc1f0063decde5c65ca47b64f7bd1fa1ca4678e04581bc9	fex	libarm64ecfex.dll	P1-de
 resource	Runtime/aarch64-windows/actxprxy.dll	786432	03761f8a13e28edd51c9b5bfb8119682a7b0f51c2c4b50464498117a1e9a6157	wine-build	build-macos/dlls/actxprxy/aarch64-windows/actxprxy.dll	P2
 resource	Runtime/aarch64-windows/advapi32.dll	786432	6587145ce55d10dca54cf89ca77324006213885af25fd3638041addab7a0ff1c	wine-build	build-macos/dlls/advapi32/aarch64-windows/advapi32.dll	P2
 resource	Runtime/aarch64-windows/apisetschema.dll	196608	678533718e811293367b8d82374d7dee3673cdf25f179e06d0152011425d0d19	wine-build	build-macos/dlls/apisetschema/aarch64-windows/apisetschema.dll	P2

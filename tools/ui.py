@@ -82,6 +82,8 @@ model calls: each --action in order, then --settings, --verify, --play:
                          helper ticks, then the app ends itself by exit(0) or SIGKILL 2 s after
                          the run's done (use --leave-running); must be the last action. -hold:
                          the helper takes its own xpc transaction and ignores SIGTERM
+  probe:memory-64 | probe:memory-2048 | probe:memory-4096
+                         Settings' shared anonymous RAM experiment, verified in the app and helper
   probe:helper-report    read that probe's report back into s1-host.log (a later run, --keep-log)
   jit:setup | jit:pair   Open the product setup (Pair again keeps old credentials until verified)
   jit:continue | jit:open-settings | jit:cancel | jit:wait
@@ -229,7 +231,7 @@ class EndOnTerm:
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|(?:uninstall|verify|play):[a-z]+-[a-z0-9 ._-]+"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[a-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096)|probe:relaunch|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
 
 
 def in_game(actions, start):

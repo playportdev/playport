@@ -128,6 +128,17 @@ Playport (S1Probe or Playport)                 PlayportJIT.appex
   and so its own free-team App ID and profile, one of the ten App IDs a free
   team may register per week. It takes no device slot.
 
+### Helper-owned RAM experiment
+
+A dev build's Settings › Developer › Probes can measure 64 MiB, 2 GiB or
+4 GiB of anonymous RAM owned by the helper and mapped directly in the app
+(`SharedMemory`, `Dev/SharedMemoryProbe.swift`). A ledger-tagged Mach memory
+entry crosses XPC as a send right; full-buffer checks in both processes
+prove aliasing and retention. On the phone, 4 GiB raised the helper's footprint,
+not the app's ([evidence](evidence/2026-10-03-helper-owned-memory.md)). This is
+not a private no-footprint entitlement, a file-backed swap area, or a claim
+that a game already uses that backing. System-wide pressure still applies.
+
 ### JIT pool placement
 
 FEX writes all translated code into one pool. The pool must lie in whole

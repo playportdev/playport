@@ -17,6 +17,9 @@
 import Foundation
 import JITHelperXPC
 import StikJIT
+#if !PLAYPORT_RELEASE
+import SharedMemory
+#endif
 
 @objc(PlayportJITHelper)
 final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
@@ -108,6 +111,42 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
     }
 
     #if !PLAYPORT_RELEASE
+    private var memoryRegions: [PPMemoryRegion] = []
+
+    func memoryAllocate(bytes: UInt64, token: UInt64, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void) {
+        queue.async { [self] in
+            // Refuse an arena whose reservation would consume the helper's last 128 MiB.
+            let state = pp_memory_snapshot() as NSDictionary
+            let available = (state["available"] as? NSNumber)?.uint64Value ?? 0
+            let reserved = memoryRegions.reduce(UInt64(0)) { $0 + $1.byteCount }
+            guard bytes > 0, reserved + bytes + (128 << 20) < available + ((state["footprint"] as? NSNumber)?.uint64Value ?? 0) else {
+                reply(nil, state, "helper budget exhausted")
+                return
+            }
+            var error: NSError?
+            guard let region = pp_memory_create(bytes, token, &error) else {
+                reply(nil, state, error?.localizedDescription ?? "memory create failed")
+                return
+            }
+            memoryRegions.append(region)
+            reply(region, pp_memory_snapshot() as NSDictionary, nil)
+        }
+    }
+
+    func memoryReport(seed: UInt64, verify: Bool, reply: @escaping (NSDictionary, Bool) -> Void) {
+        queue.async { [self] in
+            let ok = !verify || memoryRegions.allSatisfy { pp_memory_verify($0, seed + $0.token) }
+            reply(pp_memory_snapshot() as NSDictionary, ok)
+        }
+    }
+
+    func memoryRelease(reply: @escaping (NSDictionary) -> Void) {
+        queue.async { [self] in
+            memoryRegions.removeAll()
+            reply(pp_memory_snapshot() as NSDictionary)
+        }
+    }
+
     // The helper-lifetime probe (JITHelping.lifetimeProbe). Timestamps are the
     // wall clock in ms since 1970, the same clock the app logs its exit with.
     private static let probeURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
