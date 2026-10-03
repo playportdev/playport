@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 1 Oct 2026 13:00:00 +0000
+Subject: [PATCH] AllocatorHooks: do not lock rpmalloc for libc size queries
+
+The disabled-allocator malloc_usable_size implementation calls
+IOS_RPM_GUARD even though that macro is defined only in the enabled
+rpmalloc branch. This prevents the native JemallocDummy target from
+building with ENABLE_FEX_ALLOCATOR=OFF.
+
+Remove the stray guard from the libc-backed implementation, matching the
+other libc hooks. Keep all enabled-allocator guards unchanged: libc size
+queries do not access rpmalloc state and must not acquire its iOS lock.
+
+Class: build-fix
+Evidence: docs/evidence/2026-10-01-fex-native-allocator.md
+Offered-upstream: no
+---
+ FEXCore/Source/Utils/AllocatorHooks.cpp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/FEXCore/Source/Utils/AllocatorHooks.cpp b/FEXCore/Source/Utils/AllocatorHooks.cpp
+--- a/FEXCore/Source/Utils/AllocatorHooks.cpp
++++ b/FEXCore/Source/Utils/AllocatorHooks.cpp
+@@ -290,7 +290,6 @@ void free(void* ptr) {
+   return ::free(ptr);
+ }
+ size_t malloc_usable_size(void* ptr) {
+-  IOS_RPM_GUARD();
+ #ifdef __APPLE__
+   return ::malloc_size(ptr);
+ #else

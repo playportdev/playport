@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 1 Oct 2026 12:00:00 +0000
+Subject: [PATCH] Core: keep native builds free of platform-only diagnostics
+
+CompileBlock reads two capture buffers declared only under FEX_IOS_HOST.
+Guard their reporting with the same macro. ResetCallRetStack also uses ARM
+counter registers unconditionally: guard timer collection and timed reporting
+with the ARM host architectures, keeping predictor clearing and reset counts
+unconditional. Non-ARM hosts retain the untimed reset report rather than
+printing fabricated zero timings.
+
+This unblocks the native FEXCore prerequisite for the isolated PE32 decoder
+gate without enabling iOS runtime paths in that build. ARM64EC retains the
+same timing and reports. This is not guest execution support.
+
+Class: build-fix
+Evidence: docs/evidence/2026-10-01-fex-native-portability.md
+Offered-upstream: no
+---
+ FEXCore/Source/Interface/Core/Core.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 1ff4fd7..3c2fe1b 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -738,9 +738,12 @@ void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* S
+ 
+   // The FULL reservation -- see the note above. This decommit is what returns
+   // the pages; clipping it strands the remainder resident.
++#if defined(ARCHITECTURE_arm64) || defined(ARCHITECTURE_arm64ec)
+   uint64_t ResetT0, ResetT1, ResetFreq;
+   __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ResetT0));
++#endif
+   FEXCore::Allocator::VirtualDontNeed(Thread->CallRetStackBase, TS::CALLRET_STACK_SIZE);
++#if defined(ARCHITECTURE_arm64) || defined(ARCHITECTURE_arm64ec)
+   __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ResetT1));
+   __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(ResetFreq));
+   // Playport: the time the reset takes, in microseconds, for the [callret] line.
+@@ -754,6 +757,7 @@ void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* S
+     while (Us > Max && !CallRetResetMaxUs.compare_exchange_weak(Max, Us, std::memory_order_relaxed)) {
+     }
+   }
++#endif
+ 
+   for (size_t i = 0; i < CallRetSiteCount; ++i) {
+     if (Site && strcmp(Site, CallRetSiteNames[i]) == 0) {
+@@ -833,11 +837,17 @@ void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* S
+ #endif
+ 
+   if ((N & 0x3ff) == 0) {
++#if defined(ARCHITECTURE_arm64) || defined(ARCHITECTURE_arm64ec)
+     LogMan::Msg::EFmt("[callret] ml610 resets={} bytes={}MB per_reset={}KB site={} by_site core={} cpubackend={} jit-rollover={} "
+                       "reset_us={} max_us={}",
+                       N, B >> 20, TS::CALLRET_STACK_SIZE >> 10, Site, CallRetResetsBySite[0].load(std::memory_order_relaxed),
+                       CallRetResetsBySite[1].load(std::memory_order_relaxed), CallRetResetsBySite[2].load(std::memory_order_relaxed),
+                       CallRetResetUs.load(std::memory_order_relaxed), CallRetResetMaxUs.load(std::memory_order_relaxed));
++#else
++    LogMan::Msg::EFmt("[callret] ml610 resets={} bytes={}MB per_reset={}KB site={} by_site core={} cpubackend={} jit-rollover={}", N,
++                      B >> 20, TS::CALLRET_STACK_SIZE >> 10, Site, CallRetResetsBySite[0].load(std::memory_order_relaxed),
++                      CallRetResetsBySite[1].load(std::memory_order_relaxed), CallRetResetsBySite[2].load(std::memory_order_relaxed));
++#endif
+   }
+ }
+ } // namespace FEXCore::Core
+@@ -1504,6 +1514,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+   }
+ #endif
+ 
++#ifdef FEX_IOS_HOST
+   /* iOS-Madeira ml304 (task #51): REPORT CallbackPtr ENTRY ON ITS OWN, not via the bogus-RIP path.
+    *
+    * ml302 proved the JITCallback prologue writes the bad State.rip, and ml303 added an LR witness --
+@@ -1555,6 +1566,8 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+     }
+   }
+ 
++#endif
++
+   /* iOS-Madeira: refuse to compile obviously-invalid guest RIPs. After a
+    * NULL-vtable virtual call (`call [rax+8]` with rax=0), control flow
+    * lands at RIP=0x8, which then loops compiling thousands of garbage
