@@ -290,7 +290,7 @@ resource	Runtime/aarch64-windows/wintrust.dll	589824	bdd142d70017556b28fd66c4450
 resource	Runtime/aarch64-windows/winusb.dll	458752	9176d4d428f18144bf403b716fe787646e59eef9ee86bbb6fb0e2346daf540ec	wine-build	build-macos/dlls/winusb/aarch64-windows/winusb.dll	P2
 resource	Runtime/aarch64-windows/wlanapi.dll	458752	084d52fd07207841b3f23beedd5bbc1c50c01f7719978e3d860aef3721fa324f	wine-build	build-macos/dlls/wlanapi/aarch64-windows/wlanapi.dll	P2
 resource	Runtime/aarch64-windows/wow64.dll	524288	907105fc8f8e7016a6a449636a30ef03948e23888c7c65e3886f2825a30ee1f7	wine-build	build-macos/dlls/wow64/aarch64-windows/wow64.dll	P2
-resource	Runtime/aarch64-windows/wow64win.dll	917504	49f386b2375a6ac8507582f50cc502858055be41276099e39b9e2b33bc3564c2	wine-build	build-macos/dlls/wow64win/aarch64-windows/wow64win.dll	P2
+resource	Runtime/aarch64-windows/wow64win.dll	917504	c1e09df86f45d18ac3c8e70b99125ae0dc4bfb61110f1bf0527662da50423b9f	wine-build	build-macos/dlls/wow64win/aarch64-windows/wow64win.dll	P2
 resource	Runtime/aarch64-windows/ws2_32.dll	589824	b251a58223d0ce6fb9109b01342890eda9253267acc242ef7e5053aa0f51bfbd	wine-build	build-macos/dlls/ws2_32/aarch64-windows/ws2_32.dll	P2
 resource	Runtime/aarch64-windows/wsock32.dll	524288	9329d1286b1be6b9686f12fa0460aa8313b858145bd2cd21124e8bd505aa92f8	wine-build	build-macos/dlls/wsock32/aarch64-windows/wsock32.dll	P2
 resource	Runtime/aarch64-windows/wtsapi32.dll	458752	827ed29ab59e85397a510c51f6c44cb7004ee2acb0f373462475b59cf896d883	wine-build	build-macos/dlls/wtsapi32/aarch64-windows/wtsapi32.dll	P2
@@ -944,7 +944,7 @@ resource	Runtime/nls/normnfkd.nls	76294	da1a3cd3b79d995a0ea0298d842e7e49be71bb88
 resource	Runtime/nls/sortdefault.nls	3394804	93577599d1b0335d6b2b3560d2bc6bf3681193daae2a32b28cbd2612bc2b1d09	unix	wine/nls/sortdefault.nls	nls
 resource	Runtime/registry/system.reg	482589	a7243a86a08786bdaba078d1f79bd55db7234cccf95249c0421f5729da9bb35b	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	1599	e534357e8ae05068ac00258faf0b3e6086f77c1170b502a9fd46b59052c9ebd6	registry	user.reg	P7-reg
-link	lib/libntdll_unix.a	2796056	9c3c17189a9b3c908f9e8f70d5b616fc82dec1af3933a652d2d70a5ff8fdfa45	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	2799328	c04bb10c78aebc179db29153ab20c82b20be600e3cf918ec7de6f9955e1ab2e5	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4765640	c5e13a52788000fca83ab4d292f04d5316280e519a8b63adcb2c80996f7b4009	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1205616	fae818971a85c84e574b0a022261245ce4076488f57aeea71fcf40a40c6821c0	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto

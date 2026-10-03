@@ -29,6 +29,7 @@ PROTECT_PATCH = REPO / "patches/madeira-unix/0060-ntdll-protect-owned-WoW64-wind
 LOADER_PATCH = REPO / "patches/madeira-unix/0061-ntdll-start-the-WoW64-child-s-native-loader.patch"
 FAULT_PATCH = REPO / "patches/madeira-unix/0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch"
 DC_ATTR_PATCH = REPO / "patches/madeira-unix/0065-ntdll-share-win32u-s-DC_ATTR-arena-with-every-WoW64-.patch"
+SIMD_LANE_PATCH = REPO / "patches/madeira-unix/0070-signal-emulate-LD1-and-ST1-lanes-in-the-low-fault-em.patch"
 GDI32_DC_ATTR_PATCH = REPO / "patches/wine-pe/0019-gdi32-reach-a-native-DC_ATTR-through-the-WoW64-windo.patch"
 GUEST_HEADER = "dlls/wow64/wow64_window.h"
 GUEST_PATCH = REPO / "patches/wine-pe/0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch"
@@ -265,6 +266,13 @@ def main():
                         "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/dc_attr_test.c"), "-o", str(dc_attr_exe)], check=True)
         subprocess.run([str(dc_attr_exe)], check=True)
+        (root / "simd_lane_api.h").write_text(
+            patched_function(SIMD_LANE_PATCH, "static int ios_simd_lane( uint32_t insn, int *offset )"))
+        simd_exe = root / "simd-lane-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all", "-I", str(root),
+                        str(REPO / "build/wow64/simd_lane_test.c"), "-o", str(simd_exe)], check=True)
+        subprocess.run([str(simd_exe)], check=True)
         # wow64.dll's PE-side conversions, from the wine-pe patch.
         subprocess.run(["git", "-C", tmp, "apply", f"--include={GUEST_HEADER}",
                         str(GUEST_PATCH)], check=True)

@@ -2,21 +2,27 @@
 
 ## Result
 
-wow64.dll and the audited part of wow64win.dll convert the guest's pointers
-through the window base. With the follow-up below (DC attributes, the apiset
-map, KUSER_SHARED_DATA, i386 unix libraries), Portal 2's i386 child runs
-`bin\launcher.dll`'s own code: it reads `gameinfo.txt`, probes for the
-Steam overlay and `steam.dll`, and loads `bin\filesystem_stdio.dll` (37
-i386 images). It then asks for a second thread (`NtCreateThreadEx`), which
-the window still refuses (`c00000bb`), and waits for it forever.
+**Milestone 1's markers are all reached.** wow64.dll and wow64win.dll
+convert the guest's pointers through the window base. With the follow-ups
+below (DC attributes, the apiset map, KUSER_SHARED_DATA, i386 unix
+libraries, secondary threads, `NtUserMessageCall`), Portal 2's launcher
+loads `bin\engine.dll` at guest `0x79640000`, and the engine's
+initialization loads its own modules: `inputsystem`, `vphysics`,
+`materialsystem`, `datacache`, `studiorender`, `vscript`, `vgui2`,
+`shaderapidx9` with Wine's i386 `d3d9`, `wined3d` and `opengl32`, and
+`localize` (64 i386 images). The main thread then calls a null pointer
+in FEX's generated code (`blr x4`, `x4=0`) and the child hangs until the
+UI run ends the app.
 
-Milestone markers:
+Milestone markers (`.work/ui-runs/p2th-4` and, on the final IPA, `p2th-5`):
 
-- reached: `portal2.exe` at `0x400000`, the i386 `kernel32` and `ntdll`
-  loaded, the entry point executed, serviced low faults logged;
-- not reached: `bin/engine.dll`.
+- `portal2.exe` at guest `0x400000`;
+- the i386 `kernel32` (`0x7bed0000`) and `ntdll` (`0x7bf40000`) loaded;
+- the entry point executed (`bin\launcher.dll` is loaded by its code);
+- `bin\engine.dll` loaded at `0x79640000`, and its modules after it;
+- serviced low faults logged: 18,780,160 by the null call.
 
-The latest IPA and runs are under "Follow-up runs". The earlier IPAs of
+The latest IPA and runs are under "Thread and message follow-up runs". The earlier IPAs of
 this step, whose child stopped at a DC attribute read (`c0000005`):
 
 IPA: `.work/out/20261003-220140-70d803f5/Playport-26.5-70d803f5.ipa` (dev).
@@ -183,6 +189,38 @@ passed `first-frame+10` on it (8.37 s, menu).
   back to a protected gap, and a child's teardown leaving the arena and the
   other window intact.
 
+### Threads, messages and the engine (second follow-up)
+
+- **madeira-unix 0069**: `virtual_alloc_teb` refused every thread a
+  windowed owner created, and the launcher waited forever for its first
+  worker. A new thread's TEB pair now goes in the owner's window, top-down
+  below KUSER_SHARED_DATA, with the initial pair's layout; its 32-bit
+  stack already came from the window. Thread data is freed later by
+  another thread, so the window keeps a table of these threads: freeing
+  one frees only its native stack while the window holds its TEB, and the
+  window's teardown, which frees the pairs and 32-bit stacks, unlinks
+  them from `teb_list` so nothing reads their TEBs again.
+- **wine-pe 0021**: `NtUserMessageCall` (first reached as DefWindowProc's
+  `WM_GETMINMAXINFO`) converts a pointer message's lparam, by win32u's own
+  `message_pointer_flags`, and the wparam of `EM_GETSEL`, `CB_GETEDITSEL`
+  and `SBM_GETRANGE`, for the calls where win32u reads them (the window
+  procedures, DefWindowProc, the send variants). Calls that hand the
+  parameters back to the guest keep them. `WM_NCCALCSIZE`, `WM_MDICREATE`
+  and `WM_COPYDATA` convert their nested pointers. The message loop's
+  `GetMessage`, `PeekMessage`, `TranslateMessage`, `DispatchMessage`,
+  `PostMessage` and `EndPaint` are audited as they are (guest values,
+  handles and plain data only); 405 thunks are audited now.
+- **madeira-unix 0070**: engine.dll's initialization faulted on
+  `ld1 {v16.d}[0], [x20]`, a lane load FEX emits for i386 x87/SSE stack
+  slots, which the low-fault emulator did not know. It now emulates the
+  LD1/ST1 single-structure lanes (B/H/S/D, other lanes kept).
+  `build/wow64/simd_lane_test.c` checks the decoder from the patch against
+  encodings from `llvm-mc`.
+- Build note: wine-pe's Makefile does not see `window_audited.h` as a
+  dependency of `syscall.c`, so the first build of 0021 kept the old audit
+  table; `syscall.c` was touched to rebuild it. A clean build is not
+  affected.
+
 ### Conversion list (wine-pe 0016)
 
 Grep on the patched tree: `rg -n 'get_ptr|ULongToPtr|UlongToPtr|PtrToUlong|wow64_to_(host|guest)' dlls/wow64`.
@@ -344,25 +382,78 @@ err:wow:Wow64SystemServiceEx Playport: i386 system call 008b (args 00c5e42c 001f
 exit 0 at `first-frame+10`. The first frame came at 8.26 s, and the
 screenshot shows the main menu. It used one DC_ATTR bucket from the arena.
 
+### Thread and message follow-up runs
+
+IPA: `.work/out/20261003-235904-41216826/Playport-26.5-41216826.ipa` (dev),
+SHA256 `41216826d16c58b410a7253ee3c0dac10694807f5278947933d72f12f7794595`,
+built from this commit's series. `pp build` passed (78 IPA checks), and so
+did `pp test`. Battery 49% to 46%. The runs below up to `p2th-4` used the
+same artifacts (identical `artifacts.tsv`) packaged as
+`5c61a152ec9385cf4a9cbf657eb2c83749d8b13027106550a6acbd054a9229a2`; that
+series still carried a stray hunk in madeira-unix 0068 (the run tree's
+`wine` link) which no build output depends on, removed before this commit.
+
+- `p2th-1` (0069): six secondary threads get TEB pairs; the child stops
+  at the unaudited `NtUserMessageCall` (`14b5`, `WM_GETMINMAXINFO`). The
+  window's release unlinks the six threads, and the app keeps running.
+- `p2th-3` (0021): `bin\engine.dll` maps, and its initialization faults
+  on the unhandled `ld1` lane encoding at the guest stack; the launcher
+  retries twice, then the child exits with `c0000005`. 46 images.
+- `p2th-4` (0070), `.work/ui-runs/p2th-4`:
+
+```text
+[wow64-pair] thread tid=0030 owner=0x12923c000 native=0x70b7fc0000 guest=0x7ffb0000 teb32_guest=0x7ffb2000 status=0
+err:wow:wow64_NtMapViewOfSection Playport: i386 image c:\games\portal 2\bin\engine.dll at 79640000
+err:wow:wow64_NtMapViewOfSection Playport: i386 image c:\games\portal 2\bin\materialsystem.dll at 792c0000
+err:wow:wow64_NtMapViewOfSection Playport: i386 image c:\games\portal 2\bin\shaderapidx9.dll at 786d0000
+err:wow:wow64_NtMapViewOfSection Playport: i386 image C:\windows\system32\wined3d.dll at 783a0000
+[unixlib] module 0x70b0270000 (opengl32.dll) WoW64 -> 0x144ea61d8 (stub table)
+err:wow:wow64_NtMapViewOfSection Playport: i386 image c:\games\portal 2\bin\localize.dll at 787b0000
+[mach_exc] UNHANDLED #1 pc=0x0 addr=0x0 x18=0x70b7e10000 type=1 lr=0x127bd41e4 ...
+[mach_exc] caller_insn @lr-4=0x0x127bd41e0: 0xd63f0080
+```
+
+  engine.dll loads once and its DllMain completes; the engine then loads
+  its modules. The fault is a host-level null call (`blr x4`, `x4=0`)
+  from code FEX generated, with guest `eip` 0 and `launcher.dll` frames on
+  FEX's call-return stack; the guest gets no exception and the child hangs
+  (no `NtTerminateProcess`), until the UI run's 300 s limit ends the app.
+  i386 `opengl32` gets the stub table (no GL), so wined3d cannot work yet;
+  that is milestone 2's D3D9 path.
+- `p2th-5`, on the final IPA: the same (`engine.dll` at `0x79640000`, 64
+  i386 images, the null call after `localize.dll`, 18,780,160 serviced low
+  faults, no exit until the UI run's limit).
+
+**Hollow Knight** on the final IPA: `.work/ui-runs/p2th-5-hk2`, exit 0 at
+`first-frame+10`, first frame at 8.76 s, the screenshot shows the main
+menu. (`p2th-5-hk`, run right after Portal 2 in the same lock session, also
+passed, first frame at 10.11 s, with a black screenshot; `p2th-4-hk` on the
+earlier package passed at 8.75 s with the menu.)
+
 ## Open
 
-- **Secondary WoW64 threads** (next): `NtCreateThreadEx` in a windowed
-  child is refused, and the launcher waits for that thread forever. A new
-  thread needs its TEB pair, 32-bit stack and FEX thread state in the
-  window.
-- **wow64win.dll**: the thunks not audited yet stop the process. These
-  include `NtUserMessageCall` (message parameters, by message), the message
-  loop calls and D3DKMT.
-- The WoW64 thunks of the unix libraries pass guest pointers inside their
+- **The null call after `localize.dll`** (next to diagnose): FEX's
+  generated code calls a null helper pointer (`blr x4`) on the main
+  thread, and the guest gets no exception. The child then hangs instead of
+  exiting.
+- **Serviced low faults**: 18.8 million by then. Step 4's inline
+  translation must bring that down, and it removes the low-fault
+  emulator's encoding gaps on the stack path with it.
+- **wow64win.dll**: the thunks not audited yet stop the process (D3DKMT,
+  raw input, hooks and others).
+- **Threads**: a secondary thread's TEB pair and 32-bit stack stay in the
+  window until the process exits, so heavy thread churn can fill the 2 GiB
+  guest. An exit from a secondary thread keeps the window (only the
+  initial thread restores its TEB), and a thread still running when the
+  window is released would fault.
+- The unix libraries' WoW64 thunks pass guest pointers inside their
   parameter blocks; a system call given one fails with `EFAULT`.
-  Libraries without a WoW64 table (dnsapi, nsi, audio, gstreamer) get the
-  stub table.
+  Libraries without a WoW64 table (dnsapi, nsi, opengl32, audio,
+  gstreamer) get the stub table.
 - No fonts for i386 GDI (`select_font can't find a single appropriate font`).
 - The guest's metafile DCs would write UserPointer into the read-only GDI
   table alias.
 - File views in the window cannot be unmapped, protected or queried.
   Writable and anonymous sections are refused.
-- Serviced low faults: 2.49 million by the launcher's wait. Step 4's
-  inline translation must bring that down.
 - Values that win32u returns from session memory (for example
   `GetClassInfoEx`'s menu name) are still truncated, as in Wine's own WoW64.

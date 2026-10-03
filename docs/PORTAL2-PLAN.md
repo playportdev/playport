@@ -331,16 +331,20 @@ Details are in the same step-2 evidence record.
   apiset map and KUSER_SHARED_DATA aliased into the window; FEX translating
   the whole window inline (fex 0017); i386 unix libraries with their WoW64
   tables; the guest's own debug output.
-- On the phone `bin\launcher.dll` now runs its own code: `gameinfo.txt`,
-  the Steam overlay probe, `bin\filesystem_stdio.dll` (37 i386 images). It
-  then asks for a second thread, which the window refuses (`c00000bb`), and
-  waits forever (2.49 million serviced low faults by then).
-- Hollow Knight passes `first-frame+10` (8.26 s, menu visible).
+- Second follow-up: secondary threads' TEB pairs in the window,
+  `NtUserMessageCall` and the message loop audited, and LD1/ST1 lanes in
+  the low-fault emulator.
+- On the phone the launcher loads `bin\engine.dll`, which loads its own
+  modules up to `shaderapidx9`, Wine's i386 `d3d9`/`wined3d` and
+  `localize` (64 i386 images). FEX's generated code then calls a null
+  helper and the child hangs (18.8 million serviced low faults by then).
+- Hollow Knight passes `first-frame+10` (8.76 s, menu visible).
 
 Still open in step 2:
 
-- secondary WoW64 threads (next: the launcher's stop);
-- wow64win's remaining thunks, starting with `NtUserMessageCall`;
+- the null helper call after `localize.dll`;
+- wow64win's remaining unaudited thunks (D3DKMT, raw input, hooks);
+- freeing a secondary thread's pair and 32-bit stack before process exit;
 - pointers inside the unix libraries' WoW64 parameter blocks;
 - fonts for i386 GDI;
 - other query classes;
@@ -385,9 +389,14 @@ stops (`c00000bb`). Questions 1 and 2 are answered: WoW64 runs beside the ARM64E
 session, and FEX's WoW64 module runs on iOS. Hollow Knight passes
 `first-frame+10` (9.61 s, menu visible).
 
-**Next:** secondary WoW64 threads (the launcher's stop), then the
-remaining blockers as Portal 2 reaches them, toward the milestone's last
-marker, `bin/engine.dll`.
+**Milestone 1 reached, 2026-10-03:** a Portal 2 play shows every marker
+(`portal2.exe` at `0x400000`, i386 `kernel32` and `ntdll`, the entry point,
+`bin/engine.dll` at `0x79640000`, the serviced-fault count); Hollow Knight
+passes `first-frame+10` on the same IPA
+([evidence](evidence/2026-10-03-portal2-wow64-pointers.md)).
+
+**Next:** step 4, inline translation, to cut the 18.8 million serviced low
+faults; then the null helper call after `localize.dll`.
 
 - Port the iOS JIT plumbing from `ARM64EC/Module.cpp` into `WOW64/Module.cpp`:
   pool allocation, aliases, call-return stacks and the transition hooks. Share

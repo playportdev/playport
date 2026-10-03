@@ -67,3 +67,5 @@
 0066-ntdll-alias-the-apiset-map-and-KUSER_SHARED_DATA-int.patch
 0067-ntdll-give-a-WoW64-window-s-PEB32-the-debug-channel-.patch
 0068-ntdll-load-an-i386-child-s-unix-libraries-with-their.patch
+0069-ntdll-give-a-windowed-WoW64-owner-s-new-threads-TEB-.patch
+0070-signal-emulate-LD1-and-ST1-lanes-in-the-low-fault-em.patch

@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 23:19:14 +0200
+Subject: [PATCH] ntdll: give a windowed WoW64 owner's new threads TEB pairs in
+ its window
+
+virtual_alloc_teb refused every thread a windowed owner created, so
+Portal 2's launcher waited forever for its first worker thread. Allocate
+the new thread's TEB pair in the owner's window, top-down below KUSER_SHARED_DATA (a 2 GiB guest's last user page),
+with the initial pair's layout and guest-relative TEB32 fields; its
+32-bit stack already comes from the window (init_thread_stack). Record
+the thread: its thread data is freed later by another thread, so
+freeing frees only its native stack while the window still holds the
+TEB, and the window's teardown, which frees the pairs and 32-bit
+stacks, unlinks such threads from teb_list so nothing reads their TEBs
+again. A thread's pair and 32-bit stack stay in the window until then.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c | 104 +++++++++++++++++++++++++++++++--
+ 1 file changed, 100 insertions(+), 4 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index a6092d6..e6d3d7a 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -14960,6 +14960,16 @@ static struct
+     TEB *original_teb, *paired_teb;
+ } ios_wow64_windows[IOS_WOW64_WINDOWS_MAX];
+ static pthread_mutex_t ios_wow64_windows_lock = PTHREAD_MUTEX_INITIALIZER;
++/* Secondary threads of windowed owners, whose TEB pairs live in the window.
++ * The window's teardown frees the pairs and 32-bit stacks; a thread's data
++ * is freed later by another thread, so teardown unlinks it from teb_list and
++ * marks it (window 0): its TEB must not be read again. Windows lock. */
++#define IOS_WOW64_THREADS_MAX 512
++static struct
++{
++    struct thread_data *data;
++    uintptr_t window;
++} ios_wow64_threads[IOS_WOW64_THREADS_MAX];
+ 
+ uintptr_t ios_wow64_base_for_peb( void *owner )
+ {
+@@ -15750,12 +15760,25 @@ static void ios_wow64_release_window( void *owner )
+                      (void *)base, ios_wow64_window_serviced );
+             server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+             /* The dying thread still needs its TEB for exit logging/longjmp.
+-             * No secondary WoW64 thread exists yet (allocation rejects it). */
++             * Only the initial thread restores it; an exit from a secondary
++             * thread keeps the window. */
+             if (!ios_wow64_restore_initial_teb( i ))
+             {
+                 server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+                 break;
+             }
++            {
++                unsigned int j, threads = 0;
++                for (j = 0; j < IOS_WOW64_THREADS_MAX; j++)
++                {
++                    if (!ios_wow64_threads[j].data || ios_wow64_threads[j].window != base) continue;
++                    list_remove( &ios_wow64_threads[j].data->entry );
++                    list_init( &ios_wow64_threads[j].data->entry );
++                    ios_wow64_threads[j].window = 0;
++                    threads++;
++                }
++                if (threads) dprintf( 2, "[wow64-window] release: %u secondary thread(s) unlinked\n", threads );
++            }
+             __atomic_store_n( &ios_wow64_windows[i].owner, NULL, __ATOMIC_RELEASE );
+             ios_wow64_windows[i].base = 0;
+             ios_wow64_windows[i].peb32 = NULL;
+@@ -16222,6 +16245,77 @@ void virtual_alloc_first_teb(void)
+ }
+ 
+ 
++/* A windowed owner's new thread: its TEB pair in the owner's window, top-down
++ * below KUSER_SHARED_DATA (a 2 GiB guest's last user page), laid out as the initial pair (native TEB, TEB32 at +0x2000,
++ * guest-relative TEB32 fields). Its 32-bit stack follows in init_thread_stack. */
++static NTSTATUS ios_wow64_alloc_teb( struct thread_data *data )
++{
++    void *owner = ios_jit_current_peb();
++    unsigned int i, entry = IOS_WOW64_THREADS_MAX;
++    NTSTATUS status = STATUS_NOT_SUPPORTED;
++    struct file_view *view;
++    uintptr_t window = 0;
++    uint32_t guest = 0;
++    sigset_t sigset;
++
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; owner && i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (ios_wow64_windows[i].owner == owner) window = ios_wow64_windows[i].base;
++    for (i = 0; i < IOS_WOW64_THREADS_MAX && entry == IOS_WOW64_THREADS_MAX; i++)
++        if (!ios_wow64_threads[i].data) entry = i;
++    if (window && entry == IOS_WOW64_THREADS_MAX) status = STATUS_NO_MEMORY;
++    if (window && entry < IOS_WOW64_THREADS_MAX)
++    {
++        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++        if (!(status = ios_wow64_image_gap( window, IOS_WOW64_PAIR_SIZE, IOS_WOW64_NULL_GUARD,
++                                            0x7ffe0000, TRUE, &guest )) &&
++            !(status = ios_wow64_claim_view( window, guest, IOS_WOW64_PAIR_SIZE,
++                                             VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, &view )))
++        {
++            init_teb( data, view->base );
++            ios_wow64_init_teb32( data->teb, guest );
++            ios_wow64_threads[entry].data = data;
++            ios_wow64_threads[entry].window = window;
++        }
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    dprintf( 2, "[wow64-pair] thread tid=%04x owner=%p native=%p guest=%#x teb32_guest=%#x status=%#x\n",
++             (unsigned int)data->tid, owner, status ? NULL : data->teb, guest,
++             status ? 0 : guest + IOS_WOW64_TEB_OFFSET, (unsigned int)status );
++    return status;
++}
++
++/* virtual_free_thread_data for a windowed owner's secondary thread: free its
++ * native stack while the window holds its TEB, and unlink it. The TEB pair
++ * and 32-bit stack stay in the window until its teardown. FALSE for any
++ * other thread. */
++static BOOL ios_wow64_free_teb( struct thread_data *data )
++{
++    void *stack = NULL;
++    BOOL found = FALSE;
++    unsigned int i;
++    sigset_t sigset;
++    SIZE_T size = 0;
++
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_THREADS_MAX && !found; i++)
++    {
++        if (ios_wow64_threads[i].data != data) continue;
++        found = TRUE;
++        if (ios_wow64_threads[i].window) stack = data->teb->DeallocationStack;
++        ios_wow64_threads[i].data = NULL;
++        ios_wow64_threads[i].window = 0;
++        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++        list_remove( &data->entry );
++        list_init( &data->entry );
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    if (stack) NtFreeVirtualMemory( GetCurrentProcess(), &stack, &size, MEM_RELEASE );
++    return found;
++}
++
+ /***********************************************************************
+  *           virtual_alloc_teb
+  */
+@@ -16232,9 +16326,8 @@ NTSTATUS virtual_alloc_teb( struct thread_data *data )
+     SIZE_T size;
+     NTSTATUS status = STATUS_SUCCESS;
+ 
+-    /* Do not hand a WoW64 owner the session's unpaired native layout. General
+-     * paired-thread allocation/free is not implemented by this bootstrap. */
+-    if (ios_wow64_current_base()) return STATUS_NOT_SUPPORTED;
++    /* Never hand a WoW64 owner the session's unpaired native layout. */
++    if (ios_wow64_current_base()) return ios_wow64_alloc_teb( data );
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+     if (next_free_teb)
+     {
+@@ -16313,6 +16406,9 @@ void virtual_free_thread_data( struct thread_data *data )
+     WOW_TEB *wow_teb;
+ 
+     if (!(teb = data->teb)) goto done;
++#ifdef WINE_IOS
++    if (ios_wow64_free_teb( data )) goto done;
++#endif
+ 
+     if (teb->DeallocationStack)
+     {
