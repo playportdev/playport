@@ -376,6 +376,8 @@ final class JitHelper: NSObject, NSXPCListenerDelegate, JITHost, @unchecked Send
         #if !PLAYPORT_RELEASE
         c.remoteObjectInterface?.setClasses(NSSet(object: PPMemoryRegion.self) as! Set<AnyHashable>,
             for: #selector(JITHelping.memoryAllocate(bytes:token:reply:)), argumentIndex: 0, ofReply: true)
+        c.remoteObjectInterface?.setClasses(NSSet(object: PPMemoryRegion.self) as! Set<AnyHashable>,
+            for: #selector(JITHelping.memoryAllocateForRuntime(bytes:token:reply:)), argumentIndex: 0, ofReply: true)
         #endif
         c.resume()
         connection = c

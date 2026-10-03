@@ -40,6 +40,9 @@ public protocol JITHelping {
     func lifetimeProbe(intervalMs: Int, capS: Int, hold: Bool, pairingFile: Data, reply: @escaping (Int32) -> Void)
     /// A bounded non-executable RAM object owned by this helper, transported as a Mach send right.
     func memoryAllocate(bytes: UInt64, token: UInt64, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void)
+    /// Runtime: retain no helper mapping or original handle. The app's mapping
+    /// keeps the object alive; unmapping it reclaims its pages automatically.
+    func memoryAllocateForRuntime(bytes: UInt64, token: UInt64, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void)
     func memoryReport(seed: UInt64, verify: Bool, reply: @escaping (NSDictionary, Bool) -> Void)
     func memoryRelease(reply: @escaping (NSDictionary) -> Void)
     /// Dev builds: the last probe's file, deleted as it is read (empty if none).

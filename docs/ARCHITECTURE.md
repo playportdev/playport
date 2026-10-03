@@ -136,8 +136,19 @@ A dev build's Settings › Developer › Probes can measure 64 MiB, 2 GiB or
 entry crosses XPC as a send right; full-buffer checks in both processes
 prove aliasing and retention. On the phone, 4 GiB raised the helper's footprint,
 not the app's ([evidence](evidence/2026-10-03-helper-owned-memory.md)). This is
-not a private no-footprint entitlement, a file-backed swap area, or a claim
-that a game already uses that backing. System-wide pressure still applies.
+not a private no-footprint entitlement or a file-backed swap area.
+
+Settings › Developer › Memory also has **Extra FEX RAM (experiment)**, off
+by default and dev-only. On the next Play, `SharedMemoryBroker` supplies
+helper-owned backing for power-of-two 1–256 MiB RW anonymous FEX data mappings
+through madeira-unix 0049's optional host hook. Executable mappings, guest
+images, reservations and hot stack resets keep their ordinary path. Wine owns
+the mappings' protection/decommit/unmap lifetime; the helper retains no mapping
+or handle. A refused allocation falls back to ordinary mmap. Release links an
+explicit rejecting stub, no broker. The dev in-game menu shows both footprints.
+[Hollow Knight phone evidence](evidence/2026-10-03-fex-helper-memory.md) proves
+real game use, but only a modest footprint reduction in this title. Aggregate
+use above 8 GiB is not established. System-wide pressure still applies.
 
 ### JIT pool placement
 

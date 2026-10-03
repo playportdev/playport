@@ -79,8 +79,10 @@ that would spend the helper's last 128 MiB, instead of deliberately triggering j
 - **Proved:** a directly usable, zero-copy anonymous RAM capability whose
   backing is charged to the helper, with 4 GiB of real data verified on this
   non-jailbroken phone. App Groups and new private entitlements were unnecessary.
-- **Not yet proved here:** a game's allocator using this backing, aggregate
-  usage above 8 GiB, or access to all phone RAM. System-wide pressure still applies.
+- **Not proved by these allocation runs:** a game's allocator using this
+  backing, aggregate usage above 8 GiB, or access to all phone RAM.
+  [Follow-up game runs](2026-10-03-fex-helper-memory.md) now prove the first,
+  not the latter two. System-wide pressure still applies.
   This evidence does not claim a full-RAM unlock or independent verification of
   the reported emulator release.
 - `pp check` dev and release passed; `pp build` passed all 71 IPA checks.

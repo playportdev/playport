@@ -7,6 +7,13 @@ import HostIO
 import PlayportKit
 import WineHost
 
+#if PLAYPORT_RELEASE
+// The static runtime references the optional host hook. Release links no
+// SharedMemory transport or dev broker; explicitly retain the ordinary mmap.
+@_cdecl("playport_memory_backing")
+func playportMemoryBackingDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt, _ protection: Int32) -> Int32 { 0 }
+#endif
+
 /// The app process's one Wine session (decisions 0027, 0030). A Play acquires
 /// the JIT pool, starts the wineserver and the session root
 /// (playport-session.exe, the process's one __wine_main), and runs its title
@@ -59,6 +66,9 @@ final class WineHostRuntime: @unchecked Sendable {
         let check = SelfCheck.run(pool: pool)
         guard check.ok else { return (false, activation, "pool \(mb) MiB; selfcheck \(check.name)", check.name) }
         pooled()
+        #if !PLAYPORT_RELEASE
+        SharedMemoryBroker.install()
+        #endif
         let rc = runtime.path.withCString { rt in
             prefixURL.path.withCString { px in
                 AppLog.path.withCString { lp in

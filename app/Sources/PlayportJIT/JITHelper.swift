@@ -133,6 +133,20 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
         }
     }
 
+    func memoryAllocateForRuntime(bytes: UInt64, token: UInt64, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void) {
+        queue.async {
+            let state = pp_memory_snapshot() as NSDictionary
+            let available = (state["available"] as? NSNumber)?.uint64Value ?? 0
+            guard bytes > 0, bytes <= 256 << 20, bytes + (128 << 20) < available else {
+                reply(nil, state, "helper budget exhausted")
+                return
+            }
+            var error: NSError?
+            let region = pp_memory_create(bytes, token, &error)
+            reply(region, state, error?.localizedDescription)
+        }
+    }
+
     func memoryReport(seed: UInt64, verify: Bool, reply: @escaping (NSDictionary, Bool) -> Void) {
         queue.async { [self] in
             let ok = !verify || memoryRegions.allSatisfy { pp_memory_verify($0, seed + $0.token) }
