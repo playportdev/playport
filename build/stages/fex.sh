@@ -1,6 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Build FEX's arm64ec PE (libarm64ecfex.dll, shipped as xtajit64.dll) from the
+# Build FEX's arm64ec PE (libarm64ecfex.dll, shipped as xtajit64.dll) and
+# aarch64 WoW64 PE (libwow64fex.dll, shipped as xtajit.dll) from the
 # FEX pin in pins.lock (a FEX-Emu/FEX release) plus patches/fex-port (Madeira's
 # FEX port, rebased) and patches/fex, with Linux llvm-mingw.
 # docs/BUILDING.md, "The pipeline" (fex).
@@ -15,7 +16,8 @@
 # (FEX-Emu/rpmalloc, from a cache mirror) with patches/rpmalloc-port and
 # patches/rpmalloc on it.
 # The series are applied when the trees are still at their pins.
-# Output: ROOT/fex/build-arm64ec/Bin/libarm64ecfex.dll. The DLL embeds its
+# Outputs: ROOT/fex/build-{arm64ec,wow64}/Bin/lib{arm64ec,wow64}fex.dll.
+# The ARM64EC DLL embeds its
 # pin's commit time, not the build time (SOURCE_DATE_EPOCH below).
 set -euo pipefail
 
@@ -59,31 +61,40 @@ MAP="-ffile-prefix-map=$F=fex -ffile-prefix-map=$M=llvm-mingw"
 # The epoch is in the flags too, so objects built before it are compiled again.
 export SOURCE_DATE_EPOCH=$(git -C "$F" log -1 --format=%ct "$PIN")
 MAP="$MAP -DPLAYPORT_SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
-cmake -S "$F" -B "$F/build-arm64ec" -G Ninja \
-    -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=arm64ec \
+for mode in arm64ec wow64; do
+    target=arm64ec; dllname=arm64ecfex; machine=ARM64EC; ios_flags=-DFEX_IOS_HOST=1
+    # Build-only WoW64 scaffolding. Its module does not yet supply the iOS
+    # JIT/mono/arena bindings shared FEXCore needs: milestone 1 step 3 ports
+    # those before enabling FEX_IOS_HOST here. Do not link no-op bindings.
+    if [ "$mode" = wow64 ]; then target=aarch64; dllname=wow64fex; machine=ARM64; ios_flags=; fi
+cmake -S "$F" -B "$F/build-$mode" -G Ninja \
+    -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR="$target" \
     -DCMAKE_FIND_ROOT_PATH="$M" -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
     -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+    -DCMAKE_DLLTOOL="$M/bin/aarch64-w64-mingw32-dlltool" \
     -DCMAKE_C_COMPILER="$M/bin/aarch64-w64-mingw32-clang" \
     -DCMAKE_CXX_COMPILER="$M/bin/aarch64-w64-mingw32-clang++" \
     -DCMAKE_ASM_COMPILER="$M/bin/aarch64-w64-mingw32-clang" \
-    -DCMAKE_C_COMPILER_TARGET=arm64ec-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=arm64ec-windows-gnu \
-    -DCMAKE_ASM_COMPILER_TARGET=arm64ec-windows-gnu \
+    -DCMAKE_C_COMPILER_TARGET="$target-windows-gnu" -DCMAKE_CXX_COMPILER_TARGET="$target-windows-gnu" \
+    -DCMAKE_ASM_COMPILER_TARGET="$target-windows-gnu" \
     -DCMAKE_C_COMPILER_AR="$M/bin/aarch64-w64-mingw32-llvm-ar" \
     -DCMAKE_C_COMPILER_RANLIB="$M/bin/aarch64-w64-mingw32-llvm-ranlib" \
     -DCMAKE_CXX_COMPILER_AR="$M/bin/aarch64-w64-mingw32-llvm-ar" \
     -DCMAKE_CXX_COMPILER_RANLIB="$M/bin/aarch64-w64-mingw32-llvm-ranlib" \
-    -DCMAKE_C_FLAGS="-DFEX_IOS_HOST=1 -fuse-ld=lld $MAP" \
-    -DCMAKE_CXX_FLAGS="-DFEX_IOS_HOST=1 -fuse-ld=lld -stdlib=libc++ $MAP" \
-    -DCMAKE_ASM_FLAGS="-DFEX_IOS_HOST=1" \
+    -DCMAKE_C_FLAGS="$ios_flags -fuse-ld=lld $MAP" \
+    -DCMAKE_CXX_FLAGS="$ios_flags -fuse-ld=lld -stdlib=libc++ $MAP" \
+    -DCMAKE_ASM_FLAGS="$ios_flags" \
     -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=lld -Wl,--no-insert-timestamp" \
     -DFEX_IOS_HOST_BUILD=ON -DENABLE_LTO=FALSE -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF \
-    > "$ROOT/fex-configure.log"
-cmake --build "$F/build-arm64ec" -j "$JOBS" > "$ROOT/fex-build.log"
-dll=$F/build-arm64ec/Bin/libarm64ecfex.dll
+    > "$ROOT/fex-$mode-configure.log"
+# Build the module only: the aarch64 configuration also defines host tools.
+cmake --build "$F/build-$mode" --target "$dllname" -j "$JOBS" > "$ROOT/fex-$mode-build.log"
+dll=$F/build-$mode/Bin/lib$dllname.dll
 # FEX builds without -g; the only debug info is the locally rebuilt arm64ec
 # CRT's (docs/BUILDING.md, llvm-mingw), which names llvm-mingw's install path.
 "$M/bin/llvm-strip" --strip-debug "$dll"
-"$M/bin/llvm-readobj" --file-headers "$dll" | grep -q 'IMAGE_FILE_MACHINE_ARM64EC' ||
-    { echo "$dll is not an ARM64EC image"; exit 1; }
+"$M/bin/llvm-readobj" --file-headers "$dll" | grep -q "Machine: IMAGE_FILE_MACHINE_$machine " ||
+    { echo "$dll is not an $machine image"; exit 1; }
 printf '%s %s %s\n' "$(stat -c %s "$dll")" "$(sha256sum "$dll" | cut -d' ' -f1)" "$dll"
+done

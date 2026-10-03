@@ -12,13 +12,13 @@ Walks every file under */<arch-dir>/ in the build tree except intermediates
 
 kind            pe | pe-data (PE with no executable section: a -Wb,--data-only
                 resource/typelib module) | data (not an MZ/PE image)
-header_machine  the raw IMAGE_FILE_HEADER.Machine (0xAA64 arm64, 0x8664 amd64)
+header_machine  raw IMAGE_FILE_HEADER.Machine (0x14C i386, 0xAA64 arm64, 0x8664 amd64)
 readobj_machine what llvm-readobj reports; for an ARM64EC image (AMD64 header
                 plus CHPE metadata) it reports IMAGE_FILE_MACHINE_ARM64EC
 wine_builtin    yes if the "Wine builtin DLL" stamp is at file offset 0x40
 
 Exit status 1 if any code-bearing PE in the set is not the machine the set
-claims (aarch64-windows -> ARM64; arm64ec-windows -> ARM64EC). A pe-data image
+claims (i386-windows -> I386; aarch64-windows -> ARM64; arm64ec-windows -> ARM64EC). A pe-data image
 in the arm64ec set carries no EC code, so lld writes a plain AMD64 header with
 no CHPE metadata; AMD64 is accepted for those only.
 """
@@ -29,7 +29,8 @@ import subprocess
 import sys
 
 SKIP_EXT = {".o", ".a", ".res", ".c"}
-EXPECT = {"aarch64-windows": "IMAGE_FILE_MACHINE_ARM64", "arm64ec-windows": "IMAGE_FILE_MACHINE_ARM64EC"}
+EXPECT = {"i386-windows": "IMAGE_FILE_MACHINE_I386",
+          "aarch64-windows": "IMAGE_FILE_MACHINE_ARM64", "arm64ec-windows": "IMAGE_FILE_MACHINE_ARM64EC"}
 
 
 def has_code(data, pe):

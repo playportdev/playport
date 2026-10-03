@@ -36,8 +36,8 @@
 #   sources  check pins.lock against the upstream/madeira gitlinks and make
 #            sure the submodules the build clones from are checked out
 #   unix     libntdll_unix.a, libwin32u_unix.a, libwineserver.a, crypto statics
-#   pe       the Wine PE DLL sets (aarch64-windows, arm64ec-windows)
-#   fex      libarm64ecfex.dll (xtajit64.dll)
+#   pe       the Wine PE DLL sets (i386, aarch64 and arm64ec-windows)
+#   fex      libarm64ecfex.dll (xtajit64.dll), libwow64fex.dll (xtajit.dll)
 #   dxmt     the DXMT unix slice (libdxmt_combined.a) and PE DLLs, one patched tree
 #   vulkan   the Vulkan Direct3D backend (decision 0014): KosmicKrisp for iOS as
 #            app/Staged/KosmicKrisp.xcframework (build/stages/mesa.sh), DXVK and
@@ -255,9 +255,9 @@ stage_pe() {
     # so the manifests the records keep describe those copies.
     run pe python3 "$HERE/stages/wine-pe-strip.py" "$w" "$RUN/pe/staged" "$LLVM_MINGW/bin/llvm-strip"
     say "  $(grep '^wine-pe-strip:' "$RUN/logs/pe.log" | tail -1 | cut -d' ' -f2-)"
-    for arch in aarch64 arm64ec; do   # run logs a command's output: the manifest goes to its file inside it
+    for arch in i386 aarch64 arm64ec; do   # run logs a command's output: the manifest goes to its file inside it
         run pe sh -c 'python3 "$1" "$2" "$3-windows" "$4" > "$5"' manifest "$HERE/stages/wine-pe-manifest.py" \
-            "$RUN/pe/staged/$([ $arch = aarch64 ] && echo build-macos || echo build-arm64ec)" $arch \
+            "$RUN/pe/staged/$([ $arch = arm64ec ] && echo build-arm64ec || echo build-macos)" $arch \
             "$LLVM_MINGW/bin/llvm-readobj" "$RUN/pe/manifest-$arch.tsv"
     done
     sync_pe_manifests
@@ -277,7 +277,7 @@ stage_idevice() {
 # so a reverted record never disagrees with the trees being staged).
 sync_pe_manifests() {
     local arch
-    for arch in aarch64 arm64ec; do
+    for arch in i386 aarch64 arm64ec; do
         if cmp -s "$RUN/pe/manifest-$arch.tsv" "$HERE/generated/wine-pe-$arch-windows.tsv"; then
             say "  wine-pe $arch manifest unchanged"
         else
