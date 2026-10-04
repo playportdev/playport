@@ -1,6 +1,6 @@
 # Portal 2: plan to the first milestone
 
-**Status:** proposed, 2026-10-03; milestone 1 done, milestone 2 in progress. Nothing here is decided until a decision record
+**Status:** proposed, 2026-10-03; milestones 1 and 2 reached (2026-10-04). Nothing here is decided until a decision record
 accepts it. It would extend [0005](decisions/0005-title-cohort.md), which limits the
 cohort to x86-64 Direct3D 11 titles. This plan replaces the direction of the
 `portal2-runtime` branch before milestone 0; the review below says why.
@@ -447,31 +447,31 @@ passes `first-frame+10` on the same IPA
 
 ## Milestone 2: Portal 2's menu
 
-**In progress, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-d3d9-vulkan.md)).
+**Reached, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-d3d9-vulkan.md)).
+Portal 2 plays its intro videos and reaches its main menu about 30 s after Play.
+The menu runs at 60.0 FPS when capped at 60 (16.68 ms per frame, 3.55 ms of GPU
+time) and at 119.3 FPS with no limit (the 120 Hz panel, 8.39 ms per frame), with
+8 serviced low faults. **Go/no-go: go.** The menu is at interactive speed on
+emulated i386 code, so there is no case yet for a native aarch64 D3D9. Gameplay
+has not been measured. Hollow Knight passes `first-frame+10` on the same IPA.
 
-The null shader-API factory was i386 `opengl32` failing its `DllMain` with no unix
-table. That failure took `wined3d`, `d3d9` and `shaderapidx9.dll` down with it.
-Direct3D 9 now runs on DXVK's i686 `d3d9.dll` over winevulkan's WoW64 thunks and
-KosmicKrisp (Vulkan backend overlay). The engine creates its device and swap chain,
-then faults in the emulated `steam_api.dll` about 22 s after launch (exit 100). No
-game frame has been shown yet.
-
-**Done when** a Portal 2 play reaches the main menu, with a screenshot, and
-`pp perf` (or the HUD) gives its frame time and the serviced-fault count. Hollow
-Knight still passes `first-frame+10`. **Go/no-go:** if the menu is far from
-interactive speed, the next step is a native aarch64 D3D9 reached by a thunk, not
-more emulation work.
-
-1. *(done)* The i386 Direct3D 9 path: DXVK `d3d9` (i686), the `syswow64` overlay,
-   and winevulkan/win32u Vulkan through the window (wine-unix 0011). Also the next
-   wow64win audits (wine-pe 0022), data section views in the window
-   (madeira-unix 0071), no WoW64 audio driver (0072), and fex 0020's read-fault fix.
-2. **Next:** the `steam_api.dll` fault (`mov ebx, [eax+0xc]` on a garbage object).
-   Find the native code that writes NULs to guest addresses (`ml1000`) and the
-   accesses the subfloor handler refuses. Then continue to the first presented
-   frame and the menu, auditing each wow64win call as Portal 2 reaches it.
-3. Choose Portal 2's default backend. DXMT cannot run i386 Direct3D 9.
-4. Measure the menu: frame time and serviced faults.
+1. The null shader-API factory: i386 `opengl32` had no unix table, so its `DllMain`
+   failed. That failure took `wined3d`, `d3d9` and `shaderapidx9.dll` down with it.
+2. The i386 Direct3D 9 path:
+   - DXVK's i686 `d3d9.dll`, in the Vulkan overlay over `syswow64`;
+   - winevulkan and win32u's Vulkan through the window, with placed memory maps
+     (wine-unix 0011);
+   - the next wow64win audits (wine-pe 0022);
+   - data section views in the window (madeira-unix 0071).
+3. Blockers on the way:
+   - no WoW64 audio driver (0072);
+   - fex 0020: read faults in an RWX interval go to the guest;
+   - the emulated Steam API's MSVC vtable order for callbacks (gbe 0004);
+   - socket buffers through the window (wine-unix 0012).
+4. **Next:**
+   - choose Portal 2's default backend (DXMT cannot run i386 Direct3D 9; the runs
+     set Vulkan per game);
+   - then milestone 3.
 
 Still open from milestone 1 step 2: freeing a thread's pair and stack, pointers
 inside other unix libraries' WoW64 parameter blocks (audio now has none), i386
@@ -479,8 +479,9 @@ GDI fonts, other query classes, and the global WoW64 state.
 
 ## After milestone 2 (outline only)
 
-- **Milestone 3:** audio and input through `wow64win`, gameplay, save and reload,
-  and the player's settings on the game's page.
+- **Milestone 3:** gameplay (a chamber played with a controller, measured with
+  `pp perf --pad`), input and audio (a WoW64 table for the null driver) through
+  `wow64win`, save and reload, and the player's settings on the game's page.
 
 ## Rules that still apply
 

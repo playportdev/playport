@@ -289,7 +289,7 @@ resource	Runtime/aarch64-windows/winmm.dll	1179648	61c2d732ab8c9ca1f63c167c25ec5
 resource	Runtime/aarch64-windows/wintrust.dll	589824	bdd142d70017556b28fd66c4450416888c7702b004bc935dd34df82532962191	wine-build	build-macos/dlls/wintrust/aarch64-windows/wintrust.dll	P2
 resource	Runtime/aarch64-windows/winusb.dll	458752	9176d4d428f18144bf403b716fe787646e59eef9ee86bbb6fb0e2346daf540ec	wine-build	build-macos/dlls/winusb/aarch64-windows/winusb.dll	P2
 resource	Runtime/aarch64-windows/wlanapi.dll	458752	084d52fd07207841b3f23beedd5bbc1c50c01f7719978e3d860aef3721fa324f	wine-build	build-macos/dlls/wlanapi/aarch64-windows/wlanapi.dll	P2
-resource	Runtime/aarch64-windows/wow64.dll	524288	c2c4cdddc4d9b23e408dbffc243475731ea44cf97923faac309e1195954c6ed7	wine-build	build-macos/dlls/wow64/aarch64-windows/wow64.dll	P2
+resource	Runtime/aarch64-windows/wow64.dll	524288	15843757607aa865ed70643bd4c4821f5eb8590d52b6bac3ae038e4c71c76deb	wine-build	build-macos/dlls/wow64/aarch64-windows/wow64.dll	P2
 resource	Runtime/aarch64-windows/wow64win.dll	917504	e073504d8cd5d5fe1ba0f8c4ce083d20f85d248fd5435bb14ada9f8f2267f097	wine-build	build-macos/dlls/wow64win/aarch64-windows/wow64win.dll	P2
 resource	Runtime/aarch64-windows/ws2_32.dll	589824	b251a58223d0ce6fb9109b01342890eda9253267acc242ef7e5053aa0f51bfbd	wine-build	build-macos/dlls/ws2_32/aarch64-windows/ws2_32.dll	P2
 resource	Runtime/aarch64-windows/wsock32.dll	524288	9329d1286b1be6b9686f12fa0460aa8313b858145bd2cd21124e8bd505aa92f8	wine-build	build-macos/dlls/wsock32/aarch64-windows/wsock32.dll	P2
@@ -928,8 +928,8 @@ resource	Runtime/vulkan/arm64ec-windows/dxgi.dll	5509120	3eceb576e42ab2ecc2e599a
 resource	Runtime/vulkan/arm64ec-windows/d3d12.dll	196608	36e1555ac92da8faa7c28d63008693b601ff34d364860e58891dacfe4e7a1b34	vulkan-pe	arm64ec-windows/d3d12.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6340608	aac684cecb314bfa8e7d61e8745c47adac9a0fc4a318c3ac1579bb45043b6ea3	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d9.dll	7467008	d6da150273f4ea83d9348146b81ba487afc6e8709b425f675eda4687e2fa140d	vulkan-pe	i386-windows/d3d9.dll	P6-vulkan-pe
-resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8348672	a001578d1f41a34f8a180f70a83f7d792f0df7b0110fbff0888e1d7dae4a80d2	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
-resource	Runtime/steamapi/i386-windows/steam_api.dll	8663040	599666b7bd21122ec25b8309693f1c3f3b0e89b7a3299c02a625dbd1f33d1832	steamapi	i386-windows/steam_api.dll	P8-steamapi
+resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8348672	d0b0eb1bff3603db60338572f90f9049bc1389fa57d7bf059a8495013ead9bc7	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
+resource	Runtime/steamapi/i386-windows/steam_api.dll	8663040	9186f1cddb7bd0f38636197de1c9ef48bac4b7d3227c79e528d5fb5b1b942123	steamapi	i386-windows/steam_api.dll	P8-steamapi
 resource	Runtime/arm64ec-windows/playport-session.exe	18944	911b219564c65f507c5c8e68393709f56e9b281ab6765914479495cb88821126	session	playport-session.exe	P9-session
 resource	Runtime/nls/c_1252.nls	66082	e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76	unix	wine/nls/c_1252.nls	nls
 resource	Runtime/nls/c_20127.nls	66082	951a19ce0d3c785d12ea94cb28ce5c2c096d302e35b3fb3e8b35248a006435ba	unix	wine/nls/c_20127.nls	nls
@@ -945,7 +945,7 @@ resource	Runtime/nls/normnfkd.nls	76294	da1a3cd3b79d995a0ea0298d842e7e49be71bb88
 resource	Runtime/nls/sortdefault.nls	3394804	93577599d1b0335d6b2b3560d2bc6bf3681193daae2a32b28cbd2612bc2b1d09	unix	wine/nls/sortdefault.nls	nls
 resource	Runtime/registry/system.reg	482589	a7243a86a08786bdaba078d1f79bd55db7234cccf95249c0421f5729da9bb35b	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	1599	e534357e8ae05068ac00258faf0b3e6086f77c1170b502a9fd46b59052c9ebd6	registry	user.reg	P7-reg
-link	lib/libntdll_unix.a	2977984	e0143d79632c922b4ba4d51e15dc5eb60d5b1a7859526493d484c803cd29f709	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	3038112	4e3aa74f0ecbf3664124071af9105b5fc9e12a9f26679f356af5049cd407939a	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4766552	0a9f3367de039b54bfb4f60d3b6843751111bc92f5f883fcbe7355c91933fc4a	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1205616	fae818971a85c84e574b0a022261245ce4076488f57aeea71fcf40a40c6821c0	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto

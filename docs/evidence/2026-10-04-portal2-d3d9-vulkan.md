@@ -2,17 +2,25 @@
 
 ## Result
 
-[Milestone 2](../PORTAL2-PLAN.md#milestone-2-portal-2s-menu) has started. Portal 2's i386
-child now creates its Direct3D 9 device and a 1564x720 Vulkan swap chain through
-DXVK's i386 `d3d9.dll` and winevulkan's WoW64 thunks, on KosmicKrisp. It loads its
-shader DLLs and compiles shaders on DXVK's six threads. About 22 s after launch, the
-engine faults in the emulated `steam_api.dll` and exits with code 100. This happens
-before any frame of the game's own reaches the screen. The menu has not been reached,
-so there is no frame-time measurement and no go/no-go answer yet. Hollow Knight passes
-`first-frame+10` on the same IPA.
+[Milestone 2](../PORTAL2-PLAN.md#milestone-2-portal-2s-menu) is reached. Portal 2 plays
+its intro videos and reaches its main menu about 30 s after Play. In a measured run,
+the menu runs at the display's rate:
 
-IPA: `.work/out/20261004-080340-39af2094/Playport-26.5-39af2094.ipa` (dev, 665,292,621
-bytes). SHA256: `39af209467f72945b6d668d486cf4880e2c646050ec16d9d68b970a8bbb0616d`.
+- capped at 60 FPS: 60.0 FPS, 16.68 ms per frame, 3.55 ms of GPU time;
+- with no frame limit: 119.3 FPS (the 120 Hz panel, FIFO), 8.39 ms per frame, 3.49 ms
+  of GPU time.
+
+The run serviced 8 low-address faults; the previous build serviced about 307,000 in
+156 s. This is the plan's go/no-go point, and the measurement says go: the menu is at
+interactive speed on emulated i386 code, DXVK and KosmicKrisp. The cost of gameplay
+has not been measured. Hollow Knight passes `first-frame+10` on the same IPA.
+
+Direct3D 9 runs on DXVK's i386 `d3d9.dll` and winevulkan's WoW64 thunks. The last
+blocker was an ABI bug in the emulated Steam API: its MinGW build called the game's
+callback objects through the wrong vtable slot.
+
+IPA: `.work/out/20261004-084225-db9f2d48/Playport-26.5-db9f2d48.ipa` (dev, 665,362,397
+bytes). SHA256: `db9f2d48a792bbf0d84a3b0e28054043ca52ea4e7bb0b3f00c874f76650a6656`.
 `pp build` (79 IPA checks) and `pp test` pass. The new runtime resource is DXVK's
 i386 `d3d9.dll`, 7,467,008 bytes uncompressed.
 
@@ -84,6 +92,22 @@ would need a GL that iOS does not have, and DXMT has no Direct3D 9 and no i386 b
   dependencies dated from configure time, so a patch to `window_audited.h` alone left
   `syswow64`'s `syscall.o` stale. The first wine-pe 0022 IPA (`866cea38`) still
   stopped at the "audited" call.
+- **gbe 0004**: `CCallbackBase`'s `Run` overloads are declared in MSVC's vtable order
+  in a MinGW build. MSVC places overloaded virtuals in reverse order, so the
+  emulator's `Run(pvParam)` reached the game's three-argument `Run`. That is an i386
+  `__thiscall` that pops 16 bytes where 4 were pushed, and it overwrote the frame of
+  `SteamCallResults::runCallResults` (found with a linker map of the same DLL). On
+  x86-64 the two overloads had been swapped silently.
+- **wine-unix 0011, amended**: a command pool's handle is the guest's client
+  pointer, and it now takes the window. `thunk32_vkResetCommandPool` read it through
+  the low-fault handler every frame.
+- **wine-unix 0012**: in a WoW64 call, the AFD socket ioctls take an i386 child's
+  buffer, address and control pointers through the window. At the menu, the Steam
+  API's socket polling ran `virtual_check_buffer_for_write` and `sock_ioctl_recv`
+  through the low-fault handler about 2,000 times a second, and the kernel's copy to
+  the low address failed.
+- **wine-pe 0023** also logs the return addresses along the guest's frame-pointer
+  chain.
 
 ## Phone runs
 
@@ -96,7 +120,7 @@ Battery 100%. Each run was `pp install --no-build`, then
 | `p2m2-3` | `8227ea77` (+0022, `make depend`) | `D3D9DeviceEx::ResetSwapChain` 1564x720 windowed; guest AV in ucrtbase `memcpy` (exit 100) |
 | `p2m2-4` | `4dbe2bb0` (+0023) | the fault is `D3D9Shader::D3D9Shader` (d3d9+0x30e9e), destination NULL: `NtMapViewOfSection` `c00000bb` on a pagefile section |
 | `p2m2-5` | `f56170c7` (+0071) | placed maps in the window (`i386 map of 0x400000 bytes: result 0 at 0x704c8c0000`); audio thread loops on a "self-modifying code" read fault, and the host ends the app |
-| `p2m2-6` | `39af2094` (+0072, fex 0020) | `Presenter: Actual swapchain properties` B8G8R8A8, FIFO, 3 images; guest AV in `steam_api.dll`+0x25892 reading `0xe94bfe4c`; exit 100 after 22.1 s; 7,997 serviced low faults |
+| `p2m2-6` | `39af2094` (+0072, fex 0020; first commit) | `Presenter: Actual swapchain properties` B8G8R8A8, FIFO, 3 images; guest AV in `steam_api.dll`+0x25892 reading `0xe94bfe4c`; exit 100 after 22.1 s; 7,997 serviced low faults |
 
 From `p2m2-6`:
 
@@ -111,25 +135,54 @@ info:  Presenter: Actual swapchain properties:
 
 The faulting instruction is `mov ebx, [eax+0xc]` in the emulated Steam API (gbe,
 `P8-steamapi`). Its object pointer `[esp+0xc]` is garbage. The run's `+5.60 s first
-frame` mark is the engine's GDI startup window, not a Direct3D frame. No screenshot
-was taken while the game ran, so nothing on screen is claimed.
+frame` mark is the engine's GDI startup window, not a Direct3D frame. This run took
+no screenshot while the game was running.
 
-**Hollow Knight** (`.work/ui-runs/p2m2-6-hk`, same IPA, after the Portal 2 runs):
-exit 0 at `first-frame+10`, first frame at 9.35 s, main menu in the screenshot.
+- `p2m2-7` (`dd825df4`, callers in 0023): the same function again
+  (`SteamCallResults::runCallResults`, called from `Steam_Client::RunCallbacks`), now
+  in `memcpy` from a garbage vector. The screenshots show the Valve intro video at
+  14 s and "powered by Source" at 19 s: DXVK's frames are on screen.
+- `p2m2-8` (`8dff8b5c`, gbe 0004): no fault in 240 s. The screenshots at 30, 60 and
+  120 s show Portal 2's main menu (PLAY SINGLE PLAYER to QUIT over the rendered
+  background scene).
+
+**Measured** (`pp perf --title app-620 --settings '{"graphics":"vulkan"…}'`, IPA
+`db9f2d48`, battery 94%, thermal nominal throughout):
+
+| Run | Limit | FPS mean (min) | Frame ms | GPU ms | Hitches >25/>50/>100 ms | Serviced low faults |
+| --- | --- | --- | --- | --- | --- | --- |
+| `.work/perf-runs/p2m2-menu-2`, 120 s | 60 | 60.0 (59.6) | 16.68 | 3.55 | 351/3/1 | 8 |
+| `.work/perf-runs/p2m2-menu-nolimit`, 90 s | none | 119.3 (117.0) | 8.39 | 3.49 | — | — |
+
+The windows include the intro videos; the >100 ms hitch is at 15 s, while the menu
+loads. The Metal HUD in the screenshots shows the game's 1564x720 layer at 59.98 FPS
+with 3.50 ms of GPU time (capped), and 114 FPS with 3.32 ms (uncapped). `pp perf`'s
+`cpu%` column reads about 70, mostly on the E cluster. The earlier build (`8dff8b5c`,
+`.work/perf-runs/p2m2-menu`) also held 60 FPS, but serviced about 307,000 low faults
+in 156 s (socket polling and `vkResetCommandPool`); wine-unix 0011's amendment and
+0012 removed them. The 8 that remain are the known native reads of the i386 ntdll
+image.
+
+**Hollow Knight** passes `first-frame+10` after the Portal 2 runs on both committed
+IPAs: `39af2094` (`.work/ui-runs/p2m2-6-hk`, first frame 9.35 s) and `db9f2d48`
+(`.work/ui-runs/p2m2-9-hk`, first frame 8.97 s). Both screenshots show the main menu.
 
 ## Open
 
-- **The `steam_api.dll` fault**: why gbe's object is garbage. It could be a guest
-  pointer that a native conversion damaged, or the 95 refused or 7,997 serviced
-  low-address accesses. Those are native writes of NULs to guest addresses
-  (`ml1000: subfloor wrote NUL at guest 0x6c2d294`, `strb w9, [x10]`), and their
-  caller is not yet known.
-- Portal 2's default backend is DXMT, which cannot run an i386 Direct3D 9 title.
-  Making Vulkan the default for i386 titles is a product decision that has not been
-  taken.
+- Portal 2's default backend is DXMT, which cannot run an i386 Direct3D 9 title;
+  these runs set Vulkan per game. Making Vulkan the default for i386 titles is a
+  product decision that has not been taken.
 - An i386 child has no audio until the null driver has a WoW64 table.
+- The other overloaded virtuals in the Steam interfaces (`ISteamUserStats::GetStat`
+  and `SetStat` with `int32`/`float`, and the like) are still in declaration order in
+  the MinGW build. A game's stat calls reach the other overload, on x86-64 too.
+- The rest of ws2_32's WoW64 unix calls (`getaddrinfo`, `gethostbyname`) still take
+  raw guest pointers.
 - The winevulkan debug callbacks hand the guest host pointers truncated to 32 bits.
   DXVK registers none by default.
+- Native code reads guest `0x370` (a NULL structure) and is refused (`[subfloor] ...
+  REFUSED read ... pc` in `virtual_*`). The caller is not known.
 - `CREATESTRUCT`'s window name reaches wow64win as `0xFFFFFFFF` and is refused (the
   guest gets 0). Its source is not known.
 - Data section views cannot be executable or reprotected.
+- No gameplay, input or save has been tried (milestone 3).

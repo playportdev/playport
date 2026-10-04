@@ -3,3 +3,4 @@
 0001-crash_printer-include-dbghelp.h-in-lower-case.patch
 0002-premake-build-the-Windows-DLLs-with-llvm-mingw-on-Li.patch
 0003-sdk-dll-return-interface-structs-the-way-MSVC-s-memb.patch
+0004-sdk-lay-out-CCallbackBase-s-Run-overloads-in-MSVC-s-.patch

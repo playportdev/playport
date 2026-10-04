@@ -10,3 +10,4 @@
 0009-win32u-take-DC_ATTR-buckets-from-the-shared-WoW64-ar.patch
 0010-ntdll-write-an-i386-child-s-debug-output-from-its-wi.patch
 0011-winevulkan-win32u-convert-an-i386-child-s-Vulkan-poi.patch
+0012-ntdll-convert-an-i386-child-s-socket-buffers-through.patch

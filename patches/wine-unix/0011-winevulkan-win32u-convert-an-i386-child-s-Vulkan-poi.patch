@@ -1,15 +1,17 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Playport <dev@playport.invalid>
 Date: Sun, 4 Oct 2026 07:16:21 +0200
-Subject: [PATCH] winevulkan, win32u: convert an i386 child's Vulkan pointers
- through its window on iOS
+Subject: [PATCH 11/12] winevulkan, win32u: convert an i386 child's Vulkan
+ pointers through its window on iOS
 
 Portal 2's i386 Direct3D 9 runs on DXVK over winevulkan's WoW64 thunks.
 An i386 child's 32-bit pointers are host B + guest in its window
 (madeira-unix 0049), so the thunks' UlongToPtr and PtrToUlong convert
 through the window, with B from the calling thread's TEB32. Handles
-(HANDLE, HWND, HINSTANCE) keep plain conversions, and debug utils'
-64-bit object handles take the window for dispatchable objects.
+(HANDLE, HWND, HINSTANCE) keep plain conversions. A command pool's
+handle, and debug utils' 64-bit handles of dispatchable objects, are
+the guest's client object pointers and take the window too (DXVK resets
+command pools every frame).
 
 win32u's zero_bits is the session's (0), so a child's thread now takes
 the 32-bit zero_bits: its device memory is mapped in its window with
@@ -21,11 +23,11 @@ Class: feature
 Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
 Offered-upstream: no; the window exists only on the iOS port
 ---
- dlls/win32u/vulkan.c             | 46 ++++++++++++++++++++++++++++
- dlls/winevulkan/vulkan.c         | 10 +++++++
- dlls/winevulkan/vulkan_private.h | 51 ++++++++++++++++++++++++++++++++
- dlls/winevulkan/vulkan_thunks.c  | 34 ++++++++++-----------
- 4 files changed, 124 insertions(+), 17 deletions(-)
+ dlls/win32u/vulkan.c             | 46 ++++++++++++++++++++++++++
+ dlls/winevulkan/vulkan.c         | 10 ++++++
+ dlls/winevulkan/vulkan_private.h | 56 ++++++++++++++++++++++++++++++++
+ dlls/winevulkan/vulkan_thunks.c  | 34 +++++++++----------
+ 4 files changed, 129 insertions(+), 17 deletions(-)
 
 diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
 index 261c10c..fdae681 100644
@@ -128,12 +130,12 @@ index 2dac08a..0dcecae 100644
  {
      struct
 diff --git a/dlls/winevulkan/vulkan_private.h b/dlls/winevulkan/vulkan_private.h
-index bc8fe30..1821687 100644
+index bc8fe30..9b2d0aa 100644
 --- a/dlls/winevulkan/vulkan_private.h
 +++ b/dlls/winevulkan/vulkan_private.h
-@@ -151,4 +151,55 @@ static inline void *find_next_struct(const void *s, VkStructureType t)
-     return NULL;
- }
+@@ -27,6 +27,61 @@
+ 
+ #include "wine/rbtree.h"
  
 +#ifdef WINE_IOS
 +/* Playport (iOS): an i386 child's address space is a 4 GiB window at host
@@ -182,9 +184,21 @@ index bc8fe30..1821687 100644
 +#define UlongToPtr(ul) vulkan_wow64_to_host(ul)
 +#undef PtrToUlong
 +#define PtrToUlong(p) vulkan_wow64_to_guest(p)
++/* the command pool's client object is the guest's, and its handle value
++ * a guest pointer */
++#define command_pool_from_handle(handle) \
++    command_pool_from_handle((VkCommandPool)(uintptr_t)vulkan_wow64_client_handle((uintptr_t)(handle)))
 +#else
 +#define vulkan_wow64_client_handle(handle) (handle)
 +#endif
++
+ extern const struct vulkan_funcs *vk_funcs;
+ 
+ struct wine_instance
+@@ -151,4 +206,5 @@ static inline void *find_next_struct(const void *s, VkStructureType t)
+     return NULL;
+ }
+ 
 +
  #endif /* __WINE_VULKAN_PRIVATE_H */
 diff --git a/dlls/winevulkan/vulkan_thunks.c b/dlls/winevulkan/vulkan_thunks.c

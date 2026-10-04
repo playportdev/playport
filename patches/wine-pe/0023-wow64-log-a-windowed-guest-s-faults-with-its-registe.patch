@@ -6,21 +6,22 @@ Subject: [PATCH] wow64: log a windowed guest's faults with its registers and
 
 On iOS, a fault in an i386 guest dispatched to its own handlers left no
 trace of where it happened. Log the first 16 such exceptions with the
-guest's registers and the top of its stack, which name the guest code
-(and its caller) that took them.
+guest's registers, the top of its stack and the return addresses along
+its frame-pointer chain, which name the guest code that took them and
+its callers.
 
 Class: diagnostics
 Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
 Offered-upstream: no; the window exists only on the iOS port
 ---
- dlls/wow64/syscall.c | 23 +++++++++++++++++++++++
- 1 file changed, 23 insertions(+)
+ dlls/wow64/syscall.c | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
 
 diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
-index 8a9bffc..c37f3ab 100644
+index 8a9bffc..e0c0a59 100644
 --- a/dlls/wow64/syscall.c
 +++ b/dlls/wow64/syscall.c
-@@ -264,6 +264,29 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
+@@ -264,6 +264,45 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
  
              TRACE( "exception %08lx dispatcher %08lx stack %08lx eip %08lx\n",
                     rec->ExceptionCode, ctx.Eip, ctx.Esp, stack->context.Eip );
@@ -45,6 +46,22 @@ index 8a9bffc..c37f3ab 100644
 +                             "%08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
 +                             top[0], top[1], top[2], top[3], top[4], top[5], top[6], top[7],
 +                             top[8], top[9], top[10], top[11], top[12], top[13], top[14], top[15] );
++                    /* the callers, by the frame-pointer chain while it stays on the stack */
++                    {
++                        ULONG frame = stack->context.Ebp, ret[8] = { 0 };
++                        unsigned int depth;
++
++                        for (depth = 0; depth < ARRAY_SIZE(ret); depth++)
++                        {
++                            const ULONG *link;
++                            if (frame < stack->context.Esp || frame - stack->context.Esp > 0x100000 || (frame & 3)) break;
++                            link = wow64_to_host( frame );
++                            ret[depth] = link[1];
++                            frame = link[0];
++                        }
++                        ERR( "Playport: i386 callers %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
++                             ret[0], ret[1], ret[2], ret[3], ret[4], ret[5], ret[6], ret[7] );
++                    }
 +                }
 +            }
          }
