@@ -38,6 +38,7 @@ CLASS_LOOKUP_PATCH = REPO / "patches/wine-pe/0022-wow64win-audit-the-class-raw-i
 FAULT_LOG_PATCH = REPO / "patches/wine-pe/0023-wow64-log-a-windowed-guest-s-faults-with-its-registe.patch"
 MESSAGE_PARAMS_PATCH = REPO / "patches/wine-pe/0024-wow64win-preserve-guest-SendMessage-dispatch-paramet.patch"
 CLASS_MENU_PATCH = REPO / "patches/wine-pe/0025-wow64win-keep-a-class-s-client-menu-name-in-one-form.patch"
+PACKED_CREATESTRUCT_PATCH = REPO / "patches/wine-pe/0027-wow64win-keep-win32u-s-inline-string-marker-in-packe.patch"
 GUEST_PATCH = REPO / "patches/wine-pe/0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch"
 AUDIO_PATCH = REPO / "patches/madeira-unix/0074-audio-give-an-i386-child-the-iOS-audio-driver-throug.patch"
 AUDIO_SOURCE = "build/ntdll-unix/audio_null_ios.c"
@@ -168,6 +169,37 @@ def run_resolver_tests(scratch):
         subprocess.run([str(exe)], check=True)
         # The conventional WoW64 branch must still compile.
         subprocess.run(cc + ["-fsyntax-only", str(REPO / "build/wow64/ws2_resolver_test.c")], check=True)
+
+
+def run_packed_createstruct_tests(scratch):
+    """0027's packed CREATESTRUCT conversion over 0018's, from the patched user.c."""
+    user = "dlls/wow64win/user.c"
+    private = "dlls/wow64win/wow64win_private.h"
+    with tempfile.TemporaryDirectory(prefix="wow64win-", dir=scratch) as tmp:
+        root = Path(tmp)
+        subprocess.run(["git", "init", "-q", tmp], check=True)
+        if not patched_upstream_files(BUILD / "cache/wine.git", pin("wine"),
+                                      ["wine-port", "wine-valve", "wine-pe"], [user, private],
+                                      root, include=[GUEST_HEADER]):
+            print("build/wow64/test.py: packed CREATESTRUCT skipped (no Wine cache in $PLAYPORT_BUILD/cache)", flush=True)
+            return
+        if "packed_createstruct_64to32" not in PACKED_CREATESTRUCT_PATCH.read_text():
+            raise ValueError(f"{PACKED_CREATESTRUCT_PATCH.name}: no packed_createstruct_64to32")
+        u = (root / user).read_text()
+        p = (root / private).read_text()
+        struct32 = u[u.rindex("typedef struct", 0, u.index("} CREATESTRUCT32;")):u.index("} CREATESTRUCT32;")]
+        marker = next(line for line in u.splitlines() if line.startswith("#define PACKED_INLINE_STRING "))
+        (root / "packed_createstruct_api.h").write_text(
+            "".join(c_function(p, n) for n in ("wow64_to_host", "wow64_to_guest",
+                                               "wow64_intres_to_host", "wow64_intres_to_guest")) +
+            struct32 + "} CREATESTRUCT32;\n" + marker + "\n" +
+            c_function(u, "createstruct_64to32") + c_function(u, "packed_createstruct_64to32"))
+        exe = root / "packed-createstruct-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / GUEST_HEADER).parent), "-I", str(root),
+                        str(REPO / "build/wow64/packed_createstruct_test.c"), "-o", str(exe)], check=True)
+        subprocess.run([str(exe)], check=True)
 
 
 def patched_function(patch, signature):
@@ -480,6 +512,7 @@ def main():
         subprocess.run([str(vulkan_exe)], check=True)
     run_audio_tests(scratch)
     run_resolver_tests(scratch)
+    run_packed_createstruct_tests(scratch)
     return 0
 
 

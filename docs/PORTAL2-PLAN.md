@@ -503,8 +503,17 @@ global WoW64 state.
   `select_font` failures; they await the owner's distribution review.
 - Save and reload by pad work (`tools/pad/p2-save-load`).
 
-**Next:** confirm RT fires the portal gun at a portalable surface, then a chamber
-solved with portals; the fonts' distribution review.
+- RT and LT fire blue and orange portals in Chapter 2's laser chamber. wine-pe 0027
+  and madeira-unix 0075 and 0076 close the loose ends: the inline-string marker in
+  packed CREATESTRUCTs, the misleading x18 REFUSED line, and the warmer's censuses.
+  Hollow Knight's 10.92 s was an outlier. The game page's four settings apply to
+  Portal 2.
+
+**Not complete:** no chamber has been solved by pad yet.
+
+**Next:** solve a chamber with portals; that is the last gameplay check. For "fully
+playable", the fonts' distribution review is also still open, and the chamber's
+13–15 ms of GPU time leaves little headroom above 720p.
 
 ## Rules that still apply
 

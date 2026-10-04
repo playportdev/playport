@@ -180,21 +180,82 @@ the notices are `unreviewed-app-selection`, see below). Installed in place, batt
   SINGLE PLAYER, LOAD GAME and A load it back into the chamber. `tools/pad/p2-save-load`
   does the whole sequence; run once after `p2-cold-boot` (`.work/p2m3d`), it wrote
   `1791105527.sav` and ended back in the level.
-- **Firing a portal: not confirmed.** RT (bound `R_TRIGGER +attack`; `joystick 1`,
-  `joy_name "Xbox360 controller"`) held at the arrival room's walls and floor left both
-  halves of the crosshair empty and the hint up. The surfaces aimed at may not be
-  portalable, and no shot shows a projectile, so whether the trigger reaches `+attack`
-  is still open. XInput's host path (wine-port 0055) copies both triggers.
+- **Firing a portal: confirmed below** (RT and LT, in the chamber past the stairs).
 - **Hint glyphs** follow the last device the engine saw: the chapter start shows the
   mouse glyph, and after one load from the menu by pad the hint showed `RT`. No cvar was
   changed.
 
+## Portals, loose ends and settings
+
+The loose ends are fixed by wine-pe 0027 and madeira-unix 0075 and 0076. They build
+IPA `.work/out/20261004-122618-05dcdeb7/Playport-26.5-05dcdeb7.ipa` (dev, SHA256
+`05dcdeb7d8be116028d747b914b18aaaa5e0c6da0ac2d48581f2e49b699015b5`, 78 IPA checks).
+Battery was 41 to 33%, not charging.
+
+- **The portal gun fires** on `ba34b2e0`, in `sp_a2_laser_intro` (the map
+  `p2-cold-boot` loads). Screenshots are in `.work/p2m3e/`.
+  - RT puts a blue portal on the white panel under the laser emitter (`portal-blue.png`).
+  - LT puts an orange portal on the lit panel above the exit (`portal-both.png`).
+  - The bindings work as shipped: `config.cfg` has `R_TRIGGER +attack` and
+    `L_TRIGGER +attack2` after its `unbindall`. No joystick change was needed.
+  - The earlier misses were at walls that cannot take a portal.
+  - **The chamber was not solved by script.** A replay script of the walk and turns
+    was tried from a fresh launch, but dead-reckoned turns land differently each run.
+    It was not kept.
+- **wine-pe 0027** keeps win32u's inline-string marker (`0xffffffff`) in
+  `lpszName`/`lpszClass` when `packed_message_64to32` converts a WM_CREATE or
+  WM_NCCREATE. `wow64_to_guest` still rejects it everywhere else. Its host test is
+  `build/wow64/packed_createstruct_test.c` ("packed CREATESTRUCT: ok"). It covers:
+  - the marker;
+  - atoms and NULL;
+  - pointers inside and outside the window;
+  - conversion in place.
+- **madeira-unix 0075** sends a native `[x18, #imm]` TEB read straight to the x18
+  emulation instead of the window's low-fault lookup. The read is a data fault below
+  0x10000 with x18 == 0, whose base register is x18. Any other low fault is still
+  routed and refused.
+  - On the phone, the `subfloor ... REFUSED read of 8 byte(s): guest 0x370` line went
+    from 1 to 0 per launch.
+  - `x18-emul3` stays at 20.
+  - Not host-tested: the check is inline in the Mach handler.
+- **madeira-unix 0076** runs the pool warmer's slot, window and physical-map
+  censuses at cycles 1 and 2, then every 150th cycle (about 5 min). Before, they ran
+  every 15th and 5th. Page warming is unchanged.
+  - Same `pp perf` as above, 180 s: `.work/perf-runs/p2m3e-before` on `ba34b2e0`,
+    `p2m3e-after` on `05dcdeb7`.
+  - `[phys-map]` walks fell from 19 to 1.
+  - In the chamber (55–180 s), both runs had 16.67 ms per frame and 14.3/14.4 ms of
+    GPU time. Each had one frame of 30 ms or more: 42 ms before, 54 ms after.
+  - The 596 ms hitch of `p2m3-cold-boot` did not recur in either run, so the fix
+    removes the census's cost but cannot be shown to remove that hitch.
+- **Hollow Knight first frame.** 10.92 s (`20261004T111132`) was an outlier, not a
+  regression.
+  - The same IPA gave 9.75 and 9.98 s (`.work/p2m3e/hk-before-*`).
+  - `05dcdeb7` gave 9.61, 9.67 and 8.46 s (`hk-after-*`), each with the main menu on
+    its screenshot.
+  - The last 24 recorded plays range from 8.26 to 10.11 s.
+  - The font links and the audio table add no gap. The only pause over 0.35 s
+    before the game is the JIT pool's 0.9 s prepare, the same in every run.
+- **Game page.** `open:app-620#graphics` shows Resolution, Frame rate limit,
+  Direct3D (`Default · Vulkan`) and Launch arguments (`.work/p2m3e/page2`).
+  - A play with `{"frameLimit":30,"screen":"540","arguments":"-condebug"}`
+    (`.work/p2m3e/set1`) logs `screen 1172x540 ... frames limited to 30 FPS`. The
+    swap chain is 1172x540, and the command line ends with `"-condebug"`. The
+    loading screen draws.
+  - With `"graphics":"dxmt"` added, the page marks all four as changed
+    (`.work/p2m3e/page3`).
+  - DXMT for an i386 title is kept as a choice, by decision 0047, though it cannot
+    draw one. It was not launched. Nothing needed fixing.
+- **Portal 2 on `05dcdeb7`** (`.work/p2m3e/final`): `p2-cold-boot` loads the
+  chamber, and RT plays with the gun and the "Create Blue Portal" hint up.
+
 ## Open
 
-- Whether RT fires the portal gun (see above): aim at a known portalable panel in the
-  chamber past the arrival room, or watch `+attack` with a bind that logs.
+- A chamber solved by pad: it needs aiming by feedback, not dead reckoning.
 - The in-game hints' glyph depends on the last device used, not on a setting.
 - GPU time in a chamber is 13–15 ms at 720p, 60 FPS capped. Native resolution or an
   uncapped rate would be GPU-bound.
+- The 596 ms and 200 ms chamber hitches of `p2m3-cold-boot` did not recur; their
+  cause is not established.
 - The fallback fonts' distribution review (above).
 - A retired window's final teardown on the phone has not been seen (see QUIT).

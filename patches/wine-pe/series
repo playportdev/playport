@@ -24,3 +24,4 @@
 0024-wow64win-preserve-guest-SendMessage-dispatch-paramet.patch
 0025-wow64win-keep-a-class-s-client-menu-name-in-one-form.patch
 0026-ntdll-take-the-XInput-DLLs-from-system32-when-loaded.patch
+0027-wow64win-keep-win32u-s-inline-string-marker-in-packe.patch

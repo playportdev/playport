@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 12:00:00 +0200
+Subject: [PATCH] signal: leave x18 TEB reads out of the WoW64 window's
+ low-fault path
+
+Native code reads its TEB through [x18, #imm], and iOS clears x18, so
+such a read faults at the TEB offset. In a WoW64 process the low-fault
+path took every fault below 4 GB to the faulting thread's window first:
+__wine_syscall_dispatcher's ldr x16, [x18, #0x370] was looked up as
+guest 0x370, refused (guest page zero is never mapped) and logged as a
+refused guest read, and only then emulated against the TEB by the x18
+path.
+
+Skip the window and low-allocation lookups for a data fault below
+0x10000 with x18 == 0 from native code whose base register is x18, the
+x18 emulation's own discriminator. Any other low fault, a guest NULL
+access among them, is routed and refused as before.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-gameplay.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/signal_arm64_ios.c | 22 ++++++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index bb7c5d4..b0ed33e 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -1942,12 +1942,30 @@ static void *ios_mach_exception_thread( void *arg )
+                  * resolves first. The base stays mapped until fault_leave. */
+                 extern void ios_wow64_fault_leave( void );
+                 uintptr_t sf_window = 0;
+-                if (!sf_real && (uint64_t)fault_addr < 0x100000000ull && thread_teb)
++                /* Playport: native code reads its TEB through [x18, #imm], and
++                 * iOS clears x18, so the address is the TEB offset (teb+0x370 in
++                 * __wine_syscall_dispatcher). That is step 3's x18 emulation,
++                 * not guest memory: the window was entered, refused the read
++                 * and logged it before falling through. Step 3's discriminator
++                 * leaves it out here: a data fault below 0x10000, x18 == 0,
++                 * from native code whose base register is x18. Guest page zero
++                 * is never mapped, so the window could not have served it. */
++                int sf_x18_teb = 0;
++                if (!sf_real && state.__x[18] == 0 && thread_teb && fault_addr < 0x10000)
++                {
++                    uint64_t x18_pc = (uint64_t)__darwin_arm_thread_state64_get_pc( state );
++                    uint32_t x18_insn;
++
++                    if (fault_addr != (uintptr_t)x18_pc &&
++                        ios_fault_read_insn( x18_pc, &x18_insn ))
++                        sf_x18_teb = ((x18_insn >> 5) & 0x1f) == 18;
++                }
++                if (!sf_real && !sf_x18_teb && (uint64_t)fault_addr < 0x100000000ull && thread_teb)
+                 {
+                     extern uintptr_t ios_wow64_fault_enter( void *owner );
+                     sf_window = ios_wow64_fault_enter( ((TEB *)thread_teb)->Peb );
+                 }
+-                if (!sf_real && !sf_window && (uint64_t)fault_addr < 0x100000000ull)
++                if (!sf_real && !sf_window && !sf_x18_teb && (uint64_t)fault_addr < 0x100000000ull)
+                 {
+                     extern int ios_lowalloc_translate( unsigned long long addr,
+                                                        unsigned long long len,
+-- 
+2.55.0
+

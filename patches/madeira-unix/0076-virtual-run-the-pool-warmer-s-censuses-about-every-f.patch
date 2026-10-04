@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 12:00:00 +0200
+Subject: [PATCH] virtual: run the pool warmer's censuses about every five
+ minutes
+
+The pool warmer's ~2 s cycle ran the slot probe and the window
+inventories every 15th cycle and the physical-map walk over every
+region every 5th. In a Portal 2 chamber the walk covers about 78,000
+regions. One took a P-core for 154 ms inside a 596 ms chamber hitch,
+while the game thread all but stopped.
+
+Run both censuses on their early cycles (1 and 2), as before, and then
+every 150th cycle. The page warming, the pool-rot sweep, the zone check
+and the per-cycle footprint line are unchanged.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-gameplay.md
+Offered-upstream: no; diagnostics of the iOS port's pool
+---
+ build/ntdll-unix/virtual_ios.c | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index b35cd20..e1da28e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -655,6 +655,14 @@ static void ios_window_inventory( const char *why, unsigned long long lo_arg, un
+ extern unsigned long long ios_last_footprint_mb;
+ extern int ios_fast_footprint;
+ 
++/* Playport: the warmer's full censuses -- the slot probe and window
++ * inventories, and the physical-map walk over every region (77,684 in a Portal
++ * 2 chamber) -- ran every 15th and 5th ~2 s cycle. One took a P-core for
++ * 154 ms while the game thread all but stopped, inside a 596 ms chamber hitch.
++ * They now run once early (cycles 1 and 2) and then about every five minutes;
++ * the page warming and the cheap per-cycle lines are unchanged. */
++#define IOS_WARMER_CENSUS_CYCLES 150
++
+ static void *ios_pool_warmer_thread( void *arg )
+ {
+     unsigned cycle = 0;
+@@ -795,7 +803,7 @@ static void *ios_pool_warmer_thread( void *arg )
+                     dprintf(2, "[pool-rot] clean: %lu .text pages sampled across %u mappings (cycle=%u)\n",
+                             (unsigned long)checked, ios_jit_mapping_count, cycle);
+             }
+-            if (cycle == 1 || (cycle % 15) == 0)
++            if (cycle == 1 || (cycle % IOS_WARMER_CENSUS_CYCLES) == 0)
+             {
+                 /* ml469 (wall #79): one-shot proof of whether TCP loopback
+                  * works at all under this port — the webhelper's transport
+@@ -938,9 +946,9 @@ static void *ios_pool_warmer_thread( void *arg )
+              * vs FEX lookup caches vs CEF heap. Walk the address space and
+              * charge private-dirty+swapped pages to each region; the base
+              * addresses identify the owner offline (pool = RX base, FEX bands,
+-             * PA pools, guest heap). Every 5th cycle plus cycle 2, because the
+-             * walk is tens of thousands of kernel calls. */
+-            if (cycle == 2 || (cycle % 5) == 0)
++             * PA pools, guest heap). Cycle 2, then every IOS_WARMER_CENSUS_CYCLES
++             * cycles, because the walk is tens of thousands of kernel calls. */
++            if (cycle == 2 || (cycle % IOS_WARMER_CENSUS_CYCLES) == 0)
+             {
+                 struct { unsigned long long base, size, dirty, res, swap; unsigned tag; } top[12];
+                 unsigned long long dirty_by_tag[256];
+-- 
+2.55.0
+
