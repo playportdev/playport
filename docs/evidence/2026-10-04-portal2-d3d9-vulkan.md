@@ -170,8 +170,10 @@ IPAs: `39af2094` (`.work/ui-runs/p2m2-6-hk`, first frame 9.35 s) and `db9f2d48`
 ## Hardening after the milestone-1 review
 
 An independent review of milestone 1 found five defects. They are fixed, with no new
-Portal 2 feature, in IPA `.work/out/20261004-092839-138cb8c3/Playport-26.5-138cb8c3.ipa`
-(SHA256 `138cb8c319dc22e3fa116a2a70e27fe6c0f66cdd4ca0b26e94cbdfce7e4ddbe0`).
+Portal 2 feature, in commit `95ca297`: IPA
+`.work/out/20261004-094241-44ff0975/Playport-26.5-44ff0975.ipa` (SHA256
+`44ff09758d03cdcd5e6e7d4b2d727f531685f9cb550670d326b93b73fd5f79d2`; the same artifacts
+as `138cb8c3`, built before the commit).
 
 - **Window lifetime** (madeira-unix 0073). The owner's release unmapped the window
   while secondary threads still ran on their TEBs and 32-bit stacks in it, and the
@@ -211,14 +213,14 @@ teardown, unmap and reuse of the slot by another owner at another base),
 loop `fault_test` faults; with release tearing down at once, or a thread joining
 itself, `threads_test` fails.
 
-On the phone (battery 88%), `.work/ui-runs/p2h-1`
-(`pp ui --settings 'app-620:{"graphics":"vulkan"}' --play app-620 --until done --wait 50`):
+On the phone (battery 88 to 83%), `pp ui --settings 'app-620:{"graphics":"vulkan"}'
+--play app-620 --until done --wait 50` on both IPAs (`.work/ui-runs/p2h-1`, `p2h-3`):
 the 35 s screenshot shows the main menu; no guest exception was logged; the child
-created 29 secondary threads, 4 of them reclaimed, and the next 4 took their spare
-pairs. The run ended at its `--wait`, so a release with live threads was not
-exercised on the phone (the scripted pad does not reach an i386 title, so QUIT could
-not be chosen). Hollow Knight passes `first-frame+10` on the same IPA
-(`.work/ui-runs/p2h-hk`, first frame 9.67 s, main menu).
+created 29 secondary threads, 4 of them were reclaimed, and the next 4 took their
+spare pairs. The runs ended at their `--wait`, so a release with live threads was
+not exercised on the phone (the scripted pad does not reach an i386 title, so QUIT
+could not be chosen). Hollow Knight passes `first-frame+10` on both
+(`.work/ui-runs/p2h-hk`, `p2h-3-hk`: first frame 9.67 and 9.66 s, main menu).
 
 ## Open
 
