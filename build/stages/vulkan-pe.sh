@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The Vulkan Direct3D backend's PE DLLs (decision 0014): DXVK (Direct3D 8 to
 # 11) and vkd3d-proton (Direct3D 12) for arm64ec-windows, the architecture an
-# x86-64 game's DLLs load as under Wine ARM64EC. Each DLL is stripped of its
+# x86-64 game's DLLs load as under Wine ARM64EC, and DXVK's d3d9.dll for
+# i386-windows, the Direct3D 9 an i386 (WoW64) title such as Portal 2 loads. Each DLL is stripped of its
 # DWARF (as the DXMT stage does) and marked a Wine builtin with winebuild
 # --builtin: Madeira's loader ignores a DLL found through WINEDLLPATH that is
 # not one. vkd3d-proton carries patches/vkd3d-proton; DXVK is built
@@ -15,19 +16,18 @@
 #
 # Inputs (env): LLVM_MINGW (build/lib.sh); WINEBUILD, default the pe stage's
 # $PLAYPORT_BUILD/run/pe/wine/build-tools/tools/winebuild/winebuild.
-# Output: ROOT/pe/arm64ec-windows/*.dll. Host tools: meson, ninja, glslangValidator.
+# Output: ROOT/pe/arm64ec-windows/*.dll, ROOT/pe/i386-windows/d3d9.dll. Host tools: meson, ninja, glslangValidator.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../lib.sh"
 ROOT=$(realpath -m "${1:-$PLAYPORT_BUILD/run/vulkan-pe}")
 shift || true
-STAGES=${*:-src dxvk vkd3d}
+STAGES=${*:-src dxvk dxvk32 vkd3d}
 MINGW=${LLVM_MINGW:?set LLVM_MINGW (pp setup)}
 WINEBUILD=${WINEBUILD:-$PLAYPORT_BUILD/run/pe/wine/build-tools/tools/winebuild/winebuild}
 JOBS=${JOBS:-$(nproc)}
 ARCH=arm64ec
-mkdir -p "$ROOT/pe/$ARCH-windows"
 
 # fetch NAME DIR [SERIES]: the pins.lock commit of NAME with its submodules,
 # shallow, and with patches/SERIES on it when given (build/lib.sh ensure_series).
@@ -48,7 +48,10 @@ fetch() {
     echo "$name $(git -C "$dir" rev-parse HEAD)"
 }
 
+# cross_file: the meson cross file for $ARCH (arm64ec, or i686 for i386).
 cross_file() {
+    local family=aarch64
+    [ "$ARCH" = i686 ] && family=x86
     cat > "$ROOT/cross-$ARCH.txt" <<EOF
 [binaries]
 c = '$MINGW/bin/$ARCH-w64-mingw32-clang'
@@ -68,15 +71,18 @@ needs_exe_wrapper = true
 
 [host_machine]
 system = 'windows'
-cpu_family = 'aarch64'
-cpu = 'aarch64'
+cpu_family = '$family'
+cpu = '$family'
 endian = 'little'
 EOF
 }
 
-# install_dll SRC: strip, mark builtin, copy into pe/.
+# install_dll SRC: strip, mark builtin, copy into pe/<Wine arch>-windows.
 install_dll() {
-    local out=$ROOT/pe/$ARCH-windows/$(basename "$1")
+    local dir=$ROOT/pe/$ARCH-windows
+    [ "$ARCH" = i686 ] && dir=$ROOT/pe/i386-windows
+    mkdir -p "$dir"
+    local out=$dir/$(basename "$1")
     "$MINGW/bin/llvm-strip" --strip-debug -o "$out" "$1"
     "$WINEBUILD" --builtin "$out"
 }
@@ -97,6 +103,20 @@ stage_dxvk() {
     done
 }
 
+# DXVK's Direct3D 9 alone for i386: an i386 title's d3d9 (Portal 2's
+# shaderapidx9) runs on Vulkan through winevulkan's WoW64 thunks.
+stage_dxvk32() {
+    ARCH=i686
+    cross_file
+    rm -rf "$ROOT/build-dxvk32"
+    (cd "$ROOT/dxvk" && PATH=$MINGW/bin:$PATH meson setup --cross-file "$ROOT/cross-$ARCH.txt" \
+        --buildtype release -Dbuild_id=false -Denable_dxgi=false -Denable_d3d8=false \
+        -Denable_d3d10=false -Denable_d3d11=false "$ROOT/build-dxvk32") > "$ROOT/meson-dxvk32.log"
+    PATH=$MINGW/bin:$PATH ninja -C "$ROOT/build-dxvk32" -j "$JOBS" > "$ROOT/ninja-dxvk32.log"
+    install_dll "$ROOT/build-dxvk32/src/d3d9/d3d9.dll"
+    ARCH=arm64ec
+}
+
 stage_vkd3d() {
     cross_file
     rm -rf "$ROOT/build-vkd3d"
@@ -109,8 +129,8 @@ stage_vkd3d() {
 
 for s in $STAGES; do
     case $s in
-    src|dxvk|vkd3d) echo "== vulkan-pe: $s"; "stage_$s" ;;
-    *) echo "no stage $s (src dxvk vkd3d)" >&2; exit 2 ;;
+    src|dxvk|dxvk32|vkd3d) echo "== vulkan-pe: $s"; "stage_$s" ;;
+    *) echo "no stage $s (src dxvk dxvk32 vkd3d)" >&2; exit 2 ;;
     esac
 done
 (cd "$ROOT/pe" && sha256sum */*.dll)

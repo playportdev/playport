@@ -102,7 +102,14 @@ else
     mv "$OUT/gst-macos/gst/gstmacos.h.new" "$OUT/gst-macos/gst/gstmacos.h"
 fi
 configure_tree() {
-    if configured "$1"; then echo "$1: configured as before; make rebuilds what changed"; return 0; fi
+    # A kept tree's header dependencies are makedep's from when it was configured:
+    # make depend rescans the sources, so a patch that adds or edits an included
+    # header (wow64win's window_audited.h) rebuilds the objects that include it.
+    if configured "$1"; then
+        echo "$1: configured as before; make rebuilds what changed"
+        ( cd "$WINE/$1" && make depend > "$OUT/depend-$1.log" 2>&1 )
+        return
+    fi
     rm -rf "${WINE:?}/${1:?}"; mkdir "$WINE/$1"
     ( cd "$WINE/$1" &&
       CC="/usr/bin/clang --target=aarch64-apple-darwin -isysroot $MACSDK" \

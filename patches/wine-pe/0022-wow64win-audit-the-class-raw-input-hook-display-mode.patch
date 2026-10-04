@@ -1,0 +1,289 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 07:25:07 +0200
+Subject: [PATCH] wow64win: audit the class, raw-input, hook, display-mode and
+ D3DKMT adapter thunks for the window
+
+With Direct3D 9 on DXVK, Portal 2's i386 child got past device
+enumeration and stopped at NtUserUnregisterClass, whose thunk was not
+audited for the iOS guest window. Audit it and the thunks the engine
+and DXVK reach next:
+
+- NtUserUnregisterClass takes the instance as RegisterClassExWOW keeps
+  it (the guest's), and it and NtUserGetClassInfoEx give the menu name
+  block back as a guest pointer (user32 frees it).
+- the hooks keep their module and procedure as the guest's, which the
+  hook callbacks hand back.
+- the D3DKMT adapter, device and escape thunks convert their nested
+  buffers through the window.
+- raw input, NtUserChangeDisplaySettings, NtUserCallMsgFilter,
+  NtUserTrackMouseEvent, NtUserTranslateAccelerator, NtUserSendInput,
+  NtUserPostThreadMessage, NtUserSetMessageExtraInfo and
+  NtUserFlashWindowEx pass only converted top-level pointers, handles
+  and values.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/wow64win/gdi.c            | 18 +++++++++---------
+ dlls/wow64win/user.c           | 17 +++++++++--------
+ dlls/wow64win/window_audited.h | 34 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 52 insertions(+), 17 deletions(-)
+
+diff --git a/dlls/wow64win/gdi.c b/dlls/wow64win/gdi.c
+index d4569b7..ff4c71e 100644
+--- a/dlls/wow64win/gdi.c
++++ b/dlls/wow64win/gdi.c
+@@ -749,11 +749,11 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateDevice( UINT *args )
+     desc.hAdapter = desc32->hAdapter;
+     desc.hDevice = desc32->hDevice;
+     desc.Flags = desc32->Flags;
+-    desc.pCommandBuffer = UlongToPtr( desc32->pCommandBuffer );
++    desc.pCommandBuffer = wow64_to_host( desc32->pCommandBuffer );
+     desc.CommandBufferSize = desc32->CommandBufferSize;
+-    desc.pAllocationList = UlongToPtr( desc32->pAllocationList );
++    desc.pAllocationList = wow64_to_host( desc32->pAllocationList );
+     desc.AllocationListSize = desc32->AllocationListSize;
+-    desc.pPatchLocationList = UlongToPtr( desc32->pPatchLocationList );
++    desc.pPatchLocationList = wow64_to_host( desc32->pPatchLocationList );
+     desc.PatchLocationListSize = desc32->PatchLocationListSize;
+     if (!(status = NtGdiDdDDICreateDevice( &desc )))
+         desc32->hDevice = desc.hDevice;
+@@ -907,7 +907,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIEnumAdapters2( UINT *args )
+     if (!desc32) return STATUS_INVALID_PARAMETER;
+ 
+     desc.NumAdapters = desc32->NumAdapters;
+-    desc.pAdapters = UlongToPtr( desc32->pAdapters );
++    desc.pAdapters = wow64_to_host( desc32->pAdapters );
+ 
+     status = NtGdiDdDDIEnumAdapters2( &desc );
+ 
+@@ -935,7 +935,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIEscape( UINT *args )
+     desc.hDevice = desc32->hDevice;
+     desc.Type = desc32->Type;
+     desc.Flags = desc32->Flags;
+-    desc.pPrivateDriverData = UlongToPtr( desc32->pPrivateDriverData );
++    desc.pPrivateDriverData = wow64_to_host( desc32->pPrivateDriverData );
+     desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
+     desc.hContext = desc32->hContext;
+ 
+@@ -954,7 +954,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenAdapterFromDeviceName( UINT *args )
+     NTSTATUS status;
+ 
+     if (!desc32) return STATUS_INVALID_PARAMETER;
+-    desc.pDeviceName = UlongToPtr( desc32->pDeviceName );
++    desc.pDeviceName = wow64_to_host( desc32->pDeviceName );
+     desc.hAdapter = desc32->hAdapter;
+     desc.AdapterLuid = desc32->AdapterLuid;
+ 
+@@ -1370,7 +1370,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIQueryAdapterInfo( UINT *args )
+ 
+     desc.hAdapter = desc32->hAdapter;
+     desc.Type = desc32->Type;
+-    desc.pPrivateDriverData = UlongToPtr( desc32->pPrivateDriverData );
++    desc.pPrivateDriverData = wow64_to_host( desc32->pPrivateDriverData );
+     desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
+ 
+     return NtGdiDdDDIQueryAdapterInfo( &desc );
+@@ -1529,8 +1529,8 @@ NTSTATUS WINAPI wow64_NtGdiDdDDISetVidPnSourceOwner( UINT *args )
+ 
+     if (!desc32) return STATUS_INVALID_PARAMETER;
+     desc.hDevice = desc32->hDevice;
+-    desc.pType = UlongToPtr( desc32->pType );
+-    desc.pVidPnSourceId = UlongToPtr( desc32->pVidPnSourceId );
++    desc.pType = wow64_to_host( desc32->pType );
++    desc.pVidPnSourceId = wow64_to_host( desc32->pVidPnSourceId );
+     desc.VidPnSourceCount = desc32->VidPnSourceCount;
+ 
+     return NtGdiDdDDISetVidPnSourceOwner( &desc );
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index 52acd3c..d1da7e3 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -2458,7 +2458,7 @@ NTSTATUS WINAPI wow64_NtUserGetClassInfoEx( UINT *args )
+     wc32->lpszMenuName = wow64_intres_to_guest( wc.lpszMenuName );
+     wc32->lpszClassName = wow64_intres_to_guest( wc.lpszClassName );
+     wc32->hIconSm = HandleToUlong( wc.hIconSm );
+-    *menu_name32 = PtrToUlong( menu_name );
++    *menu_name32 = wow64_intres_to_guest( menu_name );
+     return ret;
+ }
+ 
+@@ -4833,9 +4833,9 @@ NTSTATUS WINAPI wow64_NtUserSetWinEventHook( UINT *args )
+ {
+     DWORD event_min = get_ulong( &args );
+     DWORD event_max = get_ulong( &args );
+-    HMODULE inst = get_ptr( &args );
++    HMODULE inst = ULongToPtr( get_ulong( &args ));  /* kept for the guest */
+     UNICODE_STRING32 *module32 = get_ptr( &args );
+-    WINEVENTPROC proc = get_ptr(&args );
++    WINEVENTPROC proc = ULongToPtr( get_ulong( &args ));  /* the event hook callback gives it back */
+     DWORD pid = get_ulong( &args );
+     DWORD tid = get_ulong( &args );
+     DWORD flags = get_ulong( &args );
+@@ -4932,11 +4932,11 @@ NTSTATUS WINAPI wow64_NtUserSetWindowWord( UINT *args )
+ 
+ NTSTATUS WINAPI wow64_NtUserSetWindowsHookEx( UINT *args )
+ {
+-    HINSTANCE inst = get_ptr( &args );
++    HINSTANCE inst = ULongToPtr( get_ulong( &args ));  /* kept for the guest */
+     UNICODE_STRING32 *module32 = get_ptr( &args );
+     DWORD tid = get_ulong( &args );
+     INT id = get_ulong( &args );
+-    HOOKPROC proc = get_ptr( &args );
++    HOOKPROC proc = ULongToPtr( get_ulong( &args ));  /* the hook callback gives it back */
+     BOOL ansi = get_ulong( &args );
+     UNICODE_STRING module;
+     HHOOK ret;
+@@ -5303,7 +5303,7 @@ NTSTATUS WINAPI wow64_NtUserUnhookWinEvent( UINT *args )
+ NTSTATUS WINAPI wow64_NtUserUnhookWindowsHook( UINT *args )
+ {
+     INT id = get_ulong( &args );
+-    HOOKPROC proc = get_ptr( &args );
++    HOOKPROC proc = ULongToPtr( get_ulong( &args ));  /* as SetWindowsHookEx keeps it */
+ 
+     return NtUserUnhookWindowsHook( id, proc );
+ }
+@@ -5318,7 +5318,7 @@ NTSTATUS WINAPI wow64_NtUserUnhookWindowsHookEx( UINT *args )
+ NTSTATUS WINAPI wow64_NtUserUnregisterClass( UINT *args )
+ {
+     UNICODE_STRING32 *name32 = get_ptr( &args );
+-    HINSTANCE instance = get_ptr( &args );
++    HINSTANCE instance = ULongToPtr( get_ulong( &args ));  /* the guest's, as RegisterClassExWOW keeps it */
+     ULONG *menu_name32 = get_ptr( &args );
+ 
+     struct client_menu_name *menu_name;
+@@ -5326,7 +5326,8 @@ NTSTATUS WINAPI wow64_NtUserUnregisterClass( UINT *args )
+     BOOL ret;
+ 
+     ret = NtUserUnregisterClass( unicode_str_32to64( &name, name32 ), instance, &menu_name );
+-    if (ret) *menu_name32 = PtrToUlong( menu_name );
++    /* RegisterClassExWOW keeps the guest's menu name block by its host address */
++    if (ret) *menu_name32 = wow64_intres_to_guest( menu_name );
+     return ret;
+ }
+ 
+diff --git a/dlls/wow64win/window_audited.h b/dlls/wow64win/window_audited.h
+index c560d0f..8d65d9c 100644
+--- a/dlls/wow64win/window_audited.h
++++ b/dlls/wow64win/window_audited.h
+@@ -39,6 +39,21 @@
+ #define WINDOW_AUDITED_NtGdiCreateRectRgn ~, 1
+ #define WINDOW_AUDITED_NtGdiCreateRoundRectRgn ~, 1
+ #define WINDOW_AUDITED_NtGdiCreateSolidBrush ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDICheckOcclusion ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDICheckVidPnExclusiveOwnership ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDICloseAdapter ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDICreateDevice ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIDestroyDevice ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIEnumAdapters ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIEnumAdapters2 ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIEscape ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIOpenAdapterFromDeviceName ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIOpenAdapterFromHdc ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIOpenAdapterFromLuid ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIQueryAdapterInfo ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDIQueryVideoMemoryInfo ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDISetQueuedLimit ~, 1
++#define WINDOW_AUDITED_NtGdiDdDDISetVidPnSourceOwner ~, 1
+ #define WINDOW_AUDITED_NtGdiDeleteClientObj ~, 1
+ #define WINDOW_AUDITED_NtGdiDeleteObjectApp ~, 1
+ #define WINDOW_AUDITED_NtGdiDescribePixelFormat ~, 1
+@@ -182,10 +197,13 @@
+ #define WINDOW_AUDITED_NtUserBuildPropList ~, 1
+ #define WINDOW_AUDITED_NtUserCallHwnd ~, 1
+ #define WINDOW_AUDITED_NtUserCallHwndParam ~, 1
++#define WINDOW_AUDITED_NtUserCallMsgFilter ~, 1
++#define WINDOW_AUDITED_NtUserCallNextHookEx ~, 1
+ #define WINDOW_AUDITED_NtUserCallNoParam ~, 1
+ #define WINDOW_AUDITED_NtUserCallOneParam ~, 1
+ #define WINDOW_AUDITED_NtUserCallTwoParam ~, 1
+ #define WINDOW_AUDITED_NtUserChangeClipboardChain ~, 1
++#define WINDOW_AUDITED_NtUserChangeDisplaySettings ~, 1
+ #define WINDOW_AUDITED_NtUserCheckMenuItem ~, 1
+ #define WINDOW_AUDITED_NtUserChildWindowFromPointEx ~, 1
+ #define WINDOW_AUDITED_NtUserClipCursor ~, 1
+@@ -233,6 +251,7 @@
+ #define WINDOW_AUDITED_NtUserExcludeUpdateRgn ~, 1
+ #define WINDOW_AUDITED_NtUserFindExistingCursorIcon ~, 1
+ #define WINDOW_AUDITED_NtUserFindWindowEx ~, 1
++#define WINDOW_AUDITED_NtUserFlashWindowEx ~, 1
+ #define WINDOW_AUDITED_NtUserGetAncestor ~, 1
+ #define WINDOW_AUDITED_NtUserGetAsyncKeyState ~, 1
+ #define WINDOW_AUDITED_NtUserGetAtomName ~, 1
+@@ -281,6 +300,11 @@
+ #define WINDOW_AUDITED_NtUserGetProcessWindowStation ~, 1
+ #define WINDOW_AUDITED_NtUserGetProp ~, 1
+ #define WINDOW_AUDITED_NtUserGetQueueStatus ~, 1
++#define WINDOW_AUDITED_NtUserGetRawInputBuffer ~, 1
++#define WINDOW_AUDITED_NtUserGetRawInputData ~, 1
++#define WINDOW_AUDITED_NtUserGetRawInputDeviceInfo ~, 1
++#define WINDOW_AUDITED_NtUserGetRawInputDeviceList ~, 1
++#define WINDOW_AUDITED_NtUserGetRegisteredRawInputDevices ~, 1
+ #define WINDOW_AUDITED_NtUserGetScrollBarInfo ~, 1
+ #define WINDOW_AUDITED_NtUserGetSystemDpiForProcess ~, 1
+ #define WINDOW_AUDITED_NtUserGetSystemMenu ~, 1
+@@ -326,6 +350,7 @@
+ #define WINDOW_AUDITED_NtUserPerMonitorDPIPhysicalToLogicalPoint ~, 1
+ #define WINDOW_AUDITED_NtUserPostMessage ~, 1
+ #define WINDOW_AUDITED_NtUserPostQuitMessage ~, 1
++#define WINDOW_AUDITED_NtUserPostThreadMessage ~, 1
+ #define WINDOW_AUDITED_NtUserPrintWindow ~, 1
+ #define WINDOW_AUDITED_NtUserQueryDisplayConfig ~, 1
+ #define WINDOW_AUDITED_NtUserQueryInputContext ~, 1
+@@ -335,6 +360,7 @@
+ #define WINDOW_AUDITED_NtUserRedrawWindow ~, 1
+ #define WINDOW_AUDITED_NtUserRegisterClassExWOW ~, 1
+ #define WINDOW_AUDITED_NtUserRegisterHotKey ~, 1
++#define WINDOW_AUDITED_NtUserRegisterRawInputDevices ~, 1
+ #define WINDOW_AUDITED_NtUserRegisterTouchPadCapable ~, 1
+ #define WINDOW_AUDITED_NtUserRegisterWindowMessage ~, 1
+ #define WINDOW_AUDITED_NtUserReleaseCapture ~, 1
+@@ -347,6 +373,7 @@
+ #define WINDOW_AUDITED_NtUserScrollDC ~, 1
+ #define WINDOW_AUDITED_NtUserScrollWindowEx ~, 1
+ #define WINDOW_AUDITED_NtUserSelectPalette ~, 1
++#define WINDOW_AUDITED_NtUserSendInput ~, 1
+ #define WINDOW_AUDITED_NtUserSetActiveWindow ~, 1
+ #define WINDOW_AUDITED_NtUserSetAdditionalForegroundBoostProcesses ~, 1
+ #define WINDOW_AUDITED_NtUserSetCapture ~, 1
+@@ -367,6 +394,7 @@
+ #define WINDOW_AUDITED_NtUserSetMenu ~, 1
+ #define WINDOW_AUDITED_NtUserSetMenuContextHelpId ~, 1
+ #define WINDOW_AUDITED_NtUserSetMenuDefaultItem ~, 1
++#define WINDOW_AUDITED_NtUserSetMessageExtraInfo ~, 1
+ #define WINDOW_AUDITED_NtUserSetObjectInformation ~, 1
+ #define WINDOW_AUDITED_NtUserSetParent ~, 1
+ #define WINDOW_AUDITED_NtUserSetProcessDefaultLayout ~, 1
+@@ -382,6 +410,7 @@
+ #define WINDOW_AUDITED_NtUserSetTaskmanWindow ~, 1
+ #define WINDOW_AUDITED_NtUserSetThreadDesktop ~, 1
+ #define WINDOW_AUDITED_NtUserSetTimer ~, 1
++#define WINDOW_AUDITED_NtUserSetWinEventHook ~, 1
+ #define WINDOW_AUDITED_NtUserSetWindowContextHelpId ~, 1
+ #define WINDOW_AUDITED_NtUserSetWindowFNID ~, 1
+ #define WINDOW_AUDITED_NtUserSetWindowLong ~, 1
+@@ -390,6 +419,7 @@
+ #define WINDOW_AUDITED_NtUserSetWindowPos ~, 1
+ #define WINDOW_AUDITED_NtUserSetWindowRgn ~, 1
+ #define WINDOW_AUDITED_NtUserSetWindowWord ~, 1
++#define WINDOW_AUDITED_NtUserSetWindowsHookEx ~, 1
+ #define WINDOW_AUDITED_NtUserShowCaret ~, 1
+ #define WINDOW_AUDITED_NtUserShowCursor ~, 1
+ #define WINDOW_AUDITED_NtUserShowOwnedPopups ~, 1
+@@ -400,10 +430,14 @@
+ #define WINDOW_AUDITED_NtUserSystemParametersInfo ~, 1
+ #define WINDOW_AUDITED_NtUserSystemParametersInfoForDpi ~, 1
+ #define WINDOW_AUDITED_NtUserToUnicodeEx ~, 1
++#define WINDOW_AUDITED_NtUserTrackMouseEvent ~, 1
+ #define WINDOW_AUDITED_NtUserTrackPopupMenuEx ~, 1
++#define WINDOW_AUDITED_NtUserTranslateAccelerator ~, 1
+ #define WINDOW_AUDITED_NtUserTranslateMessage ~, 1
+ #define WINDOW_AUDITED_NtUserUnhookWinEvent ~, 1
++#define WINDOW_AUDITED_NtUserUnhookWindowsHook ~, 1
+ #define WINDOW_AUDITED_NtUserUnhookWindowsHookEx ~, 1
++#define WINDOW_AUDITED_NtUserUnregisterClass ~, 1
+ #define WINDOW_AUDITED_NtUserUnregisterHotKey ~, 1
+ #define WINDOW_AUDITED_NtUserUpdateInputContext ~, 1
+ #define WINDOW_AUDITED_NtUserUpdateLayeredWindow ~, 1

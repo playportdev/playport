@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 07:59:22 +0200
+Subject: [PATCH] WOW64: leave a guest's read fault in an RWX interval to the
+ guest
+
+The invalidation tracker write-protects the pages of an RWX interval
+that hold compiled code; such a page stays readable. Portal 2's audio
+thread read uncommitted memory inside an RWX interval, the module
+claimed the fault as self-modifying code, the unprotect could not make
+the page readable, and the read faulted again forever until the host
+ended the app. Consult the tracker for write faults only, so a read
+fault becomes the guest's access violation.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the fault loop needs the iOS window
+---
+ Source/Windows/WOW64/Module.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index 361f079..362466f 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -1072,7 +1072,10 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+       return true;
+     }
+ 
+-    if (Thread) {
++    // Only a write can hit a page the tracker trapped for self-modifying code: a
++    // trapped page stays readable. A read fault in an RWX interval is the guest's
++    // own (uncommitted memory, a bad pointer); claiming it would retry it forever.
++    if (Thread && Exception->ExceptionInformation[0] == EXCEPTION_WRITE_FAULT) {
+       std::scoped_lock Lock(ThreadCreationMutex);
+       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
+       if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, Window::ToHost(FaultAddress))) {

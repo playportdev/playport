@@ -19,3 +19,5 @@
 0019-gdi32-reach-a-native-DC_ATTR-through-the-WoW64-windo.patch
 0020-wow64-wow64win-name-a-windowed-guest-s-failed-file-o.patch
 0021-wow64win-convert-NtUserMessageCall-s-pointer-message.patch
+0022-wow64win-audit-the-class-raw-input-hook-display-mode.patch
+0023-wow64-log-a-windowed-guest-s-faults-with-its-registe.patch

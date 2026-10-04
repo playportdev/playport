@@ -53,7 +53,8 @@ any mismatch:
                 extensions, the audio host-suspend hook and the controller
                 writers and snapshot linked in; GameController and AVFAudio
                 linked; the bundled xinput DLLs are Wine's builtins (P2)
-  wow64         i386 Runtime DLLs are Wine PE32 builtins, the aarch64
+  wow64         i386 Runtime DLLs (and DXVK's i386 d3d9.dll under
+                Runtime/vulkan) are Wine PE32 builtins, the aarch64
                 wow64.dll, wow64win.dll and xtajit.dll are ARM64 PE32+
                 builtins; xtajit exports FEX's WoW64 CPU interface.
                 Build scaffolding only: does not claim 32-bit execution works.
@@ -471,7 +472,9 @@ def pe_machine_magic(body):
 
 def wow64_checks(rt, rows):
     """Build scaffolding, not evidence that the WoW64 iOS port can run."""
-    guest = [r[1] for r in rows if r[0] == "resource" and r[1].startswith("Runtime/i386-windows/")]
+    guest = [r[1] for r in rows if r[0] == "resource" and
+             r[1].startswith(("Runtime/i386-windows/", "Runtime/vulkan/i386-windows/"))]
+    check("Runtime/vulkan/i386-windows/d3d9.dll" in guest, "wow64: DXVK's i386 d3d9.dll bundled (Vulkan overlay)")
     check({"Runtime/i386-windows/ntdll.dll", "Runtime/i386-windows/kernel32.dll"} <= set(guest),
           "wow64: i386 ntdll.dll and kernel32.dll bundled")
     bad = []

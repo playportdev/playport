@@ -1,6 +1,6 @@
 # Portal 2: plan to the first milestone
 
-**Status:** proposed, 2026-10-03. Nothing here is decided until a decision record
+**Status:** proposed, 2026-10-03; milestone 1 done, milestone 2 in progress. Nothing here is decided until a decision record
 accepts it. It would extend [0005](decisions/0005-title-cohort.md), which limits the
 cohort to x86-64 Direct3D 11 titles. This plan replaces the direction of the
 `portal2-runtime` branch before milestone 0; the review below says why.
@@ -109,9 +109,7 @@ loop should take milestone 1's steps as its instructions.
 faults, and Hollow Knight passes on the same IPA
 ([step 4 evidence](evidence/2026-10-04-portal2-inline-translation.md)). The
 items still open in step 2 carry over to milestone 2. **Next:**
-[milestone 2](#after-milestone-1-outline-only), starting with the i386 D3D9
-path: the engine stops where `materialsystem.dll` calls the shader API's
-factory, which is null because i386 `opengl32` has no GL.
+[milestone 2](#milestone-2-portal-2s-menu).
 
 **Done when** a Portal 2 Play through the UI (`pp ui --play app-620 --until
 mark:…+5`) shows in `s1-host.log`:
@@ -447,19 +445,42 @@ passes `first-frame+10` on the same IPA
   near zero. Then a Hollow Knight regression play, as AGENTS.md requires when the
   FEX series moves. Write one evidence record with the IPA's sha256.
 
-## After milestone 1 (outline only)
+## Milestone 2: Portal 2's menu
 
-- **Milestone 2, Portal 2's menu:**
-  - an i386 D3D9 path (DXVK i686 from the `dxvk` pin) through `winevulkan`'s
-    WoW64 thunks (regenerated with the conversion helpers), then KosmicKrisp;
-  - i386 `steam_api.dll`, which `steamapi.sh` already builds;
-  - audio and input through `wow64win`.
+**In progress, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-d3d9-vulkan.md)).
 
-  Measure frame time and the fault count. **Go/no-go:** if the menu is far from
-  interactive speed, the next step is a native aarch64 D3D9 reached by a thunk,
-  not more emulation work.
-- **Milestone 3:** gameplay, save and reload, and the player's settings on the
-  game's page.
+The null shader-API factory was i386 `opengl32` failing its `DllMain` with no unix
+table. That failure took `wined3d`, `d3d9` and `shaderapidx9.dll` down with it.
+Direct3D 9 now runs on DXVK's i686 `d3d9.dll` over winevulkan's WoW64 thunks and
+KosmicKrisp (Vulkan backend overlay). The engine creates its device and swap chain,
+then faults in the emulated `steam_api.dll` about 22 s after launch (exit 100). No
+game frame has been shown yet.
+
+**Done when** a Portal 2 play reaches the main menu, with a screenshot, and
+`pp perf` (or the HUD) gives its frame time and the serviced-fault count. Hollow
+Knight still passes `first-frame+10`. **Go/no-go:** if the menu is far from
+interactive speed, the next step is a native aarch64 D3D9 reached by a thunk, not
+more emulation work.
+
+1. *(done)* The i386 Direct3D 9 path: DXVK `d3d9` (i686), the `syswow64` overlay,
+   and winevulkan/win32u Vulkan through the window (wine-unix 0011). Also the next
+   wow64win audits (wine-pe 0022), data section views in the window
+   (madeira-unix 0071), no WoW64 audio driver (0072), and fex 0020's read-fault fix.
+2. **Next:** the `steam_api.dll` fault (`mov ebx, [eax+0xc]` on a garbage object).
+   Find the native code that writes NULs to guest addresses (`ml1000`) and the
+   accesses the subfloor handler refuses. Then continue to the first presented
+   frame and the menu, auditing each wow64win call as Portal 2 reaches it.
+3. Choose Portal 2's default backend. DXMT cannot run i386 Direct3D 9.
+4. Measure the menu: frame time and serviced faults.
+
+Still open from milestone 1 step 2: freeing a thread's pair and stack, pointers
+inside other unix libraries' WoW64 parameter blocks (audio now has none), i386
+GDI fonts, other query classes, and the global WoW64 state.
+
+## After milestone 2 (outline only)
+
+- **Milestone 3:** audio and input through `wow64win`, gameplay, save and reload,
+  and the player's settings on the game's page.
 
 ## Rules that still apply
 

@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 07:51:58 +0200
+Subject: [PATCH] ntdll: map an i386 child's data section views in its window
+
+DXVK's i386 Direct3D 9 keeps shader bytecode in pagefile-backed
+sections (MemoryFilePool: CreateFileMapping, MapViewOfFile), and a
+window refused every data section but a read-only file's, so Portal
+2's first CreatePixelShader copied its bytecode to NULL. Map a data
+section's view, file or pagefile backed, read-only, read-write (shared)
+or write-copy (private), in the owner's window as virtual_map_section
+does natively, register it with the server under the section's access,
+and unmap it back into a window gap. Executable views, reserved
+sections and protect stay unsupported.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c | 63 +++++++++++++++++++++++++---------
+ 1 file changed, 47 insertions(+), 16 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index e6d3d7a..fff0327 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -118,6 +118,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #include "wow64_window.h"
+ #define VPROT_WOW64_IMAGE 0x2000 /* i386 bytes, never native/pool executable */
+ #define VPROT_WOW64_VM 0x4000 /* anonymous i386 storage, logical EXEC only */
++#define VPROT_WOW64_DATA 0x8000 /* a data section's view (file or pagefile backed) */
+ #include "ios_process_image.h"
+ #include "wine/debug.h"
+ 
+@@ -15148,17 +15149,22 @@ static NTSTATUS ios_wow64_server_unmap( struct file_view *view )
+ 
+ #include "wow64_section.h"
+ 
+-/* A read-only view of an ordinary file section in the owner's window (the NLS
+- * tables a guest reads): guest placement as for anonymous VM, a claimed view
+- * with the file mapped over it, and the server's view registration. Writable,
+- * reserved and anonymous sections, partial host-page offsets, unmap, protect
+- * and query are not supported. Registry held; outputs change on success. */
++/* A view of a data section (a file's, or a pagefile-backed one such as
++ * DXVK's shader store) in the owner's window: guest placement as for
++ * anonymous VM, a claimed view with the section's backing mapped over it
++ * (shared when writable, private for write-copy) and the server's view
++ * registration, as virtual_map_section does natively. Executable views,
++ * reserved sections, partial host-page offsets and protect are not
++ * supported. Registry held; outputs change on success. */
+ static NTSTATUS ios_wow64_map_file_view( uintptr_t window, HANDLE mapping, void **addr, SIZE_T *size_ptr,
+                                          uintptr_t zero_bits, uint64_t owner_end,
+                                          const LARGE_INTEGER *offset_ptr, mem_size_t full_size,
+-                                         unsigned int sec_flags, ULONG type )
++                                         unsigned int sec_flags, ULONG type, ULONG protect,
++                                         unsigned int access )
+ {
+-    const unsigned int vprot = VPROT_READ | VPROT_COMMITTED;
++    const unsigned int vprot = VPROT_COMMITTED | (protect == PAGE_READWRITE ? VPROT_READ | VPROT_WRITE :
++                                                  protect == PAGE_WRITECOPY ? VPROT_READ | VPROT_WRITECOPY :
++                                                  VPROT_READ);
+     uint64_t end = owner_end, offset = offset_ptr ? offset_ptr->QuadPart : 0;
+     int unix_fd = -1, needs_close = 0;
+     struct file_view *view = NULL;
+@@ -15201,7 +15207,7 @@ static NTSTATUS ios_wow64_map_file_view( uintptr_t window, HANDLE mapping, void
+             SERVER_START_REQ( map_view )
+             {
+                 req->mapping = wine_server_obj_handle( mapping );
+-                req->access  = SECTION_MAP_READ;
++                req->access  = access;
+                 req->base    = wine_server_client_ptr( view->base );
+                 req->size    = size;
+                 req->start   = offset;
+@@ -15220,11 +15226,14 @@ static NTSTATUS ios_wow64_map_file_view( uintptr_t window, HANDLE mapping, void
+         }
+         else
+         {
+-            view->protect = vprot | sec_flags;
++            static unsigned int data_logs;
++            view->protect = vprot | sec_flags | VPROT_WOW64_DATA;
+             *addr = view->base;
+             *size_ptr = size;
+-            dprintf( 2, "[wow64-section] host=%p guest=%#x bytes=%#lx file=1 offset=%#llx read_only=1\n",
+-                     view->base, guest, (unsigned long)size, (unsigned long long)offset );
++            if (data_logs++ < 32)
++                dprintf( 2, "[wow64-section] host=%p guest=%#x bytes=%#lx data=1 file=%u offset=%#llx "
++                            "protect=%#x\n", view->base, guest, (unsigned long)size,
++                         !!(sec_flags & SEC_FILE), (unsigned long long)offset, (unsigned int)protect );
+         }
+     }
+     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+@@ -15232,6 +15241,24 @@ static NTSTATUS ios_wow64_map_file_view( uintptr_t window, HANDLE mapping, void
+     return status;
+ }
+ 
++/* Unmap a data section's view: the server's registration, then the window
++ * gap it came from (the reservation's protection, a hole, coalesced). Both
++ * locks held; the view must start at its base. */
++static NTSTATUS ios_wow64_unmap_data( uintptr_t window, struct file_view *view )
++{
++    NTSTATUS status;
++    size_t length;
++    if (!view || !(view->protect & VPROT_WOW64_DATA)) return STATUS_NOT_MAPPED_VIEW;
++    length = (view->size + host_page_mask) & ~host_page_mask;
++    if ((status = ios_wow64_server_unmap( view ))) return status;
++    if (mmap( view->base, length, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0 ) == MAP_FAILED)
++        dprintf( 2, "[wow64-section] data view unmap failed at %p; kept as a hole\n", view->base );
++    view->protect = VPROT_WOW64_HOLE;
++    set_page_vprot( view->base, length, 0 );
++    ios_wow64_vm_coalesce( window, view );
++    return STATUS_SUCCESS;
++}
++
+ /* Intercept before native bounds, alias steering and remote APCs. */
+ static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr, SIZE_T *size,
+                                      ULONG_PTR zero_bits, SIZE_T commit, const LARGE_INTEGER *offset,
+@@ -15282,10 +15309,11 @@ static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr
+             if (*status) goto done;
+             end = (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
+                   IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
+-            if (!info && protect == PAGE_READONLY && (sec_flags & SEC_FILE) &&
+-                !(sec_flags & (SEC_IMAGE | SEC_RESERVE)))
+-                *status = ios_wow64_map_file_view( base, mapping, addr, size, zero_bits, end, offset,
+-                                                   full_size, sec_flags, type );
++            if (!info && !(sec_flags & (SEC_IMAGE | SEC_RESERVE)))
++                *status = (protect == PAGE_READONLY || protect == PAGE_READWRITE || protect == PAGE_WRITECOPY) ?
++                          ios_wow64_map_file_view( base, mapping, addr, size, zero_bits, end, offset,
++                                                   full_size, sec_flags, type, protect, access ) :
++                          STATUS_NOT_SUPPORTED;
+             /* Shared writable sections are MAP_SHARED: WRITECOPY there would
+              * write shared backing. Refuse them until that lifecycle exists. */
+             else if (!info || info->shared_file || sec_flags != (SEC_IMAGE | SEC_FILE) ||
+@@ -15334,8 +15362,11 @@ static BOOL ios_wow64_route_unmap( HANDLE process, const void *addr, ULONG flags
+         else if (flags) *status = STATUS_NOT_SUPPORTED;
+         else
+         {
++            struct file_view *view;
+             server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-            *status = ios_wow64_unmap_image( base, find_view( addr, 1 ) );
++            view = find_view( addr, 1 );
++            *status = view && (view->protect & VPROT_WOW64_DATA) ? ios_wow64_unmap_data( base, view ) :
++                      ios_wow64_unmap_image( base, view );
+             server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+         }
+         break;

@@ -261,6 +261,8 @@ def record():
     for name in VULKAN_PE:
         add("resource", f"Runtime/vulkan/arm64ec-windows/{name}", "vulkan-pe", f"arm64ec-windows/{name}",
             "P6-vulkan-pe")
+    # DXVK's Direct3D 9 for an i386 (WoW64) title, over Wine's wined3d one.
+    add("resource", "Runtime/vulkan/i386-windows/d3d9.dll", "vulkan-pe", "i386-windows/d3d9.dll", "P6-vulkan-pe")
     for arch, name in STEAMAPI:
         add("resource", f"Runtime/steamapi/{arch}-windows/{name}", "steamapi", f"{arch}-windows/{name}", "P8-steamapi")
     add("resource", "Runtime/arm64ec-windows/playport-session.exe", "session", "playport-session.exe", "P9-session")

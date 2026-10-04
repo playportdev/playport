@@ -1,0 +1,307 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 07:16:21 +0200
+Subject: [PATCH] winevulkan, win32u: convert an i386 child's Vulkan pointers
+ through its window on iOS
+
+Portal 2's i386 Direct3D 9 runs on DXVK over winevulkan's WoW64 thunks.
+An i386 child's 32-bit pointers are host B + guest in its window
+(madeira-unix 0049), so the thunks' UlongToPtr and PtrToUlong convert
+through the window, with B from the calling thread's TEB32. Handles
+(HANDLE, HWND, HINSTANCE) keep plain conversions, and debug utils'
+64-bit object handles take the window for dispatchable objects.
+
+win32u's zero_bits is the session's (0), so a child's thread now takes
+the 32-bit zero_bits: its device memory is mapped in its window with
+VK_EXT_map_memory_placed, rounded to 64 KiB because KosmicKrisp remaps
+its whole heap-aligned buffer, and a mapping fits the guest when it is
+in the window rather than below 4 GiB.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/win32u/vulkan.c             | 46 ++++++++++++++++++++++++++++
+ dlls/winevulkan/vulkan.c         | 10 +++++++
+ dlls/winevulkan/vulkan_private.h | 51 ++++++++++++++++++++++++++++++++
+ dlls/winevulkan/vulkan_thunks.c  | 34 ++++++++++-----------
+ 4 files changed, 124 insertions(+), 17 deletions(-)
+
+diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
+index 261c10c..fdae681 100644
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -60,6 +60,30 @@ static const UINT EXTERNAL_FENCE_WIN32_BITS = VK_EXTERNAL_FENCE_HANDLE_TYPE_OPAQ
+ 
+ #define ROUND_SIZE(size, mask) ((((SIZE_T)(size) + (mask)) & ~(SIZE_T)(mask)))
+ 
++#ifdef WINE_IOS
++/* Playport (iOS): one process holds the x86-64 session and its i386 children,
++ * and win32u's zero_bits is the session's (0). An i386 child's thread has a
++ * TEB32, and its address space is a 4 GiB window at host B (patches/
++ * madeira-unix 0049), where a 32-bit zero_bits allocation lands (0057). Its
++ * Vulkan memory is mapped there like any WoW64 process's, with the placed
++ * map, and a mapping fits the guest when it is inside the window. */
++static ULONG_PTR vulkan_window_base(void)
++{
++    TEB *teb = NtCurrentTeb();
++    const TEB32 *teb32;
++
++    if (!teb->WowTebOffset) return 0;
++    teb32 = (const TEB32 *)((const char *)teb + teb->WowTebOffset);
++    return (ULONG_PTR)teb32 - teb32->Tib.Self;
++}
++
++static ULONG_PTR vulkan_zero_bits(void)
++{
++    return NtCurrentTeb()->WowTebOffset ? 0x7fffffff : zero_bits;
++}
++#define zero_bits vulkan_zero_bits()
++#endif
++
+ static BOOL use_external_memory(void)
+ {
+     return zero_bits != 0;
+@@ -530,6 +554,11 @@ static VkResult init_physical_device( struct vulkan_physical_device *physical_de
+         else TRACE( "Using VK_EXT_external_memory_host for memory mapping with alignment: %u\n", physical_device->external_memory_align );
+     }
+ 
++#ifdef WINE_IOS
++    if (NtCurrentTeb()->WowTebOffset)
++        ERR( "Playport: i386 Vulkan memory maps: placed alignment %u, host-pointer alignment %u\n",
++             physical_device->map_placed_align, physical_device->external_memory_align );
++#endif
+     driver_funcs->p_map_device_extensions( &extensions );
+     if (extensions.has_VK_KHR_external_memory_win32 && zero_bits && !physical_device->map_placed_align)
+     {
+@@ -1138,6 +1167,11 @@ static VkResult win32u_vkMapMemory2KHR( VkDevice client_device, const VkMemoryMa
+     {
+         SIZE_T alloc_size = memory->size;
+ 
++#ifdef WINE_IOS
++        /* the driver remaps its whole buffer, rounded to its heap's alignment,
++         * so the view must cover that too */
++        alloc_size = ROUND_SIZE( alloc_size, 0xffff );
++#endif
+         placed_info.pNext = info.pNext;
+         info.pNext = &placed_info;
+         info.offset = 0;
+@@ -1175,7 +1209,19 @@ static VkResult win32u_vkMapMemory2KHR( VkDevice client_device, const VkMemoryMa
+     }
+ 
+ #ifdef _WIN64
++#ifdef WINE_IOS
++    if (NtCurrentTeb()->WowTebOffset)
++    {
++        static LONG logged;
++        if (InterlockedIncrement( &logged ) <= 8)
++            ERR( "Playport: i386 map of %#llx bytes: result %d at %p (placed %p, window %#lx)\n",
++                 (unsigned long long)memory->size, res, res == VK_SUCCESS ? *data : NULL,
++                 placed_info.pPlacedAddress, (unsigned long)vulkan_window_base() );
++    }
++    if (NtCurrentTeb()->WowTebOffset && res == VK_SUCCESS && ((UINT_PTR)*data - vulkan_window_base()) >> 32)
++#else
+     if (NtCurrentTeb()->WowTebOffset && res == VK_SUCCESS && (UINT_PTR)*data >> 32)
++#endif
+     {
+         FIXME( "returned mapping %p does not fit 32-bit pointer\n", *data );
+         device->p_vkUnmapMemory( device->host.device, memory->obj.host.device_memory );
+diff --git a/dlls/winevulkan/vulkan.c b/dlls/winevulkan/vulkan.c
+index 2dac08a..0dcecae 100644
+--- a/dlls/winevulkan/vulkan.c
++++ b/dlls/winevulkan/vulkan.c
+@@ -1000,6 +1000,16 @@ NTSTATUS vk_is_available_device_function(void *arg)
+ 
+ #endif /* _WIN64 */
+ 
++#ifdef WINE_IOS
++/* a host pointer for the guest that is not in its window (vulkan_private.h) */
++ULONG vulkan_wow64_rejected(const void *host, ULONG_PTR base)
++{
++    ERR("Playport: host pointer %p (from %p) is outside the guest window at %#lx, giving the guest 0\n",
++        host, __builtin_return_address(0), (unsigned long)base);
++    return 0;
++}
++#endif
++
+ NTSTATUS wow64_init_vulkan(void *arg)
+ {
+     struct
+diff --git a/dlls/winevulkan/vulkan_private.h b/dlls/winevulkan/vulkan_private.h
+index bc8fe30..1821687 100644
+--- a/dlls/winevulkan/vulkan_private.h
++++ b/dlls/winevulkan/vulkan_private.h
+@@ -151,4 +151,55 @@ static inline void *find_next_struct(const void *s, VkStructureType t)
+     return NULL;
+ }
+ 
++#ifdef WINE_IOS
++/* Playport (iOS): an i386 child's address space is a 4 GiB window at host
++ * B (patches/madeira-unix 0049), so its 32-bit pointers are host B + guest.
++ * The WoW64 thunks (thunk32_*, wow64_init_vulkan) convert every guest pointer
++ * with UlongToPtr and every pointer they hand back with PtrToUlong, so those
++ * two convert through the window. B comes from the calling thread's paired
++ * TEB32, whose Tib.Self is its guest address; it is 0 for a thread without
++ * a TEB32 or a window. Handles (HWND, HANDLE) are not pointers and use
++ * ULongToHandle/LongToHandle, which stay plain. */
++static inline ULONG_PTR vulkan_wow64_window_base(void)
++{
++    TEB *teb = NtCurrentTeb();
++    const TEB32 *teb32;
++
++    if (!teb->WowTebOffset) return 0;
++    teb32 = (const TEB32 *)((const char *)teb + teb->WowTebOffset);
++    return (ULONG_PTR)teb32 - teb32->Tib.Self;
++}
++
++static inline void *vulkan_wow64_to_host(ULONG guest)
++{
++    return guest ? (void *)(vulkan_wow64_window_base() + guest) : NULL;
++}
++
++extern ULONG vulkan_wow64_rejected(const void *host, ULONG_PTR base);
++
++static inline ULONG vulkan_wow64_to_guest(const void *host)
++{
++    ULONG_PTR base = vulkan_wow64_window_base(), offset = (ULONG_PTR)host - base;
++
++    if (!host) return 0;
++    if (offset >> 32) return vulkan_wow64_rejected(host, base);
++    return offset;
++}
++
++/* a dispatchable handle in a 64-bit handle field (debug utils' objectHandle):
++ * the guest's client object pointer for an i386 caller */
++static inline UINT64 vulkan_wow64_client_handle(UINT64 handle)
++{
++    ULONG_PTR base = vulkan_wow64_window_base();
++    return base && handle && !(handle >> 32) ? base + handle : handle;
++}
++
++#undef UlongToPtr
++#define UlongToPtr(ul) vulkan_wow64_to_host(ul)
++#undef PtrToUlong
++#define PtrToUlong(p) vulkan_wow64_to_guest(p)
++#else
++#define vulkan_wow64_client_handle(handle) (handle)
++#endif
++
+ #endif /* __WINE_VULKAN_PRIVATE_H */
+diff --git a/dlls/winevulkan/vulkan_thunks.c b/dlls/winevulkan/vulkan_thunks.c
+index 627e1ff..8d2a075 100644
+--- a/dlls/winevulkan/vulkan_thunks.c
++++ b/dlls/winevulkan/vulkan_thunks.c
+@@ -11099,7 +11099,7 @@ static uint64_t wine_vk_unwrap_handle(uint32_t type, uint64_t handle)
+     switch(type)
+     {
+     case VK_OBJECT_TYPE_COMMAND_BUFFER:
+-        return (uint64_t) (uintptr_t) vulkan_command_buffer_from_handle(((VkCommandBuffer) (uintptr_t) handle))->host.command_buffer;
++        return (uint64_t) (uintptr_t) vulkan_command_buffer_from_handle(((VkCommandBuffer) (uintptr_t) vulkan_wow64_client_handle(handle)))->host.command_buffer;
+     case VK_OBJECT_TYPE_COMMAND_POOL:
+         return (uint64_t) wine_cmd_pool_from_handle(handle)->host.command_pool;
+     case VK_OBJECT_TYPE_DEBUG_REPORT_CALLBACK_EXT:
+@@ -11109,17 +11109,17 @@ static uint64_t wine_vk_unwrap_handle(uint32_t type, uint64_t handle)
+     case VK_OBJECT_TYPE_DEFERRED_OPERATION_KHR:
+         return (uint64_t) wine_deferred_operation_from_handle(handle)->host.deferred_operation;
+     case VK_OBJECT_TYPE_DEVICE:
+-        return (uint64_t) (uintptr_t) vulkan_device_from_handle(((VkDevice) (uintptr_t) handle))->host.device;
++        return (uint64_t) (uintptr_t) vulkan_device_from_handle(((VkDevice) (uintptr_t) vulkan_wow64_client_handle(handle)))->host.device;
+     case VK_OBJECT_TYPE_DEVICE_MEMORY:
+         return (uint64_t) vulkan_device_memory_from_handle(handle)->host.device_memory;
+     case VK_OBJECT_TYPE_FENCE:
+         return (uint64_t) vulkan_fence_from_handle(handle)->host.fence;
+     case VK_OBJECT_TYPE_INSTANCE:
+-        return (uint64_t) (uintptr_t) vulkan_instance_from_handle(((VkInstance) (uintptr_t) handle))->host.instance;
++        return (uint64_t) (uintptr_t) vulkan_instance_from_handle(((VkInstance) (uintptr_t) vulkan_wow64_client_handle(handle)))->host.instance;
+     case VK_OBJECT_TYPE_PHYSICAL_DEVICE:
+-        return (uint64_t) (uintptr_t) vulkan_physical_device_from_handle(((VkPhysicalDevice) (uintptr_t) handle))->host.physical_device;
++        return (uint64_t) (uintptr_t) vulkan_physical_device_from_handle(((VkPhysicalDevice) (uintptr_t) vulkan_wow64_client_handle(handle)))->host.physical_device;
+     case VK_OBJECT_TYPE_QUEUE:
+-        return (uint64_t) (uintptr_t) vulkan_queue_from_handle(((VkQueue) (uintptr_t) handle))->host.queue;
++        return (uint64_t) (uintptr_t) vulkan_queue_from_handle(((VkQueue) (uintptr_t) vulkan_wow64_client_handle(handle)))->host.queue;
+     case VK_OBJECT_TYPE_SEMAPHORE:
+         return (uint64_t) vulkan_semaphore_from_handle(handle)->host.semaphore;
+     case VK_OBJECT_TYPE_SURFACE_KHR:
+@@ -11499,7 +11499,7 @@ static void convert_VkMemoryAllocateInfo_win32_to_host(struct conversion_context
+             out_ext->sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
+             out_ext->pNext = NULL;
+             out_ext->handleType = in_ext->handleType;
+-            out_ext->handle = (HANDLE)UlongToPtr(in_ext->handle);
++            out_ext->handle = LongToHandle(in_ext->handle);
+             out_ext->name = (LPCWSTR)UlongToPtr(in_ext->name);
+             out_header->pNext = (void *)out_ext;
+             out_header = (void *)out_ext;
+@@ -30609,8 +30609,8 @@ static void convert_VkWin32SurfaceCreateInfoKHR_win32_to_host(const VkWin32Surfa
+     out->sType = in->sType;
+     out->pNext = NULL;
+     out->flags = in->flags;
+-    out->hinstance = (HINSTANCE)UlongToPtr(in->hinstance);
+-    out->hwnd = (HWND)UlongToPtr(in->hwnd);
++    out->hinstance = (HINSTANCE)ULongToHandle(in->hinstance);
++    out->hwnd = (HWND)ULongToHandle(in->hwnd);
+     if (in->pNext)
+         FIXME("Unexpected pNext\n");
+ }
+@@ -48027,7 +48027,7 @@ static void convert_VkImportFenceWin32HandleInfoKHR_win32_to_unwrapped_host(cons
+     out->fence = in->fence;
+     out->flags = in->flags;
+     out->handleType = in->handleType;
+-    out->handle = (HANDLE)UlongToPtr(in->handle);
++    out->handle = LongToHandle(in->handle);
+     out->name = (LPCWSTR)UlongToPtr(in->name);
+     if (in->pNext)
+         FIXME("Unexpected pNext\n");
+@@ -48042,7 +48042,7 @@ static void convert_VkImportSemaphoreWin32HandleInfoKHR_win32_to_unwrapped_host(
+     out->semaphore = in->semaphore;
+     out->flags = in->flags;
+     out->handleType = in->handleType;
+-    out->handle = (HANDLE)UlongToPtr(in->handle);
++    out->handle = LongToHandle(in->handle);
+     out->name = (LPCWSTR)UlongToPtr(in->name);
+     if (in->pNext)
+         FIXME("Unexpected pNext\n");
+@@ -65345,9 +65345,9 @@ static NTSTATUS thunk32_vkGetFenceWin32HandleKHR(void *args)
+     TRACE("%#x, %#x, %#x\n", params->device, params->pGetWin32HandleInfo, params->pHandle);
+ 
+     convert_VkFenceGetWin32HandleInfoKHR_win32_to_unwrapped_host((const VkFenceGetWin32HandleInfoKHR32 *)UlongToPtr(params->pGetWin32HandleInfo), &pGetWin32HandleInfo_host);
+-    pHandle_host = UlongToPtr(*(PTR32 *)UlongToPtr(params->pHandle));
++    pHandle_host = ULongToHandle(*(PTR32 *)UlongToPtr(params->pHandle));
+     params->result = vk_funcs->p_vkGetFenceWin32HandleKHR((VkDevice)UlongToPtr(params->device), &pGetWin32HandleInfo_host, &pHandle_host);
+-    *(PTR32 *)UlongToPtr(params->pHandle) = PtrToUlong(pHandle_host);
++    *(PTR32 *)UlongToPtr(params->pHandle) = HandleToULong(pHandle_host);
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -66205,9 +66205,9 @@ static NTSTATUS thunk32_vkGetMemoryWin32HandleKHR(void *args)
+     TRACE("%#x, %#x, %#x\n", params->device, params->pGetWin32HandleInfo, params->pHandle);
+ 
+     convert_VkMemoryGetWin32HandleInfoKHR_win32_to_unwrapped_host((const VkMemoryGetWin32HandleInfoKHR32 *)UlongToPtr(params->pGetWin32HandleInfo), &pGetWin32HandleInfo_host);
+-    pHandle_host = UlongToPtr(*(PTR32 *)UlongToPtr(params->pHandle));
++    pHandle_host = ULongToHandle(*(PTR32 *)UlongToPtr(params->pHandle));
+     params->result = vk_funcs->p_vkGetMemoryWin32HandleKHR((VkDevice)UlongToPtr(params->device), &pGetWin32HandleInfo_host, &pHandle_host);
+-    *(PTR32 *)UlongToPtr(params->pHandle) = PtrToUlong(pHandle_host);
++    *(PTR32 *)UlongToPtr(params->pHandle) = HandleToULong(pHandle_host);
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -66238,7 +66238,7 @@ static NTSTATUS thunk32_vkGetMemoryWin32HandlePropertiesKHR(void *args)
+     TRACE("%#x, %#x, %#x, %#x\n", params->device, params->handleType, params->handle, params->pMemoryWin32HandleProperties);
+ 
+     convert_VkMemoryWin32HandlePropertiesKHR_win32_to_host((VkMemoryWin32HandlePropertiesKHR32 *)UlongToPtr(params->pMemoryWin32HandleProperties), &pMemoryWin32HandleProperties_host);
+-    params->result = vk_funcs->p_vkGetMemoryWin32HandlePropertiesKHR((VkDevice)UlongToPtr(params->device), params->handleType, (HANDLE)UlongToPtr(params->handle), &pMemoryWin32HandleProperties_host);
++    params->result = vk_funcs->p_vkGetMemoryWin32HandlePropertiesKHR((VkDevice)UlongToPtr(params->device), params->handleType, LongToHandle(params->handle), &pMemoryWin32HandleProperties_host);
+     convert_VkMemoryWin32HandlePropertiesKHR_host_to_win32(&pMemoryWin32HandleProperties_host, (VkMemoryWin32HandlePropertiesKHR32 *)UlongToPtr(params->pMemoryWin32HandleProperties));
+     return STATUS_SUCCESS;
+ }
+@@ -69149,9 +69149,9 @@ static NTSTATUS thunk32_vkGetSemaphoreWin32HandleKHR(void *args)
+     TRACE("%#x, %#x, %#x\n", params->device, params->pGetWin32HandleInfo, params->pHandle);
+ 
+     convert_VkSemaphoreGetWin32HandleInfoKHR_win32_to_unwrapped_host((const VkSemaphoreGetWin32HandleInfoKHR32 *)UlongToPtr(params->pGetWin32HandleInfo), &pGetWin32HandleInfo_host);
+-    pHandle_host = UlongToPtr(*(PTR32 *)UlongToPtr(params->pHandle));
++    pHandle_host = ULongToHandle(*(PTR32 *)UlongToPtr(params->pHandle));
+     params->result = vk_funcs->p_vkGetSemaphoreWin32HandleKHR((VkDevice)UlongToPtr(params->device), &pGetWin32HandleInfo_host, &pHandle_host);
+-    *(PTR32 *)UlongToPtr(params->pHandle) = PtrToUlong(pHandle_host);
++    *(PTR32 *)UlongToPtr(params->pHandle) = HandleToULong(pHandle_host);
+     return STATUS_SUCCESS;
+ }
+ 

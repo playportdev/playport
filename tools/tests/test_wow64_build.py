@@ -64,7 +64,8 @@ class WoW64Build(unittest.TestCase):
     def test_wow64_gate_rejects_wrong_machine_magic_and_missing_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            guest = [f"Runtime/i386-windows/{n}.dll" for n in ("ntdll", "kernel32")]
+            guest = [f"Runtime/i386-windows/{n}.dll" for n in ("ntdll", "kernel32")] + \
+                ["Runtime/vulkan/i386-windows/d3d9.dll"]
             host = [f"Runtime/aarch64-windows/{n}.dll" for n in ("wow64", "wow64win", "xtajit")]
             for name in guest + host:
                 p = root / name
@@ -91,6 +92,10 @@ class WoW64Build(unittest.TestCase):
                 (root / guest[0]).write_bytes(wrong)
                 self.assertFalse(all(run()))
             (root / guest[0]).write_bytes(pe())
+            # DXVK's i386 d3d9.dll is required as well.
+            rows.remove(("resource", guest[2]))
+            self.assertFalse(all(run()))
+            rows.append(("resource", guest[2]))
             (root / host[2]).unlink()
             self.assertFalse(all(run()))
             rows.clear()

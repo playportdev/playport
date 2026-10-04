@@ -466,7 +466,10 @@ static void unlink_runtime_links(const char *sys32)
 /* The WoW64 (i386) title's farms, since system32 is the session's ARM64EC
  * set: drive_c/windows/sysarm64, the aarch64 set its native loader takes
  * (wine-pe 0015), and drive_c/windows/syswow64, the i386 set its guest loader
- * reaches through wow64's system32 redirection. A failure is logged: only
+ * reaches through wow64's system32 redirection. The launch's backend overlay
+ * (PLAYPORT_DLL_OVERLAY) goes over a set it has one for: the Vulkan backend's
+ * i386 d3d9.dll (DXVK) over Wine's. Every link is recreated, so a later
+ * launch without the overlay gets Wine's DLL back. A failure is logged: only
  * i386 titles need them. */
 static void link_wow64_farm(const char *name, const char *pe_arch)
 {
@@ -478,6 +481,13 @@ static void link_wow64_farm(const char *name, const char *pe_arch)
         return;
     }
     host_log("%s: %d links -> %s", name, link_dir_into(src_dir, dir), src_dir);
+    const char *overlay = dll_overlay();
+    if (overlay) {
+        char over_dir[1400];
+        snprintf(over_dir, sizeof(over_dir), "%s/%s/%s-windows", g_runtime, overlay, pe_arch);
+        int m = link_dir_into(over_dir, dir);   /* -1: the overlay has no such set */
+        if (m >= 0) host_log("%s: %d links from %s over them", name, m, over_dir);
+    }
 }
 
 /* Point drive_c/windows/system32 at the bundle's PE set. The bundle path

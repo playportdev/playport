@@ -31,6 +31,7 @@ FAULT_PATCH = REPO / "patches/madeira-unix/0062-ntdll-service-a-WoW64-window-s-l
 DC_ATTR_PATCH = REPO / "patches/madeira-unix/0065-ntdll-share-win32u-s-DC_ATTR-arena-with-every-WoW64-.patch"
 SIMD_LANE_PATCH = REPO / "patches/madeira-unix/0070-signal-emulate-LD1-and-ST1-lanes-in-the-low-fault-em.patch"
 GDI32_DC_ATTR_PATCH = REPO / "patches/wine-pe/0019-gdi32-reach-a-native-DC_ATTR-through-the-WoW64-windo.patch"
+VULKAN_PATCH = REPO / "patches/wine-unix/0011-winevulkan-win32u-convert-an-i386-child-s-Vulkan-poi.patch"
 GUEST_HEADER = "dlls/wow64/wow64_window.h"
 GUEST_PATCH = REPO / "patches/wine-pe/0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch"
 
@@ -282,6 +283,17 @@ def main():
                         "-I", str((root / GUEST_HEADER).parent),
                         str(REPO / "build/wow64/guest_ptr_test.c"), "-o", str(guest_exe)], check=True)
         subprocess.run([str(guest_exe)], check=True)
+        # winevulkan's WoW64 thunk conversions, from the wine-unix patch.
+        (root / "vulkan_api.h").write_text("".join(patched_function(VULKAN_PATCH, sig) for sig in (
+            "static inline ULONG_PTR vulkan_wow64_window_base(void)",
+            "static inline void *vulkan_wow64_to_host(ULONG guest)",
+            "static inline ULONG vulkan_wow64_to_guest(const void *host)",
+            "static inline UINT64 vulkan_wow64_client_handle(UINT64 handle)")))
+        vulkan_exe = root / "vulkan-ptr-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all", "-I", str(root),
+                        str(REPO / "build/wow64/vulkan_ptr_test.c"), "-o", str(vulkan_exe)], check=True)
+        subprocess.run([str(vulkan_exe)], check=True)
     return 0
 
 

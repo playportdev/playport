@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 07:43:05 +0200
+Subject: [PATCH] wow64: log a windowed guest's faults with its registers and
+ stack
+
+On iOS, a fault in an i386 guest dispatched to its own handlers left no
+trace of where it happened. Log the first 16 such exceptions with the
+guest's registers and the top of its stack, which name the guest code
+(and its caller) that took them.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/wow64/syscall.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
+index 8a9bffc..c37f3ab 100644
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -264,6 +264,29 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
+ 
+             TRACE( "exception %08lx dispatcher %08lx stack %08lx eip %08lx\n",
+                    rec->ExceptionCode, ctx.Eip, ctx.Esp, stack->context.Eip );
++            /* Playport (iOS): a windowed guest's faults, with its registers and
++             * stack, which name the guest code that took them */
++            if (wow64_window_base && (rec->ExceptionCode & 0xf0000000) == 0xc0000000)
++            {
++                static LONG logged;
++                const ULONG *top = wow64_to_host( stack->context.Esp );
++
++                if (InterlockedIncrement( &logged ) <= 16)
++                {
++                    ERR( "Playport: i386 exception %08lx at eip %08lx (%08lx %08lx): eax %08lx ebx %08lx "
++                         "ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx\n",
++                         rec->ExceptionCode, stack->context.Eip,
++                         rec->NumberParameters > 0 ? rec->ExceptionInformation[0] : 0,
++                         rec->NumberParameters > 1 ? rec->ExceptionInformation[1] : 0,
++                         stack->context.Eax, stack->context.Ebx, stack->context.Ecx, stack->context.Edx,
++                         stack->context.Esi, stack->context.Edi, stack->context.Ebp, stack->context.Esp );
++                    if (top)
++                        ERR( "Playport: i386 stack %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx "
++                             "%08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
++                             top[0], top[1], top[2], top[3], top[4], top[5], top[6], top[7],
++                             top[8], top[9], top[10], top[11], top[12], top[13], top[14], top[15] );
++                }
++            }
+         }
+         break;
+ 
