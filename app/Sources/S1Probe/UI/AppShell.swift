@@ -34,6 +34,7 @@ struct AppShell: View {
     @ObservedObject private var modal = PadModal.shared
     @ObservedObject private var gamePage = GamePageState.shared
     @ObservedObject private var setupState = SetupState.shared
+    @Environment(\.launchingFromPage) private var launchingFromPage
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
 
@@ -63,7 +64,8 @@ struct AppShell: View {
                     .padding(.bottom, Self.footerBottom)
             }
         }
-        .background(PP.background.ignoresSafeArea())
+        // Clear once Play is pressed: the launch screen under the diving page shows through.
+        .background((launchingFromPage ? Color.clear : PP.background).ignoresSafeArea())
         // The controller keyboard or a picker, over everything with its own footer.
         .overlay { PadModalHost().animation(.easeOut(duration: 0.15), value: modal.isUp) }
         // Download mode: black, over everything, until a button or a tap (DownloadsView.swift).

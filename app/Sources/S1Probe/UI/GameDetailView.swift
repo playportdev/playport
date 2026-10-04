@@ -68,6 +68,8 @@ private struct GameDetailPage: View {
     @ObservedObject private var launchSettings = LaunchSettingsStore.shared
     @ObservedObject private var navigation = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
+    /// Play was pressed: the page dives away over the launch screen (UI/LaunchTransition.swift).
+    @Environment(\.launchingFromPage) private var launchingFromPage
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -226,23 +228,18 @@ private struct GameDetailPage: View {
     private func page(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         let under = !navigation.gamePanels.isEmpty
         return ZStack(alignment: .topLeading) {
-            // The hero art, fading into the page.
-            Group {
-                if let g {
-                    SteamArtView(app: g.info, kind: .hero, placeholder: PP.tile(for: name))
-                } else if let t {
-                    GameArt(appID: t.appID, name: t.name, kind: .hero)
+            // The hero art, fading into the page (the launch screen draws the same band: on
+            // Play the page's copy goes at once, over the launch screen's, which stays put).
+            HeroBanner {
+                Group {
+                    if let g {
+                        SteamArtView(app: g.info, kind: .hero, placeholder: PP.tile(for: name))
+                    } else if let t {
+                        GameArt(appID: t.appID, name: t.name, kind: .hero)
+                    }
                 }
             }
-            .frame(height: 250)
-            .frame(maxWidth: .infinity)
-            .clipped()
-            .overlay {
-                LinearGradient(stops: [.init(color: PP.background.opacity(0.1), location: 0),
-                                       .init(color: PP.background.opacity(0.55), location: 0.55),
-                                       .init(color: PP.background, location: 1)],
-                               startPoint: .top, endPoint: .bottom)
-            }
+            .opacity(launchingFromPage ? 0 : 1)
             .ignoresSafeArea(edges: [.top, .horizontal])
             .allowsHitTesting(false)
 
@@ -275,7 +272,7 @@ private struct GameDetailPage: View {
             .padding(.top, 76)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(PP.background.ignoresSafeArea())
+        .background((launchingFromPage ? Color.clear : PP.background).ignoresSafeArea())
     }
 
     private func subtitle(_ t: InstalledTitle?, _ g: SteamGame?) -> String? {

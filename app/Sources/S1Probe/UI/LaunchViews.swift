@@ -85,9 +85,7 @@ struct LaunchScreen: View {
             .background {
                 // Aspect-fill art must not widen the foreground's layout proposal:
                 // long titles need the screen's width to wrap and scale to fit.
-                LaunchBackdrop(art: launch.art.map { .image($0) } ?? .tile(launch.title))
-                    .scaleEffect(shown || reduceMotion ? 1 : 0.9)
-                    .opacity(shown ? 1 : 0)
+                LaunchBackdrop(art: launch.art, title: launch.title, dim: shown ? 1 : 0)
                     .animation(LaunchMotion.partIn(0.65, delay: 0.12), value: shown)
             }
         }
@@ -122,22 +120,62 @@ enum LaunchFix {
     }
 }
 
-/// The game's art dimmed over the design's dark blue, or its tile colour.
-struct LaunchBackdrop: View {
-    enum Art { case image(UIImage), tile(String) }
-    let art: Art
+/// A game's hero art as its page shows it (GameDetailView): the screen's width and 250
+/// points high, filled and centred, fading into the page. The launch screen draws the same
+/// band (LaunchBackdrop), so the art keeps its place and size from the page to the game.
+struct HeroBanner<Art: View>: View {
+    /// The page's fade into its background; the launch screen dims the band its own way.
+    var fades = true
+    @ViewBuilder let art: Art
 
     var body: some View {
-        ZStack {
-            Color(hex: 0x131C2B)
-            switch art {
-            case .image(let img): Image(uiImage: img).resizable().aspectRatio(contentMode: .fill).opacity(0.28)
-            case .tile(let name): PP.tile(for: name).opacity(0.35)
+        art
+            .frame(height: 250)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .overlay {
+                if fades {
+                    LinearGradient(stops: [.init(color: PP.background.opacity(0.1), location: 0),
+                                           .init(color: PP.background.opacity(0.55), location: 0.55),
+                                           .init(color: PP.background, location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
             }
+    }
+}
+
+/// The game's art dimmed over the design's dark blue, or its tile colour, in the hero band
+/// the game's page shows it in. `dim` 0 is the page's look, where Play starts: the launch
+/// screen fades from it to its own, the art never moving.
+struct LaunchBackdrop: View {
+    let art: UIImage?
+    let title: String
+    var dim: Double = 1
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color(hex: 0x131C2B)
+            HeroBanner(fades: false) { picture }
+                .opacity(0.3)
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0.45), .init(color: .clear, location: 1)],
+                                     startPoint: .top, endPoint: .bottom))
             LinearGradient(colors: [.clear, Color(hex: 0x05070A).opacity(0.7)], startPoint: .top, endPoint: .bottom)
+            ZStack(alignment: .top) {
+                PP.background
+                HeroBanner { picture }
+            }
+            .opacity(1 - dim)
+        }
+        .ignoresSafeArea()
+    }
+
+    /// As SteamArtView draws it on the page: the tile colour under the art.
+    private var picture: some View {
+        ZStack {
+            Rectangle().fill(PP.tile(for: title))
+            if let art { Image(uiImage: art).resizable().aspectRatio(contentMode: .fill) }
         }
         .clipped()
-        .ignoresSafeArea()
     }
 }
 

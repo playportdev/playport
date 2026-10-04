@@ -47,6 +47,8 @@ struct RootView: View {
     @ObservedObject private var setup = JitSetup.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The page has dived away after Play (0.7 s): the shell leaves the hierarchy.
+    @State private var pageGone = false
 
     var body: some View {
         ZStack {
@@ -77,14 +79,30 @@ struct RootView: View {
                 // as the game left the screen, with nothing to read (decision 0034).
                 Color.black.ignoresSafeArea().statusBarHidden().persistentSystemOverlays(.hidden)
                     .transition(.identity)
-            } else {
-                // On Play the page dives away over the launch screen (UI/LaunchTransition.swift).
+            }
+            if !restart.restarting && (!launch.running || !pageGone) {
+                // On Play the page dives away over the launch screen, live (it drops its art and
+                // background at once), then goes (UI/LaunchTransition.swift).
                 AppShell()
+                    .environment(\.launchingFromPage, launch.running)
+                    .animation(LaunchMotion.pageOut) { page in
+                        page.modifier(launch.running
+                                      ? (reduceMotion ? DiveEffect(scale: 1, blur: 0, opacity: 0) : DiveEffect(scale: 1.25, blur: 8, opacity: 0))
+                                      : DiveEffect(scale: 1, blur: 0, opacity: 1))
+                    }
+                    .allowsHitTesting(!launch.running)
                     .zIndex(1)
-                    .transition(LaunchMotion.dive(scale: 1.25, blur: 8, reduceMotion: reduceMotion))
+                    .transition(.identity)
             }
         }
-        .animation(LaunchMotion.pageOut, value: launch.running)
+        .onChange(of: launch.running) { _, running in
+            pageGone = false
+            guard running else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(0.7))
+                if launch.running { pageGone = true }
+            }
+        }
         .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: Binding(get: { setup.presented }, set: { if !$0 && setup.phase != .ready && setup.phase != .cancelled { setup.cancel() } }),
                onDismiss: { setup.dismissed() }) { JitSetupSheet() }

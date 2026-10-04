@@ -414,8 +414,10 @@ but the player's Pause and runs it once Steam is signed in. A release build comp
   `wine_host_session_start`, `wine_host_session_launch` and
   `wine_host_session_wait`, once per app process. The scene turns landscape to
   `GameSurface`, covered by the launch's steps until the game's first frame.
-  On Play the page zooms, blurs and fades over the launch screen as its parts
-  come in; on the first frame the launch screen flies on the same way and the
+  On Play the page's text and controls zoom, blur and fade over the launch
+  screen as its parts come in; the hero art stays put (the page and the launch
+  screen draw it in the same band, `HeroBanner`) and only dims. On the first
+  frame the launch screen flies on the same way and the
   game settles in from just behind it (`UI/LaunchTransition.swift`; fades only
   with Reduce Motion). The game presents under a black cover, never a
   transparent Metal layer.
