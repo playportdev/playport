@@ -19,7 +19,8 @@ import PlayportKit
 import SwiftUI
 
 /// The launch screen over the title's black surface until its first frame
-/// (Launch.dc.html): the game's art dimmed, its name, one progress bar and
+/// (Launch.dc.html): over the game's art as its page shows it (LaunchBackdrop,
+/// drawn under this by RootView), its name, one progress bar and
 /// the step in a word, what the checks before the Play found that does not stop
 /// it (no controller, Steam signed out), and the tip for the in-game menu. The steps (JIT,
 /// runtime, game) are listed only when JIT is slow (LaunchProgress.jitSlow),
@@ -41,13 +42,13 @@ struct LaunchScreen: View {
             ZStack {
                 VStack(spacing: 18) {
                     LaunchTitle(name: launch.title)
-                        .scaleEffect(shown || reduceMotion ? 1 : 0.8)
-                        .blur(radius: shown || reduceMotion ? 0 : 6)
+                        .scaleEffect(shown || reduceMotion ? 1 : 0.9)
+                        .blur(radius: shown || reduceMotion ? 0 : 4)
                         .opacity(shown ? 1 : 0)
-                        .animation(LaunchMotion.partIn(0.55, delay: 0.25), value: shown)
+                        .animation(LaunchMotion.partIn(0.35, delay: 0.08), value: shown)
                     LaunchBar(fraction: LaunchProgress.fraction(launch.stage, elapsed: elapsed))
                         .opacity(shown ? 1 : 0)
-                        .animation(LaunchMotion.partIn(0.35, delay: 0.5), value: shown)
+                        .animation(LaunchMotion.partIn(0.3, delay: 0.12), value: shown)
                     HStack(spacing: 10) {
                         ForEach(LaunchProgress.steps, id: \.self) { s in
                             Circle().fill(launch.stage > s ? PP.accent : PP.line).frame(width: 8, height: 8)
@@ -56,7 +57,7 @@ struct LaunchScreen: View {
                             .accessibilityIdentifier("launch-status")
                     }
                     .opacity(shown ? 1 : 0)
-                    .animation(LaunchMotion.partIn(0.35, delay: 0.56), value: shown)
+                    .animation(LaunchMotion.partIn(0.3, delay: 0.14), value: shown)
                     if slow, case .waitingForJit(let until) = launch.step {
                         LaunchSteps(current: .jit, failed: nil) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -79,15 +80,9 @@ struct LaunchScreen: View {
                     LaunchTip().padding(.bottom, 26)
                 }
                 .opacity(shown ? 1 : 0)
-                .animation(LaunchMotion.partIn(0.35, delay: 0.62), value: shown)
+                .animation(LaunchMotion.partIn(0.3, delay: 0.16), value: shown)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background {
-                // Aspect-fill art must not widen the foreground's layout proposal:
-                // long titles need the screen's width to wrap and scale to fit.
-                LaunchBackdrop(art: launch.art, title: launch.title, dim: shown ? 1 : 0)
-                    .animation(LaunchMotion.partIn(0.65, delay: 0.12), value: shown)
-            }
         }
         .foregroundStyle(PP.text)
         .accessibilityIdentifier("launch-screen")
@@ -121,11 +116,9 @@ enum LaunchFix {
 }
 
 /// A game's hero art as its page shows it (GameDetailView): the screen's width and 250
-/// points high, filled and centred, fading into the page. The launch screen draws the same
-/// band (LaunchBackdrop), so the art keeps its place and size from the page to the game.
+/// points high, filled and centred, fading into the page's background. The launch screen
+/// draws the same (LaunchBackdrop), so from the page to the game the art does not change.
 struct HeroBanner<Art: View>: View {
-    /// The page's fade into its background; the launch screen dims the band its own way.
-    var fades = true
     @ViewBuilder let art: Art
 
     var body: some View {
@@ -134,37 +127,25 @@ struct HeroBanner<Art: View>: View {
             .frame(maxWidth: .infinity)
             .clipped()
             .overlay {
-                if fades {
-                    LinearGradient(stops: [.init(color: PP.background.opacity(0.1), location: 0),
-                                           .init(color: PP.background.opacity(0.55), location: 0.55),
-                                           .init(color: PP.background, location: 1)],
-                                   startPoint: .top, endPoint: .bottom)
-                }
+                LinearGradient(stops: [.init(color: PP.background.opacity(0.1), location: 0),
+                                       .init(color: PP.background.opacity(0.55), location: 0.55),
+                                       .init(color: PP.background, location: 1)],
+                               startPoint: .top, endPoint: .bottom)
             }
     }
 }
 
-/// The game's art dimmed over the design's dark blue, or its tile colour, in the hero band
-/// the game's page shows it in. `dim` 0 is the page's look, where Play starts: the launch
-/// screen fades from it to its own, the art never moving.
+/// Behind the launch screen: the game's page as it was without its text and controls, the
+/// hero art in its band over the page's background, unchanged for the whole launch (on Play
+/// only the page's text and controls leave and the launch screen's come; RootView).
 struct LaunchBackdrop: View {
     let art: UIImage?
     let title: String
-    var dim: Double = 1
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(hex: 0x131C2B)
-            HeroBanner(fades: false) { picture }
-                .opacity(0.3)
-                .mask(LinearGradient(stops: [.init(color: .black, location: 0.45), .init(color: .clear, location: 1)],
-                                     startPoint: .top, endPoint: .bottom))
-            LinearGradient(colors: [.clear, Color(hex: 0x05070A).opacity(0.7)], startPoint: .top, endPoint: .bottom)
-            ZStack(alignment: .top) {
-                PP.background
-                HeroBanner { picture }
-            }
-            .opacity(1 - dim)
+            PP.background
+            HeroBanner { picture }
         }
         .ignoresSafeArea()
     }

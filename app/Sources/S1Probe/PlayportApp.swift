@@ -61,10 +61,14 @@ struct RootView: View {
                     .scaleEffect(launch.showsSheet && !reduceMotion ? LaunchMotion.gameFrom : 1)
                     .overlay { Color.black.opacity(launch.showsSheet ? 1 : 0).ignoresSafeArea().allowsHitTesting(false) }
                     .animation(LaunchMotion.gameIn, value: launch.showsSheet)
-                    // The launch screen covers it until the game is up (UI/LaunchViews.swift).
+                    // The launch screen covers it until the game is up (UI/LaunchViews.swift): the
+                    // game's art as its page showed it, which only fades on the first frame, and
+                    // the name, bar and step over it, which fly off towards the player.
                     .overlay {
                         ZStack {
                             if launch.showsSheet {
+                                LaunchBackdrop(art: launch.art, title: launch.title)
+                                    .transition(.opacity.animation(LaunchMotion.backdropOut))
                                 LaunchScreen().transition(LaunchMotion.dive(scale: 1.3, blur: 10, reduceMotion: reduceMotion))
                             }
                         }
@@ -87,7 +91,7 @@ struct RootView: View {
                     .environment(\.launchingFromPage, launch.running)
                     .animation(LaunchMotion.pageOut) { page in
                         page.modifier(launch.running
-                                      ? (reduceMotion ? DiveEffect(scale: 1, blur: 0, opacity: 0) : DiveEffect(scale: 1.25, blur: 8, opacity: 0))
+                                      ? (reduceMotion ? DiveEffect(scale: 1, blur: 0, opacity: 0) : DiveEffect(scale: 1.12, blur: 6, opacity: 0))
                                       : DiveEffect(scale: 1, blur: 0, opacity: 1))
                     }
                     .allowsHitTesting(!launch.running)
@@ -99,7 +103,7 @@ struct RootView: View {
             pageGone = false
             guard running else { return }
             Task { @MainActor in
-                try? await Task.sleep(for: .seconds(0.7))
+                try? await Task.sleep(for: .seconds(LaunchMotion.pageSeconds + 0.05))
                 if launch.running { pageGone = true }
             }
         }

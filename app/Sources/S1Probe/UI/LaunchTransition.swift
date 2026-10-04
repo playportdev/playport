@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A game's launch, in motion ("dive into the art"): Play pushes the camera into the
-// game's page: its text and controls zoom, blur and fade while the launch screen's name,
-// bar, step and tip come up. The hero art does not move: the page and the launch screen
-// draw it in the same band (UI/LaunchViews.swift HeroBanner), the page's copy goes at
-// once, and the launch screen's dims from the page's look to its own. On the game's first
-// frame the launch screen keeps flying towards the player, blurring away, and the game
-// settles in from just behind it. Reduce Motion leaves fades only.
+// A game's launch, in motion ("dive into the art"). The game's hero art never changes:
+// the launch screen draws it as the game's page does (UI/LaunchViews.swift LaunchBackdrop,
+// HeroBanner), so only the text and controls move. On Play the page's zoom, blur and fade
+// away (0.35 s; it drops its own copy of the art and its background at once, over the
+// launch screen's identical one) while the launch screen's name, bar, step and tip fade
+// in, all there within half a second. On the game's first frame those fly on towards the
+// player, blurring away, the art fades, and the game settles in from just behind them.
+// Reduce Motion leaves fades only.
 
 import SwiftUI
 
 enum LaunchMotion {
-    /// The game's page leaving on Play.
-    static let pageOut = Animation.timingCurve(0.5, 0, 0.3, 1, duration: 0.65)
-    /// The launch screen leaving on the first frame.
+    /// The game's page's text and controls leaving on Play.
+    static let pageSeconds = 0.35
+    static let pageOut = Animation.timingCurve(0.4, 0, 0.2, 1, duration: pageSeconds)
+    /// The art fading on the first frame, as the launch screen's parts fly off.
+    static let backdropOut = Animation.easeInOut(duration: 0.6)
+    /// The launch screen's parts leaving on the first frame.
     static let sheetOut = Animation.timingCurve(0.5, 0, 0.3, 1, duration: 0.7)
     /// The game settling in under it.
     static let gameIn = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.75).delay(0.12)
