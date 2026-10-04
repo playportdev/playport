@@ -809,14 +809,16 @@ public actor SteamService {
         let rules = (try await backend.appRecords([appID])[appID]).map(Cloud.rules) ?? []
         let changes = try await backend.cloudChangelist(appID: appID)
         let remote = changes.remote
-        var files = Cloud.localFiles(rules: rules, roots: roots, steamID: stored.steamID)
+        let kept = loadCloud(appID)
+        let baseline = kept?.accountTag == account ? kept?.baseline : nil
+        // Each local file under the name Steam has for it, else the last sync's (Cloud.named).
+        var files = Cloud.named(Cloud.localFiles(rules: rules, roots: roots, steamID: stored.steamID),
+                                like: remote.keys.sorted() + (baseline?.files.keys.sorted() ?? []))
         for name in remote.keys where files[name] == nil {
             if let url = roots.file(name), FileManager.default.fileExists(atPath: url.path) { files[name] = url }
         }
         var local: [String: String] = [:]
         for (name, url) in files { if let d = try? Data(contentsOf: url) { local[name] = SHA1.hash([UInt8](d)).hex } }
-        let kept = loadCloud(appID)
-        let baseline = kept?.accountTag == account ? kept?.baseline : nil
         var plan = Cloud.plan(remote: remote, local: local, baseline: baseline)
         // A game's first sync does not upload a file Steam lacks: the player says.
         if baseline == nil { for name in local.keys where remote[name] == nil { plan[name] = .conflict } }

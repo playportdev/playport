@@ -51,6 +51,31 @@ public enum Cloud {
         }
     }
 
+    /// Steam's spelling of a root token, as its file list names a file a
+    /// Windows client uploaded: a PICS rule may spell it in another case
+    /// (Portal 2's `gameinstall`). A token Playport does not map stays as given.
+    static func canonicalRoot(_ token: String) -> String {
+        let steam = ["GameInstall", "WinMyDocuments", "WinAppDataLocal", "WinAppDataLocalLow", "WinAppDataRoaming", "WinSavedGames"]
+        return steam.first { $0.lowercased() == token.lowercased() } ?? token
+    }
+
+    /// The local files under the names Steam already uses. Steam takes cloud
+    /// names without case (an upload of a name that differs from a stored one
+    /// only in case is refused as a duplicate), and so does the prefix's file
+    /// system, so a local name that matches one of `names` without case takes
+    /// that spelling; an earlier entry of `names` wins. Local names that become
+    /// one keep the file of the first in sorted order.
+    public static func named(_ files: [String: URL], like names: [String]) -> [String: URL] {
+        var spelling: [String: String] = [:]
+        for n in names where spelling[n.lowercased()] == nil { spelling[n.lowercased()] = n }
+        var out: [String: URL] = [:]
+        for (name, url) in files.sorted(by: { $0.key < $1.key }) {
+            let key = spelling[name.lowercased()] ?? name
+            if out[key] == nil { out[key] = url }
+        }
+        return out
+    }
+
     /// `%Token%rest` into the token (empty for none) and the rest.
     static func split(_ name: String) -> (String, String) {
         guard name.hasPrefix("%"), let end = name.dropFirst().firstIndex(of: "%") else { return ("", name) }
@@ -100,7 +125,7 @@ public enum Cloud {
             for file in TitleInstaller.regularFiles(under: dir) {
                 let parts = file.split(separator: "/")
                 guard r.recursive || parts.count == 1, glob(r.pattern, String(parts.last ?? "")) else { continue }
-                let prefix = r.root.isEmpty ? "" : "%\(r.root)%"
+                let prefix = r.root.isEmpty ? "" : "%\(canonicalRoot(r.root))%"
                 let path = (rel + [file]).joined(separator: "/")
                 out[prefix + path] = dir.appendingPathComponent(file)
             }

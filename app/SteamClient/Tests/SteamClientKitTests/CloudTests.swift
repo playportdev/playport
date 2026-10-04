@@ -23,6 +23,24 @@ func cloudApp() throws -> KeyValue {
     """.utf8))
 }
 
+/// A PICS record with Portal 2's save rule as it spells it: the root in lower
+/// case, while Steam lists the files a Windows client uploaded as `%GameInstall%`.
+func portal2CloudApp() throws -> KeyValue {
+    try KeyValue.parseText(Array("""
+    "620"
+    {
+        "common" { "name" "Portal 2" }
+        "ufs"
+        {
+            "savefiles"
+            {
+                "0" { "root" "gameinstall" "path" "portal2/SAVE/{64BitSteamID}/" "pattern" "*.sav" }
+            }
+        }
+    }
+    """.utf8))
+}
+
 final class CloudTests: XCTestCase {
     var dir: URL!
     var roots: Cloud.Roots!
@@ -51,6 +69,26 @@ final class CloudTests: XCTestCase {
         try write(dir.appendingPathComponent("users/playport/AppData/LocalLow/TEAM CHERRY/x.dat"), "a")
         XCTAssertEqual(roots.file("%WinAppDataLocalLow%Team Cherry/x.dat")?.path,
                        dir.appendingPathComponent("users/playport/AppData/LocalLow/TEAM CHERRY/x.dat").path)
+    }
+
+    func testARulesRootTakesSteamsSpellingAndLocalNamesTakeSteamsCase() throws {
+        let rules = Cloud.rules(try portal2CloudApp())
+        XCTAssertEqual(rules.map(\.root), ["gameinstall"])
+        let save = dir.appendingPathComponent("Games/Knight/portal2/SAVE/42")
+        try write(save.appendingPathComponent("autosave.sav"), "auto")
+        try write(save.appendingPathComponent("1791103990.sav"), "quick")
+        let files = Cloud.localFiles(rules: rules, roots: roots, steamID: 42)
+        XCTAssertEqual(files.keys.sorted(), ["%GameInstall%portal2/SAVE/42/1791103990.sav", "%GameInstall%portal2/SAVE/42/autosave.sav"],
+                       "the token as Steam lists it, not as the rule spells it")
+        XCTAssertEqual(Cloud.canonicalRoot("WINAPPDATALOCALLOW"), "WinAppDataLocalLow")
+        XCTAssertEqual(Cloud.canonicalRoot("LinuxHome"), "LinuxHome", "a root Playport does not map stays as given")
+
+        // A file an earlier sync uploaded under the rule's spelling keeps the name Steam has for it.
+        let named = Cloud.named(files, like: ["%gameinstall%portal2/SAVE/42/1791103990.sav", "%GameInstall%portal2/save/42/other.sav"])
+        XCTAssertEqual(named.keys.sorted(), ["%GameInstall%portal2/SAVE/42/autosave.sav", "%gameinstall%portal2/SAVE/42/1791103990.sav"])
+        XCTAssertEqual(named["%gameinstall%portal2/SAVE/42/1791103990.sav"], files["%GameInstall%portal2/SAVE/42/1791103990.sav"])
+        let first = Cloud.named(["a/X.sav": save, "a/x.sav": dir], like: ["A/x.sav", "a/x.SAV"])
+        XCTAssertEqual(first, ["A/x.sav": save], "the first of the names wins, and two local names for one file become one")
     }
 
     func testRulesAndTheLocalFilesTheyCover() throws {
@@ -156,6 +194,50 @@ final class CloudServiceTests: XCTestCase {
         let kept = TitleInstaller.regularFiles(under: backups)
         XCTAssertEqual(kept.count, 1)
         XCTAssertEqual(text(backups.appendingPathComponent(kept[0])), "played on the phone")
+    }
+
+    /// Portal 2: its rule spells the root `gameinstall`, Steam lists `%GameInstall%`. Each save
+    /// had two names, and every sync sent Steam copies it refused (DuplicateRequest).
+    func testPortal2sSavesSyncUnderTheNamesSteamHas() async throws {
+        let auto = "%GameInstall%portal2/SAVE/7/autosave.sav"
+        let earlier = "%gameinstall%portal2/SAVE/7/1791103990.sav"   // uploaded under the rule's spelling
+        let config = "cfg/config.cfg"                                   // through ISteamRemoteStorage
+        let b = FakeBackend()
+        await b.set(cloud: [auto: Array("pc auto".utf8), earlier: Array("phone quick".utf8), config: Array("cfg".utf8)])
+        await b.set(library: [620], [620: try portal2CloudApp()])
+        await b.set(stored: FakeBackend.session(exp: 2_000_000_000))
+        let s = SteamService(backend: b, log: .silent, stateDirectory: dir.appendingPathComponent("state"))
+        _ = await s.restoreIfPossible()
+        let p2 = Cloud.Roots(user: dir.appendingPathComponent("users/playport"), gameInstall: dir.appendingPathComponent("Games/Portal 2"),
+                             remote: dir.appendingPathComponent("GSE Saves/620/remote"))
+
+        let first = try await s.syncCloud(appID: 620, roots: p2, backups: backups)
+        XCTAssertEqual(first.downloaded.sorted(), [auto, earlier, config].sorted())
+        let saves = dir.appendingPathComponent("Games/Portal 2/portal2/SAVE/7")
+        XCTAssertEqual(text(saves.appendingPathComponent("autosave.sav")), "pc auto")
+        XCTAssertEqual(text(dir.appendingPathComponent("GSE Saves/620/remote/cfg/config.cfg")), "cfg")
+
+        let unchanged = try await s.syncCloud(appID: 620, roots: p2, backups: backups)
+        XCTAssertEqual(unchanged.uploaded + unchanged.downloaded, [], "no second name for a file Steam has")
+        XCTAssertEqual(unchanged.failed, [:])
+        XCTAssertEqual(unchanged.conflicts, [])
+
+        // A play saves anew and rewrites the autosave: both go up, under Steam's spelling.
+        try Data("phone auto".utf8).write(to: saves.appendingPathComponent("autosave.sav"))
+        try Data("new save".utf8).write(to: saves.appendingPathComponent("1791200000.sav"))
+        let played = try await s.syncCloud(appID: 620, roots: p2, backups: backups)
+        XCTAssertEqual(played.uploaded, ["%GameInstall%portal2/SAVE/7/1791200000.sav", auto])
+        XCTAssertEqual(played.failed, [:])
+        let onSteam = await b.cloudFile(auto)
+        XCTAssertEqual(onSteam, Array("phone auto".utf8))
+
+        // The PC plays next: Steam's newer autosave comes down before the phone's next play.
+        await b.set(cloud: [auto: Array("pc again".utf8), earlier: Array("phone quick".utf8), config: Array("cfg".utf8),
+                            "%GameInstall%portal2/SAVE/7/1791200000.sav": Array("new save".utf8)])
+        let next = try await s.syncCloud(appID: 620, roots: p2, backups: backups)
+        XCTAssertEqual(next.downloaded, [auto])
+        XCTAssertEqual(next.uploaded, [])
+        XCTAssertEqual(text(saves.appendingPathComponent("autosave.sav")), "pc again")
     }
 
     func testBothChangedIsAConflictThePlayerSettles() async throws {

@@ -26,7 +26,9 @@ extension SteamSession {
         return try Cloud.content(raw, rawSize: r.rawFileSize, sha: r.sha.hex)
     }
 
-    /// Uploads files in one batch; returns the names Steam committed.
+    /// Uploads files in one batch; returns the names Steam committed. A file
+    /// Steam refuses is logged and left out; the batch is completed either way,
+    /// so the next sync can begin another.
     public func cloudUpload(appID: UInt32, files: [(name: String, data: [UInt8], time: UInt64)], timeout: Double) async throws -> [String] {
         guard case .loggedOn(anonymous: false) = state else { throw SteamError.notLoggedOn }
         let cm = try requireCM()
@@ -39,13 +41,18 @@ extension SteamSession {
         for f in files {
             let sha = SHA1.hash(f.data)
             var ok = false
+            // The file's own name only: its folders may carry the account's Steam ID.
+            let file = f.name.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? f.name
+            var step = "begin"
             do {
                 let begin = try CCloudClientBeginFileUploadResponse.decode(try await cm.serviceCall(
                     "Cloud.ClientBeginFileUpload#1",
                     CCloudClientBeginFileUploadRequest(appID: appID, fileSize: UInt32(f.data.count), rawFileSize: UInt32(f.data.count),
                                                        sha: sha, timeStamp: f.time, filename: f.name, batchID: batch.batchID),
                     authed: true, timeout: timeout))
-                for b in begin.blocks {
+                for (i, b) in begin.blocks.enumerated() {
+                    step = "block \(i + 1)/\(begin.blocks.count) (\(b.method) offset \(b.offset) length \(b.length)"
+                        + (b.body.map { ", body \($0.count)" } ?? "") + ")"
                     let start = Int(b.offset), end = min(f.data.count, start + Int(b.length))
                     guard start <= end else { throw SteamError.protocolChanged("cloud upload block past the file's end") }
                     _ = try await http.send(b, body: b.body ?? Array(f.data[start..<end]), maxBytes: 1 << 20, label: "cloud upload")
@@ -53,12 +60,18 @@ extension SteamSession {
                 ok = true
             } catch {
                 result = 2
+                log.warn("cloud", "app \(appID): \(file) (\(f.data.count) bytes) not uploaded: \(step): \(error)")
             }
-            let commit = try CCloudClientCommitFileUploadResponse.decode(try await cm.serviceCall(
-                "Cloud.ClientCommitFileUpload#1",
-                CCloudClientCommitFileUploadRequest(succeeded: ok, appID: appID, sha: sha, filename: f.name),
-                authed: true, timeout: timeout))
-            if ok, commit.committed { committed.append(f.name) } else { result = 2 }
+            do {
+                let commit = try CCloudClientCommitFileUploadResponse.decode(try await cm.serviceCall(
+                    "Cloud.ClientCommitFileUpload#1",
+                    CCloudClientCommitFileUploadRequest(succeeded: ok, appID: appID, sha: sha, filename: f.name),
+                    authed: true, timeout: timeout))
+                if ok, commit.committed { committed.append(f.name) } else { result = 2 }
+            } catch {
+                result = 2
+                log.warn("cloud", "app \(appID): \(file): commit (\(ok ? "sent" : "not sent")) refused: \(error)")
+            }
         }
         _ = try await cm.serviceCall("Cloud.CompleteAppUploadBatchBlocking#1",
                                      CCloudCompleteAppUploadBatchRequest(appID: appID, batchID: batch.batchID, eresult: result),
