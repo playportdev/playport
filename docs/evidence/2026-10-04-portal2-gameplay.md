@@ -248,6 +248,15 @@ Battery was 41 to 33%, not charging.
     draw one. It was not launched. Nothing needed fixing.
 - **Portal 2 on `05dcdeb7`** (`.work/p2m3e/final`): `p2-cold-boot` loads the
   chamber, and RT plays with the gun and the "Create Blue Portal" hint up.
+- **On the committed IPA.** Commit `bd2512f` builds
+  `.work/out/20261004-124027-08e0a09a/Playport-26.5-08e0a09a.ipa` (SHA256
+  `08e0a09a49b072d614a4e3029ab297ff2db3a15e960ffad612bae58f826e7ba4`, 78 IPA checks).
+  Its artifacts are `05dcdeb7`'s; only the provenance differs. In one session, battery
+  31%:
+  - Hollow Knight (`.work/p2m3e/hk-commit`) passes `first-frame+10`, first frame at
+    8.92 s, main menu on the screenshot.
+  - Portal 2 (`.work/p2m3e/commit-p2`): `p2-cold-boot`, then RT, in the chamber with
+    the gun.
 
 ## Open
 
