@@ -2,8 +2,9 @@
 
 **Status:** accepted by [0047](decisions/0047-i386-titles-on-vulkan.md), 2026-10-04,
 which extends [0005](decisions/0005-title-cohort.md)'s cohort to i386 Direct3D 9 titles
-on Vulkan by default. Milestones 1 and 2 reached (2026-10-04); milestone 3 in progress
-(gameplay by pad, [evidence](evidence/2026-10-04-portal2-gameplay.md)). This plan
+on Vulkan by default. Milestones 1 and 2 reached (2026-10-04); milestone 3's gameplay
+check done, a chamber solved by pad ([evidence](evidence/2026-10-04-portal2-gameplay.md));
+what "fully playable" still needs is listed under milestone 3. This plan
 replaces the direction of the `portal2-runtime` branch before milestone 0; the review
 below says why.
 
@@ -486,7 +487,7 @@ global WoW64 state.
 
 ## Milestone 3: gameplay
 
-**In progress, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-gameplay.md)):
+**Gameplay check done, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-gameplay.md)):
 
 - An i386 executable defaults to Vulkan (decision 0047). The game's page shows
   "Default · Vulkan", and Portal 2 reaches its menu with no settings.
@@ -509,11 +510,27 @@ global WoW64 state.
   Hollow Knight's 10.92 s was an outlier. The game page's four settings apply to
   Portal 2.
 
-**Not complete:** no chamber has been solved by pad yet.
+- **Gameplay check done:** Chapter 2's laser chamber (`sp_a2_laser_intro`) was solved
+  by pad, aimed by screenshots. Blue on the floor panel under the beam and orange on the
+  ceiling above the catcher light the catcher, and the exit platform rises. A portal then
+  takes the player up to the exit ledge. The next room was not entered and no save
+  from that session is confirmed. No runtime fault; thermal reached "serious".
 
-**Next:** solve a chamber with portals; that is the last gameplay check. For "fully
-playable", the fonts' distribution review is also still open, and the chamber's
-13–15 ms of GPU time leaves little headroom above 720p.
+**Left for "fully playable":**
+
+1. **Fonts:** the owner's distribution review of the Tahoma fallback faces
+   (`build/app-notices.json` is `unreviewed`) before an IPA is given to anyone.
+2. **Long-session stability:** a play of an hour or more through several chambers,
+   with saves and loads. It must have no crash, a steady JIT band, and frame time held
+   at the "serious" thermal state that the chamber session reached.
+3. **GPU headroom:** 13–15 ms of GPU time per frame in a chamber at 720p, capped at
+   60. Native resolution or an uncapped rate would be GPU-bound, and throttling
+   lowers the margin further.
+4. **Hitches:** the 596 ms and 200 ms chamber hitches of `p2m3-cold-boot`, and loading
+   hitches up to 713 ms, have no established cause.
+
+Also still open: the hint glyph follows the last device used, and a retired window's
+final teardown has not been seen on the phone.
 
 ## Rules that still apply
 

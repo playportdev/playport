@@ -258,9 +258,59 @@ Battery was 41 to 33%, not charging.
   - Portal 2 (`.work/p2m3e/commit-p2`): `p2-cold-boot`, then RT, in the chamber with
     the gun.
 
+## The laser chamber solved by pad
+
+One session on the committed IPA `08e0a09a` (commit `bd2512f`, SHA256
+`08e0a09a49b072d614a4e3029ab297ff2db3a15e960ffad612bae58f826e7ba4`):
+`pp ui --play app-620 --pad --until first-frame+20 --leave-running`
+(`.work/ui-runs/20261004T124533`, first frame at 5.62 s), then `pp pad push
+p2-cold-boot` and about 90 `pp pad send … --shot` steps, aimed by reading each
+screenshot. Screenshots are in `.work/p2m3s/` and are described here, not published.
+Battery went from 30% (not charging) to 38% (external power was connected partway).
+
+- **Solution** in `sp_a2_laser_intro`:
+  - blue (RT) on the white floor panel that the emitter's beam falls onto;
+  - orange (LT) on the white ceiling directly above the laser catcher, which is next to
+    the player's start spot.
+
+  The beam enters the floor portal, comes down from the ceiling into the catcher, and
+  the catcher lights. Following the indicator dots led to the catcher, after the
+  orange portal was first placed on the panel by the exit (shot 32), where the beam
+  hit a plain wall.
+- **Key screenshots:**
+  - `21`: blue on the panel, the beam leaving orange (the state of milestone 3's
+    earlier `portal-both.png`, which never reached the catcher).
+  - `56`: orange on the ceiling; the catcher's rim turns from blue to yellow and
+    the beam glows in its lens.
+  - `58`: the indicator dots turn yellow and the plate in the water below the exit
+    rises on an arm, making a platform up to the exit door.
+  - `74`–`78`: to reach the ledge, orange is moved to the panel facing the exit
+    ledge, and walking into the blue floor portal puts the player up by the exit (the
+    exit sign and the running-man door are ahead in `78`). Moving orange un-powers
+    the catcher (dots blue again).
+  - `89`–`90`: back at the catcher, orange is fired onto the ceiling again; the dots
+    are yellow and the catcher's rim yellow, so the chamber is powered again.
+- **Not done:** walking through the exit door into the next area. The session ended
+  there because the phone was needed for something else.
+- **Save:** a final START opened the pause menu (RETURN TO GAME, SAVE GAME selected,
+  LOAD LAST SAVE, OPTIONS, EXIT TO MAIN MENU; shot `93-save`). The two A presses after
+  it did not visibly open the slot list, so no save from this session is confirmed.
+  The save path itself was shown earlier (`p2-save-load`). The app was then ended with
+  `pp phone kill`.
+- **Trigger misses** (shots 17–20, 29–30) were aims at surfaces that do not take
+  portals. `VirtualPad`'s LT and RT map to the triggers, and with the crosshair on a
+  white panel every fire landed. Explicit `LT=1`/`RT=1` were used.
+- **Runtime:** no i386 exception, no crash, no unaudited win32u call
+  (`.work/p2m3s/log2/s1-host.log`). The JIT pool's band went from 1653 to 2247 MB of
+  16384, with nothing refused and `exhausted=none`. **Thermal went nominal → fair →
+  serious** over about an hour in the chamber with the screen and GPU busy; frame
+  time was not measured at the serious state.
+
 ## Open
 
-- A chamber solved by pad: it needs aiming by feedback, not dead reckoning.
+- Walking out of the solved chamber into the next one, and saving there.
+- A long session at the serious thermal state: frame time and hitches have not been
+  measured past 180 s.
 - The in-game hints' glyph depends on the last device used, not on a setting.
 - GPU time in a chamber is 13–15 ms at 720p, 60 FPS capped. Native resolution or an
   uncapped rate would be GPU-bound.
