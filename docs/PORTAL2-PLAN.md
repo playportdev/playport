@@ -349,7 +349,8 @@ Details are in the same step-2 evidence record.
 Still open in step 2 (carried to milestone 2):
 
 - wow64win's remaining unaudited thunks (D3DKMT, raw input, hooks);
-- freeing a secondary thread's pair and 32-bit stack before process exit;
+- freeing a secondary thread's pair and 32-bit stack before process exit
+  (done after milestone 2: madeira-unix 0073);
 - pointers inside the unix libraries' WoW64 parameter blocks;
 - fonts for i386 GDI;
 - other query classes;
@@ -473,9 +474,15 @@ has not been measured. Hollow Knight passes `first-frame+10` on the same IPA.
      set Vulkan per game);
    - then milestone 3.
 
-Still open from milestone 1 step 2: freeing a thread's pair and stack, pointers
-inside other unix libraries' WoW64 parameter blocks (audio now has none), i386
-GDI fonts, other query classes, and the global WoW64 state.
+5. Hardening after the milestone-1 review: the window outlives its threads and
+   the Mach handler's lookups, an exited thread's pair and stack are reclaimed
+   (madeira-unix 0073), pointer messages and class menu names keep their guest
+   form (wine-pe 0024, 0025), diagnostics read no unchecked guest stack, and every
+   Steam interface has MSVC's vtable layout (gbe 0005, checked at build).
+
+Still open from milestone 1 step 2: pointers inside other unix libraries' WoW64
+parameter blocks (audio now has none), i386 GDI fonts, other query classes, and the
+global WoW64 state.
 
 ## After milestone 2 (outline only)
 

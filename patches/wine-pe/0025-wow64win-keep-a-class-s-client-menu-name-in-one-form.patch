@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 12:00:00 +0200
+Subject: [PATCH] wow64win: keep a class's client menu name in one form for the
+ window
+
+user32's client_menu_name is an integer resource ID or a guest-owned
+block holding the menu's Unicode and ANSI names; win32u stores it
+opaquely. Registration took it as an ordinary pointer, so ID 1 became
+base + 1, and SetClassLongPtr and GetClassLongPtr (GCLP_MENUNAME) passed
+it unconverted: GetClassLongPtr handed the guest a truncated host
+address, and SetClassLongPtr stored a guest address beside registered
+host ones and returned the old block, which user32 frees, truncated.
+
+Convert it as an integer resource or window pointer at registration and
+in GCLP_MENUNAME's set and get, matching lpszMenuName and wine-pe 0022's
+GetClassInfoEx and UnregisterClass. The block's contents are not
+widened.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/wow64win/user.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index 1fec2de..f374186 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -1767,6 +1767,12 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
+             return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
+         }
+ 
++    case NtUserCallHwndParam_GetClassLongPtrW:
++        /* Playport (iOS): the stored client menu name, as at registration */
++        if (param == GCLP_MENUNAME)
++            return wow64_intres_to_guest( (void *)NtUserCallHwndParam( hwnd, param, code ));
++        return NtUserCallHwndParam( hwnd, param, code );
++
+     case NtUserCallHwndParam_ClientToScreen:
+     case NtUserCallHwndParam_GetChildRect:
+     case NtUserCallHwndParam_GetWindowInfo:
+@@ -3268,7 +3274,8 @@ NTSTATUS WINAPI wow64_NtUserRegisterClassExWOW( UINT *args )
+     const WNDCLASSEXW32 *wc32 = get_ptr( &args );
+     UNICODE_STRING32 *name32 = get_ptr( &args );
+     UNICODE_STRING32 *version32 = get_ptr( &args );
+-    struct client_menu_name *menu_name = get_ptr( &args );
++    /* user32 supplies either an integer resource or its W/A name block. */
++    struct client_menu_name *menu_name = wow64_intres_to_host( get_ulong( &args ));
+     DWORD fnid = get_ulong( &args );
+     DWORD flags = get_ulong( &args );
+     DWORD *wow = get_ptr( &args );
+@@ -4543,6 +4550,11 @@ NTSTATUS WINAPI wow64_NtUserSetClassLongPtr( UINT *args )
+     LONG_PTR newval = get_ulong( &args );
+     BOOL ansi = get_ulong( &args );
+ 
++    /* Playport (iOS): user32's client menu name, an integer resource or its
++     * W/A name block, stored as at registration; user32 frees the old one. */
++    if (offset == GCLP_MENUNAME)
++        return wow64_intres_to_guest( (void *)NtUserSetClassLongPtr( hwnd, offset,
++                                      (LONG_PTR)wow64_intres_to_host( newval ), ansi ));
+     return NtUserSetClassLongPtr( hwnd, offset, newval, ansi );
+ }
+ 

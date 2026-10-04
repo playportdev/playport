@@ -138,6 +138,9 @@ stage_api() {
         "$protoc" -I"$inc" dll/gc_steam/steammessages.proto -I./dll/gc_steam --cpp_out=proto_gen/win &&
         "$protoc" -I"$inc" dll/gc_tf2/*.proto -I./dll/gc_steam -I./dll/gc_tf2 --cpp_out=proto_gen/win/tf2 2> /dev/null &&
         "$protoc" -I"$inc" dll/net.proto -I./dll/ --cpp_out=proto_gen/win)
+    # Games call the interfaces through MSVC's vtables (gbe 0004, 0005): check
+    # the MinGW layouts match before building.
+    python3 "$HERE/../steamapi-vtables.py" "$MINGW/bin/clang++" "$G/sdk" "$ROOT/vtables"
     rm -rf "$ROOT/out"
     # A fixed build string: the default is the build time, which the DLL reports.
     premake --deps-dir="$ROOT/deps" --build-dir="$ROOT/out" --emubuild="playport-$(git -C "$G" rev-parse --short=12 "$PIN")" \

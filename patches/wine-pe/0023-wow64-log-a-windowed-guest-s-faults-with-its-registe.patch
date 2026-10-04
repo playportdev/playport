@@ -8,20 +8,40 @@ On iOS, a fault in an i386 guest dispatched to its own handlers left no
 trace of where it happened. Log the first 16 such exceptions with the
 guest's registers, the top of its stack and the return addresses along
 its frame-pointer chain, which name the guest code that took them and
-its callers.
+its callers. The reads stay inside the thread's committed 32-bit stack
+(the TEB32's StackLimit to StackBase), so a bad or switched esp or ebp
+is never dereferenced from native code.
 
 Class: diagnostics
 Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
 Offered-upstream: no; the window exists only on the iOS port
 ---
- dlls/wow64/syscall.c | 39 +++++++++++++++++++++++++++++++++++++++
- 1 file changed, 39 insertions(+)
+ dlls/wow64/syscall.c | 52 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
 
 diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
-index 8a9bffc..e0c0a59 100644
+index 8a9bffc..55b660c 100644
 --- a/dlls/wow64/syscall.c
 +++ b/dlls/wow64/syscall.c
-@@ -264,6 +264,45 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
+@@ -195,6 +195,17 @@ static NTSTATUS get_context_return_value( void *wow_context )
+ }
+ 
+ 
++/* Playport (iOS): a span of the current thread's 32-bit stack that native
++ * code may read: [StackLimit, StackBase) is committed (the window allocation
++ * commits the stack above its guard page). NULL for any other span, so a bad
++ * or switched esp is never dereferenced here. */
++static const ULONG *guest_stack_span( ULONG limit, ULONG base, ULONG addr, ULONG size )
++{
++    if ((addr & 3) || addr < limit || addr >= base || size > base - addr) return NULL;
++    return wow64_to_host( addr );
++}
++
++
+ /**********************************************************************
+  *           call_user_exception_dispatcher
+  */
+@@ -264,6 +275,47 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
  
              TRACE( "exception %08lx dispatcher %08lx stack %08lx eip %08lx\n",
                     rec->ExceptionCode, ctx.Eip, ctx.Esp, stack->context.Eip );
@@ -30,7 +50,9 @@ index 8a9bffc..e0c0a59 100644
 +            if (wow64_window_base && (rec->ExceptionCode & 0xf0000000) == 0xc0000000)
 +            {
 +                static LONG logged;
-+                const ULONG *top = wow64_to_host( stack->context.Esp );
++                const TEB32 *teb32 = NtCurrentTeb32();
++                const ULONG limit = teb32->Tib.StackLimit, base = teb32->Tib.StackBase;
++                const ULONG *top = guest_stack_span( limit, base, stack->context.Esp, 16 * sizeof(ULONG) );
 +
 +                if (InterlockedIncrement( &logged ) <= 16)
 +                {
@@ -46,17 +68,17 @@ index 8a9bffc..e0c0a59 100644
 +                             "%08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
 +                             top[0], top[1], top[2], top[3], top[4], top[5], top[6], top[7],
 +                             top[8], top[9], top[10], top[11], top[12], top[13], top[14], top[15] );
-+                    /* the callers, by the frame-pointer chain while it stays on the stack */
++                    /* the callers, by the frame-pointer chain while it climbs the stack */
 +                    {
 +                        ULONG frame = stack->context.Ebp, ret[8] = { 0 };
 +                        unsigned int depth;
 +
 +                        for (depth = 0; depth < ARRAY_SIZE(ret); depth++)
 +                        {
-+                            const ULONG *link;
-+                            if (frame < stack->context.Esp || frame - stack->context.Esp > 0x100000 || (frame & 3)) break;
-+                            link = wow64_to_host( frame );
++                            const ULONG *link = guest_stack_span( limit, base, frame, 2 * sizeof(ULONG) );
++                            if (!link || frame < stack->context.Esp) break;
 +                            ret[depth] = link[1];
++                            if (link[0] <= frame) break;
 +                            frame = link[0];
 +                        }
 +                        ERR( "Playport: i386 callers %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",

@@ -27,12 +27,17 @@ QUERY_PATCH = REPO / "patches/madeira-unix/0058-ntdll-query-owner-local-WoW64-wi
 SECTION_PATCH = REPO / "patches/madeira-unix/0059-ntdll-route-owned-window-image-sections.patch"
 PROTECT_PATCH = REPO / "patches/madeira-unix/0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch"
 LOADER_PATCH = REPO / "patches/madeira-unix/0061-ntdll-start-the-WoW64-child-s-native-loader.patch"
-FAULT_PATCH = REPO / "patches/madeira-unix/0062-ntdll-service-a-WoW64-window-s-low-faults-in-the-Mac.patch"
+THREADS_PATCH = REPO / "patches/madeira-unix/0073-ntdll-keep-a-WoW64-window-until-its-threads-and-faul.patch"
 DC_ATTR_PATCH = REPO / "patches/madeira-unix/0065-ntdll-share-win32u-s-DC_ATTR-arena-with-every-WoW64-.patch"
 SIMD_LANE_PATCH = REPO / "patches/madeira-unix/0070-signal-emulate-LD1-and-ST1-lanes-in-the-low-fault-em.patch"
 GDI32_DC_ATTR_PATCH = REPO / "patches/wine-pe/0019-gdi32-reach-a-native-DC_ATTR-through-the-WoW64-windo.patch"
 VULKAN_PATCH = REPO / "patches/wine-unix/0011-winevulkan-win32u-convert-an-i386-child-s-Vulkan-poi.patch"
 GUEST_HEADER = "dlls/wow64/wow64_window.h"
+WOW64WIN_PATCH = REPO / "patches/wine-pe/0018-wow64win-convert-audited-win32u-thunks-through-the-i.patch"
+CLASS_LOOKUP_PATCH = REPO / "patches/wine-pe/0022-wow64win-audit-the-class-raw-input-hook-display-mode.patch"
+FAULT_LOG_PATCH = REPO / "patches/wine-pe/0023-wow64-log-a-windowed-guest-s-faults-with-its-registe.patch"
+MESSAGE_PARAMS_PATCH = REPO / "patches/wine-pe/0024-wow64win-preserve-guest-SendMessage-dispatch-paramet.patch"
+CLASS_MENU_PATCH = REPO / "patches/wine-pe/0025-wow64win-keep-a-class-s-client-menu-name-in-one-form.patch"
 GUEST_PATCH = REPO / "patches/wine-pe/0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch"
 
 
@@ -103,6 +108,52 @@ def evolve_body(body, update, signature):
     if not applied:
         raise ValueError(f"{signature}: no update blocks matched")
     return body
+
+
+def patched_added_statement(patch, prefix):
+    """Recover one added conversion statement, rejecting ambiguous matches."""
+    matches = [line[1:] for line in patch.read_text().splitlines()
+               if line.startswith("+") and not line.startswith("+++")
+               and line[1:].strip().startswith(prefix)]
+    if len(matches) != 1 or not matches[0].rstrip().endswith(";"):
+        raise ValueError(f"{patch.name}: expected one complete added {prefix!r} statement")
+    return matches[0] + "\n"
+
+
+def run_user_conversion_tests(root, guest_header_dir):
+    """wow64win's SendMessage return, class-menu conversions and the fault log's stack reads."""
+    # The SendMessage helper is complete in its patch; the generic narrowing
+    # converter is stubbed by the C test and native dispatch is not run.
+    (root / "message_params_api.h").write_text(patched_function(
+        MESSAGE_PARAMS_PATCH,
+        "static void send_message_params_64to32( const struct win_proc_params *src, struct win_proc_params32 *dst,"))
+    # The actual thunk statements, not a copied conversion; the wrappers mock
+    # win32u's opaque menu-name storage only.
+    menu_helpers = "".join(patched_function(WOW64WIN_PATCH, sig) for sig in (
+        "static inline void *wow64_to_host( ULONG guest )",
+        "static inline ULONG wow64_to_guest( const void *host )",
+        "static inline void *wow64_intres_to_host( ULONG guest )",
+        "static inline ULONG wow64_intres_to_guest( const void *host )"))
+    (root / "class_menu_api.h").write_text(
+        menu_helpers +
+        "static void *register_class_menu( UINT **input )\n{\n    UINT *args = *input;\n" +
+        patched_added_statement(CLASS_MENU_PATCH, "struct client_menu_name *menu_name =") +
+        "    *input = args;\n    return menu_name;\n}\n" +
+        "static ULONG get_class_menu( void *menu_name )\n{\n    ULONG value, *menu_name32 = &value;\n" +
+        patched_added_statement(CLASS_LOOKUP_PATCH, "*menu_name32 =") +
+        "    return value;\n}\n" +
+        "static ULONG unregister_class_menu( void *menu_name )\n{\n    ULONG value = 0, *menu_name32 = &value;\n    BOOL ret = TRUE;\n" +
+        patched_added_statement(CLASS_LOOKUP_PATCH, "if (ret) *menu_name32 =") +
+        "    return value;\n}\n")
+    (root / "stack_span_api.h").write_text(patched_function(
+        FAULT_LOG_PATCH, "static const ULONG *guest_stack_span( ULONG limit, ULONG base, ULONG addr, ULONG size )"))
+    for name in ("message_params", "class_menu", "stack_span"):
+        exe = root / (name + "-test")
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str(guest_header_dir), "-I", str(root),
+                        str(REPO / "build/wow64" / (name + "_test.c")), "-o", str(exe)], check=True)
+        subprocess.run([str(exe)], check=True)
 
 
 def main():
@@ -243,13 +294,16 @@ def main():
                         "-I", str((root / VIEWS_HEADER).parent), "-I", str(root),
                         str(REPO / "build/wow64/protect_test.c"), "-o", str(protect_exe)], check=True)
         subprocess.run([str(protect_exe), str(root)], check=True)
-        (root / "fault_api.h").write_text(
-            patched_function(FAULT_PATCH, "uintptr_t ios_wow64_fault_base_for_peb( void *owner )"))
-        fault_exe = root / "fault-test"
-        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-                        "-pthread", "-fsanitize=undefined", "-fno-sanitize-recover=all",
-                        "-I", str(root), str(REPO / "build/wow64/fault_test.c"), "-o", str(fault_exe)], check=True)
-        subprocess.run([str(fault_exe)], check=True)
+        # The window's thread records and the Mach handler's pinned lookups.
+        subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_threads.h",
+                        str(THREADS_PATCH)], check=True)
+        for name in ("fault", "threads"):
+            exe = root / f"{name}-test"
+            subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                            "-Wno-unused-function", "-pthread", "-fsanitize=undefined",
+                            "-fno-sanitize-recover=all", "-I", str((root / VIEWS_HEADER).parent),
+                            str(REPO / f"build/wow64/{name}_test.c"), "-o", str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
         subprocess.run(["git", "-C", tmp, "apply", "--include=build/ntdll-unix/wow64_dc_attr.h",
                         str(DC_ATTR_PATCH)], check=True)
         (root / "pair_layout.h").write_text("".join(
@@ -283,6 +337,7 @@ def main():
                         "-I", str((root / GUEST_HEADER).parent),
                         str(REPO / "build/wow64/guest_ptr_test.c"), "-o", str(guest_exe)], check=True)
         subprocess.run([str(guest_exe)], check=True)
+        run_user_conversion_tests(root, (root / GUEST_HEADER).parent)
         # winevulkan's WoW64 thunk conversions, from the wine-unix patch.
         (root / "vulkan_api.h").write_text("".join(patched_function(VULKAN_PATCH, sig) for sig in (
             "static inline ULONG_PTR vulkan_wow64_window_base(void)",

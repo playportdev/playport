@@ -167,15 +167,70 @@ image.
 IPAs: `39af2094` (`.work/ui-runs/p2m2-6-hk`, first frame 9.35 s) and `db9f2d48`
 (`.work/ui-runs/p2m2-9-hk`, first frame 8.97 s). Both screenshots show the main menu.
 
+## Hardening after the milestone-1 review
+
+An independent review of milestone 1 found five defects. They are fixed, with no new
+Portal 2 feature, in IPA `.work/out/20261004-092839-138cb8c3/Playport-26.5-138cb8c3.ipa`
+(SHA256 `138cb8c319dc22e3fa116a2a70e27fe6c0f66cdd4ca0b26e94cbdfce7e4ddbe0`).
+
+- **Window lifetime** (madeira-unix 0073). The owner's release unmapped the window
+  while secondary threads still ran on their TEBs and 32-bit stacks in it, and the
+  Mach handler's lock-free lookup could use a base after its window was gone or its
+  slot reused. Release now only retires the window while a secondary thread is left;
+  a thread is reclaimed only after another thread has joined it, and the retired
+  window's last reclaimed thread tears it down. The Mach handler counts itself in
+  before it reads a window's owner and out after its access, and teardown clears the
+  owner and waits for that count to drain before the views go or the slot is reused.
+  Teardown also clears the dead threads' TEBs from the thread registry, and
+  `NtTerminateThread`'s registry scan reads TEBs with `mach_vm_read`.
+- **Exited threads' guest space** (0073). A joined thread's 32-bit stack is freed
+  through its window and its TEB pair kept as a spare for the owner's next thread.
+- **Pointer messages** (wine-pe 0024). The same-thread `SendMessage` fast path
+  returned host (or native temporary) parameters truncated to 32 bits for user32 to
+  dispatch; it now returns the guest's own.
+- **Class menu names** (wine-pe 0025). Registration and `GCLP_MENUNAME`'s set and get
+  convert the client menu name as an integer resource or window pointer, as
+  `GetClassInfoEx` and `UnregisterClass` (0022) already did.
+- **Native reads of the guest stack.** fex 0019's low-jump log no longer reads
+  `[esp]`; wine-pe 0023's fault log reads only inside the thread's committed 32-bit
+  stack (`StackLimit` to `StackBase`).
+- **Steam API vtables** (gbe 0005). Every interface with overloaded virtuals or a
+  virtual destructor (ISteamUserStats' `GetStat`/`SetStat` and four more groups,
+  ISteamUGC, ISteamInventory, ISteamGameServerStats, ISteamGameServerItems,
+  ISteamHTMLSurface's destructor, two old interfaces) is declared in MSVC's order for
+  a MinGW build. `build/steamapi-vtables.py` compares all 259 interface classes'
+  MinGW layouts with clang's MSVC layouts for x86-64 and i386 before each steamapi
+  build; on the unpatched SDK it lists ISteamUserStats012, the version Portal 2 asks
+  for, among the mismatches.
+
+Host tests (`build/wow64/test.py`, compiled from the patches): `threads_test`
+(48 real threads exiting while the owner releases, the window torn down once and only
+after the last join, no join cycle, spare pairs reused), `fault_test` (lookups racing
+teardown, unmap and reuse of the slot by another owner at another base),
+`message_params_test`, `class_menu_test` and `stack_span_test`. Without the drain
+loop `fault_test` faults; with release tearing down at once, or a thread joining
+itself, `threads_test` fails.
+
+On the phone (battery 88%), `.work/ui-runs/p2h-1`
+(`pp ui --settings 'app-620:{"graphics":"vulkan"}' --play app-620 --until done --wait 50`):
+the 35 s screenshot shows the main menu; no guest exception was logged; the child
+created 29 secondary threads, 4 of them reclaimed, and the next 4 took their spare
+pairs. The run ended at its `--wait`, so a release with live threads was not
+exercised on the phone (the scripted pad does not reach an i386 title, so QUIT could
+not be chosen). Hollow Knight passes `first-frame+10` on the same IPA
+(`.work/ui-runs/p2h-hk`, first frame 9.67 s, main menu).
+
 ## Open
 
 - Portal 2's default backend is DXMT, which cannot run an i386 Direct3D 9 title;
   these runs set Vulkan per game. Making Vulkan the default for i386 titles is a
   product decision that has not been taken.
 - An i386 child has no audio until the null driver has a WoW64 table.
-- The other overloaded virtuals in the Steam interfaces (`ISteamUserStats::GetStat`
-  and `SetStat` with `int32`/`float`, and the like) are still in declaration order in
-  the MinGW build. A game's stat calls reach the other overload, on x86-64 too.
+- A window whose owner exits from a secondary thread, or whose thread never runs
+  `pthread_exit_wrapper`, is kept until the app ends. The last thread of a retired
+  window is joined by the next reaper (any exiting thread, thread creation or window
+  reservation), so a retired window can outlive its process until then.
+- The scripted pad does not reach an i386 title.
 - The rest of ws2_32's WoW64 unix calls (`getaddrinfo`, `gethostbyname`) still take
   raw guest pointers.
 - The winevulkan debug callbacks hand the guest host pointers truncated to 32 bits.

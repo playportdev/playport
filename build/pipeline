@@ -433,7 +433,7 @@ digest_inputs() {
         vulkan) pins mesa dxvk vkd3d-proton; series_text mesa vkd3d-proton
                 files build/stages/mesa.sh build/stages/vulkan-pe.sh build/check-macho-imports.py
                 after pe ;;
-        steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh ;;
+        steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh build/steamapi-vtables.py ;;
         idevice) pins idevice rust; series_text idevice; files build/stages/idevice.sh build/idevice-crates.py ;;
         stage) pins stikjit idevice; series_text madeira-winios
                files build/stages/stage-artifacts.py build/stages/stikjit.sh app/registry app/artifacts.tsv \

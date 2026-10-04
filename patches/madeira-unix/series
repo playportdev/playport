@@ -71,3 +71,4 @@
 0070-signal-emulate-LD1-and-ST1-lanes-in-the-low-fault-em.patch
 0071-ntdll-map-an-i386-child-s-data-section-views-in-its-.patch
 0072-ntdll-give-an-i386-child-no-audio-driver-until-it-ha.patch
+0073-ntdll-keep-a-WoW64-window-until-its-threads-and-faul.patch

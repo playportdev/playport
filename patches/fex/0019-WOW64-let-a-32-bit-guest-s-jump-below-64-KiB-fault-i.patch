@@ -14,21 +14,22 @@ exception. Portal 2's engine thread did this after loading localize.dll
 In the WoW64 module the block compiles as usual: the decoder finds no
 executable range at the low address and the guest gets its access
 violation, which its own handlers see. The first eight such jumps log
-the guest registers and the return address at [ESP]
-([wow64-low-jump]), which names the call site.
+the guest registers ([wow64-low-jump]). Not the guest stack: ESP may
+not be readable, and a fault in the compiler would preempt the guest's
+access violation.
 
 Class: feature
 Evidence: docs/evidence/2026-10-04-portal2-inline-translation.md
 Offered-upstream: no; the refusal is Madeira's (fex-port 0019)
 ---
- FEXCore/Source/Interface/Core/Core.cpp | 27 +++++++++++++++++++++++++-
- 1 file changed, 26 insertions(+), 1 deletion(-)
+ FEXCore/Source/Interface/Core/Core.cpp | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 1066aaf..a4b99dc 100644
+index 1066aaf..ab150c9 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
-@@ -1580,11 +1580,36 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1580,11 +1580,34 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     * NULL-vtable virtual call (`call [rax+8]` with rax=0), control flow
     * lands at RIP=0x8, which then loops compiling thousands of garbage
     * blocks before SEH unwinds. Returning 0 here raises C0000005 to the
@@ -47,17 +48,15 @@ index 1066aaf..a4b99dc 100644
    }
 +#else
 +  if (GuestRIP < 0x10000) {
-+    // Name the jump: a call leaves its return address at [ESP] (read through the
-+    // guest window when there is one). Bounded: a guest may retry from its handler.
++    // Log registers only: the guest stack may be unmapped or unreadable.
++    // Bounded: a guest may retry from its handler.
 +    static std::atomic<uint32_t> LowJumps {};
 +    if (LowJumps.fetch_add(1, std::memory_order_relaxed) < 8) {
 +      const auto& GRegs = Frame->State.gregs;
-+      const uint64_t WindowBase = Thread && Thread->OpDispatcher ? Thread->OpDispatcher->GetGuestWindowBase() : 0;
 +      const uint32_t ESP = static_cast<uint32_t>(GRegs[X86State::REG_RSP]);
-+      const uint32_t* Stack = reinterpret_cast<const uint32_t*>(WindowBase + ESP);
-+      LogMan::Msg::EFmt("[wow64-low-jump] guest RIP={:#x} [esp]={:#x} [esp+4]={:#x} eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} "
++      LogMan::Msg::EFmt("[wow64-low-jump] guest RIP={:#x} eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} "
 +                        "esp={:#x} ebp={:#x} esi={:#x} edi={:#x}",
-+                        GuestRIP, WindowBase ? Stack[0] : 0, WindowBase ? Stack[1] : 0, GRegs[X86State::REG_RAX], GRegs[X86State::REG_RCX],
++                        GuestRIP, GRegs[X86State::REG_RAX], GRegs[X86State::REG_RCX],
 +                        GRegs[X86State::REG_RDX], GRegs[X86State::REG_RBX], ESP, GRegs[X86State::REG_RBP], GRegs[X86State::REG_RSI],
 +                        GRegs[X86State::REG_RDI]);
 +    }
