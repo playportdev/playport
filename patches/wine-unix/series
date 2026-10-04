@@ -11,3 +11,4 @@
 0010-ntdll-write-an-i386-child-s-debug-output-from-its-wi.patch
 0011-winevulkan-win32u-convert-an-i386-child-s-Vulkan-poi.patch
 0012-ntdll-convert-an-i386-child-s-socket-buffers-through.patch
+0013-ws2_32-convert-an-i386-child-s-resolver-pointers-thr.patch

@@ -1,0 +1,960 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 13:10:00 +0200
+Subject: [PATCH] audio: give an i386 child the iOS audio driver through a
+ WoW64 table
+
+0072 failed MemoryWineLoadUnixLibByNameWow64 for the audio drivers,
+since the driver's table read an i386 mmdevapi's 32-bit parameter blocks
+as 64-bit ones, so Portal 2 had no audio device. audio_wow64_ios.h now
+gives the driver a WoW64 table in mmdevapi's unix_funcs order: it
+mirrors the PE32 parameter blocks (stream handles stay 8-byte tokens,
+event handles stay handles), converts their inner pointers through the
+owner's window with checked ranges, and passes a stream call on only
+for a stream its own window created. The by-name WoW64 query answers
+with that table; the native table and its callers are unchanged.
+
+A WoW64 stream's render scratch, which GetBuffer hands to the guest, is
+a zeroed read-write view in the owner's window below 2 GiB
+(ios_wow64_audio_alloc), so the guest writes the bytes that
+ReleaseBuffer copies into the ring; RemoteIO still reads only the ring.
+Release and growth free it through the owner and window recorded at
+allocation. Process detach unpublishes the window's streams and frees
+their scratch; the window's final teardown in 0073 unpublishes any left,
+with no VM call under the windows lock (the view deletion reclaims the
+scratch). The stream registry's mutex is initialized statically so a
+second process attach cannot reinitialize it while it is in use.
+Capture, loopback, properties and MIDI keep their no-device answers.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-04-portal2-gameplay.md
+Offered-upstream: no; the RemoteIO driver and the window exist only on the iOS port
+---
+ build/ntdll-unix/audio_null_ios.c     |  25 +-
+ build/ntdll-unix/audio_wow64_buffer.h |  52 ++
+ build/ntdll-unix/audio_wow64_ios.h    | 659 ++++++++++++++++++++++++++
+ build/ntdll-unix/virtual_ios.c        |  75 ++-
+ 4 files changed, 788 insertions(+), 23 deletions(-)
+ create mode 100644 build/ntdll-unix/audio_wow64_buffer.h
+ create mode 100644 build/ntdll-unix/audio_wow64_ios.h
+
+diff --git a/build/ntdll-unix/audio_null_ios.c b/build/ntdll-unix/audio_null_ios.c
+index b4d1600..b085eaa 100644
+--- a/build/ntdll-unix/audio_null_ios.c
++++ b/build/ntdll-unix/audio_null_ios.c
+@@ -290,6 +290,8 @@ struct ios_stream {
+     UINT32 frame_bytes;          /* nBlockAlign of the stream format */
+     UINT32 buffer_frames;        /* ring capacity in frames */
+     BYTE *render_scratch;        /* contiguous area handed to GetBuffer */
++    void *wow64_owner;           /* NULL for native clients */
++    uintptr_t wow64_window;     /* allocating window, never the releasing thread's */
+     UINT32 scratch_frames;       /* scratch capacity */
+     UINT32 pending_frames;       /* frames handed out, awaiting release */
+     HANDLE event;
+@@ -305,6 +307,8 @@ struct ios_stream {
+     _Atomic uint64_t play_pos;   /* frames consumed by the RT callback */
+ };
+ 
++#include "audio_wow64_buffer.h"
++
+ /* ml739: one stream object per client, mirroring Wine's CoreAudio driver.
+  *
+  * This was a documented singleton -- see the comment on struct ios_stream --
+@@ -323,7 +327,7 @@ struct ios_stream {
+  * through inputProcRefCon. */
+ #define IOS_MAX_STREAMS 16
+ static struct ios_stream *g_streams[IOS_MAX_STREAMS];
+-static pthread_mutex_t g_streams_lock;   /* ml739: init at process_attach */
++static pthread_mutex_t g_streams_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ /* ml1026: ONE RemoteIO endpoint per process, with every live client mixed
+  * into it.
+@@ -798,7 +802,6 @@ static int ios_stream_is_live(const struct ios_stream *s)
+ static NTSTATUS ios_process_attach(void *args) {
+     LOG_FN_CALL(0, "process_attach");
+     (void)args;
+-    pthread_mutex_init(&g_streams_lock, NULL);
+     if (!g_timebase.denom) mach_timebase_info(&g_timebase);
+     return STATUS_SUCCESS;
+ }
+@@ -919,7 +922,7 @@ static NTSTATUS ios_create_stream(void *args) {
+     s->buffer_frames = (UINT32)dur_frames;
+     free(s->ring);
+     s->ring = (BYTE *)calloc(s->buffer_frames, s->frame_bytes);
+-    free(s->render_scratch);
++    ios_audio_scratch_free(s);
+     s->scratch_frames = s->buffer_frames;
+     s->render_scratch = (BYTE *)calloc(s->scratch_frames, s->frame_bytes);
+     s->pending_frames = 0;
+@@ -937,7 +940,7 @@ static NTSTATUS ios_create_stream(void *args) {
+     if (stream_register(s)) {
+         fprintf(stderr, "[ios-astream] ml739 too many streams -- refusing\n");
+         ios_dev_detach(s);
+-        free(s->render_scratch); free(s->ring); free(s);
++        ios_audio_scratch_free(s); free(s->ring); free(s);
+         /* the handle was published above; it now points at freed memory */
+         if (p->stream) *p->stream = 0;
+         p->result = E_OUTOFMEMORY;
+@@ -967,7 +970,7 @@ static NTSTATUS ios_release_stream(void *args) {
+     ios_dev_detach(s);
+     ios_dev_stop_if_idle();
+     stream_unregister(s);
+-    free(s->render_scratch);
++    ios_audio_scratch_free(s);
+     free(s->ring);
+     free(s);
+     p->result = S_OK;
+@@ -1065,11 +1068,11 @@ static NTSTATUS ios_get_render_buffer(void *args) {
+     if (p->frames > s->scratch_frames) {
+         /* Client asked for more than the ring — grow scratch; the copy in
+          * release clamps to ring capacity anyway. */
+-        BYTE *ns = (BYTE *)realloc(s->render_scratch,
+-                                   (size_t)p->frames * s->frame_bytes);
+-        if (!ns) { p->result = E_FAIL; return STATUS_SUCCESS; }
+-        s->render_scratch = ns;
+-        s->scratch_frames = p->frames;
++        if (!ios_audio_scratch_resize(s, p->frames)) {
++            if (s->wow64_window && p->data) *p->data = NULL;
++            p->result = s->wow64_window ? E_OUTOFMEMORY : E_FAIL;
++            return STATUS_SUCCESS;
++        }
+     }
+     s->pending_frames = p->frames;
+     if (p->data) *p->data = s->render_scratch;
+@@ -1480,3 +1483,5 @@ const void *audio_null_ios_unix_call_funcs[] = {
+  * it still catches an added or removed entry. */
+ _Static_assert(sizeof(audio_null_ios_unix_call_funcs) / sizeof(audio_null_ios_unix_call_funcs[0]) == NULL_AUDIO_FN_COUNT,
+                "audio_null_ios_unix_call_funcs must match enum unix_funcs in mmdevapi/unixlib.h");
++
++#include "audio_wow64_ios.h"
+diff --git a/build/ntdll-unix/audio_wow64_buffer.h b/build/ntdll-unix/audio_wow64_buffer.h
+new file mode 100644
+index 0000000..0aacb4b
+--- /dev/null
++++ b/build/ntdll-unix/audio_wow64_buffer.h
+@@ -0,0 +1,52 @@
++/* Window-backed render scratch; included after struct ios_stream.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ */
++#ifndef IOS_AUDIO_WOW64_BUFFER_H
++#define IOS_AUDIO_WOW64_BUFFER_H
++extern uintptr_t ios_wow64_current_base(void);
++extern void *ios_jit_current_peb(void);
++extern NTSTATUS ios_wow64_audio_alloc(void *owner, uintptr_t window, size_t size, void **host);
++extern NTSTATUS ios_wow64_audio_free(void *owner, uintptr_t window, void *host);
++
++static int ios_audio_scratch_resize(struct ios_stream *s, UINT32 frames)
++{
++    size_t bytes;
++    BYTE *next;
++    if (!frames || !s->frame_bytes || frames > SIZE_MAX / s->frame_bytes) return 0;
++    bytes = (size_t)frames * s->frame_bytes;
++    if (!s->wow64_window)
++    {
++        next = realloc(s->render_scratch, bytes);
++        if (!next) return 0;
++    }
++    else
++    {
++        void *host = NULL;
++        if (ios_wow64_audio_alloc(s->wow64_owner, s->wow64_window, bytes, &host)) return 0;
++        next = host;
++        if (s->render_scratch)
++        {
++            size_t old = (size_t)s->scratch_frames * s->frame_bytes;
++            memcpy(next, s->render_scratch, old < bytes ? old : bytes);
++            if (ios_wow64_audio_free(s->wow64_owner, s->wow64_window, s->render_scratch))
++            {
++                ios_wow64_audio_free(s->wow64_owner, s->wow64_window, next);
++                return 0;
++            }
++        }
++    }
++    s->render_scratch = next;
++    s->scratch_frames = frames;
++    return 1;
++}
++
++static void ios_audio_scratch_free(struct ios_stream *s)
++{
++    if (!s->render_scratch) return;
++    if (s->wow64_window)
++        ios_wow64_audio_free(s->wow64_owner, s->wow64_window, s->render_scratch);
++    else free(s->render_scratch);
++    s->render_scratch = NULL;
++    s->scratch_frames = 0;
++}
++#endif
+diff --git a/build/ntdll-unix/audio_wow64_ios.h b/build/ntdll-unix/audio_wow64_ios.h
+new file mode 100644
+index 0000000..4487d79
+--- /dev/null
++++ b/build/ntdll-unix/audio_wow64_ios.h
+@@ -0,0 +1,659 @@
++/* PE32 mmdevapi ABI for the static iOS driver.
++ * Layouts mirror mmdevapi/unixlib.h and winecoreaudio's WoW64 wrappers.
++ * stream_handle is an opaque UINT64; event is a HANDLE, not a pointer.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ */
++#ifndef IOS_AUDIO_WOW64_H
++#define IOS_AUDIO_WOW64_H
++#include <stddef.h>
++#define IOS_AUDIO_E_INVALIDARG ((HRESULT)0x80070057u)
++#define IOS_AUDIO_E_NOTIMPL ((HRESULT)0x80004001u)
++#define IOS_AUDIO_STATUS_INVALID_PARAMETER ((NTSTATUS)0xc000000du)
++
++static int ios_audio_guest_range(uintptr_t base, uint32_t guest, size_t bytes)
++{
++    return base > UINT32_MAX && base <= UINTPTR_MAX - UINT64_C(0x100000000) &&
++           guest >= 0x10000 && bytes <= UINT64_C(0x100000000) - guest;
++}
++
++static void *ios_audio_to_host(uintptr_t base, uint32_t guest)
++{
++    return guest ? (void *)(base + guest) : NULL;
++}
++
++static int ios_audio_to_guest(uintptr_t base, const void *host, size_t bytes, uint32_t *guest)
++{
++    uintptr_t value = (uintptr_t)host;
++    if (!host) { *guest = 0; return 1; }
++    if (value < base || value - base > UINT32_MAX ||
++        !ios_audio_guest_range(base, (uint32_t)(value - base), bytes)) return 0;
++    *guest = value - base;
++    return 1;
++}
++
++static int ios_audio_stream_owned(stream_handle handle)
++{
++    struct ios_stream *s = stream_from_handle(handle);
++    return s && s->wow64_window && s->wow64_window == ios_wow64_current_base() &&
++           s->wow64_owner == ios_jit_current_peb();
++}
++
++/* Existing native detach cannot join a dying owner's timer thread. Retain
++ * host stream/ring state as it does, but unpublish from RemoteIO before the
++ * window view is released. The timer never reads render_scratch. On final
++ * window retirement this runs under the windows lock: do NOT call VM helpers.
++ * All Wine secondary threads have been reclaimed by that point. */
++static void ios_audio_wow64_detach(uintptr_t window, int deleting_views)
++{
++    int i;
++    if (!window) return;
++    for (i = 0; i < IOS_MAX_STREAMS; i++)
++    {
++        struct ios_stream *s;
++        pthread_mutex_lock(&g_streams_lock);
++        s = g_streams[i];
++        if (!s || s->wow64_window != window) s = NULL;
++        else g_streams[i] = NULL;
++        pthread_mutex_unlock(&g_streams_lock);
++        if (!s) continue;
++        s->valid = 0;
++        s->started = 0;
++        ios_dev_detach(s); /* unpublish; RT reads ring, never window scratch */
++        if (!deleting_views) ios_audio_scratch_free(s);
++        else { s->render_scratch = NULL; s->scratch_frames = 0; }
++    }
++    ios_dev_stop_if_idle();
++}
++
++void audio_null_ios_wow64_retire(uintptr_t window)
++{
++    ios_audio_wow64_detach(window, 1);
++}
++
++static NTSTATUS ios_wow64_process_detach(void *args)
++{
++    (void)args;
++    ios_audio_wow64_detach(ios_wow64_current_base(), 0);
++    return STATUS_SUCCESS;
++}
++
++#define IOS_AUDIO_PTR(field, bytes) do { \
++    if (p->field && !ios_audio_guest_range(base, p->field, bytes)) { \
++        p->result = IOS_AUDIO_E_INVALIDARG; return STATUS_SUCCESS; \
++    } \
++} while (0)
++#define IOS_AUDIO_OWNER() do { \
++    if (!ios_audio_stream_owned(p->stream)) { \
++        p->result = AUDCLNT_E_NOT_INITIALIZED; return STATUS_SUCCESS; \
++    } \
++} while (0)
++
++struct ios_audio_create_stream32 {
++    uint32_t name, device;
++    EDataFlow flow;
++    int share;
++    DWORD flags;
++    REFERENCE_TIME duration, period;
++    uint32_t fmt;
++    HRESULT result;
++    uint32_t channel_count, stream;
++};
++_Static_assert(offsetof(struct ios_audio_create_stream32, duration) == 24, "PE32 duration");
++_Static_assert(offsetof(struct ios_audio_create_stream32, fmt) == 40, "PE32 format");
++_Static_assert(sizeof(struct ios_audio_create_stream32) == 56, "PE32 create_stream");
++
++static NTSTATUS ios_wow64_create_stream(void *args)
++{
++    struct ios_audio_create_stream32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    void *owner = ios_jit_current_peb();
++    stream_handle handle = 0;
++    UINT32 channels = 0;
++    struct create_stream_params n = {0};
++    struct ios_stream *s;
++    BYTE *old;
++    IOS_AUDIO_PTR(name, 128); /* native logging reads at most 64 WCHARs */
++    IOS_AUDIO_PTR(device, 1);
++    IOS_AUDIO_PTR(fmt, 18);
++    IOS_AUDIO_PTR(channel_count, sizeof(UINT32));
++    IOS_AUDIO_PTR(stream, sizeof(stream_handle));
++    if (!owner || !base || !p->fmt || !p->channel_count || !p->stream)
++    { p->result = IOS_AUDIO_E_INVALIDARG; return STATUS_SUCCESS; }
++    n.fmt = ios_audio_to_host(base, p->fmt);
++    if (!ios_audio_guest_range(base, p->fmt, 18u + n.fmt->cbSize))
++    { p->result = IOS_AUDIO_E_INVALIDARG; return STATUS_SUCCESS; }
++    n.name = ios_audio_to_host(base, p->name);
++    n.device = ios_audio_to_host(base, p->device);
++    n.flow = p->flow; n.share = p->share; n.flags = p->flags;
++    n.duration = p->duration; n.period = p->period;
++    n.channel_count = &channels; n.stream = &handle;
++    ios_create_stream(&n);
++    if (n.result == S_OK && (s = stream_from_handle(handle)))
++    {
++        old = s->render_scratch;
++        s->render_scratch = NULL;
++        s->wow64_owner = owner; s->wow64_window = base;
++        if (!s->ring || !ios_audio_scratch_resize(s, s->scratch_frames))
++        {
++            struct release_stream_params release = { .stream = handle };
++            ios_release_stream(&release);
++            handle = 0;
++            n.result = E_OUTOFMEMORY;
++        }
++        free(old);
++    }
++    else if (n.result == S_OK) { handle = 0; n.result = E_FAIL; }
++    *(UINT32 *)ios_audio_to_host(base, p->channel_count) = channels;
++    /* PE32 stream_handle outputs are still eight bytes. */
++    memcpy(ios_audio_to_host(base, p->stream), &handle, sizeof(handle));
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_render_buffer32 {
++    stream_handle stream;
++    UINT32 frames;
++    HRESULT result;
++    uint32_t data;
++};
++_Static_assert(offsetof(struct ios_audio_get_render_buffer32, data) == 16, "PE32 render data");
++
++static NTSTATUS ios_wow64_get_render_buffer(void *args)
++{
++    struct ios_audio_get_render_buffer32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    BYTE *data = NULL;
++    uint32_t guest = 0;
++    struct get_render_buffer_params n = { .stream = p->stream, .frames = p->frames, .data = &data };
++    IOS_AUDIO_PTR(data, sizeof(uint32_t));
++    if (!p->data) { p->result = IOS_AUDIO_E_INVALIDARG; return STATUS_SUCCESS; }
++    *(uint32_t *)ios_audio_to_host(base, p->data) = 0;
++    IOS_AUDIO_OWNER();
++    ios_get_render_buffer(&n);
++    if (n.result == S_OK)
++    {
++        struct ios_stream *s = stream_from_handle(p->stream);
++        size_t bytes = (size_t)p->frames * s->frame_bytes;
++        if (!ios_audio_to_guest(base, data, bytes, &guest) || (bytes && !data))
++        { s->pending_frames = 0; n.result = E_FAIL; }
++    }
++    *(uint32_t *)ios_audio_to_host(base, p->data) = guest;
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_capture_buffer32 {
++    stream_handle stream;
++    HRESULT result;
++    uint32_t data, frames, flags, devpos, qpcpos;
++};
++_Static_assert(offsetof(struct ios_audio_get_capture_buffer32, data) == 12, "PE32 capture data");
++_Static_assert(sizeof(struct ios_audio_get_capture_buffer32) == 32, "PE32 capture");
++
++static NTSTATUS ios_wow64_get_capture_buffer(void *args)
++{
++    struct ios_audio_get_capture_buffer32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    BYTE *data = NULL;
++    uint32_t guest = 0;
++    struct get_capture_buffer_params n = { .stream = p->stream, .data = &data };
++    IOS_AUDIO_PTR(data, 4); IOS_AUDIO_PTR(frames, 4); IOS_AUDIO_PTR(flags, 4);
++    IOS_AUDIO_PTR(devpos, 8); IOS_AUDIO_PTR(qpcpos, 8);
++    IOS_AUDIO_OWNER();
++    n.frames = ios_audio_to_host(base, p->frames);
++    n.flags = ios_audio_to_host(base, p->flags);
++    n.devpos = ios_audio_to_host(base, p->devpos);
++    n.qpcpos = ios_audio_to_host(base, p->qpcpos);
++    /* The iOS backend has no capture endpoint: zero all optional outputs. */
++    if (n.devpos) *n.devpos = 0;
++    if (n.qpcpos) *n.qpcpos = 0;
++    ios_get_capture_buffer(&n);
++    if (n.result == S_OK && !ios_audio_to_guest(base, data, 0, &guest)) n.result = E_FAIL;
++    if (p->data) *(uint32_t *)ios_audio_to_host(base, p->data) = guest;
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS ios_wow64_release_stream(void *args)
++{
++    struct release_stream_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_release_stream(args);
++}
++
++static NTSTATUS ios_wow64_start(void *args)
++{
++    struct stream_handle_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_start(args);
++}
++
++static NTSTATUS ios_wow64_stop(void *args)
++{
++    struct stream_handle_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_stop(args);
++}
++
++static NTSTATUS ios_wow64_reset(void *args)
++{
++    struct stream_handle_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_reset(args);
++}
++
++static NTSTATUS ios_wow64_release_render_buffer(void *args)
++{
++    struct release_render_buffer_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_release_render_buffer(args);
++}
++
++static NTSTATUS ios_wow64_release_capture_buffer(void *args)
++{
++    struct release_capture_buffer_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_release_capture_buffer(args);
++}
++
++static NTSTATUS ios_wow64_set_sample_rate(void *args)
++{
++    struct set_sample_rate_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_set_sample_rate(args);
++}
++
++static NTSTATUS ios_wow64_is_started(void *args)
++{
++    struct is_started_params *p = args;
++    IOS_AUDIO_OWNER();
++    return ios_is_started(args);
++}
++
++struct ios_audio_get_endpoint_ids32 {
++    EDataFlow flow;
++    uint32_t endpoints;
++    unsigned int size;
++    HRESULT result;
++    unsigned int num;
++    unsigned int default_idx;
++};
++
++static NTSTATUS ios_wow64_get_endpoint_ids(void *args)
++{
++    struct ios_audio_get_endpoint_ids32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_endpoint_ids_params n = {0};
++    if (p->size && !p->endpoints)
++    { p->result = IOS_AUDIO_E_INVALIDARG; return STATUS_SUCCESS; }
++    IOS_AUDIO_PTR(endpoints, p->size);
++    n.endpoints = ios_audio_to_host(base, p->endpoints);
++    n.flow = p->flow;
++    n.size = p->size;
++    ios_get_endpoint_ids(&n);
++    p->result = n.result;
++    p->size = n.size;
++    p->num = n.num;
++    p->default_idx = n.default_idx;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_is_format_supported32 {
++    uint32_t device;
++    EDataFlow flow;
++    int share;
++    uint32_t fmt_in;
++    HRESULT result;
++};
++
++static NTSTATUS ios_wow64_is_format_supported(void *args)
++{
++    struct ios_audio_is_format_supported32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct is_format_supported_params n = {0};
++    IOS_AUDIO_PTR(device, 1);
++    n.device = ios_audio_to_host(base, p->device);
++    IOS_AUDIO_PTR(fmt_in, 18);
++    n.fmt_in = ios_audio_to_host(base, p->fmt_in);
++    n.flow = p->flow;
++    n.share = p->share;
++    ios_is_format_supported(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_mix_format32 {
++    uint32_t device;
++    EDataFlow flow;
++    uint32_t fmt;
++    HRESULT result;
++};
++
++static NTSTATUS ios_wow64_get_mix_format(void *args)
++{
++    struct ios_audio_get_mix_format32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_mix_format_params n = {0};
++    IOS_AUDIO_PTR(device, 1);
++    n.device = ios_audio_to_host(base, p->device);
++    IOS_AUDIO_PTR(fmt, 40);
++    n.fmt = ios_audio_to_host(base, p->fmt);
++    n.flow = p->flow;
++    ios_get_mix_format(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_device_period32 {
++    uint32_t device;
++    EDataFlow flow;
++    HRESULT result;
++    uint32_t def_period;
++    uint32_t min_period;
++};
++
++static NTSTATUS ios_wow64_get_device_period(void *args)
++{
++    struct ios_audio_get_device_period32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_device_period_params n = {0};
++    IOS_AUDIO_PTR(device, 1);
++    n.device = ios_audio_to_host(base, p->device);
++    IOS_AUDIO_PTR(def_period, 8);
++    n.def_period = ios_audio_to_host(base, p->def_period);
++    IOS_AUDIO_PTR(min_period, 8);
++    n.min_period = ios_audio_to_host(base, p->min_period);
++    n.flow = p->flow;
++    ios_get_device_period(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_buffer_size32 {
++    stream_handle stream;
++    HRESULT result;
++    uint32_t frames;
++};
++
++static NTSTATUS ios_wow64_get_buffer_size(void *args)
++{
++    struct ios_audio_get_buffer_size32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_buffer_size_params n = {0};
++    IOS_AUDIO_OWNER();
++    IOS_AUDIO_PTR(frames, 4);
++    n.frames = ios_audio_to_host(base, p->frames);
++    n.stream = p->stream;
++    ios_get_buffer_size(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_latency32 {
++    stream_handle stream;
++    HRESULT result;
++    uint32_t latency;
++};
++
++static NTSTATUS ios_wow64_get_latency(void *args)
++{
++    struct ios_audio_get_latency32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_latency_params n = {0};
++    IOS_AUDIO_OWNER();
++    IOS_AUDIO_PTR(latency, 8);
++    n.latency = ios_audio_to_host(base, p->latency);
++    n.stream = p->stream;
++    ios_get_latency(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_current_padding32 {
++    stream_handle stream;
++    HRESULT result;
++    uint32_t padding;
++};
++
++static NTSTATUS ios_wow64_get_current_padding(void *args)
++{
++    struct ios_audio_get_current_padding32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_current_padding_params n = {0};
++    IOS_AUDIO_OWNER();
++    IOS_AUDIO_PTR(padding, 4);
++    n.padding = ios_audio_to_host(base, p->padding);
++    n.stream = p->stream;
++    ios_get_current_padding(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_next_packet_size32 {
++    stream_handle stream;
++    HRESULT result;
++    uint32_t frames;
++};
++
++static NTSTATUS ios_wow64_get_next_packet_size(void *args)
++{
++    struct ios_audio_get_next_packet_size32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_next_packet_size_params n = {0};
++    IOS_AUDIO_OWNER();
++    IOS_AUDIO_PTR(frames, 4);
++    n.frames = ios_audio_to_host(base, p->frames);
++    n.stream = p->stream;
++    ios_get_next_packet_size(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_frequency32 {
++    stream_handle stream;
++    HRESULT result;
++    uint32_t freq;
++};
++
++static NTSTATUS ios_wow64_get_frequency(void *args)
++{
++    struct ios_audio_get_frequency32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_frequency_params n = {0};
++    IOS_AUDIO_OWNER();
++    IOS_AUDIO_PTR(freq, 8);
++    n.freq = ios_audio_to_host(base, p->freq);
++    n.stream = p->stream;
++    ios_get_frequency(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_get_position32 {
++    stream_handle stream;
++    BOOL device;
++    HRESULT result;
++    uint32_t pos;
++    uint32_t qpctime;
++};
++
++static NTSTATUS ios_wow64_get_position(void *args)
++{
++    struct ios_audio_get_position32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct get_position_params n = {0};
++    IOS_AUDIO_OWNER();
++    IOS_AUDIO_PTR(pos, 8);
++    n.pos = ios_audio_to_host(base, p->pos);
++    IOS_AUDIO_PTR(qpctime, 8);
++    n.qpctime = ios_audio_to_host(base, p->qpctime);
++    n.stream = p->stream;
++    n.device = p->device;
++    ios_get_position(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_test_connect32 {
++    uint32_t name;
++    enum driver_priority priority;
++};
++
++static NTSTATUS ios_wow64_test_connect(void *args)
++{
++    struct ios_audio_test_connect32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct test_connect_params n = {0};
++    if (p->name && !ios_audio_guest_range(base, p->name, 2))
++    { p->priority = Priority_Unavailable; return STATUS_SUCCESS; }
++    n.name = ios_audio_to_host(base, p->name);
++    ios_test_connect(&n);
++    p->priority = n.priority;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_set_event_handle32 { stream_handle stream; uint32_t event; HRESULT result; };
++static NTSTATUS ios_wow64_set_event_handle(void *args)
++{
++    struct ios_audio_set_event_handle32 *p = args;
++    struct set_event_handle_params n = { .stream = p->stream,
++        .event = (HANDLE)(uintptr_t)p->event };
++    IOS_AUDIO_OWNER();
++    ios_set_event_handle(&n);
++    p->result = n.result;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_set_volumes32 { stream_handle stream; float master_volume; uint32_t volumes, session_volumes; };
++static NTSTATUS ios_wow64_set_volumes(void *args)
++{
++    struct ios_audio_set_volumes32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct ios_stream *s;
++    struct set_volumes_params n = { .stream = p->stream, .master_volume = p->master_volume };
++    if (!ios_audio_stream_owned(p->stream)) return IOS_AUDIO_STATUS_INVALID_PARAMETER;
++    s = stream_from_handle(p->stream);
++    if ((p->volumes && !ios_audio_guest_range(base, p->volumes, s->channels * sizeof(float))) ||
++        (p->session_volumes && !ios_audio_guest_range(base, p->session_volumes, s->channels * sizeof(float))))
++        return IOS_AUDIO_STATUS_INVALID_PARAMETER;
++    n.volumes = ios_audio_to_host(base, p->volumes);
++    n.session_volumes = ios_audio_to_host(base, p->session_volumes);
++    return ios_set_volumes(&n);
++}
++
++/* Native iOS supplies neither loopback nor properties. Do not expose a native
++ * PROPVARIANT layout to PE32; no output pointer or string is returned here. */
++struct ios_audio_loopback32 { uint32_t name, device, ret_device, ret_device_len; HRESULT result; };
++static NTSTATUS ios_wow64_get_loopback_capture_device(void *args)
++{
++    struct ios_audio_loopback32 *p = args;
++    p->result = IOS_AUDIO_E_NOTIMPL;
++    return STATUS_SUCCESS;
++}
++struct ios_audio_get_prop_value32 {
++    uint32_t device; EDataFlow flow; uint32_t guid, prop; HRESULT result;
++    uint32_t value, buffer, buffer_size;
++};
++static NTSTATUS ios_wow64_get_prop_value(void *args)
++{
++    struct ios_audio_get_prop_value32 *p = args;
++    p->result = E_FAIL;
++    return STATUS_SUCCESS;
++}
++
++struct ios_audio_notify32 {
++    BOOL send_notify; WORD dev_id, msg;
++    uint32_t param_1, param_2, callback, flags, device, instance;
++};
++_Static_assert(sizeof(struct ios_audio_notify32) == 32, "PE32 MIDI notification");
++struct ios_audio_midi_init32 { uint32_t err; };
++static NTSTATUS ios_wow64_midi_init(void *args)
++{
++    struct ios_audio_midi_init32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    if (!ios_audio_guest_range(base, p->err, 4)) return IOS_AUDIO_STATUS_INVALID_PARAMETER;
++    *(UINT *)ios_audio_to_host(base, p->err) = DRV_FAILURE;
++    return STATUS_SUCCESS;
++}
++struct ios_audio_midi_message32 { UINT dev_id, msg; uint32_t user, param_1, param_2, err, notify; };
++static NTSTATUS ios_wow64_midi_message(void *args, UINT getnumdevs)
++{
++    struct ios_audio_midi_message32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct ios_audio_notify32 *notify;
++    if (!ios_audio_guest_range(base, p->err, 4) ||
++        !ios_audio_guest_range(base, p->notify, sizeof(*notify))) return IOS_AUDIO_STATUS_INVALID_PARAMETER;
++    notify = ios_audio_to_host(base, p->notify);
++    notify->send_notify = 0;
++    *(UINT *)ios_audio_to_host(base, p->err) = ios_midi_message(p->msg, getnumdevs);
++    return STATUS_SUCCESS;
++}
++static NTSTATUS ios_wow64_midi_out_message(void *args) { return ios_wow64_midi_message(args, MODM_GETNUMDEVS); }
++static NTSTATUS ios_wow64_midi_in_message(void *args) { return ios_wow64_midi_message(args, MIDM_GETNUMDEVS); }
++struct ios_audio_midi_wait32 { uint32_t quit, notify; };
++static NTSTATUS ios_wow64_midi_notify_wait(void *args)
++{
++    struct ios_audio_midi_wait32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    struct ios_audio_notify32 *notify;
++    if (!ios_audio_guest_range(base, p->quit, 4) ||
++        !ios_audio_guest_range(base, p->notify, sizeof(*notify))) return IOS_AUDIO_STATUS_INVALID_PARAMETER;
++    notify = ios_audio_to_host(base, p->notify);
++    notify->send_notify = 0;
++    *(BOOL *)ios_audio_to_host(base, p->quit) = 1;
++    return STATUS_SUCCESS;
++}
++struct ios_audio_aux32 { UINT dev_id, msg; uint32_t user, param_1, param_2, err; };
++static NTSTATUS ios_wow64_aux_message(void *args)
++{
++    struct ios_audio_aux32 *p = args;
++    uintptr_t base = ios_wow64_current_base();
++    if (!ios_audio_guest_range(base, p->err, 4)) return IOS_AUDIO_STATUS_INVALID_PARAMETER;
++    *(UINT *)ios_audio_to_host(base, p->err) = ios_midi_message(p->msg, AUXDM_GETNUMDEVS);
++    return STATUS_SUCCESS;
++}
++
++const void *audio_null_ios_unix_call_wow64_funcs[] = {
++    ios_process_attach, /* process_attach */
++    ios_wow64_process_detach, /* process_detach */
++    ios_main_loop_start, /* main_loop_start */
++    ios_main_loop_stop, /* main_loop_stop */
++    ios_wow64_get_endpoint_ids, /* get_endpoint_ids */
++    ios_wow64_create_stream, /* create_stream */
++    ios_wow64_release_stream, /* release_stream */
++    ios_wow64_start, /* start */
++    ios_wow64_stop, /* stop */
++    ios_wow64_reset, /* reset */
++    ios_wow64_get_render_buffer, /* get_render_buffer */
++    ios_wow64_release_render_buffer, /* release_render_buffer */
++    ios_wow64_get_capture_buffer, /* get_capture_buffer */
++    ios_wow64_release_capture_buffer, /* release_capture_buffer */
++    ios_wow64_is_format_supported, /* is_format_supported */
++    ios_wow64_get_loopback_capture_device, /* get_loopback_capture_device */
++    ios_wow64_get_mix_format, /* get_mix_format */
++    ios_wow64_get_device_period, /* get_device_period */
++    ios_wow64_get_buffer_size, /* get_buffer_size */
++    ios_wow64_get_latency, /* get_latency */
++    ios_wow64_get_current_padding, /* get_current_padding */
++    ios_wow64_get_next_packet_size, /* get_next_packet_size */
++    ios_wow64_get_frequency, /* get_frequency */
++    ios_wow64_get_position, /* get_position */
++    ios_wow64_set_volumes, /* set_volumes */
++    ios_wow64_set_event_handle, /* set_event_handle */
++    ios_wow64_set_sample_rate, /* set_sample_rate */
++    ios_wow64_test_connect, /* test_connect */
++    ios_wow64_is_started, /* is_started */
++    ios_wow64_get_prop_value, /* get_prop_value */
++    ios_midi_stub, /* midi_get_driver */
++    ios_wow64_midi_init, /* midi_init */
++    ios_midi_stub, /* midi_release */
++    ios_wow64_midi_out_message, /* midi_out_message */
++    ios_wow64_midi_in_message, /* midi_in_message */
++    ios_wow64_midi_notify_wait, /* midi_notify_wait */
++    ios_wow64_aux_message, /* aux_message */
++};
++_Static_assert(sizeof(audio_null_ios_unix_call_wow64_funcs) / sizeof(audio_null_ios_unix_call_wow64_funcs[0]) == NULL_AUDIO_FN_COUNT,
++               "WoW64 iOS audio table must match mmdevapi unix_funcs");
++#undef IOS_AUDIO_PTR
++#undef IOS_AUDIO_OWNER
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 4faed84..b35cd20 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7400,6 +7400,8 @@ extern const void *dxmt_winemetal_unix_call_funcs[];
+  * a real-time IAudioClock — enough for FMOD's rhythm-game timing engine
+  * to advance past audio-gated splash/intro sequences. See audio_null_ios.c */
+ extern const void *audio_null_ios_unix_call_funcs[];
++extern const void *audio_null_ios_unix_call_wow64_funcs[];
++extern void audio_null_ios_wow64_retire( uintptr_t window );
+ 
+ /* iOS-Madeira 2026-07-05 (Steam S0): network + crypto unix tables,
+  * compiled from wine/dlls/<dll>/ sources into libntdll_unix.a with
+@@ -15011,6 +15013,58 @@ NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
+     return status;
+ }
+ 
++/* Audio scratch is a real owner-local RW view, not a host malloc pointer.
++ * Explicit owner + window prevents a later child at a recycled slot from
++ * freeing this child's allocation. Allocation is only on the owning thread;
++ * release may be from detach and uses the recorded owner, not current TLS. */
++NTSTATUS ios_wow64_audio_alloc( void *owner, uintptr_t window, size_t length, void **host )
++{
++    NTSTATUS status = STATUS_NOT_SUPPORTED;
++    unsigned int i;
++    sigset_t sigset;
++    void *addr = NULL;
++    size_t size = length;
++
++    if (!owner || owner != ios_jit_current_peb() || !host || !length)
++        return STATUS_INVALID_PARAMETER;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (ios_wow64_windows[i].owner == owner && ios_wow64_windows[i].base == window &&
++            !ios_wow64_windows[i].retiring)
++        {
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            status = ios_wow64_vm_allocate_limited( window, &addr, &size, MEM_RESERVE | MEM_COMMIT,
++                                                    PAGE_READWRITE, 0, UINT64_C(0x80000000) );
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++            if (!status) { memset( addr, 0, length ); *host = addr; }
++            break;
++        }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return status;
++}
++
++NTSTATUS ios_wow64_audio_free( void *owner, uintptr_t window, void *host )
++{
++    NTSTATUS status = STATUS_NOT_SUPPORTED;
++    unsigned int i;
++    sigset_t sigset;
++    void *addr = host;
++    size_t size = 0;
++
++    if (!owner || !host || !window) return STATUS_INVALID_PARAMETER;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (ios_wow64_windows[i].owner == owner && ios_wow64_windows[i].base == window)
++        {
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            status = ios_wow64_vm_free( window, &addr, &size, MEM_RELEASE );
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++            break;
++        }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return status;
++}
++
+ /* Native callers of ProcessWow64Information: the owner's PEB32 (host). */
+ void *ios_wow64_peb32_for_peb( void *owner )
+ {
+@@ -15762,7 +15816,9 @@ static BOOL ios_wow64_restore_initial_teb( unsigned int slot )
+ static void ios_wow64_teardown_window( unsigned int slot )
+ {
+     extern void ios_thread_registry_forget( uintptr_t start, uintptr_t end );
+-    uintptr_t base = ios_wow64_window_unpublish( slot );
++    uintptr_t base = ios_wow64_windows[slot].base;
++    audio_null_ios_wow64_retire( base ); /* no VM calls; delete_views owns the scratch */
++    base = ios_wow64_window_unpublish( slot );
+     sigset_t sigset;
+ 
+     ios_thread_registry_forget( base, base + IOS_WOW64_WINDOW_SIZE );
+@@ -21998,19 +22054,12 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+                             strstr(ascii, "winealsa") || strstr(ascii, "winepulse") ||
+                             strstr(ascii, "wineoss"))
+                         {
+-                            /* Playport: the null driver's table takes 64-bit
+-                             * parameter blocks; an i386 caller's are 32-bit,
+-                             * and read as 64-bit they hand it garbage device
+-                             * strings. Until it has a WoW64 table, an i386
+-                             * child has no audio driver. */
+-                            if (info_class == MemoryWineLoadUnixLibByNameWow64)
+-                            {
+-                                ERR("iOS: MemoryWineLoadUnixLibByNameWow64 %s -> no WoW64 audio table\n", ascii);
+-                                return status;
+-                            }
+-                            ERR("iOS: MemoryWineLoadUnixLibByName %s -> audio_null_ios stub table\n", ascii);
++                            BOOL wow64 = info_class == MemoryWineLoadUnixLibByNameWow64;
++                            ERR("iOS: MemoryWineLoadUnixLibByName%s %s -> iOS audio table\n",
++                                wow64 ? "Wow64" : "", ascii);
+                             res[0] = (UINT64)(UINT_PTR)1; /* magic non-NULL handle */
+-                            res[1] = (UINT64)(UINT_PTR)audio_null_ios_unix_call_funcs;
++                            res[1] = (UINT64)(UINT_PTR)(wow64 ? audio_null_ios_unix_call_wow64_funcs
++                                                            : audio_null_ios_unix_call_funcs);
+                             memcpy( buffer, res, min( len, sizeof(res) ));
+                             return STATUS_SUCCESS;
+                         }

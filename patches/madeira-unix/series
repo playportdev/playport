@@ -72,3 +72,4 @@
 0071-ntdll-map-an-i386-child-s-data-section-views-in-its-.patch
 0072-ntdll-give-an-i386-child-no-audio-driver-until-it-ha.patch
 0073-ntdll-keep-a-WoW64-window-until-its-threads-and-faul.patch
+0074-audio-give-an-i386-child-the-iOS-audio-driver-throug.patch

@@ -39,6 +39,135 @@ FAULT_LOG_PATCH = REPO / "patches/wine-pe/0023-wow64-log-a-windowed-guest-s-faul
 MESSAGE_PARAMS_PATCH = REPO / "patches/wine-pe/0024-wow64win-preserve-guest-SendMessage-dispatch-paramet.patch"
 CLASS_MENU_PATCH = REPO / "patches/wine-pe/0025-wow64win-keep-a-class-s-client-menu-name-in-one-form.patch"
 GUEST_PATCH = REPO / "patches/wine-pe/0016-wow64-convert-guest-pointers-through-the-iOS-guest-w.patch"
+AUDIO_PATCH = REPO / "patches/madeira-unix/0074-audio-give-an-i386-child-the-iOS-audio-driver-throug.patch"
+AUDIO_SOURCE = "build/ntdll-unix/audio_null_ios.c"
+RESOLVER_PATCH = REPO / "patches/wine-unix/0013-ws2_32-convert-an-i386-child-s-resolver-pointers-thr.patch"
+RESOLVER_SOURCES = ("dlls/ws2_32/unixlib.c", "dlls/ntdll/unix/socket.c")
+
+
+def pin(name):
+    """The pins.lock commit of one upstream."""
+    for line in (REPO / "pins.lock").read_text().splitlines():
+        fields = line.split()
+        if fields and fields[0] == name:
+            return fields[1]
+    raise ValueError(f"pins.lock has no {name}")
+
+
+def series_patches(*targets):
+    for target in targets:
+        for name in (REPO / "patches" / target / "series").read_text().splitlines():
+            if name and not name.startswith("#"):
+                yield REPO / "patches" / target / name
+
+
+def patched_upstream_files(git_dir, commit, targets, paths, root, include=()):
+    """Whole upstream files at a pin with every series patch that touches them.
+
+    Some tests need a file's unchanged functions too, which no patch carries.
+    Returns False when the upstream objects are not here (a CI checkout has
+    no Madeira submodule and no Wine cache).
+    """
+    for path in paths:
+        show = subprocess.run(["git", "-C", str(git_dir), "show", f"{commit}:{path}"],
+                              capture_output=True)
+        if show.returncode:
+            return False
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_bytes(show.stdout)
+    includes = [f"--include={p}" for p in (*paths, *include)]
+    for patch in series_patches(*targets):
+        text = patch.read_text(errors="replace")
+        if any(f"diff --git a/{p} " in text or f"+++ b/{p}\n" in text for p in (*paths, *include)):
+            subprocess.run(["git", "-C", str(root), "apply", *includes, str(patch)], check=True)
+    return True
+
+
+def c_function(text, name):
+    """One complete static function of a reconstructed source, by name."""
+    start = text.index("static ", text.rindex("\n", 0, text.index(name + "(")) + 1)
+    end = text.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += {"{": 1, "}": -1}.get(text[end], 0)
+        end += 1
+    return text[start:end] + "\n"
+
+
+def run_audio_tests(scratch):
+    """0074's WoW64 audio table over the driver's own stream code."""
+    with tempfile.TemporaryDirectory(prefix="audio-", dir=scratch) as tmp:
+        root = Path(tmp)
+        subprocess.run(["git", "init", "-q", tmp], check=True)
+        if not patched_upstream_files(REPO / "upstream/madeira", pin("madeira"), ["madeira-unix"],
+                                      [AUDIO_SOURCE], root,
+                                      include=["build/ntdll-unix/audio_wow64_buffer.h",
+                                               "build/ntdll-unix/audio_wow64_ios.h"]):
+            print("build/wow64/test.py: WoW64 audio skipped (upstream/madeira not checked out)", flush=True)
+            return
+        s = (root / AUDIO_SOURCE).read_text()
+        types = s[s.index("typedef int NTSTATUS;"):s.index("/* ---------------------------------------------------------------- */")]
+        stream = s[s.index("struct ios_stream {"):s.index('#include "audio_wow64_buffer.h"')]
+        stream = stream[:stream.index("};") + 2]
+        midi = s[s.index("struct midi_init_params {"):s.index("/* midi_get_driver:")]
+        # The driver defines this twice; the test keeps the later definition.
+        (root / "native_types.h").write_text(
+            (types + "\n" + stream + "\n" + midi).replace(
+                "#define AUDCLNT_E_NOT_INITIALIZED ((HRESULT)0x88890001L)\n", "", 1))
+        (root / "native_functions.h").write_text("".join(c_function(s, n) for n in (
+            "stream_from_handle", "stream_register", "stream_unregister", "ios_create_stream",
+            "ios_release_stream", "ios_get_render_buffer", "ios_release_render_buffer")))
+        (root / "native_other_functions.h").write_text(
+            'static const char IOS_DEVICE_NAME[] = "ios-null";\n'
+            "static uint64_t elapsed_frames(const struct ios_stream *s) { (void)s; return 0; }\n"
+            "static uint64_t mach_absolute_time(void) { return 0; }\n"
+            "static uint64_t mach_to_ns(uint64_t t) { return t; }\n"
+            "static unsigned long long ios_current_tid(void) { return 0; }\n"
+            "static NTSTATUS ios_process_attach(void *p) { (void)p; return 0; }\n"
+            "static NTSTATUS ios_start(void *p) { ((struct stream_handle_params *)p)->result = S_OK; return 0; }\n"
+            "static NTSTATUS ios_stop(void *p) { ((struct stream_handle_params *)p)->result = S_OK; return 0; }\n"
+            "static NTSTATUS ios_reset(void *p) { ((struct stream_handle_params *)p)->result = S_OK; return 0; }\n" +
+            "".join(c_function(s, n) for n in (
+                "ios_main_loop_start", "ios_main_loop_stop", "ios_get_endpoint_ids", "ios_get_capture_buffer",
+                "ios_release_capture_buffer", "ios_is_format_supported", "ios_get_mix_format",
+                "ios_get_device_period", "ios_get_buffer_size", "ios_get_latency", "ios_get_current_padding",
+                "ios_get_next_packet_size", "ios_get_frequency", "ios_get_position", "ios_set_volumes",
+                "ios_set_event_handle", "ios_set_sample_rate", "ios_test_connect", "ios_is_started",
+                "ios_midi_stub", "ios_midi_message")))
+        (root / "vm_api.h").write_text(
+            patched_function(AUDIO_PATCH, "NTSTATUS ios_wow64_audio_alloc( void *owner, uintptr_t window, size_t length, void **host )") +
+            patched_function(AUDIO_PATCH, "NTSTATUS ios_wow64_audio_free( void *owner, uintptr_t window, void *host )"))
+        for name in ("audio_wow64", "audio_vm"):
+            exe = root / (name + "-test")
+            subprocess.run(["clang", "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
+                            "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+                            "-I", str(root / "build/ntdll-unix"), "-I", str(root),
+                            str(REPO / "build/wow64" / (name + "_test.c")), "-o", str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
+
+
+def run_resolver_tests(scratch):
+    """0013's ws2_32 resolver thunks and 0012's socket conversion, from the patched files."""
+    with tempfile.TemporaryDirectory(prefix="ws2-", dir=scratch) as tmp:
+        root = Path(tmp)
+        subprocess.run(["git", "init", "-q", tmp], check=True)
+        if not patched_upstream_files(BUILD / "cache/wine.git", pin("wine"),
+                                      ["wine-port", "wine-valve", "wine-unix"], list(RESOLVER_SOURCES),
+                                      root, include=["include/wine/ios_wow64.h"]):
+            print("build/wow64/test.py: ws2_32 resolvers skipped (no Wine cache in $PLAYPORT_BUILD/cache)", flush=True)
+            return
+        ws = (root / RESOLVER_SOURCES[0]).read_text()
+        (root / "ws2_resolver_api.h").write_text(
+            ws[ws.index("typedef ULONG PTR32;"):ws.rindex("#endif  /* _WIN64 */")])
+        (root / "socket_wow64_api.h").write_text(
+            c_function((root / RESOLVER_SOURCES[1]).read_text(), "socket_wow64_ptr"))
+        exe = root / "ws2-resolver-test"
+        cc = ["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
+              "-fno-sanitize-recover=all", "-I", str(root / "include"), "-I", str(root)]
+        subprocess.run(cc + ["-DWINE_IOS", str(REPO / "build/wow64/ws2_resolver_test.c"), "-o", str(exe)], check=True)
+        subprocess.run([str(exe)], check=True)
+        # The conventional WoW64 branch must still compile.
+        subprocess.run(cc + ["-fsyntax-only", str(REPO / "build/wow64/ws2_resolver_test.c")], check=True)
 
 
 def patched_function(patch, signature):
@@ -349,6 +478,8 @@ def main():
                         "-fsanitize=undefined", "-fno-sanitize-recover=all", "-I", str(root),
                         str(REPO / "build/wow64/vulkan_ptr_test.c"), "-o", str(vulkan_exe)], check=True)
         subprocess.run([str(vulkan_exe)], check=True)
+    run_audio_tests(scratch)
+    run_resolver_tests(scratch)
     return 0
 
 
