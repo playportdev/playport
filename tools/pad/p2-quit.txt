@@ -1,0 +1,20 @@
+# Portal 2: from the main menu (PLAY SINGLE PLAYER selected, as it opens), QUIT
+# and Quit on its "Are you sure you want to quit?" dialog (A). The game exits
+# with code 0 while its secondary threads still run, so the WoW64 window is
+# retired, not torn down (madeira-unix 0073), and Playport restarts itself
+# (decision 0029). From a game in progress: START, DOWN x3 to EXIT TO MAIN MENU,
+# A, A, then this once the menu is up. Checked on the phone on 2026-10-04.
+150 DOWN     # PLAY COOPERATIVE GAME
+300 -
+150 DOWN     # COMMUNITY TEST CHAMBERS
+300 -
+150 DOWN     # OPTIONS
+300 -
+150 DOWN     # EXTRAS
+300 -
+150 DOWN     # QUIT
+500 -
+150 A        # "Are you sure you want to quit?"
+2000 -
+150 A        # Quit
+1000 -

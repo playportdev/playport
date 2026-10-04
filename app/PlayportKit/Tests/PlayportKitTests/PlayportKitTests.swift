@@ -186,6 +186,26 @@ final class CatalogTests: XCTestCase {
         XCTAssertEqual(old.titles.first?.detectsDirect3D12, false)
     }
 
+    func testAdoptionRecordsTheExecutableMachine() throws {
+        try file("Old Game/game.exe")
+        try file("New Game/game.exe")
+        for (dir, machine) in [("Old Game", 0x14c), ("New Game", 0x8664)] {
+            var pe = Direct3D12Tests.pe(plus: machine != 0x14c, name: "d3d9.dll")
+            pe[0x84] = UInt8(machine & 0xff)
+            pe[0x85] = UInt8(machine >> 8)
+            try pe.write(to: games.appendingPathComponent("\(dir)/game.exe"))
+        }
+        let scanned = Adoption.scan(games: games, cohort: Cohort(titles: []), receipts: [], previous: Catalog())
+        let old = try XCTUnwrap(scanned.titles.first { $0.installDir == "Old Game" })
+        let new = try XCTUnwrap(scanned.titles.first { $0.installDir == "New Game" })
+        XCTAssertEqual(old.executableMachine, 0x14c)
+        XCTAssertTrue(old.isI386)
+        XCTAssertEqual(new.executableMachine, 0x8664)
+        XCTAssertFalse(new.isI386)
+        let round = try JSONDecoder().decode(Catalog.self, from: JSONEncoder().encode(scanned))
+        XCTAssertEqual(round.titles.map(\.executableMachine), scanned.titles.map(\.executableMachine))
+    }
+
     func testAdoptionFindsTheStagedCohortTitleReady() throws {
         let cohort = try Cohort.load(directory: titlesDir)
         try file("Hollow Knight/hollow_knight.exe")

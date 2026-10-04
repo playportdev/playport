@@ -1,0 +1,7 @@
+# Portal 2: turn and walk, over and over, in a loaded map (after p2-new-game or
+# p2-cold-boot).
+2000 RX=0.6
+1500 LY=1
+2000 RX=-0.6
+1500 LY=-1
+loop

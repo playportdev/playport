@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 4 Oct 2026 09:55:14 +0200
+Subject: [PATCH] ntdll: take the XInput DLLs from system32 when loaded by path
+ too
+
+wine-pe 0007 opens xinput1_1/1_2/1_3/1_4 and xinput9_1_0 from system32
+for a load by base name. Portal 2's inputsystem.dll loads
+"<game>\bin\XInput1_3.dll" by its full path, so the i386 child got
+Microsoft's copy, which looks for pads through SetupAPI and HID (no
+winebus here), and the scripted pad and a controller never reached the
+game. A load by path whose file name is one of these five now opens
+the system32 copy too (open_dll_file returns the module already loaded
+from there, as steam_api's import of it is). Other names keep the
+path.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-04-portal2-gameplay.md
+Offered-upstream: no
+---
+ dlls/ntdll/loader.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 2d7260f..cc1f107 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4006,6 +4006,24 @@ static NTSTATUS open_system_only_dll( const WCHAR *name, UNICODE_STRING *nt_name
+     return status;
+ }
+ 
++/* Playport: the same for a load by path. Portal 2's inputsystem.dll loads
++ * "<game>\\bin\\XInput1_3.dll" by its full path, and Microsoft's copy there
++ * never sees a pad either. A system-only name is opened from system32 whatever
++ * directory the path names (open_dll_file returns the module already loaded
++ * from there). */
++static NTSTATUS open_system_only_dll_by_path( const WCHAR *path, UNICODE_STRING *nt_name, WINE_MODREF **pwm,
++                                              HANDLE *mapping, SECTION_IMAGE_INFORMATION *image_info,
++                                              struct file_id *id )
++{
++    const WCHAR *name = path + wcslen( path );
++    NTSTATUS status;
++
++    while (name > path && name[-1] != '\\' && name[-1] != '/') name--;
++    if ((status = open_system_only_dll( name, nt_name, pwm, mapping, image_info, id ))) return status;
++    TRACE( "%s from system32 instead of %s\n", debugstr_w(name), debugstr_w(path) );
++    return STATUS_SUCCESS;
++}
++
+ 
+ #if defined(__aarch64__) && !defined(__arm64ec__)
+ /***********************************************************************
+@@ -4102,6 +4120,7 @@ static NTSTATUS find_dll_file( const WCHAR *load_path, const WCHAR *libname, UNI
+             if (!open_system_only_dll( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
+         }
+     }
++    else if (!open_system_only_dll_by_path( libname, nt_name, pwm, mapping, image_info, id )) return STATUS_SUCCESS;
+ 
+ #if defined(__aarch64__) && !defined(__arm64ec__)
+     if (contains_path( libname ) && !open_wow64_native_dll( libname, nt_name, pwm, mapping, image_info, id ))

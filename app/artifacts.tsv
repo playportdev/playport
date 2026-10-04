@@ -108,7 +108,7 @@ resource	Runtime/arm64ec-windows/ncrypt.dll	655360	7b2096d6d05d5b0ab9a1b3e992823
 resource	Runtime/arm64ec-windows/netapi32.dll	655360	2a47aea30d0bb99ef6d4179d75c9a9ed1511deee62efd9a30c0a6f4f373a6ab4	wine-build	build-arm64ec/dlls/netapi32/arm64ec-windows/netapi32.dll	P2
 resource	Runtime/arm64ec-windows/netutils.dll	655360	5b5719b32d83908999d0b67c5c06c8cb155958d829b7a5136f4c3a14dd4c0402	wine-build	build-arm64ec/dlls/netutils/arm64ec-windows/netutils.dll	P2
 resource	Runtime/arm64ec-windows/nsi.dll	655360	cebcea47f7ac4e22fee979a32f5708db5e5ada2adc7bf751bf204a86da0f8870	wine-build	build-arm64ec/dlls/nsi/arm64ec-windows/nsi.dll	P2
-resource	Runtime/arm64ec-windows/ntdll.dll	1572864	2a05406f68e51bba81b8b2f9418ff6c9e64ee164a4dbd0d2da28a70ddc92e970	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
+resource	Runtime/arm64ec-windows/ntdll.dll	1572864	28124aa2a383bddeb8cd7f8ed4e55ad4ba6f603ba58e2b5ac2784e09a7c8af6f	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
 resource	Runtime/arm64ec-windows/ole32.dll	1638400	d04eeaf8532f2c4ccee5e5f14ce68fe492f724498f36628d44655d46bf7f0388	wine-build	build-arm64ec/dlls/ole32/arm64ec-windows/ole32.dll	P2
 resource	Runtime/arm64ec-windows/oleacc.dll	786432	e7674c4fe93fb0d0c0c3a6510806c9966ad635eed1668acff9e2894c7b274c64	wine-build	build-arm64ec/dlls/oleacc/arm64ec-windows/oleacc.dll	P2
 resource	Runtime/arm64ec-windows/oleaut32.dll	1507328	038988243a287487a56c39434904f43a962ecdf9ed1a8704d264d9f9c4c06cbf	wine-build	build-arm64ec/dlls/oleaut32/arm64ec-windows/oleaut32.dll	P2
@@ -239,7 +239,7 @@ resource	Runtime/aarch64-windows/netutils.dll	458752	e13ead2ca8184b242ede34eb647
 resource	Runtime/aarch64-windows/newdev.dll	458752	b8bf2e7f3ef9c0f9705d1d01488a45e64e9b2382018cffeca672103df344bcb0	wine-build	build-macos/dlls/newdev/aarch64-windows/newdev.dll	P2
 resource	Runtime/aarch64-windows/notepad.exe	655360	d7060614f57459ce3539b21f1f5a3549bce740f82aa68e6557c9d0cd93dde7f2	wine-build	build-macos/programs/notepad/aarch64-windows/notepad.exe	P2
 resource	Runtime/aarch64-windows/nsi.dll	458752	9686c061f9661764997e3d760abdc447c6af1b424f58953e16aff9e3c55861eb	wine-build	build-macos/dlls/nsi/aarch64-windows/nsi.dll	P2
-resource	Runtime/aarch64-windows/ntdll.dll	1376256	24f71c0a8043f9ecde4ccc963e26aca10dd77f918349bc3c3e2d5827319c93c1	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
+resource	Runtime/aarch64-windows/ntdll.dll	1376256	811c157614c97a1d8810d5555ec11d39f1fe138e95682c7eeb1a9697c002a76b	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
 resource	Runtime/aarch64-windows/ntoskrnl.exe	1048576	780bf8f9c9e6988c20149589c604af7eb07b9b0953fed541d1014c3fc3249ad9	wine-build	build-macos/dlls/ntoskrnl.exe/aarch64-windows/ntoskrnl.exe	P2
 resource	Runtime/aarch64-windows/ole32.dll	1310720	cc3c8bc17d5ee6b1da72b127c94360596873718926742f3e09b0c4e086389e05	wine-build	build-macos/dlls/ole32/aarch64-windows/ole32.dll	P2
 resource	Runtime/aarch64-windows/oleacc.dll	589824	5fbb460a255e84d78e6db763e62e31cc2d30609fbdbbf261a33e2cba1f951c79	wine-build	build-macos/dlls/oleacc/aarch64-windows/oleacc.dll	P2
@@ -646,7 +646,7 @@ resource	Runtime/i386-windows/normaliz.dll	8192	405667fb46544920b4256b6c5797a6fd
 resource	Runtime/i386-windows/npmshtml.dll	32768	334c93d160eeef505aa091d93d3d66b8732e35b1040549f1a17fb93c6ee08941	wine-build	build-macos/dlls/npmshtml/i386-windows/npmshtml.dll	P2
 resource	Runtime/i386-windows/npptools.dll	36864	2a9d8cde13b2a490e656839f75ce088d0d6496971c0a4995a381cd02cbdd1a53	wine-build	build-macos/dlls/npptools/i386-windows/npptools.dll	P2
 resource	Runtime/i386-windows/nsi.dll	45056	a47b1965b9655e18cc5f11a8a20b66b717e0448e896606e6816838fb3a4492c6	wine-build	build-macos/dlls/nsi/i386-windows/nsi.dll	P2
-resource	Runtime/i386-windows/ntdll.dll	942080	0a4839a092dd25034c82028cfe4f03efb311581e012b8a6730aa97b2ea8fac71	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
+resource	Runtime/i386-windows/ntdll.dll	942080	a8a21e3f70fd343dac1dbca297cc4a64f3508406c6122ab7b890ed4e912ec82c	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
 resource	Runtime/i386-windows/ntdsapi.dll	61440	7d73af4af7e8d298cb9771de0d3ffc23e41a6f296df109b031a633a6a0a7857e	wine-build	build-macos/dlls/ntdsapi/i386-windows/ntdsapi.dll	P2
 resource	Runtime/i386-windows/ntprint.dll	45056	58c92b3ca9eea87aa3b02809dc559c3fc0d2d681ea71e6643b6c83b36b364304	wine-build	build-macos/dlls/ntprint/i386-windows/ntprint.dll	P2
 resource	Runtime/i386-windows/objsel.dll	212992	dc93b92893085df6a8279c4364cadc34afcbf56ceda16edb8b31c39d1c60c13e	wine-build	build-macos/dlls/objsel/i386-windows/objsel.dll	P2

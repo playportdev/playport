@@ -65,6 +65,11 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     /// on adoption; nil in older catalogues. Explicit launch settings still win.
     public var direct3D: Direct3D.Detection? = nil
     public var detectsDirect3D12: Bool { direct3D?.hasDirect3D12 ?? (importsDirect3D12 == true) }
+    /// The COFF machine of the selected executable (0x14c i386, 0x8664 x86-64); rebuilt
+    /// on adoption, nil in older catalogues or when it is no PE.
+    public var executableMachine: UInt16? = nil
+    /// An i386 (WoW64) title: its default backend is Vulkan (decision 0047).
+    public var isI386: Bool { executableMachine == 0x14c }
 
     public enum Badge: String, Sendable {
         case ready = "Ready"
@@ -213,6 +218,9 @@ public enum Adoption {
                 Direct3D.detect(executable: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")), root: dir)
             }
             t.importsDirect3D12 = t.direct3D?.hasDirect3D12 ?? false
+            t.executableMachine = t.executable.flatMap {
+                SteamAPISwap.peMachine(dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")))
+            }
             if t.sizeBytes == nil { t.sizeBytes = directorySize(dir) }
             out.append(t)
         }

@@ -1,0 +1,15 @@
+# Portal 2: from the main menu to Chapter 2 (The Cold Boot), for a gameplay
+# frame-time run with p2-walk once it has loaded: pp perf --secs 120
+# --pad first-frame+30:p2-cold-boot --pad first-frame+70:p2-walk. As p2-new-game
+# up to the chapter list, where DOWN takes chapter 2 (every chapter shows in the
+# list because this account has played them).
+150 A        # PLAY SINGLE PLAYER
+2500 -
+150 DOWN     # NEW GAME
+500 -
+150 A
+2500 -
+150 DOWN     # chapter 2, The Cold Boot
+500 -
+150 A
+30000 -      # the load

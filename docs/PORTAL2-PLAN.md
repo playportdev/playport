@@ -1,9 +1,11 @@
 # Portal 2: plan to the first milestone
 
-**Status:** proposed, 2026-10-03; milestones 1 and 2 reached (2026-10-04). Nothing here is decided until a decision record
-accepts it. It would extend [0005](decisions/0005-title-cohort.md), which limits the
-cohort to x86-64 Direct3D 11 titles. This plan replaces the direction of the
-`portal2-runtime` branch before milestone 0; the review below says why.
+**Status:** accepted by [0047](decisions/0047-i386-titles-on-vulkan.md), 2026-10-04,
+which extends [0005](decisions/0005-title-cohort.md)'s cohort to i386 Direct3D 9 titles
+on Vulkan by default. Milestones 1 and 2 reached (2026-10-04); milestone 3 in progress
+(gameplay by pad, [evidence](evidence/2026-10-04-portal2-gameplay.md)). This plan
+replaces the direction of the `portal2-runtime` branch before milestone 0; the review
+below says why.
 
 ## The problem in one paragraph
 
@@ -469,10 +471,8 @@ has not been measured. Hollow Knight passes `first-frame+10` on the same IPA.
    - fex 0020: read faults in an RWX interval go to the guest;
    - the emulated Steam API's MSVC vtable order for callbacks (gbe 0004);
    - socket buffers through the window (wine-unix 0012).
-4. **Next:**
-   - choose Portal 2's default backend (DXMT cannot run i386 Direct3D 9; the runs
-     set Vulkan per game);
-   - then milestone 3.
+4. **Next** (done 2026-10-04): Portal 2's default backend is Vulkan, by decision 0047;
+   then milestone 3.
 
 5. Hardening after the milestone-1 review: the window outlives its threads and
    the Mach handler's lookups, an exited thread's pair and stack are reclaimed
@@ -484,11 +484,21 @@ Still open from milestone 1 step 2: pointers inside other unix libraries' WoW64
 parameter blocks (audio now has none), i386 GDI fonts, other query classes, and the
 global WoW64 state.
 
-## After milestone 2 (outline only)
+## Milestone 3: gameplay
 
-- **Milestone 3:** gameplay (a chamber played with a controller, measured with
-  `pp perf --pad`), input and audio (a WoW64 table for the null driver) through
-  `wow64win`, save and reload, and the player's settings on the game's page.
+**In progress, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-gameplay.md)):
+
+- An i386 executable defaults to Vulkan (decision 0047). The game's page shows
+  "Default · Vulkan", and Portal 2 reaches its menu with no settings.
+- The pad reaches Portal 2. wine-pe 0026 opens system32's XInput for a load by path,
+  where `inputsystem.dll` had loaded the game's own Microsoft copy from `bin`.
+- Chapter 1's vault and a chapter 2 test chamber were played by pad. QUIT with 11
+  live threads exits 0 through the retired window, with no crash.
+- In the chamber at 720p, capped at 60: 59.6 FPS, 16.78 ms per frame and 13–15 ms of
+  GPU time, with 8 serviced window faults. Pad scripts: `tools/pad/p2-*`.
+
+**Next:** audio (a WoW64 table for the null driver), save and reload, a chamber solved
+with portals, and the in-game hints' keyboard glyphs.
 
 ## Rules that still apply
 
