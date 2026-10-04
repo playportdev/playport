@@ -18,6 +18,13 @@ IPA: `.work/out/20261004-195427-090b7613/Playport-26.5-090b7613.ipa` (dev). SHA2
 `090b761335b498b92573faa2395eda162d0c18bc11d85aba0e5eb590e1472054`. `pp build` passes
 its 78 IPA checks. The phone was on external power, battery 32–36%.
 
+The commit (`60dd46b`) differs from that build only in a stray `kk_shader.c.orig`
+dropped from mesa 0015. Its IPA is
+`.work/out/20261004-201408-7d7f5036/Playport-26.5-7d7f5036.ipa`, SHA256
+`7d7f5036e0ac6dcae1e46753f05bc53fb24d4122df1e0775f2740a6cda98283b`, with the same
+78 checks passing. It is installed, and the 720p run below used it. Hollow Knight has
+not been played on it.
+
 ## What was missing
 
 The draft only created the physical device's disk cache. That alone would never be
@@ -86,3 +93,26 @@ serious.
 The cold run's totals line comes every 64 shaders, so its count is 64 to 127. In the
 chamber (60–180 s) neither run had a hitch of 100 ms or more. Their 30-second FPS
 buckets match within 2 FPS.
+
+## Follow-ups in the same session
+
+- **The map change out of `sp_a2_laser_intro`** was dropped. Steering by pad from
+  screenshots is too slow to make progress. The chamber was solved again from a save
+  (`.work/p2m5`), but the elevator was not reached, and that transition is left to a
+  person playing. Map loads themselves are covered by the chapter-select loads
+  (chapters 1 and 2) and by the save and load from the main menu.
+- **A long 720p run** on IPA `7d7f5036…`: `pp perf --title app-620 --secs 1800
+  --settings '{"screen":"720"}' --pad first-frame+30:p2-cold-boot --pad
+  first-frame+70:p2-walk` (`.work/p2t/long720`), on battery from 36%.
+  - First frame came 5.9 s after Play.
+  - The run was stopped by hand after about 23 minutes because the phone was needed.
+    The person watching saw it hold a steady 60 FPS.
+  - The app's log was not pulled, so this run has no per-frame numbers and no
+    footprint series. What it kept is the following:
+    - `thermalmonitord`'s `mTLL` went 3, 2, 1 (20:44–20:45), then 2, 3, 4 (20:48–20:52),
+      then 6 (21:00:36).
+    - The whole phone drew 3.8–4.2 W (`SystemLoad`), and the battery went from 36% to
+      22%.
+  - Not measured yet:
+    - 540p against 720p at "serious";
+    - whether the footprint growth stops in a longer run.

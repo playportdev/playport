@@ -528,21 +528,34 @@ global WoW64 state.
     50 FPS, with GPU time rising from 15 to 18 ms. The footprint grew about
     4 MB a minute.
 
+- **Shader cache, 2026-10-04** ([evidence](evidence/2026-10-04-portal2-shader-cache.md)):
+  - mesa 0014–0016 give KosmicKrisp a device pipeline cache and the Mesa disk cache
+    (`Library/Caches/kosmickrisp`, 256M). A second launch translates no shaders
+    (`translated=0 deserialized=128`).
+  - Frame time and the 0.3–0.5 s chapter-load hitches did not change, and no Metal
+    build took over 20 ms. So those hitches are not shader compiles.
+  - A 720p run held 60 FPS for 23 minutes in Chapter 2's first chamber; it was
+    stopped early, and its log was not pulled.
+
 **Left for "fully playable":**
 
 1. **Fonts:** the owner's distribution review of the Tahoma fallback faces
    (`build/app-notices.json` is `unreviewed`) before an IPA is given to anyone.
-2. **Progress past one chamber:** a map change, from `sp_a2_laser_intro` into the
-   next chamber, and a save there. The runtime held for 95 minutes with a save and
-   a load, but play has not left the first laser chamber.
+2. **Progress past one chamber:** an in-game map change through an elevator, from
+   `sp_a2_laser_intro` into the next chamber. It is left to a person playing, because
+   steering by pad from screenshots is too slow. Map loads are covered by chapter
+   select and by the save and load.
 3. **GPU headroom under heat:** in a chamber at 720p, capped at 60, GPU time is
    15 ms per frame when nominal and 17–18 ms after an hour at "serious", which
    gives about 50 FPS. Native resolution or an uncapped rate would be GPU-bound.
+   Not yet measured: whether 540p holds 60 at "serious" (`--settings
+   '{"screen":"540"}'` against `"720"`, back to back once hot).
 4. **Hitches:** in play, hitches of 0.4–1 s (18:22, 18:25, 19:04 in the long
    session), the 596 ms and 200 ms ones of `p2m3-cold-boot`, and loading hitches
    up to 713 ms. None has an established cause.
 5. **Footprint growth** of about 4 MB a minute in a chamber: its cause is not
-   known, and the limit was far away after 95 minutes.
+   known, and the limit was far away after 95 minutes. Not yet measured: whether it
+   levels off in a 30-minute or longer `p2-walk` run with its log pulled.
 
 Also still open: the hint glyph follows the last device used, and a retired window's
 final teardown has not been seen on the phone.
