@@ -16,6 +16,7 @@
 
 import HostIOKit
 import PlayportKit
+import SteamClientKit
 import SwiftUI
 
 /// The launch screen over the title's black surface until its first frame
@@ -115,37 +116,52 @@ enum LaunchFix {
     }
 }
 
-/// A game's hero art as its page shows it (GameDetailView): the screen's width and 250
-/// points high, filled and centred, fading into the page's background. The launch screen
-/// draws the same (LaunchBackdrop), so from the page to the game the art does not change.
-struct HeroBanner<Art: View>: View {
+/// A game's hero art as its page and its launch screen show it: filling the whole screen,
+/// centred, undimmed. Both draw it through this, so from the page to the game it does not change.
+struct GameHeroArt<Art: View>: View {
     @ViewBuilder let art: Art
 
     var body: some View {
         art
-            .frame(height: 250)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .overlay {
-                LinearGradient(stops: [.init(color: PP.background.opacity(0.1), location: 0),
-                                       .init(color: PP.background.opacity(0.55), location: 0.55),
-                                       .init(color: PP.background, location: 1)],
-                               startPoint: .top, endPoint: .bottom)
-            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
     }
 }
 
-/// Behind the launch screen: the game's page as it was without its text and controls, the
-/// hero art in its band over the page's background, unchanged for the whole launch (on Play
-/// only the page's text and controls leave and the launch screen's come; RootView).
+/// The art a game's page hands the shell to draw behind it (AppShell, GameDetailView).
+struct PageArt: Equatable {
+    let appID: UInt32?
+    let name: String
+    /// The store's app, when the page has it; else GameArt looks the game up.
+    let info: SteamAppInfo?
+
+    @ViewBuilder var view: some View {
+        if let info {
+            SteamArtView(app: info, kind: .hero, placeholder: PP.tile(for: name))
+        } else {
+            GameArt(appID: appID, name: name, kind: .hero)
+        }
+    }
+}
+
+struct PageArtKey: PreferenceKey {
+    static let defaultValue: PageArt? = nil
+    static func reduce(value: inout PageArt?, nextValue: () -> PageArt?) { value = value ?? nextValue() }
+}
+
+/// Behind the launch screen: the game's page as it was without its text and controls, its
+/// hero art filling the screen, unchanged for the whole launch (on Play only the page's
+/// text and controls leave and the launch screen's come; RootView).
 struct LaunchBackdrop: View {
     let art: UIImage?
     let title: String
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack {
             PP.background
-            HeroBanner { picture }
+            GameHeroArt { picture }
         }
         .ignoresSafeArea()
     }

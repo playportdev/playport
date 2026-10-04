@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // A game's page (docs/design/2026-09-28-gamepad-ui/Game.dc.html,
 // GameInstall.dc.html), opened from the Library or Home over the grid: the
-// hero art fading into the page, the name, the developer and controller
+// hero art filling the screen behind it (drawn by the shell, PageArt), the name, the developer and controller
 // support, then the buttons, all on the focus ring:
 //
 // - installed: Play (A), the achievements count, Options (X), Update when
@@ -68,8 +68,6 @@ private struct GameDetailPage: View {
     @ObservedObject private var launchSettings = LaunchSettingsStore.shared
     @ObservedObject private var navigation = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
-    /// Play was pressed: the page dives away over the launch screen (UI/LaunchTransition.swift).
-    @Environment(\.launchingFromPage) private var launchingFromPage
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -228,20 +226,12 @@ private struct GameDetailPage: View {
     private func page(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         let under = !navigation.gamePanels.isEmpty
         return ZStack(alignment: .topLeading) {
-            // The hero art, fading into the page (the launch screen draws the same band: on
-            // Play the page's copy goes at once, over the launch screen's, which stays put).
-            HeroBanner {
-                Group {
-                    if let g {
-                        SteamArtView(app: g.info, kind: .hero, placeholder: PP.tile(for: name))
-                    } else if let t {
-                        GameArt(appID: t.appID, name: t.name, kind: .hero)
-                    }
-                }
-            }
-            .opacity(launchingFromPage ? 0 : 1)
-            .ignoresSafeArea(edges: [.top, .horizontal])
-            .allowsHitTesting(false)
+            // The hero art fills the screen behind the page and its footer: the shell draws
+            // it (PageArt), as the launch screen does, so on Play it does not change.
+            Color.clear
+                .preference(key: PageArtKey.self,
+                            value: g.map { PageArt(appID: $0.id, name: name, info: $0.info) }
+                                ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil) })
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -272,7 +262,6 @@ private struct GameDetailPage: View {
             .padding(.top, 76)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background((launchingFromPage ? Color.clear : PP.background).ignoresSafeArea())
     }
 
     private func subtitle(_ t: InstalledTitle?, _ g: SteamGame?) -> String? {

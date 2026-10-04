@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // A game's launch, in motion ("dive into the art"). The game's hero art never changes:
 // the launch screen draws it as the game's page does (UI/LaunchViews.swift LaunchBackdrop,
-// HeroBanner), so only the text and controls move. On Play the page's zoom, blur and fade
+// GameHeroArt), so only the text and controls move. On Play the page's zoom, blur and fade
 // away (0.35 s; it drops its own copy of the art and its background at once, over the
 // launch screen's identical one) while the launch screen's name, bar, step and tip fade
 // in, all there within half a second. On the game's first frame those fly on towards the

@@ -64,8 +64,18 @@ struct AppShell: View {
                     .padding(.bottom, Self.footerBottom)
             }
         }
-        // Clear once Play is pressed: the launch screen under the diving page shows through.
-        .background((launchingFromPage ? Color.clear : PP.background).ignoresSafeArea())
+        // A game's page: its hero art fills the screen behind it and the footer, undimmed, as
+        // the launch screen shows it (UI/LaunchViews.swift GameHeroArt). Clear once Play is
+        // pressed: the launch screen's identical art under the diving page shows through.
+        .backgroundPreferenceValue(PageArtKey.self) { art in
+            if launchingFromPage {
+                Color.clear
+            } else if let art {
+                ZStack { PP.background; GameHeroArt { art.view } }.ignoresSafeArea()
+            } else {
+                PP.background.ignoresSafeArea()
+            }
+        }
         // The controller keyboard or a picker, over everything with its own footer.
         .overlay { PadModalHost().animation(.easeOut(duration: 0.15), value: modal.isUp) }
         // Download mode: black, over everything, until a button or a tap (DownloadsView.swift).
