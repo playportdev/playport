@@ -46,10 +46,10 @@ struct LaunchScreen: View {
                         .scaleEffect(shown || reduceMotion ? 1 : 0.9)
                         .blur(radius: shown || reduceMotion ? 0 : 4)
                         .opacity(shown ? 1 : 0)
-                        .animation(LaunchMotion.partIn(0.35, delay: 0.08), value: shown)
+                        .animation(LaunchMotion.partIn(0.5, delay: 0.15), value: shown)
                     LaunchBar(fraction: LaunchProgress.fraction(launch.stage, elapsed: elapsed))
                         .opacity(shown ? 1 : 0)
-                        .animation(LaunchMotion.partIn(0.3, delay: 0.12), value: shown)
+                        .animation(LaunchMotion.partIn(0.45, delay: 0.25), value: shown)
                     HStack(spacing: 10) {
                         ForEach(LaunchProgress.steps, id: \.self) { s in
                             Circle().fill(launch.stage > s ? PP.accent : PP.line).frame(width: 8, height: 8)
@@ -58,7 +58,7 @@ struct LaunchScreen: View {
                             .accessibilityIdentifier("launch-status")
                     }
                     .opacity(shown ? 1 : 0)
-                    .animation(LaunchMotion.partIn(0.3, delay: 0.14), value: shown)
+                    .animation(LaunchMotion.partIn(0.45, delay: 0.3), value: shown)
                     if slow, case .waitingForJit(let until) = launch.step {
                         LaunchSteps(current: .jit, failed: nil) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -81,7 +81,7 @@ struct LaunchScreen: View {
                     LaunchTip().padding(.bottom, 26)
                 }
                 .opacity(shown ? 1 : 0)
-                .animation(LaunchMotion.partIn(0.3, delay: 0.16), value: shown)
+                .animation(LaunchMotion.partIn(0.45, delay: 0.35), value: shown)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

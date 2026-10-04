@@ -55,10 +55,9 @@ struct RootView: View {
             if launch.running {
                 // A title started from the library: the whole screen is the guest's swap chain (HostIO.swift).
                 GameSurface().ignoresSafeArea()
-                    // Under the launch screen, black and a little small; on the first frame it
-                    // settles in as the launch screen flies off (UI/LaunchTransition.swift). A cover,
+                    // Under the launch screen, covered black; on the first frame it fades in at its
+                    // own size as the launch screen flies off (UI/LaunchTransition.swift). A cover,
                     // not the Metal layer's own opacity: the game presents into it all along.
-                    .scaleEffect(launch.showsSheet && !reduceMotion ? LaunchMotion.gameFrom : 1)
                     .overlay { Color.black.opacity(launch.showsSheet ? 1 : 0).ignoresSafeArea().allowsHitTesting(false) }
                     .animation(LaunchMotion.gameIn, value: launch.showsSheet)
                     // The launch screen covers it until the game is up (UI/LaunchViews.swift): the
