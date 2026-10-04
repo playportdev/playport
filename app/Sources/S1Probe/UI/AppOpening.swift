@@ -45,7 +45,7 @@ final class AppOpening: ObservableObject {
     /// From the start: the longest the animation waits for the stores.
     nonisolated static let capSeconds = 4.0
     /// The cards' flight, the farthest included.
-    nonisolated static let leaveSeconds = 1.0
+    nonisolated static let leaveSeconds = 1.3
 
     /// Covering the shell: everything until the cards have landed.
     var covering: Bool { phase != .done }
@@ -169,9 +169,9 @@ private struct OpeningCardModifier: ViewModifier {
         case .intro, .holding: return (1, .zero, 0)
         case .leaving:
             let l = date.timeIntervalSince(opening.leftAt ?? date)
-            if opening.reduceMotion { return (1, .zero, OpeningTime.progress(l, 0, 0.3)) }
+            if opening.reduceMotion { return (1, .zero, OpeningTime.progress(l, 0, 0.4)) }
             let dx = opening.center.x - frame.midX, dy = opening.center.y - frame.midY
-            let p = OpeningTime.progress(l, 0.12 + hypot(dx, dy) * 0.00055, 0.56, .fly)
+            let p = OpeningTime.progress(l, 0.15 + hypot(dx, dy) * 0.0007, 0.73, .fly)
             return (0.06 + 0.94 * p, CGSize(width: dx * (1 - p), height: dy * (1 - p)), p)
         }
     }
@@ -192,7 +192,7 @@ private struct OpeningChromeModifier: ViewModifier {
         switch opening.phase {
         case .done: 1
         case .intro, .holding: 0
-        case .leaving: OpeningTime.progress(date.timeIntervalSince(opening.leftAt ?? date), 0.45, 0.4)
+        case .leaving: OpeningTime.progress(date.timeIntervalSince(opening.leftAt ?? date), 0.6, 0.5)
         }
     }
 }

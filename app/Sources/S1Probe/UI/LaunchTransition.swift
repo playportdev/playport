@@ -2,31 +2,28 @@
 // A game's launch, in motion ("dive into the art"). The game's hero art never changes:
 // the launch screen draws it as the game's page does (UI/LaunchViews.swift LaunchBackdrop,
 // GameHeroArt), so only the text and controls move. On Play the page's zoom, blur and fade
-// away (0.35 s; it drops its own copy of the art and its background at once, over the
+// away (0.6 s; it drops its own copy of the art and its background at once, over the
 // launch screen's identical one) while the launch screen's name, bar, step and tip fade
-// in, all there within half a second. On the game's first frame those fly on towards the
-// player, blurring away, the art fades, and the game settles in from just behind them.
+// in, all there within a second. On the game's first frame those fly on towards the
+// player, blurring away, the art fades, and the game fades in at its own size.
 // Reduce Motion leaves fades only.
 
 import SwiftUI
 
 enum LaunchMotion {
     /// The game's page's text and controls leaving on Play.
-    static let pageSeconds = 0.35
+    static let pageSeconds = 0.6
     static let pageOut = Animation.timingCurve(0.4, 0, 0.2, 1, duration: pageSeconds)
     /// The art fading on the first frame, as the launch screen's parts fly off.
-    static let backdropOut = Animation.easeInOut(duration: 0.6)
+    static let backdropOut = Animation.easeInOut(duration: 0.8)
     /// The launch screen's parts leaving on the first frame.
-    static let sheetOut = Animation.timingCurve(0.5, 0, 0.3, 1, duration: 0.7)
-    /// The game settling in under it.
-    static let gameIn = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.75).delay(0.12)
+    static let sheetOut = Animation.timingCurve(0.5, 0, 0.3, 1, duration: 0.9)
+    /// The game fading in under it, at its own size.
+    static let gameIn = Animation.easeOut(duration: 0.9).delay(0.15)
     /// The launch screen's parts coming in, `delay` after Play.
     static func partIn(_ duration: Double, delay: Double) -> Animation {
         .timingCurve(0.2, 0.8, 0.2, 1, duration: duration).delay(delay)
     }
-    /// How small the game starts, behind the launch screen.
-    static let gameFrom = 0.9
-
     /// Gone by zooming towards the player: larger, blurred, transparent.
     static func dive(scale: Double, blur: Double, reduceMotion: Bool) -> AnyTransition {
         let gone = reduceMotion ? DiveEffect(scale: 1, blur: 0, opacity: 0) : DiveEffect(scale: scale, blur: blur, opacity: 0)

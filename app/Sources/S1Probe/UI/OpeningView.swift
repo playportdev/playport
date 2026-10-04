@@ -13,7 +13,7 @@ struct OpeningView: View {
         TimelineView(.animation(paused: opening.phase == .done)) { tl in
             let t = tl.date.timeIntervalSince(opening.clock)
             let l = opening.leftAt.map { tl.date.timeIntervalSince($0) }
-            let shown = 1 - (l.map { OpeningTime.progress($0, 0, 0.3) } ?? 0)
+            let shown = 1 - (l.map { OpeningTime.progress($0, 0, 0.4) } ?? 0)
             let drawing = OpeningDrawing(t: t, l: l, cards: opening.cards, reduceMotion: opening.reduceMotion)
             ZStack {
                 PP.background
@@ -64,7 +64,7 @@ private struct OpeningDrawing {
         let across = min(size.width, size.height) * 0.385
         var icon = ctx
         if let l {
-            let e = T.progress(l, 0.12, 0.38, .easeIn)
+            let e = T.progress(l, 0.15, 0.5, .easeIn)
             icon.opacity = 1 - e
             icon.translateBy(x: centre.x, y: centre.y)
             icon.scaleBy(x: 1 - 0.7 * e, y: 1 - 0.7 * e)
@@ -121,7 +121,7 @@ private struct OpeningDrawing {
             opacity *= 1 - 0.45 * e
             scale *= 1 - 0.08 * e
         }
-        if let l { opacity *= 1 - T.progress(l, 0, 0.3) }
+        if let l { opacity *= 1 - T.progress(l, 0, 0.4) }
         guard opacity > 0.001 else { return }
         var c = ctx
         c.opacity = opacity
