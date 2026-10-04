@@ -30,6 +30,9 @@ struct LaunchScreen: View {
     @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var setup = SetupState.shared
     @ObservedObject private var router = PadRouter.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Shown from Play: its parts come in one after another (UI/LaunchTransition.swift).
+    @State private var shown = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.2)) { ctx in
@@ -38,7 +41,13 @@ struct LaunchScreen: View {
             ZStack {
                 VStack(spacing: 18) {
                     LaunchTitle(name: launch.title)
+                        .scaleEffect(shown || reduceMotion ? 1 : 0.8)
+                        .blur(radius: shown || reduceMotion ? 0 : 6)
+                        .opacity(shown ? 1 : 0)
+                        .animation(LaunchMotion.partIn(0.55, delay: 0.25), value: shown)
                     LaunchBar(fraction: LaunchProgress.fraction(launch.stage, elapsed: elapsed))
+                        .opacity(shown ? 1 : 0)
+                        .animation(LaunchMotion.partIn(0.35, delay: 0.5), value: shown)
                     HStack(spacing: 10) {
                         ForEach(LaunchProgress.steps, id: \.self) { s in
                             Circle().fill(launch.stage > s ? PP.accent : PP.line).frame(width: 8, height: 8)
@@ -46,6 +55,8 @@ struct LaunchScreen: View {
                         Text(LaunchProgress.status(launch.stage)).font(.system(size: 14)).foregroundStyle(PP.soft)
                             .accessibilityIdentifier("launch-status")
                     }
+                    .opacity(shown ? 1 : 0)
+                    .animation(LaunchMotion.partIn(0.35, delay: 0.56), value: shown)
                     if slow, case .waitingForJit(let until) = launch.step {
                         LaunchSteps(current: .jit, failed: nil) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -67,16 +78,22 @@ struct LaunchScreen: View {
                     }
                     LaunchTip().padding(.bottom, 26)
                 }
+                .opacity(shown ? 1 : 0)
+                .animation(LaunchMotion.partIn(0.35, delay: 0.62), value: shown)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 // Aspect-fill art must not widen the foreground's layout proposal:
                 // long titles need the screen's width to wrap and scale to fit.
                 LaunchBackdrop(art: launch.art.map { .image($0) } ?? .tile(launch.title))
+                    .scaleEffect(shown || reduceMotion ? 1 : 0.9)
+                    .opacity(shown ? 1 : 0)
+                    .animation(LaunchMotion.partIn(0.65, delay: 0.12), value: shown)
             }
         }
         .foregroundStyle(PP.text)
         .accessibilityIdentifier("launch-screen")
+        .onAppear { shown = true }
     }
 }
 

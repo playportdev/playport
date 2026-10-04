@@ -414,6 +414,11 @@ but the player's Pause and runs it once Steam is signed in. A release build comp
   `wine_host_session_start`, `wine_host_session_launch` and
   `wine_host_session_wait`, once per app process. The scene turns landscape to
   `GameSurface`, covered by the launch's steps until the game's first frame.
+  On Play the page zooms, blurs and fades over the launch screen as its parts
+  come in; on the first frame the launch screen flies on the same way and the
+  game settles in from just behind it (`UI/LaunchTransition.swift`; fades only
+  with Reduce Motion). The game presents under a black cover, never a
+  transparent Metal layer.
   Each step is a `title: +<s> s` line in the log (and a `mark` event in a
   driven launch). How a launch ends is in "Restarting after a game" below.
 - **Launch environment.** A Steam game (a title with a Steam app ID) runs

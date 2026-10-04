@@ -46,24 +46,46 @@ struct RootView: View {
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var setup = JitSetup.shared
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
+        ZStack {
             if launch.running {
                 // A title started from the library: the whole screen is the guest's swap chain (HostIO.swift).
-                GameSurface().ignoresSafeArea().statusBarHidden().persistentSystemOverlays(.hidden)
+                GameSurface().ignoresSafeArea()
+                    // Under the launch screen, black and a little small; on the first frame it
+                    // settles in as the launch screen flies off (UI/LaunchTransition.swift). A cover,
+                    // not the Metal layer's own opacity: the game presents into it all along.
+                    .scaleEffect(launch.showsSheet && !reduceMotion ? LaunchMotion.gameFrom : 1)
+                    .overlay { Color.black.opacity(launch.showsSheet ? 1 : 0).ignoresSafeArea().allowsHitTesting(false) }
+                    .animation(LaunchMotion.gameIn, value: launch.showsSheet)
                     // The launch screen covers it until the game is up (UI/LaunchViews.swift).
-                    .overlay { if launch.showsSheet { LaunchScreen() } }
+                    .overlay {
+                        ZStack {
+                            if launch.showsSheet {
+                                LaunchScreen().transition(LaunchMotion.dive(scale: 1.3, blur: 10, reduceMotion: reduceMotion))
+                            }
+                        }
+                        .animation(LaunchMotion.sheetOut, value: launch.showsSheet)
+                    }
                     // Playport's menu over the paused game, on a long press of Home (UI/InGameMenuView.swift).
                     .overlay { if menu.isOpen || menu.quitting { InGameMenuView() } }
+                    .statusBarHidden().persistentSystemOverlays(.hidden)
+                    .transition(.identity)
             } else if restart.restarting {
                 // After a game, until the phone replaces this process (AppRestart): black
                 // as the game left the screen, with nothing to read (decision 0034).
                 Color.black.ignoresSafeArea().statusBarHidden().persistentSystemOverlays(.hidden)
+                    .transition(.identity)
             } else {
+                // On Play the page dives away over the launch screen (UI/LaunchTransition.swift).
                 AppShell()
+                    .zIndex(1)
+                    .transition(LaunchMotion.dive(scale: 1.25, blur: 8, reduceMotion: reduceMotion))
             }
         }
+        .animation(LaunchMotion.pageOut, value: launch.running)
+        .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: Binding(get: { setup.presented }, set: { if !$0 && setup.phase != .ready && setup.phase != .cancelled { setup.cancel() } }),
                onDismiss: { setup.dismissed() }) { JitSetupSheet() }
         .onChange(of: scenePhase) { _, phase in
