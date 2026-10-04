@@ -1,0 +1,32 @@
+# Portal 2: save the game in progress into a new slot, go to the main menu and
+# load that save (the newest, first in LOAD GAME's list). From a game in
+# progress, e.g. after p2-cold-boot. The save shows on the phone in
+# portal2/SAVE/<account>/ as <time>.sav.
+150 START    # the pause menu, RETURN TO GAME ringed
+1500 -
+150 DOWN     # SAVE GAME
+600 -
+150 A
+2500 -
+150 A        # New Saved Game Slot; back to the pause menu, SAVE GAME ringed
+4000 -
+150 DOWN     # LOAD LAST SAVE
+400 -
+150 DOWN     # OPTIONS
+400 -
+150 DOWN     # EXIT TO MAIN MENU
+400 -
+150 A        # its "are you sure" dialog
+1500 -
+150 A
+15000 -      # the main menu loads
+150 A        # PLAY SINGLE PLAYER
+2500 -
+150 DOWN
+400 -
+150 DOWN     # LOAD GAME
+400 -
+150 A
+2500 -
+150 A        # the newest save
+30000 -      # the load

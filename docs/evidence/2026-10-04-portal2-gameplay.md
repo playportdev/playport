@@ -142,12 +142,59 @@ installed and run in one session (battery 76%):
   window was released at once rather than retired. The app restarts, and there are no
   crashes (`.work/phone/20261004T102907/s1-host.log`).
 
+## Audio, resolvers and fonts
+
+Commits `9f2105b` (madeira-unix 0074, wine-unix 0013, their host tests in
+`build/wow64/test.py`) and `abd0b38` (the Tahoma fallback faces) build IPA
+`.work/out/20261004-111031-ba34b2e0/Playport-26.5-ba34b2e0.ipa` (dev, SHA256
+`ba34b2e01381c3980ce61135a6c74e6cd1ac405ec556b8ad73d90823650ce82c`, 78 IPA checks;
+the notices are `unreviewed-app-selection`, see below). Installed in place, battery
+59–76%:
+
+- **Audio.** Portal 2's i386 mmdevapi gets the iOS driver's WoW64 table
+  (`MemoryWineLoadUnixLibByNameWow64 winepulse.drv -> iOS audio table`), and
+  `create_stream by 'portal2.exe'` (0xfffe, 2 ch, 48000 Hz, 32-bit float) is followed by
+  `RemoteIO ENDPOINT ready`, `start`, and `ml1065` level lines with sound in them (about
+  870,000 samples a period, mean |x| 0.02–0.07, peak up to 0.75, no clipping;
+  `.work/p2m3c/s1-host.log`). The MMDevices Render key was written during that run
+  (no other process loads mmdevapi), so the i386 view sees it; the prefix has no
+  `Software\Wow6432Node` to redirect it.
+- **Fonts.** `fonts: 2 links` before each session; `select_font can't find a single
+  appropriate font` occurs 0 times (311 in `.work/phone/20261004T102907`). The faces are
+  Wine's tracked prebuilts under the Bitstream Vera licence with their SFD attribution.
+  They came after the owner's licensing review, so `build/app-notices.json` is
+  `unreviewed` with them as its open question: **they need review under
+  [DISTRIBUTION.md](../DISTRIBUTION.md) before an IPA is given to anyone.**
+- **Resolvers.** wine-unix 0013 is checked by its host test (packed addrinfo and hostent
+  round trips, bounds, NULL, sizing, all five thunks); Portal 2's single-player play did
+  not exercise it on the phone.
+- **Hollow Knight** (`.work/ui-runs/20261004T111132`, this IPA) passes `first-frame+10`,
+  first frame at 10.92 s, main menu on the screenshot, and its stream still carries sound
+  (`create_stream by 'hollow_knight.exe'`, mean |x| 0.044, peak 0.51).
+
+## Save, reload and the portal gun
+
+- **Save and reload** by pad: START, SAVE GAME, New Saved Game Slot writes
+  `portal2/SAVE/<account>/1791103990.sav` (LOAD GAME lists it first as "Sunday, Oct 4
+  8:53 AM", Chapter 2 – The Cold Boot, with its thumbnail). EXIT TO MAIN MENU, then PLAY
+  SINGLE PLAYER, LOAD GAME and A load it back into the chamber. `tools/pad/p2-save-load`
+  does the whole sequence; run once after `p2-cold-boot` (`.work/p2m3d`), it wrote
+  `1791105527.sav` and ended back in the level.
+- **Firing a portal: not confirmed.** RT (bound `R_TRIGGER +attack`; `joystick 1`,
+  `joy_name "Xbox360 controller"`) held at the arrival room's walls and floor left both
+  halves of the crosshair empty and the hint up. The surfaces aimed at may not be
+  portalable, and no shot shows a projectile, so whether the trigger reaches `+attack`
+  is still open. XInput's host path (wine-port 0055) copies both triggers.
+- **Hint glyphs** follow the last device the engine saw: the chapter start shows the
+  mouse glyph, and after one load from the menu by pad the hint showed `RT`. No cvar was
+  changed.
+
 ## Open
 
-- No audio: the null driver has no WoW64 table (madeira-unix 0072 gives an i386 child
-  none).
-- The in-game hints show keyboard and mouse glyphs while the menus show pad glyphs.
+- Whether RT fires the portal gun (see above): aim at a known portalable panel in the
+  chamber past the arrival room, or watch `+attack` with a bind that logs.
+- The in-game hints' glyph depends on the last device used, not on a setting.
 - GPU time in a chamber is 13–15 ms at 720p, 60 FPS capped. Native resolution or an
   uncapped rate would be GPU-bound.
-- Save and reload, and a full chamber solved with portals, have not been tried.
+- The fallback fonts' distribution review (above).
 - A retired window's final teardown on the phone has not been seen (see QUIT).

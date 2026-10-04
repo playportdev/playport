@@ -497,8 +497,14 @@ global WoW64 state.
 - In the chamber at 720p, capped at 60: 59.6 FPS, 16.78 ms per frame and 13–15 ms of
   GPU time, with 8 serviced window faults. Pad scripts: `tools/pad/p2-*`.
 
-**Next:** audio (a WoW64 table for the null driver), save and reload, a chamber solved
-with portals, and the in-game hints' keyboard glyphs.
+- Audio: madeira-unix 0074 gives an i386 mmdevapi the iOS driver's WoW64 table, and
+  Portal 2's stream reaches RemoteIO with sound in it. wine-unix 0013 takes ws2_32's
+  resolver pointers through the window (host-tested). Wine's Tahoma faces end the
+  `select_font` failures; they await the owner's distribution review.
+- Save and reload by pad work (`tools/pad/p2-save-load`).
+
+**Next:** confirm RT fires the portal gun at a portalable surface, then a chamber
+solved with portals; the fonts' distribution review.
 
 ## Rules that still apply
 
