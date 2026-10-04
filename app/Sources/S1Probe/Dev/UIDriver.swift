@@ -3,7 +3,7 @@
 // product UI, driven, and the one way the workstation drives the app
 // (decision 0012). The app shows the same screens as a Home Screen launch and
 // performs UI_ACTIONS through the same model calls the buttons make, once the
-// first library scan has finished:
+// first library scan has finished and the opening animation (UI/AppOpening.swift) is over:
 //
 //   verify:<title id>          Verify files; the next action waits for its result
 //   play:<title id>            Play; the launch ends with its `title-done` event. Playport
@@ -123,6 +123,8 @@ enum UIDriver {
             let library = LibraryModel.shared
             // The first scan: the one AppShell starts on appear.
             while library.scanning || !library.scannedOnce { try? await Task.sleep(for: .milliseconds(100)) }
+            // The opening animation (UI/AppOpening.swift) covers the shell until Home is drawn whole.
+            while AppOpening.shared.covering { try? await Task.sleep(for: .milliseconds(100)) }
             log("library: " + library.catalog.titles.map { "\($0.id) \($0.name) [\($0.badge.rawValue)]" }.joined(separator: ", "))
             var done = 0
             for (i, action) in actions.enumerated() {

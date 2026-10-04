@@ -27,6 +27,9 @@ final class SteamAccountModel: ObservableObject {
     @Published private(set) var gamesFetchedAt: Date?
     @Published private(set) var gamesLoading = false
     @Published private(set) var gamesError: String?
+    /// The games are listed (cached or fetched), or there is no account to list them for:
+    /// what the opening animation waits for from Steam (UI/AppOpening.swift).
+    @Published private(set) var listedOnce = false
     @Published private(set) var lastRenewal: SteamService.Renewal?
     @Published private(set) var signingOut = false
     /// The emulator's profile per app, as kept by the service (loadGameProfile).
@@ -209,13 +212,15 @@ final class SteamAccountModel: ObservableObject {
         Task {
             let s = await service.restoreIfPossible()
             lastRenewal = await service.lastRenewal
-            guard s.account != nil else { return }
+            guard s.account != nil else { listedOnce = true; return }
             // What the last play earned goes to Steam (the play itself ran with Steam closed).
             if case .signedIn = s { Task { await self.syncPlayedStats() } }
             await showCachedGames()
+            if !games.isEmpty { listedOnce = true }
             if case .signedIn = s, gamesFetchedAt.map({ Date().timeIntervalSince($0) > Self.refreshAge }) ?? true {
                 await loadGames(refresh: true)
             }
+            listedOnce = true
         }
     }
 
@@ -372,6 +377,11 @@ final class SteamAccountModel: ObservableObject {
     }
 
     // MARK: art
+
+    /// Art already loaded, without waiting: a view drawn again shows it at once.
+    func cachedImage(_ app: SteamAppInfo, _ kind: ArtworkCache.Kind) -> UIImage? {
+        images["\(app.appID)/\(kind.rawValue)"]
+    }
 
     func image(_ app: SteamAppInfo, _ kind: ArtworkCache.Kind) async -> UIImage? {
         let key = "\(app.appID)/\(kind.rawValue)"

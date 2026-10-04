@@ -18,9 +18,22 @@ struct HomeView: View {
     @ObservedObject private var focus = PadFocus.shared
 
     /// The game played last, else the first installed one.
-    private var continueTitle: InstalledTitle? {
-        let titles = library.catalog.titles.filter(\.canPlay)
+    private var continueTitle: InstalledTitle? { Self.continueTitle(library.catalog.titles) }
+
+    static func continueTitle(_ catalogued: [InstalledTitle]) -> InstalledTitle? {
+        let titles = catalogued.filter(\.canPlay)
         return titles.filter { $0.lastPlayed != nil }.max { $0.lastPlayed! < $1.lastPlayed! } ?? titles.first
+    }
+
+    /// The store art Home draws (the hero's, the Recent tiles'), loaded into the model's
+    /// cache: the opening animation waits for it (UI/AppOpening.swift).
+    static func loadArt(titles: [InstalledTitle], model: SteamAccountModel) async {
+        let hero = continueTitle(titles)
+        let recent = recentEntries(titles: titles, owned: model.games, excluding: hero?.id)
+        let wanted: [(UInt32?, ArtworkCache.Kind)] = [(hero?.appID, .hero)] + recent.map { ($0.appID, .header) }
+        let art = wanted.compactMap { app, kind in model.games.first { $0.id == app }.map { ($0.info, kind) } }
+        let loads = art.map { info, kind in Task { @MainActor in _ = await model.image(info, kind) } }
+        for load in loads { await load.value }
     }
 
     var body: some View {
@@ -28,13 +41,13 @@ struct HomeView: View {
             HStack(spacing: 14) {
                 hero
                 VStack(spacing: 10) {
-                    downloadCard
-                    nextCard
+                    downloadCard.openingCard(1, cornerRadius: 14)
+                    nextCard.openingCard(2, cornerRadius: 14)
                 }
                 .frame(width: 250)
             }
             .frame(height: 170)
-            Text("Recent").font(PP.display(17, .semibold)).foregroundStyle(PP.text)
+            Text("Recent").font(PP.display(17, .semibold)).foregroundStyle(PP.text).openingChrome()
             recentRow
         }
         .padding(.top, 8)
@@ -64,6 +77,7 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .padItem("hero:\(t.id)", hint: "Open", cornerRadius: 14) { nav.openTitle(t.id) }
+            .openingCard(0, cornerRadius: 14)
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Text("No games yet").font(PP.display(30)).foregroundStyle(PP.text)
@@ -73,6 +87,7 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .background(PP.surface, in: RoundedRectangle(cornerRadius: 14))
             .padItem("hero", hint: "Library", cornerRadius: 14) { _ = nav.open("games") }
+            .openingCard(0, cornerRadius: 14)
         }
     }
 
@@ -145,8 +160,11 @@ struct HomeView: View {
     /// The four games played last other than the hero, installed or not; the
     /// installed games never played fill the rest by name, then the others by name.
     private var recent: [LibraryEntry] {
-        LibraryList.recent(LibraryList.entries(titles: library.catalog.titles, owned: model.games),
-                           count: 4, excluding: continueTitle?.id)
+        Self.recentEntries(titles: library.catalog.titles, owned: model.games, excluding: continueTitle?.id)
+    }
+
+    static func recentEntries(titles: [InstalledTitle], owned: [SteamGame], excluding heroID: String?) -> [LibraryEntry] {
+        LibraryList.recent(LibraryList.entries(titles: titles, owned: owned), count: 4, excluding: heroID)
     }
 
     /// Five tiles across (Main.dc.html), the ring's room at each end included.
@@ -156,8 +174,8 @@ struct HomeView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    ForEach(recent) { entry in
-                        tile(entry)
+                    ForEach(Array(recent.enumerated()), id: \.element.id) { i, entry in
+                        tile(entry).openingCard(3 + i, cornerRadius: 10)
                     }
                     Text("+ Find games")
                         .font(.system(size: 14, weight: .semibold)).foregroundStyle(PP.muted)
@@ -166,6 +184,7 @@ struct HomeView: View {
                         .background(PP.surface, in: RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PP.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                         .padItem("find", hint: "Library", cornerRadius: 10) { _ = nav.open("games") }
+                        .openingCard(7, cornerRadius: 10)
                 }
                 // Room for the ring, which draws outside each tile.
                 .padding(.horizontal, 6).padding(.vertical, 6)

@@ -144,6 +144,9 @@ final class AppRestart: ObservableObject {
         }
     }
 
+    /// This process replaced one that played a game (noteLaunch): the opening animation skips its intro.
+    nonisolated(unsafe) private(set) static var isRestart = false
+
     /// The app's init: whether this process is a restart, and what it has to say.
     /// Returns the record's notice, for the first screen's alert.
     nonisolated static func noteLaunch() -> LaunchMessage? {
@@ -156,6 +159,7 @@ final class AppRestart: ObservableObject {
             return nil
         }
         log("new process pid \(getpid()), \(age) ms after pid \(r.pid) asked" + (r.notice.map { "; notice: \($0.title)" } ?? ""))
+        isRestart = true
         return r.notice
     }
 }
