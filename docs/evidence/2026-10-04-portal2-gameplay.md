@@ -126,6 +126,22 @@ Faults: 8 serviced window accesses (the known native reads of the i386 ntdll ima
 one refused native read of guest `0x370` (open since milestone 2). There is no guest
 exception and no unaudited win32u call.
 
+## On the committed IPA
+
+Commit `479647c` builds IPA `.work/out/20261004-102212-f817a530/Playport-26.5-f817a530.ipa`
+(SHA256 `f817a5307352269de45151125a2d48879d3401837098492f9d7111fbad708ac4`). Its
+artifacts are the same as `b455cb03`'s; only the app's provenance differs. It was
+installed and run in one session (battery 76%):
+
+- **Hollow Knight** (`.work/ui-runs/p2m3-hk`, on DXMT) passes `first-frame+10`, with
+  the first frame at 8.67 s. The screenshot shows the main menu.
+- **Portal 2** (`.work/ui-runs/p2m3-2`, no settings) logs `on vulkan` and reaches the
+  menu. DOWN moves the selection to PLAY COOPERATIVE GAME. UP, then `pp pad push
+  p2-quit`, quits. The game exits with code 0 after 295 s. This time every secondary
+  thread had exited first (`release … serviced_low_faults=188 live_threads=0`), so the
+  window was released at once rather than retired. The app restarts, and there are no
+  crashes (`.work/phone/20261004T102907/s1-host.log`).
+
 ## Open
 
 - No audio: the null driver has no WoW64 table (madeira-unix 0072 gives an i386 child
