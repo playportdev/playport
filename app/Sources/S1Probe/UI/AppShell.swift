@@ -35,6 +35,7 @@ struct AppShell: View {
     @ObservedObject private var gamePage = GamePageState.shared
     @ObservedObject private var setupState = SetupState.shared
     @ObservedObject private var opening = AppOpening.shared
+    @Environment(\.launchingFromPage) private var launchingFromPage
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
 
@@ -53,6 +54,8 @@ struct AppShell: View {
                 .opacity(modal.isUp ? 0 : 1)
                 .openingChrome()
                 .padding(.bottom, Self.footerBottom)
+                // Its own colour, over a game page's art too.
+                .background(PP.background.ignoresSafeArea(edges: [.horizontal, .bottom]))
             }
         }
         // The footer sits low, in the home indicator's inset, on every page.
@@ -65,7 +68,18 @@ struct AppShell: View {
                     .padding(.bottom, Self.footerBottom)
             }
         }
-        .background(PP.background.ignoresSafeArea())
+        // A game's page: its hero art fills the screen behind it, dimmed as the launch screen
+        // shows it (UI/LaunchViews.swift GameHeroArt). Clear once Play is
+        // pressed: the launch screen's identical art under the diving page shows through.
+        .backgroundPreferenceValue(PageArtKey.self) { art in
+            if launchingFromPage {
+                Color.clear
+            } else if let art {
+                ZStack { PP.background; GameHeroArt { art.view } }.ignoresSafeArea()
+            } else {
+                PP.background.ignoresSafeArea()
+            }
+        }
         // The controller keyboard or a picker, over everything with its own footer.
         .overlay { PadModalHost().animation(.easeOut(duration: 0.15), value: modal.isUp) }
         // Download mode: black, over everything, until a button or a tap (DownloadsView.swift).

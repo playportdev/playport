@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // A game's page (docs/design/2026-09-28-gamepad-ui/Game.dc.html,
 // GameInstall.dc.html), opened from the Library or Home over the grid: the
-// hero art fading into the page, the name, the developer and controller
+// hero art filling the screen behind it (drawn by the shell, PageArt), the name, the developer and controller
 // support, then the buttons, all on the focus ring:
 //
 // - installed: Play (A), the achievements count, Options (X), Update when
@@ -226,25 +226,12 @@ private struct GameDetailPage: View {
     private func page(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
         let under = !navigation.gamePanels.isEmpty
         return ZStack(alignment: .topLeading) {
-            // The hero art, fading into the page.
-            Group {
-                if let g {
-                    SteamArtView(app: g.info, kind: .hero, placeholder: PP.tile(for: name))
-                } else if let t {
-                    GameArt(appID: t.appID, name: t.name, kind: .hero)
-                }
-            }
-            .frame(height: 250)
-            .frame(maxWidth: .infinity)
-            .clipped()
-            .overlay {
-                LinearGradient(stops: [.init(color: PP.background.opacity(0.1), location: 0),
-                                       .init(color: PP.background.opacity(0.55), location: 0.55),
-                                       .init(color: PP.background, location: 1)],
-                               startPoint: .top, endPoint: .bottom)
-            }
-            .ignoresSafeArea(edges: [.top, .horizontal])
-            .allowsHitTesting(false)
+            // The hero art fills the screen behind the page and its footer: the shell draws
+            // it (PageArt), as the launch screen does, so on Play it does not change.
+            Color.clear
+                .preference(key: PageArtKey.self,
+                            value: g.map { PageArt(appID: $0.id, name: name, info: $0.info) }
+                                ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil) })
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -275,7 +262,6 @@ private struct GameDetailPage: View {
             .padding(.top, 76)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(PP.background.ignoresSafeArea())
     }
 
     private func subtitle(_ t: InstalledTitle?, _ g: SteamGame?) -> String? {

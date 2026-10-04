@@ -87,7 +87,10 @@ struct LibraryView: View {
                 .toolbar(.hidden, for: .navigationBar)
                 // The stack draws the system background otherwise, not the app's.
                 .containerBackground(PP.background, for: .navigation)
-                .navigationDestination(for: GameRef.self) { GameDetailView(ref: $0) }
+                .navigationDestination(for: GameRef.self) {
+                    // Clear: the shell draws the game's art behind the page (PageArt).
+                    GameDetailView(ref: $0).containerBackground(.clear, for: .navigation)
+                }
         }
     }
 }

@@ -16,10 +16,12 @@
 
 import HostIOKit
 import PlayportKit
+import SteamClientKit
 import SwiftUI
 
 /// The launch screen over the title's black surface until its first frame
-/// (Launch.dc.html): the game's art dimmed, its name, one progress bar and
+/// (Launch.dc.html): over the game's art as its page shows it (LaunchBackdrop,
+/// drawn under this by RootView), its name, one progress bar and
 /// the step in a word, what the checks before the Play found that does not stop
 /// it (no controller, Steam signed out), and the tip for the in-game menu. The steps (JIT,
 /// runtime, game) are listed only when JIT is slow (LaunchProgress.jitSlow),
@@ -30,6 +32,9 @@ struct LaunchScreen: View {
     @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var setup = SetupState.shared
     @ObservedObject private var router = PadRouter.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Shown from Play: its parts come in one after another (UI/LaunchTransition.swift).
+    @State private var shown = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.2)) { ctx in
@@ -38,7 +43,13 @@ struct LaunchScreen: View {
             ZStack {
                 VStack(spacing: 18) {
                     LaunchTitle(name: launch.title)
+                        .scaleEffect(shown || reduceMotion ? 1 : 0.9)
+                        .blur(radius: shown || reduceMotion ? 0 : 4)
+                        .opacity(shown ? 1 : 0)
+                        .animation(LaunchMotion.partIn(0.35, delay: 0.08), value: shown)
                     LaunchBar(fraction: LaunchProgress.fraction(launch.stage, elapsed: elapsed))
+                        .opacity(shown ? 1 : 0)
+                        .animation(LaunchMotion.partIn(0.3, delay: 0.12), value: shown)
                     HStack(spacing: 10) {
                         ForEach(LaunchProgress.steps, id: \.self) { s in
                             Circle().fill(launch.stage > s ? PP.accent : PP.line).frame(width: 8, height: 8)
@@ -46,6 +57,8 @@ struct LaunchScreen: View {
                         Text(LaunchProgress.status(launch.stage)).font(.system(size: 14)).foregroundStyle(PP.soft)
                             .accessibilityIdentifier("launch-status")
                     }
+                    .opacity(shown ? 1 : 0)
+                    .animation(LaunchMotion.partIn(0.3, delay: 0.14), value: shown)
                     if slow, case .waitingForJit(let until) = launch.step {
                         LaunchSteps(current: .jit, failed: nil) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -67,16 +80,14 @@ struct LaunchScreen: View {
                     }
                     LaunchTip().padding(.bottom, 26)
                 }
+                .opacity(shown ? 1 : 0)
+                .animation(LaunchMotion.partIn(0.3, delay: 0.16), value: shown)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background {
-                // Aspect-fill art must not widen the foreground's layout proposal:
-                // long titles need the screen's width to wrap and scale to fit.
-                LaunchBackdrop(art: launch.art.map { .image($0) } ?? .tile(launch.title))
-            }
         }
         .foregroundStyle(PP.text)
         .accessibilityIdentifier("launch-screen")
+        .onAppear { shown = true }
     }
 }
 
@@ -105,22 +116,70 @@ enum LaunchFix {
     }
 }
 
-/// The game's art dimmed over the design's dark blue, or its tile colour.
-struct LaunchBackdrop: View {
-    enum Art { case image(UIImage), tile(String) }
-    let art: Art
+/// A game's hero art as its page and its launch screen show it: filling the whole screen,
+/// centred, dimmed as the launch screen always had it (28 % over the design's dark blue,
+/// darker towards the bottom). Both draw it through this, so from the page to the game it
+/// does not change.
+struct GameHeroArt<Art: View>: View {
+    @ViewBuilder let art: Art
 
     var body: some View {
         ZStack {
             Color(hex: 0x131C2B)
-            switch art {
-            case .image(let img): Image(uiImage: img).resizable().aspectRatio(contentMode: .fill).opacity(0.28)
-            case .tile(let name): PP.tile(for: name).opacity(0.35)
-            }
+            art
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .opacity(0.28)
             LinearGradient(colors: [.clear, Color(hex: 0x05070A).opacity(0.7)], startPoint: .top, endPoint: .bottom)
         }
-        .clipped()
         .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+}
+
+/// The art a game's page hands the shell to draw behind it (AppShell, GameDetailView).
+struct PageArt: Equatable {
+    let appID: UInt32?
+    let name: String
+    /// The store's app, when the page has it; else GameArt looks the game up.
+    let info: SteamAppInfo?
+
+    @ViewBuilder var view: some View {
+        if let info {
+            SteamArtView(app: info, kind: .hero, placeholder: PP.tile(for: name))
+        } else {
+            GameArt(appID: appID, name: name, kind: .hero)
+        }
+    }
+}
+
+struct PageArtKey: PreferenceKey {
+    static let defaultValue: PageArt? = nil
+    static func reduce(value: inout PageArt?, nextValue: () -> PageArt?) { value = value ?? nextValue() }
+}
+
+/// Behind the launch screen: the game's page as it was without its text and controls, its
+/// hero art filling the screen, unchanged for the whole launch (on Play only the page's
+/// text and controls leave and the launch screen's come; RootView).
+struct LaunchBackdrop: View {
+    let art: UIImage?
+    let title: String
+
+    var body: some View {
+        ZStack {
+            PP.background
+            GameHeroArt { picture }
+        }
+        .ignoresSafeArea()
+    }
+
+    /// As SteamArtView draws it on the page: the tile colour under the art.
+    private var picture: some View {
+        ZStack {
+            Rectangle().fill(PP.tile(for: title))
+            if let art { Image(uiImage: art).resizable().aspectRatio(contentMode: .fill) }
+        }
+        .clipped()
     }
 }
 

@@ -46,24 +46,68 @@ struct RootView: View {
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var setup = JitSetup.shared
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The page has dived away after Play (0.7 s): the shell leaves the hierarchy.
+    @State private var pageGone = false
 
     var body: some View {
-        Group {
+        ZStack {
             if launch.running {
                 // A title started from the library: the whole screen is the guest's swap chain (HostIO.swift).
-                GameSurface().ignoresSafeArea().statusBarHidden().persistentSystemOverlays(.hidden)
-                    // The launch screen covers it until the game is up (UI/LaunchViews.swift).
-                    .overlay { if launch.showsSheet { LaunchScreen() } }
+                GameSurface().ignoresSafeArea()
+                    // Under the launch screen, black and a little small; on the first frame it
+                    // settles in as the launch screen flies off (UI/LaunchTransition.swift). A cover,
+                    // not the Metal layer's own opacity: the game presents into it all along.
+                    .scaleEffect(launch.showsSheet && !reduceMotion ? LaunchMotion.gameFrom : 1)
+                    .overlay { Color.black.opacity(launch.showsSheet ? 1 : 0).ignoresSafeArea().allowsHitTesting(false) }
+                    .animation(LaunchMotion.gameIn, value: launch.showsSheet)
+                    // The launch screen covers it until the game is up (UI/LaunchViews.swift): the
+                    // game's art as its page showed it, which only fades on the first frame, and
+                    // the name, bar and step over it, which fly off towards the player.
+                    .overlay {
+                        ZStack {
+                            if launch.showsSheet {
+                                LaunchBackdrop(art: launch.art, title: launch.title)
+                                    .transition(.opacity.animation(LaunchMotion.backdropOut))
+                                LaunchScreen().transition(LaunchMotion.dive(scale: 1.3, blur: 10, reduceMotion: reduceMotion))
+                            }
+                        }
+                        .animation(LaunchMotion.sheetOut, value: launch.showsSheet)
+                    }
                     // Playport's menu over the paused game, on a long press of Home (UI/InGameMenuView.swift).
                     .overlay { if menu.isOpen || menu.quitting { InGameMenuView() } }
+                    .statusBarHidden().persistentSystemOverlays(.hidden)
+                    .transition(.identity)
             } else if restart.restarting {
                 // After a game, until the phone replaces this process (AppRestart): black
                 // as the game left the screen, with nothing to read (decision 0034).
                 Color.black.ignoresSafeArea().statusBarHidden().persistentSystemOverlays(.hidden)
-            } else {
+                    .transition(.identity)
+            }
+            if !restart.restarting && (!launch.running || !pageGone) {
+                // On Play the page dives away over the launch screen, live (it drops its art and
+                // background at once), then goes (UI/LaunchTransition.swift).
                 AppShell()
+                    .environment(\.launchingFromPage, launch.running)
+                    .animation(LaunchMotion.pageOut) { page in
+                        page.modifier(launch.running
+                                      ? (reduceMotion ? DiveEffect(scale: 1, blur: 0, opacity: 0) : DiveEffect(scale: 1.12, blur: 6, opacity: 0))
+                                      : DiveEffect(scale: 1, blur: 0, opacity: 1))
+                    }
+                    .allowsHitTesting(!launch.running)
+                    .zIndex(1)
+                    .transition(.identity)
             }
         }
+        .onChange(of: launch.running) { _, running in
+            pageGone = false
+            guard running else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(LaunchMotion.pageSeconds + 0.05))
+                if launch.running { pageGone = true }
+            }
+        }
+        .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: Binding(get: { setup.presented }, set: { if !$0 && setup.phase != .ready && setup.phase != .cancelled { setup.cancel() } }),
                onDismiss: { setup.dismissed() }) { JitSetupSheet() }
         .onChange(of: scenePhase) { _, phase in
