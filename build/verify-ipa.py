@@ -714,7 +714,7 @@ def main():
         # Runtime/ ships at the app root (xtool.yml resources); IPAs up to 075123b6
         # carried it in the SwiftPM resource bundle. A row's Runtime/x is base/x.
         if (app / "artifacts.tsv").exists():
-            base, where, dirs = app, "app root", ["arm64ec-windows", "aarch64-windows", "nls", "registry", "vulkan",
+            base, where, dirs = app, "app root", ["arm64ec-windows", "aarch64-windows", "nls", "fonts", "registry", "vulkan",
                                                   "steamapi", "i386-windows"]
             check(not any(b.joinpath("Runtime").exists() for b in app.glob("*.bundle")),
                   "resources: Runtime/ at the app root only, not also in a resource bundle")

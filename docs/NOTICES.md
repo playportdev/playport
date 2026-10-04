@@ -6,6 +6,18 @@ come from, and the known gaps. It is not a complete linked-code audit or legal
 approval. [plans/open-source-release.md](plans/open-source-release.md) tracks
 completion before an IPA is distributed.
 
+## Wine fallback fonts
+
+`Runtime/fonts/{tahoma,tahomabd}.ttf` are unchanged, tracked Wine-pin prebuilts
+from `fonts/` (artifact provenance `fonts`), not host FontForge outputs.
+`wine-NOTICES.md` includes the Bitstream Vera font licence; the notices stage
+also preserves SFD header lines 1–6 for each face as
+`wine-fonts-*-attribution.txt`, with committed-source derived origins.
+The Wine component's `wine-*` app selection includes these attributions.
+The faces came after the owner's 2026-09-30 review, so `build/app-notices.json`
+is `unreviewed` with them as its open question: no IPA with them goes to anyone
+until they are reviewed ([DISTRIBUTION.md](DISTRIBUTION.md)).
+
 ## Collecting the files
 
 ```sh

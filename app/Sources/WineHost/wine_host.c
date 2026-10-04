@@ -490,6 +490,21 @@ static void link_wow64_farm(const char *name, const char *pe_arch)
     }
 }
 
+/* Both the native session and WoW64 titles use win32u's prefix font scan.
+ * Recreate links before the session starts GDI: bundle paths change on install.
+ * Do not remove unrelated user/game-installed fonts. */
+static void link_fonts(void)
+{
+    char src_dir[1200], dir[1200];
+    snprintf(src_dir, sizeof(src_dir), "%s/fonts", g_runtime);
+    snprintf(dir, sizeof(dir), "%s/drive_c/windows/fonts", g_prefix);
+    if (mkdirs(dir)) {
+        host_log("cannot create %s: %s", dir, strerror(errno));
+        return;
+    }
+    host_log("fonts: %d links -> %s", link_dir_into(src_dir, dir), src_dir);
+}
+
 /* Point drive_c/windows/system32 at the bundle's PE set. The bundle path
  * changes on every reinstall, so the links are always recreated. A Direct3D
  * backend other than DXMT (PLAYPORT_DLL_OVERLAY, PlayportKit
@@ -1144,6 +1159,7 @@ static int session_await(uint32_t sequence, unsigned want, int timeout_ms, pp_se
 int wine_host_session_start(int timeout_ms)
 {
     if (!g_server_started || g_guest_started) return -1;
+    link_fonts();
     if (link_system32("arm64ec")) return -2;
     snprintf(g_session_dir, sizeof(g_session_dir), "%s/%s", g_prefix, PP_SESSION_DIR_UNIX);
     if (mkdirs(g_session_dir)) {

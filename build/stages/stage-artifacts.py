@@ -99,6 +99,7 @@ HEADER = """\
 #   P4-server reconstructed base + Madeira build/wineserver/build.sh via build/stages/unix-gaps.sh wineserver (patches/madeira-unix real-suspend-safepoint, patches/wine-unix server-ios-*)
 #   P4-crypto GnuTLS 3.8.9 / GMP 6.3.0 / Nettle 3.10.1 from Madeira's tracked tarballs via build/stages/unix.sh gnutls; nettle/hogweed hashes depend on UNIX_ROOT
 #   nls       wine pin nls/ (tracked data files, the set Madeira app/Madeira/nls ships)
+#   fonts     wine pin fonts/{tahoma,tahomabd}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces
 #   P5-dxmt   DXMT pin (3Shain/dxmt) + patches/dxmt-port + patches/dxmt unix slice (build/stages/dxmt-patched.sh unix: build/stages/dxmt-base.sh unix + the hand-ported AIR helpers in build/air-helpers) + LLVM 15.0.7 iOS static libs, combined by build/stages/dxmt-combined.sh as Madeira build/dxmt-ios/README.md does
 #   P5-dxmt-pe  the same patched tree's PE DLLs (build/stages/dxmt-patched.sh pe, llvm-mingw 20260922); must match P5-dxmt's unix slot table (150 winemetal unix slots; newLibraryWithSource at 144)
 #   P5-winios Madeira pin app/Madeira/Winios/ (the reference's app-side Winios display driver); Winios.m + patches/madeira-winios; WiniosGamepad.c, the controller snapshot Wine's xinput1_*.dll (P2) read through libwin32u_unix.a
@@ -118,6 +119,8 @@ HEADER = """\
 # its test programs.
 NLS = ["c_1252.nls", "c_20127.nls", "c_28591.nls", "c_437.nls", "l_intl.nls", "locale.nls",
        "normidna.nls", "normnfc.nls", "normnfd.nls", "normnfkc.nls", "normnfkd.nls", "sortdefault.nls"]
+
+FONTS = ["tahoma.ttf", "tahomabd.ttf"]
 
 LINK = [  # dest name, root, source, provenance
     ("libntdll_unix.a", "unix", "mythic/app/Madeira/libntdll_unix.a", "P3"),
@@ -192,7 +195,7 @@ STEAMAPI = [("x86_64", "steam_api64.dll"), ("i386", "steam_api.dll")]
 
 GAPS = [  # kind-of-thing, dest, reason
     ("resource", "Runtime/arm64ec-windows/wineios.drv", "Madeira build/wineios-drv/wineios.c has no build recipe at the Madeira pin, and the wine-port tree's dlls/wineios.drv is not in its configure, so stages/wine-pe.sh does not build it; audio does not need it: mmdevapi loads winepulse.drv by name and virtual_ios.c answers with the linked audio_null_ios table"),
-    ("resource", "Runtime/prefix-template.tar.gz", "reference seeds the whole prefix from an untracked-recipe template; the app seeds only the builtins' own registrations (Runtime/registry, P7-reg), so the rest of wine.inf (fonts, services, file associations) is not applied"),
+    ("resource", "Runtime/prefix-template.tar.gz", "reference seeds the whole prefix from an untracked-recipe template; the app seeds only the builtins' own registrations (Runtime/registry, P7-reg), so the rest of wine.inf (font registry, services, file associations) is not applied"),
 ]
 
 
@@ -268,6 +271,8 @@ def record():
     add("resource", "Runtime/arm64ec-windows/playport-session.exe", "session", "playport-session.exe", "P9-session")
     for name in NLS:
         add("resource", f"Runtime/nls/{name}", "unix", f"wine/nls/{name}", "nls")
+    for name in FONTS:
+        add("resource", f"Runtime/fonts/{name}", "unix", f"wine/fonts/{name}", "fonts")
     for name in ("system.reg", "user.reg"):
         add("resource", f"Runtime/registry/{name}", "registry", name, "P7-reg")
     for dest, root, source, prov in LINK:

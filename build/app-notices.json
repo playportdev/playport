@@ -2,7 +2,7 @@
   "schema": 1,
   "about": "Which files of a `pp notices` output the app carries as Licenses/ (build/notices-app.py; docs/NOTICES.md, \"The app's selection\"). Every collected file is either included by a component or excluded by a group with its reason; a new collected file fails selection until it is classified here. An include wins over an exclude.",
   "review": {
-    "status": "release-reviewed",
+    "status": "unreviewed",
     "reviewed_by": "the Playport authors (copyright holder)",
     "date": "2026-09-30",
     "decision": "docs/decisions/0039-owners-licensing-review.md",
@@ -16,7 +16,9 @@
       "Supersets carried whole: accepted; over-inclusion cannot miss a notice.",
       "Madeira: its un-headered build/*-unix files are taken under the stricter reading, GPL-3.0-or-later, and its Wine commits under its published licence; no upstream request is sent."
     ],
-    "open": []
+    "open": [
+      "Wine's fallback Tahoma faces (Runtime/fonts, provenance part fonts; docs/NOTICES.md \"Wine fallback fonts\") were added after the 2026-09-30 review: their Bitstream Vera licence and SFD attribution lines need the owner's review per docs/DISTRIBUTION.md before an IPA is given to anyone."
+    ]
   },
   "parts": {
     "app": "Playport's Swift app, PlayportKit, HostIOKit and the JIT helper extension's own code",
@@ -57,12 +59,13 @@
         "P2",
         "P2-ec",
         "nls",
+        "fonts",
         "P3",
         "P4-win32u",
         "P4-server",
         "P6-gst"
       ],
-      "licence": "LGPL-2.1-or-later, and the licences of the libraries in its libs/",
+      "licence": "LGPL-2.1-or-later, the licences of the libraries in its libs/, and the Bitstream Vera font licence for its Tahoma faces",
       "include": [
         "LGPL-2.1.txt",
         "wine-*"

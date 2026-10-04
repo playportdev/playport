@@ -15,6 +15,7 @@
 #   P4-server reconstructed base + Madeira build/wineserver/build.sh via build/stages/unix-gaps.sh wineserver (patches/madeira-unix real-suspend-safepoint, patches/wine-unix server-ios-*)
 #   P4-crypto GnuTLS 3.8.9 / GMP 6.3.0 / Nettle 3.10.1 from Madeira's tracked tarballs via build/stages/unix.sh gnutls; nettle/hogweed hashes depend on UNIX_ROOT
 #   nls       wine pin nls/ (tracked data files, the set Madeira app/Madeira/nls ships)
+#   fonts     wine pin fonts/{tahoma,tahomabd}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces
 #   P5-dxmt   DXMT pin (3Shain/dxmt) + patches/dxmt-port + patches/dxmt unix slice (build/stages/dxmt-patched.sh unix: build/stages/dxmt-base.sh unix + the hand-ported AIR helpers in build/air-helpers) + LLVM 15.0.7 iOS static libs, combined by build/stages/dxmt-combined.sh as Madeira build/dxmt-ios/README.md does
 #   P5-dxmt-pe  the same patched tree's PE DLLs (build/stages/dxmt-patched.sh pe, llvm-mingw 20260922); must match P5-dxmt's unix slot table (150 winemetal unix slots; newLibraryWithSource at 144)
 #   P5-winios Madeira pin app/Madeira/Winios/ (the reference's app-side Winios display driver); Winios.m + patches/madeira-winios; WiniosGamepad.c, the controller snapshot Wine's xinput1_*.dll (P2) read through libwin32u_unix.a
@@ -943,6 +944,8 @@ resource	Runtime/nls/normnfd.nls	53246	8ce157d53161fc977214c1789797b752d67032e0c
 resource	Runtime/nls/normnfkc.nls	82910	5c98603c5a571a12e024bfaaff5526775026aac6b829c5a5f3fbff89f8e13a2a	unix	wine/nls/normnfkc.nls	nls
 resource	Runtime/nls/normnfkd.nls	76294	da1a3cd3b79d995a0ea0298d842e7e49be71bb88b068bc5408bcf35b000a5d85	unix	wine/nls/normnfkd.nls	nls
 resource	Runtime/nls/sortdefault.nls	3394804	93577599d1b0335d6b2b3560d2bc6bf3681193daae2a32b28cbd2612bc2b1d09	unix	wine/nls/sortdefault.nls	nls
+resource	Runtime/fonts/tahoma.ttf	143884	90f1abad4da0ce03da5d2277ee75a9600ce812d37c90eab76e0838ffa7937e55	unix	wine/fonts/tahoma.ttf	fonts
+resource	Runtime/fonts/tahomabd.ttf	137836	508a2acc88cd6abdd399ae79c9965db43fba75a46bb115117b55d2be2272d889	unix	wine/fonts/tahomabd.ttf	fonts
 resource	Runtime/registry/system.reg	482589	a7243a86a08786bdaba078d1f79bd55db7234cccf95249c0421f5729da9bb35b	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	1599	e534357e8ae05068ac00258faf0b3e6086f77c1170b502a9fd46b59052c9ebd6	registry	user.reg	P7-reg
 link	lib/libntdll_unix.a	3056280	fcf13f86f774e0553a86415988f664075b5dcfcc905b3d04bb43897af12f6f5b	unix	mythic/app/Madeira/libntdll_unix.a	P3
@@ -962,4 +965,4 @@ source	WinIOS/include/WiniosGamepad.h	815	df095974b73bd60f3b21cafea09252f8242da2
 source	WinIOS/IOSDisplayShim.m	7994	5949d006f6c8c0022a8625c1f71183762007549be9eceae3c5b707796a97712c	unix	mythic/app/Madeira/IOSDisplayShim.m	P5-dxshim
 source	WinIOS/include/IOSDisplayShim.h	811	bc201615f9f858f8085acae1aa48034804ce6a706896a101a1c209bc3647f1f4	unix	mythic/app/Madeira/IOSDisplayShim.h	P5-dxshim
 gap	Runtime/arm64ec-windows/wineios.drv	-	-	-	resource	Madeira build/wineios-drv/wineios.c has no build recipe at the Madeira pin, and the wine-port tree's dlls/wineios.drv is not in its configure, so stages/wine-pe.sh does not build it; audio does not need it: mmdevapi loads winepulse.drv by name and virtual_ios.c answers with the linked audio_null_ios table
-gap	Runtime/prefix-template.tar.gz	-	-	-	resource	reference seeds the whole prefix from an untracked-recipe template; the app seeds only the builtins' own registrations (Runtime/registry, P7-reg), so the rest of wine.inf (fonts, services, file associations) is not applied
+gap	Runtime/prefix-template.tar.gz	-	-	-	resource	reference seeds the whole prefix from an untracked-recipe template; the app seeds only the builtins' own registrations (Runtime/registry, P7-reg), so the rest of wine.inf (font registry, services, file associations) is not applied

@@ -124,6 +124,11 @@ cp_ LGPL-2.1.txt "$WINE/COPYING.LIB"
 # still needs a separate audit. Do not assume removed libraries such as
 # tomcrypt, or the retired LICENSE.OLD, exist at the current pin.
 python3 "$REPO/build/notices-wine.py" "$WINE" "$OUT" --tracked --origins-log "$OUT/.copy-sources.tsv"
+# Wine's bundled Tahoma faces: their SFD headers carry Larry Snyder's
+# attribution as well as Bitstream's (the licence is in wine-NOTICES.md).
+# Inclusive ranges are reverified against committed bytes by the derived gate.
+excerpt_ wine-fonts-tahoma-attribution.txt "$WINE/fonts/tahoma.sfd" 1 6
+excerpt_ wine-fonts-tahomabd-attribution.txt "$WINE/fonts/tahomabd.sfd" 1 6
 # FEX PE (xtajit64.dll) and what is statically inside it
 cp_ FEX-LICENSE.txt "$FEX/LICENSE"
 cp_ FEX-LICENSE-MADEIRA.md "$FEX/LICENSE-MADEIRA.md"

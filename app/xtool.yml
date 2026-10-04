@@ -33,6 +33,7 @@ resources:
   - Sources/S1Probe/Runtime/aarch64-windows
   - Sources/S1Probe/Runtime/i386-windows
   - Sources/S1Probe/Runtime/nls
+  - Sources/S1Probe/Runtime/fonts
   # The builtins' registrations, seeded into the prefix by wine_host.c (app/tools/prefix-registry.py).
   - Sources/S1Probe/Runtime/registry
   # The Vulkan Direct3D backend's DLLs (DXVK, vkd3d-proton), first on WINEDLLPATH
