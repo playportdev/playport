@@ -537,6 +537,18 @@ global WoW64 state.
   - A 720p run held 60 FPS for 23 minutes in Chapter 2's first chamber; it was
     stopped early, and its log was not pulled.
 
+- **Hitches and requests, 2026-10-05**
+  ([evidence](evidence/2026-10-05-portal2-hitches-requests.md)):
+  - Two 5-minute human plays, at 720p and 540p, each had one death. Every hitch
+    over 150 ms after the load is one of two kinds:
+    - the death's autosave reload, up to 625 ms;
+    - a pipeline's first Metal build, 200–390 ms. The shader cache keeps it from
+      the second use on.
+  - wine-pe 0028 limits XInput's scan of an empty pad slot to once a second.
+    wine-unix 0014 answers `SetCursor` with an unchanged cursor without a request.
+  - Together they take the scripted run from 57–58 to 51 requests a frame, and
+    the main thread from 28 to 21.5. madeira-unix 0077 logs `[srv-cur]`.
+
 **Left for "fully playable":**
 
 1. **Fonts:** the owner's distribution review of the Tahoma fallback faces
@@ -545,14 +557,22 @@ global WoW64 state.
    `sp_a2_laser_intro` into the next chamber. It is left to a person playing, because
    steering by pad from screenshots is too slow. Map loads are covered by chapter
    select and by the save and load.
-3. **GPU headroom under heat:** in a chamber at 720p, capped at 60, GPU time is
-   15 ms per frame when nominal and 17–18 ms after an hour at "serious", which
-   gives about 50 FPS. Native resolution or an uncapped rate would be GPU-bound.
-   Not yet measured: whether 540p holds 60 at "serious" (`--settings
-   '{"screen":"540"}'` against `"720"`, back to back once hot).
-4. **Hitches:** in play, hitches of 0.4–1 s (18:22, 18:25, 19:04 in the long
-   session), the 596 ms and 200 ms ones of `p2m3-cold-boot`, and loading hitches
-   up to 713 ms. None has an established cause.
+3. **Headroom under heat:**
+   - In a chamber at 720p, capped at 60, GPU time is 15 ms per frame when nominal
+     and 17–18 ms after an hour at "serious", which gives about 50 FPS. Native
+     resolution or an uncapped rate would be GPU-bound.
+   - GPU time in the human plays was about 15 ms at both 720p and 540p, so 540p
+     gained little: a mean of 58.2 FPS against 56.5.
+   - At "serious" (769 mW), the 720p play spent 20 s at 44–51 FPS with the P cores
+     idle and the GPU at 9–11 ms, so the CPU work on the E cores was the limit.
+   - Less CPU per frame is what is left to gain. The remaining requests are
+     `SetCursorPos` and its messages, 9 a frame, kept for Windows' semantics, and
+     unattributed `create_event` and `close_handle`.
+4. **Hitches:** the reload after a death (0.2–0.6 s, the game's load at the
+   thermal limit) and a pipeline's first Metal build (0.2–0.4 s, once per
+   install). Not yet known: which registry keys the reload opens, about 3000 in
+   one second, and the cause of the long session's 0.4–1 s hitches (18:22, 18:25,
+   19:04) and `p2m3-cold-boot`'s 596 ms one, whose logs were not matched this way.
 5. **Footprint growth** of about 4 MB a minute in a chamber: its cause is not
    known, and the limit was far away after 95 minutes. Not yet measured: whether it
    levels off in a 30-minute or longer `p2-walk` run with its log pulled.

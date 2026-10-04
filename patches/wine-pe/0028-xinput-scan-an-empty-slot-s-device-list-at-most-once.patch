@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Mon, 5 Oct 2026 12:00:00 +0200
+Subject: [PATCH] xinput: scan an empty slot's device list at most once a
+ second
+
+XInputGetState on a slot with no device scanned the HID device list
+under xinput_cs on every call: SetupDiGetClassDevsW and its registry
+keys, a wineserver open_key each time. Portal 2 polls its pads every
+frame, and with one pad connected the empty slots cost about 3.7
+open_key requests a frame on the game's main thread.
+
+The update thread already adds an arriving device when it is notified
+and rescans every 2 s when no report arrives, so the scan in
+xinput_get_state is a fallback for a missed notification. Run it only
+when the last scan of anyone is a second old. The first poll still
+scans, because the update thread scans before start_update_thread
+returns. XInputSetState and XInputGetCapabilities keep their scan.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-05-portal2-hitches-requests.md
+Offered-upstream: no
+---
+ dlls/xinput1_3/main.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+index 01020e9..7e21845 100644
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -517,6 +517,9 @@ static void try_remove_device(const WCHAR *device_path)
+         controller_destroy(&controllers[i], FALSE);
+ }
+ 
++/* GetTickCount() of the last HID device list scan, xinput_cs must be held */
++static DWORD list_scan_tick;
++
+ static void update_controller_list(void)
+ {
+     char buffer[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + MAX_PATH * sizeof(WCHAR)];
+@@ -528,6 +531,7 @@ static void update_controller_list(void)
+ 
+     EnterCriticalSection(&xinput_cs);
+ 
++    list_scan_tick = GetTickCount();
+     set = SetupDiGetClassDevsW(&guid, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
+     detail->cbSize = sizeof(*detail);
+ 
+@@ -909,8 +913,12 @@ static DWORD xinput_get_state(DWORD index, XINPUT_STATE *state)
+ 
+     if (get_current_state(index, state)) return ERROR_SUCCESS;
+ 
++    /* A game polls every slot each frame, and a scan of the device list
++     * costs registry round trips through setupapi. The update thread adds
++     * an arriving device when it is notified and rescans every 2 s, so a
++     * slot with no device scans again here at most once a second. */
+     EnterCriticalSection(&xinput_cs);
+-    update_controller_list();
++    if (GetTickCount() - list_scan_tick >= 1000) update_controller_list();
+     ret = get_current_state(index, state) ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;
+     LeaveCriticalSection(&xinput_cs);
+ 

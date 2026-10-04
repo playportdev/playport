@@ -75,3 +75,4 @@
 0074-audio-give-an-i386-child-the-iOS-audio-driver-throug.patch
 0075-signal-leave-x18-TEB-reads-out-of-the-WoW64-window-s.patch
 0076-virtual-run-the-pool-warmer-s-censuses-about-every-f.patch
+0077-ntdll-count-the-set_cursor-requests-by-the-call-that.patch

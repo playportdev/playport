@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Mon, 5 Oct 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: count the set_cursor requests by the call that made
+ them
+
+One request type carries SetCursor, ShowCursor, SetCursorPos, ClipCursor
+and GetCursor, so the [srv] census's set_cursor rate (7.2 a frame in
+Portal 2) named no caller. server_call_unlocked now counts each
+set_cursor by the flag that names its call, and the census logs the
+second's counts as [srv-cur] after [srv] when there were any. Nothing a
+request does changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-05-portal2-hitches-requests.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index e4c5f07..a948f91 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1503,6 +1503,20 @@ static void ios_srv_note_call( unsigned int req, unsigned long long ticks )
+     s->rt_ticks += ticks;
+ }
+ 
++/* Playport: [srv-cur] census. set_cursor carries SetCursor, ShowCursor,
++ * SetCursorPos, ClipCursor and GetCursor alike; count the requests by the
++ * flag that names the call, so a title's set_cursor rate has a caller. */
++static volatile unsigned long long ios_srv_cur_n[5];   /* handle, count, pos, clip, none */
++
++static void ios_srv_note_set_cursor( unsigned int flags )
++{
++    if (flags & SET_CURSOR_HANDLE) ios_srv_cur_n[0]++;
++    else if (flags & SET_CURSOR_COUNT) ios_srv_cur_n[1]++;
++    else if (flags & SET_CURSOR_POS) ios_srv_cur_n[2]++;
++    else if (flags & (SET_CURSOR_CLIP | SET_CURSOR_NOCLIP)) ios_srv_cur_n[3]++;
++    else ios_srv_cur_n[4]++;
++}
++
+ /* a select's wait for its wake-up, after the request said the wait is pending */
+ static void ios_srv_note_block( unsigned long long ticks )
+ {
+@@ -1581,6 +1595,15 @@ static void ios_srv_report( const char *wall, double wall_s )
+     }
+     wine_log_write( "%s", line );
+ 
++    {
++        static unsigned long long prev_cur[5];
++        unsigned long long d[5], any = 0;
++        for (k = 0; k < 5; k++) { d[k] = ios_srv_cur_n[k] - prev_cur[k]; prev_cur[k] += d[k]; any += d[k]; }
++        if (any)
++            wine_log_write( "[srv-cur] %s set_cursor by call: handle=%llu count=%llu pos=%llu clip=%llu get=%llu",
++                            wall, d[0], d[1], d[2], d[3], d[4] );
++    }
++
+     /* each thread that made a request or was blocked: Windows TID, then
+      * sel/ev/mtx/sem/hdl/msg/oth counts : round-trip ms / blocked ms /
+      * selects that blocked; most round-trip ms first, blocked ms breaking a
+@@ -2020,6 +2043,8 @@ unsigned int server_call_unlocked( void *req_ptr )
+     unsigned long long t0 = counting ? mach_absolute_time() : 0;
+ 
+     if (counting) ios_srv_req_count++;
++    if (counting && type == REQ_set_cursor)   /* Playport: [srv-cur] census */
++        ios_srv_note_set_cursor( ((const struct set_cursor_request *)&req->u.req)->flags );
+     if ((ret = send_request( data->request_fd, req ))) return ret;
+     /* iOS-Madeira 2026-07-05: kick the in-process server loop out of its
+      * tick sleep so the request is picked up in ~50us instead of waiting
