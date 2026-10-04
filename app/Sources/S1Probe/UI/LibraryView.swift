@@ -469,7 +469,7 @@ struct SteamArtView: View {
     var body: some View {
         ZStack {
             Rectangle().fill(placeholder)
-            if let image {
+            if let image = image ?? model.cachedImage(app, kind) {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
             }
         }

@@ -34,12 +34,13 @@ struct AppShell: View {
     @ObservedObject private var modal = PadModal.shared
     @ObservedObject private var gamePage = GamePageState.shared
     @ObservedObject private var setupState = SetupState.shared
+    @ObservedObject private var opening = AppOpening.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
 
     var body: some View {
         VStack(spacing: 0) {
-            if !nav.settings && !nav.setup && !nav.signIn && !nav.onGamePage { TopBar(installs: model.installs) }
+            if !nav.settings && !nav.setup && !nav.signIn && !nav.onGamePage { TopBar(installs: model.installs).openingChrome() }
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
             if !panelUp {
                 PadFooter(hints: hints).overlay(alignment: .leading) {
@@ -50,6 +51,7 @@ struct AppShell: View {
                 // A picker or the keyboard draws its own footer; this one would show
                 // through its scrim beside it. Hidden, not removed, so the page keeps its height.
                 .opacity(modal.isUp ? 0 : 1)
+                .openingChrome()
                 .padding(.bottom, Self.footerBottom)
             }
         }
@@ -68,6 +70,8 @@ struct AppShell: View {
         .overlay { PadModalHost().animation(.easeOut(duration: 0.15), value: modal.isUp) }
         // Download mode: black, over everything, until a button or a tap (DownloadsView.swift).
         .overlay { DownloadModeView(installs: model.installs) }
+        // The opening animation, over everything until Home's cards have landed (UI/AppOpening.swift).
+        .overlay { if opening.covering { OpeningView() } }
         .padFocusRoot()
         .onReceive(PadRouter.shared.presses) { press($0) }
         // Choosing a pairing file (the checklist's step on iOS 26, Setup check's import): touch only, as Files is.
@@ -83,6 +87,12 @@ struct AppShell: View {
             DownloadDimmer.shared.start(installs: model.installs)
             if scenePhase == .active { model.sceneBecameActive() }
             library.refresh()
+            // Until each store has listed its games (today Steam's restore and list) and
+            // Home's art is loaded, the opening animation covers the shell.
+            opening.run { [model, library] in
+                while !model.listedOnce || !library.scannedOnce { try? await Task.sleep(for: .milliseconds(50)) }
+                await HomeView.loadArt(titles: library.catalog.titles, model: model)
+            }
             // Built-in JIT's readiness check, once per launch, so Play rarely waits for the DDI mount.
             BuiltInJitStatus.shared.checkOnce()
             // A first run: the checklist (UI/SetupView.swift).
@@ -188,6 +198,8 @@ struct AppShell: View {
     }
 
     private func press(_ b: NavButton) {
+        // The opening animation covers the shell: nothing to press yet.
+        if opening.covering { return }
         // Download mode: any button wakes it, and does nothing else.
         let dimmer = DownloadDimmer.shared
         if dimmer.dimmed { return dimmer.wake() }

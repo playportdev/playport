@@ -343,7 +343,14 @@ Downloads switched with LB and RB, Settings behind ≡ or the gear, one focus
 ring and a footer naming each button (`UI/AppShell.swift`, `UI/Pad/`). Touch
 works everywhere. The controller reaches the screens through `PadRouter`
 (HostIOKit `PadNavigation` turns its snapshots into presses) until a game
-starts, when HostIO takes it for the guest. Text is typed on the
+starts, when HostIO takes it for the guest. At every start an opening
+animation covers the shell (`UI/AppOpening.swift`, `UI/OpeningView.swift`):
+placeholders where Home's cards will be fall into the app's porthole icon
+(1.8 s, skipped after the restart after a game and with Reduce Motion), it
+holds on the icon until each store has listed its games and Home's art has
+loaded, 4 s from the start at most, then Home's cards fly out of it into
+place. It names no store, takes no presses, and logs `opening:` with the time
+it took. Text is typed on the
 controller keyboard and choices made in pickers (`UI/Pad/PadModal.swift`,
 the key layout and cursor in PlayportKit `PadKeyboard`), which take every
 press while they are up; the system keyboard is not used. The current page and screen are
