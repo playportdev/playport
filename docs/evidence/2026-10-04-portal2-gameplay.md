@@ -306,11 +306,120 @@ Battery went from 30% (not charging) to 38% (external power was connected partwa
   serious** over about an hour in the chamber with the screen and GPU busy; frame
   time was not measured at the serious state.
 
+## A 95-minute session with save and load
+
+The setup:
+
+- One session on the same IPA (`08e0a09a`, commit `bd2512f`), launched with
+  `pp ui --play app-620 --pad --until first-frame+20 --leave-running`. The run
+  directory is `.work/ui-runs/20261004T180821`, and the first frame came at 5.68 s.
+- The Metal HUD was on (`hud:on --keep-settings`, turned off afterwards).
+- `p2-cold-boot` was pushed, then 165 `pp pad send … --shot` steps followed, with
+  screenshots in `.work/p2m4/`.
+- The app ran from 18:08 to 19:43 (5635 s by the last `[xp]` sample) and was
+  ended with `pp phone kill`. `pp phone crashes` found no report.
+- Battery read 18% at 19:20 and 24% at 19:42, both on external power and charging.
+
+### What was played
+
+The chamber was solved again: shot `37` shows the dots yellow, and in `50` the
+player is on the exit ledge through the portals. Orange was then moved back to the
+ceiling to re-power the catcher. In `99`–`100`, GLaDOS says "Not bad" and the
+player rides the rising arm platform. In `102` the player walks off it through the
+exit door, with the elevator tube ahead.
+
+**The map change into the next chamber was not confirmed.** The steps after `102`
+(`103`–`111`) leave the player back in the chamber, which is consistent with falling
+off the walkway. A second ride, `118`–`124`, ended in the water too (`125`). After the
+save and load below, two more tries also failed:
+
+- The ledge route dropped the player into the water (`144`).
+- The plate route lit the floor but not the catcher (`152`): orange was placed at a
+  slightly different ceiling spot, the beam came down beside the catcher, and the
+  dots stayed blue.
+
+The session stopped there after 95 minutes. None of the misses was a runtime fault.
+All of them were pad aim and movement, steered through screenshots taken about 20 s
+apart.
+
+### Save and load
+
+- **Save, confirmed** (`126`–`128`): START, then SAVE GAME, then New Saved Game
+  Slot. When SAVE GAME is reopened, the new slot is listed with the session's time.
+  The game shows UTC.
+- **Load from the menu** (`129`–`131`): EXIT TO MAIN MENU took about 15 s, then
+  PLAY SINGLE PLAYER, then LOAD GAME. The new save is first in the list (Chapter 2,
+  The Cold Boot, with a thumbnail of the laser chamber). Loading it took about 30 s
+  and restored the saved position and the powered catcher exactly.
+
+### Frame time against thermal state
+
+Frame times come from the HUD's per-frame (interval, GPU) pairs in `s1-host.log`.
+The game ran at 1564x720, capped at 60. The table uses 5-minute buckets.
+
+| Clock | Thermal | FPS | Interval median / p95 / p99 ms | GPU median / p95 ms | Frames >50 ms |
+| --- | --- | --- | --- | --- | --- |
+| 18:10–18:20 | nominal → fair (18:15:51) | 59.9–60.0 | 16.67 / 20.84 / 25.01 | 15.1 / 17.3 | 0–7 |
+| 18:20–18:55 | serious from 18:22:26 | 54.1–58.3 | 16.67 / 25–29 / 29–33 | 15.1–16.1 / 17.6–19.8 | 0–26 |
+| 19:00–19:15 | serious | 50.2–53.9 | 16.67 / 25–29 / 33.35 | 14.4–17.2 / 20.0–21.5 | 2–25 |
+| 19:20 | serious; save, menu and load | 39.6 | 25.01 / 37.51 / 45.85 | 22.4 / 28.8 | 97 |
+| 19:25–19:42 | serious | 49.6–50.2 | 16.67–20.84 / 29.18 / 33–37.5 | 17.1–17.9 / 20.3–23.3 | 1–7 |
+
+The state never went past "serious". Over the hour at "serious", the mean rate fell
+from 60 to about 50 FPS, and GPU time per frame rose from 15 to about 18 ms. That
+is more than the 16.7 ms a 60 FPS frame allows, so the cap is no longer met. The
+median interval stayed at 16.67 ms until the last 15 minutes.
+
+CPU, from the `[xp]` samples:
+
+- At 18:15 (fair), the process used about 490% of a core at P 1.6 GHz and E 2.0 GHz.
+- At "serious", the samples show P cores at 0 GHz and the threads on E cores at
+  about 1.3–1.4 GHz. At the end that was 695% of one core.
+
+Hitches of 100 ms or more: 38 in the session.
+
+- Most fall in loads, the save, and the menu: 18:09, 19:16–19:20.
+- The longest in play were:
+  - 996 ms at 18:25:24, in the chamber;
+  - 550 ms and 417 ms at 18:22:39, 13 s after the state became "serious";
+  - 578 ms and 596 ms at 19:04:16–17, at the elevator.
+- No log line explains any of them. The wineserver's per-second counts show nothing
+  unusual around them.
+
+### Stability
+
+All figures are from `.work/p2m4/log-final/s1-host.log`, 167473 lines.
+
+- **Faults:** no i386 exception, no crash, no `RECLAIM`, no page fault, and no
+  unaudited win32u call.
+  - The 39 "exception" lines are the Mach handler registering threads and the task
+    port.
+  - The 14 `REFUSED` lines are the 12 image preferred-base relocations of every run
+    and two startup `[va-scan]` lines.
+  - The guest `0x370` refused read of milestone 2 did not occur.
+  - The subfloor window serviced 106497 accesses (0 unhandled, 0 refused).
+- **JIT pool:** 512 MB.
+  - Head 26 MB, tail 161 MB, 326 MB of room, 19 images.
+  - `tail_refused=0`, `tail_fatal=0`, `exhausted=none`.
+  - `limits: wx_dropped=0 x18_images=0 x18_sites=0 split_lock=0`.
+  - FEX compiled 60259 blocks in total, flat at about 57–60k after the first
+    10 minutes, with a 99% lookup hit rate.
+- **Band:** used 1637 → 1839 → 2181 MB of 16384, with threads 22 → 26 → 29 and
+  `refused=0`.
+- **Footprint** (`fpMB`): 800 at launch, 2830 at 18:20, 2931 at 18:44, 3015 at
+  19:08, 3028 at 19:20 (after the load), and 3101 at 19:31; the last sample read
+  3119. After the chamber loaded it grew about 4 MB a minute. The cause is not
+  established, and over 95 minutes it stayed far from the limit.
+
 ## Open
 
-- Walking out of the solved chamber into the next one, and saving there.
-- A long session at the serious thermal state: frame time and hitches have not been
-  measured past 180 s.
+- The map change out of `sp_a2_laser_intro` into the next chamber, and a save there.
+  The exit door was walked through, but the move into the elevator was not completed
+  (above).
+- A long session at "serious" holds about 50 FPS at 720p, with GPU time of 17–18 ms
+  per frame, so the 60 FPS cap is not met.
+- Unexplained 0.4–1 s hitches in play (18:22, 18:25, 19:04).
+- Footprint growth of about 4 MB a minute after the chamber loads.
 - The in-game hints' glyph depends on the last device used, not on a setting.
 - GPU time in a chamber is 13–15 ms at 720p, 60 FPS capped. Native resolution or an
   uncapped rate would be GPU-bound.

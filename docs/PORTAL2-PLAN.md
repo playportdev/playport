@@ -516,18 +516,33 @@ global WoW64 state.
   takes the player up to the exit ledge. The next room was not entered and no save
   from that session is confirmed. No runtime fault; thermal reached "serious".
 
+- **Long session, 95 minutes, 2026-10-04:**
+  - The chamber was solved again, and the player walked through the exit door
+    toward the elevator. The map change was not confirmed: the pad steering fell
+    off the walkway and later tries missed.
+  - A save was confirmed in the slot list and loaded from the main menu's LOAD GAME,
+    and it restored the state exactly.
+  - No exception, crash, unaudited win32u call or refusal. The JIT pool did not
+    grow, and the band reached 2181 MB of 16384.
+  - Thermal state was "serious" from minute 14. Frame rate fell from 60 to about
+    50 FPS, with GPU time rising from 15 to 18 ms. The footprint grew about
+    4 MB a minute.
+
 **Left for "fully playable":**
 
 1. **Fonts:** the owner's distribution review of the Tahoma fallback faces
    (`build/app-notices.json` is `unreviewed`) before an IPA is given to anyone.
-2. **Long-session stability:** a play of an hour or more through several chambers,
-   with saves and loads. It must have no crash, a steady JIT band, and frame time held
-   at the "serious" thermal state that the chamber session reached.
-3. **GPU headroom:** 13–15 ms of GPU time per frame in a chamber at 720p, capped at
-   60. Native resolution or an uncapped rate would be GPU-bound, and throttling
-   lowers the margin further.
-4. **Hitches:** the 596 ms and 200 ms chamber hitches of `p2m3-cold-boot`, and loading
-   hitches up to 713 ms, have no established cause.
+2. **Progress past one chamber:** a map change, from `sp_a2_laser_intro` into the
+   next chamber, and a save there. The runtime held for 95 minutes with a save and
+   a load, but play has not left the first laser chamber.
+3. **GPU headroom under heat:** in a chamber at 720p, capped at 60, GPU time is
+   15 ms per frame when nominal and 17–18 ms after an hour at "serious", which
+   gives about 50 FPS. Native resolution or an uncapped rate would be GPU-bound.
+4. **Hitches:** in play, hitches of 0.4–1 s (18:22, 18:25, 19:04 in the long
+   session), the 596 ms and 200 ms ones of `p2m3-cold-boot`, and loading hitches
+   up to 713 ms. None has an established cause.
+5. **Footprint growth** of about 4 MB a minute in a chamber: its cause is not
+   known, and the limit was far away after 95 minutes.
 
 Also still open: the hint glyph follows the last device used, and a retired window's
 final teardown has not been seen on the phone.
