@@ -416,8 +416,8 @@ but the player's Pause and runs it once Steam is signed in. A release build comp
   `GameSurface`, covered by the launch's steps until the game's first frame.
   On Play the page's text and controls zoom, blur and fade (0.35 s) as the
   launch screen's fade in; the hero art does not change (it fills the screen,
-  undimmed, behind both: the shell draws the page's, `PageArt`, and both use
-  `GameHeroArt`). On the first frame the launch
+  dimmed as the launch screen had it, behind both: the shell draws the page's,
+  `PageArt`, and both use `GameHeroArt`). On the first frame the launch
   screen's text flies on the same way, the art fades, and the
   game settles in from just behind it (`UI/LaunchTransition.swift`; fades only
   with Reduce Motion). The game presents under a black cover, never a

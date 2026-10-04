@@ -117,16 +117,23 @@ enum LaunchFix {
 }
 
 /// A game's hero art as its page and its launch screen show it: filling the whole screen,
-/// centred, undimmed. Both draw it through this, so from the page to the game it does not change.
+/// centred, dimmed as the launch screen always had it (28 % over the design's dark blue,
+/// darker towards the bottom). Both draw it through this, so from the page to the game it
+/// does not change.
 struct GameHeroArt<Art: View>: View {
     @ViewBuilder let art: Art
 
     var body: some View {
-        art
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
+        ZStack {
+            Color(hex: 0x131C2B)
+            art
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .opacity(0.28)
+            LinearGradient(colors: [.clear, Color(hex: 0x05070A).opacity(0.7)], startPoint: .top, endPoint: .bottom)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 }
 

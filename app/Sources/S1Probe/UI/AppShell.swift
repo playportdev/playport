@@ -52,6 +52,8 @@ struct AppShell: View {
                 // through its scrim beside it. Hidden, not removed, so the page keeps its height.
                 .opacity(modal.isUp ? 0 : 1)
                 .padding(.bottom, Self.footerBottom)
+                // Its own colour, over a game page's art too.
+                .background(PP.background.ignoresSafeArea(edges: [.horizontal, .bottom]))
             }
         }
         // The footer sits low, in the home indicator's inset, on every page.
@@ -64,8 +66,8 @@ struct AppShell: View {
                     .padding(.bottom, Self.footerBottom)
             }
         }
-        // A game's page: its hero art fills the screen behind it and the footer, undimmed, as
-        // the launch screen shows it (UI/LaunchViews.swift GameHeroArt). Clear once Play is
+        // A game's page: its hero art fills the screen behind it, dimmed as the launch screen
+        // shows it (UI/LaunchViews.swift GameHeroArt). Clear once Play is
         // pressed: the launch screen's identical art under the diving page shows through.
         .backgroundPreferenceValue(PageArtKey.self) { art in
             if launchingFromPage {
