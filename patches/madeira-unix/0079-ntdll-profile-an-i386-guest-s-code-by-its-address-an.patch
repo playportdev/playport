@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Mon, 5 Oct 2026 16:00:00 +0200
+Subject: [PATCH] ntdll: profile an i386 guest's code by its address and thread
+
+WINE_IOS_PROF=1 names the guest code it samples only through the 64-bit
+loader list, which an i386 guest's modules are not in, and its EIP is a
+32-bit address in the guest's window: every Portal 2 JIT sample stayed
+an anonymous x64-JIT. Such a sample is now keyed x86:<address> (block
+granular, as the x64 key), which tools/sampleprof.py names from the
+log's i386 image lines, and a guest-thread table says which thread ran
+which guest code. Nothing a thread does changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-05-portal2-cpu-spin.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 35 ++++++++++++++++++++++++++++++++---
+ 1 file changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 7610467..87369bc 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1885,7 +1885,7 @@ static int ios_wp_desc( uint64_t a, struct ios_ts_map *mp, char *out, size_t cap
+ }
+ static void ios_wprof_main( void )
+ {
+-    static struct ios_wp_b leaf[400], inc[300], unx[200], cls[8], pein[300], thr[16];
++    static struct ios_wp_b leaf[400], inc[300], unx[200], cls[8], pein[300], thr[16], gthr[300];
+     /* Playport: WINE_IOS_PROF=1 samples the busiest threads of any kind (up to
+      * WP_MAXT, each at 5 % of a core or more when the burst starts), not only
+      * RDR2's submission worker, and adds three tables: the thread, the first
+@@ -1901,7 +1901,7 @@ static void ios_wprof_main( void )
+     {
+         thread_act_array_t th = NULL; mach_msg_type_number_t nth = 0, k;
+         mach_port_t tw[WP_MAXT]; uint64_t tw_teb[WP_MAXT]; char tw_name[WP_MAXT][24]; int ntw = 0, s, i;
+-        int nleaf = 0, ninc = 0, nunx = 0, ncls = 0, npein = 0, nthr = 0; unsigned total = 0, walked = 0;
++        int nleaf = 0, ninc = 0, nunx = 0, ncls = 0, npein = 0, nthr = 0, ngthr = 0; unsigned total = 0, walked = 0;
+         sleep( 15 );
+         if (task_threads( mach_task_self(), &th, &nth ) != KERN_SUCCESS) continue;
+         if (busy)
+@@ -1955,7 +1955,7 @@ static void ios_wprof_main( void )
+             {
+                 arm_thread_state64_t st; mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+                 thread_basic_info_data_t bi; mach_msg_type_number_t bic = THREAD_BASIC_INFO_COUNT;
+-                uint64_t chain[16], grip = 0; int nch = 0, f, kind, have_inc = 0, have_unx = 0, have_pe = 0; char key[96];
++                uint64_t chain[16], grip = 0, gbb = 0; int nch = 0, f, kind, have_inc = 0, have_unx = 0, have_pe = 0; char key[96];
+                 struct ios_ts_map *mp = ios_ts_map_for_teb( tw_teb[t] );
+                 if (thread_info( tw[t], THREAD_BASIC_INFO, (thread_info_t)&bi, &bic ) != KERN_SUCCESS || bi.run_state != TH_STATE_RUNNING) continue;
+                 if (thread_suspend( tw[t] ) != KERN_SUCCESS) continue;
+@@ -1963,6 +1963,7 @@ static void ios_wprof_main( void )
+                 {
+                     uint64_t fp = st.__fp, lr = st.__lr;
+                     if (busy) ios_ts_read( st.__x[28] + 0x18, &grip, 8 );   /* the FEX frame's guest RIP (block granular) */
++                    if (busy) ios_ts_read( st.__x[28], &gbb, 8 );           /* the running block's header (InlineJITBlockHeader) */
+                     chain[nch++] = st.__pc;
+                     if (lr) chain[nch++] = lr;
+                     for (f = 0; f < 14 && fp && !(fp & 7) && nch < 16; f++)
+@@ -1982,9 +1983,36 @@ static void ios_wprof_main( void )
+                 {   /* x64 code: name the guest module (the RIP is the block's, not the exact instruction's) */
+                     uint64_t grva; const char *gm = (grip > 0x10000 && grip < 0x8000000000ull) ? ios_ts_mod_for( mp, grip, &grva ) : NULL;
+                     if (gm) snprintf( key, sizeof(key), "x64:%s+%llx", gm, (unsigned long long)(grva & ~0xffull) );
++                    /* Playport: an i386 guest's EIP is a 32-bit address in its window, and its
++                     * modules are not in the 64-bit loader list: key it by the address
++                     * (tools/sampleprof.py names the module from the log's i386 image lines).
++                     * The frame's RIP is only the last one FEX stored (a syscall's, a block
++                     * exit's), so take the instruction's from the block's host-pc table */
++                    else if (grip > 0x10000 && grip < 0x100000000ull)
++                    {
++                        extern uint64_t ios_native_rip_from_hostpc( uint64_t, uint64_t, const char ** );
++                        const char *why = "no-block";
++                        uint64_t eip = gbb > 0x10000 ? ios_native_rip_from_hostpc( gbb, chain[0], &why ) : 0;
++                        if (eip > 0x10000 && eip < 0x100000000ull) snprintf( key, sizeof(key), "x86:%llx", (unsigned long long)(eip & ~0x3full) );
++                        else if (nch > 1 && gbb > 0x10000 && (eip = ios_native_rip_from_hostpc( gbb, chain[1], NULL )) > 0x10000 && eip < 0x100000000ull)
++                            /* a helper the block called (pc outside it, lr inside): the caller's EIP, then the helper's pc */
++                            snprintf( key, sizeof(key), "x86:%llx:helper-%llx", (unsigned long long)(eip & ~0x3full), (unsigned long long)(chain[0] & 0xfffffull) );
++                        else
++                        {
++                            int c;
++                            snprintf( key, sizeof(key), "x86:unresolved:%s:pc-%llx", why, (unsigned long long)(chain[0] & 0xfffffull) );
++                            for (c = 0; key[c]; c++) if (key[c] == ' ' || key[c] == '=') key[c] = '-';
++                        }
++                    }
+                 }
+                 ios_wp_add( leaf, &nleaf, 400, key );
+                 if (busy) ios_wp_add( thr, &nthr, 16, tw_name[t] );
++                if (busy && (!strncmp( key, "x86:", 4 ) || !strncmp( key, "x64:", 4 )))
++                {   /* Playport: which thread runs which guest code */
++                    char tk[96];
++                    snprintf( tk, sizeof(tk), "%s/%s", tw_name[t], key );
++                    ios_wp_add( gthr, &ngthr, 300, tk );
++                }
+                 {
+                     static const char *cn[7] = { "?", "PE-other", "madeira_d3d12", "x64-JIT", "Madeira-dylib", "system-lib", "unknown" };
+                     const char *c = cn[kind < 7 ? kind : 6]; char ck[96];
+@@ -2013,6 +2041,7 @@ static void ios_wprof_main( void )
+         {
+             ios_wp_print( "thread", thr, nthr, total, 16 );
+             ios_wp_print( "pe-inclusive", pein, npein, total, 45 );
++            ios_wp_print( "guest-thread", gthr, ngthr, total, 45 );
+         }
+         else ios_wp_print( "d3d12-inclusive", inc, ninc, total, 45 );
+         ios_wp_print( "unix-inclusive", unx, nunx, total, 30 );
