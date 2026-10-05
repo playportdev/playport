@@ -13,7 +13,7 @@ import PackageDescription
 let package = Package(
     name: "SteamClient",
     // iOS 18 / macOS 15: String(validating:as:), used by the manifest and
-    // proto readers, first ships there (the app target is iOS 26.5 anyway).
+    // proto readers, first ships there (the app target is iOS 26.0 anyway).
     platforms: [
         .iOS(.v18),
         .macOS(.v15),

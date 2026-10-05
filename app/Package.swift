@@ -32,9 +32,10 @@ let app = release ? "Playport" : "S1Probe"
 let package = Package(
     name: app,
     platforms: [
-        // The decided target is iOS 27.0; the pinned Xcode 26.6 SDK (iOS 26.5)
-        // caps it here until the Xcode 27 re-pin (docs/BUILDING.md).
-        .iOS("26.5"),
+        // iOS 26.0, the first iOS whose JIT the app's protocol serves (TXM's
+        // debugger-blessed pages); tested only on iOS 27.0 (docs/DEVICE.md,
+        // "Known-good iOS versions"). Below 26.4 JIT needs StikJIT 1.9.0 or later.
+        .iOS("26.0"),
         .macOS(.v14),
     ],
     products: [

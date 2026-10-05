@@ -4,7 +4,7 @@
 <dict>
 	<!-- The release version (pp release VERSION checks it; decision 0036). Keep both plists equal. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.1</string>
+	<string>0.3.2</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>CFBundleDisplayName</key>

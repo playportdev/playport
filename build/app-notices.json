@@ -23,7 +23,7 @@
     "app": "Playport's Swift app, PlayportKit, HostIOKit and the JIT helper extension's own code",
     "SteamClient": "app/SteamClient, with protocol schema tables derived from JavaSteam",
     "KosmicKrisp": "Frameworks/KosmicKrisp.framework (Mesa, build/stages/mesa.sh)",
-    "StikJIT": "PlugIns/PlayportJIT.appex/Frameworks/StikJIT.framework (prebuilt StikJIT 1.6.0)",
+    "StikJIT": "PlugIns/PlayportJIT.appex/Frameworks/StikJIT.framework (prebuilt StikJIT 1.9.0)",
     "rust-std": "the Rust standard library linked into libidevice_ffi.a (P10-idevice)",
     "llvm-mingw-runtime": "llvm-mingw's libc++, libc++abi, libunwind and compiler-rt code in every PE DLL built with it",
     "mingw-crt": "the mingw-w64 CRT and headers in every PE DLL built with llvm-mingw"

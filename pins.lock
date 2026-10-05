@@ -68,7 +68,7 @@ xtool        1.20.1                                    https://github.com/xtool-
 #
 # A prebuilt release asset the app embeds, fetched by tag; its sha256 is in
 # build/stages/stikjit.sh.
-stikjit      1.6.0                                     https://github.com/StikDebug/StikJIT.git      -
+stikjit      1.9.0                                     https://github.com/StikDebug/StikJIT.git      -
 #
 # GStreamer's own binary release for iOS, fetched by version; its sha256 is in
 # build/stages/gstreamer.sh (winegstreamer's unix side, statically linked).

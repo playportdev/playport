@@ -222,7 +222,8 @@ xtool runs: the per-target `-r` steps go to `ld64.lld`, every final link to ld64
   ([ARCHITECTURE.md](ARCHITECTURE.md#built-in-jit)).
 - **Entitlements.** xtool's free-team set plus `increased-memory-limit`
   (`app/S1Probe.entitlements`); `get-task-allow` lets debugserver attach for JIT.
-- **Deployment target.** iOS 26.5, the most the pinned SDK accepts.
+- **Deployment target.** iOS 26.0, so a phone on any iOS 26 installs it; only iOS 27.0
+  is tested ([DEVICE.md](DEVICE.md#known-good-ios-versions)). The pinned SDK accepts up to 26.5.
 
 ## Public CI and publication preparation
 

@@ -142,11 +142,13 @@ version (`gh-axi issue list -R StikDebug/StikDebug`).
 
 | iOS (build) | Phone | StikJIT | Last checked | Evidence |
 | --- | --- | --- | --- | --- |
-| 27.0 (24A437) | iPhone18,4 (A19 Pro, TXM present) | 1.6.0 (the pin); 1.9.0 in a trial IPA | 2026-09-28 | [stikjit-pin-cost](evidence/2026-09-28-stikjit-pin-cost.md): JIT in 3.19 s, first frame at +8.92 s |
+| 27.0 (24A437) | iPhone18,4 (A19 Pro, TXM present) | 1.6.0; 1.9.0 (the pin from 2026-10-05) in a trial IPA | 2026-09-28 | [stikjit-pin-cost](evidence/2026-09-28-stikjit-pin-cost.md): JIT in 3.19 s, first frame at +8.92 s |
 
 - Not known good: iOS 27.2 (StikDebug issue #471, open: the tunnel fails with
-  `missing field public_key`), and anything below iOS 26.4 with StikJIT 1.6.0,
-  which cannot mount the DDI there (1.9.0 can).
+  `missing field public_key`), and every iOS 26 version. The app installs from
+  iOS 26.0 (its deployment target since 0.3.2); below 26.4 StikJIT 1.9.0 mounts
+  the personalized DDI (1.6.0 could not), but no phone on iOS 26 has run it. On
+  iOS 26 there is no on-device pairing: the player imports a pairing file.
 - A new phone model also needs its DDI published in the repository StikJIT
   downloads it from at run time (`doronz88/DeveloperDiskImage`).
 

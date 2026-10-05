@@ -139,8 +139,8 @@
     {
       "name": "stikjit",
       "pin": "stikjit",
-      "tag": "1.6.0",
-      "commit": "e6bbfe0399de0b839869356dc02b2ad8214ac5bd",
+      "tag": "1.9.0",
+      "commit": "32287268fa5824f9edce4cb359f5833ce0cf7b00",
       "why": "the MPL-2.0 source of the prebuilt StikJIT.framework in the JIT helper extension",
       "drop": {
         "idevice/libidevice_ffi.a": "StikJIT commits idevice's FFI as a prebuilt library (blob 3fb7e2dbfdb9db3d47bd6364a435bbc10d5581f9) that records no revision; idevice is MIT, so its notice is owed, not its source (decision 0042)"

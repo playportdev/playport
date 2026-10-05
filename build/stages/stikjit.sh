@@ -26,8 +26,8 @@
 set -euo pipefail
 . "$(dirname "$0")/../lib.sh"
 
-SHA256=14990ce6a2cd6c54176ef5b76f664731d08a7e43e959a5176a3e65c9b716f215
-COMMIT=e6bbfe0399de0b839869356dc02b2ad8214ac5bd
+SHA256=806664393770c68e75f2b6429955bfdd88cfaad09fec2ba70f8ed615ff90c060
+COMMIT=32287268fa5824f9edce4cb359f5833ce0cf7b00
 tag=$(pin stikjit)
 url=$(pin_url stikjit); url=${url%.git}/releases/download/$tag/StikJIT.xcframework.zip
 cache=$PLAYPORT_BUILD/cache/stikjit-$tag
@@ -104,7 +104,9 @@ PLIST
 for f in "$fw"/Modules/StikJIT.swiftmodule/*.swiftinterface; do
     sed -i -E 's/\bStikJIT\.StikJIT\./StikJIT./g; s/\bStikJIT\.(DDIPaths|DeveloperDiskImageService|StikJITError)\b/\1/g' "$f"
 done
-if grep -n -E '\bStikJIT\.(StikJIT|DDIPaths|DeveloperDiskImageService|StikJITError)\b' "$fw"/Modules/StikJIT.swiftmodule/*.swiftinterface; then
+# Swift 6.4 interfaces (StikJIT 1.7.0 and later) also spell names with module
+# selectors (StikJIT::StikJIT.StikJIT::Configuration); those need no rewrite.
+if grep -n -E '(^|[^:])\bStikJIT\.(StikJIT|DDIPaths|DeveloperDiskImageService|StikJITError)\b' "$fw"/Modules/StikJIT.swiftmodule/*.swiftinterface; then
     echo "stage-stikjit: module-qualified names left in the interface" >&2; exit 1
 fi
 echo "staged StikJIT $tag ($(sha256sum "$fw/StikJIT" | cut -c1-16) StikJIT) at app/Staged/StikJIT.xcframework"
