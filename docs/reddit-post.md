@@ -2,8 +2,8 @@
 
 Suggested subreddits: r/sideloaded, r/iosgaming, r/EmulationOniOS, and
 r/linux_gaming for the technical angle. Post as a video post with the body as
-the first comment, or as a text post with the video inline. The release link
-works once v0.3.0 is published.
+the first comment, or as a text post with the video inline. v0.3.0 was
+published on 2026-10-05, so the release link works.
 
 Video: the owner's screen recording of the release app, 2026-10-05, 92 s,
 landscape 2736x1260 at 60 FPS with sound, 93 MB (well within Reddit's limits).
