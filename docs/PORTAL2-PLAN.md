@@ -561,6 +561,19 @@ global WoW64 state.
     removed. What the reload has left is the game's own waits, 13,000 selects
     and 9,000 event operations in its busiest second.
 
+- **x87 at 64-bit, 2026-10-05**
+  ([evidence](evidence/2026-10-05-portal2-cpu-spin.md), decision 0048): the main
+  thread's hot code was `engine.dll` x87 math in 80-bit software floats. Proton's
+  global `X87ReducedPrecision=1` cut its work 39 % and CPU power 27 %. The owner's
+  720p play gave 58.4 FPS mean, 53.8 p10 (best of four), held 60 FPS at the
+  769 mW budget for about 40 s longer, and portals rendered correctly.
+
+**Closed for this branch (owner, 2026-10-05).** Portal 2 plays: menu, gameplay
+by pad, portals, save and load, Steam Cloud, audio. The remaining performance
+work (items 3–5 below) moves to
+[the Proton alignment plan](plans/2026-10-05-proton-arm64-alignment.md#portal-2-performance-follow-ups);
+it is not chased further here.
+
 **Left for "fully playable":**
 
 1. **Fonts:** the owner's distribution review of the Tahoma fallback faces

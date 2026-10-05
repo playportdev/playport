@@ -114,6 +114,27 @@ Final IPA: `.work/out/20261005-102959-f4c8079a/Playport-26.5-f4c8079a.ipa` (dev)
 SHA256 `f4c8079aa02433ccfa63e4d32460cb53518c0d2b9f0c4e43e5a829ab56501ab0`.
 It passes its 78 IPA checks and is installed.
 
+## Human play on the final IPA
+
+`pp perf --title app-620 --secs 300 --settings '{"screen":"720"}'`, played by
+the owner with a controller (portals, tunnels, one death and reload), IPA
+`f4c8079a`, run `p2-human-720-x87`, against the three earlier 720p human plays:
+
+| Run | FPS mean | p10 | median | lowest budget |
+| --- | --- | --- | --- | --- |
+| `p2-human-720` | 56.5 | 50.0 | 59.4 | 769 mW |
+| `p2-human-720-qos` | 56.2 | 46.5 | 59.9 | 769 mW |
+| `p2-human-720-x87` | **58.4** | **53.8** | **60.0** | 769 mW |
+
+- At the 769 mW budget (from 235 s) it held 60 FPS to about 275 s, where the
+  earlier plays fell to 44–51 FPS at the same stage. The P cores were still
+  taken away in the last 25 s (P 8–20 %), at 51–55 FPS.
+- Hitches over 150 ms: the level load (30–41 s) and the death's reload
+  (148–154 s, up to 575 ms), as before.
+- **Portals:** the owner placed portals and looked through them. Rendering,
+  portal views and physics looked right with x87 at 64-bit precision.
+- Battery went from 41 % to 38 %, not charging.
+
 ## Runs
 
 | Run | IPA | What |
@@ -124,4 +145,5 @@ It passes its 78 IPA checks and is installed.
 | `p2y-x87` | `8d75f9dd` (draft, x87 for app 620 only) | the same |
 | `p2y-final` | `f4c8079a` | the same, `p2-walk` at +88, five screenshots |
 | `p2y-portals` | `f4c8079a` | `--secs 95`, a portal-firing pad, four screenshots |
+| `p2-human-720-x87` | `f4c8079a` | the owner's 300 s play, above |
 | `hky-base`, `hky-isb`, `hky-final` | `9de43e3a`, `f792cda7`, `f4c8079a` | Hollow Knight, as above |

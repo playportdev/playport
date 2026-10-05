@@ -338,6 +338,29 @@ Commits:
    bug or a Madeira bug? It blocks B1.
 7. How large a FEX disk cache is acceptable on the phone?
 
+## Portal 2 performance follow-ups
+
+Handed over from [PORTAL2-PLAN.md](../PORTAL2-PLAN.md) (owner, 2026-10-05).
+Target: a steady 720p at 60 FPS, also after the phone reaches "serious". Measure
+every change with the owner's play, as the earlier runs did:
+`pp perf --title app-620 --secs 300 --settings '{"screen":"720"}'` (300 s, a
+death and reload included), compared with `p2-human-720-x87` (58.4 mean, 53.8
+p10) by `pp perf --compare`.
+
+- **P cores taken away at the thermal limit.** Late in each human play iOS moves
+  the whole process to the E cores (P under 20 %) and FPS falls to 44–55, with
+  every thread at `USER_INTERACTIVE`. Less CPU per frame is the lever. Re-measure
+  after step 1 (FEX main, Wine and Mesa heads) and after A1 (`MaxInst=500`).
+- **Death reload hitches** (0.2–0.6 s): the game's load at the thermal limit,
+  13,000 selects and 9,000 event operations in its busiest second.
+- **A pipeline's first Metal build** (0.2–0.4 s, once per install): a Metal
+  binary archive in KosmicKrisp (see `docs/evidence/2026-10-04-portal2-shader-cache.md`).
+- **Footprint growth** (about 4 MB a minute in a chamber; 35–40 MB a minute in
+  human play including new areas): whether it levels off in a 30-minute run.
+- **Wineserver requests:** 71 a frame in human play; `SetCursorPos` and its
+  messages (9 a frame) are kept for Windows' semantics; `create_event` and
+  `close_handle` (5 a frame) are unattributed.
+
 ## Done when
 
 - Step 1's evidence record lists every `pins.lock` row as moved or held with a
