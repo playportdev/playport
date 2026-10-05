@@ -1,6 +1,8 @@
 # 0023: In-process sync stays off; NT waits keep going to the wineserver
 
-**Status:** accepted, 2026-09-28. Settles item 3 of the
+**Status:** accepted, 2026-09-28; superseded in part by
+[0052](0052-madeira-reconciliation.md), which turns Madeira's fastsync on by
+default (madsync stays off, as here). Settles item 3 of the
 [runtime-risks plan](../plans/2026-09-27-runtime-risks.md) (only in-process
 sync is fast, and it is off). The measurements are in the
 [evidence record](../evidence/2026-09-28-server-sync.md).
