@@ -1,6 +1,6 @@
 # JIT methods: Built-in still plays, the method row shows
 
-What [decision 0050](../decisions/0050-jit-from-another-app.md) changed, run on
+What [decision 0051](../decisions/0051-jit-from-another-app.md) changed, run on
 the phone on 2026-10-05.
 
 - **IPA:** dev, commit `aa229a8` (branch `feature/external-jit`),
