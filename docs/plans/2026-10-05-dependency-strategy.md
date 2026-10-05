@@ -30,11 +30,10 @@ One sequence for this plan and
 | 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs | strategy, step 2 |
 | 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases | alignment, step 1 (row 11) |
 | 6 | The alignment items (A, B) and the Portal 2 performance follow-ups | alignment, step 2 |
-| ongoing | Upstream offers: Madeira, Mesa, gbe, vkd3d-proton, idevice | strategy, steps 3 and 5 |
 
 Steps 1–2 come first because the helper pays off on the moves of step 3; step 4
-needs Madeira `main` as it is when Madeira is next; upstreaming blocks nothing
-but every accepted fix is one conflict fewer at step 5.
+needs Madeira `main` as it is when Madeira is next. Nothing is offered upstream
+(owner, 2026-10-05): every patch stays carried.
 
 ## Part A. Measurements
 
@@ -384,29 +383,12 @@ Weighed:
   provenance. Licence notices (`LICENSE-MADEIRA.md`, GPL-3.0+ with Madeira's
   exception) stay owed either way.
 
-### (d) Upstream what can go upstream
+### (d) Upstream what can go upstream: not pursued
 
-Where each part can go:
-- **Madeira.** It merges outside pull requests quickly: 49 merges in 6 days,
-  some within a day of authoring. Candidates:
-  - `madeira-unix` upstream-bug 25 patches (+1.1k lines);
-  - host-app or diagnostics patches that are generally useful;
-  - the WoW64 window design, where it differs from Madeira's.
-  At least 5 Playport fixes already have Madeira or fork equivalents by
-  subject (A4). They become `already-upstream` deletions on the next sync.
-- **Mesa** (MIT; KosmicKrisp lives in Mesa): 13 `ios-port` + 3 `feature`
-  patches, +4.6k lines. This is the largest Playport-owned series outside
-  Madeira's code. Check Mesa's contribution policy first (LICENSING.md rule);
-  not checked here.
-- **gbe** (3 upstream-bug), **vkd3d-proton** (4 small patches; 0040 already
-  licenses them for upstream), **idevice** (1, already marked "to be
-  offered").
-- **WineHQ.** `wine-pe`/`wine-unix` upstream-bug patches (12) where they are
-  not iOS-only. Most are tied to the port.
-- **FEX-Emu.** It does not accept AI-generated contributions (LICENSING.md).
-  Playport's agent-written `fex` patches stay carried. Madeira's `fex-port`
-  commits are Madeira's to offer.
-- **Valve/DXVK.** Nothing to send.
+The owner offers nothing upstream (2026-10-05). Every patch stays carried, and
+`Offered-upstream:` stays `no`. Fixes that Madeira or another upstream makes on
+its own (A4 lists 5 by subject) still drop out of the series as
+`already-upstream` when they arrive in a sync.
 
 ---
 
@@ -415,16 +397,16 @@ Where each part can go:
 | Dependency | Carried today | Measured move cost | Recommendation | Why | Tooling implications |
 |---|---|---|---|---|---|
 | **dxvk** | none | pin edit | status quo | unmodified | none |
-| **vkd3d-proton** | 4 patches, +104 | not trialled (no history locally); plan: 20 commits | status quo series, offer upstream | tiny; already licensed for upstream (0040) | none |
-| **mesa** | 16, +4,633 | not trialled; plan: head unknown | status quo series, **upstream the KosmicKrisp iOS port** | biggest Playport-owned series; MIT; upstream already hosts KosmicKrisp; each Mesa move otherwise replays 16 ios-port patches | none, until patches land |
-| **gbe** | 5, +791 | no move pending | status quo, offer the 3 upstream-bug fixes | small; LGPL-3.0 (0040) | none |
-| **idevice** | 1, +95 | – | offer upstream (already intended) | | none |
+| **vkd3d-proton** | 4 patches, +104 | not trialled (no history locally); plan: 20 commits | status quo series | tiny | none |
+| **mesa** | 16, +4,633 | not trialled; plan: head unknown | status quo series, moved often | biggest Playport-owned series; each Mesa move replays 16 ios-port patches, so small moves keep it cheap | the rebase helper (Part D) |
+| **gbe** | 5, +791 | no move pending | status quo | small | none |
+| **idevice** | 1, +95 | – | status quo | one patch | none |
 | **rpmalloc** (+ `rpmalloc-port`) | 3 + 16 | moves with FEX | status quo, same commit as FEX | defined by FEX's gitlink | none |
 | **fex** (+ `fex-port`) | 20 + 63, +11.6k | **6 / 83** conflicts over 137 commits | status quo series, moved **often** (FEX main every 1-2 weeks) | small moves are cheap; the 591-commit jump cost 16 + 3 + 3; FEX-Emu will not take Playport's patches | add a rerere-backed rebase helper (Part D) |
 | **dxmt** (+ `dxmt-port`) | 9 + 45, +10.1k | **1 / 54** over 3 commits | status quo series | upstream DXMT moves slowly; the slot-ABI check (`pp slots`) is the real gate. **Madeira's DXMT fork now uses slots 145-149 for DXSO**, which collide with the port's 146-149 | `pp slots` stays mandatory; port the slot reconciliation into the helper |
 | **wine** (+ `wine-port`, `wine-pe`, `wine-unix`) | 57 + 27 + 14 | **1 / 211** over 318 commits; replaced files: 6 commits, 71 lines | status quo, moved **every WineHQ tag** | cheap per tag; the cost was the 11.4 → 11.18 jump | none |
 | **wine-valve** | 127 | not measured (Valve's repo is not in the cache) | status quo series (0018); picks from bleeding-edge per the alignment plan | | `pp sync`'s Valve report must list bleeding-edge (plan B2) |
-| **madeira** (`madeira-unix`, `madeira-winios`, and the source of the 4 port series) | 79 + 3, plus the 188 port patches | **21 / 79** in 6 days; 3 port re-ports (31 + 12 + 22 fork commits); a path rename; parallel WoW64, sync, video and D3D9 designs | **hybrid: reconcile, then upstream**: stay on Madeira as the base (no rewrite); take a decision per overlapping area; push Playport's generic fixes and, where agreed, its WoW64 work to Madeira; keep a freeze-and-own fork as a named fallback with triggers | most of the runtime is Madeira's design (about 75-80 % of non-upstream lines, inference); Madeira is active and accepts PRs; every patch upstreamed removes a conflict source | `tools/sync.py` and `build/pipeline` must learn `dxmt` (not `research/dxmt`) and ignore or handle `madeira-dock`; a sync report section listing Madeira commits that touch built paths |
+| **madeira** (`madeira-unix`, `madeira-winios`, and the source of the 4 port series) | 79 + 3, plus the 188 port patches | **21 / 79** in 6 days; 3 port re-ports (31 + 12 + 22 fork commits); a path rename; parallel WoW64, sync, video and D3D9 designs | **reconcile and carry**: stay on Madeira as the base (no rewrite); take a decision per overlapping area (take Madeira's, or keep Playport's and carry it); keep a freeze-and-own fork as a named fallback with triggers | most of the runtime is Madeira's design (about 75-80 % of non-upstream lines, inference); Madeira is active, and taking its design where it overlaps removes a conflict source | `tools/sync.py` and `build/pipeline` must learn `dxmt` (not `research/dxmt`) and ignore or handle `madeira-dock`; a sync report section listing Madeira commits that touch built paths |
 
 ---
 
@@ -433,8 +415,8 @@ Where each part can go:
 ### The model
 
 **Keep the pins plus series model (status quo) as the canonical form for every
-dependency, add three things to it, and treat Madeira as a partner rather
-than a tree to replay.**
+dependency, add two things to it, and settle the Madeira overlaps by decision
+rather than replaying them.**
 
 1. **Rebase tooling, not fork repositories.**
    - A `pp` command (name to be decided) rebases one target's run tree onto a
@@ -448,15 +430,10 @@ than a tree to replay.**
 2. **Small, frequent moves for Wine, FEX and DXMT.** Measured: a tag-to-tag
    Wine move is 1 conflict; FEX two weeks behind is 6. This is what the
    owner's "latest possible" direction implies anyway.
-3. **An upstreaming policy** (d): Madeira first, Mesa second, then gbe,
-   vkd3d-proton and idevice; FEX excluded by its policy.
-   - Every patch gets a real `Offered-upstream:` value (a PR link, or
-     `no: <reason>`).
-   - `pp sync`'s `already-upstream` path then removes them as Madeira merges
-     them.
+3. **No upstreaming** (owner, 2026-10-05): every patch stays carried;
+   `Offered-upstream:` stays `no`.
 4. **Madeira reconciliation.** For each overlapping area, a short decision:
-   take Madeira's, keep Playport's and offer it upstream, or keep Playport's
-   and carry it. The areas are:
+   take Madeira's, or keep Playport's and carry it. The areas are:
    - i386/WoW64 windows;
    - in-process sync (fastsync);
    - winegstreamer;
@@ -464,7 +441,6 @@ than a tree to replay.**
    - DXMT slots 145-149.
 5. **Named fallback: a freeze-and-own fork of Madeira's host layer.** It is
    adopted only by a new decision record, if one of these triggers holds:
-   - Madeira stops merging Playport's PRs for some weeks;
    - Madeira's design diverges where Playport cannot follow (for example,
      fastsync becoming mandatory);
    - two consecutive syncs each cost more than one work session to reconcile.
@@ -478,9 +454,7 @@ than a tree to replay.**
 | 0 | Fix the sync tooling for Madeira's reorganisation: `GITLINKS`/pipeline `research/dxmt` → `dxmt`, and decide what `madeira-dock` means for `sources` | about half a day |
 | 1 | Rebase helper (rerere, trial, range-diff, re-export), tested on the FEX → main move | 1-2 days |
 | 2 | Madeira reconciliation: a per-area comparison of Madeira main (fetch `bbbf8d0` or newer) with Playport's series; one decision record listing what is taken from each side | 1-2 days of reading, plus Portal 2 and Hollow Knight gates |
-| 3 | Upstream to Madeira: the generic `madeira-unix` fixes (upstream-bug 25, selected diagnostics), then the WoW64 parts the reconciliation keeps | ongoing; each PR is small |
-| 4 | Step 1 of the alignment plan, reordered (below) | as the plan |
-| 5 | Mesa MR for KosmicKrisp on iOS (after a policy check); gbe, vkd3d-proton and idevice PRs | 1-3 days, then review cycles |
+| 3 | Step 1 of the alignment plan, reordered (below) | as the plan |
 
 ### Interaction with the alignment plan's step 1
 
@@ -501,18 +475,17 @@ than a tree to replay.**
   re-ported once, onto the new bases, rather than before and after.
 - **The model change (steps 0-2) should happen before Madeira moves, but need
   not block the other rows.**
-- This reorder changes the plan's table. It needs the owner's agreement and a
-  line in the step-1 pin-policy record.
+- The owner agreed to this order (2026-10-05); the alignment plan's table has
+  it, and the step-1 pin-policy record states it.
 
 ### Decision records needed
 
 - **Pin policy for heads** (already planned by the alignment plan): supersedes
   the pin-source parts of 0008, 0013 and 0018. Add: Wine moves every tag, FEX
   moves frequently, and the step-1 order is changed as above.
-- **Carrying model and upstreaming:** series stay canonical (0001 holds,
-  with its obsolete privacy reason noted); rebases use the helper;
-  `Offered-upstream:` becomes a tracked state; the FEX exception is stated;
-  Mesa's policy is checked before any offer.
+- **Carrying model:** series stay canonical (0001 holds, with its obsolete
+  privacy reason noted); rebases use the helper; nothing is offered upstream,
+  so every patch is carried for good.
 - **Madeira reconciliation:** per area, whose design Playport runs. This may
   touch 0023 (sync), 0047 (D3D9 path) and P6-gst (video).
 - **Fallback criteria for a Madeira soft fork** (could be part of the
@@ -530,6 +503,9 @@ than a tree to replay.**
   could break Portal 2. Keeping Playport's could make every later Madeira
   sync conflict in `virtual_ios.c`. 13 of the 21 trial conflicts are in
   `virtual_ios.c`, `loader_ios.c` or `env_ios.c`.
+- **Carrying everything.** With no upstreaming, Playport's 174 patches only
+  shrink when an upstream fixes the same thing itself; frequent small moves
+  and the helper are what keep that load cheap.
 - **Relying on Madeira's pace.** In 6 days it rewrote its layout and added
   about 15k lines in built paths. A slow sync cadence lets this pile up
   (the plan's 438 commits by 10-04).
