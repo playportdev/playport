@@ -32,6 +32,7 @@ plan (stable `proton_11.0` / experimental / bleeding-edge).
 | Row | Old pin | New pin | Latest upstream | Valve stable / experimental / bleeding-edge | Build, `pp test` | Gate | `pp perf` |
 |---|---|---|---|---|---|---|---|
 | `wine` | wine-11.18 `7b3fff7` | wine-11.19 `455e350` | wine-11.19 (2026-10-02; no later tag) | Valve Wine `dc26e61` / `6d211aa` / `750fd01` | passed | pending: phone away | pending: phone away |
+| `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00`; rpmalloc `09142d7` | `main` `3648ee9`; rpmalloc `09142d7` (unchanged: main's `External/rpmalloc`) | `main` `3648ee9` (2026-10-02, the head on 2026-10-05 14:34) | FEX-2607 `1cc4b93` / main `0df84d3` / main `3648ee9` | passed | pending: phone away | pending: phone away |
 
 ## IPAs, in order
 
@@ -41,6 +42,7 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
 | Step | Commit | IPA | SHA256 |
 |---|---|---|---|
 | baseline | `e71e8a7` | `.work/out/20261005-140757-b1c15122/Playport-26.5-b1c15122.ipa` | `b1c1512228c25d16a0e08860ad878bde053f04378630d35d6359ec54958803f3` |
+| wine-11.19 | `7d0f5b3` | `.work/out/20261005-143326-b047db1e/Playport-26.5-b047db1e.ipa` | `b047db1e9d16d1405732f6230513f20c47832d7da7a29825e0725ef80a6c89da` |
 
 ## wine → wine-11.19
 
@@ -87,3 +89,52 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
   Madeira's `signal_arm64_ios.c` (which has the doorbell path) and
   `thread_ios.c`; whether they behave as WineHQ's for a WoW64 thread's CPU
   area is what the FEX move's Portal 2 play shows.
+
+## fex + rpmalloc → FEX main
+
+- **Distance:** 145 FEX commits in `9fbdc00..3648ee9`. `main` does not descend
+  from the FEX-2609.1 tag (merge base `395b132`, "Docs: Update for release
+  FEX-2609"; the tag has 3 commits of its own). Re-fetched before landing: the
+  head had not moved. FEX `main`'s `External/rpmalloc` is `09142d7`, the
+  rpmalloc pin, so `rpmalloc` and `rpmalloc-port` do not move. `main` moves
+  the `vixl` and `Vulkan-Headers` submodules; `build/stages/fex.sh` now clones
+  the FEX tree again when it lacks the pin (commit `8dd5f31`), so they move
+  with it.
+- **Trial** (`pp rebase fex main --trial`): 83 patches, 72 clean, 5 3-way,
+  6 conflicts. The run landed with `pp rebase fex --write --pins` (the
+  `fex` branch column is now `main`): 72 clean, 5 3-way, 6 resolved.
+- **Resolutions:**
+  - `fex-port/0001` (`Syscalls.h`): upstream's `getrandom()` kept at the end
+    of the Linux branch, then the port's Apple branch (no `getrandom` there;
+    only a native Apple build would need it, which Playport does not make).
+  - `fex-port/0006` (`Priv.h`): upstream's `UnimplementedLog(__func__)` call,
+    then the port's encoded exit status.
+  - `fex-port/0009` (`CPUFeatures.cpp`): the port's iOS block with upstream's
+    new `ProcessPID` parameter, which it also stores.
+  - `fex-port/0043` (`SharedCodeBufferManager.cpp`): upstream's new
+    constructor (JIT-buffer naming), then the port's generation counter.
+  - `fex/0016` (`WOW64/Module.cpp`, 5 hunks): upstream's new form
+    (`LoadStateFromWowContext` without the WowTEB argument, the context API
+    off TLS, `WowContext` a pointer) with the patch's guest-window
+    translations on it (GDT base, the unix-call arguments, the
+    `Wow64SystemServiceEx` stack pointer, the SMC fault address, the access
+    violation's address).
+  - `fex/0018` (`OpcodeDispatcher.cpp`): the memory destination of
+    upstream's new `XCHGOpImpl` and its `CLZERO` now go through
+    `GuestToHostAddress`; every other memory path upstream added there was
+    checked, and these two are the only new ones.
+- **Range-diff flags (checked in the new tree):** `fex-port/0014`
+  (`Logging.cpp`: the iOS guard around `SilentLog` still inside `Init()`),
+  `0024` (`Core.cpp`: the telemetry globals still at file scope), `0041`
+  (context only; the iOS degrade loop runs before upstream's `VirtualName`),
+  `0054` (context only), `fex/0005` (context: 0009's `ProcessPID` line). No
+  clean patch changed.
+- **Build:** the `fex` stage built both DLLs; `app/artifacts.tsv` changed.
+  FEX `main`'s new `Scripts/NeedDisabledSVE.py` prints a traceback at
+  configure on the x86 build host (it reads the host's `/proc/cpuinfo`); it
+  is not fatal and both configures still end with `-mcpu=cortex-a78`.
+  `pp test`: all passed.
+- **Brought in** (alignment plan A2): the WoW64 CHPEv2 commits `af04940`,
+  `4956ac2` and `b1e54d8`, and the disk-cache cap and pruning (B1, which stays
+  off). Whether `fex/0016` and `0018`'s WoW64 resolutions hold on Portal 2
+  (i386) is the Portal 2 play of this IPA: pending, phone away.

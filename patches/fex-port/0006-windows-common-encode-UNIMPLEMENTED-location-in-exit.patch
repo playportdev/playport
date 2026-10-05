@@ -20,33 +20,35 @@ these and the missing-file path is fine — FEX falls back to defaults.
 Long-term we should implement these properly via NtQueryAttributesFile.
 
 Madeira-commit: f7a255603238fc6ab352f5c1775e17dd3a8e6e5a
-Rebased: clean
+Rebased: resolved
 Class: madeira-port
 Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
 Offered-upstream: no
 ---
- Source/Windows/Common/Priv.h        | 16 ++++++++++++----
+ Source/Windows/Common/Priv.h        | 18 +++++++++++++-----
  Source/Windows/Common/WinAPI/IO.cpp |  8 ++++++--
- 2 files changed, 18 insertions(+), 6 deletions(-)
+ 2 files changed, 19 insertions(+), 7 deletions(-)
 
 diff --git a/Source/Windows/Common/Priv.h b/Source/Windows/Common/Priv.h
-index ea702b4..7dc0042 100644
+index 10341be..2d2565f 100644
 --- a/Source/Windows/Common/Priv.h
 +++ b/Source/Windows/Common/Priv.h
-@@ -56,10 +56,18 @@ public:
- };
+@@ -59,11 +59,19 @@ namespace FEX::Windows::Logging {
+ void UnimplementedLog(const char* Func);
+ }
  
- 
--#define UNIMPLEMENTED()                        \
--  do {                                         \
--    NtTerminateProcess(NtCurrentProcess(), 0); \
--    __fastfail(0);                             \
+-#define UNIMPLEMENTED()                                \
+-  do {                                                 \
+-    FEX::Windows::Logging::UnimplementedLog(__func__); \
+-    NtTerminateProcess(NtCurrentProcess(), 0);         \
+-    __fastfail(0);                                     \
 +/* Encode the stub's source location in the exit status so we can identify
 + * which UNIMPLEMENTED was hit. The 16 LSBs of __LINE__ go into bits 0-15;
 + * the next 8 bits hash the basename (mostly first letter for disambiguation
 + * between IO.cpp/String.cpp/Misc.cpp); 0xFE marks "FEX UNIMPLEMENTED" exits. */
 +#define UNIMPLEMENTED()                                                       \
 +  do {                                                                        \
++    FEX::Windows::Logging::UnimplementedLog(__func__);                        \
 +    /* Use __FILE__'s last byte before the extension as a discriminator. */   \
 +    unsigned _file_tag = (unsigned char)(__FILE__[sizeof(__FILE__) - 6]);     \
 +    NtTerminateProcess(NtCurrentProcess(),                                    \
@@ -57,10 +59,10 @@ index ea702b4..7dc0042 100644
  
  #define DLLEXPORT_FUNC(Ret, Name, Args) \
 diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
-index ac96055..6d0d7c2 100644
+index 2720843..dc794f0 100644
 --- a/Source/Windows/Common/WinAPI/IO.cpp
 +++ b/Source/Windows/Common/WinAPI/IO.cpp
-@@ -317,11 +317,15 @@ DLLEXPORT_FUNC(WINBOOL, SetEndOfFile, (HANDLE hFile)) {
+@@ -348,11 +348,15 @@ DLLEXPORT_FUNC(WINBOOL, SetEndOfFile, (HANDLE hFile)) {
  }
  
  DLLEXPORT_FUNC(DWORD, GetFileAttributesA, (LPCSTR lpFileName)) {

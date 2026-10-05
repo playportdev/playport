@@ -1,4 +1,4 @@
-From a347176acff7405d30b735f75d4f7c749ec823db Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Playport <dev@playport.invalid>
 Date: Sat, 3 Oct 2026 19:44:24 +0200
 Subject: [PATCH 16/16] WOW64: run the WoW64 module on the iOS host
@@ -50,7 +50,7 @@ Offered-upstream: no; depends on the iOS port's JIT pool and Wine's window
  8 files changed, 243 insertions(+), 27 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/IR/PassManager.cpp b/FEXCore/Source/Interface/IR/PassManager.cpp
-index 3668cb102..a12fbfa99 100644
+index 3668cb1..a12fbfa 100644
 --- a/FEXCore/Source/Interface/IR/PassManager.cpp
 +++ b/FEXCore/Source/Interface/IR/PassManager.cpp
 @@ -233,7 +233,14 @@ namespace {
@@ -69,7 +69,7 @@ index 3668cb102..a12fbfa99 100644
  
  constexpr uint32_t IRCapMaxCaptures = 4; // a LATER generation may be the faulty one
 diff --git a/FEXCore/Source/Utils/AllocWatch.cpp b/FEXCore/Source/Utils/AllocWatch.cpp
-index 96719d2a7..7dea73b40 100644
+index 96719d2..7dea73b 100644
 --- a/FEXCore/Source/Utils/AllocWatch.cpp
 +++ b/FEXCore/Source/Utils/AllocWatch.cpp
 @@ -10,6 +10,11 @@
@@ -101,7 +101,7 @@ index 96719d2a7..7dea73b40 100644
  
    const char* EventName(uint32_t Event) {
 diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
-index a9a9293b3..7a07a735c 100644
+index a9a9293..7a07a73 100644
 --- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
 +++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
 @@ -66,7 +66,8 @@ extern uintptr_t ios_fex_band_end;
@@ -115,7 +115,7 @@ index a9a9293b3..7a07a735c 100644
    /* iOS-Madeira ml321: keep FEX's host structures OUT of the guest VA band.
     *
 diff --git a/Source/Windows/Common/CRT/Misc.cpp b/Source/Windows/Common/CRT/Misc.cpp
-index 79a006878..76061952f 100644
+index 79a0068..7606195 100644
 --- a/Source/Windows/Common/CRT/Misc.cpp
 +++ b/Source/Windows/Common/CRT/Misc.cpp
 @@ -84,6 +84,18 @@ void abort(void) {
@@ -138,7 +138,7 @@ index 79a006878..76061952f 100644
    return static_cast<int>(GetCurrentProcessId());
  }
 diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
-index 25b9a6ede..f88cb5964 100644
+index 25b9a6e..f88cb59 100644
 --- a/Source/Windows/Common/InvalidationTracker.cpp
 +++ b/Source/Windows/Common/InvalidationTracker.cpp
 @@ -583,9 +583,10 @@ inline uint64_t InvTicksPerUs() {
@@ -155,7 +155,7 @@ index 25b9a6ede..f88cb5964 100644
    const uint32_t S = Src < InvSourceCount ? Src : InvOther;
    InvCount[S].fetch_add(1, std::memory_order_relaxed);
 diff --git a/Source/Windows/Common/InvalidationTracker.h b/Source/Windows/Common/InvalidationTracker.h
-index 2735ee727..3ec24b2aa 100644
+index 2735ee7..3ec24b2 100644
 --- a/Source/Windows/Common/InvalidationTracker.h
 +++ b/Source/Windows/Common/InvalidationTracker.h
 @@ -43,7 +43,16 @@ public:
@@ -176,7 +176,7 @@ index 2735ee727..3ec24b2aa 100644
    void DisableSMCDetection();
    void InvalidateIntervalInternal(uint64_t Address, uint64_t Size, InvalidationSource Src = InvOther);
 diff --git a/Source/Windows/Common/WinAPI/Alloc.cpp b/Source/Windows/Common/WinAPI/Alloc.cpp
-index ded646b0c..f81b42bd9 100644
+index ded646b..f81b42b 100644
 --- a/Source/Windows/Common/WinAPI/Alloc.cpp
 +++ b/Source/Windows/Common/WinAPI/Alloc.cpp
 @@ -75,7 +75,12 @@ DLLEXPORT_FUNC(void*, VirtualAlloc2,
@@ -194,7 +194,7 @@ index ded646b0c..f81b42bd9 100644
      auto* NewExtParams = reinterpret_cast<MEM_EXTENDED_PARAMETER*>(alloca((ParameterCount + 1) * sizeof(MEM_EXTENDED_PARAMETER)));
      if (ExtendedParameters && ParameterCount > 0) {
 diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
-index 62a8dd216..8e178d5f6 100644
+index 8c6b7f7..3211373 100644
 --- a/Source/Windows/WOW64/Module.cpp
 +++ b/Source/Windows/WOW64/Module.cpp
 @@ -51,7 +51,10 @@ $end_info$
@@ -208,7 +208,7 @@ index 62a8dd216..8e178d5f6 100644
  #include <type_traits>
  #include <atomic>
  #include <mutex>
-@@ -122,6 +125,91 @@ struct FrontendThreadData {
+@@ -126,6 +129,91 @@ struct FrontendThreadData {
  
  class WowSyscallHandler;
  
@@ -300,10 +300,10 @@ index 62a8dd216..8e178d5f6 100644
  namespace {
  namespace BridgeInstrs {
    // These directly jumped to by the guest to make system calls
-@@ -218,9 +306,9 @@ void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread, uint64_
- 
+@@ -224,9 +312,9 @@ void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread) {
    // The TEB is the only populated GDT entry by default
    auto GDT = State.GetSegmentFromIndex(State, (Context->SegFs & 0xffff));
+   uint64_t WowTEB = GetWowTEB(NtCurrentTeb());
 -  State.SetGDTBase(GDT, WowTEB);
 +  State.SetGDTBase(GDT, Window::ToGuest(WowTEB));
    State.SetGDTLimit(GDT, 0xF'FFFFU);
@@ -312,7 +312,7 @@ index 62a8dd216..8e178d5f6 100644
    State.es_cached = 0;
    State.cs_cached = 0;
    State.ss_cached = 0;
-@@ -450,7 +538,7 @@ public:
+@@ -423,7 +511,7 @@ public:
    WowSyscallHandler() = default;
  
    static void HandleSyscallImpl(FEXCore::Core::CpuStateFrame* Frame) {
@@ -321,7 +321,7 @@ index 62a8dd216..8e178d5f6 100644
      uint64_t ReturnRSP = Frame->State.gregs[FEXCore::X86State::REG_RSP] + 4;                 // Stack pointer after popping return address
      uint64_t ReturnRAX = 0;
  
-@@ -459,14 +547,15 @@ public:
+@@ -432,14 +520,15 @@ public:
          unixlib_handle_t Handle;
          UINT32 ID;
          ULONG32 Args;
@@ -331,25 +331,25 @@ index 62a8dd216..8e178d5f6 100644
        Frame->State.gregs[FEXCore::X86State::REG_RSP] = ReturnRSP + sizeof(StackLayout);
        Frame->State.rip = ReturnRIP;
  
-       const auto TLS = GetTLS();
-       Context::UnlockJITContext(TLS);
+       Context::FlushThreadStateContext();
+       Context::UnlockJITContext();
 -      ReturnRAX = static_cast<uint64_t>(WineUnixCall(StackArgs->Handle, StackArgs->ID, ULongToPtr(StackArgs->Args)));
 +      ReturnRAX = static_cast<uint64_t>(
 +        WineUnixCall(StackArgs->Handle, StackArgs->ID, reinterpret_cast<void*>(Window::ToHost(StackArgs->Args))));
-       Context::LockJITContext(TLS);
+       Context::LockJITContext();
        Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
      } else if (Frame->State.rip == (uint64_t)BridgeInstrs::Syscall) {
-@@ -478,7 +567,8 @@ public:
-       const auto TLS = GetTLS();
-       Context::UnlockJITContext(TLS);
+@@ -451,7 +540,8 @@ public:
+       Context::FlushThreadStateContext();
+       Context::UnlockJITContext();
        Wow64ProcessPendingCrossProcessItems();
 -      ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(ReturnRSP + 4)));
 +      ReturnRAX =
 +        static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(Window::ToHost(ReturnRSP + 4))));
-       Context::LockJITContext(TLS);
+       Context::LockJITContext();
        Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
      }
-@@ -494,15 +584,21 @@ public:
+@@ -467,15 +557,21 @@ public:
    }
  
    std::optional<FEXCore::ExecutableFileSectionInfo> LookupExecutableFileSection(FEXCore::Core::InternalThreadState*, uint64_t Address) override {
@@ -374,7 +374,7 @@ index 62a8dd216..8e178d5f6 100644
    }
  
    void MarkOvercommitRange(uint64_t Start, uint64_t Length) override {
-@@ -514,7 +610,15 @@ public:
+@@ -487,7 +583,15 @@ public:
    }
  
    FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Address) override {
@@ -391,7 +391,7 @@ index 62a8dd216..8e178d5f6 100644
    }
  
    void PreCompile() override {
-@@ -522,6 +626,53 @@ public:
+@@ -495,6 +599,53 @@ public:
    }
  };
  
@@ -445,7 +445,7 @@ index 62a8dd216..8e178d5f6 100644
  void BTCpuProcessInit() {
    FEX::Windows::InitCRTProcess();
    FEX::Windows::SetupThreadHandlers();
-@@ -557,9 +708,15 @@ void BTCpuProcessInit() {
+@@ -531,9 +682,15 @@ void BTCpuProcessInit() {
  
    CTX->SetSignalDelegator(SignalDelegator.get());
    CTX->SetSyscallHandler(SyscallHandler.get());
@@ -461,7 +461,7 @@ index 62a8dd216..8e178d5f6 100644
    ImageTracker.emplace(*CTX, false);
  
    auto MainModule = reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->ImageBaseAddress;
-@@ -576,8 +733,17 @@ void BTCpuProcessInit() {
+@@ -550,8 +707,17 @@ void BTCpuProcessInit() {
    NtAllocateVirtualMemory(NtCurrentProcess(), &Addr, (1U << 31) - 1, &Size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
    InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Addr), Size, PAGE_EXECUTE);
    *reinterpret_cast<uint32_t*>(Addr) = 0x2ecd2ecd;
@@ -481,7 +481,7 @@ index 62a8dd216..8e178d5f6 100644
  
    const auto Sym = GetProcAddress(NtDll, "__wine_unix_call_dispatcher");
    if (Sym) {
-@@ -907,9 +1073,9 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+@@ -750,9 +916,9 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
      if (Thread) {
        std::scoped_lock Lock(ThreadCreationMutex);
        FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
@@ -490,20 +490,20 @@ index 62a8dd216..8e178d5f6 100644
          if (CTX->IsAddressInCodeBuffer(Thread, Context->Pc) && !CTX->IsCurrentBlockSingleInst(Thread) &&
 -            CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
 +            CTX->IsAddressInCurrentBlock(Thread, Window::ToGuest(FaultAddress) & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
-           Context::ReconstructThreadState(TLS, Context);
+           Context::ReconstructThreadState(Context);
            LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", Context->Pc,
                              Thread->CurrentFrame->State.rip, FaultAddress);
-@@ -945,6 +1111,9 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+@@ -793,6 +959,9 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
    BOOL FirstChance = TRUE;
    EXCEPTION_RECORD GuestException =
-     FEX::Windows::HandleGuestException(Fault, *Exception, WowContext.Eip, WowContext.Eax, WowContext.Ecx, FirstChance);
+     FEX::Windows::HandleGuestException(Fault, *Exception, WowContext->Eip, WowContext->Eax, WowContext->Ecx, FirstChance);
 +  if (GuestException.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && GuestException.NumberParameters >= 2) {
 +    GuestException.ExceptionInformation[1] = Window::ToGuest(GuestException.ExceptionInformation[1]);
 +  }
    if (GuestException.ExceptionCode == EXCEPTION_SINGLE_STEP) {
-     WowContext.EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
+     WowContext->EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
    }
-@@ -966,17 +1135,17 @@ NTSTATUS BTCpuResetToConsistentState(EXCEPTION_POINTERS* Ptrs) {
+@@ -813,17 +982,17 @@ NTSTATUS BTCpuResetToConsistentState(EXCEPTION_POINTERS* Ptrs) {
  
  void BTCpuFlushInstructionCache2(const void* Address, SIZE_T Size) {
    std::scoped_lock Lock(ThreadCreationMutex);
@@ -524,7 +524,7 @@ index 62a8dd216..8e178d5f6 100644
  }
  
  void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL After, ULONG Status) {
-@@ -985,7 +1154,7 @@ void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot,
+@@ -832,7 +1001,7 @@ void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot,
    } else {
      // MEM_RESET(_UNDO) ignores the passed permissions
      if (!Status && !(Type & (MEM_RESET | MEM_RESET_UNDO))) {
@@ -533,7 +533,7 @@ index 62a8dd216..8e178d5f6 100644
      }
      ThreadCreationMutex.unlock();
    }
-@@ -996,7 +1165,7 @@ void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL Af
+@@ -843,7 +1012,7 @@ void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL Af
      ThreadCreationMutex.lock();
    } else {
      if (!Status) {
@@ -542,7 +542,7 @@ index 62a8dd216..8e178d5f6 100644
      }
      ThreadCreationMutex.unlock();
    }
-@@ -1007,7 +1176,7 @@ void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL Afte
+@@ -854,7 +1023,7 @@ void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL Afte
      ThreadCreationMutex.lock();
    } else {
      if (!Status) {
@@ -551,7 +551,7 @@ index 62a8dd216..8e178d5f6 100644
      }
      ThreadCreationMutex.unlock();
    }
-@@ -1015,14 +1184,14 @@ void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL Afte
+@@ -862,14 +1031,14 @@ void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL Afte
  
  NTSTATUS BTCpuNotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
    std::scoped_lock Lock(ThreadCreationMutex);
@@ -568,7 +568,7 @@ index 62a8dd216..8e178d5f6 100644
      if (Size) {
        HandleImageUnmap(Start, Size);
      }
-@@ -1040,7 +1209,7 @@ void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After,
+@@ -887,7 +1056,7 @@ void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After,
    // See arm64ec `BTCpu64NotifyReadFile` for why this like this.
    if (After && Status == STATUS_SUCCESS) {
      std::scoped_lock Lock(ThreadCreationMutex);
@@ -577,6 +577,3 @@ index 62a8dd216..8e178d5f6 100644
    }
  }
  
--- 
-2.55.0
-

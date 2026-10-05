@@ -25,8 +25,8 @@
 # equal Madeira's research/dxmt gitlink, so a Madeira update that moves its
 # DXMT stops the build until the port series is refreshed.
 #
-# FEX is the same (decision 0008): fex is a FEX-Emu/FEX release commit (the
-# FEX-2609.1 tag, head of the FEX-2609_1 release branch) and
+# FEX is the same (decision 0008): fex is a FEX-Emu/FEX main commit
+# (decision 0049: the head of main, what Proton bleeding-edge ships) and
 # patches/fex-port carries Madeira's FEX port rebased onto it; fex-port must
 # equal Madeira's FEX gitlink. rpmalloc is that FEX commit's External/rpmalloc
 # gitlink (FEX-Emu/rpmalloc) and patches/rpmalloc-port carries Madeira's
@@ -48,7 +48,7 @@ madeira      8c050d03f4d89096e1e2e2c8bb44479fffd86619  https://github.com/willfa
 wine         455e3509b98a6919fd4ad1def4803e08c41c03b2  https://gitlab.winehq.org/wine/wine.git       master
 wine-port    723d1bf5132768276cea9bc35ab59c83557bb5fb  https://github.com/willfaust/wine.git         madeira-lgpl
 wine-valve   dc26e61847081a1b5cb0733dc30feba6ee575482  https://github.com/ValveSoftware/wine.git     proton_11.0
-fex          9fbdc00bd6401aff3b32d79e78ff98b8a13e4dcf  https://github.com/FEX-Emu/FEX.git            FEX-2609_1
+fex          3648ee97e8354bb2e6757da8bdb00c48439a561d  https://github.com/FEX-Emu/FEX.git            main
 dxmt         7c8dee1c2d73415301ceb7d1fa810861cef4cd67  https://github.com/3Shain/dxmt.git           main
 dxmt-port    ca8a2516d819e7e1f366981825ad1f0d26f80fdd  https://github.com/willfaust/dxmt.git         ios-port
 fex-port     0f8edf8f6383ae8085e0ffac511c789cdae97514  https://github.com/willfaust/FEX.git          ios-port-2607
