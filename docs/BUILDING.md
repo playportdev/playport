@@ -79,7 +79,7 @@ repository, with this build area: its inputs, caches and the phone's lock);
 | Stage | Script | Output |
 | --- | --- | --- |
 | `inputs` | | tools and inputs checked, their versions in `run/logs/inputs.txt` |
-| `sources` | | `pins.lock` checked against the Madeira gitlinks; submodules initialised |
+| `sources` | | `pins.lock` checked against the Madeira gitlinks; Madeira's wine, FEX and dxmt (`research/dxmt` before its 79e28f0) submodules initialised, not its others |
 | `unix` | `stages/unix.sh`, `stages/unix-gaps.sh`, `stages/gstreamer.sh` | `libntdll_unix.a`, `libwin32u_unix.a`, `libwineserver.a`, the crypto statics, `libwinegstreamer_unix.a` (winegstreamer's unix side prelinked with GStreamer's iOS release, cached under `cache/gstreamer-<version>/`) |
 | `pe` | `stages/wine-pe.sh`, `stages/wine-pe-strip.py` | the Wine PE DLL sets, `i386-windows`, `aarch64-windows` and `arm64ec-windows` (the first two share the new-WoW64 `build-macos` tree; configure sees GStreamer's headers, so `winegstreamer.dll` is built). The app stages them from `pe/staged`, each image without its `.debug_*` sections: every image the runtime maps is copied whole into the JIT pool. The COFF symbol table stays (`pp perf --profile` symbolises from it); the full images stay in `pe/wine` |
 | `fex` | `stages/fex.sh` | `libarm64ecfex.dll`, shipped as `xtajit64.dll`, and aarch64 `libwow64fex.dll`, shipped as `xtajit.dll` (FEX's WoW64 CPU, [Portal 2 step 3](PORTAL2-PLAN.md#step-3-fexs-wow64-module-on-ios-patchesfex)) |

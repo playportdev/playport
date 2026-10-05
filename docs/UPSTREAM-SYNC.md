@@ -17,7 +17,7 @@ Only Madeira is tracked. Its own code moves with it; the components do not
 ([0018](decisions/0018-valve-wine-as-a-series.md)). A sync replays
 `patches/wine-valve` on `patches/wine-port`, and `patches/wine-unix` and
 `patches/wine-pe` on both. When a Madeira commit
-moves its `wine`, `research/dxmt`, `FEX` or FEX's `External/rpmalloc`, the run
+moves its `wine`, `dxmt`, `FEX` or FEX's `External/rpmalloc`, the run
 holds before the build (`wine-port-moved`, `dxmt-port-moved`,
 `fex-port-moved`, `rpmalloc-port-moved`): the matching `patches/*-port` series
 is re-ported by hand ([Wine](evidence/2026-09-26-wine-latest-rebase.md),
@@ -29,6 +29,13 @@ such a move itself (the port rows must match the old pin's gitlinks): the
 re-ported series, the moved port row and the Madeira pin land together in one
 hand-made commit, built and played like any other
 ([example](evidence/2026-09-25-dxmt-port-ca8a251.md)).
+
+Madeira's 79e28f0 moved its DXMT submodule from `research/dxmt` to `dxmt`:
+the run and the `sources` stage read the dxmt-port gitlink at `dxmt`, or at
+`research/dxmt` in an older commit. Madeira's other submodules, such as
+`madeira-dock` (its Steam client host, which Playport does not build), are
+named in the report and never checked out. The `mesa`, `vkd3d-proton`, `gbe`
+and `idevice` series are on pins no Madeira commit moves and are not replayed.
 
 Each run also checks Valve's branch, the `wine-valve` row's `proton_11.0`.
 When it has commits the row's pin lacks, the run lists them, oldest first,

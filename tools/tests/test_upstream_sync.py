@@ -94,7 +94,8 @@ class UpstreamSync(unittest.TestCase):
         cls.fport2 = commit(fport, "madeira fex moves", links=[("External/rpmalloc", cls.rport)], **{"fp.c": "fp2\n"})
         git(fport, "reset", "-q", "--hard", cls.fport)
         git(fport, "update-ref", "refs/keep/fport2", cls.fport2)
-        # dxmt is pinned on its own; Madeira's research/dxmt is dxmt-port, a separate fork.
+        # dxmt is pinned on its own; Madeira's dxmt submodule (research/dxmt before
+        # its reorganisation) is dxmt-port, a separate fork.
         dxmt = new_repo(f"{t}/dxmt")
         cls.dxmt = commit(dxmt, "dxmt", **{"d.c": lines(10)})
         # patches/dxmt-port adds a line that patches/dxmt then edits: dxmt only applies on top of it.
@@ -136,7 +137,7 @@ class UpstreamSync(unittest.TestCase):
         mad = new_repo(f"{t}/Madeira")
         gm = ('[submodule "wine"]\n\tpath = wine\n\turl = x\n\tbranch = {b}\n'
               '[submodule "FEX"]\n\tpath = FEX\n\turl = x\n\tbranch = main\n'
-              '[submodule "dxmt"]\n\tpath = research/dxmt\n\turl = x\n\tbranch = main\n')
+              '[submodule "research/dxmt"]\n\tpath = research/dxmt\n\turl = x\n\tbranch = main\n')
         write(mad, ".gitmodules", gm.format(b="main"))
         links = [("wine", cls.wport), ("FEX", cls.fport), ("research/dxmt", cls.port)]
         base = {"src.c": lines(30), "other.c": lines(10), "COPYING.LIB": "lgpl\n", "unix.c": lines(10)}
@@ -181,6 +182,17 @@ class UpstreamSync(unittest.TestCase):
         cls.m6 = commit(mad, "madeira moves its Wine", links=[("wine", cls.wport2), ("FEX", cls.fport),
                                                               ("research/dxmt", cls.port)])
         git(mad, "reset", "-q", "--hard", cls.m0)
+        # m7: Madeira's reorganisation (its 79e28f0) on m0: the dxmt submodule moves from
+        # research/dxmt to dxmt at the same commit, and a madeira-dock submodule appears.
+        # m8 on m7 then moves the dxmt gitlink at its new path.
+        write(mad, ".gitmodules", gm.format(b="main").replace("research/dxmt", "dxmt")
+              + '[submodule "madeira-dock"]\n\tpath = madeira-dock\n\turl = x\n\tbranch = main\n')
+        dock = ("madeira-dock", cls.port)
+        cls.m7 = commit(mad, "Reorganize the repository", links=[("wine", cls.wport), ("FEX", cls.fport),
+                                                                 ("dxmt", cls.port), dock])
+        cls.m8 = commit(mad, "madeira moves its DXMT at the new path",
+                        links=[("wine", cls.wport), ("FEX", cls.fport), ("dxmt", cls.port2), dock])
+        git(mad, "reset", "-q", "--hard", cls.m0)
         # Valve's branch (the wine-valve row's): v0 the pin, v1 a new commit on it;
         # vr the branch rebased onto a later base, keeping v0's subject and adds another.
         valve = new_repo(f"{t}/valve")
@@ -194,7 +206,7 @@ class UpstreamSync(unittest.TestCase):
         cls.vr = commit(valve, "valve: another fix", **{"h.c": "h\n"})
         git(valve, "checkout", "-q", "-f", "proton_11.0")
         # Keep the moves reachable for fetches by SHA.
-        for n in ("m1", "m2", "m3", "m4", "m5", "m6"):
+        for n in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"):
             git(mad, "update-ref", f"refs/keep/{n}", getattr(cls, n))
 
     @classmethod
@@ -242,6 +254,7 @@ class UpstreamSync(unittest.TestCase):
             for n in names:
                 shutil.copy(f"{src}/{n}", f"{pp}/patches/{target}/{n}")
             write(pp, f"patches/{target}/series", f"# {target}\n" + "".join(n + "\n" for n in names))
+        write(pp, "patches/mesa/series", "# mesa: a pin no Madeira commit moves, never replayed\n")
         os.makedirs(f"{pp}/upstream/madeira")  # an uninitialised submodule
         commit(pp, "playport", links=[("upstream/madeira", self.m0)])
         build = f"{t}/{name}-build"
@@ -367,6 +380,33 @@ class UpstreamSync(unittest.TestCase):
         self.assertIn(self.port2[:12], kinds["dxmt-port-moved"]["detail"])
         self.assertNotIn("build", r["result"])
         self.assertNotIn("sync/", git(pp, "branch", "--list"))
+
+    def test_reorganised_madeira_reads_dxmt_at_its_new_path(self):
+        # The pin m0 has research/dxmt; m7 has dxmt (same commit) and madeira-dock.
+        pp, build = self.playport("pp-reorg")
+        st, out = self.run_tool(pp, build, self.m7, "--dry-run")
+        self.assertEqual(st, 10, out)   # a .gitmodules change holds for review
+        r = self.result(build, self.m7, True)
+        self.assertEqual(r["resolve"]["new"]["dxmt-port"], self.port)
+        kinds = {}
+        for f in r["resolve"]["flags"]:
+            kinds.setdefault(f["kind"], []).append(f["detail"])
+        self.assertNotIn("dxmt-port-moved", kinds)
+        for detail in ("research/dxmt path: research/dxmt -> None", "dxmt path: None -> dxmt",
+                       "madeira-dock path: None -> madeira-dock"):
+            self.assertIn("madeira .gitmodules " + detail, kinds["gitmodules"])
+        self.assertTrue(any(i.startswith("Madeira submodule madeira-dock is no pins.lock row")
+                            for i in r["resolve"]["info"]), r["resolve"]["info"])
+        got = {t["target"]: [p["class"] for p in t["patches"]] for t in r["replay"]}
+        self.assertEqual(got["dxmt"], ["clean"])
+        # A dxmt move at the new path is a dxmt-port move, as before the reorganisation.
+        st, out = self.run_tool(pp, build, self.m8)
+        self.assertEqual(st, 10, out)
+        r = self.result(build, self.m8, False)
+        kinds = {f["kind"]: f for f in r["resolve"]["flags"]}
+        self.assertTrue(kinds["dxmt-port-moved"]["hold"])
+        self.assertIn(self.port2[:12], kinds["dxmt-port-moved"]["detail"])
+        self.assertNotIn("build", r["result"])
 
     def test_every_class_and_flag(self):
         pp, build = self.playport("pp-classes")

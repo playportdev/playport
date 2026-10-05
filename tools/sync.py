@@ -6,18 +6,22 @@
 
 Stages (docs/UPSTREAM-SYNC.md has why they are these):
 
-  resolve  fetch Madeira and read its gitlinks for wine, FEX and research/dxmt
-           (and its FEX's External/rpmalloc) at <madeira-sha>; the gitlinks are
+  resolve  fetch Madeira and read its gitlinks for wine, FEX and dxmt
+           (research/dxmt before Madeira's 79e28f0) and its FEX's
+           External/rpmalloc at <madeira-sha>; the gitlinks are
            the component pins, never a fork's branch head. wine is the
-           wine-port row, research/dxmt the dxmt-port row, FEX the fex-port row
+           wine-port row, dxmt the dxmt-port row, FEX the fex-port row
            and FEX's rpmalloc the rpmalloc-port row: a move of any of them
            holds, for patches/wine-port, patches/dxmt-port, patches/fex-port or
            patches/rpmalloc-port to be re-ported by hand. wine (WineHQ), dxmt
            (3Shain/dxmt), fex (FEX-Emu/FEX) and rpmalloc (FEX-Emu/rpmalloc)
            keep their own pins. Record
            whether the commit descends from the current pin, any .gitmodules
-           change and any licence file changed in a component.
-  replay   for every patches/<target>/series, a fresh sparse checkout (a
+           change and any licence file changed in a component. A Madeira
+           submodule that is no row (madeira-dock) is named in the report: the
+           build never checks it out.
+  replay   for every patches/<target>/series but those on pins no Madeira
+           commit moves (mesa, vkd3d-proton, gbe, idevice), a fresh sparse checkout (a
            `git clone --shared` of the mirror) at the new component commit (for wine, dxmt and fex, with patches/wine-port
            (and for wine's own series patches/wine-valve), patches/dxmt-port or
            patches/fex-port applied first) and `git am -3` patch by patch; each patch is
@@ -93,8 +97,11 @@ EXIT = {"merged": 0, "no-op": 0, "replay-clean": 0, "hold": 10, "upstream-broken
 # commits pinned on their own (decisions 0007, 0008, 0013), and the *-port rows are the
 # Madeira gitlinks their port series were rebased from. rpmalloc is also the
 # External/rpmalloc gitlink of the fex pin.
-GITLINKS = {"wine-port": ("madeira", "wine"), "fex-port": ("madeira", "FEX"), "dxmt-port": ("madeira", "research/dxmt"),
+GITLINKS = {"wine-port": ("madeira", "wine"), "fex-port": ("madeira", "FEX"), "dxmt-port": ("madeira", "dxmt"),
             "rpmalloc-port": ("fex-port", "External/rpmalloc"), "rpmalloc": ("fex", "External/rpmalloc")}
+# A row whose gitlink moved: the first of these paths that is a gitlink at a
+# commit is the row's there (Madeira's 79e28f0 moved research/dxmt to dxmt).
+GITLINK_PATHS = {"dxmt-port": ("dxmt", "research/dxmt")}
 COMPONENTS = ["madeira", "wine", "wine-port", "fex", "fex-port", "dxmt", "dxmt-port", "rpmalloc", "rpmalloc-port"]
 # The rows whose move holds for a hand re-port of patches/<row> (they are never moved by this tool).
 PORT_ROWS = ["wine-port", "fex-port", "dxmt-port", "rpmalloc-port"]
@@ -102,6 +109,9 @@ PORT_ROWS = ["wine-port", "fex-port", "dxmt-port", "rpmalloc-port"]
 TARGET_COMPONENT = {"madeira-unix": "madeira", "madeira-winios": "madeira", "wine-port": "wine", "wine-valve": "wine",
                     "wine-unix": "wine", "wine-pe": "wine", "fex-port": "fex", "fex": "fex", "dxmt-port": "dxmt",
                     "dxmt": "dxmt", "rpmalloc-port": "rpmalloc", "rpmalloc": "rpmalloc"}
+# Series on pins no Madeira commit moves (their own upstreams, outside COMPONENTS):
+# a sync does not replay them.
+NOT_REPLAYED = {"mesa", "vkd3d-proton", "gbe", "idevice"}
 # Series applied under a target's own, in order, as build/stages/unix.sh,
 # build/stages/wine-pe.sh, build/stages/dxmt-patched.sh and build/stages/fex.sh do.
 BELOW = {"wine-valve": ["wine-port"], "wine-unix": ["wine-port", "wine-valve"], "wine-pe": ["wine-port", "wine-valve"],
@@ -248,6 +258,16 @@ def gitmodules(repo, commit):
     return {v.get("path", k): v for k, v in subs.items()}
 
 
+def link_path(repo, commit, comp):
+    """The path of the GITLINKS row comp at commit (GITLINK_PATHS for a row that moved)."""
+    paths = GITLINK_PATHS.get(comp, (GITLINKS[comp][1],))
+    for path in paths:
+        f = git(repo, "ls-tree", commit, "--", path).split()
+        if len(f) >= 3 and f[1] == "commit":
+            return path
+    raise Fail(f"{repo} has no gitlink {' or '.join(paths)} ({comp}) at {commit}")
+
+
 # --- resolve ----------------------------------------------------------------
 
 def resolve(new_madeira, pins):
@@ -259,7 +279,7 @@ def resolve(new_madeira, pins):
     res["mirrors"]["madeira"] = m
     new = {"madeira": new_madeira}
     for comp in ("wine-port", "fex-port", "dxmt-port"):
-        new[comp] = gitlink(m, new_madeira, GITLINKS[comp][1])
+        new[comp] = gitlink(m, new_madeira, link_path(m, new_madeira, comp))
         mm = mirror(comp, pins[comp]["url"], pins[comp]["branch"])
         fetch(mm, pins[comp]["branch"], [old[comp], new[comp]])
         res["mirrors"][comp] = mm
@@ -275,7 +295,8 @@ def resolve(new_madeira, pins):
     res["old"], res["new"] = old, new
 
     # The pins must be Madeira's own gitlinks at the old pin, or the base is inconsistent.
-    for comp, (parent, path) in GITLINKS.items():
+    for comp, (parent, _) in GITLINKS.items():
+        path = link_path(res["mirrors"][parent], old[parent], comp)
         pinned = gitlink(res["mirrors"][parent], old[parent], path)
         if pinned != old[comp]:
             raise Fail(f"pins.lock {comp} {old[comp]} is not the {path} gitlink {pinned} of the {parent} pin")
@@ -313,9 +334,13 @@ def resolve(new_madeira, pins):
                 if va != vb:
                     res["flags"].append({"kind": "gitmodules", "hold": True,
                                          "detail": f"{comp} .gitmodules {path} {key}: {va} -> {vb}"})
+    rows = {comp: link_path(m, new_madeira, comp) for comp in ("wine-port", "fex-port", "dxmt-port")}
+    for path in sorted(set(gitmodules(m, new_madeira)) - set(rows.values())):
+        res["info"].append(f"Madeira submodule {path} is no pins.lock row: the build does not use it "
+                           "and the sources stage does not check it out")
     new_branches = {}
     for comp in ("wine-port", "fex-port", "dxmt-port"):
-        b = gitmodules(m, new_madeira).get(GITLINKS[comp][1], {}).get("branch")
+        b = gitmodules(m, new_madeira).get(rows[comp], {}).get("branch")
         if b:
             new_branches[comp] = b
     res["new_branches"] = new_branches
@@ -1016,7 +1041,7 @@ def main():
         log("replay")
         replay = [replay_target(t, TARGET_COMPONENT[t], res, rundir, REPO)
                   for t in sorted(os.listdir(os.path.join(REPO, "patches"))) if t in TARGET_COMPONENT]
-        unknown = sorted(set(os.listdir(os.path.join(REPO, "patches"))) - set(TARGET_COMPONENT))
+        unknown = sorted(set(os.listdir(os.path.join(REPO, "patches"))) - set(TARGET_COMPONENT) - NOT_REPLAYED)
         if unknown:
             raise Fail(f"patches/ has series this tool does not know the component of: {unknown}")
         classes = [p["class"] for t in replay for p in t["patches"]]
