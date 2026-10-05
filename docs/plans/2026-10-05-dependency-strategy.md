@@ -25,7 +25,7 @@ One sequence for this plan and
 | Order | What | From |
 |---|---|---|
 | 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources`. **Done, a8c0859e**: `madeira-dock` is not used and never checked out | strategy, step 0 |
-| 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move | strategy, step 1 |
+| 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move. **Done, 0dd5f68**: `pp rebase`; FEX trial onto `main` 3648ee9: 6 conflicts in 83 patches (72 clean, 5 3-way), resolved and compiled, draft in the build area (`agent-notes/dep-strategy/fex-main/`) | strategy, step 1 |
 | 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit | alignment, step 1 (rows 2–10) |
 | 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs | strategy, step 2 |
 | 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases | alignment, step 1 (row 11) |
@@ -419,7 +419,7 @@ dependency, add two things to it, and settle the Madeira overlaps by decision
 rather than replaying them.**
 
 1. **Rebase tooling, not fork repositories.**
-   - A `pp` command (name to be decided) rebases one target's run tree onto a
+   - A `pp` command (`pp rebase`, done) rebases one target's run tree onto a
      new pin in a throwaway clone. It uses `rerere` (with its cache in
      `$PLAYPORT_BUILD`), `zdiff3`, and the cascade-suppressed conflict trial
      used here (`pick.sh`), and writes a `range-diff` against the old series.
@@ -452,7 +452,7 @@ rather than replaying them.**
 | # | Step | Effort (inference, from A2 wall times and A3 counts) |
 |---|---|---|
 | 0 | Fix the sync tooling for Madeira's reorganisation: `GITLINKS`/pipeline `research/dxmt` → `dxmt`, and decide what `madeira-dock` means for `sources`. **Done, a8c0859e** (a dry `pp sync bbbf8d0` reaches the four `*-port-moved` holds); left for the Madeira move: `build/source-bundle.json`'s madeira rules (`research/dxmt`, `madeira-dock`, `build/*-tests/*.exe` now `tests/`) | about half a day |
-| 1 | Rebase helper (rerere, trial, range-diff, re-export), tested on the FEX → main move | 1-2 days |
+| 1 | Rebase helper (rerere, trial, range-diff, re-export), tested on the FEX → main move. **Done, 0dd5f68**: `pp rebase` ([UPSTREAM-SYNC.md](../UPSTREAM-SYNC.md#moving-a-component-pin)); FEX trial onto `main` 3648ee9 (145 commits): 6 conflicts (fex-port 0001, 0006, 0009, 0043; fex 0016, 0018), 5 3-way, all flagged hunks checked, both DLLs compile; rpmalloc unchanged; draft in the build area, the move itself is order row 3 | 1-2 days |
 | 2 | Madeira reconciliation: a per-area comparison of Madeira main (fetch `bbbf8d0` or newer) with Playport's series; one decision record listing what is taken from each side | 1-2 days of reading, plus Portal 2 and Hollow Knight gates |
 | 3 | Step 1 of the alignment plan, reordered (below) | as the plan |
 
