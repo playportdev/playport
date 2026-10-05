@@ -9,7 +9,9 @@ final IPA. **Result:** every move passes the gate; the final build does no
 more CPU work a frame than the baseline in either title and draws less CPU
 power. Portal 2's count of short hitches in its load segment, higher on the
 final IPA in the first pair, is run-to-run spread: repeats and a bisection
-over the step IPAs (below) put the baseline alone at 52–268.
+over the step IPAs (below) put the baseline alone at 52–268. Rows 8–10
+(freetype, rust, StikJIT) pass one gate on the branch rebased onto `main`
+0.3.2 (`35956f63`, [the last section](#rebase-onto-main-032-and-the-gates-of-rows-810)).
 
 ## IPAs, in order
 
@@ -372,27 +374,30 @@ the build-time sources, `llvm-project`, `stikjit`) are in
 
 Latest upstream read on 2026-10-05 at about 20:00. One commit per move, each
 built (`pp build --keep-outputs 20`) and tested (`pp test`: all passed). The
-phone gates are **pending: phone held** (another job had the phone while
-these were built). Every row is now moved or held with its reason; `madeira`
+phone was held while these were built, so the per-move IPAs below were not
+played; after the rebase onto `main`, one gate on the rebased final IPA,
+which contains all three moves, passed
+([below](#rebase-onto-main-032-and-the-gates-of-rows-810)). Every row is now moved or held with its reason; `madeira`
 (row 11) moves later, after the Madeira reconciliation.
 
 | Move | Commit | IPA (`.work/out/…`) | SHA256 | Gate |
 |---|---|---|---|---|
-| freetype VER-2-14-3 | `1669ff0` | `20261005-200932-60b066f7/Playport-26.5-60b066f7.ipa` | `60b066f744c480b13ad4e21e76df77b64d337acdeb95b576bec8fb616b997289` | pending: phone held |
-| rust 1.99.0 | `a4c78a8` | `20261005-202628-8a2f0518/Playport-26.5-8a2f0518.ipa` | `8a2f0518e357c88b36b28daba014858d12fcb02cff2a90e420078a36859f6977` | pending: phone held |
-| stikjit 1.9.0 (the final IPA of rows 8–10) | `7bdc25c` | `20261005-203120-bbefed05/Playport-26.5-bbefed05.ipa` | `bbefed057a7f86e02bff9c1867ed330aefe4e6198100d0e76080e78c0c5e895d` | pending: phone held |
+| freetype VER-2-14-3 | `1669ff0` | `20261005-200932-60b066f7/Playport-26.5-60b066f7.ipa` | `60b066f744c480b13ad4e21e76df77b64d337acdeb95b576bec8fb616b997289` | superseded: gated in the rebased final `35956f63` |
+| rust 1.99.0 | `a4c78a8` | `20261005-202628-8a2f0518/Playport-26.5-8a2f0518.ipa` | `8a2f0518e357c88b36b28daba014858d12fcb02cff2a90e420078a36859f6977` | superseded: gated in the rebased final `35956f63` |
+| stikjit 1.9.0 (the final IPA of rows 8–10) | `7bdc25c` | `20261005-203120-bbefed05/Playport-26.5-bbefed05.ipa` | `bbefed057a7f86e02bff9c1867ed330aefe4e6198100d0e76080e78c0c5e895d` | superseded: gated in the rebased final `35956f63` |
 
 Each IPA was built from the tree its commit records (the rust IPA from the
 commit before an amend that added only its records and docs). All three
 change runtime code (FreeType in `libwin32u_unix.a`, Rust in
-`libidevice_ffi.a`, the JIT helper's framework), so each needs its own gate,
-both titles, before these rows count as gated.
+`libidevice_ffi.a`, the JIT helper's framework). A gate on an IPA that
+contains all three covers them, as long as it passes; it did, so no
+per-move gate or bisection was run.
 
 | Row | Old pin | New pin, or held | Latest upstream | Build, `pp test` | Gate |
 |---|---|---|---|---|---|
-| `freetype` | `VER-2-13-3` | `VER-2-14-3` (`0a0221a`) | `VER-2-14-3` | passed | pending: phone held |
-| `rust` | 1.98.1 | 1.99.0 (`b940084`, dist 2026-10-01) | 1.99.0 (stable) | passed | pending: phone held |
-| `stikjit` | 1.6.0 | 1.9.0 (`3228726`) | 1.9.0 (2026-09-27) | passed | pending: phone held |
+| `freetype` | `VER-2-13-3` | `VER-2-14-3` (`0a0221a`) | `VER-2-14-3` | passed | pass (final `35956f63`) |
+| `rust` | 1.98.1 | 1.99.0 (`b940084`, dist 2026-10-01) | 1.99.0 (stable) | passed | pass (final `35956f63`) |
+| `stikjit` | 1.6.0 | 1.9.0 (`3228726`) | 1.9.0 (2026-09-27) | passed | pass (final `35956f63`) |
 | `gbe` | release-2026_09_27 `7103add` | held: no newer release | release-2026_09_27 (the `dev` head is the tag) | not needed | not needed |
 | `abseil-cpp` | 20250512.1 | held: follows gbe's protobuf | 20260817.0 | not needed | not needed |
 | `xtool` | 1.20.1 | held: needs a new machine-wide Darwin SDK | 1.21.0 | 1.21.0 built; the app stage refused the SDK | not needed |
@@ -432,6 +437,12 @@ both titles, before these rows count as gated.
 
 ### stikjit → 1.9.0
 
+- **Now main's move.** `main` took this move in `522d253` (iOS 26 deployment
+  target and StikJIT 1.9.0; 0.3.2), with the same pin, zip sha256, commit and
+  module-selector check in `build/stages/stikjit.sh`, and the same records.
+  After the rebase onto `main` (below), `7bdc25c` kept only this evidence
+  record (`7ce2b51`); `docs/DEVICE.md` is `main`'s text, which covers every
+  iOS 26 version and supersedes this branch's.
 - **Not the expected hold.** The plan expected a hold because "a StikJIT 3.x
   move changes the JIT script protocol". 3.x is the StikDebug app (AGPL-3.0,
   never a pin candidate); the framework the pin names is at 1.9.0, and
@@ -471,14 +482,16 @@ both titles, before these rows count as gated.
   every checkout together. Held; the move is that SDK install plus the pin,
   the diff's name and a rebuild of the xtool when its version differs from
   the pin (the pipeline rebuilds it only when the binary is missing). The
-  workstation's xtool was rebuilt at 1.20.1 after the trial.
+  workstation's xtool was rebuilt at 1.20.1 after the trial. **Owner,
+  2026-10-05:** held for now; the SDK reinstall is done when convenient.
 - **gstreamer:** 1.28.7 is GStreamer's newest stable release. 1.29.2 is a
   development snapshot (odd minor) with an iOS xcframework. The app links the
   release statically, and its notices come from a reviewed lock of Cerbero's
   1.28.7 recipes and the 17 source archives the registered plugins reach
   (`build/gstreamer-notices.sources.json`, `docs/release-audits/gstreamer.md`,
   release-reviewed under decision 0039). A move, to 1.29.x or a later 1.28,
-  needs that audit redone; not a pin edit. Held.
+  needs that audit redone; not a pin edit. Held. **Owner, 2026-10-05:**
+  GStreamer stays on 1.28.7 stable; 1.29.x is a development snapshot.
 - **idevice:** the pin `d32c818` is `master`'s head and v0.1.68. Nothing to
   move.
 - **llvm-project:** 15.0.7 is the last LLVM 15 release. DXMT `main` (the
@@ -486,3 +499,103 @@ both titles, before these rows count as gated.
   `LLVM_VERSION` and `docs/DEVELOPMENT.md`), and the AIR it emits is what
   Metal reads; a later LLVM is a DXMT port, not a pin move. Held.
 
+
+## Rebase onto `main` 0.3.2, and the gates of rows 8–10
+
+`deps-latest` (20 commits on `659cdab`) was rebased onto `main` `522d253`
+(0.3.1, decision 0050 and 0.3.2's iOS 26 deployment target with StikJIT
+1.9.0). Commits on this branch before the rebase keep their old IDs in the
+text above; the IPAs were built from those.
+
+| Before | After | Commit |
+|---|---|---|
+| `e71e8a7` | `62a4a82` | decision 0049 |
+| `7d0f5b3` | `f516ce3` | wine 11.19 |
+| `22ac169` | `c96db80` | FEX main |
+| `2cd6d80` | `2516063` | DXMT main |
+| `6d09073` | `a4c4e8f` | Mesa main |
+| `cf020cb` | `aff1433` | DXVK master |
+| `c6b8936` | `23a00df` | vkd3d-proton master |
+| `b011dbf` | `119555d` | wine-valve bleeding-edge |
+| `1669ff0` | `1e86afc` | freetype VER-2-14-3 |
+| `a4c78a8` | `2370713` | rust 1.99.0 |
+| `7bdc25c` | `7ce2b51` | stikjit 1.9.0: evidence only (above) |
+
+- **Conflicts:** `docs/decisions/README.md` (0049 and 0050 both appended a
+  row: both kept, in number order); `app/artifacts.tsv` and the three
+  `build/generated/wine-pe-*.tsv` at the wine commit (resolved to this
+  branch's records, since `main`'s differed only by its own builds); and
+  `docs/DEVICE.md` at the stikjit commit (`main`'s text). The pin, the stage
+  and the notices of the stikjit commit merged without a conflict, as `main`
+  made the same change.
+- **Build records:** only the final HEAD was built (`pp build --keep-outputs
+  20`, dev). It rebuilt no tree and rewrote no record, so the records the
+  rebase carried are the ones the final tree builds. The commits in the
+  middle of the branch were not rebuilt on the new base; their records are
+  those of their builds on the old base.
+- **Checks:** `pp test` all passed; `pp names` and `pp secrets` clean.
+- **Final IPA:** `.work/out/20261005-223917-35956f63/Playport-26.5-35956f63.ipa`,
+  sha256 `35956f639b57f6bd5a905f0d29320e2b5b81fce1e834b6636d1dd13edb0b14cc`
+  (verify-ipa: 79 checks passed). It has freetype 2.14.3, rust 1.99.0,
+  StikJIT 1.9.0 and `main`'s iOS 26 changes. It supersedes the three per-move
+  IPAs above (`60b066f7`, `8a2f0518`, `bbefed05`), which were not played: a
+  gate on the final covers all three moves.
+- **Reinstall of the titles:** the games had been removed from the phone.
+  Installed in place over `main`'s build (`b010759f`), the final IPA kept the
+  container: the setup checklist read pairing, LocalDevVPN and Steam done.
+  Both titles came back through the UI with the paired Steam session
+  (`pp ui --action install:APP`), with no prompt: Hollow Knight (5.23 GB) in
+  34 s, Portal 2 (12.76 GB) in 157 s.
+- **A JIT outage first (the phone, not the build):** the first gate at 22:45
+  failed before the game: the JIT helper stopped at "checking the DDI mount"
+  with `Socket ConnectionReset (idevice code 1/0)`, and a retry failed the
+  same way. The gated `eb5ae2ad` (StikJIT 1.6.0), installed in place for a
+  check, failed identically, so it was the phone's state; the owner fixed
+  LocalDevVPN and the pairing, and the final IPA was installed again.
+
+### Gate of the final IPA
+
+One locked session at 22:52 (`gate.sh`: `pp install --no-build --ipa`, then
+both plays with `--until first-frame+10 --shot`). Both reached
+`first-frame+10` and ran on; JIT came up through StikJIT 1.9.0 each time.
+
+| Title | JIT | runtime started | game started | first frame | Screenshot |
+|---|---|---|---|---|---|
+| Hollow Knight | 2.31 s | +3.10 s | +3.20 s | +9.53 s | the game's first-run language list (the reinstall reset its settings) |
+| Portal 2 | 2.50 s | +3.70 s | +3.82 s | +7.48 s | black: the splash's timing, as on the earlier gates |
+
+Hollow Knight's language was then set to English by the scripted pad
+(`pp pad send`), so later runs reach the main menu again.
+
+**Rows 8–10 gated:** freetype 2.14.3, rust 1.99.0 and StikJIT 1.9.0 pass, by
+this one gate on the IPA that contains all three (no gate failed, so no
+per-move bisection was needed).
+
+### `pp perf` on the rebased final
+
+The routes above, `--cool 15 --cool-max 20`, thermal `nominal` throughout,
+on battery (90 → 88 %). Compared with the final IPA before the rebase
+(`eb5ae2ad`); the windows are the walks.
+
+| | HK `dl-final-hk` | HK `rb-final-hk` | P2 `dl-final-p2` | P2 `rb-final-p2` |
+|---|---|---|---|---|
+| FPS mean / p10 (whole run) | 58.3 / 54.2 | 57.1 / 52.2 | 58.7 / 55.6 | 57.7 / 41.2 |
+| FPS in the window | 59.1 | 58.9 | 60.0 | 59.3 |
+| main thread `002c` Mi/f | 23.0 | 22.9 | 14.1 | 14.3 |
+| all threads Mi/f | 72.1 | 79.4 | 64.4 | 66.8 |
+| CPU power in the window | 630 mW | 735 mW | 295 mW | 298 mW |
+| hitches ≥ 25 / 50 / 100 ms | 361 / 10 / 5 | 224 / 18 / 10 | 302 / 20 / 8 | 257 / 21 / 10 |
+
+- **Not a like-for-like pair.** Both titles were installed afresh just
+  before, so these were their first runs on new files: Hollow Knight had
+  lost its settings (and so, likely, the profile-1 save the route lands in:
+  a 942 ms frame at t = 40 s fits the new-game path), and Portal 2's first
+  map load ran to t ≈ 67 s instead of ending before t = 60 s, which moves
+  its load hitches into the play segment (≥ 50 ms 13 there, from t = 61.9 to
+  67.2 s).
+- The main thread does the same work a frame in both titles (23.0 → 22.9,
+  14.1 → 14.3 Mi/f), and Portal 2's walk is the same (59.3–60 FPS, 295 →
+  298 mW). Hollow Knight's other threads did 10 % more work in its window,
+  on a route whose scene probably differed. No regression is read from this
+  pair; a repeat once both titles are back in their usual state would
+  settle it.
