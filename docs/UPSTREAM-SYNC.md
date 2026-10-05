@@ -79,3 +79,32 @@ What stays with a person: re-porting a conflicting or `merged-3way` patch,
 judging whether an `already-upstream` `upstream-bug` patch is really
 equivalent, the licence review after a branch switch, and offering patches
 upstream.
+
+## Moving a component pin
+
+The `wine`, `fex`, `dxmt` and `rpmalloc` pins move by a rebase, played on the
+phone (AGENTS.md, "Pins"). `pp rebase`
+does the mechanical part in a scratch clone under `$PLAYPORT_BUILD/rebase/`:
+
+```sh
+./pp rebase fex main --fetch --trial   # per patch: clean, 3-way, upstream or conflict (each cause counted once)
+./pp rebase fex main                   # replay; stops at each conflict (exit 10)
+#   resolve in $PLAYPORT_BUILD/rebase/fex/tree, git add, then:
+./pp rebase fex --continue
+./pp rebase fex --write [--pins]       # the re-exported series into patches/ (and the pins.lock row)
+```
+
+A target takes the series under it (`fex` is `fex-port` then `fex`; Wine's
+two trees are two runs, `wine-pe` and `wine-unix`, both over `wine-port` and
+`wine-valve`). Every resolution is recorded with `rerere` per component and
+replayed in the next run, so the second Wine run reuses the first one's. When the replay ends, `range-diff.txt` compares the old and new series,
+and `flags.txt` lists each patch whose range-diff changed with no person
+resolving it (a 3-way merge or a recorded resolution): check those hunks
+against both sides, since git can misplace an auto-merged hunk. A clean
+patch is kept as it is; the others are written again with their `Rebased:` or
+`Picked:` trailer set to `resolved` when the move needed a resolution. The
+run never commits: review `git diff`, then build and play as for any pin move.
+A pin that is a gitlink of the moved one (FEX's `External/rpmalloc` is the
+`rpmalloc` row) is named when the new commit moves it; it is a run of its own
+(`pp rebase rpmalloc <commit>`). `pp rebase --help` has the files and exit
+statuses.

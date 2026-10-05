@@ -38,8 +38,9 @@ end.
   and their `patches/*-port` series (for Wine also the `madeira-port` patches at the end of
   `patches/madeira-unix`, and `patches/wine-valve` with its `wine-valve` pin, Valve's
   Proton Wine commits picked onto WineHQ) move only by a manual rebase or pick plus a Hollow Knight
-  play on the phone (decisions 0007, 0008, 0013, 0018). In such a rebase, check every auto-merged hunk against both
-  sides with `git range-diff`: git misplaced several in the FEX rebase. After a DXMT
+  play on the phone (decisions 0007, 0008, 0013, 0018). `pp rebase` does such a rebase in scratch
+  ([UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md#moving-a-component-pin)); check every hunk it flags
+  against both sides: git misplaced several auto-merged hunks in the FEX rebase. After a DXMT
   rebase, rerun `gen_remote_guard.py` and `gen_api_names.py` in the patched tree
   (`run/dxmt-patched/dxmt/src/winemetal/`), then `pp slots` must be clean: the slot
   numbers are an ABI a merge cannot check.
