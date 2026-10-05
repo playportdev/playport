@@ -238,9 +238,9 @@ Commits:
 - **Expected effect:** this is a correctness audit, not a speed change.
 - **Risk:** the replacements may silently bypass the WineHQ code.
 - **Phone measurement:** as for A2.
-- **Decision record:** yes, if `wine-valve` should track experimental rather
-  than proton_11.0. That changes 0018's "proton_11.0" wording. The `pp sync`
-  report lists only proton_11.0, so experimental deltas are invisible to it today.
+- **Decision record:** covered by step 1's pin-policy record (`wine-valve`
+  from bleeding-edge). Also teach the `pp sync` report to list bleeding-edge:
+  today it lists only proton_11.0, so newer Valve deltas are invisible to it.
 
 **B3. Large address aware for i386 (`WINE_LARGE_ADDRESS_AWARE`, on by default in Proton).**
 - **Change if adopted:** port Valve `799e5f0f` ("ntdll/loader: add support for
