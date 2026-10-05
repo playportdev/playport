@@ -38,6 +38,25 @@ This changes the pin policy of decisions 0008 (FEX releases), 0013 (Wine
 tags) and 0018 (`wine-valve` from proton_11.0): step 1 opens with one decision
 record that supersedes those parts, and every later move cites it.
 
+## Order across the plans (owner, 2026-10-05)
+
+One sequence for this plan and
+[the dependency strategy](2026-10-05-dependency-strategy.md):
+
+| Order | What | From |
+|---|---|---|
+| 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources` | strategy, step 0 |
+| 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move | strategy, step 1 |
+| 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit | alignment, step 1 (rows 2–10) |
+| 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs | strategy, step 2 |
+| 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases | alignment, step 1 (row 11) |
+| 6 | The alignment items (A, B) and the Portal 2 performance follow-ups | alignment, step 2 |
+| ongoing | Upstream offers: Madeira, Mesa, gbe, vkd3d-proton, idevice | strategy, steps 3 and 5 |
+
+Steps 1–2 come first because the helper pays off on the moves of step 3; step 4
+needs Madeira `main` as it is when Madeira is next; upstreaming blocks nothing
+but every accepted fix is one conflict fewer at step 5.
+
 ## Valve's reference snapshot (2026-10-05)
 
 | Proton branch | Head | FEX | Wine (ValveSoftware/wine) | DXVK | vkd3d-proton |
