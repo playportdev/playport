@@ -126,9 +126,10 @@ t = 60 s; the last column is the ≥ 25 ms count per 10 s from t = 0 to 140.
 ## The moves
 
 One row per dependency. Valve's columns are the 2026-10-05 snapshot in the
-plan (stable `proton_11.0` / experimental / bleeding-edge). Not moved yet
-(alignment plan rows 8–11): `gbe`, the build-time sources, `llvm-project`,
-`stikjit` and `madeira`.
+plan (stable `proton_11.0` / experimental / bleeding-edge). Rows 8–10 (`gbe`,
+the build-time sources, `llvm-project`, `stikjit`) are in
+[their own section](#rows-810-gbe-the-build-time-sources-llvm-project-stikjit) below;
+`madeira` (row 11) is not moved yet.
 
 | Row | Old pin | New pin | Latest upstream | Valve stable / experimental / bleeding-edge | Build, `pp test` | Gate | `pp perf` |
 |---|---|---|---|---|---|---|---|
@@ -366,3 +367,30 @@ plan (stable `proton_11.0` / experimental / bleeding-edge). Not moved yet
   passed. `pins.lock`'s `wine-valve` row is now the `bleeding-edge` branch, so
   `pp sync`'s `wine-valve-new.tsv` lists bleeding-edge's new commits (the B2
   note about the sync report).
+
+## Rows 8–10: gbe, the build-time sources, llvm-project, stikjit
+
+Latest upstream read on 2026-10-05 at about 20:00. One commit per move, each
+built (`pp build --keep-outputs 20`) and tested (`pp test`: all passed). The
+phone gates are **pending: phone held** (another job had the phone while
+these were built).
+
+| Row | Old pin | New pin, or held | Latest upstream | Build, `pp test` | Gate |
+|---|---|---|---|---|---|
+| `freetype` | `VER-2-13-3` | `VER-2-14-3` (`0a0221a`) | `VER-2-14-3` | passed | pending: phone held |
+
+### freetype → VER-2-14-3
+
+- **What it is in the app:** Wine's unix-side font rasteriser, built by
+  Madeira's `build/freetype-ios/build.sh` (all optional dependencies off) and
+  merged into `libwin32u_unix.a`, so a move changes runtime code.
+- **Build:** `build/stages/unix.sh` cloned FreeType only when the run tree had
+  no clone, so a moved pin kept the old source; it now clones again when the
+  clone is not at the pinned tag. Only `libwin32u_unix.a` changed in
+  `app/artifacts.tsv`; no Wine PE record changed.
+- **Records that name the version:** `build/source-bundle.json` (tag and
+  commit), `docs/LICENSING.md`, the comment in `build/notices-assemble.sh`, and
+  the app's FTL credit line in `build/app-notices.json`, which now reads as
+  2.14.3's `docs/FTL.TXT` asks (its sources say 1996–2026, and the project URL
+  is `https://freetype.org`).
+

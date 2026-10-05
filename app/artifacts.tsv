@@ -948,7 +948,7 @@ resource	Runtime/fonts/tahomabd.ttf	137836	508a2acc88cd6abdd399ae79c9965db43fba7
 resource	Runtime/registry/system.reg	482604	2d8e2c45d9ad3fd12ed954ba462b05e094507710f1febacb92c11207a3af50c0	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	1599	e534357e8ae05068ac00258faf0b3e6086f77c1170b502a9fd46b59052c9ebd6	registry	user.reg	P7-reg
 link	lib/libntdll_unix.a	3062344	3a1a311c4962fc41cc25c91a90954ac90eb4b6a838fd416893b6848b786fafe4	unix	mythic/app/Madeira/libntdll_unix.a	P3
-link	lib/libwin32u_unix.a	4114592	36f1d5aafda2255c4a6cd5d10ec368f3bcd509fdc0f0735a0ec6893c3900cacc	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
+link	lib/libwin32u_unix.a	4121192	774caf196471fefb1dc83ed6148bbc6ec589c5010f4fbac4bc50d0198441460a	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1205696	acfbaa6da40a9c44d724a570bcd600db401d73a32425dff75794c5020934db72	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto
 link	lib/libhogweed.a	1105792	247e869163901151301d2ff3c930a68c3742fbbb263a33b8bc10a98dfbd65b9f	unix	mythic/toolchains/gnutls-ios/lib/libhogweed.a	P4-crypto

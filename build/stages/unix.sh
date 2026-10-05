@@ -52,8 +52,10 @@ stage_clones() {
     # wine-port's ntdll includes ../../../../build/madeira_cfg.h, i.e. it
     # expects to sit at <Madeira>/wine; resolve that from ROOT/wine as well.
     ln -sfn "$M/build" "$ROOT/build"
-    test -d "$M/research/freetype" ||
-        git clone -q --depth 1 --branch $FREETYPE_TAG "$(pin_url freetype)" "$M/research/freetype"
+    # A moved freetype pin is not the tag of a clone made before the move.
+    [ "$(git -C "$M/research/freetype" describe --tags --exact-match 2>/dev/null)" = "$FREETYPE_TAG" ] || {
+        rm -rf "$M/research/freetype"
+        git clone -q --depth 1 --branch $FREETYPE_TAG "$(pin_url freetype)" "$M/research/freetype"; }
     echo "mythic $(git -C "$M" rev-parse HEAD)"
     echo "wine   $(git -C "$W" rev-parse HEAD)"
     echo "freetype $(git -C "$M/research/freetype" rev-parse HEAD) ($FREETYPE_TAG)"

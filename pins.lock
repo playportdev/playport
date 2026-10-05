@@ -60,7 +60,7 @@ vkd3d-proton 31d1f89ca5b3f2fd3b6f025c8e6f73ed3eaa852b  https://github.com/HansKr
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
 #
 # Build-time sources that are not Madeira components, fetched by tag.
-freetype     VER-2-13-3                                https://github.com/freetype/freetype.git      -
+freetype     VER-2-14-3                                https://github.com/freetype/freetype.git      -
 llvm-project llvmorg-15.0.7                            https://github.com/llvm/llvm-project.git      -
 # the Abseil release gbe's protobuf (third-party/deps/common) names in cmake/dependencies.cmake
 abseil-cpp   20250512.1                                https://github.com/abseil/abseil-cpp.git      -
