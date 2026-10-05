@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Mon, 5 Oct 2026 14:00:00 +0200
+Subject: [PATCH] ntdll: log each thread's QoS class and the Windows priority
+ requests
+
+Whether the scheduler may park a title's threads on the E cores depends
+on their QoS class, and no census showed it. Every 20 s the [xp] sampler
+now logs [xp-qos]: each thread of the task with the QoS class its
+pthread asked for and the kernel's base and current priority, a guest
+thread by its Windows TID as in [xp-t]. NtSetInformationThread logs the
+first 200 ThreadPriority and ThreadBasePriority requests as [thr-prio]
+with the caller's and the target's TID; the server applies none of them
+on iOS. Nothing a thread does changes.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-05-portal2-thread-qos.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 49 +++++++++++++++++++++++++++++++++++
+ build/ntdll-unix/thread_ios.c | 18 +++++++++++++
+ 2 files changed, 67 insertions(+)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index a948f91..7610467 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1624,6 +1624,54 @@ static void ios_srv_report( const char *wall, double wall_s )
+     wine_log_write( "%s", line );
+ }
+ 
++/* Playport: [xp-qos] census. Every thread of the task with the QoS class its
++ * pthread asked for (UI, IN, DEF, UT, BG, -), and the kernel's base and current
++ * priority, which carry the class the scheduler applies (UI 47, IN 37, DEF 31,
++ * UT 20, BG 4) and any override. A guest thread shows its Windows TID, as in
++ * [xp-t]; another its Mach thread ID with an m. Measurement only. */
++static void ios_xp_qos_census( const char *wall )
++{
++    thread_act_array_t th = NULL; mach_msg_type_number_t nth = 0, k;
++    char line[1200]; int n;
++    if (task_threads( mach_task_self(), &th, &nth ) != KERN_SUCCESS) return;
++    n = snprintf( line, sizeof(line), "[xp-qos] %s threads=%u", wall, nth );
++    for (k = 0; k < nth; k++)
++    {
++        thread_identifier_info_data_t idi; mach_msg_type_number_t cnt = THREAD_IDENTIFIER_INFO_COUNT;
++        thread_extended_info_data_t xi; mach_msg_type_number_t xcnt = THREAD_EXTENDED_INFO_COUNT;
++        pthread_t pt = pthread_from_mach_thread_np( th[k] );
++        qos_class_t q = QOS_CLASS_UNSPECIFIED; int rel = 0; uint64_t teb = 0; uint32_t w = 0;
++        const char *qn; char id[24], nm[24]; unsigned i;
++        if (thread_info( th[k], THREAD_IDENTIFIER_INFO, (thread_info_t)&idi, &cnt ) != KERN_SUCCESS ||
++            thread_info( th[k], THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xcnt ) != KERN_SUCCESS)
++        {
++            mach_port_deallocate( mach_task_self(), th[k] );
++            continue;
++        }
++        if (pt)
++        {
++            pthread_get_qos_class_np( pt, &q, &rel );
++            if ((teb = ios_ts_teb( pt ))) ios_ts_read( teb + 0x48, &w, 4 );
++        }
++        qn = q == QOS_CLASS_USER_INTERACTIVE ? "UI" : q == QOS_CLASS_USER_INITIATED ? "IN"
++           : q == QOS_CLASS_DEFAULT ? "DEF" : q == QOS_CLASS_UTILITY ? "UT" : q == QOS_CLASS_BACKGROUND ? "BG" : "-";
++        if (w) snprintf( id, sizeof(id), "-%04x", w );
++        else snprintf( id, sizeof(id), "m%llu", (unsigned long long)idi.thread_id );
++        snprintf( nm, sizeof(nm), "%s", xi.pth_name );
++        for (i = 0; nm[i]; i++) if (nm[i] == ' ' || nm[i] == ':') nm[i] = '_';
++        if (n > (int)sizeof(line) - 80)
++        {
++            wine_log_write( "%s", line );
++            n = snprintf( line, sizeof(line), "[xp-qos] %s (cont)", wall );
++        }
++        n += snprintf( line + n, sizeof(line) - n, " %s:%s:%s:%d/%d", id, nm[0] ? nm : "?", qn,
++                       xi.pth_priority, xi.pth_curpri );
++        mach_port_deallocate( mach_task_self(), th[k] );
++    }
++    vm_deallocate( mach_task_self(), (vm_address_t)th, nth * sizeof(*th) );
++    wine_log_write( "%s", line );
++}
++
+ static void ios_xprobe_main( void )
+ {
+     static struct ios_xp_row rows[1024];
+@@ -1763,6 +1811,7 @@ static void ios_xprobe_main( void )
+             }
+             if (!(gen & 3)) ios_xp_api_report( wall, XP_MS( now - t_start ) / 1000.0 );   /* ml1131: ~1 s */
+             if (!(gen & 3)) ios_srv_report( wall, XP_MS( now - t_start ) / 1000.0 );      /* Playport: ~1 s */
++            if (gen % 80 == 8) ios_xp_qos_census( wall );                                 /* Playport: ~20 s */
+         }
+         else if (ru_rc && gen < 4) wine_log_write( "[xp] ml1128 proc_pid_rusage v6 failed rc=%d errno=%d", ru_rc, errno );
+         if (!ru_rc) { pru = ru; have_ru = 1; }
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index af005ec..2e0d59a 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -3004,6 +3004,22 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
+ }
+ 
+ 
++/* Playport: [thr-prio]. A Windows thread priority stops at the server, which
++ * applies none on iOS; log the first 200 requests (the caller's TID, the
++ * target's, the class and value) so a title's priorities can be read beside
++ * the [xp-qos] census. Measurement only. */
++static void ios_log_thread_priority( HANDLE handle, const char *what, LONG value, unsigned int status )
++{
++    static LONG logged;
++    THREAD_BASIC_INFORMATION tbi;
++    ULONG target = 0;
++    if (__atomic_add_fetch( &logged, 1, __ATOMIC_RELAXED ) > 200) return;
++    if (!NtQueryInformationThread( handle, ThreadBasicInformation, &tbi, sizeof(tbi), NULL ))
++        target = HandleToULong( tbi.ClientId.UniqueThread );
++    ERR( "[thr-prio] tid=%04x target=%04x %s=%d status=%x\n",
++         (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, (unsigned)target, what, (int)value, status );
++}
++
+ /******************************************************************************
+  *              NtSetInformationThread  (NTDLL.@)
+  */
+@@ -3054,6 +3070,7 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        ios_log_thread_priority( handle, "priority", *priority, status );
+         return status;
+     }
+ 
+@@ -3069,6 +3086,7 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        ios_log_thread_priority( handle, "base", *base_priority, status );
+         return status;
+     }
+ 

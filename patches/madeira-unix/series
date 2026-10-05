@@ -76,3 +76,4 @@
 0075-signal-leave-x18-TEB-reads-out-of-the-WoW64-window-s.patch
 0076-virtual-run-the-pool-warmer-s-censuses-about-every-f.patch
 0077-ntdll-count-the-set_cursor-requests-by-the-call-that.patch
+0078-ntdll-log-each-thread-s-QoS-class-and-the-Windows-pr.patch

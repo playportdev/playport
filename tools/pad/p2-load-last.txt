@@ -1,0 +1,13 @@
+# Portal 2: reload the last save from the pause menu, the load a death makes
+# (it reloads the autosave). From a game in progress, e.g. after p2-cold-boot,
+# whose chapter start autosaves. Writes no save.
+150 START    # the pause menu, RETURN TO GAME ringed
+1500 -
+150 DOWN     # SAVE GAME
+400 -
+150 DOWN     # LOAD LAST SAVE
+400 -
+150 A
+2500 -
+150 A        # its "are you sure" dialog, if it asks
+30000 -      # the load

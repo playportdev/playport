@@ -193,6 +193,13 @@ naming such threads by hand, and made periodic stalls worse.
 priorities to interactive, applied at the thread's next wait as ECO is.
 A/B it per title, following section 4 of the follow-up plan.
 
+**Measured (2026-10-05, [Portal 2 thread QoS](../evidence/2026-10-05-portal2-thread-qos.md)):**
+madeira-unix 0078 logs the priorities. Portal 2 sets LOWEST on DXVK's shader
+workers and TIME_CRITICAL on two threads. Hollow Knight sets LOWEST on its 16
+background job workers and TIME_CRITICAL on DXMT's encoder and finisher. No
+mapping was made: lowering the shader workers would lengthen the
+first-pipeline hitches.
+
 ### B5. Smaller runtime items [code, hyp cost]
 
 - **Sleep(1) cost.** After 256 calls less than 2 ms apart, each `Sleep(1)`

@@ -549,6 +549,18 @@ global WoW64 state.
   - Together they take the scripted run from 57–58 to 51 requests a frame, and
     the main thread from 28 to 21.5. madeira-unix 0077 logs `[srv-cur]`.
 
+- **Thread QoS, 2026-10-05**
+  ([evidence](evidence/2026-10-05-portal2-thread-qos.md)):
+  - madeira-unix 0078 logs each thread's QoS class every 20 s (`[xp-qos]`) and
+    the first 200 `SetThreadPriority` calls (`[thr-prio]`). Every game and DXVK
+    thread is already `USER_INTERACTIVE`, so no QoS change was made.
+  - The E-only stretches of the human plays moved UI threads as well. In them,
+    threads waited for a core two to four times as long and the process retired
+    about 40 % more instructions for fewer frames, which looks like spin-waits.
+  - The reload's `open_key` burst was XInput's scan, which wine-pe 0028 already
+    removed. What the reload has left is the game's own waits, 13,000 selects
+    and 9,000 event operations in its busiest second.
+
 **Left for "fully playable":**
 
 1. **Fonts:** the owner's distribution review of the Tahoma fallback faces
@@ -565,13 +577,17 @@ global WoW64 state.
      gained little: a mean of 58.2 FPS against 56.5.
    - At "serious" (769 mW), the 720p play spent 20 s at 44–51 FPS with the P cores
      idle and the GPU at 9–11 ms, so the CPU work on the E cores was the limit.
+     The second 720p play did the same at 2199 and 1688 mW. Every game thread was
+     already at `USER_INTERACTIVE`, so QoS is not the cause. Not yet known: what
+     takes the P cores away in human play when no scripted run loses them, and
+     how much of the extra E-core work is spinning.
    - Less CPU per frame is what is left to gain. The remaining requests are
      `SetCursorPos` and its messages, 9 a frame, kept for Windows' semantics, and
      unattributed `create_event` and `close_handle`.
 4. **Hitches:** the reload after a death (0.2–0.6 s, the game's load at the
    thermal limit) and a pipeline's first Metal build (0.2–0.4 s, once per
-   install). Not yet known: which registry keys the reload opens, about 3000 in
-   one second, and the cause of the long session's 0.4–1 s hitches (18:22, 18:25,
+   install). The reload's 3000 `open_key` in one second were XInput's scan, gone
+   with wine-pe 0028. Not yet known: the cause of the long session's 0.4–1 s hitches (18:22, 18:25,
    19:04) and `p2m3-cold-boot`'s 596 ms one, whose logs were not matched this way.
 5. **Footprint growth** of about 4 MB a minute in a chamber: its cause is not
    known, and the limit was far away after 95 minutes. Not yet measured: whether it

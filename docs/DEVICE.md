@@ -243,7 +243,7 @@ comes out within a day of it. What a move from 1.6.0 to 1.9.0 costs was measured
   only a script written after it started. `tools/pad/` has Hollow Knight's
   `hk-new-game` (main menu to King's Pass), `hk-walk` and `hk-quit` (Quit
   Game from the main menu; its "Quit Game?" opens on No, so UP to Yes), Portal 2's
-  `p2-new-game`, `p2-cold-boot` (to a test chamber), `p2-walk`, `p2-save-load` (save, then load it from the main menu) and `p2-quit`, Witcher 3's
+  `p2-new-game`, `p2-cold-boot` (to a test chamber), `p2-walk`, `p2-save-load` (save, then load it from the main menu), `p2-load-last` (the pause menu's LOAD LAST SAVE, the load a death makes) and `p2-quit`, Witcher 3's
   opening, and `multiversus-training` (a minute of play; its comment has the
   steps into Training). Time pushes from the first frame (`first-frame+25`): the JIT and
   runtime start before it vary. Within a title, `pp pad wait-still --shot
