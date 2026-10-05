@@ -42,7 +42,10 @@ plan (stable `proton_11.0` / experimental / bleeding-edge).
 ## IPAs, in order
 
 Each IPA is a dev build of exactly its commit (a clean tree), kept in its
-`out/` directory for the plays and a bisection.
+`out/` directory for the plays and a bisection. Not moved yet (alignment plan
+rows 8–11): `gbe`, the build-time sources, `llvm-project`, `stikjit` and
+`madeira`. Still to run on each IPA, in order: the gate (both titles) and the
+two `pp perf` routes, the baseline first.
 
 | Step | Commit | IPA | SHA256 |
 |---|---|---|---|
@@ -53,6 +56,7 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
 | Mesa main | `6d09073` | `.work/out/20261005-144853-492712d6/Playport-26.5-492712d6.ipa` | `492712d6fa6d702c700b06054e5980f21b0aca7560550efb81d6112946e20157` |
 | DXVK master | `cf020cb` | `.work/out/20261005-145319-543f20f6/Playport-26.5-543f20f6.ipa` | `543f20f6d232997cc4a5e71728fc2ce0b6d343d521ffdb41e05eb8bc330ede29` |
 | vkd3d-proton master | `c6b8936` | `.work/out/20261005-145755-c85a8ec2/Playport-26.5-c85a8ec2.ipa` | `c85a8ec2f299c73ff5bee1e5ebe6d16096a07bd323af58eb11e383c4f30fdd08` |
+| wine-valve bleeding-edge | `b011dbf` | `.work/out/20261005-150922-eb5ae2ad/Playport-26.5-eb5ae2ad.ipa` | `eb5ae2adcbef49fa1f4d1cd163a44903d821f55697cd657b2a635c787e5f421e` |
 
 ## wine → wine-11.19
 
