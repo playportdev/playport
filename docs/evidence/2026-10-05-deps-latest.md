@@ -33,6 +33,7 @@ plan (stable `proton_11.0` / experimental / bleeding-edge).
 |---|---|---|---|---|---|---|---|
 | `wine` | wine-11.18 `7b3fff7` | wine-11.19 `455e350` | wine-11.19 (2026-10-02; no later tag) | Valve Wine `dc26e61` / `6d211aa` / `750fd01` | passed | pending: phone away | pending: phone away |
 | `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00`; rpmalloc `09142d7` | `main` `3648ee9`; rpmalloc `09142d7` (unchanged: main's `External/rpmalloc`) | `main` `3648ee9` (2026-10-02, the head on 2026-10-05 14:34) | FEX-2607 `1cc4b93` / main `0df84d3` / main `3648ee9` | passed | pending: phone away | pending: phone away |
+| `dxmt` | `7c8dee1` | `main` `68af85e` | `main` `68af85e` (16 commits ahead) | not used by Valve | passed; `pp slots` clean | pending: phone away | pending: phone away |
 
 ## IPAs, in order
 
@@ -43,6 +44,7 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
 |---|---|---|---|
 | baseline | `e71e8a7` | `.work/out/20261005-140757-b1c15122/Playport-26.5-b1c15122.ipa` | `b1c1512228c25d16a0e08860ad878bde053f04378630d35d6359ec54958803f3` |
 | wine-11.19 | `7d0f5b3` | `.work/out/20261005-143326-b047db1e/Playport-26.5-b047db1e.ipa` | `b047db1e9d16d1405732f6230513f20c47832d7da7a29825e0725ef80a6c89da` |
+| FEX main | `22ac169` | `.work/out/20261005-143851-8f671fd2/Playport-26.5-8f671fd2.ipa` | `8f671fd208fb0521204df33f2ba5aa0aa5b63dbd1209e0fa7051091adea2e872` |
 
 ## wine → wine-11.19
 
@@ -138,3 +140,24 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
   `4956ac2` and `b1e54d8`, and the disk-cache cap and pruning (B1, which stays
   off). Whether `fex/0016` and `0018`'s WoW64 resolutions hold on Portal 2
   (i386) is the Portal 2 play of this IPA: pending, phone away.
+
+## dxmt → main
+
+- **Distance:** 16 commits, `7c8dee1..68af85e` (fixes in d3d10/d3d11/d3d12,
+  airconv, nvapi, nvngx, two CI changes). Madeira's `dxmt-port` row did not
+  move (Madeira is not moved in this step).
+- **Trial** (`pp rebase dxmt 68af85e --trial`): 54 patches, 53 clean,
+  1 conflict.
+- **Resolution (one):** `dxmt/0006` (Playport's: initialise the encoding
+  context's `device_` and `queue_` before its command contexts). Upstream
+  `fb45156` now declares and initialises `device_` first, the same fix for the
+  same crash. Kept upstream's `device_` and the patch's `queue_` beside it, so
+  the initialisation order stays the one Playport has run; the patch is now
+  that one move, and its message says so. Its trailers are unchanged.
+- **Range-diff flags:** none other than 0006 (shown as replaced). No clean
+  patch changed.
+- **Generated sources and slots:** `gen_remote_guard.py` and
+  `gen_api_names.py` run in the patched tree changed nothing; `pp slots`:
+  150 slots, 149 calls, every call matches its slot.
+- **Build:** the `dxmt` stage; `app/artifacts.tsv` changed. `pp test`: all
+  passed.

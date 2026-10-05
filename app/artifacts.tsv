@@ -52,7 +52,7 @@ resource	Runtime/arm64ec-windows/cryptbase.dll	655360	84c0a090c7a9a0f4a1f9dd7812
 resource	Runtime/arm64ec-windows/cryptnet.dll	655360	00a85b679af54fcc26328004c18cc9836c569be7daa7c6d6a58f678431c493ee	wine-build	build-arm64ec/dlls/cryptnet/arm64ec-windows/cryptnet.dll	P2
 resource	Runtime/arm64ec-windows/cryptui.dll	1835008	20496db99351635079e8742141675f5504a4b312bd1c8daf5349c2ebb7c50748	wine-build	build-arm64ec/dlls/cryptui/arm64ec-windows/cryptui.dll	P2
 resource	Runtime/arm64ec-windows/d3d10core.dll	1253376	1087b584a71ec2bc3ba403ef3717fe2c5ac2a2b525391b41a7e13e041c9689d8	dxmt-pe	arm64ec-windows/d3d10core.dll	P5-dxmt-pe
-resource	Runtime/arm64ec-windows/d3d11.dll	5242880	14f2b1f6d1f2df7cb1f7ade05d3586dec5a44f7a2404f4e761062458879e6e35	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/d3d11.dll	5242880	3d4ebfe0d56eda18f00c2b2266d68b7a2d510e7d3f1d065cfce4f9ea20cb2851	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/d3d12.dll	851968	31f741b913a2e11d67bef3023cb21c5b540222724074bc56a36efd4abf4b68a7	wine-build	build-arm64ec/dlls/d3d12/arm64ec-windows/d3d12.dll	P2
 resource	Runtime/arm64ec-windows/d3d9.dll	983040	d27782db97637c468ed38d80c3377caede94d252368df4f660fb9e9759fb068d	wine-build	build-arm64ec/dlls/d3d9/arm64ec-windows/d3d9.dll	P2
 resource	Runtime/arm64ec-windows/d3dcompiler_43.dll	851968	af8f8eb04801eb0e8bc4123368d100b77dcef53724bd855266288cc3fb376e15	wine-build	build-arm64ec/dlls/d3dcompiler_43/arm64ec-windows/d3dcompiler_43.dll	P2
@@ -66,7 +66,7 @@ resource	Runtime/arm64ec-windows/dnsapi.dll	720896	3bf38fc7e62142d80f0d16396ec5b
 resource	Runtime/arm64ec-windows/dsound.dll	1048576	b306ef7c72ecc12c521d871c00a4ffadc3d84800158b36a1fc83fb3ef8b648d2	wine-build	build-arm64ec/dlls/dsound/arm64ec-windows/dsound.dll	P2
 resource	Runtime/arm64ec-windows/dwmapi.dll	720896	ba928f5f551c15bb45c3d800287d688dea1a506228c487367f76e64464ae6787	wine-build	build-arm64ec/dlls/dwmapi/arm64ec-windows/dwmapi.dll	P2
 resource	Runtime/arm64ec-windows/dwrite.dll	1114112	6fc7ee2722366d925e6829e4f2a3d333e514e15abd5a82b4f58607f340ae2872	wine-build	build-arm64ec/dlls/dwrite/arm64ec-windows/dwrite.dll	P2
-resource	Runtime/arm64ec-windows/dxgi.dll	1581056	16123d69a9fe159efba7ee7a542719ab3feaa223624bb10be8c6e9d74b3db331	dxmt-pe	arm64ec-windows/dxgi.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/dxgi.dll	1581056	454a06b7398211dc0c2fc8e044648d08c545bcb6dae48fa2682548c9210a06c8	dxmt-pe	arm64ec-windows/dxgi.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/dxva2.dll	851968	1b33e16f9c45658a270e227e181b6e23df6cf8f9c825af5d157eb72125b34251	wine-build	build-arm64ec/dlls/dxva2/arm64ec-windows/dxva2.dll	P2
 resource	Runtime/arm64ec-windows/esent.dll	655360	2b832904a8f8ff81d6cc2ec6424a592cc5a269cda5672f541112d0a78874e77e	wine-build	build-arm64ec/dlls/esent/arm64ec-windows/esent.dll	P2
 resource	Runtime/arm64ec-windows/fontsub.dll	655360	eb613b9ecdcc9a8721a0534993c3583e42275accb6eef9c9ce93666d33d12c87	wine-build	build-arm64ec/dlls/fontsub/arm64ec-windows/fontsub.dll	P2
@@ -191,7 +191,7 @@ resource	Runtime/aarch64-windows/cryptbase.dll	458752	f2a27d085470d4200080fabb97
 resource	Runtime/aarch64-windows/cryptnet.dll	458752	8ab435c657392236122ea3cdd560cb6e17728c6ce1ca91dadac5ea74907f2aaf	wine-build	build-macos/dlls/cryptnet/aarch64-windows/cryptnet.dll	P2
 resource	Runtime/aarch64-windows/cryptui.dll	1638400	ade853ea5c2d067852f13890cebe54b95bcbbb881c8820b8a71f8bbbeb468075	wine-build	build-macos/dlls/cryptui/aarch64-windows/cryptui.dll	P2
 resource	Runtime/aarch64-windows/d3d10core.dll	524288	cd7283d7945909a18d4ca7a7617f1e8617cc5fadf69b93dd97497f5012eeeb56	wine-build	build-macos/dlls/d3d10core/aarch64-windows/d3d10core.dll	P2
-resource	Runtime/aarch64-windows/d3d11.dll	4612096	7ab44676e04f0950ae2cb535d0ed07879c2443ebef5b7bf9584f8bf527ba3ca3	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/aarch64-windows/d3d11.dll	4612096	8d634afc3d052d9f3324879de13ab0b6caf076e46e7d1341d7634b5afa996aa8	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/d3d12.dll	589824	7ad80fead64265865868f371e2151a2fb77b43f3d19c571d952f4aa5291ebcc9	wine-build	build-macos/dlls/d3d12/aarch64-windows/d3d12.dll	P2
 resource	Runtime/aarch64-windows/d3d9.dll	655360	7993cbc19fe9d8acf8372750797ca96285f445e9db252ae58452ed34b916fdb7	wine-build	build-macos/dlls/d3d9/aarch64-windows/d3d9.dll	P2
 resource	Runtime/aarch64-windows/dbghelp.dll	1048576	8dc45df7167a2ce36e38923ea7e6c553421327f2ff8192ad6fd5d1b830227f03	wine-build	build-macos/dlls/dbghelp/aarch64-windows/dbghelp.dll	P2
@@ -202,7 +202,7 @@ resource	Runtime/aarch64-windows/dsound.dll	917504	f354caa400198d259c5379c05f5d3
 resource	Runtime/aarch64-windows/dssenh.dll	589824	c852b81e2c7c7b33d09115396894890b771e7e90a174cebd34d38f2adc87898d	wine-build	build-macos/dlls/dssenh/aarch64-windows/dssenh.dll	P2
 resource	Runtime/aarch64-windows/dwmapi.dll	524288	6d18bc1843683fbe4f2e2cafc715abdf80e50c4d45e4f0f4cc255c9df625ee9d	wine-build	build-macos/dlls/dwmapi/aarch64-windows/dwmapi.dll	P2
 resource	Runtime/aarch64-windows/dwrite.dll	917504	262d03102e9ab961b0b7cdee10aab08403bfdf6079d6999d55cd7a1c86c0f728	wine-build	build-macos/dlls/dwrite/aarch64-windows/dwrite.dll	P2
-resource	Runtime/aarch64-windows/dxgi.dll	1372160	958c324fa5486bc79b0c3f598e8e2c92ccb4de1d0468314023a3651ed989562c	dxmt-pe	aarch64-windows/dxgi.dll	P5-dxmt-pe
+resource	Runtime/aarch64-windows/dxgi.dll	1372160	fda47f9e9cb048dbdf9425bb5259ffd5a4a87f84fa77ff05174e90c2b42e0c5f	dxmt-pe	aarch64-windows/dxgi.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/esent.dll	458752	cdc8c17ab8954f81deb0f8ddf2d07bc3f23b7dfa855ae88f2900cb20c6ce0e9d	wine-build	build-macos/dlls/esent/aarch64-windows/esent.dll	P2
 resource	Runtime/aarch64-windows/explorer.exe	589824	5bc24d6f380c045642aaeb9cdab6a8b1748cbefc7b2eaf8c437e2606f289c68b	wine-build	build-macos/programs/explorer/aarch64-windows/explorer.exe	P2
 resource	Runtime/aarch64-windows/fontsub.dll	458752	87b0656bb2ce47a9f9a2bc7162d5201673319d96698ce4d427a6787484e6ebef	wine-build	build-macos/dlls/fontsub/aarch64-windows/fontsub.dll	P2
@@ -954,7 +954,7 @@ link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34
 link	lib/libhogweed.a	1105792	247e869163901151301d2ff3c930a68c3742fbbb263a33b8bc10a98dfbd65b9f	unix	mythic/toolchains/gnutls-ios/lib/libhogweed.a	P4-crypto
 link	lib/libnettle.a	1705864	ff2ecf070899ab728cf21dc13bb9463fdf5a79775a34c5f87e7d861fed2d9543	unix	mythic/toolchains/gnutls-ios/lib/libnettle.a	P4-crypto
 link	lib/libgmp.a	876096	d33a5b441d28a2e7a9847ada52032dba69d30063aa4e66a3d83e14bbb2ffd08b	unix	mythic/toolchains/gnutls-ios/lib/libgmp.a	P4-crypto
-link	lib/libdxmt_combined.a	115503432	4ab91049a3a93f03129cd200828397fbd0cb81e4135463e0c9daa101104baadb	dxmt	libdxmt_combined.a	P5-dxmt
+link	lib/libdxmt_combined.a	115503632	d76e00299a039754443dc42eb017a7151c3bddc1f0a21118071d685129aa9240	dxmt	libdxmt_combined.a	P5-dxmt
 link	lib/libwinegstreamer_unix.a	47458384	01ac411c12fb9c3cb02e7d605cf8a720fe24f31347973fd4b7f54f770479954a	unix	gstreamer/libwinegstreamer_unix.a	P6-gst
 link	lib/libidevice_ffi.a	6698688	104c3bbc9e9fe2f674d2d34cd81fe1d6ddaee0c43c2b503d2872fe648ff6ba0a	idevice	libidevice_ffi.a	P10-idevice
 source	WinIOS/Winios.m	66281	e8b35307a8e34928582f46d13eed31eff10850c4205f89e6fed443dfdbfcf6a2	unix	mythic/app/Madeira/Winios/Winios.m	P5-winios
