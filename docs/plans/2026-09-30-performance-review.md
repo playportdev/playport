@@ -341,6 +341,10 @@ logs a line.
 - **`X87ReducedPrecision=1`.** Global in Proton and in a Winlator-based launcher's default
   preset. It matters little for x64 titles; try it per title where x87 code
   shows up.
+  **Done (2026-10-05, decision 0048, [Portal 2 CPU](../evidence/2026-10-05-portal2-cpu-spin.md)):**
+  global now. Portal 2's main thread fell from 23.9 to 14.8 M instructions a
+  frame and the CPU's power from 562 to 343 mW. Spin-waits were not the cost:
+  PAUSE as ISB changed nothing in Portal 2 or Hollow Knight and was dropped.
 - **CPU topology override.** Valve's `edd5fa7c08e` and `a75c78b4079` were
   left out because they touch replaced files. Proton uses it on aarch64, and
   on this phone games see six identical cores [hyp: fewer visible cores

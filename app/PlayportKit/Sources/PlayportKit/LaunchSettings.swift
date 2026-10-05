@@ -2,7 +2,7 @@
 // The player's launch settings (Settings tab and a game's page): the guest's
 // screen, a frame rate limit, the graphics backend and, for one game, extra
 // command-line arguments, which steam_api it loads, FEX's x86 memory
-// ordering over the game's profile and FEX's block size (FEXProfile).
+// ordering over the game's profile, FEX's block size and x87 precision (FEXProfile).
 // A game's own value wins over the global one, which wins over the defaults:
 // 720 rows at 60 FPS on DXMT (Vulkan for i386 and detected DX12 games; `defaultScreen`, `defaultFrameLimit`,
 // GraphicsBackend.default). A cohort title's screen (LaunchPlan.screen) no
@@ -36,6 +36,9 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// per game only); nil takes the game's profile, else FEX's own 5000.
     /// FEXProfile.blockSizes are the ones offered.
     public var maxInst: Int?
+    /// x87 at 64-bit rather than 80-bit precision (FEX `X87ReducedPrecision`, per
+    /// game only); nil takes the game's profile (FEXProfile.defaultX87Reduced).
+    public var x87Reduced: Bool?
     /// madeira.cfg keys over the game's own (per game only; a dev build's), as typed:
     /// `key=value` items split at spaces (`vram-mb=1024 totalphys=6144 inproc-sync=1`).
     /// LaunchSettings.runtimeKeys parses them; TitleConfig writes them after the title's.
@@ -44,7 +47,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     public init(screen: String? = nil, frameLimit: Int? = nil, graphics: GraphicsBackend? = nil,
                 arguments: String = "", steamAPI: SteamAPISwap.Mode? = nil,
                 cloudSync: Bool? = nil, ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
-                runtime: String = "") {
+                x87Reduced: Bool? = nil, runtime: String = "") {
         self.screen = screen
         self.frameLimit = frameLimit
         self.graphics = graphics
@@ -53,6 +56,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         self.cloudSync = cloudSync
         self.ordering = ordering
         self.maxInst = maxInst
+        self.x87Reduced = x87Reduced
         self.runtime = runtime
     }
 
@@ -68,13 +72,14 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         cloudSync = try c.decodeIfPresent(Bool.self, forKey: .cloudSync)
         ordering = try c.decodeIfPresent(MemoryOrdering.self, forKey: .ordering) ?? MemoryOrdering()
         maxInst = try c.decodeIfPresent(Int.self, forKey: .maxInst)
+        x87Reduced = try c.decodeIfPresent(Bool.self, forKey: .x87Reduced)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime) ?? ""
     }
 
     public var isEmpty: Bool {
         screen == nil && frameLimit == nil && graphics == nil
             && arguments.trimmingCharacters(in: .whitespaces).isEmpty && steamAPI == nil && cloudSync == nil
-            && ordering.isEmpty && maxInst == nil
+            && ordering.isEmpty && maxInst == nil && x87Reduced == nil
             && runtime.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
@@ -115,13 +120,15 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         public var ordering: MemoryOrdering
         /// The game's own block size, nil for its profile's (FEXProfile.launch).
         public var maxInst: Int?
+        /// The game's own x87 precision, nil for its profile's (FEXProfile.launch).
+        public var x87Reduced: Bool?
         /// madeira.cfg keys over the title's own (config(over:)); empty for none.
         public var runtime: [String: String]
 
         public init(screen: String?, frameLimit: Int, graphics: GraphicsBackend = .default,
                     arguments: [String] = [], steamAPI: SteamAPISwap.Mode = .emulated,
                     ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
-                    runtime: [String: String] = [:]) {
+                    x87Reduced: Bool? = nil, runtime: [String: String] = [:]) {
             self.screen = screen
             self.frameLimit = frameLimit
             self.graphics = graphics
@@ -129,6 +136,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             self.steamAPI = steamAPI
             self.ordering = ordering
             self.maxInst = maxInst
+            self.x87Reduced = x87Reduced
             self.runtime = runtime
         }
 
@@ -163,6 +171,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                          arguments: splitArguments(game?.arguments ?? ""), steamAPI: game?.steamAPI ?? .emulated,
                          ordering: game?.ordering ?? MemoryOrdering(),
                          maxInst: game?.maxInst.flatMap { FEXProfile.validBlockSize($0) ? $0 : nil },
+                         x87Reduced: game?.x87Reduced,
                          runtime: runtimeKeys(game?.runtime ?? "") ?? [:])
     }
 

@@ -131,6 +131,11 @@ enum LaunchSettingsText {
         + "blocks compile in shorter bursts, larger ones run with fewer jumps between blocks. Changes apply from "
         + "the game's next launch."
 
+    static let x87Footer = "The precision at which the x86 emulator runs a game's x87 floating point. 80-bit is "
+        + "exact but done in software, many instructions for each one; 64-bit uses the CPU's own and is far cheaper, "
+        + "and can differ from Windows where a game relies on the extra digits. Default is the game's profile. "
+        + "Changes apply from the game's next launch."
+
     private static func size(_ spec: String) -> (Int, Int)? {
         let px = UIScreen.main.nativeBounds.size
         return Display.guestSize(panelLong: Int(px.width), panelShort: Int(px.height), spec: spec)

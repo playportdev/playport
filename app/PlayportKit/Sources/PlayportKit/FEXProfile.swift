@@ -14,13 +14,14 @@
 //              HalfBarrierTSOEnabled: a game's profile gives the defaults and
 //              its page (LaunchSettings.ordering) overrides each one. Proton's
 //              global values are the build's own FEX defaults.
-//   honoured   X87ReducedPrecision, Multiblock and MaxInst in a game's profile,
-//              passed on as they are; the game's page (LaunchSettings.maxInst)
-//              overrides MaxInst.
-//   not taken  Proton's other global values: X87ReducedPrecision=1 and
-//              MaxInst=500 would change every game's code generation, which
-//              nothing here has measured, and ProfileStats needs the Linux
-//              stats shared memory.
+//   x87        X87ReducedPrecision: Proton's global value (1, x87 at 64-bit
+//              precision; decision 0048) under a game's profile entry; the
+//              game's page (LaunchSettings.x87Reduced) overrides it.
+//   honoured   Multiblock and MaxInst in a game's profile, passed on as they
+//              are; the game's page (LaunchSettings.maxInst) overrides MaxInst.
+//   not taken  Proton's other global values: MaxInst=500 would change every
+//              game's code generation, which nothing here has measured, and
+//              ProfileStats needs the Linux stats shared memory.
 //
 // FEX reads each as FEX_<NAME> from the environment, the highest of its
 // configuration layers (FEX::Config::LoadConfig), so a launch sets them all
@@ -154,6 +155,13 @@ public enum FEXProfile {
         return appID.flatMap { protonApps[$0] }?.first { matches($0.pattern, name) }
     }
 
+    /// Whether the game's profile runs x87 at 64-bit precision (FEX `X87ReducedPrecision`):
+    /// Proton's global value under the matched entry's (decision 0048).
+    public static func defaultX87Reduced(appID: UInt32?, exe: String) -> Bool {
+        let config = proton.merging(override(appID: appID, exe: exe)?.config ?? [:]) { _, app in app }
+        return config["X87ReducedPrecision"].flatMap(Int.init).map { $0 != 0 } ?? false
+    }
+
     /// The ordering a game's profile gives: Proton's global values under the matched entry's.
     public static func defaults(appID: UInt32?, exe: String) -> [MemoryOrdering.Setting: Bool] {
         let config = proton.merging(override(appID: appID, exe: exe)?.config ?? [:]) { _, app in app }
@@ -177,6 +185,9 @@ public enum FEXProfile {
         /// The block size this launch asks FEX for, and whether the game's page chose it.
         public var maxInst: Int
         public var maxInstChosen: Bool
+        /// Whether x87 runs at 64-bit precision, and whether the game's page chose it.
+        public var x87Reduced: Bool
+        public var x87Chosen: Bool
 
         /// `tso=1 vector=0 memcpyset=0 halfbar=1`, as FEX's own `TSO config` line orders them,
         /// a `*` after each value the game's page chose.
@@ -196,7 +207,8 @@ public enum FEXProfile {
     }
 
     /// The game's page over its profile, for a launch of `exe`.
-    public static func launch(appID: UInt32?, exe: String, ordering: MemoryOrdering, maxInst: Int? = nil) -> Launch {
+    public static func launch(appID: UInt32?, exe: String, ordering: MemoryOrdering, maxInst: Int? = nil,
+                              x87Reduced: Bool? = nil) -> Launch {
         let entry = override(appID: appID, exe: exe)
         var values = defaults(appID: appID, exe: exe)
         var chosen: Set<MemoryOrdering.Setting> = []
@@ -213,8 +225,11 @@ public enum FEXProfile {
         }
         let chosenMax = maxInst.flatMap { validBlockSize($0) ? $0 : nil }
         if let chosenMax { env[environmentName("MaxInst")] = String(chosenMax) }
+        let x87 = x87Reduced ?? defaultX87Reduced(appID: appID, exe: exe)
+        env[environmentName("X87ReducedPrecision")] = x87 ? "1" : "0"
         return Launch(ordering: values, chosen: chosen, override: entry, environment: env,
-                      maxInst: chosenMax ?? defaultBlockSize(appID: appID, exe: exe), maxInstChosen: chosenMax != nil)
+                      maxInst: chosenMax ?? defaultBlockSize(appID: appID, exe: exe), maxInstChosen: chosenMax != nil,
+                      x87Reduced: x87, x87Chosen: x87Reduced != nil)
     }
 
     /// FEX_HOSTFEATURES for a launch. On iOS FEX cannot read the CPU's ID

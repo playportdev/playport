@@ -616,7 +616,8 @@ final class FEXProfileTests: XCTestCase {
         let l = FEXProfile.launch(appID: 367520, exe: #"C:\Games\Hollow Knight\hollow_knight.exe"#, ordering: MemoryOrdering())
         XCTAssertEqual(l.ordering, [.tso: true, .halfBarrier: true, .vector: false, .memcpySet: false])
         XCTAssertEqual(l.environment, ["FEX_TSOENABLED": "1", "FEX_HALFBARRIERTSOENABLED": "1",
-                                       "FEX_VECTORTSOENABLED": "0", "FEX_MEMCPYSETTSOENABLED": "0"])
+                                       "FEX_VECTORTSOENABLED": "0", "FEX_MEMCPYSETTSOENABLED": "0",
+                                       "FEX_X87REDUCEDPRECISION": "1"])
         XCTAssertNil(l.override)
         XCTAssertEqual(l.summary, "tso=1 halfbar=1 vector=0 memcpyset=0")
         // A title with no Steam app ID gets the same.
@@ -636,7 +637,7 @@ final class FEXProfileTests: XCTestCase {
         // Proton's Witcher 3 entry is for its setup programs, not the game.
         let game = FEXProfile.launch(appID: 292030, exe: #"C:\Games\The Witcher 3\bin\x64\witcher3.exe"#, ordering: MemoryOrdering())
         XCTAssertNil(game.override)
-        XCTAssertNil(game.environment["FEX_X87REDUCEDPRECISION"])
+        XCTAssertEqual(game.environment["FEX_X87REDUCEDPRECISION"], "1")   // Proton's global value
         let setup = FEXProfile.launch(appID: 292030, exe: #"C:\Games\The Witcher 3\setup.exe"#, ordering: MemoryOrdering())
         XCTAssertEqual(setup.override?.pattern, "setup*")
         XCTAssertEqual(setup.environment["FEX_X87REDUCEDPRECISION"], "0")
@@ -645,6 +646,34 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertNil(game.environment["FEX_PROFILESTATS"])
         XCTAssertNil(game.environment["FEX_MAXINST"])
         XCTAssertTrue(FEXProfile.honoured.isSuperset(of: FEXProfile.protonApps.values.flatMap { $0.flatMap(\.config.keys) }))
+    }
+
+    func testX87RunsAt64BitsAsProtonsGlobalValue() {
+        // Proton's global X87ReducedPrecision=1 (decision 0048), for every game and a title without an app ID.
+        let exe = #"C:\Games\Portal 2\portal2.exe"#
+        let p2 = FEXProfile.launch(appID: 620, exe: exe, ordering: MemoryOrdering())
+        XCTAssertEqual(p2.environment["FEX_X87REDUCEDPRECISION"], "1")
+        XCTAssertTrue(p2.x87Reduced)
+        XCTAssertFalse(p2.x87Chosen)
+        XCTAssertEqual(FEXProfile.launch(appID: 367520, exe: "hollow_knight.exe", ordering: MemoryOrdering())
+                       .environment["FEX_X87REDUCEDPRECISION"], "1")
+        XCTAssertTrue(FEXProfile.defaultX87Reduced(appID: nil, exe: "game.exe"))
+        // A profile entry goes over it: Proton's Witcher 3 setup programs keep 80 bits.
+        XCTAssertFalse(FEXProfile.defaultX87Reduced(appID: 292030, exe: "setup.exe"))
+        // The game's page overrides either way.
+        let full = FEXProfile.launch(appID: 620, exe: exe, ordering: MemoryOrdering(), x87Reduced: false)
+        XCTAssertEqual(full.environment["FEX_X87REDUCEDPRECISION"], "0")
+        XCTAssertFalse(full.x87Reduced)
+        XCTAssertTrue(full.x87Chosen)
+        XCTAssertEqual(FEXProfile.launch(appID: 292030, exe: "setup.exe", ordering: MemoryOrdering(),
+                                         x87Reduced: true).environment["FEX_X87REDUCEDPRECISION"], "1")
+        // Per game only, saved and resolved like the block size.
+        let s = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"x87Reduced":false}"#.utf8))
+        XCTAssertEqual(s.x87Reduced, false)
+        XCTAssertFalse(s.isEmpty)
+        XCTAssertEqual(LaunchSettings.resolve(game: s, global: LaunchSettings()).x87Reduced, false)
+        XCTAssertNil(LaunchSettings.resolve(game: nil, global: s).x87Reduced)
+        XCTAssertNil(try! JSONDecoder().decode(LaunchSettings.self, from: Data("{}".utf8)).x87Reduced)
     }
 
     func testTheGamesPageSetsTheBlockSize() {
