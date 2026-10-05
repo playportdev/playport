@@ -379,6 +379,7 @@ these were built).
 |---|---|---|---|---|---|
 | `freetype` | `VER-2-13-3` | `VER-2-14-3` (`0a0221a`) | `VER-2-14-3` | passed | pending: phone held |
 | `rust` | 1.98.1 | 1.99.0 (`b940084`, dist 2026-10-01) | 1.99.0 (stable) | passed | pending: phone held |
+| `stikjit` | 1.6.0 | 1.9.0 (`3228726`) | 1.9.0 (2026-09-27) | passed | pending: phone held |
 
 ### freetype → VER-2-14-3
 
@@ -409,4 +410,27 @@ these were built).
   commit. The standard-library notices passed with the selection unchanged;
   like 1.98.1, the 1.99.0 `rustc` archive has no separate BSD-3-Clause text.
   `docs/NOTICES.md` and `docs/LICENSING.md` name 1.99.0.
+
+### stikjit → 1.9.0
+
+- **Not the expected hold.** The plan expected a hold because "a StikJIT 3.x
+  move changes the JIT script protocol". 3.x is the StikDebug app (AGPL-3.0,
+  never a pin candidate); the framework the pin names is at 1.9.0, and
+  [stikjit-pin-cost](2026-09-28-stikjit-pin-cost.md) measured 1.6.0 → 1.9.0:
+  the script protocol (`ScriptRunner.swift`, `JITSession.swift`), the
+  embedded idevice library (the `idevice/` tree is `9ed4324` in both tags,
+  checked again) and `prepare_memory_region` are unchanged, and a trial IPA
+  enabled JIT for Hollow Knight on this phone. So the move is cheap and made.
+- **Changes:** the pin, the release zip's sha256 and the tag's commit in
+  `build/stages/stikjit.sh`, and that stage's check after the swiftinterface
+  rewrite, which now skips names after a Swift 6.4 module selector (`::`), as
+  the cost record found; the tag and commit in `build/source-bundle.json`,
+  `build/app-notices.json`, `docs/LICENSING.md` and `docs/NOTICES.md`; the
+  known-good table in `docs/DEVICE.md`. No build record changed (the
+  framework is not in `app/artifacts.tsv`). The StikJIT audit in
+  `docs/release-audits/stikjit-rust.md` is of 1.6.0; its idevice findings hold
+  for 1.9.0, whose `idevice/` tree is the same.
+- **What 1.9.0 adds:** `Script.customBase64` (unused: the helper passes
+  `.custom(URL)`), and the personalized DDI again below iOS 26.4. From iOS
+  26.4, as on this phone (iOS 27.0), both versions mount the cryptex DDI.
 
