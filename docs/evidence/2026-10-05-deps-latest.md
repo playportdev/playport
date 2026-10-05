@@ -373,13 +373,32 @@ the build-time sources, `llvm-project`, `stikjit`) are in
 Latest upstream read on 2026-10-05 at about 20:00. One commit per move, each
 built (`pp build --keep-outputs 20`) and tested (`pp test`: all passed). The
 phone gates are **pending: phone held** (another job had the phone while
-these were built).
+these were built). Every row is now moved or held with its reason; `madeira`
+(row 11) moves later, after the Madeira reconciliation.
+
+| Move | Commit | IPA (`.work/out/…`) | SHA256 | Gate |
+|---|---|---|---|---|
+| freetype VER-2-14-3 | `1669ff0` | `20261005-200932-60b066f7/Playport-26.5-60b066f7.ipa` | `60b066f744c480b13ad4e21e76df77b64d337acdeb95b576bec8fb616b997289` | pending: phone held |
+| rust 1.99.0 | `a4c78a8` | `20261005-202628-8a2f0518/Playport-26.5-8a2f0518.ipa` | `8a2f0518e357c88b36b28daba014858d12fcb02cff2a90e420078a36859f6977` | pending: phone held |
+| stikjit 1.9.0 (the final IPA of rows 8–10) | `7bdc25c` | `20261005-203120-bbefed05/Playport-26.5-bbefed05.ipa` | `bbefed057a7f86e02bff9c1867ed330aefe4e6198100d0e76080e78c0c5e895d` | pending: phone held |
+
+Each IPA was built from the tree its commit records (the rust IPA from the
+commit before an amend that added only its records and docs). All three
+change runtime code (FreeType in `libwin32u_unix.a`, Rust in
+`libidevice_ffi.a`, the JIT helper's framework), so each needs its own gate,
+both titles, before these rows count as gated.
 
 | Row | Old pin | New pin, or held | Latest upstream | Build, `pp test` | Gate |
 |---|---|---|---|---|---|
 | `freetype` | `VER-2-13-3` | `VER-2-14-3` (`0a0221a`) | `VER-2-14-3` | passed | pending: phone held |
 | `rust` | 1.98.1 | 1.99.0 (`b940084`, dist 2026-10-01) | 1.99.0 (stable) | passed | pending: phone held |
 | `stikjit` | 1.6.0 | 1.9.0 (`3228726`) | 1.9.0 (2026-09-27) | passed | pending: phone held |
+| `gbe` | release-2026_09_27 `7103add` | held: no newer release | release-2026_09_27 (the `dev` head is the tag) | not needed | not needed |
+| `abseil-cpp` | 20250512.1 | held: follows gbe's protobuf | 20260817.0 | not needed | not needed |
+| `xtool` | 1.20.1 | held: needs a new machine-wide Darwin SDK | 1.21.0 | 1.21.0 built; the app stage refused the SDK | not needed |
+| `gstreamer` | 1.28.7 | held: newest stable; a move needs a new licensing audit | 1.28.7 stable; 1.29.2 development | not needed | not needed |
+| `idevice` | `d32c818` | held: already the head | `master` `d32c818` = v0.1.68 | not needed | not needed |
+| `llvm-project` | llvmorg-15.0.7 | held: DXMT's airconv targets LLVM 15 | 15.0.7 is the last 15.x | not needed | not needed |
 
 ### freetype → VER-2-14-3
 
@@ -433,4 +452,37 @@ these were built).
 - **What 1.9.0 adds:** `Script.customBase64` (unused: the helper passes
   `.custom(URL)`), and the personalized DDI again below iOS 26.4. From iOS
   26.4, as on this phone (iOS 27.0), both versions mount the cryptex DDI.
+
+### The holds
+
+- **gbe:** `release-2026_09_27` is gbe_fork's newest release, and its `dev`
+  branch head is the same commit (`7103add`). Nothing to move.
+- **abseil-cpp:** the pin is the Abseil release gbe's protobuf names
+  (`set(abseil-cpp-version "20250512.1")` in protobuf's
+  `cmake/dependencies.cmake`, from gbe's `third-party/deps/common`). Abseil has
+  newer releases (20260817.0), but it moves only when gbe's protobuf does.
+- **xtool:** 1.21.0 (`d76498a`) builds with the increased-memory-limit diff
+  unchanged (it applies cleanly; upstream still lacks the entitlement), but
+  its SDK builder's epoch went from 2 to 3, and the app stage then stops:
+  "Darwin SDK is out of date, and was installed in 'slim' mode … install a
+  new SDK with `xtool sdk install`". The Darwin SDK is installed once for
+  the machine (AGENTS.md, Disk) and every checkout's xtool uses it, so the
+  move needs a new SDK install from Xcode for the whole workstation and moves
+  every checkout together. Held; the move is that SDK install plus the pin,
+  the diff's name and a rebuild of the xtool when its version differs from
+  the pin (the pipeline rebuilds it only when the binary is missing). The
+  workstation's xtool was rebuilt at 1.20.1 after the trial.
+- **gstreamer:** 1.28.7 is GStreamer's newest stable release. 1.29.2 is a
+  development snapshot (odd minor) with an iOS xcframework. The app links the
+  release statically, and its notices come from a reviewed lock of Cerbero's
+  1.28.7 recipes and the 17 source archives the registered plugins reach
+  (`build/gstreamer-notices.sources.json`, `docs/release-audits/gstreamer.md`,
+  release-reviewed under decision 0039). A move, to 1.29.x or a later 1.28,
+  needs that audit redone; not a pin edit. Held.
+- **idevice:** the pin `d32c818` is `master`'s head and v0.1.68. Nothing to
+  move.
+- **llvm-project:** 15.0.7 is the last LLVM 15 release. DXMT `main` (the
+  pin `68af85e`) builds airconv against `llvmorg-15.0.7` (its CI's
+  `LLVM_VERSION` and `docs/DEVELOPMENT.md`), and the AIR it emits is what
+  Metal reads; a later LLVM is a DXMT port, not a pin move. Held.
 
