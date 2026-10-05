@@ -231,33 +231,43 @@ struct JitSetupSheet: View {
     @ObservedObject private var pairing = OnDevicePairing.shared
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Set up game debugging").font(.title2.bold())
-                if setup.phase == .pairing {
-                    if pairing.code != nil {
-                        PairingCodeView(window: pairing.codeWindow)
-                            .aspectRatio(720.0 / 270.0, contentMode: .fit)
-                        Button("Open Settings") { pairing.openSettings() }
-                            .buttonStyle(.borderedProminent).controlSize(.large)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Set up game debugging").font(.title2.bold())
+                    if setup.phase == .pairing {
+                        if let code = pairing.code {
+                            // Plain text first: the picture-in-picture layer below shows
+                            // nothing for someone who has picture in picture turned off.
+                            Text("Pairing code").font(.headline).foregroundStyle(.secondary)
+                            Text(verbatim: String(code.prefix(3)) + " " + String(code.suffix(3)))
+                                .font(.system(size: 56, weight: .semibold, design: .monospaced))
+                                .frame(maxWidth: .infinity)
+                                .accessibilityLabel("Pairing code \(code.map(String.init).joined(separator: " "))")
+                            PairingCodeView(window: pairing.codeWindow)
+                                .aspectRatio(720.0 / 270.0, contentMode: .fit)
+                            Text("If the code does not float over Settings (Picture in Picture is off in Settings → General), remember it before you tap Open Settings.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            Button("Open Settings") { pairing.openSettings() }
+                                .buttonStyle(.borderedProminent).controlSize(.large)
+                        }
+                        Text(pairing.status)
+                        Text("Playport finishes setup by itself when you come back.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        if setup.phase != .failed { ProgressView() }
+                        Text(setup.message)
                     }
-                    Text(pairing.status)
-                    Text("Playport finishes setup by itself when you come back.")
+                    if setup.phase == .failed {
+                        Button("Continue") { setup.retry() }.buttonStyle(.borderedProminent)
+                        Button("Playport permissions in iOS Settings") {
+                            UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
+                        }
+                    }
+                    Text("Developer Mode and system permissions need your approval. No computer or pairing file is needed on iOS 27.")
                         .font(.footnote).foregroundStyle(.secondary)
-                } else {
-                    if setup.phase != .failed { ProgressView() }
-                    Text(setup.message)
                 }
-                if setup.phase == .failed {
-                    Button("Continue") { setup.retry() }.buttonStyle(.borderedProminent)
-                    Button("Playport permissions in iOS Settings") {
-                        UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
-                    }
-                }
-                Text("Developer Mode and system permissions need your approval. No computer or pairing file is needed on iOS 27.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                Spacer()
+                .padding(24)
             }
-            .padding(24)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { setup.cancel() } } }
         }
         .interactiveDismissDisabled()

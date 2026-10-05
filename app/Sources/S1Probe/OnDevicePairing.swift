@@ -96,7 +96,7 @@ final class OnDevicePairing: NSObject, ObservableObject, @preconcurrency NetServ
 
     func netServiceDidPublish(_ sender: NetService) {
         guard service === sender else { return }
-        status = "Tap Open Settings, then Privacy & Security → Developer Mode → Pair with Playport, and enter this code. It stays on screen over Settings. Return here afterwards."
+        status = "Tap Open Settings, then Privacy & Security → Developer Mode → Pair with Playport, and enter this code. With Picture in Picture on, it stays on screen over Settings. Return here afterwards."
         BuiltInJitStatus.log("on-device pairing: Bonjour published")
     }
 
