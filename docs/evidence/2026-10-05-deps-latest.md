@@ -36,6 +36,7 @@ plan (stable `proton_11.0` / experimental / bleeding-edge).
 | `dxmt` | `7c8dee1` | `main` `68af85e` | `main` `68af85e` (16 commits ahead) | not used by Valve | passed; `pp slots` clean | pending: phone away | pending: phone away |
 | `mesa` | `82d4f86` | `main` `b39d173` | `main` `b39d173` (2026-10-05 09:42 UTC, 369 commits ahead) | not comparable (Valve uses the Linux drivers) | passed; KosmicKrisp host test passed | pending: phone away | pending: phone away |
 | `dxvk` | `52fe923` | `master` `e5ffd0f` | `master` `e5ffd0f` (2026-10-05 10:53 UTC, 18 commits ahead) | `a676404` / `6853015` / `d30be2b` (bleeding-edge is one commit behind: `e5ffd0f` "Disable present timing by default") | passed | pending: phone away | pending: phone away |
+| `vkd3d-proton` | `472989a` | `master` `31d1f89` | `master` `31d1f89` (2026-10-02, 20 commits ahead) | `212991f` / `44cf7c2` / `31d1f89` (bleeding-edge = the head) | passed | pending: phone away | pending: phone away |
 
 ## IPAs, in order
 
@@ -49,6 +50,7 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
 | FEX main | `22ac169` | `.work/out/20261005-143851-8f671fd2/Playport-26.5-8f671fd2.ipa` | `8f671fd208fb0521204df33f2ba5aa0aa5b63dbd1209e0fa7051091adea2e872` |
 | DXMT main | `2cd6d80` | `.work/out/20261005-144347-96b9b196/Playport-26.5-96b9b196.ipa` | `96b9b196ce4c5e90a2357e6e2636d2c9fef78ab66f04d35b211cb2af1ebd7b7a` |
 | Mesa main | `6d09073` | `.work/out/20261005-144853-492712d6/Playport-26.5-492712d6.ipa` | `492712d6fa6d702c700b06054e5980f21b0aca7560550efb81d6112946e20157` |
+| DXVK master | `cf020cb` | `.work/out/20261005-145319-543f20f6/Playport-26.5-543f20f6.ipa` | `543f20f6d232997cc4a5e71728fc2ce0b6d343d521ffdb41e05eb8bc330ede29` |
 
 ## wine → wine-11.19
 
@@ -187,3 +189,12 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
   only "Disable present timing by default".
 - Unmodified (no series). **Build:** the `vulkan` stage; `app/artifacts.tsv`
   changed (the DXVK DLLs). `pp test`: all passed.
+
+## vkd3d-proton → master
+
+- **Distance:** 20 commits, `472989a..31d1f89` (GitHub compare), the commit
+  Proton bleeding-edge carries.
+- **Replay:** `patches/vkd3d-proton` (4 patches) applies with plain `git am`:
+  all clean.
+- **Build:** the `vulkan` stage; one build record changed (`d3d12core.dll`
+  in `app/artifacts.tsv`). `pp test`: all passed.

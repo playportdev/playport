@@ -926,7 +926,7 @@ resource	Runtime/vulkan/arm64ec-windows/d3d10core.dll	430080	bd784fc0f7da1724374
 resource	Runtime/vulkan/arm64ec-windows/d3d11.dll	8351744	e6ee9810b35bbdb637a6c5f01f8394365c67e2e56c90c8a5ca6da063f1e5c314	vulkan-pe	arm64ec-windows/d3d11.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/dxgi.dll	5517312	8ed7c43ead43d4d640a42d1b9e31eccb72c70f8c7d8d0e76e6d2e4e4297c6ddf	vulkan-pe	arm64ec-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d12.dll	196608	36e1555ac92da8faa7c28d63008693b601ff34d364860e58891dacfe4e7a1b34	vulkan-pe	arm64ec-windows/d3d12.dll	P6-vulkan-pe
-resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6340608	aac684cecb314bfa8e7d61e8745c47adac9a0fc4a318c3ac1579bb45043b6ea3	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
+resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6340608	be5c48fb45650f6c4fe35e08064a0f3b789d91728713dd486682f4c1ce922eca	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d9.dll	7475200	acb84e8ee64abebebdf06f9a1840e40741d151672968aec4eb2c2778d29f070f	vulkan-pe	i386-windows/d3d9.dll	P6-vulkan-pe
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8348672	d6ac91dc0ed4a5451063999c190e8950b68cd73b5a0df633098ea5b1cf9d3298	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8663040	832306eba3f9998c49d0c3ac45849228d18bd4ef01c16c5af773517d10e38c71	steamapi	i386-windows/steam_api.dll	P8-steamapi

@@ -56,7 +56,7 @@ rpmalloc     09142d726429416bfa7b459151515fe3ab7622dd  https://github.com/FEX-Em
 rpmalloc-port 1f271c0c3202663801a0aec32bdb57e5241d6a0e  https://github.com/willfaust/rpmalloc.git     ios-madeira
 mesa         b39d173ca9369c19fda2635be6655d308067e52d  https://gitlab.freedesktop.org/mesa/mesa.git main
 dxvk         e5ffd0fe5e5d62e68b2831d1285b51e61bb454d8  https://github.com/doitsujin/dxvk.git         master
-vkd3d-proton 472989aabdcf3e343e16d13c402feae3815008aa  https://github.com/HansKristian-Work/vkd3d-proton.git master
+vkd3d-proton 31d1f89ca5b3f2fd3b6f025c8e6f73ed3eaa852b  https://github.com/HansKristian-Work/vkd3d-proton.git master
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
 #
 # Build-time sources that are not Madeira components, fetched by tag.
