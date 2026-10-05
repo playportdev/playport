@@ -22,10 +22,13 @@ Stages (docs/UPSTREAM-SYNC.md has why they are these):
            build never checks it out.
   replay   for every patches/<target>/series but those on pins no Madeira
            commit moves (mesa, vkd3d-proton, gbe, idevice), a fresh sparse checkout (a
-           `git clone --shared` of the mirror) at the new component commit (for wine, dxmt and fex, with patches/wine-port
+           `git clone --shared` of the mirror) where the series first applies on its
+           own pin (which creates every patch's preimage blobs), then at the new component commit (for wine, dxmt and fex, with patches/wine-port
            (and for wine's own series patches/wine-valve), patches/dxmt-port or
-           patches/fex-port applied first) and `git am -3` patch by patch; each patch is
-           clean, merged-3way, already-upstream or conflict.
+           patches/fex-port applied first) `git am -3` patch by patch; each patch is
+           clean, merged-3way, already-upstream (only when its reverse applies or
+           its merge is empty) or conflict (any failed merge, also one with no
+           preimage, which leaves no conflict markers).
   build    pp build in a candidate checkout (a `git clone --shared` of this
            repository, <sha8>/playport) on branch sync/<sha8>, with the new
            pins.lock and gitlink, and its own run and out directories
@@ -538,13 +541,14 @@ def replay_target(target, comp, res, rundir, patches_repo):
     env = dict(BOT, GIT_COMMITTER_DATE="2026-01-01T00:00:00Z")
     # Preimage pass: the series on its own pin, where it must apply as it is.
     # A 3-way fallback finds each patch's preimage by its blob hash, and the
-    # preimage of a later patch is a blob only this pass creates.
-    pre = sparse_checkout(mm, os.path.join(rundir, "replay", target + ".pin"), old, paths)
-    st, msg = sh(["git", "-C", pre, "am", "--quiet", *below, *patches], env=env, check=False)
+    # preimage of a later patch is a blob only this pass creates, so the replay
+    # runs in the same clone, which keeps those objects.
+    wt = sparse_checkout(mm, os.path.join(rundir, "replay", target), old, paths)
+    st, msg = sh(["git", "-C", wt, "am", "--quiet", *below, *patches], env=env, check=False)
     if st != 0:
         raise Fail(f"patches/{target} does not apply to its own pin {old[:12]}:\n{msg.strip()[-1500:]}")
-    shutil.rmtree(pre)
-    wt = sparse_checkout(mm, os.path.join(rundir, "replay", target), new, paths)
+    git(wt, "tag", "preimages")   # keeps the pass's blobs referenced for the whole replay
+    git(wt, "checkout", "--quiet", "--detach", new)
     if below:
         st, msg = sh(["git", "-C", wt, "am", "--quiet", *below], env=env, check=False)
         if st != 0:
@@ -564,27 +568,29 @@ def replay_target(target, comp, res, rundir, patches_repo):
             st, msg = sh(["git", "-C", wt, "-c", "merge.conflictStyle=diff3", "am", "-3", "--quiet", "--empty=drop",
                           patch], env=env, check=False)
             if st == 0:
+                # An empty result of a real merge: the content is already there.
                 rec["class"] = "merged-3way" if git(wt, "rev-parse", "HEAD") != head else "already-upstream"
             else:
+                # A failed merge is a conflict, also with no unmerged file: git am -3 that
+                # "could not build fake ancestor" (no preimage blob) leaves the index as it was.
+                # already-upstream needs positive evidence: the reverse applies, or a merge is empty.
                 unmerged = git(wt, "diff", "--name-only", "--diff-filter=U").splitlines()
-                if not unmerged and git_ok(wt, "diff", "--cached", "--quiet", "HEAD"):
-                    sh(["git", "-C", wt, "am", "--skip"], env=env, check=False)
-                    rec["class"] = "already-upstream"
-                else:
-                    rec["class"] = "conflict"
-                    rec["am"] = msg.strip()[-3000:]
-                    rec["files"] = []
-                    for f in unmerged or patch_paths(patch):
-                        blocks = conflict_blocks(os.path.join(wt, f))
-                        entry = {"file": f, "hunks": []}
-                        for first, last, text in blocks:
-                            entry["hunks"].append({"lines": f"{first},{last}", "text": text,
-                                                   "upstream": upstream_commits(wt, since, f, first, last)})
-                        if not blocks:
-                            entry["upstream"] = upstream_commits(wt, since, f)
-                        rec["files"].append(entry)
-                    sh(["git", "-C", wt, "am", "--abort"], check=False)
-                    git(wt, "reset", "--hard", "--quiet", head)
+                rec["class"] = "conflict"
+                if not unmerged:
+                    rec["no_preimage"] = True
+                rec["am"] = msg.strip()[-3000:]
+                rec["files"] = []
+                for f in unmerged or patch_paths(patch):
+                    blocks = conflict_blocks(os.path.join(wt, f))
+                    entry = {"file": f, "hunks": []}
+                    for first, last, text in blocks:
+                        entry["hunks"].append({"lines": f"{first},{last}", "text": text,
+                                               "upstream": upstream_commits(wt, since, f, first, last)})
+                    if not blocks:
+                        entry["upstream"] = upstream_commits(wt, since, f)
+                    rec["files"].append(entry)
+                sh(["git", "-C", wt, "am", "--abort"], check=False)
+                git(wt, "reset", "--hard", "--quiet", head)
         if rec["class"] is None:  # apply --check passed but am did not: never expected
             sh(["git", "-C", wt, "am", "--abort"], check=False)
             raise Fail(f"{target}/{name}: git apply --check passes but git am fails")
@@ -902,6 +908,9 @@ def write_report(result, res, replay):
                 lines += [f"### Conflict: patches/{t['target']}/{p['patch']}", "", p["subject"], "",
                           "In each hunk the `HEAD` side is upstream, the `|||||||` side the patch's preimage "
                           "and the last side the patch.", ""]
+                if p.get("no_preimage"):
+                    lines += ["No 3-way merge: `git am -3` found no preimage blob for the patch's `index` "
+                              "lines, so it left no conflict markers. Re-port it by hand.", ""]
                 for f in p["files"]:
                     lines.append(f"`{f['file']}`:")
                     for h in f["hunks"]:

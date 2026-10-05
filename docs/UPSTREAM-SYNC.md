@@ -62,7 +62,12 @@ starts it automatically: a person or a poller (comparing
 ## Merge or hold
 
 Each patch replays as `clean`, `merged-3way`, `already-upstream` or
-`conflict`. The run merges only when every patch is `clean` or
+`conflict`. A patch is `already-upstream` only on positive evidence: its
+reverse applies to the new commit, or its 3-way merge comes out empty. Any
+merge that fails is a `conflict`, also one that found no preimage blob for
+the patch's `index` lines and so left no conflict markers. The replay runs in
+the clone where the series first applied to its own pin, so every patch's
+preimage is there. The run merges only when every patch is `clean` or
 `already-upstream`, every gate passes (the build's `verify`, `pp names`,
 `swift test`, then on the phone `pp install` and a Hollow Knight play to 10 s
 after its first frame), and no `.gitmodules` or licence file changed.

@@ -173,6 +173,19 @@ class Rebase(unittest.TestCase):
         with open(f"{self.repo}/pins.lock", "w") as f:
             f.write(text.replace(self.n1, self.b0).replace(" next\n", " main\n"))
 
+    def test_a_later_patch_on_a_file_an_earlier_one_touched_conflicts_not_upstream(self):
+        # pp sync once called such a patch already-upstream (its 3-way merge found no preimage).
+        # Here the old tree is built in the run's own clone and its commits are cherry-picked, so
+        # P3 (b.c line 12, over P2's line 10) merges against its real parent and conflicts.
+        fex = f"{self.tmp}/FEX"
+        git(fex, "checkout", "-q", "-b", "up12", self.b0)
+        n2 = commit(fex, "upstream b12", links=[("External/rpmalloc", self.rpm)], **{"b.c": lines(20, l12="up 12")})
+        out = self.pp("fex", "up12", "--trial")
+        c = self.trial_classes(n2)
+        self.assertEqual(c["0002-P2"], "3-way", out)
+        self.assertEqual(c["0003-P3"], "conflict", out)
+        self.assertEqual(c["0004-P5"], "clean", out)
+
     def test_a_stopped_run_must_be_continued_or_aborted(self):
         self.pp("fex", "next", code=10)
         self.pp("fex", self.n0, code=1)

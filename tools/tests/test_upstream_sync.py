@@ -193,6 +193,31 @@ class UpstreamSync(unittest.TestCase):
         cls.m8 = commit(mad, "madeira moves its DXMT at the new path",
                         links=[("wine", cls.wport), ("FEX", cls.fport), ("dxmt", cls.port2), dock])
         git(mad, "reset", "-q", "--hard", cls.m0)
+        # A stacked series (patches/madeira-unix replaced in its tests): 0001 edits unix.c, 0002
+        # edits unix.c again, so 0002's preimage blob exists only where 0001 was applied to the
+        # pin; 0003 edits other.c with an index line naming no blob anywhere (a hand-edited
+        # patch). They are made in a clone, so Madeira's mirror never holds those blobs.
+        stack = f"{t}/mad-stack"
+        subprocess.run(["git", "clone", "-q", "--no-local", mad, stack], check=True, env=dict(os.environ, **ENV))
+        git(stack, "checkout", "-q", "--detach", cls.m0)
+        commit(stack, "s1 unix line 2", links=links, **{"unix.c": lines(10, l2="line 2 ours")})
+        commit(stack, "s2 unix line 8", links=links, **{"unix.c": lines(10, l2="line 2 ours", l8="line 8 ours")})
+        commit(stack, "s3 other line 7", links=links, **{"other.c": lines(10, l7="line 7 ours")})
+        cls.stack_patches = f"{t}/stack-patches"
+        git(stack, "format-patch", "-q", "--zero-commit", "-o", cls.stack_patches, f"{cls.m0}..HEAD")
+        p3 = os.path.join(cls.stack_patches, sorted(os.listdir(cls.stack_patches))[2])
+        with open(p3) as f:
+            text = f.read()
+        pre = git(stack, "rev-parse", f"{cls.m0}:other.c")[:7]
+        assert f"index {pre}.." in text, text
+        with open(p3, "w") as f:
+            f.write(text.replace(f"index {pre}..", "index 1234567.."))
+        shutil.rmtree(stack)
+        # m9: a descendant of m0 that edits unix.c line 8 and other.c line 7, where 0002 and 0003
+        # of the stacked series conflict and 0001 stays clean.
+        cls.m9 = commit(mad, "upstream edits unix line 8 and other line 7", links=links,
+                        **{"unix.c": lines(10, l8="line 8 theirs"), "other.c": lines(10, l7="line 7 theirs")})
+        git(mad, "reset", "-q", "--hard", cls.m0)
         # Valve's branch (the wine-valve row's): v0 the pin, v1 a new commit on it;
         # vr the branch rebased onto a later base, keeping v0's subject and adds another.
         valve = new_repo(f"{t}/valve")
@@ -206,7 +231,7 @@ class UpstreamSync(unittest.TestCase):
         cls.vr = commit(valve, "valve: another fix", **{"h.c": "h\n"})
         git(valve, "checkout", "-q", "-f", "proton_11.0")
         # Keep the moves reachable for fetches by SHA.
-        for n in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"):
+        for n in ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"):
             git(mad, "update-ref", f"refs/keep/{n}", getattr(cls, n))
 
     @classmethod
@@ -433,6 +458,39 @@ class UpstreamSync(unittest.TestCase):
         # A dry run leaves the repository alone.
         self.assertEqual(git(pp, "status", "--porcelain"), "")
         self.assertNotIn("sync/", git(pp, "branch", "--list"))
+
+    def test_a_later_patch_on_a_file_an_earlier_one_touched_conflicts_not_upstream(self):
+        # The 3-way merge of 0002 needs the blob 0001 makes on the pin; a merge with no
+        # preimage at all (0003's hand-edited index line) is a conflict too, never already-upstream.
+        pp, build = self.playport("pp-stacked")
+        sdir = f"{pp}/patches/madeira-unix"
+        shutil.rmtree(sdir)
+        os.makedirs(sdir)
+        names = sorted(os.listdir(self.stack_patches))
+        for n in names:
+            shutil.copy(f"{self.stack_patches}/{n}", f"{sdir}/{n}")
+        write(pp, "patches/madeira-unix/series", "# madeira-unix\n" + "".join(n + "\n" for n in names))
+        commit(pp, "a stacked series", links=[("upstream/madeira", self.m0)])
+        st, out = self.run_tool(pp, build, self.m9, "--dry-run")
+        self.assertEqual(st, 10, out)
+        r = self.result(build, self.m9, True)
+        got = {p["patch"][:4]: p for t in r["replay"] if t["target"] == "madeira-unix" for p in t["patches"]}
+        self.assertEqual({k: v["class"] for k, v in got.items()},
+                         {"0001": "clean", "0002": "conflict", "0003": "conflict"})
+        # 0002 merged against its real preimage: a conflict block in unix.c.
+        self.assertNotIn("no_preimage", got["0002"])
+        self.assertEqual(got["0002"]["files"][0]["file"], "unix.c")
+        hunk = got["0002"]["files"][0]["hunks"][0]
+        self.assertIn("line 8 theirs", hunk["text"])
+        self.assertIn("line 8 ours", hunk["text"])
+        # 0003 had no preimage: no markers, named as such, with the file's upstream commits.
+        self.assertTrue(got["0003"]["no_preimage"], got["0003"])
+        self.assertEqual(got["0003"]["files"][0]["file"], "other.c")
+        self.assertTrue(any("other line 7" in c for c in got["0003"]["files"][0]["upstream"]), got["0003"])
+        with open(os.path.join(build, "sync", self.m9[:8] + "-dry-run", "REPORT.md")) as f:
+            report = f.read()
+        self.assertIn("No 3-way merge: `git am -3` found no preimage blob", report)
+        self.assertNotIn("already-upstream", report)
 
     def test_upstream_broken_is_recorded_and_reused(self):
         pp, build = self.playport("pp-broken")
