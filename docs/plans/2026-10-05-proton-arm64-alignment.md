@@ -17,6 +17,27 @@ Two steps, in order: **(1)** bring every dependency to its latest version,
 then **(2)** re-evaluate each alignment item on that build and act on it.
 Nothing from step 2 starts before step 1 is finished.
 
+**Owner's direction (2026-10-05): latest possible, not latest release.** Every
+dependency moves to the head of its development branch, and the Valve
+reference is Proton **bleeding-edge**:
+
+- FEX: `main` (what bleeding-edge ships), not FEX-2609.1 or a later monthly tag.
+- Madeira, DXMT, Mesa, DXVK, vkd3d-proton: their `main`/`master` heads
+  (bleeding-edge's DXVK and vkd3d-proton are already the heads).
+- `wine-valve`: picks from Valve Wine's bleeding-edge branch (`750fd011` at
+  this snapshot), not proton_11.0. The three WoW64 suspend-helper reverts come
+  with it (B2).
+- `wine`: the newest WineHQ development tag (wine-11.19 today). WineHQ
+  `master` moves daily and Madeira's ports are rebased per tag; take `master`
+  only if a tag lacks something Valve's bleeding-edge Wine depends on, and
+  record why.
+- The ARM defaults that differ between Proton branches (disk cache, CPU
+  topology fallback) are judged against bleeding-edge.
+
+This changes the pin policy of decisions 0008 (FEX releases), 0013 (Wine
+tags) and 0018 (`wine-valve` from proton_11.0): step 1 opens with one decision
+record that supersedes those parts, and every later move cites it.
+
 ## Valve's reference snapshot (2026-10-05)
 
 | Proton branch | Head | FEX | Wine (ValveSoftware/wine) | DXVK | vkd3d-proton |
@@ -91,8 +112,8 @@ Re-read the heads before starting. Valve moves these branches weekly.
 |---|---|---|---|---|---|
 | 1 | `madeira` | `8c050d0` | `main` `bbbf8d0` (2026-10-04), 438 commits ahead | (none) | `pp sync`. If Madeira moved its Wine, DXMT, FEX or rpmalloc, the sync holds (`*-port-moved`). Re-port the `patches/*-port` series and the `madeira-port` patches at the end of `madeira-unix`, then land the port rows and the Madeira pin together in one commit (UPSTREAM-SYNC.md). This goes first because the port rows must equal Madeira's gitlinks. |
 | 2 | `wine` | wine-11.18 `7b3fff7` | **wine-11.19** (tagged 2026-10-02) | Valve Wine `dc26e61` (stable) / `750fd01` (bleeding-edge) | 0013 re-port. Replay `patches/wine-valve` after it, and record every dropped or resolved pick. |
-| 2b | `wine-valve` | `dc26e61` | proton_11.0 head is **still `dc26e61`**, so the row does not move | experimental `6d211aab` | Record the experimental-only ARM commits in the evidence record (see item B2). They are not picked here. |
-| 3 | `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00` | newest **tag** FEX-2609.1 (= pin). Main `3648ee9` | stable FEX-2607; experimental/bleeding-edge use main | **Decision needed (Q1).** 0008 says FEX "releases". Either wait for FEX-2610, or decide to follow main as Valve's experimental branch does. The WoW64 commits `af04940`, `4956ac2` and `b1e54d8` are only on main. |
+| 2b | `wine-valve` | `dc26e61` (proton_11.0) | Valve Wine bleeding-edge `750fd011` | bleeding-edge | Re-pick from bleeding-edge (owner's direction), classifying each commit by 0018's rules; the WoW64 suspend-helper reverts come with it (B2). |
+| 3 | `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00` | `main` `3648ee9` (2026-10-03) | bleeding-edge = main head | FEX `main` (owner's direction). Brings the WoW64 commits `af04940`, `4956ac2` and `b1e54d8` (A2) and the disk-cache cap and pruning (B1). |
 | 4 | `dxmt` | `7c8dee1` | `main` `fb45156`, 3 commits ahead | not used by Valve | Then run `gen_remote_guard.py`, `gen_api_names.py` and `pp slots`. Check whether Madeira's `dxmt-port` moved in step 1. |
 | 5 | `mesa` | `82d4f86` | `main` head when the step runs (not checked) | not comparable (Valve uses the Linux drivers) | Replay `patches/mesa`. |
 | 6 | `dxvk` | `52fe923` (38 commits past v3.1.1) | `master` `d30be2b`, 17 commits ahead | bleeding-edge = `d30be2b` | Unmodified. |
@@ -293,10 +314,11 @@ Commits:
 
 ## Decision records this plan may need
 
-- FEX on main instead of releases (Q1): supersedes part of 0008.
+- Latest-possible pins (step 1, owner's direction): FEX `main`, `wine-valve`
+  from bleeding-edge, every other dependency at its branch head; supersedes
+  the pin-source parts of 0008, 0013 and 0018.
 - `MaxInst=500` (A1): supersedes part of 0021.
 - Disk cache default (B1).
-- `wine-valve` tracking experimental (B2): amends 0018.
 - LAA for i386 (B3).
 - Optionally, a standing policy record that "Valve's ARM64 Proton is the
   reference platform", naming which branch is the reference for which kind of
@@ -304,12 +326,8 @@ Commits:
 
 ## Open questions
 
-1. **FEX target for step 1:** wait for FEX-2610, or follow main (Valve's
-   experimental FEX is `0df84d38`, bleeding-edge's is `3648ee97`)? Only main
-   has the CHPEv2 set today. Monthly releases suggest 2610 is due soon; that is
-   inference, not a date.
-2. Should the reference for ARM defaults be stable (proton_11.0) or
-   experimental? They differ today in the disk cache and the topology fallback.
+1. *(Settled 2026-10-05: FEX `main`.)*
+2. *(Settled 2026-10-05: Proton bleeding-edge is the reference.)*
 3. Does `portal2.exe` carry the LAA flag, and what WoW64 limit does
    `virtual_ios.c` give non-LAA images?
 4. Do Madeira's `*_ios.c` replacements override the WineHQ files that contain
