@@ -27,8 +27,8 @@ One sequence for this plan and
 | 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources`. **Done, a8c0859e**: `madeira-dock` is not used and never checked out | strategy, step 0 |
 | 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move. **Done, 0dd5f68**: `pp rebase`; FEX trial onto `main` 3648ee9: 6 conflicts in 83 patches (72 clean, 5 3-way), resolved and compiled, draft in the build area (`agent-notes/dep-strategy/fex-main/`) | strategy, step 1 |
 | 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit. **Rows 2–7 and 2b done** (decision 0049, e71e8a7..b011dbf, one commit and IPA each): every IPA passes the gate on both titles; the final build does less CPU work a frame than the baseline, and Portal 2's ≥25 ms load-segment hitch count (52 → 134 in the first pair) is run-to-run spread, the baseline alone spanning 52–268 over three runs ([deps-latest](../evidence/2026-10-05-deps-latest.md)). **Rows 8–10 done** (1e86afc, 2370713, 7ce2b51 after the rebase): freetype VER-2-14-3, rust 1.99.0 and stikjit 1.9.0 moved, one commit and IPA each; gbe, abseil-cpp, idevice, llvm-project, xtool (needs a machine-wide Darwin SDK reinstall) and gstreamer (a new release needs a new licensing audit) held, each with its reason. Every `pins.lock` row except `madeira` (order 5) is now moved or held. **DONE (2026-10-05):** the branch was rebased onto `main` 0.3.2 (which had taken the StikJIT 1.9.0 move itself), and one gate on the rebased final IPA `35956f63`, which contains all three moves, passed on both titles (JIT 2.31 / 2.50 s, first frame +9.53 / +7.48 s); xtool and GStreamer held by the owner | alignment, step 1 (rows 2–10) |
-| 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs | strategy, step 2 |
-| 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases | alignment, step 1 (row 11) |
+| 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs. **DONE (2026-10-05): [decision 0052](../decisions/0052-madeira-reconciliation.md)** (0051 is taken on `main`), with the owner's answers: Madeira's WoW64, fastsync on by default, GStreamer and DXVK d3d9 kept, slots appended at 150–155. The carrying model is [0053](../decisions/0053-carrying-model.md) | strategy, step 2 |
+| 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases. **Tooling ready; next: the move** ([Row 5 plan](#row-5-plan-madeira-to-bbbf8d0)): `pp sync`'s replay fixed (553adf2) and every series' `index` lines re-exported (87326e3), so the `bbbf8d0` dry run is honest (084721b) | alignment, step 1 (row 11) |
 | 6 | The alignment items (A, B) and the Portal 2 performance follow-ups | alignment, step 2 |
 
 Steps 1–2 come first because the helper pays off on the moves of step 3; step 4
@@ -515,3 +515,70 @@ rather than replaying them.**
   - Madeira beyond 69b2fc0;
   - diff-level (not subject-level) equivalence of the "duplicate" fixes;
   - whether Madeira's WoW64 and Playport's are compatible designs.
+
+---
+
+## Row 5 plan: Madeira to bbbf8d0
+
+Measured on 2026-10-05 for [decision 0052](../decisions/0052-madeira-reconciliation.md),
+with the owner's answers applied. The trial scripts and their tables were left
+in the build area. Estimates are inferences from A2's wall times.
+
+**Heads.** Madeira `main` is `bbbf8d0` (still the head by `ls-remote` on
+2026-10-05), 438 commits past the pin `8c050d0`; 88 non-merge commits touch
+built paths (+19,208/−650 in 43 files). Its gitlinks: wine `3a54f56` (the
+`madeira-lgpl` head, still based on wine-11.4), FEX `be778d7`, dxmt `8937c08`
+(now at `dxmt`), FEX's `External/rpmalloc` `812c2b9` (the fork's one newer
+commit, `2dc128f`, is a licence record only), and `madeira-dock` (not used).
+
+**Trial conflicts on the new bases** (cascade-suppressed picks; textual only,
+so lower bounds):
+
+| Step | Units | Clean | Conflict | Notes |
+|---|---:|---:|---:|---|
+| wine-port: Madeira's wine `723d1bf..3a54f56` onto wine-11.19 + wine-port | 27 | 16 | 10 | plus 1 modify/delete: `dlls/bcrypt/gnutls.c` (WineHQ dropped the bcrypt unixlib) |
+| wine-valve on that | 132 | 131 | 1 | 0097 `WINE_HEAP_TOP_DOWN` against Madeira's heap.c |
+| wine-pe on that | 27 | 19 | 8 | 0001 (duplicate), 0005, 0013, WoW64 0016 0018 0021 0022 0025 |
+| wine-unix on that | 14 | 7 | 7 | 0001 (duplicate), 0002 (APC), WoW64 0008 0009 0010 0012 0013 |
+| fex-port: Madeira's FEX `0f8edf8..be778d7` onto FEX `3648ee9` + fex-port | 23 | 12 | 6 | 4 empty (pull-request pairs), 1 gitlink |
+| fex on that | 20 | 15 | 4 | 0003, 0005, 0016, 0018; 0013 empty (Madeira's 293c524) |
+| dxmt-port: Madeira's dxmt `ca8a251..8937c08` onto DXMT `68af85e` + dxmt-port | 55 | 32 | 15 | 8 empty (pull-request pairs) |
+| dxmt on that | 9 | 4 | 5 | 0002, 0003, 0005, 0007, 0008 |
+| rpmalloc-port `1f271c0..812c2b9`, then rpmalloc | 6 + 3 | 9 | 0 | |
+| madeira-unix on `bbbf8d0` | 80 | 54 | 26 | 82 hunks; `pp sync --dry-run` (am -3, no suppression): 24 clean, 6 3-way, 50 conflict |
+| madeira-winios on `bbbf8d0` | 3 | 3 | 0 | review against Madeira's 1b09614 (Winios input) |
+
+**Steps.**
+
+| # | Step | Estimate |
+|---|---|---|
+| 0 | **Tooling. Done:** `pp sync` replays in the clone that keeps the preimages and calls a failed merge `conflict` (553adf2); every series' `index` lines re-exported (87326e3); an honest `bbbf8d0` dry run (084721b) | done |
+| 1 | Decision 0052 accepted. Branch for the move (0028). Re-fetch Madeira; if `main` moved past `bbbf8d0`, re-run the trials | — |
+| 2 | **rpmalloc-port** (6, all clean) and rpmalloc (3); the row → `812c2b9` | 15 min |
+| 3 | **fex-port** with `pp rebase`: Madeira's 23 FEX commits onto FEX `3648ee9` + fex-port. **fex:** drop 0013 (empty); resolve 0003 and 0005; drop 0005/0008 if Madeira's `FEX_MADEIRA_HOSTPROBE` path makes `FEX_HOSTFEATURES` redundant (recheck LRCPC2's unix-side decode, Madeira ce34c10); 0015–0018 (WoW64) drop after Portal 2 parity; re-port 0019/0020 on Madeira's WOW64 module. Build `xtajit.dll` with Madeira's `FEX_GUEST_WINDOW` options; check `xtajit64.dll`'s code is unchanged where Madeira claims byte identity | 3–5 h |
+| 4 | **wine-port**: Madeira's 27 Wine commits onto wine-11.19 + wine-port; drop Madeira's bcrypt wow64 thunk (the unixlib is gone). Fastsync arrives with it (f6848ad client, e200a5e server cells). **wine-valve:** resolve 0097. **wine-pe:** drop 0001 (Madeira's real export-IAT classifier, d52b3e6, replaces the stub: an HK gate) and the WoW64 set; resolve 0005, 0013. **wine-unix:** drop 0001 (d280865) and 0008/0009/0012/0013; re-port 0006 and 0007 onto the fastsync-bearing `sync.c`; re-port 0010, 0011; **rework 0002 for fastsync**: take 3ba35ad and c311978 (a system APC goes to a waiting thread), replace 074e0e3's drop with "keep it on the issuing thread" for every system APC type, and make sure a thread in a fastsync wait runs a queued system APC (the wait falls through to the server after its ≤2 ms park; check that is enough, or wake it) | 1 day |
+| 5 | **dxmt-port**: Madeira's 55 DXMT commits onto DXMT `68af85e` + dxmt-port. Slots: keep upstream 0–145 and Madeira's 146–149 as rebased; append `DXSOInitialize` 150, `DXSODestroy` 151, `DXSOCompile` 152, `DXSOGetCompiledBitcode` 153, `DXSODestroyBitcode` 154, `d3d9_nop` 155 to both tables (wow64 twins at the same numbers), without Madeira's NULL 141–144 padding; renumber the PE side (`airconv_thunks.h` `unix_dxso_*`, `WINE_UNIX_CALL(150)` → 155); rerun `gen_remote_guard.py` and `gen_api_names.py`; `pp slots` clean. Madeira's 35a4db1 include layout in `dxmt-base.sh` and dxmt 0004. D3D9 (`d3d9`, `d3d9shim`, `dxmt_madeira_native`) not built or staged. **dxmt:** resolve 0002, 0003, 0005, 0007, 0008 | 4–6 h |
+| 6 | **madeira-unix** on `bbbf8d0`. Drop 0002 (Madeira's 8c81b45), 0014 (Madeira's resolver already keeps madsync behind `inproc-sync = 1`), 0041 (74e5a59; recheck a killed child's parent wait), 0046 (c8abe3b) and the WoW64 set below. Rewrite 0031 as one patch: GStreamer's tables for 64-bit and wow64 callers, Madeira's `winegstreamer_unixlib_ios.c`, `wg_parser_apple_ios.c` and their FFmpeg links not built. Re-port the wine-11.19 replacements again (0020–0025, 0080 against Madeira's new `*_ios.c`; 0022 and 0023 are 11 hunks each). Resolve 0003, 0008, 0018, 0029, 0035, 0043, 0044 (kept: per-PEB alias callbacks). 0070 and 0076–0079 should apply | 1–2 days |
+| 7 | **Portal 2 on Madeira's WoW64.** Drop, each only after a Portal 2 run shows Madeira's path covers it: madeira-unix 0049–0057, 0059, 0061–0066, 0068, 0069, 0072–0074; wine-pe 0015, 0016, 0018, 0021, 0022, 0024, 0025, 0027; wine-unix 0008, 0009, 0012, 0013; fex 0015–0018. Re-port on Madeira's `ios_wow.h` and the `ProcessWineIosWowGuestBase` (1010) query: wine-unix 0010, 0011 (winevulkan i386 pointers); madeira-unix 0058, 0060, 0067, 0071, 0075, 0079 if still needed; fex 0019, 0020; wine-pe 0020, 0023; the wow64win gaps Portal 2 finds (the 398-call audit is the checklist). App: `MADEIRA_FASTSYNC=auto` and `FEX_MADEIRA_HOSTPROBE` for every session, `MADEIRA_GDI_SHARED_SECTION=1` for an i386 title's session (launch environment, not an entry point: 0012 holds). Iterate to parity: launch, menu, ≥ 59 FPS at 720p capped, hitches within deps-latest's spread | 1–3 days |
+| 8 | `pins.lock`: madeira `bbbf8d0`, wine-port `3a54f56`, fex-port `be778d7`, dxmt-port `8937c08`, rpmalloc-port `812c2b9`; the `upstream/madeira` gitlink. **Licence review:** `LICENSE-MADEIRA.md` in the three forks, dxmt's `COPYING.LIB` (the LGPL D3D9 import), Madeira's `app/Madeira/legal/*`; NOTICES.md and LICENSING.md | 2 h |
+| 9 | **`build/source-bundle.json`**, the madeira entry: submodule key `research/dxmt` → `dxmt`; add `madeira-dock` (not built, never checked out); replace the `build/*-tests/*.exe` drop with `tests/*/*.exe` (15 prebuilt PEs) and `tests/dxmt/out-x64/cube/*`; drop `madeira-d3d12/*` (not built; prebuilt `.dxil`/`.metallib` blobs) and `build/ffmpeg/*` (not built); keep `build/tftrace/*.dll` and `research/remote-metal` | 1 h |
+| 10 | `pp build --clean`, `pp verify` (both variants), `pp slots`, `pp test`, `pp names`, `pp secrets`; check every rewritten series' `index` lines (a clean patch `pp rebase --write` keeps as it is keeps its old base's preimage); commit the build records | 1 h + build |
+| 11 | **Device gates** (one locked session): Hollow Knight `first-frame+10` and `pp perf` with `hk-new-game` (the cinematic plays); Portal 2 launch, intros, menu, a chamber, `pp perf` with `p2-walk` against deps-latest; Portal 2 lifecycle (pause, save/load, quit to menu, quit, the 0029 restart); **fastsync on and off on both titles** (`pp perf` frame and GPU ms, `srv/f`, hitches): it stays on unless a title regresses with it; `s1-host.log`: `[madsync] off`, the fastsync policy line, `[apc-*]`, `[wow-window]`, `[gdi-shared]`, `[unixlib] winegstreamer`, DXVK's `d3d9.dll` for Portal 2; a release-variant HK play | 2–3 h |
+| 12 | Evidence `docs/evidence/<date>-madeira-bbbf8d0.md`: IPA sha256s, per-patch verdicts (dropped, re-ported, resolved), the slot table, the fastsync on/off numbers. One commit for pins, series and records (UPSTREAM-SYNC.md) | 1 h |
+
+**Defaults that come with the move,** each gated by the plays above:
+- inert unless the app sets them: the swap tier (`MADEIRA_SWAP_FILE`), held
+  releases, `MADEIRA_WG_64BIT`, the HID pad;
+- on in 64-bit sessions: one child boot at a time (023b158, at most 10 s),
+  fixed-base images below 4 GB (53d46cb), the IAT-sync changes (aa70ae1,
+  ed332b6), the RtlPcToFileHeader pool alias (030c7e0), TEB access emulation
+  (d2d5e38), fresh `.data` on a DLL reload (1ef7df3), the shared-data clock
+  (da896cd), in-process NSI tables (dd53cc3, 9307a5d), the dnsapi unix side
+  (73b8cfe), the registry-loaded signal (cc20bab), audio ring-fill and 7.1.4
+  fold (fd8e1eb, 95c70c1);
+- in Madeira's dxmt-port, on for 64-bit: cached CPU mappings (4f025e0), the
+  staging budget wait (51e74fe), submit before present (4443a2e), the 1536 MB
+  reserve (bb18171), the new pacing modes.
+
+**Total (inference):** 4–7 working days, about half of it step 7. 0052's
+fallback applies if Portal 2 is not at parity within two work sessions.
