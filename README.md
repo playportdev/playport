@@ -18,9 +18,20 @@
 
 </div>
 
-Playport runs x86-64 Windows games on a stock, non-jailbroken iPhone. Install
-a game from your library onto the phone, pick up a controller and press Play. The game runs on the phone's own CPU and GPU: no
-PC, no cloud, no stream.
+Playport runs Windows games, 64-bit and now 32-bit, on a stock, non-jailbroken
+iPhone. Install a game from your library onto the phone, pick up a controller
+and press Play. The game runs on the phone's own CPU and GPU: no PC, no cloud,
+no stream.
+
+> **New in 0.3: 32-bit games.** 32-bit Windows games now run alongside 64-bit
+> ones, with Direct3D 9 drawn on the iPhone's GPU through DXVK and KosmicKrisp.
+> Portal 2 is the first: about 60 fps at 720p, with both portals, sound, a
+> controller, saves and Steam Cloud. See the [release notes](docs/releases/0.3.0.md).
+
+<p align="center">
+  <a href="https://playport.dev/#video-portal2"><img src="site/screenshots/portal2.webp" width="100%" alt="Portal 2 running on an iPhone in Playport: an orange and a blue portal in a test chamber, with Metal's HUD showing 59.98 fps at 1564 by 720. Click to watch the recording on playport.dev"></a>
+  <br><sub><b>Portal 2</b>, a 32-bit Direct3D 9 game, at 60 fps through DXVK and KosmicKrisp. <b>Watch the uncut recording</b>: Home to Play to a test chamber (<a href="site/video/portal2.mp4">MP4</a>).</sub>
+</p>
 
 <p align="center">
   <img src="site/screenshots/home-0.2.webp" width="100%" alt="Playport's Home page: Continue playing Kingdom Come: Deliverance, a download, recent games">
@@ -74,34 +85,30 @@ Playport is not on the App Store: you sideload the `.ipa` yourself.
 A free Apple ID signs the app for seven days, so re-sign it once a week; your
 games and saves stay on the phone.
 
-## Why it's different
+## How Playport differs from Madeira
 
-- **The real games, on the phone.** Wine, the FEX x86-64 translator and DXMT
-  run together inside one iOS app, so a Windows `.exe` starts as it would on a PC.
-  Direct3D 10 and 11 render straight to Metal through DXMT.
-- **Vulkan on the iPhone, with KosmicKrisp.** An experimental Vulkan backend
-  built on KosmicKrisp, Mesa's Vulkan driver for Apple's Metal, opens the door
-  to Direct3D 12 through vkd3d-proton, and runs Direct3D 8 to 11 through DXVK.
-  It is under active development.
-- **More than a repackage.** Over a hundred of our own patches on top of
-  Wine, FEX, DXMT, KosmicKrisp, vkd3d-proton and the Steam API emulator:
-  performance and compatibility work (faster FEX translation for Unity games,
-  lossless texture compression kept on in DXMT, geometry shaders and transform
-  feedback in KosmicKrisp, feature level 12_0 in vkd3d-proton), dozens of bug
-  fixes, and the diagnostics behind them. Each is a [reviewable patch](patches/)
-  with the evidence for it.
-- **On the latest upstreams.** Where Madeira stays on its own forks (Wine
-  11.4, FEX 2607 and an older DXMT), Playport carries those ports forward
-  onto current releases: WineHQ 11.18 with Valve's Proton 11 Wine on top,
-  FEX 2609.1 and DXMT's main branch.
-- **Your library.** Sign in to your store, browse what you own and download it
-  straight to the phone. Steam works today; GOG and Epic Games are planned.
-- **Made for a controller.** A landscape, gamepad-first interface and an
-  in-game menu to pause, resume or quit. Controllers reach the game as XInput.
-- **JIT built in.** The app carries its own JIT helper, so every Play works
-  from the phone alone, after a one-time pairing.
-- **No Mac.** The whole app is built, signed and installed from one Linux
-  machine, with a free Apple ID.
+Playport is built on [willfaust/Madeira](https://github.com/willfaust/Madeira),
+the research project that first ran Wine, FEX-Emu and DXMT as one process on
+iOS. Madeira proved it could be done; Playport turns it into an app you can
+play with. In plain points:
+
+| | Madeira | Playport |
+| --- | --- | --- |
+| **32-bit games** | x86-64 only | x86-64 **and 32-bit x86**: each 32-bit game gets its own 4 GB window, Portal 2 plays at about 60 fps |
+| **Graphics** | Direct3D 11 through DXMT | DXMT for Direct3D 10 and 11, **plus Vulkan through KosmicKrisp**: Direct3D 9 through DXVK, Direct3D 12 through vkd3d-proton (experimental), chosen per game automatically |
+| **Upstreams** | its own forks: Wine 11.4, FEX 2607, an older DXMT | the latest releases: WineHQ 11.18 with Valve's Proton 11 Wine, FEX 2609.1, DXMT main, Mesa main |
+| **Getting games** | launches set up per test title | sign in to Steam, browse your library, download to the phone; cloud saves and achievements |
+| **The app** | a touch-driven test bench; controllers and touch controls reach the game | a landscape, gamepad-first app with an in-game menu to pause, resume or quit |
+| **JIT** | a separate debugger app attaches for every launch | a JIT helper built into the app, after a one-time pairing |
+| **Building** | Xcode on a Mac | one Linux machine and a free Apple ID; no Mac anywhere |
+| **Getting it** | build it yourself | a ready `.ipa` on [Releases](https://github.com/playportdev/playport/releases), with the complete source of that exact build |
+
+Behind these are over 170 of our own [patches](patches/) on Wine, FEX, DXMT,
+KosmicKrisp, vkd3d-proton and the Steam API emulator: the 32-bit runtime,
+performance work (faster FEX translation for Unity games, x87 math at native
+precision, lossless texture compression kept on in DXMT, geometry shaders in
+KosmicKrisp), dozens of bug fixes, and the diagnostics behind them. Each one is
+a reviewable patch with the evidence for it.
 
 ## Release status and support
 
@@ -123,7 +130,8 @@ signature does not settle Apple's SDK, provisioning, JIT or delivery terms.
 
 - Playport is early and is tested on one phone: an A19 Pro iPhone (iPhone18,4) on iOS 27.0
   ([known-good versions](docs/DEVICE.md#known-good-ios-versions)).
-- Games must be 64-bit. iOS leaves no room for 32-bit Windows programs.
+- 32-bit games are new: Portal 2 is the only one tested so far. They run on
+  the Vulkan backend, which is experimental.
 - A free Apple ID signs apps for seven days, so refresh the app once a week
   (SideStore can do it on the phone). Your games and saves stay on the phone.
   Playport takes one of the free account's three app slots; its JIT helper takes

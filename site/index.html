@@ -7,10 +7,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playport: PC games on your iPhone</title>
-<meta name="description" content="Playport runs x86-64 Windows games natively on a non-jailbroken iPhone. No PC, no cloud, no streaming.">
+<meta name="description" content="Playport runs 64-bit and 32-bit Windows games natively on a non-jailbroken iPhone. Portal 2 at 60 fps. No PC, no cloud, no streaming.">
 <meta name="theme-color" content="#0B0E13">
 <meta property="og:title" content="Playport: PC games on your iPhone">
-<meta property="og:description" content="Windows games, running natively on a non-jailbroken iPhone. No PC, no cloud, no streaming.">
+<meta property="og:description" content="Windows games, 64-bit and now 32-bit, running natively on a non-jailbroken iPhone. No PC, no cloud, no streaming.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="https://playport.dev/screenshots/og-0.2.jpg">
 <meta property="og:image:alt" content="Playport's Library on an iPhone: Steam games installed, downloading and ready to play">
@@ -70,6 +70,7 @@
   .hero::before { content: ""; position: absolute; top: -320px; right: -200px; width: 820px; height: 820px; border-radius: 50%; background: radial-gradient(circle, rgba(245, 181, 68, 0.20), rgba(245, 181, 68, 0) 62%); pointer-events: none; }
   .hero .wrap { position: relative; display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 56px; align-items: center; }
   .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+  a.eyebrow:hover { text-decoration: none; color: var(--text); border-color: rgba(245, 181, 68, 0.45); }
   .eyebrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
   h1 { font-size: clamp(44px, 7vw, 80px); line-height: 1.02; letter-spacing: -0.035em; margin: 22px 0 18px; font-weight: 800; }
   h1 em { font-style: normal; color: var(--accent); }
@@ -187,7 +188,6 @@
     .versions th, .versions td { padding: 12px 10px; font-size: 14px; }
     .versions th { font-size: 11px; letter-spacing: 0.05em; }
     .versions .tag { margin: 6px 0 0; }
-    .versions td:nth-child(2) { white-space: nowrap; }
     .lead { font-size: 18px; }
     .hero .wrap { gap: 24px; }
     .hero-art { width: 96px; }
@@ -201,7 +201,6 @@
   @media (max-width: 400px) {
     .versions th, .versions td { padding: 10px 7px; font-size: 13px; }
     .versions th { font-size: 10px; letter-spacing: 0.02em; }
-    .versions td:nth-child(2) { white-space: normal; }
   }
 </style>
 </head>
@@ -214,6 +213,7 @@
       <a href="#screens">The app</a>
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
+      <a href="#madeira">vs Madeira</a>
       <a href="#start">Get started</a>
       <a class="btn btn-ghost btn-small" href="https://github.com/playportdev/playport">GitHub</a>
     </div>
@@ -223,9 +223,9 @@
 <header class="hero" id="top">
   <div class="wrap">
     <div>
-      <span class="eyebrow"><span class="dot"></span>Early release · iOS 27</span>
+      <a class="eyebrow" href="#video-portal2"><span class="dot"></span>New in 0.3: 32-bit games, Portal 2 at 60 fps</a>
       <h1>PC games on your <em>iPhone.</em></h1>
-      <p class="lead">Playport runs x86-64 Windows games on a stock, non-jailbroken iPhone.
+      <p class="lead">Playport runs Windows games, 64-bit and now 32-bit, on a stock, non-jailbroken iPhone.
         Install a game from your library, pick up a controller and press Play.
         <strong>It runs on the phone's own CPU and GPU: no PC, no cloud, no stream.</strong></p>
       <div class="ctas">
@@ -278,8 +278,8 @@
   <div class="wrap">
     <ul class="stats">
       <li><b>~10 s</b><span>from Play to the first frame of Hollow Knight</span></li>
-      <li><b>~3 s</b><span>to set up JIT, from the phone alone</span></li>
-      <li><b>100+</b><span>of our own patches on Wine, FEX, DXMT, KosmicKrisp, vkd3d-proton and more</span></li>
+      <li><b>60 fps</b><span>in Portal 2, a 32-bit Direct3D 9 game, at 720p</span></li>
+      <li><b>170+</b><span>of our own patches on Wine, FEX, DXMT, KosmicKrisp, vkd3d-proton and more</span></li>
       <li><b>1</b><span>iOS process for the whole Windows runtime</span></li>
     </ul>
   </div>
@@ -291,45 +291,40 @@
     <h2>The real games, not a stream of them.</h2>
     <p class="sub">A Windows <code>.exe</code> starts on the iPhone as it would on a PC, translated and rendered on the device, with a controller in your hands.</p>
     <div class="grid">
+      <div class="card wide">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1.5V4M15 1.5V4M9 20v2.5M15 20v2.5M1.5 9H4M1.5 15H4M20 9h2.5M20 15h2.5"/></svg></div>
+        <h3>32-bit games<span class="tag">NEW IN 0.3</span></h3>
+        <p>iOS keeps the lowest 4 GB of memory to itself, exactly where a 32-bit Windows game has to live. Playport gives each 32-bit game its own 4 GB window higher up and translates every memory access as it runs, so the game never notices. Portal 2 is the first: about 60 fps at 720p, with both portals, sound, a controller, saves and Steam Cloud.</p>
+      </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10.5 6.5h3"/><path d="m10.5 11 3.5 2-3.5 2z" fill="currentColor"/></svg></div>
         <h3>Native on the phone</h3>
-        <p>Wine, the FEX x86-64 translator and DXMT run together inside one iOS app. Direct3D 10 and 11 render straight to Metal through DXMT.</p>
+        <p>Wine, the FEX x86 translator and DXMT run together inside one iOS app. Direct3D 10 and 11 render straight to Metal through DXMT.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5l9 15 9-15"/><path d="M8 5l4 7 4-7"/></svg></div>
         <h3>Vulkan, with KosmicKrisp<span class="tag">EXPERIMENTAL</span></h3>
-        <p>A Vulkan backend on KosmicKrisp, Mesa's Vulkan driver for Metal, opens the door to Direct3D 12 through vkd3d-proton, and runs Direct3D 8 to 11 through DXVK. Under active development.</p>
+        <p>A Vulkan backend on KosmicKrisp, Mesa's Vulkan driver for Metal, ported to iOS. It draws Direct3D 9 through DXVK (Portal 2 runs on it) and opens the door to Direct3D 12 through vkd3d-proton. Each game gets the right backend automatically.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9h10a4 4 0 0 1 3.9 4.9l-.8 3.5a2.3 2.3 0 0 1-4 1L14 16h-4l-2.1 2.4a2.3 2.3 0 0 1-4-1l-.8-3.5A4 4 0 0 1 7 9Z"/><path d="M8 11.5v3M6.5 13h3"/><circle cx="15.5" cy="12.5" r=".6" fill="currentColor"/><circle cx="17" cy="14" r=".6" fill="currentColor"/></svg></div>
         <h3>Made for a controller</h3>
         <p>A landscape, gamepad-first interface and an in-game menu to pause, resume or quit. Controllers reach the game as XInput.</p>
       </div>
-      <div class="card wide">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
-        <h3>More than a repackage</h3>
-        <p>Over a hundred of our own patches on top of our dependencies: performance and compatibility work (faster FEX translation for Unity games, lossless texture compression kept on in DXMT, geometry shaders and transform feedback in KosmicKrisp, feature level 12_0 in vkd3d-proton), dozens of bug fixes, and the diagnostics behind them. Each one is a <a href="https://github.com/playportdev/playport/tree/main/patches">reviewable patch</a> with the evidence for it.</p>
-      </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h3"/></svg></div>
         <h3>Your library</h3>
         <p>Sign in to your store, browse what you own and download it straight to the phone. Steam works today; GOG and Epic Games are planned.</p>
       </div>
+      <div class="card wide">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+        <h3>More than a repackage</h3>
+        <p>Over 170 of our own patches on top of our dependencies: the 32-bit runtime, performance and compatibility work (faster FEX translation for Unity games, x87 math at native precision, lossless texture compression kept on in DXMT, geometry shaders and transform feedback in KosmicKrisp, feature level 12_0 in vkd3d-proton), dozens of bug fixes, and the diagnostics behind them. Each one is a <a href="https://github.com/playportdev/playport/tree/main/patches">reviewable patch</a> with the evidence for it.</p>
+      </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></div>
         <h3>JIT built in</h3>
         <p>The app carries its own JIT helper, so every Play works from the phone alone after a one-time pairing.</p>
-      </div>
-      <div class="card">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/><path d="M21 3l-7.5 7.5"/></svg></div>
-        <h3>On the latest upstreams</h3>
-        <p>The ports are carried forward onto current releases of Wine, Proton, FEX and DXMT, so fixes from upstream arrive here too.</p>
-      </div>
-      <div class="card">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="m8 8 2 2-2 2M12 12h4"/></svg></div>
-        <h3>No Mac needed</h3>
-        <p>The whole app is built, signed and installed from one Linux machine, with a free Apple ID.</p>
       </div>
     </div>
   </div>
@@ -342,11 +337,11 @@
     <p class="sub">iOS allows no second process and no JIT without a debugger, so Playport runs Wine's whole multi-process design as threads of a single app, with its own JIT helper attached for every launch.</p>
     <div class="pipeline">
       <div class="lane">
-        <div class="lane-label">x86-64 code</div>
+        <div class="lane-label">x86 code</div>
         <div class="flow">
-          <div class="node">Game.exe<small>x86-64 Windows</small></div>
+          <div class="node">Game.exe<small>64-bit or 32-bit Windows</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
-          <div class="node hot">FEX<small>x86-64 to ARM64, JIT</small></div>
+          <div class="node hot">FEX<small>x86-64 and x86 to ARM64, JIT</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
           <div class="node">Apple silicon<small>the phone's CPU</small></div>
         </div>
@@ -356,7 +351,7 @@
         <div class="flow">
           <div class="node">Win32 calls<small>from the game</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
-          <div class="node hot">Wine<small>ARM64EC, native code, Proton 11 commits</small></div>
+          <div class="node hot">Wine<small>ARM64EC, WoW64 for 32-bit, Proton 11 commits</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
           <div class="node">iOS<small>files, input, sound</small></div>
         </div>
@@ -372,34 +367,40 @@
         </div>
       </div>
       <div class="lane">
-        <div class="lane-label">Vulkan <span class="tag">EXPERIMENTAL</span></div>
+        <div class="lane-label">Vulkan</div>
         <div class="flow">
-          <div class="node">D3D12<small>and D3D8 to 11</small></div>
+          <div class="node">D3D9, D3D12<small>and D3D8 to 11</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
-          <div class="node hot exp">vkd3d-proton, DXVK<small>Direct3D to Vulkan</small></div>
+          <div class="node hot">DXVK, vkd3d-proton<small>Direct3D to Vulkan</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
-          <div class="node hot exp">KosmicKrisp<small>Vulkan on Metal</small></div>
+          <div class="node hot">KosmicKrisp<small>Vulkan on Metal</small></div>
           <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></span>
           <div class="node">Metal<small>the phone's GPU</small></div>
         </div>
       </div>
     </div>
-    <p class="process"><strong>All of it is one iOS process:</strong> the wineserver is a thread, each Windows program a pseudo-process with its own PEB, and the translated code lives in a JIT pool the app's own helper unlocks. Read the <a href="https://github.com/playportdev/playport/blob/main/docs/ARCHITECTURE.md">architecture</a>.</p>
+    <p class="process"><strong>All of it is one iOS process:</strong> the wineserver is a thread, each Windows program a pseudo-process with its own PEB, each 32-bit game gets its own 4 GB window, and the translated code lives in a JIT pool the app's own helper unlocks. Read the <a href="https://github.com/playportdev/playport/blob/main/docs/ARCHITECTURE.md">architecture</a>.</p>
   </div>
 </section>
 
-<section id="upstreams">
+<section id="madeira">
   <div class="wrap">
-    <p class="kicker">Built on Madeira, kept current</p>
-    <h2>On the latest upstreams.</h2>
-    <p class="sub">Playport is built on <a href="https://github.com/willfaust/Madeira">willfaust/Madeira</a>, which first ran Wine, FEX-Emu and DXMT as one process on iOS. Where Madeira stays on its own forks, Playport carries those ports forward onto current releases.</p>
+    <p class="kicker">Built on Madeira, taken further</p>
+    <h2>How Playport differs from Madeira.</h2>
+    <p class="sub">Playport is built on <a href="https://github.com/willfaust/Madeira">willfaust/Madeira</a>, the research project that first ran Wine, FEX-Emu and DXMT as one process on iOS. Madeira proved it could be done; Playport turns it into an app you can play with. In plain points:</p>
     <div class="table-wrap"><table class="versions">
-      <thead><tr><th>Component</th><th>Madeira</th><th>Playport</th></tr></thead>
+      <thead><tr><th></th><th>Madeira</th><th>Playport</th></tr></thead>
       <tbody>
+        <tr><td>32-bit games</td><td class="old">x86-64 only</td><td class="new">x86-64 and 32-bit x86: Portal 2 at about 60 fps <span class="tag">NEW</span></td></tr>
+        <tr><td>Graphics</td><td class="old">Direct3D 11 through DXMT</td><td class="new">DXMT for Direct3D 10 and 11, plus Vulkan through KosmicKrisp: Direct3D 9 through DXVK, Direct3D 12 through vkd3d-proton</td></tr>
         <tr><td>Wine</td><td class="old">11.4 fork</td><td class="new">WineHQ 11.18 + Valve's Proton 11 Wine</td></tr>
         <tr><td>FEX</td><td class="old">2607 fork</td><td class="new">FEX 2609.1</td></tr>
         <tr><td>DXMT</td><td class="old">older fork</td><td class="new">DXMT main</td></tr>
-        <tr><td>Vulkan</td><td class="old">none</td><td class="new">KosmicKrisp from Mesa main <span class="tag">EXPERIMENTAL</span></td></tr>
+        <tr><td>Getting games</td><td class="old">launches set up per test title</td><td class="new">Sign in to Steam, browse your library, download to the phone; cloud saves and achievements</td></tr>
+        <tr><td>The app</td><td class="old">a touch-driven test bench</td><td class="new">A landscape, gamepad-first app with an in-game menu</td></tr>
+        <tr><td>JIT</td><td class="old">a separate debugger app attaches for every launch</td><td class="new">A JIT helper built into the app, after a one-time pairing</td></tr>
+        <tr><td>Building</td><td class="old">Xcode on a Mac</td><td class="new">One Linux machine and a free Apple ID</td></tr>
+        <tr><td>Getting it</td><td class="old">build it yourself</td><td class="new">A ready <code>.ipa</code>, with the complete source of that exact build</td></tr>
       </tbody>
     </table></div>
   </div>
@@ -430,9 +431,9 @@
     <p class="sub">Playport is young. Here is what to expect.</p>
     <ul class="notes">
       <li><strong>Tested on one phone:</strong> an A19 Pro iPhone on iOS 27.0. See the <a href="https://github.com/playportdev/playport/blob/main/docs/DEVICE.md#known-good-ios-versions">known-good versions</a>.</li>
-      <li><strong>64-bit games only.</strong> iOS leaves no room for 32-bit Windows programs.</li>
+      <li><strong>32-bit games are new.</strong> Portal 2 is the only one tested so far; other 32-bit Direct3D 9 games take the same path, so expect rough edges.</li>
       <li><strong>Refresh weekly.</strong> A free Apple ID signs apps for seven days; SideStore can refresh on the phone. Your games and saves stay. Playport takes one of the account's three app slots, and its JIT helper one of its ten App IDs a week.</li>
-      <li><strong>Vulkan is experimental.</strong> The path through KosmicKrisp, for Direct3D 12 and DXVK, is under active development.</li>
+      <li><strong>Vulkan is experimental.</strong> The path through KosmicKrisp, for DXVK and Direct3D 12, is under active development. Long sessions warm the phone, and frame rates drop with the heat.</li>
     </ul>
   </div>
 </section>
@@ -442,6 +443,12 @@
     <p class="kicker">On the phone</p>
     <h2>Running on an iPhone, right now.</h2>
     <p class="sub">A screen recording and screenshots from an A19 Pro iPhone on iOS 27.0, with Metal's performance HUD on. Every frame is rendered on the phone.</p>
+    <div class="shots" id="video-portal2">
+      <figure class="shot">
+        <div class="frame"><video src="video/portal2.mp4" poster="video/portal2-poster.webp" width="1280" height="590" controls playsinline preload="none" aria-label="Screen recording: from Playport's Home to Portal 2, Play, the load, then a test chamber with an orange and a blue portal, at about 60 fps on Metal's HUD"></video></div>
+        <figcaption><strong>Portal 2, a 32-bit game, uncut</strong>From Home to Play to a test chamber: Direct3D 9 through DXVK and KosmicKrisp, 60 fps at 720p, both portals.</figcaption>
+      </figure>
+    </div>
     <div class="shots" id="video">
       <figure class="shot">
         <div class="frame"><video src="video/hollow-knight.mp4" poster="video/hollow-knight-poster.webp" width="1280" height="590" controls playsinline preload="none" aria-label="Screen recording: from Playport's Library to Hollow Knight's game options, then Play, about a minute of Hollow Knight at 60 fps, and Quit back to Home"></video></div>
