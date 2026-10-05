@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor McAdams <cmcadams@codeweavers.com>
+Date: Wed, 23 Sep 2026 08:32:50 -0400
+Subject: [PATCH] setupapi: Validate device instance ID when creating or
+ opening device info.
+
+Signed-off-by: Connor McAdams <cmcadams@codeweavers.com>
+CW-Bug-Id: #27608
+Valve-commit: 26036b79eda2f56e36330df6ce665373d55a3456
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-10-05-deps-latest.md
+Offered-upstream: no
+---
+ dlls/setupapi/devinst.c | 41 ++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/setupapi/devinst.c b/dlls/setupapi/devinst.c
+index 74891e6..933d90c 100644
+--- a/dlls/setupapi/devinst.c
++++ b/dlls/setupapi/devinst.c
+@@ -347,6 +347,20 @@ static BOOL is_valid_property_type(DEVPROPTYPE prop_type)
+     return TRUE;
+ }
+ 
++static BOOL is_valid_device_instance_id(const WCHAR *device_instance_id)
++{
++    int separators = 0;
++    const WCHAR *tmp;
++
++    if (!*device_instance_id) return FALSE;
++    if (wcslen(device_instance_id) >= MAX_DEVICE_ID_LEN) return FALSE;
++
++    for (tmp = wcschr(device_instance_id, '\\'); tmp && *tmp; tmp = wcschr(tmp + 1, '\\')) separators++;
++    if (separators != 2) return FALSE;
++    tmp = wcsrchr(device_instance_id, '\\') + 1;
++    return *tmp;
++}
++
+ static LPWSTR SETUPDI_CreateSymbolicLinkPath(LPCWSTR instanceId,
+         const GUID *InterfaceClassGuid, LPCWSTR ReferenceString)
+ {
+@@ -1355,6 +1369,13 @@ BOOL WINAPI SetupDiCreateDeviceInfoW(HDEVINFO devinfo, const WCHAR *name, const
+         return FALSE;
+     }
+ 
++    if ((!(flags & DICD_GENERATE_ID) && !is_valid_device_instance_id(name))
++            || ((flags & DICD_GENERATE_ID) && wcschr(name, '\\')))
++    {
++        SetLastError(ERROR_INVALID_DEVINST_NAME);
++        return FALSE;
++    }
++
+     if (!(set = get_device_set(devinfo)))
+         return FALSE;
+ 
+@@ -1373,12 +1394,6 @@ BOOL WINAPI SetupDiCreateDeviceInfoW(HDEVINFO devinfo, const WCHAR *name, const
+     {
+         unsigned int instance_id;
+ 
+-        if (wcschr(name, '\\'))
+-        {
+-            SetLastError(ERROR_INVALID_DEVINST_NAME);
+-            return FALSE;
+-        }
+-
+         for (instance_id = 0; ; ++instance_id)
+         {
+             if (swprintf(id, ARRAY_SIZE(id), L"ROOT\\%s\\%04u", name, instance_id) == -1)
+@@ -3459,12 +3474,18 @@ BOOL WINAPI SetupDiOpenDeviceInfoA(HDEVINFO devinfo, PCSTR instance_id, HWND hwn
+ 
+     TRACE("%p %s %p 0x%08lx %p\n", devinfo, debugstr_a(instance_id), hwnd_parent, flags, device_data);
+ 
+-    if (!instance_id || strlen(instance_id) >= MAX_DEVICE_ID_LEN)
++    if (!instance_id)
+     {
+         SetLastError(ERROR_INVALID_PARAMETER);
+         return FALSE;
+     }
+ 
++    if (strlen(instance_id) >= MAX_DEVICE_ID_LEN)
++    {
++        SetLastError(ERROR_INVALID_DEVINST_NAME);
++        return FALSE;
++    }
++
+     MultiByteToWideChar(CP_ACP, 0, instance_id, -1, instance_idW, ARRAY_SIZE(instance_idW));
+     return SetupDiOpenDeviceInfoW(devinfo, instance_idW, hwnd_parent, flags, device_data);
+ }
+@@ -3496,6 +3517,12 @@ BOOL WINAPI SetupDiOpenDeviceInfoW(HDEVINFO devinfo, PCWSTR instance_id, HWND hw
+         return FALSE;
+     }
+ 
++    if (!is_valid_device_instance_id(instance_id))
++    {
++        SetLastError(ERROR_INVALID_DEVINST_NAME);
++        return FALSE;
++    }
++
+     if (hwnd_parent)
+         FIXME("hwnd_parent unsupported\n");
+ 

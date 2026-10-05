@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jacek Caban <jacek@codeweavers.com>
+Date: Tue, 29 Sep 2026 21:06:59 +0200
+Subject: [PATCH] ntdll: Explicitly specify section names in DEFINE_USER_FUNC.
+
+CW-Bugi-Id: #27758
+Valve-commit: b6225e37cd27ea0f7b1ffbc1e22713b849e78098
+Picked: clean
+Class: valve
+Evidence: docs/evidence/2026-10-05-deps-latest.md
+Offered-upstream: no
+---
+ dlls/ntdll/rtl.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/rtl.c b/dlls/ntdll/rtl.c
+index 0423165..e594b6c 100644
+--- a/dlls/ntdll/rtl.c
++++ b/dlls/ntdll/rtl.c
+@@ -125,8 +125,13 @@ NTSTATUS WINAPI vDbgPrintExWithPrefix( LPCSTR prefix, ULONG id, ULONG level, LPC
+ 
+ static struct ntuser_client_procs_table user_procs;
+ 
++/*
++ * The Finals makes assumptions about placement of those functions and expect them to be the same
++ * as seen in GCC builds that use .text$name sections for those functions. Specify it explicitly
++ * so that Clang use the same ordering.
++ */
+ #define DEFINE_USER_FUNC(name,ptr) \
+-    LRESULT WINAPI name( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp ) { return (ptr)( hwnd, msg, wp, lp ); }
++    __attribute__((section(".text$" #name))) LRESULT WINAPI name( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp ) { return (ptr)( hwnd, msg, wp, lp ); }
+ 
+ #define USER_FUNC(name,proc) \
+     DEFINE_USER_FUNC( Ntdll##name##_A, user_procs.A[proc][0] ) \

@@ -1,0 +1,410 @@
+# commit	verdict	subject  (ValveSoftware/wine proton_11.0 dc26e618470..bleeding-edge 750fd011356, oldest first)
+c617b765ce9	reverted: Valve reverted it (the pair is left out)	HACK: winex11.drv: Expect a ConfigureNotify when entering fullscreen on KWin.
+730ed11e941	reverted: Valve reverted it (the pair is left out)	Revert "HACK: winex11.drv: Expect a ConfigureNotify when entering fullscreen on KWin."
+7fe6e74da0e	reverted: its next commit (8fe2363c04a) removes it again; net nothing	msctf: HACK: Stub ITfFnReconversion function.
+8fe2363c04a	reverted: removes 7fe6e74da0e again; net nothing	fixup! msctf: Return stub interface from ThreadMgr_GetFunctionProvider().
+34eb29ec337	upstream: already in wine-11.19	winex11.drv: Remove some noisy traces.
+7387d1858a3	upstream: already in wine-11.19	wintypes/tests: Test DataWriter.
+c1bb71ce5cc	upstream: already in wine-11.19	wintypes: Rename struct data_writer to data_writer_factory.
+2858cbb326c	upstream: already in wine-11.19	wintypes: Add DataWriter stubs.
+b39f00d8cee	upstream: already in wine-11.19	wintypes: Implement IDataWriter::WriteBytes().
+7806f446f75	upstream: already in wine-11.19	wintypes: Implement IDataWriter::DetachBuffer().
+5e988675322	upstream: already in wine-11.19	wintypes: Add IDataWriterFactory stubs.
+90745c95c54	upstream: already in wine-11.19	wintypes: Implement IDataWriterFactory::CreateDataWriter().
+b9bdc1c7fa5	upstream: already in wine-11.19	wintypes: Implement IDataWriter::StoreAsync().
+75b3ec89072	upstream: already in wine-11.19	wintypes: Implement IDataWriter::DetachStream().
+4bb052271e7	replaced: touches a file an *_ios.c replacement overrides	fixup! HACK: fshack: win32u: Emulate modesetting by default.
+e2ce04c89c6	upstream: already in wine-11.19	winegstreamer: Preserve sign of stride from 2D buffer.
+0b7452cfa0c	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	winex11.drv: Respect activation settings for fullscreen windows.
+e82eaa84588	upstream: already in wine-11.19	bcrypt: Handle prepended secret buffers in BCryptDeriveKey() for KDF_HASH.
+2978d81d05b	upstream: already in wine-11.19	windowscodecs: Always pass a valid pcbRead pointer to IStream::Read().
+b2064d07c2e	upstream: already in wine-11.19	windows.gaming.input: Allow gamepad added callback to be registered before initializing providers.
+690d0d26c5e	upstream: already in wine-11.19	amstream/tests: Test QueryAccept when connected.
+c03f7666cf7	upstream: already in wine-11.19	amstream/tests: Test negative heights in QueryAccept.
+a7b1d807a96	upstream: already in wine-11.19	amstream: Reject negative heights in QueryAccept.
+1a684fffd4e	upstream: already in wine-11.19	amstream: Accept additional subtypes in QueryAccept.
+dad41fd9b5d	upstream: already in wine-11.19	amstream/tests: Test AcceptQuery behavior after SetFormat.
+0b1f0ccd965	upstream: already in wine-11.19	amstream: Only accept format passed in SetFormat.
+6251b2861a3	upstream: already in wine-11.19	amstream/tests: Test media types when ddraw is passed to AddMediaStream.
+a6b499933af	upstream: already in wine-11.19	amstream: Use DisplayMode to determine pixel format.
+a7495dd079d	upstream: already in wine-11.19	amstream/tests: Test media type is only on the first of each sample.
+702dffa2385	upstream: already in wine-11.19	amstream: Only provide MediaType on first retrieval.
+8b3875854a4	upstream: already in wine-11.19	winegstreamer: Free the streams in unknown_inner_Release().
+883bf15900c	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	windows.media.speech: Add a trace for capture device's name.
+279f5c2e9bc	upstream: already in wine-11.19	amstream/tests: Test enum media type with ddraw.
+762a494401f	upstream: already in wine-11.19	amstream/tests: Test enum media type whilst connected.
+d5a906ec1cd	upstream: already in wine-11.19	amstream/tests: Test enum media type on disconnect.
+c38214c9b03	upstream: already in wine-11.19	amstream: Return current format in media type enum.
+e42e46f93ad	upstream: already in wine-11.19	amstream: Return connected media subtype in enum if connected.
+94196de0d16	reverted: Valve reverted it (the pair is left out)	Revert "winepulse.drv: Process streams timer updates from PA main loop."
+cfa96836dd8	reverted: Valve reverted it (the pair is left out)	winepulse.drv: Process streams timer updates from PA main loop.
+dbc4c0eb08e	fixup: its target is left out	fixup! winepulse.drv: Process streams timer updates from PA main loop.
+b95b19ffa9a	upstream: already in wine-11.19	setupapi: Fix some cfgmgr32 function signatures.
+65d721a3ff6	upstream: already in wine-11.19	cfgmgr32/tests: Add missing newline.
+cf556df190f	upstream: already in wine-11.19	include: Update cfgmgr32.h definitions.
+6ac76795ad2	upstream: already in wine-11.19	cfgmgr32: Add missing entries to cfgmgr32.spec.
+5ee98a12f57	upstream: already in wine-11.19	cfgmgr32: Split sources to separate files.
+3c891789d55	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Class_Key_Name(_Ex)(A|W).
+16591ae0537	upstream: already in wine-11.19	setupapi: Forward CM_Get_Class_Key_Name(_Ex)(A|W) to cfgmgr32.
+b9005663319	upstream: already in wine-11.19	cfgmgr32: Implement CM_Open_Class_Key(_Ex)(A|W).
+4814ae13937	upstream: already in wine-11.19	setupapi: Forward CM_Open_Class_Key(_Ex)(A|W) to cfgmgr32.
+0e63a3c0593	upstream: already in wine-11.19	cfgmgr32: Cache some common root registry keys.
+2a9654d1dbb	upstream: already in wine-11.19	cfgmgr32: Implement CM_Enumerate_Classes(_Ex).
+28d821d6cc8	upstream: already in wine-11.19	setupapi: Forward CM_Enumerate_Classes(_Ex) to cfgmgr32.
+4adccfe7c29	upstream: already in wine-11.19	cfgmgr32: Implement CM_Enumerate_Enumerators(_Ex)(A|W).
+9d9ea8c1304	upstream: already in wine-11.19	setupapi: Forward CM_Enumerate_Enumerators(_Ex)(A|W) to cfgmgr32.
+7d25f2dd31b	upstream: already in wine-11.19	cfgmgr32: Implement CM_Open_Device_Interface_Key(_Ex)(A|W).
+c5a300cb371	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Class_Registry_Property(A|W).
+19a19f9bb6b	upstream: already in wine-11.19	setupapi: Forward CM_Get_Class_Registry_Property(A|W) to cfgmgr32.
+86ca66f0e26	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Class_Property(_Ex)W.
+e79cbaeac1b	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Class_Property_Keys(_Ex).
+cec9a3d11d9	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Device_Interface_List(_Size)(_Ex)(A|W).
+9c91d6ea208	upstream: already in wine-11.19	cfgmgr32: Reimplement CM_Get_Device_Interface_Property(_Ex)W.
+6a94222deaa	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Device_Interface_Property_Keys(_Ex)W.
+6bb82516078	upstream: already in wine-11.19	cfgmgr32/tests: Add results for missing permissions.
+0338a668979	upstream: already in wine-11.19	cfgmgr32/tests: Skip some localized names tests.
+345dff9af2d	upstream: already in wine-11.19	cfgmgr32/tests: Skip some HID devices tests if none are present.
+c0381494592	upstream: already in wine-11.19	cfgmgr32: Fix leak of device info set in DevGetObjectPropertiesEx.
+e2bb7ca0c45	upstream: already in wine-11.19	cfgmgr32: Move qsort out of dev_object_iface_get_props.
+40f2aee512e	upstream: already in wine-11.19	cfgmgr32: Introduce helpers to collect object property keys.
+425dd4a1263	upstream: already in wine-11.19	cfgmgr32: Allocate the property array to its maximum size.
+e5c808606b5	upstream: already in wine-11.19	cfgmgr32: Keep properties in the order they were requested.
+757b6748dce	upstream: already in wine-11.19	cfgmgr32: Remove DEV_OBJECT parameter from internal callbacks.
+831bf8285df	upstream: already in wine-11.19	cfrmgr32: Introduce a new dev_get_device_interface_property helper.
+815f1259807	upstream: already in wine-11.19	cfgmgr32: Initialize device_interface structs in DEV_OBJECT functions.
+9c119852ddf	upstream: already in wine-11.19	cfgmgr32: Return BOOL from devprop_filter_matches_properties.
+69a56aeec58	upstream: already in wine-11.19	cfgmgr32: Use the new helpers to get device interface property keys.
+699f7ec22f8	upstream: already in wine-11.19	cfgmgr32: Use the new helpers to read device interface properties.
+5bf6322a4e1	upstream: already in wine-11.19	cfgmgr32: Return LSTATUS from enum_dev_objects callback.
+01d42e950fb	upstream: already in wine-11.19	cfgmgr32: Enumerate the registry keys directly in enum_dev_objects.
+42c57c45503	upstream: already in wine-11.19	setupapi: Cleanup SetupDiOpenClassRegKey(Ex)(A|W) code style.
+bdbc068e181	upstream: already in wine-11.19	setupapi: Reimplement SetupDiOpenClassRegKeyExW using cfgmgr32.
+e1b4e0d0589	upstream: already in wine-11.19	setupapi: Cleanup SetupDiClassGuidsFromName(Ex)(A|W) code style.
+7cfb38dd94f	upstream: already in wine-11.19	setupapi: Reimplement SetupDiClassGuidsFromNameExW using cfgmgr32.
+0dd098fefd5	upstream: already in wine-11.19	setupapi: Cleanup SetupDiBuildClassInfoList(Ex)(A|W) code style.
+624f7825c38	upstream: already in wine-11.19	setupapi: Reimplement SetupDiBuildClassInfoListExW using cfgmgr32.
+33998c1025c	upstream: already in wine-11.19	setupapi: Cleanup SetupDiGetClassDescription(Ex)(A|W) code style.
+12b2be1018c	upstream: already in wine-11.19	setupapi: Reimplement SetupDiGetClassDescriptionExW using cfgmgr32.
+d5084485420	upstream: already in wine-11.19	setupapi: Forward CM_Get_Device_Interface_List(_Size)(_Ex)(A|W) to cfgmgr32.
+bfbce2d28c0	upstream: already in wine-11.19	setupapi: Use CM_Locate_DevNode_ExW to allocate devnode.
+0deeb3182dd	upstream: already in wine-11.19	setupapi: Use CM_Get_Device_IDW to get devnode device.
+7ef4a8bae8b	upstream: already in wine-11.19	cfgmgr32: Implement CM_Locate_DevNode(_Ex)(A|W) and CM_Get_Device_ID(_Size)(_Ex)(A|W).
+3b28c68c539	upstream: already in wine-11.19	cfgmgr32: Implement CM_Open_DevNode_Key(_Ex).
+1eb55147235	upstream: already in wine-11.19	setupapi: Forward CM_Open_DevNode_Key(_Ex) to cfgmgr32.
+ac3f82df4c3	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_DevNode_Registry_Property(_Ex)(A|W).
+b0686de3371	upstream: already in wine-11.19	setupapi: Forward CM_Get_DevNode_Registry_Property(_Ex)(A|W) to cfgmgr32.
+c62e16a1548	upstream: already in wine-11.19	setupapi: Fix wrong buffer size in SetupDiGetClassDescriptionExA.
+447ea5ef2c8	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_DevNode_Property(_Ex)(A|W).
+edf79f14585	upstream: already in wine-11.19	setupapi: Forward CM_Get_DevNode_Property(_Ex)(A|W) to cfgmgr32.
+bd304265b8a	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_DevNode_Property_Keys(_Ex).
+740a7d9c73d	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Device_ID_List(_Size)(_Ex)(A|W).
+fd69b9911b2	upstream: already in wine-11.19	setupapi: Forward CM_Get_Device_ID_List(_Size)(_Ex)(A|W) to cfgmgr32.
+f410a42ca7a	upstream: already in wine-11.19	cfgmgr32: Move remaining stubs from setupapi.
+84ad3833005	upstream: already in wine-11.19	cfgmgr32: Fix querying unnamed properties.
+19efc7157b1	upstream: already in wine-11.19	cfgmgr32: Catch invalid handles in CM_Unregister_Notification.
+eab0235a480	upstream: already in wine-11.19	ntoskrnl: Store DEVPKEY_Device_Parent when enumerating child devices.
+9c69f47aa17	upstream: already in wine-11.19	ntoskrnl/tests: Add DEVPKEY_Device_Parent test.
+b76c8f816d2	upstream: already in wine-11.19	ntoskrnl: Store DEVPKEY_Device_Children on parent after bus enumeration.
+264e2bfd006	upstream: already in wine-11.19	ntoskrnl/tests: Add DEVPKEY_Device_Children test.
+4ddff1e629c	upstream: already in wine-11.19	ntoskrnl: Store DEVPKEY_Device_Siblings on each child after bus enumeration.
+b8f476b6c3c	upstream: already in wine-11.19	ntoskrnl/tests: Add DEVPKEY_Device_Siblings test.
+3d8f30aa7ff	upstream: already in wine-11.19	cfgmgr32: Implement CM_Get_Parent using DEVPKEY_Device_Parent property.
+918f5b67731	upstream: already in wine-11.19	ntoskrnl/tests: Test CM_Get_Parent on the PnP-managed child device.
+429bd039045	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	gameinput: Use version suffixes instead of prefixes.
+813f605b7f6	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	include: Add definitions for gameinput v3.
+6261bdc90e7	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	HACK: gameinput: Guard GameInputCreate for most games.
+91aee047774	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	gameinput: Add IGameInput_v0 class stub.
+2d9f564f9d8	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	gameinput: Create an HDEVQUERY to enumerate available devices.
+777df092e30	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	gameinput: Create device callback entries.
+00bc863672d	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	gameinput: Create devices entries for gamepad devices.
+4d8ed06ac38	unused: Valve's GameInput enumerates HID gamepads (cfgmgr32 device queries over winebus), which the iOS build does not have; the app's pad goes through Madeira's xinput	gameinput: Notify callbacks of added / removed devices.
+4d82a68486d	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	HACK: gameinput: Emulate Steam Input native hooks.
+6ed81b409a2	upstream: already in wine-11.19	xinput1_3: Remove an unreachable return from HID_set_state().
+e472645d362	upstream: already in wine-11.19	xinput1_3: Keep controller read events across device changes.
+b75aefe0af5	upstream: already in wine-11.19	xinput1_3: Return correct slot indices for existing devices in find_opened_device().
+cc6995fb694	upstream: already in wine-11.19	xinput1_3: Move keystroke states and locks to check_for_keystroke.
+9d9af04b417	upstream: already in wine-11.19	xinput1_3: Read and write current state without the controller lock.
+cc872c292bf	upstream: already in wine-11.19	xinput1_3: Use a global critical section to guard device and enabled flag.
+3d357607b05	upstream: already in wine-11.19	xinput1_3: Extend the CS to guard all device open / read / destroy.
+5dd7fffd301	upstream: already in wine-11.19	xinput1_3: Don't wait on overlapped event if CancelIoEx failed.
+372b18c931c	upstream: already in wine-11.19	xinput1_3: Clear enabled when controller is destroyed on read error.
+39a71b7a4ab	upstream: already in wine-11.19	xinput1_3: Return FALSE from controller_init if device enable failed.
+8e646fedba0	upstream: already in wine-11.19	xinput1_3: Disable controller when removing an opened device.
+a4b10923616	upstream: already in wine-11.19	xinput1_3: Rescan controllers before reporting disconnection to callers.
+fd0129e61a3	reverted: reapplies 6d993a3a5f8, whose revert the series carried; that patch is dropped instead (the pair is left out)	Reapply "ntoskrnl: Enumerate child devices on a separate thread."
+32034f5bf63	upstream: already in wine-11.19	xinput1_3: Initialize state with the previous state in read_controller_state.
+37d87f86017	upstream: already in wine-11.19	xinput1_3: Initialize controller state only on success in controller_init.
+33c4a56d5da	fixup: its target is left out	fixup! winepulse.drv: Process streams timer updates from PA main loop.
+77f9f14ad59	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	amdxc64: Auto-enable upgrade on compatible HW.
+20c0efa04d1	fixup: its target is left out	fixup! winepulse.drv: Process streams timer updates from PA main loop.
+5ccd852c72e	upstream: already in wine-11.19	cfgmgr32: Fix CM_Get_Device_ID buffer size handling.
+7b941ed7167	fixup: its target is left out	fixup! winepulse.drv: Process streams timer updates from PA main loop.
+6cee7d0f4e6	replaced: touches a file an *_ios.c replacement overrides	Revert "fixup! ntdll: HACK: Force en-US locale for Tom Clancy’s The Division 2 EAC launcher."
+40fcb391a95	replaced: touches a file an *_ios.c replacement overrides	Revert "ntdll: HACK: Force en-US locale for Tom Clancy’s The Division 2 EAC launcher."
+a458ef0c1ce	replaced: touches a file an *_ios.c replacement overrides	Revert "fixup! ntdll: HACK: Force en-US locale for EAC launcher."
+063def96cb7	replaced: touches a file an *_ios.c replacement overrides	Revert "ntdll: HACK: Force en-US locale for EAC launcher."
+8d7281659cb	upstream: already in wine-11.19	winex11.drv: Flush display in acquire_selection().
+26442e0a3ce	replaced: touches a file an *_ios.c replacement overrides	ntdll: Enable WINESTEAMNOEXEC for Sniper Elite V2.
+f645e358214	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	winebus.sys: HACK: Add PROTON_SPOOF_STEAMINPUT_VIDPID env var.
+9d5d6369db7	inert: wine.inf only; the app never runs wine.inf	wine.inf: Enable builtin atiadlxx for Far Cry New Dawn.
+a411745784f	upstream: already in wine-11.19	shell32: Add AppDataDocuments known folder.
+3a0709b1ab2	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	opengl32: HACK: Fixup shaders for The Rabbit's Scroll.
+60b472a0539	media: Media Foundation/GStreamer stack (Playport keeps its own video work)	fixup! mfreadwrite/reader: Rely on the video processor sample allocator.
+69e0924b4ce	upstream: already in wine-11.19	ntdll: Add BirthVolumeId to loaded dll file id.
+91642a856d5	take: picked clean	kernelbase: HACK: Force disable direct composition for Elisa: The Innkeeper - Prequel.
+916761fbab0	upstream: already in wine-11.19	strmbase: Introduce callback for ReceiveCanBlock.
+47192dde282	upstream: already in wine-11.19	winex11.drv: Allow ConfigureRequest events when the window is maximized.
+8cbb61908de	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	amd_ags_x64: Recognize version 6.3.1.
+c7039b1aff7	upstream: already in wine-11.19	quartz/tests: Add tests for implicit fullscreen support by filter graph.
+16c5e9e05e0	upstream: already in wine-11.19	quartz: Implement BaseControlWindowImpl_GetRestorePosition().
+602123a19e6	upstream: already in wine-11.19	quartz: Introduce fullscreen mode emulation in filtergraph.
+dd1e2be0f04	upstream: already in wine-11.19	quartz: Implement entering and leaving emulated fullscreen mode.
+c58ac8a0c46	fixup: its target is left out	fixup! quartz: Implement entering and leaving emulated fullscreen mode.
+cb53f984ab5	build: configure, makedep, generated files or tools	HACK/INTEL: igd10iumd64: Add dummy DLL and install it under DriverStore.
+d324dfed18c	replaced: touches a file an *_ios.c replacement overrides	HACK/INTEL: win32u: Set DriverInfPath for Intel GPUs.
+6db5f266c32	proton: Intel GPU driver-store spoofing; its pair d324dfed18c is in a replaced file and cb53f984ab5 is build	HACK/INTEL: setupapi: Hack SetupGetInfDriverStoreLocationW() to support igd_faux.inf.
+061e83212cc	inert: wine.inf only; the app never runs wine.inf	wine.inf: Enable builtin atiadlxx for Far Cry 5.
+69b85e74fe8	upstream: already in wine-11.19	winevulkan: Update to VK spec version 1.4.340.
+bf5b68998a7	upstream: already in wine-11.19	winevulkan: Update to VK spec version 1.4.344.
+a2c016ec3bb	upstream: already in wine-11.19	winevulkan: Update to VK spec version 1.4.346.
+47cf040550d	upstream: already in wine-11.19	winevulkan: Update to VK spec version 1.4.347.
+0637813d4f5	upstream: already in wine-11.19	winevulkan: Update to VK spec version 1.4.350.
+4df782380fe	upstream: already in wine-11.19	winevulkan: Update to VK spec version 1.4.353.
+20d85e6200b	upstream: already in wine-11.19	winevulkan: Update to VK spec version 1.4.357.
+3a3248354b0	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	winevulkan: Update vk.xml / video.xml to version 1.4.357.
+570b1da0092	upstream: already in wine-11.19	crypt32: Avoid adding spurious line separator in encodeBase64[A/W]().
+2ac30508dd3	upstream: already in wine-11.19	kernel32/tests: Add tests for unhandled exception filter with BeingDebugged PEB flag set.
+9f884d2ff8d	upstream: already in wine-11.19	kernel32/tests: Add tests for unhandled exception filter under debugger.
+5e4c8964279	upstream: already in wine-11.19	kernelbase: Query debug port instead of BeingDebugged PEB flag in UnhandledExceptionFilter().
+ff668016323	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	winex11.drv: HACK: Restore exact viewport coordinates if changed in glxSwapBuffers().
+ce470ee5e3b	upstream: already in wine-11.19	winhttp: Implement WINHTTP_OPTION_SERVER_CERT_CHAIN_CONTEXT.
+3ad84e5282b	upstream: already in wine-11.19	winhttp: Handle incorrect handle state when querying WINHTTP_OPTION_SERVER_CERT_CHAIN_CONTEXT.
+a6d037ea3ca	upstream: already in wine-11.19	winhttp: Use chain established in netconn_verify_cert() for WINHTTP_OPTION_SERVER_CERT_CHAIN_CONTEXT.
+7a67cc3c102	upstream: already in wine-11.19	crypt32: Fix output string tracing in quote_rdn_value_to_str_w().
+73f01a4a0e9	upstream: already in wine-11.19	cmd/tests: Add test for console mode change.
+8eb7d5d7a33	upstream: already in wine-11.19	cmd: Set console mode in node_execute().
+f279ca9f7fb	upstream: already in wine-11.19	ntdll: Implement NtQuerySystemInformation( SystemNumaProcessorMap ).
+60c0797db30	upstream: already in wine-11.19	kernelbase: Implement GetNumaHighestNodeNumber().
+29a03ee1f70	upstream: already in wine-11.19	kernel32: Implement GetNumaProcessorNode[Ex]().
+6803d94538a	upstream: already in wine-11.19	kernel32: Add FIXME to GetNumaProximityNode() stub.
+b83efcca926	upstream: already in wine-11.19	kernelbase: Implement GetNumaNodeProcessorMask[Ex]().
+9755ccc9f93	upstream: already in wine-11.19	kernelbase: Add FIXME to GetNumaProximityNodeEx().
+1aaf1f00805	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	kernelbase: HACK: Force --no-sandbox for msedgewebview2.exe on ARM.
+77ef836e108	upstream: already in wine-11.19	user32/tests: Move the test window position further away from the top-left corner of the work area.
+bad8806a31e	upstream: already in wine-11.19	user32/tests: Fix test failures when the top-left corner of the work area is not (0,0).
+b5cd671c158	upstream: already in wine-11.19	user32/tests: Add more window placement tests.
+6bbaa576c39	upstream: already in wine-11.19	win32u: Implement coordinates mapping in {Get,Set}WindowPlacement().
+cccbab7d1b6	upstream: already in wine-11.19	notepad: Use SetWindowPlacement() to restore the saved normal window position.
+ea8a9a569de	upstream: already in wine-11.19	taskmgr: Use SetWindowPlacement() to restore the saved normal window position.
+6269f967a36	upstream: already in wine-11.19	wordpad: Use SetWindowPlacement() to restore the saved normal window position.
+c0f3de900b6	upstream: already in wine-11.19	mfreadwrite: Do not return NEED_MORE_INPUT from source_reader_push_transform_samples().
+722b38449dc	upstream: already in wine-11.19	crypt32: Support CertGetCertificateContextProperty(CERT_SIGN_HASH_CNG_ALG_PROP_ID).
+a3f217b267e	upstream: already in wine-11.19	crypt32: Avoid conflict between unnamed containers.
+9605f8b8ff2	upstream: already in wine-11.19	crypt32: Use the strong provider in CertCreateSelfSignCertificate().
+36d6052644a	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	winex11.drv/init: Use GWL_EXSTYLE instead of GWL_STYLE when checking for WS_EX_LAYERED.
+5e1293d5e4a	upstream: already in wine-11.19	ntdll: Check iosb for FSCTL_GET_OBJECT_ID in open_dll_file().
+5629ada8d13	upstream: already in wine-11.19	wintrust: Add parameter check in WTHelperGetProvCertFromChain.
+1489003c1b7	upstream: already in wine-11.19	xaudio2: Release the correct lock on failure in CreateSourceVoice().
+be5ea526d84	upstream: already in wine-11.19	jscript: Separate keyword searching from parsing.
+4bccf83f606	upstream: already in wine-11.19	jscript: Support Unicode characters in identifiers.
+c91de34b04b	upstream: already in wine-11.19	jscript/tests: Add ES3 identifier tests.
+6af8e1a52db	upstream: already in wine-11.19	mshtml/tests: Add ES5 identifier tests.
+c3418224b7d	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	HACK: win32u: Reject minimization when on gamescope for Arma 3.
+5e28eaa659e	upstream: already in wine-11.19	dinput/tests: Test setting two actions with the same control identifier.
+5519d089852	upstream: already in wine-11.19	dinput: Check device GUID in init_object_app_data().
+e7697ad4950	upstream: already in wine-11.19	ntdll: Add WAYLAND_DISPLAY to ignored variables list.
+d5f209364ce	fixup: its target (e415577be81 _isatty) is left out	fixup! msvcrt: HACK: Introduce asm wrapper for _isatty on x64.
+287c5118124	upstream: already in wine-11.19	d2d1/tests: Add some tests for sprite batches.
+0fcaa3d4206	upstream: already in wine-11.19	d2d1: Implement sprite batch object methods.
+d5039cf2a7d	upstream: already in wine-11.19	d2d1: Implement DrawSpriteBatch() command list recording.
+c715eda830a	upstream: already in wine-11.19	winhttp: Support WINHTTP_QUERY_FLAG_NUMBER64 with WINHTTP_QUERY_CONTENT_LENGTH.
+055deb7bafc	upstream: already in wine-11.19	ntdll: Run native-ready .net applications as ARM64EC on ARM64.
+901a2c29e27	upstream: already in wine-11.19	msvcrt: Always set WX_TEXT flag when importing std handles.
+99ee927f6fd	upstream: already in wine-11.19	msvcrt: Initialize std handles in a loop in msvcrt_init_io().
+9cb9a07bdf7	upstream: already in wine-11.19	msvcrt: Don't update system std handles in msvcrt_init_io().
+3b4655427f8	upstream: already in wine-11.19	msvcrt: Also inherit WX_ATEOF and WX_READNL attributes.
+427c67821e8	upstream: already in wine-11.19	user32/tests: Cleanup AttachThreadInput tests.
+0422a0032d1	upstream: already in wine-11.19	user32/tests: Test that thread input attachments are refcounted.
+876fa8e763a	upstream: already in wine-11.19	server: Move desktop check out of attach_thread_input.
+8056e64501b	upstream: already in wine-11.19	server: Pass desktop instead of thread to create_thread_input.
+0d6ddeadf8b	upstream: already in wine-11.19	server: Assume thread queues are valid in attach_thread_input.
+01b62fb5249	upstream: already in wine-11.19	server: Update both shared input at once in assign_thread_input.
+333c42708ba	upstream: already in wine-11.19	server: Update shared input keystate in assign_thread_input.
+c580d1fe30c	upstream: already in wine-11.19	server: Update focus and active windows in assign_thread_input.
+f703b8256cb	upstream: already in wine-11.19	server: Detach the parent window thread input when reparenting.
+2c9f671dadf	upstream: already in wine-11.19	server: Implement thread input attachments refcounting.
+beda30dfdaf	upstream: already in wine-11.19	win32u: Lock host window state updates when applying new state.
+7a603c0bc92	replaced: touches a file an *_ios.c replacement overrides	fixup! winex11: Delay setting foreground on a minimized window.
+711725ea045	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	HACK: winex11: Optionally disable gamescope ignore focus hack.
+6ee0f43b577	replaced: touches a file an *_ios.c replacement overrides	fixup! loader: HACK: Build wine64 and wine64-preloader.
+9e5997c3468	upstream: already in wine-11.19	server: Consider _MOVE_NOCOALESCE and _ABSOLUTE flags when merging mouse events.
+9fc2cad1d3f	fixup: its target is left out	fixup! server: Consider _MOVE_NOCOALESCE and _ABSOLUTE flags when merging mouse events.
+753d0b32d89	upstream: already in wine-11.19	wbemdisp/tests: Test ISWbemObjectPath::DisplayName.
+5e42f25f142	upstream: already in wine-11.19	wbemdisp/tests: Test ISWbemObject set enumeration.
+86141886b43	upstream: already in wine-11.19	wbemdisp: Handle null output pointer in enumvar_Next().
+e353588d21f	upstream: already in wine-11.19	wbemdisp: Add ISWbemObjectPath stub implementation.
+01561d7c37d	upstream: already in wine-11.19	wbemdisp: Partially implement get ISWbemObjectPath::DisplayName.
+92332526b27	upstream: already in wine-11.19	wbemdisp: Implement ISWbemObject::GetTypeInfo().
+564ea405d2f	upstream: already in wine-11.19	wbemdisp: Return null object on failure of QueryInterface().
+e7580a1539c	upstream: already in wine-11.19	wbemdisp: Rename propertyset object to class_object.
+a72472ac585	upstream: already in wine-11.19	wbemdisp: Implement ISWbemPropertySet::NewEnum().
+86b288f7f7b	upstream: already in wine-11.19	wbemdisp: Initialise the variants in enumvar_Next().
+086c6d05492	upstream: already in wine-11.19	wbemdisp: Implement ISWbemMethodSet::NewEnum().
+0cb028cdab1	upstream: already in wine-11.19	wbemdisp: Implement get ISWbemProperty::Name.
+2c7d434d567	upstream: already in wine-11.19	wbemdisp: Add ISWbemQualifierSet stub implementation.
+eaca0e8de2e	upstream: already in wine-11.19	wbemdisp: Add ISWbemQualifierSet enumerator stub implementation.
+218cfe89631	upstream: already in wine-11.19	wbemdisp: Avoid out-of-bounds read in objectpath_get_DisplayName.
+53ad413787e	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	winex11.drv: Allow child presentation on fullscreen exclusive toplevel.
+90855a2993e	replaced: touches a file an *_ios.c replacement overrides	fixup! loader: HACK: Build wine64 and wine64-preloader.
+bd892bbfedd	upstream: already in wine-11.19	mfreadwrite: Queue only one output sample while draining transforms.
+d09a10f4faa	unused: winex11/winewayland/winebus/hidraw/pulse/opengl32, not in the iOS build	opengl32: HACK: Force compatibility profile for Ligo.
+44563134de6	upstream: already in wine-11.19	amstream: Unblock ddraw_mem_allocator_GetBuffer() and return VFW_E_NOT_COMMITTED when stream is flushing.
+99b0f640ae0	inert: wine.inf only; the app never runs wine.inf	wine.inf: Add entry for Lucida Console font.
+0d0324407bf	reverted: Valve reverted it (the pair is left out)	HACK: winebus.sys: Never remove the steam input device.
+1a1efb7f2a4	madeira: Madeira's host-pad xinput (wine-port 0055) answers get_state first; conflicts there	HACK: xinput1_3: Don't rescan controller in get_state for Far Cry 4.
+f680015cd0b	upstream: already in wine-11.19	ddraw/tests: Add tests for _ProcessVertices with vertex blending.
+cc0bb4fc8f2	upstream: already in wine-11.19	wined3d: Support vertex blending for position in process_vertices_strided().
+1c62ccb71fb	upstream: already in wine-11.19	ddraw/tests: Add test for lighting in _ProcessVertices with vertex blending.
+4d1176743d7	upstream: already in wine-11.19	wined3d: Support vertex blending for lighting in process_vertices_strided().
+c45949faec5	inert: wine.inf only; the app never runs wine.inf	loader: Add Microsoft YaHei Bold registry entry.
+84648da927b	media: FAudio's WMA decoder through wmadmod; Playport's media path stays as it is	faudio: Create the WMA decoder without using COM
+c3dfd51917e	upstream: already in wine-11.19	winegstreamer: Add winegstreamer_create_wma_decoder().
+2117ec9509f	media: the WMA decoder DMO; Playport's media path stays as it is	wmadmod: Create the decoder without using COM.
+0509a0b64a4	media: fixup of 2117ec9509f	fixup! wmadmod: Create the decoder without using COM.
+c6fc293be04	upstream: already in wine-11.19	ntdll: Fix CONTEXT_ARM64_X18 handling when setting another thread's context.
+9fe013fa1e3	upstream: already in wine-11.19	ntdll: Move KiUserEmulationDispatcher setup to syscall dispatcher exit code.
+4d21a1c717f	upstream: already in wine-11.19	ntdll: Setup KiUserEmulationDispatcher in usr1_handler when needed.
+e122adf220b	upstream: already in wine-11.19	ntdll: Set InSimulation before returning to KiUserEmulationDispatcher from the kernel side.
+36338c04918	upstream: already in wine-11.19	ntdll: Don't use entry thunk context in RtlRaiseException.
+fb697e98da2	upstream: already in wine-11.19	ntdll: Preserve exception flags when converting between x64 and arm64 context flags.
+3a9008fba45	upstream: already in wine-11.19	ntdll: Check that the pointer is within the address space limits before accessing EcCodeBitMap.
+67c1db3a8a6	upstream: already in wine-11.19	ntdll: Don't modify non-volatile registers before switching to the kernel stack in the ARM64 syscall dispatcher.
+ef59f93e030	upstream: already in wine-11.19	ntdll: Avoid exposing ARM64 syscall dispatcher to the client side.
+1c0dd8bbcd5	upstream: already in wine-11.19	ntdll: To try to handle suspend doorbell in leave_syscall_callback if the thread is in simulation.
+ca4aa59dfd4	upstream: already in wine-11.19	ntdll: Move KiUserEmulationDispatcher handling to restore_context.
+b457322ffd3	upstream: already in wine-11.19	ntdll: Suppress debug events during CPU simulation.
+70abdf76bb8	conflict: WineHQ's cmd parsing rework in 11.19 (word iterator); a pending WineHQ MR (11608), and the app runs no cmd scripts	HACK: cmd: Convert search_command into a non-static function.
+ecdb6b3ef9b	conflict: WineHQ's cmd parsing rework in 11.19 (word iterator); a pending WineHQ MR (11608), and the app runs no cmd scripts	HACK: cmd: Implement start builtin inside cmd.
+b7a8927b9fd	fixup: its target is left out	fixup! HACK: xinput1_3: Don't rescan controller in get_state for Far Cry 4.
+3254a682938	upstream: already in wine-11.19	include: Add some matrix functions prototypes to d3dx10math.h.
+59d3f159a39	upstream: already in wine-11.19	include: Add some function prototypes to d3dx10math.h.
+42d1607158d	upstream: already in wine-11.19	d3dx10/sprite: Check for the Begin/End state in affected methods.
+e3a9bdab881	upstream: already in wine-11.19	d3dx10/sprite: Partially implement state restore functionality.
+14a07e29b9a	upstream: already in wine-11.19	d3dx10/sprite: Collect sprites on DrawSpritesBuffered().
+e207283b967	upstream: already in wine-11.19	d3dx9: Move D3DXSHProjectCubeMap() implementation to texture.c.
+6c15f87f8a9	upstream: already in wine-11.19	d3dx9: Move some exports from mesh.c to math.c.
+97148c43cd3	upstream: already in wine-11.19	d3dx10: Use shared code for math exports.
+3655849f9ee	upstream: already in wine-11.19	d3dx10: Partially implement sprite rendering.
+c860583954f	upstream: already in wine-11.19	d3dx10: Implement sprite view transform methods.
+c5798e587d5	replaced: touches a file an *_ios.c replacement overrides	ntdll: HACK: Also simulate async file read and I/O cancellation for Assassin's Creed Valhalla.
+542ca26b64e	take: picked, resolved (the option list)	kernelbase: HACK: Force disable direct composition for 8Bit Fiesta.
+00e639898e0	reverted: Valve reverted it (the pair is left out)	winex11: Retrieve XIM input as UTF-8.
+65388665d4a	wow64: 32-bit guests only (i386 is not built)	Revert "wow64: Always suspend GetContextThread target when under emulation."
+8cd623d83f4	wow64: 32-bit guests only (i386 is not built)	Revert "HACK: ntdll: Spin up a thread to handle CreateThread APCs on ARM64 WOW"
+cc17cbcb13e	wow64: 32-bit guests only (i386 is not built)	Revert "ntdll: Support cross-process wow64 suspend on ARM64."
+2c1ef7131cb	wow64: 32-bit guests only (i386 is not built)	Revert "wow64: Support running a BT module provided suspend routine."
+c97ffea75a5	wow64: 32-bit guests only (i386 is not built)	Revert "ntdll: Implement WOW64 thread suspension helpers."
+45a6816a895	upstream: already in wine-11.19	ntdll: Add RtlWow64SuspendThread semi-stub implementation.
+ef2ba038040	reverted: Valve reverted it (the pair is left out)	Revert "HACK: winebus.sys: Never remove the steam input device."
+aabe7042e7f	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	win32u: Hook semaphore access functions.
+66ee546cbea	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	win32u: Support d3d12 fence timelines.
+234d17e1608	reverted: reverts 469a9fea3d1 (x86 Wine Mono on aarch64), which the series never took	Revert "HACK: Use x86 mono on aarch64."
+c921f0a2c2e	upstream: already in wine-11.19	mscoree: Use wide string literals.
+acaa98b4133	upstream: already in wine-11.19	mscoree: Add libmono dll name for arm64.
+46b29104e37	media: Media Foundation/GStreamer stack (Playport keeps its own video work)	winegstreamer: HACK: Use MPEG1 type for Making Lovers.
+6cf7facdb81	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	win32u: HACK: Clear WS_EX_TOOLWINDOW for EA launcher splash on Gamescope.
+69b4ccbae6d	upstream: already in wine-11.19	ntdll: Rename some builtin unixlib functions to reflect current usage.
+72163d47fde	upstream: already in wine-11.19	ntdll: Add a helper to retrieve a builtin module.
+cffef74fb02	upstream: already in wine-11.19	ntdll: Add a helper to load the unixlib functions.
+fb596168268	upstream: already in wine-11.19	ntdll: Add support for loading a unixlib with an explicit name.
+fbadeed3c8c	upstream: already in wine-11.19	winecrt0: Add a helper for loading a unixlib by name.
+c24a38ac3d1	upstream: already in wine-11.19	wow64: Add missing Unicode string mapping for MemoryWineLoadUnixLibByName.
+3cd4638c4dc	media: Media Foundation/GStreamer stack (Playport keeps its own video work)	quartz: HACK: Re-use data already read into the parser read thread's buffer.
+a16c7d16e5b	upstream: already in wine-11.19	winevulkan: Check for returnedonly on individual members.
+15b9d161776	upstream: already in wine-11.19	winevulkan: Don't flag dynamic array / lengths as returnedonly.
+03a91c217a8	upstream: already in wine-11.19	mf/tests: Test audio renderer MEStreamSinkStopped after OnClockStop().
+f40067de438	upstream: already in wine-11.19	mf/tests: Test video renderer stopped and paused events after OnClock*().
+58a20ff3ea3	upstream: already in wine-11.19	mf/clock: Don't notify a sink that is also the time source in AddClockStateSink().
+8dc0ff1d1c1	upstream: already in wine-11.19	mf/evr: Always send MEStreamSinkStopped in OnClockStop().
+f4917081752	upstream: already in wine-11.19	mf/evr: Always send MEStreamSinkPaused in OnClockPaused().
+3bc193768c6	upstream: already in wine-11.19	mf/session: Ignore MEStreamSinkStopped if prerolling or starting sinks.
+172e483e0dd	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	fixup! vrclient: wine.inf: Add OpenXR registry entries.
+1c785966253	proton: Steam client, Proton, Linux desktop, VR, GL/fshack, AMD/NVIDIA spoofing or winevulkan	fixup! winevulkan: Introduce Wine-specific VR extensions.
+08b9a0979d1	upstream: already in wine-11.19	user32/tests: Add more tests for CreateCompatibleBitmap() with display DCs.
+7632fe943db	upstream: already in wine-11.19	win32u: Add some special cases for CreateCompatibleBitmap() with a display DC.
+350f4a93985	upstream: already in wine-11.19	user32/tests: Move GetDIBits() tests with display DCs from gdi32.
+a517ca918a5	upstream: already in wine-11.19	win32u: Allow 8-bit DDBs with 8-bit display DCs in NtGdiGetDIBitsInternal().
+5eeadd866bc	tests: tests only	gdi32/tests: Add a missing glyph font linking test.
+33c82fc8321	take: picked, resolved (test hunks left out)	gdi32: Allow font linking for runs with missing glyphs.
+55005e3f5e2	upstream: already in wine-11.19	webservices: Probe the next element with the desired name before staying at the current one.
+937607f96a2	unix-side: unix code outside the replacements (not a PE-only game fix)	ntdll: HACK: Add WINE_HIDE_AMD_CPU.
+15543f1869f	upstream: already in wine-11.19	rsaenh: Return NTE_BAD_ALGID for an HMAC with no hash algorithm.
+cf64902ca7d	upstream: already in wine-11.19	rsaenh: Allow any implemented hash algorithm for HMAC.
+d0a8a83beb3	upstream: already in wine-11.19	rsaenh: Check the HMAC hash algorithm in CPSetHashParam().
+43c7f92fe47	upstream: already in wine-11.19	rsaenh: Use the hash implementation for the HMAC key in CPSetHashParam().
+b039c598405	upstream: already in wine-11.19	rsaenh: Pad the HMAC key with the block length of the hash algorithm.
+adea6cbac9d	upstream: already in wine-11.19	uiautomationcore: Add UiaDisconnectAllProviders stub.
+3c1a3fef309	upstream: already in wine-11.19	server: Make messages mergeable by default.
+e1cc804f23f	upstream: already in wine-11.19	mf/sar: Move audio renderer flush actions inside the conditional code block for active state.
+b939529157e	upstream: already in wine-11.19	mf/tests: Test Flush() on a shutdown audio renderer stream sink.
+b326fb09505	upstream: already in wine-11.19	mf/sar: Check for null audio client before resetting during flush.
+98dce4afb37	upstream: already in wine-11.19	kernel32/tests: Add tests for setting zero group affinity mask.
+8c33a428032	upstream: already in wine-11.19	ntdll: Treat zero group affinity as full group affinity.
+6ba259a274c	upstream: already in wine-11.19	xinput1_3: Do not enumerate "disabled" controllers.
+e33ce1f2396	unix-side: unix code outside the replacements (not a PE-only game fix)	fixup! ntdll: Improve faults logging.
+c4f11ae0fd4	reverted: Valve reverted it (the pair is left out)	Revert "winex11: Retrieve XIM input as UTF-8."
+63d3dc936c9	upstream: already in wine-11.19	d3dx10/sprite: Fix matrix multiplication order in d3dx10_sprite_draw().
+53118151e06	upstream: already in wine-11.19	d3dx10/sprite: Avoid drawing extra primitives with mismatched texture in d3dx10_sprite_draw_batch().
+6d211aabd1d	upstream: already in wine-11.19	mfplat: Set the handler's activate pointer in MFRegisterLocalByteStreamHandler().
+cf0917e9ad1	tests: tests only	setupapi/tests: Add tests for incomplete device instance registry keys.
+2189ff63653	tests: tests only	setupapi/tests: Add tests for device instance ID validation.
+26036b79eda	take: picked, resolved (test hunks left out)	setupapi: Validate device instance ID when creating or opening device info.
+021ee94d7d9	take: picked, resolved (test hunks left out)	setupapi: Be less picky about device registry keys in SetupDiOpenDeviceInfo().
+c712f921a1a	inert: ntoskrnl PnP runs in winedevice.exe, which the app does not start	ntoskrnl: Try to fix device registry key if both creation and opening fail.
+0c998f2812d	upstream: already in wine-11.19	rsaenh: Don't finalize hash for buffer size query in RSAENH_CPGetHashParam().
+b6225e37cd2	take: picked clean	ntdll: Explicitly specify section names in DEFINE_USER_FUNC.
+3e6d442c6ad	upstream: already in wine-11.19	ntoskrnl.exe: Implement KeAcquireGuardedMutex.
+2178b2d4276	upstream: already in wine-11.19	ntoskrnl.exe: Implement KeReleaseGuardedMutex.
+0a0e487496c	upstream: already in wine-11.19	ntoskrnl: Use fastcall for KeInitializeGuardedMutex.
+fe663dbf163	upstream: already in wine-11.19	ntoskrnl.exe: Add stub for KdChangeOption().
+b3ca1845872	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for directory kernel objects.
+500ef7c08bd	upstream: already in wine-11.19	ntoskrnl.exe: Implement FsRtlGetFileSize().
+39519e58e62	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for FsRtlGetFileSize().
+6a3d4738d10	upstream: already in wine-11.19	ntoskrnl.exe/tests: Fix stack use-after-free of OVERLAPPED.
+4c4cbdb3e96	upstream: already in wine-11.19	ntoskrnl: Update the security cookie once relocation are applied.
+11c71e5ad5a	upstream: already in wine-11.19	ntoskrnl.exe: Account for read-only cookies.
+89649353b7c	upstream: already in wine-11.19	ntoskrnl.exe: Implement IoThreadToProcess.
+871593999b6	upstream: already in wine-11.19	ntoskrnl: Implement IoGetRequestorProcessId.
+0b86df650b2	upstream: already in wine-11.19	ntoskrnl.exe: Add stub for KeGetCurrentIrql().
+692c89055e6	upstream: already in wine-11.19	ntoskrnl.exe: Implement MmMapLockedPagesSpecifyCache().
+aa9de8af0de	upstream: already in wine-11.19	ntoskrnl.exe/tests: Test the MDL flags maintained by test_mdl_map().
+794b32a048f	upstream: already in wine-11.19	ntoskrnl.exe: Implement MmUnmapLockedPages().
+15332dc718b	upstream: already in wine-11.19	ntoskrnl.exe: Implement MmProbeAndLockPages() and MmUnlockPages().
+ab99fdb5d03	upstream: already in wine-11.19	ntoskrnl.exe: Add stub for KeRegisterBugCheckCallback().
+77d7385238d	upstream: already in wine-11.19	ntoskrnl.exe: Add stub for KeRegisterBugCheckReasonCallback().
+47d92d10865	upstream: already in wine-11.19	ntoskrnl.exe: Add stub for KeDeregisterBugCheckReasonCallback().
+c1d0991d436	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsGetProcessSessionId.
+ea9eafa7bb2	upstream: already in wine-11.19	ntoskrnl.exe: Use the cached session id in PsGetCurrentProcessSessionId.
+b96ee614f98	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for PsGetProcessSessionId.
+e33a01d181c	upstream: already in wine-11.19	ntoskrnl.exe/tests: Test MmBuildMdlForNonPagedPool().
+fcec79bada5	upstream: already in wine-11.19	ntoskrnl.exe: Implement MmBuildMdlForNonPagedPool().
+f2fc65a533c	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsGetProcessCreateTimeQuadPart.
+d68682c1848	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for PsGetProcessCreateTimeQuadPart.
+fbdb925e4ba	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsGetThreadProcess.
+269cdf7a754	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for PsGetThreadProcess.
+ee73b20a34b	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsGetProcessPeb.
+cb2ffa3a107	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for PsGetProcessPeb.
+b8689fc7bfc	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsGetContextThread.
+e6cace59e08	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for PsGetContextThread.
+83e3862f301	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for token kernel objects.
+7f584edfb4b	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsReferencePrimaryToken.
+9f066341349	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsDereferencePrimaryToken.
+7fca73781f7	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for PsReferencePrimaryToken.
+d3cdbbaba12	upstream: already in wine-11.19	ntoskrnl.exe: Implement MmGetPhysicalMemoryRanges.
+3e68c3ee6e7	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for MmGetPhysicalMemoryRanges.
+638f87b98d3	upstream: already in wine-11.19	ntoskrnl.exe: Implement SeLocateProcessImageName.
+3b0b9da367b	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for SeLocateProcessImageName.
+5f16c4ea539	upstream: already in wine-11.19	ntoskrnl.exe: Add semi-stub for MmGetVirtualForPhysical.
+1b46e4c2540	upstream: already in wine-11.19	ntoskrnl.exe: Add stub for KeCapturePersistentThreadState.
+19a400209df	upstream: already in wine-11.19	ntoskrnl.exe: Implement PsGetProcessImageFileName.
+750fd011356	upstream: already in wine-11.19	ntoskrnl.exe/tests: Add tests for PsGetProcessImageFileName.

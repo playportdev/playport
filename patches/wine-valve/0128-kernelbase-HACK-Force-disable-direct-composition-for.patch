@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Wed, 9 Sep 2026 10:00:36 -0600
+Subject: [PATCH] kernelbase: HACK: Force disable direct composition for 8Bit
+ Fiesta.
+
+CW-Bug-Id: #27656
+Valve-commit: 542ca26b64ed53cc61de065ed4c0b0ab8802e7d6
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-10-05-deps-latest.md
+Offered-upstream: no
+---
+ dlls/kernelbase/process.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index f47bcfe..31a1c2c 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -512,6 +512,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+     }
+     options[] =
+     {
++        {L"8Bit Fiesta Steam\\nw.exe", L" --disable_direct_composition=1"},
+         {L"Elisa The Innkeeper - Prequel\\nw.exe", L" --disable_direct_composition=1"},
+         {L"UniverseGenerator.exe", L" --disable_direct_composition=1"},
+         {L"Blaite\\nw.exe", L" --disable_direct_composition=1"},

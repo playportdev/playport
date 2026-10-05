@@ -41,7 +41,7 @@ Stages (docs/UPSTREAM-SYNC.md has why they are these):
   decide   merge only when every patch is clean or already-upstream, every gate
            passes and no .gitmodules or licence file changed; otherwise hold.
 
-Every run also fetches Valve's branch (the wine-valve row's, proton_11.0) and,
+Every run also fetches Valve's branch (the wine-valve row's, bleeding-edge) and,
 when it has commits past the wine-valve pin, lists them oldest first in
 wine-valve-new.tsv (commit, date, subject, files) in the run directory and in
 $PLAYPORT_BUILD/sync, and names that file in the report and the last line.

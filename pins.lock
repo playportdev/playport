@@ -13,8 +13,8 @@
 #
 # The base stays WineHQ's newest development tag; Valve's Wine is not the
 # base (decision 0018, which weighed it). wine-valve is the ValveSoftware/wine
-# commit that patches/wine-valve, the Valve commits Playport takes, was
-# cherry-picked from (still a proton_11.0 commit); the series is applied after
+# bleeding-edge commit that patches/wine-valve, the Valve commits Playport
+# takes, was cherry-picked from (decision 0049); the series is applied after
 # patches/wine-port in both Wine trees. It moves by hand, by a pick from
 # Valve's bleeding-edge branch (decision 0049), never through pp sync; each
 # pp sync lists Valve's commits past it in $PLAYPORT_BUILD/sync/wine-valve-new.tsv.
@@ -47,7 +47,7 @@
 madeira      8c050d03f4d89096e1e2e2c8bb44479fffd86619  https://github.com/willfaust/Madeira.git      main
 wine         455e3509b98a6919fd4ad1def4803e08c41c03b2  https://gitlab.winehq.org/wine/wine.git       master
 wine-port    723d1bf5132768276cea9bc35ab59c83557bb5fb  https://github.com/willfaust/wine.git         madeira-lgpl
-wine-valve   dc26e61847081a1b5cb0733dc30feba6ee575482  https://github.com/ValveSoftware/wine.git     proton_11.0
+wine-valve   750fd011356cfcb28125c96d295ddef0d9e66dac  https://github.com/ValveSoftware/wine.git     bleeding-edge
 fex          3648ee97e8354bb2e6757da8bdb00c48439a561d  https://github.com/FEX-Emu/FEX.git            main
 dxmt         68af85e96196e1cf9f50de9fe24c70f03a1db4a7  https://github.com/3Shain/dxmt.git           main
 dxmt-port    ca8a2516d819e7e1f366981825ad1f0d26f80fdd  https://github.com/willfaust/dxmt.git         ios-port

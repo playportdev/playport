@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ziqing Hui <zhui@codeweavers.com>
+Date: Fri, 19 Jun 2026 10:26:10 +0800
+Subject: [PATCH] gdi32: Allow font linking for runs with missing glyphs.
+
+CW-Bug-Id: #26593
+Valve-commit: 33c82fc8321ed6ea82acbde0914729f84483ae61
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-10-05-deps-latest.md
+Offered-upstream: no
+---
+ dlls/gdi32/text.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/dlls/gdi32/text.c b/dlls/gdi32/text.c
+index 2bdc0ff..c7a6357 100644
+--- a/dlls/gdi32/text.c
++++ b/dlls/gdi32/text.c
+@@ -337,6 +337,35 @@ static void BidiLines(int baselevel, LPWSTR pszOutLine, LPCWSTR pszLine, const W
+     HeapFree(GetProcessHeap(), 0, run);
+ }
+ 
++static BOOL run_needs_font_linking(HDC hdc, const WCHAR *str, int count)
++{
++    BOOL ret = FALSE;
++    WORD *glyphs;
++    int i;
++
++    if (!hdc)
++        return FALSE;
++
++    if (!(glyphs = HeapAlloc(GetProcessHeap(), 0, count * sizeof(*glyphs))))
++        return FALSE;
++
++    if (NtGdiGetGlyphIndicesW(hdc, str, count, glyphs, GGI_MARK_NONEXISTING_GLYPHS) != GDI_ERROR)
++    {
++        for (i = 0; i < count; ++i)
++        {
++            /* Ignore control characters when checking for missing glyphs. */
++            if (glyphs[i] == 0xffff && str[i] >= 32)
++            {
++                ret = TRUE;
++                break;
++            }
++        }
++    }
++
++    HeapFree(GetProcessHeap(), 0, glyphs);
++    return ret;
++}
++
+ /*************************************************************
+  *    BIDI_Reorder
+  *
+@@ -647,6 +676,14 @@ static BOOL BIDI_Reorder( HDC hDC,               /* [in] Display DC */
+                     HeapFree(GetProcessHeap(), 0, *lpGlyphs);
+                     *lpGlyphs = NULL;
+                 }
++                else if (run_needs_font_linking(hDC, text, cChars))
++                {
++                    TRACE("Shaped run needs font linking\n");
++                    j = nItems;
++                    doGlyphs = FALSE;
++                    HeapFree(GetProcessHeap(), 0, *lpGlyphs);
++                    *lpGlyphs = NULL;
++                }
+                 else
+                 {
+                     WORD *new_glyphs;

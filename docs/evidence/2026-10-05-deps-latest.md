@@ -37,6 +37,7 @@ plan (stable `proton_11.0` / experimental / bleeding-edge).
 | `mesa` | `82d4f86` | `main` `b39d173` | `main` `b39d173` (2026-10-05 09:42 UTC, 369 commits ahead) | not comparable (Valve uses the Linux drivers) | passed; KosmicKrisp host test passed | pending: phone away | pending: phone away |
 | `dxvk` | `52fe923` | `master` `e5ffd0f` | `master` `e5ffd0f` (2026-10-05 10:53 UTC, 18 commits ahead) | `a676404` / `6853015` / `d30be2b` (bleeding-edge is one commit behind: `e5ffd0f` "Disable present timing by default") | passed | pending: phone away | pending: phone away |
 | `vkd3d-proton` | `472989a` | `master` `31d1f89` | `master` `31d1f89` (2026-10-02, 20 commits ahead) | `212991f` / `44cf7c2` / `31d1f89` (bleeding-edge = the head) | passed | pending: phone away | pending: phone away |
+| `wine-valve` | `dc26e61` (`proton_11.0`) | `750fd01` (`bleeding-edge`) | bleeding-edge `750fd01` (2026-10-03; `proton_11.0` plus 409 commits) | `dc26e61` / `6d211aa` / `750fd01` | passed | pending: phone away | pending: phone away |
 
 ## IPAs, in order
 
@@ -51,6 +52,7 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
 | DXMT main | `2cd6d80` | `.work/out/20261005-144347-96b9b196/Playport-26.5-96b9b196.ipa` | `96b9b196ce4c5e90a2357e6e2636d2c9fef78ab66f04d35b211cb2af1ebd7b7a` |
 | Mesa main | `6d09073` | `.work/out/20261005-144853-492712d6/Playport-26.5-492712d6.ipa` | `492712d6fa6d702c700b06054e5980f21b0aca7560550efb81d6112946e20157` |
 | DXVK master | `cf020cb` | `.work/out/20261005-145319-543f20f6/Playport-26.5-543f20f6.ipa` | `543f20f6d232997cc4a5e71728fc2ce0b6d343d521ffdb41e05eb8bc330ede29` |
+| vkd3d-proton master | `c6b8936` | `.work/out/20261005-145755-c85a8ec2/Playport-26.5-c85a8ec2.ipa` | `c85a8ec2f299c73ff5bee1e5ebe6d16096a07bd323af58eb11e383c4f30fdd08` |
 
 ## wine → wine-11.19
 
@@ -198,3 +200,66 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
   all clean.
 - **Build:** the `vulkan` stage; one build record changed (`d3d12core.dll`
   in `app/artifacts.tsv`). `pp test`: all passed.
+
+## wine-valve → Valve's bleeding-edge
+
+- **What bleeding-edge is:** Valve Wine's `bleeding-edge` (`750fd011356`,
+  2026-10-03) is `proton_11.0` at the old pin `dc26e61` plus 409 commits, no
+  merges; `wine-11.0` plus 1,862 in all. So every `Valve-commit:` the series
+  names is still on the branch, and the re-pick is the 409 sorted by 0018's
+  rules.
+- **How they were sorted:** the 2026-09-28 record's `classify.py` and
+  `choose_valve.py` (`2026-09-28-wine-proton-rebase/`), with the range set to
+  `dc26e61..bleeding-edge` and "upstream" meaning wine-11.19 has it; the 28
+  commits the scripts left as wanted were then read one by one. Every
+  commit's verdict is in
+  [`2026-10-05-deps-latest/valve-bleeding-edge-commits.tsv`](2026-10-05-deps-latest/valve-bleeding-edge-commits.tsv):
+
+  | Verdict | Commits |
+  | --- | --- |
+  | upstream (wine-11.19 has it) | 318 |
+  | unused (winex11, winebus, pulse, opengl32; Valve's GameInput, 8, which enumerates HID pads over winebus) | 16 |
+  | proton (Steam, gamescope, VR, winevulkan, GPU spoofing) | 13 |
+  | reverted (pairs in Valve's tree, and see below) | 12 |
+  | replaced (a file an `*_ios.c` replacement overrides) | 11 |
+  | fixup (target left out) | 8 |
+  | media | 6 |
+  | **taken** | **6** |
+  | inert (`wine.inf`, ntoskrnl PnP) | 5 |
+  | wow64 (the suspend-helper reverts, below) | 5 |
+  | tests, unix-side, build, madeira, conflict | 3, 2, 1, 1, 2 |
+
+- **Taken** (`patches/wine-valve` 0126–0131, `Picked:` as noted):
+  `b6225e37cd2` ntdll: section names in `DEFINE_USER_FUNC` (The Finals; clean),
+  `91642a856d5` and `542ca26b64e` kernelbase: direct composition off for two
+  NW.js games (clean; resolved: the option list now has Valve's ARM-only
+  `msedgewebview2` line above it, which is not taken, `proton`),
+  `33c82fc8321` gdi32: font linking for runs with missing glyphs,
+  `26036b79eda` and `021ee94d7d9` setupapi: device instance ID validation and
+  `SetupDiOpenDeviceInfo` (these three resolved by leaving their test hunks
+  out, as 0018's picks did; the code hunks are Valve's, checked line by line).
+- **Dropped from the series:** `0120`, Valve's revert of "ntoskrnl: Enumerate
+  child devices on a separate thread" (`6d993a3a5f8`): bleeding-edge reapplies
+  it (`fd0129e61a3`), so the pair is left out. The four patches after it
+  replay unchanged. The series is 132 patches (127 − 1 + 6).
+- **Left out after reading:** the two cmd `start` commits (they conflict with
+  WineHQ's cmd parsing rework in 11.19 and are a pending WineHQ merge
+  request; the app runs no cmd scripts), the Far Cry 4 xinput HACK and its
+  fixup (Madeira's host-pad xinput answers first), FAudio and wmadmod's WMA
+  decoder (media), Valve's Intel driver-store spoof, a revert of the x86 Wine
+  Mono HACK the series never took, and an add-then-remove pair in
+  `ntdll/exception.c`.
+- **The WoW64 suspend-helper reverts (alignment B2):** `2c1ef7131cb`,
+  `65388665d4a`, `c97ffea75a5` (and `cc17cbcb13e`, `8cd623d83f4`) revert
+  Valve-only WoW64 suspend code. `patches/wine-valve` never carried what they
+  revert, so with them Playport's Wine side already matches bleeding-edge
+  here; nothing is picked.
+- **Replaced files (not carried):** 11 commits change a file a replacement
+  overrides, among them `c5798e587d5` (simulated async read for Assassin's
+  Creed Valhalla, `SteamGameId`-keyed), `26442e0a3ce` (`WINESTEAMNOEXEC` for
+  Sniper Elite V2) and Valve's reverts of its EAC locale HACKs.
+- **Build:** the `unix`, `pe`, `dxmt` and `vulkan` stages; the three
+  `wine-pe-*.tsv` manifests and `app/artifacts.tsv` changed. `pp test`: all
+  passed. `pins.lock`'s `wine-valve` row is now the `bleeding-edge` branch, so
+  `pp sync`'s `wine-valve-new.tsv` lists bleeding-edge's new commits (the B2
+  note about the sync report).
