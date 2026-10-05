@@ -189,7 +189,8 @@ committed; the build does not render them.
 with its entitlements and no certificate, profile, team or device, and `verify`
 runs `pp verify --unsigned` in place of the signature and profile checks. It is
 named `Playport-26.5-release-unsigned-<sha8>.ipa`; `pp install` never picks it.
-`pp release VERSION` runs that build `--clean`, binds source/notices/instructions
+`pp release VERSION` reuses the newest such build of HEAD, or runs it
+(incrementally; `--clean` builds every tree afresh, [decision 0050](decisions/0050-release-reuses-the-build.md)), binds source/notices/instructions
 to its exact commit and requires distribution notice verification before a draft
 upload. `--no-github` assembles privately without an upload command; source gaps
 remain visible and neither mode approves publication

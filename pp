@@ -15,9 +15,10 @@ Build and ship
                                   trees and notices are built; it first builds what changed, and says so)
   pp verify IPA [--variant V] [--same-device-as OLD.ipa | --unsigned]
                                   the IPA checks the build's last stage runs
-  pp release VERSION [--no-build] [--no-github]
-                                  a clean unsigned release build, the gates, and a GitHub
-                                  draft pre-release (never published; decision 0036)
+  pp release VERSION [--clean | --no-build] [--no-github]
+                                  the unsigned release build of HEAD (reused, or built
+                                  incrementally; --clean: every tree afresh), the gates, and a
+                                  GitHub draft pre-release (never published; decisions 0038, 0050)
 
 Test on the host
   pp test [--quick]               names, secrets, the pin and patch series (trailers), tools/tests,

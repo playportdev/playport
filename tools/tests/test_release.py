@@ -264,7 +264,7 @@ class Release(unittest.TestCase):
         self.assertEqual(release.version_problems(version, REPO), [])
 
     def test_a_clean_release_assembles_every_file_and_builds_clean_unsigned(self):
-        dest = self.release()
+        dest = self.release(build="clean")
         self.assertEqual(sorted(p.name for p in dest.iterdir()),
                          ["INSTALL-REBUILD.tar", "NOTICES.tar", "Playport-0.1.0-source.tar", "Playport-0.1.0.ipa",
                           "RELEASE-MANIFEST.json", "RELEASE-NOTES.md", "SHA256SUMS", "artifacts.tsv", "provenance.txt"])
@@ -348,9 +348,45 @@ class Release(unittest.TestCase):
                           ("source-bundle.py", "pp source")):
             self.results = {key: 1}
             with self.assertRaisesRegex(release.Stop, what):
-                self.release()
+                self.release(build="clean")
             self.assertEqual(list((self.build / "releases").iterdir()) if (self.build / "releases").exists() else [],
                              [], "no release directory, partial or whole")
+
+    def test_by_default_an_output_of_head_is_reused_without_building(self):
+        dest = self.release()
+        self.assertFalse(any(c[0].endswith("pipeline") for c in self.calls))
+        self.assertTrue((dest / "Playport-0.1.0.ipa").exists())
+
+    def test_by_default_a_missing_output_is_built_incrementally(self):
+        built = self.root / "built"
+        built.mkdir()
+        self.build = built
+        made = []
+
+        def run(cmd, **kw):
+            if cmd[0].endswith("pipeline"):
+                made.append(self.output(self.head))
+            return self.fake(cmd, **kw)
+        with contextlib.redirect_stdout(io.StringIO()):
+            dest = release.release("0.1.0", repo=self.repo, build_dir=self.build, run=run, github=False)
+        build = next(c for c in self.calls if c[0].endswith("pipeline"))
+        self.assertEqual(build[1:], ["--variant", "release", "--unsigned"])
+        self.assertEqual(len(made), 1)
+        self.assertTrue((dest / "Playport-0.1.0.ipa").exists())
+
+    def test_by_default_an_output_with_local_changes_is_not_reused(self):
+        other = self.root / "dirty"
+        other.mkdir()
+        self.build = other
+        self.output(self.head, extra=" (with local changes)")
+        self.results = {"pipeline": 1}
+        with self.assertRaisesRegex(release.Stop, "the build failed"):
+            self.release()
+
+    def test_an_unknown_build_mode_is_refused(self):
+        with self.assertRaisesRegex(release.Stop, "unknown build mode"):
+            self.release(build=True)
+        self.assertEqual(self.calls, [])
 
     def test_an_output_of_another_commit_or_with_local_changes_is_refused(self):
         other = self.root / "other"
@@ -358,10 +394,10 @@ class Release(unittest.TestCase):
         self.build = other
         self.output("0" * 40)
         with self.assertRaisesRegex(release.Stop, "no unsigned release output"):
-            self.release(build=False)
+            self.release(build="none")
         self.output(self.head, extra=" (with local changes)", name="20260930-130000-release-unsigned-ef012345")
         with self.assertRaisesRegex(release.Stop, "local changes"):
-            self.release(build=False)
+            self.release(build="none")
 
     def test_a_build_that_changes_the_checkout_stops_it(self):
         def run(cmd, **kw):
@@ -370,7 +406,7 @@ class Release(unittest.TestCase):
             return self.fake(cmd, **kw)
         with self.assertRaisesRegex(release.Stop, "has changes"):
             with contextlib.redirect_stdout(io.StringIO()):
-                release.release("0.1.0", repo=self.repo, build_dir=self.build, run=run, github=False)
+                release.release("0.1.0", repo=self.repo, build_dir=self.build, run=run, github=False, build="clean")
 
     def test_an_existing_release_directory_is_not_overwritten(self):
         (self.build / "releases/v0.1.0").mkdir(parents=True)
@@ -425,7 +461,7 @@ class Release(unittest.TestCase):
             (output / "provenance.txt").write_text(text)
             self.sums(output)
             with self.assertRaisesRegex(release.Stop, "exact clean"):
-                self.release(build=False)
+                self.release(build="none")
         self.assertEqual(self.calls, [])
 
     def test_changed_or_unsafe_build_checksums_stop_before_children(self):
@@ -434,7 +470,7 @@ class Release(unittest.TestCase):
                      "0" * 64 + "  provenance.txt\n"):
             (output / "SHA256SUMS").write_text(text)
             with self.assertRaises(release.Stop):
-                self.release(build=False)
+                self.release(build="none")
         self.assertEqual(self.calls, [])
 
     def test_symlink_inputs_and_dangling_output_are_refused(self):
@@ -443,7 +479,7 @@ class Release(unittest.TestCase):
         path.unlink()
         path.symlink_to(output / "provenance.txt")
         with self.assertRaisesRegex(release.Stop, "symlink"):
-            self.release(build=False)
+            self.release(build="none")
         path.unlink()
         path.write_text("# records\n")
         self.sums(output)
@@ -451,7 +487,7 @@ class Release(unittest.TestCase):
         dest.parent.mkdir()
         dest.symlink_to(self.root / "absent")
         with self.assertRaisesRegex(release.Stop, "symlink"):
-            self.release(build=False)
+            self.release(build="none")
         self.assertTrue(dest.is_symlink())
 
     def test_a_stale_partial_is_not_removed(self):
@@ -459,7 +495,7 @@ class Release(unittest.TestCase):
         part.mkdir(parents=True)
         (part / "keep").write_text("keep")
         with self.assertRaisesRegex(release.Stop, "partial output already exists"):
-            self.release(build=False)
+            self.release(build="none")
         self.assertEqual((part / "keep").read_text(), "keep")
 
     def test_source_manifest_mismatch_and_false_completeness_roll_back(self):
@@ -480,7 +516,7 @@ class Release(unittest.TestCase):
                 self.sums(dest)
             self.source = source
             with self.assertRaises(release.Stop):
-                self.release(build=False)
+                self.release(build="none")
             self.assertEqual(list((self.build / "releases").iterdir()), [])
 
     def test_source_checksum_or_readme_mutation_rolls_back(self):
@@ -493,7 +529,7 @@ class Release(unittest.TestCase):
                     self.sums(dest)
             self.source = source
             with self.assertRaises(release.Stop):
-                self.release(build=False)
+                self.release(build="none")
             self.assertEqual(list((self.build / "releases").iterdir()), [])
 
     def test_notice_links_duplicate_and_traversal_are_not_extracted(self):
@@ -507,7 +543,7 @@ class Release(unittest.TestCase):
                 z.writestr(info, "payload")
             self.sums(output)
             with self.assertRaises(release.Stop):
-                self.release(build=False)
+                self.release(build="none")
             self.assertEqual(list((self.build / "releases").iterdir()), [])
         with zipfile.ZipFile(ipa, "w") as z:
             z.writestr("Payload/Playport.app/Licenses/notice", "a")
@@ -515,7 +551,7 @@ class Release(unittest.TestCase):
                 z.writestr("Payload/Playport.app/Licenses/notice", "b")
         self.sums(output)
         with self.assertRaisesRegex(release.Stop, "duplicate"):
-            self.release(build=False)
+            self.release(build="none")
 
     def test_missing_notices_are_allowed_only_for_local_preparation(self):
         output = next((self.build / "out").iterdir())
@@ -523,14 +559,14 @@ class Release(unittest.TestCase):
             z.writestr("Payload/Playport.app/Playport", "fixture")
         self.sums(output)
         with self.assertRaisesRegex(release.Stop, "no matching notices"):
-            self.release(build=False, github=True)
+            self.release(build="none", github=True)
         self.assertFalse(any(c[0] == "gh" for c in self.calls))
-        dest = self.release(build=False)
+        dest = self.release(build="none")
         self.assertNotIn("NOTICES.tar", release.checksums(dest))
 
     def test_non_github_origin_is_not_inferred_from_gh_cwd_or_environment(self):
         with self.assertRaisesRegex(release.Stop, "explicit GitHub"):
-            release.release("0.1.0", repo=self.repo, build_dir=self.build, build=False,
+            release.release("0.1.0", repo=self.repo, build_dir=self.build, build="none",
                             run=self.fake, github=True, say=lambda s: None)
         self.assertEqual(self.calls, [])
 
@@ -542,17 +578,17 @@ class Release(unittest.TestCase):
             original = path.read_bytes()
             path.write_bytes(original + b"changed")
             with self.assertRaises(release.Stop):
-                self.release(build=False)
+                self.release(build="none")
             path.write_bytes(original)
             path.unlink()
             path.symlink_to(output / "logs/build.log")
             with self.assertRaisesRegex(release.Stop, "symlink"):
-                self.release(build=False)
+                self.release(build="none")
             path.unlink()
             path.write_bytes(original)
         (output / "extra.ipa").write_bytes(b"another IPA")
         with self.assertRaisesRegex(release.Stop, "exactly the selected IPA"):
-            self.release(build=False)
+            self.release(build="none")
         self.assertEqual(self.calls, [])
 
     def test_provenance_mutation_during_source_pack_rolls_back(self):
@@ -566,7 +602,7 @@ class Release(unittest.TestCase):
             return result
         self.fake = fake
         with self.assertRaisesRegex(release.Stop, "records changed"):
-            self.release(build=False)
+            self.release(build="none")
         self.assertEqual(list((self.build / "releases").iterdir()), [])
 
     def test_late_asset_mutation_blocks_upload_but_retains_local_output(self):

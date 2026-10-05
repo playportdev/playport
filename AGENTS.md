@@ -115,9 +115,10 @@ space) and the IPA's profile before it builds. It then closes the running app an
 installs in place. An IPA the phone already has is not sent again (`--force` sends
 it). Its log goes to `$PLAYPORT_BUILD/install-runs/`, and what the phone runs, from which
 checkout, to `.work/device-state.json`. An IPA for a tester is a distribution: follow
-[DISTRIBUTION.md](docs/DISTRIBUTION.md). `pp release VERSION` builds a release's
-unsigned IPA from a clean, pushed HEAD and makes a GitHub draft; it never publishes
-(decision 0038).
+[DISTRIBUTION.md](docs/DISTRIBUTION.md). `pp release VERSION` takes a clean, pushed HEAD's
+unsigned release IPA (reusing the newest build of HEAD; `--clean` rebuilds every tree)
+and makes a GitHub draft; it never publishes (decisions 0038, 0050). So: build, commit
+the build records, push, build again (about a minute), then release.
 
 ## Test
 

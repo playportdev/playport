@@ -36,8 +36,9 @@ these assets:
   as long as the IPA is. If a release has to be withdrawn, keep its source
   available and say where it is.
 - **Build and draft on the workstation.** CI builds, signs and uploads nothing,
-  and no workflow may attach an IPA. `pp release VERSION` builds the unsigned
-  release IPA `--clean` from a clean, pushed HEAD, runs `pp names`, `pp secrets`
+  and no workflow may attach an IPA. `pp release VERSION` takes the unsigned
+  release IPA of a clean, pushed HEAD (the newest build of it, or a new incremental
+  one; `--clean` for every tree afresh, decision 0050), runs `pp names`, `pp secrets`
   and `pp verify --variant release --unsigned` (which fails an IPA holding a
   profile, a team prefix or a signer), assembles the assets in
   `$PLAYPORT_BUILD/releases/vVERSION/`. Before uploading a **draft pre-release**,

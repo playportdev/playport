@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Assemble a local release draft; optionally upload a GitHub draft (never publish).
 
-  pp release VERSION [--no-build] [--no-github]
+  pp release VERSION [--clean | --no-build] [--no-github]
+
+Reuse the newest unsigned release build of HEAD when there is one (decision
+0050); otherwise build it, incrementally like `pp build`. --clean builds every
+tree afresh from its pin instead; --no-build never builds.
 
 Require a clean, pushed HEAD, matching versions, exact clean build provenance,
 verified unsigned release IPA and checksum-checked, build-associated sources.
@@ -138,8 +142,12 @@ def provenance(ipa, head):
     return lines
 
 
-def find_output(out, head):
+def find_output(out, head, missing_ok=False):
+    """The newest unsigned release output of HEAD, or None when missing_ok and
+    there is none (or the newest was built with local changes)."""
     out = no_links(out)
+    if missing_ok and not out.exists():
+        return None
     candidates = list(out.glob("*/Playport-*-release-unsigned-*.ipa"))
     for p in candidates:
         regular(p)
@@ -147,8 +155,12 @@ def find_output(out, head):
     for ipa in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
         lines = (ipa.parent / "provenance.txt").read_text().splitlines()
         if any(l.startswith(f"superproject {head}") for l in lines):
+            if missing_ok and "(with local changes)" in "\n".join(lines):
+                return None
             provenance(ipa, head)
             return ipa
+    if missing_ok:
+        return None
     raise Stop(f"no unsigned release output of {head[:8]} (run without --no-build)")
 
 
@@ -311,8 +323,13 @@ SHA256SUMS covers every attached asset, including these notes and RELEASE-MANIFE
 """
 
 
-def release(version, repo=REPO, build_dir=None, build=True, github=True, run=subprocess.run, which=shutil.which,
+BUILD_MODES = ("auto", "clean", "none")
+
+
+def release(version, repo=REPO, build_dir=None, build="auto", github=True, run=subprocess.run, which=shutil.which,
             say=print):
+    if build not in BUILD_MODES:
+        raise Stop(f"unknown build mode {build!r}")
     repo = no_links(repo)
     problems = version_problems(version, repo)
     if problems:
@@ -335,9 +352,13 @@ def release(version, repo=REPO, build_dir=None, build=True, github=True, run=sub
     dest = no_links(build_dir / "releases" / f"v{version}")
     if dest.exists():
         raise Stop("release directory already exists; remove it to assemble again")
-    if build:
-        say("release: clean unsigned release build")
-        if invoke([str(repo / "build/pipeline"), "--variant", "release", "--unsigned", "--clean"]).returncode:
+    reuse = find_output(out, head, missing_ok=True) if build == "auto" else None
+    if reuse:
+        say(f"release: reusing {reuse.parent.name} (--clean builds every tree afresh)")
+    elif build != "none":
+        say("release: " + ("clean " if build == "clean" else "") + "unsigned release build")
+        cmd = [str(repo / "build/pipeline"), "--variant", "release", "--unsigned"]
+        if invoke(cmd + (["--clean"] if build == "clean" else [])).returncode:
             raise Stop("the build failed")
     if clean_head(repo, run) != head:
         raise Stop("the build changed HEAD")
@@ -438,11 +459,13 @@ def main():
     ap = argparse.ArgumentParser(prog="pp release", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("version")
-    ap.add_argument("--no-build", action="store_true", help="use the newest unsigned release output of HEAD")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--clean", action="store_true", help="build every tree afresh from its pin, reusing nothing")
+    mode.add_argument("--no-build", action="store_true", help="never build: require an unsigned release output of HEAD")
     ap.add_argument("--no-github", action="store_true", help="private local assembly only; no upload command")
     a = ap.parse_args()
     try:
-        release(a.version, build=not a.no_build, github=not a.no_github)
+        release(a.version, build="clean" if a.clean else "none" if a.no_build else "auto", github=not a.no_github)
     except (Stop, OSError, ValueError, KeyError, tarfile.TarError, zipfile.BadZipFile) as exc:
         sys.exit(f"pp release: {exc}")
 

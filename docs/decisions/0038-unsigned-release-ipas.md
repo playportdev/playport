@@ -1,6 +1,7 @@
 # 0038: Release IPAs are signed ad hoc, for the recipient to re-sign
 
-**Status:** accepted, 2026-09-30, by the copyright holder. It picks what a
+**Status:** accepted, 2026-09-30, by the copyright holder; its always-`--clean`
+build is changed by [0050](0050-release-reuses-the-build.md). It picks what a
 published IPA is and how it is made. It does not approve publishing: the gates
 in [plans/open-source-release.md](../plans/open-source-release.md) still apply.
 
