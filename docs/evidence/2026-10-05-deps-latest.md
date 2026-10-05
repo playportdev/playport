@@ -2,61 +2,127 @@
 
 **Date:** 2026-10-05. **Plan:** [Proton ARM64 alignment](../plans/2026-10-05-proton-arm64-alignment.md),
 step 1 (rows 2–10), under decision [0049](../decisions/0049-latest-pins.md).
-**Kind:** build records for one move per commit. The phone was away (the
-owner's) from 14:14: by the owner's direction each move is built and tested
-on the workstation and committed with its IPA, and the gate plays and
-`pp perf` runs are made later on these IPAs, in order, so that a regression
-can be bisected.
+**Kind:** one move per commit, each built and committed with its IPA while
+the phone was away (14:14–15:43), then played in order on the phone (gate,
+both titles, per IPA) and measured with `pp perf` on the baseline and the
+final IPA. **Result:** every move passes the gate; the final build does no
+more CPU work a frame than the baseline in either title and draws less CPU
+power. One borderline count is unconfirmed (Portal 2's short hitches in its
+load segment, below).
 
-## Baseline (before any move)
+## IPAs, in order
 
-- Commit `e71e8a7` (decision 0049, no pin change), dev IPA
-  `.work/out/20261005-140757-b1c15122/Playport-26.5-b1c15122.ipa`, SHA256
-  `b1c1512228c25d16a0e08860ad878bde053f04378630d35d6359ec54958803f3`.
-- Gate, one locked session (`pp install --no-build`, then both plays):
-  - Hollow Knight (`app-367520`), `.work/ui-runs/20261005T140831`: JIT after
-    2.39 s, first frame at +9.48 s, ran on to `first-frame+10`; the screenshot
-    shows the main menu.
-  - Portal 2 (`app-620`), `.work/ui-runs/20261005T140921`: JIT after 2.42 s,
-    first frame at +5.46 s (as in the 2026-10-04 records, 5.6–5.7 s), ran on to
-    `first-frame+10`; the screenshot is black (the game's start, before its
-    menu, as at that point in earlier runs).
-- `pp perf` before (both routes): **pending: phone away.** The Hollow Knight
-  run (`dl0-base-hk`) was stopped in its cooldown wait before it measured.
+**Why rebuilt:** the table listed eight IPAs, but `pp build` keeps only the
+newest three `out/` directories, so the first builds of steps 1–6 no longer
+existed when the plays were due. Steps 1–6 were therefore rebuilt from their exact commits (detached,
+clean tree, `pp build --keep-outputs 20`). The rebuilds are not byte-identical
+to the first builds: at the old pins, `d3d11.dll` (DXMT), `d3d12core.dll`
+(vkd3d-proton), the two FEX DLLs and `winetest.exe` hash differently from the
+committed records, after the build trees had moved forward and back (the
+records at FEX main and later match, except `d3d12core.dll` before the
+vkd3d-proton move). These rebuilt IPAs are the ones played; the first
+baseline `b1c15122`, played at 14:08 (Hollow Knight +9.48 s, Portal 2
++5.46 s), is gone. Steps 7 and 8 are the first builds.
+
+Gate: one locked session per IPA, `pp install --no-build --ipa IPA`, then
+`pp ui --play app-367520 --until first-frame+10 --shot` and the same for
+`app-620`. Times are from Play; every play reached `first-frame+10` and ran
+on. Every Hollow Knight screenshot shows the main menu (Start Game, Options,
+Achievements, Extras, Quit Game). Every Portal 2 screenshot shows the
+"powered by Source" splash with Valve's copyright text, except DXMT's, which
+is black at that moment. Portal 2 runs on Vulkan, which that move does not
+touch, and the baseline's 14:08 play was black there too, so this is the
+splash's timing.
+
+| Step | Commit | IPA (`.work/out/…`) | SHA256 (installed) | HK JIT / first frame | P2 JIT / first frame | Gate |
+|---|---|---|---|---|---|---|
+| baseline | `e71e8a7` | `20261005-152202-a834313d/Playport-26.5-a834313d.ipa` | `a834313d194859e97adf6f638ac18a27e33d714ca3763fa72ce09294a64ea06d` | 2.53 s / 9.49 s | 2.46 s / 5.43 s | pass |
+| wine-11.19 | `7d0f5b3` | `20261005-153220-53dbed03/Playport-26.5-53dbed03.ipa` | `53dbed03795fb8571d9bdfac41ddb32e99738f34a4b4e819a468d44cf9d3ec67` | 2.47 s / 8.40 s | 2.53 s / 5.51 s | pass |
+| FEX main | `22ac169` | `20261005-153421-46978e44/Playport-26.5-46978e44.ipa` | `46978e440e0a8fa3e037c8aa8ae77c142779df1bb0a83db148ba33c3102baf5d` | 2.47 s / 9.47 s | 2.53 s / 5.52 s | pass |
+| DXMT main | `2cd6d80` | `20261005-153622-355f2a8e/Playport-26.5-355f2a8e.ipa` | `355f2a8e2c8576adf46e25a2d032900f6c26b144c05d24f843ae353ba60c9d2e` | 2.40 s / 9.54 s | 2.37 s / 5.34 s | pass |
+| Mesa main | `6d09073` | `20261005-153851-2cd9106f/Playport-26.5-2cd9106f.ipa` | `2cd9106fca9c23de2149f310c8ec1e9590a07d4ebe6bb780363d34f8419af58c` | 2.53 s / 9.50 s | 2.28 s / 5.31 s | pass |
+| DXVK master | `cf020cb` | `20261005-154054-d18103b0/Playport-26.5-d18103b0.ipa` | `d18103b0b24863970a8393228614d14d3aeddc29b9fb6919e425a2aa7e3a2338` | 2.33 s / 9.36 s | 2.43 s / 5.37 s | pass |
+| vkd3d-proton master | `c6b8936` | `20261005-145755-c85a8ec2/Playport-26.5-c85a8ec2.ipa` | `c85a8ec2f299c73ff5bee1e5ebe6d16096a07bd323af58eb11e383c4f30fdd08` | 2.46 s / 9.45 s | 2.41 s / 5.40 s | pass |
+| wine-valve bleeding-edge | `b011dbf` | `20261005-150922-eb5ae2ad/Playport-26.5-eb5ae2ad.ipa` | `eb5ae2adcbef49fa1f4d1cd163a44903d821f55697cd657b2a635c787e5f421e` | 2.38 s / 8.38 s | 2.58 s / 5.59 s | pass |
+
+The phone was left with the final IPA (`eb5ae2ad`) installed. Portal 2 is an
+i386 WoW64 title, so its passes on the FEX main IPA and every later one show
+that the `fex/0016` and `0018` WoW64 resolutions hold as far as the start of
+the game. The scripted walk in `pp perf` below also runs on the final IPA.
+
+## `pp perf`, baseline against final
+
+Routes as the plan gives them (`pp perf --secs 100 --pad
+first-frame+25:hk-new-game --pad first-frame+45:hk-walk`; `pp perf --title
+app-620 --secs 140 --pad first-frame+30:p2-cold-boot --pad
+first-frame+88:p2-walk`), with `--cool 10 --cool-max 30` for the first run
+and `--cool 15 --cool-max 20` for the others. All four started at thermal
+`nominal`, stayed there, and ran on battery (66 → 55 % over the four). The
+windows are the walks: Hollow Knight t = 60–100 s, Portal 2 t = 95–135 s
+(averages of the 5 s buckets; Mi/f from `threads.txt`, million instructions
+a frame).
+
+| | HK base `dl-base-hk` | HK final `dl-final-hk` | P2 base `dl-base-p2` | P2 final `dl-final-p2` |
+|---|---|---|---|---|
+| FPS mean / p10 (whole run) | 58.2 / 54.0 | 58.3 / 54.2 | 58.5 / 54.0 | 58.7 / 55.6 |
+| FPS in the window | 59.1 | 59.1 | 60.0 | 60.0 |
+| main thread `002c` Mi/f | 23.6 | 23.0 | 15.0 | 14.1 |
+| all threads Mi/f | 73.5 | 72.1 | 68.9 | 64.4 |
+| process CPU (P / E) | 121 % (88 / 33) | 118 % (86 / 32) | 121 % (35 / 86) | 125 % (28 / 97) |
+| CPU power (`[xp]`) | 686 mW | 630 mW | 367 mW | 295 mW |
+| wineserver requests a frame | 18.7 | 18.7 | 48.5 | 43.8 |
+| hitches ≥ 25 / 50 / 100 ms | 384 / 10 / 5 | 361 / 10 / 5 | 192 / 20 / 7 | 302 / 20 / 8 |
+| of them before t = 60 s (load) | 257 / 7 / 3 | 210 / 7 / 3 | 52 / 19 / 7 | 134 / 19 / 8 |
+| from t = 60 s (play) | 127 / 3 / 2 | 151 / 3 / 2 | 140 / 1 / 0 | 168 / 1 / 0 |
+
+- No regression beyond noise in frame rate, work a frame or power. Portal 2's
+  main thread does 6 % less work a frame and all threads 7 % less, at 20 %
+  less CPU power, with more of it on the E cores.
+- **Under watch, unconfirmed:** Portal 2's hitches of 25 ms or more rose from
+  192 to 302, most of it in the load segment before t = 60 s (52 → 134). Those
+  are one-frame slips of 25–50 ms. The counts of 50 ms or more (20 → 20) and
+  100 ms or more (7 → 8) did not move. A repeat of the Portal 2 route on the
+  final IPA was stopped in its cooldown (the phone was taken), so whether this
+  is run-to-run spread is **unconfirmed: repeat run pending (phone taken)**.
+  If a repeat reproduces it (about 110 or more in the load segment), the next
+  steps are a second baseline run for spread, then a bisection of the
+  intermediate IPAs above on the load segment.
+- Not split per move: only the baseline and the final IPA were measured, as
+  directed; the per-move IPAs are kept for a bisection.
 
 ## The moves
 
 One row per dependency. Valve's columns are the 2026-10-05 snapshot in the
-plan (stable `proton_11.0` / experimental / bleeding-edge).
+plan (stable `proton_11.0` / experimental / bleeding-edge). Not moved yet
+(alignment plan rows 8–11): `gbe`, the build-time sources, `llvm-project`,
+`stikjit` and `madeira`.
 
 | Row | Old pin | New pin | Latest upstream | Valve stable / experimental / bleeding-edge | Build, `pp test` | Gate | `pp perf` |
 |---|---|---|---|---|---|---|---|
-| `wine` | wine-11.18 `7b3fff7` | wine-11.19 `455e350` | wine-11.19 (2026-10-02; no later tag) | Valve Wine `dc26e61` / `6d211aa` / `750fd01` | passed | pending: phone away | pending: phone away |
-| `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00`; rpmalloc `09142d7` | `main` `3648ee9`; rpmalloc `09142d7` (unchanged: main's `External/rpmalloc`) | `main` `3648ee9` (2026-10-02, the head on 2026-10-05 14:34) | FEX-2607 `1cc4b93` / main `0df84d3` / main `3648ee9` | passed | pending: phone away | pending: phone away |
-| `dxmt` | `7c8dee1` | `main` `68af85e` | `main` `68af85e` (16 commits ahead) | not used by Valve | passed; `pp slots` clean | pending: phone away | pending: phone away |
-| `mesa` | `82d4f86` | `main` `b39d173` | `main` `b39d173` (2026-10-05 09:42 UTC, 369 commits ahead) | not comparable (Valve uses the Linux drivers) | passed; KosmicKrisp host test passed | pending: phone away | pending: phone away |
-| `dxvk` | `52fe923` | `master` `e5ffd0f` | `master` `e5ffd0f` (2026-10-05 10:53 UTC, 18 commits ahead) | `a676404` / `6853015` / `d30be2b` (bleeding-edge is one commit behind: `e5ffd0f` "Disable present timing by default") | passed | pending: phone away | pending: phone away |
-| `vkd3d-proton` | `472989a` | `master` `31d1f89` | `master` `31d1f89` (2026-10-02, 20 commits ahead) | `212991f` / `44cf7c2` / `31d1f89` (bleeding-edge = the head) | passed | pending: phone away | pending: phone away |
-| `wine-valve` | `dc26e61` (`proton_11.0`) | `750fd01` (`bleeding-edge`) | bleeding-edge `750fd01` (2026-10-03; `proton_11.0` plus 409 commits) | `dc26e61` / `6d211aa` / `750fd01` | passed | pending: phone away | pending: phone away |
+| `wine` | wine-11.18 `7b3fff7` | wine-11.19 `455e350` | wine-11.19 (2026-10-02; no later tag) | Valve Wine `dc26e61` / `6d211aa` / `750fd01` | passed | pass (above) | final vs baseline (above) |
+| `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00`; rpmalloc `09142d7` | `main` `3648ee9`; rpmalloc `09142d7` (unchanged: main's `External/rpmalloc`) | `main` `3648ee9` (2026-10-02, the head on 2026-10-05 14:34) | FEX-2607 `1cc4b93` / main `0df84d3` / main `3648ee9` | passed | pass (above) | final vs baseline (above) |
+| `dxmt` | `7c8dee1` | `main` `68af85e` | `main` `68af85e` (16 commits ahead) | not used by Valve | passed; `pp slots` clean | pass (above) | final vs baseline (above) |
+| `mesa` | `82d4f86` | `main` `b39d173` | `main` `b39d173` (2026-10-05 09:42 UTC, 369 commits ahead) | not comparable (Valve uses the Linux drivers) | passed; KosmicKrisp host test passed | pass (above) | final vs baseline (above) |
+| `dxvk` | `52fe923` | `master` `e5ffd0f` | `master` `e5ffd0f` (2026-10-05 10:53 UTC, 18 commits ahead) | `a676404` / `6853015` / `d30be2b` (bleeding-edge is one commit behind: `e5ffd0f` "Disable present timing by default") | passed | pass (above) | final vs baseline (above) |
+| `vkd3d-proton` | `472989a` | `master` `31d1f89` | `master` `31d1f89` (2026-10-02, 20 commits ahead) | `212991f` / `44cf7c2` / `31d1f89` (bleeding-edge = the head) | passed | pass (above) | final vs baseline (above) |
+| `wine-valve` | `dc26e61` (`proton_11.0`) | `750fd01` (`bleeding-edge`) | bleeding-edge `750fd01` (2026-10-03; `proton_11.0` plus 409 commits) | `dc26e61` / `6d211aa` / `750fd01` | passed | pass (above) | final vs baseline (above) |
 
-## IPAs, in order
+## Where Valve's pins differ from upstream latest
 
-Each IPA is a dev build of exactly its commit (a clean tree), kept in its
-`out/` directory for the plays and a bisection. Not moved yet (alignment plan
-rows 8–11): `gbe`, the build-time sources, `llvm-project`, `stikjit` and
-`madeira`. Still to run on each IPA, in order: the gate (both titles) and the
-two `pp perf` routes, the baseline first.
-
-| Step | Commit | IPA | SHA256 |
-|---|---|---|---|
-| baseline | `e71e8a7` | `.work/out/20261005-140757-b1c15122/Playport-26.5-b1c15122.ipa` | `b1c1512228c25d16a0e08860ad878bde053f04378630d35d6359ec54958803f3` |
-| wine-11.19 | `7d0f5b3` | `.work/out/20261005-143326-b047db1e/Playport-26.5-b047db1e.ipa` | `b047db1e9d16d1405732f6230513f20c47832d7da7a29825e0725ef80a6c89da` |
-| FEX main | `22ac169` | `.work/out/20261005-143851-8f671fd2/Playport-26.5-8f671fd2.ipa` | `8f671fd208fb0521204df33f2ba5aa0aa5b63dbd1209e0fa7051091adea2e872` |
-| DXMT main | `2cd6d80` | `.work/out/20261005-144347-96b9b196/Playport-26.5-96b9b196.ipa` | `96b9b196ce4c5e90a2357e6e2636d2c9fef78ab66f04d35b211cb2af1ebd7b7a` |
-| Mesa main | `6d09073` | `.work/out/20261005-144853-492712d6/Playport-26.5-492712d6.ipa` | `492712d6fa6d702c700b06054e5980f21b0aca7560550efb81d6112946e20157` |
-| DXVK master | `cf020cb` | `.work/out/20261005-145319-543f20f6/Playport-26.5-543f20f6.ipa` | `543f20f6d232997cc4a5e71728fc2ce0b6d343d521ffdb41e05eb8bc330ede29` |
-| vkd3d-proton master | `c6b8936` | `.work/out/20261005-145755-c85a8ec2/Playport-26.5-c85a8ec2.ipa` | `c85a8ec2f299c73ff5bee1e5ebe6d16096a07bd323af58eb11e383c4f30fdd08` |
-| wine-valve bleeding-edge | `b011dbf` | `.work/out/20261005-150922-eb5ae2ad/Playport-26.5-eb5ae2ad.ipa` | `eb5ae2adcbef49fa1f4d1cd163a44903d821f55697cd657b2a635c787e5f421e` |
+- **FEX:** stable Proton (`proton_11.0`) ships FEX-2607 (`1cc4b93`), two
+  monthly releases behind; experimental has `main` `0df84d3` (09-28);
+  bleeding-edge has `main` `3648ee9`, which is Playport's new pin.
+- **Wine:** every Valve branch is WineHQ wine-11.0 with Valve's commits on
+  top (bleeding-edge: 1,862); Playport is WineHQ wine-11.19 with the Valve
+  commits it takes as a series (132 patches). 318 of the 409 commits
+  bleeding-edge added since `proton_11.0` are backports wine-11.19 already
+  has.
+- **DXVK:** stable `a676404`, experimental `6853015`, bleeding-edge `d30be2b`;
+  `master` (Playport's pin `e5ffd0f`) is one commit past bleeding-edge.
+- **vkd3d-proton:** stable `212991f`, experimental `44cf7c2`, bleeding-edge
+  `31d1f89` = `master` = Playport's pin.
+- **DXMT, Mesa (KosmicKrisp):** Valve uses neither (DXVK and vkd3d-proton on
+  the Linux Vulkan drivers).
 
 ## wine → wine-11.19
 
