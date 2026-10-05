@@ -14,9 +14,9 @@ from `fonts/` (artifact provenance `fonts`), not host FontForge outputs.
 also preserves SFD header lines 1–6 for each face as
 `wine-fonts-*-attribution.txt`, with committed-source derived origins.
 The Wine component's `wine-*` app selection includes these attributions.
-The faces came after the owner's 2026-09-30 review, so `build/app-notices.json`
-is `unreviewed` with them as its open question: no IPA with them goes to anyone
-until they are reviewed ([DISTRIBUTION.md](DISTRIBUTION.md)).
+Each face is LGPL-2.1-or-later (its SFD name table) and derived from Bitstream
+Vera Sans. The owner reviewed and accepted them on 2026-10-05: the answer is in
+`build/app-notices.json`'s review.
 
 ## Collecting the files
 

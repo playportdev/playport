@@ -108,9 +108,14 @@ Re-read the heads before starting. Valve moves these branches weekly.
 
 ### Order and targets
 
+Madeira moves **last** (owner, 2026-10-05). The rule that the `*-port` rows equal
+Madeira's gitlinks constrains only the port rows; the `wine`, `fex` and `dxmt`
+base rows move under their current port rows, as 0007, 0008 and 0013 did.
+Before the base moves, add the rebase helper of the dependency-strategy plan
+(rerere, conflict trial, range-diff, re-export).
+
 | # | Row(s) | Pin now | Latest upstream (2026-10-05) | Valve's choice | Notes |
 |---|---|---|---|---|---|
-| 1 | `madeira` | `8c050d0` | `main` `bbbf8d0` (2026-10-04), 438 commits ahead | (none) | `pp sync`. If Madeira moved its Wine, DXMT, FEX or rpmalloc, the sync holds (`*-port-moved`). Re-port the `patches/*-port` series and the `madeira-port` patches at the end of `madeira-unix`, then land the port rows and the Madeira pin together in one commit (UPSTREAM-SYNC.md). This goes first because the port rows must equal Madeira's gitlinks. |
 | 2 | `wine` | wine-11.18 `7b3fff7` | **wine-11.19** (tagged 2026-10-02) | Valve Wine `dc26e61` (stable) / `750fd01` (bleeding-edge) | 0013 re-port. Replay `patches/wine-valve` after it, and record every dropped or resolved pick. |
 | 2b | `wine-valve` | `dc26e61` (proton_11.0) | Valve Wine bleeding-edge `750fd011` | bleeding-edge | Re-pick from bleeding-edge (owner's direction), classifying each commit by 0018's rules; the WoW64 suspend-helper reverts come with it (B2). |
 | 3 | `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00` | `main` `3648ee9` (2026-10-03) | bleeding-edge = main head | FEX `main` (owner's direction). Brings the WoW64 commits `af04940`, `4956ac2` and `b1e54d8` (A2) and the disk-cache cap and pruning (B1). |
@@ -121,6 +126,7 @@ Re-read the heads before starting. Valve moves these branches weekly.
 | 8 | `gbe` | release-2026_09_27 | the same (newest release) | not used | No move unless a newer release appears. |
 | 9 | `freetype`, `abseil-cpp`, `xtool`, `gstreamer`, `idevice`, `rust` | see `pins.lock` | not checked | n/a | Each in its own commit with the same gate. `abseil-cpp` follows gbe's protobuf, so it moves only when gbe names a newer one. |
 | 10 | `llvm-project` 15.0.7, `stikjit` 1.6.0 | (these) | newer exist | n/a | **Expected holds; record the reason.** airconv is built against LLVM 15. A StikJIT 3.x move changes the JIT script protocol (runtime-risks plan, item 1). Try each move and record why it holds; do not force it. |
+| 11 | `madeira` | `8c050d0` | `main` `bbbf8d0` (2026-10-04), 438 commits ahead | (none) | `pp sync`. If Madeira moved its Wine, DXMT, FEX or rpmalloc, the sync holds (`*-port-moved`). Re-port the `patches/*-port` series and the `madeira-port` patches at the end of `madeira-unix`, then land the port rows and the Madeira pin together in one commit (UPSTREAM-SYNC.md). Last (owner, 2026-10-05), after the Madeira reconciliation of `2026-10-05-dependency-strategy.md` (its steps 0 and 2: the sync tooling for Madeira's reorganisation, then a decision per overlapping area), so that Madeira's fork deltas are re-ported once, onto the new bases. |
 
 **Deliverable of step 1:** `docs/evidence/<date>-deps-latest.md`. It contains:
 
