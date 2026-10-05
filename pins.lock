@@ -5,8 +5,8 @@
 # madeira is the pin: it must equal the upstream/madeira gitlink.
 #
 # Wine is taken from its own upstream, not from Madeira (decision 0013): wine
-# is a WineHQ release commit (the wine-11.18 tag), and patches/wine-port
-# carries Madeira's Wine fork rebased onto it. wine-port is the madeira-lgpl
+# is the newest WineHQ development tag (wine-11.19; decision 0049), and
+# patches/wine-port carries Madeira's Wine fork rebased onto it. wine-port is the madeira-lgpl
 # commit that series was rebased from; it must equal Madeira's wine gitlink,
 # so a Madeira update that moves its Wine stops the build until the port
 # series is refreshed.
@@ -45,7 +45,7 @@
 #
 # name       commit                                    repository                                    branch
 madeira      8c050d03f4d89096e1e2e2c8bb44479fffd86619  https://github.com/willfaust/Madeira.git      main
-wine         7b3fff76fa5178f6ce0141b2c776afa2a822f101  https://gitlab.winehq.org/wine/wine.git       master
+wine         455e3509b98a6919fd4ad1def4803e08c41c03b2  https://gitlab.winehq.org/wine/wine.git       master
 wine-port    723d1bf5132768276cea9bc35ab59c83557bb5fb  https://github.com/willfaust/wine.git         madeira-lgpl
 wine-valve   dc26e61847081a1b5cb0733dc30feba6ee575482  https://github.com/ValveSoftware/wine.git     proton_11.0
 fex          9fbdc00bd6401aff3b32d79e78ff98b8a13e4dcf  https://github.com/FEX-Emu/FEX.git            FEX-2609_1

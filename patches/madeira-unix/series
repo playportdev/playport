@@ -78,3 +78,4 @@
 0077-ntdll-count-the-set_cursor-requests-by-the-call-that.patch
 0078-ntdll-log-each-thread-s-QoS-class-and-the-Windows-pr.patch
 0079-ntdll-profile-an-i386-guest-s-code-by-its-address-an.patch
+0080-ntdll-unix-win32u-unix-wineserver-port-the-iOS-repla.patch
