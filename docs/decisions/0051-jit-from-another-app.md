@@ -55,4 +55,5 @@ and for the built-in one to be hidden under LiveContainer.
   as with the built-in helper on such a phone.
 - Under LiveContainer, every game needs a fresh launch from LiveContainer.
 - Not yet run on the phone: neither StikDebug nor LiveContainer is installed
-  on the reference phone. Only Built-in was checked after the change.
+  on the reference phone. Only Built-in was checked after the change
+  ([evidence](../evidence/2026-10-05-jit-methods.md)).
