@@ -24,7 +24,7 @@ One sequence for this plan and
 
 | Order | What | From |
 |---|---|---|
-| 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources` | strategy, step 0 |
+| 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources`. **Done, a8c0859e**: `madeira-dock` is not used and never checked out | strategy, step 0 |
 | 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move | strategy, step 1 |
 | 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit | alignment, step 1 (rows 2–10) |
 | 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs | strategy, step 2 |
@@ -451,7 +451,7 @@ rather than replaying them.**
 
 | # | Step | Effort (inference, from A2 wall times and A3 counts) |
 |---|---|---|
-| 0 | Fix the sync tooling for Madeira's reorganisation: `GITLINKS`/pipeline `research/dxmt` → `dxmt`, and decide what `madeira-dock` means for `sources` | about half a day |
+| 0 | Fix the sync tooling for Madeira's reorganisation: `GITLINKS`/pipeline `research/dxmt` → `dxmt`, and decide what `madeira-dock` means for `sources`. **Done, a8c0859e** (a dry `pp sync bbbf8d0` reaches the four `*-port-moved` holds); left for the Madeira move: `build/source-bundle.json`'s madeira rules (`research/dxmt`, `madeira-dock`, `build/*-tests/*.exe` now `tests/`) | about half a day |
 | 1 | Rebase helper (rerere, trial, range-diff, re-export), tested on the FEX → main move | 1-2 days |
 | 2 | Madeira reconciliation: a per-area comparison of Madeira main (fetch `bbbf8d0` or newer) with Playport's series; one decision record listing what is taken from each side | 1-2 days of reading, plus Portal 2 and Hollow Knight gates |
 | 3 | Step 1 of the alignment plan, reordered (below) | as the plan |
