@@ -23,7 +23,7 @@ Offered-upstream: no
  1 file changed, 6 insertions(+)
 
 diff --git a/dlls/winevulkan/vulkan_thunks.c b/dlls/winevulkan/vulkan_thunks.c
-index 065d57566fa..627e1ffdae8 100644
+index 065d575..627e1ff 100644
 --- a/dlls/winevulkan/vulkan_thunks.c
 +++ b/dlls/winevulkan/vulkan_thunks.c
 @@ -40375,6 +40375,9 @@ static void convert_VkPhysicalDeviceLayeredApiPropertiesKHR_win64_to_host(struct

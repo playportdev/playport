@@ -58,7 +58,7 @@ index edea275..20de2e4 100644
  
    if (metal_format.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)) {
 diff --git a/src/dxmt/dxmt_texture.cpp b/src/dxmt/dxmt_texture.cpp
-index e367bc8..b6fb2ab 100644
+index e367bc8..87c968d 100644
 --- a/src/dxmt/dxmt_texture.cpp
 +++ b/src/dxmt/dxmt_texture.cpp
 @@ -18,6 +18,8 @@

@@ -42,7 +42,7 @@ Offered-upstream: no
  8 files changed, 509 insertions(+), 20 deletions(-)
 
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 0412b4a09b4..4711fd3f542 100644
+index 0412b4a..4711fd3 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -6121,7 +6121,13 @@ static unsigned int set_pending_write( HANDLE device )
@@ -163,7 +163,7 @@ index 0412b4a09b4..4711fd3f542 100644
      reads_logged++;
  
 diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
-index 173fc4b5a49..43391a58748 100644
+index 3f993d8..1b2a5fb 100644
 --- a/dlls/ntdll/unix/socket.c
 +++ b/dlls/ntdll/unix/socket.c
 @@ -797,6 +797,101 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
@@ -304,7 +304,7 @@ index 173fc4b5a49..43391a58748 100644
      while (async->iov_cursor < async->count && ret >= async->iov[async->iov_cursor].iov_len)
          ret -= async->iov[async->iov_cursor++].iov_len;
 diff --git a/dlls/win32u/dibdrv/bitblt.c b/dlls/win32u/dibdrv/bitblt.c
-index 3e4f1430da9..5b71585c391 100644
+index 3e4f143..5b71585 100644
 --- a/dlls/win32u/dibdrv/bitblt.c
 +++ b/dlls/win32u/dibdrv/bitblt.c
 @@ -1015,12 +1015,60 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
@@ -369,7 +369,7 @@ index 3e4f1430da9..5b71585c391 100644
  
      if (dst && src && dst->visrect.right - dst->visrect.left >= 24)
 diff --git a/server/async.c b/server/async.c
-index ae51b2f72b0..5ae20d70018 100644
+index ae51b2f..5ae20d7 100644
 --- a/server/async.c
 +++ b/server/async.c
 @@ -275,11 +275,70 @@ void free_async_queue( struct async_queue *queue )
@@ -446,7 +446,7 @@ index ae51b2f72b0..5ae20d70018 100644
  }
  
 diff --git a/server/object.c b/server/object.c
-index e977b894806..db4799d5658 100644
+index e977b89..db4799d 100644
 --- a/server/object.c
 +++ b/server/object.c
 @@ -270,6 +270,141 @@ WCHAR *default_get_full_name( struct object *obj, data_size_t max, data_size_t *
@@ -623,7 +623,7 @@ index e977b894806..db4799d5658 100644
      if (!--obj->refcount)
      {
 diff --git a/server/process.c b/server/process.c
-index d668ffb13f1..5e8a1c9300e 100644
+index d668ffb..5e8a1c9 100644
 --- a/server/process.c
 +++ b/server/process.c
 @@ -828,7 +828,14 @@ static void process_poll_event( struct fd *fd, int event )
@@ -663,7 +663,7 @@ index d668ffb13f1..5e8a1c9300e 100644
      {
          release_object( process->msg_fd );
 diff --git a/server/sock.c b/server/sock.c
-index 30df1c2acd7..af57b0380ab 100644
+index 30df1c2..af57b03 100644
 --- a/server/sock.c
 +++ b/server/sock.c
 @@ -1399,20 +1399,48 @@ static void sock_dispatch_events( struct sock *sock, enum connection_state prevs
@@ -724,7 +724,7 @@ index 30df1c2acd7..af57b0380ab 100644
          }
          break;
 diff --git a/server/thread.c b/server/thread.c
-index 34c1f0adfc6..2d685198e74 100644
+index 34c1f0a..2d68519 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -542,7 +542,16 @@ static void thread_poll_event( struct fd *fd, int event )

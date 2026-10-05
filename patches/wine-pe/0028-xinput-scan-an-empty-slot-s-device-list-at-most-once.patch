@@ -25,7 +25,7 @@ Offered-upstream: no
  1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
-index 01020e9..7e21845 100644
+index f56c164..e52dedc 100644
 --- a/dlls/xinput1_3/main.c
 +++ b/dlls/xinput1_3/main.c
 @@ -517,6 +517,9 @@ static void try_remove_device(const WCHAR *device_path)

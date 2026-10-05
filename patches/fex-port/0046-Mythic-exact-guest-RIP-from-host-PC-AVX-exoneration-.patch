@@ -34,7 +34,7 @@ Offered-upstream: no
  6 files changed, 107 insertions(+), 33 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Config/Config.json.in b/FEXCore/Source/Interface/Config/Config.json.in
-index 136aa1c..60b1fc9 100644
+index 938377f..1558de3 100644
 --- a/FEXCore/Source/Interface/Config/Config.json.in
 +++ b/FEXCore/Source/Interface/Config/Config.json.in
 @@ -44,6 +44,17 @@
@@ -56,7 +56,7 @@ index 136aa1c..60b1fc9 100644
          "AffectsCodeGen": "true",
          "Comment": "Technically affects codegen, but this is serialized elsewhere.",
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 444980c..2b5a485 100644
+index 9fe1b66..6c19fcf 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -226,6 +226,52 @@ uint64_t ContextImpl::RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* T
@@ -172,7 +172,7 @@ index 3691ae5..0048283 100644
    }
  
 diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
-index e5e84bc..e3131a0 100644
+index d1c3595..ba4e126 100644
 --- a/Source/Windows/Common/WinAPI/IO.cpp
 +++ b/Source/Windows/Common/WinAPI/IO.cpp
 @@ -120,39 +120,30 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,

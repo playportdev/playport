@@ -26,7 +26,7 @@ Offered-upstream: no; the refusal is Madeira's (fex-port 0019)
  1 file changed, 24 insertions(+), 1 deletion(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 1066aaf..ab150c9 100644
+index 0289ab4..4ffe4d0 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -1580,11 +1580,34 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_

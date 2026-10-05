@@ -34,7 +34,7 @@ Offered-upstream: no
  2 files changed, 265 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 5c104a7a6d1..e36c77917f1 100644
+index 911ae2c..2a3386d4 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -999,15 +999,91 @@ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
@@ -350,7 +350,7 @@ index 5c104a7a6d1..e36c77917f1 100644
  }
  
 diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
-index ec09fefc0d7..1ff09f628ce 100644
+index ee1e399..66dad3c 100644
 --- a/dlls/rpcrt4/ndr_stubless.c
 +++ b/dlls/rpcrt4/ndr_stubless.c
 @@ -483,6 +483,32 @@ void client_do_args( PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat, enum s

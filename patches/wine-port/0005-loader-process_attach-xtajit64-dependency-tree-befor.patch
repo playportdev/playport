@@ -32,7 +32,7 @@ Offered-upstream: no
  1 file changed, 18 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index b3115fd7bdb..4dba3d010f9 100644
+index b3115fd..4dba3d0 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -4328,12 +4328,28 @@ static void load_arm64ec_module(void)

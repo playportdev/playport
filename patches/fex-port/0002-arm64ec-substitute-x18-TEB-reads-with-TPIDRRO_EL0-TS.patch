@@ -108,7 +108,7 @@ index 5ad6e7b..64233b9 100644
  #endif
  
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index b57005b..c14e7d5 100644
+index 972b84e..e630165 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -1,6 +1,12 @@
@@ -185,7 +185,7 @@ index b57005b..c14e7d5 100644
      auto DispatchSize = End - reinterpret_cast<uint64_t>(DispatchPtr);
      auto* RWPtr = WritePtr(reinterpret_cast<uint8_t*>(DispatchPtr));
 diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
-index 469a4bd..9a4fe41 100644
+index 93ed6de..39011b4 100644
 --- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 @@ -339,7 +339,15 @@ DEF_OP(MonoBackpatcherWrite) {

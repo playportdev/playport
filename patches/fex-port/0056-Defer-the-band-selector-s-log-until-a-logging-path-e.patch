@@ -27,7 +27,7 @@ Offered-upstream: no
  2 files changed, 33 insertions(+), 1 deletion(-)
 
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 2f6a512..12311be 100644
+index a873bab..c30e252 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -64,6 +64,12 @@ $end_info$

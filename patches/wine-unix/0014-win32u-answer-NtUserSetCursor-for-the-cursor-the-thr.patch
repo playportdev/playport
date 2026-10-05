@@ -23,7 +23,7 @@ Offered-upstream: no
  1 file changed, 32 insertions(+)
 
 diff --git a/dlls/win32u/cursoricon.c b/dlls/win32u/cursoricon.c
-index b7bb811..f649047 100644
+index 1dfcb6e..165379c 100644
 --- a/dlls/win32u/cursoricon.c
 +++ b/dlls/win32u/cursoricon.c
 @@ -102,6 +102,19 @@ INT WINAPI NtUserShowCursor( BOOL show )

@@ -40,7 +40,7 @@ Offered-upstream: no
  4 files changed, 334 insertions(+), 12 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 4b1266a2bbf..ef65b79aecd 100644
+index 4b1266a..ef65b79 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1148,6 +1148,35 @@ void * WINAPI RtlFindExportedRoutineByName( HMODULE module, const char *name )
@@ -232,7 +232,7 @@ index 4b1266a2bbf..ef65b79aecd 100644
      }
  
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index e36c77917f1..0281cf613bf 100644
+index 2a3386d4..d2e0627 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1635,6 +1635,15 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
@@ -366,7 +366,7 @@ index e36c77917f1..0281cf613bf 100644
           "ldr x16, [x16, #0x368]\n\t"       /* peb->EcCodeBitMap */
           "lsr x9, x11, #12\n\t"             /* dest / page_size */
 diff --git a/dlls/rpcrt4/ndr_marshall.c b/dlls/rpcrt4/ndr_marshall.c
-index 5e813ef6eb9..5d6d89b6f4d 100644
+index 5e813ef..5d6d89b 100644
 --- a/dlls/rpcrt4/ndr_marshall.c
 +++ b/dlls/rpcrt4/ndr_marshall.c
 @@ -7040,11 +7040,66 @@ static unsigned char *WINAPI NdrContextHandleUnmarshall(
@@ -437,7 +437,7 @@ index 5e813ef6eb9..5d6d89b6f4d 100644
          }
          /* [out]-only or [ret] param */
 diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
-index 1c166951218..dc45afc1f5f 100644
+index e9d760c..c4b1ebc 100644
 --- a/dlls/rpcrt4/ndr_stubless.c
 +++ b/dlls/rpcrt4/ndr_stubless.c
 @@ -538,14 +538,40 @@ void client_do_args( PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat, enum s

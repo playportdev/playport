@@ -25,7 +25,7 @@ Offered-upstream: no
  1 file changed, 17 insertions(+), 3 deletions(-)
 
 diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
-index f8e0fdb..3551e94 100644
+index 54e4fdb..fe8039b 100644
 --- a/libs/vkd3d/device.c
 +++ b/libs/vkd3d/device.c
 @@ -9766,6 +9766,12 @@ static void d3d12_device_caps_init_shader_model(struct d3d12_device *device)

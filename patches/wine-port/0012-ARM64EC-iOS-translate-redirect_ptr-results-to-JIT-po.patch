@@ -43,7 +43,7 @@ Offered-upstream: no
  2 files changed, 37 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index 2c66313e6ce..9f147d17741 100644
+index 03dd02e..c5d996e 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
 @@ -1770,6 +1770,7 @@
@@ -55,7 +55,7 @@ index 2c66313e6ce..9f147d17741 100644
  
  # Debugging
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index cfee56e8ee4..694459f00e9 100644
+index d386b2d..ae1cb52 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -163,6 +163,35 @@ static BOOL send_cross_process_notification( HANDLE process, UINT id, const void

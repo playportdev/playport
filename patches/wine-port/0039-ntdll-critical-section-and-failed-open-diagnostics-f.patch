@@ -32,7 +32,7 @@ Offered-upstream: no
  2 files changed, 280 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index e0119c20d20..7a5babba6eb 100644
+index e0119c2..7a5babb 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -34,6 +34,7 @@
@@ -311,7 +311,7 @@ index e0119c20d20..7a5babba6eb 100644
  done:
      crit->OwningThread   = ULongToHandle(GetCurrentThreadId());
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 4711fd3f542..59445703c3e 100644
+index 4711fd3..5944570 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -4648,6 +4648,12 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce

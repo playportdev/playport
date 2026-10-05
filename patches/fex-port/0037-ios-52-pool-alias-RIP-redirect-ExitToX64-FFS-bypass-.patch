@@ -50,7 +50,7 @@ Offered-upstream: no
  9 files changed, 760 insertions(+), 6 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 15974e7..08be95c 100644
+index a15c1b1..52080d7 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -954,6 +954,18 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
@@ -410,7 +410,7 @@ index 15974e7..08be95c 100644
    }
  
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index a18b7ed..fe3b9b9 100644
+index 5de65cc..fa68690 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -63,6 +63,17 @@ Dispatcher::~Dispatcher() {
@@ -531,7 +531,7 @@ index a18b7ed..fe3b9b9 100644
    // compiling to Windows ARM64EC PE, libkern isn't available — use the
    // portable ClearICache path instead. Gate on build host AND target.
 diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
-index 7ed3d77..74ecb7d 100644
+index ca7585b..fd0d28e 100644
 --- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 @@ -272,7 +272,40 @@ DEF_OP(ExitFunction) {
@@ -732,7 +732,7 @@ index 4460afd..c8995f6 100644
    size_t NumInstructionsToSkip = 0;
  
 diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
-index 65c83d2..8c6164a 100644
+index 86ce70a..f5ff2c5 100644
 --- a/FEXCore/include/FEXCore/Core/CoreState.h
 +++ b/FEXCore/include/FEXCore/Core/CoreState.h
 @@ -438,6 +438,50 @@ struct CpuStateFrame {
@@ -902,7 +902,7 @@ index 0076cac..1c34366 100644
  
  enter_jit:
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 4e3eb42..0c510eb 100644
+index 11d00ad..686ec8b 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -71,6 +71,12 @@ $end_info$
@@ -990,7 +990,7 @@ index 13805be..731ff24 100644
    }
  #endif
 diff --git a/Source/Windows/Common/FEXUnixLib.cpp b/Source/Windows/Common/FEXUnixLib.cpp
-index 8e14475..dd68462 100644
+index d122566..6ccc17a 100644
 --- a/Source/Windows/Common/FEXUnixLib.cpp
 +++ b/Source/Windows/Common/FEXUnixLib.cpp
 @@ -2,6 +2,7 @@

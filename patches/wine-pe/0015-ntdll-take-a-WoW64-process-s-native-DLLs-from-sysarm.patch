@@ -20,7 +20,7 @@ Offered-upstream: no; the farm layout is specific to the iOS port
  1 file changed, 57 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 49d7a012749..2d7260fc47a 100644
+index 49d7a01..2d7260f 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -4007,6 +4007,52 @@ static NTSTATUS open_system_only_dll( const WCHAR *name, UNICODE_STRING *nt_name

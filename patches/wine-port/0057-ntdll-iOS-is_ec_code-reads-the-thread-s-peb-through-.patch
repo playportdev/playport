@@ -16,7 +16,7 @@ Offered-upstream: no
  1 file changed, 5 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index 72bb0ad5da4..1962c6c5a83 100644
+index 72bb0ad..1962c6c 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
 @@ -494,8 +494,6 @@ static inline CLIENT_ID make_client_id( ULONG pid, ULONG tid )

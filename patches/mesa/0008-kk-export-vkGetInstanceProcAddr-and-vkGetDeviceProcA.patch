@@ -25,7 +25,7 @@ Offered-upstream: no
  1 file changed, 24 insertions(+)
 
 diff --git a/src/kosmickrisp/vulkan/kk_instance.c b/src/kosmickrisp/vulkan/kk_instance.c
-index 90abd52..b735c33 100644
+index 90abd52..7100d5d 100644
 --- a/src/kosmickrisp/vulkan/kk_instance.c
 +++ b/src/kosmickrisp/vulkan/kk_instance.c
 @@ -242,3 +242,27 @@ vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName)

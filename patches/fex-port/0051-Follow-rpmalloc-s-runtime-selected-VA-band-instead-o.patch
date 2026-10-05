@@ -122,7 +122,7 @@ index 2b5cf17..a41e648 100644
  #endif
    MEM_EXTENDED_PARAMETER Parameter {};
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 7a4c561..fa5299c 100644
+index 1b21ee5..e9ebe7b 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -844,7 +844,12 @@ NTSTATUS ProcessInit() {

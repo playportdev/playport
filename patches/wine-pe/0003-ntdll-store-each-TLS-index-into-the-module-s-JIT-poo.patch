@@ -15,7 +15,7 @@ Offered-upstream: no
  1 file changed, 11 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 9e2a5871..a600c3c6 100644
+index f60bfa3..cfd449f 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1764,6 +1764,17 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )

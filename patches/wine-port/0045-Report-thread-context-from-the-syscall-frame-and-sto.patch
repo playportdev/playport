@@ -64,7 +64,7 @@ Offered-upstream: no
  3 files changed, 97 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 9bc2c92ab5c..087db976699 100644
+index 9bc2c92..087db97 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -3817,6 +3817,40 @@ done:
@@ -109,7 +109,7 @@ index 9bc2c92ab5c..087db976699 100644
              ERR( "[dll-missing] rev=ml336 #%d %s status=%08x -- if the webhelper dies right"
                   " after this, it is the delay-load Chromium kills the process over\n",
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index ed1aeb79070..3b164a0b0cc 100644
+index 15989f3..7065613 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1663,6 +1663,38 @@ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
@@ -152,7 +152,7 @@ index ed1aeb79070..3b164a0b0cc 100644
  }
  
 diff --git a/server/thread.c b/server/thread.c
-index fccc462e463..34d2e05ce14 100644
+index fccc462..34d2e05 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -949,6 +949,28 @@ int suspend_thread( struct thread *thread )

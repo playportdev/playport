@@ -44,7 +44,7 @@ Offered-upstream: no; the window exists only on the iOS port
  create mode 100644 dlls/wow64/wow64_window.h
 
 diff --git a/dlls/wow64/process.c b/dlls/wow64/process.c
-index 16ea09808de..7c9fbf78a73 100644
+index 16ea098..7c9fbf7 100644
 --- a/dlls/wow64/process.c
 +++ b/dlls/wow64/process.c
 @@ -71,7 +71,7 @@ static RTL_USER_PROCESS_PARAMETERS *process_params_32to64( RTL_USER_PROCESS_PARA
@@ -199,7 +199,7 @@ index 16ea09808de..7c9fbf78a73 100644
          }
          else return STATUS_INFO_LENGTH_MISMATCH;
 diff --git a/dlls/wow64/security.c b/dlls/wow64/security.c
-index 331e2978cdd..f75e7958042 100644
+index 331e297..f75e795 100644
 --- a/dlls/wow64/security.c
 +++ b/dlls/wow64/security.c
 @@ -41,7 +41,7 @@ static TOKEN_GROUPS *token_groups_32to64( const TOKEN_GROUPS32 *groups32 )
@@ -275,7 +275,7 @@ index 331e2978cdd..f75e7958042 100644
              return NtSetInformationToken( handle, class, &dacl, sizeof(dacl) );
          }
 diff --git a/dlls/wow64/sync.c b/dlls/wow64/sync.c
-index d5b52a5c815..dcee554191d 100644
+index b89e7ac..04ce51a 100644
 --- a/dlls/wow64/sync.c
 +++ b/dlls/wow64/sync.c
 @@ -38,7 +38,7 @@ static void put_object_type_info( OBJECT_TYPE_INFORMATION32 *info32, const OBJEC
@@ -331,7 +331,7 @@ index d5b52a5c815..dcee554191d 100644
              info32->Size        = info.Size;
              ret_size = sizeof(*info32);
 diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
-index d6fea09cec8..501a2bc663b 100644
+index d6fea09c..501a2bc 100644
 --- a/dlls/wow64/syscall.c
 +++ b/dlls/wow64/syscall.c
 @@ -90,6 +90,9 @@ struct user_apc_frame
@@ -671,7 +671,7 @@ index d6fea09cec8..501a2bc663b 100644
              pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
  
 diff --git a/dlls/wow64/system.c b/dlls/wow64/system.c
-index eb57d35f41e..8e8f9605daa 100644
+index eb57d35..8e8f960 100644
 --- a/dlls/wow64/system.c
 +++ b/dlls/wow64/system.c
 @@ -134,7 +134,7 @@ static NTSTATUS put_system_proc_info( SYSTEM_PROCESS_INFORMATION32 *info32,
@@ -684,7 +684,7 @@ index eb57d35f41e..8e8f9605daa 100644
              proc32->UniqueProcessId              = HandleToULong( proc->UniqueProcessId );
              proc32->ParentProcessId              = HandleToULong( proc->ParentProcessId );
 diff --git a/dlls/wow64/virtual.c b/dlls/wow64/virtual.c
-index 605abe1804c..4f1fb5d7287 100644
+index 605abe1..4f1fb5d 100644
 --- a/dlls/wow64/virtual.c
 +++ b/dlls/wow64/virtual.c
 @@ -70,7 +70,7 @@ static MEMORY_RANGE_ENTRY *memory_range_entry_array_32to64( const MEMORY_RANGE_E
@@ -913,7 +913,7 @@ index 605abe1804c..4f1fb5d7287 100644
                  info32->ImageFlags  = info.ImageFlags;
              }
 diff --git a/dlls/wow64/wow64_private.h b/dlls/wow64/wow64_private.h
-index b3ea679cda6..8225b966d45 100644
+index b3ea679..8225b96 100644
 --- a/dlls/wow64/wow64_private.h
 +++ b/dlls/wow64/wow64_private.h
 @@ -23,6 +23,7 @@
@@ -1094,7 +1094,7 @@ index b3ea679cda6..8225b966d45 100644
  static inline void put_size( ULONG *size32, SIZE_T size )
 diff --git a/dlls/wow64/wow64_window.h b/dlls/wow64/wow64_window.h
 new file mode 100644
-index 00000000000..239549107ee
+index 0000000..2395491
 --- /dev/null
 +++ b/dlls/wow64/wow64_window.h
 @@ -0,0 +1,69 @@

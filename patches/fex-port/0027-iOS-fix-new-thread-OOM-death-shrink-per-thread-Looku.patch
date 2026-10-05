@@ -40,7 +40,7 @@ Offered-upstream: no
  4 files changed, 65 insertions(+)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index d642b9c..9432952 100644
+index 08a7c75..40be2ca 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -117,6 +117,18 @@ ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
@@ -132,7 +132,7 @@ index 391d485..0051f08 100644
    constexpr static size_t MAX_L1_SIZE = MAX_L1_ENTRIES * sizeof(LookupCacheEntry);
  
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index b1249dd..dd3cb00 100644
+index 0998a90..fc1d284 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -1129,6 +1129,27 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After

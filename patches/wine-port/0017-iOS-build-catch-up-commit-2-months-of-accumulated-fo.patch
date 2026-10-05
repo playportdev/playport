@@ -58,7 +58,7 @@ Offered-upstream: no
  11 files changed, 280 insertions(+), 4 deletions(-)
 
 diff --git a/dlls/combase/rpc.c b/dlls/combase/rpc.c
-index dc33877825b..a620ddcb525 100644
+index dc33877..a620ddc 100644
 --- a/dlls/combase/rpc.c
 +++ b/dlls/combase/rpc.c
 @@ -191,6 +191,19 @@ static BOOL start_rpcss(void)
@@ -82,7 +82,7 @@ index dc33877825b..a620ddcb525 100644
          ERR("Failed to open service manager\n");
          return FALSE;
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index a89abcce82c..15cabd6385c 100644
+index a89abcc..15cabd6 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -3396,6 +3396,40 @@ static NTSTATUS find_dll_file( const WCHAR *load_path, const WCHAR *libname, UNI
@@ -127,7 +127,7 @@ index a89abcce82c..15cabd6385c 100644
      if (wow64_old_value) RtlWow64EnableFsRedirectionEx( 1, &wow64_old_value );
      return status;
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index 9f147d17741..579f8fa2f4a 100644
+index c5d996e..3548e1c 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
 @@ -1771,6 +1771,7 @@
@@ -139,7 +139,7 @@ index 9f147d17741..579f8fa2f4a 100644
  
  # Debugging
 diff --git a/dlls/ntdll/signal_arm64.c b/dlls/ntdll/signal_arm64.c
-index e560718c770..e7c9d176c1a 100644
+index e560718..e7c9d17 100644
 --- a/dlls/ntdll/signal_arm64.c
 +++ b/dlls/ntdll/signal_arm64.c
 @@ -106,6 +106,33 @@ __ASM_GLOBAL_FUNC( RtlCaptureContext,
@@ -198,7 +198,7 @@ index e560718c770..e7c9d176c1a 100644
          func = RtlLookupFunctionEntry( pc, &base, &table );
          if (RtlVirtualUnwind2( UNW_FLAG_NHANDLER, base, pc, func, &context, NULL,
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index ea4b929130e..0bfb10ff94e 100644
+index 9eae3c6..e945d25 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -198,6 +198,29 @@ void *__attribute__((naked)) xlate_ios_jit( void *ptr )
@@ -354,7 +354,7 @@ index ea4b929130e..0bfb10ff94e 100644
             rec->ExceptionCode, rec->ExceptionFlags, end_frame, target_ip );
      for (i = 0; i < min( EXCEPTION_MAXIMUM_PARAMETERS, rec->NumberParameters ); i++)
 diff --git a/dlls/ntdll/unwind.c b/dlls/ntdll/unwind.c
-index f0707346a35..4e61407b892 100644
+index f070734..4e61407 100644
 --- a/dlls/ntdll/unwind.c
 +++ b/dlls/ntdll/unwind.c
 @@ -2066,6 +2066,23 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,
@@ -382,7 +382,7 @@ index f0707346a35..4e61407b892 100644
      if (RtlIsEcCode( pc ))
      {
 diff --git a/dlls/secur32/schannel_gnutls.c b/dlls/secur32/schannel_gnutls.c
-index 83b9f8faf9d..7d0db522b95 100644
+index 83b9f8f..7d0db52 100644
 --- a/dlls/secur32/schannel_gnutls.c
 +++ b/dlls/secur32/schannel_gnutls.c
 @@ -657,6 +657,7 @@ static NTSTATUS schan_handshake( void *args )
@@ -460,7 +460,7 @@ index 83b9f8faf9d..7d0db522b95 100644
      libgnutls_handle = NULL;
      return STATUS_DLL_NOT_FOUND;
 diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
-index 9a57c00cdbe..c031af9bbf9 100644
+index e2bde69..29eb314 100644
 --- a/dlls/win32u/window.c
 +++ b/dlls/win32u/window.c
 @@ -165,6 +165,13 @@ static NTSTATUS get_shared_window( HANDLE handle, struct object_lock *lock, cons
@@ -478,7 +478,7 @@ index 9a57c00cdbe..c031af9bbf9 100644
          lock->id = object->id;
          return STATUS_PENDING;
 diff --git a/dlls/ws2_32/unixlib.c b/dlls/ws2_32/unixlib.c
-index d16107be1af..49219cab0c8 100644
+index d16107b..49219ca 100644
 --- a/dlls/ws2_32/unixlib.c
 +++ b/dlls/ws2_32/unixlib.c
 @@ -750,7 +750,23 @@ static NTSTATUS unix_getaddrinfo( void *args )
@@ -506,7 +506,7 @@ index d16107be1af..49219cab0c8 100644
          return addrinfo_err_from_unix( ret );
  
 diff --git a/programs/services/services.c b/programs/services/services.c
-index 0830a75016b..8e27c3dfad3 100644
+index 0830a75..8e27c3d 100644
 --- a/programs/services/services.c
 +++ b/programs/services/services.c
 @@ -426,11 +426,24 @@ static void scmdatabase_autostart_services(struct scmdatabase *db)
@@ -547,7 +547,7 @@ index 0830a75016b..8e27c3dfad3 100644
              WINE_FIXME("Auto-start service %s failed to start: %ld\n",
                         wine_dbgstr_w(service->name), err);
 diff --git a/server/winstation.c b/server/winstation.c
-index e2aad1edeb1..61720b17f21 100644
+index e2aad1e..61720b1 100644
 --- a/server/winstation.c
 +++ b/server/winstation.c
 @@ -422,8 +422,20 @@ static void remove_desktop_user( struct desktop *desktop, struct thread *thread

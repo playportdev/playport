@@ -48,7 +48,7 @@ Offered-upstream: no
  2 files changed, 40 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 893c6cf81c2..ea4b929130e 100644
+index 1aa6734..9eae3c6 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -31,6 +31,7 @@
@@ -106,7 +106,7 @@ index 893c6cf81c2..ea4b929130e 100644
  }
  
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 9cb444342fe..de79d602d9f 100644
+index 9cb4443..de79d60 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
 @@ -66,6 +66,19 @@ struct unwind_builtin_dll_params

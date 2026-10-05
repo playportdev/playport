@@ -48,7 +48,7 @@ Offered-upstream: no
  3 files changed, 107 insertions(+)
 
 diff --git a/dlls/win32u/bitblt.c b/dlls/win32u/bitblt.c
-index c6021dde98f..d69bf94351a 100644
+index c6021dd..d69bf94 100644
 --- a/dlls/win32u/bitblt.c
 +++ b/dlls/win32u/bitblt.c
 @@ -22,6 +22,7 @@
@@ -99,7 +99,7 @@ index c6021dde98f..d69bf94351a 100644
                hdcSrc, src.log_x, src.log_y, src.log_width, src.log_height,
                src.x, src.y, src.width, src.height, wine_dbgstr_rect(&src.visrect),
 diff --git a/dlls/win32u/dib.c b/dlls/win32u/dib.c
-index 6151e8312f0..e92a51929f1 100644
+index 6151e83..e92a519 100644
 --- a/dlls/win32u/dib.c
 +++ b/dlls/win32u/dib.c
 @@ -63,6 +63,7 @@
@@ -151,7 +151,7 @@ index 6151e8312f0..e92a51929f1 100644
      BITMAPINFO *info = (BITMAPINFO *)buffer;
      PHYSDEV physdev;
 diff --git a/dlls/win32u/dibdrv/bitblt.c b/dlls/win32u/dibdrv/bitblt.c
-index 0a6916d1651..3e4f1430da9 100644
+index 0a6916d..3e4f143 100644
 --- a/dlls/win32u/dibdrv/bitblt.c
 +++ b/dlls/win32u/dibdrv/bitblt.c
 @@ -22,6 +22,7 @@

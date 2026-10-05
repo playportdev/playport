@@ -55,7 +55,7 @@ Offered-upstream: no
  3 files changed, 329 insertions(+)
 
 diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
-index 02eff44..4bde286 100644
+index 33ff9c3..a56329e 100644
 --- a/src/d3d11/d3d11_context_impl.cpp
 +++ b/src/d3d11/d3d11_context_impl.cpp
 @@ -42,6 +42,24 @@
@@ -108,7 +108,7 @@ index 02eff44..4bde286 100644
  
      if (!pDstResource)
 diff --git a/src/d3d11/d3d11_device.cpp b/src/d3d11/d3d11_device.cpp
-index a21b3c5..c612fab 100644
+index 62efc67..558e043 100644
 --- a/src/d3d11/d3d11_device.cpp
 +++ b/src/d3d11/d3d11_device.cpp
 @@ -28,6 +28,164 @@

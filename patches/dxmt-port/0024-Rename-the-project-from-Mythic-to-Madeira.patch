@@ -151,7 +151,7 @@ index f26bf0d..a94d87c 100644
     * ways that don't map to a real cross-process scenario. Skip the check. */
  
 diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
-index fc237fe..e7e7ffa 100644
+index ade2c03..d43fc0e 100644
 --- a/src/dxmt/dxmt_context.cpp
 +++ b/src/dxmt/dxmt_context.cpp
 @@ -866,7 +866,7 @@ QueryReadbacks

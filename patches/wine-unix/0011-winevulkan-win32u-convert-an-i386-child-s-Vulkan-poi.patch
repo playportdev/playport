@@ -30,7 +30,7 @@ Offered-upstream: no; the window exists only on the iOS port
  4 files changed, 129 insertions(+), 17 deletions(-)
 
 diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
-index 261c10c..fdae681 100644
+index f07e78a..48524c5 100644
 --- a/dlls/win32u/vulkan.c
 +++ b/dlls/win32u/vulkan.c
 @@ -60,6 +60,30 @@ static const UINT EXTERNAL_FENCE_WIN32_BITS = VK_EXTERNAL_FENCE_HANDLE_TYPE_OPAQ

@@ -21,7 +21,7 @@ Offered-upstream: no
  1 file changed, 7 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index b1cc90bf622..3ffa73830e8 100644
+index b1cc90b..3ffa738 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1689,6 +1689,13 @@ static NTSTATUS alloc_thread_tls(void)

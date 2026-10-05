@@ -36,7 +36,7 @@ Offered-upstream: no
  2 files changed, 69 insertions(+)
 
 diff --git a/dlls/dwrite/font.c b/dlls/dwrite/font.c
-index 9544784b8cc..44b0053db33 100644
+index 9544784..44b0053 100644
 --- a/dlls/dwrite/font.c
 +++ b/dlls/dwrite/font.c
 @@ -1117,6 +1117,17 @@ static HRESULT WINAPI dwritefontface_GetGlyphRunOutline(IDWriteFontFace5 *iface,
@@ -106,7 +106,7 @@ index 9544784b8cc..44b0053db33 100644
  }
  
 diff --git a/server/sock.c b/server/sock.c
-index 226a305e75a..30df1c2acd7 100644
+index 226a305..30df1c2 100644
 --- a/server/sock.c
 +++ b/server/sock.c
 @@ -1391,6 +1391,30 @@ static void sock_dispatch_events( struct sock *sock, enum connection_state prevs

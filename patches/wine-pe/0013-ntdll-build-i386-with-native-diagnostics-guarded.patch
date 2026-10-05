@@ -17,7 +17,7 @@ Offered-upstream: no; guards diagnostics specific to the Madeira port
  2 files changed, 15 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 1893982adbf..49d7a012749 100644
+index 1893982..49d7a01 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -5037,6 +5037,7 @@ void WINAPI LdrShutdownThread(void)
@@ -38,7 +38,7 @@ index 1893982adbf..49d7a012749 100644
  
      RtlEnterCriticalSection( &loader_section );
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index f42ef5ca90a..58094e219df 100644
+index f42ef5c..58094e2 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -53,17 +53,29 @@ unsigned int ios_counters_on = 1;

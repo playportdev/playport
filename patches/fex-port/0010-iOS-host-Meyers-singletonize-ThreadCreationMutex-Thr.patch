@@ -32,7 +32,7 @@ Offered-upstream: no
  1 file changed, 15 insertions(+), 3 deletions(-)
 
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 7b04692..e46eebe 100644
+index 7fd71d2..bf2d0ab 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -149,9 +149,21 @@ std::optional<FEX::Windows::CPUFeatures> CPUFeatures;

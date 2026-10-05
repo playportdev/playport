@@ -46,7 +46,7 @@ Offered-upstream: no
  4 files changed, 128 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 89e253e922e..3cdd7e2d131 100644
+index 89e253e..3cdd7e2 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -3704,7 +3704,28 @@ done:
@@ -126,7 +126,7 @@ index 89e253e922e..3cdd7e2d131 100644
      delayinfo.DelayloadDescriptor = desc;
      delayinfo.ThunkAddress = addr;
 diff --git a/dlls/user32/misc.c b/dlls/user32/misc.c
-index 0fa04b855da..4d6aace2f9f 100644
+index 0fa04b8..4d6aace 100644
 --- a/dlls/user32/misc.c
 +++ b/dlls/user32/misc.c
 @@ -467,6 +467,39 @@ BOOL WINAPI RegisterPointerDeviceNotifications(HWND hwnd, BOOL notifyrange)
@@ -170,7 +170,7 @@ index 0fa04b855da..4d6aace2f9f 100644
   * GetPointerDevices [USER32.@]
   */
 diff --git a/dlls/user32/user32.spec b/dlls/user32/user32.spec
-index 241b40054b8..f4ed3cfeb05 100644
+index 241b400..f4ed3cf 100644
 --- a/dlls/user32/user32.spec
 +++ b/dlls/user32/user32.spec
 @@ -629,6 +629,7 @@
@@ -182,7 +182,7 @@ index 241b40054b8..f4ed3cfeb05 100644
  @ stdcall GetPointerDeviceRects(ptr ptr ptr) NtUserGetPointerDeviceRects
  @ stdcall GetPointerDevices(ptr ptr)
 diff --git a/dlls/wininet/urlcache.c b/dlls/wininet/urlcache.c
-index 933e33e6834..bc623a3eb0b 100644
+index 933e33e..bc623a3 100644
 --- a/dlls/wininet/urlcache.c
 +++ b/dlls/wininet/urlcache.c
 @@ -636,7 +636,19 @@ static DWORD cache_container_open_index(cache_container *container, DWORD blocks

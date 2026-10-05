@@ -28,7 +28,7 @@ Offered-upstream: no
  3 files changed, 33 insertions(+)
 
 diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-index 5c2598b..c00303e 100644
+index 99e28d7..5ee7766 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 @@ -1391,8 +1391,16 @@ CPUBackend::CompiledCode Arm64JITCore::LoadCachedCode(std::span<const uint8_t> H
@@ -64,7 +64,7 @@ index 5f6a69e..9f58bd4 100644
  
    // Both of these are wrapped as FEX needs them to setup its call checker at startup time and their NTDLL thunks could
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 8cdaee6..79ea245 100644
+index f4732b8..0510793 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -704,6 +704,27 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&

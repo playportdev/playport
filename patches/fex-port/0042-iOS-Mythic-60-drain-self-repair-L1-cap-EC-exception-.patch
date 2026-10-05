@@ -271,7 +271,7 @@ index 56038cb..75995c5 100644
  };
  } // namespace FEXCore::Utils::WritePriorityMutex
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index b225bf9..4939d25 100644
+index 0e127a5..0bc12e5 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -1254,8 +1254,53 @@ void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {

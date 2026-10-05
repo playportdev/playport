@@ -29,7 +29,7 @@ Offered-upstream: no
  1 file changed, 49 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 02c8117ef59..5c104a7a6d1 100644
+index 3632176..911ae2c 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -77,8 +77,32 @@ static inline BOOL is_valid_arm64ec_frame( ULONG_PTR frame )

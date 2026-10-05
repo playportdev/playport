@@ -66,7 +66,7 @@ Offered-upstream: no
  3 files changed, 256 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/d3d9/d3d9_main.c b/dlls/d3d9/d3d9_main.c
-index b3fcfc272e4..28537e2dcba 100644
+index b3fcfc2..28537e2 100644
 --- a/dlls/d3d9/d3d9_main.c
 +++ b/dlls/d3d9/d3d9_main.c
 @@ -26,6 +26,24 @@
@@ -131,7 +131,7 @@ index b3fcfc272e4..28537e2dcba 100644
      TRACE("Created d3d9 object %p.\n", object);
      return (IDirect3D9 *)&object->IDirect3D9Ex_iface;
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 9276b96fce1..a70a32c5529 100644
+index 9276b96..a70a32c 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -510,8 +510,40 @@ static ULONG_PTR allocate_stub( const char *dll, const char *name )
@@ -351,7 +351,7 @@ index 9276b96fce1..a70a32c5529 100644
      if (wm) *hModule = wm->ldr.DllBase;
  
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index d813a072da4..4635ade9c6b 100644
+index dd53238..0499acd 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -3428,13 +3428,29 @@ BOOLEAN WINAPI RtlIsEcCode( ULONG_PTR ptr )

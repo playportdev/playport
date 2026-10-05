@@ -23,7 +23,7 @@ Offered-upstream: no
  1 file changed, 5 insertions(+), 33 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
-index 05e96bfe5..dd42a92e7 100644
+index 63b8bfb..8a7dfb6 100644
 --- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 @@ -272,40 +272,12 @@ DEF_OP(ExitFunction) {

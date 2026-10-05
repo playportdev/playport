@@ -153,7 +153,7 @@ index 0000000..def6cb1
 +
 +#endif  // FEX_IOS_HOST
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 88c8ae7..3b859b5 100644
+index 37d5d47..9270425 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -63,6 +63,16 @@ $end_info$

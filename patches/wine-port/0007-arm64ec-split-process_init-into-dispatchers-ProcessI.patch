@@ -49,7 +49,7 @@ Offered-upstream: no
  3 files changed, 112 insertions(+), 7 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index f7bce0d23b7..c47f86512d2 100644
+index f7bce0d..c47f865 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1129,6 +1129,15 @@ void * WINAPI RtlFindExportedRoutineByName( HMODULE module, const char *name )
@@ -103,7 +103,7 @@ index f7bce0d23b7..c47f86512d2 100644
      {
          ERR( "arm64ec_process_init for %s failed, status %lx\n", debugstr_w(module), status );
 diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
-index 4be99677f46..8688e6e73b1 100644
+index 4be9967..8688e6e 100644
 --- a/dlls/ntdll/ntdll_misc.h
 +++ b/dlls/ntdll/ntdll_misc.h
 @@ -161,6 +161,7 @@ extern void heap_thread_detach(void);
@@ -115,7 +115,7 @@ index 4be99677f46..8688e6e73b1 100644
  extern NTSTATUS arm64ec_thread_init(void);
  extern IMAGE_ARM64EC_METADATA *arm64ec_get_module_metadata( HMODULE module );
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 25d776f7b35..b78b21efebc 100644
+index 8f38f31..9b7bd24 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -177,6 +177,60 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD

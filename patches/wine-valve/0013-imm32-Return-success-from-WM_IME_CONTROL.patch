@@ -14,7 +14,7 @@ Offered-upstream: no
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/dlls/imm32/ime.c b/dlls/imm32/ime.c
-index 37c4d07..fce8151 100644
+index a6663d7..58a0baa 100644
 --- a/dlls/imm32/ime.c
 +++ b/dlls/imm32/ime.c
 @@ -464,7 +464,7 @@ static LRESULT WINAPI ime_ui_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LP

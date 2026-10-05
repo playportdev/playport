@@ -15,7 +15,7 @@ Offered-upstream: no
  2 files changed, 13 insertions(+)
 
 diff --git a/server/process.c b/server/process.c
-index 731fdc4a..bd9f9042 100644
+index 3073937..c8b97b8 100644
 --- a/server/process.c
 +++ b/server/process.c
 @@ -621,6 +621,12 @@ static void process_died( struct process *process )
@@ -32,7 +32,7 @@ index 731fdc4a..bd9f9042 100644
      release_object( process );
      if (!--running_processes && shutdown_stage) close_master_socket( 0 );
 diff --git a/server/registry.c b/server/registry.c
-index 9642116d..d03b5120 100644
+index e71d023..070fb11 100644
 --- a/server/registry.c
 +++ b/server/registry.c
 @@ -2233,7 +2233,14 @@ DECL_HANDLER(flush_key)

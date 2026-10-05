@@ -36,7 +36,7 @@ Offered-upstream: no
  create mode 100644 tools/tests/xinput-host.md
 
 diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
-index 6ed5b772320..e3fb4c72a58 100644
+index 6ed5b77..e3fb4c7 100644
 --- a/dlls/win32u/sysparams.c
 +++ b/dlls/win32u/sysparams.c
 @@ -7694,6 +7694,13 @@ ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code )
@@ -72,7 +72,7 @@ index 6ed5b772320..e3fb4c72a58 100644
      case NtUserAllocWinProc:
          return (UINT_PTR)alloc_winproc( (WNDPROC)arg1, arg2 );
 diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
-index 92c1877566b..e268a67f646 100644
+index 92c1877..e268a67 100644
 --- a/dlls/wow64win/user.c
 +++ b/dlls/wow64win/user.c
 @@ -1825,6 +1825,11 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
@@ -88,7 +88,7 @@ index 92c1877566b..e268a67f646 100644
          return NtUserCallTwoParam( arg1, arg2, code );
      }
 diff --git a/dlls/xinput1_1/Makefile.in b/dlls/xinput1_1/Makefile.in
-index d68c4cd8166..844bf4ced60 100644
+index d68c4cd..844bf4c 100644
 --- a/dlls/xinput1_1/Makefile.in
 +++ b/dlls/xinput1_1/Makefile.in
 @@ -1,5 +1,5 @@
@@ -99,7 +99,7 @@ index d68c4cd8166..844bf4ced60 100644
  
  VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
 diff --git a/dlls/xinput1_2/Makefile.in b/dlls/xinput1_2/Makefile.in
-index 308e0c821c9..5df8c42eea7 100644
+index 308e0c8..5df8c42 100644
 --- a/dlls/xinput1_2/Makefile.in
 +++ b/dlls/xinput1_2/Makefile.in
 @@ -1,5 +1,5 @@
@@ -110,7 +110,7 @@ index 308e0c821c9..5df8c42eea7 100644
  
  VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
 diff --git a/dlls/xinput1_3/Makefile.in b/dlls/xinput1_3/Makefile.in
-index ade51bb5d29..ebc61aa8feb 100644
+index ade51bb..ebc61aa 100644
 --- a/dlls/xinput1_3/Makefile.in
 +++ b/dlls/xinput1_3/Makefile.in
 @@ -1,6 +1,6 @@
@@ -122,7 +122,7 @@ index ade51bb5d29..ebc61aa8feb 100644
  VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
  VER_PRODUCTVERSION      = 9,15,779,0000
 diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
-index 8530b028d5e..01020e93d59 100644
+index ecc5bfc..f56c164 100644
 --- a/dlls/xinput1_3/main.c
 +++ b/dlls/xinput1_3/main.c
 @@ -42,6 +42,11 @@
@@ -318,7 +318,7 @@ index 8530b028d5e..01020e93d59 100644
      EnterCriticalSection(&xinput_cs);
      if (!controllers[index].device) update_controller_list();
 diff --git a/dlls/xinput1_4/Makefile.in b/dlls/xinput1_4/Makefile.in
-index bcf67eb82d2..ede61fb57fb 100644
+index bcf67eb..ede61fb 100644
 --- a/dlls/xinput1_4/Makefile.in
 +++ b/dlls/xinput1_4/Makefile.in
 @@ -1,5 +1,5 @@
@@ -329,7 +329,7 @@ index bcf67eb82d2..ede61fb57fb 100644
  
  VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
 diff --git a/dlls/xinputuap/Makefile.in b/dlls/xinputuap/Makefile.in
-index 23025ae52b5..7082b80215a 100644
+index 23025ae..7082b80 100644
 --- a/dlls/xinputuap/Makefile.in
 +++ b/dlls/xinputuap/Makefile.in
 @@ -1,5 +1,5 @@
@@ -340,7 +340,7 @@ index 23025ae52b5..7082b80215a 100644
  
  VER_FILEDESCRIPTION_STR = "Wine Common Controller API"
 diff --git a/include/ntuser.h b/include/ntuser.h
-index be41b33adfd..533f175b0f2 100644
+index be41b33..533f175 100644
 --- a/include/ntuser.h
 +++ b/include/ntuser.h
 @@ -1217,8 +1217,37 @@ enum
@@ -383,7 +383,7 @@ index be41b33adfd..533f175b0f2 100644
      return (DLGPROC)NtUserCallTwoParam( (UINT_PTR)proc, ansi, NtUserCallTwoParam_GetDialogProc );
 diff --git a/tools/tests/xinput-host.c b/tools/tests/xinput-host.c
 new file mode 100644
-index 00000000000..7c5d7a15fe9
+index 0000000..7c5d7a1
 --- /dev/null
 +++ b/tools/tests/xinput-host.c
 @@ -0,0 +1,82 @@
@@ -471,7 +471,7 @@ index 00000000000..7c5d7a15fe9
 +}
 diff --git a/tools/tests/xinput-host.md b/tools/tests/xinput-host.md
 new file mode 100644
-index 00000000000..dcb2345a93a
+index 0000000..dcb2345
 --- /dev/null
 +++ b/tools/tests/xinput-host.md
 @@ -0,0 +1,23 @@

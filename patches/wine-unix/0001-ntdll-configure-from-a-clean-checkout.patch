@@ -20,7 +20,7 @@ Upstream-issue: https://github.com/willfaust/Madeira/issues/20
 
 diff --git a/dlls/ntdll/arm64ec_x64_export_iat.c b/dlls/ntdll/arm64ec_x64_export_iat.c
 new file mode 100644
-index 00000000..f4822d21
+index 0000000..f4822d2
 --- /dev/null
 +++ b/dlls/ntdll/arm64ec_x64_export_iat.c
 @@ -0,0 +1,14 @@
@@ -39,7 +39,7 @@ index 00000000..f4822d21
 +    return FALSE;
 +}
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 9c9be7be..42299abe 100644
+index e77454a..80a7bb9 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -25,8 +25,8 @@

@@ -38,7 +38,7 @@ Offered-upstream: no
  2 files changed, 68 insertions(+)
 
 diff --git a/dlls/rpcrt4/ndr_marshall.c b/dlls/rpcrt4/ndr_marshall.c
-index 7b49e0e3f4b..5e813ef6eb9 100644
+index 7b49e0e..5e813ef 100644
 --- a/dlls/rpcrt4/ndr_marshall.c
 +++ b/dlls/rpcrt4/ndr_marshall.c
 @@ -7019,6 +7019,34 @@ static unsigned char *WINAPI NdrContextHandleUnmarshall(
@@ -77,7 +77,7 @@ index 7b49e0e3f4b..5e813ef6eb9 100644
          if ((pFormat[1] & (HANDLE_PARAM_IS_IN|HANDLE_PARAM_IS_OUT)) == HANDLE_PARAM_IS_OUT)
              *ccontext = NULL;
 diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
-index 1ff09f628ce..1c166951218 100644
+index 66dad3c..e9d760c 100644
 --- a/dlls/rpcrt4/ndr_stubless.c
 +++ b/dlls/rpcrt4/ndr_stubless.c
 @@ -509,6 +509,46 @@ void client_do_args( PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat, enum s

@@ -53,7 +53,7 @@ Offered-upstream: no
  5 files changed, 171 insertions(+), 5 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index b6bfdd7..15974e7 100644
+index b625d96..a15c1b1 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -568,6 +568,32 @@ ContextImpl::GenerateIRResult
@@ -90,7 +90,7 @@ index b6bfdd7..15974e7 100644
  
    uint64_t TotalInstructions {0};
 diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
-index 232adb4..7ed3d77 100644
+index cf79624..ca7585b 100644
 --- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 @@ -178,9 +178,28 @@ DEF_OP(ExitFunction) {
@@ -229,7 +229,7 @@ index a92aced..4460afd 100644
                      Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
                      (GPRs[AddressReg] & 15) ? "yes" : "no", mbi.BaseAddress, mbi.RegionSize,
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 5ccb7b5..4e3eb42 100644
+index 83ebb87..11d00ad 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -215,6 +215,42 @@ ThreadCPUArea GetCPUArea() {

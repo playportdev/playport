@@ -40,7 +40,7 @@ Offered-upstream: no
  1 file changed, 32 insertions(+), 4 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 5b52a84..444980c 100644
+index 7191c15..9fe1b66 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -828,10 +828,38 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue

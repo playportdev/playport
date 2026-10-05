@@ -44,7 +44,7 @@ Offered-upstream: no
  1 file changed, 74 insertions(+), 3 deletions(-)
 
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 27ecd54..88c8ae7 100644
+index 5288034..37d5d47 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -1083,7 +1083,12 @@ NTSTATUS ThreadInit() {

@@ -14,7 +14,7 @@ Offered-upstream: no
  1 file changed, 12 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/rsaenh/rsaenh.c b/dlls/rsaenh/rsaenh.c
-index 38f6af4..d8422b9 100644
+index f54eb28..327aaa7 100644
 --- a/dlls/rsaenh/rsaenh.c
 +++ b/dlls/rsaenh/rsaenh.c
 @@ -1204,9 +1204,20 @@ static void store_key_permissions(HCRYPTKEY hCryptKey, HKEY hKey, DWORD dwKeySpe

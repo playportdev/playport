@@ -14,7 +14,7 @@ Offered-upstream: no
  1 file changed, 2 insertions(+)
 
 diff --git a/dlls/win32u/dibdrv/bitblt.c b/dlls/win32u/dibdrv/bitblt.c
-index fa1f8420..f8b9f94c 100644
+index fa1f842..f8b9f94 100644
 --- a/dlls/win32u/dibdrv/bitblt.c
 +++ b/dlls/win32u/dibdrv/bitblt.c
 @@ -1012,6 +1012,7 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,

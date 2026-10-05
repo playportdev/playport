@@ -41,7 +41,7 @@ Offered-upstream: no
  1 file changed, 22 insertions(+), 18 deletions(-)
 
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 02cc68f..7b54fc0 100644
+index 4f5ff8b..d229e4b 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -799,19 +799,29 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte

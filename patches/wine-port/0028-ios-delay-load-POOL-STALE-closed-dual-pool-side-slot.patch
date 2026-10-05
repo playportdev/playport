@@ -43,7 +43,7 @@ Offered-upstream: no
  2 files changed, 290 insertions(+), 29 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index ef65b79aecd..89e253e922e 100644
+index ef65b79..89e253e 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1175,6 +1175,113 @@ void ios_ec_recheck_iat( const char *when )
@@ -229,7 +229,7 @@ index ef65b79aecd..89e253e922e 100644
          }
  #endif
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 16c304520b1..d30b29f3552 100644
+index 23a4c33..b82e212 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1202,6 +1202,46 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI

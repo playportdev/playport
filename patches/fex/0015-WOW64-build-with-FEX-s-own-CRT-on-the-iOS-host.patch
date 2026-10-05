@@ -20,7 +20,7 @@ Offered-upstream: no; matches the local ARM64EC host configuration
  2 files changed, 5 insertions(+), 1 deletion(-)
 
 diff --git a/Source/Windows/Common/CRT/CMakeLists.txt b/Source/Windows/Common/CRT/CMakeLists.txt
-index 53d7ba358..3df3d26c4 100644
+index 53d7ba3..3df3d26 100644
 --- a/Source/Windows/Common/CRT/CMakeLists.txt
 +++ b/Source/Windows/Common/CRT/CMakeLists.txt
 @@ -1,4 +1,4 @@
@@ -30,7 +30,7 @@ index 53d7ba358..3df3d26c4 100644
    # hooks that Module.cpp calls; skips _tls_index, DllMainCRTStartup,
    # CRT$XIA/XCA/etc. section markers, and rpmalloc init that conflict with
 diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
-index 8d15f867b..6a2421a32 100644
+index 8d15f86..6a2421a 100644
 --- a/Source/Windows/Common/CallRetStack.h
 +++ b/Source/Windows/Common/CallRetStack.h
 @@ -141,9 +141,13 @@ bool InitializeThread(FEXCore::Core::InternalThreadState* Thread) {

@@ -22,7 +22,7 @@ Offered-upstream: no
  1 file changed, 6 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 24d3b6d27e4..66a79906e6c 100644
+index 1a8174e..1f133a3 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -195,6 +195,12 @@ NTSTATUS arm64ec_process_init( HMODULE module )

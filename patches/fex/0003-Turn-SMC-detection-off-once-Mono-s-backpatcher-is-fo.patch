@@ -24,7 +24,7 @@ Offered-upstream: no
  2 files changed, 74 insertions(+), 16 deletions(-)
 
 diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
-index 003dc35c5..25b9a6ede 100644
+index 003dc35..25b9a6e 100644
 --- a/Source/Windows/Common/InvalidationTracker.cpp
 +++ b/Source/Windows/Common/InvalidationTracker.cpp
 @@ -118,7 +118,7 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
@@ -177,7 +177,7 @@ index 003dc35c5..25b9a6ede 100644
          HitRWXInterval = true;
        }
 diff --git a/Source/Windows/Common/InvalidationTracker.h b/Source/Windows/Common/InvalidationTracker.h
-index d2a80bcaa..2735ee727 100644
+index d2a80bc..2735ee7 100644
 --- a/Source/Windows/Common/InvalidationTracker.h
 +++ b/Source/Windows/Common/InvalidationTracker.h
 @@ -22,6 +22,8 @@ namespace FEX::Windows {

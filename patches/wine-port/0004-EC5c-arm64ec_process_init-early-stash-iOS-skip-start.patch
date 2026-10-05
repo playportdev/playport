@@ -28,7 +28,7 @@ Offered-upstream: no
  2 files changed, 15 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 26e4e78501b..25d776f7b35 100644
+index 9f8880d..8f38f31 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -191,6 +191,12 @@ NTSTATUS arm64ec_process_init( HMODULE module )
@@ -54,7 +54,7 @@ index 26e4e78501b..25d776f7b35 100644
      for (i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++)
      {
 diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
-index bd888b9928b..ae74a7b8417 100644
+index bd888b9..ae74a7b 100644
 --- a/dlls/ntdll/unix/env.c
 +++ b/dlls/ntdll/unix/env.c
 @@ -1929,6 +1929,13 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params(void)

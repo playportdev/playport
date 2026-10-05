@@ -14,7 +14,7 @@ Offered-upstream: no
  1 file changed, 11 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 030137b9..148a8b96 100644
+index 77a1c9c..9d53a2f 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1971,6 +1971,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,

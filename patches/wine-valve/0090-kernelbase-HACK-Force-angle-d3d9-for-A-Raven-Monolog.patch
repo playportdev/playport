@@ -14,7 +14,7 @@ Offered-upstream: no
  1 file changed, 1 insertion(+)
 
 diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
-index fcff63f..2533645 100644
+index 4d1abcf..73b6fda 100644
 --- a/dlls/kernelbase/process.c
 +++ b/dlls/kernelbase/process.c
 @@ -511,6 +511,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )

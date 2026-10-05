@@ -43,7 +43,7 @@ Offered-upstream: no
  4 files changed, 89 insertions(+), 6 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 05140c9..d642b9c 100644
+index e736c55..08a7c75 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -1049,12 +1049,25 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
@@ -75,7 +75,7 @@ index 05140c9..d642b9c 100644
    }
  
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index 6b6606b..a18b7ed 100644
+index cc34582..5de65cc 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -227,6 +227,36 @@ void Dispatcher::EmitDispatcher() {

@@ -20,7 +20,7 @@ Offered-upstream: no
  1 file changed, 11 insertions(+), 5 deletions(-)
 
 diff --git a/LICENSE-MADEIRA.md b/LICENSE-MADEIRA.md
-index 9a7301e6784..05ad09b2ce1 100644
+index 9a7301e..05ad09b 100644
 --- a/LICENSE-MADEIRA.md
 +++ b/LICENSE-MADEIRA.md
 @@ -7,16 +7,22 @@ distributes under **LGPL-2.1-or-later**. This branch keeps that licence.

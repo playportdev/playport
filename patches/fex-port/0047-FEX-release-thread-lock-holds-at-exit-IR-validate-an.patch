@@ -53,7 +53,7 @@ Offered-upstream: no
  create mode 100644 FEXCore/Source/Utils/AllocWatch.h
 
 diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
-index baedd17..34d0a4f 100644
+index 55c4c33..9674a14 100644
 --- a/FEXCore/Source/CMakeLists.txt
 +++ b/FEXCore/Source/CMakeLists.txt
 @@ -67,6 +67,7 @@ set(SRCS
@@ -65,7 +65,7 @@ index baedd17..34d0a4f 100644
    Utils/Telemetry.cpp
    Utils/Threads.cpp
 diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
-index 3aef1e5..e81e792 100644
+index c21aa41..5087910 100644
 --- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
 +++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
 @@ -422,7 +422,7 @@ namespace CPU {
@@ -78,7 +78,7 @@ index 3aef1e5..e81e792 100644
        return 1;
        // Prev + KeepAlive drop after lk releases; the final ref frees the
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 2b5a485..c5cc0a1 100644
+index 6c19fcf..78c63d5 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -61,6 +61,21 @@ $end_info$
@@ -426,7 +426,7 @@ index 2b5a485..c5cc0a1 100644
  }
  
 diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-index 526bbc3..d424fa2 100644
+index be07670..90c6980 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 @@ -963,7 +963,7 @@ CodeBuffer::CodeBufferAllocation Arm64JITCore::AllocateCodeBufferInSharedCache(s
@@ -2261,7 +2261,7 @@ index 8f9341a..c616659 100644
  
  #if defined(__linux__)
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index e49b624..c0b7c3f 100644
+index 6b90e18..07ffa4d 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -1358,6 +1358,113 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After

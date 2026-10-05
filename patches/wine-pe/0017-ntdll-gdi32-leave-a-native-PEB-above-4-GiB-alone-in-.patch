@@ -20,7 +20,7 @@ Offered-upstream: no; the window exists only on the iOS port
  2 files changed, 5 insertions(+)
 
 diff --git a/dlls/gdi32/objects.c b/dlls/gdi32/objects.c
-index f2b353cff27..47f58e7d1cf 100644
+index f2b353c..47f58e7 100644
 --- a/dlls/gdi32/objects.c
 +++ b/dlls/gdi32/objects.c
 @@ -72,6 +72,9 @@ static GDI_SHARED_MEMORY *get_gdi_shared(void)
@@ -34,7 +34,7 @@ index f2b353cff27..47f58e7d1cf 100644
      }
  #endif
 diff --git a/dlls/ntdll/locale.c b/dlls/ntdll/locale.c
-index a100a936531..f5347560643 100644
+index a100a93..f534756 100644
 --- a/dlls/ntdll/locale.c
 +++ b/dlls/ntdll/locale.c
 @@ -102,6 +102,8 @@ static PEB64 *get_peb64( void )

@@ -35,7 +35,7 @@ index 82eeac2..476d9697 100644
   *           __wine_unix_spawnvp
   */
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index 9315f57..254de86 100644
+index ae997f7..d513caf 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
 @@ -1765,6 +1765,7 @@

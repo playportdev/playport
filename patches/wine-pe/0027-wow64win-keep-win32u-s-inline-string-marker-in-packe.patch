@@ -24,7 +24,7 @@ Offered-upstream: no; the window exists only on the iOS port
  1 file changed, 21 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
-index f374186203d..cc84fb653b1 100644
+index f374186..cc84fb6 100644
 --- a/dlls/wow64win/user.c
 +++ b/dlls/wow64win/user.c
 @@ -537,6 +537,26 @@ static void createstruct_64to32( const CREATESTRUCTW *from, CREATESTRUCT32 *to )

@@ -231,7 +231,7 @@ index 5e96f35..5f6a69e 100644
    ldr x4, [x16, #8]     // Entry.JitBase
    add x9, x4, x23
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 40b40b1..8cdaee6 100644
+index 050ebb9..f4732b8 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -96,6 +96,17 @@ extern "C" uint32_t IosTebTsdOffset;

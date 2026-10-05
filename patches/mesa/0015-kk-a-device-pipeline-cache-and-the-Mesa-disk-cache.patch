@@ -71,7 +71,7 @@ index c4e0312..96bbcac 100644
     /* Geometry heap */
     if (dev->heap)
 diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
-index 9d8853e..9ed4d44 100644
+index c4fdbc0..5515c1f 100644
 --- a/src/kosmickrisp/vulkan/kk_physical_device.c
 +++ b/src/kosmickrisp/vulkan/kk_physical_device.c
 @@ -982,12 +982,31 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)

@@ -31,7 +31,7 @@ Offered-upstream: no
  create mode 100644 Source/Windows/Common/ArenaSelfTest.cpp
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 0176bcf..7a6056d 100644
+index ccdc677..c47729f 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -8,6 +8,7 @@ desc: Glues Frontend, OpDispatcher and IR Opts & Compilation, LookupCache, Dispa
@@ -233,7 +233,7 @@ index 552211a..9aee013 100644
  
    inline void deallocate(value_type* p, size_t) noexcept {
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 12311be..b429243 100644
+index c30e252..eac52f2 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -6,6 +6,7 @@ desc: Implements the ARM64EC BT module API using FEXCore

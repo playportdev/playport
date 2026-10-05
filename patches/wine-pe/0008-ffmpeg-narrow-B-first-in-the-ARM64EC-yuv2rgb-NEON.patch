@@ -21,7 +21,7 @@ Offered-upstream: no
  1 file changed, 4 insertions(+), 2 deletions(-)
 
 diff --git a/libs/ffmpeg/libswscale/arm64ec/yuv2rgb_neon.S b/libs/ffmpeg/libswscale/arm64ec/yuv2rgb_neon.S
-index 07925593b97..9b29c77271c 100644
+index 0792559..9b29c77 100644
 --- a/libs/ffmpeg/libswscale/arm64ec/yuv2rgb_neon.S
 +++ b/libs/ffmpeg/libswscale/arm64ec/yuv2rgb_neon.S
 @@ -202,12 +202,14 @@

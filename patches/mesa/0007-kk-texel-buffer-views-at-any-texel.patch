@@ -267,7 +267,7 @@ index 7cafbb2..20f0f91 100644
        unsigned offs =
           offsetof(struct kk_sampled_image_descriptor, image_gpu_resource_id);
 diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
-index 51b2336..9d8853e 100644
+index c680234..c4fdbc0 100644
 --- a/src/kosmickrisp/vulkan/kk_physical_device.c
 +++ b/src/kosmickrisp/vulkan/kk_physical_device.c
 @@ -774,9 +774,9 @@ kk_get_device_properties(

@@ -74,7 +74,7 @@ Offered-upstream: no
  3 files changed, 157 insertions(+), 6 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 4de99f5149f..9bc2c92ab5c 100644
+index 4de99f5..9bc2c92 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -3199,6 +3199,15 @@ static NTSTATUS load_native_dll( LPCWSTR load_path, const UNICODE_STRING *nt_nam
@@ -123,7 +123,7 @@ index 4de99f5149f..9bc2c92ab5c 100644
      if (cached_modref == wm) cached_modref = NULL;
      RtlFreeUnicodeString( &wm->ldr.FullDllName );
 diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
-index 8688e6e73b1..9d6980836af 100644
+index 8688e6e..9d69808 100644
 --- a/dlls/ntdll/ntdll_misc.h
 +++ b/dlls/ntdll/ntdll_misc.h
 @@ -169,6 +169,8 @@ extern void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64E
@@ -136,7 +136,7 @@ index 8688e6e73b1..9d6980836af 100644
  extern void *__os_arm64x_check_call;
  extern void *__os_arm64x_check_icall;
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 4635ade9c6b..ed1aeb79070 100644
+index 0499acd..15989f3 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -57,6 +57,7 @@ static void     (WINAPI *pBTCpu64NotifyReadFile)(HANDLE,void*,SIZE_T,BOOL,NTSTAT

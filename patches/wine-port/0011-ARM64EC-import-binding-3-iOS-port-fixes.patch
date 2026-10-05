@@ -45,7 +45,7 @@ Offered-upstream: no
  3 files changed, 43 insertions(+), 4 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 92d2192a31d..b1cc90bf622 100644
+index 92d2192..b1cc90b 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1235,8 +1235,17 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
@@ -69,7 +69,7 @@ index 92d2192a31d..b1cc90bf622 100644
  
      while (import_list->u1.Ordinal)
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 75970ecc9d7..cfee56e8ee4 100644
+index 9557c3c..d386b2d 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -206,11 +206,20 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD
@@ -96,7 +96,7 @@ index 75970ecc9d7..cfee56e8ee4 100644
                  LIST_ENTRY *list = &RtlGetCurrentPeb()->LdrData->InLoadOrderModuleList;
                  LIST_ENTRY *entry;
 diff --git a/dlls/win32u/winstation.c b/dlls/win32u/winstation.c
-index 3c55a80c5e1..117ae3a8438 100644
+index 3c55a80..117ae3a 100644
 --- a/dlls/win32u/winstation.c
 +++ b/dlls/win32u/winstation.c
 @@ -812,6 +812,13 @@ HWND get_desktop_window(void)

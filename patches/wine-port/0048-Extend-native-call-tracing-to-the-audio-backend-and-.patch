@@ -36,7 +36,7 @@ Offered-upstream: no
  1 file changed, 103 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 02bfe7089a7..520900d508f 100644
+index 02bfe70..520900d 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -2444,7 +2444,23 @@ static const char * const tft_names[5] =

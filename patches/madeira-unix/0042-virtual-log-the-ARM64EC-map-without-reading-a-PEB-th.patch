@@ -22,7 +22,7 @@ Offered-upstream: no
  1 file changed, 8 insertions(+), 2 deletions(-)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index f5b398e..2f0e693 100644
+index f1e1f4d..2561edc 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -13501,8 +13501,14 @@ static void alloc_arm64ec_map(void)
