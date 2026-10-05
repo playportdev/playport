@@ -5,6 +5,7 @@ has one identity with no dev/release split. The bundle ID stays shared. Its
 harness modes, test programs and guests are retired by
 [0012](0012-the-ui-is-the-only-entry-point.md): the dev build keeps the UI
 driver and the scripted pad.
+The JIT row's "built-in only" for a release build is narrowed by [0051](0051-jit-from-another-app.md): both variants offer StikDebug and another app too.
 
 ## Decision
 

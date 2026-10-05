@@ -72,6 +72,32 @@ something outside the app attaches: the app's own extension, on the phone
 ([decision 0011](decisions/0011-no-workstation-jit.md)). The debugger
 dependency is accepted and disclosed.
 
+### JIT methods
+
+What attaches is the player's choice, Settings › Setup check › *JIT method*
+(PlayportKit `JitMethod`, [decision 0051](decisions/0051-jit-from-another-app.md)),
+in both variants. All three end in the same protocol, so
+`wine_host_jit_pool_acquire` does not know which one served it.
+
+| Method | What a Play does | Script |
+| --- | --- | --- |
+| Built-in (default) | starts the helper extension (below) | `playport-universal.js` |
+| StikDebug | opens `stikdebug://enable-jit?bundle-id=…&pid=…&script-name=universal.js`; once the pool is blessed, waits up to 60 s for Playport to be in front before the runtime starts | StikDebug's `universal.js` |
+| Another app | waits only: LiveContainer's *Launch with JIT*, SideStore, StikDebug by hand | `universal.js`, set in that app |
+
+- A debugger already attached is used whatever the method (`jit: debugger
+  already attached`): LiveContainer's *Launch with JIT* attaches before the
+  app runs, and `universal.js` waits at its first `brk`.
+- Inside LiveContainer (`LC_HOME_PATH` set), LiveContainer cannot start the
+  extension: Built-in is not offered, a stored one reads as Another app, and
+  `BuiltInJit` refuses to start the helper. StikDebug there needs
+  LiveContainer's *Use LiveContainer's Bundle ID*.
+- With StikDebug or another app, Playport's pairing and LocalDevVPN are not
+  setup steps (PlayportKit `SetupChecklist`), and a Play waits for JIT
+  without them. The restart after a game (`AppRestart`) still needs the
+  pairing. Without it, or inside LiveContainer, Playport asks to be closed
+  and launched again.
+
 ### Built-in JIT
 
 The outside process is the app's own extension. `PlugIns/PlayportJIT.appex`

@@ -403,7 +403,9 @@ private struct GameDetailPage: View {
         VStack(alignment: .leading, spacing: 3) {
             if let t {
                 if launch.spent {
-                    Text("Playport cannot start another game in this session. Close it and reopen it from the Home Screen to play again.")
+                    Text(JitProvider.inLiveContainer
+                         ? "Playport cannot start another game in this session. Close it and launch it again from LiveContainer with JIT to play again."
+                         : "Playport cannot start another game in this session. Close it and reopen it from the Home Screen to play again.")
                 } else if !t.canPlay {
                     Text("No Windows executable in this folder.").foregroundStyle(.orange)
                 } else if let job {
@@ -1089,6 +1091,8 @@ enum ProblemReport {
 enum JitNote {
     static let beforePlay = "JIT comes from Playport's own helper over LocalDevVPN, which Play turns on when it is off."
     static let waiting = "Playport's JIT helper is attaching. Keep Playport open."
+    static let waitingForStikDebug = "Waiting for StikDebug to enable JIT. It comes back to Playport when it is done."
+    static let waitingForAnotherApp = "Waiting for JIT from another app. Enable JIT for Playport there now, with the universal.js script."
 
     /// Why a game ended on running out of its JIT pool (LaunchMessage). Every Play
     /// gets the same pool (JitPool.sizeMB, decision 0036); only a dev build's simulated

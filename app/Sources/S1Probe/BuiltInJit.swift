@@ -32,6 +32,7 @@ import SwiftUI
 enum BuiltInJit {
     enum Failure: Error, CustomStringConvertible {
         case notBundled
+        case liveContainer
         case noGetTaskAllow
         case noPairingFile
         case spi(String)
@@ -43,6 +44,7 @@ enum BuiltInJit {
         var description: String {
             switch self {
             case .notBundled: "the JIT helper extension is not in the app bundle"
+            case .liveContainer: "the JIT helper cannot run inside LiveContainer: choose StikDebug or Another app in Settings › Setup check"
             case .noGetTaskAllow: "this install has no get-task-allow; reinstall it with a development signature"
             case .noPairingFile: "no pairing file: import one in Settings › Setup check"
             case .spi(let what): "starting the JIT helper failed: \(what)"
@@ -213,6 +215,7 @@ enum BuiltInJit {
     private static func withHelper(log: @escaping @Sendable (String) -> Void,
                                    pairingFileProvided: Bool = false, cancelled: () -> Bool,
                                    _ call: (JITHelping, @escaping @Sendable (Failure?) -> Void) throws -> Void) -> Failure? {
+        guard !JitProvider.inLiveContainer else { return .liveContainer }
         guard hasGetTaskAllow else { return .noGetTaskAllow }
         guard pairingFileProvided || hasPairingFile else { return .noPairingFile }
         guard !cancelled() else { return .cancelled }
@@ -404,7 +407,7 @@ final class BuiltInJitStatus: ObservableObject {
     /// Once per launch, when a pairing file is present: mounts the DDI early, so
     /// a title's enable does not wait for the download.
     func checkOnce() {
-        guard !checkedThisLaunch, pairingFile, LocalDevVPN.tunnelUp, !JitSetup.shared.presented else { return }
+        guard JitProvider.method == .builtIn, !checkedThisLaunch, pairingFile, LocalDevVPN.tunnelUp, !JitSetup.shared.presented else { return }
         checkedThisLaunch = true
         check()
     }

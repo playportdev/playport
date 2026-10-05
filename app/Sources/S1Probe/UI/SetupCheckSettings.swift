@@ -8,7 +8,12 @@
 // first row opens the first-run checklist (SetupView.swift), which shows the
 // pairing, LocalDevVPN and Steam (PlayportKit SetupChecklist) as three steps.
 //
-// A dev build's JIT rows are the full panel (the helper's raw readiness and
+// The JIT method row picks where JIT comes from (JitMethodPicker, decision
+// 0051). With StikDebug or another app, the built-in helper's rows give way
+// to what that method needs; the pairing stays offered outside LiveContainer,
+// since Playport restarts itself after a game with it (AppRestart).
+//
+// A dev build's built-in JIT rows are the full panel (the helper's raw readiness and
 // reason, the disk image reset); a release build's show what a player acts
 // on (decision 0009). A dev build's memory rows add the footprint and the
 // phone's RAM; its simulations are in Developer.
@@ -24,6 +29,9 @@ struct SetupCheckSettings: View {
     @ObservedObject private var state = SetupState.shared
     @EnvironmentObject private var model: SteamAccountModel
     @State private var reading = MemoryLimit.read()
+    /// Read for its changes only; JitProvider.method is the choice.
+    @AppStorage(JitMethod.key) private var storedMethod = ""
+    private var method: JitMethod { _ = storedMethod; return JitProvider.method }
 
     private var tunnelUp: Bool? { state.tunnelUp }
 
@@ -80,10 +88,41 @@ struct SetupCheckSettings: View {
 
     // MARK: JIT
 
-    #if PLAYPORT_RELEASE
-    /// The built-in helper is the only method. What it reports is worded for a
-    /// player; its raw reason stays in the log.
     @ViewBuilder private var jitRows: some View {
+        PadRow(id: "set:setup:jitMethod", title: "JIT method",
+               subtitle: JitProvider.inLiveContainer ? "Playport runs inside LiveContainer" : nil,
+               value: method.label, accessory: .chevron, hint: "Change") {
+            guard !TitleLaunch.shared.running else { return }
+            JitMethodPicker.show()
+        }
+        if method == .builtIn {
+            builtInRows
+        } else {
+            SettingsInfoRow(id: "setup:jit", title: "JIT", subtitle: externalAdvice, value: method.label)
+            if !JitProvider.inLiveContainer {
+                pairingRow
+                importRow
+            }
+        }
+    }
+
+    /// What JIT from another app needs; its own setup is that app's.
+    private var externalAdvice: String {
+        let lc = JitProvider.inLiveContainer
+        switch method {
+        case .stikDebug:
+            return lc ? "Play opens StikDebug. Turn on Use LiveContainer's Bundle ID in LiveContainer's settings."
+                : "Play opens StikDebug, which enables JIT with its universal.js script and comes back to Playport."
+        default:
+            return lc ? "Launch Playport with JIT from LiveContainer, with the universal.js script. Each game needs a fresh launch."
+                : "Play waits for JIT from another app. Its script must be universal.js."
+        }
+    }
+
+    #if PLAYPORT_RELEASE
+    /// The built-in helper's rows. What it reports is worded for a
+    /// player; its raw reason stays in the log.
+    @ViewBuilder private var builtInRows: some View {
         SettingsInfoRow(id: "setup:jit", title: "JIT", subtitle: advice, value: statusText)
         pairingRow
         importRow
@@ -120,7 +159,7 @@ struct SetupCheckSettings: View {
     }
     #else
     /// The full panel: the helper's raw readiness and reason, the reset.
-    @ViewBuilder private var jitRows: some View {
+    @ViewBuilder private var builtInRows: some View {
         SettingsInfoRow(id: "setup:jit", title: "JIT", subtitle: builtIn.detail,
                         value: builtIn.busy ? "Checking…" : builtIn.readiness)
         SettingsInfoRow(id: "setup:pairingFile", title: "Pairing file", value: builtIn.pairingFile ? "Imported" : "Missing")
@@ -139,7 +178,8 @@ struct SetupCheckSettings: View {
     @ViewBuilder private var pairingRow: some View {
         if #available(iOS 27.0, *) {
             PadRow(id: "set:setup:pair", title: builtIn.pairingFile ? "Pair again" : "Pair this iPhone",
-                   subtitle: "Developer Mode and LocalDevVPN need your approval", accessory: .chevron, hint: "Pair") {
+                   subtitle: method == .builtIn ? "Developer Mode and LocalDevVPN need your approval"
+                       : "Lets Playport restart itself after a game", accessory: .chevron, hint: "Pair") {
                 guard !builtIn.busy, !pairing.busy, !TitleLaunch.shared.spent else { return }
                 setup.begin(repair: builtIn.pairingFile)
             }

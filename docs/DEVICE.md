@@ -52,10 +52,15 @@ upload still finishes on the phone, and `pp install` checks for that.
 ## JIT activation
 
 Every launch that runs guest code needs a debugger-blessed JIT pool
-([ARCHITECTURE.md](ARCHITECTURE.md#jit-activation)). It comes from the app's
+([ARCHITECTURE.md](ARCHITECTURE.md#jit-activation)). By default it comes from the app's
 own helper extension, which attaches with StikJIT
 ([decision 0011](decisions/0011-no-workstation-jit.md)). A launch waits up to
-180 s for it; the `jit:` lines in the log show each step.
+180 s for it; the `jit:` lines in the log show each step, starting with
+`jit: method …`. Settings › Setup check › *JIT method* can instead take it
+from StikDebug or another app, such as LiveContainer's *Launch with JIT*
+([JIT methods](ARCHITECTURE.md#jit-methods), [decision 0051](decisions/0051-jit-from-another-app.md));
+the driver sets it with `set:jit.method=builtIn|stikDebug|external`. The rest
+of this section is about the built-in helper.
 
 It needs Developer Mode, LocalDevVPN (App Store, takes no slot) with its
 tunnel connected, and an RP pairing file. Playport cannot carry the tunnel
