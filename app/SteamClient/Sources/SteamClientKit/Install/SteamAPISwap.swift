@@ -246,8 +246,9 @@ public enum SteamAPISwap {
         String(s.map { $0.isNewline ? " " : $0 }).trimmingCharacters(in: .whitespaces)
     }
 
-    /// The COFF machine of a PE file, nil when it is not one.
-    static func peMachine(_ url: URL) -> UInt16? {
+    /// The COFF machine of a PE file, nil when it is not one (also a title's
+    /// executable on adoption: InstalledTitle.executableMachine).
+    public static func peMachine(_ url: URL) -> UInt16? {
         guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
         guard let dos = try? h.read(upToCount: 0x40), dos.count == 0x40, dos.prefix(2) == Data("MZ".utf8) else { return nil }

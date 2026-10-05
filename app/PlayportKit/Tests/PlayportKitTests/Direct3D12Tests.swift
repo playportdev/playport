@@ -79,4 +79,15 @@ final class Direct3D12Tests: XCTestCase {
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .dxmt, arguments: "-dx12"), global: global).graphics, .dxmt)
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .vulkan, arguments: "-dx11"), global: global).graphics, .vulkan)
     }
+
+    /// Decision 0047: an i386 executable defaults to Vulkan whatever its arguments say; the
+    /// game's and the global choice still win.
+    func testI386DefaultAndExplicitOverrides() {
+        let global = LaunchSettings()
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: global, i386: true).graphics, .vulkan)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: global, i386: false).graphics, .dxmt)
+        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(arguments: "-dx11"), global: global, i386: true).graphics, .vulkan)
+        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphics: .dxmt), global: global, i386: true).graphics, .dxmt)
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: LaunchSettings(graphics: .dxmt), i386: true).graphics, .dxmt)
+    }
 }

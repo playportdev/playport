@@ -463,6 +463,48 @@ static void unlink_runtime_links(const char *sys32)
     free(names);
 }
 
+/* The WoW64 (i386) title's farms, since system32 is the session's ARM64EC
+ * set: drive_c/windows/sysarm64, the aarch64 set its native loader takes
+ * (wine-pe 0015), and drive_c/windows/syswow64, the i386 set its guest loader
+ * reaches through wow64's system32 redirection. The launch's backend overlay
+ * (PLAYPORT_DLL_OVERLAY) goes over a set it has one for: the Vulkan backend's
+ * i386 d3d9.dll (DXVK) over Wine's. Every link is recreated, so a later
+ * launch without the overlay gets Wine's DLL back. A failure is logged: only
+ * i386 titles need them. */
+static void link_wow64_farm(const char *name, const char *pe_arch)
+{
+    char src_dir[1200], dir[1200];
+    snprintf(src_dir, sizeof(src_dir), "%s/%s-windows", g_runtime, pe_arch);
+    snprintf(dir, sizeof(dir), "%s/drive_c/windows/%s", g_prefix, name);
+    if (mkdirs(dir)) {
+        host_log("cannot create %s: %s", dir, strerror(errno));
+        return;
+    }
+    host_log("%s: %d links -> %s", name, link_dir_into(src_dir, dir), src_dir);
+    const char *overlay = dll_overlay();
+    if (overlay) {
+        char over_dir[1400];
+        snprintf(over_dir, sizeof(over_dir), "%s/%s/%s-windows", g_runtime, overlay, pe_arch);
+        int m = link_dir_into(over_dir, dir);   /* -1: the overlay has no such set */
+        if (m >= 0) host_log("%s: %d links from %s over them", name, m, over_dir);
+    }
+}
+
+/* Both the native session and WoW64 titles use win32u's prefix font scan.
+ * Recreate links before the session starts GDI: bundle paths change on install.
+ * Do not remove unrelated user/game-installed fonts. */
+static void link_fonts(void)
+{
+    char src_dir[1200], dir[1200];
+    snprintf(src_dir, sizeof(src_dir), "%s/fonts", g_runtime);
+    snprintf(dir, sizeof(dir), "%s/drive_c/windows/fonts", g_prefix);
+    if (mkdirs(dir)) {
+        host_log("cannot create %s: %s", dir, strerror(errno));
+        return;
+    }
+    host_log("fonts: %d links -> %s", link_dir_into(src_dir, dir), src_dir);
+}
+
 /* Point drive_c/windows/system32 at the bundle's PE set. The bundle path
  * changes on every reinstall, so the links are always recreated. A Direct3D
  * backend other than DXMT (PLAYPORT_DLL_OVERLAY, PlayportKit
@@ -504,6 +546,10 @@ static int link_system32(const char *pe_arch)
         int m = link_dir_into(over_dir, sys32);
         host_log("system32: %d links from %s over them", m, over_dir);
         if (m <= 0) return -1;
+    }
+    if (n > 0) {
+        link_wow64_farm("sysarm64", "aarch64");
+        link_wow64_farm("syswow64", "i386");
     }
     return n > 0 ? 0 : -1;
 }
@@ -949,13 +995,24 @@ int wine_host_init(const wine_host_config *c)
      * needed it. An absolute DXMT_SHADER_CACHE_PATH skips the lookup; it must
      * be taken from HOME before HOME becomes the prefix. The keys are shader
      * and variant hashes, so one file serves every title. */
+    /* KosmicKrisp (mesa 0015) keeps the MSL of every pipeline in Mesa's disk
+     * cache, in MESA_SHADER_CACHE_DIR/mesa_shader_cache, trimmed to the size
+     * limit; without the directory it would go under HOME/.cache, which is
+     * the prefix by then. */
     const char *home = getenv("HOME");
     if (home && home[0] == '/' && strcmp(home, g_prefix) != 0) {
         char cache[1024];
         snprintf(cache, sizeof(cache), "%s/Library/Caches/dxmt/", home);
         setenv("DXMT_SHADER_CACHE_PATH", cache, 0);
+        int n = snprintf(cache, sizeof(cache), "%s/Library/Caches/kosmickrisp", home);
+        if (n > 0 && (size_t)n < sizeof(cache) && mkdirs(cache) == 0)
+            setenv("MESA_SHADER_CACHE_DIR", cache, 0);
     }
+    setenv("MESA_SHADER_CACHE_MAX_SIZE", "256M", 0);
     host_log("DXMT shader cache: %s", getenv("DXMT_SHADER_CACHE_PATH") ? getenv("DXMT_SHADER_CACHE_PATH") : "(none)");
+    host_log("Mesa shader cache: %s (limit %s)",
+             getenv("MESA_SHADER_CACHE_DIR") ? getenv("MESA_SHADER_CACHE_DIR") : "HOME/.cache",
+             getenv("MESA_SHADER_CACHE_MAX_SIZE"));
 
     setenv("WINEPREFIX", g_prefix, 1);
     setenv("HOME", g_prefix, 1);
@@ -1113,6 +1170,7 @@ static int session_await(uint32_t sequence, unsigned want, int timeout_ms, pp_se
 int wine_host_session_start(int timeout_ms)
 {
     if (!g_server_started || g_guest_started) return -1;
+    link_fonts();
     if (link_system32("arm64ec")) return -2;
     snprintf(g_session_dir, sizeof(g_session_dir), "%s/%s", g_prefix, PP_SESSION_DIR_UNIX);
     if (mkdirs(g_session_dir)) {

@@ -30,6 +30,7 @@ Build roots (env overrides; the defaults are the pipeline's run layout
 under $PLAYPORT_RUN, default $PLAYPORT_BUILD/run):
   WINE_BUILD          pe/staged          stages/wine-pe.sh tree without DWARF (P2; stages/wine-pe-strip.py)
   FEX_DLL             fex/build-arm64ec/Bin/libarm64ecfex.dll (P1)
+  FEX_WOW64_DLL       fex/build-wow64/Bin/libwow64fex.dll (P1)
   UNIX_ROOT           unix               stages/unix.sh + stages/unix-gaps.sh (P3/P4)
   DXMT_COMBINED_ROOT  dxmt-combined      stages/dxmt-combined.sh (P5-dxmt)
   DXMT_PE_ROOT        dxmt-patched/pe    stages/dxmt-patched.sh pe (P5-dxmt-pe); the
@@ -68,6 +69,7 @@ def pin(name):
 ROOTS = {
     "wine-build": Path(os.environ.get("WINE_BUILD", RUN / "pe" / "staged")),
     "fex": Path(os.environ.get("FEX_DLL", RUN / "fex/build-arm64ec/Bin/libarm64ecfex.dll")).parent,
+    "fex-wow64": Path(os.environ.get("FEX_WOW64_DLL", RUN / "fex/build-wow64/Bin/libwow64fex.dll")).parent,
     "unix": Path(os.environ.get("UNIX_ROOT", RUN / "unix")),
     "dxmt": Path(os.environ.get("DXMT_COMBINED_ROOT", RUN / "dxmt-combined")),
     "dxmt-pe": Path(os.environ.get("DXMT_PE_ROOT", RUN / "dxmt-patched" / "pe")),
@@ -89,7 +91,7 @@ HEADER = """\
 #          gap      = required by the reference architecture but not built; nothing is staged
 #   root   build root the source path is relative to (see the script docstring for defaults)
 # Provenance keys (pins: pins.lock; patch series: patches/<target>/series; recipes: docs/BUILDING.md):
-#   P1-de     FEX pin + patches/fex, llvm-mingw 20260922 (build/stages/fex.sh); shipped as xtajit64.dll (its [build-id] line carries the pin's commit time: SOURCE_DATE_EPOCH)
+#   P1-de     FEX pin + patches/fex, llvm-mingw 20260922 (build/stages/fex.sh); shipped as xtajit64.dll and aarch64 xtajit.dll (WoW64; build-only until Portal 2 milestone 1 step 3); the ARM64EC [build-id] line carries the pin's commit time: SOURCE_DATE_EPOCH
 #   P2        wine pin + patches/wine-pe, build/stages/wine-pe.sh, without DWARF (build/stages/wine-pe-strip.py); row hash equals build/generated/wine-pe-*.tsv
 #   P2-ec     arm64ec ntdll.dll of the same P2 tree (the arm64ec patches only change it); row hash equals build/generated/wine-pe-arm64ec-windows.tsv
 #   P3        Madeira pin build/ntdll-unix/build.sh via build/stages/unix.sh + stages/unix-gaps.sh gnutls-config, with patches/madeira-unix and patches/wine-unix applied
@@ -97,6 +99,7 @@ HEADER = """\
 #   P4-server reconstructed base + Madeira build/wineserver/build.sh via build/stages/unix-gaps.sh wineserver (patches/madeira-unix real-suspend-safepoint, patches/wine-unix server-ios-*)
 #   P4-crypto GnuTLS 3.8.9 / GMP 6.3.0 / Nettle 3.10.1 from Madeira's tracked tarballs via build/stages/unix.sh gnutls; nettle/hogweed hashes depend on UNIX_ROOT
 #   nls       wine pin nls/ (tracked data files, the set Madeira app/Madeira/nls ships)
+#   fonts     wine pin fonts/{tahoma,tahomabd}.ttf (tracked prebuilts, not regenerated with FontForge); architecture-neutral GDI fallback faces
 #   P5-dxmt   DXMT pin (3Shain/dxmt) + patches/dxmt-port + patches/dxmt unix slice (build/stages/dxmt-patched.sh unix: build/stages/dxmt-base.sh unix + the hand-ported AIR helpers in build/air-helpers) + LLVM 15.0.7 iOS static libs, combined by build/stages/dxmt-combined.sh as Madeira build/dxmt-ios/README.md does
 #   P5-dxmt-pe  the same patched tree's PE DLLs (build/stages/dxmt-patched.sh pe, llvm-mingw 20260922); must match P5-dxmt's unix slot table (150 winemetal unix slots; newLibraryWithSource at 144)
 #   P5-winios Madeira pin app/Madeira/Winios/ (the reference's app-side Winios display driver); Winios.m + patches/madeira-winios; WiniosGamepad.c, the controller snapshot Wine's xinput1_*.dll (P2) read through libwin32u_unix.a
@@ -116,6 +119,8 @@ HEADER = """\
 # its test programs.
 NLS = ["c_1252.nls", "c_20127.nls", "c_28591.nls", "c_437.nls", "l_intl.nls", "locale.nls",
        "normidna.nls", "normnfc.nls", "normnfd.nls", "normnfkc.nls", "normnfkd.nls", "sortdefault.nls"]
+
+FONTS = ["tahoma.ttf", "tahomabd.ttf"]
 
 LINK = [  # dest name, root, source, provenance
     ("libntdll_unix.a", "unix", "mythic/app/Madeira/libntdll_unix.a", "P3"),
@@ -180,7 +185,7 @@ EXTRA_PE = {"arm64ec": ["msvcp110.dll", "msvcp120.dll", "msvcr110.dll", "vcomp11
                        # Wine's Vulkan (decision 0014): the loader and the ICD DXVK and
                        # vkd3d-proton call, whose unix side talks to KosmicKrisp.
                        "vulkan-1.dll", "winevulkan.dll"] + MEDIA_PE,
-            "aarch64": []}
+            "aarch64": ["wow64.dll", "wow64win.dll"]}
 
 # DXVK's and vkd3d-proton's DLLs (build/stages/vulkan-pe.sh).
 VULKAN_PE = ["d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll", "d3d12.dll", "d3d12core.dll"]
@@ -190,7 +195,7 @@ STEAMAPI = [("x86_64", "steam_api64.dll"), ("i386", "steam_api.dll")]
 
 GAPS = [  # kind-of-thing, dest, reason
     ("resource", "Runtime/arm64ec-windows/wineios.drv", "Madeira build/wineios-drv/wineios.c has no build recipe at the Madeira pin, and the wine-port tree's dlls/wineios.drv is not in its configure, so stages/wine-pe.sh does not build it; audio does not need it: mmdevapi loads winepulse.drv by name and virtual_ios.c answers with the linked audio_null_ios table"),
-    ("resource", "Runtime/prefix-template.tar.gz", "reference seeds the whole prefix from an untracked-recipe template; the app seeds only the builtins' own registrations (Runtime/registry, P7-reg), so the rest of wine.inf (fonts, services, file associations) is not applied"),
+    ("resource", "Runtime/prefix-template.tar.gz", "reference seeds the whole prefix from an untracked-recipe template; the app seeds only the builtins' own registrations (Runtime/registry, P7-reg), so the rest of wine.inf (font registry, services, file associations) is not applied"),
 ]
 
 
@@ -246,15 +251,28 @@ def record():
             elif name in EXTRA_PE[arch]:
                 sys.exit(f"{name}: named in EXTRA_PE but not built (build/generated/wine-pe-{arch}-windows.tsv)")
             # else: reference-only test program or a gap row below
+    # WoW64 has no reference bundle set. Stage the complete Wine i386 DLL/driver
+    # set, not tests or programs; its loader is Wine's, not a hand-picked PE32 loader.
+    for name, (src, size, digest) in sorted(pe_index("i386").items()):
+        if not src.startswith("build-macos/dlls/") or not name.endswith((".dll", ".drv")):
+            continue
+        add("resource", f"Runtime/i386-windows/{name}", "wine-build", src, "P2")
+        if rows[-1][2:4] != (str(size), digest):
+            sys.exit(f"{src}: build tree differs from generated/wine-pe-i386-windows.tsv")
+    add("resource", "Runtime/aarch64-windows/xtajit.dll", "fex-wow64", "libwow64fex.dll", "P1-de")
     # The Vulkan Direct3D backend (decision 0014), under Runtime/vulkan/.
     for name in VULKAN_PE:
         add("resource", f"Runtime/vulkan/arm64ec-windows/{name}", "vulkan-pe", f"arm64ec-windows/{name}",
             "P6-vulkan-pe")
+    # DXVK's Direct3D 9 for an i386 (WoW64) title, over Wine's wined3d one.
+    add("resource", "Runtime/vulkan/i386-windows/d3d9.dll", "vulkan-pe", "i386-windows/d3d9.dll", "P6-vulkan-pe")
     for arch, name in STEAMAPI:
         add("resource", f"Runtime/steamapi/{arch}-windows/{name}", "steamapi", f"{arch}-windows/{name}", "P8-steamapi")
     add("resource", "Runtime/arm64ec-windows/playport-session.exe", "session", "playport-session.exe", "P9-session")
     for name in NLS:
         add("resource", f"Runtime/nls/{name}", "unix", f"wine/nls/{name}", "nls")
+    for name in FONTS:
+        add("resource", f"Runtime/fonts/{name}", "unix", f"wine/fonts/{name}", "fonts")
     for name in ("system.reg", "user.reg"):
         add("resource", f"Runtime/registry/{name}", "registry", name, "P7-reg")
     for dest, root, source, prov in LINK:

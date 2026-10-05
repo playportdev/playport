@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 07:58:29 +0200
+Subject: [PATCH] ntdll: give an i386 child no audio driver until it has a
+ WoW64 table
+
+An i386 mmdevapi loads the audio driver's unix library by name with
+MemoryWineLoadUnixLibByNameWow64 and was handed the null driver's
+64-bit table. Its calls pass 32-bit parameter blocks, which that table
+reads as 64-bit, so Portal 2's audio thread read a garbage device string
+in MultiByteToWideChar. Fail the WoW64 query, as for a driver that is
+not there: the i386 child has no audio device, and the 64-bit callers
+keep the null driver.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the null driver exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index fff0327..0cdd96d 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -21981,6 +21981,16 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+                             strstr(ascii, "winealsa") || strstr(ascii, "winepulse") ||
+                             strstr(ascii, "wineoss"))
+                         {
++                            /* Playport: the null driver's table takes 64-bit
++                             * parameter blocks; an i386 caller's are 32-bit,
++                             * and read as 64-bit they hand it garbage device
++                             * strings. Until it has a WoW64 table, an i386
++                             * child has no audio driver. */
++                            if (info_class == MemoryWineLoadUnixLibByNameWow64)
++                            {
++                                ERR("iOS: MemoryWineLoadUnixLibByNameWow64 %s -> no WoW64 audio table\n", ascii);
++                                return status;
++                            }
+                             ERR("iOS: MemoryWineLoadUnixLibByName %s -> audio_null_ios stub table\n", ascii);
+                             res[0] = (UINT64)(UINT_PTR)1; /* magic non-NULL handle */
+                             res[1] = (UINT64)(UINT_PTR)audio_null_ios_unix_call_funcs;

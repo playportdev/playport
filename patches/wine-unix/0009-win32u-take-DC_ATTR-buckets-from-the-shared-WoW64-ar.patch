@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:23:11 +0200
+Subject: [PATCH] win32u: take DC_ATTR buckets from the shared WoW64 arena on
+ iOS
+
+An i386 child of the iOS session reaches DC_ATTRs only through its
+window's alias of ntdll's arena (madeira-unix 0065), and a cached DC
+moves between the session and its children. Take every bucket from the
+arena while it has room; after that, fall back to ordinary allocation
+and say once that i386 children cannot use those DCs. UserPointer stays
+the host pointer, so the session's own path is unchanged apart from
+where its buckets live.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/win32u/dc.c | 35 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/dlls/win32u/dc.c b/dlls/win32u/dc.c
+index a866869..a6e63b0 100644
+--- a/dlls/win32u/dc.c
++++ b/dlls/win32u/dc.c
+@@ -83,6 +83,35 @@ static inline DC *get_dc_obj( HDC hdc )
+     }
+ }
+ 
++#ifdef WINE_IOS
++/* An i386 child reaches DC_ATTR only through its window's alias of ntdll's
++ * arena, and a cached DC moves between the session and its children, so
++ * every bucket comes from the arena while it has room. */
++extern void *ios_wow64_dc_attr_arena( SIZE_T *size );
++static SIZE_T dc_attr_arena_used;
++
++static DC_ATTR *alloc_dc_attr_arena_bucket( SIZE_T size )
++{
++    static BOOL reported_full;
++    SIZE_T arena_size;
++    char *arena = ios_wow64_dc_attr_arena( &arena_size );
++
++    if (arena && arena_size - dc_attr_arena_used >= size)
++    {
++        dc_attr_arena_used += size;
++        ERR( "Playport: DC_ATTR bucket %u at %p from the shared arena\n",
++             (unsigned int)(dc_attr_arena_used / size), arena + dc_attr_arena_used - size );
++        return (DC_ATTR *)(arena + dc_attr_arena_used - size );
++    }
++    if (!reported_full)
++    {
++        reported_full = TRUE;
++        ERR( "Playport: DC_ATTR arena %p full or missing; i386 children cannot use further DCs\n", arena );
++    }
++    return NULL;
++}
++#endif
++
+ /* alloc DC_ATTR from a pool of memory accessible from client */
+ static DC_ATTR *alloc_dc_attr(void)
+ {
+@@ -111,8 +140,14 @@ static DC_ATTR *alloc_dc_attr(void)
+     {
+         SIZE_T size = system_info.AllocationGranularity;
+         bucket->entries = NULL;
++#ifdef WINE_IOS
++        if ((bucket->entries = alloc_dc_attr_arena_bucket( size )) ||
++            !NtAllocateVirtualMemory( GetCurrentProcess(), (void **)&bucket->entries, zero_bits,
++                                      &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))
++#else
+         if (!NtAllocateVirtualMemory( GetCurrentProcess(), (void **)&bucket->entries, zero_bits,
+                                       &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))
++#endif
+         {
+             bucket->next_free = NULL;
+             bucket->next_unused = bucket->entries + 1;

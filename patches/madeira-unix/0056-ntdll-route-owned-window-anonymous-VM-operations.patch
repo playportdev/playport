@@ -1,0 +1,385 @@
+From 062ded6bb30e2779b60c26a711da0095caffa443 Mon Sep 17 00:00:00 2001
+From: Playport contributors <playport@users.noreply.github.com>
+Date: Sat, 3 Oct 2026 14:24:53 +0200
+Subject: [PATCH] ntdll: route explicit owned-window anonymous VM operations
+
+Keep native host pointers and guest identity separate. Add reserve, commit, protect, decommit and full release with protected-gap coalescing, zero-on-recommit, NX guest storage and owner checks. Bootstrap parameters use the native allocation path. Raw guest/NULL allocation, Ex attributes, image free and the native WoW64 loader remain unwired.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no (iOS pseudo-process window port)
+---
+ build/ntdll-unix/env_ios.c     |  14 ++-
+ build/ntdll-unix/virtual_ios.c |  75 +++++++++++++-
+ build/ntdll-unix/wow64_vm.h    | 175 +++++++++++++++++++++++++++++++++
+ 3 files changed, 257 insertions(+), 7 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_vm.h
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 60abbbf..94ba2eb 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -1969,7 +1969,6 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
+ #include "wow64_window.h"
+ #include "wow64_params.h"
+ extern uintptr_t ios_wow64_current_base(void);
+-extern NTSTATUS ios_wow64_allocate_for_peb( void *, uint32_t, size_t, unsigned int, void ** );
+ 
+ /* Initial-child startup only. Publish only after validation/allocation/packing
+  * succeeds. The global wow_peb belongs to the session and is never touched. */
+@@ -1991,10 +1990,17 @@ static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,
+         return STATUS_INVALID_PARAMETER;
+     if ((status = ios_wow64_params_size( params, &size ))) return status;
+     size = (size + 0x3fff) & ~(size_t)0x3fff;
+-    /* VPROT_COMMITTED | VPROT_READ | VPROT_WRITE, private native API. */
+-    if ((status = ios_wow64_allocate_for_peb( owner, IOS_WOW64_PARAMS_GUEST, size, 0x23, &host )))
++    /* Use native VM with checked host storage, never a raw guest pointer. */
++    host = (void *)ios_wow64_host_addr( window, IOS_WOW64_PARAMS_GUEST );
++    if ((status = NtAllocateVirtualMemory( NtCurrentProcess(), &host, 0, &size,
++                                          MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))) return status;
++    if ((status = ios_wow64_pack_params( window, params, host, size, &guest )))
++    {
++        size_t release_size = 0;
++        NTSTATUS release = NtFreeVirtualMemory( NtCurrentProcess(), &host, &release_size, MEM_RELEASE );
++        if (release) dprintf(2, "[wow64-vm] parameter rollback failed status=%x\n", release);
+         return status;
+-    if ((status = ios_wow64_pack_params( window, params, host, size, &guest ))) return status;
++    }
+     p32->BeingDebugged = debugged;
+     p32->NumberOfProcessors = owner->NumberOfProcessors;
+     p32->NtGlobalFlag = owner->NtGlobalFlag;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 95ec3b1..394a563 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -117,6 +117,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #include "unix_private.h"
+ #include "wow64_window.h"
+ #define VPROT_WOW64_IMAGE 0x2000 /* i386 bytes, never native/pool executable */
++#define VPROT_WOW64_VM 0x4000 /* anonymous i386 storage, logical EXEC only */
+ #include "ios_process_image.h"
+ #include "wine/debug.h"
+ 
+@@ -11477,18 +11478,24 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ {
+     struct file_view *view = find_view( base, size );
+-    BOOL guest_image = view && (view->protect & VPROT_WOW64_IMAGE);
++    BOOL guest_image = view && (view->protect & (VPROT_WOW64_IMAGE | VPROT_WOW64_VM));
+     size_t i, count;
+     char *addr = ROUND_ADDR( base, host_page_mask );
+     int prot, next;
+     BYTE vprot;
+ 
+-    /* Logical EXEC belongs to FEX, not ARM64. Never give i386 image bytes
++    /* Logical EXEC belongs to FEX, not ARM64. Never give i386 storage
+      * native execution permission or consume pool space copying them. */
+-    if (guest_image) { clear |= VPROT_EXEC; set &= ~VPROT_EXEC; }
++    if (guest_image)
++    {
++        if (set & VPROT_EXEC) set |= VPROT_READ;
++        clear |= VPROT_EXEC;
++        set &= ~VPROT_EXEC;
++    }
+     size = ROUND_SIZE( base, size, host_page_mask );
+ 
+     vprot = get_host_page_vprot( addr );
++    if (guest_image && (vprot & VPROT_EXEC)) vprot |= VPROT_READ;
+     prot = get_unix_prot( (vprot & ~clear) | set );
+ #ifdef WINE_IOS
+     if (!guest_image && !set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
+@@ -11496,6 +11503,7 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+     for (count = i = 1; i < size / host_page_size; i++, count++)
+     {
+         vprot = get_host_page_vprot( addr + count * host_page_size );
++        if (guest_image && (vprot & VPROT_EXEC)) vprot |= VPROT_READ;
+         next = get_unix_prot( (vprot & ~clear) | set );
+ #ifdef WINE_IOS
+         if (!guest_image && !set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
+@@ -13780,6 +13788,7 @@ static IMAGE_DATA_DIRECTORY *get_data_dir( IMAGE_NT_HEADERS *nt, SIZE_T total_si
+ #include "wow64_views.h"
+ #include "wow64_image.h"
+ #include "wow64_placement.h"
++#include "wow64_vm.h"
+ 
+ 
+ /***********************************************************************
+@@ -15186,6 +15195,55 @@ NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
+     return status;
+ }
+ 
++/* Native entry points accept host pointers only. A registered window address
++ * must never fall through to host unmap, even from a different owner. Keep the
++ * registry lock until the operation ends (registry -> virtual lock order). */
++static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **addr,
++                                SIZE_T *size, ULONG type, ULONG protect,
++                                ULONG *old_protect, NTSTATUS *status )
++{
++    unsigned int i;
++    BOOL routed = FALSE;
++    void *owner = ios_jit_current_peb();
++    sigset_t sigset;
++    uintptr_t value;
++    if (!addr || !*addr || !size) return FALSE;
++    value = (uintptr_t)*addr;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        uintptr_t base = ios_wow64_windows[i].base;
++        if (!ios_wow64_windows[i].owner || value < base || value - base >= IOS_WOW64_WINDOW_SIZE)
++            continue;
++        routed = TRUE;
++        if (process != NtCurrentProcess() || owner != ios_wow64_windows[i].owner)
++            *status = STATUS_ACCESS_DENIED;
++        else
++        {
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            if (operation == 0)
++            {
++                uint64_t limit = (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++                                 IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
++                if ((type & MEM_RESERVE) && (value - base >= limit || *size > limit - (value - base)))
++                    *status = STATUS_INVALID_PARAMETER;
++                else *status = ios_wow64_vm_allocate( base, addr, size, type, protect );
++                if (!*status && (type & MEM_RESERVE))
++                    dprintf(2, "[wow64-vm] owner=%p host=%p guest=%#lx bytes=%#lx reserve=1 commit=%u native_exec=0\n",
++                            owner, *addr, (unsigned long)((uintptr_t)*addr - base), (unsigned long)*size,
++                            !!(type & MEM_COMMIT));
++            }
++            else if (operation == 1) *status = ios_wow64_vm_free( base, addr, size, type );
++            else if (operation == 2) *status = ios_wow64_vm_protect( base, addr, size, protect, old_protect );
++            else *status = STATUS_NOT_SUPPORTED; /* Ex attributes not wired */
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        }
++        break;
++    }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return routed;
++}
++
+ static void ios_wow64_delete_views( uintptr_t base )
+ {
+     struct file_view *view;
+@@ -17903,6 +17961,9 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                                          SIZE_T *size_ptr, ULONG type, ULONG protect )
+ {
+ #ifdef WINE_IOS
++    NTSTATUS wow64_status;
++    if (ios_wow64_route_vm( zero_bits ? 3 : 0, process, ret, size_ptr, type, protect, NULL, &wow64_status ))
++        return wow64_status;
+     ios_tls38_poll( "valloc" );
+ #endif
+     static const ULONG type_mask = MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_TOP_DOWN |
+@@ -19475,6 +19536,8 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+     USHORT machine = 0;
+     unsigned int status;
+ #ifdef WINE_IOS
++    if (ios_wow64_route_vm( 3, process, ret, size_ptr, type, protect, NULL, &status ))
++        return status;
+     /* ml284: does ANYTHING allocate/commit executable memory, and where?
+      *
+      * There is already an exec-allocation probe here using ERR(), but the `virtual` debug
+@@ -20111,6 +20174,9 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
+     TRACE("%p %p %08lx %x\n", process, addr, size, type );
+ 
+ #ifdef WINE_IOS
++    NTSTATUS wow64_status;
++    if (ios_wow64_route_vm( 1, process, addr_ptr, size_ptr, type, 0, NULL, &wow64_status ))
++        return wow64_status;
+     ios_vm_note_free( addr, size, type );
+     /* ml966: a low guest allocation must be freed through its backing, and the
+      * translation retired so nothing can resolve through it afterwards.
+@@ -20339,6 +20405,9 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+     DWORD old;
+ 
+ #ifdef WINE_IOS
++    NTSTATUS wow64_status;
++    if (ios_wow64_route_vm( 2, process, addr_ptr, size_ptr, 0, new_prot, old_prot, &wow64_status ))
++        return wow64_status;
+     /* ml966: a protection change on a low guest allocation applies to the
+      * backing. The whole span is bounds-checked, so a request that runs off
+      * the end of the allocation is left alone rather than silently clipped. */
+diff --git a/build/ntdll-unix/wow64_vm.h b/build/ntdll-unix/wow64_vm.h
+new file mode 100644
+index 0000000..44865d7
+--- /dev/null
++++ b/build/ntdll-unix/wow64_vm.h
+@@ -0,0 +1,175 @@
++/* Native host-pointer VM operations inside an owned i386 window.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included after wow64_views.h; virtual_mutex must be held. Guest-pointer
++ * conversion belongs at the PE boundary, not in these native entry points.
++ */
++#ifndef IOS_WOW64_VM_H
++#define IOS_WOW64_VM_H
++
++/* x86 execute-only pages must remain readable by the decoder, not executable
++ * by ARM64. Keep Wine's logical byte unchanged. */
++static unsigned int ios_wow64_vm_native_vprot( unsigned int vprot )
++{
++    return (vprot & ~VPROT_EXEC) | ((vprot & VPROT_EXEC) ? VPROT_READ : 0);
++}
++
++static BOOL ios_wow64_vm_range( uintptr_t window, const void *addr, size_t size,
++                                void **base, size_t *rounded )
++{
++    uintptr_t value = (uintptr_t)addr, start;
++    size_t offset;
++    if (!ios_wow64_valid_base( window ) || value < window + IOS_WOW64_NULL_GUARD ||
++        value >= window + IOS_WOW64_WINDOW_SIZE || !size ||
++        size > window + IOS_WOW64_WINDOW_SIZE - value) return FALSE;
++    start = value & ~(uintptr_t)host_page_mask;
++    offset = value - start;
++    if (size > SIZE_MAX - offset - host_page_mask) return FALSE;
++    *rounded = (size + offset + host_page_mask) & ~host_page_mask;
++    *base = (void *)start;
++    return *rounded <= window + IOS_WOW64_WINDOW_SIZE - start;
++}
++
++/* Coalesce holdbacks in place. Never call delete_view: it would unmap the
++ * reservation. Descriptors are retired only after unregistering their ranges. */
++static void ios_wow64_vm_coalesce( uintptr_t window, struct file_view *view )
++{
++    struct file_view *other;
++    uintptr_t start = (uintptr_t)view->base, end = start + view->size;
++    if (start > window && (other = find_view( (void *)(start - 1), 1 )) &&
++        other->protect == VPROT_WOW64_HOLE && (uintptr_t)other->base >= window &&
++        (uintptr_t)other->base + other->size == start)
++    {
++        unregister_view( view );
++        unregister_view( other );
++        view->base = other->base;
++        view->size += other->size;
++        free_view( other );
++        register_view( view );
++    }
++    if (end < window + IOS_WOW64_WINDOW_SIZE &&
++        (other = find_view( (void *)end, 1 )) && other->protect == VPROT_WOW64_HOLE &&
++        (uintptr_t)other->base == end && other->size <= window + IOS_WOW64_WINDOW_SIZE - end)
++    {
++        unregister_view( view );
++        unregister_view( other );
++        view->size += other->size;
++        free_view( other );
++        register_view( view );
++    }
++}
++
++static NTSTATUS ios_wow64_vm_allocate( uintptr_t window, void **addr, size_t *size,
++                                      ULONG type, ULONG protect )
++{
++    struct file_view *view;
++    unsigned int vprot;
++    void *base;
++    size_t length;
++    NTSTATUS status;
++    uintptr_t start;
++    if (!addr || !size || !ios_wow64_vm_range( window, *addr, *size, &base, &length ))
++        return STATUS_INVALID_PARAMETER;
++    if (!(type & (MEM_RESERVE | MEM_COMMIT)) ||
++        (type & ~(MEM_RESERVE | MEM_COMMIT))) return STATUS_NOT_SUPPORTED;
++    if ((status = get_vprot_flags( protect, &vprot, FALSE ))) return status;
++    if (vprot & ~(VPROT_READ | VPROT_WRITE | VPROT_EXEC)) return STATUS_NOT_SUPPORTED;
++    if (type & MEM_RESERVE)
++    {
++        start = (uintptr_t)base & ~(uintptr_t)granularity_mask;
++        length += (uintptr_t)base - start;
++        if (type & MEM_COMMIT) vprot |= VPROT_COMMITTED;
++        /* Claim with non-executable protection first, then retain logical EXEC.
++         * No alias, pool copy, global low-address table or ARM64EC attributes. */
++        status = ios_wow64_claim_view( window, start - window, length,
++                                      ios_wow64_vm_native_vprot( vprot ), &view );
++        if (status) return status;
++        view->protect = VPROT_WOW64_VM | vprot;
++        set_page_vprot( view->base, length, vprot );
++        base = view->base;
++    }
++    else
++    {
++        view = find_view( base, length );
++        if (!view || !(view->protect & VPROT_WOW64_VM)) return STATUS_CONFLICTING_ADDRESSES;
++        vprot |= VPROT_COMMITTED;
++        if (mprotect( base, length, get_unix_prot( ios_wow64_vm_native_vprot( vprot ) ) ))
++            return STATUS_ACCESS_DENIED;
++        set_page_vprot( base, length, vprot );
++    }
++    *addr = base;
++    *size = length;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS ios_wow64_vm_protect( uintptr_t window, void **addr, size_t *size,
++                                     ULONG protect, ULONG *old_protect )
++{
++    struct file_view *view;
++    void *base;
++    char *p;
++    size_t length;
++    unsigned int vprot;
++    ULONG old;
++    NTSTATUS status;
++    if (!addr || !size || !old_protect ||
++        !ios_wow64_vm_range( window, *addr, *size, &base, &length )) return STATUS_INVALID_PARAMETER;
++    view = find_view( base, length );
++    if (!view || !(view->protect & VPROT_WOW64_VM)) return STATUS_NOT_SUPPORTED;
++    if ((status = get_vprot_flags( protect, &vprot, FALSE ))) return status;
++    if (vprot & ~(VPROT_READ | VPROT_WRITE | VPROT_EXEC)) return STATUS_NOT_SUPPORTED;
++    for (p = base; p < (char *)base + length; p += page_size)
++        if (!(get_page_vprot( p ) & VPROT_COMMITTED)) return STATUS_NOT_COMMITTED;
++    old = get_win32_prot( get_page_vprot( base ), view->protect );
++    vprot |= VPROT_COMMITTED;
++    if (mprotect( base, length, get_unix_prot( ios_wow64_vm_native_vprot( vprot ) ) )) return STATUS_ACCESS_DENIED;
++    set_page_vprot( base, length, vprot );
++    *old_protect = old;
++    *addr = base;
++    *size = length;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS ios_wow64_vm_free( uintptr_t window, void **addr, size_t *size, ULONG type )
++{
++    struct file_view *view;
++    void *base;
++    size_t length;
++    if (!addr || !size || !ios_wow64_valid_base( window ) ||
++        (uintptr_t)*addr < window + IOS_WOW64_NULL_GUARD ||
++        (uintptr_t)*addr >= window + IOS_WOW64_WINDOW_SIZE) return STATUS_INVALID_PARAMETER;
++    view = find_view( *addr, 1 );
++    /* Never release a bootstrap TEB/PEB or image through anonymous VM. */
++    if (!view || !(view->protect & VPROT_WOW64_VM)) return STATUS_NOT_SUPPORTED;
++    if (type == MEM_RELEASE)
++    {
++        if (*size || *addr != view->base) return STATUS_INVALID_PARAMETER;
++        base = view->base;
++        length = view->size;
++    }
++    else if (type == MEM_DECOMMIT)
++    {
++        if (!*size)
++        {
++            if (*addr != view->base) return STATUS_INVALID_PARAMETER;
++            base = view->base;
++            length = view->size;
++        }
++        else if (!ios_wow64_vm_range( window, *addr, *size, &base, &length ) ||
++                 find_view( base, length ) != view) return STATUS_INVALID_PARAMETER;
++    }
++    else return STATUS_NOT_SUPPORTED;
++    /* Atomic replacement preserves reservation and guarantees zero on recommit.
++     * Do not reuse Madeira's native/FEX decommit path: it leaves pages writable. */
++    if (mmap( base, length, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0 ) == MAP_FAILED)
++        return STATUS_NO_MEMORY;
++    set_page_vprot( base, length, 0 );
++    if (type == MEM_RELEASE)
++    {
++        view->protect = VPROT_WOW64_HOLE;
++        ios_wow64_vm_coalesce( window, view );
++    }
++    *addr = base;
++    *size = length;
++    return STATUS_SUCCESS;
++}
++#endif
+-- 
+2.55.0
+

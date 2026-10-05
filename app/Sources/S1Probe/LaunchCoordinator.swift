@@ -162,7 +162,8 @@ enum LaunchCoordinator {
         log("fex: host \(HostCPU.summary); FEX_HOSTFEATURES \(env["FEX_HOSTFEATURES"] ?? "unset")")
         if let fex {
             let profile = fex.override.map { "Proton's \($0.pattern) entry for this game" } ?? "Proton's defaults"
-            log("fex: ordering \(fex.summary) maxinst=\(fex.maxInst)\(fex.maxInstChosen ? "*" : "") (* the game's page; the rest \(profile))")
+            log("fex: ordering \(fex.summary) maxinst=\(fex.maxInst)\(fex.maxInstChosen ? "*" : "") "
+                + "x87reduced=\(fex.x87Reduced ? 1 : 0)\(fex.x87Chosen ? "*" : "") (* the game's page; the rest \(profile))")
         }
         for name in env.keys.sorted() { setenv(name, env[name]!, 1) }
         let steam = SteamGameID.names.filter { env[$0] != nil && backend[$0] == nil }

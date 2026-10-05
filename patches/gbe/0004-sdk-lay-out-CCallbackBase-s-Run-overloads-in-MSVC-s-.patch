@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 4 Oct 2026 08:21:27 +0200
+Subject: [PATCH] sdk: lay out CCallbackBase's Run overloads in MSVC's vtable
+ order
+
+MSVC puts overloaded virtual functions in its vtable in reverse
+declaration order, and a game's callback objects (CCallback,
+CCallResult) are MSVC-built, while a MinGW build of the emulator lays
+them out in declaration order. Its call of Run(pvParam) reached the
+game's Run(pvParam, bIOFailure, hSteamAPICall). On i386 that is a
+__thiscall that pops 16 bytes where 4 were pushed, so the emulator's own
+frame was overwritten: Portal 2 faulted in SteamCallResults::
+runCallResults on a garbage `this` right after its intro videos. On
+x86-64 the two overloads were swapped silently. A MinGW build now
+declares them reversed, so its slots match the game's.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no
+---
+ sdk/steam/steam_api_common.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/sdk/steam/steam_api_common.h b/sdk/steam/steam_api_common.h
+index 055d092..3f318e9 100644
+--- a/sdk/steam/steam_api_common.h
++++ b/sdk/steam/steam_api_common.h
+@@ -156,8 +156,17 @@ class CCallbackBase
+ public:
+ 	CCallbackBase() { m_nCallbackFlags = 0; m_iCallback = 0; }
+ 	// don't add a virtual destructor because we export this binary interface across dll's
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC puts overloaded virtuals in its vtable in reverse order, and the
++	// game's callback objects are MSVC's: a MinGW build declares them reversed
++	// so its slots match. Otherwise the one-argument call reaches the game's
++	// three-argument Run, which on i386 pops 16 bytes of the caller's stack.
++	virtual void Run( void *pvParam, bool bIOFailure, SteamAPICall_t hSteamAPICall ) = 0;
++	virtual void Run( void *pvParam ) = 0;
++#else
+ 	virtual void Run( void *pvParam ) = 0;
+ 	virtual void Run( void *pvParam, bool bIOFailure, SteamAPICall_t hSteamAPICall ) = 0;
++#endif
+ 	int GetICallback() { return m_iCallback; }
+ 	virtual int GetCallbackSizeBytes() = 0;
+ 

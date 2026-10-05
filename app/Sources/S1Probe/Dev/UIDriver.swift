@@ -155,7 +155,7 @@ enum UIDriver {
                     LaunchSettingsStore.shared.binding(for: id).wrappedValue = s
                     let e = LibraryModel.shared.title(id).map { LaunchSettingsStore.shared.effective(for: $0) }
                         ?? LaunchSettings.resolve(game: s, global: LaunchSettingsStore.shared.global)
-                    log("settings \(id): screen=\(e.screen ?? "native") limit=\(e.frameLimit) graphics=\(e.graphics.rawValue) arguments=\(e.arguments) ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in e.ordering[s].map { "\(s.rawValue)=\($0)" } }) maxInst=\(e.maxInst.map(String.init) ?? "profile") runtime=\(e.runtime.keys.sorted().map { "\($0)=\(e.runtime[$0]!)" })")
+                    log("settings \(id): screen=\(e.screen ?? "native") limit=\(e.frameLimit) graphics=\(e.graphics.rawValue) arguments=\(e.arguments) ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in e.ordering[s].map { "\(s.rawValue)=\($0)" } }) maxInst=\(e.maxInst.map(String.init) ?? "profile") x87Reduced=\(e.x87Reduced.map { String($0) } ?? "profile") runtime=\(e.runtime.keys.sorted().map { "\($0)=\(e.runtime[$0]!)" })")
                 case "hud":
                     guard ["on", "off"].contains(id) else { return finish("action=\(action) refused: not hud:on or hud:off") }
                     DriverUndo.willSet(MetalHUD.key)

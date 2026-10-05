@@ -1,0 +1,76 @@
+From 813fb8590ae325f68e1ca795c7677416ddc57154 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sat, 3 Oct 2026 11:24:24 +0200
+Subject: [PATCH] ntdll: build the i386 PE with native diagnostics guarded
+
+The CHPE detach probe needs the native TEB field, absent in i386.
+The lock census reads ARM counter registers; on other architectures
+use the NT performance counter and its matching frequency instead.
+Neither changes the existing aarch64 or ARM64EC paths.
+
+Class: build-fix
+Evidence: docs/evidence/2026-10-03-portal2-runtime-build.md
+Offered-upstream: no; guards diagnostics specific to the Madeira port
+---
+ dlls/ntdll/loader.c |  3 +++
+ dlls/ntdll/sync.c   | 12 ++++++++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 1893982adbf..49d7a012749 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -5037,6 +5037,7 @@ void WINAPI LdrShutdownThread(void)
+     /* don't do any detach calls if process is exiting */
+     if (process_detaching) return;
+ 
++#ifdef __aarch64__
+     /* iOS-Madeira ml843 [detach-probe]: is the FEX emulator stack top already
+      * sitting in this thread's TLS BEFORE any detach cleanup runs?
+      *
+@@ -5100,6 +5101,8 @@ void WINAPI LdrShutdownThread(void)
+         }
+     }
+ 
++#endif /* __aarch64__: the detach probe reads the native CHPE CPU area */
++
+     RtlProcessFlsData( NtCurrentTeb()->FlsSlots, 1 );
+ 
+     RtlEnterCriticalSection( &loader_section );
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index f42ef5ca90a..58094e219df 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -53,17 +53,29 @@ unsigned int ios_counters_on = 1;
+ 
+ static inline ULONGLONG ios_xp_ticks(void)
+ {
++#ifdef __aarch64__
+     ULONGLONG v;
+     __asm__ __volatile__( "mrs %0, cntvct_el0" : "=r"(v) );
+     return v;
++#else
++    LARGE_INTEGER counter;
++    if (NtQueryPerformanceCounter( &counter, NULL )) return 0;
++    return counter.QuadPart;
++#endif
+ }
+ void ios_xp_nt_init(void)
+ {
+     if (!ios_xp_nt.freq)
+     {
++#ifdef __aarch64__
+         ULONGLONG f;
+         __asm__ __volatile__( "mrs %0, cntfrq_el0" : "=r"(f) );
+         ios_xp_nt.freq = f;
++#else
++        LARGE_INTEGER counter, freq;
++        if (NtQueryPerformanceCounter( &counter, &freq )) return;
++        ios_xp_nt.freq = freq.QuadPart;
++#endif
+         ios_xp_nt.magic = 0x31544e5058444d41ull;   /* 'AMDXPNT1' */
+     }
+ }
+-- 
+2.55.0
+

@@ -1,0 +1,220 @@
+From 08ea22986979901a8f5a91d72384219f44f3dd5c Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 20:50:36 +0200
+Subject: [PATCH] ntdll: give a windowed WoW64 child its 32-bit limits and NLS
+ views
+
+user_space_wow_limit is the 64-bit session's (0), so an i386 child was
+told HighestUserAddress 0xffffffffffffffff and wow64.dll refused every
+guest allocation (its range check overflows). The child's limit is its
+window's: 2 GiB, or 4 GiB when the image is large-address aware, as
+Wine sets it for a WoW64 process. The NLS sections it maps for its
+locale tables take the same guest constraint, so they land in the
+window where the i386 guest reads them.
+
+The window now maps a read-only view of an ordinary file section
+(the NLS tables): guest placement as for anonymous VM, the file mapped
+over a claimed view, and the server's view registration, rolled back to
+a window gap on failure. Writable, reserved and anonymous sections,
+unmap, protect and query of such a view stay unsupported. An image view
+may be mapped ViewShare, as the guest loader maps DLLs: Wine gives
+inheritance no meaning.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/env_ios.c     |  21 ++++++-
+ build/ntdll-unix/virtual_ios.c | 104 +++++++++++++++++++++++++++++++--
+ 2 files changed, 118 insertions(+), 7 deletions(-)
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 2f56a1e..7f44359 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -2532,6 +2532,23 @@ void *create_startup_info( const UNICODE_STRING *nt_image, ULONG process_flags,
+ }
+ 
+ 
++/* Playport: an i386 child of a 64-bit session reads its NLS tables from its
++ * window. map_section passes user_space_wow_limit, which is the session's (0)
++ * there, so give the child's own 32-bit limit as the constraint. */
++static NTSTATUS map_nls_section( HANDLE mapping, void **ptr, SIZE_T *size )
++{
++    ULONG_PTR zero_bits = user_space_wow_limit;
++
++    if (!zero_bits && is_wow64())
++        zero_bits = (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++                    limit_4g - 1 : limit_2g - 1;
++    *ptr = NULL;
++    *size = 0;
++    return NtMapViewOfSection( mapping, NtCurrentProcess(), ptr, zero_bits,
++                               0, NULL, size, ViewShare, 0, PAGE_READONLY );
++}
++
++
+ /**************************************************************************
+  *      NtGetNlsSectionPtr  (NTDLL.@)
+  */
+@@ -2577,7 +2594,7 @@ NTSTATUS WINAPI NtGetNlsSectionPtr( ULONG type, ULONG id, void *unknown, void **
+     }
+     if (!status)
+     {
+-        status = map_section( handle, ptr, size, PAGE_READONLY );
++        status = map_nls_section( handle, ptr, size );
+         NtClose( handle );
+     }
+     return status;
+@@ -2605,7 +2622,7 @@ NTSTATUS WINAPI NtInitializeNlsFiles( void **ptr, LCID *lcid, LARGE_INTEGER *siz
+     }
+     if (!status)
+     {
+-        status = map_section( handle, ptr, &mapsize, PAGE_READONLY );
++        status = map_nls_section( handle, ptr, &mapsize );
+         NtClose( handle );
+     }
+     *lcid = system_lcid;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 9a37c75..d9a9f37 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7261,6 +7261,11 @@ static void mmap_init( const struct preload_info *preload_info )
+ static ULONG_PTR get_wow_user_space_limit(void)
+ {
+ #ifdef _WIN64
++    /* Playport: an i386 child of a 64-bit session has its 32-bit space in its
++     * own window, while user_space_wow_limit is the session's (0). */
++    if (!user_space_wow_limit && is_wow64())
++        return ((ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++                limit_4g - 1 : limit_2g - 1) & ~granularity_mask;
+     return user_space_wow_limit & ~granularity_mask;
+ #endif
+     return (ULONG_PTR)user_space_limit;
+@@ -15104,6 +15109,90 @@ static NTSTATUS ios_wow64_server_unmap( struct file_view *view )
+ 
+ #include "wow64_section.h"
+ 
++/* A read-only view of an ordinary file section in the owner's window (the NLS
++ * tables a guest reads): guest placement as for anonymous VM, a claimed view
++ * with the file mapped over it, and the server's view registration. Writable,
++ * reserved and anonymous sections, partial host-page offsets, unmap, protect
++ * and query are not supported. Registry held; outputs change on success. */
++static NTSTATUS ios_wow64_map_file_view( uintptr_t window, HANDLE mapping, void **addr, SIZE_T *size_ptr,
++                                         uintptr_t zero_bits, uint64_t owner_end,
++                                         const LARGE_INTEGER *offset_ptr, mem_size_t full_size,
++                                         unsigned int sec_flags, ULONG type )
++{
++    const unsigned int vprot = VPROT_READ | VPROT_COMMITTED;
++    uint64_t end = owner_end, offset = offset_ptr ? offset_ptr->QuadPart : 0;
++    int unix_fd = -1, needs_close = 0;
++    struct file_view *view = NULL;
++    uint32_t guest = 0;
++    size_t length;
++    SIZE_T size;
++    sigset_t sigset;
++    NTSTATUS status;
++
++    if (offset >= full_size) return STATUS_INVALID_PARAMETER;
++    if (offset & host_page_mask) return STATUS_NOT_SUPPORTED;
++    if (*size_ptr)
++    {
++        size = *size_ptr;
++        if (size > full_size - offset) return STATUS_INVALID_VIEW_SIZE;
++    }
++    else size = full_size - offset;
++    if (!(size = ROUND_SIZE( 0, size, page_mask ))) return STATUS_INVALID_PARAMETER;
++    length = (size + host_page_mask) & ~host_page_mask;
++    if (ios_wow64_vm_limit( zero_bits, &end )) return STATUS_INVALID_PARAMETER_4;
++    if ((status = server_get_unix_fd( mapping, 0, &unix_fd, &needs_close, NULL, NULL ))) return status;
++
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    if (*addr)
++    {
++        uintptr_t value = (uintptr_t)*addr;
++        if (value - window >= IOS_WOW64_WINDOW_SIZE || ((value - window) & granularity_mask))
++            status = STATUS_MAPPED_ALIGNMENT;
++        else if ((guest = value - window) < IOS_WOW64_NULL_GUARD || guest >= end || length > end - guest)
++            status = STATUS_CONFLICTING_ADDRESSES;
++    }
++    else status = ios_wow64_image_gap( window, length, IOS_WOW64_NULL_GUARD, end,
++                                       !!(type & MEM_TOP_DOWN), &guest );
++    if (!status) status = ios_wow64_claim_view( window, guest, length, vprot, &view );
++    if (!status)
++    {
++        status = map_file_into_view_ex( view, unix_fd, 0, size, offset, vprot, needs_close, FALSE );
++        if (!status)
++        {
++            SERVER_START_REQ( map_view )
++            {
++                req->mapping = wine_server_obj_handle( mapping );
++                req->access  = SECTION_MAP_READ;
++                req->base    = wine_server_client_ptr( view->base );
++                req->size    = size;
++                req->start   = offset;
++                status = wine_server_call( req );
++            }
++            SERVER_END_REQ;
++        }
++        if (status)
++        {
++            /* back to a window gap: the reservation's protection, then the hole */
++            if (mmap( view->base, length, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0 ) == MAP_FAILED)
++                dprintf( 2, "[wow64-section] file view rollback failed at %p; kept as a hole\n", view->base );
++            view->protect = VPROT_WOW64_HOLE;
++            set_page_vprot( view->base, length, 0 );
++            ios_wow64_vm_coalesce( window, view );
++        }
++        else
++        {
++            view->protect = vprot | sec_flags;
++            *addr = view->base;
++            *size_ptr = size;
++            dprintf( 2, "[wow64-section] host=%p guest=%#x bytes=%#lx file=1 offset=%#llx read_only=1\n",
++                     view->base, guest, (unsigned long)size, (unsigned long long)offset );
++        }
++    }
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    if (needs_close) close( unix_fd );
++    return status;
++}
++
+ /* Intercept before native bounds, alias steering and remote APCs. */
+ static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr, SIZE_T *size,
+                                      ULONG_PTR zero_bits, SIZE_T commit, const LARGE_INTEGER *offset,
+@@ -15138,8 +15227,7 @@ static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr
+         routed = TRUE;
+         if (process != NtCurrentProcess() || owner != ios_wow64_windows[i].owner)
+             *status = STATUS_ACCESS_DENIED;
+-        else if (ex || commit || (offset && offset->QuadPart) || inherit != ViewUnmap ||
+-                 (type & ~MEM_TOP_DOWN)) *status = STATUS_NOT_SUPPORTED;
++        else if (ex || (type & ~MEM_TOP_DOWN)) *status = STATUS_NOT_SUPPORTED;
+         else
+         {
+             switch (protect)
+@@ -15153,14 +15241,20 @@ static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr
+             }
+             *status = get_mapping_info( mapping, access, &sec_flags, &full_size, &info );
+             if (*status) goto done;
++            end = (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++                  IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
++            if (!info && protect == PAGE_READONLY && (sec_flags & SEC_FILE) &&
++                !(sec_flags & (SEC_IMAGE | SEC_RESERVE)))
++                *status = ios_wow64_map_file_view( base, mapping, addr, size, zero_bits, end, offset,
++                                                   full_size, sec_flags, type );
+             /* Shared writable sections are MAP_SHARED: WRITECOPY there would
+              * write shared backing. Refuse them until that lifecycle exists. */
+-            if (!info || info->shared_file || sec_flags != (SEC_IMAGE | SEC_FILE))
++            else if (!info || info->shared_file || sec_flags != (SEC_IMAGE | SEC_FILE) ||
++                     commit || (offset && offset->QuadPart) ||
++                     (inherit != ViewUnmap && inherit != ViewShare))
+                 *status = STATUS_NOT_SUPPORTED;
+             else
+             {
+-                end = (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
+-                      IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
+                 *status = ios_wow64_section_bounds( base, *addr, *size, zero_bits, end,
+                                                     &info->image, &low, &high );
+                 if (!*status)
+-- 
+2.55.0
+

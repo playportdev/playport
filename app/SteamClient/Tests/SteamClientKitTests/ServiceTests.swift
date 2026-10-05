@@ -179,10 +179,17 @@ actor FakeBackend: SteamBackend {
         guard let f = cloud[name] else { throw SteamError.notFound(name) }
         return f.data
     }
+    /// As Steam: a name that differs from a stored one only in case is refused (DuplicateRequest).
     func cloudUpload(appID: UInt32, files: [(name: String, data: [UInt8], time: UInt64)]) async throws -> [String] {
-        for f in files { calls.append("upload \(f.name)"); cloud[f.name] = (f.data, f.time) }
+        var committed: [String] = []
+        for f in files {
+            calls.append("upload \(f.name)")
+            guard !cloud.keys.contains(where: { $0 != f.name && $0.lowercased() == f.name.lowercased() }) else { continue }
+            cloud[f.name] = (f.data, f.time)
+            committed.append(f.name)
+        }
         cloudChange += 1
-        return files.map(\.name)
+        return committed
     }
 
     func set(persona p: Result<String?, Error>) { persona = p }

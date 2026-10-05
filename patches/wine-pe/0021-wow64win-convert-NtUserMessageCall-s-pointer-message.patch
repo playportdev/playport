@@ -1,0 +1,196 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 23:25:12 +0200
+Subject: [PATCH] wow64win: convert NtUserMessageCall's pointer messages
+ through the window
+
+On iOS a windowed i386 guest's NtUserMessageCall stopped the process
+unaudited, first for DefWindowProc's WM_GETMINMAXINFO in Portal 2's
+launcher. For the calls whose message win32u reads or writes (the window
+procedures, DefWindowProc and the send variants) convert the lparam of a
+pointer message (win32u's own message_pointer_flags), and the wparam of
+EM_GETSEL, CB_GETEDITSEL and SBM_GETRANGE, through the window; the calls
+that hand the parameters back to the guest keep them. The nested
+pointers of WM_NCCALCSIZE, WM_MDICREATE and WM_COPYDATA convert too.
+Audit the message loop's thunks as they are: GetMessage, PeekMessage,
+TranslateMessage, DispatchMessage and PostMessage carry guest values
+or handles only, and EndPaint's PAINTSTRUCT has no pointer.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/wow64win/user.c           | 73 ++++++++++++++++++++++++++++++----
+ dlls/wow64win/window_audited.h |  7 ++++
+ 2 files changed, 73 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index e69788a..52acd3c 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -3613,8 +3613,8 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
+             MDICREATESTRUCT32 *cs32 = (void *)lparam;
+             MDICREATESTRUCTW cs;
+ 
+-            cs.szClass = UlongToPtr( cs32->szClass );
+-            cs.szTitle = UlongToPtr( cs32->szTitle );
++            cs.szClass = wow64_intres_to_host( cs32->szClass );
++            cs.szTitle = wow64_to_host( cs32->szTitle );
+             cs.hOwner = LongToHandle( cs32->hOwner );
+             cs.x = cs32->x;
+             cs.y = cs32->y;
+@@ -3649,12 +3649,12 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
+             params.rgrc[1] = params32->rgrc[1];
+             params.rgrc[2] = params32->rgrc[2];
+             params.lppos = &winpos;
+-            winpos_32to64( &winpos, UlongToPtr( params32->lppos ));
++            winpos_32to64( &winpos, wow64_to_host( params32->lppos ));
+             ret = NtUserMessageCall( hwnd, msg, wparam, (LPARAM)&params, result_info, type, ansi );
+             params32->rgrc[0] = params.rgrc[0];
+             params32->rgrc[1] = params.rgrc[1];
+             params32->rgrc[2] = params.rgrc[2];
+-            winpos_64to32( &winpos, UlongToPtr( params32->lppos ));
++            winpos_64to32( &winpos, wow64_to_host( params32->lppos ));
+             return ret;
+         }
+         return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
+@@ -3736,7 +3736,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
+ 
+             cds.dwData = cds32->dwData;
+             cds.cbData = cds32->cbData;
+-            cds.lpData = UlongToPtr( cds32->lpData );
++            cds.lpData = wow64_to_host( cds32->lpData );
+             return NtUserMessageCall( hwnd, msg, wparam, (LPARAM)&cds, result_info, type, ansi );
+         }
+ 
+@@ -3816,15 +3816,74 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
+     }
+ }
+ 
++/* Playport (iOS): the messages whose lparam, or for the three marked also
++ * wparam, is a pointer; win32u's message_pointer_flags. */
++static BOOL is_guest_pointer_message( UINT msg, WPARAM wparam, BOOL *wparam_pointer )
++{
++#define SET(msg) (1u << ((msg) & 31))
++    static const unsigned int flags[] =
++    {
++        SET(WM_CREATE) | SET(WM_SETTEXT) | SET(WM_GETTEXT) | SET(WM_WININICHANGE) | SET(WM_DEVMODECHANGE),
++        SET(WM_GETMINMAXINFO) | SET(WM_DRAWITEM) | SET(WM_MEASUREITEM) | SET(WM_DELETEITEM) | SET(WM_COMPAREITEM),
++        SET(WM_WINDOWPOSCHANGING) | SET(WM_WINDOWPOSCHANGED) | SET(WM_COPYDATA) | SET(WM_HELP),
++        SET(WM_STYLECHANGING) | SET(WM_STYLECHANGED),
++        SET(WM_NCCREATE) | SET(WM_NCCALCSIZE) | SET(WM_GETDLGCODE),
++        SET(EM_GETSEL) | SET(EM_GETRECT) | SET(EM_SETRECT) | SET(EM_SETRECTNP),
++        SET(EM_REPLACESEL) | SET(EM_GETLINE) | SET(EM_SETTABSTOPS),
++        SET(SBM_GETRANGE) | SET(SBM_SETSCROLLINFO) | SET(SBM_GETSCROLLINFO) | SET(SBM_GETSCROLLBARINFO),
++        0,
++        0,
++        SET(CB_GETEDITSEL) | SET(CB_ADDSTRING) | SET(CB_DIR) | SET(CB_GETLBTEXT) | SET(CB_INSERTSTRING) |
++        SET(CB_FINDSTRING) | SET(CB_SELECTSTRING) | SET(CB_GETDROPPEDCONTROLRECT) | SET(CB_FINDSTRINGEXACT),
++        SET(CB_GETCOMBOBOXINFO),
++        SET(LB_ADDSTRING) | SET(LB_INSERTSTRING) | SET(LB_GETTEXT) | SET(LB_SELECTSTRING) | SET(LB_DIR) |
++        SET(LB_FINDSTRING) | SET(LB_GETSELITEMS) | SET(LB_SETTABSTOPS) | SET(LB_ADDFILE) | SET(LB_GETITEMRECT),
++        SET(LB_FINDSTRINGEXACT),
++        0,
++        0,
++        SET(WM_NEXTMENU) | SET(WM_SIZING) | SET(WM_MOVING) | SET(WM_DEVICECHANGE),
++        SET(WM_MDICREATE) | SET(WM_MDIGETACTIVE) | SET(WM_DROPOBJECT) | SET(WM_QUERYDROPOBJECT) |
++        SET(WM_DRAGLOOP) | SET(WM_DRAGSELECT) | SET(WM_DRAGMOVE),
++        0, 0, 0, 0, 0, 0,
++        SET(WM_ASKCBFORMATNAME)
++    };
++#undef SET
++    *wparam_pointer = msg == EM_GETSEL || msg == CB_GETEDITSEL || msg == SBM_GETRANGE;
++    if (msg >= 8 * sizeof(flags)) return FALSE;
++    if (msg == WM_DEVICECHANGE && !(wparam & 0x8000)) return FALSE;
++    return (flags[msg / 32] & (1u << (msg & 31))) != 0;
++}
++
+ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
+ {
+     HWND hwnd = get_handle( &args );
+     UINT msg = get_ulong( &args );
+-    ULONG wparam = get_ulong( &args );
+-    ULONG lparam = get_ulong( &args );
++    WPARAM wparam = get_ulong( &args );
++    LPARAM lparam = get_ulong( &args );
+     void *result_info = get_ptr( &args );
+     UINT type = get_ulong ( &args );
+     BOOL ansi = get_ulong( &args );
++    BOOL wparam_pointer;
++
++    /* Playport (iOS): win32u reads and writes a pointer message's parameters
++     * for these calls, so they go through the window; the others only hand
++     * them back to the guest, or carry their own parameter blocks. */
++    switch (type)
++    {
++    case NtUserScrollBarWndProc:
++    case NtUserPopupMenuWndProc:
++    case NtUserDesktopWindowProc:
++    case NtUserDefWindowProc:
++    case NtUserSendMessage:
++    case NtUserSendMessageTimeout:
++    case NtUserSendNotifyMessage:
++    case NtUserSendMessageCallback:
++    case NtUserClipboardWindowProc:
++        if (!is_guest_pointer_message( msg, wparam, &wparam_pointer )) break;
++        lparam = (LPARAM)wow64_to_host( lparam );
++        if (wparam_pointer) wparam = (WPARAM)wow64_to_host( wparam );
++        break;
++    }
+ 
+     switch (type)
+     {
+diff --git a/dlls/wow64win/window_audited.h b/dlls/wow64win/window_audited.h
+index 196486f..c560d0f 100644
+--- a/dlls/wow64win/window_audited.h
++++ b/dlls/wow64win/window_audited.h
+@@ -209,6 +209,7 @@
+ #define WINDOW_AUDITED_NtUserDestroyMenu ~, 1
+ #define WINDOW_AUDITED_NtUserDestroyWindow ~, 1
+ #define WINDOW_AUDITED_NtUserDisableThreadIme ~, 1
++#define WINDOW_AUDITED_NtUserDispatchMessage ~, 1
+ #define WINDOW_AUDITED_NtUserDisplayConfigGetDeviceInfo ~, 1
+ #define WINDOW_AUDITED_NtUserDragDetect ~, 1
+ #define WINDOW_AUDITED_NtUserDragObject ~, 1
+@@ -224,6 +225,7 @@
+ #define WINDOW_AUDITED_NtUserEnableWindow ~, 1
+ #define WINDOW_AUDITED_NtUserEndDeferWindowPosEx ~, 1
+ #define WINDOW_AUDITED_NtUserEndMenu ~, 1
++#define WINDOW_AUDITED_NtUserEndPaint ~, 1
+ #define WINDOW_AUDITED_NtUserEnumClipboardFormats ~, 1
+ #define WINDOW_AUDITED_NtUserEnumDisplayDevices ~, 1
+ #define WINDOW_AUDITED_NtUserEnumDisplayMonitors ~, 1
+@@ -266,6 +268,7 @@
+ #define WINDOW_AUDITED_NtUserGetKeyboardState ~, 1
+ #define WINDOW_AUDITED_NtUserGetLayeredWindowAttributes ~, 1
+ #define WINDOW_AUDITED_NtUserGetMenuItemRect ~, 1
++#define WINDOW_AUDITED_NtUserGetMessage ~, 1
+ #define WINDOW_AUDITED_NtUserGetMessagePos ~, 1
+ #define WINDOW_AUDITED_NtUserGetMouseMovePointsEx ~, 1
+ #define WINDOW_AUDITED_NtUserGetObjectInformation ~, 1
+@@ -310,6 +313,7 @@
+ #define WINDOW_AUDITED_NtUserMapVirtualKeyEx ~, 1
+ #define WINDOW_AUDITED_NtUserMenuItemFromPoint ~, 1
+ #define WINDOW_AUDITED_NtUserMessageBeep ~, 1
++#define WINDOW_AUDITED_NtUserMessageCall ~, 1
+ #define WINDOW_AUDITED_NtUserModifyUserStartupInfoFlags ~, 1
+ #define WINDOW_AUDITED_NtUserMoveWindow ~, 1
+ #define WINDOW_AUDITED_NtUserMsgWaitForMultipleObjectsEx ~, 1
+@@ -318,7 +322,9 @@
+ #define WINDOW_AUDITED_NtUserOpenClipboard ~, 1
+ #define WINDOW_AUDITED_NtUserOpenInputDesktop ~, 1
+ #define WINDOW_AUDITED_NtUserOpenWindowStation ~, 1
++#define WINDOW_AUDITED_NtUserPeekMessage ~, 1
+ #define WINDOW_AUDITED_NtUserPerMonitorDPIPhysicalToLogicalPoint ~, 1
++#define WINDOW_AUDITED_NtUserPostMessage ~, 1
+ #define WINDOW_AUDITED_NtUserPostQuitMessage ~, 1
+ #define WINDOW_AUDITED_NtUserPrintWindow ~, 1
+ #define WINDOW_AUDITED_NtUserQueryDisplayConfig ~, 1
+@@ -395,6 +401,7 @@
+ #define WINDOW_AUDITED_NtUserSystemParametersInfoForDpi ~, 1
+ #define WINDOW_AUDITED_NtUserToUnicodeEx ~, 1
+ #define WINDOW_AUDITED_NtUserTrackPopupMenuEx ~, 1
++#define WINDOW_AUDITED_NtUserTranslateMessage ~, 1
+ #define WINDOW_AUDITED_NtUserUnhookWinEvent ~, 1
+ #define WINDOW_AUDITED_NtUserUnhookWindowsHookEx ~, 1
+ #define WINDOW_AUDITED_NtUserUnregisterHotKey ~, 1

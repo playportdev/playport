@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Mon, 5 Oct 2026 12:00:00 +0200
+Subject: [PATCH] win32u: answer NtUserSetCursor for the cursor the thread
+ already has
+
+Portal 2 sets the cursor position about three times a frame, and the
+WM_MOUSEMOVE each SetCursorPos queues brings a WM_SETCURSOR that sets the
+same cursor again: about 3 of the 6 set_cursor requests a frame on its
+main thread change nothing.
+
+When the thread input's shared memory already holds the cursor, the
+server would store the same handle, queue no WM_WINE_SETCURSOR and
+answer it as the previous one. Return it without the request, after the
+same check_for_events. A handle that is not a live cursor of this
+process still goes to the server, which sets the error as before.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-05-portal2-hitches-requests.md
+Offered-upstream: no
+---
+ dlls/win32u/cursoricon.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/dlls/win32u/cursoricon.c b/dlls/win32u/cursoricon.c
+index b7bb811..f649047 100644
+--- a/dlls/win32u/cursoricon.c
++++ b/dlls/win32u/cursoricon.c
+@@ -102,6 +102,19 @@ INT WINAPI NtUserShowCursor( BOOL show )
+     return count;
+ }
+ 
++/* is cursor already the current thread input's cursor, as its shared memory says */
++static BOOL is_current_cursor( HCURSOR cursor )
++{
++    struct object_lock lock = OBJECT_LOCK_INIT;
++    const input_shm_t *input_shm;
++    NTSTATUS status;
++    BOOL ret = FALSE;
++
++    while ((status = get_shared_input( GetCurrentThreadId(), &lock, &input_shm )) == STATUS_PENDING)
++        ret = wine_server_ptr_handle( input_shm->cursor ) == cursor;
++    return !status && ret;
++}
++
+ /***********************************************************************
+  *	     NtUserSetCursor (win32u.@)
+  */
+@@ -113,6 +126,25 @@ HCURSOR WINAPI NtUserSetCursor( HCURSOR cursor )
+ 
+     TRACE( "%p\n", cursor );
+ 
++    /* Setting the cursor the thread input already has changes nothing in the
++     * server and queues no WM_WINE_SETCURSOR, and the previous cursor is the
++     * same handle, so answer it without the request. A handle that is not a
++     * live cursor of this process still goes to the server for its error. */
++    if (is_current_cursor( cursor ))
++    {
++        if (!cursor)
++        {
++            check_for_events( QS_INPUT );
++            return 0;
++        }
++        if ((obj = get_icon_ptr( cursor )))
++        {
++            release_user_handle_ptr( obj );
++            check_for_events( QS_INPUT );
++            return cursor;
++        }
++    }
++
+     SERVER_START_REQ( set_cursor )
+     {
+         req->flags = SET_CURSOR_HANDLE;

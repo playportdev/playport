@@ -1,0 +1,654 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 18:33:34 +0200
+Subject: [PATCH] ntdll: protect owned WoW64 window pages per Wine page
+
+Native NtProtectVirtualMemory on an owner's i386 window handled only
+anonymous VM, in whole 16 KiB host pages, and refused WRITECOPY and
+PAGE_GUARD. Wine's image setup set window image protections through the
+generic set_vprot, whose byte union lets a guard page revoke its host
+page and whose failures were ignored. The WoW64 loader will protect
+image and heap pages at 4 KiB, so give both kinds of window storage the
+same transaction:
+
+- Wine (4 KiB) pages keep their logical protection, including EXEC,
+  WRITECOPY and GUARD, and queries report it per page. A 16 KiB host
+  page gets the union of its pages' native permissions, never EXEC:
+  execute-only pages stay readable for FEX's decoder. A host page whose
+  committed guard page would sit beside an accessible page is refused,
+  so a guard page is always enforced.
+- Image pages take READWRITE as WRITECOPY, as Wine does; anonymous VM
+  refuses WRITECOPY. Backing is never replaced: a private image page
+  becomes writable MAP_PRIVATE or anonymous memory, so writes stay a
+  private copy. Images with shared writable sections are refused at
+  map time.
+- Every host page is checked before any changes, each changes with its
+  own mprotect, a failure restores the pages already changed, and page
+  bytes and caller outputs change only on success. The old protection
+  is the first page's. Free space, the low guard and ranges leaving one
+  allocation are invalid; bootstrap TEB/PEB views, quarantined images,
+  padding past the server's image extent and cache/CFG modifiers are
+  not supported.
+- Wine's image setup and anonymous commit use the same transaction, and
+  a failed protection now fails a window image map. mprotect_range
+  (fault and helper paths) uses the same per-page policy.
+
+Wine's protection conversions move unchanged into wow64_vprot.h so that
+host tests compile them.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no (Playport's owner-local iOS WoW64 window)
+---
+ build/ntdll-unix/virtual_ios.c        | 180 +++++++++-----------------
+ build/ntdll-unix/wow64_image_mapper.h |   2 +-
+ build/ntdll-unix/wow64_protect.h      |  96 ++++++++++++++
+ build/ntdll-unix/wow64_vm.h           |  66 ++++++----
+ build/ntdll-unix/wow64_vprot.h        | 111 ++++++++++++++++
+ 5 files changed, 308 insertions(+), 147 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_protect.h
+ create mode 100644 build/ntdll-unix/wow64_vprot.h
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index a886c9a..698a135 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5087,26 +5087,8 @@ struct file_view
+ #define VPROT_PLACEHOLDER      0x0400
+ #define VPROT_FREE_PLACEHOLDER 0x0800
+ 
+-/* Conversion from VPROT_* to Win32 flags */
+-static const BYTE VIRTUAL_Win32Flags[16] =
+-{
+-    PAGE_NOACCESS,              /* 0 */
+-    PAGE_READONLY,              /* READ */
+-    PAGE_READWRITE,             /* WRITE */
+-    PAGE_READWRITE,             /* READ | WRITE */
+-    PAGE_EXECUTE,               /* EXEC */
+-    PAGE_EXECUTE_READ,          /* READ | EXEC */
+-    PAGE_EXECUTE_READWRITE,     /* WRITE | EXEC */
+-    PAGE_EXECUTE_READWRITE,     /* READ | WRITE | EXEC */
+-    PAGE_WRITECOPY,             /* WRITECOPY */
+-    PAGE_WRITECOPY,             /* READ | WRITECOPY */
+-    PAGE_WRITECOPY,             /* WRITE | WRITECOPY */
+-    PAGE_WRITECOPY,             /* READ | WRITE | WRITECOPY */
+-    PAGE_EXECUTE_WRITECOPY,     /* EXEC | WRITECOPY */
+-    PAGE_EXECUTE_WRITECOPY,     /* READ | EXEC | WRITECOPY */
+-    PAGE_EXECUTE_WRITECOPY,     /* WRITE | EXEC | WRITECOPY */
+-    PAGE_EXECUTE_WRITECOPY      /* READ | WRITE | EXEC | WRITECOPY */
+-};
++/* Wine's conversions, unchanged; a header so host tests compile them. */
++#include "wow64_vprot.h"
+ 
+ static struct wine_rb_tree views_tree;
+ static pthread_mutex_t virtual_mutex;
+@@ -8421,27 +8403,6 @@ static const char *get_prot_str( BYTE prot )
+ }
+ 
+ 
+-/***********************************************************************
+- *           get_unix_prot
+- *
+- * Convert page protections to protection for mmap/mprotect.
+- */
+-static int get_unix_prot( BYTE vprot )
+-{
+-    int prot = 0;
+-    if ((vprot & VPROT_COMMITTED) && !(vprot & VPROT_GUARD))
+-    {
+-        if (vprot & VPROT_READ) prot |= PROT_READ;
+-        if (vprot & VPROT_WRITE) prot |= PROT_WRITE | PROT_READ;
+-        if (vprot & VPROT_WRITECOPY) prot |= PROT_WRITE | PROT_READ;
+-        if (vprot & VPROT_EXEC) prot |= PROT_EXEC | PROT_READ;
+-        if (vprot & VPROT_WRITEWATCH) prot &= ~PROT_WRITE;
+-    }
+-    if (!prot) prot = PROT_NONE;
+-    return prot;
+-}
+-
+-
+ /***********************************************************************
+  *           dump_view
+  */
+@@ -9198,67 +9159,6 @@ static NTSTATUS create_view( struct file_view **view_ret, void *base, size_t siz
+ }
+ 
+ 
+-/***********************************************************************
+- *           get_win32_prot
+- *
+- * Convert page protections to Win32 flags.
+- */
+-static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
+-{
+-    DWORD ret = VIRTUAL_Win32Flags[vprot & 0x0f];
+-    if (vprot & VPROT_GUARD) ret |= PAGE_GUARD;
+-    if (map_prot & SEC_NOCACHE) ret |= PAGE_NOCACHE;
+-    return ret;
+-}
+-
+-
+-/***********************************************************************
+- *           get_vprot_flags
+- *
+- * Build page protections from Win32 flags.
+- */
+-static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image )
+-{
+-    switch(protect & 0xff)
+-    {
+-    case PAGE_READONLY:
+-        *vprot = VPROT_READ;
+-        break;
+-    case PAGE_READWRITE:
+-        if (image)
+-            *vprot = VPROT_READ | VPROT_WRITECOPY;
+-        else
+-            *vprot = VPROT_READ | VPROT_WRITE;
+-        break;
+-    case PAGE_WRITECOPY:
+-        *vprot = VPROT_READ | VPROT_WRITECOPY;
+-        break;
+-    case PAGE_EXECUTE:
+-        *vprot = VPROT_EXEC;
+-        break;
+-    case PAGE_EXECUTE_READ:
+-        *vprot = VPROT_EXEC | VPROT_READ;
+-        break;
+-    case PAGE_EXECUTE_READWRITE:
+-        if (image)
+-            *vprot = VPROT_EXEC | VPROT_READ | VPROT_WRITECOPY;
+-        else
+-            *vprot = VPROT_EXEC | VPROT_READ | VPROT_WRITE;
+-        break;
+-    case PAGE_EXECUTE_WRITECOPY:
+-        *vprot = VPROT_EXEC | VPROT_READ | VPROT_WRITECOPY;
+-        break;
+-    case PAGE_NOACCESS:
+-        *vprot = 0;
+-        break;
+-    default:
+-        return STATUS_INVALID_PAGE_PROTECTION;
+-    }
+-    if (protect & PAGE_GUARD) *vprot |= VPROT_GUARD;
+-    return STATUS_SUCCESS;
+-}
+-
+-
+ /* task #34 [jit-name]: read a mapped PE's own name from its export directory
+  * (Name field), so the pool-copy log lines name the DLL instead of a bare
+  * base address — needed to identify which module a pseudo-proc wrongly
+@@ -11483,6 +11383,8 @@ int ios_jit_copy_module_for_child(void *module_addr, void *child_peb)
+  *
+  * Call mprotect on a page range, applying the protections from the per-page byte.
+  */
++#include "wow64_protect.h"
++
+ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ {
+     struct file_view *view = find_view( base, size );
+@@ -11492,27 +11394,22 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+     int prot, next;
+     BYTE vprot;
+ 
+-    /* Logical EXEC belongs to FEX, not ARM64. Never give i386 storage
+-     * native execution permission or consume pool space copying them. */
+-    if (guest_image)
+-    {
+-        if (set & VPROT_EXEC) set |= VPROT_READ;
+-        clear |= VPROT_EXEC;
+-        set &= ~VPROT_EXEC;
+-    }
++    /* Logical EXEC belongs to FEX, not ARM64. Window storage takes the
++     * per-Wine-page native-NX policy of wow64_protect.h and no pool copies. */
+     size = ROUND_SIZE( base, size, host_page_mask );
+ 
+     vprot = get_host_page_vprot( addr );
+-    if (guest_image && (vprot & VPROT_EXEC)) vprot |= VPROT_READ;
+-    prot = get_unix_prot( (vprot & ~clear) | set );
++    prot = guest_image ? ios_wow64_host_prot( (uintptr_t)addr, 0, 0, 0, set, clear, NULL ) :
++                         get_unix_prot( (vprot & ~clear) | set );
+ #ifdef WINE_IOS
+     if (!guest_image && !set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
+ #endif
+     for (count = i = 1; i < size / host_page_size; i++, count++)
+     {
+         vprot = get_host_page_vprot( addr + count * host_page_size );
+-        if (guest_image && (vprot & VPROT_EXEC)) vprot |= VPROT_READ;
+-        next = get_unix_prot( (vprot & ~clear) | set );
++        next = guest_image ? ios_wow64_host_prot( (uintptr_t)(addr + count * host_page_size),
++                                                  0, 0, 0, set, clear, NULL ) :
++                             get_unix_prot( (vprot & ~clear) | set );
+ #ifdef WINE_IOS
+         if (!guest_image && !set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
+             next &= ~PROT_WRITE;
+@@ -11536,6 +11433,16 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+  */
+ static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot )
+ {
++    /* Window storage: one transaction, no write-watch or write-exception bits. */
++    if (view->protect & (VPROT_WOW64_IMAGE | VPROT_WOW64_VM))
++    {
++        NTSTATUS status = ios_wow64_apply_protection( view, base, size, vprot );
++        dprintf( 2, "[wow64-protect] set_vprot host=%p bytes=%#lx logical=%s native=%#x "
++                    "status=%#x native_exec=0\n", base, (unsigned long)size, get_prot_str( vprot ),
++                 ios_wow64_host_prot( (uintptr_t)base & ~(uintptr_t)host_page_mask, 0, 0, 0, 0, 0, NULL ),
++                 (unsigned int)status );
++        return !status;
++    }
+     if (!use_kernel_writewatch && view->protect & VPROT_WRITEWATCH)
+     {
+         /* each page may need different protections depending on write watch flag */
+@@ -13907,7 +13814,12 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+         }
+ 
+         /* set the image protections */
+-        set_vprot( view, ptr, total_size, VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY | VPROT_EXEC );
++        if (!set_vprot( view, ptr, total_size, VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY | VPROT_EXEC ) &&
++            (view->protect & VPROT_WOW64_IMAGE))
++        {
++            status = STATUS_ACCESS_DENIED; /* window storage must match its page bytes */
++            goto done;
++        }
+ 
+         /* no relocations are performed on non page-aligned binaries */
+         status = STATUS_SUCCESS;
+@@ -14132,7 +14044,12 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+ 
+     /* set the image protections */
+ 
+-    set_vprot( view, ptr, ROUND_SIZE( 0, header_size, align_mask ), VPROT_COMMITTED | VPROT_READ );
++    if (!set_vprot( view, ptr, ROUND_SIZE( 0, header_size, align_mask ), VPROT_COMMITTED | VPROT_READ ) &&
++        (view->protect & VPROT_WOW64_IMAGE))
++    {
++        status = STATUS_ACCESS_DENIED;
++        goto done;
++    }
+ 
+     for (i = 0; i < nt->FileHeader.NumberOfSections; i++)
+     {
+@@ -14148,9 +14065,17 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+         if (sec[i].Characteristics & IMAGE_SCN_MEM_WRITE)   vprot |= VPROT_WRITECOPY;
+         if (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) vprot |= VPROT_EXEC;
+ 
+-        if (!set_vprot( view, ptr + sec[i].VirtualAddress, size, vprot ) && (vprot & VPROT_EXEC))
+-            ERR( "failed to set %08x protection on %s section %.8s, noexec filesystem?\n",
+-                 sec[i].Characteristics, debugstr_us(nt_name), sec[i].Name );
++        if (!set_vprot( view, ptr + sec[i].VirtualAddress, size, vprot ))
++        {
++            if (view->protect & VPROT_WOW64_IMAGE)
++            {
++                status = STATUS_ACCESS_DENIED;
++                goto done;
++            }
++            if (vprot & VPROT_EXEC)
++                ERR( "failed to set %08x protection on %s section %.8s, noexec filesystem?\n",
++                     sec[i].Characteristics, debugstr_us(nt_name), sec[i].Name );
++        }
+     }
+ 
+ #ifdef VALGRIND_LOAD_PDB_DEBUGINFO
+@@ -15129,7 +15054,9 @@ static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr
+             }
+             *status = get_mapping_info( mapping, access, &sec_flags, &full_size, &info );
+             if (*status) goto done;
+-            if (!info || sec_flags != (SEC_IMAGE | SEC_FILE))
++            /* Shared writable sections are MAP_SHARED: WRITECOPY there would
++             * write shared backing. Refuse them until that lifecycle exists. */
++            if (!info || info->shared_file || sec_flags != (SEC_IMAGE | SEC_FILE))
+                 *status = STATUS_NOT_SUPPORTED;
+             else
+             {
+@@ -15228,7 +15155,18 @@ static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **a
+                             !!(type & MEM_COMMIT), !value, !!(type & MEM_TOP_DOWN), (unsigned long)zero_bits);
+             }
+             else if (operation == 1) *status = ios_wow64_vm_free( base, addr, size, type );
+-            else if (operation == 2) *status = ios_wow64_vm_protect( base, addr, size, protect, old_protect );
++            else if (operation == 2)
++            {
++                static unsigned int protect_logs;
++                *status = ios_wow64_vm_protect( base, addr, size, protect, old_protect );
++                if (!*status && protect_logs < 64)
++                {
++                    protect_logs++;
++                    dprintf(2, "[wow64-protect] owner=%p host=%p guest=%#lx bytes=%#lx new=%#x old=%#x "
++                               "native_exec=0\n", owner, *addr, (unsigned long)((uintptr_t)*addr - base),
++                            (unsigned long)*size, (unsigned int)protect, (unsigned int)*old_protect);
++                }
++            }
+             else *status = STATUS_NOT_SUPPORTED; /* Ex attributes not wired */
+             server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+         }
+diff --git a/build/ntdll-unix/wow64_image_mapper.h b/build/ntdll-unix/wow64_image_mapper.h
+index e0c7db5..d310380 100644
+--- a/build/ntdll-unix/wow64_image_mapper.h
++++ b/build/ntdll-unix/wow64_image_mapper.h
+@@ -20,7 +20,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+ 
+     if (offset < 0 || (uint64_t)offset >= size)
+         return STATUS_INVALID_PARAMETER;
+-    if (wow64_window && offset) return STATUS_NOT_SUPPORTED;
++    if (wow64_window && (offset || pe_mapping->shared_file)) return STATUS_NOT_SUPPORTED;
+ 
+     if ((status = server_get_unix_fd( mapping, 0, &unix_fd, &needs_close, NULL, NULL )))
+         return status;
+diff --git a/build/ntdll-unix/wow64_protect.h b/build/ntdll-unix/wow64_protect.h
+new file mode 100644
+index 0000000..5086788
+--- /dev/null
++++ b/build/ntdll-unix/wow64_protect.h
+@@ -0,0 +1,96 @@
++/* Logical 4 KiB Wine page protections over native-NX 16 KiB host pages.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included after Wine's view/page/protection helpers, before mprotect_range.
++ * virtual_mutex must be held by every caller.
++ */
++#ifndef IOS_WOW64_PROTECT_H
++#define IOS_WOW64_PROTECT_H
++
++/* x86 execute-only pages must remain readable by the decoder, not executable
++ * by ARM64. Keep Wine's logical byte unchanged. */
++static unsigned int ios_wow64_vm_native_vprot( unsigned int vprot )
++{
++    return (vprot & ~VPROT_EXEC) | ((vprot & VPROT_EXEC) ? VPROT_READ : 0);
++}
++
++/* Native protection of the host page at `host`: the union of its Wine pages'
++ * native permissions, Wine's own policy for 16 KiB hosts. Uncommitted and
++ * guard pages grant nothing; nothing grants native EXEC. A Wine page stricter
++ * than a neighbour in the same host page is enforced only logically (there is
++ * no window fault service yet). A guard page is never left unenforced: a host
++ * page holding a committed guard page is PROT_NONE, and *mixed_guard tells
++ * the caller when that would also revoke an accessible neighbour.
++ * Pages in [start, start + length) read as `replacement`, a pending change.
++ */
++static int ios_wow64_host_prot( uintptr_t host, uintptr_t start, size_t length,
++                                unsigned int replacement, BYTE set, BYTE clear,
++                                BOOL *mixed_guard )
++{
++    uintptr_t page;
++    unsigned int vprot;
++    BOOL guard = FALSE;
++    int prot = PROT_NONE;
++
++    for (page = host; page - host < host_page_size; page += page_size)
++    {
++        vprot = page - start < length ? replacement : get_page_vprot( (void *)page );
++        vprot = (vprot & ~clear) | set;
++        if ((vprot & (VPROT_COMMITTED | VPROT_GUARD)) == (VPROT_COMMITTED | VPROT_GUARD))
++            guard = TRUE;
++        prot |= get_unix_prot( ios_wow64_vm_native_vprot( vprot ) );
++    }
++    if (mixed_guard) *mixed_guard = guard && prot != PROT_NONE;
++    return guard ? PROT_NONE : prot;
++}
++
++/* Give whole Wine pages [base, base + length) of a window image or anonymous
++ * VM view the logical protection `vprot`. Nothing changes on refusal: every
++ * host page is checked first. Each host page then changes with its own
++ * mprotect, which cannot apply partially. If one fails, the pages already
++ * changed get back the protection of the unchanged page bytes (outside image
++ * setup, the protection they had), and the bytes are published only after
++ * every page succeeded. Restoring a protection that this mapping already had
++ * cannot fail short of a kernel fault; if it does, stop rather than run on
++ * with a protection that no page byte describes.
++ * Backing is never replaced. A private image page with WRITECOPY becomes
++ * writable MAP_PRIVATE file or anonymous memory: a write makes a private copy
++ * and never reaches the file. Shared image sections are refused at map time.
++ */
++static NTSTATUS ios_wow64_apply_protection( struct file_view *view, void *base,
++                                           size_t length, unsigned int vprot )
++{
++    uintptr_t start = (uintptr_t)base, first, end, host;
++    BOOL mixed;
++
++    if (!view || !(view->protect & (VPROT_WOW64_IMAGE | VPROT_WOW64_VM)) ||
++        !length || (start & page_mask) || (length & page_mask) ||
++        ((uintptr_t)view->base & host_page_mask) || (view->size & host_page_mask) ||
++        start < (uintptr_t)view->base || start - (uintptr_t)view->base >= view->size ||
++        length > view->size - (start - (uintptr_t)view->base)) return STATUS_INVALID_PARAMETER;
++    /* Image pages are private copy-on-write; anonymous VM has no file. */
++    if ((view->protect & VPROT_WOW64_IMAGE) ? (vprot & VPROT_WRITE) : (vprot & VPROT_WRITECOPY))
++        return STATUS_INVALID_PAGE_PROTECTION;
++    first = start & ~(uintptr_t)host_page_mask;
++    end = (start + length + host_page_mask) & ~(uintptr_t)host_page_mask;
++    for (host = first; host < end; host += host_page_size)
++    {
++        ios_wow64_host_prot( host, start, length, vprot, 0, 0, &mixed );
++        if (mixed) return STATUS_NOT_SUPPORTED;
++    }
++    for (host = first; host < end; host += host_page_size)
++    {
++        if (!mprotect( (void *)host, host_page_size,
++                       ios_wow64_host_prot( host, start, length, vprot, 0, 0, NULL ) )) continue;
++        while (host > first)
++        {
++            host -= host_page_size;
++            if (mprotect( (void *)host, host_page_size,
++                          ios_wow64_host_prot( host, 0, 0, 0, 0, 0, NULL ) )) abort();
++        }
++        return STATUS_ACCESS_DENIED;
++    }
++    set_page_vprot( base, length, vprot );
++    return STATUS_SUCCESS;
++}
++
++#endif
+diff --git a/build/ntdll-unix/wow64_vm.h b/build/ntdll-unix/wow64_vm.h
+index 9fe0573..1a45b45 100644
+--- a/build/ntdll-unix/wow64_vm.h
++++ b/build/ntdll-unix/wow64_vm.h
+@@ -6,13 +6,7 @@
+ #ifndef IOS_WOW64_VM_H
+ #define IOS_WOW64_VM_H
+ #include "wow64_gap.h"
+-
+-/* x86 execute-only pages must remain readable by the decoder, not executable
+- * by ARM64. Keep Wine's logical byte unchanged. */
+-static unsigned int ios_wow64_vm_native_vprot( unsigned int vprot )
+-{
+-    return (vprot & ~VPROT_EXEC) | ((vprot & VPROT_EXEC) ? VPROT_READ : 0);
+-}
++#include "wow64_protect.h"
+ 
+ static BOOL ios_wow64_vm_range( uintptr_t window, const void *addr, size_t size,
+                                 void **base, size_t *rounded )
+@@ -92,10 +86,8 @@ static NTSTATUS ios_wow64_vm_allocate( uintptr_t window, void **addr, size_t *si
+     {
+         view = find_view( base, length );
+         if (!view || !(view->protect & VPROT_WOW64_VM)) return STATUS_CONFLICTING_ADDRESSES;
+-        vprot |= VPROT_COMMITTED;
+-        if (mprotect( base, length, get_unix_prot( ios_wow64_vm_native_vprot( vprot ) ) ))
+-            return STATUS_ACCESS_DENIED;
+-        set_page_vprot( base, length, vprot );
++        status = ios_wow64_apply_protection( view, base, length, vprot | VPROT_COMMITTED );
++        if (status) return status;
+     }
+     *addr = base;
+     *size = length;
+@@ -162,30 +154,54 @@ static NTSTATUS ios_wow64_vm_allocate_limited( uintptr_t window, void **addr, si
+     return status;
+ }
+ 
++/* Native NtProtectVirtualMemory on whole Wine (4 KiB) pages of one window
++ * image or anonymous VM allocation, as Wine does it: every page committed,
++ * the old protection is the first page's. Images keep copy-on-write
++ * (READWRITE becomes WRITECOPY, as for Wine images); anonymous VM refuses
++ * WRITECOPY. Modifiers that page bytes cannot hold (cache, CFG) are refused,
++ * not dropped. Bootstrap TEB/PEB views, quarantined images and host-page
++ * padding past the server's image extent are not supported. Free space, the
++ * low guard and ranges leaving the allocation are invalid. Outputs change
++ * only on success; failure leaves every page byte and protection unchanged.
++ */
+ static NTSTATUS ios_wow64_vm_protect( uintptr_t window, void **addr, size_t *size,
+                                      ULONG protect, ULONG *old_protect )
+ {
+     struct file_view *view;
+-    void *base;
+-    char *p;
++    uintptr_t value, start, offset;
+     size_t length;
+     unsigned int vprot;
+     ULONG old;
++    BOOL image;
++    char *p;
+     NTSTATUS status;
+-    if (!addr || !size || !old_protect ||
+-        !ios_wow64_vm_range( window, *addr, *size, &base, &length )) return STATUS_INVALID_PARAMETER;
+-    view = find_view( base, length );
+-    if (!view || !(view->protect & VPROT_WOW64_VM)) return STATUS_NOT_SUPPORTED;
+-    if ((status = get_vprot_flags( protect, &vprot, FALSE ))) return status;
+-    if (vprot & ~(VPROT_READ | VPROT_WRITE | VPROT_EXEC)) return STATUS_NOT_SUPPORTED;
+-    for (p = base; p < (char *)base + length; p += page_size)
++    if (!addr || !size) return STATUS_INVALID_PARAMETER;
++    if (!old_protect) return STATUS_ACCESS_VIOLATION;
++    value = (uintptr_t)*addr;
++    if (!ios_wow64_valid_base( window ) || value < window + IOS_WOW64_NULL_GUARD ||
++        value - window >= IOS_WOW64_WINDOW_SIZE || !*size ||
++        *size > window + IOS_WOW64_WINDOW_SIZE - value) return STATUS_INVALID_PARAMETER;
++    start = value & ~(uintptr_t)page_mask;
++    length = (*size + (value - start) + page_mask) & ~page_mask;
++    view = find_view( (void *)start, 1 );
++    if (!view || view->protect == VPROT_WOW64_HOLE) return STATUS_INVALID_PARAMETER;
++    offset = start - (uintptr_t)view->base;
++    if (length > view->size - offset) return STATUS_INVALID_PARAMETER;
++    if (!(view->protect & (VPROT_WOW64_VM | VPROT_WOW64_IMAGE))) return STATUS_NOT_SUPPORTED;
++    image = !!(view->protect & VPROT_WOW64_IMAGE);
++    if (image && (!view->wow64_registered || !view->wow64_mapping || !view->wow64_size ||
++                  view->wow64_size > view->size || offset >= view->wow64_size ||
++                  length > view->wow64_size - offset)) return STATUS_NOT_SUPPORTED;
++    for (p = (char *)start; p < (char *)start + length; p += page_size)
+         if (!(get_page_vprot( p ) & VPROT_COMMITTED)) return STATUS_NOT_COMMITTED;
+-    old = get_win32_prot( get_page_vprot( base ), view->protect );
+-    vprot |= VPROT_COMMITTED;
+-    if (mprotect( base, length, get_unix_prot( ios_wow64_vm_native_vprot( vprot ) ) )) return STATUS_ACCESS_DENIED;
+-    set_page_vprot( base, length, vprot );
++    if (protect & ~(0xffu | PAGE_GUARD)) return STATUS_NOT_SUPPORTED;
++    if ((status = get_vprot_flags( protect, &vprot, image ))) return status;
++    if (!image && (vprot & VPROT_WRITECOPY)) return STATUS_INVALID_PAGE_PROTECTION;
++    old = get_win32_prot( get_page_vprot( (void *)start ), view->protect );
++    status = ios_wow64_apply_protection( view, (void *)start, length, vprot | VPROT_COMMITTED );
++    if (status) return status;
+     *old_protect = old;
+-    *addr = base;
++    *addr = (void *)start;
+     *size = length;
+     return STATUS_SUCCESS;
+ }
+diff --git a/build/ntdll-unix/wow64_vprot.h b/build/ntdll-unix/wow64_vprot.h
+new file mode 100644
+index 0000000..426b537
+--- /dev/null
++++ b/build/ntdll-unix/wow64_vprot.h
+@@ -0,0 +1,111 @@
++/* Wine's page-protection conversions, moved unchanged out of virtual_ios.c
++ * so that Playport's host tests compile the production functions.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included after the VPROT_* definitions.
++ */
++#ifndef IOS_WOW64_VPROT_H
++#define IOS_WOW64_VPROT_H
++
++/* Conversion from VPROT_* to Win32 flags */
++static const BYTE VIRTUAL_Win32Flags[16] =
++{
++    PAGE_NOACCESS,              /* 0 */
++    PAGE_READONLY,              /* READ */
++    PAGE_READWRITE,             /* WRITE */
++    PAGE_READWRITE,             /* READ | WRITE */
++    PAGE_EXECUTE,               /* EXEC */
++    PAGE_EXECUTE_READ,          /* READ | EXEC */
++    PAGE_EXECUTE_READWRITE,     /* WRITE | EXEC */
++    PAGE_EXECUTE_READWRITE,     /* READ | WRITE | EXEC */
++    PAGE_WRITECOPY,             /* WRITECOPY */
++    PAGE_WRITECOPY,             /* READ | WRITECOPY */
++    PAGE_WRITECOPY,             /* WRITE | WRITECOPY */
++    PAGE_WRITECOPY,             /* READ | WRITE | WRITECOPY */
++    PAGE_EXECUTE_WRITECOPY,     /* EXEC | WRITECOPY */
++    PAGE_EXECUTE_WRITECOPY,     /* READ | EXEC | WRITECOPY */
++    PAGE_EXECUTE_WRITECOPY,     /* WRITE | EXEC | WRITECOPY */
++    PAGE_EXECUTE_WRITECOPY      /* READ | WRITE | EXEC | WRITECOPY */
++};
++
++/***********************************************************************
++ *           get_unix_prot
++ *
++ * Convert page protections to protection for mmap/mprotect.
++ */
++static int get_unix_prot( BYTE vprot )
++{
++    int prot = 0;
++    if ((vprot & VPROT_COMMITTED) && !(vprot & VPROT_GUARD))
++    {
++        if (vprot & VPROT_READ) prot |= PROT_READ;
++        if (vprot & VPROT_WRITE) prot |= PROT_WRITE | PROT_READ;
++        if (vprot & VPROT_WRITECOPY) prot |= PROT_WRITE | PROT_READ;
++        if (vprot & VPROT_EXEC) prot |= PROT_EXEC | PROT_READ;
++        if (vprot & VPROT_WRITEWATCH) prot &= ~PROT_WRITE;
++    }
++    if (!prot) prot = PROT_NONE;
++    return prot;
++}
++
++
++/***********************************************************************
++ *           get_win32_prot
++ *
++ * Convert page protections to Win32 flags.
++ */
++static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
++{
++    DWORD ret = VIRTUAL_Win32Flags[vprot & 0x0f];
++    if (vprot & VPROT_GUARD) ret |= PAGE_GUARD;
++    if (map_prot & SEC_NOCACHE) ret |= PAGE_NOCACHE;
++    return ret;
++}
++
++
++/***********************************************************************
++ *           get_vprot_flags
++ *
++ * Build page protections from Win32 flags.
++ */
++static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image )
++{
++    switch(protect & 0xff)
++    {
++    case PAGE_READONLY:
++        *vprot = VPROT_READ;
++        break;
++    case PAGE_READWRITE:
++        if (image)
++            *vprot = VPROT_READ | VPROT_WRITECOPY;
++        else
++            *vprot = VPROT_READ | VPROT_WRITE;
++        break;
++    case PAGE_WRITECOPY:
++        *vprot = VPROT_READ | VPROT_WRITECOPY;
++        break;
++    case PAGE_EXECUTE:
++        *vprot = VPROT_EXEC;
++        break;
++    case PAGE_EXECUTE_READ:
++        *vprot = VPROT_EXEC | VPROT_READ;
++        break;
++    case PAGE_EXECUTE_READWRITE:
++        if (image)
++            *vprot = VPROT_EXEC | VPROT_READ | VPROT_WRITECOPY;
++        else
++            *vprot = VPROT_EXEC | VPROT_READ | VPROT_WRITE;
++        break;
++    case PAGE_EXECUTE_WRITECOPY:
++        *vprot = VPROT_EXEC | VPROT_READ | VPROT_WRITECOPY;
++        break;
++    case PAGE_NOACCESS:
++        *vprot = 0;
++        break;
++    default:
++        return STATUS_INVALID_PAGE_PROTECTION;
++    }
++    if (protect & PAGE_GUARD) *vprot |= VPROT_GUARD;
++    return STATUS_SUCCESS;
++}
++
++#endif

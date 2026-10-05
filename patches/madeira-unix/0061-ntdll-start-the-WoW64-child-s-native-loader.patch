@@ -1,0 +1,457 @@
+From 5a16a4d757eeae002acce2b12aa05157b7902eb5 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 19:00:40 +0200
+Subject: [PATCH] ntdll: start the WoW64 child's native loader
+
+Startup stopped an i386 child after mapping its image and parameters,
+because nothing could run the native WoW64 loader: the session's
+ARM64EC ntdll is not a WoW64 host, and the child had no i386 ntdll,
+32-bit stack or initial i386 context. Wire those and remove the stop:
+
+- An i386 child loads its own native aarch64 ntdll, as X3c loads the
+  ARM64EC build for an AMD64 child of an aarch64 session, and maps the
+  i386 ntdll in its window through the native section route with a
+  guest constraint. The child's own SYSTEM_DLL_INIT_BLOCK gets the
+  i386 entry points as guest addresses and a host ntdll_handle, which
+  wow64.dll dereferences; the i386 copy is all guest. The session's
+  pLdrSystemDllInitBlock and __wine_ctrl_routine are not touched.
+- The 32-bit stack is allocated in the owner's window with
+  virtual_alloc_thread_stack's sizes and layout (no-access host page,
+  guard host page, committed RW), and the TEB32 holds guest values.
+- The initial i386 context takes the owner's PEB32 and its own init
+  block, not the session's wow_peb and block.
+- ProcessWow64Information returns the owner's PEB32 to native callers.
+
+The child then runs the native loader into wow64.dll's process init,
+which stops before loading the CPU module (wine-pe), not yet ported.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no
+---
+ build/ntdll-unix/env_ios.c          |  16 ----
+ build/ntdll-unix/ios_mixed.h        |   3 +
+ build/ntdll-unix/loader_ios.c       | 128 ++++++++++++++++++++++++++--
+ build/ntdll-unix/process_ios.c      |  13 +++
+ build/ntdll-unix/signal_arm64_ios.c |  14 ++-
+ build/ntdll-unix/thread_ios.c       |  12 +++
+ build/ntdll-unix/virtual_ios.c      |  89 ++++++++++++++++++-
+ 7 files changed, 249 insertions(+), 26 deletions(-)
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 33037df..2f56a1e 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -2450,22 +2450,6 @@ void unix_init_startup_info(void)
+     free( env );
+     free( info );
+ 
+-#ifdef WINE_IOS
+-    if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386)
+-    {
+-        init_peb( params, debugged, module );
+-        /* Parameters are now window-backed, but the session ARM64EC PE
+-         * loader cannot initialize the native WoW64 loader/heap/stack yet.
+-         * Keep this temporary boundary until those paths are wired. */
+-        dprintf(2, "[wow64-startup] image and parameters mapped; native WoW64 loader "
+-                   "not implemented -> STATUS_NOT_SUPPORTED (no i386 execution)\n");
+-        NtCurrentTeb()->Peb->ProcessParameters = NULL;
+-        size = 0;
+-        NtFreeVirtualMemory( NtCurrentProcess(), (void **)&params, &size, MEM_RELEASE );
+-        NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
+-        return;
+-    }
+-#endif
+     rebuild_argv();
+     main_wargv = build_wargv( params->ImagePathName.Buffer );
+     init_peb( params, debugged, module );
+diff --git a/build/ntdll-unix/ios_mixed.h b/build/ntdll-unix/ios_mixed.h
+index c91041a..af0eb9f 100644
+--- a/build/ntdll-unix/ios_mixed.h
++++ b/build/ntdll-unix/ios_mixed.h
+@@ -21,6 +21,9 @@ struct ios_ntdll_funcs
+     void *KiUserEmulationDispatcher;
+     void *KiRaiseUserExceptionDispatcher;
+     void *DbgUiRemoteBreakin;
++    /* WoW64 child: this native ntdll's SYSTEM_DLL_INIT_BLOCK, whose entry
++     * points are i386 guest addresses (init_syscall_frame's Eip). */
++    void *LdrSystemDllInitBlock;
+ };
+ 
+ /* Current thread's pseudo-process ntdll funcs; NULL = session ntdll. */
+diff --git a/build/ntdll-unix/loader_ios.c b/build/ntdll-unix/loader_ios.c
+index 6da2da5..0ef8e57 100644
+--- a/build/ntdll-unix/loader_ios.c
++++ b/build/ntdll-unix/loader_ios.c
+@@ -2341,14 +2341,21 @@ static void redirect_ntdll_functions( HMODULE module )
+  * session image (including the Round-7 EC unix-call swap), with every
+  * PE-.data write synced into the pool copy.
+  */
+-static int ios_load_child_ec_ntdll( PEB *child_peb )
++static int ios_load_child_i386_ntdll( SYSTEM_DLL_INIT_BLOCK *block );
++
++/* X3c: an AMD64 child of an aarch64 session runs the ARM64EC ntdll build.
++ * Playport: a WoW64 (i386) child runs the native aarch64 build, whatever the
++ * session is, with the i386 ntdll mapped in its own window. */
++static int ios_load_child_ec_ntdll( PEB *child_peb, BOOL wow64 )
+ {
+     static WCHAR path[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\',
+                            's','y','s','t','e','m','3','2','\\','n','t','d','l','l','.','d','l','l',0};
+     extern void ios_jit_sync_write(void *addr, size_t size);
+     extern void *ios_jit_translate_addr(void *addr);
+     extern void *ios_arm64ec_bitmap_base(void);
+-    const char *pe_dir = get_pe_dir( IMAGE_FILE_MACHINE_AMD64 );  /* owner-aware → /arm64ec-windows */
++    /* owner-aware: /arm64ec-windows for an AMD64 child, /aarch64-windows for i386 */
++    const WORD machine = wow64 ? IMAGE_FILE_MACHINE_ARM64 : IMAGE_FILE_MACHINE_AMD64;
++    const char *pe_dir = get_pe_dir( machine );
+     unsigned int status;
+     SECTION_IMAGE_INFORMATION info;
+     OBJECT_ATTRIBUTES attr;
+@@ -2367,7 +2374,7 @@ static int ios_load_child_ec_ntdll( PEB *child_peb )
+ 
+     dprintf(2, "[ec-child-ntdll] loading %s for peb=%p\n", name, (void *)child_peb);
+     status = open_builtin_pe_file( name, &attr, &module, &size, &info, 0, 0,
+-                                   IMAGE_FILE_MACHINE_AMD64, FALSE, 0 );
++                                   machine, FALSE, 0 );
+     if (status == STATUS_IMAGE_NOT_AT_BASE) status = virtual_relocate_module( module );
+     if (status)
+     {
+@@ -2409,9 +2416,12 @@ static int ios_load_child_ec_ntdll( PEB *child_peb )
+         EC_GET( p__wine_unix_call_dispatcher,          "__wine_unix_call_dispatcher" );
+         EC_GET( p__wine_unix_call_dispatcher_arm64ec,  "__wine_unix_call_dispatcher_arm64ec" );
+         EC_GET( p__wine_unixlib_handle,                "__wine_unixlib_handle" );
++        if (wow64) EC_GET( funcs.LdrSystemDllInitBlock, "LdrSystemDllInitBlock" );
+ #undef EC_GET
+         if (!funcs.LdrInitializeThunk || !p__wine_syscall_dispatcher || !p__wine_unixlib_handle)
+             return -1;
++        if (wow64 && (!funcs.LdrSystemDllInitBlock || ios_load_child_i386_ntdll( funcs.LdrSystemDllInitBlock )))
++            return -1;
+ 
+         /* Same slot recipe as load_ntdll_functions for the session image. */
+         *p__wine_syscall_dispatcher = __wine_syscall_dispatcher;
+@@ -2523,7 +2533,7 @@ static int ios_load_child_ec_ntdll( PEB *child_peb )
+     /* The EC code bitmap is lazily created by the first hybrid AMD64 map;
+      * only the creating PEB gets EcCodeBitMap set. Every EC child needs it
+      * (arm64x_check_call reads TEB->Peb->EcCodeBitMap). */
+-    if (!child_peb->EcCodeBitMap) child_peb->EcCodeBitMap = ios_arm64ec_bitmap_base();
++    if (!wow64 && !child_peb->EcCodeBitMap) child_peb->EcCodeBitMap = ios_arm64ec_bitmap_base();
+     dprintf(2, "[ec-child-ntdll] EcCodeBitMap=%p LdrInitializeThunk=%p (pool %p)\n",
+             child_peb->EcCodeBitMap, funcs.LdrInitializeThunk,
+             ios_jit_translate_addr( funcs.LdrInitializeThunk ));
+@@ -2531,6 +2541,98 @@ static int ios_load_child_ec_ntdll( PEB *child_peb )
+     ios_set_proc_ntdll( child_peb, module, &funcs );
+     return 0;
+ }
++
++#include "wow64_window.h"
++
++/* Playport: the WoW64 child's equivalent of load_wow64_ntdll and
++ * load_ntdll_wow64_functions. The i386 ntdll maps through the owner's
++ * window (native NtMapViewOfSection with a guest constraint), never into
++ * the session globals (pLdrSystemDllInitBlock, p__wine_ctrl_routine).
++ * The native block keeps a host ntdll_handle, which wow64.dll dereferences;
++ * its entry points, and the whole i386 copy, are guest addresses. */
++static int ios_load_child_i386_ntdll( SYSTEM_DLL_INIT_BLOCK *block )
++{
++    static WCHAR path[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\',
++                           's','y','s','w','o','w','6','4','\\','n','t','d','l','l','.','d','l','l',0};
++    extern void ios_jit_sync_write(void *addr, size_t size);
++    uintptr_t window = ios_wow64_current_base();
++    const IMAGE_EXPORT_DIRECTORY *exports;
++    SYSTEM_DLL_INIT_BLOCK *block32;
++    unixlib_handle_t *unixlib;
++    OBJECT_ATTRIBUTES attr;
++    UNICODE_STRING str;
++    HANDLE mapping;
++    void *module = NULL;
++    SIZE_T size = 0;
++    uint32_t guest = 0, block32_guest = 0;
++    char *name = NULL;
++    NTSTATUS status;
++
++    if (!window) return -1;
++    init_unicode_string( &str, path );
++    InitializeObjectAttributes( &attr, &str, 0, 0, NULL );
++    if (asprintf( &name, "%s%s/ntdll.dll", dll_dir, get_pe_dir( IMAGE_FILE_MACHINE_I386 ) ) < 0)
++        return -1;
++    status = open_dll_file( name, &attr, &mapping );
++    if (!status)
++    {
++        status = NtMapViewOfSection( mapping, NtCurrentProcess(), &module, UINT32_MAX, 0, NULL,
++                                     &size, ViewUnmap, 0, PAGE_READONLY );
++        NtClose( mapping );
++    }
++    if (!NT_SUCCESS(status) || !ios_wow64_guest_addr( window, (uintptr_t)module, &guest ))
++    {
++        dprintf( 2, "[wow64-loader] i386 ntdll %s: map FAILED status=%x host=%p\n",
++                 name, (unsigned int)status, module );
++        free( name );
++        return -1;
++    }
++    free( name );
++    if (!(exports = get_module_data_dir( module, IMAGE_DIRECTORY_ENTRY_EXPORT, NULL ))) return -1;
++
++#define GUEST_EXPORT(field, sym) do { \
++        uint32_t g_ = 0; \
++        ULONG_PTR h_ = find_named_export( module, exports, sym ); \
++        if (!h_ || !ios_wow64_guest_addr( window, h_, &g_ )) \
++        { \
++            dprintf( 2, "[wow64-loader] i386 ntdll export %s NOT FOUND\n", sym ); \
++            return -1; \
++        } \
++        block->field = g_; \
++    } while (0)
++    block->ntdll_handle = (ULONG_PTR)module;
++    GUEST_EXPORT( pKiUserApcDispatcher, "KiUserApcDispatcher" );
++    GUEST_EXPORT( pKiUserCallbackDispatcher, "KiUserCallbackDispatcher" );
++    GUEST_EXPORT( pKiUserExceptionDispatcher, "KiUserExceptionDispatcher" );
++    GUEST_EXPORT( pLdrInitializeThunk, "LdrInitializeThunk" );
++    GUEST_EXPORT( pLdrSystemDllInitBlock, "LdrSystemDllInitBlock" );
++    GUEST_EXPORT( pRtlUserThreadStart, "RtlUserThreadStart" );
++#undef GUEST_EXPORT
++    /* Optional in Wine too: zero when absent. */
++    {
++        ULONG_PTR h;
++        uint32_t g = 0;
++        h = find_named_export( module, exports, "RtlpFreezeTimeBias" );
++        block->pRtlpFreezeTimeBias = h && ios_wow64_guest_addr( window, h, &g ) ? g : 0;
++        g = 0;
++        h = find_named_export( module, exports, "RtlpQueryProcessDebugInformationRemote" );
++        block->pRtlpQueryProcessDebugInformationRemote = h && ios_wow64_guest_addr( window, h, &g ) ? g : 0;
++    }
++    if ((unixlib = (unixlib_handle_t *)find_named_export( module, exports, "__wine_unixlib_handle" )))
++        *unixlib = (UINT_PTR)unix_call_wow64_funcs;
++
++    block32_guest = block->pLdrSystemDllInitBlock;
++    block32 = (SYSTEM_DLL_INIT_BLOCK *)ios_wow64_host_addr( window, block32_guest );
++    memcpy( block32, block, sizeof(*block) );
++    block32->ntdll_handle = guest;
++    /* The native ntdll's PE code reads its block from the pool copy. */
++    ios_jit_sync_write( block, sizeof(*block) );
++    dprintf( 2, "[wow64-loader] i386 ntdll host=%p guest=%#x size=%#lx LdrInitializeThunk=%#x "
++             "RtlUserThreadStart=%#x block32=%#x unixlib=%d native_block=%p\n",
++             module, guest, (unsigned long)size, (unsigned int)block->pLdrInitializeThunk,
++             (unsigned int)block->pRtlUserThreadStart, block32_guest, !!unixlib, (void *)block );
++    return 0;
++}
+ #endif
+ 
+ 
+@@ -3266,8 +3368,22 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+         set_load_order_app_name( main_wargv[0] );
+ 
+         /* Set up thread stack */
+-        init_thread_stack( teb, 0, 0, 0 );
++        status = init_thread_stack( teb, 0, 0, 0 );
+ 
++        /* Playport: a WoW64 child needs a native, non-EC ntdll whose loader
++         * runs wow64.dll; the session's ARM64EC copy cannot be that. Its
++         * 32-bit stack is in the owner's window (init_thread_stack). */
++        if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386)
++        {
++            if (status || ios_load_child_ec_ntdll( child_peb, TRUE ) != 0)
++            {
++                dprintf(STDERR_FILENO, "[wow64-loader] native ntdll, i386 ntdll or stack FAILED "
++                        "(stack status %x) -- the WoW64 child cannot start\n", (unsigned int)status);
++                NtTerminateProcess( GetCurrentProcess(), status ? status : STATUS_DLL_INIT_FAILED );
++                return;
++            }
++        }
++        else
+         /* X3c: a cross-arch child (AMD64 exe, non-EC session) cannot run on
+          * the session's aarch64 ntdll at all — load the ARM64EC build as a
+          * private second image instead of copying the session image. The
+@@ -3275,7 +3391,7 @@ DECLSPEC_EXPORT void wine_ios_child_main( int argc, char *argv[], int child_fd_s
+          * the standard map pipeline gave it pool/EC/x18 treatment. */
+         if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_AMD64 && !is_arm64ec())
+         {
+-            if (ios_load_child_ec_ntdll( child_peb ) != 0)
++            if (ios_load_child_ec_ntdll( child_peb, FALSE ) != 0)
+             {
+                 dprintf(STDERR_FILENO, "[Wine child] EC ntdll load FAILED — cross-arch child cannot start\n");
+                 return;
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index 0ae9c2b..888862f 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -2701,7 +2701,20 @@ NTSTATUS WINAPI NtQueryInformationProcess( HANDLE handle, PROCESSINFOCLASS class
+         len = sizeof(ULONG_PTR);
+         if (size != len) return STATUS_INFO_LENGTH_MISMATCH;
+         if (handle == GetCurrentProcess())
++        {
++#ifdef WINE_IOS
++            /* Playport: a windowed WoW64 owner's PEB32 (host pointer, for
++             * native callers); the session's global wow_peb is not its. */
++            extern void *ios_wow64_peb32_for_peb( void *owner );
++            void *peb32 = ios_wow64_peb32_for_peb( NtCurrentTeb()->Peb );
++            if (peb32)
++            {
++                *(ULONG_PTR *)info = (ULONG_PTR)peb32;
++                break;
++            }
++#endif
+             *(ULONG_PTR *)info = is_old_wow64() ? (ULONG_PTR)peb : (ULONG_PTR)wow_peb;
++        }
+         else
+         {
+             ULONG_PTR val = 0;
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index e6d325d..4077d24 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -13110,9 +13110,21 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+         XMM_SAVE_AREA32 *fpu = (XMM_SAVE_AREA32 *)i386_context->ExtendedRegisters;
+         i386_context->ContextFlags = CONTEXT_I386_ALL;
+         i386_context->Eax = (ULONG_PTR)entry;
++#ifdef WINE_IOS
++        /* Playport: the owner's PEB32 and its own ntdll's init block (guest
++         * addresses), not the session's wow_peb and pLdrSystemDllInitBlock. */
++        {
++            const struct ios_ntdll_funcs *funcs = ios_cur_ntdll_funcs();
++            const SYSTEM_DLL_INIT_BLOCK *block = funcs && funcs->LdrSystemDllInitBlock ?
++                                                 funcs->LdrSystemDllInitBlock : pLdrSystemDllInitBlock;
++            i386_context->Ebx = (arg == teb->Peb ? get_wow_teb( teb )->Peb : (ULONG_PTR)arg);
++            i386_context->Eip = block->pRtlUserThreadStart;
++        }
++#else
+         i386_context->Ebx = (arg == peb ? (ULONG_PTR)wow_peb : (ULONG_PTR)arg);
+-        i386_context->Esp = get_wow_teb( teb )->Tib.StackBase - 16;
+         i386_context->Eip = pLdrSystemDllInitBlock->pRtlUserThreadStart;
++#endif
++        i386_context->Esp = get_wow_teb( teb )->Tib.StackBase - 16;
+         i386_context->SegCs = 0x23;
+         i386_context->SegDs = 0x2b;
+         i386_context->SegEs = 0x2b;
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 2e5073c..393f350 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -1346,6 +1346,18 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
+         teb->DeallocationStack = stack.DeallocationStack;
+ 
+         /* 32-bit stack */
++#ifdef WINE_IOS
++        /* Playport: a windowed WoW64 owner's 32-bit stack is in its window,
++         * and the TEB32 holds guest addresses, never truncated host ones. */
++        {
++            extern NTSTATUS ios_wow64_alloc_stack32( void *owner, SIZE_T reserve_size, SIZE_T commit_size,
++                                                    ULONG *base, ULONG *limit, ULONG *dealloc );
++            extern uintptr_t ios_wow64_base_for_peb( void *owner );
++            if (ios_wow64_base_for_peb( teb->Peb ))
++                return ios_wow64_alloc_stack32( teb->Peb, reserve_size, commit_size, &wow_teb->Tib.StackBase,
++                                                &wow_teb->Tib.StackLimit, &wow_teb->DeallocationStack );
++        }
++#endif
+         if (!limit || limit > user_space_wow_limit) limit = user_space_wow_limit;
+         if ((status = virtual_alloc_thread_stack( &stack, 0, limit, reserve_size, commit_size, TRUE )))
+             return status;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 698a135..b1bbc8a 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -14973,6 +14973,90 @@ NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
+     return status;
+ }
+ 
++/* Native callers of ProcessWow64Information: the owner's PEB32 (host). */
++void *ios_wow64_peb32_for_peb( void *owner )
++{
++    void *peb32 = NULL;
++    unsigned int i;
++    if (!owner) return NULL;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (ios_wow64_windows[i].owner == owner)
++        {
++            peb32 = ios_wow64_windows[i].peb32;
++            break;
++        }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return peb32;
++}
++
++/* A windowed owner's 32-bit thread stack, with virtual_alloc_thread_stack's
++ * sizes and layout (no-access host page, guard host page, committed RW) and
++ * guest results. The owner's own thread only; outputs change on success. */
++NTSTATUS ios_wow64_alloc_stack32( void *owner, SIZE_T reserve_size, SIZE_T commit_size,
++                                  ULONG *base, ULONG *limit, ULONG *dealloc )
++{
++    const SECTION_IMAGE_INFORMATION *info = ios_cur_image_info();
++    NTSTATUS status = STATUS_NOT_SUPPORTED;
++    void *addr = NULL, *page;
++    size_t size, page_size_host = host_page_mask + 1, length;
++    uint64_t end;
++    unsigned int i;
++    sigset_t sigset;
++    ULONG old;
++
++    if (!owner || owner != ios_jit_current_peb()) return STATUS_ACCESS_DENIED;
++    if (!reserve_size) reserve_size = info->MaximumStackSize;
++    if (!commit_size) commit_size = info->CommittedStackSize;
++    size = max( reserve_size, commit_size );
++    if (size < 8 * 1024 * 1024) size = 8 * 1024 * 1024;  /* virtual_alloc_thread_stack's guard floor */
++    size = (size + granularity_mask) & ~granularity_mask;
++    end = (info->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++          IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
++
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        uintptr_t window = ios_wow64_windows[i].base;
++        if (ios_wow64_windows[i].owner != owner) continue;
++        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++        status = ios_wow64_vm_allocate_limited( window, &addr, &size, MEM_RESERVE | MEM_COMMIT,
++                                                PAGE_READWRITE, 0, end );
++        if (!status)
++        {
++            page = addr;
++            length = page_size_host;
++            status = ios_wow64_vm_protect( window, &page, &length, PAGE_NOACCESS, &old );
++        }
++        if (!status)
++        {
++            page = (char *)addr + page_size_host;
++            length = page_size_host;
++            status = ios_wow64_vm_protect( window, &page, &length, PAGE_READWRITE | PAGE_GUARD, &old );
++        }
++        if (status && addr)
++        {
++            void *release = addr;
++            size_t release_size = 0;
++            ios_wow64_vm_free( window, &release, &release_size, MEM_RELEASE );
++        }
++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        if (!status)
++        {
++            *dealloc = (uintptr_t)addr - window;
++            *limit = (uintptr_t)addr - window + 2 * page_size_host;
++            *base = (uintptr_t)addr - window + size;
++            dprintf( 2, "[wow64-stack] owner=%p host=%p guest=%#x base=%#x limit=%#x bytes=%#lx guard=1\n",
++                     owner, addr, (unsigned int)*dealloc, (unsigned int)*base, (unsigned int)*limit,
++                     (unsigned long)size );
++        }
++        break;
++    }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    if (status) dprintf( 2, "[wow64-stack] owner=%p FAILED status=%#x\n", owner, (unsigned int)status );
++    return status;
++}
++
+ /* Server registration describes host storage, never guest ImageBase. */
+ static NTSTATUS ios_wow64_server_map( struct file_view *view )
+ {
+@@ -15454,9 +15538,8 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
+     if (!is_machine_64bit( pe_mapping->image.machine )) limit_high = (limit_2g - 1) & ~granularity_mask;
+     *ios_main_module_slot() = NULL;
+ 
+-    /* The normal i386 main image uses the same native section entry point
+-     * intended for the eventual WoW64 loader, with an explicit guest constraint.
+-     * No PE loader is entered at the retained fail-closed startup boundary. */
++    /* The normal i386 main image uses the native section entry point, with
++     * an explicit guest constraint, as the i386 ntdll and WoW64 loader do. */
+     if (pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386)
+     {
+         status = NtMapViewOfSection( mapping, NtCurrentProcess(), ios_main_module_slot(), UINT32_MAX,
+-- 
+2.55.0
+

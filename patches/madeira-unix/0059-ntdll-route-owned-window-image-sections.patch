@@ -1,0 +1,848 @@
+From c59b79c54647ad1e89d9e37759a7c5e2662a88a4 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 15:48:51 +0200
+Subject: [PATCH] ntdll: route owned window image sections transactionally
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: not-yet (owner-local iOS WoW64 bootstrap)
+---
+ build/ntdll-unix/virtual_ios.c        | 357 ++++++++++++++------------
+ build/ntdll-unix/wow64_image_mapper.h | 181 +++++++++++++
+ build/ntdll-unix/wow64_placement.h    |  15 +-
+ build/ntdll-unix/wow64_query.h        |  21 ++
+ build/ntdll-unix/wow64_section.h      |  70 +++++
+ build/wineserver/mapping_ios.c        |   7 +
+ 6 files changed, 479 insertions(+), 172 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_image_mapper.h
+ create mode 100644 build/ntdll-unix/wow64_section.h
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 92bd990..a886c9a 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5065,6 +5065,11 @@ struct file_view
+     void         *base;          /* base address */
+     size_t        size;          /* size in bytes */
+     unsigned int  protect;       /* protection for all pages at allocation time and SEC_* flags */
++    HANDLE        wow64_mapping; /* retained section for transactional window unmap */
++    client_ptr_t  wow64_entry;
++    size_t        wow64_size;    /* exact server image extent, before host rounding */
++    USHORT        wow64_machine;
++    BOOL          wow64_registered;
+ };
+ 
+ /* per-page protection flags */
+@@ -9062,6 +9067,7 @@ static struct file_view *alloc_view(void)
+     {
+         struct file_view *ret = next_free_view;
+         next_free_view = *(struct file_view **)ret;
++        memset( ret, 0, sizeof(*ret) );
+         return ret;
+     }
+     if (view_block_start == view_block_end)
+@@ -9071,6 +9077,7 @@ static struct file_view *alloc_view(void)
+         view_block_start = ptr;
+         view_block_end = view_block_start + view_block_size / sizeof(*view_block_start);
+     }
++    memset( view_block_start, 0, sizeof(*view_block_start) );
+     return view_block_start++;
+ }
+ 
+@@ -9082,6 +9089,7 @@ static struct file_view *alloc_view(void)
+  */
+ static void free_view( struct file_view *view )
+ {
++    if (view->wow64_mapping) NtClose( view->wow64_mapping );
+     *(struct file_view **)view = next_free_view;
+     next_free_view = view;
+ }
+@@ -14269,6 +14277,8 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+     if (image_info->machine == IMAGE_FILE_MACHINE_I386 && wow64_window)
+     {
+         if (alloc_type) return STATUS_NOT_SUPPORTED;
++        if (alloc_type & MEM_TOP_DOWN)
++            return ios_wow64_place_image_ex( wow64_window, image_info, size, limit_low, limit_high, TRUE, view_ret );
+         return ios_wow64_place_image( wow64_window, image_info, size, limit_low, limit_high, view_ret );
+     }
+ 
+@@ -14376,165 +14386,7 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+  *
+  * Map a PE image section into memory.
+  */
+-static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size_ptr,
+-                                   ULONG_PTR limit_low, ULONG_PTR limit_high, ULONG alloc_type,
+-                                   struct pe_mapping_info *pe_mapping, USHORT machine,
+-                                   BOOL is_builtin, off_t offset)
+-{
+-    int unix_fd = -1, needs_close;
+-    int shared_fd = -1, shared_needs_close = 0;
+-    SIZE_T size = pe_mapping->image.map_size;
+-    /* Query before virtual_mutex: registry lock order is windows -> virtual.
+-     * This thread owns the window's lifetime throughout startup. */
+-    uintptr_t wow64_window = pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386 ?
+-                             ios_wow64_current_base() : 0;
+-    struct file_view *view;
+-    unsigned int status;
+-    sigset_t sigset;
+-
+-    if (offset >= size)
+-        return STATUS_INVALID_PARAMETER;
+-    if (wow64_window && offset) return STATUS_NOT_SUPPORTED;
+-
+-    if ((status = server_get_unix_fd( mapping, 0, &unix_fd, &needs_close, NULL, NULL )))
+-        return status;
+-
+-    if (pe_mapping->shared_file &&
+-        ((status = server_get_unix_fd( pe_mapping->shared_file, FILE_READ_DATA|FILE_WRITE_DATA,
+-                                       &shared_fd, &shared_needs_close, NULL, NULL ))))
+-    {
+-        if (needs_close) close( unix_fd );
+-        return status;
+-    }
+-
+-    if (!pe_mapping->image.map_addr &&
+-        (pe_mapping->image.image_charact & IMAGE_FILE_DLL) &&
+-        (pe_mapping->image.image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated))
+-    {
+-        SERVER_START_REQ( get_image_map_address )
+-        {
+-            req->handle = wine_server_obj_handle( mapping );
+-            if (!wine_server_call( req )) pe_mapping->image.map_addr = reply->addr;
+-        }
+-        SERVER_END_REQ;
+-    }
+-
+-    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-
+-    status = map_image_view( &view, &pe_mapping->image, size, limit_low, limit_high, alloc_type, wow64_window );
+-    /* ml366: NAME the image whose placement failed. ml365's mmdevapi load
+-     * returned c0000017 with zero attributable evidence — the [va-scan]
+-     * FAILED line was storm-gated and nothing tied a placement failure to a
+-     * DLL. One line here closes that gap for every future load failure. */
+-    if (status)
+-    {
+-        static unsigned imgfail;
+-        if (imgfail++ < 64)
+-            ERR( "[img-map-fail] rev=ml366 %s status=%x size=%zx limits=%lx..%lx\n",
+-                 debugstr_us(&pe_mapping->nt_name), status, (size_t)size,
+-                 (unsigned long)limit_low, (unsigned long)limit_high );
+-        goto done;
+-    }
+-    status = map_image_into_view( view, &pe_mapping->nt_name, unix_fd, &pe_mapping->image,
+-                                  machine, shared_fd, needs_close );
+-    if (status == STATUS_SUCCESS)
+-    {
+-        if (offset)
+-        {
+-            free_pages( view, view->base, offset );
+-            size -= offset;
+-        }
+-
+-        if (view->protect & VPROT_WOW64_IMAGE)
+-        {
+-            uint32_t guest;
+-            if (offset || !ios_wow64_image_guest( wow64_window, view->base, size, &guest ))
+-            {
+-                status = STATUS_NOT_SUPPORTED;
+-                goto failed_view;
+-            }
+-            pe_mapping->image.base = guest;
+-        }
+-        else pe_mapping->image.base = wine_server_client_ptr( view->base );
+-        SERVER_START_REQ( map_image_view )
+-        {
+-            req->mapping = wine_server_obj_handle( mapping );
+-            /* Server VM views describe actual host storage. Returned image
+-             * info above describes guest identity, not this storage address. */
+-            req->base    = wine_server_client_ptr( view->base );
+-            req->size    = size;
+-            req->entry   = pe_mapping->image.entry_point;
+-            req->machine = pe_mapping->image.machine;
+-            req->offset  = offset;
+-            status = wine_server_call( req );
+-        }
+-        SERVER_END_REQ;
+-        status = ios_wow64_mapped_image_status( view, status );
+-    }
+-    if (NT_SUCCESS(status))
+-    {
+-#ifdef WINE_IOS
+-        ERR("iOS virtual_map_image: view=%p is_builtin=%d offset=%ld\n",
+-            view->base, is_builtin, (long)offset);
+-#endif
+-        if (is_builtin && !offset) add_builtin_module( view->base, NULL );
+-#ifdef WINE_IOS
+-        /* For builtin images on iOS: eagerly trigger the JIT copy for each
+-         * EXEC section. Normally Wine relies on an mprotect(PROT_EXEC) call
+-         * from somewhere downstream to activate section execution, but for
+-         * our main .exe that path isn't hit (sections are mapped via
+-         * PROT_READ|PROT_WRITECOPY and no subsequent protect flips them to
+-         * EXEC). Without the JIT copy, triangle.exe's .text isn't executable
+-         * and we bus-fault on its first instruction.
+-         */
+-        if (is_builtin && !offset && !(view->protect & VPROT_WOW64_IMAGE))
+-        {
+-            IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)view->base;
+-            if (dos && dos->e_magic == IMAGE_DOS_SIGNATURE)
+-            {
+-                IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((char *)view->base + dos->e_lfanew);
+-                if (nt->Signature == IMAGE_NT_SIGNATURE)
+-                {
+-                    IMAGE_SECTION_HEADER *s = IMAGE_FIRST_SECTION(nt);
+-                    SIZE_T align_mask = max(pe_mapping->image.alignment - 1, page_mask);
+-                    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
+-                    {
+-                        if (!(s[i].Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+-                        SIZE_T sec_size = s[i].Misc.VirtualSize
+-                            ? ROUND_SIZE(s[i].VirtualAddress, s[i].Misc.VirtualSize, align_mask)
+-                            : ROUND_SIZE(s[i].VirtualAddress, s[i].SizeOfRawData, align_mask);
+-                        void *sec_addr = (char *)view->base + s[i].VirtualAddress;
+-                        int prot = PROT_READ | PROT_EXEC;
+-                        if (s[i].Characteristics & IMAGE_SCN_MEM_WRITE) prot |= PROT_WRITE;
+-                        ERR("iOS: eager JIT-copy for builtin %s section (base=%p size=0x%lx)\n",
+-                            s[i].Name, sec_addr, (unsigned long)sec_size);
+-                        mprotect_exec(sec_addr, sec_size, prot);
+-                    }
+-                }
+-            }
+-        }
+-#endif
+-        *addr_ptr = view->base;
+-        *size_ptr = size;
+-        VIRTUAL_DEBUG_DUMP_VIEW( view );
+-    }
+-    else
+-    {
+-failed_view:
+-        if (view->protect & VPROT_WOW64_IMAGE)
+-        {
+-            NTSTATUS rollback = ios_wow64_rollback_image( view );
+-            if (rollback) ERR("WoW64 image rollback failed: %x (retained until owner exit)\n", rollback);
+-        }
+-        else delete_view( view );
+-    }
+-
+-done:
+-    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+-    if (needs_close) close( unix_fd );
+-    if (shared_needs_close) close( shared_fd );
+-    return status;
+-}
++#include "wow64_image_mapper.h"
+ 
+ 
+ /***********************************************************************
+@@ -14608,7 +14460,7 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+                             limit_low, limit_high, offset.QuadPart );
+         if (res == STATUS_IMAGE_ALREADY_LOADED)
+             res = virtual_map_image( handle, addr_ptr, size_ptr, limit_low, limit_high,
+-                                     alloc_type, pe_mapping, machine, FALSE, offset.QuadPart );
++                                     alloc_type, pe_mapping, machine, FALSE, offset.QuadPart, 0 );
+         free_pe_mapping_info( pe_mapping );
+         if (teb64) teb64->Tib.ArbitraryUserPointer = prev;
+         return res;
+@@ -15120,7 +14972,7 @@ NTSTATUS virtual_map_builtin_module( HANDLE mapping, void **module, SIZE_T *size
+     else
+     {
+         status = virtual_map_image( mapping, module, size, limit_low, limit_high, 0,
+-                                    pe_mapping, machine, TRUE, offset );
++                                    pe_mapping, machine, TRUE, offset, 0 );
+         virtual_fill_image_information( &pe_mapping->image, info );
+     }
+ 
+@@ -15196,6 +15048,143 @@ NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
+     return status;
+ }
+ 
++/* Server registration describes host storage, never guest ImageBase. */
++static NTSTATUS ios_wow64_server_map( struct file_view *view )
++{
++    NTSTATUS status;
++    SERVER_START_REQ( map_image_view )
++    {
++        req->mapping = wine_server_obj_handle( view->wow64_mapping );
++        req->base = wine_server_client_ptr( view->base );
++        req->size = view->wow64_size;
++        req->entry = view->wow64_entry;
++        req->machine = view->wow64_machine;
++        req->offset = 0;
++        status = wine_server_call( req );
++    }
++    SERVER_END_REQ;
++    return ios_wow64_mapped_image_status( view, status );
++}
++
++static NTSTATUS ios_wow64_server_unmap( struct file_view *view )
++{
++    NTSTATUS status;
++    SERVER_START_REQ( unmap_view )
++    {
++        req->base = wine_server_client_ptr( view->base );
++        status = wine_server_call( req );
++    }
++    SERVER_END_REQ;
++    return status;
++}
++
++#include "wow64_section.h"
++
++/* Intercept before native bounds, alias steering and remote APCs. */
++static BOOL ios_wow64_route_section( HANDLE mapping, HANDLE process, void **addr, SIZE_T *size,
++                                     ULONG_PTR zero_bits, SIZE_T commit, const LARGE_INTEGER *offset,
++                                     SECTION_INHERIT inherit, ULONG type, ULONG protect, BOOL ex,
++                                     NTSTATUS *status )
++{
++    unsigned int i;
++    BOOL routed = FALSE;
++    void *owner = ios_jit_current_peb();
++    uintptr_t value;
++    if (!addr || !size) return FALSE;
++    value = (uintptr_t)*addr;
++    if (!value && (!zero_bits || zero_bits > UINT32_MAX)) return FALSE;
++    /* A guest-constrained remote NULL must not reach an APC that appears
++     * local in the target and silently acquires its window. */
++    if (!value && process != NtCurrentProcess())
++    {
++        *status = STATUS_ACCESS_DENIED;
++        return TRUE;
++    }
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        uintptr_t base = ios_wow64_windows[i].base;
++        struct pe_mapping_info *info = NULL;
++        mem_size_t full_size;
++        unsigned int sec_flags, access;
++        uint64_t low, high, end;
++        if (!ios_wow64_windows[i].owner) continue;
++        if (value ? (value < base || value - base >= IOS_WOW64_WINDOW_SIZE) :
++                    (owner != ios_wow64_windows[i].owner)) continue;
++        routed = TRUE;
++        if (process != NtCurrentProcess() || owner != ios_wow64_windows[i].owner)
++            *status = STATUS_ACCESS_DENIED;
++        else if (ex || commit || (offset && offset->QuadPart) || inherit != ViewUnmap ||
++                 (type & ~MEM_TOP_DOWN)) *status = STATUS_NOT_SUPPORTED;
++        else
++        {
++            switch (protect)
++            {
++            case PAGE_NOACCESS: case PAGE_READONLY: case PAGE_WRITECOPY: access = SECTION_MAP_READ; break;
++            case PAGE_READWRITE: access = SECTION_MAP_WRITE; break;
++            case PAGE_EXECUTE: case PAGE_EXECUTE_READ: case PAGE_EXECUTE_WRITECOPY:
++                access = SECTION_MAP_READ | SECTION_MAP_EXECUTE; break;
++            case PAGE_EXECUTE_READWRITE: access = SECTION_MAP_WRITE | SECTION_MAP_EXECUTE; break;
++            default: *status = STATUS_INVALID_PAGE_PROTECTION; goto done;
++            }
++            *status = get_mapping_info( mapping, access, &sec_flags, &full_size, &info );
++            if (*status) goto done;
++            if (!info || sec_flags != (SEC_IMAGE | SEC_FILE))
++                *status = STATUS_NOT_SUPPORTED;
++            else
++            {
++                end = (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++                      IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
++                *status = ios_wow64_section_bounds( base, *addr, *size, zero_bits, end,
++                                                    &info->image, &low, &high );
++                if (!*status)
++                {
++                    *status = virtual_map_image( mapping, addr, size, low, high, type,
++                                                 info, IMAGE_FILE_MACHINE_I386, FALSE, 0, base );
++                    if (NT_SUCCESS(*status))
++                        dprintf(2, "[wow64-section] owner=%p host=%p guest=%#lx bytes=%#lx image=1 "
++                                   "null=%u top_down=%u native_exec=0 server=1\n",
++                                owner, *addr, (unsigned long)((uintptr_t)*addr - base),
++                                (unsigned long)*size, !value, !!(type & MEM_TOP_DOWN));
++                }
++            }
++            if (info) free_pe_mapping_info( info );
++        }
++        break;
++    }
++done:
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return routed;
++}
++
++static BOOL ios_wow64_route_unmap( HANDLE process, const void *addr, ULONG flags, NTSTATUS *status )
++{
++    unsigned int i;
++    BOOL routed = FALSE;
++    void *owner = ios_jit_current_peb();
++    uintptr_t value = (uintptr_t)addr;
++    sigset_t sigset;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        uintptr_t base = ios_wow64_windows[i].base;
++        if (!ios_wow64_windows[i].owner || value < base || value - base >= IOS_WOW64_WINDOW_SIZE) continue;
++        routed = TRUE;
++        if (process != NtCurrentProcess() || owner != ios_wow64_windows[i].owner)
++            *status = STATUS_ACCESS_DENIED;
++        else if (flags) *status = STATUS_NOT_SUPPORTED;
++        else
++        {
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            *status = ios_wow64_unmap_image( base, find_view( addr, 1 ) );
++            server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        }
++        break;
++    }
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return routed;
++}
++
+ /* Native entry points accept host pointers only. A registered window address
+  * must never fall through to host unmap, even from a different owner. Keep the
+  * registry lock until the operation ends (registry -> virtual lock order). */
+@@ -15290,13 +15279,18 @@ static BOOL ios_wow64_route_query( HANDLE process, const void *addr,
+         routed = TRUE;
+         if (process != NtCurrentProcess() || owner != ios_wow64_windows[i].owner)
+             *status = STATUS_ACCESS_DENIED;
+-        else if (info_class != MemoryBasicInformation) *status = STATUS_NOT_SUPPORTED;
+-        else if (len < sizeof(MEMORY_BASIC_INFORMATION)) *status = STATUS_INFO_LENGTH_MISMATCH;
++        else if (info_class != MemoryBasicInformation && info_class != MemoryImageInformation)
++            *status = STATUS_NOT_SUPPORTED;
++        else if (len < (info_class == MemoryBasicInformation ? sizeof(MEMORY_BASIC_INFORMATION) :
++                                                              sizeof(MEMORY_IMAGE_INFORMATION)))
++            *status = STATUS_INFO_LENGTH_MISMATCH;
+         else
+         {
+             server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-            *status = ios_wow64_query_basic( base, addr, buffer );
+-            if (!*status && res_len) *res_len = sizeof(MEMORY_BASIC_INFORMATION);
++            *status = info_class == MemoryBasicInformation ? ios_wow64_query_basic( base, addr, buffer ) :
++                                                            ios_wow64_query_image( base, addr, buffer );
++            if (!*status && res_len) *res_len = info_class == MemoryBasicInformation ?
++                                              sizeof(MEMORY_BASIC_INFORMATION) : sizeof(MEMORY_IMAGE_INFORMATION);
+             server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+         }
+         break;
+@@ -15522,12 +15516,26 @@ NTSTATUS virtual_map_main_module( HANDLE mapping, USHORT machine )
+     if (!is_machine_64bit( pe_mapping->image.machine )) limit_high = (limit_2g - 1) & ~granularity_mask;
+     *ios_main_module_slot() = NULL;
+ 
+-    /* check if we can replace that mapping with the builtin */
+-    status = load_builtin( pe_mapping, machine, ios_main_image_info_slot(), ios_main_module_slot(), &size, 0, limit_high, 0 );
++    /* The normal i386 main image uses the same native section entry point
++     * intended for the eventual WoW64 loader, with an explicit guest constraint.
++     * No PE loader is entered at the retained fail-closed startup boundary. */
++    if (pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386)
++    {
++        status = NtMapViewOfSection( mapping, NtCurrentProcess(), ios_main_module_slot(), UINT32_MAX,
++                                    0, NULL, &size, ViewUnmap, 0, PAGE_READONLY );
++        if (NT_SUCCESS(status))
++        {
++            uintptr_t window = ios_wow64_current_base();
++            pe_mapping->image.base = pe_mapping->image.map_addr =
++                (uintptr_t)*ios_main_module_slot() - window;
++            virtual_fill_image_information( &pe_mapping->image, ios_main_image_info_slot() );
++        }
++    }
++    else status = load_builtin( pe_mapping, machine, ios_main_image_info_slot(), ios_main_module_slot(), &size, 0, limit_high, 0 );
+     if (status == STATUS_IMAGE_ALREADY_LOADED)
+     {
+         status = virtual_map_image( mapping, ios_main_module_slot(), &size, 0, limit_high, 0,
+-                                    pe_mapping, machine, FALSE, 0 );
++                                    pe_mapping, machine, FALSE, 0, 0 );
+         virtual_fill_image_information( &pe_mapping->image, ios_main_image_info_slot() );
+     }
+     if (NT_SUCCESS(status) && pe_mapping->image.machine == IMAGE_FILE_MACHINE_I386)
+@@ -21697,7 +21705,11 @@ NTSTATUS WINAPI NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_p
+     unsigned int res;
+     SIZE_T mask = granularity_mask;
+     LARGE_INTEGER offset;
++    NTSTATUS window_status;
+ 
++    if (ios_wow64_route_section( handle, process, addr_ptr, size_ptr, zero_bits, commit_size,
++                                  offset_ptr, inherit, alloc_type, protect, FALSE, &window_status ))
++        return window_status;
+     offset.QuadPart = offset_ptr ? offset_ptr->QuadPart : 0;
+ 
+     TRACE("handle=%p process=%p addr=%p off=%s size=0x%lx alloc_type=0x%x access=0x%x\n",
+@@ -21781,6 +21793,10 @@ NTSTATUS WINAPI NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID *addr
+     SIZE_T mask = granularity_mask;
+     LARGE_INTEGER offset;
+ 
++    /* Ex attributes/guest constraints are not supported; explicit window
++     * addresses still must not fall through to the native mapper. */
++    if (ios_wow64_route_section( handle, process, addr_ptr, size_ptr, 0, 0, offset_ptr,
++                                  ViewUnmap, alloc_type, protect, TRUE, &status )) return status;
+     offset.QuadPart = offset_ptr ? offset_ptr->QuadPart : 0;
+ 
+     TRACE( "handle=%p process=%p addr=%p off=%s size=0x%lx alloc_type=0x%x access=0x%x\n",
+@@ -21790,6 +21806,9 @@ NTSTATUS WINAPI NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID *addr
+                                   &align, &attributes, &machine );
+     if (status) return status;
+ 
++    if (!*addr_ptr && limit_high && limit_high <= UINT32_MAX &&
++        ios_wow64_route_section( handle, process, addr_ptr, size_ptr, UINT32_MAX, 0, offset_ptr,
++                                  ViewUnmap, alloc_type, protect, TRUE, &status )) return status;
+     if (align) return STATUS_INVALID_PARAMETER;
+     if (*addr_ptr && (limit_low || limit_high)) return STATUS_INVALID_PARAMETER;
+ 
+@@ -21854,7 +21873,9 @@ static NTSTATUS unmap_view_of_section( HANDLE process, PVOID addr, ULONG flags )
+     struct file_view *view;
+     unsigned int status = STATUS_NOT_MAPPED_VIEW;
+     sigset_t sigset;
++    NTSTATUS window_status;
+ 
++    if (ios_wow64_route_unmap( process, addr, flags, &window_status )) return window_status;
+     if (process != NtCurrentProcess())
+     {
+         union apc_call call;
+diff --git a/build/ntdll-unix/wow64_image_mapper.h b/build/ntdll-unix/wow64_image_mapper.h
+new file mode 100644
+index 0000000..e0c7db5
+--- /dev/null
++++ b/build/ntdll-unix/wow64_image_mapper.h
+@@ -0,0 +1,181 @@
++/* Wine's existing PE mapping orchestration, shared with host helper tests.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included at virtual_map_image's original location after mapper/placement helpers.
++ */
++#ifndef IOS_WOW64_IMAGE_MAPPER_H
++#define IOS_WOW64_IMAGE_MAPPER_H
++static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size_ptr,
++                                   ULONG_PTR limit_low, ULONG_PTR limit_high, ULONG alloc_type,
++                                   struct pe_mapping_info *pe_mapping, USHORT machine,
++                                   BOOL is_builtin, off_t offset, uintptr_t wow64_window )
++{
++    int unix_fd = -1, needs_close;
++    int shared_fd = -1, shared_needs_close = 0;
++    SIZE_T size = pe_mapping->image.map_size;
++    /* Window callers retain the registry lock through this complete map.
++     * Unconstrained native callers pass zero, even for i386 images. */
++    struct file_view *view;
++    unsigned int status;
++    sigset_t sigset;
++
++    if (offset < 0 || (uint64_t)offset >= size)
++        return STATUS_INVALID_PARAMETER;
++    if (wow64_window && offset) return STATUS_NOT_SUPPORTED;
++
++    if ((status = server_get_unix_fd( mapping, 0, &unix_fd, &needs_close, NULL, NULL )))
++        return status;
++
++    if (pe_mapping->shared_file &&
++        ((status = server_get_unix_fd( pe_mapping->shared_file, FILE_READ_DATA|FILE_WRITE_DATA,
++                                       &shared_fd, &shared_needs_close, NULL, NULL ))))
++    {
++        if (needs_close) close( unix_fd );
++        return status;
++    }
++
++    if (!pe_mapping->image.map_addr &&
++        (pe_mapping->image.image_charact & IMAGE_FILE_DLL) &&
++        (pe_mapping->image.image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated))
++    {
++        SERVER_START_REQ( get_image_map_address )
++        {
++            req->handle = wine_server_obj_handle( mapping );
++            if (!wine_server_call( req )) pe_mapping->image.map_addr = reply->addr;
++        }
++        SERVER_END_REQ;
++    }
++
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++
++    status = map_image_view( &view, &pe_mapping->image, size, limit_low, limit_high, alloc_type, wow64_window );
++    /* ml366: NAME the image whose placement failed. ml365's mmdevapi load
++     * returned c0000017 with zero attributable evidence — the [va-scan]
++     * FAILED line was storm-gated and nothing tied a placement failure to a
++     * DLL. One line here closes that gap for every future load failure. */
++    if (status)
++    {
++        static unsigned imgfail;
++        if (imgfail++ < 64)
++            ERR( "[img-map-fail] rev=ml366 %s status=%x size=%zx limits=%lx..%lx\n",
++                 debugstr_us(&pe_mapping->nt_name), status, (size_t)size,
++                 (unsigned long)limit_low, (unsigned long)limit_high );
++        goto done;
++    }
++    if (wow64_window)
++    {
++        view->wow64_size = size; /* wineserver forbids extents larger than map_size */
++        status = NtDuplicateObject( NtCurrentProcess(), mapping, NtCurrentProcess(),
++                                    &view->wow64_mapping, 0, 0, DUPLICATE_SAME_ACCESS );
++        if (status) goto failed_view;
++        view->wow64_entry = pe_mapping->image.entry_point;
++        view->wow64_machine = pe_mapping->image.machine;
++    }
++    status = map_image_into_view( view, &pe_mapping->nt_name, unix_fd, &pe_mapping->image,
++                                  machine, shared_fd, needs_close );
++    if (status == STATUS_SUCCESS)
++    {
++        if (offset)
++        {
++            free_pages( view, view->base, offset );
++            size -= offset;
++        }
++
++        if (view->protect & VPROT_WOW64_IMAGE)
++        {
++            uint32_t guest;
++            if (offset || !ios_wow64_image_guest( wow64_window, view->base, size, &guest ))
++            {
++                status = STATUS_NOT_SUPPORTED;
++                goto failed_view;
++            }
++            pe_mapping->image.base = guest;
++        }
++        else pe_mapping->image.base = wine_server_client_ptr( view->base );
++        SERVER_START_REQ( map_image_view )
++        {
++            req->mapping = wine_server_obj_handle( mapping );
++            /* Server VM views describe actual host storage. Returned image
++             * info above describes guest identity, not this storage address. */
++            req->base    = wine_server_client_ptr( view->base );
++            req->size    = size;
++            req->entry   = pe_mapping->image.entry_point;
++            req->machine = pe_mapping->image.machine;
++            req->offset  = offset;
++            status = wine_server_call( req );
++        }
++        SERVER_END_REQ;
++        status = ios_wow64_mapped_image_status( view, status );
++        if (wow64_window && NT_SUCCESS(status)) view->wow64_registered = TRUE;
++    }
++    if (NT_SUCCESS(status))
++    {
++#ifdef WINE_IOS
++        ERR("iOS virtual_map_image: view=%p is_builtin=%d offset=%ld\n",
++            view->base, is_builtin, (long)offset);
++#endif
++        if (is_builtin && !offset) add_builtin_module( view->base, NULL );
++#ifdef WINE_IOS
++        /* For builtin images on iOS: eagerly trigger the JIT copy for each
++         * EXEC section. Normally Wine relies on an mprotect(PROT_EXEC) call
++         * from somewhere downstream to activate section execution, but for
++         * our main .exe that path isn't hit (sections are mapped via
++         * PROT_READ|PROT_WRITECOPY and no subsequent protect flips them to
++         * EXEC). Without the JIT copy, triangle.exe's .text isn't executable
++         * and we bus-fault on its first instruction.
++         */
++        if (is_builtin && !offset && !(view->protect & VPROT_WOW64_IMAGE))
++        {
++            IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)view->base;
++            if (dos && dos->e_magic == IMAGE_DOS_SIGNATURE)
++            {
++                IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((char *)view->base + dos->e_lfanew);
++                if (nt->Signature == IMAGE_NT_SIGNATURE)
++                {
++                    IMAGE_SECTION_HEADER *s = IMAGE_FIRST_SECTION(nt);
++                    SIZE_T align_mask = max(pe_mapping->image.alignment - 1, page_mask);
++                    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
++                    {
++                        if (!(s[i].Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
++                        SIZE_T sec_size = s[i].Misc.VirtualSize
++                            ? ROUND_SIZE(s[i].VirtualAddress, s[i].Misc.VirtualSize, align_mask)
++                            : ROUND_SIZE(s[i].VirtualAddress, s[i].SizeOfRawData, align_mask);
++                        void *sec_addr = (char *)view->base + s[i].VirtualAddress;
++                        int prot = PROT_READ | PROT_EXEC;
++                        if (s[i].Characteristics & IMAGE_SCN_MEM_WRITE) prot |= PROT_WRITE;
++                        ERR("iOS: eager JIT-copy for builtin %s section (base=%p size=0x%lx)\n",
++                            s[i].Name, sec_addr, (unsigned long)sec_size);
++                        mprotect_exec(sec_addr, sec_size, prot);
++                    }
++                }
++            }
++        }
++#endif
++        *addr_ptr = view->base;
++        *size_ptr = size;
++        VIRTUAL_DEBUG_DUMP_VIEW( view );
++    }
++    else
++    {
++failed_view:
++        if (view->protect & VPROT_WOW64_IMAGE)
++        {
++            NTSTATUS rollback = ios_wow64_rollback_image( view );
++            if (rollback) ERR("WoW64 image rollback failed: %x (retained until owner exit)\n", rollback);
++            else
++            {
++                if (view->wow64_mapping) NtClose( view->wow64_mapping );
++                view->wow64_mapping = 0;
++                ios_wow64_vm_coalesce( wow64_window, view );
++            }
++        }
++        else delete_view( view );
++    }
++
++done:
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    if (needs_close) close( unix_fd );
++    if (shared_needs_close) close( shared_fd );
++    return status;
++}
++
++#endif
+diff --git a/build/ntdll-unix/wow64_placement.h b/build/ntdll-unix/wow64_placement.h
+index 1f2bf8f..8853ae7 100644
+--- a/build/ntdll-unix/wow64_placement.h
++++ b/build/ntdll-unix/wow64_placement.h
+@@ -8,8 +8,9 @@
+ 
+ #include "wow64_gap.h"
+ 
+-static NTSTATUS ios_wow64_place_image( uintptr_t window, struct pe_image_info *image, size_t size,
+-                                      uint64_t low, uint64_t high, struct file_view **result )
++static NTSTATUS ios_wow64_place_image_ex( uintptr_t window, struct pe_image_info *image, size_t size,
++                                         uint64_t low, uint64_t high, BOOL requested_top_down,
++                                         struct file_view **result )
+ {
+     struct pe_image_info placement;
+     NTSTATUS status;
+@@ -32,8 +33,8 @@ static NTSTATUS ios_wow64_place_image( uintptr_t window, struct pe_image_info *i
+     if (low >= end || size > end - low) return STATUS_CONFLICTING_ADDRESSES;
+     movable = !(image->image_charact & IMAGE_FILE_RELOCS_STRIPPED) &&
+               !(image->image_flags & IMAGE_FLAGS_ImageMappedFlat);
+-    top_down = (image->image_charact & IMAGE_FILE_DLL) &&
+-               (image->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated);
++    top_down = requested_top_down || ((image->image_charact & IMAGE_FILE_DLL) &&
++               (image->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated));
+     suggested = image->map_addr;
+     placement = *image;
+     if (movable && (image->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated) &&
+@@ -60,6 +61,12 @@ static NTSTATUS ios_wow64_place_image( uintptr_t window, struct pe_image_info *i
+     return status;
+ }
+ 
++static NTSTATUS ios_wow64_place_image( uintptr_t window, struct pe_image_info *image, size_t size,
++                                      uint64_t low, uint64_t high, struct file_view **result )
++{
++    return ios_wow64_place_image_ex( window, image, size, low, high, FALSE, result );
++}
++
+ /* Validate the whole i386 directory before Wine mutates any target. Storage
+  * uses host addresses, but HIGH/LOW/HIGHLOW receive ONLY the guest delta.
+  * Unknown types, missing fixups and malformed blocks fail closed. */
+diff --git a/build/ntdll-unix/wow64_query.h b/build/ntdll-unix/wow64_query.h
+index d2b90ac..ffb4259 100644
+--- a/build/ntdll-unix/wow64_query.h
++++ b/build/ntdll-unix/wow64_query.h
+@@ -83,4 +83,25 @@ static NTSTATUS ios_wow64_query_basic( uintptr_t window, const void *addr,
+     *info = result; /* no partial output on a failed query */
+     return STATUS_SUCCESS;
+ }
++/* Native image queries return host storage too. Do not fabricate a signing
++ * level: this runtime has no Windows image-signature validation. Other query
++ * classes remain explicitly unsupported rather than consulting global views. */
++static NTSTATUS ios_wow64_query_image( uintptr_t window, const void *addr,
++                                     MEMORY_IMAGE_INFORMATION *info )
++{
++    MEMORY_IMAGE_INFORMATION result = {0};
++    struct file_view *view;
++    uintptr_t value = (uintptr_t)addr;
++    if (!info) return STATUS_ACCESS_VIOLATION;
++    if (!ios_wow64_valid_base( window ) || value < window ||
++        value - window >= IOS_WOW64_WINDOW_SIZE) return STATUS_INVALID_PARAMETER;
++    if (!(view = ios_wow64_query_view( window, value ))) return STATUS_INVALID_ADDRESS;
++    if (!(view->protect & VPROT_WOW64_IMAGE) || !view->wow64_registered ||
++        !view->wow64_size || view->wow64_size > view->size ||
++        value - (uintptr_t)view->base >= view->wow64_size) return STATUS_INVALID_ADDRESS;
++    result.ImageBase = view->base;
++    result.SizeOfImage = view->wow64_size;
++    *info = result;
++    return STATUS_SUCCESS;
++}
+ #endif
+diff --git a/build/ntdll-unix/wow64_section.h b/build/ntdll-unix/wow64_section.h
+new file mode 100644
+index 0000000..124fe85
+--- /dev/null
++++ b/build/ntdll-unix/wow64_section.h
+@@ -0,0 +1,70 @@
++/* Narrow native SEC_IMAGE routing: host storage, guest placement.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Registry is held by the caller; bounds selection does not touch views.
++ * No ordinary file/anonymous sections, inheritance, Ex or partial images yet.
++ */
++#ifndef IOS_WOW64_SECTION_H
++#define IOS_WOW64_SECTION_H
++
++static NTSTATUS ios_wow64_section_bounds( uintptr_t window, const void *addr, SIZE_T requested_size,
++                                         uintptr_t zero_bits, uint64_t owner_end,
++                                         const struct pe_image_info *image,
++                                         uint64_t *low, uint64_t *high )
++{
++    uint64_t end = owner_end, start = IOS_WOW64_NULL_GUARD;
++    size_t length;
++    NTSTATUS status;
++    if (!image || !low || !high || !ios_wow64_valid_base( window ) ||
++        image->machine != IMAGE_FILE_MACHINE_I386 || image->is_hybrid ||
++        (image->image_flags & ~(IMAGE_FLAGS_ImageMappedFlat | IMAGE_FLAGS_ImageDynamicallyRelocated)) ||
++        !image->map_size ||
++        image->map_size > SIZE_MAX - host_page_mask) return STATUS_NOT_SUPPORTED;
++    /* Wine's image mapper maps the complete image; do not imply partial views. */
++    if (requested_size && requested_size != image->map_size) return STATUS_NOT_SUPPORTED;
++    length = (image->map_size + host_page_mask) & ~host_page_mask;
++    if ((status = ios_wow64_vm_limit( zero_bits, &end ))) return STATUS_INVALID_PARAMETER_4;
++    if (addr)
++    {
++        uintptr_t value = (uintptr_t)addr;
++        if (value < window || value - window >= IOS_WOW64_WINDOW_SIZE ||
++            ((value - window) & granularity_mask)) return STATUS_INVALID_PARAMETER;
++        start = value - window;
++        if (start < IOS_WOW64_NULL_GUARD || start >= end || length > end - start)
++            return STATUS_CONFLICTING_ADDRESSES;
++        /* A bounded extent forces placement at this guest address. Wine's
++         * existing placement/relocation rejects fixed images at other bases. */
++        end = start + length;
++    }
++    if (start >= end || length > end - start) return STATUS_CONFLICTING_ADDRESSES;
++    *low = start;
++    *high = end - 1;
++    return STATUS_SUCCESS;
++}
++
++/* Unmap is a two-resource transaction. Retain a private section handle so an
++ * atomic replacement failure can restore the exact server image view without
++ * changing bytes/protection. Both locks are held; never delete_view a window.
++ * If even re-registration fails, quarantine the descriptor for owner exit.
++ */
++static NTSTATUS ios_wow64_unmap_image( uintptr_t window, struct file_view *view )
++{
++    NTSTATUS status, rollback;
++    if (!view || !(view->protect & VPROT_WOW64_IMAGE) || !view->wow64_mapping ||
++        !view->wow64_registered) return STATUS_NOT_MAPPED_VIEW;
++    status = ios_wow64_server_unmap( view );
++    if (status) return status;
++    view->wow64_registered = FALSE;
++    status = ios_wow64_rollback_image( view );
++    if (status)
++    {
++        rollback = ios_wow64_server_map( view );
++        if (NT_SUCCESS(rollback)) view->wow64_registered = TRUE;
++        else dprintf(2, "[wow64-section] server rollback failed=%#x; view quarantined until exit\n", rollback);
++        return status;
++    }
++    NtClose( view->wow64_mapping );
++    view->wow64_mapping = 0;
++    ios_wow64_vm_coalesce( window, view );
++    return STATUS_SUCCESS;
++}
++#endif
+diff --git a/build/wineserver/mapping_ios.c b/build/wineserver/mapping_ios.c
+index b6451fc..26aa0e5 100644
+--- a/build/wineserver/mapping_ios.c
++++ b/build/wineserver/mapping_ios.c
+@@ -1083,7 +1083,14 @@ static unsigned int get_mapping_flags( obj_handle_t handle, unsigned int flags )
+     {
+     case SEC_IMAGE:
+         if (flags & (SEC_WRITECOMBINE | SEC_LARGE_PAGES)) break;
++#ifdef WINE_IOS
++        /* Keep attributes such as SEC_IMAGE_NO_EXECUTE visible to the window
++         * mapper. Discarding them would silently upgrade an unsupported form
++         * to an executable guest image. Native mappings retain these flags too. */
++        if (handle) return SEC_FILE | flags;
++#else
+         if (handle) return SEC_FILE | SEC_IMAGE;
++#endif
+         set_error( STATUS_INVALID_FILE_FOR_SECTION );
+         return 0;
+     case SEC_COMMIT:
+-- 
+2.55.0
+

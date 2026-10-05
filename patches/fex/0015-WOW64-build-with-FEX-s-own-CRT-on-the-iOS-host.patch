@@ -1,0 +1,52 @@
+From a98738d0c72830fbb3a5f7d18cac54d489704690 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 19:44:13 +0200
+Subject: [PATCH 15/16] WOW64: build with FEX's own CRT on the iOS host
+
+The iOS host build used mingw's CRT for the ARM64EC module, and with it
+the WoW64 module imported the UCRT, which pulled kernelbase.dll into a
+WoW64 process before its native NLS tables existed. Select the iOS CRT
+stub only for ARM64EC and link the WoW64 module as upstream does
+(-nostdlib, FEX's own CRT): it then imports only ntdll.dll and
+wow64.dll. Keep the shared reserve-failure log free of iOS band externs
+when FEX_IOS_HOST is off.
+
+Class: linux-build
+Evidence: docs/evidence/2026-10-03-portal2-fex-wow64.md
+Offered-upstream: no; matches the local ARM64EC host configuration
+---
+ Source/Windows/Common/CRT/CMakeLists.txt | 2 +-
+ Source/Windows/Common/CallRetStack.h     | 4 ++++
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/Common/CRT/CMakeLists.txt b/Source/Windows/Common/CRT/CMakeLists.txt
+index 53d7ba358..3df3d26c4 100644
+--- a/Source/Windows/Common/CRT/CMakeLists.txt
++++ b/Source/Windows/Common/CRT/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-if (FEX_IOS_HOST_BUILD)
++if (FEX_IOS_HOST_BUILD AND ARCHITECTURE_arm64ec)
+   # Minimal stub for iOS-host build — only the FEX::Windows::* lifecycle
+   # hooks that Module.cpp calls; skips _tls_index, DllMainCRTStartup,
+   # CRT$XIA/XCA/etc. section markers, and rpmalloc init that conflict with
+diff --git a/Source/Windows/Common/CallRetStack.h b/Source/Windows/Common/CallRetStack.h
+index 8d15f867b..6a2421a32 100644
+--- a/Source/Windows/Common/CallRetStack.h
++++ b/Source/Windows/Common/CallRetStack.h
+@@ -141,9 +141,13 @@ bool InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
+      * meant base + one guard page = 0x1000, dereferenced at once, and the
+      * fault recursed until the stack was gone -- with the thread still owning
+      * the loader lock. */
++#ifdef FEX_IOS_HOST
+     LogMan::Msg::EFmt("[callret] RESERVE FAILED: {:#x} bytes in band [{:#x},{:#x}] -- thread cannot start",
+                       (unsigned long long)CallRetStackAllocSize,
+                       (unsigned long long)ios_fex_band_base, (unsigned long long)ios_fex_band_end);
++#else
++    LogMan::Msg::EFmt("[callret] RESERVE FAILED: {:#x} bytes -- thread cannot start", CallRetStackAllocSize);
++#endif
+     return false;
+   }
+ 
+-- 
+2.55.0
+

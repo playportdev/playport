@@ -1,0 +1,637 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 09:12:09 +0200
+Subject: [PATCH] ntdll: keep a WoW64 window until its threads and fault
+ lookups are done
+
+The owner's release (its initial thread's exit) unmapped the window
+while secondary threads still ran on their TEBs and 32-bit stacks in it
+(the server ends them only when it closes their pipes), and the Mach
+handler's lock-free lookup could use a base after its window was gone
+or its slot reused. A thread's pair and 32-bit stack also stayed in the
+window until then, so a guest that created and joined workers ran out
+of guest space after a few hundred.
+
+wow64_threads.h now keeps a record per secondary thread. Release only
+retires the window while any is left; a thread's record is marked
+exited at the end of pthread_exit_wrapper, and a later exiting thread,
+a thread creation, a reservation or a release joins it (one critical
+section claims earlier exits and marks the caller's, so joins form no
+cycle). virtual_free_thread_data then frees its 32-bit stack through
+the window and its native stack, and keeps its TEB pair as a spare for
+the owner's next thread. The retired window's last reclaimed thread
+tears it down. exit_thread no longer joins a window thread as its
+previous thread.
+
+The Mach handler counts itself in (ios_wow64_fault_enter) before it
+reads a window's owner and out after its emulated access; teardown
+clears the owner and waits for that count to drain before the views go
+or the slot is reused. Teardown also clears the dead threads' TEBs from
+the thread registry, and NtTerminateThread's registry scan reads a TEB
+with mach_vm_read, so neither dereferences a gone TEB.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/signal_arm64_ios.c |  22 ++-
+ build/ntdll-unix/thread_ios.c       |  23 ++-
+ build/ntdll-unix/virtual_ios.c      | 197 ++++++++++++++------------
+ build/ntdll-unix/wow64_threads.h    | 208 ++++++++++++++++++++++++++++
+ 4 files changed, 355 insertions(+), 95 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_threads.h
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 041b7c0..bb7c5d4 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -595,6 +595,17 @@ thread_t ios_thread_registry_mach(int i)
+     return ios_thread_registry[i].mach_thread;
+ }
+ 
++/* Playport: a torn-down WoW64 window's range. Its threads are dead; their
++ * entries keep the port and lose the TEB, so no reader dereferences it. */
++void ios_thread_registry_forget( uintptr_t start, uintptr_t end )
++{
++    int count = __sync_fetch_and_add(&ios_thread_count, 0);
++    if (count > IOS_MAX_WINE_THREADS) count = IOS_MAX_WINE_THREADS;
++    for (int i = 0; i < count; i++)
++        if (ios_thread_registry[i].teb >= start && ios_thread_registry[i].teb < end)
++            __atomic_store_n( &ios_thread_registry[i].teb, 0, __ATOMIC_RELEASE );
++}
++
+ static int ios_thread_is_registered(thread_t mach_thread)
+ {
+     int count = __sync_fetch_and_add(&ios_thread_count, 0);
+@@ -1926,13 +1937,15 @@ static void *ios_mach_exception_thread( void *arg )
+                  * this file; same value (0x100000000). */
+                 /* Playport: a WoW64 process's low 4 GB is its window at
+                  * base + guest (virtual_ios.c). The faulting thread's TEB names
+-                 * the owner; a fixed sub-floor image (KUSER_SHARED_DATA) still
+-                 * resolves first. */
++                 * the owner (its window keeps the TEB mapped until the thread is
++                 * joined); a fixed sub-floor image (KUSER_SHARED_DATA) still
++                 * resolves first. The base stays mapped until fault_leave. */
++                extern void ios_wow64_fault_leave( void );
+                 uintptr_t sf_window = 0;
+                 if (!sf_real && (uint64_t)fault_addr < 0x100000000ull && thread_teb)
+                 {
+-                    extern uintptr_t ios_wow64_fault_base_for_peb( void *owner );
+-                    sf_window = ios_wow64_fault_base_for_peb( ((TEB *)thread_teb)->Peb );
++                    extern uintptr_t ios_wow64_fault_enter( void *owner );
++                    sf_window = ios_wow64_fault_enter( ((TEB *)thread_teb)->Peb );
+                 }
+                 if (!sf_real && !sf_window && (uint64_t)fault_addr < 0x100000000ull)
+                 {
+@@ -1989,6 +2002,7 @@ static void *ios_mach_exception_thread( void *arg )
+                         handled = 1;
+                     }
+                 }
++                if (sf_window) ios_wow64_fault_leave();
+             }
+ #endif
+ 
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 393f350..af005ec 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -1267,6 +1267,13 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+             ios_thread_died( (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread );
+         }
+     }
++    {
++        /* Playport: join earlier exited WoW64 window threads, and mark this one
++         * exited if it is one: its TEB pair and 32-bit stack are reclaimed
++         * through its window once a later thread has joined it. */
++        extern void ios_wow64_thread_exit( struct thread_data *data );
++        ios_wow64_thread_exit( get_thread_data() );
++    }
+     pthread_exit( UIntToPtr(status) );
+ }
+ 
+@@ -1820,6 +1827,14 @@ static DECLSPEC_NORETURN void exit_thread( int status )
+ 
+     if (InterlockedDecrement( &nb_threads ) <= 0) exit_process( status );
+ 
++#ifdef WINE_IOS
++    {
++        /* Playport: a WoW64 window thread is joined through its window
++         * (pthread_exit_wrapper), never as the previous thread here. */
++        extern BOOL ios_wow64_is_window_thread( const struct thread_data *data );
++        if (ios_wow64_is_window_thread( get_thread_data() )) pthread_exit_wrapper( status );
++    }
++#endif
+     if ((data = InterlockedExchangePointer( &prev_data, get_thread_data() )))
+     {
+         if (data->pthread_id)
+@@ -2147,7 +2162,13 @@ static thread_t ios_mach_thread_for_handle( HANDLE handle )
+     for (i = 0; i < count; i++)
+     {
+         uintptr_t teb = ios_thread_registry_teb( i );
+-        if (teb && (DWORD)(ULONG_PTR)((TEB *)teb)->ClientId.UniqueThread == tid)
++        ULONG_PTR id = 0;
++        mach_vm_size_t got = 0;
++        /* Playport: a dead thread's TEB may be gone (a torn-down WoW64 window). */
++        if (teb && mach_vm_read_overwrite( mach_task_self(),
++                                           (mach_vm_address_t)(teb + offsetof(TEB, ClientId.UniqueThread)),
++                                           sizeof(id), (mach_vm_address_t)&id, &got ) == KERN_SUCCESS &&
++            got == sizeof(id) && (DWORD)id == tid)
+             return ios_thread_registry_mach( i );
+     }
+     return 0;
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 0cdd96d..4faed84 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -14959,18 +14959,11 @@ static struct
+     uintptr_t base;
+     PEB32 *peb32;
+     TEB *original_teb, *paired_teb;
++    BOOL retiring;          /* released by its owner; torn down with its last thread */
++    unsigned int threads;   /* secondary threads not yet reclaimed */
+ } ios_wow64_windows[IOS_WOW64_WINDOWS_MAX];
+ static pthread_mutex_t ios_wow64_windows_lock = PTHREAD_MUTEX_INITIALIZER;
+-/* Secondary threads of windowed owners, whose TEB pairs live in the window.
+- * The window's teardown frees the pairs and 32-bit stacks; a thread's data
+- * is freed later by another thread, so teardown unlinks it from teb_list and
+- * marks it (window 0): its TEB must not be read again. Windows lock. */
+-#define IOS_WOW64_THREADS_MAX 512
+-static struct
+-{
+-    struct thread_data *data;
+-    uintptr_t window;
+-} ios_wow64_threads[IOS_WOW64_THREADS_MAX];
++#include "wow64_threads.h"
+ 
+ uintptr_t ios_wow64_base_for_peb( void *owner )
+ {
+@@ -14993,21 +14986,6 @@ uintptr_t ios_wow64_current_base(void)
+     return ios_wow64_base_for_peb( ios_jit_current_peb() );
+ }
+ 
+-/* The Mach exception thread's query. It must not take the windows lock (the
+- * faulting thread may hold it), so it reads the published pairs: reservation
+- * stores the base before releasing the owner, and release clears the owner
+- * first. A window is released only by its owner's own thread, which cannot be
+- * faulting at the same time. */
+-uintptr_t ios_wow64_fault_base_for_peb( void *owner )
+-{
+-    unsigned int i;
+-    if (!owner) return 0;
+-    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
+-        if (__atomic_load_n( &ios_wow64_windows[i].owner, __ATOMIC_ACQUIRE ) == owner)
+-            return __atomic_load_n( &ios_wow64_windows[i].base, __ATOMIC_RELAXED );
+-    return 0;
+-}
+-
+ /* Native allocation entry point. Fixed guest addresses only; no PE ABI and
+  * no signal-handler callers. Output is unchanged on rejection/failure. */
+ NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
+@@ -15663,6 +15641,7 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+     struct file_view *view;
+ 
+     if (!owner) return STATUS_NOT_SUPPORTED; /* no process identity, no shared fallback */
++    ios_wow64_reap_threads( NULL );  /* a dead owner's last threads release its window */
+     pthread_mutex_lock( &ios_wow64_windows_lock );
+     for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
+     {
+@@ -15777,46 +15756,60 @@ static BOOL ios_wow64_restore_initial_teb( unsigned int slot )
+     return TRUE;
+ }
+ 
++/* Windows lock held. A retired window with no secondary thread left: no
++ * lookup can return it after ios_wow64_window_unpublish, its threads' stale
++ * registry TEBs are forgotten, and then its views go. */
++static void ios_wow64_teardown_window( unsigned int slot )
++{
++    extern void ios_thread_registry_forget( uintptr_t start, uintptr_t end );
++    uintptr_t base = ios_wow64_window_unpublish( slot );
++    sigset_t sigset;
++
++    ios_thread_registry_forget( base, base + IOS_WOW64_WINDOW_SIZE );
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    ios_wow64_delete_views( base );
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    __atomic_store_n( &ios_wow64_windows[slot].base, 0, __ATOMIC_RELAXED );
++    ios_wow64_windows[slot].peb32 = NULL;
++    ios_wow64_windows[slot].original_teb = NULL;
++    ios_wow64_windows[slot].paired_teb = NULL;
++    ios_wow64_windows[slot].retiring = FALSE;
++    ios_wow64_windows[slot].threads = 0;
++    dprintf( 2, "[wow64-window] torn down base=%p (threads created=%lu reclaimed=%lu)\n",
++             (void *)base, ios_wow64_threads_created, ios_wow64_threads_reclaimed );
++}
++
++/* The owner's initial thread, at its exit: restore its native TEB and retire
++ * the window. Secondary threads may still run on their TEBs and stacks in it
++ * (they end when the server closes their pipes): the window then stays until
++ * the last of them is reclaimed. */
+ static void ios_wow64_release_window( void *owner )
+ {
+     unsigned int i;
+     sigset_t sigset;
++
++    ios_wow64_reap_threads( NULL );
+     pthread_mutex_lock( &ios_wow64_windows_lock );
+     for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
+-        if (ios_wow64_windows[i].owner == owner)
++        if (ios_wow64_windows[i].owner == owner && !ios_wow64_windows[i].retiring)
+         {
+             uintptr_t base = ios_wow64_windows[i].base;
++            BOOL restored;
+             extern unsigned long long ios_wow64_window_serviced;
+-            dprintf( 2, "[wow64-window] release peb=%p base=%p serviced_low_faults=%llu\n", owner,
+-                     (void *)base, ios_wow64_window_serviced );
+-            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            dprintf( 2, "[wow64-window] release peb=%p base=%p serviced_low_faults=%llu "
++                     "live_threads=%u\n", owner, (void *)base, ios_wow64_window_serviced,
++                     ios_wow64_windows[i].threads );
+             /* The dying thread still needs its TEB for exit logging/longjmp.
+              * Only the initial thread restores it; an exit from a secondary
+              * thread keeps the window. */
+-            if (!ios_wow64_restore_initial_teb( i ))
+-            {
+-                server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+-                break;
+-            }
+-            {
+-                unsigned int j, threads = 0;
+-                for (j = 0; j < IOS_WOW64_THREADS_MAX; j++)
+-                {
+-                    if (!ios_wow64_threads[j].data || ios_wow64_threads[j].window != base) continue;
+-                    list_remove( &ios_wow64_threads[j].data->entry );
+-                    list_init( &ios_wow64_threads[j].data->entry );
+-                    ios_wow64_threads[j].window = 0;
+-                    threads++;
+-                }
+-                if (threads) dprintf( 2, "[wow64-window] release: %u secondary thread(s) unlinked\n", threads );
+-            }
+-            __atomic_store_n( &ios_wow64_windows[i].owner, NULL, __ATOMIC_RELEASE );
+-            ios_wow64_windows[i].base = 0;
+-            ios_wow64_windows[i].peb32 = NULL;
+-            ios_wow64_windows[i].original_teb = NULL;
+-            ios_wow64_windows[i].paired_teb = NULL;
+-            ios_wow64_delete_views( base );
++            server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++            restored = ios_wow64_restore_initial_teb( i );
+             server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++            if (!restored) break;
++            if (ios_wow64_window_retire( i )) ios_wow64_teardown_window( i );
++            else dprintf( 2, "[wow64-window] retired base=%p: %u secondary thread(s) left; "
++                          "the last one's reclamation tears it down\n", (void *)base,
++                          ios_wow64_windows[i].threads );
+             break;
+         }
+     pthread_mutex_unlock( &ios_wow64_windows_lock );
+@@ -16276,75 +16269,99 @@ void virtual_alloc_first_teb(void)
+ }
+ 
+ 
+-/* A windowed owner's new thread: its TEB pair in the owner's window, top-down
+- * below KUSER_SHARED_DATA (a 2 GiB guest's last user page), laid out as the initial pair (native TEB, TEB32 at +0x2000,
+- * guest-relative TEB32 fields). Its 32-bit stack follows in init_thread_stack. */
++/* A windowed owner's new thread: its TEB pair in the owner's window, a spare
++ * one of an earlier thread or a new one top-down below KUSER_SHARED_DATA (a 2 GiB
++ * guest's last user page), laid out as the initial pair (native TEB, TEB32 at
++ * +0x2000, guest-relative TEB32 fields). Its 32-bit stack follows in
++ * init_thread_stack. Exited threads are joined and reclaimed first. */
+ static NTSTATUS ios_wow64_alloc_teb( struct thread_data *data )
+ {
+     void *owner = ios_jit_current_peb();
+-    unsigned int i, entry = IOS_WOW64_THREADS_MAX;
+     NTSTATUS status = STATUS_NOT_SUPPORTED;
+     struct file_view *view;
+     uintptr_t window = 0;
+     uint32_t guest = 0;
++    unsigned int i;
++    int entry = -1, spare = 0;
+     sigset_t sigset;
+ 
++    ios_wow64_reap_threads( NULL );
+     pthread_mutex_lock( &ios_wow64_windows_lock );
+     for (i = 0; owner && i < IOS_WOW64_WINDOWS_MAX; i++)
+-        if (ios_wow64_windows[i].owner == owner) window = ios_wow64_windows[i].base;
+-    for (i = 0; i < IOS_WOW64_THREADS_MAX && entry == IOS_WOW64_THREADS_MAX; i++)
+-        if (!ios_wow64_threads[i].data) entry = i;
+-    if (window && entry == IOS_WOW64_THREADS_MAX) status = STATUS_NO_MEMORY;
+-    if (window && entry < IOS_WOW64_THREADS_MAX)
+     {
++        if (ios_wow64_windows[i].owner != owner) continue;
++        window = ios_wow64_windows[i].base;
++        if ((entry = ios_wow64_thread_entry( i, &guest )) < 0)
++        {
++            status = ios_wow64_windows[i].retiring ? STATUS_PROCESS_IS_TERMINATING : STATUS_NO_MEMORY;
++            break;
++        }
+         server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-        if (!(status = ios_wow64_image_gap( window, IOS_WOW64_PAIR_SIZE, IOS_WOW64_NULL_GUARD,
+-                                            0x7ffe0000, TRUE, &guest )) &&
+-            !(status = ios_wow64_claim_view( window, guest, IOS_WOW64_PAIR_SIZE,
+-                                             VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, &view )))
++        if ((spare = !!guest))
+         {
+-            init_teb( data, view->base );
++            memset( (void *)(window + guest), 0, IOS_WOW64_PAIR_SIZE );
++            status = STATUS_SUCCESS;
++        }
++        else if (!(status = ios_wow64_image_gap( window, IOS_WOW64_PAIR_SIZE, IOS_WOW64_NULL_GUARD,
++                                                 0x7ffe0000, TRUE, &guest )))
++            status = ios_wow64_claim_view( window, guest, IOS_WOW64_PAIR_SIZE,
++                                          VPROT_READ | VPROT_WRITE | VPROT_COMMITTED, &view );
++        if (!status)
++        {
++            init_teb( data, (void *)(window + guest) );
+             ios_wow64_init_teb32( data->teb, guest );
+-            ios_wow64_threads[entry].data = data;
+-            ios_wow64_threads[entry].window = window;
++            ios_wow64_thread_commit( i, entry, data, guest );
+         }
+         server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        break;
+     }
+     pthread_mutex_unlock( &ios_wow64_windows_lock );
+-    dprintf( 2, "[wow64-pair] thread tid=%04x owner=%p native=%p guest=%#x teb32_guest=%#x status=%#x\n",
+-             (unsigned int)data->tid, owner, status ? NULL : data->teb, guest,
+-             status ? 0 : guest + IOS_WOW64_TEB_OFFSET, (unsigned int)status );
++    dprintf( 2, "[wow64-pair] thread tid=%04x owner=%p native=%p guest=%#x teb32_guest=%#x "
++             "spare=%d status=%#x\n", (unsigned int)data->tid, owner, status ? NULL : data->teb,
++             guest, status ? 0 : guest + IOS_WOW64_TEB_OFFSET, spare, (unsigned int)status );
+     return status;
+ }
+ 
+-/* virtual_free_thread_data for a windowed owner's secondary thread: free its
+- * native stack while the window holds its TEB, and unlink it. The TEB pair
+- * and 32-bit stack stay in the window until its teardown. FALSE for any
+- * other thread. */
++/* virtual_free_thread_data for a windowed owner's secondary thread, joined
++ * (or never started): free its 32-bit stack through the window and its native
++ * stack, keep its TEB pair as a spare, and tear down a retired window whose
++ * last thread it was. FALSE for any other thread. */
+ static BOOL ios_wow64_free_teb( struct thread_data *data )
+ {
+-    void *stack = NULL;
+-    BOOL found = FALSE;
+-    unsigned int i;
++    void *stack = NULL, *stack32;
++    SIZE_T size = 0, size32;
++    NTSTATUS status = STATUS_SUCCESS;
++    WOW_TEB *wow_teb;
+     sigset_t sigset;
+-    SIZE_T size = 0;
++    uint32_t pair;
++    int entry, slot;
+ 
+     pthread_mutex_lock( &ios_wow64_windows_lock );
+-    for (i = 0; i < IOS_WOW64_THREADS_MAX && !found; i++)
++    if ((entry = ios_wow64_thread_find( data )) < 0)
+     {
+-        if (ios_wow64_threads[i].data != data) continue;
+-        found = TRUE;
+-        if (ios_wow64_threads[i].window) stack = data->teb->DeallocationStack;
+-        ios_wow64_threads[i].data = NULL;
+-        ios_wow64_threads[i].window = 0;
+-        server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-        list_remove( &data->entry );
+-        list_init( &data->entry );
+-        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++        pthread_mutex_unlock( &ios_wow64_windows_lock );
++        return FALSE;
+     }
++    pair = ios_wow64_threads[entry].pair;
++    stack = data->teb->DeallocationStack;
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    list_remove( &data->entry );
++    list_init( &data->entry );
++    if ((wow_teb = get_wow_teb( data->teb )) && wow_teb->DeallocationStack)
++    {
++        stack32 = (void *)(ios_wow64_threads[entry].window + wow_teb->DeallocationStack);
++        size32 = 0;
++        status = ios_wow64_vm_free( ios_wow64_threads[entry].window, &stack32, &size32, MEM_RELEASE );
++    }
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    if ((slot = ios_wow64_thread_reclaimed( entry )) >= 0) ios_wow64_teardown_window( slot );
++    if (ios_wow64_threads_reclaimed <= 8 || !(ios_wow64_threads_reclaimed % 64) || status)
++        dprintf( 2, "[wow64-thread] reclaimed tid=%04x pair=%#x stack32 status=%#x "
++                 "created=%lu reclaimed=%lu\n", (unsigned int)data->tid, pair, (unsigned int)status,
++                 ios_wow64_threads_created, ios_wow64_threads_reclaimed );
+     pthread_mutex_unlock( &ios_wow64_windows_lock );
+     if (stack) NtFreeVirtualMemory( GetCurrentProcess(), &stack, &size, MEM_RELEASE );
+-    return found;
++    return TRUE;
+ }
+ 
+ /***********************************************************************
+diff --git a/build/ntdll-unix/wow64_threads.h b/build/ntdll-unix/wow64_threads.h
+new file mode 100644
+index 0000000..7b6ccd7
+--- /dev/null
++++ b/build/ntdll-unix/wow64_threads.h
+@@ -0,0 +1,208 @@
++/* Playport: how long a WoW64 window outlives its threads and fault lookups.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Included after ios_wow64_windows (owner, base, retiring, threads),
++ * IOS_WOW64_WINDOWS_MAX and ios_wow64_windows_lock; the includer provides
++ * virtual_free_thread_data. The windows lock guards the thread records and
++ * the window fields here; the Mach handler's lookups take no lock.
++ *
++ * A windowed owner's secondary threads have their TEB pairs and 32-bit stacks
++ * in its window. The owner's release (its initial thread's exit) only retires
++ * the window while any of them is left: the window is torn down when its last
++ * thread is reclaimed, and teardown waits out the Mach handler's lookups.
++ * A thread is reclaimed only after it is joined: pthread_exit_wrapper marks it
++ * exited, and a later exiting thread, a thread creation or a release joins it.
++ * Its TEB pair stays in the window as a spare for the next thread (a stale
++ * TEB pointer still reads mapped memory, as with Wine's TEB free list).
++ */
++#ifndef IOS_WOW64_THREADS_H
++#define IOS_WOW64_THREADS_H
++
++#define IOS_WOW64_THREADS_MAX 512
++#define IOS_WOW64_THREAD_LIVE    1  /* created; running or not yet started */
++#define IOS_WOW64_THREAD_EXITED  2  /* left pthread_exit_wrapper, not yet joined */
++#define IOS_WOW64_THREAD_JOINING 3  /* claimed by one joiner */
++#define IOS_WOW64_THREAD_SPARE   4  /* no thread: a reclaimed TEB pair to reuse */
++#define IOS_WOW64_JOIN_MAX 16
++
++struct ios_wow64_thread
++{
++    struct thread_data *data;
++    uintptr_t window;
++    uint32_t pair;          /* guest address of its TEB pair */
++    unsigned int state;
++    pthread_t pthread;
++};
++static struct ios_wow64_thread ios_wow64_threads[IOS_WOW64_THREADS_MAX];
++static unsigned long ios_wow64_threads_created, ios_wow64_threads_reclaimed;
++/* Mach handler lookups in progress, between ios_wow64_fault_enter and _leave */
++static unsigned int ios_wow64_fault_readers;
++
++/* The Mach handler's window base for a faulting thread's owner, pinned until
++ * ios_wow64_fault_leave; 0 (nothing to leave) when the owner has none. It must
++ * not take the windows lock (the faulting thread may hold it). The reader is
++ * counted before it reads the owner, and teardown clears the owner before it
++ * waits for the count to drain, so a base read here stays mapped and its slot
++ * unused until the reader leaves. Reservation stores the base before the owner. */
++uintptr_t ios_wow64_fault_enter( void *owner )
++{
++    unsigned int i;
++    if (!owner) return 0;
++    __atomic_add_fetch( &ios_wow64_fault_readers, 1, __ATOMIC_SEQ_CST );
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++        if (__atomic_load_n( &ios_wow64_windows[i].owner, __ATOMIC_SEQ_CST ) == owner)
++            return __atomic_load_n( &ios_wow64_windows[i].base, __ATOMIC_RELAXED );
++    __atomic_sub_fetch( &ios_wow64_fault_readers, 1, __ATOMIC_SEQ_CST );
++    return 0;
++}
++
++void ios_wow64_fault_leave(void)
++{
++    __atomic_sub_fetch( &ios_wow64_fault_readers, 1, __ATOMIC_SEQ_CST );
++}
++
++/* Windows lock held (never virtual_mutex: the handler's lookups are short and
++ * take neither). Unpublish a retiring window that has no thread left: clear
++ * its owner, wait until no lookup can hold its base, drop its spare pairs.
++ * Returns the base; the caller deletes the views, then frees the slot. */
++static uintptr_t ios_wow64_window_unpublish( unsigned int slot )
++{
++    uintptr_t base = ios_wow64_windows[slot].base;
++    unsigned int i;
++
++    __atomic_store_n( &ios_wow64_windows[slot].owner, NULL, __ATOMIC_SEQ_CST );
++    while (__atomic_load_n( &ios_wow64_fault_readers, __ATOMIC_SEQ_CST )) sched_yield();
++    for (i = 0; i < IOS_WOW64_THREADS_MAX; i++)
++        if (ios_wow64_threads[i].window == base)
++            memset( &ios_wow64_threads[i], 0, sizeof(ios_wow64_threads[i]) );
++    return base;
++}
++
++/* The owner's release: TRUE when no secondary thread is left and the caller
++ * tears the window down now; otherwise the last thread's reclamation does. */
++static BOOL ios_wow64_window_retire( unsigned int slot )
++{
++    ios_wow64_windows[slot].retiring = TRUE;
++    return !ios_wow64_windows[slot].threads;
++}
++
++/* A record for a new thread of the window in slot: a spare pair of that window
++ * (*pair its guest address) or an empty record (*pair 0: the caller claims a
++ * pair). -1 when the window is retiring or the table is full. No change. */
++static int ios_wow64_thread_entry( unsigned int slot, uint32_t *pair )
++{
++    int i, empty = -1;
++
++    *pair = 0;
++    if (ios_wow64_windows[slot].retiring) return -1;
++    for (i = 0; i < IOS_WOW64_THREADS_MAX; i++)
++    {
++        if (ios_wow64_threads[i].state == IOS_WOW64_THREAD_SPARE &&
++            ios_wow64_threads[i].window == ios_wow64_windows[slot].base)
++        {
++            *pair = ios_wow64_threads[i].pair;
++            return i;
++        }
++        if (!ios_wow64_threads[i].state && empty < 0) empty = i;
++    }
++    return empty;
++}
++
++static void ios_wow64_thread_commit( unsigned int slot, int entry, struct thread_data *data, uint32_t pair )
++{
++    ios_wow64_threads[entry].data = data;
++    ios_wow64_threads[entry].window = ios_wow64_windows[slot].base;
++    ios_wow64_threads[entry].pair = pair;
++    ios_wow64_threads[entry].state = IOS_WOW64_THREAD_LIVE;
++    ios_wow64_windows[slot].threads++;
++    ios_wow64_threads_created++;
++}
++
++static int ios_wow64_thread_find( const struct thread_data *data )
++{
++    int i;
++    for (i = 0; data && i < IOS_WOW64_THREADS_MAX; i++)
++        if (ios_wow64_threads[i].data == data) return i;
++    return -1;
++}
++
++/* A joined (or never started) thread's record becomes its pair's spare record.
++ * Returns the window's slot when it was a retiring window's last thread (the
++ * caller tears it down), else -1. */
++static int ios_wow64_thread_reclaimed( int entry )
++{
++    uintptr_t window = ios_wow64_threads[entry].window;
++    unsigned int i;
++
++    ios_wow64_threads[entry].data = NULL;
++    ios_wow64_threads[entry].state = IOS_WOW64_THREAD_SPARE;
++    ios_wow64_threads_reclaimed++;
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        if (!ios_wow64_windows[i].owner || ios_wow64_windows[i].base != window) continue;
++        if (ios_wow64_windows[i].threads) ios_wow64_windows[i].threads--;
++        return ios_wow64_windows[i].retiring && !ios_wow64_windows[i].threads ? (int)i : -1;
++    }
++    return -1;
++}
++
++/* Claim up to IOS_WOW64_JOIN_MAX exited threads to join, then mark self (the
++ * thread in pthread_exit_wrapper, or NULL) exited. One critical section: a
++ * thread joins only threads that exited before it, so joins form no cycle. */
++static unsigned int ios_wow64_thread_collect( const struct thread_data *self, pthread_t self_id,
++                                              struct ios_wow64_thread *joins )
++{
++    unsigned int i, count = 0;
++    int entry;
++
++    for (i = 0; i < IOS_WOW64_THREADS_MAX && count < IOS_WOW64_JOIN_MAX; i++)
++    {
++        if (ios_wow64_threads[i].state != IOS_WOW64_THREAD_EXITED) continue;
++        ios_wow64_threads[i].state = IOS_WOW64_THREAD_JOINING;
++        joins[count++] = ios_wow64_threads[i];
++    }
++    if ((entry = ios_wow64_thread_find( self )) >= 0 &&
++        ios_wow64_threads[entry].state == IOS_WOW64_THREAD_LIVE)
++    {
++        ios_wow64_threads[entry].state = IOS_WOW64_THREAD_EXITED;
++        ios_wow64_threads[entry].pthread = self_id;
++    }
++    return count;
++}
++
++/* Join exited threads (self: the exiting thread, or NULL) and free them:
++ * virtual_free_thread_data reclaims each through its window. No lock held
++ * while joining; a joined thread has left pthread_exit_wrapper already. */
++static void ios_wow64_reap_threads( struct thread_data *self )
++{
++    struct ios_wow64_thread joins[IOS_WOW64_JOIN_MAX];
++    unsigned int i, count;
++
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    count = ios_wow64_thread_collect( self, pthread_self(), joins );
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    for (i = 0; i < count; i++)
++    {
++        pthread_join( joins[i].pthread, NULL );
++        virtual_free_thread_data( joins[i].data );
++    }
++}
++
++/* exit_thread: a window thread is joined by ios_wow64_reap_threads, never by
++ * exit_thread's previous-thread join (that could free it before its window's
++ * records do). */
++BOOL ios_wow64_is_window_thread( const struct thread_data *data )
++{
++    BOOL found;
++    pthread_mutex_lock( &ios_wow64_windows_lock );
++    found = ios_wow64_thread_find( data ) >= 0;
++    pthread_mutex_unlock( &ios_wow64_windows_lock );
++    return found;
++}
++
++/* pthread_exit_wrapper, last thing before pthread_exit, for every thread. */
++void ios_wow64_thread_exit( struct thread_data *data )
++{
++    ios_wow64_reap_threads( data );
++}
++
++#endif

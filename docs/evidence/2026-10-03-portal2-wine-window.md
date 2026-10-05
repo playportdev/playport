@@ -1,0 +1,1119 @@
+# Portal 2 milestone 1, step 2: Wine window (in progress)
+
+## Result and scope
+
+The first part of [step 2](../PORTAL2-PLAN.md#step-2-the-window-in-wine-patchesmadeira-unix-or-wine-port)
+reserves an owned, uncommitted 4 GiB window on the phone before attempting the
+i386 main image. The owner-identity follow-up below isolates child startup
+image state from the session and makes unix-side WoW64 identity owner-aware.
+The suballocation follow-up prepares owner-local PEB32 storage inside the
+window; the initial-thread follow-up pairs it with window-backed native and
+32-bit TEBs. Address arithmetic, startup-state selection, view splitting and
+pairing helpers are host-tested from the actual patches. The fixed-image
+follow-up below now maps Portal 2's main image in the window, retaining guest
+image/entry addresses and publishing PEB32's image base. The parameter
+follow-up now publishes a normalized, window-backed PE32 parameter block and
+environment. Guest image placement now accepts in-range ASLR suggestions and
+searches window-local gaps; nonzero relocations are host-tested with Wine's
+relocation kernel, not yet exercised on the phone. Explicit native host-window
+pointers now route to owner-checked anonymous VM operations; parameter
+allocation uses that path on the phone. Guest-constrained NULL requests now
+search owner-local gaps, with guest limits/zero-bits and top-down selection;
+parameter allocation validates the NULL path on the phone. Native
+`MemoryBasicInformation` now reports owner-local logical regions with host
+pointers; normal parameter bootstrap validates its storage through this query
+on the phone. Complete ordinary i386 image sections now map through native
+`NtMapViewOfSection` into owner-local storage, reusing Wine's mapper and server
+bookkeeping. Portal 2's normal main image exercises that entry; native image
+queries and transactional section unmap are host-tested only. Native
+`NtProtectVirtualMemory` now changes window image and anonymous VM pages per
+4 KiB Wine page through one transaction that Wine's image setup also uses;
+Other query cases,
+decommit/release/reuse and top-down/collision placement are host-tested only.
+The native-loader follow-up removes the startup stop: the child runs its own
+aarch64 ntdll's loader into wow64.dll's process init, with the i386 ntdll mapped
+(and relocated) in the window, and stops before loading FEX's CPU module.
+**No i386 code executes. Step 2 and milestone 1 are not complete.**
+Step 3 ([its record](2026-10-03-portal2-fex-wow64.md)) runs i386 code past this
+record's last boundary; wine-pe 0014 below is the earlier version of its stop.
+
+Initial reservation build: `5a54d17` plus madeira-unix 0049 and the host test changes.
+IPA: `.work/out/20261003-115558-ed95fc62/Playport-26.5-ed95fc62.ipa` (dev).
+SHA256: `ed95fc62184fbc8a855dec1571f037d78c63dd58788e6b4283013d54bb5ab1a5`.
+Only `libntdll_unix.a` changes in `app/artifacts.tsv`; PE manifests and pins
+are unchanged.
+
+## Implementation
+
+**madeira-unix 0049** in `build/ntdll-unix/virtual_ios.c`:
+
+- An i386 main image triggers reservation before its existing map attempt.
+  This does not change the session's machine, global limits or TEB layout.
+- Each reservation is keyed by the current thread's **TEB->PEB**, using
+  `ios_jit_current_peb()`, not the mutable global `peb`. No identity or a full
+  registry fails explicitly; neither falls back to another process's window.
+- A Wine `file_view`, initially `PROT_NONE`, protects the entire 4 GiB from
+  ordinary Wine allocations. No guest pages, including the low 64 KiB, are
+  committed. This is virtual address space, not 4 GiB of physical memory.
+- `ios_wow64_current_base` and `ios_wow64_base_for_peb` export native unix-side
+  queries. They take a mutex, **are not async-signal-safe**, and are not yet
+  wired to the fault handler or exported to PE WoW64. The explicit-owner
+  query is for a Mach exception handler's target, not the handler's own TEB.
+- The reservation is deleted on its owner's process exit, through the normal
+  view cleanup. Lock order is window registry then virtual mutex.
+
+`wow64_window.h` defines the arithmetic used by the native reservation
+round-trip diagnostic and the host test. A nonzero guest address translates
+as `B + zext32(g)`; guest NULL stays host NULL. The inverse accepts NULL or a
+pointer strictly above B and below B+4G, rejects other pointers **without
+truncation**, and leaves its output unchanged on rejection. A missing,
+misaligned, sub-floor or overflowing base is rejected. Low nonzero guest
+addresses still translate into the inaccessible guard; arithmetic grants no
+access permission. Handles and integers are untouched.
+
+`build/wow64/test.py`, a C-test entry in `pp test`, applies just this header
+from the patch into a scratch repository under `$PLAYPORT_BUILD/c-test`, then
+compiles `window_test.c` with UBSan. CI needs no Madeira checkout. It checks
+NULL, low guard offsets, 64 KiB, 2/4 GiB boundaries, out-of-window/wide host
+pointers, invalid bases, two disjoint windows and 200,000 round trips. This
+is an arithmetic test, not a host test of the Wine registry or fault service.
+
+## Phone runs
+
+The phone reported **18% battery, no external power** before testing. Testing
+was not skipped. One device-lock session upgraded in place, retaining the
+container, then ran both titles even though Portal 2's expected failure
+returned nonzero:
+
+```sh
+./pp install --no-build
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-window
+./pp ui --play app-367520 --until first-frame+10 --shot --out .work/ui-runs/portal2-window-hk
+```
+
+Both installed/result events name the IPA SHA256 above.
+
+**Portal 2:** `.work/ui-runs/portal2-window/pull/s1-host.log` shows the session
+root starting the i386 child, a reservation at **B=`0x7038010000`**, size
+`0x100000000`, guard `0x10000`, committed 0, roundtrip `0x400000`. The image
+still tries to map at `0x400000`, under `0x7fff0000`, and returns
+`STATUS_NO_MEMORY` (`c0000017`). The child's teardown releases the same
+window, and the session reports error 8; the UI result is
+`launch=failed run_exe=-7`, exit 1. The screenshot shows **Portal 2 could not
+start**, with JIT and Runtime checked and Game failed. This is evidence of
+reservation/lifetime, not successful image mapping or mixed-mode execution.
+
+**Hollow Knight:** `.work/ui-runs/portal2-window-hk` passes, exit 0,
+`until first-frame+10`. JIT takes 2.41 s; first frame is **9.40 s** from Play.
+The screenshot shows the game's main menu. No pool exhaustion, refused FEX
+allocation or nonzero runtime-limit counters. Its log contains no
+`[wow64-window]` line: x86-64 launches do not reserve the new window.
+
+`pp build` passed (77 IPA checks), explicit `pp verify <IPA>` passed,
+`pp test` passed (483 Python tests, C tests including the new UBSan test, all
+three Swift packages), `pp slots` passed (150 slots, 149 calls), and
+`git diff --check` passed outside the format-patch file (its blank context
+lines and mail signature have required trailing spaces). The source commit's
+`git show --check` is clean. `pp build --plan` reports no trees to rebuild.
+Logs and screenshots remain under `.work/`.
+
+## Owner identity follow-up (same step)
+
+Latest source at build: `da47ea0` plus madeira-unix 0050 and wine-unix 0008.
+Dev IPA: `.work/out/20261003-122000-92f9c501/Playport-26.5-92f9c501.ipa`.
+SHA256: `92f9c50115606327d2c7f7ce7e6afb83bc994b4503edef87f36b1440a4a6ea9f`.
+Only `libntdll_unix.a` changes in the committed build records; pins, PE
+manifests, FEX and DXMT are unchanged.
+
+The old child startup overwrote `main_image_info` and `main_module` until
+`unix_init_startup_info()` returned, then restored the session's values.
+Concurrent session threads could observe the child during that interval;
+failed startup terminates the pthread and never reaches the restore.
+
+- **madeira-unix 0050:** image/module write slots select private state stored
+  in the starting thread's already allocated Wine `thread_data`, keyed by its
+  TEB->PEB. Main-image writers and environment setup use those slots/readers.
+  The parsed image identity is available before reservation or a failing map.
+  Only successful startup publishes the child in the existing identity
+  registry; a full registry now refuses the child instead of borrowing the
+  session identity. Other startup globals are not made private here.
+- **wine-unix 0008:** iOS `is_wow64()` reads `ios_cur_image_info()`, leaving
+  non-iOS Wine unchanged. `thread_data` holds the temporary startup pointer.
+  No new Darwin TLV storage is used: its lazy allocation would be unsafe in
+  identity readers called from fault handlers. This does not make the locked
+  **window base queries** signal-safe.
+- Native `init_teb` inherits `RtlGetCurrentPeb()` from its creator rather than
+  the drifting global `peb`. CPU-area lookup and WoW64 stack machine selection
+  use the **target TEB's owner**, not the calling debugger/thread's identity;
+  an absent CPU area returns NULL. This does not allocate a window-backed TEB.
+- `build/wow64/owner_test.c` compiles the new production header and the actual
+  write-slot, storage-getter and `is_wow64()` functions recovered from the
+  patch hunks, with UBSan. Two concurrent mocked i386 startups cannot change
+  the ARM64EC session image/module. Tests cover missing storage, NULL/wrong
+  owners, nesting rejection, separate slots and a thread exiting without
+  restoring state. This tests selection, **not Wine layouts, the full identity
+  registry, TEB inheritance or the window allocator**.
+
+The final phone session upgraded in place, then ran both titles, continuing
+past Portal 2's expected nonzero exit. Commands use the same options as the
+initial runs above, with output directories:
+
+- `.work/ui-runs/portal2-owner-final`: at reservation,
+  `current_machine=0x14c session_machine=0x8664 is_wow64=1
+  session_is_wow64=0`, `wow_teb=0x0`. Window B=`0x7038010000` is reserved and
+  released. Main-image mapping still fails `c0000017`; UI result is
+  `launch=failed run_exe=-7`, exit 1. The screen still shows **Portal 2 could
+  not start** (JIT/Runtime passed, Game failed). This proves early identity
+  separation, not a mapped image or successful WoW64 bootstrap.
+- `.work/ui-runs/portal2-owner-final-hk`: exit 0, `first-frame+10`, first frame
+  **9.69 s**, JIT **2.63 s**. Screenshot shows the main menu; no pool
+  exhaustion, refused FEX allocation or nonzero runtime-limit counters.
+
+Both result events carry the latest IPA SHA256 above. Before the first
+owner-identity run the phone was at 35% battery, connected to external power
+and charging. `pp build` passes 77 IPA checks; `pp test` passes 483 Python
+tests, all C tests including both UBSan WoW64 tests, and all three Swift
+packages. `pp slots` passes (150 slots, 149 calls). Both source commits pass
+`git show --check`; the superproject diff outside format-patch files passes
+`git diff --check`. `pp build --plan` reports no trees to rebuild.
+
+## Suballocation follow-up (same step)
+
+Latest source at build: `f7e39b4` plus madeira-unix 0051 and host tests.
+Dev IPA: `.work/out/20261003-123557-40618838/Playport-26.5-40618838.ipa`.
+SHA256: `40618838186dcf025a9f4cb7727af7a7cc161401775205164842a89834b2c410`.
+Only `libntdll_unix.a` changes in the committed build records; pins and PE,
+FEX and DXMT outputs are unchanged.
+
+**madeira-unix 0051** replaces the registry's single view pointer with a
+stable base and owner-local PEB32 storage. `wow64_views.h` splits a holdback
+view into an allocation and up to two `VPROT_WOW64_HOLE` gaps. There is no
+unmap/remap interval or `MAP_FIXED`; host protection and all descriptors are
+obtained before modifying the tree. Invalid ranges, overlap, descriptor
+exhaustion and protection failure leave the tree and output unchanged. The
+native allocation wrapper selects the explicit owner under the window lock,
+then takes `virtual_mutex`; no missing-owner fallback or signal-safe API.
+Teardown walks every view inside the owner's disjoint range rather than
+following a stale descriptor after a split.
+
+Reservation now claims one RW/committed host page at guest `0x7ff00000` for
+PEB32. This is **storage only**: not a native PEB copy, not populated, and not
+linked through `wow_peb` or a paired TEB. The low 64 KiB and all other gaps
+remain PROT_NONE. The allocator currently supports fixed guest placements
+and reserved/RW views only; general VM routing, free/reuse, image/file and
+executable views are not implemented.
+
+`build/wow64/views_test.c` uses the production header, owner-selection wrapper
+and teardown function extracted from the patch. Real 4 GiB PROT_NONE host
+mappings back a **mock Wine view tree/page-metadata layer**; it does not test
+Wine's rbtree/free-range bookkeeping or signal masking. With UBSan it tests
+boundaries/overflow/alignment, untouched outputs on failure, both descriptor
+failure positions, protection failure, complete gap coverage, exact-fit reuse,
+zero-filled RW allocations, independent contents at identical guest addresses,
+unknown/NULL owners, eight concurrent claims (one success per owner), real
+SIGSEGV on the low guard, and teardown of one window leaving the other intact.
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected nonzero result. Both result events name the SHA256 above.
+The pre-run phone check reported 57% battery, not externally powered.
+
+- `.work/ui-runs/portal2-suballoc`: B=`0x7038010000`, PEB32 host
+  `0x70b7f10000`, guest `0x7ff00000`, bytes `0x4000`, `paired=0`.
+  Child `Machine=0x14c`, session `Machine=0x8664`, `wow_teb=0x0`.
+  Main-image mapping still fails `c0000017`, then the window is released;
+  UI result `launch=failed run_exe=-7`, exit 1. Screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed, Game failed. This checks allocation
+  and split-view teardown on Wine/iOS, not PEB contents or guest execution.
+- `.work/ui-runs/portal2-suballoc-hk`: `first-frame+10`, exit 0; first frame
+  **8.29 s**, JIT **2.50 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and all runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, C tests including the three WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). The source
+commit's `git show --check` and the superproject's non-patch whitespace check
+pass. `pp build --plan` reports no trees to rebuild. Logs/screenshots stay
+under `.work/portal2-suballoc` and `.work/ui-runs/`.
+
+## Initial TEB-pair follow-up (same step)
+
+Latest source at build: `41b38b0` plus madeira-unix 0052.
+Dev IPA: `.work/out/20261003-125233-3ea1b61a/Playport-26.5-3ea1b61a.ipa`.
+SHA256: `3ea1b61a1f411ed26661c2aea45c4209234272879d2a5ccbc76d15c8175cc405`.
+Only `libntdll_unix.a` changes in the committed build records; pins and PE,
+FEX and DXMT outputs are unchanged.
+
+**madeira-unix 0052** bootstraps the initial thread, not general WoW64:
+
+- The old native TEB is near 4 GiB, while the window is around `0x7000000000`.
+  A signed 32-bit `WowTebOffset` cannot span that distance. Claim one 16 KiB
+  RW view at guest `0x7fe00000` and move the pristine native TEB there, beside
+  TEB32 at guest `0x7fe02000`. Offsets are ±`0x2000`; Wine's debug-info page
+  fits after TEB32. Production compile-time assertions check the real layouts.
+- Copy native state, preserving stack/external pointers and GdiTebBatch's
+  syscall table/frame. Rebase its self, empty activation-list and Unicode
+  pointers. Reject a source with an existing pair, CPU area, live activation
+  list or nonstandard self-references. This is before child PE code executes.
+- Native pointers stay host-relative. TEB32's self, PEB, activation-list,
+  Unicode buffer and native backlink (`GdiBatchCount`) are guest addresses.
+  Client IDs remain integers. PEB32 receives selected bootstrap scalars from
+  the owner and parsed image; loader, heap, image and process parameters stay
+  NULL. No native PEB-layout copy and no global `wow_peb` assignment.
+- `thread_data` and its thread-list entry do not move. Under the window and
+  virtual locks, publish the new TEB through the patcher pthread TLS key and
+  `data->teb`, preserving signal/kernel-stack storage. The loader refreshes its
+  local TEB after startup. No extra `signal_alloc_thread` call is needed: it
+  is a no-op at this pin. The phone's pre-PE syscall frame is still NULL;
+  the host test separately exercises preservation of a non-NULL frame.
+- Retain the old native TEB outside the session free list. Restore it and its
+  TLS pointer **before** deleting the window, since exit logging and the
+  process-thread longjmp still need a valid TEB. Refuse teardown from the
+  wrong thread or after TLS publication failure rather than unmapping a live
+  pointer. This is initial-thread-only lifetime management, not a solution
+  for arbitrary live sibling threads. Secondary WoW64 thread allocation
+  explicitly returns `STATUS_NOT_SUPPORTED` until that path is implemented.
+
+`build/wow64/pair_test.c` uses the production `wow64_pair.h` and pairing/
+restore functions extracted from the patch, with **mock Wine types and view
+claims**, real 4 GiB host mappings and pthread TLS, under UBSan. It checks
+self/PEB/backlink and embedded-buffer conversion round trips; offset symmetry;
+IDs; scalar-only PEB32; native syscall/stack state and list-entry preservation;
+missing/wrong owner and incompatible source rejection; view/TLS failure before
+publication; wrong-thread/TLS-failed restoration; restoration before protecting
+the old pair inaccessible; and two concurrent owners with identical guest
+addresses. It does not test Wine's actual rbtree, signal masking, Mach exception
+handling, full PEB initialization or execution after a successful image map.
+The build compiles the actual Wine layouts and the phone checks the lifecycle.
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected nonzero result. Both result events name the SHA256 above:
+
+- `.work/ui-runs/portal2-pair`: B=`0x7038010000`, native TEB
+  `0x70b7e10000`, TEB32 `0x70b7e12000`, PEB32 `0x70b7f10000`.
+  Logs show self32=`0x7fe02000`, PEB32=`0x7ff00000`, native backlink32=
+  `0x7fe00000`, reverse offset -8192, OS 10.0, subsystem 2 and NULL image/
+  parameters. Child `Machine=0x14c` remains separate from session `0x8664`;
+  `wow_teb` is now non-NULL. TLS publication matches, then the unchanged image
+  map fails `c0000017`. Exit restores the old native TEB (`tls_match=1`) and
+  releases the window. UI result `launch=failed run_exe=-7`, exit 1; screenshot
+  still shows **Portal 2 could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-pair-hk`: `first-frame+10`, exit 0; first frame
+  **8.13 s**, JIT **2.35 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and all runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, C tests including four WoW64 UBSan tests, all three Swift
+packages), and `pp slots` passes (150 slots, 149 calls). The source commit's
+`git show --check` and the superproject's non-patch whitespace check pass.
+`pp build --plan` reports no trees to rebuild. Logs/screenshots stay under
+`.work/portal2-pair` and `.work/ui-runs/`.
+
+## Fixed-image follow-up (same step)
+
+Source at build: `37e9394` plus madeira-unix 0053 and host tests.
+Dev IPA: `.work/out/20261003-133126-6da1d49c/Playport-26.5-6da1d49c.ipa`.
+SHA256: `6da1d49c614ab6045e8d3a6a5604d308bddc59967c898696f4a9b7881c0e4e5f`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+are unchanged.
+
+**madeira-unix 0053** uses Wine's existing PE header/section mapper, not a
+second loader. The owner base is queried before taking `virtual_mutex`,
+preserving registry lock order. Fixed preferred guest placement is claimed
+inside that window, respecting the low guard, 16 KiB rounding and the
+image's 2/4 GiB large-address-aware limit. Server ASLR suggestions are ignored
+for now; collisions fail rather than falling back to a host allocation.
+
+Unix module pointers and wineserver VM views name **host storage**; returned
+image info, the PE header and PEB32's image base name **guest identity**.
+Relocation delta is zero at the preferred guest base, never B. A new view flag
+retains logical EXEC while host protection drops native EXEC and bypasses
+pool copies; these images do not enter the global sub-floor image table.
+On mapping failure, anonymous PROT_NONE backing atomically replaces any file
+pages, leaving a reusable holdback rather than unmapping the reservation.
+A replacement failure retains the descriptor until owner teardown.
+
+`build/wow64/image_test.c` compiles `wow64_image.h` and the actual modified
+`mprotect_range` recovered from the patch. UBSan tests use real mappings,
+private file backing, and **mock Wine views/page bytes/protection conversion**:
+NULL/invalid inputs, rounded 2/4 GiB edges, wide-address rejection, untouched
+failure outputs, descriptor/protection failure, identical guest addresses in
+disjoint windows, logical EXEC with physical NX/read-only/RW pages, rollback
+failure, zero-filled retry, guard and teardown isolation. Non-window views
+still take `mprotect_exec`. This does not test Wine's full rbtree, server VM
+queries, nonzero guest relocations, general VM or FEX execution.
+
+One phone-lock session upgraded in place and ran both titles. Both result
+events name the SHA256 above:
+
+- `.work/ui-runs/portal2-image-final`: B=`0x7038010000`, image host
+  `0x7038410000`, guest/header/PEB32 image `0x400000`, size `0x5c000`,
+  transfer address `0x4017d1`, delta 0. `virtual_map_main_module` returns
+  informational `STATUS_IMAGE_NOT_AT_BASE` (`40000003`) because the server
+  records high host storage. Startup then deliberately terminates with
+  `STATUS_NOT_SUPPORTED` (`c00000bb`), before the old parameter builder or
+  session ARM64EC PE loader can consume incompatible pointers/layouts.
+  TEB restoration and window release still succeed. **No i386 DLL load or
+  instruction execution is claimed.** UI result remains
+  `launch=failed run_exe=-7`, exit 1; screenshot shows **Portal 2 could not
+  start**, JIT/Runtime passed and Game failed.
+- `.work/ui-runs/portal2-image-final-hk`: `first-frame+10`, exit 0; first
+  frame **8.24 s**, JIT **2.51 s**. Screenshot shows the main menu. Pool
+  exhaustion, FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, all C tests including five WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
+`git show --check` and the non-patch whitespace check pass; `pp build --plan`
+reports no trees to rebuild. Logs/screenshots stay under `.work/portal2-image`
+and `.work/ui-runs/`.
+
+## Process-parameter follow-up (same step)
+
+Source at build: `31f0b9c` plus madeira-unix 0054 and host tests.
+Dev IPA: `.work/out/20261003-135019-5390ca2b/Playport-26.5-5390ca2b.ipa`.
+SHA256: `5390ca2bb181754cd7f9aeaf39043d7fc75b59ab9fc8addca289c24444aa34c8`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+are unchanged.
+
+**madeira-unix 0054** uses Wine's existing native startup-data builder, then
+packs a PE32 copy into one owner-local RW view at guest `0x7e000000`. The
+bootstrap placement is fixed and capped at 16 MiB; it is not a general process-
+parameter allocator. All eight string buffers and the environment live in
+that same view. Addresses are checked guest offsets, not truncated host
+pointers; standard/console/current-directory handles remain plain integers.
+RuntimeInfo remains an opaque byte blob, including odd byte lengths. String
+capacity padding is zeroed; environment size and double-NUL termination are
+validated. Unsupported drive-directory/package pointers and overflowing
+scalar fields fail explicitly, before allocation/publication.
+
+PEB32's parameter pointer is published only after packing succeeds. Heap
+option scalars, processor count, debug/global flags and critical-section
+timeout are taken from the **owner**, not the session. `load_global_options`
+now receives the current PEB explicitly: it previously wrote the mutable
+file-scope `peb` despite `init_peb`'s owner-local shadow. The global `wow_peb`
+is still untouched. PEB32 loader/heap pointers remain NULL; this is **not full
+PEB/loader initialization**. The temporary native parameter allocation is
+released at the retained fail-closed boundary, before the session's ARM64EC
+loader can run on this i386 child. The window view lives until owner teardown.
+
+`build/wow64/params_test.c` compiles the production packing header and the
+publication function extracted from the patch, with UBSan, **mock Wine
+layouts/allocation and real disjoint window mappings**. It checks invalid/
+NULL inputs, normalized flags, malformed strings/environments, binary and
+empty fields, padding, unchanged outputs/storage on rejection, allocation
+failure and duplicate/wrong-owner publication, oversized heap options,
+integer handles, a 16 MiB size limit, exact top-of-window bounds, unchanged
+source parameters and independent contents at identical guest addresses.
+It does not test Wine's actual layouts/rbtree, server serialization, general
+VM, native WoW64 loader, guest heap creation or i386 execution. The build
+compiles Wine's actual layouts, and the phone checks publication/lifetime.
+
+One phone-lock session upgraded in place and ran both titles, continuing
+past Portal 2's expected nonzero exit. Both result events name the SHA256
+above. The pre-run phone check reported 48% battery, not externally powered.
+Commands are as above, with output directories:
+
+- `.work/ui-runs/portal2-params`: B=`0x7038010000`, parameter host
+  `0x70b6010000`, guest `0x7e000000`, size `0x4000`; PEB32 image remains
+  `0x400000`. Command-line buffer is guest `0x7e0004e8`, environment is
+  guest `0x7e000568`, 5,670 bytes; normalized=1, loader=0, heap=0. Startup
+  then deliberately terminates with `STATUS_NOT_SUPPORTED` (`c00000bb`)
+  before the native WoW64 loader. TEB restoration and window release still
+  succeed. **No i386 DLL loading or code execution is claimed.** UI result
+  remains `launch=failed run_exe=-7`, exit 1; screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed and Game failed.
+- `.work/ui-runs/portal2-params-hk`: `first-frame+10`, exit 0; first frame
+  **9.25 s**, JIT **2.44 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, all C tests including six WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
+`git show --check` and the non-patch whitespace check pass; `pp build --plan`
+reports no trees to rebuild. Logs/screenshots stay under `.work/portal2-params`
+and `.work/ui-runs/`.
+
+## Guest-placement follow-up (same step)
+
+Source at build: `855eb14` plus madeira-unix 0055 and host tests.
+Dev IPA: `.work/out/20261003-141205-a3cac212/Playport-26.5-a3cac212.ipa`.
+SHA256: `a3cac212b94653f15de2f25062e2ebb6b308d5fc2479dce3b4a8af5ca5d9bb8c`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+outputs are unchanged.
+
+**madeira-unix 0055** adds guest-space placement around the existing fixed
+claim primitive, without changing Wine's PE section mapper:
+
+- In-range, aligned server ASLR suggestions are tried for movable dynamic-base
+  images, then the preferred base, then an owner-local gap. Dynamic DLLs search
+  top-down; others bottom-up. All candidates respect the guard, 64 KiB allocation
+  alignment, host-page rounding, large-address-aware 2/4 GiB limit and inclusive
+  caller bounds. Wide/unaligned hints are ignored, never truncated. Stripped or
+  flat images stay fixed. Descriptor/protection failures do not trigger fallback.
+- Gap search walks containing window views, not Wine's host free ranges, which
+  correctly consider the whole window unavailable. General VM/free routing and
+  coalescing adjacent holdbacks are still absent.
+- Host storage and preferred/selected guest identity stay separate. PE32 fixups
+  use only the selected-minus-preferred guest delta. Validate every block/type/
+  target before modifying any target, rejecting missing directories, unsupported
+  types, out-of-image targets and directory self-modification. Wine's existing
+  relocation-block kernel is moved into a shared header; HIGH/LOW/HIGHLOW use
+  memcpy and unsigned arithmetic for unaligned targets and modulo-2^16/32 adds.
+  Native DIR64/THUMB handling is unchanged. No new PE loader is implemented.
+- After completed mapping, normalize the server's `STATUS_IMAGE_NOT_AT_BASE`
+  warning for window images only. Its host VM base differs from guest ImageBase
+  even at the preferred guest base; passing this warning to the native loader
+  would make it apply the host window offset as a second relocation. Server
+  failures and non-window warnings remain unchanged.
+
+`build/wow64/placement_test.c` compiles both production headers from the patch,
+with UBSan, real disjoint window mappings and the existing **mock Wine view
+metadata**. It tests hints/collisions, bottom/top gap selection, inclusive bounds,
+2/4 GiB rounding, stripped/flat rejection, allocation/protection failures with
+unchanged outputs, isolated owners, rollback/retry, guest-only positive/negative/
+wrapping and unaligned HIGH/LOW/HIGHLOW fixups, malformed and bad-later-block
+rejection before any mutation, multiple valid blocks, native DIR64 and status
+normalization. It does not run the PE section mapper, wineserver or native loader.
+**Nonzero relocation and collision placement are not phone-validated yet.**
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected failure. Commands use the same options as previous runs;
+both result events carry the SHA256 above. Before testing, battery was 44%,
+not externally powered.
+
+- `.work/ui-runs/portal2-placement`: B=`0x7038010000`, preferred/selected
+  guest image `0x400000`, host `0x7038410000`, size `0x5c000`, transfer
+  `0x4017d1`, delta 0. `virtual_map_main_module` now returns **success (0)**,
+  not `40000003`; parameters remain published, loader/heap remain NULL.
+  The retained loader boundary returns `c00000bb`, restores the TEB and
+  releases the window. **No i386 DLL loading or instruction execution.**
+  UI result `launch=failed run_exe=-7`, exit 1; screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-placement-hk`: exit 0, `first-frame+10`; first frame
+  **9.26 s**, JIT **2.42 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks), `pp test` passes
+(483 Python tests, all C tests including seven WoW64 UBSan tests, all three
+Swift packages), and `pp slots` passes (150 slots, 149 calls). Source
+`git show --check` and the non-patch whitespace check pass. Logs/screenshots
+stay under `.work/portal2-placement` and `.work/ui-runs/`.
+
+## Native anonymous VM follow-up (same step)
+
+Source at build: `ac20ce6` plus madeira-unix 0056 and host tests.
+Dev IPA: `.work/out/20261003-144148-eeb2fca8/Playport-26.5-eeb2fca8.ipa`.
+SHA256: `eeb2fca8fac87e5f549734fffd68f14fc598008bda849e26aeb3cc3dce5e9a0d`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+outputs are unchanged.
+
+**madeira-unix 0056** routes explicit host-window pointers at native
+`NtAllocateVirtualMemory`, `NtFreeVirtualMemory` and `NtProtectVirtualMemory`
+entry, before Madeira's host/FEX steering and low-alias paths. Registry then
+virtual locking protects owner selection and lifetime through the operation;
+foreign-owner/remote requests are refused rather than reaching native unmap.
+Anonymous views retain logical EXEC but never native EXEC or pool copies,
+including through `mprotect_range`; execute-only pages stay physically readable
+for the decoder without changing their logical flags. Reserve/commit/protect
+round to 16 KiB.
+Decommit atomically replaces backing with PROT_NONE anonymous pages, clearing
+commit metadata and guaranteeing zero on recommit. Full release does the same,
+then coalesces neighboring holdbacks without unmapping the window. Bootstrap
+TEB/PEB and image views are not anonymous VM and cannot be freed by this path.
+Parameters now use native reserve+commit; packing failure attempts full release.
+
+This is **not complete guest VM routing**: NULL/raw-guest addresses still take
+existing native paths. Zero-bits requests and Ex allocations in a window,
+special protections/types and partial release fail closed. Gap allocation,
+queries, section/image free and PE pointer conversion remain unwired. The
+startup loader boundary remains closed.
+
+`build/wow64/vm_test.c` compiles the actual patch's core and routing function
+under UBSan, using real mappings and **mock Wine view/page metadata and
+identity**. Tests cover allocation/protection/replacement failure with unchanged
+outputs, partial/all decommit, zero recommit/reuse, gap coalescing, physical NX
+and no-access faults, 2/4 GiB/overflow/guard/cross-view bounds, owner/remote
+rejection, and bootstrap protection. The existing image test also checks the
+NX policy through the actual updated `mprotect_range`. Updated function
+extraction was compared byte-for-byte with the built source. These tests do
+not exercise Wine's rbtree, wineserver, PE thunks or concurrent teardown.
+
+The final phone-lock session upgraded in place and ran both titles again after
+adding execute-only decoder-read coverage. Before the initial VM tests, battery
+was 43%, not externally powered. Commands use the same options as previous
+runs; both final result events carry the SHA256 above:
+
+- `.work/ui-runs/portal2-vm-final`: B=`0x7038010000`, image guest `0x400000`,
+  entry `0x4017d1`, map success. `[wow64-vm]` confirms native parameter
+  reserve+commit at guest `0x7e000000`, host `0x70b6010000`, bytes `0x4000`,
+  native EXEC=0. Parameters/environment publish as before; loader/heap remain
+  NULL. Startup deliberately returns `c00000bb`, restores the original TEB
+  and releases the window. **No i386 DLL loading or instruction execution;
+  no phone validation of protection/decommit/release/reuse.** UI exit 1;
+  screenshot shows **Portal 2 could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-vm-final-hk`: `first-frame+10`, exit 0; first frame
+  **8.20 s**, JIT **2.49 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks); `pp test` passes
+(483 Python tests, all C tests including eight WoW64 UBSan tests, all three
+Swift packages); `pp slots` passes (150 slots, 149 calls). Source
+`git show --check`, the non-patch whitespace check and `pp build --plan` pass
+(the latter reports no tree rebuilds). Logs/screenshots stay under
+`.work/portal2-vm` and `.work/ui-runs/`.
+
+## Guest-constrained NULL allocation follow-up (same step)
+
+Source at build: `dd3966d` plus madeira-unix 0057 and host tests.
+Dev IPA: `.work/out/20261003-145749-b2805633/Playport-26.5-b2805633.ipa`.
+SHA256: `b28056338b4bc081906ea077eba5ae861a1b948ff834809859a73e7b068157f3`.
+Only `libntdll_unix.a` changes in the build records; pins, PE, FEX and DXMT
+outputs are unchanged.
+
+**madeira-unix 0057** shares image/anonymous gap search through `wow64_gap.h`.
+A NULL native allocation with a nonzero <=32-bit guest constraint selects only
+its owner's window. NULL commit implicitly reserves; `MEM_TOP_DOWN` chooses
+from the high end. Explicit host-window requests also accept zero-bits.
+Counts 1–21 and masks >=32 follow Wine's highest-set-bit limit convention,
+not sparse allowed-bit masks. Limits refer to guest offsets, capped by the
+owner's large-address-aware 2/4 GiB limit; guard, alignment and rounded extent
+are checked before claiming. Failed selection/claim/protection leaves caller
+outputs unchanged. No fallback to native allocation after a routed failure.
+Registry/virtual lock order, NX storage and release/coalescing are unchanged.
+
+Unconstrained native NULL requests, and wider native constraints, remain native:
+using WoW64 identity alone would incorrectly capture native loader heaps and
+FEX storage. Raw guest pointers still require PE-boundary conversion, and the
+returned pointer is **host storage**, not a PE32 return value. Remote routed
+allocations are refused. Ex attributes, query/section/image VM paths and the
+native-loader boundary are unchanged. Bootstrap parameters now request NULL
+with `UINT32_MAX`, removing their fixed guest placement; PEB32 publishes the
+checked inverse of the selected host address.
+
+The eight existing UBSan tests compile the updated production headers and
+reconstructed routing/parameter functions. Added cases cover count/mask limits,
+malformed constraints, bottom/top-down selection, collision/exhaustion, NULL
+commit, 16 KiB rounding, 2/4 GiB edges, unchanged failure outputs, physical NX,
+release/coalescing and disjoint-owner contents. Unconstrained/wide-native NULL
+and raw guest pointers stay unrouted. The parameter test mocks gap selection;
+the VM test uses real mappings with **mock Wine view/page metadata/identity**.
+Neither exercises Wine's rbtree, PE thunks or concurrent teardown. Extracted
+functions and changed headers were compared byte-for-byte with built source.
+
+One phone-lock session upgraded in place and ran both titles, continuing past
+Portal 2's expected failure. Before testing, battery was 37%, not externally
+powered. Both result events carry the SHA256 above:
+
+- `.work/ui-runs/portal2-gap`: B=`0x7038010000`, main image/entry unchanged,
+  map success. Parameters allocate at host `0x7038020000`, guest `0x10000`,
+  bytes `0x4000`; the VM log records `null=1 top_down=0 zero_bits=0xffffffff
+  native_exec=0`. Command/environment pointers are `0x104e8`/`0x10568`,
+  environment 5,670 bytes; normalized=1, loader/heap remain NULL. Startup
+  returns the retained `c00000bb`, restores the TEB and releases the window.
+  **No i386 DLL loading or execution; no phone validation of top-down,
+  collision placement or nonzero relocation.** UI exit 1; screenshot shows
+  **Portal 2 could not start**, JIT/Runtime passed, Game failed.
+- `.work/ui-runs/portal2-gap-hk`: exit 0, `first-frame+10`; first frame
+  **9.26 s**, JIT **2.47 s**. Screenshot shows the main menu. Pool exhaustion,
+  FEX-band refusals and runtime-limit counters remain zero.
+
+`pp build` and explicit `pp verify` pass (77 IPA checks); `pp test` passes
+(483 Python tests, all C tests including eight WoW64 UBSan tests, all three
+Swift packages); `pp slots` passes (150 slots, 149 calls). Source
+`git show --check`, the non-patch whitespace check and `pp build --plan` pass
+(the latter reports no tree rebuilds). Logs/screenshots remain under
+`.work/portal2-gap` and `.work/ui-runs/`.
+
+## Native basic-query follow-up (same step)
+
+Source at build: `fb4516d` plus madeira-unix 0058 and host tests.
+Scratch source commit:
+`a16cfc63365d6e86a43d00a7553086fdca8ddd13`,
+`.work/portal2-query/source`.
+Dev IPA: `.work/out/20261003-152911-988968b0/Playport-26.5-988968b0.ipa`.
+SHA256: `988968b0d888f81df71b2ffcfefbafaa74ef477e52b2bae2d6b916475f98c043`.
+Only `libntdll_unix.a` changes in `app/artifacts.tsv`; pins, PE manifests,
+FEX and DXMT remain unchanged.
+
+**madeira-unix 0058** implements native **host-address** basic queries, not
+PE32 pointer conversion or section mapping:
+
+- Intercept `NtQueryVirtualMemory` before JIT reverse translation/low aliases;
+  gate the internal/APC basic-info filler too. Select the registered window by
+  address, check current TEB->PEB ownership and current-process handle, then hold
+  registry -> virtual locks through lookup/output. Foreign/missing owners and
+  remote window-address requests get `STATUS_ACCESS_DENIED`, not native/global
+  view results. These queries are not signal-safe.
+- Round `BaseAddress` to Wine's logical 4 KiB page. Return a forward region to
+  the next state/logical protection change or allocation/window edge, never
+  merge distinct allocations. Original `AllocationProtect` and allocation base
+  survive commit/decommit/protect splitting. Logical EXEC remains visible even
+  though physical storage is NX. Guard/writecopy/cache flags remain logical;
+  writewatch/guest-RO bookkeeping does not split otherwise identical results.
+  Reserved pages report Protect=0. Images are `MEM_IMAGE`; bootstrap/anonymous
+  views are `MEM_PRIVATE`.
+- Free holdbacks report `MEM_FREE`, NULL allocation base, zero allocation
+  protection/type and Wine's native free-region `PAGE_NOACCESS`; adjacent free
+  descriptors merge. The low 64 KiB is separately `MEM_RESERVE`, allocation
+  base B, allocation protection `PAGE_NOACCESS`, Protect=0, `MEM_PRIVATE`.
+  It cannot merge with allocatable free space. Every region stays below B+4G.
+  Missing/out-of-window/corrupt descriptors fail without publishing partial info.
+- Success writes exactly the native basic-info structure and, when supplied,
+  its return length. Short buffers, NULL output, unsupported classes and other
+  failures leave caller output/return length unchanged. Other window-address
+  classes return `STATUS_NOT_SUPPORTED`. Local WorkingSetEx arrays containing
+  any window address are rejected before attributes are cleared, even when the
+  API's addr is NULL/native. The unchanged native remote WorkingSetEx path
+  rejects the class without reading its array. Non-window queries fall through.
+- Normal bootstrap queries the parameter allocation **before** packing/publishing
+  it; require the expected allocation base, committed private RW region and
+  native return length. Query failure/mismatch rolls back the unpublished
+  allocation. This is normal validation, not a mode, UI action or test title.
+  The existing fail-closed native-loader boundary is unchanged.
+
+`build/wow64/query_test.c` compiles the actual new header and extracted router,
+reusing the production VM helpers under UBSan. Real mappings and mutexes back
+**mock Wine view/page metadata, owner identity, protection conversion and layouts**.
+It covers owners/remote handles, 4 KiB forward-region rounding, low guard,
+coalesced/adjacent holes, reserve/partial commit/protect/decommit/recommit,
+separate allocations, image/bootstrap/private types, logical EXEC/guard/writecopy/
+cache and ignored bookkeeping, region/window edges, missing/corrupt descriptors,
+all short lengths, NULL/optional outputs, untouched failure outputs, WorkingSetEx
+arrays, non-window fall-through and concurrent query/protection changes. The
+bootstrap fixture seeds page bytes because the reused splitter mock only counts
+its metadata updates. The parameter-publication test mocks query replies and
+checks query failure/mismatch rollback; it is not a second query implementation.
+Extracted query/router/parameter functions and the query header match built
+production source byte-for-byte (`.work/portal2-query/extraction.log`). Tests do
+not execute Wine's rbtree, wineserver/APC delivery, Mach faults, alias translation,
+PE thunks, full Wine layouts or concurrent teardown. The iOS build compiles real
+layouts; the Portal 2 Play exercises the actual native entry/core/private query.
+
+The final phone-lock session installed in place and ran both titles, continuing
+past Portal 2's expected exit 1 only after its query and retained boundary were
+confirmed. Battery was **52%, externally powered and charging**. Both result
+events name the SHA256 above. Commands retained the existing UI entry:
+
+```sh
+./pp install --no-build --ipa .work/out/20261003-152911-988968b0/Playport-26.5-988968b0.ipa
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-query-final
+./pp ui --play app-367520 --until first-frame+10 --shot --out .work/ui-runs/portal2-query-final-hk
+```
+
+- **Portal 2:** B=`0x7038010000`, guest image `0x400000`, transfer `0x4017d1`.
+  `[wow64-query]` reports host/allocation `0x7038020000`, size `0x4000`,
+  `state=0x1000 protect=0x4 allocation_protect=0x4 type=0x20000 returned=48
+  validated=1`. Parameters still publish guest `0x10000`, command `0x104e8`,
+  environment `0x10568` (5,670 bytes); loader/heap remain NULL. Startup stops
+  at `STATUS_NOT_SUPPORTED` (`c00000bb`), restores the original TEB and releases
+  the window. UI result `launch=failed run_exe=-7`, exit 1. Screenshot
+  `screen-stop.png` shows **Portal 2 could not start**, JIT/Runtime passed and
+  Game failed. **No i386 execution, DLL loading, or phone validation of other
+  query regions, protection changes, holes or image-query type is claimed.**
+- **Hollow Knight:** exit 0, `first-frame+10`, first frame **10.01 s**, JIT
+  **2.61 s**. Pool exhaustion, FEX-band refusals and runtime-limit counters
+  remain zero. The captured `screen-stop.png` is **black**, not a menu image:
+  this run proves the logged first-frame milestone and continued run, not visual
+  menu/gameplay correctness.
+
+`pp test` full passes (483 Python tests, all C tests including nine WoW64 UBSan
+executables, all three Swift packages); `pp build` and explicit `pp verify`
+pass 77 IPA checks; `pp slots` passes (150 slots, 149 calls). Source
+`git show --check`, non-patch `git diff --check` and the new test's whitespace
+check pass; final `pp names` and `pp secrets` are clean. `pp build --plan`
+reports no tree rebuilds. Final logs are under `.work/portal2-query/`:
+`host-final.log`, `test-final.log`, `build-final.log`, `verify-final.log`,
+`slots-final.log`, `plan-final.log`, `phone-final.log`. Screenshots/logs stay
+in the run directories.
+An earlier development IPA/run in `.work/ui-runs/portal2-query*` was superseded
+by these final results after preserving remote WorkingSetEx buffer handling.
+**Step 2 and milestone 1 remain in progress.**
+
+## Native image-section follow-up (same step)
+
+Source at build: `e3ed6e7` plus madeira-unix 0059 and host tests.
+Scratch source: `.work/portal2-section/source`, commit
+`c59b79c54647ad1e89d9e37759a7c5e2662a88a4`, tree
+`3865fe5c4ba175080b3b2e8f87c80f6cd66e9605`.
+Dev IPA: `.work/out/20261003-161440-9dea6209/Playport-26.5-9dea6209.ipa`.
+SHA256: `9dea62091968b7a7cdb42ef420b958c4423f5da06d3ad86be557adaba8130768`.
+`libntdll_unix.a` and `libwineserver.a` change in `app/artifacts.tsv`; pins,
+PE manifests, FEX and DXMT are unchanged.
+
+**madeira-unix 0059** supports a narrow native section path, not a new loader:
+
+- Before native bounds/alias steering or remote APCs, select the registered
+  window by explicit **host** address, or the current owner's window for NULL
+  with a nonzero <=32-bit zero-bits constraint. Hold registry -> virtual locks
+  through mapping/unmapping, including wineserver requests. Foreign owners and
+  remote routed requests are denied. Remote constrained NULLs are denied even
+  without a window in the caller, so an APC cannot silently become a local map
+  in the target. Unconstrained/wider-constraint NULL and non-window native
+  addresses remain native; raw guest pointers are still not converted.
+- Accept only complete, ordinary i386 `SEC_IMAGE | SEC_FILE` views, offset 0,
+  commit size 0, `ViewUnmap` and allocation type 0 or `MEM_TOP_DOWN`. Obtain
+  protection-derived section access and PE metadata from Wine/wineserver. Do
+  not substitute a builtin with another machine or implement imports/loading.
+  Bounds intersect owner and image large-address-aware limits, zero-bits and
+  host-page-rounded extent. Explicit addresses force guest placement; stripped/
+  flat images cannot move. NULL tries Wine's image hints/preferred address and
+  shared owner-local gap search, including top-down fallback on collision.
+- Reuse the existing `map_image_into_view`, PE sections and guest relocation
+  kernel. The existing `virtual_map_image` orchestration moves into a private
+  header so host tests compile the **whole function**, not a parallel lifecycle.
+  Window selection is now explicit; unconstrained i386 native requests no longer
+  implicitly acquire a window merely because of their machine type. Guest
+  relocations/PE ImageBase and host storage remain separate; logical EXEC is
+  physically NX, without JIT copies or global sub-floor registration. Successful
+  window maps normalize the server's host/guest NOT_AT_BASE warning as before.
+- Retain a private duplicate section handle and exact server extent/entry RVA/
+  machine in the view. The server forbids a size greater than its image map size:
+  registration, return size and image queries use that **exact** extent, while
+  the holdback descriptor owns the host-page-rounded storage. Map failures leave
+  outputs unchanged and replace backing with a protected, coalesced holdback.
+  Replacement failure retains the descriptor/handle, preventing reuse until exit.
+- Unmap accepts an interior host image address, not just its base. Remove the
+  existing server image view, then atomically replace all owned backing with
+  PROT_NONE anonymous pages and coalesce adjacent holdbacks; never `delete_view`
+  a live window. A server failure changes neither bytes nor descriptor. A
+  replacement failure leaves bytes/protection intact and re-registers the exact
+  server view with the retained handle. If re-registration fails too, keep the
+  descriptor/handle quarantined until owner teardown; image query/unmap refuse
+  it. Teardown closes retained handles via the normal descriptor free. Bootstrap
+  PEB/TEB, parameter/private VM and holes cannot be released by section unmap.
+- `MemoryBasicInformation` already describes supported images logically.
+  `MemoryImageInformation` now returns **host** base, exact image extent, zero
+  unsupported signing/flag claims, with owner checks and unchanged failure
+  output/length. Host-page padding outside the server image extent is not an
+  image-query address. Other window classes still fail closed rather than
+  returning native/global answers. PE32 query-result conversion remains unwired.
+- Madeira's iOS server preserves image section attribute flags rather than
+  erasing them at creation, so the router can refuse `SEC_IMAGE_NO_EXECUTE`,
+  protected/other attribute variants instead of silently treating them as a
+  supported executable image. Non-iOS behavior is unchanged.
+
+**Exact unsupported cases:** ordinary file-backed data and anonymous/shared
+sections (including `SEC_RESERVE`/`SEC_COMMIT`) are not routed into a window:
+shared-backing coherence and server commit tracking need a separate design.
+Also refused are non-i386, hybrid/managed/unknown-image-flag forms; image attribute
+variants; nonzero/negative offsets; nonzero commit size; partial requested image
+sizes; `ViewShare`; placeholder/large-page/round-to-page/other allocation flags;
+special protection flags; Ex mappings/attributes; and remote window operations.
+Unmap flags/placeholder preservation and anonymous-VM image free/protect remain
+unsupported. Full main-image unmap is supported, but bootstrap views are not.
+Mapped filename/region/working-set/Unix-lib window queries remain unsupported.
+No general file/anonymous section support, secondary-thread pairing, PE-facing
+conversion, native WoW64 loader or i386 execution is claimed.
+
+`build/wow64/section_test.c` compiles production bounds, router, complete
+`virtual_map_image`, server request functions and unmap transaction, using the
+existing production view splitter, gap allocator and Wine relocation kernel.
+Real disjoint mappings, native page protections and SIGSEGV checks back **mock
+Wine layouts/view tree/page bytes, handle/FD/server transport, builtin bookkeeping
+and PE section population**. The population fixture writes a relocation block;
+it is not another PE mapper and does not test Wine's file/header/section parsing.
+Transport mocks now enforce the real server's exact-size rule. Tests cover
+ownership/remote/unsupported forms, 2/4 GiB rounded bounds/zero-bits/alignment,
+unchanged failure outputs, preferred collisions/explicit relocation/top-down,
+logical EXEC with physical NX, handle/FD/claim/protection/population/server map
+failures, map rollback failure quarantine, server-unmap and replacement failure
+rollback, double-failure quarantine, complete release/coalescing, bootstrap
+preservation, independent owners and native fall-through. Image/basic queries
+use supported views and check exact extent versus padding. Query tests also
+cover routed image queries, short buffers and unregistered views. Double-failed
+fixtures have explicit **test-only cleanup**, not a production recovery path.
+Tests do not execute the real wineserver, Wine rbtree, actual PE population,
+Darwin signal masking/Mach faults, PE thunks or concurrent teardown. Other
+existing owner/VM/query tests still check concurrent disjoint owners and locking.
+New headers/functions and evolved query extraction match built source byte-for-
+byte (`.work/portal2-section/extraction.log`), including complete source-file
+comparisons for `virtual_ios.c` and the server override.
+
+The final **one phone-lock session** installed in place and ran both titles,
+continuing past Portal 2's expected exit 1 only after confirming the new section
+map and retained `c00000bb` boundary. No app uninstall or alternate entry point.
+Battery was 74%, externally powered/charging at initial preflight, and 85% after
+final runs. Both final results name the IPA SHA256 above:
+
+```sh
+./pp install --no-build --ipa .work/out/20261003-161440-9dea6209/Playport-26.5-9dea6209.ipa
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-section-reviewed
+./pp ui --play app-367520 --until first-frame+30 --shot --out .work/ui-runs/portal2-section-reviewed-hk
+```
+
+- **Portal 2:** normal main-image startup calls `NtMapViewOfSection` with NULL,
+  zero-bits `0xffffffff`. `[wow64-section]` confirms B=`0x7038010000`, host
+  `0x7038410000`, guest `0x400000`, bytes `0x5c000`, server registration and
+  native EXEC=0. Header/PEB32 image and entry remain `0x400000`/`0x4017d1`,
+  delta 0, map success. Parameters publish as before; the retained native-loader
+  boundary returns `c00000bb`, restores the original TEB and releases the window.
+  UI exit 1, `launch=failed run_exe=-7`; reviewed screenshot shows **Portal 2
+  could not start**, JIT/Runtime passed, Game failed. This validates the normal
+  production section mapping entry, **not DLL loading, unmap/query transactions,
+  collision/nonzero relocation, top-down or any i386 execution on the phone**.
+- **Hollow Knight:** first frame **9.41 s**, JIT **2.22 s**, exit 0 through
+  `first-frame+30` (includes the required +10 continuation). The longer unchanged
+  UI play avoids relying on the previous black capture; reviewed screenshot
+  visibly shows the main menu. Pool exhaustion, FEX refusals and runtime-limit
+  counters remain zero. No gameplay claim.
+
+Full `pp test` passes (483 Python tests, all C tests including **ten** WoW64
+UBSan executables, all three Swift packages). `pp build` and explicit `pp verify`
+pass 77 IPA checks; `pp slots` passes 150 slots/149 calls; names/secrets and
+source/non-patch/new-test whitespace checks pass. `pp build --plan` reports no
+tree rebuilds. Final logs are under `.work/portal2-section/`: `host-final.log`,
+`test-final.log`, `build-final.log`, `verify-final.log`, `slots-final.log`,
+`plan-final.log`, `phone-final.log`, `extraction.log`, `source-check.log`,
+`whitespace.log`, `names-final.log`, `secrets-final.log`. Earlier section IPAs/runs
+were superseded by the final results after preserving unsupported section
+attributes and the exact server image extent. **Step 2/milestone 1 remain in
+progress; the fail-closed startup boundary is unchanged.**
+
+## Native protection follow-up (same step)
+
+Source at build: `1fc8f23` plus madeira-unix 0060 and host tests.
+Scratch source: `.work/portal2-protect/source`, commit
+`fd7a5e8` (on `c59b79c`, the 0059 scratch commit).
+Dev IPA: `.work/out/20261003-183553-455fa113/Playport-26.5-455fa113.ipa`.
+SHA256: `455fa1132f9298bdae5d13bb1f3d4d0c56ef7dd58db20cd18ade98ac6790a407`.
+Only `libntdll_unix.a` changes in `app/artifacts.tsv`; pins, PE manifests,
+FEX and DXMT are unchanged.
+
+**madeira-unix 0060** gives window image and anonymous VM views one protection
+transaction (`wow64_protect.h`), used by the native `NtProtectVirtualMemory`
+route, anonymous commit and Wine's own image setup (`set_vprot`):
+
+- **Logical pages, physical union.** Each 4 KiB Wine page keeps its logical
+  protection, including EXEC, WRITECOPY and GUARD; queries report it per page.
+  A 16 KiB host page gets the union of its pages' native permissions, Wine's
+  own 16 KiB-host policy, and never native EXEC: execute-only pages stay
+  readable for the decoder. **Limit:** a stricter page beside a more permissive
+  one in the same host page is enforced only logically (for example a read-only
+  page next to a writable one stays natively writable) until the window has a
+  fault service.
+- **Guard pages are enforced or refused.** A host page holding a committed
+  guard page is `PROT_NONE`. A change that would leave a guard page beside an
+  accessible page in its host page returns `STATUS_NOT_SUPPORTED`.
+- **Writecopy.** Image pages take `PAGE_READWRITE` as WRITECOPY, as Wine does;
+  anonymous VM refuses WRITECOPY (`STATUS_INVALID_PAGE_PROTECTION`). Backing is
+  never replaced: a private image page becomes writable `MAP_PRIVATE` file or
+  anonymous memory, so writes are private copies. Images with shared writable
+  sections (`MAP_SHARED`) are now refused at map time, in the router and in
+  `virtual_map_image`.
+- **No partial change.** Every host page is checked first, then changed by
+  its own `mprotect`. A failure restores the pages already changed to the
+  protection of their unchanged page bytes; page bytes and caller outputs
+  change only on success. If a restore itself fails (the protection is one the
+  mapping already had, so only a kernel fault could cause it), the process
+  stops (`abort`) rather than run on with an undescribed protection.
+- **Wine semantics.** Ranges round to whole Wine pages; every page must be
+  committed (`STATUS_NOT_COMMITTED`); the old protection is the first page's,
+  including `PAGE_GUARD`; NULL old-protection is `STATUS_ACCESS_VIOLATION`.
+- **Exact unsupported or invalid cases.** `STATUS_INVALID_PARAMETER`: size 0,
+  the low 64 KiB guard, free space, a range leaving its allocation or the window.
+  `STATUS_NOT_SUPPORTED`: bootstrap TEB/PEB views, quarantined (unregistered or
+  handle-less) images, host-page padding past the server's image extent, the
+  guard case above, and modifiers that page bytes cannot hold (`PAGE_NOCACHE`,
+  `PAGE_WRITECOMBINE`, CFG target flags); they are not silently dropped.
+  Other owners, a missing owner and remote processes get `STATUS_ACCESS_DENIED`;
+  non-window addresses fall through unchanged. PE-facing (guest pointer)
+  protection is not wired.
+- Wine's image setup now fails a window image map when a protection cannot be
+  applied, instead of continuing with stale physical protection; the failed map
+  rolls back as before. `mprotect_range` (fault and helper paths) uses the same
+  per-page policy for window views. Wine's protection conversions move
+  unchanged into `wow64_vprot.h` so host tests compile them; the extraction
+  check shows the moved text identical and present once.
+
+`build/wow64/protect_test.c` compiles the production transaction, the native
+route, Wine's conversions and the window query under UBSan, with real mappings,
+real faults (read, write and execute, with a positive control that the harness
+detects native EXEC) and a real `MAP_PRIVATE` file. It covers all 100
+transitions among 10 protections (including guard forms) with old values, page
+bytes, queries and native permissions; partial ranges and four Wine pages in a
+host page; the union limit; guard acceptance and refusal; image setup, image
+READWRITE as WRITECOPY, private copies with the file unchanged; padding,
+quarantine, cross-section and cross-allocation ranges; failure at the first and
+a later host page with outputs, bytes and protections unchanged; abort on a
+failed restore; commit through the transaction; owners, remote, bootstrap and
+non-window fall-through. Section tests now check shared-section refusal; query
+tests use Wine's real protection table instead of a mock. **Mocked:** the Wine
+view tree, page bytes, owner identity, and the image fixture's setup (a claimed
+view with the file mapped over it, Wine's `set_vprot` calls replayed through
+the transaction; not Wine's PE mapper or `set_vprot` itself). The host kernel's
+4 KiB pages stand in for 16 KiB ones (each `mprotect` covers a whole 16 KiB host
+page). No Mach fault service, signal masking, wineserver or PE thunks. Changed
+headers and extracted functions match the built source byte for byte
+(`.work/portal2-protect/extraction.log`).
+
+`pp build` passed (77 IPA checks); explicit `pp verify` of the IPA above has 0
+failures; full `pp test` passes (483 Python tests, all C tests including
+**eleven** WoW64 UBSan executables, all three Swift packages); `pp slots`
+passes (150 slots, 149 calls); `pp names` and `pp secrets` are clean; source
+`git show --check` and the non-patch whitespace checks pass; `pp build --plan`
+reports no tree rebuilds. Logs: `.work/portal2-protect/` (`build-final.log`,
+`verify.log`, `test.log`, `host.log`, `slots.log`, `names.log`, `secrets.log`,
+`plan.log`, `extraction.log`).
+
+One phone-lock session installed the IPA above in place and played both titles.
+Both `installed` and `result` events name its SHA256. The phone was on battery,
+not charging:
+
+```sh
+./pp install --no-build --ipa .work/out/20261003-183553-455fa113/Playport-26.5-455fa113.ipa
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-protect
+./pp ui --play app-367520 --until first-frame+30 --shot --out .work/ui-runs/portal2-protect-hk
+```
+
+- **Portal 2** (`.work/ui-runs/portal2-protect`):
+  - Wine's own image setup for the main image (host `0x7038410000`, guest
+    `0x400000`) goes through the new transaction. It logs six
+    `[wow64-protect] set_vprot` lines, all with `status=0 native_exec=0`.
+  - Those include the header (`c-r--`, R), the code (`c-r-x`, native R only)
+    and the data (`c-rW-`, RW).
+  - The map then succeeds, and startup stops at the retained `c00000bb`. The
+    window is released.
+  - UI exit 1, `launch=failed run_exe=-7`. The screenshot shows **Portal 2
+    could not start**, with JIT and Runtime passed and Game failed.
+- **Hollow Knight** (`.work/ui-runs/portal2-protect-hk`):
+  - Exit 0 at `first-frame+30`. The first frame comes at **9.71 s** from Play,
+    and JIT takes **2.56 s**.
+  - Pool exhaustion, FEX-band refusals and runtime-limit counters are zero.
+  - The screenshot shows the main menu.
+
+No normal bootstrap step calls `NtProtectVirtualMemory` before the `c00000bb`
+stop. The native protection route itself therefore stays **host-validated
+only**; the phone validates the shared transaction through image setup.
+**No i386 execution. Step 2 and milestone 1 remain in progress.**
+
+## Native-loader follow-up (same step)
+
+Source at build: `9cca82a` plus madeira-unix 0061, wine-pe 0014 and 0015, the
+`wine_host.c` farm and the host test. Scratch sources: `.work/portal2-loader/`.
+Dev IPA: `.work/out/20261003-192558-0c538d1c/Playport-26.5-0c538d1c.ipa`.
+SHA256: `0c538d1c0c478b62772f387efdf59aa4ef3489996183bd334cffc7f6ae77318d`.
+`libntdll_unix.a`, `wow64.dll` and the aarch64/ARM64EC/i386 `ntdll.dll` change
+(plus `winetest.exe`, which embeds the tests); pins are unchanged.
+
+- **madeira-unix 0061** removes the `c00000bb` stop after the image and
+  parameters. An i386 child loads its own native **aarch64** ntdll (the X3c
+  mechanism that gives an AMD64 child of an aarch64 session the ARM64EC
+  build; the session's ARM64EC ntdll is no WoW64 host), and maps the i386
+  ntdll from `i386-windows/` through the native section route with a guest
+  constraint. The child's own `LdrSystemDllInitBlock` gets guest entry points
+  and a host `ntdll_handle` (wow64.dll dereferences it); the i386 copy is all
+  guest. The session's `pLdrSystemDllInitBlock`, `wow_peb` and
+  `__wine_ctrl_routine` are untouched. The 32-bit stack is allocated in the
+  window with Wine's sizes and layout (no-access host page, guard host page,
+  committed RW), and the TEB32 holds guest values. The initial i386 context
+  takes the owner's PEB32 and init block. `ProcessWow64Information` returns
+  the owner's PEB32 (host) to native callers.
+- **wine-pe 0015**: `system32` is the session's ARM64EC set, and
+  `is_valid_binary` accepts any machine in a WoW64 process, so the aarch64
+  loader of a WoW64 process takes bare and system32 names from
+  `C:\windows\sysarm64` first. `wine_host.c` links that farm to the bundle's
+  `aarch64-windows` set at each launch (128 links).
+- **wine-pe 0014** is the new boundary: wow64.dll's `process_init` logs and
+  ends the process with `STATUS_NOT_SUPPORTED` before loading the CPU module.
+  A run without it loaded `xtajit.dll`, whose CRT imports (api-ms-win-crt,
+  ucrtbase) pulled the native `kernelbase.dll` into the process; its init
+  read the native NLS upcase table before `locale_init` and faulted at NULL,
+  taking the app down. That is step 3's link recipe, not Wine's loader.
+
+`build/wow64/vm_test.c` now also runs `ios_wow64_alloc_stack32`, extracted from
+0061: owner checks, outputs unchanged on refusal, 8 MiB size floor and a larger
+reserve, guest results, a no-access and a guard host page (real faults), a
+writable stack, NX, and the 2 GiB limit without large-address awareness. The
+init-block, ntdll and farm wiring has no host test; the phone run checks it.
+
+`pp build` passed (77 IPA checks); `pp test` passed. One lock session installed
+the IPA above and played both titles (93% battery):
+
+```sh
+./pp install --no-build
+./pp ui --play app-620 --until done --wait 90 --shot --out .work/ui-runs/portal2-loader-final
+./pp ui --play app-367520 --until first-frame+10 --shot --out .work/ui-runs/portal2-loader-final-hk
+```
+
+- **Portal 2** (`.work/ui-runs/portal2-loader-final`): image at guest
+  `0x400000`, 32-bit stack at guest `0x460000`–`0xc60000` (limit `0x468000`).
+  The i386 ntdll maps at guest `0x7bf40000`, **relocated** from its preferred
+  `0x7bc00000` (delta `0x340000`, the first phone check of a nonzero window
+  relocation); `LdrInitializeThunk` is at guest `0x7bf8f420`. The private
+  aarch64 ntdll's `LdrInitializeThunk` runs **native aarch64 PE code in the
+  WoW64 child** through `loader_init` and `init_wow64`; wow64.dll loads from
+  sysarm64 into the JIT pool, and `process_init` logs PEB32 host
+  `0x70b7f10000`, i386 ntdll host `0x70b3f50000`, machines `014c/aa64`, then
+  stops (`c00000bb`); the window and TEB pair are released. The UI shows
+  *Portal 2 stopped unexpectedly*, code `0xC00000BB`; the app keeps running.
+- **Hollow Knight** (`.work/ui-runs/portal2-loader-final-hk`): exit 0 at
+  `first-frame+10`, first frame **9.06 s**, JIT 2.41 s, pool not exhausted;
+  the screenshot shows the main menu.
+
+**No i386 instruction has run** and no CPU module is loaded. Step 2 and
+milestone 1 remain in progress.
+
+## Conversion inventory and remaining work
+
+The initial inventory found that the plan's original assumption about
+unix-side `is_wow64()` was incorrect at the Wine pin: it read **global
+`main_image_info.Machine`**, while `get_wow_teb()` read `WowTebOffset`.
+Child startup overwrote/restored the image global; the follow-up above
+fixes that identity path. `virtual_alloc_first_teb` still returns early for
+the child's already allocated TEB, so it cannot create the child's WoW64
+TEB/PEB as it does for a real Wine process. `wow_peb`, `teb_block_size`,
+`user_space_wow_limit` and their allocators are still global. Those must
+become owner-aware too; changing only `get_ptr` would expose the wrong
+layouts and limits.
+
+A reproducible initial grep inventory on the patched Wine PE source:
+
+```sh
+rg -n '\b(ULongToPtr|PtrToUlong)\s*\(' \
+  .work/run/pe/wine/dlls/wow64 .work/run/pe/wine/dlls/wow64win
+rg -n 'wow_peb|wow64_params|PtrToUlong|ULongToPtr' \
+  .work/run/unix/mythic/build/ntdll-unix/{env,virtual,loader,thread,signal_arm64}_ios.c
+rg -n 'is_wow64|WowTebOffset|user_space_wow_limit' \
+  .work/run/unix/wine/dlls/ntdll/unix/unix_private.h
+```
+
+| File (under Wine `dlls/`) | `ULongToPtr` | `PtrToUlong` |
+| --- | ---: | ---: |
+| wow64/process.c | 9 | 7 |
+| wow64/security.c | 4 | 4 |
+| wow64/sync.c | 1 | 7 |
+| wow64/syscall.c | 10 | 23 |
+| wow64/system.c | 0 | 11 |
+| wow64/virtual.c | 11 | 6 |
+| wow64/wow64_private.h | 17 | 4 |
+| wow64win/gdi.c | 3 | 6 |
+| wow64win/user.c | 0 | 31 |
+| wow64win/wow64win_private.h | 10 | 1 |
+
+These **65 + 100 textual uses are not an audited conversion set**: some are
+handles or integers, and raw casts/helpers add more. No sites have been
+routed yet. In particular, callbacks/APCs pack guest addresses in integers;
+blind macro replacement would change their ABI.
+
+Next: step 3's CPU module (an `xtajit.dll` without CRT imports into the native
+WoW64 process, then its iOS JIT plumbing), with the PE-visible base and wow64
+pointer conversion before the first i386 syscall. Remaining step-2 items:
+query classes; ordinary file/anonymous section VM requires shared-backing/commit
+semantics before support. Nonzero image relocation is now phone-checked (the
+i386 ntdll). Explicit
+host-pointer anonymous VM release/reuse and guest-constrained NULL allocation
+exist, as do native host-pointer basic queries; PE-facing constraint/pointer/
+return conversion (including query results) and other section forms do not.
+Complete ordinary image mapping/unmapping, native image queries and native
+image/anonymous protection changes now exist; other query classes, shared image
+sections and the protection cases listed in the protection follow-up remain
+fail-closed.
+Only the initial TEB is paired. General paired thread allocation, reuse/free and multi-thread
+teardown are pending, and secondary WoW64 threads are explicitly rejected.
+The startup stop is gone; the boundary is now wine-pe 0014. WoW64 identity is owner-aware, but the legacy `wow_peb`, TEB free lists and WoW64 allocation
+limits remain global; this bootstrap leaves them unchanged. Other startup
+globals (`peb`, argv, startup info) still rely on serialization. Then PE-visible
+base query and file-by-file pointer/return-value conversion; stack/context/
+callback/APC/exception setup; and target-owned whole-window Mach fault servicing
+with a count. The existing global sub-floor image table cannot represent the
+same guest address in two different process windows. Step 2 is not done.

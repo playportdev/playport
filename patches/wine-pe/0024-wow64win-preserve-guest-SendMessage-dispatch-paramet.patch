@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 12:00:00 +0200
+Subject: [PATCH] wow64win: preserve guest SendMessage dispatch parameters
+
+The same-thread SendMessage fast path hands its supplied wparam and
+lparam back for user32 to dispatch. The window translation has already
+turned pointer parameters into host addresses, and structure widening
+may have replaced lparam with a native stack temporary. Neither can be
+truncated or blindly inverse-converted into a guest parameter.
+
+Save the original guest values before translating. Use them only when
+NtUserSendMessage returns client dispatch parameters, keeping the
+native call's procedure, window and dispatch metadata. Leave packed
+callbacks, GetDispatchParams and CallWindowProc conversions unchanged.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/wow64win/user.c | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index d1da7e3..1fec2de 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -488,6 +488,19 @@ static void win_proc_params_64to32( const struct win_proc_params *src, struct wi
+     memcpy( dst, &params, sizeof(params) );
+ }
+ 
++/* The SendMessage fast path returns the supplied parameters for user32 to
++ * dispatch. Keep the original guest values: lparam may now be a window pointer
++ * or a native temporary created by message_call_32to64, not a guest address. */
++static void send_message_params_64to32( const struct win_proc_params *src, struct win_proc_params32 *dst,
++                                      ULONG wparam, ULONG lparam )
++{
++    struct win_proc_params params = *src;
++
++    params.wparam = wparam;
++    params.lparam = lparam;
++    win_proc_params_64to32( &params, dst );
++}
++
+ static void createstruct_32to64( const CREATESTRUCT32 *from, CREATESTRUCTW *to )
+ 
+ {
+@@ -3863,6 +3876,7 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
+     void *result_info = get_ptr( &args );
+     UINT type = get_ulong ( &args );
+     BOOL ansi = get_ulong( &args );
++    const ULONG guest_wparam = wparam, guest_lparam = lparam;
+     BOOL wparam_pointer;
+ 
+     /* Playport (iOS): win32u reads and writes a pointer message's parameters
+@@ -3913,7 +3927,8 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
+ 
+                 params.hwnd = 0;
+                 ret = message_call_32to64( hwnd, msg, wparam, lparam, &params, type, ansi );
+-                if (params.hwnd) win_proc_params_64to32( &params, params32 );
++                if (params.hwnd)
++                    send_message_params_64to32( &params, params32, guest_wparam, guest_lparam );
+                 return ret;
+             }
+ 

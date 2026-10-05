@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 00:33:58 +0200
+Subject: [PATCH] WOW64: let a 32-bit guest's jump below 64 KiB fault in the
+ guest
+
+Madeira's CompileBlock refuses guest RIPs below 0x10000 and returns 0,
+which the ARM64EC module turns into the guest's access violation. The
+WoW64 module's dispatcher branches to that 0: host pc 0, which Wine
+cannot map back to a guest state, so the thread hangs with no guest
+exception. Portal 2's engine thread did this after loading localize.dll
+(lr at the dispatcher's CompileBlock call, x0 = 0, guest EIP 0).
+
+In the WoW64 module the block compiles as usual: the decoder finds no
+executable range at the low address and the guest gets its access
+violation, which its own handlers see. The first eight such jumps log
+the guest registers ([wow64-low-jump]). Not the guest stack: ESP may
+not be readable, and a fault in the compiler would preempt the guest's
+access violation.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-inline-translation.md
+Offered-upstream: no; the refusal is Madeira's (fex-port 0019)
+---
+ FEXCore/Source/Interface/Core/Core.cpp | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 1066aaf..ab150c9 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -1580,11 +1580,34 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+    * NULL-vtable virtual call (`call [rax+8]` with rax=0), control flow
+    * lands at RIP=0x8, which then loops compiling thousands of garbage
+    * blocks before SEH unwinds. Returning 0 here raises C0000005 to the
+-   * guest immediately so the first AV is the only AV. */
++   * guest immediately so the first AV is the only AV.
++   *
++   * Playport: only the ARM64EC module turns that 0 into the guest's fault. The
++   * WoW64 module's dispatcher branches to it: host pc 0, which Wine cannot map
++   * back to the guest, so the thread hangs. There the block compiles as usual:
++   * the decoder finds no executable range and the guest gets its access
++   * violation at the low address. */
++#if !defined(_WIN32) || defined(ARCHITECTURE_arm64ec)
+   if (GuestRIP < 0x10000) {
+     LogMan::Msg::IFmt("[iOS] CompileBlock: REFUSING low/invalid RIP={:#x}", GuestRIP);
+     return 0;
+   }
++#else
++  if (GuestRIP < 0x10000) {
++    // Log registers only: the guest stack may be unmapped or unreadable.
++    // Bounded: a guest may retry from its handler.
++    static std::atomic<uint32_t> LowJumps {};
++    if (LowJumps.fetch_add(1, std::memory_order_relaxed) < 8) {
++      const auto& GRegs = Frame->State.gregs;
++      const uint32_t ESP = static_cast<uint32_t>(GRegs[X86State::REG_RSP]);
++      LogMan::Msg::EFmt("[wow64-low-jump] guest RIP={:#x} eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} "
++                        "esp={:#x} ebp={:#x} esi={:#x} edi={:#x}",
++                        GuestRIP, GRegs[X86State::REG_RAX], GRegs[X86State::REG_RCX],
++                        GRegs[X86State::REG_RDX], GRegs[X86State::REG_RBX], ESP, GRegs[X86State::REG_RBP], GRegs[X86State::REG_RSI],
++                        GRegs[X86State::REG_RDI]);
++    }
++  }
++#endif
+ 
+ #ifdef FEX_IOS_HOST
+   /* iOS-Madeira ml315 (#52 root cause, ml314): a guest RIP inside a module's JIT-POOL COPY

@@ -1,0 +1,1579 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 4 Oct 2026 09:20:26 +0200
+Subject: [PATCH] sdk: lay out every interface's overloads and destructor as
+ MSVC does
+
+A game is built with MSVC and calls the emulator's interfaces through
+MSVC's vtables. MSVC groups a class's overloaded virtuals at the first
+one's slot and reverses them, and gives a virtual destructor one slot;
+a MinGW build lays them out in declaration order and gives a destructor
+two. So a MinGW build's ISteamUserStats::GetStat(int32 *) sat in the
+game's GetStat(float *) slot (SetStat, GetUserStat, GetGlobalStat,
+GetGlobalStatHistory and GetAchievementProgressLimits likewise), the
+same in ISteamUGC, ISteamInventory, ISteamGameServerStats,
+ISteamGameServerItems and two old interfaces, and every ISteamHTMLSurface
+method was one slot off (the game's Init reached the deleting
+destructor). On x86-64 and i386 alike.
+
+A MinGW build now declares each such overload group in MSVC's order,
+and a one-slot stand-in for the destructor (the emulator never deletes
+through these interfaces). gbe 0004 did this for CCallbackBase's Run.
+build/steamapi-vtables.py compares every interface's MinGW layout with
+clang's MSVC layout before the build.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no
+---
+ sdk/steam/isteamfriends001.h         | 10 ++++++
+ sdk/steam/isteamgameserveritems.h    |  6 ++++
+ sdk/steam/isteamgameserveritems001.h |  6 ++++
+ sdk/steam/isteamgameserveritems002.h |  6 ++++
+ sdk/steam/isteamgameserveritems003.h |  6 ++++
+ sdk/steam/isteamgameserverstats.h    | 16 ++++++++++
+ sdk/steam/isteamhtmlsurface.h        |  5 +++
+ sdk/steam/isteamhtmlsurface001.h     |  5 +++
+ sdk/steam/isteamhtmlsurface002.h     |  5 +++
+ sdk/steam/isteamhtmlsurface003.h     |  5 +++
+ sdk/steam/isteamhtmlsurface004.h     |  5 +++
+ sdk/steam/isteaminventory.h          | 12 +++++++
+ sdk/steam/isteaminventory002.h       |  8 +++++
+ sdk/steam/isteamugc.h                | 15 +++++++++
+ sdk/steam/isteamugc012.h             |  6 ++++
+ sdk/steam/isteamugc013.h             | 12 +++++++
+ sdk/steam/isteamugc014.h             | 15 +++++++++
+ sdk/steam/isteamugc015.h             | 15 +++++++++
+ sdk/steam/isteamugc016.h             | 15 +++++++++
+ sdk/steam/isteamugc017.h             | 15 +++++++++
+ sdk/steam/isteamugc018.h             | 15 +++++++++
+ sdk/steam/isteamugc019.h             | 15 +++++++++
+ sdk/steam/isteamugc020.h             | 15 +++++++++
+ sdk/steam/isteamuser001.h            |  5 +++
+ sdk/steam/isteamuser002.h            |  5 +++
+ sdk/steam/isteamuser004_old.h        | 15 +++++++++
+ sdk/steam/isteamuserstats.h          | 48 ++++++++++++++++++++++++++++
+ sdk/steam/isteamuserstats001.h       | 12 +++++++
+ sdk/steam/isteamuserstats002.h       | 12 +++++++
+ sdk/steam/isteamuserstats003.h       | 12 +++++++
+ sdk/steam/isteamuserstats004.h       | 18 +++++++++++
+ sdk/steam/isteamuserstats005.h       | 18 +++++++++++
+ sdk/steam/isteamuserstats006.h       | 18 +++++++++++
+ sdk/steam/isteamuserstats007.h       | 18 +++++++++++
+ sdk/steam/isteamuserstats008.h       | 18 +++++++++++
+ sdk/steam/isteamuserstats009.h       | 18 +++++++++++
+ sdk/steam/isteamuserstats010.h       | 30 +++++++++++++++++
+ sdk/steam/isteamuserstats011.h       | 40 +++++++++++++++++++++++
+ sdk/steam/isteamuserstats012.h       | 48 ++++++++++++++++++++++++++++
+ 39 files changed, 568 insertions(+)
+
+diff --git a/sdk/steam/isteamfriends001.h b/sdk/steam/isteamfriends001.h
+index 2732d49..0b8685d 100644
+--- a/sdk/steam/isteamfriends001.h
++++ b/sdk/steam/isteamfriends001.h
+@@ -32,6 +32,15 @@ public:
+ 	virtual int32 AddFriendByName( const char *pchEmailOrAccountName ) = 0;
+ 	virtual int GetFriendCount() = 0;
+ 	STEAMWORKS_STRUCT_RETURN_1(CSteamID, GetFriendByIndex, int, iFriend) /*virtual CSteamID GetFriendByIndex( int iFriend ) = 0;*/
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SendMsgToFriend( CSteamID steamIDFriend, EChatEntryType eChatEntryType, const void *pvMsgBody, int cubMsgBody ) = 0;
++	virtual void SendMsgToFriend( CSteamID steamIDFriend, EChatEntryType eChatEntryType, const char *pchMsgBody ) = 0;
++	virtual void SetFriendRegValue( CSteamID steamIDFriend, const char *pchKey, const char *pchValue ) = 0;
++	virtual const char *GetFriendRegValue( CSteamID steamIDFriend, const char *pchKey ) = 0;
++	virtual const char *GetFriendPersonaNameHistory( CSteamID steamIDFriend, int iPersonaName ) = 0;
++	virtual int GetChatMessage( CSteamID steamIDFriend, int iChatID, void *pvData, int cubData, EChatEntryType *peChatEntryType ) = 0;
++#else
+ 	virtual void SendMsgToFriend( CSteamID steamIDFriend, EChatEntryType eChatEntryType, const char *pchMsgBody ) = 0;
+ 	virtual void SetFriendRegValue( CSteamID steamIDFriend, const char *pchKey, const char *pchValue ) = 0;
+ 	virtual const char *GetFriendRegValue( CSteamID steamIDFriend, const char *pchKey ) = 0;
+@@ -39,6 +48,7 @@ public:
+ 	virtual int GetChatMessage( CSteamID steamIDFriend, int iChatID, void *pvData, int cubData, EChatEntryType *peChatEntryType ) = 0;
+ 
+ 	virtual bool SendMsgToFriend( CSteamID steamIDFriend, EChatEntryType eChatEntryType, const void *pvMsgBody, int cubMsgBody ) = 0;
++#endif
+ 	virtual int GetChatIDOfChatHistoryStart( CSteamID steamIDFriend ) = 0;
+ 	virtual void SetChatHistoryStart( CSteamID steamIDFriend, int iChatID ) = 0;
+ 	virtual void ClearChatHistory( CSteamID steamIDFriend ) = 0;
+diff --git a/sdk/steam/isteamgameserveritems.h b/sdk/steam/isteamgameserveritems.h
+index 60c7ba9..4a79bf4 100644
+--- a/sdk/steam/isteamgameserveritems.h
++++ b/sdk/steam/isteamgameserveritems.h
+@@ -44,8 +44,14 @@ public:
+ 	virtual bool AddNewItemQuality( HNewItemRequest handle, EItemQuality eQuality ) = 0;
+ 	virtual bool SetNewItemInitialInventoryPos( HNewItemRequest handle, uint32 unInventoryPos ) = 0;
+ 	virtual bool SetNewItemInitialQuantity( HNewItemRequest handle, uint32 unQuantity ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
++#else
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++#endif
+ 	virtual SteamAPICall_t SendNewItemRequest( HNewItemRequest handle ) = 0;
+ 	virtual SteamAPICall_t GrantItemToUser( uint64 ulItemID, CSteamID steamIDRecipient ) = 0;
+ 	virtual SteamAPICall_t DeleteTemporaryItem( uint64 ulItemID ) = 0;
+diff --git a/sdk/steam/isteamgameserveritems001.h b/sdk/steam/isteamgameserveritems001.h
+index c727c7f..cfcdc73 100644
+--- a/sdk/steam/isteamgameserveritems001.h
++++ b/sdk/steam/isteamgameserveritems001.h
+@@ -16,8 +16,14 @@ public:
+ 	virtual bool GetItemByID( uint64 ulItemID, uint32 *punItemDefIndex, uint32 *punItemLevel, EItemQuality *peQuality, uint32 *punInventoryPos, uint32 *punAttributeCount ) = 0;
+ 	virtual bool GetItemAttribute( uint64 ulItemID, uint32 unAttributeIndex, uint32 *punAttributeDefIndex, float *pflAttributeValue ) = 0;
+ 	virtual HNewItemRequest CreateNewItemRequest( CSteamID steamID, uint32 unItemLevel, EItemQuality eQuality ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
++#else
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++#endif
+ 	virtual void SendNewItemRequest_old( HNewItemRequest handle ) = 0;
+ };
+ 
+diff --git a/sdk/steam/isteamgameserveritems002.h b/sdk/steam/isteamgameserveritems002.h
+index fcd6079..eaeab2c 100644
+--- a/sdk/steam/isteamgameserveritems002.h
++++ b/sdk/steam/isteamgameserveritems002.h
+@@ -16,8 +16,14 @@ public:
+ 	virtual bool GetItemByID( uint64 ulItemID, uint32 *punItemDefIndex, uint32 *punItemLevel, EItemQuality *peQuality, uint32 *punInventoryPos, uint32 *punAttributeCount ) = 0;
+ 	virtual bool GetItemAttribute( uint64 ulItemID, uint32 unAttributeIndex, uint32 *punAttributeDefIndex, float *pflAttributeValue ) = 0;
+ 	virtual HNewItemRequest CreateNewItemRequest( CSteamID steamID, uint32 unItemLevel, EItemQuality eQuality ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
++#else
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++#endif
+ 	virtual void SendNewItemRequest_old( HNewItemRequest handle ) = 0;
+ 	virtual void GrantItemToUser_old( uint64 ulItemID, CSteamID steamIDRecipient ) = 0;
+ 	virtual void DeleteTemporaryItem_old( uint64 ulItemID ) = 0;
+diff --git a/sdk/steam/isteamgameserveritems003.h b/sdk/steam/isteamgameserveritems003.h
+index 2cb5523..f5e836d 100644
+--- a/sdk/steam/isteamgameserveritems003.h
++++ b/sdk/steam/isteamgameserveritems003.h
+@@ -20,8 +20,14 @@ public:
+ 	virtual bool AddNewItemQuality( HNewItemRequest handle, EItemQuality eQuality ) = 0;
+ 	virtual bool SetNewItemInitialInventoryPos( HNewItemRequest handle, uint32 unInventoryPos ) = 0;
+ 	virtual bool SetNewItemInitialQuantity( HNewItemRequest handle, uint32 unQuantity ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
++#else
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, const char *pchValue, bool bRequired ) = 0;
+ 	virtual bool AddNewItemCriteria( HNewItemRequest handle, const char *pchField, EItemCriteriaOperator eOperator, float flValue, bool bRequired ) = 0;
++#endif
+ 	virtual void SendNewItemRequest_old( HNewItemRequest handle ) = 0;
+ 	virtual void GrantItemToUser_old( uint64 ulItemID, CSteamID steamIDRecipient ) = 0;
+ 	virtual void DeleteTemporaryItem_old( uint64 ulItemID ) = 0;
+diff --git a/sdk/steam/isteamgameserverstats.h b/sdk/steam/isteamgameserverstats.h
+index 80b8171..9c38e76 100644
+--- a/sdk/steam/isteamgameserverstats.h
++++ b/sdk/steam/isteamgameserverstats.h
+@@ -27,11 +27,19 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetUserStatFloat )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	STEAM_FLAT_NAME( GetUserStatInt32 )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetUserStatInt32 )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetUserStatFloat )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 
+@@ -40,11 +48,19 @@ public:
+ 	// game servers that have been declared as officially controlled by the game creators. 
+ 	// Set the IP range of your official servers on the Steamworks page
+ 
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( SetUserStatFloat )
++	virtual bool SetUserStat( CSteamID steamIDUser, const char *pchName, float fData ) = 0;
++	STEAM_FLAT_NAME( SetUserStatInt32 )
++	virtual bool SetUserStat( CSteamID steamIDUser, const char *pchName, int32 nData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( SetUserStatInt32 )
+ 	virtual bool SetUserStat( CSteamID steamIDUser, const char *pchName, int32 nData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( SetUserStatFloat )
+ 	virtual bool SetUserStat( CSteamID steamIDUser, const char *pchName, float fData ) = 0;
++#endif
+ 
+ 	virtual bool UpdateUserAvgRateStat( CSteamID steamIDUser, const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+diff --git a/sdk/steam/isteamhtmlsurface.h b/sdk/steam/isteamhtmlsurface.h
+index a01bcc6..0c8cd1a 100644
+--- a/sdk/steam/isteamhtmlsurface.h
++++ b/sdk/steam/isteamhtmlsurface.h
+@@ -85,7 +85,12 @@ enum EHTMLKeyModifiers
+ class ISteamHTMLSurface
+ {
+ public:
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC gives the destructor one vtable slot
++	virtual void MSVCDestructorSlot( unsigned int ) {}
++#else
+ 	virtual ~ISteamHTMLSurface() {}
++#endif
+ 
+ 	// Must call init and shutdown when starting/ending use of the interface
+ 	virtual bool Init() = 0;
+diff --git a/sdk/steam/isteamhtmlsurface001.h b/sdk/steam/isteamhtmlsurface001.h
+index ad34601..9979411 100644
+--- a/sdk/steam/isteamhtmlsurface001.h
++++ b/sdk/steam/isteamhtmlsurface001.h
+@@ -8,7 +8,12 @@
+ class ISteamHTMLSurface001
+ {
+ public:										
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC gives the destructor one vtable slot
++	virtual void MSVCDestructorSlot( unsigned int ) {}
++#else
+ 	virtual ~ISteamHTMLSurface001() {}
++#endif
+ 
+ 	// Must call init and shutdown when starting/ending use of the interface
+ 	virtual bool Init() = 0;
+diff --git a/sdk/steam/isteamhtmlsurface002.h b/sdk/steam/isteamhtmlsurface002.h
+index 2c700d1..b19db7e 100644
+--- a/sdk/steam/isteamhtmlsurface002.h
++++ b/sdk/steam/isteamhtmlsurface002.h
+@@ -8,7 +8,12 @@
+ class ISteamHTMLSurface002
+ {
+ public:										
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC gives the destructor one vtable slot
++	virtual void MSVCDestructorSlot( unsigned int ) {}
++#else
+ 	virtual ~ISteamHTMLSurface002() {}
++#endif
+ 
+ 	// Must call init and shutdown when starting/ending use of the interface
+ 	virtual bool Init() = 0;
+diff --git a/sdk/steam/isteamhtmlsurface003.h b/sdk/steam/isteamhtmlsurface003.h
+index fa8108a..cfc8d3b 100644
+--- a/sdk/steam/isteamhtmlsurface003.h
++++ b/sdk/steam/isteamhtmlsurface003.h
+@@ -8,7 +8,12 @@
+ class ISteamHTMLSurface003
+ {
+ public:										
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC gives the destructor one vtable slot
++	virtual void MSVCDestructorSlot( unsigned int ) {}
++#else
+ 	virtual ~ISteamHTMLSurface003() {}
++#endif
+ 
+ 	// Must call init and shutdown when starting/ending use of the interface
+ 	virtual bool Init() = 0;
+diff --git a/sdk/steam/isteamhtmlsurface004.h b/sdk/steam/isteamhtmlsurface004.h
+index 1f2155b..23ff0dd 100644
+--- a/sdk/steam/isteamhtmlsurface004.h
++++ b/sdk/steam/isteamhtmlsurface004.h
+@@ -8,7 +8,12 @@
+ class ISteamHTMLSurface004
+ {
+ public:										
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC gives the destructor one vtable slot
++	virtual void MSVCDestructorSlot( unsigned int ) {}
++#else
+ 	virtual ~ISteamHTMLSurface004() {}
++#endif
+ 
+ 	// Must call init and shutdown when starting/ending use of the interface
+ 	virtual bool Init() = 0;
+diff --git a/sdk/steam/isteaminventory.h b/sdk/steam/isteaminventory.h
+index 6c9041e..ad80b75 100644
+--- a/sdk/steam/isteaminventory.h
++++ b/sdk/steam/isteaminventory.h
+@@ -351,6 +351,17 @@ public:
+ 	virtual bool RemoveProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName ) = 0;
+ 	// Accessor methods to set properties on items
+ 
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( SetPropertyFloat )
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, float flValue ) = 0;
++	STEAM_FLAT_NAME( SetPropertyInt64 )
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, int64 nValue ) = 0;
++	STEAM_FLAT_NAME( SetPropertyBool )
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, bool bValue ) = 0;
++	STEAM_FLAT_NAME( SetPropertyString )
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, const char *pchPropertyValue ) = 0;
++#else
+ 	STEAM_FLAT_NAME( SetPropertyString )
+ 	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, const char *pchPropertyValue ) = 0;
+ 
+@@ -362,6 +373,7 @@ public:
+ 
+ 	STEAM_FLAT_NAME( SetPropertyFloat )
+ 	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, float flValue ) = 0;
++#endif
+ 
+ 	// Submit the update request by handle
+ 	virtual bool SubmitUpdateProperties( SteamInventoryUpdateHandle_t handle, SteamInventoryResult_t * pResultHandle ) = 0;
+diff --git a/sdk/steam/isteaminventory002.h b/sdk/steam/isteaminventory002.h
+index 793e5ea..22aa6c7 100644
+--- a/sdk/steam/isteaminventory002.h
++++ b/sdk/steam/isteaminventory002.h
+@@ -286,10 +286,18 @@ public:
+ 	// Remove the property on the item
+ 	virtual bool RemoveProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName ) = 0;
+ 	// Accessor methods to set properties on items
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, float flValue ) = 0;
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, int64 nValue ) = 0;
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, bool bValue ) = 0;
++	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, const char *pchPropertyValue ) = 0;
++#else
+ 	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, const char *pchPropertyValue ) = 0;
+ 	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, bool bValue ) = 0;
+ 	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, int64 nValue ) = 0;
+ 	virtual bool SetProperty( SteamInventoryUpdateHandle_t handle, SteamItemInstanceID_t nItemID, const char *pchPropertyName, float flValue ) = 0;
++#endif
+ 	// Submit the update request by handle
+ 	virtual bool SubmitUpdateProperties( SteamInventoryUpdateHandle_t handle, SteamInventoryResult_t * pResultHandle ) = 0;
+ 	
+diff --git a/sdk/steam/isteamugc.h b/sdk/steam/isteamugc.h
+index a63051d..eca9344 100644
+--- a/sdk/steam/isteamugc.h
++++ b/sdk/steam/isteamugc.h
+@@ -219,12 +219,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -245,11 +253,18 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchOriginalFileNameSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	// Some items can specify that they have a version that is valid for a range of game versions (Steam branch)
+ 	virtual uint32 GetNumSupportedGameVersions( UGCQueryHandle_t handle, uint32 index ) = 0;
+diff --git a/sdk/steam/isteamugc012.h b/sdk/steam/isteamugc012.h
+index 77daf97..aaf8846 100644
+--- a/sdk/steam/isteamugc012.h
++++ b/sdk/steam/isteamugc012.h
+@@ -13,10 +13,16 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+diff --git a/sdk/steam/isteamugc013.h b/sdk/steam/isteamugc013.h
+index 29d71e3..79373e4 100644
+--- a/sdk/steam/isteamugc013.h
++++ b/sdk/steam/isteamugc013.h
+@@ -12,10 +12,16 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -33,9 +39,15 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	// Release the request to free up memory, after retrieving results
+ 	virtual bool ReleaseQueryUGCRequest( UGCQueryHandle_t handle ) = 0;
+diff --git a/sdk/steam/isteamugc014.h b/sdk/steam/isteamugc014.h
+index 871dcd4..6a4d826 100644
+--- a/sdk/steam/isteamugc014.h
++++ b/sdk/steam/isteamugc014.h
+@@ -13,12 +13,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -37,11 +45,18 @@ public:
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	// Release the request to free up memory, after retrieving results
+ 	virtual bool ReleaseQueryUGCRequest( UGCQueryHandle_t handle ) = 0;
+diff --git a/sdk/steam/isteamugc015.h b/sdk/steam/isteamugc015.h
+index 18e51fe..2cd06d3 100644
+--- a/sdk/steam/isteamugc015.h
++++ b/sdk/steam/isteamugc015.h
+@@ -13,12 +13,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -39,11 +47,18 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	// Release the request to free up memory, after retrieving results
+ 	virtual bool ReleaseQueryUGCRequest( UGCQueryHandle_t handle ) = 0;
+diff --git a/sdk/steam/isteamugc016.h b/sdk/steam/isteamugc016.h
+index e4704fe..3d394b3 100644
+--- a/sdk/steam/isteamugc016.h
++++ b/sdk/steam/isteamugc016.h
+@@ -12,12 +12,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -38,11 +46,18 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	// Release the request to free up memory, after retrieving results
+ 	virtual bool ReleaseQueryUGCRequest( UGCQueryHandle_t handle ) = 0;
+diff --git a/sdk/steam/isteamugc017.h b/sdk/steam/isteamugc017.h
+index 9e3885f..bda5155 100644
+--- a/sdk/steam/isteamugc017.h
++++ b/sdk/steam/isteamugc017.h
+@@ -13,12 +13,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -39,11 +47,18 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	virtual uint32 GetQueryUGCContentDescriptors( UGCQueryHandle_t handle, uint32 index, EUGCContentDescriptorID *pvecDescriptors, uint32 cMaxEntries ) = 0;
+ 	
+diff --git a/sdk/steam/isteamugc018.h b/sdk/steam/isteamugc018.h
+index 9a11e52..12f533a 100644
+--- a/sdk/steam/isteamugc018.h
++++ b/sdk/steam/isteamugc018.h
+@@ -55,12 +55,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -81,11 +89,18 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	virtual uint32 GetQueryUGCContentDescriptors( UGCQueryHandle_t handle, uint32 index, EUGCContentDescriptorID *pvecDescriptors, uint32 cMaxEntries ) = 0;
+ 	
+diff --git a/sdk/steam/isteamugc019.h b/sdk/steam/isteamugc019.h
+index 67f84ee..d11ee66 100644
+--- a/sdk/steam/isteamugc019.h
++++ b/sdk/steam/isteamugc019.h
+@@ -13,12 +13,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -39,11 +47,18 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	virtual uint32 GetQueryUGCContentDescriptors( UGCQueryHandle_t handle, uint32 index, EUGCContentDescriptorID *pvecDescriptors, uint32 cMaxEntries ) = 0;
+ 	
+diff --git a/sdk/steam/isteamugc020.h b/sdk/steam/isteamugc020.h
+index dc636dd..d0747ce 100644
+--- a/sdk/steam/isteamugc020.h
++++ b/sdk/steam/isteamugc020.h
+@@ -16,12 +16,20 @@ public:
+ 	virtual UGCQueryHandle_t CreateQueryUserUGCRequest( AccountID_t unAccountID, EUserUGCList eListType, EUGCMatchingUGCType eMatchingUGCType, EUserUGCListSortOrder eSortOrder, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
++	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
++#else
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestPage )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage ) = 0;
+ 
+ 	// Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
+ 	STEAM_FLAT_NAME( CreateQueryAllUGCRequestCursor )
+ 	virtual UGCQueryHandle_t CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor = NULL ) = 0;
++#endif
+ 
+ 	// Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
+ 	virtual UGCQueryHandle_t CreateQueryUGCDetailsRequest( PublishedFileId_t *pvecPublishedFileID, uint32 unNumPublishedFileIDs ) = 0;
+@@ -42,11 +50,18 @@ public:
+ 	virtual uint32 GetQueryUGCNumAdditionalPreviews( UGCQueryHandle_t handle, uint32 index ) = 0;
+ 	virtual bool GetQueryUGCAdditionalPreview( UGCQueryHandle_t handle, uint32 index, uint32 previewIndex, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchURLOrVideoID, uint32 cchURLSize, STEAM_OUT_STRING_COUNT(cchURLSize) char *pchOriginalFileName, uint32 cchOriginalFileNameSize, EItemPreviewType *pPreviewType ) = 0;
+ 	virtual uint32 GetQueryUGCNumKeyValueTags( UGCQueryHandle_t handle, uint32 index ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#else
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, uint32 keyValueTagIndex, STEAM_OUT_STRING_COUNT(cchKeySize) char *pchKey, uint32 cchKeySize, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
+ 
+ 	// Return the first value matching the pchKey. Note that a key may map to multiple values.  Returns false if there was an error or no matching value was found.
+ 	STEAM_FLAT_NAME( GetQueryFirstUGCKeyValueTag )
+ 	virtual bool GetQueryUGCKeyValueTag( UGCQueryHandle_t handle, uint32 index, const char *pchKey, STEAM_OUT_STRING_COUNT(cchValueSize) char *pchValue, uint32 cchValueSize ) = 0;
++#endif
+ 
+ 	// Some items can specify that they have a version that is valid for a range of game versions (Steam branch)
+ 	virtual uint32 GetNumSupportedGameVersions( UGCQueryHandle_t handle, uint32 index ) = 0;
+diff --git a/sdk/steam/isteamuser001.h b/sdk/steam/isteamuser001.h
+index b0c1645..0b0daf4 100644
+--- a/sdk/steam/isteamuser001.h
++++ b/sdk/steam/isteamuser001.h
+@@ -20,7 +20,12 @@ enum EVACBan
+ class ICMCallback001
+ {
+ public:
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC gives the destructor one vtable slot
++	virtual void MSVCDestructorSlot( unsigned int ) {}
++#else
+ 	virtual ~ICMCallback001() {}
++#endif
+ 
+ 	virtual void OnLogonSuccess() = 0;
+ 	virtual void OnLogonFailure( EResult eResult ) = 0;
+diff --git a/sdk/steam/isteamuser002.h b/sdk/steam/isteamuser002.h
+index d1ad0bc..d3fcb51 100644
+--- a/sdk/steam/isteamuser002.h
++++ b/sdk/steam/isteamuser002.h
+@@ -18,7 +18,12 @@ enum ELogonState
+ class ICMCallback
+ {
+ public:
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC gives the destructor one vtable slot
++	virtual void MSVCDestructorSlot( unsigned int ) {}
++#else
+ 	virtual ~ICMCallback() {}
++#endif
+ 
+ 	virtual void OnLogonSuccess() = 0;
+ 	virtual void OnLogonFailure( EResult eResult ) = 0;
+diff --git a/sdk/steam/isteamuser004_old.h b/sdk/steam/isteamuser004_old.h
+index f050d07..4e86462 100644
+--- a/sdk/steam/isteamuser004_old.h
++++ b/sdk/steam/isteamuser004_old.h
+@@ -28,6 +28,20 @@ public:
+ 	virtual void RemoveClientGame( int nClientGameID ) = 0;
+ 	virtual void SetClientGameServer( int nClientGameID, uint32 unIPServer, uint16 usPortServer ) = 0;
+ 
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual const char *GetPlayerName( CSteamID steamIDFriend ) = 0;
++	virtual const char *GetPlayerName() = 0;
++	virtual void SetPlayerName( const char *pchPersonaName ) = 0;
++	virtual EPersonaState GetFriendStatus( CSteamID steamIDFriend ) = 0;
++	virtual EPersonaState GetFriendStatus() = 0;
++	virtual void SetFriendStatus( EPersonaState ePersonaState ) = 0;
++	virtual bool AddFriend( CSteamID steamIDFriend ) = 0;
++	virtual bool RemoveFriend( CSteamID steamIDFriend ) = 0;
++	virtual bool HasFriend( CSteamID steamIDFriend ) = 0;
++	virtual EFriendRelationship GetFriendRelationship( CSteamID steamIDFriend ) = 0;
++	virtual bool GetFriendGamePlayed( CSteamID steamIDFriend, int32 *pnGameID, uint32 *punGameIP, uint16 *pusGamePort ) = 0;
++#else
+ 	virtual const char *GetPlayerName() = 0;
+ 	virtual void SetPlayerName( const char *pchPersonaName ) = 0;
+ 	virtual EPersonaState GetFriendStatus() = 0;
+@@ -39,6 +53,7 @@ public:
+ 	virtual EPersonaState GetFriendStatus( CSteamID steamIDFriend ) = 0;
+ 	virtual bool GetFriendGamePlayed( CSteamID steamIDFriend, int32 *pnGameID, uint32 *punGameIP, uint16 *pusGamePort ) = 0;
+ 	virtual const char *GetPlayerName( CSteamID steamIDFriend ) = 0;
++#endif
+ 	virtual int32 AddFriendByName( const char *pchEmailOrAccountName ) = 0;
+ 
+ 	virtual void SetSteam2Ticket( uint8 *pubTicket, int cubTicket ) = 0;
+diff --git a/sdk/steam/isteamuserstats.h b/sdk/steam/isteamuserstats.h
+index d94e60c..6195441 100644
+--- a/sdk/steam/isteamuserstats.h
++++ b/sdk/steam/isteamuserstats.h
+@@ -96,18 +96,34 @@ public:
+ 	// virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetStatFloat )
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	STEAM_FLAT_NAME( GetStatInt32 )
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetStatInt32 )
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetStatFloat )
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( SetStatFloat )
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	STEAM_FLAT_NAME( SetStatInt32 )
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( SetStatInt32 )
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( SetStatFloat )
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+@@ -163,11 +179,19 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetUserStatFloat )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	STEAM_FLAT_NAME( GetUserStatInt32 )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetUserStatInt32 )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetUserStatFloat )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 	// See notes for GetAchievementAndUnlockTime above
+@@ -279,31 +303,55 @@ public:
+ 	virtual SteamAPICall_t RequestGlobalStats( int nHistoryDays ) = 0;
+ 
+ 	// Gets the lifetime totals for an aggregated stat
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetGlobalStatDouble )
++	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++	STEAM_FLAT_NAME( GetGlobalStatInt64 )
++	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetGlobalStatInt64 )
+ 	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetGlobalStatDouble )
+ 	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++#endif
+ 
+ 	// Gets history for an aggregated stat. pData will be filled with daily values, starting with today.
+ 	// So when called, pData[0] will be today, pData[1] will be yesterday, and pData[2] will be two days ago, 
+ 	// etc. cubData is the size in bytes of the pubData buffer. Returns the number of 
+ 	// elements actually set.
+ 
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetGlobalStatHistoryDouble )
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) double *pData, uint32 cubData ) = 0;
++	STEAM_FLAT_NAME( GetGlobalStatHistoryInt64 )
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) int64 *pData, uint32 cubData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetGlobalStatHistoryInt64 )
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) int64 *pData, uint32 cubData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetGlobalStatHistoryDouble )
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) double *pData, uint32 cubData ) = 0;
++#endif
+ 
+ 	// For achievements that have related Progress stats, use this to query what the bounds of that progress are.
+ 	// You may want this info to selectively call IndicateAchievementProgress when appropriate milestones of progress
+ 	// have been made, to show a progress notification to the user.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetAchievementProgressLimitsFloat )
++	virtual bool GetAchievementProgressLimits( const char *pchName, float *pfMinProgress, float *pfMaxProgress ) = 0;
++	STEAM_FLAT_NAME( GetAchievementProgressLimitsInt32 )
++	virtual bool GetAchievementProgressLimits( const char *pchName, int32 *pnMinProgress, int32 *pnMaxProgress ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetAchievementProgressLimitsInt32 )
+ 	virtual bool GetAchievementProgressLimits( const char *pchName, int32 *pnMinProgress, int32 *pnMaxProgress ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetAchievementProgressLimitsFloat )
+ 	virtual bool GetAchievementProgressLimits( const char *pchName, float *pfMinProgress, float *pfMaxProgress ) = 0;
++#endif
+ 
+ };
+ 
+diff --git a/sdk/steam/isteamuserstats001.h b/sdk/steam/isteamuserstats001.h
+index 1ea5311..6e5c367 100644
+--- a/sdk/steam/isteamuserstats001.h
++++ b/sdk/steam/isteamuserstats001.h
+@@ -16,10 +16,22 @@ public:
+ 	virtual uint32 GetNumGroupAchievements( CGameID nGameID ) = 0;
+ 	virtual const char *GetGroupAchievementName( CGameID nGameID, uint32 iAchievement ) = 0;
+ 	virtual bool RequestCurrentStats( CGameID nGameID ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( CGameID nGameID, const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( CGameID nGameID, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( CGameID nGameID, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( CGameID nGameID, const char *pchName, float *pData ) = 0;
++#endif
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( CGameID nGameID, const char *pchName, float fData ) = 0;
++	virtual bool SetStat( CGameID nGameID, const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( CGameID nGameID, const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( CGameID nGameID, const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( CGameID nGameID, const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 	virtual bool GetAchievement( CGameID nGameID, const char *pchName, bool *pbAchieved ) = 0;
+ 	virtual bool GetGroupAchievement( CGameID nGameID, const char *pchName, bool *pbAchieved ) = 0;
+diff --git a/sdk/steam/isteamuserstats002.h b/sdk/steam/isteamuserstats002.h
+index a573955..a3f414e 100644
+--- a/sdk/steam/isteamuserstats002.h
++++ b/sdk/steam/isteamuserstats002.h
+@@ -14,10 +14,22 @@ public:
+        virtual uint32 GetNumAchievements( CGameID nGameID ) = 0;
+        virtual const char *GetAchievementName( CGameID nGameID, uint32 iAchievement ) = 0;
+        virtual bool RequestCurrentStats( CGameID nGameID ) = 0;
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++       // MSVC's vtable order: these overloads grouped and reversed
++       virtual bool GetStat( CGameID nGameID, const char *pchName, float *pData ) = 0;
++       virtual bool GetStat( CGameID nGameID, const char *pchName, int32 *pData ) = 0;
++#else
+        virtual bool GetStat( CGameID nGameID, const char *pchName, int32 *pData ) = 0;
+        virtual bool GetStat( CGameID nGameID, const char *pchName, float *pData ) = 0;
++#endif
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++       // MSVC's vtable order: these overloads grouped and reversed
++       virtual bool SetStat( CGameID nGameID, const char *pchName, float fData ) = 0;
++       virtual bool SetStat( CGameID nGameID, const char *pchName, int32 nData ) = 0;
++#else
+        virtual bool SetStat( CGameID nGameID, const char *pchName, int32 nData ) = 0;
+        virtual bool SetStat( CGameID nGameID, const char *pchName, float fData ) = 0;
++#endif
+        virtual bool UpdateAvgRateStat( CGameID nGameID, const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+        virtual bool GetAchievement( CGameID nGameID, const char *pchName, bool *pbAchieved ) = 0;
+        virtual bool SetAchievement( CGameID nGameID, const char *pchName ) = 0;
+diff --git a/sdk/steam/isteamuserstats003.h b/sdk/steam/isteamuserstats003.h
+index 234c0e7..4a43c8b 100644
+--- a/sdk/steam/isteamuserstats003.h
++++ b/sdk/steam/isteamuserstats003.h
+@@ -14,12 +14,24 @@ public:
+ 	virtual bool RequestCurrentStats( ) = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+diff --git a/sdk/steam/isteamuserstats004.h b/sdk/steam/isteamuserstats004.h
+index fe22492..6c00d67 100644
+--- a/sdk/steam/isteamuserstats004.h
++++ b/sdk/steam/isteamuserstats004.h
+@@ -12,12 +12,24 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+@@ -49,8 +61,14 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ };
+ 
+diff --git a/sdk/steam/isteamuserstats005.h b/sdk/steam/isteamuserstats005.h
+index 6fd4d39..bce7770 100644
+--- a/sdk/steam/isteamuserstats005.h
++++ b/sdk/steam/isteamuserstats005.h
+@@ -15,12 +15,24 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+@@ -52,8 +64,14 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 
+ 	// Reset stats 
+diff --git a/sdk/steam/isteamuserstats006.h b/sdk/steam/isteamuserstats006.h
+index bd92970..190e0fa 100644
+--- a/sdk/steam/isteamuserstats006.h
++++ b/sdk/steam/isteamuserstats006.h
+@@ -15,12 +15,24 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+@@ -52,8 +64,14 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 
+ 	// Reset stats 
+diff --git a/sdk/steam/isteamuserstats007.h b/sdk/steam/isteamuserstats007.h
+index eeb49f7..118faf7 100644
+--- a/sdk/steam/isteamuserstats007.h
++++ b/sdk/steam/isteamuserstats007.h
+@@ -15,12 +15,24 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+@@ -65,8 +77,14 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 	// See notes for GetAchievementAndUnlockTime above
+ 	virtual bool GetUserAchievementAndUnlockTime( CSteamID steamIDUser, const char *pchName, bool *pbAchieved, uint32 *punUnlockTime ) = 0;
+diff --git a/sdk/steam/isteamuserstats008.h b/sdk/steam/isteamuserstats008.h
+index e98ef22..462bcd0 100644
+--- a/sdk/steam/isteamuserstats008.h
++++ b/sdk/steam/isteamuserstats008.h
+@@ -15,12 +15,24 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+@@ -65,8 +77,14 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 	// See notes for GetAchievementAndUnlockTime above
+ 	virtual bool GetUserAchievementAndUnlockTime( CSteamID steamIDUser, const char *pchName, bool *pbAchieved, uint32 *punUnlockTime ) = 0;
+diff --git a/sdk/steam/isteamuserstats009.h b/sdk/steam/isteamuserstats009.h
+index 63f177f..074c0f4 100644
+--- a/sdk/steam/isteamuserstats009.h
++++ b/sdk/steam/isteamuserstats009.h
+@@ -15,12 +15,24 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+@@ -65,8 +77,14 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 	// See notes for GetAchievementAndUnlockTime above
+ 	virtual bool GetUserAchievementAndUnlockTime( CSteamID steamIDUser, const char *pchName, bool *pbAchieved, uint32 *punUnlockTime ) = 0;
+diff --git a/sdk/steam/isteamuserstats010.h b/sdk/steam/isteamuserstats010.h
+index 9a184da..edf1740 100644
+--- a/sdk/steam/isteamuserstats010.h
++++ b/sdk/steam/isteamuserstats010.h
+@@ -15,12 +15,24 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+ 	// Achievement flag accessors
+@@ -65,8 +77,14 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 	// See notes for GetAchievementAndUnlockTime above
+ 	virtual bool GetUserAchievementAndUnlockTime( CSteamID steamIDUser, const char *pchName, bool *pbAchieved, uint32 *punUnlockTime ) = 0;
+@@ -166,15 +184,27 @@ public:
+ 	virtual SteamAPICall_t RequestGlobalStats( int nHistoryDays ) = 0;
+ 
+ 	// Gets the lifetime totals for an aggregated stat
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
++#else
+ 	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
+ 	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++#endif
+ 
+ 	// Gets history for an aggregated stat. pData will be filled with daily values, starting with today.
+ 	// So when called, pData[0] will be today, pData[1] will be yesterday, and pData[2] will be two days ago, 
+ 	// etc. cubData is the size in bytes of the pubData buffer. Returns the number of 
+ 	// elements actually set.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, double *pData, uint32 cubData ) = 0;
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, int64 *pData, uint32 cubData ) = 0;
++#else
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, int64 *pData, uint32 cubData ) = 0;
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, double *pData, uint32 cubData ) = 0;
++#endif
+ 
+ };
+ 
+diff --git a/sdk/steam/isteamuserstats011.h b/sdk/steam/isteamuserstats011.h
+index d64115d..3ba1ac7 100644
+--- a/sdk/steam/isteamuserstats011.h
++++ b/sdk/steam/isteamuserstats011.h
+@@ -16,18 +16,34 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetStatFloat )
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	STEAM_FLAT_NAME( GetStatInt32 )
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetStatInt32 )
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetStatFloat )
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( SetStatFloat )
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	STEAM_FLAT_NAME( SetStatInt32 )
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( SetStatInt32 )
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( SetStatFloat )
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+@@ -83,11 +99,19 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetUserStatFloat )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	STEAM_FLAT_NAME( GetUserStatInt32 )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetUserStatInt32 )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetUserStatFloat )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 	// See notes for GetAchievementAndUnlockTime above
+@@ -199,22 +223,38 @@ public:
+ 	virtual SteamAPICall_t RequestGlobalStats( int nHistoryDays ) = 0;
+ 
+ 	// Gets the lifetime totals for an aggregated stat
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetGlobalStatDouble )
++	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++	STEAM_FLAT_NAME( GetGlobalStatInt64 )
++	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetGlobalStatInt64 )
+ 	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetGlobalStatDouble )
+ 	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++#endif
+ 
+ 	// Gets history for an aggregated stat. pData will be filled with daily values, starting with today.
+ 	// So when called, pData[0] will be today, pData[1] will be yesterday, and pData[2] will be two days ago, 
+ 	// etc. cubData is the size in bytes of the pubData buffer. Returns the number of 
+ 	// elements actually set.
+ 
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetGlobalStatHistoryDouble )
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) double *pData, uint32 cubData ) = 0;
++	STEAM_FLAT_NAME( GetGlobalStatHistoryInt64 )
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) int64 *pData, uint32 cubData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetGlobalStatHistoryInt64 )
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) int64 *pData, uint32 cubData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetGlobalStatHistoryDouble )
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) double *pData, uint32 cubData ) = 0;
++#endif
+ 
+ #ifdef _PS3
+ 	// Call to kick off installation of the PS3 trophies. This call is asynchronous, and the results will be returned in a PS3TrophiesInstalled_t
+diff --git a/sdk/steam/isteamuserstats012.h b/sdk/steam/isteamuserstats012.h
+index 173208b..1fe0ffa 100644
+--- a/sdk/steam/isteamuserstats012.h
++++ b/sdk/steam/isteamuserstats012.h
+@@ -16,18 +16,34 @@ public:
+ 	virtual bool RequestCurrentStats() = 0;
+ 
+ 	// Data accessors
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetStatFloat )
++	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++	STEAM_FLAT_NAME( GetStatInt32 )
++	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetStatInt32 )
+ 	virtual bool GetStat( const char *pchName, int32 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetStatFloat )
+ 	virtual bool GetStat( const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	// Set / update data
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( SetStatFloat )
++	virtual bool SetStat( const char *pchName, float fData ) = 0;
++	STEAM_FLAT_NAME( SetStatInt32 )
++	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( SetStatInt32 )
+ 	virtual bool SetStat( const char *pchName, int32 nData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( SetStatFloat )
+ 	virtual bool SetStat( const char *pchName, float fData ) = 0;
++#endif
+ 
+ 	virtual bool UpdateAvgRateStat( const char *pchName, float flCountThisSession, double dSessionLength ) = 0;
+ 
+@@ -83,11 +99,19 @@ public:
+ 	virtual SteamAPICall_t RequestUserStats( CSteamID steamIDUser ) = 0;
+ 
+ 	// requests stat information for a user, usable after a successful call to RequestUserStats()
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetUserStatFloat )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++	STEAM_FLAT_NAME( GetUserStatInt32 )
++	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetUserStatInt32 )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, int32 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetUserStatFloat )
+ 	virtual bool GetUserStat( CSteamID steamIDUser, const char *pchName, float *pData ) = 0;
++#endif
+ 
+ 	virtual bool GetUserAchievement( CSteamID steamIDUser, const char *pchName, bool *pbAchieved ) = 0;
+ 	// See notes for GetAchievementAndUnlockTime above
+@@ -199,31 +223,55 @@ public:
+ 	virtual SteamAPICall_t RequestGlobalStats( int nHistoryDays ) = 0;
+ 
+ 	// Gets the lifetime totals for an aggregated stat
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetGlobalStatDouble )
++	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++	STEAM_FLAT_NAME( GetGlobalStatInt64 )
++	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetGlobalStatInt64 )
+ 	virtual bool GetGlobalStat( const char *pchStatName, int64 *pData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetGlobalStatDouble )
+ 	virtual bool GetGlobalStat( const char *pchStatName, double *pData ) = 0;
++#endif
+ 
+ 	// Gets history for an aggregated stat. pData will be filled with daily values, starting with today.
+ 	// So when called, pData[0] will be today, pData[1] will be yesterday, and pData[2] will be two days ago, 
+ 	// etc. cubData is the size in bytes of the pubData buffer. Returns the number of 
+ 	// elements actually set.
+ 
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetGlobalStatHistoryDouble )
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) double *pData, uint32 cubData ) = 0;
++	STEAM_FLAT_NAME( GetGlobalStatHistoryInt64 )
++	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) int64 *pData, uint32 cubData ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetGlobalStatHistoryInt64 )
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) int64 *pData, uint32 cubData ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetGlobalStatHistoryDouble )
+ 	virtual int32 GetGlobalStatHistory( const char *pchStatName, STEAM_ARRAY_COUNT(cubData) double *pData, uint32 cubData ) = 0;
++#endif
+ 
+ 	// For achievements that have related Progress stats, use this to query what the bounds of that progress are.
+ 	// You may want this info to selectively call IndicateAchievementProgress when appropriate milestones of progress
+ 	// have been made, to show a progress notification to the user.
++#if defined(_WIN32) && defined(__GNUC__) && !defined(_S4N_)
++	// MSVC's vtable order: these overloads grouped and reversed
++	STEAM_FLAT_NAME( GetAchievementProgressLimitsFloat )
++	virtual bool GetAchievementProgressLimits( const char *pchName, float *pfMinProgress, float *pfMaxProgress ) = 0;
++	STEAM_FLAT_NAME( GetAchievementProgressLimitsInt32 )
++	virtual bool GetAchievementProgressLimits( const char *pchName, int32 *pnMinProgress, int32 *pnMaxProgress ) = 0;
++#else
+ 	STEAM_FLAT_NAME( GetAchievementProgressLimitsInt32 )
+ 	virtual bool GetAchievementProgressLimits( const char *pchName, int32 *pnMinProgress, int32 *pnMaxProgress ) = 0;
+ 
+ 	STEAM_FLAT_NAME( GetAchievementProgressLimitsFloat )
+ 	virtual bool GetAchievementProgressLimits( const char *pchName, float *pfMinProgress, float *pfMaxProgress ) = 0;
++#endif
+ 
+ };
+ 

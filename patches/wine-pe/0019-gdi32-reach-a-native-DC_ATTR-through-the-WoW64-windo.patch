@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:23:11 +0200
+Subject: [PATCH] gdi32: reach a native DC_ATTR through the WoW64 window's
+ arena alias
+
+On iOS an i386 guest lives in a window above 4 GiB and win32u's DC_ATTRs
+live in one native arena that the window aliases at the guest address in
+PEB32's GdiDCAttributeList (madeira-unix 0065); the arena starts with its
+host base and size. A UserPointer above 4 GiB maps into that alias, and
+one outside the arena gives NULL, so the guest sees an invalid handle
+instead of reading a truncated session address.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/gdi32/objects.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/dlls/gdi32/objects.c b/dlls/gdi32/objects.c
+index 47f58e7..6d3451d 100644
+--- a/dlls/gdi32/objects.c
++++ b/dlls/gdi32/objects.c
+@@ -119,11 +119,26 @@ void set_gdi_client_ptr( HGDIOBJ obj, void *ptr )
+     if (entry) entry->UserPointer = (UINT_PTR)ptr;
+ }
+ 
++#ifndef _WIN64
++/* iOS keeps an i386 guest in a window above 4 GiB, and win32u's DC_ATTRs in
++ * one native arena that the window aliases at the guest address in our PEB.
++ * The arena starts with its host base and size. Anything else is out of reach. */
++static void *client_ptr_from_dc_attr_arena( const UINT64 *arena, UINT64 ptr )
++{
++    if (!arena || ptr < arena[0] || ptr - arena[0] >= arena[1]) return NULL;
++    return (char *)arena + (ptr - arena[0]);
++}
++#endif
++
+ void *get_gdi_client_ptr( HGDIOBJ obj, DWORD type )
+ {
+     GDI_HANDLE_ENTRY *entry = handle_entry( obj );
+     if (!entry || (type && entry->ExtType << NTGDI_HANDLE_TYPE_SHIFT != type))
+         return NULL;
++#ifndef _WIN64
++    if (entry->UserPointer >> 32)
++        return client_ptr_from_dc_attr_arena( NtCurrentTeb()->Peb->GdiDCAttributeList, entry->UserPointer );
++#endif
+     return (void *)(UINT_PTR)entry->UserPointer;
+ }
+ 

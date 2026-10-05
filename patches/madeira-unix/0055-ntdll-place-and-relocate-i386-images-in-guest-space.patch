@@ -1,0 +1,375 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport contributors <playport@users.noreply.github.com>
+Date: Sat, 3 Oct 2026 14:08:23 +0200
+Subject: [PATCH] ntdll: place and relocate i386 images in guest space
+
+Honor guest ASLR hints and search owner-local holdbacks on collision. Validate i386 fixups before applying Wine relocation blocks with guest deltas only. Suppress the server host-versus-guest NOT_AT_BASE warning after completed mapping, preventing a second native relocation by B. Keep the startup loader boundary closed.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no (iOS pseudo-process window port)
+---
+ build/ntdll-unix/image_reloc.h     |  63 +++++++++++
+ build/ntdll-unix/virtual_ios.c     |  77 ++++---------
+ build/ntdll-unix/wow64_placement.h | 166 +++++++++++++++++++++++++++++
+ 3 files changed, 250 insertions(+), 56 deletions(-)
+ create mode 100644 build/ntdll-unix/image_reloc.h
+ create mode 100644 build/ntdll-unix/wow64_placement.h
+
+diff --git a/build/ntdll-unix/image_reloc.h b/build/ntdll-unix/image_reloc.h
+new file mode 100644
+index 0000000..4ea3286
+--- /dev/null
++++ b/build/ntdll-unix/image_reloc.h
+@@ -0,0 +1,63 @@
++/* Wine's relocation-block kernel, shared with the window coverage test.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ */
++#ifndef IOS_IMAGE_RELOC_H
++#define IOS_IMAGE_RELOC_H
++static IMAGE_BASE_RELOCATION *process_relocation_block( char *page, IMAGE_BASE_RELOCATION *rel,
++                                                        INT_PTR delta )
++{
++    USHORT *reloc = (USHORT *)(rel + 1);
++    unsigned int count;
++
++    for (count = (rel->SizeOfBlock - sizeof(*rel)) / sizeof(USHORT); count; count--, reloc++)
++    {
++        USHORT offset = *reloc & 0xfff;
++        switch (*reloc >> 12)
++        {
++        case IMAGE_REL_BASED_ABSOLUTE:
++            break;
++        case IMAGE_REL_BASED_HIGH:
++        case IMAGE_REL_BASED_LOW:
++        {
++            WORD value;
++            memcpy( &value, page + offset, sizeof(value) );
++            value += (*reloc >> 12) == IMAGE_REL_BASED_HIGH ? HIWORD(delta) : LOWORD(delta);
++            memcpy( page + offset, &value, sizeof(value) );
++            break;
++        }
++        case IMAGE_REL_BASED_HIGHLOW:
++        {
++            DWORD value;
++            memcpy( &value, page + offset, sizeof(value) );
++            value += (DWORD)delta;
++            memcpy( page + offset, &value, sizeof(value) );
++            break;
++        }
++        case IMAGE_REL_BASED_DIR64:
++            *(INT64 *)(page + offset) += delta;
++            break;
++        case IMAGE_REL_BASED_THUMB_MOV32:
++        {
++            DWORD *inst = (DWORD *)(page + offset);
++            WORD lo = ((inst[0] << 1) & 0x0800) + ((inst[0] << 12) & 0xf000) +
++                      ((inst[0] >> 20) & 0x0700) + ((inst[0] >> 16) & 0x00ff);
++            WORD hi = ((inst[1] << 1) & 0x0800) + ((inst[1] << 12) & 0xf000) +
++                      ((inst[1] >> 20) & 0x0700) + ((inst[1] >> 16) & 0x00ff);
++            DWORD imm = MAKELONG( lo, hi ) + delta;
++
++            lo = LOWORD( imm );
++            hi = HIWORD( imm );
++            inst[0] = (inst[0] & 0x8f00fbf0) + ((lo >> 1) & 0x0400) + ((lo >> 12) & 0x000f) +
++                                               ((lo << 20) & 0x70000000) + ((lo << 16) & 0xff0000);
++            inst[1] = (inst[1] & 0x8f00fbf0) + ((hi >> 1) & 0x0400) + ((hi >> 12) & 0x000f) +
++                                               ((hi << 20) & 0x70000000) + ((hi << 16) & 0xff0000);
++            break;
++        }
++        default:
++            FIXME( "Unknown/unsupported relocation %x\n", *reloc );
++            return NULL;
++        }
++    }
++    return (IMAGE_BASE_RELOCATION *)reloc;  /* return address of next block */
++}
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 5b4bed1..95ec3b1 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -13776,55 +13776,10 @@ static IMAGE_DATA_DIRECTORY *get_data_dir( IMAGE_NT_HEADERS *nt, SIZE_T total_si
+  *
+  * Reimplementation of LdrProcessRelocationBlock.
+  */
+-static IMAGE_BASE_RELOCATION *process_relocation_block( char *page, IMAGE_BASE_RELOCATION *rel,
+-                                                        INT_PTR delta )
+-{
+-    USHORT *reloc = (USHORT *)(rel + 1);
+-    unsigned int count;
+-
+-    for (count = (rel->SizeOfBlock - sizeof(*rel)) / sizeof(USHORT); count; count--, reloc++)
+-    {
+-        USHORT offset = *reloc & 0xfff;
+-        switch (*reloc >> 12)
+-        {
+-        case IMAGE_REL_BASED_ABSOLUTE:
+-            break;
+-        case IMAGE_REL_BASED_HIGH:
+-            *(short *)(page + offset) += HIWORD(delta);
+-            break;
+-        case IMAGE_REL_BASED_LOW:
+-            *(short *)(page + offset) += LOWORD(delta);
+-            break;
+-        case IMAGE_REL_BASED_HIGHLOW:
+-            *(int *)(page + offset) += delta;
+-            break;
+-        case IMAGE_REL_BASED_DIR64:
+-            *(INT64 *)(page + offset) += delta;
+-            break;
+-        case IMAGE_REL_BASED_THUMB_MOV32:
+-        {
+-            DWORD *inst = (DWORD *)(page + offset);
+-            WORD lo = ((inst[0] << 1) & 0x0800) + ((inst[0] << 12) & 0xf000) +
+-                      ((inst[0] >> 20) & 0x0700) + ((inst[0] >> 16) & 0x00ff);
+-            WORD hi = ((inst[1] << 1) & 0x0800) + ((inst[1] << 12) & 0xf000) +
+-                      ((inst[1] >> 20) & 0x0700) + ((inst[1] >> 16) & 0x00ff);
+-            DWORD imm = MAKELONG( lo, hi ) + delta;
+-
+-            lo = LOWORD( imm );
+-            hi = HIWORD( imm );
+-            inst[0] = (inst[0] & 0x8f00fbf0) + ((lo >> 1) & 0x0400) + ((lo >> 12) & 0x000f) +
+-                                               ((lo << 20) & 0x70000000) + ((lo << 16) & 0xff0000);
+-            inst[1] = (inst[1] & 0x8f00fbf0) + ((hi >> 1) & 0x0400) + ((hi >> 12) & 0x000f) +
+-                                               ((hi << 20) & 0x70000000) + ((hi << 16) & 0xff0000);
+-            break;
+-        }
+-        default:
+-            FIXME( "Unknown/unsupported relocation %x\n", *reloc );
+-            return NULL;
+-        }
+-    }
+-    return (IMAGE_BASE_RELOCATION *)reloc;  /* return address of next block */
+-}
++#include "image_reloc.h"
++#include "wow64_views.h"
++#include "wow64_image.h"
++#include "wow64_placement.h"
+ 
+ 
+ /***********************************************************************
+@@ -14054,9 +14009,21 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+         goto done;
+     }
+ 
+-    /* relocate to dynamic base */
+-
+-    if (image_info->map_addr && (delta = image_info->map_addr - image_info->base))
++    /* Window-backed PE32 uses host storage but guest-only relocation deltas.
++     * Validate fixups before any mutation, using Wine's relocation kernel. */
++    if (view->protect & VPROT_WOW64_IMAGE)
++    {
++        status = ios_wow64_relocate_image( ptr, total_size,
++                 get_data_dir( nt, total_size, IMAGE_DIRECTORY_ENTRY_BASERELOC ),
++                 image_info->base, image_info->map_addr );
++        if (status) goto done;
++        ((IMAGE_NT_HEADERS32 *)nt)->OptionalHeader.ImageBase = image_info->map_addr;
++        dprintf(2, "[wow64-placement] preferred=%#llx guest=%#llx delta=%#x host=%p fixups=guest native_exec=0\n",
++                (unsigned long long)image_info->base, (unsigned long long)image_info->map_addr,
++                (uint32_t)(image_info->map_addr - image_info->base), ptr);
++    }
++    /* relocate native images to dynamic base */
++    else if (image_info->map_addr && (delta = image_info->map_addr - image_info->base))
+     {
+         TRACE_(module)( "relocating %s dynamic base %lx -> %lx mapped at %p\n", debugstr_us(nt_name),
+                         (ULONG_PTR)image_info->base, (ULONG_PTR)image_info->map_addr, ptr );
+@@ -14278,9 +14245,6 @@ static unsigned int get_mapping_info( HANDLE handle, ACCESS_MASK access, unsigne
+  *
+  * Map a view for a PE image at an appropriate address.
+  */
+-#include "wow64_views.h"
+-#include "wow64_image.h"
+-
+ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_info *image_info, SIZE_T size,
+                                 ULONG_PTR limit_low, ULONG_PTR limit_high, ULONG alloc_type,
+                                 uintptr_t wow64_window )
+@@ -14295,7 +14259,7 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+     if (image_info->machine == IMAGE_FILE_MACHINE_I386 && wow64_window)
+     {
+         if (alloc_type) return STATUS_NOT_SUPPORTED;
+-        return ios_wow64_claim_image( wow64_window, image_info, size, view_ret );
++        return ios_wow64_place_image( wow64_window, image_info, size, limit_low, limit_high, view_ret );
+     }
+ 
+     limit_low = max( limit_low, (ULONG_PTR)address_space_start );  /* make sure the DOS area remains free */
+@@ -14495,6 +14459,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        status = ios_wow64_mapped_image_status( view, status );
+     }
+     if (NT_SUCCESS(status))
+     {
+diff --git a/build/ntdll-unix/wow64_placement.h b/build/ntdll-unix/wow64_placement.h
+new file mode 100644
+index 0000000..e91edad
+--- /dev/null
++++ b/build/ntdll-unix/wow64_placement.h
+@@ -0,0 +1,166 @@
++/* Guest-space PE placement and relocation validation, not a second loader.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Wine types, wow64_window/views/image.h and relocation helpers precede this.
++ * virtual_mutex must be held; no registry queries or signal-handler callers.
++ */
++#ifndef IOS_WOW64_PLACEMENT_H
++#define IOS_WOW64_PLACEMENT_H
++
++static BOOL ios_wow64_image_fits( uint64_t guest, size_t size, uint64_t low, uint64_t end )
++{
++    return guest >= low && guest < end && !(guest & granularity_mask) && size <= end - guest;
++}
++
++/* Walk the reservation by containing views, not Wine's host free ranges.
++ * Those ranges correctly see the entire window as unavailable. */
++static NTSTATUS ios_wow64_image_gap( uintptr_t window, size_t size, uint64_t low,
++                                    uint64_t end, BOOL top_down, uint32_t *guest )
++{
++    uint64_t pos = top_down ? end : low;
++    while (top_down ? pos > low : pos < end)
++    {
++        struct file_view *view = find_view( (void *)(window + (top_down ? pos - 1 : pos)), 1 );
++        uint64_t start, stop, candidate;
++        if (!view || (uintptr_t)view->base < window) return STATUS_CONFLICTING_ADDRESSES;
++        start = (uintptr_t)view->base - window;
++        if (start >= IOS_WOW64_WINDOW_SIZE || view->size > IOS_WOW64_WINDOW_SIZE - start)
++            return STATUS_CONFLICTING_ADDRESSES;
++        stop = start + view->size;
++        if (view->protect == VPROT_WOW64_HOLE)
++        {
++            start = max( start, low );
++            stop = min( stop, end );
++            if (size <= stop - start)
++            {
++                candidate = top_down ? (stop - size) & ~(uint64_t)granularity_mask :
++                                       (start + granularity_mask) & ~(uint64_t)granularity_mask;
++                if (ios_wow64_image_fits( candidate, size, start, stop ))
++                {
++                    *guest = candidate;
++                    return STATUS_SUCCESS;
++                }
++            }
++        }
++        pos = top_down ? (uintptr_t)view->base - window : stop;
++    }
++    return STATUS_CONFLICTING_ADDRESSES;
++}
++
++static NTSTATUS ios_wow64_place_image( uintptr_t window, struct pe_image_info *image, size_t size,
++                                      uint64_t low, uint64_t high, struct file_view **result )
++{
++    struct pe_image_info placement;
++    NTSTATUS status;
++    uint64_t end, suggested;
++    uint32_t guest;
++    BOOL movable, top_down;
++
++    if (!image || !result || !ios_wow64_valid_base( window ) ||
++        !size || size > SIZE_MAX - host_page_mask) return STATUS_INVALID_PARAMETER;
++    size = (size + host_page_mask) & ~host_page_mask;
++    end = (image->image_charact & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
++          IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
++    /* Preserve fixed-placement validation: malformed preferred addresses are
++     * not silently repaired by choosing another guest address. */
++    if (image->machine != IMAGE_FILE_MACHINE_I386 ||
++        !ios_wow64_image_fits( image->base, size, IOS_WOW64_NULL_GUARD, end ))
++        return STATUS_INVALID_PARAMETER;
++    if (high) end = min( end, high == UINT64_MAX ? high : high + 1 );
++    low = max( low, IOS_WOW64_NULL_GUARD );
++    if (low >= end || size > end - low) return STATUS_CONFLICTING_ADDRESSES;
++    movable = !(image->image_charact & IMAGE_FILE_RELOCS_STRIPPED) &&
++              !(image->image_flags & IMAGE_FLAGS_ImageMappedFlat);
++    top_down = (image->image_charact & IMAGE_FILE_DLL) &&
++               (image->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated);
++    suggested = image->map_addr;
++    placement = *image;
++    if (movable && (image->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated) &&
++        suggested != image->base && ios_wow64_image_fits( suggested, size, low, end ))
++    {
++        placement.base = suggested;
++        status = ios_wow64_claim_image( window, &placement, size, result );
++        if (!status) { image->map_addr = suggested; return status; }
++        if (status != STATUS_CONFLICTING_ADDRESSES) return status;
++    }
++    if (ios_wow64_image_fits( image->base, size, low, end ))
++    {
++        placement.base = image->base;
++        status = ios_wow64_claim_image( window, &placement, size, result );
++        if (!status) { image->map_addr = image->base; return status; }
++        if (status != STATUS_CONFLICTING_ADDRESSES) return status;
++    }
++    if (!movable) return STATUS_CONFLICTING_ADDRESSES;
++    status = ios_wow64_image_gap( window, size, low, end, top_down, &guest );
++    if (status) return status;
++    placement.base = guest;
++    status = ios_wow64_claim_image( window, &placement, size, result );
++    if (!status) image->map_addr = guest;
++    return status;
++}
++
++/* Validate the whole i386 directory before Wine mutates any target. Storage
++ * uses host addresses, but HIGH/LOW/HIGHLOW receive ONLY the guest delta.
++ * Unknown types, missing fixups and malformed blocks fail closed. */
++static NTSTATUS ios_wow64_relocate_image( char *ptr, size_t size, IMAGE_DATA_DIRECTORY *dir,
++                                         uint32_t preferred, uint32_t guest )
++{
++    size_t offset, end;
++    if (guest == preferred) return STATUS_SUCCESS;
++    if (!dir || !dir->Size) return STATUS_CONFLICTING_ADDRESSES;
++    if (dir->VirtualAddress >= size || dir->Size > size - dir->VirtualAddress)
++        return STATUS_INVALID_IMAGE_FORMAT;
++    offset = dir->VirtualAddress;
++    end = offset + dir->Size;
++    while (offset < end)
++    {
++        IMAGE_BASE_RELOCATION *rel = (void *)(ptr + offset);
++        USHORT *entries = (void *)(rel + 1);
++        size_t i, count;
++        if (offset & (sizeof(DWORD) - 1) || end - offset < sizeof(*rel))
++            return STATUS_INVALID_IMAGE_FORMAT;
++        if (rel->SizeOfBlock < sizeof(*rel) || rel->SizeOfBlock > end - offset ||
++            rel->SizeOfBlock & (sizeof(DWORD) - 1)) return STATUS_INVALID_IMAGE_FORMAT;
++        if (rel->VirtualAddress >= size) return STATUS_INVALID_IMAGE_FORMAT;
++        count = (rel->SizeOfBlock - sizeof(*rel)) / sizeof(*entries);
++        for (i = 0; i < count; i++)
++        {
++            size_t width, rva;
++            switch (entries[i] >> 12)
++            {
++            case IMAGE_REL_BASED_ABSOLUTE: continue;
++            case IMAGE_REL_BASED_HIGH: case IMAGE_REL_BASED_LOW: width = sizeof(WORD); break;
++            case IMAGE_REL_BASED_HIGHLOW: width = sizeof(DWORD); break;
++            default: return STATUS_INVALID_IMAGE_FORMAT;
++            }
++            rva = (size_t)rel->VirtualAddress + (entries[i] & 0xfff);
++            if (rva >= size || width > size - rva ||
++                (rva < end && rva + width > dir->VirtualAddress))
++                return STATUS_INVALID_IMAGE_FORMAT; /* never mutate the directory itself */
++        }
++        offset += rel->SizeOfBlock;
++    }
++    /* Wine's existing kernel uses memcpy/unsigned adds for unaligned i386
++     * targets and modulo-2^16/32 arithmetic; all addresses here are host storage. */
++    offset = dir->VirtualAddress;
++    while (offset < end)
++    {
++        IMAGE_BASE_RELOCATION *rel = (void *)(ptr + offset);
++        size_t next = offset + rel->SizeOfBlock;
++        if (!process_relocation_block( ptr + rel->VirtualAddress, rel, (INT_PTR)guest - preferred ))
++            return STATUS_INVALID_IMAGE_FORMAT;
++        offset = next;
++    }
++    return STATUS_SUCCESS;
++}
++
++/* The server compares its host VM view with the guest ImageBase and reports
++ * NOT_AT_BASE even at the preferred guest base. Relocations above are already
++ * complete: do not let the native loader add B a second time. */
++static NTSTATUS ios_wow64_mapped_image_status( const struct file_view *view, NTSTATUS status )
++{
++    if ((view->protect & VPROT_WOW64_IMAGE) && status == STATUS_IMAGE_NOT_AT_BASE)
++        return STATUS_SUCCESS;
++    return status;
++}
++
++#endif

@@ -53,6 +53,11 @@ any mismatch:
                 extensions, the audio host-suspend hook and the controller
                 writers and snapshot linked in; GameController and AVFAudio
                 linked; the bundled xinput DLLs are Wine's builtins (P2)
+  wow64         i386 Runtime DLLs (and DXVK's i386 d3d9.dll under
+                Runtime/vulkan) are Wine PE32 builtins, the aarch64
+                wow64.dll, wow64win.dll and xtajit.dll are ARM64 PE32+
+                builtins; xtajit exports FEX's WoW64 CPU interface.
+                Build scaffolding only: does not claim 32-bit execution works.
   steamapi      the Steam API emulator (P8-steamapi): steam_api64.dll (x86-64)
                 and steam_api.dll (i386) under Runtime/steamapi, native (not
                 marked Wine builtins) and exporting SteamAPI_Init,
@@ -246,6 +251,12 @@ def pe_table(path, kind):
     objdump = Path(os.environ.get("MINGW") or inputs.need("LLVM_MINGW")) / "bin/llvm-objdump"
     out = subprocess.run([str(objdump), "-p", str(path)], capture_output=True, text=True, check=True).stdout
     return set(re.findall(r"^\s+\S+\s+\S+\s+(\S+)$" if kind == "export" else r"^\s+\d+\s+(\S+)$", out, re.M))
+
+
+def pe_import_dlls(path):
+    objdump = Path(os.environ.get("MINGW") or inputs.need("LLVM_MINGW")) / "bin/llvm-objdump"
+    out = subprocess.run([str(objdump), "-p", str(path)], capture_output=True, text=True, check=True).stdout
+    return {n.lower() for n in re.findall(r"DLL Name: (\S+)", out)}
 
 
 def signed_checks(a, app, info, m, tmp):
@@ -446,6 +457,45 @@ def steamapi_checks(rt, rows):
               and {"SteamAPI_Init", "SteamAPI_RunCallbacks", "SteamInternal_CreateInterface"} <= ex,
               f"steamapi: {k.split('/')[-1]} is a native {machine:#x} DLL exporting SteamAPI_Init, "
               "SteamAPI_RunCallbacks and SteamInternal_CreateInterface")
+
+
+def pe_machine_magic(body):
+    """COFF machine and optional-header magic, or None for a malformed PE."""
+    if len(body) < 0x40 or body[:2] != b"MZ":
+        return None
+    pe = int.from_bytes(body[0x3c:0x40], "little")
+    if pe < 0x40 or pe + 26 > len(body) or body[pe:pe + 4] != b"PE\0\0":
+        return None
+    return (int.from_bytes(body[pe + 4:pe + 6], "little"),
+            int.from_bytes(body[pe + 24:pe + 26], "little"))
+
+
+def wow64_checks(rt, rows):
+    """Build scaffolding, not evidence that the WoW64 iOS port can run."""
+    guest = [r[1] for r in rows if r[0] == "resource" and
+             r[1].startswith(("Runtime/i386-windows/", "Runtime/vulkan/i386-windows/"))]
+    check("Runtime/vulkan/i386-windows/d3d9.dll" in guest, "wow64: DXVK's i386 d3d9.dll bundled (Vulkan overlay)")
+    check({"Runtime/i386-windows/ntdll.dll", "Runtime/i386-windows/kernel32.dll"} <= set(guest),
+          "wow64: i386 ntdll.dll and kernel32.dll bundled")
+    bad = []
+    for name in guest:
+        body = rt(name).read_bytes() if rt(name).is_file() else b""
+        if pe_machine_magic(body) != (0x14c, 0x10b) or b"Wine builtin DLL" not in body[:0x200]:
+            bad.append(name)
+    check(bool(guest) and not bad, f"wow64: {len(guest)} i386 DLLs/drivers are PE32 Wine builtins"
+          + (f" (bad: {', '.join(bad)})" if bad else ""))
+    for name in ("wow64.dll", "wow64win.dll", "xtajit.dll"):
+        path = rt(f"Runtime/aarch64-windows/{name}")
+        body = path.read_bytes() if path.is_file() else b""
+        check(pe_machine_magic(body) == (0xaa64, 0x20b) and b"Wine builtin DLL" in body[:0x200],
+              f"wow64: aarch64 {name} is a PE32+ ARM64 Wine builtin")
+        if name == "xtajit.dll" and path.is_file():
+            check({"BTCpuProcessInit", "BTCpuThreadInit", "BTCpuSimulate"} <= pe_table(path, "export"),
+                  "wow64: xtajit.dll exports BTCpuProcessInit, BTCpuThreadInit and BTCpuSimulate")
+            # A CRT import loads kernelbase.dll into the WoW64 process before its NLS tables exist.
+            dlls = pe_import_dlls(path)
+            check(dlls == {"ntdll.dll", "wow64.dll"},
+                  f"wow64: xtajit.dll imports only ntdll.dll and wow64.dll (imports {', '.join(sorted(dlls))})")
 
 
 def host_io_checks(exe, rt, rows):
@@ -664,8 +714,8 @@ def main():
         # Runtime/ ships at the app root (xtool.yml resources); IPAs up to 075123b6
         # carried it in the SwiftPM resource bundle. A row's Runtime/x is base/x.
         if (app / "artifacts.tsv").exists():
-            base, where, dirs = app, "app root", ["arm64ec-windows", "aarch64-windows", "nls", "registry", "vulkan",
-                                                  "steamapi"]
+            base, where, dirs = app, "app root", ["arm64ec-windows", "aarch64-windows", "nls", "fonts", "registry", "vulkan",
+                                                  "steamapi", "i386-windows"]
             check(not any(b.joinpath("Runtime").exists() for b in app.glob("*.bundle")),
                   "resources: Runtime/ at the app root only, not also in a resource bundle")
         else:
@@ -720,6 +770,7 @@ def main():
                     check(same, f"dxmt: bundled {r[1]} is byte-identical to the patched build's {r[5]}")
         host_io_checks(exe, rt, rows)
         steamapi_checks(rt, rows)
+        wow64_checks(rt, rows)
         steam_checks(exe)
         workstation_path_checks(app)
         jit_helper_checks(app, info, not a.app, profile=not a.unsigned)

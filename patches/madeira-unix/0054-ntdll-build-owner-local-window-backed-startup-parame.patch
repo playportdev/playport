@@ -1,0 +1,286 @@
+From 4ca4dbf0300b9d8592e9af13775374f847d62124 Mon Sep 17 00:00:00 2001
+From: Playport contributors <playport@users.noreply.github.com>
+Date: Sat, 3 Oct 2026 13:45:24 +0200
+Subject: [PATCH] ntdll: build owner-local window-backed startup parameters
+
+Pack normalized PE32 parameters and their strings/environment into one owned view. Keep handles as integers, validate before publication and reject unsupported pointer fields. Target global option writes at the current PEB. Retain the fail-closed boundary before the native WoW64 loader.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no (iOS pseudo-process window port)
+---
+ build/ntdll-unix/env_ios.c      | 103 +++++++++++++++++++++++-----
+ build/ntdll-unix/wow64_params.h | 118 ++++++++++++++++++++++++++++++++
+ 2 files changed, 203 insertions(+), 18 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_params.h
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 3166274..60abbbf 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -1843,7 +1843,7 @@ static ULONG get_dword_option( HANDLE key, const WCHAR *name, ULONG defval )
+ /*************************************************************************
+  *		load_global_options
+  */
+-static void load_global_options( const UNICODE_STRING *image, BOOL debugged )
++static void load_global_options( PEB *peb, const UNICODE_STRING *image, BOOL debugged )
+ {
+     static const WCHAR optionsW[] = {'\\','R','e','g','i','s','t','r','y','\\',
+         'M','a','c','h','i','n','e','\\','S','o','f','t','w','a','r','e','\\',
+@@ -1965,6 +1965,59 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
+ }
+ 
+ 
++#ifdef WINE_IOS
++#include "wow64_window.h"
++#include "wow64_params.h"
++extern uintptr_t ios_wow64_current_base(void);
++extern NTSTATUS ios_wow64_allocate_for_peb( void *, uint32_t, size_t, unsigned int, void ** );
++
++/* Initial-child startup only. Publish only after validation/allocation/packing
++ * succeeds. The global wow_peb belongs to the session and is never touched. */
++static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,
++                                          const RTL_USER_PROCESS_PARAMETERS *params, BOOL debugged )
++{
++    TEB32 *teb32 = (TEB32 *)get_wow_teb( NtCurrentTeb() );
++    PEB32 *p32;
++    void *host = NULL;
++    size_t size;
++    uint32_t guest;
++    NTSTATUS status;
++
++    if (!owner || owner != NtCurrentTeb()->Peb || !teb32 ||
++        !(p32 = (PEB32 *)ios_wow64_host_addr( window, teb32->Peb )) || p32->ProcessParameters)
++        return STATUS_INVALID_PARAMETER;
++    if (owner->HeapSegmentReserve > UINT32_MAX || owner->HeapSegmentCommit > UINT32_MAX ||
++        owner->HeapDeCommitTotalFreeThreshold > UINT32_MAX || owner->HeapDeCommitFreeBlockThreshold > UINT32_MAX)
++        return STATUS_INVALID_PARAMETER;
++    if ((status = ios_wow64_params_size( params, &size ))) return status;
++    size = (size + 0x3fff) & ~(size_t)0x3fff;
++    /* VPROT_COMMITTED | VPROT_READ | VPROT_WRITE, private native API. */
++    if ((status = ios_wow64_allocate_for_peb( owner, IOS_WOW64_PARAMS_GUEST, size, 0x23, &host )))
++        return status;
++    if ((status = ios_wow64_pack_params( window, params, host, size, &guest ))) return status;
++    p32->BeingDebugged = debugged;
++    p32->NumberOfProcessors = owner->NumberOfProcessors;
++    p32->NtGlobalFlag = owner->NtGlobalFlag;
++    p32->CriticalSectionTimeout = owner->CriticalSectionTimeout;
++    p32->HeapSegmentReserve = owner->HeapSegmentReserve;
++    p32->HeapSegmentCommit = owner->HeapSegmentCommit;
++    p32->HeapDeCommitTotalFreeThreshold = owner->HeapDeCommitTotalFreeThreshold;
++    p32->HeapDeCommitFreeBlockThreshold = owner->HeapDeCommitFreeBlockThreshold;
++    /* Version/subsystem/image scalars were set by pairing and image mapping.
++     * Loader/heap/other pointer fields remain NULL, not session pointers. */
++    p32->ProcessParameters = guest;
++    dprintf(2, "[wow64-params] owner=%p host=%p guest=%#x size=%#lx image=%#x "
++               "command=%#x environment=%#x env_bytes=%u normalized=%u loader=%#x heap=%#x\n",
++            owner, host, guest, (unsigned long)size, p32->ImageBaseAddress,
++            ((RTL_USER_PROCESS_PARAMETERS32 *)host)->CommandLine.Buffer,
++            ((RTL_USER_PROCESS_PARAMETERS32 *)host)->Environment,
++            ((RTL_USER_PROCESS_PARAMETERS32 *)host)->EnvironmentSize,
++            !!(((RTL_USER_PROCESS_PARAMETERS32 *)host)->Flags & PROCESS_PARAMS_FLAG_NORMALIZED),
++            p32->LdrData, p32->ProcessHeap );
++    return STATUS_SUCCESS;
++}
++#endif
++
+ /*************************************************************************
+  *		init_peb
+  */
+@@ -2006,8 +2059,22 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, BOOL debugged, void *
+     peb->ImageSubSystemMinorVersion = ios_cur_image_info()->MinorSubsystemVersion;
+     peb->SessionId                  = session_id;
+ 
+-    load_global_options( &params->ImagePathName, debugged );
++    load_global_options( peb, &params->ImagePathName, debugged );
+ 
++#ifdef WINE_IOS
++    if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386)
++    {
++        uintptr_t window = ios_wow64_current_base();
++        NTSTATUS status = window ? ios_wow64_init_parameters( peb, window, params, debugged ) :
++                                   STATUS_NOT_SUPPORTED;
++        if (status)
++        {
++            dprintf(2, "[wow64-params] failed status=%x (no i386 execution)\n", status);
++            NtTerminateProcess( GetCurrentProcess(), status );
++        }
++        return; /* never use the session's global wow_peb */
++    }
++#endif
+     if (wow_peb)
+     {
+         void *wow64_params = build_wow64_parameters( params );
+@@ -2279,22 +2346,6 @@ void unix_init_startup_info(void)
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
+ 
+-#ifdef WINE_IOS
+-    /* The owned image now maps, but the legacy parameter builder truncates
+-     * host pointers and the session's ARM64EC PE loader cannot bootstrap i386.
+-     * Stop before either path until window parameters/native WoW64 are wired.
+-     * This is a temporary fail-closed bootstrap boundary, not a launch mode. */
+-    {
+-        extern uintptr_t ios_wow64_current_base(void);
+-        if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386 && ios_wow64_current_base())
+-        {
+-            dprintf(2, "[wow64-startup] image mapped; window process parameters and native WoW64 loader "
+-                       "not implemented -> STATUS_NOT_SUPPORTED (no i386 execution)\n");
+-            NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
+-            return;
+-        }
+-    }
+-#endif
+     virtual_alloc_first_teb();
+ 
+     size = (sizeof(*params)
+@@ -2375,6 +2426,22 @@ void unix_init_startup_info(void)
+     free( env );
+     free( info );
+ 
++#ifdef WINE_IOS
++    if (ios_cur_image_info()->Machine == IMAGE_FILE_MACHINE_I386)
++    {
++        init_peb( params, debugged, module );
++        /* Parameters are now window-backed, but the session ARM64EC PE
++         * loader cannot initialize the native WoW64 loader/heap/stack yet.
++         * Keep this temporary boundary until those paths are wired. */
++        dprintf(2, "[wow64-startup] image and parameters mapped; native WoW64 loader "
++                   "not implemented -> STATUS_NOT_SUPPORTED (no i386 execution)\n");
++        NtCurrentTeb()->Peb->ProcessParameters = NULL;
++        size = 0;
++        NtFreeVirtualMemory( NtCurrentProcess(), (void **)&params, &size, MEM_RELEASE );
++        NtTerminateProcess( GetCurrentProcess(), STATUS_NOT_SUPPORTED );
++        return;
++    }
++#endif
+     rebuild_argv();
+     main_wargv = build_wargv( params->ImagePathName.Buffer );
+     init_peb( params, debugged, module );
+diff --git a/build/ntdll-unix/wow64_params.h b/build/ntdll-unix/wow64_params.h
+new file mode 100644
+index 0000000..c43ed56
+--- /dev/null
++++ b/build/ntdll-unix/wow64_params.h
+@@ -0,0 +1,118 @@
++/* Window-backed startup parameters, not a general Rtl parameter allocator.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Wine types and wow64_window.h must be included first.
++ */
++#ifndef IOS_WOW64_PARAMS_H
++#define IOS_WOW64_PARAMS_H
++
++#define IOS_WOW64_PARAMS_GUEST 0x7e000000u
++#define IOS_WOW64_PARAMS_MAX   0x01000000u
++#define IOS_WOW64_PARAM_STRINGS(X) \
++    X(CurrentDirectory.DosPath) X(DllPath) X(ImagePathName) X(CommandLine) \
++    X(WindowTitle) X(Desktop) X(ShellInfo) X(RuntimeInfo)
++#define IOS_WOW64_PARAM_SCALARS(X) \
++    X(Flags) X(DebugFlags) X(ConsoleFlags) X(dwX) X(dwY) X(dwXSize) X(dwYSize) \
++    X(dwXCountChars) X(dwYCountChars) X(dwFillAttribute) X(dwFlags) X(wShowWindow) \
++    X(ProcessGroupId) X(LoaderThreads)
++
++/* Validate everything before claiming storage or publishing a PEB pointer.
++ * Startup's native builder leaves drive directories/package data empty. Do
++ * not silently discard them if a future caller supplies a richer structure.
++ * RuntimeInfo is an opaque byte blob, not necessarily UTF-16 or terminated.
++ */
++static NTSTATUS ios_wow64_params_size( const RTL_USER_PROCESS_PARAMETERS *src, size_t *result )
++{
++    size_t size = sizeof(RTL_USER_PROCESS_PARAMETERS32), i;
++    if (!src || !result || !(src->Flags & PROCESS_PARAMS_FLAG_NORMALIZED))
++        return STATUS_INVALID_PARAMETER;
++    const UNICODE_STRING *strings[] = {
++#define IOS_STRING(field) &src->field,
++        IOS_WOW64_PARAM_STRINGS(IOS_STRING)
++#undef IOS_STRING
++    };
++    if (src->PackageDependencyData || src->EnvironmentVersion > UINT32_MAX)
++        return STATUS_NOT_SUPPORTED;
++    for (i = 0; i < ARRAY_SIZE(src->DLCurrentDirectory); i++)
++        if (src->DLCurrentDirectory[i].Flags || src->DLCurrentDirectory[i].Length ||
++            src->DLCurrentDirectory[i].TimeStamp || src->DLCurrentDirectory[i].DosPath.Buffer ||
++            src->DLCurrentDirectory[i].DosPath.Length || src->DLCurrentDirectory[i].DosPath.MaximumLength)
++            return STATUS_NOT_SUPPORTED;
++    for (i = 0; i < ARRAY_SIZE(strings); i++)
++    {
++        const UNICODE_STRING *s = strings[i];
++        if (s->Length > s->MaximumLength || (s->MaximumLength && !s->Buffer) ||
++            (i != ARRAY_SIZE(strings) - 1 && ((s->Length | s->MaximumLength) & 1)))
++            return STATUS_INVALID_PARAMETER;
++        size += (s->MaximumLength + 1u) & ~1u;
++    }
++    if (!src->Environment || src->EnvironmentSize < 2 * sizeof(WCHAR) ||
++        (src->EnvironmentSize & 1) || src->EnvironmentSize > IOS_WOW64_PARAMS_MAX - size)
++        return STATUS_INVALID_PARAMETER;
++    i = src->EnvironmentSize / sizeof(WCHAR);
++    if (((const WCHAR *)src->Environment)[i - 1] || ((const WCHAR *)src->Environment)[i - 2])
++        return STATUS_INVALID_PARAMETER;
++    *result = size + src->EnvironmentSize;
++    return STATUS_SUCCESS;
++}
++
++/* All buffer addresses are guest offsets into the single claimed view. Native
++ * handles remain integer handles (including negative pseudo/console handles).
++ * Capacity is the rounded Wine allocation size; Size is the used byte count.
++ * No native loader/heap pointers or borrowed environment block are published.
++ */
++static NTSTATUS ios_wow64_pack_params( uintptr_t window, const RTL_USER_PROCESS_PARAMETERS *src,
++                                      void *host, size_t capacity, uint32_t *guest_result )
++{
++    if (!src || !host || !guest_result) return STATUS_INVALID_PARAMETER;
++    RTL_USER_PROCESS_PARAMETERS32 *dst = host;
++    const UNICODE_STRING *strings[] = {
++#define IOS_STRING(field) &src->field,
++        IOS_WOW64_PARAM_STRINGS(IOS_STRING)
++#undef IOS_STRING
++    };
++    UNICODE_STRING32 *outputs[] = {
++#define IOS_STRING(field) &dst->field,
++        IOS_WOW64_PARAM_STRINGS(IOS_STRING)
++#undef IOS_STRING
++    };
++    size_t used, offset = sizeof(*dst), i;
++    uint32_t guest;
++    NTSTATUS status;
++
++    if ((status = ios_wow64_params_size( src, &used ))) return status;
++    if (!ios_wow64_guest_addr( window, (uintptr_t)host, &guest ) ||
++        guest < IOS_WOW64_NULL_GUARD || (guest & 3) || capacity < used ||
++        capacity > IOS_WOW64_PARAMS_MAX || capacity > IOS_WOW64_WINDOW_SIZE - guest)
++        return STATUS_INVALID_PARAMETER;
++    memset( dst, 0, capacity );
++    dst->AllocationSize = capacity;
++    dst->Size = used;
++#define IOS_SCALAR(field) dst->field = src->field;
++    IOS_WOW64_PARAM_SCALARS(IOS_SCALAR)
++#undef IOS_SCALAR
++    dst->ConsoleHandle = HandleToULong( src->ConsoleHandle );
++    dst->hStdInput = HandleToULong( src->hStdInput );
++    dst->hStdOutput = HandleToULong( src->hStdOutput );
++    dst->hStdError = HandleToULong( src->hStdError );
++    dst->CurrentDirectory.Handle = HandleToULong( src->CurrentDirectory.Handle );
++    dst->EnvironmentVersion = src->EnvironmentVersion;
++    for (i = 0; i < ARRAY_SIZE(strings); i++)
++    {
++        const UNICODE_STRING *s = strings[i];
++        outputs[i]->Length = s->Length;
++        outputs[i]->MaximumLength = s->MaximumLength;
++        if (s->MaximumLength)
++        {
++            outputs[i]->Buffer = guest + offset;
++            if (s->Length) memcpy( (char *)dst + offset, s->Buffer, s->Length );
++        }
++        offset += (s->MaximumLength + 1u) & ~1u;
++    }
++    dst->Environment = guest + offset;
++    dst->EnvironmentSize = src->EnvironmentSize;
++    memcpy( (char *)dst + offset, src->Environment, src->EnvironmentSize );
++    *guest_result = guest;
++    return STATUS_SUCCESS;
++}
++
++#endif
+-- 
+2.55.0
+

@@ -1,0 +1,23 @@
+# Portal 2: from the main menu to Chapter 1 (The Courtesy Call), then the
+# relaxation vault's look-up/look-down tutorial and a few steps. The menu opens
+# with PLAY SINGLE PLAYER selected, about 30 s after Play (25 s after the first
+# frame, which is the engine's GDI startup window): pp perf --pad
+# first-frame+30:p2-new-game. SINGLE PLAYER opens on CONTINUE GAME (this account
+# has a save), so DOWN takes NEW GAME; its list opens on chapter 1. The chapter
+# loads in about 25 s, through a white screen. Checked on the phone on 2026-10-04.
+150 A        # PLAY SINGLE PLAYER
+2500 -
+150 DOWN     # NEW GAME
+500 -
+150 A
+2500 -
+150 A        # chapter 1, The Courtesy Call
+30000 -      # the load
+800 RY=1     # "LOOK UP"
+500 -
+1500 RY=-1   # "LOOK DOWN"
+500 -
+800 RY=1
+500 -
+1500 LY=1    # a few steps
+1000 -

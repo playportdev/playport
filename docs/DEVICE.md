@@ -242,7 +242,8 @@ comes out within a day of it. What a move from 1.6.0 to 1.9.0 costs was measured
   `loop` (`app/HostIOKit/Sources/HostIOKit/VirtualPad.swift`). The app plays
   only a script written after it started. `tools/pad/` has Hollow Knight's
   `hk-new-game` (main menu to King's Pass), `hk-walk` and `hk-quit` (Quit
-  Game from the main menu; its "Quit Game?" opens on No, so UP to Yes), Witcher 3's
+  Game from the main menu; its "Quit Game?" opens on No, so UP to Yes), Portal 2's
+  `p2-new-game`, `p2-cold-boot` (to a test chamber), `p2-walk`, `p2-save-load` (save, then load it from the main menu), `p2-load-last` (the pause menu's LOAD LAST SAVE, the load a death makes) and `p2-quit`, Witcher 3's
   opening, and `multiversus-training` (a minute of play; its comment has the
   steps into Training). Time pushes from the first frame (`first-frame+25`): the JIT and
   runtime start before it vary. Within a title, `pp pad wait-still --shot
@@ -376,7 +377,8 @@ figures, the launch settings that differ, and the frame rate per 30 s.
   `--pass-prof` turn them on for one run.
   - CPU sampling (`WINE_IOS_PROF=1`): the busiest threads at about 1 kHz,
     3 s in every 15 s; `profile.txt` has the class, thread, leaf function and
-    the PE function each sample runs under, symbolised against the staged DLLs.
+    the PE function each sample runs under, symbolised against the staged DLLs,
+    and an i386 guest's module+rva by thread (`guest-thread`).
   - GPU time per pass (`DXMT_PASS_PROF=1`, patches/dxmt 0008): every encoder
     of two frames in every 1200 presents; `passes.txt`
     (`tools/passprof.py LOG`) tables the sampled frames and the passes that

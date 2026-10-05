@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Build the Wine fork's PE DLL sets (aarch64-windows + arm64ec-windows) and the
+# Build the Wine fork's PE DLL sets (i386, aarch64 and arm64ec-windows) and the
 # full darwin cross build from Linux. docs/BUILDING.md, "The pipeline" (pe).
 #
 #   OUT=<dir> stages/wine-pe.sh
@@ -66,8 +66,8 @@ fi
   make -j"$JOBS" __tooldeps__ > "$OUT/make-build-tools.log" 2>&1 &&
   make nls/locale.nls >> "$OUT/make-build-tools.log" 2>&1 )
 
-# 3. Two darwin-host trees, one PE arch each (the reference layout:
-#    build-macos -> aarch64-windows, build-arm64ec -> arm64ec-windows).
+# 3. Two darwin-host trees: build-macos supplies i386 + aarch64-windows
+#    (new WoW64), build-arm64ec supplies arm64ec-windows.
 #    PE code is compiled by llvm-mingw's clang in MSVC mode (--with-mingw=clang
 #    path -> -target <cpu>-windows); host code by /usr/bin/clang for darwin.
 #    CROSSLDFLAGS=-Wl,-Brepro makes lld-link write a content-hash timestamp
@@ -102,7 +102,14 @@ else
     mv "$OUT/gst-macos/gst/gstmacos.h.new" "$OUT/gst-macos/gst/gstmacos.h"
 fi
 configure_tree() {
-    if configured "$1"; then echo "$1: configured as before; make rebuilds what changed"; return 0; fi
+    # A kept tree's header dependencies are makedep's from when it was configured:
+    # make depend rescans the sources, so a patch that adds or edits an included
+    # header (wow64win's window_audited.h) rebuilds the objects that include it.
+    if configured "$1"; then
+        echo "$1: configured as before; make rebuilds what changed"
+        ( cd "$WINE/$1" && make depend > "$OUT/depend-$1.log" 2>&1 )
+        return
+    fi
     rm -rf "${WINE:?}/${1:?}"; mkdir "$WINE/$1"
     ( cd "$WINE/$1" &&
       CC="/usr/bin/clang --target=aarch64-apple-darwin -isysroot $MACSDK" \
@@ -117,7 +124,7 @@ configure_tree() {
           --with-mingw="$M/bin/clang" --enable-archs="$2" \
           > "$OUT/config-$1.log" 2>&1 ) && echo "$KEY" > "$WINE/$1/.pp-configured"
 }
-configure_tree build-macos aarch64
+configure_tree build-macos i386,aarch64
 configure_tree build-arm64ec arm64ec
 # widl maps ARM64EC to the aarch64-windows dir when importing typelibs
 # (tools.h get_arch_dir); a pure arm64ec tree has none, so point it at ours.
@@ -128,9 +135,20 @@ set +e
 ( cd "$WINE/build-macos" && make -k -j"$JOBS" > "$OUT/make-build-macos.log" 2>&1 ); rc_mac=$?
 ( cd "$WINE/build-arm64ec" && make -k -j"$JOBS" > "$OUT/make-build-arm64ec.log" 2>&1 ); rc_ec=$?
 echo "make build-macos exit=$rc_mac; make build-arm64ec exit=$rc_ec"
-grep -h '\*\*\*' "$OUT/make-build-macos.log" "$OUT/make-build-arm64ec.log"
+grep -h '\*\*\*' "$OUT/make-build-macos.log" "$OUT/make-build-arm64ec.log" || true
+set -e
+# New WoW64 must not silently ship a partial set. Only the four documented
+# ARM64EC test-driver failures are allowed; every other make failure stops PE.
+[ "$rc_mac" = 0 ] || { echo "build-macos failed (see make-build-macos.log)"; exit 1; }
+if [ "$rc_ec" != 0 ]; then
+    errors=$(grep '\*\*\*' "$OUT/make-build-arm64ec.log" || true)
+    unexpected=$(printf '%s\n' "$errors" | grep -vE '^make(\[[0-9]+\])?: \*\*\* \[.*dlls/ntoskrnl.exe/tests/arm64ec-windows/driver(2|3|_netio)?\.dll\] Error [0-9]+$' || true)
+    [ -n "$errors" ] && [ -z "$unexpected" ] ||
+        { echo "unexpected ARM64EC make failure: $unexpected"; exit 1; }
+fi
 
 # 5. Manifests + machine check.
+python3 "$HERE/wine-pe-manifest.py" "$WINE/build-macos" i386-windows "$M/bin/llvm-readobj" > "$OUT/manifest-i386.tsv"; echo "i386 machine check exit=$?"
 python3 "$HERE/wine-pe-manifest.py" "$WINE/build-macos" aarch64-windows "$M/bin/llvm-readobj" > "$OUT/manifest-aarch64.tsv"; echo "aarch64 machine check exit=$?"
 python3 "$HERE/wine-pe-manifest.py" "$WINE/build-arm64ec" arm64ec-windows "$M/bin/llvm-readobj" > "$OUT/manifest-arm64ec.tsv"; echo "arm64ec machine check exit=$?"
 sha256sum "$WINE/build-macos/include/config.h"

@@ -532,7 +532,10 @@ main(int argc, char **argv)
    for (unsigned i = 0; i < ndescs; i++) {
       int msl_before = msl_count();
       VkPipeline p = make_pipeline(&descs[i], layout);
-      if (descs[i].xfb && msl_before >= 0 &&
+      /* No new library: the device's pipeline cache (mesa 0015) gave this
+       * pipeline the shaders of an earlier one whose keys match, checked
+       * there. */
+      if (descs[i].xfb && msl_before >= 0 && msl_count() != msl_before &&
           !msl_vertex_stores(msl_before, msl_count())) {
          fprintf(stderr, "pipeline %s: no vertex function writes transform "
                          "feedback\n", descs[i].name);

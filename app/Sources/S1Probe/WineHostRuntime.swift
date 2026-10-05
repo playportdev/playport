@@ -45,6 +45,9 @@ final class WineHostRuntime: @unchecked Sendable {
         guard let runtime = Manifest.runtime else { return (false, 0, "no Runtime in bundle", nil) }
         #if PLAYPORT_RELEASE
         Self.quietRuntime()
+        #else
+        // KosmicKrisp's shader-source counts and slow Metal builds (mesa 0016).
+        setenv("MESA_KK_DEBUG", "compile", 0)
         #endif
         let size = mb << 20
         let t0 = Date()

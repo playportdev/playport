@@ -38,7 +38,8 @@ final class LaunchSettingsStore: ObservableObject {
         if inheritingGraphics { game?.graphics = nil }
         let arguments = (try? title.launchPlan(cohort: LibraryModel.cohort))?.args ?? []
         return LaunchSettings.resolve(game: game, global: global,
-                                      importsDirect3D12: title.detectsDirect3D12, arguments: arguments)
+                                      importsDirect3D12: title.detectsDirect3D12, i386: title.isI386,
+                                      arguments: arguments)
     }
 
     private func save<T: Encodable>(_ value: T, _ key: String) {
@@ -102,13 +103,14 @@ enum LaunchSettingsText {
     }
 
     static func graphicsDetection(_ title: InstalledTitle) -> String {
+        if title.isI386 { return "A 32-bit game: DXMT cannot run it, so the default is Vulkan." }
         guard let detection = title.direct3D, !detection.apis.isEmpty else {
             return "The game's Direct3D version could not be detected."
         }
         return "Found references to \(detection.summary). This does not identify a dual-renderer game's active API."
     }
 
-    static let graphicsFooter = "DXMT runs Direct3D 10 and 11 on Metal. The default is Vulkan for detected Direct3D 12 games, DXMT otherwise. "
+    static let graphicsFooter = "DXMT runs Direct3D 10 and 11 on Metal. The default is Vulkan for 32-bit games and detected Direct3D 12 games, DXMT otherwise. "
         + "Vulkan runs Direct3D 8 to 11 through DXVK and Direct3D 12 through vkd3d-proton, on Mesa's "
         + "KosmicKrisp driver; it is experimental."
 
@@ -128,6 +130,11 @@ enum LaunchSettingsText {
         + "with half barriers. Block size is the most x86 instructions the emulator translates at once: smaller "
         + "blocks compile in shorter bursts, larger ones run with fewer jumps between blocks. Changes apply from "
         + "the game's next launch."
+
+    static let x87Footer = "The precision at which the x86 emulator runs a game's x87 floating point. 80-bit is "
+        + "exact but done in software, many instructions for each one; 64-bit uses the CPU's own and is far cheaper, "
+        + "and can differ from Windows where a game relies on the extra digits. Default is the game's profile. "
+        + "Changes apply from the game's next launch."
 
     private static func size(_ spec: String) -> (Int, Int)? {
         let px = UIScreen.main.nativeBounds.size

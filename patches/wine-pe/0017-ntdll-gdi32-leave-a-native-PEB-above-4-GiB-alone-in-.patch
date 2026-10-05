@@ -1,0 +1,51 @@
+From e90c6e017f5db54465fa9603c369d4f3cf25473d Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 20:42:23 +0200
+Subject: [PATCH] ntdll, gdi32: leave a native PEB above 4 GiB alone in the
+ i386 guest
+
+On iOS the native PEB of a WoW64 process stays above 4 GiB while the
+guest lives in a window, so TEB64's Peb is not a guest address. The
+i386 locale setup would truncate it and write the code page tables
+there; skip the PEB64 copy instead. gdi32 would read the GDI shared
+handle table through it; take it from the guest's own PEB, where the
+unix side puts the table's alias in the window.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/gdi32/objects.c | 3 +++
+ dlls/ntdll/locale.c  | 2 ++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/dlls/gdi32/objects.c b/dlls/gdi32/objects.c
+index f2b353cff27..47f58e7d1cf 100644
+--- a/dlls/gdi32/objects.c
++++ b/dlls/gdi32/objects.c
+@@ -72,6 +72,9 @@ static GDI_SHARED_MEMORY *get_gdi_shared(void)
+     {
+         TEB64 *teb64 = (TEB64 *)(UINT_PTR)NtCurrentTeb()->GdiBatchCount;
+         PEB64 *peb64 = (PEB64 *)(UINT_PTR)teb64->Peb;
++        /* a native PEB above 4 GiB (iOS keeps the guest in a window) is out of
++         * reach: the unix side puts the table's guest alias in our PEB */
++        if (teb64->Peb >> 32) return (GDI_SHARED_MEMORY *)NtCurrentTeb()->Peb->GdiSharedHandleTable;
+         return (GDI_SHARED_MEMORY *)(UINT_PTR)peb64->GdiSharedHandleTable;
+     }
+ #endif
+diff --git a/dlls/ntdll/locale.c b/dlls/ntdll/locale.c
+index a100a936531..f5347560643 100644
+--- a/dlls/ntdll/locale.c
++++ b/dlls/ntdll/locale.c
+@@ -102,6 +102,8 @@ static PEB64 *get_peb64( void )
+     TEB64 *teb64 = NtCurrentTeb64();
+ 
+     if (!teb64) return NULL;
++    /* a native PEB above 4 GiB (iOS keeps the guest in a window) is out of the guest's reach */
++    if (teb64->Peb >> 32) return NULL;
+     return (PEB64 *)(UINT_PTR)teb64->Peb;
+ }
+ 
+-- 
+2.55.0
+

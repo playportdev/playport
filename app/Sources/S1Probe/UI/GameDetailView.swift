@@ -24,8 +24,8 @@
 // Cloud save conflict screen when they conflict), check game files (and Repair), achievements (a list over the
 // panel), report a problem (a share sheet with the log) and uninstall. Y puts
 // the ringed setting back to its default. A dev build adds a Developer
-// section: FEX's memory ordering and block size over the game's profile
-// (FEXProfile), which steam_api the game loads, and the build facts.
+// section: FEX's memory ordering, block size and x87 precision over the game's
+// profile (FEXProfile), which steam_api the game loads, and the build facts.
 //
 // Play is refused, with the reason, once this process has run a title (one
 // runtime per process). A release build words failures without internals
@@ -762,7 +762,7 @@ private struct GameDetailPage: View {
     // MARK: Developer (dev builds)
 
     #if !PLAYPORT_RELEASE
-    /// FEX's four ordering switches and its block size over the game's profile, madeira.cfg
+    /// FEX's four ordering switches, its block size and x87 precision over the game's profile, madeira.cfg
     /// keys over the game's own, the steam_api the game loads, and the build's facts. Not in the player's app (decision 0034).
     @ViewBuilder
     private func developerRows(_ t: InstalledTitle) -> some View {
@@ -795,6 +795,19 @@ private struct GameDetailPage: View {
                                     detail: "\(FEXProfile.defaultBlockSize(appID: t.appID, exe: exe)), the game's profile")]
                     + FEXProfile.blockSizes.map { PadOption(id: String($0), label: "\($0) instructions") },
                 selected: settings.wrappedValue.maxInst.map(String.init) ?? "") { settings.wrappedValue.maxInst = Int($0) }
+        }
+        let x87Profile = FEXProfile.defaultX87Reduced(appID: t.appID, exe: exe)
+        let x87Name: (Bool) -> String = { $0 ? "64-bit" : "80-bit" }
+        let x87 = OptionValue.of(own: settings.wrappedValue.x87Reduced, inherited: x87Profile, name: x87Name)
+        PadRow(id: "opt:x87Reduced", title: "x87 precision", value: x87.text, accessory: .chevron, changed: x87.changed,
+               style: .plain, reset: x87.changed ? { settings.wrappedValue.x87Reduced = nil } : nil) {
+            PadModal.shared.picker(
+                title: "x87 precision", context: "\(context) · x86 emulator", note: LaunchSettingsText.x87Footer,
+                options: [PadOption(id: "", label: "Default", detail: "\(x87Name(x87Profile)), the game's profile"),
+                          PadOption(id: "reduced", label: "64-bit"), PadOption(id: "full", label: "80-bit")],
+                selected: settings.wrappedValue.x87Reduced.map { $0 ? "reduced" : "full" } ?? "") {
+                settings.wrappedValue.x87Reduced = $0.isEmpty ? nil : $0 == "reduced"
+            }
         }
         let keys = settings.wrappedValue.runtime.trimmingCharacters(in: .whitespaces)
         PadRow(id: "opt:runtime", title: "Runtime keys",

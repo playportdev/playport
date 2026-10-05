@@ -4,7 +4,7 @@
   "review": {
     "status": "release-reviewed",
     "reviewed_by": "the Playport authors (copyright holder)",
-    "date": "2026-09-30",
+    "date": "2026-10-05",
     "decision": "docs/decisions/0039-owners-licensing-review.md",
     "answers": [
       "LLVM runtime: accepted. The llvm-mingw runtime code embedded by compiling needs no attribution under the LLVM exception (4(a), 4(b), 4(d) waived); the app carries LLVM's root licence and credit files, the source bundle the full set.",
@@ -14,7 +14,8 @@
       "GStreamer's MoltenVK (Apache-2.0): its licence at the SDK's MoltenVK tag, decision 0042.",
       "mingw-w64 Cephes: answered by Moshier's own grants.",
       "Supersets carried whole: accepted; over-inclusion cannot miss a notice.",
-      "Madeira: its un-headered build/*-unix files are taken under the stricter reading, GPL-3.0-or-later, and its Wine commits under its published licence; no upstream request is sent."
+      "Madeira: its un-headered build/*-unix files are taken under the stricter reading, GPL-3.0-or-later, and its Wine commits under its published licence; no upstream request is sent.",
+      "Wine's fallback Tahoma faces (Runtime/fonts, reviewed 2026-10-05): accepted. They are Wine's tracked prebuilt TTFs at the Wine pin, shipped unmodified; each face is LGPL-2.1-or-later (its SFD name table) and derived from Bitstream Vera Sans, whose licence permits modification and redistribution with the notice, forbids the Bitstream/Vera names on modified fonts (the faces are named Wine Tahoma) and selling a face by itself (it ships inside the app). The app carries wine-COPYING.LIB.txt, the Bitstream Vera licence in wine-NOTICES.md and each face's SFD attribution lines; the SFD sources are part of the Wine pin's Corresponding Source (0042). The family name Tahoma is kept, as Wine and Linux distributions ship it, for metric-compatible substitution."
     ],
     "open": []
   },
@@ -57,12 +58,13 @@
         "P2",
         "P2-ec",
         "nls",
+        "fonts",
         "P3",
         "P4-win32u",
         "P4-server",
         "P6-gst"
       ],
-      "licence": "LGPL-2.1-or-later, and the licences of the libraries in its libs/",
+      "licence": "LGPL-2.1-or-later, the licences of the libraries in its libs/, and the Bitstream Vera font licence for its Tahoma faces",
       "include": [
         "LGPL-2.1.txt",
         "wine-*"

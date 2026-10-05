@@ -26,7 +26,8 @@ import shutil
 import subprocess
 import sys
 
-TREES = {"build-macos": "aarch64-windows", "build-arm64ec": "arm64ec-windows"}
+TREES = {"build-macos": {"i386-windows", "aarch64-windows"},
+         "build-arm64ec": {"arm64ec-windows"}}
 SKIP_EXT = {".o", ".a", ".res", ".c"}   # as wine-pe-manifest.py
 
 
@@ -40,10 +41,10 @@ def is_pe(path):
 
 
 def sources(wine):
-    for tree, arch_dir in TREES.items():
+    for tree, arch_dirs in TREES.items():
         root = os.path.join(wine, tree)
         for d, _, files in os.walk(root):
-            if os.path.basename(d) != arch_dir:
+            if os.path.basename(d) not in arch_dirs:
                 continue
             for name in files:
                 p = os.path.join(d, name)

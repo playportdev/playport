@@ -1,0 +1,61 @@
+From 416a72003ffa28f8feb54e095245c2781eca0f6a Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 19:52:02 +0200
+Subject: [PATCH] Map through ntdll where kernelbase is not loaded on iOS
+
+os_mmap takes VirtualAlloc2 from kernelbase.dll and, by design, has no
+unconstrained fallback, so without kernelbase every host mapping
+failed and rpmalloc handed out a null heap. FEX's WoW64 module runs in a
+WoW64 process, which loads only ntdll.dll and wow64.dll natively. Use
+ntdll's NtAllocateVirtualMemoryEx, which VirtualAlloc2 wraps, when
+kernelbase.dll is absent; the ARM64EC module keeps kernelbase's.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-fex-wow64.md
+Offered-upstream: no; part of the iOS host band
+---
+ rpmalloc/rpmalloc.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 2034703..29a06aa 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -1196,6 +1196,25 @@ ios_fex_band_select(ios_valloc2_t valloc2) {
+ }
+ #endif
+ 
++#ifdef FEX_IOS_HOST
++/* Playport: VirtualAlloc2 from ntdll, for a module in a process without
++ * kernelbase.dll: FEX's WoW64 module, which a WoW64 process loads with only
++ * ntdll.dll and wow64.dll. */
++static PVOID WINAPI
++ios_ntdll_valloc2(HANDLE process, PVOID address, SIZE_T size, ULONG type, ULONG protect,
++                  MEM_EXTENDED_PARAMETER* params, ULONG count) {
++	typedef NTSTATUS(WINAPI* alloc_ex_t)(HANDLE, PVOID*, SIZE_T*, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
++	static alloc_ex_t alloc_ex = (alloc_ex_t)(uintptr_t)-1;
++	if (alloc_ex == (alloc_ex_t)(uintptr_t)-1) {
++		HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
++		alloc_ex = ntdll ? (alloc_ex_t)(void*)GetProcAddress(ntdll, "NtAllocateVirtualMemoryEx") : 0;
++	}
++	if (!alloc_ex || alloc_ex(process, &address, &size, type, protect, params, count))
++		return 0;
++	return address;
++}
++#endif
++
+ static void*
+ os_mmap(size_t size, size_t alignment, size_t* offset, size_t* mapped_size) {
+ 	size_t map_size = size + alignment;
+@@ -1239,7 +1258,7 @@ os_mmap(size_t size, size_t alignment, size_t* offset, size_t* mapped_size) {
+ 		static VirtualAlloc2_t pVirtualAlloc2 = (VirtualAlloc2_t)(uintptr_t)-1;
+ 		if (pVirtualAlloc2 == (VirtualAlloc2_t)(uintptr_t)-1) {
+ 			HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
+-			pVirtualAlloc2 = kb ? (VirtualAlloc2_t)(void*)GetProcAddress(kb, "VirtualAlloc2") : 0;
++			pVirtualAlloc2 = kb ? (VirtualAlloc2_t)(void*)GetProcAddress(kb, "VirtualAlloc2") : ios_ntdll_valloc2;
+ 		}
+ 		if (pVirtualAlloc2) {
+ 			MEM_ADDRESS_REQUIREMENTS req;
+-- 
+2.55.0
+

@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:54:45 +0200
+Subject: [PATCH] ntdll: load an i386 child's unix libraries with their WoW64
+ tables
+
+A window image's MemoryWineLoadUnixLibWow64 query was refused by the
+window query router, so ws2_32's DllMain failed in Portal 2's i386
+child, and with it bin\launcher.dll ("DLL initialization failed"). Let
+the query take NtQueryVirtualMemory's own path, which names the module
+by its export directory (read as PE32 for an i386 module), and when the
+caller wants the WoW64 table return the statically linked library's
+32-bit one (ws2_32, secur32, crypt32, dwrite, winevulkan) or the stub
+table, never the 64-bit table.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c | 33 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 96cc242..a6092d6 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7409,6 +7409,12 @@ extern const void *audio_null_ios_unix_call_funcs[];
+ extern const void *ws2_32_unix_call_funcs[];
+ extern const void *secur32_unix_call_funcs[];
+ extern const void *crypt32_unix_call_funcs[];
++/* Playport: their WoW64 tables (32-bit parameter blocks), for i386 children */
++extern const void *ws2_32_unix_call_wow64_funcs[];
++extern const void *secur32_unix_call_wow64_funcs[];
++extern const void *crypt32_unix_call_wow64_funcs[];
++extern const void *dwrite_unix_call_wow64_funcs[];
++extern const void *winevulkan_unix_call_wow64_funcs[];
+ 
+ /* iOS-Madeira 2026-08-03 (#79 transport): in-process NSI TCP connection
+  * tables — nsiproxy.sys is not shipped, PE nsi.dll falls back to this
+@@ -7476,7 +7482,10 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+         if (dos && dos->e_magic == IMAGE_DOS_SIGNATURE) {
+             const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)((char *)module + dos->e_lfanew);
+             if (nt->Signature == IMAGE_NT_SIGNATURE) {
+-                DWORD exp_rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
++                /* Playport: an i386 child's modules are PE32 */
++                DWORD exp_rva = nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC ?
++                    ((const IMAGE_NT_HEADERS32 *)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress :
++                    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+                 if (exp_rva) {
+                     const IMAGE_EXPORT_DIRECTORY *exp = (const IMAGE_EXPORT_DIRECTORY *)((char *)module + exp_rva);
+                     if (exp->Name) modname = (const char *)module + exp->Name;
+@@ -7564,6 +7573,25 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+                           module, up ? up : "(null)", modname ? modname : "(null)");
+             status = STATUS_SUCCESS;
+         }
++        if (!status && wow)
++        {
++            /* Playport: an i386 child's unix calls pass 32-bit parameter blocks;
++             * a library without a WoW64 table gets the stub table. */
++            const void *wow_funcs = NULL;
++            if (*funcs == (const void *)ws2_32_unix_call_funcs) wow_funcs = ws2_32_unix_call_wow64_funcs;
++            else if (*funcs == (const void *)secur32_unix_call_funcs) wow_funcs = secur32_unix_call_wow64_funcs;
++            else if (*funcs == (const void *)crypt32_unix_call_funcs) wow_funcs = crypt32_unix_call_wow64_funcs;
++            else if (*funcs == (const void *)dwrite_unix_call_funcs) wow_funcs = dwrite_unix_call_wow64_funcs;
++            else if (*funcs == (const void *)winevulkan_unix_call_funcs) wow_funcs = winevulkan_unix_call_wow64_funcs;
++            if (!wow_funcs)
++            {
++                pthread_once( &ios_stub_tables_once, ios_init_stub_tables );
++                wow_funcs = ios_stub_unix_call_table;
++            }
++            dprintf( 2, "[unixlib] module %p (%s) WoW64 -> %p%s\n", module, match ? match : "(null)",
++                     wow_funcs, wow_funcs == (const void *)ios_stub_unix_call_table ? " (stub table)" : "" );
++            *funcs = wow_funcs;
++        }
+     }
+ #endif
+     return status;
+@@ -15384,6 +15412,9 @@ static BOOL ios_wow64_route_query( HANDLE process, const void *addr,
+     sigset_t sigset;
+     uintptr_t value = (uintptr_t)addr;
+ 
++    /* a window image's unix library: NtQueryVirtualMemory's own path reads
++     * the module's headers and picks the WoW64 table */
++    if (info_class == MemoryWineLoadUnixLibWow64) return FALSE;
+     pthread_mutex_lock( &ios_wow64_windows_lock );
+     for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
+     {

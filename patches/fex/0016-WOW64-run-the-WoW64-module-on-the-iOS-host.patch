@@ -1,0 +1,582 @@
+From a347176acff7405d30b735f75d4f7c749ec823db Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 19:44:24 +0200
+Subject: [PATCH 16/16] WOW64: run the WoW64 module on the iOS host
+
+Build the WoW64 module with FEX_IOS_HOST and give it what that
+configuration of FEXCore needs:
+
+- the JIT pool's write offset, from WINE_IOS_JIT_RW/RX as the ARM64EC
+  module reads it, before InitCore; the process refuses to start
+  without it;
+- the ARM64EC module's placement: FEX's host structures in the host
+  band, and code buffers in the JIT pool (allocated as EC_CODE, which
+  is what Wine's iOS allocator moves into the pool); FEX's VirtualAlloc2
+  keeps a caller's own address requirements instead of adding the WoW64
+  default beside them;
+- the guest window. iOS has no low 4 GB, so Wine keeps a WoW64 guest's
+  address space at a host base B (guest g is host B + g). The module
+  reads B from its paired TEB32 (host address minus its guest self
+  pointer) and checks it against PEB32. The decoder reads guest code
+  from B + EIP, and every block translates its memory operands below
+  KUSER_SHARED_DATA inline (the sub-floor hooks of fex-port 0060); the
+  rest faults low and Wine's Mach handler services it in the window;
+- guest-versus-host addresses at the module's edges: the FS base, the
+  syscall/unix-call bridge and EIP/ESP stay guest; the syscall return
+  address, its argument block and the unix-call parameters are read
+  through the window; tracker notifications and queries are in host
+  addresses, and the InvalidationTracker invalidates FEX's code by guest
+  address;
+- the ARM64EC-only hooks FEXCore calls: no JIT-pool aliases, no Mono
+  bridge (Wine publishes it to the x86-64 module only), FFS counters;
+- _time64 in FEX's CRT, which an iOS diagnostic in Core.cpp calls;
+- no thread_local in the module (it has no TLS directory, and Wine runs
+  the CPU before the loader sets up a thread's TLS block): the IR
+  capture mark is a plain global there, and AllocWatch names a thread
+  by its TEB.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-fex-wow64.md
+Offered-upstream: no; depends on the iOS port's JIT pool and Wine's window
+---
+ FEXCore/Source/Interface/IR/PassManager.cpp   |   7 +
+ FEXCore/Source/Utils/AllocWatch.cpp           |  12 +
+ .../include/FEXCore/Utils/AllocatorHooks.h    |   3 +-
+ Source/Windows/Common/CRT/Misc.cpp            |  12 +
+ Source/Windows/Common/InvalidationTracker.cpp |   5 +-
+ Source/Windows/Common/InvalidationTracker.h   |   9 +
+ Source/Windows/Common/WinAPI/Alloc.cpp        |   7 +-
+ Source/Windows/WOW64/Module.cpp               | 215 ++++++++++++++++--
+ 8 files changed, 243 insertions(+), 27 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/IR/PassManager.cpp b/FEXCore/Source/Interface/IR/PassManager.cpp
+index 3668cb102..a12fbfa99 100644
+--- a/FEXCore/Source/Interface/IR/PassManager.cpp
++++ b/FEXCore/Source/Interface/IR/PassManager.cpp
+@@ -233,7 +233,14 @@ namespace {
+  * target instruction. Containment, NOT entry RIP: with multiblock the block
+  * routinely starts hundreds of bytes earlier, so an entry-range gate (which is
+  * what I first proposed) would have missed this block entirely. */
++#if defined(_WIN32) && !defined(ARCHITECTURE_arm64ec)
++// The WoW64 module has no TLS directory, and its CPU runs before Wine's loader
++// sets up the thread's TLS block. One mark for all threads: a second thread
++// compiling at the same time can overwrite a capture.
++uint64_t IRCapRIP = 0;
++#else
+ thread_local uint64_t IRCapRIP = 0;
++#endif
+ std::atomic<uint32_t> IRCapTaken {0};
+ 
+ constexpr uint32_t IRCapMaxCaptures = 4; // a LATER generation may be the faulty one
+diff --git a/FEXCore/Source/Utils/AllocWatch.cpp b/FEXCore/Source/Utils/AllocWatch.cpp
+index 96719d2a7..7dea73b40 100644
+--- a/FEXCore/Source/Utils/AllocWatch.cpp
++++ b/FEXCore/Source/Utils/AllocWatch.cpp
+@@ -10,6 +10,11 @@
+ #include <atomic>
+ #include <cstring>
+ 
++#if defined(_WIN32) && !defined(ARCHITECTURE_arm64ec)
++#include <windef.h>
++#include <winternl.h>
++#endif
++
+ extern "C" {
+ volatile int FEX_AllocWatch_Armed = 0;
+ }
+@@ -55,8 +60,15 @@ namespace {
+   uint64_t CurrentThreadId() {
+     // Cheap, allocation-free thread identity: the address of a TLS byte. Only used
+     // to tell "same thread" from "different thread", never to name a thread.
++#if defined(_WIN32) && !defined(ARCHITECTURE_arm64ec)
++    // The WoW64 module has no TLS directory (see PassManager.cpp's IRCapRIP):
++    // the TEB names the thread. Loaded through TEB->Self, never the raw x18,
++    // which iOS can have cleared.
++    return reinterpret_cast<uint64_t>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->Self);
++#else
+     static thread_local char Anchor {};
+     return reinterpret_cast<uint64_t>(&Anchor);
++#endif
+   }
+ 
+   const char* EventName(uint32_t Event) {
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+index a9a9293b3..7a07a735c 100644
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -66,7 +66,8 @@ extern uintptr_t ios_fex_band_end;
+ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Commit = true) {
+   // Allocate top-down to avoid polluting the lower VA space, as even on 64-bit some programs (i.e. LuaJIT) require allocations below 4GB.
+   DWORD Flags = (Commit ? MEM_COMMIT : 0) | MEM_RESERVE | MEM_TOP_DOWN;
+-#ifdef ARCHITECTURE_arm64ec
++  // The WoW64 module on iOS needs the same placement: the host band, and code in the JIT pool.
++#if defined(ARCHITECTURE_arm64ec) || defined(FEX_IOS_HOST)
+ #ifdef FEX_IOS_HOST
+   /* iOS-Madeira ml321: keep FEX's host structures OUT of the guest VA band.
+    *
+diff --git a/Source/Windows/Common/CRT/Misc.cpp b/Source/Windows/Common/CRT/Misc.cpp
+index 79a006878..76061952f 100644
+--- a/Source/Windows/Common/CRT/Misc.cpp
++++ b/Source/Windows/Common/CRT/Misc.cpp
+@@ -84,6 +84,18 @@ void abort(void) {
+ }
+ #pragma pop_macro("abort")
+ 
++// FEXCore's iOS diagnostics (Core.cpp) read the wall clock in seconds.
++DLLEXPORT_FUNC(int64_t, _time64, (int64_t* Time)) {
++  LARGE_INTEGER Now;
++  NtQuerySystemTime(&Now);
++  // 100 ns ticks since 1601 to seconds since 1970.
++  const int64_t Seconds = Now.QuadPart / 10000000 - 11644473600LL;
++  if (Time) {
++    *Time = Seconds;
++  }
++  return Seconds;
++}
++
+ int getpid(void) {
+   return static_cast<int>(GetCurrentProcessId());
+ }
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 25b9a6ede..f88cb5964 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -583,9 +583,10 @@ inline uint64_t InvTicksPerUs() {
+ void InvalidationTracker::InvalidateIntervalInternalLocked(uint64_t Address, uint64_t Size, InvalidationSource Src) {
+   // NOTE: This assumes CodeInvalidationMutex is locked by the caller
+   const uint64_t T0 = InvNow();
+-  CTX.InvalidateCodeBuffersCodeRange(Address, Size);
++  const uint64_t GuestAddress = Address - GuestToHostOffset;
++  CTX.InvalidateCodeBuffersCodeRange(GuestAddress, Size);
+   for (auto Thread : Threads) {
+-    CTX.InvalidateThreadCachedCodeRange(Thread.second, Address, Size);
++    CTX.InvalidateThreadCachedCodeRange(Thread.second, GuestAddress, Size);
+   }
+   const uint32_t S = Src < InvSourceCount ? Src : InvOther;
+   InvCount[S].fetch_add(1, std::memory_order_relaxed);
+diff --git a/Source/Windows/Common/InvalidationTracker.h b/Source/Windows/Common/InvalidationTracker.h
+index 2735ee727..3ec24b2aa 100644
+--- a/Source/Windows/Common/InvalidationTracker.h
++++ b/Source/Windows/Common/InvalidationTracker.h
+@@ -43,7 +43,16 @@ public:
+ 
+   FEXCore::HLE::ExecutableRangeInfo QueryExecutableRange(uint64_t Address);
+ 
++  // The tracker works on host addresses, while FEX keys translated code by guest
++  // address. They differ only for an iOS WoW64 guest, whose address g lives at
++  // host g + Offset (the WOW64 module's window); 0 everywhere else.
++  void SetGuestToHostOffset(uint64_t Offset) {
++    GuestToHostOffset = Offset;
++  }
++
+ private:
++  uint64_t GuestToHostOffset {0};
++
+   void DetectMonoBackpatcherBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC);
+   void DisableSMCDetection();
+   void InvalidateIntervalInternal(uint64_t Address, uint64_t Size, InvalidationSource Src = InvOther);
+diff --git a/Source/Windows/Common/WinAPI/Alloc.cpp b/Source/Windows/Common/WinAPI/Alloc.cpp
+index ded646b0c..f81b42bd9 100644
+--- a/Source/Windows/Common/WinAPI/Alloc.cpp
++++ b/Source/Windows/Common/WinAPI/Alloc.cpp
+@@ -75,7 +75,12 @@ DLLEXPORT_FUNC(void*, VirtualAlloc2,
+                 MEM_EXTENDED_PARAMETER* ExtendedParameters, ULONG ParameterCount)) {
+   NTSTATUS Status;
+ #ifndef _M_ARM64EC
+-  if (!BaseAddress) {
++  bool HasAddressRequirements = false;
++  for (ULONG i = 0; i < ParameterCount; i++) {
++    HasAddressRequirements |= ExtendedParameters[i].Type == MemExtendedParameterAddressRequirements;
++  }
++  // A caller's own address requirements (FEX's host band on iOS) take the place of the default.
++  if (!BaseAddress && !HasAddressRequirements) {
+     // Add address requirements for WOW64 to limit allocations to outside the 32-bit user address space
+     auto* NewExtParams = reinterpret_cast<MEM_EXTENDED_PARAMETER*>(alloca((ParameterCount + 1) * sizeof(MEM_EXTENDED_PARAMETER)));
+     if (ExtendedParameters && ParameterCount > 0) {
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index 62a8dd216..8e178d5f6 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -51,7 +51,10 @@ $end_info$
+ #include "BTInterface.h"
+ #include "Windows/Common/SHMStats.h"
+ 
++#include <algorithm>
+ #include <cstdint>
++#include <cstdlib>
++#include <string_view>
+ #include <type_traits>
+ #include <atomic>
+ #include <mutex>
+@@ -122,6 +125,91 @@ struct FrontendThreadData {
+ 
+ class WowSyscallHandler;
+ 
++#ifdef FEX_IOS_HOST
++/* iOS has no low 4 GiB, so Wine keeps this process's 32-bit address space in a
++ * window: guest address g is host address Base + g (Playport's madeira-unix
++ * window, docs/PORTAL2-PLAN.md). The base is read from the paired TEB32 at
++ * process init. Guest code is decoded from the window, and every memory
++ * operand below InlineLimit is translated inline (OpcodeDispatcher's IosXlate);
++ * what is not translated faults on the low address and Wine's Mach handler
++ * services it against the window. Pointers this module passes to wow64.dll and
++ * to Wine's trackers are host pointers; guest state (EIP, ESP, the FS base and
++ * the bridge addresses the guest jumps to) stays guest. */
++namespace Window {
++constexpr uint64_t Size = 1ULL << 32;
++// KUSER_SHARED_DATA is the session's, at guest 0x7ffe0000: accesses from there
++// up fault low and Wine resolves the shared page before the window.
++constexpr uint64_t InlineLimit = 0x7ffe0000;
++uint64_t Base;
++
++uint64_t ToHost(uint64_t Address) {
++  return Address < Size ? Base + Address : Address;
++}
++
++uint64_t ToGuest(uint64_t Address) {
++  return Address - Base < Size ? Address - Base : Address;
++}
++} // namespace Window
++
++namespace FEXCore::DualMap {
++int64_t WriteOffset = 0;
++} // namespace FEXCore::DualMap
++
++extern "C" {
++// Decoder byte source (Frontend.cpp): guest code is read from the window.
++uint64_t IosSubfloorToReal(uint64_t Address) {
++  return Window::Base ? Window::ToHost(Address) : Address;
++}
++
++// Inline translation window for every block's memory operands (OpcodeDispatcher.cpp).
++int IosSubfloorWindowForCode(uint64_t, uint64_t* Low, uint64_t* Size, uint64_t* Real) {
++  if (!Window::Base) {
++    return 0;
++  }
++  *Low = 0;
++  *Size = Window::InlineLimit;
++  *Real = Window::Base;
++  return 1;
++}
++
++// Guest code here is never copied into the JIT pool: no PE-to-pool aliases.
++uint64_t IosJitReverseTranslate(uint64_t Address) {
++  return Address;
++}
++
++// Counters of the ARM64EC module's FFS bypass, which this module does not have.
++uint64_t IosFfsBypassLog[4] {};
++
++// Wine publishes the Mono bridge only to the x86-64 module
++// (BTCpu64IosSetMonoBridge): here it is never armed.
++uint64_t IosMonoResolveRW(uint64_t, uint64_t) {
++  return 0;
++}
++void ios_fex_mono_arm(uint64_t, uint64_t) {}
++int ios_fex_mono_take_pending(uint64_t*, uint64_t*, uint64_t*) {
++  return 0;
++}
++int ios_fex_mono_bridge_armed() {
++  return 0;
++}
++void ios_fex_mono_count_activated() {}
++uint64_t ios_fex_mono_captured_count() {
++  return 0;
++}
++void ios_fex_mono_count_helper(int) {}
++}
++#else
++namespace Window {
++constexpr uint64_t Base = 0;
++uint64_t ToHost(uint64_t Address) {
++  return Address;
++}
++uint64_t ToGuest(uint64_t Address) {
++  return Address;
++}
++} // namespace Window
++#endif
++
+ namespace {
+ namespace BridgeInstrs {
+   // These directly jumped to by the guest to make system calls
+@@ -218,9 +306,9 @@ void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread, uint64_
+ 
+   // The TEB is the only populated GDT entry by default
+   auto GDT = State.GetSegmentFromIndex(State, (Context->SegFs & 0xffff));
+-  State.SetGDTBase(GDT, WowTEB);
++  State.SetGDTBase(GDT, Window::ToGuest(WowTEB));
+   State.SetGDTLimit(GDT, 0xF'FFFFU);
+-  State.fs_cached = WowTEB;
++  State.fs_cached = Window::ToGuest(WowTEB);
+   State.es_cached = 0;
+   State.cs_cached = 0;
+   State.ss_cached = 0;
+@@ -450,7 +538,7 @@ public:
+   WowSyscallHandler() = default;
+ 
+   static void HandleSyscallImpl(FEXCore::Core::CpuStateFrame* Frame) {
+-    const uint64_t ReturnRIP = *(uint32_t*)(Frame->State.gregs[FEXCore::X86State::REG_RSP]); // Return address from the stack
++    const uint64_t ReturnRIP = *(uint32_t*)Window::ToHost(Frame->State.gregs[FEXCore::X86State::REG_RSP]); // Return address from the stack
+     uint64_t ReturnRSP = Frame->State.gregs[FEXCore::X86State::REG_RSP] + 4;                 // Stack pointer after popping return address
+     uint64_t ReturnRAX = 0;
+ 
+@@ -459,14 +547,15 @@ public:
+         unixlib_handle_t Handle;
+         UINT32 ID;
+         ULONG32 Args;
+-      }* StackArgs = reinterpret_cast<StackLayout*>(ReturnRSP);
++      }* StackArgs = reinterpret_cast<StackLayout*>(Window::ToHost(ReturnRSP));
+ 
+       Frame->State.gregs[FEXCore::X86State::REG_RSP] = ReturnRSP + sizeof(StackLayout);
+       Frame->State.rip = ReturnRIP;
+ 
+       const auto TLS = GetTLS();
+       Context::UnlockJITContext(TLS);
+-      ReturnRAX = static_cast<uint64_t>(WineUnixCall(StackArgs->Handle, StackArgs->ID, ULongToPtr(StackArgs->Args)));
++      ReturnRAX = static_cast<uint64_t>(
++        WineUnixCall(StackArgs->Handle, StackArgs->ID, reinterpret_cast<void*>(Window::ToHost(StackArgs->Args))));
+       Context::LockJITContext(TLS);
+       Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
+     } else if (Frame->State.rip == (uint64_t)BridgeInstrs::Syscall) {
+@@ -478,7 +567,8 @@ public:
+       const auto TLS = GetTLS();
+       Context::UnlockJITContext(TLS);
+       Wow64ProcessPendingCrossProcessItems();
+-      ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(ReturnRSP + 4)));
++      ReturnRAX =
++        static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(Window::ToHost(ReturnRSP + 4))));
+       Context::LockJITContext(TLS);
+       Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
+     }
+@@ -494,15 +584,21 @@ public:
+   }
+ 
+   std::optional<FEXCore::ExecutableFileSectionInfo> LookupExecutableFileSection(FEXCore::Core::InternalThreadState*, uint64_t Address) override {
+-    return ImageTracker->LookupExecutableFileSection(Address);
++    auto Result = ImageTracker->LookupExecutableFileSection(Window::ToHost(Address));
++    if (Result && Window::Base) {
++      Result->FileStartVA = Window::ToGuest(Result->FileStartVA);
++      Result->BeginVA = Window::ToGuest(Result->BeginVA);
++      Result->EndVA = Window::ToGuest(Result->EndVA - 1) + 1;
++    }
++    return Result;
+   }
+ 
+   void MarkGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override {
+-    InvalidationTracker->ReprotectRWXIntervals(Start, Length);
++    InvalidationTracker->ReprotectRWXIntervals(Window::ToHost(Start), Length);
+   }
+ 
+   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override {
+-    InvalidationTracker->InvalidateAlignedInterval(Start, Length, false);
++    InvalidationTracker->InvalidateAlignedInterval(Window::ToHost(Start), Length, false);
+   }
+ 
+   void MarkOvercommitRange(uint64_t Start, uint64_t Length) override {
+@@ -514,7 +610,15 @@ public:
+   }
+ 
+   FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Address) override {
+-    return InvalidationTracker->QueryExecutableRange(Address);
++    auto Result = InvalidationTracker->QueryExecutableRange(Window::ToHost(Address));
++    if (Result.Size && Window::Base) {
++      // Report the range in the guest's domain, clipped to the window.
++      const uint64_t Begin = Window::ToGuest(Result.Base);
++      const uint64_t End = std::min(Begin + Result.Size, Window::Size);
++      Result.Base = Begin;
++      Result.Size = Begin < End ? End - Begin : 0;
++    }
++    return Result;
+   }
+ 
+   void PreCompile() override {
+@@ -522,6 +626,53 @@ public:
+   }
+ };
+ 
++#ifdef FEX_IOS_HOST
++extern "C" char ios_va_log[];
++extern "C" int ios_va_log_len;
++
++// Before InitCore: the JIT's RW alias and the guest window.
++static bool IosHostInit() {
++  // rpmalloc chose FEX's host band before logging existed (rpmalloc.c ios_fex_band_select).
++  if (ios_va_log_len > 0) {
++    LogMan::Msg::EFmt("[wow64-fex] host band selector log:\n{}", std::string_view(ios_va_log, ios_va_log_len));
++  }
++
++  /* Emitted code is written through the JIT pool's RW alias. The app publishes
++   * both bases to Wine, which forwards them to every process (as for the
++   * ARM64EC module); without them there is no writable view of the code. */
++  const char* RwEnv = getenv("WINE_IOS_JIT_RW");
++  const char* RxEnv = getenv("WINE_IOS_JIT_RX");
++  const uint64_t Rw = RwEnv ? strtoull(RwEnv, nullptr, 16) : 0;
++  const uint64_t Rx = RxEnv ? strtoull(RxEnv, nullptr, 16) : 0;
++  if (!Rw || !Rx) {
++    LogMan::Msg::EFmt("[wow64-fex] FATAL: WINE_IOS_JIT_RW/RX missing (RW={} RX={}): no RW alias for the JIT pool", RwEnv ? RwEnv : "(null)",
++                      RxEnv ? RxEnv : "(null)");
++    return false;
++  }
++  FEXCore::DualMap::WriteOffset = static_cast<int64_t>(Rw - Rx);
++
++  /* The window base from the paired TEB32: Wine stores its guest self pointer
++   * (NT_TIB32.Self) and guest PEB32, and native callers get PEB32's host
++   * address from ProcessWow64Information. Both must give the same base. */
++  static constexpr size_t Teb32SelfOffset = 0x18;
++  static constexpr size_t Teb32PebOffset = 0x30;
++  const uint64_t HostTeb32 = GetWowTEB(NtCurrentTeb());
++  const uint32_t GuestTeb32 = *reinterpret_cast<const uint32_t*>(HostTeb32 + Teb32SelfOffset);
++  const uint32_t GuestPeb32 = *reinterpret_cast<const uint32_t*>(HostTeb32 + Teb32PebOffset);
++  ULONG_PTR HostPeb32 = 0;
++  NtQueryInformationProcess(NtCurrentProcess(), ProcessWow64Information, &HostPeb32, sizeof(HostPeb32), nullptr);
++  const uint64_t Base = HostTeb32 - GuestTeb32;
++  LogMan::Msg::EFmt("[wow64-fex] window base={:#x} teb32 host={:#x} guest={:#x} peb32 host={:#x} guest={:#x} write_offset={:#x}", Base,
++                    HostTeb32, GuestTeb32, HostPeb32, GuestPeb32, FEXCore::DualMap::WriteOffset);
++  if (!GuestTeb32 || Base < Window::Size || (Base & 0xffff) || HostPeb32 - GuestPeb32 != Base) {
++    LogMan::Msg::EFmt("[wow64-fex] FATAL: the TEB32 and PEB32 do not name one guest window");
++    return false;
++  }
++  Window::Base = Base;
++  return true;
++}
++#endif
++
+ void BTCpuProcessInit() {
+   FEX::Windows::InitCRTProcess();
+   FEX::Windows::SetupThreadHandlers();
+@@ -557,9 +708,15 @@ void BTCpuProcessInit() {
+ 
+   CTX->SetSignalDelegator(SignalDelegator.get());
+   CTX->SetSyscallHandler(SyscallHandler.get());
++#ifdef FEX_IOS_HOST
++  if (!IosHostInit()) {
++    NtTerminateProcess(NtCurrentProcess(), STATUS_NOT_SUPPORTED);
++  }
++#endif
+   CTX->InitCore();
+   Context::HandlerConfig.emplace(*CTX);
+   InvalidationTracker.emplace(*CTX, Threads);
++  InvalidationTracker->SetGuestToHostOffset(Window::Base);
+   ImageTracker.emplace(*CTX, false);
+ 
+   auto MainModule = reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->ImageBaseAddress;
+@@ -576,8 +733,17 @@ void BTCpuProcessInit() {
+   NtAllocateVirtualMemory(NtCurrentProcess(), &Addr, (1U << 31) - 1, &Size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+   InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Addr), Size, PAGE_EXECUTE);
+   *reinterpret_cast<uint32_t*>(Addr) = 0x2ecd2ecd;
+-  BridgeInstrs::Syscall = Addr;
+-  BridgeInstrs::UnixCall = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(Addr) + 2);
++  // The guest jumps to these, so they are guest addresses.
++  const uint64_t BridgeGuest = Window::ToGuest(reinterpret_cast<uint64_t>(Addr));
++  BridgeInstrs::Syscall = reinterpret_cast<void*>(BridgeGuest);
++  BridgeInstrs::UnixCall = reinterpret_cast<void*>(BridgeGuest + 2);
++#ifdef FEX_IOS_HOST
++  LogMan::Msg::EFmt("[wow64-fex] bridge host={} guest={:#x}", Addr, BridgeGuest);
++  if (BridgeGuest >= Window::Size) {
++    LogMan::Msg::EFmt("[wow64-fex] FATAL: the bridge is outside the guest window");
++    NtTerminateProcess(NtCurrentProcess(), STATUS_NOT_SUPPORTED);
++  }
++#endif
+ 
+   const auto Sym = GetProcAddress(NtDll, "__wine_unix_call_dispatcher");
+   if (Sym) {
+@@ -907,9 +1073,9 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+     if (Thread) {
+       std::scoped_lock Lock(ThreadCreationMutex);
+       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
+-      if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, FaultAddress)) {
++      if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, Window::ToHost(FaultAddress))) {
+         if (CTX->IsAddressInCodeBuffer(Thread, Context->Pc) && !CTX->IsCurrentBlockSingleInst(Thread) &&
+-            CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
++            CTX->IsAddressInCurrentBlock(Thread, Window::ToGuest(FaultAddress) & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
+           Context::ReconstructThreadState(TLS, Context);
+           LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", Context->Pc,
+                             Thread->CurrentFrame->State.rip, FaultAddress);
+@@ -945,6 +1111,9 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
+   BOOL FirstChance = TRUE;
+   EXCEPTION_RECORD GuestException =
+     FEX::Windows::HandleGuestException(Fault, *Exception, WowContext.Eip, WowContext.Eax, WowContext.Ecx, FirstChance);
++  if (GuestException.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && GuestException.NumberParameters >= 2) {
++    GuestException.ExceptionInformation[1] = Window::ToGuest(GuestException.ExceptionInformation[1]);
++  }
+   if (GuestException.ExceptionCode == EXCEPTION_SINGLE_STEP) {
+     WowContext.EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
+   }
+@@ -966,17 +1135,17 @@ NTSTATUS BTCpuResetToConsistentState(EXCEPTION_POINTERS* Ptrs) {
+ 
+ void BTCpuFlushInstructionCache2(const void* Address, SIZE_T Size) {
+   std::scoped_lock Lock(ThreadCreationMutex);
+-  InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
++  InvalidationTracker->InvalidateAlignedInterval(Window::ToHost(reinterpret_cast<uint64_t>(Address)), static_cast<uint64_t>(Size), false);
+ }
+ 
+ void BTCpuFlushInstructionCacheHeavy(const void* Address, SIZE_T Size) {
+   std::scoped_lock Lock(ThreadCreationMutex);
+-  InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
++  InvalidationTracker->InvalidateAlignedInterval(Window::ToHost(reinterpret_cast<uint64_t>(Address)), static_cast<uint64_t>(Size), false);
+ }
+ 
+ void BTCpuNotifyMemoryDirty(void* Address, SIZE_T Size) {
+   std::scoped_lock Lock(ThreadCreationMutex);
+-  InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
++  InvalidationTracker->InvalidateAlignedInterval(Window::ToHost(reinterpret_cast<uint64_t>(Address)), static_cast<uint64_t>(Size), false);
+ }
+ 
+ void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL After, ULONG Status) {
+@@ -985,7 +1154,7 @@ void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot,
+   } else {
+     // MEM_RESET(_UNDO) ignores the passed permissions
+     if (!Status && !(Type & (MEM_RESET | MEM_RESET_UNDO))) {
+-      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
++      InvalidationTracker->HandleMemoryProtectionNotification(Window::ToHost(reinterpret_cast<uint64_t>(Address)), static_cast<uint64_t>(Size), Prot);
+     }
+     ThreadCreationMutex.unlock();
+   }
+@@ -996,7 +1165,7 @@ void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL Af
+     ThreadCreationMutex.lock();
+   } else {
+     if (!Status) {
+-      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
++      InvalidationTracker->HandleMemoryProtectionNotification(Window::ToHost(reinterpret_cast<uint64_t>(Address)), static_cast<uint64_t>(Size), NewProt);
+     }
+     ThreadCreationMutex.unlock();
+   }
+@@ -1007,7 +1176,7 @@ void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL Afte
+     ThreadCreationMutex.lock();
+   } else {
+     if (!Status) {
+-      InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
++      InvalidationTracker->InvalidateAlignedInterval(Window::ToHost(reinterpret_cast<uint64_t>(Address)), static_cast<uint64_t>(Size), true);
+     }
+     ThreadCreationMutex.unlock();
+   }
+@@ -1015,14 +1184,14 @@ void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL Afte
+ 
+ NTSTATUS BTCpuNotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
+   std::scoped_lock Lock(ThreadCreationMutex);
+-  HandleImageMap(reinterpret_cast<uint64_t>(Address));
++  HandleImageMap(Window::ToHost(reinterpret_cast<uint64_t>(Address)));
+   return STATUS_SUCCESS;
+ }
+ 
+ void BTCpuNotifyUnmapViewOfSection(void* Address, BOOL After, ULONG Status) {
+   if (!After) {
+     ThreadCreationMutex.lock();
+-    auto [Start, Size] = InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
++    auto [Start, Size] = InvalidationTracker->InvalidateContainingSection(Window::ToHost(reinterpret_cast<uint64_t>(Address)), true);
+     if (Size) {
+       HandleImageUnmap(Start, Size);
+     }
+@@ -1040,7 +1209,7 @@ void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After,
+   // See arm64ec `BTCpu64NotifyReadFile` for why this like this.
+   if (After && Status == STATUS_SUCCESS) {
+     std::scoped_lock Lock(ThreadCreationMutex);
+-    InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
++    InvalidationTracker->InvalidateAlignedInterval(Window::ToHost(reinterpret_cast<uint64_t>(Address)), static_cast<uint64_t>(Size), false);
+   }
+ }
+ 
+-- 
+2.55.0
+

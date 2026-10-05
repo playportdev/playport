@@ -1,6 +1,8 @@
 # 0021: FEX's memory ordering is a per-game launch setting over Proton's profiles; LRCPC2 comes from the host
 
-**Status:** accepted, 2026-09-28. Settles item 4 of the
+**Status:** accepted, 2026-09-28; its `X87ReducedPrecision` part is
+superseded by [0048](0048-x87-reduced-precision-global.md) (Proton's global
+value is now taken). Settles item 4 of the
 [runtime-risks plan](../plans/2026-09-27-runtime-risks.md) (FEX's memory
 ordering has a known gap). The measurements are in the
 [evidence record](../evidence/2026-09-28-fex-memory-ordering.md).

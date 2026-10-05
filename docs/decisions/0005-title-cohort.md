@@ -1,6 +1,7 @@
 # 0005: Title cohort
 
-**Status:** accepted, 2026-09-24
+**Status:** accepted, 2026-09-24; extended by [0047](0047-i386-titles-on-vulkan.md)
+(i386 Direct3D 9 titles, on Vulkan)
 
 ## Decision
 

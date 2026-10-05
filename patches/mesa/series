@@ -13,3 +13,6 @@
 0011-wsi-metal-on-iOS-a-swap-chain-the-layer-scales-is-no.patch
 0012-wsi-metal-an-opaque-swap-chain-s-layer-is-opaque-on-.patch
 0013-kk-split-a-large-timestamp-query-pool-over-several-c.patch
+0014-kk-key-cached-shaders-on-all-the-pipeline-state-they.patch
+0015-kk-a-device-pipeline-cache-and-the-Mesa-disk-cache.patch
+0016-kk-MESA_KK_DEBUG-compile-counts-shader-sources-and-s.patch

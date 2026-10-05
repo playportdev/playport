@@ -2,3 +2,4 @@
 # `git am -3` inside the FEX tree's External/rpmalloc, after patches/rpmalloc-port.
 0001-Count-what-rpmalloc-maps-in-the-FEX-host-band.patch
 0002-Name-no-rpmalloc-mapping-on-iOS-the-name-hook-alloca.patch
+0003-Map-through-ntdll-where-kernelbase-is-not-loaded-on-.patch

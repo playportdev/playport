@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sat, 3 Oct 2026 22:40:49 +0200
+Subject: [PATCH] ntdll: alias the apiset map and KUSER_SHARED_DATA into a
+ WoW64 window
+
+The session loads the apiset schema once and a child's PEB is a copy of
+the session's, so PEB32's ApiSetMap stayed 0 and the i386 loader could
+not resolve api-ms-win-crt-* imports: it probed every search directory
+for them as files and failed the import. Alias the map's view read-only
+into the window the way the GDI shared table is aliased (one helper for
+all of them now, from the host page holding the pointer, which need not
+be page aligned) and give PEB32 the guest address.
+
+KUSER_SHARED_DATA was absent from the window, so guest reads of its
+architectural address 0x7ffe0000 faulted, and a top-down alias could
+land there. Alias the session's page read-only at that guest address
+first.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wow64-pointers.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c | 56 +++++++++++++++++++---------------
+ 1 file changed, 31 insertions(+), 25 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 9706772..25f0a70 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15532,39 +15532,40 @@ void *ios_wow64_dc_attr_arena( SIZE_T *size )
+     return arena ? (char *)arena + IOS_WOW64_DC_ATTR_HEADER : NULL;
+ }
+ 
+-/* GDI's shared handle table is the session's: win32u allocates it once per
+- * Mach process, and a child's PEB is a copy of the session's. i386 gdi32
+- * reads it, so alias it read-only into the window and give PEB32 its guest
+- * address. Both locks are held. Without a table the guest's GDI stays off. */
+-static void ios_wow64_alias_gdi_shared( uintptr_t window, PEB32 *peb32, const PEB *peb )
+-{
+-    struct file_view *table_view, *view;
++/* Session data an i386 child reads: GDI's shared handle table (win32u
++ * allocates it once per Mach process) and the apiset map (the session loads
++ * it once), through its PEB, a copy of the session's; and KUSER_SHARED_DATA,
++ * at its architectural address. Alias the view holding host, from its host
++ * page on, read-only into the window, at fixed_guest or else top-down below
++ * 2 GiB, and return host's guest address, or 0. Both locks are held. */
++static uint32_t ios_wow64_alias_session_view( uintptr_t window, const void *host,
++                                              uint32_t fixed_guest, const char *what )
++{
++    struct file_view *source, *view;
++    uintptr_t start = (uintptr_t)host & ~host_page_mask;
+     vm_prot_t cur, max;
+     vm_address_t target;
+     kern_return_t kr;
+     uint32_t guest;
+     size_t size;
+ 
+-    if (!peb->GdiSharedHandleTable || !(table_view = find_view( peb->GdiSharedHandleTable, 0 )))
++    if (!host || !(source = find_view( host, 0 )) || start < (uintptr_t)source->base)
+     {
+-        dprintf( 2, "[wow64-window] no GDI shared table to alias (session table %p)\n",
+-                 peb->GdiSharedHandleTable );
+-        return;
++        dprintf( 2, "[wow64-window] no %s to alias (session %p)\n", what, host );
++        return 0;
+     }
+-    size = ((char *)table_view->base + table_view->size) - (char *)peb->GdiSharedHandleTable;
++    size = (uintptr_t)source->base + source->size - start;
+     size = (size + host_page_mask) & ~host_page_mask;
+-    if (((uintptr_t)peb->GdiSharedHandleTable & host_page_mask) ||
+-        ios_wow64_image_gap( window, size, IOS_WOW64_NULL_GUARD, UINT64_C(0x80000000), TRUE, &guest ) ||
++    if ((fixed_guest ? (guest = fixed_guest, STATUS_SUCCESS) :
++         ios_wow64_image_gap( window, size, IOS_WOW64_NULL_GUARD, UINT64_C(0x80000000), TRUE, &guest )) ||
+         ios_wow64_claim_view( window, guest, size, VPROT_READ | VPROT_COMMITTED, &view ))
+     {
+-        dprintf( 2, "[wow64-window] GDI shared table %p+%#lx: no window room\n",
+-                 peb->GdiSharedHandleTable, (unsigned long)size );
+-        return;
++        dprintf( 2, "[wow64-window] %s %p+%#lx: no window room\n", what, host, (unsigned long)size );
++        return 0;
+     }
+     target = (vm_address_t)view->base;
+     kr = vm_remap( mach_task_self(), &target, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+-                   mach_task_self(), (vm_address_t)peb->GdiSharedHandleTable, FALSE,
+-                   &cur, &max, VM_INHERIT_NONE );
++                   mach_task_self(), (vm_address_t)start, FALSE, &cur, &max, VM_INHERIT_NONE );
+     if (kr == KERN_SUCCESS) kr = vm_protect( mach_task_self(), target, size, FALSE, VM_PROT_READ );
+     if (kr != KERN_SUCCESS)
+     {
+@@ -15573,12 +15574,13 @@ static void ios_wow64_alias_gdi_shared( uintptr_t window, PEB32 *peb32, const PE
+         view->protect = VPROT_WOW64_HOLE;
+         set_page_vprot( view->base, size, 0 );
+         ios_wow64_vm_coalesce( window, view );
+-        dprintf( 2, "[wow64-window] GDI shared table alias failed kr=%d\n", kr );
+-        return;
++        dprintf( 2, "[wow64-window] %s alias failed kr=%d\n", what, kr );
++        return 0;
+     }
+-    peb32->GdiSharedHandleTable = guest;
+-    dprintf( 2, "[wow64-window] GDI shared table %p aliased read-only at guest %#x (%#lx bytes)\n",
+-             peb->GdiSharedHandleTable, guest, (unsigned long)size );
++    guest += (uintptr_t)host - start;
++    dprintf( 2, "[wow64-window] %s %p aliased read-only at guest %#x (%#lx bytes)\n",
++             what, host, guest, (unsigned long)size );
++    return guest;
+ }
+ 
+ static NTSTATUS ios_wow64_reserve_window( void *owner )
+@@ -15631,6 +15633,7 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+             ios_wow64_delete_views( base );
+             goto unlock_virtual;
+         }
++        ios_wow64_alias_session_view( base, user_shared_data, 0x7ffe0000, "KUSER_SHARED_DATA" );
+         if ((ios_wow64_windows[slot].peb32->GdiDCAttributeList =
+              ios_wow64_alias_dc_attr( base, ios_wow64_dc_attr_create() )))
+             dprintf( 2, "[wow64-window] DC_ATTR arena %p aliased at guest %#x (%#x bytes)\n",
+@@ -15638,7 +15641,10 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+         else
+             dprintf( 2, "[wow64-window] DC_ATTR arena %p not aliased: the guest gets no DC attributes\n",
+                      ios_wow64_dc_attr_host );
+-        ios_wow64_alias_gdi_shared( base, ios_wow64_windows[slot].peb32, owner );
++        ios_wow64_windows[slot].peb32->GdiSharedHandleTable =
++            ios_wow64_alias_session_view( base, ((PEB *)owner)->GdiSharedHandleTable, 0, "GDI shared table" );
++        ios_wow64_windows[slot].peb32->ApiSetMap =
++            ios_wow64_alias_session_view( base, ((PEB *)owner)->ApiSetMap, 0, "apiset map" );
+         dprintf( 2, "[wow64-window] bootstrap peb32_host=%p peb32_guest=0x7ff00000 "
+                  "bytes=%#lx paired=1 scalar_only=1\n", peb_view->base, (unsigned long)(host_page_mask + 1) );
+         /* Exercise the production conversion rules on the actual reservation,

@@ -6,3 +6,10 @@
 0005-winegstreamer-register-a-static-plugin-set-on-iOS.patch
 0006-ntdll-no-in-process-sync-cache-before-a-process-s-TE.patch
 0007-ntdll-count-the-sync-and-alert-census-only-while-the.patch
+0008-ntdll-query-owner-WoW64-identity-on-iOS.patch
+0009-win32u-take-DC_ATTR-buckets-from-the-shared-WoW64-ar.patch
+0010-ntdll-write-an-i386-child-s-debug-output-from-its-wi.patch
+0011-winevulkan-win32u-convert-an-i386-child-s-Vulkan-poi.patch
+0012-ntdll-convert-an-i386-child-s-socket-buffers-through.patch
+0013-ws2_32-convert-an-i386-child-s-resolver-pointers-thr.patch
+0014-win32u-answer-NtUserSetCursor-for-the-cursor-the-thr.patch

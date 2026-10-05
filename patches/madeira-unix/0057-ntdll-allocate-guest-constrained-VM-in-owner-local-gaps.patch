@@ -1,0 +1,328 @@
+From 62c86ba44f18d67a9b124aecdb432495c99d3d82 Mon Sep 17 00:00:00 2001
+From: Playport contributors <playport@users.noreply.github.com>
+Date: Sat, 3 Oct 2026 14:52:13 +0200
+Subject: [PATCH] ntdll: allocate guest-constrained VM in owner-local gaps
+
+Share window gap search with images, apply zero-bits and image limits to guest offsets, and support NULL commit/reserve and top-down placement without capturing unconstrained native allocations. Bootstrap parameters use this path. Keep raw guest conversion and the native loader closed.
+
+Class: feature
+Evidence: docs/evidence/2026-10-03-portal2-wine-window.md
+Offered-upstream: no (iOS pseudo-process window port)
+---
+ build/ntdll-unix/env_ios.c         |  6 +--
+ build/ntdll-unix/virtual_ios.c     | 32 +++++++++-------
+ build/ntdll-unix/wow64_gap.h       | 50 ++++++++++++++++++++++++
+ build/ntdll-unix/wow64_params.h    |  1 -
+ build/ntdll-unix/wow64_placement.h | 40 +-------------------
+ build/ntdll-unix/wow64_vm.h        | 61 ++++++++++++++++++++++++++++++
+ 6 files changed, 133 insertions(+), 57 deletions(-)
+ create mode 100644 build/ntdll-unix/wow64_gap.h
+
+diff --git a/build/ntdll-unix/env_ios.c b/build/ntdll-unix/env_ios.c
+index 94ba2eb..7baf98d 100644
+--- a/build/ntdll-unix/env_ios.c
++++ b/build/ntdll-unix/env_ios.c
+@@ -1990,9 +1990,9 @@ static NTSTATUS ios_wow64_init_parameters( PEB *owner, uintptr_t window,
+         return STATUS_INVALID_PARAMETER;
+     if ((status = ios_wow64_params_size( params, &size ))) return status;
+     size = (size + 0x3fff) & ~(size_t)0x3fff;
+-    /* Use native VM with checked host storage, never a raw guest pointer. */
+-    host = (void *)ios_wow64_host_addr( window, IOS_WOW64_PARAMS_GUEST );
+-    if ((status = NtAllocateVirtualMemory( NtCurrentProcess(), &host, 0, &size,
++    /* A NULL guest-constrained request searches only this owner's gaps.
++     * Unconstrained native allocations must stay outside the window. */
++    if ((status = NtAllocateVirtualMemory( NtCurrentProcess(), &host, UINT32_MAX, &size,
+                                           MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))) return status;
+     if ((status = ios_wow64_pack_params( window, params, host, size, &guest )))
+     {
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 394a563..4896532 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -15200,21 +15200,26 @@ NTSTATUS ios_wow64_allocate_for_peb( void *owner, uint32_t guest, size_t size,
+  * registry lock until the operation ends (registry -> virtual lock order). */
+ static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **addr,
+                                 SIZE_T *size, ULONG type, ULONG protect,
+-                                ULONG *old_protect, NTSTATUS *status )
++                                ULONG_PTR zero_bits, ULONG *old_protect, NTSTATUS *status )
+ {
+     unsigned int i;
+     BOOL routed = FALSE;
+     void *owner = ios_jit_current_peb();
+     sigset_t sigset;
+     uintptr_t value;
+-    if (!addr || !*addr || !size) return FALSE;
++    if (!addr || !size) return FALSE;
+     value = (uintptr_t)*addr;
++    /* Native WoW64 loader/FEX NULL requests without a guest constraint must
++     * remain native. wow64's get_zero_bits supplies a <=32-bit mask. Do not
++     * guess from is_wow64 alone. Remote guest allocations are not wired. */
++    if (!value && (operation != 0 || !zero_bits || zero_bits > UINT32_MAX)) return FALSE;
+     pthread_mutex_lock( &ios_wow64_windows_lock );
+     for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
+     {
+         uintptr_t base = ios_wow64_windows[i].base;
+-        if (!ios_wow64_windows[i].owner || value < base || value - base >= IOS_WOW64_WINDOW_SIZE)
+-            continue;
++        if (!ios_wow64_windows[i].owner) continue;
++        if (value ? (value < base || value - base >= IOS_WOW64_WINDOW_SIZE) :
++                    (owner != ios_wow64_windows[i].owner)) continue;
+         routed = TRUE;
+         if (process != NtCurrentProcess() || owner != ios_wow64_windows[i].owner)
+             *status = STATUS_ACCESS_DENIED;
+@@ -15225,13 +15230,12 @@ static BOOL ios_wow64_route_vm( unsigned int operation, HANDLE process, void **a
+             {
+                 uint64_t limit = (ios_cur_image_info()->ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
+                                  IOS_WOW64_WINDOW_SIZE : UINT64_C(0x80000000);
+-                if ((type & MEM_RESERVE) && (value - base >= limit || *size > limit - (value - base)))
+-                    *status = STATUS_INVALID_PARAMETER;
+-                else *status = ios_wow64_vm_allocate( base, addr, size, type, protect );
+-                if (!*status && (type & MEM_RESERVE))
+-                    dprintf(2, "[wow64-vm] owner=%p host=%p guest=%#lx bytes=%#lx reserve=1 commit=%u native_exec=0\n",
++                *status = ios_wow64_vm_allocate_limited( base, addr, size, type, protect, zero_bits, limit );
++                if (!*status && ((type & MEM_RESERVE) || !value))
++                    dprintf(2, "[wow64-vm] owner=%p host=%p guest=%#lx bytes=%#lx reserve=1 commit=%u "
++                               "null=%u top_down=%u zero_bits=%#lx native_exec=0\n",
+                             owner, *addr, (unsigned long)((uintptr_t)*addr - base), (unsigned long)*size,
+-                            !!(type & MEM_COMMIT));
++                            !!(type & MEM_COMMIT), !value, !!(type & MEM_TOP_DOWN), (unsigned long)zero_bits);
+             }
+             else if (operation == 1) *status = ios_wow64_vm_free( base, addr, size, type );
+             else if (operation == 2) *status = ios_wow64_vm_protect( base, addr, size, protect, old_protect );
+@@ -17962,7 +17966,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+ {
+ #ifdef WINE_IOS
+     NTSTATUS wow64_status;
+-    if (ios_wow64_route_vm( zero_bits ? 3 : 0, process, ret, size_ptr, type, protect, NULL, &wow64_status ))
++    if (ios_wow64_route_vm( 0, process, ret, size_ptr, type, protect, zero_bits, NULL, &wow64_status ))
+         return wow64_status;
+     ios_tls38_poll( "valloc" );
+ #endif
+@@ -19536,7 +19540,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+     USHORT machine = 0;
+     unsigned int status;
+ #ifdef WINE_IOS
+-    if (ios_wow64_route_vm( 3, process, ret, size_ptr, type, protect, NULL, &status ))
++    if (ios_wow64_route_vm( 3, process, ret, size_ptr, type, protect, 0, NULL, &status ))
+         return status;
+     /* ml284: does ANYTHING allocate/commit executable memory, and where?
+      *
+@@ -20175,7 +20179,7 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
+ 
+ #ifdef WINE_IOS
+     NTSTATUS wow64_status;
+-    if (ios_wow64_route_vm( 1, process, addr_ptr, size_ptr, type, 0, NULL, &wow64_status ))
++    if (ios_wow64_route_vm( 1, process, addr_ptr, size_ptr, type, 0, 0, NULL, &wow64_status ))
+         return wow64_status;
+     ios_vm_note_free( addr, size, type );
+     /* ml966: a low guest allocation must be freed through its backing, and the
+@@ -20406,7 +20410,7 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+ 
+ #ifdef WINE_IOS
+     NTSTATUS wow64_status;
+-    if (ios_wow64_route_vm( 2, process, addr_ptr, size_ptr, 0, new_prot, old_prot, &wow64_status ))
++    if (ios_wow64_route_vm( 2, process, addr_ptr, size_ptr, 0, new_prot, 0, old_prot, &wow64_status ))
+         return wow64_status;
+     /* ml966: a protection change on a low guest allocation applies to the
+      * backing. The whole span is bounds-checked, so a request that runs off
+diff --git a/build/ntdll-unix/wow64_gap.h b/build/ntdll-unix/wow64_gap.h
+new file mode 100644
+index 0000000..ea59071
+--- /dev/null
++++ b/build/ntdll-unix/wow64_gap.h
+@@ -0,0 +1,50 @@
++/* Owner-local guest gap search shared by image and anonymous VM placement.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Wine types and wow64_window/views.h precede this; virtual_mutex is held.
++ */
++#ifndef IOS_WOW64_GAP_H
++#define IOS_WOW64_GAP_H
++
++static BOOL ios_wow64_image_fits( uint64_t guest, size_t size, uint64_t low, uint64_t end )
++{
++    return guest >= low && guest < end && !(guest & granularity_mask) && size <= end - guest;
++}
++
++/* Walk containing views, not Wine's host free ranges: the reservation is
++ * intentionally unavailable to the native allocator. end is exclusive. */
++static NTSTATUS ios_wow64_image_gap( uintptr_t window, size_t size, uint64_t low,
++                                    uint64_t end, BOOL top_down, uint32_t *guest )
++{
++    uint64_t pos = top_down ? end : low;
++    if (!guest || !ios_wow64_valid_base( window ) || !size ||
++        low < IOS_WOW64_NULL_GUARD || low >= end || end > IOS_WOW64_WINDOW_SIZE)
++        return STATUS_INVALID_PARAMETER;
++    while (top_down ? pos > low : pos < end)
++    {
++        struct file_view *view = find_view( (void *)(window + (top_down ? pos - 1 : pos)), 1 );
++        uint64_t start, stop, candidate;
++        if (!view || (uintptr_t)view->base < window) return STATUS_CONFLICTING_ADDRESSES;
++        start = (uintptr_t)view->base - window;
++        if (start >= IOS_WOW64_WINDOW_SIZE || view->size > IOS_WOW64_WINDOW_SIZE - start)
++            return STATUS_CONFLICTING_ADDRESSES;
++        stop = start + view->size;
++        if (view->protect == VPROT_WOW64_HOLE)
++        {
++            start = max( start, low );
++            stop = min( stop, end );
++            if (size <= stop - start)
++            {
++                candidate = top_down ? (stop - size) & ~(uint64_t)granularity_mask :
++                                       (start + granularity_mask) & ~(uint64_t)granularity_mask;
++                if (ios_wow64_image_fits( candidate, size, start, stop ))
++                {
++                    *guest = candidate;
++                    return STATUS_SUCCESS;
++                }
++            }
++        }
++        pos = top_down ? (uintptr_t)view->base - window : stop;
++    }
++    return STATUS_CONFLICTING_ADDRESSES;
++}
++#endif
+diff --git a/build/ntdll-unix/wow64_params.h b/build/ntdll-unix/wow64_params.h
+index c43ed56..db55d39 100644
+--- a/build/ntdll-unix/wow64_params.h
++++ b/build/ntdll-unix/wow64_params.h
+@@ -5,7 +5,6 @@
+ #ifndef IOS_WOW64_PARAMS_H
+ #define IOS_WOW64_PARAMS_H
+ 
+-#define IOS_WOW64_PARAMS_GUEST 0x7e000000u
+ #define IOS_WOW64_PARAMS_MAX   0x01000000u
+ #define IOS_WOW64_PARAM_STRINGS(X) \
+     X(CurrentDirectory.DosPath) X(DllPath) X(ImagePathName) X(CommandLine) \
+diff --git a/build/ntdll-unix/wow64_placement.h b/build/ntdll-unix/wow64_placement.h
+index e91edad..1f2bf8f 100644
+--- a/build/ntdll-unix/wow64_placement.h
++++ b/build/ntdll-unix/wow64_placement.h
+@@ -6,45 +6,7 @@
+ #ifndef IOS_WOW64_PLACEMENT_H
+ #define IOS_WOW64_PLACEMENT_H
+ 
+-static BOOL ios_wow64_image_fits( uint64_t guest, size_t size, uint64_t low, uint64_t end )
+-{
+-    return guest >= low && guest < end && !(guest & granularity_mask) && size <= end - guest;
+-}
+-
+-/* Walk the reservation by containing views, not Wine's host free ranges.
+- * Those ranges correctly see the entire window as unavailable. */
+-static NTSTATUS ios_wow64_image_gap( uintptr_t window, size_t size, uint64_t low,
+-                                    uint64_t end, BOOL top_down, uint32_t *guest )
+-{
+-    uint64_t pos = top_down ? end : low;
+-    while (top_down ? pos > low : pos < end)
+-    {
+-        struct file_view *view = find_view( (void *)(window + (top_down ? pos - 1 : pos)), 1 );
+-        uint64_t start, stop, candidate;
+-        if (!view || (uintptr_t)view->base < window) return STATUS_CONFLICTING_ADDRESSES;
+-        start = (uintptr_t)view->base - window;
+-        if (start >= IOS_WOW64_WINDOW_SIZE || view->size > IOS_WOW64_WINDOW_SIZE - start)
+-            return STATUS_CONFLICTING_ADDRESSES;
+-        stop = start + view->size;
+-        if (view->protect == VPROT_WOW64_HOLE)
+-        {
+-            start = max( start, low );
+-            stop = min( stop, end );
+-            if (size <= stop - start)
+-            {
+-                candidate = top_down ? (stop - size) & ~(uint64_t)granularity_mask :
+-                                       (start + granularity_mask) & ~(uint64_t)granularity_mask;
+-                if (ios_wow64_image_fits( candidate, size, start, stop ))
+-                {
+-                    *guest = candidate;
+-                    return STATUS_SUCCESS;
+-                }
+-            }
+-        }
+-        pos = top_down ? (uintptr_t)view->base - window : stop;
+-    }
+-    return STATUS_CONFLICTING_ADDRESSES;
+-}
++#include "wow64_gap.h"
+ 
+ static NTSTATUS ios_wow64_place_image( uintptr_t window, struct pe_image_info *image, size_t size,
+                                       uint64_t low, uint64_t high, struct file_view **result )
+diff --git a/build/ntdll-unix/wow64_vm.h b/build/ntdll-unix/wow64_vm.h
+index 44865d7..9fe0573 100644
+--- a/build/ntdll-unix/wow64_vm.h
++++ b/build/ntdll-unix/wow64_vm.h
+@@ -5,6 +5,7 @@
+  */
+ #ifndef IOS_WOW64_VM_H
+ #define IOS_WOW64_VM_H
++#include "wow64_gap.h"
+ 
+ /* x86 execute-only pages must remain readable by the decoder, not executable
+  * by ARM64. Keep Wine's logical byte unchanged. */
+@@ -101,6 +102,66 @@ static NTSTATUS ios_wow64_vm_allocate( uintptr_t window, void **addr, size_t *si
+     return STATUS_SUCCESS;
+ }
+ 
++/* Wine interprets counts 1..21 as high zero bits in a 32-bit address, and
++ * masks >=32 by their highest set bit (not as sparse allowed-bit masks).
++ * Apply these limits to guest offsets, never to the high host base. */
++static NTSTATUS ios_wow64_vm_limit( uintptr_t zero_bits, uint64_t *end )
++{
++    uint64_t limit;
++    uintptr_t bits;
++    if ((zero_bits > 21 && zero_bits < 32) ||
++        (zero_bits > 32 && zero_bits < granularity_mask)) return STATUS_INVALID_PARAMETER_3;
++    if (!zero_bits) return STATUS_SUCCESS;
++    if (zero_bits < 32) limit = (UINT64_C(1) << (32 - zero_bits)) - 1;
++    else
++    {
++        limit = 1;
++        for (bits = zero_bits; bits >>= 1;) limit = (limit << 1) | 1;
++    }
++    *end = min( *end, limit == UINT64_MAX ? limit : limit + 1 );
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS ios_wow64_vm_allocate_limited( uintptr_t window, void **addr, size_t *size,
++                                              ULONG type, ULONG protect, uintptr_t zero_bits,
++                                              uint64_t end )
++{
++    void *base, *candidate;
++    size_t length;
++    uint32_t guest;
++    NTSTATUS status;
++    if (!addr || !size || !*size || !ios_wow64_valid_base( window ) ||
++        end > IOS_WOW64_WINDOW_SIZE) return STATUS_INVALID_PARAMETER;
++    if ((status = ios_wow64_vm_limit( zero_bits, &end ))) return status;
++    if (!(type & (MEM_RESERVE | MEM_COMMIT)) ||
++        (type & ~(MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN))) return STATUS_NOT_SUPPORTED;
++    if (!*addr)
++    {
++        if (*size > SIZE_MAX - host_page_mask) return STATUS_INVALID_PARAMETER;
++        length = (*size + host_page_mask) & ~host_page_mask;
++        if (end <= IOS_WOW64_NULL_GUARD || length > end - IOS_WOW64_NULL_GUARD)
++            return STATUS_CONFLICTING_ADDRESSES;
++        status = ios_wow64_image_gap( window, length, IOS_WOW64_NULL_GUARD, end,
++                                      !!(type & MEM_TOP_DOWN), &guest );
++        if (status) return status;
++        candidate = (void *)(window + guest);
++        type |= MEM_RESERVE; /* NULL commit implicitly reserves, as Wine does. */
++    }
++    else
++    {
++        if (!ios_wow64_vm_range( window, *addr, *size, &base, &length ))
++            return STATUS_INVALID_PARAMETER;
++        if ((uintptr_t)base - window >= end || length > end - ((uintptr_t)base - window))
++            return STATUS_INVALID_PARAMETER;
++        candidate = *addr;
++        length = *size;
++    }
++    /* Keep caller outputs unchanged through failed selection/claim/protection. */
++    status = ios_wow64_vm_allocate( window, &candidate, &length, type & ~MEM_TOP_DOWN, protect );
++    if (!status) { *addr = candidate; *size = length; }
++    return status;
++}
++
+ static NTSTATUS ios_wow64_vm_protect( uintptr_t window, void **addr, size_t *size,
+                                      ULONG protect, ULONG *old_protect )
+ {
+-- 
+2.55.0
+

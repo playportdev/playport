@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Sun, 4 Oct 2026 08:40:00 +0200
+Subject: [PATCH 12/12] ntdll: convert an i386 child's socket buffers through
+ its window on iOS
+
+At Portal 2's main menu the emulated Steam API polls its sockets, and
+the AFD ioctls took the i386 ws2_32's buffer, address and control
+pointers (32-bit, or 64-bit fields holding them) as host pointers. The
+buffer checks then wrote through the low-fault handler about 2,000
+times a second, and the kernel's copy to the low address failed. In a
+WoW64 call, take them through the window; other callers keep their
+pointers.
+
+Class: feature
+Evidence: docs/evidence/2026-10-04-portal2-d3d9-vulkan.md
+Offered-upstream: no; the window exists only on the iOS port
+---
+ dlls/ntdll/unix/socket.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
+index b919456..0615431 100644
+--- a/dlls/ntdll/unix/socket.c
++++ b/dlls/ntdll/unix/socket.c
+@@ -95,6 +95,26 @@ WINE_DEFAULT_DEBUG_CHANNEL(winsock);
+ 
+ #define u64_to_user_ptr(u) ((void *)(uintptr_t)(u))
+ 
++#ifdef WINE_IOS
++/* Playport (iOS): an i386 child's address space is a 4 GiB window at host
++ * B, so the buffers, addresses and control blocks its ws2_32 hands to the
++ * AFD ioctls (32-bit pointers, or 64-bit fields holding them) are B + guest.
++ * Callers that are not WoW64 keep their pointers. */
++extern uintptr_t ios_wow64_current_base(void);
++static void *socket_wow64_ptr( ULONGLONG value )
++{
++    uintptr_t base;
++
++    if (!value || value >> 32 || !in_wow64_call() || !(base = ios_wow64_current_base()))
++        return (void *)(uintptr_t)value;
++    return (char *)base + value;
++}
++#undef u64_to_user_ptr
++#define u64_to_user_ptr(u) socket_wow64_ptr(u)
++#undef ULongToPtr
++#define ULongToPtr(ul) socket_wow64_ptr(ul)
++#endif
++
+ union unix_sockaddr
+ {
+     struct sockaddr addr;
