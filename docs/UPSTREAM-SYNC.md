@@ -67,8 +67,12 @@ reverse applies to the new commit, or its 3-way merge comes out empty. Any
 merge that fails is a `conflict`, also one that found no preimage blob for
 the patch's `index` lines and so left no conflict markers. The replay runs in
 the clone where the series first applied to its own pin, so every patch's
-preimage is there. The run merges only when every patch is `clean` or
-`already-upstream`, every gate passes (the build's `verify`, `pp names`,
+preimage is there. (Before 2026-10-05 the replay ran in a fresh clone without
+those blobs and called such a failed merge `already-upstream`: the dry run of
+Madeira `bbbf8d0` listed 52 madeira-unix patches so, none of them in
+Madeira. With the fix and re-exported series it lists 24 `clean`, 6
+`merged-3way`, 50 `conflict` and none `already-upstream`.) The run merges
+only when every patch is `clean` or `already-upstream`, every gate passes (the build's `verify`, `pp names`,
 `swift test`, then on the phone `pp install` and a Hollow Knight play to 10 s
 after its first frame), and no `.gitmodules` or licence file changed.
 Anything else holds for a person. A build that fails with none of those
