@@ -7,8 +7,9 @@ the phone was away (14:14–15:43), then played in order on the phone (gate,
 both titles, per IPA) and measured with `pp perf` on the baseline and the
 final IPA. **Result:** every move passes the gate; the final build does no
 more CPU work a frame than the baseline in either title and draws less CPU
-power. One borderline count is unconfirmed (Portal 2's short hitches in its
-load segment, below).
+power. Portal 2's count of short hitches in its load segment, higher on the
+final IPA in the first pair, is run-to-run spread: repeats and a bisection
+over the step IPAs (below) put the baseline alone at 52–268.
 
 ## IPAs, in order
 
@@ -78,17 +79,49 @@ a frame).
 - No regression beyond noise in frame rate, work a frame or power. Portal 2's
   main thread does 6 % less work a frame and all threads 7 % less, at 20 %
   less CPU power, with more of it on the E cores.
-- **Under watch, unconfirmed:** Portal 2's hitches of 25 ms or more rose from
-  192 to 302, most of it in the load segment before t = 60 s (52 → 134). Those
-  are one-frame slips of 25–50 ms. The counts of 50 ms or more (20 → 20) and
-  100 ms or more (7 → 8) did not move. A repeat of the Portal 2 route on the
-  final IPA was stopped in its cooldown (the phone was taken), so whether this
-  is run-to-run spread is **unconfirmed: repeat run pending (phone taken)**.
-  If a repeat reproduces it (about 110 or more in the load segment), the next
-  steps are a second baseline run for spread, then a bisection of the
-  intermediate IPAs above on the load segment.
-- Not split per move: only the baseline and the final IPA were measured, as
-  directed; the per-move IPAs are kept for a bisection.
+- **Closed as run-to-run spread:** Portal 2's hitches of 25 ms or more rose
+  from 192 to 302 in this pair, most of it in the load segment before
+  t = 60 s (52 → 134). The repeats below show the baseline IPA alone spans
+  52–268 there, so this is not a regression of any move.
+- Not split per move in frame rate, work or power: only the baseline and the
+  final IPA were measured for those.
+
+### Portal 2's load-segment hitches: repeats and bisection
+
+The same Portal 2 route and options (`--cool 15 --cool-max 20`; every run
+started and stayed at thermal `nominal`, on battery 63 → 28 %), each run its
+own locked session of `pp install --no-build --ipa IPA` then `pp perf`. Counts
+of hitches of 25 / 50 / 100 ms or more from `hitches.txt`, split at
+t = 60 s; the last column is the ≥ 25 ms count per 10 s from t = 0 to 140.
+
+| Run (`.work/perf-runs/…`) | IPA | all | load (t < 60) | play (t ≥ 60) | ≥ 25 ms per 10 s |
+|---|---|---|---|---|---|
+| `dl-base-p2` | baseline `a834313d` | 192 / 20 / 7 | 52 / 19 / 7 | 140 / 1 / 0 | 3 2 1 2 18 23 0 1 24 26 22 20 15 12 |
+| `dl-base-p2c` | baseline `a834313d` | 252 / 16 / 6 | 98 / 15 / 6 | 154 / 1 / 0 | 1 5 9 2 55 23 0 31 10 19 19 18 23 24 |
+| `dl-base-p2d` | baseline `a834313d` | 415 / 16 / 8 | 268 / 16 / 8 | 147 / 0 / 0 | 33 6 79 11 73 61 1 26 18 18 20 28 15 20 |
+| `bis-wine-p2` | wine-11.19 `53dbed03` | 232 / 18 / 7 | 64 / 17 / 7 | 168 / 1 / 0 | 0 13 2 3 33 7 23 26 24 22 9 18 26 15 |
+| `bis-wine-p2b` | wine-11.19 `53dbed03` | 298 / 17 / 6 | 174 / 14 / 6 | 124 / 3 / 0 | 79 19 29 3 25 13 0 3 25 24 11 25 17 13 |
+| `bis-fex-p2` | FEX main `46978e44` | 322 / 16 / 7 | 171 / 16 / 7 | 151 / 0 / 0 | 35 35 68 3 11 15 0 27 17 18 17 32 11 24 |
+| `bis-fex-p2b` | FEX main `46978e44` | 227 / 17 / 6 | 95 / 17 / 6 | 132 / 0 / 0 | 1 12 1 55 11 8 0 23 12 18 18 27 10 24 |
+| `bis-mesa-p2` | Mesa main `2cd9106f` | 264 / 17 / 6 | 99 / 17 / 6 | 165 / 0 / 0 | 59 2 1 4 15 8 14 29 32 18 9 12 21 22 |
+| `dl-final-p2` | final `eb5ae2ad` | 302 / 20 / 8 | 134 / 19 / 8 | 168 / 1 / 0 | 63 13 1 18 25 10 32 37 23 15 19 13 15 11 |
+| `dl-final-p2c` | final `eb5ae2ad` | 267 / 17 / 7 | 151 / 17 / 7 | 116 / 0 / 0 | 56 5 54 2 17 6 0 1 19 21 9 24 20 16 |
+
+- The final IPA's repeat (151) reproduced the count, so a second baseline run
+  followed (98), and then a halving over the step IPAs: Mesa (99), FEX (171),
+  wine-11.19 (64), and a second run on each side of the apparent wine → FEX
+  boundary: FEX 95, wine-11.19 174. The boundary did not hold, and a third
+  baseline run gave 268, the highest of all.
+- The count is driven by bursts: 30–80 hitches of 25 ms or more inside one
+  10 s window, most of them frames of exactly 25.0 ms (one and a half refresh
+  intervals), in a window that differs from run to run. Each IPA run twice or
+  more shows both a run with such a burst and one without. The ≥ 50 ms
+  (14–20) and ≥ 100 ms (6–8) counts, and the mean frame rate (58.5–58.8), are
+  the same on every run.
+- **Verdict:** run-to-run spread, not a regression; no move is responsible.
+  Nothing is reverted. The ≥ 25 ms count of a single Portal 2 run is not a
+  usable regression signal for this route; compare the ≥ 50 and ≥ 100 ms
+  counts, or several runs a side.
 
 ## The moves
 
