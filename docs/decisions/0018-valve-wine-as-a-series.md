@@ -4,7 +4,10 @@
 base, WineHQ's latest development release, and adds a series on it. It
 settles the choice the [Wine-on-Proton plan](../plans/2026-09-27-wine-on-proton.md)
 left open at its step-0 checkpoint. The measurements are in the
-[evidence record](../evidence/2026-09-28-wine-proton-rebase.md).
+[evidence record](../evidence/2026-09-28-wine-proton-rebase.md). Its pin
+source (picks from `proton_11.0`) is superseded by
+[0049](0049-latest-pins.md): `wine-valve` is picked from Valve's
+bleeding-edge branch.
 
 ## Decision
 

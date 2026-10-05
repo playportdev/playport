@@ -3,7 +3,9 @@
 **Status:** accepted, 2026-09-24. Applies [0007](0007-dxmt-on-upstream.md)'s
 approach to FEX, the second of the three components, and supersedes, for FEX
 and its rpmalloc, the consequence of [0001](0001-superproject-on-madeira.md)
-that Madeira's gitlinks decide which commits are built.
+that Madeira's gitlinks decide which commits are built. Its pin source (a
+monthly release, not `main`) is superseded by
+[0049](0049-latest-pins.md): `fex` follows FEX-Emu `main`.
 
 ## Decision
 

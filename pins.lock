@@ -11,12 +11,12 @@
 # so a Madeira update that moves its Wine stops the build until the port
 # series is refreshed.
 #
-# The base stays WineHQ's latest development release; Valve's Wine is not the
+# The base stays WineHQ's newest development tag; Valve's Wine is not the
 # base (decision 0018, which weighed it). wine-valve is the ValveSoftware/wine
-# proton_11.0 commit that patches/wine-valve, the Valve commits Playport takes,
-# was cherry-picked from; the series is applied after patches/wine-port in
-# both Wine trees. It moves by hand, when Valve moves proton_11.0 (each Proton
-# 11 point release) or opens the next branch, never through pp sync; each
+# commit that patches/wine-valve, the Valve commits Playport takes, was
+# cherry-picked from (still a proton_11.0 commit); the series is applied after
+# patches/wine-port in both Wine trees. It moves by hand, by a pick from
+# Valve's bleeding-edge branch (decision 0049), never through pp sync; each
 # pp sync lists Valve's commits past it in $PLAYPORT_BUILD/sync/wine-valve-new.tsv.
 #
 # DXMT is taken from its own upstream, not from Madeira: dxmt is a 3Shain/dxmt

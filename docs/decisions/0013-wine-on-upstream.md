@@ -4,7 +4,9 @@
 and [0008](0008-fex-on-upstream.md)'s approach to Wine, the third and last of
 the three components, and so ends, for every component, the consequence of
 [0001](0001-superproject-on-madeira.md) that Madeira's gitlinks decide which
-commits are built. Madeira's own code (`madeira`) is still its pin.
+commits are built. Madeira's own code (`madeira`) is still its pin. Its
+pin source is restated by [0049](0049-latest-pins.md): the newest WineHQ
+development tag, `master` only with a recorded reason, moved at every tag.
 
 ## Decision
 
