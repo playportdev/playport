@@ -1,8 +1,16 @@
 # Reddit post draft: Playport 0.3.0, 32-bit games
 
 Suggested subreddits: r/sideloaded, r/iosgaming, r/EmulationOniOS, and
-r/linux_gaming for the technical angle. Attach the Portal 2 recording; add the
-release link once v0.3.0 is published.
+r/linux_gaming for the technical angle. Post as a video post with the body as
+the first comment, or as a text post with the video inline. The release link
+works once v0.3.0 is published.
+
+Video: the owner's screen recording of the release app, 2026-10-05, 92 s,
+landscape 2736x1260 at 60 FPS with sound, 93 MB (well within Reddit's limits).
+It is kept outside the repository: the game's art is not ours to publish here.
+It shows Playport's Home, Play with "Waiting for JIT", Valve's intro, LOAD GAME,
+the load, then a test chamber with both portals placed, with
+Apple's Metal performance HUD reading about 60 FPS.
 
 ---
 
@@ -10,7 +18,8 @@ release link once v0.3.0 is published.
 
 **Body:**
 
-[video: Portal 2 played on an iPhone with a controller]
+[video: Portal 2 played on an iPhone with a DualShock 4, from Playport's Home
+to a test chamber; the HUD in the corner is Apple's Metal performance HUD]
 
 This is the actual Windows build of Portal 2 from Steam, running **locally on a
 non-jailbroken iPhone** in Playport. No streaming, no PC in the loop, no mobile
