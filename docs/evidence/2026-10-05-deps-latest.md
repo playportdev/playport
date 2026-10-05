@@ -378,6 +378,7 @@ these were built).
 | Row | Old pin | New pin, or held | Latest upstream | Build, `pp test` | Gate |
 |---|---|---|---|---|---|
 | `freetype` | `VER-2-13-3` | `VER-2-14-3` (`0a0221a`) | `VER-2-14-3` | passed | pending: phone held |
+| `rust` | 1.98.1 | 1.99.0 (`b940084`, dist 2026-10-01) | 1.99.0 (stable) | passed | pending: phone held |
 
 ### freetype → VER-2-14-3
 
@@ -393,4 +394,19 @@ these were built).
   the app's FTL credit line in `build/app-notices.json`, which now reads as
   2.14.3's `docs/FTL.TXT` asks (its sources say 1996–2026, and the project URL
   is `https://freetype.org`).
+
+### rust → 1.99.0
+
+- **What it is in the app:** the compiler of idevice's C FFI
+  (`libidevice_ffi.a`, the app's self-restart after a game, decision 0029),
+  and the source of the Rust standard library linked into it, so a move
+  changes runtime code. Only `libidevice_ffi.a` changed in
+  `app/artifacts.tsv` (6,698,688 → 6,642,912 B).
+- **The lock:** `build/rust-dist.lock.json` now names the 1.99.0 manifest
+  (its sha256 checked against the published `channel-rust-1.99.0.toml.sha256`)
+  and the three archives from it. The notices stage reads the lock from HEAD,
+  so the pin and the lock were committed first and the build ran on that
+  commit. The standard-library notices passed with the selection unchanged;
+  like 1.98.1, the 1.99.0 `rustc` archive has no separate BSD-3-Clause text.
+  `docs/NOTICES.md` and `docs/LICENSING.md` name 1.99.0.
 

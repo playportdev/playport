@@ -234,7 +234,7 @@ observed game playback does not constrain all shipped capabilities.
   require the Independent JPEG Group credit listed in [NOTICES.md](NOTICES.md).
 - Rust/stdlib/demangler and MoltenVK member candidates also appear. Cerbero's
   Rust 1.96.0 bootstrap and Vulkan SDK version are not verified embedded source
-  identities; Playport's separate Rust 1.98.1 inventory does not cover them.
+  identities; Playport's separate Rust 1.99.0 inventory does not cover them.
 
 `build/notices-gstreamer.py` preserves a checksum-verified notice superset for
 17 recipe-associated source archives, included in `pp notices`, and `pp source`
