@@ -34,6 +34,7 @@ plan (stable `proton_11.0` / experimental / bleeding-edge).
 | `wine` | wine-11.18 `7b3fff7` | wine-11.19 `455e350` | wine-11.19 (2026-10-02; no later tag) | Valve Wine `dc26e61` / `6d211aa` / `750fd01` | passed | pending: phone away | pending: phone away |
 | `fex` + `rpmalloc` | FEX-2609.1 `9fbdc00`; rpmalloc `09142d7` | `main` `3648ee9`; rpmalloc `09142d7` (unchanged: main's `External/rpmalloc`) | `main` `3648ee9` (2026-10-02, the head on 2026-10-05 14:34) | FEX-2607 `1cc4b93` / main `0df84d3` / main `3648ee9` | passed | pending: phone away | pending: phone away |
 | `dxmt` | `7c8dee1` | `main` `68af85e` | `main` `68af85e` (16 commits ahead) | not used by Valve | passed; `pp slots` clean | pending: phone away | pending: phone away |
+| `mesa` | `82d4f86` | `main` `b39d173` | `main` `b39d173` (2026-10-05 09:42 UTC, 369 commits ahead) | not comparable (Valve uses the Linux drivers) | passed; KosmicKrisp host test passed | pending: phone away | pending: phone away |
 
 ## IPAs, in order
 
@@ -45,6 +46,7 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
 | baseline | `e71e8a7` | `.work/out/20261005-140757-b1c15122/Playport-26.5-b1c15122.ipa` | `b1c1512228c25d16a0e08860ad878bde053f04378630d35d6359ec54958803f3` |
 | wine-11.19 | `7d0f5b3` | `.work/out/20261005-143326-b047db1e/Playport-26.5-b047db1e.ipa` | `b047db1e9d16d1405732f6230513f20c47832d7da7a29825e0725ef80a6c89da` |
 | FEX main | `22ac169` | `.work/out/20261005-143851-8f671fd2/Playport-26.5-8f671fd2.ipa` | `8f671fd208fb0521204df33f2ba5aa0aa5b63dbd1209e0fa7051091adea2e872` |
+| DXMT main | `2cd6d80` | `.work/out/20261005-144347-96b9b196/Playport-26.5-96b9b196.ipa` | `96b9b196ce4c5e90a2357e6e2636d2c9fef78ab66f04d35b211cb2af1ebd7b7a` |
 
 ## wine → wine-11.19
 
@@ -161,3 +163,17 @@ Each IPA is a dev build of exactly its commit (a clean tree), kept in its
   150 slots, 149 calls, every call matches its slot.
 - **Build:** the `dxmt` stage; `app/artifacts.tsv` changed. `pp test`: all
   passed.
+
+## mesa → main
+
+- **Distance:** 369 commits, `82d4f86..b39d173` (GitLab's compare; the build
+  fetches Mesa shallow). Three of the 552 changed files are under
+  `src/kosmickrisp` or the Vulkan WSI.
+- **Replay:** `patches/mesa` (16 patches) applies to `b39d173` with plain
+  `git am`: all clean, no 3-way merge, nothing upstream.
+- **Build:** the `vulkan` stage (Mesa's `src host ios check framework`, then
+  DXVK and vkd3d-proton) passed, including the Mach-O import check; no build
+  record changed (the KosmicKrisp framework is not in `app/artifacts.tsv`).
+  The KosmicKrisp host test (`build/stages/mesa.sh … hosttest`, a mock Metal
+  bridge): all 24 pipelines built and drawn, 127 MSL libraries, no
+  untranslated intrinsics. `pp test`: all passed.

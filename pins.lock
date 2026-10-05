@@ -54,7 +54,7 @@ dxmt-port    ca8a2516d819e7e1f366981825ad1f0d26f80fdd  https://github.com/willfa
 fex-port     0f8edf8f6383ae8085e0ffac511c789cdae97514  https://github.com/willfaust/FEX.git          ios-port-2607
 rpmalloc     09142d726429416bfa7b459151515fe3ab7622dd  https://github.com/FEX-Emu/rpmalloc.git       fex
 rpmalloc-port 1f271c0c3202663801a0aec32bdb57e5241d6a0e  https://github.com/willfaust/rpmalloc.git     ios-madeira
-mesa         82d4f86a0a1e9f76b2de4fa77c6c8e6acaf06aa9  https://gitlab.freedesktop.org/mesa/mesa.git main
+mesa         b39d173ca9369c19fda2635be6655d308067e52d  https://gitlab.freedesktop.org/mesa/mesa.git main
 dxvk         52fe923ca1496c8e44789b613fab8611dfcb5c4a  https://github.com/doitsujin/dxvk.git         master
 vkd3d-proton 472989aabdcf3e343e16d13c402feae3815008aa  https://github.com/HansKristian-Work/vkd3d-proton.git master
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
