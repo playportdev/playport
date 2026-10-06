@@ -45,7 +45,7 @@ final class LibraryGrid: ObservableObject {
     func openFilterSort() {
         let show = "Show", order = "Sort"
         PadModal.shared.picker(title: "Filter & sort", context: "Library",
-                               options: LibraryFilter.allCases.map { .init(id: "filter:\($0.rawValue)", label: Self.label($0), section: show) }
+                               options: Self.filters.map { .init(id: "filter:\($0.rawValue)", label: Self.label($0), section: show) }
                                    + [.init(id: "sort:\(LibrarySort.recent.rawValue)", label: "Recent", detail: "Last played first", section: order),
                                       .init(id: "sort:\(LibrarySort.name.rawValue)", label: "Name", detail: "A to Z", section: order),
                                       .init(id: "sort:\(LibrarySort.size.rawValue)", label: "Size", detail: "Largest first", section: order)],
@@ -66,6 +66,12 @@ final class LibraryGrid: ObservableObject {
         filter.label
     }
 
+    /// The chips: Steam's always, GOG's and Epic's once a copy is in the catalogue
+    /// or the store is signed in (decision 0045).
+    static var filters: [LibraryFilter] {
+        LibraryFilter.shown(stores: Set(LibraryModel.shared.catalog.titles.map(\.store)))
+    }
+
     static func label(_ sort: LibrarySort) -> String {
         switch sort {
         case .recent: "Recent"
@@ -76,7 +82,7 @@ final class LibraryGrid: ObservableObject {
 }
 
 struct LibraryView: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var nav = AppNavigation.shared
 
     var body: some View {
@@ -96,7 +102,7 @@ struct LibraryView: View {
 }
 
 private struct LibraryGridView: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var grid = LibraryGrid.shared
@@ -146,12 +152,12 @@ private struct LibraryGridView: View {
 
     // MARK: chips
 
-    private func chips(_ all: [LibraryEntry], downloading: Set<UInt32>) -> some View {
+    private func chips(_ all: [LibraryEntry], downloading: Set<StoreGameKey>) -> some View {
         HStack(spacing: 8) {
             // Store chips can grow without pushing search and sort off screen.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(LibraryFilter.allCases, id: \.self) { chip in
+                    ForEach(LibraryGrid.filters, id: \.self) { chip in
                         let count = all.filter { LibraryList.matches($0, chip, downloading: downloading) }.count
                         // Not in the ring: ⧉ picks one; a tap here.
                         Button { grid.filter = chip } label: {
@@ -306,6 +312,7 @@ private struct LibraryGridView: View {
         case .all: return "No games yet"
         case .installed: return "No games installed"
         case .steam: return needsSignIn ? "Sign in to Steam" : (model.gamesLoading ? "Loading your games…" : "No Steam games")
+        case .gog, .epic: return "No \(grid.filter.label) games"
         }
     }
 
@@ -323,6 +330,8 @@ private struct LibraryGridView: View {
         case .steam:
             if needsSignIn { return model.state == .expired ? AccountCopy.status(.expired) : "Pair Playport with your Steam account to see your games." }
             return model.gamesError ?? "Your Steam account owns no games."
+        case .gog, .epic:
+            return "Games from \(grid.filter.label) appear here."
         }
     }
 }
@@ -345,7 +354,7 @@ private struct Chip: View {
 private struct LibraryTile: View {
     let entry: LibraryEntry
     let game: SteamGame?
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var nav = AppNavigation.shared
     let showSource: Bool
@@ -354,7 +363,7 @@ private struct LibraryTile: View {
     let metaGap: CGFloat
     let metaHeight: CGFloat
 
-    private var job: SteamInstalls.Job? { entry.appID.flatMap { installs.jobs[$0] } }
+    private var job: Downloads.Job? { installs.jobs[entry.key] }
     private var title: InstalledTitle? { entry.installed ? library.title(entry.id) : nil }
 
     var body: some View {
@@ -412,7 +421,7 @@ private struct LibraryTile: View {
         }
     }
 
-    private func jobText(_ job: SteamInstalls.Job) -> String {
+    private func jobText(_ job: Downloads.Job) -> String {
         let update = entry.installed && job.kind != .repair
         switch job.phase {
         case .queued:

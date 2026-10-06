@@ -61,7 +61,7 @@ struct GameDetailView: View {
 
 private struct GameDetailPage: View {
     let ref: GameRef
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var launch = TitleLaunch.shared
@@ -83,6 +83,7 @@ private struct GameDetailPage: View {
         switch ref {
         case let .title(id): library.title(id)
         case let .steam(app): library.catalog.titles.first { $0.appID == app }
+        case let .store(key): library.catalog.titles.first { $0.key == key }
         }
     }
 
@@ -90,6 +91,17 @@ private struct GameDetailPage: View {
         switch ref {
         case let .title(id): installed?.appID ?? Self.appID(fromTitleID: id)
         case let .steam(app): app
+        case let .store(key): key.steamAppID
+        }
+    }
+
+    /// The game's store identity (decision 0057): what its download and art key on.
+    private var key: StoreGameKey? {
+        if let installed { return installed.key }
+        switch ref {
+        case let .title(id): return StoreGameKey(titleID: id)
+        case let .steam(app): return .steam(app)
+        case let .store(key): return key
         }
     }
 
@@ -102,7 +114,7 @@ private struct GameDetailPage: View {
     /// The paired account's copy of the game, if it owns it.
     private var game: SteamGame? { appID.flatMap { app in model.games.first { $0.id == app } } }
 
-    private var job: SteamInstalls.Job? { appID.flatMap { installs.jobs[$0] } }
+    private var job: Downloads.Job? { key.flatMap { installs.jobs[$0] } }
 
     /// The Steam branches this game can be downloaded from, public first.
     private var branches: [Branch] { game?.info.depots.installableBranches ?? [] }
@@ -334,7 +346,7 @@ private struct GameDetailPage: View {
 
     /// A download, update or repair of this game: its progress, Pause or Resume, and Cancel.
     @ViewBuilder
-    private func jobControls(_ job: SteamInstalls.Job) -> some View {
+    private func jobControls(_ job: Downloads.Job) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(job.status).font(.system(size: 15, weight: .semibold)).foregroundStyle(PP.text)
@@ -347,10 +359,10 @@ private struct GameDetailPage: View {
         .frame(width: 230, height: 52)
         .background(PP.surface, in: RoundedRectangle(cornerRadius: 12))
         .padItem("game:job", hint: job.isRunning || job.phase == .queued ? "Pause" : "Resume", cornerRadius: 12) {
-            if job.isRunning || job.phase == .queued { installs.pause(job.appID) } else if canDownload { installs.resume(job.appID) }
+            if job.isRunning || job.phase == .queued { installs.pause(job.key) } else if canDownload { installs.resume(job.key) }
         }
         SecondaryButton(id: "game:cancel", systemImage: "xmark", title: "Cancel", hint: job.kind == .repair ? "Cancel repair" : "Cancel download") {
-            installs.discard(job.appID)
+            installs.discard(job.key)
         }
     }
 
@@ -460,7 +472,7 @@ private struct GameDetailPage: View {
     }
 
     private func facts(_ t: InstalledTitle?, _ g: SteamGame?) -> some View {
-        let source: LibrarySource = appID == nil ? .local : .steam
+        let source: LibrarySource = key?.store ?? (appID == nil ? .local : .steam)
         var rows: [(String, String, Color?)] = [("Store", source.label, nil)]
         if let t {
             if t.badge != .ready { rows.append(("State", t.badge.rawValue, .orange)) }
@@ -725,7 +737,7 @@ private struct GameDetailPage: View {
     @ViewBuilder
     private func uninstallRow(_ t: InstalledTitle) -> some View {
         let removing = library.removing.contains(t.id)
-        let downloading = t.appID.flatMap { installs.jobs[$0] }?.isRunning ?? false
+        let downloading = installs.jobs[t.key]?.isRunning ?? false
         PadRow(id: "opt:uninstall", title: removing ? "Uninstalling…" : "Uninstall", subtitle: removeError(t),
                value: t.sizeBytes.map { "Frees \(ByteCount.format($0))" }, destructive: true, style: .plain, hint: "Uninstall") {
             guard !removing, !launch.running, !library.verifying.contains(t.id), !downloading else { return }

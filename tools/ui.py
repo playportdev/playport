@@ -17,7 +17,7 @@ model calls: each --action in order, then --settings, --verify, --play:
                          that sends nothing to Steam while Steam is signed in) or a title's page;
                          open:ID#SECTION opens its Game options at a section (graphics, game, files,
                          developer, ordering, steam);
-                         open:settings#SECTION shows a Settings section (steam, graphics, downloads,
+                         open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
                          controllers, storage, setup, about, developer; also account, jit, memory,
                          diagnostics, pairing, probes, logs for the section that holds them);
                          open:licences shows Settings › About › Licences, open:licences#PREFIX the
@@ -230,7 +230,7 @@ class EndOnTerm:
 
 
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|(?:uninstall|verify|play):[a-z]+-[a-z0-9 ._-]+"
-                       r"|hud:(?:on|off)|open:[a-z]+(?:-[a-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
+                       r"|hud:(?:on|off)|open:[a-z]+(?:-[a-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
 

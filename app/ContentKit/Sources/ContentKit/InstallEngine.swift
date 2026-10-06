@@ -46,6 +46,18 @@ public struct InstallEngine: Sendable {
         public var filesVerified: Int
         public var filesTotal: Int
         public var seconds: Double
+
+        public init(bytesDone: UInt64, bytesTotal: UInt64, downloadedBytes: UInt64, chunksDownloaded: Int, chunksToDownload: Int,
+                    filesVerified: Int, filesTotal: Int, seconds: Double) {
+            self.bytesDone = bytesDone
+            self.bytesTotal = bytesTotal
+            self.downloadedBytes = downloadedBytes
+            self.chunksDownloaded = chunksDownloaded
+            self.chunksToDownload = chunksToDownload
+            self.filesVerified = filesVerified
+            self.filesTotal = filesTotal
+            self.seconds = seconds
+        }
     }
 
     public struct Result: Sendable {

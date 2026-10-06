@@ -20,10 +20,17 @@ import UIKit
 import UIKit.UIGestureRecognizerSubclass
 
 struct DownloadsPage: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var focus = PadFocus.shared
 
-    static func item(_ appID: UInt32) -> String { "dl:job:\(appID)" }
+    /// `dl:job:<appID>` for a Steam job (as before), `dl:job:<title ID>` for any other.
+    static func item(_ key: StoreGameKey) -> String { "dl:job:" + (key.steamAppID.map(String.init) ?? key.titleID) }
+
+    static func key(item id: String) -> StoreGameKey? {
+        guard id.hasPrefix("dl:job:") else { return nil }
+        let rest = String(id.dropFirst("dl:job:".count))
+        return UInt32(rest).map(StoreGameKey.steam) ?? StoreGameKey(titleID: rest)
+    }
     static let dimItem = "dl:dim"
 
     var body: some View {
@@ -116,11 +123,10 @@ struct DownloadsPage: View {
 
     /// The footer's Y and X for the ringed job (the shell adds A, B and ≡).
     @MainActor
-    static func hints(_ installs: SteamInstalls, focused: String?) -> [PadHint] {
-        guard let id = focused, id.hasPrefix("dl:job:"), let app = UInt32(id.dropFirst("dl:job:".count)),
-              let job = installs.jobs[app] else { return [] }
+    static func hints(_ installs: Downloads, focused: String?) -> [PadHint] {
+        guard let id = focused, let app = key(item: id), let job = installs.jobs[app] else { return [] }
         var h: [PadHint] = []
-        if app != installs.order.first?.appID, !installs.suspended {
+        if app != installs.order.first?.key, !installs.suspended {
             h.append(PadHint(button: .y, label: "Download next") { installs.downloadNext(app) })
         }
         h.append(PadHint(button: .x, label: "Cancel") { confirmCancel(job, installs) })
@@ -129,29 +135,29 @@ struct DownloadsPage: View {
 
     /// A on a job: Pause, or Resume.
     @MainActor
-    static func toggle(_ job: SteamInstalls.Job, _ installs: SteamInstalls) {
+    static func toggle(_ job: Downloads.Job, _ installs: Downloads) {
         if job.isRunning || job.phase == .queued {
-            installs.pause(job.appID)
+            installs.pause(job.key)
         } else if !installs.suspended {
-            installs.resume(job.appID)
+            installs.resume(job.key)
         }
     }
 
-    static func toggleHint(_ job: SteamInstalls.Job) -> String {
+    static func toggleHint(_ job: Downloads.Job) -> String {
         job.isRunning || job.phase == .queued ? "Pause" : "Resume"
     }
 
     /// X: cancel, confirmed in a picker whose default keeps the download.
     @MainActor
-    static func confirmCancel(_ job: SteamInstalls.Job, _ installs: SteamInstalls) {
-        let what = job.kind == .repair ? "repair" : job.kind == .update ? "update" : "download"
+    static func confirmCancel(_ job: Downloads.Job, _ installs: Downloads) {
+        let what = job.kind == .repair ? "repair" : job.kind == .update ? "update" : job.kind == .import ? "import" : "download"
         let got = job.progress.map { " · deletes \(ByteCount.format($0.bytesDone))" } ?? ""
         PadModal.shared.picker(
             title: "Cancel the \(what)?", context: job.name,
             note: job.record.automatic ? "It is not queued again until Steam has a newer version." : "What was downloaded is deleted.",
             options: [PadOption(id: "keep", label: "Keep it"), PadOption(id: "cancel", label: "Cancel the \(what)" + got)],
             selected: "keep") { picked in
-            if picked == "cancel" { installs.discard(job.appID) }
+            if picked == "cancel" { installs.discard(job.key) }
         }
     }
 }
@@ -168,8 +174,8 @@ private struct SmallCaps: View {
 
 /// The job that runs first: art, name and time left, the bar, what it does and its speed.
 private struct FirstJobCard: View {
-    let job: SteamInstalls.Job
-    @ObservedObject var installs: SteamInstalls
+    let job: Downloads.Job
+    @ObservedObject var installs: Downloads
 
     var body: some View {
         HStack(spacing: 14) {
@@ -192,7 +198,7 @@ private struct FirstJobCard: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 14)
         .background(PP.surface, in: RoundedRectangle(cornerRadius: 14))
-        .padItem(DownloadsPage.item(job.appID), hint: DownloadsPage.toggleHint(job), cornerRadius: 14) {
+        .padItem(DownloadsPage.item(job.key), hint: DownloadsPage.toggleHint(job), cornerRadius: 14) {
             DownloadsPage.toggle(job, installs)
         }
     }
@@ -214,12 +220,12 @@ private struct FirstJobCard: View {
 
 /// A job in Up next: art, name, what it is, and Y on the ringed one.
 private struct JobRow: View {
-    let job: SteamInstalls.Job
-    @ObservedObject var installs: SteamInstalls
+    let job: Downloads.Job
+    @ObservedObject var installs: Downloads
     @ObservedObject private var focus = PadFocus.shared
 
     var body: some View {
-        let id = DownloadsPage.item(job.appID)
+        let id = DownloadsPage.item(job.key)
         HStack(spacing: 12) {
             Color.clear.overlay { GameArt(appID: job.appID, name: job.name, kind: .header) }
                 .frame(width: 64, height: 30).clipShape(RoundedRectangle(cornerRadius: 6))
@@ -303,10 +309,10 @@ final class DownloadDimmer: ObservableObject {
     private var lastInput = Date()
     private var saved: CGFloat?
     private var clock: Timer?
-    private weak var installs: SteamInstalls?
+    private weak var installs: Downloads?
 
     /// Once, when the product UI appears.
-    func start(installs: SteamInstalls) {
+    func start(installs: Downloads) {
         self.installs = installs
         watchTouches()
         guard clock == nil else { return }
@@ -387,7 +393,7 @@ private final class InputWatch: UIGestureRecognizer {
 
 /// The black page over the app while dimmed: the running job's progress and the queue's time.
 struct DownloadModeView: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var dimmer = DownloadDimmer.shared
 
     var body: some View {

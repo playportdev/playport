@@ -6,6 +6,18 @@ runs are kept to the phase gates (owner, 2026-10-06). Decision numbers: 0055 and
 0056 were taken, so store identity is 0057, store sessions 0058 and the Epic
 exchange code 0059.
 
+## Progress
+
+- **Phase 0, host side: done** (2026-10-06). `app/ContentKit` holds the neutral core
+  (the parts plan, engine, journal, layout, codecs, hashes with md5, HTTP, secrets,
+  `Store`/`StoreGameKey`/`StoreReceipt`); SteamClientKit re-exports it and Steam's
+  plans convert with the same journal numbering. The catalogue, library, queue and
+  game routes carry the store identity; the app's queue runner (`UI/Downloads.swift`)
+  runs each store's jobs through a `DownloadDriver` (Steam's: `UI/SteamInstalls.swift`).
+  Settings › Accounts (alias `steam`, `account`). Decisions 0057, 0058. `pp test` and
+  `pp check` (dev, release) pass. **Not checked on the phone yet:** its gate (a Steam
+  install and repair, Hollow Knight) runs with Phase 1's, to keep phone use down.
+
 ## Goal
 
 A player can get a Windows game into Playport without Steam and without a computer:

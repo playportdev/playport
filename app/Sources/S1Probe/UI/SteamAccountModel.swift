@@ -13,7 +13,9 @@ import UIKit
 @MainActor
 final class SteamAccountModel: ObservableObject {
     let service: SteamService
-    let installs: SteamInstalls
+    /// The download queue, every store's (Downloads.swift), and Steam's driver of it.
+    let installs: Downloads
+    let steamInstalls: SteamInstalls
     private let art: ArtworkCache
 
     @Published private(set) var state: SteamService.AccountState = .unknown
@@ -22,7 +24,7 @@ final class SteamAccountModel: ObservableObject {
     @Published private(set) var credentials = CredentialSignInModel()
     /// The owned games; a change looks for updates to queue (SteamInstalls.checkUpdates).
     @Published private(set) var games: [SteamGame] = [] {
-        didSet { installs.checkUpdates(games: games, titles: LibraryModel.shared.catalog.titles) }
+        didSet { steamInstalls.checkUpdates(games: games, titles: LibraryModel.shared.catalog.titles) }
     }
     @Published private(set) var gamesFetchedAt: Date?
     @Published private(set) var gamesLoading = false
@@ -73,13 +75,15 @@ final class SteamAccountModel: ObservableObject {
         service = SteamService(backend: SteamSession(store: KeychainSecretStore(), log: log), log: log,
                                stateDirectory: SteamPaths.state)
         art = ArtworkCache(directory: SteamPaths.art, log: log)
-        installs = SteamInstalls(service: service)
+        installs = Downloads()
+        steamInstalls = SteamInstalls(service: service, downloads: installs)
+        installs.register(steamInstalls, for: .steam)
         Self.current = self
         // A game installed or updated (the catalogue's builds) may leave an update to queue, or none.
         catalogWatch = LibraryModel.shared.$catalog.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] catalog in
             MainActor.assumeIsolated {
                 guard let self, !self.games.isEmpty else { return }
-                self.installs.checkUpdates(games: self.games, titles: catalog.titles)
+                self.steamInstalls.checkUpdates(games: self.games, titles: catalog.titles)
             }
         }
     }
@@ -200,8 +204,8 @@ final class SteamAccountModel: ObservableObject {
                 // The download queue runs while Steam is signed in (SteamInstalls): at every
                 // start of the app that is once the stored session is restored.
                 switch s {
-                case .signedIn: installs.steamSignedIn()
-                case .signedOut, .expired, .offline: installs.steamSignedOut()
+                case .signedIn: steamInstalls.signedIn(true)
+                case .signedOut, .expired, .offline: steamInstalls.signedIn(false)
                 case .unknown, .restoring, .pairing: break
                 }
                 if s.account == nil, wasSignedIn { games = []; gamesFetchedAt = nil }
@@ -338,7 +342,7 @@ final class SteamAccountModel: ObservableObject {
     // MARK: account
 
     func signOut() async {
-        installs.holdForSignOut()
+        steamInstalls.holdForSignOut()
         signingOut = true
         defer { signingOut = false }
         do {

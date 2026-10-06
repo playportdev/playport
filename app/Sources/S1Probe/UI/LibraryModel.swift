@@ -98,7 +98,8 @@ final class LibraryModel: ObservableObject {
         Task.detached(priority: .userInitiated) {
             let paths = LibraryModel.paths
             let scanned = Adoption.scan(games: paths.games, cohort: LibraryModel.cohort,
-                                        receipts: Adoption.receipts(in: paths.layout.installsDir), previous: previous)
+                                        receipts: Adoption.receipts(in: paths.layout.installsDir),
+                                        storeReceipts: paths.layout.storeReceipts(), previous: previous)
             await LibraryModel.shared.adopted(scanned)
         }
     }
@@ -158,7 +159,7 @@ final class LibraryModel: ObservableObject {
         // and build the launch from current settings only after sheet dismissal.
         guard let t = catalog.title(id: id), t.canPlay, !verifying.contains(id), !removing.contains(id),
               !TitleLaunch.shared.running, !TitleLaunch.shared.spent,
-              t.appID.flatMap({ SteamAccountModel.current?.installs.jobs[$0] }) == nil else { return false }
+              SteamAccountModel.current?.installs.jobs[t.key] == nil else { return false }
         let plan = try t.launchPlan(cohort: Self.cohort)
         // The player's settings over 720p, 60 fps, Vulkan for DX12 and DXMT otherwise.
         #if PLAYPORT_RELEASE
@@ -268,8 +269,8 @@ final class LibraryModel: ObservableObject {
         removing.insert(id)
         removeErrors[id] = nil
         // A paused update or repair of it goes too (the uninstall deletes its stage).
-        if let app = t.appID, let installs = SteamAccountModel.current?.installs, installs.jobs[app] != nil {
-            installs.discard(app)
+        if let installs = SteamAccountModel.current?.installs, installs.jobs[t.key] != nil {
+            installs.discard(t.key)
         }
         Self.log("uninstall \(t.name) (\(t.id)): C:\\Games\\\(t.installDir)")
         Task.detached(priority: .userInitiated) {
@@ -277,6 +278,8 @@ final class LibraryModel: ObservableObject {
             do {
                 try TitleInstaller(layout: LibraryModel.paths.layout, session: nil, log: SteamUILog.logger)
                     .uninstall(installDir: t.installDir, appID: t.appID)
+                // Another store's or an import's receipt (decision 0057).
+                if t.store != .steam { LibraryModel.paths.layout.removeReceipt(t.key) }
             } catch {
                 LibraryModel.log("uninstall \(t.name) failed: \(error)")
                 failure = "\(error)"

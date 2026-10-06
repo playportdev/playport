@@ -3,9 +3,14 @@
 // not a secret. It is rebuilt by adoption, a scan of the prefix's C:\Games,
 // every time the library opens, so it never disagrees with what is on disk:
 //
-//   installed  a folder the install engine wrote (its receipt under installs/ wins)
+//   installed  a folder a store install wrote (its receipt under installs/ wins:
+//              Steam's <appID>.json, or a GOG or Epic StoreReceipt)
+//   imported   a folder Playport copied in from Files (a local StoreReceipt)
 //   cohort     a folder without a receipt named as a titles.json entry: that pin, Ready
 //   found      any other folder with a Windows executable: Ready too
+//
+// Every title carries its store identity (decision 0057): `store` and `storeID`,
+// and an ID qualified by it (`app-`, `gog-`, `epic-`, `dir-`).
 //
 // What the scan cannot see is carried over from the previous catalogue: when
 // the title was added and last played, its play time, and the last verification (dropped
@@ -16,7 +21,7 @@ import SteamClientKit
 
 public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     public enum Source: String, Codable, Sendable {
-        case cohort, installed, found
+        case cohort, installed, found, imported
     }
 
     public struct Verification: Codable, Equatable, Sendable {
@@ -34,8 +39,10 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    /// `app-<appID>` when the app is known, else `dir-<lowercased folder>`.
+    /// `app-<appID>` when the app is known, `gog-<productID>` or `epic-<appName>`
+    /// for those stores' copies, else `dir-<lowercased folder>` (StoreGameKey.titleID).
     public var id: String
+    /// Steam's app ID, for a Steam copy only.
     public var appID: UInt32?
     public var name: String
     public var developer: String?
@@ -68,6 +75,33 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     /// The COFF machine of the selected executable (0x14c i386, 0x8664 x86-64); rebuilt
     /// on adoption, nil in older catalogues or when it is no PE.
     public var executableMachine: UInt16? = nil
+    /// The store this copy is from (decision 0057); a catalogue from before it
+    /// says nothing, and an app ID then means Steam.
+    public var store: Store {
+        get { storeRaw ?? (appID == nil ? .local : .steam) }
+        set { storeRaw = newValue }
+    }
+    private var storeRaw: Store? = nil
+    /// The store's ID for the game (Steam: the app ID; GOG: the product ID; Epic:
+    /// the app name; local: the folder, lowercased).
+    public var storeID: String? = nil
+    /// Arguments from the store's receipt (a GOG play task, Epic's launch command),
+    /// before the player's own (LaunchSettings.arguments).
+    public var storeArguments: [String]? = nil
+    /// A Steam app ID the files name (`steam_appid.txt`): a hint, never an identity (0045).
+    public var hintSteamAppID: UInt32? = nil
+    /// The build or version a GOG or Epic receipt names (Steam's is `buildID`).
+    public var storeVersion: String? = nil
+
+    public var key: StoreGameKey {
+        StoreGameKey(store: store, id: storeID ?? appID.map(String.init) ?? installDir.lowercased())
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, appID, name, developer, installDir, executable, buildID, depots, sizeBytes, source, checksums, note
+        case addedAt, lastPlayed, playSeconds, lastVerification, branch, importsDirect3D12, direct3D, executableMachine
+        case storeRaw = "store", storeID, storeArguments, hintSteamAppID, storeVersion
+    }
     /// An i386 (WoW64) title: its default backend is Vulkan (decision 0047).
     public var isI386: Bool { executableMachine == 0x14c }
 
@@ -93,7 +127,8 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
         let pin = candidate.flatMap {
             source == .cohort || (source == .installed && appID == $0.appID && buildID == $0.buildID) ? $0 : nil
         }
-        return try LaunchPlan.make(installDir: installDir, executable: executable, arguments: pin?.arguments ?? [],
+        return try LaunchPlan.make(installDir: installDir, executable: executable,
+                                   arguments: pin?.arguments ?? storeArguments ?? [],
                                    config: pin?.config ?? [:], screen: pin?.screen)
     }
 }
@@ -170,9 +205,10 @@ public struct CatalogStore: Sendable {
 
 public enum Adoption {
     /// The catalogue for what is in `games` now, keeping what `previous` knew.
-    /// `receipts` are the install engine's records (InstallLayout.installsDir).
-    public static func scan(games: URL, cohort: Cohort, receipts: [InstallReceipt], previous: Catalog,
-                            now: Date = Date()) -> Catalog {
+    /// `receipts` are Steam's install records and `storeReceipts` every other
+    /// store's and the imports' (InstallLayout.installsDir).
+    public static func scan(games: URL, cohort: Cohort, receipts: [InstallReceipt], storeReceipts: [StoreReceipt] = [],
+                            previous: Catalog, now: Date = Date()) -> Catalog {
         let fm = FileManager.default
         let folders = ((try? fm.contentsOfDirectory(atPath: games.path)) ?? [])
             .filter { !$0.hasPrefix(".") && isDirectory(games.appendingPathComponent($0)) }
@@ -193,6 +229,18 @@ public enum Adoption {
                                    sizeBytes: r.bytes, source: .installed, checksums: nil, note: nil, addedAt: now,
                                    lastPlayed: nil, lastVerification: nil)
                 t.branch = r.branch
+            } else if let r = storeReceipts.first(where: { $0.installDir.lowercased() == folder.lowercased() }) {
+                let key = r.store == .local ? StoreGameKey(store: .local, id: folder) : r.key
+                t = InstalledTitle(id: key.titleID, appID: nil, name: r.name, developer: nil, installDir: folder,
+                                   executable: r.executable.flatMap { locate($0, in: dir) } ?? pick(exes, folder: folder, in: dir),
+                                   buildID: nil, depots: [], sizeBytes: r.bytes,
+                                   source: r.store == .local ? .imported : .installed, checksums: nil, note: nil,
+                                   addedAt: now, lastPlayed: nil, lastVerification: nil)
+                t.store = key.store
+                t.storeID = key.id
+                t.storeArguments = r.arguments
+                t.hintSteamAppID = r.hintSteamAppID
+                t.storeVersion = r.version
             } else if let c = cohort.title(installDir: folder) {
                 t = InstalledTitle(id: "app-\(c.appID)", appID: c.appID, name: c.name, developer: c.developer,
                                    installDir: folder, executable: locate(c.executable, in: dir),
@@ -205,6 +253,10 @@ public enum Adoption {
                                    sizeBytes: nil, source: .found, checksums: nil, note: nil, addedAt: now,
                                    lastPlayed: nil, lastVerification: nil)
             }
+            if t.storeID == nil {
+                t.store = t.appID == nil ? .local : .steam
+                t.storeID = t.appID.map(String.init) ?? folder.lowercased()
+            }
             if let old = previous.titles.first(where: { $0.id == t.id }) ?? previous.titles.first(where: {
                 $0.installDir.lowercased() == folder.lowercased()
             }) {
@@ -213,6 +265,7 @@ public enum Adoption {
                 t.playSeconds = old.playSeconds
                 if old.buildID == t.buildID { t.lastVerification = old.lastVerification }
                 if t.source == .found, old.source == .found { t.sizeBytes = old.sizeBytes }
+                if old.storeVersion != t.storeVersion { t.lastVerification = nil }
             }
             t.direct3D = t.executable.map {
                 Direct3D.detect(executable: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")), root: dir)

@@ -3,9 +3,14 @@
 // (including its section/panels) and focus that opened them. Back unwinds local
 // panels and that history; main sections are roots, switched with LB/RB.
 
+import SteamClientKit
+
+/// A game page's subject: a catalogue title by its ID, a Steam game by app ID
+/// (as before), or any store's game by its identity (decision 0057).
 public enum GameRef: Hashable {
     case title(String)
     case steam(UInt32)
+    case store(StoreGameKey)
 }
 
 public enum LicencePage: Hashable {
@@ -34,7 +39,7 @@ public struct AppRoutes {
     private struct Screen {
         var page = Page.home
         var settings = false
-        var settingsSection = SettingsSection.steam
+        var settingsSection = SettingsSection.accounts
         var licences: [LicencePage] = []
         var setup = false
         var setupStart = SetupStep.pairing

@@ -83,7 +83,7 @@ struct SetupCheckSettings: View {
         let signedIn = state.facts.steamSignedIn == true
         return PadRow(id: "set:setup:steam", title: "Steam", subtitle: signedIn ? nil : "Optional: your library, cloud saves and achievements",
                       value: signedIn ? "Signed in" : "Signed out", accessory: .chevron, hint: "Open") {
-            AppNavigation.shared.openSettings(section: .steam)
+            AppNavigation.shared.openSettings(section: .accounts)
         }
     }
 

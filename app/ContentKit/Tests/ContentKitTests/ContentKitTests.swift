@@ -129,3 +129,22 @@ final class SlicedPlanTests: XCTestCase {
         XCTAssertEqual(ContentPlan.key20([UInt8](repeating: 7, count: 32)), SHA1.hash([UInt8](repeating: 7, count: 32)))
     }
 }
+
+final class RedactorTests: XCTestCase {
+    func testStoreTokensAndCodesAreScrubbed() {
+        let lines = [
+            #"{"access_token":"Abc123def456ghi","refresh_token":"Zyx987wvu","expires_in":3600}"#,
+            "token eg1~eyJraWQiOiJ0RkMyVUloRnBUTV9FYTFLb0dReWJLcE9ISThnRF9YOW5KcHFCbFNWckhJIn0.abc-def",
+            #"{"redirectUrl":"x","authorizationCode":"0123456789abcdef0123456789abcdef","exchangeCode":"fedcba"}"#,
+            "GET https://embed.gog.com/on_login_success?origin=client&code=SECRETCODE123",
+            "code=SECRETCODE456 client_secret=9d85c43b1482497dbbce61f6e4aa173a",
+        ]
+        let out = lines.map(Redactor.scrub).joined(separator: "\n")
+        for secret in ["Abc123def456ghi", "Zyx987wvu", "eyJraWQi", "0123456789abcdef0123456789abcdef", "fedcba",
+                       "SECRETCODE123", "SECRETCODE456", "9d85c43b1482497dbbce61f6e4aa173a"] {
+            XCTAssertFalse(out.contains(secret), "\(secret) leaked: \(out)")
+        }
+        XCTAssertTrue(out.contains("expires_in"), "a non-secret field stays")
+        XCTAssertTrue(out.contains("https://embed.gog.com/on_login_success?<query:redacted>"))
+    }
+}

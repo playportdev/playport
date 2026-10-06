@@ -11,7 +11,7 @@ import SteamClientKit
 import SwiftUI
 
 struct HomeView: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var nav = AppNavigation.shared
@@ -140,18 +140,19 @@ struct HomeView: View {
     static func percent(_ f: Double) -> String { "\(Int(f * 100))%" }
 
     /// `4 min`: the running job's time left at its speed.
-    static func left(_ job: SteamInstalls.Job) -> String? {
+    static func left(_ job: Downloads.Job) -> String? {
         guard job.phase == .downloading, let r = job.remaining,
               let s = DownloadRate.seconds(remaining: r, rate: job.rate) else { return nil }
         return DownloadRate.short(s)
     }
 
     /// `Celeste`, `Celeste update`, `Celeste repair`.
-    static func jobName(_ job: SteamInstalls.Job) -> String {
+    static func jobName(_ job: Downloads.Job) -> String {
         switch job.kind {
         case .install: job.name
         case .update: job.name + " update"
         case .repair: job.name + " repair"
+        case .import: job.name + " import"
         }
     }
 
@@ -203,7 +204,7 @@ struct HomeView: View {
     /// An installed game is `tile:ID` and opens its details; one not installed is
     /// `game:APPID`, dimmed, and opens its Steam page.
     private func tile(_ entry: LibraryEntry) -> some View {
-        let job = entry.appID.flatMap { installs.jobs[$0] }
+        let job = installs.jobs[entry.key]
         return ZStack(alignment: .bottomLeading) {
             Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header) }.clipped()
             // Store art carries the game's name; a colour tile, or a download, says it.
@@ -228,7 +229,7 @@ struct HomeView: View {
     }
 
     /// `62%` while it downloads, else the job's state.
-    private static func tileStatus(_ job: SteamInstalls.Job) -> String {
+    private static func tileStatus(_ job: Downloads.Job) -> String {
         if job.isRunning, let f = job.fraction { return percent(f) }
         return job.status
     }

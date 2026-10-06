@@ -33,10 +33,10 @@
 //                              screenshot sees it drawn; `open:<title id>#<section>`
 //                              opens the page's Game options at a section (graphics, game,
 //                              files, developer, ordering, steam);
-//                              `open:settings#<section>` shows a Settings section (steam,
+//                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controllers, storage, setup, about,
 //                              developer; PlayportKit SettingsSection.named also takes
-//                              account, jit, memory, diagnostics, pairing, probes, logs);
+//                              account, steam, jit, memory, diagnostics, pairing, probes, logs);
 //                              `open:licences` shows Settings › About › Licences,
 //                              `open:licences#<prefix>` the files of the first component
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
@@ -440,24 +440,24 @@ enum UIDriver {
         log("install \(app) \(name): started")
         installs.install(app, name: name)
         if let pauseAt {
-            while let j = installs.jobs[app], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
+            while let j = installs.jobs[.steam(app)], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            guard let j = installs.jobs[app], j.isRunning else { return "ended before \(Int(pauseAt * 100))% (\(phase(installs.jobs[app])))" }
+            guard let j = installs.jobs[.steam(app)], j.isRunning else { return "ended before \(Int(pauseAt * 100))% (\(phase(installs.jobs[.steam(app)])))" }
             installs.pause(app)
-            while installs.jobs[app]?.isRunning == true { try? await Task.sleep(for: .milliseconds(100)) }
+            while installs.jobs[.steam(app)]?.isRunning == true { try? await Task.sleep(for: .milliseconds(100)) }
             let staged = TitleInstaller(layout: installs.layout, session: nil, log: .silent).hasStage(appID: app)
-            log("install \(app): paused at \(j.detail ?? "?"); phase=\(phase(installs.jobs[app])) stage kept=\(staged)")
-            guard staged, installs.jobs[app]?.phase == .paused(nil) else { return "pause did not keep a resumable stage" }
+            log("install \(app): paused at \(j.detail ?? "?"); phase=\(phase(installs.jobs[.steam(app)])) stage kept=\(staged)")
+            guard staged, installs.jobs[.steam(app)]?.phase == .paused(nil) else { return "pause did not keep a resumable stage" }
             installs.resume(app)
             // Until the resumed run's first progress: where the kept stage put it.
-            while let p = installs.jobs[app]?.phase, p == .queued || p == .preparing {
+            while let p = installs.jobs[.steam(app)]?.phase, p == .queued || p == .preparing {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            log("install \(app): resumed at \(installs.jobs[app]?.detail ?? "?") (\(phase(installs.jobs[app])))")
+            log("install \(app): resumed at \(installs.jobs[.steam(app)]?.detail ?? "?") (\(phase(installs.jobs[.steam(app)])))")
         }
         var lastLog = Date()
-        while let j = installs.jobs[app] {
+        while let j = installs.jobs[.steam(app)] {
             if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
             if Date().timeIntervalSince(lastLog) > 30 {
                 lastLog = Date()
@@ -482,7 +482,7 @@ enum UIDriver {
         let installs = steam.installs
         let name = steam.games.first { $0.id == app }?.info.name ?? "app \(app)"
         installs.install(app, name: name)
-        guard installs.jobs[app] != nil else { return "no job queued" }
+        guard installs.jobs[.steam(app)] != nil else { return "no job queued" }
         log("queue \(app) \(name): \(queueLine(installs))")
         return nil
     }
@@ -492,18 +492,18 @@ enum UIDriver {
         guard let installs = SteamAccountModel.current?.installs else { return "no Steam model" }
         let started = Date()
         while Date().timeIntervalSince(started) < 120 {
-            if let j = installs.jobs[app], j.phase == .downloading, j.progress != nil {
+            if let j = installs.jobs[.steam(app)], j.phase == .downloading, j.progress != nil {
                 log(String(format: "downloading \(app): %@ after %.1f s; queue: %@", j.detail ?? "?",
                            Date().timeIntervalSince(started), queueLine(installs)))
                 return nil
             }
-            if installs.jobs[app] == nil { return "no job for \(app) (\(queueLine(installs)))" }
+            if installs.jobs[.steam(app)] == nil { return "no job for \(app) (\(queueLine(installs)))" }
             try? await Task.sleep(for: .milliseconds(250))
         }
         return "not downloading after 120 s (\(queueLine(installs)))"
     }
 
-    private static func queueLine(_ installs: SteamInstalls) -> String {
+    private static func queueLine(_ installs: Downloads) -> String {
         let jobs = installs.order.map { "\($0.appID) \($0.kind.rawValue) \(phase($0))" }
         return (jobs.isEmpty ? "empty" : jobs.joined(separator: ", ")) + (installs.blocked.map { " (\($0))" } ?? "")
     }
@@ -526,7 +526,7 @@ enum UIDriver {
         return ", global \(s.isEmpty ? "{}" : json)"
     }
 
-    private static func phase(_ j: SteamInstalls.Job?) -> String { j.map { "\($0.phase)" } ?? "none" }
+    private static func phase(_ j: Downloads.Job?) -> String { j.map { "\($0.phase)" } ?? "none" }
 
     /// The Uninstall button's call; nil when the folder, record and catalogue entry are gone.
     private static func uninstall(_ id: String) async -> String? {

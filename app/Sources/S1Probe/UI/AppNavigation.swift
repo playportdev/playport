@@ -59,7 +59,7 @@ final class AppNavigation: ObservableObject {
             show(.library)
             LibraryGrid.shared.filter = .steam
         case "settings", "account":
-            openSettings(section: screen == "account" ? .steam : nil)
+            openSettings(section: screen == "account" ? .accounts : nil)
         case "setup":
             openSetup()
         case "signin":

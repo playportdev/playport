@@ -3,7 +3,8 @@
 // (UI/SteamInstalls.swift runs them; docs/plans/finished.md#the-gamepad-first-ui,
 // Hard problem 1 and Downloads):
 //
-// - DownloadQueue: installs, updates and repairs in the order they run, each
+// - DownloadQueue: installs, updates, repairs and imports in the order they run,
+//   one job per game by its store identity (decision 0057), each
 //   waiting or held (the player's Pause, a game's launch, a failure), the
 //   downloads finished today, and the automatic updates the player cancelled.
 //   It is kept in the container (DownloadQueueStore) after every change,
@@ -19,16 +20,20 @@
 // - DownloadMode: when the screen dims while a download runs.
 
 import Foundation
+import SteamClientKit
 
 public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case install, update, repair
+        /// A copy from Files into C:\Games (a folder, a .zip, an installer).
+        case `import`
 
         public var label: String {
             switch self {
             case .install: "Install"
             case .update: "Update"
             case .repair: "Repair"
+            case .import: "Import"
             }
         }
     }
@@ -43,7 +48,8 @@ public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
         case stopped(String)
     }
 
-    public var appID: UInt32
+    /// The game, in its store (an import: the local folder it makes).
+    public var key: StoreGameKey
     public var name: String
     public var kind: Kind
     /// The branch asked for; nil continues the paused download's or the install's.
@@ -55,11 +61,13 @@ public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
     public var buildID: UInt32?
     /// The download's size when known before it starts (Steam's manifest sizes).
     public var bytes: UInt64?
-    public var id: UInt32 { appID }
+    public var id: StoreGameKey { key }
+    /// Steam's app ID, for a Steam job.
+    public var appID: UInt32? { key.steamAppID }
 
-    public init(appID: UInt32, name: String, kind: Kind, branch: String? = nil, hold: Hold? = nil,
+    public init(key: StoreGameKey, name: String, kind: Kind, branch: String? = nil, hold: Hold? = nil,
                 automatic: Bool = false, buildID: UInt32? = nil, bytes: UInt64? = nil) {
-        self.appID = appID
+        self.key = key
         self.name = name
         self.kind = kind
         self.branch = branch
@@ -68,27 +76,83 @@ public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
         self.buildID = buildID
         self.bytes = bytes
     }
+
+    public init(appID: UInt32, name: String, kind: Kind, branch: String? = nil, hold: Hold? = nil,
+                automatic: Bool = false, buildID: UInt32? = nil, bytes: UInt64? = nil) {
+        self.init(key: .steam(appID), name: name, kind: kind, branch: branch, hold: hold, automatic: automatic,
+                  buildID: buildID, bytes: bytes)
+    }
+
+    enum CodingKeys: String, CodingKey { case key, appID, name, kind, branch, hold, automatic, buildID, bytes }
+
+    /// A queue from before store identities names a Steam app ID only.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decodeIfPresent(StoreGameKey.self, forKey: .key) ?? .steam(try c.decode(UInt32.self, forKey: .appID))
+        name = try c.decode(String.self, forKey: .name)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        hold = try c.decodeIfPresent(Hold.self, forKey: .hold)
+        automatic = try c.decodeIfPresent(Bool.self, forKey: .automatic) ?? false
+        buildID = try c.decodeIfPresent(UInt32.self, forKey: .buildID)
+        bytes = try c.decodeIfPresent(UInt64.self, forKey: .bytes)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(key, forKey: .key)
+        try c.encodeIfPresent(appID, forKey: .appID)
+        try c.encode(name, forKey: .name)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(branch, forKey: .branch)
+        try c.encodeIfPresent(hold, forKey: .hold)
+        try c.encode(automatic, forKey: .automatic)
+        try c.encodeIfPresent(buildID, forKey: .buildID)
+        try c.encodeIfPresent(bytes, forKey: .bytes)
+    }
 }
 
 /// A download that finished: the Downloads page's "Done today".
 public struct DoneDownload: Codable, Equatable, Sendable {
-    public var appID: UInt32
+    public var key: StoreGameKey
     public var name: String
     public var kind: DownloadJob.Kind
     public var bytes: UInt64?
     public var at: Date
+    public var appID: UInt32? { key.steamAppID }
 
-    public init(appID: UInt32, name: String, kind: DownloadJob.Kind, bytes: UInt64?, at: Date) {
-        self.appID = appID
+    public init(key: StoreGameKey, name: String, kind: DownloadJob.Kind, bytes: UInt64?, at: Date) {
+        self.key = key
         self.name = name
         self.kind = kind
         self.bytes = bytes
         self.at = at
     }
 
+    enum CodingKeys: String, CodingKey { case key, appID, name, kind, bytes, at }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decodeIfPresent(StoreGameKey.self, forKey: .key) ?? .steam(try c.decode(UInt32.self, forKey: .appID))
+        name = try c.decode(String.self, forKey: .name)
+        kind = try c.decode(DownloadJob.Kind.self, forKey: .kind)
+        bytes = try c.decodeIfPresent(UInt64.self, forKey: .bytes)
+        at = try c.decode(Date.self, forKey: .at)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(key, forKey: .key)
+        try c.encodeIfPresent(appID, forKey: .appID)
+        try c.encode(name, forKey: .name)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(bytes, forKey: .bytes)
+        try c.encode(at, forKey: .at)
+    }
+
     /// `Stardew Valley update · 240 MB`
     public var line: String {
-        let what = kind == .install ? name : "\(name) \(kind.label.lowercased())"
+        let what = kind == .install || kind == .import ? name : "\(name) \(kind.label.lowercased())"
         return what + (bytes.map { " · " + ByteCount.format($0) } ?? "")
     }
 }
@@ -122,7 +186,8 @@ public struct DownloadQueue: Codable, Equatable, Sendable {
         self.jobs = jobs
     }
 
-    public func job(_ appID: UInt32) -> DownloadJob? { jobs.first { $0.appID == appID } }
+    public func job(_ key: StoreGameKey) -> DownloadJob? { jobs.first { $0.key == key } }
+    public func job(_ appID: UInt32) -> DownloadJob? { job(.steam(appID)) }
 
     /// The job to run next: the first one waiting.
     public var next: DownloadJob? { jobs.first { $0.hold == nil } }
@@ -131,7 +196,7 @@ public struct DownloadQueue: Codable, Equatable, Sendable {
     /// of its hold (a Resume) and takes the new branch. False when nothing changed.
     @discardableResult
     public mutating func add(_ job: DownloadJob) -> Bool {
-        guard let i = jobs.firstIndex(where: { $0.appID == job.appID }) else {
+        guard let i = jobs.firstIndex(where: { $0.key == job.key }) else {
             jobs.append(job)
             return true
         }
@@ -145,42 +210,50 @@ public struct DownloadQueue: Codable, Equatable, Sendable {
 
     /// Y, "Download next": the job goes to the front, behind `running` (which
     /// is not stopped), and waits no longer.
-    public mutating func moveToFront(_ appID: UInt32, running: UInt32? = nil) {
-        guard appID != running, let i = jobs.firstIndex(where: { $0.appID == appID }) else { return }
+    public mutating func moveToFront(_ key: StoreGameKey, running: StoreGameKey? = nil) {
+        guard key != running, let i = jobs.firstIndex(where: { $0.key == key }) else { return }
         var job = jobs.remove(at: i)
         job.hold = nil
-        let at = running.flatMap { r in jobs.firstIndex { $0.appID == r } }.map { $0 + 1 } ?? 0
+        let at = running.flatMap { r in jobs.firstIndex { $0.key == r } }.map { $0 + 1 } ?? 0
         jobs.insert(job, at: at)
     }
 
     /// The job that starts goes first, so the queue on disk says what ran.
-    public mutating func started(_ appID: UInt32) {
-        guard let i = jobs.firstIndex(where: { $0.appID == appID }), i != 0 else { return }
+    public mutating func started(_ key: StoreGameKey) {
+        guard let i = jobs.firstIndex(where: { $0.key == key }), i != 0 else { return }
         jobs.insert(jobs.remove(at: i), at: 0)
     }
 
-    public mutating func hold(_ appID: UInt32, _ hold: DownloadJob.Hold?) {
-        guard let i = jobs.firstIndex(where: { $0.appID == appID }) else { return }
+    public mutating func hold(_ key: StoreGameKey, _ hold: DownloadJob.Hold?) {
+        guard let i = jobs.firstIndex(where: { $0.key == key }) else { return }
         jobs[i].hold = hold
     }
 
     /// Cancel: the job leaves the queue; an automatic update is not queued
     /// again for the same build.
     @discardableResult
-    public mutating func remove(_ appID: UInt32) -> DownloadJob? {
-        guard let i = jobs.firstIndex(where: { $0.appID == appID }) else { return nil }
+    public mutating func remove(_ key: StoreGameKey) -> DownloadJob? {
+        guard let i = jobs.firstIndex(where: { $0.key == key }) else { return nil }
         let job = jobs.remove(at: i)
-        if job.automatic, let b = job.buildID { declined[appID] = b }
+        if job.automatic, let b = job.buildID, let app = key.steamAppID { declined[app] = b }
         return job
     }
 
     /// The job finished: it leaves the queue for Done today.
-    public mutating func finished(_ appID: UInt32, bytes: UInt64?, at: Date) {
-        guard let i = jobs.firstIndex(where: { $0.appID == appID }) else { return }
+    public mutating func finished(_ key: StoreGameKey, bytes: UInt64?, at: Date) {
+        guard let i = jobs.firstIndex(where: { $0.key == key }) else { return }
         let job = jobs.remove(at: i)
-        done.append(DoneDownload(appID: appID, name: job.name, kind: job.kind, bytes: bytes, at: at))
-        declined[appID] = nil
+        done.append(DoneDownload(key: key, name: job.name, kind: job.kind, bytes: bytes, at: at))
+        if let app = key.steamAppID { declined[app] = nil }
     }
+
+    // Steam's shorthands, by app ID.
+    public mutating func moveToFront(_ appID: UInt32, running: UInt32? = nil) { moveToFront(.steam(appID), running: running.map(StoreGameKey.steam)) }
+    public mutating func started(_ appID: UInt32) { started(.steam(appID)) }
+    public mutating func hold(_ appID: UInt32, _ hold: DownloadJob.Hold?) { self.hold(.steam(appID), hold) }
+    @discardableResult
+    public mutating func remove(_ appID: UInt32) -> DownloadJob? { remove(.steam(appID)) }
+    public mutating func finished(_ appID: UInt32, bytes: UInt64?, at: Date) { finished(.steam(appID), bytes: bytes, at: at) }
 
     /// A new process (Playport restarts after every game): every job waits
     /// its turn again but the ones the player paused.

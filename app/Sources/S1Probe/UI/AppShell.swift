@@ -261,7 +261,7 @@ struct AppShell: View {
 
 /// LB, the three pages, RB; the controller and its battery; the gear.
 private struct TopBar: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var nav = AppNavigation.shared
     @ObservedObject private var router = PadRouter.shared
 

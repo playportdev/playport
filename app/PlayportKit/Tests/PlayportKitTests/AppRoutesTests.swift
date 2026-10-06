@@ -75,7 +75,7 @@ final class AppRoutesTests: XCTestCase {
         var nav = AppRoutes()
         nav.openGame(game, focus: "hero")
         nav.openSetup(on: .pairing, focus: "play")
-        nav.openSettings(section: .steam, focus: "setup:steam")
+        nav.openSettings(section: .accounts, focus: "setup:steam")
         nav.openSignIn(focus: "signin-row")
         nav.back()
         XCTAssertTrue(nav.settings)
@@ -112,7 +112,7 @@ final class AppRoutesTests: XCTestCase {
             switch origin {
             case 1: nav.show(.downloads, focus: nil)
             case 2: nav.openGame(game, focus: nil)
-            case 3: nav.openSettings(section: .steam, focus: nil)
+            case 3: nav.openSettings(section: .accounts, focus: nil)
             case 4: nav.openSetup(on: .steam, focus: nil)
             default: break
             }
@@ -154,7 +154,7 @@ final class AppRoutesTests: XCTestCase {
         nav.openLicence(.list)
         nav.settingsSection = .setup
         XCTAssertTrue(nav.licences.isEmpty)
-        nav.openSettings(section: .steam, focus: "set:setup:steam")
+        nav.openSettings(section: .accounts, focus: "set:setup:steam")
         nav.back()
         XCTAssertTrue(nav.settings)
         XCTAssertEqual(nav.settingsSection, .setup)
