@@ -5,7 +5,7 @@ works on the phone with `pad:` presses: every page was walked with the focus
 ring, and Hollow Knight reached its first frame and ran on through the new
 Play buttons (Home's card and the game page), then paused, resumed and quit
 through the in-game menu back to Home. This is step 5 of the
-[plan](../plans/2026-09-28-gamepad-ui.md#order). The runs used the driver's
+[plan](../plans/finished.md#the-gamepad-first-ui). The runs used the driver's
 presses. No real controller was used, and no person was at the phone.
 
 ## Build

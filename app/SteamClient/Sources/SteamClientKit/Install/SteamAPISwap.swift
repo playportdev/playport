@@ -8,7 +8,7 @@ import Darwin
 
 /// A game's `steam_api.dll` / `steam_api64.dll` swapped for the Steam API
 /// emulator (gbe_fork's steam_api, `Runtime/steamapi/<arch>-windows/` in the
-/// app bundle; docs/plans/2026-09-27-steam-for-games.md, phase 1), and back.
+/// app bundle; docs/plans/finished.md#steam-for-games, phase 1), and back.
 ///
 /// Each game DLL is kept beside the emulator as `<name>.orig`, moved there by
 /// one rename, and a `steam_settings/` folder written by Playport (it holds

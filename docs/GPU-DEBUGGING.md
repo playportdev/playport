@@ -277,7 +277,7 @@ helper takes its debugger turn at every launch.
     DXMT's translation (`[shader-time]`)?
   - Does the GPU idle between command buffers?
   - How does DXMT's encode time compare with GPU time?
-- This serves [the performance plan](plans/2026-09-28-performance-follow-up.md)'s
+- This serves [the performance plan](plans/finished.md#performance-follow-up-after-the-runtime-audit)'s
   first-use-hitch items.
 
 **2. Is King's Pass bandwidth-bound? (performance)** Replay a King's Pass

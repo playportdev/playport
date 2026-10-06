@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-09-28. Supersedes the compiler-thread limit in
 [0015](0015-vulkan-backend-accepted.md) (the rest of 0015 stands). Settles
-item 5 of the [runtime-risks plan](../plans/2026-09-27-runtime-risks.md)
+item 5 of the [runtime-risks plan](../plans/finished.md#runtime-risks)
 (virtual address space is tight). The measurements are in the
 [evidence record](../evidence/2026-09-28-fex-band.md).
 

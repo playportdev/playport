@@ -2,7 +2,7 @@
 
 ## Result
 
-[Step 4](../PORTAL2-PLAN.md#step-4-inline-translation-in-fex-patchesfex)'s check
+[Step 4](../plans/finished.md#portal-2)'s check
 passes. FEX now addresses every i386 guest memory access through the guest
 window inline. In Portal 2's milestone run the serviced low faults fall from
 18,780,160 to 3. The run reaches the same point as before: `bin\engine.dll` at

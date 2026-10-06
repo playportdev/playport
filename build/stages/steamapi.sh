@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The Steam API emulator a game loads in place of its own steam_api(64).dll
-# (docs/plans/2026-09-27-steam-for-games.md, phase 1): gbe_fork's regular
+# (docs/plans/finished.md#steam-for-games, phase 1): gbe_fork's regular
 # steam_api build (premake project api_regular) at the pins.lock gbe commit
 # with patches/gbe, for x86-64 (steam_api64.dll) and i386 (steam_api.dll).
 # These are native DLLs: the app copies one into a game's folder at launch

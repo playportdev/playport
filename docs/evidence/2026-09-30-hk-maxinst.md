@@ -1,7 +1,7 @@
 # Hollow Knight: FEX block size 500 against 5000
 
 **Status:** one A/B/B/A block, no difference found. **Date:** 2026-09-30.
-Plan: [performance follow-up](../plans/2026-09-28-performance-follow-up.md),
+Plan: [performance follow-up](../plans/finished.md#performance-follow-up-after-the-runtime-audit),
 step 2. **IPA:** dev,
 `4c73e9c7b894f4f7ed5bd9221ee863a1165122feaaf502fa7c3f64bf3235566d`.
 **Phone:** iPhone Air (`iPhone18,4`), iOS 27.0, on battery (88 → 75 %).

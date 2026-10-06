@@ -41,7 +41,7 @@ record that supersedes those parts, and every later move cites it.
 ## Order across the plans (owner, 2026-10-05)
 
 One sequence for this plan and
-[the dependency strategy](2026-10-05-dependency-strategy.md):
+[the dependency strategy](finished.md#dependency-strategy):
 
 | Order | What | From |
 |---|---|---|
@@ -146,7 +146,7 @@ Before the base moves, add the rebase helper of the dependency-strategy plan
 | 8 | `gbe` | release-2026_09_27 | the same (newest release) | not used | No move unless a newer release appears. |
 | 9 | `freetype`, `abseil-cpp`, `xtool`, `gstreamer`, `idevice`, `rust` | see `pins.lock` | not checked | n/a | Each in its own commit with the same gate. `abseil-cpp` follows gbe's protobuf, so it moves only when gbe names a newer one. |
 | 10 | `llvm-project` 15.0.7, `stikjit` 1.6.0 | (these) | newer exist | n/a | **Expected holds; record the reason.** airconv is built against LLVM 15. A StikJIT 3.x move changes the JIT script protocol (runtime-risks plan, item 1). Try each move and record why it holds; do not force it. |
-| 11 | `madeira` | `8c050d0` | `main` `bbbf8d0` (2026-10-04), 438 commits ahead | (none) | **Superseded by [0054](../decisions/0054-madeira-frozen.md): frozen at `8c050d0`; `madeira-main` kept as a reference branch.** Before that: `pp sync`. If Madeira moved its Wine, DXMT, FEX or rpmalloc, the sync holds (`*-port-moved`). Re-port the `patches/*-port` series and the `madeira-port` patches at the end of `madeira-unix`, then land the port rows and the Madeira pin together in one commit (UPSTREAM-SYNC.md). Last (owner, 2026-10-05), after the Madeira reconciliation of `2026-10-05-dependency-strategy.md` (its steps 0 and 2: the sync tooling for Madeira's reorganisation, then a decision per overlapping area), so that Madeira's fork deltas are re-ported once, onto the new bases. |
+| 11 | `madeira` | `8c050d0` | `main` `bbbf8d0` (2026-10-04), 438 commits ahead | (none) | **Superseded by [0054](../decisions/0054-madeira-frozen.md): frozen at `8c050d0`; `madeira-main` kept as a reference branch.** Before that: `pp sync`. If Madeira moved its Wine, DXMT, FEX or rpmalloc, the sync holds (`*-port-moved`). Re-port the `patches/*-port` series and the `madeira-port` patches at the end of `madeira-unix`, then land the port rows and the Madeira pin together in one commit (UPSTREAM-SYNC.md). Last (owner, 2026-10-05), after the Madeira reconciliation of `finished.md#dependency-strategy` (its steps 0 and 2: the sync tooling for Madeira's reorganisation, then a decision per overlapping area), so that Madeira's fork deltas are re-ported once, onto the new bases. |
 
 **Deliverable of step 1:** `docs/evidence/<date>-deps-latest.md`. It contains:
 
@@ -370,7 +370,7 @@ Settings action.*
 
 ## Portal 2 performance follow-ups
 
-Handed over from [PORTAL2-PLAN.md](../PORTAL2-PLAN.md) (owner, 2026-10-05).
+Handed over from the Portal 2 plan ([finished](finished.md#portal-2)) (owner, 2026-10-05).
 Target: a steady 720p at 60 FPS, also after the phone reaches "serious". Measure
 every change with the owner's play, as the earlier runs did:
 `pp perf --title app-620 --secs 300 --settings '{"screen":"720"}'` (300 s, a

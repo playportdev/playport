@@ -1,6 +1,6 @@
 # 32-bit (i386) titles: host-side FEX build
 
-The work toward 32-bit titles follows [the Portal 2 plan](../../docs/PORTAL2-PLAN.md).
+The work toward 32-bit titles follows [the Portal 2 plan](../../docs/plans/finished.md#portal-2).
 Nothing here is shipped.
 
 ## Native FEX build (host audit only)

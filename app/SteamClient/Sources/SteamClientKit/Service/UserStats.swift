@@ -2,7 +2,7 @@
 import Foundation
 
 /// A game's stats and achievements on Steam, and the Steam API emulator's
-/// copy of them (docs/plans/2026-09-27-steam-for-games.md, phase 3).
+/// copy of them (docs/plans/finished.md#steam-for-games, phase 3).
 ///
 /// Steam keeps a user's stats as 32-bit values by stat ID (a float stat as
 /// its bit pattern); an achievement is one bit of an "achievement block"

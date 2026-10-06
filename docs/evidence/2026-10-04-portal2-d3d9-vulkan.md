@@ -2,7 +2,7 @@
 
 ## Result
 
-[Milestone 2](../PORTAL2-PLAN.md#milestone-2-portal-2s-menu) is reached. Portal 2 plays
+[Milestone 2](../plans/finished.md#portal-2) is reached. Portal 2 plays
 its intro videos and reaches its main menu about 30 s after Play. In a measured run,
 the menu runs at the display's rate:
 

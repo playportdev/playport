@@ -176,7 +176,7 @@ device, pairing and session data before sharing logs.
 Public CI checks source and host tests only; it does not build, sign, install,
 test on a phone or upload IPAs. A green check is not release approval. The
 recipient source-bundle build and public signing workflow remain untested;
-[`the release plan`](docs/plans/open-source-release.md) tracks the open gates.
+[DISTRIBUTION.md](docs/DISTRIBUTION.md) is the release procedure.
 The Linux pipeline uses Apple's SDK and ld64: a working build or Personal Team
 signature does not settle Apple's SDK, provisioning, JIT or delivery terms.
 

@@ -1,7 +1,7 @@
 # 0019: The JIT pool is sized from the memory limit; pseudo-processes keep private ntdll copies
 
 **Status:** accepted, 2026-09-28. Settles item 2 of the
-[runtime-risks plan](../plans/2026-09-27-runtime-risks.md) (the pool is fixed
+[runtime-risks plan](../plans/finished.md#runtime-risks) (the pool is fixed
 and single-shot): its sizing, and whether pseudo-processes can share one
 read-only ntdll copy. The measurements are in the
 [evidence record](../evidence/2026-09-28-jit-pool.md).

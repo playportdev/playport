@@ -4,9 +4,8 @@
 not permission to publish.** Playport is open source. Its IPAs are free to
 download from this repository's GitHub Releases, and support is voluntary,
 through Ko-fi or Patreon. `LICENSE` stays GPL-3.0-or-later with the existing
-exception. The source and the IPA are published through separate gates;
-[plans/open-source-release.md](plans/open-source-release.md) tracks the work
-still open.
+exception. The source and the IPA were published through separate gates
+([finished plans](plans/finished.md#open-source-publication-and-the-first-ipa)).
 
 ## What a release holds
 
