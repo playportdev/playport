@@ -16,3 +16,4 @@
 0014-kk-key-cached-shaders-on-all-the-pipeline-state-they.patch
 0015-kk-a-device-pipeline-cache-and-the-Mesa-disk-cache.patch
 0016-kk-MESA_KK_DEBUG-compile-counts-shader-sources-and-s.patch
+0017-kk-MESA_KK_GPU_CAPTURE_FRAME-N-captures-one-frame.patch

@@ -94,3 +94,4 @@
 0093-ntdll-keep-a-web-page-s-query-out-of-the-process-com.patch
 0094-win32u-log-changed-captions-and-static-dialog-text-o.patch
 0095-ntdll-route-iOS-NSI-reads-to-Wine-NDIS-and-IP-provid.patch
+0096-ntdll-name-KosmicKrisp-samples-by-offset-per-thread-.patch

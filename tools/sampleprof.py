@@ -18,6 +18,15 @@ prints percentage tables; a table here weights each burst by its sample count:
                 for d3d11)
   unix-inclusive the first Madeira-dylib frame on the chain
   guest-thread  thread/guest block: which thread runs which guest code
+  thread-leaf   thread/leaf for native code: where dxvk-cs, the submit thread
+                and Metal's threads spend theirs (madeira-unix 0096)
+  thread-module thread/module: each thread's time by module (guest code as
+                x64-JIT), so many small functions add up (madeira-unix 0096)
+
+A KosmicKrisp leaf is logged by its offset (KosmicKrisp+<offset>, madeira-unix
+0096) and named here from the staged framework's local symbols. A run on the
+Vulkan backend (its log's "graphics: vulkan" line) symbolises d3d11, dxgi and
+d3d12 against DXVK's and vkd3d-proton's builds, not DXMT's.
 
 An i386 guest's block is logged by its 32-bit address (x86:<address>); the
 log's i386 image lines name its module (x86:<module>+<rva>), and Wine's own
@@ -38,6 +47,12 @@ import phonelib  # noqa: E402
 
 REPO = phonelib.REPO
 RUNTIME = os.path.join(REPO, "app", "Sources", "S1Probe", "Runtime")
+KOSMICKRISP = os.path.join(REPO, "app", "Staged", "KosmicKrisp.xcframework", "ios-arm64", "KosmicKrisp.framework",
+                           "KosmicKrisp")
+# a run's backend: "vulkan" puts the overlay's DLLs (Runtime/vulkan) before the runtime's
+BACKEND = {"graphics": "dxmt"}
+GRAPHICS_RE = re.compile(r"\bgraphics: (dxmt|vulkan)\b")
+KK_KEY_RE = re.compile(r"^KosmicKrisp\+([0-9a-f]+)$")
 # a module's name in the guest's loader list -> its staged file
 ALIAS = {"libarm64ecfex.dll": "xtajit64.dll"}
 BURST_RE = re.compile(r"\[wprof\] ml1129 burst: (\d+) running samples")
@@ -64,7 +79,8 @@ def llvm(tool):
 def staged(module, x86=False):
     name = ALIAS.get(module.lower(), module.lower())
     arches = (("vulkan/i386-windows", "i386-windows") if x86 else
-              ("arm64ec-windows", "aarch64-windows"))
+              (("vulkan/arm64ec-windows",) if BACKEND["graphics"] == "vulkan" else ())
+              + ("arm64ec-windows", "aarch64-windows"))
     for arch in arches:
         d = os.path.join(RUNTIME, arch)
         try:
@@ -100,6 +116,38 @@ def symbols(module, x86=False):
         if len(p) == 3 and p[1] in "TtWw" and not p[2].endswith("$exit_thunk"):
             syms.append((int(p[0], 16), p[2]))
     return (base, syms) if base is not None and syms else None
+
+
+@functools.lru_cache(maxsize=None)
+def kk_symbols():
+    """Sorted [(offset, name)] of the staged KosmicKrisp framework; [] without it."""
+    if not os.path.exists(KOSMICKRISP):
+        return []
+    out = subprocess.run([llvm("llvm-nm"), "-n", "--defined-only", KOSMICKRISP],
+                         capture_output=True, text=True).stdout
+    syms = []
+    for l in out.splitlines():
+        p = l.split(None, 2)
+        if len(p) == 3 and p[1] in "Tt":
+            syms.append((int(p[0], 16), p[2][1:] if p[2].startswith("_") else p[2]))
+    return syms
+
+
+def kk_name(key):
+    """KosmicKrisp+<offset> -> KosmicKrisp`function (the key when it has no symbol)."""
+    m = KK_KEY_RE.match(key)
+    syms = kk_symbols() if m else []
+    if not syms:
+        return key
+    off = int(m[1], 16)
+    lo, hi = 0, len(syms)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if syms[mid][0] <= off:
+            lo = mid + 1
+        else:
+            hi = mid
+    return f"KosmicKrisp`{syms[lo - 1][1]}" if lo else key
 
 
 def i386_images(lines):
@@ -143,7 +191,9 @@ def x86_key(key, images):
 def name(key):
     """A table key with a PE module+rva symbolised: module!function (+rva when
     the DLL has no symbols, e.g. the game's own executable)."""
-    thread, _, rest = key.rpartition("/") if "/x" in key else ("", "", key)
+    thread, _, rest = key.partition("/") if "/" in key else ("", "", key)
+    if rest.startswith("KosmicKrisp+"):
+        return f"{thread + '/' if thread else ''}{kk_name(rest)}"
     rest, helper = (rest.split(":helper-", 1) + [""])[:2]
     m = PE_KEY_RE.match(rest)
     if not m:
@@ -203,9 +253,14 @@ def report(lines, top=40):
     tables, total = parse(lines)
     if not total:
         return None
+    backend = next((m[1] for m in map(GRAPHICS_RE.search, lines) if m), "dxmt")
+    if backend != BACKEND["graphics"]:
+        BACKEND["graphics"] = backend
+        symbols.cache_clear()
     images = i386_images(lines)
-    out = [f"{total} running samples; each row: % of all samples, then the key"]
-    for t in ("class", "thread", "leaf", "pe-inclusive", "unix-inclusive", "d3d12-inclusive", "guest-thread"):
+    out = [f"{total} running samples ({backend}); each row: % of all samples, then the key"]
+    for t in ("class", "thread", "leaf", "pe-inclusive", "unix-inclusive", "d3d12-inclusive", "guest-thread",
+              "thread-leaf", "thread-module"):
         if t not in tables:
             continue
         merged = defaultdict(float)

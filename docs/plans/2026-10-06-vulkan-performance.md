@@ -1,17 +1,6 @@
 # Plan: Vulkan at least on par with DXMT, on Hollow Knight in Direct3D 11 and 12
 
-**Linear:** [PLA-72](https://linear.app/playportdev/issue/PLA-72).
-**Review:** partial/paused, not "not started". The latest execution handoff is
-this file on the unmerged `vulkan-performance` branch at `e8091cd`; read it before
-continuing (`git show e8091cd:docs/plans/2026-10-06-vulkan-performance.md`). The
-owner's 2026-10-07 instruction there replaces the repeated matrices below:
-**fix, then one targeted run**, investigate no-gain results before retrying, and
-one final run per mode/backend. Tooling and found stability faults were checked
-on that branch; the performance gap remains. Some fixes were ported to main;
-reconcile patch contents rather than branch-local numbers. PLA-77 owns the
-long-term backend migration.
-
-**Date:** 2026-10-06. **Kind:** plan, not started. **Pins read:** as in the
+**Date:** 2026-10-06. **Kind:** plan, in progress (see [Progress](#progress)). **Pins read:** as in the
 [KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 (a
 Mesa `main` commit of 2026-10-05; `main` was 54 commits ahead on 2026-10-06, none
 of them in `src/kosmickrisp` or the Metal WSI) + `patches/mesa` (16), `dxvk` e5ffd0f (unmodified), `vkd3d-proton` 31d1f89 +
@@ -384,3 +373,17 @@ The owner answered on 2026-10-06:
 5. **Mesa.** The pin is already a `main` commit (b39d173, 2026-10-05), so
    there is no catch-up move before the baseline. The baseline runs at the pin.
    Later `main` commits are taken as levers in step 4, each with its own A/B.
+
+## Progress
+
+Run unattended on branch `vulkan-performance` from 2026-10-06; each decision taken
+without the owner is recorded here with its reason.
+
+- **Step 0: done** ([evidence](../evidence/2026-10-06-vulkan-perf-tooling.md)).
+  Graphics options (decision 0060; 0059 is left to the Epic decision 0058 names),
+  `[frames]` lines for `--no-hud`, `pp perf --compare --window`, KosmicKrisp one-frame
+  capture (`patches/mesa` 0017) with `tools/gputrace.py` reading Metal 4, and the
+  sampler's KosmicKrisp names and per-thread tables (`patches/madeira-unix` 0086).
+  Decision: GPU time per pass on KK was not built (the plan makes it conditional on
+  step 2 showing a GPU gap); the capture already shows one structural difference, an
+  extra full-screen pass and a compute dispatch at present on the Vulkan route.

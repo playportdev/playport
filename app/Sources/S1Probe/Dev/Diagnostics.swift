@@ -7,6 +7,8 @@
 //
 //   GPU capture         DXMT writes one frame as a Metal .gputrace into the
 //                       game's folder (DXMT_CAPTURE_FRAME, dxmt_command_queue.cpp),
+//                       and on the Vulkan backend KosmicKrisp does
+//                       (MESA_KK_GPU_CAPTURE_FRAME, patches/mesa 0017),
 //                       for `pp phone pull` and tools/gputrace.py. Metal allows
 //                       a capture only in a process that starts with
 //                       MTL_CAPTURE_ENABLED=1, which costs every frame, so it
@@ -43,6 +45,7 @@
 
 import Foundation
 import Metal
+import PlayportKit
 
 enum GPUCapture {
     static let key = "gpuCaptureFrame"
@@ -61,7 +64,8 @@ enum GPUCapture {
     /// DXMT captures only in the executable DXMT_CAPTURE_EXECUTABLE names, without
     /// its .exe, and only with MTL_CAPTURE_ENABLED=1 in the Windows environment
     /// too (dxmt_capture.cpp).
-    fileprivate static func environment(exe: String, log: (String) -> Void) -> [String: String] {
+    fileprivate static func environment(exe: String, dir: String, graphics: GraphicsBackend,
+                                        log: (String) -> Void) -> [String: String] {
         let wanted = UserDefaults.standard.integer(forKey: key)
         guard armed > 0 else {
             if wanted > 0 { log("gpu capture: frame \(wanted) is set, from Playport's next start") }
@@ -70,8 +74,13 @@ enum GPUCapture {
         let ok = MTLCaptureManager.shared().supportsDestination(.gpuTraceDocument)
         var name = String(exe.split(whereSeparator: { $0 == "\\" || $0 == "/" }).last ?? "")
         if name.lowercased().hasSuffix(".exe") { name.removeLast(4) }
-        log("gpu capture: frame \(armed) of \(name), to the game's folder; Metal \(ok ? "allows" : "refuses") a trace document")
+        log("gpu capture: frame \(armed) of \(name) on \(graphics.rawValue), to the game's folder; "
+            + "Metal \(ok ? "allows" : "refuses") a trace document")
         guard ok else { return [:] }
+        // KosmicKrisp counts its queue's presents and names the trace kk-frame<N>-<time>.gputrace.
+        if graphics == .vulkan {
+            return ["MESA_KK_GPU_CAPTURE_FRAME": String(armed), "MESA_KK_GPU_CAPTURE_DIRECTORY": dir]
+        }
         return ["MTL_CAPTURE_ENABLED": "1", "DXMT_CAPTURE_EXECUTABLE": name, "DXMT_CAPTURE_FRAME": String(armed)]
     }
 }
@@ -132,8 +141,9 @@ enum Diagnostics {
     static let cpuProfileKey = "cpuProfile"
 
     /// The next launch's diagnostic variables, each logged.
-    static func launchEnvironment(exe: String, log: (String) -> Void) -> [String: String] {
-        var env = GPUCapture.environment(exe: exe, log: log)
+    static func launchEnvironment(exe: String, dir: String, graphics: GraphicsBackend,
+                                  log: (String) -> Void) -> [String: String] {
+        var env = GPUCapture.environment(exe: exe, dir: dir, graphics: graphics, log: log)
         MetalValidation.log(log)
         RuntimeCounters.log(log)
         let d = UserDefaults.standard

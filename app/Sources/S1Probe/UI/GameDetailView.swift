@@ -948,6 +948,17 @@ private struct GameDetailPage: View {
                                      placeholder: "For example vram-mb=1024 inproc-sync=1",
                                      maxLength: 200) { settings.wrappedValue.runtime = $0 }
         }
+        // The Vulkan layers' options (decision 0060): an allowlisted set of variables, Vulkan launches only.
+        let options = settings.wrappedValue.graphicsOptions.trimmingCharacters(in: .whitespaces)
+        PadRow(id: "opt:graphicsOptions", title: "Graphics options",
+               subtitle: options.isEmpty || LaunchSettings.graphicsEnvironment(options) != nil ? nil
+                   : "Not DXVK options or \(LaunchSettings.graphicsVariables.joined(separator: ", ")) items: not used",
+               value: options.isEmpty ? "None" : options, accessory: .chevron, changed: !options.isEmpty, style: .plain,
+               reset: options.isEmpty ? nil : { settings.wrappedValue.graphicsOptions = "" }) {
+            PadModal.shared.keyboard(title: "Graphics options", text: settings.wrappedValue.graphicsOptions,
+                                     placeholder: "For example dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit",
+                                     maxLength: 300) { settings.wrappedValue.graphicsOptions = $0 }
+        }
         if let app = t.appID {
             let mode = settings.wrappedValue.steamAPI ?? .emulated
             PadRow(id: "opt:steamAPI", title: "Steam API", value: Self.steamAPIModeText(mode), accessory: .chevron,

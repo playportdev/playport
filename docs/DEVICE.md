@@ -247,7 +247,12 @@ comes out within a day of it. What a move from 1.6.0 to 1.9.0 costs was measured
   [Sharing the phone](#sharing-the-phone)); `--keep-settings` keeps them as a
   player's would, and `ID:{}` clears them. A play with none set runs at
   720 rows and 60 FPS, the default. A measurement at native resolution or
-  free-running must say so: `{"screen":"native","frameLimit":0}`. A game's options have no environment
+  free-running must say so: `{"screen":"native","frameLimit":0}`. A dev build's
+  `graphicsOptions` (the Developer section's *Graphics options*, decision
+  [0060](decisions/0060-graphics-options.md)) set the Vulkan layers' variables
+  from an allowlist: `{"graphicsOptions":"dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit"}`
+  (a `dxvk.`/`dxgi.`/`d3d11.` item goes into `DXVK_CONFIG`; also `MESA_KK_DEBUG`,
+  `MESA_KK_EXPERIMENTAL`, `MESA_KK_DISABLE_WORKAROUNDS`). Otherwise a game's options have no environment
   variables, so the runtime's environment switches (`WINE_HOST_LOG_STAMP`,
   `WINE_HOST_SAMPLE`, `WINE_HOST_DIAG` in `wine_host.c`) have no way in. A
   cohort title's madeira.cfg keys come from its `titles.json` entry
@@ -418,8 +423,9 @@ figures, the launch settings that differ, and the frame rate per 30 s.
   `--pass-prof` turn them on for one run.
   - CPU sampling (`WINE_IOS_PROF=1`): the busiest threads at about 1 kHz,
     3 s in every 15 s; `profile.txt` has the class, thread, leaf function and
-    the PE function each sample runs under, symbolised against the staged DLLs,
-    and an i386 guest's module+rva by thread (`guest-thread`).
+    the PE function each sample runs under, symbolised against the staged DLLs
+    (DXVK's and vkd3d-proton's for a Vulkan run) and KosmicKrisp's framework
+    (madeira-unix 0096), and an i386 guest's module+rva by thread (`guest-thread`).
   - GPU time per pass (`DXMT_PASS_PROF=1`, patches/dxmt 0008): every encoder
     of two frames in every 1200 presents; `passes.txt`
     (`tools/passprof.py LOG`) tables the sampled frames and the passes that
@@ -430,6 +436,9 @@ figures, the launch settings that differ, and the frame rate per 30 s.
   it costs every frame), so set it in one `pp ui` run and play in the next,
   in one session:
   `./pp phone lock -- sh -c './pp ui --action set:gpuCaptureFrame=600 && ./pp ui --play app-367520 --until first-frame+30'`.
+  On the Vulkan backend KosmicKrisp writes the frame instead (`MESA_KK_GPU_CAPTURE_FRAME`,
+  patches/mesa 0017): `pp gpu capture --frame 600 --settings '{"graphics":"vulkan"}'`
+  or `pp perf --gpu-capture 600 --settings …`.
   The log's `A new capture will be saved to` line names the bundle;
   `pp phone pull 'Documents/prefix/drive_c/Games/<game>/<name>.gputrace' DIR`
   fetches it whole (a Hollow Knight frame: 694 MB in 26 s), and
@@ -437,7 +446,9 @@ figures, the launch settings that differ, and the frame rate per 30 s.
   workstation replays it, so it has no timings
   ([evidence](evidence/2026-09-29-metal-tools-without-a-mac.md)); what a
   Mac would add is in [GPU-DEBUGGING.md](GPU-DEBUGGING.md).
-- `--no-hud` measures without the Metal HUD's logging cost. `--energy`
+- `--no-hud` measures without the Metal HUD's logging cost; frames are then
+  counted from the game layer's `[frames]` lines (every 16 drawables, either
+  backend; dev builds). `--energy`
   perturbs the title: use it for the CPU-to-GPU ratio only.
 - `--settings`, the HUD switch and Diagnostics last for the run's session and
   are undone at the app's next launch outside it (`--keep-settings` keeps them).

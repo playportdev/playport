@@ -5,8 +5,8 @@ use and the SoC's thermal power budget, second by second.
   pp perf [--out DIR] [--title ID] [--secs S] [--shot WHEN ...] [--cool MIN] [--settings JSON]
           [--pad WHEN:SCRIPT ...] [--no-hud] [--no-counters] [--energy] [--pass-prof] [--cpu-prof] [--gpu-capture FRAME] [--expect-ipa IPA|SHA256] [--any-build]
           [--keep-settings] [--dry-run]
-  pp perf --analyze DIR [--frames auto|hud|present]
-  pp perf --compare DIR DIR ... [--json]
+  pp perf --analyze DIR [--frames auto|hud|layer|present]
+  pp perf --compare DIR DIR ... [--window LO:HI] [--json]
 
 WHEN is SECS after the launch, or first-frame+SECS after the game's first
 frame. The launch is the product UI's Play of --title (default app-367520,
@@ -14,7 +14,9 @@ Hollow Knight), through `pp ui`. Settings' Metal HUD is turned on first, in
 a launch of its own: a dev build that starts with it on also has Metal log the
 HUD's figures (MetalHUD in HostIO.swift). --no-hud turns it off instead: the
 HUD's per-frame logging costs the process CPU work, and frames are then
-counted from DXMT's per-16-present `[iOS DXMT] Present #N t=` lines.
+counted from the game layer's per-16-drawable `[frames] HH:MM:SS.mmm n=N` lines
+(PacedMetalLayer in HostIO.swift, either backend), or in a run from before
+them, DXMT's per-16-present `[iOS DXMT] Present #N t=` lines.
 --settings JSON is saved as the title's launch settings first, as its page
 does. The HUD switch and --settings last for this run (one device lock
 session) and are undone at the app's next launch outside it, unless
@@ -166,6 +168,8 @@ XPT_ENT = re.compile(r"^(m\d+|[A-Z]*-?[0-9a-f]{4,}):([\d.]+)/([\d.]+):[\d.]+/[\d
 # FEX's lookup-cache summary (every 16384 lookups): real_compiles counts guest
 # blocks translated so far; DXMT's per-16-present line counts mach exceptions
 CB_RE = re.compile(r"\[CB_SUMMARY\] total=\d+ real_compiles=(\d+)")
+# the game layer's line every 16 drawables taken (HostIO.swift, dev builds; any backend)
+FRAMES_RE = re.compile(r"^\[frames\] (\d\d):(\d\d):([\d.]+) n=(\d+)")
 PRESENT_RE = re.compile(r"\[iOS DXMT\] Present #(\d+) t=([\d.]+) .*machexc_delta=(\d+)")
 # patches/dxmt 0005: one line per shader conversion, library, function or
 # pipeline-state creation, and per draw that waited for its pipeline
@@ -325,9 +329,10 @@ def present_frames(pres):
 
 def analyze(d, bucket=5.0, frames_from="auto", echo=True):
     """Per-bucket table and a JSON summary from a run directory. Frames come
-    from the Metal HUD's lines; from DXMT's Present lines when the run has no
-    HUD lines (--no-hud) or frames_from is "present" (then the frame-time, GPU
-    and memory columns and hitches.txt are empty)."""
+    from the Metal HUD's lines; when the run has no HUD lines (--no-hud) or
+    frames_from says so, from the game layer's [frames] lines, else DXMT's
+    Present lines (then the frame-time, GPU and memory columns and hitches.txt
+    are empty)."""
     log = os.path.join(d, "run", "pull", "s1-host.log")
     this = os.path.join(d, "this-launch.log")
     if not os.path.exists(this):
@@ -342,7 +347,7 @@ def analyze(d, bucket=5.0, frames_from="auto", echo=True):
             f.write(data[data.rfind(b"\n", 0, i) + 1:])
     with open(this, errors="replace") as f:
         lines = f.read().splitlines()
-    hud, xp, budget, xpt, names, vpad, pres, srv, srvt = [], [], [], [], {}, [], [], [], []
+    hud, xp, budget, xpt, names, vpad, pres, srv, srvt, lay = [], [], [], [], {}, [], [], [], [], []
     # (t, kind, n): lines without a time of their own take the last time seen
     # in the log, which runs at least four times a second ([xp], [xp-t])
     ev, cur_t, last_cb = [], None, None
@@ -377,6 +382,12 @@ def analyze(d, bucket=5.0, frames_from="auto", echo=True):
         if m:
             cur_t = secs_of(m[1], m[2], m[3])
             vpad.append((cur_t, m[4]))
+            continue
+        if l.startswith("[frames] "):
+            m = FRAMES_RE.match(l)
+            if m:
+                cur_t = secs_of(m[1], m[2], m[3])
+                lay.append((cur_t, int(m[4]), [], [], None))
             continue
         if l.startswith("[xp-t] "):
             m = XPT_RE.match(l)
@@ -460,7 +471,11 @@ def analyze(d, bucket=5.0, frames_from="auto", echo=True):
             seen.add(h[1])
             uh.append(h)
     hud = uh
-    if frames_from == "present" or (frames_from == "auto" and len(hud) < 2):
+    if frames_from == "layer" or (frames_from == "auto" and len(hud) < 2 and len(lay) >= 2):
+        hud = lay
+        if len(hud) < 2:
+            raise SystemExit(f"{d}: fewer than two [frames] lines (a build from before them?)")
+    elif frames_from == "present" or (frames_from == "auto" and len(hud) < 2):
         hud = present_frames(pres)
         if len(hud) < 2:
             raise SystemExit(f"{d}: fewer than two DXMT Present lines")
@@ -751,6 +766,75 @@ def compare(dirs, window=30, as_json=False):
     return 0
 
 
+def pctl(xs, q):
+    """The q-th percentile (0-100) of xs, nearest rank; None for none."""
+    if not xs:
+        return None
+    xs = sorted(xs)
+    return xs[min(len(xs) - 1, max(0, int(round(q / 100 * len(xs) + 0.5)) - 1))]
+
+
+def window_row(d, lo, hi):
+    """One run's figures over t = lo..hi s of its table (the plan's burst or
+    sustained window): FPS over the played time, frame-interval percentiles and
+    hitch counts from the HUD's per-frame intervals, GPU ms, the CPU and power
+    columns as bucket means, the phone's mW a frame, all threads' Mi/f from the
+    threads.txt windows that start in it, and the lowest power budget."""
+    with open(os.path.join(d, "summary.json")) as f:
+        j = json.load(f)
+    rows = [r for r in j["rows"] if lo <= r["t"] < hi and r["live_s"]]
+    live = sum(r["live_s"] for r in rows)
+    mean = lambda k: (round(sum(r[k] for r in rows if r.get(k) is not None)
+                            / len([r for r in rows if r.get(k) is not None]), 2)
+                      if any(r.get(k) is not None for r in rows) else None)
+    fps = round(sum(r["fps"] * r["live_s"] for r in rows) / live, 1) if live else None
+    gpu = (round(sum(r["gpu_avg"] * r["fps"] * r["live_s"] for r in rows if r.get("gpu_avg") is not None)
+                 / sum(r["fps"] * r["live_s"] for r in rows if r.get("gpu_avg") is not None), 2)
+           if any(r.get("gpu_avg") is not None and r["fps"] for r in rows) else None)
+    # every frame's interval from the HUD lines, at its line's time from the first line
+    ft = []
+    with contextlib.suppress(OSError):
+        with open(os.path.join(d, "this-launch.log"), errors="replace") as f:
+            t0 = None
+            for l in f:
+                m = HUD_RE.search(l)
+                if not m:
+                    continue
+                t = secs_of(m[1], m[2], m[3])
+                t0 = t if t0 is None else t0
+                if lo <= t - t0 < hi:
+                    ft += [float(x) for x in m[7].split(",")[0::2] if x]
+    thr = [w["minst_per_frame"] for w in j.get("threads", []) if lo <= w["t"] < hi and w.get("minst_per_frame")]
+    budgets = [r["budget_mw"] for r in rows if r.get("budget_mw")]
+    sysmw = mean("sys_mw")
+    return {"run": os.path.basename(os.path.normpath(d)), "fps": fps,
+            "p50": pctl(ft, 50), "p99": pctl(ft, 99), "p999": pctl(ft, 99.9),
+            "h25": sum(1 for x in ft if x >= 25), "h50": sum(1 for x in ft if x >= 50),
+            "h100": sum(1 for x in ft if x >= 100), "gpu_ms": gpu,
+            "gpu%": mean("gpu_util"), "ren%": mean("ren_util"), "til%": mean("til_util"),
+            "mi_f": round(sum(thr) / len(thr), 1) if thr else None,
+            "cpu%": mean("cpu_pct"), "P%": mean("p_pct"), "E%": mean("e_pct"), "PGHz": mean("p_ghz"),
+            "cpu_mw": mean("mw"), "sys_mw": sysmw,
+            "sys_mj_f": round(sysmw / fps, 1) if sysmw and fps else None,
+            "budget_min": min(budgets) if budgets else None, "srv_f": mean("srv_pf"), "MiB": mean("app_mib")}
+
+
+def compare_window(dirs, spec, as_json=False):
+    """pp perf --compare DIR ... --window LO:HI: window_row for each run, as a table."""
+    lo, _, hi = spec.partition(":")
+    rows = [window_row(d, float(lo), float(hi)) for d in dirs]
+    if as_json:
+        print(json.dumps({"window": [float(lo), float(hi)], "runs": rows}, indent=1))
+        return 0
+    keys = [k for k in rows[0] if k != "run"]
+    w = max(len(r["run"]) for r in rows)
+    print(f"window t = {lo}..{hi} s")
+    print(f"{'run':<{w}} " + " ".join(f"{k:>8}" for k in keys))
+    for r in rows:
+        print(f"{r['run']:<{w}} " + " ".join(f"{'-' if r[k] is None else r[k]:>8}" for k in keys))
+    return 0
+
+
 HITCH_MS = (25, 50, 100)
 LOAD_GAP_S = 2.0
 
@@ -1002,6 +1086,10 @@ def run_main(argv):
                    help="only compare finished runs: their figures side by side, the launch settings that differ, "
                         "and the frame rate per 30 s (--json: the same as JSON)")
     p.add_argument("--json", action="store_true", help="with --compare: JSON instead of tables")
+    p.add_argument("--window", metavar="LO:HI",
+                   help="with --compare: each run's figures over t = LO..HI s instead (FPS, frame-interval "
+                        "p50/p99/p99.9 and hitches, GPU ms and utilisation, all threads' Mi/f, CPU and phone "
+                        "power, the phone's mJ a frame, the lowest budget, srv/f)")
     p.add_argument("--profile", metavar="DIR",
                    help="only print the run's sampling profile, symbolised (a run with --cpu-prof; "
                         "tools/sampleprof.py)")
@@ -1009,7 +1097,8 @@ def run_main(argv):
     p.add_argument("--syslog-all", action="store_true", help="also keep the whole device syslog (syslog-all.txt)")
     p.add_argument("--no-hud", action="store_true",
                    help="turn Settings' Metal HUD off first (its per-frame logging costs CPU); frames then come from "
-                        "DXMT's Present lines and the frame-time, GPU and memory columns stay empty")
+                        "the game layer's [frames] lines (any backend) and the frame-time, GPU and memory columns "
+                        "stay empty")
     p.add_argument("--pass-prof", action="store_true",
                    help="turn on Settings' Diagnostics, GPU time per pass, for this run: winemetal times every "
                         "encoder of two frames in every 1200 presents; passes.txt tables them (tools/passprof.py)")
@@ -1026,9 +1115,9 @@ def run_main(argv):
                         "the samplers kept; the [xp-api], [sync-census] and [srv] figures then read zero")
     p.add_argument("--energy", action="store_true",
                    help="also sample Xcode's energy gauge for the app (energy.txt); it perturbs the title")
-    p.add_argument("--frames", choices=("auto", "hud", "present"), default="auto",
-                   help="with --analyze: count frames from the HUD's lines or DXMT's Present lines "
-                        "(auto: the HUD's when the run has them)")
+    p.add_argument("--frames", choices=("auto", "hud", "layer", "present"), default="auto",
+                   help="with --analyze: count frames from the HUD's lines, the game layer's [frames] lines or "
+                        "DXMT's Present lines (auto: the HUD's when the run has them, then the layer's)")
     p.add_argument("--expect-ipa", metavar="IPA|SHA256", help="refuse unless the phone has this IPA (pp ui)")
     p.add_argument("--any-build", action="store_true", help="measure whatever the phone has installed (pp ui)")
     p.add_argument("--keep-settings", action="store_true", help="keep the HUD switch and --settings after the run")
@@ -1038,6 +1127,8 @@ def run_main(argv):
         analyze(a.analyze, frames_from=a.frames)
         return 0
     if a.compare:
+        if a.window:
+            return compare_window(a.compare, a.window, as_json=a.json)
         return compare(a.compare, as_json=a.json)
     if a.profile:
         import sampleprof as prof

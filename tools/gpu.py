@@ -3,14 +3,16 @@
 """pp gpu: GPU debugging on the phone from this workstation (docs/GPU-DEBUGGING.md).
 
   pp gpu capture --frame N [--title ID] [--secs S] [--pad [first-frame+]SECS:SCRIPT ...]
-                 [--pass-prof] [--out DIR]
+                 [--settings JSON] [--pass-prof] [--out DIR]
       one frame of a play as a Metal .gputrace: sets Settings' Diagnostics (GPU capture
       at frame N, and the switches asked for) in one launch, plays in the next (Metal
       allows a capture only in a process that started with it), pulls the bundle into
       the run directory and writes capture.txt (pp gpu read), and passes.txt with
       --pass-prof. Not with validation: a capture with Metal validation on was never
       written (2026-09-29) --secs: seconds after the first frame to keep
-      playing (default: N/50 + 20, about frame N at 60 FPS with room)
+      playing (default: N/50 + 20, about frame N at 60 FPS with room).
+      --settings '{"graphics":"vulkan"}' captures on the Vulkan backend, where
+      KosmicKrisp writes the frame (patches/mesa 0017)
   pp gpu validate [--title ID] [--secs S] [--pad ...] [--shaders | --stop] [--out DIR]
       a play with Metal's API validation (--shaders: and shader validation) on;
       validation.txt groups what it found: the API layer's messages, shader
@@ -247,6 +249,7 @@ def play(a, ev, out, settings):
         threading.Thread(target=pusher, args=p, daemon=True).start()
     args = ["--play", a.title, "--until", f"first-frame+{a.secs}", "--quiet", "--wait", str(a.secs + 300)]
     args += ["--pad"] if pads else []
+    args += ["--settings", f"{a.title}:{a.settings}"] if a.settings else []
     follow = device_log(out, a.secs + 400) if settings.get("metalValidation") else None
     r = ui(os.path.join(out, "run"), *args, on_line=on_line)
     done.set()
@@ -341,6 +344,9 @@ def common(p):
     p.add_argument("--pad", action="append", default=[], metavar="[first-frame+]SECS:SCRIPT",
                    help="push SCRIPT (a tools/pad/ name or file) this long after launch or the first frame")
     p.add_argument("--out", help="the run directory (default $PLAYPORT_BUILD/gpu-runs/<time>)")
+    p.add_argument("--settings", metavar="JSON",
+                   help="the title's launch settings for this play, as pp ui --settings: "
+                        "'{\"graphics\":\"vulkan\"}' captures KosmicKrisp's frame (patches/mesa 0017)")
 
 
 def main(argv):

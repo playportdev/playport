@@ -231,6 +231,7 @@ final class LibraryModel: ObservableObject {
         settings.diskCache = nil
         settings.steamAPI = .emulated
         settings.runtime = [:]
+        settings.graphicsEnvironment = [:]
         #else
         let settings = LaunchSettingsStore.shared.effective(for: t)
         #endif
@@ -295,7 +296,7 @@ final class LibraryModel: ObservableObject {
         guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments + epicArgs,
                                        config: settings.config(over: plan.config),
                                        screen: settings.screen, frameLimit: settings.frameLimit,
-                                       graphics: settings.graphics,
+                                       graphics: settings.graphics, graphicsEnvironment: settings.graphicsEnvironment,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy) else {
             endTickets()
