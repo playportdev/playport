@@ -88,6 +88,11 @@ own Apple ID (a free one works).
    Memory and Steam. Memory has a green tick when the signature kept Increased
    Memory Limit.
 
+Already enable JIT with StikDebug, or run apps in LiveContainer? Settings ›
+Setup check › JIT method (or X on the checklist's first step) takes JIT from
+StikDebug or from another app instead, with StikDebug's `universal.js` script.
+Inside LiveContainer, launch Playport with JIT from LiveContainer.
+
 A free Apple ID signs the app for seven days, so re-sign it once a week; your
 games and saves stay on the phone.
 
@@ -148,7 +153,7 @@ play with. In plain points:
 | **Upstreams** | its own forks: Wine 11.4, FEX 2607, an older DXMT | the latest releases: WineHQ 11.18 with Valve's Proton 11 Wine, FEX 2609.1, DXMT main, Mesa main |
 | **Getting games** | launches set up per test title | sign in to Steam, browse your library, download to the phone; cloud saves and achievements |
 | **The app** | a touch-driven test bench; controllers and touch controls reach the game | a landscape, gamepad-first app with an in-game menu to pause, resume or quit |
-| **JIT** | a separate debugger app attaches for every launch | a JIT helper built into the app, after a one-time pairing |
+| **JIT** | a separate debugger app attaches for every launch | a JIT helper built into the app, after a one-time pairing; StikDebug or LiveContainer still work |
 | **Building** | Xcode on a Mac | one Linux machine and a free Apple ID; no Mac anywhere |
 | **Getting it** | build it yourself | a ready `.ipa` on [Releases](https://github.com/playportdev/playport/releases), with the complete source of that exact build |
 

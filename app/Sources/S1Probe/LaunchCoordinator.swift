@@ -163,7 +163,8 @@ enum LaunchCoordinator {
         if let fex {
             let profile = fex.override.map { "Proton's \($0.pattern) entry for this game" } ?? "Proton's defaults"
             log("fex: ordering \(fex.summary) maxinst=\(fex.maxInst)\(fex.maxInstChosen ? "*" : "") "
-                + "x87reduced=\(fex.x87Reduced ? 1 : 0)\(fex.x87Chosen ? "*" : "") (* the game's page; the rest \(profile))")
+                + "x87reduced=\(fex.x87Reduced ? 1 : 0)\(fex.x87Chosen ? "*" : "") "
+                + "diskcache=\(fex.diskCache ? 1 : 0)\(fex.diskCacheChosen ? "*" : "") (* the game's page; the rest \(profile))")
         }
         for name in env.keys.sorted() { setenv(name, env[name]!, 1) }
         let steam = SteamGameID.names.filter { env[$0] != nil && backend[$0] == nil }
@@ -279,6 +280,7 @@ enum LaunchCoordinator {
         }
 
         log("display: \(TitleScreen.summary)")
+        Fastsync.apply(log: log)
         ThermalLog.start()
         HostIO.prepareRuntime(log: WineHostRuntime.appendLog)
         if HostIO.surfaceReady.wait(timeout: .now() + 15) == .timedOut {

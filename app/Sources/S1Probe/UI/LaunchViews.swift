@@ -100,16 +100,27 @@ extension LaunchScreen {
 
 /// What the player can do about a slow or failed step.
 enum LaunchFix {
-    static func slowJit(tunnelUp: Bool) -> String {
-        tunnelUp ? JitNote.waiting
-                 : "LocalDevVPN is not connected. Open LocalDevVPN and connect it: the launch goes on once JIT arrives."
+    /// What the launch screen says while it waits for JIT, by where JIT comes from (JitMethod).
+    static func slowJit(tunnelUp: Bool, method: JitMethod = JitProvider.method) -> String {
+        if method == .external { return JitNote.waitingForAnotherApp }
+        if !tunnelUp {
+            return "LocalDevVPN is not connected. Open LocalDevVPN and connect it: the launch goes on once JIT arrives."
+        }
+        return method == .stikDebug ? JitNote.waitingForStikDebug : JitNote.waiting
     }
 
-    static func failed(_ step: LaunchStage, tunnelUp: Bool) -> String {
+    static func failed(_ step: LaunchStage, tunnelUp: Bool, method: JitMethod = JitProvider.method) -> String {
         switch step {
         case .jit, .preparing:
-            tunnelUp ? "JIT did not arrive. Keep Playport in front while the game starts, then try again."
-                     : "LocalDevVPN is not connected. Turn it on (Y), then try again."
+            if method == .external {
+                "JIT did not arrive. Enable JIT for Playport in your JIT app, with the universal.js script, then try again."
+            } else if !tunnelUp {
+                "LocalDevVPN is not connected. Turn it on (Y), then try again."
+            } else if method == .stikDebug {
+                "JIT did not arrive. Check that StikDebug is installed and set up, then try again."
+            } else {
+                "JIT did not arrive. Keep Playport in front while the game starts, then try again."
+            }
         case .runtime: "Try again. If it fails again, restart the iPhone."
         case .game, .drawing: "Try again. If it fails again, check the game's files in its options."
         }
@@ -278,7 +289,7 @@ final class LaunchFailureSession: ObservableObject {
 
     init(_ message: LaunchMessage) { self.message = message }
 
-    var offersVPN: Bool { (message.step == .jit || message.step == .preparing) && !tunnelUp }
+    var offersVPN: Bool { (message.step == .jit || message.step == .preparing) && !tunnelUp && JitProvider.method.usesTunnel }
 
     func press(_ b: NavButton) {
         switch b {

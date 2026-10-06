@@ -22,7 +22,7 @@ dependency moves to the head of its development branch, and the Valve
 reference is Proton **bleeding-edge**:
 
 - FEX: `main` (what bleeding-edge ships), not FEX-2609.1 or a later monthly tag.
-- Madeira, DXMT, Mesa, DXVK, vkd3d-proton: their `main`/`master` heads
+- Madeira (frozen at `8c050d0` since decision 0054), DXMT, Mesa, DXVK, vkd3d-proton: their `main`/`master` heads
   (bleeding-edge's DXVK and vkd3d-proton are already the heads).
 - `wine-valve`: picks from Valve Wine's bleeding-edge branch (`750fd011` at
   this snapshot), not proton_11.0. The three WoW64 suspend-helper reverts come
@@ -48,8 +48,8 @@ One sequence for this plan and
 | 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources` | strategy, step 0 |
 | 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move | strategy, step 1 |
 | 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit. **Rows 2–7 and 2b done** (decision 0049, e71e8a7..b011dbf, one commit and IPA each): every IPA passes the gate on both titles; the final build does less CPU work a frame than the baseline, and Portal 2's ≥25 ms load-segment hitch count (52 → 134 in the first pair) is run-to-run spread, the baseline alone spanning 52–268 over three runs ([deps-latest](../evidence/2026-10-05-deps-latest.md)). **Rows 8–10 done** (1e86afc, 2370713, 7ce2b51 after the rebase): freetype VER-2-14-3, rust 1.99.0 and stikjit 1.9.0 moved, one commit and IPA each; gbe, abseil-cpp, idevice, llvm-project, xtool (needs a machine-wide Darwin SDK reinstall) and gstreamer (a new release needs a new licensing audit) held, each with its reason. Every `pins.lock` row except `madeira` (order 5) is now moved or held. **DONE (2026-10-05):** the branch was rebased onto `main` 0.3.2 (which had taken the StikJIT 1.9.0 move itself), and one gate on the rebased final IPA `35956f63`, which contains all three moves, passed on both titles (JIT 2.31 / 2.50 s, first frame +9.53 / +7.48 s); xtool and GStreamer held by the owner | alignment, step 1 (rows 2–10) |
-| 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs | strategy, step 2 |
-| 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases | alignment, step 1 (row 11) |
+| 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs. **Superseded by [0054](../decisions/0054-madeira-frozen.md) (Madeira frozen); `madeira-main` kept as a reference branch.** | strategy, step 2 |
+| 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases. **Superseded by [0054](../decisions/0054-madeira-frozen.md) (Madeira frozen); `madeira-main` kept as a reference branch.** Fastsync is ported onto `8c050d0` as Playport patches | alignment, step 1 (row 11) |
 | 6 | The alignment items (A, B) and the Portal 2 performance follow-ups | alignment, step 2 |
 
 Steps 1–2 come first because the helper pays off on the moves of step 3; step 4
@@ -93,7 +93,7 @@ Re-read the heads before starting. Valve moves these branches weekly.
   build records (`app/artifacts.tsv`, `build/generated/wine-pe-*.tsv`) and an
   evidence record `docs/evidence/<date>-<dep>-<sha8>.md` with the IPA sha256.
 - **How each moves**, per AGENTS.md "Pins" and UPSTREAM-SYNC.md:
-  - Madeira moves only by `pp sync <sha>`.
+  - Madeira does not move: it is frozen at `8c050d0` (decision 0054); `pp sync` reports its new commits.
   - `wine`, `fex`, `rpmalloc`, `dxmt` and `wine-valve` move by a manual rebase or
     pick. Check every auto-merged hunk with `git range-diff` against both sides.
   - After a DXMT rebase, run `gen_remote_guard.py` and `gen_api_names.py`;
@@ -146,7 +146,7 @@ Before the base moves, add the rebase helper of the dependency-strategy plan
 | 8 | `gbe` | release-2026_09_27 | the same (newest release) | not used | No move unless a newer release appears. |
 | 9 | `freetype`, `abseil-cpp`, `xtool`, `gstreamer`, `idevice`, `rust` | see `pins.lock` | not checked | n/a | Each in its own commit with the same gate. `abseil-cpp` follows gbe's protobuf, so it moves only when gbe names a newer one. |
 | 10 | `llvm-project` 15.0.7, `stikjit` 1.6.0 | (these) | newer exist | n/a | **Expected holds; record the reason.** airconv is built against LLVM 15. A StikJIT 3.x move changes the JIT script protocol (runtime-risks plan, item 1). Try each move and record why it holds; do not force it. |
-| 11 | `madeira` | `8c050d0` | `main` `bbbf8d0` (2026-10-04), 438 commits ahead | (none) | `pp sync`. If Madeira moved its Wine, DXMT, FEX or rpmalloc, the sync holds (`*-port-moved`). Re-port the `patches/*-port` series and the `madeira-port` patches at the end of `madeira-unix`, then land the port rows and the Madeira pin together in one commit (UPSTREAM-SYNC.md). Last (owner, 2026-10-05), after the Madeira reconciliation of `2026-10-05-dependency-strategy.md` (its steps 0 and 2: the sync tooling for Madeira's reorganisation, then a decision per overlapping area), so that Madeira's fork deltas are re-ported once, onto the new bases. |
+| 11 | `madeira` | `8c050d0` | `main` `bbbf8d0` (2026-10-04), 438 commits ahead | (none) | **Superseded by [0054](../decisions/0054-madeira-frozen.md): frozen at `8c050d0`; `madeira-main` kept as a reference branch.** Before that: `pp sync`. If Madeira moved its Wine, DXMT, FEX or rpmalloc, the sync holds (`*-port-moved`). Re-port the `patches/*-port` series and the `madeira-port` patches at the end of `madeira-unix`, then land the port rows and the Madeira pin together in one commit (UPSTREAM-SYNC.md). Last (owner, 2026-10-05), after the Madeira reconciliation of `2026-10-05-dependency-strategy.md` (its steps 0 and 2: the sync tooling for Madeira's reorganisation, then a decision per overlapping area), so that Madeira's fork deltas are re-ported once, onto the new bases. |
 
 **Deliverable of step 1:** `docs/evidence/<date>-deps-latest.md`. It contains:
 
@@ -179,7 +179,8 @@ on the phone and whether it needs a decision record.
 - **Phone measurement:** none. `swift test` covers it.
 - **Decision record:** no.
 
-**A1. Global `MaxInst=500`.**
+**A1. Global `MaxInst=500`.** *Done 2026-10-06 (decision 0055): taken as Proton's
+default without the sweep below, at the owner's direction.*
 - **Change:** take Proton's global value under the profile entry and the
   game's page. Export `FEX_MAXINST` on every launch, and update
   `defaultBlockSize`, the page's default label and the tests.
@@ -227,7 +228,10 @@ Commits:
 
 ### B. Investigate before adopting
 
-**B1. FEX disk cache on by default** (Valve experimental/bleeding-edge, Proton `09d3d6e5`).
+**B1. FEX disk cache on by default** (Valve experimental/bleeding-edge, Proton `09d3d6e5`). *2026-10-06 (decision 0056): the Witcher 3 warm-start crash was a disk-cache
+key bug, fixed by `patches/fex` 0021; the default is held off: Hollow Knight's warm
+start corrupts rpmalloc (open); WoW64 keeps it off (0022); 5 GB budget and a
+Settings action.*
 - **Change if adopted:** `FEX_DISKCACHE=1` by default from the launch
   (`FEXProfile`), with a cap well below FEX's 1 GiB `DiskCacheMaxFileSize`.
   This needs a FEX that has the cap and the stale-entry pruning: FEX main, or

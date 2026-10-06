@@ -163,11 +163,12 @@ final class LibraryModel: ObservableObject {
         // The player's settings over 720p, 60 fps, Vulkan for DX12 and DXMT otherwise.
         #if PLAYPORT_RELEASE
         var settings = LaunchSettingsStore.shared.effective(for: t)
-        // Memory ordering, block size, x87 precision, the Steam API choice and runtime keys are a dev build's
+        // Memory ordering, block size, x87 precision, the disk cache, the Steam API choice and runtime keys are a dev build's
         // (decision 0034): the player's app runs the game's profile and the emulator, whatever a dev build left stored.
         settings.ordering = MemoryOrdering()
         settings.maxInst = nil
         settings.x87Reduced = nil
+        settings.diskCache = nil
         settings.steamAPI = .emulated
         settings.runtime = [:]
         #else
@@ -180,8 +181,10 @@ final class LibraryModel: ObservableObject {
                                        mode: settings.steamAPI,
                                        settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) })
         }
+        // FEX's disk cache stays under its budget (decision 0056): cleared before this launch when over it.
+        await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { Self.log($0) } }.value
         let fex = FEXProfile.launch(appID: t.appID, exe: plan.exe, ordering: settings.ordering, maxInst: settings.maxInst,
-                                    x87Reduced: settings.x87Reduced)
+                                    x87Reduced: settings.x87Reduced, diskCache: settings.diskCache)
         guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments,
                                        config: settings.config(over: plan.config),
                                        screen: settings.screen, frameLimit: settings.frameLimit,

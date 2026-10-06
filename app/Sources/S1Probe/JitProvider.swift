@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The one call a launch makes for its JIT pool (docs/ARCHITECTURE.md, JIT
 // activation). wine_host_jit_pool_acquire waits for any debugger that speaks
-// the universal brk #0xf00d protocol. Every launch, Home Screen or driven, asks
-// the app's own helper extension, which runs StikJIT against this process with
-// the pairing file the app holds (BuiltInJit.swift, docs/DEVICE.md, "JIT
-// activation"); no second app, no app switch. No workstation attaches any more
+// the universal brk #0xf00d protocol. Where that debugger comes from is the
+// player's JIT method (PlayportKit JitMethod, decision 0051):
+// - built-in, the default: the app's own helper extension runs StikJIT against
+//   this process with the pairing file the app holds (BuiltInJit.swift,
+//   docs/DEVICE.md, "JIT activation"); no second app, no app switch;
+// - StikDebug: Play opens stikdebug://enable-jit for this PID with StikDebug's
+//   universal.js, and StikDebug comes back to Playport;
+// - another app: Play only waits, for LiveContainer's Launch with JIT,
+//   SideStore, or StikDebug started by hand.
+// A debugger already attached (LiveContainer's Launch with JIT attaches before
+// the app runs) is used whatever the method. No workstation attaches any more
 // (decision 0011).
 //
 // Progress goes to the app log (AppLog) as `jit:` lines, with the app's foreground and
@@ -12,6 +19,7 @@
 
 import Foundation
 import os
+import PlayportKit
 import UIKit
 import WineHost
 
@@ -27,14 +35,25 @@ enum JitProvider {
 
     enum Failure: Error, CustomStringConvertible {
         case builtIn(BuiltInJit.Failure)
+        case stikDebug(String)
         case acquire(Int32)
 
         var description: String {
             switch self {
             case .builtIn(let f): return "built-in JIT: \(f)"
+            case .stikDebug(let why): return "StikDebug: \(why)"
             case .acquire(let rc): return "wine_host_jit_pool_acquire -> \(rc)"
             }
         }
+    }
+
+    /// LiveContainer runs Playport inside its own process and starts no app
+    /// extension, so the built-in helper cannot run (StikJIT INTEGRATION.md, "LiveContainer").
+    static let inLiveContainer = getenv("LC_HOME_PATH") != nil
+
+    /// The player's choice (Settings › Setup check), or the default for where Playport runs.
+    static var method: JitMethod {
+        JitMethod.effective(stored: UserDefaults.standard.string(forKey: JitMethod.key), inLiveContainer: inLiveContainer)
     }
 
     static var debuggerAttached: Bool {
@@ -51,11 +70,18 @@ enum JitProvider {
         var observers: [NSObjectProtocol] = []
         defer { observers.forEach(NotificationCenter.default.removeObserver) }
         var helper: HelperOutcome?
+        let method = Self.method
+        log("method \(method.rawValue)" + (inLiveContainer ? " (in LiveContainer)" : ""))
         if debuggerAttached {
-            log("debugger already attached; built-in helper not asked")
+            log("debugger already attached; \(method.label) not asked")
         } else {
             observers = watchTransitions(since: t0)
-            helper = try requestBuiltIn(wait: wait, since: t0)
+            switch method {
+            case .builtIn: helper = try requestBuiltIn(wait: wait, since: t0)
+            case .stikDebug: try requestStikDebug()
+            case .external:
+                log(String(format: "waiting up to %.0f s for a debugger from another app (universal.js)", wait))
+            }
         }
         let left = max(0, wait - Date().timeIntervalSince(t0))
         var rx: UnsafeMutableRawPointer?, rw: UnsafeMutableRawPointer?
@@ -77,7 +103,43 @@ enum JitProvider {
             }
         }
         guard rc == 0, let rx, let rw else { throw Failure.acquire(rc) }
+        // StikDebug (or the player) switched apps for the attach: the runtime
+        // starts once Playport is in front again, never in the background.
+        if method != .builtIn { waitUntilActive(since: t0) }
         return Pool(rx: rx, rw: rw, size: size)
+    }
+
+    /// Opens StikDebug with this process's request. Opening it only says iOS
+    /// took the request; the attach is what wine_host_jit_pool_acquire waits for.
+    private static func requestStikDebug() throws {
+        guard let bundle = Bundle.main.bundleIdentifier,
+              let url = JitMethod.stikDebugURL(bundleID: bundle, pid: getpid()) else {
+            throw Failure.stikDebug("no bundle identifier for the request")
+        }
+        log("asking StikDebug to attach to pid \(getpid()) (\(bundle), \(JitMethod.stikDebugScript))")
+        let opened = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var ok: Bool?
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url) { ok = $0; opened.signal() }
+        }
+        guard opened.wait(timeout: .now() + 10) == .success else { throw Failure.stikDebug("iOS did not open it within 10 s") }
+        guard ok == true else { throw Failure.stikDebug("it is not installed") }
+    }
+
+    /// Waits up to 60 s for the app to be active.
+    private static func waitUntilActive(since t0: Date) {
+        let deadline = Date() + 60
+        var logged = false
+        while Date() < deadline {
+            let active = DispatchQueue.main.sync { UIApplication.shared.applicationState == .active }
+            if active { break }
+            if !logged {
+                log(String(format: "pool ready at +%.2f s; waiting for Playport to be in front", Date().timeIntervalSince(t0)))
+                logged = true
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if logged { log(String(format: "in front at +%.2f s", Date().timeIntervalSince(t0))) }
     }
 
     private final class HelperOutcome: @unchecked Sendable {

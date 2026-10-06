@@ -208,8 +208,12 @@ private struct GameDetailPage: View {
         .task(id: "\(t?.appID.map(String.init) ?? "-") \(launch.running) \(signedIn)") {
             guard let t, let app = t.appID else { return }
             await model.loadGameProfile(app)
-            await model.syncStats(app)
-            await model.syncCloud(app)
+            // Not while the game runs: its launch suspends Steam in this process,
+            // and the next start of the app syncs the played game.
+            if !launch.running {
+                await model.syncStats(app)
+                await model.syncCloud(app)
+            }
             let root = LibraryModel.paths.games.appendingPathComponent(t.installDir, isDirectory: true)
             (steamAPIState, steamStubs) = await Task.detached(priority: .utility) {
                 (SteamAPISwap.state(in: root), SteamStub.sites(in: root))
@@ -403,7 +407,9 @@ private struct GameDetailPage: View {
         VStack(alignment: .leading, spacing: 3) {
             if let t {
                 if launch.spent {
-                    Text("Playport cannot start another game in this session. Close it and reopen it from the Home Screen to play again.")
+                    Text(JitProvider.inLiveContainer
+                         ? "Playport cannot start another game in this session. Close it and launch it again from LiveContainer with JIT to play again."
+                         : "Playport cannot start another game in this session. Close it and reopen it from the Home Screen to play again.")
                 } else if !t.canPlay {
                     Text("No Windows executable in this folder.").foregroundStyle(.orange)
                 } else if let job {
@@ -809,6 +815,18 @@ private struct GameDetailPage: View {
                 settings.wrappedValue.x87Reduced = $0.isEmpty ? nil : $0 == "reduced"
             }
         }
+        let cacheName: (Bool) -> String = { $0 ? "On" : "Off" }
+        let cache = OptionValue.of(own: settings.wrappedValue.diskCache, inherited: FEXProfile.defaultDiskCache, name: cacheName)
+        PadRow(id: "opt:diskCache", title: "Disk cache", value: cache.text, accessory: .chevron, changed: cache.changed,
+               style: .plain, reset: cache.changed ? { settings.wrappedValue.diskCache = nil } : nil) {
+            PadModal.shared.picker(
+                title: "Disk cache", context: "\(context) · x86 emulator", note: LaunchSettingsText.diskCacheFooter,
+                options: [PadOption(id: "", label: "Default", detail: cacheName(FEXProfile.defaultDiskCache)),
+                          PadOption(id: "on", label: "On"), PadOption(id: "off", label: "Off")],
+                selected: settings.wrappedValue.diskCache.map { $0 ? "on" : "off" } ?? "") {
+                settings.wrappedValue.diskCache = $0.isEmpty ? nil : $0 == "on"
+            }
+        }
         let keys = settings.wrappedValue.runtime.trimmingCharacters(in: .whitespaces)
         PadRow(id: "opt:runtime", title: "Runtime keys",
                subtitle: keys.isEmpty || LaunchSettings.runtimeKeys(keys) != nil ? nil : "Not key=value items: not used",
@@ -1089,6 +1107,8 @@ enum ProblemReport {
 enum JitNote {
     static let beforePlay = "JIT comes from Playport's own helper over LocalDevVPN, which Play turns on when it is off."
     static let waiting = "Playport's JIT helper is attaching. Keep Playport open."
+    static let waitingForStikDebug = "Waiting for StikDebug to enable JIT. It comes back to Playport when it is done."
+    static let waitingForAnotherApp = "Waiting for JIT from another app. Enable JIT for Playport there now, with the universal.js script."
 
     /// Why a game ended on running out of its JIT pool (LaunchMessage). Every Play
     /// gets the same pool (JitPool.sizeMB, decision 0036); only a dev build's simulated

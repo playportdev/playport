@@ -347,7 +347,26 @@ private struct StorageSettings: View {
                 AppNavigation.shared.openTitle(t.id)
             }
         }
+        // FEX's disk cache (decision 0056): its size, and the one way to clear it (decision 0012).
+        PadRow(id: "set:emulator-cache", title: "Emulator cache",
+               subtitle: "Speeds up later starts; cleared past 5 GB or when space is low",
+               value: cacheBytes.map(ByteCount.format) ?? "…", hint: launch.running ? "" : "Clear") {
+            guard !launch.running, !clearing else { return }
+            clearing = true
+            Task {
+                cacheBytes = await Task.detached(priority: .userInitiated) { () -> UInt64 in
+                    EmulatorCache.clear()
+                    return EmulatorCache.size()
+                }.value
+                clearing = false
+            }
+        }
+        .task { cacheBytes = await Task.detached(priority: .utility) { EmulatorCache.size() }.value }
     }
+
+    @ObservedObject private var launch = TitleLaunch.shared
+    @State private var cacheBytes: UInt64?
+    @State private var clearing = false
 }
 
 // MARK: About

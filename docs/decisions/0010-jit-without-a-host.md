@@ -6,6 +6,7 @@
 that the debugger-assisted JIT activation needs a paired host at every
 launch. Its statement that the workstation's activation tool stays for
 driven launches is superseded by [0011](0011-no-workstation-jit.md).
+[0051](0051-jit-from-another-app.md) adds StikDebug and another app (LiveContainer) beside the built-in helper, in both variants.
 
 ## Decision
 

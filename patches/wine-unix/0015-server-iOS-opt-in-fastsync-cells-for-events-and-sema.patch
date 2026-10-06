@@ -1,0 +1,1531 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: 125hz <nickfugitives@gmail.com>
+Date: Tue, 29 Sep 2026 02:10:01 -0500
+Subject: [PATCH] server iOS: opt-in fastsync cells for events and semaphores
+
+Add the server half of fastsync, the in-process event (and optional
+semaphore) fast path that Madeira's fork used as its default sync engine.
+It is an alternative to madsync, never a companion, and it is off unless
+MADEIRA_FASTSYNC selects it.
+
+include/wine/madeira_fastsync.h describes the protocol: every
+handle-reachable event gets a 32-byte cell in one table shared by the
+server thread and all guest threads of the iOS task, and the cell's packed
+{generation, state} word is the event's state. event_sync_signaled(),
+_satisfied() and _signal() read and write the cell where they used to read
+and write `signaled'; an auto-reset token the server hands to one of its
+own waiters is CLAIMED first so no client CAS can take it in between, and
+a wait-all that turns out unsatisfiable hands its claims back
+(check_wait). add_queue/remove_queue keep a server-waiter count the
+client reads before it skips a request. PulseEvent, and a watchdog
+request from the client, take one event out of the fast path for good.
+With MADEIRA_FASTSYNC_SEM=1 semaphores get the same cell, with the count
+in the state half. get_inproc_sync_fd, which has no fd to send on iOS,
+answers a cell index; event_op accepts a wake-only and a disable opcode
+from the iOS client. A timeout re-checks the objects before it fires
+while cells exist, since a client can raise one without a request.
+
+Default behaviour is unchanged: with MADEIRA_FASTSYNC unset (or 0/off),
+or whenever the server hands out madsync objects (get_inproc_device_fd()
+>= 0, i.e. madeira.cfg inproc-sync = 1, the default), no cell is ever
+allocated, every hook takes the existing path, and the timeout re-check
+is skipped. Everything is under WINE_IOS.
+
+Validation: compiled for iOS arm64 with the flags of Madeira's
+build/wineserver/build.sh against upstream's configured headers; no new
+warnings over the unchanged files. The protocol is the fork's, which ran as
+its default through the fork's device logs; its host race models are in
+the paired Madeira change (build/host-tests/fastsync-*.c).
+
+Playport (decision 0054): carried in patches/wine-unix on the Wine base of
+Madeira 8c050d0 (wine-11.19 plus patches/wine-port, Madeira's wine fork at
+723d1bf), taken from the madeira-main reference branch's re-port (its
+wine-port 0075, the cells on wine-11.19's designated object_ops); it applies
+as it is. The server builds event.c, semaphore.c, inproc_sync.c and thread.c
+from this tree (build/stages/unix-gaps.sh and Madeira's
+build/wineserver/build.sh), so the cells are compiled where they run.
+Madsync stays off (patches/madeira-unix 0014); the app sets MADEIRA_FASTSYNC
+(MadeiraSession.swift).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: 125hz <nickfugitives@gmail.com>
+
+Madeira-commit: e200a5e19a9855cca06c4e5e66726ffaa1630a56
+Class: feature
+Evidence: docs/evidence/2026-10-06-fastsync-on-8c050d0.md, madeira-main:docs/evidence/2026-10-06-portal2-madeira-wow64.md
+Offered-upstream: no
+---
+ include/wine/madeira_fastsync.h | 262 +++++++++++++++++
+ server/event.c                  | 490 ++++++++++++++++++++++++++++++++
+ server/inproc_sync.c            |  35 +++
+ server/object.h                 |  17 ++
+ server/semaphore.c              | 368 ++++++++++++++++++++++++
+ server/thread.c                 |  30 ++
+ 6 files changed, 1202 insertions(+)
+ create mode 100644 include/wine/madeira_fastsync.h
+
+diff --git a/include/wine/madeira_fastsync.h b/include/wine/madeira_fastsync.h
+new file mode 100644
+index 0000000..dcb61f5
+--- /dev/null
++++ b/include/wine/madeira_fastsync.h
+@@ -0,0 +1,262 @@
++/*
++ * Madeira fastsync: the shared cell table of the opt-in in-process event and
++ * semaphore fast path (iOS only).
++ *
++ * Copyright 2026 125hz
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++/*
++ * WHAT THIS IS
++ * ------------
++ * On iOS the wineserver is a thread in the same Mach task as every guest
++ * thread, so a server round trip is a socket write, two scheduler hops and a
++ * socket write back.  Fastsync is an alternative to madsync for the event and
++ * semaphore operations that dominate that traffic: each handle-reachable event
++ * (and, with MADEIRA_FASTSYNC_SEM, each semaphore) gets a cell in one array
++ * that the server and every guest thread share, and the cell's state word IS
++ * the object's state.  The server's signaled()/satisfied()/signal() hooks read
++ * and write the cell where they used to read and write their own field, and a
++ * client can set, reset, take or poll the object with a compare-and-swap plus
++ * at most one os_sync_wake_by_address.
++ *
++ * It is OFF unless MADEIRA_FASTSYNC asks for it, and it never runs together
++ * with madsync: when the server hands out madsync objects, no cell is
++ * allocated and the client takes no fast path.  With it off, every hook falls
++ * through to the unchanged upstream code.
++ *
++ * MADEIRA_FASTSYNC (read once per app run by both halves)
++ *   unset, "0", "off"  off: no cells, the upstream server and client.
++ *   "cells"            the server keeps state in cells; the client only
++ *                      answers zero-timeout polls that the cell proves are
++ *                      NOT signaled (it never consumes or mints a token).
++ *   "auto"             cells, plus the client wake path, armed once the task
++ *                      has issued more than MADEIRA_FS_AUTO_REQS (20000)
++ *                      event/semaphore/single-wait operations in 10 s.  A
++ *                      quiet process (a launcher, an installer) never arms.
++ *   "1", "on"          cells and the wake path from the first call.
++ * MADEIRA_FASTSYNC_SEM=1 extends the cells to semaphores (off by default).
++ *
++ * WHO OWNS WHAT
++ * -------------
++ * The table is defined by server/event.c and referenced by
++ * dlls/ntdll/unix/sync.c; both are linked into the one iOS image.  Cell
++ * allocation and freeing happen only on the server thread.  Everything a
++ * client touches is an atomic on one of the words below.
++ *
++ * THE STATE WORD
++ * --------------
++ *   MADEIRA_CELL_RESET     (0)  not signaled; also the futex sleep value.
++ *   MADEIRA_CELL_SET       (1)  signaled, token up for grabs.
++ *   MADEIRA_CELL_CLAIMED   (2)  signaled, but the server has decided (inside
++ *                               signaled()) to hand this auto-reset token to
++ *                               one of its own queued waiters.  Exists only
++ *                               between check_wait() and end_wait() on the
++ *                               server thread.  Clients must not consume it.
++ *   MADEIRA_CELL_DISABLED (-1)  this object has left the fast path for good
++ *                               (first PulseEvent, the client watchdog, or the
++ *                               cell being freed).  The server falls back to
++ *                               its own field and clients go to the server.
++ *
++ * For a semaphore cell the state half is the current COUNT (0..max);
++ * RESET (0) means empty, DISABLED (-1) is the same one-way exit, and 1 and 2
++ * are counts.  Every reader branches on `kind' first.
++ *
++ * THE TWO DEKKER PAIRINGS
++ * -----------------------
++ * (1) client setter vs. server waiter:
++ *       client:  store state = SET (seq_cst); load srv_waiters (seq_cst)
++ *                -> if != 0 also send the request so the server wakes its
++ *                   own queue (MADEIRA_EVENT_OP_WAKE, or release_semaphore
++ *                   with count 0; never a second set)
++ *       server:  srv_waiters++ (seq_cst, add_queue); load state (seq_cst,
++ *                signaled(), which check_wait() runs after wait_on())
++ * (2) client setter vs. client waiter: the same shape with `waiters'.  The
++ *     park re-checks the word inside the syscall, so a set that lands
++ *     between the waiter's load and the syscall does not sleep.
++ * On a total order at least one side of each pair sees the other; the worst
++ * case is a redundant wake, never a lost one.
++ *
++ * THE GENERATION IS PACKED INTO THE STATE WORD
++ * --------------------------------------------
++ * `gen' is bumped on every allocation and every free, and lives in the high
++ * half of the same 64-bit word as the state, so the CAS that takes a token
++ * also proves the cell has not changed hands since the caller resolved it.
++ * The futex still waits on the low (state) half: a pure generation bump does
++ * not wake a parked waiter, and every recycle also changes the low half.
++ * Every access to `sg' is a 64-bit atomic on both sides.
++ */
++
++#ifndef __WINE_MADEIRA_FASTSYNC_H
++#define __WINE_MADEIRA_FASTSYNC_H
++
++#include <stdint.h>
++
++/* 8192 cells x 32 bytes = 256 KB of zero-fill BSS; untouched pages are never
++ * committed.  Past the end the allocator answers "no cell" and that object
++ * keeps the plain server behaviour, so this is a tuning constant. */
++#define MADEIRA_SYNC_CELLS      8192
++
++#define MADEIRA_CELL_DISABLED   (-1)
++#define MADEIRA_CELL_RESET      0
++#define MADEIRA_CELL_SET        1
++#define MADEIRA_CELL_CLAIMED    2
++
++/* Which object owns a cell; immutable for the life of a generation. */
++#define MADEIRA_CELL_KIND_EVENT 0
++#define MADEIRA_CELL_KIND_SEM   1
++
++/* The packed {gen, state} word.  `state' is the low 32 bits read back SIGNED,
++ * so MADEIRA_CELL_DISABLED survives the round trip. */
++#define MADEIRA_SG(gen, state)  (((uint64_t)(unsigned int)(gen) << 32) | \
++                                 (uint64_t)(uint32_t)(int32_t)(state))
++#define MADEIRA_SG_GEN(sg)      ((unsigned int)((uint64_t)(sg) >> 32))
++#define MADEIRA_SG_STATE(sg)    ((int)(int32_t)(uint32_t)(uint64_t)(sg))
++
++struct madeira_sync_cell
++{
++    uint64_t     sg;           /* packed {gen:63..32, state:31..0}               */
++    int          srv_waiters;  /* server wait_queue entries on this object       */
++    int          waiters;      /* client threads parked on the state half        */
++    unsigned int manual;       /* 1 = manual-reset event                         */
++    unsigned int kind;         /* MADEIRA_CELL_KIND_*                            */
++    unsigned int smax;         /* semaphore maximum count, immutable             */
++    unsigned int reserved;     /* keeps the cell at 32 bytes, two per cache line */
++};
++
++/* The kind, read without synchronisation on purpose: it is written before the
++ * store of `sg' that publishes the cell, and every operation that acts on it
++ * re-validates the generation in the same atomic that performs the operation. */
++static inline unsigned int madeira_cell_kind( const struct madeira_sync_cell *cell )
++{
++    return __atomic_load_n( &cell->kind, __ATOMIC_RELAXED );
++}
++
++/* "Could a waiter be released right now?" for a state read from a load whose
++ * generation the caller has already matched.  CLAIMED is not signaled for a
++ * client: the server is handing that token to one of its own waiters. */
++static inline int madeira_cell_signalled( unsigned int kind, unsigned int manual, int state )
++{
++    if (kind == MADEIRA_CELL_KIND_SEM) return state > 0;
++    if (manual) return state > 0;
++    return state == MADEIRA_CELL_SET;
++}
++
++/* The futex address: the state half of `sg'.  Both sides must use this and
++ * only this, or a client parked by one could never be woken by the other. */
++#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
++    __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++#error "madeira_cell_futex() assumes the low half of sg lives at offset 0"
++#endif
++static inline int *madeira_cell_futex( struct madeira_sync_cell *cell )
++{
++    return (int *)&cell->sg;
++}
++
++extern struct madeira_sync_cell madeira_sync_cells[MADEIRA_SYNC_CELLS];
++
++/* The get_inproc_sync_fd reply doubles as the handle -> cell learn request
++ * (there is no /dev/ntsync on iOS, so no fd is ever in flight there).  Bit 30
++ * of `type' says "a cell index follows"; 24 bits of index cover the table. */
++#define MADEIRA_FAST_REPLY_FLAG    0x40000000
++#define MADEIRA_FAST_REPLY_MANUAL  0x20000000
++#define MADEIRA_FAST_REPLY_IDX(t)  ((t) & 0x00ffffff)
++
++/* event_op opcode: "wake your queue, do not signal".  Sent by a client setter
++ * that has already published SET in the cell and found srv_waiters != 0.  A
++ * SET_EVENT here would mint a second token out of one SetEvent.  `op' is a
++ * plain int and the server's switch rejects unknown values, so only the iOS
++ * client sends it and only the iOS server accepts it; no protocol change. */
++#define MADEIRA_EVENT_OP_WAKE      0x4d415741   /* 'MAWA' */
++
++/* event_op opcode: "take this event out of the fast path, permanently".  The
++ * self-heal half of the client watchdog: the server runs the same code a
++ * PulseEvent runs (fold the cell into its own field, store DISABLED, wake
++ * every parked client).  Accepted on a SYNCHRONIZE handle, because the thread
++ * that notices the incoherence is a waiter; it changes no observable state. */
++#define MADEIRA_EVENT_OP_DISABLE   0x4d414449   /* 'MADI' */
++
++/* The same self-heal for a semaphore handle, answered before event_op's own
++ * object-type check.  A semaphore needs no WAKE opcode: release_semaphore with
++ * count 0 already is "change nothing, then wake_up( obj, 0 )". */
++#define MADEIRA_SEM_OP_DISABLE     0x4d414453   /* 'MADS' */
++
++/* The wake primitive, shared by both sides (the same ladder sync.c uses for
++ * its futexes: os_sync_wait_on_address on iOS 17.4+, __ulock_wait below). */
++#ifdef __APPLE__
++
++#include <AvailabilityMacros.h>
++#ifdef MAC_OS_VERSION_14_4
++#include <os/os_sync_wait_on_address.h>
++#endif
++
++#ifndef UL_COMPARE_AND_WAIT
++#define UL_COMPARE_AND_WAIT 1
++#endif
++#ifndef ULF_WAKE_ALL
++#define ULF_WAKE_ALL 0x00000100
++#endif
++
++extern int __ulock_wait( uint32_t operation, void *addr, uint64_t value, uint32_t timeout );
++extern int __ulock_wake( uint32_t operation, void *addr, uint64_t wake_value );
++
++/* Park on *addr while it still reads `val', for at most ns_timeout ns
++ * (0 = forever, which the fast path never asks for). */
++static inline void madeira_fast_park( const int *addr, int val, uint64_t ns_timeout )
++{
++#ifdef MAC_OS_VERSION_14_4
++    if (__builtin_available( macOS 14.4, iOS 17.4, * ))
++    {
++        if (ns_timeout)
++            os_sync_wait_on_address_with_timeout( (void *)addr, (uint64_t)(uint32_t)val, 4,
++                                                  OS_SYNC_WAIT_ON_ADDRESS_NONE,
++                                                  OS_CLOCK_MACH_ABSOLUTE_TIME, ns_timeout );
++        else
++            os_sync_wait_on_address( (void *)addr, (uint64_t)(uint32_t)val, 4,
++                                     OS_SYNC_WAIT_ON_ADDRESS_NONE );
++        return;
++    }
++#endif
++    {
++        uint32_t us = (uint32_t)(ns_timeout / 1000);
++        if (ns_timeout && !us) us = 1;
++        __ulock_wait( UL_COMPARE_AND_WAIT, (void *)addr, (uint64_t)(uint32_t)val, us );
++    }
++}
++
++/* Wake one parked thread, or all of them (a manual-reset event, or a
++ * semaphore release of more than one token). */
++static inline void madeira_fast_wake( const int *addr, int all )
++{
++#ifdef MAC_OS_VERSION_14_4
++    if (__builtin_available( macOS 14.4, iOS 17.4, * ))
++    {
++        if (all) os_sync_wake_by_address_all( (void *)addr, 4, OS_SYNC_WAKE_BY_ADDRESS_NONE );
++        else     os_sync_wake_by_address_any( (void *)addr, 4, OS_SYNC_WAKE_BY_ADDRESS_NONE );
++        return;
++    }
++#endif
++    __ulock_wake( UL_COMPARE_AND_WAIT | (all ? ULF_WAKE_ALL : 0), (void *)addr, 0 );
++}
++
++#else  /* !__APPLE__: fastsync is iOS-only; keep the header compilable for host models */
++
++static inline void madeira_fast_park( const int *addr, int val, uint64_t ns_timeout ) { }
++static inline void madeira_fast_wake( const int *addr, int all ) { }
++
++#endif /* __APPLE__ */
++
++#endif /* __WINE_MADEIRA_FASTSYNC_H */
+diff --git a/server/event.c b/server/event.c
+index 682b131..95a9383 100644
+--- a/server/event.c
++++ b/server/event.c
+@@ -26,6 +26,7 @@
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <stdarg.h>
++#include <string.h>
+ #include <sys/types.h>
+ 
+ #include "ntstatus.h"
+@@ -37,6 +38,181 @@
+ #include "request.h"
+ #include "security.h"
+ 
++#ifdef WINE_IOS
++/* Madeira fastsync (include/wine/madeira_fastsync.h): the shared cell table
++ * and its allocator live here; dlls/ntdll/unix/sync.c references the table
++ * directly, since the server and every guest thread are one Mach task and
++ * one static link.  semaphore.c allocates through the same free list. */
++#include "wine/madeira_fastsync.h"
++
++struct madeira_sync_cell madeira_sync_cells[MADEIRA_SYNC_CELLS];
++
++/* Allocator state.  Server-thread only, so no lock. */
++static int madeira_cell_next[MADEIRA_SYNC_CELLS];
++static int madeira_cell_free_head = -1;
++static int madeira_cell_high;              /* bump allocator watermark */
++static int madeira_fastsync_on = -1;
++static int madeira_fastsync_sem_on = -1;
++
++/* The server half is OFF unless MADEIRA_FASTSYNC selects fastsync ("cells",
++ * "auto", "1"/"on"/"yes"), and never runs together with madsync: when the
++ * server creates madsync objects (get_inproc_device_fd() >= 0) the event and
++ * semaphore constructors never reach the code below anyway, and this makes
++ * the rule explicit.  Off, madeira_cell_alloc() answers -1 for every object,
++ * so every hook in this file falls through to the upstream `signaled' bit and
++ * madeira_event_cell_index() always answers -1.
++ *
++ * On, a cell with no client participation is a pure relocation of one bit:
++ * signaled()/satisfied()/signal() read and write the cell where they used to
++ * read and write `signaled'.  The client half (the wake semantics) is gated
++ * separately by the identical parse in dlls/ntdll/unix/sync.c.  Read once. */
++static int madeira_fastsync_enabled(void)
++{
++    if (madeira_fastsync_on < 0)
++    {
++        const char *e = getenv( "MADEIRA_FASTSYNC" );
++        int on = e && (!strcmp( e, "1" ) || !strcmp( e, "on" ) || !strcmp( e, "yes" ) ||
++                       !strcmp( e, "auto" ) || !strcmp( e, "cells" ));
++
++        madeira_fastsync_on = on && get_inproc_device_fd() < 0;
++    }
++    return madeira_fastsync_on;
++}
++
++/* Semaphore cells need their own opt-in, MADEIRA_FASTSYNC_SEM=1; without it a
++ * semaphore gets no cell and stays the upstream server object. */
++int madeira_fastsync_sem_enabled(void)
++{
++    if (madeira_fastsync_sem_on < 0)
++    {
++        const char *e = getenv( "MADEIRA_FASTSYNC_SEM" );
++        madeira_fastsync_sem_on = e && (!strcmp( e, "1" ) || !strcmp( e, "on" ) || !strcmp( e, "yes" ));
++    }
++    return madeira_fastsync_sem_on && madeira_fastsync_enabled();
++}
++
++/* Whether any cell can exist in this session (thread.c's timeout re-check). */
++int madeira_fastsync_cells_on(void)
++{
++    return madeira_fastsync_enabled();
++}
++
++/* ml990: the generation lives in the high half of `sg'.  Only this thread
++ * writes it, so a plain load is enough to find the current value; the bump is
++ * always published together with a new state in one 64-bit store, which is
++ * what makes a client's state CAS also a generation check. */
++static unsigned int madeira_cell_next_gen( const struct madeira_sync_cell *cell )
++{
++    unsigned int gen = MADEIRA_SG_GEN( __atomic_load_n( &cell->sg, __ATOMIC_RELAXED ) );
++
++    if (!++gen) gen = 1;               /* 0 is reserved for "never allocated" */
++    return gen;
++}
++
++/* Rebuild `sg' with a new state, keeping whatever generation is there now.
++ * Used by every server-side write that is not an alloc or a free.  The CAS
++ * loop is not there to protect the generation (this thread is its only writer)
++ * but to make the operation a proper 64-bit RMW rather than a mixed-size
++ * store racing the clients' 64-bit CASes. */
++static int madeira_cell_xchg_state( struct madeira_sync_cell *cell, int want )
++{
++    uint64_t sg = __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST );
++
++    while (!__atomic_compare_exchange_n( &cell->sg, &sg,
++                                         MADEIRA_SG( MADEIRA_SG_GEN( sg ), want ), 1,
++                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
++        ;
++    return MADEIRA_SG_STATE( sg );
++}
++
++/* Returns a cell index, or -1 when the fast path is off or the table is full;
++ * -1 simply means the object keeps the pre-fastsync, all-server behaviour.
++ *
++ * ml1010: `kind', `smax' and the initial `state' are parameters now, because
++ * semaphore.c allocates through here too.  For an event `state' is
++ * MADEIRA_CELL_SET/_RESET; for a semaphore it is the initial count. */
++static int madeira_cell_alloc_kind( unsigned int kind, int manual, unsigned int smax, int state )
++{
++    struct madeira_sync_cell *cell;
++    int idx;
++
++    if (!madeira_fastsync_enabled()) return -1;
++
++    if (madeira_cell_free_head >= 0)
++    {
++        idx = madeira_cell_free_head;
++        madeira_cell_free_head = madeira_cell_next[idx];
++    }
++    else if (madeira_cell_high < MADEIRA_SYNC_CELLS) idx = madeira_cell_high++;
++    else return -1;
++
++    cell = &madeira_sync_cells[idx];
++    cell->manual      = !!manual;
++    cell->kind        = kind;
++    cell->smax        = smax;
++    cell->srv_waiters = 0;
++    cell->waiters     = 0;
++    /* publish the generation and the state TOGETHER, and LAST: a client can
++     * only learn this index through a get_inproc_sync_fd reply, which the
++     * server sends strictly after this, and a client that still holds the
++     * PREVIOUS generation can never CAS against the word this store makes.
++     * `kind' and `smax' above are immutable for this generation and are
++     * ordered before it by this store, so a client that has matched the
++     * generation has by construction read the right ones. */
++    __atomic_store_n( &cell->sg, MADEIRA_SG( madeira_cell_next_gen( cell ), state ),
++                      __ATOMIC_SEQ_CST );
++    return idx;
++}
++
++static int madeira_cell_alloc( int manual, int signaled )
++{
++    return madeira_cell_alloc_kind( MADEIRA_CELL_KIND_EVENT, manual, 0,
++                                    signaled ? MADEIRA_CELL_SET : MADEIRA_CELL_RESET );
++}
++
++/* ml1010: semaphore.c's entry points into the allocator above.  The free list
++ * is server-thread-only state that lives here, so it is not duplicated. */
++int madeira_sem_cell_alloc( unsigned int initial, unsigned int max )
++{
++    if (!madeira_fastsync_sem_enabled()) return -1;
++    /* create_semaphore rejects max == 0 and initial > max, and NtCreateSemaphore
++     * rejects max > LONG_MAX before that, so the count always fits the signed
++     * state half.  Check it here anyway rather than trust the caller. */
++    if (!max || max > 0x7fffffffu || initial > max) return -1;
++    return madeira_cell_alloc_kind( MADEIRA_CELL_KIND_SEM, 0, max, (int)initial );
++}
++
++static void madeira_cell_free( int idx );
++
++void madeira_sem_cell_free( int idx )
++{
++    if (idx >= 0) madeira_cell_free( idx );
++}
++
++static void madeira_cell_free( int idx )
++{
++    struct madeira_sync_cell *cell = &madeira_sync_cells[idx];
++
++    /* ml990: ONE store retires the old generation and puts the cell in
++     * DISABLED.  Through ml982 these were two stores with the DISABLED first,
++     * which left a window in which a stale (index, gen) pair still matched;
++     * now a client holding the old generation cannot match the word at all,
++     * whichever of the two halves it looks at.
++     *
++     * DISABLED rather than simply "the next generation" because the low half
++     * is the futex word: a parked waiter is released by this store's value
++     * change as well as by the explicit wake below. */
++    __atomic_store_n( &cell->sg,
++                      MADEIRA_SG( madeira_cell_next_gen( cell ), MADEIRA_CELL_DISABLED ),
++                      __ATOMIC_SEQ_CST );
++    if (__atomic_load_n( &cell->waiters, __ATOMIC_SEQ_CST ))
++        madeira_fast_wake( madeira_cell_futex( cell ), 1 );
++    madeira_cell_next[idx] = madeira_cell_free_head;
++    madeira_cell_free_head = idx;
++}
++
++#endif /* WINE_IOS */
++
+ static const WCHAR event_name[] = {'E','v','e','n','t'};
+ 
+ struct type_descr event_type =
+@@ -56,23 +232,83 @@ struct event_sync
+     struct object  obj;             /* object header */
+     unsigned int   manual : 1;      /* is it a manual reset event? */
+     unsigned int   signaled : 1;    /* event has been signaled */
++#ifdef WINE_IOS
++    int            cell;            /* ml952 fastsync cell index, -1 = none.
++                                     * Only events reachable by handle get one;
++                                     * the server-internal syncs created by
++                                     * create_server_internal_sync() keep the
++                                     * `signaled' bit above and never appear in
++                                     * the shared table. */
++#endif
+ };
+ 
+ static void event_sync_dump( struct object *obj, int verbose );
+ static int event_sync_signaled( struct object *obj, struct wait_queue_entry *entry );
+ static void event_sync_satisfied( struct object *obj, struct wait_queue_entry *entry );
+ static int event_sync_signal( struct object *obj, unsigned int access, int signal );
++#ifdef WINE_IOS
++static int event_sync_add_queue( struct object *obj, struct wait_queue_entry *entry );
++static void event_sync_remove_queue( struct object *obj, struct wait_queue_entry *entry );
++static void event_sync_destroy( struct object *obj );
++
++/* Current state of an event_sync, cell or no cell.  This is the only reader of
++ * `signaled' left for a cell event, and it only fires once the cell has been
++ * disabled by a PulseEvent. */
++static int event_sync_state( struct event_sync *event )
++{
++    if (event->cell >= 0)
++    {
++        int st = MADEIRA_SG_STATE( __atomic_load_n( &madeira_sync_cells[event->cell].sg,
++                                                    __ATOMIC_SEQ_CST ) );
++        if (st != MADEIRA_CELL_DISABLED) return st != MADEIRA_CELL_RESET;
++    }
++    return event->signaled;
++}
++
++/* One-way exit from the fast path, taken by the first PulseEvent on an object.
++ * PulseEvent means "release everything waiting at this instant, then clear"; on
++ * a futex word the set and the clear cannot be made atomic with respect to a
++ * parked waiter's re-check, so a pulsed object stops using its cell rather than
++ * being approximated.  The pre-pulse state is folded back into `signaled' so
++ * the server is authoritative from here on. */
++static void event_sync_disable_cell( struct event_sync *event )
++{
++    struct madeira_sync_cell *cell;
++    int prev;
++
++    if (event->cell < 0) return;
++    cell = &madeira_sync_cells[event->cell];
++    prev = madeira_cell_xchg_state( cell, MADEIRA_CELL_DISABLED );
++    if (prev != MADEIRA_CELL_DISABLED) event->signaled = (prev != MADEIRA_CELL_RESET);
++    /* every parked client must wake, re-read DISABLED and go to the server */
++    if (__atomic_load_n( &cell->waiters, __ATOMIC_SEQ_CST ))
++        madeira_fast_wake( madeira_cell_futex( cell ), 1 );
++}
++#endif
+ 
+ static const struct object_ops event_sync_ops =
+ {
+     .size         = sizeof(struct event_sync),
+     .type         = &no_type,
+     .dump         = event_sync_dump,
++#ifdef WINE_IOS
++    /* ml952 fastsync: the add/remove hooks maintain cell->srv_waiters, which
++     * is the flag a client setter reads to decide whether the server still has
++     * to be told about a set.  The increment MUST be visible before the server
++     * evaluates `signaled', and it is: wait_on() adds every queue entry and
++     * only then does check_wait() call signaled. */
++    .add_queue    = event_sync_add_queue,
++    .remove_queue = event_sync_remove_queue,
++#else
+     .add_queue    = add_queue,
+     .remove_queue = remove_queue,
++#endif
+     .signaled     = event_sync_signaled,
+     .satisfied    = event_sync_satisfied,
+     .signal       = event_sync_signal,
++#ifdef WINE_IOS
++    .destroy      = event_sync_destroy,
++#endif
+ };
+ 
+ static struct object *create_event_sync( int manual, int signaled )
+@@ -84,6 +320,11 @@ static struct object *create_event_sync( int manual, int signaled )
+     if (!(event = alloc_object( &event_sync_ops ))) return NULL;
+     event->manual   = manual;
+     event->signaled = signaled;
++#ifdef WINE_IOS
++    /* ml952: only handle-reachable events get a cell, and a full table just
++     * means this one keeps the old all-server behaviour. */
++    event->cell = madeira_cell_alloc( manual, signaled );
++#endif
+ 
+     return &event->obj;
+ }
+@@ -95,6 +336,9 @@ struct event_sync *create_server_internal_sync( int manual, int signaled )
+     if (!(event = alloc_object( &event_sync_ops ))) return NULL;
+     event->manual   = manual;
+     event->signaled = signaled;
++#ifdef WINE_IOS
++    event->cell = -1;   /* internal syncs are never handed to a client */
++#endif
+ 
+     return event;
+ }
+@@ -109,14 +353,131 @@ static void event_sync_dump( struct object *obj, int verbose )
+ {
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
++#ifdef WINE_IOS
++    fprintf( stderr, "Event manual=%d signaled=%d cell=%d\n",
++             event->manual, event_sync_state( event ), event->cell );
++#else
+     fprintf( stderr, "Event manual=%d signaled=%d\n",
+              event->manual, event->signaled );
++#endif
+ }
+ 
++#ifdef WINE_IOS
++static int event_sync_add_queue( struct object *obj, struct wait_queue_entry *entry )
++{
++    struct event_sync *event = (struct event_sync *)obj;
++
++    assert( obj->ops == &event_sync_ops );
++    if (event->cell >= 0)
++        __atomic_add_fetch( &madeira_sync_cells[event->cell].srv_waiters, 1, __ATOMIC_SEQ_CST );
++    return add_queue( obj, entry );
++}
++
++static void event_sync_remove_queue( struct object *obj, struct wait_queue_entry *entry )
++{
++    struct event_sync *event = (struct event_sync *)obj;
++    /* ml962: remove_queue() ends in release_object( obj ), so `event' must not
++     * be dereferenced after it -- read the index first.  (The outer `event'
++     * object still holds a reference to this sync for as long as a wait entry
++     * exists, so the release is not currently the last one; this is here so it
++     * stays correct if that ever stops being true.) */
++    int cell = event->cell;
++
++    assert( obj->ops == &event_sync_ops );
++    remove_queue( obj, entry );
++    if (cell >= 0)
++        __atomic_sub_fetch( &madeira_sync_cells[cell].srv_waiters, 1, __ATOMIC_SEQ_CST );
++}
++
++static void event_sync_destroy( struct object *obj )
++{
++    struct event_sync *event = (struct event_sync *)obj;
++
++    assert( obj->ops == &event_sync_ops );
++    if (event->cell >= 0) madeira_cell_free( event->cell );
++    event->cell = -1;
++}
++
++/* ml952: release a claim taken by event_sync_signaled() for a wait-all that
++ * then turned out not to be satisfiable.  Called from check_wait() through
++ * object_sync_unclaim(); the ops check makes it a no-op for every other kind
++ * of sync object, so no ops-table entry is needed. */
++void madeira_event_sync_unclaim( struct object *obj )
++{
++    struct event_sync *event = (struct event_sync *)obj;
++    struct madeira_sync_cell *cell;
++    uint64_t sg;
++
++    if (obj->ops != &event_sync_ops) return;
++    if (event->cell < 0 || event->manual) return;
++    cell = &madeira_sync_cells[event->cell];
++    /* ml990: the CLAIM this releases was taken by event_sync_signaled() on the
++     * same generation a moment ago, so the expected word is fully determined
++     * by the current one; rebuilding it from a fresh load keeps the CAS a
++     * 64-bit RMW without ever guessing a generation. */
++    sg = __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST );
++    if (MADEIRA_SG_STATE( sg ) != MADEIRA_CELL_CLAIMED) return;
++    if (__atomic_compare_exchange_n( &cell->sg, &sg,
++                                     MADEIRA_SG( MADEIRA_SG_GEN( sg ), MADEIRA_CELL_SET ), 0,
++                                     __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
++    {
++        /* the token is up for grabs again; a client may be parked on it */
++        if (__atomic_load_n( &cell->waiters, __ATOMIC_SEQ_CST ))
++            madeira_fast_wake( madeira_cell_futex( cell ), 0 );
++    }
++}
++
++/* ml962: the whole of MADEIRA_EVENT_OP_WAKE (see wine/madeira_fastsync.h).
++ *
++ * The client already CAS'd the cell to SET and only sent a request because
++ * srv_waiters said the server still had somebody queued.  Signalling here
++ * would be a SECOND set: if a fast waiter consumed the token in the meantime
++ * the cell is back at RESET, and event_sync_signal()'s unconditional
++ * exchange-to-SET would release a server-side waiter for a SetEvent that has
++ * already been paid out.  So this runs wake_up() and nothing else, and lets
++ * event_sync_signaled() decide from the cell word whether there is still a
++ * token to hand over -- its CAS fails when there is not, and the queued
++ * thread simply stays queued.
++ *
++ * wake_up() on an empty (or unsatisfiable) queue is a no-op, so the stale
++ * srv_waiters reading that can make the client send this request when nothing
++ * is queued any more costs a round trip and nothing else. */
++void madeira_event_sync_wake_queue( struct object *obj )
++{
++    struct event_sync *event = (struct event_sync *)obj;
++
++    if (obj->ops != &event_sync_ops) return;
++    if (event->cell < 0) return;
++    wake_up( &event->obj, !event->manual );
++}
++#endif /* WINE_IOS */
++
+ static int event_sync_signaled( struct object *obj, struct wait_queue_entry *entry )
+ {
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
++#ifdef WINE_IOS
++    if (event->cell >= 0)
++    {
++        struct madeira_sync_cell *cell = &madeira_sync_cells[event->cell];
++        /* seq_cst: this load is the server half of the Dekker pair whose other
++         * half is the client's `store state; load srv_waiters' in NtSetEvent.
++         * srv_waiters was already incremented by event_sync_add_queue(). */
++        uint64_t sg = __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST );
++        int st = MADEIRA_SG_STATE( sg );
++
++        if (st == MADEIRA_CELL_DISABLED) return event->signaled;
++        if (event->manual) return st != MADEIRA_CELL_RESET;
++        if (st == MADEIRA_CELL_CLAIMED) return 1;   /* already claimed by us */
++        if (st != MADEIRA_CELL_SET) return 0;
++        /* CLAIM the auto-reset token so that no client CAS can steal it
++         * between here and event_sync_satisfied().  If the CAS loses, a client
++         * took it first and this waiter is simply not signaled. */
++        return __atomic_compare_exchange_n( &cell->sg, &sg,
++                                            MADEIRA_SG( MADEIRA_SG_GEN( sg ), MADEIRA_CELL_CLAIMED ), 0,
++                                            __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST );
++    }
++#endif
+     return event->signaled;
+ }
+ 
+@@ -124,6 +485,21 @@ static void event_sync_satisfied( struct object *obj, struct wait_queue_entry *e
+ {
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
++#ifdef WINE_IOS
++    if (event->cell >= 0)
++    {
++        struct madeira_sync_cell *cell = &madeira_sync_cells[event->cell];
++
++        if (MADEIRA_SG_STATE( __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST ) ) != MADEIRA_CELL_DISABLED)
++        {
++            /* consume the claim taken in event_sync_signaled(); a SetEvent
++             * that landed on top of the claim is consumed by this same write,
++             * which is what Windows does too -- one set, one release. */
++            if (!event->manual) madeira_cell_xchg_state( cell, MADEIRA_CELL_RESET );
++            return;
++        }
++    }
++#endif
+     /* Reset if it's an auto-reset event */
+     if (!event->manual) event->signaled = 0;
+ }
+@@ -133,6 +509,29 @@ static int event_sync_signal( struct object *obj, unsigned int access, int signa
+     struct event_sync *event = (struct event_sync *)obj;
+     assert( obj->ops == &event_sync_ops );
+ 
++#ifdef WINE_IOS
++    if (event->cell >= 0)
++    {
++        struct madeira_sync_cell *cell = &madeira_sync_cells[event->cell];
++
++        if (MADEIRA_SG_STATE( __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST ) ) != MADEIRA_CELL_DISABLED)
++        {
++            int prev;
++
++            event->signaled = !!signal;   /* kept only for the DISABLED fallback */
++            prev = madeira_cell_xchg_state( cell, signal ? MADEIRA_CELL_SET : MADEIRA_CELL_RESET );
++            if (prev == MADEIRA_CELL_DISABLED)  /* raced a pulse: put it back */
++                madeira_cell_xchg_state( cell, MADEIRA_CELL_DISABLED );
++            else if (signal)
++            {
++                if (__atomic_load_n( &cell->waiters, __ATOMIC_SEQ_CST ))
++                    madeira_fast_wake( madeira_cell_futex( cell ), event->manual );
++                wake_up( &event->obj, !event->manual );
++            }
++            return 1;
++        }
++    }
++#endif
+     /* wake up all waiters if manual reset, a single one otherwise */
+     if ((event->signaled = !!signal)) wake_up( &event->obj, !event->manual );
+     return 1;
+@@ -507,6 +906,42 @@ static void event_destroy( struct object *obj )
+     if (event->sync) release_object( event->sync );
+ }
+ 
++#ifdef WINE_IOS
++/* ml952: the handle -> cell lookup behind DECL_HANDLER(get_inproc_sync_fd).
++ * Returns -1 for anything that is not a live cell-backed event. */
++int madeira_event_cell_index( struct object *obj, int *manual )
++{
++    struct event *event;
++    struct event_sync *sync;
++
++    if (obj->ops != &event_ops) return -1;
++    event = (struct event *)obj;
++    if (!event->sync || event->sync->ops != &event_sync_ops) return -1;
++    sync = (struct event_sync *)event->sync;
++    if (sync->cell < 0) return -1;
++    if (MADEIRA_SG_STATE( __atomic_load_n( &madeira_sync_cells[sync->cell].sg,
++                                           __ATOMIC_SEQ_CST ) ) == MADEIRA_CELL_DISABLED) return -1;
++    *manual = sync->manual;
++    return sync->cell;
++}
++
++/* ml982: the self-heal half of the client-side watchdog, reached through
++ * MADEIRA_EVENT_OP_DISABLE (see wine/madeira_fastsync.h).  Takes ONE event out of the
++ * fast path for good, by exactly the route PulseEvent already uses.  Returns 0
++ * for an object that has no cell, which is not an error -- the client may have
++ * raced a pulse or a re-learn and asking twice must be harmless. */
++int madeira_event_disable_cell( struct object *obj )
++{
++    struct event *event;
++
++    if (obj->ops != &event_ops) return 0;
++    event = (struct event *)obj;
++    if (!event->sync || event->sync->ops != &event_sync_ops) return 0;
++    event_sync_disable_cell( (struct event_sync *)event->sync );
++    return 1;
++}
++#endif
++
+ struct keyed_event *create_keyed_event( struct object *root, struct unicode_str name,
+                                         unsigned int attr, const struct security_descriptor *sd )
+ {
+@@ -579,14 +1014,58 @@ DECL_HANDLER(event_op)
+     struct event_sync *sync;
+     struct event *event;
+ 
++#ifdef WINE_IOS
++    /* ml982: the one opcode a WAITER may send.  It is answered before the
++     * EVENT_MODIFY_STATE check below because the thread that notices a
++     * fast-path incoherence is by construction a thread that was WAITING on
++     * the object, and SYNCHRONIZE is the only right it is required to hold.
++     * See MADEIRA_EVENT_OP_DISABLE in wine/madeira_fastsync.h for why this is not a
++     * state modification. */
++    if (req->op == MADEIRA_EVENT_OP_DISABLE)
++    {
++        if (!(event = get_event_obj( current->process, req->handle, SYNCHRONIZE ))) return;
++        if (event->sync && event->sync->ops == &event_sync_ops)
++        {
++            madeira_event_disable_cell( &event->obj );
++            reply->state = ((struct event_sync *)event->sync)->signaled;
++        }
++        release_object( event );
++        return;
++    }
++    /* ml1010: the same self-heal for a SEMAPHORE.  It has to be answered here,
++     * ahead of get_event_obj(), because the handle is a semaphore handle.  Like
++     * the event opcode above it is accepted on SYNCHRONIZE: the thread that
++     * notices an incoherence is a waiter, and disabling a cell changes no
++     * observable semaphore state (the count is folded back into the server's
++     * own field and stays there). */
++    if (req->op == MADEIRA_SEM_OP_DISABLE)
++    {
++        struct object *obj = get_handle_obj( current->process, req->handle, SYNCHRONIZE, NULL );
++
++        if (!obj) return;
++        madeira_semaphore_disable_cell( obj );
++        release_object( obj );
++        return;
++    }
++#endif
++
+     if (!(event = get_event_obj( current->process, req->handle, EVENT_MODIFY_STATE ))) return;
+     assert( event->sync->ops == &event_sync_ops ); /* never called with inproc syncs */
+     sync = (struct event_sync *)event->sync;
+ 
++#ifdef WINE_IOS
++    reply->state = event_sync_state( sync );
++#else
+     reply->state = sync->signaled;
++#endif
+     switch(req->op)
+     {
+     case PULSE_EVENT:
++#ifdef WINE_IOS
++        /* ml952: a pulsed event leaves the fast path for good -- see
++         * event_sync_disable_cell(). */
++        event_sync_disable_cell( sync );
++#endif
+         set_event( event );
+         reset_event( event );
+         break;
+@@ -596,6 +1075,13 @@ DECL_HANDLER(event_op)
+     case RESET_EVENT:
+         reset_event( event );
+         break;
++#ifdef WINE_IOS
++    case MADEIRA_EVENT_OP_WAKE:
++        /* ml962: the cell is already authoritative, only the server's own
++         * queue still has to look at it.  See madeira_event_sync_wake_queue(). */
++        madeira_event_sync_wake_queue( event->sync );
++        break;
++#endif
+     default:
+         set_error( STATUS_INVALID_PARAMETER );
+         break;
+@@ -614,7 +1100,11 @@ DECL_HANDLER(query_event)
+     sync = (struct event_sync *)event->sync;
+ 
+     reply->manual_reset = sync->manual;
++#ifdef WINE_IOS
++    reply->state = event_sync_state( sync );
++#else
+     reply->state = sync->signaled;
++#endif
+ 
+     release_object( event );
+ }
+diff --git a/server/inproc_sync.c b/server/inproc_sync.c
+index 0c10f1c..b27b59e 100644
+--- a/server/inproc_sync.c
++++ b/server/inproc_sync.c
+@@ -38,6 +38,10 @@
+ # include <linux/ntsync.h>
+ #endif
+ 
++#ifdef WINE_IOS
++# include "wine/madeira_fastsync.h"
++#endif
++
+ #ifdef NTSYNC_IOC_EVENT_READ
+ 
+ #include <fcntl.h>
+@@ -288,6 +292,37 @@ DECL_HANDLER(get_inproc_sync_fd)
+ 
+     reply->access = get_handle_access( current->process, req->handle );
+ 
++#ifdef WINE_IOS
++    /* iOS-Madeira ml952 fastsync: there is no /dev/ntsync here, so this
++     * request never has an fd to send and upstream always answered
++     * STATUS_NOT_IMPLEMENTED.  It is reused verbatim as the handle -> cell
++     * learn request: bit 30 of `type' (free -- the field otherwise carries a
++     * small enum inproc_sync_type) says "a cell index follows, no fd is in
++     * flight".  No protocol.def change, so no regenerated headers.  The
++     * client asks once per handle and caches the answer. */
++    {
++        int manual = 0, idx = madeira_event_cell_index( obj, &manual );
++
++        if (idx >= 0)
++        {
++            reply->type = MADEIRA_FAST_REPLY_FLAG |
++                          (manual ? MADEIRA_FAST_REPLY_MANUAL : 0) | idx;
++            release_object( obj );
++            return;
++        }
++        /* ml1010: ... and the same answer for a cell-backed SEMAPHORE.  The
++         * reply needs no new bit: the client reads `kind' (and `max') out of
++         * the cell itself, both of which are immutable for the generation it
++         * validates before touching anything. */
++        if ((idx = madeira_semaphore_cell_index( obj )) >= 0)
++        {
++            reply->type = MADEIRA_FAST_REPLY_FLAG | idx;
++            release_object( obj );
++            return;
++        }
++    }
++#endif
++
+     if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
+ #ifdef WINE_IOS
+     else madsync_post( get_process_id( current->process ), req->handle, fd );   /* ml1058: no SCM_RIGHTS for a pseudo fd */
+diff --git a/server/object.h b/server/object.h
+index 3c19d15..11e6304 100644
+--- a/server/object.h
++++ b/server/object.h
+@@ -240,6 +240,23 @@ struct keyed_event;
+ 
+ extern struct event_sync *create_server_internal_sync( int manual, int signaled );
+ extern struct object *create_internal_sync( int manual, int signaled );
++#ifdef WINE_IOS
++/* Madeira fastsync (include/wine/madeira_fastsync.h), iOS only */
++extern void madeira_event_sync_unclaim( struct object *sync );
++extern void madeira_event_sync_wake_queue( struct object *sync );
++extern int madeira_event_cell_index( struct object *obj, int *manual );
++extern int madeira_event_disable_cell( struct object *obj );
++extern int madeira_fastsync_cells_on(void);
++/* ml1010: the same mechanism for semaphores.  The cell table and its allocator
++ * live in server/event.c; the semaphore half of the protocol lives in
++ * server/semaphore.c. */
++extern int madeira_fastsync_sem_enabled(void);
++extern int madeira_sem_cell_alloc( unsigned int initial, unsigned int max );
++extern void madeira_sem_cell_free( int idx );
++extern void madeira_semaphore_sync_unclaim( struct object *sync );
++extern int madeira_semaphore_cell_index( struct object *obj );
++extern int madeira_semaphore_disable_cell( struct object *obj );
++#endif
+ extern void signal_sync( struct object *sync );
+ extern void reset_sync( struct object *sync );
+ 
+diff --git a/server/semaphore.c b/server/semaphore.c
+index c8f7764..c3bde26 100644
+--- a/server/semaphore.c
++++ b/server/semaphore.c
+@@ -35,6 +35,14 @@
+ #include "request.h"
+ #include "security.h"
+ 
++#ifdef WINE_IOS
++/* iOS-Madeira ml1010: the in-process fast path, extended from events to
++ * semaphores.  See the long comment at the head of
++ * include/wine/madeira_fastsync.h; the cell table itself is defined in
++ * wine/server/event.c, which also owns the allocator and its free list. */
++#include "wine/madeira_fastsync.h"
++#endif
++
+ static const WCHAR semaphore_name[] = {'S','e','m','a','p','h','o','r','e'};
+ 
+ struct type_descr semaphore_type =
+@@ -54,26 +62,293 @@ struct semaphore_sync
+     struct object       obj;                /* object header */
+     unsigned int        count;              /* current count */
+     unsigned int        max;                /* maximum possible count */
++#ifdef WINE_IOS
++    int                 cell;               /* ml1010 fastsync cell, -1 = none */
++    unsigned int        claimed;            /* tokens taken by signaled() and
++                                             * not yet consumed by satisfied().
++                                             * Transient: only ever non-zero
++                                             * inside one check_wait() pass on
++                                             * the single server thread. */
++#endif
+ };
+ 
+ static void semaphore_sync_dump( struct object *obj, int verbose );
+ static int semaphore_sync_signaled( struct object *obj, struct wait_queue_entry *entry );
+ static void semaphore_sync_satisfied( struct object *obj, struct wait_queue_entry *entry );
++#ifdef WINE_IOS
++static int semaphore_sync_add_queue( struct object *obj, struct wait_queue_entry *entry );
++static void semaphore_sync_remove_queue( struct object *obj, struct wait_queue_entry *entry );
++static void semaphore_sync_destroy( struct object *obj );
++#endif
+ 
+ static const struct object_ops semaphore_sync_ops =
+ {
+     .size         = sizeof(struct semaphore_sync),
+     .type         = &no_type,
+     .dump         = semaphore_sync_dump,
++#ifdef WINE_IOS
++    /* ml1010: exactly as for an event -- these maintain cell->srv_waiters,
++     * which is the flag a client-side release reads to decide whether the
++     * server still has to be told to re-run its own wait queue.  The increment
++     * is visible before the server evaluates the count, because wait_on() adds
++     * every queue entry and only then does check_wait() call signaled(). */
++    .add_queue    = semaphore_sync_add_queue,
++    .remove_queue = semaphore_sync_remove_queue,
++#else
+     .add_queue    = add_queue,
+     .remove_queue = remove_queue,
++#endif
+     .signaled     = semaphore_sync_signaled,
+     .satisfied    = semaphore_sync_satisfied,
++#ifdef WINE_IOS
++    .destroy      = semaphore_sync_destroy,
++#endif
+ };
+ 
++#ifdef WINE_IOS
++
++/* ---------------------------------------------------------------------------
++ * ml1010: the cell accessors.  Every one of them is a 64-bit atomic on
++ * cell->sg, for the reason ml990 gives for events: a 32-bit store to the low
++ * half would be a mixed-size data race against the clients' 64-bit CASes.  The
++ * server is the only writer of the generation and runs on one thread, so it
++ * rebuilds the whole word from the generation it read in the same load.
++ * -------------------------------------------------------------------------*/
++
++/* Current count, cell or no cell.  `sem->count' is the fallback and is only
++ * authoritative once the cell has been disabled. */
++static unsigned int semaphore_sync_count( struct semaphore_sync *sem )
++{
++    if (sem->cell >= 0)
++    {
++        int st = MADEIRA_SG_STATE( __atomic_load_n( &madeira_sync_cells[sem->cell].sg,
++                                                    __ATOMIC_SEQ_CST ) );
++        if (st != MADEIRA_CELL_DISABLED) return (unsigned int)st;
++    }
++    return sem->count;
++}
++
++/* Add `add' tokens, refusing the whole operation on overflow.  Returns 1 and
++ * stores the PREVIOUS count on success; returns 0 and changes nothing when the
++ * result would pass `max'.  This is the cell twin of the arithmetic in
++ * release_semaphore() below, and it is a CAS loop because clients CAS the same
++ * word (a consumer takes one, another releaser adds its own). */
++static int semaphore_cell_add( struct semaphore_sync *sem, unsigned int add, unsigned int *prev )
++{
++    struct madeira_sync_cell *cell = &madeira_sync_cells[sem->cell];
++    uint64_t sg = __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST );
++
++    for (;;)
++    {
++        int cur = MADEIRA_SG_STATE( sg );
++
++        if (cur == MADEIRA_CELL_DISABLED) return -1;        /* caller falls back */
++        if (add > sem->max || (unsigned int)cur + add > sem->max)
++        {
++            if (prev) *prev = (unsigned int)cur;
++            return 0;
++        }
++        if (__atomic_compare_exchange_n( &cell->sg, &sg,
++                                         MADEIRA_SG( MADEIRA_SG_GEN( sg ), cur + (int)add ), 1,
++                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
++        {
++            if (prev) *prev = (unsigned int)cur;
++            return 1;
++        }
++    }
++}
++
++/* Take ONE token if there is one.  The loop matters: a client release landing
++ * between the load and the CAS must not make this answer "not signaled" while
++ * a token is sitting in the cell -- that would be a queued thread left asleep
++ * with work available.  (The client's Dekker half would eventually re-wake it
++ * through release_semaphore(count=0), but a retry here is one instruction and
++ * removes the need to rely on that for liveness.) */
++static int semaphore_cell_take( struct semaphore_sync *sem )
++{
++    struct madeira_sync_cell *cell = &madeira_sync_cells[sem->cell];
++    uint64_t sg = __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST );
++
++    for (;;)
++    {
++        int cur = MADEIRA_SG_STATE( sg );
++
++        if (cur <= 0) return 0;                  /* empty, or DISABLED */
++        if (__atomic_compare_exchange_n( &cell->sg, &sg,
++                                         MADEIRA_SG( MADEIRA_SG_GEN( sg ), cur - 1 ), 1,
++                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
++            return 1;
++    }
++}
++
++/* Wake client threads parked on the cell.  One release of n tokens wakes one
++ * waiter for n == 1 and ALL of them for n > 1: os_sync_wake_by_address has no
++ * "wake exactly n", and over-waking is safe because every woken waiter re-runs
++ * the CAS and re-parks if it loses. */
++static void semaphore_cell_wake( struct semaphore_sync *sem, unsigned int count )
++{
++    struct madeira_sync_cell *cell = &madeira_sync_cells[sem->cell];
++
++    if (__atomic_load_n( &cell->waiters, __ATOMIC_SEQ_CST ))
++        madeira_fast_wake( madeira_cell_futex( cell ), count > 1 );
++}
++
++/* One-way exit from the fast path, the semaphore twin of
++ * event_sync_disable_cell(): fold the live count back into `sem->count', store
++ * DISABLED and wake every parked client so it re-reads the word and goes to
++ * the server.  Taken by the client-side watchdog when it observes a real
++ * disagreement, and by nothing else. */
++static void semaphore_sync_disable_cell( struct semaphore_sync *sem )
++{
++    struct madeira_sync_cell *cell;
++    uint64_t sg;
++
++    if (sem->cell < 0) return;
++    cell = &madeira_sync_cells[sem->cell];
++    sg = __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST );
++    while (MADEIRA_SG_STATE( sg ) != MADEIRA_CELL_DISABLED)
++    {
++        if (__atomic_compare_exchange_n( &cell->sg, &sg,
++                                         MADEIRA_SG( MADEIRA_SG_GEN( sg ), MADEIRA_CELL_DISABLED ), 1,
++                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
++        {
++            sem->count = (unsigned int)MADEIRA_SG_STATE( sg );
++            break;
++        }
++    }
++    if (__atomic_load_n( &cell->waiters, __ATOMIC_SEQ_CST ))
++        madeira_fast_wake( madeira_cell_futex( cell ), 1 );
++}
++
++static int semaphore_sync_add_queue( struct object *obj, struct wait_queue_entry *entry )
++{
++    struct semaphore_sync *sem = (struct semaphore_sync *)obj;
++
++    assert( obj->ops == &semaphore_sync_ops );
++    if (sem->cell >= 0)
++        __atomic_add_fetch( &madeira_sync_cells[sem->cell].srv_waiters, 1, __ATOMIC_SEQ_CST );
++    return add_queue( obj, entry );
++}
++
++static void semaphore_sync_remove_queue( struct object *obj, struct wait_queue_entry *entry )
++{
++    /* remove_queue() ends in release_object( obj ), so read the index first --
++     * the same care event_sync_remove_queue() takes, for the same reason. */
++    int cell = ((struct semaphore_sync *)obj)->cell;
++
++    assert( obj->ops == &semaphore_sync_ops );
++    remove_queue( obj, entry );
++    if (cell >= 0)
++        __atomic_sub_fetch( &madeira_sync_cells[cell].srv_waiters, 1, __ATOMIC_SEQ_CST );
++}
++
++static void semaphore_sync_destroy( struct object *obj )
++{
++    struct semaphore_sync *sem = (struct semaphore_sync *)obj;
++
++    assert( obj->ops == &semaphore_sync_ops );
++    if (sem->cell >= 0) madeira_sem_cell_free( sem->cell );
++    sem->cell = -1;
++}
++
++/* ml1010: hand back a token that semaphore_sync_signaled() claimed for a
++ * wait-all that then turned out not to be satisfiable.  Reached from
++ * check_wait() through object_sync_unclaim(); the ops check makes it a no-op
++ * for every other kind of sync object, so it needs no ops-table entry.
++ *
++ * No wake_up() here, deliberately, and for the same reason the event twin has
++ * none: this runs within check_wait(), and the wake_up() that delivered the
++ * token in the first place walks the queue past this entry and re-evaluates
++ * the next one, which by then sees the token back in the cell.  The futex wake
++ * IS needed, because a client may be parked on the word. */
++void madeira_semaphore_sync_unclaim( struct object *obj )
++{
++    struct semaphore_sync *sem = (struct semaphore_sync *)obj;
++    struct madeira_sync_cell *cell;
++    uint64_t sg;
++
++    if (obj->ops != &semaphore_sync_ops) return;
++    if (sem->cell < 0 || !sem->claimed) return;
++    sem->claimed--;
++    cell = &madeira_sync_cells[sem->cell];
++    sg = __atomic_load_n( &cell->sg, __ATOMIC_SEQ_CST );
++    for (;;)
++    {
++        int cur = MADEIRA_SG_STATE( sg );
++
++        if (cur == MADEIRA_CELL_DISABLED)
++        {
++            /* the cell was disabled between the claim and here: the count it
++             * folded back did not include this token, so give it back there */
++            sem->count++;
++            return;
++        }
++        if (__atomic_compare_exchange_n( &cell->sg, &sg,
++                                         MADEIRA_SG( MADEIRA_SG_GEN( sg ), cur + 1 ), 1,
++                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
++            break;
++    }
++    if (__atomic_load_n( &cell->waiters, __ATOMIC_SEQ_CST ))
++        madeira_fast_wake( madeira_cell_futex( cell ), 0 );
++}
++
++#endif /* WINE_IOS */
++
+ static int release_semaphore( struct semaphore_sync *sem, unsigned int count,
+                               unsigned int *prev )
+ {
++#ifdef WINE_IOS
++    if (sem->cell >= 0)
++    {
++        int ret = semaphore_cell_add( sem, count, prev );
++
++        if (ret >= 0)
++        {
++            if (!ret)
++            {
++                set_error( STATUS_SEMAPHORE_LIMIT_EXCEEDED );
++                return 0;
++            }
++            /* Unlike upstream this wakes even when the previous count was not
++             * zero.  Upstream's "there cannot be any thread to wake up if the
++             * count is != 0" stops being true the moment clients can add
++             * tokens without telling the server: a queued thread can be sitting
++             * on a count that another thread raised off-server.  wake_up() over
++             * a satisfied or empty queue is a no-op, and the futex wake is
++             * skipped entirely when cell->waiters is 0.
++             *
++             * count == 0 is the PROTOCOL: it is the request a client sends
++             * after doing the release itself, to make the server re-run its own
++             * queue against the word the client already updated.  It adds
++             * nothing, so it can only ever hand out tokens that are really
++             * there -- semaphore_sync_signaled() CASes them out one at a time
++             * and fails when a fast waiter got there first.  It also needs no
++             * futex wake: it added no token, and the client that sent it has
++             * already woken the parked waiters itself.
++             *
++             * ml1060: THE WAKE LIMIT IS 0 ("no limit"), NOT `count'.
++             * `wake_up( obj, n )' means "stop after n threads have been
++             * satisfied", and upstream may use `count' for it because upstream's
++             * count IS the number of tokens that just appeared.  Here it is not:
++             * a client can have raised the cell without telling the server (its
++             * Dekker load of srv_waiters legitimately read 0 because nobody was
++             * queued AT THAT INSTANT), threads can queue afterwards, and the next
++             * server-side release of 1 would then wake exactly one of them and
++             * leave the rest asleep on tokens that are sitting in the cell.  The
++             * count == 0 protocol arm was already unlimited for precisely this
++             * reason; making both arms unlimited removes the asymmetry rather
++             * than relying on a later release to come and collect the backlog.
++             * It cannot over-deliver: every wake runs check_wait(), which CASes
++             * a token out of the cell and refuses when there is none, so the
++             * number of threads released is bounded by the tokens that exist. */
++            if (count) semaphore_cell_wake( sem, count );
++            wake_up( &sem->obj, 0 );
++            return 1;
++        }
++        /* DISABLED: fall through to the plain server-side arithmetic below,
++         * which is authoritative again from that point on. */
++    }
++#endif
+     if (prev) *prev = sem->count;
+     if (sem->count + count < sem->count || sem->count + count > sem->max)
+     {
+@@ -97,13 +372,39 @@ static void semaphore_sync_dump( struct object *obj, int verbose )
+ {
+     struct semaphore_sync *sem = (struct semaphore_sync *)obj;
+     assert( obj->ops == &semaphore_sync_ops );
++#ifdef WINE_IOS
++    fprintf( stderr, "Semaphore count=%d max=%d cell=%d\n",
++             semaphore_sync_count( sem ), sem->max, sem->cell );
++#else
+     fprintf( stderr, "Semaphore count=%d max=%d\n", sem->count, sem->max );
++#endif
+ }
+ 
+ static int semaphore_sync_signaled( struct object *obj, struct wait_queue_entry *entry )
+ {
+     struct semaphore_sync *sem = (struct semaphore_sync *)obj;
+     assert( obj->ops == &semaphore_sync_ops );
++#ifdef WINE_IOS
++    if (sem->cell >= 0)
++    {
++        int st = MADEIRA_SG_STATE( __atomic_load_n( &madeira_sync_cells[sem->cell].sg,
++                                                    __ATOMIC_SEQ_CST ) );
++        if (st != MADEIRA_CELL_DISABLED)
++        {
++            /* CLAIM the token here rather than merely reporting that one
++             * exists.  `satisfied' has no return value, so without the claim a
++             * client CAS could take the token between this call and it, and the
++             * server would report WAIT_0 to a thread that acquired nothing --
++             * and then decrement a count that is already zero.  This load is
++             * also the server half of the Dekker pair whose other half is the
++             * client's `CAS count+=n; load srv_waiters' in NtReleaseSemaphore;
++             * srv_waiters was incremented by semaphore_sync_add_queue(). */
++            if (!semaphore_cell_take( sem )) return 0;
++            sem->claimed++;
++            return 1;
++        }
++    }
++#endif
+     return (sem->count > 0);
+ }
+ 
+@@ -111,6 +412,31 @@ static void semaphore_sync_satisfied( struct object *obj, struct wait_queue_entr
+ {
+     struct semaphore_sync *sem = (struct semaphore_sync *)obj;
+     assert( obj->ops == &semaphore_sync_ops );
++#ifdef WINE_IOS
++    if (sem->claimed)
++    {
++        /* the token was taken out of the cell by signaled(), a few hundred
++         * nanoseconds ago on this same thread; consuming the claim is the
++         * whole of satisfying the wait */
++        sem->claimed--;
++        return;
++    }
++    if (sem->cell >= 0)
++    {
++        /* Defensive.  Every route to satisfied() for a semaphore runs
++         * signaled() first (wake_thread_queue_entry(), which does not, is
++         * reached only from keyed_event_signaled()), so `claimed' is always
++         * non-zero above.  If that ever stops being true, take the token from
++         * the cell -- which is where the count lives -- rather than decrement
++         * a `sem->count' that is not the state any more. */
++        if (MADEIRA_SG_STATE( __atomic_load_n( &madeira_sync_cells[sem->cell].sg,
++                                               __ATOMIC_SEQ_CST ) ) != MADEIRA_CELL_DISABLED)
++        {
++            semaphore_cell_take( sem );
++            return;
++        }
++    }
++#endif
+     assert( sem->count );
+     sem->count--;
+ }
+@@ -124,6 +450,10 @@ static struct object *create_semaphore_sync( unsigned int initial, unsigned int
+     if (!(sem = alloc_object( &semaphore_sync_ops ))) return NULL;
+     sem->count = initial;
+     sem->max   = max;
++#ifdef WINE_IOS
++    sem->claimed = 0;
++    sem->cell    = madeira_sem_cell_alloc( initial, max );
++#endif
+     return &sem->obj;
+ }
+ 
+@@ -201,6 +531,40 @@ static void semaphore_destroy( struct object *obj )
+     if (sem->sync) release_object( sem->sync );
+ }
+ 
++#ifdef WINE_IOS
++/* ml1010: the handle -> cell lookup behind DECL_HANDLER(get_inproc_sync_fd).
++ * Returns -1 for anything that is not a live cell-backed semaphore. */
++int madeira_semaphore_cell_index( struct object *obj )
++{
++    struct semaphore *sem;
++    struct semaphore_sync *sync;
++
++    if (obj->ops != &semaphore_ops) return -1;
++    sem = (struct semaphore *)obj;
++    if (!sem->sync || sem->sync->ops != &semaphore_sync_ops) return -1;
++    sync = (struct semaphore_sync *)sem->sync;
++    if (sync->cell < 0) return -1;
++    if (MADEIRA_SG_STATE( __atomic_load_n( &madeira_sync_cells[sync->cell].sg,
++                                           __ATOMIC_SEQ_CST ) ) == MADEIRA_CELL_DISABLED) return -1;
++    return sync->cell;
++}
++
++/* ml1010: the self-heal half of the client-side watchdog, reached through
++ * MADEIRA_SEM_OP_DISABLE.  Returns 0 for an object that has no cell, which is
++ * not an error -- the client may have raced a re-learn, and asking twice must
++ * be harmless. */
++int madeira_semaphore_disable_cell( struct object *obj )
++{
++    struct semaphore *sem;
++
++    if (obj->ops != &semaphore_ops) return 0;
++    sem = (struct semaphore *)obj;
++    if (!sem->sync || sem->sync->ops != &semaphore_sync_ops) return 0;
++    semaphore_sync_disable_cell( (struct semaphore_sync *)sem->sync );
++    return 1;
++}
++#endif
++
+ /* create a semaphore */
+ DECL_HANDLER(create_semaphore)
+ {
+@@ -252,7 +616,11 @@ DECL_HANDLER(query_semaphore)
+         struct semaphore_sync *sync = (struct semaphore_sync *)sem->sync;
+         assert( sem->sync->ops == &semaphore_sync_ops ); /* never called with inproc syncs */
+ 
++#ifdef WINE_IOS
++        reply->current = semaphore_sync_count( sync );
++#else
+         reply->current = sync->count;
++#endif
+         reply->max = sync->max;
+         release_object( sem );
+     }
+diff --git a/server/thread.c b/server/thread.c
+index 9545d02..3dd0a7f 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1126,6 +1126,19 @@ static int object_sync_signaled( struct object *obj, struct wait_queue_entry *en
+     return ret;
+ }
+ 
++#ifdef WINE_IOS
++/* Madeira fastsync: give back a token that object_sync_signaled() claimed on
++ * behalf of a wait-all that then turned out not to be satisfiable.  A no-op
++ * for every object except a cell-backed auto-reset event or semaphore. */
++static void object_sync_unclaim( struct object *obj )
++{
++    struct object *sync = get_obj_sync( obj );
++    madeira_event_sync_unclaim( sync );
++    madeira_semaphore_sync_unclaim( sync );   /* both are ops-checked */
++    release_object( sync );
++}
++#endif
++
+ void signal_sync( struct object *obj )
+ {
+     obj->ops->signal( obj, 0, 1 );
+@@ -1268,6 +1281,13 @@ static int check_wait( struct thread *thread )
+         for (i = 0, entry = wait->queues; i < wait->count; i++, entry++)
+             not_ok |= !object_sync_signaled( entry->obj, entry );
+         if (!not_ok) return STATUS_WAIT_0;
++#ifdef WINE_IOS
++        /* Madeira fastsync: on the WaitAny path a signaled object is satisfied
++         * at once, so a claim taken in `signaled' is always consumed.  Here
++         * nothing calls satisfied, so hand every claim back. */
++        for (i = 0, entry = wait->queues; i < wait->count; i++, entry++)
++            object_sync_unclaim( entry->obj );
++#endif
+     }
+     else
+     {
+@@ -1370,6 +1390,16 @@ static void thread_timeout( void *ptr )
+     if (thread->wait != wait) return; /* not the top-level wait, ignore it */
+     if (is_thread_suspended( thread )) return;  /* suspended, ignore it */
+ 
++#ifdef WINE_IOS
++    /* Madeira fastsync: ask the objects before declaring a timeout.  With
++     * cells, a client can raise an object without a request, and the
++     * wake-only request that follows can still be in the socket when this
++     * timer fires; wake_thread() runs check_wait(), which tests the objects
++     * first and otherwise returns the same STATUS_TIMEOUT by the same path.
++     * Only while fastsync cells exist; otherwise upstream's order. */
++    if (madeira_fastsync_cells_on() && wake_thread( thread ) != 0) return;
++#endif
++
+     if (debug_level) fprintf( stderr, "%04x: *wakeup* signaled=TIMEOUT\n", thread->id );
+     end_wait( thread, STATUS_TIMEOUT );
+ 

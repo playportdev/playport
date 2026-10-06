@@ -1,6 +1,8 @@
 # 0052: Madeira reconciliation: whose design runs where Madeira and Playport overlap
 
-**Status:** accepted, 2026-10-05, by the owner. Settles step 2 of the
+**Status:** accepted, 2026-10-05, by the owner; superseded by
+[0054](0054-madeira-frozen.md), which freezes Madeira at `8c050d0` (its
+freeze-and-own fallback) and ports fastsync as a Playport patch. Settled step 2 of the
 [dependency strategy](../plans/2026-10-05-dependency-strategy.md) (order row 4).
 Supersedes [0023](0023-in-process-sync-stays-off.md) for fastsync: Madeira's
 fastsync is on by default, and madsync stays off as 0023 decided. Narrows

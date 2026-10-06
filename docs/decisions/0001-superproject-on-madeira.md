@@ -1,6 +1,8 @@
 # 0001: Superproject on Madeira, not a fork
 
-**Status:** accepted, 2026-09-24
+**Status:** accepted, 2026-09-24. Since [0054](0054-madeira-frozen.md) the pin
+is frozen at `8c050d0` and Playport owns that layer; the submodule and the
+series stay, and an update is a hand port, not a replay.
 
 ## Decision
 

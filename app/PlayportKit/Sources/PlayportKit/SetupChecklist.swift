@@ -36,10 +36,13 @@ public struct SetupFacts: Equatable, Sendable {
     public var memoryEntitled: Bool?
     /// The player chose "Not now" on the Memory step.
     public var memorySkipped: Bool
+    /// Where JIT comes from (JitMethod): only the built-in helper needs the pairing,
+    /// and only it and StikDebug need LocalDevVPN.
+    public var jit: JitMethod
 
     public init(controller: String? = nil, pairing: Bool = false, pairsOnPhone: Bool = true,
                 tunnelUp: Bool? = nil, steamSignedIn: Bool? = false, steamSkipped: Bool = false,
-                memoryEntitled: Bool? = nil, memorySkipped: Bool = false) {
+                memoryEntitled: Bool? = nil, memorySkipped: Bool = false, jit: JitMethod = .builtIn) {
         self.controller = controller
         self.pairing = pairing
         self.pairsOnPhone = pairsOnPhone
@@ -48,7 +51,13 @@ public struct SetupFacts: Equatable, Sendable {
         self.steamSkipped = steamSkipped
         self.memoryEntitled = memoryEntitled
         self.memorySkipped = memorySkipped
+        self.jit = jit
     }
+
+    /// The pairing step is settled: made, or not needed by the JIT method.
+    public var jitReady: Bool { pairing || !jit.usesPairing }
+    /// The LocalDevVPN step is settled: connected, or not needed by the JIT method.
+    public var tunnelReady: Bool { tunnelUp == true || !jit.usesTunnel }
 }
 
 /// One step's card: done or not, its text, and what A does on it (nil: nothing to do).
@@ -64,6 +73,13 @@ public enum SetupChecklist {
     public static func item(_ step: SetupStep, _ f: SetupFacts) -> SetupItem {
         switch step {
         case .pairing:
+            if !f.jit.usesPairing {
+                return SetupItem(step: step, done: true, title: "JIT from \(f.jit.label)",
+                                 detail: f.jit == .stikDebug
+                                     ? "Play opens StikDebug, which enables JIT and comes back. Keep it installed."
+                                     : "Play waits for JIT from another app, such as LiveContainer's Launch with JIT, with the universal.js script.",
+                                 action: nil)
+            }
             if f.pairsOnPhone {
                 return SetupItem(step: step, done: f.pairing, title: "Pairing",
                                  detail: f.pairing ? "This iPhone is paired with itself, so games run fast."
@@ -75,6 +91,10 @@ public enum SetupChecklist {
                                  : "Lets Playport run games fast. Made once on a computer; pick it from Files.",
                              action: f.pairing ? "Choose another file" : "Choose file")
         case .vpn:
+            if !f.jit.usesTunnel {
+                return SetupItem(step: step, done: true, title: "LocalDevVPN",
+                                 detail: "Playport does not need it while JIT comes from another app.", action: nil)
+            }
             let up = f.tunnelUp == true
             return SetupItem(step: step, done: up, title: "LocalDevVPN",
                              detail: up ? "Connected. Keep it on while you play."
@@ -115,7 +135,7 @@ public enum SetupChecklist {
     /// Limit on or put off, Steam signed in or put off ("Not now"). A first
     /// run's checklist cannot be left before this.
     public static func complete(_ f: SetupFacts) -> Bool {
-        f.pairing && f.tunnelUp == true && (f.memoryEntitled == true || f.memorySkipped)
+        f.jitReady && f.tunnelReady && (f.memoryEntitled == true || f.memorySkipped)
             && (f.steamSignedIn == true || f.steamSkipped)
     }
 
@@ -157,8 +177,11 @@ public enum SetupChecklist {
     }
 
     /// The check a Play runs before JIT: the pairing, then LocalDevVPN. A
-    /// controller and Steam never stop a launch; `notes` names them.
+    /// controller and Steam never stop a launch; `notes` names them. JIT from
+    /// another app (StikDebug, LiveContainer) is that app's to set up: the
+    /// launch goes on and waits for it.
     public static func beforeLaunch(_ f: SetupFacts) -> LaunchCheck {
+        guard f.jit.usesPairing else { return .go }
         if !f.pairing {
             return f.pairsOnPhone ? .fixesItself(.pairing)
                 : .needs(.pairing, "Playport needs a pairing file to run games. Choose it from Files on the Pairing file step.")
@@ -186,5 +209,6 @@ public enum SetupChecklist {
             + (f.memorySkipped ? " (not now)" : "")
             + " steam=\(f.steamSignedIn.map { $0 ? "signed-in" : "signed-out" } ?? "unknown")"
             + (f.steamSkipped ? " (not now)" : "")
+            + (f.jit == .builtIn ? "" : " jit=\(f.jit.rawValue)")
     }
 }
