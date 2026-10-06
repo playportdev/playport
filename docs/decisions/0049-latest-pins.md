@@ -1,6 +1,7 @@
 # 0049: Every dependency at the head of its development branch
 
-**Status:** accepted, 2026-10-05. Supersedes the pin-source parts of
+**Status:** accepted, 2026-10-05; its `madeira` row is replaced by
+[0054](0054-madeira-frozen.md): the pin is frozen at `8c050d0`. Supersedes the pin-source parts of
 [0008](0008-fex-on-upstream.md) (FEX from a monthly release),
 [0013](0013-wine-on-upstream.md) (Wine from a development release, never
 `master`) and [0018](0018-valve-wine-as-a-series.md) (`wine-valve` picked

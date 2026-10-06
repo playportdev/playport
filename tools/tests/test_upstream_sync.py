@@ -285,7 +285,9 @@ class UpstreamSync(unittest.TestCase):
         build = f"{t}/{name}-build"
         return pp, build
 
-    def run_tool(self, pp, build, *args, **extra):
+    def run_tool(self, pp, build, *args, watch=False, **extra):
+        """sync.py with args; a pin move (the default here) carries --move-pin-0054, a watch none."""
+        args = args if watch else (*args, "--move-pin-0054")
         # A pymobiledevice3 that finds no phone: no test may reach a real device.
         stub = f"{self.tmp}/bin"
         if not os.path.exists(f"{stub}/pymobiledevice3"):
@@ -300,6 +302,54 @@ class UpstreamSync(unittest.TestCase):
         d = os.path.join(build, "sync", sha[:8] + ("-dry-run" if dry else ""))
         with open(os.path.join(d, "result.json")) as f:
             return json.load(f)
+
+    def test_watch_lists_what_playport_builds_and_moves_nothing(self):
+        pp, build = self.playport("pp-watch")
+        head = git(pp, "rev-parse", "HEAD")
+        # m3 edits src.c, which patches/madeira-unix patches: both commits are listed, marked.
+        st, out = self.run_tool(pp, build, self.m3, "--replay", watch=True)
+        self.assertEqual(st, 0, out)
+        self.assertIn("no pin moved", out)
+        d = f"{build}/sync/watch-{self.m3[:8]}"
+        with open(f"{d}/watch.tsv") as f:
+            rows = [l.rstrip("\n").split("\t") for l in f if not l.startswith("#")]
+        self.assertEqual([(r[0], r[1], r[3], r[4]) for r in rows],
+                         [("madeira", self.u3, "upstream fixes line 3", "src.c"),
+                          ("madeira", self.m3, "upstream edits line 13 only", "src.c")])
+        with open(f"{d}/WATCH.md") as f:
+            report = f.read()
+        self.assertIn("Would it apply", report)
+        self.assertIn("| madeira-unix | 2 | 1 | 1 | 0 |", report)
+        # m2 touches only unix.c, which Playport neither builds nor patches; m5 moves Madeira's FEX:
+        # its fork's commit is listed, the gitlink-only Madeira commit is not.
+        st, out = self.run_tool(pp, build, self.m2, watch=True)
+        self.assertEqual(st, 0, out)
+        self.assertIn("0 commit(s), 1 more touching nothing Playport builds", out)
+        st, out = self.run_tool(pp, build, self.m5, watch=True)
+        self.assertEqual(st, 0, out)
+        with open(f"{build}/sync/watch-{self.m5[:8]}/watch.tsv") as f:
+            rows = [l.rstrip("\n").split("\t") for l in f if not l.startswith("#")]
+        self.assertEqual([(r[0], r[1], r[3], r[5]) for r in rows],
+                         [("fex-port", self.fport2, "madeira fex moves", "fp.c")])
+        self.assertIn("fex-port-moved", out)
+        # No commit: the pinned branch's head (m0, the pin itself) has nothing new.
+        st, out = self.run_tool(pp, build, watch=True)
+        self.assertEqual(st, 0, out)
+        self.assertIn(f"watch {self.m0[:12]}: 0 commit(s)", out)
+        # Nothing moved: no commit, branch, changed file or watched pin mirror.
+        self.assertEqual(git(pp, "rev-parse", "HEAD"), head)
+        self.assertEqual(git(pp, "status", "--porcelain"), "")
+        self.assertNotIn("sync/", git(pp, "branch", "--list"))
+        self.assertFalse(os.path.exists(f"{build}/sync/madeira-pin.git"))
+
+    def test_a_pin_move_needs_the_0054_override(self):
+        pp, build = self.playport("pp-frozen")
+        for args in ((self.m2, "--dry-run"), (self.m2, "--push"), (self.m2, "--move-pin-0054", "--replay"),
+                     ("--move-pin-0054",)):
+            st, out = self.run_tool(pp, build, *args, watch=True)
+            self.assertEqual(st, 2, out)
+        self.assertIn("decision 0054", self.run_tool(pp, build, self.m2, "--dry-run", watch=True)[1])
+        self.assertFalse(os.path.exists(f"{build}/sync/{self.m2[:8]}-dry-run"))
 
     def test_current_pin_is_a_no_op(self):
         pp, build = self.playport("pp-noop")

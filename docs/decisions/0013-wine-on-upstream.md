@@ -6,7 +6,7 @@ the three components, and so ends, for every component, the consequence of
 [0001](0001-superproject-on-madeira.md) that Madeira's gitlinks decide which
 commits are built. Madeira's own code (`madeira`) is still its pin. Its
 pin source is restated by [0049](0049-latest-pins.md): the newest WineHQ
-development tag, `master` only with a recorded reason, moved at every tag.
+development tag, `master` only with a recorded reason, moved at every tag. Under [0054](0054-madeira-frozen.md) the Madeira pin is frozen, so the `wine-port` row is a frozen provenance record of the fork commit the port series came from. The build's check that the row equals Madeira's `wine` gitlink still holds and never fires.
 
 ## Decision
 

@@ -33,8 +33,9 @@ end.
   The build checks every tree against its series by content, so an edited patch
   is reapplied on the next build.
 - **Name gate.** `pp names` must stay clean (also run by `pp test` and CI). Name no project other than willfaust/Madeira as provenance.
-- **Pins.** The Madeira pin moves only through `pp sync <sha>`
-  ([UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md)). The `wine`, `dxmt`, `fex` and `rpmalloc` pins
+- **Pins.** The Madeira pin is frozen at `8c050d0` and Playport owns that layer
+  (decision 0054): `pp sync` only reports Madeira's new commits, and a wanted fix is
+  ported by hand as a Playport patch ([UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md)). The `wine`, `dxmt`, `fex` and `rpmalloc` pins
   and their `patches/*-port` series (for Wine also the `madeira-port` patches at the end of
   `patches/madeira-unix`, and `patches/wine-valve` with its `wine-valve` pin, Valve's
   Proton Wine commits picked onto WineHQ) move only by a manual rebase or pick plus a Hollow Knight

@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-09-24. Supersedes, for DXMT only, the consequence
 of [0001](0001-superproject-on-madeira.md) that Madeira's gitlink decides
-which DXMT commit is built.
+which DXMT commit is built. Under [0054](0054-madeira-frozen.md) the Madeira pin is frozen, so the `dxmt-port` row is a frozen provenance record of the fork commit the port series came from.
 
 ## Decision
 

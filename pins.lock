@@ -2,14 +2,16 @@
 # What Playport builds from. pp build reads this file and nothing
 # else to decide which upstream commits to check out.
 #
-# madeira is the pin: it must equal the upstream/madeira gitlink.
+# madeira is the pin: it must equal the upstream/madeira gitlink. It is frozen
+# at 8c050d0 and Playport owns that layer (decision 0054): it does not move,
+# and pp sync only reports what Madeira did since.
 #
 # Wine is taken from its own upstream, not from Madeira (decision 0013): wine
 # is the newest WineHQ development tag (wine-11.19; decision 0049), and
 # patches/wine-port carries Madeira's Wine fork rebased onto it. wine-port is the madeira-lgpl
-# commit that series was rebased from; it must equal Madeira's wine gitlink,
-# so a Madeira update that moves its Wine stops the build until the port
-# series is refreshed.
+# commit that series was rebased from; it must equal Madeira's wine gitlink.
+# With madeira frozen (0054) this row and the other *-port rows are frozen
+# provenance records: the fork commits the port series came from.
 #
 # The base stays WineHQ's newest development tag; Valve's Wine is not the
 # base (decision 0018, which weighed it). wine-valve is the ValveSoftware/wine
@@ -17,13 +19,12 @@
 # takes, was cherry-picked from (decision 0049); the series is applied after
 # patches/wine-port in both Wine trees. It moves by hand, by a pick from
 # Valve's bleeding-edge branch (decision 0049), never through pp sync; each
-# pp sync lists Valve's commits past it in $PLAYPORT_BUILD/sync/wine-valve-new.tsv.
+# pp sync (its watch report too) lists Valve's commits past it in $PLAYPORT_BUILD/sync/wine-valve-new.tsv.
 #
 # DXMT is taken from its own upstream, not from Madeira: dxmt is a 3Shain/dxmt
 # commit, and patches/dxmt-port carries Madeira's DXMT port rebased onto it.
 # dxmt-port is the Madeira DXMT commit that series was rebased from; it must
-# equal Madeira's research/dxmt gitlink, so a Madeira update that moves its
-# DXMT stops the build until the port series is refreshed.
+# equal Madeira's research/dxmt gitlink (frozen with madeira, 0054).
 #
 # FEX is the same (decision 0008): fex is a FEX-Emu/FEX main commit
 # (decision 0049: the head of main, what Proton bleeding-edge ships) and

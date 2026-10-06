@@ -1,6 +1,7 @@
 # 0053: Patch series stay the canonical form of every change to upstream code
 
-**Status:** accepted, 2026-10-05, by the owner. The "carrying model" record of
+**Status:** accepted, 2026-10-05, by the owner. Madeira no longer moves with
+`pp sync`: [0054](0054-madeira-frozen.md) froze it; `pp sync` is a watch report. The "carrying model" record of
 the [dependency strategy](../plans/2026-10-05-dependency-strategy.md#decision-records-needed).
 Keeps [0001](0001-superproject-on-madeira.md); restates the rebase and
 upstreaming parts of [0049](0049-latest-pins.md).

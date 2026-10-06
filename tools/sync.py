@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""pp sync: move Playport's pins to a Madeira commit, or hold with a report.
+"""pp sync: watch Madeira; the pin is frozen (decision 0054).
 
-  pp sync <madeira-sha> [--dry-run] [--push] [--rerun] [--device-wait S]
+  pp sync [<madeira-sha>] [--replay]
+  pp sync <madeira-sha> --move-pin-0054 [--dry-run] [--push] [--rerun] [--device-wait S]
 
-Stages (docs/UPSTREAM-SYNC.md has why they are these):
+The default is a watch report that never moves a pin. It lists Madeira's
+commits past the madeira pin (to <madeira-sha>, or the head of the pinned
+branch) that touch a path Playport builds (MADEIRA_BUILT) or patches
+(patches/madeira-unix, patches/madeira-winios), and the commits of Madeira's
+Wine, FEX, DXMT and rpmalloc forks past the wine-port, fex-port, dxmt-port and
+rpmalloc-port rows, up to the gitlinks of that commit, each with its subject and
+files; a commit that touches a file Playport's own series patch is marked.
+--replay adds the replay below as a "would it apply" signal. The report is
+WATCH.md and watch.tsv in $PLAYPORT_BUILD/sync/watch-<sha8>/. A wanted fix is
+ported by hand as a Playport patch (docs/UPSTREAM-SYNC.md).
+
+Moving the pin needs --move-pin-0054, which names the decision that froze it;
+a pin move needs a new decision record first. Its stages:
 
   resolve  fetch Madeira and read its gitlinks for wine, FEX and dxmt
            (research/dxmt before Madeira's 79e28f0) and its FEX's
@@ -44,7 +57,7 @@ Stages (docs/UPSTREAM-SYNC.md has why they are these):
   decide   merge only when every patch is clean or already-upstream, every gate
            passes and no .gitmodules or licence file changed; otherwise hold.
 
-Every run also fetches Valve's branch (the wine-valve row's, bleeding-edge) and,
+Every run, a watch too, also fetches Valve's branch (the wine-valve row's, bleeding-edge) and,
 when it has commits past the wine-valve pin, lists them oldest first in
 wine-valve-new.tsv (commit, date, subject, files) in the run directory and in
 $PLAYPORT_BUILD/sync, and names that file in the report and the last line.
@@ -63,7 +76,7 @@ mirrors/ (the fetched repositories), madeira-pin.git (whose main is the pinned
 Madeira commit, for a poller to watch) and <sha8>/ per commit, with
 REPORT.md and result.json.
 
-Exit status: 0 merged or no-op (a dry run: replay allows a merge); 10 hold for
+Exit status: 0 the watch report, merged or no-op (a dry run: replay allows a merge); 10 hold for
 review; 11 upstream-broken (the build failed with no conflict and no merged-3way
 patch: hold at the current pin, retry on the next Madeira push); 12 paused (built, awaiting the device or the device lock); 1 the tool
 itself failed; 2 usage.
@@ -122,6 +135,16 @@ BELOW = {"wine-valve": ["wine-port"], "wine-unix": ["wine-port", "wine-valve"], 
 # Madeira is small and needs full history for the candidate's submodule; the
 # forks are fetched without blobs, which are read on demand.
 PARTIAL = {"wine-valve", "wine", "wine-port", "fex", "fex-port", "dxmt", "dxmt-port", "rpmalloc", "rpmalloc-port"}
+# The paths of Madeira's own tree that the build compiles or stages (build/stages,
+# app/Package.swift); a watched Madeira commit counts when it touches one of
+# them or a file patches/madeira-unix or patches/madeira-winios patches. Every
+# file of the forks is built, so each fork commit counts.
+MADEIRA_BUILT = ("build/ntdll-unix/", "build/wineserver/", "build/win32u-unix/", "build/madsync/",
+                 "build/madeira_cfg.h", "build/gnutls-ios/", "build/freetype-ios/", "app/Madeira/Winios/")
+# The series whose files make a watched commit "owned", per row.
+OWNED_SERIES = {"madeira": ["madeira-unix", "madeira-winios"], "wine-port": ["wine-port", "wine-valve", "wine-unix",
+                "wine-pe"], "fex-port": ["fex-port", "fex"], "dxmt-port": ["dxmt-port", "dxmt"],
+                "rpmalloc-port": ["rpmalloc-port", "rpmalloc"]}
 LICENCE_RE = re.compile(r"(^|/)(LICEN[CS]E|COPYING|COPYRIGHT|NOTICE|UNLICENSE)[^/]*$", re.I)
 BOT = {"GIT_COMMITTER_NAME": "upstream-sync", "GIT_COMMITTER_EMAIL": "upstream-sync@localhost"}
 
@@ -310,7 +333,7 @@ def resolve(new_madeira, pins):
                                  "detail": f"Madeira's {GITLINKS[row][1]} ({row}) moved {old[row][:12]} -> "
                                            f"{new[row][:12]}: re-port patches/{row} onto the {base} pin by hand "
                                            f"and move {row} in pins.lock with it (docs/UPSTREAM-SYNC.md, "
-                                           "\"What moves\")"})
+                                           "\"Moving the Madeira pin\")"})
 
     ancestry = {}
     for comp in COMPONENTS:
@@ -946,18 +969,131 @@ def write_report(result, res, replay):
     return path
 
 
+# --- watch -------------------------------------------------------------------
+
+def commits_past(mm, old, new, relevant):
+    """[{commit, date, subject, files}] in old..new (merge base..new when new does not descend
+    from old), oldest first, with no merges, kept when relevant(files)."""
+    since = old if git_ok(mm, "merge-base", "--is-ancestor", old, new) else \
+        (git(mm, "merge-base", old, new, check=False) or old)
+    raw = git(mm, "log", "--reverse", "--no-merges", "--name-only", "--format=@@@%H%x09%as%x09%s", f"{since}..{new}")
+    out, cur = [], None
+    for line in raw.splitlines():
+        if line.startswith("@@@"):
+            h, d, subj = line[3:].split("\t", 2)
+            cur = {"commit": h, "date": d, "subject": subj, "files": []}
+            out.append(cur)
+        elif line.strip() and cur:
+            cur["files"].append(line.strip())
+    return [c for c in out if relevant(c["files"])]
+
+
+def watch_rows(res, repo):
+    """{row: {"old", "new", "commits": [...], "skipped": n}} for madeira and the four port rows."""
+    rows = {}
+    for row, built in (("madeira", MADEIRA_BUILT), ("wine-port", ("",)), ("fex-port", ("",)),
+                       ("dxmt-port", ("",)), ("rpmalloc-port", ("",))):
+        owned = {p for t in OWNED_SERIES[row] if os.path.isdir(os.path.join(repo, "patches", t))
+                 for patch in series(repo, t) for p in patch_paths(patch)}
+        mm, old, new = res["mirrors"][row], res["old"][row], res["new"][row]
+        every = commits_past(mm, old, new, lambda files: True) if old != new else []
+        kept = [c for c in every if any(f in owned or f.startswith(built) for f in c["files"])]
+        for c in kept:
+            c["owned"] = sorted(f for f in c["files"] if f in owned)
+        rows[row] = {"old": old, "new": new, "commits": kept, "skipped": len(every) - len(kept)}
+    return rows
+
+
+def write_watch(rundir, new, rows, res, replay):
+    lines = [f"# Watching Madeira: {new[:12]}", "",
+             "The madeira pin is frozen (decision 0054): nothing here moves a pin. A wanted fix is "
+             "ported by hand as a Playport patch (docs/UPSTREAM-SYNC.md, \"Watching Madeira\"). "
+             "`*` marks a commit that touches a file a Playport series patches.", ""]
+    tsv = ["# row\tcommit\tdate\tsubject\towned\tfiles"]
+    for row, r in rows.items():
+        lines += [f"## {row} `{r['old'][:12]}` → `{r['new'][:12]}`: {len(r['commits'])} commit(s)"
+                  + (f", {r['skipped']} more touching nothing Playport builds" if r["skipped"] else ""), ""]
+        for c in r["commits"]:
+            files = ", ".join(c["files"][:12]) + (f" (+{len(c['files']) - 12})" if len(c["files"]) > 12 else "")
+            lines.append(f"- {'*' if c['owned'] else ' '} `{c['commit'][:12]}` {c['date']} {c['subject']}: {files}")
+            tsv.append(f"{row}\t{c['commit']}\t{c['date']}\t{c['subject']}\t{','.join(c['owned'])}\t"
+                       f"{','.join(c['files'])}")
+        lines.append("")
+    if res["flags"] or res["info"]:
+        lines += ["## Notes", ""] + [f"- {f['kind']}: {f['detail']}" for f in res["flags"]] + \
+                 [f"- {i}" for i in res["info"]] + [""]
+    if replay:
+        lines += ["## Would it apply (replay of every series at this commit)", "",
+                  "| Series | clean | merged-3way | already-upstream | conflict |", "| --- | --- | --- | --- | --- |"]
+        for t in replay:
+            c = [p["class"] for p in t["patches"]]
+            lines.append(f"| {t['target']} | {c.count('clean')} | {c.count('merged-3way')} | "
+                         f"{c.count('already-upstream')} | {c.count('conflict')} |")
+        bad = [f"{t['target']}/{p['patch']}" for t in replay for p in t["patches"] if p["class"] == "conflict"]
+        lines += [""] + ([f"Conflicts: {', '.join(bad)}", ""] if bad else [])
+    path = os.path.join(rundir, "WATCH.md")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    with open(os.path.join(rundir, "watch.tsv"), "w") as f:
+        f.write("\n".join(tsv) + "\n")
+    return path
+
+
+def watch(sha, pins, replay_too):
+    """The watch report (no pin, branch or checkout changes); exit 0."""
+    m = mirror("madeira", pins["madeira"]["url"], pins["madeira"]["branch"])
+    fetch(m, pins["madeira"]["branch"], [pins["madeira"]["commit"]])
+    if sha is None:
+        sha = git(m, "rev-parse", f"refs/remotes/origin/{pins['madeira']['branch']}")
+    log(f"watch: Madeira {sha}")
+    res = resolve(sha, pins)
+    new = res["new"]["madeira"]
+    rundir = os.path.join(SYNC, "watch-" + new[:8])
+    shutil.rmtree(rundir, ignore_errors=True)
+    os.makedirs(rundir)
+    rows = watch_rows(res, REPO)
+    replay = []
+    if replay_too:
+        log("replay (would it apply)")
+        replay = [replay_target(t, TARGET_COMPONENT[t], res, rundir, REPO)
+                  for t in sorted(os.listdir(os.path.join(REPO, "patches"))) if t in TARGET_COMPONENT]
+        remove_trees(res, replay)
+    path = write_watch(rundir, new, rows, res, replay)
+    print(open(path).read())
+    try:
+        valve = valve_news(pins)
+    except Fail as e:   # reported only, as in a move
+        valve = {"error": str(e).splitlines()[0][:300], "commits": []}
+    notice = valve_notice(valve, write_valve_news(valve, rundir))
+    if notice:
+        print(f"pp sync: {notice}")
+    n = sum(len(r["commits"]) for r in rows.values())
+    print(f"pp sync: watch {new[:12]}: {n} commit(s) past the frozen pins touch what Playport builds "
+          f"(report {path}); no pin moved")
+    return 0
+
+
 # --- main --------------------------------------------------------------------
 
 def main():
     p = argparse.ArgumentParser(prog="pp sync", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("sha", help="the Madeira commit to move to (a full or unique abbreviated SHA)")
-    p.add_argument("--dry-run", action="store_true", help="stop after replay; change nothing but the sync area")
-    p.add_argument("--push", action="store_true", help="push main on a merge, the sync branch on a hold")
-    p.add_argument("--rerun", action="store_true", help="ignore a recorded result for this commit")
-    p.add_argument("--device-wait", type=int, default=3600, help="seconds to wait for the device lock")
+    p.add_argument("sha", nargs="?", help="the Madeira commit to watch up to (default: the pinned branch's head), "
+                   "or with --move-pin-0054 to move to")
+    p.add_argument("--replay", action="store_true", help="watch: also replay every series at that commit")
+    p.add_argument("--move-pin-0054", dest="move_pin", action="store_true",
+                   help="move the madeira pin, which decision 0054 froze (a new decision first)")
+    p.add_argument("--dry-run", action="store_true", help="move: stop after replay; change nothing but the sync area")
+    p.add_argument("--push", action="store_true", help="move: push main on a merge, the sync branch on a hold")
+    p.add_argument("--rerun", action="store_true", help="move: ignore a recorded result for this commit")
+    p.add_argument("--device-wait", type=int, default=3600, help="move: seconds to wait for the device lock")
     a = p.parse_args()
-    if not re.fullmatch(r"[0-9a-f]{7,40}", a.sha):
+    if a.sha is not None and not re.fullmatch(r"[0-9a-f]{7,40}", a.sha):
         p.error("the Madeira commit must be a hexadecimal SHA")
+    if not a.move_pin and (a.dry_run or a.push or a.rerun):
+        p.error("the madeira pin is frozen (decision 0054): --dry-run, --push and --rerun belong to a pin move, "
+                "which needs --move-pin-0054; the watch report with a replay is --replay")
+    if a.move_pin and (a.sha is None or a.replay):
+        p.error("--move-pin-0054 takes a Madeira commit and no --replay")
 
     os.makedirs(SYNC, exist_ok=True)
     lockf = open(os.path.join(SYNC, "sync.lock"), "w")
@@ -975,6 +1111,8 @@ def main():
     pins = read_pins(pins_text)
     if gitlink(REPO, "HEAD", "upstream/madeira") != pins["madeira"]["commit"]:
         raise Fail("pins.lock madeira is not the upstream/madeira gitlink")
+    if not a.move_pin:
+        return watch(a.sha, pins, a.replay)
     key = hashlib.sha256((git(REPO, "rev-parse", "HEAD:patches") + git(REPO, "rev-parse", "HEAD:pins.lock"))
                          .encode()).hexdigest()[:16]
 

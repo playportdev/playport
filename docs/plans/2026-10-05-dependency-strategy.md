@@ -1,6 +1,11 @@
 # Plan draft: how Playport carries its dependencies
 
-**Date:** 2026-10-05. **Kind:** research and proposal; nothing implemented. Raw trial scripts and outputs were left in the build area (`$PLAYPORT_BUILD/agent-notes/dep-strategy/`), not committed.
+**Date:** 2026-10-05. **Kind:** research and proposal, then the order below.
+**Status (2026-10-06):** order rows 1–3 done; rows 4 and 5 superseded by
+[decision 0054](../decisions/0054-madeira-frozen.md): the `madeira` pin is frozen at
+`8c050d0` and Playport owns that layer. The `bbbf8d0` move (row 5) was done on branch
+`madeira-main`, which stays unmerged as a reference. What waits for the owner is under
+[Pending the owner](#pending-the-owner). Raw trial scripts and outputs were left in the build area (`$PLAYPORT_BUILD/agent-notes/dep-strategy/`), not committed.
 **Pins read:** `pins.lock` at HEAD (`madeira` 8c050d0, `wine` wine-11.18 7b3fff7,
 `wine-valve` dc26e61, `fex` FEX-2609.1 9fbdc00, `dxmt` 7c8dee1, `mesa` 82d4f86,
 `dxvk` 52fe923, `vkd3d-proton` 472989a, `gbe` 7103add).
@@ -27,13 +32,28 @@ One sequence for this plan and
 | 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources`. **Done, a8c0859e**: `madeira-dock` is not used and never checked out | strategy, step 0 |
 | 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move. **Done, 0dd5f68**: `pp rebase`; FEX trial onto `main` 3648ee9: 6 conflicts in 83 patches (72 clean, 5 3-way), resolved and compiled, draft in the build area (`agent-notes/dep-strategy/fex-main/`) | strategy, step 1 |
 | 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit. **Rows 2–7 and 2b done** (decision 0049, e71e8a7..b011dbf, one commit and IPA each): every IPA passes the gate on both titles; the final build does less CPU work a frame than the baseline, and Portal 2's ≥25 ms load-segment hitch count (52 → 134 in the first pair) is run-to-run spread, the baseline alone spanning 52–268 over three runs ([deps-latest](../evidence/2026-10-05-deps-latest.md)). **Rows 8–10 done** (1e86afc, 2370713, 7ce2b51 after the rebase): freetype VER-2-14-3, rust 1.99.0 and stikjit 1.9.0 moved, one commit and IPA each; gbe, abseil-cpp, idevice, llvm-project, xtool (needs a machine-wide Darwin SDK reinstall) and gstreamer (a new release needs a new licensing audit) held, each with its reason. Every `pins.lock` row except `madeira` (order 5) is now moved or held. **DONE (2026-10-05):** the branch was rebased onto `main` 0.3.2 (which had taken the StikJIT 1.9.0 move itself), and one gate on the rebased final IPA `35956f63`, which contains all three moves, passed on both titles (JIT 2.31 / 2.50 s, first frame +9.53 / +7.48 s); xtool and GStreamer held by the owner | alignment, step 1 (rows 2–10) |
-| 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs. **DONE (2026-10-05): [decision 0052](../decisions/0052-madeira-reconciliation.md)** (0051 is taken on `main`), with the owner's answers: Madeira's WoW64, fastsync on by default, GStreamer and DXVK d3d9 kept, slots appended at 150–155. The carrying model is [0053](../decisions/0053-carrying-model.md) | strategy, step 2 |
-| 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases. **Tooling ready; next: the move** ([Row 5 plan](#row-5-plan-madeira-to-bbbf8d0)): `pp sync`'s replay fixed (553adf2) and every series' `index` lines re-exported (87326e3), so the `bbbf8d0` dry run is honest (084721b) | alignment, step 1 (row 11) |
-| 6 | The alignment items (A, B) and the Portal 2 performance follow-ups | alignment, step 2 |
+| 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs. **Superseded by [0054](../decisions/0054-madeira-frozen.md) (Madeira frozen); `madeira-main` kept as a reference branch.** Before that, **done (2026-10-05): [decision 0052](../decisions/0052-madeira-reconciliation.md)** (0051 is taken on `main`), with the owner's answers: Madeira's WoW64, fastsync on by default, GStreamer and DXVK d3d9 kept, slots appended at 150–155. The carrying model is [0053](../decisions/0053-carrying-model.md) | strategy, step 2 |
+| 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases. **Superseded by [0054](../decisions/0054-madeira-frozen.md) (Madeira frozen); `madeira-main` kept as a reference branch.** The move ran on `madeira-main` (2026-10-06, [Row 5 plan](#row-5-plan-madeira-to-bbbf8d0)): it reached Portal 2 parity but brought four issues the other moves did not (0054). Fastsync, its one measured win, is ported onto `8c050d0` as Playport patches; `pp sync` is now a watch report | alignment, step 1 (row 11) |
+| 6 | The alignment items (A, B) and the Portal 2 performance follow-ups. Both halves ran on `madeira-main`'s base (its evidence records); which results carry over to the frozen base is open | alignment, step 2 |
 
 Steps 1–2 come first because the helper pays off on the moves of step 3; step 4
 needs Madeira `main` as it is when Madeira is next. Nothing is offered upstream
 (owner, 2026-10-05): every patch stays carried.
+
+## Pending the owner
+
+As of 2026-10-06, with Madeira frozen (0054):
+
+1. **The public mirror of the frozen commits** (0054, Corresponding Source): a public
+   repository Playport controls, with an immutable tag for Madeira `8c050d0`, wine-port
+   `723d1bf`, fex-port `0f8edf8`, dxmt-port `ca8a251` and rpmalloc-port `1f271c0`, and
+   `build/source-bundle.json` packing from it. Creating the repository is the owner's.
+2. **A release-variant play.** The UI driver cannot drive the release app (0009), so a
+   person plays both titles on `Playport.app`.
+3. **From `madeira-main`'s alignment work, if wanted on this base:** the human Portal 2
+   runs (a 300 s play with a death and reload, a 30-minute play, a fresh-install play),
+   the A1 `MaxInst` sweep, B1 (The Witcher 3's warm-cache crash, not installed), and the
+   B4 and B6 decisions. Their evidence is on that branch.
 
 ## Part A. Measurements
 
@@ -519,6 +539,8 @@ rather than replaying them.**
 ---
 
 ## Row 5 plan: Madeira to bbbf8d0
+
+**Superseded by [0054](../decisions/0054-madeira-frozen.md) (Madeira frozen); `madeira-main` kept as a reference branch.** Kept as the record of the move that ran on `madeira-main`; it does not run on `main`.
 
 Measured on 2026-10-05 for [decision 0052](../decisions/0052-madeira-reconciliation.md),
 with the owner's answers applied. The trial scripts and their tables were left
