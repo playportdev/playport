@@ -617,7 +617,7 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertEqual(l.ordering, [.tso: true, .halfBarrier: true, .vector: false, .memcpySet: false])
         XCTAssertEqual(l.environment, ["FEX_TSOENABLED": "1", "FEX_HALFBARRIERTSOENABLED": "1",
                                        "FEX_VECTORTSOENABLED": "0", "FEX_MEMCPYSETTSOENABLED": "0",
-                                       "FEX_X87REDUCEDPRECISION": "1", "FEX_MAXINST": "500"])
+                                       "FEX_X87REDUCEDPRECISION": "1", "FEX_MAXINST": "500", "FEX_DISKCACHE": "0"])
         XCTAssertNil(l.override)
         XCTAssertEqual(l.summary, "tso=1 halfbar=1 vector=0 memcpyset=0")
         // A title with no Steam app ID gets the same.
@@ -674,6 +674,23 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertEqual(LaunchSettings.resolve(game: s, global: LaunchSettings()).x87Reduced, false)
         XCTAssertNil(LaunchSettings.resolve(game: nil, global: s).x87Reduced)
         XCTAssertNil(try! JSONDecoder().decode(LaunchSettings.self, from: Data("{}".utf8)).x87Reduced)
+    }
+
+    func testTheGamesPageTurnsTheDiskCacheOn() {
+        let exe = #"C:\Games\The Witcher 3\bin\x64\witcher3.exe"#
+        let none = FEXProfile.launch(appID: 292030, exe: exe, ordering: MemoryOrdering())
+        XCTAssertEqual(none.environment["FEX_DISKCACHE"], "0")   // FEX's own default
+        XCTAssertFalse(none.diskCache)
+        XCTAssertFalse(none.diskCacheChosen)
+        let on = FEXProfile.launch(appID: 292030, exe: exe, ordering: MemoryOrdering(), diskCache: true)
+        XCTAssertEqual(on.environment["FEX_DISKCACHE"], "1")
+        XCTAssertTrue(on.diskCache)
+        XCTAssertTrue(on.diskCacheChosen)
+        let s = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"diskCache":true}"#.utf8))
+        XCTAssertEqual(s.diskCache, true)
+        XCTAssertFalse(s.isEmpty)
+        XCTAssertEqual(LaunchSettings.resolve(game: s, global: LaunchSettings()).diskCache, true)
+        XCTAssertNil(LaunchSettings.resolve(game: nil, global: s).diskCache)
     }
 
     func testTheGamesPageSetsTheBlockSize() {

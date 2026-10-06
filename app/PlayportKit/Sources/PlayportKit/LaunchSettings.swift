@@ -39,6 +39,9 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// x87 at 64-bit rather than 80-bit precision (FEX `X87ReducedPrecision`, per
     /// game only); nil takes the game's profile (FEXProfile.defaultX87Reduced).
     public var x87Reduced: Bool?
+    /// FEX's disk cache of translated code (FEX `DiskCache`, per game only); nil
+    /// takes the default (FEXProfile.defaultDiskCache).
+    public var diskCache: Bool?
     /// madeira.cfg keys over the game's own (per game only; a dev build's), as typed:
     /// `key=value` items split at spaces (`vram-mb=1024 totalphys=6144 inproc-sync=1`).
     /// LaunchSettings.runtimeKeys parses them; TitleConfig writes them after the title's.
@@ -47,7 +50,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     public init(screen: String? = nil, frameLimit: Int? = nil, graphics: GraphicsBackend? = nil,
                 arguments: String = "", steamAPI: SteamAPISwap.Mode? = nil,
                 cloudSync: Bool? = nil, ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
-                x87Reduced: Bool? = nil, runtime: String = "") {
+                x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: String = "") {
         self.screen = screen
         self.frameLimit = frameLimit
         self.graphics = graphics
@@ -57,6 +60,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         self.ordering = ordering
         self.maxInst = maxInst
         self.x87Reduced = x87Reduced
+        self.diskCache = diskCache
         self.runtime = runtime
     }
 
@@ -73,13 +77,14 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         ordering = try c.decodeIfPresent(MemoryOrdering.self, forKey: .ordering) ?? MemoryOrdering()
         maxInst = try c.decodeIfPresent(Int.self, forKey: .maxInst)
         x87Reduced = try c.decodeIfPresent(Bool.self, forKey: .x87Reduced)
+        diskCache = try c.decodeIfPresent(Bool.self, forKey: .diskCache)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime) ?? ""
     }
 
     public var isEmpty: Bool {
         screen == nil && frameLimit == nil && graphics == nil
             && arguments.trimmingCharacters(in: .whitespaces).isEmpty && steamAPI == nil && cloudSync == nil
-            && ordering.isEmpty && maxInst == nil && x87Reduced == nil
+            && ordering.isEmpty && maxInst == nil && x87Reduced == nil && diskCache == nil
             && runtime.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
@@ -122,13 +127,15 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         public var maxInst: Int?
         /// The game's own x87 precision, nil for its profile's (FEXProfile.launch).
         public var x87Reduced: Bool?
+        /// The game's own disk cache choice, nil for the default (FEXProfile.launch).
+        public var diskCache: Bool?
         /// madeira.cfg keys over the title's own (config(over:)); empty for none.
         public var runtime: [String: String]
 
         public init(screen: String?, frameLimit: Int, graphics: GraphicsBackend = .default,
                     arguments: [String] = [], steamAPI: SteamAPISwap.Mode = .emulated,
                     ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
-                    x87Reduced: Bool? = nil, runtime: [String: String] = [:]) {
+                    x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: [String: String] = [:]) {
             self.screen = screen
             self.frameLimit = frameLimit
             self.graphics = graphics
@@ -137,6 +144,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             self.ordering = ordering
             self.maxInst = maxInst
             self.x87Reduced = x87Reduced
+            self.diskCache = diskCache
             self.runtime = runtime
         }
 
@@ -171,7 +179,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                          arguments: splitArguments(game?.arguments ?? ""), steamAPI: game?.steamAPI ?? .emulated,
                          ordering: game?.ordering ?? MemoryOrdering(),
                          maxInst: game?.maxInst.flatMap { FEXProfile.validBlockSize($0) ? $0 : nil },
-                         x87Reduced: game?.x87Reduced,
+                         x87Reduced: game?.x87Reduced, diskCache: game?.diskCache,
                          runtime: runtimeKeys(game?.runtime ?? "") ?? [:])
     }
 

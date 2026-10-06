@@ -813,6 +813,18 @@ private struct GameDetailPage: View {
                 settings.wrappedValue.x87Reduced = $0.isEmpty ? nil : $0 == "reduced"
             }
         }
+        let cacheName: (Bool) -> String = { $0 ? "On" : "Off" }
+        let cache = OptionValue.of(own: settings.wrappedValue.diskCache, inherited: FEXProfile.defaultDiskCache, name: cacheName)
+        PadRow(id: "opt:diskCache", title: "Disk cache", value: cache.text, accessory: .chevron, changed: cache.changed,
+               style: .plain, reset: cache.changed ? { settings.wrappedValue.diskCache = nil } : nil) {
+            PadModal.shared.picker(
+                title: "Disk cache", context: "\(context) · x86 emulator", note: LaunchSettingsText.diskCacheFooter,
+                options: [PadOption(id: "", label: "Default", detail: cacheName(FEXProfile.defaultDiskCache)),
+                          PadOption(id: "on", label: "On"), PadOption(id: "off", label: "Off")],
+                selected: settings.wrappedValue.diskCache.map { $0 ? "on" : "off" } ?? "") {
+                settings.wrappedValue.diskCache = $0.isEmpty ? nil : $0 == "on"
+            }
+        }
         let keys = settings.wrappedValue.runtime.trimmingCharacters(in: .whitespaces)
         PadRow(id: "opt:runtime", title: "Runtime keys",
                subtitle: keys.isEmpty || LaunchSettings.runtimeKeys(keys) != nil ? nil : "Not key=value items: not used",

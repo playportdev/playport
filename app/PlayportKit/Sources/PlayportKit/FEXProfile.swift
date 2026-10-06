@@ -20,6 +20,9 @@
 //   block size MaxInst: Proton's global value (500; decision 0055) under a
 //              game's profile entry; the game's page (LaunchSettings.maxInst)
 //              overrides it. Every launch exports it.
+//   disk cache DiskCache: off by default (FEX's own); the game's page
+//              (LaunchSettings.diskCache) turns it on or off. Every launch
+//              exports it.
 //   honoured   Multiblock in a game's profile, passed on as it is.
 //   not taken  Proton's ProfileStats, which needs the Linux stats shared memory.
 //
@@ -188,6 +191,9 @@ public enum FEXProfile {
         /// Whether x87 runs at 64-bit precision, and whether the game's page chose it.
         public var x87Reduced: Bool
         public var x87Chosen: Bool
+        /// Whether FEX caches translated code on disk, and whether the game's page chose it.
+        public var diskCache: Bool = false
+        public var diskCacheChosen: Bool = false
 
         /// `tso=1 vector=0 memcpyset=0 halfbar=1`, as FEX's own `TSO config` line orders them,
         /// a `*` after each value the game's page chose.
@@ -207,9 +213,12 @@ public enum FEXProfile {
         return config["MaxInst"].flatMap(Int.init).flatMap { validBlockSize($0) ? $0 : nil } ?? fexMaxInst
     }
 
+    /// FEX's disk cache when the game's page does not choose: FEX's own default, off.
+    public static let defaultDiskCache = false
+
     /// The game's page over its profile, for a launch of `exe`.
     public static func launch(appID: UInt32?, exe: String, ordering: MemoryOrdering, maxInst: Int? = nil,
-                              x87Reduced: Bool? = nil) -> Launch {
+                              x87Reduced: Bool? = nil, diskCache: Bool? = nil) -> Launch {
         let entry = override(appID: appID, exe: exe)
         var values = defaults(appID: appID, exe: exe)
         var chosen: Set<MemoryOrdering.Setting> = []
@@ -229,9 +238,12 @@ public enum FEXProfile {
         env[environmentName("MaxInst")] = String(blockSize)
         let x87 = x87Reduced ?? defaultX87Reduced(appID: appID, exe: exe)
         env[environmentName("X87ReducedPrecision")] = x87 ? "1" : "0"
+        let cache = diskCache ?? defaultDiskCache
+        env[environmentName("DiskCache")] = cache ? "1" : "0"
         return Launch(ordering: values, chosen: chosen, override: entry, environment: env,
                       maxInst: blockSize, maxInstChosen: chosenMax != nil,
-                      x87Reduced: x87, x87Chosen: x87Reduced != nil)
+                      x87Reduced: x87, x87Chosen: x87Reduced != nil,
+                      diskCache: cache, diskCacheChosen: diskCache != nil)
     }
 
     /// FEX_HOSTFEATURES for a launch. On iOS FEX cannot read the CPU's ID
