@@ -57,7 +57,7 @@ As of 2026-10-06, with Madeira frozen (0054):
    runs (a 300 s play with a death and reload, a 30-minute play, a fresh-install play;
    A1 `MaxInst=500` is taken without a sweep, decision 0055),
    B1 (The Witcher 3's warm-cache crash: found and fixed, `patches/fex` 0021,
-   [evidence](../evidence/2026-10-06-fex-disk-cache.md); on by default, decision 0056), and the
+   [evidence](../evidence/2026-10-06-fex-disk-cache.md); default held off: Hollow Knight's warm start corrupts rpmalloc, decision 0056), and the
    B4 and B6 decisions. Their evidence is on that branch.
 
 ## Part A. Measurements

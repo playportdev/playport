@@ -40,7 +40,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// game only); nil takes the game's profile (FEXProfile.defaultX87Reduced).
     public var x87Reduced: Bool?
     /// FEX's disk cache of translated code (FEX `DiskCache`, per game only); nil
-    /// takes the default, on (FEXProfile.defaultDiskCache, decision 0056).
+    /// takes the default, off for now (FEXProfile.defaultDiskCache, decision 0056).
     public var diskCache: Bool?
     /// madeira.cfg keys over the game's own (per game only; a dev build's), as typed:
     /// `key=value` items split at spaces (`vram-mb=1024 totalphys=6144 inproc-sync=1`).

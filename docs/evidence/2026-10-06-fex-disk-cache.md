@@ -64,3 +64,24 @@ bucket is pruned.
   (decision 0012), a size budget (about 83 MB per launch slot per game here, with
   at least two slots seen), and a decision record.
 - Hollow Knight and Portal 2 were not run with the cache on this build.
+
+## Hollow Knight: a second crash, rpmalloc at warm start (IPA `b3982ae2`)
+
+With the cache on by default, Hollow Knight's first start filled it (hits 64,978,
+misses 35,118, stored 35,072: much of its code is Mono's JIT output, which differs
+between starts). **Every warm start then crashed** within 78 ms of the game
+process's FEX start, before any block ran: `[rpm-avail] ml607 CORRUPT op=to_free
+bad=0x100 class=0x74 page=0x7c07000000 heap=0x7c00a90000`, then a read of `0x3b0`
+in rpmalloc in `xtajit64.dll` (its pool copy of the image at `0x71fd800000`), in
+`load_arm64ec_module`. Counts: 1 of 2 after the first fill, then 5 of 5, then (after
+clearing the cache through Settings › Storage › Emulator cache, which worked) 3 of
+3 after a fresh fill, on TEB slots 291 and 295. With the cache off for the game
+(its page's *Disk cache: Off*) it started normally. This is the September
+signature; the TEB-slot fix (0021) is a separate, real bug.
+
+**Outcome:** decision 0056's default is held off; the per-game setting, patches 0021
+and 0022, the 5 GB budget and the Settings action stay. *Inference, to check:*
+FEX reads the cache database into memory at start-up (the file mapper returns
+nothing on iOS, `FEXUnixLib.cpp` `MapFile`), and Hollow Knight's database, with
+Mono's anonymous code, may take a path through rpmalloc the iOS port mishandles.
+

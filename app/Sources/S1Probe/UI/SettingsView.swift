@@ -349,8 +349,7 @@ private struct StorageSettings: View {
         }
         // FEX's disk cache (decision 0056): its size, and the one way to clear it (decision 0012).
         PadRow(id: "set:emulator-cache", title: "Emulator cache",
-               subtitle: "Speeds up later starts; cleared past " + ByteCount.format(EmulatorCache.budgetBytes)
-                   + " or when space runs low",
+               subtitle: "Speeds up later starts; cleared past 5 GB or when space is low",
                value: cacheBytes.map(ByteCount.format) ?? "…", hint: launch.running ? "" : "Clear") {
             guard !launch.running, !clearing else { return }
             clearing = true
