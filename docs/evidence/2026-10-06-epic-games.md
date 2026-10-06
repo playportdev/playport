@@ -46,9 +46,16 @@ IPA `d17028de…` (`d17028deda46778b4834acc5db3a48b985d443b18048b2a4650319efb9a3
   does not support yet." under a disabled Install.
 - **Art**: Death's Door's tile shows Epic's 16:9 art (800 wide) once fetched, and the page and
   launch screen its 1920-wide form.
-- **Play** to `first-frame+10`: first frame at +4.47 s, JIT in 2.47 s; the title screen
+- **Play** to `first-frame+10` (but see below): first frame at +4.47 s, JIT in 2.47 s; the title screen
   (Start, Options, Exit) was drawn at the stop.
 - Hollow Knight on the same IPA: first frame at +8.60 s, JIT in 2.52 s.
+- **Death's Door does not run on**: a play by hand on the same IPA ended after 14 s (exit
+  `0x20474343`, an unhandled C++ exception). DXMT's d3d11 threw `dxmt::MTLD3DError` when an
+  allocation failed: Wine's free-area scan of the guest address space gave up (bottom-up from
+  `0x100000000`, `ENOMEM` from the host after 1200 tries; top-down `EEXIST` at the top, where the
+  host has mappings Wine's view list does not show), with 2.6 GB resident of an 8 GB limit. The
+  driven play above stopped at +14.5 s, just before this point. Not an Epic or install fault: the
+  files verified 1334/1334. Hollow Knight shows no such failure in the same log.
 
 Not checked on the phone: an update (Epic published no newer build in the session), a repair
 from Epic (checked from the workstation), the uninstall of an Epic game, the sign-out's session
