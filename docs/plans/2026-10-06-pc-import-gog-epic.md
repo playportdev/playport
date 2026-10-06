@@ -1,14 +1,15 @@
 # Plan: PC game import, GOG and Epic Games
 
-**Date:** 2026-10-06. **Kind:** plan. **Status:** in progress on branch
-`pc-import-gog-epic`; the owner's answers are folded in (see Settled). Phone
+**Date:** 2026-10-06. **Kind:** plan. **Status:** phases 0–3 done on branch
+`pc-import-gog-epic`, with the phone checks listed in Progress still open; the owner's answers are folded in (see Settled). Phone
 runs are kept to the phase gates (owner, 2026-10-06). Decision numbers: 0055 and
 0056 were taken, so store identity is 0057, store sessions 0058 and the Epic
 exchange code 0059.
 
 ## Progress
 
-Evidence: [PC import and GOG on the phone](../evidence/2026-10-06-pc-import-and-gog.md).
+Evidence: [PC import and GOG on the phone](../evidence/2026-10-06-pc-import-and-gog.md),
+[Epic Games on the phone](../evidence/2026-10-06-epic-games.md).
 
 - **Phase 0: done.** `app/ContentKit` holds the store-neutral core (the parts plan,
   engine, journal, layout, codecs, hashes with md5, HTTP, secrets,
@@ -43,7 +44,18 @@ Evidence: [PC import and GOG on the phone](../evidence/2026-10-06-pc-import-and-
   phone: sign-in by the owner (the sheet allows portrait so a password manager's AutoFill
   draws), the library with art (800×370 tiles, 1920×655 behind the page and launch
   screen), install of an older build, Update offered, update, verify and play.
-- **Next:** Phase 3 (Epic), whose spike needs the owner's Epic sign-in.
+- **Phase 3: done apart from an update, a repair and an uninstall on the phone.**
+  `app/EpicClient` (session, library with the catalogue, binary manifest, chunk slices,
+  installer with update, verify and repair, refusals); zlib moved to ContentKit. The app's
+  Accounts › Epic Games, the Epic filter, `epic-` pages and art, and `pp ui
+  --action install:epic-APP`. 3.1 found that Epic can answer the sign-in with a corrective
+  action (accept the privacy policy); the sheet says so. Test title Death's Door. Games that
+  need Epic online sign-in (an ownership token, no offline play, or Epic's access control:
+  Borderlands 3, Fortnite and six more) and those of another launcher are refused, and none is
+  one the owner asked for, so 0059 is not written (3.6). On the phone: sign-in by the owner,
+  install, verify 1334/1334, play to `first-frame+10`, Borderlands 3's refusal, Hollow Knight.
+- **Open:** the phone checks left in each phase (above); 2.4 and 3.7 (cloud saves), 3.6 when a
+  wanted game needs it.
 
 ## Goal
 
