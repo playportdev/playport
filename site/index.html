@@ -154,6 +154,12 @@
   .steps li::before { content: counter(step); display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #1A1306; font-weight: 800; margin-bottom: 16px; }
   .steps h3 { margin: 0 0 6px; font-size: 19px; }
   .steps p { margin: 0; color: var(--muted); font-size: 15.5px; }
+  .install-h { margin: 48px 0 10px; font-size: 22px; }
+  .install-p { color: var(--muted); font-size: 16px; max-width: 760px; margin: 0 0 20px; }
+  .install-p + .table-wrap { margin-bottom: 8px; }
+  .howto { color: var(--muted); font-size: 16px; max-width: 760px; margin: 0 0 16px; padding-left: 22px; }
+  .howto li { margin: 6px 0; }
+  .howto strong { color: var(--text); }
   .steps-cta { margin-top: 32px; display: flex; flex-wrap: wrap; gap: 14px; }
 
   /* Notes */
@@ -413,14 +419,35 @@
     <p class="sub">No computer needed after you install it. The app walks you through the rest.</p>
     <ol class="steps">
       <li><h3>Download</h3><p>Get the latest <code>.ipa</code> from the project's <a href="https://github.com/playportdev/playport/releases">Releases</a>.</p></li>
-      <li><h3>Sideload</h3><p>Install it the usual way, for example with <a href="https://sidestore.io">SideStore</a>.</p></li>
-      <li><h3>Pair and play</h3><p>Open Playport. It pairs its JIT helper once, signs you in to your store, and you are ready.</p></li>
+      <li><h3>Sideload</h3><p>Sign it with your own Apple ID using a sideloader that keeps <strong>Increased Memory Limit</strong> (below). Keep app extensions if asked: the JIT helper is one.</p></li>
+      <li><h3>Pair and play</h3><p>Open Playport. Its checklist pairs the JIT helper once, turns on LocalDevVPN, checks Memory and signs you in to Steam.</p></li>
     </ol>
     <div class="steps-cta">
       <a class="btn btn-primary" href="https://github.com/playportdev/playport/releases">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>
         Download the IPA</a>
     </div>
+    <h3 class="install-h">Keep the memory limit</h3>
+    <p class="install-p">Games, the runtime and Playport's JIT share one memory limit. With Increased Memory Limit an iPhone gives Playport 6 to 8 GB; without it, about 3.3 GB, and bigger games will not start. The <code>.ipa</code> asks for it, but only some sideloaders turn it on with Apple. Playport's <strong>Memory</strong> step shows a tick when yours did.</p>
+    <div class="table-wrap"><table class="versions">
+      <thead><tr><th>Sideloader</th><th>Keeps Increased Memory Limit</th></tr></thead>
+      <tbody>
+        <tr><td>AltStore Classic 2.2 or later</td><td class="new">Yes</td></tr>
+        <tr><td><a href="https://github.com/khcrysalis/PlumeImpactor">Impactor</a>, from a computer</td><td class="new">Yes</td></tr>
+        <tr><td>Xcode with a Personal Team</td><td class="new">Yes</td></tr>
+        <tr><td><a href="https://sidestore.io">SideStore</a> 0.7.0, free Apple ID</td><td class="old">No: do the one-time fix below</td></tr>
+        <tr><td>Sideloadly and others</td><td class="old">Check the Memory step</td></tr>
+      </tbody>
+    </table></div>
+    <h3 class="install-h" id="sidestore">SideStore: when Memory has no tick</h3>
+    <ol class="howto">
+      <li>Install Playport with SideStore as usual, so its App ID exists.</li>
+      <li>Sideload <a href="https://github.com/hugeBlack/GetMoreRam">GetMoreRam</a> and, in its Settings, sign in with the same Apple ID SideStore uses.</li>
+      <li>On its <strong>App IDs</strong> page tap <strong>Refresh</strong>, tap Playport's App ID, then <strong>Add Increased Memory Limit</strong>.</li>
+      <li>Reinstall Playport from SideStore. It upgrades in place: your games and saves stay.</li>
+      <li>Open Playport: the Memory step has its tick, and Settings › Setup check shows Increased Memory Limit On.</li>
+    </ol>
+    <p class="install-p">The capability stays on the App ID, so SideStore's weekly refresh keeps it; if the tick ever goes away, repeat steps 3 and 4. GetMoreRam takes one of a free Apple ID's three app slots: delete it afterwards.</p>
   </div>
 </section>
 
@@ -432,7 +459,7 @@
     <ul class="notes">
       <li><strong>Tested on one phone:</strong> an A19 Pro iPhone on iOS 27.0. See the <a href="https://github.com/playportdev/playport/blob/main/docs/DEVICE.md#known-good-ios-versions">known-good versions</a>.</li>
       <li><strong>32-bit games are new.</strong> Portal 2 is the only one tested so far; other 32-bit Direct3D 9 games take the same path, so expect rough edges.</li>
-      <li><strong>Refresh weekly.</strong> A free Apple ID signs apps for seven days; SideStore can refresh on the phone. Your games and saves stay. Playport takes one of the account's three app slots, and its JIT helper one of its ten App IDs a week.</li>
+      <li><strong>Refresh weekly.</strong> A free Apple ID signs apps for seven days; SideStore can refresh on the phone (after its <a href="#sidestore">one-time memory fix</a>). Your games and saves stay. Playport takes one of the account's three app slots, and its JIT helper one of its ten App IDs a week.</li>
       <li><strong>Vulkan is experimental.</strong> The path through KosmicKrisp, for DXVK and Direct3D 12, is under active development. Long sessions warm the phone, and frame rates drop with the heat.</li>
     </ul>
   </div>

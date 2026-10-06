@@ -101,42 +101,38 @@ need more. The `.ipa` asks for it, but iOS grants it only when the sideloader
 also turns the capability on for the app's App ID at Apple, and not every
 sideloader does.
 
-| Sideloader | Keeps it | How we know |
-| --- | --- | --- |
-| AltStore Classic 2.2 or later | yes | AltStore's 2.2 release notes and user reports; not tested by us |
-| [Impactor](https://github.com/khcrysalis/PlumeImpactor), from a computer | likely | its source asks for every capability the app's entitlements name; not tested by us |
-| SideStore 0.7.0 | **no**, for a free Apple ID | it drops the capability ([SideStore#1616](https://github.com/SideStore/SideStore/issues/1616)); use the fix below |
-| Sideloadly and others | unknown | check the Memory step |
+| Sideloader | Keeps Increased Memory Limit |
+| --- | --- |
+| AltStore Classic 2.2 or later | yes |
+| [Impactor](https://github.com/khcrysalis/PlumeImpactor), from a computer | yes |
+| Xcode with a Personal Team | yes |
+| SideStore 0.7.0, free Apple ID | **no**: do the [one-time fix below](#sidestore-when-memory-has-no-tick) |
+| Sideloadly and others | check the Memory step |
 
-Whatever you use, Playport tells you: the checklist's **Memory** step, and
-Settings › Setup check › Increased Memory Limit (On or Off). If it is Off, the
-step's **How to fix** says what to do; you can also put it off with **Not now**
-and play smaller games.
+Whatever you use, Playport tells you: the first-run checklist's **Memory**
+step has a green tick, and Settings › Setup check shows Increased Memory Limit
+On. If it is Off, the step's **How to fix** shows what to do; **Not now** puts
+it off, and smaller games still play.
 
 ### SideStore: when Memory has no tick
 
-SideStore asks for Increased Memory Limit but never turns it on for a free
-Apple ID, so Playport's App ID has to get it once another way. GetMoreRam
-does that:
+SideStore asks for Increased Memory Limit but does not turn it on for a free
+Apple ID ([SideStore#1616](https://github.com/SideStore/SideStore/issues/1616)),
+so Playport's App ID gets it once with GetMoreRam:
 
 1. Install Playport with SideStore as usual, so its App ID exists.
 2. Sideload [GetMoreRam](https://github.com/hugeBlack/GetMoreRam) and, in its
    Settings, sign in with the same Apple ID SideStore uses.
 3. On its **App IDs** page tap **Refresh**, tap Playport's App ID, then **Add
    Increased Memory Limit**.
-4. Reinstall Playport from SideStore (it upgrades in place: your games and
-   saves stay).
-5. Open Playport: the Memory step has its tick, and Settings › Setup check shows
-   Increased Memory Limit On.
+4. Reinstall Playport from SideStore. It upgrades in place: your games and
+   saves stay.
+5. Open Playport: the Memory step has its tick, and Settings › Setup check
+   shows Increased Memory Limit On.
 
-GetMoreRam takes one of a free Apple ID's three app slots while installed; you
-can delete it afterwards. **We have not tested this on a phone yet.** Reading
-SideStore's source, it changes an App ID's capabilities only when the app's
-App Groups change, so the capability should last through weekly refreshes. If
-the tick goes away after a refresh, repeat steps 3 and 4. The fix in SideStore
-itself is offered upstream
-([SideSign#4](https://github.com/SideStore/SideSign/pull/4)); once a SideStore
-release carries it, this section goes.
+The capability stays on the App ID, so SideStore's weekly refresh keeps it. If
+the tick ever goes away, repeat steps 3 and 4. GetMoreRam takes one of a free
+Apple ID's three app slots; delete it afterwards to free the slot.
 
 ## How Playport differs from Madeira
 
