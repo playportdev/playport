@@ -55,7 +55,8 @@ IPA `d17028de…` (`d17028deda46778b4834acc5db3a48b985d443b18048b2a4650319efb9a3
   `0x100000000`, `ENOMEM` from the host after 1200 tries; top-down `EEXIST` at the top, where the
   host has mappings Wine's view list does not show), with 2.6 GB resident of an 8 GB limit. The
   driven play above stopped at +14.5 s, just before this point. Not an Epic or install fault: the
-  files verified 1334/1334. Hollow Knight shows no such failure in the same log.
+  files verified 1334/1334. Hollow Knight shows no such failure in the same log. Fixed by `madeira-unix` 0082: Death's
+  Door now plays on into the game ([guest VA exhaustion](2026-10-06-guest-va-exhaustion.md)).
 
 Not checked on the phone: an update (Epic published no newer build in the session), a repair
 from Epic (checked from the workstation), the uninstall of an Epic game, the sign-out's session

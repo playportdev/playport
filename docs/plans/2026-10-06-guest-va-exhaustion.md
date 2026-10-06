@@ -1,6 +1,8 @@
 # Plan: Death's Door quits 14 s in (a guest address-space allocation fails)
 
-**Date:** 2026-10-06. **Kind:** plan, not started. **Pins read:** `madeira` 8c050d0
+**Date:** 2026-10-06. **Kind:** plan, done: fix (a), `madeira-unix` 0082, gated in
+[2026-10-06-guest-va-exhaustion](../evidence/2026-10-06-guest-va-exhaustion.md) (The Witcher 3
+not played; Portal 2 was the VA title). **Pins read:** `madeira` 8c050d0
 (frozen, decision 0054) with `patches/madeira-unix` (0001–0081); `dxmt` with
 `patches/dxmt-port` and `patches/dxmt`. **Found by:** the owner's play after the
 [Epic gate](../evidence/2026-10-06-epic-games.md), IPA `d17028de…`.

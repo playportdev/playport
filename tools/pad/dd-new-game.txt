@@ -1,0 +1,29 @@
+# Death's Door: from the title screen into play, on save slot 1.
+# Push it once the title screen (START, OPTIONS, EXIT) is up, about 10 s after the
+# first frame (pp ui --pad --until first-frame+15 --leave-running, or
+# pp perf --pad first-frame+15:dd-new-game). START opens the three save slots; A on
+# slot 1 opens its menu (START, ERASE), and A on START begins: on an empty slot the
+# opening plays (the bus to the Reaping Commission, about 15 s) and Sharon the Bus
+# Driver's lines take an A each; then the crow has control on the bridge ("L TO
+# MOVE"). Slot 1 got a new game on 2026-10-06; if the game saved there, START
+# continues it instead. Checked step by step with screenshots on 2026-10-06
+# (evidence 2026-10-06-guest-va-exhaustion.md). The walk at the end is right along
+# the bridge, then back up and left.
+150 A        # START
+4000 -
+150 A        # slot 1
+3000 -
+150 A        # START
+15000 -      # the bus arrives
+150 A        # Sharon's lines
+1500 -
+150 A
+1500 -
+150 A
+1500 -
+150 A
+3000 -
+2500 LX=1    # right along the bridge
+500 -
+2000 LX=-1 LY=1
+500 -

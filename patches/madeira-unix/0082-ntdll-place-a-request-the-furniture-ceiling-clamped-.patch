@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Tue, 6 Oct 2026 15:37:48 +0200
+Subject: [PATCH] ntdll: place a request the furniture ceiling clamped above
+ the ceiling
+
+Death's Door (Unity, D3D11) quit 14 s in on every launch with DXMT's
+MTLD3DError: its d3d11.dll created a thread, and the thread's 1 MB emulator
+stack could not be placed. The furniture ceiling clamps every request without
+a limit_high to [floor, 0x73ffff0000), a 16 GB window of which 8 GB is the
+ml433 holdback and 0.5 GB the JIT pool's RW alias. The game's ~7.6 GB of
+views (FEX ~4 GB, UnityPlayer.dll 2.2 GB, d3d11.dll 0.6 GB) filled the rest.
+
+Requests with a 4 GB floor (limit_4g: every x64 thread's CHPE emulator stack
+and a WoW64 thread's 64-bit stack) are not ceiling_relaxable, since
+address_space_start is 0x10000 after set_large_address_space, so they failed
+with 30 GB free above the ceiling. The relaxable ones escaped through a kernel
+pick, which put them in iOS's own low VA [4 GB, 64 GB), where the host's
+allocators have their last free holes.
+
+Now a request the ceiling clamped first scans above the ceiling, from
+max(limit_low, ceiling) to the user limit, bottom-up, before the kernel pick
+or a refusal. The caller's own limits still hold: limit_low stays the floor,
+and a caller with a limit_high is never clamped. [va-ceiling] logs the first
+16 placements and every failure.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-06-guest-va-exhaustion.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 34 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index e1da28e..189749e 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -12002,10 +12002,12 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+          * top-of-space tenant from ml106) stay below 464G-64K; only the PA
+          * 16GB/32GB pool reserves may use the slots above. */
+         int ceiling_relaxable = 0;
++        int ceiling_applied = 0;
+         if (ios_furniture_ceiling && !limit_high && size < 0x400000000ULL &&
+             (void *)ios_furniture_ceiling < end)
+         {
+             end = (void *)ios_furniture_ceiling;
++            ceiling_applied = 1;
+             /* Relaxable when the only *effective* constraint is ours. ml119
+              * BUG: the first cut used !limit_low, so a caller passing a small
+              * non-zero limit_low (<= address_space_start, i.e. not actually
+@@ -12108,7 +12110,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+                          ios_scan_stop_name( ios_scan_stop ),
+                          ios_scan_fail_addr, ios_scan_fail_errno,
+                          ios_scan_fail_errno ? strerror( ios_scan_fail_errno ) : "-", what,
+-                         ptr ? "" : (ceiling_relaxable ? "  --> relaxing ceiling, retrying unclamped"
++                         ptr ? "" : (ceiling_applied ? "  --> retrying above the ceiling"
+                                                        : "  <-- STATUS_NO_MEMORY (callers see a NULL alloc)") );
+                 }
+             }
+@@ -12117,6 +12119,36 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+                 TRACE( "got mem with map_free_area %p-%p\n", ptr, (char *)ptr + size );
+                 goto done;
+             }
++            /* Playport: the ceiling is ours, so a request it clamped tries the space
++             * above it before anything else, for every caller whose own limits allow
++             * it: limit_low (if any) stays the floor, and a caller with a limit_high
++             * was never clamped. Death's Door filled the clamped window (8 GB of it
++             * is the ml433 holdback) 14 s in. The 4 GB-floored requests, every x64
++             * thread's emulator stack among them, are not ceiling_relaxable, so they
++             * failed with 30 GB free above the ceiling, and DXMT threw when its
++             * thread could not start. The relaxable ones escaped through a kernel
++             * pick, which put them in iOS's own low VA ([4 GB, 64 GB)), the last
++             * free holes the host's allocators have. Above the ceiling is
++             * [0x73ffff0000, 0x7c00000000) before the FEX band. */
++            if (ceiling_applied)
++            {
++                void *above_lo = (void *)ios_furniture_ceiling;
++                void *above_hi = min( user_space_limit, host_addr_space_limit );
++                unsigned int above_tries = ios_va_scan_tries;
++
++                if (limit_low && (void *)limit_low > above_lo) above_lo = (void *)limit_low;
++                if ((char *)above_hi > (char *)above_lo &&
++                    (size_t)((char *)above_hi - (char *)above_lo) >= view_size)
++                    ptr = map_free_area( above_lo, above_hi, host_size, 0, unix_prot, align_mask );
++                {
++                    static unsigned above_lines;
++                    if (!ptr || above_lines++ < 16)
++                        dprintf( 2, "[va-ceiling] size=%p limit_low=%p above the ceiling: %s %p (tries=%u)\n",
++                                 (void *)size, (void *)limit_low, ptr ? "placed at" : "FAILED, none in",
++                                 ptr ? ptr : above_lo, ios_va_scan_tries - above_tries );
++                }
++                if (ptr) goto done;
++            }
+             /* ml117: THE CEILING IS ADVISORY, NEVER FATAL. It exists only to
+              * bias Wine's furniture low so the top 16GB-aligned slots stay free
+              * for PartitionAlloc; failing an allocation for it is strictly worse

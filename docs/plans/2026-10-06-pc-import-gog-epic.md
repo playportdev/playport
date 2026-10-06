@@ -54,9 +54,9 @@ Evidence: [PC import and GOG on the phone](../evidence/2026-10-06-pc-import-and-
   Borderlands 3, Fortnite and six more) and those of another launcher are refused, and none is
   one the owner asked for, so 0059 is not written (3.6). On the phone: sign-in by the owner,
   install, verify 1334/1334, play to `first-frame+10`, Borderlands 3's refusal, Hollow Knight.
-  **But Death's Door quits 14 s in** (a guest address-space allocation fails and DXMT throws;
-  see the evidence and [its plan](2026-10-06-guest-va-exhaustion.md)): a runtime fault, not
-  Epic's, and the gate's play is not good until it runs on.
+  Death's Door quit 14 s in (a guest address-space allocation failed and DXMT threw): a
+  runtime fault, not Epic's, fixed by `madeira-unix` 0082 ([its plan](2026-10-06-guest-va-exhaustion.md),
+  [evidence](../evidence/2026-10-06-guest-va-exhaustion.md)); it now plays into the game.
 - **Open:** the phone checks left in each phase (above); 2.4 and 3.7 (cloud saves), 3.6 when a
   wanted game needs it.
 
