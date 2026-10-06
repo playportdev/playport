@@ -179,7 +179,8 @@ on the phone and whether it needs a decision record.
 - **Phone measurement:** none. `swift test` covers it.
 - **Decision record:** no.
 
-**A1. Global `MaxInst=500`.**
+**A1. Global `MaxInst=500`.** *Done 2026-10-06 (decision 0055): taken as Proton's
+default without the sweep below, at the owner's direction.*
 - **Change:** take Proton's global value under the profile entry and the
   game's page. Export `FEX_MAXINST` on every launch, and update
   `defaultBlockSize`, the page's default label and the tests.

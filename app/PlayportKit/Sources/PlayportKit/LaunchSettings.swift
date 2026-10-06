@@ -33,8 +33,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// only; FEXProfile.launch).
     public var ordering: MemoryOrdering
     /// The most x86 instructions FEX translates as one block (FEX `MaxInst`,
-    /// per game only); nil takes the game's profile, else FEX's own 5000.
-    /// FEXProfile.blockSizes are the ones offered.
+    /// per game only); nil takes the game's profile, Proton's global 500 unless
+    /// its entry sets one (decision 0055). FEXProfile.blockSizes are the ones offered.
     public var maxInst: Int?
     /// x87 at 64-bit rather than 80-bit precision (FEX `X87ReducedPrecision`, per
     /// game only); nil takes the game's profile (FEXProfile.defaultX87Reduced).
