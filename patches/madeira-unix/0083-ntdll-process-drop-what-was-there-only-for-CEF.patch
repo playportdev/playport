@@ -1,0 +1,543 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Tue, 6 Oct 2026 16:26:54 +0200
+Subject: [PATCH 83/85] ntdll, process: drop what was there only for CEF
+
+Playport runs no CEF (its Steam client is the app's own; no steamwebhelper
+is ever started), but four pieces built for Steam's CEF were still live:
+
+- The ml433 8 GB "V8/cppgc cage" holdback at 0x7200000000, reserved at
+  every boot: half of the 16 GB guest window under the furniture ceiling.
+  Death's Door filled the other half 14 s in. It is now reserved only for a
+  title whose madeira.cfg sets jumbo-mb (The Witcher 3, whose exact 8 GB ask
+  it serves next to the jumbo hold); "[cage] no holdback" says so otherwise.
+- The ml434 4 GB soft "cppgc caged heap" grant: any 4 GB reserve the kernel
+  could not place was answered with unbacked address space at 0x7500000000
+  or 0x7600000000, where steered arenas and placements above the ceiling
+  now live. Removed; such an ask now fails as on any full address space.
+- The ml462 V8 CodeRange service: every reserve-only PAGE_NOACCESS ask of
+  512 MB to 513 MB went to [0x7180000000, 0x71c0000000) "near libcef's
+  builtins", and was refused outright after 32 reserve/release cycles on a
+  thread. Removed with its cycle tracker; such asks take the normal path.
+- The steamwebhelper process gate (task #34): forced single-process CEF,
+  spliced Chromium switches into its command line and refused its --type=
+  children. Removed.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-06-guest-va-exhaustion.md
+Offered-upstream: no
+---
+ build/ntdll-unix/process_ios.c | 332 ---------------------------------
+ build/ntdll-unix/virtual_ios.c | 128 +------------
+ 2 files changed, 10 insertions(+), 450 deletions(-)
+
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index 888862f..2d60539 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -986,338 +986,6 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         snprintf( pbuf, sizeof(pbuf), "spawn:%s", debugstr_us( &params->ImagePathName ) );
+         winios_phase( pbuf );
+     }
+-
+-    /* task #34 single-process CEF: the 64GB VA window above the GPU carveout
+-     * can hold exactly ONE CEF instance's PartitionAlloc pools + one V8
+-     * sandbox (see virtual_ios.c slot allocator). Force steamwebhelper into
+-     * Chromium single-process mode so browser/gpu/renderer/utility all run
+-     * as threads of one pseudo-process, and refuse any --type= child it
+-     * still tries to spawn (e.g. crashpad-handler) — a second instance
+-     * would re-init both static PA copies and exhaust the slots. Chromium
+-     * tolerates a failed crashpad spawn (continues without crash upload). */
+-    {
+-        static const char helper[] = "steamwebhelper.exe";
+-        static const char typesw[] = "--type=";
+-        const WCHAR *ip = params->ImagePathName.Buffer;
+-        int ip_len = params->ImagePathName.Length / sizeof(WCHAR);
+-        int hl = sizeof(helper) - 1, k, j;
+-        int is_helper = 0;
+-        for (k = 0; k + hl <= ip_len && !is_helper; k++)
+-        {
+-            for (j = 0; j < hl; j++)
+-            {
+-                WCHAR c = ip[k + j];
+-                if (c >= 'A' && c <= 'Z') c += 32;
+-                if (c != (WCHAR)helper[j]) break;
+-            }
+-            if (j == hl) is_helper = 1;
+-        }
+-        if (is_helper)
+-        {
+-            const WCHAR *cl = params->CommandLine.Buffer;
+-            int cl_len = params->CommandLine.Length / sizeof(WCHAR);
+-            int tl = sizeof(typesw) - 1, has_type = 0;
+-            for (k = 0; k + tl <= cl_len && !has_type; k++)
+-            {
+-                for (j = 0; j < tl; j++)
+-                    if (cl[k + j] != (WCHAR)typesw[j]) break;
+-                if (j == tl) has_type = 1;
+-            }
+-            if (has_type)
+-            {
+-                dprintf(2, "[proc-gate] REFUSING steamwebhelper --type= child (single-process mode; task #34)\n");
+-                return STATUS_ACCESS_DENIED;
+-            }
+-            /* Append --single-process to the browser instance's command line.
+-             * The new buffer intentionally leaks (once per helper launch);
+-             * RtlDestroyProcessParameters only frees the params block itself. */
+-            {
+-                /* ml279: also raise CEF's OWN verbosity.
+-                 *
+-                 * Across every run that reached CEF init, cef_log.txt ends on the SAME four
+-                 * lines -- chrome_main_delegate / process_singleton_win / os_crypt_win /
+-                 * network_change_notifier_win -- and then goes silent. A consistent stopping
+-                 * point (not scattered crash sites) says CEF is getting somewhere specific
+-                 * and dying there, but Chromium's default verbosity only emits WARNING and
+-                 * ERROR, so whatever it attempts next is simply never written down.
+-                 *
+-                 * --enable-logging routes Chromium's logging to the --log-file it already
+-                 * has, and --v=1 turns on VLOG(1) across the codebase, which covers browser
+-                 * startup, CefBrowserHost creation and the compositor bring-up -- exactly
+-                 * the stretch after network_change_notifier that we cannot currently see.
+-                 * Cheap: one command-line append, no code paths changed, and if CEF dies at
+-                 * the same place the log now says what it was doing. */
+-                /* ml281: it must be --enable-logging=FILE, not bare --enable-logging.
+-                 *
+-                 * Bare --enable-logging makes Chromium log to STDERR and ignore --log-file.
+-                 * The verbose output WAS produced -- the user saw it filling a rendered
+-                 * conhost window in the virtual desktop -- but cef_log.txt received only
+-                 * the usual 4 WARNING/ERROR lines, so none of it was readable by us. (The
+-                 * 58 INFO/VERBOSE lines already in that file are all stamped 0428/, from
+-                 * whatever Windows box this Steam install was copied off.)
+-                 * --enable-logging=file routes the same output through the --log-file the
+-                 * command line already carries, which we can pull. */
+-                /* ml282: add --log-severity=verbose.
+-                 *
+-                 * --enable-logging=file --v=1 still produced ONLY 2 WARNING + 2 ERROR lines.
+-                 * That severity profile is itself the diagnosis: it is exactly
+-                 * LOGSEVERITY_WARNING, which is a CefSettings field the HOST APP sets, and
+-                 * CefSettings overrides Chromium's --v. So Steam is capping CEF's logging.
+-                 *
+-                 * CEF reads the --log-severity switch when the app leaves log_severity at
+-                 * LOGSEVERITY_DEFAULT, and Steam's own webhelper command line does NOT pass
+-                 * one (checked in webhelper.txt), so this may be honoured. If the next run
+-                 * still shows only WARNING/ERROR then Steam sets log_severity explicitly and
+-                 * no command line can raise it -- at which point the answer is to capture
+-                 * the webhelper's STDERR instead, which we know carries the output because it
+-                 * was visibly filling a rendered conhost window. */
+-                /* ml287: steer proxy resolution AWAY from the in-process V8 PAC resolver.
+-                 *
+-                 * CEF's own verbose trace dies immediately after
+-                 *   pref_proxy_config_tracker_impl.cc(191) set chrome proxy config service
+-                 * and the fault is libcef.dll+0x59ef805 calling a pointer into a private
+-                 * PAGE_READWRITE PartitionAlloc region -- memory nothing ever requested
+-                 * execute on ([exec-req]: 5 requests, all succeeded, none in that band).
+-                 *
+-                 * On Windows Chromium resolves proxies either through WinHTTP or through a
+-                 * V8-based PAC resolver, and under --single-process that resolver runs
+-                 * IN-PROCESS. Starting V8 means JIT, which needs executable memory we cannot
+-                 * grant on iOS -- so a call into a non-executable region right after proxy
+-                 * setup is exactly what that would look like.
+-                 *
+-                 * --no-proxy-server disables proxy resolution outright (Steam connects
+-                 * directly here), and --winhttp-proxy-resolver forces the WinHTTP path
+-                 * instead of the V8 one if anything still resolves. Two flags, no code
+-                 * change: if the webhelper now survives past proxy setup, the diagnosis is
+-                 * confirmed and V8 is the wall; if it dies identically, V8/PAC is ruled out
+-                 * and the bad pointer is unrelated to proxying. */
+-                /* ml297 CORRECTION to the block above: the "private PAGE_READWRITE
+-                 * PartitionAlloc region" attribution was WRONG. ml293/294 showed those 512MB
+-                 * regions are FEX's OWN host reservations (all 23 [bigres] requests carry guest
+-                 * rsp=0/rip=0, two per thread at FEX thread init), and ml294's [vname] map proves
+-                 * FEXMem_ThreadState is the only NAMED region in that band. The V8/PAC theory was
+-                 * also refuted: the fault fired 23 times with --no-proxy-server already active.
+-                 * The flags stay (harmless, and they do force the WinHTTP path), but they are not
+-                 * the fix and the comment above should not be read as a live diagnosis.
+-                 *
+-                 * ml297 NEW TEST -- PartitionAlloc BackupRefPtr.
+-                 *
+-                 * ml296 got the deepest run yet (8,616 lines, 230 modules, ZERO 0xc0000005) and
+-                 * died instead with 0xc000001d = STATUS_ILLEGAL_INSTRUCTION at chrome_elf.dll
+-                 * +0xd7d70 -- which offline disassembly had already identified as a bare `ud2`,
+-                 * i.e. Chromium's IMMEDIATE_CRASH(), reached from a CHECK site that loads 0xAA
+-                 * poison and the string "refcount". That is PartitionAlloc's BackupRefPtr refcount
+-                 * integrity check. It never appears in cef_log.txt because IMMEDIATE_CRASH traps
+-                 * without logging, so Chromium's own log can never explain it.
+-                 *
+-                 * BRP is a security hardening feature, not a functional requirement, and it is
+-                 * runtime-gated by the PartitionAllocBackupRefPtr base::Feature. Disabling it
+-                 * removes the DETECTOR, not whatever corrupts the refcount -- so this is a
+-                 * diagnostic, not a fix, and if it works the underlying corruption (most likely a
+-                 * mis-emulated atomic RMW on PA's pool at 0x78xxxxxxxx -- note our atomic probes
+-                 * only ever fire on faults, so a silently-wrong-but-successful atomic would be
+-                 * invisible) still has to be found. Both outcomes are informative: surviving past
+-                 * the ud2 confirms refcount integrity is the wall, while dying identically means
+-                 * the ud2 is not BRP and the CHECK must be re-identified.
+-                 *
+-                 * HAZARD this must avoid: Steam ALREADY passes --disable-features=...,DcheckIsFatal,
+-                 * ... and Chromium's CommandLine takes the LAST occurrence of a switch. Appending a
+-                 * second --disable-features= would silently override Steam's whole list and make
+-                 * DCHECKs fatal, inventing new crashes and corrupting the experiment. So splice
+-                 * into the existing value instead of adding a switch. */
+-                /* ml427 (#70 experiment 2): --js-flags=--jitless. Segmentation-
+-                 * disable (ml426) took effect (cascade absent from cef_log) and
+-                 * the overflow recurred byte-identical ⇒ segmentation exonerated.
+-                 * Remaining prime suspect = in-proc renderer/Shared-JS-Context
+-                 * bring-up. Jitless V8 interprets without runtime codegen: if the
+-                 * recursion involves V8's JIT under FEX, this bypasses it; if the
+-                 * overflow persists, V8 codegen is exonerated too. Steam passes
+-                 * no --js-flags of its own (webhelper.txt cmdline verified), so
+-                 * appending the switch is collision-free. */
+-                /* ml437 (#74): --js-flags=--jitless DROPPED. It was an #70-era
+-                 * experiment variable (ml427/ml429 exonerated it; "drop
+-                 * whenever"), and ml436 showed the cost: the steamui shared-JS
+-                 * -context boot sat pre-GetDesiredSteamUIWindows for 15+ min on
+-                 * an otherwise healthy run — interpreted V8 under emulation is
+-                 * the prime suspect. Full V8 JIT emits runtime x86 (heavier FEX
+-                 * compile + tracker traffic, the normal game path) but runs JS
+-                 * 5-20x faster. Deploy proof = [proc-gate] cmdline-tail echo no
+-                 * longer showing the flag. */
+-                /* ml476: --js-flags=--jitless RESTORED — jitless-off is now
+-                 * HONESTLY CONVICTED by the criterion ml456 set ("if the JS
+-                 * boot stalls again on a park-free run").  Both jitless-off
+-                 * runs parked CrBrowserMain in NtWaitForAlertByThreadId
+-                 * shortly after BrowserReady and stopped writing cef_log
+-                 * (ml474b +104s, ml475 +4s), while the process stayed alive.
+-                 * ml475 was park-free in every sense we can currently
+-                 * measure — zero [bp-lock] timeouts (#80), zero threads
+-                 * frozen in the JIT pool, and the #81 SEH storm eliminated
+-                 * (786k faults -> 0) — so the storm was NOT the freeze cause
+-                 * and V8 JIT itself is the remaining differentiator: every
+-                 * jitless-ON run kept CEF logging for many minutes and two of
+-                 * them dialed.  Restoring it also restores the known-good
+-                 * pool tail budget (the ml455 exhaustion shape).  The #81 fix
+-                 * stays regardless — it is a real bug worth ~786k kernel
+-                 * round-trips per run. */
+-                /* ml509 EXPERIMENT — --num-raster-threads=1 (DIAGNOSTIC, one
+-                 * variable, revert after verdict). The login surface shows
+-                 * per-draw-op destination errors: a panel written at a
+-                 * constant wrong offset (~-550,-97) with its true location
+-                 * left black, the QR halo displaced independently of the QR
+-                 * it surrounds, duplicated tile content. Chromium plainly is
+-                 * NOT COMPUTING what it computes on real Windows, and the
+-                 * prime suspect class is x86-TSO memory ordering under FEX:
+-                 * cc's raster->compositor handoff assumes TSO, this port's
+-                 * FEX history is a string of atomic/ordering bugs (#37 CASPAL,
+-                 * #49 RX-alias atomics, #71 misaligned CS), and a stale read
+-                 * of a layer origin produces exactly a coherent constant
+-                 * offset. Single-threaded raster removes the cross-thread
+-                 * handoff: corruption gone => concurrency/ordering class
+-                 * confirmed, hunt moves to FEX TSO; corruption unchanged =>
+-                 * deterministic miscomputation, --disable-partial-raster is
+-                 * the next single-variable test. Steam passes no
+-                 * --num-raster-threads of its own; append is collision-free.
+-                 * Deploy proof = the [proc-gate] cmdline-tail echo below. */
+-                /* ml510 EXPERIMENT — --num-raster-threads=1 REVERTED (ml509
+-                 * verdict: deploy proven by the cmdline echo, corruption
+-                 * UNCHANGED — worker-vs-worker raster races exonerated; note
+-                 * the compositor thread still consumed raster output
+-                 * cross-thread, so ordering was only narrowed, not cleared).
+-                 * ml509 also closed the pixel-path question for good:
+-                 * [put-image] caught 11 full 700x440 paints, every one
+-                 * SRC{0,0,700,440}->DST{0,0,700,440} — GDI transport is sane
+-                 * and the corruption is already INSIDE the bitmap Chromium
+-                 * hands us. --disable-threaded-compositing is the strongest
+-                 * remaining concurrency discriminator: SingleThreadProxy
+-                 * collapses cc onto one thread. Corruption gone => TSO
+-                 * ordering convicted, fix moves into FEX. Corruption stays =>
+-                 * cross-thread ordering essentially out; deterministic
+-                 * Skia/cc miscomputation under FEX becomes the hunt. */
+-                /* ml511: --disable-threaded-compositing VOID and reverted —
+-                 * it did not test ordering, it broke frame production
+-                 * outright (ONE 700x440 paint all run vs 11, login window
+-                 * fully black, 3 presents). SingleThreadProxy's composite
+-                 * scheduling never fires in this environment; CEF windowed
+-                 * mode effectively requires threaded compositing. No verdict.
+-                 * ml511 EXPERIMENT = --disable-partial-raster: tiles are
+-                 * always fully re-rastered instead of reusing previous
+-                 * content + rastering the changed part. Targets the
+-                 * stale/duplicated-tile signature directly. Corruption gone
+-                 * => tile-reuse readback is where stale data enters (memory
+-                 * ordering on the reuse path). Unchanged => reuse exonerated,
+-                 * offline FEX TSO audit carries the hunt. */
+-                /* ml512: --disable-partial-raster REVERTED (ml511 verdict:
+-                 * deploy proven, corruption unchanged — tile reuse
+-                 * exonerated). All cheap Chromium-switch discriminators are
+-                 * now SPENT, each deploy-proven and inert: raster-threads=1
+-                 * (ml509), threaded-compositing (ml510 VOID — breaks frame
+-                 * production), partial-raster (ml511). The hunt moved into
+-                 * FEX: ml512 flips VectorTSOEnabled + MemcpySetTSOEnabled
+-                 * defaults in the fork (unordered vector/memcpy accesses are
+-                 * the audited accuracy gap; x86 orders them, FEX did not). */
+-                /* ml526 (#82 RETEST): jitless is now A/B-able at runtime.
+-                 *
+-                 * ml476 restored --jitless because BOTH jitless-off runs parked
+-                 * CrBrowserMain in NtWaitForAlertByThreadId shortly after
+-                 * BrowserReady (ml474b +104s, ml475 +4s) and stopped writing
+-                 * cef_log. ⚠️ Every one of those runs had StikDebug attached and
+-                 * spinning, which we now know made each trap a round-trip to a
+-                 * starved debugger — the same overhead that made webhelper
+-                 * bring-up 89s instead of 9s (b439be6). V8's JIT emits runtime
+-                 * x86, i.e. MORE trap/compile traffic than anything else in the
+-                 * process, so it is exactly the workload that overhead punished
+-                 * hardest. The #82 verdict may not survive its removal.
+-                 *
+-                 * Interpreted V8 costs 5-20x on all of Steam's UI JavaScript, so
+-                 * this is the largest single startup lever we have.
+-                 * MADEIRA_JITLESS=0 turns it off; default stays ON (unchanged). */
+-                static const char sp_jitless[] = " --single-process --enable-logging=file --v=1 --log-severity=verbose"
+-                                                 " --no-proxy-server --winhttp-proxy-resolver --js-flags=--jitless";
+-                static const char sp_jit[]     = " --single-process --enable-logging=file --v=1 --log-severity=verbose"
+-                                                 " --no-proxy-server --winhttp-proxy-resolver";
+-                const char *jl = getenv( "MADEIRA_JITLESS" );
+-                int jitless_on = !(jl && jl[0] == '0');
+-                const char *sp = jitless_on ? sp_jitless : sp_jit;
+-                dprintf(2, "[proc-gate] V8 %s (MADEIRA_JITLESS=%s) rev=ml526\n",
+-                        jitless_on ? "JITLESS (interpreted)" : "JIT ENABLED — #82 retest",
+-                        jl ? jl : "unset");
+-                static const char dfs[] = "--disable-features=";
+-                /* ml426 (#70): + segmentation-platform features. Four CreateBrowser
+-                 * runs died C00000FD in the CreateResponse→BrowserReady gap, and
+-                 * cef_log ends mid-segmentation-cascade (segment_result_provider
+-                 * fail-spiral: no ML models/signals in our env) at the fault
+-                 * instant every time. The bat-level -cef-disable-features attempt
+-                 * was IGNORED (Steam only translates known -cef- flags; webhelper
+-                 * cmdline showed no trace) — this splice is the layer that works.
+-                 * Feature strings verified present in libcef. One variable per
+-                 * run: --js-flags=--jitless held in reserve if this fails. */
+-                static const char brp[] = ",PartitionAllocBackupRefPtr,SegmentationPlatform"
+-                                          ",OptimizationTargetPrediction,OptimizationHints";
+-                int sl = (int)strlen( sp );
+-                int dfl = sizeof(dfs) - 1, bl = sizeof(brp) - 1;
+-                int df_end = -1;
+-                {
+-                    int p, k;
+-                    for (p = 0; p + dfl <= (int)cl_len; p++)
+-                    {
+-                        for (k = 0; k < dfl; k++) if (cl[p + k] != (WCHAR)dfs[k]) break;
+-                        if (k == dfl)
+-                        {
+-                            df_end = p + dfl;
+-                            while (df_end < (int)cl_len && cl[df_end] != ' ' && cl[df_end] != '"') df_end++;
+-                            break;
+-                        }
+-                    }
+-                }
+-                if (df_end < 0) bl = 0;   /* no existing list -> splice nothing, report it */
+-                WCHAR *nbuf = malloc( (cl_len + bl + sl + 1) * sizeof(WCHAR) );
+-                if (nbuf)
+-                {
+-                    int o = 0;
+-                    if (bl)
+-                    {
+-                        memcpy( nbuf, cl, df_end * sizeof(WCHAR) );
+-                        o = df_end;
+-                        for (j = 0; j < bl; j++) nbuf[o++] = (WCHAR)brp[j];
+-                        memcpy( nbuf + o, cl + df_end, (cl_len - df_end) * sizeof(WCHAR) );
+-                        o += (int)cl_len - df_end;
+-                    }
+-                    else
+-                    {
+-                        memcpy( nbuf, cl, cl_len * sizeof(WCHAR) );
+-                        o = (int)cl_len;
+-                    }
+-                    for (j = 0; j < sl; j++) nbuf[o++] = (WCHAR)sp[j];
+-                    nbuf[o] = 0;
+-                    params->CommandLine.Buffer = nbuf;
+-                    params->CommandLine.Length = o * sizeof(WCHAR);
+-                    params->CommandLine.MaximumLength = params->CommandLine.Length + sizeof(WCHAR);
+-                    dprintf(2, "[proc-gate] steamwebhelper: injected --single-process + CEF verbosity"
+-                               " + no-proxy + jitless (switch experiments concluded ml509-ml511);"
+-                               " BRP+segmentation-disable %s (ml426)\n",
+-                            bl ? "SPLICED into Steam's existing --disable-features list"
+-                               : "NOT applied (no --disable-features found -- refusing to add a "
+-                                 "second one, it would override Steam's list)");
+-                    /* ml428: ECHO the constructed tail. Two verification channels
+-                     * failed silently: clang compiles sp[]/brp[] into immediate
+-                     * stores (invisible to any string search of the binary, old
+-                     * substrings included), and webhelper.txt truncates the
+-                     * logged command line right where our appends land. The
+-                     * jitless experiment's first run was VOIDED by that gap —
+-                     * every injected-arg experiment from now on is proven by
+-                     * this line, not by binary greps or Valve's log. */
+-                    {
+-                        char tail[136];
+-                        int tstart = o > 128 ? o - 128 : 0, ti;
+-                        for (ti = 0; ti + tstart < o && ti < 135; ti++)
+-                            tail[ti] = (char)nbuf[tstart + ti];
+-                        tail[ti] = 0;
+-                        dprintf(2, "[proc-gate] cmdline-tail(ml428): ...%s\n", tail);
+-                    }
+-                }
+-            }
+-        }
+-    }
+ #endif
+ 
+     unixdir = get_unix_curdir( params );
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 189749e..6176264 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -1582,42 +1582,6 @@ static void ios_span_census( void *base, size_t size, int is_free )
+                 (int)ios_span_alloc_n - (int)ios_span_free_n);
+ }
+ 
+-/* iOS-Madeira ml462 (#77): reserve->release CYCLE tracker. The ml461 run died
+- * of a guest placement livelock: V8's CodeRange (512MB, must sit within jump
+- * distance of libcef's embedded builtins) reserved, got granted, REJECTED the
+- * location, released, and retried forever — ping-ponging on the same two
+- * kernel-pick addresses while the armed steer valve dutifully spilled the
+- * churn into the FEX band until the process starved (2,243 rpmalloc spans,
+- * 15.5GB reserved). A same-(tid,size) big reserve that has been GRANTED and
+- * immediately RELEASED dozens of times will never converge — after the cap,
+- * deny it outright so the guest takes its own named failure path instead of
+- * spinning. Keyed on (tid, size to 16MB granularity); 8 slots, evict-on-
+- * collision, approximate by design. */
+-static struct { unsigned tid; uint64_t size16m; unsigned cycles; } ios_rescycle[8];
+-static void ios_reserve_cycle_note( unsigned tid, uint64_t size )
+-{
+-    uint64_t s16 = size >> 24;
+-    unsigned i, slot = (tid ^ (unsigned)s16) & 7;
+-    for (i = 0; i < 8; i++)
+-        if (ios_rescycle[i].tid == tid && ios_rescycle[i].size16m == s16)
+-        {
+-            ios_rescycle[i].cycles++;
+-            return;
+-        }
+-    ios_rescycle[slot].tid = tid;
+-    ios_rescycle[slot].size16m = s16;
+-    ios_rescycle[slot].cycles = 1;
+-}
+-static unsigned ios_reserve_cycle_count( unsigned tid, uint64_t size )
+-{
+-    uint64_t s16 = size >> 24;
+-    unsigned i;
+-    for (i = 0; i < 8; i++)
+-        if (ios_rescycle[i].tid == tid && ios_rescycle[i].size16m == s16)
+-            return ios_rescycle[i].cycles;
+-    return 0;
+-}
+-
+ /* ml433 (#72): drop released ranges so [bigres-use] stops double-counting the
+  * guest's reserve/free alignment retries — ml432 reported 163,840MB "reserved"
+  * when all but ~72GB had already been freed again (the same base regranted up
+@@ -1631,8 +1595,6 @@ static void ios_bigres_release( void *base )
+         if (ios_bigres_tab[i].base != a) continue;
+         dprintf(2, "[bigres-free] 0x%llx +%lluMB released rev=ml433\n",
+                 (unsigned long long)a, (unsigned long long)(ios_bigres_tab[i].size >> 20));
+-        ios_reserve_cycle_note( NtCurrentTeb() ? (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread : 0,
+-                                ios_bigres_tab[i].size );
+         ios_bigres_tab[i] = ios_bigres_tab[--ios_bigres_cnt];
+         return;
+     }
+@@ -14713,8 +14675,16 @@ void virtual_init(void)
+     free_ranges_end = free_ranges + 1;
+ 
+     /* ml433 (#72): hold back the only 8GB-aligned stretch in the guest band
+-     * before top-down placement can put furniture in it — see IOS_CAGE_BASE. */
+-    if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
++     * before top-down placement can put furniture in it — see IOS_CAGE_BASE.
++     *
++     * Playport: only for a title whose madeira.cfg sets jumbo-mb (The Witcher 3,
++     * whose 8 GB ask this serves). The hold was built for CEF's V8/cppgc cage,
++     * and Playport runs no CEF. For every other title it took 8 GB of the 16 GB
++     * guest window for nothing: Death's Door filled the other 8 GB 14 s in
++     * (evidence 2026-10-06-guest-va-exhaustion.md). */
++    if (madeira_cfg_int( "jumbo-mb", 0 ) <= 0)
++        dprintf( 2, "[cage] no holdback: no jumbo-mb for this title\n" );
++    else if (anon_mmap_fixed( (void *)(uintptr_t)IOS_CAGE_BASE, IOS_CAGE_REAL_SIZE, PROT_NONE, 0 ) != MAP_FAILED)
+     {
+         ios_cage_holdback_live = 1;
+         dprintf( 2, "[cage] holdback reserved 0x%llx+0x%llx rev=ml433\n",
+@@ -19073,55 +19043,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+              * a steer that cannot be served is still never worse than not
+              * steering. The 1GB ceiling stays: >=1GB reserves are PartitionAlloc
+              * pool business and go through the jumbo path above. */
+-            /* iOS-Madeira ml462 (#77): V8 CodeRange placement service + livelock
+-             * breaker. Signature: kernel-pick, reserve-only, PAGE_NOACCESS,
+-             * 512MB(+slop) — V8's kMaximalCodeRangeSize, wanting to land within
+-             * jump distance of libcef's embedded builtins in the module band
+-             * (its own preferred hint 0x71e0000000 collides with loaded DLLs
+-             * and everything the kernel picks elsewhere gets rejected+released;
+-             * ml461 looped this forever). Serve it from [0x7100000000,
+-             * 0x71c0000000) — free space directly below the module band, ~1GB
+-             * from the builtins. V8 redoes its own alignment two-step inside
+-             * the zone (the aligned re-reserve arrives hinted and the normal
+-             * path grants it). If the guest has already cycled 32 grants of
+-             * this shape, placement cannot satisfy it — deny outright so V8
+-             * fails NAMED in cef_log instead of eating the FEX band. */
+-            if (!*ret && !limit && (type & MEM_RESERVE) && !(type & MEM_COMMIT)
+-                && protect == PAGE_NOACCESS
+-                && *size_ptr >= 0x20000000 && *size_ptr <= 0x20100000)
+-            {
+-                unsigned ctid = NtCurrentTeb() ? (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread : 0;
+-                unsigned cyc = ios_reserve_cycle_count( ctid, *size_ptr );
+-                static unsigned cr_logs;
+-                if (cyc >= 32)
+-                {
+-                    if (cr_logs < 16)
+-                        dprintf(2, "[coderange] DENY tid=%04x size=0x%lx cycles=%u — placement livelock, failing honestly rev=ml462\n",
+-                                ctid, (unsigned long)*size_ptr, cyc);
+-                    cr_logs++;
+-                    return STATUS_NO_MEMORY;
+-                }
+-                {
+-                    SIZE_T cwant = *size_ptr;
+-                    void *csaved = *ret;
+-                    /* ml463: floor raised 0x7100000000 -> 0x7180000000. The
+-                     * ml462 run granted the zone BOTTOM (0x7100000000, ~3.5GB
+-                     * from the builtins) and V8 cycled 4 more grant/release
+-                     * rounds before settling — consistent with a ±2GB reach
+-                     * check (acceptable floor ~0x7162000000). Start inside the
+-                     * window so the first grant sticks. */
+-                    NTSTATUS cst = allocate_virtual_memory( ret, size_ptr, type, protect,
+-                                                            0x7180000000ULL, 0x71c0000000ULL, 0, 0 );
+-                    if (cr_logs < 16)
+-                        dprintf(2, "[coderange] #%u tid=%04x size=0x%lx cycles=%u -> %s %p rev=ml462\n",
+-                                cr_logs, ctid, (unsigned long)cwant, cyc,
+-                                cst ? "zone FULL, falling through" : "near-builtins zone", *ret);
+-                    cr_logs++;
+-                    if (!cst) { st = cst; ios_steered = 1; }
+-                    else { *ret = csaved; *size_ptr = cwant; }
+-                }
+-            }
+-
+             if (!ios_steered
+                 && !*ret && !limit && (type & MEM_RESERVE) && !(type & MEM_COMMIT)
+                 && *size_ptr >= 0x2000000 && *size_ptr < 0x40000000
+@@ -19357,35 +19278,6 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                             pick, (unsigned long long)IOS_CAGE_REAL_SIZE,
+                             (unsigned long)(st2 ? 0 : sz), (unsigned)st2);
+                 }
+-                /* ml434 (#72 layer 2): the 4GB ask is the cppgc caged heap and
+-                 * must come back 4GB-ALIGNED. By the time it arrives (~69s) the
+-                 * furniture window is 89% full (ml433: free=1701MB, maxhole
+-                 * 1557MB) — no real placement can EVER work, aligned or not. But
+-                 * the PA guard pool's real 16GB reservation [0x73ffff0000,
+-                 * 0x77ffff0000) has ~12MB committed at its very bottom and the
+-                 * two soft pools claiming that band have 0 commits ever, so
+-                 * SOFT-grant the cage deep inside the dead zone. Commits ride
+-                 * the guard view (see [cage-commit] in the soft handler); the
+-                 * collision to watch is BRP growing 8GB up from its bottom. */
+-                if (st2 && *size_ptr == 0x100000000ULL)
+-                {
+-                    static const uint64_t cage4_slots[] = { 0x7600000000ULL, 0x7500000000ULL };
+-                    unsigned ci;
+-                    for (ci = 0; ci < 2 && st2; ci++)
+-                    {
+-                        if (ios_soft_slot_taken( cage4_slots[ci] )) continue;
+-                        if (ios_soft_n >= IOS_SOFT_MAX) break;
+-                        ios_soft[ios_soft_n].base = cage4_slots[ci];
+-                        ios_soft[ios_soft_n].size = 0x100000000ULL;
+-                        ios_soft[ios_soft_n].cage = 1;
+-                        ios_soft_n++;
+-                        pick = (void *)(uintptr_t)cage4_slots[ci];
+-                        sz = *size_ptr;
+-                        st2 = 0;
+-                        dprintf(2, "[cage] soft-grant %p size=0x%lx (4GB cage in PA guard dead zone) rev=ml434\n",
+-                                pick, (unsigned long)sz);
+-                    }
+-                }
+                 if (st2)
+                 {
+                     pick = NULL;

@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Tue, 6 Oct 2026 16:28:22 +0200
+Subject: [PATCH 85/85] ntdll: steer reserve-only arenas out of the guest
+ window from the first one
+
+The valve that moves reserve-only 32 MB to 1 GB reserves above the furniture
+ceiling armed only at 8 GB reserved or once ios_va_pressure was latched, and
+the latch came from a boot-time scan grinding through iOS's low VA, which
+happened on some launches and not others. On the others Death's Door's first
+14 x 512 MB reserves (7 GB) went into the 16 GB guest window and filled it.
+With the grind gone (a 4 GB floor is no constraint) no launch would latch it
+early.
+
+Now every such reserve is first placed in [0x7400000000, ios_spill_cap). The
+FEX-band fallback and the dead-thread reclaim keep the old arming, so the
+band, where every FEX thread's rpmalloc spans must fit, is not used sooner.
+When that range is held (The Witcher 3's jumbo hold) the reserve takes the
+normal path, as before. [steer] lines say armed=always for these.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-06-guest-va-exhaustion.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 18 +++++++++++++-----
+ 1 file changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 7f6e50f..be3f535 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -19053,10 +19053,18 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+              * a steer that cannot be served is still never worse than not
+              * steering. The 1GB ceiling stays: >=1GB reserves are PartitionAlloc
+              * pool business and go through the jumbo path above. */
++            /* Playport: steer from the first reserve, into [0x7400000000,
++             * ios_spill_cap) only, and arm the FEX-band fallback and the reclaim
++             * as before (8 GB reserved, or va-pressure). Gated on pressure alone,
++             * the first 8 GB of these reserves went into the 16 GB guest window
++             * unless a boot-time scan had happened to grind first: Death's Door's
++             * 14 x 512 MB filled it on the launches where none had (evidence
++             * 2026-10-06-guest-va-exhaustion.md), and with that grind gone (a
++             * 4 GB floor is no constraint) no launch would latch early. */
++            int steer_armed = (ios_bigres_reserved_total > (8ull << 30) || ios_va_pressure);
+             if (!ios_steered
+                 && !*ret && !limit && (type & MEM_RESERVE) && !(type & MEM_COMMIT)
+-                && *size_ptr >= 0x2000000 && *size_ptr < 0x40000000
+-                && (ios_bigres_reserved_total > (8ull << 30) || ios_va_pressure))
++                && *size_ptr >= 0x2000000 && *size_ptr < 0x40000000)
+             {
+                 SIZE_T want = *size_ptr;
+                 void *saved = *ret;
+@@ -19108,7 +19116,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                  * the reserve count went 27 -> 55 (28160MB) and BOTH the steer slot and
+                  * furniture reported va-scan FAILED maxgap=0 before the NULL deref.
+                  * Fall back to the other slot. That doubles steer capacity to ~32GB. */
+-                if (sst)
++                if (sst && steer_armed)
+                 {
+                     *ret = saved; *size_ptr = want;
+                     sst = allocate_virtual_memory( ret, size_ptr, type, protect,
+@@ -19119,7 +19127,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                  * have since exited, then retry once. This is what makes the steer
+                  * region sustainable: the reserves leak per-thread, so without this any
+                  * fixed capacity is exhausted by a long enough run. */
+-                if (sst && ios_steer_reclaim_dead())
++                if (sst && steer_armed && ios_steer_reclaim_dead())
+                 {
+                     *ret = saved; *size_ptr = want;
+                     sst = allocate_virtual_memory( ret, size_ptr, type, protect,
+@@ -19151,7 +19159,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
+                     dprintf(2, "[steer] #%u size=0x%lx reserved_total=%lluMB armed=%s -> %s %p\n",
+                             steer_n, (unsigned long)want,
+                             (unsigned long long)(ios_bigres_reserved_total >> 20),
+-                            ios_va_pressure ? "va-pressure" : "8GB-total",
++                            !steer_armed ? "always" : ios_va_pressure ? "va-pressure" : "8GB-total",
+                             sst ? "FAILED, falling back" : "above ceiling", *ret);
+                 }
+                 if (!sst) { st = sst; ios_steered = 1; }

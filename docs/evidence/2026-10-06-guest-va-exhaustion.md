@@ -3,7 +3,7 @@
 **Date:** 2026-10-06. **Plan:** [guest VA exhaustion](../plans/2026-10-06-guest-va-exhaustion.md).
 **Phone:** iPhone18,4, iOS 27.0, dev build, on battery. **Title:** Death's Door
 (`epic-65d73e3be8824829b5b788bd849b6559`, Unity x86-64, D3D11). **Fix:** `patches/madeira-unix`
-0082. Found by the [Epic gate](2026-10-06-epic-games.md).
+0082 to 0085. Found by the [Epic gate](2026-10-06-epic-games.md).
 
 ## Measured (plan steps 1 and 2)
 
@@ -70,9 +70,44 @@ reserves are already steered once pressure is latched.
 
 Screenshots are in the run directories under `.work`, not here.
 
+## Root causes behind the fill (madeira-unix 0083 to 0085)
+
+0082 made the fill survivable; three more patches stop it:
+
+- **0083, CEF removed.** Playport runs no CEF, but four pieces built for Steam's CEF were live:
+  the 8 GB "V8 cage" holdback (now reserved only when a title's `madeira.cfg` sets `jumbo-mb`:
+  The Witcher 3's exact 8 GB ask uses it), the 4 GB soft "cppgc cage" grant (any unplaceable
+  4 GB reserve got unbacked address space at `0x7500000000`/`0x7600000000`, where steered
+  arenas now live), the V8 CodeRange service (every 512–513 MB reserve-only ask was sent next
+  to "libcef's builtins" and refused after 32 cycles on a thread), and the steamwebhelper
+  process gate.
+- **0084, a 4 GB floor is no floor on iOS.** Nothing maps below 4 GB there, so `limit_4g`
+  requests now take the same path as unconstrained ones: the window, then above the ceiling.
+  They no longer crawl iOS's low VA.
+- **0085, steering from the first reserve.** Reserve-only arenas of 32 MB to 1 GB go to
+  `[0x7400000000, 0x7800000000)` from the first one (`[steer] … armed=always`); the FEX-band
+  fallback keeps the old arming. Before, they went into the window until 8 GB or a boot-time
+  grind latched `va-pressure`: the launch-to-launch difference behind Q1.
+
+IPA `965b7f2736d522f5dc5bec3b7effe8d8ffbd3ee602839c6c78f54c061b54664a`, one session:
+
+| Run | First frame | Clamped `FAILED` | Refused | Window at the end |
+| --- | --- | --- | --- | --- |
+| Death's Door ×3 to `first-frame+25` | +4.42, +4.53, +4.43 s | 0, 0, 0 | 0 | 15.2 GB free of 15.2 GB |
+| Hollow Knight to `first-frame+10` | +10.25 s | 0 | 0 | |
+| Portal 2 to `first-frame+10` | +5.69 s | 0 | 0 | |
+| The Witcher 3 to `first-frame+30` (disk cache off) | +17.73 s | 1 (the 8 GB ask, served by the cage hold as designed) | 0 | |
+
+Death's Door's 18 reserves of 512 MB all went to `0x7400000000` and up.
+
 ## Left
 
-- The 8 GB holdback sits in the window for CEF, which no game uses. Dropping it, or
-  steering the 512 MB reserves from the first one, would keep the window from filling at all;
-  not needed for this fix.
-- The Witcher 3 was not played in this gate (Portal 2 was the VA title).
+- **The Witcher 3 with its page's *Disk cache* On** exits `0xc0000005` 0.4 s after the game
+  starts, on this IPA and on the one with 0082 only, before any x64 instruction runs (a FEX
+  block indexes a table through a pointer of `0x770`). With the cache off it plays. This is the
+  warm-start corruption decision 0056 holds the default off for, now on The Witcher 3 despite
+  `fex` 0021. Not caused by these patches; left for its own session.
+- The main executable's image is placed by a scan from 4 GB with an upper limit just under the
+  ceiling, so it still crawls iOS's low VA once per launch (700–1100 tries) and lands there.
+- In The Witcher 3 the 32 GB jumbo hold covers the steering range, so steered reserves fall back
+  to the FEX band once pressure is latched (300 MB there), as before.

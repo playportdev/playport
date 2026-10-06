@@ -81,3 +81,6 @@
 0080-ntdll-unix-win32u-unix-wineserver-port-the-iOS-repla.patch
 0081-server-flush-fastsync-s-handle-cache-at-process-init.patch
 0082-ntdll-place-a-request-the-furniture-ceiling-clamped-.patch
+0083-ntdll-process-drop-what-was-there-only-for-CEF.patch
+0084-ntdll-a-4-GB-floor-constrains-nothing-on-iOS.patch
+0085-ntdll-steer-reserve-only-arenas-out-of-the-guest-win.patch
