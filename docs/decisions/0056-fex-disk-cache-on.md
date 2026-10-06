@@ -18,8 +18,11 @@ measurements are in the [evidence record](../evidence/2026-10-06-fex-disk-cache.
 - **The cache's key includes the iOS TEB slot offset** (`patches/fex` 0021): every
   TEB read bakes it into the code, and it differs between launches; without it a
   warm start of The Witcher 3 read the wrong slot and crashed.
-- **Budget: 1 GB.** Before a launch the app clears the whole cache when it is
-  larger; FEX fills it again. FEX itself prunes only on a machine-bucket change.
+- **Budget: 5 GB, or 10 GB left on the phone.** Before a launch the app clears the
+  whole cache when it is larger than 5 GB or the phone has under 10 GB free; FEX
+  fills it again from that launch. Proton sets no total limit, and FEX itself prunes
+  only on a machine-bucket change. The budget is generous because clearing costs
+  every game a cold start, and a game's database grows as more of it is played.
 - **Settings › Storage › Emulator cache** shows its size and clears it (decision
   0012: the UI is the way in).
 
@@ -33,8 +36,8 @@ compiling, not frame pacing.
 
 ## Costs
 
-- Disk: about 83 MB per game route per TEB slot offset (two offsets seen), up to the
-  1 GB budget.
+- Disk: about 83 MB for a game's first minute per TEB slot offset (two offsets
+  seen), growing with play, up to the 5 GB budget.
 - A cached block is only as right as the cache's key. Two iOS-only constants were
   found baked into code (the TEB slot, the WoW64 window base); another such constant
   would show as a crash on a warm start that a cold one does not have. The page's

@@ -7,8 +7,9 @@
 // %LOCALAPPDATA%\fex-emu\DiskCache (FEXCore DiskCache::Init; patches/fex 0021
 // adds the iOS TEB slot offset to the process bucket). It prunes only on a
 // machine-bucket change, so databases for slots, configurations or game
-// versions no longer used stay behind; the budget clears the whole cache when
-// it grows past it, and FEX fills it again from the next launch.
+// versions no longer used stay behind. Proton sets no total limit; here a
+// launch clears the whole cache when it is past 5 GB or the phone is short of
+// space (under 10 GB free), and FEX fills it again from that launch.
 
 import Foundation
 import PlayportKit
@@ -20,9 +21,18 @@ enum EmulatorCache {
                                                           isDirectory: true)
     }
 
-    /// Past this the cache is cleared before a launch: about a dozen games'
-    /// routes at the 83 MB a database The Witcher 3's start needed.
-    static let budgetBytes: UInt64 = 1_000_000_000
+    /// Past this the cache is cleared before a launch. Generous: clearing costs
+    /// every game a cold start, and a game's database grows as more of it is
+    /// played (83 MB for The Witcher 3's first minute, per TEB slot offset).
+    static let budgetBytes: UInt64 = 5_000_000_000
+    /// Below this much free space on the phone the cache is cleared before a launch too.
+    static let minimumFreeBytes: UInt64 = 10_000_000_000
+
+    /// The phone's free space for this app's data, nil when iOS does not say.
+    nonisolated static func freeBytes() -> UInt64? {
+        let v = try? WineHostRuntime.documents.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return v?.volumeAvailableCapacityForImportantUsage.map { UInt64(max(0, $0)) }
+    }
 
     /// The cache's size on disk, 0 when there is none.
     nonisolated static func size() -> UInt64 {
@@ -46,12 +56,21 @@ enum EmulatorCache {
         return (try? fm.removeItem(at: directory)) != nil
     }
 
-    /// Before a launch: clears the cache when it is over the budget, and says so in the log.
+    /// Before a launch: clears the cache when it is over the budget or the phone
+    /// is short of space, and says so in the log.
     nonisolated static func keepWithinBudget(log: (String) -> Void) {
         let bytes = size()
-        guard bytes > budgetBytes else { return }
+        guard bytes > 0 else { return }
+        let free = freeBytes()
+        let reason: String
+        if bytes > budgetBytes {
+            reason = "over its \(ByteCount.format(budgetBytes)) budget"
+        } else if let free, free < minimumFreeBytes {
+            reason = "with \(ByteCount.format(free)) free on the phone, under \(ByteCount.format(minimumFreeBytes))"
+        } else {
+            return
+        }
         let cleared = clear()
-        log("fex: disk cache \(ByteCount.format(bytes)) over its \(ByteCount.format(budgetBytes)) budget: "
-            + (cleared ? "cleared" : "could not be cleared"))
+        log("fex: disk cache \(ByteCount.format(bytes)) \(reason): " + (cleared ? "cleared" : "could not be cleared"))
     }
 }

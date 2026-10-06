@@ -229,7 +229,7 @@ Commits:
 ### B. Investigate before adopting
 
 **B1. FEX disk cache on by default** (Valve experimental/bleeding-edge, Proton `09d3d6e5`). *Done 2026-10-06 (decision 0056): the Witcher 3 warm-start crash was a disk-cache
-key bug, fixed by `patches/fex` 0021; WoW64 keeps it off (0022); 1 GB budget and a
+key bug, fixed by `patches/fex` 0021; WoW64 keeps it off (0022); 5 GB budget and a
 Settings action.*
 - **Change if adopted:** `FEX_DISKCACHE=1` by default from the launch
   (`FEXProfile`), with a cap well below FEX's 1 GiB `DiskCacheMaxFileSize`.
