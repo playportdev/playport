@@ -82,13 +82,18 @@ final class WineHostRuntime: @unchecked Sendable {
     /// error, and measures nothing (decision 0009). The switches are the ones
     /// the Hollow Knight measurements ran with (MADEIRA_QUIET, WINEDEBUG=-all),
     /// plus MADEIRA_NO_DIAGNOSTICS (patches/madeira-unix 0018, patches/dxmt
-    /// 0005, 0007) and DXMT's own level. A title's configuration (madeira.cfg env.*) still wins over the
-    /// ones set without overwrite.
+    /// 0005, 0007), DXMT's own level, and Proton's defaults for DXVK and
+    /// vkd3d-proton when logging is off (DXVK_LOG_LEVEL, VKD3D_DEBUG,
+    /// VKD3D_SHADER_DEBUG = none). A title's configuration (madeira.cfg env.*)
+    /// still wins over the ones set without overwrite.
     private static func quietRuntime() {
         setenv("MADEIRA_QUIET", "1", 1)          // no [PROF] sampler, no per-present or poll lines
         setenv("MADEIRA_NO_DIAGNOSTICS", "1", 1) // no samplers, no ntdll or DXMT census
         setenv("WINEDEBUG", "-all", 0)           // no Wine debug channel
         setenv("DXMT_LOG_LEVEL", "error", 0)     // DXMT's info and warn lines
+        setenv("DXVK_LOG_LEVEL", "none", 0)      // DXVK (d3d9, d3d11 on Vulkan), as Proton
+        setenv("VKD3D_DEBUG", "none", 0)         // vkd3d-proton (d3d12), as Proton
+        setenv("VKD3D_SHADER_DEBUG", "none", 0)  // its shader compiler, as Proton
     }
     #endif
 
