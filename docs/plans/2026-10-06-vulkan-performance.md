@@ -1,11 +1,13 @@
 # Plan: Vulkan at least on par with DXMT, on Hollow Knight in Direct3D 11 and 12
 
 **Date:** 2026-10-06. **Kind:** plan, not started. **Pins read:** as in the
-[KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 +
-`patches/mesa` (16), `dxvk` e5ffd0f (unmodified), `vkd3d-proton` 31d1f89 +
+[KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 (a
+Mesa `main` commit of 2026-10-05; `main` was 54 commits ahead on 2026-10-06, none
+of them in `src/kosmickrisp` or the Metal WSI) + `patches/mesa` (16), `dxvk` e5ffd0f (unmodified), `vkd3d-proton` 31d1f89 +
 `patches/vkd3d-proton` (4), `dxmt` 68af85e. **Relation:** this plan is the
 detailed form of that plan's steps 1 and 2. Its step 4 (Vulkan by default) waits
-for this plan's exit criteria.
+for this plan's exit criteria. **Owner's answers** (2026-10-06) are under
+[Decisions taken](#decisions-taken).
 
 ## Goal
 
@@ -186,8 +188,11 @@ regression in another column. Otherwise it is reverted, and its record says so.
     which thread), GPU per frame, present and latency, and hitches is behind
     DXMT, and by how much.
 
-  Steps 2 to 6 are ordered by that table. The levers below are the candidates
-  known from reading the code, and step 1 may rank them otherwise.
+  The gap table ranks the levers within each layer. The layers are worked in
+  the owner's order: KosmicKrisp (steps 3–6), then FEX (step 7), then Wine
+  (step 8), and only then DXVK and vkd3d-proton (step 9). The levers below are
+  the candidates known from reading the code, and step 1 may rank them
+  otherwise.
 
 ### Step 2. Fix what step 1 found unstable
 
@@ -220,9 +225,10 @@ check (a screenshot at the same point) for anything that touches rendering:
 
 ### Step 4. KosmicKrisp CPU cost (`patches/mesa`)
 
-Before writing a patch, check Mesa `main` for upstream work on the same thing.
-Where it exists, take it with a Mesa pin move (as the KosmicKrisp plan's step 2
-says) instead of a Playport patch.
+The pin is a Mesa `main` commit. Before writing a patch, check `main`'s newer
+commits and open merge requests for the same work. Where it exists, move the
+pin to a newer `main` commit (as the KosmicKrisp plan's step 2 says) instead of
+carrying a Playport patch. Any pin move during this plan gets its own A/B.
 
 1. **Skip the `vk_cmd_queue` copy for one-time-submit primaries.** DXVK and
    vkd3d submit each command buffer once. KK re-records from the queue only
@@ -261,7 +267,56 @@ frame rate.
    ≥50 ms frames. If cold plays are behind DXMT, take the KosmicKrisp plan's
    Metal binary archive item (its step 2.3) here.
 
-### Step 7. Exit run
+### Step 7. FEX
+
+DXVK, vkd3d-proton and DXMT are all ARM64EC, so FEX runs only the game's x86-64
+code and its calls into them. On the same scene, that work is the same for both
+D3D11 backends unless the profile shows otherwise. It differs on the D3D12 route,
+where Unity's D3D12 renderer runs other guest code.
+
+1. From step 1's per-thread Mi/f and `--cpu-prof`, split each route's guest
+   work (the main thread and `UnityGfxDeviceWorker`'s guest part) from its
+   native work. The things to compare are the DX12 route against the DX11
+   route, and DXVK against DXMT.
+2. Where the guest share differs, look at the hot blocks and at the cost of each
+   x86-64 call into ARM64EC: the entry and exit thunks per D3D call, and the
+   calls per frame.
+3. Look at the effect of the extra Vulkan threads on FEX: the band (`band:`),
+   the JIT pool and lock contention, and their futex waits (`srv/f`, 0024's
+   freeze signature).
+
+- Changes go in `patches/fex` (decision 0018 applies only to the `fex` pin).
+  The DXMT control must not regress.
+
+### Step 8. Wine (winevulkan and the unix call path)
+
+Every Vulkan command DXVK and vkd3d record is a Wine unix call. For example,
+`vkCmdDraw` in `dlls/winevulkan/loader_thunks.c` fills a parameter block and
+calls `UNIX_CALL`. The unix side then converts handles and calls KK. DXVK makes
+several such calls per draw on `dxvk-cs`. *Hypothesis:* DXMT makes fewer
+winemetal calls per draw, so this transition cost falls on Vulkan alone.
+
+1. Measure the unix calls per frame and their cost per call in `--cpu-prof`
+   (`__wine_unix_call`, the dispatcher, `wine_vk*` and the conversion code).
+2. Possible levers, cheapest first:
+   - the 64-bit thunks' handle unwrapping and struct conversion, where no
+     conversion is needed;
+   - a lighter transition for winevulkan's 64-bit calls in Madeira's
+     one-process runtime, where PE and unix code share the address space.
+     This is a `patches/madeira-unix` or `patches/wine-unix` change;
+   - Valve's `win32u` semaphore and fence commits for vkd3d-proton, which the
+     deps-latest record left out as "proton".
+
+- **On the phone:** the screening A/B on both routes, and Portal 2 in the gate.
+  Portal 2 uses the i386 WoW64 thunks, which must not regress.
+
+### Step 9. DXVK and vkd3d-proton
+
+These layers come last, for costs that KK, FEX and Wine cannot remove. A
+Playport patch here (a new `patches/dxvk`, or `patches/vkd3d-proton`) needs its
+own decision record, and should be one Valve or upstream would take.
+
+### Step 10. Exit run
 
 Repeat step 1's full matrix on the final IPA, with stability included. Write
 the evidence record. Record the result in the KosmicKrisp-default plan's
@@ -269,8 +324,9 @@ step 1 (go or no-go), and in a decision record if the defaults changed.
 
 ## Exit criteria
 
-These are the recommended thresholds (question 1). Each holds for both Vulkan
-routes against DXMT D3D11, as the median of 3 runs on one IPA:
+These are the thresholds the owner accepted. Each holds for **both** Vulkan routes
+(D3D11 on DXVK and D3D12 on vkd3d-proton) against DXMT D3D11, as the median of 3
+runs on one IPA:
 
 | Mode | Must hold |
 |---|---|
@@ -289,8 +345,9 @@ routes against DXMT D3D11, as the median of 3 runs on one IPA:
   charge. The ABBA order, `--cool`, 3 runs and recording the charge reduce this
   noise but do not remove it.
 - **vkd3d may stay behind.** D3D12 adds its own CPU (descriptor emulation
-  without descriptor buffers, root signature handling). The D3D12 bar may need
-  its own threshold (question 2).
+  without descriptor buffers, root signature handling), and the owner holds it
+  to the full bar. If it cannot reach the bar, the plan reports the gap. The
+  threshold is not lowered.
 - **Diverging from upstream.** Every `patches/mesa` performance patch is one more
   to carry over each Mesa move. Upstream equivalents are preferred, and each patch's
   evidence names its upstream status.
@@ -301,22 +358,18 @@ routes against DXMT D3D11, as the median of 3 runs on one IPA:
   Screening levers uses the 2+2 burst protocol to stay at about 1 hour per
   lever.
 
-## Open questions for the owner
+## Decisions taken
 
-1. **Are the exit thresholds above right?** In particular, the sustained
-   720/free FPS ≥ DXMT as the main uncapped bar, and +5 % on per-frame CPU and
-   GPU cost.
-2. **Is Direct3D 12 (vkd3d) held to the same bar, or is "within 5 % of DXMT
-   D3D11" enough?** Recommended: the same bar for stability and 720/60, and
-   within 5 % uncapped.
-3. **Should the Graphics options field (step 0.1) be in the dev build only, or
-   in both variants?** Recommended: dev only (`#if !PLAYPORT_RELEASE`), with an
-   allowlist. The defaults that come out of step 3 go into
-   `GraphicsBackend.runtimeEnvironment` for players.
-4. **May DXVK or vkd3d-proton carry Playport performance patches?** DXVK is
-   unmodified today. Recommended: no. Fix the cost in KK, or use DXVK's
-   options. A DXVK patch would be considered only for a cost KK cannot remove
-   (for example, adding KK to a driver check) and would need its own decision.
-5. **Should Mesa move to `main` before the baseline, or be treated as a lever?**
-   Recommended: baseline at b39d173 first, then treat a Mesa move as a step-4
-   lever, so upstream's gain is measured.
+The owner answered on 2026-10-06:
+
+1. **Thresholds.** The exit criteria above are accepted.
+2. **Direct3D 12.** It is held to the same bar as Direct3D 11, in every mode.
+3. **Graphics options field (step 0.1).** Dev build only (`app/Sources/S1Probe/Dev/`
+   or `#if !PLAYPORT_RELEASE`), with an allowlist. The defaults that come out of
+   step 3 go into `GraphicsBackend.runtimeEnvironment` for players.
+4. **Where to change code.** Patches to DXVK and vkd3d-proton are not ruled out,
+   but the first targets are KosmicKrisp, then FEX, then Wine (steps 3–8). DXVK
+   and vkd3d-proton come last (step 9).
+5. **Mesa.** The pin is already a `main` commit (b39d173, 2026-10-05), so
+   there is no catch-up move before the baseline. The baseline runs at the pin.
+   Later `main` commits are taken as levers in step 4, each with its own A/B.
