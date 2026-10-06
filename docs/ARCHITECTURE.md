@@ -790,10 +790,11 @@ the trailers `Class:`, `Evidence:` and `Offered-upstream:`. The classes are:
   at the end of `patches/madeira-unix`, Madeira's own `*_ios.c` replacements
   ported onto the `wine-port` base.
 - `valve`: in `patches/wine-valve` only, one of Valve's commits from
-  ValveSoftware/wine `proton_11.0` (the Wine Proton ships) picked onto the
+  ValveSoftware/wine's bleeding-edge branch (decision
+  [0049](decisions/0049-latest-pins.md); `proton_11.0` before it) picked onto the
   `wine` pin with `patches/wine-port` applied (trailers `Valve-commit:` for
   the original and `Picked: clean` or `Picked: resolved`). The pins.lock
-  `wine-valve` row is the `proton_11.0` commit the series was picked from.
+  `wine-valve` row is the Valve commit the series was picked from.
   Which of Valve's commits are taken, and why the others are not, is in
   decision [0018](decisions/0018-valve-wine-as-a-series.md) and its evidence
   record. The Wine trees apply `wine-port`, then `wine-valve`, then
