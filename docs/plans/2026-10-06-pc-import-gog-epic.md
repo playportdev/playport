@@ -8,59 +8,60 @@ exchange code 0059.
 
 ## Progress
 
-- **Phase 0, host side: done** (2026-10-06). `app/ContentKit` holds the neutral core
-  (the parts plan, engine, journal, layout, codecs, hashes with md5, HTTP, secrets,
-  `Store`/`StoreGameKey`/`StoreReceipt`); SteamClientKit re-exports it and Steam's
-  plans convert with the same journal numbering. The catalogue, library, queue and
-  game routes carry the store identity; the app's queue runner (`UI/Downloads.swift`)
-  runs each store's jobs through a `DownloadDriver` (Steam's: `UI/SteamInstalls.swift`).
-  Settings › Accounts (alias `steam`, `account`). Decisions 0057, 0058. `pp test` and
-  `pp check` (dev, release) pass. **Not checked on the phone yet:** its gate (a Steam
-  install and repair, Hollow Knight) runs with Phase 1's, to keep phone use down.
-- **Phase 1, code: 1.1–1.4 and 1.6 written, host-tested** (2026-10-06). Library › Add a
-  game (the grid's last tile in All and Installed, and on the empty page) opens the one
-  Files picker the shell has; a folder or a .zip becomes an `import` job
-  (`UI/Import.swift`, PlayportKit `GameImporter`: Windows-name checks, symlinks skipped,
-  iCloud placeholders refused, free space, a resumable stage, one rename, a receipt that
-  names no path). An import is always Local (owner, 2026-10-06: the sources are
-  separate); GOG's `goggame-*.info` or Epic's `.egstore/*.mancpn` in the folder only give
-  the executable and arguments; `steam_appid.txt` is a hint.
-  The zip reader and a streaming inflate are ContentKit's. Game options › Executable
-  (ranked candidates) and Name for non-Steam games. Tile art from the executable's icon
-  (PlayportKit `PEIcon`), cached under Caches (re-derivable), not Application Support.
-  `import` run events. **1.5 (installers) not started**: it needs the phone spike.
-- **Phone gates, 2026-10-06** ([evidence](../evidence/2026-10-06-pc-import-and-gog.md)):
-  Phase 0 (Hollow Knight; a Steam pause, resume and verify), Phase 1 (a 5.2 GB folder
-  imported by `pp ui --action import:PATH`, the owner's choice over a hand pick, played,
-  uninstalled) and Phase 2 (GOG sign-in by the owner, install, update, verify and play of
-  Shogun Showdown) pass. **Phase 2 done** apart from a phone repair and GOG art on tiles.
-- **1.5 dropped** (owner, 2026-10-06): offline installers are not run. GOG games come
-  from GOG's content servers (Phase 2) and need no installer; a game already installed
-  elsewhere is imported as a folder or .zip. Spike A, for the record: Shogun Showdown's
-  GOG installer (Inno Setup 5.6.2, i386) started under WoW64 with
-  `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=…`, loaded kernel32 and kernelbase,
-  and exited with code 1 after 147 ms, before writing its log or the target folder; not
-  traced further. Picking an installer in Add a game says Playport doesn't run them and
-  asks for the installed folder or a .zip.
-- **Next:** Phase 3 (Epic), whose spike needs the owner's Epic sign-in; a zip import and a
-  hand pick on the phone when convenient.
+Evidence: [PC import and GOG on the phone](../evidence/2026-10-06-pc-import-and-gog.md).
+
+- **Phase 0: done.** `app/ContentKit` holds the store-neutral core (the parts plan,
+  engine, journal, layout, codecs, hashes with md5, HTTP, secrets,
+  `Store`/`StoreGameKey`/`StoreReceipt`); SteamClientKit re-exports it, and Steam's plans
+  convert with the same journal numbering. The catalogue, library, queue and game routes
+  carry the store identity. The app's queue (`UI/Downloads.swift`) runs each source's jobs
+  through a `DownloadDriver` (Steam's `UI/SteamInstalls.swift`, imports'
+  `UI/Import.swift`, GOG's `UI/GOGAccount.swift`). Settings › Accounts (old names `steam`
+  and `account` still open it); the setup checklist's step is Accounts (Steam or GOG).
+  Decisions 0057, 0058. On the phone: Hollow Knight plays; a Steam pause, resume and
+  verify pass.
+- **Phase 1: done apart from phone checks of 1.3, 1.4 and 1.6.** Add a game is on every
+  Library filter (a header button, X, the Filter & sort picker, and a tile in All and
+  Installed); a folder or a .zip becomes an `import` job (PlayportKit `GameImporter`).
+  **The sources are separate (owner, 2026-10-06):** Local, Steam, GOG and Epic. An import
+  is always Local; a store's launch record in the folder (`goggame-*.info`,
+  `.egstore/*.mancpn`) only gives the executable and arguments, and `steam_appid.txt` is
+  kept as a hint (the page's "Run with Steam's game ID" from 1.2 is not built). On the
+  phone: a 5.2 GB folder imported, played and uninstalled, driven by
+  `pp ui --action import:PATH` (owner's choice; see 1.7). Not yet on the phone: a .zip
+  import, a hand pick in Files, the Executable and Name rows, icon art.
+- **1.5 dropped** (owner, 2026-10-06): offline installers are not run. Spike A, for the
+  record: Shogun Showdown's GOG installer (Inno Setup 5.6.2, i386) started under WoW64
+  with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=…`, loaded kernel32 and
+  kernelbase, and exited with code 1 after 147 ms, before writing its log or the target
+  folder; not traced further. Picking an installer in Add a game says Playport doesn't run
+  them and asks for the installed folder or a .zip.
+- **Phase 2: done apart from a repair and an uninstall on the phone.** `app/GOGClient`
+  (session, library, generation-2 content, chunk source, installer with update, verify and
+  repair). GOG's desktop-client secret is 64 hex digits (the 32-digit form is refused).
+  Test title Shogun Showdown (1104084973); Hollow Knight is not owned on GOG. On the
+  phone: sign-in by the owner (the sheet allows portrait so a password manager's AutoFill
+  draws), the library with art (800×370 tiles, 1920×655 behind the page and launch
+  screen), install of an older build, Update offered, update, verify and play.
+- **Next:** Phase 3 (Epic), whose spike needs the owner's Epic sign-in.
 
 ## Goal
 
 A player can get a Windows game into Playport without Steam and without a computer:
 
-1. **Import**: a game folder, a `.zip` or a GOG offline installer, picked in Files
-   (On My iPhone, iCloud, a USB drive, an SMB share). It is copied into `C:\Games`
-   and plays like any other title.
+1. **Import**: a game folder or a `.zip`, picked in Files (On My iPhone, iCloud, a
+   USB drive, an SMB share). It is copied into `C:\Games` and plays like any other
+   title, as a Local game.
 2. **GOG**: sign in, see the owned library with art, install, update and verify a
    game from GOG's content servers, and play it.
 3. **Epic Games**: the same for the Epic library. Games that need Epic's online
    ownership check at launch wait for a decision record (see 3.6).
 
 Each part ships alone. Order: 0 → 1 → 2 → 3. Import comes first because it needs
-no account and also covers "I already have this game" for every store.
+no account. Local, Steam, GOG and Epic are separate sources of games: an imported
+game is Local and joins no store.
 
-## Where things stand (facts from the tree at `4a4a4c2`)
+## Where things stood before the plan (the tree at `4a4a4c2`)
 
 - **The catalogue** (`app/PlayportKit/Sources/PlayportKit/Catalog.swift`) is rebuilt
   by adoption from `Documents/prefix/drive_c/Games` each time the app comes to the
@@ -169,7 +170,8 @@ small owned game); `./pp ui --play app-367520 --until first-frame+10 --shot` pas
 ## Phase 1: import a PC game
 
 **1.1 Import a folder (the core).**
-- Library gets an **Add a game** tile (ring-reachable). Picking a source opens
+- Library gets **Add a game** on every filter (built: a header button, X, the
+  Filter & sort picker, and a ring-reachable tile in All and Installed). Picking a source opens
   `fileImporter(allowedContentTypes: [.folder, .zip, .exe])`, which is touch
   (as the pairing-file import is).
 - The copy runs as a **Downloads queue job** of kind `import`. It shows progress,
@@ -235,14 +237,13 @@ Setup, i386.
 
 **1.6 Tile art for local games.** The executable's icon (PE `RT_GROUP_ICON` →
 largest `RT_ICON`, PNG or BMP) on a generated backdrop, cached under
-`Application Support/Playport/art/local/`. With no icon, the name's initials.
+`Caches/Playport/art/local/` (built there: it can be made again). With no icon, the name's initials.
 
 **1.7 Driver and tooling.**
 - Picking from Files is touch, so the UI driver cannot drive the picker.
-  **Settled:** the owner picks by hand and the run is recorded, which keeps 0012
-  strict. No dev import hook. A writer prepares the build and asks the owner to
-  pick; the driver takes over from the queued import job (`--leave-running`,
-  then the play).
+  **Changed (owner, 2026-10-06):** the dev build's `pp ui --action import:PATH` hands
+  `Documents/PATH` (put there by the workstation) to Add a game as the picked item,
+  then waits for the library; a hand pick is still worth one run.
 - `pp ui --action open:dir-<folder>` works already. Add `import:` events to
   `RunEvents`.
 
@@ -387,9 +388,9 @@ one game that needs the exchange code.
 | 0 Identity, engine core, sessions record | none | large refactor, mostly host tests | Steam install + HK play |
 | 1.1–1.3 Folder import, recognition, page | 0.1–0.2 | medium | import + play |
 | 1.4 Zip | 1.1 | small | zip import + play |
-| 1.5 Inno installer | 1.1 | spike small; B large | installer + play |
+| 1.5 Inno installer | dropped (owner) | | |
 | 1.6 Icons | 1.1 | small | a look (`--shot-each-action`) |
-| 2 GOG | 0, 1.2 | large (auth, library, content v2, UI) | install + play + verify |
+| 2 GOG | 0 | large (auth, library, content v2, UI) | install + play + verify |
 | 3 Epic | 0 | large (binary manifest, chunk slices) | install + play + verify |
 | 3.6 Exchange code | 3, a need found in 3.1, then a decision | small once decided | a game that needs it |
 
@@ -429,8 +430,7 @@ that title plus Hollow Knight.
 - Running GOG Galaxy or the Epic launcher inside Wine.
 - Galaxy SDK achievements and multiplayer; Epic Online Services features beyond
   launch.
-- Generic GUI installers, until GDI presentation and first-frame integration for
-  non-game windows exist (launcher-feasibility record).
+- Installers of any kind, GOG's offline ones included (1.5, dropped by the owner).
 - Sharing one install between stores (a GOG and a Steam copy of one game stay
   two copies, as 0045 says).
 
@@ -438,12 +438,13 @@ that title plus Hollow Knight.
 
 1. **Store logins:** yes, with the stores' public desktop-client OAuth identities
    in an in-app `WKWebView`. Decision 0058 records it and the risk (0.4).
-2. **Installer import:** run Inno Setup silently in Wine first; write a
-   host-side extractor only if that fails (1.5).
-3. **Import tests:** the owner picks by hand. No dev import hook; 0012 stays
-   strict (1.7).
+2. **Installer import:** dropped (later answer, same day): installers are not run (1.5).
+3. **Import tests:** first the owner's hand pick; then (later answer, same day) the
+   workstation drives it with `pp ui --action import:PATH` (1.7).
 4. **Test titles:** both are chosen in the research spikes (2.1, 3.1) by 0005's
    scorecard. For GOG, Hollow Knight is preferred if owned.
 5. **Engine layout:** a new `app/ContentKit` package (0.3).
 6. **Epic exchange code:** decision 0059 waits until 3.1 shows a wanted game
    needs it; until then those games are refused with a message (3.6).
+7. **Sources are separate** (later answer, same day): Local, Steam, GOG and Epic; an
+   import is Local whatever store its files came from (0057, 1.2).
