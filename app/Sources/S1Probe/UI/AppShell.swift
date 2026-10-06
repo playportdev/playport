@@ -40,6 +40,7 @@ struct AppShell: View {
     @State private var importing = false
     /// What the one Files picker is open for: a pairing file, or a game (UI/Import.swift).
     @State private var importingGame = false
+    @ObservedObject private var gog = GOGAccount.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -117,6 +118,8 @@ struct AppShell: View {
             importingGame = false
             importing = true
         }
+        // GOG's sign-in page (touch: a web page, as iOS draws it; decision 0058).
+        .sheet(isPresented: $gog.signingIn) { GOGSignInSheet() }
         .onReceive(GameImports.requests) {
             importingGame = true
             importing = true

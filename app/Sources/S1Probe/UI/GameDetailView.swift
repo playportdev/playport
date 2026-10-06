@@ -34,6 +34,7 @@
 
 import GameController
 import HostIOKit
+import GOGClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
@@ -68,6 +69,7 @@ private struct GameDetailPage: View {
     @ObservedObject private var launchSettings = LaunchSettingsStore.shared
     @ObservedObject private var navigation = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
+    @ObservedObject private var gog = GOGAccount.shared
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -131,14 +133,19 @@ private struct GameDetailPage: View {
         pickedBranch ?? installed?.branch ?? (installed == nil ? cohortBranch : nil) ?? Branch.publicName
     }
 
-    private var name: String { installed?.name ?? game?.info.name ?? "" }
+    private var name: String { installed?.name ?? game?.info.name ?? gogGame?.title ?? "" }
+
+    /// The GOG listing of this game, when GOG is signed in and owns it.
+    private var gogGame: GOGGame? { key.flatMap { $0.store == .gog ? gog.game($0.id) : nil } }
+
+    private var canDownloadGOG: Bool { gog.state == .signedIn && !installs.suspended }
 
     private var stats: UserStatsSnapshot? { appID.flatMap { model.userStats[$0]?.steam } }
 
     var body: some View {
         let t = installed, g = game
         Group {
-            if t == nil, g == nil {
+            if t == nil, g == nil, gogGame == nil {
                 VStack(spacing: 8) {
                     Text("Not installed").font(PP.display(28)).foregroundStyle(PP.text)
                     #if PLAYPORT_RELEASE
@@ -211,6 +218,7 @@ private struct GameDetailPage: View {
         }
         .onChange(of: navigation.gamePanels) { old, new in panelsChanged(from: old, to: new) }
         .onChange(of: xKey(t), initial: true) { _, _ in updateX(t) }
+        .task(id: t?.id) { if let t, t.store == .gog, t.source == .installed { await gog.checkUpdate(t.key.id) } }
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
             guard navigation.onGamePage, navigation.pageSection != nil, t != nil else { return }
@@ -247,7 +255,8 @@ private struct GameDetailPage: View {
             Color.clear
                 .preference(key: PageArtKey.self,
                             value: g.map { PageArt(appID: $0.id, name: name, info: $0.info) }
-                                ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil) })
+                                ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil) }
+                                ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil) })
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -258,7 +267,7 @@ private struct GameDetailPage: View {
                             Text(line).font(.system(size: 13)).foregroundStyle(PP.soft)
                         }
                         HStack(spacing: 12) {
-                            if let t { installedButtons(t, g) } else if let g { installButtons(g) }
+                            if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) }
                         }
                         .padding(.top, 14)
                         notes(t, g)
@@ -315,6 +324,10 @@ private struct GameDetailPage: View {
         SecondaryButton(id: "game:options", systemImage: "slider.horizontal.3", title: "Options", glyph: .x, hint: "Game options") {
             navigation.gamePanels = [.options]
         }
+        if job == nil, t.store == .gog, t.source == .installed, let newest = gog.newest[t.key.id], newest != t.storeVersion {
+            SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadGOG && !launch.running,
+                            hint: "Update") { gog.install(t.key.id, name: t.name, kind: .update) }
+        }
         if job == nil, let g, SteamInstallStatus.updateAvailable(t, g.info) {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownload && !launch.running,
                             hint: "Update") { installs.install(g.id, name: g.info.name) }
@@ -344,6 +357,17 @@ private struct GameDetailPage: View {
         }
     }
 
+    /// A GOG game not installed: Install, or its download's controls.
+    @ViewBuilder
+    private func gogInstallButtons(_ gg: GOGGame) -> some View {
+        if let job {
+            jobControls(job)
+        } else {
+            PrimaryButton(id: "game:install", title: gog.installer.hasStage(gg.id) ? "Resume download" : "Install",
+                          enabled: canDownloadGOG, hint: "Install") { gog.install(gg.id, name: gg.title) }
+        }
+    }
+
     /// A download, update or repair of this game: its progress, Pause or Resume, and Cancel.
     @ViewBuilder
     private func jobControls(_ job: Downloads.Job) -> some View {
@@ -359,7 +383,7 @@ private struct GameDetailPage: View {
         .frame(width: 230, height: 52)
         .background(PP.surface, in: RoundedRectangle(cornerRadius: 12))
         .padItem("game:job", hint: job.isRunning || job.phase == .queued ? "Pause" : "Resume", cornerRadius: 12) {
-            if job.isRunning || job.phase == .queued { installs.pause(job.key) } else if canDownload { installs.resume(job.key) }
+            if job.isRunning || job.phase == .queued { installs.pause(job.key) } else if canDownload || job.key.store != .steam { installs.resume(job.key) }
         }
         SecondaryButton(id: "game:cancel", systemImage: "xmark", title: "Cancel", hint: job.kind == .repair ? "Cancel repair" : "Cancel download") {
             installs.discard(job.key)
@@ -749,11 +773,17 @@ private struct GameDetailPage: View {
                 if !installs.suspended, !launch.running { installs.repair(app, name: t.name) }
             }
         }
+        if t.store == .gog, job == nil, !checking, t.lastVerification.map({ !$0.ok }) ?? false {
+            PadRow(id: "opt:repair", title: "Repair from GOG", subtitle: "Downloads the damaged files again",
+                   accessory: .chevron, style: .plain, hint: "Repair") {
+                if !installs.suspended, !launch.running { gog.install(t.key.id, name: t.name, kind: .repair) }
+            }
+        }
     }
 
     private func filesValue(_ t: InstalledTitle, checking: Bool) -> String {
         if checking { return "Checking…" }
-        if !library.canVerify(t) { return "Steam installs only" }
+        if !library.canVerify(t) { return "Store installs only" }
         guard let v = t.lastVerification else { return "Not checked yet" }
         let when = v.date.formatted(.relative(presentation: .named))
         return v.ok ? "Last OK \(when)" : "\(v.bad) of \(v.files) damaged"

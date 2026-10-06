@@ -56,6 +56,8 @@ let package = Package(
         // The native Steam protocol client (app/SteamClient). The app uses SteamClientKit only;
         // its Linux-only CCurlWS target is conditioned out on Apple platforms.
         .package(path: "SteamClient"),
+        // The GOG client (app/GOGClient): sign-in, library and content (decision 0058).
+        .package(path: "GOGClient"),
         // The product UI's catalogue, adoption and launch options, tested on the Linux host.
         .package(path: "PlayportKit"),
     ],
@@ -149,6 +151,7 @@ let package = Package(
             dependencies: ["WineHost", "WinIOS", "HostIO", "JITHelperXPC", "KosmicKrisp",
                            .product(name: "HostIOKit", package: "HostIOKit"),
                            .product(name: "SteamClientKit", package: "SteamClient"),
+                           .product(name: "GOGClientKit", package: "GOGClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
                 + ["Relaunch"],
             path: "Sources/S1Probe",
@@ -162,6 +165,8 @@ let package = Package(
                 .linkedFramework("AVFAudio"),
                 // The Steam sign-in QR code (UI/SteamSupport.swift).
                 .linkedFramework("CoreImage"),
+                // GOG's sign-in page (UI/GOGAccount.swift).
+                .linkedFramework("WebKit"),
             ]
         ),
         // How the app restarts itself after a game (decision 0029): idevice's C FFI,

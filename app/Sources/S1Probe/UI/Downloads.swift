@@ -174,7 +174,16 @@ final class Downloads: ObservableObject {
 
     /// Queues `job`, or lets go of its hold (a Resume); behind a running job.
     func enqueue(_ job: DownloadJob) {
-        guard job.key != active?.key else { return }
+        if job.key == active?.key {
+            // Resumed while its pause is still winding down: it waits its turn
+            // again once the stop lands, and starts from the kept stage.
+            if stopping[job.key] != nil {
+                stopping[job.key] = .requeue
+                queue.hold(job.key, nil)
+                rebuild()
+            }
+            return
+        }
         queue.add(job)
         rebuild()
         pump()

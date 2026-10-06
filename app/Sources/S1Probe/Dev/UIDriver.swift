@@ -13,6 +13,8 @@
 //                              goes on here
 //   install:<app id>           Install from Steam (the paired account's session);
 //                              waits until the title is in the library
+//   install:gog-<id>[@<build>] Install from GOG (signed in on the phone), the newest build or
+//                              <build>; an installed game's install is its update
 //   pause-resume:<app id>      Install, Pause once a quarter is staged, check the
 //                              stage is kept, then Resume and wait as install does
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
@@ -97,6 +99,7 @@
 
 import Foundation
 import HostIOKit
+import GOGClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
@@ -143,6 +146,8 @@ enum UIDriver {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
+                case "install" where id.hasPrefix("gog-"):
+                    if let failure = await installGOG(String(id.dropFirst(4))) { return finish("action=\(action) failed: \(failure)") }
                 case "install", "pause-resume":
                     guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
                     if let failure = await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
@@ -511,6 +516,40 @@ enum UIDriver {
         guard let t = find() else { return "done, but C:\\Games\\\(folder) is not in the library" }
         log(String(format: "import \(path): in the library as \(t.id) [\(t.badge.rawValue)] source=\(t.source.rawValue) "
                     + "store=\(t.store.rawValue) size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.1f s",
+                   Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.
+    private static func installGOG(_ spec: String) async -> String? {
+        let parts = spec.split(separator: "@", maxSplits: 1).map(String.init)
+        let pid = parts[0], build = parts.count > 1 ? parts[1] : nil
+        let gog = GOGAccount.shared
+        for _ in 0..<300 where gog.state == .unknown { try? await Task.sleep(for: .milliseconds(100)) }
+        guard gog.state == .signedIn else { return "GOG is not signed in" }
+        if gog.games.isEmpty { await gog.loadGames() }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        let key = StoreGameKey(store: .gog, id: pid)
+        let name = gog.game(pid)?.title ?? "GOG \(pid)"
+        let installed = LibraryModel.shared.title(key.titleID) != nil
+        let started = Date()
+        log("install gog-\(spec) \(name): started" + (installed ? " (an update)" : ""))
+        gog.install(pid, name: name, kind: installed ? .update : .install, build: build)
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("install gog-\(pid): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let library = LibraryModel.shared
+        for _ in 0..<600 where library.title(key.titleID)?.storeVersion == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        await gog.checkUpdate(pid)
+        log(String(format: "install gog-\(pid): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
+                    + "newest=\(gog.newest[pid] ?? "?") size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s",
                    Date().timeIntervalSince(started)))
         return nil
     }

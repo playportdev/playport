@@ -69,7 +69,7 @@ model calls: each --action in order, then --settings, --verify, --play:
   downloading:APP        wait (2 min at most) until the queue runs APP's download with progress (after
                          the restart after a game, too), and log the queue
   install:APP            install from Steam with the paired session; pause-resume:APP pauses at a
-                         quarter and resumes
+                         quarter and resumes; install:gog-ID[@BUILD] installs or updates from GOG
   uninstall:ID, verify:ID
   import:PATH            Add a game with Documents/PATH (a folder or .zip put in the container) as
                          the picked item, then wait until it is in the library
@@ -231,7 +231,7 @@ class EndOnTerm:
         return True
 
 
-ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|(?:uninstall|verify|play):[a-z]+-[a-z0-9 ._-]+"
+ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|(?:uninstall|verify|play):[a-z]+-[a-z0-9 ._-]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[a-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)"

@@ -139,7 +139,9 @@ struct SettingsView: View {
     private func section(_ s: SettingsSection) -> some View {
         Color.clear.frame(height: 0).id("set:top")
         switch s {
-        case .accounts: SteamAccountSettings()
+        case .accounts:
+            SteamAccountSettings()
+            GOGAccountSettings()
         case .graphics: GraphicsSettings()
         case .downloads: DownloadSettings()
         case .controllers: ControllerSettings()

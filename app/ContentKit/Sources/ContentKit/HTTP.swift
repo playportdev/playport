@@ -27,12 +27,19 @@ public struct HTTPClient: Sendable {
     }
 
     public func get(_ url: URL, maxBytes: Int, label: String) async throws -> [UInt8] {
+        try await get(url, headers: [:], maxBytes: maxBytes, label: label)
+    }
+
+    /// A GET with extra headers (a store's authorization header, given as a `Secret`
+    /// by the caller and never logged: only `label` and the scrubbed URL host are).
+    public func get(_ url: URL, headers: [String: Secret<String>], maxBytes: Int, label: String) async throws -> [UInt8] {
         var lastError: ClientError = .transport("\(label): no attempt")
         for attempt in 1...maxAttempts {
             try Task.checkCancellation()
             do {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = timeout
+                for (k, v) in headers { request.setValue(v.value, forHTTPHeaderField: k) }
                 let (data, response) = try await session.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard data.count <= maxBytes else {

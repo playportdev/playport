@@ -60,7 +60,7 @@ struct HomeView: View {
         if let t = continueTitle {
             ZStack(alignment: .bottomLeading) {
                 // Art sized by the card, not the card by the art.
-                Color.clear.overlay { GameArt(appID: t.appID, name: t.name, kind: .hero, titleID: t.id) }.clipped()
+                Color.clear.overlay { GameArt(appID: t.appID, name: t.name, kind: .hero, titleID: t.id, gogKey: t.store == .gog ? t.key.id : nil) }.clipped()
                 LinearGradient(colors: [.clear, PP.background.opacity(0.85)], startPoint: .center, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(t.lastPlayed == nil ? "Ready to play" : "Continue playing")
@@ -206,7 +206,8 @@ struct HomeView: View {
     private func tile(_ entry: LibraryEntry) -> some View {
         let job = installs.jobs[entry.key]
         return ZStack(alignment: .bottomLeading) {
-            Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil) }.clipped()
+            Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil,
+                                                 gogKey: entry.source == .gog ? entry.key.id : nil) }.clipped()
             // Store art carries the game's name; a colour tile, or a download, says it.
             if !hasArt(entry.appID) || job != nil {
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)

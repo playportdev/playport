@@ -212,7 +212,10 @@ final class LibraryModel: ObservableObject {
     }
 
     /// A cohort title has a committed checksum list; a Steam install has its retained manifests.
-    func canVerify(_ t: InstalledTitle) -> Bool { t.checksums != nil || (t.source == .installed && t.appID != nil) }
+    func canVerify(_ t: InstalledTitle) -> Bool {
+        t.checksums != nil || (t.source == .installed && t.appID != nil)
+            || (t.store == .gog && GOGAccount.shared.installer.loadRecord(t.key.id) != nil)
+    }
 
     /// Hashes every file against the title's checksum list or, for a Steam
     /// install, the manifests it was installed from.
@@ -226,6 +229,14 @@ final class LibraryModel: ObservableObject {
             let started = Date()
             do {
                 let (v, report): (InstalledTitle.Verification, TitleInstaller.VerifyReport)
+                if t.store == .gog, t.checksums == nil {
+                    let r = try await GOGAccount.shared.installer.verify(productID: t.key.id)
+                    let v = InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: 0)
+                    LibraryModel.log("verify \(t.name): \(r.files - r.bad.count)/\(r.files) OK against GOG's manifest"
+                                     + (r.bad.isEmpty ? "" : "; bad: " + r.bad.prefix(20).joined(separator: ", ")))
+                    await LibraryModel.shared.verified(id, v, error: nil)
+                    return
+                }
                 if t.checksums == nil, let app = t.appID {
                     let r = try await TitleInstaller(layout: LibraryModel.paths.layout, session: nil, log: SteamUILog.logger).verify(appID: app)
                     (v, report) = (InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: r.unlisted.count), r)
@@ -248,6 +259,14 @@ final class LibraryModel: ObservableObject {
         let id = "app-\(appID)"
         Self.log("repair \(id): \(r.repaired ?? 0) file(s) replaced, \(r.files) OK")
         catalog.update(id) { $0.lastVerification = .init(date: Date(), files: r.files, bad: r.bad.count, unlisted: r.unlisted.count) }
+        verifyErrors[id] = nil
+        save()
+    }
+
+    /// A store's repair finished (GOG): its verification as it stands now.
+    func recordVerification(_ id: String, files: Int, bad: [String]) {
+        Self.log("repair \(id): \(files - bad.count)/\(files) OK after")
+        catalog.update(id) { $0.lastVerification = .init(date: Date(), files: files, bad: bad.count, unlisted: 0) }
         verifyErrors[id] = nil
         save()
     }
@@ -280,6 +299,7 @@ final class LibraryModel: ObservableObject {
                     .uninstall(installDir: t.installDir, appID: t.appID)
                 // Another store's or an import's receipt (decision 0057).
                 if t.store != .steam { LibraryModel.paths.layout.removeReceipt(t.key) }
+                if t.store == .gog { await GOGAccount.shared.installer.forget(productID: t.key.id) }
             } catch {
                 LibraryModel.log("uninstall \(t.name) failed: \(error)")
                 failure = "\(error)"

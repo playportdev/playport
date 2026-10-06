@@ -18,6 +18,7 @@
 // a tile not wholly on screen scrolls just far enough to show its row, to an
 // offset worked out from that frame (a scroll to the lazy grid's id lands on an estimate).
 
+import GOGClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
@@ -72,7 +73,9 @@ final class LibraryGrid: ObservableObject {
     /// The chips: Steam's always, GOG's and Epic's once a copy is in the catalogue
     /// or the store is signed in (decision 0045).
     static var filters: [LibraryFilter] {
-        LibraryFilter.shown(stores: Set(LibraryModel.shared.catalog.titles.map(\.store)))
+        var stores = Set(LibraryModel.shared.catalog.titles.map(\.store))
+        if GOGAccount.shared.state == .signedIn { stores.insert(.gog) }
+        return LibraryFilter.shown(stores: stores)
     }
 
     static func label(_ sort: LibrarySort) -> String {
@@ -112,6 +115,7 @@ private struct LibraryGridView: View {
     @ObservedObject private var nav = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var imports = GameImports.shared
+    @ObservedObject private var gog = GOGAccount.shared
     /// The scroll view on screen, how far its content is scrolled and how far it can be.
     @State private var viewport = CGRect.zero
     @State private var offset = CGFloat.zero
@@ -127,7 +131,7 @@ private struct LibraryGridView: View {
     private static let inset: CGFloat = 8
 
     var body: some View {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: model.games)
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games))
         let downloading = Set(installs.jobs.keys)
         let shown = LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search, downloading: downloading)
         VStack(alignment: .leading, spacing: 0) {
@@ -149,7 +153,7 @@ private struct LibraryGridView: View {
 
     /// The first tile the grid shows now, read afresh (an onChange's closure holds the old body's values).
     private func firstTile() -> String? {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: model.games)
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games))
         return LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search,
                                  downloading: Set(installs.jobs.keys)).first.map { "lib:\($0.id)" }
     }
@@ -386,7 +390,8 @@ private struct LibraryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: metaGap) {
             ZStack(alignment: .bottomLeading) {
-                Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil) }.clipped()
+                Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil,
+                                                 gogKey: entry.source == .gog ? entry.key.id : nil) }.clipped()
                 if game == nil || job != nil {
                     LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
                     Text(entry.name)
@@ -502,6 +507,15 @@ struct GameSourceBadge: View {
     }
 }
 
+/// The owned games of every signed-in store, as the library joins them.
+enum LibraryOwned {
+    @MainActor
+    static func all(_ steam: [SteamGame], _ gog: [GOGGame]) -> [LibraryList.Owned] {
+        steam.map { LibraryList.Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) }
+            + gog.map { LibraryList.Owned(key: StoreGameKey(store: .gog, id: $0.id), name: $0.title) }
+    }
+}
+
 /// A game's store art when the paired account owns it; else, for a game in
 /// C:\Games, its executable's icon (LocalGameArt); else its colour tile.
 struct GameArt: View {
@@ -512,10 +526,14 @@ struct GameArt: View {
     let kind: ArtworkCache.Kind
     /// The catalogue's title, for a local game's icon.
     var titleID: String? = nil
+    /// A GOG product ID, for GOG's art.
+    var gogKey: String? = nil
 
     var body: some View {
         if let app = appID, let game = model.games.first(where: { $0.id == app }) {
             SteamArtView(app: game.info, kind: kind, placeholder: PP.tile(for: name))
+        } else if let key = gogKey, let g = GOGAccount.shared.game(key) {
+            GOGArtView(game: g, wide: kind == .hero)
         } else if let id = titleID, let t = library.title(id), t.executable != nil {
             LocalGameArt(title: t)
         } else {
