@@ -146,7 +146,9 @@ final class GOGAccount: ObservableObject, DownloadDriver {
             let owned = Set(games.map(\.id))
             let r = try await installer.install(productID: pid, buildID: job.branch, owned: owned, options: options, progress: progress)
             try writeReceipt(r.installed, name: job.name)
-            newest[pid] = r.installed.buildID
+            // Asked again: an older build installed on purpose shows its Update.
+            newest[pid] = nil
+            await checkUpdate(pid)
             log.info("gog", "\(job.key): build \(r.installed.buildID) in C:\\Games\\\(r.installed.installDir), \(r.filesChanged) files written")
             return job.kind == .install ? r.bytesWritten : r.downloadedBytes
         case .repair:

@@ -531,7 +531,8 @@ enum UIDriver {
         guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
         let key = StoreGameKey(store: .gog, id: pid)
         let name = gog.game(pid)?.title ?? "GOG \(pid)"
-        let installed = LibraryModel.shared.title(key.titleID) != nil
+        let before = LibraryModel.shared.title(key.titleID)?.storeVersion
+        let installed = before != nil
         let started = Date()
         log("install gog-\(spec) \(name): started" + (installed ? " (an update)" : ""))
         gog.install(pid, name: name, kind: installed ? .update : .install, build: build)
@@ -545,7 +546,9 @@ enum UIDriver {
             try? await Task.sleep(for: .milliseconds(250))
         }
         let library = LibraryModel.shared
-        for _ in 0..<600 where library.title(key.titleID)?.storeVersion == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        for _ in 0..<600 where [nil, before].contains(library.title(key.titleID)?.storeVersion) && build != before {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         guard let t = library.title(key.titleID) else { return "done, but not in the library" }
         await gog.checkUpdate(pid)
         log(String(format: "install gog-\(pid): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
