@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Getting started
+    url: https://github.com/playportdev/playport#install
+    about: Sideloading, pairing, JIT and your first game.

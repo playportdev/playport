@@ -1,0 +1,78 @@
+name: A game or the app has a problem
+description: A crash, a black screen, a setup step that fails, a game that will not start.
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Playport. The log is what makes a problem fixable, so please attach it:
+        on the game's page, **Report a problem** shares it. Save it to Files, long-press it there
+        and choose **Compress**, then drag the `.zip` into the log box below (GitHub takes files up to 25 MB).
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      description: Its name, and its Steam app ID if you know it (the number in its store page's address).
+      placeholder: Hollow Knight (367520)
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you did, what you expected, and what happened instead. A screenshot of an error helps.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and iOS version
+      placeholder: iPhone 16, iOS 26.1
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Playport version
+      description: Settings, Version.
+      placeholder: 0.3.3
+    validations:
+      required: true
+  - type: dropdown
+    id: sideloader
+    attributes:
+      label: How you installed it
+      options:
+        - AltStore
+        - SideStore
+        - Sideloadly
+        - Impactor
+        - Xcode
+        - Inside LiveContainer
+        - Something else (say which below)
+    validations:
+      required: true
+  - type: dropdown
+    id: jit
+    attributes:
+      label: JIT
+      options:
+        - Playport's own (pairing)
+        - StikDebug
+        - LiveContainer
+        - Not sure
+  - type: dropdown
+    id: graphics
+    attributes:
+      label: Graphics
+      description: The game's page, Graphics, Direct3D.
+      options:
+        - Default
+        - DXMT
+        - Vulkan
+        - Not sure
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Drag the zipped log from Report a problem here.
+    validations:
+      required: false

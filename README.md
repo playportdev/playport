@@ -96,6 +96,31 @@ Inside LiveContainer, launch Playport with JIT from LiveContainer.
 A free Apple ID signs the app for seven days, so re-sign it once a week; your
 games and saves stay on the phone.
 
+### Why pairing, JIT and LocalDevVPN
+
+Playport translates a game's x86 code to ARM while it runs, which needs JIT,
+and iOS allows JIT only in an app a debugger has attached to. Pairing makes
+Playport's built-in JIT helper that debugger: on iOS 27 you pair once, with a code
+in Settings › Privacy & Security › Developer Mode, and LocalDevVPN carries the
+connection on the phone itself, so no computer is involved after the install.
+On iOS 26, import a pairing file in Settings › Setup check instead.
+
+### Do I need a computer?
+
+To install, yes, once: every sideloader that signs with a free Apple ID starts
+from a computer. After that it depends on the tool. SideStore re-signs on the
+phone every week, AltStore re-signs through AltServer on your computer, and
+Impactor, Sideloadly and Xcode re-install from the computer. Playport itself,
+pairing included, then needs no computer.
+
+### Your first game
+
+The checklist's Steam step signs in to your account. Pick a game in the
+library, **Install** it (it downloads to the phone), then **Play**. Connect a
+controller before you press Play, and keep Playport in front while the game
+starts. A game page's **Report a problem** shares its log when something goes
+wrong ([below](#reporting-a-problem)).
+
 ### Which sideloaders keep the memory limit
 
 iOS closes an app that uses more memory than its limit, and Playport's JIT
@@ -163,6 +188,15 @@ performance work (faster FEX translation for Unity games, x87 math at native
 precision, lossless texture compression kept on in DXMT, geometry shaders in
 KosmicKrisp), dozens of bug fixes, and the diagnostics behind them. Each one is
 a reviewable patch with the evidence for it.
+
+## Reporting a problem
+
+Open a [GitHub issue](https://github.com/playportdev/playport/issues/new/choose)
+and attach the log; that is the one place we read them all. On the game's page,
+**Report a problem** shares the log: save it to Files, long-press it there and
+choose **Compress**, then drag the `.zip` into the issue (GitHub takes files up
+to 25 MB, so a zipped log fits where Pastebin does not). The form asks for your
+device, iOS and Playport versions, sideloader and JIT method.
 
 ## Release status and support
 
