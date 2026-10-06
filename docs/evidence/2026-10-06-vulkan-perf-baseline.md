@@ -142,3 +142,71 @@ change only whether the video starts within the window. DXVK `master` has the sa
 calls `DxvkFence::initKmtHandles` only for an exportable semaphore. It builds (IPA
 `296886d4…`, `pp test` passed) and **was not run on the phone**: the battery was at 10 %
 with nobody to charge it.
+
+## 2026-10-06 22:27 – 2026-10-07 01:55: on a charged phone
+
+IPA `eb825d16…` (HEAD `4fa21de`, with `patches/dxvk` 0001) for the plays below until
+said otherwise. The gate (Hollow Knight and Portal 2 to `first-frame+10`, one locked
+session, `ui-runs/20261006T222756`, `…T222851`) passed.
+
+### Correction: the 60 s stability plays ended in the opening cinematic
+
+Profile 1 on the phone no longer holds a save: from 19:53 on, every run's log loads the
+video path (`mfplat`, `winegstreamer`; none before), and a probe with screenshots
+(`perf-runs/vk-route-probe`, DXMT) shows the profile screen with slot 1 empty, so
+`hk-new-game` starts a new game: the calibration screens and the prologue cinematic, with
+the Knight in control at about `first-frame+75`. The plan's route pushes `hk-walk` at
+`first-frame+45`, which replaces `hk-new-game` (53.5 s long) before its presses skip the
+cinematic. So the plays `vk-s2-vkd3d-*` and `vk-s2-dxvk-*` (and `vk-st-vkd3d-*`,
+`vk-s3-dxvk-notiler1` before them) ended inside the cinematic (25–37 FPS from t = 45 s),
+not in play. What they show is that the start and the video run; they are not gameplay
+stability.
+
+- With `patches/dxvk` 0001 the video no longer ends the game: 10 of 10 DXVK and 8 of 8
+  started D3D12 plays ran through it to `first-frame+60` (`vk-s2-*`), where 5 of 6 such
+  plays had ended with `0xc0000005` at 54 s before it.
+- 2 of the 10 D3D12 plays (`vk-s2-vkd3d-2`, `-7`) ended 1 s in, as `vk-st-vkd3d-720-2`
+  had (below).
+
+**Route v2** (owner, 2026-10-07: cut the testing to the minimum; the gaps are clear):
+`--pad first-frame+25:hk-new-game --pad first-frame+80:hk-walk`, a screenshot at the end
+(`.work/agent-notes/vulkan-perf/route.sh`). Every run is a new game, as the plan wanted.
+
+### Stability on route v2 (to `first-frame+140`, no cooling between plays)
+
+| play | result | last screenshot |
+|---|---|---|
+| `vk-s2b-vkd3d-1` | `0xc0000005` 1 s in | – |
+| `vk-s2b-dxvk-2` | ran to the end | (play) |
+| `vk-s2b-vkd3d-3` | ran to the end | (play) |
+| `vk-s2b-dxvk-4` | ran to the end | (play) |
+| `vk-s2b-vkd3d-5` | ran to the end | the Knight in King's Pass past the first crawlid, HUD 69.5 FPS |
+| `vk-s2b-dxvk-6` | ran to the end | (play) |
+
+DXVK 3 of 3 in play; D3D12 2 of 3, the third the start fault. These ran back to back from
+`serious` thermal, so their frame rates (70–90 FPS by the end) are not figures.
+
+### The D3D12 start fault (3 of 13 starts with `patches/dxvk`)
+
+The main thread faults in ntdll's `RtlRunOnceComplete` (`ntdll.dll+0x677b8`, `ldr x19,
+[x1]`) on a wild pointer (`0x1280000836002500`; `0x850fc08548e08b4c`, which is x86 code
+bytes `4c 8b e0 48 85 c0 0f 85`), called through kernelbase's `InitOnceComplete` from
+UnityPlayer `+0x2616dd`: `InitOnceBeginInitialize(&once, …)` on a static once
+(UnityPlayer `+0x1f0b5f8`), two init calls, then `InitOnceComplete`. Wine's run-once queues
+a waiter by pointing the once at a variable on the waiter's stack, and the completer
+reads that variable before releasing the waiter. A pointer into garbage there means the
+waiter's frame was gone before its release: its `NtWaitForKeyedEvent` returned without
+one.
+
+A first fix (`patches/wine-pe` 0029, first form, IPA `befd6896…`) made the waiter wait
+again until the wait returned success. The gate passed on it (`ui-runs/20261006T235*`),
+but then **7 of 7 D3D12 starts hung**: the game started (`+3.45 s`), logged its pool and
+band once at about `+5 s`, and never drew a frame; `pp ui` was ended by its 15-minute
+timeout each time, so no log was pulled. An eighth ended with the app gone, and then the
+phone dropped off the network (`pp phone status`: no phone); it needs a person. Reading:
+the wait does return without a release here, at once and every time, so the waiter
+spun. 0029 is now a diagnostic only (Wine's behaviour, plus the first 16 such statuses
+logged as `once %p: keyed wait returned %#lx without a release`), built (IPA from
+`pp build` at 01:54) and **not run on the phone**. The next run of D3D12 starts on it
+names the status; the fix follows from that (the keyed event in the one-process runtime,
+`keyed_event` and the in-process server's keyed-event wait, are where to look).

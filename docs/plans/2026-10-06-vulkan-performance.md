@@ -391,3 +391,51 @@ without the owner is recorded here with its reason.
   Decision: GPU time per pass on KK was not built (the plan makes it conditional on
   step 2 showing a GPU gap); the capture already shows one structural difference, an
   extra full-screen pass and a compute dispatch at present on the Vulkan route.
+- **Step 1: partial** ([evidence](../evidence/2026-10-06-vulkan-perf-baseline.md)).
+  The phone began the session at 71 % with no charger and nobody at it. Decision: one
+  ABCCBA burst set at 720/free (two runs a backend, charge 57 → 36 %), then stability
+  plays, and no phone work below about 15 %. The 720/60, sustained and native cells and
+  the third repeats are not run. From the burst set, both Vulkan routes are behind DXMT
+  on FPS (−2 to −4), p99 (16.7 against 8.3 ms) and work a frame (DXVK +14–18 %,
+  vkd3d +26–31 %); GPU ms is within 3–6 %. The gap is in UnityGfxDeviceWorker
+  (vkd3d: twice DXMT's), the wineserver (six more requests a frame from winevulkan's
+  present: `client_surface_update` and `client_surface_present`), dxvk-cs's time in
+  Apple's driver, and an extra full-screen pass at present.
+- **Step 1 finding against step 4.1:** KosmicKrisp already skips the `vk_cmd_queue` copy
+  for `ONE_TIME_SUBMIT` primaries, which DXVK uses; vkd3d-proton uses it only with
+  `VKD3D_CONFIG=one_time_submit`, so that is a step-3 lever for the D3D12 route
+  instead of a KosmicKrisp patch.
+- **Step 2: started.** The D3D12 route reached `first-frame+60` 0 of 5 times, and DXVK
+  without tiler mode 0 of 1: a NULL `vkGetMemoryWin32HandleKHR` call in DXVK when Media
+  Foundation creates a shared texture. Decision 0061 (unattended, under answer 4): a
+  `patches/dxvk` series with the one-line fix DXVK's code already implies, taken now
+  because the stability bar blocks every lever and the bug is DXVK's, not KosmicKrisp's
+  or Wine's. Built, **not yet run on the phone** (battery 10 %). Also open: the D3D12
+  start fault 1 s in (`vk-st-vkd3d-720-2`, a wild INIT_ONCE pointer from the guest), and
+  one DXVK launch that hung before the runtime started (`vk-st-dxvk-720-3`).
+- **Tooling fixed on the way:** an unattended `pp perf` rest no longer undoes the run's
+  HUD and settings; `pp ui` fails a play whose title ended with an error before
+  `--until` (the app's restart had hidden it).
+- **Next, in order, on a charged phone:** the gate plus 10 D3D12 and 10 DXVK plays on
+  the `patches/dxvk` IPA; then the rest of the step-1 matrix (720/60, sustained, native,
+  three runs each); then step 3's screening (`VKD3D_CONFIG=one_time_submit`,
+  `dxvk.tilerMode=False`, frame latency and back buffers, compiler threads) and the Wine
+  present-path lever (step 8, the six requests a frame).
+- **2026-10-06 22:27 – 01:55, charged phone** ([evidence](../evidence/2026-10-06-vulkan-perf-baseline.md#2026-10-06-2227--2026-10-07-0155-on-a-charged-phone)).
+  `patches/dxvk` 0001 works: the opening cinematic no longer ends the game (18 of 18
+  started plays through it). The 60 s stability plays had ended in that cinematic, since
+  profile 1 is empty now and `hk-walk` came too early: **route v2** pushes `hk-walk` at
+  `first-frame+80`. Owner's direction (2026-10-07): cut testing to the minimum, the
+  performance gaps are clear; no full matrix, one run each way per fix, three
+  stability plays a route. On route v2: DXVK 3 of 3 in play, D3D12 2 of 3.
+- **Step 2, D3D12 start fault:** 3 of 13 starts, a waiter's frame gone before its run-once
+  release (`NtWaitForKeyedEvent` returning without one). Waiting again hung every D3D12
+  start (7 of 7), so `patches/wine-pe` 0029 only logs the status for now; not run on the
+  phone, which dropped off the network at 01:40 and needs a person.
+- **Also:** `build/air-helpers/air-helper-port.sh` reuses the shared LLVM 15 tools when
+  they are all there (another worktree had configured the shared cache from its own path,
+  and CMake refused it, which failed the `dxmt` stage).
+- **Next:** with the phone back, 10 D3D12 starts on the 0029 IPA for the status; fix the
+  keyed wait; then three D3D12 plays on route v2. Then the performance levers, largest
+  gap first, one run each way: winevulkan's present path (six wineserver requests a
+  frame), `VKD3D_CONFIG=one_time_submit`, the extra present pass.
