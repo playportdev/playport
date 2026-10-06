@@ -1760,7 +1760,14 @@ final class SetupChecklistTests: XCTestCase {
         XCTAssertTrue(SetupChecklist.complete(g))
         XCTAssertEqual(SetupChecklist.item(.steam, g).title, "Accounts")
         XCTAssertTrue(SetupChecklist.item(.steam, g).detail.hasPrefix("Signed in to GOG"))
+        g.epicSignedIn = true
+        XCTAssertEqual(SetupChecklist.item(.steam, g).detail.components(separatedBy: ":").first, "Signed in to GOG and Epic Games")
+        g.steamSignedIn = true
+        XCTAssertEqual(SetupChecklist.item(.steam, g).detail.components(separatedBy: ":").first, "Signed in to Steam, GOG and Epic Games")
+        g.steamSignedIn = false
         g.gogSignedIn = nil
+        XCTAssertEqual(g.accountSignedIn, true, "Epic alone settles it while GOG is still being read")
+        g.epicSignedIn = false
         XCTAssertNil(g.accountSignedIn, "unknown while GOG is still being read")
     }
 

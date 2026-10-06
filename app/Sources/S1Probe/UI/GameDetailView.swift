@@ -35,6 +35,7 @@
 import GameController
 import HostIOKit
 import GOGClientKit
+import EpicClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
@@ -70,6 +71,7 @@ private struct GameDetailPage: View {
     @ObservedObject private var navigation = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var gog = GOGAccount.shared
+    @ObservedObject private var epic = EpicAccount.shared
     @State private var playError: String?
     @State private var controllers = GCController.controllers().count
     @State private var stageOnDisk = false
@@ -133,19 +135,24 @@ private struct GameDetailPage: View {
         pickedBranch ?? installed?.branch ?? (installed == nil ? cohortBranch : nil) ?? Branch.publicName
     }
 
-    private var name: String { installed?.name ?? game?.info.name ?? gogGame?.title ?? "" }
+    private var name: String { installed?.name ?? game?.info.name ?? gogGame?.title ?? epicGame?.title ?? "" }
 
     /// The GOG listing of this game, when GOG is signed in and owns it.
     private var gogGame: GOGGame? { key.flatMap { $0.store == .gog ? gog.game($0.id) : nil } }
 
     private var canDownloadGOG: Bool { gog.state == .signedIn && !installs.suspended }
 
+    /// The Epic listing of this game, when Epic is signed in and owns it.
+    private var epicGame: EpicGame? { key.flatMap { $0.store == .epic ? epic.game($0.id) : nil } }
+
+    private var canDownloadEpic: Bool { epic.state == .signedIn && !installs.suspended }
+
     private var stats: UserStatsSnapshot? { appID.flatMap { model.userStats[$0]?.steam } }
 
     var body: some View {
         let t = installed, g = game
         Group {
-            if t == nil, g == nil, gogGame == nil {
+            if t == nil, g == nil, gogGame == nil, epicGame == nil {
                 VStack(spacing: 8) {
                     Text("Not installed").font(PP.display(28)).foregroundStyle(PP.text)
                     #if PLAYPORT_RELEASE
@@ -218,7 +225,10 @@ private struct GameDetailPage: View {
         }
         .onChange(of: navigation.gamePanels) { old, new in panelsChanged(from: old, to: new) }
         .onChange(of: xKey(t), initial: true) { _, _ in updateX(t) }
-        .task(id: t?.id) { if let t, t.store == .gog, t.source == .installed { await gog.checkUpdate(t.key.id) } }
+        .task(id: t?.id) {
+            if let t, t.store == .gog, t.source == .installed { await gog.checkUpdate(t.key.id) }
+            if let t, t.store == .epic, t.source == .installed { await epic.checkUpdate(t.key.id) }
+        }
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
             guard navigation.onGamePage, navigation.pageSection != nil, t != nil else { return }
@@ -256,8 +266,9 @@ private struct GameDetailPage: View {
                 .preference(key: PageArtKey.self,
                             value: g.map { PageArt(appID: $0.id, name: name, info: $0.info) }
                                 ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil, titleID: $0.id,
-                                                   gogKey: $0.store == .gog ? $0.key.id : nil) }
-                                ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil, gogKey: $0.id) })
+                                                   storeKey: $0.key) }
+                                ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .gog, id: $0.id)) }
+                                ?? epicGame.map { PageArt(appID: nil, name: $0.title, info: nil, storeKey: StoreGameKey(store: .epic, id: $0.id)) })
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -268,7 +279,7 @@ private struct GameDetailPage: View {
                             Text(line).font(.system(size: 13)).foregroundStyle(PP.soft)
                         }
                         HStack(spacing: 12) {
-                            if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) }
+                            if let t { installedButtons(t, g) } else if let g { installButtons(g) } else if let gg = gogGame { gogInstallButtons(gg) } else if let eg = epicGame { epicInstallButtons(eg) }
                         }
                         .padding(.top, 14)
                         notes(t, g)
@@ -329,6 +340,10 @@ private struct GameDetailPage: View {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadGOG && !launch.running,
                             hint: "Update") { gog.install(t.key.id, name: t.name, kind: .update) }
         }
+        if job == nil, t.store == .epic, t.source == .installed, let newest = epic.newest[t.key.id], newest != t.storeVersion {
+            SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownloadEpic && !launch.running,
+                            hint: "Update") { epic.install(t.key.id, name: t.name, kind: .update) }
+        }
         if job == nil, let g, SteamInstallStatus.updateAvailable(t, g.info) {
             SecondaryButton(id: "game:update", systemImage: "arrow.down.circle", title: "Update", enabled: canDownload && !launch.running,
                             hint: "Update") { installs.install(g.id, name: g.info.name) }
@@ -366,6 +381,17 @@ private struct GameDetailPage: View {
         } else {
             PrimaryButton(id: "game:install", title: gog.installer.hasStage(gg.id) ? "Resume download" : "Install",
                           enabled: canDownloadGOG, hint: "Install") { gog.install(gg.id, name: gg.title) }
+        }
+    }
+
+    /// An Epic game not installed: Install (not offered for a game Playport refuses), or its download's controls.
+    @ViewBuilder
+    private func epicInstallButtons(_ eg: EpicGame) -> some View {
+        if let job {
+            jobControls(job)
+        } else {
+            PrimaryButton(id: "game:install", title: epic.installer.hasStage(eg.id) ? "Resume download" : "Install",
+                          enabled: canDownloadEpic && epic.refusal(eg.id) == nil, hint: "Install") { epic.install(eg.id, name: eg.title) }
         }
     }
 
@@ -462,6 +488,8 @@ private struct GameDetailPage: View {
                 }
             } else if let g {
                 installNote(g)
+            } else if let eg = epicGame, let why = epic.refusal(eg.id) {
+                Text(why).foregroundStyle(.orange)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -772,6 +800,12 @@ private struct GameDetailPage: View {
             PadRow(id: "opt:repair", title: "Repair from Steam", subtitle: "Downloads the damaged files again",
                    accessory: .chevron, style: .plain, hint: "Repair") {
                 if !installs.suspended, !launch.running { installs.repair(app, name: t.name) }
+            }
+        }
+        if t.store == .epic, job == nil, !checking, t.lastVerification.map({ !$0.ok }) ?? false {
+            PadRow(id: "opt:repair", title: "Repair from Epic Games", subtitle: "Downloads the damaged files again",
+                   accessory: .chevron, style: .plain, hint: "Repair") {
+                if !installs.suspended, !launch.running { epic.install(t.key.id, name: t.name, kind: .repair) }
             }
         }
         if t.store == .gog, job == nil, !checking, t.lastVerification.map({ !$0.ok }) ?? false {

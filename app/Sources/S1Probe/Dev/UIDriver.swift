@@ -15,6 +15,9 @@
 //                              waits until the title is in the library
 //   install:gog-<id>[@<build>] Install from GOG (signed in on the phone), the newest build or
 //                              <build>; an installed game's install is its update
+//   install:epic-<app name>    Install from Epic (signed in on the phone), the live build; an
+//                              installed game's install is its update; a refused game fails
+//                              with the page's reason
 //   pause-resume:<app id>      Install, Pause once a quarter is staged, check the
 //                              stage is kept, then Resume and wait as install does
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
@@ -146,6 +149,8 @@ enum UIDriver {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
+                case "install" where id.hasPrefix("epic-"):
+                    if let failure = await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
                 case "install" where id.hasPrefix("gog-"):
                     if let failure = await installGOG(String(id.dropFirst(4))) { return finish("action=\(action) failed: \(failure)") }
                 case "install", "pause-resume":
@@ -194,6 +199,11 @@ enum UIDriver {
                     } else if let title = parts.first, library.title(title) != nil {
                         nav.openTitle(title)
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
+                    } else if let title = parts.first, let key = StoreGameKey(titleID: title),
+                              (key.store == .gog && GOGAccount.shared.game(key.id) != nil)
+                                || (key.store == .epic && EpicAccount.shared.game(key.id) != nil) {
+                        // A store's game not installed: its page, as its library tile opens it.
+                        nav.openGame(.store(key))
                     } else {
                         return finish("action=\(action) refused: \(id) is not a screen or a catalogued title")
                     }
@@ -516,6 +526,41 @@ enum UIDriver {
         guard let t = find() else { return "done, but C:\\Games\\\(folder) is not in the library" }
         log(String(format: "import \(path): in the library as \(t.id) [\(t.badge.rawValue)] source=\(t.source.rawValue) "
                     + "store=\(t.store.rawValue) size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.1f s",
+                   Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// The Epic page's Install (or Update) of `app`; nil once the live build is in the library.
+    private static func installEpic(_ app: String) async -> String? {
+        let epic = EpicAccount.shared
+        for _ in 0..<300 where epic.state == .unknown { try? await Task.sleep(for: .milliseconds(100)) }
+        guard epic.state == .signedIn else { return "Epic Games is not signed in" }
+        if epic.games.isEmpty { await epic.loadGames() }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        guard let g = epic.game(app) else { return "Epic does not list \(app) in this account" }
+        if let why = epic.refusal(app) { return "refused: \(why)" }
+        let key = StoreGameKey(store: .epic, id: app)
+        let before = LibraryModel.shared.title(key.titleID)?.storeVersion
+        let started = Date()
+        log("install epic-\(app) \(g.title): started" + (before != nil ? " (an update)" : ""))
+        epic.install(app, name: g.title, kind: before != nil ? .update : .install)
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("install epic-\(app): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let library = LibraryModel.shared
+        // The job set the build it installed as the newest; adoption names it once the receipt is read.
+        for _ in 0..<600 where library.title(key.titleID).map({ $0.storeVersion != epic.newest[app] }) ?? true {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        log(String(format: "install epic-\(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
+                    + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") args=\(t.storeArguments ?? []) after %.0f s",
                    Date().timeIntervalSince(started)))
         return nil
     }

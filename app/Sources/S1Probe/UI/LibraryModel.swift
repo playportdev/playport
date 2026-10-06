@@ -215,6 +215,7 @@ final class LibraryModel: ObservableObject {
     func canVerify(_ t: InstalledTitle) -> Bool {
         t.checksums != nil || (t.source == .installed && t.appID != nil)
             || (t.store == .gog && GOGAccount.shared.installer.loadRecord(t.key.id) != nil)
+            || (t.store == .epic && EpicAccount.shared.installer.loadRecord(t.key.id) != nil)
     }
 
     /// Hashes every file against the title's checksum list or, for a Steam
@@ -233,6 +234,15 @@ final class LibraryModel: ObservableObject {
                     let r = try await GOGAccount.shared.installer.verify(productID: t.key.id)
                     let v = InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: 0)
                     LibraryModel.log("verify \(t.name): \(r.files - r.bad.count)/\(r.files) OK against GOG's manifest"
+                                     + (r.bad.isEmpty ? "" : "; bad: " + r.bad.prefix(20).joined(separator: ", ")))
+                    await LibraryModel.shared.verified(id, v, error: nil)
+                    return
+                }
+                if t.store == .epic, t.checksums == nil {
+                    let r = try await EpicAccount.shared.installer.verify(t.key.id)
+                    let v = InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: 0)
+                    LibraryModel.log("verify \(t.name): \(r.files - r.bad.count)/\(r.files) OK against Epic's manifest, "
+                                     + String(format: "%.1f s", Date().timeIntervalSince(started))
                                      + (r.bad.isEmpty ? "" : "; bad: " + r.bad.prefix(20).joined(separator: ", ")))
                     await LibraryModel.shared.verified(id, v, error: nil)
                     return
@@ -263,7 +273,7 @@ final class LibraryModel: ObservableObject {
         save()
     }
 
-    /// A store's repair finished (GOG): its verification as it stands now.
+    /// A store's repair finished (GOG, Epic): its verification as it stands now.
     func recordVerification(_ id: String, files: Int, bad: [String]) {
         Self.log("repair \(id): \(files - bad.count)/\(files) OK after")
         catalog.update(id) { $0.lastVerification = .init(date: Date(), files: files, bad: bad.count, unlisted: 0) }
@@ -300,6 +310,7 @@ final class LibraryModel: ObservableObject {
                 // Another store's or an import's receipt (decision 0057).
                 if t.store != .steam { LibraryModel.paths.layout.removeReceipt(t.key) }
                 if t.store == .gog { await GOGAccount.shared.installer.forget(productID: t.key.id) }
+                if t.store == .epic { await EpicAccount.shared.installer.forget(t.key.id) }
             } catch {
                 LibraryModel.log("uninstall \(t.name) failed: \(error)")
                 failure = "\(error)"

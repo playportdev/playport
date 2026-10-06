@@ -71,6 +71,7 @@ final class TitleLaunch: ObservableObject {
         stageSince = Date()
         art = steamAppID.flatMap(Self.cachedHero)
             ?? titleID.flatMap { $0.hasPrefix("gog-") ? GOGArt.cachedHero(String($0.dropFirst(4))) : nil }
+            ?? titleID.flatMap { $0.hasPrefix("epic-") ? EpicArt.cachedHero(String($0.dropFirst(5))) : nil }
         if art == nil, let app = steamAppID, let steam = SteamAccountModel.current,
            let info = steam.games.first(where: { $0.id == app })?.info {
             Task { let img = await steam.image(info, .hero); if self.running, self.appID == app { self.art = img } }

@@ -30,9 +30,15 @@ public struct EpicManifest: Sendable {
 
         /// `8CBFF7EB496875E5FDB9E08EF33F5C0D`: the words in hex, as the CDN names it.
         public var guidHex: String {
-            stride(from: 0, to: 16, by: 4).map { i in
-                String(format: "%08X", UInt32(guid[i]) | UInt32(guid[i + 1]) << 8 | UInt32(guid[i + 2]) << 16 | UInt32(guid[i + 3]) << 24)
-            }.joined()
+            var out = ""
+            for i in stride(from: 0, to: 16, by: 4) {
+                var w = UInt32(guid[i])
+                w |= UInt32(guid[i + 1]) << 8
+                w |= UInt32(guid[i + 2]) << 16
+                w |= UInt32(guid[i + 3]) << 24
+                out += String(format: "%08X", w)
+            }
+            return out
         }
     }
 

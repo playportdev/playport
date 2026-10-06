@@ -6,7 +6,7 @@
 // tunnel, which A turns on (LocalDevVPN.swift); Memory, the Increased Memory
 // Limit entitlement in this copy's signature (MemoryLimit), whose A says how to
 // get a copy signed with it (`SetupRing.memoryHowTo`); and Accounts, optional,
-// whose A asks which store: Sign in to Steam (SignInView.swift) or GOG's sign-in page. A done step has a green tick.
+// whose A asks which store: Sign in to Steam (SignInView.swift), GOG's or Epic's sign-in page. A done step has a green tick.
 //
 // It replaces the shell's pages (AppNavigation.setup): by itself on a first
 // run (no pairing, and the checklist never left), and from Settings › Setup
@@ -81,6 +81,11 @@ final class SetupState: ObservableObject {
         case .unknown: f.gogSignedIn = nil
         case .signedIn: f.gogSignedIn = true
         case .signedOut: f.gogSignedIn = false
+        }
+        switch EpicAccount.shared.state {
+        case .unknown: f.epicSignedIn = nil
+        case .signedIn: f.epicSignedIn = true
+        case .signedOut: f.epicSignedIn = false
         }
         return f
     }
@@ -225,6 +230,7 @@ struct SetupView: View {
     @ObservedObject private var modal = PadModal.shared
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var gog = GOGAccount.shared
+    @ObservedObject private var epic = EpicAccount.shared
     /// The JIT method (JitMethodPicker) changes the first two steps.
     @AppStorage(JitMethod.key) private var storedMethod = ""
 
@@ -326,13 +332,18 @@ struct SetupView: View {
         case .memory:
             SetupRing.memoryHowTo()
         case .steam:
-            // Which store: Steam's own sign-in screen, or GOG's page in a sheet.
+            // Which store: Steam's own sign-in screen, or GOG's or Epic's page in a sheet.
             PadModal.shared.picker(
-                title: "Sign in", context: "Accounts", note: "Either is enough, and you can add the other later in Settings › Accounts.",
+                title: "Sign in", context: "Accounts", note: "One is enough, and you can add the others later in Settings › Accounts.",
                 options: [PadOption(id: "steam", label: "Steam", detail: SteamAccountModel.current?.state.account == nil ? nil : "Signed in"),
-                          PadOption(id: "gog", label: "GOG", detail: GOGAccount.shared.state == .signedIn ? "Signed in" : nil)],
+                          PadOption(id: "gog", label: "GOG", detail: GOGAccount.shared.state == .signedIn ? "Signed in" : nil),
+                          PadOption(id: "epic", label: "Epic Games", detail: EpicAccount.shared.state == .signedIn ? "Signed in" : nil)],
                 selected: "steam") { picked in
-                if picked == "gog" { GOGAccount.shared.signingIn = true } else { SignInState.shared.open(preview: false) }
+                switch picked {
+                case "gog": GOGAccount.shared.signingIn = true
+                case "epic": EpicAccount.shared.signingIn = true
+                default: SignInState.shared.open(preview: false)
+                }
             }
         }
     }

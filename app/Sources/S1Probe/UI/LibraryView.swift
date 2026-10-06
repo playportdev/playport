@@ -20,6 +20,7 @@
 // offset worked out from that frame (a scroll to the lazy grid's id lands on an estimate).
 
 import GOGClientKit
+import EpicClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
@@ -78,6 +79,7 @@ final class LibraryGrid: ObservableObject {
     static var filters: [LibraryFilter] {
         var stores = Set(LibraryModel.shared.catalog.titles.map(\.store))
         if GOGAccount.shared.state == .signedIn { stores.insert(.gog) }
+        if EpicAccount.shared.state == .signedIn { stores.insert(.epic) }
         return LibraryFilter.shown(stores: stores)
     }
 
@@ -119,6 +121,7 @@ private struct LibraryGridView: View {
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var imports = GameImports.shared
     @ObservedObject private var gog = GOGAccount.shared
+    @ObservedObject private var epic = EpicAccount.shared
     /// The scroll view on screen, how far its content is scrolled and how far it can be.
     @State private var viewport = CGRect.zero
     @State private var offset = CGFloat.zero
@@ -134,7 +137,7 @@ private struct LibraryGridView: View {
     private static let inset: CGFloat = 8
 
     var body: some View {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games))
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
         let downloading = Set(installs.jobs.keys)
         let shown = LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search, downloading: downloading)
         VStack(alignment: .leading, spacing: 0) {
@@ -156,7 +159,7 @@ private struct LibraryGridView: View {
 
     /// The first tile the grid shows now, read afresh (an onChange's closure holds the old body's values).
     private func firstTile() -> String? {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games))
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
         return LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search,
                                  downloading: Set(installs.jobs.keys)).first.map { "lib:\($0.id)" }
     }
@@ -408,9 +411,9 @@ private struct LibraryTile: View {
         VStack(alignment: .leading, spacing: metaGap) {
             ZStack(alignment: .bottomLeading) {
                 Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil,
-                                                 gogKey: entry.source == .gog ? entry.key.id : nil) }.clipped()
+                                                 storeKey: entry.key) }.clipped()
                 // The name over the art, unless a store's art (which carries it) is there.
-                if (game == nil && !(entry.source == .gog && GOGAccount.shared.game(entry.key.id)?.image != nil)) || job != nil {
+                if (game == nil && !StoreArt.has(entry.key)) || job != nil {
                     LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
                     Text(entry.name)
                         .font(PP.display(14)).textCase(.uppercase).tracking(0.5).foregroundStyle(.white).lineLimit(2)
@@ -528,9 +531,22 @@ struct GameSourceBadge: View {
 /// The owned games of every signed-in store, as the library joins them.
 enum LibraryOwned {
     @MainActor
-    static func all(_ steam: [SteamGame], _ gog: [GOGGame]) -> [LibraryList.Owned] {
+    static func all(_ steam: [SteamGame], _ gog: [GOGGame], _ epic: [EpicGame]) -> [LibraryList.Owned] {
         steam.map { LibraryList.Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) }
             + gog.map { LibraryList.Owned(key: StoreGameKey(store: .gog, id: $0.id), name: $0.title) }
+            + epic.map { LibraryList.Owned(key: StoreGameKey(store: .epic, id: $0.id), name: $0.title) }
+    }
+}
+
+/// Whether a GOG or Epic game has its store's art (which carries its name, so no name is drawn over it).
+enum StoreArt {
+    @MainActor
+    static func has(_ key: StoreGameKey) -> Bool {
+        switch key.store {
+        case .gog: GOGAccount.shared.game(key.id)?.image != nil
+        case .epic: EpicAccount.shared.game(key.id).map { $0.wideArt ?? $0.tallArt } != nil
+        case .steam, .local: false
+        }
     }
 }
 
@@ -544,14 +560,16 @@ struct GameArt: View {
     let kind: ArtworkCache.Kind
     /// The catalogue's title, for a local game's icon.
     var titleID: String? = nil
-    /// A GOG product ID, for GOG's art.
-    var gogKey: String? = nil
+    /// The store's game, for GOG's or Epic's art.
+    var storeKey: StoreGameKey? = nil
 
     var body: some View {
         if let app = appID, let game = model.games.first(where: { $0.id == app }) {
             SteamArtView(app: game.info, kind: kind, placeholder: PP.tile(for: name))
-        } else if let key = gogKey, let g = GOGAccount.shared.game(key) {
+        } else if let key = storeKey, key.store == .gog, let g = GOGAccount.shared.game(key.id) {
             GOGArtView(game: g, wide: kind == .hero)
+        } else if let key = storeKey, key.store == .epic, let g = EpicAccount.shared.game(key.id) {
+            EpicArtView(game: g, wide: kind == .hero)
         } else if let id = titleID, let t = library.title(id), t.executable != nil {
             LocalGameArt(title: t)
         } else {

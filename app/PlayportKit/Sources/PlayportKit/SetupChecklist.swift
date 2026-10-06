@@ -4,7 +4,7 @@
 // on iOS 26 a file chosen from Files), LocalDevVPN's tunnel, the Increased
 // Memory Limit entitlement in the signature (a signer chose it, so a player
 // may only be able to put it off with "Not now"; docs/DISTRIBUTION.md
-// section 6), and Accounts (optional: Steam or GOG signed in, or "Not now"; the step's
+// section 6), and Accounts (optional: Steam, GOG or Epic Games signed in, or "Not now"; the step's
 // case is still `steam`, as its saved "Not now" and the driver's names are). The app shows them once, on a first
 // run, which cannot be left until every step is settled (`complete`), and in
 // Settings › Setup check; the same facts are checked by themselves before
@@ -35,10 +35,17 @@ public struct SetupFacts: Equatable, Sendable {
     public var steamSkipped: Bool
     /// Signed in to GOG (decision 0058); nil while the stored session is still being read.
     public var gogSignedIn: Bool? = false
-    /// A store is signed in (Steam or GOG); nil while either is still being read and none is.
+    /// Signed in to Epic Games (decision 0058); nil while the stored session is still being read.
+    public var epicSignedIn: Bool? = false
+    /// A store is signed in (Steam, GOG or Epic); nil while one is still being read and none is.
     public var accountSignedIn: Bool? {
-        if steamSignedIn == true || gogSignedIn == true { return true }
-        return steamSignedIn == nil || gogSignedIn == nil ? nil : false
+        let all = [steamSignedIn, gogSignedIn, epicSignedIn]
+        if all.contains(true) { return true }
+        return all.contains(nil) ? nil : false
+    }
+    /// The stores signed in, by name, in the order Settings › Accounts lists them.
+    public var signedInStores: [String] {
+        [steamSignedIn == true ? "Steam" : nil, gogSignedIn == true ? "GOG" : nil, epicSignedIn == true ? "Epic Games" : nil].compactMap { $0 }
     }
     /// The signature carries Increased Memory Limit; nil when it cannot be read.
     public var memoryEntitled: Bool?
@@ -124,11 +131,12 @@ public enum SetupChecklist {
                              action: on ? nil : "How to fix")
         case .steam:
             let done = f.accountSignedIn == true
-            let stores = [f.steamSignedIn == true ? "Steam" : nil, f.gogSignedIn == true ? "GOG" : nil].compactMap { $0 }
+            let stores = f.signedInStores
+            let named = stores.count > 1 ? stores.dropLast().joined(separator: ", ") + " and " + stores.last! : stores.first ?? ""
             return SetupItem(step: step, done: done || f.steamSkipped, title: "Accounts",
-                             detail: done ? "Signed in to \(stores.joined(separator: " and ")): your games, and Steam's cloud saves and achievements."
-                                 : f.steamSkipped ? "Not now. Sign in to Steam or GOG any time in Settings › Accounts, or add games from Files."
-                                 : "Optional. Sign in to Steam or GOG for your games, or add games from Files.",
+                             detail: done ? "Signed in to \(named): your games, and Steam's cloud saves and achievements."
+                                 : f.steamSkipped ? "Not now. Sign in to Steam, GOG or Epic Games any time in Settings › Accounts, or add games from Files."
+                                 : "Optional. Sign in to Steam, GOG or Epic Games for your games, or add games from Files.",
                              action: done ? nil : "Sign in")
         }
     }

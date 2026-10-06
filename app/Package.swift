@@ -58,6 +58,8 @@ let package = Package(
         .package(path: "SteamClient"),
         // The GOG client (app/GOGClient): sign-in, library and content (decision 0058).
         .package(path: "GOGClient"),
+        // The Epic Games client (app/EpicClient): sign-in, library and content (decision 0058).
+        .package(path: "EpicClient"),
         // The product UI's catalogue, adoption and launch options, tested on the Linux host.
         .package(path: "PlayportKit"),
     ],
@@ -152,6 +154,7 @@ let package = Package(
                            .product(name: "HostIOKit", package: "HostIOKit"),
                            .product(name: "SteamClientKit", package: "SteamClient"),
                            .product(name: "GOGClientKit", package: "GOGClient"),
+                           .product(name: "EpicClientKit", package: "EpicClient"),
                            .product(name: "PlayportKit", package: "PlayportKit")]
                 + ["Relaunch"],
             path: "Sources/S1Probe",
@@ -165,7 +168,7 @@ let package = Package(
                 .linkedFramework("AVFAudio"),
                 // The Steam sign-in QR code (UI/SteamSupport.swift).
                 .linkedFramework("CoreImage"),
-                // GOG's sign-in page (UI/GOGAccount.swift).
+                // GOG's and Epic's sign-in pages (UI/GOGAccount.swift, UI/EpicAccount.swift).
                 .linkedFramework("WebKit"),
             ]
         ),

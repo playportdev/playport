@@ -81,8 +81,8 @@ struct SetupCheckSettings: View {
     /// Accounts, optional: A opens Settings › Accounts.
     private var steamRow: some View {
         let f = state.facts
-        let stores = [f.steamSignedIn == true ? "Steam" : nil, f.gogSignedIn == true ? "GOG" : nil].compactMap { $0 }
-        return PadRow(id: "set:setup:steam", title: "Accounts", subtitle: stores.isEmpty ? "Optional: Steam or GOG, for your games" : nil,
+        let stores = f.signedInStores
+        return PadRow(id: "set:setup:steam", title: "Accounts", subtitle: stores.isEmpty ? "Optional: Steam, GOG or Epic Games, for your games" : nil,
                       value: stores.isEmpty ? "Signed out" : stores.joined(separator: ", "), accessory: .chevron, hint: "Open") {
             AppNavigation.shared.openSettings(section: .accounts)
         }
