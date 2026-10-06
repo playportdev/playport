@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Tue, 6 Oct 2026 10:49:06 +0200
+Subject: [PATCH] WOW64: no disk cache on the iOS host
+
+A 32-bit guest's memory accesses carry its guest window's host base as a
+constant in the compiled code (fex 0018, GuestWindowBase), and the disk
+cache's key does not cover it: a block cached under one base would
+address another window. Keep the cache off for WoW64 processes, whatever
+FEX_DISKCACHE the launch inherits; ARM64EC processes keep it.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-06-fex-disk-cache.md
+Offered-upstream: no; the guest window exists only on the iOS port
+---
+ Source/Windows/WOW64/Module.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index e6a1928..b81a94b 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -661,6 +661,13 @@ void BTCpuProcessInit() {
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_IS64BIT_MODE, "0");
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_FILENAME, ExecutablePath);
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, ExecutableName);
++#ifdef FEX_IOS_HOST
++  // Playport: a 32-bit guest's memory accesses carry its window's host base as
++  // a constant in the compiled code (GuestWindowBase), which the disk cache's
++  // key does not cover; a block cached under one base would address another
++  // window. The disk cache stays off for WoW64 processes on the iOS host.
++  FEXCore::Config::Set(FEXCore::Config::CONFIG_DISKCACHE, "0");
++#endif
+ 
+   FEXCore::Profiler::Init("", "");
+ 

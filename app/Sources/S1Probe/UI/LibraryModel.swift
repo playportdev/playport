@@ -181,6 +181,8 @@ final class LibraryModel: ObservableObject {
                                        mode: settings.steamAPI,
                                        settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) })
         }
+        // FEX's disk cache stays under its budget (decision 0056): cleared before this launch when over it.
+        await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { Self.log($0) } }.value
         let fex = FEXProfile.launch(appID: t.appID, exe: plan.exe, ordering: settings.ordering, maxInst: settings.maxInst,
                                     x87Reduced: settings.x87Reduced, diskCache: settings.diskCache)
         guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments,

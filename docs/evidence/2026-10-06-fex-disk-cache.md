@@ -56,9 +56,10 @@ sooner. Each database is about 83 MB for this route (72.8 MB plus a 10.2 MB inde
 the pre-fix database (`b1ccb08a…`) is left behind unused, since only the machine
 bucket is pruned.
 
-## Not done
+## After this record
 
-- The default stays off. Turning it on (Proton experimental and bleeding-edge set
+- Decision 0056 turns it on by default, with `patches/fex` 0022 (off for WoW64),
+  a 1 GB budget and Settings › Storage › Emulator cache. Was: the default stays off. Turning it on (Proton experimental and bleeding-edge set
   `FEX_DISKCACHE=1`) still needs, per B1: a Settings action that clears the cache
   (decision 0012), a size budget (about 83 MB per launch slot per game here, with
   at least two slots seen), and a decision record.

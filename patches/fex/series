@@ -20,3 +20,4 @@
 0019-WOW64-let-a-32-bit-guest-s-jump-below-64-KiB-fault-i.patch
 0020-WOW64-leave-a-guest-s-read-fault-in-an-RWX-interval-.patch
 0021-DiskCache-a-cache-database-per-TEB-slot-offset-on-th.patch
+0022-WOW64-no-disk-cache-on-the-iOS-host.patch

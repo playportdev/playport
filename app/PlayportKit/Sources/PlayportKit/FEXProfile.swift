@@ -20,9 +20,10 @@
 //   block size MaxInst: Proton's global value (500; decision 0055) under a
 //              game's profile entry; the game's page (LaunchSettings.maxInst)
 //              overrides it. Every launch exports it.
-//   disk cache DiskCache: off by default (FEX's own); the game's page
-//              (LaunchSettings.diskCache) turns it on or off. Every launch
-//              exports it.
+//   disk cache DiskCache: on by default, as Proton experimental and
+//              bleeding-edge set FEX_DISKCACHE=1 (decision 0056); the game's
+//              page (LaunchSettings.diskCache) turns it on or off. Every launch
+//              exports it; a WoW64 process keeps it off (patches/fex 0022).
 //   honoured   Multiblock in a game's profile, passed on as it is.
 //   not taken  Proton's ProfileStats, which needs the Linux stats shared memory.
 //
@@ -213,8 +214,9 @@ public enum FEXProfile {
         return config["MaxInst"].flatMap(Int.init).flatMap { validBlockSize($0) ? $0 : nil } ?? fexMaxInst
     }
 
-    /// FEX's disk cache when the game's page does not choose: FEX's own default, off.
-    public static let defaultDiskCache = false
+    /// FEX's disk cache when the game's page does not choose: on, as Proton
+    /// experimental and bleeding-edge set it (decision 0056).
+    public static let defaultDiskCache = true
 
     /// The game's page over its profile, for a launch of `exe`.
     public static func launch(appID: UInt32?, exe: String, ordering: MemoryOrdering, maxInst: Int? = nil,
