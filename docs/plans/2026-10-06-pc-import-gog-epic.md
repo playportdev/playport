@@ -28,6 +28,13 @@ exchange code 0059.
   (ranked candidates) and Name for non-Steam games. Tile art from the executable's icon
   (PlayportKit `PEIcon`), cached under Caches (re-derivable), not Application Support.
   `import` run events. **1.5 (installers) not started**: it needs the phone spike.
+- **Phone gates, 2026-10-06** ([evidence](../evidence/2026-10-06-pc-import-and-gog.md)):
+  Phase 0 (Hollow Knight; a Steam pause, resume and verify), Phase 1 (a 5.2 GB folder
+  imported by `pp ui --action import:PATH`, the owner's choice over a hand pick, played,
+  uninstalled) and Phase 2 (GOG sign-in by the owner, install, update, verify and play of
+  Shogun Showdown) pass. **Phase 2 done** apart from a phone repair and GOG art on tiles.
+- **Next:** 1.5 (the Inno installer spike), a zip import on the phone, then Phase 3 (Epic,
+  which needs the owner's Epic sign-in for its spike).
 
 ## Goal
 
