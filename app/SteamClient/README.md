@@ -6,8 +6,9 @@ It does not involve the guest, Wine or JavaSteam.
 The pinned JavaSteam fork was used only as a behavioural reference.
 No JVM object or port is part of the design.
 
-`SteamClientKit` is the library: the session actor, PICS, the depot and CDN code, the whole-title install engine (`Sources/SteamClientKit/Install`), and the service layer the app's UI calls (`Service/`: `SteamService`, the Pair-screen model, title metadata and the art cache).
+`SteamClientKit` is the library: the session actor, PICS, the depot and CDN code, Steam's install planner and installer (`Sources/SteamClientKit/Install`), and the service layer the app's UI calls (`Service/`: `SteamService`, the Pair-screen model, title metadata and the art cache).
 The app's Steam screens (`app/Sources/S1Probe/UI/`) are its only user; on the phone they are driven like any other screen (`pp ui`, docs/DEVICE.md).
+The store-neutral core it builds on, the install engine and journal, the codecs, hashes, HTTP client, `Secret`, `Redactor` and the credential store, is [`app/ContentKit`](../ContentKit/README.md); SteamClientKit re-exports it, and `SteamError` is ContentKit's `ClientError`.
 
 ## Test (Linux host)
 
@@ -41,7 +42,7 @@ swift test --build-system native     # offline tests, including a fake session f
 
 The code is platform-neutral Swift apart from two seams, both Apple-only.
 
-1. **Credential store** (`Auth/SecretStore.swift`): `KeychainSecretStore`, Security.framework generic-password items, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not synchronisable, service `dev.playport.app.steamclient`, in the app's own default access group unless `accessGroup` names one. `protection(_:)` reads back an item's group, accessibility and sync flag, never its data. It holds the paired session on the phone ([evidence](../../docs/evidence/2026-09-24-steam-pairing.md)). The Linux tests use `MemorySecretStore` or `FileSecretStore`.
+1. **Credential store** (ContentKit `SecretStore.swift`): `KeychainSecretStore`, Security.framework generic-password items, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not synchronisable, service `dev.playport.app.steamclient`, in the app's own default access group unless `accessGroup` names one. `protection(_:)` reads back an item's group, accessibility and sync flag, never its data. It holds the paired session on the phone ([evidence](../../docs/evidence/2026-09-24-steam-pairing.md)). The Linux tests use `MemorySecretStore` or `FileSecretStore`.
 2. **CM WebSocket transport** (`Net/WebSocketTransport.swift`): `URLSessionWebSocketTask`, whose `receive` delivers one whole message ("once all the frames of the message are available"). One CM packet is therefore one message by construction, and a message over `maximumMessageSize` fails instead of splitting. On Linux, swift-corelibs-foundation's `URLSessionWebSocketTask` splits messages, so the Linux host has no transport.
 
 ## Known limits

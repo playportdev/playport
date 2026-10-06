@@ -98,7 +98,8 @@ final class LibraryModel: ObservableObject {
         Task.detached(priority: .userInitiated) {
             let paths = LibraryModel.paths
             let scanned = Adoption.scan(games: paths.games, cohort: LibraryModel.cohort,
-                                        receipts: Adoption.receipts(in: paths.layout.installsDir), previous: previous)
+                                        receipts: Adoption.receipts(in: paths.layout.installsDir),
+                                        storeReceipts: paths.layout.storeReceipts(), previous: previous)
             await LibraryModel.shared.adopted(scanned)
         }
     }
@@ -158,7 +159,7 @@ final class LibraryModel: ObservableObject {
         // and build the launch from current settings only after sheet dismissal.
         guard let t = catalog.title(id: id), t.canPlay, !verifying.contains(id), !removing.contains(id),
               !TitleLaunch.shared.running, !TitleLaunch.shared.spent,
-              t.appID.flatMap({ SteamAccountModel.current?.installs.jobs[$0] }) == nil else { return false }
+              SteamAccountModel.current?.installs.jobs[t.key] == nil else { return false }
         let plan = try t.launchPlan(cohort: Self.cohort)
         // The player's settings over 720p, 60 fps, Vulkan for DX12 and DXMT otherwise.
         #if PLAYPORT_RELEASE
@@ -211,7 +212,11 @@ final class LibraryModel: ObservableObject {
     }
 
     /// A cohort title has a committed checksum list; a Steam install has its retained manifests.
-    func canVerify(_ t: InstalledTitle) -> Bool { t.checksums != nil || (t.source == .installed && t.appID != nil) }
+    func canVerify(_ t: InstalledTitle) -> Bool {
+        t.checksums != nil || (t.source == .installed && t.appID != nil)
+            || (t.store == .gog && GOGAccount.shared.installer.loadRecord(t.key.id) != nil)
+            || (t.store == .epic && EpicAccount.shared.installer.loadRecord(t.key.id) != nil)
+    }
 
     /// Hashes every file against the title's checksum list or, for a Steam
     /// install, the manifests it was installed from.
@@ -225,6 +230,23 @@ final class LibraryModel: ObservableObject {
             let started = Date()
             do {
                 let (v, report): (InstalledTitle.Verification, TitleInstaller.VerifyReport)
+                if t.store == .gog, t.checksums == nil {
+                    let r = try await GOGAccount.shared.installer.verify(productID: t.key.id)
+                    let v = InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: 0)
+                    LibraryModel.log("verify \(t.name): \(r.files - r.bad.count)/\(r.files) OK against GOG's manifest"
+                                     + (r.bad.isEmpty ? "" : "; bad: " + r.bad.prefix(20).joined(separator: ", ")))
+                    await LibraryModel.shared.verified(id, v, error: nil)
+                    return
+                }
+                if t.store == .epic, t.checksums == nil {
+                    let r = try await EpicAccount.shared.installer.verify(t.key.id)
+                    let v = InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: 0)
+                    LibraryModel.log("verify \(t.name): \(r.files - r.bad.count)/\(r.files) OK against Epic's manifest, "
+                                     + String(format: "%.1f s", Date().timeIntervalSince(started))
+                                     + (r.bad.isEmpty ? "" : "; bad: " + r.bad.prefix(20).joined(separator: ", ")))
+                    await LibraryModel.shared.verified(id, v, error: nil)
+                    return
+                }
                 if t.checksums == nil, let app = t.appID {
                     let r = try await TitleInstaller(layout: LibraryModel.paths.layout, session: nil, log: SteamUILog.logger).verify(appID: app)
                     (v, report) = (InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: r.unlisted.count), r)
@@ -251,6 +273,14 @@ final class LibraryModel: ObservableObject {
         save()
     }
 
+    /// A store's repair finished (GOG, Epic): its verification as it stands now.
+    func recordVerification(_ id: String, files: Int, bad: [String]) {
+        Self.log("repair \(id): \(files - bad.count)/\(files) OK after")
+        catalog.update(id) { $0.lastVerification = .init(date: Date(), files: files, bad: bad.count, unlisted: 0) }
+        verifyErrors[id] = nil
+        save()
+    }
+
     private func verified(_ id: String, _ v: InstalledTitle.Verification?, error: String?) {
         verifying.remove(id)
         UIApplication.shared.isIdleTimerDisabled = !verifying.isEmpty || SteamAccountModel.current?.installs.isBusy == true
@@ -268,8 +298,8 @@ final class LibraryModel: ObservableObject {
         removing.insert(id)
         removeErrors[id] = nil
         // A paused update or repair of it goes too (the uninstall deletes its stage).
-        if let app = t.appID, let installs = SteamAccountModel.current?.installs, installs.jobs[app] != nil {
-            installs.discard(app)
+        if let installs = SteamAccountModel.current?.installs, installs.jobs[t.key] != nil {
+            installs.discard(t.key)
         }
         Self.log("uninstall \(t.name) (\(t.id)): C:\\Games\\\(t.installDir)")
         Task.detached(priority: .userInitiated) {
@@ -277,12 +307,37 @@ final class LibraryModel: ObservableObject {
             do {
                 try TitleInstaller(layout: LibraryModel.paths.layout, session: nil, log: SteamUILog.logger)
                     .uninstall(installDir: t.installDir, appID: t.appID)
+                // Another store's or an import's receipt (decision 0057).
+                if t.store != .steam { LibraryModel.paths.layout.removeReceipt(t.key) }
+                if t.store == .gog { await GOGAccount.shared.installer.forget(productID: t.key.id) }
+                if t.store == .epic { await EpicAccount.shared.installer.forget(t.key.id) }
             } catch {
                 LibraryModel.log("uninstall \(t.name) failed: \(error)")
                 failure = "\(error)"
             }
             await LibraryModel.shared.removed(id, error: failure)
         }
+    }
+
+    /// The game page's Executable: the player's pick (nil: adoption's own), then a
+    /// re-adoption so its machine and Direct3D evidence follow it.
+    func setExecutable(_ id: String, _ path: String?) {
+        guard !TitleLaunch.shared.running else { return }
+        catalog.update(id) { $0.chosenExecutable = path }
+        save()
+        Self.log("executable of \(id): \(path ?? "adoption's pick")")
+        refresh()
+    }
+
+    /// The game page's Name: display only (the title's ID does not change); empty puts the folder's back.
+    func rename(_ id: String, _ name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        catalog.update(id) {
+            $0.displayName = trimmed?.isEmpty == false ? trimmed : nil
+            if let n = $0.displayName { $0.name = n }
+        }
+        save()
+        refresh()
     }
 
     private func removed(_ id: String, error: String?) {

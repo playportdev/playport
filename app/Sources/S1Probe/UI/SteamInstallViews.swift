@@ -9,11 +9,11 @@ import SwiftUI
 /// The games list's line under a game: its download, or that it is installed.
 struct SteamInstallStatus: View {
     let game: SteamGame
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var library = LibraryModel.shared
 
     var body: some View {
-        if let job = installs.jobs[game.id] {
+        if let job = installs.jobs[.steam(game.id)] {
             Text(job.status).font(.caption.bold()).foregroundStyle(.tint)
         } else if let t = library.catalog.titles.first(where: { $0.appID == game.id }) {
             let update = Self.updateAvailable(t, game.info)

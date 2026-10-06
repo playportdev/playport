@@ -5,8 +5,8 @@
 // and decision 0033; on iOS 26 a file chosen from Files, by touch); LocalDevVPN's
 // tunnel, which A turns on (LocalDevVPN.swift); Memory, the Increased Memory
 // Limit entitlement in this copy's signature (MemoryLimit), whose A says how to
-// get a copy signed with it (`SetupRing.memoryHowTo`); and Steam, optional,
-// whose A opens Sign in to Steam (SignInView.swift). A done step has a green tick.
+// get a copy signed with it (`SetupRing.memoryHowTo`); and Accounts, optional,
+// whose A asks which store: Sign in to Steam (SignInView.swift), GOG's or Epic's sign-in page. A done step has a green tick.
 //
 // It replaces the shell's pages (AppNavigation.setup): by itself on a first
 // run (no pairing, and the checklist never left), and from Settings › Setup
@@ -73,10 +73,21 @@ final class SetupState: ObservableObject {
         case .signedIn?, .offline?: signedIn = true
         case .signedOut?, .pairing?, .expired?: signedIn = false
         }
-        return SetupFacts(controller: PadRouter.shared.controller?.name, pairing: BuiltInJitStatus.shared.pairingFile,
-                          pairsOnPhone: Self.pairsOnPhone, tunnelUp: tunnelUp, steamSignedIn: signedIn,
-                          steamSkipped: steamSkipped, memoryEntitled: MemoryLimit.entitled,
-                          memorySkipped: memorySkipped, jit: JitProvider.method)
+        var f = SetupFacts(controller: PadRouter.shared.controller?.name, pairing: BuiltInJitStatus.shared.pairingFile,
+                           pairsOnPhone: Self.pairsOnPhone, tunnelUp: tunnelUp, steamSignedIn: signedIn,
+                           steamSkipped: steamSkipped, memoryEntitled: MemoryLimit.entitled,
+                           memorySkipped: memorySkipped, jit: JitProvider.method)
+        switch GOGAccount.shared.state {
+        case .unknown: f.gogSignedIn = nil
+        case .signedIn: f.gogSignedIn = true
+        case .signedOut: f.gogSignedIn = false
+        }
+        switch EpicAccount.shared.state {
+        case .unknown: f.epicSignedIn = nil
+        case .signedIn: f.epicSignedIn = true
+        case .signedOut: f.epicSignedIn = false
+        }
+        return f
     }
 
     /// What the checklist shows: the facts, or a dev build's preview.
@@ -218,6 +229,8 @@ struct SetupView: View {
     @ObservedObject private var router = PadRouter.shared
     @ObservedObject private var modal = PadModal.shared
     @EnvironmentObject private var model: SteamAccountModel
+    @ObservedObject private var gog = GOGAccount.shared
+    @ObservedObject private var epic = EpicAccount.shared
     /// The JIT method (JitMethodPicker) changes the first two steps.
     @AppStorage(JitMethod.key) private var storedMethod = ""
 
@@ -319,7 +332,19 @@ struct SetupView: View {
         case .memory:
             SetupRing.memoryHowTo()
         case .steam:
-            SignInState.shared.open(preview: false)
+            // Which store: Steam's own sign-in screen, or GOG's or Epic's page in a sheet.
+            PadModal.shared.picker(
+                title: "Sign in", context: "Accounts", note: "One is enough, and you can add the others later in Settings › Accounts.",
+                options: [PadOption(id: "steam", label: "Steam", detail: SteamAccountModel.current?.state.account == nil ? nil : "Signed in"),
+                          PadOption(id: "gog", label: "GOG", detail: GOGAccount.shared.state == .signedIn ? "Signed in" : nil),
+                          PadOption(id: "epic", label: "Epic Games", detail: EpicAccount.shared.state == .signedIn ? "Signed in" : nil)],
+                selected: "steam") { picked in
+                switch picked {
+                case "gog": GOGAccount.shared.signingIn = true
+                case "epic": EpicAccount.shared.signingIn = true
+                default: SignInState.shared.open(preview: false)
+                }
+            }
         }
     }
 

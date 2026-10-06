@@ -207,7 +207,7 @@ public struct TitleInstaller: Sendable {
             (f.path, try InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, f.path), createParents: false), f.size, f.sha)
         }
         let bad = await Self.parallel(checks, width: concurrency) { c in
-            InstallEngine.fileMatches(c.1, size: c.2, sha: c.3) ? nil : c.0
+            InstallEngine.fileMatches(c.1, size: c.2, hash: c.3.map(FileHash.sha1) ?? .none) ? nil : c.0
         }
         var unlisted: [String] = []
         if only == nil {

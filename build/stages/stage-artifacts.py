@@ -322,7 +322,7 @@ def stage():
 
 # The release package's links into app/: everything xtool.yml and Package.swift
 # name except the two files it gets its own copies of and Runtime/.
-RELEASE_LINKS = ["Sources", "Staged", "Icon", "HostIOKit", "PlayportKit", "SteamClient", "PlayportJIT",
+RELEASE_LINKS = ["Sources", "Staged", "Icon", "HostIOKit", "ContentKit", "GOGClient", "EpicClient", "PlayportKit", "SteamClient", "PlayportJIT",
                  "PlayportJIT-Info.plist", "S1Probe.entitlements"]
 
 

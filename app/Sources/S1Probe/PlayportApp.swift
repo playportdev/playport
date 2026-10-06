@@ -130,9 +130,21 @@ struct RootView: View {
 }
 
 /// The whole app is landscape, a title (TitleScreen.swift) and the gamepad UI
-/// alike (UI/AppShell.swift), whichever way the phone is held.
+/// alike (UI/AppShell.swift), whichever way the phone is held; except while a
+/// store's sign-in page is up (UI/GOGAccount.swift), when portrait is allowed
+/// too: a password manager's AutoFill sheet draws only grey in a landscape-only app.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    @MainActor static var allowsPortrait = false {
+        didSet {
+            guard allowsPortrait != oldValue else { return }
+            for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+                for w in scene.windows { w.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+                if !allowsPortrait { scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in } }
+            }
+        }
+    }
+
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        .landscape
+        MainActor.assumeIsolated { Self.allowsPortrait } ? .allButUpsideDown : .landscape
     }
 }

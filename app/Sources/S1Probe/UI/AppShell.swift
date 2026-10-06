@@ -38,6 +38,10 @@ struct AppShell: View {
     @Environment(\.launchingFromPage) private var launchingFromPage
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
+    /// What the one Files picker is open for: a pairing file, or a game (UI/Import.swift).
+    @State private var importingGame = false
+    @ObservedObject private var gog = GOGAccount.shared
+    @ObservedObject private var epic = EpicAccount.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,13 +90,42 @@ struct AppShell: View {
         .overlay { DownloadModeView(installs: model.installs) }
         // The opening animation, over everything until Home's cards have landed (UI/AppOpening.swift).
         .overlay { if opening.covering { OpeningView() } }
+        // Dev builds: Settings › Developer › Black screen, over everything (Dev/BlackScreen.swift).
+        .overlay {
+            #if !PLAYPORT_RELEASE
+            BlackScreenView()
+            #endif
+        }
         .padFocusRoot()
         .onReceive(PadRouter.shared.presses) { press($0) }
-        // Choosing a pairing file (the checklist's step on iOS 26, Setup check's import): touch only, as Files is.
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.propertyList, .xml, .data]) {
-            BuiltInJitStatus.shared.importPairingFile($0)
+        // Choosing a pairing file (the checklist's step on iOS 26, Setup check's import), or a
+        // game to import (Library › Add a game): touch only, as Files is. One picker for both:
+        // SwiftUI presents only one fileImporter per hierarchy reliably.
+        .fileImporter(isPresented: $importing,
+                      allowedContentTypes: importingGame ? GameImports.contentTypes : [.propertyList, .xml, .data]) { result in
+            if importingGame {
+                guard case let .success(url) = result else { return }
+                Task {
+                    if let refusal = await GameImports.shared.picked(url) {
+                        PadModal.shared.picker(title: "Can't import \(url.lastPathComponent)", note: refusal,
+                                               options: [PadOption(id: "ok", label: "OK")], selected: "ok") { _ in }
+                    }
+                }
+            } else {
+                BuiltInJitStatus.shared.importPairingFile(result)
+            }
         }
-        .onReceive(SettingsImport.requests) { importing = true }
+        .onReceive(SettingsImport.requests) {
+            importingGame = false
+            importing = true
+        }
+        // GOG's and Epic's sign-in pages (touch: a web page, as iOS draws it; decision 0058).
+        .sheet(isPresented: $gog.signingIn) { GOGSignInSheet() }
+        .sheet(isPresented: $epic.signingIn) { EpicSignInSheet() }
+        .onReceive(GameImports.requests) {
+            importingGame = true
+            importing = true
+        }
         .environmentObject(model)
         .preferredColorScheme(.dark)
         .tint(PP.accent)
@@ -112,6 +145,7 @@ struct AppShell: View {
             // A first run: the checklist (UI/SetupView.swift).
             SetupState.shared.showAtStartIfFirstRun()
             #if !PLAYPORT_RELEASE
+            BlackScreen.restoreAtStart()
             UIDriver.startIfRequested()
             #endif
         }
@@ -122,6 +156,9 @@ struct AppShell: View {
             } else {
                 model.sceneLeftActive()
                 DownloadDimmer.shared.sceneLeftActive()
+                #if !PLAYPORT_RELEASE
+                BlackScreen.shared.wake()
+                #endif
             }
         }
     }
@@ -176,6 +213,8 @@ struct AppShell: View {
             let grid = LibraryGrid.shared
             h.append(PadHint(button: .view, label: "Filter & sort") { grid.openFilterSort() })
             h.append(PadHint(button: .y, label: "Search") { grid.openSearch() })
+            // Add a game (UI/Import.swift): on every filter, not only at the grid's end.
+            h.append(PadHint(button: .x, label: "Add a game") { GameImports.requests.send() })
             if !grid.search.isEmpty {
                 h.append(PadHint(button: .b, label: "Clear search") { grid.clearSearch() })
                 return h + [PadHint(button: .menu, label: "Settings") { _ = nav.open("settings") }]
@@ -214,6 +253,10 @@ struct AppShell: View {
     private func press(_ b: NavButton) {
         // The opening animation covers the shell: nothing to press yet.
         if opening.covering { return }
+        #if !PLAYPORT_RELEASE
+        // The black screen: any button wakes it, and does nothing else.
+        if BlackScreen.shared.shown { return BlackScreen.shared.wake() }
+        #endif
         // Download mode: any button wakes it, and does nothing else.
         let dimmer = DownloadDimmer.shared
         if dimmer.dimmed { return dimmer.wake() }
@@ -247,7 +290,7 @@ struct AppShell: View {
 
 /// LB, the three pages, RB; the controller and its battery; the gear.
 private struct TopBar: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var nav = AppNavigation.shared
     @ObservedObject private var router = PadRouter.shared
 

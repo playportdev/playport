@@ -90,25 +90,6 @@ public struct CMPacket: Sendable {
     }
 }
 
-extension Array where Element == UInt8 {
-    mutating func appendLE(_ v: UInt32) { Swift.withUnsafeBytes(of: v.littleEndian) { append(contentsOf: $0) } }
-    mutating func appendLE(_ v: UInt64) { Swift.withUnsafeBytes(of: v.littleEndian) { append(contentsOf: $0) } }
-
-    func readLE32(at i: Int) -> UInt32 {
-        UInt32(self[i]) | UInt32(self[i + 1]) << 8 | UInt32(self[i + 2]) << 16 | UInt32(self[i + 3]) << 24
-    }
-    func readLE16(at i: Int) -> UInt16 { UInt16(self[i]) | UInt16(self[i + 1]) << 8 }
-    func readLE64(at i: Int) -> UInt64 { UInt64(readLE32(at: i)) | UInt64(readLE32(at: i + 4)) << 32 }
-
-    var hex: String { map { String(format: "%02x", $0) }.joined() }
-}
-
-extension ArraySlice where Element == UInt8 {
-    func readLE32(at i: Int) -> UInt32 {
-        UInt32(self[i]) | UInt32(self[i + 1]) << 8 | UInt32(self[i + 2]) << 16 | UInt32(self[i + 3]) << 24
-    }
-}
-
 /// SteamID helpers (SteamID.kt): universe 1 (Public).
 public enum SteamIDs {
     /// Individual account with account id 0, desktop instance: what

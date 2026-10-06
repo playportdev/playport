@@ -13,13 +13,14 @@
 import Foundation
 
 public enum SettingsSection: String, CaseIterable, Sendable {
-    case steam, graphics, downloads, controllers, storage, setup, about
+    /// Every store's account (Steam, then GOG and Epic Games as they land).
+    case accounts, graphics, downloads, controllers, storage, setup, about
     /// Dev builds only: diagnostics, simulations, probes and logs.
     case developer
 
     public var title: String {
         switch self {
-        case .steam: "Steam account"
+        case .accounts: "Accounts"
         case .graphics: "Graphics"
         case .downloads: "Downloads"
         case .controllers: "Controllers"
@@ -41,7 +42,7 @@ public enum SettingsSection: String, CaseIterable, Sendable {
     public static func named(_ name: String) -> SettingsSection? {
         if let s = SettingsSection(rawValue: name) { return s }
         switch name {
-        case "account": return .steam
+        case "account", "steam": return .accounts
         case "jit", "memory": return .setup
         case "diagnostics", "pairing", "probes", "logs": return .developer
         default: return nil
@@ -85,7 +86,7 @@ public struct SettingSteps<Value: Equatable>: Sendable where Value: Sendable {
     }
 }
 
-/// Settings › Downloads (Settings.dc.html). The download queue (SteamInstalls)
+/// Settings › Downloads (Settings.dc.html). The download queue (Downloads)
 /// reads them from UserDefaults.standard by these keys; Steam Cloud's switch
 /// is SteamAccountModel.cloudKey (`steamCloud`), as it was.
 public struct DownloadPreferences: Equatable, Sendable {

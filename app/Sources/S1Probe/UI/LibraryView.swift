@@ -10,11 +10,17 @@
 // page over the grid. Works offline, with no Steam session: the owned games
 // come from the disk cache.
 //
+// Add a game (UI/Import.swift) opens Files to import a game's folder or .zip: a
+// button at the chips' right and X in the footer on every filter, an entry in the
+// ⧉ picker, and a tile after the games in All and Installed and on the empty page.
+//
 // The grid is lazy, so a tile off screen is not drawn; the grid reports every
 // tile's frame to the focus ring itself (padFrames), and when the ring moves to
 // a tile not wholly on screen scrolls just far enough to show its row, to an
 // offset worked out from that frame (a scroll to the lazy grid's id lands on an estimate).
 
+import GOGClientKit
+import EpicClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
@@ -45,11 +51,13 @@ final class LibraryGrid: ObservableObject {
     func openFilterSort() {
         let show = "Show", order = "Sort"
         PadModal.shared.picker(title: "Filter & sort", context: "Library",
-                               options: LibraryFilter.allCases.map { .init(id: "filter:\($0.rawValue)", label: Self.label($0), section: show) }
+                               options: Self.filters.map { .init(id: "filter:\($0.rawValue)", label: Self.label($0), section: show) }
+                                   + [.init(id: "add", label: "Add a game", detail: "From Files: a folder or a .zip", section: "Games")]
                                    + [.init(id: "sort:\(LibrarySort.recent.rawValue)", label: "Recent", detail: "Last played first", section: order),
                                       .init(id: "sort:\(LibrarySort.name.rawValue)", label: "Name", detail: "A to Z", section: order),
                                       .init(id: "sort:\(LibrarySort.size.rawValue)", label: "Size", detail: "Largest first", section: order)],
                                selected: ["filter:\(filter.rawValue)", "sort:\(sort.rawValue)"]) { [weak self] id in
+            if id == "add" { GameImports.requests.send(); return }
             let parts = id.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return }
             if parts[0] == "filter", let f = LibraryFilter(rawValue: parts[1]) { self?.filter = f }
@@ -66,6 +74,15 @@ final class LibraryGrid: ObservableObject {
         filter.label
     }
 
+    /// The chips: Steam's always, GOG's and Epic's once a copy is in the catalogue
+    /// or the store is signed in (decision 0045).
+    static var filters: [LibraryFilter] {
+        var stores = Set(LibraryModel.shared.catalog.titles.map(\.store))
+        if GOGAccount.shared.state == .signedIn { stores.insert(.gog) }
+        if EpicAccount.shared.state == .signedIn { stores.insert(.epic) }
+        return LibraryFilter.shown(stores: stores)
+    }
+
     static func label(_ sort: LibrarySort) -> String {
         switch sort {
         case .recent: "Recent"
@@ -76,7 +93,7 @@ final class LibraryGrid: ObservableObject {
 }
 
 struct LibraryView: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var nav = AppNavigation.shared
 
     var body: some View {
@@ -96,12 +113,15 @@ struct LibraryView: View {
 }
 
 private struct LibraryGridView: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var grid = LibraryGrid.shared
     @ObservedObject private var nav = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
+    @ObservedObject private var imports = GameImports.shared
+    @ObservedObject private var gog = GOGAccount.shared
+    @ObservedObject private var epic = EpicAccount.shared
     /// The scroll view on screen, how far its content is scrolled and how far it can be.
     @State private var viewport = CGRect.zero
     @State private var offset = CGFloat.zero
@@ -117,7 +137,7 @@ private struct LibraryGridView: View {
     private static let inset: CGFloat = 8
 
     var body: some View {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: model.games)
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
         let downloading = Set(installs.jobs.keys)
         let shown = LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search, downloading: downloading)
         VStack(alignment: .leading, spacing: 0) {
@@ -126,7 +146,7 @@ private struct LibraryGridView: View {
             if shown.isEmpty {
                 empty
             } else {
-                tiles(shown, duplicateIDs: LibraryList.duplicateSourceIDs(all))
+                tiles(shown, duplicateIDs: LibraryList.duplicateSourceIDs(all), addTile: showsAddTile)
             }
         }
         // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
@@ -139,19 +159,19 @@ private struct LibraryGridView: View {
 
     /// The first tile the grid shows now, read afresh (an onChange's closure holds the old body's values).
     private func firstTile() -> String? {
-        let all = LibraryList.entries(titles: library.catalog.titles, owned: model.games)
+        let all = LibraryList.entries(titles: library.catalog.titles, owned: LibraryOwned.all(model.games, gog.games, epic.games))
         return LibraryList.shown(all, filter: grid.filter, sort: grid.sort, search: grid.search,
                                  downloading: Set(installs.jobs.keys)).first.map { "lib:\($0.id)" }
     }
 
     // MARK: chips
 
-    private func chips(_ all: [LibraryEntry], downloading: Set<UInt32>) -> some View {
+    private func chips(_ all: [LibraryEntry], downloading: Set<StoreGameKey>) -> some View {
         HStack(spacing: 8) {
             // Store chips can grow without pushing search and sort off screen.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(LibraryFilter.allCases, id: \.self) { chip in
+                    ForEach(LibraryGrid.filters, id: \.self) { chip in
                         let count = all.filter { LibraryList.matches($0, chip, downloading: downloading) }.count
                         // Not in the ring: ⧉ picks one; a tap here.
                         Button { grid.filter = chip } label: {
@@ -182,6 +202,20 @@ private struct LibraryGridView: View {
                 .accessibilityIdentifier("library-search")
             }
             if library.scanning || model.gamesLoading { ProgressView().controlSize(.small) }
+            // Not in the ring (it leaves the tiles alone): X does it; a tap here.
+            Button { GameImports.requests.send() } label: {
+                HStack(spacing: 5) {
+                    if imports.planning { ProgressView().controlSize(.mini) } else { Image(systemName: "plus").font(.system(size: 11, weight: .bold)) }
+                    Text("Add a game")
+                    PadGlyph(button: .x).scaleEffect(0.8)
+                }
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(PP.text)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(PP.surface, in: Capsule())
+                .overlay(Capsule().strokeBorder(PP.line, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("library-add")
             Button { grid.openFilterSort() } label: {
                 Text("Sort: \(LibraryGrid.label(grid.sort))")
                     .font(.system(size: 12)).foregroundStyle(PP.muted)
@@ -195,7 +229,10 @@ private struct LibraryGridView: View {
 
     // MARK: tiles
 
-    private func tiles(_ shown: [LibraryEntry], duplicateIDs: Set<String>) -> some View {
+    /// Add a game shows where local games do: All and Installed, with no search typed.
+    private var showsAddTile: Bool { (grid.filter == .all || grid.filter == .installed) && grid.search.isEmpty }
+
+    private func tiles(_ shown: [LibraryEntry], duplicateIDs: Set<String>, addTile: Bool) -> some View {
         GeometryReader { outer in
             let width = outer.size.width - 2 * Self.inset
             let tile = CGSize(width: (width - CGFloat(Self.columns - 1) * Self.spacing.width) / CGFloat(Self.columns),
@@ -211,6 +248,10 @@ private struct LibraryGridView: View {
                                         showSource: LibraryList.showsSourceBadge(entry, filter: grid.filter, duplicateIDs: duplicateIDs),
                                         width: tile.width, artHeight: Self.artHeight, metaGap: Self.metaGap, metaHeight: Self.metaHeight)
                         }
+                        if addTile {
+                            AddGameTile(planning: imports.planning, width: tile.width, artHeight: Self.artHeight,
+                                        metaGap: Self.metaGap, metaHeight: Self.metaHeight)
+                        }
                     }
                     .padding(Self.inset)
                 }
@@ -225,7 +266,8 @@ private struct LibraryGridView: View {
                 })
                 // Every tile's art on screen, drawn or not: the ring's targets. The drawn
                 // ones report the same frames themselves.
-                .padFrames(offscreenFrames(shown, tile: tile, pitch: pitch), hint: "Open")
+                .padFrames(offscreenFrames(shown.map { "lib:\($0.id)" } + (addTile ? [AddGameTile.item] : []), tile: tile, pitch: pitch),
+                           hint: "Open")
                 .refreshable {
                     library.refresh()
                     await model.loadGames(refresh: true)
@@ -254,13 +296,13 @@ private struct LibraryGridView: View {
     }
 
     /// The frames on screen of the tiles the viewport does not show, as the grid lays them out.
-    private func offscreenFrames(_ shown: [LibraryEntry], tile: CGSize, pitch: CGSize) -> [String: CGRect] {
+    private func offscreenFrames(_ ids: [String], tile: CGSize, pitch: CGSize) -> [String: CGRect] {
         guard viewport.width > 0 else { return [:] }
         let origin = CGPoint(x: viewport.minX + Self.inset, y: viewport.minY + Self.inset - offset)
-        let frames = LibraryList.tileFrames(count: shown.count, columns: Self.columns, tile: tile, spacing: pitch, origin: origin)
+        let frames = LibraryList.tileFrames(count: ids.count, columns: Self.columns, tile: tile, spacing: pitch, origin: origin)
         var out: [String: CGRect] = [:]
-        for (entry, frame) in zip(shown, frames) where frame.maxY <= viewport.minY || frame.minY >= viewport.maxY {
-            out["lib:\(entry.id)"] = frame
+        for (id, frame) in zip(ids, frames) where frame.maxY <= viewport.minY || frame.minY >= viewport.maxY {
+            out[id] = frame
         }
         return out
     }
@@ -279,7 +321,16 @@ private struct LibraryGridView: View {
                     .background(PP.accent, in: Capsule())
                     .padItem("signin", hint: "Open", cornerRadius: 14) { _ = nav.open("account") }
                     .padding(.top, 6)
-            } else if grid.filter == .installed, !model.games.isEmpty, grid.search.isEmpty {
+            }
+            if showsAddTile {
+                Text(imports.planning ? "Reading…" : "Add a game")
+                    .font(.system(size: 13, weight: .bold)).foregroundStyle(needsSignIn ? PP.text : PP.onAccent)
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(needsSignIn ? PP.line : PP.accent, in: Capsule())
+                    .padItem(AddGameTile.item, hint: "Add", cornerRadius: 14) { GameImports.requests.send() }
+                    .padding(.top, 6)
+            }
+            if !needsSignIn, grid.filter == .installed, !model.games.isEmpty, grid.search.isEmpty {
                 Text(LibrarySource.steam.label)
                     .font(.system(size: 13, weight: .bold)).foregroundStyle(PP.onAccent)
                     .padding(.horizontal, 14).padding(.vertical, 6)
@@ -306,6 +357,7 @@ private struct LibraryGridView: View {
         case .all: return "No games yet"
         case .installed: return "No games installed"
         case .steam: return needsSignIn ? "Sign in to Steam" : (model.gamesLoading ? "Loading your games…" : "No Steam games")
+        case .gog, .epic: return "No \(grid.filter.label) games"
         }
     }
 
@@ -313,16 +365,14 @@ private struct LibraryGridView: View {
         if !grid.search.isEmpty { return "Press B to clear the search." }
         switch grid.filter {
         case .all:
-            return model.gamesError ?? "Your installed games and games from connected stores appear here. Sign in to Steam or add a local game to get started."
+            return model.gamesError ?? "Your installed games and games from connected stores appear here. Sign in to Steam or add a game from Files to get started."
         case .installed:
-            #if PLAYPORT_RELEASE
-            return "Install one from your Steam games, or copy one into Playport."
-            #else
-            return "Install one from your Steam games, or copy one into Playport's C:\\Games folder."
-            #endif
+            return "Install one from your Steam games, or add one from Files: its folder or a .zip of it."
         case .steam:
             if needsSignIn { return model.state == .expired ? AccountCopy.status(.expired) : "Pair Playport with your Steam account to see your games." }
             return model.gamesError ?? "Your Steam account owns no games."
+        case .gog, .epic:
+            return "Games from \(grid.filter.label) appear here."
         }
     }
 }
@@ -345,7 +395,7 @@ private struct Chip: View {
 private struct LibraryTile: View {
     let entry: LibraryEntry
     let game: SteamGame?
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var nav = AppNavigation.shared
     let showSource: Bool
@@ -354,14 +404,16 @@ private struct LibraryTile: View {
     let metaGap: CGFloat
     let metaHeight: CGFloat
 
-    private var job: SteamInstalls.Job? { entry.appID.flatMap { installs.jobs[$0] } }
+    private var job: Downloads.Job? { installs.jobs[entry.key] }
     private var title: InstalledTitle? { entry.installed ? library.title(entry.id) : nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: metaGap) {
             ZStack(alignment: .bottomLeading) {
-                Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header) }.clipped()
-                if game == nil || job != nil {
+                Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil,
+                                                 storeKey: entry.key) }.clipped()
+                // The name over the art, unless a store's art (which carries it) is there.
+                if (game == nil && !StoreArt.has(entry.key)) || job != nil {
                     LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
                     Text(entry.name)
                         .font(PP.display(14)).textCase(.uppercase).tracking(0.5).foregroundStyle(.white).lineLimit(2)
@@ -412,7 +464,7 @@ private struct LibraryTile: View {
         }
     }
 
-    private func jobText(_ job: SteamInstalls.Job) -> String {
+    private func jobText(_ job: Downloads.Job) -> String {
         let update = entry.installed && job.kind != .repair
         switch job.phase {
         case .queued:
@@ -427,6 +479,37 @@ private struct LibraryTile: View {
 
     private func played(_ when: Date?) -> String? {
         when.map { "Played " + $0.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)) }
+    }
+}
+
+/// The grid's last tile: Files opens to import a game's folder or .zip (UI/Import.swift).
+private struct AddGameTile: View {
+    static let item = "lib:add"
+    let planning: Bool
+    let width: CGFloat
+    let artHeight: CGFloat
+    let metaGap: CGFloat
+    let metaHeight: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: metaGap) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(PP.surface)
+                RoundedRectangle(cornerRadius: 10).strokeBorder(PP.line, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                VStack(spacing: 4) {
+                    if planning { ProgressView().controlSize(.small) } else {
+                        Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).foregroundStyle(PP.soft)
+                    }
+                    Text("Add a game").font(.system(size: 13, weight: .semibold)).foregroundStyle(PP.soft)
+                }
+            }
+            .frame(width: width, height: artHeight)
+            .padItem(Self.item, hint: "Add", cornerRadius: 10) { GameImports.requests.send() }
+            Text(planning ? "Reading the folder…" : "From Files: a folder or a .zip")
+                .font(.system(size: 12)).foregroundStyle(PP.muted).lineLimit(1)
+                .frame(width: width, height: metaHeight, alignment: .leading)
+        }
+        .accessibilityIdentifier("library-add-game")
     }
 }
 
@@ -445,16 +528,50 @@ struct GameSourceBadge: View {
     }
 }
 
-/// A game's store art when the paired account owns it, else its colour tile.
+/// The owned games of every signed-in store, as the library joins them.
+enum LibraryOwned {
+    @MainActor
+    static func all(_ steam: [SteamGame], _ gog: [GOGGame], _ epic: [EpicGame]) -> [LibraryList.Owned] {
+        steam.map { LibraryList.Owned(appID: $0.id, name: $0.info.name, installSize: $0.info.installSize) }
+            + gog.map { LibraryList.Owned(key: StoreGameKey(store: .gog, id: $0.id), name: $0.title) }
+            + epic.map { LibraryList.Owned(key: StoreGameKey(store: .epic, id: $0.id), name: $0.title) }
+    }
+}
+
+/// Whether a GOG or Epic game has its store's art (which carries its name, so no name is drawn over it).
+enum StoreArt {
+    @MainActor
+    static func has(_ key: StoreGameKey) -> Bool {
+        switch key.store {
+        case .gog: GOGAccount.shared.game(key.id)?.image != nil
+        case .epic: EpicAccount.shared.game(key.id).map { $0.wideArt ?? $0.tallArt } != nil
+        case .steam, .local: false
+        }
+    }
+}
+
+/// A game's store art when the paired account owns it; else, for a game in
+/// C:\Games, its executable's icon (LocalGameArt); else its colour tile.
 struct GameArt: View {
     @EnvironmentObject private var model: SteamAccountModel
+    @ObservedObject private var library = LibraryModel.shared
     let appID: UInt32?
     let name: String
     let kind: ArtworkCache.Kind
+    /// The catalogue's title, for a local game's icon.
+    var titleID: String? = nil
+    /// The store's game, for GOG's or Epic's art.
+    var storeKey: StoreGameKey? = nil
 
     var body: some View {
         if let app = appID, let game = model.games.first(where: { $0.id == app }) {
             SteamArtView(app: game.info, kind: kind, placeholder: PP.tile(for: name))
+        } else if let key = storeKey, key.store == .gog, let g = GOGAccount.shared.game(key.id) {
+            GOGArtView(game: g, wide: kind == .hero)
+        } else if let key = storeKey, key.store == .epic, let g = EpicAccount.shared.game(key.id) {
+            EpicArtView(game: g, wide: kind == .hero)
+        } else if let id = titleID, let t = library.title(id), t.executable != nil {
+            LocalGameArt(title: t)
         } else {
             PP.tile(for: name)
         }

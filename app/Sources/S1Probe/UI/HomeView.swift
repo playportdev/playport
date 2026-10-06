@@ -11,7 +11,7 @@ import SteamClientKit
 import SwiftUI
 
 struct HomeView: View {
-    @ObservedObject var installs: SteamInstalls
+    @ObservedObject var installs: Downloads
     @EnvironmentObject private var model: SteamAccountModel
     @ObservedObject private var library = LibraryModel.shared
     @ObservedObject private var nav = AppNavigation.shared
@@ -60,7 +60,7 @@ struct HomeView: View {
         if let t = continueTitle {
             ZStack(alignment: .bottomLeading) {
                 // Art sized by the card, not the card by the art.
-                Color.clear.overlay { GameArt(appID: t.appID, name: t.name, kind: .hero) }.clipped()
+                Color.clear.overlay { GameArt(appID: t.appID, name: t.name, kind: .hero, titleID: t.id, storeKey: t.key) }.clipped()
                 LinearGradient(colors: [.clear, PP.background.opacity(0.85)], startPoint: .center, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(t.lastPlayed == nil ? "Ready to play" : "Continue playing")
@@ -140,18 +140,19 @@ struct HomeView: View {
     static func percent(_ f: Double) -> String { "\(Int(f * 100))%" }
 
     /// `4 min`: the running job's time left at its speed.
-    static func left(_ job: SteamInstalls.Job) -> String? {
+    static func left(_ job: Downloads.Job) -> String? {
         guard job.phase == .downloading, let r = job.remaining,
               let s = DownloadRate.seconds(remaining: r, rate: job.rate) else { return nil }
         return DownloadRate.short(s)
     }
 
     /// `Celeste`, `Celeste update`, `Celeste repair`.
-    static func jobName(_ job: SteamInstalls.Job) -> String {
+    static func jobName(_ job: Downloads.Job) -> String {
         switch job.kind {
         case .install: job.name
         case .update: job.name + " update"
         case .repair: job.name + " repair"
+        case .import: job.name + " import"
         }
     }
 
@@ -203,11 +204,12 @@ struct HomeView: View {
     /// An installed game is `tile:ID` and opens its details; one not installed is
     /// `game:APPID`, dimmed, and opens its Steam page.
     private func tile(_ entry: LibraryEntry) -> some View {
-        let job = entry.appID.flatMap { installs.jobs[$0] }
+        let job = installs.jobs[entry.key]
         return ZStack(alignment: .bottomLeading) {
-            Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header) }.clipped()
+            Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil,
+                                                 storeKey: entry.key) }.clipped()
             // Store art carries the game's name; a colour tile, or a download, says it.
-            if !hasArt(entry.appID) || job != nil {
+            if !(hasArt(entry.appID) || StoreArt.has(entry.key)) || job != nil {
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
                 Text(job.map { "\(entry.name) · \(Self.tileStatus($0))" } ?? entry.name)
                     .font(PP.display(14)).textCase(.uppercase).tracking(0.5).foregroundStyle(.white).lineLimit(1)
@@ -228,7 +230,7 @@ struct HomeView: View {
     }
 
     /// `62%` while it downloads, else the job's state.
-    private static func tileStatus(_ job: SteamInstalls.Job) -> String {
+    private static func tileStatus(_ job: Downloads.Job) -> String {
         if job.isRunning, let f = job.fraction { return percent(f) }
         return job.status
     }

@@ -6,7 +6,7 @@
 // it, left and B come back to the list, B there closes Settings (AppShell's
 // `settingsPress`). Every row is on the ring, and a tap does what A does.
 //
-// - Steam account: SteamAccountSettings (AccountView.swift).
+// - Accounts: Steam's, SteamAccountSettings (AccountView.swift); GOGAccountSettings and EpicAccountSettings after it.
 // - Graphics: what every game launches with unless its Game options change
 //   it (LaunchSettingsStore.global): resolution, frame rate limit and
 //   Direct3D, changed with left and right, each "Default · X" while it follows
@@ -139,7 +139,10 @@ struct SettingsView: View {
     private func section(_ s: SettingsSection) -> some View {
         Color.clear.frame(height: 0).id("set:top")
         switch s {
-        case .steam: SteamAccountSettings()
+        case .accounts:
+            SteamAccountSettings()
+            GOGAccountSettings()
+            EpicAccountSettings()
         case .graphics: GraphicsSettings()
         case .downloads: DownloadSettings()
         case .controllers: ControllerSettings()

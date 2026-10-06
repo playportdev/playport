@@ -354,6 +354,21 @@ shares the one phone ([decision 0016](decisions/0016-agents-share-the-phone.md))
   when it is free; while another job holds it, nothing restarts netmuxd.
 - **A running title.** `--leave-running` outside `pp phone lock` warns: the
   next agent's run ends the app, and its `pp pad` would play into your game.
+- **Unattended.** The phone stays unlocked (a launch waits for its passcode), so
+  between runs it would show the lit Home Screen, which burns in an OLED. When
+  a person says nobody is watching, run `pp phone unattended on [--hours N]`
+  (12 h by default; `off` ends it, `status` shows it). While it lasts, each
+  release of an outermost hold of the lock (one command, or a whole
+  `pp phone lock` session) launches the dev app into Settings › Developer ›
+  Black screen when the app is not running: pure black at the lowest
+  brightness, with no status bar or home indicator
+  (`app/Sources/S1Probe/Dev/BlackScreen.swift`). The launch names no session,
+  so the ended session's settings are undone. A tap or any button wakes the page
+  and restores the brightness, and so does the app's next launch after a kill.
+  The next run ends it as it ends any app. A run left running keeps running.
+  The release app has no driver, so nothing comes up over it. What the hook did is in
+  `$PLAYPORT_BUILD/rest/events.jsonl`; `pp phone rest` brings the page up now,
+  and `pp ui --action open:black` within a run.
 
 ## Measuring a title
 

@@ -27,6 +27,14 @@ app (UI_SESSION), and the app undoes the settings driven runs changed
 (app/Sources/S1Probe/Dev/DriverUndo.swift), so the next session starts from
 the settings a person left.
 
+Unattended mode. The phone stays unlocked between runs (a launch waits for its
+passcode), so it would show the lit Home Screen for hours. While
+DEVICE_DIR/unattended.json lasts (`pp phone unattended on [--hours N]`), each
+release of an outermost hold of the lock (a whole `pp phone lock` session,
+or one command) launches the dev app into its black screen when the app is not
+running (rest; app/Sources/S1Probe/Dev/BlackScreen.swift). A run that leaves
+the app running keeps it. The next run ends the black screen as it ends any app.
+
 The install record. DEVICE_DIR/device-state.json says which IPA `pp install`
 put on the phone, from which checkout. `pp ui` refuses to drive a build
 another checkout installed (installed_check).
@@ -65,6 +73,7 @@ DEVICE_DIR = os.environ.get("PLAYPORT_DEVICE_DIR") or str(inputs.BUILD)  # as in
 LOCK = os.environ.get("PLAYPORT_DEVICE_LOCK") or os.path.join(DEVICE_DIR, "device.lock")
 HOLDER = os.path.join(os.path.dirname(LOCK), "device.holder.json")
 STATE = os.path.join(DEVICE_DIR, "device-state.json")
+UNATTENDED = os.path.join(DEVICE_DIR, "unattended.json")
 BID_RE = re.compile(r"^XTL-[A-Z0-9]+\.dev\.playport\.app$")
 PLACEHOLDER_BID = "XTL-TEAMIDXXXX.dev.playport.app"
 EXECUTABLES = ("S1Probe", "Playport")
@@ -200,6 +209,13 @@ def device_lock(what, wait=None, events=None, expect_s=None):
         events("lock", what=what, session=sid)
         yield
     finally:
+        if mine and unattended():
+            # Still under the lock, so no other job's launch comes between. The job's result
+            # line stays its last: what this does goes to $PLAYPORT_BUILD/rest/events.jsonl.
+            with contextlib.suppress(Exception):
+                d = os.path.join(BUILD, "rest")
+                os.makedirs(d, exist_ok=True)
+                rest(Events(d, echo=False), d)
         if mine:
             os.environ.pop("PLAYPORT_DEVICE_LOCK_HELD", None)
             os.environ.pop("PLAYPORT_DEVICE_SESSION", None)
@@ -208,6 +224,50 @@ def device_lock(what, wait=None, events=None, expect_s=None):
                 with contextlib.suppress(OSError):
                     os.remove(HOLDER)
         fd.close()
+
+
+def unattended():
+    """The unattended mark ({"until": unix time, "since", "by"}) while it lasts, or None."""
+    try:
+        with open(UNATTENDED) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return rec if isinstance(rec, dict) and float(rec.get("until") or 0) > time.time() else None
+
+
+def set_unattended(hours):
+    """Unattended mode for hours from now; 0 or None ends it. Returns the mark, or None."""
+    if not hours:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(UNATTENDED)
+        return None
+    now = time.time()
+    rec = {"until": round(now + hours * 3600), "since": round(now), "by": shlex.join(sys.argv)[:200]}
+    os.makedirs(DEVICE_DIR, exist_ok=True)
+    with open(UNATTENDED + ".tmp", "w") as f:
+        json.dump(rec, f)
+    os.replace(UNATTENDED + ".tmp", UNATTENDED)
+    return rec
+
+
+def rest(events=None, out=None):
+    """Under the lock: the dev app's black screen (Settings › Developer › Black screen), launched
+    as the UI driver does, so an unlocked phone left alone shows black at its lowest brightness.
+    Not when the app runs (a run left it running) or the release app is installed (no driver).
+    The launch names no session: the ended session's driven settings are undone (DriverUndo).
+    Returns the launched pid, or None."""
+    events = events or Events(echo=False)
+    if (installed() or {}).get("variant") == "release":
+        events("rest-skipped", why="the release app has no UI driver")
+        return None
+    phone = Phone(out, events=events).ensure()
+    if phone.pid():
+        events("rest-skipped", why="the app runs")
+        return None
+    pid = phone.launch(["S1_MODE=ui", "TITLE_NONCE=" + secrets.token_hex(4), "UI_ACTIONS=open:black"])
+    events("rest", pid=pid)
+    return pid
 
 
 def installed():

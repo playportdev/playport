@@ -4,7 +4,8 @@
 // on iOS 26 a file chosen from Files), LocalDevVPN's tunnel, the Increased
 // Memory Limit entitlement in the signature (a signer chose it, so a player
 // may only be able to put it off with "Not now"; docs/DISTRIBUTION.md
-// section 6), and Steam (optional: signed in, or "Not now"). The app shows them once, on a first
+// section 6), and Accounts (optional: Steam, GOG or Epic Games signed in, or "Not now"; the step's
+// case is still `steam`, as its saved "Not now" and the driver's names are). The app shows them once, on a first
 // run, which cannot be left until every step is settled (`complete`), and in
 // Settings › Setup check; the same facts are checked by themselves before
 // every launch (`beforeLaunch`), which names the fix when one fails. A
@@ -30,8 +31,22 @@ public struct SetupFacts: Equatable, Sendable {
     public var tunnelUp: Bool?
     /// Paired with Steam; nil while the stored session is still being read.
     public var steamSignedIn: Bool?
-    /// The player chose "Not now" on the Steam step.
+    /// The player chose "Not now" on the Accounts step.
     public var steamSkipped: Bool
+    /// Signed in to GOG (decision 0058); nil while the stored session is still being read.
+    public var gogSignedIn: Bool? = false
+    /// Signed in to Epic Games (decision 0058); nil while the stored session is still being read.
+    public var epicSignedIn: Bool? = false
+    /// A store is signed in (Steam, GOG or Epic); nil while one is still being read and none is.
+    public var accountSignedIn: Bool? {
+        let all = [steamSignedIn, gogSignedIn, epicSignedIn]
+        if all.contains(true) { return true }
+        return all.contains(nil) ? nil : false
+    }
+    /// The stores signed in, by name, in the order Settings › Accounts lists them.
+    public var signedInStores: [String] {
+        [steamSignedIn == true ? "Steam" : nil, gogSignedIn == true ? "GOG" : nil, epicSignedIn == true ? "Epic Games" : nil].compactMap { $0 }
+    }
     /// The signature carries Increased Memory Limit; nil when it cannot be read.
     public var memoryEntitled: Bool?
     /// The player chose "Not now" on the Memory step.
@@ -115,11 +130,13 @@ public enum SetupChecklist {
             return SetupItem(step: step, done: on || f.memorySkipped, title: "Memory", detail: detail,
                              action: on ? nil : "How to fix")
         case .steam:
-            let done = f.steamSignedIn == true
-            return SetupItem(step: step, done: done || f.steamSkipped, title: "Steam",
-                             detail: done ? "Signed in: your library, cloud saves and achievements."
-                                 : f.steamSkipped ? "Not now. Sign in any time for your library, cloud saves and achievements."
-                                 : "Optional. Sign in for your library, cloud saves and achievements.",
+            let done = f.accountSignedIn == true
+            let stores = f.signedInStores
+            let named = stores.count > 1 ? stores.dropLast().joined(separator: ", ") + " and " + stores.last! : stores.first ?? ""
+            return SetupItem(step: step, done: done || f.steamSkipped, title: "Accounts",
+                             detail: done ? "Signed in to \(named): your games, and Steam's cloud saves and achievements."
+                                 : f.steamSkipped ? "Not now. Sign in to Steam, GOG or Epic Games any time in Settings › Accounts, or add games from Files."
+                                 : "Optional. Sign in to Steam, GOG or Epic Games for your games, or add games from Files.",
                              action: done ? nil : "Sign in")
         }
     }
@@ -136,7 +153,7 @@ public enum SetupChecklist {
     /// run's checklist cannot be left before this.
     public static func complete(_ f: SetupFacts) -> Bool {
         f.jitReady && f.tunnelReady && (f.memoryEntitled == true || f.memorySkipped)
-            && (f.steamSignedIn == true || f.steamSkipped)
+            && (f.accountSignedIn == true || f.steamSkipped)
     }
 
     /// Later visits can always leave; a first run must settle every step first.
@@ -150,7 +167,7 @@ public enum SetupChecklist {
         guard firstRun else { return false }
         switch step {
         case .memory: return f.memoryEntitled != true && !f.memorySkipped
-        case .steam: return f.steamSignedIn != true && !f.steamSkipped
+        case .steam: return f.accountSignedIn != true && !f.steamSkipped
         case .pairing, .vpn: return false
         }
     }

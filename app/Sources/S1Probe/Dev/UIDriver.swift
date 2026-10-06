@@ -13,6 +13,11 @@
 //                              goes on here
 //   install:<app id>           Install from Steam (the paired account's session);
 //                              waits until the title is in the library
+//   install:gog-<id>[@<build>] Install from GOG (signed in on the phone), the newest build or
+//                              <build>; an installed game's install is its update
+//   install:epic-<app name>    Install from Epic (signed in on the phone), the live build; an
+//                              installed game's install is its update; a refused game fails
+//                              with the page's reason
 //   pause-resume:<app id>      Install, Pause once a quarter is staged, check the
 //                              stage is kept, then Resume and wait as install does
 //   queue:<app id>             Install from Steam, as a game page's Install does, and go on
@@ -21,6 +26,11 @@
 //                              with progress, as after the restart after a game, and logs
 //                              the queue
 //   uninstall:<title id>       Uninstall; waits until its folder and record are gone
+//   import:<path>              Hands Documents/<path> (a folder or a .zip the workstation
+//                              put in the container) to Add a game, as the Files picker
+//                              returns what the player picked (the picker itself is touch,
+//                              iOS's, and cannot be driven); waits until the import is in
+//                              the library (owner, 2026-10-06)
 //   settings:<title id>        Saves UI_SETTINGS (a PlayportKit LaunchSettings as JSON;
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
@@ -33,14 +43,16 @@
 //                              screenshot sees it drawn; `open:<title id>#<section>`
 //                              opens the page's Game options at a section (graphics, game,
 //                              files, developer, ordering, steam);
-//                              `open:settings#<section>` shows a Settings section (steam,
+//                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controllers, storage, setup, about,
 //                              developer; PlayportKit SettingsSection.named also takes
-//                              account, jit, memory, diagnostics, pairing, probes, logs);
+//                              account, steam, jit, memory, diagnostics, pairing, probes, logs);
 //                              `open:licences` shows Settings › About › Licences,
 //                              `open:licences#<prefix>` the files of the first component
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
 //                              UI/LicencesView.swift)
+//                              `open:black` shows Settings › Developer › Black screen
+//                              (BlackScreen.swift), as its row does
 //   probe:helper-exit | probe:helper-kill [-hold]
 //                              Settings' helper-lifetime probe (HelperLifetimeProbe.swift):
 //                              the run ends with ui-done, and the app ends itself 2 s later;
@@ -90,6 +102,7 @@
 
 import Foundation
 import HostIOKit
+import GOGClientKit
 import PlayportKit
 import SteamClientKit
 import SwiftUI
@@ -136,11 +149,17 @@ enum UIDriver {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
+                case "install" where id.hasPrefix("epic-"):
+                    if let failure = await installEpic(String(id.dropFirst(5))) { return finish("action=\(action) failed: \(failure)") }
+                case "install" where id.hasPrefix("gog-"):
+                    if let failure = await installGOG(String(id.dropFirst(4))) { return finish("action=\(action) failed: \(failure)") }
                 case "install", "pause-resume":
                     guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
                     if let failure = await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
                         return finish("action=\(action) failed: \(failure)")
                     }
+                case "import":
+                    if let failure = await importGame(id) { return finish("action=\(action) failed: \(failure)") }
                 case "queue", "downloading":
                     guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
                     if let failure = await (parts[0] == "queue" ? queue(app) : downloading(app)) {
@@ -164,7 +183,9 @@ enum UIDriver {
                 case "open":
                     let nav = AppNavigation.shared
                     let parts = id.split(separator: "#", maxSplits: 1).map(String.init)
-                    if parts.first == "licences" {
+                    if parts.first == "black" {
+                        BlackScreen.shared.show()
+                    } else if parts.first == "licences" {
                         var pages: [LicencePage] = []
                         if parts.count > 1 {
                             guard case .success(let licences) = BundledLicences.loaded,
@@ -178,6 +199,11 @@ enum UIDriver {
                     } else if let title = parts.first, library.title(title) != nil {
                         nav.openTitle(title)
                         nav.pageSection = parts.count > 1 ? parts[1] : nil
+                    } else if let title = parts.first, let key = StoreGameKey(titleID: title),
+                              (key.store == .gog && GOGAccount.shared.game(key.id) != nil)
+                                || (key.store == .epic && EpicAccount.shared.game(key.id) != nil) {
+                        // A store's game not installed: its page, as its library tile opens it.
+                        nav.openGame(.store(key))
                     } else {
                         return finish("action=\(action) refused: \(id) is not a screen or a catalogued title")
                     }
@@ -436,24 +462,24 @@ enum UIDriver {
         log("install \(app) \(name): started")
         installs.install(app, name: name)
         if let pauseAt {
-            while let j = installs.jobs[app], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
+            while let j = installs.jobs[.steam(app)], j.isRunning || j.phase == .queued, (j.fraction ?? 0) < pauseAt {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            guard let j = installs.jobs[app], j.isRunning else { return "ended before \(Int(pauseAt * 100))% (\(phase(installs.jobs[app])))" }
+            guard let j = installs.jobs[.steam(app)], j.isRunning else { return "ended before \(Int(pauseAt * 100))% (\(phase(installs.jobs[.steam(app)])))" }
             installs.pause(app)
-            while installs.jobs[app]?.isRunning == true { try? await Task.sleep(for: .milliseconds(100)) }
+            while installs.jobs[.steam(app)]?.isRunning == true { try? await Task.sleep(for: .milliseconds(100)) }
             let staged = TitleInstaller(layout: installs.layout, session: nil, log: .silent).hasStage(appID: app)
-            log("install \(app): paused at \(j.detail ?? "?"); phase=\(phase(installs.jobs[app])) stage kept=\(staged)")
-            guard staged, installs.jobs[app]?.phase == .paused(nil) else { return "pause did not keep a resumable stage" }
+            log("install \(app): paused at \(j.detail ?? "?"); phase=\(phase(installs.jobs[.steam(app)])) stage kept=\(staged)")
+            guard staged, installs.jobs[.steam(app)]?.phase == .paused(nil) else { return "pause did not keep a resumable stage" }
             installs.resume(app)
             // Until the resumed run's first progress: where the kept stage put it.
-            while let p = installs.jobs[app]?.phase, p == .queued || p == .preparing {
+            while let p = installs.jobs[.steam(app)]?.phase, p == .queued || p == .preparing {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            log("install \(app): resumed at \(installs.jobs[app]?.detail ?? "?") (\(phase(installs.jobs[app])))")
+            log("install \(app): resumed at \(installs.jobs[.steam(app)]?.detail ?? "?") (\(phase(installs.jobs[.steam(app)])))")
         }
         var lastLog = Date()
-        while let j = installs.jobs[app] {
+        while let j = installs.jobs[.steam(app)] {
             if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
             if Date().timeIntervalSince(lastLog) > 30 {
                 lastLog = Date()
@@ -471,6 +497,111 @@ enum UIDriver {
         return nil
     }
 
+    /// Add a game with `path` (under Documents) as the picked item; nil once it is in the library.
+    private static func importGame(_ path: String) async -> String? {
+        guard !path.split(separator: "/").contains(".."), let installs = SteamAccountModel.current?.installs else {
+            return "not a path under Documents, or no download queue"
+        }
+        let url = WineHostRuntime.documents.appendingPathComponent(path)
+        guard FileManager.default.fileExists(atPath: url.path) else { return "Documents/\(path) is not there" }
+        let started = Date()
+        log("import \(path): picked")
+        if let refusal = await GameImports.shared.picked(url) { return "refused: \(refusal)" }
+        guard let job = installs.order.first(where: { $0.kind == .import && $0.record.source == url.lastPathComponent }) else {
+            return "no import job queued"
+        }
+        let key = job.key, folder = job.name
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("import \(path): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let library = LibraryModel.shared
+        let find = { library.catalog.titles.first { $0.installDir.lowercased() == folder.lowercased() } }
+        for _ in 0..<600 where find() == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        guard let t = find() else { return "done, but C:\\Games\\\(folder) is not in the library" }
+        log(String(format: "import \(path): in the library as \(t.id) [\(t.badge.rawValue)] source=\(t.source.rawValue) "
+                    + "store=\(t.store.rawValue) size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.1f s",
+                   Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// The Epic page's Install (or Update) of `app`; nil once the live build is in the library.
+    private static func installEpic(_ app: String) async -> String? {
+        let epic = EpicAccount.shared
+        for _ in 0..<300 where epic.state == .unknown { try? await Task.sleep(for: .milliseconds(100)) }
+        guard epic.state == .signedIn else { return "Epic Games is not signed in" }
+        if epic.games.isEmpty { await epic.loadGames() }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        guard let g = epic.game(app) else { return "Epic does not list \(app) in this account" }
+        if let why = epic.refusal(app) { return "refused: \(why)" }
+        let key = StoreGameKey(store: .epic, id: app)
+        let before = LibraryModel.shared.title(key.titleID)?.storeVersion
+        let started = Date()
+        log("install epic-\(app) \(g.title): started" + (before != nil ? " (an update)" : ""))
+        epic.install(app, name: g.title, kind: before != nil ? .update : .install)
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("install epic-\(app): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let library = LibraryModel.shared
+        // The job set the build it installed as the newest; adoption names it once the receipt is read.
+        for _ in 0..<600 where library.title(key.titleID).map({ $0.storeVersion != epic.newest[app] }) ?? true {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        log(String(format: "install epic-\(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
+                    + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") args=\(t.storeArguments ?? []) after %.0f s",
+                   Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// The GOG page's Install (or Update) of `spec` (`<id>` or `<id>@<build>`); nil once the build is in the library.
+    private static func installGOG(_ spec: String) async -> String? {
+        let parts = spec.split(separator: "@", maxSplits: 1).map(String.init)
+        let pid = parts[0], build = parts.count > 1 ? parts[1] : nil
+        let gog = GOGAccount.shared
+        for _ in 0..<300 where gog.state == .unknown { try? await Task.sleep(for: .milliseconds(100)) }
+        guard gog.state == .signedIn else { return "GOG is not signed in" }
+        if gog.games.isEmpty { await gog.loadGames() }
+        guard let installs = SteamAccountModel.current?.installs else { return "no download queue" }
+        let key = StoreGameKey(store: .gog, id: pid)
+        let name = gog.game(pid)?.title ?? "GOG \(pid)"
+        let before = LibraryModel.shared.title(key.titleID)?.storeVersion
+        let installed = before != nil
+        let started = Date()
+        log("install gog-\(spec) \(name): started" + (installed ? " (an update)" : ""))
+        gog.install(pid, name: name, kind: installed ? .update : .install, build: build)
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("install gog-\(pid): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let library = LibraryModel.shared
+        for _ in 0..<600 where [nil, before].contains(library.title(key.titleID)?.storeVersion) && build != before {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        await gog.checkUpdate(pid)
+        log(String(format: "install gog-\(pid): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
+                    + "newest=\(gog.newest[pid] ?? "?") size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s",
+                   Date().timeIntervalSince(started)))
+        return nil
+    }
+
     /// The Install button's call, then on at once; nil when the job is in the queue.
     private static func queue(_ app: UInt32) async -> String? {
         guard let steam = SteamAccountModel.current else { return "no Steam model" }
@@ -478,7 +609,7 @@ enum UIDriver {
         let installs = steam.installs
         let name = steam.games.first { $0.id == app }?.info.name ?? "app \(app)"
         installs.install(app, name: name)
-        guard installs.jobs[app] != nil else { return "no job queued" }
+        guard installs.jobs[.steam(app)] != nil else { return "no job queued" }
         log("queue \(app) \(name): \(queueLine(installs))")
         return nil
     }
@@ -488,18 +619,18 @@ enum UIDriver {
         guard let installs = SteamAccountModel.current?.installs else { return "no Steam model" }
         let started = Date()
         while Date().timeIntervalSince(started) < 120 {
-            if let j = installs.jobs[app], j.phase == .downloading, j.progress != nil {
+            if let j = installs.jobs[.steam(app)], j.phase == .downloading, j.progress != nil {
                 log(String(format: "downloading \(app): %@ after %.1f s; queue: %@", j.detail ?? "?",
                            Date().timeIntervalSince(started), queueLine(installs)))
                 return nil
             }
-            if installs.jobs[app] == nil { return "no job for \(app) (\(queueLine(installs)))" }
+            if installs.jobs[.steam(app)] == nil { return "no job for \(app) (\(queueLine(installs)))" }
             try? await Task.sleep(for: .milliseconds(250))
         }
         return "not downloading after 120 s (\(queueLine(installs)))"
     }
 
-    private static func queueLine(_ installs: SteamInstalls) -> String {
+    private static func queueLine(_ installs: Downloads) -> String {
         let jobs = installs.order.map { "\($0.appID) \($0.kind.rawValue) \(phase($0))" }
         return (jobs.isEmpty ? "empty" : jobs.joined(separator: ", ")) + (installs.blocked.map { " (\($0))" } ?? "")
     }
@@ -522,7 +653,7 @@ enum UIDriver {
         return ", global \(s.isEmpty ? "{}" : json)"
     }
 
-    private static func phase(_ j: SteamInstalls.Job?) -> String { j.map { "\($0.phase)" } ?? "none" }
+    private static func phase(_ j: Downloads.Job?) -> String { j.map { "\($0.phase)" } ?? "none" }
 
     /// The Uninstall button's call; nil when the folder, record and catalogue entry are gone.
     private static func uninstall(_ id: String) async -> String? {

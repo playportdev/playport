@@ -2,7 +2,8 @@
 // Settings › Developer, dev builds only (decision 0009): the diagnostics a
 // game's next launch runs with (Diagnostics.swift), the memory simulations
 // (MemoryLimit), the on-device pairing experiment (iOS 27), the probes
-// (HelperLifetimeProbe.swift), the logs and the wine_host ABI. Every control
+// (HelperLifetimeProbe.swift), the black screen (BlackScreen.swift), the logs
+// and the wine_host ABI. Every control
 // is a row on the ring; a choice opens a list picker. The workstation sets
 // the same keys with `pp ui --action set:KEY=VALUE` (decision 0012).
 
@@ -113,6 +114,9 @@ struct DeveloperSettings: View {
                hint: "Restart") {
             if !restart.restarting, !probe.busy { restart.restart(notice: nil) }
         }
+        PadRow(id: "set:dev:blackScreen", title: "Black screen",
+               subtitle: "Pure black at the lowest brightness, for an unlocked phone left alone; a tap or any button wakes it",
+               hint: "Show") { BlackScreen.shared.show() }
     }
 
     // MARK: logs

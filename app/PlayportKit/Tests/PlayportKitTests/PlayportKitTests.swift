@@ -440,6 +440,68 @@ final class CatalogTests: XCTestCase {
         XCTAssertEqual(Adoption.receipts(in: paths.layout.installsDir).map(\.appID), [4020])
     }
 
+    func testAdoptionReadsStoreReceiptsAndKeepsEveryOldID() throws {
+        let cohort = try Cohort.load(directory: titlesDir)
+        try file("Hollow Knight/hollow_knight.exe")
+        try file("GMod DS/srcds.exe")
+        try file("Found Game/found.exe")
+        try file("GOG Game/bin/launcher.exe")
+        try file("GOG Game/bin/game.exe")
+        try file("Imported/imported.exe")
+        let paths = PlayportPaths.container(home: root.appendingPathComponent("home"))
+        let at = Date(timeIntervalSince1970: 1_790_000_000)
+        try paths.layout.saveReceipt(StoreReceipt(store: .gog, storeID: "1207664663", name: "A GOG Game", installDir: "GOG Game",
+                                                  version: "57107", executable: "BIN/GAME.EXE", arguments: ["-windowed"],
+                                                  files: 2, bytes: 2, installedAt: at))
+        try paths.layout.saveReceipt(StoreReceipt(store: .local, storeID: "imported", name: "Imported", installDir: "Imported",
+                                                  files: 1, bytes: 1, installedAt: at, importedFrom: "Imported", hintSteamAppID: 70))
+        XCTAssertEqual(paths.layout.receiptFile(StoreGameKey(store: .local, id: "My Game")).lastPathComponent, "local-my%20game.json")
+        let stores = paths.layout.storeReceipts()
+        XCTAssertEqual(stores.map(\.storeID), ["1207664663", "imported"])
+        let c = Adoption.scan(games: games, cohort: cohort, receipts: [try receipt(app: 4020, dir: "GMod DS")],
+                              storeReceipts: stores, previous: Catalog())
+        let byDir = Dictionary(uniqueKeysWithValues: c.titles.map { ($0.installDir, $0) })
+        XCTAssertEqual(byDir["Hollow Knight"]?.id, "app-367520")
+        XCTAssertEqual(byDir["Hollow Knight"]?.key, .steam(367520))
+        XCTAssertEqual(byDir["GMod DS"]?.id, "app-4020")
+        XCTAssertEqual(byDir["GMod DS"]?.store, .steam)
+        XCTAssertEqual(byDir["Found Game"]?.id, "dir-found game")
+        XCTAssertEqual(byDir["Found Game"]?.key, StoreGameKey(store: .local, id: "found game"))
+        let gog = try XCTUnwrap(byDir["GOG Game"])
+        XCTAssertEqual(gog.id, "gog-1207664663")
+        XCTAssertEqual(gog.source, .installed)
+        XCTAssertEqual(gog.store, .gog)
+        XCTAssertNil(gog.appID)
+        XCTAssertEqual(gog.executable, #"bin\game.exe"#)
+        XCTAssertEqual(gog.storeVersion, "57107")
+        XCTAssertEqual(try gog.launchPlan(cohort: cohort).args, ["-windowed"])
+        let imported = try XCTUnwrap(byDir["Imported"])
+        XCTAssertEqual(imported.id, "dir-imported")
+        XCTAssertEqual(imported.source, .imported)
+        XCTAssertEqual(imported.store, .local)
+        XCTAssertEqual(imported.hintSteamAppID, 70)
+        XCTAssertNil(imported.appID, "a steam_appid.txt hint is not a Steam identity")
+    }
+
+    func testACatalogueFromBeforeStoresLoadsWithTheStoreFromItsAppID() throws {
+        let json = """
+        {"version":1,"titles":[
+         {"id":"app-367520","appID":367520,"name":"Hollow Knight","installDir":"Hollow Knight","executable":"hollow_knight.exe",
+          "depots":[],"source":"cohort","addedAt":"2026-09-24T00:00:00Z"},
+         {"id":"dir-x","name":"X","installDir":"X","depots":[],"source":"found","addedAt":"2026-09-24T00:00:00Z"}]}
+        """
+        let url = root.appendingPathComponent("catalog.json")
+        try Data(json.utf8).write(to: url)
+        let c = CatalogStore(url: url).load()
+        XCTAssertEqual(c.titles.map(\.store), [.steam, .local])
+        XCTAssertEqual(c.titles.map(\.key), [.steam(367520), StoreGameKey(store: .local, id: "x")])
+        XCTAssertEqual(StoreGameKey(titleID: "gog-12")?.store, .gog)
+        XCTAssertEqual(StoreGameKey(titleID: "epic-Sugar")?.id, "Sugar")
+        XCTAssertEqual(StoreGameKey(titleID: "dir-Hollow Knight")?.titleID, "dir-hollow knight")
+        XCTAssertNil(StoreGameKey(titleID: "app-x"))
+        XCTAssertNil(StoreGameKey(titleID: "other"))
+    }
+
     func testVerifyCountsBadAndUnlistedFiles() async throws {
         try file("T/t.exe", "game")
         try file("T/data.bin", "data")
@@ -994,19 +1056,42 @@ final class LibraryListTests: XCTestCase {
     }
 
     func testChipsFilter() {
-        func ids(_ f: LibraryFilter, downloading: Set<UInt32> = []) -> [String] {
+        func ids(_ f: LibraryFilter, downloading: Set<StoreGameKey> = []) -> [String] {
             LibraryList.shown(entries, filter: f, sort: .name, downloading: downloading).map(\.id)
         }
         XCTAssertEqual(ids(.installed), ["app-367520", "dir-my game"])
-        XCTAssertEqual(ids(.installed, downloading: [588650]), ["app-588650", "app-367520", "dir-my game"],
+        XCTAssertEqual(ids(.installed, downloading: [.steam(588650)]), ["app-588650", "app-367520", "dir-my game"],
                        "a download counts as installed")
         XCTAssertEqual(ids(.steam), ["app-504230", "app-588650", "app-367520"])
         XCTAssertEqual(ids(.all), ["app-504230", "app-588650", "app-367520", "dir-my game"])
-        XCTAssertEqual(LibraryFilter.allCases, [.all, .installed, .steam])
-        XCTAssertEqual(LibraryFilter.allCases.map(\.label), ["All", "Installed", "Steam"])
-        XCTAssertEqual(LibraryFilter.all.next, .installed)
-        XCTAssertEqual(LibraryFilter.installed.next, .steam)
-        XCTAssertEqual(LibraryFilter.steam.next, .all)
+        let shown = LibraryFilter.shown(stores: [])
+        XCTAssertEqual(shown, [.all, .installed, .steam])
+        XCTAssertEqual(shown.map(\.label), ["All", "Installed", "Steam"])
+        XCTAssertEqual(LibraryFilter.all.next(in: shown), .installed)
+        XCTAssertEqual(LibraryFilter.installed.next(in: shown), .steam)
+        XCTAssertEqual(LibraryFilter.steam.next(in: shown), .all)
+        XCTAssertEqual(LibraryFilter.shown(stores: [.gog]), [.all, .installed, .steam, .gog])
+        XCTAssertEqual(LibraryFilter.shown(stores: [.epic, .gog]).map(\.label), ["All", "Installed", "Steam", "GOG", "Epic Games"])
+        XCTAssertEqual(LibraryFilter.gog.next(in: shown), .all, "a chip no longer shown starts the row again")
+    }
+
+    func testStoreCopiesJoinTheirOwnStoreOnly() {
+        var gog = title("Hollow Knight", app: nil, played: 10)
+        gog.id = "gog-1308320804"
+        gog.store = .gog
+        gog.storeID = "1308320804"
+        let local = title("Hollow Knight GOG", app: nil)
+        let owned = [LibraryList.Owned(key: StoreGameKey(store: .gog, id: "1308320804"), name: "Hollow Knight"),
+                     LibraryList.Owned(key: StoreGameKey(store: .gog, id: "1207658924"), name: "Unowned Elsewhere"),
+                     LibraryList.Owned(appID: 367520, name: "Hollow Knight")]
+        let e = LibraryList.entries(titles: [gog, local], owned: owned)
+        XCTAssertEqual(e.map(\.id), ["gog-1308320804", "dir-hollow knight gog", "gog-1207658924", "app-367520"])
+        XCTAssertEqual(e.map(\.source), [.gog, .local, .gog, .steam])
+        XCTAssertTrue(e[0].owned, "the installed GOG copy joins its GOG listing")
+        XCTAssertFalse(e[1].owned, "an imported folder joins no store")
+        XCTAssertFalse(e[3].installed, "the GOG copy does not install the Steam one")
+        XCTAssertEqual(LibraryList.shown(e, filter: .gog, sort: .name).map(\.id), ["gog-1308320804", "gog-1207658924"])
+        XCTAssertEqual(LibraryList.duplicateSourceIDs(e), ["gog-1308320804", "app-367520"])
     }
 
     func testSameNameFromDifferentSourcesStaysSeparate() {
@@ -1233,16 +1318,17 @@ final class OptionValueTests: XCTestCase {
 final class SettingsModelTests: XCTestCase {
     func testTheSectionsAndTheirOldNames() {
         XCTAssertEqual(SettingsSection.all(developer: false).map(\.title),
-                       ["Steam account", "Graphics", "Downloads", "Controllers", "Storage", "Setup check", "About"])
+                       ["Accounts", "Graphics", "Downloads", "Controllers", "Storage", "Setup check", "About"])
         XCTAssertEqual(SettingsSection.all(developer: true).last, .developer)
-        XCTAssertEqual(SettingsSection.named("account"), .steam)
+        XCTAssertEqual(SettingsSection.named("account"), .accounts)
+        XCTAssertEqual(SettingsSection.named("steam"), .accounts)
         XCTAssertEqual(SettingsSection.named("diagnostics"), .developer)
         XCTAssertEqual(SettingsSection.named("pairing"), .developer)
         XCTAssertEqual(SettingsSection.named("jit"), .setup)
         XCTAssertEqual(SettingsSection.named("graphics"), .graphics)
         XCTAssertNil(SettingsSection.named("nope"))
         // Up and down stop at the ends; a release build never steps onto Developer.
-        XCTAssertEqual(SettingsSection.steam.step(-1, developer: true), .steam)
+        XCTAssertEqual(SettingsSection.accounts.step(-1, developer: true), .accounts)
         XCTAssertEqual(SettingsSection.about.step(1, developer: false), .about)
         XCTAssertEqual(SettingsSection.about.step(1, developer: true), .developer)
         XCTAssertEqual(SettingsSection.graphics.step(1, developer: false), .downloads)
@@ -1281,6 +1367,15 @@ final class SettingsModelTests: XCTestCase {
 }
 
 final class DownloadQueueTests: XCTestCase {
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("dq-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
+
     private func job(_ id: UInt32, _ kind: DownloadJob.Kind = .install, hold: DownloadJob.Hold? = nil) -> DownloadJob {
         DownloadJob(appID: id, name: "Game \(id)", kind: kind, hold: hold)
     }
@@ -1328,6 +1423,38 @@ final class DownloadQueueTests: XCTestCase {
         XCTAssertEqual(loaded.next?.appID, 1)
         try Data("not json".utf8).write(to: store.url)
         XCTAssertEqual(store.load(), DownloadQueue(), "an unreadable file is an empty queue")
+    }
+
+    func testAQueueFromBeforeStoreKeysLoadsAsSteamJobs() throws {
+        let json = """
+        {"jobs":[{"appID":367520,"name":"Hollow Knight","kind":"update","automatic":false,"hold":{"player":{}}}],
+         "done":[{"appID":4020,"name":"GMod","kind":"install","bytes":5,"at":"2026-09-21T14:13:20Z"}],
+         "declined":[70,12]}
+        """
+        let url = root.appendingPathComponent("downloads.json")
+        try Data(json.utf8).write(to: url)
+        let q = DownloadQueueStore(url: url).load()
+        XCTAssertEqual(q.jobs.map(\.key), [.steam(367520)])
+        XCTAssertEqual(q.jobs.first?.hold, .player)
+        XCTAssertEqual(q.done.map(\.key), [.steam(4020)])
+        XCTAssertEqual(q.declined, [70: 12])
+    }
+
+    func testAnImportIsAJobOfItsFolder() throws {
+        var q = DownloadQueue()
+        let key = StoreGameKey(store: .local, id: "Celeste")
+        q.add(DownloadJob(key: key, name: "Celeste", kind: .import, bytes: 1_000))
+        q.add(job(7))
+        q.hold(key, .stopped("Pick the folder again."))
+        XCTAssertEqual(q.next?.appID, 7)
+        let url = root.appendingPathComponent("downloads.json")
+        try DownloadQueueStore(url: url).save(q)
+        let loaded = DownloadQueueStore(url: url).load()
+        XCTAssertEqual(loaded, q)
+        XCTAssertEqual(loaded.job(key)?.kind, .import)
+        XCTAssertNil(loaded.job(key)?.appID)
+        q.finished(key, bytes: 1_000, at: Date(timeIntervalSince1970: 1_790_000_000))
+        XCTAssertEqual(q.done.first?.line, "Celeste · 1.00 KB")
     }
 
     func testDoneTodayKeepsTodaysNewestFirst() {
@@ -1626,6 +1753,22 @@ final class SetupChecklistTests: XCTestCase {
         XCTAssertFalse(SetupChecklist.offersNotNow(.pairing, f, firstRun: true))
         f.steamSignedIn = true
         XCTAssertFalse(SetupChecklist.offersNotNow(.steam, f, firstRun: true))
+        // GOG alone settles the Accounts step too.
+        var g = SetupFacts(pairing: true, tunnelUp: true, steamSignedIn: false, memoryEntitled: true)
+        XCTAssertFalse(SetupChecklist.complete(g))
+        g.gogSignedIn = true
+        XCTAssertTrue(SetupChecklist.complete(g))
+        XCTAssertEqual(SetupChecklist.item(.steam, g).title, "Accounts")
+        XCTAssertTrue(SetupChecklist.item(.steam, g).detail.hasPrefix("Signed in to GOG"))
+        g.epicSignedIn = true
+        XCTAssertEqual(SetupChecklist.item(.steam, g).detail.components(separatedBy: ":").first, "Signed in to GOG and Epic Games")
+        g.steamSignedIn = true
+        XCTAssertEqual(SetupChecklist.item(.steam, g).detail.components(separatedBy: ":").first, "Signed in to Steam, GOG and Epic Games")
+        g.steamSignedIn = false
+        g.gogSignedIn = nil
+        XCTAssertEqual(g.accountSignedIn, true, "Epic alone settles it while GOG is still being read")
+        g.epicSignedIn = false
+        XCTAssertNil(g.accountSignedIn, "unknown while GOG is still being read")
     }
 
     func testTheMemoryStepIsTheEntitlementOrNotNow() {

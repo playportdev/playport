@@ -185,6 +185,9 @@ then plays, a pad) runs as one session:
   phone) and charge (`pp phone status` shows the battery). JIT comes only from the app's
   own helper extension, for every launch ([DEVICE.md](docs/DEVICE.md#jit-activation)).
   Keep the app in front during a launch, and connect a controller before it.
+- When told the session is unattended, run `./pp phone unattended on` first: between
+  runs the phone then shows a black screen, not the lit Home Screen (OLED burn-in;
+  [DEVICE.md](docs/DEVICE.md#sharing-the-phone)). `off` when the person is back.
 - A JIT step that times out connecting to `10.7.0.1` means LocalDevVPN is down, and a
   phone near empty fails runs: both need the person at the phone, so ask; do not retry.
 - A result that others rely on goes in `docs/evidence/<date>-<topic>.md` with the
