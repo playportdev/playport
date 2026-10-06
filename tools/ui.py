@@ -535,12 +535,32 @@ def main(argv=None):
                     return ev.result(False, JIT_UNREACHABLE["exit"], done=done.get("outcome"),
                                      why=JIT_UNREACHABLE["why"], hint=JIT_UNREACHABLE["hint"], **end)
                 return ev.result(ok, 0 if ok else 1, done=done.get("outcome"), **end)
+            # A title that ended with an error before the stop condition: the app restarts
+            # itself after it (AppRestart), so the watch can reach --until in the new process
+            # without seeing the end (2026-10-06, vk-s3-dxvk-notiler1). Its log line says so.
+            ended = title_failed(log, nonce)
+            if ended:
+                return ev.result(False, 1, why=f"the title ended before the stop condition: {ended}", **end)
             return ev.result(True, 0, why=f"until {a.until}", **end)
     except phonelib.PhoneError as e:
         return phonelib.fail(ev, str(e))
     except Terminated as e:   # while waiting for the lock: nothing ran
         return ev.result(False, 143, why="terminated", signal=str(e), out=out)
     return ev.result(False, 143, why="terminated", signal=term.signal, app_ended=term.app_ended, out=out)
+
+
+def title_failed(log, nonce):
+    """The `exit=… after_s=…` of this launch's `title: done` line when the title ended
+    with a nonzero code (or a launch failure); None when it did not end, or ended with 0."""
+    try:
+        with open(log, errors="replace") as f:
+            for line in f:
+                m = re.search(r"title: done nonce=" + re.escape(nonce) + r" (.*)$", line)
+                if m and not re.match(r"exit=0x0+ ", m[1] + " "):
+                    return m[1].strip()
+    except (OSError, TypeError):
+        pass
+    return None
 
 
 # When a play last ended, for pp perf --cool: a game launched here heats the
