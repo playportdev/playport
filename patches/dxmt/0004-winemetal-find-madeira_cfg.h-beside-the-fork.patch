@@ -15,7 +15,7 @@ Offered-upstream: no
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
-index 5105e26..e44c827 100644
+index 731eacd..eb79842 100644
 --- a/src/winemetal/unix/winemetal_unix.c
 +++ b/src/winemetal/unix/winemetal_unix.c
 @@ -1,5 +1,5 @@

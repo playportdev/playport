@@ -34,7 +34,7 @@ Offered-upstream: no
  1 file changed, 54 insertions(+), 1 deletion(-)
 
 diff --git a/Source/Windows/Common/FEXUnixLib.cpp b/Source/Windows/Common/FEXUnixLib.cpp
-index 3188034..8e14475 100644
+index e37807f..d122566 100644
 --- a/Source/Windows/Common/FEXUnixLib.cpp
 +++ b/Source/Windows/Common/FEXUnixLib.cpp
 @@ -76,9 +76,23 @@ bool Init(HMODULE NtDll) {

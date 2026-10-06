@@ -47,7 +47,7 @@ Offered-upstream: no
  2 files changed, 96 insertions(+), 11 deletions(-)
 
 diff --git a/server/thread.c b/server/thread.c
-index 34d2e05ce14..0853e694269 100644
+index 34d2e05..0853e69 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -370,6 +370,15 @@ static inline void init_thread_structure( struct thread *thread )
@@ -165,7 +165,7 @@ index 34d2e05ce14..0853e694269 100644
      thread->state = TERMINATED;
      thread->exit_time = current_time;
 diff --git a/server/thread.h b/server/thread.h
-index 96c643c64f1..50f543a8c1b 100644
+index 96c643c..50f543a 100644
 --- a/server/thread.h
 +++ b/server/thread.h
 @@ -100,8 +100,43 @@ struct thread

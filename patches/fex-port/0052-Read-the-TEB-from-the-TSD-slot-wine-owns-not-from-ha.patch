@@ -118,7 +118,7 @@ index 64233b9..7e6037c 100644
  
  constexpr uint64_t EC_CODE_BITMAP_MAX_ADDRESS = 1ULL << 47;
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index e77a6ce..de98548 100644
+index 5e7e9d4..268eb0e 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -114,7 +114,7 @@ void Dispatcher::EmitDispatcher() {
@@ -158,7 +158,7 @@ index e77a6ce..de98548 100644
  #else
      ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
 diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
-index 9a4fe41..331db8c 100644
+index 39011b4..3f5a77d 100644
 --- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 @@ -343,7 +343,7 @@ DEF_OP(MonoBackpatcherWrite) {
@@ -203,7 +203,7 @@ index c910a70..5e96f35 100644
  .macro IOS_LOAD_TEB reg
    mrs \reg, TPIDRRO_EL0
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index fa5299c..11cad10 100644
+index e9ebe7b..8290819 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -77,6 +77,14 @@ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);

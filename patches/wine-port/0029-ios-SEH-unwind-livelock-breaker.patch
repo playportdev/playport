@@ -28,7 +28,7 @@ Offered-upstream: no
  1 file changed, 37 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index d30b29f3552..b0cd8204373 100644
+index b82e212..9ae02b1 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1739,6 +1739,43 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )

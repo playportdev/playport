@@ -25,7 +25,7 @@ Offered-upstream: no
  1 file changed, 10 insertions(+), 2 deletions(-)
 
 diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
-index 4a25216..f8e0fdb 100644
+index bfabbe0..54e4fdb 100644
 --- a/libs/vkd3d/device.c
 +++ b/libs/vkd3d/device.c
 @@ -9614,8 +9614,13 @@ static void d3d12_device_caps_init_feature_level(struct d3d12_device *device)

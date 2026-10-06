@@ -27,7 +27,7 @@ Offered-upstream: no
  2 files changed, 78 insertions(+), 10 deletions(-)
 
 diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
-index bfa03d1..a8c68dc 100644
+index 7b29f1e..fc73f36 100644
 --- a/src/dxmt/dxmt_context.cpp
 +++ b/src/dxmt/dxmt_context.cpp
 @@ -864,6 +864,17 @@ QueryReadbacks

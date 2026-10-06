@@ -31,7 +31,7 @@ Offered-upstream: no
  1 file changed, 17 insertions(+), 1 deletion(-)
 
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 0abf615..b225bf9 100644
+index 3cd9c22..0e127a5 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -628,6 +628,22 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&

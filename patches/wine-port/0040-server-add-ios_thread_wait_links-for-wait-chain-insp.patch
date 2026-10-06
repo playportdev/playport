@@ -23,7 +23,7 @@ Offered-upstream: no
  1 file changed, 18 insertions(+)
 
 diff --git a/server/thread.c b/server/thread.c
-index 2d685198e74..fccc462e463 100644
+index 2d68519..fccc462 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -965,6 +965,24 @@ int resume_thread( struct thread *thread )

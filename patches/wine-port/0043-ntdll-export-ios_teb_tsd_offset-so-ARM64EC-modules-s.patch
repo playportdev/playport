@@ -30,7 +30,7 @@ Offered-upstream: no
  2 files changed, 8 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index ff6d4a44f6f..4de99f5149f 100644
+index ff6d4a4..4de99f5 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -77,6 +77,13 @@ static DWORD (WINAPI *pCtrlRoutine)(void *);
@@ -48,7 +48,7 @@ index ff6d4a44f6f..4de99f5149f 100644
  
  /* windows directory */
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index 579f8fa2f4a..0f21e4e0819 100644
+index 3548e1c..f2dabdc 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
 @@ -1772,6 +1772,7 @@

@@ -47,7 +47,7 @@ Offered-upstream: no
  4 files changed, 53 insertions(+)
 
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index c14e7d5..12bc7b1 100644
+index e630165..0adc672 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -135,6 +135,15 @@ void Dispatcher::EmitDispatcher() {
@@ -128,7 +128,7 @@ index 215591b..112e01f 100644
  }
  
 diff --git a/Source/Windows/Common/Logging.cpp b/Source/Windows/Common/Logging.cpp
-index 8980bda..5911b85 100644
+index 21fbdfd..bbb025e 100644
 --- a/Source/Windows/Common/Logging.cpp
 +++ b/Source/Windows/Common/Logging.cpp
 @@ -9,12 +9,23 @@
@@ -155,8 +155,8 @@ index 8980bda..5911b85 100644
    if (WineDbgOut) {
      WineDbgOut(Output.c_str());
    } else if (LogFile) {
-@@ -34,10 +45,18 @@ static void AssertHandler(const char* Message) {
- 
+@@ -40,10 +51,18 @@ void UnimplementedLog(const char* Func) {
+ } // namespace FEX::Windows::Logging
  namespace FEX::Windows::Logging {
  void Init() {
 +#ifndef FEX_IOS_HOST

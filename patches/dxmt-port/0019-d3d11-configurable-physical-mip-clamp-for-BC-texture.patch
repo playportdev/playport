@@ -36,7 +36,7 @@ Offered-upstream: no
  1 file changed, 142 insertions(+), 2 deletions(-)
 
 diff --git a/src/d3d11/d3d11_device.cpp b/src/d3d11/d3d11_device.cpp
-index c612fab..0f193b2 100644
+index 558e043..2a1f966 100644
 --- a/src/d3d11/d3d11_device.cpp
 +++ b/src/d3d11/d3d11_device.cpp
 @@ -23,6 +23,11 @@

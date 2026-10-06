@@ -22,7 +22,7 @@ Offered-upstream: no
  1 file changed, 13 insertions(+), 1 deletion(-)
 
 diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
-index 460e78044..4cc531314 100644
+index 4b21427..cd25c47 100644
 --- a/Source/Windows/Common/CPUFeatures.cpp
 +++ b/Source/Windows/Common/CPUFeatures.cpp
 @@ -87,7 +87,19 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF

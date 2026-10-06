@@ -14,7 +14,7 @@ Offered-upstream: no
  1 file changed, 9 insertions(+)
 
 diff --git a/dlls/gdiplus/graphics.c b/dlls/gdiplus/graphics.c
-index 6996f23..6e1d08f 100644
+index 1b32e63..1adb259 100644
 --- a/dlls/gdiplus/graphics.c
 +++ b/dlls/gdiplus/graphics.c
 @@ -6171,6 +6171,15 @@ GpStatus WINGDIPAPI GdipMeasureString(GpGraphics *graphics,

@@ -104,7 +104,7 @@ contributions, not the right to use or distribute the code under its licence.
 | mingw-directx-headers (compiled into the DXMT slice) | executable | LGPL-2.1-or-later headers |
 | GnuTLS 3.8.9 | executable, statically | LGPL-2.1-or-later |
 | Nettle/Hogweed 3.10.1, GMP 6.3.0 | executable, statically | LGPL-3.0-or-later or GPL-2.0-or-later |
-| FreeType 2.13.3 | executable (in `libwin32u_unix.a`) | FreeType License (FTL) or GPL-2.0-or-later |
+| FreeType 2.14.3 | executable (in `libwin32u_unix.a`) | FreeType License (FTL) or GPL-2.0-or-later |
 | mingw-w64 `57b595039040eaa15bece85b7cc71d952281b269` (llvm-mingw 20260922's CRT/headers; aarch64 CRT rebuilt with arm64ec support) | compiled into PE binaries where runtime code/header definitions are used | ZPL-2.1 baseline with file-specific permissive/LGPL and other terms; runtime/source notice superset collected, not a linked-code audit ([NOTICES.md](NOTICES.md#mingw-w64-source-and-installed-notices)) |
 | LLVM 15.0.7 libraries (for airconv) | executable (in `libdxmt_combined.a`) | Apache-2.0 WITH LLVM-exception, plus the legacy LLVM licence; the link keeps Henry Spencer's regex and Unicode's `ConvertUTF`, which carry their own notices |
 | KosmicKrisp: Mesa plus `patches/mesa` (decisions 0014, 0015) | `KosmicKrisp.framework` | MIT for most files, each file per its SPDX header (Mesa `docs/license.rst`); Playport's patches keep that licence |
@@ -234,7 +234,7 @@ observed game playback does not constrain all shipped capabilities.
   require the Independent JPEG Group credit listed in [NOTICES.md](NOTICES.md).
 - Rust/stdlib/demangler and MoltenVK member candidates also appear. Cerbero's
   Rust 1.96.0 bootstrap and Vulkan SDK version are not verified embedded source
-  identities; Playport's separate Rust 1.98.1 inventory does not cover them.
+  identities; Playport's separate Rust 1.99.0 inventory does not cover them.
 
 `build/notices-gstreamer.py` preserves a checksum-verified notice superset for
 17 recipe-associated source archives, included in `pp notices`, and `pp source`
@@ -298,7 +298,7 @@ tester. The procedure is [DISTRIBUTION.md](DISTRIBUTION.md).
    commits, the Mesa, DXVK and vkd3d-proton commits (with their submodules),
    the gbe_fork commit with its `third-party/deps/common` archives and the
    Abseil tag,
-   FreeType `VER-2-13-3`, LLVM 15.0.7, the crypto tarballs with their
+   FreeType `VER-2-14-3`, LLVM 15.0.7, the crypto tarballs with their
    checksums, and GStreamer 1.28.7 with the Cerbero recipes and library
    sources its iOS release was built from, and the idevice source with its
    linked Rust dependencies. For online downloads, GPL-3.0 section 6(d) requires

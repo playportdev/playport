@@ -17,7 +17,7 @@ Offered-upstream: no
  1 file changed, 38 insertions(+)
 
 diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
-index 4c532fa..b6f4a34 100644
+index 5d72a94..2c3f9b1 100644
 --- a/build/ntdll-unix/signal_arm64_ios.c
 +++ b/build/ntdll-unix/signal_arm64_ios.c
 @@ -1316,6 +1316,11 @@ static int ios_fault_read_insn( uint64_t fault_pc, uint32_t *out )

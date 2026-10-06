@@ -293,10 +293,10 @@ index 001adcb..40b9219 100644
        if (IsADRRange(ImmInstThree)) {
          // If within ADR range from the third instruction, then we can emit NOP+NOP+ADR
 diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
-index d292e5c..baedd17 100644
+index dd8e4aa..55c4c33 100644
 --- a/FEXCore/Source/CMakeLists.txt
 +++ b/FEXCore/Source/CMakeLists.txt
-@@ -9,7 +9,7 @@ set(FEXCORE_BASE_SRCS
+@@ -10,7 +10,7 @@ set(FEXCORE_BASE_SRCS
    Utils/SpinWaitLock.cpp
    Utils/WildcardMatcher.cpp)
  
@@ -305,7 +305,7 @@ index d292e5c..baedd17 100644
    list(APPEND FEXCORE_BASE_SRCS
      Utils/Allocator/64BitAllocator.cpp)
  endif()
-@@ -118,7 +118,9 @@ if (ENABLE_ZYDIS)
+@@ -119,7 +119,9 @@ if (ENABLE_ZYDIS)
    list(APPEND LIBS Zydis::Zydis)
  endif()
  
@@ -316,7 +316,7 @@ index d292e5c..baedd17 100644
    list(APPEND LIBS dl)
  else()
    list(APPEND LIBS synchronization)
-@@ -291,7 +293,7 @@ AddObject(${PROJECT_NAME}_object)
+@@ -296,7 +298,7 @@ AddObject(${PROJECT_NAME}_object)
  AddLibrary(${PROJECT_NAME} STATIC)
  AddLibrary(${PROJECT_NAME}_shared SHARED)
  
@@ -325,7 +325,7 @@ index d292e5c..baedd17 100644
    install(TARGETS ${PROJECT_NAME}_shared LIBRARY
      DESTINATION ${CMAKE_INSTALL_LIBDIR}
      COMPONENT Libraries)
-@@ -310,7 +312,7 @@ if (ENABLE_JEMALLOC_GLIBC_ALLOC)
+@@ -315,7 +317,7 @@ if (ENABLE_JEMALLOC_GLIBC_ALLOC)
    target_link_libraries(JemallocLibs INTERFACE FEX_jemalloc_glibc)
  endif()
  
@@ -371,10 +371,10 @@ index 3ebadb5..18782d7 100644
    // All are caller saved
    constexpr std::array<ARMEmitter::VRegister, 16> SRAFPR = {
 diff --git a/FEXCore/Source/Interface/Core/CodeCache.cpp b/FEXCore/Source/Interface/Core/CodeCache.cpp
-index f6feedc..d19f745 100644
+index a9de6c7..ce7c8ad 100644
 --- a/FEXCore/Source/Interface/Core/CodeCache.cpp
 +++ b/FEXCore/Source/Interface/Core/CodeCache.cpp
-@@ -354,11 +354,24 @@ bool CodeCache::SaveData(Core::InternalThreadState& Thread, int fd, const Execut
+@@ -355,11 +355,24 @@ bool CodeCache::SaveData(Core::InternalThreadState& Thread, int fd, const Execut
    ::write(fd, Relocations.data(), Relocations.size() * sizeof(Relocations[0]));
  
    // Pad to next page in file so that the CodeBuffer can be mmap'ed into process on load
@@ -400,10 +400,10 @@ index f6feedc..d19f745 100644
    // Dump the host code (relocated for position-independent serialization)
    std::span CodeBufferData(reinterpret_cast<std::byte*>(CodeBuffer->GetBufferBase()),
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 8286c14..8043dc5 100644
+index 63280a4..8af9cfe 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
-@@ -542,11 +542,19 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -545,11 +545,19 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
    if (!HasCustomIR) {
      const auto* GuestCode = reinterpret_cast<const uint8_t*>(GuestRIP);
  
@@ -423,7 +423,7 @@ index 8286c14..8043dc5 100644
      Thread->OpDispatcher->BeginFunction(GuestRIP, &CodeBlocks, BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode,
                                          AreMonoHacksActive() && MonoBackpatcherBlock.load(std::memory_order_relaxed) == GuestRIP);
  
-@@ -804,6 +812,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -790,6 +798,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
  }
  
  ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst) {
@@ -432,7 +432,7 @@ index 8286c14..8043dc5 100644
    if (SourcecodeResolver && Config.GDBSymbols()) {
      auto MappedSection = SyscallHandler->LookupExecutableFileSection(Thread, GuestRIP);
      if (MappedSection) {
-@@ -813,8 +823,10 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -799,8 +809,10 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
    }
  
    // Generate IR + Meta Info
@@ -443,7 +443,7 @@ index 8286c14..8043dc5 100644
    if (!IRView) {
      Thread->FrontendDecoder->ValidateDisownedOrFree();
      Thread->OpDispatcher->ValidateDisownedOrFree();
-@@ -846,7 +858,9 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -832,7 +844,9 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
    // If the trap flag is set we generate single instruction blocks that each check to generate a single step exception.
    bool TFSet = Thread->CurrentFrame->State.flags[X86State::RFLAG_TF_RAW_LOC];
  
@@ -453,7 +453,7 @@ index 8286c14..8043dc5 100644
  
    // Release the IR
    Thread->OpDispatcher->DelayedDisownBuffer();
-@@ -878,16 +892,22 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -864,16 +878,22 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    FEXCORE_PROFILE_SCOPED("CompileBlock");
    FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedJITTime);
  
@@ -476,7 +476,7 @@ index 8286c14..8043dc5 100644
  
    Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, MaxInst);
  
-@@ -934,6 +954,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -920,6 +940,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedJITCount, 1);
  
    auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
@@ -485,7 +485,7 @@ index 8286c14..8043dc5 100644
    if (CodePtr == nullptr) {
      return 0;
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index b174dab..b57005b 100644
+index 2f4babd..972b84e 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -1,5 +1,9 @@
@@ -514,7 +514,7 @@ index b174dab..b57005b 100644
    EmitDispatcher();
  
    FEXCore::Allocator::VirtualName("FEXMem_Misc", reinterpret_cast<void*>(GetBufferBase()), MAX_DISPATCHER_CODE_SIZE);
-@@ -600,7 +606,16 @@ void Dispatcher::EmitDispatcher() {
+@@ -665,7 +671,16 @@ void Dispatcher::EmitDispatcher() {
  
    Start = reinterpret_cast<uint64_t>(DispatchPtr);
    End = GetCursorAddress<uint64_t>();
@@ -532,10 +532,10 @@ index b174dab..b57005b 100644
    if (CTX->Config.BlockJITNaming()) {
      fextl::string Name = fextl::fmt::format("Dispatch_{}", FHU::Syscalls::gettid());
 diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
-index 6ae165c..5885da7 100644
+index 78d5f1a..5944a7a 100644
 --- a/FEXCore/Source/Interface/Core/Frontend.cpp
 +++ b/FEXCore/Source/Interface/Core/Frontend.cpp
-@@ -1510,6 +1510,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1572,6 +1572,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
  
        // Do a bit of pointer math to figure out where we are in code
        InstStream = AdjustAddrForSpecialRegion(_InstStream, EntryPoint, RIPToDecode);
@@ -543,7 +543,7 @@ index 6ae165c..5885da7 100644
      } else if (BlockResume != -1) {
        BlockIt = BlockInfo.Blocks.begin() + BlockResume;
        BlockResume = -1;
-@@ -1544,6 +1545,9 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1606,6 +1607,9 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
        }
  
        LastFieldReadSize = 0;
@@ -553,7 +553,7 @@ index 6ae165c..5885da7 100644
        BlockIt->BlockStatus = DecodeInstruction(OpAddress);
        if (HitBadRelocation) {
          BlockInfo.TotalInstructionCount = 0;
-@@ -1668,6 +1672,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1727,6 +1731,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
    }
  
    BlockInfo.TotalInstructionCount = TotalInstructions;
@@ -561,7 +561,7 @@ index 6ae165c..5885da7 100644
  
    for (auto& Block : BlockInfo.Blocks) {
      Block.IsEntryPoint = BlockInfo.EntryPoints.contains(Block.Entry);
-@@ -1699,7 +1704,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+@@ -1758,7 +1763,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
    // Decode operating mode from thread's CS segment.
    const auto CSSegment = Core::CPUState::GetSegmentFromIndex(Thread->CurrentFrame->State, Thread->CurrentFrame->State.cs_idx);
    BlockInfo.Is64BitMode = CSSegment->L == 1;
@@ -571,7 +571,7 @@ index 6ae165c..5885da7 100644
  
    EntryPoint = PC;
    BlockInfo.EntryPoints = {PC};
-@@ -1731,6 +1738,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+@@ -1790,6 +1797,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
  
    EntryBlock = true;
    FinalInstruction = false;
@@ -593,7 +593,7 @@ index 5c0e656..4b8f9b1 100644
      cos = ::cos(src);
  #else
 diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-index c23f01a..19f94ae 100644
+index ef7e332..0c0a677 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 @@ -11,6 +11,10 @@ desc: Main glue logic of the arm64 splatter backend
@@ -615,7 +615,7 @@ index c23f01a..19f94ae 100644
  
  #include "Utils/MemberFunctionToPointer.h"
  #include "Utils/variable_length_integer.h"
-@@ -511,8 +516,14 @@ static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record,
+@@ -546,8 +551,14 @@ static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record,
      BranchEmit.b(BranchOffset);
    }
  
@@ -631,7 +631,7 @@ index c23f01a..19f94ae 100644
  }
  
  static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record) {
-@@ -522,8 +533,14 @@ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record
+@@ -557,8 +568,14 @@ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record
    // Restore branch +2 instructions to jump to the linker block
    BranchEmit.b(0x2);
  
@@ -647,7 +647,7 @@ index c23f01a..19f94ae 100644
  
    // No need to reset HostCode here as the exit linker pointer is stored separately, and if the block is relinked it will be updated.
  }
-@@ -589,21 +606,33 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+@@ -624,21 +641,33 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
          GuestRip, Record, [](FEXCore::Context::ExitFunctionLinkData* Record) { DirectBlockDelinker(Record, false); }, lk);
      }
  
@@ -685,7 +685,7 @@ index c23f01a..19f94ae 100644
  
      Thread->LookupCache->AddBlockLink(GuestRip, Record, IndirectBlockDelinker, lk);
    }
-@@ -624,6 +653,8 @@ Arm64JITCore::Arm64JITCore(FEXCore::Context::ContextImpl* ctx, FEXCore::Core::In
+@@ -659,6 +688,8 @@ Arm64JITCore::Arm64JITCore(FEXCore::Context::ContextImpl* ctx, FEXCore::Core::In
    , CTX {ctx}
    , TempCodeBufferAllocator(ctx->CPUBackendAllocator, 0) {
  
@@ -694,7 +694,7 @@ index c23f01a..19f94ae 100644
    RAPass = Thread->PassManager->GetPass<IR::RegisterAllocationPass>("RA");
  
    RAPass->AddRegisters(IR::RegClass::GPR, GeneralRegisters.size());
-@@ -843,6 +874,7 @@ CodeBuffer::CodeBufferAllocation Arm64JITCore::AllocateCodeBufferInSharedCache(s
+@@ -879,6 +910,7 @@ CodeBuffer::CodeBufferAllocation Arm64JITCore::AllocateCodeBufferInSharedCache(s
  CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size, bool SingleInst, const FEXCore::IR::IRListView* IR,
                                                     FEXCore::Core::DebugData* DebugData, bool CheckTF) {
    FEXCORE_PROFILE_SCOPED("Arm64::CompileCode");
@@ -702,7 +702,7 @@ index c23f01a..19f94ae 100644
  
    const auto PrevNumAllocations = Relocations.size();
  
-@@ -882,11 +914,18 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -918,11 +950,18 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  
    // JIT output is first written to a temporary buffer and later relocated to the CodeBuffer.
    // This minimizes lock contention of CodeBufferWriteMutex.
@@ -721,7 +721,7 @@ index c23f01a..19f94ae 100644
  
    ThreadState->JITGuardPage = reinterpret_cast<uintptr_t>(TempCodeBuffer) + UsableBufferRange;
    ThreadState->JITGuardOverflowArgument = FEXCore::ToUnderlying(RestartOptions::Control::NeedsLargerJITSpace);
-@@ -927,12 +966,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -963,12 +1002,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
    PendingTargetLabel = nullptr;
    PendingCallReturnTargetLabel = nullptr;
  
@@ -736,7 +736,7 @@ index c23f01a..19f94ae 100644
      auto BlockStartHostCode = GetCursorAddress<uint8_t*>();
      {
        const auto Node = IR->GetID(BlockNode);
-@@ -949,6 +990,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -985,6 +1026,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  
        if (BlockIROp->EntryPoint) {
          uint64_t BlockStartRIP = Entry + BlockIROp->GuestEntryOffset;
@@ -744,7 +744,7 @@ index c23f01a..19f94ae 100644
  
          const auto IsReturnTarget = CallReturnTargets.try_emplace(Node).first;
          if (PendingTargetLabel) {
-@@ -965,6 +1007,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1001,6 +1043,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
          DebugData->GuestOpcodes.push_back({BlockIROp->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
  
          EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
@@ -752,7 +752,7 @@ index c23f01a..19f94ae 100644
        }
  
        if (PendingCallReturnTargetLabel) {
-@@ -977,8 +1020,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1013,8 +1056,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
        BindOrRestart(Target);
      }
  
@@ -769,7 +769,7 @@ index c23f01a..19f94ae 100644
  #define REGISTER_OP(op, x) \
    case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
  
-@@ -986,14 +1035,18 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1022,14 +1071,18 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  #include <FEXCore/IR/IRDefines_Dispatch.inc>
  #undef REGISTER_OP
  
@@ -789,7 +789,7 @@ index c23f01a..19f94ae 100644
    // Make sure last branch is generated. It certainly can't be eliminated here.
    if (PendingTargetLabel) {
      if (PendingTargetLabel->Backward.Location) {
-@@ -1113,6 +1166,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1149,6 +1202,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
      // NOTE: 16-byte alignment of the new cursor offset must be preserved for block linking records
      LOGMAN_THROW_A_FMT((reinterpret_cast<uintptr_t>(AllocatedInfo.BufferAllocationOffset) % 16) == 0, "Allocated buffer wasn't 16B "
                                                                                                        "aligned?");
@@ -800,7 +800,7 @@ index c23f01a..19f94ae 100644
  
      // Adjust host addresses
      const auto Delta = AllocatedInfo.BufferAllocationOffset - CodeData.BlockBegin;
-@@ -1123,13 +1180,29 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1159,13 +1216,29 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
      CodeBegin += Delta;
      CodeData.HostCodeOffset = CodeData.BlockBegin - CurrentCodeBuffer->GetBufferBase();
  
@@ -833,7 +833,7 @@ index c23f01a..19f94ae 100644
  #ifdef VIXL_DISASSEMBLER
    if (Disassemble() & FEXCore::Config::Disassemble::STATS) {
 diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
-index 6c2b349..469a4bd 100644
+index 6e8df95..93ed6de 100644
 --- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 @@ -5,8 +5,13 @@ tags: backend|arm64
@@ -852,7 +852,7 @@ index 6c2b349..469a4bd 100644
  
  #include "Interface/Context/Context.h"
 diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
-index d63ec3e..ffad00d 100644
+index eee5023..aa5d198 100644
 --- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 +++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 @@ -7,7 +7,7 @@
@@ -864,7 +864,7 @@ index d63ec3e..ffad00d 100644
  #include <FEXCore/Utils/PrctlUtils.h>
  #endif
  
-@@ -44,7 +44,7 @@ CodeBuffer::~CodeBuffer() {
+@@ -57,7 +57,7 @@ SharedCodeBufferManager::SharedCodeBufferManager() {
  }
  
  fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size) {
@@ -1533,7 +1533,7 @@ index b00cc58..4aaca28 100644
      close(SourceFD);
      return Result;
 diff --git a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
-index e5c2824..2c7856b 100644
+index dae3d3b..4021cb1 100644
 --- a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
 +++ b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
 @@ -7,8 +7,10 @@
@@ -1575,9 +1575,9 @@ index e5c2824..2c7856b 100644
  #if defined(HAS_SYSCALL_GETCPU) && HAS_SYSCALL_GETCPU
    return ::getcpu(cpu, node);
  #else
-@@ -96,6 +102,22 @@ inline int32_t renameat2(int olddirfd, const char* oldpath, int newdirfd, const
- inline int32_t pidfd_open(pid_t pid, unsigned int flags) {
-   return ::syscall(SYS_pidfd_open, pid, flags);
+@@ -100,6 +106,22 @@ inline int32_t pidfd_open(pid_t pid, unsigned int flags) {
+ inline ssize_t getrandom(void* buf, size_t buflen, unsigned int flags) {
+   return ::syscall(SYS_getrandom, buf, buflen, flags);
  }
 +#elif defined(__APPLE__)
 +inline int32_t getcpu(uint32_t* cpu, uint32_t* node) {

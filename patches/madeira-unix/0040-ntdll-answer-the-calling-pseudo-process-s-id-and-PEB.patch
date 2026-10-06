@@ -134,7 +134,7 @@ index 68a179c..2b67cb0 100644
      {
          if (!NtQueryInformationProcess( handle, ProcessWow64Information, &info, sizeof(info), NULL ))
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 242974b..f5b398e 100644
+index b24e975..f1e1f4d 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -15160,9 +15160,19 @@ NTSTATUS virtual_relocate_module( void *module )

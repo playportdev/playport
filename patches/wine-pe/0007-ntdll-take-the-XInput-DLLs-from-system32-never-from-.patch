@@ -21,7 +21,7 @@ Offered-upstream: no
  1 file changed, 37 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 3da2f862505..f4eb9ff8b43 100644
+index cfd449f..41d068e 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -3913,6 +3913,42 @@ done:

@@ -15,7 +15,7 @@ Offered-upstream: no
  1 file changed, 15 insertions(+), 1 deletion(-)
 
 diff --git a/build/win32u-unix/sysparams_ios.c b/build/win32u-unix/sysparams_ios.c
-index db4a188..5e21f83 100644
+index 3596813..b2b6e84 100644
 --- a/build/win32u-unix/sysparams_ios.c
 +++ b/build/win32u-unix/sysparams_ios.c
 @@ -196,6 +196,20 @@ static void ios_screen_size( int *w, int *h )

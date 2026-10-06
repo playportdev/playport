@@ -34,7 +34,7 @@ Offered-upstream: no
 
 diff --git a/dlls/wineios.drv/Makefile.in b/dlls/wineios.drv/Makefile.in
 new file mode 100644
-index 00000000000..192cac4b077
+index 0000000..192cac4
 --- /dev/null
 +++ b/dlls/wineios.drv/Makefile.in
 @@ -0,0 +1,6 @@
@@ -46,7 +46,7 @@ index 00000000000..192cac4b077
 +	coremidi.c
 diff --git a/dlls/wineios.drv/coreaudio.c b/dlls/wineios.drv/coreaudio.c
 new file mode 100644
-index 00000000000..f3f59a80ac4
+index 0000000..f3f59a8
 --- /dev/null
 +++ b/dlls/wineios.drv/coreaudio.c
 @@ -0,0 +1,2286 @@
@@ -2338,7 +2338,7 @@ index 00000000000..f3f59a80ac4
 +#endif /* _WIN64 */
 diff --git a/dlls/wineios.drv/coreaudio.h b/dlls/wineios.drv/coreaudio.h
 new file mode 100644
-index 00000000000..687bad54b55
+index 0000000..687bad5
 --- /dev/null
 +++ b/dlls/wineios.drv/coreaudio.h
 @@ -0,0 +1,36 @@
@@ -2380,7 +2380,7 @@ index 00000000000..687bad54b55
 +#endif /* __WINE_COREAUDIO_H */
 diff --git a/dlls/wineios.drv/coremidi.c b/dlls/wineios.drv/coremidi.c
 new file mode 100644
-index 00000000000..98d1ace8458
+index 0000000..98d1ace
 --- /dev/null
 +++ b/dlls/wineios.drv/coremidi.c
 @@ -0,0 +1,1631 @@
@@ -4017,7 +4017,7 @@ index 00000000000..98d1ace8458
 +#endif /* _WIN64 */
 diff --git a/dlls/wineios.drv/unixlib.h b/dlls/wineios.drv/unixlib.h
 new file mode 100644
-index 00000000000..a18c1c405d9
+index 0000000..a18c1c4
 --- /dev/null
 +++ b/dlls/wineios.drv/unixlib.h
 @@ -0,0 +1,34 @@

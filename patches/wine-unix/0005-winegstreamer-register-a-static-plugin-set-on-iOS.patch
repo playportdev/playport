@@ -17,7 +17,7 @@ Offered-upstream: no
  2 files changed, 16 insertions(+)
 
 diff --git a/dlls/winegstreamer/unix_private.h b/dlls/winegstreamer/unix_private.h
-index 3199e362fe6..37158949db7 100644
+index 3199e36..3715894 100644
 --- a/dlls/winegstreamer/unix_private.h
 +++ b/dlls/winegstreamer/unix_private.h
 @@ -33,6 +33,10 @@ GST_DEBUG_CATEGORY_EXTERN(wine);
@@ -32,7 +32,7 @@ index 3199e362fe6..37158949db7 100644
  extern GstStreamType stream_type_from_caps(GstCaps *caps);
  extern GstElement *create_element(const char *name, const char *plugin_set);
 diff --git a/dlls/winegstreamer/unixlib.c b/dlls/winegstreamer/unixlib.c
-index ac671bbb514..529e3fd41de 100644
+index ac671bb..529e3fd 100644
 --- a/dlls/winegstreamer/unixlib.c
 +++ b/dlls/winegstreamer/unixlib.c
 @@ -282,6 +282,14 @@ NTSTATUS wg_init_gstreamer(void *arg)

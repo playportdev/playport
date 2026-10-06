@@ -6,22 +6,29 @@
 
 Stages (docs/UPSTREAM-SYNC.md has why they are these):
 
-  resolve  fetch Madeira and read its gitlinks for wine, FEX and research/dxmt
-           (and its FEX's External/rpmalloc) at <madeira-sha>; the gitlinks are
+  resolve  fetch Madeira and read its gitlinks for wine, FEX and dxmt
+           (research/dxmt before Madeira's 79e28f0) and its FEX's
+           External/rpmalloc at <madeira-sha>; the gitlinks are
            the component pins, never a fork's branch head. wine is the
-           wine-port row, research/dxmt the dxmt-port row, FEX the fex-port row
+           wine-port row, dxmt the dxmt-port row, FEX the fex-port row
            and FEX's rpmalloc the rpmalloc-port row: a move of any of them
            holds, for patches/wine-port, patches/dxmt-port, patches/fex-port or
            patches/rpmalloc-port to be re-ported by hand. wine (WineHQ), dxmt
            (3Shain/dxmt), fex (FEX-Emu/FEX) and rpmalloc (FEX-Emu/rpmalloc)
            keep their own pins. Record
            whether the commit descends from the current pin, any .gitmodules
-           change and any licence file changed in a component.
-  replay   for every patches/<target>/series, a fresh sparse checkout (a
-           `git clone --shared` of the mirror) at the new component commit (for wine, dxmt and fex, with patches/wine-port
+           change and any licence file changed in a component. A Madeira
+           submodule that is no row (madeira-dock) is named in the report: the
+           build never checks it out.
+  replay   for every patches/<target>/series but those on pins no Madeira
+           commit moves (mesa, vkd3d-proton, gbe, idevice), a fresh sparse checkout (a
+           `git clone --shared` of the mirror) where the series first applies on its
+           own pin (which creates every patch's preimage blobs), then at the new component commit (for wine, dxmt and fex, with patches/wine-port
            (and for wine's own series patches/wine-valve), patches/dxmt-port or
-           patches/fex-port applied first) and `git am -3` patch by patch; each patch is
-           clean, merged-3way, already-upstream or conflict.
+           patches/fex-port applied first) `git am -3` patch by patch; each patch is
+           clean, merged-3way, already-upstream (only when its reverse applies or
+           its merge is empty) or conflict (any failed merge, also one with no
+           preimage, which leaves no conflict markers).
   build    pp build in a candidate checkout (a `git clone --shared` of this
            repository, <sha8>/playport) on branch sync/<sha8>, with the new
            pins.lock and gitlink, and its own run and out directories
@@ -37,7 +44,7 @@ Stages (docs/UPSTREAM-SYNC.md has why they are these):
   decide   merge only when every patch is clean or already-upstream, every gate
            passes and no .gitmodules or licence file changed; otherwise hold.
 
-Every run also fetches Valve's branch (the wine-valve row's, proton_11.0) and,
+Every run also fetches Valve's branch (the wine-valve row's, bleeding-edge) and,
 when it has commits past the wine-valve pin, lists them oldest first in
 wine-valve-new.tsv (commit, date, subject, files) in the run directory and in
 $PLAYPORT_BUILD/sync, and names that file in the report and the last line.
@@ -93,8 +100,11 @@ EXIT = {"merged": 0, "no-op": 0, "replay-clean": 0, "hold": 10, "upstream-broken
 # commits pinned on their own (decisions 0007, 0008, 0013), and the *-port rows are the
 # Madeira gitlinks their port series were rebased from. rpmalloc is also the
 # External/rpmalloc gitlink of the fex pin.
-GITLINKS = {"wine-port": ("madeira", "wine"), "fex-port": ("madeira", "FEX"), "dxmt-port": ("madeira", "research/dxmt"),
+GITLINKS = {"wine-port": ("madeira", "wine"), "fex-port": ("madeira", "FEX"), "dxmt-port": ("madeira", "dxmt"),
             "rpmalloc-port": ("fex-port", "External/rpmalloc"), "rpmalloc": ("fex", "External/rpmalloc")}
+# A row whose gitlink moved: the first of these paths that is a gitlink at a
+# commit is the row's there (Madeira's 79e28f0 moved research/dxmt to dxmt).
+GITLINK_PATHS = {"dxmt-port": ("dxmt", "research/dxmt")}
 COMPONENTS = ["madeira", "wine", "wine-port", "fex", "fex-port", "dxmt", "dxmt-port", "rpmalloc", "rpmalloc-port"]
 # The rows whose move holds for a hand re-port of patches/<row> (they are never moved by this tool).
 PORT_ROWS = ["wine-port", "fex-port", "dxmt-port", "rpmalloc-port"]
@@ -102,6 +112,9 @@ PORT_ROWS = ["wine-port", "fex-port", "dxmt-port", "rpmalloc-port"]
 TARGET_COMPONENT = {"madeira-unix": "madeira", "madeira-winios": "madeira", "wine-port": "wine", "wine-valve": "wine",
                     "wine-unix": "wine", "wine-pe": "wine", "fex-port": "fex", "fex": "fex", "dxmt-port": "dxmt",
                     "dxmt": "dxmt", "rpmalloc-port": "rpmalloc", "rpmalloc": "rpmalloc"}
+# Series on pins no Madeira commit moves (their own upstreams, outside COMPONENTS):
+# a sync does not replay them.
+NOT_REPLAYED = {"mesa", "vkd3d-proton", "gbe", "idevice"}
 # Series applied under a target's own, in order, as build/stages/unix.sh,
 # build/stages/wine-pe.sh, build/stages/dxmt-patched.sh and build/stages/fex.sh do.
 BELOW = {"wine-valve": ["wine-port"], "wine-unix": ["wine-port", "wine-valve"], "wine-pe": ["wine-port", "wine-valve"],
@@ -248,6 +261,16 @@ def gitmodules(repo, commit):
     return {v.get("path", k): v for k, v in subs.items()}
 
 
+def link_path(repo, commit, comp):
+    """The path of the GITLINKS row comp at commit (GITLINK_PATHS for a row that moved)."""
+    paths = GITLINK_PATHS.get(comp, (GITLINKS[comp][1],))
+    for path in paths:
+        f = git(repo, "ls-tree", commit, "--", path).split()
+        if len(f) >= 3 and f[1] == "commit":
+            return path
+    raise Fail(f"{repo} has no gitlink {' or '.join(paths)} ({comp}) at {commit}")
+
+
 # --- resolve ----------------------------------------------------------------
 
 def resolve(new_madeira, pins):
@@ -259,7 +282,7 @@ def resolve(new_madeira, pins):
     res["mirrors"]["madeira"] = m
     new = {"madeira": new_madeira}
     for comp in ("wine-port", "fex-port", "dxmt-port"):
-        new[comp] = gitlink(m, new_madeira, GITLINKS[comp][1])
+        new[comp] = gitlink(m, new_madeira, link_path(m, new_madeira, comp))
         mm = mirror(comp, pins[comp]["url"], pins[comp]["branch"])
         fetch(mm, pins[comp]["branch"], [old[comp], new[comp]])
         res["mirrors"][comp] = mm
@@ -275,7 +298,8 @@ def resolve(new_madeira, pins):
     res["old"], res["new"] = old, new
 
     # The pins must be Madeira's own gitlinks at the old pin, or the base is inconsistent.
-    for comp, (parent, path) in GITLINKS.items():
+    for comp, (parent, _) in GITLINKS.items():
+        path = link_path(res["mirrors"][parent], old[parent], comp)
         pinned = gitlink(res["mirrors"][parent], old[parent], path)
         if pinned != old[comp]:
             raise Fail(f"pins.lock {comp} {old[comp]} is not the {path} gitlink {pinned} of the {parent} pin")
@@ -313,9 +337,13 @@ def resolve(new_madeira, pins):
                 if va != vb:
                     res["flags"].append({"kind": "gitmodules", "hold": True,
                                          "detail": f"{comp} .gitmodules {path} {key}: {va} -> {vb}"})
+    rows = {comp: link_path(m, new_madeira, comp) for comp in ("wine-port", "fex-port", "dxmt-port")}
+    for path in sorted(set(gitmodules(m, new_madeira)) - set(rows.values())):
+        res["info"].append(f"Madeira submodule {path} is no pins.lock row: the build does not use it "
+                           "and the sources stage does not check it out")
     new_branches = {}
     for comp in ("wine-port", "fex-port", "dxmt-port"):
-        b = gitmodules(m, new_madeira).get(GITLINKS[comp][1], {}).get("branch")
+        b = gitmodules(m, new_madeira).get(rows[comp], {}).get("branch")
         if b:
             new_branches[comp] = b
     res["new_branches"] = new_branches
@@ -513,13 +541,14 @@ def replay_target(target, comp, res, rundir, patches_repo):
     env = dict(BOT, GIT_COMMITTER_DATE="2026-01-01T00:00:00Z")
     # Preimage pass: the series on its own pin, where it must apply as it is.
     # A 3-way fallback finds each patch's preimage by its blob hash, and the
-    # preimage of a later patch is a blob only this pass creates.
-    pre = sparse_checkout(mm, os.path.join(rundir, "replay", target + ".pin"), old, paths)
-    st, msg = sh(["git", "-C", pre, "am", "--quiet", *below, *patches], env=env, check=False)
+    # preimage of a later patch is a blob only this pass creates, so the replay
+    # runs in the same clone, which keeps those objects.
+    wt = sparse_checkout(mm, os.path.join(rundir, "replay", target), old, paths)
+    st, msg = sh(["git", "-C", wt, "am", "--quiet", *below, *patches], env=env, check=False)
     if st != 0:
         raise Fail(f"patches/{target} does not apply to its own pin {old[:12]}:\n{msg.strip()[-1500:]}")
-    shutil.rmtree(pre)
-    wt = sparse_checkout(mm, os.path.join(rundir, "replay", target), new, paths)
+    git(wt, "tag", "preimages")   # keeps the pass's blobs referenced for the whole replay
+    git(wt, "checkout", "--quiet", "--detach", new)
     if below:
         st, msg = sh(["git", "-C", wt, "am", "--quiet", *below], env=env, check=False)
         if st != 0:
@@ -539,27 +568,29 @@ def replay_target(target, comp, res, rundir, patches_repo):
             st, msg = sh(["git", "-C", wt, "-c", "merge.conflictStyle=diff3", "am", "-3", "--quiet", "--empty=drop",
                           patch], env=env, check=False)
             if st == 0:
+                # An empty result of a real merge: the content is already there.
                 rec["class"] = "merged-3way" if git(wt, "rev-parse", "HEAD") != head else "already-upstream"
             else:
+                # A failed merge is a conflict, also with no unmerged file: git am -3 that
+                # "could not build fake ancestor" (no preimage blob) leaves the index as it was.
+                # already-upstream needs positive evidence: the reverse applies, or a merge is empty.
                 unmerged = git(wt, "diff", "--name-only", "--diff-filter=U").splitlines()
-                if not unmerged and git_ok(wt, "diff", "--cached", "--quiet", "HEAD"):
-                    sh(["git", "-C", wt, "am", "--skip"], env=env, check=False)
-                    rec["class"] = "already-upstream"
-                else:
-                    rec["class"] = "conflict"
-                    rec["am"] = msg.strip()[-3000:]
-                    rec["files"] = []
-                    for f in unmerged or patch_paths(patch):
-                        blocks = conflict_blocks(os.path.join(wt, f))
-                        entry = {"file": f, "hunks": []}
-                        for first, last, text in blocks:
-                            entry["hunks"].append({"lines": f"{first},{last}", "text": text,
-                                                   "upstream": upstream_commits(wt, since, f, first, last)})
-                        if not blocks:
-                            entry["upstream"] = upstream_commits(wt, since, f)
-                        rec["files"].append(entry)
-                    sh(["git", "-C", wt, "am", "--abort"], check=False)
-                    git(wt, "reset", "--hard", "--quiet", head)
+                rec["class"] = "conflict"
+                if not unmerged:
+                    rec["no_preimage"] = True
+                rec["am"] = msg.strip()[-3000:]
+                rec["files"] = []
+                for f in unmerged or patch_paths(patch):
+                    blocks = conflict_blocks(os.path.join(wt, f))
+                    entry = {"file": f, "hunks": []}
+                    for first, last, text in blocks:
+                        entry["hunks"].append({"lines": f"{first},{last}", "text": text,
+                                               "upstream": upstream_commits(wt, since, f, first, last)})
+                    if not blocks:
+                        entry["upstream"] = upstream_commits(wt, since, f)
+                    rec["files"].append(entry)
+                sh(["git", "-C", wt, "am", "--abort"], check=False)
+                git(wt, "reset", "--hard", "--quiet", head)
         if rec["class"] is None:  # apply --check passed but am did not: never expected
             sh(["git", "-C", wt, "am", "--abort"], check=False)
             raise Fail(f"{target}/{name}: git apply --check passes but git am fails")
@@ -877,6 +908,9 @@ def write_report(result, res, replay):
                 lines += [f"### Conflict: patches/{t['target']}/{p['patch']}", "", p["subject"], "",
                           "In each hunk the `HEAD` side is upstream, the `|||||||` side the patch's preimage "
                           "and the last side the patch.", ""]
+                if p.get("no_preimage"):
+                    lines += ["No 3-way merge: `git am -3` found no preimage blob for the patch's `index` "
+                              "lines, so it left no conflict markers. Re-port it by hand.", ""]
                 for f in p["files"]:
                     lines.append(f"`{f['file']}`:")
                     for h in f["hunks"]:
@@ -1016,7 +1050,7 @@ def main():
         log("replay")
         replay = [replay_target(t, TARGET_COMPONENT[t], res, rundir, REPO)
                   for t in sorted(os.listdir(os.path.join(REPO, "patches"))) if t in TARGET_COMPONENT]
-        unknown = sorted(set(os.listdir(os.path.join(REPO, "patches"))) - set(TARGET_COMPONENT))
+        unknown = sorted(set(os.listdir(os.path.join(REPO, "patches"))) - set(TARGET_COMPONENT) - NOT_REPLAYED)
         if unknown:
             raise Fail(f"patches/ has series this tool does not know the component of: {unknown}")
         classes = [p["class"] for t in replay for p in t["patches"]]

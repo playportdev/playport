@@ -40,7 +40,7 @@ Offered-upstream: no
  1 file changed, 44 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index b78b21efebc..75970ecc9d7 100644
+index 9b7bd24..9557c3c 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -267,11 +267,50 @@ NTSTATUS arm64ec_process_init_dispatchers( HMODULE module )

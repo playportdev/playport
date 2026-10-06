@@ -130,7 +130,7 @@ index e167ae4..3761fd1 100644
  };
  
 diff --git a/src/airconv/dxbc_converter.cpp b/src/airconv/dxbc_converter.cpp
-index 369a775..e95b887 100644
+index b0704ac..aadbd41 100644
 --- a/src/airconv/dxbc_converter.cpp
 +++ b/src/airconv/dxbc_converter.cpp
 @@ -340,6 +340,32 @@ llvm::Error convert_dxbc_pixel_shader(
@@ -389,7 +389,7 @@ index a289a58..86baf67 100644
    return [=](pvalue ret) {
      return make_irvalue_bind([=](context ctx) -> IRValue {
 diff --git a/src/airconv/dxbc_instructions.cpp b/src/airconv/dxbc_instructions.cpp
-index 0bb439b..3319dfb 100644
+index e2b7f86..f5af252 100644
 --- a/src/airconv/dxbc_instructions.cpp
 +++ b/src/airconv/dxbc_instructions.cpp
 @@ -304,6 +304,14 @@ SrcOperand readSrcOperand(

@@ -26,7 +26,7 @@ Offered-upstream: no
  1 file changed, 4 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 694459f00e9..893c6cf81c2 100644
+index ae1cb52..1aa6734 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1570,6 +1570,10 @@ BOOLEAN WINAPI RtlIsEcCode( ULONG_PTR ptr )

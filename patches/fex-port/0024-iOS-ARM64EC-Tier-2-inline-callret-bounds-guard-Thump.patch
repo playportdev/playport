@@ -68,12 +68,12 @@ Offered-upstream: no
  7 files changed, 399 insertions(+), 30 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 334b3d7..9749e6f 100644
+index 7dee404..8411d7e 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
-@@ -80,6 +80,34 @@ $end_info$
- #include <arm_acle.h>
- #endif
+@@ -78,6 +78,34 @@ $end_info$
+ #include <utility>
+ #include <xxhash.h>
  
 +/* iOS-Mythic HOTRIP telemetry — plain globals (no constructors/guard vars).
 + * 2026-05-14: per-thread callret tracking (GPT diagnosis: FMOD worker
@@ -106,7 +106,7 @@ index 334b3d7..9749e6f 100644
  namespace FEXCore::Context {
  ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
    : HostFeatures {Features}
-@@ -812,7 +840,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -798,7 +826,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
  }
  
  ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst) {
@@ -115,7 +115,7 @@ index 334b3d7..9749e6f 100644
  
    if (SourcecodeResolver && Config.GDBSymbols()) {
      auto MappedSection = SyscallHandler->LookupExecutableFileSection(Thread, GuestRIP);
-@@ -823,10 +851,8 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -809,10 +837,8 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
    }
  
    // Generate IR + Meta Info
@@ -126,7 +126,7 @@ index 334b3d7..9749e6f 100644
    if (!IRView) {
      Thread->FrontendDecoder->ValidateDisownedOrFree();
      Thread->OpDispatcher->ValidateDisownedOrFree();
-@@ -858,9 +884,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -844,9 +870,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
    // If the trap flag is set we generate single instruction blocks that each check to generate a single step exception.
    bool TFSet = Thread->CurrentFrame->State.flags[X86State::RFLAG_TF_RAW_LOC];
  
@@ -136,7 +136,7 @@ index 334b3d7..9749e6f 100644
  
    // Release the IR
    Thread->OpDispatcher->DelayedDisownBuffer();
-@@ -902,22 +926,277 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -888,22 +912,277 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      return 0;
    }
  
@@ -419,7 +419,7 @@ index 334b3d7..9749e6f 100644
  
    Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, MaxInst);
  
-@@ -964,7 +1243,6 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -950,7 +1229,6 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedJITCount, 1);
  
    auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
@@ -428,7 +428,7 @@ index 334b3d7..9749e6f 100644
    if (CodePtr == nullptr) {
      return 0;
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index 12bc7b1..b6281c2 100644
+index 0adc672..0da6f58 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -141,7 +141,13 @@ void Dispatcher::EmitDispatcher() {
@@ -446,7 +446,7 @@ index 12bc7b1..b6281c2 100644
    (void)b(&LoopTop);
  #else
    // As ARM64EC uses this as an entrypoint for both guest calls and host returns, opportunistically try to return
-@@ -546,6 +552,23 @@ void Dispatcher::EmitDispatcher() {
+@@ -553,6 +559,23 @@ void Dispatcher::EmitDispatcher() {
  
      // load static regs
      FillStaticRegs();
@@ -471,10 +471,10 @@ index 12bc7b1..b6281c2 100644
  
      // Now go back to the regular dispatcher loop
 diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
-index 5885da7..b0084b0 100644
+index 5944a7a..1db2093 100644
 --- a/FEXCore/Source/Interface/Core/Frontend.cpp
 +++ b/FEXCore/Source/Interface/Core/Frontend.cpp
-@@ -1510,7 +1510,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1572,7 +1572,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
  
        // Do a bit of pointer math to figure out where we are in code
        InstStream = AdjustAddrForSpecialRegion(_InstStream, EntryPoint, RIPToDecode);
@@ -483,7 +483,7 @@ index 5885da7..b0084b0 100644
      } else if (BlockResume != -1) {
        BlockIt = BlockInfo.Blocks.begin() + BlockResume;
        BlockResume = -1;
-@@ -1546,7 +1546,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1608,7 +1608,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
  
        LastFieldReadSize = 0;
        if (TotalInstructions == 0) {
@@ -492,7 +492,7 @@ index 5885da7..b0084b0 100644
        }
        BlockIt->BlockStatus = DecodeInstruction(OpAddress);
        if (HitBadRelocation) {
-@@ -1672,7 +1672,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1731,7 +1731,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
    }
  
    BlockInfo.TotalInstructionCount = TotalInstructions;
@@ -501,7 +501,7 @@ index 5885da7..b0084b0 100644
  
    for (auto& Block : BlockInfo.Blocks) {
      Block.IsEntryPoint = BlockInfo.EntryPoints.contains(Block.Entry);
-@@ -1704,9 +1704,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+@@ -1763,9 +1763,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
    // Decode operating mode from thread's CS segment.
    const auto CSSegment = Core::CPUState::GetSegmentFromIndex(Thread->CurrentFrame->State, Thread->CurrentFrame->State.cs_idx);
    BlockInfo.Is64BitMode = CSSegment->L == 1;
@@ -513,7 +513,7 @@ index 5885da7..b0084b0 100644
  
    EntryPoint = PC;
    BlockInfo.EntryPoints = {PC};
-@@ -1738,7 +1738,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+@@ -1797,7 +1797,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
  
    EntryBlock = true;
    FinalInstruction = false;
@@ -523,10 +523,10 @@ index 5885da7..b0084b0 100644
  
  } // namespace FEXCore::Frontend
 diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
-index bbc59f4..232adb4 100644
+index d95e984..cf79624 100644
 --- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
-@@ -171,6 +171,21 @@ DEF_OP(ExitFunction) {
+@@ -172,6 +172,21 @@ DEF_OP(ExitFunction) {
          // ARM64EC entry thunks). Reload from State.callret_sp before pushing
          // the call-return frame so we don't stp to wherever x17 was left.
          ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
@@ -548,7 +548,7 @@ index bbc59f4..232adb4 100644
  #endif
          if (!Op->CallReturnBlock.IsInvalid()) {
            auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
-@@ -180,6 +195,12 @@ DEF_OP(ExitFunction) {
+@@ -181,6 +196,12 @@ DEF_OP(ExitFunction) {
          } else {
            stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
          }
@@ -561,7 +561,7 @@ index bbc59f4..232adb4 100644
        } else if (Op->Hint == IR::BranchHint::CheckTF) {
          ARMEmitter::ForwardLabel TFUnset;
          ldrb(TMP1, STATE_PTR(CpuStateFrame, State.flags[X86State::RFLAG_TF_RAW_LOC]));
-@@ -203,7 +224,32 @@ DEF_OP(ExitFunction) {
+@@ -204,7 +225,32 @@ DEF_OP(ExitFunction) {
  
      if (Op->Hint == IR::BranchHint::Return) {
        // First try to pop from the call-ret stack, otherwise follow the normal path (but ending in a ret)
@@ -594,7 +594,7 @@ index bbc59f4..232adb4 100644
        sub(TMP1, TMP1, RipReg.X());
        (void)cbz(ARMEmitter::Size::i64Bit, TMP1, &SkipFullLookup);
      }
-@@ -232,6 +278,18 @@ DEF_OP(ExitFunction) {
+@@ -233,6 +279,18 @@ DEF_OP(ExitFunction) {
        // from State.callret_sp before pushing the call-return frame, since
        // native ARM64EC returns leave x17 pointing at an arbitrary RX page.
        ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
@@ -613,7 +613,7 @@ index bbc59f4..232adb4 100644
  #endif
        if (!Op->CallReturnBlock.IsInvalid()) {
          auto CallReturnAddressReg = GetReg(Op->CallReturnAddress).X();
-@@ -241,6 +299,10 @@ DEF_OP(ExitFunction) {
+@@ -242,6 +300,10 @@ DEF_OP(ExitFunction) {
        } else {
          stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
        }
@@ -625,10 +625,10 @@ index bbc59f4..232adb4 100644
        (void)Bind(&l_CallReturn);
      } else if (Op->Hint == IR::BranchHint::Return) {
 diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-index 19f94ae..70c9602 100644
+index 0c0a677..1092add 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-@@ -914,11 +914,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -950,11 +950,10 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  
    // JIT output is first written to a temporary buffer and later relocated to the CodeBuffer.
    // This minimizes lock contention of CodeBufferWriteMutex.
@@ -641,7 +641,7 @@ index 19f94ae..70c9602 100644
  
    SetBuffer(TempCodeBuffer, UsableBufferRange);
  #ifdef __APPLE__
-@@ -966,14 +965,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1002,14 +1001,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
    PendingTargetLabel = nullptr;
    PendingCallReturnTargetLabel = nullptr;
  
@@ -658,7 +658,7 @@ index 19f94ae..70c9602 100644
      auto BlockStartHostCode = GetCursorAddress<uint8_t*>();
      {
        const auto Node = IR->GetID(BlockNode);
-@@ -990,7 +989,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1026,7 +1025,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  
        if (BlockIROp->EntryPoint) {
          uint64_t BlockStartRIP = Entry + BlockIROp->GuestEntryOffset;
@@ -667,7 +667,7 @@ index 19f94ae..70c9602 100644
  
          const auto IsReturnTarget = CallReturnTargets.try_emplace(Node).first;
          if (PendingTargetLabel) {
-@@ -1007,7 +1006,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1043,7 +1042,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
          DebugData->GuestOpcodes.push_back({BlockIROp->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
  
          EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
@@ -676,7 +676,7 @@ index 19f94ae..70c9602 100644
        }
  
        if (PendingCallReturnTargetLabel) {
-@@ -1020,13 +1019,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1056,13 +1055,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
        BindOrRestart(Target);
      }
  
@@ -692,7 +692,7 @@ index 19f94ae..70c9602 100644
          switch (IROp->Op) {
  #define REGISTER_OP(op, x) \
    case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
-@@ -1039,7 +1036,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1075,7 +1072,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
          }
          OpIdx++;
        }
@@ -702,7 +702,7 @@ index 19f94ae..70c9602 100644
  
      DebugData->Subblocks.push_back({static_cast<uint32_t>(BlockStartHostCode - CodeData.BlockBegin),
 diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
-index 7c64dd8..65c83d2 100644
+index 80514bf..86ce70a 100644
 --- a/FEXCore/include/FEXCore/Core/CoreState.h
 +++ b/FEXCore/include/FEXCore/Core/CoreState.h
 @@ -107,7 +107,11 @@ struct alignas(64) CPUState {

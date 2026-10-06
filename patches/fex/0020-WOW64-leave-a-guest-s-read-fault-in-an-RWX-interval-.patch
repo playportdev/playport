@@ -20,7 +20,7 @@ Offered-upstream: no; the fault loop needs the iOS window
  1 file changed, 4 insertions(+), 1 deletion(-)
 
 diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
-index 361f079..362466f 100644
+index f08ffd1..e6a1928 100644
 --- a/Source/Windows/WOW64/Module.cpp
 +++ b/Source/Windows/WOW64/Module.cpp
 @@ -1072,7 +1072,10 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {

@@ -31,7 +31,7 @@ Offered-upstream: no
  6 files changed, 331 insertions(+), 4 deletions(-)
 
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index 8635bff6cea..9315f570bdb 100644
+index ab64aa7..ae997f7 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
 @@ -1773,6 +1773,8 @@
@@ -44,7 +44,7 @@ index 8635bff6cea..9315f570bdb 100644
  @ extern -private ios_fex_arena_end
  @ extern -private __wine_unixlib_handle
 diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
-index 9d6980836af..ea42483d386 100644
+index 9d69808..ea42483 100644
 --- a/dlls/ntdll/ntdll_misc.h
 +++ b/dlls/ntdll/ntdll_misc.h
 @@ -189,4 +189,27 @@ extern void *__os_arm64x_helper8;
@@ -76,7 +76,7 @@ index 9d6980836af..ea42483d386 100644
 +
  #endif
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 165631eb063..c17b9553867 100644
+index 165631e..c17b955 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -37,6 +37,44 @@
@@ -211,7 +211,7 @@ index 165631eb063..c17b9553867 100644
  
      if (!addr) return;
 diff --git a/dlls/ntdll/time.c b/dlls/ntdll/time.c
-index 5a96a1e2746..9945e28d533 100644
+index 5a96a1e..9945e28 100644
 --- a/dlls/ntdll/time.c
 +++ b/dlls/ntdll/time.c
 @@ -379,11 +379,89 @@ LONGLONG WINAPI RtlGetSystemTimePrecise( void )
@@ -305,7 +305,7 @@ index 5a96a1e2746..9945e28d533 100644
  /******************************************************************************
   *  RtlQueryPerformanceFrequency   [NTDLL.@]
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 5a08e5ce510..11b132ecd38 100644
+index 577cdec..e77454a 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -25,6 +25,7 @@
@@ -594,7 +594,7 @@ index 5a08e5ce510..11b132ecd38 100644
              if (ret == -1 && errno == ETIMEDOUT)
              {
 diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
-index 30af4439720..3ba272fed65 100644
+index 30af443..3ba272f 100644
 --- a/dlls/ntdll/unix/system.c
 +++ b/dlls/ntdll/unix/system.c
 @@ -134,6 +134,7 @@

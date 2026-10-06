@@ -64,7 +64,7 @@ Offered-upstream: no
  create mode 100644 src/dxmt/dxmt_mem_census.hpp
 
 diff --git a/src/d3d11/d3d11_device.cpp b/src/d3d11/d3d11_device.cpp
-index 0f193b2..0404f6f 100644
+index 2a1f966..dd82f8f 100644
 --- a/src/d3d11/d3d11_device.cpp
 +++ b/src/d3d11/d3d11_device.cpp
 @@ -171,75 +171,15 @@ void BCCensusRecord(const D3D11_TEXTURE2D_DESC1 *d, const D3D11_SUBRESOURCE_DATA
@@ -941,7 +941,7 @@ index 057e767..75fd088 100644
  
    Rc<BufferAllocation> rename(Rc<BufferAllocation> &&newAllocation);
 diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
-index 5832bde..fc237fe 100644
+index 349f3a1..ade2c03 100644
 --- a/src/dxmt/dxmt_context.cpp
 +++ b/src/dxmt/dxmt_context.cpp
 @@ -26,6 +26,7 @@

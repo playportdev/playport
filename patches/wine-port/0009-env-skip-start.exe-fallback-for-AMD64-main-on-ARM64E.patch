@@ -22,7 +22,7 @@ Offered-upstream: no
  1 file changed, 8 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
-index ae74a7b8417..8681b2ae3fb 100644
+index ae74a7b..8681b2a 100644
 --- a/dlls/ntdll/unix/env.c
 +++ b/dlls/ntdll/unix/env.c
 @@ -1932,9 +1932,15 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params(void)

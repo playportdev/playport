@@ -18,7 +18,7 @@ Offered-upstream: no
  1 file changed, 41 insertions(+), 3 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 7a6056d85..1ff4fd71e 100644
+index c47729f..722fb47 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -738,7 +738,22 @@ void ResetCallRetStack(FEXCore::Core::InternalThreadState* Thread, const char* S

@@ -15,7 +15,7 @@ Offered-upstream: no
  1 file changed, 32 insertions(+)
 
 diff --git a/server/thread.c b/server/thread.c
-index 55cf4947..3fadb789 100644
+index 6c1ba76..9545d02 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -1549,6 +1549,25 @@ static inline int is_in_apc_wait( struct thread *thread )

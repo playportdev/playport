@@ -27,7 +27,7 @@ Offered-upstream: no; the window exists only on the iOS port
  create mode 100644 include/wine/ios_wow64.h
 
 diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
-index 0615431..67b9d57 100644
+index 2cd469b..66da4b2 100644
 --- a/dlls/ntdll/unix/socket.c
 +++ b/dlls/ntdll/unix/socket.c
 @@ -100,14 +100,14 @@ WINE_DEFAULT_DEBUG_CHANNEL(winsock);

@@ -43,7 +43,7 @@ Offered-upstream: no
  2 files changed, 58 insertions(+), 7 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 15cabd6385c..4b1266a2bbf 100644
+index 15cabd6..4b1266a 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -4421,13 +4421,29 @@ static void load_arm64ec_module(void)
@@ -104,7 +104,7 @@ index 15cabd6385c..4b1266a2bbf 100644
          load_arm64ec_module();
          ERR( "loader_init: load_arm64ec_module returned, calling update_load_config\n" );
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index 9b6401ee37d..be18e4a5452 100644
+index 9b6401e..be18e4a 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
 @@ -493,6 +493,28 @@ static inline CLIENT_ID make_client_id( ULONG pid, ULONG tid )

@@ -511,7 +511,7 @@ index e5c43bc..7cafbb2 100644
        /* Lower only compute shaders */
        if (*(bool *)data) {
 diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
-index 805f84c..51b2336 100644
+index 5ddd013..c680234 100644
 --- a/src/kosmickrisp/vulkan/kk_physical_device.c
 +++ b/src/kosmickrisp/vulkan/kk_physical_device.c
 @@ -117,6 +117,7 @@ kk_get_device_extensions(const struct kk_instance *instance,

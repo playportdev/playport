@@ -92,7 +92,7 @@ index cbaa26f..3990a58 100644
    }
  }
 diff --git a/src/dxmt/dxmt_format.cpp b/src/dxmt/dxmt_format.cpp
-index 658b3f6..25e6921 100644
+index 6183453..d767a8b 100644
 --- a/src/dxmt/dxmt_format.cpp
 +++ b/src/dxmt/dxmt_format.cpp
 @@ -1,6 +1,7 @@

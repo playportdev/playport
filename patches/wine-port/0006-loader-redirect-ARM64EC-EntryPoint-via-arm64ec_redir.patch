@@ -30,7 +30,7 @@ Offered-upstream: no
  1 file changed, 12 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 4dba3d010f9..f7bce0d23b7 100644
+index 4dba3d0..f7bce0d 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1603,7 +1603,19 @@ static WINE_MODREF *alloc_module( HMODULE hModule, const UNICODE_STRING *nt_name

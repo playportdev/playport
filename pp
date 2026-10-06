@@ -43,6 +43,9 @@ Drive the phone (dev app)
 Upstream and review
   pp sync <madeira-sha> [--dry-run] [--push]
                                   move the Madeira pin, or hold with a report
+  pp rebase TARGET NEW [--trial] | --continue | --abort | --write [--pins]
+                                  move one series stack onto a new upstream commit in a scratch
+                                  clone: conflict trial, rerere, range-diff, re-export (UPSTREAM-SYNC.md)
   pp slots [DXMT_TREE]            every winemetal thunk against its unix call slot (after a DXMT rebase)
   pp shaders TITLE_DIR OUT [...]  run a title's DXBC shaders through a host airconv (built on first use)
   pp registry [--check]           regenerate the prefix registry seed (app/registry) from the staged DLLs
@@ -432,6 +435,7 @@ COMMANDS = {
     "gpu": lambda a: __import__("gpu").main(a),
     "phone": cmd_phone,
     "sync": lambda a: py("tools/sync.py", a),
+    "rebase": lambda a: py("tools/rebase.py", a),
     "slots": lambda a: __import__("slots").main(a),
     "shaders": cmd_shaders,
     "registry": lambda a: py("app/tools/prefix-registry.py", a),

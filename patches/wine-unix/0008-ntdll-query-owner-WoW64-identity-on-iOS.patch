@@ -12,7 +12,7 @@ Offered-upstream: no
  1 file changed, 12 insertions(+)
 
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index 1962c6c5a83..a7edaef883f 100644
+index 1962c6c..a7edaef 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
 @@ -83,9 +83,18 @@ static inline WOW_TEB *get_wow_teb( TEB *teb )

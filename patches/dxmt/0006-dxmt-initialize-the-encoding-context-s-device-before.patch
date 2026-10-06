@@ -15,65 +15,58 @@ so device creation died in objc_msgSend inside
 MTLDevice_newComputePipelineState. The two members are now declared
 (and initialized) before the command contexts.
 
+Upstream fb45156 (in the 68af85e pin) now declares device_ first; this
+patch keeps queue_ beside it, as Playport has run it since 2026-09-25.
+
 Class: upstream-bug
 Evidence: docs/evidence/2026-09-25-witcher3-setup.md
 Offered-upstream: no
 ---
- src/dxmt/dxmt_context.cpp |  6 +++---
- src/dxmt/dxmt_context.hpp | 13 ++++++++++---
- 2 files changed, 13 insertions(+), 6 deletions(-)
+ src/dxmt/dxmt_context.cpp | 4 ++--
+ src/dxmt/dxmt_context.hpp | 5 +++--
+ 2 files changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
-index b323906..8dbd0b0 100644
+index 46f52fa..af38860 100644
 --- a/src/dxmt/dxmt_context.cpp
 +++ b/src/dxmt/dxmt_context.cpp
-@@ -32,6 +32,8 @@
- namespace dxmt {
+@@ -33,6 +33,7 @@ namespace dxmt {
  
  ArgumentEncodingContext::ArgumentEncodingContext(CommandQueue &queue, WMT::Device device, InternalCommandLibrary &lib) :
-+    device_(device),
+     device_(device),
 +    queue_(queue),
      lib(lib),
      emulated_cmd(device, lib, *this),
      clear_rt_cmd(device, *this),
-@@ -39,9 +41,7 @@ ArgumentEncodingContext::ArgumentEncodingContext(CommandQueue &queue, WMT::Devic
+@@ -40,8 +41,7 @@ ArgumentEncodingContext::ArgumentEncodingContext(CommandQueue &queue, WMT::Devic
      clear_uav_cmd(device, *this),
      mv_scale_cmd(device, lib, *this),
      tile_barrier_cmd(device, lib, *this),
 -    timestamp_state_(device),
--    device_(device),
 -    queue_(queue) {
 +    timestamp_state_(device) {
    dummy_sampler_info_.support_argument_buffers = true;
    dummy_sampler_info_.border_color = WMTSamplerBorderColorTransparentBlack;
    dummy_sampler_info_.compare_function = WMTCompareFunctionNever;
 diff --git a/src/dxmt/dxmt_context.hpp b/src/dxmt/dxmt_context.hpp
-index 1cd99ca..174eb79 100644
+index eabe872..bf125c9 100644
 --- a/src/dxmt/dxmt_context.hpp
 +++ b/src/dxmt/dxmt_context.hpp
-@@ -829,6 +829,16 @@ public:
-   uint32_t tess_num_output_control_point_element;
-   uint32_t tess_threads_per_patch;
- 
-+private:
-+  /* Declared before the command contexts below: their constructors already
-+   * use them (ClearUAV builds its pipelines through
-+   * SimpleCommandContext::getComputePipeline, which reads device_), and
-+   * members are initialized in declaration order, so declared after them they
-+   * were still uninitialized memory at that point. */
-+  WMT::Device device_;
+@@ -835,6 +835,9 @@ private:
+   // declaration order, so declared after them it was still uninitialised memory there, and a game
+   // could die at start in newComputePipelineStateWithDescriptor on a garbage device.
+   WMT::Device device_;
++  /* queue_ too, declared before the command contexts whose constructors run
++   * through this context. */
 +  CommandQueue& queue_;
-+
-+public:
+ 
+ public:
    InternalCommandLibrary &lib;
-   EmulatedCommandContext emulated_cmd;
-   ClearRTV<ArgumentEncodingContext> clear_rt_cmd;
-@@ -917,9 +927,6 @@ private:
+@@ -925,8 +928,6 @@ private:
    uint64_t barrier_index_ = 0;
  
    uint64_t intrapass_barrier_control_bits_ = 0;
 -
--  WMT::Device device_;
 -  CommandQueue& queue_;
  };
  

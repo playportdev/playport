@@ -24,11 +24,11 @@ Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
 Offered-upstream: no
 ---
  Source/Common/HostFeatures.cpp        |  9 +++++++++
- Source/Windows/Common/CPUFeatures.cpp | 22 ++++++++++++++++++++++
- 2 files changed, 31 insertions(+)
+ Source/Windows/Common/CPUFeatures.cpp | 23 +++++++++++++++++++++++
+ 2 files changed, 32 insertions(+)
 
 diff --git a/Source/Common/HostFeatures.cpp b/Source/Common/HostFeatures.cpp
-index ddc2cf4..6d9c16a 100644
+index 858d76d..29bdf2f 100644
 --- a/Source/Common/HostFeatures.cpp
 +++ b/Source/Common/HostFeatures.cpp
 @@ -20,6 +20,14 @@
@@ -55,13 +55,13 @@ index ddc2cf4..6d9c16a 100644
  
  #if defined(ARCHITECTURE_arm64) && !defined(VIXL_SIMULATOR)
 diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
-index 034c2ca..f89ee42 100644
+index c033db8..8ae5fd2 100644
 --- a/Source/Windows/Common/CPUFeatures.cpp
 +++ b/Source/Windows/Common/CPUFeatures.cpp
-@@ -57,6 +57,27 @@ public:
+@@ -57,6 +57,28 @@ public:
  };
  
- FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostFeatures::HostTypeEnum HostType) {
+ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostFeatures::HostTypeEnum HostType, uint32_t ProcessPID) {
 +#ifdef FEX_IOS_HOST
 +  /* iOS-Mythic: registry has nothing useful here (Hardware\... reg keys
 +   * aren't populated). Synthesize a minimal HostFeatures manually with
@@ -81,12 +81,13 @@ index 034c2ca..f89ee42 100644
 +  HostFeatures.SupportsAFP = true;
 +  HostFeatures.CPUMIDRs.push_back(0u);
 +  HostFeatures.HostType = HostType;
++  HostFeatures.ProcessPID = ProcessPID;
 +  return HostFeatures;
 +#else
    HKEY Key = OpenProcessorKey(0);
    if (!Key) {
      ERROR_AND_DIE_FMT("Couldn't detect CPU features");
-@@ -90,6 +111,7 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
+@@ -91,6 +113,7 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
      HostFeatures.SupportsAVX = false;
    }
    return HostFeatures;

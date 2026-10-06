@@ -21,7 +21,7 @@ Offered-upstream: no
 
 diff --git a/.gitignore b/.gitignore
 new file mode 100644
-index 00000000000..96c96f5e75b
+index 0000000..96c96f5
 --- /dev/null
 +++ b/.gitignore
 @@ -0,0 +1,9 @@

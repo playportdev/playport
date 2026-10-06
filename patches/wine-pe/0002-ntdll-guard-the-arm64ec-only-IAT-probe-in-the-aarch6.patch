@@ -14,7 +14,7 @@ Offered-upstream: no
  1 file changed, 4 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 9601ea02..9e2a5871 100644
+index f8aa050..f60bfa3 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -4165,6 +4165,7 @@ NTSTATUS CDECL wine_server_handle_to_fd( HANDLE handle, unsigned int access, int

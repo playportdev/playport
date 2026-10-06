@@ -84,7 +84,7 @@ index 8b7f1f3..099bd1e 100644
            err.description().getUTF8String());
      }
 diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
-index e7e7ffa..b323906 100644
+index d43fc0e..46f52fa 100644
 --- a/src/dxmt/dxmt_context.cpp
 +++ b/src/dxmt/dxmt_context.cpp
 @@ -27,6 +27,7 @@

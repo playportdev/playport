@@ -44,7 +44,7 @@ Offered-upstream: no
  1 file changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 3ffa73830e8..a89abcce82c 100644
+index 3ffa738..a89abcc 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1531,7 +1531,12 @@ static NTSTATUS fixup_imports( WINE_MODREF *wm, LPCWSTR load_path )

@@ -130,9 +130,14 @@
 0117-dwrite-Extend-emoji-fallback-range-and-add-Noto-Emoj.patch
 0118-user32-Add-a-stub-for-SkipPointerFrameMessages.patch
 0119-kernelbase-HACK-Force-disable-direct-composition-for.patch
-0120-Revert-ntoskrnl-Enumerate-child-devices-on-a-separat.patch
 0121-kernelbase-HACK-Force-disable-direct-composition-for.patch
 0122-kernelbase-Workaround-a-call-with-misaligned-stack-i.patch
 0123-d3d8-HACK-Return-NOTAVAILABLE-for-R8G8B8-in-CheckDev.patch
 0124-ddraw-Ignore-hwnd-clipper-in-exclusive-fullscreen-mo.patch
 0125-crypt32-Add-VeriSign-Class-3-Public-Primary-Certific.patch
+0126-ntdll-Explicitly-specify-section-names-in-DEFINE_USE.patch
+0127-kernelbase-HACK-Force-disable-direct-composition-for.patch
+0128-kernelbase-HACK-Force-disable-direct-composition-for.patch
+0129-gdi32-Allow-font-linking-for-runs-with-missing-glyph.patch
+0130-setupapi-Validate-device-instance-ID-when-creating-o.patch
+0131-setupapi-Be-less-picky-about-device-registry-keys-in.patch

@@ -106,11 +106,11 @@ index 0051f08..af47e3f 100644
  #ifdef FEX_IOS_HOST
    /* iOS-Mythic: halve the per-thread block-backing arena — it's committed
 diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
-index ffad00d..e4c92a2 100644
+index aa5d198..8060601 100644
 --- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 +++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 @@ -19,6 +19,28 @@ static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 128;
- CodeBuffer::CodeBuffer(size_t Size)
+ CodeBuffer::CodeBuffer(size_t Size, bool ShouldBeNamed)
    : AllocatedSize(Size) {
    Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
 +#ifdef FEX_IOS_HOST

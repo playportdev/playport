@@ -40,7 +40,7 @@ Offered-upstream: no
  7 files changed, 958 insertions(+), 72 deletions(-)
 
 diff --git a/dlls/cryptnet/cryptnet_main.c b/dlls/cryptnet/cryptnet_main.c
-index 4432f38e5b8..83df1254605 100644
+index 4432f38..83df125 100644
 --- a/dlls/cryptnet/cryptnet_main.c
 +++ b/dlls/cryptnet/cryptnet_main.c
 @@ -656,7 +656,14 @@ static BOOL CRYPT_DownloadObject(DWORD dwRetrievalFlags, HINTERNET hHttp,
@@ -115,7 +115,7 @@ index 4432f38e5b8..83df1254605 100644
                          if (WaitForSingleObject(context->event,
                           context->timeout) == WAIT_TIMEOUT)
 diff --git a/dlls/ntdll/exception.c b/dlls/ntdll/exception.c
-index ab7fe19ce26..17d25a0e333 100644
+index ab7fe19..17d25a0 100644
 --- a/dlls/ntdll/exception.c
 +++ b/dlls/ntdll/exception.c
 @@ -377,6 +377,53 @@ NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context )
@@ -173,7 +173,7 @@ index ab7fe19ce26..17d25a0e333 100644
          NtContinue( context, FALSE );
  
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 3eab1821e97..9276b96fce1 100644
+index 3eab182..9276b96 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1149,32 +1149,30 @@ void * WINAPI RtlFindExportedRoutineByName( HMODULE module, const char *name )
@@ -269,7 +269,7 @@ index 3eab1821e97..9276b96fce1 100644
           * in the new module tree runs -- the first call through a lazy slot is
           * unsalvageable (see ios_eager_delay_resolve). */
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 466b333a836..37f025dc990 100644
+index 73374e0..760bf65 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -48,6 +48,9 @@ static BOOLEAN  (WINAPI *pBTCpu64IsProcessorFeaturePresent)(UINT);
@@ -995,7 +995,7 @@ index 466b333a836..37f025dc990 100644
          {
              /* ml221: report WHY the walk produced this frame, not just that it did.
 diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
-index 43391a58748..f6a38754c02 100644
+index 1b2a5fb..6849b33 100644
 --- a/dlls/ntdll/unix/socket.c
 +++ b/dlls/ntdll/unix/socket.c
 @@ -29,6 +29,7 @@
@@ -1226,7 +1226,7 @@ index 43391a58748..f6a38754c02 100644
      while (async->iov_cursor < async->count && ret >= async->iov[async->iov_cursor].iov_len)
          ret -= async->iov[async->iov_cursor++].iov_len;
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index de79d602d9f..80ae3093e4d 100644
+index de79d60..80ae309 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
 @@ -79,6 +79,47 @@ struct ios_push_jit_aliases_params
@@ -1289,7 +1289,7 @@ index de79d602d9f..80ae3093e4d 100644
  
  extern unixlib_handle_t __wine_unixlib_handle;
 diff --git a/dlls/wininet/netconnection.c b/dlls/wininet/netconnection.c
-index 5741cc412be..af937cf8029 100644
+index 5741cc4..af937cf 100644
 --- a/dlls/wininet/netconnection.c
 +++ b/dlls/wininet/netconnection.c
 @@ -281,7 +281,20 @@ static void set_socket_blocking(netconn_t *conn, BOOL is_blocking)

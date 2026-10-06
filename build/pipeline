@@ -199,7 +199,7 @@ stage_inputs() {
 }
 
 stage_sources() {
-    local m=$PLAYPORT_REPO/upstream/madeira want got name path
+    local m=$PLAYPORT_REPO/upstream/madeira want got name path paths=""
     want=$(pin madeira)
     got=$(git -C "$PLAYPORT_REPO" ls-files -s upstream/madeira | awk '{print $2}')
     [ "$got" = "$want" ] || { say "upstream/madeira gitlink $got is not the pins.lock madeira $want"; exit 1; }
@@ -207,16 +207,25 @@ stage_sources() {
     [ "$(git -C "$m" rev-parse HEAD)" = "$want" ] ||
         { say "upstream/madeira is checked out at $(git -C "$m" rev-parse --short HEAD), not $want (git submodule update)"; exit 1; }
     # wine, dxmt and fex are upstream commits (WineHQ, 3Shain/dxmt, FEX-Emu/FEX);
-    # Madeira's wine, research/dxmt and FEX must still be the commits
+    # Madeira's wine, dxmt and FEX must still be the commits
     # patches/wine-port, patches/dxmt-port and patches/fex-port were rebased
-    # from (pins.lock, wine-port, dxmt-port and fex-port).
-    for name in wine-port:wine fex-port:FEX dxmt-port:research/dxmt; do
-        path=${name#*:}; name=${name%%:*}
-        got=$(git -C "$m" ls-tree "$want" "$path" | awk '{print $3}')
+    # from (pins.lock, wine-port, dxmt-port and fex-port). Each is at the first of
+    # its paths that the pin has as a gitlink (Madeira's 79e28f0 moved
+    # research/dxmt to dxmt). Only these are checked out: Madeira's other
+    # submodules (madeira-dock) are not used.
+    for name in wine-port:wine fex-port:FEX dxmt-port:dxmt:research/dxmt; do
+        got=""
+        for path in $(echo "${name#*:}" | tr : ' '); do
+            got=$(git -C "$m" ls-tree "$want" "$path" | awk '$2 == "commit" {print $3}')
+            [ -z "$got" ] || break
+        done
+        name=${name%%:*}
         [ "$got" = "$(pin "$name")" ] ||
-            { say "Madeira $want pins $path at $got; pins.lock says $(pin "$name")"; exit 1; }
+            { say "Madeira $want pins $path at ${got:-nothing}; pins.lock says $(pin "$name")"; exit 1; }
+        paths="$paths $path"
     done
-    run sources git -C "$m" submodule update --init --depth 1
+    # shellcheck disable=SC2086
+    run sources git -C "$m" submodule update --init --depth 1 -- $paths
     # Madeira's FEX pins its rpmalloc fork; patches/rpmalloc-port was rebased from it.
     got=$(git -C "$m/FEX" ls-tree HEAD External/rpmalloc | awk '{print $3}')
     [ "$got" = "$(pin rpmalloc-port)" ] ||

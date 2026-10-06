@@ -38,7 +38,7 @@ Offered-upstream: no
  3 files changed, 58 insertions(+), 15 deletions(-)
 
 diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
-index a8c68dc..5832bde 100644
+index fc73f36..349f3a1 100644
 --- a/src/dxmt/dxmt_context.cpp
 +++ b/src/dxmt/dxmt_context.cpp
 @@ -1120,7 +1120,9 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId

@@ -20,7 +20,7 @@ Offered-upstream: no; the window exists only on the iOS port
  1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
-index 8e178d5..a121dea 100644
+index 3211373..17d52f6 100644
 --- a/Source/Windows/WOW64/Module.cpp
 +++ b/Source/Windows/WOW64/Module.cpp
 @@ -137,9 +137,10 @@ class WowSyscallHandler;

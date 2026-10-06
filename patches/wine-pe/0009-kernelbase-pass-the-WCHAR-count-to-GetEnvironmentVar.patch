@@ -21,7 +21,7 @@ Offered-upstream: no
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
-index b53abdca597..761480ce51c 100644
+index 31a1c2c..02495eb 100644
 --- a/dlls/kernelbase/process.c
 +++ b/dlls/kernelbase/process.c
 @@ -1674,9 +1674,9 @@ static void hack_shrink_environment( WCHAR *env, SIZE_T len )

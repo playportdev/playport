@@ -49,10 +49,10 @@ Offered-upstream: no; the window exists only on the iOS port
  10 files changed, 228 insertions(+), 90 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index de2e7bd..1066aaf 100644
+index 01ba6bb..0289ab4 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
-@@ -1037,8 +1037,14 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -1040,8 +1040,14 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
          }
  
          if (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection) {
@@ -67,8 +67,8 @@ index de2e7bd..1066aaf 100644
 +                                                        Thread->OpDispatcher->_Bfe(IR::OpSize::i64Bit, 32, 0, InstAddressReg));
 +          }
  
-           auto crc32 = [](const uint8_t* Ptr, size_t Size) -> uint32_t {
- #if defined(ARCHITECTURE_arm64)
+           auto Value = FEXCore::Utils::crc32(ExistingCodePtr, DecodedInfo->InstSize);
+           auto CRC = WantsDiskCachePatching ?
 diff --git a/FEXCore/Source/Interface/Core/JIT/MemoryOps.cpp b/FEXCore/Source/Interface/Core/JIT/MemoryOps.cpp
 index 805a731..3dab106 100644
 --- a/FEXCore/Source/Interface/Core/JIT/MemoryOps.cpp
@@ -174,19 +174,19 @@ index 805a731..3dab106 100644
        break;
      }
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
-index 818d78a..176f7fd 100644
+index 56efd64..142c90c 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
-@@ -243,7 +243,7 @@ void OpDispatchBuilder::ADCOp(OpcodeArgs, uint32_t SrcIndex) {
+@@ -237,7 +237,7 @@ void OpDispatchBuilder::ADCOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
      auto ALUOp = IncrementByCarry(OpSize, Src);
      HandledLock = true;
  
 -    Ref DestMem = MakeSegmentAddress(Op, Op->Dest);
 +    Ref DestMem = GuestToHostAddress(MakeSegmentAddress(Op, Op->Dest));
      Before = _AtomicFetchAdd(Size, ALUOp, DestMem);
-   } else {
-     Before = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = true});
-@@ -279,7 +279,7 @@ void OpDispatchBuilder::SBBOp(OpcodeArgs, uint32_t SrcIndex) {
+   } else if (DestRAX) {
+     Before = LoadGPRRegister(X86State::REG_RAX, OpSizeFromSrc(Op), 0, true);
+@@ -277,7 +277,7 @@ void OpDispatchBuilder::SBBOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
    if (DestIsLockedMem(Op)) {
      HandledLock = true;
  
@@ -194,8 +194,8 @@ index 818d78a..176f7fd 100644
 +    Ref DestMem = GuestToHostAddress(MakeSegmentAddress(Op, Op->Dest));
      auto SrcPlusCF = IncrementByCarry(OpSize, Src);
      Before = _AtomicFetchSub(Size, SrcPlusCF, DestMem);
-   } else {
-@@ -457,7 +457,7 @@ void OpDispatchBuilder::LEAVEOp(OpcodeArgs) {
+   } else if (DestRAX) {
+@@ -460,7 +460,7 @@ void OpDispatchBuilder::LEAVEOp(OpcodeArgs) {
    const auto OperandSize = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE) ? OpSize::i16Bit : GPRSize;
  
    // First we move RBP in to RSP and then behave effectively like a pop
@@ -204,7 +204,7 @@ index 818d78a..176f7fd 100644
    auto NewGPR = Pop(OperandSize, SP);
  
    // Store the new stack pointer
-@@ -1122,7 +1122,7 @@ void OpDispatchBuilder::XCHGOp(OpcodeArgs) {
+@@ -1103,7 +1103,7 @@ std::optional<Ref> OpDispatchBuilder::XCHGOpImpl(OpcodeArgs, Ref Src) {
    if (DestIsMem(Op)) {
      HandledLock = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK) != 0;
  
@@ -213,7 +213,7 @@ index 818d78a..176f7fd 100644
      if (IsMonoBackpatcherBlock) {
        _MonoBackpatcherWrite(OpSizeFromSrc(Op), Src, Dest);
      } else {
-@@ -2461,7 +2461,7 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
+@@ -2513,7 +2513,7 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
  
        if (DestIsLockedMem(Op)) {
          HandledLock = true;
@@ -222,7 +222,7 @@ index 818d78a..176f7fd 100644
        } else {
          Value = _LoadMemGPRAutoTSO(OpSize::i8Bit, Address, OpSize::i8Bit);
  
-@@ -2476,7 +2476,7 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
+@@ -2528,7 +2528,7 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
  
        if (DestIsLockedMem(Op)) {
          HandledLock = true;
@@ -231,7 +231,7 @@ index 818d78a..176f7fd 100644
        } else {
          Value = _LoadMemGPRAutoTSO(OpSize::i8Bit, Address, OpSize::i8Bit);
  
-@@ -2491,7 +2491,7 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
+@@ -2543,7 +2543,7 @@ void OpDispatchBuilder::BTOp(OpcodeArgs, uint32_t SrcIndex, BTAction Action) {
  
        if (DestIsLockedMem(Op)) {
          HandledLock = true;
@@ -240,7 +240,7 @@ index 818d78a..176f7fd 100644
        } else {
          Value = _LoadMemGPRAutoTSO(OpSize::i8Bit, Address, OpSize::i8Bit);
  
-@@ -2713,7 +2713,7 @@ void OpDispatchBuilder::NOTOp(OpcodeArgs) {
+@@ -2765,7 +2765,7 @@ void OpDispatchBuilder::NOTOp(OpcodeArgs) {
  
    if (DestIsLockedMem(Op)) {
      HandledLock = true;
@@ -249,7 +249,7 @@ index 818d78a..176f7fd 100644
      // Result unused
      _AtomicFetchXor(Size, MaskConst, DestMem);
    } else if (!Op->Dest.IsGPR()) {
-@@ -2769,7 +2769,7 @@ void OpDispatchBuilder::XADDOp(OpcodeArgs) {
+@@ -2821,7 +2821,7 @@ void OpDispatchBuilder::XADDOp(OpcodeArgs) {
      StoreResultGPR(Op, Result);
    } else {
      HandledLock = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK;
@@ -258,7 +258,7 @@ index 818d78a..176f7fd 100644
      auto Before = _AtomicFetchAdd(OpSizeFromSrc(Op), Src, Dest);
      CalculateFlags_ADD(OpSizeFromSrc(Op), Before, Src);
      StoreResultGPR(Op, Op->Src[0], Before);
-@@ -2951,7 +2951,7 @@ void OpDispatchBuilder::EnterOp(OpcodeArgs) {
+@@ -3003,7 +3003,7 @@ void OpDispatchBuilder::EnterOp(OpcodeArgs) {
  
    const auto PushValue = [&](IR::OpSize Size, Ref Src) -> Ref {
      auto OldSP = LoadGPRRegister(X86State::REG_RSP);
@@ -267,7 +267,7 @@ index 818d78a..176f7fd 100644
  
      // Store the new stack pointer
      StoreGPRRegister(X86State::REG_RSP, NewSP);
-@@ -2965,7 +2965,8 @@ void OpDispatchBuilder::EnterOp(OpcodeArgs) {
+@@ -3017,7 +3017,8 @@ void OpDispatchBuilder::EnterOp(OpcodeArgs) {
    if (Level > 0) {
      for (uint8_t i = 1; i < Level; ++i) {
        auto MemLoc = Sub(GPRSize, OldBP, i * IR::OpSizeToSize(OperandSize));
@@ -277,7 +277,7 @@ index 818d78a..176f7fd 100644
        NewSP = PushValue(OperandSize, Mem);
      }
      NewSP = PushValue(OperandSize, temp_RBP);
-@@ -3090,7 +3091,7 @@ void OpDispatchBuilder::INCOp(OpcodeArgs) {
+@@ -3142,7 +3143,7 @@ void OpDispatchBuilder::INCOp(OpcodeArgs) {
    if (IsLocked) {
      HandledLock = true;
  
@@ -286,7 +286,7 @@ index 818d78a..176f7fd 100644
      Dest = _AtomicFetchAdd(OpSizeFromSrc(Op), Constant(1), DestAddress);
    } else {
      Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= 32});
-@@ -3129,7 +3130,7 @@ void OpDispatchBuilder::DECOp(OpcodeArgs) {
+@@ -3181,7 +3182,7 @@ void OpDispatchBuilder::DECOp(OpcodeArgs) {
    if (IsLocked) {
      HandledLock = true;
  
@@ -295,7 +295,7 @@ index 818d78a..176f7fd 100644
  
      // Use Add instead of Sub to avoid a NEG
      Dest = _AtomicFetchAdd(OpSizeFromSrc(Op), Constant(Size == 64 ? -1 : ((1ULL << Size) - 1)), DestAddress);
-@@ -3181,6 +3182,8 @@ void OpDispatchBuilder::STOSOp(OpcodeArgs) {
+@@ -3233,6 +3234,8 @@ void OpDispatchBuilder::STOSOp(OpcodeArgs) {
      // Store to memory where RDI points
      if (CTX->IsMemcpyAtomicTSOEnabled()) {
        _StoreMemGPRAutoTSO(Size, Dest, Src, Size);
@@ -304,7 +304,7 @@ index 818d78a..176f7fd 100644
      } else {
        _StoreMem(RegClass::GPR, Size, Src, Dest, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
      }
-@@ -3200,7 +3203,13 @@ void OpDispatchBuilder::STOSOp(OpcodeArgs) {
+@@ -3252,7 +3255,13 @@ void OpDispatchBuilder::STOSOp(OpcodeArgs) {
  
      Ref Counter = LoadGPRRegister(X86State::REG_RCX);
  
@@ -319,7 +319,7 @@ index 818d78a..176f7fd 100644
      StoreGPRRegister(X86State::REG_RCX, Constant(0));
      StoreGPRRegister(X86State::REG_RDI, Result);
    }
-@@ -3232,10 +3241,18 @@ void OpDispatchBuilder::MOVSOp(OpcodeArgs) {
+@@ -3284,10 +3293,18 @@ void OpDispatchBuilder::MOVSOp(OpcodeArgs) {
        SrcAddr = Add(OpSize::i64Bit, SrcAddr, SrcSegment);
      }
  
@@ -338,7 +338,7 @@ index 818d78a..176f7fd 100644
      if (DstSegment) {
        Result_Dst = Sub(OpSize::i64Bit, Result_Dst, DstSegment);
      }
-@@ -3256,6 +3273,9 @@ void OpDispatchBuilder::MOVSOp(OpcodeArgs) {
+@@ -3308,6 +3325,9 @@ void OpDispatchBuilder::MOVSOp(OpcodeArgs) {
  
        // Store to memory where RDI points
        _StoreMemGPRAutoTSO(Size, RDI, Src, Size);
@@ -348,7 +348,7 @@ index 818d78a..176f7fd 100644
      } else {
        auto Src = _LoadMem(RegClass::GPR, Size, RSI, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
        _StoreMem(RegClass::GPR, Size, Src, RDI, Invalid(), OpSize::i8Bit, MemOffsetType::SXTX, 1);
-@@ -3346,7 +3366,7 @@ void OpDispatchBuilder::CMPSOp(OpcodeArgs) {
+@@ -3398,7 +3418,7 @@ void OpDispatchBuilder::CMPSOp(OpcodeArgs) {
          Ref Dest_RDI = AppendSegmentOffset(Src_RDI, 0, X86Tables::DecodeFlags::FLAG_ES_PREFIX, true);
  
          auto Src1 = _LoadMemGPRAutoTSO(Size, Dest_RDI, Size);
@@ -357,7 +357,7 @@ index 818d78a..176f7fd 100644
  
          // We'll calculate PF/AF after the loop, so use them as temporaries here.
          StoreRegister(Core::CPUState::PF_AS_GREG, false, Src1);
-@@ -3652,7 +3672,7 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
+@@ -3704,7 +3724,7 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
    auto ZeroConst = Constant(0);
  
    if (DestIsLockedMem(Op)) {
@@ -366,7 +366,7 @@ index 818d78a..176f7fd 100644
      Ref Dest = _AtomicFetchNeg(Size, DestMem);
      CalculateFlags_SUB(Size, ZeroConst, Dest);
    } else {
-@@ -3926,7 +3946,7 @@ void OpDispatchBuilder::CMPXCHGOp(OpcodeArgs) {
+@@ -3978,7 +3998,7 @@ void OpDispatchBuilder::CMPXCHGOp(OpcodeArgs) {
      auto Src3Lower = _Bfe(OpSize::i64Bit, OpSizeAsBits(Size), 0, Src3);
  
      // If this is a memory location then we want the pointer to it
@@ -375,7 +375,7 @@ index 818d78a..176f7fd 100644
  
      // DataSrc = *Src1
      // if (DataSrc == Src3) { *Src1 == Src2; } Src2 = DataSrc
-@@ -3960,7 +3980,7 @@ void OpDispatchBuilder::CMPXCHGPairOp(OpcodeArgs) {
+@@ -4012,7 +4032,7 @@ void OpDispatchBuilder::CMPXCHGPairOp(OpcodeArgs) {
    HandledLock = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK) != 0;
  
    // If this is a memory location then we want the pointer to it
@@ -384,7 +384,7 @@ index 818d78a..176f7fd 100644
  
    // Load the full 64-bit registers, all the users ignore the upper 32-bits for
    // 32-bit only cmpxchg. This saves some zero extension.
-@@ -4023,8 +4043,14 @@ void OpDispatchBuilder::BeginFunction(uint64_t RIP, const fextl::vector<FEXCore:
+@@ -4075,8 +4095,14 @@ void OpDispatchBuilder::BeginFunction(uint64_t RIP, const fextl::vector<FEXCore:
    {
      uint64_t Low = 0, Sz = 0, Real = 0;
      IosXl.On = false;
@@ -400,7 +400,7 @@ index 818d78a..176f7fd 100644
      }
    }
  #endif
-@@ -4481,7 +4507,7 @@ Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::De
+@@ -4552,7 +4578,7 @@ Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::De
    const bool ShouldLoad = (IsOperandMem(Operand, true) && LoadData) || ForceLoad;
    if (ShouldLoad) {
      if (OpSize == OpSize::f80Bit) {
@@ -409,7 +409,7 @@ index 818d78a..176f7fd 100644
        if (CTX->HostFeatures.SupportsSVE()) {
          Result = _LoadMemX87SVEOptPredicate(OpSize::i128Bit, OpSize::i16Bit, MemSrc);
        } else {
-@@ -4620,7 +4646,7 @@ void OpDispatchBuilder::StoreResult_WithOpSize(RegClass Class, FEXCore::X86Table
+@@ -4691,7 +4717,7 @@ void OpDispatchBuilder::StoreResult_WithOpSize(RegClass Class, FEXCore::X86Table
    AddressMode A = DecodeAddress(Op, Operand, AccessType, false /* IsLoad */);
  
    if (OpSize == OpSize::f80Bit) {
@@ -418,7 +418,7 @@ index 818d78a..176f7fd 100644
      if (CTX->HostFeatures.SupportsSVE()) {
        _StoreMemX87SVEOptPredicate(OpSize::i128Bit, OpSize::i16Bit, Src, MemStoreDst);
      } else {
-@@ -4758,7 +4784,7 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
+@@ -4829,7 +4855,7 @@ void OpDispatchBuilder::ALUOp(OpcodeArgs, FEXCore::IR::IROps ALUIROp, FEXCore::I
  
    if (DestIsLockedMem(Op)) {
      HandledLock = true;
@@ -426,8 +426,8 @@ index 818d78a..176f7fd 100644
 +    Ref DestMem = GuestToHostAddress(MakeSegmentAddress(Op, Op->Dest));
      DeriveOp(FetchOp, AtomicFetchOp, _AtomicFetchAdd(Size, Src, DestMem));
      Dest = FetchOp;
-   } else {
-@@ -4971,7 +4997,7 @@ void OpDispatchBuilder::MOVBEOp(OpcodeArgs) {
+   } else if (DestRAX) {
+@@ -5046,7 +5072,7 @@ void OpDispatchBuilder::MOVBEOp(OpcodeArgs) {
  
  void OpDispatchBuilder::CLWBOrTPause(OpcodeArgs) {
    if (DestIsMem(Op)) {
@@ -436,7 +436,7 @@ index 818d78a..176f7fd 100644
      _CacheLineClean(DestMem);
    } else {
      if (!CTX->HostFeatures.SupportsWFXT) {
-@@ -4992,7 +5018,7 @@ void OpDispatchBuilder::CLWBOrTPause(OpcodeArgs) {
+@@ -5067,7 +5093,7 @@ void OpDispatchBuilder::CLWBOrTPause(OpcodeArgs) {
  }
  
  void OpDispatchBuilder::CLFLUSHOPT(OpcodeArgs) {
@@ -445,7 +445,7 @@ index 818d78a..176f7fd 100644
    _CacheLineClear(DestMem, false);
  }
  
-@@ -5020,7 +5046,7 @@ void OpDispatchBuilder::StoreFenceOrCLFlush(OpcodeArgs) {
+@@ -5095,7 +5121,7 @@ void OpDispatchBuilder::StoreFenceOrCLFlush(OpcodeArgs) {
      _Fence(FenceType::Store);
    } else {
      // This is a CLFlush
@@ -454,16 +454,16 @@ index 818d78a..176f7fd 100644
      _CacheLineClear(DestMem, true);
    }
  }
-@@ -5052,7 +5078,7 @@ void OpDispatchBuilder::CLZeroOp(OpcodeArgs) {
+@@ -5127,7 +5153,7 @@ void OpDispatchBuilder::CLZeroOp(OpcodeArgs) {
      UnimplementedOp(Op);
      return;
    }
--  Ref DestMem = LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.LoadData = false});
-+  Ref DestMem = GuestToHostAddress(LoadSourceGPR(Op, Op->Src[0], Op->Flags, {.LoadData = false}));
-   _CacheLineZero(DestMem);
+-  _CacheLineZero(LoadGPRRegister(X86State::REG_RAX));
++  _CacheLineZero(GuestToHostAddress(LoadGPRRegister(X86State::REG_RAX)));
  }
  
-@@ -5062,7 +5088,7 @@ void OpDispatchBuilder::Prefetch(OpcodeArgs, bool ForStore, bool Stream, uint8_t
+ void OpDispatchBuilder::Prefetch(OpcodeArgs, bool ForStore, bool Stream, uint8_t Level) {
+@@ -5136,7 +5162,7 @@ void OpDispatchBuilder::Prefetch(OpcodeArgs, bool ForStore, bool Stream, uint8_t
      return;
    }
  
@@ -473,7 +473,7 @@ index 818d78a..176f7fd 100644
  }
  
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
-index 8c40ec9..8c5a48d 100644
+index 5cdb748..1d3875a 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
 @@ -344,6 +344,20 @@ public:
@@ -497,7 +497,7 @@ index 8c40ec9..8c5a48d 100644
    // Dispatch builder functions
  #define OpcodeArgs [[maybe_unused]] FEXCore::X86Tables::DecodedOp Op
  
-@@ -2464,6 +2478,44 @@ private:
+@@ -2495,6 +2509,44 @@ private:
      Ref D = _And(OpSize::i64Bit, S, Constant(IosXl.Delta));
      return Add(OpSize::i64Bit, EA, D);
    }
@@ -542,7 +542,7 @@ index 8c40ec9..8c5a48d 100644
    IROp_IRHeader* CurrentHeader {};
  
    [[nodiscard]]
-@@ -2480,6 +2532,9 @@ private:
+@@ -2511,6 +2563,9 @@ private:
    }
  
    Ref _StoreMemAutoTSO(RegClass Class, OpSize Size, Ref Addr, Ref Value, OpSize Align = OpSize::i8Bit) {
@@ -552,7 +552,7 @@ index 8c40ec9..8c5a48d 100644
      Addr = IosXlate(Addr);
      if (IsTSOEnabled(Class)) {
        return _StoreMemTSO(Class, Size, Value, Addr, Invalid(), Align, MemOffsetType::SXTX, 1);
-@@ -2495,6 +2550,9 @@ private:
+@@ -2526,6 +2581,9 @@ private:
    }
  
    Ref _LoadMemAutoTSO(RegClass Class, OpSize Size, Ref ssa0, OpSize Align = OpSize::i8Bit) {
@@ -562,7 +562,7 @@ index 8c40ec9..8c5a48d 100644
      ssa0 = IosXlate(ssa0);
      if (IsTSOEnabled(Class)) {
        return _LoadMemTSO(Class, Size, ssa0, Invalid(), Align, MemOffsetType::SXTX, 1);
-@@ -2511,6 +2569,9 @@ private:
+@@ -2542,6 +2600,9 @@ private:
  
    Ref _LoadMemAutoTSO(RegClass Class, OpSize Size, const AddressMode& A, OpSize Align = OpSize::i8Bit) {
      const bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
@@ -572,7 +572,7 @@ index 8c40ec9..8c5a48d 100644
      if (IosXl.On) {   // ml1057: the window test needs the EFFECTIVE address, so materialise it
        Ref EA = IosXlate(LoadEffectiveAddress(this, A, GetGPROpSize(), true));
        return AtomicTSO ? _LoadMemTSO(Class, Size, EA, Invalid(), Align, MemOffsetType::SXTX, 1)
-@@ -2536,6 +2597,12 @@ private:
+@@ -2567,6 +2628,12 @@ private:
      const auto SizeInt = IR::OpSizeToSize(Size);
      AddressMode Out {};
  
@@ -585,7 +585,7 @@ index 8c40ec9..8c5a48d 100644
      signed OffsetEl = A.Offset / SizeInt;
      if ((A.Offset % SizeInt) == 0 && OffsetEl >= -64 && OffsetEl < 64) {
        Out.Offset = A.Offset;
-@@ -2579,6 +2646,9 @@ private:
+@@ -2610,6 +2677,9 @@ private:
  
    Ref _StoreMemAutoTSO(RegClass Class, OpSize Size, const AddressMode& A, Ref Value, OpSize Align = OpSize::i8Bit) {
      const bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
@@ -595,7 +595,7 @@ index 8c40ec9..8c5a48d 100644
      if (IosXl.On) {   // ml1057
        Ref EA = IosXlate(LoadEffectiveAddress(this, A, GetGPROpSize(), true));
        return AtomicTSO ? _StoreMemTSO(Class, Size, Value, EA, Invalid(), Align, MemOffsetType::SXTX, 1)
-@@ -2619,7 +2689,14 @@ private:
+@@ -2650,7 +2720,14 @@ private:
      return _StoreMemPairAutoTSO(RegClass::FPR, Size, A, Value1, Value2, Align);
    }
  
@@ -611,7 +611,7 @@ index 8c40ec9..8c5a48d 100644
      Ref Value = _AllocateGPR(false);
      _Pop(Size, SP_RMW, Value);
      return Value;
-@@ -2627,9 +2704,7 @@ private:
+@@ -2658,9 +2735,7 @@ private:
  
    Ref Pop(IR::OpSize Size) {
      Ref SP = _RMWHandle(LoadGPRRegister(X86State::REG_RSP));
@@ -622,7 +622,7 @@ index 8c40ec9..8c5a48d 100644
  
      // Store the new stack pointer
      StoreGPRRegister(X86State::REG_RSP, SP);
-@@ -2643,9 +2718,19 @@ private:
+@@ -2674,9 +2749,19 @@ private:
      return AlreadyExtended ? Value : _VMov(Size, Value);
    }
  
@@ -644,7 +644,7 @@ index 8c40ec9..8c5a48d 100644
      FlushRegisterCache();
    }
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp
-index cfce256..7f77354 100644
+index 59466b9..f84796b 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp
 @@ -356,7 +356,7 @@ void OpDispatchBuilder::AVX128_MOVVectorNT(OpcodeArgs) {
@@ -724,7 +724,7 @@ index cfce256..7f77354 100644
      Result.Low = _VLoadVectorElement(OpSize::i128Bit, ElementSize, Src1.Low, Index, Src2);
    }
  
-@@ -1572,7 +1572,7 @@ void OpDispatchBuilder::AVX128_VMASKMOVImpl(OpcodeArgs, IR::OpSize ElementSize,
+@@ -1601,7 +1601,7 @@ void OpDispatchBuilder::AVX128_VMASKMOVImpl(OpcodeArgs, IR::OpSize ElementSize,
    auto Mask = AVX128_LoadSource_WithOpSize(Op, MaskOp, Op->Flags, !Is128Bit);
  
    const auto MakeAddress = [this, Op](const X86Tables::DecodedOperand& Data) {
@@ -733,7 +733,7 @@ index cfce256..7f77354 100644
    };
  
    if (IsStore) {
-@@ -1620,7 +1620,7 @@ void OpDispatchBuilder::AVX128_MASKMOV(OpcodeArgs) {
+@@ -1649,7 +1649,7 @@ void OpDispatchBuilder::AVX128_MASKMOV(OpcodeArgs) {
    auto VectorSrc = AVX128_LoadSource_WithOpSize(Op, Op->Dest, Op->Flags, !Is128Bit);
  
    // RDI source (DS prefix by default)
@@ -743,10 +743,10 @@ index cfce256..7f77354 100644
    Ref XMMReg = _LoadMemFPR(Size, MemDest, OpSize::i8Bit);
  
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp
-index 97d1292..76119f7 100644
+index 37de3a0..d4a77c9 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp
-@@ -53,7 +53,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
+@@ -54,7 +54,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
  
    if (Op->Dest.IsGPR() && Size >= OpSize::i128Bit) {
      ///< MOVNTDQA load non-temporal comes from SSE4.1 and is extended by AVX/AVX2.
@@ -755,7 +755,7 @@ index 97d1292..76119f7 100644
      auto Src = _VLoadNonTemporal(Size, SrcAddr, 0);
  
      if (IsAVX) {
-@@ -78,7 +78,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
+@@ -79,7 +79,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
        // MMX 64-bit comes from MOVNTQ
        StoreResultFPR(Op, Src, OpSize::i8Bit, MemoryAccessType::STREAM);
      } else {
@@ -764,7 +764,7 @@ index 97d1292..76119f7 100644
  
        // Single store non-temporal for larger operations.
        _VStoreNonTemporal(Size, Src, Dest, 0);
-@@ -121,7 +121,7 @@ void OpDispatchBuilder::MOVHPDOp(OpcodeArgs) {
+@@ -122,7 +122,7 @@ void OpDispatchBuilder::MOVHPDOp(OpcodeArgs) {
      } else {
        // If the destination is a GPR then the source is memory
        // xmm1[127:64] = src
@@ -773,7 +773,7 @@ index 97d1292..76119f7 100644
        Ref Dest = LoadSourceFPR_WithOpSize(Op, Op->Dest, OpSize::i128Bit, Op->Flags);
        auto Result = _VLoadVectorElement(OpSize::i128Bit, OpSize::i64Bit, Dest, 1, Src);
        StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, Result);
-@@ -130,7 +130,7 @@ void OpDispatchBuilder::MOVHPDOp(OpcodeArgs) {
+@@ -131,7 +131,7 @@ void OpDispatchBuilder::MOVHPDOp(OpcodeArgs) {
      // In this case memory is the destination and the high bits of the XMM are source
      // Mem64 = xmm1[127:64]
      Ref Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
@@ -782,7 +782,7 @@ index 97d1292..76119f7 100644
      _VStoreVectorElement(OpSize::i128Bit, OpSize::i64Bit, Src, 1, Dest);
    }
  }
-@@ -159,7 +159,7 @@ void OpDispatchBuilder::MOVLPOp(OpcodeArgs) {
+@@ -160,7 +160,7 @@ void OpDispatchBuilder::MOVLPOp(OpcodeArgs) {
        StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, Result, OpSize::i128Bit);
      } else {
        const auto DstSize = OpSizeFromDst(Op);
@@ -791,7 +791,7 @@ index 97d1292..76119f7 100644
        Ref Dest = LoadSourceFPR_WithOpSize(Op, Op->Dest, DstSize, Op->Flags);
        auto Result = _VLoadVectorElement(OpSize::i128Bit, OpSize::i64Bit, Dest, 0, Src);
        StoreResult_WithAVXInsert(VectorOpType::SSE, RegClass::FPR, Op, Result);
-@@ -2037,7 +2037,7 @@ void OpDispatchBuilder::VBROADCASTOp(OpcodeArgs, IR::OpSize ElementSize) {
+@@ -2038,7 +2038,7 @@ void OpDispatchBuilder::VBROADCASTOp(OpcodeArgs, IR::OpSize ElementSize) {
      Result = _VDupElement(DstSize, ElementSize, Src, 0);
    } else {
      // Get the address to broadcast from into a GPR.
@@ -800,7 +800,7 @@ index 97d1292..76119f7 100644
      Result = _VBroadcastFromMem(DstSize, ElementSize, Address);
    }
  
-@@ -2061,7 +2061,7 @@ Ref OpDispatchBuilder::PINSROpImpl(OpcodeArgs, IR::OpSize ElementSize, const X86
+@@ -2062,7 +2062,7 @@ Ref OpDispatchBuilder::PINSROpImpl(OpcodeArgs, IR::OpSize ElementSize, const X86
    }
  
    // If loading from memory then we only load the element size
@@ -809,7 +809,7 @@ index 97d1292..76119f7 100644
    return _VLoadVectorElement(Size, ElementSize, Src1, Index, Src2);
  }
  
-@@ -2165,7 +2165,7 @@ void OpDispatchBuilder::PExtrOp(OpcodeArgs, IR::OpSize ElementSize) {
+@@ -2166,7 +2166,7 @@ void OpDispatchBuilder::PExtrOp(OpcodeArgs, IR::OpSize ElementSize) {
    }
  
    // If we are storing to memory then we store the size of the element extracted
@@ -818,7 +818,7 @@ index 97d1292..76119f7 100644
    _VStoreVectorElement(OpSize::i128Bit, OverridenElementSize, Src, Index, Dest);
  }
  
-@@ -2799,7 +2799,7 @@ void OpDispatchBuilder::MASKMOVOp(OpcodeArgs) {
+@@ -2800,7 +2800,7 @@ void OpDispatchBuilder::MASKMOVOp(OpcodeArgs) {
    Ref VectorSrc = LoadSourceFPR(Op, Op->Dest, Op->Flags);
  
    // RDI source (DS prefix by default)
@@ -827,7 +827,7 @@ index 97d1292..76119f7 100644
  
    Ref XMMReg = _LoadMemFPR(Size, MemDest, OpSize::i8Bit);
  
-@@ -2812,7 +2812,7 @@ void OpDispatchBuilder::VMASKMOVOpImpl(OpcodeArgs, IR::OpSize ElementSize, IR::O
+@@ -2813,7 +2813,7 @@ void OpDispatchBuilder::VMASKMOVOpImpl(OpcodeArgs, IR::OpSize ElementSize, IR::O
                                         const X86Tables::DecodedOperand& MaskOp, const X86Tables::DecodedOperand& DataOp) {
  
    const auto MakeAddress = [this, Op](const X86Tables::DecodedOperand& Data) {
@@ -836,7 +836,7 @@ index 97d1292..76119f7 100644
    };
  
    Ref Mask = LoadSourceFPR_WithOpSize(Op, MaskOp, DataSize, Op->Flags);
-@@ -2875,7 +2875,7 @@ void OpDispatchBuilder::MOVBetweenGPR_FPR(OpcodeArgs, VectorOpType VectorType) {
+@@ -2876,7 +2876,7 @@ void OpDispatchBuilder::MOVBetweenGPR_FPR(OpcodeArgs, VectorOpType VectorType) {
        const auto DstSize = std::max(OpSize::i32Bit, OpSizeFromDst(Op));
  
        // Storing first element to memory.
@@ -845,7 +845,7 @@ index 97d1292..76119f7 100644
        _StoreMemFPR(DstSize, Dest, Src, OpSize::i8Bit);
      }
    }
-@@ -2977,7 +2977,7 @@ void OpDispatchBuilder::AVXVFCMPOp(OpcodeArgs, IR::OpSize ElementSize) {
+@@ -2978,7 +2978,7 @@ void OpDispatchBuilder::AVXVFCMPOp(OpcodeArgs, IR::OpSize ElementSize) {
  }
  
  void OpDispatchBuilder::FXSaveOp(OpcodeArgs) {
@@ -854,7 +854,7 @@ index 97d1292..76119f7 100644
  
    SaveX87State(Op, Mem);
    SaveSSEState(Mem);
-@@ -2989,7 +2989,7 @@ void OpDispatchBuilder::XSaveOp(OpcodeArgs) {
+@@ -2990,7 +2990,7 @@ void OpDispatchBuilder::XSaveOp(OpcodeArgs) {
  }
  
  Ref OpDispatchBuilder::XSaveBase(X86Tables::DecodedOp Op) {
@@ -863,7 +863,7 @@ index 97d1292..76119f7 100644
  }
  
  void OpDispatchBuilder::XSaveOpImpl(OpcodeArgs) {
-@@ -3170,7 +3170,7 @@ Ref OpDispatchBuilder::GetMXCSR() {
+@@ -3171,7 +3171,7 @@ Ref OpDispatchBuilder::GetMXCSR() {
  }
  
  void OpDispatchBuilder::FXRStoreOp(OpcodeArgs) {
@@ -873,7 +873,7 @@ index 97d1292..76119f7 100644
    RestoreX87State(Mem);
    RestoreSSEState(Mem);
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher/X87.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher/X87.cpp
-index b04f47e..759b17d 100644
+index 1c3d690..77a2858 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher/X87.cpp
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher/X87.cpp
 @@ -129,7 +129,12 @@ void OpDispatchBuilder::FST(OpcodeArgs, IR::OpSize Width) {
@@ -985,10 +985,10 @@ index f205097..8b54ea1 100644
      } else {
        F80SplitStore_Helper(Op, StackNode, AddrNode, Offset, Align, OffsetType, OffsetScale);
 diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
-index a121dea..361f079 100644
+index 17d52f6..f08ffd1 100644
 --- a/Source/Windows/WOW64/Module.cpp
 +++ b/Source/Windows/WOW64/Module.cpp
-@@ -129,10 +129,10 @@ class WowSyscallHandler;
+@@ -133,10 +133,10 @@ class WowSyscallHandler;
  /* iOS has no low 4 GiB, so Wine keeps this process's 32-bit address space in a
   * window: guest address g is host address Base + g (Playport's madeira-unix
   * window, docs/PORTAL2-PLAN.md). The base is read from the paired TEB32 at
@@ -1003,7 +1003,7 @@ index a121dea..361f079 100644
   * to Wine's trackers are host pointers; guest state (EIP, ESP, the FS base and
   * the bridge addresses the guest jumps to) stays guest. */
  namespace Window {
-@@ -162,7 +162,8 @@ uint64_t IosSubfloorToReal(uint64_t Address) {
+@@ -166,7 +166,8 @@ uint64_t IosSubfloorToReal(uint64_t Address) {
    return Window::Base ? Window::ToHost(Address) : Address;
  }
  

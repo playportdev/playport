@@ -47,7 +47,7 @@ One sequence for this plan and
 |---|---|---|
 | 1 | Sync tooling for Madeira's reorganisation: `research/dxmt` → `dxmt` in `tools/sync.py` and `build/pipeline`, and what `madeira-dock` means for `sources` | strategy, step 0 |
 | 2 | The rebase helper (rerere, conflict trial, `range-diff`, re-export), proven on the FEX → `main` move | strategy, step 1 |
-| 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit | alignment, step 1 (rows 2–10) |
+| 3 | Wine, FEX, DXMT, Mesa, DXVK, vkd3d-proton and the rest to latest, one per commit. **Rows 2–7 and 2b done** (decision 0049, e71e8a7..b011dbf, one commit and IPA each): every IPA passes the gate on both titles; the final build does less CPU work a frame than the baseline, and Portal 2's ≥25 ms load-segment hitch count (52 → 134 in the first pair) is run-to-run spread, the baseline alone spanning 52–268 over three runs ([deps-latest](../evidence/2026-10-05-deps-latest.md)). **Rows 8–10 done** (1e86afc, 2370713, 7ce2b51 after the rebase): freetype VER-2-14-3, rust 1.99.0 and stikjit 1.9.0 moved, one commit and IPA each; gbe, abseil-cpp, idevice, llvm-project, xtool (needs a machine-wide Darwin SDK reinstall) and gstreamer (a new release needs a new licensing audit) held, each with its reason. Every `pins.lock` row except `madeira` (order 5) is now moved or held. **DONE (2026-10-05):** the branch was rebased onto `main` 0.3.2 (which had taken the StikJIT 1.9.0 move itself), and one gate on the rebased final IPA `35956f63`, which contains all three moves, passed on both titles (JIT 2.31 / 2.50 s, first frame +9.53 / +7.48 s); xtool and GStreamer held by the owner | alignment, step 1 (rows 2–10) |
 | 4 | Madeira reconciliation: per overlapping area (i386/WoW64, in-process sync, winegstreamer, D3D9, DXMT slots 145–149), whose design Playport runs | strategy, step 2 |
 | 5 | Madeira to `main`, re-porting its fork deltas once, onto the new bases | alignment, step 1 (row 11) |
 | 6 | The alignment items (A, B) and the Portal 2 performance follow-ups | alignment, step 2 |
@@ -125,6 +125,8 @@ Re-read the heads before starting. Valve moves these branches weekly.
   forced through.
 
 ### Order and targets
+
+**Status (2026-10-05):** rows 2, 2b and 3–7 moved, one commit each, gated on both titles. Rows 8–10: freetype, rust and stikjit moved and gated (one gate on the final IPA rebased onto `main` 0.3.2, `35956f63`); gbe, abseil-cpp, idevice, llvm-project, xtool and gstreamer held with their reasons. Row 11 (`madeira`) not started. The step-1 deliverable (every row moved or held with a reason) holds apart from row 11. See [deps-latest](../evidence/2026-10-05-deps-latest.md). Open question 5 is answered there: WineHQ's `dlls/wow64` does not read `ChpeV2CpuAreaInfo`; ntdll's unix side does, which on Playport is `signal_arm64_ios.c` and `thread_ios.c`.
 
 Madeira moves **last** (owner, 2026-10-05). The rule that the `*-port` rows equal
 Madeira's gitlinks constrains only the port rows; the `wine`, `fex` and `dxmt`

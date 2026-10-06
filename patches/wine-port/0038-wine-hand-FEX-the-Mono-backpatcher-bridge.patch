@@ -29,7 +29,7 @@ Offered-upstream: no
  2 files changed, 25 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 37f025dc990..d813a072da4 100644
+index 760bf65..dd53238 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -48,6 +48,7 @@ static BOOLEAN  (WINAPI *pBTCpu64IsProcessorFeaturePresent)(UINT);
@@ -78,7 +78,7 @@ index 37f025dc990..d813a072da4 100644
       *
       * ml611/ml616/ml617 all froze the whole app the same way: a thread dies in
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 80ae3093e4d..48f75344ce7 100644
+index 80ae309..48f7534 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
 @@ -135,6 +135,7 @@ enum ntdll_unix_funcs

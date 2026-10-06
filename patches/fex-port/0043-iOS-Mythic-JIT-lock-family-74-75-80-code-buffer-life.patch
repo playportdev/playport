@@ -49,10 +49,10 @@ Offered-upstream: no
  13 files changed, 875 insertions(+), 11 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
-index ed77028..3aef1e5 100644
+index ac39051..c21aa41 100644
 --- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
 +++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
-@@ -307,7 +307,32 @@ namespace CPU {
+@@ -308,7 +308,32 @@ namespace CPU {
  
    CPUBackend::~CPUBackend() = default;
  
@@ -85,7 +85,7 @@ index ed77028..3aef1e5 100644
      auto PrevCodeBuffer = CurrentCodeBuffer;
  
      // Resize the code buffer and reallocate our code size
-@@ -322,6 +347,27 @@ namespace CPU {
+@@ -323,6 +348,27 @@ namespace CPU {
        // We have signal handlers that have generated code
        // This means that we can not safely clear the code at this point in time
        // Keep a reference to the old code buffer to delay deallocation
@@ -113,7 +113,7 @@ index ed77028..3aef1e5 100644
        SignalHandlerCodeBuffers.push_back(std::move(CodeBuffer));
      } else {
        SignalHandlerCodeBuffers.clear();
-@@ -330,6 +376,9 @@ namespace CPU {
+@@ -331,6 +377,9 @@ namespace CPU {
  
    fextl::shared_ptr<CodeBuffer> CPUBackend::CheckCodeBufferUpdate() {
      auto NewCodeBuffer = SharedCodeBuffers.GetLatest();
@@ -123,7 +123,7 @@ index ed77028..3aef1e5 100644
      if (CurrentCodeBuffer != NewCodeBuffer) {
        RegisterForSignalHandler(CurrentCodeBuffer);
        return std::exchange(CurrentCodeBuffer, NewCodeBuffer);
-@@ -337,7 +386,188 @@ namespace CPU {
+@@ -338,7 +387,188 @@ namespace CPU {
      return nullptr;
    }
  
@@ -371,10 +371,10 @@ index 0183694..ed538f0 100644
      // Max spill slot size in bytes. We need at most 32 bytes
      // to be able to handle a 256-bit vector store to a slot.
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 08be95c..5b52a84 100644
+index 52080d7..7191c15 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
-@@ -108,6 +108,13 @@ static volatile uint64_t g_mythic_thr_last_rip[4] = {0,0,0,0};
+@@ -106,6 +106,13 @@ static volatile uint64_t g_mythic_thr_last_rip[4] = {0,0,0,0};
  static volatile uint64_t g_cb_total = 0;
  static volatile uint64_t g_cb_real_compiles = 0;
  
@@ -388,7 +388,7 @@ index 08be95c..5b52a84 100644
  namespace FEXCore::Context {
  ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
    : HostFeatures {Features}
-@@ -919,7 +926,9 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -905,7 +912,9 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
    // We could lock CodeBufferWriteMutex earlier to prevent this from happening,
    // but this would increase lock contention. Redundant frontend runs aren't
    // as expensive and are easily reverted.
@@ -399,7 +399,7 @@ index 08be95c..5b52a84 100644
      if (auto Block = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
        // Raced to compile, release the OpDispatcher IR.
        Thread->OpDispatcher->DelayedDisownBuffer();
-@@ -1600,6 +1609,34 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1586,6 +1595,34 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
  
    static_cast<ContextImpl*>(Thread->CTX)->SyscallHandler->PreCompile();
  
@@ -434,7 +434,7 @@ index 08be95c..5b52a84 100644
    // Invalidate might take a unique lock on this, to guarantee that during invalidation no code gets compiled
    auto lk = GuardSignalDeferringSection<std::shared_lock>(CodeInvalidationMutex, Thread);
  
-@@ -1608,6 +1645,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1594,6 +1631,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    if (auto HostCode = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
      return HostCode;
    }
@@ -442,7 +442,7 @@ index 08be95c..5b52a84 100644
  
    // iOS-Mythic: cache miss reached — count as true compile.
    __sync_add_and_fetch(&g_cb_real_compiles, 1);
-@@ -1619,6 +1657,11 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1605,6 +1643,11 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    std::optional<uint64_t> DiskCacheGuestCodeKey;
    {
      FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedDiskCacheLookupTime);
@@ -454,7 +454,7 @@ index 08be95c..5b52a84 100644
      Hit = DiskCache.Lookup(Thread, Region, GuestRIP, DiskCacheGuestCodeKey);
      if (Hit && !DiskCache.IsValidating()) {
        auto LoadedCode = Thread->CPUBackend->LoadCachedCode(Hit->HostCode);
-@@ -1656,7 +1699,19 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1642,7 +1685,19 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    // Accumulate a JIT count now, as even if another thread raced us, it should count as a compile.
    FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedJITCount, 1);
  
@@ -474,7 +474,7 @@ index 08be95c..5b52a84 100644
    auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
    /* iOS-Mythic diag (Thumper desktop ILL 2026-07-06): three crashes branched
     * to BlockTail+0x18 instead of a code entry — the published entry itself
-@@ -1728,6 +1783,21 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1714,6 +1769,21 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      }
    }
  
@@ -496,7 +496,7 @@ index 08be95c..5b52a84 100644
    fextl::vector<uint64_t> CodePages;
  
    if (NeedsAddGuestCodeRanges) {
-@@ -1774,6 +1844,19 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1760,6 +1830,19 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    Thread->FrontendDecoder->ValidateDisownedOrFree();
    Thread->OpDispatcher->ValidateDisownedOrFree();
  
@@ -517,10 +517,10 @@ index 08be95c..5b52a84 100644
  }
  
 diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-index 8951bb3..526bbc3 100644
+index 03b48f9..be07670 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-@@ -579,6 +579,21 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+@@ -614,6 +614,21 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
      Frame->State.rip = GuestRip;
      return Frame->Pointers.DispatcherLoopTop;
    } else {
@@ -542,7 +542,7 @@ index 8951bb3..526bbc3 100644
      {
        // Guard the LookupCache lock with the code invalidation mutex, to avoid issues with forking
        auto lk_inval =
-@@ -886,10 +901,66 @@ void Arm64JITCore::EmitEntryPoint(ARMEmitter::BackwardLabel& HeaderLabel, bool C
+@@ -922,10 +937,66 @@ void Arm64JITCore::EmitEntryPoint(ARMEmitter::BackwardLabel& HeaderLabel, bool C
  }
  
  
@@ -609,7 +609,7 @@ index 8951bb3..526bbc3 100644
    // Bring CodeBuffer up to date
    if (auto Prev = CheckCodeBufferUpdate()) {
      Allocator::VirtualDontNeed(ThreadState->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
-@@ -1202,6 +1273,12 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1238,6 +1309,12 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
      LOGMAN_THROW_A_FMT(CodeData.Size % 16 == 0, "Needs to be 16B aligned!");
  
      auto AllocatedInfo = AllocateCodeBufferInSharedCache(CodeData.Size);
@@ -661,7 +661,7 @@ index 4057786..821ba98 100644
  
  struct LookupCacheReadLockToken : public LookupCacheBaseLockToken {
 diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
-index e4c92a2..c54bf2f 100644
+index 8060601..f83eb0e 100644
 --- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 +++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 @@ -13,8 +13,17 @@
@@ -680,10 +680,10 @@ index e4c92a2..c54bf2f 100644
  static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 128;
 +#endif
  
- CodeBuffer::CodeBuffer(size_t Size)
+ CodeBuffer::CodeBuffer(size_t Size, bool ShouldBeNamed)
    : AllocatedSize(Size) {
-@@ -65,6 +74,15 @@ CodeBuffer::~CodeBuffer() {
-   FEXCore::Allocator::VirtualFree(Ptr, AllocatedSize);
+@@ -78,6 +87,15 @@ SharedCodeBufferManager::SharedCodeBufferManager() {
+   NameJITBuffers = !(GlobalJITNaming || LibraryJITNaming || BlockJITNaming);
  }
  
 +#ifdef FEX_IOS_HOST
@@ -698,9 +698,9 @@ index e4c92a2..c54bf2f 100644
  fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size) {
  #if defined(__linux__)
    // MDWE (Memory-Deny-Write-Execute) is a new Linux 6.3 feature.
-@@ -90,7 +108,31 @@ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size)
+@@ -103,7 +121,31 @@ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size)
  
-   auto Buffer = fextl::make_shared<CodeBuffer>(Size);
+   auto Buffer = fextl::make_shared<CodeBuffer>(Size, NameJITBuffers);
  
 +#ifdef FEX_IOS_HOST
 +  /* ml460 (#75): generation bookkeeping. prev_use_count at swap time is the
@@ -730,7 +730,7 @@ index e4c92a2..c54bf2f 100644
  
    OnCodeBufferAllocated(Buffer);
  
-@@ -98,10 +140,26 @@ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size)
+@@ -111,10 +153,26 @@ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size)
  }
  
  fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::GetLatest() {
@@ -758,7 +758,7 @@ index e4c92a2..c54bf2f 100644
  
  fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::StartLargerCodeBuffer() {
 diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
-index c047eb8..27c7e80 100644
+index be7de21..8ec84d0 100644
 --- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
 +++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
 @@ -14,6 +14,10 @@ $end_info$
@@ -772,7 +772,7 @@ index c047eb8..27c7e80 100644
  
  namespace FEXCore {
  struct GuestToHostMap;
-@@ -127,6 +131,16 @@ public:
+@@ -128,6 +132,16 @@ public:
  
    virtual void OnCodeBufferAllocated(const std::shared_ptr<CodeBuffer>&) {};
  
@@ -1203,7 +1203,7 @@ index 1c34366..c910a70 100644
    ldr x17, [x18, #0x1788] // TEB->ChpeV2CpuAreaInfo
  #endif
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 4939d25..e49b624 100644
+index 0bc12e5..6b90e18 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -53,6 +53,7 @@ $end_info$
@@ -1240,7 +1240,7 @@ index 4939d25..e49b624 100644
    LogMan::Msg::EFmt("[build-id] xtajit64 rev=" MYTHIC_REV " compiled " __DATE__ " " __TIME__);
  #endif
  
-@@ -1694,6 +1705,11 @@ NTSTATUS ThreadInit() {
+@@ -1695,6 +1706,11 @@ NTSTATUS ThreadInit() {
      }
    }
  
@@ -1252,7 +1252,7 @@ index 4939d25..e49b624 100644
    CPUArea.ThreadState() = Thread;
    CPUArea.Area->SuspendDoorbell = reinterpret_cast<ULONG*>(&Thread->CurrentFrame->SuspendDoorbell);
  #ifdef FEX_IOS_HOST
-@@ -1732,6 +1748,9 @@ NTSTATUS ThreadInit() {
+@@ -1733,6 +1749,9 @@ NTSTATUS ThreadInit() {
  
  NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
    if (!FEX::Windows::ValidateHandleAccess(Thread, THREAD_TERMINATE)) {
@@ -1262,7 +1262,7 @@ index 4939d25..e49b624 100644
      return STATUS_ACCESS_DENIED;
    }
  
-@@ -1739,6 +1758,7 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -1740,6 +1759,7 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
  
    THREAD_BASIC_INFORMATION Info;
    if (auto Err = NtQueryInformationThread(*ThreadDup, ThreadBasicInformation, &Info, sizeof(Info), nullptr); Err) {
@@ -1270,7 +1270,7 @@ index 4939d25..e49b624 100644
      return Err;
    }
  
-@@ -1754,6 +1774,10 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -1756,6 +1776,10 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
  
    const auto [Err, CPUArea] = GetThreadCPUArea(*ThreadDup);
    if (Err) {
@@ -1281,7 +1281,7 @@ index 4939d25..e49b624 100644
      return Err;
    }
  
-@@ -1761,7 +1785,15 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -1763,7 +1787,15 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
      std::scoped_lock Lock(ThreadCreationMutex);
      auto it = Threads.find(ThreadTID);
      if (it == Threads.end()) {
@@ -1298,7 +1298,7 @@ index 4939d25..e49b624 100644
        return STATUS_SUCCESS;
      }
  
-@@ -1772,6 +1804,15 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -1774,6 +1806,15 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
    }
    auto ThreadState = CPUArea.ThreadState();
  
@@ -1314,7 +1314,7 @@ index 4939d25..e49b624 100644
    delete GetFrontendThreadData(ThreadState);
  
    // GDT and LDT are mirrored, only free one.
-@@ -1781,7 +1822,14 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
+@@ -1783,7 +1824,14 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
    CTX->DestroyThread(ThreadState);
    ::VirtualFree(reinterpret_cast<void*>(CPUArea.EmulatorStackLimit()), 0, MEM_RELEASE);
    if (ThreadTID == GetCurrentThreadId()) {

@@ -59,7 +59,7 @@ index 9f58bd4..4453195 100644
    add x16, x16, #:lo12:IosXpFex
    mov x23, sp
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index c9fd693..6d5005b 100644
+index b2dc56e..579ef13 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -107,6 +107,12 @@ uint64_t IosFfsBypassLog[4] {};

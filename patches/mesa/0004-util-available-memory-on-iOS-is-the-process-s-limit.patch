@@ -18,7 +18,7 @@ Offered-upstream: no
  1 file changed, 9 insertions(+)
 
 diff --git a/src/util/os_misc.c b/src/util/os_misc.c
-index 5060266..91f1077 100644
+index ea73839..5ed2201 100644
 --- a/src/util/os_misc.c
 +++ b/src/util/os_misc.c
 @@ -73,6 +73,10 @@

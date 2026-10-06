@@ -33,7 +33,7 @@ Offered-upstream: no
  2 files changed, 29 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/kernelbase/version.c b/dlls/kernelbase/version.c
-index 809577afcfc..df579f1b12c 100644
+index 809577a..df579f1 100644
 --- a/dlls/kernelbase/version.c
 +++ b/dlls/kernelbase/version.c
 @@ -194,6 +194,16 @@ static BOOL CALLBACK init_current_version(PINIT_ONCE init_once, PVOID parameter,
@@ -54,7 +54,7 @@ index 809577afcfc..df579f1b12c 100644
  
      if (RtlQueryInformationActivationContext(0, NtCurrentTeb()->Peb->ActivationContextData, NULL,
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 5a7bf7ce6eb..02c8117ef59 100644
+index c039587..3632176 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -232,7 +232,20 @@ void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METAD

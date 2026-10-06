@@ -49,7 +49,7 @@ Offered-upstream: no
  4 files changed, 208 insertions(+), 3 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 7afcca2..b6bfdd7 100644
+index 4b5b6a2..b625d96 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -788,6 +788,17 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
@@ -107,7 +107,7 @@ index 7afcca2..b6bfdd7 100644
     *
     * Initial diagnostic showed callret_sp going 0x10..0x70 BELOW
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index a047f8c..5ccb7b5 100644
+index ae9f725..83ebb87 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -347,6 +347,33 @@ void HandleImageMap(uint64_t Address, bool MainImage = false) {
@@ -318,7 +318,7 @@ index 155403d..9d0feae 100644
    std::shared_lock Lock(IntervalsLock);
    const auto XResult = XIntervals.Query(Address);
 diff --git a/Source/Windows/Common/Logging.cpp b/Source/Windows/Common/Logging.cpp
-index 5911b85..cdb8263 100644
+index bbb025e..0bc28ba 100644
 --- a/Source/Windows/Common/Logging.cpp
 +++ b/Source/Windows/Common/Logging.cpp
 @@ -17,13 +17,50 @@ namespace {

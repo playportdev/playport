@@ -13,7 +13,7 @@ Offered-upstream: no
  1 file changed, 5 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 9b4ceac2..030137b9 100644
+index 05ca354..77a1c9c 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -4699,7 +4699,10 @@ ULONG WINAPI RtlWalkFrameChain( void **buffer, ULONG count, ULONG flags )

@@ -44,7 +44,7 @@ Offered-upstream: no
  1 file changed, 131 insertions(+)
 
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 1bfec7a4307..0412b4a09b4 100644
+index 1bfec7a..0412b4a 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -4642,6 +4642,12 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce

@@ -25,7 +25,7 @@ Offered-upstream: no
  1 file changed, 68 insertions(+), 3 deletions(-)
 
 diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
-index 6d0d7c2..e5e84bc 100644
+index dc794f0..d1c3595 100644
 --- a/Source/Windows/Common/WinAPI/IO.cpp
 +++ b/Source/Windows/Common/WinAPI/IO.cpp
 @@ -120,6 +120,39 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,

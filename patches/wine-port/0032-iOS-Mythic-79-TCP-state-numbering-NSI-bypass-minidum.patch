@@ -55,7 +55,7 @@ Offered-upstream: no
  8 files changed, 850 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/dbghelp/minidump.c b/dlls/dbghelp/minidump.c
-index 2ed2d0d9a29..5dd94cca95f 100644
+index 2ed2d0d..5dd94cc 100644
 --- a/dlls/dbghelp/minidump.c
 +++ b/dlls/dbghelp/minidump.c
 @@ -1032,6 +1032,35 @@ BOOL WINAPI MiniDumpWriteDump(HANDLE hProcess, DWORD pid, HANDLE hFile,
@@ -95,7 +95,7 @@ index 2ed2d0d9a29..5dd94cca95f 100644
      {
          if (!(sym_initialized = SymInitializeW(hProcess, NULL, TRUE)))
 diff --git a/dlls/nsi/nsi.c b/dlls/nsi/nsi.c
-index 14be842871a..56a287af65d 100644
+index 14be842..56a287a 100644
 --- a/dlls/nsi/nsi.c
 +++ b/dlls/nsi/nsi.c
 @@ -17,6 +17,8 @@
@@ -163,7 +163,7 @@ index 14be842871a..56a287af65d 100644
      out_size = sizeof(DWORD) +
          (params->key_size + params->rw_size + params->dynamic_size + params->static_size) * params->count;
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index b2769355e6d..466b333a836 100644
+index e70d4ae..73374e0 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -2390,6 +2390,31 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
@@ -199,7 +199,7 @@ index b2769355e6d..466b333a836 100644
                                      &dispatch, dispatch.LanguageHandler );
              rec->ExceptionFlags &= EXCEPTION_NONCONTINUABLE;
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 88d882bd702..e0119c20d20 100644
+index 88d882b..e0119c2 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -893,6 +893,31 @@ struct futex_queue
@@ -257,7 +257,7 @@ index 88d882bd702..e0119c20d20 100644
      if (NtCurrentTeb()->Instrumentation[10] == (void *)(ULONG_PTR)0x504d5550)
      {
 diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
-index 2b487347089..173fc4b5a49 100644
+index 9674d0f..3f993d8 100644
 --- a/dlls/ntdll/unix/socket.c
 +++ b/dlls/ntdll/unix/socket.c
 @@ -786,6 +786,169 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
@@ -487,7 +487,7 @@ index 2b487347089..173fc4b5a49 100644
          TRACE( "read returned %zd\n", ret );
  
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 3eb25640f15..3511233f111 100644
+index a556623..1d063b9 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -3528,6 +3528,389 @@ static unsigned int ios_alert_ring[IOS_ALERT_RING];
@@ -960,7 +960,7 @@ index 3eb25640f15..3511233f111 100644
              ERR( "[alert-unix] tid=%04x -> ALERTED\n",
                   (int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread ); }
 diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
-index aaae9a2fd8e..50bd0575b33 100644
+index aaae9a2..50bd057 100644
 --- a/dlls/ntdll/unix/system.c
 +++ b/dlls/ntdll/unix/system.c
 @@ -3357,6 +3357,18 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
@@ -983,7 +983,7 @@ index aaae9a2fd8e..50bd0575b33 100644
      {
      case SystemNativeBasicInformation:  /* 114 */
 diff --git a/server/sock.c b/server/sock.c
-index caa32a32df1..226a305e75a 100644
+index caa32a3..226a305 100644
 --- a/server/sock.c
 +++ b/server/sock.c
 @@ -124,6 +124,25 @@

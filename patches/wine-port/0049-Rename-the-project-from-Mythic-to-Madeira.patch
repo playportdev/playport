@@ -47,7 +47,7 @@ Offered-upstream: no
  31 files changed, 123 insertions(+), 123 deletions(-)
 
 diff --git a/dlls/cryptnet/cryptnet_main.c b/dlls/cryptnet/cryptnet_main.c
-index 83df1254605..771a22190f4 100644
+index 83df125..771a221 100644
 --- a/dlls/cryptnet/cryptnet_main.c
 +++ b/dlls/cryptnet/cryptnet_main.c
 @@ -658,7 +658,7 @@ static BOOL CRYPT_DownloadObject(DWORD dwRetrievalFlags, HINTERNET hHttp,
@@ -69,7 +69,7 @@ index 83df1254605..771a22190f4 100644
               * context->timeout faulted at address 0x8 -- cryptnet+0x137fc,
               * `ldr w1,[x22,#8]` with x22 == NULL -- and since every Windows
 diff --git a/dlls/d3d9/d3d9_main.c b/dlls/d3d9/d3d9_main.c
-index 28537e2dcba..62ef7b62dd3 100644
+index 28537e2..62ef7b6 100644
 --- a/dlls/d3d9/d3d9_main.c
 +++ b/dlls/d3d9/d3d9_main.c
 @@ -26,7 +26,7 @@
@@ -82,7 +82,7 @@ index 28537e2dcba..62ef7b62dd3 100644
   * whether a guest actually creates a d3d9 object, and whether wined3d can come up
   * at all on a host with no GL/Vulkan driver, so one device log answers both.
 diff --git a/dlls/dbghelp/minidump.c b/dlls/dbghelp/minidump.c
-index 5dd94cca95f..44bf494eaa9 100644
+index 5dd94cc..44bf494 100644
 --- a/dlls/dbghelp/minidump.c
 +++ b/dlls/dbghelp/minidump.c
 @@ -1032,7 +1032,7 @@ BOOL WINAPI MiniDumpWriteDump(HANDLE hProcess, DWORD pid, HANDLE hFile,
@@ -95,7 +95,7 @@ index 5dd94cca95f..44bf494eaa9 100644
       * Under FEX the dump takes minutes — it walks the whole single-process
       * address space and suspends every thread of the target pseudo-process on
 diff --git a/dlls/kernelbase/version.c b/dlls/kernelbase/version.c
-index df579f1b12c..5e59cdd6f82 100644
+index df579f1..5e59cdd 100644
 --- a/dlls/kernelbase/version.c
 +++ b/dlls/kernelbase/version.c
 @@ -195,7 +195,7 @@ static BOOL CALLBACK init_current_version(PINIT_ONCE init_once, PVOID parameter,
@@ -108,7 +108,7 @@ index df579f1b12c..5e59cdd6f82 100644
       * activation context, so the compat-GUID escape hatch below never fires
       * and every modern app is told 6.2.9200 — Steam's updater then
 diff --git a/dlls/nsi/nsi.c b/dlls/nsi/nsi.c
-index 56a287af65d..b9171d9e712 100644
+index 56a287a..b9171d9 100644
 --- a/dlls/nsi/nsi.c
 +++ b/dlls/nsi/nsi.c
 @@ -35,7 +35,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(nsi);
@@ -121,7 +121,7 @@ index 56a287af65d..b9171d9e712 100644
   * fails — Steam's loopback peer authentication (GetExtendedTcpTable pid
   * lookup) dies before any pid compare and each CEF connection is
 diff --git a/dlls/ntdll/exception.c b/dlls/ntdll/exception.c
-index 17d25a0e333..ec04f7e3dea 100644
+index 17d25a0..ec04f7e 100644
 --- a/dlls/ntdll/exception.c
 +++ b/dlls/ntdll/exception.c
 @@ -216,7 +216,7 @@ static LONG call_vectored_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
@@ -152,7 +152,7 @@ index 17d25a0e333..ec04f7e3dea 100644
       * STATUS_STACK_BUFFER_OVERRUN is what `int 0x29` (__fastfail) and the /GS
       * cookie check raise.  On real Windows this NEVER runs VEH or frame-based
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 520900d508f..3a09ef92c91 100644
+index 520900d..3a09ef9 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -78,7 +78,7 @@ SYSTEM_DLL_INIT_BLOCK LdrSystemDllInitBlock = { 0xf0 };
@@ -354,7 +354,7 @@ index 520900d508f..3a09ef92c91 100644
           * uppercases strings (RtlUpcaseUnicodeStringToCountedOemString ->
           * upcase_unicode_to_utf8), which reads nls_info's upcase table set by
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 3b164a0b0cc..ebfc8eecfa8 100644
+index 7065613..a9f46c7 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -78,7 +78,7 @@ static inline CHPE_V2_CPU_AREA_INFO *get_arm64ec_cpu_area(void)
@@ -690,7 +690,7 @@ index 3b164a0b0cc..ebfc8eecfa8 100644
            * iOS clobbers x18 (every SEGV dump in this port shows x18=0), so this fetches a
            * garbage PEB, the EcCodeBitMap pointer is garbage, the bit test reads 0, and this
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 7a5babba6eb..a485e212554 100644
+index 7a5babb..a485e21 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -521,7 +521,7 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
@@ -730,7 +730,7 @@ index 7a5babba6eb..a485e212554 100644
   * one WAIT, no ALERTED, while its sibling server thread cycles normally).
   * futex_queues is a PER-NTDLL-COPY global and our pseudo-processes each carry
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 352f2c92671..e02e29c9862 100644
+index 352f2c9..e02e29c 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -4826,7 +4826,7 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
@@ -752,7 +752,7 @@ index 352f2c92671..e02e29c9862 100644
   * Invalid or unexpected token` in library.js (whole run lost, no dial, no retry
   * path), or a partial hit where a lazily-loaded chunk fails (`ChunkLoadError:
 diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
-index f6a38754c02..b919456eddd 100644
+index 6849b33..7ef850e 100644
 --- a/dlls/ntdll/unix/socket.c
 +++ b/dlls/ntdll/unix/socket.c
 @@ -788,7 +788,7 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
@@ -801,7 +801,7 @@ index f6a38754c02..b919456eddd 100644
   * only connect evidence being IPv6 EHOSTUNREACH + IPv4 EINPROGRESS and no
   * completion, while steam.exe's own connectivity test reported NoLAN.  Nothing
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 3511233f111..55b3efed55c 100644
+index 1d063b9..9647b96 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -3516,7 +3516,7 @@ NTSTATUS WINAPI NtAlertMultipleThreadByThreadId( HANDLE *tids, ULONG count, void
@@ -850,7 +850,7 @@ index 3511233f111..55b3efed55c 100644
           * consecutive on INFINITE waits).  Every 16th consecutive hit, dump
           * the last 16 alert-ring pairs; the from-tids name the pounder.
 diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
-index 50bd0575b33..30af4439720 100644
+index 50bd057..30af443 100644
 --- a/dlls/ntdll/unix/system.c
 +++ b/dlls/ntdll/unix/system.c
 @@ -3357,7 +3357,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
@@ -863,7 +863,7 @@ index 50bd0575b33..30af4439720 100644
       * the per-copy futex_queues split that lost RtlWakeAddress* wakes. */
      if ((unsigned int)class == 0xf00d && size == sizeof(void *))
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index be18e4a5452..72bb0ad5da4 100644
+index be18e4a..72bb0ad 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
 @@ -500,7 +500,7 @@ extern pthread_key_t teb_key;  /* upstream 11.18 dropped it; the iOS thread_ios.
@@ -876,7 +876,7 @@ index be18e4a5452..72bb0ad5da4 100644
       * one process (e.g. a cube-x64 / Steam render thread) can read a SIBLING
       * process's peb whose EcCodeBitMap is null -> is_ec_code faults on a null
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 48f75344ce7..112ddd2cd06 100644
+index 48f7534..112ddd2 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
 @@ -79,7 +79,7 @@ struct ios_push_jit_aliases_params
@@ -898,7 +898,7 @@ index 48f75344ce7..112ddd2cd06 100644
   * Given a guest address inside a Mono JIT buffer, hand back the RW alias so the
   * PE side can read the SAME bytes through both views and compare them. That
 diff --git a/dlls/ntdll/unwind.c b/dlls/ntdll/unwind.c
-index bb6aa949480..5b31dcadf28 100644
+index bb6aa94..5b31dca 100644
 --- a/dlls/ntdll/unwind.c
 +++ b/dlls/ntdll/unwind.c
 @@ -2066,7 +2066,7 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,
@@ -911,7 +911,7 @@ index bb6aa949480..5b31dcadf28 100644
       * RtlUnwindEx) measured cold. Someone calls the raw unwind API directly
       * and constantly. Log first + every 4096th: rate, unwound pc, and the
 diff --git a/dlls/rpcrt4/ndr_marshall.c b/dlls/rpcrt4/ndr_marshall.c
-index 5d6d89b6f4d..2c351615bc0 100644
+index 5d6d89b..2c35161 100644
 --- a/dlls/rpcrt4/ndr_marshall.c
 +++ b/dlls/rpcrt4/ndr_marshall.c
 @@ -7019,7 +7019,7 @@ static unsigned char *WINAPI NdrContextHandleUnmarshall(
@@ -924,7 +924,7 @@ index 5d6d89b6f4d..2c351615bc0 100644
           * An earlier probe in client_do_args flagged "argument window shifted by one slot"
           * from a heuristic -- a small value sitting next to a pointer -- and that was a
 diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
-index dc45afc1f5f..c85dfa4740f 100644
+index c4b1ebc..00be0be 100644
 --- a/dlls/rpcrt4/ndr_stubless.c
 +++ b/dlls/rpcrt4/ndr_stubless.c
 @@ -483,7 +483,7 @@ void client_do_args( PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat, enum s
@@ -946,7 +946,7 @@ index dc45afc1f5f..c85dfa4740f 100644
       * Steam faults in #NdrContextHandleUnmarshall+0xcc (ndr_marshall.c:7024) with
       * ccontext == 0x10. The [ec-stacktop] probe above tested "StackTop is tiny" and
 diff --git a/dlls/user32/misc.c b/dlls/user32/misc.c
-index 4d6aace2f9f..34edf98feff 100644
+index 4d6aace..34edf98 100644
 --- a/dlls/user32/misc.c
 +++ b/dlls/user32/misc.c
 @@ -470,7 +470,7 @@ BOOL WINAPI RegisterPointerDeviceNotifications(HWND hwnd, BOOL notifyrange)
@@ -959,7 +959,7 @@ index 4d6aace2f9f..34edf98feff 100644
   * ml332-ml334's fatal was steamwebhelper executing `int3; ud2` -- Chromium's
   * IMMEDIATE_CRASH() -- inside its delay-load FAILURE hook (identified by the
 diff --git a/dlls/win32u/bitblt.c b/dlls/win32u/bitblt.c
-index d69bf94351a..45eb51e5ead 100644
+index d69bf94..45eb51e 100644
 --- a/dlls/win32u/bitblt.c
 +++ b/dlls/win32u/bitblt.c
 @@ -22,7 +22,7 @@
@@ -981,7 +981,7 @@ index d69bf94351a..45eb51e5ead 100644
           * The Steam login surface contains DUPLICATED 256x256 tiles — the
           * same tile content composited into two different slots, with other
 diff --git a/dlls/win32u/dib.c b/dlls/win32u/dib.c
-index e92a51929f1..3b82ed5c047 100644
+index e92a519..3b82ed5 100644
 --- a/dlls/win32u/dib.c
 +++ b/dlls/win32u/dib.c
 @@ -63,7 +63,7 @@
@@ -1012,7 +1012,7 @@ index e92a51929f1..3b82ed5c047 100644
          static unsigned n_setdib;
          unsigned n = ++n_setdib;
 diff --git a/dlls/win32u/dibdrv/bitblt.c b/dlls/win32u/dibdrv/bitblt.c
-index 5b71585c391..fa1f8420042 100644
+index 5b71585..fa1f842 100644
 --- a/dlls/win32u/dibdrv/bitblt.c
 +++ b/dlls/win32u/dibdrv/bitblt.c
 @@ -22,7 +22,7 @@
@@ -1052,7 +1052,7 @@ index 5b71585c391..fa1f8420042 100644
           * buffer when the env var is unset. */
          extern void ios_srcwatch_arm_geom( const void *bits, unsigned long len,
 diff --git a/dlls/wininet/netconnection.c b/dlls/wininet/netconnection.c
-index af937cf8029..d064b94ec9d 100644
+index af937cf..d064b94 100644
 --- a/dlls/wininet/netconnection.c
 +++ b/dlls/wininet/netconnection.c
 @@ -281,7 +281,7 @@ static void set_socket_blocking(netconn_t *conn, BOOL is_blocking)
@@ -1065,7 +1065,7 @@ index af937cf8029..d064b94ec9d 100644
           * wininet believing a socket was blocking when the kernel still had it
           * non-blocking. Every later recv then returns WSAEWOULDBLOCK, wininet
 diff --git a/dlls/ws2_32/unixlib.c b/dlls/ws2_32/unixlib.c
-index 49219cab0c8..7b97fa7d1a8 100644
+index 49219ca..7b97fa7 100644
 --- a/dlls/ws2_32/unixlib.c
 +++ b/dlls/ws2_32/unixlib.c
 @@ -751,7 +751,7 @@ static NTSTATUS unix_getaddrinfo( void *args )
@@ -1078,7 +1078,7 @@ index 49219cab0c8..7b97fa7d1a8 100644
       * a Wine worker thread (no autorelease pool in place) those land in
       * the implicit top-level pool that Apple's pthread_exit TSD cleanup
 diff --git a/programs/services/services.c b/programs/services/services.c
-index 8e27c3dfad3..dda9874baa1 100644
+index 8e27c3d..dda9874 100644
 --- a/programs/services/services.c
 +++ b/programs/services/services.c
 @@ -426,7 +426,7 @@ static void scmdatabase_autostart_services(struct scmdatabase *db)
@@ -1100,7 +1100,7 @@ index 8e27c3dfad3..dda9874baa1 100644
               * registry Start values at 4. */
              WINE_ERR("autostart candidate %s (type %#lx start %lu pnp %d)\n",
 diff --git a/server/async.c b/server/async.c
-index 5ae20d70018..fc9aa3d072c 100644
+index 5ae20d7..fc9aa3d 100644
 --- a/server/async.c
 +++ b/server/async.c
 @@ -275,7 +275,7 @@ void free_async_queue( struct async_queue *queue )
@@ -1113,7 +1113,7 @@ index 5ae20d70018..fc9aa3d072c 100644
           * async_terminate() can free this async before it returns. It documents
           * the hazard itself — it grabs a temporary reference because
 diff --git a/server/object.c b/server/object.c
-index db4799d5658..2bf150d04fc 100644
+index db4799d..2bf150d 100644
 --- a/server/object.c
 +++ b/server/object.c
 @@ -270,7 +270,7 @@ WCHAR *default_get_full_name( struct object *obj, data_size_t max, data_size_t *
@@ -1144,7 +1144,7 @@ index db4799d5658..2bf150d04fc 100644
          if (cached)
          {
 diff --git a/server/process.c b/server/process.c
-index 5e8a1c9300e..30739377c27 100644
+index 5e8a1c9..3073937 100644
 --- a/server/process.c
 +++ b/server/process.c
 @@ -436,7 +436,7 @@ unsigned int alloc_ptid( void *ptr )
@@ -1157,7 +1157,7 @@ index 5e8a1c9300e..30739377c27 100644
       * pseudo-processes; when the dead tid is reused, those stale lists
       * alert/act on an innocent new thread (ml400: instant-ALERTED storm on
 diff --git a/server/sock.c b/server/sock.c
-index af57b0380ab..92350761b59 100644
+index af57b03..9235076 100644
 --- a/server/sock.c
 +++ b/server/sock.c
 @@ -125,7 +125,7 @@
@@ -1241,7 +1241,7 @@ index af57b0380ab..92350761b59 100644
       * dialing client socket (and steam's accepted peers) never appeared.
       * This names every socket the walk actually reaches, pre-filter, so
 diff --git a/server/thread.c b/server/thread.c
-index 0853e694269..9972c4963e5 100644
+index 0853e69..9972c49 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -1038,7 +1038,7 @@ int resume_thread( struct thread *thread )
@@ -1254,7 +1254,7 @@ index 0853e694269..9972c4963e5 100644
   * cannot walk it directly. entry->obj holds the WRAPPER (set at line ~1162 via
   * grab_object(obj)); object_sync_add_queue resolves the sync internally, so the
 diff --git a/server/winstation.c b/server/winstation.c
-index 61720b17f21..b152347d1a7 100644
+index 61720b1..b152347 100644
 --- a/server/winstation.c
 +++ b/server/winstation.c
 @@ -716,7 +716,7 @@ DECL_HANDLER(create_desktop)

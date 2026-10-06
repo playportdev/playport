@@ -23,7 +23,7 @@ Offered-upstream: no
  1 file changed, 30 insertions(+), 15 deletions(-)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index cb07966..aeb7830 100644
+index 45be25d..061d81c 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -1232,6 +1232,20 @@ NTSTATUS WINAPI NtOpenEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_AT

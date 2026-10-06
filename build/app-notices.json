@@ -313,6 +313,6 @@
   "credits": [
     "This software is based in part on the work of the Independent JPEG Group.",
     "Regular-expression code: copyright 1992, 1993, 1994 Henry Spencer, and copyright 1992, 1993, 1994 The Regents of the University of California. This is an altered version of the original software (see LLVM-Support-COPYRIGHT.regex.txt).",
-    "Portions of this software are copyright © 2024 The FreeType Project (www.freetype.org). All rights reserved."
+    "Portions of this software are copyright © 2026 The FreeType Project (https://freetype.org). All rights reserved."
   ]
 }

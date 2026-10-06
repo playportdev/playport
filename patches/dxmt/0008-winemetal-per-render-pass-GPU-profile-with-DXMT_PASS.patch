@@ -23,7 +23,7 @@ Offered-upstream: no
  1 file changed, 296 insertions(+), 7 deletions(-)
 
 diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
-index bf660c1..9b570dc 100644
+index bf660c1..0c59813 100644
 --- a/src/winemetal/unix/winemetal_unix.c
 +++ b/src/winemetal/unix/winemetal_unix.c
 @@ -5,6 +5,7 @@

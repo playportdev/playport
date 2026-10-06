@@ -29,7 +29,7 @@ Offered-upstream: no
  1 file changed, 8 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 0bfb10ff94e..5a7bf7ce6eb 100644
+index e945d25..c039587 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1599,6 +1599,14 @@ void __attribute__((naked)) KiUserExceptionDispatcher( EXCEPTION_RECORD *rec, CO

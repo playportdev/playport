@@ -20,7 +20,7 @@ Offered-upstream: no
  1 file changed, 15 insertions(+)
 
 diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
-index 25f5544c2..460e78044 100644
+index 3a61b45..4b21427 100644
 --- a/Source/Windows/Common/CPUFeatures.cpp
 +++ b/Source/Windows/Common/CPUFeatures.cpp
 @@ -4,6 +4,8 @@
@@ -51,4 +51,4 @@ index 25f5544c2..460e78044 100644
 +  }
    HostFeatures.CPUMIDRs.push_back(0u);
    HostFeatures.HostType = HostType;
-   return HostFeatures;
+   HostFeatures.ProcessPID = ProcessPID;

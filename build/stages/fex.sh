@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Build FEX's arm64ec PE (libarm64ecfex.dll, shipped as xtajit64.dll) and
 # aarch64 WoW64 PE (libwow64fex.dll, shipped as xtajit.dll) from the
-# FEX pin in pins.lock (a FEX-Emu/FEX release) plus patches/fex-port (Madeira's
+# FEX pin in pins.lock (a FEX-Emu/FEX main commit) plus patches/fex-port (Madeira's
 # FEX port, rebased) and patches/fex, with Linux llvm-mingw.
 # docs/BUILDING.md, "The pipeline" (fex).
 #
 #   build/stages/fex.sh ROOT
 #
 # ROOT/fex is a clone of the FEX pin with its submodules (all but the test
-# binaries). The script clones it when absent, from a mirror of FEX-Emu/FEX
+# binaries). The script clones it when absent or when it lacks the pin (a pin
+# move, whose submodule gitlinks may move too), from a mirror of FEX-Emu/FEX
 # kept in $PLAYPORT_BUILD/cache (fetched only when it lacks the pin); each
 # submodule comes from the upstream/madeira/FEX checkout's copy when that has
 # the commit, else from its upstream. External/rpmalloc is the rpmalloc pin
@@ -33,6 +34,10 @@ JOBS=${JOBS:-$(nproc)}
 
 test -x "$M/bin/aarch64-w64-mingw32-clang" || { echo "missing llvm-mingw at $M"; exit 1; }
 mkdir -p "$ROOT" "$CACHE"
+if [ -e "$F/.git" ] && ! git -C "$F" cat-file -e "$PIN^{commit}" 2>/dev/null; then
+    echo "$F lacks the fex pin $PIN: cloning it again"
+    rm -rf "$F"
+fi
 if [ ! -e "$F/.git" ]; then
     git clone -q --no-checkout "$(mirror fex "$PIN")" "$F"
     git -C "$F" -c advice.detachedHead=false checkout -q "$PIN"

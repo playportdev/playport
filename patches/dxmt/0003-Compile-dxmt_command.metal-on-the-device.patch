@@ -216,7 +216,7 @@ index 299df82..5bfdd97 100644
    subdir('unix')
  endif
 diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
-index 1d418c1..5105e26 100644
+index d1c7a8b..731eacd 100644
 --- a/src/winemetal/unix/winemetal_unix.c
 +++ b/src/winemetal/unix/winemetal_unix.c
 @@ -4954,16 +4954,46 @@ _MTLDevice_newIndirectCommandBuffer(void *obj) {

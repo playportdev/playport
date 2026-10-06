@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Mon, 5 Oct 2026 14:20:08 +0200
+Subject: [PATCH] ntdll-unix, win32u-unix, wineserver: port the iOS
+ replacements onto wine-11.19
+
+WineHQ's wine-11.18..wine-11.19 changes to the files the *_ios.c
+replacements override, carried into them:
+- b28fa1c win32u: ImeToAsciiEx takes the IME update pointer (gdi_driver.h's
+  pImeToAsciiEx is now void *): driver_ios.c's nulldrv and loaderdrv.
+- 0998bfa ntdll: a zero group affinity means the full group: thread_ios.c's
+  ThreadGroupInformation.
+- 4e819f0 server: hardware messages are mergeable: queue_ios.c.
+f59c425 (win32u freetype.c) comes in through freetype_ios.c's #include.
+Not carried: the three virtual.c commits 76159fc (the first thread data
+above 16 GiB), 4c18d96 (the top-down reserve) and 5285712 (the virtual
+heap from mmap on 64-bit). They are the Linux preloader's address layout;
+virtual_ios.c places the first thread data, the reserves and the virtual
+heap itself (the iOS __PAGEZERO, the arena and guest band), and moving them
+is a separate change measured on the phone.
+The server protocol did not change.
+
+Class: madeira-port
+Evidence: docs/evidence/2026-10-05-deps-latest.md
+Offered-upstream: no
+---
+ build/ntdll-unix/thread_ios.c  | 6 +++---
+ build/win32u-unix/driver_ios.c | 6 +++---
+ build/wineserver/queue_ios.c   | 1 +
+ 3 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index 2e0d59a..c9fbee2 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -3139,7 +3139,7 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+ 
+     case ThreadGroupInformation:
+     {
+-        const ULONG_PTR affinity_mask = get_system_affinity_mask();
++        ULONG_PTR affinity_mask = get_system_affinity_mask();
+         const GROUP_AFFINITY *req_aff;
+ 
+         if (length != sizeof(*req_aff)) return STATUS_INVALID_PARAMETER;
+@@ -3153,11 +3153,11 @@ NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+         /* Wine only supports max 64 processors */
+         if (req_aff->Group) return STATUS_INVALID_PARAMETER;
+         if (req_aff->Mask & ~affinity_mask) return STATUS_INVALID_PARAMETER;
+-        if (!req_aff->Mask) return STATUS_INVALID_PARAMETER;
++        if (req_aff->Mask) affinity_mask = req_aff->Mask;
+         SERVER_START_REQ( set_thread_info )
+         {
+             req->handle   = wine_server_obj_handle( handle );
+-            req->affinity = req_aff->Mask;
++            req->affinity = affinity_mask;
+             req->mask     = SET_THREAD_INFO_AFFINITY;
+             status = wine_server_call( req );
+         }
+diff --git a/build/win32u-unix/driver_ios.c b/build/win32u-unix/driver_ios.c
+index 2dd2a29..68b3a9f 100644
+--- a/build/win32u-unix/driver_ios.c
++++ b/build/win32u-unix/driver_ios.c
+@@ -1182,7 +1182,7 @@ static void nulldrv_ReleaseKbdTables( const KBDTABLES *tables )
+ {
+ }
+ 
+-static UINT nulldrv_ImeToAsciiEx( UINT vkey, UINT vsc, const BYTE *state, HIMC himc )
++static UINT nulldrv_ImeToAsciiEx( UINT vkey, UINT vsc, const BYTE *state, void *update )
+ {
+     return STATUS_NOT_IMPLEMENTED;
+ }
+@@ -1802,9 +1802,9 @@ static void loaderdrv_ReleaseKbdTables( const KBDTABLES *tables )
+     return load_driver()->pReleaseKbdTables( tables );
+ }
+ 
+-static UINT loaderdrv_ImeToAsciiEx( UINT vkey, UINT vsc,const BYTE *state, HIMC himc )
++static UINT loaderdrv_ImeToAsciiEx( UINT vkey, UINT vsc,const BYTE *state, void *update )
+ {
+-    return load_driver()->pImeToAsciiEx( vkey, vsc, state, himc );
++    return load_driver()->pImeToAsciiEx( vkey, vsc, state, update );
+ }
+ 
+ static void loaderdrv_NotifyIMEStatus( HWND hwnd, UINT status )
+diff --git a/build/wineserver/queue_ios.c b/build/wineserver/queue_ios.c
+index 67cd024..925a37c 100644
+--- a/build/wineserver/queue_ios.c
++++ b/build/wineserver/queue_ios.c
+@@ -453,6 +453,7 @@ static struct message *alloc_hardware_message( lparam_t info, struct hw_msg_sour
+     memset( msg, 0, sizeof(*msg) );
+     msg->type      = MSG_HARDWARE;
+     msg->time      = time;
++    msg->mergeable = true;
+     msg->data      = msg_data;
+     msg->data_size = sizeof(*msg_data) + extra_size;
+ 

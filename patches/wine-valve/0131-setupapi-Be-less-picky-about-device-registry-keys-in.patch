@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Connor McAdams <cmcadams@codeweavers.com>
+Date: Wed, 23 Sep 2026 08:51:30 -0400
+Subject: [PATCH] setupapi: Be less picky about device registry keys in
+ SetupDiOpenDeviceInfo().
+
+Only refuse to open devices with a non-zero Phantom value, if present.
+
+Signed-off-by: Connor McAdams <cmcadams@codeweavers.com>
+CW-Bug-Id: #27608
+Valve-commit: 021ee94d7d97a36a25ccd9877667026c1c2c91e1
+Picked: resolved
+Class: valve
+Evidence: docs/evidence/2026-10-05-deps-latest.md
+Offered-upstream: no
+---
+ dlls/setupapi/devinst.c | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/setupapi/devinst.c b/dlls/setupapi/devinst.c
+index 933d90c..2047c41 100644
+--- a/dlls/setupapi/devinst.c
++++ b/dlls/setupapi/devinst.c
+@@ -3502,7 +3502,7 @@ BOOL WINAPI SetupDiOpenDeviceInfoW(HDEVINFO devinfo, PCWSTR instance_id, HWND hw
+     GUID guid;
+     HKEY enumKey = NULL;
+     HKEY instanceKey = NULL;
+-    DWORD phantom;
++    DWORD phantom = 0;
+     DWORD size;
+     DWORD error = ERROR_NO_SUCH_DEVINST;
+ 
+@@ -3536,16 +3536,15 @@ BOOL WINAPI SetupDiOpenDeviceInfoW(HDEVINFO devinfo, PCWSTR instance_id, HWND hw
+ 
+     /* If it's an unregistered instance, aka phantom instance, report ERROR_NO_SUCH_DEVINST */
+     size = sizeof(phantom);
+-    if (!RegQueryValueExW(instanceKey, L"Phantom", NULL, NULL, (BYTE *)&phantom, &size))
++    if (!RegQueryValueExW(instanceKey, L"Phantom", NULL, NULL, (BYTE *)&phantom, &size)
++            && phantom != 0)
+         goto done;
+ 
+-    /* Check class GUID */
++    /* Check class GUID, and use it if present. */
+     size = sizeof(classW);
+-    if (RegQueryValueExW(instanceKey, L"ClassGUID", NULL, NULL, (BYTE *)classW, &size))
+-        goto done;
+-
+-    classW[37] = 0;
+-    UuidFromStringW(&classW[1], &guid);
++    if (RegGetValueW(instanceKey, NULL, L"ClassGUID", RRF_RT_REG_SZ, NULL, classW, &size)
++            || !guid_from_string_w(classW, &guid))
++        guid = GUID_NULL;
+ 
+     if (!IsEqualGUID(&set->ClassGuid, &GUID_NULL) && !IsEqualGUID(&guid, &set->ClassGuid))
+     {

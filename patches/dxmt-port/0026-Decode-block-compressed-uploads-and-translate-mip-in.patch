@@ -42,7 +42,7 @@ Offered-upstream: no
  5 files changed, 300 insertions(+), 5 deletions(-)
 
 diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
-index 4bde286..623e02e 100644
+index a56329e..4c5f494 100644
 --- a/src/d3d11/d3d11_context_impl.cpp
 +++ b/src/d3d11/d3d11_context_impl.cpp
 @@ -28,6 +28,7 @@

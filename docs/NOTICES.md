@@ -208,7 +208,7 @@ verified standard-library source package.
 
 `build/rust-dist.lock.json` records the release-specific HTTPS manifest and
 its checksum, and the three component URLs/checksums selected from it. For Rust
-1.98.1, the published manifest was fetched locally and checked against its
+1.99.0, the published manifest was fetched locally and checked against its
 published `.sha256` file. This is a reviewed checksum pin, not a verified
 publisher signature. Updating the Rust pin requires reviewing and committing
 this lock too; collection does not trust an installed rustup manifest as its
@@ -248,7 +248,7 @@ and linked-member review remain open.
 not `rust-docs`. Every supplied licence text is collected as a clearly labelled
 release superset (including compiler/documentation licences and exceptions), not
 as a claim that each applies to linked stdlib code. The old optional five-text
-list omitted Unicode and other supplied texts; the 1.98.1 archive has no separate
+list omitted Unicode and other supplied texts; the 1.99.0 archive has no separate
 BSD-3-Clause text. Missing required MIT/Apache-2.0/BSD-2-Clause/ISC texts or the
 library copyright file now fail rather than silently omitting them.
 

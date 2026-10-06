@@ -24,7 +24,7 @@ Offered-upstream: no
  4 files changed, 17 insertions(+), 7 deletions(-)
 
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index 254de86..81c7310 100644
+index d513caf..8ff4bd7 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
 @@ -1776,6 +1776,8 @@

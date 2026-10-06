@@ -160,7 +160,7 @@ cp_ mingw-directx-headers-COPYING.MinGW-w64.txt "$DXMT/include/native/directx/CO
 cp_ LLVM-LICENSE.TXT "$LLVM/llvm/LICENSE.TXT"
 cp_ LLVM-Support-COPYRIGHT.regex.txt "$LLVM/llvm/lib/Support/COPYRIGHT.regex"
 excerpt_ LLVM-Support-ConvertUTF-Unicode-notice.txt "$LLVM/llvm/lib/Support/ConvertUTF.cpp" 8 28
-# FreeType 2.13.3 (in libwin32u_unix.a): both licence options; the choice is open
+# FreeType 2.14.3 (in libwin32u_unix.a): both licence options; the choice is open
 cp_ FreeType-LICENSE.TXT "$FREETYPE/LICENSE.TXT"
 cp_ FreeType-FTL.TXT "$FREETYPE/docs/FTL.TXT"
 cp_ FreeType-GPLv2.TXT "$FREETYPE/docs/GPLv2.TXT"

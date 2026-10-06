@@ -61,8 +61,11 @@ test.
 
 Each milestone step is ordered to answer one of these as early as possible.
 
-1. **WoW64 beside ARM64EC in one Mach process.** Madeira has only run ARM64EC
-   pseudo-processes. A WoW64 title would be a child of the x86-64 session root
+1. **WoW64 beside ARM64EC in one Mach process.** At this plan's Madeira pin,
+   Madeira had only run ARM64EC pseudo-processes. Madeira's own WoW64 guest
+   windows landed in its `main` on 2026-09-27, and
+   [decision 0052](decisions/0052-madeira-reconciliation.md) makes them the
+   design Portal 2 moves to with the next Madeira pin. A WoW64 title would be a child of the x86-64 session root
    ([0027](decisions/0027-titles-as-children-of-a-session-root.md)), with an
    aarch64 ntdll, `wow64.dll` and an i386 guest. At the Wine pin, unix-side
    `is_wow64()` reads **global `main_image_info.Machine`**, not the TEB;

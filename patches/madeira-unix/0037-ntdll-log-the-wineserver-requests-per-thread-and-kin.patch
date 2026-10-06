@@ -27,7 +27,7 @@ Offered-upstream: no
  1 file changed, 215 insertions(+), 2 deletions(-)
 
 diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
-index 08cc64c..dc47d16 100644
+index 08cc64c..15ad99a 100644
 --- a/build/ntdll-unix/server_ios.c
 +++ b/build/ntdll-unix/server_ios.c
 @@ -1398,6 +1398,209 @@ static void ios_xp_api_report( const char *wall, double wall_s )

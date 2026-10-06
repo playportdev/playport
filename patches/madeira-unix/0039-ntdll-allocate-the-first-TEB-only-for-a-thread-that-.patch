@@ -21,7 +21,7 @@ Offered-upstream: no
  1 file changed, 9 insertions(+)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 8e13106..242974b 100644
+index f68e69a..b24e975 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -15361,6 +15361,15 @@ void virtual_alloc_first_teb(void)

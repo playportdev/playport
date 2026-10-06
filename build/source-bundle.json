@@ -123,8 +123,8 @@
     {
       "name": "freetype",
       "pin": "freetype",
-      "tag": "VER-2-13-3",
-      "commit": "42608f77f20749dd6ddc9e0536788eaad70ea4b5",
+      "tag": "VER-2-14-3",
+      "commit": "0a0221a1347e2f1e07c395263540026e9a0aa7c7",
       "why": "FreeType, linked into Wine's unix side",
       "local": ["run:unix/mythic/research/freetype"],
       "allow_binary": {}

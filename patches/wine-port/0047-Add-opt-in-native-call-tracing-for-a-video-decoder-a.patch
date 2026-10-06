@@ -55,7 +55,7 @@ Offered-upstream: no
  2 files changed, 185 insertions(+)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 087db976699..02bfe7089a7 100644
+index 087db97..02bfe70 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -2420,6 +2420,97 @@ NTSTATUS WINAPI LdrUnlockLoaderLock( ULONG flags, ULONG_PTR magic )
@@ -197,7 +197,7 @@ index 087db976699..02bfe7089a7 100644
      if (status && module) NtUnmapViewOfSection( NtCurrentProcess(), module );
      return status;
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 59445703c3e..352f2c92671 100644
+index 5944570..352f2c9 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -4654,6 +4654,48 @@ static int ios_file_fail_logged;

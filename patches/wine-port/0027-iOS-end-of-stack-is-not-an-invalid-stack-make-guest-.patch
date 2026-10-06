@@ -55,7 +55,7 @@ Offered-upstream: no
  2 files changed, 182 insertions(+)
 
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 0281cf613bf..16c304520b1 100644
+index d2e0627..23a4c33 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -1657,6 +1657,45 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
@@ -202,7 +202,7 @@ index 0281cf613bf..16c304520b1 100644
                   (unsigned int)rec->ExceptionCode, rec->ExceptionAddress,
                   (void *)(ULONG_PTR)arm_ctx->Pc, (void *)(ULONG_PTR)context->AMD64_Context.Rip,
 diff --git a/dlls/ntdll/unwind.c b/dlls/ntdll/unwind.c
-index 4e61407b892..bb6aa949480 100644
+index 4e61407..bb6aa94 100644
 --- a/dlls/ntdll/unwind.c
 +++ b/dlls/ntdll/unwind.c
 @@ -2107,6 +2107,66 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,

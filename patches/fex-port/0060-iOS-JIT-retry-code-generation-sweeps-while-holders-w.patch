@@ -36,7 +36,7 @@ Offered-upstream: no
  11 files changed, 521 insertions(+), 13 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
-index 7a38de8..e9428e6 100644
+index 092def8..b59c10c 100644
 --- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
 +++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
 @@ -314,16 +314,52 @@ namespace CPU {
@@ -169,7 +169,7 @@ index 62db301..ac40dfa 100644
      // in flight), -2 = raced out. Caller must have established via the sweep
      // gate that this thread is outside emitted code (InSimulation == 0).
 diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
-index f61085d..cc74a29 100644
+index fbabf9d..2799617 100644
 --- a/FEXCore/Source/Interface/Core/Frontend.cpp
 +++ b/FEXCore/Source/Interface/Core/Frontend.cpp
 @@ -1363,6 +1363,13 @@ void Decoder::AddBranchTarget(uint64_t Target) {
@@ -259,7 +259,7 @@ index 40025eb..e213e5d 100644
      const auto Period = CurrentTime - LastPeriod;
      if (Period >= SamplePeriod) {
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
-index 9c4957f..ba95e16 100644
+index 8dc605c..b384250 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
 @@ -3950,9 +3950,23 @@ void OpDispatchBuilder::CreateJumpBlocks(const fextl::vector<FEXCore::Frontend::
@@ -287,7 +287,7 @@ index 9c4957f..ba95e16 100644
    LOGMAN_THROW_A_FMT(Is64BitMode == CTX->Config.Is64BitMode, "Expected operating mode to not change at runtime!");
    IsMonoBackpatcherBlock = MonoBackpatcherBlock;
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
-index ff5c389..bc5e403 100644
+index 0190282..9f77d5e 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
 @@ -2435,6 +2435,34 @@ private:
@@ -366,7 +366,7 @@ index ff5c389..bc5e403 100644
  
      if (AtomicTSO) {
 diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
-index bf610f3..484eddc 100644
+index c2e1e54..355b576 100644
 --- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 +++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 @@ -19,7 +19,11 @@ static constexpr size_t INITIAL_CODE_SIZE = 1024 * 1024 * 16;
@@ -659,7 +659,7 @@ index 4a14f4a..d835780 100644
    }
    g_Entries[count].PeBase = PeBase;
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index b429243..40b40b1 100644
+index eac52f2..050ebb9 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -79,6 +79,9 @@ extern "C" int ios_va_log_len;

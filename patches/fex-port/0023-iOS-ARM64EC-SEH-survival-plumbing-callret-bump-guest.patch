@@ -65,7 +65,7 @@ index 332169d..a9d1d52 100644
    // The low address of the call-ret stack allocation (not including guard pages)
    void* CallRetStackBase {};
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 3b859b5..4e97870 100644
+index 9270425..ebd82f1 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -800,8 +800,25 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E

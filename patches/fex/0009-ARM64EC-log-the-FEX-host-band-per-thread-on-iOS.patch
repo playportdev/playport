@@ -23,7 +23,7 @@ Offered-upstream: no
  1 file changed, 52 insertions(+)
 
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 41aab2d..c9fd693 100644
+index 1dd6d8b..b2dc56e 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -1540,6 +1540,42 @@ extern "C" void NotifyImageMap(void* Address) {

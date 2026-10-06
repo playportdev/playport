@@ -28,7 +28,7 @@ Offered-upstream: no
  9 files changed, 948 insertions(+), 4 deletions(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 3a09ef92c91..f02613a255d 100644
+index 3a09ef9..f02613a 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -84,6 +84,19 @@ void *__wine_syscall_dispatcher = NULL;
@@ -145,7 +145,7 @@ index 3a09ef92c91..f02613a255d 100644
  
          if (NtCurrentTeb()->SkipThreadAttach)
 diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
-index 0f21e4e0819..8635bff6cea 100644
+index f2dabdc..ab64aa7 100644
 --- a/dlls/ntdll/ntdll.spec
 +++ b/dlls/ntdll/ntdll.spec
 @@ -1773,6 +1773,8 @@
@@ -158,7 +158,7 @@ index 0f21e4e0819..8635bff6cea 100644
  
  # Debugging
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index a99fba82930..f993e7d86c7 100644
+index ae485a5..5fbfff1 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -108,7 +108,46 @@ struct ec_stack_window
@@ -709,7 +709,7 @@ index a99fba82930..f993e7d86c7 100644
                                                      (ULONG_PTR)dispatch.ControlPc );
              if (why)
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index a485e212554..165631eb063 100644
+index a485e21..165631e 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -473,6 +473,76 @@ static void ios_cs_report_bad( RTL_CRITICAL_SECTION *crit, const char *where )
@@ -834,7 +834,7 @@ index a485e212554..165631eb063 100644
          if (InterlockedDecrement( &crit->LockCount ) >= 0)
          {
 diff --git a/dlls/ntdll/thread.c b/dlls/ntdll/thread.c
-index afb3eeddd52..bfecc071f4d 100644
+index afb3eed..bfecc07 100644
 --- a/dlls/ntdll/thread.c
 +++ b/dlls/ntdll/thread.c
 @@ -239,6 +239,20 @@ void WINAPI RtlExitUserThread( ULONG status )
@@ -859,7 +859,7 @@ index afb3eeddd52..bfecc071f4d 100644
      if (last) RtlExitUserProcess( status );
      LdrShutdownThread();
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 112ddd2cd06..58ce1383ef3 100644
+index 112ddd2..58ce138 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
 @@ -120,6 +120,20 @@ struct ios_jit_alias_probe_params
@@ -892,7 +892,7 @@ index 112ddd2cd06..58ce1383ef3 100644
  
  extern unixlib_handle_t __wine_unixlib_handle;
 diff --git a/server/event.c b/server/event.c
-index b0cb6b182b8..682b13110e7 100644
+index b0cb6b1..682b131 100644
 --- a/server/event.c
 +++ b/server/event.c
 @@ -22,6 +22,8 @@
@@ -1163,7 +1163,7 @@ index b0cb6b182b8..682b13110e7 100644
  
  static struct object *event_get_sync( struct object *obj )
 diff --git a/server/handle.c b/server/handle.c
-index 1933b2f6a43..daea27f00d4 100644
+index 1933b2f..daea27f 100644
 --- a/server/handle.c
 +++ b/server/handle.c
 @@ -38,6 +38,16 @@
@@ -1205,7 +1205,7 @@ index 1933b2f6a43..daea27f00d4 100644
      if ((entry = get_handle( src, src_handle )))
          src_access = entry->access;
 diff --git a/server/thread.c b/server/thread.c
-index 9972c4963e5..58bc7c20191 100644
+index 9972c49..58bc7c2 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -1137,6 +1137,16 @@ void reset_sync( struct object *obj )

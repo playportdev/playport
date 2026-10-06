@@ -29,7 +29,7 @@ Offered-upstream: no
  3 files changed, 23 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index b0b2392c504..b3115fd7bdb 100644
+index b0b2392..b3115fd 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1221,6 +1221,15 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
@@ -75,7 +75,7 @@ index b0b2392c504..b3115fd7bdb 100644
                              pe_name->Name, name, pe_name->Hint, (void *)thunk_list->u1.Function);
          }
 diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
-index 2bf3cfaca32..4be99677f46 100644
+index 2bf3cfa..4be9967 100644
 --- a/dlls/ntdll/ntdll_misc.h
 +++ b/dlls/ntdll/ntdll_misc.h
 @@ -164,6 +164,7 @@ extern void heap_thread_detach(void);
@@ -87,7 +87,7 @@ index 2bf3cfaca32..4be99677f46 100644
                                              const IMAGE_ARM64EC_METADATA *metadata );
  extern void invoke_arm64ec_syscall(void);
 diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
-index 66a79906e6c..26e4e78501b 100644
+index 1f133a3..9f8880d 100644
 --- a/dlls/ntdll/signal_arm64ec.c
 +++ b/dlls/ntdll/signal_arm64ec.c
 @@ -163,7 +163,7 @@ static BOOL send_cross_process_notification( HANDLE process, UINT id, const void

@@ -19,7 +19,7 @@ Offered-upstream: no
  1 file changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index f6f4b3a..cb07966 100644
+index 80a7bb9..45be25d 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -562,13 +562,20 @@ struct ios_inproc_cache

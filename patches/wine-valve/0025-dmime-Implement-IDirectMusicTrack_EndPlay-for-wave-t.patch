@@ -16,7 +16,7 @@ Offered-upstream: no
  1 file changed, 13 insertions(+)
 
 diff --git a/dlls/dmime/wavetrack.c b/dlls/dmime/wavetrack.c
-index 64480c6..f34e8ee 100644
+index 9d700c7..12dceab 100644
 --- a/dlls/dmime/wavetrack.c
 +++ b/dlls/dmime/wavetrack.c
 @@ -139,7 +139,20 @@ static HRESULT WINAPI wave_track_InitPlay(IDirectMusicTrack8 *iface,

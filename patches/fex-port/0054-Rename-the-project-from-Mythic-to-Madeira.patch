@@ -107,7 +107,7 @@ index c9eea2f..4f7eb4c 100644
    if (!Meta) INIT_TAG_EXIT(0x0015);
    /* tag 0x1F — Initialize completed. To confirm we got here, uncomment: */
 diff --git a/FEXCore/Source/Interface/Config/Config.json.in b/FEXCore/Source/Interface/Config/Config.json.in
-index 60b1fc9..88d0bac 100644
+index 1558de3..b5df864 100644
 --- a/FEXCore/Source/Interface/Config/Config.json.in
 +++ b/FEXCore/Source/Interface/Config/Config.json.in
 @@ -45,7 +45,7 @@
@@ -120,10 +120,10 @@ index 60b1fc9..88d0bac 100644
            "corruption was UNCHANGED - and the writer census CHANGED (clear 816->1140,",
            "content painter 1320->684, the +0x58d937 writer vanished entirely). So",
 diff --git a/FEXCore/Source/Interface/Core/CPUBackend.cpp b/FEXCore/Source/Interface/Core/CPUBackend.cpp
-index e81e792..7a38de8 100644
+index 5087910..092def8 100644
 --- a/FEXCore/Source/Interface/Core/CPUBackend.cpp
 +++ b/FEXCore/Source/Interface/Core/CPUBackend.cpp
-@@ -308,7 +308,7 @@ namespace CPU {
+@@ -309,7 +309,7 @@ namespace CPU {
    CPUBackend::~CPUBackend() = default;
  
  #ifdef FEX_IOS_HOST
@@ -132,7 +132,7 @@ index e81e792..7a38de8 100644
     * SignalHandlerCodeBuffers holds this while the sweeper may run (see the
     * header comment). Plain test-and-set spin — all critical sections are a
     * few pointer ops. NOT recursive: RegisterForSignalHandler is only called
-@@ -348,7 +348,7 @@ namespace CPU {
+@@ -349,7 +349,7 @@ namespace CPU {
        // This means that we can not safely clear the code at this point in time
        // Keep a reference to the old code buffer to delay deallocation
  #ifdef FEX_IOS_HOST
@@ -141,7 +141,7 @@ index e81e792..7a38de8 100644
         * ml458 run ended with 12 carves (5 of them 32MB) but only ONE freed —
         * 214MB of a 896MB pool pinned while the head needed 1MB more. A buffer
         * lives until every strong ref drops; this vector is the one ref that can
-@@ -388,7 +388,7 @@ namespace CPU {
+@@ -389,7 +389,7 @@ namespace CPU {
  
  
  #ifdef FEX_IOS_HOST
@@ -150,7 +150,7 @@ index e81e792..7a38de8 100644
     * generation. Runs on the SWEEPER's thread; the caller has verified under
     * the Dekker gate that the owner is outside emitted code (InSimulation==0)
     * and cannot re-enter until the gate clears — so the owner cannot be inside
-@@ -433,7 +433,7 @@ namespace CPU {
+@@ -434,7 +434,7 @@ namespace CPU {
  #endif
  
  #if defined(FEX_IOS_HOST) && defined(_WIN32)
@@ -173,10 +173,10 @@ index ed538f0..62db301 100644
       * release sites are compile-path self-migrations — so a thread parked in
       * a wine wait pins its generation for the entire park (ml459 census: 13
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 91a441b..0176bcf 100644
+index 155fe59..ccdc677 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
-@@ -63,7 +63,7 @@ $end_info$
+@@ -64,7 +64,7 @@ $end_info$
  #include <chrono>
  #include <cstring>
  
@@ -185,9 +185,9 @@ index 91a441b..0176bcf 100644
   * rather than in a shared header because rpmalloc is C and vendored; keep the two
   * definitions in sync — the drain below is the only consumer. */
  extern "C" {
-@@ -95,36 +95,36 @@ int rpm_cas_snapshot_take(struct rpm_cas_snapshot* out);
- #include <arm_acle.h>
- #endif
+@@ -93,36 +93,36 @@ int rpm_cas_snapshot_take(struct rpm_cas_snapshot* out);
+ #include <utility>
+ #include <xxhash.h>
  
 -/* iOS-Mythic HOTRIP telemetry — plain globals (no constructors/guard vars).
 +/* iOS-Madeira HOTRIP telemetry — plain globals (no constructors/guard vars).
@@ -240,7 +240,7 @@ index 91a441b..0176bcf 100644
   * frontend (Module.cpp) which owns the thread registry. extern "C" so the
   * cross-layer reference has no namespace in its linkage name. */
  extern "C" void IosMaybeSweepCodeBuffers(FEXCore::Core::InternalThreadState* CallerThread);
-@@ -140,7 +140,7 @@ ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
+@@ -138,7 +138,7 @@ ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
      Config.VirtualMemSize = 1ULL << 32;
    }
  #ifdef FEX_IOS_HOST
@@ -249,7 +249,7 @@ index 91a441b..0176bcf 100644
     * (64GB VirtualMemSize) to 16MB (8GB). Every thread's LookupCache commits
     * its full arena upfront on iOS (commit-on-fault doesn't work — see
     * LookupCache.cpp), so ~264MB × ~19 game threads ≈ 5GB was killing the
-@@ -241,7 +241,7 @@ uint64_t ContextImpl::RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* T
+@@ -247,7 +247,7 @@ uint64_t ContextImpl::RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* T
    return Frame->State.rip;
  }
  
@@ -258,7 +258,7 @@ index 91a441b..0176bcf 100644
   *
   * WHY: our fault probes (srcwatch, the bus/segv handlers) read the guest RIP out of
   * CpuStateFrame+0x18, which FEX only syncs at BLOCK boundaries. That names the calling
-@@ -620,7 +620,7 @@ void ContextImpl::ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, boo
+@@ -621,7 +621,7 @@ void ContextImpl::ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, boo
    FEXCore::Core::ResetCallRetStack(Thread, "core");
  }
  
@@ -267,7 +267,7 @@ index 91a441b..0176bcf 100644
   *
   * ml609 clipped this to the [base+2MB, base+6MB) window on the theory that the
   * rest of the 16MB was unreachable, so decommitting it was pure waste. Both
-@@ -796,22 +796,22 @@ bool ContextImpl::CheckIfBlockIsCacheable(FEXCore::Core::InternalThreadState& Th
+@@ -797,22 +797,22 @@ bool ContextImpl::CheckIfBlockIsCacheable(FEXCore::Core::InternalThreadState& Th
    return Thread.FrontendDecoder->CheckIfCacheable(Thread, reinterpret_cast<const uint8_t*>(GuestRIP), GuestRIP, MaxInst);
  }
  
@@ -297,7 +297,7 @@ index 91a441b..0176bcf 100644
     * `str xzr,[x0,#0x378]` with x0=0 inside IREmitter::ResetWorkingList and killing the
     * process (unhandled c0000005, ml247 via chromehtml.dll -> tier0_s64).
     *
-@@ -924,8 +924,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -927,8 +927,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
          uint64_t InstAddress = Block.Entry + BlockInstructionsLength;
  
          // ml623: does THIS block contain the instruction under investigation?
@@ -308,7 +308,7 @@ index 91a441b..0176bcf 100644
          }
          const FEXCore::X86Tables::X86InstInfo* TableInfo {nullptr};
          const FEXCore::X86Tables::DecodedInst* DecodedInfo {nullptr};
-@@ -1062,14 +1062,14 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -1048,14 +1048,14 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
              } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::UNIMPLEMENTED_INST) {
                Thread->OpDispatcher->UnimplementedOp(DecodedInfo);
              } else {
@@ -325,7 +325,7 @@ index 91a441b..0176bcf 100644
                 * 1,117,783 copies of the SAME line for ONE address (0x7ED30A0080,
                 * inside the FEX host band) — a 148MB log, 2.26M lines, from line
                 * 16,648 to the end. NoExecOp raises SIGSEGV, the guest resumes at
-@@ -1170,7 +1170,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -1156,7 +1156,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
  }
  
  ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst) {
@@ -334,7 +334,7 @@ index 91a441b..0176bcf 100644
  
    if (SourcecodeResolver && Config.GDBSymbols()) {
      auto MappedSection = SyscallHandler->LookupExecutableFileSection(Thread, GuestRIP);
-@@ -1187,7 +1187,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -1173,7 +1173,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
      Thread->FrontendDecoder->ValidateDisownedOrFree();
      Thread->OpDispatcher->ValidateDisownedOrFree();
      // OpDispatcher IR already released in this case.
@@ -343,7 +343,7 @@ index 91a441b..0176bcf 100644
      return {{}, nullptr, 0, 0, false};
    }
  
-@@ -1201,7 +1201,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -1187,7 +1187,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
    if (MaxInst != 1 && !FEXCore::Utils::WritePriorityMutex::IosUnpublishedCompileActive()) {
      if (auto Block = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
        // Raced to compile, release the OpDispatcher IR.
@@ -352,7 +352,7 @@ index 91a441b..0176bcf 100644
        Thread->OpDispatcher->DelayedDisownBuffer();
        Thread->FrontendDecoder->ValidateDisownedOrFree();
        Thread->OpDispatcher->ValidateDisownedOrFree();
-@@ -1225,8 +1225,8 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -1211,8 +1211,8 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
     * arm that separates "the emitter dropped it" from "SMC/cache/alias lifetime rewrote
     * it later": the hash printed here is of the bytes AT COMPILE TIME, so a runtime
     * disassembly that disagrees convicts something after codegen. */
@@ -363,7 +363,7 @@ index 91a441b..0176bcf 100644
      if (Target >= CapRIP && CompiledCode.BlockBegin && DebugData) {
        const uint64_t WantOffset = Target - CapRIP;
        const auto& GO = DebugData->GuestOpcodes;
-@@ -1268,7 +1268,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -1254,7 +1254,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
          }
        }
      }
@@ -372,7 +372,7 @@ index 91a441b..0176bcf 100644
    }
  
    // Release the IR
-@@ -1286,13 +1286,13 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
+@@ -1272,13 +1272,13 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
  }
  
  #ifdef FEX_IOS_HOST
@@ -389,7 +389,7 @@ index 91a441b..0176bcf 100644
   * the bypass asm in Module.S. Reported below the same way as [cb-entry]. */
  extern "C" uint64_t IosFfsBypassLog[4];
  #endif
-@@ -1429,7 +1429,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1415,7 +1415,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    }
  #endif
  
@@ -398,7 +398,7 @@ index 91a441b..0176bcf 100644
     *
     * ml302 proved the JITCallback prologue writes the bad State.rip, and ml303 added an LR witness --
     * but gated the report on a later bogus-RIP hit, which only occurs in roughly half of runs. That
-@@ -1449,7 +1449,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1435,7 +1435,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     * entry happened). Key on the entry COUNTER in the static capture buffer instead, and print the
     * full captured entry state; x16/x17 are the interesting ones since a `br` through an IP register
     * is the most plausible way to arrive with LR=0. */
@@ -407,7 +407,7 @@ index 91a441b..0176bcf 100644
     * reached via its x64 fast-forward sequence -- preserves the x4/x5 varargs contract that
     * the emulation round trip destroys; see Module.S). Same change-detection pattern as
     * [cb-entry] below: CompileBlock runs often enough to notice promptly. */
-@@ -1480,7 +1480,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1466,7 +1466,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      }
    }
  
@@ -416,7 +416,7 @@ index 91a441b..0176bcf 100644
     * NULL-vtable virtual call (`call [rax+8]` with rax=0), control flow
     * lands at RIP=0x8, which then loops compiling thousands of garbage
     * blocks before SEH unwinds. Returning 0 here raises C0000005 to the
-@@ -1491,7 +1491,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1477,7 +1477,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    }
  
  #ifdef FEX_IOS_HOST
@@ -425,7 +425,7 @@ index 91a441b..0176bcf 100644
     * must be reverse-translated to its PE VA and re-classified -- NEVER compiled.
     *
     * The EcCodeBitMap is populated per-module at its PE-space mapping (wine's
-@@ -1532,7 +1532,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1518,7 +1518,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    }
  #endif
  
@@ -434,7 +434,7 @@ index 91a441b..0176bcf 100644
     *
     * [iOS-noexec] showed FEX being asked to decode x86 at addresses that are not guest
     * code at all:
-@@ -1551,7 +1551,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1537,7 +1537,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     *
     * Log the host return address (which lands in the dispatcher stub that supplied the
     * RIP) plus State.rip, so the PRODUCER is named instead of the consumer. */
@@ -443,7 +443,7 @@ index 91a441b..0176bcf 100644
     *
     * ml292/294/295 showed a SECOND leak, distinct from the 0x7c-0x7f host-heap one above and now
     * the DOMINANT killer (3 of the last 4 runs, and it fires EARLIER -- ~24.6k calls vs ~36.4k --
-@@ -1571,7 +1571,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1557,7 +1557,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     * unambiguously a host-PC leak with no possibility of a guest-image false positive. */
    const bool RIPInFEXCodeBuffer = IsAddressInCodeBuffer(Thread, GuestRIP);
  
@@ -452,7 +452,7 @@ index 91a441b..0176bcf 100644
     *
     * ml299 hit a third variant of the same leak and the gate missed all 3,422 occurrences of it:
     *   [fault_rip] cnt=3422 rip=0x13b2b888c
-@@ -1612,7 +1612,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1598,7 +1598,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
                          GuestRIP, Frame ? Frame->State.rip : 0, __builtin_return_address(0),
                          Frame ? Frame->State.callret_sp : 0);
  
@@ -461,7 +461,7 @@ index 91a441b..0176bcf 100644
         *
         * ml294 established, offline, that the guest CANNOT have computed this address. At fault
         * time the guest is inside chrome_elf.dll's memset (r10 = exact image base, r11 = exact
-@@ -1729,7 +1729,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1715,7 +1715,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
          }
        }
  
@@ -470,7 +470,7 @@ index 91a441b..0176bcf 100644
         *
         * Offline analysis of nine runs showed every bogus RIP has the form
         *   <steered 512MB PA arena base> + {0xd0080, 0xe0080, 0xf0080}
-@@ -1774,7 +1774,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1760,7 +1760,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      }
    }
  
@@ -479,7 +479,7 @@ index 91a441b..0176bcf 100644
     *
     * Initial diagnostic showed callret_sp going 0x10..0x70 BELOW
     * Thread->CallRetStackBase — underflow of the FEX prediction stack into
-@@ -1831,7 +1831,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1817,7 +1817,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      }
    }
  
@@ -488,7 +488,7 @@ index 91a441b..0176bcf 100644
     *
     * Earlier attempt to "recover" by setting State.rip = callret[0].pc and
     * compiling that as guest x86 produced a livelock: the recovered code
-@@ -1877,7 +1877,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1863,7 +1863,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      }
    }
  
@@ -497,7 +497,7 @@ index 91a441b..0176bcf 100644
     * was producing ~180K lines/run for hot RIP 0x140028d46 alone, each
     * amplified ~6× by Wine's file trace). Counters: g_cb_total bumped
     * every CompileBlock call; g_cb_real_compiles bumped after cache miss
-@@ -1899,7 +1899,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1885,7 +1885,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      if ((total - g_cb_last_summary_total) >= 16384) {
        g_cb_last_summary_total = total;
        uint64_t reals = g_cb_real_compiles;
@@ -506,7 +506,7 @@ index 91a441b..0176bcf 100644
         * lookup fields. The emitted dispatcher L1 probe reads
         * State.L1Pointer/L1Mask; the measured ~15K CompileBlock calls per
         * frame (~60us each = the whole frame time) with 99% cache hits mean
-@@ -1919,7 +1919,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1905,7 +1905,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
                          Frame ? Frame->State.L1Mask : 0,
                          (T && T->LookupCache) ? T->LookupCache->GetL1Pointer() : 0);
  
@@ -515,7 +515,7 @@ index 91a441b..0176bcf 100644
         * outside rpmalloc, where formatting is safe. The allocator side only ever
         * copies scalars into a POD and sets a flag; it must never format, because
         * LogMan/fmt can allocate and re-enter the very allocator that is stuck
-@@ -1946,7 +1946,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1932,7 +1932,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      }
    }
  
@@ -524,7 +524,7 @@ index 91a441b..0176bcf 100644
     * block dispatch, not just hot RIPs). 4-slot hash table keyed by Frame
     * pointer (unique per FEX thread). Identifies WHICH thread is leaking
     * callret entries vs healthy. */
-@@ -1954,20 +1954,20 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1940,20 +1940,20 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      uintptr_t fk = reinterpret_cast<uintptr_t>(Frame);
      int slot = (int)((fk >> 6) & 3);
      /* Claim the slot if empty, or use if matches; ignore on collision. */
@@ -553,7 +553,7 @@ index 91a441b..0176bcf 100644
     * plain volatile globals to avoid __cxa_guard_acquire on static-local
     * initialization, which appears to trip a stack-cookie check on
     * ARM64EC mingw. POD types only — no constructors. Atomicity isn't
-@@ -1997,17 +1997,17 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -1983,17 +1983,17 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
          break;
      }
      if (idx >= 0) {
@@ -576,7 +576,7 @@ index 91a441b..0176bcf 100644
        }
  
        if (idx == 1) {
-@@ -2018,15 +2018,15 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -2004,15 +2004,15 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
            if (rbx_0 >= 0x10000ull && rbx_0 < 0x800000000000ull) {
              uint64_t vt = *reinterpret_cast<uint64_t*>(rbx_0);
              if (vt >= 0x10000ull && vt < 0x800000000000ull) {
@@ -595,7 +595,7 @@ index 91a441b..0176bcf 100644
          }
        }
  
-@@ -2042,29 +2042,29 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -2028,29 +2028,29 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
                             "max_alloc=0x{:x} crsp[min..last..max]=0x{:x}..0x{:x}..0x{:x} "
                             "last_vt=0x{:x} vt2=0x{:x} last_str=0x{:x}",
                             elapsed,
@@ -640,7 +640,7 @@ index 91a441b..0176bcf 100644
          }
        }
      }
-@@ -2073,7 +2073,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -2059,7 +2059,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    static_cast<ContextImpl*>(Thread->CTX)->SyscallHandler->PreCompile();
  
  #ifdef FEX_IOS_HOST
@@ -649,7 +649,7 @@ index 91a441b..0176bcf 100644
     * THIS thread already holds emission locks, this call can only be guest SEH
     * delivery re-entering the compiler asynchronously.  Re-taking the
     * invalidation shared lock risks the write-priority recursive-read park,
-@@ -2110,7 +2110,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -2096,7 +2096,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    }
  #endif
  
@@ -658,7 +658,7 @@ index 91a441b..0176bcf 100644
    __sync_add_and_fetch(&g_cb_real_compiles, 1);
  
    Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, MaxInst);
-@@ -2176,7 +2176,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -2162,7 +2162,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    }
  #endif
    auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
@@ -667,7 +667,7 @@ index 91a441b..0176bcf 100644
     * to BlockTail+0x18 instead of a code entry — the published entry itself
     * was wrong. Validate every entry against the block layout at publication
     * time: an entry must land in [BlockBegin, Tail) and must not decode as
-@@ -2308,7 +2308,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -2294,7 +2294,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
    Thread->OpDispatcher->ValidateDisownedOrFree();
  
  #if defined(FEX_IOS_HOST) && defined(_WIN32)
@@ -677,7 +677,7 @@ index 91a441b..0176bcf 100644
     * generations live where steady state needs ~2). The frontend sweeper walks
     * its thread registry and remote-migrates threads that are outside emitted
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index de98548..9625646 100644
+index 268eb0e..0ef3ced 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -64,7 +64,7 @@ Dispatcher::~Dispatcher() {
@@ -725,7 +725,7 @@ index de98548..9625646 100644
     *
     * Upstream's loop-top lookup goes straight to the L2 page table, which
     * masks addresses to Config.VirtualMemSize (64GB). Wine on iOS maps PE
-@@ -569,7 +569,7 @@ void Dispatcher::EmitDispatcher() {
+@@ -576,7 +576,7 @@ void Dispatcher::EmitDispatcher() {
  
      PauseReturnInstruction = GetCursorAddress<uint64_t>();
  #ifdef FEX_IOS_HOST
@@ -734,7 +734,7 @@ index de98548..9625646 100644
       *
       * Upstream ends this block with hlt(0) and relies on the signal handler to notice
       * Pc == PauseReturnInstruction and resume via RestoreThreadState(TYPE_PAUSE)
-@@ -624,7 +624,7 @@ void Dispatcher::EmitDispatcher() {
+@@ -631,7 +631,7 @@ void Dispatcher::EmitDispatcher() {
      PushCalleeSavedRegisters();
  
  #ifdef FEX_IOS_HOST
@@ -743,7 +743,7 @@ index de98548..9625646 100644
       *
       * ml302/ml306 proved this prologue's str(x1, State.rip) writes the recurring bad guest RIP
       * (IosLastCallbackRip == GuestRIP, 2/2 host-heap-band hits), and the ml303 LR witness came
-@@ -684,14 +684,14 @@ void Dispatcher::EmitDispatcher() {
+@@ -691,14 +691,14 @@ void Dispatcher::EmitDispatcher() {
      // Store RIP to the context state
      str(ARMEmitter::XReg::x1, STATE_PTR(CpuStateFrame, State.rip));
  #ifdef FEX_IOS_HOST
@@ -760,7 +760,7 @@ index de98548..9625646 100644
      // sentinel push uses REG_CALLRET_SP after FillStaticRegs, which on iOS
      // ARM64EC reloads x17 from State.callret_sp. If State has drifted OOB
      // (e.g. underflow during prior dispatch), reset before stp to avoid
-@@ -808,7 +808,7 @@ void Dispatcher::EmitDispatcher() {
+@@ -873,7 +873,7 @@ void Dispatcher::EmitDispatcher() {
    End = GetCursorAddress<uint64_t>();
  
  #ifdef FEX_IOS_HOST
@@ -770,10 +770,10 @@ index de98548..9625646 100644
     * ml297's [bogus-host] dump proved CompileBlock is reached with the guest RIP taken from x12,
     * but there is no way to tell from a raw host address WHICH dispatcher entry ran -- and that is
 diff --git a/FEXCore/Source/Interface/Core/Frontend.cpp b/FEXCore/Source/Interface/Core/Frontend.cpp
-index b0084b0..f61085d 100644
+index 1db2093..fbabf9d 100644
 --- a/FEXCore/Source/Interface/Core/Frontend.cpp
 +++ b/FEXCore/Source/Interface/Core/Frontend.cpp
-@@ -1510,7 +1510,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1572,7 +1572,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
  
        // Do a bit of pointer math to figure out where we are in code
        InstStream = AdjustAddrForSpecialRegion(_InstStream, EntryPoint, RIPToDecode);
@@ -782,7 +782,7 @@ index b0084b0..f61085d 100644
      } else if (BlockResume != -1) {
        BlockIt = BlockInfo.Blocks.begin() + BlockResume;
        BlockResume = -1;
-@@ -1546,7 +1546,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1608,7 +1608,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
  
        LastFieldReadSize = 0;
        if (TotalInstructions == 0) {
@@ -791,7 +791,7 @@ index b0084b0..f61085d 100644
        }
        BlockIt->BlockStatus = DecodeInstruction(OpAddress);
        if (HitBadRelocation) {
-@@ -1672,7 +1672,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
+@@ -1731,7 +1731,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
    }
  
    BlockInfo.TotalInstructionCount = TotalInstructions;
@@ -800,7 +800,7 @@ index b0084b0..f61085d 100644
  
    for (auto& Block : BlockInfo.Blocks) {
      Block.IsEntryPoint = BlockInfo.EntryPoints.contains(Block.Entry);
-@@ -1704,9 +1704,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+@@ -1763,9 +1763,9 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
    // Decode operating mode from thread's CS segment.
    const auto CSSegment = Core::CPUState::GetSegmentFromIndex(Thread->CurrentFrame->State, Thread->CurrentFrame->State.cs_idx);
    BlockInfo.Is64BitMode = CSSegment->L == 1;
@@ -812,7 +812,7 @@ index b0084b0..f61085d 100644
  
    EntryPoint = PC;
    BlockInfo.EntryPoints = {PC};
-@@ -1738,7 +1738,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
+@@ -1797,7 +1797,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
  
    EntryBlock = true;
    FinalInstruction = false;
@@ -822,10 +822,10 @@ index b0084b0..f61085d 100644
  
  } // namespace FEXCore::Frontend
 diff --git a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
-index 74ecb7d..05e96bf 100644
+index fd0d28e..63b8bfb 100644
 --- a/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/BranchOps.cpp
-@@ -166,19 +166,19 @@ DEF_OP(ExitFunction) {
+@@ -167,19 +167,19 @@ DEF_OP(ExitFunction) {
        ARMEmitter::ForwardLabel l_CallReturn;
        if (Op->Hint == IR::BranchHint::Call) {
  #ifdef ARCHITECTURE_arm64ec
@@ -848,7 +848,7 @@ index 74ecb7d..05e96bf 100644
             * ENTIRE 16MB region, so a large-but-in-range leak sails straight through.
             * Measured on the CEF webhelper thread:
             *   tid 0098 sp-base=0x2c8c40 -> 1.1MB pushed  (~36,000 nested calls)
-@@ -244,7 +244,7 @@ DEF_OP(ExitFunction) {
+@@ -245,7 +245,7 @@ DEF_OP(ExitFunction) {
      if (Op->Hint == IR::BranchHint::Return) {
        // First try to pop from the call-ret stack, otherwise follow the normal path (but ending in a ret)
  #ifdef ARCHITECTURE_arm64ec
@@ -857,7 +857,7 @@ index 74ecb7d..05e96bf 100644
        // native returns clobber x17, so we reload from State.callret_sp
        // before popping. AND we write back the post-pop value to State so
        // the dispatcher LoopTop's reload (line 134 of Dispatcher.cpp) sees
-@@ -252,11 +252,11 @@ DEF_OP(ExitFunction) {
+@@ -253,11 +253,11 @@ DEF_OP(ExitFunction) {
        // pop changes are lost on next dispatcher iteration — quantified
        // as ~1 leaked callret entry per block dispatch on Thumper FMOD.
        ldr(REG_CALLRET_SP, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp));
@@ -871,7 +871,7 @@ index 74ecb7d..05e96bf 100644
          ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.callret_sp_base));
          add(ARMEmitter::Size::i64Bit, TMP1, TMP1, 0x200000);
          sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
-@@ -273,7 +273,7 @@ DEF_OP(ExitFunction) {
+@@ -274,7 +274,7 @@ DEF_OP(ExitFunction) {
  #endif
        sub(TMP1, TMP1, RipReg.X());
  #ifdef FEX_IOS_HOST
@@ -880,7 +880,7 @@ index 74ecb7d..05e96bf 100644
         *
         * Taking this shortcut means `br TMP2`, where TMP2 is the HOST half of the popped entry -- an
         * intra-block `adr(&l_CallReturn)` label recorded by the CALL push above. That is only safe if
-@@ -328,15 +328,15 @@ DEF_OP(ExitFunction) {
+@@ -329,15 +329,15 @@ DEF_OP(ExitFunction) {
      if (Op->Hint == IR::BranchHint::Call) {
        ARMEmitter::ForwardLabel l_CallReturn;
  #ifdef ARCHITECTURE_arm64ec
@@ -900,7 +900,7 @@ index 74ecb7d..05e96bf 100644
          add(ARMEmitter::Size::i64Bit, TMP1, TMP1, 0x200000);
          sub(ARMEmitter::Size::i64Bit, TMP1, REG_CALLRET_SP, TMP1);
 diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-index d424fa2..5c2598b 100644
+index 90c6980..99e28d7 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 @@ -16,7 +16,7 @@ $end_info$
@@ -912,7 +912,7 @@ index d424fa2..5c2598b 100644
  // kernel (NtFlushInstructionCache → __clear_cache → sys_icache_invalidate),
  // which IPIs every core so remote PEs take the required context
  // synchronization. The old inline dc/ic asm only broadcast the cache
-@@ -580,7 +580,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+@@ -615,7 +615,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
      return Frame->Pointers.DispatcherLoopTop;
    } else {
  #ifdef FEX_IOS_HOST
@@ -921,7 +921,7 @@ index d424fa2..5c2598b 100644
       * while an interrupted frame on this thread holds emission locks.  Both
       * FindBlock and the link patch below take locks that frame may own —
       * bounce to the dispatcher loop instead, which compiles unpublished
-@@ -610,7 +610,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
+@@ -645,7 +645,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
      }
    }
  
@@ -930,7 +930,7 @@ index d424fa2..5c2598b 100644
     * link target the blocks will be patched to jump at starts with the NOP
     * prefill or decodes as block-tail data (upper 16 bits all zero — no real
     * ARM64 instruction looks like that). */
-@@ -906,7 +906,7 @@ void Arm64JITCore::EmitEntryPoint(ARMEmitter::BackwardLabel& HeaderLabel, bool C
+@@ -942,7 +942,7 @@ void Arm64JITCore::EmitEntryPoint(ARMEmitter::BackwardLabel& HeaderLabel, bool C
  extern "C" int32_t NtTerminateProcess(void* ProcessHandle, int32_t ExitStatus);
  #endif
  
@@ -939,7 +939,7 @@ index d424fa2..5c2598b 100644
   * which the dispatcher then executes -> c0000005 at address 0 -> guest SEH
   * re-enters the compiler under delivery -> bails again. At pool exhaustion
   * this looped 69,902 times in the ml459 run, burning minutes of CPU and
-@@ -1026,7 +1026,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1062,7 +1062,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  
    // JIT output is first written to a temporary buffer and later relocated to the CodeBuffer.
    // This minimizes lock contention of CodeBufferWriteMutex.
@@ -948,7 +948,7 @@ index d424fa2..5c2598b 100644
    auto TempCodeBufferInfo = TempCodeBufferAllocator.ReownOrClaimBufferWithSize(DesiredBufferRange);
    auto TempCodeBuffer = TempCodeBufferInfo.Ptr;
    const uint32_t UsableBufferRange = TempCodeBufferInfo.Size - FEXCore::Utils::FEX_PAGE_SIZE;
-@@ -1078,14 +1078,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1114,14 +1114,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
    PendingTargetLabel = nullptr;
    PendingCallReturnTargetLabel = nullptr;
  
@@ -965,7 +965,7 @@ index d424fa2..5c2598b 100644
      auto BlockStartHostCode = GetCursorAddress<uint8_t*>();
      {
        const auto Node = IR->GetID(BlockNode);
-@@ -1102,7 +1102,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1138,7 +1138,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  
        if (BlockIROp->EntryPoint) {
          uint64_t BlockStartRIP = Entry + BlockIROp->GuestEntryOffset;
@@ -974,7 +974,7 @@ index d424fa2..5c2598b 100644
  
          const auto IsReturnTarget = CallReturnTargets.try_emplace(Node).first;
          if (PendingTargetLabel) {
-@@ -1119,7 +1119,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1155,7 +1155,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
          DebugData->GuestOpcodes.push_back({BlockIROp->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
  
          EmitEntryPoint(JITCodeHeaderLabel, CheckTF);
@@ -983,7 +983,7 @@ index d424fa2..5c2598b 100644
        }
  
        if (PendingCallReturnTargetLabel) {
-@@ -1132,11 +1132,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1168,11 +1168,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
        BindOrRestart(Target);
      }
  
@@ -997,7 +997,7 @@ index d424fa2..5c2598b 100644
          switch (IROp->Op) {
  #define REGISTER_OP(op, x) \
    case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
-@@ -1149,7 +1149,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1185,7 +1185,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
          }
          OpIdx++;
        }
@@ -1006,7 +1006,7 @@ index d424fa2..5c2598b 100644
      }
  
      DebugData->Subblocks.push_back({static_cast<uint32_t>(BlockStartHostCode - CodeData.BlockBegin),
-@@ -1299,11 +1299,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1335,11 +1335,11 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
  
      // Copy over CodeBuffer contents (write to RW mirror on iOS)
  #if defined(FEX_IOS_HOST)
@@ -1020,7 +1020,7 @@ index d424fa2..5c2598b 100644
       * 0x10000000; the RW alias is placed with VM_FLAGS_ANYWHERE). */
      {
        static volatile int dual_map_log_count = 0;
-@@ -1339,7 +1339,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
+@@ -1375,7 +1375,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
      sys_icache_invalidate(CodeBegin, CodeOnlySize);
    }
  #elif defined(FEX_IOS_HOST)
@@ -1101,7 +1101,7 @@ index 1b45aa4..40025eb 100644
     * the process. 64MB still backs 1024 guest code pages per thread; on
     * overflow AllocateBackingForPage returns 0 → clean ClearCodeCache.
 diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
-index c54bf2f..bf610f3 100644
+index f83eb0e..c2e1e54 100644
 --- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 +++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.cpp
 @@ -14,7 +14,7 @@
@@ -1113,7 +1113,7 @@ index c54bf2f..bf610f3 100644
  // for ALL threads' code buffers; hot threads doubling 16->32->64->128MB
  // exhausted it in ml436 (head 708MB of DLL copies + tail collided; 10 honest
  // refusals, 123 degraded threads). Cap growth at 32MB — hot threads clear
-@@ -29,7 +29,7 @@ CodeBuffer::CodeBuffer(size_t Size)
+@@ -29,7 +29,7 @@ CodeBuffer::CodeBuffer(size_t Size, bool ShouldBeNamed)
    : AllocatedSize(Size) {
    Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
  #ifdef FEX_IOS_HOST
@@ -1123,10 +1123,10 @@ index c54bf2f..bf610f3 100644
     * freelist 0), VirtualAlloc returned garbage/NULL with LOGMAN_THROW
     * compiled out, and ClearCache scribbled the detection string through a
 diff --git a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
-index 27c7e80..4710385 100644
+index 8ec84d0..5dea031 100644
 --- a/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
 +++ b/FEXCore/Source/Interface/Core/SharedCodeBufferManager.h
-@@ -132,7 +132,7 @@ public:
+@@ -133,7 +133,7 @@ public:
    virtual void OnCodeBufferAllocated(const std::shared_ptr<CodeBuffer>&) {};
  
  #ifdef FEX_IOS_HOST
@@ -1441,7 +1441,7 @@ index f5641d9..8d6be70 100644
      // unchecked memmove inside vformat/fextl::string killed the process, so
      // the message that would have named the real bug never surfaced. Emit the
 diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
-index 8c6164a..a00f4f0 100644
+index f5ff2c5..0cb13c8 100644
 --- a/FEXCore/include/FEXCore/Core/CoreState.h
 +++ b/FEXCore/include/FEXCore/Core/CoreState.h
 @@ -107,7 +107,7 @@ struct alignas(64) CPUState {
@@ -1453,7 +1453,7 @@ index 8c6164a..a00f4f0 100644
    // here so JIT code can emit inline bounds checks against it. Initialized by
    // CallRetStack::InitializeThread alongside callret_sp. Repurposes _pad1
    // (same offset, same size — was alignment padding).
-@@ -439,7 +439,7 @@ struct CpuStateFrame {
+@@ -442,7 +442,7 @@ struct CpuStateFrame {
    // Pointers that the JIT needs to load to remove relocations
    JITPointers Pointers;
  
@@ -1462,7 +1462,7 @@ index 8c6164a..a00f4f0 100644
     *
     * Three code paths write State.rip -- BranchOps' L1-miss store, the JITCallback store, and
     * AbsoluteLoopTopAddressEnterEC's `str(EC_CALL_CHECKER_PC_REG, State.rip)`. ml298 gathered strong
-@@ -454,7 +454,7 @@ struct CpuStateFrame {
+@@ -457,7 +457,7 @@ struct CpuStateFrame {
     * offset the ntdll-side probes hardcode (all inside State) is unchanged. */
    uint64_t IosLastEnterECRip {};
  
@@ -1471,7 +1471,7 @@ index 8c6164a..a00f4f0 100644
     *
     * ml301 ran with the corrected (narrow) gate and produced exactly one hit -- the host-heap
     * variant, GuestRIP=0x7e600f0080 -- with the verdict NOT EnterEC (IosLastEnterECRip=0x73899eb34a,
-@@ -469,7 +469,7 @@ struct CpuStateFrame {
+@@ -472,7 +472,7 @@ struct CpuStateFrame {
     * Appended after IosLastEnterECRip, still past Pointers, so no hardcoded offset moves. */
    uint64_t IosLastCallbackRip {};
  
@@ -1614,7 +1614,7 @@ index c616659..605bafc 100644
   * holds emission locks (WPM shared / CodeBufferWriteMutex / lookup write), and
   * the guest SEH machinery then re-enters the compiler, which parks on those
 diff --git a/Source/Common/HostFeatures.cpp b/Source/Common/HostFeatures.cpp
-index 6d9c16a..5d83889 100644
+index 29bdf2f..096b16c 100644
 --- a/Source/Common/HostFeatures.cpp
 +++ b/Source/Common/HostFeatures.cpp
 @@ -21,7 +21,7 @@ namespace FEX {
@@ -1651,7 +1651,7 @@ index b5e3e77..9f4d232 100644
  // ⚠️ THIS MUST STAY BYTE-IDENTICAL TO build/ntdll-unix/ios_mono_bridge.h.
  // The two live in different build systems (llvm-mingw arm64ec PE here, native
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 83fd381..2f6a512 100644
+index 31456bc..a873bab 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -174,7 +174,7 @@ std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
@@ -1778,7 +1778,7 @@ index 83fd381..2f6a512 100644
  #ifdef FEX_IOS_HOST
    {
      const uint32_t Off = IosTebTsdOffset;
-@@ -937,7 +937,7 @@ NTSTATUS ProcessInit() {
+@@ -938,7 +938,7 @@ NTSTATUS ProcessInit() {
     * Wine launches, forwarded through get_initial_environment because they
     * are WINE-prefixed and non-special). offset = RW_base - RX_base.
     *
@@ -1787,7 +1787,7 @@ index 83fd381..2f6a512 100644
     * an uninitialized FEXBridge pool (the guest's real pool is owned by
     * StikJITHelper, not FEXBridge) and always came back null. Fail LOUD if
     * the vars are missing — a wrong/zero offset corrupts the JIT pool. */
-@@ -953,7 +953,7 @@ NTSTATUS ProcessInit() {
+@@ -954,7 +954,7 @@ NTSTATUS ProcessInit() {
          : nullptr;
      char buf[160];
      if (off != 0) {
@@ -1796,7 +1796,7 @@ index 83fd381..2f6a512 100644
         * TODO — the flush is now NtFlushInstructionCache (kernel IPI) in
         * JIT.cpp instead of inline dc/ic asm, which was the suspected root
         * cause of the msvcp140-DllMain/steam_api64 fast-write crashes AND
-@@ -1000,7 +1000,7 @@ NTSTATUS ProcessInit() {
+@@ -1001,7 +1001,7 @@ NTSTATUS ProcessInit() {
                                                            PAGE_EXECUTE_READ);
    *reinterpret_cast<uint8_t*>(X64ReturnInstr) = 0xc3;
  
@@ -1805,7 +1805,7 @@ index 83fd381..2f6a512 100644
     *
     * [iOS-noexec]/[iOS-bogusrip] show FEX being handed GuestRIP=0x7c200e0080 — page
     * 0x7c200e0000 plus 0x80 — and the same +0x0e0080 offset has appeared across three
-@@ -1164,7 +1164,7 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+@@ -1165,7 +1165,7 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
      return true;
    } else {
  #ifdef FEX_IOS_HOST
@@ -1814,7 +1814,7 @@ index 83fd381..2f6a512 100644
      // separate emulator stack like Windows-ARM64EC does (no CPU_AREA-driven
      // sigaltstack). Mach exception delivery arrives on whatever thread
      // stack was current, which is usually the guest stack. Attempt rethrow
-@@ -1278,7 +1278,7 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
+@@ -1279,7 +1279,7 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
    }
  }
  
@@ -1823,7 +1823,7 @@ index 83fd381..2f6a512 100644
   *
   * This is a FALLBACK, not a second full registration path. It exists because in a child
   * pseudo-process the syscall notification never arrives -- enter_syscall_callback()
-@@ -1327,7 +1327,7 @@ extern "C" void NotifyImageMap(void* Address) {
+@@ -1328,7 +1328,7 @@ extern "C" void NotifyImageMap(void* Address) {
  }
  
  NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
@@ -1832,7 +1832,7 @@ index 83fd381..2f6a512 100644
     *
     * HandleImageMap() only needs InvalidationTracker + ImageTracker — it never touches
     * thread state. Requiring a live ThreadState silently DROPPED the notification whenever
-@@ -1402,7 +1402,7 @@ void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {
+@@ -1403,7 +1403,7 @@ void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {
    InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
  }
  
@@ -1841,7 +1841,7 @@ index 83fd381..2f6a512 100644
   * that can change between the paired calls.
   *
   * Upstream returns early when `!InvalidationTracker || !ThreadState`, and
-@@ -1473,7 +1473,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+@@ -1474,7 +1474,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
  
    if (AppConfigName == "P5R.exe") {
      // Use the locking mechanism for (Persona 5 Royal AppID 1687950) which does exactly the problem described above.
@@ -1850,7 +1850,7 @@ index 83fd381..2f6a512 100644
      if (!After) {
        ThreadCreationMutex.lock();
        CTX->GetCodeInvalidationMutex().lock();
-@@ -1495,7 +1495,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
+@@ -1496,7 +1496,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
    }
  }
  
@@ -1859,7 +1859,7 @@ index 83fd381..2f6a512 100644
   *
   * ml611's whole-app freeze: CrBrowserMain (00b0) blew FEX's 256KB emulator stack
   * inside a recursive fextl::set tree deleter, the fault was misclassified as
-@@ -1603,7 +1603,7 @@ extern "C" uint32_t BTCpu64IosReleaseThreadHolds(void* TebPtr, uint64_t* OutStam
+@@ -1604,7 +1604,7 @@ extern "C" uint32_t BTCpu64IosReleaseThreadHolds(void* TebPtr, uint64_t* OutStam
  }
  
  #ifdef FEX_IOS_HOST
@@ -1868,7 +1868,7 @@ index 83fd381..2f6a512 100644
   * fresh post-detach thread's "ThreadInit() entered" as the last FEX log
   * line (silent kill, no crash report) — once during loading's worker-thread
   * spawn, once when QuickTime's recording start triggered a thread spawn.
-@@ -1625,7 +1625,7 @@ static void IosTiLog(const char* msg) {
+@@ -1626,7 +1626,7 @@ static void IosTiLog(const char* msg) {
  
  NTSTATUS ThreadInit() {
  #ifdef FEX_IOS_HOST
@@ -1877,7 +1877,7 @@ index 83fd381..2f6a512 100644
     * is calling BTCpu64ThreadInit for the main x86_64 thread before the
     * dispatcher is invoked. Without this, EmulatorData[0] is garbage and
     * the dispatcher BLR's into uninitialized memory. */
-@@ -1684,7 +1684,7 @@ NTSTATUS ThreadInit() {
+@@ -1685,7 +1685,7 @@ NTSTATUS ThreadInit() {
    Frame->State.cs_cached = FEXCore::Core::CPUState::CalculateGDTBase(GDT);
  
  #ifdef FEX_IOS_HOST
@@ -1886,7 +1886,7 @@ index 83fd381..2f6a512 100644
     * convention is GS-base = TEB pointer, and MSVC-emitted code uses
     * `mov rax, gs:[0x58]` to reach TEB->ThreadLocalStoragePointer.
     * LoadStateFromECContext() at the EC->x86 transition sets this, but for
-@@ -1727,7 +1727,7 @@ NTSTATUS ThreadInit() {
+@@ -1728,7 +1728,7 @@ NTSTATUS ThreadInit() {
    CPUArea.DispatcherLoopTopEnterEC() = EnterEC;
  
  #ifdef FEX_IOS_HOST
@@ -1896,12 +1896,12 @@ index 83fd381..2f6a512 100644
     * FEX's emitter on iOS produces 7 stale `madd`/`mul` instructions where
     * 7 `stp` should be (pairs 1-7: RDX/RBX, RSP/RBP, RSI/RDI, R8/R9, R10/R11,
 diff --git a/Source/Windows/Common/CPUFeatures.cpp b/Source/Windows/Common/CPUFeatures.cpp
-index f89ee42..25f5544 100644
+index 8ae5fd2..3a61b45 100644
 --- a/Source/Windows/Common/CPUFeatures.cpp
 +++ b/Source/Windows/Common/CPUFeatures.cpp
 @@ -58,7 +58,7 @@ public:
  
- FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostFeatures::HostTypeEnum HostType) {
+ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostFeatures::HostTypeEnum HostType, uint32_t ProcessPID) {
  #ifdef FEX_IOS_HOST
 -  /* iOS-Mythic: registry has nothing useful here (Hardware\... reg keys
 +  /* iOS-Madeira: registry has nothing useful here (Hardware\... reg keys
@@ -1966,7 +1966,7 @@ index 19f3e01..fb604c9 100644
         * The ntdll-unix side reads these fields out of x28 in signal handlers using
         * hand-derived constants, and ml271 showed why that is unsafe: [rsp-forensics]
 diff --git a/Source/Windows/Common/FEXUnixLib.cpp b/Source/Windows/Common/FEXUnixLib.cpp
-index dd68462..6b6ea10 100644
+index 6ccc17a..5b86a47 100644
 --- a/Source/Windows/Common/FEXUnixLib.cpp
 +++ b/Source/Windows/Common/FEXUnixLib.cpp
 @@ -78,7 +78,7 @@ bool Init(HMODULE NtDll) {
@@ -2105,7 +2105,7 @@ index 172cca7..003dc35 100644
     * for wine-mono than for Unity's Mono: this reclassifies an XCHG from a true atomic
     * exchange into an alias-directed plain write, wine-mono ships no PDB, and its exports
 diff --git a/Source/Windows/Common/Logging.cpp b/Source/Windows/Common/Logging.cpp
-index cdb8263..6b0426a 100644
+index 0bc28ba..6f4ab70 100644
 --- a/Source/Windows/Common/Logging.cpp
 +++ b/Source/Windows/Common/Logging.cpp
 @@ -17,14 +17,14 @@ namespace {
@@ -2144,7 +2144,7 @@ index cdb8263..6b0426a 100644
     * by WineProcessBridge). __wine_dbg_output is exported but doesn't always
     * resolve via GetProcAddress on our embedded ntdll, so go around it. */
    IosLogWrite(Output.c_str(), Output.size());
-@@ -94,7 +94,7 @@ void Init() {
+@@ -100,7 +100,7 @@ void Init() {
  #endif
  
  #ifdef FEX_IOS_HOST
@@ -2167,10 +2167,10 @@ index 0048283..0019184 100644
       * this line is the only way to know what the JIT is actually doing.
       *
 diff --git a/Source/Windows/Common/WinAPI/IO.cpp b/Source/Windows/Common/WinAPI/IO.cpp
-index e3131a0..f953c3c 100644
+index ba4e126..08bcb48 100644
 --- a/Source/Windows/Common/WinAPI/IO.cpp
 +++ b/Source/Windows/Common/WinAPI/IO.cpp
-@@ -120,7 +120,7 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,
+@@ -151,7 +151,7 @@ DLLEXPORT_FUNC(WINBOOL, WriteFile,
      ByteOffset.QuadPart = (static_cast<LONGLONG>(lpOverlapped->OffsetHigh) << 32) | lpOverlapped->Offset;
      ByteOffsetPtr = &ByteOffset;
    }
@@ -2179,7 +2179,7 @@ index e3131a0..f953c3c 100644
     *
     * It formatted into `char dbg[8 + 64 + 16]` (88 bytes) but wrote a 38-byte
     * header plus up to 64 preview bytes, each of which could expand to 2 chars
-@@ -373,7 +373,7 @@ DLLEXPORT_FUNC(WINBOOL, SetEndOfFile, (HANDLE hFile)) {
+@@ -404,7 +404,7 @@ DLLEXPORT_FUNC(WINBOOL, SetEndOfFile, (HANDLE hFile)) {
  }
  
  DLLEXPORT_FUNC(DWORD, GetFileAttributesA, (LPCSTR lpFileName)) {

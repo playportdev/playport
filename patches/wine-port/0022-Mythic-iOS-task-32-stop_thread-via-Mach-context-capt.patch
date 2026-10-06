@@ -34,7 +34,7 @@ Offered-upstream: no
  1 file changed, 21 insertions(+), 1 deletion(-)
 
 diff --git a/server/thread.c b/server/thread.c
-index bdf48c4bf8f..34c1f0adfc6 100644
+index bdf48c4..34c1f0a 100644
 --- a/server/thread.c
 +++ b/server/thread.c
 @@ -907,7 +907,27 @@ void stop_thread( struct thread *thread )

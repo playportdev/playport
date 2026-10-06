@@ -19,7 +19,7 @@ Offered-upstream: no
  4 files changed, 32 insertions(+), 8 deletions(-)
 
 diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
-index 34d0a4f..e7963a9 100644
+index 9674a14..70fe669 100644
 --- a/FEXCore/Source/CMakeLists.txt
 +++ b/FEXCore/Source/CMakeLists.txt
 @@ -292,9 +292,16 @@ endfunction()

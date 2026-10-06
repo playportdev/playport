@@ -16,7 +16,7 @@ Offered-upstream: no
  3 files changed, 66 insertions(+)
 
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
-index 16d9840..8fc3254 100644
+index b384250..56efd64 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
 @@ -3704,10 +3704,67 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
@@ -99,7 +99,7 @@ index 16d9840..8fc3254 100644
    Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
  
 diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
-index c663454..e4850a2 100644
+index 9f77d5e..5cdb748 100644
 --- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
 +++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.h
 @@ -453,6 +453,7 @@ public:
@@ -111,7 +111,7 @@ index c663454..e4850a2 100644
    void IDIVOp(OpcodeArgs);
    void BSFOp(OpcodeArgs);
 diff --git a/Source/Windows/Common/Exception.h b/Source/Windows/Common/Exception.h
-index 73bf5a9..883fffc 100644
+index 1216223..f62199a 100644
 --- a/Source/Windows/Common/Exception.h
 +++ b/Source/Windows/Common/Exception.h
 @@ -64,6 +64,10 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame

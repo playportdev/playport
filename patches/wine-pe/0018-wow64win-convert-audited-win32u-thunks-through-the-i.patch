@@ -36,7 +36,7 @@ Offered-upstream: no; the window exists only on the iOS port
  create mode 100644 dlls/wow64win/window_audited.h
 
 diff --git a/dlls/wow64/syscall.c b/dlls/wow64/syscall.c
-index 501a2bc663b..0869c076eb4 100644
+index 501a2bc..0869c07 100644
 --- a/dlls/wow64/syscall.c
 +++ b/dlls/wow64/syscall.c
 @@ -1274,15 +1274,6 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
@@ -56,7 +56,7 @@ index 501a2bc663b..0869c076eb4 100644
      {
          ERR( "Playport: i386 NtTerminateProcess( %08x, %08x )\n", args[0], args[1] );
 diff --git a/dlls/wow64win/gdi.c b/dlls/wow64win/gdi.c
-index 68bd7465972..d4569b7d09f 100644
+index 68bd746..d4569b7 100644
 --- a/dlls/wow64win/gdi.c
 +++ b/dlls/wow64win/gdi.c
 @@ -262,7 +262,7 @@ NTSTATUS WINAPI wow64_NtGdiCreateDIBBrush( UINT *args )
@@ -96,7 +96,7 @@ index 68bd7465972..d4569b7d09f 100644
      DWORD flags = get_ulong( &args );
  
 diff --git a/dlls/wow64win/syscall.c b/dlls/wow64win/syscall.c
-index def438be12c..6c9d83cd960 100644
+index def438b..6c9d83c 100644
 --- a/dlls/wow64win/syscall.c
 +++ b/dlls/wow64win/syscall.c
 @@ -27,6 +27,9 @@
@@ -184,7 +184,7 @@ index def438be12c..6c9d83cd960 100644
      return TRUE;
  }
 diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
-index e268a67f646..1fb63b9f775 100644
+index e268a67..1fb63b9 100644
 --- a/dlls/wow64win/user.c
 +++ b/dlls/wow64win/user.c
 @@ -501,8 +501,8 @@ static void createstruct_32to64( const CREATESTRUCT32 *from, CREATESTRUCTW *to )
@@ -538,7 +538,7 @@ index e268a67f646..1fb63b9f775 100644
  
 diff --git a/dlls/wow64win/window_audited.h b/dlls/wow64win/window_audited.h
 new file mode 100644
-index 00000000000..196486f8908
+index 0000000..196486f
 --- /dev/null
 +++ b/dlls/wow64win/window_audited.h
 @@ -0,0 +1,409 @@
@@ -952,7 +952,7 @@ index 00000000000..196486f8908
 +#define WINDOW_AUDITED_NtUserWindowFromDC ~, 1
 +#define WINDOW_AUDITED_NtUserWindowFromPoint ~, 1
 diff --git a/dlls/wow64win/wow64win_private.h b/dlls/wow64win/wow64win_private.h
-index 956e38636a9..cb22f2a98ef 100644
+index 956e386..cb22f2a 100644
 --- a/dlls/wow64win/wow64win_private.h
 +++ b/dlls/wow64win/wow64win_private.h
 @@ -22,6 +22,7 @@

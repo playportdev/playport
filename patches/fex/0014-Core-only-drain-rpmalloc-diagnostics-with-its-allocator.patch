@@ -14,7 +14,7 @@ Offered-upstream: no
  2 files changed, 10 insertions(+)
 
 diff --git a/FEXCore/Source/CMakeLists.txt b/FEXCore/Source/CMakeLists.txt
-index e7963a9..d3819a3 100644
+index 70fe669..314e5dc 100644
 --- a/FEXCore/Source/CMakeLists.txt
 +++ b/FEXCore/Source/CMakeLists.txt
 @@ -290,6 +290,12 @@ function(AddLibrary Name Type)
@@ -31,7 +31,7 @@ index e7963a9..d3819a3 100644
  AddLibrary(${PROJECT_NAME} STATIC)
  # iOS-Madeira: on the arm64ec Windows target the shipped artifact is
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 3c2fe1b..de2e7bd 100644
+index ab44090..01ba6bb 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -64,6 +64,7 @@ $end_info$

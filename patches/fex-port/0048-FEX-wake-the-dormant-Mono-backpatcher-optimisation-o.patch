@@ -56,7 +56,7 @@ Offered-upstream: no
  create mode 100644 Source/Windows/ARM64EC/IosMonoBridge.h
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index c5cc0a1..91a441b 100644
+index 78c63d5..155fe59 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -1297,6 +1297,98 @@ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);

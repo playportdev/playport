@@ -5,18 +5,18 @@
 # madeira is the pin: it must equal the upstream/madeira gitlink.
 #
 # Wine is taken from its own upstream, not from Madeira (decision 0013): wine
-# is a WineHQ release commit (the wine-11.18 tag), and patches/wine-port
-# carries Madeira's Wine fork rebased onto it. wine-port is the madeira-lgpl
+# is the newest WineHQ development tag (wine-11.19; decision 0049), and
+# patches/wine-port carries Madeira's Wine fork rebased onto it. wine-port is the madeira-lgpl
 # commit that series was rebased from; it must equal Madeira's wine gitlink,
 # so a Madeira update that moves its Wine stops the build until the port
 # series is refreshed.
 #
-# The base stays WineHQ's latest development release; Valve's Wine is not the
+# The base stays WineHQ's newest development tag; Valve's Wine is not the
 # base (decision 0018, which weighed it). wine-valve is the ValveSoftware/wine
-# proton_11.0 commit that patches/wine-valve, the Valve commits Playport takes,
-# was cherry-picked from; the series is applied after patches/wine-port in
-# both Wine trees. It moves by hand, when Valve moves proton_11.0 (each Proton
-# 11 point release) or opens the next branch, never through pp sync; each
+# bleeding-edge commit that patches/wine-valve, the Valve commits Playport
+# takes, was cherry-picked from (decision 0049); the series is applied after
+# patches/wine-port in both Wine trees. It moves by hand, by a pick from
+# Valve's bleeding-edge branch (decision 0049), never through pp sync; each
 # pp sync lists Valve's commits past it in $PLAYPORT_BUILD/sync/wine-valve-new.tsv.
 #
 # DXMT is taken from its own upstream, not from Madeira: dxmt is a 3Shain/dxmt
@@ -25,8 +25,8 @@
 # equal Madeira's research/dxmt gitlink, so a Madeira update that moves its
 # DXMT stops the build until the port series is refreshed.
 #
-# FEX is the same (decision 0008): fex is a FEX-Emu/FEX release commit (the
-# FEX-2609.1 tag, head of the FEX-2609_1 release branch) and
+# FEX is the same (decision 0008): fex is a FEX-Emu/FEX main commit
+# (decision 0049: the head of main, what Proton bleeding-edge ships) and
 # patches/fex-port carries Madeira's FEX port rebased onto it; fex-port must
 # equal Madeira's FEX gitlink. rpmalloc is that FEX commit's External/rpmalloc
 # gitlink (FEX-Emu/rpmalloc) and patches/rpmalloc-port carries Madeira's
@@ -45,22 +45,22 @@
 #
 # name       commit                                    repository                                    branch
 madeira      8c050d03f4d89096e1e2e2c8bb44479fffd86619  https://github.com/willfaust/Madeira.git      main
-wine         7b3fff76fa5178f6ce0141b2c776afa2a822f101  https://gitlab.winehq.org/wine/wine.git       master
+wine         455e3509b98a6919fd4ad1def4803e08c41c03b2  https://gitlab.winehq.org/wine/wine.git       master
 wine-port    723d1bf5132768276cea9bc35ab59c83557bb5fb  https://github.com/willfaust/wine.git         madeira-lgpl
-wine-valve   dc26e61847081a1b5cb0733dc30feba6ee575482  https://github.com/ValveSoftware/wine.git     proton_11.0
-fex          9fbdc00bd6401aff3b32d79e78ff98b8a13e4dcf  https://github.com/FEX-Emu/FEX.git            FEX-2609_1
-dxmt         7c8dee1c2d73415301ceb7d1fa810861cef4cd67  https://github.com/3Shain/dxmt.git           main
+wine-valve   750fd011356cfcb28125c96d295ddef0d9e66dac  https://github.com/ValveSoftware/wine.git     bleeding-edge
+fex          3648ee97e8354bb2e6757da8bdb00c48439a561d  https://github.com/FEX-Emu/FEX.git            main
+dxmt         68af85e96196e1cf9f50de9fe24c70f03a1db4a7  https://github.com/3Shain/dxmt.git           main
 dxmt-port    ca8a2516d819e7e1f366981825ad1f0d26f80fdd  https://github.com/willfaust/dxmt.git         ios-port
 fex-port     0f8edf8f6383ae8085e0ffac511c789cdae97514  https://github.com/willfaust/FEX.git          ios-port-2607
 rpmalloc     09142d726429416bfa7b459151515fe3ab7622dd  https://github.com/FEX-Emu/rpmalloc.git       fex
 rpmalloc-port 1f271c0c3202663801a0aec32bdb57e5241d6a0e  https://github.com/willfaust/rpmalloc.git     ios-madeira
-mesa         82d4f86a0a1e9f76b2de4fa77c6c8e6acaf06aa9  https://gitlab.freedesktop.org/mesa/mesa.git main
-dxvk         52fe923ca1496c8e44789b613fab8611dfcb5c4a  https://github.com/doitsujin/dxvk.git         master
-vkd3d-proton 472989aabdcf3e343e16d13c402feae3815008aa  https://github.com/HansKristian-Work/vkd3d-proton.git master
+mesa         b39d173ca9369c19fda2635be6655d308067e52d  https://gitlab.freedesktop.org/mesa/mesa.git main
+dxvk         e5ffd0fe5e5d62e68b2831d1285b51e61bb454d8  https://github.com/doitsujin/dxvk.git         master
+vkd3d-proton 31d1f89ca5b3f2fd3b6f025c8e6f73ed3eaa852b  https://github.com/HansKristian-Work/vkd3d-proton.git master
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
 #
 # Build-time sources that are not Madeira components, fetched by tag.
-freetype     VER-2-13-3                                https://github.com/freetype/freetype.git      -
+freetype     VER-2-14-3                                https://github.com/freetype/freetype.git      -
 llvm-project llvmorg-15.0.7                            https://github.com/llvm/llvm-project.git      -
 # the Abseil release gbe's protobuf (third-party/deps/common) names in cmake/dependencies.cmake
 abseil-cpp   20250512.1                                https://github.com/abseil/abseil-cpp.git      -
@@ -83,4 +83,4 @@ idevice      d32c8189c51c2789496b0768039419c3705498c3  https://github.com/jkcoxs
 #
 # The Rust release idevice is compiled with (build/toolchain/rust.sh, with the
 # aarch64-apple-ios standard library), fetched by version through rustup.
-rust         1.98.1                                    https://static.rust-lang.org                  -
+rust         1.99.0                                    https://static.rust-lang.org                  -

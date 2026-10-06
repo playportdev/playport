@@ -44,7 +44,7 @@ Offered-upstream: no
  4 files changed, 100 insertions(+), 3 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
-index fe3b9b9..e77a6ce 100644
+index fa68690..5e7e9d4 100644
 --- a/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 +++ b/FEXCore/Source/Interface/Core/Dispatcher/Dispatcher.cpp
 @@ -568,8 +568,38 @@ void Dispatcher::EmitDispatcher() {
@@ -140,7 +140,7 @@ index 388dde4..6ace0f6 100644
    if (Execute) {
      Parameter.Type = MemExtendedParameterAttributeFlags;
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index 0c510eb..0abf615 100644
+index 686ec8b..3cd9c22 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -817,7 +817,7 @@ NTSTATUS ProcessInit() {

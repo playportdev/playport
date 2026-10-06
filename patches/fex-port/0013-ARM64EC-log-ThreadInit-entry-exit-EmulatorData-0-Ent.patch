@@ -26,7 +26,7 @@ Offered-upstream: no
  1 file changed, 41 insertions(+)
 
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index e46eebe..390d423 100644
+index bf2d0ab..ed0b7bd 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -956,6 +956,23 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After

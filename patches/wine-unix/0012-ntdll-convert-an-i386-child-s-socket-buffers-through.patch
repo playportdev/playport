@@ -20,7 +20,7 @@ Offered-upstream: no; the window exists only on the iOS port
  1 file changed, 20 insertions(+)
 
 diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
-index b919456..0615431 100644
+index 7ef850e..2cd469b 100644
 --- a/dlls/ntdll/unix/socket.c
 +++ b/dlls/ntdll/unix/socket.c
 @@ -95,6 +95,26 @@ WINE_DEFAULT_DEBUG_CHANNEL(winsock);

@@ -38,7 +38,7 @@ Offered-upstream: no
  3 files changed, 61 insertions(+), 47 deletions(-)
 
 diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
-index 9432952..7afcca2 100644
+index 40be2ca..4b5b6a2 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
 @@ -1274,6 +1274,23 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
@@ -66,7 +66,7 @@ index 9432952..7afcca2 100644
      return 0;
    } else if (!DebugData) {
 diff --git a/FEXCore/Source/Interface/Core/JIT/JIT.cpp b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
-index ed5a69a..8951bb3 100644
+index 34b6a63..03b48f9 100644
 --- a/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/JIT.cpp
 @@ -16,16 +16,18 @@ $end_info$
@@ -160,7 +160,7 @@ index ed5a69a..8951bb3 100644
    ClearICache(CodeBegin, CodeOnlySize);
  #endif
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index dd3cb00..a047f8c 100644
+index fc1d284..ae9f725 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -759,19 +759,19 @@ NTSTATUS ProcessInit() {

@@ -18,7 +18,7 @@ Offered-upstream: no
  2 files changed, 214 insertions(+)
 
 diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
-index b6f4a34..3fb5398 100644
+index 2c3f9b1..d596cec 100644
 --- a/build/ntdll-unix/signal_arm64_ios.c
 +++ b/build/ntdll-unix/signal_arm64_ios.c
 @@ -2975,6 +2975,47 @@ static void *ios_mach_exception_thread( void *arg )

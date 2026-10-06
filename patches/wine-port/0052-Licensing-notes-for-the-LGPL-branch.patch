@@ -17,7 +17,7 @@ Offered-upstream: no
 
 diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
 new file mode 100644
-index 00000000000..0a2060cf084
+index 0000000..0a2060c
 --- /dev/null
 +++ b/CONTRIBUTING.md
 @@ -0,0 +1,7 @@
@@ -30,7 +30,7 @@ index 00000000000..0a2060cf084
 +WineHQ first.
 diff --git a/LICENSE-MADEIRA.md b/LICENSE-MADEIRA.md
 new file mode 100644
-index 00000000000..9a7301e6784
+index 0000000..9a7301e
 --- /dev/null
 +++ b/LICENSE-MADEIRA.md
 @@ -0,0 +1,23 @@
