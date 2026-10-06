@@ -105,17 +105,21 @@ fastsync comes as a Playport patch. Keeps [0001](0001-superproject-on-madeira.md
   - NOTICES.md carries every upstream notice.
   - Playport's own exception (0006) covers only Playport's lines.
 - **Corresponding Source ([0042](0042-the-source-bundle-is-complete.md)).**
-  The frozen commits must stay fetchable. The proprietary
-  `libmetalirconverter.dylib` and Madeira's own app stay out of anything
-  Playport ships (0001's reason holds for a mirror).
+  Each release's source bundle packs the frozen Madeira tree (without its own
+  app and Apple's converter library, which is not redistributable) and the
+  port series, so the sources stay available whatever happens upstream. The
+  proprietary `libmetalirconverter.dylib` and Madeira's own app stay out of
+  anything Playport ships (0001's reason).
 
-## Pending: the public mirror (an owner action)
+## No git mirror of the frozen commits
 
-Making the frozen commits fetchable for good means a public repository that
-Playport controls, with an immutable tag per commit, and
-`build/source-bundle.json` packing from it. Creating that repository is the
-owner's to do; nothing has been created. Until then the bundle packs from
-Madeira's and its forks' own repositories, where these commits are today.
+A public git mirror was considered (owner, 2026-10-06) and not made:
+`8c050d0`'s own tree carries `app/Madeira/d3d12/libmetalirconverter.dylib`,
+so mirroring the commit would republish the library the source bundle drops
+as not redistributable. A mirror without it means rewriting history, which
+changes every hash and the pins; that needs its own decision record, and is
+warranted only if these commits stop being fetchable upstream. Today they are
+fetchable at:
 
 | Row | Repository | Commit |
 |---|---|---|

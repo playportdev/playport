@@ -44,12 +44,13 @@ needs Madeira `main` as it is when Madeira is next. Nothing is offered upstream
 
 As of 2026-10-06, with Madeira frozen (0054):
 
-1. **The public mirror of the frozen commits** (0054, Corresponding Source): a public
-   repository Playport controls, with an immutable tag for Madeira `8c050d0`, wine-port
-   `723d1bf`, fex-port `0f8edf8`, dxmt-port `ca8a251` and rpmalloc-port `1f271c0`, and
-   `build/source-bundle.json` packing from it. Creating the repository is the owner's.
+1. **No public mirror of the frozen commits** (owner asked for one, 2026-10-06; not
+   made, see 0054): Madeira `8c050d0`'s own tree carries Apple's non-redistributable
+   `libmetalirconverter.dylib`, and every release's source bundle (0042) already holds
+   the frozen sources without it. A filtered mirror needs a new decision record.
 2. **A release-variant play.** The UI driver cannot drive the release app (0009), so a
-   person plays both titles on `Playport.app`.
+   person plays both titles on `Playport.app` (B5's release log defaults, ported from
+   `madeira-main` as 2331995, are in it).
 3. **From `madeira-main`'s alignment work, if wanted on this base:** the human Portal 2
    runs (a 300 s play with a death and reload, a 30-minute play, a fresh-install play),
    the A1 `MaxInst` sweep, B1 (The Witcher 3's warm-cache crash, not installed), and the
