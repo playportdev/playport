@@ -7,7 +7,7 @@ import re
 import subprocess
 
 # The app's Swift packages with host tests.
-SWIFT_PACKAGES = ["app/HostIOKit", "app/ContentKit", "app/GOGClient", "app/SteamClient", "app/PlayportKit"]
+SWIFT_PACKAGES = ["app/HostIOKit", "app/ContentKit", "app/GOGClient", "app/EpicClient", "app/SteamClient", "app/PlayportKit"]
 
 # What must never be committed (AGENTS.md, Secrets): (what, pattern). Each
 # pattern is both a `git grep -E` and a Python regular expression.
