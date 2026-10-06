@@ -208,8 +208,12 @@ private struct GameDetailPage: View {
         .task(id: "\(t?.appID.map(String.init) ?? "-") \(launch.running) \(signedIn)") {
             guard let t, let app = t.appID else { return }
             await model.loadGameProfile(app)
-            await model.syncStats(app)
-            await model.syncCloud(app)
+            // Not while the game runs: its launch suspends Steam in this process,
+            // and the next start of the app syncs the played game.
+            if !launch.running {
+                await model.syncStats(app)
+                await model.syncCloud(app)
+            }
             let root = LibraryModel.paths.games.appendingPathComponent(t.installDir, isDirectory: true)
             (steamAPIState, steamStubs) = await Task.detached(priority: .utility) {
                 (SteamAPISwap.state(in: root), SteamStub.sites(in: root))
