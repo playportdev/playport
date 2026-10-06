@@ -57,3 +57,13 @@ On the phone (IPA `49d0dcf5…`, `49d0dcf51138382660420081be3677fca0efc2acab71f8
 
 Not checked on the phone: a repair from GOG (checked from the workstation: a corrupted
 executable found and replaced), uninstall of a GOG game, GOG art on tiles.
+
+## The installer spike (plan 1.5, dropped)
+
+IPA `603a40fa…` (`603a40fad6d06843e8fc8aaddf103b9a9a1705a0e188970d523a183852e5a38a`).
+Shogun Showdown's GOG offline installer (Inno Setup 5.6.2, i386, 113 MB) was put in its
+own folder under `C:\Games` and played with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+/SP- /NOICONS /LOG=… /DIR=C:\Games\ShogunInno` as its launch arguments. It ran under
+WoW64 (kernel32 and kernelbase mapped), then closed handles that did not exist (NtClose,
+`c0000008`, 86 times) and exited with code 1 after 147 ms, with no log and no target
+folder. The owner dropped installers: GOG installs need none. The folder was uninstalled.

@@ -33,8 +33,15 @@ exchange code 0059.
   imported by `pp ui --action import:PATH`, the owner's choice over a hand pick, played,
   uninstalled) and Phase 2 (GOG sign-in by the owner, install, update, verify and play of
   Shogun Showdown) pass. **Phase 2 done** apart from a phone repair and GOG art on tiles.
-- **Next:** 1.5 (the Inno installer spike), a zip import on the phone, then Phase 3 (Epic,
-  which needs the owner's Epic sign-in for its spike).
+- **1.5 dropped** (owner, 2026-10-06): offline installers are not run. GOG games come
+  from GOG's content servers (Phase 2) and need no installer; a game already installed
+  elsewhere is imported as a folder or .zip. Spike A, for the record: Shogun Showdown's
+  GOG installer (Inno Setup 5.6.2, i386) started under WoW64 with
+  `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=…`, loaded kernel32 and kernelbase,
+  and exited with code 1 after 147 ms, before writing its log or the target folder; not
+  traced further. Picking an installer in Add a game says so and points to GOG.
+- **Next:** Phase 3 (Epic), whose spike needs the owner's Epic sign-in; a zip import and a
+  hand pick on the phone when convenient.
 
 ## Goal
 
@@ -221,7 +228,8 @@ Setup, i386.
   (setup header + LZMA/LZMA2 slices; the LZMA decoder exists). The header layout
   varies across Inno versions, so this costs several days, and the plan would then
   limit it to the 5.5–6.x headers GOG uses.
-- **Settled:** A first; B only if A fails. Generic GUI installers (NSIS, MSI with
+- **Settled:** A first; B only if A fails. **Superseded (owner, 2026-10-06):** neither;
+  installers are not run (see Progress). Generic GUI installers (NSIS, MSI with
   dialogs) are out of scope until GDI presentation exists.
 
 **1.6 Tile art for local games.** The executable's icon (PE `RT_GROUP_ICON` →
@@ -239,7 +247,7 @@ largest `RT_ICON`, PNG or BMP) on a generated backdrop, cached under
 
 **Done when:** a DRM-free x86-64 game, imported as a folder from Files (ideally
 from a USB drive), plays to `first-frame+10`. A zip import of a small game plays.
-One GOG offline installer installs and plays (path A or B). Uninstall removes the
+(An offline installer was in this list; dropped, see Progress.) Uninstall removes the
 copy and its receipt. Hollow Knight still plays.
 
 ## Phase 2: GOG

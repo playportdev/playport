@@ -21,7 +21,8 @@ final class GameImports: ObservableObject, DownloadDriver {
     /// Add a game: the shell opens the Files picker (AppShell).
     static let requests = PassthroughSubject<Void, Never>()
 
-    /// What the picker offers: folders, zips, and (for a later installer import) executables.
+    /// What the picker offers: folders and zips, and executables only so that a picked
+    /// installer gets an answer (installers are not run; plan 1.5, owner 2026-10-06).
     static let contentTypes: [UTType] = [.folder, .zip] + [UTType(filenameExtension: "exe")].compactMap { $0 }
 
     static let pickAgain = "Pick the folder again in Add a game to continue."
@@ -109,7 +110,8 @@ final class GameImports: ObservableObject, DownloadDriver {
         } else if ext == "zip" {
             source = .zip(url)
         } else if ext == "exe" {
-            return "To import a game, pick its folder (or a .zip of it). Installers are not supported yet."
+            return "Playport doesn't run installers. Pick the installed game's folder (or a .zip of it), "
+                + "or sign in to GOG in Settings › Accounts to install the game from there."
         } else {
             return "Pick a game's folder or a .zip of it."
         }
