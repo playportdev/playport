@@ -40,6 +40,13 @@ need_dxb() {
 }
 
 stage_llvm() {
+    # The cache is shared by every checkout and worktree of this repository (.work/cache),
+    # and CMake refuses a build directory configured from another source path. The tools
+    # come from the one pinned LLVM 15 whichever checkout configured them, and stage_air
+    # checks what they produce (air.sha256): a complete set is used as it is.
+    local t ok=1
+    for t in llvm-as llvm-dis llvm-link llc opt; do [ -x "$B/$t" ] || ok=; done
+    if [ -n "$ok" ]; then echo "llvm15: tools present, not reconfigured"; return 0; fi
     need_dxb
     cmake -G Ninja -B "$ROOT/llvm15" -S "$DXB/llvm-project/llvm" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS="-include cstdint" \
