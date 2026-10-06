@@ -21,6 +21,11 @@
 //                              with progress, as after the restart after a game, and logs
 //                              the queue
 //   uninstall:<title id>       Uninstall; waits until its folder and record are gone
+//   import:<path>              Hands Documents/<path> (a folder or a .zip the workstation
+//                              put in the container) to Add a game, as the Files picker
+//                              returns what the player picked (the picker itself is touch,
+//                              iOS's, and cannot be driven); waits until the import is in
+//                              the library (owner, 2026-10-06)
 //   settings:<title id>        Saves UI_SETTINGS (a PlayportKit LaunchSettings as JSON;
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
@@ -143,6 +148,8 @@ enum UIDriver {
                     if let failure = await install(app, pauseAt: parts[0] == "pause-resume" ? 0.25 : nil) {
                         return finish("action=\(action) failed: \(failure)")
                     }
+                case "import":
+                    if let failure = await importGame(id) { return finish("action=\(action) failed: \(failure)") }
                 case "queue", "downloading":
                     guard let app = UInt32(id) else { return finish("action=\(action) refused: \(id) is not a Steam app id") }
                     if let failure = await (parts[0] == "queue" ? queue(app) : downloading(app)) {
@@ -472,6 +479,39 @@ enum UIDriver {
         guard let t = library.catalog.titles.first(where: { $0.appID == app }) else { return "done, but not in the library" }
         log(String(format: "install \(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.buildID.map(String.init) ?? "?") "
                     + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s", Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// Add a game with `path` (under Documents) as the picked item; nil once it is in the library.
+    private static func importGame(_ path: String) async -> String? {
+        guard !path.split(separator: "/").contains(".."), let installs = SteamAccountModel.current?.installs else {
+            return "not a path under Documents, or no download queue"
+        }
+        let url = WineHostRuntime.documents.appendingPathComponent(path)
+        guard FileManager.default.fileExists(atPath: url.path) else { return "Documents/\(path) is not there" }
+        let started = Date()
+        log("import \(path): picked")
+        if let refusal = await GameImports.shared.picked(url) { return "refused: \(refusal)" }
+        guard let job = installs.order.first(where: { $0.kind == .import && $0.record.source == url.lastPathComponent }) else {
+            return "no import job queued"
+        }
+        let key = job.key, folder = job.name
+        var lastLog = Date()
+        while let j = installs.jobs[key] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 15 {
+                lastLog = Date()
+                log("import \(path): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let library = LibraryModel.shared
+        let find = { library.catalog.titles.first { $0.installDir.lowercased() == folder.lowercased() } }
+        for _ in 0..<600 where find() == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        guard let t = find() else { return "done, but C:\\Games\\\(folder) is not in the library" }
+        log(String(format: "import \(path): in the library as \(t.id) [\(t.badge.rawValue)] source=\(t.source.rawValue) "
+                    + "store=\(t.store.rawValue) size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.1f s",
+                   Date().timeIntervalSince(started)))
         return nil
     }
 

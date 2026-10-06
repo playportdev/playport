@@ -71,6 +71,8 @@ model calls: each --action in order, then --settings, --verify, --play:
   install:APP            install from Steam with the paired session; pause-resume:APP pauses at a
                          quarter and resumes
   uninstall:ID, verify:ID
+  import:PATH            Add a game with Documents/PATH (a folder or .zip put in the container) as
+                         the picked item, then wait until it is in the library
   play:ID                Play. When the game ends, Playport restarts itself (decision 0029) and the
                          actions after it run in the new process, under this run
                          (Dev/DriverContinuation.swift); the run follows it across the restart.
@@ -230,6 +232,7 @@ class EndOnTerm:
 
 
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|(?:uninstall|verify|play):[a-z]+-[a-z0-9 ._-]+"
+                        r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[a-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
@@ -343,7 +346,7 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
@@ -380,7 +383,7 @@ def parse(argv=None):
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
             p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
-                    "queue:APP, downloading:APP, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
+                    "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
     a.settings_pair = None
     if a.settings:
         sid, _, js = a.settings.partition(":")
