@@ -30,8 +30,8 @@ fastsync comes as a Playport patch. Keeps [0001](0001-superproject-on-madeira.md
   Madeira move): Madeira's wine fork f6848ad (client) and e200a5e (server
   cells) and Madeira's 89710fc (`server_ios.c`), as `patches/wine-unix`
   0015–0017 and `patches/madeira-unix` 0081, class `feature`. The app sets
-  `MADEIRA_FASTSYNC`. It is on by default only when neither cohort title
-  regresses with it on this base, as 0052 required
+  `MADEIRA_FASTSYNC=auto`. It is **on by default** (owner, 2026-10-06), with a
+  dev toggle to turn it off; off was not measured on this base
   ([evidence](../evidence/2026-10-06-fastsync-on-8c050d0.md)). Madsync stays
   off (0023). Playport's system-APC semantics (`wine-unix` 0002) stay as they
   are: a system APC is never dropped.
