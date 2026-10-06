@@ -393,7 +393,7 @@ enum SetupRing {
         PadModal.shared.picker(
             title: "Increased Memory Limit",
             note: "Your sideloader decides it: the capability must be turned on for Playport's App ID. "
-                + "AltStore Classic 2.2 or later and Xcode keep it. SideStore does not turn it on for a free "
+                + "AltStore Classic 2.2 or later, Impactor and Xcode keep it. SideStore does not turn it on for a free "
                 + "Apple ID: run GetMoreRam once with the same Apple ID, turn Increased Memory Limit on for "
                 + "Playport's App ID, then reinstall Playport from SideStore. Then this step shows a tick.",
             options: [PadOption(id: "ok", label: "OK")], selected: "ok") { _ in }
