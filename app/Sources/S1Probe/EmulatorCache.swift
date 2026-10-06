@@ -22,7 +22,7 @@ enum EmulatorCache {
 
     /// Past this the cache is cleared before a launch: about a dozen games'
     /// routes at the 83 MB a database The Witcher 3's start needed.
-    static let budgetBytes: UInt64 = 1 << 30
+    static let budgetBytes: UInt64 = 1_000_000_000
 
     /// The cache's size on disk, 0 when there is none.
     nonisolated static func size() -> UInt64 {
