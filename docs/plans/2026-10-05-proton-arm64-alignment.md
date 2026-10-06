@@ -179,7 +179,8 @@ on the phone and whether it needs a decision record.
 - **Phone measurement:** none. `swift test` covers it.
 - **Decision record:** no.
 
-**A1. Global `MaxInst=500`.**
+**A1. Global `MaxInst=500`.** *Done 2026-10-06 (decision 0055): taken as Proton's
+default without the sweep below, at the owner's direction.*
 - **Change:** take Proton's global value under the profile entry and the
   game's page. Export `FEX_MAXINST` on every launch, and update
   `defaultBlockSize`, the page's default label and the tests.
@@ -227,7 +228,10 @@ Commits:
 
 ### B. Investigate before adopting
 
-**B1. FEX disk cache on by default** (Valve experimental/bleeding-edge, Proton `09d3d6e5`).
+**B1. FEX disk cache on by default** (Valve experimental/bleeding-edge, Proton `09d3d6e5`). *2026-10-06 (decision 0056): the Witcher 3 warm-start crash was a disk-cache
+key bug, fixed by `patches/fex` 0021; the default is held off: Hollow Knight's warm
+start corrupts rpmalloc (open); WoW64 keeps it off (0022); 5 GB budget and a
+Settings action.*
 - **Change if adopted:** `FEX_DISKCACHE=1` by default from the launch
   (`FEXProfile`), with a cap well below FEX's 1 GiB `DiskCacheMaxFileSize`.
   This needs a FEX that has the cap and the stale-entry pruning: FEX main, or

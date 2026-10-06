@@ -48,12 +48,16 @@ As of 2026-10-06, with Madeira frozen (0054):
    made, see 0054): Madeira `8c050d0`'s own tree carries Apple's non-redistributable
    `libmetalirconverter.dylib`, and every release's source bundle (0042) already holds
    the frozen sources without it. A filtered mirror needs a new decision record.
-2. **A release-variant play.** The UI driver cannot drive the release app (0009), so a
+2. ~~A release-variant play.~~ Done 2026-10-06: the owner played both titles on the
+   release app (`96ecadd9`), which passed; it showed the false *Not synced* fixed in
+   3bfe88c. Was: The UI driver cannot drive the release app (0009), so a
    person plays both titles on `Playport.app` (B5's release log defaults, ported from
    `madeira-main` as 2331995, are in it).
 3. **From `madeira-main`'s alignment work, if wanted on this base:** the human Portal 2
-   runs (a 300 s play with a death and reload, a 30-minute play, a fresh-install play),
-   the A1 `MaxInst` sweep, B1 (The Witcher 3's warm-cache crash, not installed), and the
+   runs (a 300 s play with a death and reload, a 30-minute play, a fresh-install play;
+   A1 `MaxInst=500` is taken without a sweep, decision 0055),
+   B1 (The Witcher 3's warm-cache crash: found and fixed, `patches/fex` 0021,
+   [evidence](../evidence/2026-10-06-fex-disk-cache.md); default held off: Hollow Knight's warm start corrupts rpmalloc, decision 0056), and the
    B4 and B6 decisions. Their evidence is on that branch.
 
 ## Part A. Measurements

@@ -17,11 +17,16 @@
 //   x87        X87ReducedPrecision: Proton's global value (1, x87 at 64-bit
 //              precision; decision 0048) under a game's profile entry; the
 //              game's page (LaunchSettings.x87Reduced) overrides it.
-//   honoured   Multiblock and MaxInst in a game's profile, passed on as they
-//              are; the game's page (LaunchSettings.maxInst) overrides MaxInst.
-//   not taken  Proton's other global values: MaxInst=500 would change every
-//              game's code generation, which nothing here has measured, and
-//              ProfileStats needs the Linux stats shared memory.
+//   block size MaxInst: Proton's global value (500; decision 0055) under a
+//              game's profile entry; the game's page (LaunchSettings.maxInst)
+//              overrides it. Every launch exports it.
+//   disk cache DiskCache: off by default until Hollow Knight's warm start
+//              stops corrupting rpmalloc (decision 0056; Proton experimental and
+//              bleeding-edge set FEX_DISKCACHE=1); the game's page
+//              (LaunchSettings.diskCache) turns it on or off. Every launch
+//              exports it; a WoW64 process keeps it off (patches/fex 0022).
+//   honoured   Multiblock in a game's profile, passed on as it is.
+//   not taken  Proton's ProfileStats, which needs the Linux stats shared memory.
 //
 // FEX reads each as FEX_<NAME> from the environment, the highest of its
 // configuration layers (FEX::Config::LoadConfig), so a launch sets them all
@@ -115,10 +120,10 @@ public enum FEXProfile {
         292030: [Override(pattern: "setup*", config: ["X87ReducedPrecision": "0"])],
     ]
 
-    /// FEX's own MaxInst (FEXCore Config.json.in) when no profile sets one.
+    /// FEX's own MaxInst (FEXCore Config.json.in), used only when no value here is valid.
     public static let fexMaxInst = 5000
     /// The block sizes a game's page offers besides its default: Proton's global
-    /// value and two between it and FEX's.
+    /// value, two between it and FEX's own, and FEX's own.
     public static let blockSizes = [500, 1000, 2000, 5000]
     /// A block size FEX takes: at least one instruction, at most FEX's own ceiling
     /// in practice (a block past a few thousand instructions only compiles longer).
@@ -188,6 +193,9 @@ public enum FEXProfile {
         /// Whether x87 runs at 64-bit precision, and whether the game's page chose it.
         public var x87Reduced: Bool
         public var x87Chosen: Bool
+        /// Whether FEX caches translated code on disk, and whether the game's page chose it.
+        public var diskCache: Bool = false
+        public var diskCacheChosen: Bool = false
 
         /// `tso=1 vector=0 memcpyset=0 halfbar=1`, as FEX's own `TSO config` line orders them,
         /// a `*` after each value the game's page chose.
@@ -200,15 +208,20 @@ public enum FEXProfile {
 
     public static func environmentName(_ fexName: String) -> String { "FEX_" + fexName.uppercased() }
 
-    /// The block size a game's profile gives for `exe`: its MaxInst, else FEX's own.
+    /// The block size a game's profile gives for `exe`: Proton's global MaxInst
+    /// (500, decision 0055) under the matched entry's.
     public static func defaultBlockSize(appID: UInt32?, exe: String) -> Int {
-        override(appID: appID, exe: exe)?.config["MaxInst"].flatMap(Int.init).flatMap { validBlockSize($0) ? $0 : nil }
-            ?? fexMaxInst
+        let config = proton.merging(override(appID: appID, exe: exe)?.config ?? [:]) { _, app in app }
+        return config["MaxInst"].flatMap(Int.init).flatMap { validBlockSize($0) ? $0 : nil } ?? fexMaxInst
     }
+
+    /// FEX's disk cache when the game's page does not choose: off for now
+    /// (decision 0056: a warm start of Hollow Knight crashes in rpmalloc).
+    public static let defaultDiskCache = false
 
     /// The game's page over its profile, for a launch of `exe`.
     public static func launch(appID: UInt32?, exe: String, ordering: MemoryOrdering, maxInst: Int? = nil,
-                              x87Reduced: Bool? = nil) -> Launch {
+                              x87Reduced: Bool? = nil, diskCache: Bool? = nil) -> Launch {
         let entry = override(appID: appID, exe: exe)
         var values = defaults(appID: appID, exe: exe)
         var chosen: Set<MemoryOrdering.Setting> = []
@@ -224,12 +237,16 @@ public enum FEXProfile {
             env[environmentName(key)] = value
         }
         let chosenMax = maxInst.flatMap { validBlockSize($0) ? $0 : nil }
-        if let chosenMax { env[environmentName("MaxInst")] = String(chosenMax) }
+        let blockSize = chosenMax ?? defaultBlockSize(appID: appID, exe: exe)
+        env[environmentName("MaxInst")] = String(blockSize)
         let x87 = x87Reduced ?? defaultX87Reduced(appID: appID, exe: exe)
         env[environmentName("X87ReducedPrecision")] = x87 ? "1" : "0"
+        let cache = diskCache ?? defaultDiskCache
+        env[environmentName("DiskCache")] = cache ? "1" : "0"
         return Launch(ordering: values, chosen: chosen, override: entry, environment: env,
-                      maxInst: chosenMax ?? defaultBlockSize(appID: appID, exe: exe), maxInstChosen: chosenMax != nil,
-                      x87Reduced: x87, x87Chosen: x87Reduced != nil)
+                      maxInst: blockSize, maxInstChosen: chosenMax != nil,
+                      x87Reduced: x87, x87Chosen: x87Reduced != nil,
+                      diskCache: cache, diskCacheChosen: diskCache != nil)
     }
 
     /// FEX_HOSTFEATURES for a launch. On iOS FEX cannot read the CPU's ID

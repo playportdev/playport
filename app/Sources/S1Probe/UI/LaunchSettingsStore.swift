@@ -131,6 +131,10 @@ enum LaunchSettingsText {
         + "blocks compile in shorter bursts, larger ones run with fewer jumps between blocks. Changes apply from "
         + "the game's next launch."
 
+    static let diskCacheFooter = "Whether the x86 emulator keeps the code it translates on the phone, in the "
+        + "prefix's AppData\\Local\\fex-emu, so a later start of the game reuses it instead of translating it again. "
+        + "Changes apply from the game's next launch."
+
     static let x87Footer = "The precision at which the x86 emulator runs a game's x87 floating point. 80-bit is "
         + "exact but done in software, many instructions for each one; 64-bit uses the CPU's own and is far cheaper, "
         + "and can differ from Windows where a game relies on the extra digits. Default is the game's profile. "

@@ -617,7 +617,7 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertEqual(l.ordering, [.tso: true, .halfBarrier: true, .vector: false, .memcpySet: false])
         XCTAssertEqual(l.environment, ["FEX_TSOENABLED": "1", "FEX_HALFBARRIERTSOENABLED": "1",
                                        "FEX_VECTORTSOENABLED": "0", "FEX_MEMCPYSETTSOENABLED": "0",
-                                       "FEX_X87REDUCEDPRECISION": "1"])
+                                       "FEX_X87REDUCEDPRECISION": "1", "FEX_MAXINST": "500", "FEX_DISKCACHE": "0"])
         XCTAssertNil(l.override)
         XCTAssertEqual(l.summary, "tso=1 halfbar=1 vector=0 memcpyset=0")
         // A title with no Steam app ID gets the same.
@@ -642,9 +642,9 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertEqual(setup.override?.pattern, "setup*")
         XCTAssertEqual(setup.environment["FEX_X87REDUCEDPRECISION"], "0")
         XCTAssertEqual(setup.ordering, game.ordering)
-        // Only the keys this build honours are passed on, and none of Proton's other globals.
+        // Only the keys this build honours are passed on, with Proton's global block size.
         XCTAssertNil(game.environment["FEX_PROFILESTATS"])
-        XCTAssertNil(game.environment["FEX_MAXINST"])
+        XCTAssertEqual(game.environment["FEX_MAXINST"], "500")
         XCTAssertTrue(FEXProfile.honoured.isSuperset(of: FEXProfile.protonApps.values.flatMap { $0.flatMap(\.config.keys) }))
     }
 
@@ -676,18 +676,37 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertNil(try! JSONDecoder().decode(LaunchSettings.self, from: Data("{}".utf8)).x87Reduced)
     }
 
+    func testTheGamesPageTurnsTheDiskCacheOn() {
+        let exe = #"C:\Games\The Witcher 3\bin\x64\witcher3.exe"#
+        let none = FEXProfile.launch(appID: 292030, exe: exe, ordering: MemoryOrdering())
+        XCTAssertEqual(none.environment["FEX_DISKCACHE"], "0")   // held off (decision 0056)
+        XCTAssertFalse(none.diskCache)
+        XCTAssertFalse(none.diskCacheChosen)
+        let on = FEXProfile.launch(appID: 292030, exe: exe, ordering: MemoryOrdering(), diskCache: true)
+        XCTAssertEqual(on.environment["FEX_DISKCACHE"], "1")
+        XCTAssertTrue(on.diskCache)
+        XCTAssertTrue(on.diskCacheChosen)
+        let s = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"diskCache":true}"#.utf8))
+        XCTAssertEqual(s.diskCache, true)
+        XCTAssertFalse(s.isEmpty)
+        XCTAssertEqual(LaunchSettings.resolve(game: s, global: LaunchSettings()).diskCache, true)
+        XCTAssertNil(LaunchSettings.resolve(game: nil, global: s).diskCache)
+    }
+
     func testTheGamesPageSetsTheBlockSize() {
         let exe = #"C:\Games\Hollow Knight\hollow_knight.exe"#
         let none = FEXProfile.launch(appID: 367520, exe: exe, ordering: MemoryOrdering())
-        XCTAssertNil(none.environment["FEX_MAXINST"])   // FEX keeps its own 5000
-        XCTAssertEqual(none.maxInst, 5000)
+        XCTAssertEqual(none.environment["FEX_MAXINST"], "500")   // Proton's global value (decision 0055)
+        XCTAssertEqual(none.maxInst, 500)
         XCTAssertFalse(none.maxInstChosen)
-        let small = FEXProfile.launch(appID: 367520, exe: exe, ordering: MemoryOrdering(), maxInst: 500)
-        XCTAssertEqual(small.environment["FEX_MAXINST"], "500")
-        XCTAssertEqual(small.maxInst, 500)
-        XCTAssertTrue(small.maxInstChosen)
-        XCTAssertEqual(small.environment.filter { $0.key != "FEX_MAXINST" }, none.environment)
-        XCTAssertNil(FEXProfile.launch(appID: 367520, exe: exe, ordering: MemoryOrdering(), maxInst: 0).environment["FEX_MAXINST"])
+        XCTAssertEqual(FEXProfile.defaultBlockSize(appID: nil, exe: "game.exe"), 500)
+        let large = FEXProfile.launch(appID: 367520, exe: exe, ordering: MemoryOrdering(), maxInst: 5000)
+        XCTAssertEqual(large.environment["FEX_MAXINST"], "5000")
+        XCTAssertEqual(large.maxInst, 5000)
+        XCTAssertTrue(large.maxInstChosen)
+        XCTAssertEqual(large.environment.filter { $0.key != "FEX_MAXINST" }, none.environment.filter { $0.key != "FEX_MAXINST" })
+        // An invalid choice falls back to the default.
+        XCTAssertEqual(FEXProfile.launch(appID: 367520, exe: exe, ordering: MemoryOrdering(), maxInst: 0).environment["FEX_MAXINST"], "500")
         // Per game only, saved and resolved like the ordering.
         let s = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"maxInst":1000}"#.utf8))
         XCTAssertEqual(s.maxInst, 1000)

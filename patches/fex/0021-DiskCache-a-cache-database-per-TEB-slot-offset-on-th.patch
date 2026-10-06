@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Tue, 6 Oct 2026 10:29:39 +0200
+Subject: [PATCH] DiskCache: a cache database per TEB slot offset on the iOS
+ host
+
+Every TEB read the iOS port emits (fex-port 0002) loads the TEB from a
+pthread TSD slot whose offset is baked into the block as an immediate
+(IosTebTsdOffset). The slot depends on the launch: The Witcher 3 had
+TEB slot 295 (offset 0x938) on three starts and 291 on a fourth. With
+the disk cache on, the fourth start ran blocks cached under 0x938, read
+the wrong slot, got 0 and faulted at 0x1788 in loader init. Mix the
+offset into the process bucket hash, so each offset has its own cache
+database; the machine bucket, which prunes on mismatch, is unchanged.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-06-fex-disk-cache.md
+Offered-upstream: no; the offset exists only on the iOS port
+---
+ FEXCore/Source/Interface/Core/DiskCache.cpp | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.cpp b/FEXCore/Source/Interface/Core/DiskCache.cpp
+index cf34191..391433e 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.cpp
++++ b/FEXCore/Source/Interface/Core/DiskCache.cpp
+@@ -4,6 +4,10 @@
+ 
+ #include "Interface/Core/Frontend.h"
+ #include "Interface/Context/Context.h"
++#ifdef FEX_IOS_HOST
++// The TEB slot offset the iOS port bakes into code (Arm64Emitter.h).
++extern "C" uint32_t IosTebTsdOffset;
++#endif
+ 
+ #include <FEXCore/Config/Config.h>
+ #include <FEXCore/Core/DiskCache.h>
+@@ -420,6 +424,14 @@ namespace DiskCache {
+ 
+     uint64_t MachineBucketHash = XXH3_64bits(BucketBytes.data(), sizeof(MachineBucketData));
+     uint64_t ProcessBucketHash = XXH3_64bits(BucketBytes.data() + sizeof(MachineBucketData), 2 + SerializedConfig.size());
++#ifdef FEX_IOS_HOST
++    // Playport: every TEB read the iOS port emits bakes this process's TSD slot
++    // offset into the code as an immediate (Arm64Emitter.h, IosTebTsdOffset),
++    // and the slot differs between launches. A block cached under one offset
++    // reads the wrong slot under another, so each offset gets its own cache
++    // database; the machine bucket, which prunes on mismatch, is left alone.
++    ProcessBucketHash = XXH3_64bits_withSeed(&IosTebTsdOffset, sizeof(IosTebTsdOffset), ProcessBucketHash);
++#endif
+     BucketHash.high64 = MachineBucketHash;
+     BucketHash.low64 = ProcessBucketHash;
+ 
