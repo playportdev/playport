@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Faust <willtechnoduck@gmail.com>
+Date: Wed, 30 Sep 2026 16:36:10 +0800
+Subject: [PATCH] include: list wine/madeira_fastsync.h so makedep can resolve
+ it
+
+dlls/ntdll/unix/sync.c includes "wine/madeira_fastsync.h" (fastsync, #16),
+but makedep only resolves wine/ headers that include/Makefile.in lists, so
+regenerating the Makefiles stopped every PE build with "wine/madeira_fastsync.h:
+No such file or directory". The iOS unix-side build scripts compile with their
+own include paths and were not affected.
+
+Playport (decision 0054): carried in patches/wine-unix with the fastsync
+client (0016), since the unix tree is configured, and its Makefiles made by
+makedep, from this tree. Taken from the madeira-main reference branch's
+re-port (its wine-port 0078).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+Madeira-commit: f674487eb601ea09abb81b5c3b5d2411f2dc8e35
+Class: feature
+Evidence: docs/evidence/2026-10-06-fastsync-on-8c050d0.md, madeira-main:docs/evidence/2026-10-06-portal2-madeira-wow64.md
+Offered-upstream: no
+---
+ include/Makefile.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/include/Makefile.in b/include/Makefile.in
+index 49cfc06..5ddebf3 100644
+--- a/include/Makefile.in
++++ b/include/Makefile.in
+@@ -1133,6 +1133,7 @@ SOURCES = \
+ 	wine/itss.idl \
+ 	wine/list.h \
+ 	wine/lsass.idl \
++	wine/madeira_fastsync.h \
+ 	wine/mfinternal.idl \
+ 	wine/mmsystem16.h \
+ 	wine/mscvpdb.h \

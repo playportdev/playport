@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: 125hz <nickfugitives@gmail.com>
+Date: Tue, 29 Sep 2026 02:35:12 -0500
+Subject: [PATCH] server: flush fastsync's handle cache at process init
+
+Madeira's 89710fc, the server_ios.c half of its opt-in fastsync engine:
+server_init_process_done() calls madeira_fast_flush_pid(), which drops the
+handle -> cell cache entries a dead process with a reissued id left
+behind. A no-op while fastsync is off; it also logs fastsync's policy line
+once when it was asked for. The Wine half is patches/wine-unix 0015-0017.
+
+Ported onto Madeira 8c050d0, which Playport keeps frozen and owns (decision
+0054); the code is Madeira's (Madeira's wine fork f6848ad and e200a5e,
+re-ported on the madeira-main reference branch). Madeira's own resolver
+(ee3d5c0, madeira_cfg_sync_engine) is not needed: Wine reads
+MADEIRA_FASTSYNC itself, and madsync stays off unless madeira.cfg has
+inproc-sync = 1 (patches/madeira-unix 0014, decision 0023).
+
+Madeira-commit: 89710fc07b8d9b870189889418c0a1e61707af34
+Class: feature
+Evidence: docs/evidence/2026-10-06-fastsync-on-8c050d0.md, madeira-main:docs/evidence/2026-10-06-portal2-madeira-wow64.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 87369bc..cd8c9f1 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -4368,6 +4368,12 @@ void server_init_process_done(void)
+         ios_srv_game_teb = (uintptr_t)NtCurrentTeb();
+     }
+ 
++    /* Opt-in fastsync (wine/dlls/ntdll/unix/sync.c): the handle -> cell cache is
++     * shared by every process of this task and keyed by process id, and the server
++     * reissues the ids of dead processes, so drop what a dead process with this id
++     * left behind. This process owns no handles yet. A no-op while fastsync is off. */
++    madeira_fast_flush_pid();
++
+     if (!get_device_info( initial_cwd, &info ) && (info.Characteristics & FILE_REMOVABLE_MEDIA))
+         chdir( "/" );
+     close( initial_cwd );
