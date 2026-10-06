@@ -4,7 +4,7 @@
 <dict>
 	<!-- The release version (pp release VERSION checks it; decision 0036). Keep both plists equal. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.2</string>
+	<string>0.3.3</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<!-- Device-initiated pairing: publish through Bonjour, not raw multicast (decision 0033). -->

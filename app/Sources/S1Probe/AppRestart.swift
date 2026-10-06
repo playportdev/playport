@@ -19,6 +19,10 @@
 // - If the request fails (LocalDevVPN off, no pairing file), this process
 //   stays: the reason, and the one before it, show as an alert, and the game's
 //   page offers Close Playport. It plays nothing more (decision 0030).
+// - Inside LiveContainer, or with no pairing (JIT from another app, decision
+//   0051), there is no request: CoreDevice would launch LiveContainer, not
+//   Playport, and the request needs the pairing. The alert asks the player to
+//   close Playport and launch it again (with JIT), and the page offers Close Playport.
 
 import Foundation
 import Relaunch
@@ -56,6 +60,18 @@ final class AppRestart: ObservableObject {
     /// After a game: restart now, or once the app is in front again.
     func restart(notice: LaunchMessage?) {
         let r = Record(requestedMs: Self.nowMs, pid: getpid(), notice: notice)
+        if let why = Self.cannotRestart {
+            Self.log("not asked: \(why)")
+            #if !PLAYPORT_RELEASE
+            restartFailed?()
+            #endif
+            let how = JitProvider.inLiveContainer
+                ? "To play again, close Playport and launch it again from LiveContainer with JIT."
+                : "To play again, close Playport and open it again."
+            let game = notice.map { "\n\n\($0.title): \($0.text)" } ?? ""
+            TitleLaunch.shared.message = LaunchMessage(title: "Close Playport to play again", text: how + game)
+            return
+        }
         restarting = true
         if UIApplication.shared.applicationState == .active {
             send(r)
@@ -63,6 +79,13 @@ final class AppRestart: ObservableObject {
             Self.log("waiting until Playport is in front")
             waiting = r
         }
+    }
+
+    /// Why Playport cannot restart itself here, or nil.
+    static var cannotRestart: String? {
+        if JitProvider.inLiveContainer { return "Playport runs inside LiveContainer" }
+        if !BuiltInJit.hasPairingFile { return "no pairing (JIT from \(JitProvider.method.label))" }
+        return nil
     }
 
     /// RootView, when the scene becomes active.

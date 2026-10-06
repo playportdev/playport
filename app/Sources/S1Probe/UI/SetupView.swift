@@ -70,7 +70,7 @@ final class SetupState: ObservableObject {
         }
         return SetupFacts(controller: PadRouter.shared.controller?.name, pairing: BuiltInJitStatus.shared.pairingFile,
                           pairsOnPhone: Self.pairsOnPhone, tunnelUp: tunnelUp, steamSignedIn: signedIn,
-                          steamSkipped: steamSkipped)
+                          steamSkipped: steamSkipped, jit: JitProvider.method)
     }
 
     /// What the checklist shows: the facts, or a dev build's preview.
@@ -199,8 +199,11 @@ struct SetupView: View {
     @ObservedObject private var router = PadRouter.shared
     @ObservedObject private var modal = PadModal.shared
     @EnvironmentObject private var model: SteamAccountModel
+    /// The JIT method (JitMethodPicker) changes the first two steps.
+    @AppStorage(JitMethod.key) private var storedMethod = ""
 
     var body: some View {
+        let _ = storedMethod
         let f = state.shown
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
@@ -307,6 +310,10 @@ struct SetupView: View {
         h.append(PadHint(button: .rb, label: "Next") { _ = SetupRing.press(.rb) })
         if !SetupState.shared.shown.pairsOnPhone { h.append(PadHint(button: .y, label: "How to make the file") { SetupRing.howTo() }) }
         let state = SetupState.shared
+        // X on the first step: JIT from StikDebug or another app (LiveContainer) instead.
+        if focus.focused == SetupStep.pairing.item, state.preview == nil {
+            h.append(PadHint(button: .x, label: "JIT method") { JitMethodPicker.show() })
+        }
         if focus.focused == SetupStep.steam.item,
            SetupChecklist.offersNotNow(state.shown, firstRun: state.inFirstRun) {
             h.append(PadHint(button: .x, label: "Not now") { state.skipSteam() })
@@ -340,6 +347,7 @@ enum SetupRing {
         case .b: _ = AppNavigation.shared.back()
         case .x:
             if focus.focused == SetupStep.steam.item { SetupState.shared.skipSteam() }
+            if focus.focused == SetupStep.pairing.item, SetupState.shared.preview == nil { JitMethodPicker.show() }
         case .menu, .view: break
         }
         return true

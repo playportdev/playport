@@ -5,6 +5,7 @@
 stays for driven harness launches. The driven launch modes it names are
 retired by [0012](0012-the-ui-is-the-only-entry-point.md); the UI driver's
 launches use the built-in helper as this record says.
+[0051](0051-jit-from-another-app.md) lets a Home Screen launch get its pool from StikDebug or another app on the phone; still no workstation.
 
 ## Decision
 

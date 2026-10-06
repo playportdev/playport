@@ -1648,6 +1648,46 @@ final class SetupChecklistTests: XCTestCase {
     }
 }
 
+final class JitMethodTests: XCTestCase {
+    func testBuiltInIsTheDefaultAndNotOfferedInsideLiveContainer() {
+        XCTAssertEqual(JitMethod.effective(stored: nil, inLiveContainer: false), .builtIn)
+        XCTAssertEqual(JitMethod.effective(stored: "nonsense", inLiveContainer: false), .builtIn)
+        XCTAssertEqual(JitMethod.effective(stored: "stikDebug", inLiveContainer: false), .stikDebug)
+        XCTAssertEqual(JitMethod.choices(inLiveContainer: false), [.builtIn, .stikDebug, .external])
+        // LiveContainer starts no app extension: a stored or default built-in waits for its debugger.
+        XCTAssertEqual(JitMethod.choices(inLiveContainer: true), [.stikDebug, .external])
+        XCTAssertEqual(JitMethod.effective(stored: nil, inLiveContainer: true), .external)
+        XCTAssertEqual(JitMethod.effective(stored: "builtIn", inLiveContainer: true), .external)
+        XCTAssertEqual(JitMethod.effective(stored: "stikDebug", inLiveContainer: true), .stikDebug)
+    }
+
+    func testTheStikDebugRequestNamesTheAppThePIDAndUniversalJS() {
+        let url = JitMethod.stikDebugURL(bundleID: "dev.playport.app", pid: 4321)
+        XCTAssertEqual(url?.absoluteString,
+                       "stikdebug://enable-jit?bundle-id=dev.playport.app&pid=4321&script-name=universal.js")
+    }
+
+    func testJitFromAnotherAppNeedsNoPairingAndStopsNoLaunch() {
+        var f = SetupFacts(pairing: false, pairsOnPhone: true, tunnelUp: false, steamSkipped: true, jit: .stikDebug)
+        XCTAssertEqual(SetupChecklist.beforeLaunch(f), .go)
+        XCTAssertTrue(SetupChecklist.item(.pairing, f).done)
+        XCTAssertNil(SetupChecklist.item(.pairing, f).action)
+        // StikDebug reaches the phone over LocalDevVPN too.
+        XCTAssertFalse(SetupChecklist.item(.vpn, f).done)
+        XCTAssertFalse(SetupChecklist.complete(f))
+        f.tunnelUp = true
+        XCTAssertTrue(SetupChecklist.complete(f))
+        // Another app (LiveContainer) brings its own debugger: neither step is Playport's.
+        f = SetupFacts(pairing: false, tunnelUp: false, steamSkipped: true, jit: .external)
+        XCTAssertTrue(SetupChecklist.item(.vpn, f).done)
+        XCTAssertNil(SetupChecklist.item(.vpn, f).action)
+        XCTAssertTrue(SetupChecklist.complete(f))
+        XCTAssertEqual(SetupChecklist.doneCount(f), 3)
+        XCTAssertEqual(SetupChecklist.beforeLaunch(f), .go)
+        XCTAssertTrue(SetupChecklist.summary(f).hasSuffix(" jit=external"))
+    }
+}
+
 final class QuickMenuTests: XCTestCase {
     func testTheRingMovesAlongTheRowsAndStopsAtTheEnds() {
         var m = QuickMenu()

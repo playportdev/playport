@@ -40,6 +40,8 @@ final class JitSetup: ObservableObject {
             return await withCheckedContinuation { waiter = $0 }
         }
         guard waiter == nil else { return false }
+        // JIT from another app (JitMethod): that app has its own pairing and tunnel.
+        guard JitProvider.method.usesPairing else { return true }
         do {
             if try BuiltInJit.storedPairingData() != nil, LocalDevVPN.tunnelUp { return true }
         } catch { /* Present a recoverable Keychain error, not an automatic replacement. */ }
