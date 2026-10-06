@@ -17,6 +17,17 @@ exchange code 0059.
   Settings › Accounts (alias `steam`, `account`). Decisions 0057, 0058. `pp test` and
   `pp check` (dev, release) pass. **Not checked on the phone yet:** its gate (a Steam
   install and repair, Hollow Knight) runs with Phase 1's, to keep phone use down.
+- **Phase 1, code: 1.1–1.4 and 1.6 written, host-tested** (2026-10-06). Library › Add a
+  game (the grid's last tile in All and Installed, and on the empty page) opens the one
+  Files picker the shell has; a folder or a .zip becomes an `import` job
+  (`UI/Import.swift`, PlayportKit `GameImporter`: Windows-name checks, symlinks skipped,
+  iCloud placeholders refused, free space, a resumable stage, one rename, a receipt that
+  names no path). GOG's `goggame-*.info` and Epic's `.egstore/*.mancpn` make the copy
+  that store's (also for a folder put there another way); `steam_appid.txt` is a hint.
+  The zip reader and a streaming inflate are ContentKit's. Game options › Executable
+  (ranked candidates) and Name for non-Steam games. Tile art from the executable's icon
+  (PlayportKit `PEIcon`), cached under Caches (re-derivable), not Application Support.
+  `import` run events. **1.5 (installers) not started**: it needs the phone spike.
 
 ## Goal
 

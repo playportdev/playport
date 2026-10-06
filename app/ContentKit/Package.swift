@@ -25,7 +25,8 @@ let package = Package(
         ),
         .testTarget(
             name: "ContentKitTests",
-            dependencies: ["ContentKit"]
+            dependencies: ["ContentKit"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

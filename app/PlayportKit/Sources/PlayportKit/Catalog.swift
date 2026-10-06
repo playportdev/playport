@@ -92,6 +92,11 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     public var hintSteamAppID: UInt32? = nil
     /// The build or version a GOG or Epic receipt names (Steam's is `buildID`).
     public var storeVersion: String? = nil
+    /// The executable the player picked on the game's page (`Adoption.candidates`),
+    /// over adoption's own pick while it is there; kept across adoptions.
+    public var chosenExecutable: String? = nil
+    /// The name the player gave the game (display only: the ID does not change).
+    public var displayName: String? = nil
 
     public var key: StoreGameKey {
         StoreGameKey(store: store, id: storeID ?? appID.map(String.init) ?? installDir.lowercased())
@@ -100,7 +105,7 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, appID, name, developer, installDir, executable, buildID, depots, sizeBytes, source, checksums, note
         case addedAt, lastPlayed, playSeconds, lastVerification, branch, importsDirect3D12, direct3D, executableMachine
-        case storeRaw = "store", storeID, storeArguments, hintSteamAppID, storeVersion
+        case storeRaw = "store", storeID, storeArguments, hintSteamAppID, storeVersion, chosenExecutable, displayName
     }
     /// An i386 (WoW64) title: its default backend is Vulkan (decision 0047).
     public var isI386: Bool { executableMachine == 0x14c }
@@ -234,7 +239,7 @@ public enum Adoption {
                 t = InstalledTitle(id: key.titleID, appID: nil, name: r.name, developer: nil, installDir: folder,
                                    executable: r.executable.flatMap { locate($0, in: dir) } ?? pick(exes, folder: folder, in: dir),
                                    buildID: nil, depots: [], sizeBytes: r.bytes,
-                                   source: r.store == .local ? .imported : .installed, checksums: nil, note: nil,
+                                   source: r.importedFrom != nil ? .imported : .installed, checksums: nil, note: nil,
                                    addedAt: now, lastPlayed: nil, lastVerification: nil)
                 t.store = key.store
                 t.storeID = key.id
@@ -247,6 +252,16 @@ public enum Adoption {
                                    buildID: c.buildID, depots: c.depots, sizeBytes: c.installedSize, source: .cohort,
                                    checksums: c.checksums, note: c.note, addedAt: now, lastPlayed: nil,
                                    lastVerification: nil)
+            } else if let m = StoreMarkers.detect(in: dir) {
+                // A store's copy put here some other way: its marker names it (decision 0057).
+                t = InstalledTitle(id: m.key.titleID, appID: nil, name: m.name ?? folder, developer: nil, installDir: folder,
+                                   executable: m.executable ?? pick(exes, folder: folder, in: dir), buildID: nil, depots: [],
+                                   sizeBytes: nil, source: .found, checksums: nil, note: nil, addedAt: now,
+                                   lastPlayed: nil, lastVerification: nil)
+                t.store = m.key.store
+                t.storeID = m.key.id
+                t.storeArguments = m.arguments
+                t.storeVersion = m.version
             } else {
                 t = InstalledTitle(id: "dir-\(folder.lowercased())", appID: nil, name: folder, developer: nil,
                                    installDir: folder, executable: pick(exes, folder: folder, in: dir), buildID: nil, depots: [],
@@ -266,6 +281,10 @@ public enum Adoption {
                 if old.buildID == t.buildID { t.lastVerification = old.lastVerification }
                 if t.source == .found, old.source == .found { t.sizeBytes = old.sizeBytes }
                 if old.storeVersion != t.storeVersion { t.lastVerification = nil }
+                t.chosenExecutable = old.chosenExecutable
+                if let chosen = old.chosenExecutable, let there = locate(chosen, in: dir) { t.executable = there }
+                t.displayName = old.displayName
+                if let name = old.displayName, !name.isEmpty { t.name = name }
             }
             t.direct3D = t.executable.map {
                 Direct3D.detect(executable: dir.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")), root: dir)
@@ -381,6 +400,38 @@ public enum Adoption {
             return a.joined(separator: "\\").lowercased() < b.joined(separator: "\\").lowercased()
         }
         return ranked.first?.joined(separator: "\\")
+    }
+
+    /// Every Windows executable a game's folder holds, up to three folders down,
+    /// for the game page's picker: adoption's pick first, then by `nested`'s
+    /// ranking (named like the folder, in a 64-bit folder, shallower, by path),
+    /// redistributables, installers, tools and crash reporters last.
+    public static func candidates(in dir: URL, folder: String) -> [String] {
+        let key = { (s: String) in s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        var found: [[String]] = []
+        func walk(_ at: URL, _ path: [String]) {
+            guard path.count <= 3 else { return }
+            for name in ((try? FileManager.default.contentsOfDirectory(atPath: at.path)) ?? []).sorted() where !name.hasPrefix(".") {
+                let url = at.appendingPathComponent(name)
+                if isDirectory(url) { walk(url, path + [name]) } else if name.lowercased().hasSuffix(".exe") { found.append(path + [name]) }
+            }
+        }
+        walk(dir, [])
+        let notGame = { (p: [String]) in p.contains { c in notTheGame.contains { c.lowercased().contains($0) } } }
+        let is64 = { (p: [String]) in p.dropLast().contains { ["win64", "x64", "bin64", "x86_64"].contains($0.lowercased()) } }
+        let picked = pick(executables(in: dir), folder: folder, in: dir)
+        let ranked = found.sorted { a, b in
+            let pa = a.joined(separator: "\\") == picked, pb = b.joined(separator: "\\") == picked
+            if pa != pb { return pa }
+            if notGame(a) != notGame(b) { return !notGame(a) }
+            let ka = key(String(a.last!.dropLast(4))), kb = key(String(b.last!.dropLast(4)))
+            let na = !ka.isEmpty && key(folder).hasPrefix(ka), nb = !kb.isEmpty && key(folder).hasPrefix(kb)
+            if na != nb { return na }
+            if is64(a) != is64(b) { return is64(a) }
+            if a.count != b.count { return a.count < b.count }
+            return a.joined(separator: "\\").lowercased() < b.joined(separator: "\\").lowercased()
+        }
+        return ranked.map { $0.joined(separator: "\\") }
     }
 
     static func isDirectory(_ url: URL) -> Bool {

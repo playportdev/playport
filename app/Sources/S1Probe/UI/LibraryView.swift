@@ -10,6 +10,9 @@
 // page over the grid. Works offline, with no Steam session: the owned games
 // come from the disk cache.
 //
+// After the games, an Add a game tile (UI/Import.swift) opens Files to import a
+// game's folder or .zip; it shows in All and Installed, and on the empty page.
+//
 // The grid is lazy, so a tile off screen is not drawn; the grid reports every
 // tile's frame to the focus ring itself (padFrames), and when the ring moves to
 // a tile not wholly on screen scrolls just far enough to show its row, to an
@@ -108,6 +111,7 @@ private struct LibraryGridView: View {
     @ObservedObject private var grid = LibraryGrid.shared
     @ObservedObject private var nav = AppNavigation.shared
     @ObservedObject private var focus = PadFocus.shared
+    @ObservedObject private var imports = GameImports.shared
     /// The scroll view on screen, how far its content is scrolled and how far it can be.
     @State private var viewport = CGRect.zero
     @State private var offset = CGFloat.zero
@@ -132,7 +136,7 @@ private struct LibraryGridView: View {
             if shown.isEmpty {
                 empty
             } else {
-                tiles(shown, duplicateIDs: LibraryList.duplicateSourceIDs(all))
+                tiles(shown, duplicateIDs: LibraryList.duplicateSourceIDs(all), addTile: showsAddTile)
             }
         }
         // The ring starts on the first tile, on arrival and after the chip, sort or search changes.
@@ -201,7 +205,10 @@ private struct LibraryGridView: View {
 
     // MARK: tiles
 
-    private func tiles(_ shown: [LibraryEntry], duplicateIDs: Set<String>) -> some View {
+    /// Add a game shows where local games do: All and Installed, with no search typed.
+    private var showsAddTile: Bool { (grid.filter == .all || grid.filter == .installed) && grid.search.isEmpty }
+
+    private func tiles(_ shown: [LibraryEntry], duplicateIDs: Set<String>, addTile: Bool) -> some View {
         GeometryReader { outer in
             let width = outer.size.width - 2 * Self.inset
             let tile = CGSize(width: (width - CGFloat(Self.columns - 1) * Self.spacing.width) / CGFloat(Self.columns),
@@ -217,6 +224,10 @@ private struct LibraryGridView: View {
                                         showSource: LibraryList.showsSourceBadge(entry, filter: grid.filter, duplicateIDs: duplicateIDs),
                                         width: tile.width, artHeight: Self.artHeight, metaGap: Self.metaGap, metaHeight: Self.metaHeight)
                         }
+                        if addTile {
+                            AddGameTile(planning: imports.planning, width: tile.width, artHeight: Self.artHeight,
+                                        metaGap: Self.metaGap, metaHeight: Self.metaHeight)
+                        }
                     }
                     .padding(Self.inset)
                 }
@@ -231,7 +242,8 @@ private struct LibraryGridView: View {
                 })
                 // Every tile's art on screen, drawn or not: the ring's targets. The drawn
                 // ones report the same frames themselves.
-                .padFrames(offscreenFrames(shown, tile: tile, pitch: pitch), hint: "Open")
+                .padFrames(offscreenFrames(shown.map { "lib:\($0.id)" } + (addTile ? [AddGameTile.item] : []), tile: tile, pitch: pitch),
+                           hint: "Open")
                 .refreshable {
                     library.refresh()
                     await model.loadGames(refresh: true)
@@ -260,13 +272,13 @@ private struct LibraryGridView: View {
     }
 
     /// The frames on screen of the tiles the viewport does not show, as the grid lays them out.
-    private func offscreenFrames(_ shown: [LibraryEntry], tile: CGSize, pitch: CGSize) -> [String: CGRect] {
+    private func offscreenFrames(_ ids: [String], tile: CGSize, pitch: CGSize) -> [String: CGRect] {
         guard viewport.width > 0 else { return [:] }
         let origin = CGPoint(x: viewport.minX + Self.inset, y: viewport.minY + Self.inset - offset)
-        let frames = LibraryList.tileFrames(count: shown.count, columns: Self.columns, tile: tile, spacing: pitch, origin: origin)
+        let frames = LibraryList.tileFrames(count: ids.count, columns: Self.columns, tile: tile, spacing: pitch, origin: origin)
         var out: [String: CGRect] = [:]
-        for (entry, frame) in zip(shown, frames) where frame.maxY <= viewport.minY || frame.minY >= viewport.maxY {
-            out["lib:\(entry.id)"] = frame
+        for (id, frame) in zip(ids, frames) where frame.maxY <= viewport.minY || frame.minY >= viewport.maxY {
+            out[id] = frame
         }
         return out
     }
@@ -285,7 +297,16 @@ private struct LibraryGridView: View {
                     .background(PP.accent, in: Capsule())
                     .padItem("signin", hint: "Open", cornerRadius: 14) { _ = nav.open("account") }
                     .padding(.top, 6)
-            } else if grid.filter == .installed, !model.games.isEmpty, grid.search.isEmpty {
+            }
+            if showsAddTile {
+                Text(imports.planning ? "Reading…" : "Add a game")
+                    .font(.system(size: 13, weight: .bold)).foregroundStyle(needsSignIn ? PP.text : PP.onAccent)
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(needsSignIn ? PP.line : PP.accent, in: Capsule())
+                    .padItem(AddGameTile.item, hint: "Add", cornerRadius: 14) { GameImports.requests.send() }
+                    .padding(.top, 6)
+            }
+            if !needsSignIn, grid.filter == .installed, !model.games.isEmpty, grid.search.isEmpty {
                 Text(LibrarySource.steam.label)
                     .font(.system(size: 13, weight: .bold)).foregroundStyle(PP.onAccent)
                     .padding(.horizontal, 14).padding(.vertical, 6)
@@ -320,13 +341,9 @@ private struct LibraryGridView: View {
         if !grid.search.isEmpty { return "Press B to clear the search." }
         switch grid.filter {
         case .all:
-            return model.gamesError ?? "Your installed games and games from connected stores appear here. Sign in to Steam or add a local game to get started."
+            return model.gamesError ?? "Your installed games and games from connected stores appear here. Sign in to Steam or add a game from Files to get started."
         case .installed:
-            #if PLAYPORT_RELEASE
-            return "Install one from your Steam games, or copy one into Playport."
-            #else
-            return "Install one from your Steam games, or copy one into Playport's C:\\Games folder."
-            #endif
+            return "Install one from your Steam games, or add one from Files: its folder or a .zip of it."
         case .steam:
             if needsSignIn { return model.state == .expired ? AccountCopy.status(.expired) : "Pair Playport with your Steam account to see your games." }
             return model.gamesError ?? "Your Steam account owns no games."
@@ -369,7 +386,7 @@ private struct LibraryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: metaGap) {
             ZStack(alignment: .bottomLeading) {
-                Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header) }.clipped()
+                Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil) }.clipped()
                 if game == nil || job != nil {
                     LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
                     Text(entry.name)
@@ -439,6 +456,37 @@ private struct LibraryTile: View {
     }
 }
 
+/// The grid's last tile: Files opens to import a game's folder or .zip (UI/Import.swift).
+private struct AddGameTile: View {
+    static let item = "lib:add"
+    let planning: Bool
+    let width: CGFloat
+    let artHeight: CGFloat
+    let metaGap: CGFloat
+    let metaHeight: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: metaGap) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(PP.surface)
+                RoundedRectangle(cornerRadius: 10).strokeBorder(PP.line, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                VStack(spacing: 4) {
+                    if planning { ProgressView().controlSize(.small) } else {
+                        Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).foregroundStyle(PP.soft)
+                    }
+                    Text("Add a game").font(.system(size: 13, weight: .semibold)).foregroundStyle(PP.soft)
+                }
+            }
+            .frame(width: width, height: artHeight)
+            .padItem(Self.item, hint: "Add", cornerRadius: 10) { GameImports.requests.send() }
+            Text(planning ? "Reading the folder…" : "From Files: a folder or a .zip")
+                .font(.system(size: 12)).foregroundStyle(PP.muted).lineLimit(1)
+                .frame(width: width, height: metaHeight, alignment: .leading)
+        }
+        .accessibilityIdentifier("library-add-game")
+    }
+}
+
 /// Quiet, readable over any artwork; not a separate tap or controller focus target.
 struct GameSourceBadge: View {
     let source: LibrarySource
@@ -454,16 +502,22 @@ struct GameSourceBadge: View {
     }
 }
 
-/// A game's store art when the paired account owns it, else its colour tile.
+/// A game's store art when the paired account owns it; else, for a game in
+/// C:\Games, its executable's icon (LocalGameArt); else its colour tile.
 struct GameArt: View {
     @EnvironmentObject private var model: SteamAccountModel
+    @ObservedObject private var library = LibraryModel.shared
     let appID: UInt32?
     let name: String
     let kind: ArtworkCache.Kind
+    /// The catalogue's title, for a local game's icon.
+    var titleID: String? = nil
 
     var body: some View {
         if let app = appID, let game = model.games.first(where: { $0.id == app }) {
             SteamArtView(app: game.info, kind: kind, placeholder: PP.tile(for: name))
+        } else if let id = titleID, let t = library.title(id), t.executable != nil {
+            LocalGameArt(title: t)
         } else {
             PP.tile(for: name)
         }

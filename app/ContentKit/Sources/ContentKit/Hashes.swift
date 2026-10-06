@@ -207,8 +207,12 @@ public enum CRC32 {
     public static func checksum(_ data: [UInt8]) -> UInt32 { update(0, data) }
 
     public static func update(_ crc: UInt32, _ data: [UInt8]) -> UInt32 {
+        data.withUnsafeBytes { update(crc, $0) }
+    }
+
+    public static func update(_ crc: UInt32, _ p: UnsafeRawBufferPointer) -> UInt32 {
         var c = ~crc
-        data.withUnsafeBytes { p in
+        do {
             tables.withUnsafeBufferPointer { t in
                 var i = 0
                 while p.count - i >= 8 {

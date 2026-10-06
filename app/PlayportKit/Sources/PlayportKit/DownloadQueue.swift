@@ -61,6 +61,9 @@ public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
     public var buildID: UInt32?
     /// The download's size when known before it starts (Steam's manifest sizes).
     public var bytes: UInt64?
+    /// An import: the name of what was picked in Files (never its path), so a
+    /// pick of the same item after a restart resumes this job.
+    public var source: String? = nil
     public var id: StoreGameKey { key }
     /// Steam's app ID, for a Steam job.
     public var appID: UInt32? { key.steamAppID }
@@ -83,7 +86,7 @@ public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
                   buildID: buildID, bytes: bytes)
     }
 
-    enum CodingKeys: String, CodingKey { case key, appID, name, kind, branch, hold, automatic, buildID, bytes }
+    enum CodingKeys: String, CodingKey { case key, appID, name, kind, branch, hold, automatic, buildID, bytes, source }
 
     /// A queue from before store identities names a Steam app ID only.
     public init(from decoder: Decoder) throws {
@@ -96,6 +99,7 @@ public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
         automatic = try c.decodeIfPresent(Bool.self, forKey: .automatic) ?? false
         buildID = try c.decodeIfPresent(UInt32.self, forKey: .buildID)
         bytes = try c.decodeIfPresent(UInt64.self, forKey: .bytes)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -109,6 +113,7 @@ public struct DownloadJob: Codable, Equatable, Identifiable, Sendable {
         try c.encode(automatic, forKey: .automatic)
         try c.encodeIfPresent(buildID, forKey: .buildID)
         try c.encodeIfPresent(bytes, forKey: .bytes)
+        try c.encodeIfPresent(source, forKey: .source)
     }
 }
 

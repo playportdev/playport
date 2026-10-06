@@ -41,3 +41,39 @@ public enum SafePath {
         }
     }
 }
+
+/// Names a Windows guest can hold: what an import from Files may bring into C:\Games.
+public enum WindowsName {
+    static let reserved: Set<String> = Set(["con", "prn", "aux", "nul"]
+        + (0...9).map { "com\($0)" } + (0...9).map { "lpt\($0)" })
+
+    /// Throws `unsafeContent` for a component Windows cannot name: a reserved
+    /// device name (with any extension), a character outside its file names,
+    /// a control character, a trailing dot or space, `.` or `..`.
+    public static func check(_ component: String) throws {
+        guard !component.isEmpty, component != ".", component != ".." else {
+            throw ClientError.unsafeContent("empty or traversal component")
+        }
+        guard component.utf8.count <= SafePath.maxComponentBytes else { throw ClientError.unsafeContent("\(component.prefix(40))… is too long") }
+        if let bad = component.unicodeScalars.first(where: { $0.value < 0x20 || $0.value == 0x7F || "<>:\"/\\|?*".unicodeScalars.contains($0) }) {
+            throw ClientError.unsafeContent("\(component.debugDescription) has a character Windows refuses (U+\(String(bad.value, radix: 16, uppercase: true)))")
+        }
+        guard !component.hasSuffix("."), !component.hasSuffix(" ") else {
+            throw ClientError.unsafeContent("\(component.debugDescription) ends in a dot or space")
+        }
+        let stem = component.split(separator: ".", maxSplits: 1).first.map { $0.lowercased() } ?? ""
+        guard !reserved.contains(stem.trimmingCharacters(in: .whitespaces)) else {
+            throw ClientError.unsafeContent("\(component) is a reserved Windows name")
+        }
+    }
+
+    /// Checks a relative path's every component, and that no two paths in
+    /// `seen` differ only by case (Windows would see one file); inserts it.
+    public static func check(path: [String], seen: inout Set<String>) throws {
+        for c in path { try check(c) }
+        let key = path.joined(separator: "/").lowercased()
+        guard seen.insert(key).inserted else {
+            throw ClientError.unsafeContent("\(path.joined(separator: "/")) differs from another name only by case")
+        }
+    }
+}

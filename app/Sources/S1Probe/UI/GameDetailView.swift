@@ -690,6 +690,7 @@ private struct GameDetailPage: View {
                 }
             }
         }
+        if t.store != .steam, t.source != .cohort { localRows(t) }
         filesRows(t)
         if let s = stats, !s.schema.achievements.isEmpty {
             PadRow(id: "opt:achievements", title: "Achievements", value: "\(s.unlockedCount) of \(s.schema.achievements.count)",
@@ -698,6 +699,40 @@ private struct GameDetailPage: View {
         PadRow(id: "opt:report", title: "Report a problem", value: "Shares a log", accessory: .chevron, style: .plain,
                hint: "Share") { ProblemReport.share(t) }
         uninstallRow(t)
+    }
+
+    /// A game that came without a store's launch record (imported, found, or another
+    /// store's copy): which executable Play starts, and the name it shows.
+    @ViewBuilder
+    private func localRows(_ t: InstalledTitle) -> some View {
+        let machine = t.executableMachine.map(Self.machineName)
+        PadRow(id: "opt:executable", title: "Executable",
+               subtitle: [machine, t.direct3D.flatMap { $0.apis.isEmpty ? nil : $0.summary }].compactMap { $0 }.joined(separator: " · "),
+               value: t.executable ?? "None found", accessory: .chevron, changed: t.chosenExecutable != nil, style: .plain,
+               hint: "Choose", reset: t.chosenExecutable == nil ? nil : { library.setExecutable(t.id, nil) }) {
+            let dir = LibraryModel.paths.games.appendingPathComponent(t.installDir, isDirectory: true)
+            let found = Adoption.candidates(in: dir, folder: t.installDir)
+            guard !found.isEmpty else { return }
+            PadModal.shared.picker(
+                title: "Executable", context: "\(context) · Game",
+                note: "What Play starts. The first is Playport's own pick; installers, tools and crash reporters are last.",
+                options: [PadOption(id: "", label: "Default", detail: found.first.map { "\($0), Playport's pick" })]
+                    + found.map { PadOption(id: $0, label: $0) },
+                selected: t.chosenExecutable ?? "") { library.setExecutable(t.id, $0.isEmpty ? nil : $0) }
+        }
+        PadRow(id: "opt:name", title: "Name", value: t.name, accessory: .chevron, changed: t.displayName != nil, style: .plain,
+               hint: "Edit", reset: t.displayName == nil ? nil : { library.rename(t.id, nil) }) {
+            PadModal.shared.keyboard(title: "Name", text: t.name, placeholder: t.installDir, maxLength: 80) { library.rename(t.id, $0) }
+        }
+    }
+
+    static func machineName(_ m: UInt16) -> String {
+        switch m {
+        case 0x8664: "x86-64"
+        case 0x14C: "32-bit x86"
+        case 0xAA64: "ARM64"
+        default: String(format: "machine 0x%04X", m)
+        }
     }
 
     @ViewBuilder

@@ -288,6 +288,27 @@ final class LibraryModel: ObservableObject {
         }
     }
 
+    /// The game page's Executable: the player's pick (nil: adoption's own), then a
+    /// re-adoption so its machine and Direct3D evidence follow it.
+    func setExecutable(_ id: String, _ path: String?) {
+        guard !TitleLaunch.shared.running else { return }
+        catalog.update(id) { $0.chosenExecutable = path }
+        save()
+        Self.log("executable of \(id): \(path ?? "adoption's pick")")
+        refresh()
+    }
+
+    /// The game page's Name: display only (the title's ID does not change); empty puts the folder's back.
+    func rename(_ id: String, _ name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        catalog.update(id) {
+            $0.displayName = trimmed?.isEmpty == false ? trimmed : nil
+            if let n = $0.displayName { $0.name = n }
+        }
+        save()
+        refresh()
+    }
+
     private func removed(_ id: String, error: String?) {
         if let error {
             removeErrors[id] = error

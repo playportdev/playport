@@ -24,6 +24,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "PlayportKit", dependencies: [.product(name: "SteamClientKit", package: "SteamClient")]),
-        .testTarget(name: "PlayportKitTests", dependencies: ["PlayportKit"]),
+        .testTarget(name: "PlayportKitTests", dependencies: ["PlayportKit"], resources: [.copy("Fixtures")]),
     ]
 )
