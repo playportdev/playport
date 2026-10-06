@@ -136,7 +136,7 @@ regression in another column. Otherwise it is reverted, and its record says so.
    - Add a per-game **Graphics options** field to the app, as decision 0012
      requires. It writes an allowlisted set: `DXVK_CONFIG`, `VKD3D_CONFIG`,
      `MESA_KK_DEBUG`, `MESA_KK_EXPERIMENTAL` and `MESA_KK_DISABLE_WORKAROUNDS`.
-     Its scope (dev only, or both variants) is question 3.
+     It is in the dev build only (decision taken 3).
    - `pp ui --settings` then reaches it, for example
      `{"graphicsOptions":"dxvk.tilerMode=False"}`.
    - Write a decision record.
