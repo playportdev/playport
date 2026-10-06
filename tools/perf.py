@@ -1210,7 +1210,8 @@ def run_main(argv):
         # HUD launch above has just closed any black screen (OLED burn-in, DEVICE.md).
         if phonelib.unattended():
             with contextlib.suppress(Exception):
-                phonelib.rest(ev, out)
+                # in this session: a launch outside it would undo the HUD switch and --settings
+                phonelib.rest(ev, out, session=phonelib.session())
         ev("cooling", rested_min=round((time.time() - ended) / 60, 1) if ended else None,
            want_min=a.cool, wait_s=round(wait), pressure=cool_state(last, ended), power=battery_power())
         time.sleep(wait)

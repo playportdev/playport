@@ -251,12 +251,13 @@ def set_unattended(hours):
     return rec
 
 
-def rest(events=None, out=None):
+def rest(events=None, out=None, session=None):
     """Under the lock: the dev app's black screen (Settings › Developer › Black screen), launched
     as the UI driver does, so an unlocked phone left alone shows black at its lowest brightness.
     Not when the app runs (a run left it running) or the release app is installed (no driver).
     The launch names no session: the ended session's driven settings are undone (DriverUndo).
-    Returns the launched pid, or None."""
+    A rest within a session that goes on (pp perf's cooling) passes it as session, so its
+    settings stay for the play after it. Returns the launched pid, or None."""
     events = events or Events(echo=False)
     if (installed() or {}).get("variant") == "release":
         events("rest-skipped", why="the release app has no UI driver")
@@ -265,7 +266,8 @@ def rest(events=None, out=None):
     if phone.pid():
         events("rest-skipped", why="the app runs")
         return None
-    pid = phone.launch(["S1_MODE=ui", "TITLE_NONCE=" + secrets.token_hex(4), "UI_ACTIONS=open:black"])
+    pid = phone.launch(["S1_MODE=ui", "TITLE_NONCE=" + secrets.token_hex(4), "UI_ACTIONS=open:black"]
+                       + (["UI_SESSION=" + session] if session else []))
     events("rest", pid=pid)
     return pid
 
