@@ -41,8 +41,9 @@ Drive the phone (dev app)
                                   (install, then plays, a pad) that no other agent may split
 
 Upstream and review
-  pp sync <madeira-sha> [--dry-run] [--push]
-                                  move the Madeira pin, or hold with a report
+  pp sync [<madeira-sha>] [--replay]
+                                  watch Madeira past the frozen pin (decision 0054): its commits
+                                  that touch what Playport builds; never moves a pin
   pp rebase TARGET NEW [--trial] | --continue | --abort | --write [--pins]
                                   move one series stack onto a new upstream commit in a scratch
                                   clone: conflict trial, rerere, range-diff, re-export (UPSTREAM-SYNC.md)

@@ -88,7 +88,7 @@ public struct MemoryOrdering: Codable, Equatable, Hashable, Sendable {
 
 public enum FEXProfile {
     /// Where `proton` and `protonApps` come from.
-    public static let protonSource = "ValveSoftware/Proton bleeding-edge c9e0da9d736c (2026-09-26): FEX_Config.json, "
+    public static let protonSource = "ValveSoftware/Proton bleeding-edge ae4e5bc925d7 (2026-10-05): FEX_Config.json, "
         + "proton's fex_application_profiles; proton_11.0 5b89db940e0e has the same"
 
     /// Proton's global FEX configuration (FEX_Config.json).

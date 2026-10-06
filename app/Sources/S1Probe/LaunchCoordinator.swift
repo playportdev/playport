@@ -279,6 +279,7 @@ enum LaunchCoordinator {
         }
 
         log("display: \(TitleScreen.summary)")
+        Fastsync.apply(log: log)
         ThermalLog.start()
         HostIO.prepareRuntime(log: WineHostRuntime.appendLog)
         if HostIO.surfaceReady.wait(timeout: .now() + 15) == .timedOut {
