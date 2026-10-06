@@ -22,8 +22,9 @@ exchange code 0059.
   Files picker the shell has; a folder or a .zip becomes an `import` job
   (`UI/Import.swift`, PlayportKit `GameImporter`: Windows-name checks, symlinks skipped,
   iCloud placeholders refused, free space, a resumable stage, one rename, a receipt that
-  names no path). GOG's `goggame-*.info` and Epic's `.egstore/*.mancpn` make the copy
-  that store's (also for a folder put there another way); `steam_appid.txt` is a hint.
+  names no path). An import is always Local (owner, 2026-10-06: the sources are
+  separate); GOG's `goggame-*.info` or Epic's `.egstore/*.mancpn` in the folder only give
+  the executable and arguments; `steam_appid.txt` is a hint.
   The zip reader and a streaming inflate are ContentKit's. Game options › Executable
   (ranked candidates) and Name for non-Steam games. Tile art from the executable's icon
   (PlayportKit `PEIcon`), cached under Caches (re-derivable), not Application Support.
@@ -39,7 +40,8 @@ exchange code 0059.
   GOG installer (Inno Setup 5.6.2, i386) started under WoW64 with
   `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=…`, loaded kernel32 and kernelbase,
   and exited with code 1 after 147 ms, before writing its log or the target folder; not
-  traced further. Picking an installer in Add a game says so and points to GOG.
+  traced further. Picking an installer in Add a game says Playport doesn't run them and
+  asks for the installed folder or a .zip.
 - **Next:** Phase 3 (Epic), whose spike needs the owner's Epic sign-in; a zip import and a
   hand pick on the phone when convenient.
 
@@ -107,8 +109,9 @@ Nothing visible changes. Every later phase depends on this.
 - Title IDs: `app-<steamID>` and `dir-<folder>` stay as they are. New:
   `gog-<productID>` and `epic-<appName>`. Saved launch settings, play time and
   cloud state are keyed by title ID, so nothing migrates.
-- A store copy is identified by its install receipt, or by a store marker in the
-  folder (`goggame-<id>.info`, `.egstore/*.mancpn`; see 1.2). Never by its name.
+- A store copy is identified by its install receipt. Never by its name. **Changed
+  (owner, 2026-10-06):** the sources are separate; a folder's store marker does not
+  make it a store copy (see 1.2).
 - An installed copy joins its own store's listing only (0045 unchanged).
 
 **0.2 Model changes (PlayportKit, host tests).**
@@ -187,14 +190,12 @@ small owned game); `./pp ui --play app-367520 --until first-frame+10 --shot` pas
   date, file count and bytes. It marks the copy as Playport's for verify and
   uninstall. No path to the source is kept, so no home path gets in.
 
-**1.2 Recognise what was imported.**
-- `goggame-<productID>.info` (JSON): `store = gog`, `id = gog-<productID>`, with the
-  primary `playTasks` entry giving the executable, arguments and working directory.
-  It then joins the GOG listing when GOG is signed in (Phase 2): the same game, no
-  second copy.
-- `.egstore/*.mancpn` / `*.manifest`: `store = epic`, with the app name. A
-  launch that needs Epic's ownership check fails without the session; the page
-  then says so (3.6).
+**1.2 Recognise what was imported.** **Changed (owner, 2026-10-06):** an import is
+always Local; Local, Steam, GOG and Epic are separate sources, and an imported copy
+joins no store's listing.
+- `goggame-<productID>.info` (JSON): the primary `playTasks` entry gives the
+  executable, arguments and name; nothing more.
+- `.egstore/*.mancpn`: read for nothing beyond that; the copy stays Local.
 - `steam_appid.txt` or `steam_api64.dll` alone **do not** make a copy a Steam copy
   (0045: an app ID from a receipt or the cohort only). Recommended: record the ID
   as `hintSteamAppID`, and let the game's page offer "Run with Steam's game ID"

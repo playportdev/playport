@@ -13,8 +13,10 @@
 //   skipping those. On Apple platforms a file is cloned when it can be (On My
 //   iPhone: no space), else copied.
 // - The commit is one rename into `Games/<folder>`, then the receipt
-//   `installs/local-<folder>.json` (or the store's, when the folder carries
-//   GOG's or Epic's marker, StoreMarkers): the source's name, never its path.
+//   `installs/local-<folder>.json`: the source's name, never its path. An import is
+//   always a Local game, whatever store the files once came from (owner, 2026-10-06:
+//   local, Steam, GOG and Epic are separate sources). A launch record a store left in
+//   the folder (StoreMarkers) only says which executable and arguments to start.
 
 import Foundation
 import SteamClientKit
@@ -260,9 +262,9 @@ public struct GameImporter: Sendable {
         progress(Progress(bytesDone: total, bytesTotal: total, filesDone: count, filesTotal: count))
         guard rename(stage.path, final.path) == 0 else { throw ClientError.transport("rename into C:\\Games errno \(errno)") }
         let marker = StoreMarkers.detect(in: final)
-        let key = marker?.key ?? StoreGameKey(store: .local, id: folder)
-        let receipt = StoreReceipt(store: key.store, storeID: key.id, name: marker?.name ?? folder, installDir: folder,
-                                   version: marker?.version, executable: marker?.executable, arguments: marker?.arguments,
+        let key = StoreGameKey(store: .local, id: folder)
+        let receipt = StoreReceipt(store: .local, storeID: key.id, name: marker?.name ?? folder, installDir: folder,
+                                   executable: marker?.executable, arguments: marker?.arguments,
                                    workingDir: marker?.workingDir, files: plan.files.count, bytes: total, installedAt: now,
                                    importedFrom: plan.source.url.lastPathComponent,
                                    hintSteamAppID: StoreMarkers.steamAppIDHint(in: final))
@@ -339,8 +341,10 @@ public struct GameImporter: Sendable {
     #endif
 }
 
-/// What a store left in a game's folder: GOG's `goggame-<id>.info`, Epic's
-/// `.egstore/*.mancpn`. A copy carrying one is that store's (decision 0057).
+/// The launch record a store left in a game's folder: GOG's `goggame-<id>.info`
+/// (its name and primary play task), Epic's `.egstore/*.mancpn`. It says how to
+/// start the game, never whose copy it is: a folder Playport did not install from
+/// a store is a Local game (decision 0057, owner 2026-10-06).
 public enum StoreMarkers {
     public struct Marker: Equatable, Sendable {
         public var key: StoreGameKey

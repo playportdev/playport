@@ -125,7 +125,7 @@ final class GameImportTests: XCTestCase {
         XCTAssertEqual(GameImporter.uniqueFolder(".hidden", existing: []), "Game")
     }
 
-    func testAGOGFolderIsAGOGCopy() async throws {
+    func testAFolderFromGOGIsStillALocalGameStartedByItsPlayTask() async throws {
         try file("bin/launcher.exe")
         try file("bin/game.exe")
         try file("steam_appid.txt", "367520\n")
@@ -136,28 +136,30 @@ final class GameImportTests: XCTestCase {
         """)
         try file("goggame-1207664664.info", #"{"gameId":"1207664664","rootGameId":"1207664663","name":"A DLC"}"#)
         let receipt = try await importer().run(try GameImporter.plan(.folder(src)), folder: "Celeste")
-        XCTAssertEqual(receipt.key, StoreGameKey(store: .gog, id: "1207664663"))
+        XCTAssertEqual(receipt.key, StoreGameKey(store: .local, id: "celeste"), "an import is Local, whatever store it came from")
         XCTAssertEqual(receipt.name, "A GOG Game")
-        XCTAssertEqual(receipt.version, "57107")
+        XCTAssertNil(receipt.version)
         XCTAssertEqual(receipt.executable, #"bin\game.exe"#)
         XCTAssertEqual(receipt.arguments, ["-windowed", "-name x"])
         XCTAssertEqual(receipt.hintSteamAppID, 367520)
-        XCTAssertEqual(layout.receiptFile(receipt.key).lastPathComponent, "gog-1207664663.json")
+        XCTAssertEqual(layout.receiptFile(receipt.key).lastPathComponent, "local-celeste.json")
         let c = Adoption.scan(games: layout.gamesRoot, cohort: Cohort(titles: []), receipts: [],
                               storeReceipts: layout.storeReceipts(), previous: Catalog())
-        XCTAssertEqual(c.titles.map(\.id), ["gog-1207664663"])
+        XCTAssertEqual(c.titles.map(\.id), ["dir-celeste"])
+        XCTAssertEqual(c.titles.first?.store, .local)
         XCTAssertEqual(c.titles.first?.source, .imported)
+        XCTAssertEqual(try c.titles.first?.launchPlan(cohort: Cohort(titles: [])).args, ["-windowed", "-name x"])
         XCTAssertNil(c.titles.first?.appID, "steam_appid.txt is a hint only")
     }
 
-    func testAnEpicFolderCopiedInSomeOtherWayIsFoundAsEpics() throws {
+    func testAFolderWithEpicsRecordCopiedInSomeOtherWayIsLocal() throws {
         let games = layout.gamesRoot
         try file("Sugar/Sugar.exe", in: games)
         try file("Sugar/.egstore/ABC.mancpn", #"{"FormatVersion":0,"AppName":"Sugar","CatalogNamespace":"ns","CatalogItemId":"x"}"#, in: games)
         try file("Plain/plain.exe", in: games)
         let c = Adoption.scan(games: games, cohort: Cohort(titles: []), receipts: [], previous: Catalog())
-        XCTAssertEqual(c.titles.map(\.id).sorted(), ["dir-plain", "epic-Sugar"])
-        XCTAssertEqual(c.titles.first { $0.id == "epic-Sugar" }?.store, .epic)
+        XCTAssertEqual(c.titles.map(\.id).sorted(), ["dir-plain", "dir-sugar"])
+        XCTAssertEqual(Set(c.titles.map(\.store)), [.local])
     }
 
     func testTheExecutablePickerRanksAndThePlayersPickSticks() throws {

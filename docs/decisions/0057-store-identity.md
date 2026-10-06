@@ -18,9 +18,14 @@ store; 0045's library rules are unchanged.
   before says nothing and an app ID then means Steam. A title's source gains
   `imported` (a folder Playport copied in from Files).
 - **A copy is identified by its receipt** (Steam's `installs/<appID>.json`; every other
-  store's and every import's `installs/<store>-<id>.json`, a `StoreReceipt`), by a
-  cohort pin, or (Phase 1.2) by a store's own marker in the folder (`goggame-<id>.info`,
-  `.egstore`). Never by its name. `steam_appid.txt` is a hint, not a Steam identity.
+  store's and every import's `installs/<store>-<id>.json`, a `StoreReceipt`) or by a
+  cohort pin. Never by its name.
+- **The sources are separate** (owner, 2026-10-06): Local, Steam, GOG and Epic. A store's
+  copy is one Playport installed from that store. A game added from Files, or put in
+  `C:\Games` any other way, is Local, even when its files came from a store: a
+  `goggame-<id>.info` or `.egstore` record in the folder only says which executable and
+  arguments start it, and `steam_appid.txt` is only a hint. A Local game never joins a
+  store's listing.
 - **Joins, downloads, art and navigation use the key.** The library joins an installed
   copy to its own store's listing only; the download queue holds one job per key (an
   old queue's jobs load as Steam's); a game page can be opened by key (`GameRef.store`);

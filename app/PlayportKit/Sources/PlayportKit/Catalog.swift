@@ -252,21 +252,14 @@ public enum Adoption {
                                    buildID: c.buildID, depots: c.depots, sizeBytes: c.installedSize, source: .cohort,
                                    checksums: c.checksums, note: c.note, addedAt: now, lastPlayed: nil,
                                    lastVerification: nil)
-            } else if let m = StoreMarkers.detect(in: dir) {
-                // A store's copy put here some other way: its marker names it (decision 0057).
-                t = InstalledTitle(id: m.key.titleID, appID: nil, name: m.name ?? folder, developer: nil, installDir: folder,
-                                   executable: m.executable ?? pick(exes, folder: folder, in: dir), buildID: nil, depots: [],
-                                   sizeBytes: nil, source: .found, checksums: nil, note: nil, addedAt: now,
-                                   lastPlayed: nil, lastVerification: nil)
-                t.store = m.key.store
-                t.storeID = m.key.id
-                t.storeArguments = m.arguments
-                t.storeVersion = m.version
             } else {
-                t = InstalledTitle(id: "dir-\(folder.lowercased())", appID: nil, name: folder, developer: nil,
-                                   installDir: folder, executable: pick(exes, folder: folder, in: dir), buildID: nil, depots: [],
-                                   sizeBytes: nil, source: .found, checksums: nil, note: nil, addedAt: now,
-                                   lastPlayed: nil, lastVerification: nil)
+                // A Local game. A store's launch record in the folder only says how to start it.
+                let m = StoreMarkers.detect(in: dir)
+                t = InstalledTitle(id: "dir-\(folder.lowercased())", appID: nil, name: m?.name ?? folder, developer: nil,
+                                   installDir: folder, executable: m?.executable ?? pick(exes, folder: folder, in: dir),
+                                   buildID: nil, depots: [], sizeBytes: nil, source: .found, checksums: nil, note: nil,
+                                   addedAt: now, lastPlayed: nil, lastVerification: nil)
+                t.storeArguments = m?.arguments
             }
             if t.storeID == nil {
                 t.store = t.appID == nil ? .local : .steam

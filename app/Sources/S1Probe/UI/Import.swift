@@ -64,7 +64,6 @@ final class GameImports: ObservableObject, DownloadDriver {
         }
         let receipt = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
         SteamUILog.logger.info("import", "\(job.key): \(receipt.files) files, \(receipt.bytes) bytes into C:\\Games\\\(folder)"
-                               + (receipt.store == .local ? "" : " (a \(receipt.store.label) copy, \(receipt.key))")
                                + (p.plan.skippedSymlinks > 0 ? ", \(p.plan.skippedSymlinks) symlinks skipped" : ""))
         Self.event("done", job, ["files": receipt.files, "bytes": receipt.bytes, "store": receipt.store.rawValue,
                                  "id": StoreGameKey(store: receipt.store, id: receipt.storeID).titleID])
@@ -110,8 +109,7 @@ final class GameImports: ObservableObject, DownloadDriver {
         } else if ext == "zip" {
             source = .zip(url)
         } else if ext == "exe" {
-            return "Playport doesn't run installers. Pick the installed game's folder (or a .zip of it), "
-                + "or sign in to GOG in Settings › Accounts to install the game from there."
+            return "Playport doesn't run installers. Pick the installed game's folder, or a .zip of it."
         } else {
             return "Pick a game's folder or a .zip of it."
         }
