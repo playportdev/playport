@@ -44,6 +44,11 @@ final class SteamAccountModel: ObservableObject {
     @Published private(set) var cloud: [UInt32: SteamService.CloudSync] = [:]
     @Published private(set) var cloudSyncing: Set<UInt32> = []
     @Published private(set) var cloudErrors: [UInt32: String] = [:]
+    /// Set when a title launch suspends the session (suspendForLaunch): from
+    /// then on this process does no Steam work, so a page's sync is skipped
+    /// rather than shown as "Not synced"; the next start of the app syncs
+    /// every played game (syncPlayedStats).
+    @Published private(set) var suspendedForLaunch = false
 
     /// Settings' switch for every game's Steam Cloud sync.
     static let cloudKey = "steamCloud"
@@ -83,6 +88,7 @@ final class SteamAccountModel: ObservableObject {
     /// CM session, and keep Steam work out of this process from here on.
     /// The caller holds the model until the suspension has run.
     func suspendForLaunch() async {
+        suspendedForLaunch = true
         installs.holdForLaunch()
         pairTask?.cancel()
         pairTask = nil
@@ -99,7 +105,7 @@ final class SteamAccountModel: ObservableObject {
     func loadGameProfile(_ appID: UInt32, refresh: Bool = false) async {
         if let kept = await service.gameProfile(appID: appID) { gameProfiles[appID] = kept }
         let stale = gameProfiles[appID].map { Date().timeIntervalSince($0.fetchedAt) > Self.gameProfileAge } ?? true
-        guard refresh || stale, case .signedIn = state, !gameProfileLoading.contains(appID) else { return }
+        guard refresh || stale, case .signedIn = state, !suspendedForLaunch, !gameProfileLoading.contains(appID) else { return }
         gameProfileLoading.insert(appID)
         defer { gameProfileLoading.remove(appID) }
         do {
@@ -116,7 +122,7 @@ final class SteamAccountModel: ObservableObject {
     /// earned goes to Steam. Needs the session, so a play's results go at the
     /// next start of the app, where every played game is synced.
     func syncStats(_ appID: UInt32) async {
-        guard case .signedIn = state, !statsSyncing.contains(appID) else { return }
+        guard case .signedIn = state, !suspendedForLaunch, !statsSyncing.contains(appID) else { return }
         statsSyncing.insert(appID)
         defer { statsSyncing.remove(appID) }
         do {
@@ -144,7 +150,7 @@ final class SteamAccountModel: ObservableObject {
     /// (SteamService.syncCloud), with the player's choices for conflicts.
     /// Nothing when Steam Cloud is off in Settings or on the game's page.
     func syncCloud(_ appID: UInt32, resolve: [String: SteamService.CloudChoice] = [:]) async {
-        guard Self.cloudOn, case .signedIn = state, !cloudSyncing.contains(appID),
+        guard Self.cloudOn, case .signedIn = state, !suspendedForLaunch, !cloudSyncing.contains(appID),
               let t = LibraryModel.shared.catalog.titles.first(where: { $0.appID == appID }),
               LaunchSettingsStore.shared.binding(for: t.id).wrappedValue.cloudSync ?? true else { return }
         cloudSyncing.insert(appID)
