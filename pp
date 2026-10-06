@@ -39,6 +39,11 @@ Drive the phone (dev app)
   pp phone status | kill | log [DIR] | ls REMOTE | pull REMOTE [DIR] | shot [FILE] | crashes [DIR] [--since T]
   pp phone lock [--wait S] -- CMD run CMD under one hold of the lock: one session for a sequence
                                   (install, then plays, a pad) that no other agent may split
+  pp phone unattended on [--hours N] | off | status
+                                  nobody watches the phone: each release of the lock leaves the dev
+                                  app's black screen up (lowest brightness) when the app is not
+                                  running, to spare the OLED (default 12 h; off ends it)
+  pp phone rest [--if-unattended] the black screen now (as above; build/install's hook)
 
 Upstream and review
   pp sync [<madeira-sha>] [--replay]
@@ -284,6 +289,17 @@ def cmd_phone(args):
                 return 2
             with phonelib.device_lock(" ".join(rest)[:120], wait=wait, events=ev):
                 return subprocess.call(rest, env=dict(phonelib.pmd_env(), PLAYPORT_DEVICE_LOCK_HELD="1"))
+        if sub == "unattended":
+            return phone_unattended(rest, ev)
+        if sub == "rest":
+            if rest not in ([], ["--if-unattended"]):
+                return phonelib.fail(ev, "pp phone rest [--if-unattended]", 2)
+            if rest and not phonelib.unattended():
+                return ev.result(True, 0, rested=False, why="not unattended")
+            out = phonelib.run_dir("phone")
+            with phonelib.device_lock("pp phone rest", events=ev):
+                pid = phonelib.rest(ev, out)
+            return ev.result(True, 0, rested=bool(pid))
         out = phonelib.run_dir("phone")
         with phonelib.device_lock("pp phone " + sub, events=ev):
             phone = phonelib.Phone(out, events=ev).ensure()
@@ -336,10 +352,34 @@ def cmd_phone(args):
         return phonelib.fail(ev, str(e))
 
 
+def phone_unattended(args, ev):
+    """pp phone unattended on [--hours N] | off | status (tools/phonelib.py, unattended mode)."""
+    usage = "pp phone unattended on [--hours N] | off | status"
+    if args in ([], ["status"]):
+        return ev.result(True, 0, unattended=phonelib.unattended())
+    if args == ["off"]:
+        phonelib.set_unattended(0)
+        return ev.result(True, 0, unattended=None)
+    if args[:1] != ["on"] or len(args) not in (1, 3) or (len(args) == 3 and args[1] != "--hours"):
+        return phonelib.fail(ev, usage, 2)
+    try:
+        hours = float(args[2]) if len(args) == 3 else 12
+    except ValueError:
+        return phonelib.fail(ev, usage, 2)
+    if not 0 < hours <= 72:
+        return phonelib.fail(ev, "pp phone unattended on --hours N: N from 0 to 72", 2)
+    rec = phonelib.set_unattended(hours)
+    out = phonelib.run_dir("phone")
+    with phonelib.device_lock("pp phone unattended on", events=ev):
+        pid = phonelib.rest(ev, out)
+    return ev.result(True, 0, unattended=rec, rested=bool(pid))
+
+
 def phone_status():
     """One JSON object: reachable, the app and whether it runs, its battery, the last install,
     the lock holder (with its command)."""
-    s = {"device_dir": phonelib.DEVICE_DIR, "holder": phonelib.holder(), "installed": phonelib.installed()}
+    s = {"device_dir": phonelib.DEVICE_DIR, "holder": phonelib.holder(), "installed": phonelib.installed(),
+         "unattended": phonelib.unattended()}
     if s["installed"]:
         s["installed"]["this_checkout"] = phonelib.same_checkout(s["installed"], REPO)
     phone = phonelib.Phone()

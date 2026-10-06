@@ -41,6 +41,8 @@
 //                              `open:licences#<prefix>` the files of the first component
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
 //                              UI/LicencesView.swift)
+//                              `open:black` shows Settings › Developer › Black screen
+//                              (BlackScreen.swift), as its row does
 //   probe:helper-exit | probe:helper-kill [-hold]
 //                              Settings' helper-lifetime probe (HelperLifetimeProbe.swift):
 //                              the run ends with ui-done, and the app ends itself 2 s later;
@@ -164,7 +166,9 @@ enum UIDriver {
                 case "open":
                     let nav = AppNavigation.shared
                     let parts = id.split(separator: "#", maxSplits: 1).map(String.init)
-                    if parts.first == "licences" {
+                    if parts.first == "black" {
+                        BlackScreen.shared.show()
+                    } else if parts.first == "licences" {
                         var pages: [LicencePage] = []
                         if parts.count > 1 {
                             guard case .success(let licences) = BundledLicences.loaded,

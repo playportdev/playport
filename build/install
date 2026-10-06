@@ -263,17 +263,27 @@ if [ "$held" != 1 ]; then
         say "waiting for the phone: $(cat "$HOLDER" 2>/dev/null || echo 'holder unknown')"
         flock ${LOCK_WAIT:+-w "$LOCK_WAIT"} 9 || die "$DEVICE_LOCK still held after ${LOCK_WAIT}s"
     }
+    SESSION="install-$$-$(date +%s)"
     jq -cn --argjson pid $$ --arg what "pp install $(basename "$IPA")" --arg checkout "$PLAYPORT_REPO" \
-        --arg session "install-$$-$(date +%s)" --arg since "$(date -Is)" \
+        --arg session "$SESSION" --arg since "$(date -Is)" \
         '{pid: $pid, what: $what, checkout: $checkout, session: $session, since: $since}' > "$HOLDER"
     trap 'rm -f "$HOLDER"' EXIT
 fi
+# Unattended mode (tools/phonelib.py): the app's black screen, while this install holds the
+# lock. Under a caller's hold, its own release does it.
+rest_if_unattended() {
+    [ "$held" = 1 ] && return 0
+    PLAYPORT_DEVICE_LOCK_HELD=1 PLAYPORT_DEVICE_SESSION="$SESSION" \
+        "$PLAYPORT_REPO/pp" phone rest --if-unattended > "$LOG/rest.out" 2>&1 ||
+        say "note: the unattended black screen did not come up ($LOG/rest.out)"
+}
 # Under the lock, so another checkout's install cannot slip in between.
 if [ "$FORCE" = 0 ] && [ -n "$INSTALLED" ] && [ "$(jq -r .ipa_sha256 "$STATE" 2>/dev/null)" = "$SHA" ]; then
     say "the phone already has this IPA (last install, $STATE); nothing to do (--force installs anyway)"
     # The same IPA may have come from another checkout; it is now this checkout's to drive.
     jq --arg ipa "$IPA" --arg checkout "$PLAYPORT_REPO" --arg head "$(git -C "$PLAYPORT_REPO" rev-parse --short HEAD)" \
         '.ipa = $ipa | .checkout = $checkout | .head = $head' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+    rest_if_unattended
     exit 0
 fi
 # From here until the new record is written the phone's build is unknown: pp ui refuses it.
@@ -322,4 +332,5 @@ jq -n --arg ipa "$IPA" --arg sha "$SHA" --arg variant "$(case $(basename "$IPA")
     --arg at "$(date -Is)" --arg expires "$(date -d "@$EXPIRY" -Is)" \
     '{ipa: $ipa, ipa_sha256: $sha, variant: $variant, checkout: $checkout, head: $head,
       installed_at: $at, profile_expires: $expires}' > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+rest_if_unattended
 say "done: open Playport from the Home Screen (profile valid until $(date -d "@$EXPIRY" '+%F %H:%M')); log $LOG"

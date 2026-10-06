@@ -24,6 +24,8 @@ model calls: each --action in order, then --settings, --verify, --play:
                          files of the first component whose name starts with PREFIX (open:licences#wine);
                          there pad:down/up move through the rows and a text's paragraphs, pad:a opens
                          the ringed one, pad:b goes back a page.
+                         open:black shows Settings › Developer › Black screen (pure black, lowest
+                         brightness; a tap or any button wakes it; pp phone unattended).
                          In Settings up and down move along its list and show each section, right
                          goes into it, left and B come back, B on the list closes Settings;
                          pad:left/right change a Graphics value.
@@ -376,7 +378,7 @@ def parse(argv=None):
             p.error(f"{t!r} is not a catalogue title id (app-367520)")
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
-                                      and x[5:].split("#")[0] not in SCREENS + ("licences",)):
+                                      and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
             p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
     a.settings_pair = None

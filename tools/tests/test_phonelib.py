@@ -179,6 +179,43 @@ class PhonelibTest(unittest.TestCase):
             self.assertNotEqual(pl.session(), first)
         self.assertIsNone(pl.session())
 
+    def test_unattended_mark_lasts_its_hours(self):
+        pl = self.pl
+        self.assertIsNone(pl.unattended())
+        rec = pl.set_unattended(2)
+        self.assertAlmostEqual(rec["until"] - time.time(), 7200, delta=5)
+        self.assertEqual(pl.unattended()["until"], rec["until"])
+        spit(pl.UNATTENDED, "w", json.dumps({"until": time.time() - 1}))
+        self.assertIsNone(pl.unattended())
+        pl.set_unattended(1)
+        pl.set_unattended(0)
+        self.assertFalse(os.path.exists(pl.UNATTENDED))
+        spit(pl.UNATTENDED, "w", "not json")
+        self.assertIsNone(pl.unattended())
+
+    def test_the_outermost_release_rests_only_when_unattended(self):
+        pl = self.pl
+        rests = []
+        pl.rest = lambda events=None, out=None: rests.append(pl.holder()["what"])
+        with pl.device_lock("attended"):
+            pass
+        self.assertEqual(rests, [])
+        pl.set_unattended(1)
+        with pl.device_lock("outer"):
+            with pl.device_lock("nested"):
+                pass
+            self.assertEqual(rests, [])
+        # once, at the outer release, still under its hold
+        self.assertEqual(rests, ["outer"])
+        self.assertIsNone(pl.holder())
+
+        def fails(events=None, out=None):
+            raise pl.PhoneError("no phone")
+        pl.rest = fails
+        with pl.device_lock("phone gone"):   # a failed rest does not fail the job
+            pass
+        self.assertIsNone(pl.holder())
+
     def write_state(self, **rec):
         with open(self.pl.STATE, "w") as f:
             json.dump(rec, f)

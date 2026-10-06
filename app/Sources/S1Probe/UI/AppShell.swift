@@ -86,6 +86,12 @@ struct AppShell: View {
         .overlay { DownloadModeView(installs: model.installs) }
         // The opening animation, over everything until Home's cards have landed (UI/AppOpening.swift).
         .overlay { if opening.covering { OpeningView() } }
+        // Dev builds: Settings › Developer › Black screen, over everything (Dev/BlackScreen.swift).
+        .overlay {
+            #if !PLAYPORT_RELEASE
+            BlackScreenView()
+            #endif
+        }
         .padFocusRoot()
         .onReceive(PadRouter.shared.presses) { press($0) }
         // Choosing a pairing file (the checklist's step on iOS 26, Setup check's import): touch only, as Files is.
@@ -112,6 +118,7 @@ struct AppShell: View {
             // A first run: the checklist (UI/SetupView.swift).
             SetupState.shared.showAtStartIfFirstRun()
             #if !PLAYPORT_RELEASE
+            BlackScreen.restoreAtStart()
             UIDriver.startIfRequested()
             #endif
         }
@@ -122,6 +129,9 @@ struct AppShell: View {
             } else {
                 model.sceneLeftActive()
                 DownloadDimmer.shared.sceneLeftActive()
+                #if !PLAYPORT_RELEASE
+                BlackScreen.shared.wake()
+                #endif
             }
         }
     }
@@ -214,6 +224,10 @@ struct AppShell: View {
     private func press(_ b: NavButton) {
         // The opening animation covers the shell: nothing to press yet.
         if opening.covering { return }
+        #if !PLAYPORT_RELEASE
+        // The black screen: any button wakes it, and does nothing else.
+        if BlackScreen.shared.shown { return BlackScreen.shared.wake() }
+        #endif
         // Download mode: any button wakes it, and does nothing else.
         let dimmer = DownloadDimmer.shared
         if dimmer.dimmed { return dimmer.wake() }
