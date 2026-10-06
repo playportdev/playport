@@ -154,12 +154,15 @@ struct PageArt: Equatable {
     let name: String
     /// The store's app, when the page has it; else GameArt looks the game up.
     let info: SteamAppInfo?
+    /// The catalogue's title (a local game's icon) and a GOG product (GOG's art).
+    var titleID: String? = nil
+    var gogKey: String? = nil
 
     @ViewBuilder var view: some View {
         if let info {
             SteamArtView(app: info, kind: .hero, placeholder: PP.tile(for: name))
         } else {
-            GameArt(appID: appID, name: name, kind: .hero)
+            GameArt(appID: appID, name: name, kind: .hero, titleID: titleID, gogKey: gogKey)
         }
     }
 }

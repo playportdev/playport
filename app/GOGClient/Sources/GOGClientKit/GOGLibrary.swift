@@ -20,7 +20,8 @@ public struct GOGGame: Codable, Equatable, Sendable, Identifiable {
         self.dlcCount = dlcCount
     }
 
-    /// The art at one of GOG's sizes: `_glx_logo`, `_196`, `_bg_crop_1920x655`, `_product_card_v2_mobile_slider_639`.
+    /// The art at one of GOG's sizes (measured 2026-10-06): `_800` 800×370 (a tile),
+    /// `_bg_crop_1920x655` (a page backdrop), `_1600` 1600×740; `_glx_logo` is only 100×60.
     public func art(_ suffix: String) -> URL? {
         guard let image, !image.isEmpty else { return nil }
         let base = image.hasPrefix("//") ? "https:" + image : image

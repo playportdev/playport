@@ -1753,6 +1753,15 @@ final class SetupChecklistTests: XCTestCase {
         XCTAssertFalse(SetupChecklist.offersNotNow(.pairing, f, firstRun: true))
         f.steamSignedIn = true
         XCTAssertFalse(SetupChecklist.offersNotNow(.steam, f, firstRun: true))
+        // GOG alone settles the Accounts step too.
+        var g = SetupFacts(pairing: true, tunnelUp: true, steamSignedIn: false, memoryEntitled: true)
+        XCTAssertFalse(SetupChecklist.complete(g))
+        g.gogSignedIn = true
+        XCTAssertTrue(SetupChecklist.complete(g))
+        XCTAssertEqual(SetupChecklist.item(.steam, g).title, "Accounts")
+        XCTAssertTrue(SetupChecklist.item(.steam, g).detail.hasPrefix("Signed in to GOG"))
+        g.gogSignedIn = nil
+        XCTAssertNil(g.accountSignedIn, "unknown while GOG is still being read")
     }
 
     func testTheMemoryStepIsTheEntitlementOrNotNow() {

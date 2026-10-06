@@ -255,8 +255,9 @@ private struct GameDetailPage: View {
             Color.clear
                 .preference(key: PageArtKey.self,
                             value: g.map { PageArt(appID: $0.id, name: name, info: $0.info) }
-                                ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil) }
-                                ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil) })
+                                ?? t.map { PageArt(appID: $0.appID, name: $0.name, info: nil, titleID: $0.id,
+                                                   gogKey: $0.store == .gog ? $0.key.id : nil) }
+                                ?? gogGame.map { PageArt(appID: nil, name: $0.title, info: nil, gogKey: $0.id) })
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {

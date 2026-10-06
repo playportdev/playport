@@ -211,6 +211,8 @@ struct AppShell: View {
             let grid = LibraryGrid.shared
             h.append(PadHint(button: .view, label: "Filter & sort") { grid.openFilterSort() })
             h.append(PadHint(button: .y, label: "Search") { grid.openSearch() })
+            // Add a game (UI/Import.swift): on every filter, not only at the grid's end.
+            h.append(PadHint(button: .x, label: "Add a game") { GameImports.requests.send() })
             if !grid.search.isEmpty {
                 h.append(PadHint(button: .b, label: "Clear search") { grid.clearSearch() })
                 return h + [PadHint(button: .menu, label: "Settings") { _ = nav.open("settings") }]

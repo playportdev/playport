@@ -10,8 +10,9 @@
 // page over the grid. Works offline, with no Steam session: the owned games
 // come from the disk cache.
 //
-// After the games, an Add a game tile (UI/Import.swift) opens Files to import a
-// game's folder or .zip; it shows in All and Installed, and on the empty page.
+// Add a game (UI/Import.swift) opens Files to import a game's folder or .zip: a
+// button at the chips' right and X in the footer on every filter, an entry in the
+// ⧉ picker, and a tile after the games in All and Installed and on the empty page.
 //
 // The grid is lazy, so a tile off screen is not drawn; the grid reports every
 // tile's frame to the focus ring itself (padFrames), and when the ring moves to
@@ -50,10 +51,12 @@ final class LibraryGrid: ObservableObject {
         let show = "Show", order = "Sort"
         PadModal.shared.picker(title: "Filter & sort", context: "Library",
                                options: Self.filters.map { .init(id: "filter:\($0.rawValue)", label: Self.label($0), section: show) }
+                                   + [.init(id: "add", label: "Add a game", detail: "From Files: a folder or a .zip", section: "Games")]
                                    + [.init(id: "sort:\(LibrarySort.recent.rawValue)", label: "Recent", detail: "Last played first", section: order),
                                       .init(id: "sort:\(LibrarySort.name.rawValue)", label: "Name", detail: "A to Z", section: order),
                                       .init(id: "sort:\(LibrarySort.size.rawValue)", label: "Size", detail: "Largest first", section: order)],
                                selected: ["filter:\(filter.rawValue)", "sort:\(sort.rawValue)"]) { [weak self] id in
+            if id == "add" { GameImports.requests.send(); return }
             let parts = id.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return }
             if parts[0] == "filter", let f = LibraryFilter(rawValue: parts[1]) { self?.filter = f }
@@ -196,6 +199,20 @@ private struct LibraryGridView: View {
                 .accessibilityIdentifier("library-search")
             }
             if library.scanning || model.gamesLoading { ProgressView().controlSize(.small) }
+            // Not in the ring (it leaves the tiles alone): X does it; a tap here.
+            Button { GameImports.requests.send() } label: {
+                HStack(spacing: 5) {
+                    if imports.planning { ProgressView().controlSize(.mini) } else { Image(systemName: "plus").font(.system(size: 11, weight: .bold)) }
+                    Text("Add a game")
+                    PadGlyph(button: .x).scaleEffect(0.8)
+                }
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(PP.text)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(PP.surface, in: Capsule())
+                .overlay(Capsule().strokeBorder(PP.line, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("library-add")
             Button { grid.openFilterSort() } label: {
                 Text("Sort: \(LibraryGrid.label(grid.sort))")
                     .font(.system(size: 12)).foregroundStyle(PP.muted)
@@ -392,7 +409,8 @@ private struct LibraryTile: View {
             ZStack(alignment: .bottomLeading) {
                 Color.clear.overlay { GameArt(appID: entry.appID, name: entry.name, kind: .header, titleID: entry.installed ? entry.id : nil,
                                                  gogKey: entry.source == .gog ? entry.key.id : nil) }.clipped()
-                if game == nil || job != nil {
+                // The name over the art, unless a store's art (which carries it) is there.
+                if (game == nil && !(entry.source == .gog && GOGAccount.shared.game(entry.key.id)?.image != nil)) || job != nil {
                     LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
                     Text(entry.name)
                         .font(PP.display(14)).textCase(.uppercase).tracking(0.5).foregroundStyle(.white).lineLimit(2)

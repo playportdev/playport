@@ -206,9 +206,16 @@ final class GOGArt: ObservableObject {
     @Published private var images: [String: UIImage] = [:]
     private var loading = Set<String>()
 
-    /// `_glx_logo` is GOG's wide tile; `_bg_crop_1920x655` its page backdrop.
+    /// `_800` (800×370) for a tile; `_bg_crop_1920x655` behind a page.
+    nonisolated static func suffix(wide: Bool) -> String { wide ? "_bg_crop_1920x655" : "_800" }
+
+    /// The page backdrop already on disk, for the launch screen (TitleLaunch).
+    nonisolated static func cachedHero(_ productID: String) -> UIImage? {
+        (try? Data(contentsOf: GOGAccount.art.appendingPathComponent(productID + suffix(wide: true) + ".jpg"))).flatMap(UIImage.init(data:))
+    }
+
     func image(_ g: GOGGame, wide: Bool) -> UIImage? {
-        let suffix = wide ? "_bg_crop_1920x655" : "_glx_logo"
+        let suffix = Self.suffix(wide: wide)
         let key = "\(g.id)\(suffix)"
         if let i = images[key] { return i }
         guard let url = g.art(suffix), loading.insert(key).inserted else { return nil }
