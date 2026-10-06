@@ -4,7 +4,7 @@
 
 **Audit observations completed; embedded idevice provenance and notice coverage
 remain unresolved.** Neither publication gate in
-[the release plan](../plans/open-source-release.md) is satisfied by this audit.
+[the release plan](../plans/finished.md#open-source-publication-and-the-first-ipa) is satisfied by this audit.
 No binary revision has been inferred from a current upstream branch, matching
 crate versions, timestamps, generated headers or a Rust compiler string.
 

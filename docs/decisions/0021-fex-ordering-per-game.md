@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-09-28; its `X87ReducedPrecision` part is
 superseded by [0048](0048-x87-reduced-precision-global.md) and its `MaxInst`
 part by [0055](0055-maxinst-500-global.md) (Proton's global values are now taken). Settles item 4 of the
-[runtime-risks plan](../plans/2026-09-27-runtime-risks.md) (FEX's memory
+[runtime-risks plan](../plans/finished.md#runtime-risks) (FEX's memory
 ordering has a known gap). The measurements are in the
 [evidence record](../evidence/2026-09-28-fex-memory-ordering.md).
 

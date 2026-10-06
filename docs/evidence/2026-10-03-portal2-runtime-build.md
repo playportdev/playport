@@ -2,7 +2,7 @@
 
 ## Result
 
-The [plan's step 1](../PORTAL2-PLAN.md#step-1-build-the-pieces-done-2026-10-03)
+The [plan's step 1](../plans/finished.md#portal-2)
 builds, stages and verifies the new runtime pieces. **It does not run i386
 code or remove Portal 2's low-address launch blocker.** No cohort decision,
 new launcher or test executable was added. Next is step 2's per-process Wine

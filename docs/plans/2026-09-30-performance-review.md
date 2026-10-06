@@ -4,7 +4,7 @@
 series were applied to scratch trees; nothing was built, installed or run on
 the phone, so every cost below is a hypothesis until a `pp perf` A/B shows it.
 **Tree:** `e700809`. **Extends:**
-[the 2026-09-28 follow-up plan](2026-09-28-performance-follow-up.md). Its
+[the 2026-09-28 follow-up plan](finished.md#performance-follow-up-after-the-runtime-audit). Its
 measurement rules apply to every experiment here.
 
 Scope: thermal throttling, hitches and lag. The areas reviewed:

@@ -1,6 +1,6 @@
 # FEX memory ordering: re-measured after the Wine plan, Proton's profiles per game, vector ordering's cost, LRCPC2
 
-**Date:** 2026-09-28. **Plan:** [runtime risks](../plans/2026-09-27-runtime-risks.md),
+**Date:** 2026-09-28. **Plan:** [runtime risks](../plans/finished.md#runtime-risks),
 item 4. **Decision:** [0021](../decisions/0021-fex-ordering-per-game.md).
 **IPA:** dev, sha256
 `a0add0d047db27d9110ecce0fe519d07bcae4b3fb156618a553ecb0c03109211`
@@ -12,7 +12,7 @@ agents' sessions between these runs. Run directories are in this worktree's
 
 ## 1. The gap still holds after the Wine plan
 
-The [Wine-on-Proton plan](../plans/2026-09-27-wine-on-proton.md) ended as
+The [Wine-on-Proton plan](../plans/finished.md#wine-from-valves-proton-branch) ended as
 `patches/wine-valve` ([decision 0018](../decisions/0018-valve-wine-as-a-series.md)),
 which takes none of Valve's FEX or ARM64EC commits and does not touch FEX's
 configuration ([its record](2026-09-28-wine-proton-rebase.md), section 4).

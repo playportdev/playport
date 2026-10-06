@@ -2,7 +2,7 @@
 
 **Status:** built, checked on the host, and one Hollow Knight play on the phone;
 The Witcher 3 and a symbolised profile not yet run.
-**Date:** 2026-09-29. Plan: [performance follow-up](../plans/2026-09-28-performance-follow-up.md),
+**Date:** 2026-09-29. Plan: [performance follow-up](../plans/finished.md#performance-follow-up-after-the-runtime-audit),
 step 5. [Decision 0019](../decisions/0019-jit-pool-sized-from-the-limit.md)
 named this follow-up.
 

@@ -9,7 +9,7 @@ device-lock session:
 | --- | --- | --- |
 | `Playport-26.5-4c4b654c.ipa` | `4c4b654c1cf742b9bec11fe279bca9579e063a37b5b63b9fda51ce25efe47d72` | madeira-unix 0035 (the counts) and 0036 (W+X fails), the `limits:` lines |
 
-Item 8 of the [runtime-risks plan](../plans/2026-09-27-runtime-risks.md) names
+Item 8 of the [runtime-risks plan](../plans/finished.md#runtime-risks) names
 four limits. For each one, the question was whether any title reaches it. None
 does, so each now fails loudly or is counted, as the plan allows, rather than
 handled in full ([ARCHITECTURE.md, "Known runtime
@@ -83,7 +83,7 @@ in [timelines.txt](2026-09-28-runtime-limits/timelines.txt).
   `UNALIGNED-EXCL` and no alias table FULL, and every `[x18-patch]` line has
   `unpatched=0`.
 - **En Garde!** stopped at the fault its
-  [plan](../plans/2026-09-27-en-garde.md) records as open. It is a null read
+  [plan](../plans/finished.md#en-garde) records as open. It is a null read
   in ARM64EC code (`AV READ of 0` at guest `0x71fe809574`), re-delivered 2000
   times until the runtime ends the process (`[redeliv] terminating process`).
   The app ended before any `limits:` or `pool:` line reached its log. The

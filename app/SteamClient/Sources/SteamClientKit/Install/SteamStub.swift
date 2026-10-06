@@ -7,7 +7,7 @@ import Darwin
 #endif
 
 /// Steam's DRM wrapper (SteamStub) taken off a game's executable, and put
-/// back (docs/plans/2026-09-27-steam-for-games.md, phase 2). A wrapped
+/// back (docs/plans/finished.md#steam-for-games, phase 2). A wrapped
 /// executable starts in a `.bind` section whose stub checks for a running
 /// Steam client before it jumps to the game's own entry point; with no Steam
 /// on the phone the game exits there.
@@ -19,7 +19,7 @@ import Darwin
 /// game's code, the code section's AES key. Only what a real executable has
 /// been checked against is unwrapped: variant 3.1, x64, code not encrypted
 /// (En Garde!: docs/evidence/2026-09-27-gbe-steam-api-build.md,
-/// docs/plans/2026-09-27-en-garde.md). Others are recognised and reported,
+/// docs/plans/finished.md#en-garde). Others are recognised and reported,
 /// and left alone.
 ///
 /// Like SteamAPISwap, the game's executable is kept as `<name>.orig` and a

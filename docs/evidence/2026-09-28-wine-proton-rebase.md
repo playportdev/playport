@@ -1,6 +1,6 @@
 # Wine from Valve's Proton branch: measured, and carried as a series
 
-**Date:** 2026-09-28. **Plan:** [Wine from Valve's Proton branch](../plans/2026-09-27-wine-on-proton.md),
+**Date:** 2026-09-28. **Plan:** [Wine from Valve's Proton branch](../plans/finished.md#wine-from-valves-proton-branch),
 steps 0 to 6. **Pins read:** `wine` 7b3fff7 (WineHQ wine-11.18), `wine-port`
 723d1bf, `madeira` 8c050d0; ValveSoftware/wine `proton_11.0` at `dc26e61847081a1b5cb0733dc30feba6ee575482`
 (2026-08-03, the head when fetched). **Status:** done. Step 0 chose B: the base stays

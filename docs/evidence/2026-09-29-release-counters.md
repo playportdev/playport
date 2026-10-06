@@ -2,7 +2,7 @@
 
 **Status:** built, checked on the host and played on the phone with the
 counters on and off. Their cost has not been measured yet. **Date:** 2026-09-29. Plan:
-[performance follow-up](../plans/2026-09-28-performance-follow-up.md), step 3,
+[performance follow-up](../plans/finished.md#performance-follow-up-after-the-runtime-audit), step 3,
 which has the audit table.
 
 ## What was found

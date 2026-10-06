@@ -8,14 +8,12 @@ Apple's terms and the delivery channel require separate review; a working
 personal-team signature is not public-distribution permission.
 [RELEASE-HOSTING.md](RELEASE-HOSTING.md) covers the chosen hosting: free IPAs
 on GitHub Releases with donations on Ko-fi or Patreon; recipients still retain
-their redistribution rights. [plans/open-source-release.md](plans/open-source-release.md)
-tracks separate source-publication and IPA-release gates.
+their redistribution rights.
 
 **What a release owes** ([decision 0042](decisions/0042-the-source-bundle-is-complete.md)):
 the notices in the app, the Corresponding Source of every GPL, LGPL and MPL part
 (`pp source`), the build scripts, and relinking by rebuilding from that source
-([decision 0041](decisions/0041-codecs-supersets-and-relinking.md)). The release
-gates are in [plans/open-source-release.md](plans/open-source-release.md).
+([decision 0041](decisions/0041-codecs-supersets-and-relinking.md)).
 
 An IPA that leaves the workstation, even for one tester, is a distribution:
 the duties in [LICENSING.md](LICENSING.md) apply to that copy. This page is

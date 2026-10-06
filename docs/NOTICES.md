@@ -3,8 +3,8 @@
 The component licences in [LICENSING.md](LICENSING.md) have differing notice
 and attribution duties. This page inventories the collected files, where they
 come from, and the known gaps. It is not a complete linked-code audit or legal
-approval. [plans/open-source-release.md](plans/open-source-release.md) tracks
-completion before an IPA is distributed.
+approval. [DISTRIBUTION.md](DISTRIBUTION.md) lists
+what an IPA owes before it is distributed.
 
 ## Wine fallback fonts
 

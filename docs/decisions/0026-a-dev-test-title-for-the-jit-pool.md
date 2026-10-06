@@ -4,7 +4,7 @@
 [0012](0012-the-ui-is-the-only-entry-point.md), which retired the dev build's
 test programs; the rest of 0012 stands. It follows the answer "Yes" to the
 question of whether a test program may be used for the pool stress test in item 2 of the
-[runtime-risks plan](../plans/2026-09-27-runtime-risks.md) (a launcher that
+[runtime-risks plan](../plans/finished.md#runtime-risks) (a launcher that
 starts child processes). That test had been deferred because no installed title starts a child,
 and 0012 was read as forbidding a staged test program. The runs are in the
 [evidence record](../evidence/2026-09-28-launcher-stress.md).

@@ -784,7 +784,7 @@ only. Host Steam secrets never enter the guest
   token and deletes both; installed games and saves are untouched.
 - **Launch.** `suspendForLaunch()` closes the session and refuses further
   Steam work in the process before the runtime starts.
-- **For games** ([plan](plans/2026-09-27-steam-for-games.md)): at each launch
+- **For games** ([plan](plans/finished.md#steam-for-games)): at each launch
   `SteamAPISwap` puts gbe_fork's `steam_api(64).dll` (`Runtime/steamapi/`) in
   the game's folder and `SteamStub` takes SteamStub 3.1 x64 off its
   executable, each keeping the game's file as `.orig`. Achievements, stats and

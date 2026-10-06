@@ -24,7 +24,7 @@ patch series. The owner's direction of 2026-10-05, as written in the
     0018's rules, not from `proton_11.0`.
   - `dxmt`, `mesa`, `dxvk`, `vkd3d-proton`: their `main`/`master` heads.
   - `madeira`: last, by `pp sync`, after the Madeira reconciliation of the
-    [dependency strategy](../plans/2026-10-05-dependency-strategy.md).
+    [dependency strategy](../plans/finished.md#dependency-strategy).
 - **Small and frequent moves.** Wine moves at every WineHQ tag (every two
   weeks), FEX every one to two weeks, the others when their heads move.
   One dependency per commit (`rpmalloc` goes with `fex`), each with its

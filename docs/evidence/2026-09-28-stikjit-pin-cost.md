@@ -1,6 +1,6 @@
 # What moving the stikjit pin costs, and the iOS versions JIT is known on
 
-**Date:** 2026-09-28. **Plan:** [runtime risks](../plans/2026-09-27-runtime-risks.md),
+**Date:** 2026-09-28. **Plan:** [runtime risks](../plans/finished.md#runtime-risks),
 item 1. **Result:** moving the `stikjit` pin from StikJIT 1.6.0 to 1.9.0, the
 newest release, costs one line in `build/stages/stikjit.sh` (the check after the
 swiftinterface rewrite) and nothing in the script protocol, the idevice notice or

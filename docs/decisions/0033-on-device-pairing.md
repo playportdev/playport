@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-09-30. The [phone experiment](../evidence/2026-09-30-on-device-pairing.md)
 proved same-phone Bonjour discovery, pairing, readiness and Hollow Knight
 first-frame+10 on iOS 27.0 (24A437). Automatic product setup remains to be
-implemented and verified ([plan](../plans/2026-09-30-pairing-file-for-testers.md)).
+implemented and verified ([plan](../plans/finished.md#self-contained-jit-setup-for-a-tester)).
 
 ## Decision
 

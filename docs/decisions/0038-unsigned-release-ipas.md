@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-09-30, by the copyright holder; its always-`--clean`
 build is changed by [0050](0050-release-reuses-the-build.md). It picks what a
 published IPA is and how it is made. It does not approve publishing: the gates
-in [plans/open-source-release.md](../plans/open-source-release.md) still apply.
+in [the open-source release plan](../plans/finished.md#open-source-publication-and-the-first-ipa) still apply.
 
 ## Decision
 

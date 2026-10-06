@@ -6,7 +6,7 @@ iOS 27.0. **Tools:** `pp gpu` and `pp perf --pass-prof`
 ([GPU-DEBUGGING.md](../GPU-DEBUGGING.md)). **Evidence:**
 [metal-tools-without-a-mac](../evidence/2026-09-29-metal-tools-without-a-mac.md).
 **Relation:** complements
-[the performance follow-up](2026-09-28-performance-follow-up.md), which
+[the performance follow-up](finished.md#performance-follow-up-after-the-runtime-audit), which
 covers CPU, power and memory; this plan covers what the GPU tools showed.
 
 ## The runs

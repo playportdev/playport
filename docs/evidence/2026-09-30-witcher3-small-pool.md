@@ -1,7 +1,7 @@
 # The Witcher 3 with a 384 MiB JIT pool
 
 **Status:** one run, a quick check. **Date:** 2026-09-30. Plan:
-[performance follow-up](../plans/2026-09-28-performance-follow-up.md), step 5.
+[performance follow-up](../plans/finished.md#performance-follow-up-after-the-runtime-audit), step 5.
 **IPA:** dev,
 `4c73e9c7b894f4f7ed5bd9221ee863a1165122feaaf502fa7c3f64bf3235566d`, the Wine
 PE set without DWARF ([record](2026-09-29-pe-debug-strip.md)). **Phone:**

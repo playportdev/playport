@@ -6,7 +6,7 @@ phone (iPhone18,4, iOS 27.0), dev variant.
 `release-2026_09_27`) plus `patches/gbe` 0001–0002; Abseil `20250512.1`
 (`76bb24329e8bf5f39704eb10d21b9a80befa7c81`); built by
 `build/stages/steamapi.sh` with llvm-mingw 20260922.
-**Plan:** [phase 1 of the Steam plan](../plans/2026-09-27-steam-for-games.md).
+**Plan:** [phase 1 of the Steam plan](../plans/finished.md#steam-for-games).
 
 ## Build
 

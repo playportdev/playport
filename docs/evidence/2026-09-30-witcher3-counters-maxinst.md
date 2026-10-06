@@ -2,7 +2,7 @@
 
 **Status:** one run of each, against a base run before and after. No
 difference found. **Date:** 2026-09-30. Plan:
-[performance follow-up](../plans/2026-09-28-performance-follow-up.md), steps 2
+[performance follow-up](../plans/finished.md#performance-follow-up-after-the-runtime-audit), steps 2
 and 3, the second title the plan asks for. Hollow Knight's A/B/B/A blocks are in
 [the counters record](2026-09-29-release-counters.md) and
 [the block-size record](2026-09-30-hk-maxinst.md). **IPA:** dev,

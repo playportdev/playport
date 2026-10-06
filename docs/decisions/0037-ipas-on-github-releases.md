@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-09-30, by the copyright holder. This decision picks
 where releases go. It does not approve publishing: the gates in
-[plans/open-source-release.md](../plans/open-source-release.md) still apply.
+[the open-source release plan](../plans/finished.md#open-source-publication-and-the-first-ipa) still apply.
 
 ## Decision
 

@@ -99,7 +99,7 @@ ticket's lifetime.
 
 ## If accepted
 
-- Implement phase 5 as above (docs/plans/2026-09-27-steam-for-games.md).
+- Implement phase 5 as above (docs/plans/finished.md#steam-for-games).
 - Measure the guest-side storage on the phone, and record it in
   `docs/evidence/` before the switch ships in a release build.
 - Amend 0004's "How the host side is kept" to point here.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The download queue's state, apart from the downloads themselves
-// (UI/SteamInstalls.swift runs them; docs/plans/2026-09-28-gamepad-ui.md,
+// (UI/SteamInstalls.swift runs them; docs/plans/finished.md#the-gamepad-first-ui,
 // Hard problem 1 and Downloads):
 //
 // - DownloadQueue: installs, updates and repairs in the order they run, each

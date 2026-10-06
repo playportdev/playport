@@ -21,8 +21,8 @@ parts, while still supplying LGPL/MPL source and usable relinking materials.
 Nothing here grants such permissions.
 
 The current preparation target is **open-source publication, then a free IPA
-with optional support**, not proprietary relicensing. The two publication gates
-are tracked in [plans/open-source-release.md](plans/open-source-release.md);
+with optional support**, not proprietary relicensing. Both publication gates
+are passed ([finished plans](plans/finished.md#open-source-publication-and-the-first-ipa));
 [RELEASE-HOSTING.md](RELEASE-HOSTING.md) describes the chosen flow: free IPAs
 on GitHub Releases and donations on Ko-fi or Patreon (decision 0037).
 Recipients may mirror their GPL copies anywhere.
@@ -251,7 +251,7 @@ accepts the codec patent risk of FFmpeg's H.264, AAC and MPEG decoders ([decisio
 `build/stages/steamapi.sh` builds gbe_fork's regular `steam_api` for x86-64
 and i386 from its pin with `patches/gbe`. The app copies it into a game's
 folder at launch in place of the game's own `steam_api(64).dll`, which it keeps
-beside it (docs/plans/2026-09-27-steam-for-games.md).
+beside it (docs/plans/finished.md#steam-for-games).
 
 - **LGPL-3.0** (gbe_fork's `LICENSE`; the repository names no "or later").
   Conveying it inside a GPL-3.0-or-later app is permitted: LGPL-3.0 is GPL-3.0
