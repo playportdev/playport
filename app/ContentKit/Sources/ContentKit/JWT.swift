@@ -12,12 +12,12 @@ public struct JWTClaims: Sendable, Equatable {
 
     public init(token: Secret<String>) throws {
         let parts = token.value.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else { throw SteamError.protocolChanged("refresh token is not a three-part JWT") }
+        guard parts.count == 3 else { throw ClientError.protocolChanged("refresh token is not a three-part JWT") }
         var b64 = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while b64.count % 4 != 0 { b64 += "=" }
         guard let data = Data(base64Encoded: b64),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw SteamError.protocolChanged("refresh token payload is not JSON")
+            throw ClientError.protocolChanged("refresh token payload is not JSON")
         }
         subject = (obj["sub"] as? String).flatMap { UInt64($0) }
         expiry = (obj["exp"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }

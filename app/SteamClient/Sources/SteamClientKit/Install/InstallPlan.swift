@@ -120,39 +120,67 @@ public struct InstallPlan: Sendable {
     }
 }
 
-/// Where installs live. On the device (`container`): staging under
-/// `Library/titles/.staging`, placed titles in the prefix's
-/// `drive_c/Games/<installdir>`, and
-/// the non-secret state (retained manifests, install records) under
-/// `Library/Application Support/Playport`. Staging and games must share a
-/// volume: the commit is one `rename`.
-public struct InstallLayout: Sendable {
-    public var stagingRoot: URL
-    public var gamesRoot: URL
-    public var stateRoot: URL
-
-    public init(stagingRoot: URL, gamesRoot: URL, stateRoot: URL) {
-        self.stagingRoot = stagingRoot
-        self.gamesRoot = gamesRoot
-        self.stateRoot = stateRoot
+extension InstallPlan {
+    /// The plan as the install engine (ContentKit) stages it: each Steam chunk
+    /// is one whole part, deduplicated by SHA-1; parts keep this plan's chunk
+    /// numbering, so a stage journal from before the engine moved still replays.
+    public var content: ContentPlan {
+        var chunks: [ContentChunk] = []
+        var index: [[UInt8]: Int] = [:]
+        let out = files.map { f in
+            ContentFile(path: f.path, size: f.size, hash: f.sha.map(FileHash.sha1) ?? .none, parts: f.chunks.map { c in
+                let k: Int
+                if let have = index[c.sha] {
+                    k = have
+                } else {
+                    k = chunks.count
+                    index[c.sha] = k
+                    chunks.append(ContentChunk(key: c.sha, size: c.cbOriginal, compressedSize: c.cbCompressed,
+                                               check: .sha1(c.sha), group: f.depotID, checksum: c.crc))
+                }
+                return ContentPart(chunk: k, length: c.cbOriginal, fileOffset: c.offset)
+            })
+        }
+        return ContentPlan(files: out, directories: directories, chunks: chunks, identity: identity)
     }
 
-    public static func container(home: URL) -> InstallLayout {
-        InstallLayout(stagingRoot: home.appendingPathComponent("Library/titles/.staging", isDirectory: true),
-                      gamesRoot: home.appendingPathComponent("Documents/prefix/drive_c/Games", isDirectory: true),
-                      stateRoot: home.appendingPathComponent("Library/Application Support/Playport", isDirectory: true))
+    /// The file holding global chunk `k` (binary search over `firstChunk`).
+    func fileIndex(forChunk k: Int) -> Int? {
+        guard k >= 0, k < chunkCount else { return nil }
+        var lo = 0, hi = files.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if files[mid].firstChunk <= k { lo = mid } else { hi = mid - 1 }
+        }
+        let f = files[lo]
+        return k < f.firstChunk + f.chunks.count ? lo : nil
+    }
+}
+
+extension InstallEngine {
+    /// Stages a Steam plan from a Steam chunk source.
+    public init(tree: URL, journal: URL, source: any ChunkSource, log: Logger, options: Options = Options()) {
+        self.init(tree: tree, journal: journal, source: SteamChunks(steam: source) as any ContentChunkSource, log: log, options: options)
     }
 
-    /// A host-side stand-in: `<root>/staging`, `<root>/Games`, `<root>/state`.
-    public static func root(_ root: URL) -> InstallLayout {
-        InstallLayout(stagingRoot: root.appendingPathComponent("staging", isDirectory: true),
-                      gamesRoot: root.appendingPathComponent("Games", isDirectory: true),
-                      stateRoot: root.appendingPathComponent("state", isDirectory: true))
+    public func run(_ plan: InstallPlan, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Result {
+        try await run(plan.content, progress: progress)
     }
+}
 
-    public var manifestsDir: URL { stateRoot.appendingPathComponent("manifests", isDirectory: true) }
-    public var installsDir: URL { stateRoot.appendingPathComponent("installs", isDirectory: true) }
+/// A Steam chunk source as the engine asks for chunks: by depot and the
+/// manifest's chunk record (SHA-1, Adler-32, sizes).
+struct SteamChunks: ContentChunkSource {
+    let steam: any ChunkSource
 
+    func chunk(_ c: ContentChunk) async throws -> [UInt8] {
+        try await steam.chunk(depotID: c.group, ContentManifestPayload.Chunk(sha: c.key, crc: c.checksum ?? 0, offset: 0,
+                                                                             cbOriginal: c.size, cbCompressed: c.compressedSize))
+    }
+}
+
+/// Steam's stages, retained manifests and receipts, by app ID.
+extension InstallLayout {
     public func stagingTree(appID: UInt32, buildID: UInt32?, suffix: String = "") -> URL {
         stagingRoot.appendingPathComponent("\(appID)_\(buildID.map(String.init) ?? "0")\(suffix)", isDirectory: true)
     }
@@ -170,6 +198,7 @@ public struct InstallLayout: Sendable {
     public func manifestFile(_ d: DepotRef) -> URL { manifestsDir.appendingPathComponent("\(d.depotID)_\(d.gid).json") }
     public func receiptFile(appID: UInt32) -> URL { installsDir.appendingPathComponent("\(appID).json") }
 }
+
 
 /// What is installed where: written after the commit rename, read by verify
 /// and repair, and by the catalogue later. Not a secret.

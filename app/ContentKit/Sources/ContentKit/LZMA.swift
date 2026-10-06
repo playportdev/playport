@@ -11,12 +11,12 @@ public enum LZMA {
 
     public static func decompress(_ input: ArraySlice<UInt8>, properties: UInt8, dictionarySize: UInt32, outSize: Int) throws -> [UInt8] {
         var d = properties
-        guard d < 9 * 5 * 5 else { throw SteamError.protocolChanged("lzma: bad properties byte") }
+        guard d < 9 * 5 * 5 else { throw ClientError.protocolChanged("lzma: bad properties byte") }
         let lc = Int(d % 9); d /= 9
         let lp = Int(d % 5)
         let pb = Int(d / 5)
         guard Int(dictionarySize) <= maxDictionary else {
-            throw SteamError.unsafeContent("lzma dictionary \(dictionarySize) exceeds \(maxDictionary)")
+            throw ClientError.unsafeContent("lzma dictionary \(dictionarySize) exceeds \(maxDictionary)")
         }
         guard outSize > 0 else {
             _ = try input.withUnsafeBufferPointer { try rangeCoderInit($0) }
@@ -40,10 +40,10 @@ public enum LZMA {
 
     /// Checks the range coder's 5-byte preamble; returns the initial code.
     static func rangeCoderInit(_ input: UnsafeBufferPointer<UInt8>) throws -> UInt32 {
-        guard input.count >= 5, input[0] == 0 else { throw SteamError.protocolChanged("lzma: bad range coder init") }
+        guard input.count >= 5, input[0] == 0 else { throw ClientError.protocolChanged("lzma: bad range coder init") }
         var code: UInt32 = 0
         for i in 1...4 { code = code << 8 | UInt32(input[i]) }
-        guard code != 0xFFFF_FFFF else { throw SteamError.protocolChanged("lzma: corrupted range coder") }
+        guard code != 0xFFFF_FFFF else { throw ClientError.protocolChanged("lzma: corrupted range coder") }
         return code
     }
 
@@ -128,7 +128,7 @@ public enum LZMA {
                 code &-= range
                 let t = 0 &- (code >> 31)
                 code &+= range & t
-                guard code != range else { throw SteamError.protocolChanged("lzma: corrupted direct bits") }
+                guard code != range else { throw ClientError.protocolChanged("lzma: corrupted direct bits") }
                 normalize()
                 res = res << 1 &+ (t &+ 1)
             }
@@ -185,14 +185,14 @@ public enum LZMA {
         let pbMask = (1 << pb) - 1, lpMask = (1 << lp) - 1, litShift = 8 - lc
         while pos < outSize {
             // Reading past the end is corruption, not a reason to spin on zeros.
-            guard rc.ip <= rc.inEnd else { throw SteamError.protocolChanged("lzma: truncated input") }
+            guard rc.ip <= rc.inEnd else { throw ClientError.protocolChanged("lzma: truncated input") }
             let posState = pos & pbMask
             if rc.bit(probs + Layout.isMatch + (state << kNumPosBitsMax) + posState) == 0 {
                 let prevByte = pos == 0 ? 0 : Int(out[pos - 1])
                 let p = probs + Layout.literal + 0x300 * (((pos & lpMask) << lc) + (prevByte >> litShift))
                 var symbol = 1
                 if state >= 7 {
-                    guard rep0 < pos else { throw SteamError.protocolChanged("lzma: distance beyond output") }
+                    guard rep0 < pos else { throw ClientError.protocolChanged("lzma: distance beyond output") }
                     var matchByte = Int(out[pos - rep0 - 1])
                     repeat {
                         let matchBit = (matchByte >> 7) & 1
@@ -211,10 +211,10 @@ public enum LZMA {
             // One length decode for both kinds of match, so it inlines once.
             let isRep = rc.bit(probs + Layout.isRep + state) != 0
             if isRep {
-                guard pos > 0 else { throw SteamError.protocolChanged("lzma: rep match at start") }
+                guard pos > 0 else { throw ClientError.protocolChanged("lzma: rep match at start") }
                 if rc.bit(probs + Layout.isRepG0 + state) == 0 {
                     if rc.bit(probs + Layout.isRep0Long + (state << kNumPosBitsMax) + posState) == 0 {
-                        guard rep0 < pos else { throw SteamError.protocolChanged("lzma: distance beyond output") }
+                        guard rep0 < pos else { throw ClientError.protocolChanged("lzma: distance beyond output") }
                         state = state < 7 ? 9 : 11
                         out[pos] = out[pos - rep0 - 1]
                         pos &+= 1
@@ -245,72 +245,16 @@ public enum LZMA {
                 (rep0, rc) = try RangeCoder.distance(rc, probs, len)
                 if rep0 == 0xFFFF_FFFF { return pos } // end marker
             }
-            guard rep0 < pos else { throw SteamError.protocolChanged("lzma: distance beyond output") }
+            guard rep0 < pos else { throw ClientError.protocolChanged("lzma: distance beyond output") }
             len += kMatchMinLen
-            guard pos + len <= outSize else { throw SteamError.unsafeContent("lzma output exceeds declared size \(outSize)") }
+            guard pos + len <= outSize else { throw ClientError.unsafeContent("lzma output exceeds declared size \(outSize)") }
             // Byte by byte: a match may overlap the bytes it produces.
             var src = out + (pos - rep0 - 1)
             var dst = out + pos
             for _ in 0..<len { dst.pointee = src.pointee; dst += 1; src += 1 }
             pos &+= len
         }
-        guard rc.ip <= rc.inEnd else { throw SteamError.protocolChanged("lzma: truncated input") }
+        guard rc.ip <= rc.inEnd else { throw ClientError.protocolChanged("lzma: truncated input") }
         return pos
-    }
-}
-
-/// Decompresses a decrypted depot chunk by its container marker
-/// (DepotChunk.kt): "VZa" (LZMA), "PK\x03\x04" (zip) or "VSZa" (zstd).
-public enum ChunkCodec {
-    public static func decompress(_ buf: [UInt8], expectedSize: Int) throws -> [UInt8] {
-        guard buf.count >= 16 else { throw SteamError.protocolChanged("decrypted chunk of \(buf.count) bytes is too short") }
-        if buf[0] == 0x56, buf[1] == 0x53, buf[2] == 0x5A, buf[3] == 0x61 {
-            return try vzstd(buf, expectedSize: expectedSize)
-        }
-        if buf[0] == 0x56, buf[1] == 0x5A, buf[2] == 0x61 {
-            return try vzip(buf, expectedSize: expectedSize)
-        }
-        if buf[0] == 0x50, buf[1] == 0x4B, buf[2] == 0x03, buf[3] == 0x04 {
-            return try ZipSingleEntry.extract(buf, maxSize: expectedSize)
-        }
-        throw SteamError.protocolChanged("unknown chunk container \(Array(buf.prefix(4)).hex)")
-    }
-
-    /// VZstd: "VSZa", u32 crc, zstd frame, footer u32 crc, u32 size, 4 bytes,
-    /// "zsv" (VZstdUtil.kt).
-    static func vzstd(_ buf: [UInt8], expectedSize: Int) throws -> [UInt8] {
-        guard buf.count >= 8 + 15, buf[buf.count - 3] == 0x7A, buf[buf.count - 2] == 0x73, buf[buf.count - 1] == 0x76 else {
-            throw SteamError.protocolChanged("vzstd: missing footer")
-        }
-        let crc = buf.readLE32(at: buf.count - 15)
-        let size = Int(buf.readLE32(at: buf.count - 11))
-        guard size == expectedSize else {
-            throw SteamError.verificationFailed("vzstd declares \(size) bytes, manifest says \(expectedSize)")
-        }
-        let out = try Zstd.decompress(buf[8..<(buf.count - 15)], limit: size)
-        guard out.count == size else { throw SteamError.verificationFailed("vzstd produced \(out.count) of \(size) bytes") }
-        guard CRC32.checksum(out) == crc else { throw SteamError.verificationFailed("vzstd CRC mismatch") }
-        return out
-    }
-
-    /// VZip: "VZ" 'a' u32 crc/timestamp, 5 LZMA property bytes, stream,
-    /// footer u32 crc, u32 size, "zv" (VZipUtil.kt).
-    static func vzip(_ buf: [UInt8], expectedSize: Int) throws -> [UInt8] {
-        guard buf.count >= 7 + 5 + 10 else { throw SteamError.protocolChanged("vzip: too short") }
-        let footer = buf.count - 10
-        guard buf[buf.count - 2] == 0x7A, buf[buf.count - 1] == 0x76 else {
-            throw SteamError.protocolChanged("vzip: missing footer")
-        }
-        let crc = buf.readLE32(at: footer)
-        let size = Int(buf.readLE32(at: footer + 4))
-        guard size == expectedSize else {
-            throw SteamError.verificationFailed("vzip declares \(size) bytes, manifest says \(expectedSize)")
-        }
-        let props = buf[7]
-        let dict = buf.readLE32(at: 8)
-        let out = try LZMA.decompress(buf[12..<footer], properties: props, dictionarySize: dict, outSize: size)
-        guard out.count == size else { throw SteamError.verificationFailed("vzip produced \(out.count) of \(size) bytes") }
-        guard CRC32.checksum(out) == crc else { throw SteamError.verificationFailed("vzip CRC mismatch") }
-        return out
     }
 }

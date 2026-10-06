@@ -12,7 +12,7 @@ public struct AES256Decryptor: Sendable {
     private let roundKeys: [UInt32] // 60 words
 
     public init(key: [UInt8]) throws {
-        guard key.count == 32 else { throw SteamError.protocolChanged("depot key is \(key.count) bytes, expected 32") }
+        guard key.count == 32 else { throw ClientError.protocolChanged("depot key is \(key.count) bytes, expected 32") }
         var w = [UInt32](repeating: 0, count: 60)
         for i in 0..<8 {
             w[i] = UInt32(key[4 * i]) << 24 | UInt32(key[4 * i + 1]) << 16 | UInt32(key[4 * i + 2]) << 8 | UInt32(key[4 * i + 3])
@@ -53,7 +53,7 @@ public struct AES256Decryptor: Sendable {
     /// CBC decryption with PKCS#7 padding removal.
     public func decryptCBC(_ data: ArraySlice<UInt8>, iv: [UInt8]) throws -> [UInt8] {
         guard data.count % 16 == 0, !data.isEmpty else {
-            throw SteamError.verificationFailed("ciphertext length \(data.count) is not a positive multiple of 16")
+            throw ClientError.verificationFailed("ciphertext length \(data.count) is not a positive multiple of 16")
         }
         precondition(iv.count == 16)
         var out = Array(data)
@@ -73,7 +73,7 @@ public struct AES256Decryptor: Sendable {
         }
         let pad = Int(out.last!)
         guard pad >= 1, pad <= 16, out.suffix(pad).allSatisfy({ Int($0) == pad }) else {
-            throw SteamError.verificationFailed("bad PKCS#7 padding (wrong depot key?)")
+            throw ClientError.verificationFailed("bad PKCS#7 padding (wrong depot key?)")
         }
         out.removeLast(pad)
         return out
@@ -81,7 +81,7 @@ public struct AES256Decryptor: Sendable {
 
     /// Steam's symmetric scheme: the first block is the ECB-encrypted IV.
     public func decryptSteam(_ data: [UInt8]) throws -> [UInt8] {
-        guard data.count >= 32 else { throw SteamError.verificationFailed("encrypted blob of \(data.count) bytes is too short") }
+        guard data.count >= 32 else { throw ClientError.verificationFailed("encrypted blob of \(data.count) bytes is too short") }
         var iv = Array(data[0..<16])
         decryptBlock(&iv)
         return try decryptCBC(data[16...], iv: iv)

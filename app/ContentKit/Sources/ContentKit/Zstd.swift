@@ -33,7 +33,7 @@ public enum Zstd {
         return out
     }
 
-    static func err(_ s: String) -> SteamError { .protocolChanged("zstd: \(s)") }
+    static func err(_ s: String) -> ClientError { .protocolChanged("zstd: \(s)") }
 
     // MARK: bit readers
 
@@ -335,16 +335,16 @@ public enum Zstd {
             let dictBytes = [0, 1, 2, 4][dictFlag]
             var dictID = 0
             for k in 0..<dictBytes { dictID |= Int(try byte()) << (8 * k) }
-            guard dictID == 0 else { throw SteamError.unsupported("zstd dictionary frames") }
+            guard dictID == 0 else { throw ClientError.unsupported("zstd dictionary frames") }
             let fcsBytes = [singleSegment ? 1 : 0, 2, 4, 8][fcsFlag]
             var fcs: UInt64 = 0
             for k in 0..<fcsBytes { fcs |= UInt64(try byte()) << (8 * UInt64(k)) }
             if fcsBytes == 2 { fcs += 256 }
             if fcsBytes > 0 {
-                guard fcs <= UInt64(limit - out.count) else { throw SteamError.unsafeContent("zstd frame declares \(fcs) bytes (limit \(limit))") }
+                guard fcs <= UInt64(limit - out.count) else { throw ClientError.unsafeContent("zstd frame declares \(fcs) bytes (limit \(limit))") }
                 if singleSegment { windowSize = Int(fcs) }
             }
-            guard windowSize <= 64 << 20 || fcsBytes > 0 else { throw SteamError.unsafeContent("zstd window \(windowSize)") }
+            guard windowSize <= 64 << 20 || fcsBytes > 0 else { throw ClientError.unsafeContent("zstd window \(windowSize)") }
 
             var last = false
             while !last {
@@ -357,12 +357,12 @@ public enum Zstd {
                 switch type {
                 case 0:
                     guard size <= src.endIndex - pos else { throw err("truncated raw block") }
-                    guard out.count + size <= limit else { throw SteamError.unsafeContent("zstd output exceeds \(limit)") }
+                    guard out.count + size <= limit else { throw ClientError.unsafeContent("zstd output exceeds \(limit)") }
                     out.append(contentsOf: src[pos..<(pos + size)])
                     pos += size
                 case 1:
                     guard pos < src.endIndex else { throw err("truncated RLE block") }
-                    guard out.count + size <= limit else { throw SteamError.unsafeContent("zstd output exceeds \(limit)") }
+                    guard out.count + size <= limit else { throw ClientError.unsafeContent("zstd output exceeds \(limit)") }
                     out.append(contentsOf: repeatElement(src[pos], count: size))
                     pos += 1
                 case 2:
@@ -374,7 +374,7 @@ public enum Zstd {
                 }
             }
             if fcsBytes > 0, UInt64(out.count - frameStart) != fcs {
-                throw SteamError.verificationFailed("zstd frame produced \(out.count - frameStart) of \(fcs) bytes")
+                throw ClientError.verificationFailed("zstd frame produced \(out.count - frameStart) of \(fcs) bytes")
             }
             if checksum {
                 guard src.endIndex - pos >= 4 else { throw err("truncated content checksum") }
@@ -469,7 +469,7 @@ public enum Zstd {
                 nbSeq = Int(block[i + 1]) + (Int(block[i + 2]) << 8) + 0x7F00; i += 3
             }
             if nbSeq == 0 {
-                guard out.count + literals.count <= limit else { throw SteamError.unsafeContent("zstd output exceeds \(limit)") }
+                guard out.count + literals.count <= limit else { throw ClientError.unsafeContent("zstd output exceeds \(limit)") }
                 out.append(contentsOf: literals)
                 return
             }
@@ -529,7 +529,7 @@ public enum Zstd {
                     }
                 }
                 guard literalLength <= literals.count - litPos else { throw err("sequence overruns literals") }
-                guard out.count + literalLength + matchLength <= limit else { throw SteamError.unsafeContent("zstd output exceeds \(limit)") }
+                guard out.count + literalLength + matchLength <= limit else { throw ClientError.unsafeContent("zstd output exceeds \(limit)") }
                 out.append(contentsOf: literals[litPos..<(litPos + literalLength)])
                 litPos += literalLength
                 guard offset > 0, offset <= out.count - frameStart else { throw err("match offset beyond frame output") }
@@ -537,7 +537,7 @@ public enum Zstd {
                 for k in 0..<matchLength { out.append(out[start + k]) }
             }
             guard bits.offset == 0 else { throw err("sequence bitstream not fully consumed") }
-            guard out.count + (literals.count - litPos) <= limit else { throw SteamError.unsafeContent("zstd output exceeds \(limit)") }
+            guard out.count + (literals.count - litPos) <= limit else { throw ClientError.unsafeContent("zstd output exceeds \(limit)") }
             out.append(contentsOf: literals[litPos...])
         }
     }

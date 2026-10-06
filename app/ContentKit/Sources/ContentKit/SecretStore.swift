@@ -18,12 +18,6 @@ public protocol SecretStore: Sendable {
     func delete(_ key: String) throws
 }
 
-public enum SecretKeys {
-    public static let service = "dev.playport.app.steamclient"
-    public static let session = "session"
-    public static let machineID = "machine-id"
-}
-
 #if canImport(Security)
 /// iOS/macOS Keychain generic-password items under one service name.
 ///
@@ -37,7 +31,7 @@ public struct KeychainSecretStore: SecretStore {
     public let service: String
     public let accessGroup: String?
     public var backendName: String { "keychain" }
-    public init(service: String = SecretKeys.service, accessGroup: String? = nil) {
+    public init(service: String, accessGroup: String? = nil) {
         self.service = service
         self.accessGroup = accessGroup
     }
@@ -58,7 +52,7 @@ public struct KeychainSecretStore: SecretStore {
         var out: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &out)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = out as? Data else { throw SteamError.credentialStore("keychain read \(status)") }
+        guard status == errSecSuccess, let data = out as? Data else { throw ClientError.credentialStore("keychain read \(status)") }
         return Secret([UInt8](data))
     }
 
@@ -69,12 +63,12 @@ public struct KeychainSecretStore: SecretStore {
         if status == errSecItemNotFound {
             status = SecItemAdd(query(key).merging(attrs) { $1 } as CFDictionary, nil)
         }
-        guard status == errSecSuccess else { throw SteamError.credentialStore("keychain write \(status)") }
+        guard status == errSecSuccess else { throw ClientError.credentialStore("keychain write \(status)") }
     }
 
     public func delete(_ key: String) throws {
         let status = SecItemDelete(query(key) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw SteamError.credentialStore("keychain delete \(status)") }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw ClientError.credentialStore("keychain delete \(status)") }
     }
 
     /// The protection attributes of a stored item, never its data: the access
@@ -97,7 +91,7 @@ public struct KeychainSecretStore: SecretStore {
         var out: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &out)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let a = out as? [String: Any] else { throw SteamError.credentialStore("keychain attributes \(status)") }
+        guard status == errSecSuccess, let a = out as? [String: Any] else { throw ClientError.credentialStore("keychain attributes \(status)") }
         let sync = (a[kSecAttrSynchronizable as String] as? Bool) ?? ((a[kSecAttrSynchronizable as String] as? NSNumber)?.boolValue ?? false)
         return ItemProtection(accessGroup: a[kSecAttrAccessGroup as String] as? String ?? "?",
                               accessible: a[kSecAttrAccessible as String] as? String ?? "?",
@@ -121,7 +115,7 @@ public struct FileSecretStore: SecretStore {
 
     private func url(_ key: String) throws -> URL {
         guard key.range(of: #"^[a-z0-9-]+$"#, options: .regularExpression) != nil else {
-            throw SteamError.credentialStore("bad key name")
+            throw ClientError.credentialStore("bad key name")
         }
         return directory.appendingPathComponent(key)
     }
@@ -136,11 +130,11 @@ public struct FileSecretStore: SecretStore {
         let u = try url(key)
         let tmp = directory.appendingPathComponent(".\(key).\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: tmp.path, contents: Data(value.value), attributes: [.posixPermissions: 0o600]) else {
-            throw SteamError.credentialStore("cannot write \(key)")
+            throw ClientError.credentialStore("cannot write \(key)")
         }
         guard rename(tmp.path, u.path) == 0 else {
             try? FileManager.default.removeItem(at: tmp)
-            throw SteamError.credentialStore("cannot commit \(key)")
+            throw ClientError.credentialStore("cannot commit \(key)")
         }
     }
 
@@ -159,13 +153,4 @@ public final class MemorySecretStore: SecretStore, @unchecked Sendable {
     public func read(_ key: String) throws -> Secret<[UInt8]>? { lock.withLock { items[key].map(Secret.init) } }
     public func write(_ key: String, _ value: Secret<[UInt8]>) throws { lock.withLock { items[key] = value.value } }
     public func delete(_ key: String) throws { _ = lock.withLock { items.removeValue(forKey: key) } }
-}
-
-/// What a session persists, serialised as JSON into one secret item.
-public struct StoredSession: Codable, Sendable, Equatable {
-    public var accountName: String
-    public var steamID: UInt64
-    public var refreshToken: String
-    public var guardData: String?
-    public var savedAt: Date
 }

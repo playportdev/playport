@@ -599,7 +599,7 @@ class UpstreamSync(unittest.TestCase):
               "echo ipa > \"$PLAYPORT_OUT/x/Playport-26.5-0.ipa\"\necho rebuilt > app/artifacts.tsv\n"
               "echo \"12:00:00  IPA $PLAYPORT_OUT/x/Playport-26.5-0.ipa\"\n"
               "echo \"12:00:00  sha256 $(printf '0%.0s' $(seq 64))\"\n")
-        for d in ("app/HostIOKit", "app/SteamClient", "app/PlayportKit", "build/generated"):
+        for d in ("app/HostIOKit", "app/ContentKit", "app/SteamClient", "app/PlayportKit", "build/generated"):
             write(pp, f"{d}/.keep", "")
         write(pp, "app/artifacts.tsv", "old\n")
         commit(pp, "a buildable stand-in", links=[("upstream/madeira", self.m0)])

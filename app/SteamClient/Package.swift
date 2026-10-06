@@ -21,9 +21,14 @@ let package = Package(
     products: [
         .library(name: "SteamClientKit", targets: ["SteamClientKit"]),
     ],
+    dependencies: [
+        // The store-neutral core: the install engine, codecs, hashes, HTTP, secrets.
+        .package(path: "../ContentKit"),
+    ],
     targets: [
         .target(
             name: "SteamClientKit",
+            dependencies: [.product(name: "ContentKit", package: "ContentKit")],
             // Always optimised: the app is built with xtool's default debug
             // configuration, and at -Onone the pure-Swift chunk pipeline (AES,
             // LZMA, SHA-1) is CPU-bound on the phone at about 0.2 MB/s.

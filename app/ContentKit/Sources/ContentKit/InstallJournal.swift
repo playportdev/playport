@@ -7,14 +7,14 @@ import Darwin
 #endif
 
 /// Append-only install journal: a 32-byte header naming the plan, then one
-/// fixed 32-byte record per verified chunk or verified file. Records are
+/// fixed 32-byte record per verified part (a stretch of a chunk) or verified file. Records are
 /// appended only after the data they vouch for is `fsync`ed, and the journal
 /// is `fsync`ed per batch, so a kill loses at most the last batch. Replay
 /// stops at the first torn or unchecked record and truncates it away.
 ///
 ///     header: "PPJ1" | u32 version | 20-byte plan identity | u32 0
 ///     record: u8 kind | 3 x 0 | u32 index | 20-byte SHA-1 | u32 CRC-32 of the first 28 bytes
-struct InstallJournal {
+public struct InstallJournal {
     enum Kind: UInt8 { case chunk = 1, file = 2 }
 
     struct Record: Equatable {
@@ -43,7 +43,7 @@ struct InstallJournal {
     /// Opens the journal for `plan`, replaying what it holds. A journal for
     /// another plan (or none) starts empty; records that do not match the plan
     /// end the replay like a torn tail.
-    static func open(_ url: URL, plan: InstallPlan) throws -> (InstallJournal, Replay) {
+    static func open(_ url: URL, plan: ContentPlan) throws -> (InstallJournal, Replay) {
         var replay = Replay()
         var bytes: [UInt8] = []
         if let d = try? Data(contentsOf: url) { bytes = [UInt8](d) }
@@ -67,18 +67,18 @@ struct InstallJournal {
         }
         try InstallFS.makeDirectory(url.deletingLastPathComponent())
         let fd = sysOpen(url.path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o644)
-        guard fd >= 0 else { throw SteamError.unsafeContent("cannot open the install journal without following links (errno \(errno))") }
+        guard fd >= 0 else { throw ClientError.unsafeContent("cannot open the install journal without following links (errno \(errno))") }
         let journal = InstallJournal(url: url, fd: fd)
         if replay.fresh {
             var header = magic
             header.appendLE(version)
             header += plan.identity
             header.appendLE(UInt32(0))
-            guard ftruncate(fd, 0) == 0 else { throw SteamError.transport("journal truncate errno \(errno)") }
+            guard ftruncate(fd, 0) == 0 else { throw ClientError.transport("journal truncate errno \(errno)") }
             try journal.write(header, at: 0)
-            guard fsync(fd) == 0 else { throw SteamError.transport("journal fsync errno \(errno)") }
+            guard fsync(fd) == 0 else { throw ClientError.transport("journal fsync errno \(errno)") }
         } else if replay.discardedBytes > 0 {
-            guard ftruncate(fd, off_t(keep)) == 0 else { throw SteamError.transport("journal truncate errno \(errno)") }
+            guard ftruncate(fd, off_t(keep)) == 0 else { throw ClientError.transport("journal truncate errno \(errno)") }
         }
         return (journal, replay)
     }
@@ -89,9 +89,9 @@ struct InstallJournal {
         buf.reserveCapacity(records.count * Self.recordSize)
         for r in records { buf += Self.encode(r) }
         let end = lseek(fd, 0, SEEK_END)
-        guard end >= 0 else { throw SteamError.transport("journal seek errno \(errno)") }
+        guard end >= 0 else { throw ClientError.transport("journal seek errno \(errno)") }
         try write(buf, at: end)
-        guard fsync(fd) == 0 else { throw SteamError.transport("journal fsync errno \(errno)") }
+        guard fsync(fd) == 0 else { throw ClientError.transport("journal fsync errno \(errno)") }
     }
 
     func close() { _ = sysClose(fd) }
@@ -100,7 +100,7 @@ struct InstallJournal {
         var done = 0
         while done < buf.count {
             let n = buf.withUnsafeBytes { pwrite(fd, $0.baseAddress! + done, buf.count - done, offset + off_t(done)) }
-            guard n > 0 else { throw SteamError.transport("journal write errno \(errno)") }
+            guard n > 0 else { throw ClientError.transport("journal write errno \(errno)") }
             done += n
         }
     }
@@ -120,34 +120,25 @@ struct InstallJournal {
         return Record(kind: kind, index: Int(b.readLE32(at: 4)), sha: Array(b[8..<28]))
     }
 
-    static func matches(_ r: Record, _ plan: InstallPlan) -> Bool {
+    static func matches(_ r: Record, _ plan: ContentPlan) -> Bool {
         switch r.kind {
         case .chunk:
-            guard let f = plan.fileIndex(forChunk: r.index) else { return false }
-            return plan.files[f].chunks[r.index - plan.files[f].firstChunk].sha == r.sha
+            guard let part = plan.part(r.index) else { return false }
+            return plan.chunks[part.chunk].journalKey == r.sha
         case .file:
             guard r.index < plan.files.count else { return false }
-            return (plan.files[r.index].sha ?? [UInt8](repeating: 0, count: 20)) == r.sha
+            return fileKey(plan.files[r.index]) == r.sha
         }
     }
-}
 
-extension InstallPlan {
-    /// The file holding global chunk `k` (binary search over `firstChunk`).
-    func fileIndex(forChunk k: Int) -> Int? {
-        guard k >= 0, k < chunkCount else { return nil }
-        var lo = 0, hi = files.count - 1
-        while lo < hi {
-            let mid = (lo + hi + 1) / 2
-            if files[mid].firstChunk <= k { lo = mid } else { hi = mid - 1 }
-        }
-        let f = files[lo]
-        return k < f.firstChunk + f.chunks.count ? lo : nil
+    /// The 20 bytes a file record holds: its hash, or zeros when it has none.
+    static func fileKey(_ f: ContentFile) -> [UInt8] {
+        f.hash.bytes.map(ContentPlan.key20) ?? [UInt8](repeating: 0, count: 20)
     }
 }
 
 // `open`/`close` without a module prefix would resolve to InstallJournal members.
-@inline(__always) func sysOpen(_ path: String, _ flags: Int32, _ mode: mode_t) -> Int32 {
+@inline(__always) public func sysOpen(_ path: String, _ flags: Int32, _ mode: mode_t) -> Int32 {
     #if canImport(Glibc)
     return Glibc.open(path, flags, mode)
     #else
@@ -155,7 +146,7 @@ extension InstallPlan {
     #endif
 }
 
-@inline(__always) func sysClose(_ fd: Int32) -> Int32 {
+@inline(__always) public func sysClose(_ fd: Int32) -> Int32 {
     #if canImport(Glibc)
     return Glibc.close(fd)
     #else
@@ -165,11 +156,11 @@ extension InstallPlan {
 
 /// Filesystem policy shared by the installers: no write follows a planted
 /// symlink, and journal-style files are replaced atomically.
-enum InstallFS {
-    static func makeDirectory(_ url: URL) throws {
+public enum InstallFS {
+    public static func makeDirectory(_ url: URL) throws {
         var st = stat()
         if lstat(url.path, &st) == 0 {
-            guard (st.st_mode & S_IFMT) == S_IFDIR else { throw SteamError.unsafeContent("\(url.lastPathComponent) exists and is not a directory") }
+            guard (st.st_mode & S_IFMT) == S_IFDIR else { throw ClientError.unsafeContent("\(url.lastPathComponent) exists and is not a directory") }
             return
         }
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -177,7 +168,7 @@ enum InstallFS {
 
     /// Resolves a validated relative path under `base`, refusing any existing
     /// component that is a symlink, so a planted link cannot redirect writes.
-    static func resolveInside(_ base: URL, _ relative: String, createParents: Bool) throws -> URL {
+    public static func resolveInside(_ base: URL, _ relative: String, createParents: Bool) throws -> URL {
         let normalized = try SafePath.normalize(relative)
         var current = base
         let parts = normalized.split(separator: "/").map(String.init)
@@ -185,30 +176,30 @@ enum InstallFS {
             current = current.appendingPathComponent(part)
             var st = stat()
             if lstat(current.path, &st) == 0 {
-                if (st.st_mode & S_IFMT) == S_IFLNK { throw SteamError.unsafeContent("symlink in staged path \(normalized)") }
+                if (st.st_mode & S_IFMT) == S_IFLNK { throw ClientError.unsafeContent("symlink in staged path \(normalized)") }
             } else if i < parts.count - 1, createParents {
                 guard mkdir(current.path, 0o755) == 0 || errno == EEXIST else {
-                    throw SteamError.transport("mkdir errno \(errno)")
+                    throw ClientError.transport("mkdir errno \(errno)")
                 }
             }
         }
         return current
     }
 
-    static func writeAtomically(_ url: URL, _ data: Data) throws {
+    public static func writeAtomically(_ url: URL, _ data: Data) throws {
         let tmp = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).tmp")
         try data.write(to: tmp)
-        guard rename(tmp.path, url.path) == 0 else { throw SteamError.transport("rename \(url.lastPathComponent) errno \(errno)") }
+        guard rename(tmp.path, url.path) == 0 else { throw ClientError.transport("rename \(url.lastPathComponent) errno \(errno)") }
     }
 
-    static func fileSize(_ url: URL) -> UInt64? {
+    public static func fileSize(_ url: URL) -> UInt64? {
         var st = stat()
         guard lstat(url.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
         return UInt64(st.st_size)
     }
 
     /// Streaming SHA-1 of a file through `pread` in 1 MiB blocks.
-    static func sha1(_ url: URL, expectedSize: UInt64? = nil) -> [UInt8]? {
+    public static func sha1(_ url: URL, expectedSize: UInt64? = nil) -> [UInt8]? {
         let fd = sysOpen(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0)
         guard fd >= 0 else { return nil }
         defer { _ = sysClose(fd) }
@@ -217,7 +208,7 @@ enum InstallFS {
         return h.finalize()
     }
 
-    static func sha256(_ url: URL) -> [UInt8]? {
+    public static func sha256(_ url: URL) -> [UInt8]? {
         let fd = sysOpen(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0)
         guard fd >= 0 else { return nil }
         defer { _ = sysClose(fd) }
@@ -226,7 +217,16 @@ enum InstallFS {
         return h.finalize()
     }
 
-    static let blockSize = 1 << 20
+    public static func md5(_ url: URL, expectedSize: UInt64? = nil) -> [UInt8]? {
+        let fd = sysOpen(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0)
+        guard fd >= 0 else { return nil }
+        defer { _ = sysClose(fd) }
+        var h = MD5Stream()
+        guard let n = stream(fd, { h.update($0) }), expectedSize == nil || n == expectedSize else { return nil }
+        return h.finalize()
+    }
+
+    public static let blockSize = 1 << 20
 
     private static func stream(_ fd: Int32, _ body: (UnsafeRawBufferPointer) -> Void) -> UInt64? {
         let buf = UnsafeMutableRawBufferPointer.allocate(byteCount: blockSize, alignment: 16)
@@ -242,14 +242,14 @@ enum InstallFS {
     }
 
     /// Space the system will let an important, user-started download use.
-    static func availableCapacity(_ url: URL) throws -> UInt64 {
+    public static func availableCapacity(_ url: URL) throws -> UInt64 {
         #if canImport(Darwin)
         let v = try url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        guard let bytes = v.volumeAvailableCapacityForImportantUsage else { throw SteamError.transport("free space unavailable") }
+        guard let bytes = v.volumeAvailableCapacityForImportantUsage else { throw ClientError.transport("free space unavailable") }
         return UInt64(max(0, bytes))
         #else
         var s = statvfs()
-        guard statvfs(url.path, &s) == 0 else { throw SteamError.transport("statvfs errno \(errno)") }
+        guard statvfs(url.path, &s) == 0 else { throw ClientError.transport("statvfs errno \(errno)") }
         return UInt64(s.f_bavail) * UInt64(s.f_frsize)
         #endif
     }

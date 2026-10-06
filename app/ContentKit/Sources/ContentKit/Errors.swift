@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-/// Every failure the client can report. Protocol drift (a field with the wrong
+/// Every failure a store client (Steam, GOG, Epic) or the install engine can
+/// report; SteamClientKit calls it `SteamError`. Protocol drift (a field with the wrong
 /// wire type, a missing required field, an unknown compression marker) is a
 /// typed `protocolChanged`, never a crash. No case carries a secret: token,
 /// QR and CDN values are never interpolated into an error.
-public enum SteamError: Error, Equatable, Sendable, CustomStringConvertible {
+public enum ClientError: Error, Equatable, Sendable, CustomStringConvertible {
     /// A pinned schema no longer matches what the server sent.
     case protocolChanged(String)
     /// Steam answered with a non-OK EResult.

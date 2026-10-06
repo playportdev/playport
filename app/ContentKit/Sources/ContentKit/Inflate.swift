@@ -16,7 +16,7 @@ public enum Inflate {
                 case 0: try s.stored()
                 case 1: try s.codes(Tables.fixedLength, Tables.fixedDistance)
                 case 2: try s.dynamic()
-                default: throw SteamError.protocolChanged("deflate: invalid block type")
+                default: throw ClientError.protocolChanged("deflate: invalid block type")
                 }
             } while !last
             return Array(UnsafeBufferPointer(start: s.out, count: s.count))
@@ -52,7 +52,7 @@ public enum Inflate {
             for (sym, l) in lengths.enumerated() where l != 0 {
                 let c = next[l]
                 next[l] += 1
-                guard c < 1 << l else { throw SteamError.protocolChanged("deflate: over-subscribed code") }
+                guard c < 1 << l else { throw ClientError.protocolChanged("deflate: over-subscribed code") }
                 guard l <= Self.fastBits else { continue }
                 var r = 0
                 for i in 0..<l where c & (1 << i) != 0 { r |= 1 << (l - 1 - i) }
@@ -98,7 +98,7 @@ public enum Inflate {
 
         /// Room for `n` more bytes, or `unsafeContent` past the declared size.
         @inline(__always) mutating func reserve(_ n: Int) throws {
-            guard count + n <= limit else { throw SteamError.unsafeContent("inflate exceeds declared size \(limit)") }
+            guard count + n <= limit else { throw ClientError.unsafeContent("inflate exceeds declared size \(limit)") }
             if count + n > capacity { grow(count + n) }
         }
 
@@ -123,7 +123,7 @@ public enum Inflate {
         @inline(__always) mutating func bits(_ need: Int) throws -> Int {
             if bitCount < need {
                 refill()
-                guard bitCount >= need else { throw SteamError.protocolChanged("deflate: truncated input") }
+                guard bitCount >= need else { throw ClientError.protocolChanged("deflate: truncated input") }
             }
             let val = Int(truncatingIfNeeded: bitBuf & ((1 << UInt64(need)) - 1))
             bitBuf >>= UInt64(need)
@@ -137,12 +137,12 @@ public enum Inflate {
             bitBuf >>= UInt64(drop); bitCount -= drop
             pos -= bitCount / 8
             bitBuf = 0; bitCount = 0
-            guard input.count - pos >= 4 else { throw SteamError.protocolChanged("deflate: truncated stored header") }
+            guard input.count - pos >= 4 else { throw ClientError.protocolChanged("deflate: truncated stored header") }
             let len = Int(input[pos]) | Int(input[pos + 1]) << 8
             let nlen = Int(input[pos + 2]) | Int(input[pos + 3]) << 8
             pos += 4
-            guard len == (~nlen & 0xFFFF) else { throw SteamError.protocolChanged("deflate: stored length mismatch") }
-            guard input.count - pos >= len else { throw SteamError.protocolChanged("deflate: truncated stored block") }
+            guard len == (~nlen & 0xFFFF) else { throw ClientError.protocolChanged("deflate: stored length mismatch") }
+            guard input.count - pos >= len else { throw ClientError.protocolChanged("deflate: truncated stored block") }
             try reserve(len)
             (out + count).update(from: input.baseAddress! + pos, count: len)
             count += len
@@ -167,7 +167,7 @@ public enum Inflate {
                 let count = Int(h.count[len])
                 if code - count < first {
                     let at = index + (code - first)
-                    guard at < h.symbol.count else { throw SteamError.protocolChanged("deflate: over-subscribed code") }
+                    guard at < h.symbol.count else { throw ClientError.protocolChanged("deflate: over-subscribed code") }
                     return Int(h.symbol[at])
                 }
                 index += count
@@ -175,7 +175,7 @@ public enum Inflate {
                 first <<= 1
                 code <<= 1
             }
-            throw SteamError.protocolChanged("deflate: bad Huffman code")
+            throw ClientError.protocolChanged("deflate: bad Huffman code")
         }
 
         mutating func codes(_ lencode: Huffman, _ distcode: Huffman) throws {
@@ -191,12 +191,12 @@ public enum Inflate {
                 }
                 if sym == 256 { return }
                 sym -= 257
-                guard sym < 29 else { throw SteamError.protocolChanged("deflate: bad length symbol") }
+                guard sym < 29 else { throw ClientError.protocolChanged("deflate: bad length symbol") }
                 let len = lengthBase[sym] + (try bits(lengthExtra[sym]))
                 let dsym = try decode(distcode)
-                guard dsym < 30 else { throw SteamError.protocolChanged("deflate: bad distance symbol") }
+                guard dsym < 30 else { throw ClientError.protocolChanged("deflate: bad distance symbol") }
                 let dist = distBase[dsym] + (try bits(distExtra[dsym]))
-                guard dist <= count else { throw SteamError.protocolChanged("deflate: distance too far back") }
+                guard dist <= count else { throw ClientError.protocolChanged("deflate: distance too far back") }
                 try reserve(len)
                 // Byte by byte: a match may overlap the bytes it produces.
                 var src = out + (count - dist)
@@ -208,7 +208,7 @@ public enum Inflate {
 
         mutating func dynamic() throws {
             let nlen = try bits(5) + 257, ndist = try bits(5) + 1, ncode = try bits(4) + 4
-            guard nlen <= 286, ndist <= 30 else { throw SteamError.protocolChanged("deflate: bad counts") }
+            guard nlen <= 286, ndist <= 30 else { throw ClientError.protocolChanged("deflate: bad counts") }
             let order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
             var lengths = [Int](repeating: 0, count: 320)
             for i in 0..<ncode { lengths[order[i]] = try bits(3) }
@@ -219,7 +219,7 @@ public enum Inflate {
                 if sym < 16 { lengths[index] = sym; index += 1; continue }
                 var len = 0
                 if sym == 16 {
-                    guard index > 0 else { throw SteamError.protocolChanged("deflate: repeat with no length") }
+                    guard index > 0 else { throw ClientError.protocolChanged("deflate: repeat with no length") }
                     len = lengths[index - 1]
                     sym = 3 + (try bits(2))
                 } else if sym == 17 {
@@ -227,10 +227,10 @@ public enum Inflate {
                 } else {
                     sym = 11 + (try bits(7))
                 }
-                guard index + sym <= nlen + ndist else { throw SteamError.protocolChanged("deflate: too many lengths") }
+                guard index + sym <= nlen + ndist else { throw ClientError.protocolChanged("deflate: too many lengths") }
                 for _ in 0..<sym { lengths[index] = len; index += 1 }
             }
-            guard lengths[256] != 0 else { throw SteamError.protocolChanged("deflate: no end-of-block code") }
+            guard lengths[256] != 0 else { throw ClientError.protocolChanged("deflate: no end-of-block code") }
             try codes(Huffman(lengths: Array(lengths[0..<nlen])), Huffman(lengths: Array(lengths[nlen..<(nlen + ndist)])))
         }
     }
@@ -240,21 +240,21 @@ public enum Inflate {
 public enum Gzip {
     public static func decompress(_ data: [UInt8], limit: Int) throws -> [UInt8] {
         guard data.count >= 18, data[0] == 0x1F, data[1] == 0x8B, data[2] == 8 else {
-            throw SteamError.protocolChanged("gzip: bad header")
+            throw ClientError.protocolChanged("gzip: bad header")
         }
         let flags = data[3]
         var i = 10
         if flags & 0x04 != 0 {
-            guard i + 2 <= data.count else { throw SteamError.protocolChanged("gzip: truncated extra") }
+            guard i + 2 <= data.count else { throw ClientError.protocolChanged("gzip: truncated extra") }
             i += 2 + Int(data.readLE16(at: i))
         }
         if flags & 0x08 != 0 { while i < data.count && data[i] != 0 { i += 1 }; i += 1 }
         if flags & 0x10 != 0 { while i < data.count && data[i] != 0 { i += 1 }; i += 1 }
         if flags & 0x02 != 0 { i += 2 }
-        guard i <= data.count - 8 else { throw SteamError.protocolChanged("gzip: truncated") }
+        guard i <= data.count - 8 else { throw ClientError.protocolChanged("gzip: truncated") }
         let out = try Inflate.decompress(data[i..<(data.count - 8)], limit: limit)
         let crc = data.readLE32(at: data.count - 8)
-        guard CRC32.checksum(out) == crc else { throw SteamError.verificationFailed("gzip CRC mismatch") }
+        guard CRC32.checksum(out) == crc else { throw ClientError.verificationFailed("gzip CRC mismatch") }
         return out
     }
 }
@@ -265,7 +265,7 @@ public enum Gzip {
 public enum ZipSingleEntry {
     public static func extract(_ data: [UInt8], maxSize: Int) throws -> [UInt8] {
         guard data.count >= 30, data.readLE32(at: 0) == 0x0403_4B50 else {
-            throw SteamError.protocolChanged("zip: no local file header")
+            throw ClientError.protocolChanged("zip: no local file header")
         }
         let flags = data.readLE16(at: 6)
         let method = data.readLE16(at: 8)
@@ -275,23 +275,23 @@ public enum ZipSingleEntry {
         let nameLength = Int(data.readLE16(at: 26))
         let extraLength = Int(data.readLE16(at: 28))
         let start = 30 + nameLength + extraLength
-        guard start <= data.count else { throw SteamError.protocolChanged("zip: truncated header") }
+        guard start <= data.count else { throw ClientError.protocolChanged("zip: truncated header") }
         if flags & 0x08 != 0 || compressedSize == 0 {
             // Sizes live in the central directory; find it via the end record.
-            guard let central = centralEntry(data) else { throw SteamError.protocolChanged("zip: no central directory") }
+            guard let central = centralEntry(data) else { throw ClientError.protocolChanged("zip: no central directory") }
             (crc, compressedSize, size) = central
         }
-        guard size <= maxSize else { throw SteamError.unsafeContent("zip entry declares \(size) bytes (limit \(maxSize))") }
-        guard compressedSize <= data.count - start else { throw SteamError.protocolChanged("zip: truncated entry") }
+        guard size <= maxSize else { throw ClientError.unsafeContent("zip entry declares \(size) bytes (limit \(maxSize))") }
+        guard compressedSize <= data.count - start else { throw ClientError.protocolChanged("zip: truncated entry") }
         let body = data[start..<(start + compressedSize)]
         let out: [UInt8]
         switch method {
         case 0: out = Array(body)
         case 8: out = try Inflate.decompress(body, limit: size)
-        default: throw SteamError.unsupported("zip compression method \(method)")
+        default: throw ClientError.unsupported("zip compression method \(method)")
         }
-        guard out.count == size else { throw SteamError.verificationFailed("zip entry size \(out.count) != declared \(size)") }
-        guard CRC32.checksum(out) == crc else { throw SteamError.verificationFailed("zip entry CRC mismatch") }
+        guard out.count == size else { throw ClientError.verificationFailed("zip entry size \(out.count) != declared \(size)") }
+        guard CRC32.checksum(out) == crc else { throw ClientError.verificationFailed("zip entry CRC mismatch") }
         return out
     }
 

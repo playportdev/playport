@@ -6,13 +6,14 @@ import Glibc
 import Darwin
 #endif
 
-/// Stages a whole `InstallPlan` into one directory: chunks fetched in
+/// Stages a whole `ContentPlan` into one directory: chunks fetched in
 /// parallel (a bounded task group), each unique chunk downloaded once and
-/// written by offset to every place it occurs, data `fsync`ed in batches
-/// before the append-only journal vouches for it, and every finished file
-/// checked against the manifest's SHA-1 by streaming `pread`. A relaunch
-/// replays the journal and re-hashes the journalled chunks of unfinished files
-/// before trusting them. Free space is checked before the first chunk and
+/// each part of it written by offset to every place it occurs, data `fsync`ed
+/// in batches before the append-only journal vouches for it, and every
+/// finished file checked against the manifest's SHA-1 or md5 by streaming
+/// `pread`. A relaunch replays the journal and re-hashes the journalled parts
+/// of unfinished files that are whole chunks before trusting them (a slice of
+/// a chunk has no hash of its own: the file's hash checks it). Free space is checked before the first chunk and
 /// while downloading; a shortfall stops the job with `insufficientSpace` and
 /// keeps the stage for the next run. The caller commits the finished tree.
 public struct InstallEngine: Sendable {
@@ -69,13 +70,13 @@ public struct InstallEngine: Sendable {
 
     public let tree: URL
     public let journalURL: URL
-    let source: any ChunkSource
+    let source: any ContentChunkSource
     let log: Logger
     public var options: Options
     /// The volume query; tests substitute a fixed figure.
-    var freeSpace: @Sendable (URL) throws -> UInt64 = { try InstallFS.availableCapacity($0) }
+    public var freeSpace: @Sendable (URL) throws -> UInt64 = { try InstallFS.availableCapacity($0) }
 
-    public init(tree: URL, journal: URL, source: any ChunkSource, log: Logger, options: Options = Options()) {
+    public init(tree: URL, journal: URL, source: any ContentChunkSource, log: Logger, options: Options = Options()) {
         self.tree = tree
         self.journalURL = journal
         self.source = source
@@ -91,25 +92,27 @@ public struct InstallEngine: Sendable {
 
     private struct Dest: Sendable {
         var file: Int
-        var chunk: Int
+        /// The global part index (the journal's numbering).
+        var part: Int
         var offset: UInt64
+        var offsetInChunk: UInt32
+        var length: UInt32
     }
 
     private struct Unit: Sendable {
-        var depotID: UInt32
-        var chunk: ContentManifestPayload.Chunk
+        var chunk: ContentChunk
         var dests: [Dest]
     }
 
-    public func run(_ plan: InstallPlan, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Result {
+    public func run(_ plan: ContentPlan, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Result {
         do {
             return try await stage(plan, progress: progress)
         } catch is CancellationError {
-            throw SteamError.cancelled
+            throw ClientError.cancelled
         }
     }
 
-    private func stage(_ plan: InstallPlan, progress: @escaping @Sendable (Progress) -> Void) async throws -> Result {
+    private func stage(_ plan: ContentPlan, progress: @escaping @Sendable (Progress) -> Void) async throws -> Result {
         let started = Date()
         let fm = FileManager.default
         let spaceRoot = tree.deletingLastPathComponent()
@@ -134,16 +137,16 @@ public struct InstallEngine: Sendable {
         var urls: [URL] = []
         urls.reserveCapacity(files.count)
         var fileDone = [Bool](repeating: false, count: files.count)
-        var chunkDone = [Bool](repeating: false, count: plan.chunkCount)
-        var toRehash: [(file: Int, chunk: Int)] = []
+        var partDone = [Bool](repeating: false, count: plan.partCount)
+        var toRehash: [(file: Int, part: Int)] = []
         for (i, f) in files.enumerated() {
             let url = try InstallFS.resolveInside(tree, f.path, createParents: true)
             urls.append(url)
             let fd = sysOpen(url.path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o644)
-            guard fd >= 0 else { throw SteamError.unsafeContent("cannot open staged \(f.path) without following links (errno \(errno))") }
+            guard fd >= 0 else { throw ClientError.unsafeContent("cannot open staged \(f.path) without following links (errno \(errno))") }
             defer { _ = sysClose(fd) }
             var st = stat()
-            guard fstat(fd, &st) == 0 else { throw SteamError.transport("fstat \(f.path) errno \(errno)") }
+            guard fstat(fd, &st) == 0 else { throw ClientError.transport("fstat \(f.path) errno \(errno)") }
             let size = UInt64(st.st_size)
             if replay.files.contains(i), size == f.size {
                 fileDone[i] = true
@@ -151,63 +154,64 @@ public struct InstallEngine: Sendable {
             }
             if replay.files.contains(i) { log.warn("install", "\(f.path) was verified but is now \(size) bytes, not \(f.size); fetching it again") }
             if size != f.size {
-                guard ftruncate(fd, off_t(f.size)) == 0 else { throw SteamError.transport("ftruncate \(f.path) errno \(errno)") }
+                guard ftruncate(fd, off_t(f.size)) == 0 else { throw ClientError.transport("ftruncate \(f.path) errno \(errno)") }
             }
-            for j in f.chunks.indices where replay.chunks.contains(f.firstChunk + j) {
-                toRehash.append((i, f.firstChunk + j))
+            for j in f.parts.indices where replay.chunks.contains(f.firstPart + j) {
+                toRehash.append((i, f.firstPart + j))
             }
         }
         let filesResumed = fileDone.filter { $0 }.count
         for (i, f) in files.enumerated() where fileDone[i] {
-            for j in f.chunks.indices { chunkDone[f.firstChunk + j] = true }
+            for j in f.parts.indices { partDone[f.firstPart + j] = true }
         }
 
-        // Trust a journalled chunk of an unfinished file only after re-hashing it.
+        // Trust a journalled part of an unfinished file only after re-hashing it.
         var resumed = 0, rejected = 0
         if !toRehash.isEmpty {
-            let jobs = toRehash.map { job -> (Int, URL, ContentManifestPayload.Chunk) in
-                (job.chunk, urls[job.file], files[job.file].chunks[job.chunk - files[job.file].firstChunk])
+            let jobs = toRehash.map { job -> (Int, URL, ContentPart, ContentChunk) in
+                let part = files[job.file].parts[job.part - files[job.file].firstPart]
+                return (job.part, urls[job.file], part, plan.chunks[part.chunk])
             }
             try await withThrowingTaskGroup(of: Outcome.self) { group in
                 var next = 0, running = 0
                 while next < jobs.count || running > 0 {
                     while running < max(2, options.concurrency), next < jobs.count {
-                        let (k, url, c) = jobs[next]
+                        let (k, url, part, c) = jobs[next]
                         next += 1
                         running += 1
-                        group.addTask { .rehashed(k, Self.chunkOnDisk(url, c)) }
+                        group.addTask { .rehashed(k, Self.partOnDisk(url, part, c)) }
                     }
                     guard case let .rehashed(k, ok)? = try await group.next() else { continue }
                     running -= 1
-                    if ok { chunkDone[k] = true; resumed += 1 } else { rejected += 1 }
+                    if ok { partDone[k] = true; resumed += 1 } else { rejected += 1 }
                 }
             }
-            log.info("install", "resume: \(resumed) journalled chunks re-hashed OK, \(rejected) failed and will be fetched again; \(filesResumed) files already verified")
+            log.info("install", "resume: \(resumed) journalled parts re-hashed OK, \(rejected) failed and will be fetched again; \(filesResumed) files already verified")
         }
 
         // Unique chunks still needed, in file order, with every place they go.
         var units: [Unit] = []
-        var unitOf: [[UInt8]: Int] = [:]
+        var unitOf: [Int: Int] = [:]
         var remaining = [Int](repeating: 0, count: files.count)
         var remainingBytes: UInt64 = 0
         for (i, f) in files.enumerated() where !fileDone[i] {
-            for (j, c) in f.chunks.enumerated() where !chunkDone[f.firstChunk + j] {
-                let dest = Dest(file: i, chunk: f.firstChunk + j, offset: c.offset)
-                if let u = unitOf[c.sha] {
+            for (j, p) in f.parts.enumerated() where !partDone[f.firstPart + j] {
+                let dest = Dest(file: i, part: f.firstPart + j, offset: p.fileOffset, offsetInChunk: p.offsetInChunk, length: p.length)
+                if let u = unitOf[p.chunk] {
                     units[u].dests.append(dest)
                 } else {
-                    unitOf[c.sha] = units.count
-                    units.append(Unit(depotID: f.depotID, chunk: c, dests: [dest]))
+                    unitOf[p.chunk] = units.count
+                    units.append(Unit(chunk: plan.chunks[p.chunk], dests: [dest]))
                 }
                 remaining[i] += 1
-                remainingBytes += UInt64(c.cbOriginal)
+                remainingBytes += UInt64(p.length)
             }
         }
         let margin = UInt64(Double(plan.totalBytes) * options.marginFraction) + options.reserveBytes
         let available = try freeSpace(spaceRoot)
         log.info("install", "free space: \(available) bytes available, \(remainingBytes + margin) needed (\(remainingBytes) to write + \(margin) margin)")
         guard available >= remainingBytes + margin else {
-            throw SteamError.insufficientSpace(needed: remainingBytes + margin, available: available)
+            throw ClientError.insufficientSpace(needed: remainingBytes + margin, available: available)
         }
         log.info("install", "stage: \(files.count) files, \(plan.totalBytes) bytes; \(units.count) unique chunks to fetch (\(remainingBytes) bytes to write) with \(options.concurrency) in flight")
 
@@ -221,7 +225,7 @@ public struct InstallEngine: Sendable {
 
         func flush() throws {
             for (_, fd) in dirty {
-                guard fsync(fd) == 0 else { throw SteamError.transport("fsync staged file errno \(errno)") }
+                guard fsync(fd) == 0 else { throw ClientError.transport("fsync staged file errno \(errno)") }
                 _ = sysClose(fd)
             }
             dirty.removeAll()
@@ -248,15 +252,15 @@ public struct InstallEngine: Sendable {
                 while true {
                     while hashing < maxHashing, !hashQueue.isEmpty {
                         let i = hashQueue.removeFirst()
-                        let url = urls[i], size = files[i].size, want = files[i].sha
+                        let url = urls[i], size = files[i].size, want = files[i].hash
                         hashing += 1
-                        group.addTask { .hashed(i, Self.fileMatches(url, size: size, sha: want)) }
+                        group.addTask { .hashed(i, Self.fileMatches(url, size: size, hash: want)) }
                     }
                     while fetching < options.concurrency, nextUnit < units.count, limit.map({ downloaded + fetching < $0 }) ?? true {
-                        let u = nextUnit, depot = units[u].depotID, c = units[u].chunk
+                        let u = nextUnit, c = units[u].chunk
                         nextUnit += 1
                         fetching += 1
-                        group.addTask { .fetched(u, try await source.chunk(depotID: depot, c)) }
+                        group.addTask { .fetched(u, try await source.chunk(c)) }
                     }
                     if fetching == 0, hashing == 0 {
                         if !pending.isEmpty || !awaitingFlush.isEmpty || !dirty.isEmpty {
@@ -277,13 +281,21 @@ public struct InstallEngine: Sendable {
                                 fd = open
                             } else {
                                 fd = sysOpen(urls[d.file].path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0)
-                                guard fd >= 0 else { throw SteamError.unsafeContent("cannot reopen staged \(files[d.file].path) (errno \(errno))") }
+                                guard fd >= 0 else { throw ClientError.unsafeContent("cannot reopen staged \(files[d.file].path) (errno \(errno))") }
                                 dirty[d.file] = fd
                             }
-                            try Self.writeAll(fd, plain, at: d.offset, path: files[d.file].path)
-                            pending.append(.init(kind: .chunk, index: d.chunk, sha: units[u].chunk.sha))
+                            let end = Int(d.offsetInChunk) + Int(d.length)
+                            guard end <= plain.count else {
+                                throw ClientError.verificationFailed("a part of \(files[d.file].path) runs past its chunk's \(plain.count) bytes")
+                            }
+                            if d.offsetInChunk == 0, Int(d.length) == plain.count {
+                                try Self.writeAll(fd, plain, at: d.offset, path: files[d.file].path)
+                            } else {
+                                try Self.writeAll(fd, Array(plain[Int(d.offsetInChunk)..<end]), at: d.offset, path: files[d.file].path)
+                            }
+                            pending.append(.init(kind: .chunk, index: d.part, sha: units[u].chunk.journalKey))
                             if n > 0 { deduped += 1 }
-                            remainingBytes -= UInt64(plain.count)
+                            remainingBytes -= UInt64(d.length)
                             remaining[d.file] -= 1
                             if remaining[d.file] == 0 { awaitingFlush.append(d.file) }
                         }
@@ -297,10 +309,10 @@ public struct InstallEngine: Sendable {
                         }
                     case let .hashed(i, ok):
                         hashing -= 1
-                        guard ok else { throw SteamError.verificationFailed("\(files[i].path) does not match the manifest SHA-1 after assembly") }
+                        guard ok else { throw ClientError.verificationFailed("\(files[i].path) does not match the manifest hash after assembly") }
                         fileDone[i] = true
                         verified += 1
-                        pending.append(.init(kind: .file, index: i, sha: files[i].sha ?? []))
+                        pending.append(.init(kind: .file, index: i, sha: InstallJournal.fileKey(files[i])))
                     case .rehashed:
                         break
                     }
@@ -316,9 +328,9 @@ public struct InstallEngine: Sendable {
         report(force: true)
         if let limit, downloaded >= limit, fileDone.contains(false) {
             log.info("install", "stopping after \(downloaded) downloaded chunks (cancel-after-chunks); the stage is kept for resume")
-            throw SteamError.cancelled
+            throw ClientError.cancelled
         }
-        guard !fileDone.contains(false) else { throw SteamError.verificationFailed("stage finished with unverified files") }
+        guard !fileDone.contains(false) else { throw ClientError.verificationFailed("stage finished with unverified files") }
         return Result(files: files.count, bytes: plan.totalBytes, chunksDownloaded: downloaded, chunksDeduped: deduped,
                       chunksResumed: resumed, chunksRejected: rejected, filesResumed: filesResumed,
                       downloadedBytes: downloadedBytes, filesVerified: verified,
@@ -327,7 +339,7 @@ public struct InstallEngine: Sendable {
 
     private func checkSpace(_ root: URL, needed: UInt64) throws {
         let available = try freeSpace(root)
-        guard available >= needed else { throw SteamError.insufficientSpace(needed: needed, available: available) }
+        guard available >= needed else { throw ClientError.insufficientSpace(needed: needed, available: available) }
     }
 
     static func writeAll(_ fd: Int32, _ data: [UInt8], at offset: UInt64, path: String) throws {
@@ -336,27 +348,34 @@ public struct InstallEngine: Sendable {
             let n = data.withUnsafeBytes { pwrite(fd, $0.baseAddress! + done, data.count - done, off_t(offset) + off_t(done)) }
             if n < 0, errno == EINTR { continue }
             guard n > 0 else {
-                if errno == ENOSPC { throw SteamError.insufficientSpace(needed: UInt64(data.count - done), available: 0) }
-                throw SteamError.transport("write \(path) errno \(errno)")
+                if errno == ENOSPC { throw ClientError.insufficientSpace(needed: UInt64(data.count - done), available: 0) }
+                throw ClientError.transport("write \(path) errno \(errno)")
             }
             done += n
         }
     }
 
-    static func chunkOnDisk(_ url: URL, _ c: ContentManifestPayload.Chunk) -> Bool {
+    /// A journalled part on disk: a whole chunk is re-hashed; a slice is
+    /// trusted from the journal (its data was synced first) and the file's hash checks it.
+    static func partOnDisk(_ url: URL, _ p: ContentPart, _ c: ContentChunk) -> Bool {
+        guard p.offsetInChunk == 0, p.length == c.size else { return true }
         let fd = sysOpen(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0)
         guard fd >= 0 else { return false }
         defer { _ = sysClose(fd) }
-        var buf = [UInt8](repeating: 0, count: Int(c.cbOriginal))
-        let n = buf.withUnsafeMutableBytes { pread(fd, $0.baseAddress, Int(c.cbOriginal), off_t(c.offset)) }
-        return n == Int(c.cbOriginal) && SHA1.hash(buf) == c.sha
+        var buf = [UInt8](repeating: 0, count: Int(p.length))
+        let n = buf.withUnsafeMutableBytes { pread(fd, $0.baseAddress, Int(p.length), off_t(p.fileOffset)) }
+        return n == Int(p.length) && c.matches(buf)
     }
 
     /// Size, then content: an empty file carries no meaningful hash.
-    static func fileMatches(_ url: URL, size: UInt64, sha: [UInt8]?) -> Bool {
+    public static func fileMatches(_ url: URL, size: UInt64, hash: FileHash) -> Bool {
         guard InstallFS.fileSize(url) == size else { return false }
-        guard let sha, size > 0 else { return true }
-        return InstallFS.sha1(url, expectedSize: size) == sha
+        guard size > 0 else { return true }
+        switch hash {
+        case let .sha1(want): return InstallFS.sha1(url, expectedSize: size) == want
+        case let .md5(want): return InstallFS.md5(url, expectedSize: size) == want
+        case .none: return true
+        }
     }
 }
 

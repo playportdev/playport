@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import XCTest
+@testable import ContentKit
 @testable import SteamClientKit
 
 /// Serves chunk plaintext from memory and counts what it served.
@@ -357,7 +358,7 @@ final class InstallEngineTests: XCTestCase {
         h.write(Data([1, 0, 0, 0, 9, 9]))
         try h.close()
 
-        let (j, replay) = try InstallJournal.open(journal, plan: p)
+        let (j, replay) = try InstallJournal.open(journal, plan: p.content)
         j.close()
         XCTAssertFalse(replay.fresh)
         XCTAssertEqual(replay.discardedBytes, 6)
@@ -382,7 +383,7 @@ final class InstallEngineTests: XCTestCase {
         let p = try plan(fx)
         _ = try? await engine(fx.source) { $0.cancelAfterChunks = 3 }.run(p)
         let other = p.restricted(to: ["one.bin"])
-        let (j, replay) = try InstallJournal.open(journal, plan: other)
+        let (j, replay) = try InstallJournal.open(journal, plan: other.content)
         j.close()
         XCTAssertTrue(replay.fresh)
         XCTAssertEqual(replay.chunks.count, 0)
@@ -391,14 +392,14 @@ final class InstallEngineTests: XCTestCase {
     func testCorruptRecordEndsReplay() throws {
         let fx = Fixture()
         let p = try plan(fx)
-        let (j, _) = try InstallJournal.open(journal, plan: p)
+        let (j, _) = try InstallJournal.open(journal, plan: p.content)
         let c = p.files[0].chunks
         try j.append([.init(kind: .chunk, index: 0, sha: c[0].sha), .init(kind: .chunk, index: 1, sha: c[1].sha),
                       .init(kind: .chunk, index: 2, sha: c[0].sha) /* wrong hash for chunk 2 */, .init(kind: .chunk, index: 3, sha: c[3].sha)])
         j.close()
         var raw = [UInt8](try Data(contentsOf: journal))
         XCTAssertEqual(raw.count, InstallJournal.headerSize + 4 * InstallJournal.recordSize)
-        let (j2, replay) = try InstallJournal.open(journal, plan: p)
+        let (j2, replay) = try InstallJournal.open(journal, plan: p.content)
         j2.close()
         XCTAssertEqual(replay.chunks, [0, 1])
         XCTAssertEqual(replay.discardedBytes, 2 * InstallJournal.recordSize)
@@ -406,7 +407,7 @@ final class InstallEngineTests: XCTestCase {
         raw = [UInt8](try Data(contentsOf: journal))
         raw[InstallJournal.headerSize + 5] ^= 1
         try Data(raw).write(to: journal)
-        let (j3, replay3) = try InstallJournal.open(journal, plan: p)
+        let (j3, replay3) = try InstallJournal.open(journal, plan: p.content)
         j3.close()
         XCTAssertEqual(replay3.chunks, [])
     }
