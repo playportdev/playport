@@ -382,7 +382,7 @@ without the owner is recorded here with its reason.
 - **`tools/perf.py`, from the supervising session (not this plan's work):** unattended,
   `pp perf` now shows the black screen during its cooling wait. It holds the lock from the HUD
   launch to the play, so the lock's own rest came only after each run and the Home Screen stayed
-  lit through every 15-minute cool. Commit it with the next chunk as is.
+  lit through every 15-minute cool. Committed as `dcfcc86`.
 - **Step 0: done** ([evidence](../evidence/2026-10-06-vulkan-perf-tooling.md)).
   Graphics options (decision 0060; 0059 is left to the Epic decision 0058 names),
   `[frames]` lines for `--no-hud`, `pp perf --compare --window`, KosmicKrisp one-frame
