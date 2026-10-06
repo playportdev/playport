@@ -13,7 +13,7 @@
 #              after `unix`
 #   TBLGEN     LLVM 15.0.7 host llvm-tblgen (air-helper-port.sh `llvm`)
 #   LLVM_IOS   the LLVM iOS build directory, version-keyed and reused across
-#              runs (default $PLAYPORT_BUILD/cache/llvm-ios-15.0.7)
+#              runs (default $PLAYPORT_BUILD/cache/llvm-ios-15.0.7-sdkcxx)
 #   LD64       build/lib.sh; CMake's link checks need a Mach-O linker.
 #              LIBTOOL: the cctools libtool next to it.
 #
@@ -32,7 +32,9 @@ TBLGEN=${TBLGEN:?set TBLGEN to an LLVM 15.0.7 llvm-tblgen}
 LLVM_TAG=$(pin llvm-project)
 # resolved: a cache/ reached through a symlink must configure the same build
 # directory, or CMake re-records it and ninja rebuilds it all
-LLVM_IOS=$(realpath -m "${LLVM_IOS:-$PLAYPORT_BUILD/cache/llvm-ios-${LLVM_TAG#llvmorg-}}")
+# -sdkcxx: built with the SDK's libc++ headers (below); the tree of an older
+# build, with the host's, stays where it is for that build.
+LLVM_IOS=$(realpath -m "${LLVM_IOS:-$PLAYPORT_BUILD/cache/llvm-ios-${LLVM_TAG#llvmorg-}-sdkcxx}")
 LIBTOOL=${LIBTOOL:-$(dirname "$LD64")/arm64-apple-darwin-libtool}
 SDK=$IOSSDK
 TARGET=arm64-apple-ios18.0   # the slice's own target (stages/dxmt-base.sh unix)
@@ -52,7 +54,7 @@ cmake -G Ninja -S "$LLVM_PROJECT/llvm" -B "$LLVM_IOS" \
     -DCMAKE_C_COMPILER_TARGET=$TARGET -DCMAKE_CXX_COMPILER_TARGET=$TARGET -DCMAKE_ASM_COMPILER_TARGET=$TARGET \
     -DCMAKE_AR="$(command -v llvm-ar)" -DCMAKE_RANLIB="$(command -v llvm-ranlib)" \
     -DCMAKE_EXE_LINKER_FLAGS="--ld-path=$LD64" -DCMAKE_SHARED_LINKER_FLAGS="--ld-path=$LD64" \
-    -DCMAKE_C_FLAGS="$MAP" -DCMAKE_CXX_FLAGS="$MAP" \
+    -DCMAKE_C_FLAGS="$MAP" -DCMAKE_CXX_FLAGS="$MAP -stdlib++-isystem $SDK/usr/include/c++/v1" \
     -DLLVM_HOST_TRIPLE=$TARGET -DLLVM_TABLEGEN="$TBLGEN" \
     -DLLVM_TARGETS_TO_BUILD="" -DLLVM_ENABLE_ASSERTIONS=On \
     -DLLVM_ENABLE_ZSTD=Off -DLLVM_ENABLE_ZLIB=Off -DLLVM_ENABLE_TERMINFO=Off -DLLVM_ENABLE_LIBXML2=Off \

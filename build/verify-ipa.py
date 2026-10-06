@@ -20,6 +20,7 @@ any mismatch:
   executable    arm64 MH_EXECUTE, NOUNDEFS, LC_BUILD_VERSION iOS minos equal to
                 Info.plist MinimumOSVersion, cryptid 0, every dylib from a
                 system path
+  libc++        no Mach-O imports a libc++ symbol that iOS 26.0 lacks
   signature     each code directory: every code page, and special slots 1, 2,
                 3, 5, 7 (Info.plist, requirements, CodeResources, entitlements,
                 DER entitlements); the entitlements carry increased-memory-limit; CodeResources files2 seals every bundle file
@@ -412,12 +413,37 @@ def jit_helper_checks(app, info, signed, profile=True):
           "jit-helper: the extension's profile names its own App ID")
 
 
+# libc++ exports newer than iOS 26.0 (the app's MinimumOSVersion), which a header
+# without Apple's availability markup calls: libc++ 21's std::__hash_memory, behind
+# every std::hash of a string (PLA-5).
+LIBCXX_NEWER_THAN_MINOS = {"__ZNSt3__113__hash_memoryEPKvm"}
+
+
 HOST_IO_EXPORTS = ["_macdrv_functions", "_get_win_data", "_release_win_data", "_macdrv_view_create_metal_view",
                    "_macdrv_view_get_metal_layer", "_macdrv_view_release_metal_view"]
 HOST_IO_DEFINED = ["_madeira_display_set_layer", "_winios_post_client_pointer", "_winios_post_focus",
                    "_ios_audio_host_suspend", "_winemetal_host_gpu_gate", "_host_pad_set",
                    "_winios_gamepad_set_state", "_winios_gamepad_get_state", "_ios_gamepad_query",
                    "_audio_null_ios_unix_call_funcs"]
+
+
+def libcxx_newer_checks(app):
+    """No Mach-O imports a libc++ symbol that iOS 26.0's /usr/lib/libc++.1.dylib
+    lacks. The SDK's .tbd stubs are the newest iOS's, so the link takes them; dyld on
+    an older iOS refuses the app at launch (PLA-5). Code compiled with the SDK's
+    libc++ headers never names them below its deployment target: one that does
+    was compiled with another libc++'s headers (the host's, stages/dxmt-base.sh)."""
+    found = {}
+    for p in sorted(app.rglob("*")):
+        if p.is_file() and not p.is_symlink() and p.read_bytes()[:4] == b"\xcf\xfa\xed\xfe":
+            und = subprocess.run(["llvm-nm", "--undefined-only", "--just-symbol-name", str(p)],
+                                 capture_output=True, text=True).stdout.split()
+            bad = sorted(set(und) & LIBCXX_NEWER_THAN_MINOS)
+            if bad:
+                found[str(p.relative_to(app))] = bad
+    check(not found, "libc++: no Mach-O imports a symbol newer than iOS 26.0's libc++ ("
+          + ", ".join(sorted(LIBCXX_NEWER_THAN_MINOS)) + ")"
+          + ("; " + "; ".join(f"{f}: {', '.join(s)}" for f, s in found.items()) if found else ""))
 
 
 def workstation_path_checks(app):
@@ -681,6 +707,7 @@ def main():
         check(all(p.startswith(sysp) or p in embedded for p in m["dylibs"]),
               f"executable: {len(m['dylibs'])} dylibs ({m['weak']} weak), from system paths or {embedded}")
         fws = sorted(p.name for p in (app / "Frameworks").iterdir()) if (app / "Frameworks").exists() else []
+        libcxx_newer_checks(app)
         check(fws == ["KosmicKrisp.framework"], f"bundle: Frameworks/ holds KosmicKrisp.framework only ({fws})")
         kk = app / "Frameworks/KosmicKrisp.framework/KosmicKrisp"
         if kk.exists():

@@ -132,6 +132,16 @@ not a failure, and what must hold:
   `unreviewed-app-selection` whenever the selection is not):
   `pp verify` reports it, and only `--distribution` fails it.
 
+**The SDK's libc++ headers for iOS C++.** The host clang searches its own
+`../include/c++/v1` before the sysroot's, so on a Linux host with libc++
+installed an iOS compile would take Linux's libc++ headers. Their
+`__config_site` has no Apple availability markup, so code below the app's
+deployment target calls exports that only a newer iOS's libc++ has. libc++ 21's
+`std::__hash_memory` killed the app at launch on iOS 26.0 (PLA-5). Every iOS C++
+compile (DXMT's unix slice and its LLVM, `mesa.sh`) passes
+`-stdlib++-isystem $IOSSDK/usr/include/c++/v1`, and `pp verify` fails a Mach-O
+that imports a libc++ symbol iOS 26.0 lacks (`LIBCXX_NEWER_THAN_MINOS`).
+
 **No workstation path in the IPA.** Every tree is compiled with
 `-ffile-prefix-map` for its own root and the toolchains (the unix stage's
 clang shim, Wine's `CROSSCFLAGS`, FEX's and DXMT's flags, and

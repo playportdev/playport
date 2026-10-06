@@ -93,6 +93,10 @@ stage_llvm() {
 stage_unix() {
     mkdir -p "$OBJ"
     local common="--target=arm64-apple-ios18.0 -isysroot $SDK -fblocks -O2 -ffile-prefix-map=$ROOT/="
+    # The SDK's libc++ headers, not the host's: clang searches its own
+    # ../include/c++/v1 first, and a Linux libc++ there has no Apple availability
+    # markup, so std::hash calls std::__hash_memory, which iOS 26.0's libc++ lacks (PLA-5).
+    local cxx="-stdlib++-isystem $SDK/usr/include/c++/v1"
     local inc="-I$D/include -I$D/libs -I$D/src/winemetal -I$D/src/airconv"
     local incdx="-I$D/include/native/directx -I$D/include/native/windows"
     local incllvm="-I$ROOT/llvm-host-build/include -I$ROOT/llvm-project/llvm/include"
@@ -110,11 +114,11 @@ stage_unix() {
              dxbc_converter_ts dxbc_converter_basicblock dxbc_converter_cfg dxbc_instructions \
              dxbc_signature metallib_writer nt/air_builder nt/dxbc_converter_base transforms/lower_16bit_texread \
              dxbc_binding_sm50 dxbc_binding_rootsig transforms/simdgroup_implicit_membarrier; do
-        cc1 "$(basename $p)" clang++ $common -std=c++20 -fno-exceptions -fno-rtti $inc $incdx \
+        cc1 "$(basename $p)" clang++ $common $cxx -std=c++20 -fno-exceptions -fno-rtti $inc $incdx \
             -I"$ROOT/shader-headers" $incllvm $defs -c "$D/src/airconv/$p.cpp"
     done
     for c in BlobContainer DXBCUtils ShaderBinary; do
-        cc1 dxbc_$c clang++ $common -std=c++20 -fno-rtti $inc $incdx $defs -c "$D/libs/DXBCParser/$c.cpp"
+        cc1 dxbc_$c clang++ $common $cxx -std=c++20 -fno-rtti $inc $incdx $defs -c "$D/libs/DXBCParser/$c.cpp"
     done
     echo "unix: $ok/23 compiled; failed:${failed:- none}"
     (cd "$OBJ" && sha256sum *.o > "$ROOT/unix-objects.sha256")
