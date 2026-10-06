@@ -254,6 +254,8 @@ struct GOGSignInSheet: View {
                 Task { await account.signIn(code: code) }
             }
             .navigationTitle("Sign in to GOG")
+            .onAppear { AppDelegate.allowsPortrait = true }
+            .onDisappear { AppDelegate.allowsPortrait = false }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { account.signingIn = false } }
