@@ -1205,6 +1205,12 @@ def run_main(argv):
         except (OSError, ValueError):
             last = {}
         wait = max(0.0, ended + a.cool * 60 - time.time())
+        # Unattended, the phone rests on the black screen while it cools: this job holds
+        # the lock throughout, so the lock's own rest comes only after the play, and the
+        # HUD launch above has just closed any black screen (OLED burn-in, DEVICE.md).
+        if phonelib.unattended():
+            with contextlib.suppress(Exception):
+                phonelib.rest(ev, out)
         ev("cooling", rested_min=round((time.time() - ended) / 60, 1) if ended else None,
            want_min=a.cool, wait_s=round(wait), pressure=cool_state(last, ended), power=battery_power())
         time.sleep(wait)
