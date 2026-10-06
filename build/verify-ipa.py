@@ -19,7 +19,8 @@ any mismatch:
   zip           entries stored, no symlinks, no case collisions
   executable    arm64 MH_EXECUTE, NOUNDEFS, LC_BUILD_VERSION iOS minos equal to
                 Info.plist MinimumOSVersion, cryptid 0, every dylib from a
-                system path
+                system path; it and KosmicKrisp import no libc++ function newer
+                than iOS 26.0's (NEWER_LIBCXX)
   signature     each code directory: every code page, and special slots 1, 2,
                 3, 5, 7 (Info.plist, requirements, CodeResources, entitlements,
                 DER entitlements); the entitlements carry increased-memory-limit; CodeResources files2 seals every bundle file
@@ -420,6 +421,20 @@ HOST_IO_DEFINED = ["_madeira_display_set_layer", "_winios_post_client_pointer", 
                    "_audio_null_ios_unix_call_funcs"]
 
 
+# libc++.1.dylib functions the app's deployment target (iOS 26.0) does not have:
+# C++ compiled against headers without Apple's availability markup calls them,
+# and dyld refuses the app at launch ("Symbol not found", iOS 26.1). The build
+# compiles iOS C++ against the SDK's headers (build/lib.sh ios_cxx_stdlib).
+NEWER_LIBCXX = [b"__ZNSt3__113__hash_memoryEPKvm"]
+
+
+def libcxx_checks(name, path):
+    d = path.read_bytes()
+    bad = [s.decode() for s in NEWER_LIBCXX if s in d]
+    check(not bad, f"libc++: {name} imports nothing newer than iOS 26.0's libc++"
+          + (f" ({', '.join(bad)})" if bad else ""))
+
+
 def workstation_path_checks(app):
     """This machine's home and repository, which the build maps out of every binary
     (build/ld64/swift-build, build/stages/unix.sh, wine-pe.sh, fex.sh, dxmt-*.sh).
@@ -674,6 +689,7 @@ def main():
         plat, minos, sdk = m["build"]
         check(plat == 2 and ver(minos) == info.get("MinimumOSVersion"), f"executable: platform iOS, minos {ver(minos)} (sdk {ver(sdk)}); Info.plist MinimumOSVersion {info.get('MinimumOSVersion')}")
         check(m.get("cryptid", 0) == 0, "executable: cryptid 0")
+        libcxx_checks("executable", exe)
         sysp = ("/System/Library/", "/usr/lib/")
         # KosmicKrisp, the Vulkan backend's driver (decision 0014), is the one
         # embedded framework: win32u dlopens it by its install name.
@@ -687,6 +703,7 @@ def main():
             km = macho(kk)
             check(km["cpu"] == 0x0100000c and km["ftype"] == 6 and km["build"][0] == 2,
                   "KosmicKrisp: arm64 MH_DYLIB for iOS")
+            libcxx_checks("KosmicKrisp", kk)
             # The signer adds a code signature (and its load command) to the
             # staged binary, after padding it to 16 bytes; compare the code
             # and data pages before it.

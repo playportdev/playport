@@ -185,6 +185,18 @@ stage_inputs() {
         [ -f "$inc/arm_neon.h" ] ||
             { say "copying clang $v resource headers into the SDK"; mkdir -p "$inc"; rsync -a --delete "$d/" "$inc/"; }
     done
+    # iOS C++ compiles take the SDK's libc++ headers (build/lib.sh ios_cxx_stdlib):
+    # std::hash<std::string> for the deployment target must not call
+    # std::__hash_memory, which iOS 26.1's libc++.1.dylib lacks.
+    local cxxstd probe=$RUN/logs/libcxx-probe
+    cxxstd=$(ios_cxx_stdlib) || exit 1
+    printf '#include <string>\nunsigned long h(const std::string &s) { return std::hash<std::string>()(s); }\n' |
+        clang++ --target=arm64-apple-ios26.0 -isysroot "$IOSSDK" $cxxstd -std=c++20 -O2 -x c++ -c - -o "$probe.o" ||
+        { say "clang++ cannot compile against the SDK's libc++ headers"; exit 1; }
+    llvm-nm -u "$probe.o" > "$probe.nm"
+    ! grep -q __hash_memory "$probe.nm" ||
+        { say "an iOS 26.0 C++ compile calls std::__hash_memory, which iOS 26.1 lacks: check ios_cxx_stdlib"; exit 1; }
+    rm -f "$probe.o" "$probe.nm"
     grep -q INCREASED_MEMORY_LIMIT "$XTOOL" ||
         { say "XTOOL lacks the increased-memory-limit patch (build/toolchain/xtool.sh)"; exit 1; }
     {

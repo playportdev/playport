@@ -92,3 +92,20 @@ ensure_series() {
     for t in $targets; do apply_series "$tree" "$t"; done
     check_series "$tree" "$targets" "$pin" "${4:-}"
 }
+
+# ios_cxx_stdlib: the flag that points an iOS C++ compile with the host clang
+# at the SDK's libc++ headers. For an Apple target clang takes them from beside
+# itself (<bin>/../include/c++/v1) before the SDK's, so a host with libc++
+# installed (Arch's /usr/include/c++/v1) compiles against upstream headers.
+# Those carry no Apple availability markup: they call libc++.1.dylib functions
+# newer than the deployment target, std::__hash_memory (LLVM 21) first, and dyld
+# refuses the app on an older iOS ("Symbol not found: __ZNSt3__113__hash_memoryEPKvm"
+# on iOS 26.1). -stdlib++-isystem replaces that search; the SDK's headers gate
+# each such call on the target's minos (build/verify-ipa.py "libc++").
+ios_cxx_stdlib() {
+    local d=$IOSSDK/usr/include/c++/v1
+    [ -f "$d/__config" ] || d=$DARWIN_SDK/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1
+    [ -f "$d/__config" ] ||
+        { echo "no libc++ headers in the iPhoneOS SDK ($IOSSDK) or its toolchain" >&2; return 1; }
+    echo "-stdlib++-isystem $d"
+}

@@ -17,6 +17,17 @@ module `pefile` (`app/tools/prefix-registry.py`). For the phone, `pp install`
 checks for `pymobiledevice3`, `netmuxd` and `jq`; the pairing file also needs
 `socat` ([DEVICE.md](DEVICE.md#setup-once)).
 
+**libc++ headers.** For an Apple target the host clang takes libc++ headers from
+beside itself (`<bin>/../include/c++/v1`, such as a distribution's libc++
+package) before the SDK's. Those upstream headers have no Apple availability
+markup, so C++ built against them calls `libc++.1.dylib` functions newer than the
+deployment target, and dyld refuses the app at launch on an older iOS (iOS 26.1:
+`Symbol not found: __ZNSt3__113__hash_memoryEPKvm`). Every iOS C++ compile (DXMT's
+unix objects, the LLVM 15 iOS libraries, the Madeira unix shim's `clang++`, Mesa)
+therefore passes `-stdlib++-isystem` with the SDK's headers (`build/lib.sh`
+`ios_cxx_stdlib`). The `inputs` stage checks this with a probe compile, and
+`pp verify` checks the executable and KosmicKrisp (`NEWER_LIBCXX`).
+
 **Cached inputs** are not committed. System toolchains (`LLVM_MINGW`,
 `DARWIN_SDK`) stay where they are installed, and the repository names no path
 outside itself: `./pp setup` finds them once (llvm-mingw's clang on `PATH` or

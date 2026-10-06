@@ -74,10 +74,12 @@ stage_ios() {
     # the dylib names no workstation path (build/verify-ipa.py).
     local cc="'--target=$TARGET', '-isysroot', '$IOSSDK', '-ffile-prefix-map=$ROOT/=', '-ffile-prefix-map=$DARWIN_SDK=darwin-sdk'"
     local ld="'--target=$TARGET', '-isysroot', '$IOSSDK', '-fuse-ld=lld'"
+    # C++ takes the SDK's libc++ headers, not the host's (build/lib.sh ios_cxx_stdlib).
+    local cxxinc; cxxinc=$(ios_cxx_stdlib); cxxinc=${cxxinc#-stdlib++-isystem }
     cat > "$ROOT/ios.cross" <<EOF
 [binaries]
 c = ['clang', $cc]
-cpp = ['clang++', $cc]
+cpp = ['clang++', $cc, '-stdlib++-isystem', '$cxxinc']
 objc = ['clang', $cc]
 c_ld = 'lld'
 cpp_ld = 'lld'

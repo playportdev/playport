@@ -38,7 +38,8 @@ SDK=$IOSSDK
 TARGET=arm64-apple-ios18.0   # the slice's own target (stages/dxmt-base.sh unix)
 LLVM_PROJECT=$(realpath "$DXMT_UNIX/llvm-project")
 # assertion strings embed __FILE__: map both trees so the bytes do not depend on them
-MAP="-ffile-prefix-map=$LLVM_IOS/= -ffile-prefix-map=$LLVM_PROJECT/=llvm-project/"
+MAP="-ffile-prefix-map=$LLVM_IOS/= -ffile-prefix-map=$LLVM_PROJECT/=llvm-project/ -ffile-prefix-map=$DARWIN_SDK=darwin-sdk"
+CXXSTD=$(ios_cxx_stdlib)   # the SDK's libc++ headers, not the host's (build/lib.sh)
 
 test "$(ls "$DXMT_UNIX"/obj/*.o | wc -l)" = 23
 "$TBLGEN" --version | grep -q 'LLVM version 15.0.7'
@@ -52,7 +53,7 @@ cmake -G Ninja -S "$LLVM_PROJECT/llvm" -B "$LLVM_IOS" \
     -DCMAKE_C_COMPILER_TARGET=$TARGET -DCMAKE_CXX_COMPILER_TARGET=$TARGET -DCMAKE_ASM_COMPILER_TARGET=$TARGET \
     -DCMAKE_AR="$(command -v llvm-ar)" -DCMAKE_RANLIB="$(command -v llvm-ranlib)" \
     -DCMAKE_EXE_LINKER_FLAGS="--ld-path=$LD64" -DCMAKE_SHARED_LINKER_FLAGS="--ld-path=$LD64" \
-    -DCMAKE_C_FLAGS="$MAP" -DCMAKE_CXX_FLAGS="$MAP" \
+    -DCMAKE_C_FLAGS="$MAP" -DCMAKE_CXX_FLAGS="$MAP $CXXSTD" \
     -DLLVM_HOST_TRIPLE=$TARGET -DLLVM_TABLEGEN="$TBLGEN" \
     -DLLVM_TARGETS_TO_BUILD="" -DLLVM_ENABLE_ASSERTIONS=On \
     -DLLVM_ENABLE_ZSTD=Off -DLLVM_ENABLE_ZLIB=Off -DLLVM_ENABLE_TERMINFO=Off -DLLVM_ENABLE_LIBXML2=Off \

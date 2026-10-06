@@ -78,7 +78,9 @@ case " \$* " in
 esac
 exec /usr/bin/clang "\$@"
 EOF
-    sed 's|/usr/bin/clang |/usr/bin/clang++ |g' "$SHIMS/clang" > "$SHIMS/clang++"
+    # clang++ also takes the SDK's libc++ headers, not the host's (build/lib.sh ios_cxx_stdlib).
+    local cxxstd; cxxstd=$(ios_cxx_stdlib)
+    sed "s|/usr/bin/clang |/usr/bin/clang++ |g; s|--target=arm64-apple-ios17.0 |&$cxxstd |" "$SHIMS/clang" > "$SHIMS/clang++"
     ln -sf clang "$SHIMS/cc"; ln -sf clang++ "$SHIMS/c++"   # CMake's default compiler names
     cat > "$SHIMS/xcrun" <<EOF
 #!/bin/sh
