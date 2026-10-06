@@ -71,19 +71,72 @@ no stream.
 
 <p align="center"><sub>On an A19 Pro iPhone, iOS 27.0, with Metal's performance HUD.</sub></p>
 
-## Quickstart
+## Install
 
-Playport is not on the App Store: you sideload the `.ipa` yourself.
+Playport is not on the App Store: you sideload the `.ipa` yourself, with your
+own Apple ID (a free one works).
 
 1. Download the `.ipa` from [Releases](https://github.com/playportdev/playport/releases).
-2. Sideload it onto your iPhone with your own Apple ID.
+   It is signed ad hoc (no certificate) and asks for Increased Memory Limit;
+   your sideloader signs it for your iPhone.
+2. Sideload it with a tool that keeps Increased Memory Limit (below). If the
+   tool asks whether to keep app extensions, keep them: Playport's JIT helper
+   is one.
 3. Turn on Developer Mode (Settings › Privacy & Security), and install
    LocalDevVPN from the App Store for JIT.
-4. Open Playport and follow its first-run checklist: controller, pairing,
-   LocalDevVPN and Steam.
+4. Open Playport and follow its first-run checklist: pairing, LocalDevVPN,
+   Memory and Steam. Memory has a green tick when the signature kept Increased
+   Memory Limit.
 
 A free Apple ID signs the app for seven days, so re-sign it once a week; your
 games and saves stay on the phone.
+
+### Which sideloaders keep the memory limit
+
+iOS closes an app that uses more memory than its limit, and Playport's JIT
+memory, the runtime and the game all share that one limit. With Increased
+Memory Limit our 12 GB test iPhone gives Playport 6 to 8 GB; without it an
+8 GB iPhone gives about 3.3 GB, and Playport will not start a game known to
+need more. The `.ipa` asks for it, but iOS grants it only when the sideloader
+also turns the capability on for the app's App ID at Apple, and not every
+sideloader does.
+
+| Sideloader | Keeps it | How we know |
+| --- | --- | --- |
+| AltStore Classic 2.2 or later | yes | AltStore's 2.2 release notes and user reports; not tested by us |
+| [Impactor](https://github.com/khcrysalis/PlumeImpactor), from a computer | likely | its source asks for every capability the app's entitlements name; not tested by us |
+| SideStore 0.7.0 | **no**, for a free Apple ID | it drops the capability ([SideStore#1616](https://github.com/SideStore/SideStore/issues/1616)); use the fix below |
+| Sideloadly and others | unknown | check the Memory step |
+
+Whatever you use, Playport tells you: the checklist's **Memory** step, and
+Settings › Setup check › Increased Memory Limit (On or Off). If it is Off, the
+step's **How to fix** says what to do; you can also put it off with **Not now**
+and play smaller games.
+
+### SideStore: when Memory has no tick
+
+SideStore asks for Increased Memory Limit but never turns it on for a free
+Apple ID, so Playport's App ID has to get it once another way. GetMoreRam
+does that:
+
+1. Install Playport with SideStore as usual, so its App ID exists.
+2. Sideload [GetMoreRam](https://github.com/hugeBlack/GetMoreRam) and, in its
+   Settings, sign in with the same Apple ID SideStore uses.
+3. On its **App IDs** page tap **Refresh**, tap Playport's App ID, then **Add
+   Increased Memory Limit**.
+4. Reinstall Playport from SideStore (it upgrades in place: your games and
+   saves stay).
+5. Open Playport: the Memory step has its tick, and Settings › Setup check shows
+   Increased Memory Limit On.
+
+GetMoreRam takes one of a free Apple ID's three app slots while installed; you
+can delete it afterwards. **We have not tested this on a phone yet.** Reading
+SideStore's source, it changes an App ID's capabilities only when the app's
+App Groups change, so the capability should last through weekly refreshes. If
+the tick goes away after a refresh, repeat steps 3 and 4. The fix in SideStore
+itself is offered upstream
+([SideSign#4](https://github.com/SideStore/SideSign/pull/4)); once a SideStore
+release carries it, this section goes.
 
 ## How Playport differs from Madeira
 
@@ -133,7 +186,8 @@ signature does not settle Apple's SDK, provisioning, JIT or delivery terms.
 - 32-bit games are new: Portal 2 is the only one tested so far. They run on
   the Vulkan backend, which is experimental.
 - A free Apple ID signs apps for seven days, so refresh the app once a week
-  (SideStore can do it on the phone). Your games and saves stay on the phone.
+  (SideStore can do it on the phone, after the one-time
+  [memory step](#sidestore-when-memory-has-no-tick)). Your games and saves stay on the phone.
   Playport takes one of the free account's three app slots; its JIT helper takes
   no slot but is one of the ten App IDs the account may register a week.
 - How it works: [architecture](docs/ARCHITECTURE.md), [building](docs/BUILDING.md),

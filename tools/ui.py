@@ -29,8 +29,9 @@ model calls: each --action in order, then --settings, --verify, --play:
                          pad:left/right change a Graphics value.
                          On the checklist (open:setup) pad:right/left or rb/lb move along its steps,
                          pad:a does the ringed one (Pair again re-pairs: not in a test). First run:
-                         pad:x on Steam puts it off; pad:b cannot leave until pairing and VPN are
-                         ready and Steam is signed in or put off. Then the completion overlay's
+                         pad:x on Memory or Steam puts it off; pad:b cannot leave until pairing
+                         and VPN are ready, Increased Memory Limit is on or put off, and Steam is
+                         signed in or put off. Then the completion overlay's
                          pad:a/Continue leaves; pad:b closes only the overlay. Later visits always
                          allow pad:b. Settings' dev Preview a first run simulates each step with A.
                          On Sign in to Steam (open:signin) pad:a on its left card asks for the account

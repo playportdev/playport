@@ -1534,8 +1534,8 @@ final class SetupChecklistTests: XCTestCase {
     func testTheStepsAndWhereTheRingStarts() {
         var f = SetupFacts(controller: "Xbox Wireless Controller", pairing: false, pairsOnPhone: false, tunnelUp: false)
         let items = SetupChecklist.items(f)
-        XCTAssertEqual(items.map(\.step), [.pairing, .vpn, .steam])
-        XCTAssertEqual(items.map(\.done), [false, false, false])
+        XCTAssertEqual(items.map(\.step), [.pairing, .vpn, .memory, .steam])
+        XCTAssertEqual(items.map(\.done), [false, false, false, false])
         XCTAssertEqual(items[0].title, "Pairing file")
         XCTAssertEqual(items[0].action, "Choose file")
         XCTAssertEqual(SetupChecklist.firstTodo(f), .pairing)
@@ -1545,11 +1545,15 @@ final class SetupChecklistTests: XCTestCase {
         f.tunnelUp = true
         XCTAssertEqual(SetupChecklist.item(.pairing, f).action, "Pair again")
         XCTAssertNil(SetupChecklist.item(.vpn, f).action)
-        XCTAssertEqual(SetupChecklist.firstTodo(f), .steam)
+        XCTAssertEqual(SetupChecklist.firstTodo(f), .memory)
         XCTAssertEqual(SetupChecklist.doneCount(f), 2)
+        f.memoryEntitled = true
+        XCTAssertNil(SetupChecklist.item(.memory, f).action)
+        XCTAssertEqual(SetupChecklist.firstTodo(f), .steam)
+        XCTAssertEqual(SetupChecklist.doneCount(f), 3)
         f.steamSignedIn = true
         XCTAssertEqual(SetupChecklist.firstTodo(f), .pairing)
-        XCTAssertEqual(SetupChecklist.doneCount(f), 3)
+        XCTAssertEqual(SetupChecklist.doneCount(f), 4)
         XCTAssertEqual(SetupChecklist.item(.vpn, SetupFacts(tunnelUp: nil)).detail, "Checking…")
     }
 
@@ -1566,7 +1570,7 @@ final class SetupChecklistTests: XCTestCase {
         // Both versions of pairing, with no controller required. Steam may be
         // done first: steps are freely navigable, only leaving is gated.
         for onPhone in [false, true] {
-            var f = SetupFacts(pairsOnPhone: onPhone, tunnelUp: false, steamSignedIn: true)
+            var f = SetupFacts(pairsOnPhone: onPhone, tunnelUp: false, steamSignedIn: true, memoryEntitled: true)
             XCTAssertFalse(SetupChecklist.complete(f))
             XCTAssertFalse(SetupChecklist.canLeave(f, firstRun: true))
             XCTAssertTrue(SetupChecklist.canLeave(f, firstRun: false))
@@ -1583,25 +1587,55 @@ final class SetupChecklistTests: XCTestCase {
     }
 
     func testNotNowSettlesOnlyTheOptionalSteamStep() {
-        var f = SetupFacts(steamSkipped: true)
+        var f = SetupFacts(steamSkipped: true, memoryEntitled: true)
         XCTAssertFalse(SetupChecklist.complete(f))
         f.pairing = true
         f.tunnelUp = true
         XCTAssertTrue(SetupChecklist.complete(f))
         XCTAssertTrue(SetupChecklist.canLeave(f, firstRun: true))
-        XCTAssertEqual(SetupChecklist.doneCount(f), 3)
+        XCTAssertEqual(SetupChecklist.doneCount(f), 4)
         XCTAssertTrue(SetupChecklist.item(.steam, f).done)
         // Not now never claims to be signed in or disables later sign-in.
         XCTAssertTrue(SetupChecklist.item(.steam, f).detail.hasPrefix("Not now."))
         XCTAssertEqual(SetupChecklist.item(.steam, f).action, "Sign in")
         XCTAssertEqual(SetupChecklist.notes(f, steamGame: true).count, 2)
-        XCTAssertFalse(SetupChecklist.offersNotNow(f, firstRun: true))
+        XCTAssertFalse(SetupChecklist.offersNotNow(.steam, f, firstRun: true))
         f.steamSkipped = false
         XCTAssertFalse(SetupChecklist.complete(f))
-        XCTAssertTrue(SetupChecklist.offersNotNow(f, firstRun: true))
-        XCTAssertFalse(SetupChecklist.offersNotNow(f, firstRun: false))
+        XCTAssertTrue(SetupChecklist.offersNotNow(.steam, f, firstRun: true))
+        XCTAssertFalse(SetupChecklist.offersNotNow(.steam, f, firstRun: false))
+        XCTAssertFalse(SetupChecklist.offersNotNow(.pairing, f, firstRun: true))
         f.steamSignedIn = true
-        XCTAssertFalse(SetupChecklist.offersNotNow(f, firstRun: true))
+        XCTAssertFalse(SetupChecklist.offersNotNow(.steam, f, firstRun: true))
+    }
+
+    func testTheMemoryStepIsTheEntitlementOrNotNow() {
+        var f = SetupFacts(pairing: true, tunnelUp: true, steamSignedIn: true, memoryEntitled: false)
+        XCTAssertFalse(SetupChecklist.complete(f))
+        XCTAssertFalse(SetupChecklist.canLeave(f, firstRun: true))
+        XCTAssertEqual(SetupChecklist.firstTodo(f), .memory)
+        XCTAssertFalse(SetupChecklist.item(.memory, f).done)
+        XCTAssertEqual(SetupChecklist.item(.memory, f).action, "How to fix")
+        XCTAssertTrue(SetupChecklist.item(.memory, f).detail.contains("without Increased Memory Limit"))
+        XCTAssertTrue(SetupChecklist.offersNotNow(.memory, f, firstRun: true))
+        XCTAssertFalse(SetupChecklist.offersNotNow(.memory, f, firstRun: false))
+        // Not now settles the step but never claims the entitlement; the fix stays offered.
+        f.memorySkipped = true
+        XCTAssertTrue(SetupChecklist.complete(f))
+        XCTAssertTrue(SetupChecklist.item(.memory, f).done)
+        XCTAssertTrue(SetupChecklist.item(.memory, f).detail.hasPrefix("Not now."))
+        XCTAssertEqual(SetupChecklist.item(.memory, f).action, "How to fix")
+        XCTAssertFalse(SetupChecklist.offersNotNow(.memory, f, firstRun: true))
+        // An unreadable signature is not on.
+        f = SetupFacts(pairing: true, tunnelUp: true, steamSignedIn: true, memoryEntitled: nil)
+        XCTAssertFalse(SetupChecklist.complete(f))
+        XCTAssertTrue(SetupChecklist.item(.memory, f).detail.contains("could not read"))
+        f.memoryEntitled = true
+        XCTAssertTrue(SetupChecklist.complete(f))
+        XCTAssertFalse(SetupChecklist.offersNotNow(.memory, f, firstRun: true))
+        // The entitlement never stops a launch: MemoryNeed decides per game.
+        f.memoryEntitled = false
+        XCTAssertEqual(SetupChecklist.beforeLaunch(f), .go)
     }
 
     func testTheCheckBeforeALaunch() {
@@ -1625,7 +1659,10 @@ final class SetupChecklistTests: XCTestCase {
         f.controller = "Pad"
         f.steamSignedIn = true
         XCTAssertEqual(SetupChecklist.notes(f, steamGame: true), [])
-        XCTAssertEqual(SetupChecklist.summary(f), "controller=Pad pairing=file vpn=unknown steam=signed-in")
+        XCTAssertEqual(SetupChecklist.summary(f), "controller=Pad pairing=file vpn=unknown memory=unknown steam=signed-in")
+        f.memoryEntitled = false
+        f.memorySkipped = true
+        XCTAssertEqual(SetupChecklist.summary(f), "controller=Pad pairing=file vpn=unknown memory=off (not now) steam=signed-in")
     }
 }
 

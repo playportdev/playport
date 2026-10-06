@@ -6,7 +6,8 @@
 // Playport turns on (LocalDevVPN.swift); and the memory iOS lets Playport use
 // (MemoryLimit), with the JIT memory a Play gets from it; Steam, optional. Its
 // first row opens the first-run checklist (SetupView.swift), which shows the
-// pairing, LocalDevVPN and Steam (PlayportKit SetupChecklist) as three steps.
+// pairing, LocalDevVPN, Increased Memory Limit and Steam (PlayportKit
+// SetupChecklist) as four steps.
 //
 // A dev build's JIT rows are the full panel (the helper's raw readiness and
 // reason, the disk image reset); a release build's show what a player acts
@@ -30,7 +31,7 @@ struct SetupCheckSettings: View {
     var body: some View {
         SettingsNote(text: "What a game needs from this phone. Playport checks it again by itself before every game.")
         PadRow(id: "set:setup:checklist", title: "Setup checklist",
-               subtitle: "The three steps a first run shows",
+               subtitle: "The steps a first run shows",
                value: "\(SetupChecklist.doneCount(state.facts)) of \(SetupStep.allCases.count) done", accessory: .chevron,
                hint: "Open") {
             AppNavigation.shared.openSetup()

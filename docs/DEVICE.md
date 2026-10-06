@@ -69,10 +69,13 @@ opens LocalDevVPN once to allow its VPN configuration. On iOS 27, Play and
 the driver's `play:` action both await the root-owned setup flow before the
 runtime starts.
 
-A first run opens the checklist (`UI/SetupView.swift`): pairing, LocalDevVPN
-and Steam (optional), each with what A does. Steps can be visited in any order,
-but B cannot leave until pairing and LocalDevVPN are ready and Steam is signed
-in or put off with **X Not now** (also a tap in the footer). Then **You're all
+A first run opens the checklist (`UI/SetupView.swift`): pairing, LocalDevVPN,
+Memory (the Increased Memory Limit entitlement in this copy's signature; A
+says how to get a copy signed with it, [DISTRIBUTION.md section
+6](DISTRIBUTION.md#6-signing-tools-and-the-memory-limit)) and Steam (optional),
+each with what A does. Steps can be visited in any order, but B cannot leave
+until pairing and LocalDevVPN are ready and Memory and Steam are each on (signed
+in) or put off with **X Not now** (also a tap in the footer). Then **You're all
 set** appears over the dimmed steps: **Continue** (tap or A) leaves setup; B
 closes only the overlay, and B on the settled steps leaves. An unfinished first
 run resumes on the next launch, even after pairing has been stored. Existing
@@ -81,8 +84,8 @@ paired phones keep their setup. A controller is not a setup step.
 Settings › Setup check's first row opens it afterwards (`pp ui --action
 open:setup`); these later visits can always leave with B. A dev build's
 *Preview a first run* rows show the same gate and completion overlay with
-simulated facts (iOS 27, or iOS 26 with the file import). A completes the ringed
-step; X on Steam puts it off. Nothing changes in the phone's pairing, VPN or
+simulated facts (iOS 27, or iOS 26 with the file import), Memory off. A completes the ringed
+step (on Memory it shows the real fix); X on Memory or Steam puts it off. Nothing changes in the phone's pairing, VPN or
 Steam session, and the preview ends on leaving. The same checks run before every Play (`setup:
 before play …` in the log): a missing pairing on iOS 27 or LocalDevVPN down
 starts the setup below and the Play goes on; a missing pairing file on iOS 26

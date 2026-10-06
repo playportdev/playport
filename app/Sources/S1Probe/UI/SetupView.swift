@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // First run (docs/design/2026-09-28-gamepad-ui/Setup.dc.html): "Let's get
-// you playing", three steps side by side (PlayportKit SetupChecklist): the
+// you playing", four steps side by side (PlayportKit SetupChecklist): the
 // pairing JIT uses (on iOS 27 made on this iPhone, JitSetup
 // and decision 0033; on iOS 26 a file chosen from Files, by touch); LocalDevVPN's
-// tunnel, which A turns on (LocalDevVPN.swift); and Steam, optional, whose A
-// opens Sign in to Steam (SignInView.swift). A done step has a green tick.
+// tunnel, which A turns on (LocalDevVPN.swift); Memory, the Increased Memory
+// Limit entitlement in this copy's signature (MemoryLimit), whose A says how to
+// get a copy signed with it (`SetupRing.memoryHowTo`); and Steam, optional,
+// whose A opens Sign in to Steam (SignInView.swift). A done step has a green tick.
 //
 // It replaces the shell's pages (AppNavigation.setup): by itself on a first
 // run (no pairing, and the checklist never left), and from Settings › Setup
 // check's first row afterwards. The ring moves along the steps with left and
 // right or LB and RB (the design's "RB Next"); A does the ringed step; Y (iOS
 // 26) says how a pairing file is made. A first run cannot leave until pairing
-// and LocalDevVPN are ready, and Steam is signed in or put off with X (Not now).
+// and LocalDevVPN are ready, and Memory and Steam are each on or put off with
+// X (Not now).
 // Then a dimmed checklist says "You're all set": A/tap Continue leaves, B
 // dismisses only the overlay; B on the settled checklist leaves. Later visits
 // can always leave, back to Settings when they came from there.
@@ -36,8 +39,10 @@ final class SetupState: ObservableObject {
     static let leftKey = "setup.left"
     private static let startedKey = "setup.started"
     private static let steamSkippedKey = "setup.steamSkipped"
+    private static let memorySkippedKey = "setup.memorySkipped"
     @Published private(set) var firstRun = false
     @Published private(set) var steamSkipped = UserDefaults.standard.bool(forKey: steamSkippedKey)
+    @Published private(set) var memorySkipped = UserDefaults.standard.bool(forKey: memorySkippedKey)
     private var completionShown = false
 
     /// LocalDevVPN's tunnel; nil before the first read.
@@ -70,7 +75,8 @@ final class SetupState: ObservableObject {
         }
         return SetupFacts(controller: PadRouter.shared.controller?.name, pairing: BuiltInJitStatus.shared.pairingFile,
                           pairsOnPhone: Self.pairsOnPhone, tunnelUp: tunnelUp, steamSignedIn: signedIn,
-                          steamSkipped: steamSkipped)
+                          steamSkipped: steamSkipped, memoryEntitled: MemoryLimit.entitled,
+                          memorySkipped: memorySkipped)
     }
 
     /// What the checklist shows: the facts, or a dev build's preview.
@@ -78,15 +84,27 @@ final class SetupState: ObservableObject {
     var inFirstRun: Bool { firstRun || preview != nil }
     var canLeave: Bool { SetupChecklist.canLeave(shown, firstRun: inFirstRun) }
 
-    func skipSteam() {
-        guard SetupChecklist.offersNotNow(shown, firstRun: inFirstRun) else { return }
-        if preview != nil {
-            preview?.steamSkipped = true
-        } else {
-            steamSkipped = true
-            UserDefaults.standard.set(true, forKey: Self.steamSkippedKey)
+    /// X on the Memory or Steam step of a first run.
+    func skip(_ step: SetupStep) {
+        guard SetupChecklist.offersNotNow(step, shown, firstRun: inFirstRun) else { return }
+        switch step {
+        case .memory:
+            if preview != nil {
+                preview?.memorySkipped = true
+            } else {
+                memorySkipped = true
+                UserDefaults.standard.set(true, forKey: Self.memorySkippedKey)
+            }
+        case .steam:
+            if preview != nil {
+                preview?.steamSkipped = true
+            } else {
+                steamSkipped = true
+                UserDefaults.standard.set(true, forKey: Self.steamSkippedKey)
+            }
+        case .pairing, .vpn: return
         }
-        Self.log("Steam: not now")
+        Self.log("\(step.rawValue): not now")
     }
 
     /// Only once per visit, on the steps screen (including after Steam sign-in
@@ -113,7 +131,7 @@ final class SetupState: ObservableObject {
     #if !PLAYPORT_RELEASE
     func previewFirstRun(onPhone: Bool) {
         completionShown = false
-        preview = SetupFacts(pairsOnPhone: onPhone, tunnelUp: false)
+        preview = SetupFacts(pairsOnPhone: onPhone, tunnelUp: false, memoryEntitled: false)
         AppNavigation.shared.openSetup(on: .pairing)
     }
 
@@ -122,6 +140,7 @@ final class SetupState: ObservableObject {
         switch step {
         case .pairing: preview?.pairing = true
         case .vpn: preview?.tunnelUp = true
+        case .memory: preview?.memoryEntitled = true
         case .steam: preview?.steamSignedIn = true
         }
         Self.log("preview: completed \(step.rawValue)")
@@ -205,7 +224,7 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Let's get you playing").font(PP.display(30))
-                Text("Three steps, once. Playport checks them again by itself before every game.")
+                Text("A few steps, once. Playport checks them again by itself before every game.")
                     .font(.system(size: 13)).foregroundStyle(PP.muted)
                 if let m = state.message {
                     Text(m).font(.system(size: 13, weight: .semibold)).foregroundStyle(PP.accent)
@@ -276,7 +295,8 @@ struct SetupView: View {
     private func run(_ item: SetupItem) {
         guard item.action != nil else { return }
         #if !PLAYPORT_RELEASE
-        if state.preview != nil { return state.completePreviewStep(item.step) }
+        // The preview's Memory step shows the real fix; the others complete.
+        if state.preview != nil, item.step != .memory { return state.completePreviewStep(item.step) }
         #endif
         SetupState.log("do \(item.step.rawValue)")
         switch item.step {
@@ -293,13 +313,15 @@ struct SetupView: View {
                 if outcome != .notInstalled, BuiltInJitStatus.shared.pairingFile { BuiltInJitStatus.shared.check() }
                 SetupState.shared.readTunnel()
             }
+        case .memory:
+            SetupRing.memoryHowTo()
         case .steam:
             SignInState.shared.open(preview: false)
         }
     }
 
     /// The footer (Setup.dc.html): A the ringed step, RB the next, Y how a pairing
-    /// file is made (iOS 26), B out.
+    /// file is made (iOS 26), X Not now (Memory, Steam), B out.
     static func hints() -> [PadHint] {
         var h: [PadHint] = []
         let focus = PadFocus.shared
@@ -307,9 +329,8 @@ struct SetupView: View {
         h.append(PadHint(button: .rb, label: "Next") { _ = SetupRing.press(.rb) })
         if !SetupState.shared.shown.pairsOnPhone { h.append(PadHint(button: .y, label: "How to make the file") { SetupRing.howTo() }) }
         let state = SetupState.shared
-        if focus.focused == SetupStep.steam.item,
-           SetupChecklist.offersNotNow(state.shown, firstRun: state.inFirstRun) {
-            h.append(PadHint(button: .x, label: "Not now") { state.skipSteam() })
+        if let step = SetupRing.ringed, SetupChecklist.offersNotNow(step, state.shown, firstRun: state.inFirstRun) {
+            h.append(PadHint(button: .x, label: "Not now") { state.skip(step) })
         }
         if state.canLeave {
             h.append(PadHint(button: .b, label: SetupChecklist.complete(state.shown) ? "Done" : "Back") {
@@ -339,11 +360,14 @@ enum SetupRing {
         case .y: if !SetupState.shared.shown.pairsOnPhone { howTo() }
         case .b: _ = AppNavigation.shared.back()
         case .x:
-            if focus.focused == SetupStep.steam.item { SetupState.shared.skipSteam() }
+            if let step = ringed { SetupState.shared.skip(step) }
         case .menu, .view: break
         }
         return true
     }
+
+    /// The step the ring is on.
+    static var ringed: SetupStep? { SetupStep.allCases.first { $0.item == PadFocus.shared.focused } }
 
     private static func step(_ by: Int) {
         let all = SetupStep.allCases
@@ -360,6 +384,18 @@ enum SetupRing {
                 + "tap Trust on the iPhone, and make an RP pairing file with a pairing tool there. "
                 + "Send the file to the iPhone (AirDrop or Files), then choose it here. "
                 + "Keep it private: it lets that computer debug this iPhone.",
+            options: [PadOption(id: "ok", label: "OK")], selected: "ok") { _ in }
+    }
+
+    /// A on Memory: how to get a copy signed with Increased Memory Limit
+    /// (README "Install", docs/DISTRIBUTION.md section 6).
+    static func memoryHowTo() {
+        PadModal.shared.picker(
+            title: "Increased Memory Limit",
+            note: "Your sideloader decides it: the capability must be turned on for Playport's App ID. "
+                + "AltStore Classic 2.2 or later and Xcode keep it. SideStore does not turn it on for a free "
+                + "Apple ID: run GetMoreRam once with the same Apple ID, turn Increased Memory Limit on for "
+                + "Playport's App ID, then reinstall Playport from SideStore. Then this step shows a tick.",
             options: [PadOption(id: "ok", label: "OK")], selected: "ok") { _ in }
     }
 }

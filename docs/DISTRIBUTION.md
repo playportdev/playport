@@ -296,11 +296,19 @@ tools keep it:
 | stock xtool 1.20.1 | no, for a free team | [BUILDING.md, "Signing"](BUILDING.md#signing) |
 | Xcode with a Personal Team | yes | reported in SideStore issue #1616; not tested here |
 | AltStore Classic 2.2 and later | yes | its 2.2 release notes (April 2025); 2.3 reported in SideStore issue #1616; not tested here |
-| SideStore 0.7.0 | no | SideStore issue #1616 (open, 2026-09-24): the App ID never gets the capability |
+| SideStore 0.7.0 | no | SideStore issue #1616 (open, 2026-09-24): the App ID never gets the capability; GetMoreRam once, then a reinstall, should add it (the README's "SideStore: when Memory has no tick"; from source, not tested here) |
+| Impactor (PlumeImpactor) | likely | its source asks for every capability the entitlements name; not tested here |
 | any other re-signer | unknown | check the app's Settings, below |
 
 So give a tester the IPA with section 5's build and install, or tell them to
-install it with a signer marked yes. The app shows what it got:
+install it with a signer marked yes. The README's "Install" section is the
+player's version of this table, with the SideStore steps. The app shows what it
+got:
+
+- **The first-run checklist's Memory step** has a tick when the signature
+  carries Increased Memory Limit. When it does not, A (**How to fix**) names
+  the signers that keep it and the GetMoreRam step, and X (**Not now**) puts it
+  off: smaller games still play.
 
 - **Settings, Memory** shows the memory limit and whether the signature
   carries Increased Memory Limit (On or Off), with a warning when it is Off.

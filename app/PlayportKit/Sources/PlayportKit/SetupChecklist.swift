@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// First run (Setup.dc.html): what a game needs from this phone, as three
+// First run (Setup.dc.html): what a game needs from this phone, as four
 // steps: the pairing JIT uses (on iOS 27 made on the phone, decision 0033;
-// on iOS 26 a file chosen from Files), LocalDevVPN's tunnel, and Steam
-// (optional: signed in, or "Not now"). The app shows them once, on a first
+// on iOS 26 a file chosen from Files), LocalDevVPN's tunnel, the Increased
+// Memory Limit entitlement in the signature (a signer chose it, so a player
+// may only be able to put it off with "Not now"; docs/DISTRIBUTION.md
+// section 6), and Steam (optional: signed in, or "Not now"). The app shows them once, on a first
 // run, which cannot be left until every step is settled (`complete`), and in
 // Settings › Setup check; the same facts are checked by themselves before
 // every launch (`beforeLaunch`), which names the fix when one fails. A
@@ -13,7 +15,7 @@
 import Foundation
 
 public enum SetupStep: String, CaseIterable, Sendable {
-    case pairing, vpn, steam
+    case pairing, vpn, memory, steam
 }
 
 /// What the app reads from the phone for the checks.
@@ -30,15 +32,22 @@ public struct SetupFacts: Equatable, Sendable {
     public var steamSignedIn: Bool?
     /// The player chose "Not now" on the Steam step.
     public var steamSkipped: Bool
+    /// The signature carries Increased Memory Limit; nil when it cannot be read.
+    public var memoryEntitled: Bool?
+    /// The player chose "Not now" on the Memory step.
+    public var memorySkipped: Bool
 
     public init(controller: String? = nil, pairing: Bool = false, pairsOnPhone: Bool = true,
-                tunnelUp: Bool? = nil, steamSignedIn: Bool? = false, steamSkipped: Bool = false) {
+                tunnelUp: Bool? = nil, steamSignedIn: Bool? = false, steamSkipped: Bool = false,
+                memoryEntitled: Bool? = nil, memorySkipped: Bool = false) {
         self.controller = controller
         self.pairing = pairing
         self.pairsOnPhone = pairsOnPhone
         self.tunnelUp = tunnelUp
         self.steamSignedIn = steamSignedIn
         self.steamSkipped = steamSkipped
+        self.memoryEntitled = memoryEntitled
+        self.memorySkipped = memorySkipped
     }
 }
 
@@ -71,6 +80,20 @@ public enum SetupChecklist {
                              detail: up ? "Connected. Keep it on while you play."
                                  : f.tunnelUp == nil ? "Checking…" : "Install it and turn it on. Keep it on while you play.",
                              action: up ? nil : "Turn it on")
+        case .memory:
+            let on = f.memoryEntitled == true
+            let detail: String
+            if on {
+                detail = "Increased Memory Limit is on: games get all the memory this iPhone gives."
+            } else if f.memorySkipped {
+                detail = "Not now. Smaller games play; bigger ones need Increased Memory Limit."
+            } else if f.memoryEntitled == nil {
+                detail = "Playport could not read its signature. Bigger games need Increased Memory Limit."
+            } else {
+                detail = "This copy was signed without Increased Memory Limit, so bigger games will not start."
+            }
+            return SetupItem(step: step, done: on || f.memorySkipped, title: "Memory", detail: detail,
+                             action: on ? nil : "How to fix")
         case .steam:
             let done = f.steamSignedIn == true
             return SetupItem(step: step, done: done || f.steamSkipped, title: "Steam",
@@ -88,10 +111,12 @@ public enum SetupChecklist {
         items(f).first { !$0.done }?.step ?? .pairing
     }
 
-    /// Every step settled: the pairing and LocalDevVPN done, Steam signed in or
-    /// put off ("Not now"). A first run's checklist cannot be left before this.
+    /// Every step settled: the pairing and LocalDevVPN done, Increased Memory
+    /// Limit on or put off, Steam signed in or put off ("Not now"). A first
+    /// run's checklist cannot be left before this.
     public static func complete(_ f: SetupFacts) -> Bool {
-        f.pairing && f.tunnelUp == true && (f.steamSignedIn == true || f.steamSkipped)
+        f.pairing && f.tunnelUp == true && (f.memoryEntitled == true || f.memorySkipped)
+            && (f.steamSignedIn == true || f.steamSkipped)
     }
 
     /// Later visits can always leave; a first run must settle every step first.
@@ -99,12 +124,18 @@ public enum SetupChecklist {
         !firstRun || complete(f)
     }
 
-    /// Whether the Steam step offers "Not now": on a first run, while signed out and not put off.
-    public static func offersNotNow(_ f: SetupFacts, firstRun: Bool) -> Bool {
-        firstRun && f.steamSignedIn != true && !f.steamSkipped
+    /// Whether a step offers "Not now": on a first run, the Memory step while the
+    /// entitlement is not on, the Steam step while signed out, and neither once put off.
+    public static func offersNotNow(_ step: SetupStep, _ f: SetupFacts, firstRun: Bool) -> Bool {
+        guard firstRun else { return false }
+        switch step {
+        case .memory: return f.memoryEntitled != true && !f.memorySkipped
+        case .steam: return f.steamSignedIn != true && !f.steamSkipped
+        case .pairing, .vpn: return false
+        }
     }
 
-    /// Steps done, for Settings' summary ("2 of 3 done").
+    /// Steps done, for Settings' summary ("2 of 4 done").
     public static func doneCount(_ f: SetupFacts) -> Int { items(f).filter(\.done).count }
 
     /// Start on an unpaired phone, and resume an unfinished first run even if
@@ -151,6 +182,8 @@ public enum SetupChecklist {
     public static func summary(_ f: SetupFacts) -> String {
         "controller=\(f.controller ?? "none") pairing=\(f.pairing ? (f.pairsOnPhone ? "on-phone" : "file") : "missing")"
             + " vpn=\(f.tunnelUp.map { $0 ? "up" : "down" } ?? "unknown")"
+            + " memory=\(f.memoryEntitled.map { $0 ? "on" : "off" } ?? "unknown")"
+            + (f.memorySkipped ? " (not now)" : "")
             + " steam=\(f.steamSignedIn.map { $0 ? "signed-in" : "signed-out" } ?? "unknown")"
             + (f.steamSkipped ? " (not now)" : "")
     }

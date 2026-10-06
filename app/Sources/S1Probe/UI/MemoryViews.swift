@@ -31,7 +31,7 @@ enum MemoryNote {
         + "signed without it gets far less."
 
     static let notEntitled = "This copy of Playport was signed without the Increased Memory Limit entitlement. "
-        + "Install one signed with a tool that keeps it."
+        + "Install one signed with a tool that keeps it: the Setup checklist's Memory step says how."
 
     /// Why a Play was refused (LaunchMessage).
     static func refused(limitMB: Int, needMB: Int) -> String {
