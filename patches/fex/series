@@ -19,3 +19,4 @@
 0018-WOW64-address-a-32-bit-guest-s-memory-through-its-wi.patch
 0019-WOW64-let-a-32-bit-guest-s-jump-below-64-KiB-fault-i.patch
 0020-WOW64-leave-a-guest-s-read-fault-in-an-RWX-interval-.patch
+0021-DiskCache-a-cache-database-per-TEB-slot-offset-on-th.patch
