@@ -52,7 +52,7 @@ sync, StikJIT pin cost). Open when the plan was removed:
   in the result event.
 - The memory entitlement: Settings shows the limit, and a low limit gives a clear
   message instead of a jetsam kill (see also
-  [the signers plan](2026-10-01-memory-entitlement-signers.md)).
+  [the signers plan](#increased-memory-limit-through-sidestore-getmoreram)).
 - Smaller items in Wine's `virtual_ios.c` and `signal_arm64_ios.c`: W+X requests
   silently losing WRITE; x18 trampolines out of branch range left to fault; the
   4096-entry anonymous-alias table; split-lock atomics that are not atomic
@@ -128,3 +128,51 @@ Open for "fully playable":
   [the Proton alignment plan](2026-10-05-proton-arm64-alignment.md#portal-2-performance-follow-ups).
 - The hint glyph follows the last device used; a retired window's final teardown
   has not been seen on the phone.
+
+## Removed without being carried out
+
+These plans were removed on 2026-10-06 without being carried out. Their open
+items are below.
+
+### Hollow Knight leads from the first GPU captures
+
+`plans/2026-09-29-hollow-knight-gpu-leads.md`. These were leads from King's Pass
+GPU captures and Metal validation on DXMT
+([metal-tools-without-a-mac](../evidence/2026-09-29-metal-tools-without-a-mac.md)).
+None is a measured cause. They are DXMT-specific, and the
+[Vulkan performance plan](2026-10-06-vulkan-performance.md) compares KosmicKrisp
+captures of the same scene with DXMT's. Open:
+
+- **NaN interpolants.** Shader validation reported 52,970 `INF or NAN detected in
+  interpolant` findings from 12 vertex shaders, in nearly every frame. Each is
+  either the game's own maths or a fault in DXMT's translation.
+- **Redundant Metal state and unused bindings** set by DXMT's encoder: about 40
+  redundant stencil-reference sets a frame, and 3–4 unused buffer bindings per
+  draw. The CPU cost is not measured.
+- **Grab-pass copies.** There are four full-screen colour copies a frame (15 % of
+  GPU time), and the colour and depth reloads after them take 41 %. That share
+  needs counters.
+- **Clear-only depth passes:** two a frame, about 0.05 ms.
+- **Frames of exactly 25.01 ms** (501 of 8,819) and 29.18 ms at a 60 FPS cap,
+  measured with capture on. The [performance review](2026-09-30-performance-review.md)
+  (A2) suspects the limiter's sleep.
+- **Fences:** 168 fence waits a frame, and whether they leave the GPU idle
+  between encoders.
+
+### Increased Memory Limit through SideStore (GetMoreRam)
+
+`plans/2026-10-01-memory-entitlement-signers.md`. This was a research plan from
+reading the source. Nothing was signed or installed. SideSign keeps
+`increasedMemoryLimit` out of a free team's features, so SideStore never turns
+on the App ID capability (SideStore issue #1616).
+[DISTRIBUTION.md](../DISTRIBUTION.md#6-signing-tools-and-the-memory-limit) and the
+README recommend signers that keep the capability, and GetMoreRam for SideStore.
+None of it has been tested here. Open:
+
+- whether GetMoreRam turns the capability on for a free team's App ID that
+  SideStore made, and whether a SideStore reinstall then carries it;
+- whether it survives SideStore's weekly refresh, and a refresh after expiry;
+- whether the JIT helper extension is still signed, and every Play still gets JIT;
+- AltStore Classic 2.3 on a free team.
+
+Each result goes in an evidence record and in DISTRIBUTION.md's signer table.

@@ -68,7 +68,7 @@ The effect, and what it means for existing measurements:
 
 - A late wake plus about 6 ms of GPU work can miss a 120 Hz slot. This is a
   candidate cause of the 501 frames of exactly 25.01 ms in the
-  [GPU-leads plan](2026-09-29-hollow-knight-gpu-leads.md).
+  [GPU leads](finished.md#hollow-knight-leads-from-the-first-gpu-captures).
 - `[FRAME_STATS] drawable_block` times this sleep, so lead 5 is mostly the
   limiter, not a stall.
 

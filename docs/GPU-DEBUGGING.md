@@ -14,7 +14,7 @@ before it is needed.
 - **Results:** a finding others rely on becomes an evidence note, as in
   [DEVICE.md](DEVICE.md).
 - **Findings so far:** [metal-tools-without-a-mac](evidence/2026-09-29-metal-tools-without-a-mac.md).
-- **Leads to hunt:** [Hollow Knight's](plans/2026-09-29-hollow-knight-gpu-leads.md).
+- **Leads to hunt:** [Hollow Knight's](plans/finished.md#hollow-knight-leads-from-the-first-gpu-captures).
 
 ## Which tool answers which question
 
