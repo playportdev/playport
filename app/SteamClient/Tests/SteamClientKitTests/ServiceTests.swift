@@ -710,11 +710,12 @@ final class LibraryServiceTests: XCTestCase {
 
     func testOwnedGamesAndCache() async throws {
         let b = FakeBackend()
-        await b.set(library: [367520, 10, 20, 50, 60], [
+        await b.set(library: [367520, 10, 20, 50, 60, 70], [
             367520: Self.record(367520, name: "Knight"),
             10: Self.record(10, name: "Alpha"),
             20: Self.record(20, name: "Old", osarch: "32"),
             50: Self.record(50, name: "Soundtrack", type: "Music"),
+            70: Self.record(70, name: "Beta Demo", type: "Demo"),
             // 60: withheld by Steam
         ])
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("svc-\(UUID().uuidString)")
@@ -723,8 +724,8 @@ final class LibraryServiceTests: XCTestCase {
         let none = await s.cachedGames()
         XCTAssertNil(none)
         let games = try await s.ownedGames(refresh: false)
-        XCTAssertEqual(games.map(\.info.name), ["Alpha", "Knight", "Old"], "games only, by name")
-        XCTAssertEqual(games.map(\.id), [10, 367520, 20], "a game that may not run is listed too")
+        XCTAssertEqual(games.map(\.info.name), ["Alpha", "Beta Demo", "Knight", "Old"], "games and demos only, by name")
+        XCTAssertEqual(games.map(\.id), [10, 70, 367520, 20], "a game that may not run is listed too")
 
         // A relaunch paints from disk with no network call.
         let s2 = await signedIn(b, dir: dir)

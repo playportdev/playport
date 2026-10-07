@@ -115,8 +115,10 @@ pairing included, then needs no computer.
 
 ### Your first game
 
-The checklist's Steam step signs in to your account. Pick a game in the
-library, **Install** it (it downloads to the phone), then **Play**. Connect a
+The checklist's Steam step signs in to your account (GOG and Epic Games are in
+Settings › Accounts, and **Add a game** takes a DRM-free game's folder or `.zip`
+from Files). Pick a game in the library, **Install** it (it downloads to the
+phone), then **Play**. Connect a
 controller before you press Play, and keep Playport in front while the game
 starts. A game page's **Report a problem** shares its log when something goes
 wrong ([below](#reporting-a-problem)).
@@ -193,9 +195,10 @@ a reviewable patch with the evidence for it.
 
 Open a [GitHub issue](https://github.com/playportdev/playport/issues/new/choose)
 and attach the log; that is the one place we read them all. On the game's page,
-**Report a problem** shares the log: save it to Files, long-press it there and
-choose **Compress**, then drag the `.zip` into the issue (GitHub takes files up
-to 25 MB, so a zipped log fits where Pastebin does not). The form asks for your
+**Report a problem** shares the logs as one `.zip`: save it to Files, then drag it
+into the issue (GitHub takes files up to 25 MB, so it fits where Pastebin does
+not). Before 0.4.0 it shares the bare log: long-press it in Files and choose
+**Compress** first. The form asks for your
 device, iOS and Playport versions, sideloader and JIT method.
 
 ## Release status and support

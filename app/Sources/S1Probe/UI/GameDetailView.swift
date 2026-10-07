@@ -22,7 +22,7 @@
 // inherits game, then Settings, then 720p, 60 fps and DXMT), launch arguments
 // on the controller keyboard; then the version, cloud saves (and the
 // Cloud save conflict screen when they conflict), check game files (and Repair), achievements (a list over the
-// panel), report a problem (a share sheet with the log) and uninstall. Y puts
+// panel), report a problem (a share sheet with a zip of the logs) and uninstall. Y puts
 // the ringed setting back to its default. A dev build adds a Developer
 // section: FEX's memory ordering, block size and x87 precision over the game's
 // profile (FEXProfile), which steam_api the game loads, and the build facts.
@@ -749,7 +749,7 @@ private struct GameDetailPage: View {
             PadRow(id: "opt:achievements", title: "Achievements", value: "\(s.unlockedCount) of \(s.schema.achievements.count)",
                    accessory: .chevron, style: .plain, hint: "Open") { navigation.gamePanels.append(.achievements) }
         }
-        PadRow(id: "opt:report", title: "Report a problem", value: "Shares a log", accessory: .chevron, style: .plain,
+        PadRow(id: "opt:report", title: "Report a problem", value: "Shares a zip of the logs", accessory: .chevron, style: .plain,
                hint: "Share") { ProblemReport.share(t) }
         uninstallRow(t)
     }
@@ -1183,8 +1183,46 @@ enum ProblemReport {
 
     static func share(_ t: InstalledTitle) {
         let urls = files()
-        LibraryModel.log("report a problem for \(t.id): sharing \(urls.map(\.lastPathComponent).joined(separator: ", "))")
-        present(urls)
+        let zip = archive(urls, name: t.id)
+        LibraryModel.log("report a problem for \(t.id): sharing \(urls.map(\.lastPathComponent).joined(separator: ", "))"
+                         + (zip.map { " as \($0.lastPathComponent)" } ?? " (not zipped)"))
+        present(zip.map { [$0] } ?? urls)
+    }
+
+    /// `urls` as one zip in the temporary folder, which a GitHub issue takes and a
+    /// paste site does not need to (PLA-21): `Playport-report-<id>-<time>.zip`, with
+    /// the files in a folder of that name. iOS zips a folder for upload
+    /// (NSFileCoordinator's forUploading); nil when that fails, and the files go as they are.
+    static func archive(_ urls: [URL], name id: String) -> URL? {
+        guard !urls.isEmpty else { return nil }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("Report a problem", isDirectory: true)
+        try? fm.removeItem(at: root)   // the last report's
+        let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        stamp.dateFormat = "yyyyMMdd-HHmmss"
+        let safe = String(id.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" })
+        let base = "Playport-report-\(safe)-\(stamp.string(from: Date()))"
+        let folder = root.appendingPathComponent(base, isDirectory: true)
+        let zip = root.appendingPathComponent(base + ".zip")
+        do {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            for u in urls { try fm.copyItem(at: u, to: folder.appendingPathComponent(u.lastPathComponent)) }
+        } catch {
+            LibraryModel.log("report a problem: could not gather the logs: \(error)")
+            return nil
+        }
+        var failure: Error?
+        var coordinatorError: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &coordinatorError) { zipped in
+            do { try fm.moveItem(at: zipped, to: zip) } catch { failure = error }
+        }
+        try? fm.removeItem(at: folder)
+        if let e = coordinatorError ?? failure {
+            LibraryModel.log("report a problem: could not zip the logs: \(e)")
+            return nil
+        }
+        return fm.fileExists(atPath: zip.path) ? zip : nil
     }
 
     /// The system share sheet with `urls` (also a dev build's Settings › Developer › logs).

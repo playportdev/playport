@@ -6,8 +6,9 @@ body:
     attributes:
       value: |
         Thanks for testing Playport. The log is what makes a problem fixable, so please attach it:
-        on the game's page, **Report a problem** shares it. Save it to Files, long-press it there
-        and choose **Compress**, then drag the `.zip` into the log box below (GitHub takes files up to 25 MB).
+        on the game's page, **Report a problem** shares it as a `.zip`. Save it to Files, then drag it
+        into the log box below (GitHub takes files up to 25 MB). Before 0.4.0 it shares the bare log:
+        long-press it in Files and choose **Compress** first.
   - type: input
     id: game
     attributes:

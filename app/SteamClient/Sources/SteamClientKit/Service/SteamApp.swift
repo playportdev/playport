@@ -44,6 +44,8 @@ public struct SteamAppInfo: Sendable, Codable, Equatable {
     public var controllerSupport: String? = nil
 
     public var isGame: Bool { type.caseInsensitiveCompare("game") == .orderedSame }
+    /// A game or a demo (`type: Demo`, its own app ID with a free licence): what the Library lists (PLA-19).
+    public var isPlayable: Bool { isGame || type.caseInsensitiveCompare("demo") == .orderedSame }
     public var publicBuildID: UInt32? { depots.publicBuildID }
 
     /// Depots a Windows install would use: Windows or any-OS content that is
@@ -122,9 +124,9 @@ public struct SteamGame: Sendable, Codable, Equatable, Identifiable {
         self.info = info
     }
 
-    /// Owned apps that are games, sorted by name.
+    /// Owned apps that are games or demos, sorted by name.
     public static func games(from apps: [SteamAppInfo]) -> [SteamGame] {
-        apps.filter(\.isGame)
+        apps.filter(\.isPlayable)
             .map(SteamGame.init(info:))
             .sorted { $0.info.name.localizedCaseInsensitiveCompare($1.info.name) == .orderedAscending }
     }

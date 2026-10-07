@@ -98,12 +98,12 @@ public enum SetupChecklist {
             if f.pairsOnPhone {
                 return SetupItem(step: step, done: f.pairing, title: "Pairing",
                                  detail: f.pairing ? "This iPhone is paired with itself, so games run fast."
-                                     : "Lets Playport run games fast. Made on this iPhone; iOS asks you to approve it.",
+                                     : "Games need JIT, and pairing lets Playport turn it on by itself. Made on this iPhone; iOS asks you to approve it.",
                                  action: f.pairing ? "Pair again" : "Pair this iPhone")
             }
             return SetupItem(step: step, done: f.pairing, title: "Pairing file",
                              detail: f.pairing ? "Imported, so games run fast."
-                                 : "Lets Playport run games fast. Made once on a computer; pick it from Files.",
+                                 : "Games need JIT, and a pairing file lets Playport turn it on by itself. Made once on a computer; pick it from Files.",
                              action: f.pairing ? "Choose another file" : "Choose file")
         case .vpn:
             if !f.jit.usesTunnel {
