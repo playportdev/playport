@@ -51,6 +51,21 @@ its Cargo query API is closed to anonymous users) and Steam's public `appdetails
 
 The reports fall into these classes:
 
+- **0. Found in the PLA-29 log (2026-10-07): an i386 child cannot load `opengl32.dll`.**
+  The player's `playport.log` (LiveContainer, 6 GB limit; kept in
+  `.work/agent-notes/compat/logs/PLA-29/`) shows every i386 launch that loads opengl32
+  ending at once with `0xc0000142` (STATUS_DLL_INIT_FAILED), right after
+  `[unixlib] module (opengl32.dll) WoW64 -> (stub table)`. That covers NFS The Run on
+  Vulkan and DXMT, and Spacewar (Steam app 480, free) on both. The cause is in
+  `patches/madeira-unix` 0068: its WoW64 branch swaps opengl32's GL-absent table, whose
+  attach codes succeed, for the all-fail stub table, so opengl32's DllMain fails. Hit:
+  every i386 title that imports opengl32, and every i386 title whose Direct3D goes
+  through wined3d, which imports it: Direct3D 10/11 (class C), Direct3D 9 set to DXMT,
+  and older ddraw titles. Proposed fix (not applied): keep the GL-absent table for
+  WoW64 callers; it takes no parameter block. A draft is in
+  `.work/agent-notes/compat/`. Free repro: Spacewar (480). After the fix, GL calls
+  still fail (class A), but D3D titles that only import opengl32 should start.
+
 - **A. OpenGL: no driver at all.** The iOS display driver has no OpenGL:
   `nulldrv_OpenGLInit` returns `STATUS_NOT_IMPLEMENTED` (in
   `patches/madeira-unix` 0029's context), and the Mesa stage builds with
@@ -203,7 +218,11 @@ Demo does not, the fault is in what the game does, not in the route.
 
 ## Order
 
-1. 4.1 (logs expire), 2.1 by hand, 2.2 and 5.1 on the phone: a day. These answer
+0. Class 0: Spacewar (480) on our phone to confirm, then the 0068 fix as a new
+   `madeira-unix` patch, gated on Spacewar, Portal 2 and Hollow Knight. Then the class B
+   and C titles again, since some of their failures may be this.
+1. 4.1 (done for PLA-29: the player sent the files; the others never posted logs), 2.1
+   (done: the owner added both demos), 2.2 and 5.1 on the phone: a day. These answer
    whether class B and class D reproduce here at all.
 2. Track 1 and 6.6 (host-only).
 3. Track 3 probes, then 6.1's detection message and 6.2.
