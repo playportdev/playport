@@ -1,6 +1,6 @@
 # Plan: Vulkan at least on par with DXMT, on Hollow Knight in Direct3D 11 and 12
 
-**Date:** 2026-10-06. **Kind:** plan, in progress (see [Progress](#progress)). **Pins read:** as in the
+**Date:** 2026-10-06, revised 2026-10-07. **Kind:** plan, in progress (see [How the work continues](#how-the-work-continues-owner-2026-10-07) and [Progress](#progress)). **Pins read:** as in the
 [KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 (a
 Mesa `main` commit of 2026-10-05; `main` was 54 commits ahead on 2026-10-06, none
 of them in `src/kosmickrisp` or the Metal WSI) + `patches/mesa` (16), `dxvk` e5ffd0f (unmodified), `vkd3d-proton` 31d1f89 +
@@ -8,6 +8,90 @@ of them in `src/kosmickrisp` or the Metal WSI) + `patches/mesa` (16), `dxvk` e5f
 detailed form of that plan's steps 1 and 2. Its step 4 (Vulkan by default) waits
 for this plan's exit criteria. **Owner's answers** (2026-10-06) are under
 [Decisions taken](#decisions-taken).
+
+**Read [How the work continues](#how-the-work-continues-owner-2026-10-07) first:** since
+2026-10-07 it replaces the measurement protocol, the matrices of steps 1 and 10 and the
+order of steps 3–9. The rest of the plan stays as the background and the list of levers.
+
+## How the work continues (owner, 2026-10-07)
+
+The owner (2026-10-07): stop testing over and over. There is enough evidence; deliver
+fixes for the issues found, retest each once, and if a fix does nothing or makes things
+worse, think about why (read the code, profile) before running more.
+
+**Where it stands** (details in [Progress](#progress) and the evidence records
+[tooling](../evidence/2026-10-06-vulkan-perf-tooling.md) and
+[baseline](../evidence/2026-10-06-vulkan-perf-baseline.md)):
+
+- Step 0 done. Step 2 done for every fault found: `patches/dxvk` 0001 (the video's
+  shared texture) and `patches/wine-unix` 0018 (the D3D12 start fault), both checked on
+  the phone. `patches/wine-pe` 0029 only logs a failed run-once keyed wait (none since
+  0018); it may be dropped later.
+- The gap is known well enough to work on. At 720/free in play, Vulkan is 2–4 FPS behind
+  DXMT, its p99 frame interval is 16.7 against 8.3 ms, and it does 14–18 % (DXVK) or
+  26–31 % (vkd3d) more work a frame; GPU time is within 3–6 %.
+
+**Rules from here:**
+
+1. **Fix, then one run.** Each change: `pp build`, `pp test`, install, the gate (Hollow
+   Knight and Portal 2 to `first-frame+10`, one locked session), then **one** route-v2
+   burst run (`.work/agent-notes/vulkan-perf/burst.sh NAME dxvk|vkd3d|dxmt [GRAPHICS
+   OPTIONS]`: a new game, `hk-walk` at `first-frame+80`, cooled, window t = 85–125 s,
+   `pp perf --compare … --window 85:125`) on the route it should help, compared with that
+   route's existing run. A rendering change also gets one look at the end screenshot.
+   Without the script (it lives in `.work`), the run is:
+   `pp perf --out $PLAYPORT_BUILD/perf-runs/NAME --secs 130 --cool 15 --cool-max 25
+   --settings '{"screen":"720","frameLimit":0,"graphics":"vulkan"}' --pad
+   first-frame+25:hk-new-game --pad first-frame+80:hk-walk --shot first-frame+128`
+   (D3D12: add `"arguments":"-force-d3d12"`; a lever: `"graphicsOptions":"…"`).
+2. **No repeats by default.** Repeat a run only when its result is within noise and the
+   decision hangs on it. No matrices, no 10-play stability series: a crash fix is checked
+   by its trigger a few times, a perf change by one run.
+3. **No gain or worse:** do not run it again unchanged. Look at the per-thread table, the
+   profile or the code, change something, then run once.
+4. **Keep** what helps (commit with its run in the evidence record); **revert** what does
+   not (say so in the record). A config lever kept goes into
+   `GraphicsBackend.runtimeEnvironment` with a decision record if it reverses 0024.
+5. **Exit:** at the end, one run per mode that the exit criteria name (720/60, 720/free
+   burst and sustained, native/free), each backend, on the final IPA, plus the gate and
+   one route-v2 play per Vulkan route. Not three of each.
+
+**Controls on route v2:** DXMT `vk-v2-dxmt-1` (120 FPS through the window). The DXVK and
+vkd3d controls (`vk-v2-dxvk-1`, `vk-v2-vkd3d-1`) are still to take, once each, at the
+start of the next session; `vk-v2-dxvk-1` failed only for want of JIT (LocalDevVPN down).
+
+**Work queue, in this order** (each item names its evidence and its first move):
+
+1. **Wine's Vulkan present path** (both routes; step 8). Six more wineserver requests a
+   frame than DXMT (18 against 12): `win32u_vkQueuePresentKHR` calls
+   `client_surface_update` before the present and `client_surface_present` after it, and
+   each runs `client_surface_update_locked` (`NtUserGetAncestor`, `get_client_surface_rects`:
+   `get_window_parents`, `get_window_rectangles`, `get_windows_offset`). Move: a
+   `patches/wine-unix` change that skips the window queries when the window has not
+   changed (or does them once a present, not twice); measure srv/f, the wineserver
+   thread's Mi/f and p99.
+2. **vkd3d records every command twice** (D3D12 route; step 4.1 turned config).
+   KosmicKrisp skips its `vk_cmd_queue` copy only for `ONE_TIME_SUBMIT` command buffers,
+   and vkd3d-proton sets that flag only with `VKD3D_CONFIG=one_time_submit`. Move: one
+   vkd3d run with `graphicsOptions` `VKD3D_CONFIG=one_time_submit`; watch
+   UnityGfxDeviceWorker's Mi/f (twice DXMT's) and the screenshot.
+3. **DXVK tiler mode** (DXVK route; step 3). DXVK puts KosmicKrisp in tiler mode, which
+   records each render pass into a secondary command buffer that KosmicKrisp queues and
+   replays on `dxvk-cs`. Move: one DXVK run with `dxvk.tilerMode=False` (it ended in the
+   video crash before `patches/dxvk` 0001; it runs now); watch dxvk-cs and the screenshot.
+4. **The extra present pass** (both routes; step 5). The Vulkan frame has a compute
+   dispatch and one more full-screen pass at present: DXVK draws into its swap-chain
+   image, then KosmicKrisp's WSI blits that into the drawable. Move: read
+   `wsi_common_metal.c` and KosmicKrisp's `kk_wsi.c` for a way to render to the drawable
+   (or skip DXVK's own blit); a `patches/mesa` change, one run.
+5. **p99 16.7 ms** (both routes; step 6). Missed 120 Hz frames. Move: after 1–4, look
+   at the frame-interval trace of one run; then `dxgi.maxFrameLatency` /
+   `dxgi.numBackBuffers` (DXMT keeps 3 drawables), one run each.
+6. **dxvk-cs time in Apple's driver** (step 4): AGX/IOGPU/Metal/objc 3.6 % against
+   KosmicKrisp 1.2 % and DXVK 1.1 % of all samples (`vk-prof-dxvk3`). Move: one
+   `--cpu-prof` run after 1–5, then look at what KosmicKrisp asks Metal for per draw.
+
+FEX (step 7) and more of steps 4–6 come only if the gap is still open after these.
 
 ## Goal
 
@@ -76,6 +160,10 @@ and are measured in step 3:
 - the thread that waits for a drawable.
 
 ## Measurement protocol (every step)
+
+*Replaced on 2026-10-07 by [How the work continues](#how-the-work-continues-owner-2026-10-07)
+(one run per change, no matrices). Kept as the definition of the runs' settings and
+columns.*
 
 - **One IPA per comparison.** Every cell of a comparison runs on the same
   installed IPA, and the backend is chosen with `--settings`:
@@ -162,6 +250,9 @@ regression in another column. Otherwise it is reverted, and its record says so.
 - **Done when** all four work on the phone and `pp test` passes.
 
 ### Step 1. The baseline matrix, and stability first
+
+*(2026-10-07: not completed and not to be; the burst set and the stability plays done
+are enough to work from. See How the work continues.)*
 
 1. **Stability.** Uncapped numbers are worthless if plays freeze or crash.
    - DXVK: 10 plays to `first-frame+60` through Start Game, at 720/free and
@@ -318,6 +409,7 @@ own decision record, and should be one Valve or upstream would take.
 
 ### Step 10. Exit run
 
+*(2026-10-07: one run per mode and backend, not three; see How the work continues.)*
 Repeat step 1's full matrix on the final IPA, with stability included. Write
 the evidence record. Record the result in the KosmicKrisp-default plan's
 step 1 (go or no-go), and in a decision record if the defaults changed.
