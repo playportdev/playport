@@ -445,3 +445,11 @@ without the owner is recorded here with its reason.
   pseudo-process. Built, IPA `5a206ea8…`; the phone was offline from 01:40. **Next on the
   phone:** install it, the gate, 10 D3D12 starts (expect no `keyed wait returned` lines
   and no 1-s fault), three D3D12 and three DXVK plays on route v2, then the levers.
+- **2026-10-07 09:00:** 0018 works on the phone: 10/10 D3D12 starts, D3D12 3/3 and DXVK
+  3/3 plays in King's Pass on route v2, gate passed. Step 2 closed for the known faults.
+  Next: route-v2 burst runs (DXMT, DXVK, vkd3d, one each, cooled), then the levers.
+- **Paused 2026-10-07 ~09:50 by the owner.** Route-v2 burst control `vk-v2-dxmt-1` ran
+  (120 FPS through the window); `vk-v2-dxvk-1` failed to get JIT (LocalDevVPN down: a
+  timeout on 10.7.0.1), and `vk-v2-vkd3d-1` was stopped while cooling. Resume with
+  `.work/agent-notes/vulkan-perf/burst.sh` for DXVK and vkd3d once LocalDevVPN is up,
+  then the levers.
