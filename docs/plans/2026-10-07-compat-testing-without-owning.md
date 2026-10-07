@@ -1,8 +1,11 @@
 # Plan: testing reported games without owning them
 
 **Date:** 2026-10-07. **Kind:** plan; research done, nothing built, no phone used.
-**Linear:** PLA-12 (the umbrella), the Compatibility project (PLA-22 to PLA-38), PLA-9,
-PLA-11, PLA-19, PLA-33.
+**Linear:** [PLA-12](https://linear.app/playportdev/issue/PLA-12) (the umbrella),
+the Compatibility project (PLA-22 to PLA-38), PLA-9, PLA-11, PLA-19, PLA-33.
+**Review:** open; these existing issues already track the plan, so no duplicate
+umbrella was created. Research and acquired demo licences are not completed
+runtime, tooling or phone gates.
 
 ## Goal and limits
 

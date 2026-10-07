@@ -1,5 +1,7 @@
 # Plan: runtime DLL coverage before the first play
 
+**Linear:** [PLA-78](https://linear.app/playportdev/issue/PLA-78).
+
 **Date:** 2026-10-07. **Kind:** execution plan; implementation not started.
 **Source:** `.work/agent-notes/dll-survey/report.md`, research baseline `7c9de03`.
 Plan prepared against `13c3522`; all four build manifests have changed since the

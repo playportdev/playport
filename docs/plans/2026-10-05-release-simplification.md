@@ -1,5 +1,10 @@
 # Plan: the release app runs Valve's defaults; emulator tuning is dev-only
 
+**Linear:** [PLA-73](https://linear.app/playportdev/issue/PLA-73).
+**Review:** open; some controls already have dev guards, but the shared player-settings
+filter and final release gates remain. Decision 0049 below is an old placeholder
+already used by the pin policy; allocate a fresh number during implementation.
+
 **Date:** 2026-10-05. **Status:** plan. Nothing is implemented yet. The
 inventory behind it (every control, its file and line, and who needs it) is in
 the appendix below. The owner settled the open questions on 2026-10-05; their

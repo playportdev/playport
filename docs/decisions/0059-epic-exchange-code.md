@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-10-07, by the owner's direction ("a game gets from its store
 what the store's launcher would give it, by default", in the
-[store game sign-in plan](../plans/2026-10-06-store-game-auth.md)), step 1. One exception
+[store game sign-in plan](../plans/finished.md#games-sign-in-to-their-store)), step 1. One exception
 to [0004](0004-steam-session-boundary.md); replaces [0058](0058-store-sessions.md)'s
 refusal of a game that needs Epic's sign-in. The phone measurement is in the
 [evidence](../evidence/2026-10-07-epic-game-auth.md).

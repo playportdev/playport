@@ -1,10 +1,10 @@
 # Finished plans
 
-Plans that were carried out were removed from the tree on 2026-10-06. Each is in
-git history (`git log --diff-filter=D -- docs/plans/ docs/PORTAL2-PLAN.md` names the
-commit; `git show COMMIT^:PATH` prints the plan). What each one settled is in the
-decisions and evidence it links; the items still open are listed here so they are
-not lost.
+Completed plan runs are removed from the tree; the first cleanup was 2026-10-06.
+Each is in git history (`git log --diff-filter=D -- docs/plans/ docs/PORTAL2-PLAN.md`
+names the commit; `git show COMMIT^:PATH` prints the plan). Outcomes live in the
+linked decisions and evidence. This is a historical index, not an active plan or
+backlog: Linear tracks remaining work; [active plans](README.md) link their issues.
 
 ## En Garde!
 
@@ -19,7 +19,7 @@ the game's ([evidence](../evidence/2026-09-27-gbe-steam-api-build.md),
 removed; phase 3, achievements and stats read and synced; phase 4, Steam Cloud.
 
 Open: phase 3 has sent no unlock yet. Phase 5 (encrypted app tickets) is done
-in the [store game sign-in plan](2026-10-06-store-game-auth.md), step 2
+in the [finished store game sign-in plan](#games-sign-in-to-their-store), step 2
 ([decision 0017](../decisions/0017-encrypted-app-ticket.md), accepted); a game
 whose online login checks the ticket is still to be found.
 
@@ -129,6 +129,45 @@ Open for "fully playable":
   [the Proton alignment plan](2026-10-05-proton-arm64-alignment.md#portal-2-performance-follow-ups).
 - The hint glyph follows the last device used; a retired window's final teardown
   has not been seen on the phone.
+
+## Guest address-space exhaustion
+
+`plans/2026-10-06-guest-va-exhaustion.md`. Done 2026-10-06: madeira-unix 0082
+makes the clamped scan escape above the ceiling; 0083–0085 remove the unused CEF
+holds and steer reserve-only arenas from their first allocation. Death's Door
+runs into gameplay, with Hollow Knight, Portal 2 and (on the final IPA, disk cache
+off) The Witcher 3 as regressions. [Evidence](../evidence/2026-10-06-guest-va-exhaustion.md)
+holds the two IPA hashes and results. The plan's header understated the final
+Witcher check; the evidence records it.
+
+Separate residuals were not part of that fix: warm disk-cache crashes (PLA-76,
+with the games' PLA-42/PLA-43 records), low-VA executable placement and the jumbo
+hold/steering overlap (PLA-75's VA audit). Death's Door's current result is PLA-46.
+No new phone play was performed while removing the plan.
+
+## Games sign in to their store
+
+`plans/2026-10-06-store-game-auth.md`. The implementation run finished
+2026-10-07; release was handed to the owner, not shipped. Epic exchange codes,
+ownership tokens, JSON manifests and the URL panel (0059, 0064), Steam encrypted
+and live session tickets (0017, 0062), and the local GOG Galaxy service (0063)
+landed with their runtime fixes. Snakebird's EOS signs in, Valheim signs in to
+PlayFab on DXMT with a server-checked ticket, and Moonscars' Galaxy SDK signs in.
+[Final gates](../evidence/2026-10-07-store-game-auth.md),
+[NSI follow-up](../evidence/2026-10-07-nsi-adapters.md) and
+[Epic deployment-ID follow-up](../evidence/2026-10-07-epic-deployment-id.md)
+record results, IPA hashes and limits. The full design and numbered steps remain
+in git history; deleting the plan does not claim every follow-up is complete.
+
+**Release handoff:** [PLA-74](https://linear.app/playportdev/issue/PLA-74) tracks
+0.4.0 notes, the clean release build, owner-assisted release gates and draft.
+**Open implementation/checks:** PLA-50 (full SSPI port), PLA-41 (JWE), PLA-39
+(Among Us), PLA-54 (Monster Train), PLA-59 (Static-body diagnostic gate), PLA-60
+(GOG offline queue, split SDK and writes), PLA-62 (Steam session and sign-out),
+PLA-63 (pool-image unmap), PLA-64 (i386 URL opener and manual checks), PLA-65
+(Vulkan shared video; keep Valheim on DXMT). PLA-57, PLA-58, PLA-61 and PLA-71
+have their completed fixes in Linear. Store import/install gates and cloud
+follow-ups remain in the [PC-store plan](2026-10-06-pc-import-gog-epic.md), PLA-80.
 
 ## Removed without being carried out
 

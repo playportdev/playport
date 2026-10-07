@@ -1,7 +1,7 @@
 # 0062: A live Steam session during play: the game's auth session and web API tickets
 
 **Status:** accepted, 2026-10-07, by the owner's answers to step 4 of the
-[store game sign-in plan](../plans/2026-10-06-store-game-auth.md) (reconnect on demand,
+[store game sign-in plan](../plans/finished.md#games-sign-in-to-their-store) (reconnect on demand,
 `ClientGamesPlayed` for the play, the WoW64 branch where cheap, on by default with no
 switch; an encrypted ticket with the game's data out of scope). One exception to
 [0004](0004-steam-session-boundary.md), and a change to its suspension rule. The phone

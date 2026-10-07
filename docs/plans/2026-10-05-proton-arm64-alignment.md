@@ -1,5 +1,11 @@
 # Plan: align with Valve's ARM64 Proton
 
+**Linear:** [PLA-76](https://linear.app/playportdev/issue/PLA-76).
+**Review:** partial. Dependency moves/holds, the Madeira freeze, MaxInst=500,
+profile-data refresh and release Vulkan log defaults have landed. Reconcile the
+remaining alignment and Portal 2 follow-ups against current code before acting;
+older "not started" lines below describe the original snapshot.
+
 **Date:** 2026-10-05. **Kind:** plan, nothing done yet. **Pins read:**
 `pins.lock` at the commit that adds this plan (`madeira` 8c050d0, `wine`
 wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`

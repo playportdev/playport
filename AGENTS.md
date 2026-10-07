@@ -22,6 +22,16 @@ end.
 
 ## Rules
 
+- **Linear tracks everything.** Team PLA is the source of truth for planned work,
+  bugs, follow-ups and release handoffs, not just compatibility reports. Every plan
+  must be reflected in a Linear issue before it is committed or executed: search
+  first and reuse an issue that covers its scope, or create one. Put a `**Linear:**`
+  issue link in the plan and its repository path in the issue. Keep progress,
+  blockers, evidence and completion in sync; split follow-ups into linked issues
+  rather than leaving them only in a document. Remove completed plans after their
+  outcomes are recorded in decisions/evidence and `docs/plans/finished.md`, with any
+  remaining work tracked in open issues. [Plans](docs/plans/README.md) indexes the
+  documents; it is not a second backlog.
 - **Commit every completed chunk of work.** After the relevant checks pass, commit
   each coherent chunk before starting the next or reporting completion; do not
   wait for a separate request. Include its documentation and changed build records,

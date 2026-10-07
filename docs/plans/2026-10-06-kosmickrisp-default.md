@@ -1,5 +1,11 @@
 # Plan: KosmicKrisp by default for Direct3D 8–12
 
+**Linear:** [PLA-77](https://linear.app/playportdev/issue/PLA-77).
+**Review:** open/partial. Detailed performance work is PLA-72; its unmerged
+`vulkan-performance` handoff supersedes the old measurement protocol. Reconcile
+routing claims below against current code. DXMT and the incomplete i386 backend
+set remain; Valheim still needs DXMT (PLA-65), so retirement is not complete.
+
 **Date:** 2026-10-06. **Kind:** plan, not started. **Pins read:** `pins.lock` on
 `madeira-freeze` (working tree, 2026-10-06): `madeira` 8c050d0 (frozen, decision
 0054), `mesa` b39d173 + `patches/mesa` (16), `dxvk` e5ffd0f (unmodified),

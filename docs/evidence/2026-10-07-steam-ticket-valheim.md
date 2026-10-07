@@ -9,7 +9,7 @@ step). Phone: iPhone18,4, iOS 27.0, Wi-Fi, on charge, unattended. Steam signed i
 owner's account. Run directories are under `$PLAYPORT_BUILD/agent-notes/store-auth/`
 (`valheim/`, `ball3d/`, `final/valheim`); screenshots stay there.
 
-Step 4 of the [store game sign-in plan](../plans/2026-10-06-store-game-auth.md) left S1 open:
+Step 4 of the [store game sign-in plan](../plans/finished.md#games-sign-in-to-their-store) left S1 open:
 no game had asked the host for a ticket. This record is the first that did.
 
 ## Valheim (Steam 892970, Unity x86-64)

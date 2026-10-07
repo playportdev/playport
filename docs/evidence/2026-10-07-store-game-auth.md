@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-07. **Final IPA:** `Playport-26.5-5eaca1e8.ipa` (dev), sha256
 `5eaca1e843e91318f4c760034794e5be542816f9eaec760f2e543987d7f3e1ae`, built from `b75dd27`
-(the [store game sign-in plan](../plans/2026-10-06-store-game-auth.md)'s last runtime change,
+(the [store game sign-in plan](../plans/finished.md#games-sign-in-to-their-store)'s last runtime change,
 wine-unix 0018). Phone: iPhone18,4, iOS 27.0, on charge, unattended. Run directories are under
 `$PLAYPORT_BUILD/ui-runs/` and `$PLAYPORT_BUILD/perf-runs/` (named below); screenshots stay
 there. The release (plan step 7) is handed off to the owner: no release build, draft or push

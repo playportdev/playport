@@ -1,5 +1,13 @@
 # Plan: Madeira layer audit, deep dives
 
+**Linear:** [PLA-75](https://linear.app/playportdev/issue/PLA-75).
+**Review:** partial; the audit below is the original research snapshot. T3 was
+implemented by madeira-unix 0090 ([evidence](../evidence/2026-10-07-pool-x64-images.md));
+T13's NSI tables were addressed by PLA-58/PLA-71 with
+[documented limits](../evidence/2026-10-07-nsi-adapters.md). Reconcile other findings
+against current patches before implementing them; those two fixes do not close
+this whole audit.
+
 **Date:** 2026-10-06. **Kind:** plan, research only: nothing changed, nothing built, no phone used. **Pins read:** `madeira` 8c050d0 (frozen, decision 0054) with `patches/madeira-unix` 0001–0085, as built in `.work/run/unix/mythic/build/`. The FEX tree is `.work/run/fex`, with `patches/fex-port` and `patches/fex` applied. **Logs read:** `.work/agent-notes/va-exhaustion/v2/{hk,dd1-3,p2,w3*}/pull/s1-host.log`, from the IPA `965b7f27…` (0082–0085). The Hollow Knight log (`v2/hk`, about 48,900 lines for one play to first-frame+10) is the main source for the counts below.
 
 ## Method

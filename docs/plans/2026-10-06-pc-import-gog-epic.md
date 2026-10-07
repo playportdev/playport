@@ -1,5 +1,12 @@
 # Plan: PC game import, GOG and Epic Games
 
+**Linear:** [PLA-80](https://linear.app/playportdev/issue/PLA-80) tracks the remaining
+gates and deferred work; implementation is PLA-14 (Local), PLA-15 (GOG), PLA-16 (Epic).
+**Review:** keep this plan: the phone checks below remain open despite the
+implementation issues being Done. Step 3.6 was subsequently carried out in
+[games sign in to their store](finished.md#games-sign-in-to-their-store), not new
+work to repeat; release handoff is PLA-74.
+
 **Date:** 2026-10-06. **Kind:** plan. **Status:** phases 0–3 done on branch
 `pc-import-gog-epic`, with the phone checks listed in Progress still open; the owner's answers are folded in (see Settled). Phone
 runs are kept to the phase gates (owner, 2026-10-06). Decision numbers: 0055 and
@@ -55,7 +62,7 @@ Evidence: [PC import and GOG on the phone](../evidence/2026-10-06-pc-import-and-
   one the owner asked for, so 0059 is not written (3.6). On the phone: sign-in by the owner,
   install, verify 1334/1334, play to `first-frame+10`, Borderlands 3's refusal, Hollow Knight.
   Death's Door quit 14 s in (a guest address-space allocation failed and DXMT threw): a
-  runtime fault, not Epic's, fixed by `madeira-unix` 0082 ([its plan](2026-10-06-guest-va-exhaustion.md),
+  runtime fault, not Epic's, fixed by `madeira-unix` 0082 ([its finished plan](finished.md#guest-address-space-exhaustion),
   [evidence](../evidence/2026-10-06-guest-va-exhaustion.md)); it now plays into the game.
 - **Open:** the phone checks left in each phase (above); 2.4 and 3.7 (cloud saves), 3.6 when a
   wanted game needs it.

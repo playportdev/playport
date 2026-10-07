@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-10-06, by the owner ("a game gets from its store what
 the store's launcher would give it, by default", in the
-[store game sign-in plan](../plans/2026-10-06-store-game-auth.md)), step 2. Proposed
+[store game sign-in plan](../plans/finished.md#games-sign-in-to-their-store)), step 2. Proposed
 2026-09-28 as a per-game switch, off by default; the owner's direction replaces
 the switch. One exception to [0004](0004-steam-session-boundary.md). The phone
 measurement is in the [evidence](../evidence/2026-10-07-steam-encrypted-app-ticket.md).

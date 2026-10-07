@@ -1,5 +1,16 @@
 # Plan: Vulkan at least on par with DXMT, on Hollow Knight in Direct3D 11 and 12
 
+**Linear:** [PLA-72](https://linear.app/playportdev/issue/PLA-72).
+**Review:** partial/paused, not "not started". The latest execution handoff is
+this file on the unmerged `vulkan-performance` branch at `e8091cd`; read it before
+continuing (`git show e8091cd:docs/plans/2026-10-06-vulkan-performance.md`). The
+owner's 2026-10-07 instruction there replaces the repeated matrices below:
+**fix, then one targeted run**, investigate no-gain results before retrying, and
+one final run per mode/backend. Tooling and found stability faults were checked
+on that branch; the performance gap remains. Some fixes were ported to main;
+reconcile patch contents rather than branch-local numbers. PLA-77 owns the
+long-term backend migration.
+
 **Date:** 2026-10-06. **Kind:** plan, not started. **Pins read:** as in the
 [KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 (a
 Mesa `main` commit of 2026-10-05; `main` was 54 commits ahead on 2026-10-06, none

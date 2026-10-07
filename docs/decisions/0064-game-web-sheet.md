@@ -1,7 +1,7 @@
 # 0064: A game opens a web page: Playport's web panel over the play
 
 **Status:** accepted, 2026-10-07, by the supervisor for the unattended session, on the
-recommended options of the [store game sign-in plan](../plans/2026-10-06-store-game-auth.md)
+recommended options of the [store game sign-in plan](../plans/finished.md#games-sign-in-to-their-store)
 (a panel over the game, not Safari; a non-persistent web session per panel; Epic's
 pre-sign-in only for an Epic game's Epic sign-in page; the EOS refresh token a game keeps in
 its prefix left as a documented residual; x86-64 games first). Amends

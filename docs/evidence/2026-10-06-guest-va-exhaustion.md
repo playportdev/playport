@@ -1,6 +1,6 @@
 # Guest address-space exhaustion: Death's Door runs on
 
-**Date:** 2026-10-06. **Plan:** [guest VA exhaustion](../plans/2026-10-06-guest-va-exhaustion.md).
+**Date:** 2026-10-06. **Plan:** [guest VA exhaustion](../plans/finished.md#guest-address-space-exhaustion).
 **Phone:** iPhone18,4, iOS 27.0, dev build, on battery. **Title:** Death's Door
 (`epic-65d73e3be8824829b5b788bd849b6559`, Unity x86-64, D3D11). **Fix:** `patches/madeira-unix`
 0082 to 0085. Found by the [Epic gate](2026-10-06-epic-games.md).

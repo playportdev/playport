@@ -1,7 +1,7 @@
 # 0063: A GOG game's Galaxy sign-in
 
 **Status:** accepted, 2026-10-07, by the owner in the
-[store game sign-in plan](../plans/2026-10-06-store-game-auth.md) (step 5): on by default for
+[store game sign-in plan](../plans/finished.md#games-sign-in-to-their-store) (step 5): on by default for
 every GOG game whose build carries a Galaxy client ID, and the residual below accepted
 before the phone measurement, whatever it showed. One exception to
 [0004](0004-steam-session-boundary.md); amends [0058](0058-store-sessions.md)'s "nothing

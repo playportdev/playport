@@ -1,5 +1,11 @@
 # Plan: performance review of the patch series against comparable projects
 
+**Linear:** [PLA-79](https://linear.app/playportdev/issue/PLA-79).
+**Review:** partial; the source snapshot below is historical. Defaults, x87,
+MaxInst and dependency updates have since landed; remaining hypotheses still need
+reconciliation and evidence. Coordinate overlapping items with PLA-75, PLA-76 and
+PLA-72 rather than treating this as a second work queue.
+
 **Date:** 2026-09-30. **Status:** review and plan. The code was read and the
 series were applied to scratch trees; nothing was built, installed or run on
 the phone, so every cost below is a hypothesis until a `pp perf` A/B shows it.
