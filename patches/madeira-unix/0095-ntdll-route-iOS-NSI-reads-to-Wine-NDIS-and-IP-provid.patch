@@ -1,0 +1,364 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Wed, 7 Oct 2026 23:33:21 +0200
+Subject: [PATCH] ntdll: route iOS NSI reads to Wine NDIS and IP providers
+
+Compile the existing nsiproxy providers into the unix archive, serve enumeration and keyed queries without a driver, and convert i386 callers through their owner-local guest window. Preserve wineserver TCP socket ownership and log only bounded table counts/status, never addresses.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-07-nsi-adapters.md
+Offered-upstream: no; Playport one-process integration
+---
+ build/ntdll-unix/build.sh               |   5 +
+ build/ntdll-unix/nsi_unixlib_ios.c      | 213 ++++++++++++++++++++++--
+ build/ntdll-unix/shims/nsi_ios_config.h |  24 +++
+ build/ntdll-unix/virtual_ios.c          |   2 +
+ 4 files changed, 229 insertions(+), 15 deletions(-)
+ create mode 100644 build/ntdll-unix/shims/nsi_ios_config.h
+
+diff --git a/build/ntdll-unix/build.sh b/build/ntdll-unix/build.sh
+index 685f7ce..bdd8c18 100755
+--- a/build/ntdll-unix/build.sh
++++ b/build/ntdll-unix/build.sh
+@@ -115,6 +115,10 @@ compile_unixlib "$CRYPTO_DIR/crypt32_unixlib_ios.c" "crypt32_unixlib" "crypt32"
+ # iOS-Madeira 2026-08-03 (#79 transport): in-process NSI TCP connection
+ # tables (nsiproxy.sys is not shipped; PE nsi.dll falls back to this).
+ compile_one "$BUILD_DIR/nsi_unixlib_ios.c" "nsi_unixlib_ios"
++compile_unixlib "$WINE_SRC/dlls/nsiproxy.sys/ndis.c" "nsi_ndis" nsi \
++    -include "$BUILD_DIR/shims/nsi_ios_config.h"
++compile_unixlib "$WINE_SRC/dlls/nsiproxy.sys/ip.c" "nsi_ip" nsi \
++    -include "$BUILD_DIR/shims/nsi_ios_config.h"
+ # Playport: winevulkan's unix side (the Vulkan thunks between the PE
+ # winevulkan.dll and win32u's Vulkan, which dlopens KosmicKrisp).
+ compile_unixlib "$WINE_SRC/dlls/winevulkan/vulkan.c" "winevulkan_unixlib" "winevulkan" \
+@@ -170,6 +174,7 @@ echo "=== Building libntdll_unix.a ==="
+ rm -f "$OBJ_DIR/libntdll_unix.a"
+ ar rcs "$OBJ_DIR/libntdll_unix.a" \
+     "$OBJ_DIR/audio_null_ios.o" "$OBJ_DIR/madsync.o" "$OBJ_DIR/nsi_unixlib_ios.o" \
++    "$OBJ_DIR/nsi_ndis.o" "$OBJ_DIR/nsi_ip.o" \
+     "$OBJ_DIR/gnutls_symtab_ios.o" "$OBJ_DIR/ws2_32_unixlib.o" \
+     "$OBJ_DIR/secur32_unixlib.o" "$OBJ_DIR/crypt32_unixlib.o" \
+     "$OBJ_DIR/dwrite_unixlib.o" \
+diff --git a/build/ntdll-unix/nsi_unixlib_ios.c b/build/ntdll-unix/nsi_unixlib_ios.c
+index d11f148..649b940 100644
+--- a/build/ntdll-unix/nsi_unixlib_ios.c
++++ b/build/ntdll-unix/nsi_unixlib_ios.c
+@@ -17,8 +17,8 @@
+  * PE nsi.dll falls back to this unixlib (WINE_UNIX_CALL code 0, same
+  * struct nsi_enumerate_all_ex the nsiproxy ioctl path uses) when the
+  * device is absent; registration is by module name in virtual_ios.c
+- * load_builtin_unixlib. Non-TCP modules keep failing exactly as before
+- * (STATUS_NOT_SUPPORTED instead of the old device-open error).
++ * load_builtin_unixlib. NDIS and IP reads use Wine's nsiproxy providers
++ * directly, without requiring a service manager or a device driver.
+  *
+  * The enumerator is wine/dlls/nsiproxy.sys/tcp.c tcp_conns_enumerate_all
+  * copied faithfully, except IPv6 scope ids come straight from the server
+@@ -34,6 +34,7 @@
+ #include <sys/socket.h>
+ #include <unistd.h>
+ #include <netinet/in.h>
++#include <ifaddrs.h>
+ 
+ #include "ntstatus.h"
+ #include "windef.h"
+@@ -42,11 +43,14 @@
+ #define USE_WS_PREFIX
+ #include "winsock2.h"
+ #include "ifdef.h"
++#define __WINE_INIT_NPI_MODULEID
+ #include "netiodef.h"
+ #include "ws2ipdef.h"
+ #include "tcpmib.h"
+ #include "wine/nsi.h"
+ #include "wine/server.h"
++#include "wine/ios_wow64.h"
++#include "../../wine/dlls/nsiproxy.sys/unix_private.h"
+ 
+ /* NPI_MS_TCP_MODULEID (netiodef.h declares it extern; the defining
+  * translation unit lives in nsiproxy.sys which we don't build) */
+@@ -70,6 +74,7 @@ static NTSTATUS ios_tcp_conns_enumerate_all( UINT filter, struct nsi_tcp_conn_ke
+ 
+     if (want_data)
+     {
++        if (*count > SIZE_MAX / sizeof(*connections)) return STATUS_NO_MEMORY;
+         connections = malloc( sizeof(*connections) * (*count) );
+         if (!connections) return STATUS_NO_MEMORY;
+     }
+@@ -94,6 +99,11 @@ static NTSTATUS ios_tcp_conns_enumerate_all( UINT filter, struct nsi_tcp_conn_ke
+     }
+     SERVER_END_REQ;
+ 
++    if (ret || !want_data)
++    {
++        free( connections );
++        return ret;
++    }
+     for (unsigned int i = 0; i < *count; i++)
+     {
+         union tcp_connection *conn = &connections[i];
+@@ -174,20 +184,11 @@ static NTSTATUS ios_nsi_enumerate_all_ex( void *args )
+     UINT filter;
+ 
+     if (!params || !params->module) return STATUS_INVALID_PARAMETER;
++    if (params->count && ((params->key_size && !params->key_data) ||
++        (params->rw_size && !params->rw_data) || (params->dynamic_size && !params->dynamic_data) ||
++        (params->static_size && !params->static_data))) return STATUS_INVALID_PARAMETER;
+     if (!NmrIsEqualNpiModuleId( params->module, &ios_tcp_moduleid ))
+-    {
+-        /* ml472 (#80 attribution): a hot caller retrying an unserviced table
+-         * would otherwise be invisible here. */
+-        static int non_tcp_logged;
+-        if (non_tcp_logged < 16)
+-        {
+-            non_tcp_logged++;
+-            dprintf( 2, "[nsi-ios] non-tcp module %08x table=%u -> NOT_SUPPORTED rev=ml472\n",
+-                     (UINT)params->module->Guid.Data1, (UINT)params->table );
+-        }
+-        return STATUS_NOT_SUPPORTED;
+-    }
+-
++        return nsi_enumerate_all_ex( params );
+     switch ((UINT)params->table)
+     {
+     case NSI_TCP_ALL_TABLE:    filter = 0; break;
+@@ -219,7 +220,189 @@ static NTSTATUS ios_nsi_enumerate_all_ex( void *args )
+     return status;
+ }
+ 
++/* IP's interface provider shares these scope helpers with upstream TCP.
++ * TCP itself remains served by the in-process wineserver above. */
++struct ipv6_addr_scope *get_ipv6_addr_scope_table( unsigned int *size )
++{
++    struct ifaddrs *addrs, *cur;
++    struct ipv6_addr_scope *table;
++    unsigned int count = 0;
++    *size = 0;
++    if (getifaddrs( &addrs )) return NULL;
++    for (cur = addrs; cur; cur = cur->ifa_next)
++        if (cur->ifa_addr && cur->ifa_addr->sa_family == AF_INET6) ++count;
++    table = calloc( count ? count : 1, sizeof(*table) );
++    if (table)
++        for (cur = addrs; cur; cur = cur->ifa_next)
++        {
++            const struct sockaddr_in6 *addr;
++            if (!cur->ifa_addr || cur->ifa_addr->sa_family != AF_INET6) continue;
++            addr = (const struct sockaddr_in6 *)cur->ifa_addr;
++            memcpy( &table[*size].addr, &addr->sin6_addr, 16 );
++            table[(*size)++].scope = addr->sin6_scope_id;
++        }
++    freeifaddrs( addrs );
++    return table;
++}
++
++UINT find_ipv6_addr_scope( const IN6_ADDR *addr, const struct ipv6_addr_scope *table, unsigned int size )
++{
++    unsigned int i;
++    if (WS_IN6_IS_ADDR_UNSPECIFIED( addr )) return 0;
++    if (WS_IN6_IS_ADDR_MULTICAST( addr )) return htons( addr->u.Byte[1] & 0x0f );
++    for (i = 0; i < size; ++i)
++        if (!memcmp( addr, &table[i].addr, sizeof(*addr) )) return table[i].scope;
++    return ~0u;
++}
++
++/* Use Wine's own NDIS/IP providers: getifaddrs, interface ioctls and the
++ * BSD routing sysctl. The TCP provider above retains wineserver ownership. */
++static const struct module_table *ios_get_table( const NPI_MODULEID *id, UINT_PTR table )
++{
++    const struct module *modules[] = { &ndis_module, &ipv4_module, &ipv6_module };
++    const struct module_table *entry;
++    unsigned int i;
++
++    if (!id || table > ~0u) return NULL;
++    for (i = 0; i < ARRAY_SIZE(modules); ++i)
++        if (NmrIsEqualNpiModuleId( modules[i]->module, id ))
++            for (entry = modules[i]->tables; entry->table != ~0u; ++entry)
++                if (entry->table == table) return entry;
++    return NULL;
++}
++
++NTSTATUS nsi_enumerate_all_ex( struct nsi_enumerate_all_ex *p )
++{
++    const struct module_table *entry = p ? ios_get_table( p->module, p->table ) : NULL;
++    UINT sizes[4];
++    void *data[4];
++    unsigned int i;
++    NTSTATUS status;
++    static unsigned int logged;
++
++    if (!entry || !entry->enumerate_all) return STATUS_NOT_SUPPORTED;
++    sizes[0] = p->key_size; sizes[1] = p->rw_size;
++    sizes[2] = p->dynamic_size; sizes[3] = p->static_size;
++    data[0] = p->key_data; data[1] = p->rw_data;
++    data[2] = p->dynamic_data; data[3] = p->static_data;
++    for (i = 0; i < 4; ++i)
++    {
++        if (!sizes[i]) data[i] = NULL;
++        else if (sizes[i] != entry->sizes[i] || (!data[i] && p->count)) return STATUS_INVALID_PARAMETER;
++    }
++    status = entry->enumerate_all( data[0], sizes[0], data[1], sizes[1],
++                                  data[2], sizes[2], data[3], sizes[3], &p->count );
++    /* Counts/status only: no interface addresses or hardware identifiers. */
++    if (__atomic_fetch_add( &logged, 1, __ATOMIC_RELAXED ) < 24)
++        dprintf( 2, "[nsi-ios] module=%08x table=%u status=%08x count=%lu\n",
++                 (UINT)p->module->Guid.Data1, (UINT)p->table, (UINT)status, (unsigned long)p->count );
++    return status;
++}
++
++NTSTATUS nsi_get_all_parameters_ex( struct nsi_get_all_parameters_ex *p )
++{
++    const struct module_table *entry = p ? ios_get_table( p->module, p->table ) : NULL;
++    if (!entry || !entry->get_all_parameters) return STATUS_NOT_SUPPORTED;
++    if (p->key_size != entry->sizes[0] || (p->key_size && !p->key) ||
++        (p->rw_size && (p->rw_size != entry->sizes[1] || !p->rw_data)) ||
++        (p->dynamic_size && (p->dynamic_size != entry->sizes[2] || !p->dynamic_data)) ||
++        (p->static_size && (p->static_size != entry->sizes[3] || !p->static_data)))
++        return STATUS_INVALID_PARAMETER;
++    return entry->get_all_parameters( p->key, p->key_size,
++                                     p->rw_size ? p->rw_data : NULL, p->rw_size,
++                                     p->dynamic_size ? p->dynamic_data : NULL, p->dynamic_size,
++                                     p->static_size ? p->static_data : NULL, p->static_size );
++}
++
++NTSTATUS nsi_get_parameter_ex( struct nsi_get_parameter_ex *p )
++{
++    const struct module_table *entry = p ? ios_get_table( p->module, p->table ) : NULL;
++    UINT size;
++    if (!entry || !entry->get_parameter) return STATUS_NOT_SUPPORTED;
++    if (p->param_type > NSI_PARAM_TYPE_STATIC || p->key_size != entry->sizes[0] ||
++        (p->key_size && !p->key) || (p->data_size && !p->data)) return STATUS_INVALID_PARAMETER;
++    size = entry->sizes[p->param_type + 1];
++    if (p->data_offset > size || p->data_size > size - p->data_offset) return STATUS_INVALID_PARAMETER;
++    return entry->get_parameter( p->key, p->key_size, p->param_type, p->data, p->data_size, p->data_offset );
++}
++
++/* PE i386 calls carry 32-bit pointers in their owner's guest window. */
++struct ios_nsi_enum32
++{
++    UINT unknown[2], module, table, first_arg, second_arg;
++    UINT key_data, key_size, rw_data, rw_size, dynamic_data, dynamic_size, static_data, static_size, count;
++};
++struct ios_nsi_all32
++{
++    UINT unknown[2], module, table, first_arg, unknown2;
++    UINT key, key_size, rw_data, rw_size, dynamic_data, dynamic_size, static_data, static_size;
++};
++struct ios_nsi_param32
++{
++    UINT unknown[2], module, table, first_arg, unknown2;
++    UINT key, key_size, param_type, data, data_size, data_offset;
++};
++
++static void *ios_nsi_ptr32( UINT ptr, size_t size )
++{
++    uintptr_t base = ios_wow64_current_base();
++    void *host = ios_wow64_to_host( base, ptr );
++    return ios_wow64_host_span( base, host, size ) ? host : NULL;
++}
++
++static NTSTATUS ios_nsi_enum_wow64( void *args )
++{
++    struct ios_nsi_enum32 *p = args;
++    struct nsi_enumerate_all_ex n = {0};
++    NTSTATUS status;
++    n.module = ios_nsi_ptr32( p->module, sizeof(*n.module) );
++    n.table = p->table; n.first_arg = p->first_arg; n.second_arg = p->second_arg;
++    n.key_size = p->key_size; n.rw_size = p->rw_size;
++    n.dynamic_size = p->dynamic_size; n.static_size = p->static_size; n.count = p->count;
++    n.key_data = ios_nsi_ptr32( p->key_data, (size_t)p->key_size * p->count );
++    n.rw_data = ios_nsi_ptr32( p->rw_data, (size_t)p->rw_size * p->count );
++    n.dynamic_data = ios_nsi_ptr32( p->dynamic_data, (size_t)p->dynamic_size * p->count );
++    n.static_data = ios_nsi_ptr32( p->static_data, (size_t)p->static_size * p->count );
++    status = ios_nsi_enumerate_all_ex( &n );
++    p->count = n.count;
++    return status;
++}
++
++static NTSTATUS ios_nsi_all_wow64( void *args )
++{
++    struct ios_nsi_all32 *p = args;
++    struct nsi_get_all_parameters_ex n = {0};
++    n.module = ios_nsi_ptr32( p->module, sizeof(*n.module) );
++    n.table = p->table; n.first_arg = p->first_arg;
++    n.key_size = p->key_size; n.key = ios_nsi_ptr32( p->key, p->key_size );
++    n.rw_size = p->rw_size; n.rw_data = ios_nsi_ptr32( p->rw_data, p->rw_size );
++    n.dynamic_size = p->dynamic_size; n.dynamic_data = ios_nsi_ptr32( p->dynamic_data, p->dynamic_size );
++    n.static_size = p->static_size; n.static_data = ios_nsi_ptr32( p->static_data, p->static_size );
++    return nsi_get_all_parameters_ex( &n );
++}
++
++static NTSTATUS ios_nsi_param_wow64( void *args )
++{
++    struct ios_nsi_param32 *p = args;
++    struct nsi_get_parameter_ex n = {0};
++    n.module = ios_nsi_ptr32( p->module, sizeof(*n.module) );
++    n.table = p->table; n.first_arg = p->first_arg;
++    n.key_size = p->key_size; n.key = ios_nsi_ptr32( p->key, p->key_size );
++    n.param_type = p->param_type; n.data = ios_nsi_ptr32( p->data, p->data_size );
++    n.data_size = p->data_size; n.data_offset = p->data_offset;
++    return nsi_get_parameter_ex( &n );
++}
++
++const void *nsi_unix_call_wow64_funcs[] =
++{
++    (const void *)ios_nsi_enum_wow64,
++    (const void *)ios_nsi_all_wow64,
++    (const void *)ios_nsi_param_wow64,
++};
++
+ const void *nsi_unix_call_funcs[] =
+ {
+     (const void *)ios_nsi_enumerate_all_ex,
++    (const void *)nsi_get_all_parameters_ex,
++    (const void *)nsi_get_parameter_ex,
+ };
+diff --git a/build/ntdll-unix/shims/nsi_ios_config.h b/build/ntdll-unix/shims/nsi_ios_config.h
+new file mode 100644
+index 0000000..3c4b352
+--- /dev/null
++++ b/build/ntdll-unix/shims/nsi_ios_config.h
+@@ -0,0 +1,24 @@
++/* Wine is configured against macOS, whose kernel networking headers aren't
++ * in the iOS SDK. NDIS uses getifaddrs; IP uses a bounded Darwin route ABI
++ * decoder. Do not compile statistics needing unavailable kernel structures. */
++#undef HAVE_NET_IF_ARP_H
++#undef HAVE_NETINET_IF_ETHER_H
++#undef HAVE_NET_ROUTE_H
++#undef HAVE_NETINET_IP_VAR_H
++#undef HAVE_NETINET_ICMP_VAR_H
++#undef HAVE_NETINET6_IP6_VAR_H
++#undef HAVE_STRUCT_ICMP6STAT_ICP6S_ERROR
++#undef HAVE_STRUCT_ICMPSTAT_ICPS_ERROR
++#undef HAVE_STRUCT_IPSTAT_IPS_TOTAL
++#include <netinet/in.h>
++#include <netinet/ip.h>
++#include <netinet/icmp6.h>
++#ifndef IPCTL_FORWARDING
++#define IPCTL_FORWARDING 1
++#define IPCTL_DEFTTL 3
++#endif
++#ifndef IPV6CTL_FORWARDING
++#define IPV6CTL_FORWARDING 1
++#define IPV6CTL_DEFHLIM 3
++#endif
++#undef IPV6CTL_STATS
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index c598687..c64eeb6 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7404,6 +7404,7 @@ extern const void *winevulkan_unix_call_wow64_funcs[];
+  * tables — nsiproxy.sys is not shipped, PE nsi.dll falls back to this
+  * when \\.\Nsi can't be opened. See nsi_unixlib_ios.c */
+ extern const void *nsi_unix_call_funcs[];
++extern const void *nsi_unix_call_wow64_funcs[];
+ 
+ /* iOS-Madeira ml494 (#61 text wall): dwrite's unix side (freetype glyph
+  * rasterisation). Without it every __wine_unix_call from dwrite.dll failed,
+@@ -7591,6 +7592,7 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             else if (*funcs == (const void *)crypt32_unix_call_funcs) wow_funcs = crypt32_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)dwrite_unix_call_funcs) wow_funcs = dwrite_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)winevulkan_unix_call_funcs) wow_funcs = winevulkan_unix_call_wow64_funcs;
++            else if (*funcs == (const void *)nsi_unix_call_funcs) wow_funcs = nsi_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)playport_steam_unix_call_funcs) wow_funcs = playport_steam_unix_call_funcs;
+             else if (*funcs == (const void *)playport_url_unix_call_funcs) wow_funcs = playport_url_unix_call_funcs;
+             if (!wow_funcs)

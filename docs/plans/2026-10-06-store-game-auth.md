@@ -11,7 +11,7 @@ reads its achievements. Valheim on Vulkan no longer crashes at the intro (`patch
 0001 ported from `vulkan-performance`, decision 0061, IPA `beefb876`) and signs in there too,
 but its picture is black (its intro video needs a shared texture handle), so its page stays on
 DXMT. Open, each with its Linear issue: PLA-50 (secur32 without lsass packages; not what
-blocked GOG), PLA-58 (the NSI adapter table itself), PLA-41 (JWE), PLA-39 (Among Us), PLA-54
+blocked GOG), PLA-41 (JWE), PLA-39 (Among Us), PLA-54
 (Monster Train), PLA-62 (the Steam live session's gaps and
 sign-out on the phone), PLA-60 (GOG B6, B7 and writes), PLA-64 (the i386 URL opener and the UI
 no person has checked), PLA-59 (logging implemented; Static-body phone check pending), PLA-63 (the JIT pool
@@ -333,6 +333,21 @@ PLA-61's launcher-parity gap. The game stops separately in its Visual C++ prereq
 bootstrap before a first frame (PLA-67); no EOS sign-in or gameplay is claimed.
 [Evidence and limits](../evidence/2026-10-07-epic-deployment-id.md).
 
+## Follow-up: PLA-58 (2026-10-07)
+
+The real NSI adapter/address/route tables now replace wine-pe 0029's unconditional
+LAN workaround (wine-unix 0019, madeira-unix 0095, wine-pe 0030). Enumeration
+and keyed reads use Wine's in-process providers; link metadata comes from
+`getifaddrs`, with a bounded decoder for both IPv4 and IPv6 Darwin routes.
+WoW64 callers have owner-window pointer conversion. On dev IPA `232b7020`,
+Moonscars signs in (`OnAuthSuccess`, `CONNECTED`), Monster Train signs in and
+reads achievements (its separate black screen remains PLA-54), and Hollow
+Knight reaches its menu. Address/route queries and allocation growth are
+confirmed in both GOG logs; no achievement/stat writes or sign-out.
+Notifications, unavailable kernel statistics, Mono/netprofm coverage and
+phone checks of offline transitions/i386 callers are not claimed.
+[Evidence and limits](../evidence/2026-10-07-nsi-adapters.md).
+
 ## Order
 
 Step 1 → step 4 → runtime fixes (4b) → the URL opener (4c) → GOG (step 5) → phone gates (6),
@@ -361,9 +376,9 @@ the scratch measurements behind the designs are left in the build area.
 - GOG may change its cross-client refresh grant; some SDK builds may want a registered
   service or more of the local protocol (B8). About a ninth of the 31 Galaxy games are 32-bit
   and cannot run anyway.
-- Wine-pe 0029 makes `InternetGetConnectedState` answer "LAN" on iOS whatever the network: a
-  game that picks an offline mode from it now fails at its network call instead. Other callers
-  of `GetAdaptersAddresses` (netprofm, Mono's `NetworkInterface`) still fail on iOS.
+- PLA-58's follow-up retires wine-pe 0029's unconditional "LAN" answer in favour of
+  real interface/address/route tables. Network-change notifications, unavailable
+  kernel statistics and a phone check of offline transitions remain outside that fix.
 
 ## Not in this plan
 

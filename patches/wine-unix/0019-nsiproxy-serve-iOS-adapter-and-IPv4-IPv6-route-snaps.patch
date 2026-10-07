@@ -1,0 +1,513 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Playport <dev@playport.invalid>
+Date: Wed, 7 Oct 2026 23:33:02 +0200
+Subject: [PATCH] nsiproxy: serve iOS adapter and IPv4/IPv6 route snapshots
+
+Read link metadata with getifaddrs on iOS and decode Darwin route snapshots with bounds checks, compressed masks and scoped IPv6 gateways. Darwin IPv6 interface scopes are interface indices, not Linux address-class codes. Exclude removed/replaced interface identities from later snapshots and queries. Keep unsupported statistics and neighbour APIs unchanged.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-07-nsi-adapters.md
+Offered-upstream: no; iOS one-process runtime integration
+---
+ dlls/nsiproxy.sys/ios_forward.h | 100 +++++++++++++++++++++++++++++
+ dlls/nsiproxy.sys/ios_routes.h  |  96 ++++++++++++++++++++++++++++
+ dlls/nsiproxy.sys/ip.c          |  24 ++++++-
+ dlls/nsiproxy.sys/ndis.c        | 109 +++++++++++++++++++++++++++++++-
+ 4 files changed, 323 insertions(+), 6 deletions(-)
+ create mode 100644 dlls/nsiproxy.sys/ios_forward.h
+ create mode 100644 dlls/nsiproxy.sys/ios_routes.h
+
+diff --git a/dlls/nsiproxy.sys/ios_forward.h b/dlls/nsiproxy.sys/ios_forward.h
+new file mode 100644
+index 0000000..a79cff1
+--- /dev/null
++++ b/dlls/nsiproxy.sys/ios_forward.h
+@@ -0,0 +1,100 @@
++/* iOS NSI forwarding tables. SPDX-License-Identifier: LGPL-2.1-or-later */
++#include <errno.h>
++#include "ios_routes.h"
++
++static NTSTATUS ios_forward_enumerate_all( int family, void *key_data, UINT key_size,
++                                           void *rw_data, UINT rw_size, void *dynamic_data, UINT dynamic_size,
++                                           void *static_data, UINT static_size, UINT_PTR *count )
++{
++    int mib[] = { CTL_NET, PF_ROUTE, 0, family, 1 /* NET_RT_DUMP */, 0 };
++    size_t size = 0, offset;
++    unsigned int attempt, num = 0;
++    BOOL want_data = key_size || rw_size || dynamic_size || static_size;
++    unsigned char *buffer = NULL;
++    NTSTATUS status = STATUS_SUCCESS;
++    for (attempt = 0; attempt < 3; ++attempt)
++    {
++        if (sysctl( mib, ARRAY_SIZE(mib), NULL, &size, NULL, 0 )) return STATUS_NOT_SUPPORTED;
++        if (!size) { *count = 0; return STATUS_SUCCESS; }
++        if (size > 16 * 1024 * 1024) return STATUS_NO_MEMORY;
++        if (!(buffer = malloc( size ))) return STATUS_NO_MEMORY;
++        if (!sysctl( mib, ARRAY_SIZE(mib), buffer, &size, NULL, 0 )) break;
++        {
++            int error = errno;
++            free( buffer );
++            buffer = NULL;
++            if (error != ENOMEM) return STATUS_NOT_SUPPORTED;
++        }
++    }
++    if (!buffer) return STATUS_BUFFER_OVERFLOW;
++    for (offset = 0; offset < size;)
++    {
++        struct ios_route_header header;
++        struct ios_route route;
++        NET_LUID luid;
++        int parsed = ios_route_parse( buffer + offset, size - offset, &route );
++        if (parsed < 0) { status = STATUS_INVALID_PARAMETER; break; }
++        memcpy( &header, buffer + offset, sizeof(header) );
++        offset += header.length;
++        if (!parsed || route.family != (family == AF_INET ? 2 : 30) ||
++            !convert_index_to_luid( route.index, &luid )) continue;
++        if (want_data && num < *count)
++        {
++            if (key_size)
++            {
++                memset( key_data, 0, key_size );
++                if (family == AF_INET)
++                {
++                    struct nsi_ipv4_forward_key *key = key_data;
++                    key->luid = key->luid2 = luid;
++                    memcpy( &key->prefix, route.prefix, 4 );
++                    memcpy( &key->next_hop, route.next_hop, 4 );
++                    key->prefix_len = route.prefix_len;
++                }
++                else
++                {
++                    struct nsi_ipv6_forward_key *key = key_data;
++                    key->luid = key->luid2 = luid;
++                    memcpy( &key->prefix, route.prefix, 16 );
++                    memcpy( &key->next_hop, route.next_hop, 16 );
++                    key->prefix_len = route.prefix_len;
++                }
++                key_data = (BYTE *)key_data + key_size;
++            }
++            if (rw_size)
++            {
++                struct nsi_ip_forward_rw *rw = rw_data;
++                memset( rw, 0, rw_size );
++                rw->site_prefix_len = route.prefix_len;
++                rw->valid_lifetime = rw->preferred_lifetime = ~0u;
++                rw->metric = route.metric;
++                rw->protocol = route.gateway ? MIB_IPPROTO_NETMGMT : MIB_IPPROTO_LOCAL;
++                rw->immortal = TRUE;
++                rw->loopback = luid.Info.IfType == IF_TYPE_SOFTWARE_LOOPBACK;
++                rw_data = (BYTE *)rw_data + rw_size;
++            }
++            if (dynamic_size)
++            {
++                memset( dynamic_data, 0, dynamic_size );
++                if (family == AF_INET)
++                    memcpy( &((struct nsi_ipv4_forward_dynamic *)dynamic_data)->addr2, route.prefix, 4 );
++                else memcpy( &((struct nsi_ipv6_forward_dynamic *)dynamic_data)->addr2, route.prefix, 16 );
++                dynamic_data = (BYTE *)dynamic_data + dynamic_size;
++            }
++            if (static_size)
++            {
++                struct nsi_ip_forward_static *stat = static_data;
++                memset( stat, 0, static_size );
++                stat->origin = NlroManual;
++                stat->if_index = route.index;
++                static_data = (BYTE *)static_data + static_size;
++            }
++        }
++        ++num;
++    }
++    free( buffer );
++    if (status) return status;
++    if (!want_data || num <= *count) *count = num;
++    else status = STATUS_BUFFER_OVERFLOW;
++    return status;
++}
+diff --git a/dlls/nsiproxy.sys/ios_routes.h b/dlls/nsiproxy.sys/ios_routes.h
+new file mode 100644
+index 0000000..1e3108c
+--- /dev/null
++++ b/dlls/nsiproxy.sys/ios_routes.h
+@@ -0,0 +1,96 @@
++/* Read-only Darwin routing-message decoder for the iOS port.
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * The iOS SDK omits net/route.h. These fixed-width fields describe Darwin's
++ * RTM_VERSION 5 / NET_RT_DUMP ABI; no pointers or kernel-private layout.
++ * Keep parsing independent of SDK headers so malformed snapshots are tested. */
++#ifndef WINE_IOS_ROUTES_H
++#define WINE_IOS_ROUTES_H
++#include <stdint.h>
++#include <stddef.h>
++#include <string.h>
++
++struct ios_route_header
++{
++    uint16_t length;
++    uint8_t version, type;
++    uint16_t index;
++    int32_t flags, addrs, pid, seq, error, use;
++    uint32_t inits, metrics[14];
++};
++_Static_assert(sizeof(struct ios_route_header) == 92, "Darwin route ABI");
++struct ios_route
++{
++    unsigned int family, index, prefix_len, metric, gateway;
++    unsigned char prefix[16], next_hop[16];
++};
++
++/* -1: malformed; 0: well-formed but not a usable IP route; 1: route. */
++static int ios_route_parse( const void *bytes, size_t size, struct ios_route *row )
++{
++    struct ios_route_header h;
++    const unsigned char *p = bytes, *addresses[8] = {0};
++    unsigned int lengths[8] = {0}, i, bits = 0, zero_seen = 0, addr_size, addr_offset;
++    size_t offset;
++    if (size < sizeof(h)) return -1;
++    memcpy( &h, bytes, sizeof(h) );
++    if (h.length < sizeof(h) || h.length > size) return -1;
++    if (h.version != 5 || h.type != 4 || !(h.flags & 1) ||
++        (h.flags & (0x8 | 0x1000 | 0x800000)) || !h.index || h.error) return 0;
++    if ((uint32_t)h.addrs & ~0xffu) return -1;
++    offset = sizeof(h);
++    for (i = 0; i < 8; ++i)
++    {
++        unsigned int length, stride;
++        if (!(h.addrs & (1u << i))) continue;
++        if (offset > h.length || h.length - offset < 2) return -1;
++        length = p[offset];
++        stride = length ? (length + 3) & ~3u : 4;
++        if (stride > h.length - offset) return -1;
++        addresses[i] = p + offset;
++        lengths[i] = length;
++        offset += stride;
++    }
++    if (!addresses[0] || lengths[0] < 2) return -1;
++    memset( row, 0, sizeof(*row) );
++    row->family = addresses[0][1]; /* Darwin AF_INET=2, AF_INET6=30 */
++    if (row->family == 2) { addr_offset = 4; addr_size = 4; }
++    else if (row->family == 30) { addr_offset = 8; addr_size = 16; }
++    else return 0;
++    if (lengths[0] < addr_offset + addr_size) return -1;
++    memcpy( row->prefix, addresses[0] + addr_offset, addr_size );
++    if (h.flags & 4) bits = addr_size * 8; /* host routes need no mask */
++    else if (addresses[2])
++    {
++        /* BSD compresses masks, and their family need not match DST. */
++        for (i = 0; i < addr_size; ++i)
++        {
++            unsigned int bit, byte = addr_offset + i < lengths[2] ? addresses[2][addr_offset + i] : 0;
++            for (bit = 0x80; bit; bit >>= 1)
++                if (byte & bit) { if (zero_seen) return -1; ++bits; }
++                else zero_seen = 1;
++        }
++    }
++    row->prefix_len = bits;
++    row->index = h.index;
++    row->metric = h.metrics[2];
++    row->gateway = !!(h.flags & 2);
++    if (row->gateway)
++    {
++        if (!addresses[1] || lengths[1] < 2) return -1;
++        if (addresses[1][1] != row->family) return 0; /* AF_LINK is on-link, not a gateway */
++        if (lengths[1] < addr_offset + addr_size) return -1;
++        memcpy( row->next_hop, addresses[1] + addr_offset, addr_size );
++    }
++    if (row->family == 30)
++    {
++        /* BSD's embedded link-local zone is represented by the NSI LUID. */
++        if (row->prefix[0] == 0xfe && (row->prefix[1] & 0xc0) == 0x80)
++            row->prefix[2] = row->prefix[3] = 0;
++        if (row->next_hop[0] == 0xfe && (row->next_hop[1] & 0xc0) == 0x80)
++            row->next_hop[2] = row->next_hop[3] = 0;
++    }
++    /* Normalize network prefixes, even if a scoped route contains host bits. */
++    for (i = bits; i < addr_size * 8; ++i) row->prefix[i / 8] &= ~(0x80u >> (i % 8));
++    return 1;
++}
++#endif
+diff --git a/dlls/nsiproxy.sys/ip.c b/dlls/nsiproxy.sys/ip.c
+index 6c4d580..a148729 100644
+--- a/dlls/nsiproxy.sys/ip.c
++++ b/dlls/nsiproxy.sys/ip.c
+@@ -840,6 +840,9 @@ static NTSTATUS ip_interface_fill( UINT fam, const char *unix_name, void *key_da
+     {
+         if (!entry->ifa_addr || entry->ifa_addr->sa_family != fam) continue;
+         if (unix_name && strcmp( entry->ifa_name, unix_name )) continue;
++        /* Darwin's sin6_scope_id is an interface index, not Linux's
++         * address-class code. Include/deduplicate all IPv6 interfaces. */
++#ifndef WINE_IOS
+         if (fam == AF_INET6)
+         {
+             scope_id = find_ipv6_addr_scope( (IN6_ADDR*)&((struct sockaddr_in6 *)entry->ifa_addr)->sin6_addr, addr_scopes,
+@@ -849,6 +852,7 @@ static NTSTATUS ip_interface_fill( UINT fam, const char *unix_name, void *key_da
+             if (scope_id != 0xffffffff && scope_id != 0x1000 /* loopback */ && scope_id != 0x2000 /* link_local */)
+                 continue;
+         }
++#endif
+         if (!unix_name)
+         {
+             /* getifaddrs may return multipe entries for the same interface having different IP addresses.
+@@ -856,6 +860,7 @@ static NTSTATUS ip_interface_fill( UINT fam, const char *unix_name, void *key_da
+             for (entry2 = addrs; entry2 && entry2 != entry; entry2 = entry2->ifa_next)
+             {
+                 if (!entry2->ifa_addr || entry2->ifa_addr->sa_family != fam) continue;
++#ifndef WINE_IOS
+                 if (fam == AF_INET6)
+                 {
+                     scope_id = find_ipv6_addr_scope( (IN6_ADDR*)&((struct sockaddr_in6 *)entry2->ifa_addr)->sin6_addr,
+@@ -863,6 +868,7 @@ static NTSTATUS ip_interface_fill( UINT fam, const char *unix_name, void *key_da
+                     if (scope_id != 0xffffffff && scope_id != 0x1000 /* loopback */
+                         && scope_id != 0x2000 /* link_local */) continue;
+                 }
++#endif
+                 if (!strcmp( entry2->ifa_name, entry->ifa_name ))
+                     break;
+             }
+@@ -906,7 +912,7 @@ static NTSTATUS ip_interface_fill( UINT fam, const char *unix_name, void *key_da
+             if (rw)
+             {
+                 site_prefix_len = 64;
+-                if (fam == AF_INET6 && iface_static.type != MIB_IF_TYPE_LOOPBACK)
++                if (fam == AF_INET6 && iface_static.type != MIB_IF_TYPE_LOOPBACK && entry->ifa_netmask)
+                 {
+                     /* For some reason prefix length reported on ipv4 is 64 for ipv4 addresses on Windows and
+                      * prefix len is 64 for loopback device. */
+@@ -1318,7 +1324,7 @@ static NTSTATUS ipv4_neighbour_enumerate_all( void *key_data, UINT key_size, voi
+         }
+         fclose( fp );
+     }
+-#elif defined(HAVE_SYS_SYSCTL_H)
++#elif defined(HAVE_SYS_SYSCTL_H) && !defined(WINE_IOS)
+     {
+         int mib[] = { CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_LLINFO }, sinarp_len;
+         size_t needed;
+@@ -1434,6 +1440,10 @@ static NTSTATUS ipv6_neighbour_enumerate_all( void *key_data, UINT key_size, voi
+     return STATUS_NOT_IMPLEMENTED;
+ }
+ 
++#ifdef WINE_IOS
++#include "ios_forward.h"
++#endif
++
+ struct ipv4_route_data
+ {
+     NET_LUID luid;
+@@ -1498,6 +1508,10 @@ static NTSTATUS ipv4_forward_enumerate_all( void *key_data, UINT key_size, void
+     NTSTATUS status = STATUS_SUCCESS;
+     BOOL want_data = key_size || rw_size || dynamic_size || static_size;
+     struct ipv4_route_data entry;
++#ifdef WINE_IOS
++    return ios_forward_enumerate_all( AF_INET, key_data, key_size, rw_data, rw_size,
++                                      dynamic_data, dynamic_size, static_data, static_size, count );
++#endif
+ 
+     TRACE( "%p %d %p %d %p %d %p %d %p\n", key_data, key_size, rw_data, rw_size,
+            dynamic_data, dynamic_size, static_data, static_size, count );
+@@ -1583,7 +1597,7 @@ static NTSTATUS ipv4_forward_enumerate_all( void *key_data, UINT key_size, void
+         }
+         fclose( fp );
+     }
+-#elif defined(HAVE_SYS_SYSCTL_H) && defined(NET_RT_DUMP)
++#elif defined(HAVE_SYS_SYSCTL_H) && defined(NET_RT_DUMP) && !defined(WINE_IOS)
+     {
+         int mib[6] = { CTL_NET, PF_ROUTE, 0, PF_INET, NET_RT_DUMP, 0 };
+         size_t needed;
+@@ -1799,6 +1813,10 @@ static NTSTATUS ipv6_forward_enumerate_all( void *key_data, UINT key_size, void
+     TRACE( "%p %d %p %d %p %d %p %d %p\n" , key_data, key_size, rw_data, rw_size,
+         dynamic_data, dynamic_size, static_data, static_size, count );
+ 
++#ifdef WINE_IOS
++    return ios_forward_enumerate_all( AF_INET6, key_data, key_size, rw_data, rw_size,
++                                      dynamic_data, dynamic_size, static_data, static_size, count );
++#endif
+ #ifdef __linux__
+     {
+         struct ipv6_route_data entry;
+diff --git a/dlls/nsiproxy.sys/ndis.c b/dlls/nsiproxy.sys/ndis.c
+index 5dde172..3a6349e 100644
+--- a/dlls/nsiproxy.sys/ndis.c
++++ b/dlls/nsiproxy.sys/ndis.c
+@@ -30,6 +30,9 @@
+ #include <sys/ioctl.h>
+ #include <unistd.h>
+ #include <errno.h>
++#ifdef WINE_IOS
++#include <ifaddrs.h>
++#endif
+ 
+ #ifdef HAVE_NET_IF_H
+ #include <net/if.h>
+@@ -100,17 +103,34 @@ struct if_entry
+     IF_PHYSICAL_ADDRESS if_phys_addr;
+     UINT if_index;
+     UINT if_type;
++#ifdef WINE_IOS
++    BOOL present;
++#endif
+ };
+ 
+ static struct list if_list = LIST_INIT( if_list );
+ static pthread_mutex_t if_list_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
++#ifdef WINE_IOS
++static BOOL if_entry_is_current( const struct if_entry *entry )
++{
++    char name[IFNAMSIZ];
++    return if_indextoname( entry->if_index, name ) && !strcmp( name, entry->if_unix_name );
++}
++#endif
++
+ static struct if_entry *find_entry_from_index( UINT index )
+ {
+     struct if_entry *entry;
+ 
+     LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
+-        if (entry->if_index == index) return entry;
++        if (entry->if_index == index)
++        {
++#ifdef WINE_IOS
++            if (!if_entry_is_current( entry )) continue;
++#endif
++            return entry;
++        }
+ 
+     return NULL;
+ }
+@@ -120,12 +140,46 @@ static struct if_entry *find_entry_from_luid( const NET_LUID *luid )
+     struct if_entry *entry;
+ 
+     LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
+-        if (entry->if_luid.Value == luid->Value) return entry;
++        if (entry->if_luid.Value == luid->Value)
++        {
++#ifdef WINE_IOS
++            if (!if_entry_is_current( entry )) continue;
++#endif
++            return entry;
++        }
+ 
+     return NULL;
+ }
+ 
+-#if defined (SIOCGIFHWADDR) && defined (HAVE_STRUCT_IFREQ_IFR_HWADDR)
++#ifdef WINE_IOS
++/* iOS exposes AF_LINK rows through getifaddrs, but not net/route.h.
++ * Keep the system's address (possibly privacy-masked), never invent one. */
++static NTSTATUS if_get_physical( const char *name, UINT *type, IF_PHYSICAL_ADDRESS *phys_addr )
++{
++    struct ifaddrs *addrs, *cur;
++    *type = MIB_IF_TYPE_OTHER;
++    memset( phys_addr, 0, sizeof(*phys_addr) );
++    if (getifaddrs( &addrs )) return STATUS_DEVICE_DATA_ERROR;
++    for (cur = addrs; cur; cur = cur->ifa_next)
++    {
++        const struct sockaddr_dl *sdl;
++        if (!cur->ifa_addr || cur->ifa_addr->sa_family != AF_LINK || strcmp( name, cur->ifa_name )) continue;
++        sdl = (const struct sockaddr_dl *)cur->ifa_addr;
++        if (cur->ifa_flags & IFF_LOOPBACK) *type = MIB_IF_TYPE_LOOPBACK;
++        else if (cur->ifa_flags & IFF_POINTOPOINT) *type = MIB_IF_TYPE_PPP;
++        else if (sdl->sdl_type == IFT_ETHER) *type = MIB_IF_TYPE_ETHERNET;
++        if (sdl->sdl_alen <= sizeof(phys_addr->Address) &&
++            offsetof(struct sockaddr_dl, sdl_data) + sdl->sdl_nlen + sdl->sdl_alen <= sdl->sdl_len)
++        {
++            phys_addr->Length = sdl->sdl_alen;
++            memcpy( phys_addr->Address, LLADDR(sdl), phys_addr->Length );
++        }
++        break;
++    }
++    freeifaddrs( addrs );
++    return STATUS_SUCCESS;
++}
++#elif defined (SIOCGIFHWADDR) && defined (HAVE_STRUCT_IFREQ_IFR_HWADDR)
+ static NTSTATUS if_get_physical( const char *name, UINT *type, IF_PHYSICAL_ADDRESS *phys_addr )
+ {
+     int fd, size, i;
+@@ -319,11 +373,24 @@ static unsigned int update_if_table( void )
+         return 0;
+     }
+ 
++#ifdef WINE_IOS
++    {
++        struct if_entry *cached;
++        LIST_FOR_EACH_ENTRY( cached, &if_list, struct if_entry, entry ) cached->present = FALSE;
++        for (entry = indices; entry->if_index; entry++)
++        {
++            cached = find_entry_from_index( entry->if_index );
++            if (!cached && (cached = add_entry( entry->if_index, entry->if_name ))) ++append_count;
++            if (cached) cached->present = TRUE;
++        }
++    }
++#else
+     for (entry = indices; entry->if_index; entry++)
+     {
+         if (!find_entry_from_index( entry->if_index ) && add_entry( entry->if_index, entry->if_name ))
+             ++append_count;
+     }
++#endif
+ 
+     if_freenameindex( indices );
+     return append_count;
+@@ -420,6 +487,33 @@ static void ifinfo_fill_dynamic( struct if_entry *entry, struct nsi_ndis_ifinfo_
+             fclose( fp );
+         }
+     }
++#elif defined(WINE_IOS)
++    {
++        struct ifaddrs *addrs, *cur;
++        if (getifaddrs( &addrs )) return;
++        for (cur = addrs; cur; cur = cur->ifa_next)
++        {
++            const struct if_data *info;
++            if (!cur->ifa_addr || cur->ifa_addr->sa_family != AF_LINK ||
++                strcmp( cur->ifa_name, entry->if_unix_name )) continue;
++            data->media_conn_state = (cur->ifa_flags & IFF_RUNNING) ?
++                                     MediaConnectStateConnected : MediaConnectStateDisconnected;
++            if (!(info = cur->ifa_data)) break;
++            data->mtu = info->ifi_mtu;
++            data->xmit_speed = data->rcv_speed = info->ifi_baudrate;
++            data->in_octets = info->ifi_ibytes;
++            data->out_octets = info->ifi_obytes;
++            data->in_errors = info->ifi_ierrors;
++            data->out_errors = info->ifi_oerrors;
++            data->in_discards = info->ifi_iqdrops;
++            data->in_ucast_pkts = info->ifi_ipackets;
++            data->out_ucast_pkts = info->ifi_opackets;
++            data->in_mcast_pkts = info->ifi_imcasts;
++            data->out_mcast_pkts = info->ifi_omcasts;
++            break;
++        }
++        freeifaddrs( addrs );
++    }
+ #elif defined(HAVE_SYS_SYSCTL_H) && defined(NET_RT_IFLIST)
+     {
+         int mib[] = { CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_IFLIST, entry->if_index };
+@@ -512,6 +606,9 @@ static NTSTATUS ifinfo_enumerate_all( void *key_data, UINT key_size, void *rw_da
+ 
+     LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
+     {
++#ifdef WINE_IOS
++        if (!entry->present) continue;
++#endif
+         if (num < *count)
+         {
+             ifinfo_fill_entry( entry, key_data, rw_data, dynamic_data, static_data );
+@@ -669,6 +766,9 @@ BOOL convert_unix_name_to_luid( const char *unix_name, NET_LUID *luid )
+     {
+         LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
+         {
++#ifdef WINE_IOS
++            if (!if_entry_is_current( entry )) continue;
++#endif
+             if (!strcmp( entry->if_unix_name, unix_name ))
+             {
+                 *luid = entry->if_luid;
+@@ -696,6 +796,9 @@ BOOL convert_luid_to_unix_name( const NET_LUID *luid, const char **unix_name )
+     {
+         LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
+         {
++#ifdef WINE_IOS
++            if (!if_entry_is_current( entry )) continue;
++#endif
+             if (entry->if_luid.Value == luid->Value)
+             {
+                 *unix_name = entry->if_unix_name;

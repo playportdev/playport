@@ -826,6 +826,19 @@ never runs and the read returns 0 bytes. `inproc-sync = 1` turns it back on for 
 round trips are under 1 % of Hollow Knight's main thread, and The Witcher 3's
 frame is GPU-bound. `pp perf`'s `server.txt` has the requests per frame.
 
+### Guest network tables
+
+There is no `nsiproxy.sys` device in the one-process runtime. `nsi.dll` falls
+back to the in-process unix table for enumeration and keyed reads (wine-pe
+0030, madeira-unix 0095). Wine's NDIS/IP providers read interface/link metadata
+and IPv4/IPv6 addresses with `getifaddrs` and ioctls; wine-unix 0019 reads both
+families' routes through a bounded Darwin routing-message decoder. LUIDs use
+Wine's interface-index convention, and i386 calls translate owner-local guest
+pointers. TCP connections retain wineserver's socket ownership. Connectivity
+comes from these tables, not wine-pe 0029's former unconditional LAN fallback.
+Change notifications and unavailable kernel statistics remain unsupported.
+[Checks and limits](evidence/2026-10-07-nsi-adapters.md).
+
 ### Native Steam client
 
 `app/SteamClient` is a host-side Swift Steam client (CM over WebSocket, QR
