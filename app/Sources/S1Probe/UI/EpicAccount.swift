@@ -5,8 +5,10 @@
 // (cached, listed offline), the art, and the Epic driver of the download queue:
 // install, update and repair through EpicClientKit's EpicInstaller. After an
 // install the store receipt names the manifest's launch executable and the
-// arguments of plan 3.4 (no exchange code). A game that needs Epic online sign-in
-// (plan 3.6), anti-cheat or another launcher is refused before an install.
+// arguments of plan 3.4 (no exchange code). A Play signs the game in (decision
+// 0059, `launchSignIn`): a fresh exchange code, who is signed in, and for a game
+// whose catalogue asks for it an ownership token. A game that uses anti-cheat or
+// another company's launcher is refused before an install.
 
 import Combine
 import ContentKit
@@ -52,7 +54,9 @@ final class EpicAccount: ObservableObject, DownloadDriver {
         if let data = try? Data(contentsOf: Self.cache), let c = try? JSONDecoder.gogCache.decode(Cache.self, from: data) {
             games = c.games
             gamesFetchedAt = c.at
-            refused = c.refused ?? [:]
+            // Only a manifest's anti-cheat refusal is kept: one an older build cached for a game it
+            // could not sign in, or for Epic's JSON manifest form, no longer holds.
+            refused = (c.refused ?? [:]).filter { $0.value == EpicManifest.usesAntiCheat }
         }
     }
 
@@ -96,6 +100,8 @@ final class EpicAccount: ObservableObject, DownloadDriver {
 
     func signOut() async {
         await session.signOut()
+        // No game keeps an ownership token of the account (decision 0059).
+        await LibraryModel.shared.removeEpicOwnershipFiles("at sign-out").value
         state = .signedOut
         games = []
         gamesFetchedAt = nil
@@ -127,6 +133,30 @@ final class EpicAccount: ObservableObject, DownloadDriver {
 
     /// Why the game is not installed by Playport, or nil.
     func refusal(_ app: String) -> String? { game(app)?.refusal ?? refused[app] }
+
+    /// What a Play needs to start the game signed in (decision 0059).
+    struct LaunchSignIn {
+        var auth: EpicLaunchAuth
+        /// For `-epicovt`, when the catalogue asks for one.
+        var ownershipToken: Secret<String>?
+    }
+
+    /// A fresh exchange code, who is signed in, and the ownership token when the catalogue
+    /// asks for one. Throws when Epic is signed out or cannot be reached: the Play then
+    /// asks the player (LibraryModel.play).
+    func launchSignIn(_ app: String, installDir: String) async throws -> LaunchSignIn {
+        guard await session.state == .signedIn else { throw ClientError.notLoggedOn }
+        guard let rec = installer.loadRecord(app) else { throw ClientError.notFound("no Epic install record for \(app)") }
+        if game(app) == nil { await loadGames() }
+        let needsToken = game(app)?.needsOwnershipToken ?? false
+        let account = try await session.account()
+        let token = needsToken ? try await session.ownershipToken(namespace: rec.namespace, catalogItem: rec.catalogItemID) : nil
+        // The code last: it lives five minutes from here.
+        let code = try await session.exchangeCode()
+        return LaunchSignIn(auth: EpicLaunchAuth(exchangeCode: code, account: account, namespace: rec.namespace,
+                                                 ownershipFile: needsToken ? EpicOwnershipFile.windowsPath(installDir: installDir) : nil),
+                            ownershipToken: token)
+    }
 
     /// The live build of an installed game, asked once per process.
     func checkUpdate(_ app: String) async {

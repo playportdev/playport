@@ -3,7 +3,8 @@ import Foundation
 
 /// A value that must never reach a log, error or transcript: refresh and access
 /// tokens (Steam's, GOG's, Epic's), the QR challenge URL, login and exchange
-/// codes, machine secrets, depot keys and CDN tokens.
+/// codes, machine secrets, depot keys, CDN tokens, Steam's encrypted app tickets
+/// and Epic's ownership tokens.
 /// `description` and `debugDescription` both print a fixed placeholder, so a
 /// stray `print(secret)` or string interpolation cannot leak it.
 public struct Secret<Value: Sendable>: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -21,6 +22,8 @@ extension Secret: Equatable where Value: Equatable {}
 public enum Redactor {
     private static let rules: [(NSRegularExpression, String)] = {
         let patterns: [(String, String)] = [
+            // Epic's ownership token (`egoc1~<JWT>`, decision 0059), before the JWT rule takes its tail.
+            (#"egoc1~[A-Za-z0-9._~+/=\-]+"#, "<ovt:redacted>"),
             // JWTs (Steam refresh and access tokens are eyJ... three-part JWTs).
             (#"eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]*"#, "<jwt:redacted>"),
             // QR challenge URLs: https://s.team/q/<version>/<client id>.
@@ -31,8 +34,15 @@ public enum Redactor {
             // Epic's eg1 tokens (decision 0058), wherever they appear.
             (#"eg1~[A-Za-z0-9._~+/=\-]+"#, "<eg1:redacted>"),
             (#"(?i)((?:access|refresh)_?token|token|authorization|cdn_?auth)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
-            // OAuth codes and session IDs: GOG's and Epic's login codes, Epic's exchange codes.
-            (#"(?i)((?:authorization|exchange)_?code|session_?id|client_?secret)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
+            // Steam's encrypted app ticket as gbe_fork's ini line holds it, `ticket=<base64>` (decision 0017).
+            (#"(?i)(\bticket\s*=\s*|["']ticket["']\s*:\s*["'])[A-Za-z0-9+/_\-]+=*"#, "$1<redacted>"),
+            // A signed-in Epic launch's arguments (decision 0059): the exchange code, the account
+            // ID, and the display name (quoted, or words up to the next argument).
+            (#"(?i)(-AUTH_PASSWORD=|-epicuserid=)[^\s"']+"#, "$1<redacted>"),
+            (#"(?i)(-epicusername=)(?:"[^"]*"|[^\s"]+(?:\s+[^\s"\-][^\s"]*)*)"#, "$1<redacted>"),
+            // OAuth codes and session IDs: GOG's and Epic's login codes, Epic's exchange codes,
+            // a device sign-in's user code (decision 0064).
+            (#"(?i)((?:authorization|exchange|user)_?code|session_?id|client_?secret)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
             (#"(?i)(["']code["']\s*:\s*["']|\bcode=)[^\s"',&}]+"#, "$1<redacted>"),
             // Home directories.
             (#"/(?:home|Users)/[^/\s"']+"#, "/<home>"),

@@ -94,6 +94,38 @@ int main(void)
     CHECK(selfcheck_judge(&f, small, 8) == SELFCHECK_OK);
     CHECK(small[7] == 0 && small[8] == 'x');
 
+    /* The executable window: the exec-time reservation (1440 MiB from the
+     * executable's end, 0x103ea8000 to 0x10a3f8000 seen) keeps it above a
+     * 512 or 768 MiB pool and its 64 MiB slack at every slide; 896 MiB keeps
+     * it at the lowest slide only. */
+    {
+        const unsigned long long res = 1440 * MiB, slack = 64 * MiB;
+        const unsigned long long slides[] = { 0x103ea8000ull, 0x10a3f8000ull };
+        unsigned long long give[2][2];
+        int held;
+        for (int i = 0; i < 2; i++) {
+            unsigned long long lo = slides[i], hi = lo + res;
+            CHECK(hi >= SELFCHECK_EXE_WINDOW_HI);
+            for (int p = 0; p < 2; p++) {
+                unsigned long long freed = lo + (p ? 768 : 512) * MiB + slack;
+                CHECK(selfcheck_exe_window_split(freed, hi, give, &held) == 2 && held);
+                CHECK(give[0][0] == freed && give[0][1] == SELFCHECK_EXE_WINDOW_LO);
+                CHECK(give[1][0] == SELFCHECK_EXE_WINDOW_HI && give[1][1] == hi);
+            }
+        }
+        unsigned long long lo = slides[0], hi = lo + res;
+        CHECK(selfcheck_exe_window_split(lo + 896 * MiB + slack, hi, give, &held) == 2 && held);
+        lo = slides[1], hi = lo + res;
+        CHECK(selfcheck_exe_window_split(lo + 896 * MiB + slack, hi, give, &held) == 1 && !held);
+        CHECK(give[0][0] == lo + 896 * MiB + slack && give[0][1] == hi);
+        /* The pool's range ending exactly at the window, and a reservation ending exactly at its top. */
+        CHECK(selfcheck_exe_window_split(SELFCHECK_EXE_WINDOW_LO, SELFCHECK_EXE_WINDOW_HI, give, &held) == 0 && held);
+        /* A reservation that stops short of the window's top keeps nothing. */
+        CHECK(selfcheck_exe_window_split(0x120000000ull, SELFCHECK_EXE_WINDOW_HI - 0x4000, give, &held) == 1 && !held);
+        /* Nothing left above the pool. */
+        CHECK(selfcheck_exe_window_split(0x160000000ull, 0x160000000ull, give, &held) == 0 && !held);
+    }
+
     CHECK(!strcmp(selfcheck_name(SELFCHECK_POOL_GUEST), "pool-guest"));
     CHECK(!strcmp(selfcheck_name(99), "unknown"));
 

@@ -37,9 +37,12 @@ under $PLAYPORT_RUN, default $PLAYPORT_BUILD/run):
                                          same patched tree as P5-dxmt's unix objects
   VULKAN_PE_ROOT      vulkan-pe/pe       stages/vulkan-pe.sh (P6-vulkan-pe): DXVK and vkd3d-proton
   STEAMAPI_ROOT       steamapi/pe        stages/steamapi.sh (P8-steamapi): gbe_fork's steam_api DLLs
-  session             session            stages/session-root.sh (P9-session): the session root
+  session             session            stages/session-root.sh (P9-session, P9-url-opener): the session
+                                         root and the URL opener
   idevice             idevice            stages/idevice.sh (P10-idevice): idevice's C FFI, one object
   registry            app/registry (committed; app/tools/prefix-registry.py, P7-reg)
+  ca-bundle           $PLAYPORT_BUILD/cache/ca-bundle-<pin>
+                                         stages/ca-bundle.sh (ca-bundle): the trusted roots
   GENERATED           build/generated    the Wine PE manifests the P2 rows must equal
 """
 
@@ -55,7 +58,8 @@ PKG = REPO / "app"
 MANIFEST = PKG / "artifacts.tsv"
 RUNTIME = PKG / "Sources" / "S1Probe" / "Runtime"
 GENERATED = Path(os.environ.get("GENERATED", REPO / "build" / "generated"))
-RUN = Path(os.environ.get("PLAYPORT_RUN") or Path(os.environ.get("PLAYPORT_BUILD", REPO / ".work")) / "run")
+BUILD = Path(os.environ.get("PLAYPORT_BUILD", REPO / ".work"))
+RUN = Path(os.environ.get("PLAYPORT_RUN") or BUILD / "run")
 
 
 def pin(name):
@@ -78,6 +82,7 @@ ROOTS = {
     "session": RUN / "session",
     "idevice": RUN / "idevice",
     "registry": PKG / "registry",
+    "ca-bundle": BUILD / "cache" / f"ca-bundle-{pin('ca-bundle')}",
 }
 MYTHIC_REV = pin("madeira")
 
@@ -108,8 +113,10 @@ HEADER = """\
 #   P6-gst    winegstreamer's unix side (wine pin + patches/wine-port + patches/wine-unix) prelinked with the static plugin set from the pins.lock gstreamer iOS release (build/stages/gstreamer.sh); one object, one exported symbol
 #   P8-steamapi gbe_fork (LGPL-3.0) at the gbe pin + patches/gbe: its regular steam_api for x86-64 and i386 with its static dependencies (build/stages/steamapi.sh, llvm-mingw 20260922); native DLLs under Runtime/steamapi/, which the app copies into a game's folder in place of the game's own (SteamClientKit SteamAPISwap)
 #   P9-session app/SessionRoot/playport-session.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the one Wine main process of an app run, which starts every title as its child (decision 0027); in arm64ec-windows so the prefix's system32 has it
+#   P9-url-opener app/UrlOpener/playport-url-opener.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the prefix's http and https handler, which hands a URL a game opens to the host app (decision 0064); in arm64ec-windows so the prefix's system32 has it
 #   P10-idevice idevice (MIT) at the idevice pin, its C FFI with the features the app's restart uses, built for aarch64-apple-ios with the pins.lock Rust (build/stages/idevice.sh) and prelinked into one object that exports four calls (app/Sources/Relaunch); its crates are in the run's idevice/crates.tsv
 #   P7-reg    app/registry/{system,user}.reg (committed): app/tools/prefix-registry.py applies the WINE_REGISTRY scripts of the staged arm64ec-windows DLLs as wineboot's register_fake_dll would; wine_host.c appends the sections a prefix lacks before the wineserver starts
+#   ca-bundle Mozilla's root store (MPL-2.0) as curl's CA extract, the dated file pins.lock's ca-bundle row names, unmodified (build/stages/ca-bundle.sh checks its sha256): wine_host.c names it in MADEIRA_CA_BUNDLE, and crypt32's unix side imports it into the prefix's ROOT store (docs/ARCHITECTURE.md, "Trusted roots")
 """
 
 # Reference bundle layout (names only) from Madeira app/Madeira @ MYTHIC_REV:
@@ -182,6 +189,14 @@ EXTRA_PE = {"arm64ec": ["msvcp110.dll", "msvcp120.dll", "msvcr110.dll", "vcomp11
                        "dxva2.dll", "ktmw32.dll", "qwave.dll",
                        # Kingdom Come's WHGame.dll imports avifil32, which imports msvfw32.
                        "avifil32.dll", "msvfw32.dll",
+                       # Jurassic World Evolution's JWE.exe imports gdiplus, which imports mlang.
+                       "gdiplus.dll", "mlang.dll",
+                       # advapi32's credential store (CredWrite, an EOS sign-in's refresh token)
+                       # delay-loads cryptsp's SystemFunction032.
+                       "cryptsp.dll",
+                       # Valheim's PlayFab Party (PartyWin32.dll) imports sspicli; without it the
+                       # load fails (Mono's DllNotFoundException for PartyWin32).
+                       "sspicli.dll",
                        # Wine's Vulkan (decision 0014): the loader and the ICD DXVK and
                        # vkd3d-proton call, whose unix side talks to KosmicKrisp.
                        "vulkan-1.dll", "winevulkan.dll"] + MEDIA_PE,
@@ -269,12 +284,14 @@ def record():
     for arch, name in STEAMAPI:
         add("resource", f"Runtime/steamapi/{arch}-windows/{name}", "steamapi", f"{arch}-windows/{name}", "P8-steamapi")
     add("resource", "Runtime/arm64ec-windows/playport-session.exe", "session", "playport-session.exe", "P9-session")
+    add("resource", "Runtime/arm64ec-windows/playport-url-opener.exe", "session", "playport-url-opener.exe", "P9-url-opener")
     for name in NLS:
         add("resource", f"Runtime/nls/{name}", "unix", f"wine/nls/{name}", "nls")
     for name in FONTS:
         add("resource", f"Runtime/fonts/{name}", "unix", f"wine/fonts/{name}", "fonts")
     for name in ("system.reg", "user.reg"):
         add("resource", f"Runtime/registry/{name}", "registry", name, "P7-reg")
+    add("resource", "Runtime/certs/cacert.pem", "ca-bundle", "cacert.pem", "ca-bundle")
     for dest, root, source, prov in LINK:
         add("link", f"lib/{dest}", root, source, prov)
     for dest, root, source, prov in SOURCES:

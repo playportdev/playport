@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Wed, 7 Oct 2026 15:27:24 +0200
+Subject: [PATCH] ntdll: keep a web page's query out of the process
+ command-line log lines
+
+NtCreateUserProcess and spawn_process print every new process's command
+line at ERR, and the +process trace prints it too. Playport's URL opener
+(playport-url-opener.exe; Playport's decision 0064) starts with the URL a
+game opens on its command line, and an Epic sign-in's URL carries the
+device flow's user code in its query. The three lines now print an http or
+https argument with its query and fragment masked; its scheme, host and
+path, and the rest of the command line, are unchanged.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-07-url-opener.md
+Offered-upstream: no
+---
+ build/ntdll-unix/process_ios.c | 32 ++++++++++++++++++++++++++++++--
+ 1 file changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index ab9c0e6..be373c6 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -79,8 +79,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(process);
+ 
+ /* Playport: a command line for the log, with the values of the arguments that
+  * carry a store sign-in masked (an Epic game's -AUTH_PASSWORD=, -epicuserid= and
+- * -epicusername=; Playport's decision 0059). A value runs to the closing quote
+- * when its argument is quoted, else to the next space. */
++ * -epicusername=; Playport's decision 0059), and the query and fragment of an
++ * http or https URL argument (Playport's URL opener gets the URL a game opens,
++ * an Epic sign-in's user code in it; decision 0064). A value runs to the
++ * closing quote when its argument is quoted, else to the next space. */
+ static const char *debugstr_cmdline( const UNICODE_STRING *us )
+ {
+     static const char *const secret[] = { "-auth_password=", "-epicuserid=", "-epicusername=" };
+@@ -106,6 +108,32 @@ static const char *debugstr_cmdline( const UNICODE_STRING *us )
+             if (j < n) continue;
+             for (j = i + n; j < len && copy[j] != '"' && (quoted || copy[j] != ' '); j++) copy[j] = '*';
+         }
++    for (i = 0; i < len; i++)
++    {
++        static const char http[] = "http://", https[] = "https://";
++        int quoted = i > 0 && copy[i - 1] == '"', mask = 0;
++        if (i > 0 && copy[i - 1] != '"' && copy[i - 1] != ' ') continue;
++        for (k = 0; k < 2; k++)
++        {
++            const char *scheme = k ? https : http;
++            n = strlen( scheme );
++            if (len - i < n) continue;
++            for (j = 0; j < n; j++)
++            {
++                WCHAR c = copy[i + j];
++                if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
++                if (c != (WCHAR)scheme[j]) break;
++            }
++            if (j == n) break;
++        }
++        if (k == 2) continue;
++        for (j = i; j < len && copy[j] != '"' && (quoted || copy[j] != ' '); j++)
++        {
++            if (mask) copy[j] = '*';
++            else if (copy[j] == '?' || copy[j] == '#') mask = 1;
++        }
++        i = j;
++    }
+     ret = debugstr_wn( copy, len );
+     free( copy );
+     return ret;

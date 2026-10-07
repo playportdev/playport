@@ -32,7 +32,19 @@ public protocol SteamBackend: Sendable {
     func cloudDownload(appID: UInt32, name: String) async throws -> [UInt8]
     /// Uploads files in one batch; the names Steam committed.
     func cloudUpload(appID: UInt32, files: [(name: String, data: [UInt8], time: UInt64)]) async throws -> [String]
+    /// The app's encrypted app ticket for the account (decision 0017), within `timeout` seconds.
+    func encryptedAppTicket(appID: UInt32, timeout: Double) async throws -> Secret<[UInt8]>
     func logout(revoke: Bool) async throws -> LogoutReport
+    /// The app's ownership ticket for the account (decision 0062), within `timeout` seconds.
+    func appOwnershipTicket(appID: UInt32, timeout: Double) async throws -> Secret<[UInt8]>
+    /// Sends the client's list of live tickets.
+    func sendAuthList(_ list: CMsgClientAuthList) async throws
+    /// The games the session is in (an empty list: none).
+    func setGamesPlayed(_ appIDs: [UInt32]) async throws
+    /// The current logon's game connect tokens, where ticket pushes go, and the CM's traffic.
+    var connectTokens: GameConnectTokens { get }
+    var ticketPushes: TicketPushRoute { get }
+    var traffic: CMTraffic { get }
 }
 
 extension SteamSession: SteamBackend {

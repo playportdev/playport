@@ -22,8 +22,8 @@ class Fonts(unittest.TestCase):
             files = [("unix", f"wine/fonts/{n}") for n in stage.FONTS] + [
                 ("fex-wow64", "libwow64fex.dll"),
                 ("vulkan-pe", "i386-windows/d3d9.dll"),
-                ("session", "playport-session.exe"),
-                ("registry", "system.reg"), ("registry", "user.reg")]
+                ("session", "playport-session.exe"), ("session", "playport-url-opener.exe"),
+                ("registry", "system.reg"), ("registry", "user.reg"), ("ca-bundle", "cacert.pem")]
             for key, name in files:
                 p = roots[key] / name
                 p.parent.mkdir(parents=True, exist_ok=True)

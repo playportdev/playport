@@ -83,6 +83,11 @@
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
+//   web:wait | web:click:<label> | web:close
+//                              After a play: (they run while the game runs): a web page the
+//                              game opened (UI/GameWebSheet.swift): wait for it (Open on its
+//                              confirm card) and its page, click a button or link by its
+//                              text, or Close it (Dev/WebSheetDriver.swift)
 //   set:<key>=<value>          Sets a UserDefaults key, as a Settings control does:
 //                              true/false a Bool, an integer an Int, else a String
 //                              (`set:metalHUD=true`)
@@ -295,6 +300,14 @@ enum UIDriver {
                     log("menu \(id): \(menu.summary)")
                     if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "web":
+                    // A web page the running game opened (Dev/WebSheetDriver.swift).
+                    guard TitleLaunch.shared.running || GameWebSheet.shared.isUp else {
+                        return finish("action=\(action) refused: no game is running")
+                    }
+                    if let failure = await WebSheetDriver.run(id, log: log) { return finish("action=\(action) failed: \(failure)") }
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "set":
                     let kv = id.split(separator: "=", maxSplits: 1).map(String.init)
                     guard kv.count == 2, !kv[0].isEmpty else { return finish("action=\(action) refused: not set:<key>=<value>") }
@@ -426,7 +439,8 @@ enum UIDriver {
 
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
-        action.hasPrefix("menu:") || action.hasPrefix("wait:") || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
+        action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:")
+            || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 
     /// After an action for the running game: when the actions after it are not

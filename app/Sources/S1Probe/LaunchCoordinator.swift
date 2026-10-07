@@ -22,7 +22,14 @@
 // FEX's settings (FEXProfile: the game's memory ordering, and the host CPU
 // features FEX cannot read on iOS, HostCPU) and the backend's variables go into
 // the title's own environment, over the session root's, and into the app's
-// for the runtime's unix side. Progress goes to the app log
+// for the runtime's unix side. A Steam game's encrypted app ticket, fetched after
+// Play (LibraryModel.play), goes into the emulator's settings before the runtime
+// starts and out of them when the launch ends (decision 0017). An Epic game's ownership token,
+// fetched after Play with its exchange code, goes into its file the same way (decision 0059).
+// A web page the game opens during the play reaches the host (UrlOpenerHost, decision 0064)
+// while the launch runs. A GOG game's Galaxy service (GOGClientKit GalaxyListener, decision
+// 0063), started at Play, stops when the launch ends.
+// Progress goes to the app log
 // (AppLog) as `title:` lines and, for the UI, to a step callback; the outcome's line is the
 // `title: done` result the drivers parse, unchanged. `title: +<s> s` lines time the
 // launch from its start to the game's first frame, in both variants.
@@ -30,6 +37,8 @@
 import Foundation
 import HostIOKit
 import PlayportKit
+import EpicClientKit
+import GOGClientKit
 import SteamClientKit
 import WineHost
 
@@ -55,6 +64,19 @@ enum LaunchCoordinator {
         var steamAPI: SteamAPI? = nil
         /// What the title needs of the app's memory limit (MemoryNeed); nil checks nothing.
         var memory: MemoryNeed? = nil
+        /// An Epic game's ownership token file (decision 0059); nil for a game of another store.
+        var epic: Epic? = nil
+        /// The title's name, for a web page the game opens (UrlOpenerHost).
+        var title: String = ""
+        /// A GOG game's Galaxy service, listening since Play (decision 0063); nil for none.
+        var galaxy: GalaxyListener? = nil
+    }
+
+    /// An Epic game's launch: its folder, and the ownership token for `-epicovt`
+    /// (fetched after Play), nil for a game that needs none or plays offline.
+    struct Epic {
+        var root: URL
+        var ownershipToken: Secret<String>? = nil
     }
 
     /// What SteamAPISwap needs at a launch. The settings come from the Steam
@@ -65,6 +87,12 @@ enum LaunchCoordinator {
         var root: URL
         var mode: SteamAPISwap.Mode
         var settings: @Sendable () async -> SteamAPISwap.Settings
+        /// The game's encrypted app ticket (decision 0017), fetched after Play
+        /// before the session closed; nil starts the game without one.
+        var ticket: Secret<[UInt8]>? = nil
+        /// The play's auth session and web API tickets (decision 0062), armed after
+        /// Play; nil leaves the emulator's made-up ones.
+        var tickets: SteamTicketBroker? = nil
     }
 
     enum Step: Equatable {
@@ -115,10 +143,26 @@ enum LaunchCoordinator {
             log("steamapi: no staged runtime; the game's own steam_api stays")
             return
         }
+        // A ticket a crash or a kill left behind goes before anything else (decision 0017).
+        removeTicket(s, when: "before the launch")
         do {
             let state = try SteamAPISwap.ensure(s.mode, in: s.root, emulator: runtime.appendingPathComponent("steamapi", isDirectory: true),
                                                 settings: settings ?? .init(appID: s.appID))
             log("steamapi: \(s.mode.rawValue): \(state.rawValue)" + (s.mode == .emulated ? " (\(fields))" : ""))
+            if s.mode == .emulated {
+                if let ticket = s.ticket {
+                    let n = try SteamAPISwap.writeTicket(ticket, in: s.root)
+                    log("ticket: the encrypted app ticket (\(ticket.value.count) bytes) written to \(n) configs.user.ini")
+                } else {
+                    log("ticket: none; the emulator makes up its own")
+                }
+            }
+            // The emulator's unix calls reach the play's broker, or none (SteamTicketHost).
+            SteamTicketHost.arm(s.mode == .emulated ? s.tickets : nil)
+            if s.mode == .emulated {
+                log(s.tickets != nil ? "ticket: auth session and web API tickets armed; the CM session stays logged on for them"
+                                     : "ticket: auth session and web API tickets off; the emulator makes up its own")
+            }
             var stub = "none"
             if s.mode == .emulated {
                 for site in try SteamStub.remove(in: s.root) {
@@ -137,6 +181,43 @@ enum LaunchCoordinator {
             #if !PLAYPORT_RELEASE
             RunEvents.emit("steamapi", ["mode": s.mode.rawValue, "error": "\(error)"])
             #endif
+        }
+    }
+
+    /// Takes the encrypted app ticket out of the game's emulator settings
+    /// (decision 0017): at the game's exit, and before a launch for one a crash
+    /// or a kill left behind. Logged only when there was one.
+    private static func removeTicket(_ s: SteamAPI, when: String) {
+        do {
+            let n = try SteamAPISwap.removeTickets(in: s.root)
+            if n > 0 || (when == "at exit" && s.ticket != nil) { log("ticket: removed from \(n) configs.user.ini \(when)") }
+        } catch {
+            log("ticket: not removed \(when): \(error)")
+        }
+    }
+
+    /// Writes the Epic game's ownership token file after removing one a crash or a kill
+    /// left behind (decision 0059). A failed write is logged; the game then says it
+    /// could not check its ownership.
+    private static func prepareEpic(_ e: Epic) {
+        removeOwnershipFile(e, when: "before the launch")
+        guard let token = e.ownershipToken else { return }
+        do {
+            try EpicOwnershipFile.write(token, in: e.root)
+            log("epic: the ownership token (\(token.value.utf8.count) bytes) written to \(EpicOwnershipFile.name)")
+        } catch {
+            log("epic: the ownership token not written: \(error)")
+        }
+    }
+
+    /// Takes the ownership token file out of the game's folder: at the game's exit, and
+    /// before a launch for one a crash or a kill left behind. Logged only when there was one.
+    private static func removeOwnershipFile(_ e: Epic, when: String) {
+        do {
+            let n = try EpicOwnershipFile.remove(in: e.root)
+            if n > 0 || (when == "at exit" && e.ownershipToken != nil) { log("epic: ownership token file removed (\(n)) \(when)") }
+        } catch {
+            log("epic: ownership token file not removed \(when): \(error)")
         }
     }
 
@@ -177,6 +258,8 @@ enum LaunchCoordinator {
     /// thread, which keeps serving the surface, input and the JIT vehicle.
     static func run(_ r: Request, step: @escaping (Step) -> Void = { _ in }) -> Outcome {
         precondition(!Thread.isMainThread, "LaunchCoordinator.run blocks; call it off the main thread")
+        // However the launch ends, the Galaxy service ends with it (decision 0063).
+        defer { r.galaxy?.stop() }
         let launched = Date()
         let mark = { (what: String) in
             let s = Date().timeIntervalSince(launched)
@@ -260,6 +343,14 @@ enum LaunchCoordinator {
         }
 
         if let s = r.steamAPI { prepareSteamAPI(s) }
+        // However the launch ends from here, the ticket goes with it (decision 0017).
+        defer { if let s = r.steamAPI { removeTicket(s, when: "at exit") } }
+        if let e = r.epic { prepareEpic(e) }
+        // And the ownership token file (decision 0059).
+        defer { if let e = r.epic { removeOwnershipFile(e, when: "at exit") } }
+        // A web page the game opens goes to the host for this play only (decision 0064).
+        UrlOpenerHost.arm(.init(title: r.title.isEmpty ? (r.exe as NSString).lastPathComponent : r.title, epicSignIn: r.epic != nil))
+        defer { UrlOpenerHost.arm(nil) }
 
         // A Unity title reopens at the window size it saved; ask it for the whole screen (TitleScreen.swift).
         let dir = (withUnsafeBytes(of: tp.unix_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) } as NSString)

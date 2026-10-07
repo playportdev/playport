@@ -63,6 +63,16 @@ model calls: each --action in order, then --settings, --verify, --play:
                          Example: --action play:app-367520 --action wait:10 --action menu:open
                          --action menu:resume --action wait:5 --action menu:open --action menu:quit
                          --action open:home --shot-each-action
+  web:wait               after a play: (it runs while the game runs): wait (3 min at most) for a web
+                         page the game opened in Playport's panel over the game (UI/GameWebSheet.swift),
+                         press Open on its confirm card, and wait for the page (an Epic game's Epic
+                         sign-in page opens signed in to Epic, decision 0064)
+  web:click:LABEL        click the button or link whose text is LABEL in that page (letters, digits,
+                         space . _ -), waiting 30 s at most for it: web:click:Allow gives an Epic
+                         game the consent its sign-in asks for
+  web:close              close the page, as its Close button does; the game gets its input back
+                         Example: --action play:epic-8337d1f975514d35ad0c1176e8a29f26 --action web:wait
+                         --action web:click:Allow --action wait:30 --action web:close --action wait:10
   set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true)
   hud:on | hud:off       Settings' Metal HUD
   queue:APP              queue a download from Steam, as a game page's Install does, and go on at once
@@ -235,16 +245,16 @@ class EndOnTerm:
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|play):[a-z]+-[A-Za-z0-9 ._-]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
-                       r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)"
+                       r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
 
 
 def in_game(actions, start):
-    """How many actions from start act on the running game (UIDriver.inGame): wait: and
-    menu:, and pad: once a menu:open has opened the in-game menu."""
+    """How many actions from start act on the running game (UIDriver.inGame): wait:, menu:
+    and web:, and pad: once a menu:open has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "menu:")) or (menu and x.startswith("pad:")):
+        if x.startswith(("wait:", "menu:", "web:")) or (menu and x.startswith("pad:")):
             menu = menu or x == "menu:open"
             n += 1
         else:

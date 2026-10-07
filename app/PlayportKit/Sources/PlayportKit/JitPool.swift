@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The JIT pool: the one block of executable memory a launch gets, blessed once
 // by the debugger before the runtime starts (docs/ARCHITECTURE.md, "JIT pool
-// placement"), which never grows. PE images and guest JIT code (Mono, V8) are
-// copied into its head, from the bottom up; FEX's translated code goes into its
-// tail, from the top down. Its size is fixed at the Play, and every byte of it
+// placement"), which never grows. Images with ARM64EC code (Wine's
+// builtins), a child's ntdll copy and guest JIT code (Mono, V8) are copied into
+// its head, from the bottom up; a pure x86-64 image is not (madeira-unix 0090:
+// FEX runs it at its PE address). FEX's translated code goes into its tail, from
+// the top down. Its size is fixed at the Play, and every byte of it
 // counts against the app's memory limit from the bless on, so every Play gets the
 // least that the games measured need (`sizeMB`, decision 0036, which replaced 0019's
 // eighth of the limit). A launch logs its use as `pool:` lines
@@ -13,10 +15,13 @@
 import Foundation
 
 public enum JitPool {
-    /// What the executable's exec-time reservation is laid out for: 960 MiB holds
-    /// this plus 64 MiB of slack at its start at any slide (wine_host.c
+    /// What the executable's exec-time reservation is laid out for: its 1440 MiB
+    /// hold this plus 64 MiB of slack at its start at any slide (wine_host.c
     /// host_pool_reserve); a larger pool is placed first fit, which failed about one
-    /// launch in four. A dev build's simulated pool may go up to it.
+    /// launch in four. A dev build's simulated pool may go up to it. Above a pool of
+    /// up to 768 MiB the reservation also keeps the executable window
+    /// (0x140000000-0x15c000000) at every slide seen; 896 MiB keeps it only at the
+    /// lowest slides, and a launch that loses it logs `executable window: not held`.
     public static let maximumMB = 896
     /// What every Play gets: the high-water marks measured (The Witcher 3: head
     /// 206 MiB, tail 145 MiB; Kingdom Come: Deliverance: head 182, tail 161) with

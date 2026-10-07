@@ -44,9 +44,16 @@ Three sideloaded apps at once, and each profile lasts about seven days: after
 that the app stops launching until `pp install` (the container survives).
 `pp install` refuses a first install into the last slot unless
 `ALLOW_LAST_SLOT=1`, and never evicts anything. If `xtool ds devices` prints
-nothing, the phone is not registered on the team and signing fails with a 409;
-`xtool install --network <ipa>` (with `USBMUXD_SOCKET_ADDRESS=UNIX:<socket>`)
-registers it. An install is a ~650 MB transfer; one that times out after the
+nothing, the phone is not registered on the team and signing fails with a 409
+("no current IOS devices"). xtool registers a phone only when it installs on it, so:
+`./pp build --variant release --unsigned`, then `xtool install --network
+out/…/Playport-26.5-release-unsigned-….ipa` (with `USBMUXD_SOCKET_ADDRESS=UNIX:<socket>`),
+then `./pp install` for the dev build again. That IPA's bundle ID is `dev.playport.app`, so
+xtool signs it as the installed app's `XTL-<team>.dev.playport.app` and upgrades it in
+place. Never hand xtool an IPA `pp build` signed: it already says `XTL-<team>.dev.playport.app`,
+xtool prefixes it again, and the phone gets a second app, `XTL-<team>.XTL-<team>.dev.playport.app`,
+in a slot of its own (remove only that one, with `pymobiledevice3 apps uninstall` and its exact
+ID). An install is a ~650 MB transfer; one that times out after the
 upload still finishes on the phone, and `pp install` checks for that.
 
 ## JIT activation
@@ -274,6 +281,15 @@ comes out within a day of it. What a move from 1.6.0 to 1.9.0 costs was measured
   10 s later, and the run follows the restart to Home:
   `pp ui --action play:app-367520 --action wait:10 --action menu:open --action menu:resume
   --action wait:5 --action menu:open --action menu:quit --action open:home --shot-each-action`.
+- **A game's web page.** A page the game opens (an Epic game's EOS sign-in) comes up in
+  Playport's panel over the running game (decision [0064](decisions/0064-game-web-sheet.md)),
+  logged as `url: … open <host><path> (<kind>) for <title>` and `url: … [sheet]` lines. After
+  `play:`, `web:wait` waits for it (pressing Open on a confirm card) and its page,
+  `web:click:LABEL` clicks the button or link with that text, `web:close` closes it:
+  `pp ui --action play:epic-8337d1f975514d35ad0c1176e8a29f26 --action web:wait
+  --action web:click:Allow --action wait:30 --action web:close --action wait:10
+  --shot-each-action` signs Snakebird's EOS in (its Player.log, `pp phone pull`, then says
+  `Tried to login auth: Success`). A release build has no `web:` actions: a person taps Allow.
 - **The memory limit.** Settings › Setup check shows the app's limit
   ([DISTRIBUTION.md, section 6](DISTRIBUTION.md#6-signing-tools-and-the-memory-limit)).
   Settings › Developer's *Simulated limit* (`set:memoryLimitSimulatedMB=2048`, undone like

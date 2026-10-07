@@ -53,8 +53,10 @@ extension SteamSession {
     }
 
     /// Stats replies may come without a job, so a session has one stats
-    /// request out at a time and each reply is its game's.
-    private func oneStatsCallAtATime<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) async throws -> T {
+    /// request out at a time and each reply is its game's. The calls that set
+    /// the game being played (a stats store, an encrypted app ticket) take
+    /// turns here too, so one never ends another's game.
+    func oneStatsCallAtATime<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) async throws -> T {
         let previous = statsCall
         let call = Task { await previous?.value; return try await body() }
         statsCall = Task { _ = await call.result }

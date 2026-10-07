@@ -5,3 +5,4 @@
 0003-sdk-dll-return-interface-structs-the-way-MSVC-s-memb.patch
 0004-sdk-lay-out-CCallbackBase-s-Run-overloads-in-MSVC-s-.patch
 0005-sdk-lay-out-every-interface-s-overloads-and-destruct.patch
+0006-auth-ask-Playport-s-host-for-Steam-s-auth-session-an.patch

@@ -7,6 +7,8 @@
 // are logged to the app log (AppLog) as `library:` lines. None needs Steam:
 // a Steam install is verified against its retained manifests.
 
+import EpicClientKit
+import GOGClientKit
 import Foundation
 import PlayportKit
 import SteamClientKit
@@ -66,6 +68,8 @@ final class LibraryModel: ObservableObject {
             Self.log("play time: \(left.titleID) +\(Int(left.seconds)) s from the session the last process left"
                      + " (total \(Int(catalog.title(id: left.titleID)?.playSeconds ?? 0)) s)")
         }
+        removeSteamTickets("at app start")
+        removeEpicOwnershipFiles("at app start")
         // Cloud saves a sync replaced are kept 30 days (Cloud.Backups): once per process, which
         // after decision 0029 is once per game played.
         Task.detached(priority: .utility) {
@@ -75,6 +79,57 @@ final class LibraryModel: ObservableObject {
                                  + removed.map { "\($0.deletingLastPathComponent().lastPathComponent)/\($0.lastPathComponent)" }.joined(separator: ", "))
             }
         }
+    }
+
+    /// The latest removal of encrypted app tickets (removeSteamTickets); Play waits for it.
+    private var ticketSweep: Task<Void, Never>?
+
+    /// Takes the encrypted app ticket out of every installed Steam game's
+    /// emulator settings (decision 0017): at app start, for one a crash, a kill
+    /// or the restart after a game left behind, and at sign-out. Off the main
+    /// thread; a Play waits for it before it writes its own.
+    @discardableResult
+    func removeSteamTickets(_ when: String) -> Task<Void, Never> {
+        let roots = catalog.titles.filter { $0.appID != nil }
+            .map { Self.paths.games.appendingPathComponent($0.installDir, isDirectory: true) }
+        let previous = ticketSweep
+        let task = Task.detached(priority: .utility) {
+            await previous?.value
+            var removed = 0
+            for root in roots {
+                do { removed += try SteamAPISwap.removeTickets(in: root) } catch {
+                    LibraryModel.log("ticket: not removed from \(root.lastPathComponent) \(when): \(error)")
+                }
+            }
+            LibraryModel.log("ticket: \(removed) removed \(when) (\(roots.count) Steam game(s) checked)")
+        }
+        ticketSweep = task
+        return task
+    }
+
+    /// The latest removal of Epic ownership token files; an Epic Play waits for it.
+    private var ownershipSweep: Task<Void, Never>?
+
+    /// Takes the ownership token file out of every installed Epic game's folder
+    /// (decision 0059): at app start, for one a crash, a kill or the restart after a
+    /// game left behind, and at sign-out. Off the main thread.
+    @discardableResult
+    func removeEpicOwnershipFiles(_ when: String) -> Task<Void, Never> {
+        let roots = catalog.titles.filter { $0.store == .epic }
+            .map { Self.paths.games.appendingPathComponent($0.installDir, isDirectory: true) }
+        let previous = ownershipSweep
+        let task = Task.detached(priority: .utility) {
+            await previous?.value
+            var removed = 0
+            for root in roots {
+                do { removed += try EpicOwnershipFile.remove(in: root) } catch {
+                    LibraryModel.log("epic: ownership token file not removed from \(root.lastPathComponent) \(when): \(error)")
+                }
+            }
+            LibraryModel.log("epic: \(removed) ownership token file(s) removed \(when) (\(roots.count) Epic game(s) checked)")
+        }
+        ownershipSweep = task
+        return task
     }
 
     /// The game ended in this process: its session counts when the runtime ran it
@@ -138,8 +193,12 @@ final class LibraryModel: ObservableObject {
     /// FEX's memory ordering and block size from the game's profile with its page's choices over it (FEXProfile).
     /// Throws for a title whose executable is not a path inside C:\Games, or whose
     /// cohort entry has a bad madeira.cfg key or screen (LaunchPlanError).
+    /// An Epic game starts signed in (decision 0059): a fresh exchange code and, when its catalogue
+    /// asks, an ownership token. When they cannot be had it does not start; the player gets Try again,
+    /// and for a game that may run offline Play offline (`epicOffline`), which starts it as before
+    /// step 1 of the store game sign-in plan, with no sign-in arguments.
     @discardableResult
-    func play(_ id: String) async throws -> Bool {
+    func play(_ id: String, epicOffline: Bool = false) async throws -> Bool {
         guard catalog.title(id: id)?.canPlay == true, !TitleLaunch.shared.running, !TitleLaunch.shared.spent else { return false }
         // A game whose saves changed on the phone and on Steam asks which to keep first; the
         // choice starts it, Decide later does not (UI/CloudConflictView.swift).
@@ -177,21 +236,67 @@ final class LibraryModel: ObservableObject {
         #endif
         // A Steam app's steam_api: the emulator told about the paired account, or the game's own.
         let service = SteamAccountModel.current?.service
+        // The emulator's encrypted app ticket, on by default (decision 0017): asked for now, while the
+        // session is up (TitleLaunch.start closes it), after the start's sweep of old ones.
+        var ticket: Secret<[UInt8]>?
+        // The game's auth session and web API tickets, on by default (decision 0062): armed now, and
+        // the CM session stays logged on for them alone through the play.
+        var tickets: SteamTicketBroker?
+        if let app = t.appID, settings.steamAPI == .emulated, let service {
+            await ticketSweep?.value
+            ticket = await service.encryptedAppTicket(appID: app)
+            tickets = await service.prepareTicketSession(appID: app, playLog: SteamTicketHost.log)
+        }
         let steamAPI = t.appID.map { app in
             LaunchCoordinator.SteamAPI(appID: app, root: Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true),
                                        mode: settings.steamAPI,
-                                       settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) })
+                                       settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) },
+                                       ticket: ticket, tickets: tickets)
         }
+        let endTickets = { if tickets != nil { Task { await service?.endPlay() } } }
+        // An Epic game's sign-in (decision 0059), fetched now: the code lives five minutes.
+        var epicArgs: [String] = []
+        var epic: LaunchCoordinator.Epic?
+        if t.store == .epic {
+            await ownershipSweep?.value
+            let root = Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true)
+            epic = LaunchCoordinator.Epic(root: root)
+            if epicOffline {
+                Self.log("epic: \(t.name) plays offline, not signed in (the player's choice)")
+            } else {
+                let started = Date()
+                do {
+                    let signIn = try await EpicAccount.shared.launchSignIn(t.key.id, installDir: t.installDir)
+                    epicArgs = EpicInstaller.authArguments(signIn.auth)
+                    epic?.ownershipToken = signIn.ownershipToken
+                    Self.log("epic: \(t.name) signed in for the launch: exchange code fetched"
+                             + (signIn.ownershipToken != nil ? ", with an ownership token" : "")
+                             + String(format: " in %.2f s", Date().timeIntervalSince(started)))
+                } catch {
+                    Self.log("epic: \(t.name) could not be signed in: \(error)")
+                    askEpicSignIn(t, error)
+                    endTickets()
+                    return false
+                }
+            }
+        }
+        // A GOG game's Galaxy service (decision 0063), on by default: listening from now to the game's exit
+        // when its build names a Galaxy client and GOG is signed in; otherwise the game runs without it.
+        let galaxy = t.store == .gog ? await GOGAccount.shared.galaxyListener(t.key.id, name: t.name) : nil
         // FEX's disk cache stays under its budget (decision 0056): cleared before this launch when over it.
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { Self.log($0) } }.value
         let fex = FEXProfile.launch(appID: t.appID, exe: plan.exe, ordering: settings.ordering, maxInst: settings.maxInst,
                                     x87Reduced: settings.x87Reduced, diskCache: settings.diskCache)
-        guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments,
+        guard TitleLaunch.shared.start(title: t.name, titleID: t.id, exe: plan.exe, args: plan.args + settings.arguments + epicArgs,
                                        config: settings.config(over: plan.config),
                                        screen: settings.screen, frameLimit: settings.frameLimit,
                                        graphics: settings.graphics,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
-                                       memory: MemoryNeed.of(t, cohort: Self.cohort)) else { return false }
+                                       memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy) else {
+            endTickets()
+            galaxy?.stop()
+            return false
+        }
         catalog.update(id) { $0.lastPlayed = Date() }
         save()
         PlayClock.shared.begin(id)
@@ -203,6 +308,30 @@ final class LibraryModel: ObservableObject {
         }
         Self.log("play \(t.name) (\(t.id)) on \(settings.graphics.rawValue): \(plan.exe) \((plan.args + settings.arguments).joined(separator: " "))")
         return true
+    }
+
+    /// Epic could not sign the game in: Try again, Play offline for a game that may run
+    /// offline (its catalogue allows it and asks for no ownership token), or Cancel.
+    func askEpicSignIn(_ t: InstalledTitle, _ error: Error) {
+        let offline = EpicAccount.shared.game(t.key.id)?.mayPlayOffline ?? false
+        let why: String
+        if case ClientError.notLoggedOn? = error as? ClientError {
+            why = "You are not signed in to Epic Games. Sign in under Settings › Accounts."
+        } else {
+            why = InstallCopy.detailed("Epic Games can't be reached.", error)
+        }
+        let note = why + (offline ? " This game can also play offline, without its online features." : "")
+        var options = [PadOption(id: "retry", label: "Try again")]
+        if offline { options.append(PadOption(id: "offline", label: "Play offline")) }
+        options.append(PadOption(id: "cancel", label: "Cancel"))
+        PadModal.shared.picker(title: "Epic could not sign the game in", context: t.name, note: note, options: options,
+                               selected: nil) { choice in
+            switch choice {
+            case "retry": Task { try? await LibraryModel.shared.play(t.id) }
+            case "offline": Task { try? await LibraryModel.shared.play(t.id, epicOffline: true) }
+            default: break
+            }
+        }
     }
 
     /// The Cloud save conflict screen for the game's open conflicts; `thenPlay` starts it once settled.

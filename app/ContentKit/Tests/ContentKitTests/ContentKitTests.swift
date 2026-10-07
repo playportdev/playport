@@ -138,10 +138,11 @@ final class RedactorTests: XCTestCase {
             #"{"redirectUrl":"x","authorizationCode":"0123456789abcdef0123456789abcdef","exchangeCode":"fedcba"}"#,
             "GET https://embed.gog.com/on_login_success?origin=client&code=SECRETCODE123",
             "code=SECRETCODE456 client_secret=9d85c43b1482497dbbce61f6e4aa173a",
+            #"{"user_code":"USRCODE1","verification_uri_complete":"x"} userCode=USRCODE2"#,
         ]
         let out = lines.map(Redactor.scrub).joined(separator: "\n")
         for secret in ["Abc123def456ghi", "Zyx987wvu", "eyJraWQi", "0123456789abcdef0123456789abcdef", "fedcba",
-                       "SECRETCODE123", "SECRETCODE456", "9d85c43b1482497dbbce61f6e4aa173a"] {
+                       "SECRETCODE123", "SECRETCODE456", "9d85c43b1482497dbbce61f6e4aa173a", "USRCODE1", "USRCODE2"] {
             XCTAssertFalse(out.contains(secret), "\(secret) leaked: \(out)")
         }
         XCTAssertTrue(out.contains("expires_in"), "a non-secret field stays")

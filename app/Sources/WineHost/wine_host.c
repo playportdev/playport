@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -748,9 +749,11 @@ static void log_vm_layout(void)
  * app's own runs, and in about one launch in four no piece is left that holds
  * 896 MiB on the device. This zero-fill array lives in the executable's
  * __DATA,__bss, which the kernel maps with the image, so nothing can be placed
- * inside it first. Untouched, it costs no footprint. It holds a pool of 896
- * MiB plus the slack below and starts where the image ends, which the slide
- * moves (0x103ea8000 to 0x108540000 seen on the phone).
+ * inside it first. Untouched, it costs no footprint. It holds a pool of up to
+ * 896 MiB plus the slack below, and starts where the image ends, which the
+ * slide moves (0x103ea8000 to 0x10a3f8000 seen on the phone). Above a pool
+ * whose range ends below 0x140000000 (512 MiB does at every slide) it also
+ * holds the executable window; a larger one leaves the window unheld.
  * wine_host_jit_pool_acquire frees the pool's range at its start
  * just before debugserver allocates it; its `_M` is a first-fit allocation
  * and nothing below the array can hold the pool, so it lands there. Pool
@@ -761,8 +764,16 @@ static void log_vm_layout(void)
  * guarded against "mode A", which belonged to its trap-mode JIT writes
  * (docs/ARCHITECTURE.md, "JIT pool placement"). The rules a placement must
  * meet are selfcheck_pool_placement's. */
-#define HOST_POOL_RESERVE_BYTES (960ull << 20)
 #define HOST_POOL_SLACK (64ull << 20)   /* for a stray allocation between the free and `_M` */
+/* The reservation also holds the executable window (SELFCHECK_EXE_WINDOW_LO
+ * to _HI): by the time the runtime starts, libmalloc has put regions just
+ * above the reservation's end (64 MiB tagged VM_RECLAIM and about 110 MiB
+ * read-only, at every slide seen), so the reservation reaches past the window
+ * and keeps it when the rest goes back (selfcheck_exe_window_split). From the
+ * lowest executable end seen (0x103ea8000) it passes the window; from the
+ * highest (0x10a3f8000) it ends at 0x1643f8000, under the lowest main-thread
+ * stack seen (0x16d0c4000). */
+#define HOST_POOL_RESERVE_BYTES (1440ull << 20)
 static char host_pool_reserve[HOST_POOL_RESERVE_BYTES] __attribute__((aligned(0x4000), used));
 
 /* The largest unmapped gap inside [lo, hi), and where it starts. */
@@ -852,9 +863,24 @@ int wine_host_jit_pool_acquire(const char *log_path, size_t size, int wait_ms, v
         int in_reserve = rx && a >= pool_lo && a + size <= freed_hi;
         host_log("JIT pool: placement %s the reservation (+0x%lx)", in_reserve ? "inside" : "OUTSIDE",
                  in_reserve ? (unsigned long)(a - pool_lo) : 0ul);
-        /* The rest of the reservation above the pool goes back to the system:
-         * the start-up heap and thread stacks share this range with it. */
-        if (freed_hi < res_hi) vm_deallocate(mach_task_self(), freed_hi, res_hi - freed_hi);
+        /* The rest of the reservation above the pool goes back to the system,
+         * but the executable window: the start-up heap and thread stacks share
+         * this range with it. */
+        unsigned long long give[2][2];
+        int held, n = selfcheck_exe_window_split(freed_hi, res_hi, give, &held);
+        for (int i = 0; i < n; i++)
+            vm_deallocate(mach_task_self(), (vm_address_t)give[i][0], (vm_size_t)(give[i][1] - give[i][0]));
+        if (held) {
+            char window[64];
+            snprintf(window, sizeof(window), "%llx:%llx", SELFCHECK_EXE_WINDOW_LO,
+                     SELFCHECK_EXE_WINDOW_HI - SELFCHECK_EXE_WINDOW_LO);
+            setenv("WINE_IOS_EXE_WINDOW", window, 1);
+            host_log("executable window: 0x%llx-0x%llx held for an executable that cannot move",
+                     SELFCHECK_EXE_WINDOW_LO, SELFCHECK_EXE_WINDOW_HI);
+        } else {
+            host_log("executable window: not held (the pool's range ends at 0x%lx, the reservation at 0x%lx)",
+                     (unsigned long)freed_hi, (unsigned long)res_hi);
+        }
     }
     vm_address_t rw = 0;
     if (!rc) {
@@ -1031,6 +1057,15 @@ int wine_host_init(const wine_host_config *c)
         setenv("WINEDLLPATH", g_runtime, 1);
     }
     host_log("WINEDLLPATH=%s", getenv("WINEDLLPATH"));
+    /* iOS has no call that lists the system's trusted roots, so crypt32's unix
+     * side reads them from this file (the runtime's Mozilla root store,
+     * build/stages/ca-bundle.sh) into the prefix's ROOT store. Without it the
+     * store holds only Wine's six built-in roots, and a game's own TLS (EOS's
+     * libcurl, Unity's web stack) refuses every server. */
+    char ca_bundle[sizeof(g_runtime) + 32];
+    snprintf(ca_bundle, sizeof(ca_bundle), "%s/certs/cacert.pem", g_runtime);
+    setenv("MADEIRA_CA_BUNDLE", ca_bundle, 1);
+    host_log("trusted roots: %s%s", ca_bundle, access(ca_bundle, R_OK) == 0 ? "" : " (missing)");
     setenv_hex("WINE_IOS_JIT_RX", (unsigned long long)(uintptr_t)c->jit_rx);
     setenv_hex("WINE_IOS_JIT_RW", (unsigned long long)(uintptr_t)c->jit_rw);
     setenv_hex("WINE_IOS_JIT_SIZE", (unsigned long long)c->jit_size);
@@ -1250,7 +1285,17 @@ int wine_host_session_launch(const char *dos_path, const char *const *args, int 
     pp_session_request req = { PP_SESSION_MAGIC, g_session_seq, PP_REQUEST_LAUNCH, (uint32_t)used,
                                (uint32_t)nargs, (uint32_t)nenv };
     host_log("session: title %u: %s in %s, %d arguments, %d variables", req.sequence, tp.dos, tp.dos_dir, nargs, nenv);
-    for (int i = 0; i < nargs; i++) host_log("session: title %u: argv[%d] = \"%s\"", req.sequence, i + 1, args[i]);
+    for (int i = 0; i < nargs; i++) {
+        /* A signed-in Epic launch's code, account ID and name stay out of the log (decision 0059). */
+        static const char *const secret[] = { "-AUTH_PASSWORD=", "-epicuserid=", "-epicusername=" };
+        int hidden = 0;
+        for (size_t k = 0; k < sizeof(secret) / sizeof(*secret) && !hidden; k++)
+            if (!strncasecmp(args[i], secret[k], strlen(secret[k]))) {
+                host_log("session: title %u: argv[%d] = \"%s<redacted>\"", req.sequence, i + 1, secret[k]);
+                hidden = 1;
+            }
+        if (!hidden) host_log("session: title %u: argv[%d] = \"%s\"", req.sequence, i + 1, args[i]);
+    }
     rc = session_send("request", &req, payload);
     free(payload);
     if (rc) return -4;

@@ -81,13 +81,13 @@ repository, with this build area: its inputs, caches and the phone's lock);
 | `inputs` | | tools and inputs checked, their versions in `run/logs/inputs.txt` |
 | `sources` | | `pins.lock` checked against the Madeira gitlinks; Madeira's wine, FEX and dxmt (`research/dxmt` before its 79e28f0) submodules initialised, not its others |
 | `unix` | `stages/unix.sh`, `stages/unix-gaps.sh`, `stages/gstreamer.sh` | `libntdll_unix.a`, `libwin32u_unix.a`, `libwineserver.a`, the crypto statics, `libwinegstreamer_unix.a` (winegstreamer's unix side prelinked with GStreamer's iOS release, cached under `cache/gstreamer-<version>/`) |
-| `pe` | `stages/wine-pe.sh`, `stages/wine-pe-strip.py` | the Wine PE DLL sets, `i386-windows`, `aarch64-windows` and `arm64ec-windows` (the first two share the new-WoW64 `build-macos` tree; configure sees GStreamer's headers, so `winegstreamer.dll` is built). The app stages them from `pe/staged`, each image without its `.debug_*` sections: every image the runtime maps is copied whole into the JIT pool. The COFF symbol table stays (`pp perf --profile` symbolises from it); the full images stay in `pe/wine` |
+| `pe` | `stages/wine-pe.sh`, `stages/wine-pe-strip.py` | the Wine PE DLL sets, `i386-windows`, `aarch64-windows` and `arm64ec-windows` (the first two share the new-WoW64 `build-macos` tree; configure sees GStreamer's headers, so `winegstreamer.dll` is built). The app stages them from `pe/staged`, each image without its `.debug_*` sections: every image with native code the runtime maps is copied whole into the JIT pool. The COFF symbol table stays (`pp perf --profile` symbolises from it); the full images stay in `pe/wine` |
 | `fex` | `stages/fex.sh` | `libarm64ecfex.dll`, shipped as `xtajit64.dll`, and aarch64 `libwow64fex.dll`, shipped as `xtajit.dll` (FEX's WoW64 CPU, [Portal 2 step 3](plans/finished.md#portal-2)) |
 | `dxmt` | `stages/dxmt-*.sh`, `air-helpers/` | DXMT's unix slice (`libdxmt_combined.a`) and PE DLLs, from one patched tree |
-| `vulkan` | `stages/mesa.sh`, `stages/vulkan-pe.sh` | the Vulkan backend (decision 0014): KosmicKrisp as `app/Staged/KosmicKrisp.xcframework`, DXVK and vkd3d-proton (with `patches/vkd3d-proton`) for `arm64ec-windows` |
+| `vulkan` | `stages/mesa.sh`, `stages/vulkan-pe.sh` | the Vulkan backend (decision 0014): KosmicKrisp as `app/Staged/KosmicKrisp.xcframework`, DXVK (with `patches/dxvk`) and vkd3d-proton (with `patches/vkd3d-proton`) for `arm64ec-windows` |
 | `steamapi` | `stages/steamapi.sh` | the Steam API emulator: gbe_fork's `steam_api64.dll` and `steam_api.dll` with their static dependencies, a host `protoc` of the same protobuf release, and Abseil at its pin; native DLLs the app copies into a game's folder at launch (`Runtime/steamapi/`); first `steamapi-vtables.py` checks that every interface's MinGW vtable matches MSVC's, which games use |
 | `idevice` | `stages/idevice.sh` | idevice's C FFI at its pin plus `patches/idevice`, built for iOS with `RUST_ROOT` (`ring` for TLS; paths remapped), prelinked into one object exporting the restart and Bonjour pairing interfaces (`libidevice_ffi.a`); `crates.tsv` lists resolved normal target dependencies for `pp notices`, not actual linked members or the build/proc-macro/native graph ([decision 0029](decisions/0029-restart-after-each-game.md), [pairing experiment](plans/finished.md#self-contained-jit-setup-for-a-tester)) |
-| `stage` | `stages/session-root.sh`, `stages/stage-artifacts.py`, `stages/stikjit.sh` | the session root `playport-session.exe` (`app/SessionRoot`, staged in `Runtime/arm64ec-windows`, decisions [0027](decisions/0027-titles-as-children-of-a-session-root.md), [0030](decisions/0030-one-title-per-process.md)), `app/artifacts.tsv` recorded, everything staged into `app/`, StikJIT's framework (outside the main checkout's `.work/run`, every run ends by putting the records back and keeping its own in `out/…/records/`, or `run/records/` when it stops before `verify`) |
+| `stage` | `stages/session-root.sh`, `stages/ca-bundle.sh`, `stages/stage-artifacts.py`, `stages/stikjit.sh` | the trusted roots (`Runtime/certs/cacert.pem`, cached under `cache/ca-bundle-<date>/`; "The trusted roots" below), the session root `playport-session.exe` (`app/SessionRoot`, staged in `Runtime/arm64ec-windows`, decisions [0027](decisions/0027-titles-as-children-of-a-session-root.md), [0030](decisions/0030-one-title-per-process.md)), the URL opener `playport-url-opener.exe` beside it (`app/UrlOpener`, the prefix's http and https handler, decision [0064](decisions/0064-game-web-sheet.md)), `app/artifacts.tsv` recorded, everything staged into `app/`, StikJIT's framework (outside the main checkout's `.work/run`, every run ends by putting the records back and keeping its own in `out/…/records/`, or `run/records/` when it stops before `verify`) |
 | `notices` | `notices-inputs.py`, `notices-assemble.sh`, `notices-app.py`, `notices-bundle.py` | the app's `Licenses/` for both variants: the collection inputs prepared in `cache/` from their committed locks, every notice of this run's trees collected into `run/notices` (`pp notices`), the reviewed selection (`build/app-notices.json`) in `run/licenses`, then staged as `app/Staged/Licenses` ([NOTICES.md](NOTICES.md#the-apps-selection)) |
 | `app` | xtool | the signed IPA, linked with ld64 |
 | `verify` | `verify-ipa.py` | the IPA checks; the IPA, `artifacts.tsv`, `SHA256SUMS`, `provenance.txt` and the logs to `out/` |
@@ -131,6 +131,16 @@ not a failure, and what must hold:
   bundle keeps its status (`release-reviewed` from the reviewed selection, decision 0039;
   `unreviewed-app-selection` whenever the selection is not):
   `pp verify` reports it, and only `--distribution` fails it.
+
+**The trusted roots.** `Runtime/certs/cacert.pem` is Mozilla's root store as
+published in curl's CA extract (<https://curl.se/docs/caextract.html>), the dated
+file `cacert-<date>.pem` the pins.lock `ca-bundle` row names, checked against the
+sha256 in `build/stages/ca-bundle.sh` (ARCHITECTURE.md, "Trusted roots"). Move it
+by hand before each release: take the newest date from that page, download
+`https://curl.se/ca/cacert-<date>.pem`, check it against the published
+`cacert.pem.sha256` when the dated file is the newest, then put the date in
+`pins.lock`, the sha256 in `ca-bundle.sh`, and both in `build/source-bundle.json`'s
+`ca-bundle` entry, and commit them with the rebuilt `app/artifacts.tsv`.
 
 **The SDK's libc++ headers for iOS C++.** The host clang searches its own
 `../include/c++/v1` before the sysroot's, so on a Linux host with libc++

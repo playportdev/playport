@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 6 Oct 2026 21:00:00 +0200
+Subject: [PATCH] dxvk: no shared handle for an image or fence the device
+ cannot share
+
+A D3D11 texture created with D3D11_RESOURCE_MISC_SHARED asks DxvkImage
+for exportable memory. canShareImage refuses it on a device without
+VK_KHR_external_memory_win32 (KosmicKrisp has none), so m_shared is false
+and the image is allocated as an ordinary one; but allocateStorageWithUsage
+still passed the sharing's handle type to the allocator, which then called
+DxvkResourceAllocation::initKmtHandles, and that calls
+vkGetMemoryWin32HandleKHR: a NULL function pointer on such a device.
+Hollow Knight's Media Foundation video path (mfplat, winegstreamer) creates
+such a texture on a thread-pool worker after New Game; the call through
+NULL ended the game with 0xc0000005 on the D3D12 route and on DXVK with
+tiler mode off. The allocation now carries the handle type only when the
+image is shared.
+
+DxvkFence had the same shape: it called initKmtHandles, and so
+vkGetSemaphoreWin32HandleKHR, for any shared type, even when the device
+reported the semaphore type as not exportable and created a plain one.
+It now does so only for an exportable semaphore whose function loaded.
+
+On a device with the extensions nothing changes.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-06-vulkan-perf-baseline.md
+Offered-upstream: no
+---
+ src/dxvk/dxvk_fence.cpp | 7 ++++++-
+ src/dxvk/dxvk_image.cpp | 7 ++++++-
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/src/dxvk/dxvk_fence.cpp b/src/dxvk/dxvk_fence.cpp
+index 8485c40..87f8428 100644
+--- a/src/dxvk/dxvk_fence.cpp
++++ b/src/dxvk/dxvk_fence.cpp
+@@ -57,7 +57,12 @@ namespace dxvk {
+       }
+     }
+ 
+-    if (info.sharedType != VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_FLAG_BITS_MAX_ENUM)
++    // Only an exportable semaphore has a handle to open: without
++    // VK_KHR_external_semaphore_win32 the call would go to a function
++    // the device never loaded.
++    if (info.sharedType != VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_FLAG_BITS_MAX_ENUM
++     && (externalFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT)
++     && m_vkd->vkGetSemaphoreWin32HandleKHR)
+       initKmtHandles();
+   }
+ 
+diff --git a/src/dxvk/dxvk_image.cpp b/src/dxvk/dxvk_image.cpp
+index 3b5b739..9111633 100644
+--- a/src/dxvk/dxvk_image.cpp
++++ b/src/dxvk/dxvk_image.cpp
+@@ -334,7 +334,12 @@ namespace dxvk {
+     allocationInfo.resourceCookie = cookie();
+     allocationInfo.properties = m_properties;
+     allocationInfo.mode = mode;
+-    allocationInfo.handleType = m_info.sharing.type;
++    // Only an image that can be shared has exportable memory: one whose sharing
++    // canShareImage refused (no VK_KHR_external_memory_win32) is an ordinary image,
++    // and asking for its handle would call a function the device never loaded.
++    allocationInfo.handleType = m_shared
++      ? m_info.sharing.type
++      : VK_EXTERNAL_MEMORY_HANDLE_TYPE_FLAG_BITS_MAX_ENUM;
+ 
+     if (m_info.transient)
+       allocationInfo.mode.set(DxvkAllocationMode::NoDedicated);

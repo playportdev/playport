@@ -8,8 +8,11 @@
 // that says why in an alert (LaunchMessage). Progress goes to the app log
 // (AppLog) as `title:` lines.
 
+import EpicClientKit
+import GOGClientKit
 import Foundation
 import PlayportKit
+import SteamClientKit
 import SwiftUI
 import WineHost
 
@@ -58,7 +61,7 @@ final class TitleLaunch: ObservableObject {
     func start(title: String, titleID: String? = nil, exe: String, args: [String], config: [String: String] = [:],
                screen: String? = nil, frameLimit: Int = 0, graphics: GraphicsBackend = .default, steamAppID: UInt32? = nil,
                fex: FEXProfile.Launch? = nil, steamAPI: LaunchCoordinator.SteamAPI? = nil,
-               memory: MemoryNeed? = nil) -> Bool {
+               memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil, galaxy: GalaxyListener? = nil) -> Bool {
         guard !running, !spent else { return false }
         self.title = title
         self.titleID = titleID
@@ -78,10 +81,11 @@ final class TitleLaunch: ObservableObject {
         }
         showsSheet = true
         begin(screen: screen, frameLimit: frameLimit)
-        TitleMode.log("in-app start \(exe) \(args.joined(separator: " "))")
+        // An Epic game's sign-in arguments stay out of the log (decision 0059).
+        TitleMode.log("in-app start \(exe) \(EpicInstaller.redacted(args).joined(separator: " "))")
         let request = LaunchCoordinator.Request(exe: exe, args: args, config: config,
                                                 steamAppID: steamAppID, graphics: graphics, fex: fex, jitWait: 180, steamAPI: steamAPI,
-                                                memory: memory)
+                                                memory: memory, epic: epic, title: title, galaxy: galaxy)
         Thread.detachNewThread {
             let outcome = LaunchCoordinator.run(request) { step in
                 DispatchQueue.main.async { MainActor.assumeIsolated { TitleLaunch.shared.advance(step) } }
@@ -141,7 +145,8 @@ final class TitleLaunch: ObservableObject {
     private func begin(screen: String? = nil, frameLimit: Int = 0) {
         running = true
         // Steam work stops before the runtime starts (decision 0004); the JIT
-        // wait ahead of wine_host_init leaves it ample time to disconnect.
+        // wait ahead of wine_host_init leaves it ample time to disconnect. A play
+        // with armed tickets keeps the CM logged on for them alone (decision 0062).
         if let steam = SteamAccountModel.current { Task { await steam.suspendForLaunch() } }
         TitleScreen.configure(title: screen, frameLimit: frameLimit)
         // The pads are the guest's from here, not the app screens' (UI/Pad/PadRouter.swift).
@@ -168,15 +173,23 @@ final class TitleLaunch: ObservableObject {
         showsSheet = false
         running = false
         InGameMenu.shared.gameEnded()
+        GameWebSheet.shared.gameEnded()
         var why = LaunchMessage.of(outcome, title: title, spent: spent)
         // The player quit: a game that exits with a code, or that the session root ended, is not a surprise.
         if quitting, outcome.kind != .refused { why = nil }
         if why?.step != nil { why?.titleID = titleID; why?.appID = appID }
         // The play time, on disk before the restart ends this process.
         LibraryModel.shared.sessionEnded(counted: spent)
+        // The play's tickets end with it (decision 0062): Steam is told within a second.
+        let steam = SteamAccountModel.current?.service
         if spent {
-            AppRestart.shared.restart(notice: why)
+            let notice = why
+            Task {
+                await steam?.endPlay()
+                AppRestart.shared.restart(notice: notice)
+            }
         } else {
+            Task { await steam?.endPlay() }
             PadRouter.shared.takeBack()
             message = why
         }

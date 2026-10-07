@@ -19,13 +19,36 @@ func withDeadline<T: Sendable>(_ seconds: Double, _ what: String, _ op: @escapin
     }
 }
 
+/// The messages a session's CM connections have carried, and whether the
+/// current one is open: read without the actor (a live play's ticket broker,
+/// on a guest thread), so a lock, not isolation. One per session, shared by
+/// each connection it opens.
+public final class CMTraffic: @unchecked Sendable {
+    private let lock = NSLock()
+    private var received = 0, sent = 0, open = false
+
+    public init() {}
+
+    /// Messages in (each in a Multi counted) and out, since the session began.
+    public var counts: (received: Int, sent: Int) { lock.withLock { (received, sent) } }
+    public var isOpen: Bool { lock.withLock { open } }
+
+    func countIn() { lock.withLock { received += 1 } }
+    func countOut() { lock.withLock { sent += 1 } }
+    func setOpen(_ v: Bool) { lock.withLock { open = v } }
+}
+
 /// One connection to a Steam CM over its WebSocket endpoint
 /// (wss://<endpoint>/cmsocket/, WebSocketConnection.kt). TLS carries the
 /// channel security, so there is no Steam-level channel encryption handshake.
 ///
 /// Replies are matched to requests by job id; unsolicited messages the client
 /// cares about (license list, logged-off) are buffered per EMsg until read.
+/// The pushes a live play's tickets need (`pushedEMsgs`) go to `push` as they
+/// come, never to the mailbox: they arrive at any time and none may be dropped.
 public actor CMConnection {
+    public typealias PushHandler = @Sendable (CMPacket) -> Void
+
     public enum Key: Hashable, Sendable { case job(UInt64), emsg(UInt32) }
 
     public let endpoint: String
@@ -49,10 +72,19 @@ public actor CMConnection {
         EMsg.clientStoreUserStatsResponse.rawValue,
     ]
     static let mailboxLimit = 8
+    /// Game connect tokens, the auth list's ack and a server's ticket check (decision 0062).
+    static let pushedEMsgs: Set<UInt32> = [
+        EMsg.clientGameConnectTokens.rawValue, EMsg.clientAuthListAck.rawValue, EMsg.clientTicketAuthComplete.rawValue,
+    ]
 
-    public init(endpoint: String, log: Logger) {
+    let traffic: CMTraffic?
+    let push: PushHandler?
+
+    public init(endpoint: String, log: Logger, traffic: CMTraffic? = nil, push: PushHandler? = nil) {
         self.endpoint = endpoint
         self.log = log
+        self.traffic = traffic
+        self.push = push
     }
 
     public var isOpen: Bool { socket != nil && failure == nil }
@@ -68,9 +100,12 @@ public actor CMConnection {
         log.info("cm", "connected to CM \(endpoint) (websocket)")
     }
 
+    /// The receive loop and the heartbeat run at utility priority: during a
+    /// play they share the phone with the game (decision 0062).
     func attach(_ box: WebSocketTransport) {
         socket = box
-        receiveTask = Task { [weak self] in await self?.receiveLoop(box) }
+        traffic?.setOpen(true)
+        receiveTask = Task(priority: .utility) { [weak self] in await self?.receiveLoop(box) }
     }
 
     private func receiveLoop(_ box: WebSocketTransport) async {
@@ -100,6 +135,11 @@ public actor CMConnection {
     }
 
     private func dispatch(_ p: CMPacket) {
+        traffic?.countIn()
+        if let push, Self.pushedEMsgs.contains(p.emsg) {
+            push(p)
+            return
+        }
         if p.knownEMsg == .clientLogOnResponse {
             if let sid = p.header.steamID { steamID = sid }
             if let s = p.header.clientSessionID { sessionID = s }
@@ -132,6 +172,7 @@ public actor CMConnection {
     private func fail(_ e: SteamError) {
         guard failure == nil else { return }
         failure = e
+        traffic?.setOpen(false)
         log.warn("cm", "connection closed: \(e)")
         for (_, ws) in waiters { for (_, c) in ws { c.resume(throwing: e) } }
         waiters = [:]
@@ -193,6 +234,7 @@ public actor CMConnection {
         if h.steamID == nil, steamID != 0 { h.steamID = steamID }
         if h.clientSessionID == nil, sessionID != 0 { h.clientSessionID = sessionID }
         try await socket.send(CMPacket(emsg: emsg, header: h, body: body.encode()).serialize())
+        traffic?.countOut()
     }
 
     /// A request whose reply (`reply`) may or may not target its job: the first
@@ -258,7 +300,7 @@ public actor CMConnection {
     public func startHeartbeat(seconds: Int) {
         heartbeatTask?.cancel()
         let interval = UInt64(max(5, seconds)) * 1_000_000_000
-        heartbeatTask = Task { [weak self] in
+        heartbeatTask = Task(priority: .utility) { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: interval)
                 guard let self, !Task.isCancelled else { return }

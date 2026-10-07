@@ -170,14 +170,32 @@ places its start-up heap somewhere in that range before any app code runs; in
 about one launch in four no piece large enough was left.
 
 `wine_host.c` therefore reserves the pool's address space at exec time: a
-960 MiB zero-fill array (`host_pool_reserve`) in the executable's
+1440 MiB zero-fill array (`host_pool_reserve`) in the executable's
 `__DATA,__bss`, which the kernel maps with the image, so nothing can be placed
-inside it first. Untouched, it costs no memory footprint. It holds an 896 MiB
-pool plus 64 MiB of slack and starts where the executable ends, which the
-slide moves (`0x103ea8000` to `0x108540000` in the evidence below).
+inside it first. Untouched, it costs no memory footprint. It holds a pool of up
+to 896 MiB plus 64 MiB of slack and starts where the executable ends, which the
+slide moves (`0x103ea8000` to `0x10a3f8000` seen on the phone).
 `wine_host_jit_pool_acquire` frees the pool's range at its start just before
 debugserver allocates, and debugserver's first-fit allocation lands there.
-The rest of the reservation is given back afterwards.
+
+The rest of the reservation is given back afterwards, except the **executable
+window**, `[0x140000000, 0x15c000000)` (`selfcheck_exe_window_split`): an x86-64
+executable that is not DYNAMIC_BASE must load at its ImageBase, the linker's
+default `0x140000000`, and one with its relocations stripped cannot load anywhere
+else (Jurassic World Evolution's 422 MiB `JWE.exe`). Without the hold that range
+is taken before the runtime starts: libmalloc puts a 64 MiB `VM_RECLAIM` region
+and about 110 MiB of read-only regions just above the reservation's end, and the
+session root (`playport-session.exe`, linked at the default base) took
+`0x140000000` itself. The reservation reaches past the window from the lowest
+slide seen and ends at `0x1643f8000` from the highest, under the lowest main-thread
+stack seen (`0x16d0c4000`). The host names the window in `WINE_IOS_EXE_WINDOW` and
+logs `executable window: 0x140000000-0x15c000000 held …`; above a pool whose range
+reaches it (896 MiB at a high slide) it logs `not held`. ntdll gives the window
+only to `map_image_view`'s attempt at such an executable's preferred base
+(`patches/madeira-unix` 0089; Madeira's `ios_exe_win_claim`, logged `ml977:
+RELEASED`), and holds the image's interval again for its next launch in the session
+(`ml988`); the session root and relocatable executables are placed by the scan. A
+refused base of such an executable logs `[exe-base]` with what holds it.
 
 #### Mode A: the old `0x119000000` floor
 
@@ -234,7 +252,8 @@ then on, and every MiB of it is a MiB the game cannot have. Every Play therefore
 gets 512 MiB, the least the games measured need, whatever the memory limit
 (PlayportKit `JitPool`, [decision 0036](decisions/0036-one-512-mib-jit-pool.md),
 which replaced 0019's eighth of the limit); the reservation still holds 896 MiB,
-which a dev build's simulated pool may use. The limit itself comes from the
+which a dev build's simulated pool may use (above 768 MiB at the cost of the
+executable window at some slides). The limit itself comes from the
 `com.apple.developer.kernel.increased-memory-limit` entitlement: 8 GB once Game
 Mode is on. Of the build's signers only the patched xtool keeps it
 ([BUILDING.md, "Signing"](BUILDING.md#signing); other signers:
@@ -245,14 +264,24 @@ whose title needs more (PlayportKit `MemoryNeed`) before the pool is acquired.
 
 ### JIT pool use
 
-The pool never grows. PE images (a full copy of each, x18 trampolines
-included), guest JIT blocks (Mono's, V8's) and each pseudo-process's private
+The pool never grows. PE images with native code (a full copy of each ARM64EC,
+ARM64X or ARM64 image, x18 trampolines included), guest JIT blocks (Mono's, V8's) and each pseudo-process's private
 ntdll copy take its **head**, from the bottom up; FEX's code buffers take its
 **tail**, from the top down, up to 128 MiB each while the room between them
 allows. A guest JIT region's writes are routed through the **anonymous-alias
 table** (4096 entries). A dead process's code buffers are reused; of its head
 ranges only guest JIT blocks are, since its image ranges have lost execute
 permission by the time they are freed and are dropped. Nothing is returned.
+
+A pure x86-64 image (AMD64, no CHPE metadata: a game's executable and DLLs)
+gets no copy (`patches/madeira-unix` 0090, logged `[jit-pool] x64 image …: no
+pool copy`): FEX translates its code at its PE addresses and never ran the
+copy. Its EXEC stays logical, in Wine's page protection, and its host pages
+are R or RW, as the copy path left them. Madeira had tried this twice and
+reverted it (its ml457/ml458 notes); both trials predate the writable backing
+of RWX sections (ml957), the likely cause, and the phone showed no regression
+([evidence](evidence/2026-10-07-pool-x64-images.md)): Hollow Knight's head
+fell from 138 to 83 MiB, Jurassic World Evolution's from 480 to 68.
 
 - Madeira-unix 0034 counts them (`ios_jit_pool_stats`), and
   `wine_host_pool_stats_read` passes the counts to the app. While a title
@@ -683,7 +712,8 @@ user profile keys below, which the seed marks with a `;; playport:top-up` line:
 for those it appends a section with the seed's values the key lacks. So a
 fresh install, an existing prefix and an update that ships more DLLs all end up
 registered, and no value the prefix holds is overwritten. The rest of
-`wine.inf` (fonts, services, file associations) is not applied. Regenerate the seed after any staged
+`wine.inf` (fonts, services, file associations) is not applied, except the
+`http` and `https` handlers, which name Playport's URL opener (below). Regenerate the seed after any staged
 `arm64ec-windows` DLL changes; the build's `stage` step fails until it matches.
 
 The seed also carries the user profile wineboot would create: the
@@ -704,6 +734,48 @@ resampler DLLs make in `DllRegisterServer` with `MFTRegister` rather than in
 a registrar script: `MFTEnumEx`, and so a source reader, finds a decoder only
 through them. `MFTS` in `prefix-registry.py` holds their tables as the wine pin
 has them.
+
+### A game's web pages
+
+A game that opens an http or https page (`ShellExecute`, `start`, Unity's
+`Application.OpenURL`; an Epic game's EOS sign-in opens
+`https://www.epicgames.com/activate?userCode=…`) gets Playport's web panel over
+the running game (decision [0064](decisions/0064-game-web-sheet.md)). shell32
+reads `HKCR\https\shell\open\command`, which the seed (marked for top-up) sets to
+`"C:\windows\system32\playport-url-opener.exe" "%1"`. The opener
+(`app/UrlOpener/playport-url-opener.c`, freestanding x86-64, built by
+`stages/session-root.sh`, P9-url-opener) hands the URL to the host through one
+unix call table (`url_opener_protocol.h`, `url_opener.c`), which madeira-unix 0092
+gives the module exported as `playport-url-opener.exe`, and exits. The app's
+`UrlOpenerHost`, armed by the launch for its title, checks and rates it
+(PlayportKit `UrlOpenRequest`, `UrlOpenRate`), logs `url: … open <host><path>
+(<kind>) for <title>`, and hands it to `GameWebSheet` on the main actor: a
+`WKWebView` with its own non-persistent data store, the game's input held
+(`HostIO.holdGuest`) but its threads running. Epic's activate page on an Epic
+game's play loads through Epic's `/id/exchange` with a fresh exchange code
+first, with desktop Safari's user agent, so only the consent is left, and stays
+on https `epicgames.com`; any
+other page asks first. The runtime's process lines print the opener's URL with
+its query masked (madeira-unix 0093). An i386 game's `system32` is `syswow64`,
+where the opener is not staged yet.
+
+### Trusted roots
+
+A game's own TLS (the EOS SDK's libcurl, Unity's web stack) checks a server
+against the Windows ROOT store. Wine fills that store from the host's roots
+(crypt32's unix side, `enum_root_certs`), and iOS has no call that lists them,
+so the runtime ships them: `Runtime/certs/cacert.pem`, Mozilla's root store as
+published in curl's CA extract, a Playport input locked by date and sha256
+(pins.lock `ca-bundle`, `build/stages/ca-bundle.sh`; refreshed by hand before
+each release, BUILDING.md "The trusted roots"). `wine_host.c` names it in
+`MADEIRA_CA_BUNDLE` and logs `trusted roots: PATH`; crypt32 logs
+`load_root_certs: N root certs imported`. Each Wine process that opens the
+ROOT store syncs the bundle into the prefix's
+(`HKLM\Software\Microsoft\SystemCertificates\Root`), and Wine's own
+bookkeeping (`HKLM\Software\Wine\HostImportedCertificates`) removes a root a
+later bundle drops. Every Wine process of a session shares the one unix side,
+so it walks the list for each, not once (`patches/madeira-unix` 0088): a
+second process that found it consumed would delete every imported root.
 
 ### Media
 
@@ -782,8 +854,10 @@ only. Host Steam secrets never enter the guest
 - **Files.** Non-secret only: `Library/Application Support/Playport/steam/`
   and the art cache in `Library/Caches/Playport/art/`. Sign-out revokes the
   token and deletes both; installed games and saves are untouched.
-- **Launch.** `suspendForLaunch()` closes the session and refuses further
-  Steam work in the process before the runtime starts.
+- **Launch.** `suspendForLaunch()` refuses further Steam work in the process
+  before the runtime starts and closes the session, unless the game's tickets
+  are armed: then the CM stays logged on for them alone
+  ([0062](decisions/0062-steam-live-session.md)).
 - **For games** ([plan](plans/finished.md#steam-for-games)): at each launch
   `SteamAPISwap` puts gbe_fork's `steam_api(64).dll` (`Runtime/steamapi/`) in
   the game's folder and `SteamStub` takes SteamStub 3.1 x64 off its
@@ -792,7 +866,36 @@ only. Host Steam secrets never enter the guest
   A game whose saves changed on the phone and on Steam asks once at Play
   which side to keep, for all its files in one `syncCloud(resolve:)` call;
   until then it does not start. The side not kept stays in
-  `Documents/Cloud Backups/` for 30 days (`Cloud.Backups`).
+  `Documents/Cloud Backups/` for 30 days (`Cloud.Backups`). The game's
+  encrypted app ticket, fetched after Play before the suspension, is the one
+  host secret a Steam game gets: a `ticket=` line in the emulator's
+  `configs.user.ini` while it runs, removed at exit, the next launch, app start
+  and sign-out ([0017](decisions/0017-encrypted-app-ticket.md)). Its auth
+  session and web API tickets come from the host during the play
+  ([0062](decisions/0062-steam-live-session.md)): at Play `prepareTicketSession`
+  fetches the app's ownership ticket, checks Steam's game connect tokens and puts
+  the session in the game; the emulator (gbe 0006) asks through the unix call
+  table `playport_steam_unix_call_funcs` (`WineHost/steam_ticket.c`, given to a
+  `steam_api` module by madeira-unix 0087, x86-64 and WoW64), and
+  `SteamTicketBroker` builds each ticket, reports it in `ClientAuthList`, and
+  ends them all at `endPlay` before the restart. A dropped CM is reconnected
+  for it at most once a minute. Only ticket bytes, a handle and a state cross.
+- **An Epic game** starts signed in, as Epic's launcher starts it
+  ([0059](decisions/0059-epic-exchange-code.md)): after Play the host fetches a
+  five-minute exchange code and, when the catalogue asks, a five-minute ownership
+  token; the code goes on the command line (`-AUTH_PASSWORD=`, with
+  `-epicusername`, `-epicuserid`, `-epicsandboxid`), the token into
+  `playport-epic.ovt` in the game's folder (`-epicovt`), removed at exit, the next
+  launch, app start and sign-out. Without them the page offers Try again, and Play
+  offline for a game that allows it.
+- **A GOG game** whose build names a Galaxy client gets the local Galaxy service
+  while it runs ([0063](decisions/0063-gog-galaxy-sign-in.md)): `GalaxyListener`
+  (GOGClientKit) listens on `127.0.0.1:9977` from Play to the launch's end while GOG
+  is signed in, and `GalaxyService` answers the SDK's frames: its auth request, bound
+  to the client ID and secret kept in the install record, gets a refresh token minted
+  for that client; achievements, stats, leaderboards and play time go to
+  `gameplay.gog.com` with the game's access token, which stays on the host. The log's
+  `galaxy:` lines name each request and its status.
 
 ## Patch series
 

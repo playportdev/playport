@@ -253,7 +253,8 @@ env USBMUXD_SOCKET_ADDRESS=$SOCK pymobiledevice3 apps install app/.release/xtool
 ```
 
 If signing fails with "no current IOS devices", register the phone with the
-team first ([BUILDING.md, "Signing"](BUILDING.md#signing)). When the profile
+team first ([DEVICE.md, "Free-team limits"](DEVICE.md#free-team-limits): with the unsigned
+IPA, never a signed one). When the profile
 expires, the app stops launching: build, sign and install again, in place.
 
 **Every launch needs a debugger for JIT.** In the release build it comes

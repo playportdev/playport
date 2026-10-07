@@ -354,6 +354,8 @@ final class SteamAccountModel: ObservableObject {
         } catch {
             SteamUILog.logger.warn("ui", "sign-out failed: \(error)")
         }
+        // No game keeps an encrypted app ticket of the account (decision 0017).
+        await LibraryModel.shared.removeSteamTickets("at sign-out").value
         // Which apps have art cached says what the account owned (decision 0004).
         try? await art.clear()
         images = [:]

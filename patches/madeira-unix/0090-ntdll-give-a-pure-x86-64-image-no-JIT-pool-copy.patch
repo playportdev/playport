@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Wed, 7 Oct 2026 13:51:28 +0200
+Subject: [PATCH] ntdll: give a pure x86-64 image no JIT-pool copy
+
+mprotect_exec copied every image that asked for EXEC into the JIT pool,
+whole, x86-64 games' own executables and DLLs included. FEX translates
+x86-64 code at its PE addresses, reading the bytes from the image's own
+mapping, and a guest RIP that lands in a pool copy is moved back to the PE
+address ([pool-rip-fix]); nothing executes the copy of a pure x86-64 image.
+It only takes the pool's head: Jurassic World Evolution's 422 MB JWE.exe
+filled 443 of the 512 MiB pool, The Witcher 3's x86-64 images take 256 MiB
+of its 335, Hollow Knight's 52 of 131.
+
+map_image_into_view now marks an AMD64 image without CHPE metadata (no
+VPROT_ARM64EC from update_arm64ec_ranges, not a WoW64 image) VPROT_X64_IMAGE,
+skips its eager pool copy, and mprotect_range clears PROT_EXEC from the host
+protection of such a view, as it does for WoW64 images. Its EXEC stays
+logical, in Wine's per-page protection, which is what FEX queries. The host
+page gets R or RW, which is what the copy path left on the backing: a
+writable code section (JWE's .ecode) stays writable, and FEX's
+PAGE_EXECUTE_READ on translated code still makes its page read-only, so a
+write to it still faults and invalidates. ARM64EC, ARM64X and ARM64 images
+keep their copies. A `[jit-pool] x64 image ... no pool copy` line names each
+skipped image.
+
+Class: feature
+Evidence: docs/evidence/2026-10-07-pool-x64-images.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 31 +++++++++++++++++++++++++++++--
+ 1 file changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index bbf82bc..caa2b20 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -119,6 +119,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #define VPROT_WOW64_IMAGE 0x2000 /* i386 bytes, never native/pool executable */
+ #define VPROT_WOW64_VM 0x4000 /* anonymous i386 storage, logical EXEC only */
+ #define VPROT_WOW64_DATA 0x8000 /* a data section's view (file or pagefile backed) */
++#define VPROT_X64_IMAGE 0x10000 /* pure x86-64 image: logical EXEC only, no pool copy */
+ #include "ios_process_image.h"
+ #include "wine/debug.h"
+ 
+@@ -11418,6 +11419,13 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ {
+     struct file_view *view = find_view( base, size );
+     BOOL guest_image = view && (view->protect & (VPROT_WOW64_IMAGE | VPROT_WOW64_VM));
++    /* Playport: a pure x86-64 image's code is guest bytes that FEX reads and
++     * translates at their PE addresses, like a WoW64 image's: its EXEC stays
++     * logical (Wine's vprot, what FEX queries), and the host page gets the
++     * rest of the protection, R or RW, which is what the pool-copy path left
++     * on the backing anyway. FEX's write protection of translated code
++     * (PAGE_EXECUTE_READ) still makes the host page read-only. */
++    int host_exec_mask = view && (view->protect & VPROT_X64_IMAGE) ? ~PROT_EXEC : ~0;
+     size_t i, count;
+     char *addr = ROUND_ADDR( base, host_page_mask );
+     int prot, next;
+@@ -11429,7 +11437,7 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+ 
+     vprot = get_host_page_vprot( addr );
+     prot = guest_image ? ios_wow64_host_prot( (uintptr_t)addr, 0, 0, 0, set, clear, NULL ) :
+-                         get_unix_prot( (vprot & ~clear) | set );
++                         get_unix_prot( (vprot & ~clear) | set ) & host_exec_mask;
+ #ifdef WINE_IOS
+     if (!guest_image && !set && !clear && (prot & PROT_WRITE) && ios_host_page_split( addr )) prot &= ~PROT_WRITE;
+ #endif
+@@ -11438,7 +11446,7 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+         vprot = get_host_page_vprot( addr + count * host_page_size );
+         next = guest_image ? ios_wow64_host_prot( (uintptr_t)(addr + count * host_page_size),
+                                                   0, 0, 0, set, clear, NULL ) :
+-                             get_unix_prot( (vprot & ~clear) | set );
++                             get_unix_prot( (vprot & ~clear) | set ) & host_exec_mask;
+ #ifdef WINE_IOS
+         if (!guest_image && !set && !clear && (next & PROT_WRITE) && ios_host_page_split( addr + count * host_page_size ))
+             next &= ~PROT_WRITE;
+@@ -14010,6 +14018,19 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+         goto done;
+     }
+ 
++#ifdef WINE_IOS
++    /* Playport: an x86-64 image with no ARM64EC code (no CHPE metadata, so
++     * update_arm64ec_ranges left VPROT_ARM64EC clear) holds nothing the CPU
++     * executes: FEX translates its code at its PE addresses and never runs the
++     * pool copy (a guest RIP inside one is moved back to the PE address,
++     * [pool-rip-fix]). Mark it before any protection is applied, so no
++     * section of it is copied into the JIT pool. ARM64EC, ARM64X and ARM64
++     * images keep their copies. */
++    if (nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
++        !(view->protect & (VPROT_ARM64EC | VPROT_WOW64_IMAGE)))
++        view->protect |= VPROT_X64_IMAGE;
++#endif
++
+     /* Window-backed PE32 uses host storage but guest-only relocation deltas.
+      * Validate fixups before any mutation, using Wine's relocation kernel. */
+     if (view->protect & VPROT_WOW64_IMAGE)
+@@ -14159,6 +14180,12 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+      * through map_image_into_view, regardless of whether it's via
+      * virtual_map_image (builtin flag) or any alternate path. */
+     if (view->protect & VPROT_WOW64_IMAGE) goto done;
++    if (view->protect & VPROT_X64_IMAGE)
++    {
++        dprintf( 2, "[jit-pool] x64 image %p+0x%lx (%s): no pool copy\n",
++                 ptr, (unsigned long)total_size, debugstr_us(nt_name) );
++        goto done;
++    }
+     ERR("iOS map_image_into_view: view=%p EXEC fixup\n", ptr);
+     for (int si = 0; si < nt->FileHeader.NumberOfSections; si++)
+     {

@@ -297,7 +297,7 @@ def collect(repo, scratch):
         ("MYTHIC", "madeira", "madeira-unix"),
         ("DXMT", "dxmt", "dxmt-port dxmt"),
         ("LLVM", "llvm-project", ""), ("FREETYPE", "freetype", ""),
-        ("MESA", "mesa", "mesa"), ("DXVK", "dxvk", ""),
+        ("MESA", "mesa", "mesa"), ("DXVK", "dxvk", "dxvk"),
         ("VKD3D", "vkd3d-proton", "vkd3d-proton"), ("GBE", "gbe", "gbe"),
         ("ABSL", "abseil-cpp", ""), ("STIKJIT", "stikjit", ""),
         ("IDEVICE", "idevice", ""),

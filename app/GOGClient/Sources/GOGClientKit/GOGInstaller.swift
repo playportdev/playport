@@ -7,14 +7,21 @@ import Glibc
 import Darwin
 #endif
 
-/// What a GOG install keeps beside its receipt (manifests/gog-<id>.json): the build
-/// and every file with its chunks, for verify, repair and the next update. No secret.
+/// What a GOG install keeps beside its receipt (manifests/gog-<id>.json, in the host's
+/// container, not the prefix): the build and every file with its chunks, for verify,
+/// repair and the next update, and the build's Galaxy client for the game's Galaxy
+/// sign-in (decision 0063). No user secret.
 public struct GOGInstalled: Codable, Equatable, Sendable {
     public var productID: String
     public var buildID: String
     public var version: String?
     public var installDir: String
     public var files: [GOGDepotFile]
+    /// The build's Galaxy client; nil when it names none, or in a record written before
+    /// it was kept (`galaxyRead` nil: GOGInstaller.galaxyClient reads it then).
+    public var galaxy: GOGGalaxyClient? = nil
+    /// The build manifest's Galaxy fields were read into this record.
+    public var galaxyRead: Bool? = nil
 }
 
 /// Installs, updates, verifies and repairs a GOG game in C:\Games through
@@ -78,7 +85,8 @@ public struct GOGInstaller: Sendable {
         let plan = try GOGContent.plan(productID: productID, buildID: build.buildID, files: files)
         let union = plan.files.map { f in files.last { $0.path.lowercased() == f.path.lowercased() }! }
         if let old = loadRecord(productID), FileManager.default.fileExists(atPath: layout.gamesRoot.appendingPathComponent(old.installDir).path) {
-            return try await apply(productID: productID, build: build, files: union, over: old, options: options, progress: progress)
+            return try await apply(productID: productID, build: build, galaxy: manifest.galaxy, files: union, over: old,
+                                   options: options, progress: progress)
         }
         let folder = Self.unique(try SafePath.normalize(manifest.installDirectory).split(separator: "/").last.map(String.init) ?? productID,
                                  in: layout.gamesRoot)
@@ -93,14 +101,16 @@ public struct GOGInstaller: Sendable {
             throw ClientError.transport("cannot move the GOG install into C:\\Games (errno \(errno))")
         }
         try? FileManager.default.removeItem(at: layout.journal(name: name))
-        let rec = GOGInstalled(productID: productID, buildID: build.buildID, version: build.version, installDir: folder, files: union)
+        let rec = GOGInstalled(productID: productID, buildID: build.buildID, version: build.version, installDir: folder, files: union,
+                               galaxy: manifest.galaxy, galaxyRead: true)
         try saveRecord(rec)
         discardStages(productID)
         return Result(installed: rec, bytesWritten: r.bytes, downloadedBytes: r.downloadedBytes, filesChanged: plan.files.count)
     }
 
     /// An update: stages the files whose chunks changed, moves them in, drops the removed ones.
-    func apply(productID: String, build: GOGBuild, files: [GOGDepotFile], over old: GOGInstalled, options: InstallEngine.Options,
+    func apply(productID: String, build: GOGBuild, galaxy: GOGGalaxyClient?, files: [GOGDepotFile], over old: GOGInstalled,
+               options: InstallEngine.Options,
                progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> Result {
         let before = Dictionary(old.files.map { ($0.path.lowercased(), $0) }, uniquingKeysWith: { _, b in b })
         let changed = files.filter { f in before[f.path.lowercased()].map { $0.chunks.map(\.md5) != f.chunks.map(\.md5) } ?? true }
@@ -111,7 +121,8 @@ public struct GOGInstaller: Sendable {
                                         options: options, progress: progress)
         let dir = layout.gamesRoot.appendingPathComponent(old.installDir, isDirectory: true)
         for f in dropped { if let u = try? InstallFS.resolveInside(dir, f.path, createParents: false) { try? FileManager.default.removeItem(at: u) } }
-        let rec = GOGInstalled(productID: productID, buildID: build.buildID, version: build.version, installDir: old.installDir, files: files)
+        let rec = GOGInstalled(productID: productID, buildID: build.buildID, version: build.version, installDir: old.installDir, files: files,
+                               galaxy: galaxy, galaxyRead: true)
         try saveRecord(rec)
         discardStages(productID)
         return Result(installed: rec, bytesWritten: r?.bytes ?? 0, downloadedBytes: r?.downloadedBytes ?? 0, filesChanged: changed.count + dropped.count)
@@ -136,6 +147,29 @@ public struct GOGInstaller: Sendable {
         try? FileManager.default.removeItem(at: tree)
         try? FileManager.default.removeItem(at: layout.journal(name: name))
         return r
+    }
+
+    /// The installed build's Galaxy client (decision 0063): the record's, or, for a record
+    /// written before it was kept, read once from the build manifest and kept in it.
+    /// Nil when the game is not installed from GOG, its build names none, or GOG cannot
+    /// be reached for an older record (the game then runs without the Galaxy service).
+    public func galaxyClient(productID: String) async -> GOGGalaxyClient? {
+        guard var rec = loadRecord(productID) else { return nil }
+        if rec.galaxyRead == true { return rec.galaxy }
+        do {
+            guard let b = try await GOGContent.builds(session, productID: productID).first(where: { $0.buildID == rec.buildID }) else {
+                log.warn("gog", "\(productID): build \(rec.buildID) is no longer listed; its Galaxy client is unknown")
+                return nil
+            }
+            rec.galaxy = try await GOGContent.buildManifest(session, b).galaxy
+            rec.galaxyRead = true
+            try saveRecord(rec)
+            log.info("gog", "\(productID): Galaxy client \(rec.galaxy == nil ? "none" : "read") from build \(rec.buildID) into its record")
+            return rec.galaxy
+        } catch {
+            log.warn("gog", "\(productID): Galaxy client not read: \(error)")
+            return nil
+        }
     }
 
     public struct VerifyReport: Sendable {

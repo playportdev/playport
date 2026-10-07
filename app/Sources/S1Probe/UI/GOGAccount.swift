@@ -122,6 +122,32 @@ final class GOGAccount: ObservableObject, DownloadDriver {
 
     var installer: GOGInstaller { GOGInstaller(layout: LibraryModel.paths.layout, session: session, log: log) }
 
+    /// The runtime log's `galaxy:` lines (the play's Galaxy service, decision 0063).
+    nonisolated static let galaxyLog = ContentKit.Logger { line in AppLog.append("galaxy: " + line) }
+
+    /// The play's local Galaxy service (decision 0063), listening on 127.0.0.1:9977: for a GOG
+    /// game whose build names a Galaxy client, while GOG is signed in. Nil (the game runs
+    /// without it, as before) when it is signed out, names none, or the port is taken.
+    func galaxyListener(_ productID: String, name: String) async -> GalaxyListener? {
+        let log = Self.galaxyLog
+        guard state == .signedIn else {
+            log.info("galaxy", "\(name) plays without the Galaxy service: not signed in to GOG")
+            return nil
+        }
+        guard let client = await installer.galaxyClient(productID: productID) else {
+            log.info("galaxy", "\(name) plays without the Galaxy service: its build names no Galaxy client")
+            return nil
+        }
+        let listener = GalaxyListener(service: GalaxyService(client: client, tokens: session, log: log), log: log)
+        do {
+            try listener.start()
+        } catch {
+            log.warn("galaxy", "\(name) plays without the Galaxy service: \(error)")
+            return nil
+        }
+        return listener
+    }
+
     // MARK: queue
 
     /// `build`: a GOG build ID to install instead of the newest (kept in the job's branch field).

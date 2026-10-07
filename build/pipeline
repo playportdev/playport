@@ -46,7 +46,8 @@
 #            gbe_fork's steam_api for x86-64 and i386 (build/stages/steamapi.sh)
 #   idevice  idevice's C FFI for iOS with the pins.lock Rust, prelinked into one object
 #            (build/stages/idevice.sh): how the app restarts itself after a game (decision 0029)
-#   stage    record app/artifacts.tsv from this run's trees, then stage them into app/,
+#   stage    fetch the trusted roots pins.lock names (build/stages/ca-bundle.sh),
+#            record app/artifacts.tsv from this run's trees, then stage them into app/,
 #            check the prefix registry seed against them (app/tools/prefix-registry.py),
 #            and StikJIT's framework for the JIT helper (build/stages/stikjit.sh)
 #   notices  the app's Licenses/, for both variants: build/notices-inputs.py prepares the
@@ -323,10 +324,13 @@ stage_vulkan() {
 
 stage_stage() {
     RECORDED=1
-    # The session root (decision 0027): recorded and staged with the runtime's PE set below.
+    # The session root (decision 0027) and the URL opener (decision 0064): recorded and
+    # staged with the runtime's PE set below.
     run stage bash "$HERE/stages/session-root.sh" "$RUN/session"
     say "  $(tail -1 "$RUN/logs/stage.log")"
     sync_pe_manifests
+    run stage bash "$HERE/stages/ca-bundle.sh"
+    say "  $(tail -1 "$RUN/logs/stage.log")"
     run stage python3 "$HERE/stages/stage-artifacts.py" record
     run stage python3 "$HERE/stages/stage-artifacts.py" stage
     say "  $(tail -1 "$RUN/logs/stage.log")"
@@ -439,15 +443,16 @@ digest_inputs() {
         dxmt) pins madeira dxmt dxmt-port llvm-project; series_text dxmt-port dxmt
               files build/stages/dxmt-base.sh build/stages/dxmt-patched.sh build/stages/dxmt-combined.sh build/air-helpers
               after pe ;;
-        vulkan) pins mesa dxvk vkd3d-proton; series_text mesa vkd3d-proton
+        vulkan) pins mesa dxvk vkd3d-proton; series_text mesa dxvk vkd3d-proton
                 files build/stages/mesa.sh build/stages/vulkan-pe.sh build/check-macho-imports.py
                 after pe ;;
         steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh build/steamapi-vtables.py ;;
         idevice) pins idevice rust; series_text idevice; files build/stages/idevice.sh build/idevice-crates.py ;;
-        stage) pins stikjit idevice; series_text madeira-winios
-               files build/stages/stage-artifacts.py build/stages/stikjit.sh app/registry app/artifacts.tsv \
+        stage) pins stikjit idevice ca-bundle; series_text madeira-winios
+               files build/stages/stage-artifacts.py build/stages/stikjit.sh build/stages/ca-bundle.sh app/registry app/artifacts.tsv \
                      app/tools/prefix-registry.py \
-                     build/stages/session-root.sh app/SessionRoot app/Sources/WineHost/include/session_protocol.h
+                     build/stages/session-root.sh app/SessionRoot app/Sources/WineHost/include/session_protocol.h \
+                     app/UrlOpener app/Sources/WineHost/include/url_opener_protocol.h
                for t in unix pe fex dxmt vulkan steamapi idevice; do after "$t"; done ;;
         notices) pins stikjit idevice rust; toolchain
                  files LICENSE LICENSE-EXCEPTION.md app/SteamClient/LICENSE-JavaSteam.txt app/artifacts.tsv \

@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Wed, 7 Oct 2026 13:29:56 +0200
+Subject: [PATCH] crypt32: hand every process of a session the whole root list
+
+crypt32's unix side reads the trusted roots once, from MADEIRA_CA_BUNDLE,
+and hands them to the PE side's sync_trusted_roots_from_known_locations
+one by one, freeing each as it goes: upstream loads the unix side once per
+Wine process, so one pass is all a list ever serves. Here it is loaded once
+per app process and every Wine process of the session shares it, so only
+the first process to open the ROOT store got the roots. A later one (the
+title after a launcher, a crash handler) found the list empty, and since
+the roots it had imported were recorded under HostImportedCertificates,
+its sync deleted every one of them from the prefix's ROOT store.
+
+The list is now kept and walked: the enumeration returns its entries in
+order and STATUS_NO_MORE_ENTRIES at its end, then starts again from the
+head for the next process. The PE side serialises the processes' syncs
+with its crypt32_root_semaphore, so two walks do not interleave.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-07-guest-tls-roots.md
+Offered-upstream: no
+---
+ build/crypto-unix/crypt32_unixlib_ios.c | 26 +++++++++++++++++++------
+ 1 file changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/build/crypto-unix/crypt32_unixlib_ios.c b/build/crypto-unix/crypt32_unixlib_ios.c
+index 073a3e9..cb563df 100644
+--- a/build/crypto-unix/crypt32_unixlib_ios.c
++++ b/build/crypto-unix/crypt32_unixlib_ios.c
+@@ -1016,24 +1016,38 @@ static void load_root_certs(void)
+         import_certs_from_path( CRYPT_knownLocations[i], TRUE );
+ }
+ 
++/* Playport: this unix side is loaded once per app process and shared by every
++ * Wine process of its session (the session root, the title, the title's own
++ * children), where upstream loads it once per Wine process. Each process's
++ * crypt32 enumerates the list once (rootstore.c, serialised across processes
++ * by crypt32_root_semaphore), and a process that found it already consumed
++ * would delete every imported root from the registry. So the list is walked,
++ * not consumed, and the walk starts over after its end. */
+ static NTSTATUS enum_root_certs( void *args )
+ {
+     struct enum_root_certs_params *params = args;
+     static BOOL loaded;
+-    struct list *ptr;
++    static struct list *next;
+     struct root_cert *cert;
+ 
+-    if (!loaded) load_root_certs();
++    if (!loaded)
++    {
++        load_root_certs();
++        next = list_head( &root_cert_list );
++    }
+     loaded = TRUE;
+ 
+-    if (!(ptr = list_head( &root_cert_list ))) return STATUS_NO_MORE_ENTRIES;
+-    cert = LIST_ENTRY( ptr, struct root_cert, entry );
++    if (!next)
++    {
++        next = list_head( &root_cert_list );
++        return STATUS_NO_MORE_ENTRIES;
++    }
++    cert = LIST_ENTRY( next, struct root_cert, entry );
+     *params->needed = cert->size;
+     if (cert->size <= params->size)
+     {
+         memcpy( params->buffer, cert->data, cert->size );
+-        list_remove( &cert->entry );
+-        free( cert );
++        next = list_next( &root_cert_list, next );
+     }
+     return STATUS_SUCCESS;
+ }

@@ -193,6 +193,31 @@ final class SafetyTests: XCTestCase {
         XCTAssertEqual(Redactor.scrub("Bearer abc.def"), "Bearer <redacted>")
     }
 
+    func testRedactorScrubsTheEncryptedAppTicket() {
+        // Made up: the shape of gbe_fork's configs.user.ini line (decision 0017).
+        XCTAssertEqual(Redactor.scrub("ticket=CAIQ/wB/AAEC+3=="), "ticket=<redacted>")
+        XCTAssertEqual(Redactor.scrub("cat configs.user.ini: [user::general] Ticket = CAIQ_wB-AAEC ok"),
+                       "cat configs.user.ini: [user::general] Ticket = <redacted> ok")
+        XCTAssertFalse(Redactor.scrub(#"{"ticket": "CAIQ/wB/AAEC"}"#).contains("CAIQ"))
+        // The launch's own lines name the ticket without a value and stay as they are.
+        let line = "ticket: the encrypted app ticket (240 bytes) written to 1 configs.user.ini"
+        XCTAssertEqual(Redactor.scrub(line), line)
+    }
+
+    func testEncryptedAppTicketMessages() throws {
+        XCTAssertEqual(CMsgClientRequestEncryptedAppTicket(appID: 367520).encode(), [0x08, 0xa0, 0xb7, 0x16])
+        var t = ProtoWriter(); t.uint32(1, 2); t.bytes(5, [1, 2, 3])
+        var w = ProtoWriter(); w.uint32(1, 367520); w.int32(2, 1); w.bytes(3, t.bytes)
+        let r = try CMsgClientRequestEncryptedAppTicketResponse.decode(w.bytes)
+        XCTAssertEqual(r.appID, 367520)
+        XCTAssertEqual(r.eresult, .ok)
+        XCTAssertEqual(r.ticket?.value, t.bytes, "the EncryptedAppTicket message as Steam serialised it")
+        XCTAssertEqual("\(r.ticket!)", "<redacted>")
+        let other = CMPacket(emsg: .clientRequestEncryptedAppTicketResponse, header: ProtoHeader(), body: w.bytes)
+        XCTAssertTrue(SteamSession.ticketReply(forApp: 367520)(other))
+        XCTAssertFalse(SteamSession.ticketReply(forApp: 10)(other))
+    }
+
     func testMaskTeam() {
         // A free-team group carries the team twice; a paid-team group once.
         XCTAssertEqual(Redactor.maskTeam(accessGroup: "A1B2C3D4E5.XTL-A1B2C3D4E5.dev.playport.app"),
