@@ -387,7 +387,7 @@ without the owner is recorded here with its reason.
   Graphics options (decision 0060; 0059 is left to the Epic decision 0058 names),
   `[frames]` lines for `--no-hud`, `pp perf --compare --window`, KosmicKrisp one-frame
   capture (`patches/mesa` 0017) with `tools/gputrace.py` reading Metal 4, and the
-  sampler's KosmicKrisp names and per-thread tables (`patches/madeira-unix` 0086).
+  sampler's KosmicKrisp names and per-thread tables (`patches/madeira-unix` 0096).
   Decision: GPU time per pass on KK was not built (the plan makes it conditional on
   step 2 showing a GPU gap); the capture already shows one structural difference, an
   extra full-screen pass and a compute dispatch at present on the Vulkan route.
@@ -430,12 +430,12 @@ without the owner is recorded here with its reason.
   stability plays a route. On route v2: DXVK 3 of 3 in play, D3D12 2 of 3.
 - **Step 2, D3D12 start fault:** 3 of 13 starts, a waiter's frame gone before its run-once
   release (`NtWaitForKeyedEvent` returning without one). Waiting again hung every D3D12
-  start (7 of 7), so `patches/wine-pe` 0029 only logs the status for now; not run on the
+  start (7 of 7), so `patches/wine-pe` 0031 only logs the status for now; not run on the
   phone, which dropped off the network at 01:40 and needs a person.
 - **Also:** `build/air-helpers/air-helper-port.sh` reuses the shared LLVM 15 tools when
   they are all there (another worktree had configured the shared cache from its own path,
   and CMake refused it, which failed the `dxmt` stage).
-- **Next:** with the phone back, 10 D3D12 starts on the 0029 IPA for the status; fix the
+- **Next:** with the phone back, 10 D3D12 starts on the 0031 IPA for the status; fix the
   keyed wait; then three D3D12 plays on route v2. Then the performance levers, largest
   gap first, one run each way: winevulkan's present path (six wineserver requests a
   frame), `VKD3D_CONFIG=one_time_submit`, the extra present pass.

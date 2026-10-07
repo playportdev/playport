@@ -26,5 +26,5 @@
 0026-ntdll-take-the-XInput-DLLs-from-system32-when-loaded.patch
 0027-wow64win-keep-win32u-s-inline-string-marker-in-packe.patch
 0028-xinput-scan-an-empty-slot-s-device-list-at-most-once.patch
-0029-ntdll-log-a-run-once-keyed-wait-that-ends-without-it.patch
 0030-nsi-forward-keyed-reads-to-the-iOS-unix-fallback.patch
+0031-ntdll-log-a-run-once-keyed-wait-that-ends-without-it.patch

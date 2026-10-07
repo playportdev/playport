@@ -198,14 +198,14 @@ reads that variable before releasing the waiter. A pointer into garbage there me
 waiter's frame was gone before its release: its `NtWaitForKeyedEvent` returned without
 one.
 
-A first fix (`patches/wine-pe` 0029, first form, IPA `befd6896…`) made the waiter wait
+A first fix (`patches/wine-pe` 0031, numbered 0029 on the first branch, first form, IPA `befd6896…`) made the waiter wait
 again until the wait returned success. The gate passed on it (`ui-runs/20261006T235*`),
 but then **7 of 7 D3D12 starts hung**: the game started (`+3.45 s`), logged its pool and
 band once at about `+5 s`, and never drew a frame; `pp ui` was ended by its 15-minute
 timeout each time, so no log was pulled. An eighth ended with the app gone, and then the
 phone dropped off the network (`pp phone status`: no phone); it needs a person. Reading:
 the wait does return without a release here, at once and every time, so the waiter
-spun. 0029 is now a diagnostic only (Wine's behaviour, plus the first 16 such statuses
+spun. 0031 is now a diagnostic only (Wine's behaviour, plus the first 16 such statuses
 logged as `once %p: keyed wait returned %#lx without a release`), built (IPA from
 `pp build` at 01:54) and **not run on the phone**. The next run of D3D12 starts on it
 names the status; the fix follows from that (the keyed event in the one-process runtime,
@@ -221,7 +221,7 @@ root creates that event (`loader_ios.c`, in the root's startup; the game's start
 `wine_ios_child_main` does not). In the game the handle names some other object, so every
 keyed wait and release fails at once: run-once waiters spin rather than sleep, which is
 harmless until a waiter leaves while the completer reads its frame (the fault), and which
-the first form of 0029 turned into a hang. `patches/wine-unix` 0020 gives each PEB its own
+the first form of 0031 turned into a hang. `patches/wine-unix` 0020 gives each PEB its own
 keyed event on first use, the way the in-process sync cache is already keyed by PEB, and
 drops it when the pseudo-process dies. Built (IPA `5a206ea8…`, `pp test` passed), **not run
 on the phone** (offline since 01:40). It affects every title, not only Direct3D 12: any
