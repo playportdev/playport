@@ -705,6 +705,24 @@ a registrar script: `MFTEnumEx`, and so a source reader, finds a decoder only
 through them. `MFTS` in `prefix-registry.py` holds their tables as the wine pin
 has them.
 
+### Trusted roots
+
+A game's own TLS (the EOS SDK's libcurl, Unity's web stack) checks a server
+against the Windows ROOT store. Wine fills that store from the host's roots
+(crypt32's unix side, `enum_root_certs`), and iOS has no call that lists them,
+so the runtime ships them: `Runtime/certs/cacert.pem`, Mozilla's root store as
+published in curl's CA extract, a Playport input locked by date and sha256
+(pins.lock `ca-bundle`, `build/stages/ca-bundle.sh`; refreshed by hand before
+each release, BUILDING.md "The trusted roots"). `wine_host.c` names it in
+`MADEIRA_CA_BUNDLE` and logs `trusted roots: PATH`; crypt32 logs
+`load_root_certs: N root certs imported`. Each Wine process that opens the
+ROOT store syncs the bundle into the prefix's
+(`HKLM\Software\Microsoft\SystemCertificates\Root`), and Wine's own
+bookkeeping (`HKLM\Software\Wine\HostImportedCertificates`) removes a root a
+later bundle drops. Every Wine process of a session shares the one unix side,
+so it walks the list for each, not once (`patches/madeira-unix` 0088): a
+second process that found it consumed would delete every imported root.
+
 ### Media
 
 Titles that play video (Hollow Knight's cinematics are H.264/AAC MP4 clips

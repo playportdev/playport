@@ -15,7 +15,8 @@
       "mingw-w64 Cephes: answered by Moshier's own grants.",
       "Supersets carried whole: accepted; over-inclusion cannot miss a notice.",
       "Madeira: its un-headered build/*-unix files are taken under the stricter reading, GPL-3.0-or-later, and its Wine commits under its published licence; no upstream request is sent.",
-      "Wine's fallback Tahoma faces (Runtime/fonts, reviewed 2026-10-05): accepted. They are Wine's tracked prebuilt TTFs at the Wine pin, shipped unmodified; each face is LGPL-2.1-or-later (its SFD name table) and derived from Bitstream Vera Sans, whose licence permits modification and redistribution with the notice, forbids the Bitstream/Vera names on modified fonts (the faces are named Wine Tahoma) and selling a face by itself (it ships inside the app). The app carries wine-COPYING.LIB.txt, the Bitstream Vera licence in wine-NOTICES.md and each face's SFD attribution lines; the SFD sources are part of the Wine pin's Corresponding Source (0042). The family name Tahoma is kept, as Wine and Linux distributions ship it, for metric-compatible substitution."
+      "Wine's fallback Tahoma faces (Runtime/fonts, reviewed 2026-10-05): accepted. They are Wine's tracked prebuilt TTFs at the Wine pin, shipped unmodified; each face is LGPL-2.1-or-later (its SFD name table) and derived from Bitstream Vera Sans, whose licence permits modification and redistribution with the notice, forbids the Bitstream/Vera names on modified fonts (the faces are named Wine Tahoma) and selling a face by itself (it ships inside the app). The app carries wine-COPYING.LIB.txt, the Bitstream Vera licence in wine-NOTICES.md and each face's SFD attribution lines; the SFD sources are part of the Wine pin's Corresponding Source (0042). The family name Tahoma is kept, as Wine and Linux distributions ship it, for metric-compatible substitution.",
+      "Mozilla's trusted root certificates (Runtime/certs/cacert.pem, curl's extract, MPL-2.0): owner decision 2026-10-07 (store-game-auth plan), shipped unmodified with the MPL-2.0 text."
     ],
     "open": []
   },
@@ -217,6 +218,16 @@
         "StikJIT"
       ],
       "licence": "MPL-2.0 (source: docs/LICENSING.md, \"StikJIT\"); its embedded dependencies' notices are best effort from matching versions",
+      "include": [
+        "StikJIT-LICENSE.txt"
+      ]
+    },
+    {
+      "name": "Mozilla's trusted root certificates",
+      "covers": [
+        "ca-bundle"
+      ],
+      "licence": "MPL-2.0 (Mozilla's root store, as published in curl's CA extract; Runtime/certs/cacert.pem is the extract unmodified, its own source form, with its header; the MPL-2.0 text is StikJIT-LICENSE.txt)",
       "include": [
         "StikJIT-LICENSE.txt"
       ]

@@ -179,6 +179,15 @@
       "gstreamer_lock": "build/gstreamer-notices.sources.json",
       "stage": "build/stages/gstreamer.sh",
       "why": "GStreamer's iOS release, prelinked into winegstreamer's unix side (build/stages/gstreamer.sh): Cerbero's 1.28.7 recipes and the 17 source archives of what its registered plugins reach, each checked against the lock's sha256"
+    },
+    {
+      "name": "ca-bundle",
+      "pin": "ca-bundle",
+      "tag": "2026-09-25",
+      "file": "cacert-2026-09-25.pem",
+      "url": "https://curl.se/ca/cacert-2026-09-25.pem",
+      "sha256": "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505",
+      "why": "the runtime's trusted root certificates (Runtime/certs/cacert.pem, build/stages/ca-bundle.sh): Mozilla's root store (MPL-2.0), as published in curl's CA extract, shipped unmodified"
     }
   ],
   "crates": {

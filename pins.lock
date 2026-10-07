@@ -71,6 +71,12 @@ xtool        1.20.1                                    https://github.com/xtool-
 # build/stages/stikjit.sh.
 stikjit      1.9.0                                     https://github.com/StikDebug/StikJIT.git      -
 #
+# The runtime's trusted root certificates (Runtime/certs/cacert.pem): Mozilla's
+# root store (MPL-2.0) as curl's dated extract, fetched by date; its sha256 is in
+# build/stages/ca-bundle.sh. Moved by hand to the newest extract before each
+# release (docs/BUILDING.md, "The trusted roots").
+ca-bundle    2026-09-25                                https://curl.se/ca                            -
+#
 # GStreamer's own binary release for iOS, fetched by version; its sha256 is in
 # build/stages/gstreamer.sh (winegstreamer's unix side, statically linked).
 gstreamer    1.28.7                                    https://gstreamer.freedesktop.org/data/pkg/ios -

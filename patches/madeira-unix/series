@@ -86,3 +86,4 @@
 0085-ntdll-steer-reserve-only-arenas-out-of-the-guest-win.patch
 0086-ntdll-keep-a-store-sign-in-out-of-the-process-comman.patch
 0087-ntdll-give-a-game-s-steam_api-the-host-s-Steam-ticke.patch
+0088-crypt32-hand-every-process-of-a-session-the-whole-ro.patch

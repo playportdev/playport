@@ -169,6 +169,21 @@ title; at most 8 live tickets, one every 2 s. Chunks, in order:
 Steam lobbies, matchmaking and P2P stay out (Playport sets gbe's `disable_networking=1`):
 step 4 serves games that sign in to their publisher's servers.
 
+**4b. Runtime fixes pulled into this plan (owner, 2026-10-07).** In order, each committed
+with its phone run:
+
+- **PLA-40, the guest's trusted roots. Done 2026-10-07**
+  ([evidence](../evidence/2026-10-07-guest-tls-roots.md)). The IPA ships
+  `Runtime/certs/cacert.pem`, a Playport-owned input locked by date and sha256 (pins.lock
+  `ca-bundle`: Mozilla's root store as published in curl's CA extract, refreshed by hand
+  before each release, BUILDING.md); `wine_host.c` names it in `MADEIRA_CA_BUNDLE`, and
+  madeira-unix 0088 hands the root list to every Wine process of a session. Snakebird's
+  `Curl error 60` is gone and 121 roots reach the prefix's ROOT store; its EOS login now
+  ends `UnexpectedError` (was `NoConnection`): no EOS sign-in shown yet.
+- PLA-41, Jurassic World Evolution's fixed-base executable: the host's executable window
+  and madeira-unix 0089.
+- The JIT-pool copy of a pure x86-64 image: madeira-unix 0090, judged by the phone.
+
 **5. GOG Galaxy (decision 0063).** The host is the game's local Galaxy service while a GOG
 game with a Galaxy client ID runs. Measured first on the workstation (B0, 2026-10-07, with
 the owner's GOG session, results only): a refresh token minted at Moonscars' client with

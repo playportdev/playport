@@ -87,7 +87,7 @@ repository, with this build area: its inputs, caches and the phone's lock);
 | `vulkan` | `stages/mesa.sh`, `stages/vulkan-pe.sh` | the Vulkan backend (decision 0014): KosmicKrisp as `app/Staged/KosmicKrisp.xcframework`, DXVK and vkd3d-proton (with `patches/vkd3d-proton`) for `arm64ec-windows` |
 | `steamapi` | `stages/steamapi.sh` | the Steam API emulator: gbe_fork's `steam_api64.dll` and `steam_api.dll` with their static dependencies, a host `protoc` of the same protobuf release, and Abseil at its pin; native DLLs the app copies into a game's folder at launch (`Runtime/steamapi/`); first `steamapi-vtables.py` checks that every interface's MinGW vtable matches MSVC's, which games use |
 | `idevice` | `stages/idevice.sh` | idevice's C FFI at its pin plus `patches/idevice`, built for iOS with `RUST_ROOT` (`ring` for TLS; paths remapped), prelinked into one object exporting the restart and Bonjour pairing interfaces (`libidevice_ffi.a`); `crates.tsv` lists resolved normal target dependencies for `pp notices`, not actual linked members or the build/proc-macro/native graph ([decision 0029](decisions/0029-restart-after-each-game.md), [pairing experiment](plans/finished.md#self-contained-jit-setup-for-a-tester)) |
-| `stage` | `stages/session-root.sh`, `stages/stage-artifacts.py`, `stages/stikjit.sh` | the session root `playport-session.exe` (`app/SessionRoot`, staged in `Runtime/arm64ec-windows`, decisions [0027](decisions/0027-titles-as-children-of-a-session-root.md), [0030](decisions/0030-one-title-per-process.md)), `app/artifacts.tsv` recorded, everything staged into `app/`, StikJIT's framework (outside the main checkout's `.work/run`, every run ends by putting the records back and keeping its own in `out/…/records/`, or `run/records/` when it stops before `verify`) |
+| `stage` | `stages/session-root.sh`, `stages/ca-bundle.sh`, `stages/stage-artifacts.py`, `stages/stikjit.sh` | the trusted roots (`Runtime/certs/cacert.pem`, cached under `cache/ca-bundle-<date>/`; "The trusted roots" below), the session root `playport-session.exe` (`app/SessionRoot`, staged in `Runtime/arm64ec-windows`, decisions [0027](decisions/0027-titles-as-children-of-a-session-root.md), [0030](decisions/0030-one-title-per-process.md)), `app/artifacts.tsv` recorded, everything staged into `app/`, StikJIT's framework (outside the main checkout's `.work/run`, every run ends by putting the records back and keeping its own in `out/…/records/`, or `run/records/` when it stops before `verify`) |
 | `notices` | `notices-inputs.py`, `notices-assemble.sh`, `notices-app.py`, `notices-bundle.py` | the app's `Licenses/` for both variants: the collection inputs prepared in `cache/` from their committed locks, every notice of this run's trees collected into `run/notices` (`pp notices`), the reviewed selection (`build/app-notices.json`) in `run/licenses`, then staged as `app/Staged/Licenses` ([NOTICES.md](NOTICES.md#the-apps-selection)) |
 | `app` | xtool | the signed IPA, linked with ld64 |
 | `verify` | `verify-ipa.py` | the IPA checks; the IPA, `artifacts.tsv`, `SHA256SUMS`, `provenance.txt` and the logs to `out/` |
@@ -131,6 +131,16 @@ not a failure, and what must hold:
   bundle keeps its status (`release-reviewed` from the reviewed selection, decision 0039;
   `unreviewed-app-selection` whenever the selection is not):
   `pp verify` reports it, and only `--distribution` fails it.
+
+**The trusted roots.** `Runtime/certs/cacert.pem` is Mozilla's root store as
+published in curl's CA extract (<https://curl.se/docs/caextract.html>), the dated
+file `cacert-<date>.pem` the pins.lock `ca-bundle` row names, checked against the
+sha256 in `build/stages/ca-bundle.sh` (ARCHITECTURE.md, "Trusted roots"). Move it
+by hand before each release: take the newest date from that page, download
+`https://curl.se/ca/cacert-<date>.pem`, check it against the published
+`cacert.pem.sha256` when the dated file is the newest, then put the date in
+`pins.lock`, the sha256 in `ca-bundle.sh`, and both in `build/source-bundle.json`'s
+`ca-bundle` entry, and commit them with the rebuilt `app/artifacts.tsv`.
 
 **The SDK's libc++ headers for iOS C++.** The host clang searches its own
 `../include/c++/v1` before the sysroot's, so on a Linux host with libc++

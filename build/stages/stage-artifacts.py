@@ -40,6 +40,8 @@ under $PLAYPORT_RUN, default $PLAYPORT_BUILD/run):
   session             session            stages/session-root.sh (P9-session): the session root
   idevice             idevice            stages/idevice.sh (P10-idevice): idevice's C FFI, one object
   registry            app/registry (committed; app/tools/prefix-registry.py, P7-reg)
+  ca-bundle           $PLAYPORT_BUILD/cache/ca-bundle-<pin>
+                                         stages/ca-bundle.sh (ca-bundle): the trusted roots
   GENERATED           build/generated    the Wine PE manifests the P2 rows must equal
 """
 
@@ -55,7 +57,8 @@ PKG = REPO / "app"
 MANIFEST = PKG / "artifacts.tsv"
 RUNTIME = PKG / "Sources" / "S1Probe" / "Runtime"
 GENERATED = Path(os.environ.get("GENERATED", REPO / "build" / "generated"))
-RUN = Path(os.environ.get("PLAYPORT_RUN") or Path(os.environ.get("PLAYPORT_BUILD", REPO / ".work")) / "run")
+BUILD = Path(os.environ.get("PLAYPORT_BUILD", REPO / ".work"))
+RUN = Path(os.environ.get("PLAYPORT_RUN") or BUILD / "run")
 
 
 def pin(name):
@@ -78,6 +81,7 @@ ROOTS = {
     "session": RUN / "session",
     "idevice": RUN / "idevice",
     "registry": PKG / "registry",
+    "ca-bundle": BUILD / "cache" / f"ca-bundle-{pin('ca-bundle')}",
 }
 MYTHIC_REV = pin("madeira")
 
@@ -110,6 +114,7 @@ HEADER = """\
 #   P9-session app/SessionRoot/playport-session.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the one Wine main process of an app run, which starts every title as its child (decision 0027); in arm64ec-windows so the prefix's system32 has it
 #   P10-idevice idevice (MIT) at the idevice pin, its C FFI with the features the app's restart uses, built for aarch64-apple-ios with the pins.lock Rust (build/stages/idevice.sh) and prelinked into one object that exports four calls (app/Sources/Relaunch); its crates are in the run's idevice/crates.tsv
 #   P7-reg    app/registry/{system,user}.reg (committed): app/tools/prefix-registry.py applies the WINE_REGISTRY scripts of the staged arm64ec-windows DLLs as wineboot's register_fake_dll would; wine_host.c appends the sections a prefix lacks before the wineserver starts
+#   ca-bundle Mozilla's root store (MPL-2.0) as curl's CA extract, the dated file pins.lock's ca-bundle row names, unmodified (build/stages/ca-bundle.sh checks its sha256): wine_host.c names it in MADEIRA_CA_BUNDLE, and crypt32's unix side imports it into the prefix's ROOT store (docs/ARCHITECTURE.md, "Trusted roots")
 """
 
 # Reference bundle layout (names only) from Madeira app/Madeira @ MYTHIC_REV:
@@ -275,6 +280,7 @@ def record():
         add("resource", f"Runtime/fonts/{name}", "unix", f"wine/fonts/{name}", "fonts")
     for name in ("system.reg", "user.reg"):
         add("resource", f"Runtime/registry/{name}", "registry", name, "P7-reg")
+    add("resource", "Runtime/certs/cacert.pem", "ca-bundle", "cacert.pem", "ca-bundle")
     for dest, root, source, prov in LINK:
         add("link", f"lib/{dest}", root, source, prov)
     for dest, root, source, prov in SOURCES:

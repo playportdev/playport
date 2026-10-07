@@ -1032,6 +1032,15 @@ int wine_host_init(const wine_host_config *c)
         setenv("WINEDLLPATH", g_runtime, 1);
     }
     host_log("WINEDLLPATH=%s", getenv("WINEDLLPATH"));
+    /* iOS has no call that lists the system's trusted roots, so crypt32's unix
+     * side reads them from this file (the runtime's Mozilla root store,
+     * build/stages/ca-bundle.sh) into the prefix's ROOT store. Without it the
+     * store holds only Wine's six built-in roots, and a game's own TLS (EOS's
+     * libcurl, Unity's web stack) refuses every server. */
+    char ca_bundle[sizeof(g_runtime) + 32];
+    snprintf(ca_bundle, sizeof(ca_bundle), "%s/certs/cacert.pem", g_runtime);
+    setenv("MADEIRA_CA_BUNDLE", ca_bundle, 1);
+    host_log("trusted roots: %s%s", ca_bundle, access(ca_bundle, R_OK) == 0 ? "" : " (missing)");
     setenv_hex("WINE_IOS_JIT_RX", (unsigned long long)(uintptr_t)c->jit_rx);
     setenv_hex("WINE_IOS_JIT_RW", (unsigned long long)(uintptr_t)c->jit_rw);
     setenv_hex("WINE_IOS_JIT_SIZE", (unsigned long long)c->jit_size);

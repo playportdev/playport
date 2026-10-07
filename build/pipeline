@@ -46,7 +46,8 @@
 #            gbe_fork's steam_api for x86-64 and i386 (build/stages/steamapi.sh)
 #   idevice  idevice's C FFI for iOS with the pins.lock Rust, prelinked into one object
 #            (build/stages/idevice.sh): how the app restarts itself after a game (decision 0029)
-#   stage    record app/artifacts.tsv from this run's trees, then stage them into app/,
+#   stage    fetch the trusted roots pins.lock names (build/stages/ca-bundle.sh),
+#            record app/artifacts.tsv from this run's trees, then stage them into app/,
 #            check the prefix registry seed against them (app/tools/prefix-registry.py),
 #            and StikJIT's framework for the JIT helper (build/stages/stikjit.sh)
 #   notices  the app's Licenses/, for both variants: build/notices-inputs.py prepares the
@@ -327,6 +328,8 @@ stage_stage() {
     run stage bash "$HERE/stages/session-root.sh" "$RUN/session"
     say "  $(tail -1 "$RUN/logs/stage.log")"
     sync_pe_manifests
+    run stage bash "$HERE/stages/ca-bundle.sh"
+    say "  $(tail -1 "$RUN/logs/stage.log")"
     run stage python3 "$HERE/stages/stage-artifacts.py" record
     run stage python3 "$HERE/stages/stage-artifacts.py" stage
     say "  $(tail -1 "$RUN/logs/stage.log")"
@@ -444,8 +447,8 @@ digest_inputs() {
                 after pe ;;
         steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh build/steamapi-vtables.py ;;
         idevice) pins idevice rust; series_text idevice; files build/stages/idevice.sh build/idevice-crates.py ;;
-        stage) pins stikjit idevice; series_text madeira-winios
-               files build/stages/stage-artifacts.py build/stages/stikjit.sh app/registry app/artifacts.tsv \
+        stage) pins stikjit idevice ca-bundle; series_text madeira-winios
+               files build/stages/stage-artifacts.py build/stages/stikjit.sh build/stages/ca-bundle.sh app/registry app/artifacts.tsv \
                      app/tools/prefix-registry.py \
                      build/stages/session-root.sh app/SessionRoot app/Sources/WineHost/include/session_protocol.h
                for t in unix pe fex dxmt vulkan steamapi idevice; do after "$t"; done ;;
