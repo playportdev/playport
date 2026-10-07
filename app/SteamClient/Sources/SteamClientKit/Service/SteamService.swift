@@ -970,7 +970,18 @@ public actor SteamService {
         }
         let started = Date()
         do {
-            let ticket = try await backend.encryptedAppTicket(appID: appID, timeout: timeout)
+            // The limit holds for the whole call, a wait behind a stats call included.
+            let backend = self.backend
+            let ticket = try await withThrowingTaskGroup(of: Secret<[UInt8]>.self) { group in
+                group.addTask { try await backend.encryptedAppTicket(appID: appID, timeout: timeout) }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    throw SteamError.timeout("no encrypted app ticket in \(Int(timeout)) s")
+                }
+                defer { group.cancelAll() }
+                guard let first = try await group.next() else { throw SteamError.cancelled }
+                return first
+            }
             log.info("ticket", "app \(appID): encrypted app ticket fetched, \(ticket.value.count) bytes in "
                      + String(format: "%.2f", Date().timeIntervalSince(started)) + " s")
             return ticket

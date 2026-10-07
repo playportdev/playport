@@ -62,7 +62,9 @@ Steam game the player runs, each to its own servers only.
   gets from Steam's own client.
 - **Fetched** right after Play (`LibraryModel.play`, `SteamService.encryptedAppTicket`),
   before the session closes for the launch (0004's suspension), on a session
-  already logged on, with a 5 s limit. No restore is started for it: one could
+  already logged on, with a 5 s limit. Steam answers `Fail` unless the session
+  is in the game (`ClientGamesPlayed`), as Steam's client is when a running game
+  asks, so the session is in it for the call and then in none. No restore is started for it: one could
   outlive the limit and race the suspension. If there is no such session, or
   the fetch fails or times out, the game starts without a ticket and the
   emulator makes up its own, as before. It is never kept on the host: not in the

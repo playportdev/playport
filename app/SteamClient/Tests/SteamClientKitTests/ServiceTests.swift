@@ -196,9 +196,11 @@ actor FakeBackend: SteamBackend {
     func personaName() async throws -> String? { calls.append("persona"); return try persona.get() }
 
     var ticket: Result<[UInt8], Error> = .success(Array("a made-up encrypted app ticket".utf8))
-    func set(ticket t: Result<[UInt8], Error>) { ticket = t }
+    var ticketDelay: UInt64 = 0
+    func set(ticket t: Result<[UInt8], Error>, delay ns: UInt64 = 0) { ticket = t; ticketDelay = ns }
     func encryptedAppTicket(appID: UInt32, timeout: Double) async throws -> Secret<[UInt8]> {
         calls.append("ticket \(appID)")
+        if ticketDelay > 0 { try await Task.sleep(nanoseconds: ticketDelay) }
         return Secret(try ticket.get())
     }
 
@@ -870,6 +872,13 @@ final class LibraryServiceTests: XCTestCase {
         let refused = await s.encryptedAppTicket(appID: 367520)
         XCTAssertNil(refused)
 
+        // Steam is slow: the limit holds and the game starts without one.
+        await b.set(ticket: .success([1, 2, 3]), delay: 2_000_000_000)
+        let t0 = Date()
+        let slow = await s.encryptedAppTicket(appID: 367520, timeout: 0.2)
+        XCTAssertNil(slow)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 1.5)
+
         // The session dropped: no ticket, and no restore to get one.
         await b.set(ticket: .success([1, 2, 3]))
         await b.disconnect()
@@ -882,7 +891,7 @@ final class LibraryServiceTests: XCTestCase {
         let suspended = await s.encryptedAppTicket(appID: 367520)
         XCTAssertNil(suspended)
         let askedInAll = await b.count("ticket 367520")
-        XCTAssertEqual(askedInAll, 2)
+        XCTAssertEqual(askedInAll, 3)
     }
 
     func testOwnedGamesNeedsASession() async {
