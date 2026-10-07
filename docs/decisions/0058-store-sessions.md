@@ -23,6 +23,10 @@ Applies [0004](0004-steam-session-boundary.md) to the two new stores.
   only the store's own login. A page an Epic game opens during its play (Epic's sign-in
   page) is signed in to Epic in Playport's panel with a fresh exchange code, in a
   non-persistent web session that ends with the panel; nothing of it crosses into the guest.
+  **Amended by [0063](0063-gog-galaxy-sign-in.md)** (2026-10-07): a GOG game whose build
+  carries a Galaxy client ID gets a refresh token for that client from the host acting as
+  its local Galaxy service while it runs; GOG cannot revoke it, and the host session's
+  tokens still never cross.
 - **Logs**: `Redactor` scrubs Epic's `eg1~` tokens, every `access_token`/`refresh_token`,
   and the login and exchange codes (`authorizationCode`, `exchangeCode`, a `code=`
   query or JSON field), with tests, before any network code ships.

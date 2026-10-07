@@ -48,7 +48,9 @@ container copy) into a host-session leak surface.
   command line and ownership token in one file while it runs
   ([0059](0059-epic-exchange-code.md)); and a Steam game's auth session and web
   API tickets, made by the host during the play through one unix call table
-  ([0062](0062-steam-live-session.md)). A game's web page opened in Playport's panel
+  ([0062](0062-steam-live-session.md)); and a GOG game's refresh token for its own Galaxy
+  client, in the local Galaxy service's auth reply while the game runs
+  ([0063](0063-gog-galaxy-sign-in.md)). A game's web page opened in Playport's panel
   ([0064](0064-game-web-sheet.md)) is not a transfer: an Epic game's Epic sign-in page is
   signed in with a fresh exchange code inside the panel's own non-persistent web session,
   and nothing of it reaches the guest.
