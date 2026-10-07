@@ -1,8 +1,8 @@
 # Plan: games sign in to their store (Epic, Steam, GOG)
 
 **Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4,
-the runtime fixes 4b and the URL opener 4c done (4's S1: Valheim made a ticket Steam acked,
-then crashed before a server checked it; Snakebird's EOS signs in through Playport's web
+the runtime fixes 4b and the URL opener 4c done (4's S1: on DXMT, Valheim's PlayFab sign-in
+had Steam check two of the host's tickets, OK, and logged in; Snakebird's EOS signs in through Playport's web
 panel; Jurassic World Evolution passes its DRM check but shows no frame, and is time-boxed
 out: Linear PLA-41); GOG (step 5) built (B1 to B5) and its phone gate blocked: the Galaxy SDK
 connects and sends nothing on the phone.
@@ -151,10 +151,12 @@ plays as before (60 fps median in a 120 s `pp perf`; arming takes 0.3–0.4 s), 
 costs the CM 6–17 messages out and 7–8 in. Among Us uses the encrypted app ticket (its
 IL2CPP strings; no web API ticket in its Steamworks.NET) and made no ticket before its
 PLA-39 fault. The container search found no ticket header outside the emulator's DLL.
-Open: S1 half seen ([evidence](../evidence/2026-10-07-steam-ticket-valheim.md)): Valheim
-asks for an auth session ticket at its PlayFab login; the host makes it (240 bytes) and Steam
-acks it, then the game dies `0xc0000005` a second later, so no server has checked one yet
-(Soccer Online: Ball 3D shows no frame; Battlerite not tried); S3 (the background) cannot be driven
+S1 seen ([evidence](../evidence/2026-10-07-steam-ticket-valheim.md)): Valheim asks for an
+auth session ticket at its PlayFab login; the host makes it (240 bytes) and Steam acks it. On
+Vulkan the game dies `0xc0000005` at the intro (DXVK's NULL `vkGetMemoryWin32HandleKHR`); on
+DXMT (its page's Direct3D, kept) it plays on, Steam reports both tickets it asked for checked
+by a server (`EAuthSessionResponse 0 (OK)`), and PlayFab logs it in on its second attempt
+(the first got `409 Conflict` from PlayFab). Open: S3 (the background) cannot be driven
 through `pp ui` and the reconnect is host-tested only; one play's CM socket dropped
 16 s in (ECONNABORTED, cause unknown). Design as built: the host keeps the logged-on CM
 connection during a play (heartbeat and receive tasks at `.utility`); every other Steam call
