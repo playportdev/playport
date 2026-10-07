@@ -138,7 +138,8 @@ final class EpicClientKitTests: XCTestCase {
         XCTAssertEqual(try EpicSession.parseOwnershipToken(Array(#"{"token":"\#(ovt)"}"#.utf8)).value, ovt)
         XCTAssertThrowsError(try EpicSession.parseOwnershipToken(Array(#"{"token":""}"#.utf8)))
         XCTAssertThrowsError(try EpicSession.parseOwnershipToken(Array(#"{"token":"a b"}"#.utf8)))
-        let who = try EpicSession.parseVerify(Array(#"{"token":"x","account_id":"\#(code)","displayName":"Some One"}"#.utf8))
+        // Epic's verify reply, as served: `display_name`.
+        let who = try EpicSession.parseVerify(Array(#"{"token":"x","account_id":"\#(code)","display_name":"Some One"}"#.utf8))
         XCTAssertEqual(who.accountID.value, code)
         XCTAssertEqual(who.displayName.value, "Some One")
         XCTAssertThrowsError(try EpicSession.parseVerify(Array(#"{"account_id":"../x"}"#.utf8)))

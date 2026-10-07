@@ -161,7 +161,7 @@ public actor EpicSession {
     public func account() async throws -> EpicAccountIdentity {
         let token = try await accessToken()
         guard var t = tokens else { throw ClientError.notLoggedOn }
-        if t.accountID == nil || t.displayName == nil {
+        if (t.accountID ?? "").isEmpty || (t.displayName ?? "").isEmpty {
             let url = URL(string: EpicAPI.account + "/account/api/oauth/verify")!
             let body = try await launchHTTP.get(url, headers: ["Authorization": Secret("bearer " + token.value)],
                                                 maxBytes: 1 << 16, label: "Epic account")
@@ -174,11 +174,12 @@ public actor EpicSession {
     }
 
     static func parseVerify(_ reply: [UInt8]) throws -> EpicAccountIdentity {
-        struct Reply: Decodable { var account_id: String; var displayName: String? }
+        // The verify reply names it `display_name`; the token reply `displayName`.
+        struct Reply: Decodable { var account_id: String; var display_name: String?; var displayName: String? }
         guard let r = try? JSONDecoder().decode(Reply.self, from: Data(reply)), isCode(r.account_id) else {
             throw ClientError.protocolChanged("Epic account: unexpected reply")
         }
-        return EpicAccountIdentity(accountID: Secret(r.account_id), displayName: Secret(r.displayName ?? ""))
+        return EpicAccountIdentity(accountID: Secret(r.account_id), displayName: Secret(r.display_name ?? r.displayName ?? ""))
     }
 
     /// A one-time exchange code for a game's launch (`-AUTH_PASSWORD=`): any Epic client can
