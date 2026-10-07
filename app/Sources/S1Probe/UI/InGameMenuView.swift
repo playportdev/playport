@@ -49,6 +49,11 @@ final class InGameMenu: ObservableObject {
     func open() -> Bool {
         let launch = TitleLaunch.shared
         guard !isOpen else { return true }
+        // A web page the game opened holds the game's input already; it closes first.
+        guard !GameWebSheet.shared.isUp else {
+            Self.log("Home held, but a web page is up over \(launch.title)")
+            return false
+        }
         guard launch.acceptsMenu else {
             Self.log("Home held, but no game is running yet (step \(launch.step.map { "\($0)" } ?? "none"))")
             return false

@@ -145,7 +145,7 @@ failures = []
 EXECUTABLE = {"dev": "S1Probe", "release": "Playport"}
 # What only a dev build's code holds (Sources/S1Probe/Dev/).
 DEV_MODULES = ["7S1Probe"]
-DEV_TYPES = ["UIDriver", "VirtualPad", "RunEvents",
+DEV_TYPES = ["UIDriver", "VirtualPad", "RunEvents", "WebSheetDriver",
              "DeveloperSettings"]
 DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"HIO_VPAD", b"s1-host.log",
                b"run-events.jsonl", b"steam-drive.log"]

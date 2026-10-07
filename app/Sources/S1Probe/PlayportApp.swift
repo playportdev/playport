@@ -43,6 +43,7 @@ struct PlayportApp: App {
 struct RootView: View {
     @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var menu = InGameMenu.shared
+    @ObservedObject private var web = GameWebSheet.shared
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var setup = JitSetup.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -75,6 +76,8 @@ struct RootView: View {
                     }
                     // Playport's menu over the paused game, on a long press of Home (UI/InGameMenuView.swift).
                     .overlay { if menu.isOpen || menu.quitting { InGameMenuView() } }
+                    // A web page the game opened, over the running game (UI/GameWebSheet.swift).
+                    .overlay { if web.isUp { GameWebSheetView() } }
                     .statusBarHidden().persistentSystemOverlays(.hidden)
                     .transition(.identity)
             } else if restart.restarting {

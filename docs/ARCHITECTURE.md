@@ -712,7 +712,8 @@ user profile keys below, which the seed marks with a `;; playport:top-up` line:
 for those it appends a section with the seed's values the key lacks. So a
 fresh install, an existing prefix and an update that ships more DLLs all end up
 registered, and no value the prefix holds is overwritten. The rest of
-`wine.inf` (fonts, services, file associations) is not applied. Regenerate the seed after any staged
+`wine.inf` (fonts, services, file associations) is not applied, except the
+`http` and `https` handlers, which name Playport's URL opener (below). Regenerate the seed after any staged
 `arm64ec-windows` DLL changes; the build's `stage` step fails until it matches.
 
 The seed also carries the user profile wineboot would create: the
@@ -733,6 +734,30 @@ resampler DLLs make in `DllRegisterServer` with `MFTRegister` rather than in
 a registrar script: `MFTEnumEx`, and so a source reader, finds a decoder only
 through them. `MFTS` in `prefix-registry.py` holds their tables as the wine pin
 has them.
+
+### A game's web pages
+
+A game that opens an http or https page (`ShellExecute`, `start`, Unity's
+`Application.OpenURL`; an Epic game's EOS sign-in opens
+`https://www.epicgames.com/activate?userCode=…`) gets Playport's web panel over
+the running game (decision [0064](decisions/0064-game-web-sheet.md)). shell32
+reads `HKCR\https\shell\open\command`, which the seed (marked for top-up) sets to
+`"C:\windows\system32\playport-url-opener.exe" "%1"`. The opener
+(`app/UrlOpener/playport-url-opener.c`, freestanding x86-64, built by
+`stages/session-root.sh`, P9-url-opener) hands the URL to the host through one
+unix call table (`url_opener_protocol.h`, `url_opener.c`), which madeira-unix 0092
+gives the module exported as `playport-url-opener.exe`, and exits. The app's
+`UrlOpenerHost`, armed by the launch for its title, checks and rates it
+(PlayportKit `UrlOpenRequest`, `UrlOpenRate`), logs `url: … open <host><path>
+(<kind>) for <title>`, and hands it to `GameWebSheet` on the main actor: a
+`WKWebView` with its own non-persistent data store, the game's input held
+(`HostIO.holdGuest`) but its threads running. Epic's activate page on an Epic
+game's play loads through Epic's `/id/exchange` with a fresh exchange code
+first, with desktop Safari's user agent, so only the consent is left, and stays
+on https `epicgames.com`; any
+other page asks first. The runtime's process lines print the opener's URL with
+its query masked (madeira-unix 0093). An i386 game's `system32` is `syswow64`,
+where the opener is not staged yet.
 
 ### Trusted roots
 

@@ -35,6 +35,16 @@ final class UrlOpenRequestTests: XCTestCase {
         XCTAssertNotNil(UrlOpenRequest.classify("https://example.com/" + String(repeating: "a", count: 2047 - 20)))
     }
 
+    func testEpicSignInURLCarriesThePageWhole() throws {
+        let r = try XCTUnwrap(UrlOpenRequest.classify("https://www.epicgames.com/activate?userCode=AB+CD&x=1"))
+        let u = try XCTUnwrap(r.epicSignInURL(exchangeCode: "0123abcd"))
+        XCTAssertEqual(u.absoluteString, "https://www.epicgames.com/id/exchange?exchangeCode=0123abcd"
+                       + "&redirectUrl=https%3A%2F%2Fwww.epicgames.com%2Factivate%3FuserCode%3DAB%2BCD%26x%3D1")
+        let items = URLComponents(url: u, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.map(\.name), ["exchangeCode", "redirectUrl"])
+        XCTAssertEqual(items.last?.value, "https://www.epicgames.com/activate?userCode=AB+CD&x=1")
+    }
+
     func testRate() {
         var rate = UrlOpenRate(spacing: 5, perPlay: 3)
         let t0 = Date(timeIntervalSince1970: 1000)

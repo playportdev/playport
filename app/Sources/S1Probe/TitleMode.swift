@@ -172,6 +172,7 @@ final class TitleLaunch: ObservableObject {
         showsSheet = false
         running = false
         InGameMenu.shared.gameEnded()
+        GameWebSheet.shared.gameEnded()
         var why = LaunchMessage.of(outcome, title: title, spent: spent)
         // The player quit: a game that exits with a code, or that the session root ended, is not a surprise.
         if quitting, outcome.kind != .refused { why = nil }

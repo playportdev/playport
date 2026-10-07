@@ -36,6 +36,19 @@ public struct UrlOpenRequest: Equatable, Sendable {
     }
 }
 
+extension UrlOpenRequest {
+    /// Epic's web sign-in with a one-time exchange code, which then goes on to this
+    /// page: `https://www.epicgames.com/id/exchange?exchangeCode=…&redirectUrl=…`
+    /// (the form measured on the workstation; only it signs in the `/id` session the
+    /// activate page reads). Both values are percent-encoded whole.
+    public func epicSignInURL(exchangeCode: String) -> URL? {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let code = exchangeCode.addingPercentEncoding(withAllowedCharacters: allowed),
+              let page = url.absoluteString.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return URL(string: "https://www.epicgames.com/id/exchange?exchangeCode=\(code)&redirectUrl=\(page)")
+    }
+}
+
 /// How often a game may open a page (decision 0064): one sheet at a time, at
 /// least `spacing` seconds between opens, at most `perPlay` in one play.
 public struct UrlOpenRate: Sendable {

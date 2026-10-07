@@ -1,9 +1,9 @@
 # Plan: games sign in to their store (Epic, Steam, GOG)
 
-**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4 and
-the runtime fixes 4b done (4's S1 waits for a title that asks for a ticket; no EOS sign-in
-shown yet: Jurassic World Evolution now waits behind a hidden launcher-check window); GOG
-(step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
+**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4,
+the runtime fixes 4b and the URL opener 4c done (4's S1 waits for a title that asks for a
+ticket; Snakebird's EOS signs in through Playport's web panel; Jurassic World Evolution passes
+its DRM check but shows no frame); GOG (step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
 can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
 (`b21f63d`); nothing is built or drafted.
 
@@ -208,11 +208,26 @@ with its phone run:
   app does not show. The likeliest cause, from its strings and its `EpicGamesLauncher` folder
   probes: Frontier's check that Epic's launcher is installed. EOS is never reached.
 
-Open after 4b (filed separately, not fixed here): Jurassic World Evolution's hidden window
-(two questions: what its launcher check reads, and whether the app should show a guest's GDI
-windows, at least a message box); Snakebird's EOS login ends `UnexpectedError` with its TLS
-fixed (cause unknown: the SDK logs nothing more); The Witcher 3 with its disk cache on dies
+Open after 4b (filed separately, not fixed here): The Witcher 3 with its disk cache on dies
 239 ms in, in FEX, on every IPA of the day (plays with it off); Among Us still ends in PLA-39.
+
+**4c. A game's web pages: the URL opener (decision [0064](../decisions/0064-game-web-sheet.md)).
+Done 2026-10-07** ([evidence](../evidence/2026-10-07-url-opener.md), IPA `6eb4929e`).
+Snakebird's EOS signs in with AccountPortal (a device code, then `ShellExecute` of Epic's
+activate page); the prefix had no `https` handler, hence its `UnexpectedError`. The seed now
+names Playport's URL opener, which hands the URL to the host (madeira-unix 0092, the query
+masked in process lines by 0093); the app shows the page in a panel over the running game, an
+Epic game's Epic sign-in page signed in with a fresh exchange code (desktop Safari's user
+agent: a phone's makes Epic drop the session at the consent). On the phone the driver taps
+Allow (`web:click:Allow`) and Snakebird logs `Tried to login auth: Success` and `Logged in to
+connect`, then signs in silently on its next play; the arm64ec `cryptsp.dll` is staged (EOS's
+Credential Manager write delay-loads it). The `-epicovt` file now holds Epic's JSON reply:
+Jurassic World Evolution's hidden window was its DRM's error 88500000 for the bare token; its
+DRM licence cache now appears, but the game still shows no frame in 600 s (lsass and service
+manager pipes missing, a TLS connection abandoned). Open: i386 games' pages (the opener is not
+in `syswow64`), a release play approved by a person, JWE past its DRM, the EOS refresh token
+left in the prefix at Epic sign-out (a residual in 0064), a log line for a guest's top-level
+window text (would have shown JWE's dialog at once).
 
 **5. GOG Galaxy (decision 0063).** The host is the game's local Galaxy service while a GOG
 game with a Galaxy client ID runs. Measured first on the workstation (B0, 2026-10-07, with
@@ -248,9 +263,9 @@ CMake caches hold absolute paths).
 
 ## Order
 
-Step 1 → step 4 → runtime fixes (4b) → GOG (step 5) → phone gates (6) → release (7). Next:
-GOG, from B1; before step 6, an EOS title that signs in (Jurassic World Evolution's
-launcher check behind its hidden window, Snakebird's `UnexpectedError`). Each step commits with its
+Step 1 → step 4 → runtime fixes (4b) → the URL opener (4c) → GOG (step 5) → phone gates (6)
+→ release (7). Next: GOG, from B1; beside it, Jurassic World Evolution past its DRM check (no
+frame yet). Snakebird is the EOS title for step 6. Each step commits with its
 own evidence; the scratch measurements behind the designs are left in the build area.
 
 ## Risks

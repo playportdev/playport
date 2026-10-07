@@ -180,7 +180,7 @@ if [ "$BUILD" = 1 ]; then
     timeout 120 "$XTOOL" ds devices list > "$LOG/ds.out" 2>&1 || die "xtool ds devices failed (see $LOG/ds.out)"
     grep -qiF "udid: $UDID" "$LOG/ds.out" && reg=1 || reg=0
     rm "$LOG/ds.out"
-    [ "$reg" = 1 ] || die "the phone is not registered on the team; 'xtool install --network' once registers it (docs/BUILDING.md, Signing)"
+    [ "$reg" = 1 ] || die "the phone is not registered on the team; 'xtool install --network' of the unsigned release IPA registers it (docs/DEVICE.md, Free-team limits; a signed IPA makes a second app)"
 fi
 BID_RE='^XTL-[A-Z0-9]+\.dev\.playport\.app$'
 xtl_apps apps-before

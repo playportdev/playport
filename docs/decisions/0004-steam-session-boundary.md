@@ -48,7 +48,10 @@ container copy) into a host-session leak surface.
   command line and ownership token in one file while it runs
   ([0059](0059-epic-exchange-code.md)); and a Steam game's auth session and web
   API tickets, made by the host during the play through one unix call table
-  ([0062](0062-steam-live-session.md)).
+  ([0062](0062-steam-live-session.md)). A game's web page opened in Playport's panel
+  ([0064](0064-game-web-sheet.md)) is not a transfer: an Epic game's Epic sign-in page is
+  signed in with a fresh exchange code inside the panel's own non-persistent web session,
+  and nothing of it reaches the guest.
 - During a play the host's Steam session does no Steam work: the CM session
   closes before the runtime starts, except that it stays logged on for the
   game's tickets alone while they are armed ([0062](0062-steam-live-session.md)).

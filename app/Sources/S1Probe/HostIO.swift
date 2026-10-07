@@ -355,6 +355,11 @@ final class HostIO {
     /// A pad's snapshot as the menu reads it: from a GameController pad, the
     /// scripted pad (Dev/VirtualPad.swift) and a dev build's driver (`menu:open`).
     func menuInput(_ p: PadInput) {
+        // A web page the game opened takes the presses while it is up (UI/GameWebSheet.swift).
+        if GameWebSheet.shared.isUp {
+            GameWebSheet.shared.padInput(p)
+            return
+        }
         menuEvents(menuControl.update(p, at: ProcessInfo.processInfo.systemUptime))
     }
 

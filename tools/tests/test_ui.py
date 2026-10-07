@@ -127,6 +127,16 @@ class UiEnvTest(unittest.TestCase):
         resume = ["play:app-367520", "menu:open", "menu:resume"]
         self.assertFalse(m.after_play(resume))
         self.assertTrue(m.ends_run(ui, resume, None))       # the UI is done while the game runs on
+        # web: acts on a page the running game opened
+        for ok in ("web:wait", "web:close", "web:click:Allow", "web:click:Sign in", "web:click:Not-now_2.x"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("web:", "web:open", "web:click:", "web:click:a,b", "web:click:<b>", "web:click:x\"y"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        web = ["play:epic-8337d1f975514d35ad0c1176e8a29f26", "web:wait", "web:click:Allow", "wait:30", "web:close"]
+        self.assertEqual(m.in_game(web, 1), 4)
+        self.assertFalse(m.after_play(web))
+        self.assertTrue(m.ends_run(title, web, None))
+        self.assertTrue(m.after_play(web + ["open:home"]))
         # pad: after a play: without the menu is an action for the restarted process, as before
         self.assertEqual(m.in_game(["play:app-367520", "pad:a"], 1), 0)
         self.assertTrue(m.after_play(["play:app-367520", "pad:a"]))

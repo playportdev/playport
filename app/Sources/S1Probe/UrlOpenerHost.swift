@@ -4,7 +4,8 @@
 // http or https page during a play reaches it through the prefix's handler,
 // playport-url-opener.exe; the call comes on the opener's thread, is checked
 // here (PlayportKit UrlOpenRequest, UrlOpenRate) and answered at once, and the
-// page goes to the main actor. Armed by the launch (LaunchCoordinator) for the
+// page goes to the panel over the game on the main actor (UI/GameWebSheet.swift).
+// Armed by the launch (LaunchCoordinator) for the
 // play's title, and disarmed at its end: with none armed every call answers
 // NOT_SUPPORTED. The log names the page's host and path, never its query.
 
@@ -76,9 +77,9 @@ enum UrlOpenerHost {
         return UInt32(PP_URL_OK)
     }
 
-    /// Nothing shows a page yet: the line above is the whole of it.
+    /// The page goes to the panel over the game (UI/GameWebSheet.swift), on the main actor;
+    /// the opener's thread does not wait for it.
     private static func present(_ request: UrlOpenRequest, _ p: Play) {
-        log.info("open", "no web sheet in this build; nothing shown")
-        sheetClosed()
+        DispatchQueue.main.async { MainActor.assumeIsolated { GameWebSheet.shared.present(request, p) } }
     }
 }
