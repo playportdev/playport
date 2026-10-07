@@ -90,7 +90,13 @@ public final class GalaxyListener: @unchecked Sendable {
             for fd in fds where fd >= 0 { shutdown(fd, Int32(SHUT_RDWR)) }
             return fds
         }
-        if !fds.isEmpty { log.info("galaxy", "the Galaxy service stopped (\(accepted) connection(s) in the play)") }
+        guard !fds.isEmpty else { return }
+        let service = self.service, log = self.log, connections = lock.withLock { accepted }
+        Task.detached {
+            let summary = await service.summary, minted = await service.minted
+            log.info("galaxy", "the Galaxy service stopped: \(connections) connection(s) in the play; \(summary); "
+                     + (minted ? "a game token was minted" : "no game token minted"))
+        }
     }
 
     private var isStopped: Bool { lock.withLock { stopped } }

@@ -27,7 +27,8 @@
 // starts and out of them when the launch ends (decision 0017). An Epic game's ownership token,
 // fetched after Play with its exchange code, goes into its file the same way (decision 0059).
 // A web page the game opens during the play reaches the host (UrlOpenerHost, decision 0064)
-// while the launch runs.
+// while the launch runs. A GOG game's Galaxy service (GOGClientKit GalaxyListener, decision
+// 0063), started at Play, stops when the launch ends.
 // Progress goes to the app log
 // (AppLog) as `title:` lines and, for the UI, to a step callback; the outcome's line is the
 // `title: done` result the drivers parse, unchanged. `title: +<s> s` lines time the
@@ -37,6 +38,7 @@ import Foundation
 import HostIOKit
 import PlayportKit
 import EpicClientKit
+import GOGClientKit
 import SteamClientKit
 import WineHost
 
@@ -66,6 +68,8 @@ enum LaunchCoordinator {
         var epic: Epic? = nil
         /// The title's name, for a web page the game opens (UrlOpenerHost).
         var title: String = ""
+        /// A GOG game's Galaxy service, listening since Play (decision 0063); nil for none.
+        var galaxy: GalaxyListener? = nil
     }
 
     /// An Epic game's launch: its folder, and the ownership token for `-epicovt`
@@ -254,6 +258,8 @@ enum LaunchCoordinator {
     /// thread, which keeps serving the surface, input and the JIT vehicle.
     static func run(_ r: Request, step: @escaping (Step) -> Void = { _ in }) -> Outcome {
         precondition(!Thread.isMainThread, "LaunchCoordinator.run blocks; call it off the main thread")
+        // However the launch ends, the Galaxy service ends with it (decision 0063).
+        defer { r.galaxy?.stop() }
         let launched = Date()
         let mark = { (what: String) in
             let s = Date().timeIntervalSince(launched)

@@ -8,6 +8,7 @@
 // a Steam install is verified against its retained manifests.
 
 import EpicClientKit
+import GOGClientKit
 import Foundation
 import PlayportKit
 import SteamClientKit
@@ -279,6 +280,9 @@ final class LibraryModel: ObservableObject {
                 }
             }
         }
+        // A GOG game's Galaxy service (decision 0063), on by default: listening from now to the game's exit
+        // when its build names a Galaxy client and GOG is signed in; otherwise the game runs without it.
+        let galaxy = t.store == .gog ? await GOGAccount.shared.galaxyListener(t.key.id, name: t.name) : nil
         // FEX's disk cache stays under its budget (decision 0056): cleared before this launch when over it.
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { Self.log($0) } }.value
         let fex = FEXProfile.launch(appID: t.appID, exe: plan.exe, ordering: settings.ordering, maxInst: settings.maxInst,
@@ -288,8 +292,9 @@ final class LibraryModel: ObservableObject {
                                        screen: settings.screen, frameLimit: settings.frameLimit,
                                        graphics: settings.graphics,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
-                                       memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic) else {
+                                       memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy) else {
             endTickets()
+            galaxy?.stop()
             return false
         }
         catalog.update(id) { $0.lastPlayed = Date() }

@@ -9,6 +9,7 @@
 // (AppLog) as `title:` lines.
 
 import EpicClientKit
+import GOGClientKit
 import Foundation
 import PlayportKit
 import SteamClientKit
@@ -60,7 +61,7 @@ final class TitleLaunch: ObservableObject {
     func start(title: String, titleID: String? = nil, exe: String, args: [String], config: [String: String] = [:],
                screen: String? = nil, frameLimit: Int = 0, graphics: GraphicsBackend = .default, steamAppID: UInt32? = nil,
                fex: FEXProfile.Launch? = nil, steamAPI: LaunchCoordinator.SteamAPI? = nil,
-               memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil) -> Bool {
+               memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil, galaxy: GalaxyListener? = nil) -> Bool {
         guard !running, !spent else { return false }
         self.title = title
         self.titleID = titleID
@@ -84,7 +85,7 @@ final class TitleLaunch: ObservableObject {
         TitleMode.log("in-app start \(exe) \(EpicInstaller.redacted(args).joined(separator: " "))")
         let request = LaunchCoordinator.Request(exe: exe, args: args, config: config,
                                                 steamAppID: steamAppID, graphics: graphics, fex: fex, jitWait: 180, steamAPI: steamAPI,
-                                                memory: memory, epic: epic, title: title)
+                                                memory: memory, epic: epic, title: title, galaxy: galaxy)
         Thread.detachNewThread {
             let outcome = LaunchCoordinator.run(request) { step in
                 DispatchQueue.main.async { MainActor.assumeIsolated { TitleLaunch.shared.advance(step) } }
