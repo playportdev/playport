@@ -194,6 +194,11 @@ then plays, a pad) runs as one session:
   IPA's sha256 (the `installed` event of a `pp ui` run, and `pp phone status`, have it).
   Screenshots stay in the run directory under `.work`: describe them in the text
   (games' artwork is not ours to publish; `pp secrets` fails an image in `docs/evidence/`).
+- Every game you play on the phone gets its latest result in Linear (team PLA, project
+  Compatibility; one issue per title, `Name (Steam appID)`, with **Status:** Works,
+  Playable with issues or Broken and **Best known:**, the IPA and the run directory).
+  Search first and update the existing issue. A failure outside your task is filed
+  there, not fixed in passing; a subagent lists its games for the supervisor to file.
 
 ## Reference
 
