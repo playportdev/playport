@@ -199,11 +199,12 @@ then plays, a pad) runs as one session:
   Playable with issues or Broken and **Best known:**, the IPA and the run directory).
   Search first and update the existing issue. A failure outside your task is filed
   there, not fixed in passing; a subagent lists its games for the supervisor to file.
-- A game alive with no first frame, or failing without a reason in the log, is often behind
-  a window or a browser page the phone does not show (`[win-pos]` lines). Reproduce it under
-  desktop Proton on this workstation with Playport's arguments before guessing:
-  [DESKTOP-REPRO.md](docs/DESKTOP-REPRO.md) (the setup in the build area; sway display only,
-  never the owner's niri session or browser).
+- When a question is quicker to answer on this workstation than on the phone (what a game
+  waits for, Playport or the game, its network, a file's format, a binary), answer it under
+  desktop Wine/Proton here first, then fix and confirm on the phone. A game alive with no
+  first frame is often behind a window the phone does not show (`[win-pos]` lines):
+  [HOST-DEBUGGING.md](docs/HOST-DEBUGGING.md) (the setup in the build area; sway display
+  only, never the owner's niri session or browser).
 
 ## Reference
 
@@ -212,7 +213,7 @@ then plays, a pad) runs as one session:
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | the one-process runtime, JIT, the app's host pieces, the patch series |
 | [BUILDING.md](docs/BUILDING.md) | build inputs, the build area, each stage, variants, signing, the IPA checks, CI |
 | [DEVICE.md](docs/DEVICE.md) | phone setup, JIT, driving the UI, measuring, Steam, logs, the secret scan |
-| [DESKTOP-REPRO.md](docs/DESKTOP-REPRO.md) | a stuck game under desktop Proton on the workstation: hidden windows, browser sign-ins, Epic requests |
+| [HOST-DEBUGGING.md](docs/HOST-DEBUGGING.md) | the workstation as a debugging aid: a game under desktop Proton, hidden windows, browser pages, requests, A/B in a scratch prefix |
 | [UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md) | moving the Madeira pin |
 | [DISTRIBUTION.md](docs/DISTRIBUTION.md), [LICENSING.md](docs/LICENSING.md), [NOTICES.md](docs/NOTICES.md) | giving an IPA to anyone: source, relinking, notices |
 | [decisions/](docs/decisions/README.md) | why things are the way they are; a decision changes only by a new record |
