@@ -439,3 +439,9 @@ without the owner is recorded here with its reason.
   keyed wait; then three D3D12 plays on route v2. Then the performance levers, largest
   gap first, one run each way: winevulkan's present path (six wineserver requests a
   frame), `VKD3D_CONFIG=one_time_submit`, the extra present pass.
+- **D3D12 start fault, cause found (not phone-checked):** the game's NULL keyed-event
+  handle named another object (the session root's handle, in a table the game does not
+  share), so keyed waits failed at once. `patches/wine-unix` 0020: one keyed event per
+  pseudo-process. Built, IPA `5a206ea8…`; the phone was offline from 01:40. **Next on the
+  phone:** install it, the gate, 10 D3D12 starts (expect no `keyed wait returned` lines
+  and no 1-s fault), three D3D12 and three DXVK plays on route v2, then the levers.

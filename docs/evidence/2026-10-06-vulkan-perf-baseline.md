@@ -210,3 +210,19 @@ logged as `once %p: keyed wait returned %#lx without a release`), built (IPA fro
 `pp build` at 01:54) and **not run on the phone**. The next run of D3D12 starts on it
 names the status; the fix follows from that (the keyed event in the one-process runtime,
 `keyed_event` and the in-process server's keyed-event wait, are where to look).
+
+### The cause, and a fix not yet run on the phone
+
+The fault's registers carry `x0 = 0xc0000024`, `STATUS_OBJECT_TYPE_MISMATCH`, the status
+the completer's `NtReleaseKeyedEvent` had just returned. A NULL keyed-event handle stands
+for the process's own keyed event, `keyed_event`, but on iOS every pseudo-process shares
+the one copy of ntdll's unix side while owning its own handle table, and only the session
+root creates that event (`loader_ios.c`, in the root's startup; the game's startup in
+`wine_ios_child_main` does not). In the game the handle names some other object, so every
+keyed wait and release fails at once: run-once waiters spin rather than sleep, which is
+harmless until a waiter leaves while the completer reads its frame (the fault), and which
+the first form of 0029 turned into a hang. `patches/wine-unix` 0020 gives each PEB its own
+keyed event on first use, the way the in-process sync cache is already keyed by PEB, and
+drops it when the pseudo-process dies. Built (IPA `5a206ea8…`, `pp test` passed), **not run
+on the phone** (offline since 01:40). It affects every title, not only Direct3D 12: any
+run-once with a contended waiter in a game process went through this.

@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 7 Oct 2026 02:00:00 +0200
+Subject: [PATCH] ntdll: iOS: one default keyed event per pseudo-process
+
+A NULL handle to NtWaitForKeyedEvent and NtReleaseKeyedEvent stands for
+the process's own keyed event, `keyed_event`. On iOS every pseudo-process
+shares the one copy of ntdll's unix side but owns its own handle table,
+and only the first process (the session root) creates that event, in its
+own table. In the game the handle named another object: both calls
+returned STATUS_OBJECT_TYPE_MISMATCH (0xc0000024, the status the fault
+reports left in x0 after NtReleaseKeyedEvent), so RtlRunOnce's waiters
+spun instead of sleeping, and a waiter that saw the once done and left
+while the completer read its frame ended Hollow Knight's Direct3D 12
+start with an access violation in RtlRunOnceComplete (3 of 13 starts).
+A version that made the waiter wait again until success hung every start,
+which is what a wait that always fails does.
+
+Each PEB now gets its own keyed event on first use, as the in-process
+sync cache keys itself by PEB (ml1058), and the entry goes when the
+pseudo-process dies (ios_inproc_cache_release).
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-06-vulkan-perf-baseline.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/sync.c | 67 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 65 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 1036a72..7a64afe 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -609,6 +609,10 @@ void ios_inproc_cache_release( void *peb )
+             ios_inproc_caches[i] = NULL;
+         }
+     pthread_mutex_unlock( &ios_inproc_cache_lock );
++    {
++        extern void ios_keyed_event_release( void *peb );
++        ios_keyed_event_release( peb );
++    }
+ }
+ #define inproc_sync_cache               (ios_get_inproc_cache()->blocks)
+ #define inproc_sync_cache_initial_block (ios_get_inproc_cache()->initial)
+@@ -3913,6 +3917,65 @@ NTSTATUS WINAPI NtOpenKeyedEvent( HANDLE *handle, ACCESS_MASK access, const OBJE
+     return ret;
+ }
+ 
++#ifdef WINE_IOS
++/* Playport: the keyed event a NULL handle stands for is a handle in the
++ * process's own handle table, but `keyed_event` is one variable in the one copy
++ * of ntdll's unix side that every pseudo-process shares, and only the first
++ * process (the session root) creates it. In the game, that handle named another
++ * object or none: NtWaitForKeyedEvent and NtReleaseKeyedEvent returned
++ * STATUS_OBJECT_TYPE_MISMATCH at once, so RtlRunOnce's waiters spun, and one
++ * that left while the completer read its frame ended Hollow Knight's Direct3D 12
++ * start with an access violation. As for the in-process sync cache (ml1058):
++ * one keyed event per PEB, created on first use. */
++#define IOS_MAX_KEYED_EVENTS 64
++static struct { void *peb; HANDLE handle; } ios_keyed_events[IOS_MAX_KEYED_EVENTS];
++static pthread_mutex_t ios_keyed_event_lock = PTHREAD_MUTEX_INITIALIZER;
++
++static HANDLE ios_process_keyed_event(void)
++{
++    TEB *teb = NtCurrentTeb();
++    void *peb = teb ? teb->Peb : NULL;
++    HANDLE handle = 0;
++    int i, free_slot = -1;
++
++    if (!peb) return keyed_event;
++    for (i = 0; i < IOS_MAX_KEYED_EVENTS; i++)       /* lock-free hit: entries change only under the lock */
++        if (__atomic_load_n( &ios_keyed_events[i].peb, __ATOMIC_ACQUIRE ) == peb && ios_keyed_events[i].handle)
++            return ios_keyed_events[i].handle;
++    pthread_mutex_lock( &ios_keyed_event_lock );
++    for (i = 0; i < IOS_MAX_KEYED_EVENTS; i++)
++    {
++        if (ios_keyed_events[i].peb == peb) { handle = ios_keyed_events[i].handle; break; }
++        if (!ios_keyed_events[i].peb && free_slot < 0) free_slot = i;
++    }
++    if (!handle && free_slot >= 0 &&
++        !NtCreateKeyedEvent( &handle, GENERIC_READ | GENERIC_WRITE, NULL, 0 ))
++    {
++        ios_keyed_events[free_slot].handle = handle;
++        __atomic_store_n( &ios_keyed_events[free_slot].peb, peb, __ATOMIC_RELEASE );
++    }
++    pthread_mutex_unlock( &ios_keyed_event_lock );
++    return handle ? handle : keyed_event;
++}
++
++/* A pseudo-process died: its handle table, and the keyed event in it, are gone. */
++void ios_keyed_event_release( void *peb )
++{
++    int i;
++    pthread_mutex_lock( &ios_keyed_event_lock );
++    for (i = 0; i < IOS_MAX_KEYED_EVENTS; i++)
++        if (ios_keyed_events[i].peb == peb)
++        {
++            __atomic_store_n( &ios_keyed_events[i].peb, NULL, __ATOMIC_RELEASE );
++            ios_keyed_events[i].handle = 0;
++        }
++    pthread_mutex_unlock( &ios_keyed_event_lock );
++}
++#define process_keyed_event() ios_process_keyed_event()
++#else
++#define process_keyed_event() keyed_event
++#endif
++
+ /******************************************************************************
+  *              NtWaitForKeyedEvent (NTDLL.@)
+  */
+@@ -3924,7 +3987,7 @@ NTSTATUS WINAPI NtWaitForKeyedEvent( HANDLE handle, const void *key,
+ 
+     TRACE( "handle %p, key %p, alertable %u, timeout %s\n", handle, key, alertable, debugstr_timeout(timeout) );
+ 
+-    if (!handle) handle = keyed_event;
++    if (!handle) handle = process_keyed_event();
+     if ((ULONG_PTR)key & 1) return STATUS_INVALID_PARAMETER_1;
+     if (alertable) flags |= SELECT_ALERTABLE;
+     select_op.keyed_event.op     = SELECT_KEYED_EVENT_WAIT;
+@@ -3945,7 +4008,7 @@ NTSTATUS WINAPI NtReleaseKeyedEvent( HANDLE handle, const void *key,
+ 
+     TRACE( "handle %p, key %p, alertable %u, timeout %s\n", handle, key, alertable, debugstr_timeout(timeout) );
+ 
+-    if (!handle) handle = keyed_event;
++    if (!handle) handle = process_keyed_event();
+     if ((ULONG_PTR)key & 1) return STATUS_INVALID_PARAMETER_1;
+     if (alertable) flags |= SELECT_ALERTABLE;
+     select_op.keyed_event.op     = SELECT_KEYED_EVENT_RELEASE;
