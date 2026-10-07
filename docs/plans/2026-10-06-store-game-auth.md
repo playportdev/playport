@@ -12,7 +12,7 @@ reads its achievements. Valheim on Vulkan no longer crashes at the intro (`patch
 but its picture is black (its intro video needs a shared texture handle), so its page stays on
 DXMT. Open, each with its Linear issue: PLA-50 (secur32 without lsass packages; not what
 blocked GOG), PLA-58 (the NSI adapter table itself), PLA-41 (JWE), PLA-39 (Among Us), PLA-54
-(Monster Train), PLA-61 (Epic's `deploymentid`), PLA-62 (the Steam live session's gaps and
+(Monster Train), PLA-62 (the Steam live session's gaps and
 sign-out on the phone), PLA-60 (GOG B6, B7 and writes), PLA-64 (the i386 URL opener and the UI
 no person has checked), PLA-59 (logging implemented; Static-body phone check pending), PLA-63 (the JIT pool
 unmap), and Valheim's black picture on Vulkan (PLA-65). PLA-57 (the driver's GOG install
@@ -321,6 +321,17 @@ caption is phone-confirmed and its normal play reaches the menu; no Static-body 
 was reproduced in the device runs. **PLA-59 remains open for that device check**, not for
 an unimplemented hook. JWE's no-frame blocker remains PLA-41. Results, failed reproduction
 attempts and limits: [evidence](../evidence/2026-10-07-hidden-dialog-text.md).
+
+## Follow-up: PLA-61 (2026-10-07)
+
+Epic's optional Live-asset sidecar deployment ID is now retained at install/update and
+passed as `-epicdeploymentid`, online and offline. The page's existing asset check refreshes
+sidecar-only changes/removal and migrates older records without another Play-time request.
+Host tests and all 80 IPA checks pass. House of Golf 2's real ID is confirmed in the phone
+install receipt/adopted arguments and Wine's launch command line (IPA `e8891332`), closing
+PLA-61's launcher-parity gap. The game stops separately in its Visual C++ prerequisite
+bootstrap before a first frame (PLA-67); no EOS sign-in or gameplay is claimed.
+[Evidence and limits](../evidence/2026-10-07-epic-deployment-id.md).
 
 ## Order
 

@@ -20,6 +20,9 @@ public struct EpicInstalled: Codable, Equatable, Sendable {
     public var launchCommand: String
     public var files: Int
     public var bytes: UInt64
+    /// Optional so pre-sidecar install records still decode. Neither value is a credential.
+    public var deploymentID: String? = nil
+    public var sidecarRvn: Int? = nil
 }
 
 /// Installs, updates, verifies and repairs an Epic game in C:\Games through
@@ -69,7 +72,28 @@ public struct EpicInstaller: Sendable {
     }
 
     /// The newest build Epic lists for the game.
-    public func newestBuild(_ g: EpicGame) async throws -> String { try await EpicContent.asset(session, g).buildVersion }
+    public func newestBuild(_ g: EpicGame) async throws -> String { try await newestAsset(g).buildVersion }
+    public func newestAsset(_ g: EpicGame) async throws -> EpicAsset { try await EpicContent.asset(session, g) }
+
+    /// A sidecar can change without a build update. Reuse the page's asset check, not Play's
+    /// credential requests. Keep the receipt's install date, version and other arguments.
+    /// Compare the receipt too so an interrupted two-file write heals on the next check.
+    @discardableResult
+    public func refreshLaunchMetadata(_ app: String, asset: EpicAsset) throws -> Bool {
+        guard var rec = loadRecord(app) else { return false }
+        let key = StoreGameKey(store: .epic, id: app)
+        let url = layout.receiptFile(key)
+        var receipt = try StoreReceipt.decoder.decode(StoreReceipt.self, from: Data(contentsOf: url))
+        let args = Self.withDeployment(receipt.arguments ?? [], deploymentID: asset.deploymentID)
+        let changed = rec.deploymentID != asset.deploymentID || rec.sidecarRvn != asset.sidecarRvn || receipt.arguments != args
+        guard changed else { return false }
+        rec.deploymentID = asset.deploymentID
+        rec.sidecarRvn = asset.sidecarRvn
+        receipt.arguments = args
+        try layout.saveReceipt(receipt)
+        try InstallFS.writeAtomically(recordFile(app), JSONEncoder().encode(rec))
+        return true
+    }
 
     /// Installs the game, or updates it to Epic's live build.
     public func install(_ g: EpicGame, options: InstallEngine.Options = .init(),
@@ -83,7 +107,7 @@ public struct EpicInstaller: Sendable {
         }
         let source = EpicChunkSource(session: session, bases: asset.locations.map(\.base), log: log)
         if let old = loadRecord(g.id), FileManager.default.fileExists(atPath: layout.gamesRoot.appendingPathComponent(old.installDir).path) {
-            return try await update(g, manifest: manifest, raw: raw, over: old, source: source, options: options, progress: progress)
+            return try await update(g, manifest: manifest, raw: raw, asset: asset, over: old, source: source, options: options, progress: progress)
         }
         let plan = try EpicContent.plan(manifest)
         let folder = Self.unique(try SafePath.normalize(g.folderName).split(separator: "/").last.map(String.init) ?? g.id, in: layout.gamesRoot)
@@ -99,19 +123,20 @@ public struct EpicInstaller: Sendable {
             throw ClientError.transport("cannot move the Epic install into C:\\Games (errno \(errno))")
         }
         try? FileManager.default.removeItem(at: layout.journal(name: name))
-        let rec = record(g, manifest, folder: folder)
+        let rec = record(g, manifest, folder: folder, asset: asset)
         try save(rec, manifest: raw)
         discardStages(g.id)
         return Result(installed: rec, bytesWritten: r.bytes, downloadedBytes: r.downloadedBytes, filesChanged: plan.files.count)
     }
 
-    func record(_ g: EpicGame, _ m: EpicManifest, folder: String) -> EpicInstalled {
+    func record(_ g: EpicGame, _ m: EpicManifest, folder: String, asset: EpicAsset? = nil) -> EpicInstalled {
         EpicInstalled(appName: g.id, namespace: g.namespace, catalogItemID: g.catalogItemID, buildVersion: m.buildVersion,
                       installDir: folder, launchExe: m.launchExe.replacingOccurrences(of: "/", with: "\\"),
-                      launchCommand: m.launchCommand, files: m.files.count, bytes: m.installBytes)
+                      launchCommand: m.launchCommand, files: m.files.count, bytes: m.installBytes,
+                      deploymentID: asset?.deploymentID, sidecarRvn: asset?.sidecarRvn)
     }
 
-    func update(_ g: EpicGame, manifest: EpicManifest, raw: [UInt8], over old: EpicInstalled, source: EpicChunkSource,
+    func update(_ g: EpicGame, manifest: EpicManifest, raw: [UInt8], asset: EpicAsset, over old: EpicInstalled, source: EpicChunkSource,
                 options: InstallEngine.Options, progress: @escaping @Sendable (InstallEngine.Progress) -> Void) async throws -> Result {
         let before = (try? loadManifest(g.id)).map { Dictionary($0.files.map { ($0.path.lowercased(), $0) }, uniquingKeysWith: { _, b in b }) } ?? [:]
         let changed = Set(manifest.files.filter { before[$0.path.lowercased()]?.sha1 != $0.sha1 }.map { $0.path.lowercased() })
@@ -122,7 +147,7 @@ public struct EpicInstaller: Sendable {
                                         source: source, options: options, progress: progress)
         let dir = layout.gamesRoot.appendingPathComponent(old.installDir, isDirectory: true)
         for p in dropped { if let u = try? InstallFS.resolveInside(dir, p, createParents: false) { try? FileManager.default.removeItem(at: u) } }
-        let rec = record(g, manifest, folder: old.installDir)
+        let rec = record(g, manifest, folder: old.installDir, asset: asset)
         try save(rec, manifest: raw)
         discardStages(g.id)
         return Result(installed: rec, bytesWritten: r?.bytes ?? 0, downloadedBytes: r?.downloadedBytes ?? 0, filesChanged: changed.count + dropped.count)
@@ -179,6 +204,7 @@ public struct EpicInstaller: Sendable {
             let source = EpicChunkSource(session: session, bases: asset.locations.map(\.base), log: log)
             _ = try await stageAndPlace(g.id, tag: rec.buildVersion + "-repair", manifest: m, only: Set(report.bad.map { $0.lowercased() }),
                                         into: rec.installDir, source: source, options: options, progress: progress)
+            try refreshLaunchMetadata(g.id, asset: asset)
         }
         discardStages(g.id)
         return try await verify(g.id)
@@ -207,8 +233,25 @@ public struct EpicInstaller: Sendable {
     /// without `auth`; a Play adds `authArguments` (decision 0059).
     public static func arguments(_ r: EpicInstalled, game: EpicGame?, locale: String = "en", auth: EpicLaunchAuth? = nil) -> [String] {
         split(r.launchCommand) + split(game?.attributes["AdditionalCommandLine"] ?? "")
-            + ["-epicapp=\(r.appName)", "-epicenv=Prod", "-EpicPortal", "-epiclocale=\(locale)"]
+            + ["-epicapp=\(r.appName)", "-epicenv=Prod"]
+            + deploymentArguments(r.deploymentID)
+            + ["-EpicPortal", "-epiclocale=\(locale)"]
             + (auth.map(authArguments) ?? [])
+    }
+
+    static func deploymentArguments(_ id: String?) -> [String] {
+        guard let id, EpicContent.safeDeploymentID(id) else { return [] }
+        return ["-epicdeploymentid=\(id)"]
+    }
+
+    /// Replace rather than append: a removed sidecar must remove an old cached argument too.
+    /// Validate again at launch, including IDs decoded from old or damaged records.
+    public static func withDeployment(_ args: [String], deploymentID: String?) -> [String] {
+        let isDeployment = { (arg: String) in arg.lowercased().hasPrefix("-epicdeploymentid=") }
+        let position = args.firstIndex(where: isDeployment) ?? args.count
+        var out = args.filter { !isDeployment($0) }
+        out.insert(contentsOf: deploymentArguments(deploymentID), at: min(position, out.count))
+        return out
     }
 
     /// What Epic's launcher adds for a signed-in launch (decision 0059): the exchange code,

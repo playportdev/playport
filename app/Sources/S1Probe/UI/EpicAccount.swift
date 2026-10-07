@@ -162,7 +162,16 @@ final class EpicAccount: ObservableObject, DownloadDriver {
     func checkUpdate(_ app: String) async {
         guard state == .signedIn, newest[app] == nil, let g = game(app) else { return }
         if g.attributes["NeverUpdate"]?.lowercased() == "true" { return }
-        if let b = try? await installer.newestBuild(g) { newest[app] = b }
+        do {
+            let asset = try await installer.newestAsset(g)
+            if try installer.refreshLaunchMetadata(app, asset: asset) {
+                log.info("epic", "\(app): launch sidecar refreshed (revision \(asset.sidecarRvn.map(String.init) ?? "none"))")
+                LibraryModel.shared.refresh()
+            }
+            newest[app] = asset.buildVersion
+        } catch {
+            log.warn("epic", "\(app): update/sidecar check failed: \(error)")
+        }
     }
 
     var installer: EpicInstaller { EpicInstaller(layout: LibraryModel.paths.layout, session: session, log: log) }

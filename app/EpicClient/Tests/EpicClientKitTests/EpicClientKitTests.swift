@@ -210,6 +210,84 @@ final class EpicClientKitTests: XCTestCase {
         XCTAssertNil(a.locations[1].manifest.query)
     }
 
+    func asset(sidecar: Any? = nil, build: String = "1") throws -> EpicAsset {
+        var element: [String: Any] = ["buildVersion": build, "manifests": [["uri": "https://cdn.example/build.manifest"]]]
+        if let sidecar { element["sidecar"] = sidecar }
+        return try EpicContent.parseAsset([UInt8](JSONSerialization.data(withJSONObject: ["elements": [element]])))
+    }
+
+    func testTheOptionalSidecarReadsOnlyA32HexDeploymentID() throws {
+        let id = "0123456789abcdef0123456789ABCDEF"
+        let a = try asset(sidecar: ["config": #"{"deploymentId":"\#(id)"}"#, "rvn": 7])
+        XCTAssertEqual(a.deploymentID, id)
+        XCTAssertEqual(a.sidecarRvn, 7)
+        XCTAssertNil(try asset().deploymentID)
+        XCTAssertNil(try asset().sidecarRvn)
+        XCTAssertNil(try asset(sidecar: NSNull()).deploymentID)
+        for config in ["not json", "{}", #"{"deploymentId":42}"#, 42,
+                            #"{"deploymentId":"short"}"#,
+                            #"{"deploymentId":"0123456789abcdef0123456789abcdeg"}"#,
+                            #"{"deploymentId":"0123456789abcdef0123456789abcdeé"}"#,
+                            #"{"deploymentId":"0123456789abcdef0123456789abcdef -bad"}"#] as [Any] {
+            let invalid = try asset(sidecar: ["config": config, "rvn": 8])
+            XCTAssertNil(invalid.deploymentID, "\(config)")
+            XCTAssertEqual(invalid.sidecarRvn, 8, "bad optional config does not prevent installing the build")
+        }
+        XCTAssertEqual(try asset(sidecar: ["config": #"{"deploymentId":"\#(id)"}"#]).deploymentID, id, "revision is optional")
+    }
+
+    func testTheSidecarPersistsAndRefreshesWithoutChangingTheInstalledBuild() throws {
+        let layout = InstallLayout.root(try temp())
+        let installer = EpicInstaller(layout: layout, session: EpicSession(store: MemorySecretStore(), log: .silent), log: .silent)
+        let g = EpicGame(id: "Test", namespace: "n", catalogItemID: "c", title: "Test")
+        let m = try EpicManifest.parse(try fixture("hazelnut.manifest"))
+        let id = "0123456789abcdef0123456789abcdef", next = "fedcba9876543210fedcba9876543210"
+        let a = try asset(sidecar: ["config": #"{"deploymentId":"\#(id)"}"#, "rvn": 1])
+        let rec = installer.record(g, m, folder: "Test", asset: a)
+        XCTAssertEqual(rec.deploymentID, id)
+        XCTAssertEqual(rec.sidecarRvn, 1)
+        try installer.save(rec, manifest: try fixture("hazelnut.manifest"))
+        XCTAssertEqual(installer.loadRecord(g.id), rec)
+        let args = EpicInstaller.arguments(rec, game: g)
+        XCTAssertEqual(args.suffix(5), ["-epicapp=Test", "-epicenv=Prod", "-epicdeploymentid=\(id)", "-EpicPortal", "-epiclocale=en"])
+        XCTAssertEqual(EpicInstaller.redacted(args), args, "the deployment ID is public")
+        XCTAssertTrue(Redactor.scrub(args.joined(separator: " ")).contains("-epicdeploymentid=\(id)"))
+        let auth = EpicLaunchAuth(exchangeCode: Secret("code"), account: EpicAccountIdentity(accountID: Secret("user"), displayName: Secret("name")), namespace: "n")
+        XCTAssertEqual(EpicInstaller.arguments(rec, game: g, auth: auth).filter { $0.hasPrefix("-epicdeploymentid=") }, ["-epicdeploymentid=\(id)"], "same public ID online and offline")
+        var receipt = StoreReceipt(store: .epic, storeID: g.id, name: g.title, installDir: rec.installDir,
+                                   version: rec.buildVersion, executable: rec.launchExe, arguments: args, files: rec.files, bytes: rec.bytes,
+                                   installedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try layout.saveReceipt(receipt)
+        XCTAssertFalse(try installer.refreshLaunchMetadata(g.id, asset: a))
+        let updated = try asset(sidecar: ["config": #"{"deploymentId":"\#(next)"}"#, "rvn": 2], build: "newer-not-installed")
+        XCTAssertTrue(try installer.refreshLaunchMetadata(g.id, asset: updated))
+        XCTAssertEqual(installer.loadRecord(g.id)?.deploymentID, next)
+        XCTAssertEqual(installer.loadRecord(g.id)?.sidecarRvn, 2)
+        XCTAssertEqual(installer.loadRecord(g.id)?.buildVersion, m.buildVersion)
+        receipt.arguments = EpicInstaller.withDeployment(args, deploymentID: next)
+        XCTAssertEqual(layout.storeReceipts(), [receipt], "only arguments change, not install date or build")
+        XCTAssertEqual(EpicInstaller.withDeployment(args + ["-EPICDEPLOYMENTID=stale"], deploymentID: next), receipt.arguments)
+        XCTAssertTrue(try installer.refreshLaunchMetadata(g.id, asset: try asset()))
+        XCTAssertNil(installer.loadRecord(g.id)?.deploymentID)
+        XCTAssertNil(installer.loadRecord(g.id)?.sidecarRvn)
+        XCTAssertFalse(layout.storeReceipts()[0].arguments!.contains { $0.hasPrefix("-epicdeploymentid=") })
+        XCTAssertEqual(EpicInstaller.withDeployment(args, deploymentID: "unsafe -arg"), args.filter { !$0.hasPrefix("-epicdeploymentid=") })
+        // Pre-sidecar records decode and gain the ID on the next page check.
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(rec)) as? [String: Any])
+        old.removeValue(forKey: "deploymentID")
+        old.removeValue(forKey: "sidecarRvn")
+        let oldData = try JSONSerialization.data(withJSONObject: old)
+        XCTAssertNil(try JSONDecoder().decode(EpicInstalled.self, from: oldData).deploymentID)
+        try oldData.write(to: installer.recordFile(g.id))
+        XCTAssertTrue(try installer.refreshLaunchMetadata(g.id, asset: a))
+        XCTAssertEqual(installer.loadRecord(g.id), rec)
+        // A receipt written before a killed process saved its record is healed too.
+        receipt.arguments = EpicInstaller.withDeployment(args, deploymentID: next)
+        try layout.saveReceipt(receipt)
+        XCTAssertTrue(try installer.refreshLaunchMetadata(g.id, asset: a))
+        XCTAssertEqual(layout.storeReceipts()[0].arguments, EpicInstaller.withDeployment(args, deploymentID: id))
+    }
+
     // MARK: manifest
 
     func testARealManifestParses() throws {

@@ -219,7 +219,7 @@ final class LibraryModel: ObservableObject {
         guard let t = catalog.title(id: id), t.canPlay, !verifying.contains(id), !removing.contains(id),
               !TitleLaunch.shared.running, !TitleLaunch.shared.spent,
               SteamAccountModel.current?.installs.jobs[t.key] == nil else { return false }
-        let plan = try t.launchPlan(cohort: Self.cohort)
+        var plan = try t.launchPlan(cohort: Self.cohort)
         // The player's settings over 720p, 60 fps, Vulkan for DX12 and DXMT otherwise.
         #if PLAYPORT_RELEASE
         var settings = LaunchSettingsStore.shared.effective(for: t)
@@ -279,6 +279,11 @@ final class LibraryModel: ObservableObject {
                     return false
                 }
             }
+        }
+        // A page's sidecar check can finish while adoption or sign-in is in flight. Use the
+        // kept record for this one public ID, with no extra Play-time request (PLA-61).
+        if t.store == .epic, let rec = EpicAccount.shared.installer.loadRecord(t.key.id) {
+            plan.args = EpicInstaller.withDeployment(plan.args, deploymentID: rec.deploymentID)
         }
         // A GOG game's Galaxy service (decision 0063), on by default: listening from now to the game's exit
         // when its build names a Galaxy client and GOG is signed in; otherwise the game runs without it.

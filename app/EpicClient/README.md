@@ -32,7 +32,11 @@ runs its offline tests on the Linux host.
   an update or repair stages only the files whose SHA-1 differs; verify checks every file against
   the kept manifest (`manifests/epic-APP.manifest`, with `epic-APP.json`). Launch arguments: the
   manifest's command, the catalogue's extra command line, `-epicapp -epicenv=Prod -EpicPortal
-  -epiclocale`; a Play adds the sign-in arguments.
+  -epiclocale`, plus `-epicdeploymentid` when the Live asset's sidecar names one (32 hex).
+  The install record keeps that public ID and `sidecarRvn`; the page's existing update check
+  refreshes the record and receipt even when the build stays the same, and removes an ID whose
+  sidecar disappeared. Older installs gain it on that check. Play reads the kept ID without
+  another network call, online or offline; a signed-in Play adds the sign-in arguments.
 
 Measured from the workstation (2026-10-06): the library listed 34 games; Limbo (Hazelnut, 44
 files, 103 MB) installed in 1.7 s, verified 44/44, a corrupted executable found and repaired,

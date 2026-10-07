@@ -19,8 +19,12 @@ launcher does:
     -epicovt=C:\Games\<folder>\playport-epic.ovt
 
 beside the arguments the game always had (`-epicapp`, `-epicenv=Prod`, `-EpicPortal`,
-`-epiclocale`). Nothing else from the host session crosses: not the `eg1` refresh or access
-token, not a CDN token.
+`-epiclocale`). A build whose Live asset sidecar names an EOS deployment also gets
+`-epicdeploymentid=<32 hex>` (PLA-61): a public build identity, not a player identity or
+credential. It is kept at install and refreshed by the page's existing asset/update check,
+including sidecar-only changes and removal; it passes online and offline, without a new
+Play-time request. Nothing else from the host session crosses: not the `eg1` refresh or
+access token, not a CDN token.
 
 A game whose catalogue sets `OwnershipToken` or `CanRunOffline=false` is no longer refused.
 Refusals stay for anti-cheat (EasyAntiCheat or BattlEye files; Epic's access control;

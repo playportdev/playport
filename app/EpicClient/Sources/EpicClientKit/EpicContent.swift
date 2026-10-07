@@ -22,12 +22,17 @@ public struct EpicAsset: Sendable, Equatable {
     /// The SHA-1 of the manifest file.
     public var hash: [UInt8]?
     public var locations: [Location]
+    /// Public, build-scoped EOS identity from the Live asset's sidecar.
+    public var deploymentID: String? = nil
+    public var sidecarRvn: Int? = nil
 }
 
 public enum EpicContent {
     static func safeID(_ s: String) -> Bool {
         !s.isEmpty && s.count <= 128 && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == ".") }
     }
+
+    static func safeDeploymentID(_ s: String) -> Bool { s.utf8.count == 32 && hex(s) != nil }
 
     public static func asset(_ session: EpicSession, _ g: EpicGame) async throws -> EpicAsset {
         guard safeID(g.id), safeID(g.namespace), safeID(g.catalogItemID) else { throw ClientError.unsafeContent("Epic game IDs") }
@@ -44,9 +49,20 @@ public enum EpicContent {
                     var uri: String
                     var queryParams: [Q]?
                 }
+                struct Sidecar: Decodable {
+                    var config: String?
+                    var rvn: Int?
+                    init(from decoder: Decoder) throws {
+                        let c = try decoder.container(keyedBy: CodingKeys.self)
+                        config = try? c.decode(String.self, forKey: .config)
+                        rvn = try? c.decode(Int.self, forKey: .rvn)
+                    }
+                    enum CodingKeys: String, CodingKey { case config, rvn }
+                }
                 var buildVersion: String
                 var hash: String?
                 var manifests: [M]
+                var sidecar: Sidecar?
             }
             var elements: [Element]
         }
@@ -63,7 +79,12 @@ public enum EpicContent {
         }
         guard !locations.isEmpty else { throw ClientError.notFound("Epic lists no manifest for this game") }
         let hash = e.hash.flatMap { $0.count == 40 ? hex($0) : nil }
-        return EpicAsset(buildVersion: e.buildVersion, hash: hash, locations: locations)
+        struct Config: Decodable { var deploymentId: String? }
+        let deployment = e.sidecar?.config.flatMap {
+            (try? JSONDecoder().decode(Config.self, from: Data($0.utf8)))?.deploymentId
+        }.flatMap { safeDeploymentID($0) ? $0 : nil }
+        return EpicAsset(buildVersion: e.buildVersion, hash: hash, locations: locations,
+                         deploymentID: deployment, sidecarRvn: e.sidecar?.rvn)
     }
 
     /// The manifest from the first CDN that has it, checked against the asset's SHA-1.
