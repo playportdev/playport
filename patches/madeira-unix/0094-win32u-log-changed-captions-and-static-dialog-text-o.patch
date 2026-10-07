@@ -1,0 +1,150 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 7 Oct 2026 22:36:42 +0200
+Subject: [PATCH] win32u: log changed captions and static dialog text on iOS
+
+Geometry diagnostics can sample a window before its text is set, and miss custom dialogs that never call MessageBox. Log nonempty changed captions and textual Static controls at the common ANSI/Unicode WM_NCCREATE and WM_SETTEXT path instead. Correlate each entry with its root and the win-pos handle without calling a guest window procedure. Editable controls, images and message-only trees are excluded. Bound and escape each entry, preserving UTF-16 without log-line injection.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-07-hidden-dialog-text.md
+Offered-upstream: no
+---
+ build/win32u-unix/defwnd_ios.c      | 37 ++++++++++++++++++
+ build/win32u-unix/window_text_log.h | 59 +++++++++++++++++++++++++++++
+ 2 files changed, 96 insertions(+)
+ create mode 100644 build/win32u-unix/window_text_log.h
+
+diff --git a/build/win32u-unix/defwnd_ios.c b/build/win32u-unix/defwnd_ios.c
+index 875ec32..8d5a834 100644
+--- a/build/win32u-unix/defwnd_ios.c
++++ b/build/win32u-unix/defwnd_ios.c
+@@ -30,6 +30,29 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(win);
+ 
++#ifdef WINE_IOS
++#include "window_text_log.h"
++
++static void log_window_text( HWND hwnd, const WCHAR *text, unsigned int style )
++{
++    HWND root = NtUserGetAncestor( hwnd, GA_ROOT );
++    ATOM atom;
++    int kind;
++    char escaped[IOS_WINDOW_TEXT_BYTES];
++
++    /* No SendMessage/WM_GETTEXT: a custom window procedure may block or
++     * reenter us. Only read win32u's metadata, outside the WND lock. */
++    if (!root || NtUserGetAncestor( root, GA_PARENT ) != get_desktop_window()) return;
++    atom = get_class_long( hwnd, GCW_ATOM, FALSE );
++    kind = ios_window_text_kind( style, atom == get_builtin_class_atom( NTUSER_WNDPROC_STATIC ),
++                                 atom == get_builtin_class_atom( NTUSER_WNDPROC_EDIT ) );
++    if (!kind) return;
++    ios_window_text_escape( text, escaped );
++    dprintf( 2, "[win-text] hwnd=%p root=%p kind=%s class=%04x style=%08x text=\"%s\"\n",
++             hwnd, root, kind == 1 ? "caption" : "static", atom, style, escaped );
++}
++#endif
++
+ 
+ #define DRAG_FILE  0x454c4946
+ 
+@@ -312,6 +335,10 @@ static BOOL set_window_text( HWND hwnd, const void *text, BOOL ansi )
+     static const WCHAR emptyW[] = { 0 };
+     WCHAR *str;
+     WND *win;
++#ifdef WINE_IOS
++    BOOL text_changed;
++    unsigned int style;
++#endif
+ 
+     /* check for string, as static icons, bitmaps (SS_ICON, SS_BITMAP)
+      * may have child window IDs instead of window name */
+@@ -333,6 +360,10 @@ static BOOL set_window_text( HWND hwnd, const void *text, BOOL ansi )
+         return FALSE;
+     }
+ 
++#ifdef WINE_IOS
++    text_changed = str && str[0] && (!win->text || wcscmp( win->text, str ));
++    style = win->dwStyle;
++#endif
+     free( win->text );
+     win->text = str;
+     SERVER_START_REQ( set_window_text )
+@@ -345,6 +376,12 @@ static BOOL set_window_text( HWND hwnd, const void *text, BOOL ansi )
+ 
+     release_win_ptr( win );
+ 
++#ifdef WINE_IOS
++    /* WM_NCCREATE and WM_SETTEXT (ANSI and Unicode) both reach here. Unlike
++     * geometry sampling this sees Static bodies populated after creation.
++     * Repeated identical text is silent; each entry is at most 1024 units. */
++    if (text_changed) log_window_text( hwnd, str, style );
++#endif
+     user_driver->pSetWindowText( hwnd, str ? str : emptyW );
+ 
+     return TRUE;
+diff --git a/build/win32u-unix/window_text_log.h b/build/win32u-unix/window_text_log.h
+new file mode 100644
+index 0000000..7d81cb6
+--- /dev/null
++++ b/build/win32u-unix/window_text_log.h
+@@ -0,0 +1,59 @@
++/* iOS hidden-window diagnostics. SPDX-License-Identifier: LGPL-2.1-or-later */
++#ifndef IOS_WINDOW_TEXT_LOG_H
++#define IOS_WINDOW_TEXT_LOG_H
++
++/* Captions and textual Static controls, never editable fields or image IDs.
++ * The caller also excludes windows rooted at HWND_MESSAGE. */
++static int ios_window_text_kind( unsigned int style, int is_static, int is_edit )
++{
++    if (is_edit) return 0;
++    if (!(style & WS_CHILD)) return 1;
++    if (!is_static) return 0;
++    switch (style & SS_TYPEMASK)
++    {
++    case SS_LEFT:
++    case SS_CENTER:
++    case SS_RIGHT:
++    case SS_SIMPLE:
++    case SS_LEFTNOWORDWRAP:
++        return 2;
++    default:
++        return 0;
++    }
++}
++
++#define IOS_WINDOW_TEXT_UNITS 1024
++#define IOS_WINDOW_TEXT_BYTES (IOS_WINDOW_TEXT_UNITS * 6 + 4)
++
++/* One ASCII log line, lossless UTF-16 escapes (including surrogate pairs).
++ * No allocation, locale dependency or read beyond the input limit. */
++static void ios_window_text_escape( const WCHAR *text, char out[IOS_WINDOW_TEXT_BYTES] )
++{
++    static const char hex[] = "0123456789abcdef";
++    unsigned int i, c;
++    char *p = out;
++
++    for (i = 0; i < IOS_WINDOW_TEXT_UNITS && text[i]; i++)
++    {
++        c = text[i];
++        switch (c)
++        {
++        case '\n': *p++ = '\\'; *p++ = 'n'; break;
++        case '\r': *p++ = '\\'; *p++ = 'r'; break;
++        case '\t': *p++ = '\\'; *p++ = 't'; break;
++        case '\\': case '"': *p++ = '\\'; *p++ = c; break;
++        default:
++            if (c >= 32 && c < 127) *p++ = c;
++            else
++            {
++                *p++ = '\\'; *p++ = 'u';
++                *p++ = hex[(c >> 12) & 15]; *p++ = hex[(c >> 8) & 15];
++                *p++ = hex[(c >> 4) & 15]; *p++ = hex[c & 15];
++            }
++        }
++    }
++    if (i == IOS_WINDOW_TEXT_UNITS) { *p++ = '.'; *p++ = '.'; *p++ = '.'; }
++    *p = 0;
++}
++
++#endif

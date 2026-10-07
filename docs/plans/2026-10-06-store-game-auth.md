@@ -14,7 +14,7 @@ DXMT. Open, each with its Linear issue: PLA-50 (secur32 without lsass packages; 
 blocked GOG), PLA-58 (the NSI adapter table itself), PLA-41 (JWE), PLA-39 (Among Us), PLA-54
 (Monster Train), PLA-61 (Epic's `deploymentid`), PLA-62 (the Steam live session's gaps and
 sign-out on the phone), PLA-60 (GOG B6, B7 and writes), PLA-64 (the i386 URL opener and the UI
-no person has checked), PLA-59 (a log line for a hidden dialog's text), PLA-63 (the JIT pool
+no person has checked), PLA-59 (logging implemented; Static-body phone check pending), PLA-63 (the JIT pool
 unmap), and Valheim's black picture on Vulkan (PLA-65). PLA-57 (the driver's GOG install
 check) is fixed and phone-checked ([evidence](../evidence/2026-10-07-gog-install-driver.md)). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
 without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md` (`b21f63d`);
@@ -311,6 +311,16 @@ comes before 0.4.0; no `pp release`, no draft, no push here). For the owner's la
 works; Steam's online part; GOG's Galaxy features), then `pp release 0.4.0` from a clean,
 pushed `main` in its own build area (`PLAYPORT_BUILD`, a fresh `run/`: the live `run/`'s
 CMake caches hold absolute paths).
+
+## Follow-up: PLA-59 (2026-10-07)
+
+Madeira-unix 0094 logs changed top-level captions and textual Static children at the
+ANSI/Unicode text-setting path, independent of geometry, with bounded escaped UTF-16;
+MessageBox's existing log is unchanged. Host tests and the IPA build pass. Hollow Knight's
+caption is phone-confirmed and its normal play reaches the menu; no Static-body dialog
+was reproduced in the device runs. **PLA-59 remains open for that device check**, not for
+an unimplemented hook. JWE's no-frame blocker remains PLA-41. Results, failed reproduction
+attempts and limits: [evidence](../evidence/2026-10-07-hidden-dialog-text.md).
 
 ## Order
 

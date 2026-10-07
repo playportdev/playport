@@ -92,3 +92,4 @@
 0091-ntdll-do-not-reuse-a-freed-image-s-JIT-pool-copy-for.patch
 0092-ntdll-give-Playport-s-URL-opener-the-host-s-URL-tabl.patch
 0093-ntdll-keep-a-web-page-s-query-out-of-the-process-com.patch
+0094-win32u-log-changed-captions-and-static-dialog-text-o.patch
