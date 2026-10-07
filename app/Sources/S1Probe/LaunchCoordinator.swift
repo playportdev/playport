@@ -82,6 +82,9 @@ enum LaunchCoordinator {
         /// The game's encrypted app ticket (decision 0017), fetched after Play
         /// before the session closed; nil starts the game without one.
         var ticket: Secret<[UInt8]>? = nil
+        /// The play's auth session and web API tickets (decision 0062), armed after
+        /// Play; nil leaves the emulator's made-up ones.
+        var tickets: SteamTicketBroker? = nil
     }
 
     enum Step: Equatable {
@@ -145,6 +148,12 @@ enum LaunchCoordinator {
                 } else {
                     log("ticket: none; the emulator makes up its own")
                 }
+            }
+            // The emulator's unix calls reach the play's broker, or none (SteamTicketHost).
+            SteamTicketHost.arm(s.mode == .emulated ? s.tickets : nil)
+            if s.mode == .emulated {
+                log(s.tickets != nil ? "ticket: auth session and web API tickets armed; the CM session stays logged on for them"
+                                     : "ticket: auth session and web API tickets off; the emulator makes up its own")
             }
             var stub = "none"
             if s.mode == .emulated {

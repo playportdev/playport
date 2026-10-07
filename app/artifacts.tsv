@@ -928,8 +928,8 @@ resource	Runtime/vulkan/arm64ec-windows/dxgi.dll	5517312	8ed7c43ead43d4d640a42d1
 resource	Runtime/vulkan/arm64ec-windows/d3d12.dll	196608	36e1555ac92da8faa7c28d63008693b601ff34d364860e58891dacfe4e7a1b34	vulkan-pe	arm64ec-windows/d3d12.dll	P6-vulkan-pe
 resource	Runtime/vulkan/arm64ec-windows/d3d12core.dll	6340608	be5c48fb45650f6c4fe35e08064a0f3b789d91728713dd486682f4c1ce922eca	vulkan-pe	arm64ec-windows/d3d12core.dll	P6-vulkan-pe
 resource	Runtime/vulkan/i386-windows/d3d9.dll	7475200	acb84e8ee64abebebdf06f9a1840e40741d151672968aec4eb2c2778d29f070f	vulkan-pe	i386-windows/d3d9.dll	P6-vulkan-pe
-resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8348672	d6ac91dc0ed4a5451063999c190e8950b68cd73b5a0df633098ea5b1cf9d3298	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
-resource	Runtime/steamapi/i386-windows/steam_api.dll	8663040	832306eba3f9998c49d0c3ac45849228d18bd4ef01c16c5af773517d10e38c71	steamapi	i386-windows/steam_api.dll	P8-steamapi
+resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8353280	f0db32854540fbfb0096e212436c03c7cee50f2671ce9bd14eab6da88484e713	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
+resource	Runtime/steamapi/i386-windows/steam_api.dll	8667648	0d6b96b7689a3286c891dd5b072f9f4b7ca88bf23ed84c2aba9b2b81106f7985	steamapi	i386-windows/steam_api.dll	P8-steamapi
 resource	Runtime/arm64ec-windows/playport-session.exe	18944	911b219564c65f507c5c8e68393709f56e9b281ab6765914479495cb88821126	session	playport-session.exe	P9-session
 resource	Runtime/nls/c_1252.nls	66082	e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76	unix	wine/nls/c_1252.nls	nls
 resource	Runtime/nls/c_20127.nls	66082	951a19ce0d3c785d12ea94cb28ce5c2c096d302e35b3fb3e8b35248a006435ba	unix	wine/nls/c_20127.nls	nls
@@ -947,7 +947,7 @@ resource	Runtime/fonts/tahoma.ttf	143884	90f1abad4da0ce03da5d2277ee75a9600ce812d
 resource	Runtime/fonts/tahomabd.ttf	137836	508a2acc88cd6abdd399ae79c9965db43fba75a46bb115117b55d2be2272d889	unix	wine/fonts/tahomabd.ttf	fonts
 resource	Runtime/registry/system.reg	482604	2d8e2c45d9ad3fd12ed954ba462b05e094507710f1febacb92c11207a3af50c0	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	1599	e534357e8ae05068ac00258faf0b3e6086f77c1170b502a9fd46b59052c9ebd6	registry	user.reg	P7-reg
-link	lib/libntdll_unix.a	3072656	785ba6bea4ac471a2d4d99268c99d4aa25427e1ea023a546b5868f14a11bbadf	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	3073016	e190693633d2a2637cdca83c7fc625dd77cca6a4a42fcfdc71b822b21008437f	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4121192	774caf196471fefb1dc83ed6148bbc6ec589c5010f4fbac4bc50d0198441460a	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1217248	05150f6ee7d65f02aa7b444ca39b4ce16ddb5041544a750156b614321f674b4f	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto

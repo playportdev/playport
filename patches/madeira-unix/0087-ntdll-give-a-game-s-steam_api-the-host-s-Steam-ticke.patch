@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Wed, 7 Oct 2026 12:44:41 +0200
+Subject: [PATCH] ntdll: give a game's steam_api the host's Steam ticket table
+
+A game's Steam API emulator (Playport's gbe_fork build, a native
+steam_api64.dll or steam_api.dll) asks the host app for Steam's auth
+session and web API tickets during a play (Playport's decision 0062). It
+reaches the host as a Wine library reaches its unix side:
+MemoryWineLoadUnixLib on its own module. On iOS no module has a unix .so,
+so load_builtin_unixlib matches the module's export name; a name with
+"steam_api" now gets playport_steam_unix_call_funcs, which the app defines
+(its WineHost steam_ticket.c). The table's argument blocks hold no
+pointers, so an i386 game's WoW64 calls get the same table.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-07-steam-live-session.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index be3f535..db323cc 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7412,6 +7412,13 @@ extern const void *winevulkan_unix_call_funcs[];
+  * (Playport build/stages/gstreamer.sh). */
+ extern const void *winegstreamer_unix_call_funcs[];
+ 
++/* Playport: the game's Steam API emulator (a native steam_api64.dll or
++ * steam_api.dll, matched by its export name) asks the host app for Steam's
++ * auth session and web API tickets through this table, defined in the app
++ * (WineHost steam_ticket.c). Its blocks have no pointers, so an i386 game's
++ * WoW64 calls use the same table. */
++extern const void *playport_steam_unix_call_funcs[];
++
+ /* win32u's unix init, statically linked via libwin32u_unix.a. Renamed
+  * from __wine_unix_lib_init in build/win32u-unix/build.sh so future
+  * statically-linked unix libs can keep their own init without colliding.
+@@ -7511,6 +7518,11 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             dprintf(2, "[unixlib] module %p (%s) -> winegstreamer_unix_call_funcs (%p)\n",
+                 module, match, (void *)winegstreamer_unix_call_funcs);
+             status = STATUS_SUCCESS;
++        } else if (match && strstr(match, "steam_api")) {
++            *funcs = (const void *)playport_steam_unix_call_funcs;
++            dprintf(2, "[unixlib] module %p (%s) -> playport_steam_unix_call_funcs (%p)\n",
++                module, match, (void *)playport_steam_unix_call_funcs);
++            status = STATUS_SUCCESS;
+         } else if (match && strstr(match, "nsi.dll")) {
+             *funcs = (const void *)nsi_unix_call_funcs;
+             dprintf(2, "[unixlib] module %p (%s) -> nsi_unix_call_funcs (%p) rev=ml472\n",
+@@ -7556,6 +7568,7 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             else if (*funcs == (const void *)crypt32_unix_call_funcs) wow_funcs = crypt32_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)dwrite_unix_call_funcs) wow_funcs = dwrite_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)winevulkan_unix_call_funcs) wow_funcs = winevulkan_unix_call_wow64_funcs;
++            else if (*funcs == (const void *)playport_steam_unix_call_funcs) wow_funcs = playport_steam_unix_call_funcs;
+             if (!wow_funcs)
+             {
+                 pthread_once( &ios_stub_tables_once, ios_init_stub_tables );

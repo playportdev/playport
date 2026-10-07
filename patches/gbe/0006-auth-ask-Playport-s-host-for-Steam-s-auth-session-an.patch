@@ -1,0 +1,466 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 7 Oct 2026 12:48:19 +0200
+Subject: [PATCH] auth: ask Playport's host for Steam's auth session and web
+ API tickets
+
+In Playport the game runs in one process with the app that holds the
+player's Steam session, and during a play the app keeps that session
+logged on and makes the game's tickets as Steam's client does (Playport's
+decision 0062). The emulator now asks it for them: a new playport_host
+reaches the app through the Wine unix call table the runtime gives this
+module (NtQueryVirtualMemory(MemoryWineLoadUnixLib) on its own image,
+then __wine_unix_call), says hello once at start, and creates, polls and
+cancels tickets by handle. Its protocol is fixed-size blocks with no
+pointers, so the i386 build uses the same calls through WoW64.
+
+The client's Auth_Manager (not the game server's) uses it:
+GetAuthSessionTicket returns the host's ticket, bound to the
+SteamNetworkingIdentity when the game passes a valid one, and posts
+GetAuthSessionTicketResponse_t once Steam has taken it, a server refused
+it, or 10 s passed; GetAuthTicketForWebApi does the same with its
+identity and GetTicketForWebApiResponse_t; CancelAuthTicket takes a host
+ticket out of Steam's list. The host's tickets are polled from
+run_every_runcb, which the background thread also runs.
+
+Where there is no such host (Windows, another Wine), or the play's
+tickets are not armed, every call takes the made-up path as before.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-07-steam-live-session.md
+Offered-upstream: no
+---
+ dll/auth.cpp            | 82 +++++++++++++++++++++++++++++++++-
+ dll/dll/auth.h          | 19 +++++++-
+ dll/dll/playport_host.h | 59 +++++++++++++++++++++++++
+ dll/dll/steam_user.h    |  3 +-
+ dll/playport_host.cpp   | 97 +++++++++++++++++++++++++++++++++++++++++
+ dll/steam_client.cpp    |  7 ++-
+ dll/steam_user.cpp      | 12 +++--
+ 7 files changed, 269 insertions(+), 10 deletions(-)
+ create mode 100644 dll/dll/playport_host.h
+ create mode 100644 dll/playport_host.cpp
+
+diff --git a/dll/auth.cpp b/dll/auth.cpp
+index efcaeb8..76c3847 100644
+--- a/dll/auth.cpp
++++ b/dll/auth.cpp
+@@ -16,6 +16,7 @@
+    <http://www.gnu.org/licenses/>.  */
+ 
+ #include "dll/auth.h"
++#include "dll/playport_host.h"
+ 
+ // this should be at least as long as SteamGameServer logon time
+ #define STEAM_TICKET_PROCESS_TIME 0.15
+@@ -669,18 +670,21 @@ void Auth_Manager::ticket_callback(void *object, Common_Message *msg)
+     auth_manager->Callback(msg);
+ }
+ 
+-Auth_Manager::Auth_Manager(class Settings *settings, class Networking *network, class SteamCallBacks *callbacks)
++Auth_Manager::Auth_Manager(class Settings *settings, class Networking *network, class SteamCallBacks *callbacks, class RunEveryRunCB *run_every_runcb)
+ {
+     this->network = network;
+     this->settings = settings;
+     this->callbacks = callbacks;
++    this->run_every_runcb = run_every_runcb;
+ 
+     this->network->setCallback(CALLBACK_ID_AUTH_TICKET, settings->get_local_steam_id(), &Auth_Manager::ticket_callback, this);
+     this->network->setCallback(CALLBACK_ID_USER_STATUS, settings->get_local_steam_id(), &Auth_Manager::ticket_callback, this);
++    if (run_every_runcb) run_every_runcb->add(&Auth_Manager::host_run_every_runcb, this);
+ }
+ 
+ Auth_Manager::~Auth_Manager()
+ {
++    if (run_every_runcb) run_every_runcb->remove(&Auth_Manager::host_run_every_runcb, this);
+     this->network->rmCallback(CALLBACK_ID_AUTH_TICKET, settings->get_local_steam_id(), &Auth_Manager::ticket_callback, this);
+     this->network->rmCallback(CALLBACK_ID_USER_STATUS, settings->get_local_steam_id(), &Auth_Manager::ticket_callback, this);
+ }
+@@ -830,8 +834,59 @@ pBuffer += sizeof(v)
+     return ticket_data;
+ }
+ 
+-HAuthTicket Auth_Manager::getTicket( void *pTicket, int cbMaxTicket, uint32 *pcbTicket )
++void Auth_Manager::host_run_every_runcb(void *object)
+ {
++    ((Auth_Manager *)object)->poll_host();
++}
++
++// Playport: a host ticket's callback once Steam has taken it (its ack), or a
++// server refused it, or 10 s passed, as Steam's client does.
++void Auth_Manager::poll_host()
++{
++    for (auto it = host_pending.begin(); it != host_pending.end();) {
++        uint32 state = PP_STEAM_PENDING, eresult = 0;
++        bool known = playport_host::status(it->handle, &state, &eresult);
++        bool late = std::chrono::steady_clock::now() - it->created > std::chrono::seconds(10);
++        if (known && state == PP_STEAM_PENDING && !late) { ++it; continue; }
++        EResult result = (!known || state == PP_STEAM_FAILED) ? k_EResultFail : k_EResultOK;
++        if (it->web_api) {
++            GetTicketForWebApiResponse_t data{};
++            data.m_hAuthTicket = it->handle;
++            data.m_eResult = result;
++            data.m_cubTicket = (int)it->bytes.size();
++            memcpy(data.m_rgubTicket, it->bytes.data(), it->bytes.size());
++            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
++        } else {
++            GetAuthSessionTicketResponse_t data{};
++            data.m_hAuthTicket = it->handle;
++            data.m_eResult = result;
++            callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
++        }
++        it = host_pending.erase(it);
++    }
++}
++
++HAuthTicket Auth_Manager::getTicket( void *pTicket, int cbMaxTicket, uint32 *pcbTicket, const char *identity )
++{
++    // Playport: the host's ticket when it has one; otherwise the made-up one below.
++    if (run_every_runcb && playport_host::armed()) {
++        static uint8_t buf[PP_STEAM_TICKET_MAX];
++        uint32 size = 0;
++        uint32 handle = playport_host::create(PP_STEAM_TICKET_SESSION, identity ? identity : "", buf, sizeof(buf), &size);
++        if (handle) {
++            if (cbMaxTicket < 0 || (uint32)cbMaxTicket < size) {
++                playport_host::cancel(handle);
++                *pcbTicket = 0;
++                return k_HAuthTicketInvalid;
++            }
++            memcpy(pTicket, buf, size);
++            *pcbTicket = size;
++            host_pending.push_back({ handle, false, std::chrono::steady_clock::now(), {} });
++            host_live.push_back(handle);
++            return handle;
++        }
++    }
++
+     if (settings->enable_new_app_ticket)
+     {
+         if (cbMaxTicket < STEAM_TICKET_MIN_SIZE_NEW) return k_HAuthTicketInvalid;
+@@ -860,6 +915,19 @@ HAuthTicket Auth_Manager::getTicket( void *pTicket, int cbMaxTicket, uint32 *pcb
+ 
+ HAuthTicket Auth_Manager::getWebApiTicket( const char* pchIdentity )
+ {
++    // Playport: the host's ticket, bound to the identity, when it has one.
++    if (run_every_runcb && playport_host::armed()) {
++        std::vector<uint8_t> bytes(PP_STEAM_TICKET_MAX);
++        uint32 size = 0;
++        uint32 handle = playport_host::create(PP_STEAM_TICKET_WEB_API, pchIdentity ? pchIdentity : "", bytes.data(), (uint32)bytes.size(), &size);
++        if (handle) {
++            bytes.resize(size);
++            host_pending.push_back({ handle, true, std::chrono::steady_clock::now(), std::move(bytes) });
++            host_live.push_back(handle);
++            return handle;
++        }
++    }
++
+     // https://docs.unity.com/ugs/en-us/manual/authentication/manual/platform-signin-steam
+     GetTicketForWebApiResponse_t data{};
+ 
+@@ -888,6 +956,16 @@ CSteamID Auth_Manager::fakeUser()
+ 
+ void Auth_Manager::cancelTicket(uint32 number)
+ {
++    // Playport: a host ticket leaves Steam's list.
++    auto live = std::find(host_live.begin(), host_live.end(), number);
++    if (live != host_live.end()) {
++        playport_host::cancel(number);
++        host_live.erase(live);
++        host_pending.erase(std::remove_if(host_pending.begin(), host_pending.end(),
++                                          [number](Host_Ticket const &t) { return t.handle == number; }), host_pending.end());
++        return;
++    }
++
+     auto ticket = std::find_if(outbound.begin(), outbound.end(), [&number](Auth_Data const& item) { return item.number == number; });
+     if (outbound.end() == ticket)
+         return;
+diff --git a/dll/dll/auth.h b/dll/dll/auth.h
+index 663ef41..38459a4 100644
+--- a/dll/dll/auth.h
++++ b/dll/dll/auth.h
+@@ -105,6 +105,19 @@ class Auth_Manager {
+     std::vector<struct Auth_Data> inbound{};
+     std::vector<struct Auth_Data> outbound{};
+ 
++    // Playport: tickets the host made (dll/playport_host.h), the client's only.
++    class RunEveryRunCB *run_every_runcb{};
++    struct Host_Ticket {
++        uint32 handle;
++        bool web_api;
++        std::chrono::steady_clock::time_point created;
++        std::vector<uint8_t> bytes; // a web API ticket's, for its callback
++    };
++    std::vector<Host_Ticket> host_pending{};
++    std::vector<uint32> host_live{};
++    static void host_run_every_runcb(void *object);
++    void poll_host();
++
+     void launch_callback(CSteamID id, EAuthSessionResponse resp, double delay=0);
+     void launch_callback_gs_steam2(CSteamID steam_id, uint32_t user_id, bool approved);
+     void launch_callback_gs(CSteamID id, bool approved);
+@@ -113,10 +126,12 @@ class Auth_Manager {
+     void Callback(Common_Message *msg);
+ 
+ public:
+-    Auth_Manager(class Settings *settings, class Networking *network, class SteamCallBacks *callbacks);
++    // Playport: with run_every_runcb (the client's, not the game server's) the
++    // tickets come from the host when it has them.
++    Auth_Manager(class Settings *settings, class Networking *network, class SteamCallBacks *callbacks, class RunEveryRunCB *run_every_runcb = nullptr);
+     ~Auth_Manager();
+ 
+-    HAuthTicket getTicket( void *pTicket, int cbMaxTicket, uint32 *pcbTicket );
++    HAuthTicket getTicket( void *pTicket, int cbMaxTicket, uint32 *pcbTicket, const char *identity = "" );
+     HAuthTicket getWebApiTicket( const char *pchIdentity );
+     void cancelTicket(uint32 number);
+ 
+diff --git a/dll/dll/playport_host.h b/dll/dll/playport_host.h
+new file mode 100644
+index 0000000..40c6f84
+--- /dev/null
++++ b/dll/dll/playport_host.h
+@@ -0,0 +1,59 @@
++/* Playport: the host app's Steam tickets (Playport's decision 0062).
++ *
++ * In Playport the game runs in one process with the app that holds the
++ * player's Steam session. During a play the app keeps that session logged on
++ * and makes the game's auth session and web API tickets as Steam's client
++ * does; the emulator asks for them through a Wine unix call table the runtime
++ * gives this module (NtQueryVirtualMemory(MemoryWineLoadUnixLib) on itself).
++ * Anywhere else (Windows, another Wine) the query fails, nothing is
++ * available, and the emulator makes up its tickets as before.
++ *
++ * The protocol below is a copy of Playport's app/Sources/WineHost/include/
++ * steam_ticket_protocol.h: fixed-size blocks with no pointers, each with a
++ * magic and its size, so the host refuses a mismatch instead of misreading it.
++ */
++#ifndef PLAYPORT_HOST_H
++#define PLAYPORT_HOST_H
++
++#include <cstdint>
++
++#define PP_STEAM_MAGIC 0x54535050u /* "PPST" */
++#define PP_STEAM_PROTOCOL 1u
++#define PP_STEAM_IDENTITY_MAX 256
++#define PP_STEAM_TICKET_MAX 2560
++
++enum pp_steam_call { PP_STEAM_HELLO = 0, PP_STEAM_CREATE = 1, PP_STEAM_STATUS = 2, PP_STEAM_CANCEL = 3 };
++enum pp_steam_ticket_type { PP_STEAM_TICKET_SESSION = 2, PP_STEAM_TICKET_WEB_API = 5 };
++enum pp_steam_state { PP_STEAM_PENDING = 0, PP_STEAM_ACKED = 1, PP_STEAM_FAILED = 2 };
++#define PP_STEAM_OK 0x00000000u
++
++struct pp_steam_hello { uint32_t magic, size, version, armed; };
++struct pp_steam_create {
++    uint32_t magic, size, type;
++    char identity[PP_STEAM_IDENTITY_MAX];
++    uint32_t handle, ticket_size;
++    uint8_t ticket[PP_STEAM_TICKET_MAX];
++};
++struct pp_steam_status { uint32_t magic, size, handle, state, eresult; };
++struct pp_steam_cancel { uint32_t magic, size, handle; };
++
++namespace playport_host {
++
++/* Says hello to the host once (the host logs it on every play); true when the
++ * host has this play's tickets armed. */
++bool armed();
++
++/* A ticket of `type` from the host, bound to `identity` ("" for none): its
++ * handle, or 0 when the host has none to give (the caller makes up its own). */
++uint32_t create(uint32_t type, const char *identity, uint8_t *ticket, uint32_t cap, uint32_t *size);
++
++/* Whether Steam has taken the ticket (PP_STEAM_ACKED) or refused it
++ * (PP_STEAM_FAILED, with a server's EAuthSessionResponse); false for a handle
++ * the host does not know. */
++bool status(uint32_t handle, uint32_t *state, uint32_t *eresult);
++
++void cancel(uint32_t handle);
++
++}
++
++#endif
+diff --git a/dll/dll/steam_user.h b/dll/dll/steam_user.h
+index 0f41cf2..f5e114a 100644
+--- a/dll/dll/steam_user.h
++++ b/dll/dll/steam_user.h
+@@ -70,7 +70,8 @@ public ISteamUser
+     std::vector<std::pair<CSteamID, std::chrono::high_resolution_clock::time_point>> player_auths{};
+ 
+ public:
+-    Steam_User(Settings *settings, Local_Storage *local_storage, class Networking *network, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, bool is_server);
++    // Playport: the client's run_every_runcb lets its tickets come from the host (dll/playport_host.h).
++    Steam_User(Settings *settings, Local_Storage *local_storage, class Networking *network, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, bool is_server, class RunEveryRunCB *run_every_runcb = nullptr);
+     ~Steam_User();
+ 
+     // returns the HSteamUser this interface represents
+diff --git a/dll/playport_host.cpp b/dll/playport_host.cpp
+new file mode 100644
+index 0000000..9ad877a
+--- /dev/null
++++ b/dll/playport_host.cpp
+@@ -0,0 +1,97 @@
++/* Playport: the host app's Steam tickets (dll/playport_host.h). */
++#include "dll/playport_host.h"
++
++#include <cstring>
++#include <mutex>
++
++#if defined(_WIN32)
++#include <windows.h>
++
++extern "C" IMAGE_DOS_HEADER __ImageBase;
++
++namespace {
++
++typedef LONG (NTAPI *query_virtual_memory_fn)(HANDLE, const void *, ULONG, void *, SIZE_T, SIZE_T *);
++typedef LONG (WINAPI *wine_unix_call_fn)(UINT64, unsigned int, void *);
++
++const ULONG MemoryWineLoadUnixLib = 1000;
++
++std::once_flag once;
++wine_unix_call_fn unix_call;
++UINT64 handle;
++bool host_armed;
++
++void say_hello()
++{
++    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
++    if (!ntdll) return;
++    auto query = (query_virtual_memory_fn)GetProcAddress(ntdll, "NtQueryVirtualMemory");
++    auto call = (wine_unix_call_fn)GetProcAddress(ntdll, "__wine_unix_call");
++    if (!query || !call) return;
++    UINT64 h = 0;
++    if (query(GetCurrentProcess(), &__ImageBase, MemoryWineLoadUnixLib, &h, sizeof(h), nullptr) != 0 || !h) return;
++    pp_steam_hello hello{ PP_STEAM_MAGIC, sizeof(hello), PP_STEAM_PROTOCOL, 0 };
++    if (call(h, PP_STEAM_HELLO, &hello) != 0 || hello.version != PP_STEAM_PROTOCOL) return;
++    unix_call = call;
++    handle = h;
++    host_armed = hello.armed != 0;
++}
++
++}
++
++namespace playport_host {
++
++bool armed()
++{
++    std::call_once(once, say_hello);
++    return host_armed;
++}
++
++uint32_t create(uint32_t type, const char *identity, uint8_t *ticket, uint32_t cap, uint32_t *size)
++{
++    *size = 0;
++    if (!armed()) return 0;
++    static pp_steam_create c;   /* 2.8 KB; callers hold gbe's global mutex */
++    std::memset(&c, 0, sizeof(c));
++    c.magic = PP_STEAM_MAGIC;
++    c.size = sizeof(c);
++    c.type = type;
++    if (identity) std::strncpy(c.identity, identity, sizeof(c.identity) - 1);
++    if (unix_call(handle, PP_STEAM_CREATE, &c) != 0 || !c.handle || c.ticket_size > cap || c.ticket_size > sizeof(c.ticket)) {
++        if (c.handle) cancel(c.handle);
++        return 0;
++    }
++    std::memcpy(ticket, c.ticket, c.ticket_size);
++    *size = c.ticket_size;
++    return c.handle;
++}
++
++bool status(uint32_t h, uint32_t *state, uint32_t *eresult)
++{
++    if (!armed()) return false;
++    pp_steam_status s{ PP_STEAM_MAGIC, sizeof(s), h, PP_STEAM_FAILED, 0 };
++    if (unix_call(handle, PP_STEAM_STATUS, &s) != 0) return false;
++    *state = s.state;
++    *eresult = s.eresult;
++    return true;
++}
++
++void cancel(uint32_t h)
++{
++    if (!armed()) return;
++    pp_steam_cancel c{ PP_STEAM_MAGIC, sizeof(c), h };
++    unix_call(handle, PP_STEAM_CANCEL, &c);
++}
++
++}
++
++#else
++
++namespace playport_host {
++bool armed() { return false; }
++uint32_t create(uint32_t, const char *, uint8_t *, uint32_t, uint32_t *size) { *size = 0; return 0; }
++bool status(uint32_t, uint32_t *, uint32_t *) { return false; }
++void cancel(uint32_t) {}
++}
++
++#endif
+diff --git a/dll/steam_client.cpp b/dll/steam_client.cpp
+index b10c7df..7ac2b3a 100644
+--- a/dll/steam_client.cpp
++++ b/dll/steam_client.cpp
+@@ -16,6 +16,7 @@
+    <http://www.gnu.org/licenses/>.  */
+ 
+ #include "dll/steam_client.h"
++#include "dll/playport_host.h"
+ #include "dll/settings_parser.h"
+ #include "dll/dll.h"
+ 
+@@ -125,7 +126,7 @@ Steam_Client::Steam_Client()
+     playtime_counter = new PlaytimeCounter(local_storage, settings_client->record_playtime);
+     steam_overlay = new Steam_Overlay(settings_client, local_storage, callback_results_client, callbacks_client, run_every_runcb, network, playtime_counter);
+ 
+-    steam_user = new Steam_User(settings_client, local_storage, network, callback_results_client, callbacks_client, false);
++    steam_user = new Steam_User(settings_client, local_storage, network, callback_results_client, callbacks_client, false, run_every_runcb);
+     steam_friends = new Steam_Friends(settings_client, local_storage, network, callback_results_client, callbacks_client, run_every_runcb, steam_overlay);
+     steam_utils = new Steam_Utils(settings_client, callback_results_client, callbacks_client, steam_overlay);
+     
+@@ -187,6 +188,10 @@ Steam_Client::Steam_Client()
+     PRINT_DEBUG("init AppTicket");
+     steam_app_ticket = new Steam_AppTicket(settings_client);
+ 
++    // Playport: say hello to the host app on every start, so its log shows
++    // whether this play's tickets are armed (dll/playport_host.h).
++    playport_host::armed();
++
+     gameserver_has_ipv6_functions = false;
+     steamclient_version = 6; // default for C exports
+ 
+diff --git a/dll/steam_user.cpp b/dll/steam_user.cpp
+index acafc73..3c11441 100644
+--- a/dll/steam_user.cpp
++++ b/dll/steam_user.cpp
+@@ -21,7 +21,7 @@
+ #include "dll/base64.h"
+ #include "dll/dll.h"
+ 
+-Steam_User::Steam_User(Settings *settings, Local_Storage *local_storage, class Networking *network, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, bool is_server)
++Steam_User::Steam_User(Settings *settings, Local_Storage *local_storage, class Networking *network, class SteamCallResults *callback_results, class SteamCallBacks *callbacks, bool is_server, class RunEveryRunCB *run_every_runcb)
+ {
+     this->settings = settings;
+     this->local_storage = local_storage;
+@@ -30,7 +30,7 @@ Steam_User::Steam_User(Settings *settings, Local_Storage *local_storage, class N
+     this->callback_results = callback_results;
+     this->is_server = is_server;
+     
+-    auth_manager = new Auth_Manager(settings, network, callbacks);
++    auth_manager = new Auth_Manager(settings, network, callbacks, is_server ? nullptr : run_every_runcb);
+     voicechat = new VoiceChat();
+ }
+ 
+@@ -664,8 +664,12 @@ HAuthTicket Steam_User::GetAuthSessionTicket( void *pTicket, int cbMaxTicket, ui
+     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+ 
+     if (!pTicket) return k_HAuthTicketInvalid;
+-    
+-    return auth_manager->getTicket(pTicket, cbMaxTicket, pcbTicket);
++
++    // Playport: the identity binds the host's ticket to the entity it is for.
++    char identity[SteamNetworkingIdentity::k_cchMaxString] = "";
++    if (pSteamNetworkingIdentity && !pSteamNetworkingIdentity->IsInvalid())
++        get_steam_client()->steam_networking_utils->SteamNetworkingIdentity_ToString(*pSteamNetworkingIdentity, identity, sizeof(identity));
++    return auth_manager->getTicket(pTicket, cbMaxTicket, pcbTicket, identity);
+ }
+ 
+ // Request a ticket which will be used for webapi "ISteamUserAuth\AuthenticateUserTicket"

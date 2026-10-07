@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WINE_HOST_ABI_VERSION 3
+#define WINE_HOST_ABI_VERSION 4
 
 typedef void (*wine_host_log_fn)(const char *line);
 
@@ -183,6 +183,23 @@ void wine_host_band_dump(const char *why);
  * more is written this session. 0, the default, is no limit. Added in ABI 1
  * without changing any existing call. */
 void wine_host_set_log_limit(size_t bytes);
+
+/* The host side of the game's Steam tickets (steam_ticket_protocol.h,
+ * decision 0062): the calls playport_steam_unix_call_funcs (steam_ticket.c)
+ * makes, on the game's thread, after it checked the block. Each returns an
+ * NTSTATUS from steam_ticket_protocol.h and must not wait on the network.
+ * hello answers 1 when the play's tickets are armed. create writes at most
+ * cap bytes. Set (or cleared with NULL) from any app thread; with none set
+ * every call answers PP_STEAM_NOT_SUPPORTED. Added in ABI 4 without changing
+ * any existing call. */
+typedef struct {
+    unsigned (*hello)(void);
+    unsigned (*create)(unsigned type, const char *identity, unsigned *handle,
+                       unsigned char *ticket, unsigned cap, unsigned *size);
+    unsigned (*status)(unsigned handle, unsigned *state, unsigned *eresult);
+    unsigned (*cancel)(unsigned handle);
+} wine_host_steam_ticket_provider;
+void wine_host_set_steam_ticket_provider(const wine_host_steam_ticket_provider *provider);
 
 #ifdef __cplusplus
 }

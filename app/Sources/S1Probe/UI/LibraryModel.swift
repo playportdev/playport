@@ -238,16 +238,21 @@ final class LibraryModel: ObservableObject {
         // The emulator's encrypted app ticket, on by default (decision 0017): asked for now, while the
         // session is up (TitleLaunch.start closes it), after the start's sweep of old ones.
         var ticket: Secret<[UInt8]>?
+        // The game's auth session and web API tickets, on by default (decision 0062): armed now, and
+        // the CM session stays logged on for them alone through the play.
+        var tickets: SteamTicketBroker?
         if let app = t.appID, settings.steamAPI == .emulated, let service {
             await ticketSweep?.value
             ticket = await service.encryptedAppTicket(appID: app)
+            tickets = await service.prepareTicketSession(appID: app, playLog: SteamTicketHost.log)
         }
         let steamAPI = t.appID.map { app in
             LaunchCoordinator.SteamAPI(appID: app, root: Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true),
                                        mode: settings.steamAPI,
                                        settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) },
-                                       ticket: ticket)
+                                       ticket: ticket, tickets: tickets)
         }
+        let endTickets = { if tickets != nil { Task { await service?.endPlay() } } }
         // An Epic game's sign-in (decision 0059), fetched now: the code lives five minutes.
         var epicArgs: [String] = []
         var epic: LaunchCoordinator.Epic?
@@ -269,6 +274,7 @@ final class LibraryModel: ObservableObject {
                 } catch {
                     Self.log("epic: \(t.name) could not be signed in: \(error)")
                     askEpicSignIn(t, error)
+                    endTickets()
                     return false
                 }
             }
@@ -282,7 +288,10 @@ final class LibraryModel: ObservableObject {
                                        screen: settings.screen, frameLimit: settings.frameLimit,
                                        graphics: settings.graphics,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
-                                       memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic) else { return false }
+                                       memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic) else {
+            endTickets()
+            return false
+        }
         catalog.update(id) { $0.lastPlayed = Date() }
         save()
         PlayClock.shared.begin(id)

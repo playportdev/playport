@@ -11,6 +11,7 @@
 import EpicClientKit
 import Foundation
 import PlayportKit
+import SteamClientKit
 import SwiftUI
 import WineHost
 
@@ -143,7 +144,8 @@ final class TitleLaunch: ObservableObject {
     private func begin(screen: String? = nil, frameLimit: Int = 0) {
         running = true
         // Steam work stops before the runtime starts (decision 0004); the JIT
-        // wait ahead of wine_host_init leaves it ample time to disconnect.
+        // wait ahead of wine_host_init leaves it ample time to disconnect. A play
+        // with armed tickets keeps the CM logged on for them alone (decision 0062).
         if let steam = SteamAccountModel.current { Task { await steam.suspendForLaunch() } }
         TitleScreen.configure(title: screen, frameLimit: frameLimit)
         // The pads are the guest's from here, not the app screens' (UI/Pad/PadRouter.swift).
@@ -176,9 +178,16 @@ final class TitleLaunch: ObservableObject {
         if why?.step != nil { why?.titleID = titleID; why?.appID = appID }
         // The play time, on disk before the restart ends this process.
         LibraryModel.shared.sessionEnded(counted: spent)
+        // The play's tickets end with it (decision 0062): Steam is told within a second.
+        let steam = SteamAccountModel.current?.service
         if spent {
-            AppRestart.shared.restart(notice: why)
+            let notice = why
+            Task {
+                await steam?.endPlay()
+                AppRestart.shared.restart(notice: notice)
+            }
         } else {
+            Task { await steam?.endPlay() }
             PadRouter.shared.takeBack()
             message = why
         }
