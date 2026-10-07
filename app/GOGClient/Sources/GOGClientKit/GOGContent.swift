@@ -5,7 +5,8 @@
 //              newest first, each with the link to its build manifest
 //   build      zlib JSON: installDirectory, depots by language, bitness and product
 //              (the GOG depot holds goggame-ID.info, the play tasks), and the game's
-//              own cloud client credentials, which are never kept or logged
+//              own Galaxy client ID and secret (GOGGalaxyClient: kept in the install
+//              record for the game's Galaxy sign-in, decision 0063; never logged)
 //   depot      cdn.gog.com/content-system/v2/meta/aa/bb/HASH, zlib JSON: files, each
 //              a list of chunks (md5 of the plain bytes, md5 of the zlib bytes, sizes)
 //   chunks     a secure link (signed, expiring) + /aa/bb/<compressed md5>, zlib
@@ -18,6 +19,42 @@ public struct GOGBuild: Codable, Equatable, Sendable {
     public var version: String?
     public var published: String?
     public var link: URL
+}
+
+/// A game's own Galaxy client identity, from its build manifest (decision 0063): what
+/// the Galaxy SDK in the game sends to the local Galaxy service, and what the host
+/// checks it against before minting the game's token. Public (every build manifest
+/// carries it), but a game identity: the secret is never logged.
+public struct GOGGalaxyClient: Codable, Equatable, Sendable {
+    public var clientID: String
+    public var clientSecret: Secret<String>
+
+    public init(clientID: String, clientSecret: Secret<String>) {
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+    }
+
+    /// GOG's client IDs are decimal and its secrets hex: anything else (a missing or
+    /// placeholder field) is no client.
+    public init?(id: String?, secret: String?) {
+        guard let id, let secret, (1...24).contains(id.count), id.allSatisfy({ $0.isASCII && $0.isNumber }),
+              (16...128).contains(secret.count), secret.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
+        self.init(clientID: id, clientSecret: Secret(secret))
+    }
+
+    enum CodingKeys: String, CodingKey { case clientID = "clientId", clientSecret }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        clientID = try c.decode(String.self, forKey: .clientID)
+        clientSecret = Secret(try c.decode(String.self, forKey: .clientSecret))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(clientID, forKey: .clientID)
+        try c.encode(clientSecret.value, forKey: .clientSecret)
+    }
 }
 
 public struct GOGBuildManifest: Sendable {
@@ -35,10 +72,10 @@ public struct GOGBuildManifest: Sendable {
     public var installDirectory: String
     public var depots: [Depot]
     public var dependencies: [String]
+    /// The game's Galaxy client (decision 0063); nil when the build names none.
+    public var galaxy: GOGGalaxyClient? = nil
 
     static func parse(_ json: [UInt8]) throws -> GOGBuildManifest {
-        // Decoded field by field: the build also carries the game's cloud
-        // clientSecret, which is deliberately not read.
         struct Raw: Decodable {
             struct D: Decodable {
                 var manifest: String
@@ -54,6 +91,8 @@ public struct GOGBuildManifest: Sendable {
             var depots: [D]
             var dependencies: [String]?
             var version: Int?
+            var clientId: String?
+            var clientSecret: String?
         }
         guard let r = try? JSONDecoder().decode(Raw.self, from: Data(json)) else {
             throw ClientError.protocolChanged("GOG build manifest: unexpected shape")
@@ -63,7 +102,7 @@ public struct GOGBuildManifest: Sendable {
         return GOGBuildManifest(buildID: r.buildId ?? "", baseProductID: r.baseProductId, installDirectory: r.installDirectory,
                                 depots: r.depots.map { .init(manifest: $0.manifest, languages: $0.languages ?? ["*"], productID: $0.productId,
                                                              size: $0.size ?? 0, bitness: $0.osBitness, isGogDepot: $0.isGogDepot ?? false) },
-                                dependencies: r.dependencies ?? [])
+                                dependencies: r.dependencies ?? [], galaxy: GOGGalaxyClient(id: r.clientId, secret: r.clientSecret))
     }
 
     /// The depots to install (plan 2.2): the base game's and owned DLCs', Windows

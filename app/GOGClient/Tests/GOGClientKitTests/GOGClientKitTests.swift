@@ -53,6 +53,30 @@ final class GOGClientKitTests: XCTestCase {
         XCTAssertEqual(m.selected(language: "pl-PL").count, 2, "no Polish depot: English")
     }
 
+    func testTheBuildsGalaxyClientIsReadAndAPlaceholderIsNone() throws {
+        XCTAssertNil(try GOGBuildManifest.parse(try Zlib.json(try fixture("build.zlib"))).galaxy,
+                     "the fixture's fields are placeholders: no client")
+        let secret = String(repeating: "0f", count: 32)
+        let json = #"{"baseProductId":"7","installDirectory":"G","depots":[],"version":2,"clientId":"51234567890123456","clientSecret":""# + secret + #""}"#
+        let m = try GOGBuildManifest.parse(Array(json.utf8))
+        XCTAssertEqual(m.galaxy?.clientID, "51234567890123456")
+        XCTAssertEqual(m.galaxy?.clientSecret.value, secret)
+        XCTAssertEqual("\(m.galaxy!)".contains(secret), false, "the secret never prints")
+        XCTAssertNil(GOGGalaxyClient(id: "123", secret: "not hex at all, not hex at all"))
+        XCTAssertNil(GOGGalaxyClient(id: nil, secret: secret))
+    }
+
+    func testTheInstallRecordKeepsTheGalaxyClientAndAnOlderRecordStillReads() throws {
+        let g = GOGGalaxyClient(clientID: "5", clientSecret: Secret("abcdef0123456789"))
+        let rec = GOGInstalled(productID: "7", buildID: "1", version: nil, installDir: "G", files: [], galaxy: g, galaxyRead: true)
+        let back = try JSONDecoder().decode(GOGInstalled.self, from: JSONEncoder().encode(rec))
+        XCTAssertEqual(back, rec)
+        let old = #"{"productID":"7","buildID":"1","installDir":"G","files":[]}"#
+        let o = try JSONDecoder().decode(GOGInstalled.self, from: Data(old.utf8))
+        XCTAssertNil(o.galaxy)
+        XCTAssertNil(o.galaxyRead, "an older record: the client is read from its build at the next launch")
+    }
+
     func testDepotSelectionKeepsNeutral64BitAndOwnedDLCs() {
         func d(_ m: String, _ l: [String], _ p: String = "1", _ b: [String]? = nil) -> GOGBuildManifest.Depot {
             .init(manifest: m, languages: l, productID: p, size: 1, bitness: b, isGogDepot: false)
