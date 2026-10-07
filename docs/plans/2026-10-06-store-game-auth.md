@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4 and
 the runtime fixes 4b done (4's S1 waits for a title that asks for a ticket; no EOS sign-in
-shown yet); GOG (step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
+shown yet: Jurassic World Evolution now waits behind a hidden launcher-check window); GOG
+(step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
 can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
 (`b21f63d`); nothing is built or drafted.
 
@@ -119,8 +120,9 @@ plays as before. The container search after the plays found no copy of the code,
 account ID or the token. Open:
 - No game has shown an EOS sign-in yet. The two runtime causes found here are fixed in
   4b (PLA-40 TLS roots, PLA-41 the executable window and the pool copy); Snakebird's EOS
-  now ends `UnexpectedError`, and Jurassic World Evolution stops at a missing
-  `gdiplus.dll`. Step 6 needs one of them past that or another EOS title.
+  now ends `UnexpectedError`, and Jurassic World Evolution, past its imports and a stale
+  pool copy, waits on a window the app does not show (most likely its "Epic launcher is
+  installed" check). Step 6 needs one of them past that or another EOS title.
 - The sign-in failure page and sign-out removal are checked by host tests only.
 
 **2. Steam encrypted app ticket: 0017 accepted. Done 2026-10-07** (`e65f3f0`, `bd490ac`,
@@ -196,13 +198,21 @@ with its phone run:
 - **Jurassic World Evolution's missing DLLs. Done 2026-10-07**
   ([evidence](../evidence/2026-10-07-jwe.md), IPA `753ebd58`). The arm64ec `gdiplus.dll` and
   its import `mlang.dll` are staged (`EXTRA_PE`; mlang's COM keys in the registry seed). JWE
-  gets past its imports and its packer, then ends `0xc0000005` at 4.1 s: `uxtheme.dll`, loaded
-  where `rsaenh.dll` was just freed (same size), reuses rsaenh's stale JIT-pool copy (next:
-  madeira-unix 0091).
+  gets past its imports and its packer, then ended `0xc0000005` at 4.1 s: `uxtheme.dll`, loaded
+  where `rsaenh.dll` was just freed (same size), reused rsaenh's stale JIT-pool copy.
+- **The stale JIT-pool copy. Done 2026-10-07** (same evidence, IPA `10469f9b`).
+  madeira-unix 0091 checks a pool entry found by address against its copy's PE header and
+  section table; a mismatch is copied fresh (`[jit-pool] stale copy replaced`). Hollow Knight,
+  Death's Door, Snakebird and Portal 2 play as before. JWE now stays alive but shows no frame:
+  its one window (550×146, centred, made as a message box makes it) is GDI-only, which the
+  app does not show. The likeliest cause, from its strings and its `EpicGamesLauncher` folder
+  probes: Frontier's check that Epic's launcher is installed. EOS is never reached.
 
-Open after 4b (filed separately, not fixed here): Snakebird's EOS login ends
-`UnexpectedError` with its TLS fixed (cause unknown: the SDK logs nothing more); The Witcher 3 with its disk cache on dies 239 ms in, in
-FEX, on every IPA of the day (plays with it off); Among Us still ends in PLA-39.
+Open after 4b (filed separately, not fixed here): Jurassic World Evolution's hidden window
+(two questions: what its launcher check reads, and whether the app should show a guest's GDI
+windows, at least a message box); Snakebird's EOS login ends `UnexpectedError` with its TLS
+fixed (cause unknown: the SDK logs nothing more); The Witcher 3 with its disk cache on dies
+239 ms in, in FEX, on every IPA of the day (plays with it off); Among Us still ends in PLA-39.
 
 **5. GOG Galaxy (decision 0063).** The host is the game's local Galaxy service while a GOG
 game with a Galaxy client ID runs. Measured first on the workstation (B0, 2026-10-07, with
@@ -240,7 +250,7 @@ CMake caches hold absolute paths).
 
 Step 1 → step 4 → runtime fixes (4b) → GOG (step 5) → phone gates (6) → release (7). Next:
 GOG, from B1; before step 6, an EOS title that signs in (Jurassic World Evolution's
-`gdiplus.dll`, Snakebird's `UnexpectedError`). Each step commits with its
+launcher check behind its hidden window, Snakebird's `UnexpectedError`). Each step commits with its
 own evidence; the scratch measurements behind the designs are left in the build area.
 
 ## Risks

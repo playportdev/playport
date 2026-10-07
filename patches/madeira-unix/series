@@ -89,3 +89,4 @@
 0088-crypt32-hand-every-process-of-a-session-the-whole-ro.patch
 0089-ntdll-keep-the-executable-window-for-an-executable-t.patch
 0090-ntdll-give-a-pure-x86-64-image-no-JIT-pool-copy.patch
+0091-ntdll-do-not-reuse-a-freed-image-s-JIT-pool-copy-for.patch

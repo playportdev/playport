@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Wed, 7 Oct 2026 15:00:00 +0200
+Subject: [PATCH] ntdll: do not reuse a freed image's JIT-pool copy for a new
+ image of its size
+
+mprotect_exec takes an address inside a known pool copy's PE range as
+"already copied" and skips the copy. ml352 validates such an entry by the
+MZ and SizeOfImage now at its base, because a freed image's entry stays in
+the table until its process exits (ios_jit_reclaim_process) and a later
+image can be mapped over its range. An image of the same SizeOfImage at the
+same base passed that check: Jurassic World Evolution frees rsaenh.dll and
+maps uxtheme.dll (both 0xc0000) at its base, and uxtheme's
+DllMainCRTStartup ran rsaenh's bytes at that offset, writing into rsaenh's
+read-only header (c0000005, unhandled, 4 s in).
+
+The entry is now also checked against its pool copy's header: the PE
+signature and file header, the optional header through BaseOfCode (entry
+point, code and data sizes) and the section table, within the first 0x400
+bytes, read fault-safe. A mismatch skips the entry, logs `[jit-pool] stale
+copy replaced`, and the image is copied fresh; add_mapping's overlap purge
+then tombstones the stale entry, as for ml352's case.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-07-jwe.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index caa2b20..874f07b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -9612,6 +9612,34 @@ static kern_return_t ios_anon_view_protect( char *base, size_t size )
+     return kr;
+ }
+ 
++/* Whether the pool copy at `copy` still holds the image now mapped at `pe`
++ * (PE header at `lfanew`, already read from `pe`): the PE signature and file
++ * header, the optional header up to BaseOfCode (its entry point, code and data
++ * sizes) and the section table, within the first 0x400 bytes. Fault-safe
++ * reads: the stale base may be unmapped. */
++static int ios_jit_copy_header_matches( const char *pe, const char *copy, unsigned int lfanew )
++{
++    unsigned char live[0x400], held[0x400];
++    mach_vm_size_t got = 0;
++    unsigned int sec, sec_end;
++
++    if (lfanew + 0x30 > sizeof(live)) return 1;  /* nothing comparable: keep the old answer */
++    if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)pe, sizeof(live),
++                                (mach_vm_address_t)live, &got ) != KERN_SUCCESS || got != sizeof(live))
++        return 0;
++    if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)copy, sizeof(held),
++                                (mach_vm_address_t)held, &got ) != KERN_SUCCESS || got != sizeof(held))
++        return 0;
++    /* the signature, IMAGE_FILE_HEADER and the optional header through BaseOfCode */
++    if (memcmp( live + lfanew, held + lfanew, 0x30 )) return 0;
++    /* the section table (past ImageBase and CheckSum, which the loader may rewrite) */
++    sec = lfanew + 0x18 + (live[lfanew + 0x14] | (live[lfanew + 0x15] << 8));
++    sec_end = sec + (live[lfanew + 6] | (live[lfanew + 7] << 8)) * 40;
++    if (sec_end > sizeof(live)) sec_end = sizeof(live);
++    if (sec < sec_end && memcmp( live + sec, held + sec, sec_end - sec )) return 0;
++    return 1;
++}
++
+ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+ {
+     /* ml247: catch WHO narrows maxprot on pool pages.
+@@ -9978,6 +10006,24 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+                                     mz, lfanew, imgsz, base);
+                             continue;
+                         }
++                        /* An image of the same SizeOfImage mapped at a freed
++                         * image's base passes the check above: Jurassic World
++                         * Evolution frees rsaenh.dll and maps uxtheme.dll
++                         * (both 0xc0000) there, and uxtheme's DllMain ran
++                         * rsaenh's copy. Compare the headers that tell two
++                         * images apart (the PE signature and file header,
++                         * the optional header up to BaseOfCode, the section
++                         * table) between the live image and its pool copy. */
++                        if (!ios_jit_copy_header_matches( (const char *)mb,
++                                                          (const char *)ios_jit_mappings[i].jit_base,
++                                                          lfanew ))
++                        {
++                            dprintf(2, "[jit-pool] stale copy replaced: entry pe=%p+0x%lx jit=%p "
++                                    "holds another image's header; copying fresh image for %p\n",
++                                    (void *)mb, (unsigned long)ios_jit_mappings[i].size,
++                                    ios_jit_mappings[i].jit_base, base);
++                            continue;
++                        }
+                     }
+                     ERR("iOS JIT: %p already in mapping %d (%p+0x%lx)\n",
+                         base, i, (void*)mb, (unsigned long)ios_jit_mappings[i].size);
