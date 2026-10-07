@@ -125,6 +125,13 @@ public actor GOGSession {
         loaded = true
     }
 
+    /// The kept refresh token, for minting a game's own token (GalaxyService, decision
+    /// 0063): read only, never refreshed or replaced by that grant.
+    func hostRefreshToken() throws -> Secret<String>? {
+        loadIfNeeded()
+        return tokens.map { Secret($0.refreshToken) }
+    }
+
     private func fetch(_ grant: [URLQueryItem], label: String) async throws -> GOGTokens {
         let body = try await http.get(GOGAPI.tokenURL(grant), maxBytes: 1 << 16, label: label)
         struct Reply: Decodable {
