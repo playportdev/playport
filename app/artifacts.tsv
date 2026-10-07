@@ -158,7 +158,7 @@ resource	Runtime/arm64ec-windows/winegstreamer.dll	1179648	090061c0eb2e73048808c
 resource	Runtime/arm64ec-windows/winemetal.dll	110592	6eac9eef6dc4516e3aed99d880589c09b33b5f509764e7e28d95bb4a5153b4ea	dxmt-pe	arm64ec-windows/winemetal.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/winevulkan.dll	983040	c5404bfd70afc631c33b97dfb6e9ebdff78b8ac744d2b68b40aa5f6ecd346973	wine-build	build-arm64ec/dlls/winevulkan/arm64ec-windows/winevulkan.dll	P2
 resource	Runtime/arm64ec-windows/winhttp.dll	1048576	8ac9b21729059f5fe592d037c6d779b53f004084e16d81ce2ab21689b7bbc2a8	wine-build	build-arm64ec/dlls/winhttp/arm64ec-windows/winhttp.dll	P2
-resource	Runtime/arm64ec-windows/wininet.dll	1245184	197e8dc8c729d17bc5590b02189d4e860e18070876e02ad4021ef1d38552b6dd	wine-build	build-arm64ec/dlls/wininet/arm64ec-windows/wininet.dll	P2
+resource	Runtime/arm64ec-windows/wininet.dll	1245184	8f1294926e9eced8fe8966961d767df31ac02f2986569262feb26a870936b288	wine-build	build-arm64ec/dlls/wininet/arm64ec-windows/wininet.dll	P2
 resource	Runtime/arm64ec-windows/winmm.dll	1376256	dea4bb6f19d05aa4709cc5b15b96303a9726373fff7a6aad2f63542e090fc953	wine-build	build-arm64ec/dlls/winmm/arm64ec-windows/winmm.dll	P2
 resource	Runtime/arm64ec-windows/winspool.drv	786432	9e1dffa4e641181a017d25d0057d6767225baf3fa01759e880aab5594e8a9c7c	wine-build	build-arm64ec/dlls/winspool.drv/arm64ec-windows/winspool.drv	P2
 resource	Runtime/arm64ec-windows/wintrust.dll	786432	6538144a08b51497dba1f82b2ed386760b6b699cfab035935363d12c098beb7d	wine-build	build-arm64ec/dlls/wintrust/arm64ec-windows/wintrust.dll	P2
@@ -291,7 +291,7 @@ resource	Runtime/aarch64-windows/wined3d.dll	4653056	ddf4e1eeb618b9d32afd79721c4
 resource	Runtime/aarch64-windows/winemetal.dll	69632	289e4aa2f5fbb03936dec2d62445cd5ed1f485db1fadf3133aff4dfdf1ab1b1e	dxmt-pe	aarch64-windows/winemetal.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/winemine.exe	655360	e948186fc70e990285247d1645afcadd427c882f0c453a13f4b15503769ec691	wine-build	build-macos/programs/winemine/aarch64-windows/winemine.exe	P2
 resource	Runtime/aarch64-windows/winhttp.dll	851968	774f48e3c3fbb8aafa3bc1d8ef09d2d56a244e3261c07e55561536dfca31e0e4	wine-build	build-macos/dlls/winhttp/aarch64-windows/winhttp.dll	P2
-resource	Runtime/aarch64-windows/wininet.dll	1048576	426c4186726a82680be57bdabaae98650acd2dca4b50602a2c5fee4bee4ce885	wine-build	build-macos/dlls/wininet/aarch64-windows/wininet.dll	P2
+resource	Runtime/aarch64-windows/wininet.dll	1048576	89e8d4017c03c0ab9ced14bba3d68aae7934c4c840933cd69268e6b7d30cdbbf	wine-build	build-macos/dlls/wininet/aarch64-windows/wininet.dll	P2
 resource	Runtime/aarch64-windows/winmm.dll	1179648	39c50c871363663069bd0b114ee31e8c9f04cde0b8e7c97f90b04176a2c01feb	wine-build	build-macos/dlls/winmm/aarch64-windows/winmm.dll	P2
 resource	Runtime/aarch64-windows/wintrust.dll	589824	ac6ca5396cea5494d3f19b780ecaf8d945577996260f8d9c91f2b00666bd7795	wine-build	build-macos/dlls/wintrust/aarch64-windows/wintrust.dll	P2
 resource	Runtime/aarch64-windows/winusb.dll	458752	4dd34f8d7e7fd217263aaa9918374e691685a76b5caa387e860b46911b721fbe	wine-build	build-macos/dlls/winusb/aarch64-windows/winusb.dll	P2
@@ -842,7 +842,7 @@ resource	Runtime/i386-windows/wineps.drv	679936	fa3f48c08399328abaaf4af4d58e84b5
 resource	Runtime/i386-windows/winevulkan.dll	360448	c899ee0d0bbaad683b39069ada8eb1c92632333b12ccbc022ca47da5535ce6ac	wine-build	build-macos/dlls/winevulkan/i386-windows/winevulkan.dll	P2
 resource	Runtime/i386-windows/wing32.dll	28672	0d77db7677358dbe41872464c97dd46792f1e91023503992192a8482a7cd2ded	wine-build	build-macos/dlls/wing32/i386-windows/wing32.dll	P2
 resource	Runtime/i386-windows/winhttp.dll	450560	c7eb07997c8ab8352afb16ad8eb6ed09eea8b34905a6417d254ba202f0de4082	wine-build	build-macos/dlls/winhttp/i386-windows/winhttp.dll	P2
-resource	Runtime/i386-windows/wininet.dll	598016	50e6dc930cc2ce161686e0a15bdcc766666c0c0883099b454877784d41fa4e6f	wine-build	build-macos/dlls/wininet/i386-windows/wininet.dll	P2
+resource	Runtime/i386-windows/wininet.dll	598016	04669f67144f8de4fc29761ab908aa54e9ee55049c70e13a61a1778a2029e01b	wine-build	build-macos/dlls/wininet/i386-windows/wininet.dll	P2
 resource	Runtime/i386-windows/winmm.dll	843776	3cf20f7a8f52341b7235324fdfe0ee4fc3bb4ee330f7d40609ea3daf169ce1c2	wine-build	build-macos/dlls/winmm/i386-windows/winmm.dll	P2
 resource	Runtime/i386-windows/winnls32.dll	28672	651a7c50cdce5151dcaca7102a9eb974b40f8a767e3299629f6dda2d50d3bd41	wine-build	build-macos/dlls/winnls32/i386-windows/winnls32.dll	P2
 resource	Runtime/i386-windows/winprint.dll	36864	8dba82a7c8796fdf9b793e5dd1195b37932b741f4891fa1294c7f9beee67fb3b	wine-build	build-macos/dlls/winprint/i386-windows/winprint.dll	P2

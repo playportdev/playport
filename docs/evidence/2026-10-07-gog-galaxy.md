@@ -13,8 +13,10 @@ owner's account. Run directories are under `$PLAYPORT_BUILD/agent-notes/store-au
 
 **Update, PLA-55 (IPA `5eaca1e8`, below):** the SDK's silence was a system APC that never ran;
 with wine-unix 0018 Moonscars and Monster Train send `AUTH_INFO` and get the token within half a
-second. Their sign-in at GOG then fails on the next gap, Schannel without security packages
-(PLA-50), so the gate still does not pass. The rest of this section is the first state.
+second. Their sign-in at GOG then failed on the next gap. **Update, PLA-58 (IPA `31eda60f`,
+below):** that gap was `InternetGetConnectedState` answering "offline" (no `\\.\Nsi` on iOS), not
+Schannel (PLA-50, refuted). With wine-pe 0029 both games sign in, and the gate passes. The rest of
+this section is the first state.
 
 The host side works; the gate does not pass. On the phone the Galaxy SDK of Moonscars and
 Monster Train connects to the service and sends nothing, then signs out with
@@ -136,7 +138,8 @@ those only once signed in. The likely cause, inferred from the same thread's ear
 not measured: `secur32:start_samss Failed to open service manager` and `load_auth_packages Failed
 to get security packages list: 80090304`. The pinned Wine's secur32 gets its packages from an
 lsass service that the phone does not run, so Schannel has no TLS package (PLA-50). Proton 10's
-secur32, on the workstation, does not ask that service. No achievement was unlocked.
+secur32, on the workstation, does not ask that service. No achievement was unlocked. (This
+inference was wrong: see PLA-58 below.)
 
 **Monster Train** (`gog-1304291300`, `--until first-frame+60 --shot`): first frame +4.25 s,
 the black screen at +60 s as before. `AUTH_INFO (87 bytes) -> 200 (91 bytes)` 0.57 s after the
@@ -188,7 +191,100 @@ title. Other titles that poll a completion port with a zero timeout pay the same
   frame +4.95 s, the main menu; `Player.log`: `Tried to login auth: Success`, `Logged in to
   connect` (the silent EOS sign-in).
 
+## PLA-58: the SDK asks whether the machine is online (wine-pe 0029)
+
+**IPA** `Playport-26.5-31eda60f.ipa` (dev), sha256
+`31eda60fed9be1c02d94d74133454d97138851a25c18f9a792fba8b55d2092b8`: `95a6fb9` with
+`patches/wine-pe/0029-wininet-report-a-LAN-connection-when-there-is-no-ada.patch`. Phone as
+above, unattended. Run directories: `$PLAYPORT_BUILD/ui-runs/20261007T202659` (Moonscars),
+`…T202833` (Monster Train), `…T203425`, `…T203521`, `…T203626`, `…T203807` (the regressions);
+the workstation runs are in `$PLAYPORT_BUILD/agent-notes/store-auth/pla50/`.
+
+**Cause** (measured on the workstation; PLA-50's secur32 hypothesis refuted). Right after
+`AUTH_INFO` the SDK calls `InternetGetConnectedState`, the only function `Galaxy64.dll` imports
+from wininet. Wine answers it from `GetAdaptersAddresses`. On iOS there is no `nsiproxy.sys`,
+so there is no `\\.\Nsi` device, and Madeira's in-process NSI fallback serves only the TCP
+tables: the NDIS interface table fails (`[nsi-ios] non-tcp module eb004a11 table=0 ->
+NOT_SUPPORTED`; the play's first fallback line reads `no \\.\Nsi (err 2)`), so the call
+answers "offline" and the SDK gives up with `FAILURE_REASON_CONNECTION_FAILURE` before it
+contacts `auth.gog.com`. Under Proton 10, with a real game token from the workstation's copy of
+the GOG session (no gameplay request let through), Moonscars signs in. With the nsiproxy
+service disabled it fails 3 ms after the reply, as on the phone. A wininet shim that answers
+"LAN" makes it sign in again with the device still gone. Schannel was not the cause: its
+handshake completes on the phone, and desktop picks the same ChaCha20 suite. secur32 still has
+no lsass packages on the phone (no NTLM, Negotiate or Kerberos), which does not affect TLS.
+
+**Fix.** wine-pe 0029: when `GetAdaptersAddresses` fails with `ERROR_FILE_NOT_FOUND` (no
+`\\.\Nsi`) or `ERROR_NOT_SUPPORTED`, `InternetGetConnectedStateExW` reports a LAN connection,
+as its gateway case does, with one FIXME. `ERROR_NO_DATA` and the other errors behave as before.
+
+**Moonscars** (`gog-2106173825`, `--until first-frame+60 --shot`): JIT 2.35 s, first frame
++5.51 s, the title screen ("Press Space to Start") at +60 s.
+
+    galaxy: 18:27:15.884Z [galaxy] a connection from the game
+    galaxy: 18:27:16.116Z [galaxy] AUTH_INFO: a game token minted for the build's client in 0.23 s
+    galaxy: 18:27:16.275Z [galaxy] AUTH_INFO (87 bytes) -> 200 (91 bytes)
+    0104:fixme:wininet:InternetGetConnectedStateExW no adapter table (error 2): returning a LAN connection
+    [srv-conn] … dport=443 …   (two connections, then two more)
+    galaxy: 18:27:16.792Z [galaxy] web broker: topic subscription acknowledged, nothing will be pushed   (×3)
+
+The connection to the service stayed open to the end of the play (no `the game closed a
+connection` line). `Player.log`: `Galaxy SDK was initialized`, `AuthenticationListener::
+OnAuthSuccess()` (followed by the account's Galaxy user ID, not quoted), `Connection state to GOG
+services changed to GOG_SERVICES_CONNECTION_STATE_CONNECTED`; no `OnAuthFailure`. Moonscars asked
+for no stats or achievements within the 60 s at its title screen.
+
+**Monster Train** (`gog-1304291300`, `--until first-frame+60 --shot`): first frame +4.24 s, the
+black screen at +60 s as on earlier IPAs (its `Player.log` has the same `GraphicsSettingsManager`
+`Sequence contains no elements` exception as before).
+
+    galaxy: 18:28:51.530Z [galaxy] a connection from the game
+    galaxy: 18:28:51.889Z [galaxy] AUTH_INFO (87 bytes) -> 200 (91 bytes)
+    00f0:fixme:wininet:InternetGetConnectedStateExW no adapter table (error 2): returning a LAN connection
+    galaxy: 18:28:52.583Z [galaxy] web broker: topic subscription acknowledged, nothing will be pushed   (×3)
+    galaxy: 18:28:52.791Z [galaxy] GET_USER_STATS (9 bytes) -> 200 (0 bytes)
+    galaxy: 18:28:52.996Z [galaxy] GET_USER_ACHIEVEMENTS (9 bytes) -> 200 (16450 bytes)
+
+Its `logfile.log` no longer says `Unable to authenticate with GOG`. It logs `GOG State. Signed
+in: True. Logged On: True.` and starts a run-history migration for the GOG user (it had used a
+generated signed-out user before). No achievement and no stat was set by either game: the service logged no write
+request.
+
+**0063's measurement after a successful sign-in.** The same scratch script as above walked the
+container after both plays and read every file modified since just before the first of them.
+It printed counts and paths, never a value.
+
+| Files walked | Bytes walked | Files read (modified since) | Hits |
+| --- | --- | --- | --- |
+| 17,785 | 89.0 GB | 44 (51.5 MB) | **0** |
+
+Three files matched the access-token shape, and none of the matches is a token. In `s1-host.log`
+and `s1-host.prev.log` the matches are Swift symbol names in a thread backtrace (preceded by
+`$`). In Metal's shader cache (`Library/Caches/…/com.apple.metal/functions.data`) all 9 are C++
+mangled names (`_Z…`) after `BasicBlock:` in the compiler's remarks. Nothing matched the
+refresh-token shape or the key names. So the SDK, signed in, wrote no GOG token to a file in the
+first minute. Process memory is not searched.
+
+**Regressions on `31eda60f`** (one `pp phone lock` session):
+
+- Hollow Knight (`app-367520`, `first-frame+10 --shot`): JIT 2.43 s, first frame +9.26 s, the
+  title menu; `emulator connected (protocol 1, tickets armed)`.
+- Shogun Showdown (`gog-1104084973`, `first-frame+20 --shot`): first frame +18.65 s, "Press any
+  button"; the service listened and nothing connected.
+- Valheim (`app-892970`, on its page's DXMT, `first-frame+60 --shot`): first frame +6.90 s, the
+  intro cinematic at +60 s. `[ticket] ticket 1347420161: auth session for app 892970, 240 bytes`,
+  `auth list acked by Steam`, `checked by a server: EAuthSessionResponse 0 (OK), state 2`,
+  `cancelled by the game`. `Player.log`: `Logged in PlayFab user via Steam auth session ticket`
+  at the first attempt.
+- Snakebird Complete (`epic-8337d1f975514d35ad0c1176e8a29f26`, `first-frame+30 --shot`): first
+  frame +4.77 s, the main menu; `Player.log`: `Tried to login auth: Success`, `Logged in to
+  connect`.
+
+None of these four plays logged the wininet FIXME.
+
 ## Not checked on the phone
 
-The GOG sign-in itself (blocked by PLA-50, above), a gameplay request, the token refresh,
-sign-out during a play; they are host-tested only (`GalaxyTests`).
+An achievement or stat write (none was made: an unlock is permanent on the owner's account), the
+token refresh, sign-out during a play; they are host-tested only (`GalaxyTests`). A phone that
+is offline now tells a game that asks `InternetGetConnectedState` that it is online (wine-pe
+0029); not played offline.

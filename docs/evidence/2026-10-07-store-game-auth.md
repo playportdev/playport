@@ -16,7 +16,7 @@ was made. The release variant of this IPA was not built or checked.
 | Epic | **An EOS game signs in.** Snakebird Complete's first sign-in goes through Playport's web panel (AccountPortal device code, Epic's consent page, Allow). Each later play signs in silently: `Tried to login auth: Success`, `Logged in to connect`, the main menu at first frame +30 s (`5eaca1e8`). | `6eb4929e`, `5eaca1e8` | [url-opener](2026-10-07-url-opener.md) |
 | Steam | **Encrypted app ticket.** Among Us gets a 143-byte ticket (0.22 s on `6b253ef0`). On `5eaca1e8` it was written again (`the encrypted app ticket (143 bytes) written to 1 configs.user.ini`); first frame +15.07 s, the play ran to its stop at first frame +10 s. Its online menu still waits on PLA-39. | `6b253ef0`, `5eaca1e8` | [steam-encrypted-app-ticket](2026-10-07-steam-encrypted-app-ticket.md) |
 | Steam | **Auth session tickets checked by a server.** On DXMT (its page's Direct3D) Valheim's PlayFab login asks for a ticket. The host makes it (240 bytes) and Steam acks it, then `checked by a server: EAuthSessionResponse 0 (OK), state 2`. `Player.log`: `Logged in PlayFab user via Steam auth session ticket` (on `5eaca1e8` at the first attempt). | `baf1dfa1`, `5eaca1e8` | [steam-live-session](2026-10-07-steam-live-session.md), [steam-ticket-valheim](2026-10-07-steam-ticket-valheim.md) |
-| GOG | **The Galaxy service, up to the token.** Moonscars and Monster Train connect to the host's service, send `AUTH_INFO` and get `200` with a freshly minted game token within 0.6 s (PLA-55 fixed by wine-unix 0018). **The Galaxy sign-in itself is not shown:** the SDK's own TLS connection to GOG fails next (`FAILURE_REASON_CONNECTION_FAILURE`; inferred: Schannel has no security packages, PLA-50). | `5eaca1e8` | [gog-galaxy](2026-10-07-gog-galaxy.md) |
+| GOG | **A Galaxy game signs in.** Moonscars and Monster Train connect to the host's service, send `AUTH_INFO` and get `200` with a freshly minted game token within 0.6 s (PLA-55, wine-unix 0018, on `5eaca1e8`). On `31eda60f` (PLA-58, wine-pe 0029: `InternetGetConnectedState` no longer answers "offline" without `\\.\Nsi`) the SDK then signs in at GOG: Moonscars' `Player.log` has `OnAuthSuccess()` and `GOG_SERVICES_CONNECTION_STATE_CONNECTED`, the service connection stays open with three web-broker subscriptions, and Monster Train reads `GET_USER_ACHIEVEMENTS -> 200 (16450 bytes)`. No achievement or stat was written. | `5eaca1e8`, `31eda60f` | [gog-galaxy](2026-10-07-gog-galaxy.md) |
 
 The plan's gate, per title, on `5eaca1e8`:
 
@@ -24,7 +24,7 @@ The plan's gate, per title, on `5eaca1e8`:
 | --- | --- | --- |
 | Epic signs in and reaches its menu | Snakebird Complete | **passes**: first frame +4.95 s, silent EOS sign-in, main menu |
 | Steam's title reaches its online menu signed in | Valheim (DXMT) | **passes the sign-in**: PlayFab logged in with the host's ticket. The main menu was not reached within first frame +60 s; the intro cinematic was still playing |
-| GOG shows its Galaxy sign-in | Moonscars | **does not pass**: `AUTH_INFO -> 200`, then `OnAuthFailure(): FAILURE_REASON_CONNECTION_FAILURE` (PLA-50) |
+| GOG shows its Galaxy sign-in | Moonscars | **does not pass** on `5eaca1e8`: `AUTH_INFO -> 200`, then `OnAuthFailure(): FAILURE_REASON_CONNECTION_FAILURE`. **Passes on `31eda60f`** (PLA-58, wine-pe 0029): `OnAuthSuccess()`, `GOG_SERVICES_CONNECTION_STATE_CONNECTED`; Hollow Knight, Shogun Showdown, Valheim (DXMT, ticket checked, PlayFab) and Snakebird (EOS) replayed on it with the same results ([gog-galaxy](2026-10-07-gog-galaxy.md#pla-58-the-sdk-asks-whether-the-machine-is-online-wine-pe-0029)) |
 | Hollow Knight to `first-frame+10` | Hollow Knight | **passes**: first frame +9.77 s, the title menu, `emulator connected (protocol 1, tickets armed)` |
 | Death's Door to `first-frame+10` | Death's Door | **passes**: first frame +4.39 s, the title menu |
 | Sign-out removes every leftover file | all three | **not run on the phone**: signing out would end sessions the owner pairs again. Host tests only |
@@ -36,7 +36,7 @@ The other plays on `5eaca1e8`:
 - Moonscars under `pp perf --secs 120`: median 60 fps. The poll costs the SDK thread about
   one percentage point of a core ([gog-galaxy](2026-10-07-gog-galaxy.md)).
 
-## Secret searches (`5eaca1e8`)
+## Secret searches (`5eaca1e8`, `31eda60f`)
 
 Scratch scripts under `.work` (not committed) walked the app's container over AFC (house
 arrest) after the plays. Each read every file modified since just before the session's first
@@ -45,6 +45,7 @@ play, and printed counts and paths only.
 | Search | For | Files walked | Read | Hits |
 | --- | --- | --- | --- | --- |
 | after Moonscars and Monster Train | GOG token shapes (a 64-character mixed-case refresh token, a 150 to 400-character access token), `refresh_token`/`access_token`, in ASCII and UTF-16LE | 17,762 (89.0 GB) | 37 (21.5 MB) | **0** (two access-token-shape matches in the host log are Swift symbol names in a backtrace) |
+| after Moonscars and Monster Train signed in (`31eda60f`) | the same | 17,785 (89.0 GB) | 44 (51.5 MB) | **0** (the shape matches are Swift symbol names in the host logs and C++ mangled names in Metal's shader cache) |
 | after every play of the session, Snakebird, Death's Door and Among Us included | an unmasked `userCode=` value, an exchange code in a URL or argument (32 hex, ASCII and UTF-16LE), an `egoc1~` ownership token | 17,780 (89.0 GB) | 81 | **0** |
 
 A second GOG search, after the last plays, was stopped part way: the owner needed the phone. It
@@ -57,8 +58,9 @@ emulator's ini line (the encrypted app ticket, while the game runs) and its own 
 ## Still open
 
 - **PLA-50**: secur32 gets its security packages from an lsass service that the phone does not
-  run (`start_samss Failed to open service manager`, `80090304`). It is now what blocks the
-  GOG Galaxy sign-in (Schannel), and it may affect any game that uses Schannel or SSPI.
+  run (`start_samss Failed to open service manager`, `80090304`). It did not block the GOG
+  sign-in (that was PLA-58, fixed by wine-pe 0029 on `31eda60f`) and does not affect TLS; it
+  leaves no NTLM, Negotiate or Kerberos for a game that uses them.
 - **PLA-41**: Jurassic World Evolution passes its DRM check but shows no frame in 600 s.
 - **PLA-39**: Among Us's EOS client and its fault; its online menu has not been reached.
 - **Valheim on Vulkan** dies at the intro: DXVK calls a NULL `vkGetMemoryWin32HandleKHR` for
