@@ -204,6 +204,21 @@ actor FakeBackend: SteamBackend {
         return Secret(try ticket.get())
     }
 
+    // A live play's tickets (decision 0062).
+    nonisolated let connectTokens = GameConnectTokens()
+    nonisolated let ticketPushes = TicketPushRoute()
+    nonisolated let traffic = CMTraffic()
+    var ownership: Result<[UInt8], Error> = .success(Array("an ownership ticket".utf8))
+    var authLists: [CMsgClientAuthList] = []
+    var gamesPlayed: [[UInt32]] = []
+    func set(ownership o: Result<[UInt8], Error>) { ownership = o }
+    func appOwnershipTicket(appID: UInt32, timeout: Double) async throws -> Secret<[UInt8]> {
+        calls.append("ownership \(appID)")
+        return Secret(try ownership.get())
+    }
+    func sendAuthList(_ list: CMsgClientAuthList) async throws { authLists.append(list) }
+    func setGamesPlayed(_ appIDs: [UInt32]) async throws { gamesPlayed.append(appIDs) }
+
     func logout(revoke: Bool) async throws -> LogoutReport {
         calls.append(revoke ? "logout-revoke" : "logout")
         let had = stored != nil

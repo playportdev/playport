@@ -205,6 +205,12 @@ public actor SteamService {
     private var restoreTask: Task<AccountState, Never>?
     private var signingOut = false
     private var suspended = false
+    /// A live play's tickets (decision 0062): armed at Play, ended before the restart.
+    private var ticketBroker: SteamTicketBroker?
+    private var playReconnectAt: Date?
+    private var playReconnecting = false
+    /// A dropped CM connection is reconnected for the game's tickets at most this often.
+    public static let playReconnectInterval: TimeInterval = 60
 
     /// - Parameters:
     ///   - stateDirectory: where the renewal record and games cache live
@@ -991,15 +997,117 @@ public actor SteamService {
         }
     }
 
-    /// Before the runtime starts (decision 0004): cancel pairing, close the CM
-    /// session and refuse further Steam work in this process. The refresh
-    /// token stays in the Keychain for the next launch.
+    /// Before the runtime starts (decision 0004): cancel pairing and refuse
+    /// further Steam work in this process. The CM session closes, unless the
+    /// play's tickets are armed (prepareTicketSession): then it stays logged on
+    /// for them alone (decision 0062), and every other call is still refused.
+    /// The refresh token stays in the Keychain for the next launch.
     public func suspendForLaunch() async {
         suspended = true
         signInTask?.cancel()
-        await backend.disconnect()
         appInfoCache = [:]
+        if ticketBroker?.isArmed == true {
+            log.info("service", "suspended for a title launch; CM kept for the game's tickets")
+            return
+        }
+        await backend.disconnect()
         log.info("service", "suspended for a title launch; CM session closed")
+    }
+
+    // MARK: a live play's tickets (decision 0062)
+
+    /// Arms the launched game's auth session and web API tickets, asked for
+    /// after Play and before `suspendForLaunch`, within `timeout` seconds: the
+    /// app's ownership ticket, at least one game connect token (waiting up to
+    /// 2 s for Steam's push), and the session in the game (ClientGamesPlayed).
+    /// Only on a session already logged on to the account, as
+    /// `encryptedAppTicket`. Nil when there is no such session, when suspended,
+    /// or when Steam refuses or does not answer; the game then gets the
+    /// emulator's made-up tickets. The broker logs the play's tickets to
+    /// `playLog` (the app: the runtime's log), or else to the service's.
+    public func prepareTicketSession(appID: UInt32, timeout: Double = 5, playLog: Logger? = nil) async -> SteamTicketBroker? {
+        guard !suspended, case .signedIn = state else {
+            log.info("ticket", "app \(appID): tickets off (\(suspended ? "suspended" : "not signed in"))")
+            return nil
+        }
+        let s = await backend.isLoggedOn()
+        guard s.loggedOn, !s.anonymous, s.connected else {
+            log.info("ticket", "app \(appID): tickets off (the session is not connected)")
+            return nil
+        }
+        if ticketBroker != nil { await endPlay() }
+        let started = Date()
+        let backend = self.backend, log = self.log
+        do {
+            let ownership = try await withDeadline(timeout, "app ownership ticket") {
+                try await backend.appOwnershipTicket(appID: appID, timeout: timeout)
+            }
+            let tokens = backend.connectTokens
+            for _ in 0..<20 where tokens.count == 0 { try await Task.sleep(nanoseconds: 100_000_000) }
+            guard tokens.count > 0 else {
+                log.warn("ticket", "app \(appID): tickets off (Steam has given no game connect token)")
+                return nil
+            }
+            let broker = SteamTicketBroker(
+                appID: appID, ownershipTicket: ownership, tokens: tokens, traffic: backend.traffic, log: playLog ?? log,
+                send: { list in
+                    Task.detached(priority: .utility) {
+                        do { try await backend.sendAuthList(list) } catch { log.warn("ticket", "auth list not sent: \(error)") }
+                    }
+                },
+                reconnect: { [weak self] in Task { await self?.reconnectForPlay() } })
+            backend.ticketPushes.set { p in broker.handle(p) }
+            ticketBroker = broker
+            do { try await backend.setGamesPlayed([appID]) } catch { log.warn("ticket", "app \(appID): games played not set: \(error)") }
+            log.info("ticket", "app \(appID): tickets armed: ownership ticket \(ownership.value.count) bytes, "
+                     + "\(tokens.count) game connect token(s), in " + String(format: "%.2f", Date().timeIntervalSince(started)) + " s")
+            return broker
+        } catch {
+            log.warn("ticket", "app \(appID): tickets off: \(error)")
+            return nil
+        }
+    }
+
+    /// A play's dropped CM connection, again (decision 0062): the stored
+    /// session logs on anew, at most once each `playReconnectInterval`, only
+    /// while the play's tickets are armed. Its tickets ended with the old one.
+    func reconnectForPlay() async {
+        guard let broker = ticketBroker, broker.isArmed, !playReconnecting else { return }
+        if let last = playReconnectAt, now().timeIntervalSince(last) < Self.playReconnectInterval {
+            log.info("ticket", "CM reconnect not due: the last was \(Int(now().timeIntervalSince(last))) s ago")
+            return
+        }
+        playReconnecting = true
+        playReconnectAt = now()
+        defer { playReconnecting = false }
+        let started = Date()
+        await backend.disconnect()
+        do {
+            _ = try await backend.restore()
+            broker.connectionReplaced()
+            try? await backend.setGamesPlayed([broker.appID])
+            log.info("ticket", "CM reconnected for the game's tickets in " + String(format: "%.2f", Date().timeIntervalSince(started)) + " s")
+        } catch {
+            log.warn("ticket", "CM reconnect for the game's tickets failed: \(error)")
+        }
+    }
+
+    /// The play is over: the auth list goes out empty and the session is in
+    /// no game, within `timeout` seconds; nothing is created after this.
+    public func endPlay(timeout: Double = 1) async {
+        guard let broker = ticketBroker else { return }
+        ticketBroker = nil
+        backend.ticketPushes.set(nil)
+        guard let list = broker.endPlay() else { return }
+        let backend = self.backend
+        do {
+            try await withDeadline(timeout, "the play's end") {
+                try await backend.sendAuthList(list)
+                try await backend.setGamesPlayed([])
+            }
+        } catch {
+            log.warn("ticket", "the play's end not sent to Steam: \(error)")
+        }
     }
 
     // MARK: games cache (non-secret, per account, deleted at sign-out)

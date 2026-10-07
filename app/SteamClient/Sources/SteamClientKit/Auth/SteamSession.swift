@@ -90,6 +90,12 @@ public actor SteamSession {
     public private(set) var licenses: [CMsgClientLicenseList.License] = []
     private var transitionInFlight: String?
     var statsCall: Task<Void, Never>?
+    /// The game connect tokens of the current logon (decision 0062), cleared at disconnect.
+    public nonisolated let connectTokens = GameConnectTokens()
+    /// Ticket acks and checks, to a play's broker (SteamTicketBroker).
+    public nonisolated let ticketPushes = TicketPushRoute()
+    /// What the session's connections carried, and whether one is open.
+    public nonisolated let traffic = CMTraffic()
 
     public init(store: SecretStore, log: Logger) {
         self.store = store
@@ -119,7 +125,7 @@ public actor SteamSession {
         var last: Error = SteamError.notFound("CM")
         for ep in endpoints.prefix(maxEndpoints) {
             try Task.checkCancellation()
-            let c = CMConnection(endpoint: ep, log: log)
+            let c = CMConnection(endpoint: ep, log: log, traffic: traffic, push: pushHandler())
             do {
                 try await c.connect()
                 cm = c
@@ -145,6 +151,8 @@ public actor SteamSession {
         state = .disconnected
         // The next logon may be another account, or anonymous: its list comes fresh.
         licenses = []
+        // Tokens belong to the logon that got them (decision 0062).
+        connectTokens.clear()
     }
 
     // MARK: machine id (a machine secret, kept in the store)

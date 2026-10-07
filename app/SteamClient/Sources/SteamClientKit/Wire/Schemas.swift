@@ -35,11 +35,16 @@ public enum EMsg: UInt32, Sendable {
     case clientLogOnResponse = 751
     case clientLoggedOff = 757
     case clientPersonaState = 766
+    case clientGameConnectTokens = 779
     case clientLicenseList = 780
     case clientRequestFriendData = 815
     case clientGetUserStats = 818
     case clientGetUserStatsResponse = 819
     case clientStoreUserStatsResponse = 821
+    case clientGetAppOwnershipTicket = 857
+    case clientGetAppOwnershipTicketResponse = 858
+    case clientTicketAuthComplete = 5429
+    case clientAuthList = 5432
     case clientGetDepotDecryptionKey = 5438
     case clientGetDepotDecryptionKeyResponse = 5439
     case clientStoreUserStats2 = 5466
@@ -47,6 +52,7 @@ public enum EMsg: UInt32, Sendable {
     case clientLogon = 5514
     case clientRequestEncryptedAppTicket = 5526
     case clientRequestEncryptedAppTicketResponse = 5527
+    case clientAuthListAck = 5575
     case clientPICSProductInfoRequest = 8903
     case clientPICSProductInfoResponse = 8904
     case clientPICSAccessTokenRequest = 8905
@@ -499,6 +505,118 @@ public struct CMsgClientRequestEncryptedAppTicketResponse: ProtoDecodable {
         appID = try f.uint32(1)
         eresult = EResult(try f.int32(2) ?? 2)
         ticket = try f.bytes(3).map(Secret.init)
+    }
+}
+
+// MARK: - auth session and web API tickets (decision 0062)
+
+/// CMsgClientGameConnectTokens, pushed after logon: the tokens a session
+/// ticket is built on. Steam says how many to keep; the oldest go first.
+public struct CMsgClientGameConnectTokens: ProtoDecodable {
+    public static let protoName = "CMsgClientGameConnectTokens"
+    public var maxTokensToKeep: UInt32        // 1 (default 10)
+    public var tokens: [Secret<[UInt8]>]      // 2 repeated bytes
+    public init(_ f: ProtoFields) throws {
+        maxTokensToKeep = try f.uint32(1) ?? 10
+        tokens = try f.repeatedBytes(2).map(Secret.init)
+    }
+}
+
+/// CMsgClientGetAppOwnershipTicket.
+public struct CMsgClientGetAppOwnershipTicket: ProtoMessage {
+    public var appID: UInt32 // 1
+    public func encode() -> [UInt8] { var w = ProtoWriter(); w.uint32(1, appID); return w.bytes }
+}
+
+/// CMsgClientGetAppOwnershipTicketResponse: Steam's signed proof that the
+/// account owns the app, the tail of every ticket the app's game is given.
+public struct CMsgClientGetAppOwnershipTicketResponse: ProtoDecodable {
+    public static let protoName = "CMsgClientGetAppOwnershipTicketResponse"
+    public var eresult: EResult              // 1 uint32 (default 2)
+    public var appID: UInt32?                // 2
+    public var ticket: Secret<[UInt8]>?      // 3 bytes
+    public init(_ f: ProtoFields) throws {
+        eresult = EResult(Int32(truncatingIfNeeded: try f.uint32(1) ?? 2))
+        appID = try f.uint32(2)
+        ticket = try f.bytes(3).map(Secret.init)
+    }
+}
+
+/// CMsgAuthTicket (steammessages_base.proto): one live ticket in a ClientAuthList.
+public struct CMsgAuthTicket: ProtoMessage, Sendable {
+    public var gameID: UInt64                // 4 fixed64
+    public var ticketCRC: UInt32             // 6
+    public var ticket: Secret<[UInt8]>       // 7 bytes: the ticket's auth part
+    public var serverSecret: [UInt8]?        // 8 bytes: "str:<identity>\0" for a bound ticket
+    public init(gameID: UInt64, ticketCRC: UInt32, ticket: Secret<[UInt8]>, serverSecret: [UInt8]? = nil) {
+        self.gameID = gameID
+        self.ticketCRC = ticketCRC
+        self.ticket = ticket
+        self.serverSecret = serverSecret
+    }
+    public func encode() -> [UInt8] {
+        var w = ProtoWriter()
+        w.fixed64(4, gameID)
+        w.uint32(6, ticketCRC)
+        w.bytes(7, ticket.value)
+        w.bytes(8, serverSecret)
+        return w.bytes
+    }
+}
+
+/// CMsgClientAuthList: every ticket the client holds live, sent whole each
+/// time one is added or cancelled (an empty list ends them all).
+public struct CMsgClientAuthList: ProtoMessage, Sendable {
+    public var tokensLeft: UInt32            // 1
+    public var lastRequestSeq: UInt32?       // 2
+    public var tickets: [CMsgAuthTicket]     // 4 repeated
+    public var appIDs: [UInt32]              // 5 repeated
+    public var messageSequence: UInt32?      // 6
+    public init(tokensLeft: UInt32, tickets: [CMsgAuthTicket], appIDs: [UInt32], messageSequence: UInt32? = nil) {
+        self.tokensLeft = tokensLeft
+        self.tickets = tickets
+        self.appIDs = appIDs
+        self.messageSequence = messageSequence
+    }
+    public func encode() -> [UInt8] {
+        var w = ProtoWriter()
+        w.uint32(1, tokensLeft)
+        w.uint32(2, lastRequestSeq)
+        for t in tickets { w.bytes(4, t.encode()) }
+        for a in appIDs { w.uint32(5, a) }
+        w.uint32(6, messageSequence)
+        return w.bytes
+    }
+}
+
+/// CMsgClientAuthListAck: the ticket CRCs Steam took from the last list.
+public struct CMsgClientAuthListAck: ProtoDecodable {
+    public static let protoName = "CMsgClientAuthListAck"
+    public var ticketCRCs: [UInt32]          // 1 repeated
+    public var appIDs: [UInt32]              // 2 repeated
+    public var messageSequence: UInt32?      // 3
+    public init(_ f: ProtoFields) throws {
+        ticketCRCs = try f.repeatedUInt32(1)
+        appIDs = try f.repeatedUInt32(2)
+        messageSequence = try f.uint32(3)
+    }
+}
+
+/// CMsgClientTicketAuthComplete, pushed when a server checked one of the
+/// client's tickets (BeginAuthSession, AuthenticateUserTicket) and with what result.
+public struct CMsgClientTicketAuthComplete: ProtoDecodable {
+    public static let protoName = "CMsgClientTicketAuthComplete"
+    public var gameID: UInt64?               // 2 fixed64
+    public var estate: UInt32?               // 3
+    public var authSessionResponse: UInt32?  // 4 (EAuthSessionResponse)
+    public var ticketCRC: UInt32?            // 6
+    public var ticketSequence: UInt32?       // 7
+    public init(_ f: ProtoFields) throws {
+        gameID = try f.fixed64(2)
+        estate = try f.uint32(3)
+        authSessionResponse = try f.uint32(4)
+        ticketCRC = try f.uint32(6)
+        ticketSequence = try f.uint32(7)
     }
 }
 
