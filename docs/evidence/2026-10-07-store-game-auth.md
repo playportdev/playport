@@ -84,5 +84,5 @@ Each item names its Linear issue (team PLA).
   by a server and PlayFab signs in. Its picture stays black (Unity's video player gets a null
   `GetSharedHandle` and the intro never shows), so its page stays on DXMT
   ([steam-ticket-valheim](2026-10-07-steam-ticket-valheim.md#play-6-on-vulkan-with-patchesdxvk-0001-decision-0061)).
-  Its Linear issue is still to be filed.
+  Linear PLA-65.
 - The release (step 7): the owner's later session.

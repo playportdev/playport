@@ -15,8 +15,8 @@ blocked GOG), PLA-58 (the NSI adapter table itself), PLA-41 (JWE), PLA-39 (Among
 (Monster Train), PLA-61 (Epic's `deploymentid`), PLA-62 (the Steam live session's gaps and
 sign-out on the phone), PLA-60 (GOG B6, B7 and writes), PLA-64 (the i386 URL opener and the UI
 no person has checked), PLA-57 (the driver's GOG install check), PLA-59 (a log line for a
-hidden dialog's text), PLA-63 (the JIT pool unmap), and Valheim's black picture on Vulkan (to
-be filed). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
+hidden dialog's text), PLA-63 (the JIT pool unmap), and Valheim's black picture on Vulkan
+(PLA-65). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
 without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md` (`b21f63d`);
 nothing is built or drafted.
 
@@ -321,7 +321,7 @@ owner:
 - Wine-pe 0029 (PLA-58) makes the GOG sign-in work on a dev IPA; the release build plays it
   again. PLA-50 (secur32 without lsass packages) no longer blocks GOG and can wait.
 - The dxvk patch from `vulkan-performance` is on this branch (decision 0061, ported from
-  `4fa21de`): Valheim on Vulkan lives and signs in, its picture is black, its page stays on
+  `4fa21de`): Valheim on Vulkan lives and signs in, its picture is black (PLA-65), its page stays on
   DXMT ([evidence](../evidence/2026-10-07-steam-ticket-valheim.md#play-6-on-vulkan-with-patchesdxvk-0001-decision-0061)).
 - Then step 7.
 
