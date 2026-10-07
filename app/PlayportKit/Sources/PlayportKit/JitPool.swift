@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The JIT pool: the one block of executable memory a launch gets, blessed once
 // by the debugger before the runtime starts (docs/ARCHITECTURE.md, "JIT pool
-// placement"), which never grows. PE images and guest JIT code (Mono, V8) are
-// copied into its head, from the bottom up; FEX's translated code goes into its
-// tail, from the top down. Its size is fixed at the Play, and every byte of it
+// placement"), which never grows. Images with ARM64EC code (Wine's
+// builtins), a child's ntdll copy and guest JIT code (Mono, V8) are copied into
+// its head, from the bottom up; a pure x86-64 image is not (madeira-unix 0090:
+// FEX runs it at its PE address). FEX's translated code goes into its tail, from
+// the top down. Its size is fixed at the Play, and every byte of it
 // counts against the app's memory limit from the bless on, so every Play gets the
 // least that the games measured need (`sizeMB`, decision 0036, which replaced 0019's
 // eighth of the limit). A launch logs its use as `pool:` lines

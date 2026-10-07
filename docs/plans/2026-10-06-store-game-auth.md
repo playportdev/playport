@@ -193,10 +193,15 @@ with its phone run:
   Pool head: Hollow Knight 138 → 83 MiB, Snakebird 188 → 97, Death's Door 123 → 82, Among
   Us 245 → 120, The Witcher 3 158 → 88, Jurassic World Evolution 480 → 68.
 
-Open after 4b (filed separately, not fixed here): Jurassic World Evolution now stops at
-`gdiplus.dll`, which the runtime does not ship (`0xc0000135` at +3.4 s), so it shows no menu
-and no Epic state yet; Snakebird's EOS login ends `UnexpectedError` with its TLS fixed (cause
-unknown: the SDK logs nothing more); The Witcher 3 with its disk cache on dies 239 ms in, in
+- **Jurassic World Evolution's missing DLLs. Done 2026-10-07**
+  ([evidence](../evidence/2026-10-07-jwe.md), IPA `753ebd58`). The arm64ec `gdiplus.dll` and
+  its import `mlang.dll` are staged (`EXTRA_PE`; mlang's COM keys in the registry seed). JWE
+  gets past its imports and its packer, then ends `0xc0000005` at 4.1 s: `uxtheme.dll`, loaded
+  where `rsaenh.dll` was just freed (same size), reuses rsaenh's stale JIT-pool copy (next:
+  madeira-unix 0091).
+
+Open after 4b (filed separately, not fixed here): Snakebird's EOS login ends
+`UnexpectedError` with its TLS fixed (cause unknown: the SDK logs nothing more); The Witcher 3 with its disk cache on dies 239 ms in, in
 FEX, on every IPA of the day (plays with it off); Among Us still ends in PLA-39.
 
 **5. GOG Galaxy (decision 0063).** The host is the game's local Galaxy service while a GOG

@@ -187,6 +187,8 @@ EXTRA_PE = {"arm64ec": ["msvcp110.dll", "msvcp120.dll", "msvcr110.dll", "vcomp11
                        "dxva2.dll", "ktmw32.dll", "qwave.dll",
                        # Kingdom Come's WHGame.dll imports avifil32, which imports msvfw32.
                        "avifil32.dll", "msvfw32.dll",
+                       # Jurassic World Evolution's JWE.exe imports gdiplus, which imports mlang.
+                       "gdiplus.dll", "mlang.dll",
                        # Wine's Vulkan (decision 0014): the loader and the ICD DXVK and
                        # vkd3d-proton call, whose unix side talks to KosmicKrisp.
                        "vulkan-1.dll", "winevulkan.dll"] + MEDIA_PE,

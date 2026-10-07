@@ -72,6 +72,7 @@ resource	Runtime/arm64ec-windows/dxva2.dll	851968	1b33e16f9c45658a270e227e181b6e
 resource	Runtime/arm64ec-windows/esent.dll	655360	2b832904a8f8ff81d6cc2ec6424a592cc5a269cda5672f541112d0a78874e77e	wine-build	build-arm64ec/dlls/esent/arm64ec-windows/esent.dll	P2
 resource	Runtime/arm64ec-windows/fontsub.dll	655360	eb613b9ecdcc9a8721a0534993c3583e42275accb6eef9c9ce93666d33d12c87	wine-build	build-arm64ec/dlls/fontsub/arm64ec-windows/fontsub.dll	P2
 resource	Runtime/arm64ec-windows/gdi32.dll	1245184	4a72a20ed090775f924ac71ee6a563927844b1c6d92f3899d1c999088fb1fe6f	wine-build	build-arm64ec/dlls/gdi32/arm64ec-windows/gdi32.dll	P2
+resource	Runtime/arm64ec-windows/gdiplus.dll	1507328	379dabb46595a3f37756941e5f58cdb0f7d8996d9b06c7fbb6dba86d37c72444	wine-build	build-arm64ec/dlls/gdiplus/arm64ec-windows/gdiplus.dll	P2
 resource	Runtime/arm64ec-windows/hid.dll	720896	52d679ae7be9004794afe297f84b81b55299f342d2e7b45e8d2742c3c199181a	wine-build	build-arm64ec/dlls/hid/arm64ec-windows/hid.dll	P2
 resource	Runtime/arm64ec-windows/imagehlp.dll	655360	fa3e8201a46d3954d24761930c6b81fbaba26e702c285300014ccc6076ae1aeb	wine-build	build-arm64ec/dlls/imagehlp/arm64ec-windows/imagehlp.dll	P2
 resource	Runtime/arm64ec-windows/imm32.dll	720896	3f6353daa14cbe217516e9809242fcb857613b445dde6486e3b267145cd5a93b	wine-build	build-arm64ec/dlls/imm32/arm64ec-windows/imm32.dll	P2
@@ -85,6 +86,7 @@ resource	Runtime/arm64ec-windows/mfmp4srcsnk.dll	851968	0b1572384134a9a3fbef2e8e
 resource	Runtime/arm64ec-windows/mfplat.dll	1179648	d0c05759d93f477245ca3f6a30c0a04f6d4cdf72903676f92b57242f570932e5	wine-build	build-arm64ec/dlls/mfplat/arm64ec-windows/mfplat.dll	P2
 resource	Runtime/arm64ec-windows/mfreadwrite.dll	851968	94ffbe400602b198e19152ac683ffb5543a3b6a7b07be386458691f0287a14a9	wine-build	build-arm64ec/dlls/mfreadwrite/arm64ec-windows/mfreadwrite.dll	P2
 resource	Runtime/arm64ec-windows/mfsrcsnk.dll	851968	f8ff51f49743bb8adc9ec0de94baede28752a0ac933cc427cb51f366f573191d	wine-build	build-arm64ec/dlls/mfsrcsnk/arm64ec-windows/mfsrcsnk.dll	P2
+resource	Runtime/arm64ec-windows/mlang.dll	917504	897cce2ce5ed55d1be3782957999245827c28a1a5ca3628e0a83b38b78c8a37c	wine-build	build-arm64ec/dlls/mlang/arm64ec-windows/mlang.dll	P2
 resource	Runtime/arm64ec-windows/mmdevapi.dll	851968	f99d1d38a0e4e28a5728741aaf109609d9e9e673353ad275e83ffc1d8dc4e205	wine-build	build-arm64ec/dlls/mmdevapi/arm64ec-windows/mmdevapi.dll	P2
 resource	Runtime/arm64ec-windows/mpr.dll	720896	f6c38e3de4b7dbba2ead56e7269767084ba6a5275346a70d7b801fbafff6673f	wine-build	build-arm64ec/dlls/mpr/arm64ec-windows/mpr.dll	P2
 resource	Runtime/arm64ec-windows/msacm32.dll	786432	534fcfefe763d68135889cc307293ed2bb5901c5f3e20585e8db89fce63afd15	wine-build	build-arm64ec/dlls/msacm32/arm64ec-windows/msacm32.dll	P2
@@ -946,8 +948,8 @@ resource	Runtime/nls/normnfkd.nls	77356	8389be626551ea40c00d020cb500b87eda6cfb8c
 resource	Runtime/nls/sortdefault.nls	3396708	962e6c8f1ce4bcb447e6641317937a4e033ecef1ae91c94679ec9725888eb238	unix	wine/nls/sortdefault.nls	nls
 resource	Runtime/fonts/tahoma.ttf	143884	90f1abad4da0ce03da5d2277ee75a9600ce812d37c90eab76e0838ffa7937e55	unix	wine/fonts/tahoma.ttf	fonts
 resource	Runtime/fonts/tahomabd.ttf	137836	508a2acc88cd6abdd399ae79c9965db43fba75a46bb115117b55d2be2272d889	unix	wine/fonts/tahomabd.ttf	fonts
-resource	Runtime/registry/system.reg	482604	2d8e2c45d9ad3fd12ed954ba462b05e094507710f1febacb92c11207a3af50c0	registry	system.reg	P7-reg
-resource	Runtime/registry/user.reg	1599	e534357e8ae05068ac00258faf0b3e6086f77c1170b502a9fd46b59052c9ebd6	registry	user.reg	P7-reg
+resource	Runtime/registry/system.reg	506006	854bfd6b0b2073e12e3cbb1140cff1ba32c6d0ea96c1bcd64c9d991452dadb09	registry	system.reg	P7-reg
+resource	Runtime/registry/user.reg	1610	590b70ff4b8a797c3c1d385550b22765d7c8c9ac2e8d0581f679e2b5fd49a75b	registry	user.reg	P7-reg
 resource	Runtime/certs/cacert.pem	188900	a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505	ca-bundle	cacert.pem	ca-bundle
 link	lib/libntdll_unix.a	3074512	d28ea572d549fdfd43e5372190d165bc6a3829cd0fe41e5b0a66e6d5db848d71	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4121192	774caf196471fefb1dc83ed6148bbc6ec589c5010f4fbac4bc50d0198441460a	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
