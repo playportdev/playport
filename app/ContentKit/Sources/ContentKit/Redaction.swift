@@ -40,8 +40,9 @@ public enum Redactor {
             // ID, and the display name (quoted, or words up to the next argument).
             (#"(?i)(-AUTH_PASSWORD=|-epicuserid=)[^\s"']+"#, "$1<redacted>"),
             (#"(?i)(-epicusername=)(?:"[^"]*"|[^\s"]+(?:\s+[^\s"\-][^\s"]*)*)"#, "$1<redacted>"),
-            // OAuth codes and session IDs: GOG's and Epic's login codes, Epic's exchange codes.
-            (#"(?i)((?:authorization|exchange)_?code|session_?id|client_?secret)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
+            // OAuth codes and session IDs: GOG's and Epic's login codes, Epic's exchange codes,
+            // a device sign-in's user code (decision 0064).
+            (#"(?i)((?:authorization|exchange|user)_?code|session_?id|client_?secret)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
             (#"(?i)(["']code["']\s*:\s*["']|\bcode=)[^\s"',&}]+"#, "$1<redacted>"),
             // Home directories.
             (#"/(?:home|Users)/[^/\s"']+"#, "/<home>"),

@@ -111,6 +111,18 @@ PROFILE = {
         ],
     },
 }
+# The schemes a game may open a web page with, and their handler: Playport's
+# URL opener (app/UrlOpener, staged in system32), which hands the URL to the
+# host app's web sheet (decision 0064). Wine's wine.inf would name
+# winebrowser.exe, which the app does not ship and which cannot open anything
+# on iOS. shell32 reads <scheme>\\shell\\open\\command for a URL
+# (dlls/shell32/shlexec.c SHELL_execute_url). Marked like PROFILE, so a key the
+# prefix already has gets the value only when it lacks one.
+URL_OPENER = f'"{SYSTEM32}\\playport-url-opener.exe" "%1"'
+ASSOCIATIONS = {
+    f"Software\\Classes\\{scheme}\\shell\\open\\command": [("", "sz", URL_OPENER)]
+    for scheme in ("http", "https")
+}
 # The Media Foundation transforms the staged decoder DLLs register. Their
 # DllRegisterServer calls MFTRegister at run time instead of carrying the keys
 # as WINE_REGISTRY resources, so the scripts above do not have them, and a source
@@ -374,7 +386,11 @@ def generate():
         for path, values in keys.items():
             for vname, vtype, data in values:
                 hives[name].value(path, vname, vtype, data)
+    for path, values in ASSOCIATIONS.items():
+        for vname, vtype, data in values:
+            hives["system"].value(path, vname, vtype, data)
     marked = {name: {path.lower() for path in PROFILE[name]} for name in hives}
+    marked["system"] |= {path.lower() for path in ASSOCIATIONS}
     return {f"{name}.reg": render(h, name, sources, marked[name]) for name, h in hives.items()}, hives
 
 

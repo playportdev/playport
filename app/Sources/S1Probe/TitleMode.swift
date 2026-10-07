@@ -84,7 +84,7 @@ final class TitleLaunch: ObservableObject {
         TitleMode.log("in-app start \(exe) \(EpicInstaller.redacted(args).joined(separator: " "))")
         let request = LaunchCoordinator.Request(exe: exe, args: args, config: config,
                                                 steamAppID: steamAppID, graphics: graphics, fex: fex, jitWait: 180, steamAPI: steamAPI,
-                                                memory: memory, epic: epic)
+                                                memory: memory, epic: epic, title: title)
         Thread.detachNewThread {
             let outcome = LaunchCoordinator.run(request) { step in
                 DispatchQueue.main.async { MainActor.assumeIsolated { TitleLaunch.shared.advance(step) } }

@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WINE_HOST_ABI_VERSION 4
+#define WINE_HOST_ABI_VERSION 5
 
 typedef void (*wine_host_log_fn)(const char *line);
 
@@ -200,6 +200,18 @@ typedef struct {
     unsigned (*cancel)(unsigned handle);
 } wine_host_steam_ticket_provider;
 void wine_host_set_steam_ticket_provider(const wine_host_steam_ticket_provider *provider);
+
+/* The host side of Playport's URL opener (url_opener_protocol.h, decision
+ * 0064): playport_url_unix_call_funcs (url_opener.c) calls open, on the
+ * opener's thread, with a checked http(s) URL. It returns an NTSTATUS from
+ * url_opener_protocol.h at once: it must not wait for the page or the main
+ * thread. Set (or cleared with NULL) from any app thread; with none set the
+ * call answers PP_URL_NOT_SUPPORTED. Added in ABI 5 without changing any
+ * existing call. */
+typedef struct {
+    unsigned (*open)(const char *url);
+} wine_host_url_opener;
+void wine_host_set_url_opener(const wine_host_url_opener *opener);
 
 #ifdef __cplusplus
 }

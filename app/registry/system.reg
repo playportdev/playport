@@ -1472,6 +1472,14 @@ WINE REGISTRY Version 2
 [Software\\Classes\\file\\CLSID]
 @="{00000303-0000-0000-C000-000000000046}"
 
+;; playport:top-up
+[Software\\Classes\\http\\shell\\open\\command]
+@="\"C:\\windows\\system32\\playport-url-opener.exe\" \"%1\""
+
+;; playport:top-up
+[Software\\Classes\\https\\shell\\open\\command]
+@="\"C:\\windows\\system32\\playport-url-opener.exe\" \"%1\""
+
 [Software\\Classes\\Interface\\{00000000-0000-0000-C000-000000000046}]
 @="IUnknown"
 

@@ -7,6 +7,10 @@
 # and user32 only, no C runtime, no timestamp and no debug info, so the output is the same
 # for the same source and toolchain and names no path.
 #
+# The same flags build Playport's URL opener (decision 0064):
+# app/UrlOpener/playport-url-opener.c into OUT/playport-url-opener.exe, the
+# prefix's http and https handler, staged beside the session root (P9-url-opener).
+#
 #   build/stages/session-root.sh OUT
 set -euo pipefail
 
@@ -19,4 +23,9 @@ mkdir -p "$OUT"
 "$CC" -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -nostdlib -mwindows \
     -Wl,--entry,entry -Wl,--no-insert-timestamp -o "$OUT/playport-session.exe" \
     "$PLAYPORT_REPO/app/SessionRoot/playport-session.c" -lkernel32 -luser32
-echo "$(sha256sum "$OUT/playport-session.exe" | cut -c1-16)  playport-session.exe ($(stat -c %s "$OUT/playport-session.exe") bytes)"
+"$CC" -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -nostdlib -mwindows \
+    -Wl,--entry,entry -Wl,--no-insert-timestamp -o "$OUT/playport-url-opener.exe" \
+    "$PLAYPORT_REPO/app/UrlOpener/playport-url-opener.c" -lkernel32
+for exe in playport-url-opener.exe playport-session.exe; do
+    echo "$(sha256sum "$OUT/$exe" | cut -c1-16)  $exe ($(stat -c %s "$OUT/$exe") bytes)"
+done

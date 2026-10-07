@@ -35,6 +35,7 @@
       "covers": [
         "app",
         "P9-session",
+        "P9-url-opener",
         "P7-reg"
       ],
       "licence": "GPL-3.0-or-later with Playport's converter exception",

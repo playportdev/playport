@@ -26,6 +26,8 @@
 // Play (LibraryModel.play), goes into the emulator's settings before the runtime
 // starts and out of them when the launch ends (decision 0017). An Epic game's ownership token,
 // fetched after Play with its exchange code, goes into its file the same way (decision 0059).
+// A web page the game opens during the play reaches the host (UrlOpenerHost, decision 0064)
+// while the launch runs.
 // Progress goes to the app log
 // (AppLog) as `title:` lines and, for the UI, to a step callback; the outcome's line is the
 // `title: done` result the drivers parse, unchanged. `title: +<s> s` lines time the
@@ -62,6 +64,8 @@ enum LaunchCoordinator {
         var memory: MemoryNeed? = nil
         /// An Epic game's ownership token file (decision 0059); nil for a game of another store.
         var epic: Epic? = nil
+        /// The title's name, for a web page the game opens (UrlOpenerHost).
+        var title: String = ""
     }
 
     /// An Epic game's launch: its folder, and the ownership token for `-epicovt`
@@ -338,6 +342,9 @@ enum LaunchCoordinator {
         if let e = r.epic { prepareEpic(e) }
         // And the ownership token file (decision 0059).
         defer { if let e = r.epic { removeOwnershipFile(e, when: "at exit") } }
+        // A web page the game opens goes to the host for this play only (decision 0064).
+        UrlOpenerHost.arm(.init(title: r.title.isEmpty ? (r.exe as NSString).lastPathComponent : r.title, epicSignIn: r.epic != nil))
+        defer { UrlOpenerHost.arm(nil) }
 
         // A Unity title reopens at the window size it saved; ask it for the whole screen (TitleScreen.swift).
         let dir = (withUnsafeBytes(of: tp.unix_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) } as NSString)

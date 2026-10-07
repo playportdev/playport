@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Wed, 7 Oct 2026 15:26:56 +0200
+Subject: [PATCH] ntdll: give Playport's URL opener the host's URL table
+
+A game that opens a web page during a play (an Epic game's EOS sign-in
+calls ShellExecute on https://www.epicgames.com/activate?userCode=...)
+reaches Playport's URL opener, the prefix's http and https handler
+(playport-url-opener.exe; Playport's decision 0064). The opener hands the
+URL to the host app as a Wine library reaches its unix side:
+MemoryWineLoadUnixLib on its own module. On iOS no module has a unix .so,
+so load_builtin_unixlib matches the module's export name; the exact name
+playport-url-opener.exe now gets playport_url_unix_call_funcs, which the
+app defines (its WineHost url_opener.c). The table's block holds no
+pointers, so a WoW64 caller gets the same table.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-07-url-opener.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 874f07b..c598687 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7430,6 +7430,13 @@ extern const void *winegstreamer_unix_call_funcs[];
+  * WoW64 calls use the same table. */
+ extern const void *playport_steam_unix_call_funcs[];
+ 
++/* Playport: Playport's URL opener (playport-url-opener.exe, the prefix's
++ * http and https handler, matched by its exact export name) hands the host
++ * app a web page a game opens through this table, defined in the app
++ * (WineHost url_opener.c). Its block has no pointers, so a WoW64 caller uses
++ * the same table. */
++extern const void *playport_url_unix_call_funcs[];
++
+ /* win32u's unix init, statically linked via libwin32u_unix.a. Renamed
+  * from __wine_unix_lib_init in build/win32u-unix/build.sh so future
+  * statically-linked unix libs can keep their own init without colliding.
+@@ -7534,6 +7541,11 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             dprintf(2, "[unixlib] module %p (%s) -> playport_steam_unix_call_funcs (%p)\n",
+                 module, match, (void *)playport_steam_unix_call_funcs);
+             status = STATUS_SUCCESS;
++        } else if (match && !strcmp(match, "playport-url-opener.exe")) {
++            *funcs = (const void *)playport_url_unix_call_funcs;
++            dprintf(2, "[unixlib] module %p (%s) -> playport_url_unix_call_funcs (%p)\n",
++                module, match, (void *)playport_url_unix_call_funcs);
++            status = STATUS_SUCCESS;
+         } else if (match && strstr(match, "nsi.dll")) {
+             *funcs = (const void *)nsi_unix_call_funcs;
+             dprintf(2, "[unixlib] module %p (%s) -> nsi_unix_call_funcs (%p) rev=ml472\n",
+@@ -7580,6 +7592,7 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             else if (*funcs == (const void *)dwrite_unix_call_funcs) wow_funcs = dwrite_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)winevulkan_unix_call_funcs) wow_funcs = winevulkan_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)playport_steam_unix_call_funcs) wow_funcs = playport_steam_unix_call_funcs;
++            else if (*funcs == (const void *)playport_url_unix_call_funcs) wow_funcs = playport_url_unix_call_funcs;
+             if (!wow_funcs)
+             {
+                 pthread_once( &ios_stub_tables_once, ios_init_stub_tables );

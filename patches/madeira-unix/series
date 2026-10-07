@@ -90,3 +90,5 @@
 0089-ntdll-keep-the-executable-window-for-an-executable-t.patch
 0090-ntdll-give-a-pure-x86-64-image-no-JIT-pool-copy.patch
 0091-ntdll-do-not-reuse-a-freed-image-s-JIT-pool-copy-for.patch
+0092-ntdll-give-Playport-s-URL-opener-the-host-s-URL-tabl.patch
+0093-ntdll-keep-a-web-page-s-query-out-of-the-process-com.patch
