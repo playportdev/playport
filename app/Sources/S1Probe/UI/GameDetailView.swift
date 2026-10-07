@@ -1183,17 +1183,21 @@ enum ProblemReport {
 
     static func share(_ t: InstalledTitle) {
         let urls = files()
-        let zip = archive(urls, name: t.id)
-        LibraryModel.log("report a problem for \(t.id): sharing \(urls.map(\.lastPathComponent).joined(separator: ", "))"
-                         + (zip.map { " as \($0.lastPathComponent)" } ?? " (not zipped)"))
-        present(zip.map { [$0] } ?? urls)
+        Task { @MainActor in
+            let zip = await archive(urls, name: t.id)
+            LibraryModel.log("report a problem for \(t.id): sharing \(urls.map(\.lastPathComponent).joined(separator: ", "))"
+                             + (zip.map { " as \($0.lastPathComponent)" } ?? " (not zipped)"))
+            present(zip.map { [$0] } ?? urls)
+        }
     }
 
     /// `urls` as one zip in the temporary folder, which a GitHub issue takes and a
     /// paste site does not need to (PLA-21): `Playport-report-<id>-<time>.zip`, with
     /// the files in a folder of that name. iOS zips a folder for upload
-    /// (NSFileCoordinator's forUploading); nil when that fails, and the files go as they are.
-    static func archive(_ urls: [URL], name id: String) -> URL? {
+    /// (NSFileCoordinator's forUploading, through the queue form: the blocking form's
+    /// non-escaping block makes Swift record this file's full path for its escape check);
+    /// nil when that fails, and the files go as they are.
+    static func archive(_ urls: [URL], name id: String) async -> URL? {
         guard !urls.isEmpty else { return nil }
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("Report a problem", isDirectory: true)
@@ -1212,14 +1216,21 @@ enum ProblemReport {
             LibraryModel.log("report a problem: could not gather the logs: \(error)")
             return nil
         }
-        var failure: Error?
-        var coordinatorError: NSError?
-        NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &coordinatorError) { zipped in
-            do { try fm.moveItem(at: zipped, to: zip) } catch { failure = error }
+        let intent = NSFileAccessIntent.readingIntent(with: folder, options: .forUploading)
+        let failure: String? = await withCheckedContinuation { done in
+            NSFileCoordinator().coordinate(with: [intent], queue: OperationQueue()) { error in
+                if let error { return done.resume(returning: "\(error)") }
+                do {
+                    try FileManager.default.moveItem(at: intent.url, to: zip)
+                    done.resume(returning: nil)
+                } catch {
+                    done.resume(returning: "\(error)")
+                }
+            }
         }
         try? fm.removeItem(at: folder)
-        if let e = coordinatorError ?? failure {
-            LibraryModel.log("report a problem: could not zip the logs: \(e)")
+        if let failure {
+            LibraryModel.log("report a problem: could not zip the logs: \(failure)")
             return nil
         }
         return fm.fileExists(atPath: zip.path) ? zip : nil

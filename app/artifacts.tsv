@@ -954,7 +954,7 @@ link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34
 link	lib/libhogweed.a	1105792	247e869163901151301d2ff3c930a68c3742fbbb263a33b8bc10a98dfbd65b9f	unix	mythic/toolchains/gnutls-ios/lib/libhogweed.a	P4-crypto
 link	lib/libnettle.a	1705864	ff2ecf070899ab728cf21dc13bb9463fdf5a79775a34c5f87e7d861fed2d9543	unix	mythic/toolchains/gnutls-ios/lib/libnettle.a	P4-crypto
 link	lib/libgmp.a	876096	d33a5b441d28a2e7a9847ada52032dba69d30063aa4e66a3d83e14bbb2ffd08b	unix	mythic/toolchains/gnutls-ios/lib/libgmp.a	P4-crypto
-link	lib/libdxmt_combined.a	115503632	d76e00299a039754443dc42eb017a7151c3bddc1f0a21118071d685129aa9240	dxmt	libdxmt_combined.a	P5-dxmt
+link	lib/libdxmt_combined.a	114658552	a10f3c5b7a1d8f6146f110abe2e0888c15fe3ba197a39ba0bccd576f9e383954	dxmt	libdxmt_combined.a	P5-dxmt
 link	lib/libwinegstreamer_unix.a	47458384	01ac411c12fb9c3cb02e7d605cf8a720fe24f31347973fd4b7f54f770479954a	unix	gstreamer/libwinegstreamer_unix.a	P6-gst
 link	lib/libidevice_ffi.a	6642912	59d86f1bd335b52c4cc7decabaa75ab081ea893b04246b9796683e702dc41756	idevice	libidevice_ffi.a	P10-idevice
 source	WinIOS/Winios.m	66281	e8b35307a8e34928582f46d13eed31eff10850c4205f89e6fed443dfdbfcf6a2	unix	mythic/app/Madeira/Winios/Winios.m	P5-winios
