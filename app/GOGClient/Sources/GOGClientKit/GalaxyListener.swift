@@ -148,13 +148,16 @@ public final class GalaxyListener: @unchecked Sendable {
         }
         var buffer: [UInt8] = []
         var chunk = [UInt8](repeating: 0, count: 16 << 10)
+        var received = 0, frames = 0
         while !isStopped {
             guard readable(fd) else { continue }
             let n = chunk.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
             guard n > 0 else {
-                log.info("galaxy", "the game closed a connection")
+                let why = n == 0 ? "the game closed a connection" : "a connection failed (errno \(errno))"
+                log.info("galaxy", "\(why) after \(received) bytes in \(frames) frame(s)")
                 return
             }
+            received += n
             buffer += chunk[0..<n]
             while true {
                 let parsed: (GalaxyFrame, Int)?
@@ -166,6 +169,7 @@ public final class GalaxyListener: @unchecked Sendable {
                 }
                 guard let (frame, used) = parsed else { break }
                 buffer.removeFirst(used)
+                frames += 1
                 for reply in handle(frame) where !write(fd, reply.encoded) { return }
             }
         }
