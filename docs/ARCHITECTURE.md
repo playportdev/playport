@@ -264,14 +264,24 @@ whose title needs more (PlayportKit `MemoryNeed`) before the pool is acquired.
 
 ### JIT pool use
 
-The pool never grows. PE images (a full copy of each, x18 trampolines
-included), guest JIT blocks (Mono's, V8's) and each pseudo-process's private
+The pool never grows. PE images with native code (a full copy of each ARM64EC,
+ARM64X or ARM64 image, x18 trampolines included), guest JIT blocks (Mono's, V8's) and each pseudo-process's private
 ntdll copy take its **head**, from the bottom up; FEX's code buffers take its
 **tail**, from the top down, up to 128 MiB each while the room between them
 allows. A guest JIT region's writes are routed through the **anonymous-alias
 table** (4096 entries). A dead process's code buffers are reused; of its head
 ranges only guest JIT blocks are, since its image ranges have lost execute
 permission by the time they are freed and are dropped. Nothing is returned.
+
+A pure x86-64 image (AMD64, no CHPE metadata: a game's executable and DLLs)
+gets no copy (`patches/madeira-unix` 0090, logged `[jit-pool] x64 image …: no
+pool copy`): FEX translates its code at its PE addresses and never ran the
+copy. Its EXEC stays logical, in Wine's page protection, and its host pages
+are R or RW, as the copy path left them. Madeira had tried this twice and
+reverted it (its ml457/ml458 notes); both trials predate the writable backing
+of RWX sections (ml957), the likely cause, and the phone showed no regression
+([evidence](evidence/2026-10-07-pool-x64-images.md)): Hollow Knight's head
+fell from 138 to 83 MiB, Jurassic World Evolution's from 480 to 68.
 
 - Madeira-unix 0034 counts them (`ios_jit_pool_stats`), and
   `wine_host_pool_stats_read` passes the counts to the app. While a title

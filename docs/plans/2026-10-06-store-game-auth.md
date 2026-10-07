@@ -1,7 +1,8 @@
 # Plan: games sign in to their store (Epic, Steam, GOG)
 
-**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2 and
-4 done (4's S1 waits for a title that asks for a ticket); GOG (step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
+**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4 and
+the runtime fixes 4b done (4's S1 waits for a title that asks for a ticket; no EOS sign-in
+shown yet); GOG (step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
 can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
 (`b21f63d`); nothing is built or drafted.
 
@@ -116,11 +117,10 @@ Evolution gets a code and an ownership token, its file written and removed at ex
 FM2022 Resource Archiver installs from its JSON manifest and verifies 11/11; Hollow Knight
 plays as before. The container search after the plays found no copy of the code, the
 account ID or the token. Open:
-- No game has shown an EOS sign-in yet: Snakebird's EOS refuses Epic's certificate
-  (`Curl error 60`, the guest's TLS roots, as Among Us's PLA-39), and Jurassic World
-  Evolution does not start (`0xc0000018`, its fixed-base executable placed by the
-  runtime). Both are runtime work, filed separately; step 6 needs one of them fixed or
-  another EOS title.
+- No game has shown an EOS sign-in yet. The two runtime causes found here are fixed in
+  4b (PLA-40 TLS roots, PLA-41 the executable window and the pool copy); Snakebird's EOS
+  now ends `UnexpectedError`, and Jurassic World Evolution stops at a missing
+  `gdiplus.dll`. Step 6 needs one of them past that or another EOS title.
 - The sign-in failure page and sign-out removal are checked by host tests only.
 
 **2. Steam encrypted app ticket: 0017 accepted. Done 2026-10-07** (`e65f3f0`, `bd490ac`,
@@ -186,7 +186,18 @@ with its phone run:
   executable that cannot move. `JWE.exe` now maps at its base (`ml977: RELEASED`,
   `virtual_map_main_module = 0x0`) and then ends `0xc0000135`: its 422 MiB copy filled the
   pool's head (480 of 512 MiB).
-- The JIT-pool copy of a pure x86-64 image: madeira-unix 0090, judged by the phone.
+- **The JIT-pool copy of a pure x86-64 image. Done 2026-10-07**
+  ([evidence](../evidence/2026-10-07-pool-x64-images.md), IPA `18ab92ce`). madeira-unix 0090
+  copies no AMD64 image without CHPE metadata (no mapping entry, the supervisor's choice).
+  Madeira's ml457/ml458 warning was answered on the phone: no title regressed, so it stays.
+  Pool head: Hollow Knight 138 → 83 MiB, Snakebird 188 → 97, Death's Door 123 → 82, Among
+  Us 245 → 120, The Witcher 3 158 → 88, Jurassic World Evolution 480 → 68.
+
+Open after 4b (filed separately, not fixed here): Jurassic World Evolution now stops at
+`gdiplus.dll`, which the runtime does not ship (`0xc0000135` at +3.4 s), so it shows no menu
+and no Epic state yet; Snakebird's EOS login ends `UnexpectedError` with its TLS fixed (cause
+unknown: the SDK logs nothing more); The Witcher 3 with its disk cache on dies 239 ms in, in
+FEX, on every IPA of the day (plays with it off); Among Us still ends in PLA-39.
 
 **5. GOG Galaxy (decision 0063).** The host is the game's local Galaxy service while a GOG
 game with a Galaxy client ID runs. Measured first on the workstation (B0, 2026-10-07, with
@@ -222,7 +233,9 @@ CMake caches hold absolute paths).
 
 ## Order
 
-Step 1 → step 4 → GOG (step 5) → phone gates (6) → release (7). Next: GOG, from B1. Each step commits with its
+Step 1 → step 4 → runtime fixes (4b) → GOG (step 5) → phone gates (6) → release (7). Next:
+GOG, from B1; before step 6, an EOS title that signs in (Jurassic World Evolution's
+`gdiplus.dll`, Snakebird's `UnexpectedError`). Each step commits with its
 own evidence; the scratch measurements behind the designs are left in the build area.
 
 ## Risks

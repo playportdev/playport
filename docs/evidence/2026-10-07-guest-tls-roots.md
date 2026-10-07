@@ -42,6 +42,20 @@ Starfield Services G2 (`925A8F8D…3F3F`).
 the SDK logs nothing more through the game, and `s1-host.log` has no crypt32, schannel,
 winhttp or socket error around it. This is open (see the plan's PLA-40 note).
 
+## Among Us (`app-945360`) and Snakebird again, on the final IPA
+
+On `Playport-26.5-18ab92ce.ipa` (sha256 `18ab92cedcc09ea8fc8270913f18b9ad2034ab74ee4dd7057e2027486dd99afc`,
+with 0089 and 0090; [pool evidence](2026-10-07-pool-x64-images.md)):
+
+- Among Us (`20261007T135921`, `--until first-frame+30`): first frame +15.05 s, then its
+  PLA-39 fault at 17 s (`c000001d` at `0x19c587fc8`, the same address as before). Its
+  `crashpad_handler.exe` child started, crypt32 imported 121 roots, and the game's
+  `Player.log` has no `unknown CA` and no libcurl error 60; its EOS line is
+  `[EOSManager] > Encryption key length is 63`, the game's own configuration. The
+  prefix's ROOT store, pulled after it, still holds 126 keys.
+- Snakebird Complete (`20261007T135542`): first frame +4.64 s; `Player.log` again has no
+  `Curl error 60` and ends its EOS login `Tried to login auth: UnexpectedError`.
+
 ## Hollow Knight (`app-367520`), regression
 
 `pp ui --play app-367520 --until first-frame+10 --shot` (`20261007T134042`): JIT 2.58 s,
