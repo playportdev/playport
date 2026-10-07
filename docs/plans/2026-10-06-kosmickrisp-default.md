@@ -5,6 +5,9 @@
 `vulkan-performance` handoff supersedes the old measurement protocol. Reconcile
 routing claims below against current code. DXMT and the incomplete i386 backend
 set remain; Valheim still needs DXMT (PLA-65), so retirement is not complete.
+The separate [FL12_2 research plan](2026-10-05-kosmickrisp-fl12_2.md) (PLA-81)
+tracks the missing GPU features: "out of reach" below describes this plan's
+baseline/scope, not implemented support or a decision to abandon that research.
 
 **Date:** 2026-10-06. **Kind:** plan, not started. **Pins read:** `pins.lock` on
 `madeira-freeze` (working tree, 2026-10-06): `madeira` 8c050d0 (frozen, decision

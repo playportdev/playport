@@ -24,8 +24,9 @@ end.
 
 - **Linear tracks everything.** Team PLA is the source of truth for planned work,
   bugs, follow-ups and release handoffs, not just compatibility reports. Every plan
-  must be reflected in a Linear issue before it is committed or executed: search
-  first and reuse an issue that covers its scope, or create one. Put a `**Linear:**`
+  (including drafts under `.work/plans/`) must be reflected in a Linear issue when
+  written, before commit or execution: search first and reuse an issue that covers
+  its scope, or create one. Put a `**Linear:**`
   issue link in the plan and its repository path in the issue. Keep progress,
   blockers, evidence and completion in sync; split follow-ups into linked issues
   rather than leaving them only in a document. Remove completed plans after their
