@@ -52,6 +52,7 @@ resource	Runtime/arm64ec-windows/credui.dll	786432	b935427b85ffa6edfa5a979529fe1
 resource	Runtime/arm64ec-windows/crypt32.dll	1507328	c0846b0d9c14bbea51db5270754d2596e6e00a676497e93557d91ea9f29b804b	wine-build	build-arm64ec/dlls/crypt32/arm64ec-windows/crypt32.dll	P2
 resource	Runtime/arm64ec-windows/cryptbase.dll	655360	84c0a090c7a9a0f4a1f9dd7812a4f9cbbaba14362c16bf33967386bdae42c298	wine-build	build-arm64ec/dlls/cryptbase/arm64ec-windows/cryptbase.dll	P2
 resource	Runtime/arm64ec-windows/cryptnet.dll	655360	00a85b679af54fcc26328004c18cc9836c569be7daa7c6d6a58f678431c493ee	wine-build	build-arm64ec/dlls/cryptnet/arm64ec-windows/cryptnet.dll	P2
+resource	Runtime/arm64ec-windows/cryptsp.dll	655360	6f2d63fe26910fb0234575053c1d7fa628ec61668a95c5999d9039ef6312ac5e	wine-build	build-arm64ec/dlls/cryptsp/arm64ec-windows/cryptsp.dll	P2
 resource	Runtime/arm64ec-windows/cryptui.dll	1835008	20496db99351635079e8742141675f5504a4b312bd1c8daf5349c2ebb7c50748	wine-build	build-arm64ec/dlls/cryptui/arm64ec-windows/cryptui.dll	P2
 resource	Runtime/arm64ec-windows/d3d10core.dll	1253376	1087b584a71ec2bc3ba403ef3717fe2c5ac2a2b525391b41a7e13e041c9689d8	dxmt-pe	arm64ec-windows/d3d10core.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/d3d11.dll	5242880	3d4ebfe0d56eda18f00c2b2266d68b7a2d510e7d3f1d065cfce4f9ea20cb2851	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe

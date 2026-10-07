@@ -191,6 +191,9 @@ EXTRA_PE = {"arm64ec": ["msvcp110.dll", "msvcp120.dll", "msvcr110.dll", "vcomp11
                        "avifil32.dll", "msvfw32.dll",
                        # Jurassic World Evolution's JWE.exe imports gdiplus, which imports mlang.
                        "gdiplus.dll", "mlang.dll",
+                       # advapi32's credential store (CredWrite, an EOS sign-in's refresh token)
+                       # delay-loads cryptsp's SystemFunction032.
+                       "cryptsp.dll",
                        # Wine's Vulkan (decision 0014): the loader and the ICD DXVK and
                        # vkd3d-proton call, whose unix side talks to KosmicKrisp.
                        "vulkan-1.dll", "winevulkan.dll"] + MEDIA_PE,
