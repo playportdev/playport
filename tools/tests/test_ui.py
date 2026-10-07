@@ -77,13 +77,13 @@ class UiEnvTest(unittest.TestCase):
         """play: with actions after it: they run in the restarted process; the title's end does
         not end the run, the UI's does."""
         m = load()
-        for ok in ("play:app-367520", "probe:relaunch", "probe:helper-kill-hold", "probe:helper-report",
+        for ok in ("play:app-367520", "probe:relaunch", "probe:helper-kill-hold", "probe:helper-report", "probe:native-auth",
                    "probe:pairing", "probe:pairing-cancel", "probe:pairing-use",
                    "jit:setup", "jit:pair", "jit:continue", "jit:open-settings", "jit:cancel", "jit:wait",
                    "probe:settings-url-0", "probe:settings-url-5"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
         for bad in ("play:367520", "back:library", "relaunch-play:app-367520", "probe:helper-hold",
-                    "probe:pairing-use-extra", "probe:pairing-delete", "jit:delete", "jit:pair-extra", "probe:settings-url-", "probe:settings-url-12"):
+                    "probe:pairing-use-extra", "probe:pairing-delete", "probe:native-auth-extra", "jit:delete", "jit:pair-extra", "probe:settings-url-", "probe:settings-url-12"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
         title = {"event": "title-done", "outcome": "pool=exhausted:head still-running after_s=14"}
         ui = {"event": "ui-done", "outcome": "ok actions=3"}

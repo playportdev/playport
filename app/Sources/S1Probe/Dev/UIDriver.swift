@@ -53,6 +53,7 @@
 //                              UI/LicencesView.swift)
 //                              `open:black` shows Settings › Developer › Black screen
 //                              (BlackScreen.swift), as its row does
+//   probe:native-auth           Settings' synthetic native GSS probe, no real credentials
 //   probe:helper-exit | probe:helper-kill [-hold]
 //                              Settings' helper-lifetime probe (HelperLifetimeProbe.swift):
 //                              the run ends with ui-done, and the app ends itself 2 s later;
@@ -383,6 +384,12 @@ enum UIDriver {
                         }
                         let opened = await UIApplication.shared.open(SettingsLink.probed[n])
                         log("settings link \(n) \(SettingsLink.probed[n].absoluteString): opened=\(opened)")
+                    case "native-auth":
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        if let failure = await NativeAuthProbe.shared.run() {
+                            return finish("action=\(action) failed: \(failure)")
+                        }
                     case "helper-report":
                         log("probe report: \(await probe.report())")
                     default:

@@ -99,6 +99,7 @@ model calls: each --action in order, then --settings, --verify, --play:
                          the run's done (use --leave-running); must be the last action. -hold:
                          the helper takes its own xpc transaction and ignores SIGTERM
   probe:helper-report    read that probe's report back into s1-host.log (a later run, --keep-log)
+  probe:native-auth      Settings' synthetic native GSS probe (no game or store credentials)
   jit:setup | jit:pair   Open the product setup (Pair again keeps old credentials until verified)
   jit:continue | jit:open-settings | jit:cancel | jit:wait
                          Resume/open Settings/cancel/wait in the SAME run; system Settings needs the person
@@ -246,7 +247,7 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|menu:(?:open|resume|screenshot|overlay|controller|quit)|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
 
 
 def in_game(actions, start):

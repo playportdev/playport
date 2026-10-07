@@ -21,6 +21,7 @@ struct DeveloperSettings: View {
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
     @ObservedObject private var probe = HelperLifetimeProbe.shared
+    @ObservedObject private var authProbe = NativeAuthProbe.shared
     @ObservedObject private var restart = AppRestart.shared
     @ObservedObject private var pairing = OnDevicePairing.shared
     @ObservedObject private var builtIn = BuiltInJitStatus.shared
@@ -100,6 +101,10 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var probes: some View {
         PadSectionHeader(text: "Probes").id("probes")
+        PadRow(id: "set:dev:nativeAuth", title: "Native authentication", subtitle: authProbe.status,
+               hint: "Run") {
+            if !authProbe.busy { Task { _ = await authProbe.run() } }
+        }
         PadRow(id: "set:dev:helperExit", title: "Helper lifetime: end by exit", subtitle: probe.status, hint: "Run") {
             if !probe.busy { Task { _ = await probe.run(.exit, hold: hold) } }
         }

@@ -10,7 +10,7 @@ with a host ticket that a server checked. GOG passes since PLA-58 (wine-pe 0029,
 reads its achievements. Valheim on Vulkan no longer crashes at the intro (`patches/dxvk`
 0001 ported from `vulkan-performance`, decision 0061, IPA `beefb876`) and signs in there too,
 but its picture is black (its intro video needs a shared texture handle), so its page stays on
-DXMT. Open, each with its Linear issue: PLA-50 (secur32 without lsass packages; not what
+DXMT. Open, each with its Linear issue: PLA-50 (full NTLM/Negotiate/Kerberos port in progress; not what
 blocked GOG), PLA-41 (JWE), PLA-39 (Among Us), PLA-54
 (Monster Train), PLA-62 (the Steam live session's gaps and
 sign-out on the phone), PLA-60 (GOG B6, B7 and writes), PLA-64 (the i386 URL opener and the UI
@@ -347,6 +347,19 @@ confirmed in both GOG logs; no achievement/stat writes or sign-out.
 Notifications, unavailable kernel statistics, Mono/netprofm coverage and
 phone checks of offline transitions/i386 callers are not claimed.
 [Evidence and limits](../evidence/2026-10-07-nsi-adapters.md).
+
+## Follow-up: PLA-50 (2026-10-07–08, in progress)
+
+The owner selected the full NTLM/Negotiate/Kerberos port, not enumeration alone.
+The missing service manager is only one part: Wine's NTLM backend starts an
+external `ntlm_auth` process, and its Kerberos backend needs libraries not linked
+in this runtime. A dev Settings probe on IPA `c28c8422` confirms that iOS's native
+GSS framework can produce synthetic NTLM type-1/type-3 tokens and a 16-byte
+session key. This is not a server-validated login or a Wine SSPI fix. Native
+password acquisition can retain an NT hash in the system credential service;
+the owner explicitly accepted that residual and selected native GSS
+([0065](../decisions/0065-native-sspi.md)). Default phone credentials remain
+forbidden. Runtime integration and authentication gates are pending; PLA-50 remains open. [Investigation and limits](../evidence/2026-10-07-native-auth-backend.md).
 
 ## Order
 
