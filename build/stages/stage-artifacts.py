@@ -194,6 +194,9 @@ EXTRA_PE = {"arm64ec": ["msvcp110.dll", "msvcp120.dll", "msvcr110.dll", "vcomp11
                        # advapi32's credential store (CredWrite, an EOS sign-in's refresh token)
                        # delay-loads cryptsp's SystemFunction032.
                        "cryptsp.dll",
+                       # Valheim's PlayFab Party (PartyWin32.dll) imports sspicli; without it the
+                       # load fails (Mono's DllNotFoundException for PartyWin32).
+                       "sspicli.dll",
                        # Wine's Vulkan (decision 0014): the loader and the ICD DXVK and
                        # vkd3d-proton call, whose unix side talks to KosmicKrisp.
                        "vulkan-1.dll", "winevulkan.dll"] + MEDIA_PE,

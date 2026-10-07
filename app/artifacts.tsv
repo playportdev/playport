@@ -135,6 +135,7 @@ resource	Runtime/arm64ec-windows/setupapi.dll	1245184	f11b4216eaee98e3c995be37ce
 resource	Runtime/arm64ec-windows/shcore.dll	655360	c0575aba35230dcec35eef7ff0f38c7d8d4e9dc91df2f026ffb2f7872b9635f5	wine-build	build-arm64ec/dlls/shcore/arm64ec-windows/shcore.dll	P2
 resource	Runtime/arm64ec-windows/shell32.dll	10682368	e346d2f77d833a383c8409bd76f4863c9438ab88fa5365fe0907ed034674636e	wine-build	build-arm64ec/dlls/shell32/arm64ec-windows/shell32.dll	P2
 resource	Runtime/arm64ec-windows/shlwapi.dll	983040	ea6a5809c086be31d1b013dd2e64a60fedd9c0b0ef8e9059ef505d2de0559913	wine-build	build-arm64ec/dlls/shlwapi/arm64ec-windows/shlwapi.dll	P2
+resource	Runtime/arm64ec-windows/sspicli.dll	655360	87ff913a503c4bff9dd81a5259b6a5fb9a8d00c08454bef7fdbd1d98c4118ebb	wine-build	build-arm64ec/dlls/sspicli/arm64ec-windows/sspicli.dll	P2
 resource	Runtime/arm64ec-windows/ucrtbase.dll	1572864	e8d6d792354146ef303a7a4848fb7326a8fad48c0112b672a06413c823554721	wine-build	build-arm64ec/dlls/ucrtbase/arm64ec-windows/ucrtbase.dll	P2
 resource	Runtime/arm64ec-windows/uiautomationcore.dll	1245184	2e4de700c13c8b05d2a06f180cc3e945e3515271aaf3d3ec0f1883f74e4380a2	wine-build	build-arm64ec/dlls/uiautomationcore/arm64ec-windows/uiautomationcore.dll	P2
 resource	Runtime/arm64ec-windows/urlmon.dll	1310720	ecda4964c396aba0c5563c232f5854f3e7f7fa2daa59cd65685df7a9abcfde24	wine-build	build-arm64ec/dlls/urlmon/arm64ec-windows/urlmon.dll	P2
