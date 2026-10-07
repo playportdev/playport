@@ -1,14 +1,15 @@
 # Plan: games sign in to their store (Epic, Steam, GOG)
 
-**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1 and 2
-done; step 4 next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
+**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2 and
+4 done (4's S1 waits for a title that asks for a ticket); GOG (step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
 can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
 (`b21f63d`); nothing is built or drafted.
 
 **Decisions:** [0059](../decisions/0059-epic-exchange-code.md) (Epic exchange code and
 ownership token) was accepted in step 1;
 [0017](../decisions/0017-encrypted-app-ticket.md) (Steam encrypted app ticket) was accepted
-in step 2; 0062 (a live Steam session during play) is written in step 4; 0063 (a GOG game's
+in step 2; [0062](../decisions/0062-steam-live-session.md) (a live Steam session during
+play) was accepted in step 4; 0063 (a GOG game's
 Galaxy sign-in) in the GOG step. 0060 and 0061 are taken on `vulkan-performance`.
 
 ## Goal and the owner's direction
@@ -133,7 +134,19 @@ search found no copy outside the ini line. Open: sign-out removal is tested on t
 
 **3. Steam tickets made before launch: dropped** (Settled, above).
 
-**4. A live Steam session during play (decision 0062).** The host keeps the logged-on CM
+**4. A live Steam session during play (decision 0062). Done 2026-10-07** (`086c59c`,
+`624cc35`; [evidence](../evidence/2026-10-07-steam-live-session.md)). 0062 accepted with the
+owner's D1, D2, D5; D3: the WoW64 branch was one line and gbe's i386 build already existed,
+so it is in; Among Us is x86-64 anyway. On the phone (IPA `74c28bf7`): Hollow Knight logs
+`emulator connected (protocol 1, tickets armed)` and `CM kept for the game's tickets`,
+plays as before (60 fps median in a 120 s `pp perf`; arming takes 0.3–0.4 s), and its play
+costs the CM 6–17 messages out and 7–8 in. Among Us uses the encrypted app ticket (its
+IL2CPP strings; no web API ticket in its Steamworks.NET) and made no ticket before its
+PLA-39 fault. The container search found no ticket header outside the emulator's DLL.
+Open: no title has made a ticket yet (S1 needs one that calls `GetAuthSessionTicket` or
+`GetAuthTicketForWebApi` for its own servers); S3 (the background) cannot be driven
+through `pp ui` and the reconnect is host-tested only; one play's CM socket dropped
+16 s in (ECONNABORTED, cause unknown). Design as built: the host keeps the logged-on CM
 connection during a play (heartbeat and receive tasks at `.utility`); every other Steam call
 stays refused while suspended. gbe_fork asks the host for auth session and web API tickets
 through a Wine unix call table; the host builds each ticket from a game connect token and
@@ -146,7 +159,7 @@ title; at most 8 live tickets, one every 2 s. Chunks, in order:
 | 4.1 | Wire: EMsgs 779, 857/858, 5432 (with `CMsgAuthTicket`), 5575, 5429, with tests | S |
 | 4.2 | `CMConnection` push handler; `SteamSession` token queue (≤ `max_tokens_to_keep`, cleared at disconnect); `appOwnershipTicket(appID:)` | S–M |
 | 4.3 | `SteamTicketBroker`: build (24-byte header, CRC32 of the auth part, web API padding to 2560), auth list, ack, cancel by the auth part's CRC, `endPlay`, limits; tests | M |
-| 4.4 | Service and launch: `prepareTicketSession` at Play, `suspendForLaunch(keepingTickets:)`, `endPlay` before the restart, `cm: N in / M out` counters, reconnect on demand (D1), `ClientGamesPlayed` (D2) | M |
+| 4.4 | Service and launch: `prepareTicketSession` at Play, `suspendForLaunch` keeping the CM while a broker is armed, `endPlay` before the restart, `cm: N in / M out` counters, reconnect on demand (D1), `ClientGamesPlayed` (D2) | M |
 | 4.5 | WineHost: `steam_ticket_protocol.h`, `steam_ticket.c`, provider registration (ABI 4), C tests | S–M |
 | 4.6 | `patches/madeira-unix`: the `steam_api` name match to the table; the WoW64 branch if D3 calls for it | S |
 | 4.7 | `patches/gbe`: the host client, `auth.cpp`/`steam_user.cpp`/`steam_client.cpp` hooks; HELLO on every play | M |
@@ -190,7 +203,7 @@ CMake caches hold absolute paths).
 
 ## Order
 
-Step 1 → step 4 → GOG (step 5) → phone gates (6) → release (7). Each step commits with its
+Step 1 → step 4 → GOG (step 5) → phone gates (6) → release (7). Next: GOG, from B1. Each step commits with its
 own evidence; the scratch measurements behind the designs are left in the build area.
 
 ## Risks

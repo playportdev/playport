@@ -782,8 +782,10 @@ only. Host Steam secrets never enter the guest
 - **Files.** Non-secret only: `Library/Application Support/Playport/steam/`
   and the art cache in `Library/Caches/Playport/art/`. Sign-out revokes the
   token and deletes both; installed games and saves are untouched.
-- **Launch.** `suspendForLaunch()` closes the session and refuses further
-  Steam work in the process before the runtime starts.
+- **Launch.** `suspendForLaunch()` refuses further Steam work in the process
+  before the runtime starts and closes the session, unless the game's tickets
+  are armed: then the CM stays logged on for them alone
+  ([0062](decisions/0062-steam-live-session.md)).
 - **For games** ([plan](plans/finished.md#steam-for-games)): at each launch
   `SteamAPISwap` puts gbe_fork's `steam_api(64).dll` (`Runtime/steamapi/`) in
   the game's folder and `SteamStub` takes SteamStub 3.1 x64 off its
@@ -796,7 +798,16 @@ only. Host Steam secrets never enter the guest
   encrypted app ticket, fetched after Play before the suspension, is the one
   host secret a Steam game gets: a `ticket=` line in the emulator's
   `configs.user.ini` while it runs, removed at exit, the next launch, app start
-  and sign-out ([0017](decisions/0017-encrypted-app-ticket.md)).
+  and sign-out ([0017](decisions/0017-encrypted-app-ticket.md)). Its auth
+  session and web API tickets come from the host during the play
+  ([0062](decisions/0062-steam-live-session.md)): at Play `prepareTicketSession`
+  fetches the app's ownership ticket, checks Steam's game connect tokens and puts
+  the session in the game; the emulator (gbe 0006) asks through the unix call
+  table `playport_steam_unix_call_funcs` (`WineHost/steam_ticket.c`, given to a
+  `steam_api` module by madeira-unix 0087, x86-64 and WoW64), and
+  `SteamTicketBroker` builds each ticket, reports it in `ClientAuthList`, and
+  ends them all at `endPlay` before the restart. A dropped CM is reconnected
+  for it at most once a minute. Only ticket bytes, a handle and a state cross.
 - **An Epic game** starts signed in, as Epic's launcher starts it
   ([0059](decisions/0059-epic-exchange-code.md)): after Play the host fetches a
   five-minute exchange code and, when the catalogue asks, a five-minute ownership
