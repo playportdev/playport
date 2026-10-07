@@ -1,9 +1,11 @@
 # Plan: games sign in to their store (Epic, Steam, GOG)
 
 **Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4,
-the runtime fixes 4b and the URL opener 4c done (4's S1 waits for a title that asks for a
-ticket; Snakebird's EOS signs in through Playport's web panel; Jurassic World Evolution passes
-its DRM check but shows no frame, and is time-boxed out: Linear PLA-41); GOG (step 5) next.
+the runtime fixes 4b and the URL opener 4c done (4's S1: Valheim made a ticket Steam acked,
+then crashed before a server checked it; Snakebird's EOS signs in through Playport's web
+panel; Jurassic World Evolution passes its DRM check but shows no frame, and is time-boxed
+out: Linear PLA-41); GOG (step 5) built (B1 to B5) and its phone gate blocked: the Galaxy SDK
+connects and sends nothing on the phone.
 The plan ends with the phone gates (6) and their evidence; the release (7) is handed off to the
 owner's later sessions (owner, 2026-10-07: other work comes before 0.4.0). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
 can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
@@ -149,8 +151,10 @@ plays as before (60 fps median in a 120 s `pp perf`; arming takes 0.3–0.4 s), 
 costs the CM 6–17 messages out and 7–8 in. Among Us uses the encrypted app ticket (its
 IL2CPP strings; no web API ticket in its Steamworks.NET) and made no ticket before its
 PLA-39 fault. The container search found no ticket header outside the emulator's DLL.
-Open: no title has made a ticket yet (S1 needs one that calls `GetAuthSessionTicket` or
-`GetAuthTicketForWebApi` for its own servers); S3 (the background) cannot be driven
+Open: S1 half seen ([evidence](../evidence/2026-10-07-steam-ticket-valheim.md)): Valheim
+asks for an auth session ticket at its PlayFab login; the host makes it (240 bytes) and Steam
+acks it, then the game dies `0xc0000005` a second later, so no server has checked one yet
+(Soccer Online: Ball 3D shows no frame; Battlerite not tried); S3 (the background) cannot be driven
 through `pp ui` and the reconnect is host-tested only; one play's CM socket dropped
 16 s in (ECONNABORTED, cause unknown). Design as built: the host keeps the logged-on CM
 connection during a play (heartbeat and receive tasks at `.utility`); every other Steam call
@@ -233,7 +237,17 @@ in `syswow64`), a release play approved by a person, JWE past its DRM, the EOS r
 left in the prefix at Epic sign-out (a residual in 0064), a log line for a guest's top-level
 window text (would have shown JWE's dialog at once).
 
-**5. GOG Galaxy (decision 0063).** The host is the game's local Galaxy service while a GOG
+**5. GOG Galaxy (decision 0063). Built 2026-10-07; the phone gate is blocked**
+([evidence](../evidence/2026-10-07-gog-galaxy.md), IPA `baf1dfa1`). B1 (`9ec1ee7`, 0063
+accepted), B2 (`830f638`), B3 and B4 (`3292142`), B5 (`141abea`, `8afe7ee`) are in, with host
+tests. On the phone the service listens for every GOG play with a client, Moonscars and Monster
+Train connect to it and send nothing, and their SDK signs out
+(`GALAXY_SERVICE_NOT_AVAILABLE`); under Proton the same Moonscars files send `AUTH_INFO` and
+read Playport's reply, with no service registered, and the SDK's socket calls work on the
+phone in a probe: the cause, in the runtime, is not found. Hollow Knight and Shogun Showdown
+play as before. B6 (offline queue) and B7 (split SDK) are follow-ups; B8 (a registered
+service) is not what blocks it. Next: find what keeps the SDK from sending on the phone
+(Linear), then B9 again. The host is the game's local Galaxy service while a GOG
 game with a Galaxy client ID runs. Measured first on the workstation (B0, 2026-10-07, with
 the owner's GOG session, results only): a refresh token minted at Moonscars' client with
 `without_new_session=1` answered 200 with the same user ID and its own session ID; the host
@@ -269,7 +283,8 @@ CMake caches hold absolute paths).
 ## Order
 
 Step 1 → step 4 → runtime fixes (4b) → the URL opener (4c) → GOG (step 5) → phone gates (6),
-where this plan ends; the release (7) is the owner's, later. Next: GOG, from B1. Snakebird
+where this plan ends; the release (7) is the owner's, later. Next: the Galaxy SDK's silence on
+the phone (step 5's gate), then the phone gates. Snakebird
 Complete is the Epic title for step 6; Jurassic World Evolution stays on Linear PLA-41 (its
 DRM passes, then no frame in 600 s; not worked on here). Each step commits with its
 own evidence; the scratch measurements behind the designs are left in the build area.

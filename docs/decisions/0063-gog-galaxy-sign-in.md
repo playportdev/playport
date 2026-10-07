@@ -20,6 +20,28 @@ client gives it to every such game, with no per-game switch.
 
 One secret crosses: the game-scoped refresh token. Nothing else from the host session does.
 
+## How
+
+- **The client.** The build manifest's `clientId` and `clientSecret` go into the game's
+  install record (`manifests/gog-<id>.json` in the host's container) at install and
+  update; a record written before reads them from its build at the next launch.
+- **The listener.** At Play (`LibraryModel.play`), for a GOG game with a client while GOG
+  is signed in, `GalaxyListener` (GOGClientKit) binds `127.0.0.1:9977`; the launch stops it
+  however it ends. Signed out, no client, or the port taken: the game runs without it, as
+  before, and a `galaxy:` line says why. Each connection is read on its own thread; a
+  malformed or oversized frame (over 1 MiB) closes it.
+- **The service.** `GalaxyService` answers the SDK's communication-service messages:
+  `AUTH_INFO` (the binding check, then the mint at the play's first request, the overlay
+  state "not supported", and the reply with the refresh token, the user ID and the public
+  user name), `GET_USER_STATS`, `UPDATE_USER_STAT`, `DELETE_USER_STATS`,
+  `GET_USER_ACHIEVEMENTS`, `UNLOCK_USER_ACHIEVEMENT`, `CLEAR_USER_ACHIEVEMENT`,
+  `DELETE_USER_ACHIEVEMENTS`, the leaderboard requests, `GET_USER_TIME_PLAYED` and
+  `START_GAME_SESSION`. Anything before the sign-in is refused (401); a message it does not
+  serve gets 501. `LIBRARY_INFO` (GOG's separate peer library, which split SDKs load) is
+  answered "not available": that library is not provided. The game's access token is
+  refreshed at the game's client when it has under five minutes left. Unlocks and stat
+  updates made with no network are not kept for later.
+
 ## The secret
 
 - **What it is.** The host trades its GOG session's refresh token (GOG's desktop-client

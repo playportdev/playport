@@ -46,7 +46,8 @@ committed). As of 2026-10-07 (under `agent-notes/store-auth/`):
   `swift test --build-system native --scratch-path …`, a scratch test that installs a title from
   the workstation's store session). Steam has no workstation session, so take a Steam game's files
   from the phone (`pp phone pull`, between other jobs) or reason from its manifest.
-- **Runners** (`eos/desktop/run.py`, `jwe-launcher/run.py`): Proton 10 `waitforexitandrun` outside
+- **Runners** (`eos/desktop/run.py`, `jwe-launcher/run.py`, `gog-desktop/run.py` with a
+  stand-in Galaxy service, `gog-desktop/svc` the real one built for Linux): Proton 10 `waitforexitandrun` outside
   Steam, a scratch prefix, Playport's exact arguments (for Epic: `EpicInstaller.arguments` +
   `authArguments`, a fresh code and ownership token from the workstation session just before
   launch), the run's own process group killed and `wineserver -k` at the end, logs scrubbed. Copy
@@ -102,5 +103,6 @@ run.
 | --- | --- | --- | --- |
 | 2026-10-07 | Snakebird Complete (Epic) | EOS `UnexpectedError` | its login opens a browser page (device code); the phone had no URL opener (decision 0064) |
 | 2026-10-07 | Jurassic World Evolution (Epic) | alive, no frame, a hidden 550×146 window | the DRM's error box: the ownership-token file needed Epic's JSON reply, not the bare token ([evidence](evidence/2026-10-07-jwe.md), PLA-41) |
+| 2026-10-07 | Moonscars (GOG) | the Galaxy SDK connects to the host's service, sends nothing, signs out (`GALAXY_SERVICE_NOT_AVAILABLE`) | the same files send `AUTH_INFO` at once and read Playport's reply (its listener built for Linux); no service registration needed; a probe of the SDK's socket calls works on the phone: cause not found ([evidence](evidence/2026-10-07-gog-galaxy.md)) |
 
 Add a row for each new case, and file or update the game's Linear issue (AGENTS.md, "The phone").

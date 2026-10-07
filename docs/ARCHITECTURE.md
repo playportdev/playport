@@ -888,6 +888,14 @@ only. Host Steam secrets never enter the guest
   `playport-epic.ovt` in the game's folder (`-epicovt`), removed at exit, the next
   launch, app start and sign-out. Without them the page offers Try again, and Play
   offline for a game that allows it.
+- **A GOG game** whose build names a Galaxy client gets the local Galaxy service
+  while it runs ([0063](decisions/0063-gog-galaxy-sign-in.md)): `GalaxyListener`
+  (GOGClientKit) listens on `127.0.0.1:9977` from Play to the launch's end while GOG
+  is signed in, and `GalaxyService` answers the SDK's frames: its auth request, bound
+  to the client ID and secret kept in the install record, gets a refresh token minted
+  for that client; achievements, stats, leaderboards and play time go to
+  `gameplay.gog.com` with the game's access token, which stays on the host. The log's
+  `galaxy:` lines name each request and its status.
 
 ## Patch series
 
