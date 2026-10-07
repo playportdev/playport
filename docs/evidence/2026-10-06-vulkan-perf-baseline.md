@@ -227,14 +227,17 @@ drops it when the pseudo-process dies. Built (IPA `5a206ea8…`, `pp test` passe
 on the phone** (offline since 01:40). It affects every title, not only Direct3D 12: any
 run-once with a contended waiter in a game process went through this.
 
-## 2026-10-07 09:00: `patches/wine-unix` 0018 on the phone
+## 2026-10-07 09:00: `patches/wine-unix` 0020 on the phone
+
+On the first branch this patch was wine-unix 0018 and the diagnostic wine-pe 0029; on
+main's series they are 0020 and 0031 (main's own 0018 and 0029 are other patches).
 
 IPA `bf3d38f0…` (HEAD `32c9b38`). The gate passed (`ui-runs/20261007T0900*`, both titles
 to `first-frame+10`). **10 of 10 Direct3D 12 starts** reached `first-frame+12`
-(`ui-runs/20261007T0902*`–`T0909*`), with no `keyed wait returned` line from 0029 in any
+(`ui-runs/20261007T0902*`–`T0909*`), with no `keyed wait returned` line from the diagnostic in any
 log: the keyed waits now block. Then route v2 to `first-frame+140`, alternating, no cooling
 between (`perf-runs/vk-s2c-*`): **D3D12 3 of 3 and DXVK 3 of 3 in play**; the six last
 screenshots show the Knight in King's Pass (in the lumafly room in one). With the earlier
-three DXVK plays on route v2, DXVK is 6 of 6 and D3D12 3 of 3 since 0018, and 10 of 10
+three DXVK plays on route v2, DXVK is 6 of 6 and D3D12 3 of 3 since the fix, and 10 of 10
 D3D12 starts. Step 2's stability blockers known so far are fixed; the plan's 10-play bar
 is not repeated (owner, 2026-10-07: minimum testing).

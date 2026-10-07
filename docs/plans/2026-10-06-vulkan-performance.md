@@ -1,5 +1,6 @@
 # Plan: Vulkan at least on par with DXMT, on Hollow Knight in Direct3D 11 and 12
 
+**Linear:** [PLA-72](https://linear.app/playportdev/issue/PLA-72).
 **Date:** 2026-10-06, revised 2026-10-07. **Kind:** plan, in progress (see [How the work continues](#how-the-work-continues-owner-2026-10-07) and [Progress](#progress)). **Pins read:** as in the
 [KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 (a
 Mesa `main` commit of 2026-10-05; `main` was 54 commits ahead on 2026-10-06, none
@@ -24,9 +25,9 @@ worse, think about why (read the code, profile) before running more.
 [baseline](../evidence/2026-10-06-vulkan-perf-baseline.md)):
 
 - Step 0 done. Step 2 done for every fault found: `patches/dxvk` 0001 (the video's
-  shared texture) and `patches/wine-unix` 0018 (the D3D12 start fault), both checked on
-  the phone. `patches/wine-pe` 0029 only logs a failed run-once keyed wait (none since
-  0018); it may be dropped later.
+  shared texture) and `patches/wine-unix` 0020 (the D3D12 start fault), both checked on
+  the phone. `patches/wine-pe` 0031 only logs a failed run-once keyed wait (none since
+  0020); it may be dropped later.
 - The gap is known well enough to work on. At 720/free in play, Vulkan is 2–4 FPS behind
   DXMT, its p99 frame interval is 16.7 against 8.3 ms, and it does 14–18 % (DXVK) or
   26–31 % (vkd3d) more work a frame; GPU time is within 3–6 %.
@@ -537,7 +538,7 @@ without the owner is recorded here with its reason.
   pseudo-process. Built, IPA `5a206ea8…`; the phone was offline from 01:40. **Next on the
   phone:** install it, the gate, 10 D3D12 starts (expect no `keyed wait returned` lines
   and no 1-s fault), three D3D12 and three DXVK plays on route v2, then the levers.
-- **2026-10-07 09:00:** 0018 works on the phone: 10/10 D3D12 starts, D3D12 3/3 and DXVK
+- **2026-10-07 09:00:** wine-unix 0020 (then numbered 0018) works on the phone: 10/10 D3D12 starts, D3D12 3/3 and DXVK
   3/3 plays in King's Pass on route v2, gate passed. Step 2 closed for the known faults.
   Next: route-v2 burst runs (DXMT, DXVK, vkd3d, one each, cooled), then the levers.
 - **Paused 2026-10-07 ~09:50 by the owner.** Route-v2 burst control `vk-v2-dxmt-1` ran
