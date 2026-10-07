@@ -92,3 +92,42 @@ caller on the phone. IPv6 interface-table enumeration (distinct from the observe
 IPv6 address/route tables) was corrected for Darwin scopes but not directly
 exercised by these games' logs. The host mocks test dispatch/ABI validation,
 not the OS's interface list or sysctl sandbox policy.
+
+## Review follow-up (PLA-71, 2026-10-08)
+
+Changes after review of `087a202`:
+
+- **Cloned entries.** The route decoder skips `RTF_LLINFO` (ARP/ND) and
+  `RTF_WASCLONED` (cloned host) messages, which Windows does not list as routes.
+  The parent cloning route (`RTF_CLONING`) stays. Moonscars' IPv6 routes fall
+  from 71 to 43; IPv4 stays at 24.
+- **Denied routing sysctl.** `EPERM`/`EACCES` from `NET_RT_DUMP` now serves an
+  empty route table and logs one line per family. `GetAdaptersAddresses` then
+  still lists adapters and addresses, without gateways, instead of failing
+  outright. Other errors stay `STATUS_NOT_SUPPORTED`. The phone does not deny the
+  sysctl, so this path is reasoned, not exercised.
+- **Retry exhaustion.** The second sysctl gets 25 % + 4 KiB slack. Three lost
+  races now return `STATUS_NOT_SUPPORTED` (as a failed read), not
+  `STATUS_BUFFER_OVERFLOW`. nsi.dll's `NsiAllocateAndGetTable` is bounded at five
+  attempts either way.
+- **Interface identity.** `if_entry_is_current` reads a `present` flag that each
+  `update_if_table` snapshot refreshes, keyed by index *and* name. No
+  `if_indextoname` syscall per lookup, so an update is no longer n² syscalls.
+  A renamed index gets a new entry. Entries are never freed, because callers keep
+  `if_unix_name` pointers; every lookup path (`find_entry_from_*`,
+  `convert_*`, `ifinfo_enumerate_all`) skips absent ones.
+- **Series.** wine-pe 0029 is dropped and 0030 no longer touches wininet. The
+  built `wininet.dll` is byte-identical: only `libntdll_unix.a` and `winetest.exe`
+  (it embeds tree commit IDs) changed in the records.
+- **Not changed:** the i386 NSI path is still host-tested only.
+
+Host: `test_nsi_ios` adds `RTF_LLINFO`/`RTF_WASCLONED`/`RTF_CLONING` decoder
+cases; `pp test --quick` passes; the dev IPA passes all 80 checks.
+
+Phone: dev IPA `3c754e0544da2f84f5614f26b08842b8a0ca514187beacc7d298eedbb748b5d3`,
+upgraded in place, iPhone18,4 / iOS 27.0.
+
+| Run under `$PLAYPORT_BUILD/ui-runs/` | Result |
+| --- | --- |
+| `20261008T011203` Moonscars, `first-frame+60` | JIT 2.39 s, first frame +5.47 s, title screen. `AUTH_INFO -> 200`; Player.log `OnAuthSuccess` and `GOG_SERVICES_CONNECTION_STATE_CONNECTED`, no failure. NDIS 35 interfaces, IPv4 7 addresses / 24 routes, IPv6 35 / 43; every table `status=0`. |
+| `20261008T011339` Hollow Knight, `first-frame+10` | JIT 2.43 s, first frame +9.14 s, main menu. |

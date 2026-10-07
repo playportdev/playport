@@ -182,6 +182,10 @@ int main(void)
     h.length = len; h.version = 6; memcpy(b, &h, sizeof(h)); assert(!ios_route_parse(b, len, &row));
     h.version = 5; h.flags = 0; memcpy(b, &h, sizeof(h)); assert(!ios_route_parse(b, len, &row));
     h.flags = 3 | 0x800000; memcpy(b, &h, sizeof(h)); assert(!ios_route_parse(b, len, &row));
+    /* Cloned ARP/ND entries and cloned host routes are not Windows routes. */
+    h.flags = 5 | 0x400; memcpy(b, &h, sizeof(h)); assert(!ios_route_parse(b, len, &row));
+    h.flags = 7 | 0x20000; memcpy(b, &h, sizeof(h)); assert(!ios_route_parse(b, len, &row));
+    h.flags = 3 | 0x100; memcpy(b, &h, sizeof(h)); assert(ios_route_parse(b, len, &row) == 1); /* RTF_CLONING parent stays */
     h.flags = 3; h.addrs |= 256; memcpy(b, &h, sizeof(h)); assert(ios_route_parse(b, len, &row) == -1);
     len = message(b, 2, 3, 8);
     b[sizeof(h) + 32 + 4] = 0xf0; b[sizeof(h) + 32 + 5] = 0x80; /* noncontiguous mask */

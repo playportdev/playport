@@ -3,29 +3,45 @@ From: Playport <dev@playport.invalid>
 Date: Wed, 7 Oct 2026 23:33:02 +0200
 Subject: [PATCH] nsiproxy: serve iOS adapter and IPv4/IPv6 route snapshots
 
-Read link metadata with getifaddrs on iOS and decode Darwin route snapshots with bounds checks, compressed masks and scoped IPv6 gateways. Darwin IPv6 interface scopes are interface indices, not Linux address-class codes. Exclude removed/replaced interface identities from later snapshots and queries. Keep unsupported statistics and neighbour APIs unchanged.
+Read link metadata with getifaddrs on iOS and decode Darwin route snapshots with bounds checks, compressed masks and scoped IPv6 gateways. Skip cloned link-layer (ARP/ND) and cloned host entries, which Windows does not list as routes. A sandbox that denies the routing sysctl yields an empty route table rather than failing GetAdaptersAddresses. Darwin IPv6 interface scopes are interface indices, not Linux address-class codes. Exclude removed/replaced interface identities from later snapshots and queries, tracked per if_nameindex snapshot rather than with a syscall per lookup. Keep unsupported statistics and neighbour APIs unchanged.
 
 Class: ios-port
 Evidence: docs/evidence/2026-10-07-nsi-adapters.md
 Offered-upstream: no; iOS one-process runtime integration
 ---
- dlls/nsiproxy.sys/ios_forward.h | 100 +++++++++++++++++++++++++++++
- dlls/nsiproxy.sys/ios_routes.h  |  96 ++++++++++++++++++++++++++++
+ dlls/nsiproxy.sys/ios_forward.h | 119 +++++++++++++++++++++++++++++++
+ dlls/nsiproxy.sys/ios_routes.h  | 100 ++++++++++++++++++++++++++
  dlls/nsiproxy.sys/ip.c          |  24 ++++++-
- dlls/nsiproxy.sys/ndis.c        | 109 +++++++++++++++++++++++++++++++-
- 4 files changed, 323 insertions(+), 6 deletions(-)
+ dlls/nsiproxy.sys/ndis.c        | 122 +++++++++++++++++++++++++++++++-
+ 4 files changed, 359 insertions(+), 6 deletions(-)
  create mode 100644 dlls/nsiproxy.sys/ios_forward.h
  create mode 100644 dlls/nsiproxy.sys/ios_routes.h
 
 diff --git a/dlls/nsiproxy.sys/ios_forward.h b/dlls/nsiproxy.sys/ios_forward.h
 new file mode 100644
-index 0000000..a79cff1
+index 0000000..7fb3665
 --- /dev/null
 +++ b/dlls/nsiproxy.sys/ios_forward.h
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,119 @@
 +/* iOS NSI forwarding tables. SPDX-License-Identifier: LGPL-2.1-or-later */
 +#include <errno.h>
 +#include "ios_routes.h"
++
++/* A sandbox that denies the routing sysctl yields an empty table, so
++ * GetAdaptersAddresses still lists adapters and addresses (with no gateways)
++ * instead of failing outright. Other failures are reported as upstream's BSD
++ * path does. One line per family; no addresses. */
++static NTSTATUS ios_forward_unavailable( int family, int error, UINT_PTR *count )
++{
++    static int logged[2];
++    int denied = error == EPERM || error == EACCES;
++    if (!__atomic_exchange_n( &logged[family == AF_INET6], 1, __ATOMIC_RELAXED ))
++        ERR( "route table (family %d) unavailable: errno %d%s\n", family, error,
++             denied ? ", serving an empty table" : "" );
++    if (!denied) return STATUS_NOT_SUPPORTED;
++    *count = 0;
++    return STATUS_SUCCESS;
++}
 +
 +static NTSTATUS ios_forward_enumerate_all( int family, void *key_data, UINT key_size,
 +                                           void *rw_data, UINT rw_size, void *dynamic_data, UINT dynamic_size,
@@ -39,19 +55,22 @@ index 0000000..a79cff1
 +    NTSTATUS status = STATUS_SUCCESS;
 +    for (attempt = 0; attempt < 3; ++attempt)
 +    {
-+        if (sysctl( mib, ARRAY_SIZE(mib), NULL, &size, NULL, 0 )) return STATUS_NOT_SUPPORTED;
++        if (sysctl( mib, ARRAY_SIZE(mib), NULL, &size, NULL, 0 )) return ios_forward_unavailable( family, errno, count );
 +        if (!size) { *count = 0; return STATUS_SUCCESS; }
 +        if (size > 16 * 1024 * 1024) return STATUS_NO_MEMORY;
++        /* Slack for routes added between the two calls. */
++        size += size / 4 + 4096;
 +        if (!(buffer = malloc( size ))) return STATUS_NO_MEMORY;
 +        if (!sysctl( mib, ARRAY_SIZE(mib), buffer, &size, NULL, 0 )) break;
 +        {
 +            int error = errno;
 +            free( buffer );
 +            buffer = NULL;
-+            if (error != ENOMEM) return STATUS_NOT_SUPPORTED;
++            if (error != ENOMEM) return ios_forward_unavailable( family, error, count );
 +        }
 +    }
-+    if (!buffer) return STATUS_BUFFER_OVERFLOW;
++    /* Still racing a growing table: a failed read, not a short caller buffer. */
++    if (!buffer) return ios_forward_unavailable( family, ENOMEM, count );
 +    for (offset = 0; offset < size;)
 +    {
 +        struct ios_route_header header;
@@ -125,10 +144,10 @@ index 0000000..a79cff1
 +}
 diff --git a/dlls/nsiproxy.sys/ios_routes.h b/dlls/nsiproxy.sys/ios_routes.h
 new file mode 100644
-index 0000000..1e3108c
+index 0000000..9a99e83
 --- /dev/null
 +++ b/dlls/nsiproxy.sys/ios_routes.h
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,100 @@
 +/* Read-only Darwin routing-message decoder for the iOS port.
 + * SPDX-License-Identifier: LGPL-2.1-or-later
 + * The iOS SDK omits net/route.h. These fixed-width fields describe Darwin's
@@ -165,8 +184,12 @@ index 0000000..1e3108c
 +    if (size < sizeof(h)) return -1;
 +    memcpy( &h, bytes, sizeof(h) );
 +    if (h.length < sizeof(h) || h.length > size) return -1;
++    /* Skip down, reject (0x8), blackhole (0x1000) and multicast (0x800000)
++     * routes, and the cloned per-neighbour/per-destination entries Windows
++     * does not list as routes: link-layer (ARP/ND, RTF_LLINFO 0x400) and
++     * cloned host routes (RTF_WASCLONED 0x20000). */
 +    if (h.version != 5 || h.type != 4 || !(h.flags & 1) ||
-+        (h.flags & (0x8 | 0x1000 | 0x800000)) || !h.index || h.error) return 0;
++        (h.flags & (0x8 | 0x400 | 0x1000 | 0x20000 | 0x800000)) || !h.index || h.error) return 0;
 +    if ((uint32_t)h.addrs & ~0xffu) return -1;
 +    offset = sizeof(h);
 +    for (i = 0; i < 8; ++i)
@@ -324,7 +347,7 @@ index 6c4d580..a148729 100644
      {
          struct ipv6_route_data entry;
 diff --git a/dlls/nsiproxy.sys/ndis.c b/dlls/nsiproxy.sys/ndis.c
-index 5dde172..3a6349e 100644
+index 5dde172..aaf00d9 100644
 --- a/dlls/nsiproxy.sys/ndis.c
 +++ b/dlls/nsiproxy.sys/ndis.c
 @@ -30,6 +30,9 @@
@@ -337,7 +360,7 @@ index 5dde172..3a6349e 100644
  
  #ifdef HAVE_NET_IF_H
  #include <net/if.h>
-@@ -100,17 +103,34 @@ struct if_entry
+@@ -100,17 +103,37 @@ struct if_entry
      IF_PHYSICAL_ADDRESS if_phys_addr;
      UINT if_index;
      UINT if_type;
@@ -350,10 +373,13 @@ index 5dde172..3a6349e 100644
  static pthread_mutex_t if_list_lock = PTHREAD_MUTEX_INITIALIZER;
  
 +#ifdef WINE_IOS
++/* Present in the last if_nameindex snapshot under the same index and name.
++ * Entries are never freed (callers keep if_unix_name pointers), so a removed
++ * or renamed interface stays listed but is skipped. No syscall per lookup:
++ * update_if_table refreshes the flag on each enumeration and on a miss. */
 +static BOOL if_entry_is_current( const struct if_entry *entry )
 +{
-+    char name[IFNAMSIZ];
-+    return if_indextoname( entry->if_index, name ) && !strcmp( name, entry->if_unix_name );
++    return entry->present;
 +}
 +#endif
 +
@@ -373,7 +399,7 @@ index 5dde172..3a6349e 100644
  
      return NULL;
  }
-@@ -120,12 +140,46 @@ static struct if_entry *find_entry_from_luid( const NET_LUID *luid )
+@@ -120,12 +143,46 @@ static struct if_entry *find_entry_from_luid( const NET_LUID *luid )
      struct if_entry *entry;
  
      LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
@@ -422,19 +448,36 @@ index 5dde172..3a6349e 100644
  static NTSTATUS if_get_physical( const char *name, UINT *type, IF_PHYSICAL_ADDRESS *phys_addr )
  {
      int fd, size, i;
-@@ -319,11 +373,24 @@ static unsigned int update_if_table( void )
+@@ -285,6 +342,9 @@ static struct if_entry *add_entry( UINT index, char *name )
+     if (!entry) return NULL;
+ 
+     entry->if_index = index;
++#ifdef WINE_IOS
++    entry->present = TRUE;
++#endif
+     memcpy( entry->if_unix_name, name, name_len + 1 );
+     entry->if_name = strdupAtoW( name );
+     if (!entry->if_name)
+@@ -319,11 +379,31 @@ static unsigned int update_if_table( void )
          return 0;
      }
  
 +#ifdef WINE_IOS
 +    {
 +        struct if_entry *cached;
++        struct if_entry *found;
 +        LIST_FOR_EACH_ENTRY( cached, &if_list, struct if_entry, entry ) cached->present = FALSE;
 +        for (entry = indices; entry->if_index; entry++)
 +        {
-+            cached = find_entry_from_index( entry->if_index );
-+            if (!cached && (cached = add_entry( entry->if_index, entry->if_name ))) ++append_count;
-+            if (cached) cached->present = TRUE;
++            found = NULL;
++            LIST_FOR_EACH_ENTRY( cached, &if_list, struct if_entry, entry )
++                if (cached->if_index == entry->if_index && !strcmp( cached->if_unix_name, entry->if_name ))
++                {
++                    found = cached;
++                    break;
++                }
++            if (!found && (found = add_entry( entry->if_index, entry->if_name ))) ++append_count;
++            if (found) found->present = TRUE;
 +        }
 +    }
 +#else
@@ -447,7 +490,7 @@ index 5dde172..3a6349e 100644
  
      if_freenameindex( indices );
      return append_count;
-@@ -420,6 +487,33 @@ static void ifinfo_fill_dynamic( struct if_entry *entry, struct nsi_ndis_ifinfo_
+@@ -420,6 +500,33 @@ static void ifinfo_fill_dynamic( struct if_entry *entry, struct nsi_ndis_ifinfo_
              fclose( fp );
          }
      }
@@ -481,7 +524,7 @@ index 5dde172..3a6349e 100644
  #elif defined(HAVE_SYS_SYSCTL_H) && defined(NET_RT_IFLIST)
      {
          int mib[] = { CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_IFLIST, entry->if_index };
-@@ -512,6 +606,9 @@ static NTSTATUS ifinfo_enumerate_all( void *key_data, UINT key_size, void *rw_da
+@@ -512,6 +619,9 @@ static NTSTATUS ifinfo_enumerate_all( void *key_data, UINT key_size, void *rw_da
  
      LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
      {
@@ -491,7 +534,7 @@ index 5dde172..3a6349e 100644
          if (num < *count)
          {
              ifinfo_fill_entry( entry, key_data, rw_data, dynamic_data, static_data );
-@@ -669,6 +766,9 @@ BOOL convert_unix_name_to_luid( const char *unix_name, NET_LUID *luid )
+@@ -669,6 +779,9 @@ BOOL convert_unix_name_to_luid( const char *unix_name, NET_LUID *luid )
      {
          LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
          {
@@ -501,7 +544,7 @@ index 5dde172..3a6349e 100644
              if (!strcmp( entry->if_unix_name, unix_name ))
              {
                  *luid = entry->if_luid;
-@@ -696,6 +796,9 @@ BOOL convert_luid_to_unix_name( const NET_LUID *luid, const char **unix_name )
+@@ -696,6 +809,9 @@ BOOL convert_luid_to_unix_name( const NET_LUID *luid, const char **unix_name )
      {
          LIST_FOR_EACH_ENTRY( entry, &if_list, struct if_entry, entry )
          {

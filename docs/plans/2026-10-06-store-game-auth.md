@@ -390,7 +390,7 @@ the scratch measurements behind the designs are left in the build area.
   service or more of the local protocol (B8). About a ninth of the 31 Galaxy games are 32-bit
   and cannot run anyway.
 - PLA-58's follow-up retires wine-pe 0029's unconditional "LAN" answer in favour of
-  real interface/address/route tables. Network-change notifications, unavailable
+  real interface/address/route tables; PLA-71 drops 0029 from the series. Network-change notifications, unavailable
   kernel statistics and a phone check of offline transitions remain outside that fix.
 
 ## Not in this plan

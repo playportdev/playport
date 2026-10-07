@@ -1,17 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Playport <dev@playport.invalid>
-Date: Wed, 7 Oct 2026 23:33:21 +0200
+Date: Thu, 8 Oct 2026 01:05:56 +0200
 Subject: [PATCH] nsi: forward keyed reads to the iOS unix fallback
 
-GetAdaptersAddresses needs keyed LUID/GUID conversion as well as enumeration. Route both query entry points to the matching unix slots when the NSI device is absent. With the real adapter/address/route tables available, retire wininet's unconditional LAN workaround (0029); connectivity now follows the tables.
+GetAdaptersAddresses needs keyed LUID/GUID conversion as well as enumeration. Route both query entry points to the matching unix slots when the NSI device is absent. With the real adapter/address/route tables available, wininet's connectivity answer follows the tables, as upstream's does.
 
 Class: host-app
 Evidence: docs/evidence/2026-10-07-nsi-adapters.md
 Offered-upstream: no; Playport one-process integration
 ---
- dlls/nsi/nsi.c          | 18 ++++++++++++++++--
- dlls/wininet/internet.c | 15 +--------------
- 2 files changed, 17 insertions(+), 16 deletions(-)
+ dlls/nsi/nsi.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
 
 diff --git a/dlls/nsi/nsi.c b/dlls/nsi/nsi.c
 index b9171d9..bf81fbe 100644
@@ -49,43 +48,3 @@ index b9171d9..bf81fbe 100644
  
      in = malloc( in_size );
      if (!in) return ERROR_OUTOFMEMORY;
-diff --git a/dlls/wininet/internet.c b/dlls/wininet/internet.c
-index 8e71be6..aacd507 100644
---- a/dlls/wininet/internet.c
-+++ b/dlls/wininet/internet.c
-@@ -1565,7 +1565,6 @@ BOOL WINAPI InternetGetConnectedStateExW(LPDWORD lpdwStatus, LPWSTR lpszConnecti
-     IP_ADAPTER_ADDRESSES *buf = NULL, *aa;
-     ULONG size = 0;
-     DWORD status;
--    BOOL no_adapter_table = FALSE;
- 
-     TRACE("(%p, %p, %ld, 0x%08lx)\n", lpdwStatus, lpszConnectionName, dwNameLen, dwReserved);
- 
-@@ -1589,18 +1588,7 @@ BOOL WINAPI InternetGetConnectedStateExW(LPDWORD lpdwStatus, LPWSTR lpszConnecti
-             errcode = ERROR_NOT_ENOUGH_MEMORY;
-         if (errcode != ERROR_BUFFER_OVERFLOW)
-         {
--            /* No adapter table at all is not "offline": without the \\.\Nsi device
--             * (the iOS runtime has no nsiproxy.sys) GetAdaptersAddresses fails with
--             * ERROR_FILE_NOT_FOUND whatever the network. Report a LAN connection,
--             * as a gateway does below. */
--            if (errcode == ERROR_FILE_NOT_FOUND || errcode == ERROR_NOT_SUPPORTED)
--            {
--                static LONG once;
--                if (!InterlockedExchange(&once, 1))
--                    FIXME("no adapter table (error %lu): returning a LAN connection\n", errcode);
--                no_adapter_table = TRUE;
--            }
--            else if (errcode != ERROR_NO_DATA)
-+            if (errcode != ERROR_NO_DATA)
-             {
-                 SetLastError(errcode);
-                 return FALSE;
-@@ -1611,7 +1599,6 @@ BOOL WINAPI InternetGetConnectedStateExW(LPDWORD lpdwStatus, LPWSTR lpszConnecti
-     }
- 
-     status = INTERNET_RAS_INSTALLED;
--    if (no_adapter_table) status |= INTERNET_CONNECTION_LAN;
-     for (aa = buf; aa; aa = aa->Next)
-     {
-         /* Connected, but not necessarily to internet */

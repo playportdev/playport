@@ -193,6 +193,8 @@ title. Other titles that poll a completion port with a zero timeout pay the same
 
 ## PLA-58: the SDK asks whether the machine is online (wine-pe 0029)
 
+*Later:* wine-pe 0029 was replaced by real NSI tables ([nsi-adapters](2026-10-07-nsi-adapters.md)) and dropped from the series (PLA-71).
+
 **IPA** `Playport-26.5-31eda60f.ipa` (dev), sha256
 `31eda60fed9be1c02d94d74133454d97138851a25c18f9a792fba8b55d2092b8`: `95a6fb9` with
 `patches/wine-pe/0029-wininet-report-a-LAN-connection-when-there-is-no-ada.patch`. Phone as
