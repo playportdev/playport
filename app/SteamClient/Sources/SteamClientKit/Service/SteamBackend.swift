@@ -32,6 +32,8 @@ public protocol SteamBackend: Sendable {
     func cloudDownload(appID: UInt32, name: String) async throws -> [UInt8]
     /// Uploads files in one batch; the names Steam committed.
     func cloudUpload(appID: UInt32, files: [(name: String, data: [UInt8], time: UInt64)]) async throws -> [String]
+    /// The app's encrypted app ticket for the account (decision 0017), within `timeout` seconds.
+    func encryptedAppTicket(appID: UInt32, timeout: Double) async throws -> Secret<[UInt8]>
     func logout(revoke: Bool) async throws -> LogoutReport
 }
 

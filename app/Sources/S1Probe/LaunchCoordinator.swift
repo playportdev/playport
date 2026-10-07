@@ -22,7 +22,9 @@
 // FEX's settings (FEXProfile: the game's memory ordering, and the host CPU
 // features FEX cannot read on iOS, HostCPU) and the backend's variables go into
 // the title's own environment, over the session root's, and into the app's
-// for the runtime's unix side. Progress goes to the app log
+// for the runtime's unix side. A Steam game's encrypted app ticket, fetched after
+// Play (LibraryModel.play), goes into the emulator's settings before the runtime
+// starts and out of them when the launch ends (decision 0017). Progress goes to the app log
 // (AppLog) as `title:` lines and, for the UI, to a step callback; the outcome's line is the
 // `title: done` result the drivers parse, unchanged. `title: +<s> s` lines time the
 // launch from its start to the game's first frame, in both variants.
@@ -65,6 +67,9 @@ enum LaunchCoordinator {
         var root: URL
         var mode: SteamAPISwap.Mode
         var settings: @Sendable () async -> SteamAPISwap.Settings
+        /// The game's encrypted app ticket (decision 0017), fetched after Play
+        /// before the session closed; nil starts the game without one.
+        var ticket: Secret<[UInt8]>? = nil
     }
 
     enum Step: Equatable {
@@ -115,10 +120,20 @@ enum LaunchCoordinator {
             log("steamapi: no staged runtime; the game's own steam_api stays")
             return
         }
+        // A ticket a crash or a kill left behind goes before anything else (decision 0017).
+        removeTicket(s, when: "before the launch")
         do {
             let state = try SteamAPISwap.ensure(s.mode, in: s.root, emulator: runtime.appendingPathComponent("steamapi", isDirectory: true),
                                                 settings: settings ?? .init(appID: s.appID))
             log("steamapi: \(s.mode.rawValue): \(state.rawValue)" + (s.mode == .emulated ? " (\(fields))" : ""))
+            if s.mode == .emulated {
+                if let ticket = s.ticket {
+                    let n = try SteamAPISwap.writeTicket(ticket, in: s.root)
+                    log("ticket: the encrypted app ticket (\(ticket.value.count) bytes) written to \(n) configs.user.ini")
+                } else {
+                    log("ticket: none; the emulator makes up its own")
+                }
+            }
             var stub = "none"
             if s.mode == .emulated {
                 for site in try SteamStub.remove(in: s.root) {
@@ -137,6 +152,18 @@ enum LaunchCoordinator {
             #if !PLAYPORT_RELEASE
             RunEvents.emit("steamapi", ["mode": s.mode.rawValue, "error": "\(error)"])
             #endif
+        }
+    }
+
+    /// Takes the encrypted app ticket out of the game's emulator settings
+    /// (decision 0017): at the game's exit, and before a launch for one a crash
+    /// or a kill left behind. Logged only when there was one.
+    private static func removeTicket(_ s: SteamAPI, when: String) {
+        do {
+            let n = try SteamAPISwap.removeTickets(in: s.root)
+            if n > 0 || (when == "at exit" && s.ticket != nil) { log("ticket: removed from \(n) configs.user.ini \(when)") }
+        } catch {
+            log("ticket: not removed \(when): \(error)")
         }
     }
 
@@ -260,6 +287,8 @@ enum LaunchCoordinator {
         }
 
         if let s = r.steamAPI { prepareSteamAPI(s) }
+        // However the launch ends from here, the ticket goes with it (decision 0017).
+        defer { if let s = r.steamAPI { removeTicket(s, when: "at exit") } }
 
         // A Unity title reopens at the window size it saved; ask it for the whole screen (TitleScreen.swift).
         let dir = (withUnsafeBytes(of: tp.unix_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) } as NSString)

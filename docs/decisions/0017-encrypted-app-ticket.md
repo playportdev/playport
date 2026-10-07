@@ -1,20 +1,25 @@
-# 0017: An encrypted app ticket may enter the guest, per game
+# 0017: An encrypted app ticket enters the guest, for every Steam game
 
-**Status:** proposed, 2026-09-28. Not accepted. Until it is, no ticket
-enters the guest and [0004](0004-steam-session-boundary.md) holds unchanged.
+**Status:** accepted, 2026-10-06, by the owner ("a game gets from its store what
+the store's launcher would give it, by default", in the
+[store game sign-in plan](../plans/2026-10-06-store-game-auth.md)), step 2. Proposed
+2026-09-28 as a per-game switch, off by default; the owner's direction replaces
+the switch. One exception to [0004](0004-steam-session-boundary.md). The phone
+measurement is in the [evidence](../evidence/2026-10-07-steam-encrypted-app-ticket.md).
 
-## Decision (proposed)
+## Decision
 
 One exception to 0004, for one secret: Steam's **encrypted app ticket** for
-the game being launched. The player turns it on for one game on that game's
-page ("Prove ownership to the game's servers"); it is off by default.
-When it is on, the launch fetches a fresh ticket on the host and gives it to
-the Steam API emulator through one file, which is deleted when the game
-exits. Nothing else from the host session crosses: not the refresh or access
-token, not the account name, not a CDN or depot key.
+the game being launched. It is **on by default for every Steam game** that runs
+with the Steam API emulator (gbe_fork), as Steam's own client gives it to every
+game that asks. There is no per-game switch: the review keeps one only if the
+phone measurement finds a copy outside the ini line. The launch fetches a fresh
+ticket on the host and gives it to the emulator through one file line, which is
+removed when the game exits. Nothing else from the host session crosses: not
+the refresh or access token, not the account name, not a CDN or depot key.
 
 0004 asks five things of a record like this one. This one meets four and
-asks to narrow the fifth.
+narrows the fifth.
 
 ## The secret
 
@@ -42,26 +47,36 @@ asks to narrow the fifth.
 
 Everything runs in one process (0004). So anything in the guest can read the
 ticket while the game runs: the game itself (which is meant to), any mod or
-other DLL it loads, and anything that reads the prefix while the file exists.
+other DLL it loads, and anything that reads the prefix while the line exists.
 The residual risk is 0004's, narrowed to one game's servers and one
-ticket's lifetime.
+ticket's lifetime. With the ticket on for every game, the exposure is every
+Steam game the player runs, each to its own servers only.
 
 ## The one channel
 
-- **Where.** The line `ticket=<base64>` in the game's
+- **Where.** The line `ticket=<base64>` in `[user::general]` of the game's
   `steam_settings/configs.user.ini`, beside the emulator's DLL. That folder is
-  Playport's own (SteamAPISwap marks it).
-- **Written** by the launch (`LaunchCoordinator`) after the ticket is
-  fetched, and before the runtime starts.
-- **Removed:**
-  - when the game exits (the same thread, no network needed);
-  - at the next launch and at the next app start, when a crash or a kill left
-    it behind;
-  - at sign-out, from every installed game.
-- **Fetched** right after Play, before the session closes for the launch
-  (0004's suspension), with a 5 s limit. If the fetch fails, the game starts
-  without a ticket. It is never kept on the host: not in the Keychain, and not
-  in the service's files.
+  Playport's own (SteamAPISwap marks it). The base64 is of the bytes Steam
+  returns as the reply's `encrypted_app_ticket` (the serialised
+  `EncryptedAppTicket` message), which is what a game's `GetEncryptedAppTicket`
+  gets from Steam's own client.
+- **Fetched** right after Play (`LibraryModel.play`, `SteamService.encryptedAppTicket`),
+  before the session closes for the launch (0004's suspension), on a session
+  already logged on, with a 5 s limit. No restore is started for it: one could
+  outlive the limit and race the suspension. If there is no such session, or
+  the fetch fails or times out, the game starts without a ticket and the
+  emulator makes up its own, as before. It is never kept on the host: not in the
+  Keychain, and not in the service's files.
+- **Written** by the launch (`LaunchCoordinator`, `SteamAPISwap.writeTicket`)
+  after the emulator's settings, and before the runtime starts.
+- **Removed** (`SteamAPISwap.removeTickets`):
+  - when the launch ends (the same thread, no network needed);
+  - at the next launch and at the next app start, when a crash, a kill or the
+    restart after a game left it behind (a Play waits for the start's sweep);
+  - at sign-out, from every installed Steam game.
+- **Logs** never print it: the launch logs its size and where it went, and
+  `Redactor` scrubs a `ticket=` value from any line that reaches a log. `pp secrets`
+  fails a committed line that looks like a real one.
 
 ## Where it is in the guest (from gbe_fork's source at the gbe pin)
 
@@ -69,12 +84,12 @@ ticket's lifetime.
   startup, into the client and server settings: two copies in process memory.
 - `steam_user.cpp` `GetEncryptedAppTicket` copies it into the game's buffer.
   From there it is the game's, which sends it to its servers.
-- gbe_fork writes it nowhere: the parser only reads it, and its debug prints
-  are not in the release build.
-- **To measure on the phone before this record is accepted:** after a play
-  with a ticket, search the whole prefix and the app container for the base64
-  and for the raw bytes. Only the ini line may hold them, and only while the
-  game runs.
+- gbe_fork writes it nowhere: the parser only reads it, `save_global_ini_value`
+  writes only the global settings folder's files (never the ticket key), and its
+  debug prints are not in the release build.
+- **Measured on the phone** ([evidence](../evidence/2026-10-07-steam-encrypted-app-ticket.md)):
+  after a play with a ticket, the app's container, prefix included, was searched
+  for the base64 and the raw bytes.
 
 ## What 0004 asks, and what this does
 
@@ -82,9 +97,9 @@ ticket's lifetime.
 | --- | --- |
 | a threat model for the secret | above |
 | a single channel | the ini line, written at launch, removed at exit |
-| measured guest-side storage | from the source; the phone measurement is still to do |
+| measured guest-side storage | from the source, and the phone measurement in the evidence |
 | logout removes every copy | sign-out removes every ini line; the host keeps none |
-| revocation also invalidates what the guest received | **not possible.** Playport cannot revoke a Steam ticket, and revoking the refresh token does not invalidate one already issued. The proposal is to accept this for this secret alone, because the ticket gives no Steam account access and lasts a bounded time. |
+| revocation also invalidates what the guest received | **not possible.** Playport cannot revoke a Steam ticket, and revoking the refresh token does not invalidate one already issued. This is accepted for this secret alone, because the ticket gives no Steam account access and lasts a bounded time. |
 
 ## Also
 
@@ -92,14 +107,8 @@ ticket's lifetime.
   ticket (a server nonce) gets a ticket without it, because it was fetched
   before the game ran. Its servers will refuse it. The emulator already
   ignores that data.
-- **Scope.** A game with the switch off gets gbe_fork's own made-up ticket,
-  as it does today. No cohort title needs a real one, so there is no test
-  title yet: the plan's "done when" needs a game whose online login checks
-  the ticket.
-
-## If accepted
-
-- Implement phase 5 as above (docs/plans/finished.md#steam-for-games).
-- Measure the guest-side storage on the phone, and record it in
-  `docs/evidence/` before the switch ships in a release build.
-- Amend 0004's "How the host side is kept" to point here.
+- **The game's own steam_api** (the dev build's per-game choice) gets no ticket:
+  it needs a running Steam client, which Playport does not have.
+- **No test title yet** checks the ticket online; the plan's step 5 needs one,
+  from its survey (step 0). Hollow Knight shows the channel and that it costs
+  the launch nothing.

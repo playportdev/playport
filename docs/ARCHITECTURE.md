@@ -792,7 +792,11 @@ only. Host Steam secrets never enter the guest
   A game whose saves changed on the phone and on Steam asks once at Play
   which side to keep, for all its files in one `syncCloud(resolve:)` call;
   until then it does not start. The side not kept stays in
-  `Documents/Cloud Backups/` for 30 days (`Cloud.Backups`).
+  `Documents/Cloud Backups/` for 30 days (`Cloud.Backups`). The game's
+  encrypted app ticket, fetched after Play before the suspension, is the one
+  host secret a game gets: a `ticket=` line in the emulator's
+  `configs.user.ini` while it runs, removed at exit, the next launch, app start
+  and sign-out ([0017](decisions/0017-encrypted-app-ticket.md)).
 
 ## Patch series
 

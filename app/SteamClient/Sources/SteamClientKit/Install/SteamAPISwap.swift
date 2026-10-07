@@ -14,7 +14,9 @@ import Darwin
 /// one rename, and a `steam_settings/` folder written by Playport (it holds
 /// `playport.txt`) goes beside it with what the emulator reports: the app ID,
 /// the persona name, the SteamID64, the language and the owned DLC. None of it
-/// is a credential (decision 0004). Every step is a rename or an atomic write,
+/// is a credential (decision 0004). The one exception is the game's encrypted
+/// app ticket, a line in configs.user.ini only while the game runs
+/// (`writeTicket`, `removeTickets`; decision 0017). Every step is a rename or an atomic write,
 /// so a kill part-way leaves a state the next `apply` or `restore` finishes;
 /// both are idempotent, and the launch applies the game's mode every time.
 ///
@@ -230,6 +232,70 @@ public enum SteamAPISwap {
         for (name, data) in files {
             let url = folder.appendingPathComponent(name)
             if (try? Data(contentsOf: url)) != data { try InstallFS.writeAtomically(url, data) }
+        }
+    }
+
+    // MARK: the encrypted app ticket (decision 0017)
+
+    /// gbe_fork's key for the ticket, in configs.user.ini's `[user::general]`
+    /// (settings_parser.cpp parse_encrypted_app_ticket at the gbe pin): the
+    /// base64 of the bytes GetEncryptedAppTicket returns.
+    public static let ticketKey = "ticket"
+    static let userConfig = "configs.user.ini"
+    static let userSection = "[user::general]"
+
+    /// Adds the `ticket=<base64>` line to every configs.user.ini in a
+    /// steam_settings folder Playport wrote under `root`, after `apply` wrote
+    /// them and before the runtime starts; any older ticket line goes. Returns
+    /// how many files hold it.
+    @discardableResult
+    public static func writeTicket(_ ticket: Secret<[UInt8]>, in root: URL) throws -> Int {
+        let line = "\(ticketKey)=\(Data(ticket.value).base64EncodedString())"
+        var n = 0
+        for folder in settingsFolders(in: root) {
+            let url = folder.appendingPathComponent(userConfig)
+            var lines = withoutTicket(String(decoding: (try? Data(contentsOf: url)) ?? Data(), as: UTF8.self))
+            if let i = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == userSection }) {
+                lines.insert(line, at: i + 1)
+            } else {
+                lines = [userSection, line] + lines
+            }
+            try InstallFS.writeAtomically(url, Data((lines.joined(separator: "\n") + "\n").utf8))
+            n += 1
+        }
+        return n
+    }
+
+    /// Takes the ticket line out of every configs.user.ini in a steam_settings
+    /// folder Playport wrote under `root`, and any temporary file a kill
+    /// part-way through a write left beside one. At the game's exit, at the
+    /// next launch and app start, and at sign-out. Returns how many files held
+    /// a ticket.
+    @discardableResult
+    public static func removeTickets(in root: URL) throws -> Int {
+        var n = 0
+        for folder in settingsFolders(in: root) {
+            let tmp = folder.appendingPathComponent(".\(userConfig).tmp")
+            if FileManager.default.fileExists(atPath: tmp.path) {
+                try FileManager.default.removeItem(at: tmp)
+                n += 1
+            }
+            let url = folder.appendingPathComponent(userConfig)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let text = String(decoding: data, as: UTF8.self)
+            let kept = withoutTicket(text)
+            guard kept.count != text.split(separator: "\n", omittingEmptySubsequences: true).count else { continue }
+            try InstallFS.writeAtomically(url, Data((kept.joined(separator: "\n") + "\n").utf8))
+            n += 1
+        }
+        return n
+    }
+
+    /// The lines of an ini file without its ticket lines (and without blank lines).
+    static func withoutTicket(_ text: String) -> [String] {
+        text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init).filter { l in
+            let key = l.split(separator: "=", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            return key != ticketKey
         }
     }
 

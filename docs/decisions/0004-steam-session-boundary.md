@@ -42,6 +42,11 @@ container copy) into a host-session leak surface.
   (`harness/device/steam-device-run.py`).
 - Logout revokes the token with Steam, deletes the Keychain item and cached
   account data, and leaves games and saves in place.
+- Exceptions, each with its own record meeting the five things above: a game's
+  encrypted app ticket, one ini line while the game runs
+  ([0017](0017-encrypted-app-ticket.md)); and, planned, an Epic game's exchange
+  code (0059, being written in the
+  [store game sign-in plan](../plans/2026-10-06-store-game-auth.md)).
 
 ## Residual risk
 

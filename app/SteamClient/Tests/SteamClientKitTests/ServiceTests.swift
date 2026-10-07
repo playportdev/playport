@@ -195,6 +195,13 @@ actor FakeBackend: SteamBackend {
     func set(persona p: Result<String?, Error>) { persona = p }
     func personaName() async throws -> String? { calls.append("persona"); return try persona.get() }
 
+    var ticket: Result<[UInt8], Error> = .success(Array("a made-up encrypted app ticket".utf8))
+    func set(ticket t: Result<[UInt8], Error>) { ticket = t }
+    func encryptedAppTicket(appID: UInt32, timeout: Double) async throws -> Secret<[UInt8]> {
+        calls.append("ticket \(appID)")
+        return Secret(try ticket.get())
+    }
+
     func logout(revoke: Bool) async throws -> LogoutReport {
         calls.append(revoke ? "logout-revoke" : "logout")
         let had = stored != nil
@@ -832,6 +839,50 @@ final class LibraryServiceTests: XCTestCase {
         let s = SteamService(backend: FakeBackend(), log: .silent, stateDirectory: nil)
         let settings = await s.emulatorSettings(appID: 10)
         XCTAssertEqual(settings, SteamAPISwap.Settings(appID: 10))
+    }
+
+    func testEncryptedAppTicketOnTheSignedInSessionOnly() async throws {
+        let b = FakeBackend()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("svc-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let lines = Counter()
+        await b.set(stored: FakeBackend.session(exp: 2_000_000_000))
+        let s = SteamService(backend: b, log: Logger { lines.add($0) }, stateDirectory: dir)
+        // Before any restore: no session to ask on, and none is started for it.
+        let early = await s.encryptedAppTicket(appID: 367520)
+        XCTAssertNil(early)
+        let restores = await b.count("restore")
+        XCTAssertEqual(restores, 0)
+        _ = await s.restoreIfPossible()
+
+        let ticket = await s.encryptedAppTicket(appID: 367520)
+        XCTAssertEqual(ticket?.value, Array("a made-up encrypted app ticket".utf8))
+        let asked = await b.count("ticket 367520")
+        XCTAssertEqual(asked, 1)
+        // Never kept on the host: no file the service writes holds it, and no log line.
+        let files = (FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
+        for f in files { XCTAssertNil((try? Data(contentsOf: f))?.range(of: Data("made-up encrypted".utf8)), f.lastPathComponent) }
+        XCTAssertFalse(lines.values.contains { $0.contains("made-up") })
+        XCTAssertTrue(lines.values.contains { $0.contains("encrypted app ticket fetched, 30 bytes") })
+
+        // Steam refuses: the game starts without one.
+        await b.set(ticket: .failure(SteamError.eresult(.accessDenied, context: "ClientRequestEncryptedAppTicket 367520")))
+        let refused = await s.encryptedAppTicket(appID: 367520)
+        XCTAssertNil(refused)
+
+        // The session dropped: no ticket, and no restore to get one.
+        await b.set(ticket: .success([1, 2, 3]))
+        await b.disconnect()
+        let dropped = await s.encryptedAppTicket(appID: 367520)
+        XCTAssertNil(dropped)
+
+        // Suspended for the launch: none.
+        _ = await s.restoreIfPossible()
+        await s.suspendForLaunch()
+        let suspended = await s.encryptedAppTicket(appID: 367520)
+        XCTAssertNil(suspended)
+        let askedInAll = await b.count("ticket 367520")
+        XCTAssertEqual(askedInAll, 2)
     }
 
     func testOwnedGamesNeedsASession() async {

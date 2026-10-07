@@ -66,6 +66,7 @@ final class LibraryModel: ObservableObject {
             Self.log("play time: \(left.titleID) +\(Int(left.seconds)) s from the session the last process left"
                      + " (total \(Int(catalog.title(id: left.titleID)?.playSeconds ?? 0)) s)")
         }
+        removeSteamTickets("at app start")
         // Cloud saves a sync replaced are kept 30 days (Cloud.Backups): once per process, which
         // after decision 0029 is once per game played.
         Task.detached(priority: .utility) {
@@ -75,6 +76,32 @@ final class LibraryModel: ObservableObject {
                                  + removed.map { "\($0.deletingLastPathComponent().lastPathComponent)/\($0.lastPathComponent)" }.joined(separator: ", "))
             }
         }
+    }
+
+    /// The latest removal of encrypted app tickets (removeSteamTickets); Play waits for it.
+    private var ticketSweep: Task<Void, Never>?
+
+    /// Takes the encrypted app ticket out of every installed Steam game's
+    /// emulator settings (decision 0017): at app start, for one a crash, a kill
+    /// or the restart after a game left behind, and at sign-out. Off the main
+    /// thread; a Play waits for it before it writes its own.
+    @discardableResult
+    func removeSteamTickets(_ when: String) -> Task<Void, Never> {
+        let roots = catalog.titles.filter { $0.appID != nil }
+            .map { Self.paths.games.appendingPathComponent($0.installDir, isDirectory: true) }
+        let previous = ticketSweep
+        let task = Task.detached(priority: .utility) {
+            await previous?.value
+            var removed = 0
+            for root in roots {
+                do { removed += try SteamAPISwap.removeTickets(in: root) } catch {
+                    LibraryModel.log("ticket: not removed from \(root.lastPathComponent) \(when): \(error)")
+                }
+            }
+            LibraryModel.log("ticket: \(removed) removed \(when) (\(roots.count) Steam game(s) checked)")
+        }
+        ticketSweep = task
+        return task
     }
 
     /// The game ended in this process: its session counts when the runtime ran it
@@ -177,10 +204,18 @@ final class LibraryModel: ObservableObject {
         #endif
         // A Steam app's steam_api: the emulator told about the paired account, or the game's own.
         let service = SteamAccountModel.current?.service
+        // The emulator's encrypted app ticket, on by default (decision 0017): asked for now, while the
+        // session is up (TitleLaunch.start closes it), after the start's sweep of old ones.
+        var ticket: Secret<[UInt8]>?
+        if let app = t.appID, settings.steamAPI == .emulated, let service {
+            await ticketSweep?.value
+            ticket = await service.encryptedAppTicket(appID: app)
+        }
         let steamAPI = t.appID.map { app in
             LaunchCoordinator.SteamAPI(appID: app, root: Self.paths.games.appendingPathComponent(t.installDir, isDirectory: true),
                                        mode: settings.steamAPI,
-                                       settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) })
+                                       settings: { await service?.emulatorSettings(appID: app) ?? .init(appID: app) },
+                                       ticket: ticket)
         }
         // FEX's disk cache stays under its budget (decision 0056): cleared before this launch when over it.
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { Self.log($0) } }.value

@@ -951,6 +951,35 @@ public actor SteamService {
         return report
     }
 
+    /// The launched game's encrypted app ticket (decision 0017), asked for after
+    /// Play and before `suspendForLaunch`, within `timeout` seconds. Only on a
+    /// session already logged on to the account: a restore here could outlive
+    /// the timeout and race the suspension that follows. Nil when there is no
+    /// such session, when suspended, or when Steam refuses or does not answer
+    /// in time; the game then starts without one. The ticket is returned and
+    /// never kept: not here, not in the Keychain, not in `stateDirectory`.
+    public func encryptedAppTicket(appID: UInt32, timeout: Double = 5) async -> Secret<[UInt8]>? {
+        guard !suspended, case .signedIn = state else {
+            log.info("ticket", "app \(appID): no encrypted app ticket (\(suspended ? "suspended" : "not signed in"))")
+            return nil
+        }
+        let s = await backend.isLoggedOn()
+        guard s.loggedOn, !s.anonymous, s.connected else {
+            log.info("ticket", "app \(appID): no encrypted app ticket (the session is not connected)")
+            return nil
+        }
+        let started = Date()
+        do {
+            let ticket = try await backend.encryptedAppTicket(appID: appID, timeout: timeout)
+            log.info("ticket", "app \(appID): encrypted app ticket fetched, \(ticket.value.count) bytes in "
+                     + String(format: "%.2f", Date().timeIntervalSince(started)) + " s")
+            return ticket
+        } catch {
+            log.warn("ticket", "app \(appID): no encrypted app ticket: \(error)")
+            return nil
+        }
+    }
+
     /// Before the runtime starts (decision 0004): cancel pairing, close the CM
     /// session and refuse further Steam work in this process. The refresh
     /// token stays in the Keychain for the next launch.

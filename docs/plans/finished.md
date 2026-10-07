@@ -18,9 +18,10 @@ the game's ([evidence](../evidence/2026-09-27-gbe-steam-api-build.md),
 [ARCHITECTURE.md](../ARCHITECTURE.md), "For games"); phase 2, SteamStub 3.1 x64
 removed; phase 3, achievements and stats read and synced; phase 4, Steam Cloud.
 
-Open: phase 3 has sent no unlock yet. Phase 5 (encrypted app tickets) waits on
-[decision 0017](../decisions/0017-encrypted-app-ticket.md), proposed, which
-describes it.
+Open: phase 3 has sent no unlock yet. Phase 5 (encrypted app tickets) is done
+in the [store game sign-in plan](2026-10-06-store-game-auth.md), step 2
+([decision 0017](../decisions/0017-encrypted-app-ticket.md), accepted); a game
+whose online login checks the ticket is still to be found.
 
 ## Wine from Valve's Proton branch
 

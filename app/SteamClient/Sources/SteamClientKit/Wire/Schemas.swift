@@ -45,6 +45,8 @@ public enum EMsg: UInt32, Sendable {
     case clientStoreUserStats2 = 5466
     case clientServerUnavailable = 5500
     case clientLogon = 5514
+    case clientRequestEncryptedAppTicket = 5526
+    case clientRequestEncryptedAppTicketResponse = 5527
     case clientPICSProductInfoRequest = 8903
     case clientPICSProductInfoResponse = 8904
     case clientPICSAccessTokenRequest = 8905
@@ -473,6 +475,30 @@ public struct CMsgClientGetDepotDecryptionKeyResponse: ProtoDecodable {
         eresult = EResult(try f.int32(1) ?? 2)
         depotID = try f.uint32(2)
         key = try f.bytes(3).map(Secret.init)
+    }
+}
+
+// MARK: - steammessages_clientserver.proto (encrypted app ticket, decision 0017)
+
+/// CMsgClientRequestEncryptedAppTicket. The userdata field (2) is never sent:
+/// the ticket is fetched before the game runs, so there is none to include.
+public struct CMsgClientRequestEncryptedAppTicket: ProtoMessage {
+    public var appID: UInt32 // 1
+    public func encode() -> [UInt8] { var w = ProtoWriter(); w.uint32(1, appID); return w.bytes }
+}
+
+/// CMsgClientRequestEncryptedAppTicketResponse. The ticket is the
+/// EncryptedAppTicket message (encrypted_app_ticket.proto) as Steam serialised
+/// it, the bytes ISteamUser::GetEncryptedAppTicket gives a game.
+public struct CMsgClientRequestEncryptedAppTicketResponse: ProtoDecodable {
+    public static let protoName = "CMsgClientRequestEncryptedAppTicketResponse"
+    public var appID: UInt32?                  // 1
+    public var eresult: EResult                // 2
+    public var ticket: Secret<[UInt8]>?        // 3 encrypted_app_ticket
+    public init(_ f: ProtoFields) throws {
+        appID = try f.uint32(1)
+        eresult = EResult(try f.int32(2) ?? 2)
+        ticket = try f.bytes(3).map(Secret.init)
     }
 }
 

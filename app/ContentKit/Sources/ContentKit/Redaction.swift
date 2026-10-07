@@ -3,7 +3,7 @@ import Foundation
 
 /// A value that must never reach a log, error or transcript: refresh and access
 /// tokens (Steam's, GOG's, Epic's), the QR challenge URL, login and exchange
-/// codes, machine secrets, depot keys and CDN tokens.
+/// codes, machine secrets, depot keys, CDN tokens and Steam's encrypted app tickets.
 /// `description` and `debugDescription` both print a fixed placeholder, so a
 /// stray `print(secret)` or string interpolation cannot leak it.
 public struct Secret<Value: Sendable>: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -31,6 +31,8 @@ public enum Redactor {
             // Epic's eg1 tokens (decision 0058), wherever they appear.
             (#"eg1~[A-Za-z0-9._~+/=\-]+"#, "<eg1:redacted>"),
             (#"(?i)((?:access|refresh)_?token|token|authorization|cdn_?auth)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
+            // Steam's encrypted app ticket as gbe_fork's ini line holds it, `ticket=<base64>` (decision 0017).
+            (#"(?i)(\bticket\s*=\s*|["']ticket["']\s*:\s*["'])[A-Za-z0-9+/_\-]+=*"#, "$1<redacted>"),
             // OAuth codes and session IDs: GOG's and Epic's login codes, Epic's exchange codes.
             (#"(?i)((?:authorization|exchange)_?code|session_?id|client_?secret)(["']?\s*[:=]\s*["']?)[^\s"',&}]+"#, "$1$2<redacted>"),
             (#"(?i)(["']code["']\s*:\s*["']|\bcode=)[^\s"',&}]+"#, "$1<redacted>"),

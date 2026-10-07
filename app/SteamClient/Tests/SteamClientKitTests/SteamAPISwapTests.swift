@@ -80,6 +80,46 @@ final class SteamAPISwapTests: XCTestCase {
         XCTAssertEqual(String(decoding: read("tools/steam_settings/configs.app.ini") ?? [], as: UTF8.self), "[app::dlcs]\nunlock_all=0\n")
     }
 
+    func testTheTicketLineIsWrittenAsGbeReadsItAndRemovedWithNothingLeft() throws {
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
+        let user = "Game_Data/Plugins/x86_64/steam_settings/configs.user.ini"
+        let before = read(user)
+        let ticket = Secret<[UInt8]>([0x08, 0x02, 0x10, 0xff, 0x00, 0x7f])
+        XCTAssertEqual(try SteamAPISwap.writeTicket(ticket, in: root), 2, "beside each steam_api the emulator reads")
+        let text = String(decoding: read(user) ?? [], as: UTF8.self)
+        // gbe_fork's parse_encrypted_app_ticket: [user::general] ticket, base64 of the bytes.
+        XCTAssertEqual(text, "[user::general]\nticket=CAIQ/wB/\naccount_name=Knight Player\naccount_steamid=4242\nlanguage=english\n")
+        XCTAssertEqual(Data(base64Encoded: "CAIQ/wB/").map(Array.init), ticket.value)
+        // A second write replaces the line, never adds one.
+        try SteamAPISwap.writeTicket(Secret([1, 2, 3]), in: root)
+        XCTAssertEqual(String(decoding: read(user) ?? [], as: UTF8.self).components(separatedBy: "ticket=").count, 2)
+
+        XCTAssertEqual(try SteamAPISwap.removeTickets(in: root), 2)
+        XCTAssertEqual(read(user), before, "the file is the emulator settings again, byte for byte")
+        XCTAssertEqual(try SteamAPISwap.removeTickets(in: root), 0, "idempotent")
+        XCTAssertEqual(try SteamAPISwap.writeTicket(ticket, in: dir.appendingPathComponent("NoSuchGame")), 0)
+    }
+
+    func testAKillPartWayThroughATicketWriteLeavesNothingAfterRemoval() throws {
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
+        // The temporary file of an atomic write a kill interrupted.
+        try write("Game/tools/steam_settings/.configs.user.ini.tmp", Array("[user::general]\nticket=CAIQ/wB/\n".utf8))
+        XCTAssertTrue(SteamAPISwap.isSwapFile(root, "tools/steam_settings/.configs.user.ini.tmp"))
+        XCTAssertEqual(try SteamAPISwap.removeTickets(in: root), 1)
+        XCTAssertFalse(exists("tools/steam_settings/.configs.user.ini.tmp"))
+    }
+
+    func testANextLaunchApplyAlsoTakesALeftTicketOut() throws {
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
+        try SteamAPISwap.writeTicket(Secret([9, 9, 9]), in: root)
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
+        XCTAssertFalse(String(decoding: read("tools/steam_settings/configs.user.ini") ?? [], as: UTF8.self).contains("ticket"))
+        // Restoring the game's own steam_api removes the folder, ticket and all.
+        try SteamAPISwap.writeTicket(Secret([9, 9, 9]), in: root)
+        try SteamAPISwap.restore(in: root)
+        XCTAssertFalse(exists("tools/steam_settings"))
+    }
+
     func testRestorePutsTheGameBackAndRemovesOnlyPlayportSettings() throws {
         try write("Game/own/steam_settings/force_language.txt", Array("german".utf8))
         try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
