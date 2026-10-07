@@ -72,7 +72,10 @@ five-minute single-use code and a five-minute proof of ownership for each play.
   through the session's request file (`AppData\Local\Playport\session\request` in the
   prefix, mode 0600), which the session root reads and deletes before it starts the game.
 - **The ownership token's file**, `playport-epic.ovt` in the game's own folder under
-  `C:\Games`, named by `-epicovt`, mode 0600.
+  `C:\Games`, named by `-epicovt`, mode 0600. It holds Epic's reply as it came,
+  `{"token":"egoc1~…"}`, as Epic's launcher writes it, not the bare token: a game's DRM
+  reads the JSON (Jurassic World Evolution's refused the bare token with its error
+  88500000; corrected 2026-10-07, [evidence](../evidence/2026-10-07-url-opener.md)).
 - **Fetched** right after Play (`LibraryModel.play`, `EpicAccount.launchSignIn`): the account,
   the ownership token if the catalogue asks for it, then the code last, each call with a
   10 s limit and one retry. Never kept on the host: not in the Keychain, not in a file.

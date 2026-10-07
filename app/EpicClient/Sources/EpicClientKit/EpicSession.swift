@@ -202,7 +202,9 @@ public actor EpicSession {
     }
 
     /// The ownership token of one catalogue item, for a game whose catalogue sets
-    /// `OwnershipToken` (`-epicovt=` names a file holding it).
+    /// `OwnershipToken` (`-epicovt=` names a file holding it): Epic's reply as it came,
+    /// `{"token":"…"}`, which is what the file must hold (a game's DRM refuses the bare
+    /// token: Jurassic World Evolution's error 88500000), once it is checked.
     public func ownershipToken(namespace: String, catalogItem: String) async throws -> Secret<String> {
         let who = try await account()
         let token = try await accessToken()
@@ -219,13 +221,16 @@ public actor EpicSession {
         return try Self.parseOwnershipToken(body)
     }
 
+    /// The reply's text when it is a JSON object whose `token` is one printable word of at
+    /// most 16 KiB, and the reply at most 32 KiB.
     static func parseOwnershipToken(_ reply: [UInt8]) throws -> Secret<String> {
         struct Reply: Decodable { var token: String }
-        guard let r = try? JSONDecoder().decode(Reply.self, from: Data(reply)), !r.token.isEmpty, r.token.utf8.count <= 1 << 14,
+        guard reply.count <= 1 << 15, let text = String(bytes: reply, encoding: .utf8),
+              let r = try? JSONDecoder().decode(Reply.self, from: Data(reply)), !r.token.isEmpty, r.token.utf8.count <= 1 << 14,
               r.token.utf8.allSatisfy({ $0 > 0x20 && $0 < 0x7F }) else {
             throw ClientError.protocolChanged("Epic ownership token: unexpected reply")
         }
-        return Secret(r.token)
+        return Secret(text)
     }
 
     static func isCode(_ s: String) -> Bool { EpicAPI.isCode(s) }

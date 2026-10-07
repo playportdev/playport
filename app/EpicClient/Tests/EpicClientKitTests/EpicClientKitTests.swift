@@ -135,7 +135,10 @@ final class EpicClientKitTests: XCTestCase {
         XCTAssertThrowsError(try EpicSession.parseExchange(Array(#"{"code":"short"}"#.utf8)))
         XCTAssertThrowsError(try EpicSession.parseExchange(Array("{}".utf8)))
         let ovt = "egoc1~" + "eyJhbGciOiJFUzI1NiJ9.e30.c2ln"   // split, so that pp secrets does not find it
-        XCTAssertEqual(try EpicSession.parseOwnershipToken(Array(#"{"token":"\#(ovt)"}"#.utf8)).value, ovt)
+        // The reply as Epic sent it, which the -epicovt file holds (a bare token fails a game's DRM).
+        XCTAssertEqual(try EpicSession.parseOwnershipToken(Array(#"{"token":"\#(ovt)"}"#.utf8)).value, #"{"token":"\#(ovt)"}"#)
+        XCTAssertThrowsError(try EpicSession.parseOwnershipToken(Array(ovt.utf8)), "a bare token is not Epic's reply")
+        XCTAssertThrowsError(try EpicSession.parseOwnershipToken(Array(#"{"token":"\#(String(repeating: "a", count: 1 << 15))"}"#.utf8)))
         XCTAssertThrowsError(try EpicSession.parseOwnershipToken(Array(#"{"token":""}"#.utf8)))
         XCTAssertThrowsError(try EpicSession.parseOwnershipToken(Array(#"{"token":"a b"}"#.utf8)))
         // Epic's verify reply, as served: `display_name`.
@@ -180,9 +183,9 @@ final class EpicClientKitTests: XCTestCase {
 
     func testTheOwnershipFileIsWrittenForTheOwnerAndRemoved() throws {
         let root = try temp()
-        try EpicOwnershipFile.write(Secret("egoc1~token"), in: root)
+        try EpicOwnershipFile.write(Secret(#"{"token":"egoc1~token"}"#), in: root)
         let file = root.appendingPathComponent(EpicOwnershipFile.name)
-        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "egoc1~token")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), #"{"token":"egoc1~token"}"#)
         let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)
         XCTAssertEqual(mode.intValue & 0o777, 0o600)
         // A write a kill cut short leaves its temporary file: removed too.

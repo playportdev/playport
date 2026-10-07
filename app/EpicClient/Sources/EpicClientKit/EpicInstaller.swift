@@ -287,7 +287,8 @@ public enum EpicOwnershipFile {
 
     static var temporary: String { "." + name + ".tmp" }
 
-    /// Writes the token (its text, as Epic returned it), readable by the owner only.
+    /// Writes Epic's ownership token reply (`{"token":"…"}`, as Epic returned it, as Epic's
+    /// launcher writes it), readable by the owner only.
     public static func write(_ token: Secret<String>, in root: URL) throws {
         let tmp = root.appendingPathComponent(temporary), url = root.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: tmp)
