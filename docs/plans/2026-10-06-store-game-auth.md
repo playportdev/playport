@@ -1,11 +1,12 @@
 # Plan: games sign in to their store (Epic, Steam, GOG)
 
-**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: step 0 and step 2
-done; step 1 next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
+**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1 and 2
+done; step 4 next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
 can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
 (`b21f63d`); nothing is built or drafted.
 
-**Decisions:** 0059 (Epic exchange code and ownership token) is written in step 1;
+**Decisions:** [0059](../decisions/0059-epic-exchange-code.md) (Epic exchange code and
+ownership token) was accepted in step 1;
 [0017](../decisions/0017-encrypted-app-ticket.md) (Steam encrypted app ticket) was accepted
 in step 2; 0062 (a live Steam session during play) is written in step 4; 0063 (a GOG game's
 Galaxy sign-in) in the GOG step. 0060 and 0061 are taken on `vulkan-performance`.
@@ -98,41 +99,28 @@ ship EasyAntiCheat, 4 use the JSON manifest form. Steam: the owned list cannot b
 the workstation; static scans cannot show ticket use for Unity or interface-based games.
 GOG: 31 of 46 ship the Galaxy SDK.
 
-**1. Epic: decision 0059, the launch, and JSON manifests (host only, then the phone).**
-- Write 0059 as 0017 is written: the secrets (exchange code; ownership token), the threat
-  model, the one channel, guest-side storage, sign-out, revocation. The threat: everything
-  runs in one process (0004), so guest code can read the code from the command line (the
-  `PEB`, Wine's process list, the session's request file while it exists) before the game
-  redeems it. Any Epic client can redeem it, which gives a session on the account; the
-  code's 5 minutes, its single use and the game redeeming it at once are the bound. The
-  ownership token proves ownership of one item only.
-- On by default for every Epic game, as Epic's launcher does. No per-game switch.
-- `EpicSession.exchangeCode()` and `EpicSession.ownershipToken(namespace:catalogItem:)`;
-  `EpicInstaller.arguments` gains the auth arguments, `-epicusername`, `-epicuserid` and
-  `-epicsandboxid`. The code is fetched right after Play. The ovt file goes in the game's own
-  folder under the prefix, is written by the launch and removed at exit, at the next launch,
-  at app start and at sign-out (0017's pattern).
-- If the fetch fails the game does not start signed in: the page says Epic could not sign
-  the game in, with Try again (and Play offline as settled above).
-- `Redactor` scrubs `-AUTH_PASSWORD=`, `-epicusername=`, `-epicuserid=` and the ownership
-  token; `pp secrets` fails a committed code argument or ownership token. The launch log
-  prints the arguments with them redacted.
-- Remove the refusal for `OwnershipToken`/`CanRunOffline`. Keep the refusals, each with its
-  own message, for anti-cheat (EasyAntiCheat or BattlEye files: Fortnite, Rocket League,
-  Rogue Company; Marvel Rivals) and third-party launchers (Roller Champions and Trackmania
-  through Ubisoft Connect; Elite Dangerous through Frontier's `EDLaunch`; Star Trek Online
-  through Cryptic's launcher).
-- **JSON manifests.** `EpicManifest.parse` reads Epic's JSON form as served: numbers as
-  decimal byte triplets, little-endian (`"000000016000"` is 1 048 576); GUIDs as four
-  big-endian words; a 1 MiB window for every chunk; feature level 13, so `ChunksV3`; chunk
-  files of header version 2, which `EpicChunkFile` already reads. The same caps as the binary
-  form. Tests with the Resource Archiver's 14 799-byte manifest as a fixture. It makes Scarf
-  installable and, with the refusal gone, the Football Manager 2022 trio.
-- Phone: Snakebird Complete to `first-frame+10` (code fetched, arguments redacted); the FM2022
-  Editor or Resource Archiver installed and verified; Jurassic World Evolution to its menu if
-  it fits `MemoryNeed` and the free space; Death's Door and Hollow Knight to `first-frame+10`.
-  After the Epic plays, search the container for the code and the ownership token (0017's
-  measurement).
+**1. Epic: decision 0059, the launch, and JSON manifests. Done 2026-10-07** (`5d559c3`,
+`c970646`; [evidence](../evidence/2026-10-07-epic-game-auth.md)). 0059 accepted, on by
+default with no per-game switch; 0004 and 0058 point at it. Right after Play the host
+fetches a fresh exchange code (and, when the catalogue sets `OwnershipToken`, a five-minute
+ownership token); the launch passes Epic's launcher's arguments and writes
+`playport-epic.ovt` in the game's folder, removed at exit, next launch, app start and
+sign-out. Without the sign-in the page offers Try again and Cancel, and Play offline for a
+game that allows it. The OwnershipToken/CanRunOffline refusal is gone; anti-cheat and other
+companies' launchers keep theirs, each with its own message. `EpicManifest` reads Epic's
+JSON form. The app, `Redactor` and the runtime's process lines (madeira-unix 0086) keep the
+code, account ID and display name out of logs. On the phone: Snakebird Complete and Death's
+Door start with a code (fetched in 0.4–0.6 s) and reach their menus; Jurassic World
+Evolution gets a code and an ownership token, its file written and removed at exit; the
+FM2022 Resource Archiver installs from its JSON manifest and verifies 11/11; Hollow Knight
+plays as before. The container search after the plays found no copy of the code, the
+account ID or the token. Open:
+- No game has shown an EOS sign-in yet: Snakebird's EOS refuses Epic's certificate
+  (`Curl error 60`, the guest's TLS roots, as Among Us's PLA-39), and Jurassic World
+  Evolution does not start (`0xc0000018`, its fixed-base executable placed by the
+  runtime). Both are runtime work, filed separately; step 6 needs one of them fixed or
+  another EOS title.
+- The sign-in failure page and sign-out removal are checked by host tests only.
 
 **2. Steam encrypted app ticket: 0017 accepted. Done 2026-10-07** (`e65f3f0`, `bd490ac`,
 `0b4cc93`; [evidence](../evidence/2026-10-07-steam-encrypted-app-ticket.md)). On by default

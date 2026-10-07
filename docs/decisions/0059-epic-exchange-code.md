@@ -92,9 +92,11 @@ five-minute single-use code and a five-minute proof of ownership for each play.
 - The game's process: its command line (the `PEB`), and whatever the game does with it.
   An EOS game hands the code to `EOS_Auth_Login` with the exchange-code credential type.
 - The `.ovt` file while the game runs.
-- **Measured on the phone** ([evidence](../evidence/2026-10-07-epic-game-auth.md)): after the
-  Epic plays, every file in the app's container modified since the launch was searched for
-  the code, the account ID and the ownership token.
+- **Measured on the phone** ([evidence](../evidence/2026-10-07-epic-game-auth.md)): after
+  Snakebird Complete, Jurassic World Evolution and Death's Door, every file in the app's
+  container modified since the play began was searched for the code (by pattern), the
+  account ID and the ownership token: none held them. The first build found the code in the
+  app log, printed by the runtime's process-creation line; madeira-unix 0086 masks it there.
 
 ## What 0004 asks, and what this does
 
@@ -112,6 +114,6 @@ five-minute single-use code and a five-minute proof of ownership for each play.
   Play offline row is not shown for a game with an ownership token or `CanRunOffline=false`.
 - **Fortnite-style access control** stays refused with the anti-cheat message.
 - An exchange code is fetched with the launcher's identity and redeemed by the game's own
-  EOS client, as with Epic's launcher; the plays in the evidence show whether Epic accepts
-  it on the phone. If Epic ever ties codes to a client, the sign-in fails, not the play
-  offline.
+  EOS client, as with Epic's launcher. The phone has not shown Epic accepting one yet: the
+  EOS games tried could not reach Epic (the guest's TLS roots) or did not start (the
+  evidence). If Epic ever ties codes to a client, the sign-in fails, not the play offline.
