@@ -3,7 +3,9 @@
 **Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4,
 the runtime fixes 4b and the URL opener 4c done (4's S1 waits for a title that asks for a
 ticket; Snakebird's EOS signs in through Playport's web panel; Jurassic World Evolution passes
-its DRM check but shows no frame); GOG (step 5) next. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
+its DRM check but shows no frame, and is time-boxed out: Linear PLA-41); GOG (step 5) next.
+The plan ends with the phone gates (6) and their evidence; the release (7) is handed off to the
+owner's later sessions (owner, 2026-10-07: other work comes before 0.4.0). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
 can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
 (`b21f63d`); nothing is built or drafted.
 
@@ -59,8 +61,10 @@ cross. What crosses is a game-scoped credential, by one channel each, under its 
   **Play offline** beside Try again and Cancel; it then starts with the arguments it had
   before step 1, logged as offline. Any other game offers Try again and Cancel only.
 - **Test titles.**
-  - Epic: Jurassic World Evolution (8.0 GB; ownership token, no offline play, EOS) if it fits
-    `MemoryNeed`; Snakebird Complete (319 MB, EOS) as the light first check; Death's Door as
+  - Epic: **Snakebird Complete** (319 MB, EOS, signed in through the URL opener, 4c) is the
+    gate title (owner, 2026-10-07): Jurassic World Evolution (8.0 GB; ownership token, no
+    offline play, EOS) is time-boxed out after its DRM check passed without a first frame
+    (Linear PLA-41); Death's Door as
     the regression play; the Football Manager 2022 Editor or Resource Archiver for the JSON
     manifest (install and verify).
   - Steam: Among Us (945360, installed, 1.15 GB): pull its binaries and look at which ticket
@@ -256,16 +260,18 @@ signed in; GOG's shows its Galaxy sign-in; Hollow Knight and Death's Door to
 `first-frame+10`. Sign-out from each store removes every leftover file (where it can be done
 without the owner re-pairing). `docs/evidence/<date>-store-game-auth.md` with the IPA's sha256.
 
-**7. Release.** Update `docs/releases/0.4.0.md` (the Epic refusal paragraph becomes what now
+**7. Release: handed off, not part of this plan's run** (owner, 2026-10-07: other work
+comes before 0.4.0; no `pp release`, no draft, no push here). For the owner's later session: update `docs/releases/0.4.0.md` (the Epic refusal paragraph becomes what now
 works; Steam's online part; GOG's Galaxy features), then `pp release 0.4.0` from a clean,
 pushed `main` in its own build area (`PLAYPORT_BUILD`, a fresh `run/`: the live `run/`'s
 CMake caches hold absolute paths).
 
 ## Order
 
-Step 1 → step 4 → runtime fixes (4b) → the URL opener (4c) → GOG (step 5) → phone gates (6)
-→ release (7). Next: GOG, from B1; beside it, Jurassic World Evolution past its DRM check (no
-frame yet). Snakebird is the EOS title for step 6. Each step commits with its
+Step 1 → step 4 → runtime fixes (4b) → the URL opener (4c) → GOG (step 5) → phone gates (6),
+where this plan ends; the release (7) is the owner's, later. Next: GOG, from B1. Snakebird
+Complete is the Epic title for step 6; Jurassic World Evolution stays on Linear PLA-41 (its
+DRM passes, then no frame in 600 s; not worked on here). Each step commits with its
 own evidence; the scratch measurements behind the designs are left in the build area.
 
 ## Risks
