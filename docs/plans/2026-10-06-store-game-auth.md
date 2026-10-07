@@ -1,10 +1,10 @@
 # Plan: games sign in to their store (Epic exchange code, Steam tickets)
 
-**Date:** 2026-10-06. **Kind:** plan, not started. **Blocks:** the 0.4.0 release (owner,
+**Date:** 2026-10-06. **Kind:** plan, in progress: step 2 done (2026-10-07). **Blocks:** the 0.4.0 release (owner,
 2026-10-06: "the stores update can't ship without these"). `main` carries the 0.4.0
 version and `docs/releases/0.4.0.md` (`b21f63d`); nothing is built or drafted. **Decisions:**
 0059 (Epic exchange code) is written here; [0017](../decisions/0017-encrypted-app-ticket.md)
-(Steam encrypted app ticket, proposed) is accepted or amended here; 0062 (a live Steam
+(Steam encrypted app ticket) is accepted here, in step 2; 0062 (a live Steam
 session during play) is written only if step 0 calls for it. 0060 and 0061 are taken on
 `vulkan-performance`.
 
@@ -103,12 +103,16 @@ gate.
 - If the exchange-code fetch fails, the game does not start: the page says Epic could not
   sign the game in, with Try again. It does not start the game signed out.
 
-**2. Steam encrypted app ticket: 0017 accepted (host only).** Amend 0017 so the ticket is
-on by default, not per game. The owner's direction outranks the record's switch; the
-review keeps a per-game off switch only if the measurement in step 5 finds a copy outside
-the ini line. Implement 0017's phase 5 as written (`LaunchCoordinator` writes the line;
-removal at exit, next launch, app start and sign-out). Amend 0004 to point at 0017 and
-0059.
+**2. Steam encrypted app ticket: 0017 accepted. Done 2026-10-07** (`e65f3f0`, `bd490ac`;
+[evidence](../evidence/2026-10-07-steam-encrypted-app-ticket.md)). 0017 is accepted, on by
+default for every Steam game with no per-game switch, and 0004 points at 0017 and 0059.
+After Play the host asks Steam for the ticket (in the game for the call, 5 s limit); the
+launch writes `ticket=<base64>` in the emulator's `configs.user.ini` and removes it at exit,
+next launch, app start and sign-out. On the phone: Among Us gets a 143-byte ticket in 0.22 s,
+written and removed at exit; Hollow Knight gets none (Steam answers `Fail`: it is not set up
+for tickets) and plays to its first frame as before. The container search after two plays
+found no copy outside the ini line, so no switch. Open: sign-out removal is tested on the host
+only; no title yet shows an online login that checks the ticket (step 0's test title, step 5).
 
 **3. Steam auth session tickets, the short form (host only).** If step 0 shows a ticket
 made before launch is still accepted while Steam's session is closed (try it from the

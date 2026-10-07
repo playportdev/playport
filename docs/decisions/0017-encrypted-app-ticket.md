@@ -90,8 +90,11 @@ Steam game the player runs, each to its own servers only.
   writes only the global settings folder's files (never the ticket key), and its
   debug prints are not in the release build.
 - **Measured on the phone** ([evidence](../evidence/2026-10-07-steam-encrypted-app-ticket.md)):
-  after a play with a ticket, the app's container, prefix included, was searched
-  for the base64 and the raw bytes.
+  after two plays of Among Us with a ticket, every file in the app's container
+  (prefix included) modified since the ticket was written was searched for the
+  base64 and the raw bytes: none held them. Only the ini line held the ticket,
+  and only while the game ran. Steam gives Hollow Knight no ticket (`Fail`): an
+  app has one only when its publisher set it up.
 
 ## What 0004 asks, and what this does
 
@@ -99,7 +102,7 @@ Steam game the player runs, each to its own servers only.
 | --- | --- |
 | a threat model for the secret | above |
 | a single channel | the ini line, written at launch, removed at exit |
-| measured guest-side storage | from the source, and the phone measurement in the evidence |
+| measured guest-side storage | from the source, and on the phone: only the ini line, only while the game runs |
 | logout removes every copy | sign-out removes every ini line; the host keeps none |
 | revocation also invalidates what the guest received | **not possible.** Playport cannot revoke a Steam ticket, and revoking the refresh token does not invalidate one already issued. This is accepted for this secret alone, because the ticket gives no Steam account access and lasts a bounded time. |
 
