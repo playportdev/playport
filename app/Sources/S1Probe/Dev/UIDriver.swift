@@ -605,10 +605,15 @@ enum UIDriver {
             try? await Task.sleep(for: .milliseconds(250))
         }
         let library = LibraryModel.shared
-        for _ in 0..<600 where [nil, before].contains(library.title(key.titleID)?.storeVersion) && build != before {
+        let ready = {
+            DriverInstallCheck.gogReady(version: library.title(key.titleID)?.storeVersion,
+                                        requestedBuild: build, scanning: library.scanning)
+        }
+        for _ in 0..<600 where !ready() {
             try? await Task.sleep(for: .milliseconds(100))
         }
         guard let t = library.title(key.titleID) else { return "done, but not in the library" }
+        guard ready() else { return "done, but library adoption did not finish for build \(build ?? "latest") (found \(t.storeVersion ?? "none"))" }
         await gog.checkUpdate(pid)
         log(String(format: "install gog-\(pid): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.storeVersion ?? "?") "
                     + "newest=\(gog.newest[pid] ?? "?") size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s",

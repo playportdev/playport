@@ -14,9 +14,9 @@ DXMT. Open, each with its Linear issue: PLA-50 (secur32 without lsass packages; 
 blocked GOG), PLA-58 (the NSI adapter table itself), PLA-41 (JWE), PLA-39 (Among Us), PLA-54
 (Monster Train), PLA-61 (Epic's `deploymentid`), PLA-62 (the Steam live session's gaps and
 sign-out on the phone), PLA-60 (GOG B6, B7 and writes), PLA-64 (the i386 URL opener and the UI
-no person has checked), PLA-57 (the driver's GOG install check), PLA-59 (a log line for a
-hidden dialog's text), PLA-63 (the JIT pool unmap), and Valheim's black picture on Vulkan
-(PLA-65). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
+no person has checked), PLA-59 (a log line for a hidden dialog's text), PLA-63 (the JIT pool
+unmap), and Valheim's black picture on Vulkan (PLA-65). PLA-57 (the driver's GOG install
+check) is fixed and phone-checked ([evidence](../evidence/2026-10-07-gog-install-driver.md)). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
 without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md` (`b21f63d`);
 nothing is built or drafted.
 
