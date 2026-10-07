@@ -7,10 +7,16 @@ with their [evidence](../evidence/2026-10-07-store-game-auth.md) on IPA `5eaca1e
 passes: Snakebird's EOS signs in. Steam passes its sign-in: Valheim on DXMT logs in to PlayFab
 with a host ticket that a server checked. GOG passes since PLA-58 (wine-pe 0029, IPA
 `31eda60f`): Moonscars' Galaxy SDK signs in (`OnAuthSuccess`, `CONNECTED`), and Monster Train
-reads its achievements. Open: PLA-50 (secur32 without lsass packages; not what blocked GOG),
-PLA-41, PLA-39, Valheim on Vulkan (the dxvk
-patch on `vulkan-performance`), the i386 URL opener, B6 and B7, PLA-57, and sign-out on the
-phone. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
+reads its achievements. Valheim on Vulkan no longer crashes at the intro (`patches/dxvk`
+0001 ported from `vulkan-performance`, decision 0061, IPA `beefb876`) and signs in there too,
+but its picture is black (its intro video needs a shared texture handle), so its page stays on
+DXMT. Open, each with its Linear issue: PLA-50 (secur32 without lsass packages; not what
+blocked GOG), PLA-58 (the NSI adapter table itself), PLA-41 (JWE), PLA-39 (Among Us), PLA-54
+(Monster Train), PLA-61 (Epic's `deploymentid`), PLA-62 (the Steam live session's gaps and
+sign-out on the phone), PLA-60 (GOG B6, B7 and writes), PLA-64 (the i386 URL opener and the UI
+no person has checked), PLA-57 (the driver's GOG install check), PLA-59 (a log line for a
+hidden dialog's text), PLA-63 (the JIT pool unmap), and Valheim's black picture on Vulkan (to
+be filed). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
 without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md` (`b21f63d`);
 nothing is built or drafted.
 
@@ -132,7 +138,7 @@ account ID or the token. Open:
   now ends `UnexpectedError`, and Jurassic World Evolution, past its imports and a stale
   pool copy, waits on a window the app does not show (most likely its "Epic launcher is
   installed" check). Step 6 needs one of them past that or another EOS title.
-- The sign-in failure page and sign-out removal are checked by host tests only.
+- The sign-in failure page and sign-out removal are checked by host tests only (PLA-64).
 
 **2. Steam encrypted app ticket: 0017 accepted. Done 2026-10-07** (`e65f3f0`, `bd490ac`,
 `0b4cc93`; [evidence](../evidence/2026-10-07-steam-encrypted-app-ticket.md)). On by default
@@ -141,7 +147,8 @@ host asks Steam for the ticket (the session in the game for the call, 5 s limit)
 writes `ticket=<base64>` in the emulator's `configs.user.ini` and removes it at exit, next
 launch, app start and sign-out. On the phone: Among Us gets a 143-byte ticket in 0.22 s;
 Hollow Knight gets none (`Fail`: not set up for tickets) and plays as before. The container
-search found no copy outside the ini line. Open: sign-out removal is tested on the host only.
+search found no copy outside the ini line. Open: sign-out removal is tested on the host only
+(PLA-62).
 
 **3. Steam tickets made before launch: dropped** (Settled, above).
 
@@ -156,12 +163,14 @@ IL2CPP strings; no web API ticket in its Steamworks.NET) and made no ticket befo
 PLA-39 fault. The container search found no ticket header outside the emulator's DLL.
 S1 seen ([evidence](../evidence/2026-10-07-steam-ticket-valheim.md)): Valheim asks for an
 auth session ticket at its PlayFab login; the host makes it (240 bytes) and Steam acks it. On
-Vulkan the game dies `0xc0000005` at the intro (DXVK's NULL `vkGetMemoryWin32HandleKHR`); on
+Vulkan the game died `0xc0000005` at the intro (DXVK's NULL `vkGetMemoryWin32HandleKHR`; since
+`patches/dxvk` 0001 it lives, a server checks its ticket and PlayFab signs in, but the picture
+is black); on
 DXMT (its page's Direct3D, kept) it plays on, Steam reports both tickets it asked for checked
 by a server (`EAuthSessionResponse 0 (OK)`), and PlayFab logs it in on its second attempt
 (the first got `409 Conflict` from PlayFab). Open: S3 (the background) cannot be driven
 through `pp ui` and the reconnect is host-tested only; one play's CM socket dropped
-16 s in (ECONNABORTED, cause unknown). Design as built: the host keeps the logged-on CM
+16 s in (ECONNABORTED, cause unknown) (both PLA-62). Design as built: the host keeps the logged-on CM
 connection during a play (heartbeat and receive tasks at `.utility`); every other Steam call
 stays refused while suspended. gbe_fork asks the host for auth session and web API tickets
 through a Wine unix call table; the host builds each ticket from a game connect token and
@@ -238,9 +247,9 @@ Credential Manager write delay-loads it). The `-epicovt` file now holds Epic's J
 Jurassic World Evolution's hidden window was its DRM's error 88500000 for the bare token; its
 DRM licence cache now appears, but the game still shows no frame in 600 s (lsass and service
 manager pipes missing, a TLS connection abandoned). Open: i386 games' pages (the opener is not
-in `syswow64`), a release play approved by a person, JWE past its DRM, the EOS refresh token
-left in the prefix at Epic sign-out (a residual in 0064), a log line for a guest's top-level
-window text (would have shown JWE's dialog at once).
+in `syswow64`) and a release play approved by a person (PLA-64), JWE past its DRM (PLA-41), the
+EOS refresh token left in the prefix at Epic sign-out (a residual in 0064), a log line for a
+guest's top-level window text (would have shown JWE's dialog at once; PLA-59).
 
 **5. GOG Galaxy (decision 0063). Built 2026-10-07; the SDK signs in since PLA-58 (wine-pe
 0029)** ([evidence](../evidence/2026-10-07-gog-galaxy.md), IPAs `baf1dfa1`, `5eaca1e8` and
@@ -261,7 +270,7 @@ connection held, three web-broker subscriptions) and Monster Train reads
 found no token, the poll costs the SDK thread about one percentage point of a core, there are
 no regressions (Hollow Knight, Shogun Showdown, Valheim on DXMT, Snakebird), and no
 achievement or stat was written. B6 (offline queue)
-and B7 (split SDK) are follow-ups; B8 (a registered service) is not needed. The host is the
+and B7 (split SDK) are follow-ups (PLA-60, with the writes); B8 (a registered service) is not needed. The host is the
 game's local Galaxy service while a GOG
 game with a Galaxy client ID runs. Measured first on the workstation (B0, 2026-10-07, with
 the owner's GOG session, results only): a refresh token minted at Moonscars' client with
@@ -311,8 +320,9 @@ owner:
 
 - Wine-pe 0029 (PLA-58) makes the GOG sign-in work on a dev IPA; the release build plays it
   again. PLA-50 (secur32 without lsass packages) no longer blocks GOG and can wait.
-- Decide whether the dxvk patch from `vulkan-performance` (Valheim on Vulkan) goes before
-  0.4.0.
+- The dxvk patch from `vulkan-performance` is on this branch (decision 0061, ported from
+  `4fa21de`): Valheim on Vulkan lives and signs in, its picture is black, its page stays on
+  DXMT ([evidence](../evidence/2026-10-07-steam-ticket-valheim.md#play-6-on-vulkan-with-patchesdxvk-0001-decision-0061)).
 - Then step 7.
 
 Jurassic World Evolution stays on Linear PLA-41. Each step committed with its own evidence;

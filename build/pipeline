@@ -443,7 +443,7 @@ digest_inputs() {
         dxmt) pins madeira dxmt dxmt-port llvm-project; series_text dxmt-port dxmt
               files build/stages/dxmt-base.sh build/stages/dxmt-patched.sh build/stages/dxmt-combined.sh build/air-helpers
               after pe ;;
-        vulkan) pins mesa dxvk vkd3d-proton; series_text mesa vkd3d-proton
+        vulkan) pins mesa dxvk vkd3d-proton; series_text mesa dxvk vkd3d-proton
                 files build/stages/mesa.sh build/stages/vulkan-pe.sh build/check-macho-imports.py
                 after pe ;;
         steamapi) pins gbe abseil-cpp; series_text gbe; files build/stages/steamapi.sh build/steamapi-vtables.py ;;

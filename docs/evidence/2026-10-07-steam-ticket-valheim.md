@@ -108,3 +108,53 @@ host writes that line when the game exits. This replaces "What is left of S1" ab
 Direct3D stays DXMT on Valheim's page (saved with `--keep-settings`; its page shows `DXMT`,
 "Changed for this game"): on this branch Vulkan fails every play at the intro, so DXMT is
 the only way it plays here.
+
+## Play 6: on Vulkan with `patches/dxvk` 0001 (decision 0061)
+
+IPA `Playport-26.5-beefb876.ipa` (dev), sha256
+`beefb8767f9abb51a0bfd7b69b96038878e643bae6efff7a19bb116bd9725f68`: this branch with DXVK's
+0001 ported from `vulkan-performance` (`4fa21de`), its first run on the phone. Valheim's page
+was reset to the default (`pp ui --settings 'app-892970:{}' --keep-settings --play app-892970
+--until first-frame+90 --shot`; `ui: settings app-892970: … graphics=vulkan`, `library: play
+Valheim (app-892970) on vulkan`), then played again to `first-frame+240` with screenshots at
+30, 60, 120 and 180 s. Run directories: `$PLAYPORT_BUILD/agent-notes/store-auth/dxvk-port/`
+(`valheim`, `valheim2`).
+
+- **The crash is gone.** First frame at +6.9 s both times; the game ran until the driver
+  ended it (110 s and 250 s after Play), with no crash report and no `Crash!!!` in
+  `Player.log`. DXVK now refuses the intro video's shared textures and goes on:
+
+      warn:  D3D11DeviceFeatures: External memory features not supported
+      err:   Failed to create shared resource: VK_KHR_EXTERNAL_MEMORY_WIN32 not supported
+      warn:  D3D11: Failed to write shared resource info for a texture
+
+  (six of each per play). The 32 handled `c0000005` write faults in the log are the same
+  count as on DXMT's play 5: not a crash.
+- **The sign-in passes on Vulkan.** The host's lines (`valheim`):
+
+      steam: 19:32:46.782Z [emulator] emulator connected (protocol 1, tickets armed)
+      steam: 19:32:58.644Z [ticket] ticket 1347420161: auth session for app 892970, 240 bytes; 9 token(s) left
+      steam: 19:32:58.896Z [ticket] auth list acked by Steam: 1 ticket(s), handle(s) 1347420161
+      steam: 19:33:04.845Z [ticket] ticket 1347420161 checked by a server: EAuthSessionResponse 0 (OK), state 2
+      steam: 19:33:23.915Z [ticket] ticket 1347420161: cancelled by the game; 0 live
+
+  `Player.log` (local time): `21:32:58 Sending PlayFab login request (attempt 1)`, `21:33:04
+  Session auth respons callback`, `21:33:23 Logged in PlayFab user via Steam auth session
+  ticket`, `Released session ticket`: the first attempt, with no `409`. The second play
+  logged the same (checked by a server at 19:36:36.898Z, PlayFab logged in 6 s later).
+- **The picture is black.** Every screenshot of both plays (30 s to 240 s) is all black, where
+  DXMT shows the intro cinematic. `Player.log` has `Playing cinematic: $cinematics_intro` and
+  then `Got null handle from IDXGIResource::GetSharedHandle.` 1,647 times in the 90 s play
+  and 3,822 times in the 240 s one: Unity's video player wants the shared handle DXVK cannot
+  make on KosmicKrisp, so the intro never shows and never ends.
+
+So 0001 does what it says (no NULL call, the game lives, the ticket is checked and PlayFab
+signs in), but Valheim is not playable on Vulkan: its intro needs a shared texture handle.
+Its page is set back to DXMT (`pp ui --settings 'app-892970:{"graphics":"dxmt"}'
+--keep-settings`; `graphics=dxmt`), as after play 5.
+
+On the same IPA: Hollow Knight (Vulkan, the default) reached its title menu at first frame
++9.4 s and ran to `first-frame+10`; Portal 2 (i386, Direct3D 9 on Vulkan) its menu at +5.4 s,
+to `first-frame+20`; Death's Door (its page's DXMT) its title at +4.2 s, to `first-frame+10`.
+None logged a shared resource line. Hollow Knight's video path (a new game, about 54 s in),
+where the commit's crash was seen, was not played here.

@@ -57,20 +57,32 @@ emulator's ini line (the encrypted app ticket, while the game runs) and its own 
 
 ## Still open
 
+Each item names its Linear issue (team PLA).
+
 - **PLA-50**: secur32 gets its security packages from an lsass service that the phone does not
   run (`start_samss Failed to open service manager`, `80090304`). It did not block the GOG
   sign-in (that was PLA-58, fixed by wine-pe 0029 on `31eda60f`) and does not affect TLS; it
   leaves no NTLM, Negotiate or Kerberos for a game that uses them.
+- **PLA-58**: the NSI adapter table (`\\.\Nsi`) the phone lacks; wine-pe 0029 only answers
+  `InternetGetConnectedState` without it.
 - **PLA-41**: Jurassic World Evolution passes its DRM check but shows no frame in 600 s.
 - **PLA-39**: Among Us's EOS client and its fault; its online menu has not been reached.
-- **Valheim on Vulkan** dies at the intro: DXVK calls a NULL `vkGetMemoryWin32HandleKHR` for
-  a shared texture. The fix is the `patches/dxvk` patch on the unmerged `vulkan-performance`
-  branch. DXMT (its page's setting) plays.
-- **The URL opener for i386 games** (it is not in `syswow64`).
-- **GOG B6** (an offline queue for unlocks and stats) and **B7** (the split SDK, Quake II), as
-  follow-ups.
+- **PLA-54**: Monster Train.
+- **PLA-61**: Epic's `deploymentid`.
+- **PLA-62**: the Steam live session's gaps (the reconnect after the background, S3, is
+  host-tested only) and sign-out on the phone (host tests only).
+- **PLA-60**: GOG B6 (an offline queue for unlocks and stats), B7 (the split SDK, Quake II) and
+  writes (no achievement or stat has been written).
+- **PLA-64**: the URL opener for i386 games (it is not in `syswow64`), and the UI no person has
+  checked (a release play approved by a person).
 - **PLA-57**: `pp ui --action install:gog-<id>` reports "done, but not in the library" for a
   GOG install that worked (a driver check).
-- Sign-out on the phone, the Steam reconnect after the background (S3), and a release play
-  approved by a person: host tests or not run.
+- **PLA-59**: a log line for a guest's hidden top-level window text (JWE's dialog).
+- **PLA-63**: the JIT pool unmap.
+- **Valheim on Vulkan** no longer dies at the intro since `patches/dxvk` 0001 (decision 0061,
+  IPA `beefb876`): DXVK refuses the shared texture and the game lives, its ticket is checked
+  by a server and PlayFab signs in. Its picture stays black (Unity's video player gets a null
+  `GetSharedHandle` and the intro never shows), so its page stays on DXMT
+  ([steam-ticket-valheim](2026-10-07-steam-ticket-valheim.md#play-6-on-vulkan-with-patchesdxvk-0001-decision-0061)).
+  Its Linear issue is still to be filed.
 - The release (step 7): the owner's later session.

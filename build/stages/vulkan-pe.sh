@@ -6,8 +6,8 @@
 # i386-windows, the Direct3D 9 an i386 (WoW64) title such as Portal 2 loads. Each DLL is stripped of its
 # DWARF (as the DXMT stage does) and marked a Wine builtin with winebuild
 # --builtin: Madeira's loader ignores a DLL found through WINEDLLPATH that is
-# not one. vkd3d-proton carries patches/vkd3d-proton; DXVK is built
-# unmodified. The app stages them under Runtime/vulkan/arm64ec-windows, where a
+# not one. vkd3d-proton carries patches/vkd3d-proton and DXVK patches/dxvk
+# (decision 0061). The app stages them under Runtime/vulkan/arm64ec-windows, where a
 # launch set to Vulkan finds them before DXMT's (wine_host_init,
 # PLAYPORT_DLL_OVERLAY).
 #
@@ -88,7 +88,7 @@ install_dll() {
 }
 
 stage_src() {
-    fetch dxvk "$ROOT/dxvk"
+    fetch dxvk "$ROOT/dxvk" dxvk
     fetch vkd3d-proton "$ROOT/vkd3d-proton" vkd3d-proton
 }
 
