@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 7 Oct 2026 19:30:00 +0200
+Subject: [PATCH] ntdll iOS: run pending system APCs when a thread polls a
+ completion port
+
+On iOS the server cannot signal a thread (wine-unix 0002 queues a system
+APC "without a signal"), so a thread takes a system APC only at its next
+server select. An overlapped I/O completes through such an APC on the
+thread that issued it (APC_ASYNC_IO), and only then is its completion
+packet posted. The GOG Galaxy SDK's network thread issues ConnectEx to
+the host's Galaxy service and then polls its completion port with a zero
+timeout (GetQueuedCompletionStatus, thousands of times a second) and
+sleeps; NtRemoveIoCompletion answers a zero timeout without a select, so
+the APC never ran, the connect never completed, the SDK sent nothing and
+gave up after 15 s (FAILURE_REASON_GALAXY_SERVICE_NOT_AVAILABLE).
+
+On iOS a zero-timeout NtRemoveIoCompletion(Ex) that finds the port empty
+now does a zero-timeout select on the port's wait object, as a nonzero
+timeout already does: the server hands it the thread's pending system
+APCs first, and a packet one of them posts is taken at once. It is not
+alertable (a zero-timeout poll ran no user APCs before either) and does
+not yield. Other platforms are unchanged.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-07-gog-galaxy.md
+Offered-upstream: no; upstream signals the thread (SIGUSR1), which iOS cannot
+---
+ dlls/ntdll/unix/sync.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 1036a72ff97..f2dce022612 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -4063,6 +4063,26 @@ NTSTATUS WINAPI NtSetIoCompletionEx( HANDLE completion_handle, HANDLE completion
+     return ret;
+ }
+ 
++#ifdef WINE_IOS
++/* Playport: the server cannot signal a thread on iOS (wine-unix 0002), so a
++ * system APC queued while the thread runs waits for the thread's next server
++ * select. The completion of an overlapped I/O (a ConnectEx, a WSARecv) is such
++ * an APC on the issuing thread, and it posts the I/O's completion packet. A
++ * thread that polls its port with a zero timeout, as the GOG Galaxy SDK's
++ * network thread does, never enters a select, so the packet never comes. Poll
++ * the port's wait object with a zero-timeout select instead: the select runs
++ * the pending system APCs first, then takes a packet one of them posted. */
++static unsigned int ios_poll_completion_wait( HANDLE wait_handle )
++{
++    union select_op select_op;
++
++    select_op.wait.op = SELECT_WAIT;
++    select_op.wait.handles[0] = wine_server_obj_handle( wait_handle );
++    return server_select( &select_op, offsetof( union select_op, wait.handles[1] ),
++                          SELECT_INTERRUPTIBLE, 0, NULL, NULL );
++}
++#endif
++
+ /***********************************************************************
+  *             NtRemoveIoCompletion (NTDLL.@)
+  */
+@@ -4090,7 +4110,11 @@ NTSTATUS WINAPI NtRemoveIoCompletion( HANDLE handle, ULONG_PTR *key, ULONG_PTR *
+     SERVER_END_REQ;
+     if (status != STATUS_PENDING) return status;
+     if (!timeout || timeout->QuadPart) status = server_wait_for_object( wait_handle, FALSE, timeout );
++#ifdef WINE_IOS
++    else                               status = ios_poll_completion_wait( wait_handle );
++#else
+     else                               status = STATUS_TIMEOUT;
++#endif
+     if (status != WAIT_OBJECT_0) return status;
+ 
+     SERVER_START_REQ( get_thread_completion )
+@@ -4154,7 +4178,11 @@ NTSTATUS WINAPI NtRemoveIoCompletionEx( HANDLE handle, FILE_IO_COMPLETION_INFORM
+         goto done;
+     }
+     if (!timeout || timeout->QuadPart) status = server_wait_for_object( wait_handle, alertable, timeout );
++#ifdef WINE_IOS
++    else                               status = ios_poll_completion_wait( wait_handle );
++#else
+     else                               status = STATUS_TIMEOUT;
++#endif
+     if (status != WAIT_OBJECT_0) goto done;
+ 
+     SERVER_START_REQ( get_thread_completion )
+-- 
+2.47.0
+
