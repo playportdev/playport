@@ -1,15 +1,16 @@
 # Plan: games sign in to their store (Epic, Steam, GOG)
 
-**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan, in progress: steps 0, 1, 2, 4,
-the runtime fixes 4b and the URL opener 4c done (4's S1: on DXMT, Valheim's PlayFab sign-in
-had Steam check two of the host's tickets, OK, and logged in; Snakebird's EOS signs in through Playport's web
-panel; Jurassic World Evolution passes its DRM check but shows no frame, and is time-boxed
-out: Linear PLA-41); GOG (step 5) built (B1 to B5) and its phone gate blocked: the Galaxy SDK
-connects and sends nothing on the phone.
-The plan ends with the phone gates (6) and their evidence; the release (7) is handed off to the
-owner's later sessions (owner, 2026-10-07: other work comes before 0.4.0). **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update
-can't ship without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md`
-(`b21f63d`); nothing is built or drafted.
+**Date:** 2026-10-06, rewritten 2026-10-07. **Kind:** plan; this run is finished, and the
+release (step 7) is handed off to the owner. Done: steps 0, 1, 2 and 4, the runtime fixes 4b,
+the URL opener 4c, GOG's B1 to B5 with PLA-55 fixed (wine-unix 0018), and the phone gates (6)
+with their [evidence](../evidence/2026-10-07-store-game-auth.md) on IPA `5eaca1e8`. Epic
+passes: Snakebird's EOS signs in. Steam passes its sign-in: Valheim on DXMT logs in to PlayFab
+with a host ticket that a server checked. GOG does not pass: the SDK gets its token, then its
+own TLS to GOG fails (PLA-50). Open: PLA-50, PLA-41, PLA-39, Valheim on Vulkan (the dxvk
+patch on `vulkan-performance`), the i386 URL opener, B6 and B7, PLA-57, and sign-out on the
+phone. **Blocks:** the 0.4.0 release (owner, 2026-10-06: "the stores update can't ship
+without these"). `main` carries the 0.4.0 version and `docs/releases/0.4.0.md` (`b21f63d`);
+nothing is built or drafted.
 
 **Decisions:** [0059](../decisions/0059-epic-exchange-code.md) (Epic exchange code and
 ownership token) was accepted in step 1;
@@ -239,17 +240,21 @@ in `syswow64`), a release play approved by a person, JWE past its DRM, the EOS r
 left in the prefix at Epic sign-out (a residual in 0064), a log line for a guest's top-level
 window text (would have shown JWE's dialog at once).
 
-**5. GOG Galaxy (decision 0063). Built 2026-10-07; the phone gate is blocked**
-([evidence](../evidence/2026-10-07-gog-galaxy.md), IPA `baf1dfa1`). B1 (`9ec1ee7`, 0063
-accepted), B2 (`830f638`), B3 and B4 (`3292142`), B5 (`141abea`, `8afe7ee`) are in, with host
-tests. On the phone the service listens for every GOG play with a client, Moonscars and Monster
-Train connect to it and send nothing, and their SDK signs out
-(`GALAXY_SERVICE_NOT_AVAILABLE`); under Proton the same Moonscars files send `AUTH_INFO` and
-read Playport's reply, with no service registered, and the SDK's socket calls work on the
-phone in a probe: the cause, in the runtime, is not found. Hollow Knight and Shogun Showdown
-play as before. B6 (offline queue) and B7 (split SDK) are follow-ups; B8 (a registered
-service) is not what blocks it. Next: find what keeps the SDK from sending on the phone
-(Linear), then B9 again. The host is the game's local Galaxy service while a GOG
+**5. GOG Galaxy (decision 0063). Built 2026-10-07; the service works and the sign-in is
+blocked by PLA-50** ([evidence](../evidence/2026-10-07-gog-galaxy.md), IPAs `baf1dfa1` and
+`5eaca1e8`). B1 (`9ec1ee7`, 0063 accepted), B2 (`830f638`), B3 and B4 (`3292142`), B5
+(`141abea`, `8afe7ee`) are in, with host tests. On `baf1dfa1` Moonscars and Monster Train
+connected and sent nothing (`GALAXY_SERVICE_NOT_AVAILABLE`). The cause (PLA-55, measured on
+the workstation): the SDK's ConnectEx completes through a system APC that iOS delivers only
+at a server select, and the SDK polls its completion port with a zero timeout. wine-unix 0018
+(`b75dd27`) makes that poll select on iOS. On `5eaca1e8` both send `AUTH_INFO` and get `200`
+with a minted game token within 0.6 s. The SDK then fails its own TLS sign-in at GOG
+(`FAILURE_REASON_CONNECTION_FAILURE`; inferred: secur32 has no security packages without an
+lsass service, PLA-50). B9 is therefore half done: the container search found no token, the
+poll costs the SDK thread about one percentage point of a core, and there are no regressions.
+The achievements request waits on PLA-50, and no achievement was unlocked. B6 (offline queue)
+and B7 (split SDK) are follow-ups; B8 (a registered service) is not needed. The host is the
+game's local Galaxy service while a GOG
 game with a Galaxy client ID runs. Measured first on the workstation (B0, 2026-10-07, with
 the owner's GOG session, results only): a refresh token minted at Moonscars' client with
 `without_new_session=1` answered 200 with the same user ID and its own session ID; the host
@@ -270,11 +275,19 @@ owner's choice: whether the game token works at another client (0063 assumes the
 | B8 | Only if the phone shows it: an SDK that will not connect without a registered `GalaxyCommunication` service (a Wine patch) | unknown |
 | B9 | Phone gate: Moonscars to `first-frame+10` and into the game; the log shows `AUTH_INFO` and the achievements request; container search for the minted token; Shogun Showdown and Hollow Knight as regressions; evidence. An achievement unlock is permanent on the owner's account: ask first | one session |
 
-**6. Phone gates (one `pp phone lock` session each).** Each store's test title on the IPA
-that will ship: Epic signs in and reaches its menu; Steam's title reaches its online menu
-signed in; GOG's shows its Galaxy sign-in; Hollow Knight and Death's Door to
-`first-frame+10`. Sign-out from each store removes every leftover file (where it can be done
-without the owner re-pairing). `docs/evidence/<date>-store-game-auth.md` with the IPA's sha256.
+**6. Phone gates. Done 2026-10-07**
+([evidence](../evidence/2026-10-07-store-game-auth.md), IPA `5eaca1e8`):
+
+| Gate | Result |
+| --- | --- |
+| Epic: Snakebird signs in and reaches its menu | passes |
+| Steam: Valheim on DXMT signs in to PlayFab with a host ticket checked by a server | passes; the main menu was not reached in 60 s, the intro was still playing |
+| GOG: Moonscars shows its Galaxy sign-in | does not pass: the token is delivered, then PLA-50 |
+| Hollow Knight and Death's Door to `first-frame+10` | pass |
+| Sign-out | not run on the phone (it would end sessions the owner pairs again); host tests only |
+
+The container searches found no exchange code, ownership token, user code or GOG token. The IPA
+that ships is a later release build, so the owner's release session plays these gates again.
 
 **7. Release: handed off, not part of this plan's run** (owner, 2026-10-07: other work
 comes before 0.4.0; no `pp release`, no draft, no push here). For the owner's later session: update `docs/releases/0.4.0.md` (the Epic refusal paragraph becomes what now
@@ -285,11 +298,17 @@ CMake caches hold absolute paths).
 ## Order
 
 Step 1 → step 4 → runtime fixes (4b) → the URL opener (4c) → GOG (step 5) → phone gates (6),
-where this plan ends; the release (7) is the owner's, later. Next: the Galaxy SDK's silence on
-the phone (step 5's gate), then the phone gates. Snakebird
-Complete is the Epic title for step 6; Jurassic World Evolution stays on Linear PLA-41 (its
-DRM passes, then no frame in 600 s; not worked on here). Each step commits with its
-own evidence; the scratch measurements behind the designs are left in the build area.
+where this plan's run ended (2026-10-07). The release (7) is the owner's, later. Next for the
+owner:
+
+- Decide whether PLA-50 (an lsass service for secur32, so Schannel works) goes before 0.4.0,
+  since GOG's Galaxy sign-in waits on it.
+- Decide whether the dxvk patch from `vulkan-performance` (Valheim on Vulkan) goes before
+  0.4.0.
+- Then step 7.
+
+Jurassic World Evolution stays on Linear PLA-41. Each step committed with its own evidence;
+the scratch measurements behind the designs are left in the build area.
 
 ## Risks
 
