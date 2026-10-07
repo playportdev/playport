@@ -26,6 +26,13 @@
  * take a pc there for guest code; pool code there hangs its first call. */
 #define SELFCHECK_GUEST_LO 0x7000000000ull
 #define SELFCHECK_GUEST_HI 0x8000000000ull
+/* The executable window: where an x86-64 executable that is not DYNAMIC_BASE
+ * must load, at the linker's default ImageBase. The host holds it from exec
+ * and names it in WINE_IOS_EXE_WINDOW; ntdll hands it to such an executable
+ * (patches/madeira-unix 0089). 448 MiB holds Jurassic World Evolution's
+ * 0x1a5c5000-byte JWE.exe. */
+#define SELFCHECK_EXE_WINDOW_LO 0x140000000ull
+#define SELFCHECK_EXE_WINDOW_HI 0x15c000000ull
 /* ntdll finds the TEB's raw TSD slot by scanning this many (loader_ios.c). */
 #define SELFCHECK_TSD_SLOTS 512
 
@@ -55,6 +62,14 @@ const char *selfcheck_name(int result);
 /* The pool's placement alone, which wine_host_jit_pool_acquire also checks:
  * SELFCHECK_OK or the first rule it breaks. */
 int selfcheck_pool_placement(unsigned long long rx, unsigned long long size);
+
+/* What goes back of the exec-time reservation once the pool's range
+ * [reservation start, freed_hi) is taken: the rest up to res_hi, but the
+ * executable window when the rest holds all of it. Fills give[n] with the
+ * ranges [lo, hi) to deallocate (at most two) and returns n; *held is 1 when
+ * the window stays held. */
+int selfcheck_exe_window_split(unsigned long long freed_hi, unsigned long long res_hi,
+                               unsigned long long give[2][2], int *held);
 
 /* Every assumption in turn: SELFCHECK_OK or the first that fails. report gets
  * one line, "ok page=16384 tsd=key 5 slot 5 pool=0x...+896MiB rw=0x..."; on a

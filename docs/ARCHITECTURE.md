@@ -170,14 +170,32 @@ places its start-up heap somewhere in that range before any app code runs; in
 about one launch in four no piece large enough was left.
 
 `wine_host.c` therefore reserves the pool's address space at exec time: a
-960 MiB zero-fill array (`host_pool_reserve`) in the executable's
+1440 MiB zero-fill array (`host_pool_reserve`) in the executable's
 `__DATA,__bss`, which the kernel maps with the image, so nothing can be placed
-inside it first. Untouched, it costs no memory footprint. It holds an 896 MiB
-pool plus 64 MiB of slack and starts where the executable ends, which the
-slide moves (`0x103ea8000` to `0x108540000` in the evidence below).
+inside it first. Untouched, it costs no memory footprint. It holds a pool of up
+to 896 MiB plus 64 MiB of slack and starts where the executable ends, which the
+slide moves (`0x103ea8000` to `0x10a3f8000` seen on the phone).
 `wine_host_jit_pool_acquire` frees the pool's range at its start just before
 debugserver allocates, and debugserver's first-fit allocation lands there.
-The rest of the reservation is given back afterwards.
+
+The rest of the reservation is given back afterwards, except the **executable
+window**, `[0x140000000, 0x15c000000)` (`selfcheck_exe_window_split`): an x86-64
+executable that is not DYNAMIC_BASE must load at its ImageBase, the linker's
+default `0x140000000`, and one with its relocations stripped cannot load anywhere
+else (Jurassic World Evolution's 422 MiB `JWE.exe`). Without the hold that range
+is taken before the runtime starts: libmalloc puts a 64 MiB `VM_RECLAIM` region
+and about 110 MiB of read-only regions just above the reservation's end, and the
+session root (`playport-session.exe`, linked at the default base) took
+`0x140000000` itself. The reservation reaches past the window from the lowest
+slide seen and ends at `0x1643f8000` from the highest, under the lowest main-thread
+stack seen (`0x16d0c4000`). The host names the window in `WINE_IOS_EXE_WINDOW` and
+logs `executable window: 0x140000000-0x15c000000 held …`; above a pool whose range
+reaches it (896 MiB at a high slide) it logs `not held`. ntdll gives the window
+only to `map_image_view`'s attempt at such an executable's preferred base
+(`patches/madeira-unix` 0089; Madeira's `ios_exe_win_claim`, logged `ml977:
+RELEASED`), and holds the image's interval again for its next launch in the session
+(`ml988`); the session root and relocatable executables are placed by the scan. A
+refused base of such an executable logs `[exe-base]` with what holds it.
 
 #### Mode A: the old `0x119000000` floor
 
@@ -234,7 +252,8 @@ then on, and every MiB of it is a MiB the game cannot have. Every Play therefore
 gets 512 MiB, the least the games measured need, whatever the memory limit
 (PlayportKit `JitPool`, [decision 0036](decisions/0036-one-512-mib-jit-pool.md),
 which replaced 0019's eighth of the limit); the reservation still holds 896 MiB,
-which a dev build's simulated pool may use. The limit itself comes from the
+which a dev build's simulated pool may use (above 768 MiB at the cost of the
+executable window at some slides). The limit itself comes from the
 `com.apple.developer.kernel.increased-memory-limit` entitlement: 8 GB once Game
 Mode is on. Of the build's signers only the patched xtool keeps it
 ([BUILDING.md, "Signing"](BUILDING.md#signing); other signers:

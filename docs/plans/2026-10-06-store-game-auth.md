@@ -180,8 +180,12 @@ with its phone run:
   madeira-unix 0088 hands the root list to every Wine process of a session. Snakebird's
   `Curl error 60` is gone and 121 roots reach the prefix's ROOT store; its EOS login now
   ends `UnexpectedError` (was `NoConnection`): no EOS sign-in shown yet.
-- PLA-41, Jurassic World Evolution's fixed-base executable: the host's executable window
-  and madeira-unix 0089.
+- **PLA-41, Jurassic World Evolution's fixed-base executable. Done 2026-10-07**
+  ([evidence](../evidence/2026-10-07-executable-window.md)). The host holds the executable
+  window `[0x140000000, 0x15c000000)` from exec; madeira-unix 0089 gives it only to an
+  executable that cannot move. `JWE.exe` now maps at its base (`ml977: RELEASED`,
+  `virtual_map_main_module = 0x0`) and then ends `0xc0000135`: its 422 MiB copy filled the
+  pool's head (480 of 512 MiB).
 - The JIT-pool copy of a pure x86-64 image: madeira-unix 0090, judged by the phone.
 
 **5. GOG Galaxy (decision 0063).** The host is the game's local Galaxy service while a GOG

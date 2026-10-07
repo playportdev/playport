@@ -34,6 +34,20 @@ int selfcheck_pool_placement(unsigned long long rx, unsigned long long size)
     return SELFCHECK_OK;
 }
 
+int selfcheck_exe_window_split(unsigned long long freed_hi, unsigned long long res_hi,
+                               unsigned long long give[2][2], int *held)
+{
+    int n = 0;
+    *held = freed_hi <= SELFCHECK_EXE_WINDOW_LO && res_hi >= SELFCHECK_EXE_WINDOW_HI;
+    if (!*held) {
+        if (freed_hi < res_hi) { give[n][0] = freed_hi; give[n][1] = res_hi; n++; }
+        return n;
+    }
+    if (freed_hi < SELFCHECK_EXE_WINDOW_LO) { give[n][0] = freed_hi; give[n][1] = SELFCHECK_EXE_WINDOW_LO; n++; }
+    if (SELFCHECK_EXE_WINDOW_HI < res_hi) { give[n][0] = SELFCHECK_EXE_WINDOW_HI; give[n][1] = res_hi; n++; }
+    return n;
+}
+
 int selfcheck_judge(const selfcheck_facts *f, char *report, size_t len)
 {
     char why[160] = "";

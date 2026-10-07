@@ -13,10 +13,13 @@
 import Foundation
 
 public enum JitPool {
-    /// What the executable's exec-time reservation is laid out for: 960 MiB holds
-    /// this plus 64 MiB of slack at its start at any slide (wine_host.c
+    /// What the executable's exec-time reservation is laid out for: its 1440 MiB
+    /// hold this plus 64 MiB of slack at its start at any slide (wine_host.c
     /// host_pool_reserve); a larger pool is placed first fit, which failed about one
-    /// launch in four. A dev build's simulated pool may go up to it.
+    /// launch in four. A dev build's simulated pool may go up to it. Above a pool of
+    /// up to 768 MiB the reservation also keeps the executable window
+    /// (0x140000000-0x15c000000) at every slide seen; 896 MiB keeps it only at the
+    /// lowest slides, and a launch that loses it logs `executable window: not held`.
     public static let maximumMB = 896
     /// What every Play gets: the high-water marks measured (The Witcher 3: head
     /// 206 MiB, tail 145 MiB; Kingdom Come: Deliverance: head 182, tail 161) with

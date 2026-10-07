@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: playportdev <dev@playport.dev>
+Date: Wed, 7 Oct 2026 13:45:00 +0200
+Subject: [PATCH] ntdll: keep the executable window for an executable that
+ cannot move
+
+An x86-64 executable that is not DYNAMIC_BASE loads at its ImageBase, the
+linker's default 0x140000000, or not at all when its relocations are
+stripped: Jurassic World Evolution's 442 MB JWE.exe (characteristics 0x23,
+image_flags 0) was refused its base with STATUS_CONFLICTING_ADDRESSES, mapped
+at 0x7038010000 instead, and the loader then ended it ("failed to create main
+module", 0xc0000018). The host now holds [0x140000000, 0x15c000000) from
+exec and names it in WINE_IOS_EXE_WINDOW, and ios_exe_win_claim (ml977) gives
+it to the first no-clobber map of 64 MB or more that lies inside it.
+
+That rule let any such map take it: map_view's bottom-up scan from 4 GB
+probes the window with the size of whatever it places (an image, a guest
+reserve), so the first large relocatable image or arena placed by a scan
+would have released it. Only map_image_view's attempt at an executable's
+preferred base may claim it now, when the executable is not DYNAMIC_BASE;
+one with its relocations stripped claims it at any size, since nothing else
+can load it. The session root and every relocatable title executable
+(image_flags 0x4) are refused the window and placed by the scan, as they are
+today behind the session root.
+
+The claim is recorded with map_fixed_area's size, rounded to the 16 KB host
+page; map_image_view committed it with the image's own size, so for an image
+whose size is not a multiple of 16 KB (JWE.exe: 0x1a5c5000) the commit never
+matched, the window stayed CLAIMING with no owner, and the image was never
+retired for the next launch of the same game in the session (ml988).
+
+A refused preferred base of such an executable now logs what holds it:
+`[exe-base] BASE+SIZE is held by a Wine view` (another pseudo-process's
+image) or `by a host region ADDR+SIZE tag T prot P`.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-07-executable-window.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 49 +++++++++++++++++++++++++++++++---
+ 1 file changed, 46 insertions(+), 3 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index db323cc..bbf82bc 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -6720,6 +6720,13 @@ static size_t unmap_area_above_user_limit( void *addr, size_t size )
+ static uint64_t ios_exe_win_base, ios_exe_win_size;
+ static int ios_exe_win_state = -1;          /* -1 unparsed, 1 held, 0 released/absent */
+ 
++/* Playport: set by map_image_view only while it maps an executable that is not
++ * DYNAMIC_BASE at its preferred base (2 when it is also RELOCS_STRIPPED), so
++ * only such a map can claim the window. Every other no-clobber map that falls
++ * inside it (map_view's bottom-up scan from 4 GB, which probes the window with
++ * the size of whatever it places, a guest reserve at a hint) is declined. */
++static __thread int ios_exe_win_fixed_image;
++
+ /* ml983: the image currently holding the window, and whether its owner is gone.
+  * Only one image can occupy the window at a time, so a single record is the
+  * whole registry -- no per-view owner field, and nothing for the rest of the
+@@ -6868,7 +6875,10 @@ static int ios_exe_win_claim( const void *addr, size_t size )
+      * a released window still has to answer a matching request. */
+     if (!ios_exe_win_base) return 0;
+     if (a < ios_exe_win_base || a + size > ios_exe_win_base + ios_exe_win_size) return 0;
+-    if (size < 64u * 1024u * 1024u)
++    if (!ios_exe_win_fixed_image) return 0;
++    /* Playport: an image with its relocations stripped cannot load anywhere
++     * else, whatever its size. */
++    if (size < 64u * 1024u * 1024u && ios_exe_win_fixed_image != 2)
+     {
+         static int small_n;
+         if (small_n++ < 8)
+@@ -14304,11 +14314,44 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+ 
+     if (base)
+     {
++        BOOL fixed = !(image_info->image_charact & IMAGE_FILE_DLL) &&
++                     !(image_info->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated);
++
++        ios_exe_win_fixed_image = !fixed ? 0 :
++            (image_info->image_charact & IMAGE_FILE_RELOCS_STRIPPED) ? 2 : 1;
+         status = map_view( view_ret, base, size, alloc_type, vprot, limit_low, limit_high, 0 );
++        ios_exe_win_fixed_image = 0;
+         /* ml988: commit or roll back a pending fixed-base claim. No-ops unless
+-         * ios_exe_win_claim granted this exact interval during the call above. */
+-        ios_exe_win_commit_claim( base, size, !status );
++         * ios_exe_win_claim granted this exact interval during the call above.
++         * Playport: the claim saw map_fixed_area's size, rounded to the host
++         * page (JWE.exe's 0x1a5c5000 is not a multiple of 16 KB). */
++        ios_exe_win_commit_claim( base, ROUND_SIZE( 0, size, host_page_mask ), !status );
+         if (!status) return status;
++        /* Playport: an executable that is not DYNAMIC_BASE was refused its base.
++         * Name what holds it: a view of Wine's (another pseudo-process's image)
++         * or a host region (libmalloc, a file mapping), with its Mach tag. */
++        if (fixed)
++        {
++            struct file_view *occupant = find_view_range( base, size );
++            mach_vm_address_t q = (mach_vm_address_t)(uintptr_t)base;
++            mach_vm_size_t qsize = 0;
++            vm_region_extended_info_data_t einfo;
++            mach_msg_type_number_t cnt = VM_REGION_EXTENDED_INFO_COUNT;
++            mach_port_t obj = MACH_PORT_NULL;
++
++            if (occupant)
++                dprintf( 2, "[exe-base] %p+%#lx is held by a Wine view %p+%#lx\n", base,
++                         (unsigned long)size, occupant->base, (unsigned long)occupant->size );
++            else if (mach_vm_region( mach_task_self(), &q, &qsize, VM_REGION_EXTENDED_INFO,
++                                     (vm_region_info_t)&einfo, &cnt, &obj ) == KERN_SUCCESS &&
++                     q < (mach_vm_address_t)(uintptr_t)base + size)
++                dprintf( 2, "[exe-base] %p+%#lx is held by a host region %#llx+%#llx tag %u "
++                         "prot %d\n", base, (unsigned long)size, (unsigned long long)q,
++                         (unsigned long long)qsize, einfo.user_tag, einfo.protection );
++            else
++                dprintf( 2, "[exe-base] %p+%#lx refused with nothing mapped there (status %#x)\n",
++                         base, (unsigned long)size, (unsigned int)status );
++        }
+ 
+         /* ml985: the preferred base is refused. Report it UNCONDITIONALLY, with
+          * the raw image_flags rather than an assumption about them -- rdr56
