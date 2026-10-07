@@ -448,6 +448,10 @@
       <li>Open Playport: the Memory step has its tick, and Settings › Setup check shows Increased Memory Limit On.</li>
     </ol>
     <p class="install-p">The capability stays on the App ID, so SideStore's weekly refresh keeps it; if the tick ever goes away, repeat steps 3 and 4. GetMoreRam takes one of a free Apple ID's three app slots: delete it afterwards.</p>
+    <h3 class="install-h" id="pairing">Why pairing and LocalDevVPN</h3>
+    <p class="install-p">Playport translates a game's x86 code to ARM as it runs, which needs JIT, and iOS allows JIT only in an app a debugger has attached to. Pairing makes Playport's own JIT helper that debugger: on iOS 27 you pair once, with a code in Settings › Privacy &amp; Security › Developer Mode, and LocalDevVPN carries the connection on the phone itself. On iOS 26, import a pairing file in Settings › Setup check instead. Already use StikDebug or LiveContainer? Settings › Setup check › JIT method takes JIT from them.</p>
+    <h3 class="install-h" id="report">Something not working?</h3>
+    <p class="install-p">On the game's page, <strong>Report a problem</strong> shares its logs as one <code>.zip</code> (before 0.4.0 the bare log: long-press it in Files and choose <strong>Compress</strong>). Save it to Files and attach it to a <a href="https://github.com/playportdev/playport/issues/new/choose">GitHub issue</a>, with your device, iOS and Playport versions and how you sideloaded: that is where we read them all.</p>
   </div>
 </section>
 
