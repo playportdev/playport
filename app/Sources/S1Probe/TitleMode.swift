@@ -8,6 +8,7 @@
 // that says why in an alert (LaunchMessage). Progress goes to the app log
 // (AppLog) as `title:` lines.
 
+import EpicClientKit
 import Foundation
 import PlayportKit
 import SwiftUI
@@ -58,7 +59,7 @@ final class TitleLaunch: ObservableObject {
     func start(title: String, titleID: String? = nil, exe: String, args: [String], config: [String: String] = [:],
                screen: String? = nil, frameLimit: Int = 0, graphics: GraphicsBackend = .default, steamAppID: UInt32? = nil,
                fex: FEXProfile.Launch? = nil, steamAPI: LaunchCoordinator.SteamAPI? = nil,
-               memory: MemoryNeed? = nil) -> Bool {
+               memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil) -> Bool {
         guard !running, !spent else { return false }
         self.title = title
         self.titleID = titleID
@@ -78,10 +79,11 @@ final class TitleLaunch: ObservableObject {
         }
         showsSheet = true
         begin(screen: screen, frameLimit: frameLimit)
-        TitleMode.log("in-app start \(exe) \(args.joined(separator: " "))")
+        // An Epic game's sign-in arguments stay out of the log (decision 0059).
+        TitleMode.log("in-app start \(exe) \(EpicInstaller.redacted(args).joined(separator: " "))")
         let request = LaunchCoordinator.Request(exe: exe, args: args, config: config,
                                                 steamAppID: steamAppID, graphics: graphics, fex: fex, jitWait: 180, steamAPI: steamAPI,
-                                                memory: memory)
+                                                memory: memory, epic: epic)
         Thread.detachNewThread {
             let outcome = LaunchCoordinator.run(request) { step in
                 DispatchQueue.main.async { MainActor.assumeIsolated { TitleLaunch.shared.advance(step) } }

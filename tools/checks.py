@@ -27,6 +27,10 @@ SECRETS = [
     # is hundreds of base64 characters, a test's made-up one is short. Last: the source
     # payload audit names the patterns by their index.
     ("Steam encrypted app ticket", r"\b[Tt]icket *= *[A-Za-z0-9+/]{40,}"),
+    # A signed-in Epic launch (decision 0059): the exchange code argument and the ownership
+    # token. Appended for the same reason.
+    ("Epic exchange code argument", r"AUTH_PASSWORD=[0-9A-Fa-f]{32}"),
+    ("Epic ownership token", r"egoc1~[A-Za-z0-9_-]{20,}"),
 ]
 # Made-up or public values the tests use; a line holding one is not a hit.
 SECRET_FIXTURES = ("XTL-TEAMIDXXXX.", "XTL-A1B2C3D4E5.", "eyJhbGciOiJFZERTQSJ9.", "76561197960287930",

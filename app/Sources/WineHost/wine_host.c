@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -1250,7 +1251,17 @@ int wine_host_session_launch(const char *dos_path, const char *const *args, int 
     pp_session_request req = { PP_SESSION_MAGIC, g_session_seq, PP_REQUEST_LAUNCH, (uint32_t)used,
                                (uint32_t)nargs, (uint32_t)nenv };
     host_log("session: title %u: %s in %s, %d arguments, %d variables", req.sequence, tp.dos, tp.dos_dir, nargs, nenv);
-    for (int i = 0; i < nargs; i++) host_log("session: title %u: argv[%d] = \"%s\"", req.sequence, i + 1, args[i]);
+    for (int i = 0; i < nargs; i++) {
+        /* A signed-in Epic launch's code, account ID and name stay out of the log (decision 0059). */
+        static const char *const secret[] = { "-AUTH_PASSWORD=", "-epicuserid=", "-epicusername=" };
+        int hidden = 0;
+        for (size_t k = 0; k < sizeof(secret) / sizeof(*secret) && !hidden; k++)
+            if (!strncasecmp(args[i], secret[k], strlen(secret[k]))) {
+                host_log("session: title %u: argv[%d] = \"%s<redacted>\"", req.sequence, i + 1, secret[k]);
+                hidden = 1;
+            }
+        if (!hidden) host_log("session: title %u: argv[%d] = \"%s\"", req.sequence, i + 1, args[i]);
+    }
     rc = session_send("request", &req, payload);
     free(payload);
     if (rc) return -4;

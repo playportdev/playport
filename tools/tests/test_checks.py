@@ -38,6 +38,12 @@ class Secrets(unittest.TestCase):
         self.assertEqual([w for w, _ in checks.secret_hits(line)], ["Steam encrypted app ticket"])
         self.assertEqual(checks.secret_hits("ticket=CAIQ/wB/ ticket=<redacted> ticket: fetched, 240 bytes"), [])
 
+    def test_epic_launch_secrets(self):
+        line = "-AUTH_PASSWORD=" + "0123456789abcdef" * 2
+        self.assertEqual([w for w, _ in checks.secret_hits(line)], ["Epic exchange code argument"])
+        self.assertIn("Epic ownership token", [w for w, _ in checks.secret_hits("egoc1~" + "A" * 30)])
+        self.assertEqual(checks.secret_hits("-AUTH_PASSWORD=<redacted> <ovt:redacted> egoc1~short"), [])
+
     def test_home_paths(self):
         home = "/ho" + "me/alice/"   # split, as above
         self.assertEqual([w for w, _ in checks.secret_hits(f"IPA {home}x.ipa")], ["a workstation's home path"])

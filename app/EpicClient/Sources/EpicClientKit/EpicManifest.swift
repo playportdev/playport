@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Epic's binary manifest, as the spike measured it (plan 3.1; every manifest seen
-// was this form, feature level 17):
+// Epic's binary manifest, as the spike measured it (plan 3.1; feature level 17 in
+// the games seen; the older JSON form is EpicManifestJSON.swift's, `parse` takes both):
 //
 //   header   magic 0x44BEC00C, header size, body sizes, SHA-1 of the body, stored-as
 //            (bit 0: zlib), version
@@ -88,10 +88,12 @@ public struct EpicManifest: Sendable {
     public var refusal: String? {
         let names = ["easyanticheat", "battleye", "beclient", "eac_launcher"]
         if files.contains(where: { f in let p = f.path.lowercased(); return names.contains { p.contains($0) } }) {
-            return "This game uses anti-cheat, which does not run in Playport."
+            return Self.usesAntiCheat
         }
         return nil
     }
+
+    public static let usesAntiCheat = "This game uses anti-cheat, which does not run in Playport."
 
     // MARK: parsing
 
@@ -104,7 +106,7 @@ public struct EpicManifest: Sendable {
         var h = Reader(data)
         guard data.count >= 4 else { throw ClientError.protocolChanged("Epic manifest: empty") }
         guard try h.u32() == magic else {
-            if data.first == 0x7B { throw ClientError.unsupported("Epic's older JSON manifest") }
+            if data.first == 0x7B { return try parseJSON(data) }
             throw ClientError.protocolChanged("Epic manifest: not a manifest")
         }
         let headerSize = Int(try h.u32()), plainSize = Int(try h.u32()), storedSize = Int(try h.u32())

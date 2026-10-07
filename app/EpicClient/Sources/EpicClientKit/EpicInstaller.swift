@@ -203,10 +203,30 @@ public struct EpicInstaller: Sendable {
     }
 
     /// The arguments a launch passes (plan 3.4): the manifest's launch command, the
-    /// catalogue's extra command line, then Epic's non-secret ones. No exchange code.
-    public static func arguments(_ r: EpicInstalled, game: EpicGame?, locale: String = "en") -> [String] {
+    /// catalogue's extra command line, then Epic's own. The store receipt keeps these
+    /// without `auth`; a Play adds `authArguments` (decision 0059).
+    public static func arguments(_ r: EpicInstalled, game: EpicGame?, locale: String = "en", auth: EpicLaunchAuth? = nil) -> [String] {
         split(r.launchCommand) + split(game?.attributes["AdditionalCommandLine"] ?? "")
             + ["-epicapp=\(r.appName)", "-epicenv=Prod", "-EpicPortal", "-epiclocale=\(locale)"]
+            + (auth.map(authArguments) ?? [])
+    }
+
+    /// What Epic's launcher adds for a signed-in launch (decision 0059): the exchange code,
+    /// who is signed in, the sandbox, and for a game with an ownership token the file holding it.
+    public static func authArguments(_ a: EpicLaunchAuth) -> [String] {
+        ["-AUTH_LOGIN=unused", "-AUTH_PASSWORD=\(a.exchangeCode.value)", "-AUTH_TYPE=exchangecode",
+         "-epicusername=\(a.displayName.value)", "-epicuserid=\(a.accountID.value)", "-epicsandboxid=\(a.namespace)"]
+            + (a.ownershipFile.map { ["-epicovt=\($0)"] } ?? [])
+    }
+
+    /// The arguments with the secret values replaced, for a log line.
+    public static func redacted(_ args: [String]) -> [String] {
+        args.map { a in
+            for p in ["-AUTH_PASSWORD=", "-epicusername=", "-epicuserid="] where a.lowercased().hasPrefix(p.lowercased()) {
+                return a.prefix(p.count) + "<redacted>"
+            }
+            return a
+        }
     }
 
     /// Words, with double quotes grouping.
@@ -231,5 +251,65 @@ public struct EpicInstaller: Sendable {
         var n = 2
         while have.contains("\(tagged) \(n)".lowercased()) { n += 1 }
         return "\(tagged) \(n)"
+    }
+}
+
+/// A signed-in launch's credentials (decision 0059), fetched right after Play.
+public struct EpicLaunchAuth: Sendable {
+    public var exchangeCode: Secret<String>
+    public var accountID: Secret<String>
+    public var displayName: Secret<String>
+    /// The game's namespace (`-epicsandboxid`).
+    public var namespace: String
+    /// The ownership token file as the game sees it (`C:\Games\…`), for a game whose catalogue sets
+    /// `OwnershipToken`; nil for the rest.
+    public var ownershipFile: String?
+
+    public init(exchangeCode: Secret<String>, account: EpicAccountIdentity, namespace: String, ownershipFile: String? = nil) {
+        self.exchangeCode = exchangeCode
+        accountID = account.accountID
+        displayName = account.displayName
+        self.namespace = namespace
+        self.ownershipFile = ownershipFile
+    }
+}
+
+/// The ownership token's file (`-epicovt`, decision 0059): one fixed name in the game's
+/// folder, written by the launch and removed when it ends, before the next launch, at
+/// app start and at sign-out.
+public enum EpicOwnershipFile {
+    public static let name = "playport-epic.ovt"
+
+    /// The file as the game sees it, for the folder `installDir` under C:\Games.
+    public static func windowsPath(installDir: String) -> String {
+        "C:\\Games\\" + installDir.replacingOccurrences(of: "/", with: "\\") + "\\" + name
+    }
+
+    static var temporary: String { "." + name + ".tmp" }
+
+    /// Writes the token (its text, as Epic returned it), readable by the owner only.
+    public static func write(_ token: Secret<String>, in root: URL) throws {
+        let tmp = root.appendingPathComponent(temporary), url = root.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: tmp)
+        guard FileManager.default.createFile(atPath: tmp.path, contents: Data(token.value.utf8), attributes: [.posixPermissions: 0o600]) else {
+            throw ClientError.transport("cannot write \(name) in \(root.lastPathComponent)")
+        }
+        guard rename(tmp.path, url.path) == 0 else {
+            try? FileManager.default.removeItem(at: tmp)
+            throw ClientError.transport("rename \(name) errno \(errno)")
+        }
+    }
+
+    /// Removes the file (and a write's leftover); how many there were.
+    @discardableResult
+    public static func remove(in root: URL) throws -> Int {
+        var removed = 0
+        for n in [name, temporary] {
+            let u = root.appendingPathComponent(n)
+            guard FileManager.default.fileExists(atPath: u.path) else { continue }
+            try FileManager.default.removeItem(at: u)
+            removed += 1
+        }
+        return removed
     }
 }

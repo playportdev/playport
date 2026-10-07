@@ -40,21 +40,36 @@ public struct EpicGame: Codable, Equatable, Sendable, Identifiable {
     public var folderName: String { attributes["FolderName"].flatMap { $0.isEmpty ? nil : $0 } ?? title }
 
     /// Why Playport does not install it (plan 3.5), from the catalogue: nil when it may.
-    /// Anti-cheat is found later, in the manifest's files (`EpicManifest.refusal`).
+    /// An ownership token or no offline play is no reason: a Play signs the game in
+    /// (decision 0059). Anti-cheat files are found later, in the manifest (`EpicManifest.refusal`).
     public var refusal: String? {
-        if attributes["ThirdPartyManagedProvider"].map({ !$0.isEmpty }) ?? false {
-            return "This game is installed through another company's launcher, which Playport does not run."
+        if let provider = attributes["ThirdPartyManagedProvider"], !provider.isEmpty {
+            return provider.lowercased() == "ubisoftconnect"
+                ? "This game is installed and started through Ubisoft Connect, which Playport does not run."
+                : "This game is installed through another company's launcher, which Playport does not run."
         }
-        // Measured (plan 3.1): an ownership token, no offline play, or Epic's access
-        // control (Fortnite) all mean the game signs in to Epic at launch.
-        if attributes["OwnershipToken"]?.lowercased() == "true" || attributes["CanRunOffline"]?.lowercased() == "false"
-            || attributes["UseAccessControl"]?.lowercased() == "true" {
-            return EpicGame.needsOnlineSignIn
-        }
-        return nil
+        // Epic's access control (Fortnite) is its anti-cheat's.
+        if attributes["UseAccessControl"]?.lowercased() == "true" { return EpicManifest.usesAntiCheat }
+        return Self.knownRefusals[id]
     }
 
-    public static let needsOnlineSignIn = "This game needs Epic online sign-in, which Playport does not support yet."
+    /// Games whose catalogue does not say why they cannot run here (store game sign-in
+    /// survey, 2026-10-07), by app name.
+    static let knownRefusals: [String: String] = [
+        // Elite Dangerous: Frontier's EDLaunch.exe, with a Frontier account.
+        "9c203b6ed35846e8a4a9ff1e314f6593": "This game starts through Frontier's launcher and its account, which Playport does not run.",
+        // Star Trek Online: Cryptic's launcher (Star Trek Online.exe).
+        "0fb6e06aacd14e88b1aaea8f54dd8525": "This game starts through Cryptic's launcher, which Playport does not run.",
+        // Marvel Rivals: its own launcher and anti-cheat, with no anti-cheat file by name.
+        "575efd0b5dd54429b035ffc8fe2d36d0": EpicManifest.usesAntiCheat,
+    ]
+
+    /// The catalogue asks for an ownership token at launch (`-epicovt`).
+    public var needsOwnershipToken: Bool { attributes["OwnershipToken"]?.lowercased() == "true" }
+
+    /// Whether the game may start without Epic's sign-in when it cannot be had (offline,
+    /// signed out): the catalogue allows offline play and asks for no ownership token.
+    public var mayPlayOffline: Bool { attributes["CanRunOffline"]?.lowercased() != "false" && !needsOwnershipToken }
 }
 
 public enum EpicLibrary {

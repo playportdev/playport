@@ -24,7 +24,9 @@
 // the title's own environment, over the session root's, and into the app's
 // for the runtime's unix side. A Steam game's encrypted app ticket, fetched after
 // Play (LibraryModel.play), goes into the emulator's settings before the runtime
-// starts and out of them when the launch ends (decision 0017). Progress goes to the app log
+// starts and out of them when the launch ends (decision 0017). An Epic game's ownership token,
+// fetched after Play with its exchange code, goes into its file the same way (decision 0059).
+// Progress goes to the app log
 // (AppLog) as `title:` lines and, for the UI, to a step callback; the outcome's line is the
 // `title: done` result the drivers parse, unchanged. `title: +<s> s` lines time the
 // launch from its start to the game's first frame, in both variants.
@@ -32,6 +34,7 @@
 import Foundation
 import HostIOKit
 import PlayportKit
+import EpicClientKit
 import SteamClientKit
 import WineHost
 
@@ -57,6 +60,15 @@ enum LaunchCoordinator {
         var steamAPI: SteamAPI? = nil
         /// What the title needs of the app's memory limit (MemoryNeed); nil checks nothing.
         var memory: MemoryNeed? = nil
+        /// An Epic game's ownership token file (decision 0059); nil for a game of another store.
+        var epic: Epic? = nil
+    }
+
+    /// An Epic game's launch: its folder, and the ownership token for `-epicovt`
+    /// (fetched after Play), nil for a game that needs none or plays offline.
+    struct Epic {
+        var root: URL
+        var ownershipToken: Secret<String>? = nil
     }
 
     /// What SteamAPISwap needs at a launch. The settings come from the Steam
@@ -164,6 +176,31 @@ enum LaunchCoordinator {
             if n > 0 || (when == "at exit" && s.ticket != nil) { log("ticket: removed from \(n) configs.user.ini \(when)") }
         } catch {
             log("ticket: not removed \(when): \(error)")
+        }
+    }
+
+    /// Writes the Epic game's ownership token file after removing one a crash or a kill
+    /// left behind (decision 0059). A failed write is logged; the game then says it
+    /// could not check its ownership.
+    private static func prepareEpic(_ e: Epic) {
+        removeOwnershipFile(e, when: "before the launch")
+        guard let token = e.ownershipToken else { return }
+        do {
+            try EpicOwnershipFile.write(token, in: e.root)
+            log("epic: the ownership token (\(token.value.utf8.count) bytes) written to \(EpicOwnershipFile.name)")
+        } catch {
+            log("epic: the ownership token not written: \(error)")
+        }
+    }
+
+    /// Takes the ownership token file out of the game's folder: at the game's exit, and
+    /// before a launch for one a crash or a kill left behind. Logged only when there was one.
+    private static func removeOwnershipFile(_ e: Epic, when: String) {
+        do {
+            let n = try EpicOwnershipFile.remove(in: e.root)
+            if n > 0 || (when == "at exit" && e.ownershipToken != nil) { log("epic: ownership token file removed (\(n)) \(when)") }
+        } catch {
+            log("epic: ownership token file not removed \(when): \(error)")
         }
     }
 
@@ -289,6 +326,9 @@ enum LaunchCoordinator {
         if let s = r.steamAPI { prepareSteamAPI(s) }
         // However the launch ends from here, the ticket goes with it (decision 0017).
         defer { if let s = r.steamAPI { removeTicket(s, when: "at exit") } }
+        if let e = r.epic { prepareEpic(e) }
+        // And the ownership token file (decision 0059).
+        defer { if let e = r.epic { removeOwnershipFile(e, when: "at exit") } }
 
         // A Unity title reopens at the window size it saved; ask it for the whole screen (TitleScreen.swift).
         let dir = (withUnsafeBytes(of: tp.unix_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) } as NSString)

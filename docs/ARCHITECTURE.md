@@ -794,9 +794,17 @@ only. Host Steam secrets never enter the guest
   until then it does not start. The side not kept stays in
   `Documents/Cloud Backups/` for 30 days (`Cloud.Backups`). The game's
   encrypted app ticket, fetched after Play before the suspension, is the one
-  host secret a game gets: a `ticket=` line in the emulator's
+  host secret a Steam game gets: a `ticket=` line in the emulator's
   `configs.user.ini` while it runs, removed at exit, the next launch, app start
   and sign-out ([0017](decisions/0017-encrypted-app-ticket.md)).
+- **An Epic game** starts signed in, as Epic's launcher starts it
+  ([0059](decisions/0059-epic-exchange-code.md)): after Play the host fetches a
+  five-minute exchange code and, when the catalogue asks, a five-minute ownership
+  token; the code goes on the command line (`-AUTH_PASSWORD=`, with
+  `-epicusername`, `-epicuserid`, `-epicsandboxid`), the token into
+  `playport-epic.ovt` in the game's folder (`-epicovt`), removed at exit, the next
+  launch, app start and sign-out. Without them the page offers Try again, and Play
+  offline for a game that allows it.
 
 ## Patch series
 
