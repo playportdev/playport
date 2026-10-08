@@ -13,7 +13,7 @@ signed in (Snakebird to its menu) would make a strong video post: none is made y
 
 ---
 
-**Title:** Playport 0.4.0: your GOG and Epic Games libraries now run natively on a non-jailbroken iPhone. Games even sign in to their store
+**Title:** Playport 0.4.0 is out: GOG + Epic games, online sign-in and your own PC games, running natively on iPhone 🎉
 
 **Body:**
 
