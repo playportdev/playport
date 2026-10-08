@@ -28,9 +28,11 @@ worse, think about why (read the code, profile) before running more.
   shared texture) and `patches/wine-unix` 0020 (the D3D12 start fault), both checked on
   the phone. `patches/wine-pe` 0031 only logs a failed run-once keyed wait (none since
   0020); it may be dropped later.
-- The gap is known well enough to work on. At 720/free in play, Vulkan is 2–4 FPS behind
-  DXMT, its p99 frame interval is 16.7 against 8.3 ms, and it does 14–18 % (DXVK) or
-  26–31 % (vkd3d) more work a frame; GPU time is within 3–6 %.
+- The gap is known well enough to work on. On route v2 at 720/free (the controls), all
+  three sit near the 120-Hz ceiling (DXMT 119.5, DXVK 118.5, vkd3d 118.0 FPS), so it shows
+  as p99 (8.3 against 12.5 and 16.7 ms), work a frame (+19 % DXVK, +29 % vkd3d Mi/f),
+  wineserver requests (12.0 against 17.8 and 23.2 a frame) and CPU power (+44 %, +60 %);
+  GPU time is 6 % lower on Vulkan.
 
 **Rules from here:**
 
@@ -57,9 +59,9 @@ worse, think about why (read the code, profile) before running more.
    burst and sustained, native/free), each backend, on the final IPA, plus the gate and
    one route-v2 play per Vulkan route. Not three of each.
 
-**Controls on route v2:** DXMT `vk-v2-dxmt-1` (120 FPS through the window). The DXVK and
-vkd3d controls (`vk-v2-dxvk-1`, `vk-v2-vkd3d-1`) are still to take, once each, at the
-start of the next session; `vk-v2-dxvk-1` failed only for want of JIT (LocalDevVPN down).
+**Controls on route v2** (IPA `0d4a0f1e…`, [controls](../evidence/2026-10-08-vulkan-perf-controls.md)):
+`vk-v2-dxmt-2`, `vk-v2-dxvk-2` and `vk-v2-vkd3d-1`, window t = 85–125 s. A lever's run is
+compared with its route's control (`vk-v2-dxvk-1` lost its HUD figures; do not use it).
 
 **Work queue, in this order** (each item names its evidence and its first move):
 
@@ -541,8 +543,15 @@ without the owner is recorded here with its reason.
 - **2026-10-07 09:00:** wine-unix 0020 (then numbered 0018) works on the phone: 10/10 D3D12 starts, D3D12 3/3 and DXVK
   3/3 plays in King's Pass on route v2, gate passed. Step 2 closed for the known faults.
   Next: route-v2 burst runs (DXMT, DXVK, vkd3d, one each, cooled), then the levers.
-- **Paused 2026-10-07 ~09:50 by the owner.** Route-v2 burst control `vk-v2-dxmt-1` ran
-  (120 FPS through the window); `vk-v2-dxvk-1` failed to get JIT (LocalDevVPN down: a
-  timeout on 10.7.0.1), and `vk-v2-vkd3d-1` was stopped while cooling. Resume with
-  `.work/agent-notes/vulkan-perf/burst.sh` for DXVK and vkd3d once LocalDevVPN is up,
-  then the levers.
+- **Paused 2026-10-07 ~09:50 by the owner;** resumed 2026-10-08 on `vulkan-performance-2`:
+  main `1e08fe3` plus the first branch's commits (dxvk 0001 and air-helpers were already
+  on main), the branch's patches renumbered after main's series (`wine-unix` 0018 → 0020,
+  `wine-pe` 0029 → 0031; main had used 0018 and 0029 for other patches). IPA `0d4a0f1e…`:
+  the gate passed, one D3D12 start reached `first-frame+10`, and the route-v2 controls ran
+  once each (`vk-v2-dxvk-1` lost its HUD to a settings undo, so DXVK ran once more as
+  `vk-v2-dxvk-2`) ([controls](../evidence/2026-10-08-vulkan-perf-controls.md)).
+- **Next:** work-queue item 1, Wine's Vulkan present path: a `patches/wine-unix` change so
+  `win32u_vkQueuePresentKHR` does not query the window (`get_window_parents`,
+  `get_window_rectangles`, `get_windows_offset`, 2 a frame each) when it has not changed;
+  then the gate and one DXVK route-v2 run against `vk-v2-dxvk-2` (srv/f, the wineserver
+  thread's Mi/f, p99). Then items 2–6 as the work queue orders them.
