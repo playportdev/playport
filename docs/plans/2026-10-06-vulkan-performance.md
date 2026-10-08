@@ -165,10 +165,13 @@ lever's run is compared with `vk-v2-dxvk-p99-2` (window 85–115 s, the same pit
    frame doubles when King's Pass starts, not when thermal pressure arrives. A private-storage
    memory type with narrow texture usage (`patches/mesa` 0019 and 0020, behind
    `MESA_KK_EXPERIMENTAL`) left that doubling in place and was not kept
-   ([private memory](../evidence/2026-10-08-vulkan-perf-private-memory.md)). Next move: a
-   King's Pass gameplay capture on DXMT and DXVK (`pp gpu capture`), compared pass by pass for
-   render-pass splits and forced loads and stores. If the passes match, attachments as dedicated
-   private textures outside any heap. Each change gets one warm native/free pair.
+   ([private memory](../evidence/2026-10-08-vulkan-perf-private-memory.md)). King's Pass
+   captures on both backends ([King's Pass capture](../evidence/2026-10-08-vulkan-perf-kings-pass-capture.md))
+   show the same passes, with no extra split or forced load or store (H3 out). They also show
+   that the flagged run left pixel format view on Unity's TYPELESS scene targets (`0x15`;
+   DXMT `0x5`), so compression was never tested. Next move: widen `narrow_usage` to
+   layout-preserving format lists (DXMT 0009's rule), check the usage in a capture, then one
+   warm native/free pair. Each change gets one warm native/free pair.
 8. **FEX on the D3D12 route** (step 7). UnityGfxDeviceWorker's guest and xtajit64 time is
    13.5 % of samples on vkd3d against 7.6 % on DXVK, with 3× the ARM64EC transitions
    (`ios_ec_xlate_loop`, `ExitFunctionEC`), and it drives vkd3d's +45 % CPU mW at 720/60.
@@ -745,11 +748,27 @@ without the owner is recorded here with its reason.
     that, and was not rerun, because the doubling H1(a) predicted would vanish is still there.
   - Decision (unattended): both patches were reverted, file and series line in one commit. The
     phone keeps `55ca5c34…`, which with the flags off runs as HEAD does.
+- **Work-queue item 7, King's Pass captures** (measurement only, IPA `55ca5c34…`,
+  [evidence](../evidence/2026-10-08-vulkan-perf-kings-pass-capture.md)). Captured on DXMT
+  (`vk-kp-dxmt-1`, with GPU time per pass), DXVK (`vk-kp-dxvk-3`) and DXVK with chunk 8's flags
+  (`vk-kp-dxvk-pm-2`).
+  - **Structure.** DXVK's frame has the same game passes, sizes, formats and actions as DXMT's.
+    Its only extra full-res work is the WSI copy plus one depth store (about 45 MB a frame), and
+    its attachment traffic is lower in that spot (504 against 639 MB). H3 is ruled out.
+  - **Usage.** With `narrow_usage,private_memory`, the targets were private, but the TYPELESS
+    scene targets kept pixel format view (`0x15`). DXVK lists the whole typeless family, and the
+    chunk-8 rule accepted only the sRGB twin. The chunk-8 null result therefore did not test
+    compression.
+  - Top cause (inference): uncompressed TYPELESS render targets, as DXMT had before 0009.
+  - Two DXVK captures were lost: one did not reach its frame on a `serious` phone, and one lost its
+    capture switch to the settings undo (PLA-82). One more landed before King's Pass.
 - **Next:**
-  1. Item 7: a King's Pass gameplay capture on DXMT and DXVK (`pp gpu capture`, the same
-     frame), compared pass by pass for render-pass splits and forced loads and stores (H3).
-  2. If the passes match: one patch that gives attachment images dedicated private textures
-     outside any heap (`prefersDedicatedAllocation`, `newTextureWithDescriptor` on the device),
-     DXMT's layout exactly, then one warm native/free pair. A null result there rules out
-     compression.
+  1. Item 7: `patches/mesa`, `narrow_usage` (behind `MESA_KK_EXPERIMENTAL`) with no pixel format
+     view when every listed view format keeps the component layout (DXMT 0009's rule; depth and
+     block formats keep it). Build, gate, then one `pp gpu capture` to confirm `0x5` on the scene
+     targets, then one warm native/free pair, `narrow_usage` alone first and `private_memory` added
+     only if needed.
+  2. If a gap remains: the depth store DXVK keeps in the pass where DXMT's matching pass does not
+     store depth, then `KK_WORKAROUND_7`'s sample-mask epilogue on single-sample pipelines; one
+     pair each.
   3. Item 8 (FEX on the D3D12 route) for vkd3d's CPU power, with warm 720/60 pairs.
