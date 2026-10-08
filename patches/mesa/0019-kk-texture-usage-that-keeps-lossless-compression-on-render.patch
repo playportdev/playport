@@ -1,11 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: The Playport authors <dev@playport.dev>
 Date: Thu, 8 Oct 2026 10:22:21 +0200
-Subject: [PATCH] kk: MESA_KK_EXPERIMENTAL=narrow_usage
-
-Metal texture usage that keeps lossless compression on render targets,
-behind an experimental flag so that one IPA runs the control and the
-change.
+Subject: [PATCH] kk: texture usage that keeps lossless compression on render
+ targets
 
 KosmicKrisp gives every image a transfer can write the shader write
 usage, and every mutable-format image the pixel format view usage.
@@ -14,9 +11,10 @@ texture with either usage losslessly. DXVK makes every TYPELESS texture
 mutable, with the family as its format list (R8G8B8A8_TYPELESS:
 UNORM, SNORM, SRGB, UINT, SINT), and Unity makes its render textures
 TYPELESS, so Hollow Knight's full-resolution scene targets were 0x17
-(0x15 with chunk 8's sRGB-only rule) where DXMT's are 0x5.
+where DXMT's are 0x5, and its native King's Pass GPU time doubled as
+DXMT's did before patches/dxmt 0009.
 
-With the flag:
+Now:
 - shader write only for storage images: transfers into an image are
   Metal copies or render passes (clears, blits, resolves);
 - no pixel format view when every format in the image's format list
@@ -35,11 +33,10 @@ With the flag:
   image, depth/stencil and every non-plain format (block compressed,
   packed shared-exponent, planar). Z32_FLOAT_S8X24 keeps it as before.
 
-A view that changes the format of a texture made without the usage,
-other than to its sRGB or linear twin, is logged as [kk-pfv-view], the
-first 32 such views, as DXMT logs [pfv-view].
-
-Without the flag nothing changes.
+MESA_KK_DEBUG=wide_usage restores both usages as upstream sets them.
+A view that changes the format of a texture made without pixel format
+view, other than to its sRGB or linear twin, is logged as
+[kk-pfv-view], the first 32 such views, as DXMT logs [pfv-view].
 
 Class: ios-port
 Evidence: docs/evidence/2026-10-08-vulkan-perf-typeless-usage.md
@@ -54,34 +51,34 @@ Offered-upstream: no
  6 files changed, 106 insertions(+), 5 deletions(-)
 
 diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
-index 4bc4232..daf3241 100644
+index 4bc4232..4e76727 100644
 --- a/src/kosmickrisp/vulkan/kk_debug.c
 +++ b/src/kosmickrisp/vulkan/kk_debug.c
-@@ -24,6 +24,7 @@ const struct debug_named_value experimental_flags[] = {
-    {"custom_border", KK_EXPERIMENTAL_CUSTOM_BORDER},
-    {"image_view_min_lod", KK_EXPERIMENTAL_IMAGE_VIEW_MIN_LOD},
-    {"m5_optimize_e5b9g9r9", KK_EXPERIMENTAL_M5_OPTIMIZE_E5B9G9R9},
-+   {"narrow_usage", KK_EXPERIMENTAL_NARROW_USAGE},
+@@ -12,6 +12,7 @@ const struct debug_named_value debug_flags[] = {
+    {"msl", KK_DEBUG_MSL},
+    {"force_robustness", KK_DEBUG_FORCE_ROBUSTNESS},
+    {"compile", KK_DEBUG_COMPILE},
++   {"wide_usage", KK_DEBUG_WIDE_USAGE},
     {NULL, 0},
  };
  
 diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
-index 668a77d..b5c062a 100644
+index 668a77d..d812284 100644
 --- a/src/kosmickrisp/vulkan/kk_debug.h
 +++ b/src/kosmickrisp/vulkan/kk_debug.h
-@@ -28,6 +28,10 @@ enum kk_experimental {
-    /* Using allowGPUOptimizedContents on M5 for this format causes
-     * vkCmdCopyImage() tests in CTS to fail, but it is otherwise usable */
-    KK_EXPERIMENTAL_M5_OPTIMIZE_E5B9G9R9 = 1ull << 2,
-+   /* Shader write usage only for storage images, and no pixel format view
-+    * usage for an image whose views all keep its component layout: either
-+    * usage turns off Metal's lossless compression */
-+   KK_EXPERIMENTAL_NARROW_USAGE = 1ull << 3,
+@@ -14,6 +14,10 @@ enum kk_debug {
+    KK_DEBUG_FORCE_ROBUSTNESS = 1ull << 2,
+    /* Count translated and cached shaders; log Metal builds over 20 ms */
+    KK_DEBUG_COMPILE = 1ull << 3,
++   /* Shader write usage for every image a transfer can write and pixel format
++    * view usage for every mutable-format image, as upstream sets them: both
++    * turn off Metal's lossless compression */
++   KK_DEBUG_WIDE_USAGE = 1ull << 4,
  };
  
- extern enum kk_experimental kk_mesa_experimental_flags;
+ extern enum kk_debug kk_mesa_debug_flags;
 diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
-index de27a6d..b3e1a62 100644
+index de27a6d..ccd4349 100644
 --- a/src/kosmickrisp/vulkan/kk_image.c
 +++ b/src/kosmickrisp/vulkan/kk_image.c
 @@ -7,6 +7,7 @@
@@ -141,7 +138,7 @@ index de27a6d..b3e1a62 100644
 +static bool
 +kk_image_views_keep_layout(const VkImageCreateInfo *pCreateInfo)
 +{
-+   if (!KK_EXPERIMENTAL(NARROW_USAGE))
++   if (KK_DEBUG(WIDE_USAGE))
 +      return false;
 +
 +   if (pCreateInfo->flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT)
@@ -175,7 +172,7 @@ index de27a6d..b3e1a62 100644
     }
  
 diff --git a/src/kosmickrisp/vulkan/kk_image_layout.c b/src/kosmickrisp/vulkan/kk_image_layout.c
-index f91bfa8..1789df8 100644
+index f91bfa8..4162bd3 100644
 --- a/src/kosmickrisp/vulkan/kk_image_layout.c
 +++ b/src/kosmickrisp/vulkan/kk_image_layout.c
 @@ -42,12 +42,16 @@ vk_image_to_mtl_texture_type(const struct vk_image *image)
@@ -192,7 +189,7 @@ index f91bfa8..1789df8 100644
 +   /* Transfers into an image are Metal copies or render passes (clears,
 +    * blits, resolves), so only storage images need shader write. */
 +   VkImageUsageFlags shader_write = VK_IMAGE_USAGE_STORAGE_BIT;
-+   if (!KK_EXPERIMENTAL(NARROW_USAGE))
++   if (KK_DEBUG(WIDE_USAGE))
 +      shader_write |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (usage_flags & shader_write)
        usage |= MTL_TEXTURE_USAGE_SHADER_WRITE;
@@ -241,7 +238,7 @@ index 0e2a054..f964fdb 100644
  
  #endif /* KK_IMAGE_LAYOUT_H */
 diff --git a/src/kosmickrisp/vulkan/kk_image_view.c b/src/kosmickrisp/vulkan/kk_image_view.c
-index 90eb6f6..19c8d81 100644
+index 90eb6f6..52e04fb 100644
 --- a/src/kosmickrisp/vulkan/kk_image_view.c
 +++ b/src/kosmickrisp/vulkan/kk_image_view.c
 @@ -16,8 +16,11 @@
@@ -261,8 +258,8 @@ index 90eb6f6..19c8d81 100644
        }
  
 +      /* A view that changes the format of a texture made without pixel format
-+       * view usage (MESA_KK_EXPERIMENTAL=narrow_usage), other than to its
-+       * sRGB or linear twin, is reported, the first 32 such views, so a view
++       * view usage (kk_image_views_keep_layout), other than to its sRGB or
++       * linear twin, is reported, the first 32 such views, so a view
 +       * Metal might not take shows in the log. */
 +      if (!(plane->layout.usage & MTL_TEXTURE_USAGE_PIXEL_FORMAT_VIEW) &&
 +          util_format_linear(p_format) !=
