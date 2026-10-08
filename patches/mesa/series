@@ -19,3 +19,4 @@
 0017-kk-MESA_KK_GPU_CAPTURE_FRAME-N-captures-one-frame.patch
 0018-kk-no-present-wait-on-iOS.patch
 0019-kk-texture-usage-that-keeps-lossless-compression-on-render.patch
+0020-kk-lower-the-static-sample-mask-only-when-it-clears-.patch

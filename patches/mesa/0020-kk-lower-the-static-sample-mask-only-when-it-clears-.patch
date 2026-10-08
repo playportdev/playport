@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 8 Oct 2026 13:16:16 +0200
+Subject: [PATCH] kk: lower the static sample mask only when it clears a
+ rasterized sample
+
+KosmicKrisp lowered every static sample mask that is not all ones into
+the fragment shader: a [[sample_mask]] write of the mask and, for
+KK_WORKAROUND_7 (Metal ignoring the sample mask output for a
+multisample stencil attachment), a discard of the fragments it clears.
+DXVK masks the D3D11 sample mask to the rasterized samples
+(dxvk_graphics.cpp: sampleMask & ((1 << rasterizationSamples) - 1)), so
+every one-sample DXVK pipeline has the mask 0x1, and 28 of the 30
+fragment shaders of a Hollow Knight King's Pass frame carried both.
+vkd3d-proton passes D3D12's 0xFFFFFFFF and its shaders carry neither.
+
+Bits above the rasterization samples cover no sample, so a mask that
+keeps every rasterized sample is a no-op: the write leaves the coverage
+as it is and the discard never fires, but a shader that can discard may
+lose early depth testing and hidden-surface removal. Now the mask is
+lowered only when (sample_mask & BITFIELD_MASK(rasterization_samples))
+leaves a rasterized sample out. Sample mask and rasterization samples
+are static pipeline state on KosmicKrisp (no extended dynamic state 3
+for either), and the fragment shader key already carries both.
+
+MESA_KK_DEBUG=any_sample_mask lowers every mask that is not all ones,
+as upstream does; the flag joins the pipeline cache UUID with
+force_robustness.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-08-vulkan-perf-sample-mask.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c           |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h           |  3 +++
+ src/kosmickrisp/vulkan/kk_physical_device.c |  7 ++++---
+ src/kosmickrisp/vulkan/kk_shader.c          | 19 ++++++++++++++++++-
+ 4 files changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 4e76727..197c99d 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -13,6 +13,7 @@ const struct debug_named_value debug_flags[] = {
+    {"force_robustness", KK_DEBUG_FORCE_ROBUSTNESS},
+    {"compile", KK_DEBUG_COMPILE},
+    {"wide_usage", KK_DEBUG_WIDE_USAGE},
++   {"any_sample_mask", KK_DEBUG_ANY_SAMPLE_MASK},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index d812284..75d28da 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -18,6 +18,9 @@ enum kk_debug {
+     * view usage for every mutable-format image, as upstream sets them: both
+     * turn off Metal's lossless compression */
+    KK_DEBUG_WIDE_USAGE = 1ull << 4,
++   /* Lower every static sample mask that is not all ones into the fragment
++    * shader, as upstream does, also one that covers every rasterized sample */
++   KK_DEBUG_ANY_SAMPLE_MASK = 1ull << 5,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index a3f1cb8..82c2f7d 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -999,8 +999,8 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+    _mesa_blake3_update(&blake3_ctx, instance->driver_build_sha,
+                        sizeof(instance->driver_build_sha));
+ 
+-   /* The MSL also depends on the GPU, the language version, the workarounds
+-    * and forced robustness. */
++   /* The MSL also depends on the GPU, the language version, the workarounds,
++    * forced robustness and the sample mask lowering. */
+    _mesa_blake3_update(&blake3_ctx, &pdev->info.gpu_apple_family,
+                        sizeof(pdev->info.gpu_apple_family));
+    _mesa_blake3_update(&blake3_ctx, &pdev->info.msl_version,
+@@ -1008,7 +1008,8 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+    _mesa_blake3_update(&blake3_ctx, &pdev->settings.disabled_workarounds,
+                        sizeof(pdev->settings.disabled_workarounds));
+    const uint64_t compiler_flags =
+-      kk_mesa_debug_flags & KK_DEBUG_FORCE_ROBUSTNESS;
++      kk_mesa_debug_flags &
++      (KK_DEBUG_FORCE_ROBUSTNESS | KK_DEBUG_ANY_SAMPLE_MASK);
+    _mesa_blake3_update(&blake3_ctx, &compiler_flags, sizeof(compiler_flags));
+ 
+    unsigned char blake3[BLAKE3_KEY_LEN];
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index fb7b82c..ba8a4e6 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -540,6 +540,23 @@ lower_subpass_dim(nir_builder *b, nir_tex_instr *tex, UNUSED void *_data)
+    return true;
+ }
+ 
++/* The static sample mask is lowered into the shader (a [[sample_mask]] write
++ * and KK_WORKAROUND_7's discard) only when it clears a sample the pipeline
++ * rasterizes: bits above the rasterization samples cover nothing, so DXVK's
++ * mask of 0x1 for a one-sample pipeline needs no lowering. A shader that can
++ * discard may lose early depth testing and hidden-surface removal.
++ * MESA_KK_DEBUG=any_sample_mask lowers every mask that is not all ones, as
++ * upstream does. */
++static bool
++kk_sample_mask_clears_a_sample(const struct vk_multisample_state *ms)
++{
++   if (KK_DEBUG(ANY_SAMPLE_MASK))
++      return ms->sample_mask != UINT16_MAX;
++
++   const uint16_t rasterized = BITFIELD_MASK(ms->rasterization_samples);
++   return (ms->sample_mask & rasterized) != rasterized;
++}
++
+ static void
+ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+             const struct vk_graphics_pipeline_state *state)
+@@ -599,7 +616,7 @@ kk_lower_fs(struct kk_device *dev, nir_shader *nir,
+    NIR_PASS(_, nir, msl_nir_fs_io_types);
+ 
+    if (state->ms && state->ms->rasterization_samples &&
+-       state->ms->sample_mask != UINT16_MAX) {
++       kk_sample_mask_clears_a_sample(state->ms)) {
+ 
+       /* KK_WORKAROUND_7 */
+       if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(7))) {
