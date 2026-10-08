@@ -4,7 +4,7 @@
 **Date:** 2026-10-06, revised 2026-10-07. **Kind:** plan, in progress (see [How the work continues](#how-the-work-continues-owner-2026-10-07) and [Progress](#progress)). **Pins read:** as in the
 [KosmicKrisp-default plan](2026-10-06-kosmickrisp-default.md): `mesa` b39d173 (a
 Mesa `main` commit of 2026-10-05; `main` was 54 commits ahead on 2026-10-06, none
-of them in `src/kosmickrisp` or the Metal WSI) + `patches/mesa` (16), `dxvk` e5ffd0f (unmodified), `vkd3d-proton` 31d1f89 +
+of them in `src/kosmickrisp` or the Metal WSI) + `patches/mesa` (16 then; 19 on 2026-10-08), `dxvk` e5ffd0f (+ `patches/dxvk` 0001), `vkd3d-proton` 31d1f89 +
 `patches/vkd3d-proton` (4), `dxmt` 68af85e. **Relation:** this plan is the
 detailed form of that plan's steps 1 and 2. Its step 4 (Vulkan by default) waits
 for this plan's exit criteria. **Owner's answers** (2026-10-06) are under
@@ -20,19 +20,21 @@ The owner (2026-10-07): stop testing over and over. There is enough evidence; de
 fixes for the issues found, retest each once, and if a fix does nothing or makes things
 worse, think about why (read the code, profile) before running more.
 
-**Where it stands** (details in [Progress](#progress) and the evidence records
-[tooling](../evidence/2026-10-06-vulkan-perf-tooling.md) and
-[baseline](../evidence/2026-10-06-vulkan-perf-baseline.md)):
-
-- Step 0 done. Step 2 done for every fault found: `patches/dxvk` 0001 (the video's
-  shared texture) and `patches/wine-unix` 0020 (the D3D12 start fault), both checked on
-  the phone. `patches/wine-pe` 0031 only logs a failed run-once keyed wait (none since
-  0020); it may be dropped later.
-- The gap is known well enough to work on. On route v2 at 720/free (the controls), all
-  three sit near the 120-Hz ceiling (DXMT 119.5, DXVK 118.5, vkd3d 118.0 FPS), so it shows
-  as p99 (8.3 against 12.5 and 16.7 ms), work a frame (+19 % DXVK, +29 % vkd3d Mi/f),
-  wineserver requests (12.0 against 17.8 and 23.2 a frame) and CPU power (+44 %, +60 %);
-  GPU time is 6 % lower on Vulkan.
+**Where it stands (2026-10-08, end of session; paused by the owner):** branch
+`vulkan-performance-2`, HEAD after `178fb67`, not merged and not pushed. The phone runs
+dev IPA `363c1234…` (HEAD's runtime). Kept on the branch, each checked on the phone:
+`patches/wine-unix` 0020 (the D3D12 start fault) and 0021 (present-path window queries),
+decision 0066 (DXVK tiler mode off), `patches/mesa` 0018 (no present wait on iOS: p99 at
+DXMT's) and 0019 (texture usage that keeps lossless compression: native King's Pass held 60
+FPS where it fell to 37–53), and the PLA-93 freeze deferral (`patches/madeira-unix` 0097,
+diagnostics 0098 and `wine-unix` 0022). Tried and not kept: `one_time_submit`, the drawable
+at present, the first usage rule, vkd3d-proton 0005 (decision 0067), private-storage memory,
+the sample-mask lowering. The exit criteria are not met yet; the session handoff with the
+numbers and the next chunks is the last entry of [Progress](#progress) (**Next**). The
+earlier picture (720/free controls, step 0, step 2) is in the evidence records
+[tooling](../evidence/2026-10-06-vulkan-perf-tooling.md),
+[baseline](../evidence/2026-10-06-vulkan-perf-baseline.md) and
+[controls](../evidence/2026-10-08-vulkan-perf-controls.md).
 
 **Rules from here:**
 
@@ -821,17 +823,46 @@ without the owner is recorded here with its reason.
     and the new deferral never fired (`in_fex=0`).
   - Residual: FEX's write holds outside a syscall callback (`HandleRWXAccessViolation`) have
     no TEB stamp and are not covered.
-- **Next** (from the [standing](../evidence/2026-10-08-vulkan-perf-standing.md) and the
-  [sample mask](../evidence/2026-10-08-vulkan-perf-sample-mask.md) record, IPA `e6bd82a4…`):
-  - **Where it stands.** Not at exit; each route meets 2 of 9 criteria rows. At native/free DXVK's
-    GPU ms is +29 % over DXMT's and vkd3d's +4 %; sys mJ/f is +17 % and +12 %. The sample-mask
-    lowering is not DXVK's share. At native/60 phone mW is +7.7 % and +6.4 %. vkd3d's
-    UnityGfxDeviceWorker does +9 Mi/f. The freeze after about `first-frame+37` (no frames, 42
-    threads parked) came on D3D12 and now on DXVK: PLA-93, before the exit runs.
-  1. `private_memory` (chunk 8's 0020, from `c8c6016`) on top of 0019, with one warm native/free
-     vkd3d pair, for the residual both routes share.
-  2. DXVK's own GPU time: the depth store in pass 20 of the King's Pass capture (17.2 MB a frame,
-     DXMT stores none), from DXVK's render-pass store ops; or first a per-pass GPU time on
-     KosmicKrisp to find where DXVK's extra 2.5 ms go.
-  3. Item 8 (FEX on the D3D12 route) for UnityGfxDeviceWorker's +9 Mi/f, with warm 720/60 pairs.
-  4. Then the cooled exit runs.
+- **Next: session handoff (2026-10-08, paused by the owner)** (from the
+  [standing](../evidence/2026-10-08-vulkan-perf-standing.md),
+  [sample mask](../evidence/2026-10-08-vulkan-perf-sample-mask.md) and
+  [suspend in FEX](../evidence/2026-10-08-pla93-suspend-in-fex.md) records):
+  - **State.** Branch `vulkan-performance-2`, not merged or pushed; phone on IPA `363c1234…`
+    (HEAD's runtime). `pp build` keeps three outputs (PLA-92): rebuild a control's commit if its
+    IPA was pruned.
+  - **Where it stands** (warm standing on `4e6e930d…`, before the PLA-93 patches, which change
+    no rendering). Not at exit; each route meets 2 of 9 criteria rows. At native/free DXVK's GPU
+    ms is +29 % over DXMT's and vkd3d's +4 %; sys mJ/f +17 % and +12 %. At native/60 phone mW is
+    +7.7 % and +6.4 %, Mi/f +11 % and +22 % (vkd3d's UnityGfxDeviceWorker +9 Mi/f). Not DXVK's
+    GPU share: the sample-mask lowering, private storage, render-pass splits.
+  - **Stability (PLA-93).** The freeze at about `first-frame+37` (Mono GC suspend held a thread
+    inside FEX's CodeInvalidationMutex) hit both routes, 2 in about 20 plays. 0097 defers that
+    hold; 10 plays since had no freeze, but the deferral never fired (`in_fex=0`), so the fix is
+    not proven. If it freezes again, `[wpm-owner]` and the `susp=` sampler lines name the
+    owner's state. Not covered: FEX's write holds outside a syscall callback
+    (`HandleRWXAccessViolation`, the Mono back-patcher), which need a FEX TEB stamp (Linear
+    follow-up of PLA-93).
+  - **Lessons for the protocol.** Warm pairs often end with one run under a much tighter
+    thermal budget than the other (pressure 20, a 404–667 mW client-11 budget), in either
+    order, which swings FPS and sys mJ/f. GPU ms has been the column that holds; read the 5-s
+    buckets and the budget columns before any other. Use a Graphics-options switch so a pair
+    runs on one IPA (no reinstall between the runs). PLA-82 (a settings undo that turns the HUD
+    or a GPU capture off) voided four runs; check each log for `Metal HUD off`.
+  - **Next chunks, one change each:**
+    1. `private_memory` (chunk 8's `patches/mesa` 0020, kept in
+       `$PLAYPORT_BUILD/agent-notes/vulkan-perf/chunk8-patches/` and commit `c8c6016`) on top of
+       0019, behind its flag, with one warm native/free vkd3d pair and one DXVK pair, for the
+       residual both routes share.
+    2. DXVK's own GPU time: first GPU time per pass on KosmicKrisp (or a capture with
+       `--pass-prof`-style timing) to find where DXVK's extra ~2.5 ms go; candidates are the
+       depth store in pass 20 of the King's Pass capture (17.2 MB a frame; DXMT stores none)
+       and DXVK's render-pass store ops.
+    3. Item 8 (FEX on the D3D12 route) for UnityGfxDeviceWorker's +9 Mi/f, with warm 720/60
+       pairs.
+    4. Proton's logging-off defaults for the release variant only (owner, 2026-10-08:
+       `DXVK_LOG_LEVEL=none`, `VKD3D_DEBUG=none`, `VKD3D_SHADER_DEBUG=none`, `WINEDEBUG=-all`;
+       dev keeps its logs), with a decision record. The research note behind it and other
+       candidates (`dxvk.enableDescriptorUpdateTemplates`, `MESA_KK_EXPERIMENTAL=image_view_min_lod`)
+       is left in the build area (`agent-notes/vulkan-perf/research-kk-defaults.md`).
+    5. Then the cooled exit runs ([Exit criteria](#exit-criteria)), with the gate; stability
+       counts every exit run and gate play.
