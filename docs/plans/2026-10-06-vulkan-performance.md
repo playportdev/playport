@@ -55,9 +55,39 @@ worse, think about why (read the code, profile) before running more.
 4. **Keep** what helps (commit with its run in the evidence record); **revert** what does
    not (say so in the record). A config lever kept goes into
    `GraphicsBackend.runtimeEnvironment` with a decision record if it reverses 0024.
-5. **Exit:** at the end, one run per mode that the exit criteria name (720/60, 720/free
-   burst and sustained, native/free), each backend, on the final IPA, plus the gate and
-   one route-v2 play per Vulkan route. Not three of each.
+5. **Exit:** at the end, one native/free run and one 720/60 run per backend on the final
+   IPA, plus the gate (owner, 2026-10-08; see [Exit criteria](#exit-criteria)). Not three
+   of each.
+
+**Owner's directions (2026-10-08), replacing route v2 at 720/free as the lever mode** (rule 1's
+burst run and the controls below stay as history; no more 720/free burst runs):
+
+- **Power counts as much as FPS.** Every table carries CPU and phone mW and mJ/f. Raw mW is
+  not comparable at different FPS, so read mJ/f there.
+- **The mode follows what the change targets.** Still one run per change, on route v2:
+  - A GPU or throughput change gets a native/free run (`{"screen":"native","frameLimit":0}`),
+    read as FPS, GPU ms and the energy a frame (sys and CPU mJ/f).
+  - A CPU or power change (KosmicKrisp's per-draw cost, vkd3d's worker, FEX) gets a 720/60
+    run (`{"screen":"720","frameLimit":60}`), read as CPU mW, phone mW and Mi/f at equal FPS.
+- **A warm phone, paired runs.** From the next chunk, lever checks run without `--cool` or
+  `--cool-max`, back to back in one locked session (`pp phone lock -- sh -c …`): a control
+  run on the current IPA and settings, then at once the change's run in the same mode, so
+  both share the warm state.
+  - A cooled run is not compared with a warm one.
+  - Each run's thermal state is recorded (`summary.json`: `thermal_start`,
+    `first_pressure_s`, `max_pressure`). A pair whose thermal pressure differs is flagged.
+  - Config levers (Graphics options) can go several to a session: control, lever A,
+    lever B, control.
+  - Exit runs stay cooled.
+- **Cooled references** on IPA `b024e1f7…` ([profile](../evidence/2026-10-08-vulkan-perf-profile.md)):
+  - native/free: `vk-nat-dxmt-1`, `vk-nat-dxvk-1`, `vk-nat-vkd3d-2` (`vk-nat-vkd3d-1` lost
+    its HUD, PLA-82);
+  - 720/60: `vk-60-dxmt-1`, `vk-60-dxvk-1`, `vk-60-vkd3d-1`.
+
+  They are the baseline the exit runs are read against, not a lever's control.
+- `--cpu-prof` runs are taken at native/free; their figures are not compared.
+- **Exit:** power criteria first, one native/free and one 720/60 run per backend, cooled,
+  plus the gate ([Exit criteria](#exit-criteria)).
 
 **Controls on route v2** (IPA `0d4a0f1e…`, [controls](../evidence/2026-10-08-vulkan-perf-controls.md)):
 `vk-v2-dxmt-2`, `vk-v2-dxvk-2` and `vk-v2-vkd3d-1`, window t = 85–125 s. A lever's run is
@@ -121,12 +151,29 @@ lever's run is compared with `vk-v2-dxvk-p99-2` (window 85–115 s, the same pit
    original item: **p99 16.7 ms** (both routes; step 6). Missed 120 Hz frames. Move: after
    1–4, look at the frame-interval trace of one run; then `dxgi.maxFrameLatency` /
    `dxgi.numBackBuffers` (DXMT keeps 3 drawables), one run each.
-6. **dxvk-cs time in Apple's driver** (step 4): AGX/IOGPU/Metal/objc 3.6 % against
-   KosmicKrisp 1.2 % and DXVK 1.1 % of all samples (`vk-prof-dxvk3`). Move: one
-   `--cpu-prof` run after 1–5, then look at what KosmicKrisp asks Metal for per draw,
-   and at item 4's two present-path trims on `dxvk-submit` and the presenting thread.
-
-FEX (step 7) and more of steps 4–6 come only if the gap is still open after these.
+6. **Done (profiled; `patches/mesa` 0019 not kept)** ([profile](../evidence/2026-10-08-vulkan-perf-profile.md)).
+   At native/free both Vulkan routes fall to about half DXMT's FPS once the thermal budget
+   applies, because their GPU time a frame doubles. The phone's energy a frame is 40–100 %
+   above DXMT's, and was already 30 % above at 720/free before 0018. At 720/60, DXVK uses
+   +10 % CPU mW and +8 % phone mW, and vkd3d +45 % and +10 %. In the profiles, KosmicKrisp is
+   0.6–1.0 % of samples, Apple's driver 2.2–3.6 % on the recording thread, and the WSI
+   submit thread 0.4 % (its two trims are dropped). 0019 (Metal texture usage without
+   shader write or pixel format view, so render targets could be compressed) left native/free
+   unchanged and was reverted. The original item: **dxvk-cs time in Apple's driver** (step 4),
+   one `--cpu-prof` run, KosmicKrisp's per-draw Metal calls, item 4's two present-path trims.
+7. **GPU energy a frame at native** (step 5; the largest gap). Move: a King's Pass gameplay
+   capture on DXMT and DXVK (`pp gpu capture`), compared pass by pass. Look at storage modes
+   (KosmicKrisp places every texture in a shared-storage placement heap), load and store
+   actions, and the WSI's extra full-screen copy at 2736×1260. Then each change gets one warm
+   native/free pair.
+8. **FEX on the D3D12 route** (step 7). UnityGfxDeviceWorker's guest and xtajit64 time is
+   13.5 % of samples on vkd3d against 7.6 % on DXVK, with 3× the ARM64EC transitions
+   (`ios_ec_xlate_loop`, `ExitFunctionEC`), and it drives vkd3d's +45 % CPU mW at 720/60.
+   Move: the hot guest blocks (`UnityPlayer.dll+941800`, `+958300`, `+494800`, `+916700`) and
+   the transitions per frame; each change gets a warm 720/60 pair.
+9. **Apple's driver on the recording thread** (step 4.4): dxvk-cs 2.2 %, vkd3d worker 3.6 %,
+   against KosmicKrisp's 0.6–1.0 %. It needs symbolised AGX frames, or a count of the Metal
+   calls per draw, before any change.
 
 ## Goal
 
@@ -451,17 +498,20 @@ step 1 (go or no-go), and in a decision record if the defaults changed.
 
 ## Exit criteria
 
-These are the thresholds the owner accepted. Each holds for **both** Vulkan routes
-(D3D11 on DXVK and D3D12 on vkd3d-proton) against DXMT D3D11, as the median of 3
-runs on one IPA:
+*Rewritten on 2026-10-08 by the owner's direction (How the work continues): power first,
+two modes, one run each.* Each holds for **both** Vulkan routes (D3D11 on DXVK and D3D12
+on vkd3d-proton) against DXMT D3D11, on route v2, one run per backend on the final IPA:
 
 | Mode | Must hold |
 |---|---|
-| 720/60 | FPS ≥ DXMT − 0.5; all-thread Mi/f and CPU mW ≤ DXMT + 5 %; GPU ms ≤ + 5 %; ≥50 ms hitches within DXMT's spread |
-| 720/free, burst | FPS ≥ DXMT − 1; p99 interval ≤ DXMT's; Mi/f ≤ + 5 %; GPU ms ≤ + 5 % |
-| 720/free, sustained (t = 300–600 s) | FPS ≥ DXMT; phone mW per frame ≤ + 5 %; ≥50 ms hitches within DXMT's spread |
-| native/free, burst | FPS ≥ DXMT; GPU ms ≤ DXMT |
-| stability | 10/10 starts and plays to `first-frame+60` through Start Game; one 10-minute human play with no freeze or crash |
+| 720/60 (the players' default) | CPU mW and phone mW ≤ DXMT + 5 %; FPS ≥ DXMT − 0.5; all-thread Mi/f ≤ DXMT + 5 %; ≥ 50 ms hitches not above DXMT's |
+| native/free | FPS ≥ DXMT; GPU ms ≤ DXMT; phone mJ/f ≤ DXMT + 5 % |
+| gate | Hollow Knight on Vulkan and on DXMT, and Portal 2, each to `first-frame+10` |
+| stability | every exit run and gate play ends in play, with no freeze or crash |
+
+The exit runs are therefore: one native/free run and one 720/60 run per backend on the
+final IPA, plus the gate. The earlier thresholds (720/free burst and sustained, median of
+3 runs, 10/10 stability plays) are retired.
 
 ## Risks
 
@@ -645,13 +695,31 @@ without the owner is recorded here with its reason.
   not repeated. Open: GPU ms rose 5.8 → 6.55 on both routes (DXMT 6.1–6.2) with the same
   work and no more power a frame. It is either a lower GPU clock or Metal counting the
   blit's drawable wait, and the exit criterion (≤ DXMT + 5 %) now reads +7 %.
-- **Next:** item 6, one `--cpu-prof` run per Vulkan route on `b024e1f7…`, a D3D12 one
-  included. It should look at the following:
-  - `dxvk-cs`'s time in Apple's driver (AGX/IOGPU/Metal/objc) against KosmicKrisp's own;
-  - what KosmicKrisp asks Metal for per draw;
-  - item 4's two present-path trims;
-  - on vkd3d, where UnityGfxDeviceWorker's 17–20 Mi/f goes (DXMT 9.4).
+- **Work-queue item 6, done; `patches/mesa` 0019 not kept**
+  ([profile](../evidence/2026-10-08-vulkan-perf-profile.md)). The owner set three directions
+  mid-chunk: native/free and 720/60 as the modes, power in every table, warm paired runs
+  (How the work continues). Decisions (unattended):
+  - `vk-nat-vkd3d-1` was void (`Metal HUD off`, PLA-82) and was rerun once.
+  - The `--cpu-prof` runs moved to native/free, per the owner.
+  - The change taken was the GPU-side lead (Metal texture usage `0x17` against DXMT's `0x5`),
+    not a CPU trim. The profile ranked no CPU change: KosmicKrisp 0.6–1.0 % and the WSI
+    submit thread 0.4 % of samples.
+  - 0019 was judged by one native/free DXVK run (`vk-nat-dxvk-0019-1`, IPA `f9a12132…`). The
+    gate passed. FPS rose 57.7 → 59.2 and GPU ms fell 13.40 → 13.26 in the window, both within
+    noise, so it was reverted (file and series line together).
+  - The phone was put back on `b024e1f7…`.
 
-  DXVK's remaining gap to DXMT is 5.3 Mi/f a frame (57.1 against 51.8) and about 190 mW
-  of CPU. Before the exit runs, the native/free run should show whether the higher GPU ms
-  costs frames where the GPU is the limit.
+  The answer to item 5's GPU-time question: 0018 does not cost frames. The Vulkan routes'
+  energy a frame was already 30 % above DXMT's before it. At native, once the thermal budget
+  applies, their GPU time doubles and FPS halves (DXVK 57.7, vkd3d 56.4, DXMT 108.9).
+- **Exit readiness: not ready.** Against the rewritten [exit criteria](#exit-criteria):
+  - native/free: FPS 57.7 / 56.4 against 108.9 and GPU ms 13.4 / 10.2 against 7.5 fail;
+    sys mJ/f 90 / 125 against 61 fails.
+  - 720/60: CPU mW +10 % (DXVK) and +45 % (vkd3d) fail; phone mW +8 % and +10 % fail.
+  - FPS and hitches hold.
+
+  The exit runs should not start.
+- **Next:** work-queue item 7 (GPU energy a frame at native): a King's Pass gameplay
+  capture on DXMT and DXVK compared pass by pass, then one warm native/free pair per change.
+  Item 8 (FEX on the D3D12 route, plan step 7) is next for vkd3d's CPU power, with warm
+  720/60 pairs.
