@@ -17,15 +17,14 @@
 
 </div>
 
-Playport runs Windows games, 64-bit and now 32-bit, on a stock, non-jailbroken
-iPhone. Install a game from your library onto the phone, pick up a controller
-and press Play. The game runs on the phone's own CPU and GPU: no PC, no cloud,
-no stream.
+Playport runs Windows games, 64-bit and 32-bit, on a stock, non-jailbroken
+iPhone. Install a game from Steam, GOG or Epic Games, or bring your own, pick up
+a controller and press Play. The game runs on the phone's own CPU and GPU: no
+PC, no cloud, no stream.
 
-> **New in 0.3: 32-bit games.** 32-bit Windows games now run alongside 64-bit
-> ones, with Direct3D 9 drawn on the iPhone's GPU through DXVK and KosmicKrisp.
-> Portal 2 is the first: about 60 fps at 720p, with both portals, sound, a
-> controller, saves and Steam Cloud. See the [release notes](docs/releases/0.3.0.md).
+> **New in 0.4: GOG, Epic Games and your own games.** Sign in to GOG or Epic
+> Games beside Steam, or add a DRM-free game from Files, and games now sign in to
+> their store as they would on a PC. See the [release notes](docs/releases/0.4.0.md).
 
 <p align="center">
   <a href="https://playport.dev/#video-portal2"><img src="site/screenshots/portal2.webp" width="100%" alt="Portal 2 running on an iPhone in Playport: an orange and a blue portal in a test chamber, with Metal's HUD showing 59.98 fps at 1564 by 720. Click to watch the recording on playport.dev"></a>
@@ -43,7 +42,7 @@ no stream.
   </tr>
   <tr>
     <td align="center"><b>Library</b>: everything you own, installed or not</td>
-    <td align="center"><b>Downloads</b>: straight from Steam onto the phone</td>
+    <td align="center"><b>Downloads</b>: straight from your store onto the phone</td>
   </tr>
 </table>
 
@@ -70,6 +69,38 @@ no stream.
 
 <p align="center"><sub>On an A19 Pro iPhone, iOS 27.0, with Metal's performance HUD.</sub></p>
 
+## Features
+
+- **Steam, GOG and Epic Games.** Sign in to any of them in Settings › Accounts;
+  your Windows games from each show up in one Library with the store's artwork.
+  Install, Update, Verify and Repair go through one Downloads queue onto the
+  phone. Steam brings cloud saves and achievements. *New in 0.4: GOG and Epic.*
+- **Add a game from Files.** A DRM-free game's folder or `.zip` joins the
+  Library under Local. Installers are not run. *New in 0.4.*
+- **Games sign in to their store.** A game gets what its store's launcher would
+  give it: Epic's sign-in, Steam's app and session tickets, GOG Galaxy's sign-in.
+  A sign-in page a game opens shows in a panel over the play. *New in 0.4.*
+- **32-bit and 64-bit games.** Each 32-bit game gets its own 4 GB window above the
+  memory iOS keeps for itself; Portal 2 plays at about 60 fps at 720p.
+- **Native on the phone.** Wine, the FEX x86 translator and DXMT run inside one
+  iOS app; Direct3D 10 and 11 render to Metal through DXMT.
+- **Vulkan through KosmicKrisp** (experimental): Direct3D 9 through DXVK and
+  Direct3D 12 through vkd3d-proton, chosen per game automatically.
+- **Made for a controller.** A landscape, gamepad-first app with an in-game menu
+  to pause, resume or quit; controllers reach the game as XInput.
+- **JIT your way.** A built-in JIT helper after a one-time pairing, or JIT from
+  StikDebug or LiveContainer.
+- **Help when a game fails.** A game page's Report a problem shares one zip of
+  its logs, and the [compatibility list](https://playport.dev/compatibility/)
+  shows what runs.
+
+**More than a repackage.** Over 200 of our own [patches](patches/) on Wine,
+FEX, DXMT, KosmicKrisp, vkd3d-proton, DXVK and the Steam API emulator: the
+32-bit runtime, performance work (faster FEX translation for Unity games, x87
+math at native precision, lossless texture compression kept on in DXMT and
+KosmicKrisp, geometry shaders in KosmicKrisp), dozens of bug fixes, and the
+diagnostics behind them. Each one is a reviewable patch with the evidence for it.
+
 ## Install
 
 Playport is not on the App Store: you sideload the `.ipa` yourself, with your
@@ -84,7 +115,7 @@ own Apple ID (a free one works).
 3. Turn on Developer Mode (Settings › Privacy & Security), and install
    LocalDevVPN from the App Store for JIT.
 4. Open Playport and follow its first-run checklist: pairing, LocalDevVPN,
-   Memory and Steam. Memory has a green tick when the signature kept Increased
+   Memory and Accounts. Memory has a green tick when the signature kept Increased
    Memory Limit.
 
 Already enable JIT with StikDebug, or run apps in LiveContainer? Settings ›
@@ -114,8 +145,8 @@ pairing included, then needs no computer.
 
 ### Your first game
 
-The checklist's Steam step signs in to your account (GOG and Epic Games are in
-Settings › Accounts, and **Add a game** takes a DRM-free game's folder or `.zip`
+The checklist's Accounts step signs in to Steam, GOG or Epic Games (more
+accounts are in Settings › Accounts, and **Add a game** takes a DRM-free game's folder or `.zip`
 from Files). Pick a game in the library, **Install** it (it downloads to the
 phone), then **Play**. Connect a
 controller before you press Play, and keep Playport in front while the game
@@ -164,15 +195,6 @@ so Playport's App ID gets it once with GetMoreRam:
 The capability stays on the App ID, so SideStore's weekly refresh keeps it. If
 the tick ever goes away, repeat steps 3 and 4. GetMoreRam takes one of a free
 Apple ID's three app slots; delete it afterwards to free the slot.
-
-## Our patches
-
-Playport carries over 170 of its own [patches](patches/) on Wine, FEX, DXMT,
-KosmicKrisp, vkd3d-proton and the Steam API emulator: the 32-bit runtime,
-performance work (faster FEX translation for Unity games, x87 math at native
-precision, lossless texture compression kept on in DXMT, geometry shaders in
-KosmicKrisp), dozens of bug fixes, and the diagnostics behind them. Each one is
-a reviewable patch with the evidence for it.
 
 ## Game compatibility
 

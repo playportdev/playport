@@ -230,10 +230,10 @@
 <header class="hero" id="top">
   <div class="wrap">
     <div>
-      <a class="eyebrow" href="#video-portal2"><span class="dot"></span>New in 0.3: 32-bit games, Portal 2 at 60 fps</a>
+      <a class="eyebrow" href="#features"><span class="dot"></span>New in 0.4: GOG, Epic Games and your own games</a>
       <h1>PC games on your <em>iPhone.</em></h1>
-      <p class="lead">Playport runs Windows games, 64-bit and now 32-bit, on a stock, non-jailbroken iPhone.
-        Install a game from your library, pick up a controller and press Play.
+      <p class="lead">Playport runs Windows games, 64-bit and 32-bit, on a stock, non-jailbroken iPhone.
+        Install a game from Steam, GOG or Epic Games, or bring your own, pick up a controller and press Play.
         <strong>It runs on the phone's own CPU and GPU: no PC, no cloud, no stream.</strong></p>
       <div class="ctas">
         <a class="btn btn-primary" href="https://github.com/playportdev/playport/releases">
@@ -267,11 +267,11 @@
     <div class="shots shots-3">
       <figure class="shot">
         <a href="screenshots/library-0.2.webp"><img src="screenshots/library-0.2.webp" width="2000" height="921" loading="lazy" alt="Playport's Library page: All, Installed and Steam filters over a grid of installed and not-installed Steam games"></a>
-        <figcaption><strong>Library</strong>Everything you own on Steam, installed or not.</figcaption>
+        <figcaption><strong>Library</strong>Everything you own on Steam, GOG and Epic Games, installed or not.</figcaption>
       </figure>
       <figure class="shot">
         <a href="screenshots/downloads.webp"><img src="screenshots/downloads.webp" width="2000" height="921" loading="lazy" alt="Playport's Downloads page: a game downloading at 23.6 MB/s, free storage, and the games finished today"></a>
-        <figcaption><strong>Downloads</strong>Install straight from Steam onto the phone.</figcaption>
+        <figcaption><strong>Downloads</strong>Install straight from your store onto the phone.</figcaption>
       </figure>
       <figure class="shot">
         <a href="screenshots/game-page.webp"><img src="screenshots/game-page.webp" width="2000" height="921" loading="lazy" alt="Hollow Knight's game page in Playport: Play, achievements, options, play time and cloud saves"></a>
@@ -286,7 +286,7 @@
     <ul class="stats">
       <li><b>~10 s</b><span>from Play to the first frame of Hollow Knight</span></li>
       <li><b>60 fps</b><span>in Portal 2, a 32-bit Direct3D 9 game, at 720p</span></li>
-      <li><b>170+</b><span>of our own patches on Wine, FEX, DXMT, KosmicKrisp, vkd3d-proton and more</span></li>
+      <li><b>200+</b><span>of our own patches on Wine, FEX, DXMT, KosmicKrisp, vkd3d-proton and more</span></li>
       <li><b>1</b><span>iOS process for the whole Windows runtime</span></li>
     </ul>
   </div>
@@ -299,9 +299,24 @@
     <p class="sub">A Windows <code>.exe</code> starts on the iPhone as it would on a PC, translated and rendered on the device, with a controller in your hands.</p>
     <div class="grid">
       <div class="card wide">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h3"/></svg></div>
+        <h3>Steam, GOG and Epic Games<span class="tag">NEW IN 0.4</span></h3>
+        <p>Sign in to any of the three in Settings › Accounts and your Windows games from each show up in one Library, with the store's own artwork. Install, Update, Verify and Repair go through one Downloads queue, straight onto the phone. Steam brings cloud saves and achievements.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5m-2.5-2.5h5"/></svg></div>
+        <h3>Add a game from Files<span class="tag">NEW IN 0.4</span></h3>
+        <p>Have a DRM-free PC game? Pick its folder or a <code>.zip</code> in Files and it joins your Library under Local.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M16 7l3 3M18.5 4.5l2 2"/></svg></div>
+        <h3>Games sign in to their store<span class="tag">NEW IN 0.4</span></h3>
+        <p>A game gets what its store's launcher would give it: Epic's sign-in, Steam's tickets, GOG Galaxy's sign-in. A sign-in page a game opens shows in a panel over the play.</p>
+      </div>
+      <div class="card wide">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1.5V4M15 1.5V4M9 20v2.5M15 20v2.5M1.5 9H4M1.5 15H4M20 9h2.5M20 15h2.5"/></svg></div>
-        <h3>32-bit games<span class="tag">NEW IN 0.3</span></h3>
-        <p>iOS keeps the lowest 4 GB of memory to itself, exactly where a 32-bit Windows game has to live. Playport gives each 32-bit game its own 4 GB window higher up and translates every memory access as it runs, so the game never notices. Portal 2 is the first: about 60 fps at 720p, with both portals, sound, a controller, saves and Steam Cloud.</p>
+        <h3>32-bit games</h3>
+        <p>iOS keeps the lowest 4 GB of memory to itself, exactly where a 32-bit Windows game has to live. Playport gives each 32-bit game its own 4 GB window higher up and translates every memory access as it runs, so the game never notices. Portal 2 plays at about 60 fps at 720p, with both portals, sound, a controller, saves and Steam Cloud.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10.5 6.5h3"/><path d="m10.5 11 3.5 2-3.5 2z" fill="currentColor"/></svg></div>
@@ -318,20 +333,15 @@
         <h3>Made for a controller</h3>
         <p>A landscape, gamepad-first interface and an in-game menu to pause, resume or quit. Controllers reach the game as XInput.</p>
       </div>
-      <div class="card">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h3"/></svg></div>
-        <h3>Your library</h3>
-        <p>Sign in to your store, browse what you own and download it straight to the phone. Steam works today; GOG and Epic Games are planned.</p>
-      </div>
       <div class="card wide">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
         <h3>More than a repackage</h3>
-        <p>Over 170 of our own patches on top of our dependencies: the 32-bit runtime, performance and compatibility work (faster FEX translation for Unity games, x87 math at native precision, lossless texture compression kept on in DXMT, geometry shaders and transform feedback in KosmicKrisp, feature level 12_0 in vkd3d-proton), dozens of bug fixes, and the diagnostics behind them. Each one is a <a href="https://github.com/playportdev/playport/tree/main/patches">reviewable patch</a> with the evidence for it.</p>
+        <p>Over 200 of our own patches on top of our dependencies: the 32-bit runtime, performance and compatibility work (faster FEX translation for Unity games, x87 math at native precision, lossless texture compression kept on in DXMT and KosmicKrisp, geometry shaders and transform feedback in KosmicKrisp, feature level 12_0 in vkd3d-proton), dozens of bug fixes, and the diagnostics behind them. Each one is a <a href="https://github.com/playportdev/playport/tree/main/patches">reviewable patch</a> with the evidence for it.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></div>
-        <h3>JIT built in</h3>
-        <p>The app carries its own JIT helper, so every Play works from the phone alone after a one-time pairing.</p>
+        <h3>JIT your way</h3>
+        <p>The app carries its own JIT helper, so every Play works from the phone alone after a one-time pairing. Already use StikDebug or LiveContainer? Playport takes JIT from them too.</p>
       </div>
     </div>
   </div>
@@ -398,7 +408,7 @@
     <ol class="steps">
       <li><h3>Download</h3><p>Get the latest <code>.ipa</code> from the project's <a href="https://github.com/playportdev/playport/releases">Releases</a>.</p></li>
       <li><h3>Sideload</h3><p>Sign it with your own Apple ID using a sideloader that keeps <strong>Increased Memory Limit</strong> (below). Keep app extensions if asked: the JIT helper is one.</p></li>
-      <li><h3>Pair and play</h3><p>Open Playport. Its checklist pairs the JIT helper once, turns on LocalDevVPN, checks Memory and signs you in to Steam.</p></li>
+      <li><h3>Pair and play</h3><p>Open Playport. Its checklist pairs the JIT helper once, turns on LocalDevVPN, checks Memory and signs you in to Steam, GOG or Epic Games.</p></li>
     </ol>
     <div class="steps-cta">
       <a class="btn btn-primary" href="https://github.com/playportdev/playport/releases">
