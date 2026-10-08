@@ -719,7 +719,13 @@ without the owner is recorded here with its reason.
   - FPS and hitches hold.
 
   The exit runs should not start.
-- **Next:** work-queue item 7 (GPU energy a frame at native): a King's Pass gameplay
-  capture on DXMT and DXVK compared pass by pass, then one warm native/free pair per change.
-  Item 8 (FEX on the D3D12 route, plan step 7) is next for vkd3d's CPU power, with warm
-  720/60 pairs.
+- **Next:** vkd3d-proton's submission path is ruled out for vkd3d's CPU power:
+  `patches/vkd3d-proton` 0005 (KosmicKrisp syncs host readback, so no re-recorded barrier
+  command buffer each submission) took effect, but in a warm 720/60 pair CPU stayed at 793
+  against 792 mW and `vkd3d_queue` at 0.82 against 0.83 Mi/f. It was not kept (decision 0067,
+  [evidence](../evidence/2026-10-08-vulkan-perf-vkd3d-kk-driver.md)). Next for vkd3d's CPU
+  power is item 8 (FEX on the D3D12 route, plan step 7): UnityGfxDeviceWorker's guest and
+  `xtajit64` time, with warm 720/60 pairs. Item 7 (GPU energy a frame at native) remains: a
+  King's Pass gameplay capture on DXMT and DXVK compared pass by pass, then one warm
+  native/free pair per change. A control IPA for a warm pair must still be in the build
+  area: `pp build` keeps three outputs, so rebuild the control's commit if it was pruned.

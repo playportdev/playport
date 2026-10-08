@@ -4,4 +4,3 @@
 0002-vkd3d-shader-model-6.6-on-KosmicKrisp.patch
 0003-vkd3d-place-a-resource-where-its-Vulkan-memory-allow.patch
 0004-vkd3d-log-a-failed-committed-or-placed-resource-crea.patch
-0005-vkd3d-no-submission-barrier-command-buffer-on-Kosmic.patch
