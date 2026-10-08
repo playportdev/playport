@@ -161,11 +161,14 @@ lever's run is compared with `vk-v2-dxvk-p99-2` (window 85–115 s, the same pit
    shader write or pixel format view, so render targets could be compressed) left native/free
    unchanged and was reverted. The original item: **dxvk-cs time in Apple's driver** (step 4),
    one `--cpu-prof` run, KosmicKrisp's per-draw Metal calls, item 4's two present-path trims.
-7. **GPU energy a frame at native** (step 5; the largest gap). Move: a King's Pass gameplay
-   capture on DXMT and DXVK (`pp gpu capture`), compared pass by pass. Look at storage modes
-   (KosmicKrisp places every texture in a shared-storage placement heap), load and store
-   actions, and the WSI's extra full-screen copy at 2736×1260. Then each change gets one warm
-   native/free pair.
+7. **GPU energy a frame at native** (step 5; the largest gap). In progress. The GPU time a
+   frame doubles when King's Pass starts, not when thermal pressure arrives. A private-storage
+   memory type with narrow texture usage (`patches/mesa` 0019 and 0020, behind
+   `MESA_KK_EXPERIMENTAL`) left that doubling in place and was not kept
+   ([private memory](../evidence/2026-10-08-vulkan-perf-private-memory.md)). Next move: a
+   King's Pass gameplay capture on DXMT and DXVK (`pp gpu capture`), compared pass by pass for
+   render-pass splits and forced loads and stores. If the passes match, attachments as dedicated
+   private textures outside any heap. Each change gets one warm native/free pair.
 8. **FEX on the D3D12 route** (step 7). UnityGfxDeviceWorker's guest and xtajit64 time is
    13.5 % of samples on vkd3d against 7.6 % on DXVK, with 3× the ARM64EC transitions
    (`ios_ec_xlate_loop`, `ExitFunctionEC`), and it drives vkd3d's +45 % CPU mW at 720/60.
@@ -719,13 +722,34 @@ without the owner is recorded here with its reason.
   - FPS and hitches hold.
 
   The exit runs should not start.
-- **Next:** vkd3d-proton's submission path is ruled out for vkd3d's CPU power:
+- **vkd3d-proton's submission path, not kept (decision 0067):** ruled out for vkd3d's CPU power:
   `patches/vkd3d-proton` 0005 (KosmicKrisp syncs host readback, so no re-recorded barrier
   command buffer each submission) took effect, but in a warm 720/60 pair CPU stayed at 793
   against 792 mW and `vkd3d_queue` at 0.82 against 0.83 Mi/f. It was not kept (decision 0067,
   [evidence](../evidence/2026-10-08-vulkan-perf-vkd3d-kk-driver.md)). Next for vkd3d's CPU
   power is item 8 (FEX on the D3D12 route, plan step 7): UnityGfxDeviceWorker's guest and
-  `xtajit64` time, with warm 720/60 pairs. Item 7 (GPU energy a frame at native) remains: a
-  King's Pass gameplay capture on DXMT and DXVK compared pass by pass, then one warm
-  native/free pair per change. A control IPA for a warm pair must still be in the build
-  area: `pp build` keeps three outputs, so rebuild the control's commit if it was pruned.
+  `xtajit64` time, with warm 720/60 pairs. A control IPA for a warm pair must still be in the
+  build area: `pp build` keeps three outputs, so rebuild the control's commit if it was pruned.
+- **Work-queue item 7, private-storage memory: not kept**
+  ([private memory](../evidence/2026-10-08-vulkan-perf-private-memory.md)).
+  - **What was tried.** Hypothesis H1(a): shared storage, or the whole-heap buffer alias, blocks
+    lossless compression of KosmicKrisp's render targets. To test it, `patches/mesa` 0019
+    (`narrow_usage`) and 0020 (`private_memory`) went behind `MESA_KK_EXPERIMENTAL`, giving a
+    `DEVICE_LOCAL`-only memory type backed by a private Metal heap with no buffer over it.
+  - **Gate** (IPA `55ca5c34…`, commit `c8c6016`): Hollow Knight on DXVK, D3D12 and DXMT and
+    Portal 2 passed, with and without the flags. DXVK listed two memory types with them.
+  - **The warm native/free DXVK pair.** With the flags, GPU ms still doubled in the first King's
+    Pass bucket (6.35 → 13.42 ms; control 6.25 → 14.11). In the 85–125 s window it was 13.17
+    against 13.00 ms, and CPU mJ/f 3.6 against 3.5. FPS was lower (45.7 against 58.5), but that
+    run started at `serious`, where the control started at `nominal`. The pair is flagged for
+    that, and was not rerun, because the doubling H1(a) predicted would vanish is still there.
+  - Decision (unattended): both patches were reverted, file and series line in one commit. The
+    phone keeps `55ca5c34…`, which with the flags off runs as HEAD does.
+- **Next:**
+  1. Item 7: a King's Pass gameplay capture on DXMT and DXVK (`pp gpu capture`, the same
+     frame), compared pass by pass for render-pass splits and forced loads and stores (H3).
+  2. If the passes match: one patch that gives attachment images dedicated private textures
+     outside any heap (`prefersDedicatedAllocation`, `newTextureWithDescriptor` on the device),
+     DXMT's layout exactly, then one warm native/free pair. A null result there rules out
+     compression.
+  3. Item 8 (FEX on the D3D12 route) for vkd3d's CPU power, with warm 720/60 pairs.

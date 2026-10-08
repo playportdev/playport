@@ -18,5 +18,3 @@
 0016-kk-MESA_KK_DEBUG-compile-counts-shader-sources-and-s.patch
 0017-kk-MESA_KK_GPU_CAPTURE_FRAME-N-captures-one-frame.patch
 0018-kk-no-present-wait-on-iOS.patch
-0019-kk-MESA_KK_EXPERIMENTAL-narrow_usage.patch
-0020-kk-MESA_KK_EXPERIMENTAL-private_memory-a-private-sto.patch
