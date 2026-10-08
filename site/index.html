@@ -161,6 +161,7 @@
   .howto li { margin: 6px 0; }
   .howto strong { color: var(--text); }
   .steps-cta { margin-top: 32px; display: flex; flex-wrap: wrap; gap: 14px; }
+  .games-cta { margin: -16px 0 44px; }
 
   /* Notes */
   .notes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 40px; padding: 0; margin: 0; list-style: none; }
@@ -221,6 +222,7 @@
       <a href="#how">How it works</a>
       <a href="#madeira">vs Madeira</a>
       <a href="#start">Get started</a>
+      <a href="compatibility/">Games</a>
       <a class="btn btn-ghost btn-small" href="https://github.com/playportdev/playport">GitHub</a>
     </div>
   </div>
@@ -452,6 +454,7 @@
     <p class="install-p">Playport translates a game's x86 code to ARM as it runs, which needs JIT, and iOS allows JIT only in an app a debugger has attached to. Pairing makes Playport's own JIT helper that debugger: on iOS 27 you pair once, with a code in Settings › Privacy &amp; Security › Developer Mode, and LocalDevVPN carries the connection on the phone itself. On iOS 26, import a pairing file in Settings › Setup check instead. Already use StikDebug or LiveContainer? Settings › Setup check › JIT method takes JIT from them.</p>
     <h3 class="install-h" id="report">Something not working?</h3>
     <p class="install-p">On the game's page, <strong>Report a problem</strong> shares its logs as one <code>.zip</code> (before 0.4.0 the bare log: long-press it in Files and choose <strong>Compress</strong>). Save it to Files and attach it to a <a href="https://github.com/playportdev/playport/issues/new/choose">GitHub issue</a>, with your device, iOS and Playport versions and how you sideloaded: that is where we read them all.</p>
+    <p class="install-p">Played a game, working or not? Check the <a href="compatibility/">compatibility list</a> and send a <a href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">game report</a>: it goes on the list.</p>
   </div>
 </section>
 
@@ -474,6 +477,10 @@
     <p class="kicker">On the phone</p>
     <h2>Running on an iPhone, right now.</h2>
     <p class="sub">A screen recording and screenshots from an A19 Pro iPhone on iOS 27.0, with Metal's performance HUD on. Every frame is rendered on the phone.</p>
+    <div class="steps-cta games-cta">
+      <a class="btn btn-primary" href="compatibility/">See which games run</a>
+      <a class="btn btn-ghost" href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">Report a game</a>
+    </div>
     <div class="shots" id="video-portal2">
       <figure class="shot">
         <div class="frame"><video src="video/portal2.mp4" poster="video/portal2-poster.webp" width="1280" height="590" controls playsinline preload="none" aria-label="Screen recording: from Playport's Home to Portal 2, Play, the load, then a test chamber with an orange and a blue portal, at about 60 fps on Metal's HUD"></video></div>

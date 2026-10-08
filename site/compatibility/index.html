@@ -1,0 +1,398 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Playport's game compatibility list, published with the landing page (site/index.html).
+     The data is games.json beside it: a public summary of Linear project Compatibility. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game compatibility: Playport</title>
+<meta name="description" content="Which Windows games run on an iPhone in Playport: works, playable with issues or broken, with what happens and where it was tested.">
+<meta name="theme-color" content="#0B0E13">
+<meta property="og:title" content="Game compatibility: Playport">
+<meta property="og:description" content="Which Windows games run on an iPhone in Playport, and how well.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://playport.dev/screenshots/og-0.2.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../logo.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #0B0E13;
+    --surface: #151A21;
+    --surface-2: #1D242E;
+    --surface-3: #24324A;
+    --line: #2A3340;
+    --accent: #F5B544;
+    --accent-tint: #FFD08A;
+    --text: #EEF1F5;
+    --muted: #9AA4B2;
+    --works: #3FB950;
+    --issues: #F5B544;
+    --broken: #F85149;
+    --radius: 18px;
+    --max: 1120px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent-tint); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font: 0.92em ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: var(--surface-2); padding: 2px 6px; border-radius: 6px; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+  nav { position: sticky; top: 0; z-index: 10; background: rgba(11, 14, 19, 0.82); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid rgba(42, 51, 64, 0.6); }
+  nav .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 19px; letter-spacing: -0.01em; }
+  .brand:hover { text-decoration: none; }
+  .brand img { width: 30px; height: 30px; }
+  nav .links { display: flex; align-items: center; gap: 24px; margin-left: auto; font-size: 15px; }
+  nav .links a { color: var(--muted); }
+  nav .links a:hover { color: var(--text); text-decoration: none; }
+
+  .btn { display: inline-flex; align-items: center; gap: 10px; padding: 13px 22px; border-radius: 999px; font-weight: 600; font-size: 16px; transition: transform .15s ease, background .15s ease; }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn svg { width: 18px; height: 18px; }
+  .btn-primary { background: var(--accent); color: #1A1306; box-shadow: 0 8px 30px -8px rgba(245, 181, 68, 0.55); }
+  .btn-primary:hover { background: var(--accent-tint); }
+  .btn-ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); }
+  .btn-ghost:hover { background: var(--surface-3); }
+  .btn-small { padding: 8px 16px; font-size: 14px; }
+  nav .links a.btn-primary { color: #1A1306; }
+
+  header { padding: 64px 0 24px; }
+  .kicker { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; margin: 0 0 12px; }
+  h1 { font-size: clamp(34px, 5vw, 52px); line-height: 1.08; letter-spacing: -0.025em; margin: 0 0 16px; font-weight: 800; }
+  .sub { color: var(--muted); font-size: 18px; max-width: 760px; margin: 0 0 24px; }
+  .sub strong { color: var(--text); }
+  .ctas { display: flex; flex-wrap: wrap; gap: 14px; }
+
+  /* Controls */
+  .controls { position: sticky; top: 64px; z-index: 5; background: var(--bg); padding: 16px 0 12px; border-bottom: 1px solid var(--line); }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .row + .row { margin-top: 12px; }
+  .search { flex: 1 1 280px; position: relative; }
+  .search svg { position: absolute; left: 14px; top: 50%; width: 18px; height: 18px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+  .search input { width: 100%; padding: 11px 14px 11px 42px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 16px; }
+  .search input:focus { outline: none; border-color: rgba(245, 181, 68, 0.6); }
+  .chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font: inherit; font-size: 14.5px; font-weight: 600; cursor: pointer; }
+  .chip:hover { color: var(--text); }
+  .chip[aria-pressed="true"] { color: var(--text); border-color: rgba(245, 181, 68, 0.6); background: var(--surface-3); }
+  .chip .n { color: var(--muted); font-weight: 500; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.works { background: var(--works); }
+  .dot.issues { background: var(--issues); }
+  .dot.broken { background: var(--broken); }
+  .letters { display: flex; flex-wrap: wrap; gap: 4px; }
+  .letters button { min-width: 34px; height: 34px; padding: 0 8px; border-radius: 9px; border: 1px solid transparent; background: none; color: var(--text); font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer; }
+  .letters button:hover:not(:disabled) { background: var(--surface-2); }
+  .letters button[aria-pressed="true"] { background: var(--accent); color: #1A1306; }
+  .letters button:disabled { color: #3A4452; cursor: default; }
+
+  /* List */
+  main { padding: 20px 0 72px; }
+  .count { color: var(--muted); font-size: 14.5px; margin: 0 0 14px; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  th, td { padding: 16px 20px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; background: var(--surface-2); }
+  td.game { width: 26%; }
+  td.game b { display: block; font-size: 16.5px; }
+  td.game a { color: var(--text); }
+  .store { display: inline-block; margin-top: 4px; color: var(--muted); font-size: 13px; }
+  td.status { width: 17%; white-space: nowrap; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 4px 11px; border-radius: 999px; font-size: 13.5px; font-weight: 700; }
+  .pill.works { color: #7EE787; background: rgba(63, 185, 80, 0.14); }
+  .pill.issues { color: var(--accent-tint); background: rgba(245, 181, 68, 0.14); }
+  .pill.broken { color: #FF9C95; background: rgba(248, 81, 73, 0.14); }
+  td.notes { color: var(--text); font-size: 15.5px; }
+  td.tested { width: 20%; color: var(--muted); font-size: 14px; }
+  td.tested span { display: block; }
+  td.tested span.tag { display: inline-block; }
+  .tag { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--muted); border: 1px solid var(--line); }
+  .empty { padding: 40px 24px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+  .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 40px 0 0; padding: 0; list-style: none; }
+  .legend li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; color: var(--muted); font-size: 15px; }
+  .legend .pill { margin-bottom: 8px; }
+  .fine { color: var(--muted); font-size: 14.5px; margin-top: 28px; max-width: 760px; }
+
+  footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--muted); font-size: 14.5px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 20px 48px; justify-content: space-between; align-items: center; }
+  footer p { margin: 0; }
+
+  @media (max-width: 820px) {
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100% !important; }
+    tr { padding: 16px 18px; border-bottom: 1px solid var(--line); }
+    tr:last-child { border-bottom: 0; }
+    td { padding: 0; border: 0; }
+    td.status { margin: 8px 0; }
+    td.tested { margin-top: 8px; }
+    td.tested span { display: inline; }
+    td.tested span + span::before { content: " · "; }
+    td.tested span.tag { margin-left: 8px; }
+    td.tested span.tag::before { content: none; }
+    .legend { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 16px; }
+    nav .links a:not(.btn) { display: none; }
+    header { padding: 40px 0 16px; }
+    .controls { position: static; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../logo.svg" alt="">Playport</a>
+    <div class="links">
+      <a href="../">Home</a>
+      <a href="../#start">Get started</a>
+      <a href="https://github.com/playportdev/playport">GitHub</a>
+      <a class="btn btn-primary btn-small" href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">Report a game</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <p class="kicker">Game compatibility</p>
+    <h1>Which games run, and how well.</h1>
+    <p class="sub">Every game we have played in Playport, or players have told us about: whether it works, what happens, and on which device. <strong>Tried a game that is not here, or found one that runs better or worse?</strong> Tell us: working games help as much as broken ones.</p>
+    <div class="ctas">
+      <a class="btn btn-primary" href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        Report a game</a>
+      <a class="btn btn-ghost" href="https://github.com/playportdev/playport/issues?q=is%3Aissue+%22Game+report%22">See the reports</a>
+    </div>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="wrap">
+    <div class="row">
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="Search games, stores, problems" autocomplete="off" aria-label="Search games">
+      </label>
+      <div class="row" id="statuses" role="group" aria-label="Filter by status"></div>
+    </div>
+    <div class="row">
+      <div class="letters" id="letters" role="group" aria-label="Filter by first letter"></div>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="wrap">
+    <p class="count" id="count" aria-live="polite">Loading the list…</p>
+    <div id="list"></div>
+    <noscript><p class="empty">The list needs JavaScript to filter. The data is in <a href="games.json">games.json</a>.</p></noscript>
+
+    <ul class="legend">
+      <li><span class="pill works"><span class="dot works"></span>Works</span><br>Plays as on a PC, as far as it was played.</li>
+      <li><span class="pill issues"><span class="dot issues"></span>Playable with issues</span><br>Plays, but something is wrong: speed, sound, a mode that fails.</li>
+      <li><span class="pill broken"><span class="dot broken"></span>Broken</span><br>Does not start, or cannot be played yet.</li>
+    </ul>
+    <p class="fine"><strong>A19 Pro iPhone</strong> is our test phone; other devices are players' reports, marked <span class="tag">player report</span>. A <em>dev build</em> result comes before the next release, so a fix may not be in the current one. Results change quickly: the date is when it was last checked.</p>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Playport, built on <a href="https://github.com/willfaust/Madeira">willfaust/Madeira</a>. <span id="updated"></span></p>
+    <a class="btn btn-ghost btn-small" href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">Report a game</a>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var STATUS = {
+    works: "Works",
+    issues: "Playable with issues",
+    broken: "Broken"
+  };
+  var STORE = { steam: "Steam", gog: "GOG", epic: "Epic Games", other: "Other store" };
+  var games = [];
+  var state = { q: "", letter: "", status: "" };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function fold(s) {
+    return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  }
+  function letterOf(name) {
+    var c = fold(name).charAt(0).toUpperCase();
+    return c >= "A" && c <= "Z" ? c : "#";
+  }
+  function storeLink(g) {
+    if (g.store === "steam" && g.id) return "https://store.steampowered.com/app/" + g.id + "/";
+    return null;
+  }
+
+  function readURL() {
+    var p = new URLSearchParams(location.search);
+    state.q = p.get("q") || "";
+    state.letter = (p.get("letter") || "").toUpperCase();
+    state.status = STATUS[p.get("status")] ? p.get("status") : "";
+    $("q").value = state.q;
+  }
+  function writeURL() {
+    var p = new URLSearchParams();
+    if (state.q) p.set("q", state.q);
+    if (state.letter) p.set("letter", state.letter);
+    if (state.status) p.set("status", state.status);
+    var s = p.toString();
+    history.replaceState(null, "", s ? "?" + s : location.pathname);
+  }
+
+  function matches(g, opts) {
+    if (opts.status && state.status && g.status !== state.status) return false;
+    if (opts.letter && state.letter && letterOf(g.name) !== state.letter) return false;
+    if (state.q) {
+      var hay = fold([g.name, g.id || "", STORE[g.store], STATUS[g.status], g.notes, g.device, g.build].join(" "));
+      var words = fold(state.q).split(/\s+/).filter(Boolean);
+      for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) < 0) return false;
+    }
+    return true;
+  }
+
+  function renderStatuses() {
+    var box = $("statuses");
+    box.textContent = "";
+    var keys = ["", "works", "issues", "broken"];
+    keys.forEach(function (k) {
+      var n = games.filter(function (g) { return (!k || g.status === k) && matches(g, { letter: true }); }).length;
+      var b = el("button", "chip");
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(state.status === k));
+      if (k) b.appendChild(el("span", "dot " + k));
+      b.appendChild(document.createTextNode(k ? STATUS[k] : "All"));
+      b.appendChild(el("span", "n", String(n)));
+      b.onclick = function () { state.status = k; update(); };
+      box.appendChild(b);
+    });
+  }
+
+  function renderLetters() {
+    var box = $("letters");
+    box.textContent = "";
+    var have = {};
+    games.forEach(function (g) { if (matches(g, { status: true })) have[letterOf(g.name)] = true; });
+    var all = ["", "#"].concat("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
+    all.forEach(function (L) {
+      var b = el("button", null, L || "All");
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(state.letter === L));
+      if (L) b.setAttribute("aria-label", L === "#" ? "Games starting with a digit or symbol" : "Games starting with " + L);
+      if (L && !have[L] && state.letter !== L) b.disabled = true;
+      b.onclick = function () { state.letter = state.letter === L ? "" : L; update(); };
+      box.appendChild(b);
+    });
+  }
+
+  function renderList() {
+    var shown = games.filter(function (g) { return matches(g, { status: true, letter: true }); });
+    var list = $("list");
+    list.textContent = "";
+    $("count").textContent = shown.length === games.length
+      ? games.length + " games"
+      : shown.length + " of " + games.length + " games";
+    if (!shown.length) {
+      var empty = el("div", "empty");
+      empty.appendChild(document.createTextNode("No game matches. Played it? "));
+      var a = el("a", null, "Report it");
+      a.href = "https://github.com/playportdev/playport/issues/new?template=game-report.yml";
+      empty.appendChild(a);
+      empty.appendChild(document.createTextNode(" and it goes on the list."));
+      list.appendChild(empty);
+      return;
+    }
+    var table = el("table");
+    var head = el("thead");
+    var hr = el("tr");
+    ["Game", "Status", "What happens", "Tested"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+    head.appendChild(hr);
+    table.appendChild(head);
+    var body = el("tbody");
+    shown.forEach(function (g) {
+      var tr = el("tr");
+      var tdGame = el("td", "game");
+      var name = el("b");
+      var link = storeLink(g);
+      if (link) {
+        var a = el("a", null, g.name);
+        a.href = link;
+        a.rel = "noopener";
+        name.appendChild(a);
+      } else {
+        name.textContent = g.name;
+      }
+      tdGame.appendChild(name);
+      tdGame.appendChild(el("span", "store", STORE[g.store] + (g.id ? " " + g.id : "")));
+      tr.appendChild(tdGame);
+
+      var tdStatus = el("td", "status");
+      var pill = el("span", "pill " + g.status);
+      pill.appendChild(el("span", "dot " + g.status));
+      pill.appendChild(document.createTextNode(STATUS[g.status]));
+      tdStatus.appendChild(pill);
+      tr.appendChild(tdStatus);
+
+      tr.appendChild(el("td", "notes", g.notes));
+
+      var tdTested = el("td", "tested");
+      tdTested.appendChild(el("span", null, g.tested));
+      tdTested.appendChild(el("span", null, g.device));
+      tdTested.appendChild(el("span", null, g.build === "dev build" ? "dev build" : "Playport " + g.build));
+      if (g.reported) tdTested.appendChild(el("span", "tag", "player report"));
+      tr.appendChild(tdTested);
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    list.appendChild(table);
+  }
+
+  function update() {
+    writeURL();
+    renderStatuses();
+    renderLetters();
+    renderList();
+  }
+
+  $("q").addEventListener("input", function (e) { state.q = e.target.value.trim(); update(); });
+
+  fetch("games.json", { cache: "no-cache" })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (data) {
+      games = data.games.slice().sort(function (a, b) { return fold(a.name).localeCompare(fold(b.name)); });
+      $("updated").textContent = "List updated " + data.updated + ".";
+      readURL();
+      update();
+    })
+    .catch(function () {
+      $("count").textContent = "";
+      var e = el("p", "empty");
+      e.appendChild(document.createTextNode("The list did not load. The data is in "));
+      var a = el("a", null, "games.json");
+      a.href = "games.json";
+      e.appendChild(a);
+      e.appendChild(document.createTextNode("."));
+      $("list").appendChild(e);
+    });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,336 @@
+{
+  "comment": "Playport's public compatibility list, shown by site/compatibility/index.html. A scrubbed summary of Linear project Compatibility (team PLA), one entry per title: no player names, IPA hashes, run paths or tracker links. Keep entries sorted by name; tools/tests/test_compat_site.py checks the format.",
+  "updated": "2026-10-08",
+  "games": [
+    {
+      "name": "Among Us",
+      "store": "steam",
+      "id": "945360",
+      "status": "broken",
+      "notes": "Crashes about 17 s after Play. Its online sign-in (through Epic Online Services) also fails a certificate check.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Bloodstained: Curse of the Moon",
+      "store": "steam",
+      "id": "838310",
+      "status": "broken",
+      "notes": "Does not start: the app closes, says the game cannot run, or shows a black screen. A 32-bit Direct3D 9 game.",
+      "tested": "2026-10-07",
+      "device": "iPhone 16 Pro Max, iOS 27, LiveContainer",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Castle Crashers",
+      "store": "steam",
+      "id": "204360",
+      "status": "broken",
+      "notes": "Does not start: the app closes, says the game cannot run, or shows a black screen. The same setup runs it on Madeira, so the fault is in Playport.",
+      "tested": "2026-10-07",
+      "device": "iPhone 16 Pro Max, iOS 27, LiveContainer",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Cat Mail Co.",
+      "store": "steam",
+      "id": "4380490",
+      "status": "broken",
+      "notes": "Closes at once at launch, on Vulkan and on DXMT.",
+      "tested": "2026-10-05",
+      "device": "iPhone 16, SideStore",
+      "build": "0.3.0",
+      "reported": true
+    },
+    {
+      "name": "Catherine Classic",
+      "store": "steam",
+      "id": "893180",
+      "status": "broken",
+      "notes": "Does not start: the app closes, says the game cannot run, or shows a black screen. A 32-bit Direct3D 9 game.",
+      "tested": "2026-10-07",
+      "device": "iPhone 16 Pro Max, iOS 27, LiveContainer",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Counter-Strike",
+      "store": "steam",
+      "id": "10",
+      "status": "broken",
+      "notes": "\"No Windows executable in this folder\" after install. After that it needs OpenGL, which Playport does not have yet.",
+      "tested": "2026-10-06",
+      "device": "not reported",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Death's Door",
+      "store": "epic",
+      "status": "issues",
+      "notes": "Plays into the game, with an Epic sign-in. About 35 to 40 FPS, held back by the GPU, with some hitches.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "DiRT 3 Complete Edition",
+      "store": "steam",
+      "id": "321040",
+      "status": "broken",
+      "notes": "\"Could not start\". It is a 32-bit Direct3D 11 game, which Playport has no graphics backend for yet.",
+      "tested": "2026-10-06",
+      "device": "not reported",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Duck Paradox",
+      "store": "gog",
+      "id": "1816031813",
+      "status": "broken",
+      "notes": "Exits about a second after start.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "En Garde!",
+      "store": "steam",
+      "id": "1654660",
+      "status": "issues",
+      "notes": "Plays, through DXMT, at 18 to 20 FPS (held back by the GPU at 720 rows). Its Direct3D 12 mode reaches only the splash screen.",
+      "tested": "2026-09-30",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Final Fantasy III (3D Remake)",
+      "store": "steam",
+      "id": "239120",
+      "status": "broken",
+      "notes": "Closes at once at launch. It needs OpenGL, which Playport does not have yet.",
+      "tested": "2026-10-05",
+      "device": "iPhone 16, SideStore",
+      "build": "0.3.0",
+      "reported": true
+    },
+    {
+      "name": "Final Fantasy VII Remake Intergrade",
+      "store": "steam",
+      "id": "1462040",
+      "status": "issues",
+      "notes": "About 30 FPS most of the time at 900p, textures and shadows Low, Vulkan. Stutters the first time it loads new assets, and the sound is not right.",
+      "tested": "2026-10-06",
+      "device": "M5 iPad Pro, AltStore",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Geometry Dash",
+      "store": "steam",
+      "id": "322170",
+      "status": "broken",
+      "notes": "Closes when opened. It needs OpenGL, which Playport does not have yet.",
+      "tested": "2026-10-07",
+      "device": "not reported",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Half-Life",
+      "store": "steam",
+      "id": "70",
+      "status": "broken",
+      "notes": "\"No Windows executable in this folder\" after install. After that it needs OpenGL, which Playport does not have yet.",
+      "tested": "2026-10-06",
+      "device": "not reported",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Hollow Knight",
+      "store": "steam",
+      "id": "367520",
+      "status": "works",
+      "notes": "Menus and gameplay at 60 FPS at 720 rows, about 120 FPS uncapped, on Vulkan or DXMT. Keep the game page's Disk cache Off (the default): with it On, warm starts crash.",
+      "tested": "2026-10-08",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "House of Golf 2",
+      "store": "epic",
+      "status": "broken",
+      "notes": "Installs, then stops at its Visual C++ runtime installer before the game starts.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Jurassic World Evolution",
+      "store": "epic",
+      "status": "broken",
+      "notes": "Exits at once: its program must load at a fixed address the runtime already uses.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Kingdom Come: Deliverance",
+      "store": "steam",
+      "id": "379430",
+      "status": "issues",
+      "notes": "Plays from the menu into Rattay at about 29 FPS on the lowest settings, through DXMT. Long loads (about 95 s to the menu), and it uses nearly all of an 8 GB memory limit: it needs Increased Memory Limit.",
+      "tested": "2026-10-04",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Monster Train",
+      "store": "gog",
+      "id": "1304291300",
+      "status": "broken",
+      "notes": "Starts, but the picture stays black. GOG sign-in works.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Moonscars",
+      "store": "gog",
+      "id": "2106173825",
+      "status": "works",
+      "notes": "Reaches the title screen and signs in to GOG. Gameplay not checked yet.",
+      "tested": "2026-10-08",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Mortal Kombat Komplete Edition",
+      "store": "steam",
+      "id": "237110",
+      "status": "broken",
+      "notes": "Does not start: the app closes, says the game cannot run, or shows a black screen. A 32-bit Direct3D 9 game.",
+      "tested": "2026-10-07",
+      "device": "iPhone 16 Pro Max, iOS 27, LiveContainer",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "MultiVersus",
+      "store": "steam",
+      "id": "1818750",
+      "status": "issues",
+      "notes": "With -dx12 (Direct3D 12 on Vulkan): menus and local Training at 26 to 31 FPS. Online modes are gone (the servers closed in 2025). The default Direct3D 11 mode is not tested.",
+      "tested": "2026-09-30",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Need for Speed: The Run",
+      "store": "other",
+      "status": "broken",
+      "notes": "Black screen. It needs EA's launcher, and it is a 32-bit Direct3D 11 game, which Playport has no graphics backend for yet.",
+      "tested": "2026-10-06",
+      "device": "LiveContainer",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Oxygen Not Included",
+      "store": "steam",
+      "id": "457140",
+      "status": "issues",
+      "notes": "Reaches the menus, then crashes when creating a world.",
+      "tested": "2026-10-06",
+      "device": "not reported",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "Portal 2",
+      "store": "steam",
+      "id": "620",
+      "status": "works",
+      "notes": "About 60 FPS at 720p, Direct3D 9 through Vulkan, with both portals, sound, a controller, saves and Steam Cloud. A black screen is reported on an iPhone 16e inside LiveContainer.",
+      "tested": "2026-10-08",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Shogun Showdown",
+      "store": "gog",
+      "id": "1104084973",
+      "status": "works",
+      "notes": "Installs and updates from GOG and reaches the title screen. Gameplay not checked yet.",
+      "tested": "2026-10-06",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Snakebird Complete",
+      "store": "epic",
+      "status": "works",
+      "notes": "Reaches the main menu, with Epic Online Services sign-in. Gameplay past the menu not checked yet.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Soccer Online: Ball 3D",
+      "store": "steam",
+      "id": "485610",
+      "status": "broken",
+      "notes": "Runs, but no picture: most likely a settings window the phone does not show.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "South Park: The Stick of Truth",
+      "store": "steam",
+      "id": "213670",
+      "status": "broken",
+      "notes": "Does not start: the app closes, says the game cannot run, or shows a black screen. The same setup runs it on Madeira, so the fault is in Playport.",
+      "tested": "2026-10-07",
+      "device": "iPhone 16 Pro Max, iOS 27, LiveContainer",
+      "build": "0.3",
+      "reported": true
+    },
+    {
+      "name": "The Binding of Isaac: Rebirth",
+      "store": "steam",
+      "id": "250900",
+      "status": "broken",
+      "notes": "Closes at once at launch. It needs OpenGL, which Playport does not have yet.",
+      "tested": "2026-10-05",
+      "device": "iPhone 16, SideStore",
+      "build": "0.3.0",
+      "reported": true
+    },
+    {
+      "name": "The Witcher 3: Wild Hunt",
+      "store": "steam",
+      "id": "292030",
+      "status": "issues",
+      "notes": "The classic 1.32 build (Steam branch \"classic\") plays at its 30 FPS cap, through DXMT. The current build does not start: it needs AVX, which Playport's x86 translator does not offer.",
+      "tested": "2026-10-06",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    },
+    {
+      "name": "Valheim",
+      "store": "steam",
+      "id": "892970",
+      "status": "issues",
+      "notes": "With the game page's graphics set to DXMT: its intro plays and Steam online sign-in works; the main menu and gameplay are not checked yet. On Vulkan it crashed in the intro; a fix is in, not yet checked with this game.",
+      "tested": "2026-10-07",
+      "device": "A19 Pro iPhone, iOS 27.0",
+      "build": "dev build"
+    }
+  ]
+}
