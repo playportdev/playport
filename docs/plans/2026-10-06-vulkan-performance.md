@@ -807,6 +807,20 @@ without the owner is recorded here with its reason.
     9.7–10.0 ms in every bucket from t = 85 in both; the control again ran under pressure 20, so its
     higher sys mJ/f is not read as a gain. Reverted, file and series line in one commit (`377e7cb`);
     the phone runs `e6bd82a4…` (HEAD, the same artifacts as `4e6e930d…`).
+- **Stability, PLA-93** ([suspend in FEX](../evidence/2026-10-08-pla93-suspend-in-fex.md), IPA
+  `363c1234…`, commits `59a107e`, `dedb498`).
+  - The fix, `patches/madeira-unix` 0097: a real suspend's deferred hold is not taken while the
+    thread is inside FEX, that is while `InSyscallCallback` or FEX's TEB lock stamps
+    (+0x16f0, +0x16e8) are set.
+  - The diagnostics, madeira-unix 0098 and wine-unix 0022: `[wpm-owner]` gives a stuck
+    lock's write owner's Mach state, and the thread sampler prints each held thread with
+    `susp=`.
+  - The gate passed: Hollow Knight on DXVK, DXMT and D3D12, and Portal 2.
+  - 10 Hollow Knight plays through `hk-new-game` to `first-frame+70` (5 DXVK, 5 D3D12) had no
+    freeze. Against a baseline of 2 in about 20 that supports the fix but does not prove it,
+    and the new deferral never fired (`in_fex=0`).
+  - Residual: FEX's write holds outside a syscall callback (`HandleRWXAccessViolation`) have
+    no TEB stamp and are not covered.
 - **Next** (from the [standing](../evidence/2026-10-08-vulkan-perf-standing.md) and the
   [sample mask](../evidence/2026-10-08-vulkan-perf-sample-mask.md) record, IPA `e6bd82a4…`):
   - **Where it stands.** Not at exit; each route meets 2 of 9 criteria rows. At native/free DXVK's
