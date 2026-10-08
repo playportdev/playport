@@ -20,8 +20,8 @@ The owner (2026-10-07): stop testing over and over. There is enough evidence; de
 fixes for the issues found, retest each once, and if a fix does nothing or makes things
 worse, think about why (read the code, profile) before running more.
 
-**Where it stands (2026-10-08, end of session; paused by the owner):** branch
-`vulkan-performance-2`, HEAD after `178fb67`, not merged and not pushed. The phone runs
+**Where it stands (2026-10-08, end of session; paused by the owner):** the work of branch
+`vulkan-performance-2` is merged to `main` (merge `99a38c3`); the next chunk branches from `main`. The phone runs
 dev IPA `363c1234…` (HEAD's runtime). Kept on the branch, each checked on the phone:
 `patches/wine-unix` 0020 (the D3D12 start fault) and 0021 (present-path window queries),
 decision 0066 (DXVK tiler mode off), `patches/mesa` 0018 (no present wait on iOS: p99 at
@@ -827,8 +827,8 @@ without the owner is recorded here with its reason.
   [standing](../evidence/2026-10-08-vulkan-perf-standing.md),
   [sample mask](../evidence/2026-10-08-vulkan-perf-sample-mask.md) and
   [suspend in FEX](../evidence/2026-10-08-pla93-suspend-in-fex.md) records):
-  - **State.** Branch `vulkan-performance-2`, not merged or pushed; phone on IPA `363c1234…`
-    (HEAD's runtime). `pp build` keeps three outputs (PLA-92): rebuild a control's commit if its
+  - **State.** Merged to `main` (`99a38c3`); continue on a new branch from `main`. Phone on IPA
+    `363c1234…` (the merged runtime; the merge changed no build input). `pp build` keeps three outputs (PLA-92): rebuild a control's commit if its
     IPA was pruned.
   - **Where it stands** (warm standing on `4e6e930d…`, before the PLA-93 patches, which change
     no rendering). Not at exit; each route meets 2 of 9 criteria rows. At native/free DXVK's GPU
