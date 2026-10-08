@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 8 Oct 2026 13:47:24 +0200
+Subject: [PATCH] ntdll: iOS: print a stuck FEX lock's write owner from the
+ hot-lock dump
+
+[hot-lock] dumps the memory around an address three or more threads
+wait on. When that address is a FEX WritePriorityMutex (read-waiters
+wait on the lock + 2) whose word has the write bit set, the dump already
+shows the owner's TEB and tid, which the mutex stamps after the word,
+but not what that thread is doing. In the Hollow Knight freeze (PLA-93)
+that was the question: is the owner held by a real suspend inside FEX,
+or did it leak the lock?
+
+The dump now passes the mutex, the owner TEB and the tid to
+ios_wpm_owner_report() (patches/madeira-unix), which prints the owner's
+Mach suspend count, run state, pc, lr and fp chain as [wpm-owner]. A
+word that only looks like such a mutex finds no registered thread with
+that TEB and tid and prints a miss line.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-08-pla93-suspend-in-fex.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/sync.c | 26 ++++++++++++++++++++++++--
+ 1 file changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 7a5cb18..694e467 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -5113,21 +5113,43 @@ void ios_alert_waiter_dump(void)
+             hot_dumps++;
+             {
+                 ULONG_PTR base = ((ULONG_PTR)a & ~0xfULL) - 0x100;
+-                int line;
++                unsigned long long rows[5][8];
++                int line, have_rows[5] = { 0 };
+                 dprintf( 2, "[hot-lock] addr=%p waiters=%d dumping [%p,%p) rev=ml444\n",
+                          a, nsame, (void *)base, (void *)(base + 0x140) );
+                 for (line = 0; line < 5; line++)
+                 {
+                     ULONG_PTR row = base + line * 0x40;
+-                    unsigned long long w[8] = { 0 };
++                    unsigned long long *w = rows[line];
+                     char *page = (char *)(row & ~0x3fffULL);
+                     if (msync( page, 0x4000, MS_ASYNC )) continue;
+                     if ((((row + 0x38) & ~0x3fffULL) != (ULONG_PTR)page) &&
+                         msync( (char *)((row + 0x38) & ~0x3fffULL), 0x4000, MS_ASYNC )) continue;
+                     memcpy( w, (void *)row, 0x40 );
++                    have_rows[line] = 1;
+                     dprintf( 2, "[hot-lock]  %p: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n",
+                              (void *)row, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7] );
+                 }
++                /* PLA-93: a FEX WritePriorityMutex (read-waiters wait on lock+2) is
++                 * a 32-bit word, bit 31 the write lock, then the owner's TEB at +8
++                 * and tid at +0x10. Write-owned: print the owner's Mach state. */
++                {
++                    ULONG_PTR m = (ULONG_PTR)a & ~7ULL;
++                    unsigned int q = (unsigned int)((m - base - 0x100) / 8);   /* m is in row 4: 0 or 1 */
++                    if (have_rows[4])
++                    {
++                        unsigned long long *w = rows[4];
++                        unsigned int word = (unsigned int)w[q];
++                        unsigned long long owner_teb = w[q + 1];
++                        unsigned int owner_tid = (unsigned int)w[q + 2];
++                        if ((word & 0x80000000) && owner_teb && !(owner_teb & 0xfff))
++                        {
++                            extern void ios_wpm_owner_report( unsigned long long mutex, unsigned long long owner_teb,
++                                                              unsigned int owner_tid );
++                            ios_wpm_owner_report( (unsigned long long)m, owner_teb, owner_tid );
++                        }
++                    }
++                }
+             }
+         }
+     }

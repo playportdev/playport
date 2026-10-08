@@ -1,0 +1,255 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 8 Oct 2026 13:46:17 +0200
+Subject: [PATCH] wineserver: defer a real suspend's hold while the thread is
+ inside FEX
+
+madeira-unix 0010 holds a really suspended thread only where upstream Wine
+would stop it: outside host code and outside the syscall window. FEX's
+ARM64EC module is PE code in the JIT pool, so a thread running FEX passes
+both tests. Hollow Knight froze about once in ten plays in its new-game
+menu, on DXVK and on D3D12, just after Mono's collector suspended its
+threads: the Loading.PreloadManager thread, logically suspended while
+its hold was deferred, left a timed in-process wait, took FEX's
+CodeInvalidationMutex for writing in a memory or read-file notification's
+code invalidation (the ntdll ARM64EC wrappers run those with the CPU
+area's InSyscallCallback set), and the deferred hold's retry froze it
+there. The collector then read-waited on that mutex for ever and never
+resumed anyone ([fexlock] STUCK read-wait, owner the held thread).
+
+Upstream Wine stops a thread with InSimulation or InSyscallCallback set
+only cooperatively, on its way out. The hold is now also deferred while
+the target's InSyscallCallback is set, or while FEX's TEB lock stamps
+are: Instrumentation[7] (TEB+0x16f0, its WritePriorityMutex shared-hold
+depth, set in compile and link while InSimulation is set) and
+Instrumentation[6] (TEB+0x16e8, the CodeBufferWriteMutex stamp; FEX at
+the pin no longer sets it, so it reads 0). Guest code in the JIT
+(InSimulation alone) stays a safe point. The retry and its back-off are
+unchanged: a thread that stays in FEX is retried every 1 ms, then up to
+every 32 ms, as a thread in host code is.
+
+Logged, 64 lines each: "[real-susp] in-fex defer" for each deferral this
+adds, "[real-susp] late hold" for each hold a retry takes (tid, tries,
+pc, sp, InSimulation, InSyscallCallback and the two stamps), and in_fex=
+in the stats line.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-08-pla93-suspend-in-fex.md
+Offered-upstream: no
+---
+ build/wineserver/mach_ios.c | 105 ++++++++++++++++++++++++++++++++----
+ 1 file changed, 95 insertions(+), 10 deletions(-)
+
+diff --git a/build/wineserver/mach_ios.c b/build/wineserver/mach_ios.c
+index a154e5b..112ffbf 100644
+--- a/build/wineserver/mach_ios.c
++++ b/build/wineserver/mach_ios.c
+@@ -450,6 +450,13 @@ int send_thread_signal( struct thread *thread, int sig )
+ #define IOS_SCF_CPSR  0x108
+ #define IOS_SCF_SIZE  0x330
+ #define IOS_CPUAREA_CTX64_OFF      0x18     /* CHPE_V2_CPU_AREA_INFO.ContextAmd64 */
++#define IOS_CPUAREA_INSIM_OFF      0x00     /* CHPE_V2_CPU_AREA_INFO.InSimulation (BOOLEAN) */
++#define IOS_CPUAREA_INSYSCB_OFF    0x01     /* CHPE_V2_CPU_AREA_INFO.InSyscallCallback (BOOLEAN) */
++/* FEX's own TEB stamps (WritePriorityMutex.h, IosEmissionLocksHeldBySelf):
++ * Instrumentation[7] is the thread's WritePriorityMutex shared-hold depth (uint32),
++ * Instrumentation[6] the CodeBufferWriteMutex stamp (uint64). */
++#define IOS_TEB_FEX_WPM_DEPTH_OFF  0x16f0
++#define IOS_TEB_FEX_CBW_STAMP_OFF  0x16e8
+ #define IOS_A64_SEGCS   0x38
+ #define IOS_A64_SEGDS   0x3a
+ #define IOS_A64_SEGES   0x3c
+@@ -531,16 +538,16 @@ int ios_real_suspend_enabled(void)
+ }
+ 
+ static unsigned int rs_holds, rs_releases, rs_hold_fail, rs_release_fail, rs_ops;
+-static unsigned int rs_deferred, rs_retries, rs_late_holds, rs_frame_unknown;
++static unsigned int rs_deferred, rs_retries, rs_late_holds, rs_frame_unknown, rs_in_fex;
+ 
+ void ios_real_suspend_stats( const char *why )
+ {
+     fprintf( stderr, "[real-susp] ml730 %s: ops=%u holds=%u releases=%u "
+              "outstanding=%d hold_fail=%u release_fail=%u "
+-             "deferred=%u retries=%u late_holds=%u frame_unknown=%u\n",
++             "deferred=%u retries=%u late_holds=%u frame_unknown=%u in_fex=%u\n",
+              why, rs_ops, rs_holds, rs_releases,
+              (int)rs_holds - (int)rs_releases, rs_hold_fail, rs_release_fail,
+-             rs_deferred, rs_retries, rs_late_holds, rs_frame_unknown );
++             rs_deferred, rs_retries, rs_late_holds, rs_frame_unknown, rs_in_fex );
+ }
+ 
+ /* ================= safepoint: hold only where upstream Wine would stop =========
+@@ -573,6 +580,19 @@ void ios_real_suspend_stats( const char *why )
+  * fifty-odd threads of a paused game kept this thread making some 28000
+  * suspend/state/resume rounds a second for as long as the pause lasted.
+  *
++ * A third place is FEX itself (PLA-93). The ARM64EC ntdll wrappers call FEX with
++ * the CPU area's InSyscallCallback set (memory and read-file notifications), and
++ * FEX's code invalidation there takes its CodeInvalidationMutex for writing. FEX's
++ * code is PE code in the JIT pool, so it passes both tests above: a thread held
++ * there kept the mutex, and its suspender (Mono's collector, which needs the JIT
++ * before it resumes anyone) waited on it for ever. Upstream Wine stops a thread
++ * with InSyscallCallback set only cooperatively, on its way out. So the hold is
++ * also deferred while InSyscallCallback is set, or while one of FEX's own TEB
++ * lock stamps is: its WritePriorityMutex shared-hold depth (compile and link, which
++ * run with InSimulation set) and its CodeBufferWriteMutex stamp. InSimulation
++ * alone (guest code running in the JIT) stays a safe point: that is where a
++ * stop-the-world finds its threads.
++ *
+  * ios_mach_suspended is 0 (none), 1 (held) or RS_PENDING (deferred, one timer). */
+ #define RS_PENDING   2
+ #define RS_RETRY_MS  1
+@@ -646,12 +666,53 @@ static int rs_pc_in_host( uint64_t pc )
+     return 0;
+ }
+ 
++/* What the target's CPU area and FEX's TEB stamps say. Fields stay 0 where a read fails. */
++struct rs_fex_state
++{
++    unsigned char in_simulation, in_syscall_callback;
++    uint32_t      wpm_depth;
++    uint64_t      cbw_stamp;
++};
++
++static void rs_read_fex_state( struct thread *thread, struct rs_fex_state *fs )
++{
++    uint64_t teb = (uint64_t)thread->teb, cpuarea = 0;
++    unsigned char flags[2];
++
++    memset( fs, 0, sizeof(*fs) );
++    if (!teb) return;
++    if (ios_safe_read( teb + IOS_TEB_CHPE_CPUAREA_OFF, &cpuarea, 8 ) && cpuarea &&
++        ios_safe_read( cpuarea + IOS_CPUAREA_INSIM_OFF, flags, 2 ))
++    {
++        fs->in_simulation       = flags[IOS_CPUAREA_INSIM_OFF];
++        fs->in_syscall_callback = flags[IOS_CPUAREA_INSYSCB_OFF];
++    }
++    if (!ios_safe_read( teb + IOS_TEB_FEX_WPM_DEPTH_OFF, &fs->wpm_depth, 4 )) fs->wpm_depth = 0;
++    if (!ios_safe_read( teb + IOS_TEB_FEX_CBW_STAMP_OFF, &fs->cbw_stamp, 8 )) fs->cbw_stamp = 0;
++}
++
++#define RS_FEX_LOG_MAX 64
++
+ /* The target is stopped. Is this a point where upstream Wine would suspend it? */
+ static int rs_at_safe_point( struct thread *thread, uint64_t pc, uint64_t sp )
+ {
++    static unsigned int fex_logged;
++    struct rs_fex_state fs;
+     uint64_t frame = 0, kstack = 0;
+ 
+     if (rs_pc_in_host( pc )) return 0;
++    rs_read_fex_state( thread, &fs );
++    if (fs.in_syscall_callback || fs.wpm_depth || fs.cbw_stamp)
++    {
++        rs_in_fex++;
++        if (fex_logged++ < RS_FEX_LOG_MAX)
++            fprintf( stderr, "[real-susp] in-fex defer #%u tid=%04x pc=%#llx sp=%#llx "
++                     "insim=%u insc=%u wpm_depth=%u cbw=%#llx\n",
++                     fex_logged, thread->id, (unsigned long long)pc, (unsigned long long)sp,
++                     fs.in_simulation, fs.in_syscall_callback, fs.wpm_depth,
++                     (unsigned long long)fs.cbw_stamp );
++        return 0;
++    }
+     if (thread->teb &&
+         ios_safe_read( (uint64_t)thread->teb + IOS_TEB_SYSCALL_FRAME_OFF, &frame, 8 ) &&
+         ios_safe_read( (uint64_t)thread->teb + IOS_TEB_KERNEL_STACK_OFF, &kstack, 8 ) &&
+@@ -661,12 +722,14 @@ static int rs_at_safe_point( struct thread *thread, uint64_t pc, uint64_t sp )
+     return 1;
+ }
+ 
+-static int rs_port_at_safe_point( struct thread *thread, mach_port_t port )
++static int rs_port_at_safe_point( struct thread *thread, mach_port_t port, uint64_t *pc, uint64_t *sp )
+ {
+     arm_thread_state64_t arm;
+     mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+ 
+     if (thread_get_state( port, ARM_THREAD_STATE64, (thread_state_t)&arm, &count )) return 0;
++    *pc = arm.__pc;
++    *sp = arm.__sp;
+     return rs_at_safe_point( thread, arm.__pc, arm.__sp );
+ }
+ 
+@@ -741,14 +804,17 @@ static int rs_flag_ok( struct thread *thread, const char *who )
+ }
+ 
+ /* Try to take the one persistent Mach hold now: 1 held, 0 failed, -1 not at a
+- * safe point (safepoint; the thread was let go again). */
+-static int rs_try_hold( struct thread *thread )
++ * safe point (safepoint; the thread was let go again). *pc and *sp are where the
++ * thread was stopped, 0 when it was not. */
++static int rs_try_hold( struct thread *thread, uint64_t *pc, uint64_t *sp )
+ {
+     mach_msg_type_name_t type;
+     mach_port_t port;
+     kern_return_t kr;
+     int safe;
+ 
++    *pc = *sp = 0;
++
+     if (thread->unix_pid == -1 || thread->unix_tid == (unsigned int)-1) return 0;
+     if (mach_port_extract_right( mach_task_self(), thread->unix_tid,
+                                  MACH_MSG_TYPE_COPY_SEND, &port, &type ))
+@@ -761,7 +827,7 @@ static int rs_try_hold( struct thread *thread )
+             fprintf( stderr, "[real-susp] ml730 HOLD FAILED tid=%04x kr=%d\n", thread->id, kr );
+         return 0;
+     }
+-    safe = rs_port_at_safe_point( thread, port );
++    safe = rs_port_at_safe_point( thread, port, pc, sp );
+     if (!safe) thread_resume( port );
+     mach_port_deallocate( mach_task_self(), port );
+     if (!safe) return -1;
+@@ -773,33 +839,52 @@ static int rs_try_hold( struct thread *thread )
+ /* Apply ONE persistent Mach hold. Idempotent per thread. */
+ int ios_thread_mach_hold( struct thread *thread )
+ {
++    uint64_t pc, sp;
+     int ret;
+ 
+     rs_tick();
+     if (!ios_real_suspend_enabled()) return 0;
+     if (!rs_flag_ok( thread, "hold" )) return 0;
+     if (thread->ios_mach_suspended == 1) return 1;     /* nested: counter only */
+-    ret = rs_try_hold( thread );
++    ret = rs_try_hold( thread, &pc, &sp );
+     if (ret < 0) rs_defer( thread );
+     return ret > 0;
+ }
+ 
++#define RS_LATE_LOG_MAX 64
++
+ /* safepoint: the deferred hold's retry. Holds a reference on the thread. */
+ static void rs_retry( void *private )
+ {
++    static unsigned int late_logged;
+     struct rs_pending *p = private;
+     struct thread *thread = p->thread;
+ 
+     if (thread->ios_mach_suspended == RS_PENDING)
+     {
++        uint64_t pc = 0, sp = 0;
+         int ret = 0;
+ 
+         if (thread->suspend > 0 && thread->state != TERMINATED)
+         {
+             rs_retries++;
+-            ret = rs_try_hold( thread );
++            ret = rs_try_hold( thread, &pc, &sp );
++        }
++        if (ret > 0)
++        {
++            rs_late_holds++;
++            if (late_logged++ < RS_LATE_LOG_MAX)
++            {
++                struct rs_fex_state fs;
++
++                rs_read_fex_state( thread, &fs );
++                fprintf( stderr, "[real-susp] late hold #%u tid=%04x tries=%u pc=%#llx sp=%#llx "
++                         "insim=%u insc=%u wpm_depth=%u cbw=%#llx\n",
++                         late_logged, thread->id, p->tries + 1, (unsigned long long)pc,
++                         (unsigned long long)sp, fs.in_simulation, fs.in_syscall_callback,
++                         fs.wpm_depth, (unsigned long long)fs.cbw_stamp );
++            }
+         }
+-        if (ret > 0) rs_late_holds++;
+         else if (ret < 0 && add_timeout_user( rs_retry_delay( ++p->tries ), rs_retry, p ))
+             return;                                    /* keep the reference for the next try */
+         else if (thread->ios_mach_suspended == RS_PENDING) thread->ios_mach_suspended = 0;

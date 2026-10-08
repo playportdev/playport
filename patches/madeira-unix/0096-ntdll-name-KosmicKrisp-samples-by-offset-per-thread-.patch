@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 6 Oct 2026 17:00:00 +0200
+Subject: [PATCH] ntdll: name KosmicKrisp samples by offset; per-thread leaf
+ and module tables
+
+Three changes to the [wprof] sampler (WINE_IOS_PROF=1) for the Vulkan
+route's profiles:
+
+- It names a native leaf by dladdr's symbol. KosmicKrisp is built with
+  hidden visibility and exports only its Vulkan entry points, so every
+  sample in one of its static functions was named after the nearest
+  export before it (for example
+  vk_common_GetPipelineExecutableStatisticsKHR), which says nothing
+  about where the driver spends its time. A KosmicKrisp leaf is now
+  "KosmicKrisp+<offset>", which tools/sampleprof.py resolves against the
+  framework the app was built with: it keeps its local symbols. The
+  class table still counts it as lib:KosmicKrisp.
+- The leaf table is the whole process's, cut at its 45 largest entries,
+  so a thread such as dxvk-cs, whose ~10 % spreads over many functions
+  each under 0.4 %, never showed. A "thread-leaf" table (80 entries) now
+  keys each native (not guest) sample by "<thread>/<leaf>", as
+  guest-thread does for guest code.
+- A "thread-module" table (60 entries) keys every sample by
+  "<thread>/<module>" (guest code as x64-JIT), so a thread's share in
+  KosmicKrisp, d3d11, winevulkan or Metal adds up even where no single
+  function is large.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-06-vulkan-perf-tooling.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index cd8c9f1..7cb9109 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -1875,7 +1875,12 @@ static int ios_wp_desc( uint64_t a, struct ios_ts_map *mp, char *out, size_t cap
+     if (dladdr( (void *)a, &di ) && di.dli_fname)
+     {
+         const char *img = strrchr( di.dli_fname, '/' ); img = img ? img + 1 : di.dli_fname;
+-        if (di.dli_sname) snprintf( out, cap, "%s`%s", img, di.dli_sname );
++        /* Playport: KosmicKrisp exports only its Vulkan entry points, so dladdr
++         * names its static functions after the nearest export. Its offset is
++         * what tools/sampleprof.py resolves against the staged framework. */
++        if (!strcmp( img, "KosmicKrisp" ))
++            snprintf( out, cap, "%s+%llx", img, (unsigned long long)((a - (uint64_t)di.dli_fbase) & ~0xfull) );
++        else if (di.dli_sname) snprintf( out, cap, "%s`%s", img, di.dli_sname );
+         else snprintf( out, cap, "%s+%llx", img, (unsigned long long)((a - (uint64_t)di.dli_fbase) & ~0xffull) );
+         *kind = strstr( img, "Madeira" ) ? 4 : 5;
+         return 1;
+@@ -1885,7 +1890,7 @@ static int ios_wp_desc( uint64_t a, struct ios_ts_map *mp, char *out, size_t cap
+ }
+ static void ios_wprof_main( void )
+ {
+-    static struct ios_wp_b leaf[400], inc[300], unx[200], cls[8], pein[300], thr[16], gthr[300];
++    static struct ios_wp_b leaf[400], inc[300], unx[200], cls[8], pein[300], thr[16], gthr[300], tleaf[500], tmod[120];
+     /* Playport: WINE_IOS_PROF=1 samples the busiest threads of any kind (up to
+      * WP_MAXT, each at 5 % of a core or more when the burst starts), not only
+      * RDR2's submission worker, and adds three tables: the thread, the first
+@@ -1901,7 +1906,7 @@ static void ios_wprof_main( void )
+     {
+         thread_act_array_t th = NULL; mach_msg_type_number_t nth = 0, k;
+         mach_port_t tw[WP_MAXT]; uint64_t tw_teb[WP_MAXT]; char tw_name[WP_MAXT][24]; int ntw = 0, s, i;
+-        int nleaf = 0, ninc = 0, nunx = 0, ncls = 0, npein = 0, nthr = 0, ngthr = 0; unsigned total = 0, walked = 0;
++        int nleaf = 0, ninc = 0, nunx = 0, ncls = 0, npein = 0, nthr = 0, ngthr = 0, ntleaf = 0, ntmod = 0; unsigned total = 0, walked = 0;
+         sleep( 15 );
+         if (task_threads( mach_task_self(), &th, &nth ) != KERN_SUCCESS) continue;
+         if (busy)
+@@ -2013,6 +2018,21 @@ static void ios_wprof_main( void )
+                     snprintf( tk, sizeof(tk), "%s/%s", tw_name[t], key );
+                     ios_wp_add( gthr, &ngthr, 300, tk );
+                 }
++                else if (busy)
++                {   /* Playport: which thread runs which native code (dxvk-cs, the
++                     * submit thread, Metal's): the leaf under the thread's name */
++                    char tk[96];   /* the table's key size: a longer one is cut alike every time */
++                    snprintf( tk, sizeof(tk), "%s/%s", tw_name[t], key );
++                    ios_wp_add( tleaf, &ntleaf, 500, tk );
++                }
++                if (busy)
++                {   /* and by module: the thread's time in KosmicKrisp, d3d11, winevulkan, Metal */
++                    char tm[96]; int c;
++                    snprintf( tm, sizeof(tm), "%s/%s", tw_name[t], kind == 3 ? "x64-JIT" : key );
++                    for (c = strlen( tw_name[t] ) + 1; tm[c]; c++)
++                        if (tm[c] == '`' || tm[c] == '+') { tm[c] = 0; break; }
++                    ios_wp_add( tmod, &ntmod, 120, tm );
++                }
+                 {
+                     static const char *cn[7] = { "?", "PE-other", "madeira_d3d12", "x64-JIT", "Madeira-dylib", "system-lib", "unknown" };
+                     const char *c = cn[kind < 7 ? kind : 6]; char ck[96];
+@@ -2042,6 +2062,8 @@ static void ios_wprof_main( void )
+             ios_wp_print( "thread", thr, nthr, total, 16 );
+             ios_wp_print( "pe-inclusive", pein, npein, total, 45 );
+             ios_wp_print( "guest-thread", gthr, ngthr, total, 45 );
++            ios_wp_print( "thread-leaf", tleaf, ntleaf, total, 80 );
++            ios_wp_print( "thread-module", tmod, ntmod, total, 60 );
+         }
+         else ios_wp_print( "d3d12-inclusive", inc, ninc, total, 45 );
+         ios_wp_print( "unix-inclusive", unx, nunx, total, 30 );

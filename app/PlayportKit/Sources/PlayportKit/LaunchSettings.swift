@@ -46,11 +46,16 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     /// `key=value` items split at spaces (`vram-mb=1024 totalphys=6144 inproc-sync=1`).
     /// LaunchSettings.runtimeKeys parses them; TitleConfig writes them after the title's.
     public var runtime: String
+    /// The Vulkan layers' options (per game only; a dev build's, decision 0060), as typed:
+    /// items split at spaces, each `NAME=value` for an allowlisted variable
+    /// (LaunchSettings.graphicsVariables) or a DXVK option (`dxvk.tilerMode=False`), which
+    /// goes into DXVK_CONFIG. LaunchSettings.graphicsEnvironment parses them.
+    public var graphicsOptions: String
 
     public init(screen: String? = nil, frameLimit: Int? = nil, graphics: GraphicsBackend? = nil,
                 arguments: String = "", steamAPI: SteamAPISwap.Mode? = nil,
                 cloudSync: Bool? = nil, ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
-                x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: String = "") {
+                x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: String = "", graphicsOptions: String = "") {
         self.screen = screen
         self.frameLimit = frameLimit
         self.graphics = graphics
@@ -62,6 +67,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         self.x87Reduced = x87Reduced
         self.diskCache = diskCache
         self.runtime = runtime
+        self.graphicsOptions = graphicsOptions
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,6 +85,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         x87Reduced = try c.decodeIfPresent(Bool.self, forKey: .x87Reduced)
         diskCache = try c.decodeIfPresent(Bool.self, forKey: .diskCache)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime) ?? ""
+        graphicsOptions = try c.decodeIfPresent(String.self, forKey: .graphicsOptions) ?? ""
     }
 
     public var isEmpty: Bool {
@@ -86,6 +93,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             && arguments.trimmingCharacters(in: .whitespaces).isEmpty && steamAPI == nil && cloudSync == nil
             && ordering.isEmpty && maxInst == nil && x87Reduced == nil && diskCache == nil
             && runtime.trimmingCharacters(in: .whitespaces).isEmpty
+            && graphicsOptions.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Arguments as a command line splits them: at spaces, except inside
@@ -112,6 +120,40 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         return (try? TitleConfig.validate(out)) == nil ? nil : out
     }
 
+    /// The variables a game's Graphics options may set (decision 0060): DXVK's and
+    /// vkd3d-proton's option strings and KosmicKrisp's debug, experimental and
+    /// workaround switches. Nothing else reaches a game's environment this way.
+    public static let graphicsVariables = ["DXVK_CONFIG", "VKD3D_CONFIG", "MESA_KK_DEBUG",
+                                           "MESA_KK_EXPERIMENTAL", "MESA_KK_DISABLE_WORKAROUNDS"]
+    /// The sections of a DXVK option an item may name without DXVK_CONFIG= (dxvk.conf's).
+    public static let dxvkSections = ["dxvk", "dxgi", "d3d11", "d3d10", "d3d9", "d3d8"]
+
+    /// Graphics options as typed (`dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit`):
+    /// items at spaces (double quotes keep spaces), each `NAME=value` for a variable in
+    /// graphicsVariables or `section.option=value` for DXVK. DXVK options join DXVK_CONFIG
+    /// with `;`, as DXVK splits it; a repeated other variable joins with `,`, as vkd3d-proton
+    /// and Mesa split theirs. nil when an item is neither, or names another variable.
+    public static func graphicsEnvironment(_ line: String) -> [String: String]? {
+        var out: [String: String] = [:]
+        func add(_ name: String, _ value: String) {
+            guard !value.isEmpty else { return }
+            out[name] = out[name].map { $0 + (name == "DXVK_CONFIG" ? ";" : ",") + value } ?? value
+        }
+        for item in splitArguments(line) {
+            guard let eq = item.firstIndex(of: "="), eq != item.startIndex else { return nil }
+            let name = String(item[..<eq]), value = String(item[item.index(after: eq)...])
+            if graphicsVariables.contains(name) {
+                add(name, value)
+            } else if let dot = name.firstIndex(of: "."), dxvkSections.contains(String(name[..<dot])),
+                      name.index(after: dot) < name.endIndex {
+                add("DXVK_CONFIG", "\(name) = \(value)")
+            } else {
+                return nil
+            }
+        }
+        return out
+    }
+
     /// What one launch uses.
     public struct Effective: Equatable, Sendable {
         /// nil for the panel's native pixels.
@@ -131,11 +173,14 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
         public var diskCache: Bool?
         /// madeira.cfg keys over the title's own (config(over:)); empty for none.
         public var runtime: [String: String]
+        /// The Vulkan layers' variables from the game's Graphics options; empty for none.
+        public var graphicsEnvironment: [String: String]
 
         public init(screen: String?, frameLimit: Int, graphics: GraphicsBackend = .default,
                     arguments: [String] = [], steamAPI: SteamAPISwap.Mode = .emulated,
                     ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
-                    x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: [String: String] = [:]) {
+                    x87Reduced: Bool? = nil, diskCache: Bool? = nil, runtime: [String: String] = [:],
+                    graphicsEnvironment: [String: String] = [:]) {
             self.screen = screen
             self.frameLimit = frameLimit
             self.graphics = graphics
@@ -146,6 +191,7 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
             self.x87Reduced = x87Reduced
             self.diskCache = diskCache
             self.runtime = runtime
+            self.graphicsEnvironment = graphicsEnvironment
         }
 
         /// The title's madeira.cfg keys (its cohort entry's) with these over them.
@@ -180,7 +226,8 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
                          ordering: game?.ordering ?? MemoryOrdering(),
                          maxInst: game?.maxInst.flatMap { FEXProfile.validBlockSize($0) ? $0 : nil },
                          x87Reduced: game?.x87Reduced, diskCache: game?.diskCache,
-                         runtime: runtimeKeys(game?.runtime ?? "") ?? [:])
+                         runtime: runtimeKeys(game?.runtime ?? "") ?? [:],
+                         graphicsEnvironment: graphicsEnvironment(game?.graphicsOptions ?? "") ?? [:])
     }
 
     /// The screens the pickers offer, as screen specs; the phone keeps those it can show.
@@ -214,14 +261,30 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
 
     /// Environment this backend's launches start with.
     ///
-    /// None for either backend. Vulkan started with
-    /// `DXVK_CONFIG=dxvk.numCompilerThreads = 2` while the FEX host band was
-    /// too full for DXVK's own compiler pool (decision 0015); with the band's
-    /// leak fixed, Hollow Knight starts all of DXVK's threads with most of the
-    /// band free, so DXVK picks its own count (decision 0024).
+    /// None for DXMT. Vulkan turns DXVK's tiler mode off (decision 0066): on
+    /// KosmicKrisp it recorded each render pass into a secondary command buffer
+    /// that the driver copied and replayed on DXVK's frame thread, for no GPU time
+    /// saved. DXVK still picks its own compiler thread count (decision 0024).
     public var runtimeEnvironment: [String: String] {
         switch self {
-        case .dxmt, .vulkan: [:]
+        case .dxmt: [:]
+        case .vulkan: ["DXVK_CONFIG": "dxvk.tilerMode = False"]
         }
+    }
+
+    /// The backend's environment with a game's Graphics options over it (decision
+    /// 0060): an option's variable replaces the backend's, except DXVK_CONFIG, where
+    /// the options follow the backend's after `;`, so DXVK takes an option's value for
+    /// a key both name and keeps the backend's others.
+    public func environment(graphicsOptions options: [String: String]) -> [String: String] {
+        var env = runtimeEnvironment
+        for (name, value) in options {
+            if name == "DXVK_CONFIG", let own = env[name] {
+                env[name] = own + ";" + value
+            } else {
+                env[name] = value
+            }
+        }
+        return env
     }
 }

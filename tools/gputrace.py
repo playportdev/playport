@@ -216,6 +216,25 @@ def pass_desc(blob):
             "stencil": attachment(q, i + 17), "width": q[i + 38], "height": q[i + 39]}
 
 
+def pass_desc4(blob):
+    """A Metal 4 render pass descriptor (KosmicKrisp's), read from an iOS 27.0
+    capture: from word 1 the colour attachments as pass_desc's, to a word of all
+    ones; one word; the depth attachment; 3 words; the render target's height and
+    width (a 720-row frame of the 19.5:9 panel reads 720 then 1564); stencil."""
+    q = words(blob)
+    if len(q) < 3 or q[0] != 0xE1:
+        return None
+    colors, i = {}, 1
+    while i < len(q) and q[i] != 0xFFFFFFFFFFFFFFFF:
+        colors[q[i]] = attachment(q, i + 1)
+        i += 17
+    j = i + 2
+    if j + 22 + 17 > len(q):
+        return None
+    return {"colors": colors, "color0": colors.get(0), "depth": attachment(q, j),
+            "stencil": attachment(q, j + 22), "width": q[j + 21], "height": q[j + 20]}
+
+
 def summarize(bundle):
     names = call_names()
     store = load_store(bundle)
@@ -227,9 +246,11 @@ def summarize(bundle):
         n = name_of(names, c.num)
         if n == "MTLLibrary_newFunctionWithName" and len(c.args) > 1:
             functions[c.ret] = c.args[1]
-        elif n.startswith("MTLDevice_newRenderPipelineState") and len(c.args) > 1:
+        elif (n.startswith("MTLDevice_newRenderPipelineState")
+              or n.startswith("MTL4Compiler_newRenderPipelineState")) and len(c.args) > 1:
             pipelines[c.ret] = store.get(c.args[1], b"")
-        elif n.startswith("MTLDevice_newTexture") and len(c.args) > 1 and isinstance(c.args[1], str):
+        elif (n.startswith("MTLDevice_newTexture") or n.startswith("MTLHeap_newTexture")) \
+                and len(c.args) > 1 and isinstance(c.args[1], str):
             textures[c.ret] = texture_desc(store.get(c.args[1], b""))
         elif c.sig == "CiUul" and len(c.args) > 2 and isinstance(c.args[2], str):
             data = store.get(c.args[2], b"")
@@ -243,20 +264,24 @@ def summarize(bundle):
     cur = None
     for c in records(os.path.join(bundle, "capture")):
         n = name_of(names, c.num)
-        if n.startswith("MTLCommandQueue_commandBuffer"):
+        # Metal 4 (KosmicKrisp): a command buffer begins with an allocator, the
+        # queue signals the drawable it presents
+        if n.startswith("MTLCommandQueue_commandBuffer") or n == "MTL4CommandBuffer_beginCommandBufferWithAllocator":
             buffers.append({"passes": 0, "presents": 0})
-        elif n == "MTLCommandBuffer_renderCommandEncoderWithDescriptor":
-            d = pass_desc(store.get(c.args[1], b"")) if len(c.args) > 1 else None
+        elif n in ("MTLCommandBuffer_renderCommandEncoderWithDescriptor",
+                   "MTL4CommandBuffer_renderCommandEncoderWithDescriptor"):
+            parse = pass_desc4 if n.startswith("MTL4") else pass_desc
+            d = parse(store.get(c.args[1], b"")) if len(c.args) > 1 else None
             cur = {"buffer": len(buffers), "kind": "render", "desc": d, "pipelines": [], "draws": 0,
                    "elements": 0, "resources": 0, "fence_waits": 0}
             passes.append(cur)
             if buffers:
                 buffers[-1]["passes"] += 1
-        elif re.match(r"MTLCommandBuffer_(blit|compute)CommandEncoder", n):
+        elif re.match(r"MTL4?CommandBuffer_(blit|compute)CommandEncoder", n):
             cur = {"buffer": len(buffers), "kind": n.split("_")[1][:4], "desc": None, "pipelines": [],
                    "draws": 0, "elements": 0, "resources": 0, "fence_waits": 0}
             passes.append(cur)
-        elif n == "MTLCommandBuffer_presentDrawable" and buffers:
+        elif n in ("MTLCommandBuffer_presentDrawable", "MTL4CommandQueue_signalDrawable") and buffers:
             buffers[-1]["presents"] += 1
         elif cur is None:
             continue
@@ -327,8 +352,6 @@ def report(s):
             v = st.get(stage) or {}
             fn = next((f for f in fns if f.startswith(prefix)), "?")
             vals = [v.get(k) for k in keys]
-            cells = [f"{x:>6}" if i == 0 else (f"{x:>6.1f}" if isinstance(x, float) else f"{x!s:>4}")
-                     for i, x in enumerate(vals)]
             out.append(f"{pid:<4} {stage.split()[0]:<9} {vals[0]!s:>6} {vals[1]!s:>5} {vals[2]!s:>5} "
                        f"{vals[3]!s:>4} {vals[4]!s:>5} {vals[5]!s:>4} {vals[6]!s:>4} "
                        f"{(vals[7] or 0):>6.1f}  {fn}")

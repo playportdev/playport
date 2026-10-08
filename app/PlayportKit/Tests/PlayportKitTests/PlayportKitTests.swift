@@ -581,8 +581,20 @@ final class LaunchSettingsTests: XCTestCase {
         XCTAssertNil(GraphicsBackend.dxmt.runtimeOverlay)
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeOverlay, "vulkan")
         XCTAssertEqual(GraphicsBackend.dxmt.runtimeEnvironment, [:])
-        // DXVK picks its own compiler thread count (decision 0024).
-        XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, [:])
+        // DXVK picks its own compiler thread count (decision 0024); tiler mode is off (decision 0066).
+        XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
+    }
+
+    func testGraphicsOptionsGoOverTheBackendsEnvironment() {
+        // A DXVK option follows the backend's DXVK_CONFIG, so DXVK keeps tiler mode off
+        // unless the option names it (DXVK takes a key's last value).
+        XCTAssertEqual(GraphicsBackend.vulkan.environment(graphicsOptions: ["DXVK_CONFIG": "dxgi.maxFrameLatency = 2"]),
+                       ["DXVK_CONFIG": "dxvk.tilerMode = False;dxgi.maxFrameLatency = 2"])
+        XCTAssertEqual(GraphicsBackend.vulkan.environment(graphicsOptions: ["VKD3D_CONFIG": "one_time_submit"]),
+                       ["DXVK_CONFIG": "dxvk.tilerMode = False", "VKD3D_CONFIG": "one_time_submit"])
+        XCTAssertEqual(GraphicsBackend.vulkan.environment(graphicsOptions: [:]), GraphicsBackend.vulkan.runtimeEnvironment)
+        XCTAssertEqual(GraphicsBackend.dxmt.environment(graphicsOptions: ["DXVK_CONFIG": "dxvk.hud = fps"]),
+                       ["DXVK_CONFIG": "dxvk.hud = fps"])
     }
 
     func testASteamGameRunsWithItsAppIDAsSteamsGameID() {
@@ -790,6 +802,31 @@ final class FEXProfileTests: XCTestCase {
         XCTAssertNil(LaunchSettings.runtimeKeys("a b=1"))
         XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(runtime: "oops"), global: LaunchSettings()).runtime, [:])
         XCTAssertEqual(LaunchSettings.runtimeKeys(""), [:])
+    }
+
+    func testGraphicsOptionsSetOnlyTheAllowlistedVariables() {
+        // A DXVK option without its variable joins DXVK_CONFIG, as DXVK splits it (at ;).
+        XCTAssertEqual(LaunchSettings.graphicsEnvironment("dxvk.tilerMode=False dxgi.maxFrameLatency=2"),
+                       ["DXVK_CONFIG": "dxvk.tilerMode = False;dxgi.maxFrameLatency = 2"])
+        XCTAssertEqual(LaunchSettings.graphicsEnvironment("DXVK_CONFIG=dxvk.hud=fps d3d11.cachedDynamicResources=a"),
+                       ["DXVK_CONFIG": "dxvk.hud=fps;d3d11.cachedDynamicResources = a"])
+        // The other variables join at , (vkd3d-proton's and Mesa's lists).
+        XCTAssertEqual(LaunchSettings.graphicsEnvironment("VKD3D_CONFIG=one_time_submit VKD3D_CONFIG=no_upload_hvv MESA_KK_EXPERIMENTAL=all"),
+                       ["VKD3D_CONFIG": "one_time_submit,no_upload_hvv", "MESA_KK_EXPERIMENTAL": "all"])
+        XCTAssertEqual(LaunchSettings.graphicsEnvironment(""), [:])
+        // Anything else is refused whole: another variable, a bare word, an unknown section.
+        XCTAssertNil(LaunchSettings.graphicsEnvironment("DYLD_INSERT_LIBRARIES=x"))
+        XCTAssertNil(LaunchSettings.graphicsEnvironment("dxvk.tilerMode=False oops"))
+        XCTAssertNil(LaunchSettings.graphicsEnvironment("wine.x=1"))
+        XCTAssertNil(LaunchSettings.graphicsEnvironment("=1"))
+        // Per game only, saved and resolved like the runtime keys.
+        let s = try! JSONDecoder().decode(LaunchSettings.self, from: Data(#"{"graphicsOptions":"dxvk.hud=fps"}"#.utf8))
+        XCTAssertFalse(s.isEmpty)
+        XCTAssertEqual(LaunchSettings.resolve(game: s, global: LaunchSettings()).graphicsEnvironment,
+                       ["DXVK_CONFIG": "dxvk.hud = fps"])
+        XCTAssertEqual(LaunchSettings.resolve(game: nil, global: s).graphicsEnvironment, [:])
+        XCTAssertEqual(LaunchSettings.resolve(game: LaunchSettings(graphicsOptions: "bad"), global: LaunchSettings())
+                           .graphicsEnvironment, [:])
     }
 
     func testHostFeaturesAddLRCPC2ToThePlayersOwn() {

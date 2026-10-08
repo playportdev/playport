@@ -4,7 +4,8 @@
 [0015](0015-vulkan-backend-accepted.md) (the rest of 0015 stands). Settles
 item 5 of the [runtime-risks plan](../plans/finished.md#runtime-risks)
 (virtual address space is tight). The measurements are in the
-[evidence record](../evidence/2026-09-28-fex-band.md).
+[evidence record](../evidence/2026-09-28-fex-band.md). Its "no `DXVK_CONFIG`" is superseded by
+[0066](0066-dxvk-tiler-mode-off.md) (tiler mode off); the compiler threads stand.
 
 ## Decision
 

@@ -94,3 +94,6 @@
 0093-ntdll-keep-a-web-page-s-query-out-of-the-process-com.patch
 0094-win32u-log-changed-captions-and-static-dialog-text-o.patch
 0095-ntdll-route-iOS-NSI-reads-to-Wine-NDIS-and-IP-provid.patch
+0096-ntdll-name-KosmicKrisp-samples-by-offset-per-thread-.patch
+0097-wineserver-defer-a-real-suspend-s-hold-while-the-thr.patch
+0098-ntdll-name-a-stuck-FEX-lock-s-write-owner-s-Mach-sta.patch

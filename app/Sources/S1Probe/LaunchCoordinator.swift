@@ -52,6 +52,9 @@ enum LaunchCoordinator {
         var steamAppID: UInt32? = nil
         /// Which layer runs the game's Direct3D (LaunchSettings).
         var graphics: GraphicsBackend = .default
+        /// The game's Graphics options (LaunchSettings.graphicsEnvironment; dev builds only,
+        /// decision 0060), over the backend's own environment.
+        var graphicsEnvironment: [String: String] = [:]
         /// FEX's memory ordering for the game (FEXProfile.launch); nil leaves FEX's own defaults.
         var fex: FEXProfile.Launch? = nil
         /// The JIT pool (docs/ARCHITECTURE.md, JIT pool placement); nil sizes it
@@ -399,7 +402,12 @@ enum LaunchCoordinator {
         // After the session root started: its environment is the app's without the title's.
         var backend = r.graphics.runtimeEnvironment
         #if !PLAYPORT_RELEASE
-        backend.merge(Diagnostics.launchEnvironment(exe: r.exe, log: log)) { own, _ in own }
+        if !r.graphicsEnvironment.isEmpty {
+            log("graphics options: " + r.graphicsEnvironment.keys.sorted().map { "\($0)=\(r.graphicsEnvironment[$0]!)" }
+                .joined(separator: " "))
+            backend = r.graphics.environment(graphicsOptions: r.graphicsEnvironment)
+        }
+        backend.merge(Diagnostics.launchEnvironment(exe: r.exe, dir: dir, graphics: r.graphics, log: log)) { own, _ in own }
         #endif
         let environment = applyEnvironment(backend: backend, steamAppID: r.steamAppID, fex: r.fex)
         step(.startingGame)

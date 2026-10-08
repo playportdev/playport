@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 7 Oct 2026 00:00:00 +0200
+Subject: [PATCH] ntdll: log a run-once keyed wait that ends without its
+ release
+
+RtlRunOnceBeginInitialize queues a waiter by pointing the once at a
+variable on the waiter's stack, and RtlRunOnceComplete walks that list,
+reading each waiter's link before releasing it. If NtWaitForKeyedEvent
+returns without that release, the waiter loops, may see the once done
+and return, and the completer then reads a link in a dead frame. Hollow
+Knight on Direct3D 12 ended 1 s in with an access violation in
+RtlRunOnceComplete reading such a link (garbage: 0x1280000836002500,
+then x86 code bytes), from UnityPlayer's InitOnceComplete on a static
+once, in 3 of 13 starts.
+
+Waiting again until the wait reports success hung every Direct3D 12
+start (7 of 7), so the wait does end without a release here, and keeps
+doing so. This logs the status (the first 16 times) and keeps Wine's
+behaviour, to find out which status and why before a fix.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-06-vulkan-perf-baseline.md
+Offered-upstream: no
+---
+ dlls/ntdll/sync.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index 58094e2..db1d74e 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -142,7 +142,18 @@ DWORD WINAPI RtlRunOnceBeginInitialize( RTL_RUN_ONCE *once, ULONG flags, void **
+             next = val & ~3;
+             if (InterlockedCompareExchangePointer( &once->Ptr, (void *)((ULONG_PTR)&next | 1),
+                                                    (void *)val ) == (void *)val)
+-                NtWaitForKeyedEvent( 0, &next, FALSE, NULL );
++            {
++                /* Playport: once queued, this frame is the completer's list node
++                 * until RtlRunOnceComplete releases it (it reads next first). Log
++                 * a wait that ends without the release: then the frame can go
++                 * while the completer may still read it. Waiting again on such a
++                 * status hung every Direct3D 12 start of Hollow Knight (the wait
++                 * kept failing at once), so the status is only logged for now. */
++                static LONG logged;
++                NTSTATUS status = NtWaitForKeyedEvent( 0, &next, FALSE, NULL );
++                if (status && InterlockedIncrement( &logged ) <= 16)
++                    ERR( "once %p: keyed wait returned %#lx without a release\n", once, (long)status );
++            }
+             break;
+ 
+         case 2:  /* done */

@@ -528,10 +528,31 @@ final class PacedMetalLayer: CAMetalLayer {
     /// drawable: its first frame (LaunchCoordinator's `first frame` mark).
     static func onFirstFrame(_ then: @escaping () -> Void) { firstFrame.withLockUnchecked { $0 = then } }
 
+    #if !PLAYPORT_RELEASE
+    private static let drawables = OSAllocatedUnfairLock(initialState: 0)
+
+    /// A dev build's `[frames] HH:MM:SS.mmm n=N` line every 16 drawables the game takes, on
+    /// either backend: what `pp perf --no-hud` counts frames by when the Metal HUD is off
+    /// (DXMT's own Present lines are DXMT's only).
+    private static func countDrawable() {
+        let n = drawables.withLock { n in n += 1; return n }
+        guard n % 16 == 0 else { return }
+        var tv = timeval(), t = tm()
+        gettimeofday(&tv, nil)
+        var secs = tv.tv_sec
+        localtime_r(&secs, &t)
+        HostIO.log(String(format: "[frames] %02d:%02d:%02d.%03ld n=%ld", t.tm_hour, t.tm_min, t.tm_sec,
+                          Int(tv.tv_usec / 1000), n))
+    }
+    #endif
+
     override func nextDrawable() -> (any CAMetalDrawable)? {
         let wait = Self.pacer.withLock { $0.delay(now: CACurrentMediaTime()) }
         if wait > 0 { Thread.sleep(forTimeInterval: wait) }
         let drawable = super.nextDrawable()
+        #if !PLAYPORT_RELEASE
+        if drawable != nil { Self.countDrawable() }
+        #endif
         drawable?.addPresentedHandler { d in
             guard let t = (d as? CAMetalDrawable)?.texture else { return }
             Self.shown.withLockUnchecked { $0 = t }

@@ -59,7 +59,8 @@ final class TitleLaunch: ObservableObject {
     /// then the launch on its own thread. False when a launch is running or spent.
     @discardableResult
     func start(title: String, titleID: String? = nil, exe: String, args: [String], config: [String: String] = [:],
-               screen: String? = nil, frameLimit: Int = 0, graphics: GraphicsBackend = .default, steamAppID: UInt32? = nil,
+               screen: String? = nil, frameLimit: Int = 0, graphics: GraphicsBackend = .default,
+               graphicsEnvironment: [String: String] = [:], steamAppID: UInt32? = nil,
                fex: FEXProfile.Launch? = nil, steamAPI: LaunchCoordinator.SteamAPI? = nil,
                memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil, galaxy: GalaxyListener? = nil) -> Bool {
         guard !running, !spent else { return false }
@@ -84,7 +85,8 @@ final class TitleLaunch: ObservableObject {
         // An Epic game's sign-in arguments stay out of the log (decision 0059).
         TitleMode.log("in-app start \(exe) \(EpicInstaller.redacted(args).joined(separator: " "))")
         let request = LaunchCoordinator.Request(exe: exe, args: args, config: config,
-                                                steamAppID: steamAppID, graphics: graphics, fex: fex, jitWait: 180, steamAPI: steamAPI,
+                                                steamAppID: steamAppID, graphics: graphics,
+                                                graphicsEnvironment: graphicsEnvironment, fex: fex, jitWait: 180, steamAPI: steamAPI,
                                                 memory: memory, epic: epic, title: title, galaxy: galaxy)
         Thread.detachNewThread {
             let outcome = LaunchCoordinator.run(request) { step in

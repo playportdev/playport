@@ -114,7 +114,7 @@ resource	Runtime/arm64ec-windows/ncrypt.dll	655360	6f4dddc285de2149257f85a36f834
 resource	Runtime/arm64ec-windows/netapi32.dll	655360	d881f11781b354a88b8a19bddfa106adc898cf1b2e43285f33794a74ba0681fa	wine-build	build-arm64ec/dlls/netapi32/arm64ec-windows/netapi32.dll	P2
 resource	Runtime/arm64ec-windows/netutils.dll	655360	f8f303467f3eb482f1e8baa0e94e428894f3c8fb2a9f729e9d0da4b54bf07624	wine-build	build-arm64ec/dlls/netutils/arm64ec-windows/netutils.dll	P2
 resource	Runtime/arm64ec-windows/nsi.dll	655360	ada3001ea979e11d17ed50d5d441a26c9aa2714c1bc4742bbad6b48924c81e51	wine-build	build-arm64ec/dlls/nsi/arm64ec-windows/nsi.dll	P2
-resource	Runtime/arm64ec-windows/ntdll.dll	1572864	d1616287c5048a57f1e4be2f7b70dc4f279682d9b108c6a215ba3b9251427d8b	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
+resource	Runtime/arm64ec-windows/ntdll.dll	1572864	867a8b01169208b13f92782610deb76c7a6ca26a7371c7c1ad775264d571e56f	wine-build	build-arm64ec/dlls/ntdll/arm64ec-windows/ntdll.dll	P2-ec
 resource	Runtime/arm64ec-windows/ole32.dll	1638400	ba28bc412a2072b90ff03e9efd238192f0ab2afe599570a6eb1e2a13ad2c8cb0	wine-build	build-arm64ec/dlls/ole32/arm64ec-windows/ole32.dll	P2
 resource	Runtime/arm64ec-windows/oleacc.dll	786432	6f2f8ab7fe54e9eea0e18d66a17df03d811bf78290d6da4923c73d2c80b09b34	wine-build	build-arm64ec/dlls/oleacc/arm64ec-windows/oleacc.dll	P2
 resource	Runtime/arm64ec-windows/oleaut32.dll	1507328	b6322c406627463c14ba753e4c6cb5aad3c74e046a583b46fe57d5363baef47e	wine-build	build-arm64ec/dlls/oleaut32/arm64ec-windows/oleaut32.dll	P2
@@ -246,7 +246,7 @@ resource	Runtime/aarch64-windows/netutils.dll	458752	3277bb41fd69dcb9962ae97bb03
 resource	Runtime/aarch64-windows/newdev.dll	458752	ee7110a7836ed5494e88a84c1643f5107688e46d8fac57827e3770c520e9b076	wine-build	build-macos/dlls/newdev/aarch64-windows/newdev.dll	P2
 resource	Runtime/aarch64-windows/notepad.exe	655360	056a4dbdc12f1fce5eab8618c9ef6d29c8dec023c0a637332c674019114275d0	wine-build	build-macos/programs/notepad/aarch64-windows/notepad.exe	P2
 resource	Runtime/aarch64-windows/nsi.dll	458752	0c51863bc63137572fcebbabea20c260210579621bacb63fc7fa72737223bd9e	wine-build	build-macos/dlls/nsi/aarch64-windows/nsi.dll	P2
-resource	Runtime/aarch64-windows/ntdll.dll	1376256	016eacb34c47e9a2ed78d7fecfec5ea52dd73010f56a5cd041165b9cf04776a6	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
+resource	Runtime/aarch64-windows/ntdll.dll	1376256	a26f863c3df4bf1518a9baf83a9c99577f38364e06339a3c18dc20b4a8405d8c	wine-build	build-macos/dlls/ntdll/aarch64-windows/ntdll.dll	P2
 resource	Runtime/aarch64-windows/ntoskrnl.exe	1048576	d8a343d53a7225c7fcd0ca1a1228dffa227e07365cbffa8b7c80db3a415ff188	wine-build	build-macos/dlls/ntoskrnl.exe/aarch64-windows/ntoskrnl.exe	P2
 resource	Runtime/aarch64-windows/ole32.dll	1310720	3f9913866dff126010b1e12458bdf124d7f08eeae86db9d3da3007c6ebe5fdda	wine-build	build-macos/dlls/ole32/aarch64-windows/ole32.dll	P2
 resource	Runtime/aarch64-windows/oleacc.dll	589824	37ce934246f4650d7516b26aee788ecc1279d1651706e2915d5d9e70c7ecb075	wine-build	build-macos/dlls/oleacc/aarch64-windows/oleacc.dll	P2
@@ -652,7 +652,7 @@ resource	Runtime/i386-windows/normaliz.dll	8192	405667fb46544920b4256b6c5797a6fd
 resource	Runtime/i386-windows/npmshtml.dll	32768	17905e43f52b411ca7ad29917cc7a7f6d045ebc6073d8e1971598abc22b31d04	wine-build	build-macos/dlls/npmshtml/i386-windows/npmshtml.dll	P2
 resource	Runtime/i386-windows/npptools.dll	36864	2a9d8cde13b2a490e656839f75ce088d0d6496971c0a4995a381cd02cbdd1a53	wine-build	build-macos/dlls/npptools/i386-windows/npptools.dll	P2
 resource	Runtime/i386-windows/nsi.dll	45056	604b812b257e3575289aed5e4271a93d748ee5b3f0af4d81d71f265875bdcf36	wine-build	build-macos/dlls/nsi/i386-windows/nsi.dll	P2
-resource	Runtime/i386-windows/ntdll.dll	942080	16a48171ed215c567910402c9733eb6b7ab6a4585e94b8d624bff762421b5392	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
+resource	Runtime/i386-windows/ntdll.dll	942080	6c7d2d5eb157980cacc81c69e5e30cccbf958b2f7ad7648ff65eef625c1511a7	wine-build	build-macos/dlls/ntdll/i386-windows/ntdll.dll	P2
 resource	Runtime/i386-windows/ntdsapi.dll	61440	168d0ad51ba6455af08a2c2eda7c0f1199e7f9948e7b66b909f29a14a3b7fdd0	wine-build	build-macos/dlls/ntdsapi/i386-windows/ntdsapi.dll	P2
 resource	Runtime/i386-windows/ntprint.dll	45056	9e38f659276a4e99a5b9733f9bef2d9bc57671d0e0d49dc39595da9fec60be2c	wine-build	build-macos/dlls/ntprint/i386-windows/ntprint.dll	P2
 resource	Runtime/i386-windows/objsel.dll	212992	ea9e9f79dec6d78e723b1934a3d910ec2ec7fcf592ed5c85f1678a001f577b80	wine-build	build-macos/dlls/objsel/i386-windows/objsel.dll	P2
@@ -955,9 +955,9 @@ resource	Runtime/fonts/tahomabd.ttf	137836	508a2acc88cd6abdd399ae79c9965db43fba7
 resource	Runtime/registry/system.reg	506267	10fc366caf0cbaa72fd003adc79dc39c2a49a089db8fcea0897bc2bf78161e1a	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	1610	590b70ff4b8a797c3c1d385550b22765d7c8c9ac2e8d0581f679e2b5fd49a75b	registry	user.reg	P7-reg
 resource	Runtime/certs/cacert.pem	188900	a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505	ca-bundle	cacert.pem	ca-bundle
-link	lib/libntdll_unix.a	3108552	b013857eddc133ffe7860101a95df828a9234c53e1ccb5fdcfa6a4ed2a39421d	unix	mythic/app/Madeira/libntdll_unix.a	P3
-link	lib/libwin32u_unix.a	4122184	ef1ae3ded301bb25b7ac4902d47e4f53b0907fff3176d8b96aea38b9718dd322	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
-link	lib/libwineserver.a	1217248	05150f6ee7d65f02aa7b444ca39b4ce16ddb5041544a750156b614321f674b4f	unix	mythic/app/Madeira/libwineserver.a	P4-server
+link	lib/libntdll_unix.a	3112488	5a97b5681a42638447aab808432edeeccdd54783bf3ee21fe6812efc8f88850c	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libwin32u_unix.a	4122192	15db0738a2bea85078c91a24850e5cbec4a98decdf6b051b7c0edc8f2a676956	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
+link	lib/libwineserver.a	1218648	dac2a2f898b268b7b684cd825e9639d8de33e1c24112818c0a605d5f9e598b10	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto
 link	lib/libhogweed.a	1105792	247e869163901151301d2ff3c930a68c3742fbbb263a33b8bc10a98dfbd65b9f	unix	mythic/toolchains/gnutls-ios/lib/libhogweed.a	P4-crypto
 link	lib/libnettle.a	1705864	ff2ecf070899ab728cf21dc13bb9463fdf5a79775a34c5f87e7d861fed2d9543	unix	mythic/toolchains/gnutls-ios/lib/libnettle.a	P4-crypto
