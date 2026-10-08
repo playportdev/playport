@@ -46,6 +46,17 @@ PC, no cloud, no stream.
   </tr>
 </table>
 
+<table>
+  <tr>
+    <td width="50%"><img src="site/screenshots/library-gog.webp" alt="Playport's Library with the GOG filter: Moonscars, Monster Train, Shogun Showdown and Duck Paradox ready to play, more GOG games not installed"></td>
+    <td width="50%"><img src="site/screenshots/library-epic.webp" alt="Playport's Library with the Epic Games filter: Snakebird Complete, House of Golf 2, Football Manager 2022 and Death's Door ready to play, more Epic games not installed"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>GOG</b>: your GOG games in the same Library (new in 0.4)</td>
+    <td align="center"><b>Epic Games</b>: Epic games install and start signed in (new in 0.4)</td>
+  </tr>
+</table>
+
 <p align="center">
   <a href="https://playport.dev/#video"><img src="site/video/hollow-knight-poster.webp" width="100%" alt="Screen recording: Hollow Knight in Playport, from the Library to gameplay and back. Click to watch on playport.dev"></a>
   <br><sub><b>Watch the uncut recording</b>: Library to Play to Hollow Knight at 60 fps, then Quit back to Home (<a href="site/video/hollow-knight.mp4">MP4</a>).</sub>
