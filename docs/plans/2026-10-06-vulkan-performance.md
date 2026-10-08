@@ -167,11 +167,14 @@ lever's run is compared with `vk-v2-dxvk-p99-2` (window 85–115 s, the same pit
    `MESA_KK_EXPERIMENTAL`) left that doubling in place and was not kept
    ([private memory](../evidence/2026-10-08-vulkan-perf-private-memory.md)). King's Pass
    captures on both backends ([King's Pass capture](../evidence/2026-10-08-vulkan-perf-kings-pass-capture.md))
-   show the same passes, with no extra split or forced load or store (H3 out). They also show
-   that the flagged run left pixel format view on Unity's TYPELESS scene targets (`0x15`;
-   DXMT `0x5`), so compression was never tested. Next move: widen `narrow_usage` to
-   layout-preserving format lists (DXMT 0009's rule), check the usage in a capture, then one
-   warm native/free pair. Each change gets one warm native/free pair.
+   show the same passes, with no extra split or forced load or store (H3 out), and pixel format
+   view left on Unity's TYPELESS scene targets. **Kept:** `patches/mesa` 0019 (on by default,
+   `MESA_KK_DEBUG=wide_usage` disables it) drops pixel format view for layout-preserving format
+   lists (DXMT 0009's rule) and shader write for non-storage images. The scene targets are now `0x5`.
+   In warm native/60 pairs it held 60 FPS through King's Pass on both routes, where the controls
+   did not, at 21–33 % less phone energy a frame
+   ([TYPELESS usage](../evidence/2026-10-08-vulkan-perf-typeless-usage.md)). What is left of the
+   gap is measured by the cooled exit runs.
 8. **FEX on the D3D12 route** (step 7). UnityGfxDeviceWorker's guest and xtajit64 time is
    13.5 % of samples on vkd3d against 7.6 % on DXVK, with 3× the ARM64EC transitions
    (`ios_ec_xlate_loop`, `ExitFunctionEC`), and it drives vkd3d's +45 % CPU mW at 720/60.
@@ -762,13 +765,35 @@ without the owner is recorded here with its reason.
   - Top cause (inference): uncompressed TYPELESS render targets, as DXMT had before 0009.
   - Two DXVK captures were lost: one did not reach its frame on a `serious` phone, and one lost its
     capture switch to the settings undo (PLA-82). One more landed before King's Pass.
+- **Work-queue item 7, TYPELESS texture usage: kept, on by default**
+  ([TYPELESS usage](../evidence/2026-10-08-vulkan-perf-typeless-usage.md)).
+  - **The change.** `patches/mesa` 0019 gives no pixel format view when every format in an image's
+    format list keeps its component layout. The test is the same channel count, sizes, bit
+    positions and order, the rule of Apple's `pixelFormatView` page and of `patches/dxmt` 0009.
+    Images with no list, depth/stencil and non-plain formats keep it. Shader write goes only to
+    storage images. A layout-changing view is logged as `[kk-pfv-view]`.
+  - **Behind the flag** (IPA `8ea52bd9…`, commit `1545734`):
+    - The gate passed with and without it, and no `[kk-pfv-view]` line came.
+    - The King's Pass capture `vk-kp-dxvk-nu-1` shows the 7 full-res RGBA8 targets at `0x5` and the
+      UAV target at `0x7`.
+    - A warm native/free pair ran both at `serious`. GPU ms went 18.7 → 12.3 and FPS 40.4 → 49.9,
+      but sys mJ/f only 76.5 → 74.1. The control ran under a 404 mW client-11 budget, so the pair
+      is budget-confounded.
+    - The supervisor's tie-break was a warm native/60 pair, flag first: the flag held 59.9 FPS
+      against 37.5, at 68.5 against 102.7 sys mJ/f.
+  - **Default** (IPA `4e6e930d…`, commit `ca12f08`):
+    - The gate passed.
+    - A warm vkd3d native/60 pair ran the control (`wide_usage`) first. The default held 59.7
+      against 53.5 FPS, at 4299 against 4862 sys mW (72.0 against 90.9 mJ/f) and GPU 12.9 against
+      15.2 ms.
+  - **Caveat.** Every pair's control reached thermal pressure 20 where the change did not, in
+    either order. The cooled exit runs confirm.
+  - Decisions (supervisor): keep as the default with a disable switch. It is a patch, not a
+    `runtimeEnvironment` setting, so there is no decision record.
 - **Next:**
-  1. Item 7: `patches/mesa`, `narrow_usage` (behind `MESA_KK_EXPERIMENTAL`) with no pixel format
-     view when every listed view format keeps the component layout (DXMT 0009's rule; depth and
-     block formats keep it). Build, gate, then one `pp gpu capture` to confirm `0x5` on the scene
-     targets, then one warm native/free pair, `narrow_usage` alone first and `private_memory` added
-     only if needed.
-  2. If a gap remains: the depth store DXVK keeps in the pass where DXMT's matching pass does not
-     store depth, then `KK_WORKAROUND_7`'s sample-mask epilogue on single-sample pipelines; one
-     pair each.
+  1. A cooled native/free run per Vulkan route on the 0019 IPA, read against `vk-nat-dxmt-1`
+     (108.9 FPS, 7.5 ms, 61 mJ/f): does the King's Pass doubling remain?
+  2. If a gap remains: `private_memory` (chunk 8's 0020, from `c8c6016`) on top of 0019, since
+     storage is now the one difference left in the targets' descriptors. Then the depth store DXVK
+     keeps in pass 20, then `KK_WORKAROUND_7`'s sample-mask epilogue; one warm pair each.
   3. Item 8 (FEX on the D3D12 route) for vkd3d's CPU power, with warm 720/60 pairs.
