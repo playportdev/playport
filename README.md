@@ -6,7 +6,7 @@
 
 **PC games on your iPhone. Natively, no streaming.**
 
-[Website](https://playport.dev/) · [Download](https://github.com/playportdev/playport/releases) · [Architecture](docs/ARCHITECTURE.md)
+[Website](https://playport.dev/) · [Download](https://github.com/playportdev/playport/releases) · [Game compatibility](https://playport.dev/compatibility/) · [Architecture](docs/ARCHITECTURE.md)
 
 [![Checks](https://img.shields.io/github/actions/workflow/status/playportdev/playport/checks.yml?branch=main&style=flat-square&label=checks&labelColor=151A21)](https://github.com/playportdev/playport/actions/workflows/checks.yml)
 [![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-F5B544?style=flat-square&labelColor=151A21)](LICENSE)
@@ -190,6 +190,15 @@ performance work (faster FEX translation for Unity games, x87 math at native
 precision, lossless texture compression kept on in DXMT, geometry shaders in
 KosmicKrisp), dozens of bug fixes, and the diagnostics behind them. Each one is
 a reviewable patch with the evidence for it.
+
+## Game compatibility
+
+Which games run, and how well: the [compatibility list](https://playport.dev/compatibility/)
+has every game we have played and every one players have reported, with its status,
+searchable and filtered by first letter or status (its data is
+[`site/compatibility/games.json`](site/compatibility/games.json)). Played a game,
+working or not? [Report it](https://github.com/playportdev/playport/issues/new?template=problem.yml)
+and it goes on the list.
 
 ## Reporting a problem
 

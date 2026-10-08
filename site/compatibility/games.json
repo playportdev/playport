@@ -1,0 +1,193 @@
+{
+  "comment": "Playport's public compatibility list, shown by site/compatibility/index.html: each title's status from Linear project Compatibility (team PLA). Keep entries sorted by name; tools/tests/test_compat_site.py checks the format.",
+  "updated": "2026-10-08",
+  "games": [
+    {
+      "name": "Among Us",
+      "store": "steam",
+      "id": "945360",
+      "status": "broken"
+    },
+    {
+      "name": "Bloodstained: Curse of the Moon",
+      "store": "steam",
+      "id": "838310",
+      "status": "broken"
+    },
+    {
+      "name": "Castle Crashers",
+      "store": "steam",
+      "id": "204360",
+      "status": "broken"
+    },
+    {
+      "name": "Cat Mail Co.",
+      "store": "steam",
+      "id": "4380490",
+      "status": "broken"
+    },
+    {
+      "name": "Catherine Classic",
+      "store": "steam",
+      "id": "893180",
+      "status": "broken"
+    },
+    {
+      "name": "Counter-Strike",
+      "store": "steam",
+      "id": "10",
+      "status": "broken"
+    },
+    {
+      "name": "Death's Door",
+      "store": "epic",
+      "status": "issues"
+    },
+    {
+      "name": "DiRT 3 Complete Edition",
+      "store": "steam",
+      "id": "321040",
+      "status": "broken"
+    },
+    {
+      "name": "Duck Paradox",
+      "store": "gog",
+      "id": "1816031813",
+      "status": "broken"
+    },
+    {
+      "name": "En Garde!",
+      "store": "steam",
+      "id": "1654660",
+      "status": "issues"
+    },
+    {
+      "name": "Final Fantasy III (3D Remake)",
+      "store": "steam",
+      "id": "239120",
+      "status": "broken"
+    },
+    {
+      "name": "Final Fantasy VII Remake Intergrade",
+      "store": "steam",
+      "id": "1462040",
+      "status": "issues"
+    },
+    {
+      "name": "Geometry Dash",
+      "store": "steam",
+      "id": "322170",
+      "status": "broken"
+    },
+    {
+      "name": "Half-Life",
+      "store": "steam",
+      "id": "70",
+      "status": "broken"
+    },
+    {
+      "name": "Hollow Knight",
+      "store": "steam",
+      "id": "367520",
+      "status": "works"
+    },
+    {
+      "name": "House of Golf 2",
+      "store": "epic",
+      "status": "broken"
+    },
+    {
+      "name": "Jurassic World Evolution",
+      "store": "epic",
+      "status": "broken"
+    },
+    {
+      "name": "Kingdom Come: Deliverance",
+      "store": "steam",
+      "id": "379430",
+      "status": "issues"
+    },
+    {
+      "name": "Monster Train",
+      "store": "gog",
+      "id": "1304291300",
+      "status": "broken"
+    },
+    {
+      "name": "Moonscars",
+      "store": "gog",
+      "id": "2106173825",
+      "status": "works"
+    },
+    {
+      "name": "Mortal Kombat Komplete Edition",
+      "store": "steam",
+      "id": "237110",
+      "status": "broken"
+    },
+    {
+      "name": "MultiVersus",
+      "store": "steam",
+      "id": "1818750",
+      "status": "issues"
+    },
+    {
+      "name": "Need for Speed: The Run",
+      "store": "other",
+      "status": "broken"
+    },
+    {
+      "name": "Oxygen Not Included",
+      "store": "steam",
+      "id": "457140",
+      "status": "issues"
+    },
+    {
+      "name": "Portal 2",
+      "store": "steam",
+      "id": "620",
+      "status": "works"
+    },
+    {
+      "name": "Shogun Showdown",
+      "store": "gog",
+      "id": "1104084973",
+      "status": "works"
+    },
+    {
+      "name": "Snakebird Complete",
+      "store": "epic",
+      "status": "works"
+    },
+    {
+      "name": "Soccer Online: Ball 3D",
+      "store": "steam",
+      "id": "485610",
+      "status": "broken"
+    },
+    {
+      "name": "South Park: The Stick of Truth",
+      "store": "steam",
+      "id": "213670",
+      "status": "broken"
+    },
+    {
+      "name": "The Binding of Isaac: Rebirth",
+      "store": "steam",
+      "id": "250900",
+      "status": "broken"
+    },
+    {
+      "name": "The Witcher 3: Wild Hunt",
+      "store": "steam",
+      "id": "292030",
+      "status": "issues"
+    },
+    {
+      "name": "Valheim",
+      "store": "steam",
+      "id": "892970",
+      "status": "issues"
+    }
+  ]
+}

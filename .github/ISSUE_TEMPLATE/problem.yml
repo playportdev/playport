@@ -1,5 +1,5 @@
-name: A game or the app has a problem
-description: A crash, a black screen, a setup step that fails, a game that will not start.
+name: Report a game or a problem
+description: How a game runs, working or not, or a problem with the app.
 labels: []
 body:
   - type: markdown
@@ -15,6 +15,15 @@ body:
       label: Game
       description: Its name, and its Steam app ID if you know it (the number in its store page's address).
       placeholder: Hollow Knight (367520)
+  - type: dropdown
+    id: status
+    attributes:
+      label: How the game runs
+      description: For the compatibility list at playport.dev/compatibility. Leave empty for a problem that is not about one game.
+      options:
+        - Works
+        - Playable with issues
+        - Broken
   - type: textarea
     id: what
     attributes:
