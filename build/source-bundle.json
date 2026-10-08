@@ -7,7 +7,9 @@
       "pin": "superproject",
       "why": "the app, the build scripts, every patch series, pins.lock and the build records",
       "submodules": {"upstream/madeira": "packed as the madeira component, from its pin"},
-      "allow_binary": {}
+      "allow_binary": {
+        "app/PlayportKit/Tests/PlayportKitTests/Fixtures/icon.exe": "PEIconTests' fixture, not in the IPA; its whole source is app/PlayportKit/Tests/FixtureSources/make-icon-exe.py, which rebuilds it byte for byte with llvm-mingw"
+      }
     },
     {
       "name": "madeira",
