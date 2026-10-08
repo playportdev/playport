@@ -790,10 +790,20 @@ without the owner is recorded here with its reason.
     either order. The cooled exit runs confirm.
   - Decisions (supervisor): keep as the default with a disable switch. It is a patch, not a
     `runtimeEnvironment` setting, so there is no decision record.
-- **Next:**
-  1. A cooled native/free run per Vulkan route on the 0019 IPA, read against `vk-nat-dxmt-1`
-     (108.9 FPS, 7.5 ms, 61 mJ/f): does the King's Pass doubling remain?
-  2. If a gap remains: `private_memory` (chunk 8's 0020, from `c8c6016`) on top of 0019, since
-     storage is now the one difference left in the targets' descriptors. Then the depth store DXVK
-     keeps in pass 20, then `KK_WORKAROUND_7`'s sample-mask epilogue; one warm pair each.
-  3. Item 8 (FEX on the D3D12 route) for vkd3d's CPU power, with warm 720/60 pairs.
+- **Next** (from the warm standing on IPA `4e6e930d…`,
+  [standing](../evidence/2026-10-08-vulkan-perf-standing.md)):
+  - **Where it stands.** Not at exit; each route meets 2 of 9 criteria rows. At native/free DXVK's
+    GPU ms is +29 % over DXMT's and vkd3d's +4 %; sys mJ/f is +17 % and +12 %. At native/60, phone mW
+    is +7.7 % and +6.4 %, while CPU mW is not above DXMT's (thermal-confounded). vkd3d's
+    UnityGfxDeviceWorker does +9 Mi/f. One D3D12 run froze after vkd3d-proton's
+    `Enabling staggered submissions`; it goes to its own issue before the exit runs.
+  1. `patches/mesa`: the sample-mask lowering (`KK_WORKAROUND_7`'s discard and the static
+     `[[sample_mask]]`) only when the mask clears a rasterized sample. DXVK masks it to `0x1`, and
+     vkd3d-proton passes `0xFFFFFFFF`, so this is the lead for DXVK's own 25 points of GPU time.
+     Size it first with `MESA_KK_DISABLE_WORKAROUNDS=7` in the same session, then run the gate and
+     one warm native/free DXVK pair.
+  2. `private_memory` (chunk 8's 0020, from `c8c6016`) on top of 0019, with one warm native/free
+     vkd3d pair, for the residual both routes share. DXVK's depth store in pass 20 comes after 1, if
+     DXVK still trails vkd3d.
+  3. Item 8 (FEX on the D3D12 route) for UnityGfxDeviceWorker's +9 Mi/f, with warm 720/60 pairs.
+  4. Then the cooled exit runs.
