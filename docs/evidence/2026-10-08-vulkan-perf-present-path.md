@@ -43,5 +43,59 @@ surface (Vulkan and OpenGL share the function); DXMT does not use client surface
 do not touch `window.c` or `vulkan.c`. Whether a later WineHQ or Proton tree changed it is
 not known from this tree.
 
-Host checks: `pp build` (IPA `baa20a27…`, `unix` rebuilt, `libwin32u_unix.a` changed) and
-`pp test` passed.
+Host checks: `pp build` (`unix` rebuilt, `libwin32u_unix.a` changed) and `pp test` passed.
+
+## On the phone
+
+**IPA:** dev `baa20a273bfbc25cbfb3328bfc924c6abe87c11db4bbace99823106bc1504a96`, built from
+`vulkan-performance-2` at `977e26d` (the controls' IPA plus `wine-unix` 0021). Phone:
+iPhone18,4, iOS 27.0, on charge at 100 %, unattended. One locked session: `pp install
+--no-build` (upgrade in place), the gate, then the DXVK run; the vkd3d run after it.
+
+| play | run | first frame | result |
+|---|---|---|---|
+| Hollow Knight, default backend (DXMT) | `ui-runs/20261008T031215` | +9.56 s (JIT 2.46 s) | `first-frame+10` |
+| Portal 2, default backend | `ui-runs/20261008T031307` | +5.56 s (JIT 2.52 s) | `first-frame+10` |
+
+Route v2, burst, 720/free (`burst.sh NAME dxvk|vkd3d`), each started at thermal `nominal`
+after the 15-minute rest; neither log has a `ui: undo session` or `Metal HUD off` line
+(PLA-82). Figures: `pp perf --compare CONTROL RUN --window 85:125`.
+
+| run | FPS | p50 | p99 | p99.9 | ≥25/50/100 | GPU ms | Mi/f | CPU% | CPU mW | sys mW | srv/f |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `vk-v2-dxvk-2` (control) | 118.5 | 8.34 | 12.5 | 25.01 | 7/0/0 | 5.81 | 61.5 | 132.3 | 1858 | 6090 | 17.84 |
+| `vk-v2-dxvk-presentfix-1` | 118.3 | 8.34 | 16.67 | 25.01 | 8/0/0 | 5.81 | 60.8 | 129.5 | 1805 | 6294 | 12.10 |
+| `vk-v2-vkd3d-1` (control) | 118.0 | 8.34 | 16.67 | 20.84 | 4/0/0 | 5.85 | 66.6 | 122.5 | 2060 | 6877 | 23.19 |
+| `vk-v2-vkd3d-presentfix-1` | 118.0 | 8.34 | 16.67 | 29.18 | 8/0/0 | 5.86 | 65.1 | 119.8 | 2051 | 7663 | 17.00 |
+
+| | DXVK control | DXVK 0021 | vkd3d control | vkd3d 0021 |
+|---|---|---|---|---|
+| `get_window_parents` / `get_window_rectangles` / `get_windows_offset` a frame | 2.1 each | 0 | 2.1 each | 0 |
+| the present thread's requests a frame (`dxvk-submit`, t = 0–60) | 6.2–6.6 | none in the table | – | – |
+| server round-trip time a frame (t = 90, 105) | 0.56, 0.58 ms | 0.40, 0.41 ms | 0.81, 0.80 ms | 0.61, 0.63 ms |
+| wineserver thread Mi/f (t = 90, 105) | 4.47, 4.50 | 3.43, 3.46 | 5.72, 5.69 | 4.58, 4.56 |
+| all threads Mi/f (t = 90, 105) | 59.0, 63.9 | 57.9, 63.1 | 64.3, 68.5 | 63.0, 67.3 |
+
+(The wineserver thread is the host thread the log names in `wineserver_main starting … on
+thread m…`.)
+
+**Result.** The three requests are gone on both routes: DXVK's srv/f is DXMT's now (12.1
+against 12.0), vkd3d's drops by 6.2 to 17.0 (its own five a frame remain: `event_op`,
+`release_semaphore`, `set_queue_mask`, `get_message`, `select`). The wineserver thread does
+about 1.1 Mi/f less (−23 % DXVK, −20 % vkd3d), all threads 0.7 and 1.5 Mi/f less, CPU power
+53 and 9 mW less. FPS, p50 and GPU time do not move. p99 on DXVK went from 12.5 to 16.67 ms,
+one 120-Hz step; DXVK's p99 was 16.7 ms in the step-1 burst set too, so it moves between the
+two from run to run, and the change only removes work from the present thread. vkd3d's
+p99.9 and hitches ≥25 ms (4 → 8) and both runs' sys mW (+204, +786; the charger-side
+`SystemLoad`, which CPU mW does not follow) are read the same way: single runs, not caused by
+fewer server calls. The end screenshot of the DXVK run shows the Knight in King's Pass with
+the HUD on, drawn as before.
+
+**Kept** (rule 4): the change does what it was for, costs nothing measured and is a strict
+reduction in work. The gap left on DXVK is not in wineserver requests.
+
+## Games observed
+
+- Hollow Knight (367520): gate on DXMT, `first-frame+10`; route-v2 runs on DXVK and vkd3d,
+  both in play at the end.
+- Portal 2 (620): gate, `first-frame+10`.

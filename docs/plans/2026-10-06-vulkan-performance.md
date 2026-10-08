@@ -62,10 +62,13 @@ worse, think about why (read the code, profile) before running more.
 **Controls on route v2** (IPA `0d4a0f1e…`, [controls](../evidence/2026-10-08-vulkan-perf-controls.md)):
 `vk-v2-dxmt-2`, `vk-v2-dxvk-2` and `vk-v2-vkd3d-1`, window t = 85–125 s. A lever's run is
 compared with its route's control (`vk-v2-dxvk-1` lost its HUD figures; do not use it).
+Since `wine-unix` 0021 (item 1, kept), a Vulkan lever's run is compared with its route's
+latest run on the 0021 IPA `baa20a27…`: `vk-v2-dxvk-presentfix-1` and
+`vk-v2-vkd3d-presentfix-1` ([present path](../evidence/2026-10-08-vulkan-perf-present-path.md)).
 
 **Work queue, in this order** (each item names its evidence and its first move):
 
-1. **Wine's Vulkan present path** (both routes; step 8). Six more wineserver requests a
+1. **Done (kept, `wine-unix` 0021):** Wine's Vulkan present path (both routes; step 8). Six more wineserver requests a
    frame than DXMT (18 against 12): `win32u_vkQueuePresentKHR` calls
    `client_surface_update` before the present and `client_surface_present` after it, and
    each runs `client_surface_update_locked` (`NtUserGetAncestor`, `get_client_surface_rects`:
@@ -550,8 +553,20 @@ without the owner is recorded here with its reason.
   the gate passed, one D3D12 start reached `first-frame+10`, and the route-v2 controls ran
   once each (`vk-v2-dxvk-1` lost its HUD to a settings undo, so DXVK ran once more as
   `vk-v2-dxvk-2`) ([controls](../evidence/2026-10-08-vulkan-perf-controls.md)).
-- **Next:** work-queue item 1, Wine's Vulkan present path: a `patches/wine-unix` change so
-  `win32u_vkQueuePresentKHR` does not query the window (`get_window_parents`,
-  `get_window_rectangles`, `get_windows_offset`, 2 a frame each) when it has not changed;
-  then the gate and one DXVK route-v2 run against `vk-v2-dxvk-2` (srv/f, the wineserver
-  thread's Mi/f, p99). Then items 2–6 as the work queue orders them.
+- **Work-queue item 1, done, kept** ([present path](../evidence/2026-10-08-vulkan-perf-present-path.md)):
+  the six requests a frame were not the window changing. The renderer's present thread never
+  asked for its desktop window, so win32u took the desktop for another process's window and
+  each walk up from the game's window (`NtUserGetAncestor`, `get_window_rects`,
+  `get_windows_offset`) went to the server. Decision (unattended): `patches/wine-unix` 0021
+  makes `client_surface_update_locked` call `get_desktop_window()` first, keeping upstream's
+  refresh on every present, instead of caching the rects (which would miss changes made
+  outside `apply_window_pos`) or updating once a present (which keeps three). IPA
+  `baa20a27…`: gate passed; DXVK srv/f 17.8 → 12.1 (DXMT 12.0), vkd3d 23.2 → 17.0; the
+  wineserver thread about 1.1 Mi/f less on each; Mi/f 61.5 → 60.8 and 66.6 → 65.1; FPS and
+  GPU time unchanged; DXVK p99 12.5 → 16.67 ms, one 120-Hz step it also showed in step 1, read
+  as run-to-run.
+- **Next:** work-queue item 2, one vkd3d run with `graphicsOptions`
+  `VKD3D_CONFIG=one_time_submit` against `vk-v2-vkd3d-presentfix-1` (UnityGfxDeviceWorker's
+  Mi/f, 18–20 against DXMT's 9.4, and the screenshot). Then items 3–6 in order. On DXVK the
+  request count now equals DXMT's; its remaining gap is in work a frame (dxvk-cs,
+  UnityGfxDeviceWorker) and p99.
