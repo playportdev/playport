@@ -79,7 +79,8 @@ Apple's terms; the owner accepts that risk
 
 ## Draft release notes
 
-Use only once the release gates pass and the real links and checksums are in
+Use only once the owner has signed off the release app
+([decision 0068](decisions/0068-release-owner-signoff.md)) and the real links and checksums are in
 place:
 
 > Playport is free and open-source software under GPL-3.0-or-later, with the

@@ -131,7 +131,8 @@ checkout, to `.work/device-state.json`. An IPA for a tester is a distribution: f
 [DISTRIBUTION.md](docs/DISTRIBUTION.md). `pp release VERSION` takes a clean, pushed HEAD's
 unsigned release IPA (reusing the newest build of HEAD; `--clean` rebuilds every tree)
 and makes a GitHub draft; it never publishes (decisions 0038, 0050). So: build, commit
-the build records, push, build again (about a minute), then release.
+the build records, push, build again (about a minute), then release. The release app
+gets no automated phone tests: the owner installs it, plays and signs off (decision 0068).
 
 ## Test
 

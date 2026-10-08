@@ -162,7 +162,8 @@ pipeline selects it with `pp notices --app` and bundles `Licenses/` in both
 variants; Settings › About › Licences displays it. The selected bundle carries
 the owner's `release-reviewed` status, while the whole collector retains its
 inventory limitations. Dev UI and dev/unsigned-release packaging are verified
-([evidence](evidence/2026-10-01-licences-ui.md)); the separate release gates remain.
+([evidence](evidence/2026-10-01-licences-ui.md)); the release app on the phone is the
+owner's sign-off ([decision 0068](decisions/0068-release-owner-signoff.md)).
 
 `pp verify IPA --variant release --notices APP_NOTICES --distribution` checks
 that the IPA's `Licenses/` equals the **selected app bundle**, not the entire

@@ -13,8 +13,9 @@ verified unsigned release IPA and checksum-checked, build-associated sources.
 --no-github permits private incomplete preparation, not permission to distribute.
 GitHub uploads additionally require --distribution verification of the IPA and
 its attached, byte-identical notices. Incomplete sources stay labelled incomplete,
-even in a private GitHub draft. Human approval and the other release-plan gates
-are separate requirements; this command neither grants nor records approval.
+even in a private GitHub draft. The owner's sign-off of the release app on the
+phone (decision 0068) and publication approval are separate; this command neither
+grants nor records them.
 
 Assemble atomically under $PLAYPORT_BUILD/releases/vVERSION; checksum every asset,
 including notes, instructions and the release manifest. Never overwrite existing
@@ -280,8 +281,8 @@ def notes(version, head, ipa_name, ipa_sha, size, source_name, source_sha, sourc
     return f"""# Playport {version} (draft)
 
 **Draft pre-release. Do not publish.** Local preparation and even a private upload
-are not permission to distribute; the source/IPA release-plan gates and explicit
-owner approval still apply. This command never publishes.
+are not permission to distribute; the owner's sign-off of the release app
+(decision 0068) and explicit owner approval still apply. This command never publishes.
 
 Built from commit `{head}` with `pp release {version}`.
 
@@ -315,7 +316,7 @@ components keep their licences. No warranty except where the law requires one.
 
 - Complete and validate exact source, notices and usable rebuild/relink instructions.
 - Demonstrate recipient signing, installation and JIT; retain matching source.
-- Review the final payloads and all release-plan human/platform/privacy gates.
+- The owner installs the release app, plays and signs off on its Linear issue (decision 0068).
 - Attach no Apple SDK, private signing/device data or games.
 - Obtain explicit owner approval of the remote, history, upload and publication.
 

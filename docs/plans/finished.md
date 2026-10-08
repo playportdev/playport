@@ -160,7 +160,8 @@ record results, IPA hashes and limits. The full design and numbered steps remain
 in git history; deleting the plan does not claim every follow-up is complete.
 
 **Release handoff:** [PLA-74](https://linear.app/playportdev/issue/PLA-74) tracks
-0.4.0 notes, the clean release build, owner-assisted release gates and draft.
+0.4.0 notes, the release build and draft; the release app is the owner's sign-off
+([decision 0068](../decisions/0068-release-owner-signoff.md)), not a replay of these gates.
 **Open implementation/checks:** PLA-50 (full SSPI port), PLA-41 (JWE), PLA-39
 (Among Us), PLA-54 (Monster Train), PLA-59 (Static-body diagnostic gate), PLA-60
 (GOG offline queue, split SDK and writes), PLA-62 (Steam session and sign-out),
