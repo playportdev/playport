@@ -86,6 +86,12 @@
       "status": "broken"
     },
     {
+      "name": "Helldivers 2",
+      "store": "steam",
+      "id": "553850",
+      "status": "broken"
+    },
+    {
       "name": "Hollow Knight",
       "store": "steam",
       "id": "367520",
@@ -106,6 +112,12 @@
       "store": "steam",
       "id": "379430",
       "status": "issues"
+    },
+    {
+      "name": "Megabonk",
+      "store": "steam",
+      "id": "3405340",
+      "status": "broken"
     },
     {
       "name": "Monster Train",
