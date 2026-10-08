@@ -96,7 +96,15 @@ in it.
    records each render pass into a secondary command buffer that KosmicKrisp queues and
    replays on `dxvk-cs`. Move: one DXVK run with `dxvk.tilerMode=False` (it ended in the
    video crash before `patches/dxvk` 0001; it runs now); watch dxvk-cs and the screenshot.
-4. **The extra present pass** (both routes; step 5). The Vulkan frame has a compute
+4. **Done (no change, no run):** the extra present pass is the Metal WSI's copy of the
+   swap-chain image into the drawable (`vk_meta_blit_image2`); it cannot be removed safely,
+   since KosmicKrisp fixes an image view's Metal texture at view creation and a drawable's
+   texture changes with every acquire, and the drawable is `framebufferOnly`. The compute
+   dispatch is a one-thread immediate write of the game's frame (an event or query), not a
+   present pass. GPU time is already 6 % below DXMT's. The two safe CPU trims (one submit
+   instead of two at present; the blit's re-recording at acquire) are below one run's
+   resolution and go with item 6 ([present pass](../evidence/2026-10-08-vulkan-perf-present-pass.md)).
+   The original item: **the extra present pass** (both routes; step 5). The Vulkan frame has a compute
    dispatch and one more full-screen pass at present: DXVK draws into its swap-chain
    image, then KosmicKrisp's WSI blits that into the drawable. Move: read
    `wsi_common_metal.c` and KosmicKrisp's `kk_wsi.c` for a way to render to the drawable
@@ -106,7 +114,8 @@ in it.
    `dxgi.numBackBuffers` (DXMT keeps 3 drawables), one run each.
 6. **dxvk-cs time in Apple's driver** (step 4): AGX/IOGPU/Metal/objc 3.6 % against
    KosmicKrisp 1.2 % and DXVK 1.1 % of all samples (`vk-prof-dxvk3`). Move: one
-   `--cpu-prof` run after 1–5, then look at what KosmicKrisp asks Metal for per draw.
+   `--cpu-prof` run after 1–5, then look at what KosmicKrisp asks Metal for per draw,
+   and at item 4's two present-path trims on `dxvk-submit` and the presenting thread.
 
 FEX (step 7) and more of steps 4–6 come only if the gap is still open after these.
 
@@ -593,9 +602,25 @@ without the owner is recorded here with its reason.
   Portal 2, both on DXVK on this phone) and one Hollow Knight Vulkan play, each log with
   `Found config env: dxvk.tilerMode = False`. Found on the way: the gate's Hollow Knight play
   runs on Vulkan on this phone, not DXMT; the controls and present-path records are corrected.
-- **Next:** work-queue item 4, the extra present pass (read `wsi_common_metal.c` and
-  KosmicKrisp's `kk_wsi.c`; a `patches/mesa` change, one run on each route against
-  `vk-v2-dxvk-notiler-1` and `vk-v2-vkd3d-presentfix-1`). Then items 5–6. DXVK's gap to DXMT
-  is now 5.7 Mi/f a frame (57.5 against 51.8), 370 mW and p99 (16.7 against 8.3 ms); vkd3d's
-  UnityGfxDeviceWorker (18–20 against 9.4 Mi/f) needs a D3D12 `--cpu-prof` run (item 6's
-  profile, taken on the vkd3d route too) before any lever there.
+- **Work-queue item 4, done, no change** ([present pass](../evidence/2026-10-08-vulkan-perf-present-pass.md)).
+  From the code and the step-0 capture `gpu-runs/vk-kk-cap1`: after the game's passes the
+  Vulkan frame has DXVK's 3-vertex draw onto the swap-chain image (DXMT's present quad does
+  the same job) and the Metal WSI's `meta:vkCmdBlitImage2`, a 6-vertex copy of that image
+  into the drawable: the one extra full-screen pass. The compute dispatch is
+  KosmicKrisp's one-thread immediate write (`kk_cmd_write`) at the end of the game's own
+  command buffer, not a present pass. Decisions (unattended): no `patches/mesa` change and
+  no phone run. Rendering straight into the drawable would mean re-creating every view of
+  a swap-chain image at each acquire (KosmicKrisp fixes a view's Metal texture at creation
+  and encodes at record time), and would break any application that records for an image
+  before acquiring it. The drawable is `framebufferOnly`, so no cheaper blit-encoder copy
+  is possible. The pass costs about 0.1–0.15 ms of GPU time, and Vulkan's GPU time is
+  already 6 % under DXMT's. The safe trims (one submit instead of two, since
+  `kk_get_blit_queue` makes the WSI submit an empty semaphore hop; the blit re-recorded at
+  every acquire) are on threads with under 0.2 % of the profile's samples, so they go with
+  item 6. The installed IPA stays `4349d6a2…`; nothing was reverted.
+- **Next:** work-queue item 5, p99 (16.7 against 8.3 ms): first read the frame-interval
+  trace of `vk-v2-dxvk-notiler-1` and `vk-v2-vkd3d-presentfix-1` against `vk-v2-dxmt-2` (no
+  phone time), then one run each for `dxgi.maxFrameLatency` / `dxgi.numBackBuffers`. Then
+  item 6. DXVK's gap to DXMT is 5.7 Mi/f a frame (57.5 against 51.8), 370 mW and p99;
+  vkd3d's UnityGfxDeviceWorker (18–20 against 9.4 Mi/f) needs a D3D12 `--cpu-prof` run
+  (item 6's profile, taken on the vkd3d route too) before any lever there.
