@@ -173,7 +173,9 @@ lever's run is compared with `vk-v2-dxvk-p99-2` (window 85–115 s, the same pit
    lists (DXMT 0009's rule) and shader write for non-storage images. The scene targets are now `0x5`.
    In warm native/60 pairs it held 60 FPS through King's Pass on both routes, where the controls
    did not, at 21–33 % less phone energy a frame
-   ([TYPELESS usage](../evidence/2026-10-08-vulkan-perf-typeless-usage.md)). What is left of the
+   ([TYPELESS usage](../evidence/2026-10-08-vulkan-perf-typeless-usage.md)). Lowering DXVK's
+   sample mask only when it clears a sample (`patches/mesa` 0020) saved no GPU time and was not
+   kept ([sample mask](../evidence/2026-10-08-vulkan-perf-sample-mask.md)). What is left of the
    gap is measured by the cooled exit runs.
 8. **FEX on the D3D12 route** (step 7). UnityGfxDeviceWorker's guest and xtajit64 time is
    13.5 % of samples on vkd3d against 7.6 % on DXVK, with 3× the ARM64EC transitions
@@ -790,20 +792,32 @@ without the owner is recorded here with its reason.
     either order. The cooled exit runs confirm.
   - Decisions (supervisor): keep as the default with a disable switch. It is a patch, not a
     `runtimeEnvironment` setting, so there is no decision record.
-- **Next** (from the warm standing on IPA `4e6e930d…`,
-  [standing](../evidence/2026-10-08-vulkan-perf-standing.md)):
+- **Work-queue item 7, sample-mask lowering on DXVK: not kept**
+  ([sample mask](../evidence/2026-10-08-vulkan-perf-sample-mask.md)).
+  - **Sizing** (IPA `4e6e930d…`): the first pair was void (the control froze at
+    `first-frame+37` with PLA-93's signature, on DXVK; the switch's run lost its HUD, PLA-82), and
+    its one rerun gave `MESA_KK_DISABLE_WORKAROUNDS=7` (the discard only) 11.33 → 11.04 GPU ms,
+    within the pair's thermal bias (the control ran under pressure 20 and a 404 mW budget).
+  - Decision (unattended): build the change anyway, since the switch left the static
+    `[[sample_mask]]` write in place and only the patch could size both, and take its pair on one IPA
+    with a restore switch.
+  - **The change**, `patches/mesa` 0020 (IPA `7d7c983b…`): no lowering when the mask covers every
+    rasterized sample, `MESA_KK_DEBUG=any_sample_mask` to restore. The gate passed. In a warm
+    native/free DXVK pair, GPU ms was 11.58 (upstream's lowering) against 11.71 (0020), and
+    9.7–10.0 ms in every bucket from t = 85 in both; the control again ran under pressure 20, so its
+    higher sys mJ/f is not read as a gain. Reverted, file and series line in one commit (`377e7cb`);
+    the phone runs `e6bd82a4…` (HEAD, the same artifacts as `4e6e930d…`).
+- **Next** (from the [standing](../evidence/2026-10-08-vulkan-perf-standing.md) and the
+  [sample mask](../evidence/2026-10-08-vulkan-perf-sample-mask.md) record, IPA `e6bd82a4…`):
   - **Where it stands.** Not at exit; each route meets 2 of 9 criteria rows. At native/free DXVK's
-    GPU ms is +29 % over DXMT's and vkd3d's +4 %; sys mJ/f is +17 % and +12 %. At native/60, phone mW
-    is +7.7 % and +6.4 %, while CPU mW is not above DXMT's (thermal-confounded). vkd3d's
-    UnityGfxDeviceWorker does +9 Mi/f. One D3D12 run froze after vkd3d-proton's
-    `Enabling staggered submissions`; it goes to its own issue before the exit runs.
-  1. `patches/mesa`: the sample-mask lowering (`KK_WORKAROUND_7`'s discard and the static
-     `[[sample_mask]]`) only when the mask clears a rasterized sample. DXVK masks it to `0x1`, and
-     vkd3d-proton passes `0xFFFFFFFF`, so this is the lead for DXVK's own 25 points of GPU time.
-     Size it first with `MESA_KK_DISABLE_WORKAROUNDS=7` in the same session, then run the gate and
-     one warm native/free DXVK pair.
-  2. `private_memory` (chunk 8's 0020, from `c8c6016`) on top of 0019, with one warm native/free
-     vkd3d pair, for the residual both routes share. DXVK's depth store in pass 20 comes after 1, if
-     DXVK still trails vkd3d.
+    GPU ms is +29 % over DXMT's and vkd3d's +4 %; sys mJ/f is +17 % and +12 %. The sample-mask
+    lowering is not DXVK's share. At native/60 phone mW is +7.7 % and +6.4 %. vkd3d's
+    UnityGfxDeviceWorker does +9 Mi/f. The freeze after about `first-frame+37` (no frames, 42
+    threads parked) came on D3D12 and now on DXVK: PLA-93, before the exit runs.
+  1. `private_memory` (chunk 8's 0020, from `c8c6016`) on top of 0019, with one warm native/free
+     vkd3d pair, for the residual both routes share.
+  2. DXVK's own GPU time: the depth store in pass 20 of the King's Pass capture (17.2 MB a frame,
+     DXMT stores none), from DXVK's render-pass store ops; or first a per-pass GPU time on
+     KosmicKrisp to find where DXVK's extra 2.5 ms go.
   3. Item 8 (FEX on the D3D12 route) for UnityGfxDeviceWorker's +9 Mi/f, with warm 720/60 pairs.
   4. Then the cooled exit runs.
