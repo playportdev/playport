@@ -69,7 +69,9 @@ Since tiler mode went off by default (item 3, kept, decision 0066; IPA `4349d6a2
 lever's run is compared with `vk-v2-dxvk-notiler-1`, in the window 85–115 s unless its walk
 reaches the lumafly room ([config levers](../evidence/2026-10-08-vulkan-perf-config-levers.md));
 a Graphics option's DXVK item now follows the backend's `DXVK_CONFIG`, so tiler mode stays off
-in it.
+in it. Since `patches/mesa` 0018 (no present wait on iOS, item 5, kept; IPA `b024e1f7…`), a
+lever's run is compared with `vk-v2-dxvk-p99-2` (window 85–115 s, the same pit scene) or
+`vk-v2-vkd3d-p99-1` ([p99](../evidence/2026-10-08-vulkan-perf-p99.md)).
 
 **Work queue, in this order** (each item names its evidence and its first move):
 
@@ -109,8 +111,15 @@ in it.
    image, then KosmicKrisp's WSI blits that into the drawable. Move: read
    `wsi_common_metal.c` and KosmicKrisp's `kk_wsi.c` for a way to render to the drawable
    (or skip DXVK's own blit); a `patches/mesa` change, one run.
-5. **p99 16.7 ms** (both routes; step 6). Missed 120 Hz frames. Move: after 1–4, look
-   at the frame-interval trace of one run; then `dxgi.maxFrameLatency` /
+5. **Done (kept, `patches/mesa` 0018):** p99 is 8.34 ms on both routes, DXMT's figure
+   ([p99](../evidence/2026-10-08-vulkan-perf-p99.md)). The game ran one frame ahead of the
+   screen, because DXVK and vkd3d-proton released its frame latency at the drawable's
+   presented handler (present wait). Without present wait on iOS they release it when the
+   GPU work is done, as DXMT does. Late frames went from 1.2–1.5 % to 0.19 % and FPS from
+   118 to 119.5–119.8. GPU ms went 5.8 → 6.55 with the same work (not explained yet).
+   Taking the drawable at present instead of at acquire did nothing and was reverted. The
+   original item: **p99 16.7 ms** (both routes; step 6). Missed 120 Hz frames. Move: after
+   1–4, look at the frame-interval trace of one run; then `dxgi.maxFrameLatency` /
    `dxgi.numBackBuffers` (DXMT keeps 3 drawables), one run each.
 6. **dxvk-cs time in Apple's driver** (step 4): AGX/IOGPU/Metal/objc 3.6 % against
    KosmicKrisp 1.2 % and DXVK 1.1 % of all samples (`vk-prof-dxvk3`). Move: one
@@ -618,9 +627,31 @@ without the owner is recorded here with its reason.
   `kk_get_blit_queue` makes the WSI submit an empty semaphore hop; the blit re-recorded at
   every acquire) are on threads with under 0.2 % of the profile's samples, so they go with
   item 6. The installed IPA stays `4349d6a2…`; nothing was reverted.
-- **Next:** work-queue item 5, p99 (16.7 against 8.3 ms): first read the frame-interval
-  trace of `vk-v2-dxvk-notiler-1` and `vk-v2-vkd3d-presentfix-1` against `vk-v2-dxmt-2` (no
-  phone time), then one run each for `dxgi.maxFrameLatency` / `dxgi.numBackBuffers`. Then
-  item 6. DXVK's gap to DXMT is 5.7 Mi/f a frame (57.5 against 51.8), 370 mW and p99;
-  vkd3d's UnityGfxDeviceWorker (18–20 against 9.4 Mi/f) needs a D3D12 `--cpu-prof` run
-  (item 6's profile, taken on the vkd3d route too) before any lever there.
+- **Work-queue item 5, done, kept** ([p99](../evidence/2026-10-08-vulkan-perf-p99.md)).
+  The frame-interval traces showed no GPU, shader or thermal cause. Each late Vulkan frame
+  carried two frames' GPU time, and the device log's present trace showed the game exactly
+  one frame ahead of the screen on both routes: DXVK and vkd3d-proton released its frame
+  latency at the presented handler (present wait), where DXMT releases at GPU completion.
+  `dxgi.numBackBuffers` does not exist at DXVK's pin, `dxgi.maxFrameLatency` can only lower
+  the latency, and the swap chain and the layer already have 3 drawables, so no config
+  lever applied. Decisions (unattended): the first change (`patches/mesa`, the drawable
+  taken at present rather than at acquire; `vk-v2-dxvk-p99-1`) did nothing and was reverted.
+  It was not run on vkd3d, since its trace already showed it could not change the lockstep.
+  The second change, `patches/mesa` 0018 (no `VK_KHR_present_wait`/`present_wait2` on iOS),
+  is kept: DXVK p99 16.67 → 8.34 ms, FPS 118.2 → 119.5, CPU 1675 → 1500 mW; vkd3d p99
+  16.67 → 8.34, FPS 118.0 → 119.8, ≥ 25 ms hitches 8 → 0. A patch, not a
+  `runtimeEnvironment` setting, and no decision changed, so no decision record. The
+  gate and the per-route runs on IPA `b024e1f7…` (commit `80d48bf`) are the confirming runs,
+  not repeated. Open: GPU ms rose 5.8 → 6.55 on both routes (DXMT 6.1–6.2) with the same
+  work and no more power a frame. It is either a lower GPU clock or Metal counting the
+  blit's drawable wait, and the exit criterion (≤ DXMT + 5 %) now reads +7 %.
+- **Next:** item 6, one `--cpu-prof` run per Vulkan route on `b024e1f7…`, a D3D12 one
+  included. It should look at the following:
+  - `dxvk-cs`'s time in Apple's driver (AGX/IOGPU/Metal/objc) against KosmicKrisp's own;
+  - what KosmicKrisp asks Metal for per draw;
+  - item 4's two present-path trims;
+  - on vkd3d, where UnityGfxDeviceWorker's 17–20 Mi/f goes (DXMT 9.4).
+
+  DXVK's remaining gap to DXMT is 5.3 Mi/f a frame (57.1 against 51.8) and about 190 mW
+  of CPU. Before the exit runs, the native/free run should show whether the higher GPU ms
+  costs frames where the GPU is the limit.
