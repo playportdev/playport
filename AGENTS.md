@@ -208,8 +208,8 @@ then plays, a pad) runs as one session:
 - Every game you play on the phone gets its latest result in Linear (team PLA, project
   Compatibility; one issue per title, `Name (Steam appID)`, with **Status:** Works,
   Playable with issues or Broken and **Best known:**, the IPA and the run directory).
-  Search first and update the existing issue, then its public summary in
-  `site/compatibility/games.json` (playport.dev/compatibility; no names, hashes or paths).
+  Search first and update the existing issue, then its status in
+  `site/compatibility/games.json` (playport.dev/compatibility).
   A failure outside your task is filed
   there, not fixed in passing; a subagent lists its games for the supervisor to file.
 - When a question is quicker to answer on this workstation than on the phone (what a game

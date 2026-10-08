@@ -7,7 +7,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Game compatibility: Playport</title>
-<meta name="description" content="Which Windows games run on an iPhone in Playport: works, playable with issues or broken, with what happens and where it was tested.">
+<meta name="description" content="Which Windows games run on an iPhone in Playport: works, playable with issues or broken.">
 <meta name="theme-color" content="#0B0E13">
 <meta property="og:title" content="Game compatibility: Playport">
 <meta property="og:description" content="Which Windows games run on an iPhone in Playport, and how well.">
@@ -100,42 +100,26 @@
   th, td { padding: 16px 20px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
   tr:last-child td { border-bottom: 0; }
   th { color: var(--muted); font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; background: var(--surface-2); }
-  td.game { width: 26%; }
   td.game b { display: block; font-size: 16.5px; }
   td.game a { color: var(--text); }
   .store { display: inline-block; margin-top: 4px; color: var(--muted); font-size: 13px; }
-  td.status { width: 17%; white-space: nowrap; }
+  td.status { width: 240px; white-space: nowrap; vertical-align: middle; }
   .pill { display: inline-flex; align-items: center; gap: 8px; padding: 4px 11px; border-radius: 999px; font-size: 13.5px; font-weight: 700; }
   .pill.works { color: #7EE787; background: rgba(63, 185, 80, 0.14); }
   .pill.issues { color: var(--accent-tint); background: rgba(245, 181, 68, 0.14); }
   .pill.broken { color: #FF9C95; background: rgba(248, 81, 73, 0.14); }
-  td.notes { color: var(--text); font-size: 15.5px; }
-  td.tested { width: 20%; color: var(--muted); font-size: 14px; }
-  td.tested span { display: block; }
-  td.tested span.tag { display: inline-block; }
-  .tag { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--muted); border: 1px solid var(--line); }
   .empty { padding: 40px 24px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
   .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 40px 0 0; padding: 0; list-style: none; }
   .legend li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; color: var(--muted); font-size: 15px; }
   .legend .pill { margin-bottom: 8px; }
-  .fine { color: var(--muted); font-size: 14.5px; margin-top: 28px; max-width: 760px; }
 
   footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--muted); font-size: 14.5px; }
   footer .wrap { display: flex; flex-wrap: wrap; gap: 20px 48px; justify-content: space-between; align-items: center; }
   footer p { margin: 0; }
 
   @media (max-width: 820px) {
-    thead { display: none; }
-    table, tbody, tr, td { display: block; width: 100% !important; }
-    tr { padding: 16px 18px; border-bottom: 1px solid var(--line); }
-    tr:last-child { border-bottom: 0; }
-    td { padding: 0; border: 0; }
-    td.status { margin: 8px 0; }
-    td.tested { margin-top: 8px; }
-    td.tested span { display: inline; }
-    td.tested span + span::before { content: " · "; }
-    td.tested span.tag { margin-left: 8px; }
-    td.tested span.tag::before { content: none; }
+    th, td { padding: 14px 14px; }
+    td.status { width: auto; }
     .legend { grid-template-columns: 1fr; }
   }
   @media (max-width: 640px) {
@@ -155,7 +139,7 @@
       <a href="../">Home</a>
       <a href="../#start">Get started</a>
       <a href="https://github.com/playportdev/playport">GitHub</a>
-      <a class="btn btn-primary btn-small" href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">Report a game</a>
+      <a class="btn btn-primary btn-small" href="https://github.com/playportdev/playport/issues/new?template=problem.yml">Report a game</a>
     </div>
   </div>
 </nav>
@@ -164,12 +148,12 @@
   <div class="wrap">
     <p class="kicker">Game compatibility</p>
     <h1>Which games run, and how well.</h1>
-    <p class="sub">Every game we have played in Playport, or players have told us about: whether it works, what happens, and on which device. <strong>Tried a game that is not here, or found one that runs better or worse?</strong> Tell us: working games help as much as broken ones.</p>
+    <p class="sub">Every game we have played in Playport, or players have told us about, and how it runs. <strong>Tried a game that is not here, or found one that runs better or worse?</strong> Tell us: working games help as much as broken ones.</p>
     <div class="ctas">
-      <a class="btn btn-primary" href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">
+      <a class="btn btn-primary" href="https://github.com/playportdev/playport/issues/new?template=problem.yml">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
         Report a game</a>
-      <a class="btn btn-ghost" href="https://github.com/playportdev/playport/issues?q=is%3Aissue+%22Game+report%22">See the reports</a>
+      <a class="btn btn-ghost" href="https://github.com/playportdev/playport/issues">See the reports</a>
     </div>
   </div>
 </header>
@@ -179,7 +163,7 @@
     <div class="row">
       <label class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="q" type="search" placeholder="Search games, stores, problems" autocomplete="off" aria-label="Search games">
+        <input id="q" type="search" placeholder="Search games" autocomplete="off" aria-label="Search games">
       </label>
       <div class="row" id="statuses" role="group" aria-label="Filter by status"></div>
     </div>
@@ -200,14 +184,13 @@
       <li><span class="pill issues"><span class="dot issues"></span>Playable with issues</span><br>Plays, but something is wrong: speed, sound, a mode that fails.</li>
       <li><span class="pill broken"><span class="dot broken"></span>Broken</span><br>Does not start, or cannot be played yet.</li>
     </ul>
-    <p class="fine"><strong>A19 Pro iPhone</strong> is our test phone; other devices are players' reports, marked <span class="tag">player report</span>. A <em>dev build</em> result comes before the next release, so a fix may not be in the current one. Results change quickly: the date is when it was last checked.</p>
   </div>
 </main>
 
 <footer>
   <div class="wrap">
     <p>Playport, built on <a href="https://github.com/willfaust/Madeira">willfaust/Madeira</a>. <span id="updated"></span></p>
-    <a class="btn btn-ghost btn-small" href="https://github.com/playportdev/playport/issues/new?template=game-report.yml">Report a game</a>
+    <a class="btn btn-ghost btn-small" href="https://github.com/playportdev/playport/issues/new?template=problem.yml">Report a game</a>
   </div>
 </footer>
 
@@ -262,7 +245,7 @@
     if (opts.status && state.status && g.status !== state.status) return false;
     if (opts.letter && state.letter && letterOf(g.name) !== state.letter) return false;
     if (state.q) {
-      var hay = fold([g.name, g.id || "", STORE[g.store], STATUS[g.status], g.notes, g.device, g.build].join(" "));
+      var hay = fold([g.name, g.id || "", STORE[g.store]].join(" "));
       var words = fold(state.q).split(/\s+/).filter(Boolean);
       for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) < 0) return false;
     }
@@ -314,7 +297,7 @@
       var empty = el("div", "empty");
       empty.appendChild(document.createTextNode("No game matches. Played it? "));
       var a = el("a", null, "Report it");
-      a.href = "https://github.com/playportdev/playport/issues/new?template=game-report.yml";
+      a.href = "https://github.com/playportdev/playport/issues/new?template=problem.yml";
       empty.appendChild(a);
       empty.appendChild(document.createTextNode(" and it goes on the list."));
       list.appendChild(empty);
@@ -323,7 +306,7 @@
     var table = el("table");
     var head = el("thead");
     var hr = el("tr");
-    ["Game", "Status", "What happens", "Tested"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+    ["Game", "Status"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
     head.appendChild(hr);
     table.appendChild(head);
     var body = el("tbody");
@@ -350,15 +333,6 @@
       pill.appendChild(document.createTextNode(STATUS[g.status]));
       tdStatus.appendChild(pill);
       tr.appendChild(tdStatus);
-
-      tr.appendChild(el("td", "notes", g.notes));
-
-      var tdTested = el("td", "tested");
-      tdTested.appendChild(el("span", null, g.tested));
-      tdTested.appendChild(el("span", null, g.device));
-      tdTested.appendChild(el("span", null, g.build === "dev build" ? "dev build" : "Playport " + g.build));
-      if (g.reported) tdTested.appendChild(el("span", "tag", "player report"));
-      tr.appendChild(tdTested);
       body.appendChild(tr);
     });
     table.appendChild(body);

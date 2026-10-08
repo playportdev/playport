@@ -194,10 +194,10 @@ a reviewable patch with the evidence for it.
 ## Game compatibility
 
 Which games run, and how well: the [compatibility list](https://playport.dev/compatibility/)
-has every game we have played and every one players have reported, with what happens
-and on which device, searchable and filtered by first letter or status (its data is
+has every game we have played and every one players have reported, with its status,
+searchable and filtered by first letter or status (its data is
 [`site/compatibility/games.json`](site/compatibility/games.json)). Played a game,
-working or not? Send a [game report](https://github.com/playportdev/playport/issues/new?template=game-report.yml)
+working or not? [Report it](https://github.com/playportdev/playport/issues/new?template=problem.yml)
 and it goes on the list.
 
 ## Reporting a problem
