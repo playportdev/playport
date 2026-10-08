@@ -19,3 +19,4 @@
 0018-ntdll-iOS-run-pending-system-APCs-when-a-thread-poll.patch
 0019-nsiproxy-serve-iOS-adapter-and-IPv4-IPv6-route-snaps.patch
 0020-ntdll-iOS-one-default-keyed-event-per-pseudo-process.patch
+0021-win32u-know-the-desktop-window-before-a-client-surfa.patch

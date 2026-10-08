@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 8 Oct 2026 12:00:00 +0200
+Subject: [PATCH] win32u: know the desktop window before a client surface's
+ per-present update
+
+win32u_vkQueuePresentKHR updates the swap chain's client surface before
+the present (client_surface_update) and after it (client_surface_present),
+and each update runs client_surface_update_locked: NtUserGetAncestor and
+get_client_surface_rects. These read the window itself when its parents
+belong to the process. The present runs on a renderer's thread (DXVK's,
+vkd3d-proton's) that never asked for its desktop window, so its
+user_thread_info has no top_window, is_desktop_window does not know the
+desktop, and get_win_ptr calls the desktop (made by the session's first
+pseudo-process) another process's window. Each update then went to
+wineserver three times: get_window_parents, get_window_rectangles and
+get_windows_offset, six requests a frame on both Vulkan routes that
+DXMT does not make.
+
+client_surface_update_locked now calls get_desktop_window first, one
+get_desktop_window request on a thread's first update and none after,
+as any thread that has used a window already has. The update still runs
+on every present, so a move, resize or fullscreen switch is seen exactly
+as before; only where the figures come from changes.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-08-vulkan-perf-present-path.md
+Offered-upstream: no
+---
+ dlls/win32u/window.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
+index 29eb314356d..d8e3144cf76 100644
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -369,6 +369,12 @@ static void client_surface_update_locked( struct client_surface *surface )
+     RECT virtual_rect = surface->virtual_rect, monitor_rect = surface->monitor_rect;
+     HWND toplevel = surface->toplevel;
+ 
++    /* A thread that never asked for its desktop window (a renderer's present
++     * thread) does not know it, so get_win_ptr calls the desktop another
++     * process's window, and the ancestor, rects and offset below each go to
++     * the server instead of reading the window. */
++    get_desktop_window();
++
+     surface->toplevel = NtUserGetAncestor( surface->hwnd, GA_ROOT );
+     surface->virtual_rect = get_client_surface_rects( surface->toplevel, surface->hwnd, &surface->monitor_rect );
+ 
