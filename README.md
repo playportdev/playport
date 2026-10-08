@@ -14,7 +14,6 @@
 [![No jailbreak](https://img.shields.io/badge/jailbreak-not%20needed-3FB950?style=flat-square&labelColor=151A21)](docs/DEVICE.md)
 [![Builds on Linux](https://img.shields.io/badge/builds%20on-Linux-FFD08A?style=flat-square&logo=linux&logoColor=white&labelColor=151A21)](docs/BUILDING.md)
 [![Swift 6](https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white&labelColor=151A21)](app/Package.swift)
-[![Built on Madeira](https://img.shields.io/badge/built%20on-Madeira-24324A?style=flat-square&labelColor=151A21)](https://github.com/willfaust/Madeira)
 
 </div>
 
@@ -166,25 +165,9 @@ The capability stays on the App ID, so SideStore's weekly refresh keeps it. If
 the tick ever goes away, repeat steps 3 and 4. GetMoreRam takes one of a free
 Apple ID's three app slots; delete it afterwards to free the slot.
 
-## How Playport differs from Madeira
+## Our patches
 
-Playport is built on [willfaust/Madeira](https://github.com/willfaust/Madeira),
-the research project that first ran Wine, FEX-Emu and DXMT as one process on
-iOS. Madeira proved it could be done; Playport turns it into an app you can
-play with. In plain points:
-
-| | Madeira | Playport |
-| --- | --- | --- |
-| **32-bit games** | x86-64 only | x86-64 **and 32-bit x86**: each 32-bit game gets its own 4 GB window, Portal 2 plays at about 60 fps |
-| **Graphics** | Direct3D 11 through DXMT | DXMT for Direct3D 10 and 11, **plus Vulkan through KosmicKrisp**: Direct3D 9 through DXVK, Direct3D 12 through vkd3d-proton (experimental), chosen per game automatically |
-| **Upstreams** | its own forks: Wine 11.4, FEX 2607, an older DXMT | the latest releases: WineHQ 11.18 with Valve's Proton 11 Wine, FEX 2609.1, DXMT main, Mesa main |
-| **Getting games** | launches set up per test title | sign in to Steam, browse your library, download to the phone; cloud saves and achievements |
-| **The app** | a touch-driven test bench; controllers and touch controls reach the game | a landscape, gamepad-first app with an in-game menu to pause, resume or quit |
-| **JIT** | a separate debugger app attaches for every launch | a JIT helper built into the app, after a one-time pairing; StikDebug or LiveContainer still work |
-| **Building** | Xcode on a Mac | one Linux machine and a free Apple ID; no Mac anywhere |
-| **Getting it** | build it yourself | a ready `.ipa` on [Releases](https://github.com/playportdev/playport/releases), with the complete source of that exact build |
-
-Behind these are over 170 of our own [patches](patches/) on Wine, FEX, DXMT,
+Playport carries over 170 of its own [patches](patches/) on Wine, FEX, DXMT,
 KosmicKrisp, vkd3d-proton and the Steam API emulator: the 32-bit runtime,
 performance work (faster FEX translation for Unity games, x87 math at native
 precision, lossless texture compression kept on in DXMT, geometry shaders in
@@ -254,9 +237,7 @@ to even one tester requires the source and notices in
 
 ## Credits
 
-Playport is built on [willfaust/Madeira](https://github.com/willfaust/Madeira),
-which first ran Wine, FEX-Emu and DXMT as one process on iOS. Every component
-keeps its own licence; see [LICENSING.md](docs/LICENSING.md) and
+Every component keeps its own licence; see [LICENSING.md](docs/LICENSING.md) and
 [NOTICES.md](docs/NOTICES.md).
 
 ## Licence
