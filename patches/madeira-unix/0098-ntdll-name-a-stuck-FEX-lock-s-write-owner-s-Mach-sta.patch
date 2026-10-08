@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 8 Oct 2026 13:46:57 +0200
+Subject: [PATCH] ntdll: name a stuck FEX lock's write owner's Mach state;
+ sample every held thread
+
+Two things the Hollow Knight freeze's log could not show (PLA-93): the
+state of the thread that owned FEX's CodeInvalidationMutex for writing,
+and that thread's stack, because the thread sampler prints at most 64
+threads a pass and the owner was late in the list.
+
+ios_wpm_owner_report() takes a WritePriorityMutex's address and the
+owner TEB and tid the mutex stamps, finds that thread in the registry
+(by TEB, checked by its tid) and prints [wpm-owner]: its Mach
+suspend_count, run state, pc, lr, sp and a 12-frame fp chain. A held
+owner shows susp=1 or more with its pc in FEX; an owner that leaked the
+lock shows susp=0 in its own wait. [hot-lock] in unix/sync.c calls it
+(patches/wine-unix).
+
+The thread sampler prints every thread with a Mach suspend count on
+every pass, also past its 64-line cap, and each line now carries susp=N.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-08-pla93-suspend-in-fex.md
+Offered-upstream: no
+---
+ build/ntdll-unix/server_ios.c       | 15 ++++---
+ build/ntdll-unix/signal_arm64_ios.c | 61 +++++++++++++++++++++++++++++
+ 2 files changed, 71 insertions(+), 5 deletions(-)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 7cb9109..eaa243d 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -643,20 +643,25 @@ static void ios_thread_sampler_pass(int burst)
+     thread_act_array_t tlist; mach_msg_type_number_t tcount; unsigned k, printed = 0;
+     if (task_threads(mach_task_self(), &tlist, &tcount) != KERN_SUCCESS) return;
+     ios_ts_nmaps = 0;                                   /* fresh maps every pass */
+-    for (k = 0; k < tcount && printed < 64; k++) {
++    /* PLA-93: a thread with a Mach suspend count (a real suspend's hold, or a stop
++     * that never ended) is printed on every pass and past the 64-line cap: the
++     * held owner of a stuck FEX lock was late in the list and never printed. */
++    for (k = 0; k < tcount; k++) {
+         thread_basic_info_data_t bi; mach_msg_type_number_t bic = THREAD_BASIC_INFO_COUNT;
+         arm_thread_state64_t st; mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+-        char tname[40] = ""; pthread_t pt; int running, is_game;
++        char tname[40] = ""; pthread_t pt; int running, is_game, held;
+         uint64_t pc, lr, sp, x28, x17, x18, x23, bb = 0, rip = 0, cr[16], stk[64], nstk[64];
+         int have_bb, have_cr, have_stk, have_nstk;
+         const char *why = "";
+         if (tlist[k] == self_port) continue;
+         if (thread_info(tlist[k], THREAD_BASIC_INFO, (thread_info_t)&bi, &bic) != KERN_SUCCESS) continue;
++        held = bi.suspend_count > 0;
++        if (printed >= 64 && !held) continue;
+         pt = pthread_from_mach_thread_np(tlist[k]);
+         if (pt) pthread_getname_np(pt, tname, sizeof(tname));
+         running = bi.run_state == TH_STATE_RUNNING;
+         is_game = !strcmp(tname, "GameThread") || !strncmp(tname, "RenderThread", 12) || !strncmp(tname, "RHIThread", 9);
+-        if (burst && !running && !is_game) continue;    /* idle waiters: once per burst */
++        if (burst && !running && !is_game && !held) continue;    /* idle waiters: once per burst */
+         if (thread_suspend(tlist[k]) != KERN_SUCCESS) continue;
+         if (thread_get_state(tlist[k], ARM_THREAD_STATE64, (thread_state_t)&st, &cnt) != KERN_SUCCESS) { thread_resume(tlist[k]); continue; }
+         pc = arm_thread_state64_get_pc(st); lr = arm_thread_state64_get_lr(st); sp = arm_thread_state64_get_sp(st);
+@@ -673,9 +678,9 @@ static void ios_thread_sampler_pass(int burst)
+             char line[1400], s1[120], s2[120]; int n; unsigned i, shown; uint64_t rva; const char *mn;
+             struct ios_ts_map *mp = ios_ts_map_for_teb(x18);
+             ios_ts_sym(pc, s1, sizeof(s1)); ios_ts_sym(lr, s2, sizeof(s2));
+-            n = snprintf(line, sizeof(line), "[thread-sample] ml876 b%d \"%s\" teb=0x%llx cpu=%d%% %s pc=%s lr=%s sp=0x%llx",
++            n = snprintf(line, sizeof(line), "[thread-sample] ml876 b%d \"%s\" teb=0x%llx cpu=%d%% %s susp=%d pc=%s lr=%s sp=0x%llx",
+                          burst, tname, (unsigned long long)x18, bi.cpu_usage / 10, running ? "RUN" : "wait",
+-                         s1, s2, (unsigned long long)sp);
++                         bi.suspend_count, s1, s2, (unsigned long long)sp);
+             if (rip) {
+                 mn = ios_ts_mod_for(mp, rip, &rva);
+                 n += snprintf(line + n, sizeof(line) - n, " GUEST rip=0x%llx", (unsigned long long)rip);
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index b0ed33e..02e523e 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -672,6 +672,67 @@ static int ios_lookup_thread(thread_t mach_thread, uintptr_t *teb_out, void **tr
+     return 0;
+ }
+ 
++/* PLA-93: the write owner of a FEX WritePriorityMutex that a crowd is stuck on
++ * ([hot-lock] in unix/sync.c, [fexlock] STUCK in FEX). The mutex names its owner
++ * by TEB and tid; this prints that thread's Mach state: suspend_count (a real
++ * suspend's hold shows as 1 or more), run state, pc, lr, sp and the fp chain.
++ * The owner is found in the registry by TEB and checked by its tid, so a word
++ * that only looks like a FEX mutex prints nothing but a miss line. */
++void ios_wpm_owner_report( unsigned long long mutex, unsigned long long owner_teb,
++                           unsigned int owner_tid )
++{
++    int count = __sync_fetch_and_add(&ios_thread_count, 0);
++    int i, fi;
++    if (count > IOS_MAX_WINE_THREADS) count = IOS_MAX_WINE_THREADS;
++
++    for (i = count - 1; i >= 0; i--)
++    {
++        thread_t cand = ios_thread_registry[i].mach_thread;
++        struct thread_basic_info bi;
++        mach_msg_type_number_t bcnt = THREAD_BASIC_INFO_COUNT;
++        arm_thread_state64_t st;
++        mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
++        uint64_t fp, frames[12] = { 0 };
++        unsigned int tid = 0;
++        mach_vm_size_t got = 0;
++
++        if (!cand || (unsigned long long)ios_thread_registry[i].teb != owner_teb) continue;
++        if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)(owner_teb + 0x48), 4,
++                                    (mach_vm_address_t)&tid, &got ) != KERN_SUCCESS || got != 4 ||
++            (tid & 0xffff) != (owner_tid & 0xffff))
++            continue;
++        if (thread_info( cand, THREAD_BASIC_INFO, (thread_info_t)&bi, &bcnt ) != KERN_SUCCESS) continue;
++        if (thread_get_state( cand, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt ) != KERN_SUCCESS)
++            memset( &st, 0, sizeof(st) );
++        fp = st.__fp;
++        for (fi = 0; fi < 12 && fp > 0x1000 && !(fp & 7); fi++)
++        {
++            uint64_t rec[2] = { 0, 0 };
++            got = 0;
++            if (mach_vm_read_overwrite( mach_task_self(), (mach_vm_address_t)fp, sizeof(rec),
++                                        (mach_vm_address_t)rec, &got ) != KERN_SUCCESS || got != sizeof(rec))
++                break;
++            frames[fi] = rec[1];
++            fp = rec[0];
++        }
++        dprintf( 2, "[wpm-owner] mutex=0x%llx owner teb=0x%llx tid=%04x port=0x%x run_state=%d susp=%d "
++                 "pc=0x%llx lr=0x%llx sp=0x%llx fp=0x%llx bt: %llx %llx %llx %llx %llx %llx %llx %llx "
++                 "%llx %llx %llx %llx\n",
++                 mutex, owner_teb, tid, cand, bi.run_state, bi.suspend_count,
++                 (unsigned long long)arm_thread_state64_get_pc( st ), (unsigned long long)st.__lr,
++                 (unsigned long long)arm_thread_state64_get_sp( st ), (unsigned long long)st.__fp,
++                 (unsigned long long)frames[0], (unsigned long long)frames[1],
++                 (unsigned long long)frames[2], (unsigned long long)frames[3],
++                 (unsigned long long)frames[4], (unsigned long long)frames[5],
++                 (unsigned long long)frames[6], (unsigned long long)frames[7],
++                 (unsigned long long)frames[8], (unsigned long long)frames[9],
++                 (unsigned long long)frames[10], (unsigned long long)frames[11] );
++        return;
++    }
++    dprintf( 2, "[wpm-owner] mutex=0x%llx owner teb=0x%llx tid=%04x not a registered thread\n",
++             mutex, owner_teb, owner_tid );
++}
++
+ /* ml398 (task #60): the webhelper chrome_ipc pump thread wakes ONCE on
+  * MasterStream_Event, reads a perfectly valid hello ([chrome-mem] proved the
+  * bytes cross), then goes silent — no reply, no re-wait, no further wrapped
