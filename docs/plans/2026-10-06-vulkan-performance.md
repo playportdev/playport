@@ -65,6 +65,11 @@ compared with its route's control (`vk-v2-dxvk-1` lost its HUD figures; do not u
 Since `wine-unix` 0021 (item 1, kept), a Vulkan lever's run is compared with its route's
 latest run on the 0021 IPA `baa20a27…`: `vk-v2-dxvk-presentfix-1` and
 `vk-v2-vkd3d-presentfix-1` ([present path](../evidence/2026-10-08-vulkan-perf-present-path.md)).
+Since tiler mode went off by default (item 3, kept, decision 0066; IPA `4349d6a2…`), a DXVK
+lever's run is compared with `vk-v2-dxvk-notiler-1`, in the window 85–115 s unless its walk
+reaches the lumafly room ([config levers](../evidence/2026-10-08-vulkan-perf-config-levers.md));
+a Graphics option's DXVK item now follows the backend's `DXVK_CONFIG`, so tiler mode stays off
+in it.
 
 **Work queue, in this order** (each item names its evidence and its first move):
 
@@ -76,12 +81,18 @@ latest run on the 0021 IPA `baa20a27…`: `vk-v2-dxvk-presentfix-1` and
    `patches/wine-unix` change that skips the window queries when the window has not
    changed (or does them once a present, not twice); measure srv/f, the wineserver
    thread's Mi/f and p99.
-2. **vkd3d records every command twice** (D3D12 route; step 4.1 turned config).
+2. **Done (not kept):** `VKD3D_CONFIG=one_time_submit` took UnityGfxDeviceWorker 0.35 Mi/f
+   down (−2 %), nothing else measurable, and would drop a re-executed command list's work
+   on KosmicKrisp ([config levers](../evidence/2026-10-08-vulkan-perf-config-levers.md)).
+   The worker's remaining time needs a D3D12 CPU profile. The original item:
+   **vkd3d records every command twice** (D3D12 route; step 4.1 turned config).
    KosmicKrisp skips its `vk_cmd_queue` copy only for `ONE_TIME_SUBMIT` command buffers,
    and vkd3d-proton sets that flag only with `VKD3D_CONFIG=one_time_submit`. Move: one
    vkd3d run with `graphicsOptions` `VKD3D_CONFIG=one_time_submit`; watch
    UnityGfxDeviceWorker's Mi/f (twice DXMT's) and the screenshot.
-3. **DXVK tiler mode** (DXVK route; step 3). DXVK puts KosmicKrisp in tiler mode, which
+3. **Done (kept, decision 0066):** `dxvk.tilerMode=False` is the Vulkan backend's default:
+   Mi/f 60.5 → 57.5, CPU 1784 → 1675 mW, dxvk-cs down, GPU time unchanged. The original item:
+   **DXVK tiler mode** (DXVK route; step 3). DXVK puts KosmicKrisp in tiler mode, which
    records each render pass into a secondary command buffer that KosmicKrisp queues and
    replays on `dxvk-cs`. Move: one DXVK run with `dxvk.tilerMode=False` (it ended in the
    video crash before `patches/dxvk` 0001; it runs now); watch dxvk-cs and the screenshot.
@@ -565,8 +576,26 @@ without the owner is recorded here with its reason.
   wineserver thread about 1.1 Mi/f less on each; Mi/f 61.5 → 60.8 and 66.6 → 65.1; FPS and
   GPU time unchanged; DXVK p99 12.5 → 16.67 ms, one 120-Hz step it also showed in step 1, read
   as run-to-run.
-- **Next:** work-queue item 2, one vkd3d run with `graphicsOptions`
-  `VKD3D_CONFIG=one_time_submit` against `vk-v2-vkd3d-presentfix-1` (UnityGfxDeviceWorker's
-  Mi/f, 18–20 against DXMT's 9.4, and the screenshot). Then items 3–6 in order. On DXVK the
-  request count now equals DXMT's; its remaining gap is in work a frame (dxvk-cs,
-  UnityGfxDeviceWorker) and p99.
+- **Work-queue items 2 and 3, done** ([config levers](../evidence/2026-10-08-vulkan-perf-config-levers.md)),
+  one run each on the 0021 IPA. `VKD3D_CONFIG=one_time_submit` (`vk-v2-vkd3d-ots-1`): **not
+  kept**. KosmicKrisp's skipped `vk_cmd_queue` copy was worth 0.35 Mi/f on UnityGfxDeviceWorker
+  (17.9/19.8 → 17.6/19.5), nothing else moved, and with the flag a D3D12 command list
+  executed twice would replay an empty queue on KosmicKrisp. `dxvk.tilerMode=False`
+  (`vk-v2-dxvk-notiler-1`): **kept**. In the same scene (window 85–115 s; the Knight then
+  missed the held jump out of the pit) Mi/f 60.5 → 57.5, CPU 1784 → 1675 mW, dxvk-cs
+  4.3/5.8 → 3.8/4.0 Mi/f, 180 MiB less, GPU time 5.81 → 5.80 ms, p99 unchanged.
+  Decisions (unattended): the lever is the Vulkan backend's default
+  (`GraphicsBackend.runtimeEnvironment`, decision 0066, superseding 0024's empty
+  `DXVK_CONFIG`); a dev build's DXVK Graphics options now follow that default after `;`
+  instead of replacing it, so later DXVK lever runs keep tiler mode off; one run each, no
+  repeat (the notiler run's late scene change was handled by the matched window, not a
+  rerun). IPA `4349d6a2…`: `pp test`, `pp build`, install, the gate (Hollow Knight and
+  Portal 2, both on DXVK on this phone) and one Hollow Knight Vulkan play, each log with
+  `Found config env: dxvk.tilerMode = False`. Found on the way: the gate's Hollow Knight play
+  runs on Vulkan on this phone, not DXMT; the controls and present-path records are corrected.
+- **Next:** work-queue item 4, the extra present pass (read `wsi_common_metal.c` and
+  KosmicKrisp's `kk_wsi.c`; a `patches/mesa` change, one run on each route against
+  `vk-v2-dxvk-notiler-1` and `vk-v2-vkd3d-presentfix-1`). Then items 5–6. DXVK's gap to DXMT
+  is now 5.7 Mi/f a frame (57.5 against 51.8), 370 mW and p99 (16.7 against 8.3 ms); vkd3d's
+  UnityGfxDeviceWorker (18–20 against 9.4 Mi/f) needs a D3D12 `--cpu-prof` run (item 6's
+  profile, taken on the vkd3d route too) before any lever there.

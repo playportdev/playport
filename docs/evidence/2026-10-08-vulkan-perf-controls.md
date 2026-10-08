@@ -15,7 +15,7 @@ One locked session after `pp install --no-build` (default settings, `--shot`):
 
 | play | run | first frame | result |
 |---|---|---|---|
-| Hollow Knight, default backend (DXMT) | `ui-runs/20261008T014459` | +9.20 s | `first-frame+10`, title menu |
+| Hollow Knight, the phone's default backend (Vulkan: DXVK; `title: graphics: vulkan`) | `ui-runs/20261008T014459` | +9.20 s | `first-frame+10`, title menu |
 | Portal 2, default backend | `ui-runs/20261008T014550` | +5.38 s | `first-frame+10`, Source intro |
 | Hollow Knight, `graphics: vulkan`, `-force-d3d12` (vkd3d) | `ui-runs/20261008T014633` | +8.37 s | `first-frame+10`, title menu; no `keyed wait returned` line (`wine-pe` 0031), no fault |
 
@@ -76,6 +76,6 @@ Vulkan present path). vkd3d adds about 1 `event_op`, 1 `release_semaphore`, 1
 
 ## Games observed
 
-- Hollow Knight (367520): gate on DXMT, one D3D12 start, three route-v2 runs (DXMT, DXVK
+- Hollow Knight (367520): gate on the default backend (Vulkan: DXVK), one D3D12 start, three route-v2 runs (DXMT, DXVK
   twice, vkd3d), all in play at the end.
 - Portal 2 (620): gate, `first-frame+10`.

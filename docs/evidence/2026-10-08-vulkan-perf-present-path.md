@@ -54,7 +54,7 @@ iPhone18,4, iOS 27.0, on charge at 100 %, unattended. One locked session: `pp in
 
 | play | run | first frame | result |
 |---|---|---|---|
-| Hollow Knight, default backend (DXMT) | `ui-runs/20261008T031215` | +9.56 s (JIT 2.46 s) | `first-frame+10` |
+| Hollow Knight, the phone's default backend (Vulkan: DXVK; `title: graphics: vulkan`) | `ui-runs/20261008T031215` | +9.56 s (JIT 2.46 s) | `first-frame+10` |
 | Portal 2, default backend | `ui-runs/20261008T031307` | +5.56 s (JIT 2.52 s) | `first-frame+10` |
 
 Route v2, burst, 720/free (`burst.sh NAME dxvk|vkd3d`), each started at thermal `nominal`
@@ -96,6 +96,6 @@ reduction in work. The gap left on DXVK is not in wineserver requests.
 
 ## Games observed
 
-- Hollow Knight (367520): gate on DXMT, `first-frame+10`; route-v2 runs on DXVK and vkd3d,
+- Hollow Knight (367520): gate on the default backend (Vulkan: DXVK), `first-frame+10`; route-v2 runs on DXVK and vkd3d,
   both in play at the end.
 - Portal 2 (620): gate, `first-frame+10`.

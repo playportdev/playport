@@ -261,14 +261,30 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
 
     /// Environment this backend's launches start with.
     ///
-    /// None for either backend. Vulkan started with
-    /// `DXVK_CONFIG=dxvk.numCompilerThreads = 2` while the FEX host band was
-    /// too full for DXVK's own compiler pool (decision 0015); with the band's
-    /// leak fixed, Hollow Knight starts all of DXVK's threads with most of the
-    /// band free, so DXVK picks its own count (decision 0024).
+    /// None for DXMT. Vulkan turns DXVK's tiler mode off (decision 0066): on
+    /// KosmicKrisp it recorded each render pass into a secondary command buffer
+    /// that the driver copied and replayed on DXVK's frame thread, for no GPU time
+    /// saved. DXVK still picks its own compiler thread count (decision 0024).
     public var runtimeEnvironment: [String: String] {
         switch self {
-        case .dxmt, .vulkan: [:]
+        case .dxmt: [:]
+        case .vulkan: ["DXVK_CONFIG": "dxvk.tilerMode = False"]
         }
+    }
+
+    /// The backend's environment with a game's Graphics options over it (decision
+    /// 0060): an option's variable replaces the backend's, except DXVK_CONFIG, where
+    /// the options follow the backend's after `;`, so DXVK takes an option's value for
+    /// a key both name and keeps the backend's others.
+    public func environment(graphicsOptions options: [String: String]) -> [String: String] {
+        var env = runtimeEnvironment
+        for (name, value) in options {
+            if name == "DXVK_CONFIG", let own = env[name] {
+                env[name] = own + ";" + value
+            } else {
+                env[name] = value
+            }
+        }
+        return env
     }
 }

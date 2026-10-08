@@ -405,7 +405,7 @@ enum LaunchCoordinator {
         if !r.graphicsEnvironment.isEmpty {
             log("graphics options: " + r.graphicsEnvironment.keys.sorted().map { "\($0)=\(r.graphicsEnvironment[$0]!)" }
                 .joined(separator: " "))
-            backend.merge(r.graphicsEnvironment) { _, option in option }
+            backend = r.graphics.environment(graphicsOptions: r.graphicsEnvironment)
         }
         backend.merge(Diagnostics.launchEnvironment(exe: r.exe, dir: dir, graphics: r.graphics, log: log)) { own, _ in own }
         #endif

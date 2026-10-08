@@ -581,8 +581,20 @@ final class LaunchSettingsTests: XCTestCase {
         XCTAssertNil(GraphicsBackend.dxmt.runtimeOverlay)
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeOverlay, "vulkan")
         XCTAssertEqual(GraphicsBackend.dxmt.runtimeEnvironment, [:])
-        // DXVK picks its own compiler thread count (decision 0024).
-        XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, [:])
+        // DXVK picks its own compiler thread count (decision 0024); tiler mode is off (decision 0066).
+        XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
+    }
+
+    func testGraphicsOptionsGoOverTheBackendsEnvironment() {
+        // A DXVK option follows the backend's DXVK_CONFIG, so DXVK keeps tiler mode off
+        // unless the option names it (DXVK takes a key's last value).
+        XCTAssertEqual(GraphicsBackend.vulkan.environment(graphicsOptions: ["DXVK_CONFIG": "dxgi.maxFrameLatency = 2"]),
+                       ["DXVK_CONFIG": "dxvk.tilerMode = False;dxgi.maxFrameLatency = 2"])
+        XCTAssertEqual(GraphicsBackend.vulkan.environment(graphicsOptions: ["VKD3D_CONFIG": "one_time_submit"]),
+                       ["DXVK_CONFIG": "dxvk.tilerMode = False", "VKD3D_CONFIG": "one_time_submit"])
+        XCTAssertEqual(GraphicsBackend.vulkan.environment(graphicsOptions: [:]), GraphicsBackend.vulkan.runtimeEnvironment)
+        XCTAssertEqual(GraphicsBackend.dxmt.environment(graphicsOptions: ["DXVK_CONFIG": "dxvk.hud = fps"]),
+                       ["DXVK_CONFIG": "dxvk.hud = fps"])
     }
 
     func testASteamGameRunsWithItsAppIDAsSteamsGameID() {

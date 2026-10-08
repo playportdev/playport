@@ -251,7 +251,8 @@ comes out within a day of it. What a move from 1.6.0 to 1.9.0 costs was measured
   `graphicsOptions` (the Developer section's *Graphics options*, decision
   [0060](decisions/0060-graphics-options.md)) set the Vulkan layers' variables
   from an allowlist: `{"graphicsOptions":"dxvk.tilerMode=False VKD3D_CONFIG=one_time_submit"}`
-  (a `dxvk.`/`dxgi.`/`d3d11.` item goes into `DXVK_CONFIG`; also `MESA_KK_DEBUG`,
+  (a `dxvk.`/`dxgi.`/`d3d11.` item goes into `DXVK_CONFIG`, after the Vulkan backend's own
+  `dxvk.tilerMode = False`, decision [0066](decisions/0066-dxvk-tiler-mode-off.md); also `MESA_KK_DEBUG`,
   `MESA_KK_EXPERIMENTAL`, `MESA_KK_DISABLE_WORKAROUNDS`). Otherwise a game's options have no environment
   variables, so the runtime's environment switches (`WINE_HOST_LOG_STAMP`,
   `WINE_HOST_SAMPLE`, `WINE_HOST_DIAG` in `wine_host.c`) have no way in. A
