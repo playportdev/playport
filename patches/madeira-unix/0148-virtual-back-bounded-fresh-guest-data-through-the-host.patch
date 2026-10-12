@@ -1,5 +1,5 @@
-From a7a5486d79071f1f2103839436bed2511196d526 Mon Sep 17 00:00:00 2001
-From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
 Date: Sat, 3 Oct 2026 08:14:46 +0200
 Subject: [PATCH] virtual: back bounded fresh guest data through the host
 
@@ -55,10 +55,10 @@ index 0000000..8a74b59
 +}
 +#endif
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 940cec3..7f2b562 100644
+index 96bd91a..e24ed3d 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -5996,6 +5996,8 @@ static inline BOOL use_aslr(void)
+@@ -5965,6 +5965,8 @@ static inline BOOL use_aslr(void)
   * all protection, decommit and unmap operations. Never send code, reservations,
   * low guest memory or image mappings through this path. */
  extern int playport_memory_backing( void *, size_t, int ) __attribute__((weak_import));
@@ -67,7 +67,7 @@ index 940cec3..7f2b562 100644
  
  /* mmap() anonymous memory at a fixed address */
  void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
-@@ -8070,6 +8072,8 @@ static inline UINT64 maskbits( size_t idx )
+@@ -8117,6 +8119,8 @@ static inline UINT64 maskbits( size_t idx )
   *           set_arm64ec_range
   */
  static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot );  /* fwd-decl */
@@ -76,7 +76,7 @@ index 940cec3..7f2b562 100644
  static void ios_swap_release_range( void *base, size_t size, int copy_back );   /* ml1077 fwd-decls */
  static void ios_swap_init( void );
  static int ios_swap_eligible( const void *base, size_t size, unsigned int vprot, struct file_view *view );
-@@ -9115,6 +9119,7 @@ static void delete_view( struct file_view *view ) /* [in] View */
+@@ -9148,6 +9152,7 @@ static void delete_view( struct file_view *view ) /* [in] View */
      /* ml989: entered BEFORE any field of `view` is read, so "call never
       * entered" is distinguishable from "died reading the view". */
      if (ios_retire_trace_armed) ios_retire_mark( "D0>\n" );
@@ -84,7 +84,7 @@ index 940cec3..7f2b562 100644
      ios_swap_release_range( view->base, view->size, 0 );   /* ml1077 */
      if (!(view->protect & VPROT_SYSTEM)) unmap_area( view->base, view->size );
      if (ios_retire_trace_armed) ios_retire_mark( "D1u\n" );   /* unmap_area done */
-@@ -11580,6 +11585,12 @@ static NTSTATUS set_protection( struct file_view *view, void *base, SIZE_T size,
+@@ -11626,6 +11631,12 @@ static NTSTATUS set_protection( struct file_view *view, void *base, SIZE_T size,
          if ((view->protect & access) != access) return STATUS_INVALID_PAGE_PROTECTION;
      }
  
@@ -97,7 +97,7 @@ index 940cec3..7f2b562 100644
      if (!set_vprot( view, base, size, vprot | VPROT_COMMITTED ))
      {
          dprintf(2, "[vmem-denied] set_vprot failed: base=%p size=%p protect=0x%x\n",
-@@ -12726,6 +12737,60 @@ static int ios_swap_eligible( const void *base, size_t size, unsigned int vprot,
+@@ -12827,6 +12838,60 @@ static int ios_swap_eligible( const void *base, size_t size, unsigned int vprot,
      if (size < (8u << 20)) return 0;
      return 1;
  }
@@ -158,7 +158,7 @@ index 940cec3..7f2b562 100644
  static void ios_swap_back( void *base, size_t size, unsigned int vprot )
  {
      char *hs = (char *)(((uintptr_t)base + host_page_mask) & ~(uintptr_t)host_page_mask);
-@@ -12918,6 +12983,7 @@ static NTSTATUS decommit_pages( struct file_view *view, char *base, size_t size
+@@ -13019,6 +13084,7 @@ static NTSTATUS decommit_pages( struct file_view *view, char *base, size_t size
          }
          else if (host_start < host_end)
          {
@@ -166,7 +166,7 @@ index 940cec3..7f2b562 100644
              ios_swap_release_range( host_start, host_end - host_start, 0 );   /* ml1077 */
              anon_mmap_fixed( host_start, host_end - host_start, PROT_READ | PROT_WRITE, 0 );
              dc_branch = "mmap-over";
-@@ -16948,7 +17014,11 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+@@ -18051,7 +18117,11 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
                  base = view->base;
                  if (vprot & VPROT_EXEC || force_exec_prot) mprotect_range( base, size, 0, 0 );
                  ios_swap_init();
@@ -179,7 +179,7 @@ index 940cec3..7f2b562 100644
  
                  /* iOS-Madeira ml308 (task #54): DETECT VA HANDED OUT TWICE.
                   *
-@@ -17044,7 +17114,11 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+@@ -18147,7 +18217,11 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
          {
              unsigned int sv = 0;
              ios_swap_init();

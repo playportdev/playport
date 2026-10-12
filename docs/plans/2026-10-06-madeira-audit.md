@@ -36,7 +36,7 @@ near 5930). Function names still hold.
 T11 → T9 → T10) now rebases over 0124, 0138 and 0141 as well. The unmerged donor-memory
 branch `research/extended-memory`
 ([PLA-216](https://linear.app/playportdev/issue/PLA-216)) carries two more `virtual_ios.c`
-patches (numbered 0126 and 0127 on that branch; main's 0126/0127 are other patches): host
+patches (numbered 0147 and 0148 on that branch, after main's 0146): host
 backing for committed FEX data, and for fresh guest RW commits of 1 MiB or more in
 `[0x7000000000, 0x7c00000000)`. That is the range T4's steering and T10's layout move, so
 whichever lands second rebases onto the other.

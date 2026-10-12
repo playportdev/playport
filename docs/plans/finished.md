@@ -314,3 +314,16 @@ None of it has been tested here. Open:
 - AltStore Classic 2.3 on a free team.
 
 Each result goes in an evidence record and in DISTRIBUTION.md's signer table.
+
+A source reading on 2026-10-05 (branch `research/extended-memory`, not merged)
+added three points:
+
+- A SideSign fix was offered upstream (SideStore/SideSign#4, linked from
+  #1616). It puts the capability in the free features and sends the
+  `bundleIdCapabilities` request GetMoreRam sends.
+- Impactor asks for every capability named in the binary's entitlements.
+- `PlayportJIT.appex` is signed with the memory entitlement too, so a SideStore
+  install without it lowers both processes' limits.
+
+The runtime alternative that needs no entitlement is now
+[the donor-memory plan](2026-10-12-donor-memory.md) (PLA-216).

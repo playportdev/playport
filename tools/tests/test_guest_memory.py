@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-PATCH = ROOT / "patches/madeira-unix/0050-virtual-back-bounded-fresh-guest-data-through-the-host.patch"
+PATCH = ROOT / "patches/madeira-unix/0148-virtual-back-bounded-fresh-guest-data-through-the-host.patch"
 
 
 def added_header():
@@ -84,11 +84,3 @@ int main(void) {
                             "-I", str(d), str(d / "test.c"), "-o", str(d / "test")], check=True,
                            capture_output=True)
             subprocess.run([str(d / "test")], check=True, capture_output=True)
-
-    def test_swift_quota_matches_tracker_bound(self):
-        source = (ROOT / "app/Sources/S1Probe/Dev/SharedMemoryBroker.swift").read_text()
-        self.assertIn("guestCap: UInt64 = 2 << 30", source)
-        self.assertIn("bytes <= guestCap - guestLive", source)
-        self.assertIn("if guest { guestMapped += bytes; guestLive += bytes; guestCalls += 1 }", source)
-        self.assertIn("guestLive -= bytes", source)
-        self.assertIn("#define PP_GUEST_MAX_RANGES (524288u)", added_header())

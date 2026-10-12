@@ -9,7 +9,6 @@ extern kern_return_t mach_memory_entry_ownership(mach_port_t, mach_port_t, int, 
 #include <mach/vm_statistics.h>
 #include <os/proc.h>
 #include <xpc/xpc.h>
-#include <stdatomic.h>
 #include <sys/mman.h>
 
 // An individually transported object is bounded; larger arenas use chunks.
@@ -115,14 +114,6 @@ PPMemoryRegion *pp_memory_create(uint64_t bytes, uint64_t token, NSError **error
 
 bool pp_memory_map_backing(PPMemoryRegion *region, void *address, int protection) {
     return [region mapBackingAt:address protection:protection];
-}
-static _Atomic(PPMemoryBackingProvider) backingProvider;
-void pp_memory_set_backing_provider(PPMemoryBackingProvider provider) {
-    atomic_store_explicit(&backingProvider, provider, memory_order_release);
-}
-int playport_memory_backing(void *address, size_t bytes, int protection) {
-    PPMemoryBackingProvider provider = atomic_load_explicit(&backingProvider, memory_order_acquire);
-    return provider ? provider(address, bytes, protection) : 0;
 }
 
 NSDictionary *pp_memory_snapshot(void) {

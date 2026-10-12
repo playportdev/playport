@@ -1,5 +1,5 @@
-From 9495281d8078afde41baf7b46c66c58c71a11cdf Mon Sep 17 00:00:00 2001
-From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
 Date: Sat, 3 Oct 2026 00:22:17 +0200
 Subject: [PATCH] virtual: let the host back large committed FEX data mappings
 
@@ -13,11 +13,11 @@ Offered-upstream: no; optional iOS host integration
  1 file changed, 13 insertions(+)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 846d530..940cec3 100644
+index 1e99477..96bd91a 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
-@@ -5990,6 +5990,13 @@ static inline BOOL use_aslr(void)
-            (main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE);
+@@ -5959,6 +5959,13 @@ static inline BOOL use_aslr(void)
+            (ios_cur_image_info()->DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE);
  }
  
 +/* Optional host backing for committed FEX data. A missing/rejecting host hook
@@ -30,7 +30,7 @@ index 846d530..940cec3 100644
  /* mmap() anonymous memory at a fixed address */
  void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
  {
-@@ -5998,6 +6005,12 @@ void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
+@@ -5967,6 +5974,12 @@ void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
      assert( !(size & host_page_mask) );
  
      ios_jit_range_tripwire( "anon_mmap_fixed", start, size, prot, __builtin_return_address(0) );

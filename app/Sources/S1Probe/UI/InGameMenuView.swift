@@ -386,9 +386,6 @@ struct InGameMenuView: View {
     @ObservedObject private var safe = WindowInsets.shared
     @ObservedObject private var controls = OnScreenControls.shared
     @ObservedObject private var store = ControlsStore.shared
-    #if !PLAYPORT_RELEASE
-    @ObservedObject private var memory = SharedMemoryProbe.shared
-    #endif
 
     var body: some View {
         let lead = safe.side(44, safe.insets.leading), trail = safe.side(44, safe.insets.trailing)
@@ -405,11 +402,6 @@ struct InGameMenuView: View {
                 ForEach(QuickMenuItem.allCases, id: \.self) { item in
                     row(item)
                 }
-                #if !PLAYPORT_RELEASE
-                Text(memory.status).font(.system(size: 11)).foregroundStyle(PP.muted)
-                    .padding(.horizontal, 14).padding(.top, 8)
-                    .task { await memory.reportRuntime() }
-                #endif
                 Spacer(minLength: 0)
             }
             .padding(.top, 22).padding(.leading, lead).padding(.trailing, 20)
