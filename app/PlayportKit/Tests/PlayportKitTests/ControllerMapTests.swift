@@ -11,7 +11,7 @@ final class ControllerMapTests: XCTestCase {
             "leftStick.up": "key:0x57", "leftStick.left": "key:0x41", "leftStick.down": "key:0x53", "leftStick.right": "key:0x44",
             "rightStick": "mouse:move", "rt": "mouse:left", "lt": "mouse:right",
             "a": "key:0x20", "b": "key:0x43", "x": "key:0x52", "y": "key:0x46", "lb": "key:0x51", "rb": "key:0x45",
-            "up": "key:0x31", "right": "key:0x32", "down": "key:0x33", "left": "key:0x34",
+            "up": "key:0x26", "right": "key:0x27", "down": "key:0x28", "left": "key:0x25",   // the arrow keys
             "back": "key:0x09", "start": "key:0x1B",
         ]
         XCTAssertEqual(ControllerMap.keyboardMouse.names, want)
@@ -141,8 +141,8 @@ final class ControllerMapTests: XCTestCase {
         let presses: [(String, (inout PadInput) -> Void, UInt8)] = [
             ("A", { $0.a = true }, 0x20), ("B", { $0.b = true }, 0x43), ("X", { $0.x = true }, 0x52), ("Y", { $0.y = true }, 0x46),
             ("LB", { $0.leftShoulder = true }, 0x51), ("RB", { $0.rightShoulder = true }, 0x45),
-            ("up", { $0.up = true }, 0x31), ("right", { $0.right = true }, 0x32), ("down", { $0.down = true }, 0x33),
-            ("left", { $0.left = true }, 0x34), ("View", { $0.options = true }, 0x09), ("Menu", { $0.menu = true }, 0x1B),
+            ("up", { $0.up = true }, 0x26), ("right", { $0.right = true }, 0x27), ("down", { $0.down = true }, 0x28),
+            ("left", { $0.left = true }, 0x25), ("View", { $0.options = true }, 0x09), ("Menu", { $0.menu = true }, 0x1B),
         ]
         var m = mixer()
         for (name, press, vk) in presses {

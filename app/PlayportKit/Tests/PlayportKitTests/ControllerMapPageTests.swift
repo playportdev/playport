@@ -21,7 +21,7 @@ final class ControllerMapPageTests: XCTestCase {
 
     func testThePresetsRowsAsTheBoardShowsThem() {
         XCTAssertEqual(ControllerMapRow.leftStick.caps(in: preset), ["W", "A", "S", "D"])
-        XCTAssertEqual(ControllerMapRow.dpad.caps(in: preset), ["1", "2", "3", "4"])   // clockwise from up
+        XCTAssertEqual(ControllerMapRow.dpad.caps(in: preset), ["↑", "→", "↓", "←"])   // the arrow keys, clockwise from up
         XCTAssertEqual(ControllerMapRow.rightStick.caps(in: preset), ["Mouse"])
         XCTAssertEqual(ControllerMapRow.rt.caps(in: preset), ["Left"])
         XCTAssertEqual(ControllerMapRow.lt.caps(in: preset), ["Right"])

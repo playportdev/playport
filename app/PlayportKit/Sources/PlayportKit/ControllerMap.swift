@@ -53,7 +53,8 @@ public struct ControllerMap: Codable, Equatable, Sendable {
 
     /// The `keyboardMouse` preset: left stick W A S D, right stick mouse look,
     /// RT left mouse button, LT right, A Space, B C, X R, Y F, LB Q, RB E,
-    /// d-pad 1–4 (up, right, down, left), View Tab, Menu Esc.
+    /// d-pad the arrow keys (so a game's menus can be driven: owner, 2026-10-13;
+    /// it was 1–4 before touch controls U), View Tab, Menu Esc.
     public static let keyboardMouse: ControllerBindings = {
         func key(_ vk: UInt8) -> InputAction { .key(vk, []) }
         let table: [ControllerInput: InputAction] = [
@@ -70,10 +71,10 @@ public struct ControllerMap: Codable, Equatable, Sendable {
             .control(.y): key(0x46),                          // F
             .control(.lb): key(0x51),                         // Q
             .control(.rb): key(0x45),                         // E
-            .control(.up): key(0x31),                         // 1
-            .control(.right): key(0x32),                      // 2
-            .control(.down): key(0x33),                       // 3
-            .control(.left): key(0x34),                       // 4
+            .control(.up): key(0x26),                         // Up arrow
+            .control(.right): key(0x27),                      // Right arrow
+            .control(.down): key(0x28),                       // Down arrow
+            .control(.left): key(0x25),                       // Left arrow
             .control(.back): key(0x09),                       // View: Tab
             .control(.start): key(0x1B),                      // Menu: Esc
         ]

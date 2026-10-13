@@ -185,7 +185,7 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          physical controller (and --pad's scripted pad, not the on-screen controls) does:
                          {"mode":"controller"} (the default: an XInput pad), {"mode":"keyboardMouse"} (left
                          stick W A S D, right stick mouse look, RT/LT left/right mouse button, A Space, B C,
-                         X R, Y F, LB Q, RB E, d-pad up/right/down/left 1-4, BACK Tab, START Esc; Home stays
+                         X R, Y F, LB Q, RB E, d-pad the arrow keys, BACK Tab, START Esc; Home stays
                          Playport's), or {"mode":"custom","table":{INPUT:ACTION,...}} (no table: a copy of
                          that preset). INPUT is a b x y lb rb lt rt start back ls rs up down left right,
                          leftStick/rightStick (whole: mouse:move, pad:leftStick, pad:rightStick) or
