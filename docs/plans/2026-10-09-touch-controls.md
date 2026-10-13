@@ -16,10 +16,14 @@ proposed answer unless the owner says otherwise before the phase that needs them
   phase (`pp phone lock -- …`: install, Hollow Knight `first-frame+10`, the phase's
   driven checks), and the overlay `pp perf` A/B only if the blur is suspected.
 - **Decision number:** 0075 is taken; the record this plan calls "0075" takes the next
-  free number when written.
-- **Done:** nothing yet.
-- **Running:** phase 1 writer.
-- **Queue:** phase 1 → phase 2 (owner gyro play at its end) → phase 3; then stop.
+  free number, **0105** as of 2026-10-13 (0104 is the last), when phase 6 writes it.
+- **Done:** phase 1 (`b784617`; [evidence](../evidence/2026-10-13-touch-controls-phase1.md),
+  IPA `3911e0fa…`). Choices made there: Off for a game keeps the Playport button while no
+  controller is connected, so the menu stays in reach by touch; Never makes Off every game's
+  starting choice; the controls' pad is player 1 from the runtime's start and they are drawn
+  from the first frame; the `pp perf` A/B was skipped (60 fps held with the overlay).
+- **Running:** nothing.
+- **Queue:** phase 2 (owner gyro play at its end) → phase 3; then stop.
 - **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
 
 ## Goal
@@ -162,6 +166,8 @@ gate listed. A UI change needs a run showing it. A runtime-facing change needs H
 result. Phases 1–3 make a releasable first cut.
 
 ### Phase 1: the Gamepad layout and the Playport button
+
+**Status:** done 2026-10-13 ([evidence](../evidence/2026-10-13-touch-controls-phase1.md)).
 
 1. **HostIOKit.** `InputAction`, `InputMixer` with slot-0 merging, and the
    touch-control state machines: hold, toggle, repeat, floating stick, double-tap
