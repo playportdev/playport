@@ -27,6 +27,9 @@
 //                 it is up the pads' presses are the menu's, the guest's pads
 //                 are at rest (HostIOKit.GuestPadGate), audio stops and the
 //                 session root holds the game's threads (pauseGame)
+//   gyro aim      the iPhone's or a controller's gyro as slot 0's right stick
+//                 or relative mouse motion while the game takes input
+//                 (GyroSensors.swift, HostIOKit.GyroAim)
 //   lifecycle     focus loss before releasing held controls (pads by Winios's
 //                 drain, after the loss reaches the game), audio back when
 //                 active, foreground and uninterrupted, and DXMT's Metal
@@ -199,6 +202,7 @@ final class HostIO {
         Self.trace.start()
         #endif
         OnScreenControls.shared.start(controllers: extended.count)
+        GyroSensors.shared.start()
     }
 
     #if !PLAYPORT_RELEASE
@@ -216,6 +220,7 @@ final class HostIO {
     private func handle(_ event: LifecycleEvent) {
         let actions = lifecycle.handle(event)
         if event == .resignActive { motion.reset() }
+        defer { GyroSensors.shared.appState(active: lifecycle.active && !lifecycle.background) }
         defer { if event == .resignActive { OnScreenControls.shared.releaseAll() } }
         for a in actions {
             switch a {
@@ -373,8 +378,9 @@ final class HostIO {
         Self.pads.withLock { p in Self.apply(p.mixer.physicalLeft(slot: slot), slot: slot, &p.gate) }
     }
 
-    /// A slot's update under the pad lock: new values through the gate, or the slot gone.
-    private nonisolated static func apply(_ u: SlotUpdate, slot: Int, _ gate: inout GuestPadGate) {
+    /// A slot's update under the pad lock: new values through the gate, or the slot gone
+    /// (here, and gyro aim's right stick: GyroSensors.swift).
+    nonisolated static func apply(_ u: SlotUpdate, slot: Int, _ gate: inout GuestPadGate) {
         switch u {
         case .unchanged:
             break
@@ -520,6 +526,7 @@ final class HostIO {
         Self.pads.withLock { p in for s in p.gate.hold(.menu) { Self.set(s, PadValues()) } }
         handle(.menuOpened)
         OnScreenControls.shared.guestHeld(true)
+        GyroSensors.shared.guestHeld(true)
     }
 
     /// The menu closed: the pads the guest's again, but not the buttons still
@@ -532,6 +539,7 @@ final class HostIO {
         Self.pads.withLock { p in for (s, v) in p.gate.release(.menu) { Self.set(s, v) } }
         handle(.menuClosed)
         OnScreenControls.shared.guestHeld(false)
+        GyroSensors.shared.guestHeld(false)
     }
 
     /// A guest dialog came over the running game, or the last one went
@@ -544,6 +552,7 @@ final class HostIO {
             Self.pads.withLock { p in for (s, v) in p.gate.release(.dialog) { Self.set(s, v) } }
         }
         OnScreenControls.shared.dialogOverGame(up)
+        GyroSensors.shared.dialogOverGame(up)
     }
 
     /// One of the in-game menu's controls to the session root

@@ -37,7 +37,8 @@
 ///   smoothing restarts on release and the calibration carries on as if
 ///   nothing happened, so release brings no jump.
 /// - A gap of more than `maxStep` between samples (the sensors stopped)
-///   restarts the windows and moves nothing for the gap.
+///   restarts the windows and moves nothing for the gap; `restart()` does the
+///   same at once when the sensors start again.
 
 import Foundation
 
@@ -84,6 +85,16 @@ public struct GyroAim: Sendable {
     private var motion = RelativeMotion()
 
     public init(config: Config = Config()) { self.config = config }
+
+    /// The sensors start again (after a stop: the menu, the background, a
+    /// setting): the windows, the smoothing and the carried remainder start
+    /// over, so nothing from before the stop moves the aim; the bias learnt is kept.
+    public mutating func restart() {
+        last = nil
+        window = []
+        smoothing = []
+        motion.reset()
+    }
 
     /// One sample; `paused` while the pause button is held.
     public mutating func add(_ s: GyroSample, paused: Bool = false) -> GyroAimOutput {

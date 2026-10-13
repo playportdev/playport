@@ -5,7 +5,8 @@
 // aim (PlayportKit GyroSettings.swift) is stored the same way: its defaults under
 // the `gyro.*` keys, a game's own (GameGyro) in its GameControls record.
 // Unlike launch settings, a change applies at once while the game runs
-// (UI/TouchControlsView.swift, OnScreenControls, reads them on every change).
+// (UI/TouchControlsView.swift, OnScreenControls, and GyroSensors.swift read them
+// on every change).
 
 import Combine
 import Foundation

@@ -117,4 +117,43 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertNil(GyroPauseButton(name: "pad:rightStick"))
         XCTAssertNil(GyroPauseButton(name: "mouse:left"))
     }
+
+    /// The sensors run only while the output is not Off and the game is in front, taking input.
+    func testTheSensorsRunOnlyWhileTheGameTakesInput() {
+        let mouse = GyroSettings(output: .mouse)
+        let on = GyroConditions(settings: mouse, gameDrawing: true, appActive: true)
+        XCTAssertEqual(GyroRun.decide(on), .running(.phone, .mouse))
+        var c = on
+        c.settings.output = .off
+        XCTAssertEqual(GyroRun.decide(c), .stopped("output off"))
+        c = on; c.gameDrawing = false
+        XCTAssertEqual(GyroRun.decide(c), .stopped("no game in front"))
+        c = on; c.appActive = false
+        XCTAssertEqual(GyroRun.decide(c), .stopped("app not active"))
+        c = on; c.guestHeld = true
+        XCTAssertEqual(GyroRun.decide(c), .stopped("menu"))
+        c = on; c.dialog = true
+        XCTAssertEqual(GyroRun.decide(c), .stopped("dialog"))
+        XCTAssertNil(GyroRun.decide(c).device)
+        // Off wins over everything else: nothing runs for a game that has none.
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: GyroSettings(), gameDrawing: false, appActive: false, guestHeld: true)),
+                       .stopped("output off"))
+    }
+
+    func testTheSourceAutomaticPrefersAControllersGyro() {
+        XCTAssertEqual(GyroSource.auto.device(phone: true, controller: true), .controller)
+        XCTAssertEqual(GyroSource.auto.device(phone: true, controller: false), .phone)
+        XCTAssertNil(GyroSource.auto.device(phone: false, controller: false))
+        XCTAssertEqual(GyroSource.phone.device(phone: true, controller: true), .phone)
+        XCTAssertEqual(GyroSource.controller.device(phone: true, controller: true), .controller)
+        // An explicit Controller does not fall back to the iPhone.
+        XCTAssertNil(GyroSource.controller.device(phone: true, controller: false))
+        let stick = GyroSettings(output: .rightStick, source: .controller)
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: stick, gameDrawing: true, appActive: true, controllerHasGyro: true)),
+                       .running(.controller, .rightStick))
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: stick, gameDrawing: true, appActive: true)),
+                       .stopped("no controller with a gyro"))
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: GyroSettings(output: .mouse), gameDrawing: true, appActive: true,
+                                                     phoneHasGyro: false)), .stopped("no gyro"))
+    }
 }

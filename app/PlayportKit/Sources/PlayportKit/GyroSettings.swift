@@ -15,7 +15,10 @@
 //   (saved as `none` or an action name, `pad:lb`).
 //
 // Every field may be left out of saved JSON (its default); a value this
-// build does not know is refused, as GameControls' are.
+// build does not know is refused, as GameControls' are. A game's own are part
+// of its GameControls record (ControlsStore).
+//
+// GyroRun decides when the sensors run, and which (S1Probe's GyroSensors.swift).
 
 import Foundation
 import HostIOKit
@@ -184,5 +187,71 @@ public struct GameGyro: Codable, Equatable, Sendable {
                      verticalRatio: GyroSettings.kept(verticalRatio, in: GyroSettings.verticalRatioRange, else: d.verticalRatio),
                      turnAxis: turnAxis ?? d.turnAxis, invertX: invertX ?? d.invertX, invertY: invertY ?? d.invertY,
                      pauseButton: pauseButton ?? d.pauseButton)
+    }
+}
+
+/// The gyro a game's aim reads.
+public enum GyroDevice: String, Sendable {
+    case phone, controller
+}
+
+extension GyroSource {
+    /// The gyro this choice reads, given which have one: Automatic takes the
+    /// controller's when it reports rotation rate, else the iPhone's; iPhone and
+    /// Controller take only their own (nil when it has none).
+    public func device(phone: Bool, controller: Bool) -> GyroDevice? {
+        switch self {
+        case .auto: controller ? .controller : phone ? .phone : nil
+        case .phone: phone ? .phone : nil
+        case .controller: controller ? .controller : nil
+        }
+    }
+}
+
+/// What gyro aim's sensors depend on (S1Probe's GyroSensors gathers it on every change).
+public struct GyroConditions: Equatable, Sendable {
+    /// The running game's settings (its own over the defaults).
+    public var settings: GyroSettings
+    /// A game is running, has drawn its first frame and is not quitting.
+    public var gameDrawing: Bool
+    /// The app is active (focused) and in the foreground.
+    public var appActive: Bool
+    /// The in-game menu or a game's web page holds the game's input (HostIO.holdGuest).
+    public var guestHeld: Bool
+    /// A guest dialog is over the game (its pads are held too).
+    public var dialog: Bool
+    public var phoneHasGyro: Bool
+    /// The current controller reports rotation rate.
+    public var controllerHasGyro: Bool
+
+    public init(settings: GyroSettings, gameDrawing: Bool, appActive: Bool, guestHeld: Bool = false, dialog: Bool = false,
+                phoneHasGyro: Bool = true, controllerHasGyro: Bool = false) {
+        self.settings = settings; self.gameDrawing = gameDrawing; self.appActive = appActive; self.guestHeld = guestHeld
+        self.dialog = dialog; self.phoneHasGyro = phoneHasGyro; self.controllerHasGyro = controllerHasGyro
+    }
+}
+
+/// Whether gyro aim's sensors run, and which: only while its output is not Off
+/// and the game is in front and taking input. Anything else stops them; when
+/// they start again GyroAim restarts its windows (no jump from before the stop).
+public enum GyroRun: Equatable, Sendable {
+    case stopped(String)
+    case running(GyroDevice, GyroOutput)
+
+    public static func decide(_ c: GyroConditions) -> GyroRun {
+        if c.settings.output == .off { return .stopped("output off") }
+        if !c.gameDrawing { return .stopped("no game in front") }
+        if !c.appActive { return .stopped("app not active") }
+        if c.guestHeld { return .stopped("menu") }
+        if c.dialog { return .stopped("dialog") }
+        guard let d = c.settings.source.device(phone: c.phoneHasGyro, controller: c.controllerHasGyro) else {
+            return .stopped(c.settings.source == .controller ? "no controller with a gyro" : "no gyro")
+        }
+        return .running(d, c.settings.output)
+    }
+
+    public var device: GyroDevice? {
+        if case .running(let d, _) = self { return d }
+        return nil
     }
 }
