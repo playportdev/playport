@@ -173,6 +173,19 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          true|false, "pauseButton":"none"|"pad:BUTTON" (a b x y lb rb lt rt start back ls rs
                          up down left right), "antiDeadZone":0-0.9 (right stick: where its deflection starts,
                          0.27 by default). Example: --controls 'app-620:{"gyro":{"output":"mouse"}}'
+                         "controllerMap" is the game's controller map (PlayportKit ControllerMap), what a
+                         physical controller (and --pad's scripted pad, not the on-screen controls) does:
+                         {"mode":"controller"} (the default: an XInput pad), {"mode":"keyboardMouse"} (left
+                         stick W A S D, right stick mouse look, RT/LT left/right mouse button, A Space, B C,
+                         X R, Y F, LB Q, RB E, d-pad up/right/down/left 1-4, BACK Tab, START Esc; Home stays
+                         Playport's), or {"mode":"custom","table":{INPUT:ACTION,...}} (no table: a copy of
+                         that preset). INPUT is a b x y lb rb lt rt start back ls rs up down left right,
+                         leftStick/rightStick (whole: mouse:move, pad:leftStick, pad:rightStick) or
+                         leftStick.up/down/left/right (likewise rightStick.*); ACTION is pad:CONTROL,
+                         key:[shift+][ctrl+][alt+]0xVK, mouse:left|right|middle|wheelUp|wheelDown,
+                         playport:menu. The log's `controls: controller map MODE for PAD (slot N)` line
+                         shows the map each pad plays. Example: --controls
+                         'app-620:{"controllerMap":{"mode":"keyboardMouse"}}' --pad
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
@@ -418,6 +431,41 @@ def gyro_ok(g):
         and g.get("pauseButton", "none") in GYRO_PAUSE
 
 
+# PlayportKit ControllerMap / HostIOKit ControllerBindings: a table's inputs and actions, by name.
+PAD_CONTROLS = "a b x y lb rb lt rt start back ls rs up down left right leftStick rightStick".split()
+STICK_INPUTS = {s + "." + d for s in ("leftStick", "rightStick") for d in ("up", "down", "left", "right")}
+STICK_ACTIONS = {"pad:leftStick", "pad:rightStick", "mouse:move"}
+MAP_ACTION_RE = re.compile(r"pad:(?:" + "|".join(PAD_CONTROLS) + r")|mouse:(?:left|right|middle|wheelUp|wheelDown|move)"
+                           r"|playport:menu|key:(?:(?:shift|ctrl|alt)\+)*(?:0[xX][0-9a-fA-F]{1,2}|[0-9]{1,3})")
+
+
+def key_ok(action):
+    """A key: action names a VK 1-255."""
+    vk = action.rsplit("+", 1)[-1].removeprefix("key:")
+    n = int(vk, 16) if vk.lower().startswith("0x") else int(vk)
+    return 1 <= n <= 255
+
+
+def controller_map_ok(c):
+    """Whether c is a PlayportKit ControllerMap as JSON (--controls' "controllerMap"): a mode, and for
+    custom an optional table INPUT -> ACTION where a whole stick takes only a stick's action, every
+    other input anything else, and a stick is bound whole or by direction, not both. Home is no input."""
+    if not isinstance(c, dict) or not set(c) <= {"version", "mode", "table"} or c.get("version", 1) != 1 \
+            or c.get("mode") not in ("controller", "keyboardMouse", "custom"):
+        return False
+    table = c.get("table", {})
+    if not isinstance(table, dict):
+        return False
+    for k, a in table.items():
+        if k not in PAD_CONTROLS and k not in STICK_INPUTS:
+            return False
+        if not isinstance(a, str) or not MAP_ACTION_RE.fullmatch(a) or (a.startswith("key:") and not key_ok(a)):
+            return False
+        if (k in ("leftStick", "rightStick")) != (a in STICK_ACTIONS):
+            return False
+    return not any(s in table and any(k.startswith(s + ".") for k in table) for s in ("leftStick", "rightStick"))
+
+
 def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, pad=False,
            session=None, keep_settings=False, controls=None):
     """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
@@ -512,7 +560,8 @@ def parse(argv=None):
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"} or '
                         '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}, with "gyro":'
-                        '{"output":"mouse","sensitivity":1.5} for its gyro aim; {} clears them)')
+                        '{"output":"mouse","sensitivity":1.5} for its gyro aim, "controllerMap":{"mode":"keyboardMouse"} for its '
+                        'controller map; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -565,19 +614,21 @@ def parse(argv=None):
         try:
             cobj = json.loads(cjs)
             ok = ID_RE.match(cid) and isinstance(cobj, dict) \
-                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro"} \
+                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap"} \
                 and cobj.get("layout", "off") in ("off", "gamepad") \
                 and number(cobj.get("opacity", 0.5), 0.1, 1) \
                 and cobj.get("dpad", "off") in ("off", "on") \
                 and cobj.get("rightStick", "off") in ("off", "below", "above") \
-                and gyro_ok(cobj.get("gyro", {}))
+                and gyro_ok(cobj.get("gyro", {})) \
+                and ("controllerMap" not in cobj or controller_map_ok(cobj["controllerMap"]))
         except ValueError:
             ok = False
         if not ok:
             p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on), "
                     "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
                     "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
-                    "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9) only")
+                    "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9) and controllerMap "
+                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:

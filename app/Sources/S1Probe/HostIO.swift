@@ -30,6 +30,13 @@
 //   gyro aim      the iPhone's or a controller's gyro as slot 0's right stick
 //                 or relative mouse motion while the game takes input
 //                 (GyroSensors.swift, HostIOKit.GyroAim)
+//   controller    a game's controller map (PlayportKit ControllerMap, its own
+//   maps          over Settings'): with one that is not `controller`, every
+//                 physical pad (the scripted pad too) plays through it
+//                 (HostIOKit.InputMixer, MappedPad): its slot at rest but for
+//                 its pad: actions, its keys and mouse buttons through
+//                 Lifecycle, its sticks' mouse motion on InputClock's ticks;
+//                 the on-screen controls' pad is never mapped
 //   lifecycle     focus loss before releasing held controls (pads by Winios's
 //                 drain, after the loss reaches the game), audio back when
 //                 active, foreground and uninterrupted, and DXMT's Metal
@@ -52,12 +59,14 @@
 
 #if canImport(UIKit)
 import AVFAudio
+import Combine
 import Foundation
 import GameController
 import HostIO
 import HostIOKit
 import os
 import Metal
+import PlayportKit
 import QuartzCore
 import SwiftUI
 import UIKit
@@ -74,6 +83,13 @@ final class HostIO {
 
     private var lifecycle = Lifecycle()
     private var slots = PadSlots<ObjectIdentifier>()
+    /// Each physical pad's name, by slot, for the logs.
+    private var padNames: [Int: String] = [:]
+    /// The controller map the pads play through now (updateControllerMap).
+    private var controllerMap: ControllerMap?
+    /// The map last logged for each slot's pad.
+    private var loggedMaps: [Int: String] = [:]
+    private var subscriptions: Set<AnyCancellable> = []
     /// The extended controllers connected (the dev build's scripted pad too): any hides
     /// the on-screen controls in Automatic (OnScreenControls).
     private var extended = Set<ObjectIdentifier>()
@@ -96,6 +112,8 @@ final class HostIO {
     struct GuestPads: Sendable {
         var mixer = InputMixer()
         var gate = GuestPadGate()
+        /// The mixer's need of InputClock as sendMixer last saw it.
+        var clockOn = false
     }
     /// The in-game menu's controls to the session root, in order (pauseGame).
     private nonisolated static let sessionQueue = DispatchQueue(label: "hostio.session", qos: .userInitiated)
@@ -203,15 +221,22 @@ final class HostIO {
         #endif
         OnScreenControls.shared.start(controllers: extended.count)
         GyroSensors.shared.start()
+        // A change applies at once (objectWillChange fires before it: read on the next turn).
+        let later = { DispatchQueue.main.async { MainActor.assumeIsolated { HostIO.shared.updateControllerMap() } } }
+        ControlsStore.shared.objectWillChange.sink { _ in later() }.store(in: &subscriptions)
+        TitleLaunch.shared.objectWillChange.sink { _ in later() }.store(in: &subscriptions)
+        updateControllerMap()
     }
 
     #if !PLAYPORT_RELEASE
     /// A pad slot for something other than a GameController pad (Dev/VirtualPad.swift);
     /// it counts as a connected controller.
-    func connectSlot(_ id: ObjectIdentifier) -> Int? {
+    func connectSlot(_ id: ObjectIdentifier, name: String) -> Int? {
         extended.insert(id)
         OnScreenControls.shared.controllersChanged(extended.count)
-        return slots.connect(id)
+        let slot = slots.connect(id)
+        if let slot { padNames[slot] = name; logControllerMaps() }
+        return slot
     }
     #endif
 
@@ -352,6 +377,8 @@ final class HostIO {
         defer { OnScreenControls.shared.controllersChanged(extended.count) }
         guard let slot = slots.connect(ObjectIdentifier(c)) else { return }
         HostIO.log("hostio: controller \"\(c.vendorName ?? "?")\" is XInput slot \(slot)")
+        padNames[slot] = c.vendorName ?? "?"
+        defer { logControllerMaps() }
         pad.valueChangedHandler = { gp, _ in
             MainActor.assumeIsolated { HostIO.shared.padChanged(gp, slot: slot) }
         }
@@ -375,7 +402,10 @@ final class HostIO {
         defer { OnScreenControls.shared.controllersChanged(extended.count) }
         guard let slot = slots.disconnect(ObjectIdentifier(c)) else { return }
         HostIO.trace.update { $0.pads[slot] = nil }
+        padNames[slot] = nil
+        loggedMaps[slot] = nil
         Self.pads.withLock { p in Self.apply(p.mixer.physicalLeft(slot: slot), slot: slot, &p.gate) }
+        sendMixer()
     }
 
     /// A slot's update under the pad lock: new values through the gate, or the slot gone
@@ -398,29 +428,79 @@ final class HostIO {
     /// button's menu.
     func touchControls(_ t: TouchOutput?) {
         let outputs = Self.pads.withLock { p in
+            let earlier = p.mixer.takeOutputs()   // the mapped pads', in the order they came
             let r = p.mixer.touch(t)
             Self.apply(r.slot0, slot: 0, &p.gate)
-            return r.outputs
+            return earlier + r.outputs
         }
-        for o in outputs {
-            switch o {
-            case .key(let vk, let down):
-                if down && menuUp { continue }
-                if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
-            case .pointer(let flags, let data):
-                if flags == Pointer.wheel {
-                    if !menuUp { winios_pointer(0, 0, flags, data) }
-                } else if [Pointer.leftDown, Pointer.rightDown, Pointer.middleDown].contains(flags) {
-                    mouseButton(down: true, downFlag: flags, upFlag: flags << 1)
-                } else {
-                    mouseButton(down: false, downFlag: flags >> 1, upFlag: flags)
-                }
-            case .move(let dx, let dy):
-                if !menuUp { winios_pointer(dx, dy, Pointer.move, 0) }
-            case .playport(.menu):
-                InGameMenu.shared.open()
+        outputs.forEach(send)
+    }
+
+    /// One of the mixer's outputs to the guest: keys and mouse buttons through
+    /// Lifecycle (a press while the menu is up does not reach the game, a release
+    /// does), the wheel and motion only while the menu is down and the app active.
+    private func send(_ o: MixerOutput) {
+        switch o {
+        case .key(let vk, let down):
+            if down && menuUp { return }
+            if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
+        case .pointer(let flags, let data):
+            if flags == Pointer.wheel {
+                if !menuUp { winios_pointer(0, 0, flags, data) }
+            } else if [Pointer.leftDown, Pointer.rightDown, Pointer.middleDown].contains(flags) {
+                if menuUp { return }
+                mouseButton(down: true, downFlag: flags, upFlag: flags << 1)
+            } else {
+                mouseButton(down: false, downFlag: flags >> 1, upFlag: flags)
+            }
+        case .move(let dx, let dy):
+            if !menuUp && lifecycle.active { winios_pointer(dx, dy, Pointer.move, 0) }
+        case .playport(.menu):
+            InGameMenu.shared.open()
+        }
+    }
+
+    /// What the mapped pads sent (from any thread, in order) to the guest, and
+    /// InputClock on while a mapped stick moves the mouse or a wheel repeats.
+    func sendMixer() {
+        let (outputs, clock) = Self.pads.withLock { p in
+            p.clockOn = p.mixer.needsClock
+            return (p.mixer.takeOutputs(), p.clockOn)
+        }
+        outputs.forEach(send)
+        InputClock.shared.need(.controllerMap, clock)
+    }
+
+    /// InputClock's tick while the mapped pads need it: their mouse motion and wheel repeats.
+    func controllerMapTick() {
+        Self.pads.withLock { $0.mixer.tick(time: CACurrentMediaTime()) }
+        sendMixer()
+    }
+
+    /// The running game's controller map (its own over Settings'), into the mixer when it changed.
+    func updateControllerMap() {
+        let store = ControlsStore.shared
+        let map = TitleLaunch.shared.titleID.map { store.game($0).controllerMap(over: store.defaults) } ?? store.defaults.controllerMap
+        guard map != controllerMap else { return }
+        controllerMap = map
+        Self.pads.withLock { p in
+            for (slot, v) in p.mixer.setMap(map.bindings) {
+                if let out = p.gate.input(slot: slot, v) { Self.set(slot, out) }
             }
         }
+        sendMixer()
+        logControllerMaps()
+    }
+
+    /// Once per pad and map: `controls: controller map keyboardMouse for <pad name> (slot N)`.
+    private func logControllerMaps() {
+        #if !PLAYPORT_RELEASE
+        guard let map = controllerMap else { return }
+        for slot in padNames.keys.sorted() where loggedMaps[slot] != map.summary {
+            loggedMaps[slot] = map.summary
+            HostIO.log("controls: controller map \(map.summary) for \(padNames[slot] ?? "?") (slot \(slot))")
+        }
+        #endif
     }
 
     private func padChanged(_ gp: GCExtendedGamepad, slot: Int) {
@@ -431,11 +511,19 @@ final class HostIO {
 
     /// A pad's values toward the guest's slot, through the menu's gate.
     /// `changesOnly`: the trace counts only a change (the scripted pad, which sends every 8 ms).
+    /// A mapped pad's keys, buttons and clock go to the main thread (sendMixer).
     nonisolated static func publish(_ v: PadValues, slot: Int, changesOnly: Bool = false) {
-        pads.withLock { p in
+        let due = pads.withLock { p in
             let merged = p.mixer.physical(slot: slot, v)
-            guard let out = p.gate.input(slot: slot, merged) else { return }
-            set(slot, out)
+            if let out = p.gate.input(slot: slot, merged) { set(slot, out) }
+            return p.mixer.hasOutputs || p.mixer.needsClock != p.clockOn
+        }
+        if due {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { HostIO.shared.sendMixer() }
+            } else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { HostIO.shared.sendMixer() } }
+            }
         }
         #if !PLAYPORT_RELEASE
         if let line = trace.update({ changesOnly && $0.pads[slot] == v ? nil : $0.pad(slot: slot, v) }) { log(line) }
@@ -523,7 +611,11 @@ final class HostIO {
     func holdGuest() {
         guard !menuUp else { return }
         menuUp = true
-        Self.pads.withLock { p in for s in p.gate.hold(.menu) { Self.set(s, PadValues()) } }
+        Self.pads.withLock { p in
+            for s in p.gate.hold(.menu) { Self.set(s, PadValues()) }
+            p.mixer.hold(.menu, true)
+        }
+        sendMixer()
         handle(.menuOpened)
         OnScreenControls.shared.guestHeld(true)
         GyroSensors.shared.guestHeld(true)
@@ -536,7 +628,11 @@ final class HostIO {
         menuEvents([])
         guard menuUp else { return }
         menuUp = false
-        Self.pads.withLock { p in for (s, v) in p.gate.release(.menu) { Self.set(s, v) } }
+        Self.pads.withLock { p in
+            for (s, v) in p.gate.release(.menu) { Self.set(s, v) }
+            p.mixer.hold(.menu, false)
+        }
+        sendMixer()
         handle(.menuClosed)
         OnScreenControls.shared.guestHeld(false)
         GyroSensors.shared.guestHeld(false)
@@ -547,10 +643,17 @@ final class HostIO {
     /// rest, and their presses are the dialog's keys (WindowKeys).
     func dialogOverGame(_ up: Bool) {
         if up {
-            Self.pads.withLock { p in for s in p.gate.hold(.dialog) { Self.set(s, PadValues()) } }
+            Self.pads.withLock { p in
+                for s in p.gate.hold(.dialog) { Self.set(s, PadValues()) }
+                p.mixer.hold(.dialog, true)
+            }
         } else {
-            Self.pads.withLock { p in for (s, v) in p.gate.release(.dialog) { Self.set(s, v) } }
+            Self.pads.withLock { p in
+                for (s, v) in p.gate.release(.dialog) { Self.set(s, v) }
+                p.mixer.hold(.dialog, false)
+            }
         }
+        sendMixer()
         OnScreenControls.shared.dialogOverGame(up)
         GyroSensors.shared.dialogOverGame(up)
     }

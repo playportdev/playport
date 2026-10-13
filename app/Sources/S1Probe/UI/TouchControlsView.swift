@@ -75,7 +75,6 @@ final class OnScreenControls: ObservableObject {
     private var size = CGSize.zero
     private var insets = ControlInsets.zero
     private var subscriptions: Set<AnyCancellable> = []
-    private var clock: CADisplayLink?
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     weak var view: TouchControlsView?
 
@@ -202,17 +201,11 @@ final class OnScreenControls: ObservableObject {
     private func publish() {
         HostIO.shared.touchControls(padOn ? controls.output : nil)
         view?.refresh()
-        if controls.needsClock, clock == nil {
-            let link = CADisplayLink(target: ClockTarget.shared, selector: #selector(ClockTarget.tick))
-            link.add(to: .main, forMode: .common)
-            clock = link
-        } else if !controls.needsClock, let link = clock {
-            link.invalidate()
-            clock = nil
-        }
+        InputClock.shared.need(.touchControls, controls.needsClock)
     }
 
-    fileprivate func tick() {
+    /// InputClock's tick while the controls need it.
+    func tick() {
         controls.tick(time: CACurrentMediaTime())
         publish()
     }
@@ -251,13 +244,6 @@ final class OnScreenControls: ObservableObject {
         if controls.held != held { Self.log("finger cancelled; held=\(controls.held.sorted().joined(separator: "+"))") }
         publish()
     }
-}
-
-/// CADisplayLink holds its target strongly; this one lives for the app.
-@MainActor
-private final class ClockTarget: NSObject {
-    static let shared = ClockTarget()
-    @objc func tick() { OnScreenControls.shared.tick() }
 }
 
 /// The controls, drawn over GameSurfaceView and taking only the touches on them.

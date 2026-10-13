@@ -36,7 +36,7 @@
 // - Automatic: the current controller's gyro when it reports rotation rate,
 //   else the iPhone's; a controller connecting or going decides again.
 // - The output (GyroFeed, on its queue): GyroAim with the pause button read
-//   from slot 0 as the guest has it; a right-stick deflection into the mixer
+//   from slot 0 as the player holds it (before a controller map); a right-stick deflection into the mixer
 //   under the pad lock and through the menu's gate, as every slot-0 change;
 //   mouse counts coalesced to at most 125 moves a second (GyroMouseCoalescer:
 //   Winios's ring holds 256 events and drops new ones when the game does not
@@ -516,7 +516,7 @@ final class GyroFeed: @unchecked Sendable {
             return o
         }
         let (o, outputs) = HostIO.pads.withLock { p in
-            let o = aim.add(s, paused: settings.paused(by: p.mixer.slot0))
+            let o = aim.add(s, paused: settings.paused(by: p.mixer.slot0Input))   // as held, before a controller map
             let r = p.mixer.gyro(o)
             HostIO.apply(r.slot0, slot: 0, &p.gate)
             return (o, r.outputs)

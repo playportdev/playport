@@ -13,7 +13,7 @@ extension HostIO {
     /// when its input starts.
     func startVirtualPad() {
         guard let name = ProcessInfo.processInfo.environment["HIO_VPAD"], !name.isEmpty, !name.contains("/") else { return }
-        guard let slot = connectSlot(ObjectIdentifier(VirtualPad.self)) else { return }
+        guard let slot = connectSlot(ObjectIdentifier(VirtualPad.self), name: "scripted pad") else { return }
         VirtualPad.shared.start(path: WineHostRuntime.documents.appendingPathComponent(name).path, slot: slot)
     }
 }
@@ -27,7 +27,8 @@ extension HostIO {
 /// only one written after the start plays. The log gets each step as it starts,
 /// with the wall-clock time, so frame-time lines can be matched to what the
 /// Knight was doing. Its values reach the guest through HostIO's gate, as a
-/// controller's do, so the in-game menu holds them too.
+/// controller's do, so the in-game menu holds them too, and through the
+/// game's controller map (HostIO.publish), so a driven run plays a map.
 final class VirtualPad: @unchecked Sendable {
     static let shared = VirtualPad()
     private let queue = DispatchQueue(label: "hostio.vpad", qos: .userInteractive)

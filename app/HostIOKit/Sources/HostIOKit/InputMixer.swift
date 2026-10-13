@@ -78,6 +78,9 @@ public struct InputMixer: Sendable {
         return pending
     }
 
+    /// Outputs wait for `takeOutputs`.
+    public var hasOutputs: Bool { !pending.isEmpty }
+
     /// Slot 0's pad as the player holds it, before a controller map: the
     /// physical pad's own values merged with the controls' (gyro aim's pause button reads it).
     public var slot0Input: PadValues? {

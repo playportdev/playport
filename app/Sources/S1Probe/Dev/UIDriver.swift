@@ -43,7 +43,11 @@
 //                              "controller","sensitivity":0.05-20 (1.5 by default),"verticalRatio":0-4,
 //                              "turnAxis":"playerSpace"|"yaw"|"roll","invertX","invertY":
 //                              true|false,"pauseButton":"none"|"pad:<button>","antiDeadZone":
-//                              0-0.9), each key left out following the gyro.* defaults
+//                              0-0.9), each key left out following the gyro.* defaults;
+//                              "controllerMap" its controller map (PlayportKit ControllerMap:
+//                              {"mode":"controller"|"keyboardMouse"|"custom","table":{INPUT:
+//                              ACTION,...}}, a custom map without a table starting as the
+//                              keyboardMouse preset); one this build cannot read is refused
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
@@ -245,11 +249,17 @@ enum UIDriver {
                           let c = try? JSONDecoder().decode(GameControls.self, from: Data(json.utf8)) else {
                         return finish("action=\(action) refused: UI_CONTROLS is not GameControls JSON")
                     }
+                    // GameControls reads a map it cannot read as none (a record saved by a later build still loads).
+                    if c.controllerMap == nil, json.contains("\"controllerMap\"") {
+                        return finish("action=\(action) refused: UI_CONTROLS' controllerMap is not a ControllerMap")
+                    }
                     DriverUndo.willSet(ControlsStore.gamesKey)
                     ControlsStore.shared.setGame(id, c)
                     log("controls \(id): layout=\(c.layout?.rawValue ?? "default") opacity=\(c.opacity.map(ControlsOpacity.label) ?? "default") "
                         + "dpad=\(c.dpad?.rawValue ?? "default") rightStick=\(c.rightStick?.rawValue ?? "default") "
-                        + "gyro=\(c.gyro == nil ? "default" : "own") (\(ControlsStore.shared.gyro(id).summary))")
+                        + "gyro=\(c.gyro == nil ? "default" : "own") (\(ControlsStore.shared.gyro(id).summary)) "
+                        + "controllerMap=\(c.controllerMap == nil ? "default" : "own") "
+                        + "(\(ControlsStore.shared.game(id).controllerMap(over: ControlsStore.shared.defaults).summary))")
                 case "touch":
                     let launch = TitleLaunch.shared
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }

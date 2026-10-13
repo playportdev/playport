@@ -251,6 +251,38 @@ class UiEnvTest(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 m.parse(["--controls", "app-620:" + bad])
 
+    def test_controls_carries_a_games_controller_map(self):
+        """--controls' "controllerMap" is PlayportKit ControllerMap: the mode, and a custom map's table."""
+        m = load()
+        for ok in ('{"controllerMap":{"mode":"keyboardMouse"}}', '{"controllerMap":{"mode":"controller"}}',
+                   '{"controllerMap":{"mode":"custom"}}', '{"controllerMap":{"mode":"custom","version":1}}',
+                   '{"layout":"off","controllerMap":{"mode":"custom","table":{"a":"key:0x20","rt":"mouse:left",'
+                   '"leftStick.up":"key:0x57","leftStick.left":"key:shift+0x41","rightStick":"mouse:move",'
+                   '"lb":"mouse:wheelUp","back":"playport:menu","x":"pad:b","start":"key:27"}}}',
+                   '{"controllerMap":{"mode":"custom","table":{"leftStick":"pad:rightStick","rightStick":"pad:leftStick"}}}',
+                   '{"controllerMap":{"mode":"custom","table":{}},"gyro":{"output":"mouse"}}'):
+            a = m.parse(["--controls", "app-620:" + ok])
+            self.assertEqual(a.controls_pair, ("app-620", json.dumps(json.loads(ok), separators=(",", ":"))), ok)
+        for bad in ('{"controllerMap":"keyboardMouse"}', '{"controllerMap":{}}', '{"controllerMap":{"mode":"mouse"}}',
+                    '{"controllerMap":{"mode":"custom","version":2}}', '{"controllerMap":{"mode":"custom","x":1}}',
+                    '{"controllerMap":{"mode":"custom","table":[]}}',
+                    '{"controllerMap":{"mode":"custom","table":{"home":"key:0x20"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"mouse:move"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"pad:leftStick"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"leftStick":"key:0x57"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"leftStick.up":"mouse:move"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"rightStick":"mouse:move","rightStick.up":"key:0x57"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"key:0x00"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"key:256"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"key:meta+0x20"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"mouse:back"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"gyro:on"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a.up":"key:0x20"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":1}}}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + bad])
+        self.assertIn("controllerMap", m.__doc__)
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")
