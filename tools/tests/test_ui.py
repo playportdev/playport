@@ -197,6 +197,24 @@ class UiEnvTest(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 m.parse(["--controls", bad])
 
+    def test_controls_carries_a_games_gyro_aim(self):
+        """--controls' "gyro" is PlayportKit GameGyro: the game's own gyro aim, saved with its controls."""
+        m = load()
+        for ok in ('{"gyro":{"output":"mouse"}}', '{"gyro":{}}',
+                   '{"layout":"off","gyro":{"output":"rightStick","source":"phone","sensitivity":2.5,"verticalRatio":0,'
+                   '"turnAxis":"yaw","invertX":true,"invertY":false,"pauseButton":"pad:lb"}}',
+                   '{"gyro":{"source":"controller","turnAxis":"roll","pauseButton":"none","sensitivity":20}}',
+                   '{"gyro":{"pauseButton":"pad:rt","sensitivity":0.05,"verticalRatio":4}}'):
+            a = m.parse(["--controls", "app-620:" + ok])
+            self.assertEqual(a.controls_pair, ("app-620", json.dumps(json.loads(ok), separators=(",", ":"))), ok)
+        for bad in ('{"gyro":{"output":"keyboard"}}', '{"gyro":{"source":"watch"}}', '{"gyro":{"sensitivity":0}}',
+                    '{"gyro":{"sensitivity":21}}', '{"gyro":{"sensitivity":"2"}}', '{"gyro":{"sensitivity":true}}',
+                    '{"gyro":{"verticalRatio":-1}}', '{"gyro":{"turnAxis":"pitch"}}', '{"gyro":{"invertX":1}}',
+                    '{"gyro":{"pauseButton":"pad:leftStick"}}', '{"gyro":{"pauseButton":"key:0x20"}}',
+                    '{"gyro":{"speed":1}}', '{"gyro":"mouse"}', '{"gyro":[]}', '{"opacity":true}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + bad])
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")

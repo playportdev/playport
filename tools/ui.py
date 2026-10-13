@@ -146,8 +146,14 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          the last action
   --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
                          (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.2-1,
-                         "dpad":"off"|"on","rightStick":"off"|"below"|"above"}; a key left out follows
-                         Settings › Controls, where the d-pad and right stick are off by default; `ID:{}` clears)
+                         "dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a key left out
+                         follows Settings › Controls, where the d-pad and right stick are off by default;
+                         `ID:{}` clears). "gyro" is the game's own gyro aim (PlayportKit GameGyro), each key
+                         left out following the gyro.* defaults (output off): "output":"off"|"mouse"|
+                         "rightStick", "source":"auto"|"phone"|"controller", "sensitivity":0.05-20,
+                         "verticalRatio":0-4, "turnAxis":"playerSpace"|"yaw"|"roll", "invertX"/"invertY":
+                         true|false, "pauseButton":"none"|"pad:BUTTON" (a b x y lb rb lt rt start back ls rs
+                         up down left right). Example: --controls 'app-620:{"gyro":{"output":"mouse"}}'
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
@@ -366,6 +372,27 @@ def ends_run(e, actions, play, titles_done=1):
     return not game_last or not e.get("outcome", "").startswith("ok")
 
 
+def number(v, lo, hi):
+    """Whether v is a JSON number (not a bool) within lo...hi."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
+
+
+# PlayportKit GyroPauseButton: none, or a pad button (HostIOKit PadControl, not a stick).
+GYRO_PAUSE = ("none",) + tuple("pad:" + b for b in "a b x y lb rb lt rt start back ls rs up down left right".split())
+
+
+def gyro_ok(g):
+    """Whether g is a PlayportKit GameGyro as JSON (--controls' "gyro"): only its keys, each valid."""
+    return isinstance(g, dict) \
+        and set(g) <= {"output", "source", "sensitivity", "verticalRatio", "turnAxis", "invertX", "invertY", "pauseButton"} \
+        and g.get("output", "off") in ("off", "mouse", "rightStick") \
+        and g.get("source", "auto") in ("auto", "phone", "controller") \
+        and number(g.get("sensitivity", 1), 0.05, 20) and number(g.get("verticalRatio", 1), 0, 4) \
+        and g.get("turnAxis", "playerSpace") in ("playerSpace", "yaw", "roll") \
+        and all(isinstance(g.get(k, False), bool) for k in ("invertX", "invertY")) \
+        and g.get("pauseButton", "none") in GYRO_PAUSE
+
+
 def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, pad=False,
            session=None, keep_settings=False, controls=None):
     """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
@@ -459,7 +486,8 @@ def parse(argv=None):
                         "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"} or '
-                        '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}; {} clears them)')
+                        '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}, with "gyro":'
+                        '{"output":"mouse","sensitivity":1.5} for its gyro aim; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -511,16 +539,20 @@ def parse(argv=None):
         cid, _, cjs = a.controls.partition(":")
         try:
             cobj = json.loads(cjs)
-            ok = ID_RE.match(cid) and isinstance(cobj, dict) and set(cobj) <= {"layout", "opacity", "dpad", "rightStick"} \
+            ok = ID_RE.match(cid) and isinstance(cobj, dict) \
+                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro"} \
                 and cobj.get("layout", "off") in ("off", "gamepad") \
-                and isinstance(cobj.get("opacity", 0.5), (int, float)) and 0.1 <= cobj.get("opacity", 0.5) <= 1 \
+                and number(cobj.get("opacity", 0.5), 0.1, 1) \
                 and cobj.get("dpad", "off") in ("off", "on") \
-                and cobj.get("rightStick", "off") in ("off", "below", "above")
+                and cobj.get("rightStick", "off") in ("off", "below", "above") \
+                and gyro_ok(cobj.get("gyro", {}))
         except ValueError:
             ok = False
         if not ok:
-            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on) "
-                    "and rightStick (off, below, above) only")
+            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on), "
+                    "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
+                    "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
+                    "invertX/invertY true|false, pauseButton none|pad:BUTTON) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:

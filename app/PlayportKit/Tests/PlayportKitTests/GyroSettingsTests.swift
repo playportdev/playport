@@ -82,6 +82,30 @@ final class GyroSettingsTests: XCTestCase {
         d.removePersistentDomain(forName: "GyroSettingsTests")
     }
 
+    /// A game's gyro aim lives in its GameControls record (ControlsStore): controls
+    /// saved before it load unchanged, and a gyro that sets nothing is not kept.
+    func testAGamesGyroIsPartOfItsControls() throws {
+        func decode(_ s: String) throws -> GameControls { try JSONDecoder().decode(GameControls.self, from: Data(s.utf8)) }
+        XCTAssertEqual(try decode(#"{"layout":"gamepad","opacity":0.8,"dpad":"on"}"#),
+                       GameControls(layout: .gamepad, opacity: 0.8, dpad: .on))
+        XCTAssertNil(try decode(#"{"layout":"off"}"#).gyro)
+        let mine = try decode(#"{"layout":"off","gyro":{"output":"mouse","sensitivity":2,"pauseButton":"pad:lb"}}"#)
+        XCTAssertEqual(mine, GameControls(layout: .off, gyro: GameGyro(output: .mouse, sensitivity: 2, pauseButton: .pad(.lb))))
+        XCTAssertEqual(try decode(String(decoding: try JSONEncoder().encode(mine), as: UTF8.self)), mine)
+        XCTAssertThrowsError(try decode(#"{"gyro":{"output":"keyboard"}}"#))
+        // Only gyro set is not empty; an empty gyro is.
+        XCTAssertFalse(GameControls(gyro: GameGyro(output: .rightStick)).isEmpty)
+        XCTAssertTrue(GameControls(gyro: GameGyro()).isEmpty)
+        XCTAssertNil(GameControls(layout: .off, gyro: GameGyro()).normalized.gyro)
+        XCTAssertEqual(GameControls(gyro: GameGyro(invertY: true)).normalized.gyro, GameGyro(invertY: true))
+        // Resolved over the gyro.* defaults.
+        let defaults = GyroSettings(output: .rightStick, sensitivity: 1.5)
+        XCTAssertEqual(GameControls().gyroSettings(over: defaults), defaults)
+        XCTAssertEqual(mine.gyroSettings(over: defaults), GyroSettings(output: .mouse, sensitivity: 2, pauseButton: .pad(.lb)))
+        XCTAssertEqual(GyroSettings(output: .mouse, invertY: true, pauseButton: .pad(.lb)).summary,
+                       "output=mouse source=auto sensitivity=1.0 verticalRatio=1.0 turnAxis=playerSpace invert=-y pause=pad:lb")
+    }
+
     func testThePauseButtonIsReadFromAPad() {
         var v = PadValues()
         v.buttons = PadMapping.leftShoulder

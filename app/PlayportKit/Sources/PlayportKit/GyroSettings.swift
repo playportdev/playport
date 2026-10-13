@@ -144,6 +144,12 @@ public struct GyroSettings: Codable, Equatable, Sendable {
                        invertX: invertX, invertY: invertY)
     }
 
+    /// One line for the logs: `output=mouse source=auto sensitivity=1.0 verticalRatio=1.0 turnAxis=playerSpace invert=-- pause=none`.
+    public var summary: String {
+        "output=\(output.rawValue) source=\(source.rawValue) sensitivity=\(sensitivity) verticalRatio=\(verticalRatio) "
+            + "turnAxis=\(turnAxis.rawValue) invert=\(invertX ? "x" : "-")\(invertY ? "y" : "-") pause=\(pauseButton.name)"
+    }
+
     /// Whether the pause button is held in a pad's values.
     public func paused(by pad: PadValues?) -> Bool {
         guard let c = pauseButton.control, let pad else { return false }

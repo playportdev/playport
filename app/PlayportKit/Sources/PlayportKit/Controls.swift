@@ -18,6 +18,8 @@
 // - The Gamepad layout's d-pad (Off or On) and right stick (Off, Below A/B/X/Y
 //   or Above A/B/X/Y): the game's own, else the default; both Off by default.
 // - Opacity: the game's own, else the default (60%).
+// - Gyro aim (GyroSettings.swift): the game's own fields in the same record,
+//   over the `gyro.*` defaults; a change applies at once as the rest do.
 
 import Foundation
 
@@ -137,19 +139,34 @@ public struct ControlsDefaults: Equatable, Sendable {
 }
 
 /// A game's own controls, nil fields following the defaults. Saved as JSON per
-/// catalogue id; the dev driver's `controls:<title id>` saves one.
+/// catalogue id; the dev driver's `controls:<title id>` saves one. `gyro` is the
+/// game's own gyro aim (GyroSettings.swift), over Settings' `gyro.*` defaults;
+/// JSON saved before it reads as none.
 public struct GameControls: Codable, Equatable, Sendable {
     public var layout: OnScreenLayout?
     public var opacity: Double?
     public var dpad: OnScreenDpad?
     public var rightStick: OnScreenRightStick?
+    public var gyro: GameGyro?
 
     public init(layout: OnScreenLayout? = nil, opacity: Double? = nil, dpad: OnScreenDpad? = nil,
-                rightStick: OnScreenRightStick? = nil) {
-        self.layout = layout; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick
+                rightStick: OnScreenRightStick? = nil, gyro: GameGyro? = nil) {
+        self.layout = layout; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick; self.gyro = gyro
     }
 
-    public var isEmpty: Bool { layout == nil && opacity == nil && dpad == nil && rightStick == nil }
+    public var isEmpty: Bool { layout == nil && opacity == nil && dpad == nil && rightStick == nil && (gyro?.isEmpty ?? true) }
+
+    /// The same, with a gyro that sets nothing dropped (what the store saves).
+    public var normalized: GameControls {
+        var c = self
+        if c.gyro?.isEmpty == true { c.gyro = nil }
+        return c
+    }
+
+    /// The game's gyro aim settings over the defaults.
+    public func gyroSettings(over defaults: GyroSettings) -> GyroSettings {
+        gyro?.resolved(over: defaults) ?? defaults
+    }
 }
 
 /// The controls a running game has now.

@@ -36,8 +36,14 @@
 //                              as its page does
 //   controls:<title id>        Saves UI_CONTROLS (a PlayportKit GameControls as JSON:
 //                              {"layout":"off"|"gamepad","opacity":0.2-1,"dpad":"off"|"on",
-//                              "rightStick":"off"|"below"|"above"}; `{}` clears them)
-//                              as the game's own controls, as the in-game menu's Controls does
+//                              "rightStick":"off"|"below"|"above","gyro":{...}}; `{}` clears them)
+//                              as the game's own controls, as the in-game menu's Controls does;
+//                              "gyro" is the game's own gyro aim (PlayportKit GameGyro:
+//                              "output":"off"|"mouse"|"rightStick","source":"auto"|"phone"|
+//                              "controller","sensitivity":0.05-20,"verticalRatio":0-4,
+//                              "turnAxis":"playerSpace"|"yaw"|"roll","invertX","invertY":
+//                              true|false,"pauseButton":"none"|"pad:<button>"), each key left
+//                              out following the gyro.* defaults
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
@@ -227,7 +233,8 @@ enum UIDriver {
                     DriverUndo.willSet(ControlsStore.gamesKey)
                     ControlsStore.shared.setGame(id, c)
                     log("controls \(id): layout=\(c.layout?.rawValue ?? "default") opacity=\(c.opacity.map(ControlsOpacity.label) ?? "default") "
-                        + "dpad=\(c.dpad?.rawValue ?? "default") rightStick=\(c.rightStick?.rawValue ?? "default")")
+                        + "dpad=\(c.dpad?.rawValue ?? "default") rightStick=\(c.rightStick?.rawValue ?? "default") "
+                        + "gyro=\(c.gyro == nil ? "default" : "own") (\(ControlsStore.shared.gyro(id).summary))")
                 case "touch":
                     let launch = TitleLaunch.shared
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }
