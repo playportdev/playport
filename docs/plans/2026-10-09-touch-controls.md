@@ -27,26 +27,45 @@ proposed answer unless the owner says otherwise before the phase that needs them
   phase's one phone session is its own last chunk, and **every phase then waits for the
   owner's hands-on sign-off** before the next phase starts. The owner's feedback becomes
   a fix chunk.
-- **Running:** nothing. Waiting for the owner's phase 1 sign-off.
+- **Running:** 1b, the phase 1 fix chunk (owner feedback below).
+- **Owner feedback on phase 1 (2026-10-13), settled:**
+  1. The overlay respects the safe area in both landscape orientations.
+  2. Pink flicker over the game while the overlay shows: drop the blur for a flat
+     translucent fill unless a cheaper fix is proven.
+  3. The top controls are hard to hit, as if under the top-edge system gesture: keep them
+     inside the safe area, and hold back system gestures on the top and bottom edges
+     while a game runs.
+  4. **No Playport button.** A **three-finger tap** anywhere opens the in-game menu.
+     iOS's three-finger editing gestures are turned off, and the first-time toast teaches
+     the tap. Home still opens it on a controller. This replaces "To confirm" 1 and amends
+     decision 0034 in the controls decision record. With the layout Off, the gesture is
+     the way back to the menu.
+  5. **Zoned floating sticks, mirrored.** Each floating stick works only inside a marked
+     zone in its lower corner. The d-pad (left) and A/B/X/Y (right) move up and inward,
+     out of the zones, with a gap and larger hit areas, so a press on them never starts
+     a stick.
+  6. View and Menu become small buttons at the top by the bumpers, inside the safe area.
 - **Queue:**
-  1. **Phase 1 sign-off (owner):** play Hollow Knight with only the touch overlay
-     (dev IPA `3911e0fa…`, installed): several fingers at once, the floating stick,
-     haptics, the 3 s dim, the first-time toast, a controller connecting mid-game.
-  2. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
-  3. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+  1. **1b (fix):** owner feedback 1–6 above; a short phone session; then the phase 1
+     sign-off again.
+  2. **Phase 1 sign-off (owner):** play Hollow Knight with only the touch overlay:
+     several fingers at once, the floating sticks, haptics, the first-time toast, a
+     controller connecting mid-game, both landscape orientations.
+  3. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
+  4. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
-  4. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+  5. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
-  5. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
+  6. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
      chunk follows.
-  6. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
-  7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
+  7. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
+  8. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
-  8. **3b:** the Controller page and the ActionPicker.
-  9. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+  9. **3b:** the Controller page and the ActionPicker.
+  10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
-  10. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+  11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
       a controller. Then stop.
 - **Phone:** dev IPA `3911e0fa…` installed; unattended mode on; Hollow Knight's profile
   slot 3 may now hold a King's Pass save rather than New Game (check it before a
