@@ -61,7 +61,16 @@ proposed answer unless the owner says otherwise before the phase that needs them
   `GyroScript`; its samples replace the sensors' while it plays). Dev IPA `48dcb074…` built and
   verified, not installed. 2d checks on the phone: no motion permission prompt, the landscape
   signs, a DualSense's `hasRotationRate` and gravity, Portal 2 in both outputs.
-- **Running:** 2c (writer launched 2026-10-13).
+- **Done: 2c** (host only; no phone run). `97ff6ac`: the dev `gyro:` activity line gives the
+  samples' rate and, for the mouse, the moves sent, their rate and the longest coalescing delay
+  (for 2d's timing). `d6fb8fe`: Game options › Controls (layout, d-pad, right stick, opacity,
+  Gyro aim) and the Gyro aim page with its test area (the sensors run for the dot only while the
+  page is up and no game runs; that run sends nothing to the guest), Settings › Controls › Gyro
+  aim, the in-game Controls panel's Gyro aim and Sensitivity, the "Gyro aim" chip with the
+  controls, `set:gyro.sensitivity=1.5` read as a number, and `open:ID#gyro`, `open:ID#controls`,
+  `open:settings#gyro`, `gyro:` on the test area. A pad's gyro is still chosen by
+  `hasRotationRate` (as SDL does; a dev line logs each pad's motion flags). Dev IPA `3cc4e2c6…`
+  built and verified, not installed. Next: 2d (phone).
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -95,7 +104,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
      tests; plus the A/B/X/Y size tweak as its own commit.
   2. **2b, done:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
-  3. **2c, running:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+  3. **2c, done:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
   4. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
