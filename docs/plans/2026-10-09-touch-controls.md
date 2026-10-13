@@ -81,6 +81,16 @@ proposed answer unless the owner says otherwise before the phase that needs them
   250 of 250 were drained. `51e01f5` fixed three things seen on the phone: the panel's gyro values
   ("Stick"), the Gyro aim page's B ("Back"), and a still right stick's activity lines. Dev IPA
   `fe0110ab…`; Hollow Knight `first-frame+10` passed on both IPAs.
+- **Done: 2e** (host and phone; [evidence](../evidence/2026-10-13-touch-controls-phase2e.md)).
+  `57951b2`: the right stick starts past an anti-dead-zone (`gyro.antiDeadZone`, 0.27, per game;
+  its row only for Right stick). `4de3a2b`: touches outside the shown controls are ignored
+  (HostIOKit `TouchRoute`), and the "Gyro aim" chip shows 2.5 s as gyro aim starts or its source
+  or output changes (PlayportKit `GyroChipCue`). `bd13674`: the phone gyro's default sensitivity is
+  1.5×. Dev IPA `1acd7cab…`. On the phone: Hollow Knight `first-frame+10` passed; in Portal 2's
+  first map a touch on the right stick turned the view, the driver's taps outside the controls were
+  ignored (no change), the chip showed at the start and was gone 2.4 s later, and right-stick
+  `yaw=30@1000` (peak 0.45) now turns the view (0.36 still does not). The background bug is
+  PLA-338, not the controls. The 125 Hz cap is unchanged.
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -153,7 +163,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
        cap never applied (delay 0 ms). Its bias (about 0.03 rad/s, 1.7 °/s) was learnt only
        some time into play. The owner found it too slow (set 2–2.5×) and laggy compared with
        the physical right stick; mouse mode with the phone's gyro feels great.
-  6. **2e (fix), running:** the three decisions, the 1.5× default and the background diagnosis above; one short
+  6. **2e (fix), done** (see "Done: 2e" above)**:** the three decisions, the 1.5× default and the background diagnosis above; one short
      phone session.
   7. **2f (controller gyro):** deliver the controller's motion off the main thread, near its
      own rate, with better timestamps. Derive gravity for a pad without it from low-passed
@@ -169,8 +179,9 @@ proposed answer unless the owner says otherwise before the phase that needs them
      `controller` mode, plus Hollow Knight.
   11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
-- **Phone:** dev IPA `fe0110ab…` (2d) installed; unattended mode on; Hollow Knight's own
-  on-screen controls are Off (the owner's setting, left as found); Hollow Knight's profile
+- **Phone:** dev IPA `1acd7cab…` (2e) installed; unattended mode off (the owner is at the
+  phone); Hollow Knight's own on-screen controls are Off and Portal 2's controls and launch
+  arguments are cleared (2e restored them); Hollow Knight's profile
   slot 3 may now hold a King's Pass save rather than New Game (check it before a
   measured run that uses `tools/pad/hk-new-slot.txt`).
 - **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
