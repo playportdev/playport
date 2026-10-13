@@ -123,17 +123,29 @@ proposed answer unless the owner says otherwise before the phase that needs them
      gyro rate if one is connected, `winios_pointer` moves per second and per frame
      with the 125 Hz coalescer, the delay it adds, and the ring's fill. The owner then
      decides on the cap (keep 125 Hz, or pass every controller sample at about 250 Hz).
-  5. **Phase 2 sign-off (owner), next:** Portal 2 with the phone's gyro and a DualSense's. With
-     the DualSense, check the `controller "…": motion …` line, the `source controller` line, the
-     controller's `sensor rate:`, the coalescing delay, and whether touch and key releases hold
-     while aiming. The owner also decides the right stick's dead zone (anti-dead-zone option) and
-     the 125 Hz cap.
-  6. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
+  5. **Phase 2 owner play, in progress:** mouse mode with the phone's gyro "feels great"
+     (owner, 2026-10-13). Owner decisions from the play, settled:
+     - **Right stick stays, with an anti-dead-zone.** Mouse stays the default. Right-stick
+       output starts past an anti-dead-zone (default about 27%, XInput's right-stick dead
+       zone 8689/32767), adjustable per game on the Gyro aim page. Its purpose is games with
+       no mouse look.
+     - **Touches outside the controls are ignored while the on-screen controls show:** no
+       cursor jump and no click. A stray touch flicked the view in a mouse-look game. With
+       the layout Off, touch is a mouse as before. This replaces phase 1's tap-as-click
+       fall-through for the Gamepad layout.
+     - **The "Gyro aim" chip shows briefly** (a few seconds, then fades) when gyro starts:
+       the game starts with it on, it is turned on in the menu, or its source changes.
+     - **DualSense capture:** the supervisor runs `pp perf --keep-log` on Portal 2 while the
+       owner plays with a DualSense, for the controller's `sensor rate:`, Auto's choice and the
+       coalescing delay. The owner then decides the 125 Hz cap.
+  6. **2e (fix):** the three decisions above, plus the cap if the owner changes it; one short
+     phone session; then the owner's phase 2 sign-off.
+  7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
-  7. **3b:** the Controller page and the ActionPicker.
-  8. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+  8. **3b:** the Controller page and the ActionPicker.
+  9. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
-  9. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+  10. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
 - **Phone:** dev IPA `fe0110ab…` (2d) installed; unattended mode on; Hollow Knight's own
   on-screen controls are Off (the owner's setting, left as found); Hollow Knight's profile
