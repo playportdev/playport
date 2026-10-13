@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Playport's in-game menu (QuickMenu.dc.html; decision 0034, the plan's Hard
 // problem 2): a long press of the controller's Home button over a running game
-// opens it (HostIO, HostIOKit.QuickMenuControl), and the game is paused behind
-// it:
+// (HostIO, HostIOKit.QuickMenuControl), or the on-screen controls' Playport
+// button, opens it, and the game is paused behind it:
 //
 //   - input: the guest's pads rest, and keys, touches and the mouse stop
 //     (HostIO.holdGuest; a button still down from the menu stays up for the
@@ -13,7 +13,10 @@
 //     held by the wineserver only at a safe point (in guest code, outside a
 //     server call: patches/madeira-unix 0010), and resumes them on Resume.
 //
-// Its rows: Resume (also B, ≡ and Home), Screenshot (the frame on screen to
+// Its rows: Resume (also B, ≡ and Home), Controls (a panel beside the rows,
+// QuickMenuControls.dc.html: the game's on-screen controls, Off or Gamepad, and
+// their opacity, saved for the game and applied at once; UI/TouchControlsView.swift),
+// Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
 // overlay (the Metal HUD on the game layer, now and for this game only), the
 // controller with its battery, and Quit game (TitleLaunch.quit: WM_CLOSE to
@@ -45,7 +48,7 @@ final class InGameMenu: ObservableObject {
 
     private static func log(_ line: String) { HostIO.log("menu: " + line) }
 
-    /// Home held on a pad (HostIO). False when there is no game to pause yet.
+    /// Home held on a pad (HostIO), or the on-screen Playport button. False when there is no game to pause yet.
     @discardableResult
     func open() -> Bool {
         let launch = TitleLaunch.shared
@@ -62,6 +65,7 @@ final class InGameMenu: ObservableObject {
         isOpen = true
         menu = QuickMenu()
         shot = nil
+        HostIO.shared.menuOpened()
         HostIO.shared.holdGuest()
         Self.log("open over \(launch.title); \(WindowInsets.shared.read())")
         HostIO.sessionControl(Int(PP_CONTROL_PAUSE), "pause") { rc, _ in
@@ -73,6 +77,22 @@ final class InGameMenu: ObservableObject {
     /// A press from a pad (HostIO) or, in a dev build, the driver.
     func press(_ b: NavButton) {
         guard isOpen, !quitting else { return }
+        if let row = menu.panel {
+            switch b {
+            case .up: menu.move(down: false)
+            case .down: menu.move(down: true)
+            case .left: changeControls(row, by: -1)
+            case .right: changeControls(row, by: 1)
+            case .a: changeControls(row, by: 1, wrapping: true)
+            case .b: menu.closePanel()
+            case .menu: resume()
+            default: return
+            }
+            #if !PLAYPORT_RELEASE
+            Self.log("pad \(b.rawValue): controls panel \(menu.panel?.rawValue ?? "closed"), \(OnScreenControls.shared.state.summary)")
+            #endif
+            return
+        }
         switch b {
         case .up: menu.move(down: false)
         case .down: menu.move(down: true)
@@ -91,11 +111,32 @@ final class InGameMenu: ObservableObject {
         menu.ring(item)
         switch item {
         case .resume: resume()
+        case .controls: menu.openPanel()
         case .screenshot: screenshot()
         case .overlay: toggleOverlay()
         case .controller: PadRouter.shared.refreshControllers()
         case .quit: quit()
         }
+    }
+
+    /// The Controls panel's row `row` moved `by` steps (left -1, right +1; A
+    /// goes round): saved as the game's own, and the controls change at once.
+    func changeControls(_ row: QuickMenuControlsRow, by: Int, wrapping: Bool = false) {
+        guard isOpen, !quitting, let id = TitleLaunch.shared.titleID else { return }
+        menu.openPanel(row)
+        let now = OnScreenControls.shared.state
+        var mine = ControlsStore.shared.game(id)
+        switch row {
+        case .layout:
+            let all = OnScreenLayout.allCases
+            let i = all.firstIndex(of: now.layout)! + by
+            mine.layout = wrapping ? all[(i % all.count + all.count) % all.count] : all[max(0, min(all.count - 1, i))]
+        case .opacity:
+            let next = ControlsOpacity.step(now.opacity, by: by)
+            mine.opacity = wrapping && next == now.opacity ? ControlsOpacity.steps[0] : next
+        }
+        ControlsStore.shared.setGame(id, mine)
+        Self.log("controls for \(id): layout \(mine.layout?.rawValue ?? "default") opacity \(mine.opacity.map(ControlsOpacity.label) ?? "default")")
     }
 
     /// Back to the game: its threads go on first, then its input and audio.
@@ -235,7 +276,8 @@ final class InGameMenu: ObservableObject {
     #if !PLAYPORT_RELEASE
     /// The driver's summary line (Dev/UIDriver.swift).
     var summary: String {
-        "menu \(isOpen ? "open" : "closed"), ring \(menu.ring.rawValue), paused=\(paused) overlay=\(overlay)"
+        "menu \(isOpen ? "open" : "closed"), ring \(menu.ring.rawValue)" + (menu.panel.map { " (panel \($0.rawValue))" } ?? "")
+            + ", paused=\(paused) overlay=\(overlay), controls \(OnScreenControls.shared.state.summary)"
             + (shot.map { ", screenshot: \($0)" } ?? "") + (quitting ? ", quitting" : "")
     }
     #endif
@@ -253,6 +295,7 @@ struct InGameMenuView: View {
     @ObservedObject private var launch = TitleLaunch.shared
     @ObservedObject private var router = PadRouter.shared
     @ObservedObject private var safe = WindowInsets.shared
+    @ObservedObject private var controls = OnScreenControls.shared
 
     var body: some View {
         let lead = safe.side(44, safe.insets.leading), trail = safe.side(44, safe.insets.trailing)
@@ -277,7 +320,11 @@ struct InGameMenuView: View {
             .background(PP.surface)
             .overlay(alignment: .trailing) { Rectangle().fill(PP.line).frame(width: 1) }
             .ignoresSafeArea()
-            if downloadsWaiting {
+            if let row = model.menu.panel {
+                ControlsPanel(ring: row, state: controls.state)
+                    .padding(.leading, 330 + lead - 44 + 24).padding(.top, 22)
+            }
+            if downloadsWaiting && model.menu.panel == nil {
                 HStack(spacing: 8) {
                     Circle().fill(PP.muted).frame(width: 8, height: 8)
                     Text("Downloads paused while you play")
@@ -292,9 +339,12 @@ struct InGameMenuView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    PadFooter(hints: [
+                    PadFooter(hints: model.menu.panel == nil ? [
                         PadHint(button: .a, label: "Choose") { model.press(.a) },
                         PadHint(button: .b, label: "Back to game") { model.resume() },
+                    ] : [
+                        PadHint(button: .a, label: "Change") { model.press(.a) },
+                        PadHint(button: .b, label: "Back") { model.press(.b) },
                     ], leading: true)
                     .fixedSize()
                 }
@@ -335,6 +385,7 @@ struct InGameMenuView: View {
     private func value(_ item: QuickMenuItem) -> String? {
         switch item {
         case .resume: nil
+        case .controls: controls.state.summary
         case .screenshot: model.shot ?? "Saved to Photos"
         case .overlay: model.overlay ? "On" : "Off"
         case .controller: QuickMenu.controller(name: router.controller?.name, battery: router.controller?.battery)
@@ -345,5 +396,75 @@ struct InGameMenuView: View {
     /// Downloads the launch held (SteamInstalls): they go on after the game.
     private var downloadsWaiting: Bool {
         !(SteamAccountModel.current?.installs.order.isEmpty ?? true)
+    }
+}
+
+/// The Controls panel beside the menu's rows (QuickMenuControls.dc.html): the
+/// game's on-screen layout and their opacity. A tap does what left and right do.
+private struct ControlsPanel: View {
+    let ring: QuickMenuControlsRow
+    let state: ControlsState
+    private var model: InGameMenu { InGameMenu.shared }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Controls").font(PP.display(20))
+                Text("For this game · saved as you change them").font(.system(size: 12)).foregroundStyle(PP.muted)
+            }
+            .padding(.bottom, 4)
+            row(.layout) {
+                HStack(spacing: 2) {
+                    ForEach(OnScreenLayout.allCases, id: \.self) { l in
+                        Text(l.title).font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(l == state.layout ? PP.background : PP.muted)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(l == state.layout ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 9))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                let by = OnScreenLayout.allCases.firstIndex(of: l)! - OnScreenLayout.allCases.firstIndex(of: state.layout)!
+                                model.changeControls(.layout, by: by)
+                            }
+                            .accessibilityIdentifier("menu-controls-layout-\(l.rawValue)")
+                    }
+                }
+                .padding(3)
+                .background(PP.background, in: RoundedRectangle(cornerRadius: 12))
+            }
+            row(.opacity) {
+                HStack(spacing: 8) {
+                    arrow("‹", by: -1)
+                    Text(ControlsOpacity.label(state.opacity)).font(.system(size: 14, weight: .semibold))
+                    arrow("›", by: 1)
+                }
+            }
+            if !state.visible && state.layout != .off {
+                Text("Hidden while a controller is connected.").font(.system(size: 12)).foregroundStyle(PP.muted)
+            }
+        }
+        .padding(16)
+        .frame(width: 330, alignment: .leading)
+        .background(PP.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(PP.line, lineWidth: 1))
+        .accessibilityIdentifier("menu-controls-panel")
+    }
+
+    private func row<V: View>(_ r: QuickMenuControlsRow, @ViewBuilder value: () -> V) -> some View {
+        HStack {
+            Text(r.title).font(.system(size: 14, weight: .medium))
+            Spacer(minLength: 8)
+            value()
+        }
+        .padding(.horizontal, 12).frame(height: 44)
+        .background(PP.raised, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(ring == r ? PP.accent : .clear, lineWidth: 2))
+        .accessibilityIdentifier("menu-controls-\(r.rawValue)")
+    }
+
+    private func arrow(_ s: String, by: Int) -> some View {
+        Text(s).font(.system(size: 16)).foregroundStyle(PP.muted)
+            .frame(minWidth: 18, minHeight: 30)
+            .contentShape(Rectangle())
+            .onTapGesture { model.changeControls(.opacity, by: by) }
     }
 }

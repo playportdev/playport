@@ -491,6 +491,21 @@ final class InGameMenuTests: XCTestCase {
         XCTAssertEqual(c.update(input { $0.home = true; $0.x = true }, at: 1.6), [.open])
     }
 
+    func testOpenedByThePlayportButtonTakesThePadsPresses() {
+        var c = QuickMenuControl()
+        c.opened()
+        XCTAssertTrue(c.isOpen)
+        XCTAssertFalse(c.needsClock)
+        XCTAssertEqual(c.update(input { $0.down = true }, at: 0), [.press(.down)])
+        XCTAssertEqual(c.update(input(), at: 0.1), [])
+        XCTAssertEqual(c.update(input { $0.home = true }, at: 0.2), [.close])
+        XCTAssertFalse(c.isOpen)
+        c.opened()
+        c.opened()   // twice is once
+        c.closed()
+        XCTAssertFalse(c.isOpen)
+    }
+
     func testTheGuestSeesNothingWhileHeldAndNotTheButtonThatClosedTheMenu() {
         var g = GuestPadGate()
         var a = PadValues(); a.buttons = PadMapping.a

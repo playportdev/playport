@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """pp ui: drive the product UI on the phone (app/Sources/S1Probe/Dev/UIDriver.swift; dev builds only).
 
-  pp ui [--action VERB:ARG ...] [--settings ID:JSON] [--verify ID] [--play ID]
+  pp ui [--action VERB:ARG ...] [--controls ID:JSON] [--settings ID:JSON] [--verify ID] [--play ID]
         [--shot-each-action] [--pad] [--out DIR] [--until SPEC] [--wait S] [--idle N] [--quiet]
         [--shot] [--screenshot-after S ...] [--leave-running] [--keep-log] [--lock-wait S]
         [--expect-ipa IPA|SHA256] [--any-build] [--keep-settings] [--dry-run]
 
 The app starts as a Home Screen launch does, shows the
 library, and does what a person would do with its buttons, through the same
-model calls: each --action in order, then --settings, --verify, --play, regardless
+model calls: each --action in order, then --controls, --settings, --verify, --play, regardless
 of argv order. Use --settings with --play, not --action play:ID, to save settings
 before playing. --dry-run prints UI_ACTIONS without accessing the phone:
 
@@ -20,8 +20,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          open:ID#SECTION opens its Game options at a section (graphics, game, files,
                          developer, ordering, steam);
                          open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
-                         controllers, storage, setup, about, developer; also account, jit, memory,
-                         diagnostics, pairing, probes, logs for the section that holds them);
+                         controls, storage, setup, about, developer; also account, jit, memory,
+                         diagnostics, pairing, probes, logs for the section that holds them, and
+                         controllers, the old name of controls);
                          open:licences shows Settings › About › Licences, open:licences#PREFIX the
                          files of the first component whose name starts with PREFIX (open:licences#wine);
                          there pad:down/up move through the rows and a text's paragraphs, pad:a opens
@@ -61,12 +62,24 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          its first one is the `first window` mark, --until mark:first window+S;
                          or a dialog it opens after it, decision 0076, --until mark:dialog shown+S)
                          while one is shown, else on the game
+  touch:CONTROL[+CONTROL...][@MS]
+                         after a play: (it runs while the game runs): wait for the game's first frame,
+                         then fingers on the on-screen controls by id, held MS ms (200 by default,
+                         10000 at most) and let go together (Dev/TouchDriver.swift). The Gamepad
+                         layout's ids: playport view menu lt lb rt rb dpad leftStick rightStick y x b a;
+                         a stick or the d-pad takes a direction: dpad.right, leftStick.up.
+                         touch:playport opens the in-game menu (pad: and menu: then act on it).
+                         The controls show while no controller is connected (--pad connects one).
+                         Example: --action play:app-367520 --action wait:20 --action touch:a
+                         --action touch:dpad.right@2000 --action touch:dpad.right+a@600
   menu:open              after a play: (the actions after it then run while the game runs): wait for
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
                          game (UI/InGameMenuView.swift)
-  menu:ROW               in that menu, move its ring to ROW (resume, screenshot, overlay, controller,
-                         quit) and press A; pad:up/down/a/b press into the menu while it is up.
+  menu:ROW               in that menu, move its ring to ROW (resume, controls, screenshot, overlay,
+                         controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
+                         menu:controls opens its Controls panel: pad:left/right change the ringed row
+                         (On-screen controls: Off, Gamepad; Opacity), pad:down/up move, pad:b goes back.
                          menu:screenshot saves the frame to Photos (the first time iOS asks a person
                          to allow it) and, in a dev build, to Documents/Screenshots; menu:quit closes
                          the game's windows, and the run follows Playport's restart as for play:.
@@ -125,6 +138,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
   probe:relaunch         Settings' Restart Playport now (AppRestart.swift): the restart after a game,
                          with no game; the run is done as it asks (use --leave-running); must be
                          the last action
+  --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
+                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.2-1}; `ID:{}` clears)
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
@@ -285,20 +300,24 @@ class EndOnTerm:
         return True
 
 
+# A control of an on-screen layout, with a direction for a stick or the d-pad (Dev/TouchDriver.swift).
+TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right))?"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|play):[a-z]+-[A-Za-z0-9 ._-]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
-                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
-                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|screenshot|overlay|controller|quit)|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
+                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
+                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
+                       r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL))
 
 
 def in_game(actions, start):
     """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
-    menu: and web:, and pad: once a menu:open has opened the in-game menu."""
+    touch:, menu: and web:, and pad: once a menu:open (or the on-screen Playport button,
+    touch:playport) has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "menu:", "web:")) or (menu and x.startswith("pad:")):
-            menu = menu or x == "menu:open"
+        if x.startswith(("wait:", "tap:", "touch:", "menu:", "web:")) or (menu and x.startswith("pad:")):
+            menu = menu or x == "menu:open" or (x.startswith("touch:") and "playport" in re.split(r"[+@.:]", x))
             n += 1
         else:
             break
@@ -340,18 +359,22 @@ def ends_run(e, actions, play, titles_done=1):
 
 
 def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, pad=False,
-           session=None, keep_settings=False):
-    """settings: (title id, LaunchSettings JSON) or None. step: the app waits after each
+           session=None, keep_settings=False, controls=None):
+    """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
+    JSON) or None. step: the app waits after each
     action until the driver pushes Documents/ui-step-<n> (--shot-each-action). session:
     the device lock hold this launch is part of (the app undoes an earlier session's
     driven settings, and records this one's); keep_settings: record nothing to undo."""
-    actions = (list(extra) + ([f"settings:{settings[0]}"] if settings else [])
+    actions = (list(extra) + ([f"controls:{controls[0]}"] if controls else [])
+               + ([f"settings:{settings[0]}"] if settings else [])
                + [f"verify:{verify}"] * bool(verify) + [f"play:{play}"] * bool(play))
     envs = ["S1_MODE=ui", "TITLE_NONCE=" + nonce]
     if actions:
         envs.append("UI_ACTIONS=" + ",".join(actions))
     if settings:
         envs.append("UI_SETTINGS=" + settings[1])
+    if controls:
+        envs.append("UI_CONTROLS=" + controls[1])
     if step:
         envs.append("UI_STEP=1")
     if pad:
@@ -424,8 +447,11 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
+    p.add_argument("--controls", metavar="ID:JSON",
+                   help='save these on-screen controls for the title first ({"layout":"off"} or '
+                        '{"layout":"gamepad","opacity":0.8}; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -463,7 +489,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
     seq = a.action + [f"play:{a.play}"] * bool(a.play)
     pad = pad_after_play(seq)
@@ -472,6 +498,19 @@ def parse(argv=None):
                 "buttons in the game use `pp ui --pad ... --leave-running` and `pp pad send` in one "
                 "`pp phone lock -- sh -c '...'`; pad: works with menu:open (the in-game menu) or on screens "
                 "before play:")
+    a.controls_pair = None
+    if a.controls:
+        cid, _, cjs = a.controls.partition(":")
+        try:
+            cobj = json.loads(cjs)
+            ok = ID_RE.match(cid) and isinstance(cobj, dict) and set(cobj) <= {"layout", "opacity"} \
+                and cobj.get("layout", "off") in ("off", "gamepad") \
+                and isinstance(cobj.get("opacity", 0.5), (int, float)) and 0.1 <= cobj.get("opacity", 0.5) <= 1
+        except ValueError:
+            ok = False
+        if not ok:
+            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad) and opacity (0.1-1) only")
+        a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:
         sid, _, js = a.settings.partition(":")
@@ -569,7 +608,7 @@ def main(argv=None, launched=None):
             if not a.keep_log:
                 phone.rotate_log()
             envs = ui_env(nonce, a.verify, a.play, a.action, a.settings_pair, a.shot_each_action, a.pad,
-                          phonelib.session(), a.keep_settings)
+                          phonelib.session(), a.keep_settings, a.controls_pair)
             pid = phone.launch(envs)
             t0 = time.monotonic()
             t_wall = time.time()

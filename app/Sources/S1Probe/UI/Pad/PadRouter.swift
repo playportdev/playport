@@ -26,10 +26,12 @@ final class PadRouter: ObservableObject {
         var name: String
         var battery: Int?
         var charging: Bool
+        /// It reports rotation rate (GCMotion), for gyro aim (Settings › Controls' badge).
+        var gyro = false
     }
 
     @Published private(set) var controller: Controller?
-    /// Every controller connected, the current one first (Settings › Controllers).
+    /// Every controller connected, the current one first (Settings › Controls).
     @Published private(set) var controllers: [Controller] = []
     let presses = PassthroughSubject<NavButton, Never>()
     private(set) var handedOff = false
@@ -104,10 +106,11 @@ final class PadRouter: ObservableObject {
         let level = c.battery.map { Int(($0.batteryLevel * 100).rounded()) }
         return Controller(name: c.productCategory.isEmpty ? c.vendorName ?? "Controller" : c.productCategory,
                           battery: level.flatMap { (0...100).contains($0) ? $0 : nil },
-                          charging: c.battery?.batteryState == .charging)
+                          charging: c.battery?.batteryState == .charging,
+                          gyro: c.motion?.hasRotationRate ?? false)
     }
 
-    /// Reads the controllers and their batteries now (Settings › Controllers on appear).
+    /// Reads the controllers and their batteries now (Settings › Controls on appear).
     func refreshControllers() { readController() }
 
     private func changed(_ gp: GCExtendedGamepad) {

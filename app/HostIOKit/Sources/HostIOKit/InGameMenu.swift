@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /// What the controller does around Playport's in-game menu (QuickMenu.dc.html,
-/// S1Probe's UI/InGameMenuView.swift): the Home button held opens it, and
+/// S1Probe's UI/InGameMenuView.swift): the Home button held (or the on-screen
+/// Playport button, `opened`) opens it, and
 /// while it is up the pad's presses are the menu's and the guest's pads are at rest.
 public enum QuickMenuEvent: Equatable, Sendable {
     /// Home was held `longPress` seconds: open the menu.
@@ -59,6 +60,15 @@ public struct QuickMenuControl: Sendable {
     /// Whether the caller should keep calling `tick`: Home is held toward a
     /// long press, or a direction repeats in the menu.
     public var needsClock: Bool { isOpen ? nav.isRepeating : homeDownAt != nil }
+
+    /// The menu was opened another way (the on-screen Playport button): the
+    /// pads' presses are the menu's from the next snapshot, and Home closes it.
+    public mutating func opened() {
+        guard !isOpen else { return }
+        isOpen = true
+        homeDownAt = nil
+        nav.reset()
+    }
 
     /// The menu was closed from the UI.
     public mutating func closed() {

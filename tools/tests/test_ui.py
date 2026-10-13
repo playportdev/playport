@@ -150,6 +150,36 @@ class UiEnvTest(unittest.TestCase):
         self.assertEqual(m.in_game(["play:app-367520", "pad:a"], 1), 0)
         self.assertTrue(m.after_play(["play:app-367520", "pad:a"]))
 
+    def test_touch_presses_the_on_screen_controls_while_the_game_runs(self):
+        """touch: is a finger on the running game's on-screen controls (Dev/TouchDriver.swift);
+        touch:playport opens the in-game menu, so pad: after it is the menu's."""
+        m = load()
+        for ok in ("touch:a", "touch:playport", "touch:dpad.right@2000", "touch:dpad.right+a@600",
+                   "touch:leftStick.up+rightStick.left@10000", "menu:controls", "open:settings#controls",
+                   "open:settings#controllers"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("touch:", "touch:a@", "touch:a.b", "touch:a@123456", "touch:a+", "touch:a,b", "menu:control"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        run = ["play:app-367520", "wait:20", "touch:a", "touch:dpad.right@2000", "touch:playport", "pad:down",
+               "menu:resume", "touch:a"]
+        self.assertEqual(m.in_game(run, 1), 7)
+        self.assertFalse(m.after_play(run))
+        self.assertIsNone(m.pad_after_play(run))
+        self.assertEqual(m.in_game(["play:app-367520", "touch:a", "pad:a"], 1), 1)
+
+    def test_controls_saves_a_games_on_screen_controls_before_play(self):
+        m = load()
+        env = m.ui_env("n1", play="app-367520", controls=("app-367520", '{"layout":"off"}'),
+                       settings=("app-367520", "{}"))
+        self.assertIn("UI_ACTIONS=controls:app-367520,settings:app-367520,play:app-367520", env)
+        self.assertIn('UI_CONTROLS={"layout":"off"}', env)
+        a = m.parse(["--controls", 'app-367520:{"opacity": 0.8}', "--play", "app-367520"])
+        self.assertEqual(a.controls_pair, ("app-367520", '{"opacity":0.8}'))
+        for bad in ('app-367520:{"layout":"tank"}', 'app-367520:{"opacity":3}', 'app-367520:{"x":1}', "app-367520:[]",
+                    'nope:{}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", bad])
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")

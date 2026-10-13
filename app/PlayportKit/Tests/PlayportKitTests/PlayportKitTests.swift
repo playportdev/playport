@@ -1440,7 +1440,7 @@ final class OptionValueTests: XCTestCase {
 final class SettingsModelTests: XCTestCase {
     func testTheSectionsAndTheirOldNames() {
         XCTAssertEqual(SettingsSection.all(developer: false).map(\.title),
-                       ["Accounts", "Graphics", "Downloads", "Controllers", "Storage", "Setup check", "About"])
+                       ["Accounts", "Graphics", "Downloads", "Controls", "Storage", "Setup check", "About"])
         XCTAssertEqual(SettingsSection.all(developer: true).last, .developer)
         XCTAssertEqual(SettingsSection.named("account"), .accounts)
         XCTAssertEqual(SettingsSection.named("steam"), .accounts)
@@ -1448,6 +1448,7 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(SettingsSection.named("pairing"), .developer)
         XCTAssertEqual(SettingsSection.named("jit"), .setup)
         XCTAssertEqual(SettingsSection.named("graphics"), .graphics)
+        XCTAssertEqual(SettingsSection.named("controllers"), .controls)
         XCTAssertNil(SettingsSection.named("nope"))
         // Up and down stop at the ends; a release build never steps onto Developer.
         XCTAssertEqual(SettingsSection.accounts.step(-1, developer: true), .accounts)
@@ -2069,8 +2070,8 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(m.ring, .quit)
         m.move(down: false)
         XCTAssertEqual(m.ring, .controller)
-        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true])
-        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false])
+        XCTAssertEqual(QuickMenu.steps(from: .resume, to: .quit), [true, true, true, true, true])
+        XCTAssertEqual(QuickMenu.steps(from: .overlay, to: .resume), [false, false, false])
         XCTAssertEqual(QuickMenu.steps(from: .quit, to: .quit), [])
     }
 
@@ -2081,7 +2082,29 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(QuickMenu.controller(name: "DualSense", battery: nil), "DualSense")
         XCTAssertEqual(QuickMenu.controller(name: nil, battery: nil), "None")
         XCTAssertEqual(QuickMenuItem.allCases.map(\.title),
-                       ["Resume", "Screenshot", "Performance overlay", "Controller", "Quit game"])
+                       ["Resume", "Controls", "Screenshot", "Performance overlay", "Controller", "Quit game"])
+    }
+
+    func testTheControlsPanelTakesTheRingAndGivesItBack() {
+        var m = QuickMenu()
+        m.move(down: true)
+        XCTAssertEqual(m.ring, .controls)
+        XCTAssertNil(m.panel)
+        m.openPanel()
+        XCTAssertEqual(m.panel, .layout)
+        m.move(down: true)
+        XCTAssertEqual(m.panel, .opacity)
+        m.move(down: true)
+        XCTAssertEqual(m.panel, .opacity)
+        XCTAssertEqual(m.ring, .controls)   // the rows' ring stays on Controls
+        m.closePanel()
+        XCTAssertNil(m.panel)
+        m.move(down: true)
+        XCTAssertEqual(m.ring, .screenshot)
+        m.openPanel(.opacity)
+        XCTAssertEqual(m.ring, .controls)
+        m.ring(.quit)                        // a tap on another row closes the panel
+        XCTAssertNil(m.panel)
     }
 }
 

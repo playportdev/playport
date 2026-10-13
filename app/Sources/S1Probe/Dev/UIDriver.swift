@@ -34,6 +34,9 @@
 //   settings:<title id>        Saves UI_SETTINGS (a PlayportKit LaunchSettings as JSON;
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
+//   controls:<title id>        Saves UI_CONTROLS (a PlayportKit GameControls as JSON:
+//                              {"layout":"off"|"gamepad","opacity":0.2-1}; `{}` clears them)
+//                              as the game's own controls, as the in-game menu's Controls does
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
@@ -44,7 +47,7 @@
 //                              opens the page's Game options at a section (graphics, game,
 //                              files, developer, ordering, steam);
 //                              `open:settings#<section>` shows a Settings section (accounts,
-//                              graphics, downloads, controllers, storage, setup, about,
+//                              graphics, downloads, controls, storage, setup, about,
 //                              developer; PlayportKit SettingsSection.named also takes
 //                              account, steam, jit, memory, diagnostics, pairing, probes, logs);
 //                              `open:licences` shows Settings › About › Licences,
@@ -78,13 +81,21 @@
 //                              that fraction (0-1) of the game's screen, through GameSurfaceView's
 //                              touch path (a guest GDI window while one is shown, decision 0075),
 //                              then waits 1 s
+//   touch:<control>[+<control>...][@<ms>]
+//                              After a play: (it runs while the game runs): waits for the
+//                              game's first frame (3 min at most), then fingers on the
+//                              on-screen controls by id, held <ms> (200 by default) and let
+//                              go (Dev/TouchDriver.swift; `touch:dpad.right@2000`,
+//                              `touch:a`, `touch:playport` opens the in-game menu)
 //   menu:open                  After a play: (the actions after it then run while the game runs):
 //                              waits for the game's first frame (3 min at most), then holds the
 //                              controller's Home button 0.8 s through HostIO's pad handling
 //                              (HostIO.menuInput), which opens the in-game menu
 //                              (UI/InGameMenuView.swift), and waits 1 s
-//   menu:<row>                 In the menu: moves its ring to the row (resume, screenshot,
-//                              overlay, controller, quit) and presses A, as a controller does;
+//   menu:<row>                 In the menu: moves its ring to the row (resume, controls,
+//                              screenshot, overlay, controller, quit) and presses A, as a
+//                              controller does (controls opens its panel: pad:left/right
+//                              change the ringed row, pad:down moves to Opacity, pad:b back);
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
@@ -171,7 +182,7 @@ enum UIDriver {
                 let parts = action.split(separator: ":", maxSplits: 1).map(String.init)
                 guard parts.count == 2 else { return finish("action=\(action) refused: not <verb>:<id>") }
                 let id = parts[1]
-                if ["verify", "play", "uninstall", "settings"].contains(parts[0]), library.title(id) == nil {
+                if ["verify", "play", "uninstall", "settings", "controls"].contains(parts[0]), library.title(id) == nil {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
@@ -201,6 +212,27 @@ enum UIDriver {
                     let e = LibraryModel.shared.title(id).map { LaunchSettingsStore.shared.effective(for: $0) }
                         ?? LaunchSettings.resolve(game: s, global: LaunchSettingsStore.shared.global)
                     log("settings \(id): screen=\(e.screen ?? "native") aspect=\(e.aspect.rawValue) limit=\(e.frameLimit) graphics=\(e.graphics.rawValue) arguments=\(e.arguments) ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in e.ordering[s].map { "\(s.rawValue)=\($0)" } }) maxInst=\(e.maxInst.map(String.init) ?? "profile") x87Reduced=\(e.x87Reduced.map { String($0) } ?? "profile") diskCache=\(e.diskCache.map { String($0) } ?? "default") runtime=\(e.runtime.keys.sorted().map { "\($0)=\(e.runtime[$0]!)" }) graphicsOptions=\(e.graphicsEnvironment.keys.sorted().map { "\($0)=\(e.graphicsEnvironment[$0]!)" })")
+                case "controls":
+                    guard let json = env["UI_CONTROLS"],
+                          let c = try? JSONDecoder().decode(GameControls.self, from: Data(json.utf8)) else {
+                        return finish("action=\(action) refused: UI_CONTROLS is not GameControls JSON")
+                    }
+                    DriverUndo.willSet(ControlsStore.gamesKey)
+                    ControlsStore.shared.setGame(id, c)
+                    log("controls \(id): layout=\(c.layout?.rawValue ?? "default") opacity=\(c.opacity.map(ControlsOpacity.label) ?? "default")")
+                case "touch":
+                    let launch = TitleLaunch.shared
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))   // the controls drawn after the first frame
+                    if let failure = await OnScreenControls.shared.driverPress(id) { return finish("action=\(action) failed: \(failure)") }
+                    try? await Task.sleep(for: .milliseconds(500))
+                    log("touch \(id): \(OnScreenControls.shared.summary)" + (InGameMenu.shared.isOpen ? "; \(InGameMenu.shared.summary)" : ""))
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "hud":
                     guard ["on", "off"].contains(id) else { return finish("action=\(action) refused: not hud:on or hud:off") }
                     DriverUndo.willSet(MetalHUD.key)
@@ -481,6 +513,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
+            || action.hasPrefix("touch:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

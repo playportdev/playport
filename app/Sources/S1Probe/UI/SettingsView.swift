@@ -13,7 +13,9 @@
 //   Playport's default; and the Metal HUD.
 // - Downloads: PlayportKit DownloadPreferences (the download queue reads
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
-// - Controllers: every controller connected, with its battery (PadRouter).
+// - Controls: when the on-screen controls show, their opacity and haptics
+//   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), and every
+//   controller connected, with its battery and whether it has a gyro (PadRouter).
 // - Storage: free space and each game's size; A opens the game's page. Steamworks Shared
 //   (Steam's redistributables) with its size and Remove, and the emulator cache with Clear.
 // - Setup check: JIT, LocalDevVPN and memory (SetupCheckSettings.swift).
@@ -147,7 +149,7 @@ struct SettingsView: View {
             EpicAccountSettings()
         case .graphics: GraphicsSettings()
         case .downloads: DownloadSettings()
-        case .controllers: ControllerSettings()
+        case .controls: ControlsSettings()
         case .storage: StorageSettings()
         case .setup: SetupCheckSettings()
         case .about:
@@ -319,21 +321,47 @@ private struct DownloadSettings: View {
     }
 }
 
-// MARK: Controllers
+// MARK: Controls
 
-private struct ControllerSettings: View {
+private struct ControlsSettings: View {
     @ObservedObject private var router = PadRouter.shared
+    @AppStorage(ControlsDefaults.showKey) private var show = ControlsShow.automatic.rawValue
+    @AppStorage(ControlsDefaults.opacityKey) private var opacity = ControlsOpacity.defaultValue
+    @AppStorage(ControlsDefaults.hapticsKey) private var haptics = true
 
     var body: some View {
-        SettingsNote(text: "Connect a controller in iOS Settings › Bluetooth. Playport and its games use the one you "
-                     + "pressed last.")
+        Color.clear.frame(height: 42)
+        let shows = ControlsShow.allCases
+        let current = ControlsShow(rawValue: show) ?? .automatic
+        PadValueRow(id: "set:controlsShow", title: "On-screen controls", subtitle: Self.showSubtitle(current),
+                    values: shows.map(\.title), index: shows.firstIndex(of: current) ?? 0) { show = shows[$0].rawValue }
+        let steps = ControlsOpacity.steps
+        PadValueRow(id: "set:controlsOpacity", title: "Opacity", subtitle: "How much of the game shows through",
+                    values: steps.map(ControlsOpacity.label),
+                    index: steps.firstIndex(of: ControlsOpacity.step(opacity, by: 0)) ?? 0) { opacity = steps[$0] }
+        SettingsSwitchRow(id: "controlsHaptics", title: "A tap you can feel", subtitle: "Haptics when a control is pressed",
+                          on: $haptics)
+        SettingsNote(text: "Each game can turn them off or change their opacity in the in-game menu's Controls; the "
+                     + "Playport button at the top opens that menu without a controller. Connect a controller in iOS "
+                     + "Settings › Bluetooth. Playport and its games use the one you pressed last.")
         if router.controllers.isEmpty {
             SettingsInfoRow(id: "controller:none", title: "No controller", subtitle: "Touch works everywhere meanwhile")
         }
         ForEach(Array(router.controllers.enumerated()), id: \.offset) { i, c in
-            SettingsInfoRow(id: "controller:\(i)", title: c.name, subtitle: i == 0 ? "In use" : nil, value: battery(c))
+            SettingsInfoRow(id: "controller:\(i)", title: c.name,
+                            subtitle: ([i == 0 ? "In use" : nil, c.gyro ? "has a gyro" : nil].compactMap { $0 }
+                                .joined(separator: " · ")).nilIfEmpty,
+                            value: battery(c))
         }
         Color.clear.frame(height: 0).onAppear { router.refreshControllers() }
+    }
+
+    private static func showSubtitle(_ s: ControlsShow) -> String {
+        switch s {
+        case .automatic: "Shown while no controller is connected"
+        case .always: "Shown with a controller too"
+        case .never: "Off unless a game turns them on"
+        }
     }
 
     private func battery(_ c: PadRouter.Controller) -> String {
