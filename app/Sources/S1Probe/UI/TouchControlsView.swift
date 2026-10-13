@@ -372,7 +372,7 @@ private final class GlassView: UIView {
 }
 
 /// A control as TouchGamepad.dc.html draws it. The d-pad and the face buttons
-/// are drawn 2 points inside their frame, which is what a touch hits: the
+/// are drawn 1 point inside their frame, which is what a touch hits: the
 /// d-pad's arms and a face button come out the same size, and so do the two
 /// clusters (ControlLayout.gamepad).
 private final class ControlView: UIView {
@@ -392,13 +392,13 @@ private final class ControlView: UIView {
         case .button:
             let round = Glass.faces[control.label] != nil
             let font = UIFont.systemFont(ofSize: round ? 18 : 13, weight: .semibold)
-            let drawn = round ? bounds.insetBy(dx: 2, dy: 2) : bounds
+            let drawn = round ? bounds.insetBy(dx: 1, dy: 1) : bounds
             let g = GlassView(frame: drawn, radius: round ? drawn.width / 2 : h / 2, text: control.label, font: font,
                               labelColor: Glass.faces[control.label] ?? Glass.text)
             addSubview(g)
             parts = [g]
         case .dpad:
-            let side = min(w, h) - 4, o = 2.0
+            let side = min(w, h) - 2, o = 1.0
             let s = side * 30 / 92, mid = o + (side - s) / 2, far = o + side - s
             for (x, y, glyph) in [(mid, o, "▲"), (mid, far, "▼"), (o, mid, "◀"), (far, mid, "▶")] {
                 let g = GlassView(frame: CGRect(x: x, y: y, width: s, height: s), radius: 8, text: glyph,

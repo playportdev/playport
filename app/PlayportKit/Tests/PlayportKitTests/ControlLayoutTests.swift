@@ -124,8 +124,8 @@ final class ControlLayoutTests: XCTestCase {
                 }
                 // A/B/X/Y: the d-pad's size, and the right zone centred on them, below or above.
                 let faces = Self.bounds(["y", "x", "b", "a"].map { frame($0)! })
-                XCTAssertEqual(faces.width, 120, name)
-                XCTAssertEqual(faces.height, 120, name)
+                XCTAssertEqual(faces.width, 126, name)
+                XCTAssertEqual(faces.height, 126, name)
                 if let d = frame("dpad") { XCTAssertEqual(d.width, faces.width, name) }
                 XCTAssertTrue(near(frame("y")!.center.x, faces.center.x) && near(frame("a")!.center.x, faces.center.x), name)
                 let bottom = area.y + area.height, right = area.x + area.width
@@ -160,11 +160,11 @@ final class ControlLayoutTests: XCTestCase {
               case .stick(.rightStick, let rz?) = target("rightStick").kind else { return XCTFail("both sticks float") }
         XCTAssertEqual(lz, TouchRect(x: 62, y: 255, width: 210, height: 126))
         XCTAssertEqual(rz, TouchRect(x: 602, y: 255, width: 210, height: 126))
-        XCTAssertEqual(target("dpad").frame, TouchRect(x: 107, y: 123, width: 120, height: 120))
-        XCTAssertEqual(target("a").frame, TouchRect(x: 687, y: 203, width: 40, height: 40))
-        XCTAssertEqual(target("y").frame.center, TouchPoint(x: 707, y: 143))
-        XCTAssertEqual(target("x").frame.center, TouchPoint(x: 667, y: 183))
-        XCTAssertEqual(target("b").frame.center, TouchPoint(x: 747, y: 183))
+        XCTAssertEqual(target("dpad").frame, TouchRect(x: 104, y: 117, width: 126, height: 126))
+        XCTAssertEqual(target("a").frame, TouchRect(x: 686, y: 201, width: 42, height: 42))
+        XCTAssertEqual(target("y").frame.center, TouchPoint(x: 707, y: 138))
+        XCTAssertEqual(target("x").frame.center, TouchPoint(x: 665, y: 180))
+        XCTAssertEqual(target("b").frame.center, TouchPoint(x: 749, y: 180))
         XCTAssertEqual(target("lt").frame, TouchRect(x: 68, y: 4, width: 64, height: 40))
         XCTAssertEqual(target("lb").frame, TouchRect(x: 68, y: 50, width: 64, height: 40))
         XCTAssertEqual(target("view").frame, TouchRect(x: 138, y: 7, width: 44, height: 30))
@@ -183,9 +183,9 @@ final class ControlLayoutTests: XCTestCase {
         XCTAssertNil(owner(167, 249))
         XCTAssertNil(owner(707, 249))
         // A/B/X/Y side by side: each its own square, the corners between them and the middle the game's.
-        XCTAssertEqual(owner(686, 183), "x")
-        XCTAssertEqual(owner(728, 183), "b")
-        XCTAssertNil(owner(707, 183))
+        XCTAssertEqual(owner(685, 180), "x")
+        XCTAssertEqual(owner(729, 180), "b")
+        XCTAssertNil(owner(707, 180))
         XCTAssertNil(owner(667, 143))
         XCTAssertNil(owner(437, 300))
         XCTAssertNil(owner(437, 30))
@@ -208,14 +208,14 @@ final class ControlLayoutTests: XCTestCase {
         // Above: A B X Y in the corner, the zone over them; the gap between is the game's.
         let above = ControlLayout.gamepad(rightStick: .above).targets(width: 874, height: 402, insets: insets)
         guard case .stick(.rightStick, let az?) = above.first(where: { $0.id == "rightStick" })!.kind else { return XCTFail("floats") }
-        XCTAssertEqual(az, TouchRect(x: 602, y: 129, width: 210, height: 120))
-        XCTAssertEqual(above.first { $0.id == "a" }!.frame, TouchRect(x: 687, y: 341, width: 40, height: 40))
-        XCTAssertEqual(above.first { $0.id == "y" }!.frame, TouchRect(x: 687, y: 261, width: 40, height: 40))
+        XCTAssertEqual(az, TouchRect(x: 602, y: 129, width: 210, height: 114))
+        XCTAssertEqual(above.first { $0.id == "a" }!.frame, TouchRect(x: 686, y: 339, width: 42, height: 42))
+        XCTAssertEqual(above.first { $0.id == "y" }!.frame, TouchRect(x: 686, y: 255, width: 42, height: 42))
         let u = TouchControls(targets: above)
         func aboveOwner(_ x: Double, _ y: Double) -> String? { u.target(at: TouchPoint(x: x, y: y)).map { above[$0].id } }
-        XCTAssertEqual(aboveOwner(707, 248), "rightStick")
-        XCTAssertNil(aboveOwner(707, 255))
-        XCTAssertEqual(aboveOwner(707, 262), "y")
+        XCTAssertEqual(aboveOwner(707, 242), "rightStick")
+        XCTAssertNil(aboveOwner(707, 249))
+        XCTAssertEqual(aboveOwner(707, 256), "y")
         XCTAssertNil(above.first { $0.id == "dpad" })
     }
 

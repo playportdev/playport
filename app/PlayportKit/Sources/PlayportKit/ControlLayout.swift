@@ -270,9 +270,11 @@ public struct ControlLayout: Codable, Equatable, Sendable {
     /// - The d-pad and A/B/X/Y are the same size (`cluster` square): the d-pad's
     ///   arms and each face button are drawn alike (TouchControlsView), and the
     ///   four face buttons tile the cluster's middle row and column, each hit
-    ///   over its own `cluster / 3` square.
+    ///   over its own `cluster / 3` square. 126 is the largest cluster the
+    ///   5.4-inch safe height leaves between the left zone and LB with the d-pad on;
+    ///   there the Above zone, 114 tall, keeps its gap to RB.
     public static func gamepad(dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off) -> ControlLayout {
-        let zoneWidth = 210.0, zoneHeight = 126.0, aboveZoneHeight = 120.0, gap = 12.0, cluster = 120.0
+        let zoneWidth = 210.0, zoneHeight = 126.0, aboveZoneHeight = 114.0, gap = 12.0, cluster = 126.0
         let face = cluster / 3
         let middle = zoneWidth / 2
         // A/B/X/Y's centre, from the lower right corner.
