@@ -182,10 +182,18 @@ proposed answer unless the owner says otherwise before the phase that needs them
      consider a source-specific default sensitivity. Host tests first, one short phone
      session, then the owner's phase 2 sign-off (phone gyro and controller). The 125 Hz cap is decided
      after 2f measures the new rate.
-  8. **3a, running (host only):** `ControllerMap` with the `keyboardMouse` preset, and the
-     mixer's translation, with host tests. The owner allowed phase 3's host chunks (3a, 3b) to
-     start while the phone is paused (2026-10-13). 3c and the phase 3 sign-off still wait for
-     2f's phone session and the owner's phase 2 sign-off.
+  8. **3a, host done (no phone run):** `6e5a087`: PlayportKit `ControllerMap` (`controller` |
+     `keyboardMouse` | `custom`, versioned, per game in `GameControls.controllerMap`, default
+     `controls.controllerMap`; d-pad up/right/down/left = 1–4), HostIOKit `ControllerBindings`,
+     `MappedPad` (keys, mouse buttons, wheel repeat, stick and trigger hysteresis 0.5/0.4,
+     stick to mouse: dead zone 0.15, t² curve, 2000 counts/s, remainder carried) and the
+     mixer's mapped pads (slot at rest but for `pad:` actions; the menu or a dialog releases
+     them; the controls' pad never mapped). `d322113`: the app resolves the game's map at once on a
+     change; `InputClock`, one `CADisplayLink` for the continuous sources; `pp ui --controls`
+     `"controllerMap"`; the `controls: controller map MODE for PAD (slot N)` log line. Dev IPA
+     `1e83233a…` built and verified, not installed. The owner allowed phase 3's host chunks
+     (3a, 3b) to start while the phone is paused (2026-10-13). 3c and the phase 3 sign-off
+     still wait for 2f's phone session and the owner's phase 2 sign-off. **3b next.**
   9. **3b:** the Controller page and the ActionPicker.
   10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
