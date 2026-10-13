@@ -165,7 +165,8 @@ proposed answer unless the owner says otherwise before the phase that needs them
        the physical right stick; mouse mode with the phone's gyro feels great.
   6. **2e (fix), done** (see "Done: 2e" above)**:** the three decisions, the 1.5× default and the background diagnosis above; one short
      phone session.
-  7. **2f (controller gyro), running:** deliver the controller's motion off the main thread, near its
+  7. **2f (controller gyro), running, host only:** phone tests paused by the owner
+     (2026-10-13); the phone session waits for the owner to unpause. deliver the controller's motion off the main thread, near its
      own rate, with better timestamps. Derive gravity for a pad without it from low-passed
      acceleration, not raw acceleration. Check the DualShock/DualSense axis mapping and
      scale against the phone (the same physical turn should give the same counts), and
