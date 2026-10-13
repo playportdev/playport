@@ -139,8 +139,12 @@ proposed answer unless the owner says otherwise before the phase that needs them
        owner plays with a DualSense, for the controller's `sensor rate:`, Auto's choice and the
        coalescing delay. The owner then decides the 125 Hz cap.
      - **Bug:** after sending the app to the background and coming back, the on-screen
-       controls stopped working while the three-finger tap still worked. 2e diagnoses and
-       fixes it.
+       controls stopped working while the three-finger tap still worked. 2e found the cause
+       outside this plan: the Vulkan device is lost in the background because KosmicKrisp's
+       queue commits outside the GPU gate, so the game stops presenting. Tracked in
+       [PLA-338](https://linear.app/playportdev/issue/PLA-338); not fixed here.
+     - **Phone gyro default sensitivity 1.5×** (owner, after playing with the phone's gyro
+       again: "feels much better but needs ~1.5x"). The 1.0× scale keeps its meaning. In 2e.
      - **Controller capture (2026-10-13, IPA `fe0110ab…`, log
        `.work/perf-runs/pla13-dualsense-p2/pulled/s1-host.log`; the owner stopped the
        `pp perf` run early, so only the app log was pulled):** the pad was a DualShock 4
@@ -149,7 +153,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
        cap never applied (delay 0 ms). Its bias (about 0.03 rad/s, 1.7 °/s) was learnt only
        some time into play. The owner found it too slow (set 2–2.5×) and laggy compared with
        the physical right stick; mouse mode with the phone's gyro feels great.
-  6. **2e (fix), running:** the three decisions and the background bug above; one short
+  6. **2e (fix), running:** the three decisions, the 1.5× default and the background diagnosis above; one short
      phone session.
   7. **2f (controller gyro):** deliver the controller's motion off the main thread, near its
      own rate, with better timestamps. Derive gravity for a pad without it from low-passed
