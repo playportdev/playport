@@ -20,6 +20,8 @@
 // - Opacity: the game's own, else the default (60%).
 // - Gyro aim (GyroSettings.swift): the game's own fields in the same record,
 //   over the `gyro.*` defaults; a change applies at once as the rest do.
+// - The controller map (ControllerMap.swift): the game's own in the same
+//   record, else Settings' (`controls.controllerMap`); `controller` by default.
 
 import Foundation
 
@@ -115,16 +117,19 @@ public struct ControlsDefaults: Equatable, Sendable {
     public static let hapticsKey = "controls.haptics"
     public static let dpadKey = "controls.dpad"
     public static let rightStickKey = "controls.rightStick"
+    public static let controllerMapKey = ControllerMap.defaultsKey
 
     public var show = ControlsShow.automatic
     public var opacity = ControlsOpacity.defaultValue
     public var haptics = true
     public var dpad = OnScreenDpad.off
     public var rightStick = OnScreenRightStick.off
+    public var controllerMap = ControllerMap()
 
     public init(show: ControlsShow = .automatic, opacity: Double = ControlsOpacity.defaultValue, haptics: Bool = true,
-                dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off) {
+                dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off, controllerMap: ControllerMap = ControllerMap()) {
         self.show = show; self.opacity = opacity; self.haptics = haptics; self.dpad = dpad; self.rightStick = rightStick
+        self.controllerMap = controllerMap
     }
 
     /// What `defaults` holds, each key missing (or not understood) read as its default.
@@ -135,26 +140,48 @@ public struct ControlsDefaults: Equatable, Sendable {
         haptics = defaults.object(forKey: Self.hapticsKey) as? Bool ?? true
         dpad = defaults.string(forKey: Self.dpadKey).flatMap(OnScreenDpad.init(rawValue:)) ?? .off
         rightStick = defaults.string(forKey: Self.rightStickKey).flatMap(OnScreenRightStick.init(rawValue:)) ?? .off
+        controllerMap = ControllerMap(defaults)
     }
 }
 
 /// A game's own controls, nil fields following the defaults. Saved as JSON per
 /// catalogue id; the dev driver's `controls:<title id>` saves one. `gyro` is the
 /// game's own gyro aim (GyroSettings.swift), over Settings' `gyro.*` defaults;
-/// JSON saved before it reads as none.
+/// `controllerMap` its controller map (ControllerMap.swift), over Settings'. JSON
+/// saved before either reads as none; a map this build cannot read (another
+/// version) reads as none too, so the rest of the record still loads.
 public struct GameControls: Codable, Equatable, Sendable {
     public var layout: OnScreenLayout?
     public var opacity: Double?
     public var dpad: OnScreenDpad?
     public var rightStick: OnScreenRightStick?
     public var gyro: GameGyro?
+    public var controllerMap: ControllerMap?
 
     public init(layout: OnScreenLayout? = nil, opacity: Double? = nil, dpad: OnScreenDpad? = nil,
-                rightStick: OnScreenRightStick? = nil, gyro: GameGyro? = nil) {
+                rightStick: OnScreenRightStick? = nil, gyro: GameGyro? = nil, controllerMap: ControllerMap? = nil) {
         self.layout = layout; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick; self.gyro = gyro
+        self.controllerMap = controllerMap
     }
 
-    public var isEmpty: Bool { layout == nil && opacity == nil && dpad == nil && rightStick == nil && (gyro?.isEmpty ?? true) }
+    enum CodingKeys: String, CodingKey { case layout, opacity, dpad, rightStick, gyro, controllerMap }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        layout = try c.decodeIfPresent(OnScreenLayout.self, forKey: .layout)
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity)
+        dpad = try c.decodeIfPresent(OnScreenDpad.self, forKey: .dpad)
+        rightStick = try c.decodeIfPresent(OnScreenRightStick.self, forKey: .rightStick)
+        gyro = try c.decodeIfPresent(GameGyro.self, forKey: .gyro)
+        controllerMap = (try? c.decodeIfPresent(ControllerMap.self, forKey: .controllerMap)) ?? nil
+    }
+
+    public var isEmpty: Bool {
+        layout == nil && opacity == nil && dpad == nil && rightStick == nil && (gyro?.isEmpty ?? true) && controllerMap == nil
+    }
+
+    /// The game's controller map, else the default.
+    public func controllerMap(over defaults: ControlsDefaults) -> ControllerMap { controllerMap ?? defaults.controllerMap }
 
     /// The same, with a gyro that sets nothing dropped (what the store saves).
     public var normalized: GameControls {

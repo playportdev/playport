@@ -6,13 +6,13 @@
 ///
 /// Saved layouts (PlayportKit ControlLayout) keep an action as its `name`:
 /// `pad:a`, `pad:leftStick`, `key:0x20`, `key:shift+0x31`, `mouse:left`,
-/// `mouse:wheelUp`, `playport:menu`.
+/// `mouse:wheelUp`, `mouse:move`, `playport:menu`.
 public enum InputAction: Hashable, Sendable {
     /// A control of the XInput pad in slot 0.
     case pad(PadControl)
     /// A Windows virtual key, with the modifiers held around it.
     case key(UInt8, KeyModifiers)
-    /// A mouse button, or one notch of the wheel.
+    /// A mouse button, one notch of the wheel, or a stick's motion.
     case mouse(MouseAction)
     /// Playport's own: the in-game menu.
     case playport(PlayportAction)
@@ -53,6 +53,9 @@ public struct KeyModifiers: OptionSet, Hashable, Sendable {
 
 public enum MouseAction: String, CaseIterable, Sendable {
     case left, right, middle, wheelUp, wheelDown
+    /// Relative motion: a controller's stick bound whole to it moves the mouse
+    /// (MappedPad); nothing else takes it (a touch button with it moves nothing).
+    case move
 }
 
 public enum PlayportAction: String, CaseIterable, Sendable {
