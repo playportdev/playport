@@ -31,7 +31,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
   phase's one phone session is its own last chunk, and **every phase then waits for the
   owner's hands-on sign-off** before the next phase starts. The owner's feedback becomes
   a fix chunk.
-- **Running:** nothing; waiting for the owner's phase 1 sign-off.
+- **Running:** 1c, the second phase 1 fix chunk (owner feedback on 1b).
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -49,26 +49,38 @@ proposed answer unless the owner says otherwise before the phase that needs them
      out of the zones, with a gap and larger hit areas, so a press on them never starts
      a stick.
   6. View and Menu become small buttons at the top by the bumpers, inside the safe area.
+- **Owner feedback on 1b (2026-10-13), settled:**
+  1. Controls switched on in-game, after the game started with them Off, respond only
+     after a long delay. Find the cause first (Playport, or the game's XInput reconnect
+     polling), then fix it.
+  2. The d-pad and A/B/X/Y look and feel the same size: A/B/X/Y closer together.
+  3. **The d-pad and the right stick are off by default.** Both are per-game options in
+     the in-game Controls panel, with defaults in Settings › Controls:
+     - D-pad: Off or On. When on, it is centred above the left stick's zone.
+     - Right stick: Off, Below A/B/X/Y or Above A/B/X/Y, centred horizontally on
+       A/B/X/Y in both cases.
+  4. No outlines on the stick zones.
 - **Queue:**
-  1. **Phase 1 sign-off (owner), next:** play Hollow Knight with only the touch overlay:
+  1. **1c (fix), running:** owner feedback on 1b above; a short phone session.
+  2. **Phase 1 sign-off (owner):** play Hollow Knight with only the touch overlay:
      several fingers at once, the floating sticks, haptics, the first-time toast, a
      controller connecting mid-game, both landscape orientations; and 1b's checks (its
      evidence, "Not checked here").
-  2. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
-  3. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+  3. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
+  4. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
-  4. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+  5. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
-  5. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
+  6. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
      chunk follows.
-  6. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
-  7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
+  7. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
+  8. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
-  8. **3b:** the Controller page and the ActionPicker.
-  9. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+  9. **3b:** the Controller page and the ActionPicker.
+  10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
-  10. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+  11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
       a controller. Then stop.
 - **Phone:** dev IPA `4cfadad8…` installed; unattended mode on; Hollow Knight's own
   on-screen controls are Off (the owner's setting, left as found); Hollow Knight's profile
