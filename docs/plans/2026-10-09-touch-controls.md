@@ -220,16 +220,19 @@ proposed answer unless the owner says otherwise before the phase that needs them
      connected too); Y over an edited Custom table asks first (`ControllerMapConfirm.useDefault`);
      Reset all's Keep changes nothing; the Controller row's "Default ·"; two stale texts.
      Two sources sharing one key or button release each other early: a note only, tracked in
-     [PLA-339](https://linear.app/playportdev/issue/PLA-339). Dev IPA `7566e31a…` built and
-     verified. **Next:** one phone session on it that combines 2f's and 3c's scripts (the
-     phone is back, DualShock 4 connected; the controller's physical steps are the owner's).
+     [PLA-339](https://linear.app/playportdev/issue/PLA-339). Dev IPA `7566e31a…` built, verified and
+     installed ([evidence](../evidence/2026-10-13-touch-controls-R.md); Hollow Knight
+     `first-frame+10` passed). **R done (host).** The combined 2f + 3c phone session
+     (`.work/agent-notes/pla-13-v2/phone-session-R.sh`, with gates for the owner's controller
+     steps and the scripted pad's slot) stopped after the install and the smoke run: **the 2f and
+     3c phone parts are pending (owner paused the phone).**
   11. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
   12. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
-- **Phone:** dev IPA `1acd7cab…` (2e) installed; unattended mode off (the owner is at the
-  phone); Hollow Knight's own on-screen controls are Off and Portal 2's controls and launch
-  arguments are cleared (2e restored them); Hollow Knight's profile
+- **Phone:** dev IPA `7566e31a…` (R) installed; unattended mode off (the owner is at the
+  phone); Portal 2's controls and launch arguments are cleared (2e restored them); Hollow
+  Knight's controls drew as Gamepad in R's smoke run (expected Off; not changed there); Hollow Knight's profile
   slot 3 may now hold a King's Pass save rather than New Game (check it before a
   measured run that uses `tools/pad/hk-new-slot.txt`).
 - **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
