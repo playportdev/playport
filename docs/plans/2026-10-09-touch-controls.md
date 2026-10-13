@@ -150,13 +150,13 @@ proposed answer unless the owner says otherwise before the phase that needs them
        some time into play. The owner found it too slow (set 2–2.5×) and laggy compared with
        the physical right stick; mouse mode with the phone's gyro feels great.
   6. **2e (fix), running:** the three decisions and the background bug above; one short
-     phone session; then the owner's phase 2 sign-off.
+     phone session.
   7. **2f (controller gyro):** deliver the controller's motion off the main thread, near its
      own rate, with better timestamps. Derive gravity for a pad without it from low-passed
      acceleration, not raw acceleration. Check the DualShock/DualSense axis mapping and
      scale against the phone (the same physical turn should give the same counts), and
      consider a source-specific default sensitivity. Host tests first, one short phone
-     session, then the owner plays with the controller again. The 125 Hz cap is decided
+     session, then the owner's phase 2 sign-off (phone gyro and controller). The 125 Hz cap is decided
      after 2f measures the new rate.
   8. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
