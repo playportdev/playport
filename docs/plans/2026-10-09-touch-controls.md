@@ -207,9 +207,18 @@ proposed answer unless the owner says otherwise before the phase that needs them
      connected (its rows scroll where they do not fit), `open:ID#controller`,
      `open:settings#controller`. Dev IPA `2c985b4d…` built and verified, not installed. **Next:** the
      phone sessions once the owner unpauses it: 2f's, then 3c.
-  10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+  10. **R (review fixes), running, host only:** two read-only reviews of `412de5f..16ffafc`
+     (owner asked, 2026-10-13; reports left in the build area under
+     `.work/agent-notes/pla-13-v2/review/`) found no blocker. Fix before the sign-offs:
+     one unreadable record in `controls.games` erases every game's controls; a pad button
+     mapped to `playport:menu` is read again as a menu press; NaN gyro samples can trap in
+     mouse mode; the gyro chip is never drawn with the layout Off or a controller connected;
+     Y wipes an edited Custom table unasked. Also the low findings, and the plan body's text
+     still describing tap-as-click and the Playport button. Two controllers sharing one
+     key or button release each other early: a note only, tracked in [PLA-339](https://linear.app/playportdev/issue/PLA-339).
+  11. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
-  11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+  12. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
 - **Phone:** dev IPA `1acd7cab…` (2e) installed; unattended mode off (the owner is at the
   phone); Hollow Knight's own on-screen controls are Off and Portal 2's controls and launch
