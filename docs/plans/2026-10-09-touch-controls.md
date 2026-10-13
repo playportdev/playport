@@ -47,7 +47,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
   (calibration, player space, smoothing, mouse and right-stick outputs, pause), its output
   into `InputMixer` (right stick added and clamped; mouse as `move(dx, dy)`), PlayportKit
   `GyroSettings` and `GameGyro`, with host tests; nothing reads a sensor yet.
-- **Running next:** 2b.
+- **Running:** 2b (writer launched 2026-10-13).
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -79,7 +79,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
 - **Queue:**
   1. **2a, done:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host
      tests; plus the A/B/X/Y size tweak as its own commit.
-  2. **2b, next:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+  2. **2b, running:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
   3. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
