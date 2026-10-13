@@ -15,9 +15,11 @@
 ///   the device is still: over the last `stillWindow` seconds every axis
 ///   stayed within `stillSpread` (max − min), the mean rate is under
 ///   `maxBias`, and gravity's direction moved less than `stillGravitySpread`.
-///   The first still window sets the bias to its mean; later ones move it
-///   toward theirs with time constant `biasTimeConstant`. Nothing is learnt
-///   from a window with any motion in it, so a held aim is never taken for bias.
+///   The first estimate needs only `firstStillWindow` seconds (a pad just put
+///   down or connected is drifting until then: touch controls 2f) and sets the
+///   bias to its mean; later windows are `stillWindow` long and move it toward
+///   theirs with time constant `biasTimeConstant`. Nothing is learnt from a
+///   window with any motion in it, so a held aim is never taken for bias.
 /// - **Turn axis.** Player space (the default) turns about the world's
 ///   vertical however the device is tilted: the rate's component about
 ///   gravity, relaxed by `playerSpaceRelax` toward the yaw-and-roll rate so a
@@ -48,6 +50,7 @@ import Foundation
 
 public struct GyroAim: Sendable {
     public static let stillWindow = 1.0                         // s
+    public static let firstStillWindow = 0.5                    // s, until the first estimate
     public static let stillSpread = 0.04                        // rad/s, max − min per axis (≈ 2.3 °/s)
     public static let maxBias = 0.05                            // rad/s (≈ 2.9 °/s)
     public static let stillGravitySpread = 0.02                 // unit vector, max − min per axis (≈ 1.1°)
@@ -172,10 +175,12 @@ public struct GyroAim: Sendable {
     private mutating func calibrate(_ s: GyroSample, dt: Double) {
         window.append(s)
         while window.count > 1, window[1].time <= s.time - Self.stillWindow { window.removeFirst() }
-        guard let first = window.first, first.time <= s.time - Self.stillWindow, window.count > 1 else { return }
-        var lo = window[0].rate, hi = lo, sum = GyroVector.zero
-        var glo = window[0].gravity.unit, ghi = glo
-        for w in window {
+        let span = calibrated ? Self.stillWindow : Self.firstStillWindow
+        guard let start = window.lastIndex(where: { $0.time <= s.time - span }), window.count - start > 1 else { return }
+        let still = window[start...]
+        var lo = window[start].rate, hi = lo, sum = GyroVector.zero
+        var glo = window[start].gravity.unit, ghi = glo
+        for w in still {
             lo = lo.min(w.rate); hi = hi.max(w.rate); sum = sum + w.rate
             let g = w.gravity.unit
             glo = glo.min(g); ghi = ghi.max(g)
@@ -184,7 +189,7 @@ public struct GyroAim: Sendable {
         guard spread.x <= Self.stillSpread, spread.y <= Self.stillSpread, spread.z <= Self.stillSpread,
               gspread.x <= Self.stillGravitySpread, gspread.y <= Self.stillGravitySpread, gspread.z <= Self.stillGravitySpread
         else { return }
-        let mean = sum * (1 / Double(window.count))
+        let mean = sum * (1 / Double(still.count))
         guard mean.length <= Self.maxBias else { return }
         if calibrated {
             bias = bias + (mean - bias) * (1 - exp(-dt / Self.biasTimeConstant))

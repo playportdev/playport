@@ -55,11 +55,15 @@ final class GyroAimTests: XCTestCase {
         let bias = GyroVector(x: 0.01, y: -0.02, z: 0.015)
         var noise = Noise(state: 1)
         var aim = GyroAim(config: .init(output: .mouse))
-        // Less than a window of stillness: nothing learnt yet.
-        Self.run(&aim, from: 0, seconds: 0.99) { _ in bias + noise.vector(0.003) }
+        // Less than the first window of stillness: nothing learnt yet.
+        Self.run(&aim, from: 0, seconds: 0.49) { _ in bias + noise.vector(0.003) }
         XCTAssertFalse(aim.calibrated)
         XCTAssertEqual(aim.bias, .zero)
-        Self.run(&aim, from: 0.99, seconds: 2) { _ in bias + noise.vector(0.003) }
+        // Half a second still is enough for the first estimate (a pad just put down: touch controls 2f).
+        Self.run(&aim, from: 0.49, seconds: 0.02) { _ in bias + noise.vector(0.003) }
+        XCTAssertTrue(aim.calibrated)
+        assertNear(aim.bias, bias, 0.002, "the first estimate")
+        Self.run(&aim, from: 0.51, seconds: 2.48) { _ in bias + noise.vector(0.003) }
         XCTAssertTrue(aim.calibrated)
         assertNear(aim.bias, bias, 0.001, "still: the bias converges")
 
@@ -99,13 +103,14 @@ final class GyroAimTests: XCTestCase {
         XCTAssertGreaterThan(abs(bias.y) * Self.degrees * GyroAim.mouseCountsPerDegree * 20, 250)
     }
 
-    /// Within the first second (no calibration yet), so the steps are the gyro's alone.
+    /// Within the first still window (no calibration yet), so the steps are the gyro's alone.
     func testSmoothingOnlyAtSmallSpeeds() {
         let window = Int(GyroAim.smoothingWindow * Self.hz)   // 32 samples
         func first(after rate: Double) -> (x: Double, y: Double, settled: Double) {
             var aim = GyroAim(config: .init(output: .rightStick, turnAxis: .yaw))
-            Self.run(&aim, from: 0, seconds: 0.5) { _ in .zero }
-            let out = Self.run(&aim, from: 0.5, seconds: 0.25) { _ in GyroVector(x: 0, y: rate, z: 0) }
+            Self.run(&aim, from: 0, seconds: 0.2) { _ in .zero }
+            let out = Self.run(&aim, from: 0.2, seconds: 0.25) { _ in GyroVector(x: 0, y: rate, z: 0) }
+            XCTAssertFalse(aim.calibrated)
             let a = Self.stick(out.first), b = Self.stick(out.last)
             return (a.x, a.y, b.x)
         }

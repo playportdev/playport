@@ -93,6 +93,38 @@ final class GyroSourcesTests: XCTestCase {
         XCTAssertEqual(Double(mouse(rate: about, gravity: tilted, map: GyroFrame.controller).dx), Double(left.dx), accuracy: 2)
     }
 
+    /// The same physical turn of the phone (landscape, upright) and of a pad held
+    /// normally (tilted toward the player, gravity estimated from its acceleration)
+    /// gives the same counts with the same sign: both are rad/s (CMRotationRate,
+    /// GCRotationRate), both onto the aim frame. Per Apple's GCMotion.h frame.
+    func testThePhoneAndAPadTurnTheAimAlike() {
+        let w = 1.2   // rad/s to the left about the world's vertical, for 0.5 s
+        let phone = mouse(rate: GyroVector(x: w, y: 0, z: 0), gravity: GyroVector(x: -1, y: 0, z: 0)) {
+            GyroFrame.phone($0, .landscapeRight)
+        }
+        XCTAssertLessThan(phone.dx, -100)
+        for tilt in [0.0, Double.pi / 6, Double.pi / 4] {
+            let up = GyroVector(x: 0, y: sin(tilt), z: cos(tilt))
+            var aim = GyroAim(config: .init(output: .mouse))
+            var g = GyroGravityEstimate()
+            var sum = (dx: 0, dy: 0)
+            // A second at rest so the estimate settles, then the turn (the phone's sum starts at its first sample).
+            for i in 0..<Int(Self.hz) {
+                _ = g.add(time: Double(i) / Self.hz, rate: .zero, acceleration: GyroFrame.controller(up * -1))
+            }
+            for i in 0..<Int(0.5 * Self.hz) {
+                let t = 1 + Double(i) / Self.hz
+                let rate = GyroFrame.controller(up * w)
+                let gravity = g.add(time: t, rate: rate, acceleration: GyroFrame.controller(up * -1))
+                if case .mouse(let dx, let dy) = aim.add(GyroSample(time: t, rate: rate, gravity: gravity)) {
+                    sum.dx += Int(dx); sum.dy += Int(dy)
+                }
+            }
+            XCTAssertEqual(Double(sum.dx), Double(phone.dx), accuracy: 2, "tilt \(tilt)")
+            XCTAssertEqual(sum.dy, 0, "tilt \(tilt)")
+        }
+    }
+
     func testTheCoalescerSendsAtMostOneMovePerInterval() {
         // The iPhone's 100 Hz: every sample is sent.
         var c = GyroMouseCoalescer()
