@@ -133,27 +133,92 @@ final class ControllerMapPageTests: XCTestCase {
         XCTAssertEqual(ControllerMapConfirm.copyPreset.outcome("keep", for: km), .save(mine))
     }
 
-    func testThePressesThatRingARow() {
-        XCTAssertEqual(ControllerMapRow.row(for: .lb), .lb)
-        XCTAssertEqual(ControllerMapRow.row(for: .view), .back)
-        XCTAssertEqual(ControllerMapRow.row(for: .menu), .start)
-        // The page moves with these.
-        for b in [NavButton.a, .b, .y, .up, .down, .left, .right] { XCTAssertNil(ControllerMapRow.row(for: b), b.rawValue) }
-        var rest = PadInput(), p = PadInput()
-        p.rightTrigger = 0.6
-        XCTAssertEqual(ControllerMapRow.pressed(from: rest, to: p), .rt)
-        XCTAssertNil(ControllerMapRow.pressed(from: p, to: p))          // held: once
-        p = PadInput(); p.leftTrigger = 0.4
-        XCTAssertNil(ControllerMapRow.pressed(from: rest, to: p))
-        p = PadInput(); p.rightThumb = true
-        XCTAssertEqual(ControllerMapRow.pressed(from: rest, to: p), .rs)
-        p = PadInput(); p.rx = 0.4; p.ry = -0.4
-        XCTAssertEqual(ControllerMapRow.pressed(from: rest, to: p), .rightStick)
-        p = PadInput(); p.lx = 1                                         // the left stick moves the ring
-        XCTAssertNil(ControllerMapRow.pressed(from: rest, to: p))
-        rest.leftThumb = true
-        p = rest
-        XCTAssertNil(ControllerMapRow.pressed(from: rest, to: p))
+    /// The ring (touch controls U, replacing 3b's press-an-input-to-ring-its-row): down alone
+    /// reaches every item in every mode, up walks back, and left and right cross the header or
+    /// the columns at the same row.
+    func testTheRingReachesEveryInputInEveryMode() {
+        let inputs = Set(ControllerMapRow.allCases.map(\.itemID))
+        for mode in ControllerMap.Mode.allCases {
+            var seen: [String] = []
+            var at = ControllerMapNav.next(from: nil, .up, mode: mode)
+            XCTAssertEqual(at, ControllerMapNav.modeID, "the ring starts on the mode switch")
+            at = ControllerMapNav.header(mode).first!
+            while seen.last != at {
+                seen.append(at)
+                at = ControllerMapNav.next(from: at, .down, mode: mode)
+            }
+            XCTAssertEqual(seen, ControllerMapNav.order(mode), mode.rawValue)
+            XCTAssertTrue(inputs.isSubset(of: Set(seen)), "every input in \(mode.rawValue)")
+            XCTAssertEqual(seen.count, Set(seen).count)
+            // Up walks back to the header's first item.
+            var back = seen.last!
+            for _ in seen { back = ControllerMapNav.next(from: back, .up, mode: mode) }
+            XCTAssertEqual(back, seen.first)
+            XCTAssertEqual(seen.contains(ControllerMapNav.lookSpeedID), mode != .controller, mode.rawValue)
+        }
+        // Columns down, then across: the header, LT…Menu, Look speed, RT…R3.
+        XCTAssertEqual(ControllerMapNav.order(.custom),
+                       ["ctl:resetAll", "ctl:mode", "ctl:lt", "ctl:lb", "ctl:leftStick", "ctl:ls", "ctl:dpad", "ctl:back", "ctl:start",
+                        "ctl:lookSpeed", "ctl:rt", "ctl:rb", "ctl:y", "ctl:x", "ctl:b", "ctl:a", "ctl:rightStick", "ctl:rs"])
+        XCTAssertEqual(ControllerMapNav.header(.keyboardMouse), ["ctl:copy", "ctl:mode"])
+        XCTAssertEqual(ControllerMapNav.header(.controller), ["ctl:mode"])
+        // Across: the same row of the other column; the header's two; the edges stay.
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:lt", .right, mode: .custom), "ctl:rt")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:start", .right, mode: .custom), "ctl:rightStick")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:rs", .left, mode: .custom), "ctl:start")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:b", .left, mode: .controller), "ctl:dpad")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:lt", .left, mode: .custom), "ctl:lt")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:rt", .right, mode: .custom), "ctl:rt")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:mode", .left, mode: .keyboardMouse), "ctl:copy")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:copy", .right, mode: .keyboardMouse), "ctl:mode")
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:mode", .down, mode: .controller), "ctl:lt")
+        // An item of another mode's page (Reset all after a switch to Controller): the mode switch.
+        XCTAssertEqual(ControllerMapNav.next(from: "ctl:resetAll", .down, mode: .controller), "ctl:mode")
+        XCTAssertEqual(ControllerMapRow(itemID: "ctl:rt"), .rt)
+        XCTAssertNil(ControllerMapRow(itemID: "ctl:mode"))
+    }
+
+    /// LB and RB cycle the mode from anywhere, going round; Custom keeps its table across them.
+    func testLBAndRBCycleTheMode() throws {
+        XCTAssertEqual(ControllerMapNav.cycle(.controller, by: 1), .keyboardMouse)
+        XCTAssertEqual(ControllerMapNav.cycle(.keyboardMouse, by: 1), .custom)
+        XCTAssertEqual(ControllerMapNav.cycle(.custom, by: 1), .controller)
+        XCTAssertEqual(ControllerMapNav.cycle(.controller, by: -1), .custom)
+        let edited = try XCTUnwrap(ControllerMapEdit.setting(.control(.b), .key(0x31, []), in: preset))
+        var m = ControllerMap(mode: .custom, custom: edited)
+        for _ in 0..<3 { m.mode = ControllerMapNav.cycle(m.mode, by: 1) }
+        XCTAssertEqual(m, ControllerMap(mode: .custom, custom: edited))
+    }
+
+    /// A on an input: in Custom its editor at once; in Keyboard & mouse "Edit a copy?" first; in
+    /// As a controller "Switch to Custom?" first. Either way the first choice changes nothing, and
+    /// the other saves Custom (the input's editor then opens).
+    func testAOnAnInputPerMode() throws {
+        XCTAssertNil(ControllerMapConfirm.forEditing(ControllerMap(mode: .custom)))
+        XCTAssertEqual(ControllerMapConfirm.forEditing(ControllerMap(mode: .keyboardMouse)), .editCopy)
+        XCTAssertEqual(ControllerMapConfirm.forEditing(ControllerMap(mode: .controller)), .useCustom)
+        let edited = try XCTUnwrap(ControllerMapEdit.setting(.control(.b), .key(0x31, []), in: preset))
+        XCTAssertEqual(ControllerMapConfirm.forEditing(ControllerMap(mode: .keyboardMouse, custom: edited)), .copyPreset)
+        XCTAssertEqual(ControllerMapConfirm.forEditing(ControllerMap(mode: .controller, custom: edited)), .useCustom)
+
+        let km = ControllerMap(mode: .keyboardMouse)
+        let copy = ControllerMapConfirm.editCopy
+        XCTAssertEqual(copy.title, "Edit a copy of Keyboard & mouse?")
+        XCTAssertEqual(copy.options.map(\.id), ["keep", "reset"])
+        XCTAssertEqual(copy.options.first?.id, copy.defaultChoice)
+        XCTAssertEqual(copy.outcome("keep", for: km), .unchanged)
+        XCTAssertEqual(copy.outcome("reset", for: km), .save(ControllerMap(mode: .custom)))
+
+        let pad = ControllerMap(mode: .controller, custom: edited)
+        let custom = ControllerMapConfirm.useCustom
+        XCTAssertEqual(custom.options.map(\.id), ["keep", "custom"])
+        XCTAssertEqual(custom.options.first?.id, custom.defaultChoice)
+        XCTAssertEqual(custom.outcome("keep", for: pad), .unchanged)
+        // Its own table kept.
+        XCTAssertEqual(custom.outcome("custom", for: pad), .save(ControllerMap(mode: .custom, custom: edited)))
+    }
+
+    func testTheModesTitles() {
         XCTAssertEqual(ControllerMap.Mode.allCases.map(\.title), ["As a controller", "As keyboard & mouse", "Custom"])
     }
 }

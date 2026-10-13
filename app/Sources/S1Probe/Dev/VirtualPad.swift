@@ -37,8 +37,11 @@ final class VirtualPad: @unchecked Sendable {
     private var stamp: (Date?, Int)? = nil
     private var script = PadScript(), t0: UInt64 = 0, step: Int? = nil, ticks = 0, loads = 0
     private var menuSeen = PadInput()
+    /// Started (set once, on the main thread): the in-game menu names it, as GameController knows nothing of it.
+    private(set) var connected = false
 
     func start(path: String, slot: Int) {
+        connected = true
         queue.async { [self] in
             self.path = path
             self.slot = slot

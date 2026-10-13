@@ -131,6 +131,8 @@ struct PadModalHost: View {
 /// A modal's own footer entry: its glyph and label, a tap runs it.
 struct PadModalHint: View {
     let button: NavButton
+    /// A second button for the same thing (LB RB Tabs).
+    var also: NavButton? = nil
     let label: String
     let action: () -> Void
 
@@ -138,6 +140,7 @@ struct PadModalHint: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 PadGlyph(button: button)
+                if let also { PadGlyph(button: also) }
                 Text(label).font(.system(size: 13)).foregroundStyle(PP.soft)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)

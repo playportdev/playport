@@ -311,7 +311,7 @@ final class ControlsSettingsTests: XCTestCase {
 
     func testTheSummaryAndOpacitySteps() {
         XCTAssertEqual(ControlsState(layout: .gamepad, visible: true, opacity: 0.6).summary, "Gamepad · 60%")
-        XCTAssertEqual(ControlsState(layout: .gamepad, visible: false, opacity: 0.6).summary, "Gamepad · controller connected")
+        XCTAssertEqual(ControlsState(layout: .gamepad, visible: false, opacity: 0.6).summary, "Gamepad · hidden")
         XCTAssertEqual(ControlsState(layout: .off, visible: false, opacity: 0.6).summary, "Off")
         XCTAssertEqual(ControlsOpacity.step(0.6, by: 1), 0.7)
         XCTAssertEqual(ControlsOpacity.step(1.0, by: 1), 1.0)

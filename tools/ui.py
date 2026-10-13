@@ -23,8 +23,13 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          open:ID#controller opens its Controller page (the game's controller map: the
                          mode ctl:mode, Look speed ctl:lookSpeed, Edit a copy ctl:copy, Reset all
                          ctl:resetAll, a row per input ctl:a, ctl:lt, ctl:leftStick, ctl:dpad...;
-                         pad:x/lb/rb/view/menu ring their rows, pad:a on a Custom row opens the
-                         ActionPicker, whose tabs pad:lb/rb switch, pad:x waits for a hardware key);
+                         pad:up/down/left/right move one ring through every item in every mode
+                         (down walks the header, the left column, Look speed, the right column),
+                         pad:lb/rb cycle the mode, pad:a edits the ringed input (in Custom the
+                         ActionPicker at once; as keyboard & mouse "Edit a copy?" first, as a
+                         controller "Switch to Custom?" first), pad:y resets it, pad:b goes back; in
+                         the ActionPicker pad:lb/rb switch tabs, pad:x waits for a hardware key,
+                         pad:b cancels);
                          open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
                          controls, storage, setup, about, developer; also account, jit, memory,
                          diagnostics, pairing, probes, logs for the section that holds them,
@@ -110,7 +115,10 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          (On-screen controls: Off, Gamepad; D-pad: Off, On; Right stick: Off, Below, Above
                          A/B/X/Y; Opacity; Gyro aim: Off, Mouse, Right stick; Sensitivity; and, while a
                          controller is connected, --pad's scripted pad too, Controller: Pad, Keys &
-                         mouse, Custom), pad:down/up move, pad:b goes back.
+                         mouse, Custom), pad:down/up move, pad:b goes back. pad:a on Controller (or
+                         choosing Custom there) opens the Controller page over the paused game, which
+                         pad: then drives as on a game page (the ActionPicker too); pad:b comes back
+                         to the panel. The menu keeps the pads from the game all along.
                          menu:screenshot saves the frame to Photos (the first time iOS asks a person
                          to allow it) and, in a dev build, to Documents/Screenshots; menu:quit closes
                          the game's windows, and the run follows Playport's restart as for play:.

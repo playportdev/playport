@@ -241,9 +241,10 @@ public struct ControlsState: Equatable, Sendable {
                              padConnected: shown || !controllerConnected)
     }
 
-    /// The in-game menu's Controls row: `Gamepad · 60%`, `Off`, `Gamepad · controller connected` while a controller hides it.
+    /// The in-game menu's Controls row: `Gamepad · 60%`, `Off`, `Gamepad · hidden` while a controller
+    /// hides it (short: "controller connected" was cut off there, touch controls 3c).
     public var summary: String {
         guard layout != .off else { return layout.title }
-        return layout.title + " · " + (visible ? ControlsOpacity.label(opacity) : "controller connected")
+        return layout.title + " · " + (visible ? ControlsOpacity.label(opacity) : "hidden")
     }
 }

@@ -4,21 +4,27 @@
 // controller does in a game, as a controller or as a keyboard and mouse.
 //
 // - Opened from Game options › Controls › Controller (AppRoutes.GamePanel.controller,
-//   over the whole game page) for the game's own map, and from Settings ›
+//   over the whole game page) for the game's own map, from Settings ›
 //   Controls › Controller (AppRoutes.settingsControllerMap, in Settings' place)
-//   for the default every game follows.
+//   for the default every game follows, and from the in-game menu's Controls
+//   panel over the paused game (InGameControllerPage, UI/InGameMenuView.swift),
+//   where the menu's presses drive it (ControllerMapRing.pagePress).
+// - The ring (PlayportKit ControllerMapNav; owner, 2026-10-13, touch controls U,
+//   replacing 3b's "press a controller's input to ring its row"): the D-pad and
+//   the left stick move it through every item in every mode, LB and RB cycle
+//   the mode from anywhere, A edits, Y resets, B goes back. No button press
+//   rings or edits a row by itself.
 // - The mode switch at the top right: As a controller, As keyboard & mouse,
-//   Custom (left and right, or a tap). A game's own has the amber dot, and Y
+//   Custom (LB and RB, A on it, or a tap). A game's own has the amber dot, and Y
 //   puts it back to Settings' (asking first over an edited Custom table).
-// - The pad's picture in the middle, its inputs' rows down both sides (none in
-//   As a controller: the game sees an Xbox pad). Pressing an input rings its
-//   row (ControllerMapRow.row(for:), .pressed(from:to:)); the ringed input is
-//   amber in the picture. Home is Playport's, labelled, never a row.
-// - As keyboard & mouse the rows are the preset's, read only: A on one, or
-//   Edit a copy, goes to Custom with a copy (asking first over a Custom table
-//   of the player's own). In Custom, A on a row opens the ActionPicker (a
-//   stick's or the D-pad's list first), Y puts that row back to the preset, and
-//   Reset all asks, then puts every row back.
+// - The pad's picture in the middle, its inputs' rows down both sides ("As the
+//   controller" in As a controller); the ringed input is amber in the picture.
+//   Home is Playport's, labelled, never a row.
+// - A on an input: in Custom the ActionPicker (a stick's or the D-pad's list
+//   first); as keyboard & mouse (read only) "Edit a copy?" first, as a
+//   controller "Switch to Custom?" first, then the same in Custom
+//   (ControllerMapConfirm.forEditing). Y in Custom puts the row back to the
+//   preset; Edit a copy and Reset all ask first over the player's own table.
 // - Look speed (Keyboard & mouse and Custom): how fast a stick bound to mouse
 //   look turns the view (PlayportKit LookSpeed); a game's own has the dot, Y clears it.
 //
@@ -125,8 +131,6 @@ struct ControllerMapView: View {
     @ObservedObject private var store = ControlsStore.shared
     @ObservedObject private var focus = PadFocus.shared
     @ObservedObject private var modal = PadModal.shared
-    /// The last pad snapshot (LT, RT, L3, R3 and the right stick ring their rows as they go down).
-    @State private var lastPad = PadInput()
 
     var body: some View {
         let map = ControllerMapAccess.map(target)
@@ -152,29 +156,28 @@ struct ControllerMapView: View {
         .padding(.horizontal, 44).padding(.top, 14).padding(.bottom, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(PP.background.ignoresSafeArea())
-        .onReceive(PadRouter.shared.snapshots) { pad in
-            defer { lastPad = pad }
-            guard !modal.isUp, let row = ControllerMapRow.pressed(from: lastPad, to: pad) else { return }
-            ringRow(row)
+        .onReceive(ControllerMapRing.moves) { d in
+            guard !modal.isUp else { return }
+            move(d)
         }
-        .onReceive(PadRouter.shared.presses) { b in
-            // X, LB, RB, View and Menu ring their rows (the shell does nothing else with them here).
-            guard !modal.isUp, let row = ControllerMapRow.row(for: b) else { return }
-            ringRow(row)
+        .onReceive(ControllerMapRing.modeSteps) { by in
+            // The ring stays where it is (an item the new mode has not comes back to the page's first).
+            guard !modal.isUp else { return }
+            setMode(ControllerMapNav.cycle(ControllerMapAccess.map(target).mode, by: by))
         }
         .accessibilityIdentifier("controller-page")
     }
 
     /// The input under the ring, for the picture.
-    private var ringedRow: ControllerMapRow? {
-        guard let id = focus.focused, id.hasPrefix("ctl:") else { return nil }
-        return ControllerMapRow(rawValue: String(id.dropFirst(4)))
-    }
+    private var ringedRow: ControllerMapRow? { focus.focused.flatMap(ControllerMapRow.init(itemID:)) }
 
-    /// A pressed input's row, when the rows are on the ring.
-    private func ringRow(_ row: ControllerMapRow) {
-        guard ControllerMapAccess.map(target).mode != .controller else { return }
-        focus.ring(row.itemID)
+    /// A direction: the ring's next item (ControllerMapNav); left and right on Look speed change it.
+    private func move(_ d: FocusDirection) {
+        let mode = ControllerMapAccess.map(target).mode
+        if d == .left || d == .right, focus.focused == Self.lookSpeedID, mode != .controller {
+            return stepLookSpeed(d == .left ? -1 : 1)
+        }
+        focus.ring(ControllerMapNav.next(from: focus.focused, d, mode: mode))
     }
 
     // MARK: the header: the title, the mode, Edit a copy or Reset all
@@ -224,7 +227,6 @@ struct ControllerMapView: View {
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? PP.accent : PP.line, lineWidth: selected ? 2 : 1))
         }
         .padItem(Self.modeID, hint: "Change", cornerRadius: 10,
-                 adjust: { by in setMode(modes[max(0, min(modes.count - 1, modes.firstIndex(of: map.mode)! + by))]) },
                  reset: own ? {
                      ControllerMapAccess.resetToDefault(target, context: context) { ControllerMapAccess.save(nil, target) }
                  } : nil, ring: false) {
@@ -264,8 +266,8 @@ struct ControllerMapView: View {
                 .frame(width: 44, alignment: .leading).lineLimit(1)
             if map.mode == .controller {
                 // The game sees the pad as it is.
-                Text(row == .dpad ? "D-pad" : row.pad.map(ActionText.pad) ?? "").font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(PP.muted)
+                Text("As the controller").font(.system(size: 11.5, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    .foregroundStyle(selected ? PP.background : PP.muted)
             } else {
                 ForEach(Array(row.caps(in: table).enumerated()), id: \.offset) { _, cap in
                     Text(cap).font(.system(size: 11.5, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7)
@@ -281,14 +283,10 @@ struct ControllerMapView: View {
         .padding(.horizontal, 10)
         .frame(height: 26)
         .background(selected ? PP.text : PP.surface, in: RoundedRectangle(cornerRadius: 9))
-        .opacity(map.mode == .controller ? 0.6 : 1)
-        if map.mode == .controller {
-            content.accessibilityIdentifier("item-\(row.itemID)")
-        } else {
-            content.padItem(row.itemID, hint: custom ? "Change" : "Edit a copy", cornerRadius: 9,
-                         reset: changed ? { saveTable(ControllerMapEdit.reset(row, in: table)) } : nil, ring: false) {
-                custom ? change(row) : editCopy()
-            }
+        .opacity(map.mode == .controller && !selected ? 0.6 : 1)
+        content.padItem(row.itemID, hint: "Edit", cornerRadius: 9,
+                        reset: changed ? { saveTable(ControllerMapEdit.reset(row, in: table)) } : nil, ring: false) {
+            edit(row)
         }
     }
 
@@ -297,19 +295,26 @@ struct ControllerMapView: View {
         let own = ControllerMapAccess.isOwnLookSpeed(target)
         let selected = focus.focused == Self.lookSpeedID
         let ends = (LookSpeed.step(v, by: -1) == v, LookSpeed.step(v, by: 1) == v)
-        return HStack(spacing: 8) {
-            Text("Look speed").font(.system(size: 13, weight: .medium))
-            Text("Mouse look").font(.system(size: 11)).foregroundStyle(selected ? Color(hex: 0x3A4452) : PP.muted)
+        // Two lines, so it fits the narrow middle column whole (it was cut to "Look sp…" and
+        // "Default…" on a phone: touch controls 3c): "Default" goes under the title.
+        return HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Look speed").font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text("Mouse look" + (own || target == .defaults ? "" : " · Default")).font(.system(size: 10))
+                    .foregroundStyle(selected ? Color(hex: 0x3A4452) : PP.muted).lineLimit(1)
+            }
+            .fixedSize()
             Spacer(minLength: 4)
             if own { Circle().fill(PP.accent).frame(width: 7, height: 7) }
-            Text("‹").opacity(ends.0 ? 0.35 : 1).frame(minWidth: 18, minHeight: 26).contentShape(Rectangle())
+            Text("‹").opacity(ends.0 ? 0.35 : 1).frame(minWidth: 18, minHeight: 30).contentShape(Rectangle())
                 .onTapGesture { stepLookSpeed(-1) }
-            Text((own || target == .defaults ? "" : "Default · ") + LookSpeed.label(v)).font(.system(size: 13, weight: .semibold))
-            Text("›").opacity(ends.1 ? 0.35 : 1).frame(minWidth: 18, minHeight: 26).contentShape(Rectangle())
+            Text(LookSpeed.label(v)).font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
+                .accessibilityIdentifier("controller-look-speed-value")
+            Text("›").opacity(ends.1 ? 0.35 : 1).frame(minWidth: 18, minHeight: 30).contentShape(Rectangle())
                 .onTapGesture { stepLookSpeed(1) }
         }
         .foregroundStyle(selected ? PP.background : PP.text)
-        .padding(.horizontal, 12).frame(height: 30)
+        .padding(.horizontal, 12).frame(height: 34)
         .background(selected ? PP.text : PP.surface, in: RoundedRectangle(cornerRadius: 9))
         .frame(maxWidth: 300)
         .padItem(Self.lookSpeedID, hint: "Change", cornerRadius: 9, adjust: stepLookSpeed,
@@ -318,9 +323,9 @@ struct ControllerMapView: View {
 
     static func hint(_ mode: ControllerMap.Mode) -> String {
         switch mode {
-        case .controller: "The game sees an Xbox controller. Choose As keyboard & mouse for a game that reads only those."
-        case .keyboardMouse: "Press a button on the controller to find it. Edit a copy to change what it does."
-        case .custom: "Press a button on the controller to find it, or choose one. Y puts a row back."
+        case .controller: "The game sees an Xbox controller. LB and RB change the mode; A on an input changes it in Custom."
+        case .keyboardMouse: "Read only. A on an input edits it in a copy (Custom). LB and RB change the mode."
+        case .custom: "A changes the ringed input, Y puts it back. LB and RB change the mode."
         }
     }
 
@@ -387,7 +392,21 @@ struct ControllerMapView: View {
         }
     }
 
-    /// A on a Custom row: a stick's or the D-pad's list, else the ActionPicker at once.
+    /// A on an input row: in Custom its editor at once; else asked first (Edit a copy? Switch to
+    /// Custom?), then its editor in Custom.
+    private func edit(_ row: ControllerMapRow) {
+        guard let c = ControllerMapConfirm.forEditing(ControllerMapAccess.map(target)) else { return change(row) }
+        PadModal.shared.picker(title: c.title, context: (context ?? "Settings") + " · Controller · " + row.title, note: c.note,
+                               options: c.options.map { PadOption(id: $0.id, label: $0.label) },
+                               selected: c.defaultChoice) { choice in
+            guard case .save(let m) = c.outcome(choice, for: ControllerMapAccess.map(target)) else { return }
+            ControllerMapAccess.save(m, target)
+            // Its editor once this list has closed.
+            DispatchQueue.main.async { change(row) }
+        }
+    }
+
+    /// In Custom: a stick's or the D-pad's list, else the ActionPicker at once.
     private func change(_ row: ControllerMapRow) {
         let table = ControllerMapAccess.map(target).custom
         guard let parts = ControllerMapEdit.parts(row, in: table) else { return pick(.control(row.pad!)) }
@@ -419,38 +438,60 @@ struct ControllerMapView: View {
     }
 }
 
-/// The shell's presses on the Controller page: Y on the ringed row, B back (A
-/// and the directions are the ring's; X, LB, RB, View and Menu ring their rows).
+/// The presses on the Controller page, from the shell or (over a paused game) the in-game
+/// menu: the directions move the ring (ControllerMapNav, through `moves`), LB and RB cycle
+/// the mode (`modeSteps`), A edits the ringed item, Y resets it, B goes back. X, View and
+/// Menu do nothing here.
 @MainActor
 enum ControllerMapRing {
+    /// A direction for the page's ring.
+    static let moves = PassthroughSubject<FocusDirection, Never>()
+    /// LB (-1) or RB (+1): the mode before or after.
+    static let modeSteps = PassthroughSubject<Int, Never>()
+
     /// Whether the page is up (over a game's page, or in Settings' place).
     static var isUp: Bool {
         let nav = AppNavigation.shared
         return (nav.settings && nav.settingsControllerMap && !nav.signIn) || (nav.onGamePage && nav.gamePanels.last == .controller)
     }
 
-    /// The shell's press, when the page is up: true when it was the page's.
+    /// The shell's press, when the page is up: true when it was the page's (every press is).
     static func press(_ b: NavButton) -> Bool {
         guard isUp else { return false }
-        switch b {
-        case .y: PadFocus.shared.resetFocused()
-        case .b: _ = AppNavigation.shared.back()
-        case .x, .lb, .rb, .view, .menu: break   // the page rings their rows (ControllerMapView)
-        default: return false
-        }
+        pagePress(b) { _ = AppNavigation.shared.back() }
         return true
     }
 
+    /// A press on the page (no picker over it); B does `back`.
+    static func pagePress(_ b: NavButton, back: () -> Void) {
+        switch b {
+        case .up: moves.send(.up)
+        case .down: moves.send(.down)
+        case .left: moves.send(.left)
+        case .right: moves.send(.right)
+        case .lb: modeSteps.send(-1)
+        case .rb: modeSteps.send(1)
+        case .a: PadFocus.shared.activate()
+        case .y: PadFocus.shared.resetFocused()
+        case .b: back()
+        case .x, .view, .menu: break
+        }
+    }
+
     /// The footer: A on the ringed item, Y back to the default or the preset, B back.
-    static var hints: [PadHint] {
+    static var hints: [PadHint] { hints { _ = AppNavigation.shared.back() } }
+
+    /// The same, with B doing `back` (over a paused game: back to the in-game menu's panel).
+    static func hints(back: @escaping () -> Void) -> [PadHint] {
         let focus = PadFocus.shared
         var h: [PadHint] = []
         if let a = focus.hint, !a.isEmpty { h.append(PadHint(button: .a, label: a) { focus.activate() }) }
+        h.append(PadHint(button: .lb, label: "Mode", action: { modeSteps.send(1) }, also: .rb))
         if focus.canReset {
-            let row = focus.focused.map { $0.hasPrefix("ctl:") && ControllerMapRow(rawValue: String($0.dropFirst(4))) != nil } ?? false
+            let row = focus.focused.flatMap(ControllerMapRow.init(itemID:)) != nil
             h.append(PadHint(button: .y, label: row ? "Reset row" : "Back to default") { focus.resetFocused() })
         }
-        h.append(PadHint(button: .b, label: "Back") { _ = AppNavigation.shared.back() })
+        h.append(PadHint(button: .b, label: "Back", action: back))
         return h
     }
 }

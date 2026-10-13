@@ -208,6 +208,19 @@ class UiEnvTest(unittest.TestCase):
                      "controller: Settings › Controls › Controller", "Controller: Pad, Keys &"):
             self.assertIn(text, m.__doc__)
 
+    def test_the_controller_page_ring_and_the_in_game_editor_are_documented(self):
+        """The Controller page's ring (touch controls U): every item by the directions, LB/RB the mode,
+        A edits, Y resets, B back; and its in-game editor from menu:controls."""
+        m = load()
+        for text in ("move one ring through every item in every mode", "pad:lb/rb cycle the mode",
+                     "pad:y resets it", "Switch to Custom?", "pad:b cancels",
+                     "opens the Controller page over the paused game", "pad:b comes back"):
+            self.assertIn(text, m.__doc__)
+        a = m.parse(["--action", "play:app-620", "--action", "menu:open", "--action", "menu:controls",
+                     "--action", "pad:down+down+down+down+down+down+a", "--action", "pad:down+a", "--action", "pad:b+b",
+                     "--action", "menu:resume"])
+        self.assertIsNone(m.pad_after_play(a.action))
+
     def test_three_finger_tap_opens_the_menu_so_pad_after_it_is_the_menus(self):
         """gesture:three-finger-tap fires the app's three-finger tap handler (HostIO.menuGesture),
         which opens the in-game menu with or without on-screen controls: pad: after it is the menu's."""

@@ -4,13 +4,13 @@
 // every press while it is up and draws its own footer.
 //
 // - LB and RB switch the tabs (Keyboard, Mouse, Controller, Playport), the
-//   D-pad moves over the cells, A chooses (or turns a modifier chip on or
-//   off), B goes back unchanged. Every cell, chip and tab is a tap too.
+//   D-pad and the left stick move over the cells, A chooses (or turns a
+//   modifier chip on or off), B cancels (nothing changes). Every cell, chip and tab is a tap too.
 // - X, Press a real key: the next key of a hardware keyboard is chosen, with
 //   the modifiers held (and the chips on). A UIKit view takes the keyboard's
 //   presses (pressesBegan) only while it waits, and maps them through KeyMap.
-// - The Controller page opens it (UI/ControllerMapView.swift); phase 5's
-//   layout editor will open it for an on-screen control.
+// - The Controller page opens it (UI/ControllerMapView.swift), in the shell or
+//   over a paused game; phase 5's layout editor will open it for an on-screen control.
 
 import HostIOKit
 import PlayportKit
@@ -66,15 +66,21 @@ struct ActionPickerView: View {
             Color(hex: 0x05070A).opacity(0.78).ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { session.press(.b) }
+            // The footer at the bottom, where the screen's own is (it floated over the page under the
+            // scrim while the panel was short, waiting for a key: touch controls 3c); the panel in the
+            // middle of the space above it.
             VStack(spacing: 8) {
+                Spacer(minLength: 0)
                 panel(m).frame(maxWidth: 660)
+                Spacer(minLength: 0)
                 HStack(spacing: 18) {
                     Spacer(minLength: 0)
+                    PadModalHint(button: .lb, also: .rb, label: "Tabs") { session.press(.rb) }
                     PadModalHint(button: .a, label: "Choose") { session.press(.a) }
-                    if m.tabs.contains(.keyboard) {
-                        PadModalHint(button: .x, label: m.listening ? "Stop waiting" : "Press a real key") { session.press(.x) }
+                    if m.tabs.contains(.keyboard), !m.listening {
+                        PadModalHint(button: .x, label: "Press a real key") { session.press(.x) }
                     }
-                    PadModalHint(button: .b, label: "Back") { session.press(.b) }
+                    PadModalHint(button: .b, label: m.listening ? "Stop waiting" : "Cancel") { session.press(.b) }
                 }
                 .frame(height: 36)
             }

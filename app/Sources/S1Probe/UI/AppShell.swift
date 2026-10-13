@@ -14,7 +14,8 @@
 // own buttons: A on the ringed control, X Game options, B back; in the
 // options panel Y puts the ringed setting back to its default. The Controller
 // page (ControllerMapView.swift), over a game page or in Settings' place,
-// names its own: A, Y back to the default (or the row to the preset), B back. The first-run
+// takes every press and names its own: A, LB RB the mode, Y back to the default
+// (or the row to the preset), B back. The first-run
 // checklist (SetupView.swift) replaces the pages on a first run or from
 // Settings › Setup check. Sign in to Steam (SignInView.swift) covers
 // whichever of them opened it.
@@ -286,7 +287,7 @@ struct AppShell: View {
         if modal.isUp { return modal.press(b) }
         // Sign in to Steam covers everything under it (UI/SignInView.swift).
         if nav.signIn { return SignInState.shared.press(b, model) }
-        // The Controller page: Y and B, and the buttons that ring its rows (UI/ControllerMapView.swift).
+        // The Controller page: its ring, LB and RB, A, Y and B (UI/ControllerMapView.swift).
         if ControllerMapRing.press(b) { return }
         // Settings keeps the ring on its list or in the shown section (SettingsView.swift).
         if nav.settings, SettingsRing.press(b) { return }

@@ -14,10 +14,12 @@
 //   amber dot, and Y puts just that row back to the preset (`reset`). Reset all
 //   (ControllerMapConfirm.resetAll) and Edit a copy (`copyPreset`, from
 //   Keyboard & mouse) ask first when they would replace the player's own table.
-// - Pressing a controller's input rings its row, but for those the page
-//   moves with (A, B, Y, the D-pad, the left stick): X, LB, RB, View and Menu
-//   come as the router's presses (`row(for:)`), LT, RT, L3, R3 and the right
-//   stick from its snapshots (`pressed(from:to:)`).
+// - The ring (ControllerMapNav; owner, 2026-10-13, touch controls U, replacing
+//   3b's "press a controller's input to ring its row", which left rows out of
+//   reach and took B and the shoulders): the D-pad and the left stick move one
+//   ring through every item in every mode, LB and RB cycle the mode from
+//   anywhere, A edits the ringed input (`ControllerMapConfirm.forEditing`
+//   asks first outside Custom), Y resets it, B goes back.
 
 import Foundation
 import HostIOKit
@@ -96,28 +98,61 @@ public enum ControllerMapRow: String, CaseIterable, Sendable {
         }
     }
 
-    /// The row a router press rings: X, LB, RB, View, Menu (A, B, Y and the directions move the page).
-    public static func row(for b: NavButton) -> ControllerMapRow? {
-        switch b {
-        case .x: .x
-        case .lb: .lb
-        case .rb: .rb
-        case .view: .back
-        case .menu: .start
-        default: nil
+    /// The row of a ring item's id (`ctl:a`), nil for the page's other items.
+    public init?(itemID: String) {
+        guard itemID.hasPrefix("ctl:"), let r = ControllerMapRow(rawValue: String(itemID.dropFirst(4))) else { return nil }
+        self = r
+    }
+}
+
+/// The Controller page's ring, laid out as the page is: the header (Edit a copy or
+/// Reset all, then the mode switch) above the left column's rows, Look speed under
+/// the picture, and the right column's. Up and down walk that order (columns down,
+/// then across), so every item is reached in every mode; left and right go across
+/// the header, or between the two columns at the same row. Look speed takes left
+/// and right itself (its value), as an adjustable item does.
+public enum ControllerMapNav {
+    public static let modeID = "ctl:mode"
+    public static let lookSpeedID = "ctl:lookSpeed"
+    public static let resetAllID = "ctl:resetAll"
+    public static let copyID = "ctl:copy"
+
+    /// The header's items, left to right.
+    public static func header(_ mode: ControllerMap.Mode) -> [String] {
+        switch mode {
+        case .controller: [modeID]
+        case .keyboardMouse: [copyID, modeID]
+        case .custom: [resetAllID, modeID]
         }
     }
 
-    /// The row a pad's snapshot rings as one of LT, RT, L3, R3 or the right stick goes past half.
-    public static func pressed(from old: PadInput, to new: PadInput) -> ControllerMapRow? {
-        func past(_ v: Float) -> Bool { v >= 0.5 }
-        func stick(_ p: PadInput) -> Bool { (p.rx * p.rx + p.ry * p.ry).squareRoot() >= 0.5 }
-        if past(new.leftTrigger) && !past(old.leftTrigger) { return .lt }
-        if past(new.rightTrigger) && !past(old.rightTrigger) { return .rt }
-        if new.leftThumb && !old.leftThumb { return .ls }
-        if new.rightThumb && !old.rightThumb { return .rs }
-        if stick(new) && !stick(old) { return .rightStick }
-        return nil
+    /// Every item, in the ring's order.
+    public static func order(_ mode: ControllerMap.Mode) -> [String] {
+        header(mode) + ControllerMapRow.left.map(\.itemID) + (mode == .controller ? [] : [lookSpeedID])
+            + ControllerMapRow.right.map(\.itemID)
+    }
+
+    /// Where the ring goes from `from` (nil, or an item not on the page: the mode switch).
+    public static func next(from: String?, _ d: FocusDirection, mode: ControllerMap.Mode) -> String {
+        let all = order(mode)
+        guard let from, let at = all.firstIndex(of: from) else { return modeID }
+        switch d {
+        case .up: return all[max(0, at - 1)]
+        case .down: return all[min(all.count - 1, at + 1)]
+        case .left, .right:
+            let h = header(mode)
+            if let i = h.firstIndex(of: from) { return h[max(0, min(h.count - 1, i + (d == .left ? -1 : 1)))] }
+            guard let row = ControllerMapRow(itemID: from) else { return from }
+            let (here, there) = row.isLeft ? (ControllerMapRow.left, ControllerMapRow.right) : (ControllerMapRow.right, ControllerMapRow.left)
+            guard (d == .right) == row.isLeft else { return from }
+            return there[min(there.count - 1, here.firstIndex(of: row)!)].itemID
+        }
+    }
+
+    /// LB (-1) or RB (+1): the mode before or after, going round.
+    public static func cycle(_ mode: ControllerMap.Mode, by: Int) -> ControllerMap.Mode {
+        let all = ControllerMap.Mode.allCases
+        return all[((all.firstIndex(of: mode)! + by) % all.count + all.count) % all.count]
     }
 }
 
@@ -245,6 +280,20 @@ public enum ControllerMapEdit {
 /// row): asked first in a list whose first, default choice changes nothing.
 public enum ControllerMapConfirm: String, Sendable {
     case resetAll, copyPreset, useDefault
+    /// A on an input in Keyboard & mouse while Custom is still the preset: Custom, with a copy, to edit it.
+    case editCopy
+    /// A on an input in As a controller: Custom (its table kept), to edit it.
+    case useCustom
+
+    /// What A on an input row asks first in `map`'s mode; nil in Custom (the input's editor at once).
+    /// After a `.save` into Custom the input's editor opens.
+    public static func forEditing(_ map: ControllerMap) -> ControllerMapConfirm? {
+        switch map.mode {
+        case .custom: nil
+        case .keyboardMouse: needed(for: map) ? .copyPreset : .editCopy
+        case .controller: .useCustom
+        }
+    }
 
     /// Whether it must ask: only when it would replace a table that is not the preset.
     public static func needed(for map: ControllerMap) -> Bool { map.custom != ControllerMap.keyboardMouse }
@@ -261,6 +310,8 @@ public enum ControllerMapConfirm: String, Sendable {
         case .resetAll: "Reset every input?"
         case .copyPreset: "Edit a copy of Keyboard & mouse?"
         case .useDefault: "Use the default controller map?"
+        case .editCopy: "Edit a copy of Keyboard & mouse?"
+        case .useCustom: "Change what this input does?"
         }
     }
 
@@ -269,6 +320,9 @@ public enum ControllerMapConfirm: String, Sendable {
         case .resetAll: "Every input goes back to what Keyboard & mouse does."
         case .copyPreset: "Custom already has your own changes."
         case .useDefault: "This game's Custom map has your own changes. Using the default replaces them with Settings' map."
+        case .editCopy: "Keyboard & mouse is read only. Custom starts as a copy of it, and this input's editor opens."
+        case .useCustom: "As a controller, the game sees the controller as it is. Custom maps each input to a key, "
+            + "the mouse or a button; this input's editor opens."
         }
     }
 
@@ -278,6 +332,8 @@ public enum ControllerMapConfirm: String, Sendable {
         case .resetAll: [("keep", "Keep my changes"), ("reset", "Reset all to Keyboard & mouse")]
         case .copyPreset: [("keep", "Use my Custom map"), ("reset", "Start again from Keyboard & mouse")]
         case .useDefault: [("keep", "Keep my changes"), ("reset", "Use Settings' map")]
+        case .editCopy: [("keep", "Not now"), ("reset", "Edit a copy")]
+        case .useCustom: [("keep", "Keep As a controller"), ("custom", "Switch to Custom")]
         }
     }
 
@@ -298,6 +354,8 @@ public enum ControllerMapConfirm: String, Sendable {
         switch self {
         case .resetAll: choice == "reset" ? .save(apply(choice, to: map)) : .unchanged
         case .copyPreset: .save(apply(choice, to: map))
+        case .editCopy: choice == "reset" ? .save(apply(choice, to: map)) : .unchanged
+        case .useCustom: choice == "custom" ? .save(apply(choice, to: map)) : .unchanged
         case .useDefault: choice == "reset" ? .useDefault : .unchanged
         }
     }
@@ -305,7 +363,7 @@ public enum ControllerMapConfirm: String, Sendable {
     /// The map after `choice` (`keep` or `reset`) in Reset all or Edit a copy; Edit a copy is in Custom either way.
     public func apply(_ choice: String, to map: ControllerMap) -> ControllerMap {
         var m = map
-        if self == .copyPreset { m.mode = .custom }
+        if self == .copyPreset || self == .editCopy || (self == .useCustom && choice == "custom") { m.mode = .custom }
         if choice == "reset" { m.custom = ControllerMap.keyboardMouse }
         return m
     }
