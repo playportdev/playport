@@ -63,13 +63,15 @@ proposed answer unless the owner says otherwise before the phase that needs them
   signs, a DualSense's `hasRotationRate` and gravity, Portal 2 in both outputs.
 - **Done: 2c** (host only; no phone run). `97ff6ac`: the dev `gyro:` activity line gives the
   samples' rate and, for the mouse, the moves sent, their rate and the longest coalescing delay
-  (for 2d's timing). `d6fb8fe`: Game options › Controls (layout, d-pad, right stick, opacity,
+  (for 2d's timing); `b03b0e0`: a `sensor rate:` line once, 2 s after the sensors start, still or
+  not. The ring's fill has no counter: Winios is Madeira's code (a patch), so 2d counts its
+  `[winios] drain` lines against the moves sent. `d6fb8fe`: Game options › Controls (layout, d-pad, right stick, opacity,
   Gyro aim) and the Gyro aim page with its test area (the sensors run for the dot only while the
   page is up and no game runs; that run sends nothing to the guest), Settings › Controls › Gyro
   aim, the in-game Controls panel's Gyro aim and Sensitivity, the "Gyro aim" chip with the
   controls, `set:gyro.sensitivity=1.5` read as a number, and `open:ID#gyro`, `open:ID#controls`,
   `open:settings#gyro`, `gyro:` on the test area. A pad's gyro is still chosen by
-  `hasRotationRate` (as SDL does; a dev line logs each pad's motion flags). Dev IPA `3cc4e2c6…`
+  `hasRotationRate` (as SDL does; a dev line logs each pad's motion flags). Dev IPA `0636a72d…`
   built and verified, not installed. Next: 2d (phone).
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
