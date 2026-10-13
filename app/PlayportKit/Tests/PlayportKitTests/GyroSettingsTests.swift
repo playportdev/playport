@@ -8,14 +8,17 @@ final class GyroSettingsTests: XCTestCase {
         let d = GyroSettings()
         XCTAssertEqual(d.output, .off)
         XCTAssertEqual(d.source, .auto)
-        XCTAssertEqual(d.sensitivity, 1)
+        XCTAssertEqual(d.sensitivity, 1.5)                    // owner, 2026-10-13: the phone's gyro at 1.5×
         XCTAssertEqual(d.verticalRatio, 1)
         XCTAssertEqual(d.turnAxis, .playerSpace)
         XCTAssertFalse(d.invertX)
         XCTAssertFalse(d.invertY)
         XCTAssertEqual(d.pauseButton, .none)
         XCTAssertEqual(d.antiDeadZone, 0.27)
-        XCTAssertEqual(d.aimConfig, GyroAim.Config(antiDeadZone: 0.27))
+        XCTAssertEqual(d.aimConfig, GyroAim.Config(sensitivity: 1.5, antiDeadZone: 0.27))
+        // 1.0× keeps its meaning: GyroAim's own scale, as a game's saved value.
+        XCTAssertEqual(GameGyro(sensitivity: 1).resolved(over: d).aimConfig.sensitivity, 1)
+        XCTAssertEqual(GyroAim.Config().sensitivity, 1)
     }
 
     func testSettingsRoundTripAndMissingKeysFallBack() throws {
@@ -127,7 +130,7 @@ final class GyroSettingsTests: XCTestCase {
         d.set("pad:rightStick", forKey: GyroSettings.pauseButtonKey)
         let read = GyroSettings(d)
         XCTAssertEqual(read.output, .off)
-        XCTAssertEqual(read.sensitivity, 1)
+        XCTAssertEqual(read.sensitivity, 1.5)
         XCTAssertEqual(read.pauseButton, .none)
         // The driver's set: stores "1.5" as a String and 2 as an Int: both read as numbers.
         d.set("1.5", forKey: GyroSettings.sensitivityKey)
@@ -135,7 +138,7 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertEqual(GyroSettings(d).sensitivity, 1.5)
         XCTAssertEqual(GyroSettings(d).verticalRatio, 2)
         d.set("fast", forKey: GyroSettings.sensitivityKey)
-        XCTAssertEqual(GyroSettings(d).sensitivity, 1)
+        XCTAssertEqual(GyroSettings(d).sensitivity, 1.5)
         d.removePersistentDomain(forName: "GyroSettingsTests")
     }
 
@@ -160,7 +163,7 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertEqual(GameControls().gyroSettings(over: defaults), defaults)
         XCTAssertEqual(mine.gyroSettings(over: defaults), GyroSettings(output: .mouse, sensitivity: 2, pauseButton: .pad(.lb)))
         XCTAssertEqual(GyroSettings(output: .mouse, invertY: true, pauseButton: .pad(.lb)).summary,
-                       "output=mouse source=auto sensitivity=1.0 verticalRatio=1.0 turnAxis=playerSpace invert=-y pause=pad:lb")
+                       "output=mouse source=auto sensitivity=1.5 verticalRatio=1.0 turnAxis=playerSpace invert=-y pause=pad:lb")
     }
 
     func testThePauseButtonIsReadFromAPad() {

@@ -83,7 +83,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          does not fight it). It moves the aim only while the game's gyro output is on
                          (--controls 'ID:{"gyro":{"output":"mouse"}}' or "rightStick") and the sensors
                          run (no menu); the `gyro: driver` line in the log gives the mouse counts (20
-                         per degree at sensitivity 1) or the right stick's peak (1 at 180 deg/s).
+                         per degree at sensitivity 1; the default is 1.5) or the right stick's peak (1 at
+                         180 deg/s at sensitivity 1, then past its anti-dead-zone, 0.27 by default).
                          Example: --controls 'app-620:{"gyro":{"output":"mouse"}}' --action play:app-620
                          --action wait:30 --action gyro:yaw=90@500/rest@300/pitch=-30+yaw=10@300
                          With no game running and the Gyro aim page up, it moves the page's test-area dot
@@ -167,7 +168,7 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          follows Settings › Controls, where the d-pad and right stick are off by default;
                          `ID:{}` clears). "gyro" is the game's own gyro aim (PlayportKit GameGyro), each key
                          left out following the gyro.* defaults (output off): "output":"off"|"mouse"|
-                         "rightStick", "source":"auto"|"phone"|"controller", "sensitivity":0.05-20,
+                         "rightStick", "source":"auto"|"phone"|"controller", "sensitivity":0.05-20 (1.5 by default),
                          "verticalRatio":0-4, "turnAxis":"playerSpace"|"yaw"|"roll", "invertX"/"invertY":
                          true|false, "pauseButton":"none"|"pad:BUTTON" (a b x y lb rb lt rt start back ls rs
                          up down left right), "antiDeadZone":0-0.9 (right stick: where its deflection starts,

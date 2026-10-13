@@ -159,7 +159,8 @@ public enum GyroRow: String, CaseIterable, Sendable {
     /// The value to write to `key` for the choice `id` (Settings' default): a Double, a Bool or a String.
     public func stored(_ id: String) -> Any {
         switch self {
-        case .sensitivity, .verticalRatio: Double(id) ?? 1
+        case .sensitivity: Double(id) ?? GyroSettings.defaultSensitivity
+        case .verticalRatio: Double(id) ?? 1
         case .antiDeadZone: Double(id) ?? GyroSettings.defaultAntiDeadZone
         case .invertX, .invertY: id == "true"
         default: id

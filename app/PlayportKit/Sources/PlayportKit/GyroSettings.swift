@@ -9,7 +9,8 @@
 //   no button has to be held.
 // - Source: Automatic (a controller's gyro when it has one, else the
 //   iPhone's), iPhone or Controller.
-// - Sensitivity (a multiplier of GyroAim's scale), vertical ratio, turn axis
+// - Sensitivity (a multiplier of GyroAim's scale; 1.5× by default, owner
+//   2026-10-13, 1.0× still GyroAim's own scale), vertical ratio, turn axis
 //   (player space, yaw or roll), invert X and Y.
 // - Anti-dead-zone (right stick only): where the stick's deflection starts,
 //   past a game's own dead zone; 0.27 by default (XInput's right-stick dead
@@ -93,12 +94,13 @@ public struct GyroSettings: Codable, Equatable, Sendable {
     public static let sensitivityRange = 0.05...20.0
     public static let verticalRatioRange = 0.0...4.0
     public static let antiDeadZoneRange = 0.0...0.9
+    public static let defaultSensitivity = 1.5
     /// XInput's right-stick dead zone (XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, 8689 of 32767), rounded.
     public static let defaultAntiDeadZone = 0.27
 
     public var output = GyroOutput.off
     public var source = GyroSource.auto
-    public var sensitivity = 1.0
+    public var sensitivity = GyroSettings.defaultSensitivity
     public var verticalRatio = 1.0
     public var turnAxis = GyroTurnAxis.playerSpace
     public var invertX = false
@@ -106,7 +108,8 @@ public struct GyroSettings: Codable, Equatable, Sendable {
     public var pauseButton = GyroPauseButton.none
     public var antiDeadZone = GyroSettings.defaultAntiDeadZone
 
-    public init(output: GyroOutput = .off, source: GyroSource = .auto, sensitivity: Double = 1, verticalRatio: Double = 1,
+    public init(output: GyroOutput = .off, source: GyroSource = .auto, sensitivity: Double = GyroSettings.defaultSensitivity,
+                verticalRatio: Double = 1,
                 turnAxis: GyroTurnAxis = .playerSpace, invertX: Bool = false, invertY: Bool = false,
                 pauseButton: GyroPauseButton = .none, antiDeadZone: Double = GyroSettings.defaultAntiDeadZone) {
         self.output = output; self.source = source; self.sensitivity = sensitivity; self.verticalRatio = verticalRatio

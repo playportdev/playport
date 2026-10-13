@@ -40,7 +40,7 @@
 //                              as the game's own controls, as the in-game menu's Controls does;
 //                              "gyro" is the game's own gyro aim (PlayportKit GameGyro:
 //                              "output":"off"|"mouse"|"rightStick","source":"auto"|"phone"|
-//                              "controller","sensitivity":0.05-20,"verticalRatio":0-4,
+//                              "controller","sensitivity":0.05-20 (1.5 by default),"verticalRatio":0-4,
 //                              "turnAxis":"playerSpace"|"yaw"|"roll","invertX","invertY":
 //                              true|false,"pauseButton":"none"|"pad:<button>","antiDeadZone":
 //                              0-0.9), each key left out following the gyro.* defaults
