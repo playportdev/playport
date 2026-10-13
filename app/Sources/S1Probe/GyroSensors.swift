@@ -45,7 +45,8 @@
 // and stop, the calibration once learnt, and a summary of the output at most
 // every 2 s while it moves (none while the aim is still): the samples and
 // their rate, and for the mouse the moves sent, their rate and the longest a
-// move waited in the coalescer.
+// move waited in the coalescer. Once, 2 s after the sensors start, still or
+// not, the sensor's own sample rate (`sensor rate:`).
 
 #if canImport(UIKit)
 import Combine
@@ -300,6 +301,12 @@ final class GyroFeed: @unchecked Sendable {
     private var coalescer = GyroMouseCoalescer()
     private var activity = GyroActivity()
     private var calibrationLogged = false
+    #if !PLAYPORT_RELEASE
+    /// The sensor's own samples since the sensors started (the script's not counted): logged
+    /// once, `rateWindow` s after the first, still or not (2d reads the sensor's real rate).
+    private var sensorRate: (first: Double, count: Int, logged: Bool)?
+    private static let rateWindow = 2.0
+    #endif
 
     init() {
         queue = OperationQueue()
@@ -341,6 +348,9 @@ final class GyroFeed: @unchecked Sendable {
             }
             coalescer.reset()
             activity.reset()
+            #if !PLAYPORT_RELEASE
+            sensorRate = nil
+            #endif
             let calibrated = aim.calibrated
             previewState.withLock { $0.calibrated = calibrated }
             control.withLock { c in if c.generation == generation { c.running = d } }
@@ -387,6 +397,14 @@ final class GyroFeed: @unchecked Sendable {
         guard c.running == d else { return }
         #if !PLAYPORT_RELEASE
         if c.scripted { return }
+        var r = sensorRate ?? (time, 0, false)
+        r.count += 1
+        if !r.logged, time - r.first >= Self.rateWindow {
+            r.logged = true
+            GyroSensors.log(String(format: "sensor rate: %d samples in %.2f s (%.1f/s) from %@", r.count - 1, time - r.first,
+                                   Double(r.count - 1) / (time - r.first), d.rawValue))
+        }
+        sensorRate = r
         #endif
         let s = switch d {
         case .phone:
