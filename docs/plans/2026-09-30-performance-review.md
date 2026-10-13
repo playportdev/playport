@@ -60,7 +60,7 @@ change landed, and its cost is still a hypothesis until a `pp perf` A/B shows it
 | C6 diagnostics on FEX hot paths | open | not changed |
 | C7 call-return reset in hitches | open | the same finding is T2 of the Madeira audit (PLA-75), tracked there |
 | D FEX move past 2609.1 | done | FEX `main` `3648ee9` (`c96db80`, decision 0049), which contains Valve's cache series listed in D and `638329278` |
-| D disk cache default | open | decision 0056: held off, Hollow Knight's warm start corrupts rpmalloc; WoW64 keeps it off (fex 0022). The Witcher 3's warm-start crash was the cache key (fex 0021). Tracked by PLA-76 (B1) |
+| D disk cache default | done | on by default (decision 0056, PLA-341, [2026-10-14](../evidence/2026-10-14-fex-disk-cache-on.md)): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004); keyed on the FEX build (fex 0041), one database for every TEB slot (fex 0042); WoW64 keeps it off (fex 0022) |
 | D `MaxInst=500` | done | decision 0055 (`afd3900`), taken without the A/B |
 | D inline `PCMPxSTRx` | done | in the FEX pin above; not measured |
 | D `X87ReducedPrecision=1` | done | decision 0048 (below) |

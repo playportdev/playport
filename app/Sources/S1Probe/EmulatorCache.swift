@@ -4,10 +4,10 @@
 // through the UI), and the budget a launch keeps it under.
 //
 // FEX writes one database per machine bucket and process bucket under
-// %LOCALAPPDATA%\fex-emu\DiskCache (FEXCore DiskCache::Init; patches/fex 0021
-// adds the iOS TEB slot offset to the process bucket). It prunes only on a
-// machine-bucket change, so databases for slots, configurations or game
-// versions no longer used stay behind. Proton sets no total limit; here a
+// %LOCALAPPDATA%\fex-emu\DiskCache (FEXCore DiskCache::Init; patches/fex 0041
+// adds the FEX build to the machine bucket, so an app update with a new FEX
+// starts over). It prunes only on a machine-bucket change, so databases for
+// configurations or game versions no longer used stay behind. Proton sets no total limit; here a
 // launch clears the whole cache when it is past 5 GB or the phone is short of
 // space (under 10 GB free), and FEX fills it again from that launch.
 

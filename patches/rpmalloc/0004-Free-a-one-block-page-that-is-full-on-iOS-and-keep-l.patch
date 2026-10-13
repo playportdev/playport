@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 13 Oct 2026 23:29:08 +0200
+Subject: [PATCH] Free a one-block page that is full on iOS, and keep list
+ heads unlinked
+
+The iOS port's 16 MB large pages (rpmalloc-port 0005, LARGE_PAGE_SIZE_SHIFT
+24) hold a single block of the last large class, 7-8 MB; upstream's 64 MB
+pages hold seven. rpmalloc's free path assumes a full page becomes
+available on an earlier free before its last block goes, and
+page_available_to_free unlinks the page from the available list. A full
+one-block page is on no list: freeing its block unlinked it through the
+stale prev/next it kept from its last time on the list, writing into other
+pages' headers. That is the [rpm-avail] to_free corruption (bad=0x100,
+class 0x74) of every warm start of Hollow Knight with FEX's disk cache on,
+whose index read is such an allocation, and The Witcher 3's crash in
+page_available_to_free. Move the page to the available list first.
+
+Also give every new list head a null prev. Upstream never reads a head's
+prev, so it leaves stale ones; the iOS port's list guard (rpm_avail_check,
+rpmalloc-port 0008) does, logged them as corruption (op=consume bad=0x20)
+and, in page_available_to_free, dropped the whole list for that class.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-14-fex-disk-cache-on.md
+Offered-upstream: no; upstream's page sizes never give a one-block page
+---
+ rpmalloc/rpmalloc.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/rpmalloc/rpmalloc.c b/rpmalloc/rpmalloc.c
+index 29a06aa..6d9b235 100644
+--- a/rpmalloc/rpmalloc.c
++++ b/rpmalloc/rpmalloc.c
+@@ -1968,6 +1968,8 @@ page_available_to_free(page_t* page) {
+ 			heap->page_available[page->size_class] = 0;
+ 	} else if (heap->page_available[page->size_class] == page) {
+ 		heap->page_available[page->size_class] = page->next;
++		if (page->next)
++			page->next->prev = 0; /* Playport: the new head has no prev either */
+ 	} else {
+ 		page->prev->next = page->next;
+ 		if (page->next)
+@@ -1989,6 +1991,10 @@ page_full_to_available(page_t* page) {
+ 	page->next = heap->page_available[page->size_class];
+ 	if (page->next)
+ 		page->next->prev = page;
++	/* Playport: the new head has no prev. Upstream never reads a head's prev,
++	 * but the iOS port's list guard (rpm_avail_check) does, and took the stale
++	 * link from the page's last time on the list for corruption. */
++	page->prev = 0;
+ 	heap->page_available[page->size_class] = page;
+ 	page->is_full = 0;
+ 	if (page->has_aligned_block == 0)
+@@ -2015,6 +2021,8 @@ page_available_to_full(page_t* page) {
+ 	heap_t* heap = page->heap;
+ 	if (heap->page_available[page->size_class] == page) {
+ 		heap->page_available[page->size_class] = page->next;
++		if (page->next)
++			page->next->prev = 0; /* Playport: the new head has no prev either */
+ 	} else {
+ 		page->prev->next = page->next;
+ 		if (page->next)
+@@ -2031,6 +2039,17 @@ page_put_local_free_block(page_t* page, block_t* block) {
+ 	page->local_free = block;
+ 	++page->local_free_count;
+ 	if (UNEXPECTED(--page->block_used == 0)) {
++#ifdef FEX_IOS_HOST
++		/* Playport: a page of one block goes from full straight to free. The
++		 * iOS port's 16 MB large pages (LARGE_PAGE_SIZE_SHIFT 24) hold a single
++		 * block of the last large class (7-8 MB); upstream's 64 MB pages hold
++		 * seven, so a full page always became available on an earlier free and
++		 * page_available_to_free could assume it is on the available list. A
++		 * full page is not: unlinking it wrote through its stale prev/next into
++		 * other pages' headers. Put it on the list first. */
++		if (UNEXPECTED(page->is_full != 0))
++			page_full_to_available(page);
++#endif
+ 		page_available_to_free(page);
+ 	} else if (UNEXPECTED(page->is_full != 0)) {
+ 		page_full_to_available(page);
+-- 
+2.55.0
+

@@ -1,6 +1,12 @@
 # 0056: FEX's disk cache: Proton's default, held off until a warm-start crash is fixed
 
-**Status:** accepted, 2026-10-06, by the owner; **the default is held off** (below).
+**Status:** accepted, 2026-10-06, by the owner; the default was held off (below).
+**Amended 2026-10-14** ([evidence](../evidence/2026-10-14-fex-disk-cache-on.md), PLA-341),
+as this record provides: the hold is lifted and every launch passes `FEX_DISKCACHE=1`.
+The warm-start crash was rpmalloc's (`patches/rpmalloc` 0004: the iOS port's one-block
+pages), not the cache's. The key changed too: the FEX build is in the machine bucket
+(`patches/fex` 0041), and one database serves every TEB slot offset, the cached TEB reads
+pointed at the launch's slot (0042), in place of 0021's database per offset.
 Item B1 of the
 [Proton alignment plan](../plans/2026-10-05-proton-arm64-alignment.md); changes the
 "stays off" outcome of the
