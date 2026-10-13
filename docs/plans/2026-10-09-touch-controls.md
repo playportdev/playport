@@ -26,12 +26,17 @@ proposed answer unless the owner says otherwise before the phase that needs them
   `4cfadad8…`): owner feedback 1–6 below. The Playport button is gone (Off draws nothing);
   layout format version 2 (version 1 refused, the preset used); the design board
   `TouchGamepad.dc.html` is stale until redrawn.
+  **1c** (`7f6cd07`; [evidence](../evidence/2026-10-13-touch-controls-phase1c.md), IPA
+  `67d0938d…`): owner feedback on 1b below. The late controls were the game's: Hollow Knight took
+  no press from a pad that connected mid-game in over two minutes; the controls' pad is now player
+  1 from the runtime's start whenever no controller is connected, at rest while the layout is Off
+  (risk: a game may show pad prompts while Off).
 - **How the work is split (owner, 2026-10-13):** each phase runs as small writer chunks
   that use only the host (`pp test`, `pp check`, `pp build`), one writer at a time. The
   phase's one phone session is its own last chunk, and **every phase then waits for the
   owner's hands-on sign-off** before the next phase starts. The owner's feedback becomes
   a fix chunk.
-- **Running:** 1c, the second phase 1 fix chunk (owner feedback on 1b).
+- **Running:** nothing; phase 1 waits for the owner's sign-off.
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -61,28 +66,27 @@ proposed answer unless the owner says otherwise before the phase that needs them
        A/B/X/Y in both cases.
   4. No outlines on the stick zones.
 - **Queue:**
-  1. **1c (fix), running:** owner feedback on 1b above; a short phone session.
-  2. **Phase 1 sign-off (owner):** play Hollow Knight with only the touch overlay:
+  1. **Phase 1 sign-off (owner):** play Hollow Knight with only the touch overlay:
      several fingers at once, the floating sticks, haptics, the first-time toast, a
-     controller connecting mid-game, both landscape orientations; and 1b's checks (its
-     evidence, "Not checked here").
-  3. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
-  4. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+     controller connecting mid-game, both landscape orientations; and 1b's and 1c's checks
+     (their evidence, "Not checked here").
+  2. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
+  3. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
-  5. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+  4. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
-  6. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
+  5. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
      chunk follows.
-  7. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
-  8. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
+  6. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
+  7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
-  9. **3b:** the Controller page and the ActionPicker.
-  10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+  8. **3b:** the Controller page and the ActionPicker.
+  9. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
-  11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+  10. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
       a controller. Then stop.
-- **Phone:** dev IPA `4cfadad8…` installed; unattended mode on; Hollow Knight's own
+- **Phone:** dev IPA `67d0938d…` (1c) installed; unattended mode on; Hollow Knight's own
   on-screen controls are Off (the owner's setting, left as found); Hollow Knight's profile
   slot 3 may now hold a King's Pass save rather than New Game (check it before a
   measured run that uses `tools/pad/hk-new-slot.txt`).
