@@ -248,6 +248,11 @@ proposed answer unless the owner says otherwise before the phase that needs them
      - Choosing Custom in the in-game menu changes nothing visible, and the editor isn't
        reachable there. **The in-game Controls panel opens the full Controller page and the
        ActionPicker over the paused game;** choosing Custom goes straight into the editor.
+     - **The Controller page's navigation is reworked** (owner: "some buttons can't be
+       reached, LB/RB don't change the mode, B goes back instead of editing B"). The left
+       stick and d-pad ring every row; A edits the ringed input; B goes back; Y resets the
+       row; LB/RB cycle the mode at the top. This supersedes 3b's "press a physical button
+       to select its row".
   13. **U (fixes from the owner's play), running:** the three items above plus the
      cosmetic list below; one short phone session; then the owner's phase 2 and phase 3
      sign-offs, which wait for U.
