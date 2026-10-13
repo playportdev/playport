@@ -194,10 +194,19 @@ proposed answer unless the owner says otherwise before the phase that needs them
      `1e83233a…` built and verified, not installed. The owner allowed phase 3's host chunks
      (3a, 3b) to start while the phone is paused (2026-10-13). 3c and the phase 3 sign-off
      still wait for 2f's phone session and the owner's phase 2 sign-off. **3b next.**
-  9. **3b, running (host only):** the Controller page and the ActionPicker. Owner,
+  9. **3b, host done (no phone run):** the Controller page and the ActionPicker. Owner,
      2026-10-13: the preset's d-pad stays clockwise from up (1 up, 2 right, 3 down, 4 left), and
      the right stick's mouse-look speed becomes a per-game "Look speed" row (Keyboard & mouse
-     and Custom; Y resets it).
+     and Custom; Y resets it). `a98d901`: Look speed, `GameControls.lookSpeed` over
+     `controls.lookSpeed` (1× = 2000 counts/s, 0.25–4×), applied in place. `cde4ead`: PlayportKit
+     `ActionPicker` and the page's model (`ControllerMapPage.swift`: a row's Y back to the preset,
+     Reset all and Edit a copy asking first), the in-game Controller row's model. `c30de5e`: the
+     Controller page (Game options' `opt:controllerMap`, Settings' `set:controllerMap`; X, LB, RB,
+     View, Menu, LT, RT, L3, R3 and the right stick ring their rows), the ActionPicker (a PadModal;
+     X waits for a hardware key), the in-game Controls panel's Controller row while a controller is
+     connected (its rows scroll where they do not fit), `open:ID#controller`,
+     `open:settings#controller`. Dev IPA `2c985b4d…` built and verified, not installed. **Next:** the
+     phone sessions once the owner unpauses it: 2f's, then 3c.
   10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
   11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
