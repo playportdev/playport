@@ -33,6 +33,14 @@
 //   Winios's ring holds 256 events and drops new ones when the game does not
 //   drain it) and pushed to the ring, which takes them from any thread.
 //
+// - The test area (Game options › Controls › Gyro aim, UI/GyroAimView.swift):
+//   while the page is up and no game runs, the sensors run for its dot
+//   (GyroRun.previewing) through the same GyroAim, with the page's settings.
+//   The feed then sends nothing to the guest: in preview `process` takes no
+//   pad lock, sets no mixer value and calls no winios_pointer, and puts the
+//   output into the dot (HostIOKit GyroPreviewDot) alone. A running game's
+//   run always wins (GyroRun.decide), and the page closing stops the sensors.
+//
 // A dev build logs `gyro:` lines: the source and output as the sensors start
 // and stop, the calibration once learnt, and a summary of the output at most
 // every 2 s while it moves (none while the aim is still): the samples and
@@ -50,15 +58,24 @@ import PlayportKit
 import UIKit
 import WinIOS
 
+/// What the Gyro aim page previews: a game's settings, or Settings' defaults.
+enum GyroPreviewTarget: Equatable {
+    case game(String)
+    case defaults
+}
+
 @MainActor
-final class GyroSensors {
+final class GyroSensors: ObservableObject {
     static let shared = GyroSensors()
 
     /// The iPhone's device motion rate.
     static let phoneHz = 100.0
 
     /// Whether the sensors run now, and which.
-    private(set) var run = GyroRun.stopped("not started")
+    @Published private(set) var run = GyroRun.stopped("not started")
+    /// The Gyro aim page is up, and what it previews (its test area's dot); nil while it is not.
+    private var preview: GyroPreviewTarget?
+    private var previewActive = true
     private var settings = GyroSettings()
     private var started = false
     private var appActive = true
@@ -101,6 +118,20 @@ final class GyroSensors {
         update()
     }
 
+    /// The Gyro aim page appeared (`target`), went (nil), or the app left or came back to the front (`active`).
+    func preview(_ target: GyroPreviewTarget?, active: Bool) {
+        if target != nil { start() }
+        guard target != preview || active != previewActive else { return }
+        preview = target
+        previewActive = active
+        update()
+    }
+
+    /// The gyro `s` reads now (the source row's "in use"): nil when none can be read.
+    func device(for s: GyroSettings) -> GyroDevice? {
+        s.source.device(phone: motion.isDeviceMotionAvailable, controller: gyroController() != nil)
+    }
+
     /// The app is active and in the foreground (HostIO's Lifecycle), or not.
     func appState(active: Bool) {
         guard active != appActive else { return }
@@ -132,32 +163,66 @@ final class GyroSensors {
         Self.log("screen \(mapped.rawValue): the iPhone's axes follow it")
     }
 
-    /// The current controller (else the first connected) when it reports rotation rate.
+    /// The current controller (else the first connected) when it reports rotation rate. A pad
+    /// whose sensors need turning on (DualSense, DualShock 4) is read by `hasRotationRate`
+    /// before they are on, as SDL reads it; a dev build logs each pad's motion once.
     private func gyroController() -> GCController? {
         let c = GCController.current ?? GCController.controllers().first { $0.extendedGamepad != nil }
-        guard let c, c.extendedGamepad != nil, c.motion?.hasRotationRate == true else { return nil }
+        guard let c, c.extendedGamepad != nil else { return nil }
+        #if !PLAYPORT_RELEASE
+        if loggedPads.insert(ObjectIdentifier(c)).inserted {
+            Self.log("controller \"\(c.vendorName ?? "?")\": " + (c.motion.map {
+                "motion, rotation rate \($0.hasRotationRate ? "yes" : "no"), gravity \($0.hasGravityAndUserAcceleration ? "yes" : "no"), "
+                    + "sensors \($0.sensorsRequireManualActivation ? "turned on when read" : "always on")"
+            } ?? "no motion"))
+        }
+        #endif
+        guard c.motion?.hasRotationRate == true else { return nil }
         return c
     }
+    #if !PLAYPORT_RELEASE
+    private var loggedPads: Set<ObjectIdentifier> = []
+    #endif
 
     private func update() {
         guard started else { return }
         let launch = TitleLaunch.shared
-        settings = launch.titleID.map { ControlsStore.shared.gyro($0) } ?? ControlsStore.shared.gyroDefaults
-        feed.configure(settings)
+        let game = launch.titleID.map { ControlsStore.shared.gyro($0) } ?? ControlsStore.shared.gyroDefaults
         let pad = gyroController()
-        let next = GyroRun.decide(GyroConditions(settings: settings,
+        let phone = motion.isDeviceMotionAvailable
+        let previewed: GyroSettings? = switch preview {
+        case .game(let id)?: ControlsStore.shared.gyro(id)
+        case .defaults?: ControlsStore.shared.gyroDefaults
+        case nil: nil
+        }
+        let next = GyroRun.decide(GyroConditions(settings: game,
                                                  gameDrawing: launch.running && launch.step == .drawing && !launch.quitting,
                                                  appActive: appActive, guestHeld: guestHeld, dialog: dialog,
-                                                 phoneHasGyro: motion.isDeviceMotionAvailable, controllerHasGyro: pad != nil))
+                                                 phoneHasGyro: phone, controllerHasGyro: pad != nil),
+                                  preview: previewed.map {
+                                      GyroPreviewConditions(settings: $0, gameRunning: launch.running, appActive: previewActive,
+                                                            phoneHasGyro: phone, controllerHasGyro: pad != nil)
+                                  })
+        settings = if case .previewing = next, let previewed { previewed } else { game }
+        feed.configure(settings)
         let samePad = next.device != .controller || pad === controller
         guard next != run || !samePad else { return }
         stopSensors(next)
         run = next
-        if case .running(let d, let o) = next { startSensors(d, output: o, pad: pad) }
+        OnScreenControls.shared.gyroAiming(next.toGuest)
+        switch next {
+        case .running(let d, let o): startSensors(d, output: o, pad: pad, toGuest: true)
+        case .previewing(let d, let o): startSensors(d, output: o, pad: pad, toGuest: false)
+        case .stopped: break
+        }
     }
 
     private func stopSensors(_ next: GyroRun) {
-        guard case .running(let d, let o) = run else { return }
+        guard let d = run.device else { return }
+        let o: GyroOutput = switch run {
+        case .running(_, let o), .previewing(_, let o): o
+        case .stopped: .off
+        }
         switch d {
         case .phone:
             motion.stopDeviceMotionUpdates()
@@ -170,16 +235,17 @@ final class GyroSensors {
         }
         feed.stop()
         let why = if case .stopped(let r) = next { r } else { "source or output changed" }
-        Self.log("stopped (\(why)); was source \(d.rawValue), output \(o.rawValue)")
+        Self.log("stopped (\(why)); was source \(d.rawValue), output \(o.rawValue)" + (run.toGuest ? "" : ", the test area's"))
     }
 
-    private func startSensors(_ d: GyroDevice, output o: GyroOutput, pad: GCController?) {
-        feed.start(d)
+    private func startSensors(_ d: GyroDevice, output o: GyroOutput, pad: GCController?, toGuest: Bool) {
+        feed.start(d, toGuest: toGuest)
+        let to = toGuest ? "" : " into the test area's dot (nothing to the guest)"
         switch d {
         case .phone:
             motion.deviceMotionUpdateInterval = 1 / Self.phoneHz
             feed.startPhone(motion)
-            Self.log("source phone (device motion \(Int(Self.phoneHz)) Hz, \(feed.orientation.rawValue)); output \(o.rawValue); "
+            Self.log("source phone (device motion \(Int(Self.phoneHz)) Hz, \(feed.orientation.rawValue)); output \(o.rawValue)\(to); "
                      + settings.summary)
         case .controller:
             guard let pad, let m = pad.motion else { return }
@@ -187,7 +253,7 @@ final class GyroSensors {
             if m.sensorsRequireManualActivation { m.sensorsActive = true }
             feed.startController(m)
             Self.log("source controller (\"\(pad.vendorName ?? "?")\", gravity "
-                     + (m.hasGravityAndUserAcceleration ? "reported" : "from acceleration") + "); output \(o.rawValue); "
+                     + (m.hasGravityAndUserAcceleration ? "reported" : "from acceleration") + "); output \(o.rawValue)\(to); "
                      + settings.summary)
         }
     }
@@ -207,6 +273,8 @@ final class GyroFeed: @unchecked Sendable {
         /// Each start and stop; a start whose turn on the queue comes after a later stop does nothing.
         var generation = 0
         var settings = GyroSettings()
+        /// The output goes to the guest (a game's run), else only to the test area's dot (GyroRun.previewing).
+        var toGuest = false
         var orientation = GyroScreenOrientation.landscapeRight
         #if !PLAYPORT_RELEASE
         /// A dev build's `gyro:` script runs: its samples replace the sensors'.
@@ -214,6 +282,17 @@ final class GyroFeed: @unchecked Sendable {
         #endif
     }
     private let control = OSAllocatedUnfairLock(initialState: Control())
+
+    /// What the test area draws: the dot, and whether the bias is learnt (the Calibration row).
+    struct Preview: Equatable, Sendable {
+        var dot = GyroPreviewDot()
+        var calibrated = false
+    }
+    private let previewState = OSAllocatedUnfairLock(initialState: Preview())
+    /// The test area's dot now (read by its view each frame).
+    var preview: Preview { previewState.withLock { $0 } }
+    /// A tap on the test area: the dot back to the middle.
+    func centreDot() { previewState.withLock { $0.dot.centre() } }
 
     // The queue's alone:
     private var aim = GyroAim()
@@ -241,14 +320,17 @@ final class GyroFeed: @unchecked Sendable {
 
     func configure(_ s: GyroSettings) { control.withLock { $0.settings = s } }
 
-    /// Take `d`'s samples: the same device's aim restarts its windows (its bias
-    /// kept), another device's starts afresh.
-    func start(_ d: GyroDevice) {
+    /// Take `d`'s samples, into the guest or (`toGuest` false) only into the test
+    /// area's dot: the same device's aim restarts its windows (its bias kept),
+    /// another device's starts afresh.
+    func start(_ d: GyroDevice, toGuest: Bool) {
         let generation = control.withLock { c in
             c.generation += 1
             c.running = nil
+            c.toGuest = toGuest
             return c.generation
         }
+        if !toGuest { previewState.withLock { $0.dot.centre() } }
         dispatch.async { [self] in
             if aimDevice == d {
                 aim.restart()
@@ -259,20 +341,23 @@ final class GyroFeed: @unchecked Sendable {
             }
             coalescer.reset()
             activity.reset()
+            let calibrated = aim.calibrated
+            previewState.withLock { $0.calibrated = calibrated }
             control.withLock { c in if c.generation == generation { c.running = d } }
         }
     }
 
-    /// Take no more samples (at once), and take the gyro off the right stick.
+    /// Take no more samples (at once), and take the gyro off the right stick (a game's run; the test area's never set it).
     func stop() {
-        control.withLock { c in
+        let guest = control.withLock { c in
             c.generation += 1
             c.running = nil
+            return c.toGuest
         }
         dispatch.async { [self] in
             coalescer.reset()
             activity.reset()
-            HostIO.pads.withLock { p in HostIO.apply(p.mixer.gyro(.none).slot0, slot: 0, &p.gate) }
+            if guest { HostIO.pads.withLock { p in HostIO.apply(p.mixer.gyro(.none).slot0, slot: 0, &p.gate) } }
         }
     }
 
@@ -309,13 +394,25 @@ final class GyroFeed: @unchecked Sendable {
         case .controller:
             GyroSample(time: time, rate: GyroFrame.controller(rate), gravity: GyroFrame.controller(gravity))
         }
-        _ = process(s, c.settings)
+        _ = process(s, c.settings, toGuest: c.toGuest)
     }
 
-    /// One aim-frame sample through GyroAim into the guest; GyroAim's output.
-    private func process(_ s: GyroSample, _ settings: GyroSettings) -> GyroAimOutput {
+    /// One aim-frame sample through GyroAim into the guest, or (`toGuest` false)
+    /// into the test area's dot alone; GyroAim's output.
+    private func process(_ s: GyroSample, _ settings: GyroSettings, toGuest: Bool) -> GyroAimOutput {
         let config = settings.aimConfig
         if aim.config != config { aim.config = config }
+        guard toGuest else {
+            // The test area: no pad lock, no mixer, no winios_pointer. The pause button is
+            // the guest's (slot 0), which has none outside a game: not paused.
+            let o = aim.add(s)
+            let calibrated = aim.calibrated
+            previewState.withLock { p in
+                p.dot.add(o)
+                p.calibrated = calibrated
+            }
+            return o
+        }
         let (o, outputs) = HostIO.pads.withLock { p in
             let o = aim.add(s, paused: settings.paused(by: p.mixer.slot0))
             let r = p.mixer.gyro(o)
@@ -389,7 +486,7 @@ final class GyroFeed: @unchecked Sendable {
             let c = control.withLock { $0 }
             guard c.running != nil else { continue }
             p.result.taken += 1
-            switch process(s, c.settings) {
+            switch process(s, c.settings, toGuest: c.toGuest) {
             case .none: break
             case .mouse(let dx, let dy): p.result.dx += Int(dx); p.result.dy += Int(dy)
             case .rightStick(let x, let y): p.result.peak = max(p.result.peak, (x * x + y * y).squareRoot())

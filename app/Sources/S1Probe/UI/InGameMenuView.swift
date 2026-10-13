@@ -15,8 +15,9 @@
 //
 // Its rows: Resume (also B, ≡ and Home), Controls (a panel beside the rows,
 // QuickMenuControls.dc.html: the game's on-screen controls, Off or Gamepad, the
-// Gamepad layout's d-pad and right stick, and their opacity, saved for the game
-// and applied at once; UI/TouchControlsView.swift),
+// Gamepad layout's d-pad and right stick, their opacity, and gyro aim's output
+// and sensitivity, saved for the game and applied at once; UI/TouchControlsView.swift,
+// GyroSensors.swift),
 // Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
 // overlay (the Metal HUD on the game layer, now and for this game only), the
@@ -137,10 +138,17 @@ final class InGameMenu: ObservableObject {
         case .opacity:
             let next = ControlsOpacity.step(now.opacity, by: by)
             mine.opacity = wrapping && next == now.opacity ? ControlsOpacity.steps[0] : next
+        case .gyro:
+            mine.gyro = GyroRow.output.setting(GyroRow.output.step(ControlsStore.shared.gyro(id), by: by, wrapping: wrapping),
+                                               in: mine.gyro)
+        case .gyroSensitivity:
+            mine.gyro = GyroRow.sensitivity.setting(GyroRow.sensitivity.step(ControlsStore.shared.gyro(id), by: by, wrapping: wrapping),
+                                                    in: mine.gyro)
         }
         ControlsStore.shared.setGame(id, mine)
         Self.log("controls for \(id): layout \(mine.layout?.rawValue ?? "default") dpad \(mine.dpad?.rawValue ?? "default") "
-                 + "rightStick \(mine.rightStick?.rawValue ?? "default") opacity \(mine.opacity.map(ControlsOpacity.label) ?? "default")")
+                 + "rightStick \(mine.rightStick?.rawValue ?? "default") opacity \(mine.opacity.map(ControlsOpacity.label) ?? "default") "
+                 + "gyro \(mine.gyro?.output?.rawValue ?? "default") sensitivity \(mine.gyro?.sensitivity.map { String($0) } ?? "default")")
     }
 
     /// The value `by` steps from `value` along its cases, stopping at the ends (going round with `wrapping`).
@@ -289,6 +297,7 @@ final class InGameMenu: ObservableObject {
     var summary: String {
         "menu \(isOpen ? "open" : "closed"), ring \(menu.ring.rawValue)" + (menu.panel.map { " (panel \($0.rawValue))" } ?? "")
             + ", paused=\(paused) overlay=\(overlay), controls \(OnScreenControls.shared.state.summary)"
+            + ", gyro \(TitleLaunch.shared.titleID.map { GyroText.summary(ControlsStore.shared.gyro($0)) } ?? "none")"
             + (shot.map { ", screenshot: \($0)" } ?? "") + (quitting ? ", quitting" : "")
     }
     #endif
@@ -307,6 +316,7 @@ struct InGameMenuView: View {
     @ObservedObject private var router = PadRouter.shared
     @ObservedObject private var safe = WindowInsets.shared
     @ObservedObject private var controls = OnScreenControls.shared
+    @ObservedObject private var store = ControlsStore.shared
 
     var body: some View {
         let lead = safe.side(44, safe.insets.leading), trail = safe.side(44, safe.insets.trailing)
@@ -332,7 +342,8 @@ struct InGameMenuView: View {
             .overlay(alignment: .trailing) { Rectangle().fill(PP.line).frame(width: 1) }
             .ignoresSafeArea()
             if let row = model.menu.panel {
-                ControlsPanel(ring: row, state: controls.state)
+                ControlsPanel(ring: row, state: controls.state,
+                              gyro: launch.titleID.map { store.gyro($0) } ?? store.gyroDefaults)
                     .padding(.leading, 330 + lead - 44 + 24).padding(.top, 22)
             }
             if downloadsWaiting && model.menu.panel == nil {
@@ -411,48 +422,63 @@ struct InGameMenuView: View {
 }
 
 /// The Controls panel beside the menu's rows (QuickMenuControls.dc.html): the
-/// game's on-screen layout, its d-pad and right stick, and their opacity. A tap does what left and right do.
+/// game's on-screen layout, its d-pad and right stick, their opacity, and gyro
+/// aim's output and sensitivity. A tap does what left and right do. Rows are
+/// 36 pt so all six fit above the footer on a 375 pt tall screen.
 private struct ControlsPanel: View {
     let ring: QuickMenuControlsRow
     let state: ControlsState
+    /// The game's gyro aim, its own over the defaults.
+    let gyro: GyroSettings
     private var model: InGameMenu { InGameMenu.shared }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Controls").font(PP.display(20))
                 Text("For this game · saved as you change them").font(.system(size: 12)).foregroundStyle(PP.muted)
+                    .lineLimit(1).minimumScaleFactor(0.8)
             }
-            .padding(.bottom, 4)
+            .padding(.bottom, 6)
             row(.layout) { choices(.layout, OnScreenLayout.allCases, state.layout, title: \.title) }
             row(.dpad) { choices(.dpad, OnScreenDpad.allCases, state.dpad, title: \.title) }
             row(.rightStick) { choices(.rightStick, OnScreenRightStick.allCases, state.rightStick, title: \.shortTitle) }
-            row(.opacity) {
-                HStack(spacing: 8) {
-                    arrow("‹", by: -1)
-                    Text(ControlsOpacity.label(state.opacity)).font(.system(size: 14, weight: .semibold))
-                    arrow("›", by: 1)
-                }
+            row(.opacity) { stepper(.opacity, ControlsOpacity.label(state.opacity)) }
+            row(.gyro, subtitle: gyroSource) {
+                choices(.gyro, GyroOutput.allCases, gyro.output, title: \.gyroTitle)
             }
-            Text("The right stick goes below or above A/B/X/Y.").font(.system(size: 12)).foregroundStyle(PP.muted)
+            row(.gyroSensitivity) { stepper(.gyroSensitivity, GyroText.sensitivity(gyro.sensitivity)) }
             if !state.visible && state.layout != .off {
                 Text("Hidden while a controller is connected.").font(.system(size: 12)).foregroundStyle(PP.muted)
+                    .padding(.top, 2)
             }
         }
-        .padding(16)
+        .padding(12)
         .frame(width: 330, alignment: .leading)
         .background(PP.surface, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(PP.line, lineWidth: 1))
         .accessibilityIdentifier("menu-controls-panel")
     }
 
-    private func row<V: View>(_ r: QuickMenuControlsRow, @ViewBuilder value: () -> V) -> some View {
+    /// Under Gyro aim: the gyro it reads (QuickMenuControls.dc.html's "iPhone gyro").
+    private var gyroSource: String {
+        let use = GyroText.sourceInUse(gyro.source, device: GyroSensors.shared.device(for: gyro))
+        guard gyro.output != .off else { return "Moves the view as you turn" }
+        return use.why ?? "Always on · " + use.value + " gyro"
+    }
+
+    private func row<V: View>(_ r: QuickMenuControlsRow, subtitle: String? = nil, @ViewBuilder value: () -> V) -> some View {
         HStack {
-            Text(r.title).font(.system(size: 14, weight: .medium))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(r.title).font(.system(size: 14, weight: .medium))
+                if let subtitle {
+                    Text(subtitle).font(.system(size: 10)).foregroundStyle(PP.muted).lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
             Spacer(minLength: 8)
             value()
         }
-        .padding(.horizontal, 12).frame(height: 44)
+        .padding(.horizontal, 12).frame(height: 36)
         .background(PP.raised, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(ring == r ? PP.accent : .clear, lineWidth: 2))
         .accessibilityIdentifier("menu-controls-\(r.rawValue)")
@@ -465,21 +491,35 @@ private struct ControlsPanel: View {
             ForEach(all, id: \.self) { v in
                 Text(v[keyPath: title]).font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(v == current ? PP.background : PP.muted)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(v == current ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 9))
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(v == current ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                     .onTapGesture { model.changeControls(r, by: all.firstIndex(of: v)! - all.firstIndex(of: current)!) }
                     .accessibilityIdentifier("menu-controls-\(r.rawValue)-\(v.rawValue)")
             }
         }
-        .padding(3)
-        .background(PP.background, in: RoundedRectangle(cornerRadius: 12))
+        .padding(2)
+        .background(PP.background, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private func arrow(_ s: String, by: Int) -> some View {
+    /// ‹ value ›: a tap on an arrow steps the row.
+    private func stepper(_ r: QuickMenuControlsRow, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            arrow(r, "‹", by: -1)
+            Text(value).font(.system(size: 14, weight: .semibold))
+            arrow(r, "›", by: 1)
+        }
+    }
+
+    private func arrow(_ r: QuickMenuControlsRow, _ s: String, by: Int) -> some View {
         Text(s).font(.system(size: 16)).foregroundStyle(PP.muted)
             .frame(minWidth: 18, minHeight: 30)
             .contentShape(Rectangle())
-            .onTapGesture { model.changeControls(.opacity, by: by) }
+            .onTapGesture { model.changeControls(r, by: by) }
     }
+}
+
+private extension GyroOutput {
+    /// The panel's short word for it.
+    var gyroTitle: String { GyroText.output(self) }
 }

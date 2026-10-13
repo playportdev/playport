@@ -162,3 +162,26 @@ final class GyroSourcesTests: XCTestCase {
         } else { XCTFail("mouse") }
     }
 }
+
+final class GyroPreviewDotTests: XCTestCase {
+    /// Mouse output moves the dot as the view turns, kept inside; the right stick places it.
+    func testTheDotFollowsTheAim() {
+        var dot = GyroPreviewDot()
+        // 15° right and up at sensitivity 1: half way to the right and top edges.
+        dot.add(.mouse(dx: 300, dy: -300))
+        XCTAssertEqual(dot.x, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(dot.y, 0.5, accuracy: 1e-9)
+        dot.add(.mouse(dx: 10_000, dy: 0))
+        XCTAssertEqual(dot.x, 1)
+        dot.add(.none)
+        XCTAssertEqual(dot.x, 1)
+        dot.add(.rightStick(x: -0.25, y: 0.5))
+        XCTAssertEqual(dot.x, -0.25)
+        XCTAssertEqual(dot.y, 0.5)
+        dot.add(.rightStick(x: 0, y: 0))
+        XCTAssertEqual(dot, GyroPreviewDot())
+        dot.add(.mouse(dx: 50, dy: 50))
+        dot.centre()
+        XCTAssertEqual(dot, GyroPreviewDot())
+    }
+}

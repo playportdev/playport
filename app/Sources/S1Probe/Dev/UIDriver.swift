@@ -51,12 +51,14 @@
 //                              or a title's page over the
 //                              Library, then waits 1.5 s so a
 //                              screenshot sees it drawn; `open:<title id>#<section>`
-//                              opens the page's Game options at a section (graphics, game,
-//                              files, developer, ordering, steam);
+//                              opens the page's Game options at a section (graphics, controls,
+//                              game, files, developer, ordering, steam), and
+//                              `open:<title id>#gyro` its Controls › Gyro aim page;
 //                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controls, storage, setup, about,
 //                              developer; PlayportKit SettingsSection.named also takes
-//                              account, steam, jit, memory, diagnostics, pairing, probes, logs);
+//                              account, steam, jit, memory, diagnostics, pairing, probes, logs,
+//                              and gyro: Controls, ringed at its Gyro aim rows);
 //                              `open:licences` shows Settings › About › Licences,
 //                              `open:licences#<prefix>` the files of the first component
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
@@ -103,7 +105,9 @@
 //                              `rest`, then @<ms> (`gyro:yaw=90@500/pitch=-30+yaw=10@300`).
 //                              Taken only while the game's gyro output is on (controls:'s
 //                              "gyro") and the sensors run; the `gyro: driver` line says what
-//                              moved (mouse counts, or the right stick's peak)
+//                              moved (mouse counts, or the right stick's peak). With no game
+//                              running and the Gyro aim page up (open:<title id>#gyro), the
+//                              script moves its test area's dot instead (nothing reaches a guest)
 //   gesture:three-finger-tap   After a play: (it runs while the game runs): waits for the
 //                              game's first frame (3 min at most), then fires the three-finger
 //                              tap through the handler GameSurfaceView's recognizer calls
@@ -118,7 +122,7 @@
 //                              screenshot, overlay, controller, quit) and presses A, as a
 //                              controller does (controls opens its panel: pad:left/right
 //                              change the ringed row, pad:down moves along On-screen controls,
-//                              D-pad, Right stick and Opacity, pad:b back);
+//                              D-pad, Right stick, Opacity, Gyro aim and Sensitivity, pad:b back);
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
@@ -260,8 +264,18 @@ enum UIDriver {
                     if AppRestart.shared.restarting { return }
                 case "gyro":
                     let launch = TitleLaunch.shared
-                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
                     do { _ = try GyroScript.parse(id) } catch { return finish("action=\(action) refused: \(error)") }
+                    if !launch.running {
+                        // The Gyro aim page's test area (open:<title id>#gyro): its dot, nothing to a guest.
+                        guard case .previewing = GyroSensors.shared.run else {
+                            return finish("action=\(action) refused: no game is running and no Gyro aim test area runs "
+                                          + "(\(GyroSensors.shared.summary))")
+                        }
+                        if let failure = await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
+                        try? await Task.sleep(for: .milliseconds(500))   // the dot drawn, for a screenshot
+                        log("gyro \(id): \(GyroSensors.shared.summary)")
+                        break
+                    }
                     let deadline = Date().addingTimeInterval(180)
                     while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
                         try? await Task.sleep(for: .milliseconds(250))

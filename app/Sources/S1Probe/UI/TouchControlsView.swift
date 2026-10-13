@@ -32,6 +32,11 @@
 // - The fingers of a three-finger tap are cancelled (UIKit's touchesCancelled):
 //   whatever they held is let go, as if they had never come down.
 //
+// - The "Gyro aim" chip (TouchKeyboardMouse.dc.html's lit chip): while gyro aim
+//   runs for the game (GyroSensors, GyroRun.running), a small chip at the top
+//   middle of the safe area, between View and Menu, drawn with the controls
+//   (so at their opacity, and not while they are hidden).
+//
 // A dev build logs `controls:` lines: shown and hidden, and each press.
 
 #if canImport(UIKit)
@@ -49,6 +54,8 @@ final class OnScreenControls: ObservableObject {
     @Published private(set) var state = ControlsState(layout: .gamepad, visible: false, opacity: ControlsOpacity.defaultValue)
     /// Drawn and taking touches.
     @Published private(set) var drawn = false
+    /// Gyro aim runs for the game: the chip shows with the controls.
+    private(set) var gyroAiming = false
     private(set) var layout: ControlLayout?
     private(set) var controls = TouchControls()
     /// The controls' pad is in slot 0 (HostIO.touchControls).
@@ -104,6 +111,13 @@ final class OnScreenControls: ObservableObject {
     func dialogOverGame(_ up: Bool) {
         dialog = up
         update()
+    }
+
+    /// GyroSensors: gyro aim started or stopped for the game.
+    func gyroAiming(_ on: Bool) {
+        guard on != gyroAiming else { return }
+        gyroAiming = on
+        view?.refresh()
     }
 
     /// The app leaves the front: every touch let go.
@@ -229,6 +243,7 @@ private final class ClockTarget: NSObject {
 final class TouchControlsView: UIView {
     private var views: [String: ControlView] = [:]
     private let toast = ToastView()
+    private let chip = GyroChipView()
     private var touchIDs: [ObjectIdentifier: Int] = [:]
     private var nextTouch = 1
 
@@ -238,6 +253,7 @@ final class TouchControlsView: UIView {
         backgroundColor = .clear
         isHidden = true
         addSubview(toast)
+        addSubview(chip)
         accessibilityIdentifier = "touch-controls"
         OnScreenControls.shared.view = self
     }
@@ -258,6 +274,7 @@ final class TouchControlsView: UIView {
         OnScreenControls.shared.layout(in: bounds.size, insets: ControlInsets(top: Double(i.top), left: Double(i.left),
                                                                               bottom: Double(i.bottom), right: Double(i.right)))
         toast.place(in: bounds.inset(by: i))
+        chip.place(in: bounds.inset(by: i))
     }
 
     /// The phone turned (the island to the other side) or the insets otherwise changed: laid out again.
@@ -287,6 +304,7 @@ final class TouchControlsView: UIView {
         let model = OnScreenControls.shared
         isHidden = !model.drawn
         alpha = CGFloat(model.state.opacity)
+        chip.isHidden = !model.gyroAiming
         guard model.drawn else { return }
         let held = model.controls.held, pad = model.controls.output.pad
         for (id, v) in views {
@@ -444,6 +462,37 @@ private final class ControlView: UIView {
             let dx = CGFloat(stick?.x ?? 0) * r, dy = -CGFloat(stick?.y ?? 0) * r
             nub?.center = CGPoint(x: bounds.midX + dx, y: bounds.midY + dy)
         }
+    }
+}
+
+/// "Gyro aim", lit, at the top middle of the safe area: in line with View and
+/// Menu (ControlLayout.gamepad's top row, 98 pt in from each side), clear of
+/// them on the narrowest screen, and of the first-time note below it.
+private final class GyroChipView: UIView {
+    private let label = UILabel()
+
+    init() {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        isHidden = true
+        backgroundColor = Glass.fill
+        layer.borderWidth = 1
+        layer.borderColor = Glass.amberEdge.cgColor
+        label.text = "Gyro aim"
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = Glass.amber
+        label.textAlignment = .center
+        addSubview(label)
+        accessibilityIdentifier = "gyro-chip"
+    }
+
+    required init?(coder: NSCoder) { fatalError("GyroChipView is created in code") }
+
+    func place(in area: CGRect) {
+        let w = label.sizeThatFits(CGSize(width: 200, height: 20)).width + 20, h = 22.0
+        frame = CGRect(x: area.midX - w / 2, y: area.minY + 26, width: w, height: h)
+        layer.cornerRadius = h / 2
+        label.frame = bounds
     }
 }
 

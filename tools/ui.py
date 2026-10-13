@@ -17,12 +17,13 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          settings, account: Settings' Accounts section, setup: the first-run checklist as
                          Settings › Setup check's first row opens it, signin: Sign in to Steam, a preview
                          that sends nothing to Steam while Steam is signed in) or a title's page;
-                         open:ID#SECTION opens its Game options at a section (graphics, game, files,
-                         developer, ordering, steam);
+                         open:ID#SECTION opens its Game options at a section (graphics, controls, game,
+                         files, developer, ordering, steam); open:ID#gyro opens its Controls › Gyro aim
+                         page, whose test area runs the gyro for its dot while it is up (no game);
                          open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
                          controls, storage, setup, about, developer; also account, jit, memory,
-                         diagnostics, pairing, probes, logs for the section that holds them, and
-                         controllers, the old name of controls);
+                         diagnostics, pairing, probes, logs for the section that holds them,
+                         controllers, the old name of controls, and gyro: Controls at its Gyro aim rows);
                          open:licences shows Settings › About › Licences, open:licences#PREFIX the
                          files of the first component whose name starts with PREFIX (open:licences#wine);
                          there pad:down/up move through the rows and a text's paragraphs, pad:a opens
@@ -84,6 +85,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          per degree at sensitivity 1) or the right stick's peak (1 at 180 deg/s).
                          Example: --controls 'app-620:{"gyro":{"output":"mouse"}}' --action play:app-620
                          --action wait:30 --action gyro:yaw=90@500/rest@300/pitch=-30+yaw=10@300
+                         With no game running and the Gyro aim page up, it moves the page's test-area dot
+                         instead (nothing reaches a game): --action open:app-620#gyro --action gyro:yaw=30@500
   gesture:three-finger-tap
                          after a play: (it runs while the game runs): wait for the game's first frame,
                          then fire the three-finger tap through the handler the app's recognizer calls,
@@ -97,7 +100,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
                          (On-screen controls: Off, Gamepad; D-pad: Off, On; Right stick: Off, Below, Above
-                         A/B/X/Y; Opacity), pad:down/up move, pad:b goes back.
+                         A/B/X/Y; Opacity; Gyro aim: Off, Mouse, Right stick; Sensitivity), pad:down/up
+                         move, pad:b goes back.
                          menu:screenshot saves the frame to Photos (the first time iOS asks a person
                          to allow it) and, in a dev build, to Documents/Screenshots; menu:quit closes
                          the game's windows, and the run follows Playport's restart as for play:.
@@ -333,7 +337,7 @@ GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|play):[a-z]+-[A-Za-z0-9 ._-]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
-                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
+                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)

@@ -15,7 +15,8 @@
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
 // - Controls: when the on-screen controls show, their opacity, the Gamepad
 //   layout's d-pad and right stick, and haptics
-//   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), and every
+//   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), gyro aim's
+//   defaults (UI/GyroAimView.swift, the `gyro.*` keys), and every
 //   controller connected, with its battery and whether it has a gyro (PadRouter).
 // - Storage: free space and each game's size; A opens the game's page. Steamworks Shared
 //   (Steam's redistributables) with its size and Remove, and the emulator cache with Clear.
@@ -69,7 +70,8 @@ struct SettingsView: View {
             if let s = SettingsSection.named(name), SettingsSection.shown.contains(s) {
                 navigation.settingsSection = s
                 try? await Task.sleep(for: .milliseconds(200))
-                focus.ring(s.navItem)
+                // `gyro`: Controls, at its Gyro aim rows.
+                focus.ring(name == "gyro" ? "set:" + GyroDefaultsRows.id(.output) : s.navItem)
             }
             navigation.pageSection = nil
         }
@@ -366,6 +368,7 @@ private struct ControlsSettings: View {
                                 .joined(separator: " · ")).nilIfEmpty,
                             value: battery(c))
         }
+        GyroDefaultsRows()
         Color.clear.frame(height: 0).onAppear { router.refreshControllers() }
     }
 

@@ -1449,6 +1449,7 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(SettingsSection.named("jit"), .setup)
         XCTAssertEqual(SettingsSection.named("graphics"), .graphics)
         XCTAssertEqual(SettingsSection.named("controllers"), .controls)
+        XCTAssertEqual(SettingsSection.named("gyro"), .controls)
         XCTAssertNil(SettingsSection.named("nope"))
         // Up and down stop at the ends; a release build never steps onto Developer.
         XCTAssertEqual(SettingsSection.accounts.step(-1, developer: true), .accounts)
@@ -2099,7 +2100,11 @@ final class QuickMenuTests: XCTestCase {
         m.move(down: true)
         XCTAssertEqual(m.panel, .opacity)
         m.move(down: true)
-        XCTAssertEqual(m.panel, .opacity)
+        XCTAssertEqual(m.panel, .gyro)
+        m.move(down: true)
+        XCTAssertEqual(m.panel, .gyroSensitivity)
+        m.move(down: true)
+        XCTAssertEqual(m.panel, .gyroSensitivity)
         XCTAssertEqual(m.ring, .controls)   // the rows' ring stays on Controls
         m.closePanel()
         XCTAssertNil(m.panel)

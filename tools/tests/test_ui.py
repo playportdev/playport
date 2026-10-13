@@ -180,6 +180,20 @@ class UiEnvTest(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             m.parse(["--action", "gyro:yaw=90"])
 
+    def test_the_gyro_aim_page_and_its_test_area_are_reachable(self):
+        """open:ID#gyro opens Game options › Controls › Gyro aim, open:ID#controls its Controls section,
+        open:settings#gyro Settings › Controls at its Gyro aim rows; gyro: with no game moves the test area's dot."""
+        m = load()
+        for ok in ("open:app-620#gyro", "open:app-620#controls", "open:settings#gyro", "menu:controls"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        self.assertFalse(m.ACTION_RE.match("open:settings#gyroaim"))
+        a = m.parse(["--action", "open:app-620#gyro", "--action", "gyro:yaw=30@500", "--action", "pad:down+right"])
+        self.assertEqual(a.action, ["open:app-620#gyro", "gyro:yaw=30@500", "pad:down+right"])
+        self.assertFalse(m.after_play(a.action))
+        self.assertIsNone(m.pad_after_play(a.action))
+        self.assertIn("open:ID#gyro", m.__doc__)
+        self.assertIn("Gyro aim: Off, Mouse, Right stick; Sensitivity", m.__doc__)
+
     def test_three_finger_tap_opens_the_menu_so_pad_after_it_is_the_menus(self):
         """gesture:three-finger-tap fires the app's three-finger tap handler (HostIO.menuGesture),
         which opens the in-game menu with or without on-screen controls: pad: after it is the menu's."""

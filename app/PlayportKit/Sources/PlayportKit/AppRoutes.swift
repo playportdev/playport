@@ -33,7 +33,8 @@ public struct AppRoutes {
     }
 
     public enum GamePanel: String, Hashable {
-        case options, achievements
+        /// `gyro`: Game options › Controls › Gyro aim, opened over Game options.
+        case options, achievements, gyro
     }
 
     private struct Screen {

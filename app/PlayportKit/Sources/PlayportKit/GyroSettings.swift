@@ -127,13 +127,23 @@ public struct GyroSettings: Codable, Equatable, Sendable {
         let d = GyroSettings()
         output = defaults.string(forKey: Self.outputKey).flatMap(GyroOutput.init(rawValue:)) ?? d.output
         source = defaults.string(forKey: Self.sourceKey).flatMap(GyroSource.init(rawValue:)) ?? d.source
-        sensitivity = Self.kept(defaults.object(forKey: Self.sensitivityKey) as? Double, in: Self.sensitivityRange, else: d.sensitivity)
-        verticalRatio = Self.kept(defaults.object(forKey: Self.verticalRatioKey) as? Double, in: Self.verticalRatioRange,
-                                  else: d.verticalRatio)
+        sensitivity = Self.kept(Self.number(defaults, Self.sensitivityKey), in: Self.sensitivityRange, else: d.sensitivity)
+        verticalRatio = Self.kept(Self.number(defaults, Self.verticalRatioKey), in: Self.verticalRatioRange, else: d.verticalRatio)
         turnAxis = defaults.string(forKey: Self.turnAxisKey).flatMap(GyroTurnAxis.init(rawValue:)) ?? d.turnAxis
         invertX = defaults.object(forKey: Self.invertXKey) as? Bool ?? d.invertX
         invertY = defaults.object(forKey: Self.invertYKey) as? Bool ?? d.invertY
         pauseButton = defaults.string(forKey: Self.pauseButtonKey).flatMap(GyroPauseButton.init(name:)) ?? d.pauseButton
+    }
+
+    /// A number key: a number, or a String that reads as one (the driver's `set:gyro.sensitivity=1.5` stores "1.5").
+    static func number(_ defaults: UserDefaults, _ key: String) -> Double? {
+        switch defaults.object(forKey: key) {
+        case let v as Double: v
+        case let v as Int: Double(v)
+        case let n as NSNumber: n.doubleValue
+        case let s as String: Double(s.trimmingCharacters(in: .whitespaces))
+        default: nil
+        }
     }
 
     static func kept(_ v: Double?, in range: ClosedRange<Double>, else d: Double) -> Double {
@@ -231,12 +241,35 @@ public struct GyroConditions: Equatable, Sendable {
     }
 }
 
-/// Whether gyro aim's sensors run, and which: only while its output is not Off
-/// and the game is in front and taking input. Anything else stops them; when
-/// they start again GyroAim restarts its windows (no jump from before the stop).
+/// What the Gyro aim page's test area needs to run the sensors for its dot
+/// (S1Probe's GyroSensors gathers it while the page is up).
+public struct GyroPreviewConditions: Equatable, Sendable {
+    /// The page's settings: a game's own over the defaults, or the defaults.
+    public var settings: GyroSettings
+    /// A game is running (any step): the game's gyro, never the page's, then.
+    public var gameRunning: Bool
+    /// The app is active and in the foreground.
+    public var appActive: Bool
+    public var phoneHasGyro: Bool
+    public var controllerHasGyro: Bool
+
+    public init(settings: GyroSettings, gameRunning: Bool = false, appActive: Bool = true, phoneHasGyro: Bool = true,
+                controllerHasGyro: Bool = false) {
+        self.settings = settings; self.gameRunning = gameRunning; self.appActive = appActive
+        self.phoneHasGyro = phoneHasGyro; self.controllerHasGyro = controllerHasGyro
+    }
+}
+
+/// Whether gyro aim's sensors run, which, and for what: only while its output
+/// is not Off and the game is in front and taking input (`running`: the output
+/// goes to the guest). Anything else stops them; when they start again GyroAim
+/// restarts its windows (no jump from before the stop). Outside a game, the
+/// Gyro aim page's test area runs them for its dot (`previewing`: the output
+/// goes to the dot, never to the guest).
 public enum GyroRun: Equatable, Sendable {
     case stopped(String)
     case running(GyroDevice, GyroOutput)
+    case previewing(GyroDevice, GyroOutput)
 
     public static func decide(_ c: GyroConditions) -> GyroRun {
         if c.settings.output == .off { return .stopped("output off") }
@@ -250,8 +283,29 @@ public enum GyroRun: Equatable, Sendable {
         return .running(d, c.settings.output)
     }
 
+    /// The game's run, else (no game running, `preview` given: the page is up)
+    /// the test area's. A running game always wins, and its output alone reaches the guest.
+    public static func decide(_ c: GyroConditions, preview: GyroPreviewConditions?) -> GyroRun {
+        let game = decide(c)
+        guard case .stopped = game, let p = preview, !p.gameRunning else { return game }
+        if p.settings.output == .off { return .stopped("preview: output off") }
+        if !p.appActive { return .stopped("preview: app not active") }
+        guard let d = p.settings.source.device(phone: p.phoneHasGyro, controller: p.controllerHasGyro) else {
+            return .stopped(p.settings.source == .controller ? "preview: no controller with a gyro" : "preview: no gyro")
+        }
+        return .previewing(d, p.settings.output)
+    }
+
     public var device: GyroDevice? {
-        if case .running(let d, _) = self { return d }
-        return nil
+        switch self {
+        case .running(let d, _), .previewing(let d, _): d
+        case .stopped: nil
+        }
+    }
+
+    /// The guest takes the output (a game's run, not the test area's).
+    public var toGuest: Bool {
+        if case .running = self { return true }
+        return false
     }
 }

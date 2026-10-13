@@ -43,6 +43,8 @@ struct PadRow: View {
     var hint = "Choose"
     /// Y on the row: its value back to the default (a game's option set for it).
     var reset: (() -> Void)?
+    /// Left (-1) and right (+1) step the row's value rather than move the ring (a number row).
+    var adjust: ((Int) -> Void)?
     let action: () -> Void
     @ObservedObject private var focus = PadFocus.shared
 
@@ -62,7 +64,7 @@ struct PadRow: View {
             }
             .font(.system(size: 13)).foregroundStyle(selected ? Color(hex: 0x3A4452) : PP.muted)
         }
-        .padItem(id, hint: hint, cornerRadius: 10, reset: reset, ring: style != .plain, action: action)
+        .padItem(id, hint: hint, cornerRadius: 10, adjust: adjust, reset: reset, ring: style != .plain, action: action)
     }
 }
 

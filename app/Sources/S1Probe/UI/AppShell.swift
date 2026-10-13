@@ -245,6 +245,9 @@ struct AppShell: View {
             h.append(PadHint(button: .b, label: "Close") { _ = nav.back() })
         case .achievements?:
             h.append(PadHint(button: .b, label: nav.gamePanels.count > 1 ? "Game options" : "Close") { _ = nav.back() })
+        case .gyro?:
+            if focus.canReset { h.append(PadHint(button: .y, label: "Back to default") { focus.resetFocused() }) }
+            h.append(PadHint(button: .b, label: "Game options") { _ = nav.back() })
         case nil:
             if let x = gamePage.x { h.append(PadHint(button: .x, label: x.label, action: x.action)) }
             h.append(PadHint(button: .b, label: nav.gameBackLabel) { _ = nav.back() })

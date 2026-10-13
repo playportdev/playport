@@ -6,7 +6,9 @@
 // device. While it plays its samples replace the sensors': the phone lying
 // still on a desk does not fight it. Its samples are taken only while the
 // sensors run (the game's gyro output on, the game in front, no menu), as a
-// sensor's are; otherwise they move nothing and the line says why.
+// sensor's are; otherwise they move nothing and the line says why. With no
+// game running and the Gyro aim page up, they move its test area's dot
+// (nothing reaches a guest), and the line gives where the dot ended.
 //
 //   gyro:<axis>=<deg/s>[+<axis>=<deg/s>...]@<ms>[/<step>...]   (rest@<ms> holds still)
 //
@@ -26,15 +28,22 @@ extension GyroSensors {
         let r = await feed.play(script)
         let state = switch before {
         case .running(let d, let o): "source \(d.rawValue), output \(o.rawValue)"
+        case .previewing(let d, let o): "test area: source \(d.rawValue), output \(o.rawValue)"
         case .stopped(let why): "not running: \(why)"
         }
-        let moved: String
+        var moved: String
         if r.taken == 0 {
             moved = "nothing moved"
         } else if case .running(_, .rightStick) = before {
             moved = String(format: "right stick peak %.2f", r.peak)
+        } else if case .previewing(_, .rightStick) = before {
+            moved = String(format: "right stick peak %.2f", r.peak)
         } else {
             moved = "mouse dx=\(r.dx) dy=\(r.dy)"
+        }
+        if case .previewing = before {
+            let dot = feed.preview.dot
+            moved += String(format: "; dot at x=%.2f y=%.2f", dot.x, dot.y)
         }
         Self.log("driver \(spec): \(r.samples) samples over \(script.totalMs + GyroScript.restAfterMs) ms, \(r.taken) taken "
                  + "(\(state)): \(moved)")
@@ -45,6 +54,7 @@ extension GyroSensors {
     var summary: String {
         switch run {
         case .running(let d, let o): "gyro running: source \(d.rawValue), output \(o.rawValue)"
+        case .previewing(let d, let o): "gyro in the test area: source \(d.rawValue), output \(o.rawValue)"
         case .stopped(let why): "gyro stopped: \(why)"
         }
     }
