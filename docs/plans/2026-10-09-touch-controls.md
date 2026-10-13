@@ -265,7 +265,10 @@ proposed answer unless the owner says otherwise before the phase that needs them
      and the cosmetic list below (the scripted pad is named "Scripted pad" in dev). Hollow
      Knight `first-frame+10` passed; both games' own controls restored by DriverUndo. **Next
      (queue head): the owner's phase 2 and phase 3 sign-offs.**
-  14. **Phase 2 and phase 3 sign-offs (owner).** Then stop.
+  14. **Phase 2 and phase 3 signed off by the owner (2026-10-13)** on dev IPA `5faec414…`.
+     Phases 1–3 are done; this run stopped here. Phases 4+ are not started; follow-ups:
+     PLA-338 (Vulkan device lost in the background), PLA-339 (shared held keys release
+     early), PLA-340 (arrow keys without the extended flag).
 - **Phone:** dev IPA `5faec414…` (U) installed; unattended mode off (the owner is at the
   phone). Both games keep the owner's own controls, restored by DriverUndo after the 2f/3c
   session: Portal 2 Gamepad, right stick Below, gyro Mouse 1.5×; Hollow Knight Gamepad 60%,
