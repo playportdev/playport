@@ -36,7 +36,10 @@ proposed answer unless the owner says otherwise before the phase that needs them
   phase's one phone session is its own last chunk, and **every phase then waits for the
   owner's hands-on sign-off** before the next phase starts. The owner's feedback becomes
   a fix chunk.
-- **Running:** nothing; phase 1 waits for the owner's sign-off.
+- **Phase 1 signed off by the owner (2026-10-13)** on IPA `67d0938d…` (1c), with one tweak:
+  A/B/X/Y a bit bigger. The tweak is a separate commit in 2a, checked on the host and seen
+  on the phone in 2d.
+- **Running:** 2a (with the A/B/X/Y tweak).
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -66,26 +69,23 @@ proposed answer unless the owner says otherwise before the phase that needs them
        A/B/X/Y in both cases.
   4. No outlines on the stick zones.
 - **Queue:**
-  1. **Phase 1 sign-off (owner):** play Hollow Knight with only the touch overlay:
-     several fingers at once, the floating sticks, haptics, the first-time toast, a
-     controller connecting mid-game, both landscape orientations; and 1b's and 1c's checks
-     (their evidence, "Not checked here").
-  2. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
-  3. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+  1. **2a, running:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host
+     tests; plus the A/B/X/Y size tweak as its own commit.
+  2. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
-  4. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+  3. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
-  5. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
+  4. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
      chunk follows.
-  6. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
-  7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
+  5. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
+  6. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
-  8. **3b:** the Controller page and the ActionPicker.
-  9. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+  7. **3b:** the Controller page and the ActionPicker.
+  8. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
-  10. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
-      a controller. Then stop.
+  9. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+     a controller. Then stop.
 - **Phone:** dev IPA `67d0938d…` (1c) installed; unattended mode on; Hollow Knight's own
   on-screen controls are Off (the owner's setting, left as found); Hollow Knight's profile
   slot 3 may now hold a King's Pass save rather than New Game (check it before a
