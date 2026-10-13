@@ -186,6 +186,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          playport:menu. The log's `controls: controller map MODE for PAD (slot N)` line
                          shows the map each pad plays. Example: --controls
                          'app-620:{"controllerMap":{"mode":"keyboardMouse"}}' --pad
+                         "lookSpeed" (0.1-8, Settings' controls.lookSpeed, 1 by default) is how fast a
+                         stick bound to mouse:move turns the view, a multiple of 2000 counts/s (the
+                         Controller page's Look speed row); a change logs `controls: look speed 2.0×`
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
@@ -561,7 +564,7 @@ def parse(argv=None):
                    help='save these on-screen controls for the title first ({"layout":"off"} or '
                         '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}, with "gyro":'
                         '{"output":"mouse","sensitivity":1.5} for its gyro aim, "controllerMap":{"mode":"keyboardMouse"} for its '
-                        'controller map; {} clears them)')
+                        'controller map, "lookSpeed":2 for its mouse look; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -614,13 +617,14 @@ def parse(argv=None):
         try:
             cobj = json.loads(cjs)
             ok = ID_RE.match(cid) and isinstance(cobj, dict) \
-                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap"} \
+                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap", "lookSpeed"} \
                 and cobj.get("layout", "off") in ("off", "gamepad") \
                 and number(cobj.get("opacity", 0.5), 0.1, 1) \
                 and cobj.get("dpad", "off") in ("off", "on") \
                 and cobj.get("rightStick", "off") in ("off", "below", "above") \
                 and gyro_ok(cobj.get("gyro", {})) \
-                and ("controllerMap" not in cobj or controller_map_ok(cobj["controllerMap"]))
+                and ("controllerMap" not in cobj or controller_map_ok(cobj["controllerMap"])) \
+                and number(cobj.get("lookSpeed", 1), 0.1, 8)
         except ValueError:
             ok = False
         if not ok:
@@ -628,7 +632,7 @@ def parse(argv=None):
                     "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
                     "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
                     "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9) and controllerMap "
-                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) only")
+                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) and lookSpeed (0.1-8) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:

@@ -64,6 +64,8 @@ public struct InputMixer: Sendable {
     private var gyroStick: (x: Double, y: Double)?
     /// The controller map's table; nil for the `controller` mode.
     public private(set) var map: ControllerBindings?
+    /// The mouse look's speed for the mapped pads (MappedPad.lookSpeed).
+    public private(set) var lookSpeed = 1.0
     /// Each physical pad's own values, by slot.
     private var raw: [Int: PadValues] = [:]
     private var mapped: [Int: MappedPad] = [:]
@@ -113,7 +115,7 @@ public struct InputMixer: Sendable {
         raw[slot] = v
         var out = v
         if let map {
-            var m = mapped[slot] ?? MappedPad(bindings: map, held: holders)
+            var m = mapped[slot] ?? MappedPad(bindings: map, held: holders, lookSpeed: lookSpeed)
             pending += m.update(v)
             mapped[slot] = m
             out = m.pad
@@ -137,8 +139,13 @@ public struct InputMixer: Sendable {
     /// The controller map's table for every physical pad (nil: the
     /// `controller` mode, a pad passes through): each connected pad's slot
     /// again. What the old map held goes up; an input down now does nothing
-    /// under the new one until it is let go.
-    public mutating func setMap(_ b: ControllerBindings?) -> [(slot: Int, values: PadValues)] {
+    /// under the new one until it is let go. A new `lookSpeed` alone (the same
+    /// table) changes the mapped pads' mouse speed in place: nothing goes up.
+    public mutating func setMap(_ b: ControllerBindings?, lookSpeed: Double = 1) -> [(slot: Int, values: PadValues)] {
+        if lookSpeed != self.lookSpeed {
+            self.lookSpeed = lookSpeed
+            for slot in mapped.keys { mapped[slot]?.lookSpeed = lookSpeed }
+        }
         guard b != map else { return [] }
         map = b
         mapped = [:]
@@ -147,7 +154,7 @@ public struct InputMixer: Sendable {
             guard let v = raw[slot] else { continue }
             var values = v
             if let b {
-                let m = MappedPad(bindings: b, values: v, held: holders)
+                let m = MappedPad(bindings: b, values: v, held: holders, lookSpeed: lookSpeed)
                 mapped[slot] = m
                 values = m.pad
             }

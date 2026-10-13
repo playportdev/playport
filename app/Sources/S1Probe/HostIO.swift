@@ -87,6 +87,8 @@ final class HostIO {
     private var padNames: [Int: String] = [:]
     /// The controller map the pads play through now (updateControllerMap).
     private var controllerMap: ControllerMap?
+    /// Its look speed (updateControllerMap).
+    private var lookSpeed = LookSpeed.defaultValue
     /// The map last logged for each slot's pad.
     private var loggedMaps: [Int: String] = [:]
     private var subscriptions: Set<AnyCancellable> = []
@@ -477,14 +479,19 @@ final class HostIO {
         sendMixer()
     }
 
-    /// The running game's controller map (its own over Settings'), into the mixer when it changed.
+    /// The running game's controller map and look speed (its own over Settings'), into the mixer when either changed.
     func updateControllerMap() {
         let store = ControlsStore.shared
-        let map = TitleLaunch.shared.titleID.map { store.game($0).controllerMap(over: store.defaults) } ?? store.defaults.controllerMap
-        guard map != controllerMap else { return }
+        let game = TitleLaunch.shared.titleID.map { store.game($0) } ?? GameControls()
+        let map = game.controllerMap(over: store.defaults), speed = game.lookSpeed(over: store.defaults)
+        guard map != controllerMap || speed != lookSpeed else { return }
+        #if !PLAYPORT_RELEASE
+        if speed != lookSpeed { HostIO.log("controls: look speed \(LookSpeed.label(speed))") }
+        #endif
         controllerMap = map
+        lookSpeed = speed
         Self.pads.withLock { p in
-            for (slot, v) in p.mixer.setMap(map.bindings) {
+            for (slot, v) in p.mixer.setMap(map.bindings, lookSpeed: speed) {
                 if let out = p.gate.input(slot: slot, v) { Self.set(slot, out) }
             }
         }

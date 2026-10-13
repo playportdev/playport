@@ -93,6 +93,36 @@ final class ControllerMapTests: XCTestCase {
         d.removePersistentDomain(forName: "ControllerMapTests")
     }
 
+    func testLookSpeedPerGameOverTheDefault() throws {
+        let d = UserDefaults(suiteName: "ControllerMapTests.look")!
+        d.removePersistentDomain(forName: "ControllerMapTests.look")
+        XCTAssertEqual(ControlsDefaults(d).lookSpeed, 1)
+        d.set(2, forKey: ControlsDefaults.lookSpeedKey)                  // an Int, as set: stores 2
+        XCTAssertEqual(ControlsDefaults(d).lookSpeed, 2)
+        d.set("1.5", forKey: ControlsDefaults.lookSpeedKey)              // a String, as set: stores 1.5
+        XCTAssertEqual(ControlsDefaults(d).lookSpeed, 1.5)
+        d.set(50.0, forKey: ControlsDefaults.lookSpeedKey)               // out of range: the default
+        XCTAssertEqual(ControlsDefaults(d).lookSpeed, 1)
+        d.removePersistentDomain(forName: "ControllerMapTests.look")
+        let defaults = ControlsDefaults(lookSpeed: 0.5)
+        XCTAssertEqual(GameControls().lookSpeed(over: defaults), 0.5)
+        XCTAssertEqual(GameControls(lookSpeed: 3).lookSpeed(over: defaults), 3)
+        XCTAssertEqual(GameControls(lookSpeed: 0).lookSpeed(over: defaults), 0.5)
+        XCTAssertFalse(GameControls(lookSpeed: 2).isEmpty)
+        // Saved in the game's record; older records read as none.
+        let c = try JSONDecoder().decode(GameControls.self, from: Data(#"{"lookSpeed":2.5,"controllerMap":{"mode":"keyboardMouse"}}"#.utf8))
+        XCTAssertEqual(c.lookSpeed, 2.5)
+        XCTAssertEqual(try JSONDecoder().decode(GameControls.self, from: try JSONEncoder().encode(c)), c)
+        XCTAssertNil(try JSONDecoder().decode(GameControls.self, from: Data(#"{"layout":"off"}"#.utf8)).lookSpeed)
+        // The row's steps: 0.25× to 4×, stopping at the ends, from the nearest step.
+        XCTAssertEqual(LookSpeed.step(1, by: 1), 1.25)
+        XCTAssertEqual(LookSpeed.step(4, by: 1), 4)
+        XCTAssertEqual(LookSpeed.step(0.25, by: -1), 0.25)
+        XCTAssertEqual(LookSpeed.step(1.1, by: 1), 1.25)
+        XCTAssertEqual(LookSpeed.label(1), "1.0×")
+        XCTAssertEqual(LookSpeed.label(0.25), "0.25×")
+    }
+
     // MARK: the preset through the mixer
 
     func pad(_ input: (inout PadInput) -> Void) -> PadValues {

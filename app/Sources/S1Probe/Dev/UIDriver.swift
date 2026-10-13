@@ -47,7 +47,9 @@
 //                              "controllerMap" its controller map (PlayportKit ControllerMap:
 //                              {"mode":"controller"|"keyboardMouse"|"custom","table":{INPUT:
 //                              ACTION,...}}, a custom map without a table starting as the
-//                              keyboardMouse preset); one this build cannot read is refused
+//                              keyboardMouse preset); one this build cannot read is refused;
+//                              "lookSpeed" (0.1-8, 1 by default) its mouse look's speed, a
+//                              multiple of 2000 counts/s for a stick bound to mouse:move
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
@@ -259,7 +261,9 @@ enum UIDriver {
                         + "dpad=\(c.dpad?.rawValue ?? "default") rightStick=\(c.rightStick?.rawValue ?? "default") "
                         + "gyro=\(c.gyro == nil ? "default" : "own") (\(ControlsStore.shared.gyro(id).summary)) "
                         + "controllerMap=\(c.controllerMap == nil ? "default" : "own") "
-                        + "(\(ControlsStore.shared.game(id).controllerMap(over: ControlsStore.shared.defaults).summary))")
+                        + "(\(ControlsStore.shared.game(id).controllerMap(over: ControlsStore.shared.defaults).summary)) "
+                        + "lookSpeed=\(c.lookSpeed == nil ? "default" : "own") "
+                        + "(\(LookSpeed.label(ControlsStore.shared.game(id).lookSpeed(over: ControlsStore.shared.defaults))))")
                 case "touch":
                     let launch = TitleLaunch.shared
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }

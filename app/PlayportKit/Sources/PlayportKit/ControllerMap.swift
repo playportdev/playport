@@ -15,6 +15,12 @@
 // for the default); Settings' default is under `controls.controllerMap`, as a
 // mode's name or a map's JSON. Saved JSON carries `version` (left out, it is
 // this build's); any other is refused, and the default applies instead.
+//
+// Look speed (LookSpeed): how fast a stick bound to `mouse:move` turns the
+// view, a multiple of MappedPad's 2000 counts a second. It is not part of the
+// map: a game's own is GameControls.lookSpeed, over Settings'
+// `controls.lookSpeed` (1×), so a mode change keeps it and Y on its row
+// clears just it.
 
 import Foundation
 import HostIOKit
@@ -112,4 +118,28 @@ public struct ControllerMap: Codable, Equatable, Sendable {
     public var summary: String {
         mode == .custom ? "custom (\(custom.table.count) inputs)" : mode.rawValue
     }
+}
+
+/// The Look speed row's steps (Keyboard & mouse and Custom; ControllerMapping.dc.html).
+public enum LookSpeed {
+    public static let defaultsKey = "controls.lookSpeed"
+    public static let defaultValue = 1.0
+    public static let steps: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4]
+    /// What a saved or `set:` value may be; anything else reads as the default.
+    public static let range = 0.1...8.0
+
+    /// `value` when it is in range, else the default.
+    public static func kept(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, range.contains(value) else { return nil }
+        return value
+    }
+
+    /// The step `by` steps from `value` (-1 left, +1 right), stopping at the ends; a value between the steps moves from its nearest.
+    public static func step(_ value: Double, by: Int) -> Double {
+        let i = GyroSteps.nearest(value, in: steps)
+        return steps[max(0, min(steps.count - 1, i + by))]
+    }
+
+    /// `1.0×`, `0.25×`.
+    public static func label(_ value: Double) -> String { GyroText.sensitivity(value) }
 }

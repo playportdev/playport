@@ -283,6 +283,18 @@ class UiEnvTest(unittest.TestCase):
                 m.parse(["--controls", "app-620:" + bad])
         self.assertIn("controllerMap", m.__doc__)
 
+    def test_controls_carries_a_games_look_speed(self):
+        """--controls' "lookSpeed" is GameControls.lookSpeed: a number 0.1-8, the mouse look's speed."""
+        m = load()
+        for ok in ('{"lookSpeed":1}', '{"lookSpeed":0.25}', '{"lookSpeed":8}',
+                   '{"controllerMap":{"mode":"keyboardMouse"},"lookSpeed":2.5}'):
+            a = m.parse(["--controls", "app-620:" + ok])
+            self.assertEqual(a.controls_pair, ("app-620", json.dumps(json.loads(ok), separators=(",", ":"))), ok)
+        for bad in ('{"lookSpeed":0}', '{"lookSpeed":9}', '{"lookSpeed":"2"}', '{"lookSpeed":true}', '{"lookSpeed":null}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + bad])
+        self.assertIn("lookSpeed", m.__doc__)
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")

@@ -11,8 +11,9 @@ import Foundation
 ///   flicker). A stick's directions are its two axes apart, so a diagonal
 ///   holds two (W and D).
 /// - A stick bound to `mouse:move` moves the mouse at a speed set by its
-///   deflection (`Tuning.velocity`), on each clock tick, whole counts out and
-///   the rest carried (RelativeMotion).
+///   deflection (`Tuning.velocity`) times the game's look speed (`lookSpeed`,
+///   1 by default), on each clock tick, whole counts out and the rest carried
+///   (RelativeMotion).
 /// - The wheel turns one notch as its input goes down, then repeats while it
 ///   is held (`Tuning.wheelDelay`, `Tuning.wheelInterval`); Playport's actions
 ///   happen once, as their input goes down.
@@ -35,7 +36,7 @@ public struct MappedPad: Sendable {
         /// ...then speed = maxSpeed × t^curve, t the deflection past the dead zone over what is left (0...1):
         /// fine aim near the centre, a quick turn at the rim.
         public static let mouseCurve = 2.0
-        /// Mouse counts a second at full deflection.
+        /// Mouse counts a second at full deflection, at look speed 1.
         public static let mouseMaxSpeed = 2000.0
         /// The longest gap between two ticks that counts (a stalled clock does not jump the view).
         public static let maxTickGap = 0.05
@@ -44,18 +45,21 @@ public struct MappedPad: Sendable {
         /// ...then once every this often.
         public static let wheelInterval = 0.1
 
-        /// A stick's deflection (-1...1, +y up) as mouse counts a second (+y down).
-        public static func velocity(x: Double, y: Double) -> (dx: Double, dy: Double) {
+        /// A stick's deflection (-1...1, +y up) as mouse counts a second (+y down), at `lookSpeed` times `mouseMaxSpeed`.
+        public static func velocity(x: Double, y: Double, lookSpeed: Double = 1) -> (dx: Double, dy: Double) {
             guard x.isFinite, y.isFinite else { return (0, 0) }
             let m = (x * x + y * y).squareRoot()
             guard m > mouseDeadZone else { return (0, 0) }
             let t = min(1, (m - mouseDeadZone) / (1 - mouseDeadZone))
-            let speed = mouseMaxSpeed * pow(t, mouseCurve)
+            let speed = mouseMaxSpeed * (lookSpeed.isFinite ? max(0, lookSpeed) : 1) * pow(t, mouseCurve)
             return (speed * x / m, -speed * y / m)
         }
     }
 
     public let bindings: ControllerBindings
+    /// The mouse look's speed, a multiple of `Tuning.mouseMaxSpeed` (the game's
+    /// Look speed); changing it moves nothing and releases nothing.
+    public var lookSpeed: Double
     private var values = PadValues()
     /// The inputs pressed now (by Tuning's hysteresis for triggers and stick directions).
     private var active: Set<ControllerInput> = []
@@ -68,8 +72,10 @@ public struct MappedPad: Sendable {
     private var wheelNext: [ControllerInput: Double?] = [:]
 
     /// A pad with this table; `held` its inputs down now, which do nothing until let go.
-    public init(bindings: ControllerBindings, values v: PadValues = PadValues(), held: Set<GuestPadGate.Holder> = []) {
+    public init(bindings: ControllerBindings, values v: PadValues = PadValues(), held: Set<GuestPadGate.Holder> = [],
+                lookSpeed: Double = 1) {
         self.bindings = bindings
+        self.lookSpeed = lookSpeed
         holders = held
         values = v
         active = pressed(v)
@@ -169,7 +175,7 @@ public struct MappedPad: Sendable {
         var vx = 0.0, vy = 0.0
         for s in [PadControl.leftStick, .rightStick] where bindings[.control(s)] == .mouse(.move) {
             let (x, y) = s == .leftStick ? (values.lx, values.ly) : (values.rx, values.ry)
-            let v = Tuning.velocity(x: Self.unit(x), y: Self.unit(y))
+            let v = Tuning.velocity(x: Self.unit(x), y: Self.unit(y), lookSpeed: lookSpeed)
             vx += v.dx; vy += v.dy
         }
         return vx == 0 && vy == 0 ? nil : (vx, vy)

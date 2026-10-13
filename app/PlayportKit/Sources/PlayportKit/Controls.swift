@@ -22,6 +22,7 @@
 //   over the `gyro.*` defaults; a change applies at once as the rest do.
 // - The controller map (ControllerMap.swift): the game's own in the same
 //   record, else Settings' (`controls.controllerMap`); `controller` by default.
+//   Its Look speed the same way (`lookSpeed`, `controls.lookSpeed`; 1×).
 
 import Foundation
 
@@ -118,6 +119,7 @@ public struct ControlsDefaults: Equatable, Sendable {
     public static let dpadKey = "controls.dpad"
     public static let rightStickKey = "controls.rightStick"
     public static let controllerMapKey = ControllerMap.defaultsKey
+    public static let lookSpeedKey = LookSpeed.defaultsKey
 
     public var show = ControlsShow.automatic
     public var opacity = ControlsOpacity.defaultValue
@@ -125,11 +127,13 @@ public struct ControlsDefaults: Equatable, Sendable {
     public var dpad = OnScreenDpad.off
     public var rightStick = OnScreenRightStick.off
     public var controllerMap = ControllerMap()
+    public var lookSpeed = LookSpeed.defaultValue
 
     public init(show: ControlsShow = .automatic, opacity: Double = ControlsOpacity.defaultValue, haptics: Bool = true,
-                dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off, controllerMap: ControllerMap = ControllerMap()) {
+                dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off, controllerMap: ControllerMap = ControllerMap(),
+                lookSpeed: Double = LookSpeed.defaultValue) {
         self.show = show; self.opacity = opacity; self.haptics = haptics; self.dpad = dpad; self.rightStick = rightStick
-        self.controllerMap = controllerMap
+        self.controllerMap = controllerMap; self.lookSpeed = lookSpeed
     }
 
     /// What `defaults` holds, each key missing (or not understood) read as its default.
@@ -141,13 +145,16 @@ public struct ControlsDefaults: Equatable, Sendable {
         dpad = defaults.string(forKey: Self.dpadKey).flatMap(OnScreenDpad.init(rawValue:)) ?? .off
         rightStick = defaults.string(forKey: Self.rightStickKey).flatMap(OnScreenRightStick.init(rawValue:)) ?? .off
         controllerMap = ControllerMap(defaults)
+        // A number, or a String that reads as one (the driver's `set:controls.lookSpeed=1.5`).
+        lookSpeed = LookSpeed.kept(GyroSettings.number(defaults, Self.lookSpeedKey)) ?? LookSpeed.defaultValue
     }
 }
 
 /// A game's own controls, nil fields following the defaults. Saved as JSON per
 /// catalogue id; the dev driver's `controls:<title id>` saves one. `gyro` is the
 /// game's own gyro aim (GyroSettings.swift), over Settings' `gyro.*` defaults;
-/// `controllerMap` its controller map (ControllerMap.swift), over Settings'. JSON
+/// `controllerMap` its controller map (ControllerMap.swift), over Settings', and
+/// `lookSpeed` its mouse look's speed (LookSpeed), over Settings'. JSON
 /// saved before either reads as none; a map this build cannot read (another
 /// version) reads as none too, so the rest of the record still loads.
 public struct GameControls: Codable, Equatable, Sendable {
@@ -157,14 +164,16 @@ public struct GameControls: Codable, Equatable, Sendable {
     public var rightStick: OnScreenRightStick?
     public var gyro: GameGyro?
     public var controllerMap: ControllerMap?
+    public var lookSpeed: Double?
 
     public init(layout: OnScreenLayout? = nil, opacity: Double? = nil, dpad: OnScreenDpad? = nil,
-                rightStick: OnScreenRightStick? = nil, gyro: GameGyro? = nil, controllerMap: ControllerMap? = nil) {
+                rightStick: OnScreenRightStick? = nil, gyro: GameGyro? = nil, controllerMap: ControllerMap? = nil,
+                lookSpeed: Double? = nil) {
         self.layout = layout; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick; self.gyro = gyro
-        self.controllerMap = controllerMap
+        self.controllerMap = controllerMap; self.lookSpeed = lookSpeed
     }
 
-    enum CodingKeys: String, CodingKey { case layout, opacity, dpad, rightStick, gyro, controllerMap }
+    enum CodingKeys: String, CodingKey { case layout, opacity, dpad, rightStick, gyro, controllerMap, lookSpeed }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -174,14 +183,19 @@ public struct GameControls: Codable, Equatable, Sendable {
         rightStick = try c.decodeIfPresent(OnScreenRightStick.self, forKey: .rightStick)
         gyro = try c.decodeIfPresent(GameGyro.self, forKey: .gyro)
         controllerMap = (try? c.decodeIfPresent(ControllerMap.self, forKey: .controllerMap)) ?? nil
+        lookSpeed = try c.decodeIfPresent(Double.self, forKey: .lookSpeed)
     }
 
     public var isEmpty: Bool {
         layout == nil && opacity == nil && dpad == nil && rightStick == nil && (gyro?.isEmpty ?? true) && controllerMap == nil
+            && lookSpeed == nil
     }
 
     /// The game's controller map, else the default.
     public func controllerMap(over defaults: ControlsDefaults) -> ControllerMap { controllerMap ?? defaults.controllerMap }
+
+    /// The game's look speed when it is in range, else the default.
+    public func lookSpeed(over defaults: ControlsDefaults) -> Double { LookSpeed.kept(lookSpeed) ?? defaults.lookSpeed }
 
     /// The same, with a gyro that sets nothing dropped (what the store saves).
     public var normalized: GameControls {

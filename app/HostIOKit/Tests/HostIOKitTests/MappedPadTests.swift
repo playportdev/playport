@@ -142,6 +142,50 @@ final class MappedPadTests: XCTestCase {
         XCTAssertEqual(slow.tick(time: 100), [])
     }
 
+    func testLookSpeedScalesTheMouseOnly() {
+        let t = MappedPad.Tuning.self
+        XCTAssertEqual(t.velocity(x: 1, y: 0, lookSpeed: 2).dx, 2 * t.mouseMaxSpeed, accuracy: 1e-9)
+        XCTAssertEqual(t.velocity(x: 0, y: 1, lookSpeed: 0.25).dy, -0.25 * t.mouseMaxSpeed, accuracy: 1e-9)
+        XCTAssertEqual(t.velocity(x: 1, y: 0, lookSpeed: .nan).dx, t.mouseMaxSpeed, accuracy: 1e-9)
+        XCTAssertEqual(t.velocity(x: 1, y: 0, lookSpeed: -1).dx, 0)
+        // Two seconds at full right: 4000 counts at 1×, 12000 at 3×.
+        func counts(_ speed: Double) -> Int {
+            var m = MappedPad(bindings: table, lookSpeed: speed)
+            _ = m.update(pad(rx: 1))
+            var n = 0
+            for i in 0...240 { for case .move(let dx, _) in m.tick(time: Double(i) / 120) { n += Int(dx) } }
+            return n
+        }
+        XCTAssertEqual(Double(counts(1)), 2 * t.mouseMaxSpeed, accuracy: 1)
+        XCTAssertEqual(Double(counts(3)), 6 * t.mouseMaxSpeed, accuracy: 1)
+    }
+
+    func testANewLookSpeedChangesTheMixerInPlace() {
+        // Ticks 1/32 s apart (exact in binary): 62.5 counts a tick at full right, 1×.
+        func moved(_ mixer: inout InputMixer, ticks: ClosedRange<Int>) -> Int {
+            var n = 0
+            for i in ticks {
+                mixer.tick(time: Double(i) / 32)
+                for case .move(let dx, _) in mixer.takeOutputs() { n += Int(dx) }
+            }
+            return n
+        }
+        var mixer = InputMixer()
+        _ = mixer.setMap(table)
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.a, rx: 1))
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x20, down: true)])
+        XCTAssertEqual(moved(&mixer, ticks: 0...4), 250)
+        // The same table at 2×: Space stays down, the slot is not sent again, the speed doubles.
+        XCTAssertEqual(mixer.setMap(table, lookSpeed: 2).count, 0)
+        XCTAssertEqual(mixer.lookSpeed, 2)
+        XCTAssertEqual(mixer.takeOutputs(), [])
+        XCTAssertEqual(moved(&mixer, ticks: 5...8), 500)
+        // A pad that connects later plays at the new speed too (its first tick only starts its clock).
+        _ = mixer.physical(slot: 1, pad(rx: 1))
+        _ = mixer.takeOutputs()
+        XCTAssertEqual(moved(&mixer, ticks: 9...12), 500 + 375)
+    }
+
     func testAStalledClockDoesNotJumpTheView() {
         var m = MappedPad(bindings: table)
         _ = m.update(pad(rx: 1))
