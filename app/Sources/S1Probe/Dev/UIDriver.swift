@@ -58,13 +58,19 @@
 //                              Library, then waits 1.5 s so a
 //                              screenshot sees it drawn; `open:<title id>#<section>`
 //                              opens the page's Game options at a section (graphics, controls,
-//                              game, files, developer, ordering, steam), and
-//                              `open:<title id>#gyro` its Controls › Gyro aim page;
+//                              game, files, developer, ordering, steam),
+//                              `open:<title id>#gyro` its Controls › Gyro aim page, and
+//                              `open:<title id>#controller` its Controller page
+//                              (UI/ControllerMapView.swift: ctl:mode, ctl:lookSpeed,
+//                              ctl:copy, ctl:resetAll, ctl:<row> such as ctl:a, ctl:leftStick,
+//                              ctl:dpad; pad:x/lb/rb/view/menu ring their rows; A on a Custom
+//                              row opens the ActionPicker, whose presses pad: sends);
 //                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controls, storage, setup, about,
 //                              developer; PlayportKit SettingsSection.named also takes
 //                              account, steam, jit, memory, diagnostics, pairing, probes, logs,
-//                              and gyro: Controls, ringed at its Gyro aim rows);
+//                              gyro: Controls, ringed at its Gyro aim rows, and controller:
+//                              Settings › Controls › Controller, the default's page);
 //                              `open:licences` shows Settings › About › Licences,
 //                              `open:licences#<prefix>` the files of the first component
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
@@ -129,7 +135,9 @@
 //                              screenshot, overlay, controller, quit) and presses A, as a
 //                              controller does (controls opens its panel: pad:left/right
 //                              change the ringed row, pad:down moves along On-screen controls,
-//                              D-pad, Right stick, Opacity, Gyro aim and Sensitivity, pad:b back);
+//                              D-pad, Right stick, Opacity, Gyro aim, Sensitivity and, while a
+//                              controller is connected (--pad's scripted pad counts), Controller:
+//                              Pad, Keys & mouse, Custom; pad:b back);
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:

@@ -3,8 +3,8 @@
 // GameOptionsControls.dc.html, GyroAim.dc.html):
 //
 // - GameControlsOptionRows: Game options' Controls section, the game's own
-//   on-screen controls (layout, d-pad, right stick, opacity) and the entry to
-//   its Gyro aim page. Each shows "Default · X" while it follows Settings ›
+//   on-screen controls (layout, d-pad, right stick, opacity) and the entries to
+//   its Controller page (UI/ControllerMapView.swift) and its Gyro aim page. Each shows "Default · X" while it follows Settings ›
 //   Controls, the amber dot while the game sets it, and Y puts it back.
 // - GyroAimPanel: Game options › Controls › Gyro aim (AppRoutes.GamePanel.gyro),
 //   the game's own gyro aim (PlayportKit GyroRow), over Game options.
@@ -48,6 +48,14 @@ struct GameControlsOptionRows: View {
                 options: [PadOption(id: "", label: "Default", detail: ControlsOpacity.label(inherited.opacity) + ", from Settings")]
                     + ControlsOpacity.steps.map { PadOption(id: String($0), label: ControlsOpacity.label($0)) },
                 selected: own.opacity.map { String(ControlsOpacity.step($0, by: 0)) } ?? "") { id in set { $0.opacity = Double(id) } }
+        }
+        // The Controller page (UI/ControllerMapView.swift): the game's controller map and its look speed.
+        let ownMap = own.controllerMap != nil || own.lookSpeed != nil
+        PadRow(id: ControllerMapView.gameRowID, title: "Controller", subtitle: nil,
+               value: (ownMap ? "" : "Default · ") + own.controllerMap(over: store.defaults).mode.title,
+               accessory: .chevron, changed: ownMap, style: .plain, hint: "Open",
+               reset: ownMap ? { set { $0.controllerMap = nil; $0.lookSpeed = nil } } : nil) {
+            navigation.gamePanels.append(.controller)
         }
         let gyro = store.gyro(titleID)
         PadRow(id: "opt:gyro", title: "Gyro aim", value: GyroText.summary(gyro), accessory: .chevron, changed: own.gyro != nil,

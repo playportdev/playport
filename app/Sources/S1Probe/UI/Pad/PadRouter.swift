@@ -34,6 +34,9 @@ final class PadRouter: ObservableObject {
     /// Every controller connected, the current one first (Settings › Controls).
     @Published private(set) var controllers: [Controller] = []
     let presses = PassthroughSubject<NavButton, Never>()
+    /// Every pad's snapshot as it changes, for a screen that reads inputs the
+    /// presses leave out (the Controller page: LT, RT, L3, R3, the right stick).
+    let snapshots = PassthroughSubject<PadInput, Never>()
     private(set) var handedOff = false
 
     private var nav = PadNavigation()
@@ -115,7 +118,9 @@ final class PadRouter: ObservableObject {
 
     private func changed(_ gp: GCExtendedGamepad) {
         guard !handedOff else { return }
-        for b in nav.update(PadInput(gp), at: ProcessInfo.processInfo.systemUptime) { presses.send(b) }
+        let input = PadInput(gp)
+        for b in nav.update(input, at: ProcessInfo.processInfo.systemUptime) { presses.send(b) }
+        snapshots.send(input)
         if nav.isRepeating, clock == nil {
             clock = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in
                 MainActor.assumeIsolated { PadRouter.shared.tick() }

@@ -179,7 +179,11 @@ private struct GameDetailPage: View {
             page(t, g)
                 // Under a panel the page's controls leave the ring.
                 .transformPreference(PadItemsKey.self) { if panel != nil { $0 = [:] } }
-            if let panel {
+            if panel == .controller, let t {
+                // The Controller page covers the whole page (ControllerMapping.dc.html).
+                ControllerMapView(target: .game(t.id), context: name)
+                    .transition(.move(edge: .trailing))
+            } else if let panel {
                 Color(hex: 0x05070A).opacity(0.72).ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture { _ = navigation.back() }
@@ -214,6 +218,7 @@ private struct GameDetailPage: View {
                         case .options: if let t { optionsPanel(t, g) }
                         case .achievements: achievementsPanel
                         case .gyro: if let t { GyroAimPanel(titleID: t.id, context: name) }
+                        case .controller: EmptyView()
                         }
                     }
                     .frame(width: 410)
@@ -241,9 +246,9 @@ private struct GameDetailPage: View {
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
             guard navigation.onGamePage, navigation.pageSection != nil, t != nil else { return }
-            if navigation.pageSection == "gyro" {
-                // Its Controls › Gyro aim page, over Game options.
-                navigation.gamePanels = [.options, .gyro]
+            if let page = ["gyro": AppNavigation.GamePanel.gyro, "controller": .controller][navigation.pageSection ?? ""] {
+                // Its Controls › Gyro aim or Controller page, over Game options.
+                navigation.gamePanels = [.options, page]
                 navigation.pageSection = nil
                 return
             }
@@ -617,9 +622,12 @@ private struct GameDetailPage: View {
         switch new.last {
         case .options?:
             let section = navigation.pageSection.flatMap(Self.firstRow(ofSection:))
-            focus.reset(start: section ?? (old.last == .achievements ? "opt:achievements" : old.last == .gyro ? "opt:gyro" : "opt:aspect"))
+            focus.reset(start: section ?? (old.last == .achievements ? "opt:achievements" : old.last == .gyro ? "opt:gyro"
+                                           : old.last == .controller ? ControllerMapView.gameRowID : "opt:aspect"))
         case .gyro?:
             focus.reset(start: "gyro:output")
+        case .controller?:
+            focus.reset(start: ControllerMapView.modeID)
         case .achievements?:
             focus.reset(start: "ach:0")
         case nil:

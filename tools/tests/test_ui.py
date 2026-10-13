@@ -194,6 +194,20 @@ class UiEnvTest(unittest.TestCase):
         self.assertIn("open:ID#gyro", m.__doc__)
         self.assertIn("Gyro aim: Off, Mouse, Right stick; Sensitivity", m.__doc__)
 
+    def test_the_controller_page_and_the_action_picker_are_reachable(self):
+        """open:ID#controller opens a game's Controller page, open:settings#controller Settings' default's;
+        pad: rings rows and drives the ActionPicker there; menu:controls has the Controller row."""
+        m = load()
+        for ok in ("open:app-620#controller", "open:settings#controller", "menu:controls"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        self.assertFalse(m.ACTION_RE.match("open:settings#controllermap"))
+        a = m.parse(["--action", "open:app-620#controller", "--action", "pad:right+right+lb", "--action", "pad:a+rb+a"])
+        self.assertEqual(a.action, ["open:app-620#controller", "pad:right+right+lb", "pad:a+rb+a"])
+        self.assertIsNone(m.pad_after_play(a.action))
+        for text in ("open:ID#controller", "ctl:mode", "ctl:lookSpeed", "ctl:resetAll", "ActionPicker",
+                     "controller: Settings › Controls › Controller", "Controller: Pad, Keys &"):
+            self.assertIn(text, m.__doc__)
+
     def test_three_finger_tap_opens_the_menu_so_pad_after_it_is_the_menus(self):
         """gesture:three-finger-tap fires the app's three-finger tap handler (HostIO.menuGesture),
         which opens the in-game menu with or without on-screen controls: pad: after it is the menu's."""

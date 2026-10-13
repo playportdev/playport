@@ -69,7 +69,9 @@ final class OnScreenControls: ObservableObject {
     /// padOn as last logged.
     private var loggedPad = false
     private var started = false
-    private var controllers = 0
+    /// The extended controllers connected (the dev build's scripted pad too); the in-game
+    /// menu's Controls panel shows its Controller row while there is one.
+    @Published private(set) var controllers = 0
     private var guestHeld = false
     private var dialog = false
     private var size = CGSize.zero

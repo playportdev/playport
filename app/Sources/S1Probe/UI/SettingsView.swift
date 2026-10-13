@@ -16,8 +16,10 @@
 // - Controls: when the on-screen controls show, their opacity, the Gamepad
 //   layout's d-pad and right stick, and haptics
 //   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), gyro aim's
-//   defaults (UI/GyroAimView.swift, the `gyro.*` keys), and every
-//   controller connected, with its battery and whether it has a gyro (PadRouter).
+//   defaults (UI/GyroAimView.swift, the `gyro.*` keys), every
+//   controller connected, with its battery and whether it has a gyro (PadRouter),
+//   and the Controller page for every game's default controller map
+//   (UI/ControllerMapView.swift, `controls.controllerMap`, `controls.lookSpeed`).
 // - Storage: free space and each game's size; A opens the game's page. Steamworks Shared
 //   (Steam's redistributables) with its size and Remove, and the emulator cache with Clear.
 // - Setup check: JIT, LocalDevVPN and memory (SetupCheckSettings.swift).
@@ -70,7 +72,11 @@ struct SettingsView: View {
             if let s = SettingsSection.named(name), SettingsSection.shown.contains(s) {
                 navigation.settingsSection = s
                 try? await Task.sleep(for: .milliseconds(200))
-                // `gyro`: Controls, at its Gyro aim rows.
+                // `gyro`: Controls, at its Gyro aim rows; `controller`: its Controller page.
+                if name == "controller" {
+                    navigation.pageSection = nil
+                    return navigation.openSettingsControllerMap()
+                }
                 focus.ring(name == "gyro" ? "set:" + GyroDefaultsRows.id(.output) : s.navItem)
             }
             navigation.pageSection = nil
@@ -328,6 +334,7 @@ private struct DownloadSettings: View {
 
 private struct ControlsSettings: View {
     @ObservedObject private var router = PadRouter.shared
+    @ObservedObject private var store = ControlsStore.shared
     @AppStorage(ControlsDefaults.showKey) private var show = ControlsShow.automatic.rawValue
     @AppStorage(ControlsDefaults.opacityKey) private var opacity = ControlsOpacity.defaultValue
     @AppStorage(ControlsDefaults.hapticsKey) private var haptics = true
@@ -367,6 +374,11 @@ private struct ControlsSettings: View {
                             subtitle: ([i == 0 ? "In use" : nil, c.gyro ? "has a gyro" : nil].compactMap { $0 }
                                 .joined(separator: " · ")).nilIfEmpty,
                             value: battery(c))
+        }
+        // The Controller page for every game (UI/ControllerMapView.swift).
+        PadRow(id: ControllerMapView.settingsRowID, title: "Controller", subtitle: "What a controller does in every game",
+               value: store.defaults.controllerMap.mode.title, accessory: .chevron, hint: "Open") {
+            AppNavigation.shared.openSettingsControllerMap()
         }
         GyroDefaultsRows()
         Color.clear.frame(height: 0).onAppear { router.refreshControllers() }
