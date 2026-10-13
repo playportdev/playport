@@ -2093,17 +2093,18 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertNil(m.panel)
         m.openPanel()
         XCTAssertEqual(m.panel, .layout)
-        m.move(down: true)
+        let noPad = QuickMenuControlsRow.shown(controller: false)
+        m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .dpad)
-        m.move(down: true)
+        m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .rightStick)
-        m.move(down: true)
+        m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .opacity)
-        m.move(down: true)
+        m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .gyro)
-        m.move(down: true)
+        m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .gyroSensitivity)
-        m.move(down: true)
+        m.move(down: true, rows: noPad)
         XCTAssertEqual(m.panel, .gyroSensitivity)
         XCTAssertEqual(m.ring, .controls)   // the rows' ring stays on Controls
         m.closePanel()
@@ -2114,6 +2115,22 @@ final class QuickMenuTests: XCTestCase {
         XCTAssertEqual(m.ring, .controls)
         m.ring(.quit)                        // a tap on another row closes the panel
         XCTAssertNil(m.panel)
+    }
+
+    func testTheControllerRowShowsOnlyWithAController() {
+        XCTAssertFalse(QuickMenuControlsRow.shown(controller: false).contains(.controllerMap))
+        XCTAssertEqual(QuickMenuControlsRow.shown(controller: true).last, .controllerMap)
+        XCTAssertEqual(QuickMenuControlsRow.controllerMap.title, "Controller")
+        var m = QuickMenu()
+        m.openPanel(.gyroSensitivity)
+        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true))
+        XCTAssertEqual(m.panel, .controllerMap)
+        m.move(down: true, rows: QuickMenuControlsRow.shown(controller: true))
+        XCTAssertEqual(m.panel, .controllerMap)
+        // The controller goes: the ring comes back to the last row shown.
+        m.move(down: false, rows: QuickMenuControlsRow.shown(controller: false))
+        XCTAssertEqual(m.panel, .gyroSensitivity)
+        XCTAssertEqual(ControllerMap.Mode.allCases.map(\.shortTitle), ["Pad", "Keys & mouse", "Custom"])
     }
 }
 

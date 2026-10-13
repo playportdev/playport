@@ -217,29 +217,7 @@ public enum GyroText {
         }
     }
 
-    public static func pauseButton(_ b: GyroPauseButton) -> String {
-        guard let c = b.control else { return "None" }
-        return switch c {
-        case .a: "A"
-        case .b: "B"
-        case .x: "X"
-        case .y: "Y"
-        case .lb: "LB"
-        case .rb: "RB"
-        case .lt: "LT"
-        case .rt: "RT"
-        case .start: "Menu"
-        case .back: "View"
-        case .ls: "L3"
-        case .rs: "R3"
-        case .up: "D-pad up"
-        case .down: "D-pad down"
-        case .left: "D-pad left"
-        case .right: "D-pad right"
-        case .leftStick: "Left stick"
-        case .rightStick: "Right stick"
-        }
-    }
+    public static func pauseButton(_ b: GyroPauseButton) -> String { b.control.map(ActionText.pad) ?? "None" }
 
     /// `2.0×`; two places when one would round it (`0.25×`).
     public static func sensitivity(_ v: Double) -> String {

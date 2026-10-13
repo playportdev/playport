@@ -48,7 +48,8 @@ public struct KeyModifiers: OptionSet, Hashable, Sendable {
         [(Self.shift, UInt8(0xA0)), (Self.control, 0xA2), (Self.alt, 0xA4)].compactMap { contains($0.0) ? $0.1 : nil }
     }
 
-    static let names: [(KeyModifiers, String)] = [(.shift, "shift"), (.control, "ctrl"), (.alt, "alt")]
+    /// Each modifier and its saved name, in the order they go down.
+    public static let names: [(KeyModifiers, String)] = [(.shift, "shift"), (.control, "ctrl"), (.alt, "alt")]
 }
 
 public enum MouseAction: String, CaseIterable, Sendable {

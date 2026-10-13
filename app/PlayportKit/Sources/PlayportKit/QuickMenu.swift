@@ -3,9 +3,10 @@
 // its rows in order, the ring moving along them, and the words each row shows.
 // The controller side (the Home button held, the presses) is HostIOKit's
 // QuickMenuControl. Controls opens a panel beside the rows (QuickMenuControls.dc.html):
-// the game's on-screen layout, its d-pad and right stick, their opacity, and its gyro aim
-// (output and sensitivity), up and down between them, left
-// and right (and A) to change one, B back to the rows.
+// the game's on-screen layout, its d-pad and right stick, their opacity, its gyro aim
+// (output and sensitivity) and, while a controller is connected, its controller map's
+// mode (ControllerMap.swift), up and down between them, left and right (and A) to
+// change one, B back to the rows.
 
 import Foundation
 
@@ -29,6 +30,13 @@ public enum QuickMenuControlsRow: String, CaseIterable, Sendable {
     case layout, dpad, rightStick, opacity
     /// The game's gyro aim output (Off, Mouse, Right stick) and its sensitivity (GyroOptions.swift).
     case gyro, gyroSensitivity
+    /// The controller map's mode (Pad, Keys & mouse, Custom): only while a controller is connected.
+    case controllerMap
+
+    /// The rows shown: the controller map's only with a controller connected.
+    public static func shown(controller: Bool) -> [QuickMenuControlsRow] {
+        controller ? allCases : allCases.filter { $0 != .controllerMap }
+    }
 
     public var title: String {
         switch self {
@@ -38,6 +46,7 @@ public enum QuickMenuControlsRow: String, CaseIterable, Sendable {
         case .opacity: "Opacity"
         case .gyro: "Gyro aim"
         case .gyroSensitivity: "Sensitivity"
+        case .controllerMap: "Controller"
         }
     }
 }
@@ -50,11 +59,12 @@ public struct QuickMenu: Equatable, Sendable {
 
     public init() {}
 
-    /// Up and down move the ring (in the panel while it is open), stopping at the ends.
-    public mutating func move(down: Bool) {
+    /// Up and down move the ring (in the panel while it is open, along `rows`, the ones shown), stopping at the ends.
+    public mutating func move(down: Bool, rows: [QuickMenuControlsRow] = QuickMenuControlsRow.allCases) {
         if let p = panel {
-            let rows = QuickMenuControlsRow.allCases
-            let i = rows.firstIndex(of: p)! + (down ? 1 : -1)
+            // A row no longer shown (the controller went): the last one shown.
+            guard let at = rows.firstIndex(of: p) else { panel = rows.last; return }
+            let i = at + (down ? 1 : -1)
             if rows.indices.contains(i) { panel = rows[i] }
             return
         }

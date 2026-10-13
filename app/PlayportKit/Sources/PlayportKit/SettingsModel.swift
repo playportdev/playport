@@ -43,7 +43,7 @@ public enum SettingsSection: String, CaseIterable, Sendable {
         if let s = SettingsSection(rawValue: name) { return s }
         switch name {
         case "account", "steam": return .accounts
-        case "controllers", "gyro": return .controls
+        case "controllers", "gyro", "controller": return .controls
         case "jit", "memory": return .setup
         case "diagnostics", "pairing", "probes", "logs": return .developer
         default: return nil

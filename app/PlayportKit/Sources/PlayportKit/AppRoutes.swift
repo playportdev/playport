@@ -33,8 +33,9 @@ public struct AppRoutes {
     }
 
     public enum GamePanel: String, Hashable {
-        /// `gyro`: Game options › Controls › Gyro aim, opened over Game options.
-        case options, achievements, gyro
+        /// `gyro`: Game options › Controls › Gyro aim, opened over Game options;
+        /// `controller`: its Controller page (the game's controller map), over the whole page.
+        case options, achievements, gyro, controller
     }
 
     private struct Screen {
@@ -42,6 +43,8 @@ public struct AppRoutes {
         var settings = false
         var settingsSection = SettingsSection.accounts
         var licences: [LicencePage] = []
+        /// Settings › Controls › Controller: the default controller map's page, in Settings' place.
+        var settingsControllerMap = false
         var setup = false
         var setupStart = SetupStep.pairing
         var signIn = false
@@ -62,11 +65,12 @@ public struct AppRoutes {
     public var signIn: Bool { screen.signIn }
     public var gamePath: [GameRef] { screen.gamePath }
     public var licences: [LicencePage] { screen.licences }
+    public var settingsControllerMap: Bool { screen.settingsControllerMap }
     public var focusStart: String? { screen.focus }
     public var settingsSection: SettingsSection {
         get { screen.settingsSection }
         set {
-            if newValue != screen.settingsSection { screen.licences = [] }
+            if newValue != screen.settingsSection { screen.licences = []; screen.settingsControllerMap = false }
             screen.settingsSection = newValue
         }
     }
@@ -103,6 +107,7 @@ public struct AppRoutes {
         screen.signIn = false
         screen.settings = false
         screen.licences = []
+        screen.settingsControllerMap = false
         screen.setup = false
         screen.gamePath = []
         screen.gamePanels = []
@@ -130,8 +135,17 @@ public struct AppRoutes {
         remember(focus)
         screen.signIn = false
         screen.settings = true
+        screen.settingsControllerMap = false
         if let section { settingsSection = section }
         return true
+    }
+
+    /// Settings › Controls › Controller over Settings; Back returns to its row.
+    public mutating func openSettingsControllerMap() {
+        guard settings else { return }
+        screen.settingsSection = .controls
+        screen.licences = []
+        screen.settingsControllerMap = true
     }
 
     @discardableResult
@@ -174,6 +188,10 @@ public struct AppRoutes {
     @discardableResult
     public mutating func back() -> Bool {
         guard canGoBack else { return false }
+        if settings && !signIn && settingsControllerMap {
+            screen.settingsControllerMap = false
+            return true
+        }
         if settings && !signIn && !licences.isEmpty {
             _ = closeLicence()
             return true
