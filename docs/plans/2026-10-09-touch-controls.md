@@ -91,6 +91,15 @@ proposed answer unless the owner says otherwise before the phase that needs them
   ignored (no change), the chip showed at the start and was gone 2.4 s later, and right-stick
   `yaw=30@1000` (peak 0.45) now turns the view (0.36 still does not). The background bug is
   PLA-338, not the controls. The 125 Hz cap is unchanged.
+- **2f: host done, phone session pending (owner paused the phone)**
+  ([evidence](../evidence/2026-10-13-touch-controls-phase2f.md)). `c9dc6c3`: a pad's gravity
+  estimated from its acceleration (HostIOKit `GyroGravityEstimate`), and GyroAim's first bias
+  after 0.5 s still. `23709dd`: a controller's `GCMotion` polled at 500 Hz on gyro aim's queue
+  instead of its main-thread handler (about 65/s from the DualShock 4), with dev lines giving
+  the polled rate beside the handler's and the pad's gravity in the aim frame. Dev IPA
+  `1db2c6ec…` built, not installed. The new rate is **not measured**. No controller-specific
+  sensitivity yet: the pad's acceleration frame (Apple's header against SDL's mapping) is open,
+  and the phone script in the evidence settles it. The 125 Hz cap is unchanged.
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -165,8 +174,8 @@ proposed answer unless the owner says otherwise before the phase that needs them
        the physical right stick; mouse mode with the phone's gyro feels great.
   6. **2e (fix), done** (see "Done: 2e" above)**:** the three decisions, the 1.5× default and the background diagnosis above; one short
      phone session.
-  7. **2f (controller gyro), running, host only:** phone tests paused by the owner
-     (2026-10-13); the phone session waits for the owner to unpause. deliver the controller's motion off the main thread, near its
+  7. **2f (controller gyro), host done, phone session pending (owner paused the phone):**
+     the phone session (script in the 2f evidence) waits for the owner to unpause. Deliver the controller's motion off the main thread, near its
      own rate, with better timestamps. Derive gravity for a pad without it from low-passed
      acceleration, not raw acceleration. Check the DualShock/DualSense axis mapping and
      scale against the phone (the same physical turn should give the same counts), and
