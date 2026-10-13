@@ -241,10 +241,18 @@ proposed answer unless the owner says otherwise before the phase that needs them
   12. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
 - **Phone:** dev IPA `7566e31a…` (R) installed; unattended mode off (the owner is at the
-  phone); Portal 2's controls and launch arguments are cleared (2e restored them); Hollow
-  Knight's controls drew as Gamepad in R's smoke run (expected Off; not changed there); Hollow Knight's profile
-  slot 3 may now hold a King's Pass save rather than New Game (check it before a
-  measured run that uses `tools/pad/hk-new-slot.txt`).
+  phone). Both games keep the owner's own controls, restored by DriverUndo after the 2f/3c
+  session: Portal 2 Gamepad, right stick Below, gyro Mouse 1.5×; Hollow Knight Gamepad 60%,
+  d-pad on, right stick Below. Hollow Knight's profile slot 3 may hold a King's Pass save
+  rather than New Game (check it before a measured run that uses `tools/pad/hk-new-slot.txt`).
+- **Settled after 2f (supervisor, 2026-10-13):** keep the 125 Hz cap (the DualShock 4 gives
+  about 65/s and the phone 100/s, so neither reaches it), and keep the 500 Hz `GCMotion` poll
+  (the same rate as the handler, but off the main thread).
+- **For the next fix chunk (seen in 3c, cosmetic):** the in-game panel's "Controller" label
+  wraps; the Controller page's Look speed row and the in-game Controls value are truncated;
+  the ActionPicker's footer hints overlap the page while it waits for a key; the in-game
+  Controller row says "None" with the scripted pad; the 3c script loses the pad steps' app
+  log (keep it next time).
 - **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
 
 ## Goal
