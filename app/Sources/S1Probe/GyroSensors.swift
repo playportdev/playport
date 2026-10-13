@@ -20,10 +20,19 @@
 //   turn it might take for bias (under 0.05 rad/s, perfectly even) moves a
 //   bias that is already near zero. Device motion asks for no permission.
 // - A controller: GCController.motion with its sensors on, `rotationRate`, and
-//   `gravity` when it reports it, else `acceleration` (gravity plus the hand's
-//   motion; a pad that reports neither gives no gravity, and player space is
-//   yaw then), onto the aim frame (GyroFrame.controller). GameController calls
-//   on the main thread; each sample hops to the feed's queue, stamped then.
+//   `gravity` when it reports it, else gravity estimated from `acceleration`
+//   (HostIOKit GyroGravityEstimate: the hand's shake taken out; none yet, or a
+//   pad that reports no acceleration, and player space is yaw), onto the aim
+//   frame (GyroFrame.controller). The feed's queue polls the motion profile
+//   `controllerPollHz` times a second and takes each new value, stamped as it
+//   is read (GCMotion has no timestamp), and a held one every `heldValueInterval`
+//   so a pad at rest still calibrates. Not GCMotion's valueChangedHandler: it
+//   runs on the controller's handlerQueue (GCDevice.h; main, where HostIO's pad
+//   handlers must stay) and came only about 65 times a second from a
+//   DualShock 4 (touch controls 2f), each a main-queue hop late. SDL reads
+//   GCMotion by polling as well, never through the handler
+//   (SDL_mfijoystick.m, IOS_MFIJoystickUpdate). A dev build still counts the
+//   handler's calls, so `sensor rate:` shows both rates side by side.
 // - Automatic: the current controller's gyro when it reports rotation rate,
 //   else the iPhone's; a controller connecting or going decides again.
 // - The output (GyroFeed, on its queue): GyroAim with the pause button read
@@ -232,10 +241,8 @@ final class GyroSensors: ObservableObject {
         case .phone:
             motion.stopDeviceMotionUpdates()
         case .controller:
-            if let m = controller?.motion {
-                m.valueChangedHandler = nil
-                if m.sensorsRequireManualActivation { m.sensorsActive = false }
-            }
+            feed.stopController(controller?.motion)
+            if let m = controller?.motion, m.sensorsRequireManualActivation { m.sensorsActive = false }
             controller = nil
         }
         feed.stop()
@@ -257,8 +264,8 @@ final class GyroSensors: ObservableObject {
             controller = pad
             if m.sensorsRequireManualActivation { m.sensorsActive = true }
             feed.startController(m)
-            Self.log("source controller (\"\(pad.vendorName ?? "?")\", gravity "
-                     + (m.hasGravityAndUserAcceleration ? "reported" : "from acceleration") + "); output \(o.rawValue)\(to); "
+            Self.log("source controller (\"\(pad.vendorName ?? "?")\", polled \(Int(GyroFeed.controllerPollHz)) Hz, gravity "
+                     + (m.hasGravityAndUserAcceleration ? "reported" : "estimated from acceleration") + "); output \(o.rawValue)\(to); "
                      + settings.summary)
         }
     }
@@ -269,6 +276,10 @@ final class GyroSensors: ObservableObject {
 /// thread sets, read with each sample.
 final class GyroFeed: @unchecked Sendable {
     let dispatch = DispatchQueue(label: "hostio.gyro", qos: .userInteractive)
+    /// How often a controller's motion is read.
+    static let controllerPollHz = 500.0
+    /// A value that has not changed is taken again this often (s), so the aim's clock and calibration run on.
+    static let heldValueInterval = 0.05
     /// CoreMotion's handler queue: `dispatch`.
     let queue: OperationQueue
 
@@ -305,10 +316,24 @@ final class GyroFeed: @unchecked Sendable {
     private var coalescer = GyroMouseCoalescer()
     private var activity = GyroActivity()
     private var calibrationLogged = false
+    /// The controller whose motion is polled, and what was read last.
+    private struct ControllerPoll {
+        let motion: PolledMotion
+        let timer: DispatchSourceTimer
+        var last: (rate: GyroVector, acceleration: GyroVector)?
+        var lastTaken = -Double.infinity
+    }
+    private var poll: ControllerPoll?
+    /// Gravity for a controller that reports only its total acceleration.
+    private var gravity = GyroGravityEstimate()
     #if !PLAYPORT_RELEASE
+    /// The last sample's gravity in the aim frame (the dev lines show it: 2f checks the pad's frame).
+    private var lastGravity = GyroVector.zero
+    /// GameController's own motion callbacks (main thread), counted against the polled values' rate.
+    private let handlerCalls = OSAllocatedUnfairLock(initialState: 0)
     /// The sensor's own samples since the sensors started (the script's not counted): logged
     /// once, `rateWindow` s after the first, still or not (2d reads the sensor's real rate).
-    private var sensorRate: (first: Double, count: Int, logged: Bool)?
+    private var sensorRate: (first: Double, count: Int, handlerCalls: Int, logged: Bool)?
     private static let rateWindow = 2.0
     #endif
 
@@ -352,6 +377,7 @@ final class GyroFeed: @unchecked Sendable {
             }
             coalescer.reset()
             activity.reset()
+            gravity.reset()
             #if !PLAYPORT_RELEASE
             sensorRate = nil
             #endif
@@ -384,39 +410,93 @@ final class GyroFeed: @unchecked Sendable {
         }
     }
 
-    /// GameController calls on the main thread; the sample hops to the queue.
+    /// Poll `m` on the queue (main thread: GyroSensors). GameController updates it as the
+    /// pad reports; reading it here needs no main-queue turn.
     func startController(_ m: GCMotion) {
-        m.valueChangedHandler = { @Sendable [self] m in
-            let time = ProcessInfo.processInfo.systemUptime
-            let r = m.rotationRate
-            let g = m.hasGravityAndUserAcceleration ? m.gravity : m.acceleration
-            let rate = GyroVector(x: r.x, y: r.y, z: r.z), gravity = GyroVector(x: g.x, y: g.y, z: g.z)
-            dispatch.async { [self] in take(time: time, rate: rate, gravity: gravity, from: .controller) }
+        let polled = PolledMotion(m)
+        #if !PLAYPORT_RELEASE
+        m.valueChangedHandler = { @Sendable [self] _ in handlerCalls.withLock { $0 += 1 } }
+        #endif
+        dispatch.async { [self] in
+            poll?.timer.cancel()
+            let timer = DispatchSource.makeTimerSource(queue: dispatch)
+            timer.schedule(deadline: .now(), repeating: 1 / Self.controllerPollHz, leeway: .microseconds(500))
+            timer.setEventHandler { [self] in pollController() }
+            poll = ControllerPoll(motion: polled, timer: timer)
+            timer.resume()
         }
     }
 
+    /// Stop polling the controller (main thread; the queue takes no more of its samples already: `stop`).
+    func stopController(_ m: GCMotion?) {
+        #if !PLAYPORT_RELEASE
+        m?.valueChangedHandler = nil
+        #endif
+        dispatch.async { [self] in
+            poll?.timer.cancel()
+            poll = nil
+        }
+    }
+
+    /// One read of the polled controller: a new value is a sample, and so is a held one now and then.
+    private func pollController() {
+        guard var p = poll else { return }
+        let m = p.motion.motion
+        let r = m.rotationRate
+        let a = p.motion.gravityReported ? m.gravity : m.acceleration
+        let rate = GyroVector(x: r.x, y: r.y, z: r.z), acceleration = GyroVector(x: a.x, y: a.y, z: a.z)
+        let time = ProcessInfo.processInfo.systemUptime
+        let fresh = p.last.map { $0.rate != rate || $0.acceleration != acceleration } ?? true
+        guard fresh || time - p.lastTaken >= Self.heldValueInterval else { return }
+        p.last = (rate, acceleration)
+        p.lastTaken = time
+        poll = p
+        take(time: time, rate: rate, gravity: acceleration, from: .controller, fresh: fresh, gravityReported: p.motion.gravityReported)
+    }
+
     /// A sensor's sample in its own frame, on the queue: taken while its device runs (and no `gyro:` script does).
-    private func take(time: Double, rate: GyroVector, gravity: GyroVector, from d: GyroDevice) {
+    /// `fresh`: a new value (the sensor rate counts these alone); `gravityReported` false: `gravity` is the total
+    /// acceleration, and gravity is estimated from it.
+    private func take(time: Double, rate: GyroVector, gravity: GyroVector, from d: GyroDevice, fresh: Bool = true,
+                      gravityReported: Bool = true) {
         let c = control.withLock { $0 }
         guard c.running == d else { return }
         #if !PLAYPORT_RELEASE
         if c.scripted { return }
-        var r = sensorRate ?? (time, 0, false)
-        r.count += 1
-        if !r.logged, time - r.first >= Self.rateWindow {
-            r.logged = true
-            GyroSensors.log(String(format: "sensor rate: %d samples in %.2f s (%.1f/s) from %@", r.count - 1, time - r.first,
-                                   Double(r.count - 1) / (time - r.first), d.rawValue))
-        }
-        sensorRate = r
         #endif
         let s = switch d {
         case .phone:
             GyroSample(time: time, rate: GyroFrame.phone(rate, c.orientation), gravity: GyroFrame.phone(gravity, c.orientation))
         case .controller:
-            GyroSample(time: time, rate: GyroFrame.controller(rate), gravity: GyroFrame.controller(gravity))
+            controllerSample(time: time, rate: GyroFrame.controller(rate), gravity: GyroFrame.controller(gravity),
+                             reported: gravityReported)
         }
+        #if !PLAYPORT_RELEASE
+        lastGravity = s.gravity
+        let calls = handlerCalls.withLock { $0 }
+        var rr = sensorRate ?? (time, 0, calls, false)
+        if fresh { rr.count += 1 }
+        if !rr.logged, time - rr.first >= Self.rateWindow {
+            rr.logged = true
+            let span = time - rr.first, n = rr.count - 1
+            var line = String(format: "sensor rate: %d samples in %.2f s (%.1f/s) from %@", n, span, Double(n) / span, d.rawValue)
+            if d == .controller {
+                let h = calls - rr.handlerCalls
+                line += String(format: ", polled at %.0f Hz (GameController's own callback: %d in the same time, %.1f/s); ",
+                               Self.controllerPollHz, h, Double(h) / span)
+                    + "acceleration " + Self.vector(GyroFrame.controller(gravity)) + ", gravity "
+                    + (gravityReported ? "reported " : "estimated ") + Self.vector(s.gravity) + " (aim frame; flat and still: 0 -1 0)"
+            }
+            GyroSensors.log(line)
+        }
+        sensorRate = rr
+        #endif
         _ = process(s, c.settings, toGuest: c.toGuest)
+    }
+
+    /// A controller's sample in the aim frame: its own gravity, or gravity estimated from its acceleration (`g`).
+    private func controllerSample(time: Double, rate: GyroVector, gravity g: GyroVector, reported: Bool) -> GyroSample {
+        GyroSample(time: time, rate: rate, gravity: reported ? g : gravity.add(time: time, rate: rate, acceleration: g))
     }
 
     /// One aim-frame sample through GyroAim into the guest, or (`toGuest` false)
@@ -454,12 +534,15 @@ final class GyroFeed: @unchecked Sendable {
             calibrationLogged = true
             GyroSensors.log("calibrated: " + Self.bias(aim.bias))
         }
-        if let line = activity.add(o, time: s.time) { GyroSensors.log(line + "; " + Self.bias(aim.bias)) }
+        if let line = activity.add(o, time: s.time) {
+            GyroSensors.log(line + "; " + Self.bias(aim.bias) + "; gravity " + Self.vector(lastGravity))
+        }
         #endif
         return o
     }
 
     private static func bias(_ b: GyroVector) -> String { String(format: "bias %.4f %.4f %.4f rad/s", b.x, b.y, b.z) }
+    private static func vector(_ v: GyroVector) -> String { String(format: "%.2f %.2f %.2f", v.x, v.y, v.z) }
 
     #if !PLAYPORT_RELEASE
     // A dev build's `gyro:` script (Dev/GyroDriver.swift): its samples enter
@@ -521,5 +604,19 @@ final class GyroFeed: @unchecked Sendable {
         p.done.resume(returning: p.result)
     }
     #endif
+}
+
+/// A controller's motion profile, read on the feed's queue. GCMotion's properties
+/// are plain values that GameController keeps current; it documents no thread for
+/// reading them (an inference: a read may see one report's x with the next one's
+/// y, no worse than a sample late).
+final class PolledMotion: @unchecked Sendable {
+    let motion: GCMotion
+    /// `gravity` is the controller's own (else `acceleration` is read, and gravity estimated).
+    let gravityReported: Bool
+    init(_ m: GCMotion) {
+        motion = m
+        gravityReported = m.hasGravityAndUserAcceleration
+    }
 }
 #endif
