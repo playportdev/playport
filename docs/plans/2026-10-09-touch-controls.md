@@ -61,7 +61,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
   `GyroScript`; its samples replace the sensors' while it plays). Dev IPA `48dcb074…` built and
   verified, not installed. 2d checks on the phone: no motion permission prompt, the landscape
   signs, a DualSense's `hasRotationRate` and gravity, Portal 2 in both outputs.
-- **Next:** 2c.
+- **Running:** 2c (writer launched 2026-10-13).
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -95,7 +95,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
      tests; plus the A/B/X/Y size tweak as its own commit.
   2. **2b, done:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
-  3. **2c, next:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+  3. **2c, running:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
   4. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
