@@ -14,7 +14,9 @@
 ///   merge and clamped to XInput's range; it connects no pad by itself. Gyro
 ///   aim as a mouse is relative motion (`move`).
 /// - Keys and mouse buttons: what the controls hold now against what they held,
-///   as downs (a chord's modifiers first) and ups (its key first). HostIO sends
+///   as downs (a chord's modifiers first) and ups (its key first); a chord
+///   newly held while its key is already down (held alone by another control)
+///   sends that key up, the modifiers down, then the key down again. HostIO sends
 ///   them through Lifecycle, which releases them on focus loss as it does a
 ///   hardware keyboard's.
 /// - The wheel and Playport's actions happen once, as their control goes down.
@@ -24,9 +26,10 @@
 ///   pad input from it), its keys and mouse buttons join the controls' (one
 ///   key held by both goes up when neither holds it), its sticks bound to
 ///   `mouse:move` move the mouse on each `tick`. The on-screen controls' pad is
-///   never mapped: the map is a physical pad's. While the menu or a dialog is
-///   up (`hold`) mapped pads hold nothing (their keys and buttons go up), and
-///   an input held through it does nothing until let go.
+///   never mapped: the map is a physical pad's. While the menu, a dialog or
+///   the guest's windows before the first frame are up (`hold`) mapped pads
+///   hold nothing (their keys and buttons go up), and an input held through
+///   it does nothing until let go.
 /// - What the pads, `setMap`, `hold` and `tick` send waits in order until
 ///   `takeOutputs`; `touch` and `gyro` return theirs.
 ///
@@ -57,6 +60,8 @@ public struct InputMixer: Sendable {
     private var physical0: PadValues?
     private var touchPad: PadValues?
     private var keysDown: [UInt8] = []
+    /// The chords (keys with modifiers) held at the last `edges`.
+    private var chordsDown: Set<InputAction> = []
     private var buttonsDown: Set<MouseAction> = []
     private var touchKeys: Set<InputAction> = []
     private var touchMouse: Set<MouseAction> = []
@@ -197,9 +202,18 @@ public struct InputMixer: Sendable {
         for m in mapped.values { keys.formUnion(m.keys); mouse.formUnion(m.buttons) }
         let want = Self.virtualKeys(keys)
         for vk in keysDown.reversed() where !want.contains(vk) { out.append(.key(vk, down: false)) }
-        let new = want.filter { !keysDown.contains($0) }
+        var kept = keysDown.filter(want.contains)
+        // A new chord whose key is down without its modifiers: that key again after them.
+        let chords = keys.filter { if case .key(_, let m) = $0 { !m.isEmpty } else { false } }
+        for case let .key(vk, m) in chords.subtracting(chordsDown).sorted(by: { $0.name < $1.name })
+        where kept.contains(vk) && !m.virtualKeys.allSatisfy(kept.contains) {
+            out.append(.key(vk, down: false))
+            kept.removeAll { $0 == vk }
+        }
+        chordsDown = chords
+        let new = want.filter { !kept.contains($0) }
         for vk in new { out.append(.key(vk, down: true)) }
-        keysDown = keysDown.filter(want.contains) + new   // in press order: ups go last pressed first
+        keysDown = kept + new   // in press order: ups go last pressed first
         for m in [MouseAction.left, .right, .middle] {
             let was = buttonsDown.contains(m), now = mouse.contains(m)
             guard was != now else { continue }

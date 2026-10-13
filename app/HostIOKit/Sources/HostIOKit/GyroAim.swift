@@ -45,6 +45,8 @@
 /// - A gap of more than `maxStep` between samples (the sensors stopped)
 ///   restarts the windows and moves nothing for the gap; `restart()` does the
 ///   same at once when the sensors start again.
+/// - A sample with a value that is not finite (NaN, infinity) is dropped: it
+///   moves nothing and leaves the windows, the bias and the smoothing as they were.
 
 import Foundation
 
@@ -92,7 +94,10 @@ public struct GyroAim: Sendable {
     public private(set) var calibrated = false
 
     private var last: Double?
+    /// The calibration window: `window[windowStart...]`, the last `stillWindow` seconds
+    /// (the samples before `windowStart` are dropped in batches, not one by one).
     private var window: [GyroSample] = []
+    private var windowStart = 0
     private var smoothing: [(time: Double, aim: (x: Double, y: Double))] = []
     private var motion = RelativeMotion()
 
@@ -104,18 +109,26 @@ public struct GyroAim: Sendable {
     public mutating func restart() {
         last = nil
         window = []
+        windowStart = 0
         smoothing = []
         motion.reset()
     }
 
     /// One sample; `paused` while the pause button is held.
     public mutating func add(_ s: GyroSample, paused: Bool = false) -> GyroAimOutput {
+        guard s.time.isFinite, s.rate.isFinite, s.gravity.isFinite else {
+            switch config.output {
+            case .off: return .none
+            case .mouse: return .mouse(dx: 0, dy: 0)
+            case .rightStick: return .rightStick(x: 0, y: 0)
+            }
+        }
         let dt: Double
         if let l = last, s.time - l <= Self.maxStep {
             dt = max(0, s.time - l)
         } else {
             dt = 0
-            if last != nil { window = []; smoothing = [] }
+            if last != nil { window = []; windowStart = 0; smoothing = [] }
         }
         last = max(last ?? s.time, s.time)
         calibrate(s, dt: dt)
@@ -174,9 +187,14 @@ public struct GyroAim: Sendable {
 
     private mutating func calibrate(_ s: GyroSample, dt: Double) {
         window.append(s)
-        while window.count > 1, window[1].time <= s.time - Self.stillWindow { window.removeFirst() }
+        while window.count - windowStart > 1, window[windowStart + 1].time <= s.time - Self.stillWindow { windowStart += 1 }
+        if windowStart >= 256, windowStart * 2 >= window.count {
+            window.removeFirst(windowStart)
+            windowStart = 0
+        }
         let span = calibrated ? Self.stillWindow : Self.firstStillWindow
-        guard let start = window.lastIndex(where: { $0.time <= s.time - span }), window.count - start > 1 else { return }
+        guard let start = window[windowStart...].lastIndex(where: { $0.time <= s.time - span }), window.count - start > 1
+        else { return }
         let still = window[start...]
         var lo = window[start].rate, hi = lo, sum = GyroVector.zero
         var glo = window[start].gravity.unit, ghi = glo
@@ -242,6 +260,7 @@ public struct GyroVector: Equatable, Sendable {
     public static let zero = GyroVector(x: 0, y: 0, z: 0)
 
     public var length: Double { (x * x + y * y + z * z).squareRoot() }
+    public var isFinite: Bool { x.isFinite && y.isFinite && z.isFinite }
     var unit: GyroVector { let n = length; return n > 0 ? self * (1 / n) : .zero }
     func min(_ o: GyroVector) -> GyroVector { GyroVector(x: Swift.min(x, o.x), y: Swift.min(y, o.y), z: Swift.min(z, o.z)) }
     func max(_ o: GyroVector) -> GyroVector { GyroVector(x: Swift.max(x, o.x), y: Swift.max(y, o.y), z: Swift.max(z, o.z)) }

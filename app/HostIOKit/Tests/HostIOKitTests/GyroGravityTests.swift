@@ -98,6 +98,24 @@ final class GyroGravityTests: XCTestCase {
         XCTAssertEqual(gap.add(time: 2, rate: .zero, acceleration: rest), .zero)
     }
 
+    /// A NaN or infinite rate, acceleration or time is ignored: the estimate stays as it was.
+    func testANonFiniteSampleIsIgnored() {
+        let rest = GyroFrame.controller(GyroVector(x: 0, y: 0, z: -1))
+        var g = GyroGravityEstimate()
+        var t = 0.0
+        while t < 0.5 { t += 0.004; _ = g.add(time: t, rate: .zero, acceleration: rest) }
+        let before = g.add(time: t, rate: .zero, acceleration: rest)
+        XCTAssertNotEqual(before, .zero)
+        XCTAssertEqual(g.add(time: t + 0.004, rate: GyroVector(x: .nan, y: 0, z: 0), acceleration: rest), before)
+        XCTAssertEqual(g.add(time: t + 0.004, rate: .zero, acceleration: GyroVector(x: 0, y: .infinity, z: 0)), before)
+        XCTAssertEqual(g.add(time: .nan, rate: .zero, acceleration: rest), before)
+        let after = g.add(time: t + 0.004, rate: .zero, acceleration: rest)
+        XCTAssertTrue(after.isFinite)
+        XCTAssertEqual(after.y, before.y, accuracy: 1e-9)
+        var fresh = GyroGravityEstimate()
+        XCTAssertEqual(fresh.add(time: 0, rate: .zero, acceleration: GyroVector(x: .nan, y: .nan, z: .nan)), .zero)
+    }
+
     /// A pad held in the hands with a tremor too small to matter: GyroAim's first
     /// estimate comes within a second through the estimated gravity, while the raw
     /// acceleration's hand jitter (over the 1.1° gravity spread) never lets it.

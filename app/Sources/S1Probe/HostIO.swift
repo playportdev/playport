@@ -98,9 +98,13 @@ final class HostIO {
     private var motion = RelativeMotion()
     /// The Home button and the in-game menu's presses, from every pad.
     private var menuControl = QuickMenuControl()
+    /// The last pad snapshot the menu read (menuInput): what is held when the menu opens another way (menuOpened).
+    private var lastMenuInput = PadInput()
     private var menuClock: Timer?
     /// A pad's presses for the guest's GDI windows while they are shown (WindowKeys).
     private var windowNav = PadNavigation()
+    /// The mapped pads are held for the guest's windows (WindowKeys.takesPads).
+    private var windowsHoldPads = false
     /// The in-game menu is up: keys, touches and the mouse do not reach the guest.
     private(set) var menuUp = false
     /// The game layer, once registered: the menu's performance overlay switches its HUD.
@@ -448,7 +452,7 @@ final class HostIO {
             if down ? lifecycle.keyDown(vk) : lifecycle.keyUp(vk) { winios_post_key(Int32(vk), down ? 1 : 0) }
         case .pointer(let flags, let data):
             if flags == Pointer.wheel {
-                if !menuUp { winios_pointer(0, 0, flags, data) }
+                if !menuUp && lifecycle.active { winios_pointer(0, 0, flags, data) }
             } else if [Pointer.leftDown, Pointer.rightDown, Pointer.middleDown].contains(flags) {
                 if menuUp { return }
                 mouseButton(down: true, downFlag: flags, upFlag: flags << 1)
@@ -548,19 +552,27 @@ final class HostIO {
     /// A pad's snapshot as the menu reads it: from a GameController pad, the
     /// scripted pad (Dev/VirtualPad.swift) and a dev build's driver (`menu:open`).
     func menuInput(_ p: PadInput) {
+        lastMenuInput = p
         // A web page the game opened takes the presses while it is up (UI/GameWebSheet.swift).
         if GameWebSheet.shared.isUp {
             GameWebSheet.shared.padInput(p)
             return
         }
-        // The guest's GDI windows on screen (a launcher, a dialog) get the presses as keys too.
+        // The guest's GDI windows on screen (a launcher, a dialog) get the presses as keys too,
+        // and the mapped pads hold nothing meanwhile (before publish reads this snapshot).
+        let windows = WindowKeys.takesPads(windowsShown: GuestWindows.shown, menuUp: menuUp)
+        if windows != windowsHoldPads {
+            windowsHoldPads = windows
+            Self.pads.withLock { $0.mixer.hold(.windows, windows) }
+            sendMixer()
+        }
         let presses = windowNav.update(p, at: ProcessInfo.processInfo.systemUptime)
         // The game has ended with its last window kept on screen: a press only ends that.
         if GuestWindows.holdingAfterExit {
             if !presses.isEmpty { GuestWindows.endExitHold() }
             return
         }
-        if !menuUp, GuestWindows.shown {
+        if windows {
             for b in presses {
                 for k in WindowKeys.events(for: b) { winios_post_key(k.vk, k.down ? 1 : 0) }
                 #if !PLAYPORT_RELEASE
@@ -593,9 +605,10 @@ final class HostIO {
     }
 
     /// The menu opened another way than a held Home (InGameMenu.open): a pad's
-    /// presses are the menu's from here, as after a held Home.
+    /// presses are the menu's from here, as after a held Home; what the pads
+    /// hold now (a button mapped to `playport:menu`) is not a press.
     func menuOpened() {
-        menuControl.opened()
+        menuControl.opened(holding: lastMenuInput)
         menuEvents([])
     }
 

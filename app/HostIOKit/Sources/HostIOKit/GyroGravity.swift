@@ -16,7 +16,8 @@
 /// Until `settle` seconds of plausible acceleration are in, and again once
 /// none has come for `staleAfter` seconds, the estimate is zero: GyroAim's
 /// player space is then yaw (its fallback for no gravity). A gap of more than
-/// GyroAim.maxStep starts it over.
+/// GyroAim.maxStep starts it over. A sample with a value that is not finite is
+/// ignored: the estimate stays as it was.
 
 import Foundation
 
@@ -42,6 +43,7 @@ public struct GyroGravityEstimate: Sendable {
     /// as −up), both in the aim frame. Returns gravity in the aim frame, unit
     /// length, or zero while there is no estimate to use.
     public mutating func add(time: Double, rate: GyroVector, acceleration a: GyroVector) -> GyroVector {
+        guard time.isFinite, rate.isFinite, a.isFinite else { return estimate(at: last) }
         var dt = 0.0
         if let l = last {
             if time - l > GyroAim.maxStep { g = nil; settled = 0; lastPlausible = nil } else { dt = max(0, time - l) }
@@ -61,7 +63,12 @@ public struct GyroGravityEstimate: Sendable {
             }
             lastPlausible = time
         }
-        guard let e = g, settled >= Self.settle, let p = lastPlausible, time - p <= Self.staleAfter else { return .zero }
+        return estimate(at: time)
+    }
+
+    /// The estimate at time `t` when it is settled and not stale, else zero.
+    private func estimate(at t: Double?) -> GyroVector {
+        guard let e = g, settled >= Self.settle, let t, let p = lastPlausible, t - p <= Self.staleAfter else { return .zero }
         return e
     }
 }

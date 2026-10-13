@@ -251,7 +251,7 @@ final class GyroSensors: ObservableObject {
     }
 
     private func startSensors(_ d: GyroDevice, output o: GyroOutput, pad: GCController?, toGuest: Bool) {
-        feed.start(d, toGuest: toGuest)
+        feed.start(d, pad: d == .controller ? pad.map(ObjectIdentifier.init) : nil, toGuest: toGuest)
         let to = toGuest ? "" : " into the test area's dot (nothing to the guest)"
         switch d {
         case .phone:
@@ -312,7 +312,8 @@ final class GyroFeed: @unchecked Sendable {
 
     // The queue's alone:
     private var aim = GyroAim()
-    private var aimDevice: GyroDevice?
+    /// Whose samples `aim` learnt its bias from: the device, and for a controller which one.
+    private var aimSource: (device: GyroDevice, pad: ObjectIdentifier?)?
     private var coalescer = GyroMouseCoalescer()
     private var activity = GyroActivity()
     private var calibrationLogged = false
@@ -356,10 +357,10 @@ final class GyroFeed: @unchecked Sendable {
 
     func configure(_ s: GyroSettings) { control.withLock { $0.settings = s } }
 
-    /// Take `d`'s samples, into the guest or (`toGuest` false) only into the test
-    /// area's dot: the same device's aim restarts its windows (its bias kept),
-    /// another device's starts afresh.
-    func start(_ d: GyroDevice, toGuest: Bool) {
+    /// Take `d`'s samples (a controller's: `pad`'s), into the guest or (`toGuest`
+    /// false) only into the test area's dot: the same device's aim restarts its
+    /// windows (its bias kept), another device's, or another pad's, starts afresh.
+    func start(_ d: GyroDevice, pad: ObjectIdentifier?, toGuest: Bool) {
         let generation = control.withLock { c in
             c.generation += 1
             c.running = nil
@@ -368,11 +369,11 @@ final class GyroFeed: @unchecked Sendable {
         }
         if !toGuest { previewState.withLock { $0.dot.centre() } }
         dispatch.async { [self] in
-            if aimDevice == d {
+            if let a = aimSource, a.device == d, a.pad == pad {
                 aim.restart()
             } else {
                 aim = GyroAim(config: control.withLock { $0.settings }.aimConfig)
-                aimDevice = d
+                aimSource = (d, pad)
                 calibrationLogged = false
             }
             coalescer.reset()
@@ -515,11 +516,14 @@ final class GyroFeed: @unchecked Sendable {
             }
             return o
         }
-        let (o, outputs) = HostIO.pads.withLock { p in
-            let o = aim.add(s, paused: settings.paused(by: p.mixer.slot0Input))   // as held, before a controller map
+        // GyroAim's work (its calibration walks a second of samples) outside the pad lock, which
+        // the main thread's pad handlers need: the lock only to read the pause button and to apply.
+        let held = HostIO.pads.withLock { $0.mixer.slot0Input }   // as held, before a controller map
+        let o = aim.add(s, paused: settings.paused(by: held))
+        let outputs = HostIO.pads.withLock { p in
             let r = p.mixer.gyro(o)
             HostIO.apply(r.slot0, slot: 0, &p.gate)
-            return (o, r.outputs)
+            return r.outputs
         }
         for case .move(let dx, let dy) in outputs {
             if let m = coalescer.add(dx: dx, dy: dy, time: s.time) {

@@ -62,6 +62,13 @@ public struct PadNavigation: Sendable {
         repeating = nil
     }
 
+    /// Starts over from snapshot `p`: what it holds is not a press, and no held direction repeats until pressed again.
+    public mutating func prime(_ p: PadInput) {
+        reset()
+        _ = update(p, at: 0)
+        repeating = nil
+    }
+
     static func stickDirection(_ p: PadInput, current: NavButton?, on: Float, off: Float) -> NavButton? {
         let x = p.lx.isFinite ? p.lx : 0, y = p.ly.isFinite ? p.ly : 0
         if let current {

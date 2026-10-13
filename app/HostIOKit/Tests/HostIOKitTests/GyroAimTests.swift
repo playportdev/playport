@@ -314,6 +314,34 @@ final class GyroAimTests: XCTestCase {
         let back = aim.add(GyroSample(time: 2.5, rate: GyroVector(x: 0, y: 1, z: 0)))
         XCTAssertEqual(back, .mouse(dx: 0, dy: 0))
     }
+
+    /// A NaN or infinite sample moves nothing and leaves the bias and the windows
+    /// as they were: the aim after it is the same as with the sample left out.
+    func testANonFiniteSampleIsDropped() {
+        let bias = GyroVector(x: 0.01, y: -0.02, z: 0.015)
+        let bad: [GyroSample] = [
+            GyroSample(time: 1.0 + 0.5 / Self.hz, rate: GyroVector(x: .nan, y: 0, z: 0)),
+            GyroSample(time: 1.0 + 0.5 / Self.hz, rate: GyroVector(x: 0, y: .infinity, z: 0)),
+            GyroSample(time: 1.0 + 0.5 / Self.hz, rate: bias, gravity: GyroVector(x: 0, y: -.infinity, z: 0)),
+            GyroSample(time: .nan, rate: bias),
+        ]
+        for output in [GyroOutput.mouse, .rightStick] {
+            var clean = GyroAim(config: .init(output: output, turnAxis: .playerSpace)), dirty = clean
+            Self.run(&clean, from: 0, seconds: 1) { _ in bias }
+            Self.run(&dirty, from: 0, seconds: 1) { _ in bias }
+            XCTAssertTrue(dirty.calibrated)
+            for s in bad {
+                let o = dirty.add(s)
+                XCTAssertEqual(o, output == .mouse ? .mouse(dx: 0, dy: 0) : .rightStick(x: 0, y: 0))
+            }
+            XCTAssertEqual(dirty.bias, clean.bias)
+            let turn = { (_: Double) in bias + GyroVector(x: 0.3, y: 0.6, z: 0) }
+            XCTAssertEqual(Self.run(&dirty, from: 1 + 1 / Self.hz, seconds: 0.25, rate: turn),
+                           Self.run(&clean, from: 1 + 1 / Self.hz, seconds: 0.25, rate: turn))
+        }
+        var off = GyroAim()
+        XCTAssertEqual(off.add(GyroSample(time: 0, rate: GyroVector(x: .nan, y: .nan, z: .nan))), GyroAimOutput.none)
+    }
 }
 
 /// GyroAim through InputMixer: the right stick added to slot 0, the mouse as relative moves.

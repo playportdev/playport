@@ -295,6 +295,56 @@ final class MappedPadTests: XCTestCase {
         XCTAssertEqual(mixer.takeOutputs(), [.key(0x20, down: false)])
     }
 
+    /// A chord newly held while its key is down alone (0x31 from the d-pad, then
+    /// X's shift+0x31): the key goes up, the modifier down, then the key again,
+    /// so the game sees shift+0x31, not 0x31 then shift.
+    func testAChordOverItsKeyAlreadyDownPressesTheKeyAgainAfterTheModifier() {
+        var mixer = InputMixer()
+        _ = mixer.setMap(table)
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.dpadUp))
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x31, down: true)])
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.dpadUp | PadMapping.x))
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x31, down: false), .key(0xA0, down: true), .key(0x31, down: true)])
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.dpadUp | PadMapping.x | PadMapping.a))
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x20, down: true)])   // the chord still held: nothing again
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.dpadUp))
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x20, down: false), .key(0xA0, down: false)])
+        _ = mixer.physical(slot: 0, pad())
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x31, down: false)])
+        // The touch controls' key under a mapped pad's chord: the same order.
+        var t = TouchOutput()
+        t.keys = [.key(0x31, [])]
+        XCTAssertEqual(mixer.touch(t).outputs, [.key(0x31, down: true)])
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.x))
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x31, down: false), .key(0xA0, down: true), .key(0x31, down: true)])
+    }
+
+    /// The guest's windows before the first frame take the pads' presses
+    /// (WindowKeys): a mapped pad holds nothing meanwhile, so A is Enter alone,
+    /// not Enter and the map's Space; A held as they go waits until let go.
+    func testTheGuestsWindowsHoldMappedPads() {
+        XCTAssertTrue(WindowKeys.takesPads(windowsShown: true, menuUp: false))
+        XCTAssertFalse(WindowKeys.takesPads(windowsShown: true, menuUp: true))
+        XCTAssertFalse(WindowKeys.takesPads(windowsShown: false, menuUp: false))
+        XCTAssertEqual(WindowKeys.events(for: .a).map(\.vk), [0x0D, 0x0D])
+
+        var mixer = InputMixer()
+        _ = mixer.setMap(table)
+        _ = mixer.physical(slot: 0, pad())
+        mixer.hold(.windows, WindowKeys.takesPads(windowsShown: true, menuUp: false))
+        XCTAssertEqual(mixer.takeOutputs(), [])
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.a, rt: 255, rx: 1))
+        mixer.tick(time: 0)
+        mixer.tick(time: 0.016)
+        XCTAssertEqual(mixer.takeOutputs(), [])   // no Space, no left button, no mouse motion
+        mixer.hold(.windows, false)               // the game's first frame
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.a))
+        XCTAssertEqual(mixer.takeOutputs(), [])   // A held through the windows
+        _ = mixer.physical(slot: 0, pad())
+        _ = mixer.physical(slot: 0, pad(buttons: PadMapping.a))
+        XCTAssertEqual(mixer.takeOutputs(), [.key(0x20, down: true)])
+    }
+
     /// The menu opens with RT held: the left button goes up, and stays up until RT is pressed again.
     func testTheMenuReleasesAMappedPadsKeysAndButtons() {
         var mixer = InputMixer()

@@ -61,13 +61,17 @@ public struct QuickMenuControl: Sendable {
     /// long press, or a direction repeats in the menu.
     public var needsClock: Bool { isOpen ? nav.isRepeating : homeDownAt != nil }
 
-    /// The menu was opened another way (a three-finger tap on the game): the
-    /// pads' presses are the menu's from the next snapshot, and Home closes it.
-    public mutating func opened() {
+    /// The menu was opened another way (a three-finger tap on the game, a pad
+    /// button mapped to `playport:menu`): the pads' presses are the menu's from
+    /// the next snapshot, and Home closes it. `holding` is the pads' snapshot
+    /// now: what it holds is not a press, as after a held Home (`due`).
+    public mutating func opened(holding p: PadInput = PadInput()) {
         guard !isOpen else { return }
         isOpen = true
         homeDownAt = nil
-        nav.reset()
+        var q = p
+        q.home = false
+        nav.prime(q)
     }
 
     /// The menu was closed from the UI.
@@ -81,10 +85,9 @@ public struct QuickMenuControl: Sendable {
         guard let d = homeDownAt, t - d >= longPress else { return [] }
         homeDownAt = nil
         isOpen = true
-        nav.reset()
         var q = p
         q.home = false
-        _ = nav.update(q, at: t)   // what is held now is not a press
+        nav.prime(q)   // what is held now is not a press
         return [.open]
     }
 }
@@ -108,6 +111,9 @@ public struct GuestPadGate: Sendable {
         case menu
         /// A guest dialog over the running game (its keys are WindowKeys').
         case dialog
+        /// The guest's GDI windows before the game's first frame (WindowKeys.takesPads):
+        /// only InputMixer's mapped pads hold for it, not the gate's slots.
+        case windows
     }
 
     private var holders: Set<Holder> = []
