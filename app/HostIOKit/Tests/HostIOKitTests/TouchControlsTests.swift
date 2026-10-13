@@ -135,6 +135,52 @@ final class TouchControlsTests: XCTestCase {
         XCTAssertEqual(t.output.pad, PadInput())
     }
 
+    func testTwoFloatingSticksEachKeepToTheirOwnZone() {
+        let l = TouchTarget(id: "leftStick", kind: .stick(.leftStick, zone: TouchRect(x: 62, y: 231, width: 210, height: 150)),
+                            frame: TouchRect(x: 115, y: 254, width: 104, height: 104))
+        let r = TouchTarget(id: "rightStick", kind: .stick(.rightStick, zone: TouchRect(x: 602, y: 231, width: 210, height: 150)),
+                            frame: TouchRect(x: 655, y: 254, width: 104, height: 104))
+        var t = TouchControls(targets: [l, r])
+        XCTAssertNil(t.target(at: p(437, 300)))      // between the zones is the game's
+        XCTAssertNil(t.target(at: p(100, 200)))      // above the left zone too
+        XCTAssertTrue(t.began(1, at: p(120, 330), time: 0))
+        XCTAssertTrue(t.began(2, at: p(780, 250), time: 0))
+        t.moved(1, at: p(172, 330), time: 0.05)     // the left stick fully right
+        t.moved(2, at: p(780, 302), time: 0.05)     // the right stick fully down
+        XCTAssertEqual(t.output.pad.lx, 1, accuracy: 0.001)
+        XCTAssertEqual(t.output.pad.ly, 0, accuracy: 0.001)
+        XCTAssertEqual(t.output.pad.rx, 0, accuracy: 0.001)
+        XCTAssertEqual(t.output.pad.ry, -1, accuracy: 0.001)
+        // A finger leaving its zone keeps its stick.
+        t.moved(1, at: p(400, 330), time: 0.1)
+        XCTAssertEqual(t.output.pad.lx, 1, accuracy: 0.001)
+        XCTAssertEqual(t.held, ["leftStick", "rightStick"])
+    }
+
+    func testACancelledFingerIsTakenBackAsIfItNeverCameDown() {
+        let crouch = TouchTarget(id: "crouch", kind: .button(.key(0x43, []), .toggle), frame: TouchRect(x: 0, y: 0, width: 40, height: 40))
+        var t = TouchControls(targets: [a, crouch, left])
+        t.began(1, at: p(710, 310), time: 0)
+        t.began(2, at: p(10, 10), time: 0)
+        t.began(3, at: p(200, 300), time: 0)
+        XCTAssertTrue(t.output.pad.a)
+        XCTAssertEqual(t.output.keys, [.key(0x43, [])])
+        // The three fingers were a three-finger tap: all taken back.
+        for n in 1...3 { t.cancelled(n, time: 0.1) }
+        XCTAssertEqual(t.output, TouchOutput())
+        XCTAssertEqual(t.held, [])
+        // The stick's short touch was no tap: the next touch there is no double tap.
+        XCTAssertTrue(t.began(4, at: p(200, 300), time: 0.2))
+        XCTAssertFalse(t.output.pad.leftThumb)
+        // A toggle that was on before stays on when a later press on it is taken back.
+        t.ended(4, time: 0.3)
+        t.began(5, at: p(10, 10), time: 1)
+        t.ended(5, time: 1.1)
+        t.began(6, at: p(10, 10), time: 2)
+        t.cancelled(6, time: 2.1)
+        XCTAssertEqual(t.output.keys, [.key(0x43, [])])
+    }
+
     func testToggleFlipsOnEachPress() {
         let crouch = TouchTarget(id: "crouch", kind: .button(.key(0x43, []), .toggle), frame: TouchRect(x: 0, y: 0, width: 40, height: 40))
         var t = TouchControls(targets: [crouch])

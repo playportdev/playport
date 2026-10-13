@@ -48,7 +48,7 @@ final class InGameMenu: ObservableObject {
 
     private static func log(_ line: String) { HostIO.log("menu: " + line) }
 
-    /// Home held on a pad (HostIO), or the on-screen Playport button. False when there is no game to pause yet.
+    /// Home held on a pad (HostIO), or a three-finger tap on the game (HostIO.menuGesture). False when there is no game to pause yet.
     @discardableResult
     func open() -> Bool {
         let launch = TitleLaunch.shared

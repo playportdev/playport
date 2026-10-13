@@ -341,8 +341,8 @@ private struct ControlsSettings: View {
                     index: steps.firstIndex(of: ControlsOpacity.step(opacity, by: 0)) ?? 0) { opacity = steps[$0] }
         SettingsSwitchRow(id: "controlsHaptics", title: "A tap you can feel", subtitle: "Haptics when a control is pressed",
                           on: $haptics)
-        SettingsNote(text: "Each game can turn them off or change their opacity in the in-game menu's Controls; the "
-                     + "Playport button at the top opens that menu without a controller. Connect a controller in iOS "
+        SettingsNote(text: "Each game can turn them off or change their opacity in the in-game menu's Controls; a "
+                     + "three-finger tap on the game opens that menu, as holding a controller's Home button does. Connect a controller in iOS "
                      + "Settings › Bluetooth. Playport and its games use the one you pressed last.")
         if router.controllers.isEmpty {
             SettingsInfoRow(id: "controller:none", title: "No controller", subtitle: "Touch works everywhere meanwhile")

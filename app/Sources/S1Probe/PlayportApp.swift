@@ -79,6 +79,11 @@ struct RootView: View {
                     // A web page the game opened, over the running game (UI/GameWebSheet.swift).
                     .overlay { if web.isUp { GameWebSheetView() } }
                     .statusBarHidden().persistentSystemOverlays(.hidden)
+                    // A swipe from the top or bottom edge reaches the game and its on-screen controls
+                    // first; a second swipe opens Control Centre or goes Home. SwiftUI sets the hosting
+                    // controller's preferredScreenEdgesDeferringSystemGestures and asks for an update
+                    // as the game starts and stops.
+                    .defersSystemGestures(on: .vertical)
                     .transition(.identity)
             } else if restart.restarting {
                 // After a game, until the phone replaces this process (AppRestart): black

@@ -8,10 +8,11 @@
 //   touch:<control>[+<control>...][@<ms>]
 //
 // A control is a layout control's id (UI/TouchControlsView.swift,
-// PlayportKit ControlLayout: playport view menu lt lb rt rb dpad leftStick
-// rightStick y x b a in the Gamepad layout); a stick or the d-pad takes a
-// direction after a dot (`dpad.right`, `leftStick.up`: the stick fully over,
-// the d-pad near its edge). Every finger goes down together, stays `ms`
+// PlayportKit ControlLayout: view menu lt lb rt rb dpad leftStick rightStick
+// y x b a in the Gamepad layout); a stick or the d-pad takes a direction after
+// a dot (`dpad.right`, `leftStick.up`: the stick fully over, the d-pad near
+// its edge). A floating stick's finger lands at its home, in its zone. The
+// in-game menu's three-finger tap is the driver's `gesture:three-finger-tap`. Every finger goes down together, stays `ms`
 // milliseconds (200 by default, 10000 at most), and lifts together.
 
 #if canImport(UIKit)
@@ -79,7 +80,7 @@ extension OnScreenControls {
     /// The driver's summary line.
     var summary: String {
         "drawn=\(drawn) layout=\(state.layout.rawValue) visible=\(state.visible) "
-            + "menuButtonOnly=\(state.menuButtonOnly) opacity=\(ControlsOpacity.label(state.opacity)) "
+            + "opacity=\(ControlsOpacity.label(state.opacity)) "
             + "held=\(controls.held.sorted().joined(separator: "+"))"
     }
 }

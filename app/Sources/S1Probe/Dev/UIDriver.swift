@@ -86,7 +86,12 @@
 //                              game's first frame (3 min at most), then fingers on the
 //                              on-screen controls by id, held <ms> (200 by default) and let
 //                              go (Dev/TouchDriver.swift; `touch:dpad.right@2000`,
-//                              `touch:a`, `touch:playport` opens the in-game menu)
+//                              `touch:a`)
+//   gesture:three-finger-tap   After a play: (it runs while the game runs): waits for the
+//                              game's first frame (3 min at most), then fires the three-finger
+//                              tap through the handler GameSurfaceView's recognizer calls
+//                              (HostIO.menuGesture), which opens the in-game menu with or
+//                              without on-screen controls, and waits 1 s
 //   menu:open                  After a play: (the actions after it then run while the game runs):
 //                              waits for the game's first frame (3 min at most), then holds the
 //                              controller's Home button 0.8 s through HostIO's pad handling
@@ -334,6 +339,21 @@ enum UIDriver {
                     log("tap \(id): " + (window ? "on a guest window" : "on the game"))
                     if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
+                case "gesture":
+                    let launch = TitleLaunch.shared
+                    guard id == "three-finger-tap" else { return finish("action=\(action) refused: not gesture:three-finger-tap") }
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    guard launch.acceptsMenu else { return finish("action=\(action) failed: the game did not draw a frame") }
+                    HostIO.shared.menuGesture()
+                    try? await Task.sleep(for: .milliseconds(1000))
+                    guard InGameMenu.shared.isOpen else { return finish("action=\(action) failed: the menu did not open") }
+                    log("gesture \(id): \(InGameMenu.shared.summary)")
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "menu":
                     let launch = TitleLaunch.shared, menu = InGameMenu.shared
                     if id == "open" {
@@ -513,7 +533,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
-            || action.hasPrefix("touch:")
+            || action.hasPrefix("touch:") || action.hasPrefix("gesture:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

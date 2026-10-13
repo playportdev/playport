@@ -66,12 +66,16 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          after a play: (it runs while the game runs): wait for the game's first frame,
                          then fingers on the on-screen controls by id, held MS ms (200 by default,
                          10000 at most) and let go together (Dev/TouchDriver.swift). The Gamepad
-                         layout's ids: playport view menu lt lb rt rb dpad leftStick rightStick y x b a;
+                         layout's ids: view menu lt lb rt rb dpad leftStick rightStick y x b a;
                          a stick or the d-pad takes a direction: dpad.right, leftStick.up.
-                         touch:playport opens the in-game menu (pad: and menu: then act on it).
                          The controls show while no controller is connected (--pad connects one).
                          Example: --action play:app-367520 --action wait:20 --action touch:a
                          --action touch:dpad.right@2000 --action touch:dpad.right+a@600
+  gesture:three-finger-tap
+                         after a play: (it runs while the game runs): wait for the game's first frame,
+                         then fire the three-finger tap through the handler the app's recognizer calls,
+                         which opens the in-game menu with the on-screen controls on or off and with a
+                         controller connected too (pad: and menu: then act on it)
   menu:open              after a play: (the actions after it then run while the game runs): wait for
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
@@ -306,18 +310,18 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
-                       r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
+                       r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL))
 
 
 def in_game(actions, start):
     """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
-    touch:, menu: and web:, and pad: once a menu:open (or the on-screen Playport button,
-    touch:playport) has opened the in-game menu."""
+    touch:, gesture:, menu: and web:, and pad: once a menu:open or gesture:three-finger-tap has
+    opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "touch:", "menu:", "web:")) or (menu and x.startswith("pad:")):
-            menu = menu or x == "menu:open" or (x.startswith("touch:") and "playport" in re.split(r"[+@.:]", x))
+        if x.startswith(("wait:", "tap:", "touch:", "gesture:", "menu:", "web:")) or (menu and x.startswith("pad:")):
+            menu = menu or x in ("menu:open", "gesture:three-finger-tap")
             n += 1
         else:
             break
@@ -447,7 +451,7 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"} or '
@@ -489,7 +493,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
     seq = a.action + [f"play:{a.play}"] * bool(a.play)
     pad = pad_after_play(seq)

@@ -21,8 +21,8 @@
 //   controls      their pad merged into slot 0 with the physical pad there
 //                 (HostIOKit.InputMixer), their keys and buttons through
 //                 Lifecycle, shown while no extended controller is connected
-//   in-game menu  the controller's Home button held, or the on-screen Playport
-//                 button, opens Playport's menu
+//   in-game menu  the controller's Home button held, or a three-finger tap
+//                 anywhere on the game (GameSurfaceView), opens Playport's menu
 //                 (UI/InGameMenuView.swift, HostIOKit.QuickMenuControl); while
 //                 it is up the pads' presses are the menu's, the guest's pads
 //                 are at rest (HostIOKit.GuestPadGate), audio stops and the
@@ -489,11 +489,22 @@ final class HostIO {
         }
     }
 
-    /// The menu opened from the on-screen Playport button (InGameMenu.open): a pad's
+    /// The menu opened another way than a held Home (InGameMenu.open): a pad's
     /// presses are the menu's from here, as after a held Home.
     func menuOpened() {
         menuControl.opened()
         menuEvents([])
+    }
+
+    /// A three-finger tap on the game (GameSurfaceView's recognizer, which has
+    /// already taken its fingers back from the controls and the game) or a dev
+    /// build's `gesture:three-finger-tap`: the in-game menu, with or without
+    /// on-screen controls or a controller.
+    func menuGesture() {
+        #if !PLAYPORT_RELEASE
+        HostIO.log("hostio: three-finger tap")
+        #endif
+        InGameMenu.shared.open()
     }
 
     private func menuTick() {
@@ -720,11 +731,18 @@ final class PacedMetalLayer: CAMetalLayer {
 /// The full-screen view DXMT presents into: its backing layer is a
 /// PacedMetalLayer, registered with IOSDisplayShim when the view reaches a window.
 /// The swap chain is aspect-fitted, black around it, and touches map into
-/// the fitted picture.
+/// the fitted picture: one finger at a time is the game's (the first down).
+/// A three-finger tap anywhere on it, on the on-screen controls too, opens the
+/// in-game menu (HostIO.menuGesture); UIKit cancels the tap's fingers out of
+/// the controls and the game, and iOS's own three-finger editing gestures
+/// (undo, copy, paste) are off here.
 final class GameSurfaceView: UIView {
     override class var layerClass: AnyClass { PacedMetalLayer.self }
     override var canBecomeFirstResponder: Bool { true }
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
     private var registered = false
+    /// The finger that is the game's now.
+    private weak var gameTouch: UITouch?
     /// The guest's GDI windows until the game's swap chain presents (GuestWindows).
     private let windows = Unmanaged<CALayer>.fromOpaque(winios_windows_layer()).takeUnretainedValue()
     /// The on-screen controls, over the game and its windows (UI/TouchControlsView.swift).
@@ -740,10 +758,23 @@ final class GameSurfaceView: UIView {
         layer.contentsGravity = .resizeAspect
         layer.addSublayer(windows)
         addSubview(controls)
-        isMultipleTouchEnabled = false
+        // Every finger reaches the view, so the three-finger tap sees them; forward lets only one through.
+        isMultipleTouchEnabled = true
+        let menuTap = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
+        menuTap.numberOfTouchesRequired = 3
+        // Its fingers' presses are cancelled when it is recognized (cancelsTouchesInView), and
+        // their releases held until it fails (delaysTouchesEnded): both UIKit's defaults.
+        menuTap.cancelsTouchesInView = true
+        menuTap.delaysTouchesEnded = true
+        addGestureRecognizer(menuTap)
         // Counted only (hostio: input … hover=N): whether iOS shows a mouse to
         // UIKit as a hovering pointer when GCMouse's handlers stay silent.
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered)))
+    }
+
+    @objc private func threeFingerTap(_ g: UITapGestureRecognizer) {
+        guard g.state == .recognized else { return }
+        HostIO.shared.menuGesture()
     }
 
     @objc private func hovered(_ g: UIHoverGestureRecognizer) {
@@ -796,7 +827,12 @@ final class GameSurfaceView: UIView {
     private func forward(_ touches: Set<UITouch>) {
         let indirect = touches.filter { $0.type != .direct }.count
         HostIO.trace.update { $0.touches += touches.count - indirect; $0.pointerTouches += indirect }
-        for t in touches where t.type == .direct { route(t.location(in: self), phase: t.phase) }
+        for t in touches where t.type == .direct {
+            if t.phase == .began, gameTouch == nil { gameTouch = t }
+            guard t === gameTouch else { continue }
+            if t.phase == .ended || t.phase == .cancelled { gameTouch = nil }
+            route(t.location(in: self), phase: t.phase)
+        }
     }
 
     /// A finger at p: on a guest GDI window while one is shown, else at the same

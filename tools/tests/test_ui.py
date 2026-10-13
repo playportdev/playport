@@ -151,21 +151,31 @@ class UiEnvTest(unittest.TestCase):
         self.assertTrue(m.after_play(["play:app-367520", "pad:a"]))
 
     def test_touch_presses_the_on_screen_controls_while_the_game_runs(self):
-        """touch: is a finger on the running game's on-screen controls (Dev/TouchDriver.swift);
-        touch:playport opens the in-game menu, so pad: after it is the menu's."""
+        """touch: is a finger on the running game's on-screen controls (Dev/TouchDriver.swift)."""
         m = load()
-        for ok in ("touch:a", "touch:playport", "touch:dpad.right@2000", "touch:dpad.right+a@600",
+        for ok in ("touch:a", "touch:dpad.right@2000", "touch:dpad.right+a@600",
                    "touch:leftStick.up+rightStick.left@10000", "menu:controls", "open:settings#controls",
                    "open:settings#controllers"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
         for bad in ("touch:", "touch:a@", "touch:a.b", "touch:a@123456", "touch:a+", "touch:a,b", "menu:control"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
-        run = ["play:app-367520", "wait:20", "touch:a", "touch:dpad.right@2000", "touch:playport", "pad:down",
+        self.assertEqual(m.in_game(["play:app-367520", "touch:a", "pad:a"], 1), 1)
+
+    def test_three_finger_tap_opens_the_menu_so_pad_after_it_is_the_menus(self):
+        """gesture:three-finger-tap fires the app's three-finger tap handler (HostIO.menuGesture),
+        which opens the in-game menu with or without on-screen controls: pad: after it is the menu's."""
+        m = load()
+        self.assertTrue(m.ACTION_RE.match("gesture:three-finger-tap"))
+        for bad in ("gesture:", "gesture:tap", "gesture:three-finger-tap@100"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        run = ["play:app-367520", "wait:20", "touch:a", "touch:dpad.right@2000", "gesture:three-finger-tap", "pad:down",
                "menu:resume", "touch:a"]
         self.assertEqual(m.in_game(run, 1), 7)
         self.assertFalse(m.after_play(run))
         self.assertIsNone(m.pad_after_play(run))
-        self.assertEqual(m.in_game(["play:app-367520", "touch:a", "pad:a"], 1), 1)
+        # A touch: on a control named like the old Playport button no longer opens the menu.
+        self.assertEqual(m.in_game(["play:app-367520", "touch:playport", "pad:a"], 1), 1)
+        self.assertEqual(m.pad_after_play(["play:app-367520", "touch:playport", "pad:a"]), "pad:a")
 
     def test_controls_saves_a_games_on_screen_controls_before_play(self):
         m = load()

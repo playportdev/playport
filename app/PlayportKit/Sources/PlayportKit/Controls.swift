@@ -9,8 +9,8 @@
 //   controller too; Never makes Off every game's starting choice.
 // - A game's layout is Off or Gamepad; with none set it is Gamepad, or Off
 //   when the default is Never. Off hides them for that game whatever else.
-// - Without a controller the Playport button stays even when the layout is Off,
-//   so a person playing by touch can always reach the in-game menu.
+// - A three-finger tap on the game opens the in-game menu whatever the layout
+//   (S1Probe's HostIO.swift, GameSurfaceView), so Off draws nothing at all.
 // - Opacity: the game's own, else the default (60%).
 
 import Foundation
@@ -102,23 +102,18 @@ public struct ControlsState: Equatable, Sendable {
     /// The layout's controls are shown, and their pad is player 1.
     public var visible: Bool
     public var opacity: Double
-    /// The Playport button alone is shown: the layout is Off and no controller is connected.
-    public var menuButtonOnly = false
 
-    public init(layout: OnScreenLayout, visible: Bool, opacity: Double, menuButtonOnly: Bool = false) {
-        self.layout = layout; self.visible = visible; self.opacity = opacity; self.menuButtonOnly = menuButtonOnly
+    public init(layout: OnScreenLayout, visible: Bool, opacity: Double) {
+        self.layout = layout; self.visible = visible; self.opacity = opacity
     }
 
-    /// What is drawn: the layout, the Playport button alone, or nothing.
-    public var drawnLayout: ControlLayout? {
-        visible ? layout.layout : menuButtonOnly ? .menuButton : nil
-    }
+    /// What is drawn: the layout, or nothing.
+    public var drawnLayout: ControlLayout? { visible ? layout.layout : nil }
 
     public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool) -> ControlsState {
         let layout = game?.layout ?? (defaults.show == .never ? .off : .gamepad)
         let shown = layout != .off && (defaults.show == .always || !controllerConnected)
-        return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity,
-                             menuButtonOnly: !shown && !controllerConnected)
+        return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity)
     }
 
     /// The in-game menu's Controls row: `Gamepad · 60%`, `Off`, `Gamepad · controller connected` while a controller hides it.

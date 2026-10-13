@@ -110,11 +110,14 @@ extension PadInput {
 /// - A stick starts where the thumb lands: the deflection is the finger's
 ///   distance from there over the stick's radius, clamped to the unit circle
 ///   (+y up, as XInput has it). A floating stick starts anywhere in its zone
-///   (the Gamepad layout's lower left third); controls inside the zone are hit
-///   first. A second touch within `doubleTapWindow` of a short tap on the same
+///   (the Gamepad layout's lower corners, one for each stick); a control that
+///   overlaps a zone is hit first. A second touch within `doubleTapWindow` of a short tap on the same
 ///   stick holds its thumb button (L3, R3) as long as it is down.
 /// - A d-pad holds the one or two directions the finger is toward from its
 ///   centre (8 ways), none inside `dpadDeadZone` of its half size.
+/// - `cancelled` takes a finger back as if it had never come down: a toggle it
+///   flipped flips back, and it counts as no tap (the three-finger tap that
+///   opens the in-game menu takes its fingers back from the controls).
 /// - `releaseAll` lets go of everything, toggles too: the in-game menu, the
 ///   app leaving the front, a layout change, the controls hiding.
 public struct TouchControls: Sendable {
@@ -187,6 +190,18 @@ public struct TouchControls: Sendable {
         if case .stick = target.kind, !f.thumb, t - f.began <= doubleTapWindow,
            Self.distance(f.origin, f.at) < target.frame.width / 4 {
             lastTap[target.id] = t
+        }
+    }
+
+    /// The system took the finger back (a gesture it was part of): what it
+    /// held is let go, a toggle it flipped flips back, and no tap is counted.
+    public mutating func cancelled(_ touch: Int, time t: Double) {
+        now = max(now, t)
+        guard let f = fingers.removeValue(forKey: touch) else { return }
+        order.removeAll { $0 == touch }
+        let target = targets[f.target]
+        if case .button(_, .toggle) = target.kind {
+            if toggled.contains(target.id) { toggled.remove(target.id) } else { toggled.insert(target.id) }
         }
     }
 
