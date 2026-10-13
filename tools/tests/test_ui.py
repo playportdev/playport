@@ -161,6 +161,25 @@ class UiEnvTest(unittest.TestCase):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
         self.assertEqual(m.in_game(["play:app-367520", "touch:a", "pad:a"], 1), 1)
 
+    def test_gyro_plays_a_scripted_gyro_while_the_game_runs(self):
+        """gyro: plays HostIOKit GyroScript steps into gyro aim (Dev/GyroDriver.swift) while the game runs."""
+        m = load()
+        for ok in ("gyro:yaw=90@500", "gyro:yaw=90@500/pitch=-30@300", "gyro:pitch=-30+yaw=10.5@300/rest@200",
+                   "gyro:roll=45@10000", "gyro:rest@1", "gyro:yaw=2000@1/yaw=-2000@1"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("gyro:", "gyro:yaw=90", "gyro:yaw@500", "gyro:spin=10@100", "gyro:yaw=90@500/", "gyro:yaw=90@500,pitch=1@2",
+                    "gyro:yaw=+90@500", "gyro:yaw=90@123456", "gyro:rest", "gyro:yaw=1e3@100"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        run = ["play:app-620", "wait:30", "gyro:yaw=90@500", "touch:a", "gyro:rest@100", "open:home"]
+        self.assertEqual(m.in_game(run, 1), 4)
+        self.assertTrue(m.after_play(run))
+        self.assertIsNone(m.pad_after_play(run))
+        a = m.parse(["--controls", 'app-620:{"gyro":{"output":"mouse"}}', "--action", "play:app-620",
+                     "--action", "gyro:yaw=90@500/rest@300"])
+        self.assertEqual(a.action[-1], "gyro:yaw=90@500/rest@300")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            m.parse(["--action", "gyro:yaw=90"])
+
     def test_three_finger_tap_opens_the_menu_so_pad_after_it_is_the_menus(self):
         """gesture:three-finger-tap fires the app's three-finger tap handler (HostIO.menuGesture),
         which opens the in-game menu with or without on-screen controls: pad: after it is the menu's."""

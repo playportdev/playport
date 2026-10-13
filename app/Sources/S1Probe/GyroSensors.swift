@@ -206,8 +206,10 @@ final class GyroFeed: @unchecked Sendable {
         var generation = 0
         var settings = GyroSettings()
         var orientation = GyroScreenOrientation.landscapeRight
+        #if !PLAYPORT_RELEASE
         /// A dev build's `gyro:` script runs: its samples replace the sensors'.
         var scripted = false
+        #endif
     }
     private let control = OSAllocatedUnfairLock(initialState: Control())
 
@@ -292,10 +294,13 @@ final class GyroFeed: @unchecked Sendable {
         }
     }
 
-    /// A sensor's sample in its own frame, on the queue: taken while its device runs and no script does.
+    /// A sensor's sample in its own frame, on the queue: taken while its device runs (and no `gyro:` script does).
     private func take(time: Double, rate: GyroVector, gravity: GyroVector, from d: GyroDevice) {
         let c = control.withLock { $0 }
-        guard c.running == d, !c.scripted else { return }
+        guard c.running == d else { return }
+        #if !PLAYPORT_RELEASE
+        if c.scripted { return }
+        #endif
         let s = switch d {
         case .phone:
             GyroSample(time: time, rate: GyroFrame.phone(rate, c.orientation), gravity: GyroFrame.phone(gravity, c.orientation))
@@ -329,5 +334,66 @@ final class GyroFeed: @unchecked Sendable {
     }
 
     private static func bias(_ b: GyroVector) -> String { String(format: "bias %.4f %.4f %.4f rad/s", b.x, b.y, b.z) }
+
+    #if !PLAYPORT_RELEASE
+    // A dev build's `gyro:` script (Dev/GyroDriver.swift): its samples enter
+    // where the sensors' do, and replace them while it plays.
+
+    /// What a script's samples did.
+    struct ScriptResult: Sendable {
+        var samples = 0
+        /// Taken: the sensors were running (else the sample moved nothing, as a sensor's would not).
+        var taken = 0
+        var dx = 0, dy = 0
+        var peak = 0.0
+    }
+
+    private struct Playing {
+        var samples: [GyroSample]
+        var next = 0
+        var result = ScriptResult()
+        var timer: DispatchSourceTimer
+        var done: CheckedContinuation<ScriptResult, Never>
+    }
+    /// The queue's alone.
+    private var playing: Playing?
+
+    /// Plays `script` from now, each sample at its time, on the queue; returns once the last is fed.
+    func play(_ script: GyroScript) async -> ScriptResult {
+        await withCheckedContinuation { done in
+            dispatch.async { [self] in
+                control.withLock { $0.scripted = true }
+                let timer = DispatchSource.makeTimerSource(queue: dispatch)
+                playing = Playing(samples: script.samples(from: ProcessInfo.processInfo.systemUptime), timer: timer, done: done)
+                timer.schedule(deadline: .now(), repeating: .milliseconds(2), leeway: .milliseconds(1))
+                timer.setEventHandler { [self] in scriptTick() }
+                timer.resume()
+            }
+        }
+    }
+
+    private func scriptTick() {
+        guard var p = playing else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        while p.next < p.samples.count, p.samples[p.next].time <= now {
+            let s = p.samples[p.next]
+            p.next += 1
+            p.result.samples += 1
+            let c = control.withLock { $0 }
+            guard c.running != nil else { continue }
+            p.result.taken += 1
+            switch process(s, c.settings) {
+            case .none: break
+            case .mouse(let dx, let dy): p.result.dx += Int(dx); p.result.dy += Int(dy)
+            case .rightStick(let x, let y): p.result.peak = max(p.result.peak, (x * x + y * y).squareRoot())
+            }
+        }
+        guard p.next == p.samples.count else { playing = p; return }
+        p.timer.cancel()
+        playing = nil
+        control.withLock { $0.scripted = false }
+        p.done.resume(returning: p.result)
+    }
+    #endif
 }
 #endif

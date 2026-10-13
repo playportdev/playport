@@ -94,6 +94,16 @@
 //                              on-screen controls by id, held <ms> (200 by default) and let
 //                              go (Dev/TouchDriver.swift; `touch:dpad.right@2000`,
 //                              `touch:a`)
+//   gyro:<script>              After a play: (it runs while the game runs): waits for the
+//                              game's first frame (3 min at most), then plays a scripted gyro
+//                              into gyro aim where the sensors' samples enter it, replacing
+//                              them while it plays (Dev/GyroDriver.swift, HostIOKit
+//                              GyroScript): steps joined by `/`, each <axis>=<deg/s> terms
+//                              joined by `+` (yaw + right, pitch + up, roll + clockwise) or
+//                              `rest`, then @<ms> (`gyro:yaw=90@500/pitch=-30+yaw=10@300`).
+//                              Taken only while the game's gyro output is on (controls:'s
+//                              "gyro") and the sensors run; the `gyro: driver` line says what
+//                              moved (mouse counts, or the right stick's peak)
 //   gesture:three-finger-tap   After a play: (it runs while the game runs): waits for the
 //                              game's first frame (3 min at most), then fires the three-finger
 //                              tap through the handler GameSurfaceView's recognizer calls
@@ -246,6 +256,19 @@ enum UIDriver {
                     if let failure = await OnScreenControls.shared.driverPress(id) { return finish("action=\(action) failed: \(failure)") }
                     try? await Task.sleep(for: .milliseconds(500))
                     log("touch \(id): \(OnScreenControls.shared.summary)" + (InGameMenu.shared.isOpen ? "; \(InGameMenu.shared.summary)" : ""))
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
+                case "gyro":
+                    let launch = TitleLaunch.shared
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    do { _ = try GyroScript.parse(id) } catch { return finish("action=\(action) refused: \(error)") }
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))   // the sensors started after the first frame
+                    if let failure = await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
+                    log("gyro \(id): \(GyroSensors.shared.summary)" + (InGameMenu.shared.isOpen ? "; \(InGameMenu.shared.summary)" : ""))
                     if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "hud":
@@ -543,7 +566,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
-            || action.hasPrefix("touch:") || action.hasPrefix("gesture:")
+            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 
