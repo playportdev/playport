@@ -18,7 +18,10 @@
 ///   second): every sample of the iPhone's 100 Hz feed, every other one of a
 ///   faster controller's, the counts carried, never lost.
 /// - **The log.** GyroActivity sums the output over `interval` seconds and
-///   gives one line when anything moved, none while the aim is still.
+///   gives one line when anything moved, none while the aim is still: the
+///   samples and their rate (the sensor's actual rate), the output, and for
+///   the mouse the moves sent, their rate and the longest a move waited in the
+///   coalescer (`lastDelay`), the measures phase 2d reads on the phone.
 
 import Foundation
 
@@ -53,6 +56,10 @@ public struct GyroMouseCoalescer: Sendable {
     public static let minInterval = 1.0 / 125
     private var dx = 0, dy = 0
     private var lastSent: Double?
+    /// When the counts carried now began to wait.
+    private var pendingSince: Double?
+    /// How long the last move sent had waited, from its first sample's counts (the delay coalescing added), s.
+    public private(set) var lastDelay = 0.0
 
     public init() {}
 
@@ -60,16 +67,19 @@ public struct GyroMouseCoalescer: Sendable {
     public mutating func add(dx: Int32, dy: Int32, time: Double) -> (dx: Int32, dy: Int32)? {
         self.dx += Int(dx)
         self.dy += Int(dy)
-        guard self.dx != 0 || self.dy != 0 else { return nil }
+        guard self.dx != 0 || self.dy != 0 else { pendingSince = nil; return nil }
+        if pendingSince == nil { pendingSince = time }
         // 10% slack: samples' timestamps jitter, and two of a 250 Hz feed are one interval apart.
         if let l = lastSent, time >= l, time - l < Self.minInterval * 0.9 { return nil }
         lastSent = time
+        lastDelay = max(0, time - (pendingSince ?? time))
+        pendingSince = nil
         defer { self.dx = 0; self.dy = 0 }
         return (Int32(clamping: self.dx), Int32(clamping: self.dy))
     }
 
     /// The sensors stopped: what is carried is dropped (the menu or the background took the game).
-    public mutating func reset() { dx = 0; dy = 0; lastSent = nil }
+    public mutating func reset() { dx = 0; dy = 0; lastSent = nil; pendingSince = nil; lastDelay = 0 }
 }
 
 /// What gyro aim did lately, for the log: one line per `interval` with motion in it.
@@ -81,8 +91,17 @@ public struct GyroActivity: Sendable {
     private var peak = 0.0
     private var stick = false
     private var moved = false
+    /// Mouse moves sent to the guest (after coalescing), and the longest a move waited.
+    private var moves = 0
+    private var maxDelay = 0.0
 
     public init() {}
+
+    /// A coalesced mouse move went to the guest, `delay` s after its first counts (GyroMouseCoalescer.lastDelay).
+    public mutating func sent(delay: Double) {
+        moves += 1
+        maxDelay = max(maxDelay, delay)
+    }
 
     /// One sample's output; a line (without the `gyro: ` prefix) once `interval` has passed with motion in it.
     public mutating func add(_ o: GyroAimOutput, time: Double) -> String? {
@@ -103,7 +122,10 @@ public struct GyroActivity: Sendable {
         defer { self = GyroActivity(); since = time }
         guard moved else { return nil }
         let what = stick ? String(format: "right stick peak %.2f", peak) : "mouse dx=\(dx) dy=\(dy)"
-        return String(format: "%.1f s, %d samples, ", time - s, samples) + what
+        let span = time - s
+        let sent = moves == 0 ? ""
+            : String(format: "; %d moves (%.0f/s), coalescing delay max %.1f ms", moves, Double(moves) / span, maxDelay * 1000)
+        return String(format: "%.1f s, %d samples (%.0f/s), ", span, samples, Double(samples) / span) + what + sent
     }
 
     /// The sensors stopped: start the next interval afresh.

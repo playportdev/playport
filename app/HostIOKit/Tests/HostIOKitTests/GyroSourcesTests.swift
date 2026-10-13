@@ -118,6 +118,13 @@ final class GyroSourcesTests: XCTestCase {
         XCTAssertNil(c.add(dx: 5, dy: 5, time: 0.010))
         c.reset()
         XCTAssertEqual(c.add(dx: 1, dy: 0, time: 0.011)?.dx, 1)
+        // The delay coalescing added: from the first carried counts to the move.
+        c = GyroMouseCoalescer()
+        XCTAssertNotNil(c.add(dx: 1, dy: 0, time: 1))
+        XCTAssertEqual(c.lastDelay, 0)
+        XCTAssertNil(c.add(dx: 1, dy: 0, time: 1.004))
+        XCTAssertNotNil(c.add(dx: 1, dy: 0, time: 1.008))
+        XCTAssertEqual(c.lastDelay, 0.004, accuracy: 1e-9)
     }
 
     func testTheActivityLineIsQuietWhileStill() {
@@ -125,14 +132,17 @@ final class GyroSourcesTests: XCTestCase {
         var lines: [String] = []
         for i in 0...500 { if let l = a.add(.mouse(dx: 0, dy: 0), time: Double(i) / 100) { lines.append(l) } }
         XCTAssertEqual(lines, [])
-        for i in 501...900 { if let l = a.add(.mouse(dx: 2, dy: -1), time: Double(i) / 100) { lines.append(l) } }
+        for i in 501...900 {
+            if i.isMultiple(of: 2) { a.sent(delay: i == 800 ? 0.012 : 0.004) }
+            if let l = a.add(.mouse(dx: 2, dy: -1), time: Double(i) / 100) { lines.append(l) }
+        }
         XCTAssertEqual(lines.count, 2)
         XCTAssertTrue(lines[0].contains("mouse dx="), lines[0])
-        XCTAssertEqual(lines[1], "2.0 s, 200 samples, mouse dx=400 dy=-200")
+        XCTAssertEqual(lines[1], "2.0 s, 200 samples (100/s), mouse dx=400 dy=-200; 100 moves (50/s), coalescing delay max 12.0 ms")
         var s = GyroActivity()
         _ = s.add(.rightStick(x: 0, y: 0), time: 0)
         _ = s.add(.rightStick(x: 0.3, y: 0.4), time: 1)
-        XCTAssertEqual(s.add(.rightStick(x: 0, y: 0), time: 2), "2.0 s, 3 samples, right stick peak 0.50")
+        XCTAssertEqual(s.add(.rightStick(x: 0, y: 0), time: 2), "2.0 s, 3 samples (2/s), right stick peak 0.50")
     }
 
     /// A restart (the sensors stopped and started again) moves nothing for the gap and keeps the bias.

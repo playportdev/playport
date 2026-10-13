@@ -35,7 +35,9 @@
 //
 // A dev build logs `gyro:` lines: the source and output as the sensors start
 // and stop, the calibration once learnt, and a summary of the output at most
-// every 2 s while it moves (none while the aim is still).
+// every 2 s while it moves (none while the aim is still): the samples and
+// their rate, and for the mouse the moves sent, their rate and the longest a
+// move waited in the coalescer.
 
 #if canImport(UIKit)
 import Combine
@@ -321,7 +323,12 @@ final class GyroFeed: @unchecked Sendable {
             return (o, r.outputs)
         }
         for case .move(let dx, let dy) in outputs {
-            if let m = coalescer.add(dx: dx, dy: dy, time: s.time) { winios_pointer(m.dx, m.dy, Pointer.move, 0) }
+            if let m = coalescer.add(dx: dx, dy: dy, time: s.time) {
+                winios_pointer(m.dx, m.dy, Pointer.move, 0)
+                #if !PLAYPORT_RELEASE
+                activity.sent(delay: coalescer.lastDelay)
+                #endif
+            }
         }
         #if !PLAYPORT_RELEASE
         if aim.calibrated, !calibrationLogged {
