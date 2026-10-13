@@ -72,7 +72,8 @@ proposed answer unless the owner says otherwise before the phase that needs them
   controls, `set:gyro.sensitivity=1.5` read as a number, and `open:ID#gyro`, `open:ID#controls`,
   `open:settings#gyro`, `gyro:` on the test area. A pad's gyro is still chosen by
   `hasRotationRate` (as SDL does; a dev line logs each pad's motion flags). Dev IPA `0636a72d…`
-  built and verified, not installed. Next: 2d (phone).
+  built and verified, not installed.
+- **Running:** 2d, the phase 2 phone session (writer launched 2026-10-13).
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -108,7 +109,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
      driver action.
   3. **2c, done:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
-  4. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
+  4. **2d (phone), running:** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
      chunk follows. Also **measure the gyro event timing** (owner, 2026-10-13): the
      iPhone's real device-motion rate (and whether raw gyro goes higher), a controller's
