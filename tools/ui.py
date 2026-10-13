@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """pp ui: drive the product UI on the phone (app/Sources/S1Probe/Dev/UIDriver.swift; dev builds only).
 
-  pp ui [--action VERB:ARG ...] [--settings ID:JSON] [--verify ID] [--play ID]
+  pp ui [--action VERB:ARG ...] [--controls ID:JSON] [--settings ID:JSON] [--verify ID] [--play ID]
         [--shot-each-action] [--pad] [--out DIR] [--until SPEC] [--wait S] [--idle N] [--quiet]
         [--shot] [--screenshot-after S ...] [--leave-running] [--keep-log] [--lock-wait S]
         [--expect-ipa IPA|SHA256] [--any-build] [--keep-settings] [--dry-run]
 
 The app starts as a Home Screen launch does, shows the
 library, and does what a person would do with its buttons, through the same
-model calls: each --action in order, then --settings, --verify, --play, regardless
+model calls: each --action in order, then --controls, --settings, --verify, --play, regardless
 of argv order. Use --settings with --play, not --action play:ID, to save settings
 before playing. --dry-run prints UI_ACTIONS without accessing the phone:
 
@@ -17,11 +17,24 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          settings, account: Settings' Accounts section, setup: the first-run checklist as
                          Settings › Setup check's first row opens it, signin: Sign in to Steam, a preview
                          that sends nothing to Steam while Steam is signed in) or a title's page;
-                         open:ID#SECTION opens its Game options at a section (graphics, game, files,
-                         developer, ordering, steam);
+                         open:ID#SECTION opens its Game options at a section (graphics, controls, game,
+                         files, developer, ordering, steam); open:ID#gyro opens its Controls › Gyro aim
+                         page, whose test area runs the gyro for its dot while it is up (no game);
+                         open:ID#controller opens its Controller page (the game's controller map: the
+                         mode ctl:mode, Look speed ctl:lookSpeed, Edit a copy ctl:copy, Reset all
+                         ctl:resetAll, a row per input ctl:a, ctl:lt, ctl:leftStick, ctl:dpad...;
+                         pad:up/down/left/right move one ring through every item in every mode
+                         (down walks the header, the left column, Look speed, the right column),
+                         pad:lb/rb cycle the mode, pad:a edits the ringed input (in Custom the
+                         ActionPicker at once; as keyboard & mouse "Edit a copy?" first, as a
+                         controller "Switch to Custom?" first), pad:y resets it, pad:b goes back; in
+                         the ActionPicker pad:lb/rb switch tabs, pad:x waits for a hardware key,
+                         pad:b cancels);
                          open:settings#SECTION shows a Settings section (accounts, graphics, downloads,
-                         controllers, storage, setup, about, developer; also account, jit, memory,
-                         diagnostics, pairing, probes, logs for the section that holds them);
+                         controls, storage, setup, about, developer; also account, jit, memory,
+                         diagnostics, pairing, probes, logs for the section that holds them,
+                         controllers, the old name of controls, gyro: Controls at its Gyro aim rows,
+                         and controller: Settings › Controls › Controller, the default's page);
                          open:licences shows Settings › About › Licences, open:licences#PREFIX the
                          files of the first component whose name starts with PREFIX (open:licences#wine);
                          there pad:down/up move through the rows and a text's paragraphs, pad:a opens
@@ -60,13 +73,52 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          launcher or a dialog shown before the game's first frame, decision 0075;
                          its first one is the `first window` mark, --until mark:first window+S;
                          or a dialog it opens after it, decision 0076, --until mark:dialog shown+S)
-                         while one is shown, else on the game
+                         while one is shown, else on the game. While the on-screen controls show it
+                         sends nothing: a touch outside them is ignored, and the app logs `tap …: ignored`
+  touch:CONTROL[+CONTROL...][@MS]
+                         after a play: (it runs while the game runs): wait for the game's first frame,
+                         then fingers on the on-screen controls by id, held MS ms (200 by default,
+                         10000 at most) and let go together (Dev/TouchDriver.swift). The Gamepad
+                         layout's ids: view menu lt lb rt rb leftStick y x b a, and dpad and rightStick
+                         when the game's controls have them ("dpad":"on", "rightStick":"below"|"above");
+                         a stick or the d-pad takes a direction: dpad.right, leftStick.up.
+                         The controls show while no controller is connected (--pad connects one).
+                         Example: --action play:app-367520 --action wait:20 --action touch:a
+                         --action touch:leftStick.right@2000 --action touch:leftStick.right+a@600
+  gyro:STEP[/STEP...]    after a play: (it runs while the game runs): wait for the game's first frame,
+                         then play a scripted gyro into gyro aim where the sensors' samples enter it
+                         (Dev/GyroDriver.swift, HostIOKit GyroScript), at 100 Hz, the device upright.
+                         STEP is AXIS=DEG_PER_S[+AXIS=DEG_PER_S...]@MS or rest@MS: yaw + turns right,
+                         pitch + up, roll + clockwise; at most 2000 deg/s, 1-10000 ms a step, 60 s in
+                         all. While it plays its samples replace the sensors' (a phone still on the desk
+                         does not fight it). It moves the aim only while the game's gyro output is on
+                         (--controls 'ID:{"gyro":{"output":"mouse"}}' or "rightStick") and the sensors
+                         run (no menu); the `gyro: driver` line in the log gives the mouse counts (20
+                         per degree at sensitivity 1; the default is 1.5) or the right stick's peak (1 at
+                         180 deg/s at sensitivity 1, then past its anti-dead-zone, 0.27 by default).
+                         Example: --controls 'app-620:{"gyro":{"output":"mouse"}}' --action play:app-620
+                         --action wait:30 --action gyro:yaw=90@500/rest@300/pitch=-30+yaw=10@300
+                         With no game running and the Gyro aim page up, it moves the page's test-area dot
+                         instead (nothing reaches a game): --action open:app-620#gyro --action gyro:yaw=30@500
+  gesture:three-finger-tap
+                         after a play: (it runs while the game runs): wait for the game's first frame,
+                         then fire the three-finger tap through the handler the app's recognizer calls,
+                         which opens the in-game menu with the on-screen controls on or off and with a
+                         controller connected too (pad: and menu: then act on it)
   menu:open              after a play: (the actions after it then run while the game runs): wait for
                          the game's first frame, then hold the controller's Home button 0.8 s through
                          HostIO's pad handling, which opens Playport's in-game menu over the paused
                          game (UI/InGameMenuView.swift)
-  menu:ROW               in that menu, move its ring to ROW (resume, screenshot, overlay, controller,
-                         quit) and press A; pad:up/down/a/b press into the menu while it is up.
+  menu:ROW               in that menu, move its ring to ROW (resume, controls, screenshot, overlay,
+                         controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
+                         menu:controls opens its Controls panel: pad:left/right change the ringed row
+                         (On-screen controls: Off, Gamepad; D-pad: Off, On; Right stick: Off, Below, Above
+                         A/B/X/Y; Opacity; Gyro aim: Off, Mouse, Right stick; Sensitivity; and, while a
+                         controller is connected, --pad's scripted pad too, Controller: Pad, Keys &
+                         mouse, Custom), pad:down/up move, pad:b goes back. pad:a on Controller (or
+                         choosing Custom there) opens the Controller page over the paused game, which
+                         pad: then drives as on a game page (the ActionPicker too); pad:b comes back
+                         to the panel. The menu keeps the pads from the game all along.
                          menu:screenshot saves the frame to Photos (the first time iOS asks a person
                          to allow it) and, in a dev build, to Documents/Screenshots; menu:quit closes
                          the game's windows, and the run follows Playport's restart as for play:.
@@ -125,6 +177,34 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
   probe:relaunch         Settings' Restart Playport now (AppRestart.swift): the restart after a game,
                          with no game; the run is done as it asks (use --leave-running); must be
                          the last action
+  --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
+                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.1-1,
+                         "dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a key left out
+                         follows Settings › Controls, where the d-pad and right stick are off by default;
+                         `ID:{}` clears). "gyro" is the game's own gyro aim (PlayportKit GameGyro), each key
+                         left out following the gyro.* defaults (output off): "output":"off"|"mouse"|
+                         "rightStick", "source":"auto"|"phone"|"controller", "sensitivity":0.05-20 (1.5 by default),
+                         "verticalRatio":0-4, "turnAxis":"playerSpace"|"yaw"|"roll", "invertX"/"invertY":
+                         true|false, "pauseButton":"none"|"pad:BUTTON" (a b x y lb rb lt rt start back ls rs
+                         up down left right), "antiDeadZone":0-0.9 (right stick: where its deflection starts,
+                         0.27 by default), "smoothing":"auto"|"off"|"light"|"normal" (auto, the default: off for a
+                         controller's gyro, normal for the iPhone's). Example: --controls 'app-620:{"gyro":{"output":"mouse"}}'
+                         "controllerMap" is the game's controller map (PlayportKit ControllerMap), what a
+                         physical controller (and --pad's scripted pad, not the on-screen controls) does:
+                         {"mode":"controller"} (the default: an XInput pad), {"mode":"keyboardMouse"} (left
+                         stick W A S D, right stick mouse look, RT/LT left/right mouse button, A Space, B C,
+                         X R, Y F, LB Q, RB E, d-pad the arrow keys, BACK Tab, START Esc; Home stays
+                         Playport's), or {"mode":"custom","table":{INPUT:ACTION,...}} (no table: a copy of
+                         that preset). INPUT is a b x y lb rb lt rt start back ls rs up down left right,
+                         leftStick/rightStick (whole: mouse:move, pad:leftStick, pad:rightStick) or
+                         leftStick.up/down/left/right (likewise rightStick.*); ACTION is pad:CONTROL,
+                         key:[shift+][ctrl+][alt+]0xVK, mouse:left|right|middle|wheelUp|wheelDown,
+                         playport:menu. The log's `controls: controller map MODE for PAD (slot N)` line
+                         shows the map each pad plays. Example: --controls
+                         'app-620:{"controllerMap":{"mode":"keyboardMouse"}}' --pad
+                         "lookSpeed" (0.1-8, Settings' controls.lookSpeed, 1 by default) is how fast a
+                         stick bound to mouse:move turns the view, a multiple of 2000 counts/s (the
+                         Controller page's Look speed row); a change logs `controls: look speed 2.0×`
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
@@ -285,20 +365,28 @@ class EndOnTerm:
         return True
 
 
+# A control of an on-screen layout, with a direction for a stick or the d-pad (Dev/TouchDriver.swift).
+TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right))?"
+# A gyro: script's step (HostIOKit GyroScript): axis=deg/s terms joined by +, or rest, then @ms.
+GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
+GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
 ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|play):[a-z]+-[A-Za-z0-9 ._-]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
-                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controllers|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
-                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|screenshot|overlay|controller|quit)|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS))
+                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
+                       r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
+                       r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
+                       .replace("{g}", GYRO_STEP))
 
 
 def in_game(actions, start):
     """How many actions from start act on the running game (UIDriver.inGame): wait:, tap:,
-    menu: and web:, and pad: once a menu:open has opened the in-game menu."""
+    touch:, gyro:, gesture:, menu: and web:, and pad: once a menu:open or gesture:three-finger-tap
+    has opened the in-game menu."""
     n, menu = 0, False
     for x in actions[start:]:
-        if x.startswith(("wait:", "tap:", "menu:", "web:")) or (menu and x.startswith("pad:")):
-            menu = menu or x == "menu:open"
+        if x.startswith(("wait:", "tap:", "touch:", "gyro:", "gesture:", "menu:", "web:")) or (menu and x.startswith("pad:")):
+            menu = menu or x in ("menu:open", "gesture:three-finger-tap")
             n += 1
         else:
             break
@@ -339,19 +427,83 @@ def ends_run(e, actions, play, titles_done=1):
     return not game_last or not e.get("outcome", "").startswith("ok")
 
 
+def number(v, lo, hi):
+    """Whether v is a JSON number (not a bool) within lo...hi."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
+
+
+GYRO_SMOOTHING = ("auto", "off", "light", "normal")   # PlayportKit GyroSmoothingChoice
+# PlayportKit GyroPauseButton: none, or a pad button (HostIOKit PadControl, not a stick).
+GYRO_PAUSE = ("none",) + tuple("pad:" + b for b in "a b x y lb rb lt rt start back ls rs up down left right".split())
+
+
+def gyro_ok(g):
+    """Whether g is a PlayportKit GameGyro as JSON (--controls' "gyro"): only its keys, each valid."""
+    return isinstance(g, dict) \
+        and set(g) <= {"output", "source", "sensitivity", "verticalRatio", "turnAxis", "invertX", "invertY", "pauseButton",
+                   "antiDeadZone", "smoothing"} \
+        and g.get("output", "off") in ("off", "mouse", "rightStick") \
+        and g.get("source", "auto") in ("auto", "phone", "controller") \
+        and number(g.get("sensitivity", 1), 0.05, 20) and number(g.get("verticalRatio", 1), 0, 4) \
+        and number(g.get("antiDeadZone", 0.27), 0, 0.9) \
+        and g.get("turnAxis", "playerSpace") in ("playerSpace", "yaw", "roll") \
+        and all(isinstance(g.get(k, False), bool) for k in ("invertX", "invertY")) \
+        and g.get("pauseButton", "none") in GYRO_PAUSE \
+        and g.get("smoothing", "auto") in GYRO_SMOOTHING
+
+
+# PlayportKit ControllerMap / HostIOKit ControllerBindings: a table's inputs and actions, by name.
+PAD_CONTROLS = "a b x y lb rb lt rt start back ls rs up down left right leftStick rightStick".split()
+STICK_INPUTS = {s + "." + d for s in ("leftStick", "rightStick") for d in ("up", "down", "left", "right")}
+STICK_ACTIONS = {"pad:leftStick", "pad:rightStick", "mouse:move"}
+MAP_ACTION_RE = re.compile(r"pad:(?:" + "|".join(PAD_CONTROLS) + r")|mouse:(?:left|right|middle|wheelUp|wheelDown|move)"
+                           r"|playport:menu|key:(?:(?:shift|ctrl|alt)\+)*(?:0[xX][0-9a-fA-F]{1,2}|[0-9]{1,3})")
+
+
+def key_ok(action):
+    """A key: action names a VK 1-255."""
+    vk = action.rsplit("+", 1)[-1].removeprefix("key:")
+    n = int(vk, 16) if vk.lower().startswith("0x") else int(vk)
+    return 1 <= n <= 255
+
+
+def controller_map_ok(c):
+    """Whether c is a PlayportKit ControllerMap as JSON (--controls' "controllerMap"): a mode, and for
+    custom an optional table INPUT -> ACTION where a whole stick takes only a stick's action, every
+    other input anything else, and a stick is bound whole or by direction, not both. Home is no input."""
+    if not isinstance(c, dict) or not set(c) <= {"version", "mode", "table"} or c.get("version", 1) != 1 \
+            or c.get("mode") not in ("controller", "keyboardMouse", "custom"):
+        return False
+    table = c.get("table", {})
+    if not isinstance(table, dict):
+        return False
+    for k, a in table.items():
+        if k not in PAD_CONTROLS and k not in STICK_INPUTS:
+            return False
+        if not isinstance(a, str) or not MAP_ACTION_RE.fullmatch(a) or (a.startswith("key:") and not key_ok(a)):
+            return False
+        if (k in ("leftStick", "rightStick")) != (a in STICK_ACTIONS):
+            return False
+    return not any(s in table and any(k.startswith(s + ".") for k in table) for s in ("leftStick", "rightStick"))
+
+
 def ui_env(nonce, verify=None, play=None, extra=(), settings=None, step=False, pad=False,
-           session=None, keep_settings=False):
-    """settings: (title id, LaunchSettings JSON) or None. step: the app waits after each
+           session=None, keep_settings=False, controls=None):
+    """settings: (title id, LaunchSettings JSON) or None; controls: (title id, GameControls
+    JSON) or None. step: the app waits after each
     action until the driver pushes Documents/ui-step-<n> (--shot-each-action). session:
     the device lock hold this launch is part of (the app undoes an earlier session's
     driven settings, and records this one's); keep_settings: record nothing to undo."""
-    actions = (list(extra) + ([f"settings:{settings[0]}"] if settings else [])
+    actions = (list(extra) + ([f"controls:{controls[0]}"] if controls else [])
+               + ([f"settings:{settings[0]}"] if settings else [])
                + [f"verify:{verify}"] * bool(verify) + [f"play:{play}"] * bool(play))
     envs = ["S1_MODE=ui", "TITLE_NONCE=" + nonce]
     if actions:
         envs.append("UI_ACTIONS=" + ",".join(actions))
     if settings:
         envs.append("UI_SETTINGS=" + settings[1])
+    if controls:
+        envs.append("UI_CONTROLS=" + controls[1])
     if step:
         envs.append("UI_STEP=1")
     if pad:
@@ -424,8 +576,13 @@ def band_of(timeline):
 def parse(argv=None):
     p = argparse.ArgumentParser(prog="pp ui", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--action", action="append", default=[], metavar="VERB:ARG",
-                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
+                   help="open:SCREEN|ID[#SECTION], pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, queue:APP, downloading:APP, import:PATH, uninstall:ID, "
                         "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
+    p.add_argument("--controls", metavar="ID:JSON",
+                   help='save these on-screen controls for the title first ({"layout":"off"} or '
+                        '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}, with "gyro":'
+                        '{"output":"mouse","sensitivity":1.5} for its gyro aim, "controllerMap":{"mode":"keyboardMouse"} for its '
+                        'controller map, "lookSpeed":2 for its mouse look; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -463,7 +620,7 @@ def parse(argv=None):
     for x in a.action:
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
-            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
+            p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
                     "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
     seq = a.action + [f"play:{a.play}"] * bool(a.play)
     pad = pad_after_play(seq)
@@ -472,6 +629,30 @@ def parse(argv=None):
                 "buttons in the game use `pp ui --pad ... --leave-running` and `pp pad send` in one "
                 "`pp phone lock -- sh -c '...'`; pad: works with menu:open (the in-game menu) or on screens "
                 "before play:")
+    a.controls_pair = None
+    if a.controls:
+        cid, _, cjs = a.controls.partition(":")
+        try:
+            cobj = json.loads(cjs)
+            ok = ID_RE.match(cid) and isinstance(cobj, dict) \
+                and set(cobj) <= {"layout", "opacity", "dpad", "rightStick", "gyro", "controllerMap", "lookSpeed"} \
+                and cobj.get("layout", "off") in ("off", "gamepad") \
+                and number(cobj.get("opacity", 0.5), 0.1, 1) \
+                and cobj.get("dpad", "off") in ("off", "on") \
+                and cobj.get("rightStick", "off") in ("off", "below", "above") \
+                and gyro_ok(cobj.get("gyro", {})) \
+                and ("controllerMap" not in cobj or controller_map_ok(cobj["controllerMap"])) \
+                and number(cobj.get("lookSpeed", 1), 0.1, 8)
+        except ValueError:
+            ok = False
+        if not ok:
+            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on), "
+                    "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
+                    "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
+                    "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9, smoothing auto|off|light|normal) "
+                    "and controllerMap "
+                    "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) and lookSpeed (0.1-8) only")
+        a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:
         sid, _, js = a.settings.partition(":")
@@ -569,7 +750,7 @@ def main(argv=None, launched=None):
             if not a.keep_log:
                 phone.rotate_log()
             envs = ui_env(nonce, a.verify, a.play, a.action, a.settings_pair, a.shot_each_action, a.pad,
-                          phonelib.session(), a.keep_settings)
+                          phonelib.session(), a.keep_settings, a.controls_pair)
             pid = phone.launch(envs)
             t0 = time.monotonic()
             t_wall = time.time()

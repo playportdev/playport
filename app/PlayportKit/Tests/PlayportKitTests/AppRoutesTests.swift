@@ -21,6 +21,31 @@ final class AppRoutesTests: XCTestCase {
         XCTAssertFalse(nav.back())
     }
 
+    func testTheControllerPageOverSettingsAndOverAGame() {
+        var nav = AppRoutes()
+        nav.openSettings(section: .graphics, focus: "home")
+        nav.openSettingsControllerMap()
+        XCTAssertTrue(nav.settingsControllerMap)
+        XCTAssertEqual(nav.settingsSection, .controls)
+        XCTAssertTrue(nav.back())                 // B: back to Settings › Controls
+        XCTAssertFalse(nav.settingsControllerMap)
+        XCTAssertTrue(nav.settings)
+        nav.openSettingsControllerMap()
+        nav.settingsSection = .about              // another section leaves it
+        XCTAssertFalse(nav.settingsControllerMap)
+        nav.openSettingsControllerMap()
+        nav.show(.library, focus: nil)
+        XCTAssertFalse(nav.settingsControllerMap)
+        var outside = AppRoutes()
+        outside.openSettingsControllerMap()       // only inside Settings
+        XCTAssertFalse(outside.settingsControllerMap)
+        // A game's: Game options, then its Controller page; Back to Game options.
+        nav.openGame(game, focus: nil)
+        nav.gamePanels = [.options, .controller]
+        XCTAssertTrue(nav.back())
+        XCTAssertEqual(nav.gamePanels, [.options])
+    }
+
     func testGameReturnsToEveryOrigin() {
         for page in AppRoutes.Page.allCases {
             var nav = AppRoutes()

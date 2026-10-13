@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // What sits over a screen and takes every press while it is up: the
 // controller keyboard (PadKeyboardView.swift), a list picker
-// (PadPicker.swift), the Cloud save conflict (CloudConflictView.swift) or a
+// (PadPicker.swift), the ActionPicker (ActionPickerView.swift), the Cloud save conflict (CloudConflictView.swift) or a
 // launch that failed at a step (LaunchViews.swift). The shell (AppShell.swift) draws `PadModalHost` over
 // everything, the top bar and the footer too, and sends each press here
 // first. A modal draws its own footer; each of its entries is a tap too.
@@ -20,6 +20,7 @@ final class PadModal: ObservableObject {
     enum Content {
         case keyboard(PadKeyboardSession)
         case picker(PadPickerSession)
+        case actionPicker(ActionPickerSession)
         case cloud(CloudConflictSession)
         case launchFailure(LaunchFailureSession)
         case setupComplete
@@ -56,6 +57,11 @@ final class PadModal: ObservableObject {
                                            selected: selected, choose: choose))
     }
 
+    /// What an input does (ActionPicker.dc.html): `choose` gets the action (nil: Nothing); B closes it unchanged.
+    func actionPicker(_ model: ActionPicker, choose: @escaping (InputAction?) -> Void) {
+        content = .actionPicker(ActionPickerSession(model, choose: choose))
+    }
+
     /// Which save to keep, for a game whose saves changed on both sides (CloudConflict.dc.html).
     func cloudConflict(_ session: CloudConflictSession) { content = .cloud(session) }
 
@@ -72,6 +78,7 @@ final class PadModal: ObservableObject {
         switch content {
         case .keyboard(let k): k.press(b)
         case .picker(let p): p.press(b)
+        case .actionPicker(let p): p.press(b)
         case .cloud(let c): c.press(b)
         case .launchFailure(let f): f.press(b)
         case .setupComplete:
@@ -93,6 +100,9 @@ final class PadModal: ObservableObject {
         case .keyboard(let k) where k.privacy != .shown: "keyboard \(k.title) (\(k.privacy), not logged)"
         case .keyboard(let k): "keyboard \"\(k.state.string)\" on \(k.keyName)"
         case .picker(let p): "picker \(p.title) on \(p.options.indices.contains(p.cursor) ? p.options[p.cursor].id : "none")"
+        case .actionPicker(let p):
+            "action picker \"\(p.model.title)\" tab \(p.model.tab.rawValue) on \(p.model.cell?.id ?? "none")"
+                + " with \(KeyModifiers.names.filter { p.model.modifiers.contains($0.0) }.map(\.1))" + (p.model.listening ? ", waiting for a key" : "")
         case .cloud(let c): "cloud conflict \(c.titleID): \(c.conflicts.count) file(s)" + (c.settling.map { ", keeping \($0.rawValue)" } ?? "")
         case .launchFailure(let f): "launch failed at \(f.message.step.map(LaunchProgress.stepName) ?? "?"): \(f.message.title)"
         case .setupComplete: "setup complete"
@@ -109,6 +119,7 @@ struct PadModalHost: View {
         switch modal.content {
         case .keyboard(let k): PadKeyboardView(session: k).transition(.move(edge: .bottom))
         case .picker(let p): PadPickerPanel(session: p).transition(.opacity)
+        case .actionPicker(let p): ActionPickerView(session: p).transition(.opacity)
         case .cloud(let c): CloudConflictView(session: c).transition(.opacity)
         case .launchFailure(let f): LaunchFailureView(session: f).transition(.opacity)
         case .setupComplete: SetupCompletionView().transition(.opacity)
@@ -120,6 +131,8 @@ struct PadModalHost: View {
 /// A modal's own footer entry: its glyph and label, a tap runs it.
 struct PadModalHint: View {
     let button: NavButton
+    /// A second button for the same thing (LB RB Tabs).
+    var also: NavButton? = nil
     let label: String
     let action: () -> Void
 
@@ -127,6 +140,7 @@ struct PadModalHint: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 PadGlyph(button: button)
+                if let also { PadGlyph(button: also) }
                 Text(label).font(.system(size: 13)).foregroundStyle(PP.soft)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)

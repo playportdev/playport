@@ -5,6 +5,12 @@
 /// arrow keys, A is Enter (the default button), B is Escape (Cancel), X is
 /// Space (the focused button or check box), RB is Tab and LB Shift+Tab.
 public enum WindowKeys {
+    /// Whether a controller's presses are the windows' keys now: a window is
+    /// shown and the in-game menu is not up. While they are, mapped pads hold
+    /// nothing (InputMixer.hold(.windows)), so A is Enter alone, not Enter and
+    /// the map's key for A too.
+    public static func takesPads(windowsShown: Bool, menuUp: Bool) -> Bool { windowsShown && !menuUp }
+
     /// The key events for a press, in order: (virtual-key code, down).
     public static func events(for b: NavButton) -> [(vk: Int32, down: Bool)] {
         switch b {

@@ -78,6 +78,16 @@ final class PointerTests: XCTestCase {
         m.reset()
         XCTAssertNil(m.add(dx: 0.9, dy: 0))
     }
+
+    func testRelativeMotionIgnoresNonFiniteDeltasAndClampsAHugeOne() {
+        var m = RelativeMotion()
+        XCTAssertNil(m.add(dx: 0.6, dy: 0))
+        XCTAssertNil(m.add(dx: .nan, dy: 1))
+        XCTAssertNil(m.add(dx: 1, dy: .infinity))
+        XCTAssertNil(m.add(dx: -.infinity, dy: -.infinity))
+        XCTAssertEqual(m.add(dx: 0.6, dy: 0).map { [$0.0, $0.1] }, [1, 0])   // the carried 0.6 survived
+        XCTAssertEqual(m.add(dx: 1e12, dy: -1e12).map { [$0.0, $0.1] }, [Int32.max, Int32.min])
+    }
 }
 
 final class PadTests: XCTestCase {
@@ -489,6 +499,35 @@ final class InGameMenuTests: XCTestCase {
         XCTAssertEqual(c.update(input { $0.a = true }, at: 0.7), [])
         _ = c.update(input { $0.home = true }, at: 1)
         XCTAssertEqual(c.update(input { $0.home = true; $0.x = true }, at: 1.6), [.open])
+    }
+
+    func testOpenedByThePlayportButtonTakesThePadsPresses() {
+        var c = QuickMenuControl()
+        c.opened()
+        XCTAssertTrue(c.isOpen)
+        XCTAssertFalse(c.needsClock)
+        XCTAssertEqual(c.update(input { $0.down = true }, at: 0), [.press(.down)])
+        XCTAssertEqual(c.update(input(), at: 0.1), [])
+        XCTAssertEqual(c.update(input { $0.home = true }, at: 0.2), [.close])
+        XCTAssertFalse(c.isOpen)
+        c.opened()
+        c.opened()   // twice is once
+        c.closed()
+        XCTAssertFalse(c.isOpen)
+    }
+
+    func testOpenedHoldingAMappedMenuButtonDoesNotTakeItAsAPress() {
+        var c = QuickMenuControl()
+        // A pad's A mapped to playport:menu (or held through a three-finger tap) opened the menu.
+        c.opened(holding: input { $0.a = true; $0.menu = true })
+        XCTAssertEqual(c.update(input { $0.a = true; $0.menu = true; $0.rx = 0.2 }, at: 0.1), [])   // stick jitter
+        XCTAssertEqual(c.update(input { $0.a = true; $0.ly = 0.1 }, at: 0.2), [])
+        XCTAssertEqual(c.update(input(), at: 0.3), [])
+        XCTAssertEqual(c.update(input { $0.a = true }, at: 0.4), [.press(.a)])        // pressed again: a press
+        c.closed()
+        c.opened(holding: input { $0.down = true })
+        XCTAssertFalse(c.needsClock)                                            // a held direction does not repeat
+        XCTAssertEqual(c.tick(at: 2), [])
     }
 
     func testTheGuestSeesNothingWhileHeldAndNotTheButtonThatClosedTheMenu() {

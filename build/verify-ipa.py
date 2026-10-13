@@ -147,7 +147,7 @@ EXECUTABLE = {"dev": "S1Probe", "release": "Playport"}
 DEV_MODULES = ["7S1Probe"]
 DEV_TYPES = ["UIDriver", "VirtualPad", "RunEvents", "WebSheetDriver",
              "DeveloperSettings"]
-DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"HIO_VPAD", b"s1-host.log",
+DEV_STRINGS = [b"S1_MODE", b"TITLE_NONCE", b"UI_ACTIONS", b"UI_SETTINGS", b"UI_CONTROLS", b"HIO_VPAD", b"s1-host.log",
                b"run-events.jsonl", b"steam-drive.log"]
 RELEASE_STRINGS = [b"MADEIRA_NO_DIAGNOSTICS", b"playport.log"]
 

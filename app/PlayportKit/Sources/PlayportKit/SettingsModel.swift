@@ -14,7 +14,7 @@ import Foundation
 
 public enum SettingsSection: String, CaseIterable, Sendable {
     /// Every store's account (Steam, then GOG and Epic Games as they land).
-    case accounts, graphics, downloads, controllers, storage, setup, about
+    case accounts, graphics, downloads, controls, storage, setup, about
     /// Dev builds only: diagnostics, simulations, probes and logs.
     case developer
 
@@ -23,7 +23,7 @@ public enum SettingsSection: String, CaseIterable, Sendable {
         case .accounts: "Accounts"
         case .graphics: "Graphics"
         case .downloads: "Downloads"
-        case .controllers: "Controllers"
+        case .controls: "Controls"
         case .storage: "Storage"
         case .setup: "Setup check"
         case .about: "About"
@@ -38,11 +38,12 @@ public enum SettingsSection: String, CaseIterable, Sendable {
 
     /// The section `open:settings#NAME` names: a section's own name, or what
     /// used to be a section of the old Settings list (account, jit, memory,
-    /// diagnostics, pairing, probes, logs).
+    /// diagnostics, pairing, probes, logs), or its old name (controllers).
     public static func named(_ name: String) -> SettingsSection? {
         if let s = SettingsSection(rawValue: name) { return s }
         switch name {
         case "account", "steam": return .accounts
+        case "controllers", "gyro", "controller": return .controls
         case "jit", "memory": return .setup
         case "diagnostics", "pairing", "probes", "logs": return .developer
         default: return nil

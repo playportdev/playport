@@ -21,6 +21,8 @@ final class AppNavigation: ObservableObject {
     var setup: Bool { routes.setup }
     var signIn: Bool { routes.signIn }
     var licences: [LicencePage] { routes.licences }
+    /// Settings › Controls › Controller is up in Settings' place (UI/ControllerMapView.swift).
+    var settingsControllerMap: Bool { routes.settingsControllerMap }
     var onGamePage: Bool { routes.onGamePage }
     var canGoBack: Bool { routes.canGoBack && (signIn || !setupBlocksLeaving) }
     private var setupBlocksLeaving: Bool { setup && !SetupState.shared.canLeave }
@@ -83,6 +85,12 @@ final class AppNavigation: ObservableObject {
     }
 
     func closeLicences() { routes.closeLicences() }
+
+    /// Settings › Controls › Controller: the default controller map's page.
+    func openSettingsControllerMap() {
+        routes.openSettingsControllerMap()
+        PadFocus.shared.reset(start: ControllerMapView.modeID)
+    }
 
     func showLicences(_ pages: [LicencePage] = []) {
         if signIn { closeSignIn() }
@@ -152,6 +160,11 @@ final class AppNavigation: ObservableObject {
         // Steam can always cancel/return to setup, but an unfinished first run
         // cannot pop the checklist itself (footer, controller or native Back).
         guard signIn || !setupBlocksLeaving else { return false }
+        if settings && !signIn && settingsControllerMap {
+            _ = routes.back()
+            PadFocus.shared.reset(start: ControllerMapView.settingsRowID)
+            return true
+        }
         if settings && !signIn && !licences.isEmpty {
             closeLicence()
             return true

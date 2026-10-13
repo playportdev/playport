@@ -63,6 +63,8 @@ public struct Lifecycle {
     public private(set) var menu = false
     public private(set) var audioSuspended = false
     public private(set) var gpuHeld = false
+    // One held set for every source (a keyboard, a GCMouse, the touch controls, the mapped pads):
+    // two sources holding one key or button release it when the first lets go (PLA-339).
     private var keys: [UInt8] = []        // held, in press order
     private var buttons: [UInt32] = []    // MOUSEEVENTF_*UP of the held buttons
 

@@ -24,18 +24,24 @@ public enum Pointer {
 
 /// Mouse motion arrives as fractional deltas (GCMouse); Wine takes whole
 /// pixels. Whole parts go out, the rest is carried, so slow motion is not lost.
-public struct RelativeMotion {
+public struct RelativeMotion: Sendable {
     private var rx = 0.0, ry = 0.0
     public init() {}
 
-    /// dx, dy in Windows orientation (+y down). Returns nil when nothing whole is due.
+    /// dx, dy in Windows orientation (+y down). Returns nil when nothing whole is due;
+    /// a delta that is not finite is ignored, and a whole part past Int32 is clamped.
     public mutating func add(dx: Double, dy: Double) -> (Int32, Int32)? {
+        guard dx.isFinite, dy.isFinite else { return nil }
         rx += dx
         ry += dy
         let ix = rx.rounded(.towardZero), iy = ry.rounded(.towardZero)
         rx -= ix
         ry -= iy
-        return ix == 0 && iy == 0 ? nil : (Int32(ix), Int32(iy))
+        return ix == 0 && iy == 0 ? nil : (Self.clamped(ix), Self.clamped(iy))
+    }
+
+    private static func clamped(_ v: Double) -> Int32 {
+        Int32(clamping: Int64(max(Double(Int32.min), min(Double(Int32.max), v))))
     }
 
     public mutating func reset() { rx = 0; ry = 0 }

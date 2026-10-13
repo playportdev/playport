@@ -179,32 +179,46 @@ private struct GameDetailPage: View {
             page(t, g)
                 // Under a panel the page's controls leave the ring.
                 .transformPreference(PadItemsKey.self) { if panel != nil { $0 = [:] } }
-            if let panel {
+            if panel == .controller, let t {
+                // The Controller page covers the whole page (ControllerMapping.dc.html).
+                ControllerMapView(target: .game(t.id), context: name)
+                    .transition(.move(edge: .trailing))
+            } else if let panel {
                 Color(hex: 0x05070A).opacity(0.72).ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture { _ = navigation.back() }
                 HStack(spacing: 0) {
-                    // The note sits low at the left, just above the footer the shell
-                    // draws there (36 pt), clear of the page's dimmed title and
-                    // subtitle (GameOptions.dc.html puts it under the title).
-                    VStack(alignment: .leading) {
-                        Spacer()
-                        if panel == .options {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Circle().fill(PP.accent).frame(width: 7, height: 7)
-                                Text("Changed for this game. The rest follow Settings › Graphics.")
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .font(.system(size: 13)).foregroundStyle(PP.soft)
+                    if panel == .gyro, let t {
+                        // Gyro aim's test area at the left, over the page's dimmed title (GyroAim.dc.html).
+                        GyroTestArea(target: .game(t.id))
+                            .frame(maxWidth: 330)
+                            .padding(.leading, 24).padding(.trailing, 20).padding(.top, 70)
                             .padding(.bottom, AppShell.footerBottom + 36 + 12)
+                    } else {
+                        // The note sits low at the left, just above the footer the shell
+                        // draws there (36 pt), clear of the page's dimmed title and
+                        // subtitle (GameOptions.dc.html puts it under the title).
+                        VStack(alignment: .leading) {
+                            Spacer()
+                            if panel == .options {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Circle().fill(PP.accent).frame(width: 7, height: 7)
+                                    Text("Changed for this game. The rest follow Settings.")
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .font(.system(size: 13)).foregroundStyle(PP.soft)
+                                .padding(.bottom, AppShell.footerBottom + 36 + 12)
+                            }
                         }
+                        .allowsHitTesting(false)
                     }
-                    .allowsHitTesting(false)
                     Spacer(minLength: 0)
                     Group {
                         switch panel {
                         case .options: if let t { optionsPanel(t, g) }
                         case .achievements: achievementsPanel
+                        case .gyro: if let t { GyroAimPanel(titleID: t.id, context: name) }
+                        case .controller: EmptyView()
                         }
                     }
                     .frame(width: 410)
@@ -232,6 +246,12 @@ private struct GameDetailPage: View {
         .task(id: navigation.pageSection) {
             // A dev build's `open:ID#SECTION`: the options, at that section.
             guard navigation.onGamePage, navigation.pageSection != nil, t != nil else { return }
+            if let page = ["gyro": AppNavigation.GamePanel.gyro, "controller": .controller][navigation.pageSection ?? ""] {
+                // Its Controls › Gyro aim or Controller page, over Game options.
+                navigation.gamePanels = [.options, page]
+                navigation.pageSection = nil
+                return
+            }
             if navigation.gamePanels != [.options] { navigation.gamePanels = [.options] }
         }
         // Again once a restore signs in: a page opened while it ran fetched nothing.
@@ -602,7 +622,12 @@ private struct GameDetailPage: View {
         switch new.last {
         case .options?:
             let section = navigation.pageSection.flatMap(Self.firstRow(ofSection:))
-            focus.reset(start: section ?? (old.last == .achievements ? "opt:achievements" : "opt:aspect"))
+            focus.reset(start: section ?? (old.last == .achievements ? "opt:achievements" : old.last == .gyro ? "opt:gyro"
+                                           : old.last == .controller ? ControllerMapView.gameRowID : "opt:aspect"))
+        case .gyro?:
+            focus.reset(start: "gyro:output")
+        case .controller?:
+            focus.reset(start: ControllerMapView.modeID)
         case .achievements?:
             focus.reset(start: "ach:0")
         case nil:
@@ -614,6 +639,7 @@ private struct GameDetailPage: View {
     private static func firstRow(ofSection s: String) -> String? {
         switch s {
         case "graphics": "opt:aspect"
+        case "controls": "opt:layout"
         case "game": "opt:version"
         case "files": "opt:files"
         case "developer", "ordering": "opt:ordering-\(MemoryOrdering.Setting.allCases[0].rawValue)"
@@ -632,6 +658,7 @@ private struct GameDetailPage: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 2) {
                         graphicsRows(t)
+                        GameControlsOptionRows(titleID: t.id, context: context)
                         gameRows(t, g)
                         #if !PLAYPORT_RELEASE
                         developerRows(t)

@@ -34,6 +34,22 @@
 //   settings:<title id>        Saves UI_SETTINGS (a PlayportKit LaunchSettings as JSON;
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
+//   controls:<title id>        Saves UI_CONTROLS (a PlayportKit GameControls as JSON:
+//                              {"layout":"off"|"gamepad","opacity":0.1-1,"dpad":"off"|"on",
+//                              "rightStick":"off"|"below"|"above","gyro":{...}}; `{}` clears them)
+//                              as the game's own controls, as the in-game menu's Controls does;
+//                              "gyro" is the game's own gyro aim (PlayportKit GameGyro:
+//                              "output":"off"|"mouse"|"rightStick","source":"auto"|"phone"|
+//                              "controller","sensitivity":0.05-20 (1.5 by default),"verticalRatio":0-4,
+//                              "turnAxis":"playerSpace"|"yaw"|"roll","invertX","invertY":
+//                              true|false,"pauseButton":"none"|"pad:<button>","antiDeadZone":
+//                              0-0.9,"smoothing":"auto"|"off"|"light"|"normal"), each key left out following the gyro.* defaults;
+//                              "controllerMap" its controller map (PlayportKit ControllerMap:
+//                              {"mode":"controller"|"keyboardMouse"|"custom","table":{INPUT:
+//                              ACTION,...}}, a custom map without a table starting as the
+//                              keyboardMouse preset); one this build cannot read is refused;
+//                              "lookSpeed" (0.1-8, 1 by default) its mouse look's speed, a
+//                              multiple of 2000 counts/s for a stick bound to mouse:move
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to
@@ -41,12 +57,20 @@
 //                              or a title's page over the
 //                              Library, then waits 1.5 s so a
 //                              screenshot sees it drawn; `open:<title id>#<section>`
-//                              opens the page's Game options at a section (graphics, game,
-//                              files, developer, ordering, steam);
+//                              opens the page's Game options at a section (graphics, controls,
+//                              game, files, developer, ordering, steam),
+//                              `open:<title id>#gyro` its Controls › Gyro aim page, and
+//                              `open:<title id>#controller` its Controller page
+//                              (UI/ControllerMapView.swift: ctl:mode, ctl:lookSpeed,
+//                              ctl:copy, ctl:resetAll, ctl:<row> such as ctl:a, ctl:leftStick,
+//                              ctl:dpad; pad:x/lb/rb/view/menu ring their rows; A on a Custom
+//                              row opens the ActionPicker, whose presses pad: sends);
 //                              `open:settings#<section>` shows a Settings section (accounts,
-//                              graphics, downloads, controllers, storage, setup, about,
+//                              graphics, downloads, controls, storage, setup, about,
 //                              developer; PlayportKit SettingsSection.named also takes
-//                              account, steam, jit, memory, diagnostics, pairing, probes, logs);
+//                              account, steam, jit, memory, diagnostics, pairing, probes, logs,
+//                              gyro: Controls, ringed at its Gyro aim rows, and controller:
+//                              Settings › Controls › Controller, the default's page);
 //                              `open:licences` shows Settings › About › Licences,
 //                              `open:licences#<prefix>` the files of the first component
 //                              whose name starts with it, ignoring case (`open:licences#wine`;
@@ -77,14 +101,43 @@
 //   tap:<fx>:<fy>              After a play: (it runs while the game runs): a finger's tap at
 //                              that fraction (0-1) of the game's screen, through GameSurfaceView's
 //                              touch path (a guest GDI window while one is shown, decision 0075),
-//                              then waits 1 s
+//                              then waits 1 s. While the on-screen controls show it sends
+//                              nothing (outside them a touch is ignored; on them, use touch:)
+//   touch:<control>[+<control>...][@<ms>]
+//                              After a play: (it runs while the game runs): waits for the
+//                              game's first frame (3 min at most), then fingers on the
+//                              on-screen controls by id, held <ms> (200 by default) and let
+//                              go (Dev/TouchDriver.swift; `touch:dpad.right@2000`,
+//                              `touch:a`)
+//   gyro:<script>              After a play: (it runs while the game runs): waits for the
+//                              game's first frame (3 min at most), then plays a scripted gyro
+//                              into gyro aim where the sensors' samples enter it, replacing
+//                              them while it plays (Dev/GyroDriver.swift, HostIOKit
+//                              GyroScript): steps joined by `/`, each <axis>=<deg/s> terms
+//                              joined by `+` (yaw + right, pitch + up, roll + clockwise) or
+//                              `rest`, then @<ms> (`gyro:yaw=90@500/pitch=-30+yaw=10@300`).
+//                              Taken only while the game's gyro output is on (controls:'s
+//                              "gyro") and the sensors run; the `gyro: driver` line says what
+//                              moved (mouse counts, or the right stick's peak). With no game
+//                              running and the Gyro aim page up (open:<title id>#gyro), the
+//                              script moves its test area's dot instead (nothing reaches a guest)
+//   gesture:three-finger-tap   After a play: (it runs while the game runs): waits for the
+//                              game's first frame (3 min at most), then fires the three-finger
+//                              tap through the handler GameSurfaceView's recognizer calls
+//                              (HostIO.menuGesture), which opens the in-game menu with or
+//                              without on-screen controls, and waits 1 s
 //   menu:open                  After a play: (the actions after it then run while the game runs):
 //                              waits for the game's first frame (3 min at most), then holds the
 //                              controller's Home button 0.8 s through HostIO's pad handling
 //                              (HostIO.menuInput), which opens the in-game menu
 //                              (UI/InGameMenuView.swift), and waits 1 s
-//   menu:<row>                 In the menu: moves its ring to the row (resume, screenshot,
-//                              overlay, controller, quit) and presses A, as a controller does;
+//   menu:<row>                 In the menu: moves its ring to the row (resume, controls,
+//                              screenshot, overlay, controller, quit) and presses A, as a
+//                              controller does (controls opens its panel: pad:left/right
+//                              change the ringed row, pad:down moves along On-screen controls,
+//                              D-pad, Right stick, Opacity, Gyro aim, Sensitivity and, while a
+//                              controller is connected (--pad's scripted pad counts), Controller:
+//                              Pad, Keys & mouse, Custom; pad:b back);
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
@@ -171,7 +224,7 @@ enum UIDriver {
                 let parts = action.split(separator: ":", maxSplits: 1).map(String.init)
                 guard parts.count == 2 else { return finish("action=\(action) refused: not <verb>:<id>") }
                 let id = parts[1]
-                if ["verify", "play", "uninstall", "settings"].contains(parts[0]), library.title(id) == nil {
+                if ["verify", "play", "uninstall", "settings", "controls"].contains(parts[0]), library.title(id) == nil {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
@@ -201,6 +254,60 @@ enum UIDriver {
                     let e = LibraryModel.shared.title(id).map { LaunchSettingsStore.shared.effective(for: $0) }
                         ?? LaunchSettings.resolve(game: s, global: LaunchSettingsStore.shared.global)
                     log("settings \(id): screen=\(e.screen ?? "native") aspect=\(e.aspect.rawValue) limit=\(e.frameLimit) graphics=\(e.graphics.rawValue) arguments=\(e.arguments) ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in e.ordering[s].map { "\(s.rawValue)=\($0)" } }) maxInst=\(e.maxInst.map(String.init) ?? "profile") x87Reduced=\(e.x87Reduced.map { String($0) } ?? "profile") diskCache=\(e.diskCache.map { String($0) } ?? "default") runtime=\(e.runtime.keys.sorted().map { "\($0)=\(e.runtime[$0]!)" }) graphicsOptions=\(e.graphicsEnvironment.keys.sorted().map { "\($0)=\(e.graphicsEnvironment[$0]!)" })")
+                case "controls":
+                    guard let json = env["UI_CONTROLS"],
+                          let c = try? JSONDecoder().decode(GameControls.self, from: Data(json.utf8)) else {
+                        return finish("action=\(action) refused: UI_CONTROLS is not GameControls JSON")
+                    }
+                    // GameControls reads a map it cannot read as none (a record saved by a later build still loads).
+                    if c.controllerMap == nil, json.contains("\"controllerMap\"") {
+                        return finish("action=\(action) refused: UI_CONTROLS' controllerMap is not a ControllerMap")
+                    }
+                    DriverUndo.willSet(ControlsStore.gamesKey)
+                    ControlsStore.shared.setGame(id, c)
+                    log("controls \(id): layout=\(c.layout?.rawValue ?? "default") opacity=\(c.opacity.map(ControlsOpacity.label) ?? "default") "
+                        + "dpad=\(c.dpad?.rawValue ?? "default") rightStick=\(c.rightStick?.rawValue ?? "default") "
+                        + "gyro=\(c.gyro == nil ? "default" : "own") (\(ControlsStore.shared.gyro(id).summary)) "
+                        + "controllerMap=\(c.controllerMap == nil ? "default" : "own") "
+                        + "(\(ControlsStore.shared.game(id).controllerMap(over: ControlsStore.shared.defaults).summary)) "
+                        + "lookSpeed=\(c.lookSpeed == nil ? "default" : "own") "
+                        + "(\(LookSpeed.label(ControlsStore.shared.game(id).lookSpeed(over: ControlsStore.shared.defaults))))")
+                case "touch":
+                    let launch = TitleLaunch.shared
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))   // the controls drawn after the first frame
+                    if let failure = await OnScreenControls.shared.driverPress(id) { return finish("action=\(action) failed: \(failure)") }
+                    try? await Task.sleep(for: .milliseconds(500))
+                    log("touch \(id): \(OnScreenControls.shared.summary)" + (InGameMenu.shared.isOpen ? "; \(InGameMenu.shared.summary)" : ""))
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
+                case "gyro":
+                    let launch = TitleLaunch.shared
+                    do { _ = try GyroScript.parse(id) } catch { return finish("action=\(action) refused: \(error)") }
+                    if !launch.running {
+                        // The Gyro aim page's test area (open:<title id>#gyro): its dot, nothing to a guest.
+                        guard case .previewing = GyroSensors.shared.run else {
+                            return finish("action=\(action) refused: no game is running and no Gyro aim test area runs "
+                                          + "(\(GyroSensors.shared.summary))")
+                        }
+                        if let failure = await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
+                        try? await Task.sleep(for: .milliseconds(500))   // the dot drawn, for a screenshot
+                        log("gyro \(id): \(GyroSensors.shared.summary)")
+                        break
+                    }
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))   // the sensors started after the first frame
+                    if let failure = await GyroSensors.shared.driverPlay(id) { return finish("action=\(action) failed: \(failure)") }
+                    log("gyro \(id): \(GyroSensors.shared.summary)" + (InGameMenu.shared.isOpen ? "; \(InGameMenu.shared.summary)" : ""))
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
                 case "hud":
                     guard ["on", "off"].contains(id) else { return finish("action=\(action) refused: not hud:on or hud:off") }
                     DriverUndo.willSet(MetalHUD.key)
@@ -297,9 +404,26 @@ enum UIDriver {
                         return finish("action=\(action) refused: no game is running")
                     }
                     let window = GuestWindows.shown
-                    await view.tap(fx: f[0], fy: f[1])
+                    let to = await view.tap(fx: f[0], fy: f[1])
                     try? await Task.sleep(for: .milliseconds(1000))
-                    log("tap \(id): " + (window ? "on a guest window" : "on the game"))
+                    log("tap \(id): " + (to == .ignored ? "ignored: outside the on-screen controls"
+                                         : to == .controls ? "on an on-screen control: nothing sent (touch: presses them)"
+                                         : window ? "on a guest window" : "on the game"))
+                    if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
+                    if AppRestart.shared.restarting { return }
+                case "gesture":
+                    let launch = TitleLaunch.shared
+                    guard id == "three-finger-tap" else { return finish("action=\(action) refused: not gesture:three-finger-tap") }
+                    guard launch.running else { return finish("action=\(action) refused: no game is running") }
+                    let deadline = Date().addingTimeInterval(180)
+                    while launch.running, !launch.acceptsMenu || launch.step != .drawing, Date() < deadline {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    guard launch.acceptsMenu else { return finish("action=\(action) failed: the game did not draw a frame") }
+                    HostIO.shared.menuGesture()
+                    try? await Task.sleep(for: .milliseconds(1000))
+                    guard InGameMenu.shared.isOpen else { return finish("action=\(action) failed: the menu did not open") }
+                    log("gesture \(id): \(InGameMenu.shared.summary)")
                     if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "menu":
@@ -481,6 +605,7 @@ enum UIDriver {
     /// An action that acts on the running game, which a play: does not wait past.
     static func inGame(_ action: String) -> Bool {
         action.hasPrefix("menu:") || action.hasPrefix("wait:") || action.hasPrefix("web:") || action.hasPrefix("tap:")
+            || action.hasPrefix("touch:") || action.hasPrefix("gesture:") || action.hasPrefix("gyro:")
             || (action.hasPrefix("pad:") && InGameMenu.shared.isOpen)
     }
 

@@ -173,6 +173,8 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("GameController"),
                 .linkedFramework("AVFAudio"),
+                // Gyro aim's iPhone gyro (GyroSensors.swift).
+                .linkedFramework("CoreMotion"),
                 // The Steam sign-in QR code (UI/SteamSupport.swift).
                 .linkedFramework("CoreImage"),
                 // GOG's and Epic's sign-in pages (UI/GOGAccount.swift, UI/EpicAccount.swift).

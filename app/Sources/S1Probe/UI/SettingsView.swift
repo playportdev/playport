@@ -13,7 +13,13 @@
 //   Playport's default; and the Metal HUD.
 // - Downloads: PlayportKit DownloadPreferences (the download queue reads
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
-// - Controllers: every controller connected, with its battery (PadRouter).
+// - Controls: when the on-screen controls show, their opacity, the Gamepad
+//   layout's d-pad and right stick, and haptics
+//   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), gyro aim's
+//   defaults (UI/GyroAimView.swift, the `gyro.*` keys), every
+//   controller connected, with its battery and whether it has a gyro (PadRouter),
+//   and the Controller page for every game's default controller map
+//   (UI/ControllerMapView.swift, `controls.controllerMap`, `controls.lookSpeed`).
 // - Storage: free space and each game's size; A opens the game's page. Steamworks Shared
 //   (Steam's redistributables) with its size and Remove, and the emulator cache with Clear.
 // - Setup check: JIT, LocalDevVPN and memory (SetupCheckSettings.swift).
@@ -66,7 +72,12 @@ struct SettingsView: View {
             if let s = SettingsSection.named(name), SettingsSection.shown.contains(s) {
                 navigation.settingsSection = s
                 try? await Task.sleep(for: .milliseconds(200))
-                focus.ring(s.navItem)
+                // `gyro`: Controls, at its Gyro aim rows; `controller`: its Controller page.
+                if name == "controller" {
+                    navigation.pageSection = nil
+                    return navigation.openSettingsControllerMap()
+                }
+                focus.ring(name == "gyro" ? "set:" + GyroDefaultsRows.id(.output) : s.navItem)
             }
             navigation.pageSection = nil
         }
@@ -147,7 +158,7 @@ struct SettingsView: View {
             EpicAccountSettings()
         case .graphics: GraphicsSettings()
         case .downloads: DownloadSettings()
-        case .controllers: ControllerSettings()
+        case .controls: ControlsSettings()
         case .storage: StorageSettings()
         case .setup: SetupCheckSettings()
         case .about:
@@ -319,21 +330,66 @@ private struct DownloadSettings: View {
     }
 }
 
-// MARK: Controllers
+// MARK: Controls
 
-private struct ControllerSettings: View {
+private struct ControlsSettings: View {
     @ObservedObject private var router = PadRouter.shared
+    @ObservedObject private var store = ControlsStore.shared
+    @AppStorage(ControlsDefaults.showKey) private var show = ControlsShow.automatic.rawValue
+    @AppStorage(ControlsDefaults.opacityKey) private var opacity = ControlsOpacity.defaultValue
+    @AppStorage(ControlsDefaults.hapticsKey) private var haptics = true
+    @AppStorage(ControlsDefaults.dpadKey) private var dpad = OnScreenDpad.off.rawValue
+    @AppStorage(ControlsDefaults.rightStickKey) private var rightStick = OnScreenRightStick.off.rawValue
 
     var body: some View {
-        SettingsNote(text: "Connect a controller in iOS Settings › Bluetooth. Playport and its games use the one you "
-                     + "pressed last.")
+        Color.clear.frame(height: 42)
+        let shows = ControlsShow.allCases
+        let current = ControlsShow(rawValue: show) ?? .automatic
+        PadValueRow(id: "set:controlsShow", title: "On-screen controls", subtitle: Self.showSubtitle(current),
+                    values: shows.map(\.title), index: shows.firstIndex(of: current) ?? 0) { show = shows[$0].rawValue }
+        let steps = ControlsOpacity.steps
+        PadValueRow(id: "set:controlsOpacity", title: "Opacity", subtitle: "How much of the game shows through",
+                    values: steps.map(ControlsOpacity.label),
+                    index: steps.firstIndex(of: ControlsOpacity.step(opacity, by: 0)) ?? 0) { opacity = steps[$0] }
+        let dpads = OnScreenDpad.allCases
+        PadValueRow(id: "set:controlsDpad", title: "D-pad", subtitle: "Above the left stick",
+                    values: dpads.map(\.title),
+                    index: dpads.firstIndex(of: OnScreenDpad(rawValue: dpad) ?? .off) ?? 0) { dpad = dpads[$0].rawValue }
+        let sticks = OnScreenRightStick.allCases
+        PadValueRow(id: "set:controlsRightStick", title: "Right stick", subtitle: "Where it goes beside A/B/X/Y",
+                    values: sticks.map(\.title),
+                    index: sticks.firstIndex(of: OnScreenRightStick(rawValue: rightStick) ?? .off) ?? 0) {
+            rightStick = sticks[$0].rawValue
+        }
+        SettingsSwitchRow(id: "controlsHaptics", title: "A tap you can feel", subtitle: "Haptics when a control is pressed",
+                          on: $haptics)
+        SettingsNote(text: "Each game can turn them off or change these in the in-game menu's Controls; a "
+                     + "three-finger tap on the game opens that menu, as holding a controller's Home button does. Connect a controller in iOS "
+                     + "Settings › Bluetooth. Playport and its games use the one you pressed last.")
         if router.controllers.isEmpty {
             SettingsInfoRow(id: "controller:none", title: "No controller", subtitle: "Touch works everywhere meanwhile")
         }
         ForEach(Array(router.controllers.enumerated()), id: \.offset) { i, c in
-            SettingsInfoRow(id: "controller:\(i)", title: c.name, subtitle: i == 0 ? "In use" : nil, value: battery(c))
+            SettingsInfoRow(id: "controller:\(i)", title: c.name,
+                            subtitle: ([i == 0 ? "In use" : nil, c.gyro ? "has a gyro" : nil].compactMap { $0 }
+                                .joined(separator: " · ")).nilIfEmpty,
+                            value: battery(c))
         }
+        // The Controller page for every game (UI/ControllerMapView.swift).
+        PadRow(id: ControllerMapView.settingsRowID, title: "Controller", subtitle: "What a controller does in every game",
+               value: store.defaults.controllerMap.mode.title, accessory: .chevron, hint: "Open") {
+            AppNavigation.shared.openSettingsControllerMap()
+        }
+        GyroDefaultsRows()
         Color.clear.frame(height: 0).onAppear { router.refreshControllers() }
+    }
+
+    private static func showSubtitle(_ s: ControlsShow) -> String {
+        switch s {
+        case .automatic: "Shown while no controller is connected"
+        case .always: "Shown with a controller too"
+        case .never: "Off unless a game turns them on"
+        }
     }
 
     private func battery(_ c: PadRouter.Controller) -> String {

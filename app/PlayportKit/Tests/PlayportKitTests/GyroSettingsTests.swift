@@ -1,0 +1,380 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import HostIOKit
+import XCTest
+@testable import PlayportKit
+
+final class GyroSettingsTests: XCTestCase {
+    func testTheDefaultsAreOffAndPlainly() {
+        let d = GyroSettings()
+        XCTAssertEqual(d.output, .off)
+        XCTAssertEqual(d.source, .auto)
+        XCTAssertEqual(d.sensitivity, 1.5)                    // owner, 2026-10-13: the phone's gyro at 1.5×
+        XCTAssertEqual(d.verticalRatio, 1)
+        XCTAssertEqual(d.turnAxis, .playerSpace)
+        XCTAssertFalse(d.invertX)
+        XCTAssertFalse(d.invertY)
+        XCTAssertEqual(d.pauseButton, .none)
+        XCTAssertEqual(d.antiDeadZone, 0.27)
+        XCTAssertEqual(d.aimConfig(device: .phone), GyroAim.Config(sensitivity: 1.5, antiDeadZone: 0.27))
+        // 1.0× keeps its meaning: GyroAim's own scale, as a game's saved value.
+        XCTAssertEqual(GameGyro(sensitivity: 1).resolved(over: d).aimConfig(device: .phone).sensitivity, 1)
+        XCTAssertEqual(GyroAim.Config().sensitivity, 1)
+    }
+
+    func testSettingsRoundTripAndMissingKeysFallBack() throws {
+        let mine = GyroSettings(output: .rightStick, source: .controller, sensitivity: 2.5, verticalRatio: 0.6, turnAxis: .roll,
+                                invertX: true, invertY: true, pauseButton: .pad(.lb))
+        let data = try JSONEncoder().encode(mine)
+        XCTAssertEqual(try JSONDecoder().decode(GyroSettings.self, from: data), mine)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(#""pauseButton":"pad:lb""#))
+        XCTAssertEqual(mine.aimConfig(device: .phone), GyroAim.Config(output: .rightStick, turnAxis: .roll, sensitivity: 2.5, verticalRatio: 0.6,
+                                                      invertX: true, invertY: true, antiDeadZone: 0.27))
+
+        func decode(_ s: String) throws -> GyroSettings { try JSONDecoder().decode(GyroSettings.self, from: Data(s.utf8)) }
+        XCTAssertEqual(try decode("{}"), GyroSettings())
+        XCTAssertEqual(try decode(#"{"output":"mouse","sensitivity":3}"#), GyroSettings(output: .mouse, sensitivity: 3))
+        // A number out of range is its default; an unknown choice is refused.
+        XCTAssertEqual(try decode(#"{"sensitivity":-1,"verticalRatio":99}"#), GyroSettings())
+        XCTAssertThrowsError(try decode(#"{"output":"keyboard"}"#))
+        XCTAssertThrowsError(try decode(#"{"turnAxis":"pitch"}"#))
+        XCTAssertThrowsError(try decode(#"{"pauseButton":"pad:leftStick"}"#))
+        XCTAssertThrowsError(try decode(#"{"pauseButton":"key:0x20"}"#))
+        XCTAssertEqual(try decode(#"{"pauseButton":"none"}"#).pauseButton, GyroPauseButton.none)
+        XCTAssertEqual(try decode(#"{"pauseButton":"pad:rt"}"#).pauseButton, .pad(.rt))
+    }
+
+    /// The right stick's anti-dead-zone: per game over the `gyro.antiDeadZone` default, 0.27 when neither sets it.
+    func testTheAntiDeadZoneIsAGyroSetting() throws {
+        func decode(_ s: String) throws -> GyroSettings { try JSONDecoder().decode(GyroSettings.self, from: Data(s.utf8)) }
+        XCTAssertEqual(try decode(#"{"antiDeadZone":0.3}"#).antiDeadZone, 0.3)
+        XCTAssertEqual(try decode(#"{"antiDeadZone":0}"#).antiDeadZone, 0)
+        XCTAssertEqual(try decode(#"{"antiDeadZone":0.95}"#).antiDeadZone, 0.27)   // out of range: the default
+        let mine = GyroSettings(output: .rightStick, antiDeadZone: 0.35)
+        XCTAssertEqual(try JSONDecoder().decode(GyroSettings.self, from: try JSONEncoder().encode(mine)), mine)
+        XCTAssertEqual(mine.aimConfig(device: .phone).antiDeadZone, 0.35)
+        XCTAssertTrue(mine.summary.hasSuffix(" antiDeadZone=0.35"))
+        XCTAssertFalse(GyroSettings(output: .mouse).summary.contains("antiDeadZone"))
+
+        let defaults = GyroSettings(output: .rightStick, antiDeadZone: 0.2)
+        XCTAssertEqual(GameGyro().resolved(over: defaults).antiDeadZone, 0.2)
+        XCTAssertEqual(GameGyro(antiDeadZone: 0.4).resolved(over: defaults).antiDeadZone, 0.4)
+        XCTAssertEqual(GameGyro(antiDeadZone: 2).resolved(over: defaults).antiDeadZone, 0.2)
+        XCTAssertEqual(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"antiDeadZone":0.3}"#.utf8)), GameGyro(antiDeadZone: 0.3))
+
+        let d = UserDefaults(suiteName: "GyroAntiDeadZoneTests")!
+        d.removePersistentDomain(forName: "GyroAntiDeadZoneTests")
+        XCTAssertEqual(GyroSettings(d).antiDeadZone, 0.27)
+        d.set("0.3", forKey: GyroSettings.antiDeadZoneKey)           // the driver's set:
+        XCTAssertEqual(GyroSettings(d).antiDeadZone, 0.3)
+        d.set(1.5, forKey: GyroSettings.antiDeadZoneKey)
+        XCTAssertEqual(GyroSettings(d).antiDeadZone, 0.27)
+        d.removePersistentDomain(forName: "GyroAntiDeadZoneTests")
+    }
+
+    /// Its row: shown only for the right stick, as a percentage, stepped, reset by Y.
+    func testTheAntiDeadZoneRowShowsOnlyForTheRightStick() {
+        XCTAssertFalse(GyroRow.antiDeadZone.isShown(in: GyroSettings(output: .mouse)))
+        XCTAssertFalse(GyroRow.antiDeadZone.isShown(in: GyroSettings(output: .off)))
+        XCTAssertTrue(GyroRow.antiDeadZone.isShown(in: GyroSettings(output: .rightStick)))
+        XCTAssertTrue(GyroRow.allCases.filter { $0 != .antiDeadZone }.allSatisfy { $0.isShown(in: GyroSettings(output: .mouse)) })
+        let s = GyroSettings(output: .rightStick)
+        XCTAssertEqual(GyroRow.antiDeadZone.text(s), "27%")
+        XCTAssertEqual(GyroText.antiDeadZone(0), "None")
+        XCTAssertTrue(GyroRow.antiDeadZone.isNumber)
+        XCTAssertEqual(GyroRow.antiDeadZone.step(s, by: 1), "0.3")
+        XCTAssertEqual(GyroRow.antiDeadZone.step(s, by: -1), "0.24")
+        XCTAssertEqual(GyroRow.antiDeadZone.key, "gyro.antiDeadZone")
+        XCTAssertEqual(GyroRow.antiDeadZone.stored("0.3") as? Double, 0.3)
+        var own = GyroRow.antiDeadZone.setting("0.3", in: GameGyro(output: .rightStick))
+        XCTAssertEqual(own, GameGyro(output: .rightStick, antiDeadZone: 0.3))
+        XCTAssertTrue(GyroRow.antiDeadZone.isSet(in: own))
+        own = GyroRow.antiDeadZone.cleared(own)
+        XCTAssertEqual(own, GameGyro(output: .rightStick))
+    }
+
+    func testAGameFollowsTheDefaultsWhereItSetsNothing() throws {
+        let defaults = GyroSettings(output: .mouse, sensitivity: 1.5, pauseButton: .pad(.lb))
+        XCTAssertEqual(GameGyro().resolved(over: defaults), defaults)
+        XCTAssertTrue(GameGyro().isEmpty)
+        let mine = GameGyro(output: .rightStick, verticalRatio: 0.5, pauseButton: GyroPauseButton.none)
+        XCTAssertFalse(mine.isEmpty)
+        XCTAssertEqual(mine.resolved(over: defaults),
+                       GyroSettings(output: .rightStick, sensitivity: 1.5, verticalRatio: 0.5, pauseButton: .none))
+        XCTAssertEqual(GameGyro(sensitivity: .nan).resolved(over: defaults).sensitivity, 1.5)
+        // Saved JSON: missing keys follow the defaults; an explicit "none" pause button is the game's own.
+        let data = try JSONEncoder().encode(mine)
+        XCTAssertEqual(try JSONDecoder().decode(GameGyro.self, from: data), mine)
+        XCTAssertEqual(try JSONDecoder().decode(GameGyro.self, from: Data("{}".utf8)), GameGyro())
+        XCTAssertEqual(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"pauseButton":"none","invertY":true}"#.utf8)),
+                       GameGyro(invertY: true, pauseButton: GyroPauseButton.none))
+        XCTAssertThrowsError(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"source":"watch"}"#.utf8)))
+    }
+
+    func testTheDefaultsFromStorage() {
+        let d = UserDefaults(suiteName: "GyroSettingsTests")!
+        d.removePersistentDomain(forName: "GyroSettingsTests")
+        XCTAssertEqual(GyroSettings(d), GyroSettings())
+        d.set("rightStick", forKey: GyroSettings.outputKey)
+        d.set("phone", forKey: GyroSettings.sourceKey)
+        d.set(2.0, forKey: GyroSettings.sensitivityKey)
+        d.set(0.5, forKey: GyroSettings.verticalRatioKey)
+        d.set("yaw", forKey: GyroSettings.turnAxisKey)
+        d.set(true, forKey: GyroSettings.invertXKey)
+        d.set(false, forKey: GyroSettings.invertYKey)
+        d.set("pad:rb", forKey: GyroSettings.pauseButtonKey)
+        XCTAssertEqual(GyroSettings(d), GyroSettings(output: .rightStick, source: .phone, sensitivity: 2, verticalRatio: 0.5,
+                                                     turnAxis: .yaw, invertX: true, pauseButton: .pad(.rb)))
+        // Anything not understood is its default.
+        d.set("sideways", forKey: GyroSettings.outputKey)
+        d.set(1000.0, forKey: GyroSettings.sensitivityKey)
+        d.set("pad:rightStick", forKey: GyroSettings.pauseButtonKey)
+        let read = GyroSettings(d)
+        XCTAssertEqual(read.output, .off)
+        XCTAssertEqual(read.sensitivity, 1.5)
+        XCTAssertEqual(read.pauseButton, .none)
+        // The driver's set: stores "1.5" as a String and 2 as an Int: both read as numbers.
+        d.set("1.5", forKey: GyroSettings.sensitivityKey)
+        d.set(2, forKey: GyroSettings.verticalRatioKey)
+        XCTAssertEqual(GyroSettings(d).sensitivity, 1.5)
+        XCTAssertEqual(GyroSettings(d).verticalRatio, 2)
+        d.set("fast", forKey: GyroSettings.sensitivityKey)
+        XCTAssertEqual(GyroSettings(d).sensitivity, 1.5)
+        d.removePersistentDomain(forName: "GyroSettingsTests")
+    }
+
+    /// A game's gyro aim lives in its GameControls record (ControlsStore): controls
+    /// saved before it load unchanged, and a gyro that sets nothing is not kept.
+    func testAGamesGyroIsPartOfItsControls() throws {
+        func decode(_ s: String) throws -> GameControls { try JSONDecoder().decode(GameControls.self, from: Data(s.utf8)) }
+        XCTAssertEqual(try decode(#"{"layout":"gamepad","opacity":0.8,"dpad":"on"}"#),
+                       GameControls(layout: .gamepad, opacity: 0.8, dpad: .on))
+        XCTAssertNil(try decode(#"{"layout":"off"}"#).gyro)
+        let mine = try decode(#"{"layout":"off","gyro":{"output":"mouse","sensitivity":2,"pauseButton":"pad:lb"}}"#)
+        XCTAssertEqual(mine, GameControls(layout: .off, gyro: GameGyro(output: .mouse, sensitivity: 2, pauseButton: .pad(.lb))))
+        XCTAssertEqual(try decode(String(decoding: try JSONEncoder().encode(mine), as: UTF8.self)), mine)
+        XCTAssertThrowsError(try decode(#"{"gyro":{"output":"keyboard"}}"#))
+        // Only gyro set is not empty; an empty gyro is.
+        XCTAssertFalse(GameControls(gyro: GameGyro(output: .rightStick)).isEmpty)
+        XCTAssertTrue(GameControls(gyro: GameGyro()).isEmpty)
+        XCTAssertNil(GameControls(layout: .off, gyro: GameGyro()).normalized.gyro)
+        XCTAssertEqual(GameControls(gyro: GameGyro(invertY: true)).normalized.gyro, GameGyro(invertY: true))
+        // Resolved over the gyro.* defaults.
+        let defaults = GyroSettings(output: .rightStick, sensitivity: 1.5)
+        XCTAssertEqual(GameControls().gyroSettings(over: defaults), defaults)
+        XCTAssertEqual(mine.gyroSettings(over: defaults), GyroSettings(output: .mouse, sensitivity: 2, pauseButton: .pad(.lb)))
+        XCTAssertEqual(GyroSettings(output: .mouse, invertY: true, pauseButton: .pad(.lb)).summary,
+                       "output=mouse source=auto sensitivity=1.5 verticalRatio=1.0 turnAxis=playerSpace invert=-y pause=pad:lb smoothing=auto")
+    }
+
+    func testThePauseButtonIsReadFromAPad() {
+        var v = PadValues()
+        v.buttons = PadMapping.leftShoulder
+        XCTAssertTrue(GyroSettings(pauseButton: .pad(.lb)).paused(by: v))
+        XCTAssertFalse(GyroSettings(pauseButton: .pad(.rb)).paused(by: v))
+        XCTAssertFalse(GyroSettings().paused(by: v))
+        XCTAssertFalse(GyroSettings(pauseButton: .pad(.lb)).paused(by: nil))
+        XCTAssertEqual(GyroPauseButton.pad(.lt).name, "pad:lt")
+        XCTAssertNil(GyroPauseButton(name: "pad:rightStick"))
+        XCTAssertNil(GyroPauseButton(name: "mouse:left"))
+    }
+
+    /// The sensors run only while the output is not Off and the game is in front, taking input.
+    func testTheSensorsRunOnlyWhileTheGameTakesInput() {
+        let mouse = GyroSettings(output: .mouse)
+        let on = GyroConditions(settings: mouse, gameDrawing: true, appActive: true)
+        XCTAssertEqual(GyroRun.decide(on), .running(.phone, .mouse))
+        var c = on
+        c.settings.output = .off
+        XCTAssertEqual(GyroRun.decide(c), .stopped("output off"))
+        c = on; c.gameDrawing = false
+        XCTAssertEqual(GyroRun.decide(c), .stopped("no game in front"))
+        c = on; c.appActive = false
+        XCTAssertEqual(GyroRun.decide(c), .stopped("app not active"))
+        c = on; c.guestHeld = true
+        XCTAssertEqual(GyroRun.decide(c), .stopped("menu"))
+        c = on; c.dialog = true
+        XCTAssertEqual(GyroRun.decide(c), .stopped("dialog"))
+        XCTAssertNil(GyroRun.decide(c).device)
+        // Off wins over everything else: nothing runs for a game that has none.
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: GyroSettings(), gameDrawing: false, appActive: false, guestHeld: true)),
+                       .stopped("output off"))
+    }
+
+    func testTheSourceAutomaticPrefersAControllersGyro() {
+        XCTAssertEqual(GyroSource.auto.device(phone: true, controller: true), .controller)
+        XCTAssertEqual(GyroSource.auto.device(phone: true, controller: false), .phone)
+        XCTAssertNil(GyroSource.auto.device(phone: false, controller: false))
+        XCTAssertEqual(GyroSource.phone.device(phone: true, controller: true), .phone)
+        XCTAssertEqual(GyroSource.controller.device(phone: true, controller: true), .controller)
+        // An explicit Controller does not fall back to the iPhone.
+        XCTAssertNil(GyroSource.controller.device(phone: true, controller: false))
+        let stick = GyroSettings(output: .rightStick, source: .controller)
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: stick, gameDrawing: true, appActive: true, controllerHasGyro: true)),
+                       .running(.controller, .rightStick))
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: stick, gameDrawing: true, appActive: true)),
+                       .stopped("no controller with a gyro"))
+        XCTAssertEqual(GyroRun.decide(GyroConditions(settings: GyroSettings(output: .mouse), gameDrawing: true, appActive: true,
+                                                     phoneHasGyro: false)), .stopped("no gyro"))
+    }
+
+    /// The Gyro aim page's test area runs the sensors only outside a game, with
+    /// its output for the dot; a running game's run always wins and alone reaches the guest.
+    func testThePreviewNeverTakesTheGuest() {
+        let mouse = GyroSettings(output: .mouse)
+        let noGame = GyroConditions(settings: mouse, gameDrawing: false, appActive: true)
+        let page = GyroPreviewConditions(settings: mouse)
+        XCTAssertEqual(GyroRun.decide(noGame, preview: page), .previewing(.phone, .mouse))
+        XCTAssertFalse(GyroRun.decide(noGame, preview: page).toGuest)
+        XCTAssertEqual(GyroRun.decide(noGame, preview: page).device, .phone)
+        // No page: as before.
+        XCTAssertEqual(GyroRun.decide(noGame, preview: nil), .stopped("no game in front"))
+        // A game running (even before its first frame, or under its menu): never the page's.
+        var running = page
+        running.gameRunning = true
+        XCTAssertEqual(GyroRun.decide(noGame, preview: running), .stopped("no game in front"))
+        var menu = GyroConditions(settings: mouse, gameDrawing: true, appActive: true, guestHeld: true)
+        XCTAssertEqual(GyroRun.decide(menu, preview: running), .stopped("menu"))
+        menu.guestHeld = false
+        XCTAssertEqual(GyroRun.decide(menu, preview: page), .running(.phone, .mouse))
+        XCTAssertTrue(GyroRun.decide(menu, preview: page).toGuest)
+        // The page's own conditions.
+        var p = page
+        p.settings.output = .off
+        XCTAssertEqual(GyroRun.decide(noGame, preview: p), .stopped("preview: output off"))
+        p = page
+        p.appActive = false
+        XCTAssertEqual(GyroRun.decide(noGame, preview: p), .stopped("preview: app not active"))
+        p = GyroPreviewConditions(settings: GyroSettings(output: .rightStick, source: .controller))
+        XCTAssertEqual(GyroRun.decide(noGame, preview: p), .stopped("preview: no controller with a gyro"))
+        p.controllerHasGyro = true
+        XCTAssertEqual(GyroRun.decide(noGame, preview: p), .previewing(.controller, .rightStick))
+    }
+
+    /// A game's row: its value over the default, the amber dot while the game sets it, Y back to the default.
+    func testAGyroRowResolvesAndResets() {
+        let defaults = GyroSettings(output: .mouse, sensitivity: 2)
+        var own: GameGyro? = GameGyro(sensitivity: 1.5, invertY: true)
+        let s = GameControls(gyro: own).gyroSettings(over: defaults)
+        XCTAssertEqual(GyroRow.output.text(s), "Mouse")
+        XCTAssertFalse(GyroRow.output.isSet(in: own))
+        XCTAssertEqual(GyroRow.sensitivity.text(s), "1.5×")
+        XCTAssertTrue(GyroRow.sensitivity.isSet(in: own))
+        XCTAssertEqual(GyroRow.invertY.text(s), "On")
+        own = GyroRow.sensitivity.cleared(own)
+        XCTAssertEqual(own, GameGyro(invertY: true))
+        XCTAssertEqual(GameControls(gyro: own).gyroSettings(over: defaults).sensitivity, 2)
+        XCTAssertNil(GyroRow.invertY.cleared(own))           // nothing left set
+        XCTAssertNil(GyroRow.output.cleared(nil))
+        // Choosing sets the field, by the choice's id.
+        own = GyroRow.output.setting("rightStick", in: nil)
+        own = GyroRow.pauseButton.setting("pad:lb", in: own)
+        own = GyroRow.verticalRatio.setting("0.8", in: own)
+        XCTAssertEqual(own, GameGyro(output: .rightStick, verticalRatio: 0.8, pauseButton: .pad(.lb)))
+        let r = GameControls(gyro: own).gyroSettings(over: defaults)
+        XCTAssertEqual(GyroRow.pauseButton.text(r), "LB")
+        XCTAssertEqual(GyroRow.verticalRatio.text(r), "0.8× of across")
+        XCTAssertEqual(GyroText.summary(r), "Right stick · 2.0×")
+        XCTAssertEqual(GyroText.summary(GyroSettings()), "Off")
+        // Every row's current choice is one of its choices, and each choice's id sets it back.
+        for row in GyroRow.allCases {
+            let id = row.choices[row.index(in: r)].id
+            XCTAssertEqual(GameControls(gyro: row.setting(id, in: nil)).gyroSettings(over: r), r, row.rawValue)
+        }
+    }
+
+    func testAGyroRowStepsAlongItsChoices() {
+        let s = GyroSettings(output: .rightStick, sensitivity: 1.7)
+        XCTAssertEqual(GyroRow.output.step(s, by: 1), "rightStick")             // stops at the end
+        XCTAssertEqual(GyroRow.output.step(s, by: 1, wrapping: true), "off")    // A goes round
+        XCTAssertEqual(GyroRow.sensitivity.text(s), "1.7×")                      // between the steps: as it is
+        XCTAssertEqual(GyroRow.sensitivity.step(s, by: 1), "2.0")               // from the nearest, 1.5
+        XCTAssertEqual(GyroRow.sensitivity.step(s, by: -1), "1.25")
+        XCTAssertEqual(GyroText.sensitivity(0.25), "0.25×")
+        XCTAssertEqual(GyroRow.invertX.step(s, by: 1, wrapping: true), "true")
+        XCTAssertEqual(GyroRow.invertX.stored("true") as? Bool, true)
+        XCTAssertEqual(GyroRow.sensitivity.stored("2.5") as? Double, 2.5)
+        XCTAssertEqual(GyroRow.output.stored("mouse") as? String, "mouse")
+        XCTAssertEqual(GyroSteps.pauseButtons.first, GyroPauseButton.none)
+        XCTAssertTrue(GyroSteps.pauseButtons.allSatisfy { GyroPauseButton(name: $0.name) == $0 })
+    }
+
+    /// The chip shows as gyro aim starts: game start, turned on in the menu, a new source or output; not on a plain Resume.
+    func testTheGyroChipShowsOnlyWhenGyroAimStarts() {
+        var cue = GyroChipCue()
+        let phone = GyroRun.running(.phone, .mouse)
+        // Before the first frame, then the game starts with it on.
+        XCTAssertFalse(cue.update(.stopped("no game in front"), output: .mouse))
+        XCTAssertTrue(cue.update(phone, output: .mouse))
+        XCTAssertFalse(cue.update(phone, output: .mouse))                 // any other update while it runs
+        // The menu, then Resume with nothing changed; the app away and back.
+        XCTAssertFalse(cue.update(.stopped("menu"), output: .mouse))
+        XCTAssertFalse(cue.update(phone, output: .mouse))
+        XCTAssertFalse(cue.update(.stopped("app not active"), output: .mouse))
+        XCTAssertFalse(cue.update(phone, output: .mouse))
+        // A controller with a gyro connects (Automatic takes it), and goes.
+        XCTAssertTrue(cue.update(.running(.controller, .mouse), output: .mouse))
+        XCTAssertTrue(cue.update(phone, output: .mouse))
+        // Changed to the right stick in the menu: shown on Resume.
+        XCTAssertFalse(cue.update(.stopped("menu"), output: .rightStick))
+        XCTAssertTrue(cue.update(.running(.phone, .rightStick), output: .rightStick))
+        // Turned off in the menu, and on again: shown again on Resume.
+        XCTAssertFalse(cue.update(.stopped("output off"), output: .off))
+        XCTAssertFalse(cue.update(.stopped("menu"), output: .rightStick))
+        XCTAssertTrue(cue.update(.running(.phone, .rightStick), output: .rightStick))
+        // The Gyro aim page's test area never shows it.
+        var page = GyroChipCue()
+        XCTAssertFalse(page.update(.previewing(.phone, .mouse), output: .mouse))
+        XCTAssertEqual(GyroChipCue.seconds, 2.5)
+    }
+
+    /// The source row shows the gyro in use, and why there is none.
+    func testTheSourceRowSaysWhichGyro() {
+        XCTAssertEqual(GyroText.sourceInUse(.auto, device: .phone).value, "Auto · iPhone")
+        XCTAssertEqual(GyroText.sourceInUse(.auto, device: .controller).value, "Auto · Controller")
+        XCTAssertEqual(GyroText.sourceInUse(.phone, device: .phone).value, "iPhone")
+        XCTAssertNil(GyroText.sourceInUse(.phone, device: .phone).why)
+        XCTAssertEqual(GyroText.sourceInUse(.controller, device: nil).why, "No controller with a gyro is connected")
+    }
+
+    /// Smoothing (owner, 2026-10-13): Auto is Off for a controller's gyro and Normal for the iPhone's,
+    /// unless the player chose a level; a game's own over the `gyro.smoothing` default.
+    func testSmoothingFollowsTheGyroUnlessChosen() throws {
+        let d = GyroSettings()
+        XCTAssertEqual(d.smoothing, .auto)
+        XCTAssertEqual(d.aimConfig(device: .phone).smoothing, .normal)
+        XCTAssertEqual(d.aimConfig(device: .controller).smoothing, .off)
+        for level in [GyroSmoothingChoice.off, .light, .normal] {
+            let s = GyroSettings(smoothing: level)
+            XCTAssertEqual(s.aimConfig(device: .phone).smoothing.rawValue, level.rawValue)
+            XCTAssertEqual(s.aimConfig(device: .controller).smoothing.rawValue, level.rawValue)
+        }
+        // A game's own over the default; left out, it follows it.
+        let defaults = GyroSettings(smoothing: .light)
+        XCTAssertEqual(GameGyro().resolved(over: defaults).smoothing, .light)
+        XCTAssertEqual(GameGyro(smoothing: .off).resolved(over: defaults).smoothing, .off)
+        XCTAssertEqual(GameGyro(smoothing: .auto).resolved(over: defaults).aimConfig(device: .controller).smoothing, .off)
+        XCTAssertEqual(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"smoothing":"light"}"#.utf8)), GameGyro(smoothing: .light))
+        XCTAssertThrowsError(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"smoothing":"heavy"}"#.utf8)))
+        // The default's key; missing or not understood, Auto.
+        let u = UserDefaults(suiteName: "GyroSmoothingTests")!
+        u.removePersistentDomain(forName: "GyroSmoothingTests")
+        XCTAssertEqual(GyroSettings(u).smoothing, .auto)
+        u.set("off", forKey: GyroSettings.smoothingKey)
+        XCTAssertEqual(GyroSettings(u).smoothing, .off)
+        u.set("heavy", forKey: GyroSettings.smoothingKey)
+        XCTAssertEqual(GyroSettings(u).smoothing, .auto)
+        u.removePersistentDomain(forName: "GyroSmoothingTests")
+        // Its row: Auto says what it is for the gyro read; Y on a game's row clears it.
+        XCTAssertEqual(GyroRow.smoothing.key, "gyro.smoothing")
+        XCTAssertEqual(GyroRow.smoothing.choices.map(\.label), ["Auto", "Off", "Light", "Normal"])
+        XCTAssertEqual(GyroText.smoothingInUse(.auto, device: .controller), "Auto · Off")
+        XCTAssertEqual(GyroText.smoothingInUse(.auto, device: .phone), "Auto · Normal")
+        XCTAssertEqual(GyroText.smoothingInUse(.auto, device: nil), "Auto")
+        XCTAssertEqual(GyroText.smoothingInUse(.light, device: .controller), "Light")
+        let own = GyroRow.smoothing.setting("off", in: nil)
+        XCTAssertEqual(own, GameGyro(smoothing: .off))
+        XCTAssertTrue(GyroRow.smoothing.isSet(in: own))
+        XCTAssertNil(GyroRow.smoothing.cleared(own))
+        XCTAssertEqual(GyroRow.smoothing.stored("light") as? String, "light")
+    }
+}

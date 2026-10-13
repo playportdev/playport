@@ -150,6 +150,180 @@ class UiEnvTest(unittest.TestCase):
         self.assertEqual(m.in_game(["play:app-367520", "pad:a"], 1), 0)
         self.assertTrue(m.after_play(["play:app-367520", "pad:a"]))
 
+    def test_touch_presses_the_on_screen_controls_while_the_game_runs(self):
+        """touch: is a finger on the running game's on-screen controls (Dev/TouchDriver.swift)."""
+        m = load()
+        for ok in ("touch:a", "touch:dpad.right@2000", "touch:dpad.right+a@600",
+                   "touch:leftStick.up+rightStick.left@10000", "menu:controls", "open:settings#controls",
+                   "open:settings#controllers"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("touch:", "touch:a@", "touch:a.b", "touch:a@123456", "touch:a+", "touch:a,b", "menu:control"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        self.assertEqual(m.in_game(["play:app-367520", "touch:a", "pad:a"], 1), 1)
+
+    def test_gyro_plays_a_scripted_gyro_while_the_game_runs(self):
+        """gyro: plays HostIOKit GyroScript steps into gyro aim (Dev/GyroDriver.swift) while the game runs."""
+        m = load()
+        for ok in ("gyro:yaw=90@500", "gyro:yaw=90@500/pitch=-30@300", "gyro:pitch=-30+yaw=10.5@300/rest@200",
+                   "gyro:roll=45@10000", "gyro:rest@1", "gyro:yaw=2000@1/yaw=-2000@1"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("gyro:", "gyro:yaw=90", "gyro:yaw@500", "gyro:spin=10@100", "gyro:yaw=90@500/", "gyro:yaw=90@500,pitch=1@2",
+                    "gyro:yaw=+90@500", "gyro:yaw=90@123456", "gyro:rest", "gyro:yaw=1e3@100"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        run = ["play:app-620", "wait:30", "gyro:yaw=90@500", "touch:a", "gyro:rest@100", "open:home"]
+        self.assertEqual(m.in_game(run, 1), 4)
+        self.assertTrue(m.after_play(run))
+        self.assertIsNone(m.pad_after_play(run))
+        a = m.parse(["--controls", 'app-620:{"gyro":{"output":"mouse"}}', "--action", "play:app-620",
+                     "--action", "gyro:yaw=90@500/rest@300"])
+        self.assertEqual(a.action[-1], "gyro:yaw=90@500/rest@300")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            m.parse(["--action", "gyro:yaw=90"])
+
+    def test_the_gyro_aim_page_and_its_test_area_are_reachable(self):
+        """open:ID#gyro opens Game options › Controls › Gyro aim, open:ID#controls its Controls section,
+        open:settings#gyro Settings › Controls at its Gyro aim rows; gyro: with no game moves the test area's dot."""
+        m = load()
+        for ok in ("open:app-620#gyro", "open:app-620#controls", "open:settings#gyro", "menu:controls"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        self.assertFalse(m.ACTION_RE.match("open:settings#gyroaim"))
+        a = m.parse(["--action", "open:app-620#gyro", "--action", "gyro:yaw=30@500", "--action", "pad:down+right"])
+        self.assertEqual(a.action, ["open:app-620#gyro", "gyro:yaw=30@500", "pad:down+right"])
+        self.assertFalse(m.after_play(a.action))
+        self.assertIsNone(m.pad_after_play(a.action))
+        self.assertIn("open:ID#gyro", m.__doc__)
+        self.assertIn("Gyro aim: Off, Mouse, Right stick; Sensitivity", m.__doc__)
+
+    def test_the_controller_page_and_the_action_picker_are_reachable(self):
+        """open:ID#controller opens a game's Controller page, open:settings#controller Settings' default's;
+        pad: rings rows and drives the ActionPicker there; menu:controls has the Controller row."""
+        m = load()
+        for ok in ("open:app-620#controller", "open:settings#controller", "menu:controls"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        self.assertFalse(m.ACTION_RE.match("open:settings#controllermap"))
+        a = m.parse(["--action", "open:app-620#controller", "--action", "pad:right+right+lb", "--action", "pad:a+rb+a"])
+        self.assertEqual(a.action, ["open:app-620#controller", "pad:right+right+lb", "pad:a+rb+a"])
+        self.assertIsNone(m.pad_after_play(a.action))
+        for text in ("open:ID#controller", "ctl:mode", "ctl:lookSpeed", "ctl:resetAll", "ActionPicker",
+                     "controller: Settings › Controls › Controller", "Controller: Pad, Keys &"):
+            self.assertIn(text, m.__doc__)
+
+    def test_the_controller_page_ring_and_the_in_game_editor_are_documented(self):
+        """The Controller page's ring (touch controls U): every item by the directions, LB/RB the mode,
+        A edits, Y resets, B back; and its in-game editor from menu:controls."""
+        m = load()
+        for text in ("move one ring through every item in every mode", "pad:lb/rb cycle the mode",
+                     "pad:y resets it", "Switch to Custom?", "pad:b cancels",
+                     "opens the Controller page over the paused game", "pad:b comes back"):
+            self.assertIn(text, m.__doc__)
+        a = m.parse(["--action", "play:app-620", "--action", "menu:open", "--action", "menu:controls",
+                     "--action", "pad:down+down+down+down+down+down+a", "--action", "pad:down+a", "--action", "pad:b+b",
+                     "--action", "menu:resume"])
+        self.assertIsNone(m.pad_after_play(a.action))
+
+    def test_three_finger_tap_opens_the_menu_so_pad_after_it_is_the_menus(self):
+        """gesture:three-finger-tap fires the app's three-finger tap handler (HostIO.menuGesture),
+        which opens the in-game menu with or without on-screen controls: pad: after it is the menu's."""
+        m = load()
+        self.assertTrue(m.ACTION_RE.match("gesture:three-finger-tap"))
+        for bad in ("gesture:", "gesture:tap", "gesture:three-finger-tap@100"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        run = ["play:app-367520", "wait:20", "touch:a", "touch:dpad.right@2000", "gesture:three-finger-tap", "pad:down",
+               "menu:resume", "touch:a"]
+        self.assertEqual(m.in_game(run, 1), 7)
+        self.assertFalse(m.after_play(run))
+        self.assertIsNone(m.pad_after_play(run))
+        # A touch: on a control named like the old Playport button no longer opens the menu.
+        self.assertEqual(m.in_game(["play:app-367520", "touch:playport", "pad:a"], 1), 1)
+        self.assertEqual(m.pad_after_play(["play:app-367520", "touch:playport", "pad:a"]), "pad:a")
+
+    def test_controls_saves_a_games_on_screen_controls_before_play(self):
+        m = load()
+        env = m.ui_env("n1", play="app-367520", controls=("app-367520", '{"layout":"off"}'),
+                       settings=("app-367520", "{}"))
+        self.assertIn("UI_ACTIONS=controls:app-367520,settings:app-367520,play:app-367520", env)
+        self.assertIn('UI_CONTROLS={"layout":"off"}', env)
+        a = m.parse(["--controls", 'app-367520:{"opacity": 0.8}', "--play", "app-367520"])
+        self.assertEqual(a.controls_pair, ("app-367520", '{"opacity":0.8}'))
+        # The Gamepad layout's d-pad and right stick (PlayportKit GameControls.dpad, .rightStick).
+        for stick in ("off", "below", "above"):
+            a = m.parse(["--controls", f'app-367520:{{"layout":"gamepad","dpad":"on","rightStick":"{stick}"}}'])
+            self.assertEqual(a.controls_pair,
+                             ("app-367520", f'{{"layout":"gamepad","dpad":"on","rightStick":"{stick}"}}'))
+        self.assertEqual(m.parse(["--controls", 'app-367520:{"dpad":"off"}']).controls_pair, ("app-367520", '{"dpad":"off"}'))
+        for bad in ('app-367520:{"layout":"tank"}', 'app-367520:{"opacity":3}', 'app-367520:{"x":1}', "app-367520:[]",
+                    'nope:{}', 'app-367520:{"dpad":"yes"}', 'app-367520:{"dpad":true}', 'app-367520:{"rightStick":"left"}',
+                    'app-367520:{"rightStick":"Below A/B/X/Y"}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", bad])
+
+    def test_controls_carries_a_games_gyro_aim(self):
+        """--controls' "gyro" is PlayportKit GameGyro: the game's own gyro aim, saved with its controls."""
+        m = load()
+        for ok in ('{"gyro":{"output":"mouse"}}', '{"gyro":{}}',
+                   '{"layout":"off","gyro":{"output":"rightStick","source":"phone","sensitivity":2.5,"verticalRatio":0,'
+                   '"turnAxis":"yaw","invertX":true,"invertY":false,"pauseButton":"pad:lb"}}',
+                   '{"gyro":{"source":"controller","turnAxis":"roll","pauseButton":"none","sensitivity":20}}',
+                   '{"gyro":{"pauseButton":"pad:rt","sensitivity":0.05,"verticalRatio":4}}',
+                   '{"gyro":{"output":"rightStick","antiDeadZone":0.3}}', '{"gyro":{"antiDeadZone":0}}',
+                   '{"gyro":{"antiDeadZone":0.9}}', '{"gyro":{"smoothing":"off"}}', '{"gyro":{"smoothing":"light"}}',
+                   '{"gyro":{"output":"mouse","smoothing":"normal"}}', '{"gyro":{"smoothing":"auto"}}'):
+            a = m.parse(["--controls", "app-620:" + ok])
+            self.assertEqual(a.controls_pair, ("app-620", json.dumps(json.loads(ok), separators=(",", ":"))), ok)
+        for bad in ('{"gyro":{"output":"keyboard"}}', '{"gyro":{"source":"watch"}}', '{"gyro":{"sensitivity":0}}',
+                    '{"gyro":{"sensitivity":21}}', '{"gyro":{"sensitivity":"2"}}', '{"gyro":{"sensitivity":true}}',
+                    '{"gyro":{"verticalRatio":-1}}', '{"gyro":{"turnAxis":"pitch"}}', '{"gyro":{"invertX":1}}',
+                    '{"gyro":{"pauseButton":"pad:leftStick"}}', '{"gyro":{"pauseButton":"key:0x20"}}',
+                    '{"gyro":{"speed":1}}', '{"gyro":"mouse"}', '{"gyro":[]}', '{"opacity":true}',
+                    '{"gyro":{"antiDeadZone":-0.1}}', '{"gyro":{"antiDeadZone":0.95}}', '{"gyro":{"antiDeadZone":"0.3"}}',
+                    '{"gyro":{"smoothing":"heavy"}}', '{"gyro":{"smoothing":false}}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + bad])
+
+    def test_controls_carries_a_games_controller_map(self):
+        """--controls' "controllerMap" is PlayportKit ControllerMap: the mode, and a custom map's table."""
+        m = load()
+        for ok in ('{"controllerMap":{"mode":"keyboardMouse"}}', '{"controllerMap":{"mode":"controller"}}',
+                   '{"controllerMap":{"mode":"custom"}}', '{"controllerMap":{"mode":"custom","version":1}}',
+                   '{"layout":"off","controllerMap":{"mode":"custom","table":{"a":"key:0x20","rt":"mouse:left",'
+                   '"leftStick.up":"key:0x57","leftStick.left":"key:shift+0x41","rightStick":"mouse:move",'
+                   '"lb":"mouse:wheelUp","back":"playport:menu","x":"pad:b","start":"key:27"}}}',
+                   '{"controllerMap":{"mode":"custom","table":{"leftStick":"pad:rightStick","rightStick":"pad:leftStick"}}}',
+                   '{"controllerMap":{"mode":"custom","table":{}},"gyro":{"output":"mouse"}}'):
+            a = m.parse(["--controls", "app-620:" + ok])
+            self.assertEqual(a.controls_pair, ("app-620", json.dumps(json.loads(ok), separators=(",", ":"))), ok)
+        for bad in ('{"controllerMap":"keyboardMouse"}', '{"controllerMap":{}}', '{"controllerMap":{"mode":"mouse"}}',
+                    '{"controllerMap":{"mode":"custom","version":2}}', '{"controllerMap":{"mode":"custom","x":1}}',
+                    '{"controllerMap":{"mode":"custom","table":[]}}',
+                    '{"controllerMap":{"mode":"custom","table":{"home":"key:0x20"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"mouse:move"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"pad:leftStick"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"leftStick":"key:0x57"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"leftStick.up":"mouse:move"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"rightStick":"mouse:move","rightStick.up":"key:0x57"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"key:0x00"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"key:256"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"key:meta+0x20"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"mouse:back"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":"gyro:on"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a.up":"key:0x20"}}}',
+                    '{"controllerMap":{"mode":"custom","table":{"a":1}}}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + bad])
+        self.assertIn("controllerMap", m.__doc__)
+
+    def test_controls_carries_a_games_look_speed(self):
+        """--controls' "lookSpeed" is GameControls.lookSpeed: a number 0.1-8, the mouse look's speed."""
+        m = load()
+        for ok in ('{"lookSpeed":1}', '{"lookSpeed":0.25}', '{"lookSpeed":8}',
+                   '{"controllerMap":{"mode":"keyboardMouse"},"lookSpeed":2.5}'):
+            a = m.parse(["--controls", "app-620:" + ok])
+            self.assertEqual(a.controls_pair, ("app-620", json.dumps(json.loads(ok), separators=(",", ":"))), ok)
+        for bad in ('{"lookSpeed":0}', '{"lookSpeed":9}', '{"lookSpeed":"2"}', '{"lookSpeed":true}', '{"lookSpeed":null}'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.parse(["--controls", "app-620:" + bad])
+        self.assertIn("lookSpeed", m.__doc__)
+
     def test_pad_after_play_is_refused_and_settings_arguments_may_be_a_list(self):
         m = load()
         self.assertEqual(m.pad_after_play(["play:app-367520", "wait:10", "pad:a"]), "pad:a")
