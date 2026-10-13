@@ -91,15 +91,18 @@ proposed answer unless the owner says otherwise before the phase that needs them
   ignored (no change), the chip showed at the start and was gone 2.4 s later, and right-stick
   `yaw=30@1000` (peak 0.45) now turns the view (0.36 still does not). The background bug is
   PLA-338, not the controls. The 125 Hz cap is unchanged.
-- **2f: host done, phone session pending (owner paused the phone)**
-  ([evidence](../evidence/2026-10-13-touch-controls-phase2f.md)). `c9dc6c3`: a pad's gravity
+- **Done: 2f** (host and phone; [evidence](../evidence/2026-10-13-touch-controls-phase2f.md),
+  [phone](../evidence/2026-10-13-touch-controls-2f-3c.md)). On the phone (IPA `7566e31a…`, with the
+  owner's DualShock 4): polling reads 65–67/s, the same as GameController's callback, so the pad
+  delivers about 65/s. Flat, the acceleration reads `0.01 -1.03 0.03`: Apple's header frame is
+  right, so no mapping fix. Calibrated within 2 s (was 18.7 s). A hand-turned 90° in player
+  space counted about 81°. The yaw run fell back to the phone (the pad had dropped off), so it
+  was not compared. The 125 Hz cap stays (the owner decides at the sign-off). Host work: `c9dc6c3`: a pad's gravity
   estimated from its acceleration (HostIOKit `GyroGravityEstimate`), and GyroAim's first bias
   after 0.5 s still. `23709dd`: a controller's `GCMotion` polled at 500 Hz on gyro aim's queue
   instead of its main-thread handler (about 65/s from the DualShock 4), with dev lines giving
   the polled rate beside the handler's and the pad's gravity in the aim frame. Dev IPA
-  `1db2c6ec…` built, not installed. The new rate is **not measured**. No controller-specific
-  sensitivity yet: the pad's acceleration frame (Apple's header against SDL's mapping) is open,
-  and the phone script in the evidence settles it. The 125 Hz cap is unchanged.
+  `1db2c6ec…` built, not installed. No controller-specific sensitivity.
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -174,8 +177,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
        the physical right stick; mouse mode with the phone's gyro feels great.
   6. **2e (fix), done** (see "Done: 2e" above)**:** the three decisions, the 1.5× default and the background diagnosis above; one short
      phone session.
-  7. **2f (controller gyro), host done, phone session pending (owner paused the phone):**
-     the phone session (script in the 2f evidence) waits for the owner to unpause. Deliver the controller's motion off the main thread, near its
+  7. **2f (controller gyro), done** (see "Done: 2f" above)**:** Deliver the controller's motion off the main thread, near its
      own rate, with better timestamps. Derive gravity for a pad without it from low-passed
      acceleration, not raw acceleration. Check the DualShock/DualSense axis mapping and
      scale against the phone (the same physical turn should give the same counts), and
@@ -224,10 +226,18 @@ proposed answer unless the owner says otherwise before the phase that needs them
      installed ([evidence](../evidence/2026-10-13-touch-controls-R.md); Hollow Knight
      `first-frame+10` passed). **R done (host).** The combined 2f + 3c phone session
      (`.work/agent-notes/pla-13-v2/phone-session-R.sh`, with gates for the owner's controller
-     steps and the scripted pad's slot) stopped after the install and the smoke run: **the 2f and
-     3c phone parts are pending (owner paused the phone).**
-  11. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
-     `controller` mode, plus Hollow Knight.
+     steps and the scripted pad's slot) stopped after the install and the smoke run. **R done:**
+     its 2f and 3c phone parts ran in the session recorded in
+     [2f and 3c](../evidence/2026-10-13-touch-controls-2f-3c.md).
+  11. **3c (phone), done** ([evidence](../evidence/2026-10-13-touch-controls-2f-3c.md)): the
+     Controller page, the ActionPicker and Settings' page drawn as designed. Portal 2 with the
+     scripted pad (slot 0) in `keyboardMouse` walked, strafed, looked, and opened and closed its
+     pause menu with START. Held RT plus Home opened Playport's menu, and nothing leaked. In
+     `controller` mode the pad played as before. The in-game panel showed its Controller row
+     without scrolling. `lookSpeed` 2× applied (its counts were not measured). Seen, not fixed:
+     the panel's "Controlle / r" wrap and the page's truncated Look speed row. Hollow Knight
+     `first-frame+10` passed. **Next (queue head): the owner's phase 2 sign-off (phone and
+     controller gyro, the 125 Hz cap) and phase 3 sign-off.**
   12. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
 - **Phone:** dev IPA `7566e31a…` (R) installed; unattended mode off (the owner is at the
