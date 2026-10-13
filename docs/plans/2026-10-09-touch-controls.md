@@ -22,8 +22,35 @@ proposed answer unless the owner says otherwise before the phase that needs them
   controller is connected, so the menu stays in reach by touch; Never makes Off every game's
   starting choice; the controls' pad is player 1 from the runtime's start and they are drawn
   from the first frame; the `pp perf` A/B was skipped (60 fps held with the overlay).
-- **Running:** nothing.
-- **Queue:** phase 2 (owner gyro play at its end) → phase 3; then stop.
+- **How the work is split (owner, 2026-10-13):** each phase runs as small writer chunks
+  that use only the host (`pp test`, `pp check`, `pp build`), one writer at a time. The
+  phase's one phone session is its own last chunk, and **every phase then waits for the
+  owner's hands-on sign-off** before the next phase starts. The owner's feedback becomes
+  a fix chunk.
+- **Running:** nothing. Waiting for the owner's phase 1 sign-off.
+- **Queue:**
+  1. **Phase 1 sign-off (owner):** play Hollow Knight with only the touch overlay
+     (dev IPA `3911e0fa…`, installed): several fingers at once, the floating stick,
+     haptics, the 3 s dim, the first-time toast, a controller connecting mid-game.
+  2. **2a:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host tests.
+  3. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+     driver action.
+  4. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+     sensitivity, the overlay chip.
+  5. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
+     right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
+     chunk follows.
+  6. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
+  7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
+     with host tests.
+  8. **3b:** the Controller page and the ActionPicker.
+  9. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+     `controller` mode, plus Hollow Knight.
+  10. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+      a controller. Then stop.
+- **Phone:** dev IPA `3911e0fa…` installed; unattended mode on; Hollow Knight's profile
+  slot 3 may now hold a King's Pass save rather than New Game (check it before a
+  measured run that uses `tools/pad/hk-new-slot.txt`).
 - **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
 
 ## Goal
