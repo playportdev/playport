@@ -194,7 +194,10 @@ proposed answer unless the owner says otherwise before the phase that needs them
      `1e83233a…` built and verified, not installed. The owner allowed phase 3's host chunks
      (3a, 3b) to start while the phone is paused (2026-10-13). 3c and the phase 3 sign-off
      still wait for 2f's phone session and the owner's phase 2 sign-off. **3b next.**
-  9. **3b:** the Controller page and the ActionPicker.
+  9. **3b, running (host only):** the Controller page and the ActionPicker. Owner,
+     2026-10-13: the preset's d-pad stays clockwise from up (1 up, 2 right, 3 down, 4 left), and
+     the right stick's mouse-look speed becomes a per-game "Look speed" row (Keyboard & mouse
+     and Custom; Y resets it).
   10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
   11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
