@@ -47,7 +47,21 @@ proposed answer unless the owner says otherwise before the phase that needs them
   (calibration, player space, smoothing, mouse and right-stick outputs, pause), its output
   into `InputMixer` (right stick added and clamped; mouse as `move(dx, dy)`), PlayportKit
   `GyroSettings` and `GameGyro`, with host tests; nothing reads a sensor yet.
-- **Running:** 2b (writer launched 2026-10-13).
+- **Done: 2b** (host only; no phone run). `8391fdf`: a game's gyro aim is part of its
+  `GameControls` record (`gyro`, PlayportKit `GameGyro`, over the `gyro.*` defaults; old JSON
+  loads), and `pp ui --controls` takes `"gyro":{...}`. `d6bdf4a`: `GyroSensors` and `GyroFeed`:
+  the iPhone's CoreMotion device motion at 100 Hz (bias-corrected `rotationRate` rather than the
+  raw gyro, so GyroAim only trims a residual) mapped for landscape left and right as the screen
+  rotates; a controller's `GCController.motion` (gravity, else acceleration, else none: player
+  space is yaw); Automatic takes a controller's gyro when it reports rotation rate. The sensors
+  run only while the output is not Off and the game is drawing, active, with no menu, web page or
+  dialog (PlayportKit `GyroRun`); a restart keeps the bias, restarts the windows. Right stick into
+  `InputMixer.gyro` under the pad lock; mouse moves coalesced to at most ~125 a second for
+  Winios's 256-event ring. `cad0a0e`: the dev `gyro:STEP[/STEP...]` driver action (HostIOKit
+  `GyroScript`; its samples replace the sensors' while it plays). Dev IPA `48dcb074…` built and
+  verified, not installed. 2d checks on the phone: no motion permission prompt, the landscape
+  signs, a DualSense's `hasRotationRate` and gravity, Portal 2 in both outputs.
+- **Next:** 2c.
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -79,9 +93,9 @@ proposed answer unless the owner says otherwise before the phase that needs them
 - **Queue:**
   1. **2a, done:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host
      tests; plus the A/B/X/Y size tweak as its own commit.
-  2. **2b, running:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+  2. **2b, done:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
-  3. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
+  3. **2c, next:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
   4. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
