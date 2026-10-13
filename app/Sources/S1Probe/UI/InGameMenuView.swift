@@ -490,6 +490,7 @@ private struct ControlsPanel: View {
         HStack(spacing: 2) {
             ForEach(all, id: \.self) { v in
                 Text(v[keyPath: title]).font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1).fixedSize()   // the subtitle beside it gives way, never a value
                     .foregroundStyle(v == current ? PP.background : PP.muted)
                     .padding(.horizontal, 9).padding(.vertical, 5)
                     .background(v == current ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 8))
@@ -520,6 +521,6 @@ private struct ControlsPanel: View {
 }
 
 private extension GyroOutput {
-    /// The panel's short word for it.
-    var gyroTitle: String { GyroText.output(self) }
+    /// The panel's short word for it: "Stick", so Off, Mouse and Stick fit beside the gyro's source.
+    var gyroTitle: String { self == .rightStick ? "Stick" : GyroText.output(self) }
 }

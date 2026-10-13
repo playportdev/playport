@@ -85,6 +85,8 @@ public struct GyroMouseCoalescer: Sendable {
 /// What gyro aim did lately, for the log: one line per `interval` with motion in it.
 public struct GyroActivity: Sendable {
     public static let interval = 2.0
+    /// The smallest right-stick deflection that counts as motion (0.01 at the line's precision).
+    public static let stickMotion = 0.005
     private var since: Double?
     private var samples = 0
     private var dx = 0, dy = 0
@@ -116,7 +118,9 @@ public struct GyroActivity: Sendable {
             stick = true
             let l = (x * x + y * y).squareRoot()
             peak = max(peak, l)
-            if l > 0 { moved = true }
+            // A still device's residual noise leaves the stick a few hundred-thousandths off
+            // centre: motion is a deflection the line's two decimals show.
+            if l >= Self.stickMotion { moved = true }
         }
         guard let s = since, time - s >= Self.interval else { return nil }
         defer { self = GyroActivity(); since = time }

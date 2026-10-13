@@ -139,6 +139,13 @@ final class GyroSourcesTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
         XCTAssertTrue(lines[0].contains("mouse dx="), lines[0])
         XCTAssertEqual(lines[1], "2.0 s, 200 samples (100/s), mouse dx=400 dy=-200; 100 moves (50/s), coalescing delay max 12.0 ms")
+        // A still phone's right stick: residual noise far below the line's precision logs nothing.
+        var still = GyroActivity()
+        var stillLines: [String] = []
+        for i in 0...500 {
+            if let l = still.add(.rightStick(x: 0.00003, y: -0.00002), time: Double(i) / 100) { stillLines.append(l) }
+        }
+        XCTAssertEqual(stillLines, [])
         var s = GyroActivity()
         _ = s.add(.rightStick(x: 0, y: 0), time: 0)
         _ = s.add(.rightStick(x: 0.3, y: 0.4), time: 1)
