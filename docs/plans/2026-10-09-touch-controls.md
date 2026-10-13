@@ -266,7 +266,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
      Knight `first-frame+10` passed; both games' own controls restored by DriverUndo. **Next
      (queue head): the owner's phase 2 and phase 3 sign-offs.**
   14. **Phase 2 and phase 3 signed off by the owner (2026-10-13)** on dev IPA `5faec414…`.
-     Phases 1–3 are done; this run stopped here. Phases 4+ are not started; follow-ups:
+     Phases 1–3 are done and merged to `main` (`631bd7f`); this run stopped here. Phases 4+ are not started; follow-ups:
      PLA-338 (Vulkan device lost in the background), PLA-339 (shared held keys release
      early), PLA-340 (arrow keys without the extended flag).
 - **Phone:** dev IPA `5faec414…` (U) installed; unattended mode off (the owner is at the
