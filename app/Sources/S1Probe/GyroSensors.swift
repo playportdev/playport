@@ -372,7 +372,7 @@ final class GyroFeed: @unchecked Sendable {
             if let a = aimSource, a.device == d, a.pad == pad {
                 aim.restart()
             } else {
-                aim = GyroAim(config: control.withLock { $0.settings }.aimConfig)
+                aim = GyroAim(config: control.withLock { $0.settings }.aimConfig(device: d))
                 aimSource = (d, pad)
                 calibrationLogged = false
             }
@@ -503,7 +503,7 @@ final class GyroFeed: @unchecked Sendable {
     /// One aim-frame sample through GyroAim into the guest, or (`toGuest` false)
     /// into the test area's dot alone; GyroAim's output.
     private func process(_ s: GyroSample, _ settings: GyroSettings, toGuest: Bool) -> GyroAimOutput {
-        let config = settings.aimConfig
+        let config = settings.aimConfig(device: aimSource?.device ?? .phone)
         if aim.config != config { aim.config = config }
         guard toGuest else {
             // The test area: no pad lock, no mixer, no winios_pointer. The pause button is

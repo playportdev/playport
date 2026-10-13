@@ -15,9 +15,9 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertFalse(d.invertY)
         XCTAssertEqual(d.pauseButton, .none)
         XCTAssertEqual(d.antiDeadZone, 0.27)
-        XCTAssertEqual(d.aimConfig, GyroAim.Config(sensitivity: 1.5, antiDeadZone: 0.27))
+        XCTAssertEqual(d.aimConfig(device: .phone), GyroAim.Config(sensitivity: 1.5, antiDeadZone: 0.27))
         // 1.0× keeps its meaning: GyroAim's own scale, as a game's saved value.
-        XCTAssertEqual(GameGyro(sensitivity: 1).resolved(over: d).aimConfig.sensitivity, 1)
+        XCTAssertEqual(GameGyro(sensitivity: 1).resolved(over: d).aimConfig(device: .phone).sensitivity, 1)
         XCTAssertEqual(GyroAim.Config().sensitivity, 1)
     }
 
@@ -27,7 +27,7 @@ final class GyroSettingsTests: XCTestCase {
         let data = try JSONEncoder().encode(mine)
         XCTAssertEqual(try JSONDecoder().decode(GyroSettings.self, from: data), mine)
         XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(#""pauseButton":"pad:lb""#))
-        XCTAssertEqual(mine.aimConfig, GyroAim.Config(output: .rightStick, turnAxis: .roll, sensitivity: 2.5, verticalRatio: 0.6,
+        XCTAssertEqual(mine.aimConfig(device: .phone), GyroAim.Config(output: .rightStick, turnAxis: .roll, sensitivity: 2.5, verticalRatio: 0.6,
                                                       invertX: true, invertY: true, antiDeadZone: 0.27))
 
         func decode(_ s: String) throws -> GyroSettings { try JSONDecoder().decode(GyroSettings.self, from: Data(s.utf8)) }
@@ -51,7 +51,7 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertEqual(try decode(#"{"antiDeadZone":0.95}"#).antiDeadZone, 0.27)   // out of range: the default
         let mine = GyroSettings(output: .rightStick, antiDeadZone: 0.35)
         XCTAssertEqual(try JSONDecoder().decode(GyroSettings.self, from: try JSONEncoder().encode(mine)), mine)
-        XCTAssertEqual(mine.aimConfig.antiDeadZone, 0.35)
+        XCTAssertEqual(mine.aimConfig(device: .phone).antiDeadZone, 0.35)
         XCTAssertTrue(mine.summary.hasSuffix(" antiDeadZone=0.35"))
         XCTAssertFalse(GyroSettings(output: .mouse).summary.contains("antiDeadZone"))
 
@@ -163,7 +163,7 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertEqual(GameControls().gyroSettings(over: defaults), defaults)
         XCTAssertEqual(mine.gyroSettings(over: defaults), GyroSettings(output: .mouse, sensitivity: 2, pauseButton: .pad(.lb)))
         XCTAssertEqual(GyroSettings(output: .mouse, invertY: true, pauseButton: .pad(.lb)).summary,
-                       "output=mouse source=auto sensitivity=1.5 verticalRatio=1.0 turnAxis=playerSpace invert=-y pause=pad:lb")
+                       "output=mouse source=auto sensitivity=1.5 verticalRatio=1.0 turnAxis=playerSpace invert=-y pause=pad:lb smoothing=auto")
     }
 
     func testThePauseButtonIsReadFromAPad() {
@@ -334,5 +334,47 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertEqual(GyroText.sourceInUse(.phone, device: .phone).value, "iPhone")
         XCTAssertNil(GyroText.sourceInUse(.phone, device: .phone).why)
         XCTAssertEqual(GyroText.sourceInUse(.controller, device: nil).why, "No controller with a gyro is connected")
+    }
+
+    /// Smoothing (owner, 2026-10-13): Auto is Off for a controller's gyro and Normal for the iPhone's,
+    /// unless the player chose a level; a game's own over the `gyro.smoothing` default.
+    func testSmoothingFollowsTheGyroUnlessChosen() throws {
+        let d = GyroSettings()
+        XCTAssertEqual(d.smoothing, .auto)
+        XCTAssertEqual(d.aimConfig(device: .phone).smoothing, .normal)
+        XCTAssertEqual(d.aimConfig(device: .controller).smoothing, .off)
+        for level in [GyroSmoothingChoice.off, .light, .normal] {
+            let s = GyroSettings(smoothing: level)
+            XCTAssertEqual(s.aimConfig(device: .phone).smoothing.rawValue, level.rawValue)
+            XCTAssertEqual(s.aimConfig(device: .controller).smoothing.rawValue, level.rawValue)
+        }
+        // A game's own over the default; left out, it follows it.
+        let defaults = GyroSettings(smoothing: .light)
+        XCTAssertEqual(GameGyro().resolved(over: defaults).smoothing, .light)
+        XCTAssertEqual(GameGyro(smoothing: .off).resolved(over: defaults).smoothing, .off)
+        XCTAssertEqual(GameGyro(smoothing: .auto).resolved(over: defaults).aimConfig(device: .controller).smoothing, .off)
+        XCTAssertEqual(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"smoothing":"light"}"#.utf8)), GameGyro(smoothing: .light))
+        XCTAssertThrowsError(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"smoothing":"heavy"}"#.utf8)))
+        // The default's key; missing or not understood, Auto.
+        let u = UserDefaults(suiteName: "GyroSmoothingTests")!
+        u.removePersistentDomain(forName: "GyroSmoothingTests")
+        XCTAssertEqual(GyroSettings(u).smoothing, .auto)
+        u.set("off", forKey: GyroSettings.smoothingKey)
+        XCTAssertEqual(GyroSettings(u).smoothing, .off)
+        u.set("heavy", forKey: GyroSettings.smoothingKey)
+        XCTAssertEqual(GyroSettings(u).smoothing, .auto)
+        u.removePersistentDomain(forName: "GyroSmoothingTests")
+        // Its row: Auto says what it is for the gyro read; Y on a game's row clears it.
+        XCTAssertEqual(GyroRow.smoothing.key, "gyro.smoothing")
+        XCTAssertEqual(GyroRow.smoothing.choices.map(\.label), ["Auto", "Off", "Light", "Normal"])
+        XCTAssertEqual(GyroText.smoothingInUse(.auto, device: .controller), "Auto · Off")
+        XCTAssertEqual(GyroText.smoothingInUse(.auto, device: .phone), "Auto · Normal")
+        XCTAssertEqual(GyroText.smoothingInUse(.auto, device: nil), "Auto")
+        XCTAssertEqual(GyroText.smoothingInUse(.light, device: .controller), "Light")
+        let own = GyroRow.smoothing.setting("off", in: nil)
+        XCTAssertEqual(own, GameGyro(smoothing: .off))
+        XCTAssertTrue(GyroRow.smoothing.isSet(in: own))
+        XCTAssertNil(GyroRow.smoothing.cleared(own))
+        XCTAssertEqual(GyroRow.smoothing.stored("light") as? String, "light")
     }
 }

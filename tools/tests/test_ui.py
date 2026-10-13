@@ -253,7 +253,8 @@ class UiEnvTest(unittest.TestCase):
                    '{"gyro":{"source":"controller","turnAxis":"roll","pauseButton":"none","sensitivity":20}}',
                    '{"gyro":{"pauseButton":"pad:rt","sensitivity":0.05,"verticalRatio":4}}',
                    '{"gyro":{"output":"rightStick","antiDeadZone":0.3}}', '{"gyro":{"antiDeadZone":0}}',
-                   '{"gyro":{"antiDeadZone":0.9}}'):
+                   '{"gyro":{"antiDeadZone":0.9}}', '{"gyro":{"smoothing":"off"}}', '{"gyro":{"smoothing":"light"}}',
+                   '{"gyro":{"output":"mouse","smoothing":"normal"}}', '{"gyro":{"smoothing":"auto"}}'):
             a = m.parse(["--controls", "app-620:" + ok])
             self.assertEqual(a.controls_pair, ("app-620", json.dumps(json.loads(ok), separators=(",", ":"))), ok)
         for bad in ('{"gyro":{"output":"keyboard"}}', '{"gyro":{"source":"watch"}}', '{"gyro":{"sensitivity":0}}',
@@ -261,7 +262,8 @@ class UiEnvTest(unittest.TestCase):
                     '{"gyro":{"verticalRatio":-1}}', '{"gyro":{"turnAxis":"pitch"}}', '{"gyro":{"invertX":1}}',
                     '{"gyro":{"pauseButton":"pad:leftStick"}}', '{"gyro":{"pauseButton":"key:0x20"}}',
                     '{"gyro":{"speed":1}}', '{"gyro":"mouse"}', '{"gyro":[]}', '{"opacity":true}',
-                    '{"gyro":{"antiDeadZone":-0.1}}', '{"gyro":{"antiDeadZone":0.95}}', '{"gyro":{"antiDeadZone":"0.3"}}'):
+                    '{"gyro":{"antiDeadZone":-0.1}}', '{"gyro":{"antiDeadZone":0.95}}', '{"gyro":{"antiDeadZone":"0.3"}}',
+                    '{"gyro":{"smoothing":"heavy"}}', '{"gyro":{"smoothing":false}}'):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 m.parse(["--controls", "app-620:" + bad])
 

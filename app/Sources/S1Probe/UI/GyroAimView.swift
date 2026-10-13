@@ -147,7 +147,11 @@ struct GyroAimPanel: View {
                 save(next == row.id(in: defaults) ? row.cleared(own) : row.setting(next, in: own))
             }
         } else {
-            let text: (value: String, why: String?) = row == .source ? GyroText.sourceInUse(now.source, device: sensors.device(for: now)) : (row.text(now), nil)
+            let text: (value: String, why: String?) = switch row {
+            case .source: GyroText.sourceInUse(now.source, device: sensors.device(for: now))
+            case .smoothing: (GyroText.smoothingInUse(now.smoothing, device: sensors.device(for: now)), nil)
+            default: (row.text(now), nil)
+            }
             PadRow(id: id, title: row.title, subtitle: text.why ?? Self.subtitle(row),
                    value: changed ? text.value : "Default · " + text.value, accessory: .chevron, changed: changed,
                    style: .plain, reset: reset,
@@ -176,6 +180,7 @@ struct GyroAimPanel: View {
         case .pauseButton: "Held, the aim stops (to recentre)"
         case .sensitivity: "Left and right change it"
         case .antiDeadZone: "Where the stick starts: past the game's own dead zone"
+        case .smoothing: "Steadies slow turns; a little delay"
         case .turnAxis: "Player space works however you hold it"
         default: nil
         }
@@ -188,6 +193,10 @@ struct GyroAimPanel: View {
         case (.output, "rightStick"): "For games that read only a controller"
         case (.antiDeadZone, "0.0"): "The stick starts at rest"
         case (.antiDeadZone, "0.27"): "XInput's dead zone: most games"
+        case (.smoothing, "auto"): "Off for a controller's gyro, Normal for the iPhone's"
+        case (.smoothing, "off"): "Every turn as it comes: no delay"
+        case (.smoothing, "light"): "Half Normal's, for a steadier hand"
+        case (.smoothing, "normal"): "Steadies a held aim; slow turns lag a little"
         case (.source, "auto"): "A controller's gyro when it has one, else the iPhone's"
         case (.source, "controller"): "DualSense, DualShock 4 and others with a gyro"
         case (.turnAxis, "playerSpace"): "Turns about the world's up, however you hold it"
@@ -291,8 +300,13 @@ struct GyroDefaultsRows: View {
                 // A number between the steps (from the driver's set:) shows as itself.
                 let labels = choices.indices.map { $0 == i ? row.text(d) : choices[$0].label }
                 let source = GyroText.sourceInUse(d.source, device: sensors.device(for: d))
-                PadValueRow(id: "set:" + Self.id(row), title: row.title,
-                            subtitle: row == .source ? source.why ?? "Now: " + source.value : GyroAimPanel.subtitle(row),
+                let subtitle = switch row {
+                case .source: source.why ?? "Now: " + source.value
+                case .smoothing: "Now: " + GyroText.smoothingInUse(d.smoothing, device: sensors.device(for: d))
+                    + ". Auto is Off for a controller's gyro, Normal for the iPhone's"
+                default: GyroAimPanel.subtitle(row)
+                }
+                PadValueRow(id: "set:" + Self.id(row), title: row.title, subtitle: subtitle,
                             values: labels, index: i) {
                     UserDefaults.standard.set(row.stored(choices[$0].id), forKey: row.key)
                 }

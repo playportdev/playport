@@ -17,6 +17,10 @@
 //   zone, 8689/32767), 0 for none.
 // - Pause button: none by default; a pad button that, held, stops the aim
 //   (saved as `none` or an action name, `pad:lb`).
+// - Smoothing: Auto (the default: Off for a controller's gyro, Normal for the
+//   iPhone's; owner 2026-10-13, a controller's felt delayed with it), Off,
+//   Light or Normal (HostIOKit GyroSmoothing). GyroAim takes it resolved for
+//   the gyro it reads (`aimConfig(device:)`).
 //
 // Every field may be left out of saved JSON (its default); a value this
 // build does not know is refused, as GameControls' are. A game's own are part
@@ -33,6 +37,21 @@ public enum GyroSource: String, Codable, CaseIterable, Sendable {
     case auto
     case phone
     case controller
+}
+
+/// How much gyro aim steadies slow motion: a level, or Auto (by the gyro read).
+public enum GyroSmoothingChoice: String, Codable, CaseIterable, Sendable {
+    case auto, off, light, normal
+
+    /// The level GyroAim takes for `device`'s gyro: Auto is Off for a controller, Normal for the iPhone.
+    public func smoothing(for device: GyroDevice) -> GyroSmoothing {
+        switch self {
+        case .auto: device == .controller ? .off : .normal
+        case .off: .off
+        case .light: .light
+        case .normal: .normal
+        }
+    }
 }
 
 /// The pad button that stops gyro aim while held, or none.
@@ -89,6 +108,7 @@ public struct GyroSettings: Codable, Equatable, Sendable {
     public static let invertYKey = "gyro.invertY"
     public static let pauseButtonKey = "gyro.pauseButton"
     public static let antiDeadZoneKey = "gyro.antiDeadZone"
+    public static let smoothingKey = "gyro.smoothing"
 
     /// The sensitivities and vertical ratios a value is kept to.
     public static let sensitivityRange = 0.05...20.0
@@ -107,18 +127,20 @@ public struct GyroSettings: Codable, Equatable, Sendable {
     public var invertY = false
     public var pauseButton = GyroPauseButton.none
     public var antiDeadZone = GyroSettings.defaultAntiDeadZone
+    public var smoothing = GyroSmoothingChoice.auto
 
     public init(output: GyroOutput = .off, source: GyroSource = .auto, sensitivity: Double = GyroSettings.defaultSensitivity,
                 verticalRatio: Double = 1,
                 turnAxis: GyroTurnAxis = .playerSpace, invertX: Bool = false, invertY: Bool = false,
-                pauseButton: GyroPauseButton = .none, antiDeadZone: Double = GyroSettings.defaultAntiDeadZone) {
+                pauseButton: GyroPauseButton = .none, antiDeadZone: Double = GyroSettings.defaultAntiDeadZone,
+                smoothing: GyroSmoothingChoice = .auto) {
         self.output = output; self.source = source; self.sensitivity = sensitivity; self.verticalRatio = verticalRatio
         self.turnAxis = turnAxis; self.invertX = invertX; self.invertY = invertY; self.pauseButton = pauseButton
-        self.antiDeadZone = antiDeadZone
+        self.antiDeadZone = antiDeadZone; self.smoothing = smoothing
     }
 
     enum CodingKeys: String, CodingKey {
-        case output, source, sensitivity, verticalRatio, turnAxis, invertX, invertY, pauseButton, antiDeadZone
+        case output, source, sensitivity, verticalRatio, turnAxis, invertX, invertY, pauseButton, antiDeadZone, smoothing
     }
 
     /// Each field left out is its default; a number out of range is its default too.
@@ -136,6 +158,7 @@ public struct GyroSettings: Codable, Equatable, Sendable {
         pauseButton = try c.decodeIfPresent(GyroPauseButton.self, forKey: .pauseButton) ?? d.pauseButton
         antiDeadZone = Self.kept(try c.decodeIfPresent(Double.self, forKey: .antiDeadZone), in: Self.antiDeadZoneRange,
                                  else: d.antiDeadZone)
+        smoothing = try c.decodeIfPresent(GyroSmoothingChoice.self, forKey: .smoothing) ?? d.smoothing
     }
 
     /// What `defaults` holds (Settings › Controls › Gyro aim), each key missing (or not understood) read as its default.
@@ -150,6 +173,7 @@ public struct GyroSettings: Codable, Equatable, Sendable {
         invertY = defaults.object(forKey: Self.invertYKey) as? Bool ?? d.invertY
         pauseButton = defaults.string(forKey: Self.pauseButtonKey).flatMap(GyroPauseButton.init(name:)) ?? d.pauseButton
         antiDeadZone = Self.kept(Self.number(defaults, Self.antiDeadZoneKey), in: Self.antiDeadZoneRange, else: d.antiDeadZone)
+        smoothing = defaults.string(forKey: Self.smoothingKey).flatMap(GyroSmoothingChoice.init(rawValue:)) ?? d.smoothing
     }
 
     /// A number key: a number, or a String that reads as one (the driver's `set:gyro.sensitivity=1.5` stores "1.5").
@@ -168,17 +192,19 @@ public struct GyroSettings: Codable, Equatable, Sendable {
         return v
     }
 
-    /// What HostIOKit GyroAim takes.
-    public var aimConfig: GyroAim.Config {
+    /// What HostIOKit GyroAim takes, reading `device`'s gyro (the smoothing is resolved for it).
+    public func aimConfig(device: GyroDevice) -> GyroAim.Config {
         GyroAim.Config(output: output, turnAxis: turnAxis, sensitivity: sensitivity, verticalRatio: verticalRatio,
-                       invertX: invertX, invertY: invertY, antiDeadZone: antiDeadZone)
+                       invertX: invertX, invertY: invertY, antiDeadZone: antiDeadZone,
+                       smoothing: smoothing.smoothing(for: device))
     }
 
-    /// One line for the logs: `output=mouse source=auto sensitivity=1.0 verticalRatio=1.0 turnAxis=playerSpace invert=-- pause=none`,
-    /// with ` antiDeadZone=0.27` after it for the right stick.
+    /// One line for the logs: `output=mouse source=auto sensitivity=1.0 verticalRatio=1.0 turnAxis=playerSpace invert=-- pause=none
+    /// smoothing=auto`, with ` antiDeadZone=0.27` after it for the right stick.
     public var summary: String {
         "output=\(output.rawValue) source=\(source.rawValue) sensitivity=\(sensitivity) verticalRatio=\(verticalRatio) "
             + "turnAxis=\(turnAxis.rawValue) invert=\(invertX ? "x" : "-")\(invertY ? "y" : "-") pause=\(pauseButton.name)"
+            + " smoothing=\(smoothing.rawValue)"
             + (output == .rightStick ? " antiDeadZone=\(antiDeadZone)" : "")
     }
 
@@ -201,13 +227,14 @@ public struct GameGyro: Codable, Equatable, Sendable {
     public var invertY: Bool?
     public var pauseButton: GyroPauseButton?
     public var antiDeadZone: Double?
+    public var smoothing: GyroSmoothingChoice?
 
     public init(output: GyroOutput? = nil, source: GyroSource? = nil, sensitivity: Double? = nil, verticalRatio: Double? = nil,
                 turnAxis: GyroTurnAxis? = nil, invertX: Bool? = nil, invertY: Bool? = nil, pauseButton: GyroPauseButton? = nil,
-                antiDeadZone: Double? = nil) {
+                antiDeadZone: Double? = nil, smoothing: GyroSmoothingChoice? = nil) {
         self.output = output; self.source = source; self.sensitivity = sensitivity; self.verticalRatio = verticalRatio
         self.turnAxis = turnAxis; self.invertX = invertX; self.invertY = invertY; self.pauseButton = pauseButton
-        self.antiDeadZone = antiDeadZone
+        self.antiDeadZone = antiDeadZone; self.smoothing = smoothing
     }
 
     public var isEmpty: Bool { self == GameGyro() }
@@ -219,7 +246,8 @@ public struct GameGyro: Codable, Equatable, Sendable {
                      verticalRatio: GyroSettings.kept(verticalRatio, in: GyroSettings.verticalRatioRange, else: d.verticalRatio),
                      turnAxis: turnAxis ?? d.turnAxis, invertX: invertX ?? d.invertX, invertY: invertY ?? d.invertY,
                      pauseButton: pauseButton ?? d.pauseButton,
-                     antiDeadZone: GyroSettings.kept(antiDeadZone, in: GyroSettings.antiDeadZoneRange, else: d.antiDeadZone))
+                     antiDeadZone: GyroSettings.kept(antiDeadZone, in: GyroSettings.antiDeadZoneRange, else: d.antiDeadZone),
+                     smoothing: smoothing ?? d.smoothing)
     }
 }
 

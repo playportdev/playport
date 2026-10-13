@@ -43,7 +43,7 @@
 //                              "controller","sensitivity":0.05-20 (1.5 by default),"verticalRatio":0-4,
 //                              "turnAxis":"playerSpace"|"yaw"|"roll","invertX","invertY":
 //                              true|false,"pauseButton":"none"|"pad:<button>","antiDeadZone":
-//                              0-0.9), each key left out following the gyro.* defaults;
+//                              0-0.9,"smoothing":"auto"|"off"|"light"|"normal"), each key left out following the gyro.* defaults;
 //                              "controllerMap" its controller map (PlayportKit ControllerMap:
 //                              {"mode":"controller"|"keyboardMouse"|"custom","table":{INPUT:
 //                              ACTION,...}}, a custom map without a table starting as the

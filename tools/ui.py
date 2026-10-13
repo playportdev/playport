@@ -179,7 +179,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          "verticalRatio":0-4, "turnAxis":"playerSpace"|"yaw"|"roll", "invertX"/"invertY":
                          true|false, "pauseButton":"none"|"pad:BUTTON" (a b x y lb rb lt rt start back ls rs
                          up down left right), "antiDeadZone":0-0.9 (right stick: where its deflection starts,
-                         0.27 by default). Example: --controls 'app-620:{"gyro":{"output":"mouse"}}'
+                         0.27 by default), "smoothing":"auto"|"off"|"light"|"normal" (auto, the default: off for a
+                         controller's gyro, normal for the iPhone's). Example: --controls 'app-620:{"gyro":{"output":"mouse"}}'
                          "controllerMap" is the game's controller map (PlayportKit ControllerMap), what a
                          physical controller (and --pad's scripted pad, not the on-screen controls) does:
                          {"mode":"controller"} (the default: an XInput pad), {"mode":"keyboardMouse"} (left
@@ -423,6 +424,7 @@ def number(v, lo, hi):
     return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
 
 
+GYRO_SMOOTHING = ("auto", "off", "light", "normal")   # PlayportKit GyroSmoothingChoice
 # PlayportKit GyroPauseButton: none, or a pad button (HostIOKit PadControl, not a stick).
 GYRO_PAUSE = ("none",) + tuple("pad:" + b for b in "a b x y lb rb lt rt start back ls rs up down left right".split())
 
@@ -431,14 +433,15 @@ def gyro_ok(g):
     """Whether g is a PlayportKit GameGyro as JSON (--controls' "gyro"): only its keys, each valid."""
     return isinstance(g, dict) \
         and set(g) <= {"output", "source", "sensitivity", "verticalRatio", "turnAxis", "invertX", "invertY", "pauseButton",
-                   "antiDeadZone"} \
+                   "antiDeadZone", "smoothing"} \
         and g.get("output", "off") in ("off", "mouse", "rightStick") \
         and g.get("source", "auto") in ("auto", "phone", "controller") \
         and number(g.get("sensitivity", 1), 0.05, 20) and number(g.get("verticalRatio", 1), 0, 4) \
         and number(g.get("antiDeadZone", 0.27), 0, 0.9) \
         and g.get("turnAxis", "playerSpace") in ("playerSpace", "yaw", "roll") \
         and all(isinstance(g.get(k, False), bool) for k in ("invertX", "invertY")) \
-        and g.get("pauseButton", "none") in GYRO_PAUSE
+        and g.get("pauseButton", "none") in GYRO_PAUSE \
+        and g.get("smoothing", "auto") in GYRO_SMOOTHING
 
 
 # PlayportKit ControllerMap / HostIOKit ControllerBindings: a table's inputs and actions, by name.
@@ -638,7 +641,8 @@ def parse(argv=None):
             p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on), "
                     "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
                     "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
-                    "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9) and controllerMap "
+                    "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9, smoothing auto|off|light|normal) "
+                    "and controllerMap "
                     "(an object: mode controller|keyboardMouse|custom, table INPUT:ACTION) and lookSpeed (0.1-8) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None

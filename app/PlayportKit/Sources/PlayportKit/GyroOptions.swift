@@ -13,13 +13,14 @@
 //   choices; a value between them (from `controls:` or `set:`) shows as itself
 //   and steps from the nearest.
 // - The anti-dead-zone row shows only while the output is Right stick (`isShown`).
+// - Smoothing's Auto depends on the gyro read (`GyroText.smoothingInUse`).
 
 import Foundation
 import HostIOKit
 
 /// A row of the Gyro aim page, in the page's order.
 public enum GyroRow: String, CaseIterable, Sendable {
-    case output, source, pauseButton, sensitivity, antiDeadZone, verticalRatio, turnAxis, invertX, invertY
+    case output, source, pauseButton, sensitivity, antiDeadZone, smoothing, verticalRatio, turnAxis, invertX, invertY
 
     public var title: String {
         switch self {
@@ -28,6 +29,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .pauseButton: "Pause button"
         case .sensitivity: "Sensitivity"
         case .antiDeadZone: "Anti-dead zone"
+        case .smoothing: "Smoothing"
         case .verticalRatio: "Up and down"
         case .turnAxis: "Turn with"
         case .invertX: "Invert left and right"
@@ -43,6 +45,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .pauseButton: GyroSettings.pauseButtonKey
         case .sensitivity: GyroSettings.sensitivityKey
         case .antiDeadZone: GyroSettings.antiDeadZoneKey
+        case .smoothing: GyroSettings.smoothingKey
         case .verticalRatio: GyroSettings.verticalRatioKey
         case .turnAxis: GyroSettings.turnAxisKey
         case .invertX: GyroSettings.invertXKey
@@ -67,6 +70,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .pauseButton: GyroSteps.pauseButtons.map { ($0.name, GyroText.pauseButton($0)) }
         case .sensitivity: GyroSteps.sensitivity.map { (String($0), GyroText.sensitivity($0)) }
         case .antiDeadZone: GyroSteps.antiDeadZone.map { (String($0), GyroText.antiDeadZone($0)) }
+        case .smoothing: GyroSmoothingChoice.allCases.map { ($0.rawValue, GyroText.smoothing($0)) }
         case .verticalRatio: GyroSteps.verticalRatio.map { (String($0), GyroText.verticalRatio($0)) }
         case .turnAxis: GyroTurnAxis.allCases.map { ($0.rawValue, GyroText.turnAxis($0)) }
         case .invertX, .invertY: [("false", "Off"), ("true", "On")]
@@ -81,6 +85,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .pauseButton: s.pauseButton.name
         case .sensitivity: String(s.sensitivity)
         case .antiDeadZone: String(s.antiDeadZone)
+        case .smoothing: s.smoothing.rawValue
         case .verticalRatio: String(s.verticalRatio)
         case .turnAxis: s.turnAxis.rawValue
         case .invertX: String(s.invertX)
@@ -106,6 +111,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .pauseButton: GyroText.pauseButton(s.pauseButton)
         case .sensitivity: GyroText.sensitivity(s.sensitivity)
         case .antiDeadZone: GyroText.antiDeadZone(s.antiDeadZone)
+        case .smoothing: GyroText.smoothing(s.smoothing)
         case .verticalRatio: GyroText.verticalRatio(s.verticalRatio)
         case .turnAxis: GyroText.turnAxis(s.turnAxis)
         case .invertX: s.invertX ? "On" : "Off"
@@ -129,6 +135,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .pauseButton: g.pauseButton != nil
         case .sensitivity: g.sensitivity != nil
         case .antiDeadZone: g.antiDeadZone != nil
+        case .smoothing: g.smoothing != nil
         case .verticalRatio: g.verticalRatio != nil
         case .turnAxis: g.turnAxis != nil
         case .invertX: g.invertX != nil
@@ -145,6 +152,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .pauseButton: g.pauseButton = id.flatMap(GyroPauseButton.init(name:))
         case .sensitivity: g.sensitivity = id.flatMap(Double.init)
         case .antiDeadZone: g.antiDeadZone = id.flatMap(Double.init)
+        case .smoothing: g.smoothing = id.flatMap(GyroSmoothingChoice.init(rawValue:))
         case .verticalRatio: g.verticalRatio = id.flatMap(Double.init)
         case .turnAxis: g.turnAxis = id.flatMap(GyroTurnAxis.init(rawValue:))
         case .invertX: g.invertX = id.flatMap(Bool.init)
@@ -228,6 +236,30 @@ public enum GyroText {
     /// `27%`, `None` for 0.
     public static func antiDeadZone(_ v: Double) -> String {
         v <= 0 ? "None" : String(format: "%.0f%%", v * 100)
+    }
+
+    public static func smoothing(_ c: GyroSmoothingChoice) -> String {
+        switch c {
+        case .auto: "Auto"
+        case .off: smoothing(GyroSmoothing.off)
+        case .light: smoothing(GyroSmoothing.light)
+        case .normal: smoothing(GyroSmoothing.normal)
+        }
+    }
+
+    public static func smoothing(_ l: GyroSmoothing) -> String {
+        switch l {
+        case .off: "Off"
+        case .light: "Light"
+        case .normal: "Normal"
+        }
+    }
+
+    /// The smoothing row's value: `Auto · Off` while Auto reads a controller's gyro, `Light`; `Auto`
+    /// alone when no gyro can be read now.
+    public static func smoothingInUse(_ c: GyroSmoothingChoice, device: GyroDevice?) -> String {
+        guard c == .auto, let device else { return smoothing(c) }
+        return "Auto · " + smoothing(c.smoothing(for: device))
     }
 
     /// `0.8× of across`.

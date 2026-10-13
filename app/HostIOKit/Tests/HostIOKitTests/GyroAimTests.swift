@@ -130,6 +130,37 @@ final class GyroAimTests: XCTestCase {
         XCTAssertEqual(fast.settled, full(0.5), accuracy: 1e-12)
     }
 
+    /// Smoothing Off passes every sample as it is, even the slowest.
+    func testSmoothingOffPassesSamplesStraightThrough() {
+        var aim = GyroAim(config: .init(output: .rightStick, turnAxis: .yaw, smoothing: .off))
+        Self.run(&aim, from: 0, seconds: 0.2) { _ in .zero }
+        let rates = [0.005, 0.02, 0.05, 0.01, 0.3, 0.001]
+        for (i, rate) in rates.enumerated() {
+            let o = aim.add(GyroSample(time: 0.2 + Double(i) / Self.hz, rate: GyroVector(x: rate / 2, y: rate, z: 0)))
+            let s = Self.stick(o)
+            XCTAssertEqual(s.x, -rate * Self.degrees / GyroAim.stickFullScale, accuracy: 1e-12, "rate \(rate)")
+            XCTAssertEqual(s.y, rate / 2 * Self.degrees / GyroAim.stickFullScale, accuracy: 1e-12, "rate \(rate)")
+        }
+    }
+
+    /// On a slow ramp (under every threshold), Light lags less than Normal, and Off not at all.
+    func testLightSmoothingLagsLessThanNormalOnASlowRamp() {
+        func lag(_ smoothing: GyroSmoothing) -> Double {
+            var aim = GyroAim(config: .init(output: .rightStick, turnAxis: .yaw, smoothing: smoothing))
+            Self.run(&aim, from: 0, seconds: 0.2) { _ in .zero }
+            // 0 to 0.015 rad/s over 0.3 s: slower than Light's lower threshold (0.02).
+            let out = Self.run(&aim, from: 0.2, seconds: 0.3) { t in GyroVector(x: 0, y: 0.05 * (t - 0.2), z: 0) }
+            XCTAssertFalse(aim.calibrated)
+            let last = 0.05 * Double(Int((0.3 * Self.hz).rounded()) - 1) / Self.hz   // the last sample's rate
+            return Self.stick(out.last).x - (-last * Self.degrees / GyroAim.stickFullScale)
+        }
+        let off = lag(.off), light = lag(.light), normal = lag(.normal)
+        XCTAssertEqual(off, 0, accuracy: 1e-12)
+        // The output trails the input (the stick's x is the negative turn, so a lag is positive).
+        XCTAssertGreaterThan(light, 1e-6)
+        XCTAssertGreaterThan(normal, light * 1.8, "Normal's window is twice Light's")
+    }
+
     func testMouseDeltasAreProportionalAndTheRemainderIsCarried() {
         func total(rate: Double, seconds: Double, sensitivity: Double) -> (sum: Int, steps: [Int32], exact: Double) {
             var aim = GyroAim(config: .init(output: .mouse, turnAxis: .yaw, sensitivity: sensitivity))

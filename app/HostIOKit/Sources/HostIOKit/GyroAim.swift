@@ -25,10 +25,12 @@
 ///   gravity, relaxed by `playerSpaceRelax` toward the yaw-and-roll rate so a
 ///   steep tilt still turns fully. Yaw takes the device's y alone, roll its z
 ///   (a steering wheel). The vertical is always the device's x (pitch).
-/// - **Smoothing.** Soft tiered: speeds under `smoothingLow` are the average
-///   over the last `smoothingWindow` seconds, speeds over `smoothingHigh`
-///   pass as they are, and between them a blend. It steadies a held aim
-///   without delaying a turn.
+/// - **Smoothing.** Soft tiered (`GyroSmoothing.normal`): speeds under
+///   `smoothingLow` are the average over the last `smoothingWindow` seconds,
+///   speeds over `smoothingHigh` pass as they are, and between them a blend.
+///   It steadies a held aim without delaying a turn. `light` halves the
+///   window and both thresholds; `off` passes every sample as it is (a
+///   controller's gyro felt delayed with it: touch controls U).
 /// - **Mouse.** Angle × `mouseCountsPerDegree` × sensitivity, in whole counts
 ///   with the remainder carried to the next sample: linear, no acceleration,
 ///   no dead zone.
@@ -75,16 +77,18 @@ public struct GyroAim: Sendable {
         public var invertY: Bool
         /// Right stick only: where a deflection starts, 0..<1 (0: none).
         public var antiDeadZone: Double
+        public var smoothing: GyroSmoothing
 
         public init(output: GyroOutput = .off, turnAxis: GyroTurnAxis = .playerSpace, sensitivity: Double = 1,
-                    verticalRatio: Double = 1, invertX: Bool = false, invertY: Bool = false, antiDeadZone: Double = 0) {
+                    verticalRatio: Double = 1, invertX: Bool = false, invertY: Bool = false, antiDeadZone: Double = 0,
+                    smoothing: GyroSmoothing = .normal) {
             self.output = output; self.turnAxis = turnAxis; self.sensitivity = sensitivity
             self.verticalRatio = verticalRatio; self.invertX = invertX; self.invertY = invertY
-            self.antiDeadZone = antiDeadZone
+            self.antiDeadZone = antiDeadZone; self.smoothing = smoothing
         }
     }
 
-    /// A change of output or sensitivity drops the carried remainder and the smoothing.
+    /// A change of any setting drops the carried remainder and the smoothing.
     public var config: Config {
         didSet { if config != oldValue { motion.reset(); smoothing = [] } }
     }
@@ -218,10 +222,17 @@ public struct GyroAim: Sendable {
     }
 
     private mutating func smooth(_ aim: (x: Double, y: Double), time: Double) -> (x: Double, y: Double) {
+        let scale: Double
+        switch config.smoothing {
+        case .off: return aim
+        case .light: scale = 0.5
+        case .normal: scale = 1
+        }
+        let low = Self.smoothingLow * scale, high = Self.smoothingHigh * scale
         let speed = (aim.x * aim.x + aim.y * aim.y).squareRoot()
-        let direct = max(0, min(1, (speed - Self.smoothingLow) / (Self.smoothingHigh - Self.smoothingLow)))
+        let direct = max(0, min(1, (speed - low) / (high - low)))
         smoothing.append((time, (aim.x * (1 - direct), aim.y * (1 - direct))))
-        while let f = smoothing.first, f.time <= time - Self.smoothingWindow { smoothing.removeFirst() }
+        while let f = smoothing.first, f.time <= time - Self.smoothingWindow * scale { smoothing.removeFirst() }
         var sx = 0.0, sy = 0.0
         for e in smoothing { sx += e.aim.x; sy += e.aim.y }
         let n = Double(smoothing.count)
@@ -232,6 +243,12 @@ public struct GyroAim: Sendable {
 /// What gyro aim drives.
 public enum GyroOutput: String, Codable, CaseIterable, Sendable {
     case off, mouse, rightStick
+}
+
+/// How much GyroAim steadies slow motion: none, or its soft tiered smoothing
+/// over half or all of its window and thresholds.
+public enum GyroSmoothing: String, Codable, CaseIterable, Sendable {
+    case off, light, normal
 }
 
 /// Which rotation turns the view left and right.
