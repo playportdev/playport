@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The on-screen controls' settings (PlayportKit Controls.swift): Settings ›
 // Controls' defaults under their own UserDefaults keys (ControlsDefaults), and
-// each game's own (GameControls) as JSON under one key, by catalogue id. Gyro
+// each game's own (GameControls) as JSON under one key, by catalogue id, read
+// record by record (PlayportKit GameControlsRecords: a record this build cannot
+// read is written back as it came; a value that is not a JSON object at all is
+// never written over). Gyro
 // aim (PlayportKit GyroSettings.swift) is stored the same way: its defaults under
 // the `gyro.*` keys, a game's own (GameGyro) in its GameControls record.
 // Unlike launch settings, a change applies at once while the game runs
@@ -16,19 +19,21 @@ import PlayportKit
 final class ControlsStore: ObservableObject {
     static let shared = ControlsStore()
 
-    /// Every game's own controls, JSON [title id: GameControls].
+    /// Every game's own controls, JSON [title id: GameControls] (GameControlsRecords).
     static let gamesKey = "controls.games"
 
     @Published private(set) var defaults = ControlsDefaults(.standard)
     /// Settings › Controls › Gyro aim (the `gyro.*` keys).
     @Published private(set) var gyroDefaults = GyroSettings(.standard)
-    @Published private var games: [String: GameControls] {
-        didSet { UserDefaults.standard.set(try? JSONEncoder().encode(games), forKey: Self.gamesKey) }
-    }
+    @Published private var games: GameControlsRecords
+    /// What is stored under `gamesKey` could not be read at all: a change applies, but is not saved over it.
+    private var gamesUnreadable = false
     private var observer: NSObjectProtocol?
 
     private init() {
-        games = Self.loadGames()
+        let loaded = Self.loadGames()
+        games = loaded ?? GameControlsRecords()
+        gamesUnreadable = loaded == nil
         // Settings' rows and the driver's set: write the keys themselves.
         observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
                                                           queue: .main) { _ in
@@ -36,9 +41,10 @@ final class ControlsStore: ObservableObject {
         }
     }
 
-    private static func loadGames() -> [String: GameControls] {
-        UserDefaults.standard.data(forKey: gamesKey)
-            .flatMap { try? JSONDecoder().decode([String: GameControls].self, from: $0) } ?? [:]
+    /// The stored records; none stored is empty, nil when what is stored is not a JSON object.
+    private static func loadGames() -> GameControlsRecords? {
+        guard let stored = UserDefaults.standard.object(forKey: gamesKey) else { return GameControlsRecords() }
+        return (stored as? Data).flatMap(GameControlsRecords.init(json:))
     }
 
     private func reload() {
@@ -46,8 +52,10 @@ final class ControlsStore: ObservableObject {
         if d != defaults { defaults = d }
         let gd = GyroSettings(.standard)
         if gd != gyroDefaults { gyroDefaults = gd }
+        // Reading never writes: an unreadable value keeps what this session holds.
         let g = Self.loadGames()
-        if g != games { games = g }
+        gamesUnreadable = g == nil
+        if let g, g != games { games = g }
     }
 
     func game(_ id: String) -> GameControls { games[id] ?? GameControls() }
@@ -57,6 +65,8 @@ final class ControlsStore: ObservableObject {
 
     /// A game's own controls; one left with nothing set is dropped.
     func setGame(_ id: String, _ c: GameControls) {
-        games[id] = c.isEmpty ? nil : c.normalized
+        games.set(id, c)
+        guard !gamesUnreadable, let json = try? games.json() else { return }
+        UserDefaults.standard.set(json, forKey: Self.gamesKey)
     }
 }
