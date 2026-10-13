@@ -43,7 +43,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
   120 → 126 pt (face hit 40 → 42 pt, drawn 1 pt inside rather than 2, so 36 → 40 pt; the
   d-pad's arms the same), the Above right-stick zone 210 × 120 → 210 × 114. The 5.4-inch
   safe height (354 pt) is the limit: larger faces would need smaller bumpers (an owner
-  call). The next commit ("touch controls 2a: gyro aim on the host"): HostIOKit `GyroAim`
+  call). `3f10fc4` ("touch controls 2a: gyro aim on the host"): HostIOKit `GyroAim`
   (calibration, player space, smoothing, mouse and right-stick outputs, pause), its output
   into `InputMixer` (right stick added and clamped; mouse as `move(dx, dy)`), PlayportKit
   `GyroSettings` and `GameGyro`, with host tests; nothing reads a sensor yet.
@@ -193,7 +193,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
      `"controllerMap"`; the `controls: controller map MODE for PAD (slot N)` log line. Dev IPA
      `1e83233a…` built and verified, not installed. The owner allowed phase 3's host chunks
      (3a, 3b) to start while the phone is paused (2026-10-13). 3c and the phase 3 sign-off
-     still wait for 2f's phone session and the owner's phase 2 sign-off. **3b next.**
+     still wait for 2f's phone session and the owner's phase 2 sign-off.
   9. **3b, host done (no phone run):** the Controller page and the ActionPicker. Owner,
      2026-10-13: the preset's d-pad stays clockwise from up (1 up, 2 right, 3 down, 4 left), and
      the right stick's mouse-look speed becomes a per-game "Look speed" row (Keyboard & mouse
@@ -207,17 +207,22 @@ proposed answer unless the owner says otherwise before the phase that needs them
      connected (its rows scroll where they do not fit), `open:ID#controller`,
      `open:settings#controller`. Dev IPA `2c985b4d…` built and verified, not installed. **Next:** the
      phone sessions once the owner unpauses it: 2f's, then 3c.
-  10. **R (review fixes), running:** the phone is back (owner, 2026-10-13, DualShock 4
-     connected), so R ends with one phone session that combines 2f's and 3c's scripts on R's
-     IPA; the controller's physical steps are done by the owner. two read-only reviews of `412de5f..16ffafc`
-     (owner asked, 2026-10-13; reports left in the build area under
-     `.work/agent-notes/pla-13-v2/review/`) found no blocker. Fix before the sign-offs:
-     one unreadable record in `controls.games` erases every game's controls; a pad button
-     mapped to `playport:menu` is read again as a menu press; NaN gyro samples can trap in
-     mouse mode; the gyro chip is never drawn with the layout Off or a controller connected;
-     Y wipes an edited Custom table unasked. Also the low findings, and the plan body's text
-     still describing tap-as-click and the Playport button. Two controllers sharing one
-     key or button release each other early: a note only, tracked in [PLA-339](https://linear.app/playportdev/issue/PLA-339).
+  10. **R (review fixes), host done:** two read-only reviews of `412de5f..16ffafc` (owner
+     asked, 2026-10-13; reports under `.work/agent-notes/pla-13-v2/review/`) found no blocker;
+     their findings are fixed with host tests. `5a19de4`: `controls.games` read record by record
+     (PlayportKit `GameControlsRecords`): an unreadable record is written back untouched, and
+     reading never writes. `33dd958`: a pad button mapped to `playport:menu` is not read again
+     as a menu press (`QuickMenuControl.opened(holding:)`); non-finite gyro samples dropped;
+     mapped pads held while the guest's windows take the pads' presses before the first frame;
+     a controller's gyro aim keyed on the pad; the mapped wheel only while active; GyroAim
+     outside the pad lock; a chord over its key already down sends key up, modifiers, key.
+     `3159bdd`: the gyro chip in its own view (shown with the layout Off or a controller
+     connected too); Y over an edited Custom table asks first (`ControllerMapConfirm.useDefault`);
+     Reset all's Keep changes nothing; the Controller row's "Default ·"; two stale texts.
+     Two sources sharing one key or button release each other early: a note only, tracked in
+     [PLA-339](https://linear.app/playportdev/issue/PLA-339). Dev IPA `7566e31a…` built and
+     verified. **Next:** one phone session on it that combines 2f's and 3c's scripts (the
+     phone is back, DualShock 4 connected; the controller's physical steps are the owner's).
   11. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
   12. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
@@ -332,7 +337,9 @@ the amber dot, and Y puts it back to the default, as other options do.
 `RootView`:
 
 - It hit-tests only its controls and look areas. Every other touch falls through to
-  `GameSurfaceView`, which keeps today's tap-as-click.
+  `GameSurfaceView`, which keeps today's tap-as-click. *Superseded (owner, 2026-10-13,
+  Run state queue item 5): while the controls show, touches outside them are ignored; a
+  three-finger tap opens the menu.*
 - In the Gamepad layout, the lower left third is the floating-stick zone.
 - The SwiftUI screens (Game options › Controls, Gyro aim, Controller,
   Settings › Controls, the in-game menu's Controls panel, the editor and the action
@@ -353,9 +360,13 @@ release` must find no driver names in the release executable.
 
 **Decision record.** **0075 On-screen controls, input mapping and gyro** covers:
 
+*Superseded in part: phase 6 writes it (as 0105) from the owner's decisions in Run
+state, which replace this list where they differ.*
+
 - automatic display
 - the Playport button as a second way to open the in-game menu. This adds to 0034,
-  where only Home opens it.
+  where only Home opens it. *Superseded (owner feedback on phase 1, item 4): no
+  Playport button; a three-finger tap anywhere opens the menu.*
 - actions as the single model
 - gyro always on when enabled
 - the driver's new actions, under 0012.
@@ -510,7 +521,9 @@ result. Phases 1–3 make a releasable first cut.
   game drains it. Coalesce mouse deltas per frame if `[winios]` reports drops.
 - **Touch passes through to the game.** Touches outside controls still click the
   game. With the floating-stick zone, a tap in the lower left no longer clicks there.
-  This is acceptable for Gamepad; Point & click has no zone.
+  This is acceptable for Gamepad; Point & click has no zone. *Superseded (owner,
+  2026-10-13, Run state queue item 5): touches outside the shown controls are ignored;
+  with the layout Off, touch is a mouse as before.*
 - **Controller gyro coverage** depends on what GameController reports for each pad.
   Pads without rotation rate fall back to the iPhone's gyro, and the Gyro aim page
   says which source is in use.
