@@ -99,7 +99,11 @@ proposed answer unless the owner says otherwise before the phase that needs them
      sensitivity, the overlay chip.
   4. **2d (phone):** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
-     chunk follows.
+     chunk follows. Also **measure the gyro event timing** (owner, 2026-10-13): the
+     iPhone's real device-motion rate (and whether raw gyro goes higher), a controller's
+     gyro rate if one is connected, `winios_pointer` moves per second and per frame
+     with the 125 Hz coalescer, the delay it adds, and the ring's fill. The owner then
+     decides on the cap (keep 125 Hz, or pass every controller sample at about 250 Hz).
   5. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
   6. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
