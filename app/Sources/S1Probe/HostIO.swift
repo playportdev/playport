@@ -409,6 +409,8 @@ final class HostIO {
                 } else {
                     mouseButton(down: false, downFlag: flags >> 1, upFlag: flags)
                 }
+            case .move(let dx, let dy):
+                if !menuUp { winios_pointer(dx, dy, Pointer.move, 0) }
             case .playport(.menu):
                 InGameMenu.shared.open()
             }

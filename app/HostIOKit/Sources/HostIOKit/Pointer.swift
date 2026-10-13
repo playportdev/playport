@@ -24,7 +24,7 @@ public enum Pointer {
 
 /// Mouse motion arrives as fractional deltas (GCMouse); Wine takes whole
 /// pixels. Whole parts go out, the rest is carried, so slow motion is not lost.
-public struct RelativeMotion {
+public struct RelativeMotion: Sendable {
     private var rx = 0.0, ry = 0.0
     public init() {}
 

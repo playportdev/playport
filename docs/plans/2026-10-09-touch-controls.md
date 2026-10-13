@@ -39,7 +39,15 @@ proposed answer unless the owner says otherwise before the phase that needs them
 - **Phase 1 signed off by the owner (2026-10-13)** on IPA `67d0938d…` (1c), with one tweak:
   A/B/X/Y a bit bigger. The tweak is a separate commit in 2a, checked on the host and seen
   on the phone in 2d.
-- **Running:** 2a (with the A/B/X/Y tweak).
+- **Done: 2a** (host only; no phone run). `079dce7`: A/B/X/Y a bit bigger: both clusters
+  120 → 126 pt (face hit 40 → 42 pt, drawn 1 pt inside rather than 2, so 36 → 40 pt; the
+  d-pad's arms the same), the Above right-stick zone 210 × 120 → 210 × 114. The 5.4-inch
+  safe height (354 pt) is the limit: larger faces would need smaller bumpers (an owner
+  call). The next commit ("touch controls 2a: gyro aim on the host"): HostIOKit `GyroAim`
+  (calibration, player space, smoothing, mouse and right-stick outputs, pause), its output
+  into `InputMixer` (right stick added and clamped; mouse as `move(dx, dy)`), PlayportKit
+  `GyroSettings` and `GameGyro`, with host tests; nothing reads a sensor yet.
+- **Running next:** 2b.
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -69,9 +77,9 @@ proposed answer unless the owner says otherwise before the phase that needs them
        A/B/X/Y in both cases.
   4. No outlines on the stick zones.
 - **Queue:**
-  1. **2a, running:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host
+  1. **2a, done:** HostIOKit `GyroAim` and PlayportKit `GyroSettings`, with synthetic host
      tests; plus the A/B/X/Y size tweak as its own commit.
-  2. **2b:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
+  2. **2b, next:** sources (CoreMotion, `GCController.motion`, auto), sensor lifecycle, the `gyro:`
      driver action.
   3. **2c:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
