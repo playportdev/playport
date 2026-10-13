@@ -253,9 +253,18 @@ proposed answer unless the owner says otherwise before the phase that needs them
        stick and d-pad ring every row; A edits the ringed input; B goes back; Y resets the
        row; LB/RB cycle the mode at the top. This supersedes 3b's "press a physical button
        to select its row".
-  13. **U (fixes from the owner's play), running:** the three items above plus the
-     cosmetic list below; one short phone session; then the owner's phase 2 and phase 3
-     sign-offs, which wait for U.
+  13. **U (fixes from the owner's play), done** ([evidence](../evidence/2026-10-13-touch-controls-U.md);
+     dev IPA `5faec414…`, installed). `3052fe5`: the gyro Smoothing row (Auto, Off, Light,
+     Normal; Auto is Off for a controller, Normal for the iPhone). `01942c9`: Keyboard &
+     mouse's d-pad presses the arrow keys; Portal 2's Esc menu moved with them on the phone.
+     `c3920bd`: the Controller page's ring (PlayportKit `ControllerMapNav`: every item in every
+     mode, LB/RB the mode, A edits with "Edit a copy?" or "Switch to Custom?" first outside
+     Custom, Y resets, B back), which **supersedes 3b's press-a-button-to-ring-its-row capture**
+     (removed); the in-game Controls panel opens the full Controller page and its ActionPicker
+     over the paused game (A on the Controller row, its "Edit controller…", or choosing Custom);
+     and the cosmetic list below (the scripted pad is named "Scripted pad" in dev). Hollow
+     Knight `first-frame+10` passed; both games' own controls restored by DriverUndo. **Next
+     (queue head): the owner's phase 2 and phase 3 sign-offs.**
   14. **Phase 2 and phase 3 sign-offs (owner).** Then stop.
 - **Phone:** dev IPA `7566e31a…` (R) installed; unattended mode off (the owner is at the
   phone). Both games keep the owner's own controls, restored by DriverUndo after the 2f/3c
