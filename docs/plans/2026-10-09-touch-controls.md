@@ -207,7 +207,9 @@ proposed answer unless the owner says otherwise before the phase that needs them
      connected (its rows scroll where they do not fit), `open:ID#controller`,
      `open:settings#controller`. Dev IPA `2c985b4d…` built and verified, not installed. **Next:** the
      phone sessions once the owner unpauses it: 2f's, then 3c.
-  10. **R (review fixes), running, host only:** two read-only reviews of `412de5f..16ffafc`
+  10. **R (review fixes), running:** the phone is back (owner, 2026-10-13, DualShock 4
+     connected), so R ends with one phone session that combines 2f's and 3c's scripts on R's
+     IPA; the controller's physical steps are done by the owner. two read-only reviews of `412de5f..16ffafc`
      (owner asked, 2026-10-13; reports left in the build area under
      `.work/agent-notes/pla-13-v2/review/`) found no blocker. Fix before the sign-offs:
      one unreadable record in `controls.games` erases every game's controls; a pad button
