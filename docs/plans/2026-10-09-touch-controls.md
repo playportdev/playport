@@ -238,8 +238,20 @@ proposed answer unless the owner says otherwise before the phase that needs them
      the panel's "Controlle / r" wrap and the page's truncated Look speed row. Hollow Knight
      `first-frame+10` passed. **Next (queue head): the owner's phase 2 sign-off (phone and
      controller gyro, the 125 Hz cap) and phase 3 sign-off.**
-  12. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
-     a controller. Then stop.
+  12. **Owner play after 2f/3c (2026-10-13), settled:**
+     - The controller's gyro still feels a little delayed next to the phone's ("not major";
+       the phone's is perfect). **Smoothing becomes a per-game row** on the Gyro aim page:
+       Off / Light / Normal. Controllers default to Off, the phone keeps Normal.
+     - Keyboard & mouse plays Portal 2 but can't drive its menus. **The preset's d-pad
+       presses the arrow keys** (Up, Down, Left, Right) instead of 1–4; this supersedes the
+       earlier "1–4 clockwise". A stays Space.
+     - Choosing Custom in the in-game menu changes nothing visible, and the editor isn't
+       reachable there. **The in-game Controls panel opens the full Controller page and the
+       ActionPicker over the paused game;** choosing Custom goes straight into the editor.
+  13. **U (fixes from the owner's play), running:** the three items above plus the
+     cosmetic list below; one short phone session; then the owner's phase 2 and phase 3
+     sign-offs, which wait for U.
+  14. **Phase 2 and phase 3 sign-offs (owner).** Then stop.
 - **Phone:** dev IPA `7566e31a…` (R) installed; unattended mode off (the owner is at the
   phone). Both games keep the owner's own controls, restored by DriverUndo after the 2f/3c
   session: Portal 2 Gamepad, right stick Below, gyro Mouse 1.5×; Hollow Knight Gamepad 60%,
