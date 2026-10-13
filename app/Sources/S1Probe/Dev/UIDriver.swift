@@ -42,8 +42,8 @@
 //                              "output":"off"|"mouse"|"rightStick","source":"auto"|"phone"|
 //                              "controller","sensitivity":0.05-20,"verticalRatio":0-4,
 //                              "turnAxis":"playerSpace"|"yaw"|"roll","invertX","invertY":
-//                              true|false,"pauseButton":"none"|"pad:<button>"), each key left
-//                              out following the gyro.* defaults
+//                              true|false,"pauseButton":"none"|"pad:<button>","antiDeadZone":
+//                              0-0.9), each key left out following the gyro.* defaults
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
 //                              account, setup: the first-run checklist, signin: Sign in to

@@ -103,7 +103,7 @@ struct GyroAimPanel: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 2) {
-                        ForEach(GyroRow.allCases, id: \.self) { row in
+                        ForEach(GyroRow.allCases.filter { $0.isShown(in: now) }, id: \.self) { row in
                             gyroRow(row, own: own, now: now, defaults: defaults)
                         }
                         PadRow(id: "gyro:calibration", title: "Calibration", value: "Automatic · when still", style: .plain,
@@ -162,6 +162,7 @@ struct GyroAimPanel: View {
         case .output: "Always on while chosen: no button to hold"
         case .pauseButton: "Held, the aim stops (to recentre)"
         case .sensitivity: "Left and right change it"
+        case .antiDeadZone: "Where the stick starts: past the game's own dead zone"
         case .turnAxis: "Player space works however you hold it"
         default: nil
         }
@@ -172,6 +173,8 @@ struct GyroAimPanel: View {
         switch (row, id) {
         case (.output, "mouse"): "For games that aim with the mouse"
         case (.output, "rightStick"): "For games that read only a controller"
+        case (.antiDeadZone, "0.0"): "The stick starts at rest"
+        case (.antiDeadZone, "0.27"): "XInput's dead zone: most games"
         case (.source, "auto"): "A controller's gyro when it has one, else the iPhone's"
         case (.source, "controller"): "DualSense, DualShock 4 and others with a gyro"
         case (.turnAxis, "playerSpace"): "Turns about the world's up, however you hold it"
@@ -264,7 +267,7 @@ struct GyroDefaultsRows: View {
     var body: some View {
         let d = store.gyroDefaults
         PadSectionHeader(text: "Gyro aim").id("set:gyro")
-        ForEach(GyroRow.allCases, id: \.self) { row in
+        ForEach(GyroRow.allCases.filter { $0.isShown(in: d) }, id: \.self) { row in
             if row.isSwitch {
                 SettingsSwitchRow(id: Self.id(row), title: row.title, subtitle: nil,
                                   on: Binding(get: { row.id(in: store.gyroDefaults) == "true" },

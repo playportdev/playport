@@ -169,7 +169,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          "rightStick", "source":"auto"|"phone"|"controller", "sensitivity":0.05-20,
                          "verticalRatio":0-4, "turnAxis":"playerSpace"|"yaw"|"roll", "invertX"/"invertY":
                          true|false, "pauseButton":"none"|"pad:BUTTON" (a b x y lb rb lt rt start back ls rs
-                         up down left right). Example: --controls 'app-620:{"gyro":{"output":"mouse"}}'
+                         up down left right), "antiDeadZone":0-0.9 (right stick: where its deflection starts,
+                         0.27 by default). Example: --controls 'app-620:{"gyro":{"output":"mouse"}}'
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
@@ -404,10 +405,12 @@ GYRO_PAUSE = ("none",) + tuple("pad:" + b for b in "a b x y lb rb lt rt start ba
 def gyro_ok(g):
     """Whether g is a PlayportKit GameGyro as JSON (--controls' "gyro"): only its keys, each valid."""
     return isinstance(g, dict) \
-        and set(g) <= {"output", "source", "sensitivity", "verticalRatio", "turnAxis", "invertX", "invertY", "pauseButton"} \
+        and set(g) <= {"output", "source", "sensitivity", "verticalRatio", "turnAxis", "invertX", "invertY", "pauseButton",
+                   "antiDeadZone"} \
         and g.get("output", "off") in ("off", "mouse", "rightStick") \
         and g.get("source", "auto") in ("auto", "phone", "controller") \
         and number(g.get("sensitivity", 1), 0.05, 20) and number(g.get("verticalRatio", 1), 0, 4) \
+        and number(g.get("antiDeadZone", 0.27), 0, 0.9) \
         and g.get("turnAxis", "playerSpace") in ("playerSpace", "yaw", "roll") \
         and all(isinstance(g.get(k, False), bool) for k in ("invertX", "invertY")) \
         and g.get("pauseButton", "none") in GYRO_PAUSE
@@ -572,7 +575,7 @@ def parse(argv=None):
             p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on), "
                     "rightStick (off, below, above) and gyro (an object: output off|mouse|rightStick, source "
                     "auto|phone|controller, sensitivity 0.05-20, verticalRatio 0-4, turnAxis playerSpace|yaw|roll, "
-                    "invertX/invertY true|false, pauseButton none|pad:BUTTON) only")
+                    "invertX/invertY true|false, pauseButton none|pad:BUTTON, antiDeadZone 0-0.9) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:

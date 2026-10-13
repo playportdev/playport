@@ -184,6 +184,51 @@ final class GyroAimTests: XCTestCase {
         XCTAssertEqual(out(left, .init(output: .off)), GyroAimOutput.none)
     }
 
+    /// The right stick's anti-dead-zone (Portal 2 ate deflections of 0.33 and below: touch controls 2d).
+    func testTheAntiDeadZoneStartsTheStickPastTheGamesDeadZone() {
+        let a = 0.27
+        func last(_ rate: GyroVector, _ adz: Double, sensitivity: Double = 1) -> (x: Double, y: Double) {
+            var aim = GyroAim(config: .init(output: .rightStick, turnAxis: .yaw, sensitivity: sensitivity, antiDeadZone: adz))
+            return Self.stick(Self.run(&aim, from: 0, seconds: 0.25) { _ in rate }.last)
+        }
+        func length(_ p: (x: Double, y: Double)) -> Double { (p.x * p.x + p.y * p.y).squareRoot() }
+        // Zero stays zero, and a still device's residual under stickRest rests too.
+        XCTAssertEqual(GyroAim.past(antiDeadZone: a, x: 0, y: 0), .rightStick(x: 0, y: 0))
+        let residual = GyroAim.stickRest * 0.9 * GyroAim.stickFullScale / Self.degrees   // rad/s
+        XCTAssertEqual(length(last(GyroVector(x: 0, y: residual, z: 0), a)), 0)
+        // A tiny turn jumps just past the anti-dead-zone, in its own direction (turning left: the stick left).
+        let tiny = last(GyroVector(x: 0, y: 0.02, z: 0), a)
+        let d = 0.02 * Self.degrees / GyroAim.stickFullScale
+        XCTAssertEqual(tiny.x, -(a + d * (1 - a)), accuracy: 1e-12)
+        XCTAssertEqual(tiny.y, 0, accuracy: 1e-12)
+        XCTAssertGreaterThan(length(tiny), a)
+        // Full stays full.
+        XCTAssertEqual(length(last(GyroVector(x: 0, y: 10, z: 0), a)), 1, accuracy: 1e-12)
+        let unit = Self.stick(GyroAim.past(antiDeadZone: a, x: 0.6, y: -0.8))
+        XCTAssertEqual(unit.x, 0.6, accuracy: 1e-12)
+        XCTAssertEqual(unit.y, -0.8, accuracy: 1e-12)
+        // The direction is kept: a diagonal is scaled along itself.
+        let diagonal = last(GyroVector(x: 0.3, y: -0.4, z: 0), a)
+        let plain = last(GyroVector(x: 0.3, y: -0.4, z: 0), 0)
+        XCTAssertEqual(diagonal.x / diagonal.y, plain.x / plain.y, accuracy: 1e-9)
+        XCTAssertEqual(length(diagonal), a + length(plain) * (1 - a), accuracy: 1e-9)
+        // None: as before.
+        XCTAssertEqual(last(GyroVector(x: 0, y: 0.02, z: 0), 0).x, -d, accuracy: 1e-12)
+        // Mouse output ignores it.
+        var mouse = GyroAim(config: .init(output: .mouse, turnAxis: .yaw, antiDeadZone: a))
+        XCTAssertEqual(Self.mouseSum(Self.run(&mouse, from: 0, seconds: 0.25) { _ in .zero }).dx, 0)
+
+        // Through the mixer: added to the physical stick and clamped.
+        var m = InputMixer()
+        var p = PadValues()
+        p.rx = 20000
+        _ = m.physical(slot: 0, p)
+        guard case .set(let v) = m.gyro(GyroAim.past(antiDeadZone: a, x: 0.5, y: 0)).slot0 else { return XCTFail("set") }
+        XCTAssertEqual(v.rx, 32767)
+        guard case .set(let back) = m.gyro(GyroAim.past(antiDeadZone: a, x: 0, y: 0)).slot0 else { return XCTFail("set") }
+        XCTAssertEqual(back.rx, 20000)
+    }
+
     /// The phone tilted back 45°: a turn about the world's vertical shows on both its y and z.
     func testPlayerSpaceYawAndRollOnATiltedGravity() {
         let s = 0.5.squareRoot()

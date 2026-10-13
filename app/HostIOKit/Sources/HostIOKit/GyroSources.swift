@@ -85,8 +85,8 @@ public struct GyroMouseCoalescer: Sendable {
 /// What gyro aim did lately, for the log: one line per `interval` with motion in it.
 public struct GyroActivity: Sendable {
     public static let interval = 2.0
-    /// The smallest right-stick deflection that counts as motion (0.01 at the line's precision).
-    public static let stickMotion = 0.005
+    /// The smallest right-stick deflection that counts as motion (0.01 at the line's precision; GyroAim rests under it).
+    public static let stickMotion = GyroAim.stickRest
     private var since: Double?
     private var samples = 0
     private var dx = 0, dy = 0

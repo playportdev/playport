@@ -11,6 +11,9 @@
 //   iPhone's), iPhone or Controller.
 // - Sensitivity (a multiplier of GyroAim's scale), vertical ratio, turn axis
 //   (player space, yaw or roll), invert X and Y.
+// - Anti-dead-zone (right stick only): where the stick's deflection starts,
+//   past a game's own dead zone; 0.27 by default (XInput's right-stick dead
+//   zone, 8689/32767), 0 for none.
 // - Pause button: none by default; a pad button that, held, stops the aim
 //   (saved as `none` or an action name, `pad:lb`).
 //
@@ -84,10 +87,14 @@ public struct GyroSettings: Codable, Equatable, Sendable {
     public static let invertXKey = "gyro.invertX"
     public static let invertYKey = "gyro.invertY"
     public static let pauseButtonKey = "gyro.pauseButton"
+    public static let antiDeadZoneKey = "gyro.antiDeadZone"
 
     /// The sensitivities and vertical ratios a value is kept to.
     public static let sensitivityRange = 0.05...20.0
     public static let verticalRatioRange = 0.0...4.0
+    public static let antiDeadZoneRange = 0.0...0.9
+    /// XInput's right-stick dead zone (XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, 8689 of 32767), rounded.
+    public static let defaultAntiDeadZone = 0.27
 
     public var output = GyroOutput.off
     public var source = GyroSource.auto
@@ -97,15 +104,19 @@ public struct GyroSettings: Codable, Equatable, Sendable {
     public var invertX = false
     public var invertY = false
     public var pauseButton = GyroPauseButton.none
+    public var antiDeadZone = GyroSettings.defaultAntiDeadZone
 
     public init(output: GyroOutput = .off, source: GyroSource = .auto, sensitivity: Double = 1, verticalRatio: Double = 1,
                 turnAxis: GyroTurnAxis = .playerSpace, invertX: Bool = false, invertY: Bool = false,
-                pauseButton: GyroPauseButton = .none) {
+                pauseButton: GyroPauseButton = .none, antiDeadZone: Double = GyroSettings.defaultAntiDeadZone) {
         self.output = output; self.source = source; self.sensitivity = sensitivity; self.verticalRatio = verticalRatio
         self.turnAxis = turnAxis; self.invertX = invertX; self.invertY = invertY; self.pauseButton = pauseButton
+        self.antiDeadZone = antiDeadZone
     }
 
-    enum CodingKeys: String, CodingKey { case output, source, sensitivity, verticalRatio, turnAxis, invertX, invertY, pauseButton }
+    enum CodingKeys: String, CodingKey {
+        case output, source, sensitivity, verticalRatio, turnAxis, invertX, invertY, pauseButton, antiDeadZone
+    }
 
     /// Each field left out is its default; a number out of range is its default too.
     public init(from decoder: Decoder) throws {
@@ -120,6 +131,8 @@ public struct GyroSettings: Codable, Equatable, Sendable {
         invertX = try c.decodeIfPresent(Bool.self, forKey: .invertX) ?? d.invertX
         invertY = try c.decodeIfPresent(Bool.self, forKey: .invertY) ?? d.invertY
         pauseButton = try c.decodeIfPresent(GyroPauseButton.self, forKey: .pauseButton) ?? d.pauseButton
+        antiDeadZone = Self.kept(try c.decodeIfPresent(Double.self, forKey: .antiDeadZone), in: Self.antiDeadZoneRange,
+                                 else: d.antiDeadZone)
     }
 
     /// What `defaults` holds (Settings › Controls › Gyro aim), each key missing (or not understood) read as its default.
@@ -133,6 +146,7 @@ public struct GyroSettings: Codable, Equatable, Sendable {
         invertX = defaults.object(forKey: Self.invertXKey) as? Bool ?? d.invertX
         invertY = defaults.object(forKey: Self.invertYKey) as? Bool ?? d.invertY
         pauseButton = defaults.string(forKey: Self.pauseButtonKey).flatMap(GyroPauseButton.init(name:)) ?? d.pauseButton
+        antiDeadZone = Self.kept(Self.number(defaults, Self.antiDeadZoneKey), in: Self.antiDeadZoneRange, else: d.antiDeadZone)
     }
 
     /// A number key: a number, or a String that reads as one (the driver's `set:gyro.sensitivity=1.5` stores "1.5").
@@ -154,13 +168,15 @@ public struct GyroSettings: Codable, Equatable, Sendable {
     /// What HostIOKit GyroAim takes.
     public var aimConfig: GyroAim.Config {
         GyroAim.Config(output: output, turnAxis: turnAxis, sensitivity: sensitivity, verticalRatio: verticalRatio,
-                       invertX: invertX, invertY: invertY)
+                       invertX: invertX, invertY: invertY, antiDeadZone: antiDeadZone)
     }
 
-    /// One line for the logs: `output=mouse source=auto sensitivity=1.0 verticalRatio=1.0 turnAxis=playerSpace invert=-- pause=none`.
+    /// One line for the logs: `output=mouse source=auto sensitivity=1.0 verticalRatio=1.0 turnAxis=playerSpace invert=-- pause=none`,
+    /// with ` antiDeadZone=0.27` after it for the right stick.
     public var summary: String {
         "output=\(output.rawValue) source=\(source.rawValue) sensitivity=\(sensitivity) verticalRatio=\(verticalRatio) "
             + "turnAxis=\(turnAxis.rawValue) invert=\(invertX ? "x" : "-")\(invertY ? "y" : "-") pause=\(pauseButton.name)"
+            + (output == .rightStick ? " antiDeadZone=\(antiDeadZone)" : "")
     }
 
     /// Whether the pause button is held in a pad's values.
@@ -181,11 +197,14 @@ public struct GameGyro: Codable, Equatable, Sendable {
     public var invertX: Bool?
     public var invertY: Bool?
     public var pauseButton: GyroPauseButton?
+    public var antiDeadZone: Double?
 
     public init(output: GyroOutput? = nil, source: GyroSource? = nil, sensitivity: Double? = nil, verticalRatio: Double? = nil,
-                turnAxis: GyroTurnAxis? = nil, invertX: Bool? = nil, invertY: Bool? = nil, pauseButton: GyroPauseButton? = nil) {
+                turnAxis: GyroTurnAxis? = nil, invertX: Bool? = nil, invertY: Bool? = nil, pauseButton: GyroPauseButton? = nil,
+                antiDeadZone: Double? = nil) {
         self.output = output; self.source = source; self.sensitivity = sensitivity; self.verticalRatio = verticalRatio
         self.turnAxis = turnAxis; self.invertX = invertX; self.invertY = invertY; self.pauseButton = pauseButton
+        self.antiDeadZone = antiDeadZone
     }
 
     public var isEmpty: Bool { self == GameGyro() }
@@ -196,7 +215,8 @@ public struct GameGyro: Codable, Equatable, Sendable {
                      sensitivity: GyroSettings.kept(sensitivity, in: GyroSettings.sensitivityRange, else: d.sensitivity),
                      verticalRatio: GyroSettings.kept(verticalRatio, in: GyroSettings.verticalRatioRange, else: d.verticalRatio),
                      turnAxis: turnAxis ?? d.turnAxis, invertX: invertX ?? d.invertX, invertY: invertY ?? d.invertY,
-                     pauseButton: pauseButton ?? d.pauseButton)
+                     pauseButton: pauseButton ?? d.pauseButton,
+                     antiDeadZone: GyroSettings.kept(antiDeadZone, in: GyroSettings.antiDeadZoneRange, else: d.antiDeadZone))
     }
 }
 

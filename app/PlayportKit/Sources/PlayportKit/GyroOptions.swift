@@ -9,16 +9,17 @@
 //   writes the `gyro.*` key (`stored(_:)` gives the value to write).
 // - A game's row is "changed for this game" (the amber dot) while its GameGyro
 //   sets that field; Y clears it (`cleared`), so the row follows the default.
-// - Numbers (sensitivity, vertical ratio) step along fixed choices; a value
-//   between them (from `controls:` or `set:`) shows as itself and steps from
-//   the nearest.
+// - Numbers (sensitivity, anti-dead-zone, vertical ratio) step along fixed
+//   choices; a value between them (from `controls:` or `set:`) shows as itself
+//   and steps from the nearest.
+// - The anti-dead-zone row shows only while the output is Right stick (`isShown`).
 
 import Foundation
 import HostIOKit
 
 /// A row of the Gyro aim page, in the page's order.
 public enum GyroRow: String, CaseIterable, Sendable {
-    case output, source, pauseButton, sensitivity, verticalRatio, turnAxis, invertX, invertY
+    case output, source, pauseButton, sensitivity, antiDeadZone, verticalRatio, turnAxis, invertX, invertY
 
     public var title: String {
         switch self {
@@ -26,6 +27,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .source: "Gyro from"
         case .pauseButton: "Pause button"
         case .sensitivity: "Sensitivity"
+        case .antiDeadZone: "Anti-dead zone"
         case .verticalRatio: "Up and down"
         case .turnAxis: "Turn with"
         case .invertX: "Invert left and right"
@@ -40,6 +42,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .source: GyroSettings.sourceKey
         case .pauseButton: GyroSettings.pauseButtonKey
         case .sensitivity: GyroSettings.sensitivityKey
+        case .antiDeadZone: GyroSettings.antiDeadZoneKey
         case .verticalRatio: GyroSettings.verticalRatioKey
         case .turnAxis: GyroSettings.turnAxisKey
         case .invertX: GyroSettings.invertXKey
@@ -51,7 +54,10 @@ public enum GyroRow: String, CaseIterable, Sendable {
     public var isSwitch: Bool { self == .invertX || self == .invertY }
 
     /// A number row: left and right step it.
-    public var isNumber: Bool { self == .sensitivity || self == .verticalRatio }
+    public var isNumber: Bool { self == .sensitivity || self == .antiDeadZone || self == .verticalRatio }
+
+    /// Whether the row shows for `s`: the anti-dead-zone only for the right stick.
+    public func isShown(in s: GyroSettings) -> Bool { self != .antiDeadZone || s.output == .rightStick }
 
     /// The choices, left to right: (id, label).
     public var choices: [(id: String, label: String)] {
@@ -60,6 +66,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .source: GyroSource.allCases.map { ($0.rawValue, GyroText.source($0)) }
         case .pauseButton: GyroSteps.pauseButtons.map { ($0.name, GyroText.pauseButton($0)) }
         case .sensitivity: GyroSteps.sensitivity.map { (String($0), GyroText.sensitivity($0)) }
+        case .antiDeadZone: GyroSteps.antiDeadZone.map { (String($0), GyroText.antiDeadZone($0)) }
         case .verticalRatio: GyroSteps.verticalRatio.map { (String($0), GyroText.verticalRatio($0)) }
         case .turnAxis: GyroTurnAxis.allCases.map { ($0.rawValue, GyroText.turnAxis($0)) }
         case .invertX, .invertY: [("false", "Off"), ("true", "On")]
@@ -73,6 +80,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .source: s.source.rawValue
         case .pauseButton: s.pauseButton.name
         case .sensitivity: String(s.sensitivity)
+        case .antiDeadZone: String(s.antiDeadZone)
         case .verticalRatio: String(s.verticalRatio)
         case .turnAxis: s.turnAxis.rawValue
         case .invertX: String(s.invertX)
@@ -84,6 +92,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
     public func index(in s: GyroSettings) -> Int {
         switch self {
         case .sensitivity: GyroSteps.nearest(s.sensitivity, in: GyroSteps.sensitivity)
+        case .antiDeadZone: GyroSteps.nearest(s.antiDeadZone, in: GyroSteps.antiDeadZone)
         case .verticalRatio: GyroSteps.nearest(s.verticalRatio, in: GyroSteps.verticalRatio)
         default: choices.firstIndex { $0.id == id(in: s) } ?? 0
         }
@@ -96,6 +105,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .source: GyroText.source(s.source)
         case .pauseButton: GyroText.pauseButton(s.pauseButton)
         case .sensitivity: GyroText.sensitivity(s.sensitivity)
+        case .antiDeadZone: GyroText.antiDeadZone(s.antiDeadZone)
         case .verticalRatio: GyroText.verticalRatio(s.verticalRatio)
         case .turnAxis: GyroText.turnAxis(s.turnAxis)
         case .invertX: s.invertX ? "On" : "Off"
@@ -118,6 +128,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .source: g.source != nil
         case .pauseButton: g.pauseButton != nil
         case .sensitivity: g.sensitivity != nil
+        case .antiDeadZone: g.antiDeadZone != nil
         case .verticalRatio: g.verticalRatio != nil
         case .turnAxis: g.turnAxis != nil
         case .invertX: g.invertX != nil
@@ -133,6 +144,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
         case .source: g.source = id.flatMap(GyroSource.init(rawValue:))
         case .pauseButton: g.pauseButton = id.flatMap(GyroPauseButton.init(name:))
         case .sensitivity: g.sensitivity = id.flatMap(Double.init)
+        case .antiDeadZone: g.antiDeadZone = id.flatMap(Double.init)
         case .verticalRatio: g.verticalRatio = id.flatMap(Double.init)
         case .turnAxis: g.turnAxis = id.flatMap(GyroTurnAxis.init(rawValue:))
         case .invertX: g.invertX = id.flatMap(Bool.init)
@@ -148,6 +160,7 @@ public enum GyroRow: String, CaseIterable, Sendable {
     public func stored(_ id: String) -> Any {
         switch self {
         case .sensitivity, .verticalRatio: Double(id) ?? 1
+        case .antiDeadZone: Double(id) ?? GyroSettings.defaultAntiDeadZone
         case .invertX, .invertY: id == "true"
         default: id
         }
@@ -157,6 +170,8 @@ public enum GyroRow: String, CaseIterable, Sendable {
 /// The choices the number and pause rows step along.
 public enum GyroSteps {
     public static let sensitivity: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]
+    /// None, then around a game's own dead zone (XInput's is 0.27).
+    public static let antiDeadZone: [Double] = [0, 0.1, 0.15, 0.2, 0.24, 0.27, 0.3, 0.35, 0.4, 0.5]
     public static let verticalRatio: [Double] = [0, 0.25, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.25, 1.5, 2]
     /// None, then the buttons a hand rests on first.
     public static let pauseButtons: [GyroPauseButton] = [.none] + [PadControl.lb, .rb, .lt, .rt, .ls, .rs, .a, .b, .x, .y,
@@ -229,6 +244,11 @@ public enum GyroText {
     public static func sensitivity(_ v: Double) -> String {
         let one = String(format: "%.1f", v)
         return (abs(Double(one)! - v) < 0.001 ? one : String(format: "%.2f", v)) + "×"
+    }
+
+    /// `27%`, `None` for 0.
+    public static func antiDeadZone(_ v: Double) -> String {
+        v <= 0 ? "None" : String(format: "%.0f%%", v * 100)
     }
 
     /// `0.8× of across`.

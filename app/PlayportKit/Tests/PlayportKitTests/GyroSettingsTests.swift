@@ -14,7 +14,8 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertFalse(d.invertX)
         XCTAssertFalse(d.invertY)
         XCTAssertEqual(d.pauseButton, .none)
-        XCTAssertEqual(d.aimConfig, GyroAim.Config())
+        XCTAssertEqual(d.antiDeadZone, 0.27)
+        XCTAssertEqual(d.aimConfig, GyroAim.Config(antiDeadZone: 0.27))
     }
 
     func testSettingsRoundTripAndMissingKeysFallBack() throws {
@@ -24,7 +25,7 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(GyroSettings.self, from: data), mine)
         XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(#""pauseButton":"pad:lb""#))
         XCTAssertEqual(mine.aimConfig, GyroAim.Config(output: .rightStick, turnAxis: .roll, sensitivity: 2.5, verticalRatio: 0.6,
-                                                      invertX: true, invertY: true))
+                                                      invertX: true, invertY: true, antiDeadZone: 0.27))
 
         func decode(_ s: String) throws -> GyroSettings { try JSONDecoder().decode(GyroSettings.self, from: Data(s.utf8)) }
         XCTAssertEqual(try decode("{}"), GyroSettings())
@@ -37,6 +38,55 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertThrowsError(try decode(#"{"pauseButton":"key:0x20"}"#))
         XCTAssertEqual(try decode(#"{"pauseButton":"none"}"#).pauseButton, GyroPauseButton.none)
         XCTAssertEqual(try decode(#"{"pauseButton":"pad:rt"}"#).pauseButton, .pad(.rt))
+    }
+
+    /// The right stick's anti-dead-zone: per game over the `gyro.antiDeadZone` default, 0.27 when neither sets it.
+    func testTheAntiDeadZoneIsAGyroSetting() throws {
+        func decode(_ s: String) throws -> GyroSettings { try JSONDecoder().decode(GyroSettings.self, from: Data(s.utf8)) }
+        XCTAssertEqual(try decode(#"{"antiDeadZone":0.3}"#).antiDeadZone, 0.3)
+        XCTAssertEqual(try decode(#"{"antiDeadZone":0}"#).antiDeadZone, 0)
+        XCTAssertEqual(try decode(#"{"antiDeadZone":0.95}"#).antiDeadZone, 0.27)   // out of range: the default
+        let mine = GyroSettings(output: .rightStick, antiDeadZone: 0.35)
+        XCTAssertEqual(try JSONDecoder().decode(GyroSettings.self, from: try JSONEncoder().encode(mine)), mine)
+        XCTAssertEqual(mine.aimConfig.antiDeadZone, 0.35)
+        XCTAssertTrue(mine.summary.hasSuffix(" antiDeadZone=0.35"))
+        XCTAssertFalse(GyroSettings(output: .mouse).summary.contains("antiDeadZone"))
+
+        let defaults = GyroSettings(output: .rightStick, antiDeadZone: 0.2)
+        XCTAssertEqual(GameGyro().resolved(over: defaults).antiDeadZone, 0.2)
+        XCTAssertEqual(GameGyro(antiDeadZone: 0.4).resolved(over: defaults).antiDeadZone, 0.4)
+        XCTAssertEqual(GameGyro(antiDeadZone: 2).resolved(over: defaults).antiDeadZone, 0.2)
+        XCTAssertEqual(try JSONDecoder().decode(GameGyro.self, from: Data(#"{"antiDeadZone":0.3}"#.utf8)), GameGyro(antiDeadZone: 0.3))
+
+        let d = UserDefaults(suiteName: "GyroAntiDeadZoneTests")!
+        d.removePersistentDomain(forName: "GyroAntiDeadZoneTests")
+        XCTAssertEqual(GyroSettings(d).antiDeadZone, 0.27)
+        d.set("0.3", forKey: GyroSettings.antiDeadZoneKey)           // the driver's set:
+        XCTAssertEqual(GyroSettings(d).antiDeadZone, 0.3)
+        d.set(1.5, forKey: GyroSettings.antiDeadZoneKey)
+        XCTAssertEqual(GyroSettings(d).antiDeadZone, 0.27)
+        d.removePersistentDomain(forName: "GyroAntiDeadZoneTests")
+    }
+
+    /// Its row: shown only for the right stick, as a percentage, stepped, reset by Y.
+    func testTheAntiDeadZoneRowShowsOnlyForTheRightStick() {
+        XCTAssertFalse(GyroRow.antiDeadZone.isShown(in: GyroSettings(output: .mouse)))
+        XCTAssertFalse(GyroRow.antiDeadZone.isShown(in: GyroSettings(output: .off)))
+        XCTAssertTrue(GyroRow.antiDeadZone.isShown(in: GyroSettings(output: .rightStick)))
+        XCTAssertTrue(GyroRow.allCases.filter { $0 != .antiDeadZone }.allSatisfy { $0.isShown(in: GyroSettings(output: .mouse)) })
+        let s = GyroSettings(output: .rightStick)
+        XCTAssertEqual(GyroRow.antiDeadZone.text(s), "27%")
+        XCTAssertEqual(GyroText.antiDeadZone(0), "None")
+        XCTAssertTrue(GyroRow.antiDeadZone.isNumber)
+        XCTAssertEqual(GyroRow.antiDeadZone.step(s, by: 1), "0.3")
+        XCTAssertEqual(GyroRow.antiDeadZone.step(s, by: -1), "0.24")
+        XCTAssertEqual(GyroRow.antiDeadZone.key, "gyro.antiDeadZone")
+        XCTAssertEqual(GyroRow.antiDeadZone.stored("0.3") as? Double, 0.3)
+        var own = GyroRow.antiDeadZone.setting("0.3", in: GameGyro(output: .rightStick))
+        XCTAssertEqual(own, GameGyro(output: .rightStick, antiDeadZone: 0.3))
+        XCTAssertTrue(GyroRow.antiDeadZone.isSet(in: own))
+        own = GyroRow.antiDeadZone.cleared(own)
+        XCTAssertEqual(own, GameGyro(output: .rightStick))
     }
 
     func testAGameFollowsTheDefaultsWhereItSetsNothing() throws {

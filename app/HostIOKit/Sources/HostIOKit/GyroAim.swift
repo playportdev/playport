@@ -31,7 +31,11 @@
 ///   with the remainder carried to the next sample: linear, no acceleration,
 ///   no dead zone.
 /// - **Right stick.** Speed × sensitivity / `stickFullScale` as a deflection,
-///   at most 1; InputMixer adds it to slot 0's right stick and clamps.
+///   at most 1; InputMixer adds it to slot 0's right stick and clamps. With an
+///   anti-dead-zone a (0..<1), a deflection d is a + d × (1 − a) along its own
+///   direction, so the slowest turn already starts past the game's own stick
+///   dead zone (Portal 2 ate 0.33 and below: touch controls 2d); a deflection
+///   under `stickRest` (a still device's residual) stays zero, so nothing creeps.
 /// - **Vertical ratio and invert** scale and flip the two output axes.
 /// - **Pause.** While the pause button is held the output is zero; the
 ///   smoothing restarts on release and the calibration carries on as if
@@ -54,6 +58,8 @@ public struct GyroAim: Sendable {
     public static let mouseCountsPerDegree = 20.0               // at sensitivity 1
     public static let stickFullScale = 180.0                    // °/s for a full deflection at sensitivity 1
     public static let maxStep = 0.1                             // s
+    /// The right-stick deflection under which the stick rests (a still device's residual noise).
+    public static let stickRest = 0.005
 
     public struct Config: Equatable, Sendable {
         public var output: GyroOutput
@@ -62,11 +68,14 @@ public struct GyroAim: Sendable {
         public var verticalRatio: Double
         public var invertX: Bool
         public var invertY: Bool
+        /// Right stick only: where a deflection starts, 0..<1 (0: none).
+        public var antiDeadZone: Double
 
         public init(output: GyroOutput = .off, turnAxis: GyroTurnAxis = .playerSpace, sensitivity: Double = 1,
-                    verticalRatio: Double = 1, invertX: Bool = false, invertY: Bool = false) {
+                    verticalRatio: Double = 1, invertX: Bool = false, invertY: Bool = false, antiDeadZone: Double = 0) {
             self.output = output; self.turnAxis = turnAxis; self.sensitivity = sensitivity
             self.verticalRatio = verticalRatio; self.invertX = invertX; self.invertY = invertY
+            self.antiDeadZone = antiDeadZone
         }
     }
 
@@ -137,8 +146,18 @@ public struct GyroAim: Sendable {
             var x = h * config.sensitivity / Self.stickFullScale, y = v * config.sensitivity / Self.stickFullScale
             let length = (x * x + y * y).squareRoot()
             if length > 1 { x /= length; y /= length }
-            return .rightStick(x: x, y: y)
+            return Self.past(antiDeadZone: config.antiDeadZone, x: x, y: y)
         }
+    }
+
+    /// A deflection (length at most 1) moved past an anti-dead-zone along its own
+    /// direction; one under `stickRest`, or any with no anti-dead-zone, as it is.
+    static func past(antiDeadZone a: Double, x: Double, y: Double) -> GyroAimOutput {
+        guard a > 0, a.isFinite else { return .rightStick(x: x, y: y) }
+        let d = min(1, (x * x + y * y).squareRoot())
+        guard d >= stickRest else { return .rightStick(x: 0, y: 0) }
+        let k = (min(a, 1) + d * (1 - min(a, 1))) / d
+        return .rightStick(x: x * k, y: y * k)
     }
 
     /// The rate about the world's vertical (+ left), relaxed toward the rate in the yaw-roll plane.
