@@ -35,7 +35,7 @@
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
 //   controls:<title id>        Saves UI_CONTROLS (a PlayportKit GameControls as JSON:
-//                              {"layout":"off"|"gamepad","opacity":0.2-1,"dpad":"off"|"on",
+//                              {"layout":"off"|"gamepad","opacity":0.1-1,"dpad":"off"|"on",
 //                              "rightStick":"off"|"below"|"above","gyro":{...}}; `{}` clears them)
 //                              as the game's own controls, as the in-game menu's Controls does;
 //                              "gyro" is the game's own gyro aim (PlayportKit GameGyro:

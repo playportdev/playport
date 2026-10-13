@@ -50,11 +50,16 @@ struct GameControlsOptionRows: View {
                 selected: own.opacity.map { String(ControlsOpacity.step($0, by: 0)) } ?? "") { id in set { $0.opacity = Double(id) } }
         }
         // The Controller page (UI/ControllerMapView.swift): the game's controller map and its look speed.
+        // The dot and Y for its own map or look speed; "Default ·" while the mode is Settings'.
         let ownMap = own.controllerMap != nil || own.lookSpeed != nil
         PadRow(id: ControllerMapView.gameRowID, title: "Controller", subtitle: nil,
-               value: (ownMap ? "" : "Default · ") + own.controllerMap(over: store.defaults).mode.title,
+               value: (own.controllerMap == nil ? "Default · " : "") + own.controllerMap(over: store.defaults).mode.title,
                accessory: .chevron, changed: ownMap, style: .plain, hint: "Open",
-               reset: ownMap ? { set { $0.controllerMap = nil; $0.lookSpeed = nil } } : nil) {
+               reset: ownMap ? {
+                   ControllerMapAccess.resetToDefault(.game(titleID), context: context) {
+                       set { $0.controllerMap = nil; $0.lookSpeed = nil }
+                   }
+               } : nil) {
             navigation.gamePanels.append(.controller)
         }
         let gyro = store.gyro(titleID)

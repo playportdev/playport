@@ -37,9 +37,10 @@
 // - The "Gyro aim" chip (TouchKeyboardMouse.dc.html's lit chip): a small chip
 //   at the top middle of the safe area, between View and Menu, that fades in
 //   as gyro aim starts for the game, stays `GyroChipCue.seconds` and fades out
-//   (PlayportKit GyroChipCue decides when: GyroSensors). Drawn with the
-//   controls (so at their opacity, and not while they are hidden); gone at
-//   once when gyro aim stops.
+//   (PlayportKit GyroChipCue decides when: GyroSensors). Drawn in its own view
+//   over the game (GyroChipOverlay, which takes no touch), not with the
+//   controls: it shows with the layout Off or a controller connected too, at
+//   its own opacity; gone at once when gyro aim stops.
 //
 // A dev build logs `controls:` lines: shown and hidden, and each press.
 
@@ -79,6 +80,7 @@ final class OnScreenControls: ObservableObject {
     private var subscriptions: Set<AnyCancellable> = []
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     weak var view: TouchControlsView?
+    weak var chipView: GyroChipOverlay?
 
     /// Set once the first-time toast (which teaches the three-finger tap) has shown.
     static let toastKey = "controls.menuGestureToastShown"
@@ -124,12 +126,13 @@ final class OnScreenControls: ObservableObject {
     func gyroAiming(_ on: Bool) {
         guard on != gyroAiming else { return }
         gyroAiming = on
-        view?.refresh()
+        if !on { chipView?.hideNow() }
     }
 
-    /// GyroSensors: gyro aim started for the game (GyroChipCue): the chip, briefly.
+    /// GyroSensors: gyro aim started for the game (GyroChipCue): the chip, briefly,
+    /// whether the controls are shown or not.
     func showGyroChip() {
-        view?.showGyroChip(seconds: GyroChipCue.seconds)
+        chipView?.show(seconds: GyroChipCue.seconds)
     }
 
     /// Where a finger at p (in the controls' view) goes: to them, nowhere while they show, else to the game.
@@ -252,7 +255,6 @@ final class OnScreenControls: ObservableObject {
 final class TouchControlsView: UIView {
     private var views: [String: ControlView] = [:]
     private let toast = ToastView()
-    private let chip = GyroChipView()
     private var touchIDs: [ObjectIdentifier: Int] = [:]
     private var nextTouch = 1
 
@@ -262,28 +264,18 @@ final class TouchControlsView: UIView {
         backgroundColor = .clear
         isHidden = true
         addSubview(toast)
-        addSubview(chip)
         accessibilityIdentifier = "touch-controls"
         OnScreenControls.shared.view = self
     }
 
     required init?(coder: NSCoder) { fatalError("TouchControlsView is created in code") }
 
-    /// The safe area to lay the controls out in. The game view ignores the safe
-    /// area, and fills the window: the window's insets are taken too, whichever is larger.
-    private var controlInsets: UIEdgeInsets {
-        let own = safeAreaInsets, w = window?.safeAreaInsets ?? .zero
-        return UIEdgeInsets(top: max(own.top, w.top), left: max(own.left, w.left),
-                            bottom: max(own.bottom, w.bottom), right: max(own.right, w.right))
-    }
-
     override func layoutSubviews() {
         super.layoutSubviews()
-        let i = controlInsets
+        let i = gameSafeInsets
         OnScreenControls.shared.layout(in: bounds.size, insets: ControlInsets(top: Double(i.top), left: Double(i.left),
                                                                               bottom: Double(i.bottom), right: Double(i.right)))
         toast.place(in: bounds.inset(by: i))
-        chip.place(in: bounds.inset(by: i))
     }
 
     /// The phone turned (the island to the other side) or the insets otherwise changed: laid out again.
@@ -313,7 +305,6 @@ final class TouchControlsView: UIView {
         let model = OnScreenControls.shared
         isHidden = !model.drawn
         alpha = CGFloat(model.state.opacity)
-        if !model.gyroAiming { chip.hideNow() }
         guard model.drawn else { return }
         let held = model.controls.held, pad = model.controls.output.pad
         for (id, v) in views {
@@ -322,8 +313,6 @@ final class TouchControlsView: UIView {
     }
 
     func showToast(_ text: String) { toast.show(text, seconds: 6) }
-
-    func showGyroChip(seconds: Double) { chip.show(seconds: seconds) }
 
     private func id(_ t: UITouch) -> Int {
         if let n = touchIDs[ObjectIdentifier(t)] { return n }
@@ -348,6 +337,48 @@ final class TouchControlsView: UIView {
             guard let n = touchIDs.removeValue(forKey: ObjectIdentifier(t)) else { continue }
             if cancelled { OnScreenControls.shared.cancelled(n) } else { OnScreenControls.shared.ended(n) }
         }
+    }
+}
+
+/// The "Gyro aim" chip's own view over the game (GameSurfaceView, above the
+/// controls), apart from them: it shows whether they are drawn or not, and
+/// takes no touch.
+final class GyroChipOverlay: UIView {
+    private let chip = GyroChipView()
+
+    init() {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        addSubview(chip)
+        OnScreenControls.shared.chipView = self
+    }
+
+    required init?(coder: NSCoder) { fatalError("GyroChipOverlay is created in code") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        chip.place(in: bounds.inset(by: gameSafeInsets))
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
+    }
+
+    func show(seconds: Double) { chip.show(seconds: seconds) }
+
+    /// Gyro aim stopped: gone now.
+    func hideNow() { chip.hideNow() }
+}
+
+private extension UIView {
+    /// The safe area over the game. The game view ignores the safe area and
+    /// fills the window: the window's insets are taken too, whichever is larger.
+    var gameSafeInsets: UIEdgeInsets {
+        let own = safeAreaInsets, w = window?.safeAreaInsets ?? .zero
+        return UIEdgeInsets(top: max(own.top, w.top), left: max(own.left, w.left),
+                            bottom: max(own.bottom, w.bottom), right: max(own.right, w.right))
     }
 }
 

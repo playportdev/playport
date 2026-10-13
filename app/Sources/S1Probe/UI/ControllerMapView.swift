@@ -9,7 +9,7 @@
 //   for the default every game follows.
 // - The mode switch at the top right: As a controller, As keyboard & mouse,
 //   Custom (left and right, or a tap). A game's own has the amber dot, and Y
-//   puts it back to Settings'.
+//   puts it back to Settings' (asking first over an edited Custom table).
 // - The pad's picture in the middle, its inputs' rows down both sides (none in
 //   As a controller: the game sees an Xbox pad). Pressing an input rings its
 //   row (ControllerMapRow.row(for:), .pressed(from:to:)); the ringed input is
@@ -81,6 +81,20 @@ enum ControllerMapAccess {
     static func isOwnLookSpeed(_ t: ControllerMapTarget) -> Bool {
         if case .game(let id) = t { return ControlsStore.shared.game(id).lookSpeed != nil }
         return false
+    }
+
+    /// Y on a game's map (the mode row, Game options' Controller row): `reset`
+    /// puts it back to Settings', asking first over an edited Custom table of the
+    /// game's own (ControllerMapConfirm.useDefault); at once otherwise.
+    static func resetToDefault(_ t: ControllerMapTarget, context: String?, reset: @escaping () -> Void) {
+        guard case .game(let id) = t, ControllerMapConfirm.neededForDefault(own: ControlsStore.shared.game(id).controllerMap)
+        else { return reset() }
+        let c = ControllerMapConfirm.useDefault
+        PadModal.shared.picker(title: c.title, context: (context ?? "Settings") + " · Controller", note: c.note,
+                               options: c.options.map { PadOption(id: $0.id, label: $0.label) },
+                               selected: c.defaultChoice) { choice in
+            if c.outcome(choice, for: map(t)) == .useDefault { reset() }
+        }
     }
 
     /// Saves the look speed (nil: the game follows Settings' again).
@@ -211,7 +225,9 @@ struct ControllerMapView: View {
         }
         .padItem(Self.modeID, hint: "Change", cornerRadius: 10,
                  adjust: { by in setMode(modes[max(0, min(modes.count - 1, modes.firstIndex(of: map.mode)! + by))]) },
-                 reset: own ? { ControllerMapAccess.save(nil, target) } : nil, ring: false) {
+                 reset: own ? {
+                     ControllerMapAccess.resetToDefault(target, context: context) { ControllerMapAccess.save(nil, target) }
+                 } : nil, ring: false) {
             setMode(modes[(modes.firstIndex(of: map.mode)! + 1) % modes.count])
         }
     }
@@ -363,7 +379,11 @@ struct ControllerMapView: View {
         PadModal.shared.picker(title: c.title, context: (context ?? "Settings") + " · Controller", note: c.note,
                                options: c.options.map { PadOption(id: $0.id, label: $0.label) },
                                selected: c.defaultChoice) { choice in
-            ControllerMapAccess.save(c.apply(choice, to: ControllerMapAccess.map(target)), target)
+            switch c.outcome(choice, for: ControllerMapAccess.map(target)) {
+            case .unchanged: break   // "Keep my changes": not even made the game's own
+            case .save(let m): ControllerMapAccess.save(m, target)
+            case .useDefault: ControllerMapAccess.save(nil, target)
+            }
         }
     }
 

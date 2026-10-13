@@ -240,18 +240,27 @@ public enum ControllerMapEdit {
     }
 }
 
-/// Reset all, and Edit a copy over the player's own table: asked first in a
-/// list whose first, default choice changes nothing.
+/// Reset all, Edit a copy over the player's own table, and Y putting a game's
+/// own Custom map back to Settings' (the mode row, Game options' Controller
+/// row): asked first in a list whose first, default choice changes nothing.
 public enum ControllerMapConfirm: String, Sendable {
-    case resetAll, copyPreset
+    case resetAll, copyPreset, useDefault
 
     /// Whether it must ask: only when it would replace a table that is not the preset.
     public static func needed(for map: ControllerMap) -> Bool { map.custom != ControllerMap.keyboardMouse }
+
+    /// Whether Y on a game's map (back to Settings') must ask first (`useDefault`): the
+    /// game's own map is Custom with a table that is not the preset. Else Y resets at once.
+    public static func neededForDefault(own: ControllerMap?) -> Bool {
+        guard let own, own.mode == .custom else { return false }
+        return needed(for: own)
+    }
 
     public var title: String {
         switch self {
         case .resetAll: "Reset every input?"
         case .copyPreset: "Edit a copy of Keyboard & mouse?"
+        case .useDefault: "Use the default controller map?"
         }
     }
 
@@ -259,6 +268,7 @@ public enum ControllerMapConfirm: String, Sendable {
         switch self {
         case .resetAll: "Every input goes back to what Keyboard & mouse does."
         case .copyPreset: "Custom already has your own changes."
+        case .useDefault: "This game's Custom map has your own changes. Using the default replaces them with Settings' map."
         }
     }
 
@@ -267,12 +277,32 @@ public enum ControllerMapConfirm: String, Sendable {
         switch self {
         case .resetAll: [("keep", "Keep my changes"), ("reset", "Reset all to Keyboard & mouse")]
         case .copyPreset: [("keep", "Use my Custom map"), ("reset", "Start again from Keyboard & mouse")]
+        case .useDefault: [("keep", "Keep my changes"), ("reset", "Use Settings' map")]
         }
     }
 
     public var defaultChoice: String { "keep" }
 
-    /// The map after `choice` (`keep` or `reset`); Edit a copy is in Custom either way.
+    /// What a choice does to the map asked about.
+    public enum Outcome: Equatable, Sendable {
+        /// Nothing changes (`keep` in Reset all and Use the default).
+        case unchanged
+        /// The map is saved as this.
+        case save(ControllerMap)
+        /// The game's own map goes: it follows Settings' again.
+        case useDefault
+    }
+
+    /// What `choice` (`keep` or `reset`) does to `map`.
+    public func outcome(_ choice: String, for map: ControllerMap) -> Outcome {
+        switch self {
+        case .resetAll: choice == "reset" ? .save(apply(choice, to: map)) : .unchanged
+        case .copyPreset: .save(apply(choice, to: map))
+        case .useDefault: choice == "reset" ? .useDefault : .unchanged
+        }
+    }
+
+    /// The map after `choice` (`keep` or `reset`) in Reset all or Edit a copy; Edit a copy is in Custom either way.
     public func apply(_ choice: String, to map: ControllerMap) -> ControllerMap {
         var m = map
         if self == .copyPreset { m.mode = .custom }

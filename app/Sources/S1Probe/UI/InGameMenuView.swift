@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Playport's in-game menu (QuickMenu.dc.html; decision 0034, the plan's Hard
 // problem 2): a long press of the controller's Home button over a running game
-// (HostIO, HostIOKit.QuickMenuControl), or the on-screen controls' Playport
-// button, opens it, and the game is paused behind it:
+// (HostIO, HostIOKit.QuickMenuControl), or a three-finger tap on the game
+// (HostIO.menuGesture), opens it, and the game is paused behind it:
 //
 //   - input: the guest's pads rest, and keys, touches and the mouse stop
 //     (HostIO.holdGuest; a button still down from the menu stays up for the

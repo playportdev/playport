@@ -170,7 +170,7 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          with no game; the run is done as it asks (use --leave-running); must be
                          the last action
   --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
-                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.2-1,
+                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.1-1,
                          "dpad":"off"|"on","rightStick":"off"|"below"|"above","gyro":{...}}; a key left out
                          follows Settings › Controls, where the d-pad and right stick are off by default;
                          `ID:{}` clears). "gyro" is the game's own gyro aim (PlayportKit GameGyro), each key

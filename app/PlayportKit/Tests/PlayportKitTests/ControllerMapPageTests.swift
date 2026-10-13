@@ -110,6 +110,29 @@ final class ControllerMapPageTests: XCTestCase {
         XCTAssertEqual(ControllerMapConfirm.copyPreset.apply("reset", to: km), ControllerMap(mode: .custom))
     }
 
+    /// Y on a game's map (the mode row, Game options' Controller row) over an edited
+    /// Custom table asks first; keep changes nothing, reset follows Settings' map again.
+    /// Reset all's keep changes nothing either (it does not make the map the game's own).
+    func testYBackToTheDefaultAsksFirstOverAnEditedCustomTable() throws {
+        let edited = try XCTUnwrap(ControllerMapEdit.setting(.control(.a), .key(0x31, []), in: preset))
+        let mine = ControllerMap(mode: .custom, custom: edited)
+        XCTAssertTrue(ControllerMapConfirm.neededForDefault(own: mine))
+        XCTAssertFalse(ControllerMapConfirm.neededForDefault(own: nil))
+        XCTAssertFalse(ControllerMapConfirm.neededForDefault(own: ControllerMap(mode: .custom)))
+        XCTAssertFalse(ControllerMapConfirm.neededForDefault(own: ControllerMap(mode: .keyboardMouse, custom: edited)))
+        let c = ControllerMapConfirm.useDefault
+        XCTAssertEqual(c.options.map(\.id), ["keep", "reset"])
+        XCTAssertEqual(c.options.first?.id, c.defaultChoice)
+        XCTAssertEqual(c.options.map(\.label), ["Keep my changes", "Use Settings' map"])
+        XCTAssertEqual(c.title, "Use the default controller map?")
+        XCTAssertEqual(c.outcome("keep", for: mine), .unchanged)
+        XCTAssertEqual(c.outcome("reset", for: mine), .useDefault)
+        XCTAssertEqual(ControllerMapConfirm.resetAll.outcome("keep", for: mine), .unchanged)
+        XCTAssertEqual(ControllerMapConfirm.resetAll.outcome("reset", for: mine), .save(ControllerMap(mode: .custom)))
+        let km = ControllerMap(mode: .keyboardMouse, custom: edited)
+        XCTAssertEqual(ControllerMapConfirm.copyPreset.outcome("keep", for: km), .save(mine))
+    }
+
     func testThePressesThatRingARow() {
         XCTAssertEqual(ControllerMapRow.row(for: .lb), .lb)
         XCTAssertEqual(ControllerMapRow.row(for: .view), .back)

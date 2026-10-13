@@ -883,6 +883,8 @@ final class GameSurfaceView: UIView {
     private let windows = Unmanaged<CALayer>.fromOpaque(winios_windows_layer()).takeUnretainedValue()
     /// The on-screen controls, over the game and its windows (UI/TouchControlsView.swift).
     private let controls = TouchControlsView()
+    /// The "Gyro aim" chip, over them and shown without them too; it takes no touch.
+    private let gyroChip = GyroChipOverlay()
     #if !PLAYPORT_RELEASE
     /// The view on screen, for the UI driver's tap: action (Dev/UIDriver.swift).
     static weak var current: GameSurfaceView?
@@ -894,6 +896,7 @@ final class GameSurfaceView: UIView {
         layer.contentsGravity = .resizeAspect
         layer.addSublayer(windows)
         addSubview(controls)
+        addSubview(gyroChip)
         // Every finger reaches the view, so the three-finger tap sees them; forward lets only one through.
         isMultipleTouchEnabled = true
         let menuTap = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
@@ -927,6 +930,7 @@ final class GameSurfaceView: UIView {
         windows.setNeedsLayout()
         CATransaction.commit()
         controls.frame = bounds
+        gyroChip.frame = bounds
     }
 
     override func didMoveToWindow() {
