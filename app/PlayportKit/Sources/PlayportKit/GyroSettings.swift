@@ -329,3 +329,24 @@ public enum GyroRun: Equatable, Sendable {
         return false
     }
 }
+
+/// When the "Gyro aim" chip shows over the controls (owner, 2026-10-13): briefly,
+/// as gyro aim starts for the game: the game starts with it on, it is turned on
+/// in the in-game menu (seen on Resume), or its source or output changes. A
+/// Resume, or the app coming back, with nothing changed shows nothing; turning
+/// it off forgets what was shown.
+public struct GyroChipCue: Sendable {
+    /// How long it stays, between its fades.
+    public static let seconds = 2.5
+    private var shown: GyroRun?
+
+    public init() {}
+
+    /// The game's run now (GyroRun.decide) and its output setting: true when the chip shows now.
+    public mutating func update(_ run: GyroRun, output: GyroOutput) -> Bool {
+        if output == .off { shown = nil; return false }
+        guard case .running = run, run != shown else { return false }
+        shown = run
+        return true
+    }
+}

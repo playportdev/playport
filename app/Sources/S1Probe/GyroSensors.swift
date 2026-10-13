@@ -181,6 +181,8 @@ final class GyroSensors: ObservableObject {
         guard c.motion?.hasRotationRate == true else { return nil }
         return c
     }
+    /// When the controls' "Gyro aim" chip shows.
+    private var chipCue = GyroChipCue()
     #if !PLAYPORT_RELEASE
     private var loggedPads: Set<ObjectIdentifier> = []
     #endif
@@ -206,11 +208,13 @@ final class GyroSensors: ObservableObject {
                                   })
         settings = if case .previewing = next, let previewed { previewed } else { game }
         feed.configure(settings)
+        let chip = chipCue.update(next, output: game.output)
         let samePad = next.device != .controller || pad === controller
         guard next != run || !samePad else { return }
         stopSensors(next)
         run = next
         OnScreenControls.shared.gyroAiming(next.toGuest)
+        if chip { OnScreenControls.shared.showGyroChip() }
         switch next {
         case .running(let d, let o): startSensors(d, output: o, pad: pad, toGuest: true)
         case .previewing(let d, let o): startSensors(d, output: o, pad: pad, toGuest: false)

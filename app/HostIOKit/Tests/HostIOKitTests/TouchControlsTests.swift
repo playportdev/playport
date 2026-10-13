@@ -28,6 +28,14 @@ final class TouchControlsTests: XCTestCase {
         XCTAssertEqual(t.held, [])
     }
 
+    /// While the controls show, a touch outside them reaches nothing; with none shown it is the game's mouse.
+    func testATouchOutsideTheShownControlsIsIgnored() {
+        XCTAssertEqual(TouchRoute.decide(controlsShown: true, onControl: true), .controls)
+        XCTAssertEqual(TouchRoute.decide(controlsShown: true, onControl: false), .ignored)
+        XCTAssertEqual(TouchRoute.decide(controlsShown: false, onControl: false), .game)
+        XCTAssertEqual(TouchRoute.decide(controlsShown: false, onControl: true), .game)
+    }
+
     func testATouchOffEveryControlIsTheGames() {
         var t = TouchControls(targets: [a, right])
         XCTAssertFalse(t.began(1, at: p(400, 100), time: 0))

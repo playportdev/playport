@@ -24,18 +24,22 @@
 // - TouchControlsView, a subview of GameSurfaceView, lays the controls out in
 //   its safe area (the notch or Dynamic Island on either side, the home
 //   indicator) and again when that changes, and hit-tests only the controls
-//   and the floating sticks' zones (not drawn): every other touch
-//   falls through to the game as a click, as before. A flat translucent fill,
+//   and the floating sticks' zones (not drawn). Every other touch falls
+//   through to GameSurfaceView, which ignores it while the controls show
+//   (HostIOKit TouchRoute; owner, 2026-10-13: a stray touch flicked the view):
+//   no cursor, no click. Its three-finger tap still sees every finger. A flat translucent fill,
 //   amber while held, a light haptic tick on each press (Settings › Controls).
 //   No backdrop blur: with one, pink glitches flickered over the game (phase 1
 //   on the phone), most likely the blur sampling the game's Metal layer.
 // - The fingers of a three-finger tap are cancelled (UIKit's touchesCancelled):
 //   whatever they held is let go, as if they had never come down.
 //
-// - The "Gyro aim" chip (TouchKeyboardMouse.dc.html's lit chip): while gyro aim
-//   runs for the game (GyroSensors, GyroRun.running), a small chip at the top
-//   middle of the safe area, between View and Menu, drawn with the controls
-//   (so at their opacity, and not while they are hidden).
+// - The "Gyro aim" chip (TouchKeyboardMouse.dc.html's lit chip): a small chip
+//   at the top middle of the safe area, between View and Menu, that fades in
+//   as gyro aim starts for the game, stays `GyroChipCue.seconds` and fades out
+//   (PlayportKit GyroChipCue decides when: GyroSensors). Drawn with the
+//   controls (so at their opacity, and not while they are hidden); gone at
+//   once when gyro aim stops.
 //
 // A dev build logs `controls:` lines: shown and hidden, and each press.
 
@@ -54,8 +58,10 @@ final class OnScreenControls: ObservableObject {
     @Published private(set) var state = ControlsState(layout: .gamepad, visible: false, opacity: ControlsOpacity.defaultValue)
     /// Drawn and taking touches.
     @Published private(set) var drawn = false
-    /// Gyro aim runs for the game: the chip shows with the controls.
+    /// Gyro aim runs for the game.
     private(set) var gyroAiming = false
+    /// A touch outside the shown controls was logged (once per game: the app restarts after each).
+    private var loggedIgnored = false
     private(set) var layout: ControlLayout?
     private(set) var controls = TouchControls()
     /// The controls' pad is in slot 0 (HostIO.touchControls).
@@ -118,6 +124,21 @@ final class OnScreenControls: ObservableObject {
         guard on != gyroAiming else { return }
         gyroAiming = on
         view?.refresh()
+    }
+
+    /// GyroSensors: gyro aim started for the game (GyroChipCue): the chip, briefly.
+    func showGyroChip() {
+        view?.showGyroChip(seconds: GyroChipCue.seconds)
+    }
+
+    /// Where a finger at p (in the controls' view) goes: to them, nowhere while they show, else to the game.
+    func route(_ p: CGPoint) -> TouchRoute {
+        let to = TouchRoute.decide(controlsShown: drawn, onControl: takes(p))
+        if to == .ignored, !loggedIgnored {
+            loggedIgnored = true
+            Self.log("touches outside the controls are ignored")
+        }
+        return to
     }
 
     /// The app leaves the front: every touch let go.
@@ -304,7 +325,7 @@ final class TouchControlsView: UIView {
         let model = OnScreenControls.shared
         isHidden = !model.drawn
         alpha = CGFloat(model.state.opacity)
-        chip.isHidden = !model.gyroAiming
+        if !model.gyroAiming { chip.hideNow() }
         guard model.drawn else { return }
         let held = model.controls.held, pad = model.controls.output.pad
         for (id, v) in views {
@@ -313,6 +334,8 @@ final class TouchControlsView: UIView {
     }
 
     func showToast(_ text: String) { toast.show(text, seconds: 6) }
+
+    func showGyroChip(seconds: Double) { chip.show(seconds: seconds) }
 
     private func id(_ t: UITouch) -> Int {
         if let n = touchIDs[ObjectIdentifier(t)] { return n }
@@ -470,11 +493,12 @@ private final class ControlView: UIView {
 /// them on the narrowest screen, and of the first-time note below it.
 private final class GyroChipView: UIView {
     private let label = UILabel()
+    private var hide: DispatchWorkItem?
 
     init() {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
-        isHidden = true
+        alpha = 0
         backgroundColor = Glass.fill
         layer.borderWidth = 1
         layer.borderColor = Glass.amberEdge.cgColor
@@ -493,6 +517,27 @@ private final class GyroChipView: UIView {
         frame = CGRect(x: area.midX - w / 2, y: area.minY + 26, width: w, height: h)
         layer.cornerRadius = h / 2
         label.frame = bounds
+    }
+
+    /// Fades in, stays `seconds`, fades out.
+    func show(seconds: Double) {
+        hide?.cancel()
+        UIView.animate(withDuration: 0.25, delay: 0, options: .beginFromCurrentState) { self.alpha = 1 }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                UIView.animate(withDuration: 0.5, delay: 0, options: .beginFromCurrentState) { self?.alpha = 0 }
+            }
+        }
+        hide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25 + seconds, execute: work)
+    }
+
+    /// Gyro aim stopped: gone now.
+    func hideNow() {
+        hide?.cancel()
+        hide = nil
+        layer.removeAllAnimations()
+        alpha = 0
     }
 }
 

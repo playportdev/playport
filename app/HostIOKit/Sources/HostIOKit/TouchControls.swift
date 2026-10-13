@@ -97,6 +97,22 @@ extension PadInput {
     }
 }
 
+/// Where a finger that lands on the game goes (touch controls 2e, owner
+/// 2026-10-13): while the on-screen controls show, only to them (a control, or
+/// a floating stick's zone); one outside them is ignored, as a stray touch
+/// would flick the view of a mouse-look game. With no controls shown (the
+/// layout Off, a controller connected), it is the game's left mouse button.
+public enum TouchRoute: Equatable, Sendable {
+    case controls
+    case ignored
+    case game
+
+    public static func decide(controlsShown: Bool, onControl: Bool) -> TouchRoute {
+        guard controlsShown else { return .game }
+        return onControl ? .controls : .ignored
+    }
+}
+
 /// The on-screen controls' touch state: which fingers are on which control,
 /// and what that holds (docs/plans/2026-10-09-touch-controls.md, phase 1;
 /// S1Probe's UI/TouchControlsView.swift feeds it UIKit's touches). Geometry is

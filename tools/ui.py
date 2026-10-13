@@ -62,7 +62,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          launcher or a dialog shown before the game's first frame, decision 0075;
                          its first one is the `first window` mark, --until mark:first window+S;
                          or a dialog it opens after it, decision 0076, --until mark:dialog shown+S)
-                         while one is shown, else on the game
+                         while one is shown, else on the game. While the on-screen controls show it
+                         sends nothing: a touch outside them is ignored, and the app logs `tap …: ignored`
   touch:CONTROL[+CONTROL...][@MS]
                          after a play: (it runs while the game runs): wait for the game's first frame,
                          then fingers on the on-screen controls by id, held MS ms (200 by default,

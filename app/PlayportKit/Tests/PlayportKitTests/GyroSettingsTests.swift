@@ -295,6 +295,35 @@ final class GyroSettingsTests: XCTestCase {
         XCTAssertTrue(GyroSteps.pauseButtons.allSatisfy { GyroPauseButton(name: $0.name) == $0 })
     }
 
+    /// The chip shows as gyro aim starts: game start, turned on in the menu, a new source or output; not on a plain Resume.
+    func testTheGyroChipShowsOnlyWhenGyroAimStarts() {
+        var cue = GyroChipCue()
+        let phone = GyroRun.running(.phone, .mouse)
+        // Before the first frame, then the game starts with it on.
+        XCTAssertFalse(cue.update(.stopped("no game in front"), output: .mouse))
+        XCTAssertTrue(cue.update(phone, output: .mouse))
+        XCTAssertFalse(cue.update(phone, output: .mouse))                 // any other update while it runs
+        // The menu, then Resume with nothing changed; the app away and back.
+        XCTAssertFalse(cue.update(.stopped("menu"), output: .mouse))
+        XCTAssertFalse(cue.update(phone, output: .mouse))
+        XCTAssertFalse(cue.update(.stopped("app not active"), output: .mouse))
+        XCTAssertFalse(cue.update(phone, output: .mouse))
+        // A controller with a gyro connects (Automatic takes it), and goes.
+        XCTAssertTrue(cue.update(.running(.controller, .mouse), output: .mouse))
+        XCTAssertTrue(cue.update(phone, output: .mouse))
+        // Changed to the right stick in the menu: shown on Resume.
+        XCTAssertFalse(cue.update(.stopped("menu"), output: .rightStick))
+        XCTAssertTrue(cue.update(.running(.phone, .rightStick), output: .rightStick))
+        // Turned off in the menu, and on again: shown again on Resume.
+        XCTAssertFalse(cue.update(.stopped("output off"), output: .off))
+        XCTAssertFalse(cue.update(.stopped("menu"), output: .rightStick))
+        XCTAssertTrue(cue.update(.running(.phone, .rightStick), output: .rightStick))
+        // The Gyro aim page's test area never shows it.
+        var page = GyroChipCue()
+        XCTAssertFalse(page.update(.previewing(.phone, .mouse), output: .mouse))
+        XCTAssertEqual(GyroChipCue.seconds, 2.5)
+    }
+
     /// The source row shows the gyro in use, and why there is none.
     func testTheSourceRowSaysWhichGyro() {
         XCTAssertEqual(GyroText.sourceInUse(.auto, device: .phone).value, "Auto · iPhone")

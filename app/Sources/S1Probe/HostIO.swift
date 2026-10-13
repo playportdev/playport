@@ -743,6 +743,8 @@ final class PacedMetalLayer: CAMetalLayer {
 /// PacedMetalLayer, registered with IOSDisplayShim when the view reaches a window.
 /// The swap chain is aspect-fitted, black around it, and touches map into
 /// the fitted picture: one finger at a time is the game's (the first down).
+/// While the on-screen controls show, a finger outside them is no one's
+/// (HostIOKit TouchRoute): no cursor, no click.
 /// A three-finger tap anywhere on it, on the on-screen controls too, opens the
 /// in-game menu (HostIO.menuGesture); UIKit cancels the tap's fingers out of
 /// the controls and the game, and iOS's own three-finger editing gestures
@@ -839,7 +841,7 @@ final class GameSurfaceView: UIView {
         let indirect = touches.filter { $0.type != .direct }.count
         HostIO.trace.update { $0.touches += touches.count - indirect; $0.pointerTouches += indirect }
         for t in touches where t.type == .direct {
-            if t.phase == .began, gameTouch == nil { gameTouch = t }
+            if t.phase == .began, gameTouch == nil, OnScreenControls.shared.route(t.location(in: controls)) == .game { gameTouch = t }
             guard t === gameTouch else { continue }
             if t.phase == .ended || t.phase == .cancelled { gameTouch = nil }
             route(t.location(in: self), phase: t.phase)
@@ -868,12 +870,16 @@ final class GameSurfaceView: UIView {
     }
 
     #if !PLAYPORT_RELEASE
-    /// The UI driver's tap: a finger down and up at (fx, fy), fractions of the view, 0.1 s apart.
-    func tap(fx: Double, fy: Double) async {
+    /// The UI driver's tap: a finger down and up at (fx, fy), fractions of the view, 0.1 s apart,
+    /// when it is the game's (not with the on-screen controls shown: those take `touch:`).
+    func tap(fx: Double, fy: Double) async -> TouchRoute {
         let p = CGPoint(x: fx * bounds.width, y: fy * bounds.height)
+        let to = OnScreenControls.shared.route(convert(p, to: controls))
+        guard to == .game else { return to }
         route(p, phase: .began)
         try? await Task.sleep(for: .milliseconds(100))
         route(p, phase: .ended)
+        return to
     }
     #endif
 

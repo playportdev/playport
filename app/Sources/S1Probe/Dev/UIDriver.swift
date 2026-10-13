@@ -89,7 +89,8 @@
 //   tap:<fx>:<fy>              After a play: (it runs while the game runs): a finger's tap at
 //                              that fraction (0-1) of the game's screen, through GameSurfaceView's
 //                              touch path (a guest GDI window while one is shown, decision 0075),
-//                              then waits 1 s
+//                              then waits 1 s. While the on-screen controls show it sends
+//                              nothing (outside them a touch is ignored; on them, use touch:)
 //   touch:<control>[+<control>...][@<ms>]
 //                              After a play: (it runs while the game runs): waits for the
 //                              game's first frame (3 min at most), then fingers on the
@@ -381,9 +382,11 @@ enum UIDriver {
                         return finish("action=\(action) refused: no game is running")
                     }
                     let window = GuestWindows.shown
-                    await view.tap(fx: f[0], fy: f[1])
+                    let to = await view.tap(fx: f[0], fy: f[1])
                     try? await Task.sleep(for: .milliseconds(1000))
-                    log("tap \(id): " + (window ? "on a guest window" : "on the game"))
+                    log("tap \(id): " + (to == .ignored ? "ignored: outside the on-screen controls"
+                                         : to == .controls ? "on an on-screen control: nothing sent (touch: presses them)"
+                                         : window ? "on a guest window" : "on the game"))
                     if let failure = await afterInGame(action, index: done + 1, next: actions[(i + 1)...]) { return finish(failure) }
                     if AppRestart.shared.restarting { return }
                 case "gesture":
