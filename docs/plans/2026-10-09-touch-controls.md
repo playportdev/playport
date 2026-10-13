@@ -4,9 +4,23 @@
 [`docs/design/2026-10-09-touch-controls/`](../design/2026-10-09-touch-controls/)
 (boards and README).
 
-**Date:** 2026-10-09. **Kind:** plan. **Status:** written, not started. Branch
+**Date:** 2026-10-09. **Kind:** plan. **Status:** running (started over 2026-10-13
+from `main` at `412de5f`; an earlier attempt is abandoned and not reused). Branch
 `dev/pla-13-touch-controls`. The four items under [To confirm](#to-confirm) take the
 proposed answer unless the owner says otherwise before the phase that needs them.
+
+## Run state
+
+- **Owner settings (2026-10-13):** this run covers phases 1–3 only. **Minimise phone
+  testing:** host tests and `pp check` for each chunk; one batched phone session per
+  phase (`pp phone lock -- …`: install, Hollow Knight `first-frame+10`, the phase's
+  driven checks), and the overlay `pp perf` A/B only if the blur is suspected.
+- **Decision number:** 0075 is taken; the record this plan calls "0075" takes the next
+  free number when written.
+- **Done:** nothing yet.
+- **Running:** phase 1 writer.
+- **Queue:** phase 1 → phase 2 (owner gyro play at its end) → phase 3; then stop.
+- **Notes and reports:** `.work/agent-notes/pla-13-v2/`.
 
 ## Goal
 
