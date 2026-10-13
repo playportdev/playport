@@ -73,7 +73,14 @@ proposed answer unless the owner says otherwise before the phase that needs them
   `open:settings#gyro`, `gyro:` on the test area. A pad's gyro is still chosen by
   `hasRotationRate` (as SDL does; a dev line logs each pad's motion flags). Dev IPA `0636a72d…`
   built and verified, not installed.
-- **Running:** 2d, the phase 2 phone session (writer launched 2026-10-13).
+- **Done: 2d** (phone; [evidence](../evidence/2026-10-13-touch-controls-phase2d.md)). The
+  relative-mouse spike passed on Portal 2 in its first map (`+map sp_a1_intro1`): 900 counts
+  turned the view right and 180 turned it down, and every move was drained. Right stick turns the
+  view only at 0.50; 0.33 and below are eaten by the game's dead zone. Timing: the iPhone gives
+  99.6 samples/s, 100 moves/s reach Wine (1.7 per 60 fps frame) with 0 ms coalescing delay, and
+  250 of 250 were drained. `51e01f5` fixed three things seen on the phone: the panel's gyro values
+  ("Stick"), the Gyro aim page's B ("Back"), and a still right stick's activity lines. Dev IPA
+  `fe0110ab…`; Hollow Knight `first-frame+10` passed on both IPAs.
 - **Owner feedback on phase 1 (2026-10-13), settled:**
   1. The overlay respects the safe area in both landscape orientations.
   2. Pink flicker over the game while the overlay shows: drop the blur for a flat
@@ -109,14 +116,18 @@ proposed answer unless the owner says otherwise before the phase that needs them
      driver action.
   3. **2c, done:** UI: the Gyro aim page and its test area, the in-game panel's gyro switch and
      sensitivity, the overlay chip.
-  4. **2d (phone), running:** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
+  4. **2d (phone), done:** the relative-mouse spike on Portal 2 (`app-620`) in mouse and
      right-stick modes, plus Hollow Knight `first-frame+10`. If the spike fails, a fix
      chunk follows. Also **measure the gyro event timing** (owner, 2026-10-13): the
      iPhone's real device-motion rate (and whether raw gyro goes higher), a controller's
      gyro rate if one is connected, `winios_pointer` moves per second and per frame
      with the 125 Hz coalescer, the delay it adds, and the ring's fill. The owner then
      decides on the cap (keep 125 Hz, or pass every controller sample at about 250 Hz).
-  5. **Phase 2 sign-off (owner):** Portal 2 with the phone's gyro and a DualSense's.
+  5. **Phase 2 sign-off (owner), next:** Portal 2 with the phone's gyro and a DualSense's. With
+     the DualSense, check the `controller "…": motion …` line, the `source controller` line, the
+     controller's `sensor rate:`, the coalescing delay, and whether touch and key releases hold
+     while aiming. The owner also decides the right stick's dead zone (anti-dead-zone option) and
+     the 125 Hz cap.
   6. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
   7. **3b:** the Controller page and the ActionPicker.
@@ -124,7 +135,7 @@ proposed answer unless the owner says otherwise before the phase that needs them
      `controller` mode, plus Hollow Knight.
   9. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
-- **Phone:** dev IPA `67d0938d…` (1c) installed; unattended mode on; Hollow Knight's own
+- **Phone:** dev IPA `fe0110ab…` (2d) installed; unattended mode on; Hollow Knight's own
   on-screen controls are Off (the owner's setting, left as found); Hollow Knight's profile
   slot 3 may now hold a King's Pass save rather than New Game (check it before a
   measured run that uses `tools/pad/hk-new-slot.txt`).
