@@ -14,8 +14,9 @@
 //     server call: patches/madeira-unix 0010), and resumes them on Resume.
 //
 // Its rows: Resume (also B, ≡ and Home), Controls (a panel beside the rows,
-// QuickMenuControls.dc.html: the game's on-screen controls, Off or Gamepad, and
-// their opacity, saved for the game and applied at once; UI/TouchControlsView.swift),
+// QuickMenuControls.dc.html: the game's on-screen controls, Off or Gamepad, the
+// Gamepad layout's d-pad and right stick, and their opacity, saved for the game
+// and applied at once; UI/TouchControlsView.swift),
 // Screenshot (the frame on screen to
 // Photos; a dev build also keeps a PNG in Documents/Screenshots), Performance
 // overlay (the Metal HUD on the game layer, now and for this game only), the
@@ -128,15 +129,25 @@ final class InGameMenu: ObservableObject {
         var mine = ControlsStore.shared.game(id)
         switch row {
         case .layout:
-            let all = OnScreenLayout.allCases
-            let i = all.firstIndex(of: now.layout)! + by
-            mine.layout = wrapping ? all[(i % all.count + all.count) % all.count] : all[max(0, min(all.count - 1, i))]
+            mine.layout = Self.step(now.layout, by: by, wrapping: wrapping)
+        case .dpad:
+            mine.dpad = Self.step(now.dpad, by: by, wrapping: wrapping)
+        case .rightStick:
+            mine.rightStick = Self.step(now.rightStick, by: by, wrapping: wrapping)
         case .opacity:
             let next = ControlsOpacity.step(now.opacity, by: by)
             mine.opacity = wrapping && next == now.opacity ? ControlsOpacity.steps[0] : next
         }
         ControlsStore.shared.setGame(id, mine)
-        Self.log("controls for \(id): layout \(mine.layout?.rawValue ?? "default") opacity \(mine.opacity.map(ControlsOpacity.label) ?? "default")")
+        Self.log("controls for \(id): layout \(mine.layout?.rawValue ?? "default") dpad \(mine.dpad?.rawValue ?? "default") "
+                 + "rightStick \(mine.rightStick?.rawValue ?? "default") opacity \(mine.opacity.map(ControlsOpacity.label) ?? "default")")
+    }
+
+    /// The value `by` steps from `value` along its cases, stopping at the ends (going round with `wrapping`).
+    static func step<T: CaseIterable & Equatable>(_ value: T, by: Int, wrapping: Bool) -> T where T.AllCases == [T] {
+        let all = T.allCases
+        let i = all.firstIndex(of: value)! + by
+        return wrapping ? all[(i % all.count + all.count) % all.count] : all[max(0, min(all.count - 1, i))]
     }
 
     /// Back to the game: its threads go on first, then its input and audio.
@@ -400,7 +411,7 @@ struct InGameMenuView: View {
 }
 
 /// The Controls panel beside the menu's rows (QuickMenuControls.dc.html): the
-/// game's on-screen layout and their opacity. A tap does what left and right do.
+/// game's on-screen layout, its d-pad and right stick, and their opacity. A tap does what left and right do.
 private struct ControlsPanel: View {
     let ring: QuickMenuControlsRow
     let state: ControlsState
@@ -413,24 +424,9 @@ private struct ControlsPanel: View {
                 Text("For this game · saved as you change them").font(.system(size: 12)).foregroundStyle(PP.muted)
             }
             .padding(.bottom, 4)
-            row(.layout) {
-                HStack(spacing: 2) {
-                    ForEach(OnScreenLayout.allCases, id: \.self) { l in
-                        Text(l.title).font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(l == state.layout ? PP.background : PP.muted)
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(l == state.layout ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 9))
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                let by = OnScreenLayout.allCases.firstIndex(of: l)! - OnScreenLayout.allCases.firstIndex(of: state.layout)!
-                                model.changeControls(.layout, by: by)
-                            }
-                            .accessibilityIdentifier("menu-controls-layout-\(l.rawValue)")
-                    }
-                }
-                .padding(3)
-                .background(PP.background, in: RoundedRectangle(cornerRadius: 12))
-            }
+            row(.layout) { choices(.layout, OnScreenLayout.allCases, state.layout, title: \.title) }
+            row(.dpad) { choices(.dpad, OnScreenDpad.allCases, state.dpad, title: \.title) }
+            row(.rightStick) { choices(.rightStick, OnScreenRightStick.allCases, state.rightStick, title: \.shortTitle) }
             row(.opacity) {
                 HStack(spacing: 8) {
                     arrow("‹", by: -1)
@@ -438,6 +434,7 @@ private struct ControlsPanel: View {
                     arrow("›", by: 1)
                 }
             }
+            Text("The right stick goes below or above A/B/X/Y.").font(.system(size: 12)).foregroundStyle(PP.muted)
             if !state.visible && state.layout != .off {
                 Text("Hidden while a controller is connected.").font(.system(size: 12)).foregroundStyle(PP.muted)
             }
@@ -459,6 +456,24 @@ private struct ControlsPanel: View {
         .background(PP.raised, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(ring == r ? PP.accent : .clear, lineWidth: 2))
         .accessibilityIdentifier("menu-controls-\(r.rawValue)")
+    }
+
+    /// A row's values side by side, the current one filled; a tap chooses one.
+    private func choices<T: Hashable & RawRepresentable>(_ r: QuickMenuControlsRow, _ all: [T], _ current: T,
+                                                          title: KeyPath<T, String>) -> some View where T.RawValue == String {
+        HStack(spacing: 2) {
+            ForEach(all, id: \.self) { v in
+                Text(v[keyPath: title]).font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(v == current ? PP.background : PP.muted)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(v == current ? PP.text : .clear, in: RoundedRectangle(cornerRadius: 9))
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.changeControls(r, by: all.firstIndex(of: v)! - all.firstIndex(of: current)!) }
+                    .accessibilityIdentifier("menu-controls-\(r.rawValue)-\(v.rawValue)")
+            }
+        }
+        .padding(3)
+        .background(PP.background, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func arrow(_ s: String, by: Int) -> some View {

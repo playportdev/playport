@@ -66,11 +66,12 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          after a play: (it runs while the game runs): wait for the game's first frame,
                          then fingers on the on-screen controls by id, held MS ms (200 by default,
                          10000 at most) and let go together (Dev/TouchDriver.swift). The Gamepad
-                         layout's ids: view menu lt lb rt rb dpad leftStick rightStick y x b a;
+                         layout's ids: view menu lt lb rt rb leftStick y x b a, and dpad and rightStick
+                         when the game's controls have them ("dpad":"on", "rightStick":"below"|"above");
                          a stick or the d-pad takes a direction: dpad.right, leftStick.up.
                          The controls show while no controller is connected (--pad connects one).
                          Example: --action play:app-367520 --action wait:20 --action touch:a
-                         --action touch:dpad.right@2000 --action touch:dpad.right+a@600
+                         --action touch:leftStick.right@2000 --action touch:leftStick.right+a@600
   gesture:three-finger-tap
                          after a play: (it runs while the game runs): wait for the game's first frame,
                          then fire the three-finger tap through the handler the app's recognizer calls,
@@ -83,7 +84,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
   menu:ROW               in that menu, move its ring to ROW (resume, controls, screenshot, overlay,
                          controller, quit) and press A; pad:up/down/a/b press into the menu while it is up.
                          menu:controls opens its Controls panel: pad:left/right change the ringed row
-                         (On-screen controls: Off, Gamepad; Opacity), pad:down/up move, pad:b goes back.
+                         (On-screen controls: Off, Gamepad; D-pad: Off, On; Right stick: Off, Below, Above
+                         A/B/X/Y; Opacity), pad:down/up move, pad:b goes back.
                          menu:screenshot saves the frame to Photos (the first time iOS asks a person
                          to allow it) and, in a dev build, to Documents/Screenshots; menu:quit closes
                          the game's windows, and the run follows Playport's restart as for play:.
@@ -143,7 +145,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          with no game; the run is done as it asks (use --leave-running); must be
                          the last action
   --controls ID:JSON     a game's own on-screen controls, as the in-game menu's Controls saves them
-                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.2-1}; `ID:{}` clears)
+                         (PlayportKit GameControls: {"layout":"off"|"gamepad","opacity":0.2-1,
+                         "dpad":"off"|"on","rightStick":"off"|"below"|"above"}; a key left out follows
+                         Settings › Controls, where the d-pad and right stick are off by default; `ID:{}` clears)
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
                          LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
@@ -455,7 +459,7 @@ def parse(argv=None):
                         "verify:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch, probe:pairing[-cancel|-use]; in order, before --settings/--verify/--play")
     p.add_argument("--controls", metavar="ID:JSON",
                    help='save these on-screen controls for the title first ({"layout":"off"} or '
-                        '{"layout":"gamepad","opacity":0.8}; {} clears them)')
+                        '{"layout":"gamepad","opacity":0.8,"dpad":"on","rightStick":"below"}; {} clears them)')
     p.add_argument("--settings", metavar="ID:JSON",
                    help='save these launch settings for the title first ({"frameLimit":30,"screen":"720",'
                         '"arguments":"-DX12"}; "arguments" may also be a list of strings; {} clears them)')
@@ -507,13 +511,16 @@ def parse(argv=None):
         cid, _, cjs = a.controls.partition(":")
         try:
             cobj = json.loads(cjs)
-            ok = ID_RE.match(cid) and isinstance(cobj, dict) and set(cobj) <= {"layout", "opacity"} \
+            ok = ID_RE.match(cid) and isinstance(cobj, dict) and set(cobj) <= {"layout", "opacity", "dpad", "rightStick"} \
                 and cobj.get("layout", "off") in ("off", "gamepad") \
-                and isinstance(cobj.get("opacity", 0.5), (int, float)) and 0.1 <= cobj.get("opacity", 0.5) <= 1
+                and isinstance(cobj.get("opacity", 0.5), (int, float)) and 0.1 <= cobj.get("opacity", 0.5) <= 1 \
+                and cobj.get("dpad", "off") in ("off", "on") \
+                and cobj.get("rightStick", "off") in ("off", "below", "above")
         except ValueError:
             ok = False
         if not ok:
-            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad) and opacity (0.1-1) only")
+            p.error(f"{a.controls!r} is not ID:JSON with layout (off, gamepad), opacity (0.1-1), dpad (off, on) "
+                    "and rightStick (off, below, above) only")
         a.controls_pair = (cid, json.dumps(cobj, separators=(",", ":")))
     a.settings_pair = None
     if a.settings:

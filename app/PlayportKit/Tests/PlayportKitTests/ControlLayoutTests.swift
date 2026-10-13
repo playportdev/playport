@@ -4,15 +4,25 @@ import XCTest
 @testable import PlayportKit
 
 final class ControlLayoutTests: XCTestCase {
+    /// Every d-pad and right-stick choice.
+    static let options: [(dpad: OnScreenDpad, rightStick: OnScreenRightStick)] =
+        OnScreenDpad.allCases.flatMap { d in OnScreenRightStick.allCases.map { (d, $0) } }
+
     func testTheGamepadPresetRoundTripsAndIsUsable() throws {
-        let g = ControlLayout.gamepad
-        XCTAssertNil(g.problem)
-        XCTAssertEqual(g.version, 2)
-        let data = try JSONEncoder().encode(g)
-        XCTAssertEqual(try JSONDecoder().decode(ControlLayout.self, from: data), g)
-        XCTAssertEqual(g.controls.map(\.id), ["view", "menu", "lt", "lb", "rt", "rb", "dpad",
-                                              "leftStick", "rightStick", "y", "x", "b", "a"])
-        XCTAssertFalse(g.controls.contains { $0.actions.contains(.playport(.menu)) })   // the menu is a three-finger tap
+        for o in Self.options {
+            let g = ControlLayout.gamepad(dpad: o.dpad, rightStick: o.rightStick)
+            XCTAssertNil(g.problem)
+            XCTAssertEqual(g.version, 2)
+            let data = try JSONEncoder().encode(g)
+            XCTAssertEqual(try JSONDecoder().decode(ControlLayout.self, from: data), g)
+            XCTAssertFalse(g.controls.contains { $0.actions.contains(.playport(.menu)) })   // the menu is a three-finger tap
+        }
+        // The d-pad and the right stick are off by default.
+        XCTAssertEqual(ControlLayout.gamepad().controls.map(\.id), ["view", "menu", "lt", "lb", "rt", "rb", "leftStick", "y", "x", "b", "a"])
+        XCTAssertEqual(ControlLayout.gamepad(dpad: .on, rightStick: .below).controls.map(\.id),
+                       ["view", "menu", "lt", "lb", "rt", "rb", "dpad", "leftStick", "rightStick", "y", "x", "b", "a"])
+        XCTAssertEqual(OnScreenLayout.gamepad.layout(dpad: .off, rightStick: .above), .gamepad(rightStick: .above))
+        XCTAssertNil(OnScreenLayout.off.layout(dpad: .on, rightStick: .below))
     }
 
     /// Anchor + offset + size, placed in the safe area: the anchor is the safe
@@ -55,58 +65,108 @@ final class ControlLayoutTests: XCTestCase {
         ("right inset only", 874, 402, ControlInsets(left: 0, bottom: 21, right: 62)),
     ]
 
+    static func overlap(_ a: TouchRect, _ b: TouchRect) -> Bool {
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    static func gap(_ a: TouchRect, _ b: TouchRect) -> Double {
+        let dx = max(b.x - (a.x + a.width), a.x - (b.x + b.width), 0)
+        let dy = max(b.y - (a.y + a.height), a.y - (b.y + b.height), 0)
+        return max(dx, dy)
+    }
+
+    /// The smallest rectangle around them.
+    static func bounds(_ rs: [TouchRect]) -> TouchRect {
+        let x0 = rs.map(\.x).min()!, y0 = rs.map(\.y).min()!
+        let x1 = rs.map { $0.x + $0.width }.max()!, y1 = rs.map { $0.y + $0.height }.max()!
+        return TouchRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+    }
+
     func testThePresetFitsEveryScreenWithZonesClearOfTheControls() {
         func inside(_ r: TouchRect, _ a: TouchRect) -> Bool {
             r.x >= a.x - 1e-9 && r.y >= a.y - 1e-9 && r.x + r.width <= a.x + a.width + 1e-9 && r.y + r.height <= a.y + a.height + 1e-9
         }
-        func overlap(_ a: TouchRect, _ b: TouchRect) -> Bool {
-            a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-        }
-        func gap(_ a: TouchRect, _ b: TouchRect) -> Double {
-            let dx = max(b.x - (a.x + a.width), a.x - (b.x + b.width), 0)
-            let dy = max(b.y - (a.y + a.height), a.y - (b.y + b.height), 0)
-            return max(dx, dy)
-        }
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
         for s in Self.screens {
-            let area = s.insets.area(width: s.width, height: s.height)
-            let targets = ControlLayout.gamepad.targets(width: s.width, height: s.height, insets: s.insets)
-            var zones: [TouchRect] = []
-            var fixed: [TouchTarget] = []
-            for t in targets {
-                XCTAssertTrue(inside(t.frame, area), "\(s.name): \(t.id) \(t.frame) is outside \(area)")
-                if case .stick(_, let zone?) = t.kind {
-                    XCTAssertTrue(inside(zone, area), "\(s.name): \(t.id)'s zone")
-                    XCTAssertTrue(zone.contains(t.frame.center), "\(s.name): \(t.id) rests in its zone")   // where touch: lands
-                    zones.append(zone)
-                } else {
-                    fixed.append(t)
+            for o in Self.options {
+                let name = "\(s.name), d-pad \(o.dpad.rawValue), right stick \(o.rightStick.rawValue)"
+                let area = s.insets.area(width: s.width, height: s.height)
+                let targets = ControlLayout.gamepad(dpad: o.dpad, rightStick: o.rightStick)
+                    .targets(width: s.width, height: s.height, insets: s.insets)
+                func frame(_ id: String) -> TouchRect? { targets.first { $0.id == id }?.frame }
+                var zones: [String: TouchRect] = [:]
+                var fixed: [TouchTarget] = []
+                for t in targets {
+                    XCTAssertTrue(inside(t.frame, area), "\(name): \(t.id) \(t.frame) is outside \(area)")
+                    if case .stick(_, let zone?) = t.kind {
+                        XCTAssertTrue(inside(zone, area), "\(name): \(t.id)'s zone")
+                        XCTAssertTrue(zone.contains(t.frame.center), "\(name): \(t.id) rests in its zone")   // where touch: lands
+                        zones[t.id] = zone
+                    } else {
+                        fixed.append(t)
+                    }
                 }
-            }
-            XCTAssertEqual(zones.count, 2, s.name)
-            XCTAssertGreaterThanOrEqual(gap(zones[0], zones[1]), 12, "\(s.name): the zones")
-            for (i, t) in fixed.enumerated() {
-                for z in zones { XCTAssertGreaterThanOrEqual(gap(t.frame, z), 12, "\(s.name): \(t.id) is near a zone") }
-                for u in fixed[(i + 1)...] { XCTAssertFalse(overlap(t.frame, u.frame), "\(s.name): \(t.id) and \(u.id) overlap") }
+                XCTAssertEqual(zones.count, o.rightStick == .off ? 1 : 2, name)
+                XCTAssertEqual(frame("dpad") != nil, o.dpad == .on, name)
+                for (i, t) in fixed.enumerated() {
+                    for (id, z) in zones { XCTAssertGreaterThanOrEqual(Self.gap(t.frame, z), 12, "\(name): \(t.id) is near \(id)'s zone") }
+                    for u in fixed[(i + 1)...] { XCTAssertFalse(Self.overlap(t.frame, u.frame), "\(name): \(t.id) and \(u.id) overlap") }
+                }
+                if let l = zones["leftStick"], let r = zones["rightStick"] {
+                    XCTAssertGreaterThanOrEqual(Self.gap(l, r), 12, "\(name): the zones")
+                }
+                // The left zone takes the lower left corner; the d-pad is centred above it.
+                let left = zones["leftStick"]!
+                XCTAssertTrue(near(left.x, area.x) && near(left.y + left.height, area.y + area.height), "\(name): the left zone")
+                if let d = frame("dpad") {
+                    XCTAssertTrue(near(d.center.x, left.center.x), "\(name): the d-pad is centred over the left zone")
+                    XCTAssertLessThan(d.y + d.height, left.y, "\(name): the d-pad is above the left zone")
+                }
+                // A/B/X/Y: the d-pad's size, and the right zone centred on them, below or above.
+                let faces = Self.bounds(["y", "x", "b", "a"].map { frame($0)! })
+                XCTAssertEqual(faces.width, 120, name)
+                XCTAssertEqual(faces.height, 120, name)
+                if let d = frame("dpad") { XCTAssertEqual(d.width, faces.width, name) }
+                XCTAssertTrue(near(frame("y")!.center.x, faces.center.x) && near(frame("a")!.center.x, faces.center.x), name)
+                let bottom = area.y + area.height, right = area.x + area.width
+                switch o.rightStick {
+                case .off, .above:
+                    XCTAssertTrue(near(faces.y + faces.height, bottom), "\(name): A/B/X/Y keep the lower right corner")
+                case .below:
+                    XCTAssertLessThan(faces.y + faces.height, bottom, "\(name): A/B/X/Y move up")
+                }
+                if let z = zones["rightStick"] {
+                    XCTAssertTrue(near(z.center.x, faces.center.x), "\(name): the right zone is centred on A/B/X/Y")
+                    if o.rightStick == .below {
+                        XCTAssertTrue(near(z.y + z.height, bottom) && near(z.x + z.width, right), "\(name): the right zone takes the corner")
+                        XCTAssertLessThan(faces.y + faces.height, z.y, "\(name): A/B/X/Y over the zone")
+                    } else {
+                        XCTAssertLessThan(z.y + z.height, faces.y, "\(name): the zone over A/B/X/Y")
+                    }
+                }
             }
         }
     }
 
-    /// The left zone is the lower left corner, the right zone mirrors it, and the
-    /// d-pad and A B X Y are above and inward of them.
-    func testTheZonesAreMirroredAndTheirOwnersHitThere() {
+    /// At 874 × 402 with the island on the left and right: the left zone and the
+    /// d-pad over it, the right zone in the corner with A B X Y over it (Below),
+    /// or A B X Y in the corner with the zone over them (Above); each control's
+    /// edge nearest a zone is its own, the gap and the middle the game's.
+    func testTheZonesAndTheirNeighboursHitWhereTheyAreDrawn() {
         let insets = ControlInsets(left: 62, bottom: 21, right: 62)
-        let targets = ControlLayout.gamepad.targets(width: 874, height: 402, insets: insets)
+        let targets = ControlLayout.gamepad(dpad: .on, rightStick: .below).targets(width: 874, height: 402, insets: insets)
         func target(_ id: String) -> TouchTarget { targets.first { $0.id == id }! }
         guard case .stick(.leftStick, let lz?) = target("leftStick").kind,
               case .stick(.rightStick, let rz?) = target("rightStick").kind else { return XCTFail("both sticks float") }
-        XCTAssertEqual(lz, TouchRect(x: 62, y: 241, width: 210, height: 140))
-        XCTAssertEqual(rz, TouchRect(x: 602, y: 241, width: 210, height: 140))
-        XCTAssertEqual(target("dpad").frame, TouchRect(x: 158, y: 113, width: 116, height: 116))
-        XCTAssertEqual(target("a").frame.center, TouchPoint(x: 656, y: 203))
-        XCTAssertEqual(target("y").frame.center, TouchPoint(x: 656, y: 99))
-        XCTAssertEqual(target("x").frame.center, TouchPoint(x: 604, y: 151))
-        XCTAssertEqual(target("b").frame.center, TouchPoint(x: 708, y: 151))
+        XCTAssertEqual(lz, TouchRect(x: 62, y: 255, width: 210, height: 126))
+        XCTAssertEqual(rz, TouchRect(x: 602, y: 255, width: 210, height: 126))
+        XCTAssertEqual(target("dpad").frame, TouchRect(x: 107, y: 123, width: 120, height: 120))
+        XCTAssertEqual(target("a").frame, TouchRect(x: 687, y: 203, width: 40, height: 40))
+        XCTAssertEqual(target("y").frame.center, TouchPoint(x: 707, y: 143))
+        XCTAssertEqual(target("x").frame.center, TouchPoint(x: 667, y: 183))
+        XCTAssertEqual(target("b").frame.center, TouchPoint(x: 747, y: 183))
         XCTAssertEqual(target("lt").frame, TouchRect(x: 68, y: 4, width: 64, height: 40))
+        XCTAssertEqual(target("lb").frame, TouchRect(x: 68, y: 50, width: 64, height: 40))
         XCTAssertEqual(target("view").frame, TouchRect(x: 138, y: 7, width: 44, height: 30))
         XCTAssertEqual(target("menu").frame, TouchRect(x: 692, y: 7, width: 44, height: 30))
 
@@ -114,31 +174,49 @@ final class ControlLayoutTests: XCTestCase {
         func owner(_ x: Double, _ y: Double) -> String? { t.target(at: TouchPoint(x: x, y: y)).map { targets[$0].id } }
         // Each zone is its stick's, edge to edge.
         XCTAssertEqual(owner(63, 380), "leftStick")
-        XCTAssertEqual(owner(271, 242), "leftStick")
+        XCTAssertEqual(owner(271, 256), "leftStick")
         XCTAssertEqual(owner(811, 380), "rightStick")
-        XCTAssertEqual(owner(603, 242), "rightStick")
-        // The d-pad's and A's edges nearest the zones are theirs, not a stick's.
-        XCTAssertEqual(owner(216, 228), "dpad")
-        XCTAssertEqual(owner(656, 228), "a")
-        // Between them, and the middle, are the game's.
-        XCTAssertNil(owner(216, 235))
+        XCTAssertEqual(owner(603, 256), "rightStick")
+        // The d-pad's and A's edges nearest the zones are theirs, not a stick's; the gap is the game's.
+        XCTAssertEqual(owner(167, 242), "dpad")
+        XCTAssertEqual(owner(707, 242), "a")
+        XCTAssertNil(owner(167, 249))
+        XCTAssertNil(owner(707, 249))
+        // A/B/X/Y side by side: each its own square, the corners between them and the middle the game's.
+        XCTAssertEqual(owner(686, 183), "x")
+        XCTAssertEqual(owner(728, 183), "b")
+        XCTAssertNil(owner(707, 183))
+        XCTAssertNil(owner(667, 143))
         XCTAssertNil(owner(437, 300))
         XCTAssertNil(owner(437, 30))
         // Out of the safe area (under the island) is the game's.
         XCTAssertNil(owner(30, 380))
         // A face button and the d-pad with both sticks, all at once.
-        XCTAssertTrue(t.began(1, at: TouchPoint(x: 656, y: 203), time: 0))
-        XCTAssertTrue(t.began(2, at: TouchPoint(x: 216, y: 130), time: 0))
-        XCTAssertTrue(t.began(3, at: TouchPoint(x: 150, y: 320), time: 0))
-        XCTAssertTrue(t.began(4, at: TouchPoint(x: 700, y: 320), time: 0))
-        t.moved(3, at: TouchPoint(x: 150, y: 268), time: 0.05)
-        t.moved(4, at: TouchPoint(x: 648, y: 320), time: 0.05)
+        XCTAssertTrue(t.began(1, at: TouchPoint(x: 707, y: 223), time: 0))
+        XCTAssertTrue(t.began(2, at: TouchPoint(x: 167, y: 130), time: 0))
+        XCTAssertTrue(t.began(3, at: TouchPoint(x: 150, y: 330), time: 0))
+        XCTAssertTrue(t.began(4, at: TouchPoint(x: 700, y: 330), time: 0))
+        t.moved(3, at: TouchPoint(x: 150, y: 278), time: 0.05)
+        t.moved(4, at: TouchPoint(x: 648, y: 330), time: 0.05)
         let pad = t.output.pad
         XCTAssertTrue(pad.a)
         XCTAssertTrue(pad.up)
         XCTAssertEqual(pad.ly, 1, accuracy: 0.001)
         XCTAssertEqual(pad.rx, -1, accuracy: 0.001)
         XCTAssertEqual(t.held, ["a", "dpad", "leftStick", "rightStick"])
+
+        // Above: A B X Y in the corner, the zone over them; the gap between is the game's.
+        let above = ControlLayout.gamepad(rightStick: .above).targets(width: 874, height: 402, insets: insets)
+        guard case .stick(.rightStick, let az?) = above.first(where: { $0.id == "rightStick" })!.kind else { return XCTFail("floats") }
+        XCTAssertEqual(az, TouchRect(x: 602, y: 129, width: 210, height: 120))
+        XCTAssertEqual(above.first { $0.id == "a" }!.frame, TouchRect(x: 687, y: 341, width: 40, height: 40))
+        XCTAssertEqual(above.first { $0.id == "y" }!.frame, TouchRect(x: 687, y: 261, width: 40, height: 40))
+        let u = TouchControls(targets: above)
+        func aboveOwner(_ x: Double, _ y: Double) -> String? { u.target(at: TouchPoint(x: x, y: y)).map { above[$0].id } }
+        XCTAssertEqual(aboveOwner(707, 248), "rightStick")
+        XCTAssertNil(aboveOwner(707, 255))
+        XCTAssertEqual(aboveOwner(707, 262), "y")
+        XCTAssertNil(above.first { $0.id == "dpad" })
     }
 
     func testANewerOlderOrBrokenLayoutIsRefused() {
@@ -151,6 +229,9 @@ final class ControlLayoutTests: XCTestCase {
         let stick = #"{"id":"s","kind":"stick","actions":["pad:leftStick"],"anchor":"bottomLeading","x":100,"y":-80,"width":100,"height":100"#
         XCTAssertEqual(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomLeading","width":200,"height":150}}]}"#)?
             .controls.first?.floatingZone, ControlZone(anchor: .bottomLeading, width: 200, height: 150))
+        // A zone's offset (1c) may be left out: 0, as a layout saved before it reads.
+        XCTAssertEqual(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"anchor":"bottomTrailing","y":-132,"width":210,"height":120}}]}"#)?
+            .controls.first?.floatingZone, ControlZone(anchor: .bottomTrailing, y: -132, width: 210, height: 120))
         // Version 1 (before the safe area; zones as fractions of the view): refused, so the preset is used.
         XCTAssertNil(decode(#"{"version":1,"controls":[\#(button)]}"#))
         XCTAssertNil(decode(#"{"version":2,"controls":[\#(stick),"floatingZone":{"x":0,"y":0.33,"width":0.33,"height":0.67}}]}"#))
@@ -192,7 +273,40 @@ final class ControlsSettingsTests: XCTestCase {
         let pad = ControlsState.resolve(game: GameControls(layout: .off), defaults: ControlsDefaults(), controllerConnected: true)
         XCTAssertNil(pad.drawnLayout)
         XCTAssertEqual(ControlsState.resolve(game: nil, defaults: ControlsDefaults(), controllerConnected: false).drawnLayout,
-                       .gamepad)
+                       .gamepad())
+    }
+
+    /// The controls' pad is player 1 whenever no controller is connected, Off too,
+    /// so turning the controls on in-game connects nothing new (1c).
+    func testTheControlsPadIsConnectedWhileNoControllerIs() {
+        let d = ControlsDefaults()
+        let off = GameControls(layout: .off)
+        XCTAssertTrue(ControlsState.resolve(game: off, defaults: d, controllerConnected: false).padConnected)
+        XCTAssertTrue(ControlsState.resolve(game: nil, defaults: ControlsDefaults(show: .never), controllerConnected: false).padConnected)
+        XCTAssertTrue(ControlsState.resolve(game: nil, defaults: d, controllerConnected: false).padConnected)
+        // A controller connected is player 1 instead, unless Always shows the controls with it.
+        XCTAssertFalse(ControlsState.resolve(game: off, defaults: d, controllerConnected: true).padConnected)
+        XCTAssertFalse(ControlsState.resolve(game: nil, defaults: d, controllerConnected: true).padConnected)
+        XCTAssertTrue(ControlsState.resolve(game: nil, defaults: ControlsDefaults(show: .always), controllerConnected: true).padConnected)
+        XCTAssertFalse(ControlsState.resolve(game: off, defaults: ControlsDefaults(show: .always), controllerConnected: true).padConnected)
+    }
+
+    /// The d-pad and the right stick: the game's own, else Settings › Controls' (both Off by default).
+    func testTheDpadAndRightStickFollowTheGameThenTheDefaults() {
+        let plain = ControlsState.resolve(game: nil, defaults: ControlsDefaults(), controllerConnected: false)
+        XCTAssertEqual(plain.dpad, .off)
+        XCTAssertEqual(plain.rightStick, .off)
+        XCTAssertEqual(plain.drawnLayout, .gamepad(dpad: .off, rightStick: .off))
+        let defaults = ControlsDefaults(dpad: .on, rightStick: .above)
+        let withDefaults = ControlsState.resolve(game: GameControls(layout: .gamepad), defaults: defaults, controllerConnected: false)
+        XCTAssertEqual(withDefaults.drawnLayout, .gamepad(dpad: .on, rightStick: .above))
+        let mine = ControlsState.resolve(game: GameControls(rightStick: .below), defaults: defaults, controllerConnected: false)
+        XCTAssertEqual(mine.dpad, .on)
+        XCTAssertEqual(mine.rightStick, .below)
+        XCTAssertEqual(mine.drawnLayout, .gamepad(dpad: .on, rightStick: .below))
+        XCTAssertFalse(GameControls(dpad: .off).isEmpty)
+        XCTAssertEqual(OnScreenRightStick.allCases.map(\.title), ["Off", "Below A/B/X/Y", "Above A/B/X/Y"])
+        XCTAssertEqual(OnScreenDpad.allCases.map(\.title), ["Off", "On"])
     }
 
     func testTheSummaryAndOpacitySteps() {
@@ -217,9 +331,20 @@ final class ControlsSettingsTests: XCTestCase {
         d.set("sometimes", forKey: ControlsDefaults.showKey)
         d.set(7.0, forKey: ControlsDefaults.opacityKey)
         XCTAssertEqual(ControlsDefaults(d), ControlsDefaults(show: .automatic, opacity: 0.6, haptics: false))
+        d.set("on", forKey: ControlsDefaults.dpadKey)
+        d.set("below", forKey: ControlsDefaults.rightStickKey)
+        XCTAssertEqual(ControlsDefaults(d), ControlsDefaults(show: .automatic, opacity: 0.6, haptics: false, dpad: .on, rightStick: .below))
+        d.set("sideways", forKey: ControlsDefaults.rightStickKey)
+        XCTAssertEqual(ControlsDefaults(d).rightStick, .off)
         d.removePersistentDomain(forName: "ControlsSettingsTests")
         let g = try JSONDecoder().decode(GameControls.self, from: Data(#"{"layout":"off"}"#.utf8))
         XCTAssertEqual(g, GameControls(layout: .off))
+        // A game saved before the d-pad and right stick options reads them as the defaults'.
+        XCTAssertEqual(try JSONDecoder().decode(GameControls.self, from: Data(#"{"layout":"gamepad","opacity":0.8}"#.utf8)),
+                       GameControls(layout: .gamepad, opacity: 0.8))
+        XCTAssertEqual(try JSONDecoder().decode(GameControls.self, from: Data(#"{"dpad":"on","rightStick":"above"}"#.utf8)),
+                       GameControls(dpad: .on, rightStick: .above))
+        XCTAssertThrowsError(try JSONDecoder().decode(GameControls.self, from: Data(#"{"rightStick":"left"}"#.utf8)))
         XCTAssertTrue(try JSONDecoder().decode(GameControls.self, from: Data("{}".utf8)).isEmpty)
         XCTAssertThrowsError(try JSONDecoder().decode(GameControls.self, from: Data(#"{"layout":"tank"}"#.utf8)))
     }

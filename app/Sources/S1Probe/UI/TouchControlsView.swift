@@ -9,11 +9,14 @@
 //
 // - Automatic display (PlayportKit ControlsState): with the game's layout on
 //   and no extended controller connected (the dev build's scripted pad counts),
-//   the controls' pad is player 1 from the runtime's start, so a game that
-//   lists its controllers early sees it; they are drawn and take touches once
-//   the game draws its first frame. A controller connecting hides them, its
-//   going brings them back. The first time they show on their own, a toast
-//   says why and teaches the three-finger tap.
+//   they are drawn and take touches once the game draws its first frame. A
+//   controller connecting hides them, its going brings them back. The first
+//   time they show on their own, a toast says why and teaches the three-finger tap.
+// - The controls' pad is player 1 from the runtime's start whenever no
+//   controller is connected, at rest while the layout is Off
+//   (ControlsState.padConnected): a game that looks for pads only at its start
+//   or now and then already has it, so turning the controls on in-game only
+//   draws them (touch controls 1c evidence).
 // - Nothing stays held: the in-game menu or a web page over the game
 //   (HostIO.holdGuest), a guest dialog over the game, the app leaving the
 //   front, a new layout or size, and the controls hiding all let go of every
@@ -21,7 +24,7 @@
 // - TouchControlsView, a subview of GameSurfaceView, lays the controls out in
 //   its safe area (the notch or Dynamic Island on either side, the home
 //   indicator) and again when that changes, and hit-tests only the controls
-//   and the floating sticks' zones (drawn as faint outlines): every other touch
+//   and the floating sticks' zones (not drawn): every other touch
 //   falls through to the game as a click, as before. A flat translucent fill,
 //   amber while held, a light haptic tick on each press (Settings › Controls).
 //   No backdrop blur: with one, pink glitches flickered over the game (phase 1
@@ -50,6 +53,8 @@ final class OnScreenControls: ObservableObject {
     private(set) var controls = TouchControls()
     /// The controls' pad is in slot 0 (HostIO.touchControls).
     private var padOn = false
+    /// padOn as last logged.
+    private var loggedPad = false
     private var started = false
     private var controllers = 0
     private var guestHeld = false
@@ -127,10 +132,11 @@ final class OnScreenControls: ObservableObject {
         let newLayout = s.drawnLayout
         let drawNow = newLayout != nil && launch.running && launch.step == .drawing && !launch.quitting && !guestHeld && !dialog
         let changed = s != state || drawNow != drawn || newLayout != layout
-        guard changed || padOn != (s.visible && launch.running) else { return }
+        guard changed || padOn != (s.padConnected && launch.running) else { return }
         let layoutChanged = newLayout != layout
         if drawNow != drawn || (drawNow && layoutChanged) {
-            Self.log(drawNow ? "shown (\(s.layout.title), \(ControlsOpacity.label(s.opacity)))"
+            Self.log(drawNow ? "shown (\(s.layout.title), \(ControlsOpacity.label(s.opacity)), d-pad \(s.dpad.rawValue), "
+                     + "right stick \(s.rightStick.rawValue))"
                      : "hidden (" + (newLayout == nil ? "controller connected" : guestHeld ? "menu" : dialog ? "dialog"
                                      : "game not drawing") + ")")
         }
@@ -141,7 +147,11 @@ final class OnScreenControls: ObservableObject {
         state = s
         drawn = drawNow
         layout = newLayout
-        padOn = s.visible && launch.running
+        padOn = s.padConnected && launch.running
+        if padOn != loggedPad {
+            loggedPad = padOn
+            Self.log(padOn ? "player 1 is the controls' pad (\(s.layout.title))" : "the controls' pad left player 1")
+        }
         if layoutChanged { place() }
         if !drawn { controls.releaseAll() }
         publish()
@@ -218,7 +228,6 @@ private final class ClockTarget: NSObject {
 /// The controls, drawn over GameSurfaceView and taking only the touches on them.
 final class TouchControlsView: UIView {
     private var views: [String: ControlView] = [:]
-    private var zones: [UIView] = []
     private let toast = ToastView()
     private var touchIDs: [ObjectIdentifier: Int] = [:]
     private var nextTouch = 1
@@ -261,23 +270,12 @@ final class TouchControlsView: UIView {
         OnScreenControls.shared.takes(point)
     }
 
-    /// The layout changed: one view per control.
+    /// The layout changed: one view per control. A floating stick's zone is not drawn.
     func rebuild() {
         views.values.forEach { $0.removeFromSuperview() }
         views = [:]
-        zones.forEach { $0.removeFromSuperview() }
-        zones = []
         let model = OnScreenControls.shared
         for (c, t) in zip(model.layout?.controls ?? [], model.controls.targets) {
-            if case .stick(_, let z?) = t.kind {
-                let outline = UIView(frame: CGRect(x: z.x, y: z.y, width: z.width, height: z.height))
-                outline.isUserInteractionEnabled = false
-                outline.layer.cornerRadius = 22
-                outline.layer.borderWidth = 1
-                outline.layer.borderColor = Glass.zoneEdge.cgColor
-                insertSubview(outline, at: 0)
-                zones.append(outline)
-            }
             let v = ControlView(control: c, frame: CGRect(x: t.frame.x, y: t.frame.y, width: t.frame.width, height: t.frame.height))
             insertSubview(v, belowSubview: toast)
             views[c.id] = v
@@ -334,8 +332,6 @@ private enum Glass {
     static let amberEdge = UIColor(red: 1, green: 208 / 255, blue: 138 / 255, alpha: 1)
     static let onAmber = UIColor(red: 26 / 255, green: 18 / 255, blue: 4 / 255, alpha: 1)
     static let nub = UIColor(red: 232 / 255, green: 237 / 255, blue: 244 / 255, alpha: 0.85)
-    /// A floating stick's zone: a faint outline.
-    static let zoneEdge = UIColor(red: 238 / 255, green: 241 / 255, blue: 245 / 255, alpha: 0.16)
     static let faces: [String: UIColor] = [
         "A": UIColor(red: 134 / 255, green: 222 / 255, blue: 147 / 255, alpha: 1),
         "B": UIColor(red: 1, green: 142 / 255, blue: 128 / 255, alpha: 1),
@@ -376,7 +372,9 @@ private final class GlassView: UIView {
 }
 
 /// A control as TouchGamepad.dc.html draws it. The d-pad and the face buttons
-/// are drawn 8 points inside their frame, which is what a touch hits.
+/// are drawn 2 points inside their frame, which is what a touch hits: the
+/// d-pad's arms and a face button come out the same size, and so do the two
+/// clusters (ControlLayout.gamepad).
 private final class ControlView: UIView {
     private let control: Control
     private var parts: [GlassView] = []
@@ -394,13 +392,13 @@ private final class ControlView: UIView {
         case .button:
             let round = Glass.faces[control.label] != nil
             let font = UIFont.systemFont(ofSize: round ? 18 : 13, weight: .semibold)
-            let drawn = round ? bounds.insetBy(dx: 4, dy: 4) : bounds
+            let drawn = round ? bounds.insetBy(dx: 2, dy: 2) : bounds
             let g = GlassView(frame: drawn, radius: round ? drawn.width / 2 : h / 2, text: control.label, font: font,
                               labelColor: Glass.faces[control.label] ?? Glass.text)
             addSubview(g)
             parts = [g]
         case .dpad:
-            let side = min(w, h) - 16, o = 8.0
+            let side = min(w, h) - 4, o = 2.0
             let s = side * 30 / 92, mid = o + (side - s) / 2, far = o + side - s
             for (x, y, glyph) in [(mid, o, "▲"), (mid, far, "▼"), (o, mid, "◀"), (far, mid, "▶")] {
                 let g = GlassView(frame: CGRect(x: x, y: y, width: s, height: s), radius: 8, text: glyph,

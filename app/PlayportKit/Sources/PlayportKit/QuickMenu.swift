@@ -3,7 +3,7 @@
 // its rows in order, the ring moving along them, and the words each row shows.
 // The controller side (the Home button held, the presses) is HostIOKit's
 // QuickMenuControl. Controls opens a panel beside the rows (QuickMenuControls.dc.html):
-// the game's on-screen layout and their opacity, up and down between them, left
+// the game's on-screen layout, its d-pad and right stick, and their opacity, up and down between them, left
 // and right (and A) to change one, B back to the rows.
 
 import Foundation
@@ -25,11 +25,13 @@ public enum QuickMenuItem: String, CaseIterable, Sendable {
 
 /// The Controls panel's rows.
 public enum QuickMenuControlsRow: String, CaseIterable, Sendable {
-    case layout, opacity
+    case layout, dpad, rightStick, opacity
 
     public var title: String {
         switch self {
         case .layout: "On-screen controls"
+        case .dpad: "D-pad"
+        case .rightStick: "Right stick"
         case .opacity: "Opacity"
         }
     }

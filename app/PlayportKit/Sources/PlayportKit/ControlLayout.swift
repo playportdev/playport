@@ -8,7 +8,8 @@
 // by an anchor (a corner, an edge's middle or the centre), the offset of its
 // centre from there and its size, in points, so one layout fits every iPhone
 // in either landscape orientation; one that would reach out of the safe area
-// is moved back in. A floating stick's zone is a corner of the safe area.
+// is moved back in. A floating stick's zone is a corner of the safe area,
+// moved by an offset (0 when left out, so a layout saved without one reads the same).
 // A saved layout carries `version`; any other than this build's is refused, and
 // the caller uses a preset instead (no build saved a version 1 layout).
 //
@@ -89,17 +90,33 @@ public enum ControlKind: String, Codable, CaseIterable, Sendable {
 }
 
 /// Where a floating stick starts: a width × height rectangle, in points, in a
-/// corner (or at an edge's middle) of the safe area.
+/// corner (or at an edge's middle) of the safe area, moved by the offset `x`, `y`
+/// (+y down; 0 when left out) and kept inside the safe area.
 public struct ControlZone: Codable, Equatable, Sendable {
     public var anchor: ControlAnchor
+    public var x: Double, y: Double
     public var width: Double, height: Double
-    public init(anchor: ControlAnchor, width: Double, height: Double) {
-        self.anchor = anchor; self.width = width; self.height = height
+    public init(anchor: ControlAnchor, x: Double = 0, y: Double = 0, width: Double, height: Double) {
+        self.anchor = anchor; self.x = x; self.y = y; self.width = width; self.height = height
+    }
+
+    enum CodingKeys: String, CodingKey { case anchor, x, y, width, height }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        anchor = try c.decode(ControlAnchor.self, forKey: .anchor)
+        x = try c.decodeIfPresent(Double.self, forKey: .x) ?? 0
+        y = try c.decodeIfPresent(Double.self, forKey: .y) ?? 0
+        width = try c.decode(Double.self, forKey: .width)
+        height = try c.decode(Double.self, forKey: .height)
     }
 
     /// Where it is in `area`, cut to it.
     public func frame(in area: TouchRect) -> TouchRect {
-        anchor.rect(width: min(width, area.width), height: min(height, area.height), in: area)
+        var r = anchor.rect(width: min(width, area.width), height: min(height, area.height), in: area)
+        r.x += x
+        r.y += y
+        return r.kept(in: area)
     }
 }
 
@@ -170,7 +187,9 @@ public struct Control: Codable, Equatable, Sendable, Identifiable {
         }
         if let z = floatingZone {
             guard kind == .stick else { return "\(id): only a stick floats" }
-            guard z.width > 0, z.height > 0, z.width.isFinite, z.height.isFinite else { return "\(id): a zone's size must be more than 0" }
+            guard z.width > 0, z.height > 0, z.width.isFinite, z.height.isFinite, z.x.isFinite, z.y.isFinite else {
+                return "\(id): a zone's size must be more than 0"
+            }
         }
         return nil
     }
@@ -234,31 +253,70 @@ public struct ControlLayout: Codable, Equatable, Sendable {
         }
     }
 
-    /// The Gamepad layout, in the safe area: LT over LB in the top left corner
-    /// with View beside LT, Menu, RT and RB mirrored at the right; a floating
-    /// stick in a zone in each lower corner, the left stick at the left, the
-    /// right stick at the right; the d-pad above the left zone and A B X Y above
-    /// the right one, inward of the corners, with a 12-point gap to the zones so
-    /// neither takes the other's touches. The d-pad and the face buttons are hit
-    /// over a larger square than they are drawn. Placed for a 750 × 381 safe area
-    /// (a 6.3-inch iPhone in landscape); ControlLayoutTests checks it from the
-    /// 4.7-inch screen and the 5.4-inch one's 712 × 354 safe area to a 6.9-inch one.
-    public static let gamepad = ControlLayout(controls: [
-        Control(id: "view", actions: [.pad(.back)], label: "⧉", anchor: .topLeading, x: 98, y: 22, width: 44, height: 30),
-        Control(id: "menu", actions: [.pad(.start)], label: "≡", anchor: .topTrailing, x: -98, y: 22, width: 44, height: 30),
-        Control(id: "lt", actions: [.pad(.lt)], label: "LT", anchor: .topLeading, x: 38, y: 24, width: 64, height: 40),
-        Control(id: "lb", actions: [.pad(.lb)], label: "LB", anchor: .topLeading, x: 38, y: 70, width: 64, height: 40),
-        Control(id: "rt", actions: [.pad(.rt)], label: "RT", anchor: .topTrailing, x: -38, y: 24, width: 64, height: 40),
-        Control(id: "rb", actions: [.pad(.rb)], label: "RB", anchor: .topTrailing, x: -38, y: 70, width: 64, height: 40),
-        Control(id: "dpad", kind: .dpad, actions: [.pad(.up), .pad(.down), .pad(.left), .pad(.right)], label: "D-pad",
-                anchor: .bottomLeading, x: 154, y: -210, width: 116, height: 116),
-        Control(id: "leftStick", kind: .stick, actions: [.pad(.leftStick)], label: "Left stick", anchor: .bottomLeading,
-                x: 105, y: -70, width: 104, height: 104, floatingZone: ControlZone(anchor: .bottomLeading, width: 210, height: 140)),
-        Control(id: "rightStick", kind: .stick, actions: [.pad(.rightStick)], label: "Right stick", anchor: .bottomTrailing,
-                x: -105, y: -70, width: 104, height: 104, floatingZone: ControlZone(anchor: .bottomTrailing, width: 210, height: 140)),
-        Control(id: "y", actions: [.pad(.y)], label: "Y", anchor: .bottomTrailing, x: -156, y: -282, width: 52, height: 52),
-        Control(id: "x", actions: [.pad(.x)], label: "X", anchor: .bottomTrailing, x: -208, y: -230, width: 52, height: 52),
-        Control(id: "b", actions: [.pad(.b)], label: "B", anchor: .bottomTrailing, x: -104, y: -230, width: 52, height: 52),
-        Control(id: "a", actions: [.pad(.a)], label: "A", anchor: .bottomTrailing, x: -156, y: -178, width: 52, height: 52),
-    ])
+    /// The Gamepad layout, in the safe area, placed for every iPhone from the
+    /// 4.7-inch screen and the 5.4-inch one's 712 × 354 safe area to a 6.9-inch
+    /// one (ControlLayoutTests checks each with every option):
+    ///
+    /// - LT over LB in the top left corner with View beside LT; Menu, RT and RB
+    ///   mirrored at the right.
+    /// - The left stick floats in a zone in the lower left corner; the d-pad
+    ///   (`dpad` On) is centred above it.
+    /// - A/B/X/Y in the lower right corner, centred where the right zone's middle
+    ///   is. The right stick (`rightStick`) floats in a zone centred on them: with
+    ///   Below the zone takes the corner and A/B/X/Y move up over it; with Above
+    ///   the zone is over them.
+    /// - Each zone is clear of every other control by `gap`, so no touch near a
+    ///   zone's edge is both's.
+    /// - The d-pad and A/B/X/Y are the same size (`cluster` square): the d-pad's
+    ///   arms and each face button are drawn alike (TouchControlsView), and the
+    ///   four face buttons tile the cluster's middle row and column, each hit
+    ///   over its own `cluster / 3` square.
+    public static func gamepad(dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off) -> ControlLayout {
+        let zoneWidth = 210.0, zoneHeight = 126.0, aboveZoneHeight = 120.0, gap = 12.0, cluster = 120.0
+        let face = cluster / 3
+        let middle = zoneWidth / 2
+        // A/B/X/Y's centre, from the lower right corner.
+        let faceY = rightStick == .below ? -(zoneHeight + gap + cluster / 2) : -cluster / 2
+        var controls = [
+            Control(id: "view", actions: [.pad(.back)], label: "⧉", anchor: .topLeading, x: 98, y: 22, width: 44, height: 30),
+            Control(id: "menu", actions: [.pad(.start)], label: "≡", anchor: .topTrailing, x: -98, y: 22, width: 44, height: 30),
+            Control(id: "lt", actions: [.pad(.lt)], label: "LT", anchor: .topLeading, x: 38, y: 24, width: 64, height: 40),
+            Control(id: "lb", actions: [.pad(.lb)], label: "LB", anchor: .topLeading, x: 38, y: 70, width: 64, height: 40),
+            Control(id: "rt", actions: [.pad(.rt)], label: "RT", anchor: .topTrailing, x: -38, y: 24, width: 64, height: 40),
+            Control(id: "rb", actions: [.pad(.rb)], label: "RB", anchor: .topTrailing, x: -38, y: 70, width: 64, height: 40),
+        ]
+        if dpad == .on {
+            controls.append(Control(id: "dpad", kind: .dpad, actions: [.pad(.up), .pad(.down), .pad(.left), .pad(.right)],
+                                    label: "D-pad", anchor: .bottomLeading, x: middle, y: -(zoneHeight + gap + cluster / 2),
+                                    width: cluster, height: cluster))
+        }
+        controls.append(Control(id: "leftStick", kind: .stick, actions: [.pad(.leftStick)], label: "Left stick",
+                                anchor: .bottomLeading, x: middle, y: -zoneHeight / 2, width: 104, height: 104,
+                                floatingZone: ControlZone(anchor: .bottomLeading, width: zoneWidth, height: zoneHeight)))
+        switch rightStick {
+        case .off:
+            break
+        case .below:
+            controls.append(Control(id: "rightStick", kind: .stick, actions: [.pad(.rightStick)], label: "Right stick",
+                                    anchor: .bottomTrailing, x: -middle, y: -zoneHeight / 2, width: 104, height: 104,
+                                    floatingZone: ControlZone(anchor: .bottomTrailing, width: zoneWidth, height: zoneHeight)))
+        case .above:
+            let lift = cluster + gap
+            controls.append(Control(id: "rightStick", kind: .stick, actions: [.pad(.rightStick)], label: "Right stick",
+                                    anchor: .bottomTrailing, x: -middle, y: -(lift + aboveZoneHeight / 2), width: 104, height: 104,
+                                    floatingZone: ControlZone(anchor: .bottomTrailing, y: -lift, width: zoneWidth,
+                                                              height: aboveZoneHeight)))
+        }
+        controls += [
+            Control(id: "y", actions: [.pad(.y)], label: "Y", anchor: .bottomTrailing, x: -middle, y: faceY - face,
+                    width: face, height: face),
+            Control(id: "x", actions: [.pad(.x)], label: "X", anchor: .bottomTrailing, x: -middle - face, y: faceY,
+                    width: face, height: face),
+            Control(id: "b", actions: [.pad(.b)], label: "B", anchor: .bottomTrailing, x: -middle + face, y: faceY,
+                    width: face, height: face),
+            Control(id: "a", actions: [.pad(.a)], label: "A", anchor: .bottomTrailing, x: -middle, y: faceY + face,
+                    width: face, height: face),
+        ]
+        return ControlLayout(controls: controls)
+    }
 }

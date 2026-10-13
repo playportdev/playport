@@ -185,8 +185,15 @@ class UiEnvTest(unittest.TestCase):
         self.assertIn('UI_CONTROLS={"layout":"off"}', env)
         a = m.parse(["--controls", 'app-367520:{"opacity": 0.8}', "--play", "app-367520"])
         self.assertEqual(a.controls_pair, ("app-367520", '{"opacity":0.8}'))
+        # The Gamepad layout's d-pad and right stick (PlayportKit GameControls.dpad, .rightStick).
+        for stick in ("off", "below", "above"):
+            a = m.parse(["--controls", f'app-367520:{{"layout":"gamepad","dpad":"on","rightStick":"{stick}"}}'])
+            self.assertEqual(a.controls_pair,
+                             ("app-367520", f'{{"layout":"gamepad","dpad":"on","rightStick":"{stick}"}}'))
+        self.assertEqual(m.parse(["--controls", 'app-367520:{"dpad":"off"}']).controls_pair, ("app-367520", '{"dpad":"off"}'))
         for bad in ('app-367520:{"layout":"tank"}', 'app-367520:{"opacity":3}', 'app-367520:{"x":1}', "app-367520:[]",
-                    'nope:{}'):
+                    'nope:{}', 'app-367520:{"dpad":"yes"}', 'app-367520:{"dpad":true}', 'app-367520:{"rightStick":"left"}',
+                    'app-367520:{"rightStick":"Below A/B/X/Y"}'):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 m.parse(["--controls", bad])
 

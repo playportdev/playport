@@ -35,7 +35,8 @@
 //                              `{}` clears them) as the game's own launch settings,
 //                              as its page does
 //   controls:<title id>        Saves UI_CONTROLS (a PlayportKit GameControls as JSON:
-//                              {"layout":"off"|"gamepad","opacity":0.2-1}; `{}` clears them)
+//                              {"layout":"off"|"gamepad","opacity":0.2-1,"dpad":"off"|"on",
+//                              "rightStick":"off"|"below"|"above"}; `{}` clears them)
 //                              as the game's own controls, as the in-game menu's Controls does
 //   hud:on | hud:off           Sets Settings' Metal HUD, as its toggle does
 //   open:<screen | title id>   Shows a screen (home, library, games, downloads, settings,
@@ -100,7 +101,8 @@
 //   menu:<row>                 In the menu: moves its ring to the row (resume, controls,
 //                              screenshot, overlay, controller, quit) and presses A, as a
 //                              controller does (controls opens its panel: pad:left/right
-//                              change the ringed row, pad:down moves to Opacity, pad:b back);
+//                              change the ringed row, pad:down moves along On-screen controls,
+//                              D-pad, Right stick and Opacity, pad:b back);
 //                              pad: presses go to the menu too while it is up. menu:quit waits
 //                              for the game's end: Playport restarts, and the actions after it
 //                              run in the new process, as after play:
@@ -224,7 +226,8 @@ enum UIDriver {
                     }
                     DriverUndo.willSet(ControlsStore.gamesKey)
                     ControlsStore.shared.setGame(id, c)
-                    log("controls \(id): layout=\(c.layout?.rawValue ?? "default") opacity=\(c.opacity.map(ControlsOpacity.label) ?? "default")")
+                    log("controls \(id): layout=\(c.layout?.rawValue ?? "default") opacity=\(c.opacity.map(ControlsOpacity.label) ?? "default") "
+                        + "dpad=\(c.dpad?.rawValue ?? "default") rightStick=\(c.rightStick?.rawValue ?? "default")")
                 case "touch":
                     let launch = TitleLaunch.shared
                     guard launch.running else { return finish("action=\(action) refused: no game is running") }

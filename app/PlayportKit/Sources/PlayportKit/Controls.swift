@@ -9,8 +9,14 @@
 //   controller too; Never makes Off every game's starting choice.
 // - A game's layout is Off or Gamepad; with none set it is Gamepad, or Off
 //   when the default is Never. Off hides them for that game whatever else.
+// - The controls' pad is player 1 whenever no controller is connected, at rest
+//   while the layout is Off (ControlsState.padConnected): a game that looks for
+//   pads only now and then, or only at its start, already has it when the
+//   controls are turned on in-game. A game may show pad prompts while Off.
 // - A three-finger tap on the game opens the in-game menu whatever the layout
 //   (S1Probe's HostIO.swift, GameSurfaceView), so Off draws nothing at all.
+// - The Gamepad layout's d-pad (Off or On) and right stick (Off, Below A/B/X/Y
+//   or Above A/B/X/Y): the game's own, else the default; both Off by default.
 // - Opacity: the game's own, else the default (60%).
 
 import Foundation
@@ -38,10 +44,50 @@ public enum OnScreenLayout: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    public var layout: ControlLayout? {
+    /// The layout with these options.
+    public func layout(dpad: OnScreenDpad, rightStick: OnScreenRightStick) -> ControlLayout? {
         switch self {
         case .off: nil
-        case .gamepad: .gamepad
+        case .gamepad: .gamepad(dpad: dpad, rightStick: rightStick)
+        }
+    }
+}
+
+/// The Gamepad layout's d-pad: centred above the left stick's zone when On.
+public enum OnScreenDpad: String, Codable, CaseIterable, Sendable {
+    case off, on
+
+    public var title: String {
+        switch self {
+        case .off: "Off"
+        case .on: "On"
+        }
+    }
+}
+
+/// The Gamepad layout's right stick: its zone centred under or over A/B/X/Y.
+public enum OnScreenRightStick: String, Codable, CaseIterable, Sendable {
+    /// No right stick; A/B/X/Y in the lower right corner.
+    case off
+    /// The zone in the lower right corner, A/B/X/Y above it.
+    case below
+    /// A/B/X/Y in the lower right corner, the zone above them.
+    case above
+
+    public var title: String {
+        switch self {
+        case .off: "Off"
+        case .below: "Below A/B/X/Y"
+        case .above: "Above A/B/X/Y"
+        }
+    }
+
+    /// The in-game menu's narrower panel: `Below`.
+    public var shortTitle: String {
+        switch self {
+        case .off: "Off"
+        case .below: "Below"
+        case .above: "Above"
         }
     }
 }
@@ -65,13 +111,18 @@ public struct ControlsDefaults: Equatable, Sendable {
     public static let showKey = "controls.show"
     public static let opacityKey = "controls.opacity"
     public static let hapticsKey = "controls.haptics"
+    public static let dpadKey = "controls.dpad"
+    public static let rightStickKey = "controls.rightStick"
 
     public var show = ControlsShow.automatic
     public var opacity = ControlsOpacity.defaultValue
     public var haptics = true
+    public var dpad = OnScreenDpad.off
+    public var rightStick = OnScreenRightStick.off
 
-    public init(show: ControlsShow = .automatic, opacity: Double = ControlsOpacity.defaultValue, haptics: Bool = true) {
-        self.show = show; self.opacity = opacity; self.haptics = haptics
+    public init(show: ControlsShow = .automatic, opacity: Double = ControlsOpacity.defaultValue, haptics: Bool = true,
+                dpad: OnScreenDpad = .off, rightStick: OnScreenRightStick = .off) {
+        self.show = show; self.opacity = opacity; self.haptics = haptics; self.dpad = dpad; self.rightStick = rightStick
     }
 
     /// What `defaults` holds, each key missing (or not understood) read as its default.
@@ -80,6 +131,8 @@ public struct ControlsDefaults: Equatable, Sendable {
         let o = defaults.object(forKey: Self.opacityKey) as? Double ?? ControlsOpacity.defaultValue
         opacity = (0.1...1).contains(o) ? o : ControlsOpacity.defaultValue
         haptics = defaults.object(forKey: Self.hapticsKey) as? Bool ?? true
+        dpad = defaults.string(forKey: Self.dpadKey).flatMap(OnScreenDpad.init(rawValue:)) ?? .off
+        rightStick = defaults.string(forKey: Self.rightStickKey).flatMap(OnScreenRightStick.init(rawValue:)) ?? .off
     }
 }
 
@@ -88,32 +141,46 @@ public struct ControlsDefaults: Equatable, Sendable {
 public struct GameControls: Codable, Equatable, Sendable {
     public var layout: OnScreenLayout?
     public var opacity: Double?
+    public var dpad: OnScreenDpad?
+    public var rightStick: OnScreenRightStick?
 
-    public init(layout: OnScreenLayout? = nil, opacity: Double? = nil) {
-        self.layout = layout; self.opacity = opacity
+    public init(layout: OnScreenLayout? = nil, opacity: Double? = nil, dpad: OnScreenDpad? = nil,
+                rightStick: OnScreenRightStick? = nil) {
+        self.layout = layout; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick
     }
 
-    public var isEmpty: Bool { layout == nil && opacity == nil }
+    public var isEmpty: Bool { layout == nil && opacity == nil && dpad == nil && rightStick == nil }
 }
 
 /// The controls a running game has now.
 public struct ControlsState: Equatable, Sendable {
     public var layout: OnScreenLayout
-    /// The layout's controls are shown, and their pad is player 1.
+    /// The layout's controls are shown.
     public var visible: Bool
     public var opacity: Double
+    public var dpad: OnScreenDpad
+    public var rightStick: OnScreenRightStick
+    /// No controller is connected, or the controls are shown: the controls' pad
+    /// is player 1 (slot 0), at rest while the layout is Off, so turning them on
+    /// in-game only draws them and a game that notices a pad connecting late
+    /// (or never) already has it.
+    public var padConnected: Bool
 
-    public init(layout: OnScreenLayout, visible: Bool, opacity: Double) {
-        self.layout = layout; self.visible = visible; self.opacity = opacity
+    public init(layout: OnScreenLayout, visible: Bool, opacity: Double, dpad: OnScreenDpad = .off,
+                rightStick: OnScreenRightStick = .off, padConnected: Bool? = nil) {
+        self.layout = layout; self.visible = visible; self.opacity = opacity; self.dpad = dpad; self.rightStick = rightStick
+        self.padConnected = padConnected ?? visible
     }
 
     /// What is drawn: the layout, or nothing.
-    public var drawnLayout: ControlLayout? { visible ? layout.layout : nil }
+    public var drawnLayout: ControlLayout? { visible ? layout.layout(dpad: dpad, rightStick: rightStick) : nil }
 
     public static func resolve(game: GameControls?, defaults: ControlsDefaults, controllerConnected: Bool) -> ControlsState {
         let layout = game?.layout ?? (defaults.show == .never ? .off : .gamepad)
         let shown = layout != .off && (defaults.show == .always || !controllerConnected)
-        return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity)
+        return ControlsState(layout: layout, visible: shown, opacity: game?.opacity ?? defaults.opacity,
+                             dpad: game?.dpad ?? defaults.dpad, rightStick: game?.rightStick ?? defaults.rightStick,
+                             padConnected: shown || !controllerConnected)
     }
 
     /// The in-game menu's Controls row: `Gamepad · 60%`, `Off`, `Gamepad · controller connected` while a controller hides it.

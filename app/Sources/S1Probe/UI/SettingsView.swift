@@ -13,7 +13,8 @@
 //   Playport's default; and the Metal HUD.
 // - Downloads: PlayportKit DownloadPreferences (the download queue reads
 //   them) and Steam Cloud's switch (SteamAccountModel.cloudKey).
-// - Controls: when the on-screen controls show, their opacity and haptics
+// - Controls: when the on-screen controls show, their opacity, the Gamepad
+//   layout's d-pad and right stick, and haptics
 //   (PlayportKit ControlsDefaults; UI/TouchControlsView.swift), and every
 //   controller connected, with its battery and whether it has a gyro (PadRouter).
 // - Storage: free space and each game's size; A opens the game's page. Steamworks Shared
@@ -328,6 +329,8 @@ private struct ControlsSettings: View {
     @AppStorage(ControlsDefaults.showKey) private var show = ControlsShow.automatic.rawValue
     @AppStorage(ControlsDefaults.opacityKey) private var opacity = ControlsOpacity.defaultValue
     @AppStorage(ControlsDefaults.hapticsKey) private var haptics = true
+    @AppStorage(ControlsDefaults.dpadKey) private var dpad = OnScreenDpad.off.rawValue
+    @AppStorage(ControlsDefaults.rightStickKey) private var rightStick = OnScreenRightStick.off.rawValue
 
     var body: some View {
         Color.clear.frame(height: 42)
@@ -339,9 +342,19 @@ private struct ControlsSettings: View {
         PadValueRow(id: "set:controlsOpacity", title: "Opacity", subtitle: "How much of the game shows through",
                     values: steps.map(ControlsOpacity.label),
                     index: steps.firstIndex(of: ControlsOpacity.step(opacity, by: 0)) ?? 0) { opacity = steps[$0] }
+        let dpads = OnScreenDpad.allCases
+        PadValueRow(id: "set:controlsDpad", title: "D-pad", subtitle: "Above the left stick",
+                    values: dpads.map(\.title),
+                    index: dpads.firstIndex(of: OnScreenDpad(rawValue: dpad) ?? .off) ?? 0) { dpad = dpads[$0].rawValue }
+        let sticks = OnScreenRightStick.allCases
+        PadValueRow(id: "set:controlsRightStick", title: "Right stick", subtitle: "Where it goes beside A/B/X/Y",
+                    values: sticks.map(\.title),
+                    index: sticks.firstIndex(of: OnScreenRightStick(rawValue: rightStick) ?? .off) ?? 0) {
+            rightStick = sticks[$0].rawValue
+        }
         SettingsSwitchRow(id: "controlsHaptics", title: "A tap you can feel", subtitle: "Haptics when a control is pressed",
                           on: $haptics)
-        SettingsNote(text: "Each game can turn them off or change their opacity in the in-game menu's Controls; a "
+        SettingsNote(text: "Each game can turn them off or change these in the in-game menu's Controls; a "
                      + "three-finger tap on the game opens that menu, as holding a controller's Home button does. Connect a controller in iOS "
                      + "Settings › Bluetooth. Playport and its games use the one you pressed last.")
         if router.controllers.isEmpty {
