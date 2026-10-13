@@ -138,6 +138,9 @@ proposed answer unless the owner says otherwise before the phase that needs them
      - **DualSense capture:** the supervisor runs `pp perf --keep-log` on Portal 2 while the
        owner plays with a DualSense, for the controller's `sensor rate:`, Auto's choice and the
        coalescing delay. The owner then decides the 125 Hz cap.
+     - **Bug:** after sending the app to the background and coming back, the on-screen
+       controls stopped working while the three-finger tap still worked. 2e diagnoses and
+       fixes it.
   6. **2e (fix):** the three decisions above, plus the cap if the owner changes it; one short
      phone session; then the owner's phase 2 sign-off.
   7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
