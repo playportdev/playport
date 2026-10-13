@@ -141,14 +141,29 @@ proposed answer unless the owner says otherwise before the phase that needs them
      - **Bug:** after sending the app to the background and coming back, the on-screen
        controls stopped working while the three-finger tap still worked. 2e diagnoses and
        fixes it.
-  6. **2e (fix):** the three decisions above, plus the cap if the owner changes it; one short
+     - **Controller capture (2026-10-13, IPA `fe0110ab…`, log
+       `.work/perf-runs/pla13-dualsense-p2/pulled/s1-host.log`; the owner stopped the
+       `pp perf` run early, so only the app log was pulled):** the pad was a DualShock 4
+       (`rotation rate yes, gravity no`), and Auto picked it. Its samples reached gyro aim at
+       only **about 65/s** (`sensor rate: 64.7/s`, `66.2/s`), not the pad's own rate, so the
+       cap never applied (delay 0 ms). Its bias (about 0.03 rad/s, 1.7 °/s) was learnt only
+       some time into play. The owner found it too slow (set 2–2.5×) and laggy compared with
+       the physical right stick; mouse mode with the phone's gyro feels great.
+  6. **2e (fix), running:** the three decisions and the background bug above; one short
      phone session; then the owner's phase 2 sign-off.
-  7. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
+  7. **2f (controller gyro):** deliver the controller's motion off the main thread, near its
+     own rate, with better timestamps. Derive gravity for a pad without it from low-passed
+     acceleration, not raw acceleration. Check the DualShock/DualSense axis mapping and
+     scale against the phone (the same physical turn should give the same counts), and
+     consider a source-specific default sensitivity. Host tests first, one short phone
+     session, then the owner plays with the controller again. The 125 Hz cap is decided
+     after 2f measures the new rate.
+  8. **3a:** `ControllerMap` with the `keyboardMouse` preset, and the mixer's translation,
      with host tests.
-  8. **3b:** the Controller page and the ActionPicker.
-  9. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
+  9. **3b:** the Controller page and the ActionPicker.
+  10. **3c (phone):** Portal 2 in `keyboardMouse` mode driven by the scripted pad, back to
      `controller` mode, plus Hollow Knight.
-  10. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
+  11. **Phase 3 sign-off (owner):** a game that reads only keyboard and mouse, played with
      a controller. Then stop.
 - **Phone:** dev IPA `fe0110ab…` (2d) installed; unattended mode on; Hollow Knight's own
   on-screen controls are Off (the owner's setting, left as found); Hollow Knight's profile
