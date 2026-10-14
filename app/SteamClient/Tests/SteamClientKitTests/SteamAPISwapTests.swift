@@ -189,6 +189,70 @@ final class SteamAPISwapTests: XCTestCase {
         XCTAssertEqual(r.unlisted, [])
     }
 
+    /// A steam_api of an SDK whose GetAuthSessionTicket has three arguments
+    /// (SteamUser019, as Kingdom Come's, PLA-350): the emulator is told its
+    /// versions, in generate_interfaces' order, beside each swapped DLL.
+    func testAnOlderSDKsInterfaceVersionsAreWrittenFromTheKeptOriginal() throws {
+        let old = peImage(machine: 0x8664, tag: "\0SteamUser019\0SteamClient017\0SteamFriends015\0SteamNetworking005\0"
+                          + "STEAMAPPS_INTERFACE_VERSION008\0STEAMCONTROLLER_INTERFACE_VERSION\0SteamUtils009\0SteamUser\0")
+        try write("Game/Game_Data/Plugins/x86_64/steam_api64.dll", old)
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
+        let file = "Game_Data/Plugins/x86_64/steam_settings/steam_interfaces.txt"
+        XCTAssertEqual(String(decoding: read(file) ?? [], as: UTF8.self), """
+            STEAMAPPS_INTERFACE_VERSION008
+            SteamClient017
+            STEAMCONTROLLER_INTERFACE_VERSION
+            SteamFriends015
+            SteamNetworking005
+            SteamUser019
+            SteamUtils009
+
+            """)
+        XCTAssertFalse(exists("tools/steam_settings/steam_interfaces.txt"), "a DLL that names no interface gets no file")
+        XCTAssertTrue(SteamAPISwap.isSwapFile(root, file))
+        try SteamAPISwap.restore(in: root)
+        XCTAssertFalse(exists(file))
+    }
+
+    /// A newer SDK's DLL: SteamClient017 alone stays of its SteamClients, and
+    /// the longer names are not taken for the shorter ones.
+    func testANewerSDKsInterfaceVersionsKeepOnlySteamClient017() {
+        let dll = Data(peImage(machine: 0x8664, tag: "SteamClient021\0SteamClient017\0SteamClient020\0SteamUser023\0"
+                               + "SteamNetworkingSockets012\0SteamNetworkingUtils004\0SteamGameServerStats001\0SteamGameServer015\0"
+                               + "SteamMatchMakingServers002\0SteamMatchMaking009\0STEAMUSERSTATS_INTERFACE_VERSION013\0"))
+        XCTAssertEqual(SteamAPISwap.interfacesText(dll), """
+            SteamClient017
+            SteamGameServerStats001
+            SteamGameServer015
+            SteamMatchMakingServers002
+            SteamMatchMaking009
+            SteamNetworkingSockets012
+            SteamNetworkingUtils004
+            SteamUser023
+            STEAMUSERSTATS_INTERFACE_VERSION013
+
+            """)
+        XCTAssertNil(SteamAPISwap.interfacesText(Data(game64)))
+    }
+
+    /// One already in the folder stays as it is; one in the settings is written as given.
+    func testAGivenOrExistingInterfacesFileIsLeftAlone() throws {
+        let old = peImage(machine: 0x8664, tag: "SteamUser019\0")
+        try write("Game/Game_Data/Plugins/x86_64/steam_api64.dll", old)
+        try write("Game/tools/steam_api.dll", peImage(machine: 0x14c, tag: "SteamUser017\0"))
+        try write("Game/tools/steam_settings/steam_interfaces.txt", Array("SteamUser016\n".utf8))
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
+        XCTAssertEqual(read("tools/steam_settings/steam_interfaces.txt"), Array("SteamUser016\n".utf8))
+        XCTAssertEqual(read("Game_Data/Plugins/x86_64/steam_settings/steam_interfaces.txt"), Array("SteamUser019\n".utf8))
+        var given = settings
+        given.files = ["steam_interfaces.txt": Data("SteamUser018\n".utf8)]
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: given)
+        XCTAssertEqual(read("Game_Data/Plugins/x86_64/steam_settings/steam_interfaces.txt"), Array("SteamUser018\n".utf8))
+        XCTAssertEqual(read("tools/steam_settings/steam_interfaces.txt"), Array("SteamUser018\n".utf8))
+        try SteamAPISwap.apply(in: root, emulator: emulator, settings: settings)
+        XCTAssertEqual(read("Game_Data/Plugins/x86_64/steam_settings/steam_interfaces.txt"), Array("SteamUser018\n".utf8))
+    }
+
     func testOwnedDLCIsTheListIntersectedWithTheLicences() {
         let app = KeyValue(name: "367520", children: [
             KeyValue(name: "extended", children: [KeyValue(name: "listofdlc", value: "30, 10,20,x")]),
