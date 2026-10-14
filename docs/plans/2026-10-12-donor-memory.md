@@ -1,9 +1,9 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** step 2 in progress; step 1 done 2026-10-14: H1 passed for both variants at 2048 and 4096 MiB ([evidence](../evidence/2026-10-14-donor-memory.md)).
+**Date:** 2026-10-12. **Status:** step 2 done 2026-10-14 for entitled builds: two donors gave 6400 MiB, verified; physical RAM, not the app's limit, is the wall ([evidence](../evidence/2026-10-14-donor-memory-scale.md)); step 1 done 2026-10-14: H1 passed for both variants at 2048 and 4096 MiB ([evidence](../evidence/2026-10-14-donor-memory.md)).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
-not merged. Last built at `0534342` (IPA `19e10116…`, step 1).
+not merged. Last built at `9552b8b` (IPA `fc107a8d…`, step 2).
 
 ## Progress
 
@@ -13,8 +13,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 `.work/agent-notes/donor-memory/reports/`.
 
 - **Now:** step 1 is done; H1 passed for both variants at 2048 and 4096 MiB on IPA `19e10116…` ([evidence](../evidence/2026-10-14-donor-memory.md)).
-- **Now:** step 2, entitled builds only (owner, 2026-10-14). One writer
-  child; its run id is in `.work/agent-notes/donor-memory/queue.md`.
+- **Done:** step 2 (entitled) on IPA `fc107a8d…`: 6400 MiB from two donors verified, the phone's free RAM is the wall ([evidence](../evidence/2026-10-14-donor-memory-scale.md)).
 - **Settled:** the owner chose no unentitled research IPA for step 2; that
   part of step 2 is deferred, not done.
 - **Queue:** steps 3–5 in order, after step 2's result.
@@ -148,6 +147,21 @@ This is the cheapest test, and it decides the plan.
 - **System pressure:** with a large pool mapped, open another app, then
   return. Check whether the pool's data survives and whether iOS ends the app
   or the background app.
+- **Result (2026-10-14, IPA `fc107a8d…`, entitled only):** probe
+  `probe:memory-donors-<total>` (purgeable, 256 MiB objects, each donor's
+  available memory less 512 MiB; stop while jetsam's level is under 15 % or
+  less than 1.5 GiB is spare). Every round was a fresh helper with 6137 MiB
+  available, gone about 100 ms after the stop. **6144 MiB passed twice (two
+  donors); 8192 stopped at 6400 MiB** (level 13 %), all 6400 MiB verified 60 s
+  after the last donor died. The app's own available memory stayed about
+  8.1 GiB, but the phone could give it only 0–768 MiB more: on an idle phone,
+  pool plus app gains are bounded by free physical RAM (about 6.4–6.9 GiB
+  with the reserve), not by the per-process limit. With 6144 MiB mapped, a
+  60 s trip to iOS Settings did not end the app and every byte verified
+  after the return; right after it the app's available memory read
+  6092 MiB (about a 6 GiB limit) instead of 8140, unexplained. Hollow
+  Knight reached first frame at +10.56 s on the same IPA. The unentitled
+  part is deferred (owner). [Evidence](../evidence/2026-10-14-donor-memory-scale.md).
 
 ### 3. A pool at Play that feeds 0127
 
