@@ -2,69 +2,76 @@
 
 **Linear:** [PLA-344](https://linear.app/playportdev/issue/PLA-344) (from PLA-43).
 **Phone:** iPhone18,4, iOS 27.0.1. **Game:** The Witcher 3 1.32 (`bin\x64\witcher3.exe`,
-Direct3D 11 on DXMT), app `app-292030`.
+Direct3D 11 on DXMT), app `app-292030`. Logs: `$PLAYPORT_BUILD/scratch/w3quit/`.
 
-## The owner's hang (IPA `792375cd…`)
+## Result
 
-The owner played, then chose Exit in the game's pause menu and confirmed. The game hid its
-window, then drew nothing more for about 94 s. Playport's menu › Quit game ended it: WM_CLOSE,
-then forced after 10 s, exit `0x42b`. The log was pulled to `$PLAYPORT_BUILD/scratch/w3quit/s1-host.log`.
+The cause was a lost wakeup in Playport's win32u (iOS). Quitting from the game's pause menu
+could leave the main thread in a SendMessage to Wine's dinput worker thread. That thread was
+asleep in `MsgWaitForMultipleObjectsEx` and was never woken.
 
-- **Main thread `009c`:** blocked in every `[thread-sample]` in
-  `send_inter_thread_message → wait_message_reply → … → server_select`. It had sent a message
-  across threads and was waiting for a reply.
-- **`RenderThread` `010c`:** at 97–100 % CPU, making no server calls. It was in
-  `witcher3.exe+0xc65dc0`, a loop that runs the render thread's queued commands to a time
-  budget (`QueryPerformanceCounter`, IAT `0x141cc87c0`). Its samples are FEX JIT code,
-  `libarm64ecfex!ExitFunctionEC` and ntdll `RtlQueryPerformanceCounter`: the game's own loop,
-  with no message pump in it.
-- **The game window `0x500ea` and its Default IME window** were created right after
-  `RenderThread` started, interleaved with its thread-init lines, so `RenderThread` owns them.
-- **Window steps at the quit:** the hang logged only the hide (`[win-pos] … flags=800018bf`).
-  A clean quit (below) logs three steps:
-  1. the hide;
-  2. `SetWindowPos(HWND_NOTOPMOST, …, 0x73b)` (`after=0xfffffffffffffffe flags=80001f3b`;
-     `witcher3.exe+0xc64484`);
-  3. `ShowWindow(SW_MINIMIZE)` (`-32000,-32000`; `+0xc64493`).
+madeira-unix 0145 fixes it. madeira-unix 0144 adds the diagnostic that named the call. With
+the fix (IPA `c606b68f`), the owner's quit with on-screen controls and gyro aim ended with exit 0.
 
-  So the main thread most likely blocked in that `SetWindowPos`. Wine sends it to the window's
-  owner as an internal message. The owner, `RenderThread`, had by then entered the loop above,
-  which never reads messages.
+## The hangs
 
-This reading is an inference from the window steps, not yet a logged message. If the
-hypothesis is right, the hang is a race: the quit hangs when `RenderThread` is already in that
-loop as the main thread repositions the window. Why Windows does not show this was not
-established.
+1. **IPA `792375cd…` (log `s1-host.log`).**
+   - The owner played, chose Exit in the pause menu and confirmed. The game hid its window,
+     drew nothing more for about 94 s, and was ended by Playport's menu › Quit game (exit `0x42b`).
+   - The main thread `009c` was blocked in `send_inter_thread_message` in every `[thread-sample]`.
+   - `wine_dinput_worker` sat in `NtUserMsgWaitForMultipleObjectsEx → wait_message →
+     server_wait`. `RenderThread` was busy-looping in its command queue at
+     `witcher3.exe+0xc65dc0`. That was a side effect, not the cause; an earlier reading of
+     this record blamed it.
+2. **IPA `3cc547ac…` (with 0144; log `owner2/s1-host.log`).**
+   - The owner's second play hung the same way.
+   - The new line named the call:
+     `[sendmsg-stuck] tid=002c waits 5000 ms for a reply: hwnd=0x10040 msg=410 (WM_USER+16) wp=1 lp=0 type=1 … to tid=00b4`,
+     where `00b4` is `wine_dinput_worker`.
+   - `WM_USER+0x10` with wParam 1 is dinput's `INPUT_THREAD_NOTIFY` / `NOTIFY_REFRESH_DEVICES`.
+     `dinput_hooks_unacquire_device` sends it to the worker's message window when the game
+     unacquires its devices at quit.
+   - The worker was again in `MsgWaitForMultipleObjectsEx`, which wakes on `QS_ALLINPUT`
+     and should have taken the sent message at once.
+
+## Cause
+
+On iOS, `process_driver_events` (`build/win32u-unix/message_ios.c`) calls winios.drv's
+`pProcessEvents` on every call and on every thread. When that call drained input, it sends
+`set_queue_mask` with `poll_events = drained`.
+
+The server's handler stores the thread's wake and changed masks. When `poll_events` is set and
+the queue has no driver fd, it returns before storing them. No iOS queue has a driver fd:
+nothing sends `set_queue_fd`, which only winemac.drv does.
+
+So a thread whose wait-time call drained input kept the masks some earlier call had left.
+That could be none: for example a call through `check_for_events` sets `0/0`. The thread then
+slept on its queue with nothing to wake it, and a SendMessage to it waited for ever.
+
+The dinput worker drains input often while gyro aim or touch input is flowing. The owner's
+logs show the phone gyro moving the mouse at 66–97 moves/s at both quits. The driven runs had
+the phone still on the desk and never hung.
+
+## Fix (madeira-unix 0145)
+
+On iOS, `set_queue_mask` is sent with `poll_events = 0`, so the masks are always stored.
+`poll_events` only clears `QS_DRIVER` and re-arms a driver fd, and neither exists on iOS.
 
 ## The diagnostic (madeira-unix 0144)
 
-`wait_message_reply` (`build/win32u-unix/message_ios.c`) now waits in 5 s slices until the
-first 5 s have passed. It then logs once
+`wait_message_reply` waits in 5 s slices until the first 5 s have passed. It then logs once
 `[sendmsg-stuck] tid=… waits … ms for a reply: hwnd=… msg=… (name) … to tid=…`, and on the
 reply `… replied … after N ms`. Waits under 5 s are unchanged and log nothing.
 
-## Driven attempts on IPA `3cc547ac5808c399378c9a4acee84a073652bc8d70a152f6451489c94c841909`
+## Runs
 
-All three used the scripted pad (`pp ui --play app-292030 --pad --leave-running`, then
-`pp pad send`). They are in `$PLAYPORT_BUILD/scratch/w3quit/` (`run1`, `run2`, `run3`; pulled
-logs `mainmenu-exit/`, `ingame/`, `p3/`).
-
-| Attempt | Path | Result |
+| IPA | Run | Result |
 | --- | --- | --- |
-| 1 | title menu › Exit | exit 0 at once |
-| 2 | Continue, Kaer Morhen, pause menu (BACK) › Exit › OK | exit 0 in about 2 s; the three window steps |
-| 3 | as 2, after two Playport menu pause/resume cycles and some walking (the owner paused twice too) | exit 0 in about 2 s |
+| `3cc547ac5808c399378c9a4acee84a073652bc8d70a152f6451489c94c841909` | driven, scripted pad, phone still: title menu › Exit (`run1`); pause menu › Exit (`run2`); same after two Playport menu pause/resume cycles (`run3`) | exit 0 each time; no `[sendmsg-stuck]` |
+| same | owner, on-screen controls, gyro aim | hung; `[sendmsg-stuck]` as above (`owner2/`) |
+| `c606b68ff9ed38c0ae8e0aac212fd11b89690ad7658d319f1db75e37c7addf81` | owner, on-screen controls, gyro aim (11–27 moves/s at the end), pause menu › Exit | first frame +19.33 s, exit 0 after 84 s; no `[sendmsg-stuck]` (`owner3/`) |
+| same | Hollow Knight smoke gate (`hk2`) | first frame +8.57 s, ran to first-frame+10 |
 
-No `[sendmsg-stuck]` line appeared in any of the three logs, during play or at the quit.
-The hang did not reproduce in these three runs. The owner's session differed in other ways:
-on-screen controls with no controller, phone gyro aim as a mouse, and about 3.5 min of play.
-
-Hollow Knight smoke gate on this IPA: first frame +9.61 s, ran to first-frame+10, no `[sendmsg-stuck]` (`$PLAYPORT_BUILD/scratch/w3quit/hk`).
-
-## Next
-
-Keep 0144 in the dev builds. The next hang will then name the stuck message and its receiver
-in `s1-host.log` (`grep sendmsg-stuck`), which confirms or refutes the SetWindowPos reading.
-Possible fixes then: compare with Windows/Proton behaviour for a cross-thread
-`SetWindowPos` (z-order only, the window already hidden), or send it without waiting
-(`SWP_ASYNCWINDOWPOS`) where Windows would not block either.
+One clean quit after the fix does not prove that the race is gone. The mechanism, though, is
+named in the code, and every sleeping message thread on iOS was exposed to it, not only
+dinput's.
