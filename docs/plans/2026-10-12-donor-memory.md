@@ -31,9 +31,9 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 - **Step 3 done** (`25f484d`; IPA `d8226b20…`): a 4 GiB pool at Play from
   one donor served Hollow Knight's heap; first frame +9.98 s against
   +10.24 s off ([evidence](../evidence/2026-10-14-donor-pool-at-play.md)).
-- **Step 4 KCD part done, blocked** (`9cbc873`, `5e088c6`; IPA `195d5698…`):
-  Kingdom Come crashed in the Steam API emulator before its first frame with the pool off and on
-  ([evidence](../evidence/2026-10-14-donor-pool-kcd.md)).
+- **Step 4's first try** (`9cbc873`, `5e088c6`; IPA `195d5698…`) hit
+  PLA-350: Kingdom Come crashed in the Steam API emulator before its first
+  frame, with the pool off and on.
 - **PLA-350 fixed** on `dev/pla-350-kcd-steam-api` (`4af9e3b`, from main;
   merged to main as `fd624c3` on 2026-10-14, not pushed). It is merged
   here as `3db126b`.
@@ -46,23 +46,33 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   the bump allocator reuses an object only once all of it is free. The system
   also compressed up to 2.6 GiB of pool pages. One pair only, with a thermal
   difference.
-- **Queue item 1 done 2026-10-14** (`9f4d5bf`; IPA `2010a999…`; [evidence](../evidence/2026-10-14-donor-pool-reuse.md)): best-fit reuse, refused 0 through +240 s, peak −582 MiB (bounded by the ~700 MiB live set).
-- **Queue:**
-  1. Reuse within an object: free ranges zeroed and handed out again, so the
-     pool keeps serving. Then rerun the KCD pair with
-     `.work/agent-notes/donor-memory/runs/step4-session.sh`.
+- **Pool reuse inside an object done 2026-10-14** (`9f4d5bf`, `122d152`;
+  IPA `2010a999…`; [evidence](../evidence/2026-10-14-donor-pool-reuse.md)):
+  best fit over per-object page bitmaps; stale pages are memset when taken
+  (about 0.1 ms/MiB). Refused stayed 0 through +240 s (13,211 before).
+  KCD's peak was 7,783 off vs 7,201 on (−582 MiB). **The saving is bounded by
+  the pool's live set (about 700 MiB)**: 0148 backs only fresh RW commits of
+  1 MiB or more, and KCD churns them (36.5 GiB served). A bigger saving needs
+  0148 to back more of the game's memory. `MADV_FREE_REUSABLE` does nothing
+  on the pool mapping.
+- **Now:** nothing running; the phone is free. Waiting for the owner.
+- **Queue (proposed):**
+  1. Widen what 0148 backs: smaller commits, or commits that are not fresh,
+     whichever KCD's footprint is made of. Measure first which allocations
+     make up KCD's ordinary footprint.
   2. Hollow Knight `pp perf` A/B while the owner plays.
   3. A session longer than 30 minutes with the pool on.
   4. A PLA-203-family title for the detach path, which has never run.
   5. Step 5.
-- **Phone (2026-10-14):** dev IPA `f1f024ae…` installed, battery 80 % on
-  power, 3.5 GB storage free, unattended off. Kingdom Come and Hollow Knight
-  are installed. KCD's Plaion EULA was accepted by script with the owner's
-  approval. Results are filed on PLA-42, PLA-49 and PLA-350.
+- **Phone (2026-10-14):** dev IPA `2010a999…` installed, battery 72 %,
+  5.8 GB storage free, unattended off. KCD and HK are installed. The phone was
+  re-registered with the free team once (DEVICE.md procedure, owner-approved).
+  Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
   step2-writer.md, step3-writer.md, step4-writer.md,
-  pla350-writer.md).
+  pla350-writer.md, reuse-writer.md; MeloNX notes in
+  `melonx-2.7-notes.md`).
 
 ## Why
 
