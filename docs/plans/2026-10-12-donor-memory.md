@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** step 1 done 2026-10-14: H1 passed for both variants at 2048 and 4096 MiB ([evidence](../evidence/2026-10-14-donor-memory.md)); step 2 next.
+**Date:** 2026-10-12. **Status:** step 2 in progress; step 1 done 2026-10-14: H1 passed for both variants at 2048 and 4096 MiB ([evidence](../evidence/2026-10-14-donor-memory.md)).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `0534342` (IPA `19e10116…`, step 1).
@@ -13,9 +13,11 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 `.work/agent-notes/donor-memory/reports/`.
 
 - **Now:** step 1 is done; H1 passed for both variants at 2048 and 4096 MiB on IPA `19e10116…` ([evidence](../evidence/2026-10-14-donor-memory.md)).
-- **Queue:** step 2 next, waiting for the owner to start it. It needs the
-  owner's yes for an unentitled research IPA, which must never be
-  distributed. Then steps 3–5 in order. No child is running.
+- **Now:** step 2, entitled builds only (owner, 2026-10-14). One writer
+  child; its run id is in `.work/agent-notes/donor-memory/queue.md`.
+- **Settled:** the owner chose no unentitled research IPA for step 2; that
+  part of step 2 is deferred, not done.
+- **Queue:** steps 3–5 in order, after step 2's result.
 - **Phone (2026-10-14):** IPA `19e10116…` installed (dev), battery 58 % on
   power, 3.9 GB free, unattended off. Hollow Knight result filed on PLA-42.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
