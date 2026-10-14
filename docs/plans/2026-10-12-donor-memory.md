@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** step 1 paused (2048 MiB passed; 4096, HK gate and evidence left).
+**Date:** 2026-10-12. **Status:** step 1 resumed 2026-10-14 (2048 both and tagged 4096 passed; purgeable 4096, HK gate and evidence left).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Nothing on it has been built since the rebase.
@@ -19,8 +19,11 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   `probe:memory-donor-purgeable-N`). On IPA `19e10116…`, **2048 MiB passed H1
   for both variants**: the helper was confirmed dead, the data verified at
   60 s, and the app's footprint fell after the helper died (tagged −43 MiB,
-  purgeable −27 MiB) while about 8.5 GB stayed available. The 4096 MiB runs,
-  the Hollow Knight smoke gate and the evidence record were not done.
+  purgeable −27 MiB) while about 8.5 GB stayed available. Tagged 4096 MiB also passed (footprint −27 MiB, verified at 60 s;
+  run dir `.work/agent-notes/donor-memory/runs/tagged-4096`). Purgeable
+  4096 MiB was killed mid-run; it, the Hollow Knight smoke gate and the
+  evidence record were not done. **Resumed** by the owner with a fresh writer
+  (run id in the build-area queue).
   **Resume:** a writer that reaches UI elements only through named `pp ui`
   actions (add one if missing, never trial-and-error tapping), runs both
   4096 variants and HK on one IPA, writes the evidence. Ask the owner first.
