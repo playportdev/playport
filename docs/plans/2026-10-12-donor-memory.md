@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 blocked by PLA-350 (Kingdom Come crashes before its first frame, with the pool off too); waiting for the owner.
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 blocked by PLA-350 (Kingdom Come crashes before its first frame, with the pool off too); PLA-350 in progress.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `9cbc873` (IPA `195d5698…`, step 4).
@@ -39,7 +39,10 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   (`steam_api64` +0x1b4760). It happens with the pool off as well. Main has
   not been checked, so a cause on this branch (0148's hooks, which are in
   every dev build) is not ruled out yet.
-- **Now:** nothing running; the phone is free. Waiting for the owner.
+- **Now:** PLA-350 (owner: check main, then fix) in a writer child. A fix
+  that is main's goes on `dev/pla-350-kcd-steam-api` from main, merged into
+  this branch (not into main). The run id is in the build-area queue. The
+  checkout may be on main or the dev branch while it runs.
 - **Queue:**
   1. PLA-350: check main's IPA, then fix.
   2. Step 4 KCD A/B: rerun `.work/agent-notes/donor-memory/runs/step4-session.sh`
