@@ -31,13 +31,22 @@ enum DonorPool {
                                        level: pp_memory_system()["level"]?.intValue ?? -1)
     }
 
+    /// What install took, for the Play's memory plan (PlayportKit MemoryPlan): the pool
+    /// granted (0 for none) and P, nil when the setting is off.
+    struct Installed {
+        var poolMB = 0
+        var phoneMB: Int?
+    }
+
     /// Takes and installs the pool the setting asks for; once per process (the runtime starts once).
     /// It runs after the JIT activation, seconds after the Play, so the limit read here is the one
     /// Game Mode gives (MemoryLimit; the check before Play waits for it only when it refuses).
-    static func install() {
+    @discardableResult
+    static func install() -> Installed {
         let setting = setting
-        guard setting != .off else { return }
+        guard setting != .off else { return Installed() }
         let r = reading()
+        var installed = Installed(poolMB: 0, phoneMB: r.phoneMB)
         let decision = DonorPoolSizing.decide(setting, r)
         /// The `donor-pool: auto` line: L, P, RAM, the donor's limit, the target and why (PLA-351).
         func autoLine(donorMB: Int?, target: Int, reason: String) {
@@ -55,7 +64,7 @@ enum DonorPool {
                 ? SharedMemoryProbe.donorLimitMB { log($0) } : nil
             autoLine(donorMB: donor, target: 0, reason: decision.reason)
             log("no room for a pool; ordinary memory")
-            return
+            return installed
         }
         let t0 = Date()
         let rounds = SharedMemoryProbe.donorRounds(mb: decision.targetMB, touch: false, gateFirstDonor: true) { log($0) }
@@ -65,17 +74,19 @@ enum DonorPool {
         guard !rounds.stop.contains("did not end"), granted > 0 else {
             autoLine(donorMB: rounds.firstDonorMB, target: 0, reason: decision.reason + "; " + rounds.stop)
             log("no pool: granted_mb=\(granted) stop=\"\(rounds.stop)\" after \(seconds) s; ordinary memory")
-            return
+            return installed
         }
         autoLine(donorMB: rounds.firstDonorMB, target: decision.targetMB, reason: decision.reason)
         guard pp_guest_pool_install(rounds.regions, { line in WineHostRuntime.appendLog(String(cString: line)) }) else {
             log("install refused (\(rounds.regions.count) objects); ordinary memory")
-            return
+            return installed
         }
         log("installed granted_mb=\(granted) objects=\(rounds.regions.count) donors=\(rounds.pids.count) "
             + "stop=\"\(rounds.stop)\" in \(seconds) s " + SharedMemoryProbe.describe(pp_memory_snapshot())
             + " " + SharedMemoryProbe.system())
         startPeriodicReport()
+        installed.poolMB = granted
+        return installed
     }
 
     /// Seconds between the stats lines while the pool is installed (the title runs in this

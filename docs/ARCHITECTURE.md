@@ -1084,6 +1084,21 @@ file is never edited (PlayportKit `TitleConfig`). The runtime's own
 land in that directory for such a launch. The first title in a process fixes
 the guest's screen (`TitleScreen.configure`).
 
+**The memory plan** (PLA-352, PlayportKit `MemoryPlan`). Just before Wine starts,
+after the JIT pool and a dev build's donor pool, the app reads the limit L once and
+tells the runtime the guest's RAM and the video budget through the environment:
+`MADEIRA_TOTAL_PHYS_MB` (ml992) and `PLAYPORT_VRAM_MB` (DXMT ml1042, patches/dxmt
+0011; its formula stays the fallback). Above a 6 GiB limit the guest is told L; at
+or under it, L less the runtime's 2 GiB (at least half of L). Video is L − 4 GiB of
+guest heap − 2 GiB of runtime − 512 MiB of margin, at least 1 GiB (768 MiB at or
+under a 4 GiB limit): 8,192 / 1,536 MiB on the reference phone, as before. A pool
+raises the guest's RAM by at most P − L, never the video budget. A title's
+`totalphys` and `vram-mb` win. The `memory plan:` app-log line has every input and
+output. Opt-in keys, off by default: `vram-budget-event = 1` signals DXGI's
+budget-change event when the ml1075 trim moves the budget (it hung RDR2 when it
+never fired); `vulkan-vram-plan = 1` adds `dxgi.maxDeviceMemory` = the plan's
+budget to `DXVK_CONFIG` (DXVK otherwise reports KosmicKrisp's 8 GiB heap).
+
 **`inproc-sync` is off by default**
 ([madeira-unix 0014](../patches/madeira-unix/0014-madsync-make-in-process-sync-opt-in.patch)).
 With Madeira's in-process NT sync (madsync) on, a thread blocked in madsync

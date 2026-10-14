@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 14 Oct 2026 23:32:11 +0200
+Subject: [PATCH] dxmt: the app's memory plan for the video budget; signal the
+ budget-change event on opt-in
+
+ml1042 computed the video budget at the first DXGI query as the process
+limit less 4096 MB of guest RAM and 2560 MB of runtime overhead. The
+guest is told the whole limit (ml992), the overhead was measured with the
+old 896 MiB JIT pool, and a first query before Game Mode raised the limit
+gave the 1 GB floor for the whole run. Playport's app now makes one memory
+plan per Play from one reading of the limit (PlayportKit MemoryPlan) and
+passes the budget as PLAYPORT_VRAM_MB: ml1042 takes it after madeira.cfg
+vram-mb, which still wins, and before its own formula, which stays the
+fallback. The ml1042 line names where the budget came from. The trim
+(ml1075) applies as before.
+
+The budget moves under the trim, and RegisterVideoMemoryBudgetChangeNotificationEvent
+registered events that never fired (rdr77/78: RDR2 waited on one forever),
+so it answers DXGI_ERROR_UNSUPPORTED. With madeira.cfg vram-budget-event = 1
+(read through MadeiraCtl's config lookup; the legacy madeira-dxgi-budget.txt
+still works) it now signals as DXVK does: once at registration, and from a
+thread that polls the budget every 500 ms while an event is registered,
+whenever the budget has moved. It stays off by default: RDR2 cannot be
+tested here.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-14-memory-plan.md
+Offered-upstream: no
+---
+ src/dxgi/dxgi_adapter.cpp           | 63 +++++++++++++++++++++++++++--
+ src/winemetal/unix/winemetal_unix.c | 21 +++++++---
+ 2 files changed, 75 insertions(+), 9 deletions(-)
+
+diff --git a/src/dxgi/dxgi_adapter.cpp b/src/dxgi/dxgi_adapter.cpp
+index 47bf183..cb3033a 100644
+--- a/src/dxgi/dxgi_adapter.cpp
++++ b/src/dxgi/dxgi_adapter.cpp
+@@ -8,6 +8,7 @@
+ #include "dxgi_object.hpp"
+ #include "d3d10_1.h"
+ #include "Metal.hpp"
++#include "thread.hpp"
+ #include <cstdio>     /* ml1007 */
+ #include <cstdlib>
+ #include <mutex>
+@@ -42,6 +43,12 @@ public:
+   };
+ 
+   ~MTLDXGIAdapter() {
++    if (budget_thread_.joinable()) {
++      SetEvent(budget_stop_);
++      budget_thread_.join();
++    }
++    if (budget_stop_)
++      CloseHandle(budget_stop_);
+     if (local_kmt_) {
+       D3DKMT_CLOSEADAPTER close = {};
+       close.hAdapter = local_kmt_;
+@@ -327,7 +334,14 @@ public:
+    *
+    * Documents/madeira-dxgi-budget.txt = 1 re-enables real registration, for
+    * when Budget becomes dynamic and we can actually signal the handles. Do not
+-   * enable it before there is a signalling path. */
++   * enable it before there is a signalling path.
++   *
++   * Playport (PLA-352): the budget is dynamic (ml1075's trim), and there is now a
++   * signalling path, as DXVK's: the event is signalled once at registration (as
++   * Windows does), and a thread polls the budget every 500 ms while an event is
++   * registered and signals every registered event when it moves. Still opt-in, by
++   * madeira.cfg `vram-budget-event = 1` (per title through its cohort `config`) or
++   * the file above, because RDR2, the title that hung, cannot be tested here. */
+   HRESULT STDMETHODCALLTYPE RegisterVideoMemoryBudgetChangeNotificationEvent(
+       HANDLE event, DWORD *cookie) override {
+     if (!cookie)
+@@ -335,17 +349,26 @@ public:
+ 
+     if (!budget_notify_enabled()) {
+       Logger::warn("DXGI: RegisterVideoMemoryBudgetChangeNotificationEvent "
+-                   "disabled by madeira-dxgi-budget.txt -> DXGI_ERROR_UNSUPPORTED");
++                   "not enabled (madeira.cfg vram-budget-event) -> DXGI_ERROR_UNSUPPORTED");
+       return DXGI_ERROR_UNSUPPORTED;
+     }
++    if (!event)
++      return DXGI_ERROR_INVALID_CALL;
+ 
+     std::lock_guard<std::mutex> lock(budget_mutex_);
+     DWORD assigned = ++budget_cookie_seq_;
+     budget_events_.emplace_back(assigned, event);
+     *cookie = assigned;
++    if (!budget_thread_.joinable()) {
++      budget_last_ = device_.recommendedMaxWorkingSetSize();
++      budget_stop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
++      if (budget_stop_)
++        budget_thread_ = dxmt::thread([this] { watch_budget(); });
++    }
++    SetEvent(event);
+     Logger::warn(str::format("DXGI: registered video-memory budget notification "
+-                             "cookie=", assigned, " (budget is static on this "
+-                             "platform, so no notification is expected)"));
++                             "cookie=", assigned, ", signalled now and when the budget (",
++                             budget_last_ >> 20, " MB) moves"));
+     return S_OK;
+   }
+ 
+@@ -370,11 +393,40 @@ public:
+   D3DKMT_HANDLE STDMETHODCALLTYPE GetLocalD3DKMT() final { return local_kmt_; }
+ 
+ private:
++  /* Playport (PLA-352): every 500 ms until the adapter goes, signal the registered
++   * events when the budget QueryVideoMemoryInfo reports has moved since the last look. */
++  void watch_budget() {
++    while (WaitForSingleObject(budget_stop_, 500) == WAIT_TIMEOUT) {
++      std::lock_guard<std::mutex> lock(budget_mutex_);
++      if (budget_events_.empty())
++        continue;
++      uint64_t now = device_.recommendedMaxWorkingSetSize();
++      if (now == budget_last_)
++        continue;
++      Logger::warn(str::format("DXGI: video memory budget ", budget_last_ >> 20, " -> ", now >> 20,
++                               " MB; signalling ", budget_events_.size(), " event(s)"));
++      budget_last_ = now;
++      for (auto &registered : budget_events_)
++        SetEvent(registered.second);
++    }
++  }
++
+   /* ml1007: read once. Absent file (the normal case) leaves this enabled. */
+   static bool budget_notify_enabled() {
+     /* Default FALSE: see the A/B in the comment above. Only an explicit "1"
+      * turns real registration back on. */
+     static const bool enabled = [] {
++      /* Playport (PLA-352): madeira.cfg vram-budget-event, through winemetal's
++       * config lookup (MadeiraCtl op 2), then the legacy file. */
++      struct madeira_ctl_args args = {};
++      char value[16] = {};
++      args.op = 2;
++      args.ptr = (uint64_t)(uintptr_t)value;
++      args.len = sizeof value;
++      std::strncpy(args.name, "vram-budget-event", sizeof args.name - 1);
++      MadeiraCtl(&args);
++      if (args.ret == 1)
++        return value[0] == '1';
+       const char *docs = std::getenv("MADEIRA_DOCS_DIR");
+       if (!docs || !*docs)
+         return false;
+@@ -397,6 +449,9 @@ private:
+   std::mutex budget_mutex_;
+   std::vector<std::pair<DWORD, HANDLE>> budget_events_;
+   DWORD budget_cookie_seq_ = 0;
++  uint64_t budget_last_ = 0;
++  HANDLE budget_stop_ = nullptr;
++  dxmt::thread budget_thread_;
+ };
+ 
+ Com<IMTLDXGIAdapter> CreateAdapter(WMT::Device Device,
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 0c59813..125ee80 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -677,13 +677,24 @@ static uint64_t madeira_ml1042_video_budget(uint64_t metal_recommended) {
+   if (cached) return madeira_ml1075_dynamic_budget(cached);
+ 
+   uint64_t budget = 0;
++  const char *source = "madeira.cfg vram-mb";
+   { long long mb = madeira_cfg_int("vram-mb", 0);   /* ml1095: madeira.cfg vram-mb = N */
+     if (mb >= 256) budget = (uint64_t)mb << 20; }
+-  uint64_t limit = 0, foot = 0;
++  /* Playport (PLA-352): the app's memory plan (PlayportKit MemoryPlan), made from one
++   * reading of the limit just before Wine starts, after a title's own vram-mb and
++   * before the formula below, which stays the fallback. Read at the first query, as
++   * the formula was; the trim (ml1075) still applies to it. */
+   if (!budget) {
+-    task_vm_info_data_t vmi; mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
++    const char *plan = getenv("PLAYPORT_VRAM_MB");
++    long long mb = plan && *plan ? strtoll(plan, NULL, 10) : 0;
++    if (mb >= 256) { budget = (uint64_t)mb << 20; source = "Playport's memory plan"; }
++  }
++  uint64_t limit = 0, foot = 0;
++  { task_vm_info_data_t vmi; mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
+     if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &cnt) == KERN_SUCCESS) foot = vmi.phys_footprint;
+-    limit = (uint64_t)os_proc_available_memory() + foot;
++    limit = (uint64_t)os_proc_available_memory() + foot; }
++  if (!budget) {
++    source = "ml1042's formula";
+     const uint64_t guest_ram = 4096ull << 20;      /* what ml992 lets the guest see */
+     const uint64_t overhead  = 2560ull << 20;      /* JIT pool + FEX + Wine + host, measured */
+     budget = limit > guest_ram + overhead ? limit - guest_ram - overhead : 0;
+@@ -692,9 +703,9 @@ static uint64_t madeira_ml1042_video_budget(uint64_t metal_recommended) {
+   if (metal_recommended && budget > metal_recommended) budget = metal_recommended;
+   cached = budget;
+   fprintf(stderr, "[wmt] ml1042 video memory budget = %llu MB (process limit %llu MB, footprint now %llu MB, "
+-                  "Metal recommends %llu MB)\n",
++                  "Metal recommends %llu MB; from %s)\n",
+           (unsigned long long)(budget >> 20), (unsigned long long)(limit >> 20),
+-          (unsigned long long)(foot >> 20), (unsigned long long)(metal_recommended >> 20));
++          (unsigned long long)(foot >> 20), (unsigned long long)(metal_recommended >> 20), source);
+   return madeira_ml1075_dynamic_budget(cached);
+ }
+ 
+-- 
+2.55.0
+

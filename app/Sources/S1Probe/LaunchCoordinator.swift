@@ -424,7 +424,28 @@ enum LaunchCoordinator {
         #endif
         step(.waitingForJit(until: Date().addingTimeInterval(r.jitWait)))
         if let value = HostCPU.exportDisableSwitches() { log("host-cpu: FEX_HOSTFEATURES \(value) for every process (absent: \(HostCPU.summary))") }
-        let started = runtime.start(poolMB: poolMB, wait: r.jitWait) { step(.startingRuntime) }
+        // The guest's RAM and the video budget from one reading of the limit (PlayportKit
+        // MemoryPlan, PLA-352), after the donor pool, just before Wine starts; the launch's
+        // madeira.cfg (its title keys over the shared file) and environment may override it.
+        var plan: MemoryPlan?
+        let started = runtime.start(poolMB: poolMB, wait: r.jitWait, pooled: { step(.startingRuntime) }) { donorMB, phoneMB in
+            let now = MemoryLimit.read()
+            guard let limit = now.effectiveMB else {
+                log("memory plan: no limit reported; the runtime's own readings hold")
+                return
+            }
+            let docs = getenv("MADEIRA_DOCS_DIR").map { URL(fileURLWithPath: String(cString: $0)) }
+                ?? runtime.prefixURL.appendingPathComponent("Documents", isDirectory: true)
+            let overrides = MemoryPlan.Overrides.read(value: { MadeiraConfig.value($0, directory: docs) },
+                                                      environment: ProcessInfo.processInfo.environment)
+            let p = MemoryPlan(MemoryPlan.Inputs(limitMB: limit, physicalMB: now.physicalMB, phoneMB: phoneMB,
+                                                 poolMB: donorMB), overrides: overrides)
+            let env = p.environment
+            for name in env.keys.sorted() { setenv(name, env[name]!, 1) }
+            log("memory plan: " + p.logLine + (now.simulatedMB != nil ? " (simulated limit)" : "")
+                + " env=" + (env.isEmpty ? "none" : env.keys.sorted().map { "\($0)=\(env[$0]!)" }.joined(separator: ",")))
+            plan = p
+        }
         log("runtime: \(started.detail), activation \(String(format: "%.2f", started.activationSeconds)) s")
         mark("runtime started")
         guard started.ok else {
@@ -442,6 +463,12 @@ enum LaunchCoordinator {
         }
         backend.merge(Diagnostics.launchEnvironment(exe: r.exe, dir: dir, graphics: r.graphics, log: log)) { own, _ in own }
         #endif
+        // DXVK reports Metal's whole working set as video memory unless the title opts into
+        // the plan's (`vulkan-vram-plan = 1`, MemoryPlan.dxvkOption; off by default).
+        if r.graphics == .vulkan, let option = plan?.dxvkOption {
+            backend["DXVK_CONFIG"] = backend["DXVK_CONFIG"].map { $0 + ";" + option } ?? option
+            log("memory plan: DXVK_CONFIG \(option)")
+        }
         let environment = applyEnvironment(backend: backend, steamAppID: r.steamAppID, fex: r.fex)
         PacedMetalLayer.onFirstFrame {
             mark("first frame")
