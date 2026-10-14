@@ -13,7 +13,8 @@ import Darwin
 /// Each game DLL is kept beside the emulator as `<name>.orig`, moved there by
 /// one rename, and a `steam_settings/` folder written by Playport (it holds
 /// `playport.txt`) goes beside it with what the emulator reports: the app ID,
-/// the persona name, the SteamID64, the language and the owned DLC. None of it
+/// the persona name, the SteamID64, the language and the owned DLC, and the
+/// interface versions of the game's own DLL (`interfacesFile`). None of it
 /// is a credential (decision 0004). The one exception is the game's encrypted
 /// app ticket, a line in configs.user.ini only while the game runs
 /// (`writeTicket`, `removeTickets`; decision 0017). Every step is a rename or an atomic write,
@@ -138,7 +139,7 @@ public enum SteamAPISwap {
             if InstallFS.sha256(dll) != InstallFS.sha256(source) {
                 try InstallFS.writeAtomically(dll, Data(contentsOf: source))
             }
-            try writeSettings(beside: dll.deletingLastPathComponent(), settings)
+            try writeSettings(beside: dll.deletingLastPathComponent(), settings, gameDLL: orig)
             done.append(site)
         }
         return done
@@ -224,15 +225,91 @@ public enum SteamAPISwap {
         ]
     }
 
-    static func writeSettings(beside dir: URL, _ s: Settings) throws {
+    static func writeSettings(beside dir: URL, _ s: Settings, gameDLL: URL) throws {
         let folder = dir.appendingPathComponent(settingsDirectory, isDirectory: true)
         try InstallFS.makeDirectory(folder)
         var files = settingsFiles(s).mapValues { Data($0.utf8) }
         files.merge(s.files) { a, _ in a }
+        // One given in the settings, or one already in the folder, is left as it is.
+        if files[interfacesFile] == nil,
+           !FileManager.default.fileExists(atPath: folder.appendingPathComponent(interfacesFile).path),
+           let game = try? Data(contentsOf: gameDLL), let text = interfacesText(game) {
+            files[interfacesFile] = Data(text.utf8)
+        }
         for (name, data) in files {
             let url = folder.appendingPathComponent(name)
             if (try? Data(contentsOf: url)) != data { try InstallFS.writeAtomically(url, data) }
         }
+    }
+
+    // MARK: the game's interface versions
+
+    /// gbe_fork's list of the interface versions the game's own steam_api
+    /// hands out from its exported accessors (`SteamUser()`, `SteamClient()`
+    /// and the rest, which games built with an older SDK call). Without
+    /// it the emulator's accessors return its newest interfaces, and a game
+    /// calls their methods with the arguments of its own SDK: Kingdom Come's
+    /// GetAuthSessionTicket through SteamUser023's slot, whose fourth argument
+    /// it never passes (PLA-350).
+    public static let interfacesFile = "steam_interfaces.txt"
+
+    /// gbe_fork's tools/generate_interfaces at the gbe pin, in its order: a
+    /// name and whether it is followed by digits (`\d+`).
+    static let interfacePatterns: [(name: String, digits: Bool)] = [
+        ("STEAMAPPS_INTERFACE_VERSION", true), ("SteamApps", true), ("STEAMAPPLIST_INTERFACE_VERSION", true),
+        ("STEAMAPPTICKET_INTERFACE_VERSION", true), ("SteamClient", true),
+        ("STEAMCONTROLLER_INTERFACE_VERSION", false), ("SteamController", true),
+        ("SteamFriends", true),
+        ("SteamGameServerStats", true), ("SteamGameCoordinator", true), ("SteamGameServer", true),
+        ("STEAMHTMLSURFACE_INTERFACE_VERSION_", true), ("STEAMHTTP_INTERFACE_VERSION", true),
+        ("SteamInput", true), ("STEAMINVENTORY_INTERFACE_V", true),
+        ("SteamMatchMakingServers", true), ("SteamMatchMaking", true), ("SteamMatchGameSearch", true),
+        ("SteamParties", true),
+        ("STEAMMUSIC_INTERFACE_VERSION", true), ("STEAMMUSICREMOTE_INTERFACE_VERSION", true),
+        ("SteamNetworkingMessages", true), ("SteamNetworkingSockets", true), ("SteamNetworkingUtils", true),
+        ("SteamNetworking", true),
+        ("STEAMPARENTALSETTINGS_INTERFACE_VERSION", true), ("STEAMREMOTEPLAY_INTERFACE_VERSION", true),
+        ("STEAMREMOTESTORAGE_INTERFACE_VERSION", true), ("STEAMSCREENSHOTS_INTERFACE_VERSION", true),
+        ("STEAMTIMELINE_INTERFACE_V", true), ("STEAMUGC_INTERFACE_VERSION", true),
+        ("SteamUser", true), ("STEAMUSERSTATS_INTERFACE_VERSION", true),
+        ("SteamUtils", true),
+        ("STEAMVIDEO_INTERFACE_V", true),
+        ("STEAMUNIFIEDMESSAGES_INTERFACE_VERSION", true),
+        ("SteamMasterServerUpdater", true),
+    ]
+
+    /// The interface versions in a game's steam_api DLL, as generate_interfaces
+    /// writes them: each pattern's matches in file order, a line each. A DLL
+    /// that also names SteamClient017 keeps only that SteamClient (newer SDKs
+    /// export only SteamClient(), which returns it). Nil when it names none.
+    public static func interfacesText(_ dll: Data) -> String? {
+        let bytes = [UInt8](dll)
+        var lines: [String] = []
+        for p in interfacePatterns {
+            var found = matches(of: Array(p.name.utf8), digits: p.digits, in: bytes)
+            if p.name == "SteamClient", found.count > 1, found.contains("SteamClient017") {
+                found = found.filter { $0 == "SteamClient017" }
+            }
+            lines += found
+        }
+        return lines.isEmpty ? nil : lines.map { $0 + "\n" }.joined()
+    }
+
+    /// Every `name` (followed by one or more ASCII digits, when `digits`) in `bytes`, in order.
+    static func matches(of name: [UInt8], digits: Bool, in bytes: [UInt8]) -> [String] {
+        var found: [String] = []
+        var i = 0
+        while i + name.count <= bytes.count {
+            guard bytes[i] == name[0], bytes[i..<i + name.count].elementsEqual(name) else { i += 1; continue }
+            var end = i + name.count
+            if digits {
+                while end < bytes.count, (0x30...0x39).contains(bytes[end]) { end += 1 }
+                guard end > i + name.count else { i += 1; continue }
+            }
+            found.append(String(decoding: bytes[i..<end], as: UTF8.self))
+            i = end
+        }
+        return found
     }
 
     // MARK: the encrypted app ticket (decision 0017)
