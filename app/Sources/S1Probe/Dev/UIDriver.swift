@@ -87,6 +87,15 @@
 //   probe:memory-donor-tagged-2048|4096 | probe:memory-donor-purgeable-2048|4096
 //                              Its donor variant: the helper ends after allocating and the
 //                              app keeps the mappings 60 s; the H1 verdict is in the log
+//   probe:memory-donors-6144|8192|10240
+//                              Settings' donor RAM pool: fresh helpers in turn give purgeable
+//                              RAM and end until the total is mapped (or a donor has nothing left,
+//                              or the phone runs low: then it fails), verified 60 s later, then the
+//                              app's own remaining limit; the pool stays held
+//   probe:memory-pool-verify   Settings' Verify the donor pool: reads the held pool again
+//   background:<seconds>       Opens iOS Settings (10-600 s), so Playport goes to the background,
+//                              and waits until it is in front again: pp ui brings it back after
+//                              that long, unless iOS ended it (the ui-background event)
 //   probe:pairing              Settings' on-device pairing experiment (iOS 27)
 //   probe:pairing-cancel | probe:pairing-use
 //                              Cancel, or use the completed pairing and check readiness
@@ -571,9 +580,47 @@ enum UIDriver {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor RAM probe: \(SharedMemoryProbe.shared.status)")
+                    case let s where s.hasPrefix("memory-donors-"):
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        guard let mb = Int(s.dropFirst("memory-donors-".count)), SharedMemoryProbe.donorTotals.contains(mb) else {
+                            return finish("action=\(action) refused: not a donor pool total")
+                        }
+                        guard await SharedMemoryProbe.shared.runDonors(mb: mb) else {
+                            return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
+                        }
+                        log("donor RAM pool probe: \(SharedMemoryProbe.shared.status)")
+                    case "memory-pool-verify":
+                        guard await SharedMemoryProbe.shared.verifyPool() else {
+                            return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
+                        }
+                        log("donor RAM pool: \(SharedMemoryProbe.shared.status)")
                     default:
                         return finish("action=\(action) refused: unknown probe")
                     }
+                case "background":
+                    guard let seconds = Int(id), (10...600).contains(seconds) else {
+                        return finish("action=\(action) refused: not background:<seconds 10-600>")
+                    }
+                    let app = UIApplication.shared
+                    // pp ui reads this, waits, and brings the app back (tools/ui.py return_from_background).
+                    RunEvents.emit("ui-background", ["seconds": seconds, "pid": Int(getpid())])
+                    log("background \(seconds) s: opening Settings")
+                    guard await app.open(URL(string: UIApplication.openSettingsURLString)!) else {
+                        return finish("action=\(action) failed: Settings did not open")
+                    }
+                    let left = Date()
+                    while app.applicationState == .active, Date().timeIntervalSince(left) < 10 {
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                    guard app.applicationState != .active else { return finish("action=\(action) failed: Playport stayed in front") }
+                    while app.applicationState != .active, Date().timeIntervalSince(left) < Double(seconds + 180) {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                    guard app.applicationState == .active else {
+                        return finish("action=\(action) failed: not in front again \(seconds + 180) s after leaving")
+                    }
+                    log("background: in front again after \(Int(Date().timeIntervalSince(left))) s")
                 case "uninstall":
                     if let failure = await uninstall(id) { return finish("action=\(action) failed: \(failure)") }
                 case "verify":

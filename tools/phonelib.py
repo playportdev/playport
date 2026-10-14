@@ -513,6 +513,14 @@ class Phone:
         pid = int((re.findall(r"pid (\d+)", text) or ["0"])[-1])
         return pid
 
+    def activate(self):
+        """Bring the running app to the front without ending it (a launch with
+        --no-kill-existing and no environment); the pid the launch names, or None."""
+        text = self.pmd("activate", "developer", "dvt", "launch", "--no-kill-existing", self.bundle_id(),
+                        secs=self.LAUNCH_S, check=False)
+        found = re.findall(r"pid (\d+)", text)
+        return int(found[-1]) if found else None
+
     def pull(self, remote, dest):
         """One named file into DEST (a directory); its path, or None, with the reason in
         self.pull_error. Never a directory: Documents holds the prefix, whose z: drive links to /."""

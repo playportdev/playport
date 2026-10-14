@@ -43,6 +43,41 @@ final class SharedMemoryProbe: ObservableObject {
         return result.0
     }
 
+    /// The totals Settings and the driver offer for runDonors (docs/plans/2026-10-12-donor-memory.md step 2).
+    static let donorTotals = [6144, 8192, 10240]
+
+    /// Several donors, one after another (step 2): each round starts a fresh helper process,
+    /// takes purgeable objects up to its available memory less a margin, and ends it, until mb MiB
+    /// are mapped here, a donor has nothing to give, or the phone runs low. Then the pool is
+    /// verified 60 s after the last donor died, and the app takes ordinary memory up to its own
+    /// limit less a margin while holding it. The pool stays mapped until the next run or the
+    /// app's exit (verifyPool). True when mb MiB were mapped and verified throughout.
+    func runDonors(mb: Int) async -> Bool {
+        guard !busy, Self.donorTotals.contains(mb) else { return false }
+        while BuiltInJitStatus.shared.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        busy = true
+        status = "Measuring \(mb) MiB from donors…"
+        let result = await withCheckedContinuation { done in
+            BuiltInJit.queue.async { done.resume(returning: Self.measureDonors(mb: mb)) }
+        }
+        status = result.1
+        busy = false
+        return result.0
+    }
+
+    /// Reads the pool runDonors left mapped (after the app was in the background, say).
+    func verifyPool() async -> Bool {
+        guard !busy else { return false }
+        busy = true
+        status = "Verifying the donor pool…"
+        let result = await withCheckedContinuation { done in
+            BuiltInJit.queue.async { done.resume(returning: Self.verifyHeldPool()) }
+        }
+        status = result.1
+        busy = false
+        return result.0
+    }
+
     private nonisolated static func variant(_ purgeable: Bool) -> String { purgeable ? "purgeable" : "tagged" }
 
     /// The page counts of every object, summed (kr is the first failure, or 0).
@@ -140,12 +175,17 @@ final class SharedMemoryProbe: ObservableObject {
         return (true, "Donor \(kind) \(mb) MiB: H1 \(verdict), footprint +\(grown >> 20) MiB, verified \(at60.verified)")
     }
 
-    /// Allocates mb MiB from the helper in 64 MiB objects, each fully written and verified here.
-    /// Returns the failure, or nil.
-    private nonisolated static func allocate(mb: Int, purgeable: Bool, proxy: JITHelping, into regions: inout [PPMemoryRegion]) -> String? {
+    /// Allocates mb MiB from the helper in chunkMB objects, each fully written and verified here.
+    /// lowMemory is asked before each object: its reason stops the allocation. Returns the failure, or nil.
+    private nonisolated static func allocate(mb: Int, purgeable: Bool, chunkMB: Int = 64, proxy: JITHelping,
+                                             into regions: inout [PPMemoryRegion], lowMemory: () -> String? = { nil }) -> String? {
         var allocated = 0
         while allocated < mb {
-            let chunk = min(64, mb - allocated)
+            if let low = lowMemory() {
+                log("allocation stopped at \(allocated) MiB: \(low)")
+                return "Allocated \(allocated) MiB; stopped: \(low)"
+            }
+            let chunk = min(chunkMB, mb - allocated)
             let token = UInt64(regions.count + 1)
             let replied = DispatchSemaphore(value: 0)
             nonisolated(unsafe) var received: PPMemoryRegion?
@@ -168,6 +208,131 @@ final class SharedMemoryProbe: ObservableObject {
             }
         }
         return nil
+    }
+
+    // runDonors' rule (step 2): a donor gives its available memory less donorMarginMB, in
+    // donorChunkMB objects; the app keeps appMarginMB of its own limit. Before every object the
+    // phone must have systemFloorMB free, inactive, speculative or purgeable, jetsam's level at
+    // least levelFloor percent, and no pressure warning: the pool is real RAM, and stopping
+    // here is cheaper than jetsam ending a process.
+    private nonisolated static let donorChunkMB = 256, donorMarginMB = 512, appMarginMB = 512, maxDonors = 8
+    private nonisolated static let systemFloorMB: UInt64 = 1536, levelFloor: Int64 = 15
+    /// runDonors' pool, held after the probe; touched only on BuiltInJit.queue.
+    private nonisolated(unsafe) static var pool: [PPMemoryRegion] = []
+
+    private nonisolated static func mib(_ n: NSNumber?) -> UInt64 { (n?.uint64Value ?? 0) >> 20 }
+
+    /// The phone's memory in MiB (pp_memory_system), for the log.
+    private nonisolated static func system() -> String {
+        let s = pp_memory_system()
+        let counts = ["free", "active", "inactive", "speculative", "wired", "purgeable", "compressor", "compressed_data"]
+            .map { "sys_\($0)_mb=\(mib(s[$0]))" }
+        let events = ["compressions", "decompressions", "swapins", "swapouts"].map { "sys_\($0)=\(s[$0]?.uint64Value ?? 0)" }
+        return (["sys_kr=\(s["kr"]?.int64Value ?? -1)"] + counts + events
+                + ["sys_level=\(s["level"]?.int64Value ?? -1)", "sys_pressure=\(s["pressure"]?.int64Value ?? -1)"]).joined(separator: " ")
+    }
+
+    /// Why the phone is too low on memory for another object, or nil.
+    private nonisolated static func systemLow() -> String? {
+        let s = pp_memory_system()
+        let level = s["level"]?.int64Value ?? -1, pressure = s["pressure"]?.int64Value ?? -1
+        let spare = mib(s["free"]) + mib(s["inactive"]) + mib(s["speculative"]) + mib(s["purgeable"])
+        if pressure >= 2 { return "system pressure level \(pressure)" }
+        if level >= 0, level < levelFloor { return "memorystatus level \(level)% < \(levelFloor)%" }
+        if spare < systemFloorMB { return "system spare \(spare) MiB < \(systemFloorMB) MiB" }
+        return nil
+    }
+
+    private nonisolated static func appMB(_ key: String) -> UInt64 { mib(pp_memory_snapshot()[key]) }
+
+    private nonisolated static func measureDonors(mb: Int) -> (Bool, String) {
+        pool.removeAll()
+        log("donors start target_mb=\(mb) variant=purgeable chunk_mb=\(donorChunkMB) donor_margin_mb=\(donorMarginMB) "
+            + describe(pp_memory_snapshot()) + " " + system())
+        var regions: [PPMemoryRegion] = []
+        var pids: [Int32] = []
+        var stop = "target reached"
+        var lastDeath = Date()
+        var mapped: Int { regions.reduce(0) { $0 + Int($1.byteCount >> 20) } }
+        for round in 1...maxDonors where mapped < mb {
+            if let low = systemLow() { stop = "before donor \(round): \(low)"; break }
+            let helper: JitHelper
+            do { helper = try JitHelper.start(log: log) } catch {
+                stop = "donor \(round) did not start: \(error.localizedDescription)"; break
+            }
+            let proxy = helper.proxy { error in log("XPC error: \(error.localizedDescription)") }
+            let baseline = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var report: NSDictionary = [:]
+            proxy.memoryReport(seed: seed, verify: false) { state, _ in report = state; baseline.signal() }
+            guard baseline.wait(timeout: .now() + 10) == .success,
+                  let pid = (report["pid"] as? NSNumber)?.int32Value, pid > 0 else {
+                helper.stop()
+                stop = "donor \(round) report timed out"; break
+            }
+            let available = Int(((report["available"] as? NSNumber)?.uint64Value ?? 0) >> 20)
+            let grant = min(mb - mapped, max(0, available - donorMarginMB) / donorChunkMB * donorChunkMB)
+            log("donors round=\(round) donor_pid=\(pid) fresh=\(!pids.contains(pid)) donor_available_mb=\(available) "
+                + "donor_footprint_mb=\(mib(report["footprint"] as? NSNumber)) grant_mb=\(grant)")
+            pids.append(pid)
+            guard grant > 0 else {
+                helper.stop()
+                stop = "donor \(round) has nothing to give (\(available) MiB available)"; break
+            }
+            let before = mapped
+            let failure = allocate(mb: grant, purgeable: true, chunkMB: donorChunkMB, proxy: proxy, into: &regions,
+                                   lowMemory: systemLow)
+            helper.stop()
+            let died = Date()
+            let exit = waitForExit(pid: pid, seconds: 5)
+            lastDeath = Date()
+            log("donors round=\(round) donor_pid=\(pid) granted_mb=\(mapped - before) total_mb=\(mapped) gone=\(exit.gone) "
+                + "kill0_errno=\(exit.errno) after_ms=\(Int(lastDeath.timeIntervalSince(died) * 1000)) "
+                + "app_footprint_mb=\(appMB("footprint")) app_available_mb=\(appMB("available")) " + system())
+            if let failure { stop = "donor \(round): \(failure)"; break }
+            guard exit.gone else { stop = "donor \(round) (pid \(pid)) did not end"; break }
+        }
+        if mapped < mb, stop == "target reached" { stop = "\(maxDonors) donors gave too little" }
+        let total = mapped
+        log("donors rounds_done=\(pids.count) total_mb=\(total) target_mb=\(mb) stop=\"\(stop)\"")
+        let wait = 60 - Date().timeIntervalSince(lastDeath)
+        if wait > 0 { Thread.sleep(forTimeInterval: wait) }
+        let at60 = point("donors_dead_60s", regions)
+        log("donors system_60s " + system())
+
+        // The app's own limit, with the pool held: ordinary memory, 256 MiB at a time.
+        var ordinary: [UnsafeMutableRawPointer] = []
+        let step = UInt64(donorChunkMB) << 20
+        var appStop = "app margin"
+        while true {
+            let available = appMB("available")
+            if available < UInt64(donorChunkMB + appMarginMB) { appStop = "app available \(available) MiB"; break }
+            if let low = systemLow() { appStop = low; break }
+            guard let block = pp_memory_ordinary(step, seed &+ 0x1000 &+ UInt64(ordinary.count)) else {
+                appStop = "vm_allocate refused"; break
+            }
+            ordinary.append(block)
+            log("donors app_limit ordinary_mb=\(ordinary.count * donorChunkMB) app_footprint_mb=\(appMB("footprint")) "
+                + "app_available_mb=\(appMB("available")) " + system())
+        }
+        let taken = ordinary.count * donorChunkMB
+        log("donors app_limit_done ordinary_mb=\(taken) stop=\"\(appStop)\" " + describe(pp_memory_snapshot()) + " " + system())
+        for block in ordinary { pp_memory_ordinary_release(block, step) }
+        let after = point("donors_after_app_limit", regions)
+        pool = regions
+        let pass = total >= mb && at60.verified && after.verified
+        log("donors RESULT \(pass ? "PASS" : "FAIL") target_mb=\(mb) total_mb=\(total) donors=\(pids.count) "
+            + "verify_60s=\(at60.verified) verify_after_app_limit=\(after.verified) app_ordinary_mb=\(taken) "
+            + "stop=\"\(stop)\" app_stop=\"\(appStop)\"")
+        return (pass, "Donors \(total)/\(mb) MiB from \(pids.count), verified \(at60.verified && after.verified), "
+                + "app +\(taken) MiB; \(stop)")
+    }
+
+    private nonisolated static func verifyHeldPool() -> (Bool, String) {
+        guard !pool.isEmpty else { return (false, "No donor pool is held") }
+        let total = pool.reduce(0) { $0 + Int($1.byteCount >> 20) }
+        let result = point("pool_verify", pool)
+        log("donors pool_verify total_mb=\(total) verified=\(result.verified) " + system())
+        return (result.verified, "Pool \(total) MiB verified \(result.verified)")
     }
 
     private nonisolated static func describe(_ value: Any) -> String {

@@ -78,6 +78,44 @@ class UiEnvTest(unittest.TestCase):
                        "probe:memory-donor-2048", "probe:memory-donor-tagged-64", "probe:memory-donor-other-2048"):
             self.assertFalse(m.ACTION_RE.match(action), action)
 
+    def test_donor_pool_and_background_actions(self):
+        m = load()
+        for action in ("probe:memory-donors-6144", "probe:memory-donors-8192", "probe:memory-donors-10240",
+                       "probe:memory-pool-verify", "background:10", "background:60", "background:600"):
+            self.assertEqual(m.parse(["--action", action]).action, [action])
+        for action in ("probe:memory-donors-4096", "probe:memory-donors-", "probe:memory-pool", "background:",
+                       "background:9", "background:601", "background:060", "background:1000"):
+            self.assertFalse(m.ACTION_RE.match(action), action)
+
+    def test_return_from_background(self):
+        m = load()
+
+        class Phone:
+            def __init__(self, pid):
+                self.running, self.activated = pid, 0
+
+            def pid(self):
+                return self.running
+
+            def activate(self):
+                self.activated += 1
+                return self.running
+
+        slept = []
+        alive = Phone(42)
+        out = m.return_from_background(alive, {"seconds": 60, "pid": 42, "t": 100.0}, now=lambda: 103.0, sleep=slept.append)
+        self.assertEqual(slept, [57.0])
+        self.assertEqual(out, {"seconds": 60, "pid": 42, "pid_seen": 42, "alive": True, "pid_after": 42, "same_process": True})
+        self.assertEqual(alive.activated, 1)
+        gone = Phone(None)
+        out = m.return_from_background(gone, {"seconds": 60, "pid": 42, "t": 100.0}, now=lambda: 300.0, sleep=slept.append)
+        self.assertEqual(slept[-1], 0)
+        self.assertEqual((out["alive"], gone.activated), (False, 0))
+        self.assertNotIn("pid_after", out)
+        replaced = Phone(43)
+        out = m.return_from_background(replaced, {"seconds": 10, "pid": 42}, sleep=slept.append)
+        self.assertEqual((out["alive"], replaced.activated), (False, 0))
+
     def test_queue_and_downloading_take_an_app_id(self):
         m = load()
         for ok in ("queue:2494780", "downloading:2494780", "install:367520", "install:gog-1104084973@123",

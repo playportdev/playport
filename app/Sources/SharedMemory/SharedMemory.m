@@ -10,6 +10,7 @@ extern kern_return_t mach_memory_entry_ownership(mach_port_t, mach_port_t, int, 
 #include <os/proc.h>
 #include <xpc/xpc.h>
 #include <sys/mman.h>
+#include <sys/sysctl.h>
 
 // An individually transported object is bounded; larger arenas use chunks.
 static const uint64_t maxBytes = 256ULL << 20;
@@ -191,4 +192,36 @@ bool pp_memory_verify(PPMemoryRegion *region, uint64_t seed) {
         if (p[i] != word(i, seed)) { return false; }
     }
     return true;
+}
+
+static int64_t sysctlInt(const char *name) {
+    int value = 0;
+    size_t size = sizeof value;
+    return sysctlbyname(name, &value, &size, NULL, 0) == 0 ? value : -1;
+}
+NSDictionary *pp_memory_system(void) {
+    vm_statistics64_data_t vm = {0};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    kern_return_t kr = host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vm, &count);
+    uint64_t page = vm_kernel_page_size;
+    return @{@"kr": @(kr), @"free": @(vm.free_count * page), @"active": @(vm.active_count * page),
+             @"inactive": @(vm.inactive_count * page), @"speculative": @(vm.speculative_count * page),
+             @"wired": @(vm.wire_count * page), @"purgeable": @(vm.purgeable_count * page),
+             @"internal": @(vm.internal_page_count * page), @"external": @(vm.external_page_count * page),
+             @"compressor": @(vm.compressor_page_count * page),
+             @"compressed_data": @(vm.total_uncompressed_pages_in_compressor * page),
+             @"compressions": @(vm.compressions), @"decompressions": @(vm.decompressions),
+             @"swapins": @(vm.swapins), @"swapouts": @(vm.swapouts),
+             @"level": @(sysctlInt("kern.memorystatus_level")),
+             @"pressure": @(sysctlInt("kern.memorystatus_vm_pressure_level"))};
+}
+void *pp_memory_ordinary(uint64_t bytes, uint64_t seed) {
+    vm_address_t address = 0;
+    if (vm_allocate(mach_task_self(), &address, bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) { return NULL; }
+    volatile uint64_t *p = (volatile uint64_t *)address;
+    for (uint64_t i = 0, n = bytes / 8; i < n; ++i) { p[i] = word(i, seed); }
+    return (void *)address;
+}
+void pp_memory_ordinary_release(void *address, uint64_t bytes) {
+    if (address) { vm_deallocate(mach_task_self(), (vm_address_t)address, bytes); }
 }

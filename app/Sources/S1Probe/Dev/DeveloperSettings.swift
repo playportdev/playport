@@ -116,6 +116,15 @@ struct DeveloperSettings: View {
                 }
             }
         }
+        ForEach(SharedMemoryProbe.donorTotals, id: \.self) { mb in
+            PadRow(id: "set:dev:memoryDonors:\(mb)", title: "Donor RAM pool: \(mb) MiB",
+                   subtitle: "Fresh helpers give purgeable RAM, then end; the app keeps the pool", hint: "Measure") {
+                if !sharedMemory.busy { Task { _ = await sharedMemory.runDonors(mb: mb) } }
+            }
+        }
+        PadRow(id: "set:dev:memoryPoolVerify", title: "Verify the donor pool", subtitle: sharedMemory.status, hint: "Verify") {
+            if !sharedMemory.busy { Task { _ = await sharedMemory.verifyPool() } }
+        }
         PadRow(id: "set:dev:nativeAuth", title: "Native authentication", subtitle: authProbe.status,
                hint: "Run") {
             if !authProbe.busy { Task { _ = await authProbe.run() } }

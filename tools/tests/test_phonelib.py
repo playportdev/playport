@@ -148,6 +148,21 @@ class PhonelibTest(unittest.TestCase):
         for k in ("argv:", "cwd:", "checkout:", "head:", "at:"):
             self.assertIn(k, text)
 
+    def test_activate_launches_without_ending_the_app(self):
+        phone = self.pl.Phone(self.tmp, dry=False, events=self.pl.Events(echo=False))
+        phone._bid = "XTL-T.dev.playport.app"
+        calls = []
+
+        def run(name, args, secs, check=True, env=None):
+            calls.append((name, args, check))
+            return "Process launched with pid 4242\n"
+        phone.run = run
+        self.assertEqual(phone.activate(), 4242)
+        self.assertEqual(calls, [("activate", ["pymobiledevice3", "developer", "dvt", "launch", "--no-kill-existing",
+                                               "XTL-T.dev.playport.app"], False)])
+        phone.run = lambda *a, **k: "error\n"
+        self.assertIsNone(phone.activate())
+
     def test_battery(self):
         b = self.pl.battery_of
         self.assertEqual(b({"CurrentCapacity": 80, "ExternalConnected": False}),
