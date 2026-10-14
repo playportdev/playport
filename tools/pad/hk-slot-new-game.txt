@@ -1,0 +1,67 @@
+# Hollow Knight: from the profile screen, a new game in the slot the cursor is
+# on, then the prologue skipped: hk-new-slot without its first A (Start Game),
+# for a session that has opened the profile screen itself (hk-profiles, or
+# hk-menu-back-start) and checked the slot before any press on it. The cursor
+# opens on the last slot used and is shown by a fleur on each side of that
+# slot. On 2026-10-14 (profile screen 1600x737) slot 3 read New Game and had
+# the cursor; `pp pad wait-text --crop 0.26,0.56,0.37,0.64 "New Game"` read its
+# label, and `--need 1 --crop 0.60,0.53,0.70,0.67 ">" "»"` read its right
+# fleur, which that crop does not read once the fleur is gone. Push this only
+# after both read. A new game is not saved until the Knight dies or rests
+# (evidence 2026-09-29-hk-gameplay-baseline.md), so killing the app leaves the
+# slot New Game. The A presses every 1.5 s skip the prologue (about 40 s), as
+# in hk-new-slot; push hk-walk once this has played.
+150 A        # the slot the cursor is on: New Game (checked, above)
+3500 -       # the prologue
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
+150 A
+1350 -
