@@ -89,7 +89,14 @@ may be a 4 GiB burst of allocation the pool made slower, or play that differed.
 - **Steady play is unaffected.** The pool costs Hollow Knight nothing
   measurable at 60 FPS, and the first frame is the same.
 - **A heavy allocation burst coincided with a 15 FPS drop for about 30 s in
-  the pool run only.** Unresolved: it needs a repeat with the same scripted
-  route (a `pp pad` route) in both runs, so that play is identical.
+  the pool run only.** The owner recalls, not with certainty, that the runs
+  started differently:
+  - the off run started with the hero already standing;
+  - the pool run began with cutscenes and the hero falling to the ground.
+
+  That fits a scene load in the pool run only: the 4.4 GiB churn and the
+  doubled server requests. So the dip is most likely the game's content, not
+  the pool. To confirm it, repeat with the same scripted route (a `pp pad`
+  route) from the same save point in both runs.
 - **The runs are not fully comparable:** one pair, played by hand, a break
   between them, and different battery levels.

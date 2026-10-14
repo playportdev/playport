@@ -77,7 +77,8 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   window, where the pool run churned 4.4 GiB through the pool, served twice
   the server requests and fell to 44 FPS. Elsewhere the runs match within
   1 FPS. The pool's own work was small: about 0.6 s over the run, no call
-  over 1 ms. The cause of the dip is unresolved.
+  over 1 ms. The dip most likely came from different content: the owner
+  recalls that only the pool run opened with cutscenes and a scene load.
 - **Now:** nothing running; the phone is free. Waiting for the owner.
 - **Queue (proposed):**
   1. Repeat the HK A/B with an identical scripted `pp pad` route, to settle
