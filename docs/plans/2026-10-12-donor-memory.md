@@ -83,15 +83,15 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   below runs in order, one writer at a time, with the phone in unattended
   mode. Run ids are in the build-area queue.
 - **Queue:**
-  1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)).
+  1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)). Follow-ups 2026-10-15 ([evidence](../evidence/2026-10-15-donor-pool-followups.md)): the scripted HK A/B on an unsaved new game in slot 3 (no save made) matched in steady play (walk and roam 59.9–60.0 FPS, the same server requests per frame), but the pool run's two scene loads took 1.5–2.2 s longer and its 1 % lows were lower (20.9 vs 21.8 over the run); one pair, not settled. The detach probe was not run: no `protect` title in the library, and pp has no command to copy a file to the phone (owner: Files/Finder, or decide on a `pp phone put`).
   2. **[PLA-351](https://linear.app/playportdev/issue/PLA-351), done 2026-10-14:** Off/Auto sizing from P − L (`da6fe62`, IPA `d2c62e6c…`); on this phone Auto is off at Play (P 4,440, L 8,191); the helper is signed with increased-memory-limit, and its limit is 6,139 MiB ([evidence](../evidence/2026-10-14-donor-pool-auto.md)).
   3. **[PLA-352](https://linear.app/playportdev/issue/PLA-352), done 2026-10-14:** one memory plan per Play (`9e900b8`, IPA `21347e47…`); the reference phone keeps 8,192 / 1,536 MiB, ≤ 6 GiB limits tell the guest less, the event and the Vulkan clamp are opt-in; DXVK reports an 8 GiB heap ([evidence](../evidence/2026-10-14-memory-plan.md)).
   4. Step 5: GPU buffers in pool memory (stretch).
-- **Phone (2026-10-14, 23:58):** dev IPA `21347e47…` installed, on the charger (53 %),
-  unattended on, app killed. The sessions' `--settings` (HK graphics) and `set:donorPoolMB=0`
-  are undone at the app's next launch outside a session. KCD and HK are installed; the
-  `protect` probe is not. Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350 (PLA-352's
-  for the supervisor to file).
+- **Phone (2026-10-15, 01:03):** dev IPA `21347e47…` installed, on the charger (96 %),
+  unattended on, app killed. The sessions' `set:donorPoolMB` and the HUD switch are undone at
+  the app's next launch outside a session. KCD and HK are installed; HK profile slot 3 is still
+  New Game. The `protect` probe is not installed. Results are filed on PLA-42, PLA-49, PLA-216
+  and PLA-350 (PLA-352's and the 2026-10-15 follow-ups' for the supervisor to file).
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
   step2-writer.md, step3-writer.md, step4-writer.md,
