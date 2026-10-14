@@ -1,9 +1,21 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** written, not started.
+**Date:** 2026-10-12. **Status:** step 1 in progress (started 2026-10-14).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Nothing on it has been built since the rebase.
+
+## Progress
+
+Run with the plan-runner skill (supervisor plus one writer at a time). Models
+for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
+`anthropic/claude-sonnet-5-5` (medium). Reports go to
+`.work/agent-notes/donor-memory/reports/`.
+
+- **Now:** step 1 (H1 probe), one writer child on this branch, starting from
+  `4967788`. Its run id is in `.work/agent-notes/donor-memory/queue.md`; wait
+  for its report or read it there before starting anything else.
+- **Queue:** step 1, then step 2 only if step 1 passes; steps 3–5 in order.
 
 ## Why
 
