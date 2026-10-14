@@ -39,10 +39,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   (`steam_api64` +0x1b4760). It happens with the pool off as well. Main has
   not been checked, so a cause on this branch (0148's hooks, which are in
   every dev build) is not ruled out yet.
-- **Now:** PLA-350 (owner: check main, then fix) in a writer child. A fix
-  that is main's goes on `dev/pla-350-kcd-steam-api` from main, merged into
-  this branch (not into main). The run id is in the build-area queue. The
-  checkout may be on main or the dev branch while it runs.
+- **Done 2026-10-14:** PLA-350 fixed (`4af9e3b`, merged `3db126b`), and the step-4 KCD pair passed: peak `fpMB` 7,914 off, 7,217 on (IPA `f1f024ae…`; [evidence](../evidence/2026-10-14-donor-pool-kcd.md)).
 - **Queue:**
   1. PLA-350: check main's IPA, then fix.
   2. Step 4 KCD A/B: rerun `.work/agent-notes/donor-memory/runs/step4-session.sh`
@@ -260,24 +257,33 @@ Measure these in one locked session each, pool off and on:
 - **Kingdom Come** (PLA-49): its peak `fpMB` against the limit, through the
   same orchestration as the KCD evidence. Then raise the RAM and video memory
   the game is told it has, and check that it still loads Rattay.
-- **Result, Kingdom Come (2026-10-14, IPA `195d5698…`): blocked, not
-  measured.**
-  - **Added before the session:** a `donor-pool: stats at install+Ns` line
-    every 30 s, and `pp pad wait-text`, which presses Continue only on a
-    menu whose labels it has read.
-  - **What happened:** KCD exited `0xc0000005` 11–12 s after it started,
-    before the first frame. It did so in both runs: pool off, and pool
-    asked 6144 (`cap_mb=4096`, 4096 granted).
-  - **The fault:** the same in both runs, in Playport's `steam_api64.dll`
-    emulator at +0x1b4760, a read of NULL+0x1f4. So this is a regression
-    in the title since 2026-10-03, not the pool.
-  - **What the pool did:** this was the first purge and reuse on the
-    phone. Object 3 was purged 16 times at 0.01 ms each, then served again
-    from offset 0. 256 requests (786 MiB) were served. There were no
-    detaches, no unmatched, no refused requests and no map failures.
-  - **Hollow Knight on the same IPA with 4 GiB:** first frame at +9.94 s,
+- **Result, Kingdom Come (2026-10-14, IPA `f1f024ae…`): passed for one
+  pair.**
+  - **First session (IPA `195d5698…`):** blocked by
+    [PLA-350](https://linear.app/playportdev/issue/PLA-350), a crash in
+    the Steam API emulator before the first frame with the pool off and on.
+    It was fixed on main's `dev/pla-350-kcd-steam-api`: `steam_interfaces.txt`
+    is written from the game's own `steam_api`. That branch is merged here.
+  - **Plaion's EULA:** a new EULA page appeared once. With the owner's
+    approval, the script accepted it with one A after reading it. It did not
+    come back. Whether the interfaces file caused it is open.
+  - **The pair:** pool off against pool asked 6144 (`cap_mb=5120`). Both
+    loaded Rattay through Continue, checked by
+    `pp pad wait-text --crop --highlight-above`, then walked; the game was
+    stopped at first frame +205.
+    - **Peak `fpMB`:** 7,914 off, 7,217 on (−697).
+    - **At Play+110/+170/+230:** −391, −781 and −809.
+    - **Errors:** unmatched 0, detaches 0, map failures 0, no crash, no
+      jetsam.
+  - **The pool:** it served 10,454 MiB through 5,120 with 83 purges. It
+    stopped serving after the load (from install+150 s), with `refused`
+    up to 13,211 and only 631 MiB live. Its per-object bump allocator reuses
+    an object only when all of it is free. The system compressed up to
+    2,640 MiB of pool pages.
+  - **Hollow Knight on the same IPA with 4 GiB:** first frame at +10.55 s,
     unmatched 0.
-  - **Next:** the off/on footprint comparison waits for the crash fix.
+  - **Next:** a longer session, a pool that reuses partly freed objects, and
+    raising the game's advertised RAM.
   [Evidence](../evidence/2026-10-14-donor-pool-kcd.md).
 - **Hollow Knight:** a launch to first frame +10 and a gameplay `pp perf` as
   the regression, with first-frame time and FPS unchanged within noise.

@@ -13,8 +13,8 @@ iPhone18,4, iOS 27.0.1. Run directories are under `$PLAYPORT_BUILD/agent-notes/`
 Kingdom Come: Deliverance (379430) exited `0xc0000005` about 11–12 s after the game
 started, with no first frame, in both step-4 runs of the donor-memory plan (IPA
 `195d5698…`, branch `research/extended-memory`; run directories
-`donor-memory/runs/kcd-pool-off` and `kcd-pool-6144`,
-`2026-10-14-donor-pool-kcd.md` on that branch):
+`donor-memory/runs/old-step4/kcd-pool-off` and `kcd-pool-6144`,
+[2026-10-14-donor-pool-kcd.md](2026-10-14-donor-pool-kcd.md)):
 
 ```
 [exc-disp] raise tid=0100 code=c0000005 … p0=0 p1=1f4
@@ -95,3 +95,17 @@ installed). The phone was at 80 % on power, with 3.3 GB free.
 
 This proves that Kingdom Come starts on the fixed IPA. It does not show what the
 game's `steam_interfaces.txt` holds: the file is only on the phone.
+
+## Afterwards: Plaion's EULA (on `research/extended-memory`)
+
+The first launches after this change, on IPA `f1f024ae…` (this fix merged
+into `research/extended-memory`), showed a page Kingdom Come had not shown
+before: Plaion's EULA, with a QR code and "Accept (A)". With the owner's
+approval, it was accepted by script: one A after `pp pad wait-text` had read
+"EULA" and "Accept". The main menu then had Continue, the save loaded
+Rattay, and the EULA did not come back in the next two launches
+([2026-10-14-donor-pool-kcd.md](2026-10-14-donor-pool-kcd.md)).
+
+**Open question:** did the interfaces file make the game show it? With
+its own SDK's versions, the game may no longer have seen a stored
+acceptance. This was not checked. The save was still seen.

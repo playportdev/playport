@@ -1,21 +1,23 @@
-# Donor pool and Kingdom Come: blocked by a crash before the first frame
+# Donor pool and Kingdom Come: about 700–800 MiB less app footprint in Rattay
 
-**Date:** 2026-10-14. Branch `research/extended-memory`, commits `9cbc873` and
-`5e088c6` (on top of step 3, `25f484d`).
+**Date:** 2026-10-14. Branch `research/extended-memory`, commits `9cbc873`
+and `5e088c6` (step 4's additions on top of step 3, `25f484d`), the PLA-350
+merge `3db126b` and `8bb3093` (`pp pad wait-text --crop --highlight-above`).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216); the title
-is PLA-49.
+is PLA-49; the crash fixed first is
+[PLA-350](https://linear.app/playportdev/issue/PLA-350).
 **Plan:** [donor memory, step 4](../plans/2026-10-12-donor-memory.md#4-does-it-help-a-game).
-**IPA:** `Playport-26.5-195d5698.ipa` (dev, entitled build), SHA256
-`195d5698ba853c447bdbdb92477bc530fc8b63f747febbe152932c3f437db111`, installed
-in place. iPhone18,4, iOS 27.0.1, 11734 MiB physical RAM, battery 80 % and
-not on power. All three runs below used that IPA in one locked session.
+**IPA:** `Playport-26.5-f1f024ae.ipa` (dev, entitled build), SHA256
+`f1f024aed7548b6eb01a8002de8e4f685dfa92f728d540cdce8d52c4cf56e26b`, installed
+in place. iPhone18,4, iOS 27.0.1, 11734 MiB physical RAM, battery 80 % on
+power, 3.3–3.5 GB storage free. Every run below used that IPA.
 
 ## What this step added before the session
 
-- **A periodic stats line.** A pool that is installed now logs
+- **A periodic stats line.** A pool that is installed logs
   `donor-pool: stats at install+Ns` every 30 s, from a utility-queue timer.
   The line has the same fields as the first-frame lines:
-  - served and served_mb, live_mb, resident_mb, released_mb;
+  - served and served_mb, live_mb, resident_mb, compressed_mb, released_mb;
   - detaches and detached_mb;
   - resets (the purges), purge_ms_total and purge_ms_max;
   - refused, unmatched_mb, map_failures;
@@ -27,115 +29,145 @@ not on power. All three runs below used that IPA in one locked session.
   It takes screenshots and reads them with tesseract, both the image and its
   inverse, until at least N of the given labels are read.
   - `--press STEP` plays those pad steps after each check that read none of
-    the labels.
-  - It stops pressing for good once any label is seen.
-  - A failed screenshot presses nothing, and the check is repeated.
+    the labels, and stops pressing for good once any label is seen.
+  - `--crop L,T,R,B --highlight-above TEXT` (added for this session) also
+    needs a light bar just above TEXT's line in that part of the screen.
+    Tesseract drops or garbles Kingdom Come's highlighted Continue, which is
+    dark text on a light banner. A check that read only the screen's text
+    missed it in the session before this one, so no A was pressed.
 
-  This is the "menu recognized before A" step of the
-  [2026-10-03 KCD orchestration](2026-10-03-kcd-helper-memory.md), whose
-  local script is gone. It is now a named command.
+## Before this session
+
+- **The first session (IPA `195d5698…`)** crashed in the Steam API emulator
+  about 11 s after the game started, with the pool off and on. That was
+  PLA-350: Kingdom Come called the newest `SteamUser` interface's
+  GetAuthSessionTicket with three arguments
+  ([2026-10-14-kcd-steam-api-crash.md](2026-10-14-kcd-steam-api-crash.md)).
+  The pool's first purges and reuse on the phone ran in that session's
+  start-up: object 3 was purged 16 times, then served again from offset 0.
+  It had no errors. Runs are in `donor-memory/runs/old-step4/`.
+- **Plaion's EULA (sessions 2 and 3).** On the fixed IPA, Kingdom Come
+  showed a page it had not shown before: "EULA", a QR code,
+  `deepsilver.com/games/kingdom-come-deliverance/eula`, and the button
+  "Accept (A)". The menu wait found no labels there, so no A was pressed
+  (`runs/eula-step4/`). With the owner's approval, the next session accepted
+  it by script. `pp pad wait-text` first read "EULA" and "Accept", then one
+  `pp pad send "150 A"` was sent at 14:29:03. The main menu then showed
+  Continue (highlighted), New Game, Load Game, Settings, Help, DLCs, Deep
+  Silver Account, Credits and Quit; the game's version reads
+  1.9.8-404-504czi4. That session's Continue check missed the highlighted
+  item and stopped without an A (`runs/eula-step4b/`).
+- **Open question:** did the PLA-350 change make the game show the EULA?
+  `steam_interfaces.txt` now gives Kingdom Come its own SDK's interface
+  versions. This may have stopped the game from seeing a stored acceptance.
+  It is not known. The save was still seen (Continue is there and loads
+  Rattay), and the EULA did not come back in the next two launches.
 
 ## The session
 
 The session script was `step4-session.sh` in
 `$PLAYPORT_BUILD/agent-notes/donor-memory/runs/`, run under
-`pp phone lock -- sh`. Steps:
+`pp phone lock -- sh` from 14:43 to 14:57. Steps:
 
-1. `pp install --no-build`.
+1. `pp install --no-build`: the IPA was already installed, so there was
+   nothing to do.
 2. Two Kingdom Come runs. Each was
-   `pp ui --pad --action set:donorPoolMB=<0|6144> --play app-379430 --until first-frame+205 --shot`,
-   with this pad sequence after the first frame:
-   - `pp pad wait-text --press "150 B" --press "300 -" --need 2 "New Game" "Load Game" Settings`;
-   - `pp pad send "150 A" "1000 -"`;
-   - 45 s, then `pp phone shot`;
+   `pp ui --pad --action set:donorPoolMB=<0|6144> --play app-379430 --until first-frame+205 --shot`.
+   After the first frame:
+   - `pp pad wait-text --press "150 B" --press "300 -" --need 2 EULA Accept "New Game" "Load Game" Settings`.
+     If the EULA came back, the script was to stop. It did not come back.
+   - The menu wait from the session before.
+   - `pp pad wait-text --crop 0.70,0.33,0.92,0.80 --highlight-above "New Game" --timeout 0 "New Game"`.
+     It returned `highlight_above: true` in both runs.
+   - One A on Continue, then 45 s and `pp phone shot`.
    - `pp pad push kcd-walk`.
 3. A 2-minute rest before each launch.
 4. Hollow Knight with a 4 GiB pool.
 5. `pp phone status` and `pp phone kill`.
 
-No run was retried.
+No run was retried. Both runs started at nominal thermal state. The pool
+run reached "serious", the off run "fair", so this is not a controlled
+performance comparison.
 
 | Measurement | KCD, pool off | KCD, pool 6144 asked |
 | --- | ---: | ---: |
 | Run directory (under `$PLAYPORT_BUILD/agent-notes/donor-memory/runs/`) | `kcd-pool-off` | `kcd-pool-6144` |
-| Pool | none | `asked_mb=6144 cap_mb=4096` (level 50 % less 15 % of 11734 MiB), `granted_mb=4096 objects=16 donors=1` in 0.71 s |
-| Prerequisites before the game | VC++ 2015 x86 and x64 ran for the first time in this prefix, both `exit 0x00000666` (already installed), and were recorded | both already ran |
-| Game started | +5.27 s | +3.93 s |
-| First frame | **none** | **none** |
-| End | `exit=0xc0000005 after_s=12` | `exit=0xc0000005 after_s=11` |
-| Peak `[xp] fpMB` before the end | 2,714 | 2,064 |
-| FEX band in use at the end | 3,836 MiB | 3,145 MiB |
-| Menu / loaded / walk | not reached (no A pressed) | not reached (no A pressed) |
-| Crash reports (iOS) | none | none |
+| Pool | none | `asked_mb=6144 cap_mb=5120` (level 60 % less 15 % of 11734 MiB), 5120 MiB granted by one donor |
+| Game started / first frame | +3.20 s / **+24.33 s** | +3.87 s / **+25.53 s** |
+| A on Continue (about) | Play+101 s | Play+104 s |
+| Menu, loaded and stop screenshots | Menu with Continue highlighted. Loaded in Rattay: the arcaded houses across the square, compass and health bar. Stop: the square with a saddled horse, NPCs, the arcades. | The same menu. Loaded at the same spot. Stop: a street of half-timbered houses with two NPCs, Henry's hand and staff in view. |
+| Peak `[xp] fpMB` | **7,914** (at +230.6 s) | **7,217** (at +232.7 s), −697 |
+| `fpMB` at Play+110 / +170 / +230 | 6,010 / 7,751 / 7,875 | 5,619 / 6,970 / 7,066 (−391 / −781 / −809) |
+| `os_proc_available_memory` at start | 7,591 MB (footprint 600 MB) | 7,602 MB (footprint 589 MB) |
+| Lowest `app_available_mb` (pool stats) | n/a (no pool) | 1,016 MiB at install+210 s |
+| End | `until first-frame+205` reached, `ok: true`, exit 0 | the same |
+| `c0000005`, crash reports, jetsam | none, none, none | none, none, none |
+| Visual damage | none seen | none seen |
 
-**Both runs end with the same fault.** The game's Steam API module faults
-before any frame, with the pool off and on:
-
-- The module is `steam_api64.dll` at base `0x73f3490000`. This is Playport's
-  Steam API emulator: its unixlib is `playport_steam_unix_call_funcs`.
-- The fault is at offset +0x1b4760, on `41 83 3f 00`, which is
-  `cmp dword [r15], 0` with `r15 = 0x1f4`. That is a read of NULL+0x1f4
-  (`[exc-disp] raise … code=c0000005 … p0=0 p1=1f4`).
-- The process then calls `NtTerminateProcess(exit_code=0xc0000005)`.
-
-The stop screenshots show only the game's splash window, Kingdom Come's crest
-and title over a burning village. The pool-off run also still shows the
-VC++ installer's empty console window. No game frame was drawn.
-
-So the pool did not cause the crash. The run never reaches the memory the
-step is meant to measure, and the footprint figures above are from the first
-~11 s of start-up: **they are not an off/on comparison.** On 2026-10-03, at
-main `2f2240e`, the same title loaded Rattay. Main has since gained:
-
-- store sign-in and Steam tickets (`13c3522`);
-- install-script prerequisites (`bb5a281`, `825c102`);
-- SteamStub changes.
-
-Which change is responsible has not been checked. It is filed as a
-Kingdom Come issue, not fixed here.
+The game's own Steam auth ticket was made and acked in both runs, as on the
+PLA-350 IPA.
 
 ## What the pool did in the 6144 run
 
-This is the first time purge and reuse ran on the phone:
+| Stats line | served | served_mb | live_mb | resident_mb | compressed_mb | resets | refused | unmatched_mb | app_footprint_mb | app_available_mb |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| first frame | 449 | 1,321 | 621 | 864 | 0 | 36 | 0 | 0 | 2,570 | 5,621 |
+| install+30 s | 503 | 1,568 | 665 | 1,100 | 0 | 36 | 0 | 0 | 2,843 | 5,348 |
+| install+60 s | 685 | 3,065 | 752 | 2,191 | 0 | 50 | 0 | 0 | 3,183 | 5,008 |
+| install+90 s | 2,398 | 7,174 | 607 | 1,779 | 1,114 | 71 | 0 | 0 | 4,412 | 3,779 |
+| install+120 s | 2,716 | 7,831 | 613 | 1,447 | 1,503 | 75 | 0 | 0 | 5,699 | 2,492 |
+| install+150 s | 3,992 | 10,454 | 631 | 1,063 | 2,054 | 83 | 3,406 | 0 | 6,793 | 1,398 |
+| install+180 s | 3,992 | 10,454 | 631 | 501 | 2,620 | 83 | 6,630 | 0 | 7,155 | 1,036 |
+| install+210 s | 3,992 | 10,454 | 631 | 484 | 2,639 | 83 | 10,090 | 0 | 7,175 | 1,016 |
+| install+240 s | 3,992 | 10,454 | 631 | 482 | 2,640 | 83 | 13,211 | 0 | 7,131 | 1,060 |
 
-- **Served:** 256 requests by about +11 s (`served #256 … served_mb=786
-  live_mb=529`).
-- **Purges:** object 3 was released whole and purged 16 times
-  (`purge kr=0 in 0.01 ms (zeroed)`, resets 1–16). Each time only a few of
-  its pages had been touched.
-- **Reuse:** `served #256` then came from object 3 at offset 0, so a purged
-  object was served again.
-- **Errors:** none. No `detach` line, no `bytes not leased` (unmatched)
-  line, no map-failure line and no `refused` line.
-- **Periodic stats:** no `stats at` line. The game ended before both the
-  first frame and the first 30 s tick.
+In every line: detaches 0, detached_mb 0, retired 0, map_failures 0,
+unmatched_mb 0. The purges took 17 ms in total, 4 ms at most.
+
+- **Purge and reuse under load worked.** The pool served 10,454 MiB in
+  3,992 requests through 5,120 MiB, with 83 purges. No lease was unmatched.
+- **The pool stopped serving from about install+150 s.** `served` stayed at
+  3,992 from then on, and `refused` climbed to 13,211, while only 631 MiB
+  was live. The pool is a bump allocator per object, and an object is
+  reused only once it is released whole and purged. After the Rattay load,
+  no object had room at its bump pointer, so later allocations went to
+  ordinary memory. The footprint gap stopped growing there (+170 −781,
+  +230 −809).
+- **The system compressed pool pages.** `compressed_mb` reached 2,640, and
+  `resident_mb` fell to about 480. This memory is outside the app's
+  footprint, but it is not free for the phone.
+- **Detach path not exercised:** there were no detaches.
+
+## Result
+
+**Step 4's pass criteria are met for this single pair:**
+
+- **Lower peak footprint:** 697 MiB less with the pool (7,914 against
+  7,217, −8.8 %), and 781–809 MiB less in the world at +170 and +230.
+  The 2026-10-03 pair varied by 86 MiB between runs.
+- **Rattay:** both runs loaded it.
+- **Unmatched:** 0 throughout.
+- **Crashes:** none, and no jetsam.
+
+This is one pair, with a thermal difference. The pool stops serving after
+the load, so a longer session would show how much of the gap is left.
+Raising the RAM and VRAM the game is told it has was not done.
 
 ## Hollow Knight regression (pool 4096)
 
 Run `hk-pool-4096-step4`: `ok: true`, `until first-frame+10` reached.
 
-- **Pool:** `cap_mb=4096`, `granted_mb=4096` in 0.71 s.
-- **First frame:** +9.94 s. Step 3 measured +9.98 s with the pool and
+- **Pool:** `asked_mb=4096 cap_mb=4864`, 4096 MiB granted.
+- **First frame:** +10.55 s. Step 3 measured +9.98 s with the pool and
   +10.24 s without it.
 - **Stats at first frame+8s:** 56 requests, 399 MiB served, 286 MiB
   resident, 0 detaches, 0 resets, 0 refused, unmatched 0, 0 map failures,
-  app footprint 2,283 MiB, available 5,908 MiB.
-- **Peak `[xp] fpMB`:** 2,461.
-- **Screen:** the stop screenshot shows the title menu (Start Game, Options,
-  Achievements, Extras, Quit Game) with no visual damage.
-
-The run ends about 20 s after Play, so the periodic line has not yet been
-seen on the phone.
+  app footprint 2,280 MiB, available 5,911 MiB.
+- **Peak `[xp] fpMB`:** 2,468.
 
 ## Not done
 
-Nothing in this step was measured with KCD in Rattay:
-
-- peak fpMB against the limit;
-- footprint at Play+110/+170/+230;
-- detaches under load;
-- `pp pad wait-text` on the real menu;
-- raising the RAM and VRAM the game is told it has.
-
-All of these wait for the crash fix. Phone storage went from 3.6 to 3.3 GB
-free during the session.
+- the detach path (a PLA-203-family title);
+- a session over 30 minutes with the pool on;
+- raising the RAM and VRAM the game is told it has;
+- a pool that can reuse released ranges before a whole object is free.
