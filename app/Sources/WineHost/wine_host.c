@@ -1290,7 +1290,9 @@ int wine_host_init(const wine_host_config *c)
     /* KosmicKrisp (mesa 0015) keeps the MSL of every pipeline in Mesa's disk
      * cache, in MESA_SHADER_CACHE_DIR/mesa_shader_cache, trimmed to the size
      * limit; without the directory it would go under HOME/.cache, which is
-     * the prefix by then. */
+     * the prefix by then. One directory serves every title, so the limit is
+     * Mesa's own default, 1 GB (PLA-279): a limit reserves nothing, and
+     * Settings > Storage shows and clears the cache (ShaderCache.swift). */
     const char *home = getenv("HOME");
     if (home && home[0] == '/' && strcmp(home, g_prefix) != 0) {
         char cache[1024];
@@ -1300,7 +1302,7 @@ int wine_host_init(const wine_host_config *c)
         if (n > 0 && (size_t)n < sizeof(cache) && mkdirs(cache) == 0)
             setenv("MESA_SHADER_CACHE_DIR", cache, 0);
     }
-    setenv("MESA_SHADER_CACHE_MAX_SIZE", "256M", 0);
+    setenv("MESA_SHADER_CACHE_MAX_SIZE", "1G", 0);
     host_log("DXMT shader cache: %s", getenv("DXMT_SHADER_CACHE_PATH") ? getenv("DXMT_SHADER_CACHE_PATH") : "(none)");
     host_log("Mesa shader cache: %s (limit %s)",
              getenv("MESA_SHADER_CACHE_DIR") ? getenv("MESA_SHADER_CACHE_DIR") : "HOME/.cache",

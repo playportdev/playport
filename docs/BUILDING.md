@@ -217,9 +217,8 @@ GBM, glvnd, LLVM or video codecs). `libEGL` and `libgallium_dri` are staged as
 MesaGallium, Zink loads KosmicKrisp by its framework install name, and
 `patches/mesa` 0022–0028 make Zink build without MoltenVK, present to Metal
 surfaces, give the surfaceless EGL platform window surfaces on a `CAMetalLayer`
-(sRGB ones for sRGB pixel formats), reach Zink without DRM devices, keep no Zink
-disk cache on iOS, and let Zink create its instance on KosmicKrisp with no Vulkan
-loader ([decision 0087](decisions/0087-opengl-through-zink-on-the-host.md)). The `check`
+(sRGB ones for sRGB pixel formats), reach Zink without DRM devices, and let Zink
+create its instance on KosmicKrisp with no Vulkan loader ([decision 0087](decisions/0087-opengl-through-zink-on-the-host.md)). The `check`
 stage checks both libraries too, MesaEGL's imports against MesaGallium's exports
 (`check-macho-imports.py --with`). The app links and embeds all three
 frameworks; win32u dlopens MesaEGL as its EGL.

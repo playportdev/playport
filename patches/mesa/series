@@ -25,7 +25,6 @@
 0023-zink-kopper-presents-to-Metal-surfaces.patch
 0024-egl-surfaceless-window-surfaces-on-a-CAMetalLayer.patch
 0025-egl-Zink-on-surfaceless-without-DRM.patch
-0026-zink-no-disk-cache-on-iOS.patch
 0027-kk-enumerate-no-instance-layers.patch
 0028-egl-sRGB-window-configs-on-surfaceless-with-kopper.patch
 0029-kk-MESA_KK_DEBUG-os26_workarounds-keeps-the-workarou.patch
