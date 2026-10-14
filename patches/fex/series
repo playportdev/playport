@@ -39,3 +39,6 @@
 0038-Windows-check-code-bytes-in-an-untrappable-WoW64-hos.patch
 0039-Windows-retire-a-dead-process-s-image-alias-and-neve.patch
 0040-Windows-turn-code-write-tracking-off-when-the-iOS-Mo.patch
+0041-DiskCache-key-the-machine-bucket-on-the-FEX-build-on.patch
+0042-DiskCache-one-database-for-every-TEB-slot-offset-on-.patch
+0043-DiskCache-cache-WoW64-code-on-the-iOS-host-keyed-on-.patch

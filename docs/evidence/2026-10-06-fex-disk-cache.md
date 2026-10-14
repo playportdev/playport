@@ -85,3 +85,9 @@ FEX reads the cache database into memory at start-up (the file mapper returns
 nothing on iOS, `FEXUnixLib.cpp` `MapFile`), and Hollow Knight's database, with
 Mono's anonymous code, may take a path through rpmalloc the iOS port mishandles.
 
+
+**Later (2026-10-14):** the Hollow Knight crash was rpmalloc's, not the cache's: a full
+page of one 7–8 MB block (class `0x74`) freed as if it were on the available list,
+fixed by `patches/rpmalloc` 0004; the cache is on by default
+([record](2026-10-14-fex-disk-cache-on.md)). The inference above (the file mapper) was
+not the cause.

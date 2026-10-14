@@ -1,6 +1,14 @@
 # 0056: FEX's disk cache: Proton's default, held off until a warm-start crash is fixed
 
-**Status:** accepted, 2026-10-06, by the owner; **the default is held off** (below).
+**Status:** accepted, 2026-10-06, by the owner; the default was held off (below).
+**Amended 2026-10-14** ([evidence](../evidence/2026-10-14-fex-disk-cache-on.md), PLA-341),
+as this record provides: the hold is lifted and every launch passes `FEX_DISKCACHE=1`.
+The warm-start crash was rpmalloc's (`patches/rpmalloc` 0004: the iOS port's one-block
+pages), not the cache's. The key changed too: the FEX build is in the machine bucket
+(`patches/fex` 0041), and one database serves every TEB slot offset, the cached TEB reads
+pointed at the launch's slot (0042), in place of 0021's database per offset. WoW64
+processes use it too (0043, PLA-345), keyed on their guest window's base, which 0022
+had kept them off for.
 Item B1 of the
 [Proton alignment plan](../plans/2026-10-05-proton-arm64-alignment.md); changes the
 "stays off" outcome of the
@@ -18,7 +26,8 @@ measurements are in the [evidence record](../evidence/2026-10-06-fex-disk-cache.
 - **A game's page overrides it** in a dev build (*Disk cache*: Default/On/Off,
   `LaunchSettings.diskCache`, decision 0034).
 - **WoW64 processes keep it off** (`patches/fex` 0022): a 32-bit guest's code carries
-  its window's host base as a constant the cache's key does not cover.
+  its window's host base as a constant the cache's key does not cover. *(Amended
+  2026-10-14: the key covers it, `patches/fex` 0043; WoW64 processes use the cache.)*
 - **The cache's key includes the iOS TEB slot offset** (`patches/fex` 0021): every
   TEB read bakes it into the code, and it differs between launches; without it a
   warm start of The Witcher 3 read the wrong slot and crashed.

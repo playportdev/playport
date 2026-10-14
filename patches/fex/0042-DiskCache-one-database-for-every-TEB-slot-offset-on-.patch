@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 13 Oct 2026 23:30:56 +0200
+Subject: [PATCH] DiskCache: one database for every TEB slot offset on the iOS
+ host
+
+fex 0021 gave each TEB slot offset its own cache database: every TEB
+read the iOS port emits bakes the offset into the block, and the slot
+differs between launches. But it differs on most launches (Hollow
+Knight had slots 296 and 292 on two starts in a row, 291 to 297
+seen), so most starts found a database of their own empty and ran
+cold. Drop the offset from the process bucket and point the reads in
+each block taken from the cache at this launch's slot instead: the
+emitter writes each one as the same three instructions,
+mrs xN, tpidrro_el0; and xN, xN, #~7; ldr xN, [xN, #offset].
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-14-fex-disk-cache-on.md
+Offered-upstream: no; the offset exists only on the iOS port
+---
+ FEXCore/Source/Interface/Core/DiskCache.cpp | 50 +++++++++++++++++----
+ 1 file changed, 42 insertions(+), 8 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.cpp b/FEXCore/Source/Interface/Core/DiskCache.cpp
+index 9330078de..1948f55bc 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.cpp
++++ b/FEXCore/Source/Interface/Core/DiskCache.cpp
+@@ -400,6 +400,43 @@ namespace DiskCache {
+       &SimpleCapture);
+   }
+ 
++#ifdef FEX_IOS_HOST
++  // Playport: every TEB read the iOS port emits (Arm64Emitter.h) bakes this
++  // process's TSD slot offset into the code as an immediate:
++  //   mrs xN, tpidrro_el0 ; and xN, xN, #~7 ; ldr xN, [xN, #IosTebTsdOffset]
++  // The slot differs between launches (291 to 297 seen), so a cached block
++  // read the wrong slot under another one (The Witcher 3, fex 0021), and a
++  // database per offset made most launches cold. Point every such read in a
++  // cached block at this launch's slot instead. Returns false when the offset
++  // does not fit the load's immediate, which the emitter would not take either.
++  static bool IosRetargetTebReads(std::span<std::byte> Code) {
++    const uint32_t Offset = IosTebTsdOffset;
++    if (Offset == 0 || (Offset & 7) != 0 || Offset / 8 > 0xfff) {
++      return false;
++    }
++    auto* Base = reinterpret_cast<uint8_t*>(Code.data());
++    for (size_t i = 0; i + 12 <= Code.size(); i += 4) {
++      uint32_t Insn[3];
++      memcpy(Insn, Base + i, sizeof(Insn));
++      if ((Insn[0] & 0xffffffe0u) != 0xd53bd060u) { // mrs xN, tpidrro_el0
++        continue;
++      }
++      const uint32_t Reg = Insn[0] & 31;
++      const uint32_t RegPair = (Reg << 5) | Reg;
++      if (Insn[1] != (0x927df000u | RegPair)) { // and xN, xN, #~7
++        continue;
++      }
++      if ((Insn[2] & 0xffc003ffu) != (0xf9400000u | RegPair)) { // ldr xN, [xN, #imm]
++        continue;
++      }
++      Insn[2] = (Insn[2] & ~(0xfffu << 10)) | ((Offset / 8) << 10);
++      memcpy(Base + i + 8, &Insn[2], sizeof(uint32_t));
++      i += 8;
++    }
++    return true;
++  }
++#endif
++
+   void DiskCache::Init(FEXCore::Context::ContextImpl* CTX) {
+     this->CTX = CTX;
+ 
+@@ -435,14 +472,6 @@ namespace DiskCache {
+     MachineBucketHash = XXH3_64bits_withSeed(GIT_HASH.data(), GIT_HASH.size(), MachineBucketHash);
+ #endif
+     uint64_t ProcessBucketHash = XXH3_64bits(BucketBytes.data() + sizeof(MachineBucketData), 2 + SerializedConfig.size());
+-#ifdef FEX_IOS_HOST
+-    // Playport: every TEB read the iOS port emits bakes this process's TSD slot
+-    // offset into the code as an immediate (Arm64Emitter.h, IosTebTsdOffset),
+-    // and the slot differs between launches. A block cached under one offset
+-    // reads the wrong slot under another, so each offset gets its own cache
+-    // database; the machine bucket, which prunes on mismatch, is left alone.
+-    ProcessBucketHash = XXH3_64bits_withSeed(&IosTebTsdOffset, sizeof(IosTebTsdOffset), ProcessBucketHash);
+-#endif
+     BucketHash.high64 = MachineBucketHash;
+     BucketHash.low64 = ProcessBucketHash;
+ 
+@@ -874,6 +903,11 @@ namespace DiskCache {
+     if (!CTX->CodeCache.ApplyPackedCodeRelocations(GuestRIP, std::as_writable_bytes(HitData.HostCode), SmallRelocs, ThunkRelocs)) {
+       return std::nullopt;
+     }
++#ifdef FEX_IOS_HOST
++    if (!IosRetargetTebReads(std::as_writable_bytes(HitData.HostCode))) {
++      return std::nullopt;
++    }
++#endif
+ 
+     return HitData;
+   }
+-- 
+2.55.0
+

@@ -10,7 +10,7 @@ item (each marked below):
 | A0 Proton data in `FEXProfile` | done (3bbc21d) |
 | A1 `MaxInst=500` | done ([0055](../decisions/0055-maxinst-500-global.md)) |
 | A2 WoW64 suspend/termination | done: came with FEX `main`, then adapted to iOS's real suspend by patches (PLA-93, 222, 223, 226, 229, 302, 304); leftovers open in their own issues |
-| B1 disk cache default | open: held off ([0056](../decisions/0056-fex-disk-cache-on.md)), Hollow Knight's warm-start rpmalloc corruption not found |
+| B1 disk cache default | done: on by default ([0056](../decisions/0056-fex-disk-cache-on.md), [2026-10-14 evidence](../evidence/2026-10-14-fex-disk-cache-on.md); PLA-341): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004) |
 | B2 Valve Wine past stable | done (`wine-valve` from bleeding-edge, `pp sync` lists it); questions 4 and 5 answered |
 | B3 LAA for i386 | open, not started; Portal 2 is LAA already (question 3) |
 | B4 child-process FEX profiles | open, not started |
@@ -314,6 +314,12 @@ Settings action.* *Open (Review 2026-10-13): still held,
 crash. The Witcher 3 with its cache on crashed again in FEX on 2026-10-07
 ([pool-x64-images](../evidence/2026-10-07-pool-x64-images.md)). The cache key
 now faces host features that vary by phone (PLA-132), the risk named below.*
+*Done 2026-10-14 (PLA-341, [2026-10-14 evidence](../evidence/2026-10-14-fex-disk-cache-on.md)): both warm-start crashes were one rpmalloc bug, a
+full page of one 7–8 MB block freed as if it were on the available list
+(`patches/rpmalloc` 0004); the cache key now includes the FEX build (`patches/fex`
+0041) and one database serves every TEB slot (0042, replacing 0021's per-slot
+databases). `FEXProfile.defaultDiskCache = true`. Host features were already in
+FEX's machine bucket.*
 - **Change if adopted:** `FEX_DISKCACHE=1` by default from the launch
   (`FEXProfile`), with a cap well below FEX's 1 GiB `DiskCacheMaxFileSize`.
   This needs a FEX that has the cap and the stale-entry pruning: FEX main, or

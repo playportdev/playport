@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Tue, 13 Oct 2026 23:30:34 +0200
+Subject: [PATCH] DiskCache: key the machine bucket on the FEX build on the iOS
+ host
+
+FormatVersion moves only with upstream's codegen; Playport's patches
+change codegen without it, and each app update rebuilds the patched
+tree. A cache filled by one build was reused by the next. Mix the
+build's commit (GIT_HASH, the patched tree's HEAD) into the machine
+bucket hash, so a new FEX starts its own databases and
+PruneStaleEntries removes the older builds' ones.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-14-fex-disk-cache-on.md
+Offered-upstream: no; upstream's releases move FormatVersion
+---
+ FEXCore/Source/Interface/Core/DiskCache.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.cpp b/FEXCore/Source/Interface/Core/DiskCache.cpp
+index 1d7772b62..9330078de 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.cpp
++++ b/FEXCore/Source/Interface/Core/DiskCache.cpp
+@@ -7,6 +7,9 @@
+ #ifdef FEX_IOS_HOST
+ // The TEB slot offset the iOS port bakes into code (Arm64Emitter.h).
+ extern "C" uint32_t IosTebTsdOffset;
++// The commit this FEX was built from: Playport's patches change codegen
++// without moving FormatVersion.
++#include <git_version.h>
+ #endif
+ 
+ #include <FEXCore/Config/Config.h>
+@@ -423,6 +426,14 @@ namespace DiskCache {
+     memcpy(BucketBytes.data() + sizeof(MachineBucketData) + 2, SerializedConfig.data(), SerializedConfig.size());
+ 
+     uint64_t MachineBucketHash = XXH3_64bits(BucketBytes.data(), sizeof(MachineBucketData));
++#ifdef FEX_IOS_HOST
++    // Playport: FormatVersion only moves with upstream's codegen, and the
++    // iOS port's patches change codegen on their own (the patched tree is
++    // rebuilt for every app update). Key the machine bucket on the build's
++    // commit as well, so a new FEX never runs a block an older one cached;
++    // PruneStaleEntries then removes the older builds' databases.
++    MachineBucketHash = XXH3_64bits_withSeed(GIT_HASH.data(), GIT_HASH.size(), MachineBucketHash);
++#endif
+     uint64_t ProcessBucketHash = XXH3_64bits(BucketBytes.data() + sizeof(MachineBucketData), 2 + SerializedConfig.size());
+ #ifdef FEX_IOS_HOST
+     // Playport: every TEB read the iOS port emits bakes this process's TSD slot
+-- 
+2.55.0
+
