@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14.
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 waits for the owner (Kingdom Come must be on the phone).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `25f484d` (IPA `d8226b20…`, step 3).
@@ -31,13 +31,22 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 - **Step 3 done** (`25f484d`; IPA `d8226b20…`): a 4 GiB pool at Play from
   one donor served Hollow Knight's heap; first frame +9.98 s against
   +10.24 s off ([evidence](../evidence/2026-10-14-donor-pool-at-play.md)).
-- **Queue:** steps 4 and 5 after step 3.
-- **Phone (2026-10-14):** dev IPA `fc107a8d…` installed, battery 79 % on
-  power, 3.8 GB storage free, unattended off. Hollow Knight results filed on
-  PLA-42.
+- **Now:** nothing running; the phone is free.
+- **Queue:** step 4 next. Before its session: a periodic `donor-pool: stats`
+  log line (every 30 s), since stats are logged only at first frame and +8 s
+  today. Then one locked session: Kingdom Come (379430, PLA-49) with the pool
+  off and at 4 GiB (or 6 GiB if the cap allows), through the KCD orchestration
+  in [kcd-helper-memory](../evidence/2026-10-03-kcd-helper-memory.md).
+  Record peak fpMB against the limit, the pool stats, detaches and purges.
+  Then a Hollow Knight `pp perf` A/B, a session longer than 30 minutes with
+  the pool on, and one PLA-203-family title for the detach path. Detach,
+  purge and reuse have not run on the phone yet. Step 5 follows.
+- **Phone (2026-10-14):** dev IPA `d8226b20…` installed, battery 80 % on
+  power, 3.7 GB storage free, unattended off. The app was ended after step 3.
+  Hollow Knight results are filed on PLA-42.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
-  step2-writer.md).
+  step2-writer.md, step3-writer.md).
 
 ## Why
 
