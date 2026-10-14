@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 1 Jan 2026 00:00:00 +0000
+Subject: [PATCH] DiskCache: set the WoW64 guest window before the context
+ opens the cache
+
+fex 0043 keys a WoW64 process's disk-cache bucket on its guest window
+base (IosGuestWindowBase), but the WOW64 module set the base in
+IosHostInit after CreateNewContext, whose constructor runs
+DiskCache::Init. Every 32-bit process hashed a base of 0 and shared one
+bucket, so a second 32-bit process with another window (a launcher's
+game, Assassin's Creed's AssassinsCreed_Dx10.exe at 0x7138950000) ran
+blocks compiled for the first one's window (0x7038950000) and faulted at
+its first instruction. Set the window up before the context is created.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-14-assassins-creed.md
+Offered-upstream: no; the guest window exists only on the iOS port
+---
+ FEXCore/Source/Interface/Core/DiskCache.h |  2 +-
+ Source/Windows/WOW64/Module.cpp           | 14 ++++++++------
+ 2 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.h b/FEXCore/Source/Interface/Core/DiskCache.h
+index 219eda08e..937455ec1 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.h
++++ b/FEXCore/Source/Interface/Core/DiskCache.h
+@@ -24,7 +24,7 @@
+ #ifdef FEX_IOS_HOST
+ // Playport: a WoW64 process's 32-bit guest window (guest address g is host
+ // address IosGuestWindowBase + g); 0 in an ARM64EC process. Set by the WOW64
+-// module before InitCore.
++// module before it creates the context, whose constructor runs DiskCache::Init.
+ extern "C" uint64_t IosGuestWindowBase;
+ #endif
+ 
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index dc3b8f75f..52a413695 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -609,7 +609,7 @@ public:
+ extern "C" char ios_va_log[];
+ extern "C" int ios_va_log_len;
+ 
+-// Before InitCore: the JIT's RW alias and the guest window.
++// Before the context is created: the JIT's RW alias and the guest window.
+ static bool IosHostInit() {
+   // rpmalloc chose FEX's host band before logging existed (rpmalloc.c ios_fex_band_select).
+   if (ios_va_log_len > 0) {
+@@ -682,6 +682,13 @@ void BTCpuProcessInit() {
+     FEXCore::DiskCache::SetFileMapper(FEX::Windows::UnixLib::MapFile);
+   }
+ 
++#ifdef FEX_IOS_HOST
++  // Before the context: its constructor opens the disk cache, whose process
++  // bucket is keyed on this process's guest window (IosGuestWindowBase).
++  if (!IosHostInit()) {
++    NtTerminateProcess(NtCurrentProcess(), STATUS_NOT_SUPPORTED);
++  }
++#endif
+   {
+     auto HostFeatures =
+       FEX::Windows::CPUFeatures::FetchHostFeatures(IsWine, FEXCore::HostFeatures::HostTypeEnum::Wow64, FEX::Windows::UnixLib::GetPID());
+@@ -690,11 +697,6 @@ void BTCpuProcessInit() {
+ 
+   CTX->SetSignalDelegator(SignalDelegator.get());
+   CTX->SetSyscallHandler(SyscallHandler.get());
+-#ifdef FEX_IOS_HOST
+-  if (!IosHostInit()) {
+-    NtTerminateProcess(NtCurrentProcess(), STATUS_NOT_SUPPORTED);
+-  }
+-#endif
+   CTX->InitCore();
+   Context::HandlerConfig.emplace(*CTX);
+   InvalidationTracker.emplace(*CTX, Threads);
+-- 
+2.55.0
+

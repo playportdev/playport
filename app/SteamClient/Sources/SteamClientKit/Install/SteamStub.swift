@@ -25,17 +25,33 @@ import Darwin
 /// docs/plans/finished.md#en-garde); x86 and encrypted code follow the same
 /// header (docs/evidence/2026-10-12-steamstub-x86.md).
 ///
+/// Variant 2.0 (x86 only) marks its entry with the dword 0xC0DEC0DE just
+/// before it; the stub's first instructions load the header's address and
+/// its size in dwords (`mov esi, imm32; mov ecx, imm32`). The header is
+/// XOR-chained the same way, 856, 884 or 952 bytes (`Header20`), and names
+/// the original entry point as an address, the app ID, and, with flag 0x04,
+/// the code section's range and the key its dwords are XOR-chained from.
+/// Checked against Assassin's Creed's launcher (952 bytes, encoded code:
+/// docs/evidence/2026-10-14-assassins-creed.md).
+///
 /// Like SteamAPISwap, the game's executable is kept as `<name>.orig` and a
 /// copy without the stub takes its place (an APFS clone plus a few header
 /// bytes, and the code section when it was encrypted), and `restore` puts the
 /// game's back; verify and repair see the kept original.
 public enum SteamStub {
     public static let signature: UInt32 = 0xC0DE_C0DF
+    /// The dword just before a variant 2.0 stub's entry.
+    static let marker20: UInt32 = 0xC0DE_C0DE
+    /// A variant 2.0 stub's first instructions, before `mov esi, <header address>`.
+    static let prologue20: [UInt8] = [0x53, 0x51, 0x52, 0x56, 0x57, 0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x00, 0x10, 0x00, 0x00, 0xBE]
+    /// The variant 2.0 header flag for a code section XOR-chained by the stub.
+    static let encodedCodeFlag20: UInt32 = 0x04
+    static let supported: Set<String> = ["3.1", "2.0"]
     /// The header flag for a stub that left the game's code as it was.
     static let noEncryptionFlag: UInt32 = 0x02
 
     public struct Info: Sendable, Equatable {
-        /// "3.1" or "3.0", from the header's size.
+        /// "3.1", "3.0" (from the header's size) or "2.0".
         public var variant: String
         /// "x64" or "x86".
         public var arch: String
@@ -45,13 +61,13 @@ public enum SteamStub {
         /// The stub also encrypts the game's code section.
         public var encrypted: Bool
         public var flags: UInt32
-        /// Why a 3.1 header cannot be unwrapped as it reads (an entry point or
+        /// Why a 3.1 or 2.0 header cannot be unwrapped as it reads (an entry point or
         /// encrypted code outside the image); nil when it can.
         public var defect: String? = nil
 
         /// What Playport can take off; nil when it can, else why not.
         public var unsupported: String? {
-            if variant != "3.1" { return "SteamStub \(variant) \(arch) is not supported yet" }
+            if !SteamStub.supported.contains(variant) { return "SteamStub \(variant) \(arch) is not supported yet" }
             return defect.map { "\(label): \($0)" }
         }
 
@@ -76,13 +92,31 @@ public enum SteamStub {
         var encrypted: Bool { (codeSectionRVA != 0 || codeSectionSize != 0) && flags & noEncryptionFlag == 0 }
     }
 
+    /// A decoded variant 2.0 header (x86). The 856-byte layout lacks one
+    /// import slot, so its fields start 4 bytes earlier.
+    struct Header20 {
+        var bytes: [UInt8]
+        static let sizes = [856, 884, 952]
+        private var base: Int { bytes.count == 856 ? 0x14 : 0x18 }
+        var flags: UInt32 { u32(bytes, base) }
+        /// An address in the image base, not an RVA.
+        var originalEntryPoint: UInt32 { u32(bytes, base + 0x14) }
+        var codeSectionVA: UInt32 { u32(bytes, base + 0x18) }
+        var codeSectionSize: UInt32 { u32(bytes, base + 0x1C) }
+        var codeKey: UInt32 { u32(bytes, base + 0x20) }
+        var appID: UInt32 { u32(bytes, base + 0x24) }
+        var encoded: Bool { flags & encodedCodeFlag20 != 0 }
+    }
+
     /// An executable's SteamStub, read from its headers and the stub header
     /// only; nil when it has none.
     public static func inspect(_ url: URL) -> Info? {
         guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
-        guard let pe = try? PEImage.read(h), let (variant, head) = header(h, pe) else { return nil }
+        guard let pe = try? PEImage.read(h) else { return nil }
         let arch = pe.is64 ? "x64" : "x86"
+        if let head = header20(h, pe) { return inspect20(head, pe) }
+        guard let (variant, head) = header(h, pe) else { return nil }
         guard variant == "3.1" else {
             // A 3.0 header is recognised but not read further (its fields stay zero).
             return Info(variant: variant, arch: arch, appID: 0, originalEntryPoint: 0, encrypted: false, flags: 0)
@@ -107,6 +141,84 @@ public enum SteamStub {
             if u32(head, 4) == signature { return (variant, head) }
         }
         return nil
+    }
+
+    /// A variant 2.0 stub's header, decoded; an empty one when the stub is
+    /// found but its header size is not a known one.
+    static func header20(_ h: FileHandle, _ pe: PEImage) -> [UInt8]? {
+        guard !pe.is64, let bind = pe.section(containingRVA: pe.entryPoint), bind.name == ".bind" else { return nil }
+        let epOffset = UInt64(bind.rawPointer) + UInt64(pe.entryPoint - bind.virtualAddress)
+        guard epOffset >= 4, (try? h.seek(toOffset: epOffset - 4)) != nil,
+              let raw = try? h.read(upToCount: 4 + 0x40), raw.count >= 4 + prologue20.count + 9 else { return nil }
+        let code = [UInt8](raw)
+        guard u32(code, 0) == marker20 else { return nil }
+        let at = (4...(code.count - prologue20.count - 9)).first { Array(code[$0..<$0 + prologue20.count]) == prologue20 }
+        guard let at, code[at + prologue20.count + 4] == 0xB9 else { return nil }
+        let va = UInt64(u32(code, at + prologue20.count)), size = Int(u32(code, at + prologue20.count + 5)) * 4
+        guard Header20.sizes.contains(size) else { return [] }
+        guard va > pe.imageBase, va - pe.imageBase <= UInt64(UInt32.max),
+              let s = pe.section(containingRVA: UInt32(va - pe.imageBase)) else { return [] }
+        let off = UInt64(s.rawPointer) + (va - pe.imageBase - UInt64(s.virtualAddress))
+        guard (try? h.seek(toOffset: off)) != nil, let head = try? h.read(upToCount: size), head.count == size else { return [] }
+        return decodeHeader([UInt8](head))
+    }
+
+    static func inspect20(_ head: [UInt8], _ pe: PEImage) -> Info {
+        guard !head.isEmpty else {
+            return Info(variant: "2.0", arch: "x86", appID: 0, originalEntryPoint: 0, encrypted: false, flags: 0,
+                        defect: "the stub header is not one of the known sizes")
+        }
+        let h20 = Header20(bytes: head)
+        let oep = entryRVA20(h20, pe)
+        return Info(variant: "2.0", arch: "x86", appID: h20.appID, originalEntryPoint: oep ?? h20.originalEntryPoint,
+                    encrypted: h20.encoded, flags: h20.flags,
+                    defect: oep == nil ? "the original entry point is not in an executable section"
+                        : h20.encoded ? codeSection20(h20, pe).defect : nil)
+    }
+
+    /// A 2.0 header's entry point as an RVA in an executable section.
+    static func entryRVA20(_ head: Header20, _ pe: PEImage) -> UInt32? {
+        let va = UInt64(head.originalEntryPoint)
+        guard va > pe.imageBase, va - pe.imageBase <= UInt64(UInt32.max) else { return nil }
+        let rva = UInt32(va - pe.imageBase)
+        return pe.section(containingRVA: rva)?.executable == true ? rva : nil
+    }
+
+    /// The section a 2.0 stub encoded and how many bytes of it, or why not.
+    static func codeSection20(_ head: Header20, _ pe: PEImage) -> (section: PEImage.Section?, size: Int, defect: String?) {
+        let va = UInt64(head.codeSectionVA)
+        guard va > pe.imageBase, let s = pe.section(containingRVA: UInt32(truncatingIfNeeded: va - pe.imageBase)),
+              UInt64(s.virtualAddress) == va - pe.imageBase else {
+            return (nil, 0, "the encoded code is not at a section's start")
+        }
+        let size = Int(head.codeSectionSize) & ~3
+        guard size >= 4, size <= Int(s.rawSize) else {
+            return (nil, 0, "the encoded code size \(head.codeSectionSize) does not fit its section (\(s.rawSize) bytes)")
+        }
+        return (s, size, nil)
+    }
+
+    /// A 2.0 stub's code decoding: each dword XORed with the one before it
+    /// as stored, the first with the header's key.
+    static func decodeCode20(_ raw: [UInt8], key: UInt32) -> [UInt8] {
+        var out = raw, key = key
+        for i in stride(from: 0, to: raw.count - 3, by: 4) {
+            let stored = u32(raw, i)
+            put32(&out, i, stored ^ key)
+            key = stored
+        }
+        return out
+    }
+
+    /// The inverse of decodeCode20, for building test images.
+    static func encodeCode20(_ plain: [UInt8], key: UInt32) -> [UInt8] {
+        var out = plain, prev = key
+        for i in stride(from: 0, to: plain.count - 3, by: 4) {
+            let stored = u32(plain, i) ^ prev
+            put32(&out, i, stored)
+            prev = stored
+        }
+        return out
     }
 
     /// The game's entry point as an RVA in an executable section: the
@@ -193,12 +305,22 @@ public enum SteamStub {
         defer { try? h.close() }
         let pe = try PEImage.read(h)
         guard let bind = pe.section(containingRVA: pe.entryPoint),
-              pe.section(containingRVA: info.originalEntryPoint)?.executable == true,
-              let (_, head) = header(h, pe) else {
+              pe.section(containingRVA: info.originalEntryPoint)?.executable == true else {
             throw SteamError.unsupported("the original entry point is not in an executable section")
         }
         var code: (offset: UInt64, bytes: [UInt8])?
-        if info.encrypted {
+        if info.variant == "2.0" {
+            guard let head = header20(h, pe), !head.isEmpty else { throw SteamError.unsupported("no SteamStub 2.0 header") }
+            let h20 = Header20(bytes: head)
+            if info.encrypted {
+                let c = codeSection20(h20, pe)
+                guard let s = c.section else { throw SteamError.unsupported(c.defect ?? "no code section") }
+                try h.seek(toOffset: UInt64(s.rawPointer))
+                guard let raw = try h.read(upToCount: c.size), raw.count == c.size else { throw SteamError.unsupported("truncated code section") }
+                code = (UInt64(s.rawPointer), decodeCode20([UInt8](raw), key: h20.codeKey))
+            }
+        } else if info.encrypted {
+            guard let (_, head) = header(h, pe) else { throw SteamError.unsupported("no SteamStub header") }
             let h31 = Header31(bytes: head)
             let c = codeSection(h31, pe)
             guard let s = c.section else { throw SteamError.unsupported(c.defect ?? "no code section") }
@@ -337,6 +459,7 @@ struct PEImage {
     var sectionTable: Int
     var is64: Bool
     var entryPoint: UInt32
+    var imageBase: UInt64
     var sectionAlignment: UInt32
     var sections: [Section]
     var dataDirectories: [Directory]
@@ -376,7 +499,8 @@ struct PEImage {
                            characteristics: SteamStub.u32(table, o + 36))
         }
         return PEImage(coffHeader: pe + 4, optionalHeader: optAt, sectionTable: tableAt, is64: is64,
-                       entryPoint: SteamStub.u32(opt, 16), sectionAlignment: SteamStub.u32(opt, 32),
+                       entryPoint: SteamStub.u32(opt, 16),
+                       imageBase: is64 ? SteamStub.u64(opt, 24) : UInt64(SteamStub.u32(opt, 28)), sectionAlignment: SteamStub.u32(opt, 32),
                        sections: sections, dataDirectories: dirs)
     }
 }

@@ -112,6 +112,86 @@ struct WrappedImage {
     }
 }
 
+/// A made-up PE32 image wrapped the way SteamStub 2.0 wraps one: .text
+/// (XOR-chained when `encoded`), .data, then .bind holding the encoded
+/// header, the 0xC0DEC0DE marker and the stub's entry, whose first
+/// instructions load the header's address and size. No byte of it comes from
+/// a real executable.
+struct Wrapped20Image {
+    var headerSize = 952
+    var encoded = true
+    var appID: UInt32 = 15100
+    var oepVA: UInt32 = 0x40_1000
+    var codeSize: UInt32 = 0x200
+    var marker: UInt32 = SteamStub.marker20
+
+    static let imageBase: UInt32 = 0x40_0000
+    static let key: UInt32 = 0x5091_7C1F
+    /// .text as the game built it: code, then int3 padding to the file alignment.
+    static let text: [UInt8] = {
+        var t: [UInt8] = [0xE8, 0xA6, 0x56, 0, 0, 0xE9, 0x17, 0xFE, 0xFF, 0xFF, 0x51, 0x53, 0x55, 0x56, 0x57, 0xC3]
+        t += [UInt8](repeating: 0xCC, count: 0x200 - t.count)
+        return t
+    }()
+
+    func build() -> [UInt8] {
+        let fileAlign = 0x200
+        func pad(_ b: inout [UInt8], to n: Int) { if b.count < n { b += [UInt8](repeating: 0, count: n - b.count) } }
+        var plain = [UInt8](repeating: 0, count: headerSize)
+        let base = headerSize == 856 ? 0x14 : 0x18
+        SteamStub.put32(&plain, 0, 0x2B91_4CC7)
+        SteamStub.put32(&plain, base, encoded ? 0x05 : 0x01)
+        SteamStub.put32(&plain, base + 0x14, oepVA)
+        SteamStub.put32(&plain, base + 0x18, Self.imageBase + 0x1000)
+        SteamStub.put32(&plain, base + 0x1C, codeSize)
+        SteamStub.put32(&plain, base + 0x20, Self.key)
+        SteamStub.put32(&plain, base + 0x24, appID)
+        // .bind: 0x10 bytes of stub, the header, the marker, then the entry.
+        let headerRVA: UInt32 = 0x3010
+        var bind = [UInt8](repeating: 0xCC, count: 0x10) + SteamStub.encodeHeader(plain)
+        bind += [0, 0, 0, 0]; SteamStub.put32(&bind, bind.count - 4, marker)
+        let entry = UInt32(0x3000 + bind.count)
+        bind += SteamStub.prologue20 + [0, 0, 0, 0, 0xB9, 0, 0, 0, 0, 0xC3]
+        SteamStub.put32(&bind, bind.count - 10, Self.imageBase + headerRVA)
+        SteamStub.put32(&bind, bind.count - 5, UInt32(headerSize / 4))
+        pad(&bind, to: (bind.count + fileAlign - 1) / fileAlign * fileAlign)
+        let text = encoded ? SteamStub.encodeCode20(Self.text, key: Self.key) : Self.text
+        var data = [UInt8](repeating: 0x11, count: 0x40); pad(&data, to: fileAlign)
+        let sections: [(String, UInt32, [UInt8], UInt32)] = [(".text", 0x1000, text, 0x6000_0020),
+            (".data", 0x2000, data, 0xC000_0040), (".bind", 0x3000, bind, 0x6000_0040)]
+
+        var b = [UInt8](repeating: 0, count: 0x40)
+        b[0] = 0x4D; b[1] = 0x5A; b[0x3C] = 0x40
+        b += [0x50, 0x45, 0, 0]
+        var coff = [UInt8](repeating: 0, count: 20)
+        coff[0] = 0x4C; coff[1] = 0x01; coff[2] = 3; coff[16] = 224; coff[18] = 0x02
+        b += coff
+        var opt = [UInt8](repeating: 0, count: 224)
+        opt[0] = 0x0B; opt[1] = 0x01
+        SteamStub.put32(&opt, 16, entry)
+        SteamStub.put32(&opt, 28, Self.imageBase)
+        SteamStub.put32(&opt, 32, 0x1000)
+        SteamStub.put32(&opt, 36, UInt32(fileAlign))
+        SteamStub.put32(&opt, 56, 0x3000 + UInt32(bind.count))
+        SteamStub.put32(&opt, 60, UInt32(fileAlign))
+        SteamStub.put32(&opt, 92, 16)
+        b += opt
+        var raw = UInt32(fileAlign)
+        for (name, rva, d, ch) in sections {
+            var s = [UInt8](repeating: 0, count: 40)
+            for (i, c) in name.utf8.enumerated() { s[i] = c }
+            SteamStub.put32(&s, 8, UInt32(d.count)); SteamStub.put32(&s, 12, rva)
+            SteamStub.put32(&s, 16, UInt32(d.count)); SteamStub.put32(&s, 20, raw)
+            SteamStub.put32(&s, 36, ch)
+            b += s
+            raw += UInt32(d.count)
+        }
+        pad(&b, to: fileAlign)
+        for s in sections { b += s.2 }
+        return b
+    }
+}
+
 final class SteamStubTests: XCTestCase {
     var dir: URL!
 
@@ -255,6 +335,46 @@ final class SteamStubTests: XCTestCase {
         XCTAssertThrowsError(try SteamStub.unwrap(odd, to: dir.appendingPathComponent("x.exe")))
         XCTAssertThrowsError(try SteamStub.unwrap(v30, to: dir.appendingPathComponent("x.exe")))
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("x.exe").path))
+    }
+
+    func testA20x86StubIsReadAndItsCodeDecoded() throws {
+        for size in [952, 884, 856] {
+            let src = try write("ac\(size).exe", Wrapped20Image(headerSize: size).build())
+            let info = try XCTUnwrap(SteamStub.inspect(src))
+            XCTAssertEqual(info, .init(variant: "2.0", arch: "x86", appID: 15100, originalEntryPoint: 0x1000, encrypted: true, flags: 5))
+            XCTAssertNil(info.unsupported)
+            XCTAssertEqual(info.label, "SteamStub 2.0 x86 with encrypted code")
+            let dst = dir.appendingPathComponent("out\(size).exe")
+            try SteamStub.unwrap(src, to: dst)
+            XCTAssertNil(SteamStub.inspect(dst))
+            let h = try FileHandle(forReadingFrom: dst)
+            let pe = try PEImage.read(h)
+            try h.close()
+            XCTAssertEqual(pe.entryPoint, 0x1000)
+            XCTAssertEqual(pe.sections.map(\.name), [".text", ".data", ".bind"], "an x86 .bind stays")
+            let out = [UInt8](try Data(contentsOf: dst))
+            XCTAssertEqual(Array(out[0x200..<0x400]), Wrapped20Image.text, "the code as the game built it")
+            XCTAssertEqual(out.count, try Data(contentsOf: src).count)
+        }
+    }
+
+    func testA20StubWithoutEncodedCodeKeepsItsCode() throws {
+        let src = try write("plain20.exe", Wrapped20Image(encoded: false).build())
+        XCTAssertEqual(SteamStub.inspect(src)?.encrypted, false)
+        let dst = dir.appendingPathComponent("out.exe")
+        try SteamStub.unwrap(src, to: dst)
+        XCTAssertEqual(Array([UInt8](try Data(contentsOf: dst))[0x200..<0x400]), Wrapped20Image.text)
+    }
+
+    func testA20StubThatCannotBeUnwrappedIsRefused() throws {
+        let odd = try write("odd.exe", Wrapped20Image(headerSize: 900).build())
+        XCTAssertEqual(SteamStub.inspect(odd)?.unsupported, "SteamStub 2.0 x86: the stub header is not one of the known sizes")
+        let far = try write("far.exe", Wrapped20Image(oepVA: 0x40_2000).build())
+        XCTAssertEqual(SteamStub.inspect(far)?.unsupported, "SteamStub 2.0 x86 with encrypted code: the original entry point is not in an executable section")
+        let big = try write("big.exe", Wrapped20Image(codeSize: 0x400).build())
+        XCTAssertNotNil(SteamStub.inspect(big)?.unsupported)
+        XCTAssertNil(SteamStub.inspect(try write("nomark.exe", Wrapped20Image(marker: 0).build())), "no marker, no stub")
+        XCTAssertThrowsError(try SteamStub.unwrap(odd, to: dir.appendingPathComponent("x.exe")))
     }
 
     func testRemoveAndRestoreInAGameFolder() throws {
