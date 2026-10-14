@@ -31,7 +31,8 @@ default) are on it, case and spacing aside, then leaves that screenshot in FILE.
 --press STEP plays those pad steps after each check that found none of them (to
 skip a title's intro with --press "150 B" --press "300 -"), and stops pressing for good once any
 TEXT was seen, so a press never lands on the screen being waited for. Each
-`text-check` event has what was found. It gives up after S seconds (default 60)
+`text-check` event has what was found; a check whose screenshot failed presses
+nothing and looks again. It gives up after S seconds (default 60)
 with ok false; the caller then presses nothing.
 """
 
@@ -133,17 +134,18 @@ def wait_text(phone, ev, path, texts, need=None, press=None, timeout=60, interva
     end, pressing = time.monotonic() + timeout, bool(press)
     while True:
         shot = shoot(path)
-        if not shot:
-            raise phonelib.PhoneError("wait-text: no screenshot")
-        found = found_texts(read(shot), texts)
-        ev("text-check", found=found, pressed=pressing and not found)
-        if len(found) >= need:
-            return True
+        if not shot:   # another job's screenshot at the same moment, say: look again, press nothing
+            ev("text-check", error="no screenshot")
+        else:
+            found = found_texts(read(shot), texts)
+            ev("text-check", found=found, pressed=pressing and not found)
+            if len(found) >= need:
+                return True
+            if found:
+                pressing = False
         if time.monotonic() >= end:
             return False
-        if found:
-            pressing = False
-        if pressing:
+        if shot and pressing:
             push(phone, press)
         sleep(interval)
 

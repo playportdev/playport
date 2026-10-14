@@ -105,7 +105,10 @@ class WaitText(unittest.TestCase):
         reads = {}
 
         def shoot(path):
-            reads[path] = next(it)
+            screen = next(it)
+            if screen is None:
+                return None
+            reads[path] = screen
             return path
         return pad.wait_text(self.phone, self.ev, self.path, ["New Game", "Load Game", "Settings"],
                              shoot=shoot, read=lambda p: reads[p], sleep=lambda s: None, **kw)
@@ -131,9 +134,11 @@ class WaitText(unittest.TestCase):
         self.assertFalse(self.run_screens([""], press="150 B\n", timeout=0))
         self.assertEqual(self.phone.pushed, [])
 
-    def test_no_screenshot_is_an_error(self):
-        with self.assertRaises(phonelib.PhoneError):
-            pad.wait_text(self.phone, self.ev, self.path, ["New Game"], shoot=lambda p: None)
+    def test_a_failed_screenshot_presses_nothing_and_looks_again(self):
+        menu = "New Game Load Game Settings"
+        self.assertTrue(self.run_screens([None, "", None, menu], press="150 B\n", timeout=60))
+        self.assertEqual(len(self.phone.pushed), 1)
+        self.assertEqual([kw.get("error") for k, kw in self.events].count("no screenshot"), 2)
 
 
 @unittest.skipIf(Image is None or not shutil.which("tesseract"), "no Pillow or tesseract")
