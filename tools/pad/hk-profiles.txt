@@ -1,0 +1,8 @@
+# Hollow Knight: from the main menu to the profile screen (Start Game), and
+# nothing more. The screen opens with the cursor on the last slot used
+# (hk-new-slot), so a screenshot once this has played (pp pad push hk-profiles
+# --shot FILE) shows which slot that is and whether it reads New Game, before
+# any run presses A on it. Push it once the main menu is up (first-frame+25, as
+# hk-new-slot); nothing is saved, so the run can then be ended.
+150 A        # Start Game
+3000 -
