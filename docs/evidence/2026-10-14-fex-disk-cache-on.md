@@ -87,7 +87,7 @@ Runs in `$PLAYPORT_BUILD/pla341/g/`. `[diskcache]` is the process's last count.
 | dr-2 | warm | +12.34 s | hits 217,058, misses 15 |
 | dp-1 | Duck Paradox, cold | +5.70 s | hits 49,306, misses 40,916 |
 | dp-2, dpx-1..4 | warm | +4.83–4.95 s | misses 2–38 |
-| p2 | Portal 2 (i386: WoW64 keeps it off, 0022) | +5.80 s | — |
+| p2 | Portal 2 (i386: WoW64 kept it off here, 0022; see below) | +5.80 s | — |
 
 Every run reached its `--until` with no unhandled exception and **no `[rpm-avail]`
 line**. #DRIVE Rally's first start grew the shared index past 65,536 entries while it
@@ -114,7 +114,40 @@ Knight four times (`$PLAYPORT_BUILD/pla341/g3/`). The clear removed the whole
 The database was 74.8 MB with an 8,586,800-byte index: just past rpmalloc's 8 MB
 large limit, so this index read took the huge path, not class 116.
 
+## WoW64 too (patches/fex 0043, PLA-345)
+
+0022 kept WoW64 processes off the cache: a 32-bit guest's memory accesses carry its
+window's host base as a constant (`GuestWindowBase`). Past runs' logs show that base is
+nearly always the same (`[wow64-fex] window base=`: `0x7038950000` 647 times,
+`0x7038010000` 148, `0x7138950000` 65 for a second 32-bit process, a few others), so
+0043 keys the process bucket on it and drops 0022's override. Two further things the
+cache had never met under WoW64:
+- it hashed guest code by reading the guest address itself; under WoW64 those bytes are
+  in the window, so the anonymous-code key, the lookup and store hashes and validation
+  now read through it (`GuestCodeBytes`), as the decoder does;
+- 0042's TEB-read rewrite is for ARM64EC code only (WoW64 code has no such read; a
+  failed rewrite would have made every lookup a miss).
+
+IPA `913d6472620cde1d67fd91ea4743a8c82b8f7304eda89b40f498cd8df324b4f6`, one locked
+session (`$PLAYPORT_BUILD/pla341/g4/`), each to `first-frame+10`:
+
+| Run | First frame | Window base | Disk cache |
+|---|---|---|---|
+| Portal 2, cold | +5.97 s | `0x7038950000` | hits 3,826, misses 39,047 |
+| Portal 2, warm ×3 | +5.45, +5.30, +5.31 s | `0x7038950000` | misses 8 / 5 / 0 of ~36,860 |
+| Portal 2, cache off | +5.67 s | `0x703a3f0000` | off |
+| Hollow Knight, cold (new build's bucket) | +9.34 s | — | misses 36,700 |
+| Hollow Knight, warm | +9.53 s | — | misses 7 |
+
+No `[rpm-avail]` line; the one `UNHANDLED`-matching line per Portal 2 run and nine per
+Hollow Knight run are the same as the earlier gate's (the subfloor service's
+`0 unhandled` count; Hollow Knight's known SIGBUS lines). The cache-off run shows the
+base does move sometimes; such a launch starts cold in its own database, it cannot
+run another base's code.
+
 ## Not checked
+
+- WoW64 beyond Portal 2's single 32-bit process; a launch whose base moved, warm.
 
 - A warm start on a different TEB slot (above, PLA-343).
 - The Witcher 3: not installed; the driver installs Steam's default branch (4.x,

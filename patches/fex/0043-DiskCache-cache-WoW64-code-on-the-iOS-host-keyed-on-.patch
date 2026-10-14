@@ -1,0 +1,187 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 1 Jan 2026 00:00:00 +0000
+Subject: [PATCH] DiskCache: cache WoW64 code on the iOS host, keyed on the
+ guest window
+
+A 32-bit guest's memory accesses carry its window's host base as a
+constant (GuestWindowBase), so fex 0022 kept the disk cache off for WoW64
+processes. The base is the same for most launches (0x7038950000 for the
+first 32-bit process), so key the process bucket on it instead and drop
+0022's override. Guest code bytes the cache hashes (the anonymous-code
+key, the lookup and store hashes, validation) are read through the
+window, as the frontend's decoder reads them; and only ARM64EC code has
+the TEB reads fex 0042 rewrites.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-14-fex-disk-cache-on.md
+Offered-upstream: no; the guest window exists only on the iOS port
+---
+ FEXCore/Source/Interface/Core/Core.cpp      |  2 +-
+ FEXCore/Source/Interface/Core/DiskCache.cpp | 21 +++++++++++++++++----
+ FEXCore/Source/Interface/Core/DiskCache.h   | 18 ++++++++++++++++++
+ Source/Windows/WOW64/Module.cpp             | 12 +++++-------
+ 4 files changed, 41 insertions(+), 12 deletions(-)
+
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+index 14f1dc8b6..1febb068f 100644
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -2416,7 +2416,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+       if (DebugData && DebugData->Relocations) {
+         Relocations = *DebugData->Relocations;
+       }
+-      std::span<const uint8_t> GuestCode = {reinterpret_cast<const uint8_t*>(StartAddr), Length};
++      std::span<const uint8_t> GuestCode = {DiskCache::GuestCodeBytes(StartAddr), Length};
+       const Frontend::Decoder::DecodedBlockInformation* BlockInfo =
+         NeedsAddGuestCodeRanges ? Thread->FrontendDecoder->GetDecodedBlockInfo() : nullptr;
+       DiskCache.Store(Thread, Region, GuestRIP, *DiskCacheGuestCodeKey, GuestCode, CompiledCode, Relocations, BlockInfo);
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.cpp b/FEXCore/Source/Interface/Core/DiskCache.cpp
+index 1948f55bc..379526e13 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.cpp
++++ b/FEXCore/Source/Interface/Core/DiskCache.cpp
+@@ -10,6 +10,7 @@ extern "C" uint32_t IosTebTsdOffset;
+ // The commit this FEX was built from: Playport's patches change codegen
+ // without moving FormatVersion.
+ #include <git_version.h>
++extern "C" uint64_t IosGuestWindowBase = 0;
+ #endif
+ 
+ #include <FEXCore/Config/Config.h>
+@@ -472,6 +473,15 @@ namespace DiskCache {
+     MachineBucketHash = XXH3_64bits_withSeed(GIT_HASH.data(), GIT_HASH.size(), MachineBucketHash);
+ #endif
+     uint64_t ProcessBucketHash = XXH3_64bits(BucketBytes.data() + sizeof(MachineBucketData), 2 + SerializedConfig.size());
++#ifdef FEX_IOS_HOST
++    // Playport: a WoW64 process's code carries its guest window's host base as
++    // a constant in every memory access (OpcodeDispatcher's GuestWindowBase),
++    // so its blocks only run under that base. Key the process bucket on it;
++    // the base is the same for most launches (the first 32-bit process's).
++    if (IosGuestWindowBase) {
++      ProcessBucketHash = XXH3_64bits_withSeed(&IosGuestWindowBase, sizeof(IosGuestWindowBase), ProcessBucketHash);
++    }
++#endif
+     BucketHash.high64 = MachineBucketHash;
+     BucketHash.low64 = ProcessBucketHash;
+ 
+@@ -622,11 +632,11 @@ namespace DiskCache {
+         uint64_t HashStart = SubBlock.Entry;
+         // skip over masked in-block data and data/etc gaps between blocks
+         for (auto& DataMask : SubBlock.DataMasks) {
+-          XXH3_64bits_update(&HashState, reinterpret_cast<const uint8_t*>(HashStart), DataMask.FieldAddress - HashStart);
++          XXH3_64bits_update(&HashState, GuestCodeBytes(HashStart), DataMask.FieldAddress - HashStart);
+           HashStart = DataMask.FieldAddress + DataMask.ValueSize;
+         }
+         if (HashStart != SubBlock.Entry + SubBlock.Size) {
+-          XXH3_64bits_update(&HashState, reinterpret_cast<const uint8_t*>(HashStart), SubBlock.Size - (HashStart - SubBlock.Entry));
++          XXH3_64bits_update(&HashState, GuestCodeBytes(HashStart), SubBlock.Size - (HashStart - SubBlock.Entry));
+         }
+       }
+       GuestCodeKey = XXH3_64bits_digest(&HashState);
+@@ -751,7 +761,7 @@ namespace DiskCache {
+           XXH3_state_t HashState;
+           XXH3_128bits_reset(&HashState);
+           for (uint32_t i = 0; i < Entry.GuestExtents.size(); i += 2) {
+-            XXH3_128bits_update(&HashState, reinterpret_cast<uint8_t*>(GuestRIP) + Entry.GuestExtents[i], Entry.GuestExtents[i + 1]);
++            XXH3_128bits_update(&HashState, GuestCodeBytes(GuestRIP) + Entry.GuestExtents[i], Entry.GuestExtents[i + 1]);
+           }
+           LiveGuestHash = XXH3_128bits_digest(&HashState);
+           LastFootprintHashed = CurrentFootprint;
+@@ -765,7 +775,7 @@ namespace DiskCache {
+           fextl::vector<uint8_t> GuestCode(Entry.GuestSize);
+           if (Entry.Size >= Entry.GuestSize && Entry.DB && Entry.DB->ReadCacheBlob(Entry.Offset + Entry.Size - Entry.GuestSize, GuestCode)) {
+             const uint8_t* CachedGuest = GuestCode.data();
+-            const uint8_t* LiveGuest = reinterpret_cast<const uint8_t*>(GuestRIP);
++            const uint8_t* LiveGuest = GuestCodeBytes(GuestRIP);
+             uint64_t DiffCount = 0;
+             uint64_t DiffOffset = 0;
+             for (uint32_t i = 0; i < Entry.GuestExtents.size(); i += 2) {
+@@ -904,9 +914,12 @@ namespace DiskCache {
+       return std::nullopt;
+     }
+ #ifdef FEX_IOS_HOST
++#ifdef ARCHITECTURE_arm64ec
++    // Only the ARM64EC module's code reads the TEB through the TSD slot.
+     if (!IosRetargetTebReads(std::as_writable_bytes(HitData.HostCode))) {
+       return std::nullopt;
+     }
++#endif
+ #endif
+ 
+     return HitData;
+diff --git a/FEXCore/Source/Interface/Core/DiskCache.h b/FEXCore/Source/Interface/Core/DiskCache.h
+index fd017c3e0..219eda08e 100644
+--- a/FEXCore/Source/Interface/Core/DiskCache.h
++++ b/FEXCore/Source/Interface/Core/DiskCache.h
+@@ -21,6 +21,13 @@
+ #include <span>
+ #include <xxhash.h>
+ 
++#ifdef FEX_IOS_HOST
++// Playport: a WoW64 process's 32-bit guest window (guest address g is host
++// address IosGuestWindowBase + g); 0 in an ARM64EC process. Set by the WOW64
++// module before InitCore.
++extern "C" uint64_t IosGuestWindowBase;
++#endif
++
+ namespace FEXCore {
+ 
+ namespace Context {
+@@ -28,6 +35,17 @@ namespace Context {
+ }
+ 
+ namespace DiskCache {
++  // Where a guest code address's bytes are in this process (the iOS WoW64
++  // window; the address itself everywhere else).
++  static inline const uint8_t* GuestCodeBytes(uint64_t GuestAddr) {
++#ifdef FEX_IOS_HOST
++    if (IosGuestWindowBase && GuestAddr < (1ULL << 32)) {
++      return reinterpret_cast<const uint8_t*>(IosGuestWindowBase + GuestAddr);
++    }
++#endif
++    return reinterpret_cast<const uint8_t*>(GuestAddr);
++  }
++
+ 
+   namespace MesaFOZ {
+ 
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index 43a86ed6d..dc3b8f75f 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -139,6 +139,9 @@ class WowSyscallHandler;
+  * and Wine's Mach handler services it against the window. Pointers this module passes to wow64.dll and
+  * to Wine's trackers are host pointers; guest state (EIP, ESP, the FS base and
+  * the bridge addresses the guest jumps to) stays guest. */
++// The disk cache's key for this process's blocks (DiskCache.cpp).
++extern "C" uint64_t IosGuestWindowBase;
++
+ namespace Window {
+ constexpr uint64_t Size = 1ULL << 32;
+ // Wine aliases KUSER_SHARED_DATA into the window at its guest address 0x7ffe0000,
+@@ -645,6 +648,8 @@ static bool IosHostInit() {
+     return false;
+   }
+   Window::Base = Base;
++  // The disk cache keys this process's blocks on the window (DiskCache.cpp).
++  IosGuestWindowBase = Base;
+   return true;
+ }
+ #endif
+@@ -662,13 +667,6 @@ void BTCpuProcessInit() {
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_IS64BIT_MODE, "0");
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_FILENAME, ExecutablePath);
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, ExecutableName);
+-#ifdef FEX_IOS_HOST
+-  // Playport: a 32-bit guest's memory accesses carry its window's host base as
+-  // a constant in the compiled code (GuestWindowBase), which the disk cache's
+-  // key does not cover; a block cached under one base would address another
+-  // window. The disk cache stays off for WoW64 processes on the iOS host.
+-  FEXCore::Config::Set(FEXCore::Config::CONFIG_DISKCACHE, "0");
+-#endif
+ 
+   FEXCore::Profiler::Init("", "");
+ 
+-- 
+2.55.0
+
