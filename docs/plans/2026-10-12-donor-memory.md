@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 blocked by PLA-350 (Kingdom Come crashes before its first frame, with the pool off too); PLA-350 in progress.
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); the rest of step 4 waits for the owner.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `9cbc873` (IPA `195d5698…`, step 4).
@@ -34,28 +34,34 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 - **Step 4 KCD part done, blocked** (`9cbc873`, `5e088c6`; IPA `195d5698…`):
   Kingdom Come crashed in the Steam API emulator before its first frame with the pool off and on
   ([evidence](../evidence/2026-10-14-donor-pool-kcd.md)).
-- **Blocker:** [PLA-350](https://linear.app/playportdev/issue/PLA-350).
-  Kingdom Come exits `0xc0000005` at about +11 s in the Steam API emulator
-  (`steam_api64` +0x1b4760). It happens with the pool off as well. Main has
-  not been checked, so a cause on this branch (0148's hooks, which are in
-  every dev build) is not ruled out yet.
-- **Done 2026-10-14:** PLA-350 fixed (`4af9e3b`, merged `3db126b`), and the step-4 KCD pair passed: peak `fpMB` 7,914 off, 7,217 on (IPA `f1f024ae…`; [evidence](../evidence/2026-10-14-donor-pool-kcd.md)).
-- **Queue:**
-  1. PLA-350: check main's IPA, then fix.
-  2. Step 4 KCD A/B: rerun `.work/agent-notes/donor-memory/runs/step4-session.sh`
-     with the new IPA hash.
-  3. Hollow Knight `pp perf` A/B while the owner plays.
-  4. A session longer than 30 minutes with the pool on.
-  5. A PLA-203-family title to exercise the detach path, which has still
-     never run.
-  6. Step 5.
-  Purge and reuse have now run once on the phone (KCD start-up).
-- **Phone (2026-10-14):** dev IPA `195d5698…` installed, battery 80 %, 3.3 GB
-  storage free, unattended off. Kingdom Come is installed. Results filed on
-  PLA-42 and PLA-49.
+- **PLA-350 fixed** on `dev/pla-350-kcd-steam-api` (`4af9e3b`, from main;
+  In Review, **not merged to main**). It is merged here as `3db126b`.
+  `SteamAPISwap` writes `steam_interfaces.txt` from the game's own steam_api.
+- **Step 4, Kingdom Come pair done 2026-10-14** (`8bb3093`, `6e586c0`; IPA
+  `f1f024ae…`; [evidence](../evidence/2026-10-14-donor-pool-kcd.md)): peak
+  `fpMB` 7,914 off vs 7,217 with the pool (asked 6144, 5120 granted). Both runs
+  loaded Rattay, with no crash, unmatched 0 and detaches 0. **Found:** after
+  about +150 s the pool refused every request with only 631 MiB live, because
+  the bump allocator reuses an object only once all of it is free. The system
+  also compressed up to 2.6 GiB of pool pages. One pair only, with a thermal
+  difference.
+- **Now:** nothing running; the phone is free. Waiting for the owner.
+- **Queue (proposed):**
+  1. Reuse within an object: free ranges zeroed and handed out again, so the
+     pool keeps serving. Then rerun the KCD pair with
+     `.work/agent-notes/donor-memory/runs/step4-session.sh`.
+  2. Hollow Knight `pp perf` A/B while the owner plays.
+  3. A session longer than 30 minutes with the pool on.
+  4. A PLA-203-family title for the detach path, which has never run.
+  5. Step 5.
+- **Phone (2026-10-14):** dev IPA `f1f024ae…` installed, battery 80 % on
+  power, 3.5 GB storage free, unattended off. Kingdom Come and Hollow Knight
+  are installed. KCD's Plaion EULA was accepted by script with the owner's
+  approval. Results are filed on PLA-42, PLA-49 and PLA-350.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
-  step2-writer.md, step3-writer.md, step4-writer.md).
+  step2-writer.md, step3-writer.md, step4-writer.md,
+  pla350-writer.md).
 
 ## Why
 
