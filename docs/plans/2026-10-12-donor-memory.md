@@ -55,24 +55,42 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   1 MiB or more, and KCD churns them (36.5 GiB served). A bigger saving needs
   0148 to back more of the game's memory. `MADV_FREE_REUSABLE` does nothing
   on the pool mapping.
-- **Queue item 1 done 2026-10-14** (`cc2b80e`, `7413ff3`; IPA `b3cdca61…`;
-  [evidence](../evidence/2026-10-14-donor-pool-widen.md)): small commits backed, KCD peak 7,682 off vs 3,884 on.
-- **Queue:**
-  1. Widen what 0148 backs: smaller commits, or commits that are not fresh,
-     whichever KCD's footprint is made of. Measure first which allocations
-     make up KCD's ordinary footprint.
-  2. Hollow Knight `pp perf` A/B while the owner plays.
-  3. A session longer than 30 minutes with the pool on.
-  4. A PLA-203-family title for the detach path, which has never run.
-  5. Step 5.
-- **Phone (2026-10-14):** dev IPA `2010a999…` installed, battery 72 %,
-  5.8 GB storage free, unattended off. KCD and HK are installed. The phone was
-  re-registered with the free team once (DEVICE.md procedure, owner-approved).
-  Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350.
+- **0148 widened, done 2026-10-14** (`cc2b80e`, `7413ff3`, `0d74744`;
+  IPA `b3cdca61…`; [evidence](../evidence/2026-10-14-donor-pool-widen.md)).
+  - madeira-unix 0149 counts guest memory by class. It showed KCD's
+    ordinary footprint is mostly RW views filled by commits under 1 MiB
+    (8.7 GiB in 112k commits).
+  - 0150 backs every fresh RW commit that holds a whole host page. Backed
+    pages are tracked in a bitmap.
+  - **KCD peak `fpMB` 7,682 off vs 3,884 on (−3,798 MiB)**. Rattay loaded,
+    no crash. Refused 0, unmatched 0. The first 22 whole-object purges ran
+    on the phone.
+  - The pool held a 4.1 GiB live set, 805 MiB of it compressed. The memory
+    moved out of the app's charge but did not shrink, so physical RAM is now
+    the wall.
+  - Hook cost: about 1.8 % of the run, at most 10.6 ms per call. HK first
+    frame +11.87 s (+10.5 s before; one run).
+  - The pool run reached "serious" thermal state. FPS was not measured.
+- **Now:** nothing running; the phone is free. Waiting for the owner.
+- **Queue (proposed):**
+  1. HK `pp perf` A/B (pool off/on) while the owner plays: the hook's cost and FPS.
+  2. A KCD session longer than 30 minutes with the pool on: stability, the
+     compressor, and physical-memory pressure.
+  3. A PLA-203-family title for the detach path, which has never run.
+  4. Step 5 (GPU buffers, the remaining 1.55 GB of KCD's footprint).
+  5. [PLA-351](https://linear.app/playportdev/issue/PLA-351): Auto pool
+     sizing per phone RAM, and the helper's own limit.
+  6. [PLA-352](https://linear.app/playportdev/issue/PLA-352): one memory plan
+     for guest RAM and the video budget.
+- **Phone (2026-10-14):** dev IPA `b3cdca61…` installed, battery 65 %
+  charging, 5.5 GB storage free, unattended off. KCD and HK are installed.
+  The phone was re-registered with the free team once (DEVICE.md procedure,
+  owner-approved). Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
   step2-writer.md, step3-writer.md, step4-writer.md,
-  pla350-writer.md, reuse-writer.md; MeloNX notes in
+  pla350-writer.md, reuse-writer.md, widen-writer.md, research-device-ram.md,
+  research-gpu-reporting.md; MeloNX notes in
   `melonx-2.7-notes.md`).
 
 ## Why
