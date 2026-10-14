@@ -94,7 +94,8 @@
 //                              app's own remaining limit; the pool stays held
 //   probe:memory-pool-verify   Settings' Verify the donor pool: reads the held pool again
 //   probe:memory-pool-zero     Settings' Donor pool: zeroing: 1 GiB from a donor that ends, then
-//                              memset, purge and fixed-address range mapping (`pool-zero` lines)
+//                              memset, purge, fixed-address range mapping and four ways to zero
+//                              or give back 64 MiB of an object (`pool-zero` lines)
 //   background:<seconds>       Opens iOS Settings (10-600 s), so Playport goes to the background,
 //                              and waits until it is in front again: pp ui brings it back after
 //                              that long, unless iOS ended it (the ui-background event)

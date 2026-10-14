@@ -9,8 +9,9 @@ NS_ASSUME_NONNULL_BEGIN
 bool pp_guest_pool_install(NSArray<PPMemoryRegion *> *objects, void (*log)(const char *));
 /// The pool's counters: objects, bytes, live, leases, served, served_bytes, released_bytes,
 /// detaches, detached_bytes, resets, retired, refused, unmatched_bytes, map_failures,
-/// purge_ms_total, purge_ms_max, and the objects' resident_bytes and swapped_bytes (in the
-/// compressor). All zero before install.
+/// purge_ms_total, purge_ms_max, stale_bytes (free, not yet zeroed), reuses (takes that zeroed
+/// stale pages), zeroed_bytes, zero_ms_total, zero_us_max, purges_pending, and the objects'
+/// resident_bytes and swapped_bytes (in the compressor). All zero before install.
 NSDictionary<NSString *, NSNumber *> *pp_guest_pool_stats(void);
 
 /// madeira-unix 0148's hooks (weak imports in ntdll's unix side).

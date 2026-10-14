@@ -180,7 +180,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          Settings' Verify the donor pool: reads that held pool again
   probe:memory-pool-zero
                          Settings' Donor pool: zeroing: 1 GiB from a donor that ends, untouched; then
-                         memset, purge and a fixed-address range mapping (`pool-zero ...` lines)
+                         memset, purge, a fixed-address range mapping and four ways to zero or
+                         give back 64 MiB of an object: memset, MADV_ZERO, MADV_FREE_REUSABLE(+memset) (`pool-zero ...` lines)
   background:S           the app opens iOS Settings (Playport goes to the background); S seconds
                          (10-600) later pp ui checks the app's process is still there and brings it
                          back to the front without ending it (a background-return event)

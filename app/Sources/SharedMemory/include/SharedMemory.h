@@ -42,6 +42,11 @@ bool pp_memory_verify(PPMemoryRegion *region, uint64_t seed);
 bool pp_memory_is_zero(PPMemoryRegion *region, uint64_t offset, uint64_t bytes);
 /// memset(0) of the whole object through its own view: the nanoseconds it took, -1 if unmappable.
 int64_t pp_memory_clear(PPMemoryRegion *region);
+/// Zeroes bytes of the object from offset through its own view: method 0 memset, 1
+/// madvise(MADV_ZERO), 2 madvise(MADV_FREE_REUSABLE) then memset; method 3 is
+/// MADV_FREE_REUSABLE alone, which only gives the pages back (no zeroing promised). The
+/// nanoseconds it took, or -1 with *error the errno.
+int64_t pp_memory_zero_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, int method, int *error);
 /// pp_memory_fill's words at an address; pp_memory_verify_range reads them in the object from offset.
 void pp_memory_fill_address(void *address, uint64_t bytes, uint64_t seed);
 bool pp_memory_verify_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, uint64_t seed);

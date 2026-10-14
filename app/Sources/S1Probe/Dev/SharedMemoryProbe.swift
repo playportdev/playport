@@ -82,7 +82,10 @@ final class SharedMemoryProbe: ObservableObject {
     /// ends; then the app touches object 1 (who pays for pages first touched after the donor died),
     /// clears it with memset, purges object 2 after touching it and touches it again (does the
     /// purge move the charge?), purges untouched object 3, and maps a range of object 4 at a fixed
-    /// address as the hooks do (VM_FLAGS_OVERWRITE at an offset). The `pool-zero` lines.
+    /// address as the hooks do (VM_FLAGS_OVERWRITE at an offset), and zeroes 64 MiB parts of
+    /// object 1, refilled, four ways (memset, MADV_ZERO, MADV_FREE_REUSABLE plus memset, and
+    /// MADV_FREE_REUSABLE alone). The
+    /// `pool-zero` lines.
     func runPoolZero() async -> Bool {
         guard !busy else { return false }
         while BuiltInJitStatus.shared.busy { try? await Task.sleep(for: .milliseconds(100)) }
@@ -161,7 +164,26 @@ final class SharedMemoryProbe: ObservableObject {
         }
         log("pool-zero map_range mapped=\(mapped) visible_at_offset=\(inRange) rest_untouched=\(outsideZero) "
             + "resident_mb=\(resident(objects[3]))")
+
+        // 5: zeroing part of an object (the pool's reuse of a freed range, step 4): object 1 refilled,
+        // then 64 MiB each by memset, madvise(MADV_ZERO), MADV_FREE_REUSABLE plus memset, and
+        // MADV_FREE_REUSABLE alone (does it give freed pool pages back without a purge?).
+        let partialFilled = pp_memory_fill(objects[0], seed + 5)
+        var partialZero = partialFilled
+        for (method, name) in [(0, "memset"), (1, "madv_zero"), (2, "reusable_memset"), (3, "reusable_only")] {
+            let offset = UInt64(method) * span
+            let before = resident(objects[0])
+            var err: Int32 = 0
+            let ns = pp_memory_zero_range(objects[0], offset, span, Int32(method), &err)
+            let after = resident(objects[0])   // before the read below faults pages back in
+            let zero = ns >= 0 && pp_memory_is_zero(objects[0], offset, span)
+            if method == 0 { partialZero = partialZero && zero }
+            log("pool-zero partial method=\(name) bytes_mb=\(span >> 20) rc=\(ns < 0 ? "errno \(err)" : "0") "
+                + "ms=\(String(format: "%.2f", Double(max(ns, 0)) / 1e6)) reads_zero=\(zero) "
+                + "resident_mb_before=\(before) resident_mb_after=\(after)")
+        }
         let pass = filled1 && zero1 && filled2 && kr2 == 0 && zero2 && kr3 == 0 && mapped && inRange && outsideZero
+            && partialZero
         log("pool-zero RESULT \(pass ? "PASS" : "FAIL") chunk_mb=\(chunk >> 20) touch_delta_mb=\(fp1 - fp0) "
             + "memset_ms=\(String(format: "%.2f", Double(clearNS) / 1e6)) purge_ms=\(purgeMS) retouch_delta_mb=\(fp2b - fp2) "
             + describe(pp_memory_snapshot()))

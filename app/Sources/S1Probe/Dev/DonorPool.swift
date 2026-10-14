@@ -96,6 +96,9 @@ enum DonorPool {
             "resets=\(n("resets"))", "retired=\(n("retired"))", "refused=\(n("refused"))",
             "unmatched_mb=\(mb("unmatched_bytes"))", "map_failures=\(n("map_failures"))",
             "purge_ms_total=\(n("purge_ms_total"))", "purge_ms_max=\(n("purge_ms_max"))",
+            "stale_mb=\(mb("stale_bytes"))", "reuses=\(n("reuses"))", "zeroed_mb=\(mb("zeroed_bytes"))",
+            "zero_ms_total=\(n("zero_ms_total"))", "zero_us_max=\(n("zero_us_max"))",
+            "purges_pending=\(n("purges_pending"))",
             "app_footprint_mb=\(footprint)", "app_available_mb=\(available)",
         ]
         log("stats at \(when): " + fields.joined(separator: " "))

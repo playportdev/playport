@@ -12,6 +12,7 @@ extern kern_return_t mach_memory_entry_ownership(mach_port_t, mach_port_t, int, 
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 #include <string.h>
+#include <errno.h>
 #include <time.h>
 
 // An individually transported object is bounded; larger arenas use chunks.
@@ -245,6 +246,19 @@ int64_t pp_memory_clear(PPMemoryRegion *region) {
     if (!p) { return -1; }
     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     memset(p, 0, region.byteCount);
+    return (int64_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
+}
+int64_t pp_memory_zero_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, int method, int *error) {
+    char *p = [region mapWithError:NULL];
+    *error = 0;
+    if (!p || offset % vm_page_size || bytes % vm_page_size || offset > region.byteCount
+        || bytes > region.byteCount - offset) { *error = EINVAL; return -1; }
+    p += offset;
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (method >= 1 && method <= 3) {
+        if (madvise(p, bytes, method == 1 ? MADV_ZERO : MADV_FREE_REUSABLE)) { *error = errno; return -1; }
+    }
+    if (method == 0 || method == 2) { memset(p, 0, bytes); }
     return (int64_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
 }
 void pp_memory_fill_address(void *address, uint64_t bytes, uint64_t seed) {
