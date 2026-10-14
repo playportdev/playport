@@ -83,18 +83,14 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   below runs in order, one writer at a time, with the phone in unattended
   mode. Run ids are in the build-area queue.
 - **Queue:**
-  1. **Phone measurements (one writer):**
-     - the HK A/B again with an identical scripted `pp pad` route from the
-       same save;
-     - KCD for 30+ minutes with the pool on;
-     - the detach path through the `protect` probe's RW→RX phase
-       (PLA-203 family).
+  1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)).
   2. [PLA-351](https://linear.app/playportdev/issue/PLA-351): Auto pool
      sizing per phone RAM, and the helper's own limit.
   3. [PLA-352](https://linear.app/playportdev/issue/PLA-352): one memory plan
      for guest RAM and the video budget.
   4. Step 5: GPU buffers in pool memory (stretch).
-- **Phone (2026-10-14):** dev IPA `b3cdca61…` installed, battery 82 %, 5.5 GB storage free, unattended off. KCD and HK are installed.
+- **Phone (2026-10-14, 23:00):** dev IPA `b3cdca61…` installed, battery 40 % on battery,
+  unattended on. KCD and HK are installed; the `protect` probe is not.
   The phone was re-registered with the free team once (DEVICE.md procedure,
   owner-approved). Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
