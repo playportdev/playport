@@ -1,9 +1,9 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 in progress (owner: Kingdom Come is on the phone).
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 in progress (Kingdom Come blocked by a crash before its first frame, independent of the pool).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
-not merged. Last built at `25f484d` (IPA `d8226b20…`, step 3).
+not merged. Last built at `9cbc873` (IPA `195d5698…`, step 4).
 
 ## Progress
 
@@ -31,8 +31,9 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 - **Step 3 done** (`25f484d`; IPA `d8226b20…`): a 4 GiB pool at Play from
   one donor served Hollow Knight's heap; first frame +9.98 s against
   +10.24 s off ([evidence](../evidence/2026-10-14-donor-pool-at-play.md)).
-- **Now:** step 4 (Kingdom Come A/B) in a writer child; its run id is in
-  `.work/agent-notes/donor-memory/queue.md`.
+- **Step 4 KCD part done, blocked** (`9cbc873`, `5e088c6`; IPA `195d5698…`):
+  Kingdom Come crashed in the Steam API emulator before its first frame with the pool off and on
+  ([evidence](../evidence/2026-10-14-donor-pool-kcd.md)).
 - **Queue:** step 4 next. Before its session: a periodic `donor-pool: stats`
   log line (every 30 s), since stats are logged only at first frame and +8 s
   today. Then one locked session: Kingdom Come (379430, PLA-49) with the pool
@@ -249,6 +250,25 @@ Measure these in one locked session each, pool off and on:
 - **Kingdom Come** (PLA-49): its peak `fpMB` against the limit, through the
   same orchestration as the KCD evidence. Then raise the RAM and video memory
   the game is told it has, and check that it still loads Rattay.
+- **Result, Kingdom Come (2026-10-14, IPA `195d5698…`): blocked, not
+  measured.**
+  - **Added before the session:** a `donor-pool: stats at install+Ns` line
+    every 30 s, and `pp pad wait-text`, which presses Continue only on a
+    menu whose labels it has read.
+  - **What happened:** KCD exited `0xc0000005` 11–12 s after it started,
+    before the first frame. It did so in both runs: pool off, and pool
+    asked 6144 (`cap_mb=4096`, 4096 granted).
+  - **The fault:** the same in both runs, in Playport's `steam_api64.dll`
+    emulator at +0x1b4760, a read of NULL+0x1f4. So this is a regression
+    in the title since 2026-10-03, not the pool.
+  - **What the pool did:** this was the first purge and reuse on the
+    phone. Object 3 was purged 16 times at 0.01 ms each, then served again
+    from offset 0. 256 requests (786 MiB) were served. There were no
+    detaches, no unmatched, no refused requests and no map failures.
+  - **Hollow Knight on the same IPA with 4 GiB:** first frame at +9.94 s,
+    unmatched 0.
+  - **Next:** the off/on footprint comparison waits for the crash fix.
+  [Evidence](../evidence/2026-10-14-donor-pool-kcd.md).
 - **Hollow Knight:** a launch to first frame +10 and a gameplay `pp perf` as
   the regression, with first-frame time and FPS unchanged within noise.
 - **One session over 30 minutes** with the pool on.
