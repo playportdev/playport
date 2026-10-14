@@ -1,9 +1,9 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); pool reuse within an object in progress.
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); pool reuse within an object done 2026-10-14 (refused 0, peak −582 MiB).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
-not merged. Last built at `9cbc873` (IPA `195d5698…`, step 4).
+not merged. Last built at `9f4d5bf` (IPA `2010a999…`, pool reuse).
 
 ## Progress
 
@@ -46,8 +46,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   the bump allocator reuses an object only once all of it is free. The system
   also compressed up to 2.6 GiB of pool pages. One pair only, with a thermal
   difference.
-- **Now:** item 1 below (owner, 2026-10-14) in a writer child; its run id
-  is in the build-area queue.
+- **Queue item 1 done 2026-10-14** (`9f4d5bf`; IPA `2010a999…`; [evidence](../evidence/2026-10-14-donor-pool-reuse.md)): best-fit reuse, refused 0 through +240 s, peak −582 MiB (bounded by the ~700 MiB live set).
 - **Queue:**
   1. Reuse within an object: free ranges zeroed and handed out again, so the
      pool keeps serving. Then rerun the KCD pair with
@@ -293,6 +292,27 @@ Measure these in one locked session each, pool off and on:
   - **Next:** a longer session, a pool that reuses partly freed objects, and
     raising the game's advertised RAM.
   [Evidence](../evidence/2026-10-14-donor-pool-kcd.md).
+- **Result, pool reuse inside an object (2026-10-14, IPA `2010a999…`):**
+  - **Allocator:** best fit over per-object leased and stale page bitmaps;
+    freed neighbours coalesce. A reused range's stale pages are zeroed by
+    `memset` at Wine's new address before the hook returns. A whole-object
+    purge is deferred to the next hook call, after Wine has replaced its
+    mapping.
+  - **Zeroing measured on the phone, per 64 MiB:** memset 1.28 ms,
+    `MADV_ZERO` 1.48 ms. `MADV_FREE_REUSABLE` returns 0 on the pool mapping
+    but frees nothing and keeps the old data.
+  - **Kingdom Come pair:** peak `fpMB` 7,783 off and 7,201 on (−582);
+    −469/−503/−626 at +110/+170/+230.
+  - **The pool:** it never refused (0 through install+240 s, against 13,211
+    before). It served 36.5 GiB in 16,688 requests through 600–834 MiB live.
+    Zeroing took 3.45 s in total, at most 4.35 ms per take. Compressed pool
+    pages peaked at 266 MiB, against 2,640.
+  - **Errors:** Rattay loaded both times. No crash, unmatched 0, detaches 0,
+    map failures 0, no whole-object purge.
+  - **Why no larger saving:** it is bounded by the pool's live set. More
+    needs 0148 to back more of the game's memory.
+  - **Hollow Knight with 4 GiB:** first frame +10.52 s.
+  [Evidence](../evidence/2026-10-14-donor-pool-reuse.md).
 - **Hollow Knight:** a launch to first frame +10 and a gameplay `pp perf` as
   the regression, with first-frame time and FPS unchanged within noise.
 - **One session over 30 minutes** with the pool on.
