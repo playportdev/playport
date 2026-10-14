@@ -96,3 +96,5 @@ status Works.
 
 - A warm start gains nothing when the game's window base moves between launches (seen once
   here). This costs speed only, not correctness.
+  Fixed by madeira-unix 0146 (fixed window slots; PLA-349,
+  [2026-10-14-wow64-window-slots.md](2026-10-14-wow64-window-slots.md)).

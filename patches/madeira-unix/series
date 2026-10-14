@@ -144,3 +144,4 @@
 0143-wineserver-do-not-hold-a-thread-in-FEX-s-module-or-a.patch
 0144-win32u-log-a-sent-message-that-waits-5-s-for-its-rep.patch
 0145-win32u-store-the-queue-masks-when-the-iOS-driver-dra.patch
+0146-ntdll-reserve-a-WoW64-window-in-a-fixed-slot-first.patch
