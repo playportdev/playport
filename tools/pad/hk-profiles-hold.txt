@@ -1,0 +1,8 @@
+# Hollow Knight: hk-profiles with A held 400 ms. On 2026-10-14 (pool on) a
+# 150 ms A from hk-profiles reached the pad (s1-host.log: buttons=0x1000, then
+# 0x0000) during a frame stall of about 100 ms and the game stayed on its main
+# menu: it did not see the press. A 400 ms hold spans such a stall. Push it once
+# the main menu is read, as hk-profiles; a read of the main menu after it means
+# the press was missed again.
+400 A        # Start Game
+3000 -

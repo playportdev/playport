@@ -355,7 +355,7 @@ final class PadScriptTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("tools/pad")
         let names = try FileManager.default.contentsOfDirectory(atPath: pad.path).filter { $0.hasSuffix(".txt") }.sorted()
         XCTAssertTrue(names.contains("hk-profiles.txt") && names.contains("hk-menu-back-start.txt")
-            && names.contains("hk-slot-new-game.txt") && names.contains("kcd-continue.txt"), "\(names)")
+            && names.contains("hk-slot-new-game.txt") && names.contains("hk-profiles-hold.txt") && names.contains("kcd-continue.txt"), "\(names)")
         for name in names {
             let s = try PadScript.parse(String(contentsOf: pad.appendingPathComponent(name), encoding: .utf8))
             XCTAssertGreaterThan(s.totalMs, 0, name)
