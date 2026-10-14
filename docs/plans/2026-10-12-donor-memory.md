@@ -55,8 +55,9 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   1 MiB or more, and KCD churns them (36.5 GiB served). A bigger saving needs
   0148 to back more of the game's memory. `MADV_FREE_REUSABLE` does nothing
   on the pool mapping.
-- **Now:** nothing running; the phone is free. Waiting for the owner.
-- **Queue (proposed):**
+- **Now:** queue item 1 (owner, 2026-10-14) in a writer child; its run id
+  is in the build-area queue.
+- **Queue:**
   1. Widen what 0148 backs: smaller commits, or commits that are not fresh,
      whichever KCD's footprint is made of. Measure first which allocations
      make up KCD's ordinary footprint.
