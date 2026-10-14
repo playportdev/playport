@@ -1,0 +1,19 @@
+# Hollow Knight: from the main menu's "Quit Game?" dialog (cursor on No) to the
+# profile screen. Seen on 2026-10-14: the main menu opened with its cursor on
+# Quit Game, so hk-profiles' A opened this dialog instead of Start Game. Push
+# this only after `pp pad wait-text --crop 0.35,0.35,0.65,0.62 "Quit Game" "Yes" "No"`
+# has read the dialog. A on No closes it with the cursor on Quit Game; four UPs
+# go Extras, Achievements, Options, Start Game (no wrap needed); A opens the
+# profile screen. Take its screenshot before pressing A on any slot.
+150 A        # No
+1500 -
+120 UP       # Extras
+500 -
+120 UP       # Achievements
+500 -
+120 UP       # Options
+500 -
+120 UP       # Start Game
+800 -
+150 A        # Start Game: the profile screen
+3000 -
