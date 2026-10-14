@@ -8,8 +8,9 @@
  * every page Wine gets reads zero (never used, purged, or reported stale and
  * zeroed by the caller before Wine sees it), that no pool page backs two guest
  * pages, that a guest page keeps its pool page through splits, that an object
- * awaiting its purge is never handed out, and that the lease bound covers the
- * worst split pattern.
+ * awaiting its purge is never handed out, and that the guest page table
+ * (madeira-unix 0150's small commits: one entry per guest page) refuses a page
+ * leased twice or outside it and handles thousands of one-page leases.
  */
 #include "guest_pool.h"
 
@@ -36,17 +37,19 @@ static void check_model(const struct pp_pool *p)
     int seen[OBJS][OBJ_PAGES];
     memset(seen, 0, sizeof seen);
     uint64_t live = 0, stale = 0;
-    for (uint32_t i = 0; i < p->nleases; i++) {
-        const struct pp_pool_lease *l = &p->leases[i];
-        CHECK(l->lo < l->hi && !(l->lo % PAGE) && !(l->hi % PAGE) && !(l->offset % PAGE));
-        CHECK(l->offset + (l->hi - l->lo) <= p->objects[l->object].size);
-        for (uintptr_t a = l->lo; a < l->hi; a += PAGE) {
-            unsigned g = (unsigned)((a - BASE) / PAGE), o = (unsigned)((l->offset + (a - l->lo)) / PAGE);
-            CHECK(guest_obj[g] == (int)l->object && guest_off[g] == (int)o);
-            CHECK(pool_state[l->object][o] == LEASED);
-            CHECK(!seen[l->object][o]++);
+    for (unsigned g = 0; g < GUEST_PAGES; g++) {
+        uint32_t object;
+        uint64_t offset;
+        if (pp_pool_lookup(p, BASE + (uintptr_t)g * PAGE, &object, &offset)) {
+            CHECK(guest_obj[g] < 0);
+            continue;
         }
-        live += l->hi - l->lo;
+        unsigned o = (unsigned)(offset / PAGE);
+        CHECK(!(offset % PAGE) && object < OBJS && offset < p->objects[object].size);
+        CHECK(guest_obj[g] == (int)object && guest_off[g] == (int)o);
+        CHECK(pool_state[object][o] == LEASED);
+        CHECK(!seen[object][o]++);
+        live += PAGE;
     }
     CHECK(live == p->live);
     for (unsigned o = 0; o < OBJS; o++) {
@@ -129,9 +132,12 @@ static void flush(struct pp_pool *p)
     for (unsigned o = 0; o < OBJS; o++) if (pending[o]) purge(p, o, 1);
 }
 
-static void reset_model(struct pp_pool *p, struct pp_pool_lease *leases, uint32_t max, unsigned objs)
+static uint32_t where[GUEST_PAGES];
+
+static void reset_model(struct pp_pool *p, unsigned objs)
 {
-    pp_pool_init(p, PAGE, leases, max);
+    memset(where, 0, sizeof where);
+    pp_pool_init(p, PAGE, where, BASE, GUEST_PAGES);
     for (unsigned o = 0; o < objs; o++) CHECK(pp_pool_add(p, (uint64_t)OBJ_PAGES * PAGE) == (int)o);
     memset(pool_state, FRESH, sizeof pool_state);
     memset(pending, 0, sizeof pending);
@@ -141,25 +147,45 @@ static void reset_model(struct pp_pool *p, struct pp_pool_lease *leases, uint32_
 int main(void)
 {
     static struct pp_pool p;
-    uint64_t max = pp_pool_max_leases((uint64_t)OBJS * OBJ_PAGES * PAGE, PAGE);
-    struct pp_pool_lease *leases = calloc(max, sizeof *leases);
     uint32_t obj;
     uint64_t off;
 
-    /* The bounds: a 6 GiB pool on 16 KiB pages, the largest pool, a 256 MiB object. */
-    CHECK(pp_pool_max_leases(6ull << 30, 16384) == 393216);
+    /* The bounds: the guest window's table on 16 KiB pages, the largest pool, a 256 MiB object. */
+    CHECK(pp_pool_map_entries(0x7000000000ull, 0x7c00000000ull, 16384) == 3145728);
+    CHECK(pp_pool_map_entries(0x7c00000000ull, 0x7000000000ull, 16384) == 0);
     CHECK((uint64_t)PP_POOL_MAX_OBJECTS * (256ull << 20) == (8ull << 30));
     CHECK((uint64_t)PP_POOL_MAX_OBJECT_PAGES * 16384 == (256ull << 20));
 
     /* Misaligned, oversize and too-large requests are refused; adds past the limits too. */
-    pp_pool_init(&p, PAGE, leases, (uint32_t)max);
+    pp_pool_init(&p, PAGE, where, BASE, GUEST_PAGES);
     CHECK(pp_pool_add(&p, PAGE + 1) < 0);
     CHECK(pp_pool_add(&p, (uint64_t)(PP_POOL_MAX_OBJECT_PAGES + 1) * PAGE) < 0);
-    reset_model(&p, leases, (uint32_t)max, OBJS);
+    reset_model(&p, OBJS);
     CHECK(pp_pool_take(&p, BASE + 1, PAGE, &obj, &off) < 0);
     CHECK(pp_pool_take(&p, BASE, PAGE + 1, &obj, &off) < 0);
     CHECK(pp_pool_take(&p, BASE, (uint64_t)(OBJ_PAGES + 1) * PAGE, &obj, &off) < 0);
-    CHECK(p.refused == 3 && !p.nleases);
+    CHECK(p.refused == 3 && !p.live);
+    /* Outside the guest page table, or a guest page already leased: refused, nothing changes. */
+    CHECK(pp_pool_take(&p, BASE - PAGE, PAGE, &obj, &off) < 0);
+    CHECK(pp_pool_take(&p, BASE + (GUEST_PAGES - 1) * (uintptr_t)PAGE, 2 * PAGE, &obj, &off) < 0);
+    CHECK(take(&p, 900, 4) == 0);
+    CHECK(pp_pool_take(&p, BASE + 902 * (uintptr_t)PAGE, 4 * PAGE, &obj, &off) < 0);
+    CHECK(p.refused == 6 && p.live == 4ull * PAGE);
+    CHECK(!pp_pool_lookup(&p, BASE + 901 * (uintptr_t)PAGE + 100, &obj, &off) && obj == 0 && off == PAGE + 100);
+    CHECK(pp_pool_lookup(&p, BASE + 904 * (uintptr_t)PAGE, &obj, &off) < 0);
+    CHECK(pp_pool_lookup(&p, BASE - 1, &obj, &off) < 0);
+    check_model(&p);
+    /* A release reaching past the table counts its outside bytes as unmatched. */
+    {
+        uint32_t emptied[PP_POOL_MAX_OBJECTS];
+        for (unsigned k = 900; k < 904; k++) { pool_state[0][k - 900] = DIRTY; guest_obj[k] = guest_off[k] = -1; }
+        CHECK(pp_pool_release(&p, BASE + 900 * (uintptr_t)PAGE, BASE + (GUEST_PAGES + 8) * (uintptr_t)PAGE, 0, emptied) == 1);
+        CHECK(p.released_bytes == 4ull * PAGE && p.unmatched_bytes == (uint64_t)(GUEST_PAGES + 8 - 904) * PAGE);
+        pending[0] = 1;
+        purge(&p, 0, 1);
+        check_model(&p);
+    }
+    reset_model(&p, OBJS);
 
     /* untake gives the space back as it was, stale pages included. */
     take(&p, 0, 8);
@@ -167,13 +193,13 @@ int main(void)
     release(&p, 0, 8, 0, 0, 0);
     CHECK(!pp_pool_take(&p, BASE + 64 * PAGE, 8 * PAGE, &obj, &off) && obj == 0 && off == 0);
     CHECK(p.reuses == 1 && p.zeroed_bytes == 8ull * PAGE && p.objects[0].stale == 0);
-    pp_pool_untake(&p, BASE + 64 * PAGE);
+    pp_pool_untake(&p, BASE + 64 * PAGE, 8 * PAGE);
     CHECK(p.reuses == 0 && !p.zeroed_bytes && p.objects[0].stale == 8ull * PAGE && p.served == 2);
     check_model(&p);
 
     /* Reuse with zero on reuse, best fit: a freed range inside an object is handed out
      * again, zeroed, while another part of the object is still leased. */
-    reset_model(&p, leases, (uint32_t)max, OBJS);
+    reset_model(&p, OBJS);
     take(&p, 0, 32);
     take(&p, 32, 16);
     release(&p, 0, 32, 0, 0, 0);
@@ -187,7 +213,7 @@ int main(void)
     check_model(&p);
 
     /* Coalescing: two adjacent freed ranges serve one take of their joint size. */
-    reset_model(&p, leases, (uint32_t)max, OBJS);
+    reset_model(&p, OBJS);
     for (unsigned k = 0; k < 4; k++) take(&p, k * 16, 16);
     release(&p, 16, 16, 0, 0, 0);
     release(&p, 32, 16, 0, 0, 0);
@@ -197,15 +223,15 @@ int main(void)
 
     /* Fragmentation: 32 one-page holes in object 0 serve one-page takes; a two-page
      * take goes to a fresh object, and with no fresh object it is refused. */
-    reset_model(&p, leases, (uint32_t)max, 1);
+    reset_model(&p, 1);
     for (unsigned k = 0; k < OBJ_PAGES; k++) take(&p, k, 1);
     for (unsigned k = 1; k < OBJ_PAGES; k += 2) release(&p, k, 1, 0, 0, 0);
-    CHECK(p.objects[0].stale == 32ull * PAGE && p.nleases == 32);
+    CHECK(p.objects[0].stale == 32ull * PAGE && p.live == 32ull * PAGE);
     uint64_t refused = p.refused;
     CHECK(take(&p, 500, 2) < 0 && p.refused == refused + 1);
     CHECK(take(&p, 500, 1) == 0 && guest_off[500] == 1);
     check_model(&p);
-    reset_model(&p, leases, (uint32_t)max, 2);
+    reset_model(&p, 2);
     for (unsigned k = 0; k < OBJ_PAGES; k++) take(&p, k, 1);
     for (unsigned k = 1; k < OBJ_PAGES; k += 2) release(&p, k, 1, 0, 0, 0);
     CHECK(take(&p, 500, 2) == 1 && guest_off[500] == 0);
@@ -213,7 +239,7 @@ int main(void)
     check_model(&p);
 
     /* Exhaustion: a full pool refuses; a freed range serves again, then it is full once more. */
-    reset_model(&p, leases, (uint32_t)max, OBJS);
+    reset_model(&p, OBJS);
     for (unsigned o = 0; o < OBJS; o++) take(&p, o * OBJ_PAGES, OBJ_PAGES);
     refused = p.refused;
     CHECK(take(&p, 600, 1) < 0 && p.refused == refused + 1);
@@ -224,7 +250,7 @@ int main(void)
 
     /* An emptied object awaits its purge and is not handed out before it; after the purge
      * it serves from offset 0 with nothing stale. */
-    reset_model(&p, leases, (uint32_t)max, 1);
+    reset_model(&p, 1);
     take(&p, 0, 16);
     CHECK(release(&p, 0, 16, 0, 0, 1) == 1 && p.objects[0].awaiting_purge);
     CHECK(take(&p, 100, 4) < 0);
@@ -239,25 +265,39 @@ int main(void)
     check_model(&p);
 
     /* Every lease page released one at a time in the middle: splits stay within the bound. */
-    reset_model(&p, leases, (uint32_t)max, OBJS);
+    reset_model(&p, OBJS);
     for (unsigned o = 0; o < OBJS; o++) take(&p, o * OBJ_PAGES, OBJ_PAGES);
     for (unsigned g = 1; g < OBJS * OBJ_PAGES; g += 2) { release(&p, g, 1, 0, 0, 0); check_model(&p); }
-    CHECK(p.nleases == OBJS * OBJ_PAGES / 2 && p.nleases <= max);
+    CHECK(p.live == (uint64_t)OBJS * OBJ_PAGES / 2 * PAGE);
     release(&p, 0, OBJS * OBJ_PAGES, 0, 0, 0);
-    CHECK(!p.nleases && !p.live && !p.stale && p.resets == OBJS);
+    CHECK(!p.live && !p.stale && p.resets == OBJS);
     check_model(&p);
 
     /* Unmatched bytes are counted, nothing else changes. */
     uint64_t unmatched = p.unmatched_bytes;
     CHECK(unmatched == (uint64_t)OBJS * OBJ_PAGES / 2 * PAGE);   /* the pages released before */
     release(&p, 500, 4, 0, 0, 0);
-    CHECK(p.unmatched_bytes == unmatched + 4ull * PAGE && !p.nleases);
+    CHECK(p.unmatched_bytes == unmatched + 4ull * PAGE && !p.live);
+
+    /* Small commits: every page of the pool as its own lease, released in a scattered
+     * order and taken again one page at a time, each take an exact fit (a hole). */
+    reset_model(&p, OBJS);
+    for (unsigned g = 0; g < OBJS * OBJ_PAGES; g++) CHECK(take(&p, g, 1) >= 0);
+    CHECK(p.live == (uint64_t)OBJS * OBJ_PAGES * PAGE && take(&p, OBJS * OBJ_PAGES, 1) < 0);
+    for (unsigned k = 0; k < OBJS * OBJ_PAGES; k += 1) {
+        unsigned g = (k * 37) % (OBJS * OBJ_PAGES);
+        if (g % 3 == 0) release(&p, g, 1, 0, 0, 1);
+    }
+    check_model(&p);
+    for (unsigned g = OBJS * OBJ_PAGES; g < GUEST_PAGES && take(&p, g, 1) >= 0; g++) {}
+    CHECK(p.live == (uint64_t)OBJS * OBJ_PAGES * PAGE && !p.stale && p.reuses == p.served - OBJS * OBJ_PAGES);
+    check_model(&p);
 
     /* Random: takes of 1-40 pages, releases of any range, purges sometimes deferred to a
      * later call (as GuestPool.m does) and sometimes failing (retire). */
     for (unsigned seed = 1; seed <= 300; seed++) {
         unsigned rng = seed;
-        reset_model(&p, leases, (uint32_t)max, OBJS);
+        reset_model(&p, OBJS);
 #define NEXT (rng = rng * 1664525u + 1013904223u, rng >> 8)
         for (unsigned step = 0; step < 600; step++) {
             unsigned g = NEXT % GUEST_PAGES;
@@ -274,12 +314,16 @@ int main(void)
                 int defer = !fail && NEXT % 2;
                 release(&p, g, pages, detached, fail, defer);
             }
+            /* Wine never offers a guest page twice: such a take is refused. */
+            if (guest_obj[g] >= 0) {
+                uint64_t refused_before = p.refused, live = p.live;
+                CHECK(pp_pool_take(&p, BASE + (uintptr_t)g * PAGE, PAGE, &obj, &off) < 0);
+                CHECK(p.refused == refused_before + 1 && p.live == live);
+            }
             check_model(&p);
-            CHECK(p.nleases <= max);
         }
         CHECK(p.served_bytes == p.live + p.released_bytes);
     }
-    free(leases);
     if (failures) { printf("%d failures\n", failures); return 1; }
     printf("guest pool: ok\n");
     return 0;

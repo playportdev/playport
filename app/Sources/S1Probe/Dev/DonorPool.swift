@@ -3,7 +3,7 @@
 // `pp ui --action set:donorPoolMB=4096`). When on, a Play takes a pool of that
 // size from JIT helpers that then end, after the JIT activation and before
 // Wine starts, and puts it behind madeira-unix 0148's guest hooks
-// (SharedMemory/GuestPool.m): Wine's fresh large RW guest commits are backed
+// (SharedMemory/GuestPool.m): Wine's fresh RW guest commits (a host page or more, 0150) are backed
 // by it, charged to no process (docs/evidence/2026-10-14-donor-memory.md).
 // Nothing touches the pool here: its pages are resident only once the game
 // uses them, and physical RAM is the wall (docs/evidence/2026-10-14-donor-memory-scale.md),
@@ -91,14 +91,16 @@ enum DonorPool {
         let footprint = (app["footprint"]?.uint64Value ?? 0) >> 20, available = (app["available"]?.uint64Value ?? 0) >> 20
         let fields: [String] = [
             "pool_mb=\(mb("bytes"))", "served=\(n("served"))", "served_mb=\(mb("served_bytes"))", "live_mb=\(mb("live"))",
-            "resident_mb=\(mb("resident_bytes"))", "compressed_mb=\(mb("swapped_bytes"))", "leases=\(n("leases"))",
+            "resident_mb=\(mb("resident_bytes"))", "compressed_mb=\(mb("swapped_bytes"))",
             "released_mb=\(mb("released_bytes"))", "detaches=\(n("detaches"))", "detached_mb=\(mb("detached_bytes"))",
             "resets=\(n("resets"))", "retired=\(n("retired"))", "refused=\(n("refused"))",
             "unmatched_mb=\(mb("unmatched_bytes"))", "map_failures=\(n("map_failures"))",
             "purge_ms_total=\(n("purge_ms_total"))", "purge_ms_max=\(n("purge_ms_max"))",
             "stale_mb=\(mb("stale_bytes"))", "reuses=\(n("reuses"))", "zeroed_mb=\(mb("zeroed_bytes"))",
             "zero_ms_total=\(n("zero_ms_total"))", "zero_us_max=\(n("zero_us_max"))",
-            "purges_pending=\(n("purges_pending"))",
+            "purges_pending=\(n("purges_pending"))", "back_ms_total=\(n("back_ms_total"))",
+            "back_us_max=\(n("back_us_max"))", "releases=\(n("releases"))",
+            "release_ms_total=\(n("release_ms_total"))", "release_us_max=\(n("release_us_max"))",
             "app_footprint_mb=\(footprint)", "app_available_mb=\(available)",
         ]
         log("stats at \(when): " + fields.joined(separator: " "))

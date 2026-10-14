@@ -16,7 +16,7 @@ Offered-upstream: no; optional iOS host experiment
  1 file changed, 193 insertions(+), 19 deletions(-)
 
 diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
-index 45a3439..b3e389b 100644
+index 45a3439..0affbab 100644
 --- a/build/ntdll-unix/virtual_ios.c
 +++ b/build/ntdll-unix/virtual_ios.c
 @@ -898,13 +898,20 @@ static void *ios_pool_warmer_thread( void *arg )
@@ -113,10 +113,10 @@ index 45a3439..b3e389b 100644
 + * of the range already committed ("recommit"), the swap tier ("swap"), under
 + * 1 MiB ("small"); then backed, refused by the host, or the host-page
 + * remainder at either end ("edge"). */
-+enum { GN_BACKED, GN_REFUSED, GN_EDGE, GN_SMALL, GN_PROT, GN_WATCH, GN_VIEW, GN_WINDOW, GN_RECOMMIT, GN_SWAP, GN_OFF, GN_MAX };
-+static const char *const ios_guest_note_name[GN_MAX] =
++enum { GCN_BACKED, GCN_REFUSED, GCN_EDGE, GCN_SMALL, GCN_PROT, GCN_WATCH, GCN_VIEW, GCN_WINDOW, GCN_RECOMMIT, GCN_SWAP, GCN_OFF, GCN_MAX };
++static const char *const ios_guest_note_name[GCN_MAX] =
 +    { "backed", "refused", "edge", "small", "prot", "watch", "view", "window", "recommit", "swap", "off" };
-+static unsigned long long ios_guest_note_bytes[GN_MAX], ios_guest_note_count[GN_MAX];
++static unsigned long long ios_guest_note_bytes[GCN_MAX], ios_guest_note_count[GCN_MAX];
 +int ios_guest_census_on;   /* the host has backed a range: [guest-census] and the warmer's [phys-map] every 30 s */
 +static void ios_guest_note( int reason, size_t bytes )
 +{
@@ -126,13 +126,13 @@ index 45a3439..b3e389b 100644
 +static int ios_guest_reason( void *base, size_t size, unsigned int vprot, struct file_view *view )
 +{
 +    uintptr_t b = (uintptr_t)base;
-+    if (!playport_guest_memory_backing || force_exec_prot || host_page_size < PP_GUEST_PAGE) return GN_OFF;
-+    if (b < 0x7000000000ULL || b >= 0x7c00000000ULL || size > 0x7c00000000ULL - b) return GN_WINDOW;
-+    if (!view || !is_view_valloc( view ) || (view->protect & (SEC_FILE | SEC_IMAGE | SEC_RESERVE | SEC_NOCACHE | VPROT_SYSTEM))) return GN_VIEW;
-+    if (vprot & VPROT_WRITEWATCH) return GN_WATCH;
-+    if (!(vprot & VPROT_WRITE) || (vprot & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD))) return GN_PROT;
-+    if (size < (1u << 20)) return GN_SMALL;
-+    return GN_BACKED;
++    if (!playport_guest_memory_backing || force_exec_prot || host_page_size < PP_GUEST_PAGE) return GCN_OFF;
++    if (b < 0x7000000000ULL || b >= 0x7c00000000ULL || size > 0x7c00000000ULL - b) return GCN_WINDOW;
++    if (!view || !is_view_valloc( view ) || (view->protect & (SEC_FILE | SEC_IMAGE | SEC_RESERVE | SEC_NOCACHE | VPROT_SYSTEM))) return GCN_VIEW;
++    if (vprot & VPROT_WRITEWATCH) return GCN_WATCH;
++    if (!(vprot & VPROT_WRITE) || (vprot & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD))) return GCN_PROT;
++    if (size < (1u << 20)) return GCN_SMALL;
++    return GCN_BACKED;
 +}
  static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct file_view *view )
  {
@@ -144,7 +144,7 @@ index 45a3439..b3e389b 100644
 -    if (!(vprot & VPROT_WRITE) || (vprot & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD | VPROT_WRITEWATCH))) return;
 -    if (!view || !is_view_valloc( view ) || (view->protect & (SEC_FILE | SEC_IMAGE | SEC_RESERVE | SEC_NOCACHE | VPROT_SYSTEM))) return;
 -    if (b < 0x7000000000ULL || b >= 0x7c00000000ULL || size > 0x7c00000000ULL - b) return;
-+    if (reason != GN_BACKED) { ios_guest_note( reason, size ); return; }
++    if (reason != GCN_BACKED) { ios_guest_note( reason, size ); return; }
      lo = (b + host_page_mask) & ~(uintptr_t)host_page_mask;
      hi = (b + size) & ~(uintptr_t)host_page_mask;
      while (lo < hi && ios_guest_n < PP_GUEST_MAX_RANGES)
@@ -158,9 +158,9 @@ index 45a3439..b3e389b 100644
          lo += len;
 +        backed += len;
 +    }
-+    if (backed) ios_guest_note( GN_BACKED, backed );
-+    if (lo < hi) ios_guest_note( GN_REFUSED, hi - lo );
-+    if (size - backed - (lo < hi ? hi - lo : 0)) ios_guest_note( GN_EDGE, size - backed - (lo < hi ? hi - lo : 0) );
++    if (backed) ios_guest_note( GCN_BACKED, backed );
++    if (lo < hi) ios_guest_note( GCN_REFUSED, hi - lo );
++    if (size - backed - (lo < hi ? hi - lo : 0)) ios_guest_note( GCN_EDGE, size - backed - (lo < hi ? hi - lo : 0) );
 +}
 +
 +/* Playport (diagnostics, dev donor pool): what the guest's memory is made of,
@@ -276,7 +276,7 @@ index 45a3439..b3e389b 100644
 +        n += snprintf( line + n, sizeof(line) - n, " %s=%llu/%llu", ios_guest_class_name[i], c[i] >> 20, f[i] >> 20 );
 +    dprintf( 2, "%s\n", line );
 +    n = snprintf( line, sizeof(line), "[guest-census] commits since start (MiB/count):" );
-+    for (i = 0; i < GN_MAX && n < (int)sizeof(line) - 48; i++)
++    for (i = 0; i < GCN_MAX && n < (int)sizeof(line) - 48; i++)
 +        n += snprintf( line + n, sizeof(line) - n, " %s=%llu/%llu", ios_guest_note_name[i],
 +                       ios_guest_note_bytes[i] >> 20, ios_guest_note_count[i] );
 +    dprintf( 2, "%s\n", line );
@@ -284,11 +284,11 @@ index 45a3439..b3e389b 100644
 +/* Every guest commit, under virtual_mutex: the swap tier first (ml1077), then the host. */
 +static void ios_guest_commit( void *base, size_t size, unsigned int vprot, struct file_view *view, int any_committed )
 +{
-+    if (any_committed) ios_guest_note( GN_RECOMMIT, size );
++    if (any_committed) ios_guest_note( GCN_RECOMMIT, size );
 +    else if (ios_swap_eligible( base, size, vprot, view ))
 +    {
 +        ios_swap_back( base, size, vprot );
-+        ios_guest_note( GN_SWAP, size );
++        ios_guest_note( GCN_SWAP, size );
 +    }
 +    else ios_guest_back( base, size, vprot, view );
 +    ios_guest_census();

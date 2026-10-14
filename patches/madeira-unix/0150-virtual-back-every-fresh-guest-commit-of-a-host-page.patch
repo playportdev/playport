@@ -1,0 +1,322 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 14 Oct 2026 19:00:00 +0200
+Subject: [PATCH] virtual: back every fresh guest commit of a host page or more
+
+0148 offered the host only fresh RW commits of at least 1 MiB. Kingdom Come's census (0149) showed that most of its ordinary guest memory is RW views filled by commits under 1 MiB (8.7 GiB in 112,232 commits by load end, about 80 KiB each), so offer every fresh RW commit in the window that holds a whole host page. The rules are otherwise 0148's: only plain VirtualAlloc views, never write-watched, exec, guard or write-copy pages, only commits with no page already committed, the host-page remainder at either end stays ordinary, detach to ordinary memory before any protection other than RW, and every range Wine stops using is reported.
+
+Tens of thousands of small backed ranges would make 0148's interval table (a linear scan on every unmap, decommit and protection change) too slow, so track backed pages in a bitmap over the window instead: one bit per 16 KiB page of [0x7000000000, 0x7c00000000), 384 KiB of zero-fill BSS. A release looks only at the pages of its own range, and reports each run of backed pages, at most 64 MiB at a time (a detach copies that much through a temporary buffer). Portable host tests check marking, clearing, runs and clipping against a page model.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-14-donor-pool-widen.md
+Offered-upstream: no; optional iOS host experiment
+---
+ build/ntdll-unix/pp_guest_pages.h  | 77 ++++++++++++++++++++++++++++++
+ build/ntdll-unix/pp_guest_ranges.h | 36 --------------
+ build/ntdll-unix/virtual_ios.c     | 74 +++++++++++-----------------
+ 3 files changed, 106 insertions(+), 81 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_guest_pages.h
+ delete mode 100644 build/ntdll-unix/pp_guest_ranges.h
+
+diff --git a/build/ntdll-unix/pp_guest_pages.h b/build/ntdll-unix/pp_guest_pages.h
+new file mode 100644
+index 0000000..59388e4
+--- /dev/null
++++ b/build/ntdll-unix/pp_guest_pages.h
+@@ -0,0 +1,77 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * Host-backed guest pages, serialized by Wine's virtual_mutex: one bit per
++ * PP_GUEST_PAGE page of the window [PP_GUEST_LO, PP_GUEST_HI) that the host
++ * backs now. Wine backs nothing when the host page is under PP_GUEST_PAGE, so
++ * every backed range is a whole number of these pages. Finding, marking and
++ * clearing cost the pages of the range asked about, not the number of backed
++ * ranges, so backing every fresh commit of a host page or more stays cheap.
++ * The bitmap is zero-fill BSS (384 KiB): only the words in use need physical
++ * pages. */
++#ifndef PP_GUEST_PAGES_H
++#define PP_GUEST_PAGES_H
++#include <stdint.h>
++#include <stddef.h>
++#define PP_GUEST_LO 0x7000000000ull
++#define PP_GUEST_HI 0x7c00000000ull
++#define PP_GUEST_PAGE 16384u
++#define PP_GUEST_PAGES ((size_t)((PP_GUEST_HI - PP_GUEST_LO) / PP_GUEST_PAGE))
++#define PP_GUEST_WORDS (PP_GUEST_PAGES / 64)
++
++/* [*lo, *hi) clipped to the window and rounded outward to whole pages; 0 if
++ * nothing of it is in the window. */
++static int pp_guest_clip( uintptr_t *lo, uintptr_t *hi )
++{
++    uintptr_t a = *lo, b = *hi;
++    if (a < PP_GUEST_LO) a = PP_GUEST_LO;
++    if (b > PP_GUEST_HI) b = PP_GUEST_HI;
++    if (a >= b) return 0;
++    *lo = a & ~(uintptr_t)(PP_GUEST_PAGE - 1);
++    *hi = (b + PP_GUEST_PAGE - 1) & ~(uintptr_t)(PP_GUEST_PAGE - 1);
++    return 1;
++}
++/* Sets (set) or clears the pages of [lo, hi): page aligned, inside the window. */
++static void pp_guest_mark( uint64_t *bits, uintptr_t lo, uintptr_t hi, int set )
++{
++    size_t i = (lo - PP_GUEST_LO) / PP_GUEST_PAGE, end = (hi - PP_GUEST_LO) / PP_GUEST_PAGE;
++    for (; i < end; i++)
++    {
++        if (set) bits[i / 64] |= 1ull << (i % 64);
++        else bits[i / 64] &= ~(1ull << (i % 64));
++    }
++}
++/* The first page in [from, end) whose bit equals set, or end (page indices). */
++static size_t pp_guest_next_bit( const uint64_t *bits, size_t from, size_t end, int set )
++{
++    while (from < end)
++    {
++        uint64_t w = set ? bits[from / 64] : ~bits[from / 64];
++        w &= ~0ull << (from % 64);
++        if (w)
++        {
++            size_t at = (from & ~(size_t)63) + (size_t)__builtin_ctzll( w );
++            return at < end ? at : end;
++        }
++        from = (from & ~(size_t)63) + 64;
++    }
++    return end;
++}
++/* The first run of backed pages in [*lo, hi) (page aligned, inside the window):
++ * returns 1 with the run in [*lo, *run_end), or 0 when there is none. */
++static int pp_guest_next_run( const uint64_t *bits, uintptr_t *lo, uintptr_t hi, uintptr_t *run_end )
++{
++    size_t from = (*lo - PP_GUEST_LO) / PP_GUEST_PAGE, end = (hi - PP_GUEST_LO) / PP_GUEST_PAGE;
++    size_t a = pp_guest_next_bit( bits, from, end, 1 ), b;
++    if (a >= end) return 0;
++    b = pp_guest_next_bit( bits, a, end, 0 );
++    *lo = PP_GUEST_LO + a * PP_GUEST_PAGE;
++    *run_end = PP_GUEST_LO + b * PP_GUEST_PAGE;
++    return 1;
++}
++static int pp_guest_backed( const uint64_t *bits, uintptr_t va )
++{
++    size_t i;
++    if (va < PP_GUEST_LO || va >= PP_GUEST_HI) return 0;
++    i = (va - PP_GUEST_LO) / PP_GUEST_PAGE;
++    return (int)(bits[i / 64] >> (i % 64)) & 1;
++}
++#endif
+diff --git a/build/ntdll-unix/pp_guest_ranges.h b/build/ntdll-unix/pp_guest_ranges.h
+deleted file mode 100644
+index aaa8d07..0000000
+--- a/build/ntdll-unix/pp_guest_ranges.h
++++ /dev/null
+@@ -1,36 +0,0 @@
+-/* SPDX-License-Identifier: LGPL-2.1-or-later
+- * Host-backed guest intervals, serialized by Wine's virtual_mutex.
+- * The host backs at most PP_GUEST_MAX_BYTES at once (the dev donor pool: at most
+- * 32 objects of 256 MiB). Every interval is host-page aligned and nonempty, and
+- * Wine backs nothing when the host page is under PP_GUEST_PAGE, so the interval
+- * bound also covers splits. The array is zero-fill BSS: only the entries in use
+- * need physical pages. */
+-#ifndef PP_GUEST_RANGES_H
+-#define PP_GUEST_RANGES_H
+-#include <stdint.h>
+-#include <stddef.h>
+-#include <assert.h>
+-#define PP_GUEST_MAX_BYTES (8ull << 30)
+-#define PP_GUEST_PAGE 16384u
+-#define PP_GUEST_MAX_RANGES ((unsigned)(PP_GUEST_MAX_BYTES / PP_GUEST_PAGE))
+-struct pp_guest_range { uintptr_t lo, hi; };
+-static int pp_guest_overlap(struct pp_guest_range r, uintptr_t lo, uintptr_t hi)
+-{
+-    return r.lo < hi && lo < r.hi;
+-}
+-/* Remove one intersecting interval, preserving any remaining prefix/suffix.
+- * Returns 1 if index i was removed (the former last item is now at i). */
+-static int pp_guest_trim(struct pp_guest_range *r, unsigned *n, unsigned i,
+-                         uintptr_t lo, uintptr_t hi)
+-{
+-    uintptr_t a = r[i].lo, b = r[i].hi;
+-    assert(i < *n && lo < hi && a <= lo && hi <= b);
+-    if (lo == a && hi == b) { r[i] = r[--*n]; return 1; }
+-    if (lo == a) { r[i].lo = hi; return 0; }
+-    if (hi == b) { r[i].hi = lo; return 0; }
+-    assert(*n < PP_GUEST_MAX_RANGES);
+-    r[(*n)++] = (struct pp_guest_range){hi, b};
+-    r[i].hi = lo;
+-    return 0;
+-}
+-#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 0affbab..166767b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -13219,16 +13219,17 @@ static int ios_swap_eligible( const void *base, size_t size, unsigned int vprot,
+     if (size < (8u << 20)) return 0;
+     return 1;
+ }
+-#include "pp_guest_ranges.h"
+-static struct pp_guest_range ios_guest_ext[PP_GUEST_MAX_RANGES];
+-static unsigned ios_guest_n;
++#include "pp_guest_pages.h"
++static uint64_t ios_guest_bits[PP_GUEST_WORDS];
++static unsigned long long ios_guest_bytes;   /* backed now */
+ /* Playport (diagnostics, dev donor pool): every guest commit's bytes by what
+  * ios_guest_back made of it, checked in this order: no host or forced exec
+  * ("off"), outside [0x7000000000, 0x7c00000000) ("window"), not a plain
+  * VirtualAlloc view ("view"), write-watched ("watch"), not RW ("prot"), part
+  * of the range already committed ("recommit"), the swap tier ("swap"), under
+- * 1 MiB ("small"); then backed, refused by the host, or the host-page
+- * remainder at either end ("edge"). */
++ * 1 MiB ("small", before 0150); then backed, refused by the host, or the
++ * host-page remainder at either end ("edge"). Since 0150 every commit with a
++ * whole host page inside is offered, so "small" stays 0. */
+ enum { GCN_BACKED, GCN_REFUSED, GCN_EDGE, GCN_SMALL, GCN_PROT, GCN_WATCH, GCN_VIEW, GCN_WINDOW, GCN_RECOMMIT, GCN_SWAP, GCN_OFF, GCN_MAX };
+ static const char *const ios_guest_note_name[GCN_MAX] =
+     { "backed", "refused", "edge", "small", "prot", "watch", "view", "window", "recommit", "swap", "off" };
+@@ -13243,11 +13244,10 @@ static int ios_guest_reason( void *base, size_t size, unsigned int vprot, struct
+ {
+     uintptr_t b = (uintptr_t)base;
+     if (!playport_guest_memory_backing || force_exec_prot || host_page_size < PP_GUEST_PAGE) return GCN_OFF;
+-    if (b < 0x7000000000ULL || b >= 0x7c00000000ULL || size > 0x7c00000000ULL - b) return GCN_WINDOW;
++    if (b < PP_GUEST_LO || b >= PP_GUEST_HI || size > PP_GUEST_HI - b) return GCN_WINDOW;
+     if (!view || !is_view_valloc( view ) || (view->protect & (SEC_FILE | SEC_IMAGE | SEC_RESERVE | SEC_NOCACHE | VPROT_SYSTEM))) return GCN_VIEW;
+     if (vprot & VPROT_WRITEWATCH) return GCN_WATCH;
+     if (!(vprot & VPROT_WRITE) || (vprot & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD))) return GCN_PROT;
+-    if (size < (1u << 20)) return GCN_SMALL;
+     return GCN_BACKED;
+ }
+ static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct file_view *view )
+@@ -13259,15 +13259,16 @@ static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct
+     if (reason != GCN_BACKED) { ios_guest_note( reason, size ); return; }
+     lo = (b + host_page_mask) & ~(uintptr_t)host_page_mask;
+     hi = (b + size) & ~(uintptr_t)host_page_mask;
+-    while (lo < hi && ios_guest_n < PP_GUEST_MAX_RANGES)
++    while (lo < hi)
+     {
+         size_t len = hi - lo;
+         if (len > (64u << 20)) len = 64u << 20;
+         if (!playport_guest_memory_backing( (void *)lo, len )) break;
+-        ios_guest_ext[ios_guest_n++] = (struct pp_guest_range){lo, lo + len};
++        pp_guest_mark( ios_guest_bits, lo, lo + len, 1 );
++        ios_guest_bytes += len;
+         ios_guest_census_on = 1;
+-        if (++backs <= 16 || !(backs % 64))
+-            dprintf( 2, "[helper-guest] fresh %p+0x%zx, %u ranges\n", (void *)lo, len, ios_guest_n );
++        if (++backs <= 16 || !(backs % 1024))
++            dprintf( 2, "[helper-guest] fresh %p+0x%zx (#%u), %llu MiB backed\n", (void *)lo, len, backs, ios_guest_bytes >> 20 );
+         lo += len;
+         backed += len;
+     }
+@@ -13287,25 +13288,8 @@ enum { GC_POOL, GC_RW_S, GC_RW_M, GC_RW_L, GC_RW_S_PART, GC_RW_M_PART, GC_RW_L_P
+ static const char *const ios_guest_class_name[GC_MAX] =
+     { "pool", "rw<64K", "rw<1M", "rw>=1M", "rw<64K-part", "rw<1M-part", "rw>=1M-part", "watch", "exec", "other",
+       "out-rw", "out-exec", "out-other", "image", "section", "system" };
+-static struct pp_guest_range ios_guest_sorted[PP_GUEST_MAX_RANGES];
+-static int ios_guest_range_cmp( const void *a, const void *b )
+-{
+-    uintptr_t x = ((const struct pp_guest_range *)a)->lo, y = ((const struct pp_guest_range *)b)->lo;
+-    return x < y ? -1 : x > y;
+-}
+-static int ios_guest_page_backed( uintptr_t hp, unsigned n )
+-{
+-    unsigned lo = 0, hi = n;
+-    while (lo < hi)
+-    {
+-        unsigned mid = lo + (hi - lo) / 2;
+-        if (ios_guest_sorted[mid].hi <= hp) lo = mid + 1;
+-        else hi = mid;
+-    }
+-    return lo < n && ios_guest_sorted[lo].lo <= hp;
+-}
+ static void ios_guest_census_run( unsigned long long *c, unsigned long long *f, unsigned long long *pool_f,
+-                                  int cls, char *p, size_t len, unsigned nsorted, uintptr_t *last_hp )
++                                  int cls, char *p, size_t len, uintptr_t *last_hp )
+ {
+     static char vec[4096];
+     uintptr_t hp = (uintptr_t)p & ~(uintptr_t)host_page_mask, end = (uintptr_t)p + len;
+@@ -13319,7 +13303,7 @@ static void ios_guest_census_run( unsigned long long *c, unsigned long long *f,
+         for (i = 0; i < pages; i++, hp += host_page_size)
+         {
+             if (!(vec[i] & (MINCORE_INCORE | MINCORE_PAGED_OUT))) continue;
+-            if (cls != GC_IMAGE && cls != GC_SECTION && cls != GC_SYSTEM && ios_guest_page_backed( hp, nsorted ))
++            if (cls != GC_IMAGE && cls != GC_SECTION && cls != GC_SYSTEM && pp_guest_backed( ios_guest_bits, hp ))
+                 *pool_f += host_page_size;
+             else if (vec[i] & (MINCORE_ANONYMOUS | MINCORE_COPIED | MINCORE_PAGED_OUT)) f[cls] += host_page_size;
+         }
+@@ -13330,7 +13314,7 @@ static void ios_guest_census( void )
+ {
+     static struct timespec last;
+     struct timespec now, t1;
+-    unsigned long long c[GC_MAX] = {0}, f[GC_MAX] = {0}, pool_f = 0, backed = 0;
++    unsigned long long c[GC_MAX] = {0}, f[GC_MAX] = {0}, pool_f = 0;
+     uintptr_t last_hp = ~(uintptr_t)0;
+     struct file_view *view;
+     unsigned i, views = 0;
+@@ -13340,9 +13324,6 @@ static void ios_guest_census( void )
+     clock_gettime( CLOCK_MONOTONIC, &now );
+     if (last.tv_sec && now.tv_sec - last.tv_sec < 30) return;
+     last = now;
+-    memcpy( ios_guest_sorted, ios_guest_ext, ios_guest_n * sizeof(*ios_guest_ext) );
+-    qsort( ios_guest_sorted, ios_guest_n, sizeof(*ios_guest_sorted), ios_guest_range_cmp );
+-    for (i = 0; i < ios_guest_n; i++) backed += ios_guest_sorted[i].hi - ios_guest_sorted[i].lo;
+     WINE_RB_FOR_EACH_ENTRY( view, &views_tree, struct file_view, entry )
+     {
+         char *p = view->base, *end = (char *)view->base + view->size;
+@@ -13351,7 +13332,7 @@ static void ios_guest_census( void )
+         views++;
+         if (view->protect & VPROT_SYSTEM)
+         {
+-            ios_guest_census_run( c, f, &pool_f, GC_SYSTEM, p, view->size, ios_guest_n, &last_hp );
++            ios_guest_census_run( c, f, &pool_f, GC_SYSTEM, p, view->size, &last_hp );
+             continue;
+         }
+         while (p < end)
+@@ -13375,16 +13356,16 @@ static void ios_guest_census( void )
+                     cls = len < (64u << 10) ? GC_RW_S : len < (1u << 20) ? GC_RW_M : GC_RW_L;
+                     if (len != view->size) cls += GC_RW_S_PART - GC_RW_S;
+                 }
+-                ios_guest_census_run( c, f, &pool_f, cls, p, len, ios_guest_n, &last_hp );
++                ios_guest_census_run( c, f, &pool_f, cls, p, len, &last_hp );
+             }
+             p += len;
+         }
+     }
+-    c[GC_POOL] = backed;
++    c[GC_POOL] = ios_guest_bytes;
+     f[GC_POOL] = pool_f;
+     clock_gettime( CLOCK_MONOTONIC, &t1 );
+-    n = snprintf( line, sizeof(line), "[guest-census] views=%u ranges=%u took=%ld ms (MiB committed/footprint):", views,
+-                  ios_guest_n, (long)((t1.tv_sec - now.tv_sec) * 1000 + (t1.tv_nsec - now.tv_nsec) / 1000000) );
++    n = snprintf( line, sizeof(line), "[guest-census] views=%u took=%ld ms (MiB committed/footprint):", views,
++                  (long)((t1.tv_sec - now.tv_sec) * 1000 + (t1.tv_nsec - now.tv_nsec) / 1000000) );
+     for (i = 0; i < GC_MAX && n < (int)sizeof(line) - 48; i++)
+         n += snprintf( line + n, sizeof(line) - n, " %s=%llu/%llu", ios_guest_class_name[i], c[i] >> 20, f[i] >> 20 );
+     dprintf( 2, "%s\n", line );
+@@ -13410,12 +13391,13 @@ static int ios_guest_release_range( void *base, size_t size, int copy_back )
+ {
+     uintptr_t lo = (uintptr_t)base & ~(uintptr_t)host_page_mask;
+     uintptr_t hi = ((uintptr_t)base + size + host_page_mask) & ~(uintptr_t)host_page_mask;
+-    unsigned i = 0;
+-    while (i < ios_guest_n)
++    uintptr_t oa, ob;
++    if (!ios_guest_bytes || !pp_guest_clip( &lo, &hi )) return 1;
++    while (pp_guest_next_run( ios_guest_bits, &lo, hi, &ob ))
+     {
+-        uintptr_t a = ios_guest_ext[i].lo, b = ios_guest_ext[i].hi;
+-        uintptr_t oa = a > lo ? a : lo, ob = b < hi ? b : hi;
+-        if (!pp_guest_overlap( ios_guest_ext[i], lo, hi )) { i++; continue; }
++        /* At most 64 MiB at a time: a run may join many backed commits. */
++        if (ob - lo > (64u << 20)) ob = lo + (64u << 20);
++        oa = lo;
+         if (copy_back)
+         {
+             size_t len = ob - oa;
+@@ -13431,8 +13413,10 @@ static int ios_guest_release_range( void *base, size_t size, int copy_back )
+             free( tmp );
+             dprintf( 2, "[helper-guest] preserved %p+0x%zx in ordinary backing\n", p, len );
+         }
+-        if (!pp_guest_trim( ios_guest_ext, &ios_guest_n, i, oa, ob )) i++;
++        pp_guest_mark( ios_guest_bits, oa, ob, 0 );
++        ios_guest_bytes -= ob - oa;
+         if (playport_guest_memory_released) playport_guest_memory_released( (void *)oa, ob - oa, copy_back );
++        lo = ob;
+     }
+     return 1;
+ }

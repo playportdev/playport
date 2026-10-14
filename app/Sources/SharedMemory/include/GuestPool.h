@@ -7,11 +7,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 0148's guest hooks, once per process; log gets each logged line. False if a pool is
 /// already installed, there are no or too many objects, or the bookkeeping cannot be allocated.
 bool pp_guest_pool_install(NSArray<PPMemoryRegion *> *objects, void (*log)(const char *));
-/// The pool's counters: objects, bytes, live, leases, served, served_bytes, released_bytes,
+/// The pool's counters: objects, bytes, live, served, served_bytes, released_bytes,
 /// detaches, detached_bytes, resets, retired, refused, unmatched_bytes, map_failures,
 /// purge_ms_total, purge_ms_max, stale_bytes (free, not yet zeroed), reuses (takes that zeroed
 /// stale pages), zeroed_bytes, zero_ms_total, zero_us_max, purges_pending, and the objects'
-/// resident_bytes and swapped_bytes (in the compressor). All zero before install.
+/// resident_bytes and swapped_bytes (in the compressor), and the time in the hooks: back_ms_total,
+/// back_us_max, releases, release_ms_total, release_us_max. All zero before install.
 NSDictionary<NSString *, NSNumber *> *pp_guest_pool_stats(void);
 
 /// madeira-unix 0148's hooks (weak imports in ntdll's unix side).

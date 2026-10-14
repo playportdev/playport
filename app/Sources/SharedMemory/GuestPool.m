@@ -27,6 +27,10 @@ static struct pp_pool pool;
 static NSArray<PPMemoryRegion *> *regions;   // the send rights; held for the process's life
 static void (*logLine)(const char *);
 static uint64_t mapFailures, purgeNanos, purgeMaxNanos, zeroNanos, zeroMaxNanos;
+// Time inside the hooks (madeira-unix 0150 offers every fresh commit of a host page or more).
+static uint64_t backNanos, backMaxNanos, releaseNanos, releaseMaxNanos, releases;
+// The guest window 0148/0150 back, and the pool's table of its pages.
+static const uintptr_t windowLo = 0x7000000000ULL, windowHi = 0x7c00000000ULL;
 // Objects whose last lease went in an earlier release, purged by purgePending.
 static uint32_t pending[PP_POOL_MAX_OBJECTS], npending;
 
@@ -69,14 +73,16 @@ bool pp_guest_pool_install(NSArray<PPMemoryRegion *> *objects, void (*log)(const
     if (!regions && objects.count && objects.count <= PP_POOL_MAX_OBJECTS) {
         uint64_t bytes = 0;
         for (PPMemoryRegion *r in objects) { bytes += r.byteCount; }
-        uint64_t max = pp_pool_max_leases(bytes, vm_page_size);
-        struct pp_pool_lease *leases = calloc(max, sizeof *leases);   // zero-fill: pages only as used
-        if (leases) {
-            pp_pool_init(&pool, vm_page_size, leases, (uint32_t)max);
+        uint64_t entries = pp_pool_map_entries(windowLo, windowHi, vm_page_size);
+        uint32_t *where = calloc(entries, sizeof *where);   // 12 MiB, zero-fill: pages only as used
+        if (where && bytes) {
+            pp_pool_init(&pool, vm_page_size, where, windowLo, entries);
             for (PPMemoryRegion *r in objects) { pp_pool_add(&pool, r.byteCount); }
             regions = [objects copy];
             logLine = log;
             done = true;
+        } else {
+            free(where);
         }
     }
     os_unfair_lock_unlock(&lock);
@@ -88,14 +94,17 @@ NSDictionary<NSString *, NSNumber *> *pp_guest_pool_stats(void) {
     uint64_t bytes = 0, retired = 0;
     for (uint32_t i = 0; i < pool.nobjects; i++) { bytes += pool.objects[i].size; retired += pool.objects[i].retired; }
     NSDictionary *stats = @{@"objects": @(pool.nobjects), @"bytes": @(bytes), @"live": @(pool.live),
-        @"leases": @(pool.nleases), @"served": @(pool.served), @"served_bytes": @(pool.served_bytes),
+        @"served": @(pool.served), @"served_bytes": @(pool.served_bytes),
         @"released_bytes": @(pool.released_bytes), @"detaches": @(pool.detaches),
         @"detached_bytes": @(pool.detached_bytes), @"resets": @(pool.resets), @"retired": @(retired),
         @"refused": @(pool.refused), @"unmatched_bytes": @(pool.unmatched_bytes), @"map_failures": @(mapFailures),
         @"purge_ms_total": @(purgeNanos / 1000000), @"purge_ms_max": @(purgeMaxNanos / 1000000),
         @"stale_bytes": @(pool.stale), @"reuses": @(pool.reuses), @"zeroed_bytes": @(pool.zeroed_bytes),
         @"zero_ms_total": @(zeroNanos / 1000000), @"zero_us_max": @(zeroMaxNanos / 1000),
-        @"purges_pending": @(npending)};
+        @"purges_pending": @(npending),
+        @"back_ms_total": @(backNanos / 1000000), @"back_us_max": @(backMaxNanos / 1000),
+        @"releases": @(releases), @"release_ms_total": @(releaseNanos / 1000000),
+        @"release_us_max": @(releaseMaxNanos / 1000)};
     NSArray<PPMemoryRegion *> *objects = regions;
     os_unfair_lock_unlock(&lock);
     uint64_t resident = 0, swapped = 0;
@@ -110,12 +119,13 @@ NSDictionary<NSString *, NSNumber *> *pp_guest_pool_stats(void) {
     return all;
 }
 
-// madeira-unix 0148: back guest [address, address + bytes), a fresh RW commit
+// madeira-unix 0148/0150: back guest [address, address + bytes), a fresh RW commit
 // (host-page aligned, at most 64 MiB, in [0x7000000000, 0x7c00000000)), or say no.
 int playport_guest_memory_backing(void *address, size_t bytes) {
     uintptr_t va = (uintptr_t)address;
-    if (va < 0x7000000000ULL || va >= 0x7c00000000ULL || bytes > 0x7c00000000ULL - va) { return 0; }
+    if (va < windowLo || va >= windowHi || bytes > windowHi - va) { return 0; }
     os_unfair_lock_lock(&lock);
+    uint64_t hookStart = now();
     int backed = 0;
     uint32_t object;
     uint64_t offset;
@@ -123,7 +133,7 @@ int playport_guest_memory_backing(void *address, size_t bytes) {
     if (regions && !pp_pool_take(&pool, va, bytes, &object, &offset)) {
         int kr = pp_memory_map_range(regions[object], offset, bytes, address);
         if (kr) {
-            pp_pool_untake(&pool, va);
+            pp_pool_untake(&pool, va, bytes);
             if (++mapFailures <= 8) {
                 say("donor-pool: map %p+0x%zx from object %u offset 0x%llx failed: kr=%d; ordinary memory",
                     address, bytes, object, offset, kr);
@@ -157,6 +167,11 @@ int playport_guest_memory_backing(void *address, size_t bytes) {
         say("donor-pool: refused %p+0x%zx (#%llu): no free run fits; live_mb=%llu stale_mb=%llu", address, bytes,
             pool.refused, pool.live >> 20, pool.stale >> 20);
     }
+    if (regions) {
+        uint64_t took = now() - hookStart;
+        backNanos += took;
+        if (took > backMaxNanos) { backMaxNanos = took; }
+    }
     os_unfair_lock_unlock(&lock);
     return backed;
 }
@@ -167,6 +182,7 @@ int playport_guest_memory_backing(void *address, size_t bytes) {
 void playport_guest_memory_released(void *address, size_t bytes, int detached) {
     os_unfair_lock_lock(&lock);
     if (regions) {
+        uint64_t t0 = now();
         purgePending();
         uint32_t emptied[PP_POOL_MAX_OBJECTS];
         uint64_t unmatched = pool.unmatched_bytes;
@@ -180,6 +196,10 @@ void playport_guest_memory_released(void *address, size_t bytes, int detached) {
         }
         // Wine still maps the range until this hook returns: purge at the next call.
         for (uint32_t i = 0; i < n; i++) { pending[npending++] = emptied[i]; }
+        uint64_t took = now() - t0;
+        releases++;
+        releaseNanos += took;
+        if (took > releaseMaxNanos) { releaseMaxNanos = took; }
     }
     os_unfair_lock_unlock(&lock);
 }

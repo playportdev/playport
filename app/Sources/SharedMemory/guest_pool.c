@@ -37,17 +37,18 @@ static uint32_t pages_of(const struct pp_pool *p, const struct pp_pool_object *o
     return (uint32_t)(o->size / p->page);
 }
 
-uint64_t pp_pool_max_leases(uint64_t bytes, uint64_t page)
+uint64_t pp_pool_map_entries(uintptr_t base, uintptr_t end, uint64_t page)
 {
-    return page ? bytes / page : 0;
+    return page && end > base ? (end - base) / page : 0;
 }
 
-void pp_pool_init(struct pp_pool *p, uint64_t page, struct pp_pool_lease *leases, uint32_t maxleases)
+void pp_pool_init(struct pp_pool *p, uint64_t page, uint32_t *where, uintptr_t base, uint64_t entries)
 {
     memset(p, 0, sizeof *p);
     p->page = page;
-    p->leases = leases;
-    p->maxleases = maxleases;
+    p->where = where;
+    p->base = base;
+    p->entries = entries;
 }
 
 int pp_pool_add(struct pp_pool *p, uint64_t size)
@@ -60,15 +61,31 @@ int pp_pool_add(struct pp_pool *p, uint64_t size)
     return (int)p->nobjects++;
 }
 
+/* The table index of guest page lo, with len bytes inside the table; 0 if not. */
+static int table_index(const struct pp_pool *p, uintptr_t lo, uint64_t len, uint64_t *index)
+{
+    if (lo < p->base || lo % p->page || len % p->page) return 0;
+    uint64_t first = (lo - p->base) / p->page;
+    if (first > p->entries || len / p->page > p->entries - first) return 0;
+    *index = first;
+    return 1;
+}
+
 int pp_pool_take(struct pp_pool *p, uintptr_t lo, uint64_t len, uint32_t *object, uint64_t *offset)
 {
-    if (!len || len % p->page || lo % p->page || lo + len < lo || p->nleases >= p->maxleases
-        || len / p->page > PP_POOL_MAX_OBJECT_PAGES) {
+    uint64_t first;
+    if (!len || lo + len < lo || len / p->page > PP_POOL_MAX_OBJECT_PAGES || !table_index(p, lo, len, &first)) {
         p->refused++;
         return -1;
     }
     uint32_t need = (uint32_t)(len / p->page), best_obj = 0, best_at = 0, best_len = UINT32_MAX;
-    for (uint32_t i = 0; i < p->nobjects; i++) {
+    for (uint32_t k = 0; k < need; k++) {
+        if (p->where[first + k]) {   /* Wine never offers a page twice: refuse rather than alias it */
+            p->refused++;
+            return -1;
+        }
+    }
+    for (uint32_t i = 0; i < p->nobjects && best_len != need; i++) {
         const struct pp_pool_object *o = &p->objects[i];
         uint32_t n = pages_of(p, o);
         if (o->retired || o->awaiting_purge || o->size - o->live < len) continue;
@@ -78,10 +95,10 @@ int pp_pool_take(struct pp_pool *p, uintptr_t lo, uint64_t len, uint32_t *object
                 best_obj = i;
                 best_at = at;
                 best_len = end - at;
+                if (best_len == need) break;   /* nothing fits better */
             }
             at = next_bit(o->leased, end, n, 0);
         }
-        if (best_len == need) break;   /* nothing fits better */
     }
     if (best_len == UINT32_MAX) {
         p->refused++;
@@ -96,13 +113,24 @@ int pp_pool_take(struct pp_pool *p, uintptr_t lo, uint64_t len, uint32_t *object
         p->reuses++;
         p->zeroed_bytes += stale;
     }
+    for (uint32_t k = 0; k < need; k++)
+        p->where[first + k] = 1 + best_obj * PP_POOL_MAX_OBJECT_PAGES + best_at + k;
     *object = best_obj;
     *offset = (uint64_t)best_at * p->page;
-    p->leases[p->nleases++] = (struct pp_pool_lease){ lo, lo + len, *offset, best_obj };
     o->live += len;
     p->live += len;
     p->served++;
     p->served_bytes += len;
+    return 0;
+}
+
+int pp_pool_lookup(const struct pp_pool *p, uintptr_t va, uint32_t *object, uint64_t *offset)
+{
+    uint64_t i;
+    if (!table_index(p, va - va % p->page, 0, &i) || i >= p->entries || !p->where[i]) return -1;
+    uint32_t e = p->where[i] - 1;
+    *object = e / PP_POOL_MAX_OBJECT_PAGES;
+    *offset = (uint64_t)(e % PP_POOL_MAX_OBJECT_PAGES) * p->page + va % p->page;
     return 0;
 }
 
@@ -123,14 +151,16 @@ void pp_pool_zeroed(struct pp_pool *p, uint32_t object, uint64_t offset, uint64_
     set_bits(o->stale_map, (uint32_t)(offset / p->page), (uint32_t)((offset + len) / p->page), 0);
 }
 
-void pp_pool_untake(struct pp_pool *p, uintptr_t lo)
+void pp_pool_untake(struct pp_pool *p, uintptr_t lo, uint64_t len)
 {
-    if (!p->nleases || p->leases[p->nleases - 1].lo != lo) return;
-    struct pp_pool_lease l = p->leases[--p->nleases];
-    struct pp_pool_object *o = &p->objects[l.object];
-    uint64_t len = l.hi - l.lo;
-    uint32_t a = (uint32_t)(l.offset / p->page), b = (uint32_t)((l.offset + len) / p->page);
+    uint64_t first;
+    uint32_t object;
+    uint64_t offset;
+    if (!len || !table_index(p, lo, len, &first) || pp_pool_lookup(p, lo, &object, &offset)) return;
+    struct pp_pool_object *o = &p->objects[object];
+    uint32_t a = (uint32_t)(offset / p->page), b = a + (uint32_t)(len / p->page);
     /* Nothing was mapped or zeroed: the pages are free again as they were. */
+    for (uint64_t k = 0; k < len / p->page; k++) p->where[first + k] = 0;
     set_bits(o->leased, a, b, 0);
     uint64_t stale = (uint64_t)count_bits(o->stale_map, a, b) * p->page;
     o->stale += stale;
@@ -148,43 +178,30 @@ void pp_pool_untake(struct pp_pool *p, uintptr_t lo)
 uint32_t pp_pool_release(struct pp_pool *p, uintptr_t lo, uintptr_t hi, int detached, uint32_t *emptied)
 {
     uint64_t matched = 0;
-    uint32_t n = 0, i = 0;
+    uint32_t n = 0;
     if (lo >= hi) return 0;
-    while (i < p->nleases) {
-        struct pp_pool_lease *l = &p->leases[i];
-        if (!(l->lo < hi && lo < l->hi)) { i++; continue; }
-        uintptr_t a = l->lo > lo ? l->lo : lo, b = l->hi < hi ? l->hi : hi;
-        uint32_t obj = l->object;
-        uint64_t from = l->offset + (a - l->lo);
-        int removed = 0;
-        if (a == l->lo && b == l->hi) {
-            p->leases[i] = p->leases[--p->nleases];
-            removed = 1;
-        } else if (a == l->lo) {
-            l->offset += b - l->lo;
-            l->lo = b;
-        } else if (b == l->hi) {
-            l->hi = a;
-        } else {
-            /* The middle goes: the suffix becomes its own lease. Leases never
-             * share a pool byte and each is at least a page, so there is room. */
-            p->leases[p->nleases++] = (struct pp_pool_lease){ b, l->hi, l->offset + (b - l->lo), obj };
-            l->hi = a;
-        }
+    /* The table's pages that [lo, hi) touches; a partial page is not leased by it. */
+    uintptr_t a = lo > p->base ? lo : p->base, end = p->base + p->entries * p->page;
+    uintptr_t b = hi < end ? hi : end;
+    a = p->base + (a - p->base + p->page - 1) / p->page * p->page;
+    b = p->base + (b > p->base ? (b - p->base) / p->page * p->page : 0);
+    for (uintptr_t va = a; va < b; va += p->page) {
+        uint32_t *e = &p->where[(va - p->base) / p->page];
+        if (!*e) continue;
+        uint32_t obj = (*e - 1) / PP_POOL_MAX_OBJECT_PAGES, page = (*e - 1) % PP_POOL_MAX_OBJECT_PAGES;
         struct pp_pool_object *o = &p->objects[obj];
-        uint32_t pa = (uint32_t)(from / p->page), pb = (uint32_t)((from + (b - a)) / p->page);
-        set_bits(o->leased, pa, pb, 0);
-        set_bits(o->stale_map, pa, pb, 1);
-        o->live -= b - a;
-        p->live -= b - a;
-        o->stale += b - a;
-        p->stale += b - a;
-        matched += b - a;
+        *e = 0;
+        o->leased[page / 64] &= ~(1ull << (page % 64));
+        o->stale_map[page / 64] |= 1ull << (page % 64);
+        o->live -= p->page;
+        p->live -= p->page;
+        o->stale += p->page;
+        p->stale += p->page;
+        matched += p->page;
         if (!o->live) {
             o->awaiting_purge = 1;
             emptied[n++] = obj;
         }
-        if (!removed) i++;
     }
     p->released_bytes += matched;
     p->unmatched_bytes += (hi - lo) - matched;

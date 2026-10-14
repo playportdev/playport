@@ -13,7 +13,10 @@
  * range. When an object's last lease is released it awaits a purge: it is not
  * handed out until the caller zeroes all of it and calls pp_pool_reset (or
  * retires it when that fails). So every page Wine gets reads zero, as a Windows
- * commit must. Callers serialize every call. */
+ * commit must. Which pool page backs which guest page is a table indexed by the
+ * guest page (madeira-unix 0150 offers every fresh commit of a host page or
+ * more, so tens of thousands of small leases may be live): a release costs the
+ * pages of its own range, not the number of leases. Callers serialize every call. */
 #ifndef PP_GUEST_POOL_H
 #define PP_GUEST_POOL_H
 #include <stdint.h>
@@ -34,50 +37,50 @@ struct pp_pool_object {
     uint64_t stale_map[PP_POOL_OBJECT_WORDS];   /* page bits; a leased page is stale only between take and zeroed */
 };
 
-/* [lo, hi) of guest memory is backed by the object's bytes from offset. */
-struct pp_pool_lease {
-    uintptr_t lo, hi;
-    uint64_t offset;
-    uint32_t object;
-};
-
 struct pp_pool {
     uint64_t page;
     struct pp_pool_object objects[PP_POOL_MAX_OBJECTS];
     uint32_t nobjects;
-    struct pp_pool_lease *leases;   /* maxleases entries, owned by the caller */
-    uint32_t nleases, maxleases;
+    /* One entry per guest page of [base, base + entries pages), owned by the caller:
+     * 0, or 1 + object * PP_POOL_MAX_OBJECT_PAGES + the object's page backing it. */
+    uint32_t *where;
+    uintptr_t base;
+    uint64_t entries;
     /* Counters for the log. */
     uint64_t live, stale, served, served_bytes, released_bytes, detaches, detached_bytes;
     uint64_t resets, retired, refused, unmatched_bytes;
     uint64_t reuses, zeroed_bytes;   /* takes with stale pages, and those pages' bytes */
 };
 
-/* The leases a pool of `bytes` can need: each is at least one page and no two
- * share a pool byte, so this bound also covers splits. */
-uint64_t pp_pool_max_leases(uint64_t bytes, uint64_t page);
+/* The entries of the guest page table for guest [base, end). */
+uint64_t pp_pool_map_entries(uintptr_t base, uintptr_t end, uint64_t page);
 
-/* Sets up p over `leases` (pp_pool_max_leases entries); objects are added by pp_pool_add. */
-void pp_pool_init(struct pp_pool *p, uint64_t page, struct pp_pool_lease *leases, uint32_t maxleases);
+/* Sets up p over `where` (pp_pool_map_entries entries, zeroed) for guest pages from
+ * base; objects are added by pp_pool_add. */
+void pp_pool_init(struct pp_pool *p, uint64_t page, uint32_t *where, uintptr_t base, uint64_t entries);
 /* Adds an object of `size` bytes (at most PP_POOL_MAX_OBJECT_PAGES pages); returns
  * its index, or -1 when full, too large or misaligned. Its pages start zero. */
 int pp_pool_add(struct pp_pool *p, uint64_t size);
 
 /* Leases len bytes for guest [lo, lo + len) from the smallest free run that
- * fits (lowest object and offset on a tie). Returns 0 and the object and
- * offset, or -1 (counted as refused) when nothing fits or the request is
- * misaligned. The take's stale pages must be zeroed before Wine uses it. */
+ * fits (lowest object and offset on a tie; the first exact fit ends the
+ * search). Returns 0 and the object and offset, or -1 (counted as refused)
+ * when nothing fits, or the request is misaligned, outside the table or
+ * overlaps a guest page already leased. The take's stale pages must be zeroed
+ * before Wine uses it. */
 int pp_pool_take(struct pp_pool *p, uintptr_t lo, uint64_t len, uint32_t *object, uint64_t *offset);
 /* The first run of stale pages of object in [*at, end): returns its length
  * and moves *at to its start, or returns 0 when there is none. */
 uint64_t pp_pool_next_stale(const struct pp_pool *p, uint32_t object, uint64_t *at, uint64_t end);
 /* The caller zeroed every stale page of the take at offset, len bytes. */
 void pp_pool_zeroed(struct pp_pool *p, uint32_t object, uint64_t offset, uint64_t len);
-/* Undoes the last pp_pool_take for lo (its mapping failed; nothing was zeroed). */
-void pp_pool_untake(struct pp_pool *p, uintptr_t lo);
+/* Undoes the pp_pool_take of guest [lo, lo + len) (its mapping failed; nothing was zeroed). */
+void pp_pool_untake(struct pp_pool *p, uintptr_t lo, uint64_t len);
+/* The object and offset backing guest page va: 0, or -1 when no lease covers it. */
+int pp_pool_lookup(const struct pp_pool *p, uintptr_t va, uint32_t *object, uint64_t *offset);
 
 /* Wine no longer uses guest [lo, hi) (unmap, decommit, or a detach to
- * ordinary memory when `detached`). Trims every lease it overlaps; the freed
+ * ordinary memory when `detached`). Frees every leased page in it; the freed
  * pages become stale. Writes the objects whose last lease went to emptied[]
  * (at most PP_POOL_MAX_OBJECTS) and returns how many: each awaits a purge and
  * pp_pool_reset. Bytes of [lo, hi) that no lease covers are counted in
