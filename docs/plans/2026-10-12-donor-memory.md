@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** step 2 done 2026-10-14 for entitled builds: two donors gave 6400 MiB, verified; physical RAM, not the app's limit, is the wall ([evidence](../evidence/2026-10-14-donor-memory-scale.md)); step 1 done 2026-10-14: H1 passed for both variants at 2048 and 4096 MiB ([evidence](../evidence/2026-10-14-donor-memory.md)).
+**Date:** 2026-10-12. **Status:** steps 1 and 2 done 2026-10-14; step 3 waits for the owner's go-ahead.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `9552b8b` (IPA `fc107a8d…`, step 2).
@@ -12,15 +12,31 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 `anthropic/claude-sonnet-5-5` (medium). Reports go to
 `.work/agent-notes/donor-memory/reports/`.
 
-- **Now:** step 1 is done; H1 passed for both variants at 2048 and 4096 MiB on IPA `19e10116…` ([evidence](../evidence/2026-10-14-donor-memory.md)).
-- **Done:** step 2 (entitled) on IPA `fc107a8d…`: 6400 MiB from two donors verified, the phone's free RAM is the wall ([evidence](../evidence/2026-10-14-donor-memory-scale.md)).
+- **Step 1 done** (`0534342`, `bf013e7`; IPA `19e10116…`): H1 passed for
+  both variants at 2048 and 4096 MiB
+  ([evidence](../evidence/2026-10-14-donor-memory.md)).
+- **Step 2 done, entitled only** (`9552b8b`, `35af59b`; IPA `fc107a8d…`): two
+  fresh donors gave 6400 MiB (purgeable), verified at 60 s; the app's
+  `os_proc_available_memory` stayed about 8.1 GiB, but with the pool held the
+  phone could give only 0–768 MiB more ordinary memory before
+  `kern.memorystatus_level` fell under 15 %. **Physical RAM, not the
+  per-process limit, is then the wall.** A 60 s background trip kept the app
+  and every byte of a 6 GiB pool; right after it the app's available memory
+  read 6092 MiB instead of 8140 (one sample, unexplained)
+  ([evidence](../evidence/2026-10-14-donor-memory-scale.md)). The writer
+  recommends option (a) for step 3: map only committed ranges, size the pool
+  from `memorystatus_level`.
 - **Settled:** the owner chose no unentitled research IPA for step 2; that
-  part of step 2 is deferred, not done.
-- **Queue:** steps 3–5 in order, after step 2's result.
-- **Phone (2026-10-14):** IPA `19e10116…` installed (dev), battery 58 % on
-  power, 3.9 GB free, unattended off. Hollow Knight result filed on PLA-42.
+  part is deferred, not done.
+- **Now:** nothing running. Step 3 waits for the owner, because step 2 shows
+  the gain on an entitled phone is bounded by free physical RAM.
+- **Queue:** steps 3–5 in order if the owner continues.
+- **Phone (2026-10-14):** dev IPA `fc107a8d…` installed, battery 79 % on
+  power, 3.8 GB storage free, unattended off. Hollow Knight results filed on
+  PLA-42.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
-  the stopped first writer's partial report; step1-finish-writer.md).
+  the stopped first writer's partial report; step1-finish-writer.md,
+  step2-writer.md).
 
 ## Why
 
@@ -227,6 +243,5 @@ AAA game's memory.
 
 ## Not done
 
-As of this writing, nothing has been built or run on the phone since the
-rebase. The app's build records (`app/artifacts.tsv`) are main's and change on
-the next build.
+Steps 3–5, and the unentitled part of step 2. Nothing from this branch is on
+`main`.
