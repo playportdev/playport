@@ -1,0 +1,323 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 14 Oct 2026 18:00:00 +0200
+Subject: [PATCH] virtual: count guest memory by class while the host backs
+ some
+
+While the host backs guest memory (the dev donor pool behind 0148), log every 30 s, under virtual_mutex, what the guest's committed memory is made of: each view's committed runs by protection, size and whether the view is only partly committed, inside or outside the 0148 window, image, section and system views, each with its committed size and its footprint (host pages mincore reports in core or compressed, the host-backed ones apart). Also log every guest commit's bytes by what 0148 made of them (backed, refused, under 1 MiB, not RW, write-watched, already partly committed, ...). The warmer's address-space walk then runs every 30 s too and splits each band's dirty pages in shared objects, and its footprint line adds the graphics and purgeable ledgers.
+
+Nothing changes what Wine maps: the commit path still asks the swap tier first and then 0148, as before.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-14-donor-pool-reuse.md
+Offered-upstream: no; optional iOS host experiment
+---
+ build/ntdll-unix/virtual_ios.c | 212 ++++++++++++++++++++++++++++++---
+ 1 file changed, 193 insertions(+), 19 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 45a3439..b3e389b 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -898,13 +898,20 @@ static void *ios_pool_warmer_thread( void *arg )
+                             if (kr[i] == KERN_SUCCESS) vm_deallocate( mach_task_self(), a[i], 0x19000 );
+                         }
+                     }
++                    /* Playport: graphics= is Metal's charge (the graphics ledger tag),
++                     * purgeable= the app's own non-volatile purgeable memory. */
+                     dprintf(2, "[footprint] rev=ml358 phys=%llu MB (peak %llu) internal=%llu MB "
+-                            "compressed=%llu MB external=%llu MB reusable=%llu MB (cycle=%u)\n",
++                            "compressed=%llu MB external=%llu MB reusable=%llu MB graphics=%llu MB "
++                            "purgeable=%llu MB (cycle=%u)\n",
+                             fp_mb, peak_mb,
+                             (unsigned long long)vmi.internal >> 20,
+                             (unsigned long long)vmi.compressed >> 20,
+                             (unsigned long long)vmi.external >> 20,
+-                            (unsigned long long)vmi.reusable >> 20, cycle);
++                            (unsigned long long)vmi.reusable >> 20,
++                            (unsigned long long)(vmi.ledger_tag_graphics_footprint +
++                                                 vmi.ledger_tag_graphics_footprint_compressed) >> 20,
++                            (unsigned long long)(vmi.ledger_purgeable_nonvolatile +
++                                                 vmi.ledger_purgeable_novolatile_compressed) >> 20, cycle);
+                 }
+             }
+             /* ml566: WHEN does the host malloc zone become corrupt?
+@@ -963,8 +970,11 @@ static void *ios_pool_warmer_thread( void *arg )
+              * charge private-dirty+swapped pages to each region; the base
+              * addresses identify the owner offline (pool = RX base, FEX bands,
+              * PA pools, guest heap). Cycle 2, then every IOS_WARMER_CENSUS_CYCLES
+-             * cycles, because the walk is tens of thousands of kernel calls. */
+-            if (cycle == 2 || (cycle % IOS_WARMER_CENSUS_CYCLES) == 0)
++             * cycles, because the walk is tens of thousands of kernel calls.
++             * Playport: every 15th cycle (about 30 s) while the host backs guest
++             * memory (the dev donor pool, ios_guest_back), beside [guest-census]. */
++            extern int ios_guest_census_on;
++            if (cycle == 2 || (cycle % IOS_WARMER_CENSUS_CYCLES) == 0 || (ios_guest_census_on && !(cycle % 15)))
+             {
+                 struct { unsigned long long base, size, dirty, res, swap; unsigned tag; } top[12];
+                 unsigned long long dirty_by_tag[256];
+@@ -988,6 +998,9 @@ static void *ios_pool_warmer_thread( void *arg )
+                 static const char *band_name[B_MAX] =
+                     { "poolRX", "poolRW", "hostlow", "guest", "pa", "fex", "other" };
+                 unsigned long long band_dirty[B_MAX], band_res[B_MAX];
++                /* Playport: the part of band_dirty in shared objects (the donor pool's
++                 * mappings, owned by an ended process, are among them). */
++                unsigned long long band_shared[B_MAX];
+                 /* ml1074: the four dirtiest regions of the two bands nobody can name
+                  * from the totals (hostlow = everything below 64 GB that is not the
+                  * pool; pa = 0x74..0x7c). The overall top-12 is always the game's own
+@@ -1020,6 +1033,7 @@ static void *ios_pool_warmer_thread( void *arg )
+                 memset( swap_by_tag, 0, sizeof(swap_by_tag) );
+                 memset( band_dirty, 0, sizeof(band_dirty) );
+                 memset( band_res, 0, sizeof(band_res) );
++                memset( band_shared, 0, sizeof(band_shared) );
+                 for (;;)
+                 {
+                     vm_region_submap_info_data_64_t info;
+@@ -1050,6 +1064,8 @@ static void *ios_pool_warmer_thread( void *arg )
+                         else b = B_OTHER;
+                         band_dirty[b] += d;
+                         band_res[b] += (unsigned long long)info.pages_resident << 14;
++                        if (info.share_mode == SM_SHARED || info.share_mode == SM_TRUESHARED ||
++                            info.share_mode == SM_SHARED_ALIASED) band_shared[b] += d;
+                         if (b == B_HOST_LOW || b == B_PA)
+                         {
+                             int w = 0, q;
+@@ -1142,6 +1158,9 @@ static void *ios_pool_warmer_thread( void *arg )
+                     dprintf(2, " %s=%llu/%llu", band_name[ti],
+                             band_dirty[ti] >> 20, band_res[ti] >> 20);
+                 dprintf(2, "\n");
++                dprintf(2, "[phys-map] shared bands (dirty MB in shared objects):");
++                for (ti = 0; ti < B_MAX; ti++) dprintf(2, " %s=%llu", band_name[ti], band_shared[ti] >> 20);
++                dprintf(2, "\n");
+                 for (ti = 0; ti < B_MAX; ti++)
+                 {
+                     int q;
+@@ -8444,7 +8463,7 @@ static inline UINT64 maskbits( size_t idx )
+  *           set_arm64ec_range
+  */
+ static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot );  /* fwd-decl */
+-static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct file_view *view );
++static void ios_guest_commit( void *base, size_t size, unsigned int vprot, struct file_view *view, int any_committed );
+ static int ios_guest_release_range( void *base, size_t size, int copy_back );
+ static void ios_swap_release_range( void *base, size_t size, int copy_back );   /* ml1077 fwd-decls */
+ static void ios_swap_init( void );
+@@ -13203,14 +13222,41 @@ static int ios_swap_eligible( const void *base, size_t size, unsigned int vprot,
+ #include "pp_guest_ranges.h"
+ static struct pp_guest_range ios_guest_ext[PP_GUEST_MAX_RANGES];
+ static unsigned ios_guest_n;
++/* Playport (diagnostics, dev donor pool): every guest commit's bytes by what
++ * ios_guest_back made of it, checked in this order: no host or forced exec
++ * ("off"), outside [0x7000000000, 0x7c00000000) ("window"), not a plain
++ * VirtualAlloc view ("view"), write-watched ("watch"), not RW ("prot"), part
++ * of the range already committed ("recommit"), the swap tier ("swap"), under
++ * 1 MiB ("small"); then backed, refused by the host, or the host-page
++ * remainder at either end ("edge"). */
++enum { GN_BACKED, GN_REFUSED, GN_EDGE, GN_SMALL, GN_PROT, GN_WATCH, GN_VIEW, GN_WINDOW, GN_RECOMMIT, GN_SWAP, GN_OFF, GN_MAX };
++static const char *const ios_guest_note_name[GN_MAX] =
++    { "backed", "refused", "edge", "small", "prot", "watch", "view", "window", "recommit", "swap", "off" };
++static unsigned long long ios_guest_note_bytes[GN_MAX], ios_guest_note_count[GN_MAX];
++int ios_guest_census_on;   /* the host has backed a range: [guest-census] and the warmer's [phys-map] every 30 s */
++static void ios_guest_note( int reason, size_t bytes )
++{
++    ios_guest_note_bytes[reason] += bytes;
++    ios_guest_note_count[reason]++;
++}
++static int ios_guest_reason( void *base, size_t size, unsigned int vprot, struct file_view *view )
++{
++    uintptr_t b = (uintptr_t)base;
++    if (!playport_guest_memory_backing || force_exec_prot || host_page_size < PP_GUEST_PAGE) return GN_OFF;
++    if (b < 0x7000000000ULL || b >= 0x7c00000000ULL || size > 0x7c00000000ULL - b) return GN_WINDOW;
++    if (!view || !is_view_valloc( view ) || (view->protect & (SEC_FILE | SEC_IMAGE | SEC_RESERVE | SEC_NOCACHE | VPROT_SYSTEM))) return GN_VIEW;
++    if (vprot & VPROT_WRITEWATCH) return GN_WATCH;
++    if (!(vprot & VPROT_WRITE) || (vprot & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD))) return GN_PROT;
++    if (size < (1u << 20)) return GN_SMALL;
++    return GN_BACKED;
++}
+ static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct file_view *view )
+ {
+     uintptr_t b = (uintptr_t)base, lo, hi;
++    size_t backed = 0;
++    int reason = ios_guest_reason( base, size, vprot, view );
+     static unsigned backs;
+-    if (!playport_guest_memory_backing || force_exec_prot || size < (1u << 20) || host_page_size < PP_GUEST_PAGE) return;
+-    if (!(vprot & VPROT_WRITE) || (vprot & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD | VPROT_WRITEWATCH))) return;
+-    if (!view || !is_view_valloc( view ) || (view->protect & (SEC_FILE | SEC_IMAGE | SEC_RESERVE | SEC_NOCACHE | VPROT_SYSTEM))) return;
+-    if (b < 0x7000000000ULL || b >= 0x7c00000000ULL || size > 0x7c00000000ULL - b) return;
++    if (reason != GN_BACKED) { ios_guest_note( reason, size ); return; }
+     lo = (b + host_page_mask) & ~(uintptr_t)host_page_mask;
+     hi = (b + size) & ~(uintptr_t)host_page_mask;
+     while (lo < hi && ios_guest_n < PP_GUEST_MAX_RANGES)
+@@ -13219,10 +13265,146 @@ static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct
+         if (len > (64u << 20)) len = 64u << 20;
+         if (!playport_guest_memory_backing( (void *)lo, len )) break;
+         ios_guest_ext[ios_guest_n++] = (struct pp_guest_range){lo, lo + len};
++        ios_guest_census_on = 1;
+         if (++backs <= 16 || !(backs % 64))
+             dprintf( 2, "[helper-guest] fresh %p+0x%zx, %u ranges\n", (void *)lo, len, ios_guest_n );
+         lo += len;
++        backed += len;
++    }
++    if (backed) ios_guest_note( GN_BACKED, backed );
++    if (lo < hi) ios_guest_note( GN_REFUSED, hi - lo );
++    if (size - backed - (lo < hi ? hi - lo : 0)) ios_guest_note( GN_EDGE, size - backed - (lo < hi ? hi - lo : 0) );
++}
++
++/* Playport (diagnostics, dev donor pool): what the guest's memory is made of,
++ * every 30 s while the host backs guest memory, under virtual_mutex. Each view's
++ * committed runs (pages with one protection) are sorted into classes, with
++ * their committed size and their footprint: host pages mincore reports in
++ * core or compressed, each host page counted once, the host-backed ones in
++ * "pool" only. A run is "part" when its view also has other pages. */
++enum { GC_POOL, GC_RW_S, GC_RW_M, GC_RW_L, GC_RW_S_PART, GC_RW_M_PART, GC_RW_L_PART, GC_WATCH, GC_EXEC, GC_OTHER,
++       GC_OUT_RW, GC_OUT_EXEC, GC_OUT_OTHER, GC_IMAGE, GC_SECTION, GC_SYSTEM, GC_MAX };
++static const char *const ios_guest_class_name[GC_MAX] =
++    { "pool", "rw<64K", "rw<1M", "rw>=1M", "rw<64K-part", "rw<1M-part", "rw>=1M-part", "watch", "exec", "other",
++      "out-rw", "out-exec", "out-other", "image", "section", "system" };
++static struct pp_guest_range ios_guest_sorted[PP_GUEST_MAX_RANGES];
++static int ios_guest_range_cmp( const void *a, const void *b )
++{
++    uintptr_t x = ((const struct pp_guest_range *)a)->lo, y = ((const struct pp_guest_range *)b)->lo;
++    return x < y ? -1 : x > y;
++}
++static int ios_guest_page_backed( uintptr_t hp, unsigned n )
++{
++    unsigned lo = 0, hi = n;
++    while (lo < hi)
++    {
++        unsigned mid = lo + (hi - lo) / 2;
++        if (ios_guest_sorted[mid].hi <= hp) lo = mid + 1;
++        else hi = mid;
+     }
++    return lo < n && ios_guest_sorted[lo].lo <= hp;
++}
++static void ios_guest_census_run( unsigned long long *c, unsigned long long *f, unsigned long long *pool_f,
++                                  int cls, char *p, size_t len, unsigned nsorted, uintptr_t *last_hp )
++{
++    static char vec[4096];
++    uintptr_t hp = (uintptr_t)p & ~(uintptr_t)host_page_mask, end = (uintptr_t)p + len;
++    c[cls] += len;
++    if (hp <= *last_hp && *last_hp != ~(uintptr_t)0) hp = *last_hp + host_page_size;
++    while (hp < end)
++    {
++        size_t pages = (end - hp + host_page_mask) / host_page_size, i;
++        if (pages > sizeof(vec)) pages = sizeof(vec);
++        if (mincore( (void *)hp, pages * host_page_size, vec )) memset( vec, 0, pages );
++        for (i = 0; i < pages; i++, hp += host_page_size)
++        {
++            if (!(vec[i] & (MINCORE_INCORE | MINCORE_PAGED_OUT))) continue;
++            if (cls != GC_IMAGE && cls != GC_SECTION && cls != GC_SYSTEM && ios_guest_page_backed( hp, nsorted ))
++                *pool_f += host_page_size;
++            else if (vec[i] & (MINCORE_ANONYMOUS | MINCORE_COPIED | MINCORE_PAGED_OUT)) f[cls] += host_page_size;
++        }
++        *last_hp = hp - host_page_size;
++    }
++}
++static void ios_guest_census( void )
++{
++    static struct timespec last;
++    struct timespec now, t1;
++    unsigned long long c[GC_MAX] = {0}, f[GC_MAX] = {0}, pool_f = 0, backed = 0;
++    uintptr_t last_hp = ~(uintptr_t)0;
++    struct file_view *view;
++    unsigned i, views = 0;
++    char line[1400];
++    int n;
++    if (!ios_guest_census_on) return;
++    clock_gettime( CLOCK_MONOTONIC, &now );
++    if (last.tv_sec && now.tv_sec - last.tv_sec < 30) return;
++    last = now;
++    memcpy( ios_guest_sorted, ios_guest_ext, ios_guest_n * sizeof(*ios_guest_ext) );
++    qsort( ios_guest_sorted, ios_guest_n, sizeof(*ios_guest_sorted), ios_guest_range_cmp );
++    for (i = 0; i < ios_guest_n; i++) backed += ios_guest_sorted[i].hi - ios_guest_sorted[i].lo;
++    WINE_RB_FOR_EACH_ENTRY( view, &views_tree, struct file_view, entry )
++    {
++        char *p = view->base, *end = (char *)view->base + view->size;
++        uintptr_t vb = (uintptr_t)view->base;
++        int in = vb >= 0x7000000000ULL && vb < 0x7c00000000ULL;
++        views++;
++        if (view->protect & VPROT_SYSTEM)
++        {
++            ios_guest_census_run( c, f, &pool_f, GC_SYSTEM, p, view->size, ios_guest_n, &last_hp );
++            continue;
++        }
++        while (p < end)
++        {
++            BYTE vp;
++            SIZE_T len = get_vprot_range_size( p, end - p, VPROT_COMMITTED | VPROT_READ | VPROT_WRITE | VPROT_EXEC |
++                                               VPROT_WRITECOPY | VPROT_GUARD | VPROT_WRITEWATCH, &vp );
++            int cls;
++            if (!len) break;
++            if (vp & VPROT_COMMITTED)
++            {
++                int rw = (vp & (VPROT_READ | VPROT_WRITE | VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD)) == (VPROT_READ | VPROT_WRITE);
++                if (view->protect & SEC_IMAGE) cls = GC_IMAGE;
++                else if (!is_view_valloc( view )) cls = GC_SECTION;
++                else if (!in) cls = (vp & VPROT_EXEC) ? GC_OUT_EXEC : rw ? GC_OUT_RW : GC_OUT_OTHER;
++                else if (vp & VPROT_WRITEWATCH) cls = GC_WATCH;
++                else if (vp & VPROT_EXEC) cls = GC_EXEC;
++                else if (!rw) cls = GC_OTHER;
++                else
++                {
++                    cls = len < (64u << 10) ? GC_RW_S : len < (1u << 20) ? GC_RW_M : GC_RW_L;
++                    if (len != view->size) cls += GC_RW_S_PART - GC_RW_S;
++                }
++                ios_guest_census_run( c, f, &pool_f, cls, p, len, ios_guest_n, &last_hp );
++            }
++            p += len;
++        }
++    }
++    c[GC_POOL] = backed;
++    f[GC_POOL] = pool_f;
++    clock_gettime( CLOCK_MONOTONIC, &t1 );
++    n = snprintf( line, sizeof(line), "[guest-census] views=%u ranges=%u took=%ld ms (MiB committed/footprint):", views,
++                  ios_guest_n, (long)((t1.tv_sec - now.tv_sec) * 1000 + (t1.tv_nsec - now.tv_nsec) / 1000000) );
++    for (i = 0; i < GC_MAX && n < (int)sizeof(line) - 48; i++)
++        n += snprintf( line + n, sizeof(line) - n, " %s=%llu/%llu", ios_guest_class_name[i], c[i] >> 20, f[i] >> 20 );
++    dprintf( 2, "%s\n", line );
++    n = snprintf( line, sizeof(line), "[guest-census] commits since start (MiB/count):" );
++    for (i = 0; i < GN_MAX && n < (int)sizeof(line) - 48; i++)
++        n += snprintf( line + n, sizeof(line) - n, " %s=%llu/%llu", ios_guest_note_name[i],
++                       ios_guest_note_bytes[i] >> 20, ios_guest_note_count[i] );
++    dprintf( 2, "%s\n", line );
++}
++/* Every guest commit, under virtual_mutex: the swap tier first (ml1077), then the host. */
++static void ios_guest_commit( void *base, size_t size, unsigned int vprot, struct file_view *view, int any_committed )
++{
++    if (any_committed) ios_guest_note( GN_RECOMMIT, size );
++    else if (ios_swap_eligible( base, size, vprot, view ))
++    {
++        ios_swap_back( base, size, vprot );
++        ios_guest_note( GN_SWAP, size );
++    }
++    else ios_guest_back( base, size, vprot, view );
++    ios_guest_census();
+ }
+ static int ios_guest_release_range( void *base, size_t size, int copy_back )
+ {
+@@ -18584,11 +18766,7 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+                 base = view->base;
+                 if (vprot & VPROT_EXEC || force_exec_prot) mprotect_range( base, size, 0, 0 );
+                 ios_swap_init();
+-                if (type & MEM_COMMIT)
+-                {
+-                    if (ios_swap_eligible( base, size, vprot, view )) ios_swap_back( base, size, vprot );
+-                    else ios_guest_back( base, size, vprot, view );
+-                }
++                if (type & MEM_COMMIT) ios_guest_commit( base, size, vprot, view, 0 );
+ 
+                 /* iOS-Madeira ml308 (task #54): DETECT VA HANDED OUT TWICE.
+                  *
+@@ -18684,11 +18862,7 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+         {
+             unsigned int sv = 0;
+             ios_swap_init();
+-            if (!any_committed && !get_vprot_flags( protect, &sv, 0 ))
+-            {
+-                if (ios_swap_eligible( base, size, sv, view )) ios_swap_back( base, size, sv );
+-                else ios_guest_back( base, size, sv, view );
+-            }
++            if (!get_vprot_flags( protect, &sv, 0 )) ios_guest_commit( base, size, sv, view, any_committed );
+         }
+         if (!status && view && (view->protect & SEC_RESERVE))
+         {
