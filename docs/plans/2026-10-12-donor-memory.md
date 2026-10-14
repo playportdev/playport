@@ -1,9 +1,9 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1 and 2 done 2026-10-14; step 3 in progress (owner go-ahead 2026-10-14).
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
-not merged. Last built at `9552b8b` (IPA `fc107a8d…`, step 2).
+not merged. Last built at `25f484d` (IPA `d8226b20…`, step 3).
 
 ## Progress
 
@@ -28,10 +28,9 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   from `memorystatus_level`.
 - **Settled:** the owner chose no unentitled research IPA for step 2; that
   part is deferred, not done.
-- **Now:** step 3 (owner go-ahead 2026-10-14, option (a) recommended), one
-  writer child; its run id is in `.work/agent-notes/donor-memory/queue.md`.
-  In step 3 below, "0127" means madeira-unix **0148** and "0126" means **0147**
-  (renumbered at the rebase).
+- **Step 3 done** (`25f484d`; IPA `d8226b20…`): a 4 GiB pool at Play from
+  one donor served Hollow Knight's heap; first frame +9.98 s against
+  +10.24 s off ([evidence](../evidence/2026-10-14-donor-pool-at-play.md)).
 - **Queue:** steps 4 and 5 after step 3.
 - **Phone (2026-10-14):** dev IPA `fc107a8d…` installed, battery 79 % on
   power, 3.8 GB storage free, unattended off. Hollow Knight results filed on
@@ -99,7 +98,8 @@ included. Only system-wide pressure still applies.
   address), page counts, footprint snapshot, fill/verify.
 - The probe: Settings › Developer › Probes, `probe:memory-64|2048|4096`.
 - The JIT helper's `memoryAllocate` / `memoryReport` / `memoryRelease`.
-- madeira-unix **0147**: a hook for FEX's data band.
+- madeira-unix **0147**, a hook for FEX's data band, was removed in step 3:
+  it had no release notification.
 - madeira-unix **0148**: a hook for fresh RW guest commits of at least 1 MiB
   in `[0x7000000000, 0x7c00000000)`. It records the backed ranges
   (`pp_guest_ranges.h`, host-tested). Before any protection other than plain
@@ -206,6 +206,31 @@ This is the cheapest test, and it decides the plan.
 - **Out of scope:** the JIT pool and executable memory stay ordinary.
 - **Release:** the stubs stay in release. Release behaviour changes only by a
   decision record with the owner's sign-off.
+- **Result (2026-10-14, IPA `d8226b20…`):** done, dev only.
+  - **Setting:** Settings › Developer › Donor pool
+    (`set:donorPoolMB=0|2048|4096|6144`, off by default).
+  - **Option (a):** the app keeps the entries' send rights, and each 0148
+    request is a `vm_map` FIXED|OVERWRITE of an unused range of one object at
+    Wine's address.
+  - **Cap:** the pool is capped at (jetsam level − 15 %) × RAM.
+  - **Zero on reuse:** an object is handed out once from its start upwards
+    and purged whole (EMPTY, then non-volatile) when its last lease is
+    released. On the phone the purge took 8.4 ms per touched 256 MiB, freed
+    the pages and left the charge with no process. A memset took 12.1 ms but
+    left the pages resident. The bookkeeping is host-tested
+    (`app/tests/guest_pool_test.c`).
+  - **0148:** it reports `(address, size, detached)`, and its table is
+    bounded by 8 GiB on 16 KiB pages. 0147 is removed: it had no release
+    notification.
+  - **Hollow Knight with 4 GiB:**
+    - one donor, installed in 0.72 s;
+    - by first frame + 8 s, 56 requests (400 MiB) were served, 286 MiB of
+      them resident, 0 detaches, 0 purges;
+    - the app's footprint at the end was 343 MB lower than with the pool
+      off;
+    - first frame at +9.98 s with the pool, +10.24 s without.
+  - **Not yet exercised on the phone:** detaches, purges and reuse.
+  [Evidence](../evidence/2026-10-14-donor-pool-at-play.md).
 
 ### 4. Does it help a game?
 
@@ -245,5 +270,5 @@ AAA game's memory.
 
 ## Not done
 
-Steps 3–5, and the unentitled part of step 2. Nothing from this branch is on
+Steps 4 and 5, and the unentitled part of step 2. Nothing from this branch is on
 `main`.
