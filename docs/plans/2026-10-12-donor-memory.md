@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 waits for the owner (Kingdom Come must be on the phone).
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4 in progress (owner: Kingdom Come is on the phone).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `25f484d` (IPA `d8226b20…`, step 3).
@@ -31,7 +31,8 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 - **Step 3 done** (`25f484d`; IPA `d8226b20…`): a 4 GiB pool at Play from
   one donor served Hollow Knight's heap; first frame +9.98 s against
   +10.24 s off ([evidence](../evidence/2026-10-14-donor-pool-at-play.md)).
-- **Now:** nothing running; the phone is free.
+- **Now:** step 4 (Kingdom Come A/B) in a writer child; its run id is in
+  `.work/agent-notes/donor-memory/queue.md`.
 - **Queue:** step 4 next. Before its session: a periodic `donor-pool: stats`
   log line (every 30 s), since stats are logged only at first frame and +8 s
   today. Then one locked session: Kingdom Come (379430, PLA-49) with the pool
