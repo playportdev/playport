@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); the rest of step 4 waits for the owner.
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); pool reuse within an object in progress.
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `9cbc873` (IPA `195d5698…`, step 4).
@@ -35,7 +35,8 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   Kingdom Come crashed in the Steam API emulator before its first frame with the pool off and on
   ([evidence](../evidence/2026-10-14-donor-pool-kcd.md)).
 - **PLA-350 fixed** on `dev/pla-350-kcd-steam-api` (`4af9e3b`, from main;
-  In Review, **not merged to main**). It is merged here as `3db126b`.
+  merged to main as `fd624c3` on 2026-10-14, not pushed). It is merged
+  here as `3db126b`.
   `SteamAPISwap` writes `steam_interfaces.txt` from the game's own steam_api.
 - **Step 4, Kingdom Come pair done 2026-10-14** (`8bb3093`, `6e586c0`; IPA
   `f1f024ae…`; [evidence](../evidence/2026-10-14-donor-pool-kcd.md)): peak
@@ -45,8 +46,9 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   the bump allocator reuses an object only once all of it is free. The system
   also compressed up to 2.6 GiB of pool pages. One pair only, with a thermal
   difference.
-- **Now:** nothing running; the phone is free. Waiting for the owner.
-- **Queue (proposed):**
+- **Now:** item 1 below (owner, 2026-10-14) in a writer child; its run id
+  is in the build-area queue.
+- **Queue:**
   1. Reuse within an object: free ranges zeroed and handed out again, so the
      pool keeps serving. Then rerun the KCD pair with
      `.work/agent-notes/donor-memory/runs/step4-session.sh`.
