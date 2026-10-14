@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 14 Oct 2026 10:58:00 +0200
+Subject: [PATCH] ntdll: reserve a WoW64 window in a fixed slot first
+
+The FEX disk cache keys a 32-bit process's code on its window's host
+base (fex 0043): every guest memory access carries the base as a
+constant. The window was a bottom-up first fit right after Wine's
+furniture, so furniture that landed there before a launcher's child
+moved the child's window (Assassin's Creed's game, 0x7138950000 then
+0x7139b70000), and the moved process started with a cold cache.
+
+A window now first tries fixed slots (wow64_slots.h): 4 GB apart,
+counted down from the furniture ceiling below a 1 GB margin left for the
+DLL images Wine places top-down from it. A slot is taken only when no
+Wine view is in it, it is outside CoreAnimation's range and the
+no-clobber map succeeds. With no slot free the window is placed as
+before.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-14-wow64-window-slots.md
+Offered-upstream: no; the WoW64 window exists only on the iOS port
+---
+ build/ntdll-unix/virtual_ios.c | 32 ++++++++++++++++++++++-
+ build/ntdll-unix/wow64_slots.h | 48 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 79 insertions(+), 1 deletion(-)
+ create mode 100644 build/ntdll-unix/wow64_slots.h
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 685f656..5626260 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -116,6 +116,7 @@ extern kern_return_t vm_protect(mach_port_t target_task, vm_address_t address,
+ #include "wine/rbtree.h"
+ #include "unix_private.h"
+ #include "wow64_window.h"
++#include "wow64_slots.h"
+ #define VPROT_WOW64_IMAGE 0x2000 /* i386 bytes, never native/pool executable */
+ #define VPROT_WOW64_VM 0x4000 /* anonymous i386 storage, logical EXEC only */
+ #define VPROT_WOW64_DATA 0x8000 /* a data section's view (file or pagefile backed) */
+@@ -16272,12 +16273,31 @@ static uint32_t ios_wow64_alias_session_view( uintptr_t window, const void *host
+     return guest;
+ }
+ 
++/* PLA-349: reserve one fixed window slot (wow64_slots.h) if it is free: no
++ * Wine view in it, outside CoreAnimation's range, and the no-clobber map
++ * succeeds (nothing of the host's there either). virtual_mutex held. */
++static int ios_wow64_try_slot( uintptr_t base, void *ctx )
++{
++    struct file_view **view = ctx;
++
++    if (find_view_range( (void *)base, IOS_WOW64_WINDOW_SIZE )) return 0;
++    if (ios_in_layerkit( base, IOS_WOW64_WINDOW_SIZE )) return 0;
++    if (anon_mmap_tryfixed( (void *)base, IOS_WOW64_WINDOW_SIZE, PROT_NONE, 0 ) == MAP_FAILED) return 0;
++    if (create_view( view, (void *)base, IOS_WOW64_WINDOW_SIZE, 0 ))
++    {
++        unmap_area( (void *)base, IOS_WOW64_WINDOW_SIZE );
++        return 0;
++    }
++    return 1;
++}
++
+ static NTSTATUS ios_wow64_reserve_window( void *owner )
+ {
+     unsigned int i, slot = IOS_WOW64_WINDOWS_MAX;
+     NTSTATUS status = STATUS_NO_MEMORY;
+     sigset_t sigset;
+     struct file_view *view;
++    uintptr_t fixed;
+ 
+     if (!owner) return STATUS_NOT_SUPPORTED; /* no process identity, no shared fallback */
+     ios_wow64_reap_threads( NULL );  /* a dead owner's last threads release its window */
+@@ -16290,7 +16310,17 @@ static NTSTATUS ios_wow64_reserve_window( void *owner )
+     if (slot == IOS_WOW64_WINDOWS_MAX) goto done;
+ 
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+-    status = map_view( &view, NULL, IOS_WOW64_WINDOW_SIZE, 0, 0, 0, 0, 0 );
++    if ((fixed = ios_wow64_reserve_slot( ios_furniture_ceiling, ios_usable_va_floor,
++                                         ios_wow64_try_slot, &view )))
++    {
++        status = STATUS_SUCCESS;
++        dprintf( 2, "[wow64-window] fixed slot %#llx\n", (unsigned long long)fixed );
++    }
++    else
++    {
++        status = map_view( &view, NULL, IOS_WOW64_WINDOW_SIZE, 0, 0, 0, 0, 0 );
++        dprintf( 2, "[wow64-window] no fixed slot free: first fit %s\n", status ? "failed" : "placed" );
++    }
+     if (!status && !ios_wow64_valid_base( (uintptr_t)view->base ))
+     {
+         delete_view( view );
+diff --git a/build/ntdll-unix/wow64_slots.h b/build/ntdll-unix/wow64_slots.h
+new file mode 100644
+index 0000000..0b69edb
+--- /dev/null
++++ b/build/ntdll-unix/wow64_slots.h
+@@ -0,0 +1,48 @@
++/* Playport's iOS WoW64 window slots (PLA-349).
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * Keep this independent of Wine so the host test uses this exact header.
++ *
++ * The FEX disk cache keys a 32-bit process's code on its window's host base
++ * (fex 0043): every guest memory access carries the base as a constant. A
++ * window that was a first fit after Wine's furniture moved whenever furniture
++ * landed below it first (Assassin's Creed's game, 0x7138950000 then
++ * 0x7139b70000), and the moved process started with a cold cache. So a window
++ * first tries fixed slots: 4 GB apart, counted down from the furniture
++ * ceiling, below a margin left for the DLL images Wine places top-down from
++ * the ceiling. The first process takes the first free slot, a launcher's
++ * child the next, at the same bases every launch.
++ */
++#ifndef IOS_WOW64_SLOTS_H
++#define IOS_WOW64_SLOTS_H
++
++#include <stdint.h>
++#include "wow64_window.h"
++
++/* Room under the ceiling for top-down DLL images (about 50 MB in a run). */
++#define IOS_WOW64_SLOT_MARGIN UINT64_C(0x40000000)
++
++/* Slot k's base, or 0 when it would reach below floor. */
++static inline uintptr_t ios_wow64_slot_base( uintptr_t ceiling, uintptr_t floor, unsigned int k )
++{
++    uint64_t below = IOS_WOW64_SLOT_MARGIN + ((uint64_t)k + 1) * IOS_WOW64_WINDOW_SIZE;
++    uintptr_t base;
++
++    if (k >= 64 || ceiling < below) return 0;
++    base = (ceiling - below) & ~(uintptr_t)(IOS_WOW64_NULL_GUARD - 1);
++    if (base < floor || !ios_wow64_valid_base( base )) return 0;
++    return base;
++}
++
++/* The first slot try_slot reserves, or 0 (no free slot: place it as before). */
++static inline uintptr_t ios_wow64_reserve_slot( uintptr_t ceiling, uintptr_t floor,
++                                                int (*try_slot)( uintptr_t base, void *ctx ), void *ctx )
++{
++    uintptr_t base;
++    unsigned int k;
++
++    for (k = 0; (base = ios_wow64_slot_base( ceiling, floor, k )); k++)
++        if (try_slot( base, ctx )) return base;
++    return 0;
++}
++
++#endif

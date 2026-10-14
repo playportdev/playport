@@ -30,6 +30,8 @@ NET_IMAGE_PATCH = REPO / "patches/madeira-unix/0112-ntdll-map-an-i386-.NET-image
 PROTECT_PATCH = REPO / "patches/madeira-unix/0060-ntdll-protect-owned-WoW64-window-pages-per-Wine-page.patch"
 LOADER_PATCH = REPO / "patches/madeira-unix/0061-ntdll-start-the-WoW64-child-s-native-loader.patch"
 THREADS_PATCH = REPO / "patches/madeira-unix/0073-ntdll-keep-a-WoW64-window-until-its-threads-and-faul.patch"
+SLOTS_HEADER = "build/ntdll-unix/wow64_slots.h"
+SLOTS_PATCH = REPO / "patches/madeira-unix/0146-ntdll-reserve-a-WoW64-window-in-a-fixed-slot-first.patch"
 DC_ATTR_PATCH = REPO / "patches/madeira-unix/0065-ntdll-share-win32u-s-DC_ATTR-arena-with-every-WoW64-.patch"
 SIMD_LANE_PATCH = REPO / "patches/madeira-unix/0070-signal-emulate-LD1-and-ST1-lanes-in-the-low-fault-em.patch"
 GDI32_DC_ATTR_PATCH = REPO / "patches/wine-pe/0019-gdi32-reach-a-native-DC_ATTR-through-the-WoW64-windo.patch"
@@ -469,6 +471,15 @@ def main():
                         "-I", str((root / HEADER).parent),
                         str(REPO / "build/wow64/window_test.c"), "-o", str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
+        # The window's fixed slots (PLA-349).
+        subprocess.run(["git", "-C", tmp, "apply", f"--include={SLOTS_HEADER}",
+                        str(SLOTS_PATCH)], check=True)
+        slots_exe = root / "slots-test"
+        subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "-I", str((root / HEADER).parent),
+                        str(REPO / "build/wow64/slots_test.c"), "-o", str(slots_exe)], check=True)
+        subprocess.run([str(slots_exe)], check=True)
         subprocess.run(["git", "-C", tmp, "apply", f"--include={OWNER_HEADER}",
                         str(OWNER_PATCH)], check=True)
         (root / "owner_api.h").write_text(
