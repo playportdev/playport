@@ -84,19 +84,19 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   mode. Run ids are in the build-area queue.
 - **Queue:**
   1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)).
-  2. [PLA-351](https://linear.app/playportdev/issue/PLA-351): Auto pool
-     sizing per phone RAM, and the helper's own limit.
+  2. **[PLA-351](https://linear.app/playportdev/issue/PLA-351), done 2026-10-14:** Off/Auto sizing from P − L (`da6fe62`, IPA `d2c62e6c…`); on this phone Auto is off at Play (P 4,440, L 8,191); the helper is signed with increased-memory-limit, and its limit is 6,139 MiB ([evidence](../evidence/2026-10-14-donor-pool-auto.md)).
   3. [PLA-352](https://linear.app/playportdev/issue/PLA-352): one memory plan
      for guest RAM and the video budget.
   4. Step 5: GPU buffers in pool memory (stretch).
-- **Phone (2026-10-14, 23:00):** dev IPA `b3cdca61…` installed, battery 40 % on battery,
-  unattended on. KCD and HK are installed; the `protect` probe is not.
+- **Phone (2026-10-14, 23:20):** dev IPA `d2c62e6c…` installed, battery 38 % on battery,
+  unattended on, app killed. The session's `set:donorPoolMB=auto` is undone at the app's
+  next launch outside a session (Off). KCD and HK are installed; the `protect` probe is not.
   The phone was re-registered with the free team once (DEVICE.md procedure,
   owner-approved). Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
   step2-writer.md, step3-writer.md, step4-writer.md,
-  pla350-writer.md, reuse-writer.md, widen-writer.md, research-device-ram.md,
+  pla350-writer.md, reuse-writer.md, widen-writer.md, pla351-writer.md, research-device-ram.md,
   research-gpu-reporting.md; MeloNX notes in
   `melonx-2.7-notes.md`).
 
