@@ -38,8 +38,9 @@ public protocol JITHelping {
     /// hold: the helper also takes its own xpc transaction and ignores SIGTERM
     /// (logging it), to see whether that keeps it alive once the host is gone.
     func lifetimeProbe(intervalMs: Int, capS: Int, hold: Bool, pairingFile: Data, reply: @escaping (Int32) -> Void)
-    /// A bounded non-executable RAM object owned by this helper, transported as a Mach send right.
-    func memoryAllocate(bytes: UInt64, token: UInt64, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void)
+    /// A bounded non-executable RAM object owned by this helper, transported as a Mach send right:
+    /// a ledger-tagged named entry, or (purgeable) a non-volatile purgeable allocation's entry.
+    func memoryAllocate(bytes: UInt64, token: UInt64, purgeable: Bool, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void)
     func memoryReport(seed: UInt64, verify: Bool, reply: @escaping (NSDictionary, Bool) -> Void)
     func memoryRelease(reply: @escaping (NSDictionary) -> Void)
     /// Dev builds: the last probe's file, deleted as it is read (empty if none).

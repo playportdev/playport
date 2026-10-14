@@ -70,7 +70,12 @@ class UiEnvTest(unittest.TestCase):
         for size in (64, 2048, 4096):
             action = f"probe:memory-{size}"
             self.assertEqual(m.parse(["--action", action]).action, [action])
-        for action in ("probe:memory-0", "probe:memory-8192", "probe:memory--1", "probe:memory-64-extra", "probe:memory-status"):
+        for kind in ("tagged", "purgeable"):
+            for size in (2048, 4096):
+                action = f"probe:memory-donor-{kind}-{size}"
+                self.assertEqual(m.parse(["--action", action]).action, [action])
+        for action in ("probe:memory-0", "probe:memory-8192", "probe:memory--1", "probe:memory-64-extra", "probe:memory-status",
+                       "probe:memory-donor-2048", "probe:memory-donor-tagged-64", "probe:memory-donor-other-2048"):
             self.assertFalse(m.ACTION_RE.match(action), action)
 
     def test_queue_and_downloading_take_an_app_id(self):

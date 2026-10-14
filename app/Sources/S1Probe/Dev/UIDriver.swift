@@ -83,6 +83,10 @@
 //                              the run ends with ui-done, and the app ends itself 2 s later;
 //                              -hold turns on its Helper holds on
 //   probe:helper-report        Reads that probe's report back (at the next launch)
+//   probe:memory-64|2048|4096  Settings' shared RAM probe (SharedMemoryProbe.swift)
+//   probe:memory-donor-tagged-2048|4096 | probe:memory-donor-purgeable-2048|4096
+//                              Its donor variant: the helper ends after allocating and the
+//                              app keeps the mappings 60 s; the H1 verdict is in the log
 //   probe:pairing              Settings' on-device pairing experiment (iOS 27)
 //   probe:pairing-cancel | probe:pairing-use
 //                              Cancel, or use the completed pairing and check readiness
@@ -557,6 +561,16 @@ enum UIDriver {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("shared RAM probe: \(SharedMemoryProbe.shared.status)")
+                    case "memory-donor-tagged-2048", "memory-donor-tagged-4096",
+                         "memory-donor-purgeable-2048", "memory-donor-purgeable-4096":
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        let purgeable = id.hasPrefix("memory-donor-purgeable-")
+                        guard let mb = Int(id.split(separator: "-").last ?? ""),
+                              await SharedMemoryProbe.shared.runDonor(mb: mb, purgeable: purgeable) else {
+                            return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
+                        }
+                        log("donor RAM probe: \(SharedMemoryProbe.shared.status)")
                     default:
                         return finish("action=\(action) refused: unknown probe")
                     }

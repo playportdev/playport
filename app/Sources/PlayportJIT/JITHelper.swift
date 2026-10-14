@@ -113,7 +113,7 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
     #if !PLAYPORT_RELEASE
     private var memoryRegions: [PPMemoryRegion] = []
 
-    func memoryAllocate(bytes: UInt64, token: UInt64, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void) {
+    func memoryAllocate(bytes: UInt64, token: UInt64, purgeable: Bool, reply: @escaping (PPMemoryRegion?, NSDictionary, String?) -> Void) {
         queue.async { [self] in
             // Refuse an arena whose reservation would consume the helper's last 128 MiB.
             let state = pp_memory_snapshot() as NSDictionary
@@ -124,7 +124,8 @@ final class JITHelper: NSObject, NSExtensionRequestHandling, JITHelping {
                 return
             }
             var error: NSError?
-            guard let region = pp_memory_create(bytes, token, &error) else {
+            guard let region = purgeable ? pp_memory_create_purgeable(bytes, token, &error)
+                    : pp_memory_create(bytes, token, &error) else {
                 reply(nil, state, error?.localizedDescription ?? "memory create failed")
                 return
             }

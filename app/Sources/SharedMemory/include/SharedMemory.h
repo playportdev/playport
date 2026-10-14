@@ -13,6 +13,11 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 PPMemoryRegion * _Nullable pp_memory_create(uint64_t bytes, uint64_t token, NSError * _Nullable * _Nullable error);
+/// The same transport for a purgeable (set non-volatile) object allocated by this task, which owns it.
+PPMemoryRegion * _Nullable pp_memory_create_purgeable(uint64_t bytes, uint64_t token, NSError * _Nullable * _Nullable error);
+/// The object's purgeable state as seen through this task's mapping
+/// (VM_PURGABLE_NONVOLATILE 0, VOLATILE 1, EMPTY 2), -1 if unmappable, -1000-kr if not purgeable.
+int pp_memory_purgeable_state(PPMemoryRegion *region);
 NSDictionary<NSString *, NSNumber *> *pp_memory_snapshot(void);
 /// Runtime mappings belong to Wine, not the transport object's destructor.
 bool pp_memory_map_backing(PPMemoryRegion *region, void *address, int protection);

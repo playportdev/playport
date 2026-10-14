@@ -107,6 +107,15 @@ struct DeveloperSettings: View {
                 if !sharedMemory.busy { Task { _ = await sharedMemory.run(mb: mb) } }
             }
         }
+        ForEach([false, true], id: \.self) { purgeable in
+            ForEach([2048, 4096], id: \.self) { mb in
+                let kind = purgeable ? "purgeable" : "tagged"
+                PadRow(id: "set:dev:memoryDonor:\(kind):\(mb)", title: "Donor RAM (\(kind)): \(mb) MiB",
+                       subtitle: "Helper allocates, then ends; the app keeps it 60 s", hint: "Measure") {
+                    if !sharedMemory.busy { Task { _ = await sharedMemory.runDonor(mb: mb, purgeable: purgeable) } }
+                }
+            }
+        }
         PadRow(id: "set:dev:nativeAuth", title: "Native authentication", subtitle: authProbe.status,
                hint: "Run") {
             if !authProbe.busy { Task { _ = await authProbe.run() } }

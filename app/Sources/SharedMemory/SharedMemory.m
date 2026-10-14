@@ -112,6 +112,45 @@ PPMemoryRegion *pp_memory_create(uint64_t bytes, uint64_t token, NSError **error
     return [[PPMemoryRegion alloc] initWithPort:entry bytes:bytes token:token];
 }
 
+PPMemoryRegion *pp_memory_create_purgeable(uint64_t bytes, uint64_t token, NSError **error) {
+    if (!bytes || bytes > maxBytes || bytes % vm_page_size) {
+        if (error) { *error = failure(KERN_INVALID_ARGUMENT, @"purgeable RAM size"); }
+        return nil;
+    }
+    // vm_allocate is mach_vm_allocate on a 64-bit task; the SDK refuses mach_vm.h.
+    vm_address_t address = 0;
+    kern_return_t kr = vm_allocate(mach_task_self(), &address, bytes, VM_FLAGS_ANYWHERE | VM_FLAGS_PURGABLE);
+    if (kr != KERN_SUCCESS) {
+        if (error) { *error = failure(kr, @"allocate purgeable RAM"); }
+        return nil;
+    }
+    int state = VM_PURGABLE_NONVOLATILE;
+    kr = vm_purgable_control(mach_task_self(), address, VM_PURGABLE_SET_STATE, &state);
+    memory_object_size_t size = bytes;
+    mach_port_t entry = MACH_PORT_NULL;
+    if (kr == KERN_SUCCESS) {
+        // No copy flag: the entry names the purgeable object itself, so this task stays its owner.
+        kr = mach_make_memory_entry_64(mach_task_self(), &size, address,
+            VM_PROT_READ | VM_PROT_WRITE, &entry, MACH_PORT_NULL);
+    }
+    // The entry holds the object; this task's own mapping is not needed.
+    vm_deallocate(mach_task_self(), address, bytes);
+    if (kr != KERN_SUCCESS || size != bytes) {
+        if (MACH_PORT_VALID(entry)) { mach_port_deallocate(mach_task_self(), entry); }
+        if (error) { *error = failure(kr ? kr : KERN_INVALID_ARGUMENT, @"purgeable RAM entry"); }
+        return nil;
+    }
+    return [[PPMemoryRegion alloc] initWithPort:entry bytes:bytes token:token];
+}
+
+int pp_memory_purgeable_state(PPMemoryRegion *region) {
+    void *address = [region mapWithError:NULL];
+    if (!address) { return -1; }
+    int state = 0;
+    kern_return_t kr = vm_purgable_control(mach_task_self(), (vm_address_t)address, VM_PURGABLE_GET_STATE, &state);
+    return kr == KERN_SUCCESS ? state : -1000 - kr;
+}
+
 bool pp_memory_map_backing(PPMemoryRegion *region, void *address, int protection) {
     return [region mapBackingAt:address protection:protection];
 }
