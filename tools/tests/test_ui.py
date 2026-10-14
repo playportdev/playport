@@ -65,6 +65,13 @@ class UiEnvTest(unittest.TestCase):
         for bad in ("pad:", "pad:start", "pad:a+", "pad:a b", "pad:A"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
+    def test_donor_pool_setting_takes_auto_and_fixed_sizes(self):
+        # Settings › Developer › Donor pool (PLA-351): set:'s generic KEY=VALUE carries auto.
+        m = load()
+        for v in ("0", "auto", "2048", "4096", "6144"):
+            self.assertEqual(m.parse(["--action", f"set:donorPoolMB={v}"]).action, [f"set:donorPoolMB={v}"])
+        self.assertFalse(m.ACTION_RE.match("set:donorPoolMB=auto,play:app-367520"))
+
     def test_memory_probe_sizes_are_bounded(self):
         m = load()
         for size in (64, 2048, 4096):

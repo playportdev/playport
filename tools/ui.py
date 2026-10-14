@@ -138,7 +138,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          Example: --action play:epic-8337d1f975514d35ad0c1176e8a29f26 --action web:wait
                          --action web:click:Allow --action wait:30 --action web:close --action wait:10
   set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
-                         set:donorPoolMB=0|2048|4096|6144: Settings › Developer › Donor pool, next Play)
+                         set:donorPoolMB=0|auto|2048|4096|6144: Settings › Developer › Donor pool, next Play;
+                         auto sizes it from the phone's free memory and the app's limit)
   hud:on | hud:off       Settings' Metal HUD
   queue:APP              queue a download from Steam, as a game page's Install does, and go on at once
   downloading:APP        wait (2 min at most) until the queue runs APP's download with progress (after

@@ -3,6 +3,7 @@
 // disk-backed file, purgable cache, or virtual-address reservation.
 import Foundation
 import JITHelperXPC
+import PlayportKit
 import SharedMemory
 import SwiftUI
 
@@ -328,11 +329,14 @@ final class SharedMemoryProbe: ObservableObject {
 
     // runDonors' rule (step 2): a donor gives its available memory less donorMarginMB, in
     // donorChunkMB objects; the app keeps appMarginMB of its own limit. Before every object the
-    // phone must have systemFloorMB free, inactive, speculative or purgeable, jetsam's level at
-    // least levelFloor percent, and no pressure warning: the pool is real RAM, and stopping
-    // here is cheaper than jetsam ending a process.
+    // phone must have systemFloorMB free, inactive, speculative or purgeable (a share of its
+    // RAM, DonorPoolSizing.spareFloorMB), jetsam's level at least levelFloor percent, and no
+    // pressure warning: the pool is real RAM, and stopping here is cheaper than jetsam ending a
+    // process.
     private nonisolated static let donorChunkMB = 256, donorMarginMB = 512, appMarginMB = 512, maxDonors = 8
-    private nonisolated static let systemFloorMB: UInt64 = 1536, levelFloor: Int64 = 15
+    private nonisolated static let systemFloorMB = UInt64(DonorPoolSizing.spareFloorMB(
+        physicalMB: Int(ProcessInfo.processInfo.physicalMemory >> 20)))
+    private nonisolated static let levelFloor = Int64(DonorPoolSizing.levelFloor)
     /// runDonors' pool, held after the probe; touched only on BuiltInJit.queue.
     private nonisolated(unsafe) static var pool: [PPMemoryRegion] = []
 
@@ -365,17 +369,21 @@ final class SharedMemoryProbe: ObservableObject {
     /// helper, takes purgeable donorChunkMB objects up to its available memory less donorMarginMB
     /// (and what mb still needs), ends it and waits until it is gone; until mb MiB are mapped, a
     /// donor has nothing to give or does not end, or the phone runs low (systemLow, asked before
-    /// every object only when touch: untouched objects take no RAM). touch fills and verifies
-    /// every object here as it arrives.
-    nonisolated static func donorRounds(mb: Int, touch: Bool, log: @escaping @Sendable (String) -> Void)
-        -> (regions: [PPMemoryRegion], pids: [Int32], stop: String, lastDeath: Date) {
+    /// every round and object; at Play too, though untouched objects take no RAM, PLA-351).
+    /// gateFirstDonor: no pool when the first donor's own limit is under
+    /// DonorPoolSizing.minimumDonorMB. touch fills and verifies every object here as it arrives.
+    /// firstDonorMB is the first donor's available memory, or nil when none reported.
+    nonisolated static func donorRounds(mb: Int, touch: Bool, gateFirstDonor: Bool = false,
+                                        log: @escaping @Sendable (String) -> Void)
+        -> (regions: [PPMemoryRegion], pids: [Int32], stop: String, lastDeath: Date, firstDonorMB: Int?) {
+        var firstDonorMB: Int?
         var regions: [PPMemoryRegion] = []
         var pids: [Int32] = []
         var stop = "target reached"
         var lastDeath = Date()
         var mapped: Int { regions.reduce(0) { $0 + Int($1.byteCount >> 20) } }
         for round in 1...maxDonors where mapped < mb {
-            if touch, let low = systemLow() { stop = "before donor \(round): \(low)"; break }
+            if let low = systemLow() { stop = "before donor \(round): \(low)"; break }
             let helper: JitHelper
             do { helper = try JitHelper.start(log: log) } catch {
                 stop = "donor \(round) did not start: \(error.localizedDescription)"; break
@@ -390,6 +398,13 @@ final class SharedMemoryProbe: ObservableObject {
                 stop = "donor \(round) report timed out"; break
             }
             let available = Int(((report["available"] as? NSNumber)?.uint64Value ?? 0) >> 20)
+            if round == 1 { firstDonorMB = available }
+            if round == 1, gateFirstDonor, let small = DonorPoolSizing.donorTooSmall(availableMB: available) {
+                log("donors round=1 donor_pid=\(pid) donor_available_mb=\(available)")
+                helper.stop()
+                _ = waitForExit(pid: pid, seconds: 5)
+                stop = "donor 1: \(small)"; break
+            }
             let grant = min(mb - mapped, max(0, available - donorMarginMB) / donorChunkMB * donorChunkMB)
             log("donors round=\(round) donor_pid=\(pid) fresh=\(!pids.contains(pid)) donor_available_mb=\(available) "
                 + "donor_footprint_mb=\(mib(report["footprint"] as? NSNumber)) grant_mb=\(grant)")
@@ -400,7 +415,7 @@ final class SharedMemoryProbe: ObservableObject {
             }
             let before = mapped
             let failure = allocate(mb: grant, purgeable: true, chunkMB: donorChunkMB, proxy: proxy, into: &regions,
-                                   touch: touch, lowMemory: touch ? systemLow : { nil })
+                                   touch: touch, lowMemory: systemLow)
             helper.stop()
             let died = Date()
             let exit = waitForExit(pid: pid, seconds: 5)
@@ -412,14 +427,30 @@ final class SharedMemoryProbe: ObservableObject {
             guard exit.gone else { stop = "donor \(round) (pid \(pid)) did not end"; break }
         }
         if mapped < mb, stop == "target reached" { stop = "\(maxDonors) donors gave too little" }
-        return (regions, pids, stop, lastDeath)
+        return (regions, pids, stop, lastDeath, firstDonorMB)
+    }
+
+    /// A fresh helper's available memory in MiB (it maps nothing), or nil: the donor limit the
+    /// pool's auto line records when it takes no pool.
+    nonisolated static func donorLimitMB(log: @escaping @Sendable (String) -> Void) -> Int? {
+        guard let helper = try? JitHelper.start(log: log) else { return nil }
+        let proxy = helper.proxy { error in log("XPC error: \(error.localizedDescription)") }
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var report: NSDictionary = [:]
+        proxy.memoryReport(seed: seed, verify: false) { state, _ in report = state; done.signal() }
+        let answered = done.wait(timeout: .now() + 10) == .success
+        helper.stop()
+        let pid = (report["pid"] as? NSNumber)?.int32Value ?? 0
+        if pid > 0 { _ = waitForExit(pid: pid, seconds: 5) }
+        guard answered, pid > 0 else { return nil }
+        return Int(((report["available"] as? NSNumber)?.uint64Value ?? 0) >> 20)
     }
 
     private nonisolated static func measureDonors(mb: Int) -> (Bool, String) {
         pool.removeAll()
         log("donors start target_mb=\(mb) variant=purgeable chunk_mb=\(donorChunkMB) donor_margin_mb=\(donorMarginMB) "
             + describe(pp_memory_snapshot()) + " " + system())
-        let (regions, pids, stop, lastDeath) = donorRounds(mb: mb, touch: true, log: log)
+        let (regions, pids, stop, lastDeath, _) = donorRounds(mb: mb, touch: true, log: log)
         let mapped = regions.reduce(0) { $0 + Int($1.byteCount >> 20) }
         let total = mapped
         log("donors rounds_done=\(pids.count) total_mb=\(total) target_mb=\(mb) stop=\"\(stop)\"")

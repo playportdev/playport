@@ -77,12 +77,21 @@ struct DeveloperSettings: View {
                value: simulatedPool > 0 ? MemoryNeed.format(mb: simulatedPool) : "Off",
                options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
                selected: "\(simulatedPool)", note: nil) { simulatedPool = Int($0) ?? 0 }
-        // docs/plans/2026-10-12-donor-memory.md step 3 (DonorPool.swift).
-        choice("dev:donorPool", "Donor pool (experiment)", subtitle: "Next Play: guest RAM from helpers that then end",
-               value: donorPool > 0 ? MemoryNeed.format(mb: donorPool) : "Off",
-               options: DonorPool.sizes.map { PadOption(id: "\($0)", label: $0 > 0 ? MemoryNeed.format(mb: $0) : "Off") },
-               selected: "\(donorPool)", note: "Capped by the phone's free memory; any failure plays on ordinary memory.") {
-            donorPool = Int($0) ?? 0
+        // docs/plans/2026-10-12-donor-memory.md step 3 (DonorPool.swift); Off, Auto (PLA-351) or a
+        // fixed size to experiment with. Not offered on a phone under 7 GiB (PlayportKit DonorPoolSizing).
+        if DonorPoolSizing.offered(physicalMB: Int(ProcessInfo.processInfo.physicalMemory >> 20)) {
+            // Read through DonorPool.setting: the driver's set: may store "auto" as a string.
+            let current = donorPool == DonorPoolSizing.Setting.autoStored ? .auto : DonorPool.setting
+            let options: [(DonorPoolSizing.Setting, String)] = [(.off, "Off"), (.auto, "Auto")]
+                + DonorPoolSizing.fixedSizesMB.map { (.fixed($0), MemoryNeed.format(mb: $0) + " (fixed)") }
+            choice("dev:donorPool", "Donor pool (experiment)", subtitle: "Next Play: guest RAM from helpers that then end",
+                   value: options.first { $0.0 == current }?.1 ?? "\(current.stored) MB (fixed)",
+                   options: options.map { PadOption(id: "\($0.0.stored)", label: $0.1) },
+                   selected: "\(current.stored)",
+                   note: "Auto: what the phone's free memory gives beyond the app's limit, off under 1 GB. "
+                       + "Any failure plays on ordinary memory.") {
+                donorPool = Int($0) ?? 0
+            }
         }
     }
 
