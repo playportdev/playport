@@ -1,9 +1,9 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); pool reuse within an object done 2026-10-14 (refused 0, peak −582 MiB).
+**Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); pool reuse within an object done 2026-10-14 (refused 0, peak −582 MiB); 0148 widened to small commits 2026-10-14 (peak −3,798 MiB).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
-not merged. Last built at `9f4d5bf` (IPA `2010a999…`, pool reuse).
+not merged. Last built at `7413ff3` (IPA `b3cdca61…`, small commits backed).
 
 ## Progress
 
@@ -55,8 +55,8 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   1 MiB or more, and KCD churns them (36.5 GiB served). A bigger saving needs
   0148 to back more of the game's memory. `MADV_FREE_REUSABLE` does nothing
   on the pool mapping.
-- **Now:** queue item 1 (owner, 2026-10-14) in a writer child; its run id
-  is in the build-area queue.
+- **Queue item 1 done 2026-10-14** (`cc2b80e`, `7413ff3`; IPA `b3cdca61…`;
+  [evidence](../evidence/2026-10-14-donor-pool-widen.md)): small commits backed, KCD peak 7,682 off vs 3,884 on.
 - **Queue:**
   1. Widen what 0148 backs: smaller commits, or commits that are not fresh,
      whichever KCD's footprint is made of. Measure first which allocations
@@ -137,10 +137,12 @@ included. Only system-wide pressure still applies.
 - madeira-unix **0147**, a hook for FEX's data band, was removed in step 3:
   it had no release notification.
 - madeira-unix **0148**: a hook for fresh RW guest commits of at least 1 MiB
-  in `[0x7000000000, 0x7c00000000)`. It records the backed ranges
-  (`pp_guest_ranges.h`, host-tested). Before any protection other than plain
+  in `[0x7000000000, 0x7c00000000)`. Before any protection other than plain
   RW, it copies a range back to ordinary memory. It reports releases.
-  **It has never run on the phone.**
+  **0149** (diagnostics) logs a census of the guest's memory by class every
+  30 s while the pool backs some. **0150** drops the 1 MiB threshold (every
+  fresh RW commit with a whole host page) and tracks backed pages in a
+  bitmap (`pp_guest_pages.h`, host-tested) in place of 0148's range table.
 - The stubs in `WineHostRuntime.swift` answer every hook with "no" in every
   build until step 3 lands.
 
@@ -324,6 +326,24 @@ Measure these in one locked session each, pool off and on:
     needs 0148 to back more of the game's memory.
   - **Hollow Knight with 4 GiB:** first frame +10.52 s.
   [Evidence](../evidence/2026-10-14-donor-pool-reuse.md).
+- **Result, backing small commits (2026-10-14, IPA `b3cdca61…`):**
+  - **Measured first** (0149's census, IPA `91861df5…`): at Play+230, of
+    KCD's 6,898 MB footprint, 3.4 GB was ordinary guest RW in the window,
+    in views filled by commits under 1 MiB (112,232 commits, 8.7 GiB). The
+    GPU was 1.57 GB, the JIT pool 512 MiB and the FEX band 473 MiB.
+    Exec, write-watched, re-committed and non-RW memory were about 0.
+  - **Widened:** 0150 backs every fresh RW commit with a whole host page.
+    A page bitmap in Wine and a guest page table in the pool keep releases
+    cheap with tens of thousands of leases.
+  - **Kingdom Come pair:** peak `fpMB` 7,682 off and 3,884 on (−3,798);
+    −2,685/−3,707/−3,744 at +110/+170/+230. The pool's live set was
+    4,150 MiB. Refused 0, unmatched 0, map failures 0, detaches 0. 22
+    whole-object purges ran.
+  - **Cost:** 4.36 s in the backing hook over 240 s, at most 10.6 ms.
+  - **Health:** Rattay loaded, with no crash and no visual damage.
+  - **Hollow Knight:** first frame +11.87 s.
+  - **Caveats:** one pair; the pool run reached "serious".
+  [Evidence](../evidence/2026-10-14-donor-pool-widen.md).
 - **Hollow Knight:** a launch to first frame +10 and a gameplay `pp perf` as
   the regression, with first-frame time and FPS unchanged within noise.
 - **One session over 30 minutes** with the pool on.
