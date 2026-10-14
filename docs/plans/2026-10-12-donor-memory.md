@@ -79,18 +79,21 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   1 FPS. The pool's own work was small: about 0.6 s over the run, no call
   over 1 ms. The dip most likely came from different content: the owner
   recalls that only the pool run opened with cutscenes and a scene load.
-- **Now:** nothing running; the phone is free. Waiting for the owner.
-- **Queue (proposed):**
-  1. Repeat the HK A/B with an identical scripted `pp pad` route, to settle
-     the 30–60 s dip.
-  2. A KCD session longer than 30 minutes with the pool on: stability, the
-     compressor, and physical-memory pressure.
-  3. A PLA-203-family title for the detach path, which has never run.
-  4. Step 5 (GPU buffers, the remaining 1.55 GB of KCD's footprint).
-  5. [PLA-351](https://linear.app/playportdev/issue/PLA-351): Auto pool
+- **Now (2026-10-14, owner: "run all of that, unattended"):** the queue
+  below runs in order, one writer at a time, with the phone in unattended
+  mode. Run ids are in the build-area queue.
+- **Queue:**
+  1. **Phone measurements (one writer):**
+     - the HK A/B again with an identical scripted `pp pad` route from the
+       same save;
+     - KCD for 30+ minutes with the pool on;
+     - the detach path through the `protect` probe's RW→RX phase
+       (PLA-203 family).
+  2. [PLA-351](https://linear.app/playportdev/issue/PLA-351): Auto pool
      sizing per phone RAM, and the helper's own limit.
-  6. [PLA-352](https://linear.app/playportdev/issue/PLA-352): one memory plan
+  3. [PLA-352](https://linear.app/playportdev/issue/PLA-352): one memory plan
      for guest RAM and the video budget.
+  4. Step 5: GPU buffers in pool memory (stretch).
 - **Phone (2026-10-14):** dev IPA `b3cdca61…` installed, battery 82 %, 5.5 GB storage free, unattended off. KCD and HK are installed.
   The phone was re-registered with the free team once (DEVICE.md procedure,
   owner-approved). Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350.
