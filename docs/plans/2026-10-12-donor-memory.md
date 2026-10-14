@@ -71,9 +71,17 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   - Hook cost: about 1.8 % of the run, at most 10.6 ms per call. HK first
     frame +11.87 s (+10.5 s before; one run).
   - The pool run reached "serious" thermal state. FPS was not measured.
+- **HK `pp perf` A/B done 2026-10-14** (IPA `b3cdca61…`, owner playing;
+  [evidence](../evidence/2026-10-14-donor-pool-hk-perf.md)): mean FPS 59.1
+  off vs 57.5 on, first frame the same. All of the difference is one 30 s
+  window, where the pool run churned 4.4 GiB through the pool, served twice
+  the server requests and fell to 44 FPS. Elsewhere the runs match within
+  1 FPS. The pool's own work was small: about 0.6 s over the run, no call
+  over 1 ms. The cause of the dip is unresolved.
 - **Now:** nothing running; the phone is free. Waiting for the owner.
 - **Queue (proposed):**
-  1. HK `pp perf` A/B (pool off/on) while the owner plays: the hook's cost and FPS.
+  1. Repeat the HK A/B with an identical scripted `pp pad` route, to settle
+     the 30–60 s dip.
   2. A KCD session longer than 30 minutes with the pool on: stability, the
      compressor, and physical-memory pressure.
   3. A PLA-203-family title for the detach path, which has never run.
@@ -82,8 +90,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
      sizing per phone RAM, and the helper's own limit.
   6. [PLA-352](https://linear.app/playportdev/issue/PLA-352): one memory plan
      for guest RAM and the video budget.
-- **Phone (2026-10-14):** dev IPA `b3cdca61…` installed, battery 65 %
-  charging, 5.5 GB storage free, unattended off. KCD and HK are installed.
+- **Phone (2026-10-14):** dev IPA `b3cdca61…` installed, battery 82 %, 5.5 GB storage free, unattended off. KCD and HK are installed.
   The phone was re-registered with the free team once (DEVICE.md procedure,
   owner-approved). Results are filed on PLA-42, PLA-49, PLA-216 and PLA-350.
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
