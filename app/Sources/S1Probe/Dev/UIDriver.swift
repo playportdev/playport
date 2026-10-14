@@ -93,6 +93,8 @@
 //                              or the phone runs low: then it fails), verified 60 s later, then the
 //                              app's own remaining limit; the pool stays held
 //   probe:memory-pool-verify   Settings' Verify the donor pool: reads the held pool again
+//   probe:memory-pool-zero     Settings' Donor pool: zeroing: 1 GiB from a donor that ends, then
+//                              memset, purge and fixed-address range mapping (`pool-zero` lines)
 //   background:<seconds>       Opens iOS Settings (10-600 s), so Playport goes to the background,
 //                              and waits until it is in front again: pp ui brings it back after
 //                              that long, unless iOS ended it (the ui-background event)
@@ -590,6 +592,13 @@ enum UIDriver {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor RAM pool probe: \(SharedMemoryProbe.shared.status)")
+                    case "memory-pool-zero":
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        guard await SharedMemoryProbe.shared.runPoolZero() else {
+                            return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
+                        }
+                        log("donor pool zeroing: \(SharedMemoryProbe.shared.status)")
                     case "memory-pool-verify":
                         guard await SharedMemoryProbe.shared.verifyPool() else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")

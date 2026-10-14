@@ -20,6 +20,7 @@ struct DeveloperSettings: View {
     @AppStorage(Fastsync.offKey) private var fastsyncOff = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
+    @AppStorage(DonorPool.key) private var donorPool = 0
     @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
     @ObservedObject private var probe = HelperLifetimeProbe.shared
     @ObservedObject private var authProbe = NativeAuthProbe.shared
@@ -76,6 +77,13 @@ struct DeveloperSettings: View {
                value: simulatedPool > 0 ? MemoryNeed.format(mb: simulatedPool) : "Off",
                options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
                selected: "\(simulatedPool)", note: nil) { simulatedPool = Int($0) ?? 0 }
+        // docs/plans/2026-10-12-donor-memory.md step 3 (DonorPool.swift).
+        choice("dev:donorPool", "Donor pool (experiment)", subtitle: "Next Play: guest RAM from helpers that then end",
+               value: donorPool > 0 ? MemoryNeed.format(mb: donorPool) : "Off",
+               options: DonorPool.sizes.map { PadOption(id: "\($0)", label: $0 > 0 ? MemoryNeed.format(mb: $0) : "Off") },
+               selected: "\(donorPool)", note: "Capped by the phone's free memory; any failure plays on ordinary memory.") {
+            donorPool = Int($0) ?? 0
+        }
     }
 
     private static func choices(_ base: [Int], with current: Int) -> [Int] {
@@ -121,6 +129,9 @@ struct DeveloperSettings: View {
                    subtitle: "Fresh helpers give purgeable RAM, then end; the app keeps the pool", hint: "Measure") {
                 if !sharedMemory.busy { Task { _ = await sharedMemory.runDonors(mb: mb) } }
             }
+        }
+        PadRow(id: "set:dev:memoryPoolZero", title: "Donor pool: zeroing", subtitle: sharedMemory.status, hint: "Measure") {
+            if !sharedMemory.busy { Task { _ = await sharedMemory.runPoolZero() } }
         }
         PadRow(id: "set:dev:memoryPoolVerify", title: "Verify the donor pool", subtitle: sharedMemory.status, hint: "Verify") {
             if !sharedMemory.busy { Task { _ = await sharedMemory.verifyPool() } }

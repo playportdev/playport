@@ -446,6 +446,9 @@ enum LaunchCoordinator {
         PacedMetalLayer.onFirstFrame {
             mark("first frame")
             step(.drawing)
+            #if !PLAYPORT_RELEASE
+            DonorPool.reportFirstFrame()
+            #endif
         }
         // The guest's windows give way when a frame is on screen, not when a drawable is taken.
         PacedMetalLayer.onFirstPresent { GuestWindows.gamePresents() }

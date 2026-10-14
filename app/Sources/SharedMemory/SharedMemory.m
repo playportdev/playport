@@ -11,6 +11,8 @@ extern kern_return_t mach_memory_entry_ownership(mach_port_t, mach_port_t, int, 
 #include <xpc/xpc.h>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
+#include <string.h>
+#include <time.h>
 
 // An individually transported object is bounded; larger arenas use chunks.
 static const uint64_t maxBytes = 256ULL << 20;
@@ -23,6 +25,8 @@ static NSError *failure(kern_return_t code, NSString *operation) {
 - (instancetype)initWithPort:(mach_port_t)port bytes:(uint64_t)bytes token:(uint64_t)token;
 - (int)requestNoFootprint;
 - (bool)mapBackingAt:(void *)address protection:(int)protection;
+- (kern_return_t)mapRange:(uint64_t)offset bytes:(uint64_t)bytes at:(void *)address;
+- (kern_return_t)empty;
 @end
 @implementation PPMemoryRegion {
     mach_port_t _entry;
@@ -85,6 +89,32 @@ static NSError *failure(kern_return_t code, NSString *operation) {
         VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
     // Deliberately do not record target in _address: Wine owns this mapping.
     return kr == KERN_SUCCESS && target == (vm_address_t)address;
+}
+- (kern_return_t)mapRange:(uint64_t)offset bytes:(uint64_t)bytes at:(void *)address {
+    if (!address || (uintptr_t)address % vm_page_size || offset % vm_page_size || !bytes || bytes % vm_page_size
+        || offset > _byteCount || bytes > _byteCount - offset) { return KERN_INVALID_ARGUMENT; }
+    vm_address_t target = (vm_address_t)address;
+    kern_return_t kr = vm_map(mach_task_self(), &target, bytes, 0,
+        VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, _entry, offset, FALSE,
+        VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    // Wine owns this mapping; _address is this object's own view, not it.
+    return kr == KERN_SUCCESS && target != (vm_address_t)address ? KERN_FAILURE : kr;
+}
+- (kern_return_t)empty {
+    // vm_purgable_control names the object by an address in this task: a
+    // temporary view of the whole object, no page touched.
+    vm_address_t view = 0;
+    kern_return_t kr = vm_map(mach_task_self(), &view, _byteCount, 0, VM_FLAGS_ANYWHERE, _entry, 0, FALSE,
+        VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS) { return kr; }
+    int state = VM_PURGABLE_EMPTY;
+    kr = vm_purgable_control(mach_task_self(), view, VM_PURGABLE_SET_STATE, &state);
+    if (kr == KERN_SUCCESS) {
+        state = VM_PURGABLE_NONVOLATILE;
+        kr = vm_purgable_control(mach_task_self(), view, VM_PURGABLE_SET_STATE, &state);
+    }
+    vm_deallocate(mach_task_self(), view, _byteCount);
+    return kr;
 }
 - (int)requestNoFootprint {
     return mach_memory_entry_ownership(_entry, MACH_PORT_NULL, VM_LEDGER_TAG_DEFAULT, VM_LEDGER_FLAG_NO_FOOTPRINT);
@@ -152,6 +182,13 @@ int pp_memory_purgeable_state(PPMemoryRegion *region) {
     return kr == KERN_SUCCESS ? state : -1000 - kr;
 }
 
+int pp_memory_map_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, void *address) {
+    return [region mapRange:offset bytes:bytes at:address];
+}
+int pp_memory_empty(PPMemoryRegion *region) {
+    return [region empty];
+}
+
 bool pp_memory_map_backing(PPMemoryRegion *region, void *address, int protection) {
     return [region mapBackingAt:address protection:protection];
 }
@@ -189,6 +226,36 @@ bool pp_memory_verify(PPMemoryRegion *region, uint64_t seed) {
     const volatile uint64_t *p = [region mapWithError:NULL];
     if (!p) { return false; }
     for (uint64_t i = 0, n = region.byteCount / 8; i < n; ++i) {
+        if (p[i] != word(i, seed)) { return false; }
+    }
+    return true;
+}
+
+bool pp_memory_is_zero(PPMemoryRegion *region, uint64_t offset, uint64_t bytes) {
+    const volatile uint64_t *p = [region mapWithError:NULL];
+    if (!p || offset % 8 || offset > region.byteCount || bytes > region.byteCount - offset) { return false; }
+    p += offset / 8;
+    for (uint64_t i = 0, n = bytes / 8; i < n; ++i) {
+        if (p[i]) { return false; }
+    }
+    return true;
+}
+int64_t pp_memory_clear(PPMemoryRegion *region) {
+    void *p = [region mapWithError:NULL];
+    if (!p) { return -1; }
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    memset(p, 0, region.byteCount);
+    return (int64_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
+}
+void pp_memory_fill_address(void *address, uint64_t bytes, uint64_t seed) {
+    volatile uint64_t *p = address;
+    for (uint64_t i = 0, n = bytes / 8; i < n; ++i) { p[i] = word(i, seed); }
+}
+bool pp_memory_verify_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, uint64_t seed) {
+    const volatile uint64_t *p = [region mapWithError:NULL];
+    if (!p || offset % 8 || offset > region.byteCount || bytes > region.byteCount - offset) { return false; }
+    p += offset / 8;
+    for (uint64_t i = 0, n = bytes / 8; i < n; ++i) {
         if (p[i] != word(i, seed)) { return false; }
     }
     return true;

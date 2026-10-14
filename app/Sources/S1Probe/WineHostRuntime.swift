@@ -9,16 +9,16 @@ import MachO
 import PlayportKit
 import WineHost
 
-// madeira-unix 0147/0148 call these optional host hooks; the static link needs
-// a definition. No provider backs anything yet (dev or release): every request
-// keeps Wine's ordinary mmap. The donor-pool plan replaces them in dev builds
-// (docs/plans/2026-10-12-donor-memory.md).
-@_cdecl("playport_memory_backing")
-func playportMemoryBackingDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt, _ protection: Int32) -> Int32 { 0 }
+#if PLAYPORT_RELEASE
+// madeira-unix 0148 calls these optional host hooks; the static link needs a
+// definition. A release build backs nothing: every request keeps Wine's
+// ordinary mmap. A dev build's donor pool answers them (SharedMemory/GuestPool.m,
+// Dev/DonorPool.swift; docs/plans/2026-10-12-donor-memory.md).
 @_cdecl("playport_guest_memory_backing")
 func playportGuestMemoryBackingDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt) -> Int32 { 0 }
 @_cdecl("playport_guest_memory_released")
-func playportGuestMemoryReleasedDisabled(_ bytes: UInt) {}
+func playportGuestMemoryReleasedDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt, _ detached: Int32) {}
+#endif
 
 /// The app process's one Wine session (decisions 0027, 0030). A Play acquires
 /// the JIT pool, starts the wineserver and the session root
@@ -75,6 +75,9 @@ final class WineHostRuntime: @unchecked Sendable {
         let check = SelfCheck.run(pool: pool)
         guard check.ok else { return (false, activation, "pool \(mb) MiB; selfcheck \(check.name)", check.name) }
         pooled()
+        #if !PLAYPORT_RELEASE
+        DonorPool.install()
+        #endif
         let rc = runtime.path.withCString { rt in
             prefixURL.path.withCString { px in
                 AppLog.path.withCString { lp in

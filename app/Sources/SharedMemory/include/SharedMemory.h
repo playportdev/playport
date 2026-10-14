@@ -27,9 +27,23 @@ void * _Nullable pp_memory_ordinary(uint64_t bytes, uint64_t seed);
 void pp_memory_ordinary_release(void * _Nullable address, uint64_t bytes);
 /// Runtime mappings belong to Wine, not the transport object's destructor.
 bool pp_memory_map_backing(PPMemoryRegion *region, void *address, int protection);
+/// Maps bytes of the object from offset at address (RW, shared, replacing what is there:
+/// VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE); 0 or the kern_return_t. The mapping is the caller's.
+int pp_memory_map_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, void *address);
+/// Purges a purgeable object's pages (VM_PURGABLE_EMPTY) and makes it non-volatile again, so
+/// every page reads zero; 0 or the kern_return_t. Every view of it then reads zero.
+int pp_memory_empty(PPMemoryRegion *region);
 /// Authorization control: hiding an object's footprint must not be assumed possible.
 int pp_memory_nofootprint_control(void);
 /// Incompressible deterministic content, covering every byte, not just lazy VM reservations.
 bool pp_memory_fill(PPMemoryRegion *region, uint64_t seed);
 bool pp_memory_verify(PPMemoryRegion *region, uint64_t seed);
+/// Whether bytes of the object from offset all read zero (through its own view).
+bool pp_memory_is_zero(PPMemoryRegion *region, uint64_t offset, uint64_t bytes);
+/// memset(0) of the whole object through its own view: the nanoseconds it took, -1 if unmappable.
+int64_t pp_memory_clear(PPMemoryRegion *region);
+/// pp_memory_fill's words at an address; pp_memory_verify_range reads them in the object from offset.
+void pp_memory_fill_address(void *address, uint64_t bytes, uint64_t seed);
+bool pp_memory_verify_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, uint64_t seed);
 NS_ASSUME_NONNULL_END
+#import "GuestPool.h"

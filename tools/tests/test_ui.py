@@ -81,7 +81,7 @@ class UiEnvTest(unittest.TestCase):
     def test_donor_pool_and_background_actions(self):
         m = load()
         for action in ("probe:memory-donors-6144", "probe:memory-donors-8192", "probe:memory-donors-10240",
-                       "probe:memory-pool-verify", "background:10", "background:60", "background:600"):
+                       "probe:memory-pool-verify", "probe:memory-pool-zero", "background:10", "background:60", "background:600"):
             self.assertEqual(m.parse(["--action", action]).action, [action])
         for action in ("probe:memory-donors-4096", "probe:memory-donors-", "probe:memory-pool", "background:",
                        "background:9", "background:601", "background:060", "background:1000"):

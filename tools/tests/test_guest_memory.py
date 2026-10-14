@@ -54,7 +54,10 @@ static void check(void) {
     assert(!memcmp(actual, pages, sizeof pages));
 }
 int main(void) {
-    assert(PP_GUEST_MAX_RANGES * 4096ull == (2ull << 30));
+    /* The bound matches the host's largest pool (8 GiB) on 16 KiB host pages. */
+    assert(PP_GUEST_MAX_BYTES == (8ull << 30) && PP_GUEST_PAGE == 16384u);
+    assert(PP_GUEST_MAX_RANGES * (unsigned long long)PP_GUEST_PAGE == PP_GUEST_MAX_BYTES);
+    assert(PP_GUEST_MAX_RANGES == 524288u);
     assert(!pp_guest_overlap((struct pp_guest_range){0,4096},4096,8192));
     for (unsigned seed = 1; seed <= 200; seed++) {
         unsigned rng = seed;

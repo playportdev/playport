@@ -190,16 +190,20 @@ prove aliasing and retention. On the phone, 4 GiB raised the helper's footprint,
 not the app's ([evidence](evidence/2026-10-03-helper-owned-memory.md)). This is
 not a private no-footprint entitlement or a file-backed swap area.
 
-madeira-unix 0147 (FEX data band) and 0148 (fresh large RW guest commits) offer
-memory to optional host hooks (`playport_memory_backing`,
-`playport_guest_memory_backing`, `playport_guest_memory_released`). Today every
-build answers them with the stubs in `WineHostRuntime.swift`, so Wine keeps its
-ordinary mmap. An earlier per-allocation broker asked the living helper over XPC
-for each mapping; it moved only 30–90 MiB in Hollow Knight and Kingdom Come
+madeira-unix 0148 offers fresh large RW guest commits to optional host hooks
+(`playport_guest_memory_backing`, and `playport_guest_memory_released` with the
+range and whether it was detached to ordinary memory). A release build answers
+them with the stubs in `WineHostRuntime.swift`, so Wine keeps its ordinary mmap.
+A dev build answers them from a donor pool when Settings › Developer › Donor
+pool is on (`set:donorPoolMB=2048|4096|6144`, off by default): at Play, after
+the JIT activation, helpers that then end give purgeable objects, and each
+commit is a `vm_map` of an unused range of one at Wine's address
+(`SharedMemory/GuestPool.m`, `Dev/DonorPool.swift`;
+[plan](plans/2026-10-12-donor-memory.md), step 3). An earlier per-allocation
+broker asked the living helper over XPC for each mapping, and a hook for FEX's
+data band (0147) moved only 30–90 MiB in Hollow Knight and Kingdom Come
 ([evidence](evidence/2026-10-03-fex-helper-memory.md),
-[KCD](evidence/2026-10-03-kcd-helper-memory.md)) and was removed. Its successor,
-a pool from donor processes that end after mapping, is
-[a plan](plans/2026-10-12-donor-memory.md), not current behaviour.
+[KCD](evidence/2026-10-03-kcd-helper-memory.md)); both were removed.
 
 ### JIT pool placement
 

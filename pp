@@ -99,6 +99,8 @@ C_TESTS = [
     ("steam tickets", ["app/tests/steam_ticket_test.c", "app/Sources/WineHost/steam_ticket.c"], []),
     ("url opener", ["app/tests/url_opener_test.c", "app/Sources/WineHost/url_opener.c"], []),
     ("command line", ["app/tests/command_line_test.c"], []),
+    ("guest pool", ["app/tests/guest_pool_test.c", "app/Sources/SharedMemory/guest_pool.c"],
+     ["-Iapp/Sources/SharedMemory", "-fsanitize=address,undefined"]),
 ]
 
 

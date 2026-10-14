@@ -78,6 +78,97 @@ final class SharedMemoryProbe: ObservableObject {
         return result.0
     }
 
+    /// How a pool at Play can give zero pages again (step 3): one donor gives 1 GiB untouched and
+    /// ends; then the app touches object 1 (who pays for pages first touched after the donor died),
+    /// clears it with memset, purges object 2 after touching it and touches it again (does the
+    /// purge move the charge?), purges untouched object 3, and maps a range of object 4 at a fixed
+    /// address as the hooks do (VM_FLAGS_OVERWRITE at an offset). The `pool-zero` lines.
+    func runPoolZero() async -> Bool {
+        guard !busy else { return false }
+        while BuiltInJitStatus.shared.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        busy = true
+        status = "Measuring pool zeroing…"
+        let result = await withCheckedContinuation { done in
+            BuiltInJit.queue.async { done.resume(returning: Self.measurePoolZero()) }
+        }
+        status = result.1
+        busy = false
+        return result.0
+    }
+
+    private nonisolated static func measurePoolZero() -> (Bool, String) {
+        let chunk = UInt64(donorChunkMB) << 20
+        func fp() -> Int64 { Int64(bitPattern: pp_memory_snapshot()["footprint"]?.uint64Value ?? 0) >> 20 }
+        func resident(_ r: PPMemoryRegion) -> UInt64 { (r.pageCounts()["resident"]?.uint64Value ?? 0) >> 20 }
+        func ms(_ t0: UInt64) -> String { String(format: "%.2f", Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0) / 1e6) }
+        log("pool-zero start " + describe(pp_memory_snapshot()) + " " + system())
+        let rounds = donorRounds(mb: 4 * donorChunkMB, touch: false, log: log)
+        let objects = rounds.regions
+        guard objects.count == 4 else { return (false, "Pool zero: donors gave \(objects.count) objects; \(rounds.stop)") }
+        Thread.sleep(forTimeInterval: 2)
+        let fp0 = fp()
+        log("pool-zero untouched donors=\(rounds.pids.count) stop=\"\(rounds.stop)\" app_footprint_mb=\(fp0) "
+            + "resident_mb=\(objects.map(resident))")
+
+        // 1: first touch after the donor died, then memset.
+        var t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let filled1 = pp_memory_fill(objects[0], seed + 1)
+        let fillMS = ms(t0)
+        let fp1 = fp()
+        let clearNS = pp_memory_clear(objects[0])
+        let zero1 = pp_memory_is_zero(objects[0], 0, chunk)
+        log("pool-zero touch filled=\(filled1) fill_ms=\(fillMS) app_footprint_mb=\(fp1) footprint_delta_mb=\(fp1 - fp0) "
+            + "resident_mb=\(resident(objects[0]))")
+        log("pool-zero memset bytes_mb=\(donorChunkMB) memset_ms=\(String(format: "%.2f", Double(clearNS) / 1e6)) "
+            + "reads_zero=\(zero1) resident_mb_after=\(resident(objects[0])) app_footprint_mb=\(fp())")
+
+        // 2: purge a touched object (its own view stays mapped, as Wine's may), then touch it again.
+        let filled2 = pp_memory_fill(objects[1], seed + 2)
+        let fp2 = fp()
+        t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let kr2 = pp_memory_empty(objects[1])
+        let purgeMS = ms(t0)
+        let resident2 = resident(objects[1])
+        let zero2 = pp_memory_is_zero(objects[1], 0, chunk)
+        let state2 = pp_memory_purgeable_state(objects[1])
+        _ = pp_memory_fill(objects[1], seed + 3)
+        let fp2b = fp()
+        log("pool-zero purge filled=\(filled2) kr=\(kr2) purge_ms=\(purgeMS) resident_mb_after=\(resident2) reads_zero=\(zero2) "
+            + "state_after=\(state2) footprint_before_mb=\(fp2) footprint_after_retouch_mb=\(fp2b) "
+            + "retouch_delta_mb=\(fp2b - fp2) resident_mb_retouched=\(resident(objects[1]))")
+
+        // 3: purge an object nothing touched.
+        t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let kr3 = pp_memory_empty(objects[2])
+        log("pool-zero purge_untouched kr=\(kr3) purge_ms=\(ms(t0)) reads_zero=\(pp_memory_is_zero(objects[2], 0, chunk))")
+
+        // 4: the hooks' mapping: 64 MiB at offset 64 MiB over a fixed, ordinary reservation.
+        let span: UInt64 = 64 << 20
+        var address: vm_address_t = 0
+        var mapped = false, inRange = false, outsideZero = false
+        if vm_allocate(mach_task_self_, &address, vm_size_t(span), VM_FLAGS_ANYWHERE) == KERN_SUCCESS,
+           let at = UnsafeMutableRawPointer(bitPattern: UInt(address)) {
+            let kr = pp_memory_map_range(objects[3], span, span, at)
+            mapped = kr == 0
+            if mapped {
+                pp_memory_fill_address(at, span, seed + 4)
+                inRange = pp_memory_verify_range(objects[3], span, span, seed + 4)
+                outsideZero = pp_memory_is_zero(objects[3], 0, span) && pp_memory_is_zero(objects[3], 2 * span, chunk - 2 * span)
+            } else {
+                log("pool-zero map_range kr=\(kr)")
+            }
+            vm_deallocate(mach_task_self_, address, vm_size_t(span))
+        }
+        log("pool-zero map_range mapped=\(mapped) visible_at_offset=\(inRange) rest_untouched=\(outsideZero) "
+            + "resident_mb=\(resident(objects[3]))")
+        let pass = filled1 && zero1 && filled2 && kr2 == 0 && zero2 && kr3 == 0 && mapped && inRange && outsideZero
+        log("pool-zero RESULT \(pass ? "PASS" : "FAIL") chunk_mb=\(chunk >> 20) touch_delta_mb=\(fp1 - fp0) "
+            + "memset_ms=\(String(format: "%.2f", Double(clearNS) / 1e6)) purge_ms=\(purgeMS) retouch_delta_mb=\(fp2b - fp2) "
+            + describe(pp_memory_snapshot()))
+        return (pass, "Pool zero \(pass ? "PASS" : "FAIL"): memset \(String(format: "%.0f", Double(clearNS) / 1e6)) ms, "
+                + "purge \(purgeMS) ms, touch +\(fp1 - fp0) MiB, retouch +\(fp2b - fp2) MiB")
+    }
+
     private nonisolated static func variant(_ purgeable: Bool) -> String { purgeable ? "purgeable" : "tagged" }
 
     /// The page counts of every object, summed (kr is the first failure, or 0).
@@ -175,10 +266,12 @@ final class SharedMemoryProbe: ObservableObject {
         return (true, "Donor \(kind) \(mb) MiB: H1 \(verdict), footprint +\(grown >> 20) MiB, verified \(at60.verified)")
     }
 
-    /// Allocates mb MiB from the helper in chunkMB objects, each fully written and verified here.
+    /// Allocates mb MiB from the helper in chunkMB objects, each fully written and verified here
+    /// unless touch is false (the pool at Play: its pages stay unresident until the game uses them).
     /// lowMemory is asked before each object: its reason stops the allocation. Returns the failure, or nil.
     private nonisolated static func allocate(mb: Int, purgeable: Bool, chunkMB: Int = 64, proxy: JITHelping,
-                                             into regions: inout [PPMemoryRegion], lowMemory: () -> String? = { nil }) -> String? {
+                                             into regions: inout [PPMemoryRegion], touch: Bool = true,
+                                             lowMemory: () -> String? = { nil }) -> String? {
         var allocated = 0
         while allocated < mb {
             if let low = lowMemory() {
@@ -198,10 +291,11 @@ final class SharedMemoryProbe: ObservableObject {
                 return "Allocated \(allocated) MiB; \(failure ?? "helper timeout")"
             }
             regions.append(region)
+            allocated += chunk
+            guard touch else { continue }
             guard pp_memory_fill(region, seed + token), pp_memory_verify(region, seed + token) else {
                 return "Host data verification failed"
             }
-            allocated += chunk
             if allocated % 512 == 0 || allocated == mb {
                 log("host touched_mb=\(allocated) " + describe(pp_memory_snapshot()))
                 log("object token=\(token) pages=\(region.pageCounts())")
@@ -223,7 +317,7 @@ final class SharedMemoryProbe: ObservableObject {
     private nonisolated static func mib(_ n: NSNumber?) -> UInt64 { (n?.uint64Value ?? 0) >> 20 }
 
     /// The phone's memory in MiB (pp_memory_system), for the log.
-    private nonisolated static func system() -> String {
+    nonisolated static func system() -> String {
         let s = pp_memory_system()
         let counts = ["free", "active", "inactive", "speculative", "wired", "purgeable", "compressor", "compressed_data"]
             .map { "sys_\($0)_mb=\(mib(s[$0]))" }
@@ -245,17 +339,21 @@ final class SharedMemoryProbe: ObservableObject {
 
     private nonisolated static func appMB(_ key: String) -> UInt64 { mib(pp_memory_snapshot()[key]) }
 
-    private nonisolated static func measureDonors(mb: Int) -> (Bool, String) {
-        pool.removeAll()
-        log("donors start target_mb=\(mb) variant=purgeable chunk_mb=\(donorChunkMB) donor_margin_mb=\(donorMarginMB) "
-            + describe(pp_memory_snapshot()) + " " + system())
+    /// The donor rounds of runDonors and of the pool at Play (DonorPool): each round starts a fresh
+    /// helper, takes purgeable donorChunkMB objects up to its available memory less donorMarginMB
+    /// (and what mb still needs), ends it and waits until it is gone; until mb MiB are mapped, a
+    /// donor has nothing to give or does not end, or the phone runs low (systemLow, asked before
+    /// every object only when touch: untouched objects take no RAM). touch fills and verifies
+    /// every object here as it arrives.
+    nonisolated static func donorRounds(mb: Int, touch: Bool, log: @escaping @Sendable (String) -> Void)
+        -> (regions: [PPMemoryRegion], pids: [Int32], stop: String, lastDeath: Date) {
         var regions: [PPMemoryRegion] = []
         var pids: [Int32] = []
         var stop = "target reached"
         var lastDeath = Date()
         var mapped: Int { regions.reduce(0) { $0 + Int($1.byteCount >> 20) } }
         for round in 1...maxDonors where mapped < mb {
-            if let low = systemLow() { stop = "before donor \(round): \(low)"; break }
+            if touch, let low = systemLow() { stop = "before donor \(round): \(low)"; break }
             let helper: JitHelper
             do { helper = try JitHelper.start(log: log) } catch {
                 stop = "donor \(round) did not start: \(error.localizedDescription)"; break
@@ -280,7 +378,7 @@ final class SharedMemoryProbe: ObservableObject {
             }
             let before = mapped
             let failure = allocate(mb: grant, purgeable: true, chunkMB: donorChunkMB, proxy: proxy, into: &regions,
-                                   lowMemory: systemLow)
+                                   touch: touch, lowMemory: touch ? systemLow : { nil })
             helper.stop()
             let died = Date()
             let exit = waitForExit(pid: pid, seconds: 5)
@@ -292,6 +390,15 @@ final class SharedMemoryProbe: ObservableObject {
             guard exit.gone else { stop = "donor \(round) (pid \(pid)) did not end"; break }
         }
         if mapped < mb, stop == "target reached" { stop = "\(maxDonors) donors gave too little" }
+        return (regions, pids, stop, lastDeath)
+    }
+
+    private nonisolated static func measureDonors(mb: Int) -> (Bool, String) {
+        pool.removeAll()
+        log("donors start target_mb=\(mb) variant=purgeable chunk_mb=\(donorChunkMB) donor_margin_mb=\(donorMarginMB) "
+            + describe(pp_memory_snapshot()) + " " + system())
+        let (regions, pids, stop, lastDeath) = donorRounds(mb: mb, touch: true, log: log)
+        let mapped = regions.reduce(0) { $0 + Int($1.byteCount >> 20) }
         let total = mapped
         log("donors rounds_done=\(pids.count) total_mb=\(total) target_mb=\(mb) stop=\"\(stop)\"")
         let wait = 60 - Date().timeIntervalSince(lastDeath)
@@ -335,7 +442,7 @@ final class SharedMemoryProbe: ObservableObject {
         return (result.verified, "Pool \(total) MiB verified \(result.verified)")
     }
 
-    private nonisolated static func describe(_ value: Any) -> String {
+    nonisolated static func describe(_ value: Any) -> String {
         let state = value as? [String: NSNumber] ?? [:]
         return ["pid", "kr", "footprint", "resident", "compressed", "internal", "external", "available"].map {
             "\($0)=\((state[$0] as? NSNumber)?.uint64Value ?? 0)"

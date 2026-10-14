@@ -137,7 +137,8 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
   web:close              close the page, as its Close button does; the game gets its input back
                          Example: --action play:epic-8337d1f975514d35ad0c1176e8a29f26 --action web:wait
                          --action web:click:Allow --action wait:30 --action web:close --action wait:10
-  set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true)
+  set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
+                         set:donorPoolMB=0|2048|4096|6144: Settings › Developer › Donor pool, next Play)
   hud:on | hud:off       Settings' Metal HUD
   queue:APP              queue a download from Steam, as a game page's Install does, and go on at once
   downloading:APP        wait (2 min at most) until the queue runs APP's download with progress (after
@@ -177,6 +178,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          The pool stays held for the actions after it
   probe:memory-pool-verify
                          Settings' Verify the donor pool: reads that held pool again
+  probe:memory-pool-zero
+                         Settings' Donor pool: zeroing: 1 GiB from a donor that ends, untouched; then
+                         memset, purge and a fixed-address range mapping (`pool-zero ...` lines)
   background:S           the app opens iOS Settings (Playport goes to the background); S seconds
                          (10-600) later pp ui checks the app's process is still there and brings it
                          back to the front without ending it (a background-return event)
@@ -391,7 +395,7 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP))
 
 
