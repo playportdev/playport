@@ -13,7 +13,13 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 `.work/agent-notes/donor-memory/reports/`.
 
 - **Now:** step 1 is done; H1 passed for both variants at 2048 and 4096 MiB on IPA `19e10116…` ([evidence](../evidence/2026-10-14-donor-memory.md)).
-- **Queue:** step 1, then step 2 only if step 1 passes; steps 3–5 in order.
+- **Queue:** step 2 next, waiting for the owner to start it. It needs the
+  owner's yes for an unentitled research IPA, which must never be
+  distributed. Then steps 3–5 in order. No child is running.
+- **Phone (2026-10-14):** IPA `19e10116…` installed (dev), battery 58 % on
+  power, 3.9 GB free, unattended off. Hollow Knight result filed on PLA-42.
+- **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
+  the stopped first writer's partial report; step1-finish-writer.md).
 
 ## Why
 
