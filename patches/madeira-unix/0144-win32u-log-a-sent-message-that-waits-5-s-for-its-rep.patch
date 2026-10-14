@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 14 Oct 2026 07:33:06 +0200
+Subject: [PATCH] win32u: log a sent message that waits 5 s for its reply
+
+A game that hangs while quitting (The Witcher 3) had its main thread
+blocked in send_inter_thread_message for 94 s, and the thread sampler
+showed only that it waits, not for which message or which thread. The
+reply wait now runs in 5 s slices until it has lasted 5 s, then logs
+once "[sendmsg-stuck] tid=... waits ... ms for a reply: hwnd=... msg=...
+(name) ... to tid=..." and waits as before; when the reply comes it logs
+"[sendmsg-stuck] tid=... replied ... after N ms". A wait under 5 s logs
+nothing and behaves as before.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-14-witcher3-quit-hang.md
+Offered-upstream: no
+---
+ build/win32u-unix/message_ios.c | 49 +++++++++++++++++++++++++++++----
+ 1 file changed, 43 insertions(+), 6 deletions(-)
+
+diff --git a/build/win32u-unix/message_ios.c b/build/win32u-unix/message_ios.c
+index 02eb1a7..0bb248f 100644
+--- a/build/win32u-unix/message_ios.c
++++ b/build/win32u-unix/message_ios.c
+@@ -3890,11 +3890,20 @@ static NTSTATUS post_dde_message_call( HWND hwnd, UINT msg, WPARAM wparam, LPARA
+  *
+  * Wait until a sent message gets replied to.
+  */
+-static void wait_message_reply( UINT flags )
++extern int dprintf( int fd, const char *fmt, ... );
++
++static void wait_message_reply( const struct send_message_info *info, UINT flags )
+ {
+     HANDLE server_queue = get_server_queue_handle();
+     unsigned int wake_mask = QS_SMRESULT | ((flags & SMTO_BLOCK) ? 0 : QS_SENDMESSAGE);
+-
++    /* Playport: a sent message whose receiver has not replied in 5 s is
++     * logged once with its receiver, and again when the reply comes, to name
++     * a cross-thread SendMessage deadlock (a game that hangs while quitting).
++     * The wait is the same, cut into 5 s slices until the first line. */
++    LARGE_INTEGER stuck_start, stuck_now;
++    BOOL stuck_logged = FALSE;
++
++    NtQuerySystemTime( &stuck_start );
+     for (;;)
+     {
+         UINT wake_bits, changed_bits;
+@@ -3911,7 +3920,18 @@ static void wait_message_reply( UINT flags )
+         }
+         SERVER_END_REQ;
+ 
+-        if (wake_bits & QS_SMRESULT) return;  /* got a result */
++        if (wake_bits & QS_SMRESULT)  /* got a result */
++        {
++            if (stuck_logged)
++            {
++                NtQuerySystemTime( &stuck_now );
++                dprintf( 2, "[sendmsg-stuck] tid=%04x replied: hwnd=%p msg=%x (%s) to tid=%04x after %lld ms\n",
++                         (int)GetCurrentThreadId(), info->hwnd, info->msg,
++                         debugstr_msg_name( info->msg, info->hwnd ), (int)info->dest_tid,
++                         (long long)((stuck_now.QuadPart - stuck_start.QuadPart) / 10000) );
++            }
++            return;
++        }
+         if (wake_bits & QS_SENDMESSAGE)
+         {
+             /* Process the sent message immediately */
+@@ -3919,7 +3939,24 @@ static void wait_message_reply( UINT flags )
+             continue;
+         }
+ 
+-        wait_message( 1, &server_queue, INFINITE, wake_mask, wake_mask, 0 );
++        if (stuck_logged)
++        {
++            wait_message( 1, &server_queue, INFINITE, wake_mask, wake_mask, 0 );
++            continue;
++        }
++        wait_message( 1, &server_queue, 5000, wake_mask, wake_mask, 0 );
++        NtQuerySystemTime( &stuck_now );
++        if (stuck_now.QuadPart - stuck_start.QuadPart >= 5000LL * 10000)
++        {
++            stuck_logged = TRUE;
++            dprintf( 2, "[sendmsg-stuck] tid=%04x waits %lld ms for a reply: hwnd=%p msg=%x (%s) wp=%lx lp=%lx "
++                     "type=%d flags=%x timeout=%u to tid=%04x\n",
++                     (int)GetCurrentThreadId(),
++                     (long long)((stuck_now.QuadPart - stuck_start.QuadPart) / 10000),
++                     info->hwnd, info->msg, debugstr_msg_name( info->msg, info->hwnd ),
++                     (long)info->wparam, (long)info->lparam, (int)info->type, info->flags,
++                     info->timeout, (int)info->dest_tid );
++        }
+     }
+ }
+ 
+@@ -3982,7 +4019,7 @@ static LRESULT send_inter_thread_message( const struct send_message_info *info,
+     /* there's no reply to wait for on notify/callback messages */
+     if (info->type == MSG_NOTIFY || info->type == MSG_CALLBACK) return 1;
+ 
+-    wait_message_reply( info->flags );
++    wait_message_reply( info, info->flags );
+     return retrieve_reply( info, reply_size, res_ptr );
+ }
+ 
+@@ -4141,7 +4178,7 @@ NTSTATUS server_send_hardware_message( HWND hwnd, UINT flags, const INPUT *input
+     if (wait)
+     {
+         LRESULT ignored;
+-        wait_message_reply( 0 );
++        wait_message_reply( &info, 0 );
+         retrieve_reply( &info, 0, &ignored );
+     }
+     return ret;

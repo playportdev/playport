@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Wed, 14 Oct 2026 08:23:31 +0200
+Subject: [PATCH] win32u: store the queue masks when the iOS driver drained
+ events
+
+On iOS process_driver_events calls winios.drv's pProcessEvents on every
+thread and sends set_queue_mask with poll_events set when it drained
+input. No iOS queue has a driver fd (nothing sends set_queue_fd), and the
+server's set_queue_mask returns before it stores the wake and changed
+masks when poll_events is set and the queue has no fd. A thread about to
+wait in MsgWaitForMultipleObjects whose call drained input (gyro or
+touch input, which reaches dinput's worker as raw input) kept the masks
+an earlier call left, possibly none: a message then sent to it never
+woke it, and the sender waited for ever. The Witcher 3 hung at quit this
+way: its main thread's SendMessage of dinput's NOTIFY_REFRESH_DEVICES to
+wine_dinput_worker ("[sendmsg-stuck] ... msg=410 ... to tid=00b4").
+
+poll_events is now never set on iOS; the masks are always stored.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-14-witcher3-quit-hang.md
+Offered-upstream: no; winios.drv and the always-on pProcessEvents are Madeira's
+---
+ build/win32u-unix/message_ios.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/build/win32u-unix/message_ios.c b/build/win32u-unix/message_ios.c
+index 0bb248f..74a440d 100644
+--- a/build/win32u-unix/message_ios.c
++++ b/build/win32u-unix/message_ios.c
+@@ -3431,7 +3431,18 @@ static BOOL process_driver_events( UINT events_mask, UINT wake_mask, UINT change
+ #endif
+         if (!skip_server) SERVER_START_REQ( set_queue_mask )
+         {
++#ifdef WINE_IOS
++            /* iOS: pProcessEvents drains winios.drv's ring on any thread and
++             * no queue on iOS has a driver fd (nothing sends set_queue_fd).
++             * The server's set_queue_mask returns early when poll_events is
++             * set and the queue has no fd, without storing the masks below;
++             * a thread that then waits in MsgWaitForMultipleObjects (Wine's
++             * dinput worker) is never woken by a sent message, and its
++             * sender hangs (The Witcher 3 at quit, PLA-344). */
++            req->poll_events = 0;
++#else
+             req->poll_events = drained;
++#endif
+             req->wake_mask = wake_mask;
+             req->changed_mask = changed_mask;
+             wine_server_call( req );
