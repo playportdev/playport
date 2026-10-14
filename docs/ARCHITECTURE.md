@@ -837,7 +837,6 @@ amended by [0088](decisions/0088-opengl-window-surfaces-and-pacing.md) and
   - There are no persistent buffer maps on i386.
   - The in-game menu's screenshot finds no frame on the KosmicKrisp path.
   - A title presenting GL and Direct3D at once is not supported.
-  - Zink keeps no disk cache; KosmicKrisp's pipeline cache serves it.
 
 ### Winios hooks
 

@@ -444,8 +444,23 @@ private struct StorageSettings: View {
                 clearing = false
             }
         }
+        // The graphics backends' shader caches (PLA-279): their size, and the one way to clear them.
+        PadRow(id: "set:shader-cache", title: "Shader cache",
+               subtitle: "Speeds up later starts; Mesa's part is capped at 1 GB",
+               value: shaderBytes.map(ByteCount.format) ?? "…", hint: launch.running ? "" : "Clear") {
+            guard !launch.running, !clearingShaders else { return }
+            clearingShaders = true
+            Task {
+                shaderBytes = await Task.detached(priority: .userInitiated) { () -> UInt64 in
+                    ShaderCache.clear()
+                    return ShaderCache.size()
+                }.value
+                clearingShaders = false
+            }
+        }
         .task {
             cacheBytes = await Task.detached(priority: .utility) { EmulatorCache.size() }.value
+            shaderBytes = await Task.detached(priority: .utility) { ShaderCache.size() }.value
             sharedBytes = await library.steamworksSharedBytes()
         }
     }
@@ -453,6 +468,8 @@ private struct StorageSettings: View {
     @ObservedObject private var launch = TitleLaunch.shared
     @State private var cacheBytes: UInt64?
     @State private var clearing = false
+    @State private var shaderBytes: UInt64?
+    @State private var clearingShaders = false
     @State private var sharedBytes: UInt64?
     @State private var removingShared = false
 }
