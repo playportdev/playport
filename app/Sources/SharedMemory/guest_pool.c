@@ -85,23 +85,28 @@ int pp_pool_take(struct pp_pool *p, uintptr_t lo, uint64_t len, uint32_t *object
             return -1;
         }
     }
+    /* Growing, the candidates are the runs of free pages (leased clear); stopped, only the
+     * runs of stale pages (free pages used since the object's last purge). */
+    int want = p->growth_stopped ? 1 : 0;
     for (uint32_t i = 0; i < p->nobjects && best_len != need; i++) {
         const struct pp_pool_object *o = &p->objects[i];
+        const uint64_t *runs = p->growth_stopped ? o->stale_map : o->leased;
         uint32_t n = pages_of(p, o);
-        if (o->retired || o->awaiting_purge || o->size - o->live < len) continue;
-        for (uint32_t at = next_bit(o->leased, 0, n, 0); at < n;) {
-            uint32_t end = next_bit(o->leased, at, n, 1);
+        if (o->retired || o->awaiting_purge || o->size - o->live < len || (p->growth_stopped && o->stale < len)) continue;
+        for (uint32_t at = next_bit(runs, 0, n, want); at < n;) {
+            uint32_t end = next_bit(runs, at, n, !want);
             if (end - at >= need && end - at < best_len) {
                 best_obj = i;
                 best_at = at;
                 best_len = end - at;
                 if (best_len == need) break;   /* nothing fits better */
             }
-            at = next_bit(o->leased, end, n, 0);
+            at = next_bit(runs, end, n, want);
         }
     }
     if (best_len == UINT32_MAX) {
         p->refused++;
+        if (p->growth_stopped) p->growth_refused++;
         return -1;
     }
     struct pp_pool_object *o = &p->objects[best_obj];

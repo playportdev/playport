@@ -195,11 +195,16 @@ madeira-unix 0148 offers fresh large RW guest commits to optional host hooks
 range and whether it was detached to ordinary memory). A release build answers
 them with the stubs in `WineHostRuntime.swift`, so Wine keeps its ordinary mmap.
 A dev build answers them from a donor pool when Settings › Developer › Donor
-pool is on (`set:donorPoolMB=2048|4096|6144`, off by default): at Play, after
+pool is on (`set:donorPoolMB=auto|2048|4096|6144`, off by default): at Play, after
 the JIT activation, helpers that then end give purgeable objects, and each
 commit is a `vm_map` of an unused range of one at Wine's address
 (`SharedMemory/GuestPool.m`, `Dev/DonorPool.swift`;
-[plan](plans/2026-10-12-donor-memory.md), step 3). An earlier per-allocation
+[plan](plans/2026-10-12-donor-memory.md), step 3). Auto sizes it from the RAM
+headroom: RAM − 2 GiB for the system − the spare floor (12 % of RAM) − the app's
+own part (min(L, 4 GiB)), at most 6 GiB and one donor's grant
+(PlayportKit `DonorPoolSizing`). During play the pool stops taking unused pages
+when the phone's spare memory or jetsam's level falls under its floor
+(`donor-pool: pressure` lines). An earlier per-allocation
 broker asked the living helper over XPC for each mapping, and a hook for FEX's
 data band (0147) moved only 30–90 MiB in Hollow Knight and Kingdom Come
 ([evidence](evidence/2026-10-03-fex-helper-memory.md),
@@ -1092,7 +1097,7 @@ tells the runtime the guest's RAM and the video budget through the environment:
 or under it, L less the runtime's 2 GiB (at least half of L). Video is L − 4 GiB of
 guest heap − 2 GiB of runtime − 512 MiB of margin, at least 1 GiB (768 MiB at or
 under a 4 GiB limit): 8,192 / 1,536 MiB on the reference phone, as before. A pool
-raises the guest's RAM by at most P − L, never the video budget. A title's
+raises the guest's RAM up to Auto's budget (RAM − 2 GiB − the spare floor), never the video budget. A title's
 `totalphys` and `vram-mb` win. The `memory plan:` app-log line has every input and
 output. Opt-in keys, off by default: `vram-budget-event = 1` signals DXGI's
 budget-change event when the ml1075 trim moves the budget (it hung RDR2 when it

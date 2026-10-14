@@ -10,7 +10,8 @@
  * pages, that a guest page keeps its pool page through splits, that an object
  * awaiting its purge is never handed out, and that the guest page table
  * (madeira-unix 0150's small commits: one entry per guest page) refuses a page
- * leased twice or outside it and handles thousands of one-page leases.
+ * leased twice or outside it and handles thousands of one-page leases. With
+ * growth stopped (the phone low on memory) a take uses only stale pages.
  */
 #include "guest_pool.h"
 
@@ -78,6 +79,8 @@ static int take(struct pp_pool *p, unsigned g, unsigned pages)
     uint64_t off, len = (uint64_t)pages * PAGE;
     if (pp_pool_take(p, BASE + (uintptr_t)g * PAGE, len, &obj, &off)) return -1;
     CHECK(obj < OBJS && !pending[obj] && !p->objects[obj].retired);
+    if (p->growth_stopped)   /* no page the pool has not used since its object's purge */
+        for (unsigned k = 0; k < pages; k++) CHECK(pool_state[obj][off / PAGE + k] == DIRTY);
     for (uint64_t at = off, run; (run = pp_pool_next_stale(p, obj, &at, off + len)); at += run) {
         CHECK(at >= off && at + run <= off + len);
         for (uint64_t b = at; b < at + run; b += PAGE) {
@@ -264,6 +267,28 @@ int main(void)
     CHECK(take(&p, 200, 1) < 0);
     check_model(&p);
 
+    /* Growth stopped: fresh pages are not handed out, a stale run is (best fit among stale
+     * runs), and the refusals are counted; growing again, fresh pages serve. */
+    reset_model(&p, 2);
+    take(&p, 0, 16);
+    take(&p, 16, 8);
+    take(&p, 24, 8);
+    release(&p, 0, 16, 0, 0, 0);
+    release(&p, 24, 8, 0, 0, 0);   /* object 0: 0-15 stale, 16-23 leased, 24-31 stale, 32-63 fresh */
+    p.growth_stopped = 1;
+    refused = p.refused;
+    CHECK(take(&p, 100, 17) < 0 && p.refused == refused + 1 && p.growth_refused == 1);
+    CHECK(take(&p, 100, 4) == 0 && guest_off[100] == 24);   /* the smaller stale run, not the fresh tail */
+    CHECK(take(&p, 110, 16) == 0 && guest_off[110] == 0);
+    CHECK(take(&p, 130, 5) < 0 && p.growth_refused == 2);   /* 4 stale pages left; object 1 is all fresh */
+    CHECK(take(&p, 131, 4) == 0 && guest_off[131] == 28);
+    CHECK(take(&p, 140, 1) < 0 && p.growth_refused == 3);
+    check_model(&p);
+    p.growth_stopped = 0;
+    CHECK(take(&p, 140, 1) == 0 && guest_off[140] == 32);
+    CHECK(p.growth_refused == 3);
+    check_model(&p);
+
     /* Every lease page released one at a time in the middle: splits stay within the bound. */
     reset_model(&p, OBJS);
     for (unsigned o = 0; o < OBJS; o++) take(&p, o * OBJ_PAGES, OBJ_PAGES);
@@ -302,6 +327,7 @@ int main(void)
         for (unsigned step = 0; step < 600; step++) {
             unsigned g = NEXT % GUEST_PAGES;
             if (NEXT % 3 == 0) flush(&p);
+            if (NEXT % 16 == 0) p.growth_stopped = !p.growth_stopped;
             if (NEXT % 2) {
                 unsigned pages = 1 + NEXT % 40;
                 if (g + pages > GUEST_PAGES) pages = GUEST_PAGES - g;

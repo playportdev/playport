@@ -18,8 +18,8 @@
 // A donor pool backs guest RAM only, outside the app's limit; GPU memory stays
 // ordinary, and with a pool physical RAM is the wall
 // (docs/evidence/2026-10-14-donor-memory-scale.md). So a pool may raise the
-// guest's RAM by what the phone can give beyond the limit (P − L), never the
-// video budget.
+// guest's RAM only up to the game's budget, the RAM Auto sizes the pool from
+// (DonorPoolSizing.gameBudgetMB, less L), never the video budget.
 
 import Foundation
 
@@ -59,17 +59,17 @@ public struct MemoryPlan: Equatable, Sendable {
         public var limitMB: Int
         /// The phone's RAM (hw.memsize), MiB.
         public var physicalMB: Int
-        /// P: what jetsam's level lets the phone give the app and its pool (DonorPoolSizing); nil unread.
-        public var phoneMB: Int?
         /// The donor pool granted for this Play, MiB (0 for none).
         public var poolMB: Int
 
-        public init(limitMB: Int, physicalMB: Int, phoneMB: Int? = nil, poolMB: Int = 0) {
+        public init(limitMB: Int, physicalMB: Int, poolMB: Int = 0) {
             self.limitMB = limitMB
             self.physicalMB = physicalMB
-            self.phoneMB = phoneMB
             self.poolMB = poolMB
         }
+
+        /// What the game may use of the phone's RAM (DonorPoolSizing.gameBudgetMB).
+        public var budgetMB: Int { DonorPoolSizing.gameBudgetMB(physicalMB: physicalMB) }
     }
 
     /// A title's own values, which win over the plan's.
@@ -122,7 +122,7 @@ public struct MemoryPlan: Equatable, Sendable {
         } else {
             base = max(l - Self.overheadMB, l / 2) / Self.granuleMB * Self.granuleMB
         }
-        let room = inputs.phoneMB.map { max(0, $0 - l) } ?? 0
+        let room = inputs.physicalMB > 0 ? max(0, inputs.budgetMB - l) / Self.granuleMB * Self.granuleMB : 0
         poolRaiseMB = min(max(0, inputs.poolMB), room)
         plannedGuestRAMMB = max(0, min(base + poolRaiseMB, inputs.physicalMB > 0 ? inputs.physicalMB : Int.max))
         let floor = l > Self.lowVideoLimitMB ? Self.videoFloorMB : Self.lowVideoFloorMB
@@ -149,7 +149,7 @@ public struct MemoryPlan: Equatable, Sendable {
     /// The one `memory plan:` log line.
     public var logLine: String {
         var f = ["L_mb=\(inputs.limitMB)", "ram_mb=\(inputs.physicalMB)",
-                 "P_mb=\(inputs.phoneMB.map(String.init) ?? "unread")", "pool_mb=\(inputs.poolMB)",
+                 "budget_mb=\(inputs.budgetMB)", "pool_mb=\(inputs.poolMB)",
                  "guest_ram_mb=\(guestRAMMB)", "video_mb=\(videoMB)",
                  "planned_guest_ram_mb=\(plannedGuestRAMMB)", "pool_raise_mb=\(poolRaiseMB)",
                  "planned_video_mb=\(plannedVideoMB)",

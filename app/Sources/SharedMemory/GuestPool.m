@@ -5,8 +5,16 @@
 // fresh guest commit Wine offers is backed by vm_map of an unused range of one
 // object at Wine's own address, so pool pages are resident only once the game
 // touches them. A release is bookkeeping here, no IPC: the freed range is
-// handed out again (best fit, guest_pool.h), and its stale pages are zeroed by
-// memset at Wine's new address right after the vm_map, before the hook returns.
+// handed out again (best fit, guest_pool.h), and its stale pages are zeroed at
+// Wine's new address right after the vm_map, before the hook returns: runs of
+// 64 KiB or more by madvise(MADV_ZERO), which zeroes the object's pages in the
+// kernel and drops compressed ones without a fault per page (memset took about
+// 125 ms per GiB in Kingdom Come, six times the probe's rate on a mapped view),
+// smaller ones by memset. The first 64 such runs and every 256th after are
+// checked to read zero (their first and last page); a failure, or a check that
+// does not read zero, falls back to memset for good. While the phone is low
+// (pp_guest_pool_set_growth) takes use only stale pages, so the pool's resident
+// set does not grow.
 // An object whose last lease is released is purged whole (8.4 ms per touched
 // 256 MiB on the phone) at the next hook call, before any take: Wine calls the
 // release hook before it replaces its own mapping, so neither zeroing ever runs
@@ -17,7 +25,9 @@
 #include "guest_pool.h"
 #include <mach/mach.h>
 #include <os/lock.h>
+#include <errno.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -33,6 +43,10 @@ static uint64_t backNanos, backMaxNanos, releaseNanos, releaseMaxNanos, releases
 static const uintptr_t windowLo = 0x7000000000ULL, windowHi = 0x7c00000000ULL;
 // Objects whose last lease went in an earlier release, purged by purgePending.
 static uint32_t pending[PP_POOL_MAX_OBJECTS], npending;
+// Stale runs of at least this much are zeroed by MADV_ZERO, unless madviseOff.
+static const uint64_t madviseMinBytes = 64u << 10;
+static bool madviseOff;
+static uint64_t madvBytes, madvNanos, madvFailures, madvChecks;
 
 static void say(const char *format, ...) __attribute__((format(printf, 1, 2)));
 static void say(const char *format, ...) {
@@ -46,6 +60,38 @@ static void say(const char *format, ...) {
 }
 
 static uint64_t now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+
+static bool pageReadsZero(const char *p) {
+    const uint64_t *w = (const uint64_t *)p;
+    for (size_t i = 0; i < vm_page_size / sizeof *w; i++) {
+        if (w[i]) { return false; }
+    }
+    return true;
+}
+
+// Zeroes the stale run [p, p + run) of a take through Wine's new mapping (lock held).
+static void zeroRun(char *p, uint64_t run) {
+    if (!madviseOff && run >= madviseMinBytes) {
+        uint64_t t0 = now();
+        if (!madvise(p, run, MADV_ZERO)) {
+            bool check = ++madvChecks <= 64 || !(madvChecks % 256);
+            if (!check || (pageReadsZero(p) && pageReadsZero(p + run - vm_page_size))) {
+                madvBytes += run;
+                madvNanos += now() - t0;
+                return;
+            }
+            madviseOff = true;
+            say("donor-pool: MADV_ZERO left %p+0x%llx reading non-zero (check #%llu); memset from now on", p, run,
+                madvChecks);
+        } else {
+            int error = errno;
+            madvFailures++;
+            madviseOff = true;
+            say("donor-pool: MADV_ZERO %p+0x%llx failed: errno=%d; memset from now on", p, run, error);
+        }
+    }
+    memset(p, 0, run);
+}
 
 // Purges the objects emptied by earlier releases (Wine has replaced its mappings of
 // them since: it calls the release hook before it does, all under virtual_mutex).
@@ -104,7 +150,10 @@ NSDictionary<NSString *, NSNumber *> *pp_guest_pool_stats(void) {
         @"purges_pending": @(npending),
         @"back_ms_total": @(backNanos / 1000000), @"back_us_max": @(backMaxNanos / 1000),
         @"releases": @(releases), @"release_ms_total": @(releaseNanos / 1000000),
-        @"release_us_max": @(releaseMaxNanos / 1000)};
+        @"release_us_max": @(releaseMaxNanos / 1000),
+        @"madv_zeroed_bytes": @(madvBytes), @"madv_zero_ms_total": @(madvNanos / 1000000),
+        @"madv_failures": @(madvFailures), @"growing": @(pool.growth_stopped ? 0 : 1),
+        @"growth_refused": @(pool.growth_refused)};
     NSArray<PPMemoryRegion *> *objects = regions;
     os_unfair_lock_unlock(&lock);
     uint64_t resident = 0, swapped = 0;
@@ -117,6 +166,12 @@ NSDictionary<NSString *, NSNumber *> *pp_guest_pool_stats(void) {
     all[@"resident_bytes"] = @(resident);
     all[@"swapped_bytes"] = @(swapped);
     return all;
+}
+
+void pp_guest_pool_set_growth(bool growing) {
+    os_unfair_lock_lock(&lock);
+    pool.growth_stopped = !growing;
+    os_unfair_lock_unlock(&lock);
 }
 
 // madeira-unix 0148/0150: back guest [address, address + bytes), a fresh RW commit
@@ -144,7 +199,7 @@ int playport_guest_memory_backing(void *address, size_t bytes) {
             // them through Wine's new mapping before Wine sees it.
             uint64_t t0 = now(), stale = 0;
             for (uint64_t at = offset, run; (run = pp_pool_next_stale(&pool, object, &at, offset + bytes)); at += run) {
-                memset((char *)address + (at - offset), 0, run);
+                zeroRun((char *)address + (at - offset), run);
                 stale += run;
             }
             pp_pool_zeroed(&pool, object, offset, bytes);

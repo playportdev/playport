@@ -428,7 +428,7 @@ enum LaunchCoordinator {
         // MemoryPlan, PLA-352), after the donor pool, just before Wine starts; the launch's
         // madeira.cfg (its title keys over the shared file) and environment may override it.
         var plan: MemoryPlan?
-        let started = runtime.start(poolMB: poolMB, wait: r.jitWait, pooled: { step(.startingRuntime) }) { donorMB, phoneMB in
+        let started = runtime.start(poolMB: poolMB, wait: r.jitWait, pooled: { step(.startingRuntime) }) { donorMB in
             let now = MemoryLimit.read()
             guard let limit = now.effectiveMB else {
                 log("memory plan: no limit reported; the runtime's own readings hold")
@@ -438,8 +438,8 @@ enum LaunchCoordinator {
                 ?? runtime.prefixURL.appendingPathComponent("Documents", isDirectory: true)
             let overrides = MemoryPlan.Overrides.read(value: { MadeiraConfig.value($0, directory: docs) },
                                                       environment: ProcessInfo.processInfo.environment)
-            let p = MemoryPlan(MemoryPlan.Inputs(limitMB: limit, physicalMB: now.physicalMB, phoneMB: phoneMB,
-                                                 poolMB: donorMB), overrides: overrides)
+            let p = MemoryPlan(MemoryPlan.Inputs(limitMB: limit, physicalMB: now.physicalMB, poolMB: donorMB),
+                               overrides: overrides)
             let env = p.environment
             for name in env.keys.sorted() { setenv(name, env[name]!, 1) }
             log("memory plan: " + p.logLine + (now.simulatedMB != nil ? " (simulated limit)" : "")

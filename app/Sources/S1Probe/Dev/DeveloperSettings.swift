@@ -88,7 +88,7 @@ struct DeveloperSettings: View {
                    value: options.first { $0.0 == current }?.1 ?? "\(current.stored) MB (fixed)",
                    options: options.map { PadOption(id: "\($0.0.stored)", label: $0.1) },
                    selected: "\(current.stored)",
-                   note: "Auto: what the phone's free memory gives beyond the app's limit, off under 1 GB. "
+                   note: "Auto: the RAM beside the app's own part, stopping on low memory. "
                        + "Any failure plays on ordinary memory.") {
                 donorPool = Int($0) ?? 0
             }

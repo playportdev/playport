@@ -7,9 +7,9 @@ import XCTest
 /// without the increased-memory-limit entitlement (12 GB: measured, 8,192 with Game Mode and
 /// 6,144 before it; the others from the public crash ceilings).
 final class MemoryPlanTests: XCTestCase {
-    private func plan(_ limit: Int, ram: Int = 11734, phone: Int? = nil, pool: Int = 0,
+    private func plan(_ limit: Int, ram: Int = 11734, pool: Int = 0,
                       _ o: MemoryPlan.Overrides = MemoryPlan.Overrides()) -> MemoryPlan {
-        MemoryPlan(MemoryPlan.Inputs(limitMB: limit, physicalMB: ram, phoneMB: phone, poolMB: pool), overrides: o)
+        MemoryPlan(MemoryPlan.Inputs(limitMB: limit, physicalMB: ram, poolMB: pool), overrides: o)
     }
 
     func testPerTier() {
@@ -40,20 +40,27 @@ final class MemoryPlanTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(plan(8191).videoMB, 1535)
     }
 
+    /// A pool raises the guest's RAM up to the game's budget (DonorPoolSizing.gameBudgetMB, the
+    /// one Auto sizes the pool from), never the video budget.
     func testPoolRaisesGuestRAMNotVideo() {
-        // On the reference phone at Play P (4,440) is under L: a pool adds nothing.
-        XCTAssertEqual(plan(8192, phone: 4440, pool: 5120).guestRAMMB, 8192)
-        // Where the phone can give 1 GiB beyond the limit, 2 GiB granted adds 1 GiB.
-        let p = plan(8192, phone: 9216, pool: 2048)
-        XCTAssertEqual(p.poolRaiseMB, 1024)
-        XCTAssertEqual(p.guestRAMMB, 9216)
-        XCTAssertEqual(p.videoMB, 1536)
-        // Unentitled 12 GB with a large P − L: the raise is P − L (3,044); video stays put.
-        let u = plan(3356, phone: 6400, pool: 3072)
-        XCTAssertEqual(u.guestRAMMB, 1536 + 3044)
+        // The reference phone: the budget (8,278) is 86 over L, under a granule: nothing.
+        let r = plan(8192, pool: 4096)
+        XCTAssertEqual(r.poolRaiseMB, 0)
+        XCTAssertEqual(r.guestRAMMB, 8192)
+        XCTAssertEqual(r.videoMB, 1536)
+        // Before Game Mode (6,144): the budget leaves 2,134 -> 2,048 of a 4,096 pool.
+        let g = plan(6144, pool: 4096)
+        XCTAssertEqual(g.poolRaiseMB, 2048)
+        XCTAssertEqual(g.guestRAMMB, 4096 + 2048)
+        XCTAssertEqual(g.videoMB, 1024)
+        // Unentitled 12 GB with Auto's 4,864: the budget leaves 4,922 -> 4,864, all of it.
+        let u = plan(3356, pool: 4864)
+        XCTAssertEqual(u.guestRAMMB, 1536 + 4864)
         XCTAssertEqual(u.videoMB, 768)
-        // Never above the phone's RAM.
-        XCTAssertEqual(plan(8192, ram: 8600, phone: 12000, pool: 4096).guestRAMMB, 8600)
+        // Unentitled 8 GB with Auto's 1,280: the budget (4,710) leaves 1,355 -> 1,280.
+        XCTAssertEqual(plan(3355, ram: 7679, pool: 1280).guestRAMMB, 1536 + 1280)
+        // No pool, no raise.
+        XCTAssertEqual(plan(3356).poolRaiseMB, 0)
     }
 
     func testOverridesWin() {
@@ -89,8 +96,8 @@ final class MemoryPlanTests: XCTestCase {
     }
 
     func testLogLine() {
-        XCTAssertEqual(plan(8192, phone: 4440, pool: 0).logLine,
-                       "L_mb=8192 ram_mb=11734 P_mb=4440 pool_mb=0 guest_ram_mb=8192 video_mb=1536 "
+        XCTAssertEqual(plan(8192, pool: 0).logLine,
+                       "L_mb=8192 ram_mb=11734 budget_mb=8278 pool_mb=0 guest_ram_mb=8192 video_mb=1536 "
                        + "planned_guest_ram_mb=8192 pool_raise_mb=0 planned_video_mb=1536 overhead_mb=2048 "
                        + "guest_share_mb=4096 margin_mb=512 override=none vulkan_clamp=0")
     }

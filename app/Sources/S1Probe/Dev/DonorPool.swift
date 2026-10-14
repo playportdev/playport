@@ -7,9 +7,10 @@
 // by it, charged to no process (docs/evidence/2026-10-14-donor-memory.md).
 // Nothing touches the pool here: its pages are resident only once the game
 // uses them, and physical RAM is the wall (docs/evidence/2026-10-14-donor-memory-scale.md),
-// so Auto asks for what the phone can give beyond the app's own limit, and a fixed size
+// so Auto sizes the pool from the RAM headroom beside the app's own part, and a fixed size
 // is capped by what jetsam's level says is free (PlayportKit DonorPoolSizing, PLA-351).
-// Any failure leaves the Play on ordinary memory.
+// During play the pool stops growing when the phone runs low (watchGrowth). Any failure
+// leaves the Play on ordinary memory.
 import Foundation
 import PlayportKit
 import SharedMemory
@@ -32,10 +33,9 @@ enum DonorPool {
     }
 
     /// What install took, for the Play's memory plan (PlayportKit MemoryPlan): the pool
-    /// granted (0 for none) and P, nil when the setting is off.
+    /// granted, 0 for none.
     struct Installed {
         var poolMB = 0
-        var phoneMB: Int?
     }
 
     /// Takes and installs the pool the setting asks for; once per process (the runtime starts once).
@@ -46,13 +46,14 @@ enum DonorPool {
         let setting = setting
         guard setting != .off else { return Installed() }
         let r = reading()
-        var installed = Installed(poolMB: 0, phoneMB: r.phoneMB)
+        var installed = Installed()
         let decision = DonorPoolSizing.decide(setting, r)
-        /// The `donor-pool: auto` line: L, P, RAM, the donor's limit, the target and why (PLA-351).
+        /// The `donor-pool: auto` line: L, the game's budget, the app's part, RAM, the donor's
+        /// limit, the target and why (PLA-351).
         func autoLine(donorMB: Int?, target: Int, reason: String) {
             guard setting == .auto else { return }
-            log("auto L_mb=\(r.limitMB) P_mb=\(r.phoneMB) ram_mb=\(r.physicalMB) level=\(r.level) "
-                + "footprint_mb=\(r.footprintMB) donor_limit_mb=\(donorMB.map(String.init) ?? "unknown") "
+            log("auto L_mb=\(r.limitMB) budget_mb=\(r.budgetMB) app_part_mb=\(r.appMB) ram_mb=\(r.physicalMB) "
+                + "level=\(r.level) footprint_mb=\(r.footprintMB) donor_limit_mb=\(donorMB.map(String.init) ?? "unknown") "
                 + "target_mb=\(target) reason=\"\(reason)\"")
         }
         log("setting=\(setting == .auto ? "auto" : "\(setting.stored)") target_mb=\(decision.targetMB) "
@@ -67,7 +68,10 @@ enum DonorPool {
             return installed
         }
         let t0 = Date()
-        let rounds = SharedMemoryProbe.donorRounds(mb: decision.targetMB, touch: false, gateFirstDonor: true) { log($0) }
+        // Auto takes one donor's grant at most (its limit less a margin: about 5.4 GiB on the
+        // 12 GB phone); the fixed sizes keep taking more donors.
+        let rounds = SharedMemoryProbe.donorRounds(mb: decision.targetMB, touch: false, gateFirstDonor: true,
+                                                   donors: setting == .auto ? 1 : 8) { log($0) }
         let granted = rounds.regions.reduce(0) { $0 + Int($1.byteCount >> 20) }
         let seconds = String(format: "%.2f", Date().timeIntervalSince(t0))
         // A donor that did not end would keep its objects charged to itself: no pool then.
@@ -76,7 +80,8 @@ enum DonorPool {
             log("no pool: granted_mb=\(granted) stop=\"\(rounds.stop)\" after \(seconds) s; ordinary memory")
             return installed
         }
-        autoLine(donorMB: rounds.firstDonorMB, target: decision.targetMB, reason: decision.reason)
+        autoLine(donorMB: rounds.firstDonorMB, target: decision.targetMB,
+                 reason: decision.reason + (granted < decision.targetMB ? "; granted \(granted): \(rounds.stop)" : ""))
         guard pp_guest_pool_install(rounds.regions, { line in WineHostRuntime.appendLog(String(cString: line)) }) else {
             log("install refused (\(rounds.regions.count) objects); ordinary memory")
             return installed
@@ -85,8 +90,44 @@ enum DonorPool {
             + "stop=\"\(rounds.stop)\" in \(seconds) s " + SharedMemoryProbe.describe(pp_memory_snapshot())
             + " " + SharedMemoryProbe.system())
         startPeriodicReport()
+        watchGrowth(physicalMB: r.physicalMB)
         installed.poolMB = granted
         return installed
+    }
+
+    /// Seconds between the growth checks.
+    static let growthCheckInterval = 2
+    nonisolated(unsafe) private static var growthTimer: DispatchSourceTimer?
+
+    /// Every growthCheckInterval seconds, on a utility queue, the phone's spare memory and
+    /// jetsam's level decide whether the pool may grow (DonorPoolSizing.growthStop and
+    /// growthResumes); a stopped pool backs new commits only with pages it has used before,
+    /// so new memory is the app's own and jetsam sees it. One `donor-pool: pressure` line per
+    /// change.
+    private static func watchGrowth(physicalMB: Int) {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        var growing = true
+        timer.schedule(deadline: .now() + .seconds(growthCheckInterval), repeating: .seconds(growthCheckInterval))
+        timer.setEventHandler {
+            let s = pp_memory_system()
+            func mb(_ k: String) -> Int { Int((s[k]?.uint64Value ?? 0) >> 20) }
+            let spare = mb("free") + mb("inactive") + mb("speculative") + mb("purgeable")
+            let level = s["level"]?.intValue ?? -1
+            let readings = "spare_mb=\(spare) level=\(level) pressure_level=\(s["pressure"]?.intValue ?? -1) "
+                + "floor_mb=\(DonorPoolSizing.spareFloorMB(physicalMB: physicalMB))"
+            if growing, let why = DonorPoolSizing.growthStop(spareMB: spare, level: level, physicalMB: physicalMB) {
+                growing = false
+                pp_guest_pool_set_growth(false)
+                log("pressure: growth stopped (\(why)) " + readings)
+                report("growth stop")
+            } else if !growing, DonorPoolSizing.growthResumes(spareMB: spare, level: level, physicalMB: physicalMB) {
+                growing = true
+                pp_guest_pool_set_growth(true)
+                log("pressure: growth resumed " + readings)
+            }
+        }
+        growthTimer = timer
+        timer.resume()
     }
 
     /// Seconds between the stats lines while the pool is installed (the title runs in this
@@ -135,6 +176,8 @@ enum DonorPool {
             "purges_pending=\(n("purges_pending"))", "back_ms_total=\(n("back_ms_total"))",
             "back_us_max=\(n("back_us_max"))", "releases=\(n("releases"))",
             "release_ms_total=\(n("release_ms_total"))", "release_us_max=\(n("release_us_max"))",
+            "madv_zeroed_mb=\(mb("madv_zeroed_bytes"))", "madv_zero_ms_total=\(n("madv_zero_ms_total"))",
+            "madv_failures=\(n("madv_failures"))", "growing=\(n("growing"))", "growth_refused=\(n("growth_refused"))",
             "app_footprint_mb=\(footprint)", "app_available_mb=\(available)",
         ]
         log("stats at \(when): " + fields.joined(separator: " "))

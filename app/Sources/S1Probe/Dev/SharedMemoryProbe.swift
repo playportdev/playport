@@ -372,8 +372,9 @@ final class SharedMemoryProbe: ObservableObject {
     /// every round and object; at Play too, though untouched objects take no RAM, PLA-351).
     /// gateFirstDonor: no pool when the first donor's own limit is under
     /// DonorPoolSizing.minimumDonorMB. touch fills and verifies every object here as it arrives.
-    /// firstDonorMB is the first donor's available memory, or nil when none reported.
-    nonisolated static func donorRounds(mb: Int, touch: Bool, gateFirstDonor: Bool = false,
+    /// firstDonorMB is the first donor's available memory, or nil when none reported. At most
+    /// `donors` rounds (Auto takes one: its pool is capped by the first donor's grant).
+    nonisolated static func donorRounds(mb: Int, touch: Bool, gateFirstDonor: Bool = false, donors: Int = maxDonors,
                                         log: @escaping @Sendable (String) -> Void)
         -> (regions: [PPMemoryRegion], pids: [Int32], stop: String, lastDeath: Date, firstDonorMB: Int?) {
         var firstDonorMB: Int?
@@ -382,7 +383,8 @@ final class SharedMemoryProbe: ObservableObject {
         var stop = "target reached"
         var lastDeath = Date()
         var mapped: Int { regions.reduce(0) { $0 + Int($1.byteCount >> 20) } }
-        for round in 1...maxDonors where mapped < mb {
+        let rounds = max(1, min(donors, maxDonors))
+        for round in 1...rounds where mapped < mb {
             if let low = systemLow() { stop = "before donor \(round): \(low)"; break }
             let helper: JitHelper
             do { helper = try JitHelper.start(log: log) } catch {
@@ -426,7 +428,7 @@ final class SharedMemoryProbe: ObservableObject {
             if let failure { stop = "donor \(round): \(failure)"; break }
             guard exit.gone else { stop = "donor \(round) (pid \(pid)) did not end"; break }
         }
-        if mapped < mb, stop == "target reached" { stop = "\(maxDonors) donors gave too little" }
+        if mapped < mb, stop == "target reached" { stop = rounds == 1 ? "one donor's grant" : "\(rounds) donors gave too little" }
         return (regions, pids, stop, lastDeath, firstDonorMB)
     }
 

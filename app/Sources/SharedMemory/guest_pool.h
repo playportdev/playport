@@ -50,6 +50,10 @@ struct pp_pool {
     uint64_t live, stale, served, served_bytes, released_bytes, detaches, detached_bytes;
     uint64_t resets, retired, refused, unmatched_bytes;
     uint64_t reuses, zeroed_bytes;   /* takes with stale pages, and those pages' bytes */
+    /* Set by the caller when the phone runs low: takes then use only stale pages (the pool's
+     * resident set does not grow), and their refusals are also counted in growth_refused. */
+    int growth_stopped;
+    uint64_t growth_refused;
 };
 
 /* The entries of the guest page table for guest [base, end). */
@@ -66,8 +70,9 @@ int pp_pool_add(struct pp_pool *p, uint64_t size);
  * fits (lowest object and offset on a tie; the first exact fit ends the
  * search). Returns 0 and the object and offset, or -1 (counted as refused)
  * when nothing fits, or the request is misaligned, outside the table or
- * overlaps a guest page already leased. The take's stale pages must be zeroed
- * before Wine uses it. */
+ * overlaps a guest page already leased. With growth_stopped set, only runs of
+ * stale pages are candidates. The take's stale pages must be zeroed before
+ * Wine uses it. */
 int pp_pool_take(struct pp_pool *p, uintptr_t lo, uint64_t len, uint32_t *object, uint64_t *offset);
 /* The first run of stale pages of object in [*at, end): returns its length
  * and moves *at to its start, or returns 0 when there is none. */
