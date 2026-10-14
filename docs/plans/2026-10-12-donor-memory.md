@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** steps 1 and 2 done 2026-10-14; step 3 waits for the owner's go-ahead.
+**Date:** 2026-10-12. **Status:** steps 1 and 2 done 2026-10-14; step 3 in progress (owner go-ahead 2026-10-14).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Last built at `9552b8b` (IPA `fc107a8d…`, step 2).
@@ -28,9 +28,11 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   from `memorystatus_level`.
 - **Settled:** the owner chose no unentitled research IPA for step 2; that
   part is deferred, not done.
-- **Now:** nothing running. Step 3 waits for the owner, because step 2 shows
-  the gain on an entitled phone is bounded by free physical RAM.
-- **Queue:** steps 3–5 in order if the owner continues.
+- **Now:** step 3 (owner go-ahead 2026-10-14, option (a) recommended), one
+  writer child; its run id is in `.work/agent-notes/donor-memory/queue.md`.
+  In step 3 below, "0127" means madeira-unix **0148** and "0126" means **0147**
+  (renumbered at the rebase).
+- **Queue:** steps 4 and 5 after step 3.
 - **Phone (2026-10-14):** dev IPA `fc107a8d…` installed, battery 79 % on
   power, 3.8 GB storage free, unattended off. Hollow Knight results filed on
   PLA-42.
