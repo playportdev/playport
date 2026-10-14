@@ -1,6 +1,6 @@
 # Plan: guest RAM from donor processes that end after mapping
 
-**Date:** 2026-10-12. **Status:** step 1 in progress (started 2026-10-14).
+**Date:** 2026-10-12. **Status:** step 1 paused (2048 MiB passed; 4096, HK gate and evidence left).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
 not merged. Nothing on it has been built since the rebase.
@@ -12,9 +12,18 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 `anthropic/claude-sonnet-5-5` (medium). Reports go to
 `.work/agent-notes/donor-memory/reports/`.
 
-- **Now:** step 1 (H1 probe), one writer child on this branch, starting from
-  `4967788`. Its run id is in `.work/agent-notes/donor-memory/queue.md`; wait
-  for its report or read it there before starting anything else.
+- **Now (paused by the owner 2026-10-14):** the step-1 writer was stopped
+  mid-run because it drove the phone in an unexpected way; no child is running
+  and the phone is free. It committed `0534342` (the donor probe: Settings ›
+  Developer › Probes rows, driver actions `probe:memory-donor-tagged-N` and
+  `probe:memory-donor-purgeable-N`). On IPA `19e10116…`, **2048 MiB passed H1
+  for both variants**: the helper was confirmed dead, the data verified at
+  60 s, and the app's footprint fell after the helper died (tagged −43 MiB,
+  purgeable −27 MiB) while about 8.5 GB stayed available. The 4096 MiB runs,
+  the Hollow Knight smoke gate and the evidence record were not done.
+  **Resume:** a writer that reaches UI elements only through named `pp ui`
+  actions (add one if missing, never trial-and-error tapping), runs both
+  4096 variants and HK on one IPA, writes the evidence. Ask the owner first.
 - **Queue:** step 1, then step 2 only if step 1 passes; steps 3–5 in order.
 
 ## Why
