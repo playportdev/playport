@@ -52,9 +52,30 @@ enum DonorPool {
         log("installed granted_mb=\(granted) objects=\(rounds.regions.count) donors=\(rounds.pids.count) "
             + "stop=\"\(rounds.stop)\" in \(seconds) s " + SharedMemoryProbe.describe(pp_memory_snapshot())
             + " " + SharedMemoryProbe.system())
+        startPeriodicReport()
     }
 
-    /// report at the first frame, and 8 s after it (inside a `--until first-frame+10` run).
+    /// Seconds between the stats lines while the pool is installed (the title runs in this
+    /// process, which ends with it: decision 0029).
+    static let reportInterval = 30
+    nonisolated(unsafe) private static var reportTimer: DispatchSourceTimer?
+
+    /// A stats line every reportInterval seconds from the install on, on a utility queue: it
+    /// takes only the pool's own lock to copy its counters, never Wine's.
+    private static func startPeriodicReport() {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        var ticks = 0
+        timer.schedule(deadline: .now() + .seconds(reportInterval), repeating: .seconds(reportInterval))
+        timer.setEventHandler {
+            ticks += 1
+            report("install+\(ticks * reportInterval)s")
+        }
+        reportTimer = timer
+        timer.resume()
+    }
+
+    /// report at the first frame, and 8 s after it (inside a `--until first-frame+10` run);
+    /// the periodic lines (startPeriodicReport) follow longer runs.
     static func reportFirstFrame() {
         report("first frame")
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 8) { report("first frame+8s") }

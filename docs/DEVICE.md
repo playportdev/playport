@@ -311,7 +311,12 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   steps into Training). Time pushes from the first frame (`first-frame+25`): the JIT and
   runtime start before it vary. Within a title, `pp pad wait-still --shot
   FILE` waits for the screen to settle (a menu after a load) instead of a
-  fixed wait, and leaves the settled screen in FILE.
+  fixed wait, and leaves the settled screen in FILE. `pp pad wait-text TEXT ...
+  [--need N] [--press STEP ...] --shot FILE` waits until tesseract reads the
+  menu's labels on the screen, pressing STEP (an intro's skip) only while none
+  is read, so the next press lands on a recognized menu, not after a fixed
+  delay (Kingdom Come: `--press "150 B" --press "300 -" --need 2 "New Game"
+  "Load Game" Settings`, then `pp pad send "150 A" "1000 -"` on its Continue).
 - **The in-game menu.** Holding the controller's Home button half a second over
   a running game opens Playport's menu (`UI/InGameMenuView.swift`): the game is
   paused behind it (its pads at rest, audio stopped, its threads suspended by
