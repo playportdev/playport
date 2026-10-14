@@ -143,3 +143,4 @@
 0142-ntdll-end-a-killed-thread-in-an-i386-program-s-in-pr.patch
 0143-wineserver-do-not-hold-a-thread-in-FEX-s-module-or-a.patch
 0144-win32u-log-a-sent-message-that-waits-5-s-for-its-rep.patch
+0145-win32u-store-the-queue-masks-when-the-iOS-driver-dra.patch
