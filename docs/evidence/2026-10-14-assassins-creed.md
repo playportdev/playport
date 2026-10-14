@@ -87,8 +87,12 @@ With `pp ui --pad --leave-running`:
 The owner took over testing at this point. Menus, new game and control in play were
 **not** checked by this session.
 
+## The owner's play
+
+On the same IPA, the owner played the game on the phone and reported it **playable**:
+status Works.
+
 ## Open
 
-- Menu and controller input in the game, and gameplay: the owner is testing.
 - A warm start gains nothing when the game's window base moves between launches (seen once
   here). This costs speed only, not correctness.
