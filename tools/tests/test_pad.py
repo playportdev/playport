@@ -134,6 +134,13 @@ class WaitText(unittest.TestCase):
         self.assertFalse(self.run_screens([""], press="150 B\n", timeout=0))
         self.assertEqual(self.phone.pushed, [])
 
+    def test_the_highlight_above_is_needed_too(self):
+        menu = "New Game Load Game Settings"
+        self.assertFalse(self.run_screens([menu], need=2, timeout=0, above="New Game", highlight=lambda p, t: False))
+        self.assertFalse(self.run_screens([menu], need=2, timeout=0, above="New Game", highlight=lambda p, t: None))
+        self.assertEqual([kw["highlight_above"] for k, kw in self.events if k == "text-check"], [False, False])
+        self.assertTrue(self.run_screens([menu], need=2, timeout=0, above="New Game", highlight=lambda p, t: True))
+
     def test_a_failed_screenshot_presses_nothing_and_looks_again(self):
         menu = "New Game Load Game Settings"
         self.assertTrue(self.run_screens([None, "", None, menu], press="150 B\n", timeout=60))
@@ -157,6 +164,45 @@ class Ocr(unittest.TestCase):
             self.assertEqual(pad.found_texts(pad.ocr(path), ["New Game", "Load Game", "Settings"]),
                              ["New Game", "Load Game", "Settings"])
             self.assertEqual(os.listdir(d), ["menu.png"])
+        finally:
+            shutil.rmtree(d)
+
+    def menu_screen(self, path, labels, highlighted=0):
+        """A 1600x737 screen: a line of text at the bottom left, and a menu column at the
+        right whose HIGHLIGHTED item is dark text on a light banner (as Kingdom Come's)."""
+        from PIL import ImageFont
+        im = Image.new("RGB", (1600, 737), (34, 44, 30))
+        draw = ImageDraw.Draw(im)
+        font = ImageFont.load_default(size=30)
+        draw.text((80, 600), "Link the game to your account", fill=(220, 200, 150), font=font)
+        for i, label in enumerate(labels):
+            y = 265 + 36 * i
+            if i == highlighted:
+                draw.rectangle([1200, y - 4, 1430, y + 34], fill=(235, 232, 225))
+                draw.text((1250, y), label, fill=(30, 26, 20), font=font)
+            else:
+                draw.text((1250, y), label, fill=(240, 236, 225), font=font)
+        im.save(path)
+        return path
+
+    def test_reads_a_menu_column_and_the_highlighted_item_above(self):
+        d = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
+        try:
+            crop = (0.70, 0.33, 0.92, 0.80)
+            menu = self.menu_screen(os.path.join(d, "menu.png"), ["Continue", "New Game", "Load Game", "Settings", "Quit"])
+            read = pad.ocr(menu, crop)
+            self.assertNotIn("Link", read, "only the menu column is read")
+            self.assertEqual(pad.found_texts(read, ["New Game", "Load Game"]), ["New Game", "Load Game"])
+            self.assertTrue(pad.highlight_above(menu, "New Game", crop))
+            # Highlighted further down: nothing light just above New Game.
+            down = self.menu_screen(os.path.join(d, "down.png"), ["Continue", "New Game", "Load Game", "Settings"], 2)
+            self.assertFalse(pad.highlight_above(down, "New Game", crop))
+            # No save: New Game is the first item, highlighted (and not read, or read inside the bar).
+            fresh = self.menu_screen(os.path.join(d, "fresh.png"), ["New Game", "Load Game", "Settings", "Quit"])
+            self.assertFalse(pad.highlight_above(fresh, "New Game", crop))
+            # A screen without the text, as Kingdom Come's EULA page.
+            self.assertIsNone(pad.highlight_above(menu, "Accept", crop))
+            self.assertEqual(sorted(os.listdir(d)), ["down.png", "fresh.png", "menu.png"])
         finally:
             shutil.rmtree(d)
 

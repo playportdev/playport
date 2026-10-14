@@ -317,6 +317,10 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   is read, so the next press lands on a recognized menu, not after a fixed
   delay (Kingdom Come: `--press "150 B" --press "300 -" --need 2 "New Game"
   "Load Game" Settings`, then `pp pad send "150 A" "1000 -"` on its Continue).
+  Tesseract misreads a highlighted item, so `--crop L,T,R,B --highlight-above TEXT
+  --timeout 0` checks once that a light bar sits just above TEXT in that part of
+  the screen (Kingdom Come's Continue above New Game: `--crop 0.70,0.33,0.92,0.80
+  --highlight-above "New Game" "New Game"`) before that A.
 - **The in-game menu.** Holding the controller's Home button half a second over
   a running game opens Playport's menu (`UI/InGameMenuView.swift`): the game is
   paused behind it (its pads at rest, audio stopped, its threads suspended by
