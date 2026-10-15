@@ -421,5 +421,14 @@ AAA game's memory.
 
 ## Not done
 
-Steps 4 and 5, and the unentitled part of step 2. Nothing from this branch is on
-`main`.
+Steps 4 and 5 were run on the reference phone, with step 5 ending at an
+off-by-default key (PLA-354). Still open:
+
+- the unentitled part of step 2 and every phone other than the 12 GB reference
+  (PLA-351);
+- the detach-path probe (no way to put `protect.exe` on the phone without the
+  owner);
+- the Vulkan clamp (PLA-353);
+- the lower 1 % lows in HK play with the pool.
+
+Nothing from this branch is on `main`.
