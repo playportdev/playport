@@ -116,7 +116,7 @@ resource	Runtime/arm64ec-windows/d2d1.dll	1441792	5e770de5a3bd6c01f411f22a24924c
 resource	Runtime/arm64ec-windows/d3d10.dll	917504	609eff227ab4983fd285ab13e815868ff0ea701331919f08444086ff71d7317f	wine-build	build-arm64ec/dlls/d3d10/arm64ec-windows/d3d10.dll	P2
 resource	Runtime/arm64ec-windows/d3d10_1.dll	720896	b90ea76cb7f2667461b28e1acf7d0384d6112ec94e006645e3592534b2932890	wine-build	build-arm64ec/dlls/d3d10_1/arm64ec-windows/d3d10_1.dll	P2
 resource	Runtime/arm64ec-windows/d3d10core.dll	1253376	1087b584a71ec2bc3ba403ef3717fe2c5ac2a2b525391b41a7e13e041c9689d8	dxmt-pe	arm64ec-windows/d3d10core.dll	P5-dxmt-pe
-resource	Runtime/arm64ec-windows/d3d11.dll	5242880	9f26db1d9390f56e1aea6937c5a80791edc122e2d6e6fb7b9c0890361980a88d	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/arm64ec-windows/d3d11.dll	5251072	6c3d0734514e6f82b4f427106c810709fecdab6fb54582369b2a6387f55ddc15	dxmt-pe	arm64ec-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/arm64ec-windows/d3d12.dll	851968	31f741b913a2e11d67bef3023cb21c5b540222724074bc56a36efd4abf4b68a7	wine-build	build-arm64ec/dlls/d3d12/arm64ec-windows/d3d12.dll	P2
 resource	Runtime/arm64ec-windows/d3d12core.dll	655360	082b10c803a959b76897f8960045f30373043b8a6522114185c8fa69ddca6af4	wine-build	build-arm64ec/dlls/d3d12core/arm64ec-windows/d3d12core.dll	P2
 resource	Runtime/arm64ec-windows/d3d8thk.dll	720896	58e980988fe0a9a2a874ae31e563197099121783c34de7c5487f27c4dc1aa372	wine-build	build-arm64ec/dlls/d3d8thk/arm64ec-windows/d3d8thk.dll	P2
@@ -861,7 +861,7 @@ resource	Runtime/aarch64-windows/d2d1.dll	1114112	8bda8e71c388563848ffa37ceca89b
 resource	Runtime/aarch64-windows/d3d10.dll	655360	be143b624fc092844e0df42870a03d5f92b19a653b87750fd5a77fcf6dbed573	wine-build	build-macos/dlls/d3d10/aarch64-windows/d3d10.dll	P2
 resource	Runtime/aarch64-windows/d3d10_1.dll	524288	983c83b35c452289ff73118a2aafe0e29edd18e9dd7c6811e23b6d727439318a	wine-build	build-macos/dlls/d3d10_1/aarch64-windows/d3d10_1.dll	P2
 resource	Runtime/aarch64-windows/d3d10core.dll	524288	cd7283d7945909a18d4ca7a7617f1e8617cc5fadf69b93dd97497f5012eeeb56	wine-build	build-macos/dlls/d3d10core/aarch64-windows/d3d10core.dll	P2
-resource	Runtime/aarch64-windows/d3d11.dll	4612096	82526b99e2431521fdec7d97f73f8538fcbda2971a7b72ec53c0cd30fc749978	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
+resource	Runtime/aarch64-windows/d3d11.dll	4624384	049387ef157cc321869f1561c9c9ac707b72641ebeb434b8a0cf9f42bd7ff63f	dxmt-pe	aarch64-windows/d3d11.dll	P5-dxmt-pe
 resource	Runtime/aarch64-windows/d3d12.dll	589824	7ad80fead64265865868f371e2151a2fb77b43f3d19c571d952f4aa5291ebcc9	wine-build	build-macos/dlls/d3d12/aarch64-windows/d3d12.dll	P2
 resource	Runtime/aarch64-windows/d3d12core.dll	458752	380f34b8c7eb75a8e8d7d025651fecc0402b34cc3cb248458bc92340c058ab3d	wine-build	build-macos/dlls/d3d12core/aarch64-windows/d3d12core.dll	P2
 resource	Runtime/aarch64-windows/d3d8thk.dll	524288	25680f185831e16c0133d3c41a5c898536a8deb5b80d89484f70adf37ca950c3	wine-build	build-macos/dlls/d3d8thk/aarch64-windows/d3d8thk.dll	P2
