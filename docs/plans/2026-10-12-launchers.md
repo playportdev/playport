@@ -11,6 +11,25 @@ copies with a message ([PLA-266](https://linear.app/playportdev/issue/PLA-266));
 [Where a launcher lives in the UI](#where-a-launcher-lives-in-the-ui). **Repository path:** `docs/plans/2026-10-12-launchers.md`. Scratch for this
 plan: `$PLAYPORT_BUILD/agent-notes/pla254/`.
 
+## Progress (Rockstar track)
+
+**Owner, 2026-10-15:** work the Rockstar Games Launcher alone first (Stages R, 0, 1, 2 for
+Rockstar only; Ubisoft, EA and Battle.net wait). Run with the plan-runner skill: hard tasks
+`anthropic/claude-opus-5-5` (medium), easy tasks `anthropic/claude-sonnet-5-5` (medium).
+Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Reports and scratch:
+`$PLAYPORT_BUILD/agent-notes/pla254-rockstar/` (`reports/`, `inputs/`).
+
+- **Why now:** RDR2's Steam copy (installed on the phone, about 120 GB) stops at its
+  bootstrapper `PlayRDR2.exe` with "File not found." because no Rockstar Games Launcher is
+  installed ([PLA-364](https://linear.app/playportdev/issue/PLA-364), run
+  `$PLAYPORT_BUILD/ui-runs/20261015T210227`).
+- **Running:** chunk 1, Stage R for Rockstar only
+  ([PLA-291](https://linear.app/playportdev/issue/PLA-291)), host only, no phone.
+- **Queue:** Stage R (Rockstar) → Stage 0 with the Rockstar installer and sign-in page as
+  subject (PLA-292/314, 277, 274, 275 as needed) → Stage 1 (PLA-271, 267, 293, 273, 278) →
+  Stage 2 (PLA-294, 295; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
+- **Phone:** RDR2 and Steamworks Shared installed, 9.6 GB free, unattended mode on.
+
 ## Goal
 
 The owner's goal (2026-10-12): Playport runs publisher launchers, and through them the games that
