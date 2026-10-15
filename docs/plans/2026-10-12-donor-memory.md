@@ -105,15 +105,18 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
      passed. A heavier Vulkan title over 1.5 GiB is not measured.
      - **KosmicKrisp** already exposes `VK_EXT_external_memory_host`. Nothing in DXVK imports
        host memory, so it was not pursued.
-- **Phone (2026-10-15, 07:13):** dev IPA `efd4f8e6…` (`4e3ea9e`, mesa 0036) installed, 100 %,
-  unattended on, app killed. The step 5 sessions' `--settings` for HK and KCD
+  6. **Memory ceiling and video figure (PLA-216, PLA-355, PLA-352), measured 2026-10-15:** KCD 600 s × 5 with Auto (4 GiB) and Runtime keys `totalphys`/`vram-mb` (IPA `efd4f8e6…`, no code change); guest told 9,216 ran without jetsam but took the kernel's available memory to 1,137 MiB, under the 1,408 floor; 2,048/3,072 MiB of video changed KCD's machine class (1 → 2) but not its graphics ledger (about 1.6 GB), and pool off at 3,072 peaked 7,931 with no jetsam; constants kept ([evidence](../evidence/2026-10-15-memory-ceiling-vram.md)).
+- **Phone (2026-10-15, 10:08):** dev IPA `efd4f8e6…` (`4e3ea9e`, mesa 0036) installed, 80 % on
+  the charger, unattended on, app killed. The ceiling session's KCD `--settings` (screen 720,
+  60 FPS, Runtime keys `totalphys`/`vram-mb`) are undone at the app's next launch outside a
+  session. The step 5 sessions' `--settings` for HK and KCD
   (`gpu-pool-buffers`, screen 720, 60 FPS) and `set:donorPoolMB` are undone at the app's next
   launch outside a session. The sessions' `set:donorPoolMB` is undone at the app's next launch
   outside a session. KCD and HK are installed; HK profile slot 3 read New Game before the last
   run, which was killed without a save. The `protect` probe was imported on 2026-10-15 as
   `dir-protect` (its `Documents/Import/protect` copy stays). Results are filed on
-  PLA-42, PLA-49, PLA-216 and PLA-350 (PLA-352's, the 2026-10-15 follow-ups' and the Auto-headroom
-  session's for the supervisor to file).
+  PLA-42, PLA-49, PLA-216 and PLA-350 (PLA-352's, the 2026-10-15 follow-ups', the Auto-headroom
+  session's and the ceiling session's for the supervisor to file).
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
   step2-writer.md, step3-writer.md, step4-writer.md,
