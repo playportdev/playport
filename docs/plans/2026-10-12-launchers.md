@@ -91,8 +91,10 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
     Playport closes the launcher, and the game keeps its own Social Club CEF. This needs a
     decision record (Stage 2, with PLA-295). It takes the place of "hidden and hibernating"
     during play, and of suspension (dropped).
-- **Running now:** chunk 2 below (writer run `7179aee9`: builds, phone, commits). Phone: dev IPA
-  `fb14fc65` installed, Hollow Knight and RDR2 installed, 3.3 GB free.
+- **Chunk 2 ended 2026-10-16 after steps 1–2** (writer run `7179aee9`, stopped for context;
+  commits `f71f15a`, `9a381ca`, `df5d1d5`; report `reports/chunk2-stage0.md`).
+- **Running now: chunk 3**, a fresh writer for the remainder of step 2 (the service exiting
+  `0xC0000001`) and steps 3–7 below.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
@@ -137,15 +139,10 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   [PLA-294](https://linear.app/playportdev/issue/PLA-294) and
   [PLA-295](https://linear.app/playportdev/issue/PLA-295) (Stage 2; PLA-295 also depends on
   PLA-253), PLA-273 (until a game runs beside the launcher), and PLA-213 (done).
-- **In-game phase (open, needs the owner):**
-  - the owner signs in once, in person, on the sway display;
-  - a decision on the Steam client the launcher's `steam_api64` may use under desktop Proton (the
-    owner's running Steam, or none);
-  - then RDR2 from the scratch prefix against a read-only view of the owner's install, for the
-    research questions 1, 2, 3, 5 and 7.
-- **Queue:** chunk 2 (above) → Stage 1 (PLA-271, 267, 293, 273, 278) → Stage 2 (PLA-294, 295,
+- **Queue:** chunk 3 (steps 2–7 above) → Stage 1 (PLA-271, 267, 293, 273, 278) → Stage 2 (PLA-294, 295,
   PLA-253; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
-- **Phone:** RDR2 and Steamworks Shared installed, 9.6 GB free, unattended mode on.
+- **Phone:** dev IPA `2966df7c` installed. RDR2 (with depot 1899671), Hollow Knight and Steamworks
+  Shared are installed, and the Rockstar launcher is installed in the prefix. About 3.9 GB free.
 
 ## Goal
 
