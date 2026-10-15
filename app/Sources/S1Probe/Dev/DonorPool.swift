@@ -156,7 +156,8 @@ enum DonorPool {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 8) { report("first frame+8s") }
     }
 
-    /// One line of the pool's counters and the app's footprint (at the first frame, say).
+    /// One line of the pool's counters, the app's footprint and the phone's memory (at the first
+    /// frame, say).
     static func report(_ when: String) {
         let s = pp_guest_pool_stats()
         guard (s["objects"]?.intValue ?? 0) > 0 else { return }
@@ -180,6 +181,6 @@ enum DonorPool {
             "madv_failures=\(n("madv_failures"))", "growing=\(n("growing"))", "growth_refused=\(n("growth_refused"))",
             "app_footprint_mb=\(footprint)", "app_available_mb=\(available)",
         ]
-        log("stats at \(when): " + fields.joined(separator: " "))
+        log("stats at \(when): " + fields.joined(separator: " ") + " " + SharedMemoryProbe.system())
     }
 }
