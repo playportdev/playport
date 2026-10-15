@@ -81,12 +81,17 @@ RDR2 kept running through every step.
 - The game-owned CEF uses 5 processes, 150 threads and 2.1 GiB PSS (1.2 GiB of it libcef copies),
   at 0.5% CPU.
 
+**Saving without the launcher works.** At 23:44, about 17 minutes after step 8, the owner saved
+once the prologue was over [O]. With no launcher process alive, the game wrote its save slots
+(`SRDR30000`, `SRDR30015`, their `.bak` copies, `Player` and `cloudsavedata.dat`) [M, file
+times]. The game's `socialclub.log` logged "Cloud file registered" for the save files after the
+launcher was gone, with no sign-out or offline line [M].
+
 **Not determined:**
 
-- saving without the launcher (manual saves are unavailable in the prologue; the last save was
-  written before step 8);
-- the ticket's expiry or refresh without the launcher;
-- cloud saves, achievements and presence without the launcher.
+- the ticket's expiry or refresh without the launcher, over more than an hour;
+- whether cloud saves reach Rockstar's servers (only their local registration is logged);
+- achievements and presence without the launcher.
 
 ## What it means for Playport
 

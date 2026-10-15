@@ -83,7 +83,8 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
     1.2 GiB is libcef private copies) and signs in with the ticket it already holds.
   - **Suspension is dropped:** traffic runs between the game and the launcher during play
     (ticket, presence).
-  - **Not determined:** saving and the ticket refresh without the launcher.
+  - **Saving works without the launcher** (23:44, 17 min after it was ended; save files and Social
+    Club cloud registration). **Not determined:** the ticket refresh over more than 1 hour.
   - **For the owner to decide:** whether Playport ends the launcher after the game's Social Club
     has signed in.
 - **Running now:** chunk 2 below (writer run `7179aee9`: builds, phone, commits). Phone: dev IPA
