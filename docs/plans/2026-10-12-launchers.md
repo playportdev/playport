@@ -74,8 +74,8 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   - There is no "Hibernate while game is running" setting string in this build; there is an
     internal UI hibernation in Social Club.
   - The installer and `Social-Club-Setup.exe` are the same bytes from Steam and from Rockstar.
-- **Running now (owner, 2026-10-15, in parallel):** chunk 2 below (the writer: builds, phone,
-  commits), and the in-game measurement (read-only observer: the owner plays RDR2 Story from
+- **Running now (owner, 2026-10-15, in parallel):** chunk 2 below (writer run `7179aee9`: builds, phone,
+  commits), and the in-game measurement (observer run `319b1952`, read-only: the owner plays RDR2 Story from
   the owner's desktop Steam on the owner's desktop; the observer reads `/proc` and sockets only,
   writes `$PLAYPORT_BUILD/agent-notes/pla254-rockstar/ingame/`, and commits nothing; the
   supervisor folds its results into the evidence). Phone: IPA `560d43cb` installed (newest
