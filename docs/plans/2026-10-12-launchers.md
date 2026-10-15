@@ -96,6 +96,7 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
 - **Chunk 3 ended 2026-10-16 after steps 2–3** (writer run `8c1186ac`, stopped at half its context;
   report `reports/chunk3-stage0.md`). **Next: a fresh writer for steps 5, 4, 6, 7, in that order**
   (the supervisor's order: Open first, so CEF can start without Steam mode).
+- **Running now: chunk 4** (writer run `25d06b24`, owner away, unattended): steps 5, 4, 6, 7.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
