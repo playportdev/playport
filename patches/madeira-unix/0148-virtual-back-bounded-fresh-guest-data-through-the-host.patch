@@ -1,0 +1,207 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 3 Oct 2026 08:14:46 +0200
+Subject: [PATCH] virtual: back bounded fresh guest data through the host
+
+Only fresh anonymous RW commits of at least 1 MiB in the guest band qualify. Keep existing file backing precedence, preserve partial host pages and already committed data, and leave protection/decommit/unmap under Wine ownership. Detach to ordinary anonymous memory before any non-RW protection, preserving contents and reporting allocation failure before changing logical protection.
+
+Every tracked range Wine stops using is reported to the host with its address, size and whether it was detached: local bookkeeping, never IPC, so the host can reuse it. The host backs at most 8 GiB at once (the dev donor pool's 32 objects of 256 MiB); with host pages of at least 16 KiB the page-aligned interval table has a matching hard bound, and portable host tests check splitting and removal against a page model.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-03-kcd-helper-memory.md; docs/evidence/2026-10-14-donor-pool-at-play.md
+Offered-upstream: no; optional iOS host experiment
+---
+ build/ntdll-unix/pp_guest_ranges.h | 36 +++++++++++++
+ build/ntdll-unix/virtual_ios.c     | 84 +++++++++++++++++++++++++++++-
+ 2 files changed, 118 insertions(+), 2 deletions(-)
+ create mode 100644 build/ntdll-unix/pp_guest_ranges.h
+
+diff --git a/build/ntdll-unix/pp_guest_ranges.h b/build/ntdll-unix/pp_guest_ranges.h
+new file mode 100644
+index 0000000..aaa8d07
+--- /dev/null
++++ b/build/ntdll-unix/pp_guest_ranges.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later
++ * Host-backed guest intervals, serialized by Wine's virtual_mutex.
++ * The host backs at most PP_GUEST_MAX_BYTES at once (the dev donor pool: at most
++ * 32 objects of 256 MiB). Every interval is host-page aligned and nonempty, and
++ * Wine backs nothing when the host page is under PP_GUEST_PAGE, so the interval
++ * bound also covers splits. The array is zero-fill BSS: only the entries in use
++ * need physical pages. */
++#ifndef PP_GUEST_RANGES_H
++#define PP_GUEST_RANGES_H
++#include <stdint.h>
++#include <stddef.h>
++#include <assert.h>
++#define PP_GUEST_MAX_BYTES (8ull << 30)
++#define PP_GUEST_PAGE 16384u
++#define PP_GUEST_MAX_RANGES ((unsigned)(PP_GUEST_MAX_BYTES / PP_GUEST_PAGE))
++struct pp_guest_range { uintptr_t lo, hi; };
++static int pp_guest_overlap(struct pp_guest_range r, uintptr_t lo, uintptr_t hi)
++{
++    return r.lo < hi && lo < r.hi;
++}
++/* Remove one intersecting interval, preserving any remaining prefix/suffix.
++ * Returns 1 if index i was removed (the former last item is now at i). */
++static int pp_guest_trim(struct pp_guest_range *r, unsigned *n, unsigned i,
++                         uintptr_t lo, uintptr_t hi)
++{
++    uintptr_t a = r[i].lo, b = r[i].hi;
++    assert(i < *n && lo < hi && a <= lo && hi <= b);
++    if (lo == a && hi == b) { r[i] = r[--*n]; return 1; }
++    if (lo == a) { r[i].lo = hi; return 0; }
++    if (hi == b) { r[i].hi = lo; return 0; }
++    assert(*n < PP_GUEST_MAX_RANGES);
++    r[(*n)++] = (struct pp_guest_range){hi, b};
++    r[i].hi = lo;
++    return 0;
++}
++#endif
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 5626260..45a3439 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -6289,6 +6289,14 @@ static inline BOOL use_aslr(void)
+            (ios_cur_image_info()->DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE);
+ }
+ 
++/* Optional host backing for fresh guest data (ios_guest_back). A missing or
++ * refusing host hook leaves the original mmap path untouched, as in release
++ * builds. The host maps its memory at Wine's exact address; Wine still owns
++ * every protection, decommit and unmap, and reports each tracked range it stops
++ * using (address, size, and whether it was detached to ordinary memory). */
++extern int playport_guest_memory_backing( void *, size_t ) __attribute__((weak_import));
++extern void playport_guest_memory_released( void *, size_t, int ) __attribute__((weak_import));
++
+ /* mmap() anonymous memory at a fixed address */
+ void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
+ {
+@@ -8436,6 +8444,8 @@ static inline UINT64 maskbits( size_t idx )
+  *           set_arm64ec_range
+  */
+ static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot );  /* fwd-decl */
++static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct file_view *view );
++static int ios_guest_release_range( void *base, size_t size, int copy_back );
+ static void ios_swap_release_range( void *base, size_t size, int copy_back );   /* ml1077 fwd-decls */
+ static void ios_swap_init( void );
+ static int ios_swap_eligible( const void *base, size_t size, unsigned int vprot, struct file_view *view );
+@@ -9500,6 +9510,7 @@ static void delete_view( struct file_view *view ) /* [in] View */
+     /* ml989: entered BEFORE any field of `view` is read, so "call never
+      * entered" is distinguishable from "died reading the view". */
+     if (ios_retire_trace_armed) ios_retire_mark( "D0>\n" );
++    ios_guest_release_range( view->base, view->size, 0 );
+     ios_swap_release_range( view->base, view->size, 0 );   /* ml1077 */
+     if (!(view->protect & VPROT_SYSTEM)) unmap_area( view->base, view->size );
+     if (ios_retire_trace_armed) ios_retire_mark( "D1u\n" );   /* unmap_area done */
+@@ -11982,6 +11993,12 @@ static NTSTATUS set_protection( struct file_view *view, void *base, SIZE_T size,
+         if ((view->protect & access) != access) return STATUS_INVALID_PAGE_PROTECTION;
+     }
+ 
++    /* Keep every tracked helper range physically RW. Detach, preserving
++     * contents, before ANY other protection (including NOACCESS); otherwise
++     * a later EXEC promotion could not safely read its old data. On failure
++     * leave Wine's logical protection unchanged. */
++    if ((vprot & (VPROT_READ | VPROT_WRITE | VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD)) != (VPROT_READ | VPROT_WRITE) &&
++        !ios_guest_release_range( base, size, 1 )) return STATUS_NO_MEMORY;
+     if (!set_vprot( view, base, size, vprot | VPROT_COMMITTED ))
+     {
+         dprintf(2, "[vmem-denied] set_vprot failed: base=%p size=%p protect=0x%x\n",
+@@ -13183,6 +13200,60 @@ static int ios_swap_eligible( const void *base, size_t size, unsigned int vprot,
+     if (size < (8u << 20)) return 0;
+     return 1;
+ }
++#include "pp_guest_ranges.h"
++static struct pp_guest_range ios_guest_ext[PP_GUEST_MAX_RANGES];
++static unsigned ios_guest_n;
++static void ios_guest_back( void *base, size_t size, unsigned int vprot, struct file_view *view )
++{
++    uintptr_t b = (uintptr_t)base, lo, hi;
++    static unsigned backs;
++    if (!playport_guest_memory_backing || force_exec_prot || size < (1u << 20) || host_page_size < PP_GUEST_PAGE) return;
++    if (!(vprot & VPROT_WRITE) || (vprot & (VPROT_EXEC | VPROT_WRITECOPY | VPROT_GUARD | VPROT_WRITEWATCH))) return;
++    if (!view || !is_view_valloc( view ) || (view->protect & (SEC_FILE | SEC_IMAGE | SEC_RESERVE | SEC_NOCACHE | VPROT_SYSTEM))) return;
++    if (b < 0x7000000000ULL || b >= 0x7c00000000ULL || size > 0x7c00000000ULL - b) return;
++    lo = (b + host_page_mask) & ~(uintptr_t)host_page_mask;
++    hi = (b + size) & ~(uintptr_t)host_page_mask;
++    while (lo < hi && ios_guest_n < PP_GUEST_MAX_RANGES)
++    {
++        size_t len = hi - lo;
++        if (len > (64u << 20)) len = 64u << 20;
++        if (!playport_guest_memory_backing( (void *)lo, len )) break;
++        ios_guest_ext[ios_guest_n++] = (struct pp_guest_range){lo, lo + len};
++        if (++backs <= 16 || !(backs % 64))
++            dprintf( 2, "[helper-guest] fresh %p+0x%zx, %u ranges\n", (void *)lo, len, ios_guest_n );
++        lo += len;
++    }
++}
++static int ios_guest_release_range( void *base, size_t size, int copy_back )
++{
++    uintptr_t lo = (uintptr_t)base & ~(uintptr_t)host_page_mask;
++    uintptr_t hi = ((uintptr_t)base + size + host_page_mask) & ~(uintptr_t)host_page_mask;
++    unsigned i = 0;
++    while (i < ios_guest_n)
++    {
++        uintptr_t a = ios_guest_ext[i].lo, b = ios_guest_ext[i].hi;
++        uintptr_t oa = a > lo ? a : lo, ob = b < hi ? b : hi;
++        if (!pp_guest_overlap( ios_guest_ext[i], lo, hi )) { i++; continue; }
++        if (copy_back)
++        {
++            size_t len = ob - oa;
++            void *tmp = malloc( len );
++            void *p;
++            if (!tmp) return 0;
++            memcpy( tmp, (void *)oa, len );
++            /* Deliberately bypass all providers: EXEC/guard promotion must
++             * become ordinary anonymous memory, not another helper object. */
++            p = mmap( (void *)oa, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0 );
++            if (p == MAP_FAILED) { free( tmp ); return 0; }
++            memcpy( p, tmp, len );
++            free( tmp );
++            dprintf( 2, "[helper-guest] preserved %p+0x%zx in ordinary backing\n", p, len );
++        }
++        if (!pp_guest_trim( ios_guest_ext, &ios_guest_n, i, oa, ob )) i++;
++        if (playport_guest_memory_released) playport_guest_memory_released( (void *)oa, ob - oa, copy_back );
++    }
++    return 1;
++}
+ static void ios_swap_back( void *base, size_t size, unsigned int vprot )
+ {
+     char *hs = (char *)(((uintptr_t)base + host_page_mask) & ~(uintptr_t)host_page_mask);
+@@ -13375,6 +13446,7 @@ static NTSTATUS decommit_pages( struct file_view *view, char *base, size_t size
+         }
+         else if (host_start < host_end)
+         {
++            ios_guest_release_range( host_start, host_end - host_start, 0 );
+             ios_swap_release_range( host_start, host_end - host_start, 0 );   /* ml1077 */
+             anon_mmap_fixed( host_start, host_end - host_start, PROT_READ | PROT_WRITE, 0 );
+             dc_branch = "mmap-over";
+@@ -18512,7 +18584,11 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+                 base = view->base;
+                 if (vprot & VPROT_EXEC || force_exec_prot) mprotect_range( base, size, 0, 0 );
+                 ios_swap_init();
+-                if ((type & MEM_COMMIT) && ios_swap_eligible( base, size, vprot, view )) ios_swap_back( base, size, vprot );   /* ml1077 */
++                if (type & MEM_COMMIT)
++                {
++                    if (ios_swap_eligible( base, size, vprot, view )) ios_swap_back( base, size, vprot );
++                    else ios_guest_back( base, size, vprot, view );
++                }
+ 
+                 /* iOS-Madeira ml308 (task #54): DETECT VA HANDED OUT TWICE.
+                  *
+@@ -18608,7 +18684,11 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+         {
+             unsigned int sv = 0;
+             ios_swap_init();
+-            if (!any_committed && !get_vprot_flags( protect, &sv, 0 ) && ios_swap_eligible( base, size, sv, view )) ios_swap_back( base, size, sv );
++            if (!any_committed && !get_vprot_flags( protect, &sv, 0 ))
++            {
++                if (ios_swap_eligible( base, size, sv, view )) ios_swap_back( base, size, sv );
++                else ios_guest_back( base, size, sv, view );
++            }
+         }
+         if (!status && view && (view->protect & SEC_RESERVE))
+         {
+-- 
+2.55.0
+

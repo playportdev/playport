@@ -49,6 +49,7 @@ import contextlib
 import datetime
 import fcntl
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -513,6 +514,14 @@ class Phone:
         pid = int((re.findall(r"pid (\d+)", text) or ["0"])[-1])
         return pid
 
+    def activate(self):
+        """Bring the running app to the front without ending it (a launch with
+        --no-kill-existing and no environment); the pid the launch names, or None."""
+        text = self.pmd("activate", "developer", "dvt", "launch", "--no-kill-existing", self.bundle_id(),
+                        secs=self.LAUNCH_S, check=False)
+        found = re.findall(r"pid (\d+)", text)
+        return int(found[-1]) if found else None
+
     def pull(self, remote, dest):
         """One named file into DEST (a directory); its path, or None, with the reason in
         self.pull_error. Never a directory: Documents holds the prefix, whose z: drive links to /."""
@@ -609,6 +618,19 @@ class Phone:
         """Write bytes to a file in the container, whole, in one AFC call (no temporary file)."""
         self.afc("put", "put", remote, data=data)
 
+    def put_import(self, local, remote):
+        """Copy the local file LOCAL to Documents/Import/NAME/FILE (the app's import inbox, what a
+        person fills with Files; `pp ui --action import:Import/NAME` adds it); afc.py's reply.
+        Refuses any other path (afc.import_refusal) before the phone is asked."""
+        why = afc_tool().import_refusal(remote)
+        if why:
+            raise PhoneError(f"{remote}: {why}")
+        if not os.path.isfile(local):
+            raise PhoneError(f"{local}: not a file")
+        with open(local, "rb") as f:
+            data = f.read()
+        return self.afc("put-import", "put-import", remote, data=data, secs=600)
+
     def remove(self, remote):
         """Delete one Documents/NAME.zip (afc.py rm refuses anything else); afc.py's reply."""
         return self.afc("rm", "rm", remote)
@@ -624,6 +646,15 @@ class Phone:
                     if o.get("nonce") == nonce:
                         out.append(o)
         return out
+
+
+def afc_tool():
+    """tools/afc.py as a module (its path rules; the AFC calls themselves run under
+    pymobiledevice3's Python through Phone.afc)."""
+    spec = importlib.util.spec_from_file_location("afc_tool", os.path.join(HERE, "afc.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 LOW_BATTERY_PCT = 30

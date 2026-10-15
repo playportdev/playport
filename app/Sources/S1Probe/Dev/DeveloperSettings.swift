@@ -20,6 +20,8 @@ struct DeveloperSettings: View {
     @AppStorage(Fastsync.offKey) private var fastsyncOff = false
     @AppStorage(MemoryLimit.simulatedKey) private var simulated = 0
     @AppStorage(MemoryLimit.simulatedPoolKey) private var simulatedPool = 0
+    @AppStorage(DonorPool.key) private var donorPool = 0
+    @ObservedObject private var sharedMemory = SharedMemoryProbe.shared
     @ObservedObject private var probe = HelperLifetimeProbe.shared
     @ObservedObject private var authProbe = NativeAuthProbe.shared
     @ObservedObject private var restart = AppRestart.shared
@@ -75,6 +77,22 @@ struct DeveloperSettings: View {
                value: simulatedPool > 0 ? MemoryNeed.format(mb: simulatedPool) : "Off",
                options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
                selected: "\(simulatedPool)", note: nil) { simulatedPool = Int($0) ?? 0 }
+        // docs/plans/2026-10-12-donor-memory.md step 3 (DonorPool.swift); Off, Auto (PLA-351) or a
+        // fixed size to experiment with. Not offered on a 4 or 6 GB phone (PlayportKit DonorPoolSizing).
+        if DonorPoolSizing.offered(physicalMB: Int(ProcessInfo.processInfo.physicalMemory >> 20)) {
+            // Read through DonorPool.setting: the driver's set: may store "auto" as a string.
+            let current = donorPool == DonorPoolSizing.Setting.autoStored ? .auto : DonorPool.setting
+            let options: [(DonorPoolSizing.Setting, String)] = [(.off, "Off"), (.auto, "Auto")]
+                + DonorPoolSizing.fixedSizesMB.map { (.fixed($0), MemoryNeed.format(mb: $0) + " (fixed)") }
+            choice("dev:donorPool", "Donor pool (experiment)", subtitle: "Next Play: guest RAM from helpers that then end",
+                   value: options.first { $0.0 == current }?.1 ?? "\(current.stored) MB (fixed)",
+                   options: options.map { PadOption(id: "\($0.0.stored)", label: $0.1) },
+                   selected: "\(current.stored)",
+                   note: "Auto: the phone's default pool, stopping on low memory. "
+                       + "Any failure plays on ordinary memory.") {
+                donorPool = Int($0) ?? 0
+            }
+        }
     }
 
     private static func choices(_ base: [Int], with current: Int) -> [Int] {
@@ -101,6 +119,35 @@ struct DeveloperSettings: View {
 
     @ViewBuilder private var probes: some View {
         PadSectionHeader(text: "Probes").id("probes")
+        ForEach([64, 2048, 4096], id: \.self) { mb in
+            PadRow(id: "set:dev:memoryBroker:\(mb)", title: "Shared RAM: \(mb) MiB", subtitle: sharedMemory.status, hint: "Measure") {
+                if !sharedMemory.busy { Task { _ = await sharedMemory.run(mb: mb) } }
+            }
+        }
+        ForEach([false, true], id: \.self) { purgeable in
+            ForEach([2048, 4096], id: \.self) { mb in
+                let kind = purgeable ? "purgeable" : "tagged"
+                PadRow(id: "set:dev:memoryDonor:\(kind):\(mb)", title: "Donor RAM (\(kind)): \(mb) MiB",
+                       subtitle: "Helper allocates, then ends; the app keeps it 60 s", hint: "Measure") {
+                    if !sharedMemory.busy { Task { _ = await sharedMemory.runDonor(mb: mb, purgeable: purgeable) } }
+                }
+            }
+        }
+        ForEach(SharedMemoryProbe.donorTotals, id: \.self) { mb in
+            PadRow(id: "set:dev:memoryDonors:\(mb)", title: "Donor RAM pool: \(mb) MiB",
+                   subtitle: "Fresh helpers give purgeable RAM, then end; the app keeps the pool", hint: "Measure") {
+                if !sharedMemory.busy { Task { _ = await sharedMemory.runDonors(mb: mb) } }
+            }
+        }
+        PadRow(id: "set:dev:memoryPoolZero", title: "Donor pool: zeroing", subtitle: sharedMemory.status, hint: "Measure") {
+            if !sharedMemory.busy { Task { _ = await sharedMemory.runPoolZero() } }
+        }
+        PadRow(id: "set:dev:memoryPoolGPU", title: "Donor pool: Metal buffers", subtitle: sharedMemory.status, hint: "Measure") {
+            if !sharedMemory.busy { Task { _ = await sharedMemory.runPoolGPU() } }
+        }
+        PadRow(id: "set:dev:memoryPoolVerify", title: "Verify the donor pool", subtitle: sharedMemory.status, hint: "Verify") {
+            if !sharedMemory.busy { Task { _ = await sharedMemory.verifyPool() } }
+        }
         PadRow(id: "set:dev:nativeAuth", title: "Native authentication", subtitle: authProbe.status,
                hint: "Run") {
             if !authProbe.busy { Task { _ = await authProbe.run() } }

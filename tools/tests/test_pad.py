@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""pp pad wait-still: the thumbnail difference and the wait loop, on synthetic
-screenshots (no phone)."""
+"""pp pad wait-still and wait-text: the thumbnail difference, the OCR match and
+the wait loops, on synthetic screenshots (no phone)."""
 
 import os
 import shutil
@@ -67,6 +67,144 @@ class WaitStill(unittest.TestCase):
     def test_no_screenshot_is_an_error(self):
         with self.assertRaises(phonelib.PhoneError):
             pad.wait_still(None, self.ev, os.path.join(self.d, "x.png"), shoot=lambda p: None)
+
+
+class FoundTexts(unittest.TestCase):
+    def test_case_and_spacing_aside(self):
+        read = "CONTINUE\nNew  game\nLOAD\nGAME\nSettings"
+        self.assertEqual(pad.found_texts(read, ["New Game", "Load Game", "Settings", "Quit"]),
+                         ["New Game", "Load Game", "Settings"])
+        self.assertEqual(pad.found_texts("", ["New Game"]), [])
+
+
+class Phone:
+    """Records what wait-text pushes to the pad."""
+    def __init__(self):
+        self.pushed = []
+
+    def put(self, remote, data):
+        self.pushed.append((remote, data.decode()))
+
+
+class WaitText(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
+        self.path = os.path.join(self.d, "text.png")
+        self.events = []
+        self.phone = Phone()
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def ev(self, kind, **kw):
+        self.events.append((kind, kw))
+
+    def run_screens(self, screens, **kw):
+        """wait_text over SCREENS, the OCR text of each screenshot in turn."""
+        it = iter(screens)
+        reads = {}
+
+        def shoot(path):
+            screen = next(it)
+            if screen is None:
+                return None
+            reads[path] = screen
+            return path
+        return pad.wait_text(self.phone, self.ev, self.path, ["New Game", "Load Game", "Settings"],
+                             shoot=shoot, read=lambda p: reads[p], sleep=lambda s: None, **kw)
+
+    def test_presses_through_the_intro_until_the_menu(self):
+        menu = "Continue New Game Load Game Settings"
+        self.assertTrue(self.run_screens(["", "WARHORSE", "", menu], press="150 B\n300 -\n", timeout=60))
+        self.assertEqual(self.phone.pushed, [(pad.REMOTE, "150 B\n300 -\n")] * 3)
+        self.assertEqual([kw["found"] for k, kw in self.events if k == "text-check"][-1],
+                         ["New Game", "Load Game", "Settings"])
+
+    def test_stops_pressing_once_any_text_is_seen(self):
+        screens = ["", "New Game", "New Game Load", "New Game Load Game"]
+        self.assertTrue(self.run_screens(screens, need=2, press="150 B\n", timeout=60))
+        self.assertEqual(len(self.phone.pushed), 1)
+
+    def test_need_counts_the_texts_read(self):
+        self.assertTrue(self.run_screens(["New Game Settings"], need=2))
+        self.assertFalse(self.run_screens(["New Game"], need=2, timeout=0))
+        self.assertEqual(self.phone.pushed, [])
+
+    def test_gives_up_without_pressing_on(self):
+        self.assertFalse(self.run_screens([""], press="150 B\n", timeout=0))
+        self.assertEqual(self.phone.pushed, [])
+
+    def test_the_highlight_above_is_needed_too(self):
+        menu = "New Game Load Game Settings"
+        self.assertFalse(self.run_screens([menu], need=2, timeout=0, above="New Game", highlight=lambda p, t: False))
+        self.assertFalse(self.run_screens([menu], need=2, timeout=0, above="New Game", highlight=lambda p, t: None))
+        self.assertEqual([kw["highlight_above"] for k, kw in self.events if k == "text-check"], [False, False])
+        self.assertTrue(self.run_screens([menu], need=2, timeout=0, above="New Game", highlight=lambda p, t: True))
+
+    def test_a_failed_screenshot_presses_nothing_and_looks_again(self):
+        menu = "New Game Load Game Settings"
+        self.assertTrue(self.run_screens([None, "", None, menu], press="150 B\n", timeout=60))
+        self.assertEqual(len(self.phone.pushed), 1)
+        self.assertEqual([kw.get("error") for k, kw in self.events].count("no screenshot"), 2)
+
+
+@unittest.skipIf(Image is None or not shutil.which("tesseract"), "no Pillow or tesseract")
+class Ocr(unittest.TestCase):
+    def test_reads_light_menu_text_on_a_dark_screen(self):
+        from PIL import ImageFont
+        d = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
+        try:
+            path = os.path.join(d, "menu.png")
+            im = Image.new("RGB", (1600, 740), (24, 20, 16))
+            draw = ImageDraw.Draw(im)
+            font = ImageFont.load_default(size=44)
+            for i, label in enumerate(["Continue", "New Game", "Load Game", "Settings"]):
+                draw.text((160, 200 + 80 * i), label, fill=(225, 215, 190), font=font)
+            im.save(path)
+            self.assertEqual(pad.found_texts(pad.ocr(path), ["New Game", "Load Game", "Settings"]),
+                             ["New Game", "Load Game", "Settings"])
+            self.assertEqual(os.listdir(d), ["menu.png"])
+        finally:
+            shutil.rmtree(d)
+
+    def menu_screen(self, path, labels, highlighted=0):
+        """A 1600x737 screen: a line of text at the bottom left, and a menu column at the
+        right whose HIGHLIGHTED item is dark text on a light banner (as Kingdom Come's)."""
+        from PIL import ImageFont
+        im = Image.new("RGB", (1600, 737), (34, 44, 30))
+        draw = ImageDraw.Draw(im)
+        font = ImageFont.load_default(size=30)
+        draw.text((80, 600), "Link the game to your account", fill=(220, 200, 150), font=font)
+        for i, label in enumerate(labels):
+            y = 265 + 36 * i
+            if i == highlighted:
+                draw.rectangle([1200, y - 4, 1430, y + 34], fill=(235, 232, 225))
+                draw.text((1250, y), label, fill=(30, 26, 20), font=font)
+            else:
+                draw.text((1250, y), label, fill=(240, 236, 225), font=font)
+        im.save(path)
+        return path
+
+    def test_reads_a_menu_column_and_the_highlighted_item_above(self):
+        d = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
+        try:
+            crop = (0.70, 0.33, 0.92, 0.80)
+            menu = self.menu_screen(os.path.join(d, "menu.png"), ["Continue", "New Game", "Load Game", "Settings", "Quit"])
+            read = pad.ocr(menu, crop)
+            self.assertNotIn("Link", read, "only the menu column is read")
+            self.assertEqual(pad.found_texts(read, ["New Game", "Load Game"]), ["New Game", "Load Game"])
+            self.assertTrue(pad.highlight_above(menu, "New Game", crop))
+            # Highlighted further down: nothing light just above New Game.
+            down = self.menu_screen(os.path.join(d, "down.png"), ["Continue", "New Game", "Load Game", "Settings"], 2)
+            self.assertFalse(pad.highlight_above(down, "New Game", crop))
+            # No save: New Game is the first item, highlighted (and not read, or read inside the bar).
+            fresh = self.menu_screen(os.path.join(d, "fresh.png"), ["New Game", "Load Game", "Settings", "Quit"])
+            self.assertFalse(pad.highlight_above(fresh, "New Game", crop))
+            # A screen without the text, as Kingdom Come's EULA page.
+            self.assertIsNone(pad.highlight_above(menu, "Accept", crop))
+            self.assertEqual(sorted(os.listdir(d)), ["down.png", "fresh.png", "menu.png"])
+        finally:
+            shutil.rmtree(d)
 
 
 if __name__ == "__main__":

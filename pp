@@ -37,6 +37,9 @@ Drive the phone (dev app)
   pp pad send STEP... | push SCRIPT | rest [--shot FILE]
                                   press buttons on the scripted pad of a running title
   pp phone status | kill | log [DIR] | ls REMOTE | pull REMOTE [DIR] | rm Documents/NAME.zip | shot [FILE] | crashes [DIR] [--since T]
+  pp phone put LOCAL Documents/Import/NAME/FILE
+                                  copy a file into the app's import inbox (what a person does with
+                                  Files), then add it through the UI: pp ui --action import:Import/NAME
   pp phone lock [--wait S] -- CMD run CMD under one hold of the lock: one session for a sequence
                                   (install, then plays, a pad) that no other agent may split
   pp phone unattended on [--hours N] | off | status
@@ -99,6 +102,8 @@ C_TESTS = [
     ("steam tickets", ["app/tests/steam_ticket_test.c", "app/Sources/WineHost/steam_ticket.c"], []),
     ("url opener", ["app/tests/url_opener_test.c", "app/Sources/WineHost/url_opener.c"], []),
     ("command line", ["app/tests/command_line_test.c"], []),
+    ("guest pool", ["app/tests/guest_pool_test.c", "app/Sources/SharedMemory/guest_pool.c"],
+     ["-Iapp/Sources/SharedMemory", "-fsanitize=address,undefined"]),
 ]
 
 
@@ -306,6 +311,13 @@ def cmd_phone(args):
             with phonelib.device_lock("pp phone rest", events=ev):
                 pid = phonelib.rest(ev, out)
             return ev.result(True, 0, rested=bool(pid))
+        if sub == "put":   # refused before the lock and the phone
+            if len(rest) != 2:
+                return phonelib.fail(ev, "pp phone put LOCAL Documents/Import/NAME/FILE", 2)
+            why = phonelib.afc_tool().import_refusal(rest[1])
+            if why or not os.path.isfile(rest[0]):
+                return phonelib.fail(ev, f"pp phone put: {rest[1]}: {why}" if why else
+                                     f"pp phone put: {rest[0]}: not a file", 2)
         out = phonelib.run_dir("phone")
         with phonelib.device_lock("pp phone " + sub, events=ev):
             phone = phonelib.Phone(out, events=ev).ensure()
@@ -338,6 +350,9 @@ def cmd_phone(args):
                 path = phone.pull(rest[0], rest[1] if len(rest) > 1 else out)
                 return ev.result(bool(path), 0 if path else 1, path=path,
                                  **({} if path else {"why": phone.pull_error}))
+            if sub == "put":
+                said = phone.put_import(rest[0], rest[1]).strip()
+                return ev.result(True, 0, path=rest[1], put=said)
             if sub == "rm":
                 if len(rest) != 1:
                     return phonelib.fail(ev, "pp phone rm Documents/NAME.zip (a zip put there for import:)", 2)
@@ -403,7 +418,7 @@ def phone_status():
             s["app"] = phone.bundle_id().split(".", 1)[1]
             s["app_pid"] = phone.pid()
             s["battery"] = phone.battery()
-            text = phone.pmd("disk", "lockdown", "get", "--domain", "com.apple.disk_usage", check=False)
+            text = phone.pmd("disk", "lockdown", "get", "com.apple.disk_usage", check=False)
             try:
                 s["free_gb"] = round(json.loads(text[text.index("{"):text.rindex("}") + 1])["AmountDataAvailable"] / 1e9, 1)
             except (ValueError, KeyError):

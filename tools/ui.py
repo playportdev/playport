@@ -137,7 +137,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
   web:close              close the page, as its Close button does; the game gets its input back
                          Example: --action play:epic-8337d1f975514d35ad0c1176e8a29f26 --action web:wait
                          --action web:click:Allow --action wait:30 --action web:close --action wait:10
-  set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true)
+  set:KEY=VALUE          a UserDefaults key, as a Settings control sets it (set:metalHUD=true;
+                         set:donorPoolMB=0|auto|2048|4096|6144: Settings › Developer › Donor pool, next Play;
+                         auto sizes it from the phone's free memory and the app's limit)
   hud:on | hud:off       Settings' Metal HUD
   queue:APP              queue a download from Steam, as a game page's Install does, and go on at once
   downloading:APP        wait (2 min at most) until the queue runs APP's download with progress (after
@@ -164,6 +166,31 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          helper ticks, then the app ends itself by exit(0) or SIGKILL 2 s after
                          the run's done (use --leave-running); must be the last action. -hold:
                          the helper takes its own xpc transaction and ignores SIGTERM
+  probe:memory-64 | probe:memory-2048 | probe:memory-4096
+                         Settings' shared anonymous RAM experiment, verified in the app and helper
+  probe:memory-donor-tagged-2048 | probe:memory-donor-tagged-4096
+  probe:memory-donor-purgeable-2048 | probe:memory-donor-purgeable-4096
+                         its donor variant: the helper (ledger-tagged or purgeable objects) ends
+                         after allocating, the app keeps the mappings 60 s and logs the H1 verdict
+  probe:memory-donors-6144 | probe:memory-donors-8192 | probe:memory-donors-10240
+                         Settings' donor RAM pool: fresh helpers in turn give purgeable RAM and end
+                         until the total is mapped, verified 60 s later, then the app's own remaining
+                         limit (`donors ...` lines); fails when a donor or the phone runs out first.
+                         The pool stays held for the actions after it
+  probe:memory-pool-verify
+                         Settings' Verify the donor pool: reads that held pool again
+  probe:memory-pool-zero
+                         Settings' Donor pool: zeroing: 1 GiB from a donor that ends, untouched; then
+                         memset, purge, a fixed-address range mapping and four ways to zero or
+                         give back 64 MiB of an object: memset, MADV_ZERO, MADV_FREE_REUSABLE(+memset) (`pool-zero ...` lines)
+  probe:memory-pool-gpu
+                         Settings' Donor pool: Metal buffers: 1 GiB from a donor that ends, as four
+                         no-copy shared Metal buffers the GPU writes and the CPU reads back, a
+                         64 MiB range view's buffer, then four ordinary buffers as the control, with
+                         the footprint and graphics ledger at each step (`pool-gpu ...` lines)
+  background:S           the app opens iOS Settings (Playport goes to the background); S seconds
+                         (10-600) later pp ui checks the app's process is still there and brings it
+                         back to the front without ending it (a background-return event)
   probe:helper-report    read that probe's report back into s1-host.log (a later run, --keep-log)
   probe:native-auth      Settings' synthetic native GSS probe (no game or store credentials)
   jit:setup | jit:pair   Open the product setup (Pair again keeps old credentials until verified)
@@ -375,8 +402,22 @@ ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|
                        r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
-                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
+                       r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
                        .replace("{g}", GYRO_STEP))
+
+
+def return_from_background(phone, e, now=time.time, sleep=time.sleep):
+    """The workstation's half of background:S (UIDriver): S seconds after the app's
+    ui-background event, whether the app's process is still the one that left, and if so
+    bring it to the front again without ending it (Phone.activate)."""
+    secs = int(e.get("seconds", 0))
+    sleep(min(secs, max(0, e.get("t", now()) + secs - now())))
+    before, seen = e.get("pid"), phone.pid()
+    out = {"seconds": secs, "pid": before, "pid_seen": seen, "alive": seen is not None and seen == before}
+    if out["alive"]:
+        after = phone.activate()
+        out.update(pid_after=after, same_process=after == before)
+    return out
 
 
 def in_game(actions, start):
@@ -721,6 +762,8 @@ def main(argv=None, launched=None):
             marker = os.path.join(out, "cmd", "ui-step")
             open(marker, "w").close()
             phone.push(marker, f"Documents/ui-step-{e.get('index', shots_taken['n'])}")
+        if e.get("event") == "ui-background":
+            ev("background-return", **return_from_background(phone, e))
         if e.get("event") == "ui-done" and any(x.split(":")[0] in ("install", "pause-resume", "queue", "downloading") for x in a.action):
             phone.pull("Documents/steam-drive.log", os.path.join(out, "pull"))
 

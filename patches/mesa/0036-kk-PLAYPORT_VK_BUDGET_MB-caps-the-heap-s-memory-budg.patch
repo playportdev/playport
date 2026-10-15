@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 15 Oct 2026 07:02:23 +0200
+Subject: [PATCH] kk: PLAYPORT_VK_BUDGET_MB caps the heap's memory budget
+
+KosmicKrisp reports one device-local heap the size of Metal's
+recommended working set (8 GiB on a 12 GB iPhone) and a
+VK_EXT_memory_budget budget of 90% of what the process may still
+allocate plus what Metal already holds (about 6 GiB at a game's start).
+Both are far above the video budget Playport's memory plan leaves the
+guest beside its RAM (1,536 MiB on that phone, what DXMT reports): DXVK
+over KosmicKrisp told games 8 GiB of dedicated video memory and a 6 GiB
+budget, and sized its own residency to that.
+
+When PLAYPORT_VK_BUDGET_MB is 256 or more, cap heap 0's budget at that
+many MiB; the host app sets it from the plan only for a title that opts
+in. The heap's size stays Metal's working set: an application may size
+pools or caches from the heap size, and shrinking it below what the
+device can hold would change what it may allocate, not just what it is
+advised to use; DXVK's own option (dxgi.maxDeviceMemory) already clamps
+the dedicated memory DXGI reports. Unset, the driver is unchanged. One
+line on stderr says the cap and the heap size.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-15-vulkan-clamp.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_physical_device.c | 20 +++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_physical_device.h |  3 +++
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index b7be613..0efbd14 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -30,6 +30,8 @@
+ #include "vk_drm_syncobj.h"
+ #include "vk_shader_module.h"
+ 
++#include <inttypes.h>
++#include <stdio.h>
+ #include <string.h>
+ 
+ #if DETECT_OS_APPLE
+@@ -1088,8 +1090,14 @@ kk_get_sysmem_heap_budget(struct kk_physical_device *pdev)
+    /* Budget is calculated using the default Mesa logic, based on available
+     * system memory. Available memory is reduced to 90% to avoid thrashing. */
+    const float available_percent = 0.9f;
+-   return vk_physical_device_heap_budget_from_system(
++   uint64_t budget = vk_physical_device_heap_budget_from_system(
+       &pdev->vk, available_percent, heap_size, used);
++
++   /* The host app's video budget, when it asks for one: the heap's size stays
++    * Metal's working set, only the budget is capped. */
++   if (pdev->heap_budget_cap_B && budget > pdev->heap_budget_cap_B)
++      budget = pdev->heap_budget_cap_B;
++   return budget;
+ }
+ 
+ static void
+@@ -1250,6 +1258,16 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
+       goto fail_disk_cache;
+    }
+ 
++   /* PLAYPORT_VK_BUDGET_MB (256 MiB to 1 TiB): the host app's video budget,
++    * set only when the title opts in. */
++   int64_t budget_cap_MB = debug_get_num_option("PLAYPORT_VK_BUDGET_MB", 0);
++   if (budget_cap_MB >= 256 && budget_cap_MB <= (INT64_C(1) << 20)) {
++      pdev->heap_budget_cap_B = (uint64_t)budget_cap_MB << 20;
++      fprintf(stderr, "[kk-memory] heap 0: size %" PRIu64 " MiB, budget capped "
++              "at %" PRId64 " MiB (PLAYPORT_VK_BUDGET_MB)\n",
++              sysmem_size_B >> 20, budget_cap_MB);
++   }
++
+    uint32_t sysmem_heap_idx = pdev->mem_heap_count++;
+    pdev->mem_heaps[sysmem_heap_idx] = (struct kk_memory_heap){
+       .size = sysmem_size_B,
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.h b/src/kosmickrisp/vulkan/kk_physical_device.h
+index 9d815cf..b4f141a 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.h
++++ b/src/kosmickrisp/vulkan/kk_physical_device.h
+@@ -76,6 +76,9 @@ struct kk_physical_device {
+    VkMemoryType mem_types[3];
+    uint8_t mem_heap_count;
+    uint8_t mem_type_count;
++   /* PLAYPORT_VK_BUDGET_MB in bytes: the most the device-local heap's
++    * VK_EXT_memory_budget budget reports; 0 for no cap. */
++   uint64_t heap_budget_cap_B;
+ 
+    // Emulated binary sync type
+    struct vk_sync_binary_type sync_binary_type;

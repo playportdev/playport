@@ -9,6 +9,17 @@ import MachO
 import PlayportKit
 import WineHost
 
+#if PLAYPORT_RELEASE
+// madeira-unix 0148 calls these optional host hooks; the static link needs a
+// definition. A release build backs nothing: every request keeps Wine's
+// ordinary mmap. A dev build's donor pool answers them (SharedMemory/GuestPool.m,
+// Dev/DonorPool.swift; docs/plans/2026-10-12-donor-memory.md).
+@_cdecl("playport_guest_memory_backing")
+func playportGuestMemoryBackingDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt) -> Int32 { 0 }
+@_cdecl("playport_guest_memory_released")
+func playportGuestMemoryReleasedDisabled(_ address: UnsafeMutableRawPointer?, _ bytes: UInt, _ detached: Int32) {}
+#endif
+
 /// The app process's one Wine session (decisions 0027, 0030). A Play acquires
 /// the JIT pool, starts the wineserver and the session root
 /// (playport-session.exe, the process's one __wine_main), and runs its title
@@ -38,10 +49,14 @@ final class WineHostRuntime: @unchecked Sendable {
     /// Acquires the JIT pool (JitProvider), checks it (SelfCheck), starts
     /// wine_host and the session root. The wait for the debugger plus the bless
     /// is the activation cost. pooled runs once the pool is blessed and
-    /// checked, before wine_host_init (the launch screen's step). The
+    /// checked, before wine_host_init (the launch screen's step). memory runs
+    /// after the donor pool (dev builds), just before wine_host_init, with the
+    /// pool granted in MiB (DonorPool.Installed; 0 without one):
+    /// the Play's memory plan is made there (PlayportKit MemoryPlan). The
     /// presentation switches are TitleScreen's, set before this. selfcheck
     /// names the failed assumption when the pool's self-check stopped the start.
-    func start(poolMB mb: Int, wait: TimeInterval, pooled: () -> Void = {})
+    func start(poolMB mb: Int, wait: TimeInterval, pooled: () -> Void = {},
+               memory: (_ donorPoolMB: Int) -> Void = { _ in })
         -> (ok: Bool, activationSeconds: Double, detail: String, selfcheck: String?) {
         precondition(!poolAcquired, "the session starts once per process")
         guard let runtime = Manifest.runtime else { return (false, 0, "no Runtime in bundle", nil) }
@@ -64,6 +79,12 @@ final class WineHostRuntime: @unchecked Sendable {
         let check = SelfCheck.run(pool: pool)
         guard check.ok else { return (false, activation, "pool \(mb) MiB; selfcheck \(check.name)", check.name) }
         pooled()
+        #if !PLAYPORT_RELEASE
+        let donors = DonorPool.install()
+        memory(donors.poolMB)
+        #else
+        memory(0)
+        #endif
         let rc = runtime.path.withCString { rt in
             prefixURL.path.withCString { px in
                 AppLog.path.withCString { lp in

@@ -180,6 +180,36 @@ Playport (S1Probe or Playport)                 PlayportJIT.appex
   and so its own free-team App ID and profile, one of the ten App IDs a free
   team may register per week. It takes no device slot.
 
+### Helper-owned RAM experiment
+
+A dev build's Settings › Developer › Probes can measure 64 MiB, 2 GiB or
+4 GiB of anonymous RAM owned by the helper and mapped directly in the app
+(`SharedMemory`, `Dev/SharedMemoryProbe.swift`). A ledger-tagged Mach memory
+entry crosses XPC as a send right; full-buffer checks in both processes
+prove aliasing and retention. On the phone, 4 GiB raised the helper's footprint,
+not the app's ([evidence](evidence/2026-10-03-helper-owned-memory.md)). This is
+not a private no-footprint entitlement or a file-backed swap area.
+
+madeira-unix 0148 offers fresh large RW guest commits to optional host hooks
+(`playport_guest_memory_backing`, and `playport_guest_memory_released` with the
+range and whether it was detached to ordinary memory). A release build answers
+them with the stubs in `WineHostRuntime.swift`, so Wine keeps its ordinary mmap.
+A dev build answers them from a donor pool when Settings › Developer › Donor
+pool is on (`set:donorPoolMB=auto|2048|4096|6144`, off by default): at Play, after
+the JIT activation, helpers that then end give purgeable objects, and each
+commit is a `vm_map` of an unused range of one at Wine's address
+(`SharedMemory/GuestPool.m`, `Dev/DonorPool.swift`;
+[plan](plans/2026-10-12-donor-memory.md), step 3). Auto takes the phone's tier's
+pool ([decision 0105](decisions/0105-memory-defaults-per-phone.md): 4 GiB on a 12 GB
+phone, 1 GiB on 8 GB, none and no setting under), at most one donor's grant
+(PlayportKit `DonorPoolSizing`). During play the pool stops taking unused pages
+when the phone's spare memory or jetsam's level falls under its floor
+(`donor-pool: pressure` lines). An earlier per-allocation
+broker asked the living helper over XPC for each mapping, and a hook for FEX's
+data band (0147) moved only 30–90 MiB in Hollow Knight and Kingdom Come
+([evidence](evidence/2026-10-03-fex-helper-memory.md),
+[KCD](evidence/2026-10-03-kcd-helper-memory.md)); both were removed.
+
 ### JIT pool placement
 
 FEX writes all translated code into one pool. The pool must lie in whole
@@ -1058,6 +1088,24 @@ file is never edited (PlayportKit `TitleConfig`). The runtime's own
 `MADEIRA_DOCS_DIR` outputs (`fex-jit-dump.bin`, `madeira-retire-trace.txt`)
 land in that directory for such a launch. The first title in a process fixes
 the guest's screen (`TitleScreen.configure`).
+
+**The memory plan** (PLA-352, PlayportKit `MemoryPlan`). Just before Wine starts,
+after the JIT pool and a dev build's donor pool, the app tells the runtime the
+guest's RAM G and the video figure V through the environment: `MADEIRA_TOTAL_PHYS_MB`
+(ml992) and `PLAYPORT_VRAM_MB` (DXMT ml1042, patches/dxmt 0011; its formula stays the
+fallback). Both come from the phone's tier by its RAM
+([decision 0105](decisions/0105-memory-defaults-per-phone.md)): G / V 8,192 / 3,072 MiB
+on 12 GB, 6,144 / 2,048 on 8 GB, 3,072 / 1,024 on 6 GB, 2,048 / 768 on 4 GB. A limit L
+read lower than the tier assumes (no entitlement, or before Game Mode) clamps G to L
+rounded down to a GiB (after 64 MiB of slack) and V to 3/8 of that G, rounded down to
+512, at least 768. A pool does not raise G. A title's
+`totalphys` and `vram-mb` win. The `memory plan:` app-log line has every input and
+output. Opt-in keys, off by default: `vram-budget-event = 1` signals DXGI's
+budget-change event when the ml1075 trim moves the budget (it hung RDR2 when it
+never fired); `vulkan-vram-plan = 1` adds `dxgi.maxDeviceMemory` = the plan's
+budget to `DXVK_CONFIG` (DXVK otherwise reports KosmicKrisp's 8 GiB heap) and sets
+`PLAYPORT_VK_BUDGET_MB`, which caps KosmicKrisp's `VK_EXT_memory_budget` budget at it
+(patches/mesa 0036; the heap's size stays Metal's working set).
 
 **`inproc-sync` is off by default**
 ([madeira-unix 0014](../patches/madeira-unix/0014-madsync-make-in-process-sync-opt-in.patch)).

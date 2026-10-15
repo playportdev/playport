@@ -347,6 +347,20 @@ final class PadScriptTests: XCTestCase {
         XCTAssertEqual((try? PadScript.parse("100 A\n100 Q")) == nil, true)
         do { _ = try PadScript.parse("100 A\n100 Q") } catch let e as PadScript.ParseError { XCTAssertEqual(e.line, 2) } catch { XCTFail("\(error)") }
     }
+
+    /// Every committed route in tools/pad/ (what `pp pad push NAME` sends) is one the app can play.
+    func testEveryCommittedRouteParses() throws {
+        let pad = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("tools/pad")
+        let names = try FileManager.default.contentsOfDirectory(atPath: pad.path).filter { $0.hasSuffix(".txt") }.sorted()
+        XCTAssertTrue(names.contains("hk-profiles.txt") && names.contains("hk-menu-back-start.txt")
+            && names.contains("hk-slot-new-game.txt") && names.contains("hk-profiles-hold.txt") && names.contains("kcd-continue.txt"), "\(names)")
+        for name in names {
+            let s = try PadScript.parse(String(contentsOf: pad.appendingPathComponent(name), encoding: .utf8))
+            XCTAssertGreaterThan(s.totalMs, 0, name)
+        }
+    }
 }
 
 final class FramePacerTests: XCTestCase {

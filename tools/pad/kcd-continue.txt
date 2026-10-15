@@ -1,0 +1,7 @@
+# Kingdom Come: Deliverance: A on the main menu's highlighted item, and rest.
+# Push it only after `pp pad wait-text --crop 0.70,0.33,0.92,0.80
+# --highlight-above "New Game" --timeout 0 "New Game"` has seen that the item
+# above New Game, Continue, is the highlighted one; the last save then loads
+# (about 45 s), and kcd-walk follows.
+150 A        # Continue
+1000 -

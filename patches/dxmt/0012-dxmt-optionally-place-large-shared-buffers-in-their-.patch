@@ -1,0 +1,233 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 15 Oct 2026 03:00:00 +0200
+Subject: [PATCH] dxmt: optionally place large shared buffers in their own
+ pages (gpu-pool-buffers)
+
+With madeira.cfg gpu-pool-buffers = 1 (read once through MadeiraCtl's config
+lookup; off by default), each shared-storage buffer allocation of at least
+1 MiB that is not write-combined gets fresh VirtualAlloc pages of its own,
+rounded to 64 KiB, and a no-copy Metal buffer over them, instead of Metal's
+newBufferWithLength. Such a commit is fresh RW guest memory, so with the
+dev app's donor pool installed madeira-unix 0148/0150 back it with pool
+memory, which a no-copy Metal buffer does not charge to the app (the
+probe:memory-pool-gpu probe: 1 GiB of GPU-written no-copy buffers over pool
+objects added 19 MiB of footprint, 1 GiB of ordinary buffers 1,020 MiB).
+Without a pool the pages are the app's own, as the buffer's were.
+
+The pages are released after the Metal buffer and its texture views, when
+the allocation's last reference ends, which command chunks hold until they
+complete; the pool zeroes released pages before it reuses them. A refused
+allocation or buffer falls back to an ordinary buffer. [gpu-pool] lines
+count the placed buffers, their live and total MiB and the refusals.
+
+Class: host-app
+Evidence: docs/evidence/2026-10-15-donor-pool-gpu.md
+Offered-upstream: no; optional iOS host experiment
+---
+ src/dxmt/dxmt_buffer.cpp         | 79 +++++++++++++++++++++++++++++++-
+ src/dxmt/dxmt_buffer.hpp         |  5 ++
+ src/util/wsi_platform.hpp        |  6 +++
+ src/util/wsi_platform_darwin.cpp | 11 +++++
+ src/util/wsi_platform_win32.cpp  | 11 +++++
+ 5 files changed, 111 insertions(+), 1 deletion(-)
+
+diff --git a/src/dxmt/dxmt_buffer.cpp b/src/dxmt/dxmt_buffer.cpp
+index 2464b31..694758f 100644
+--- a/src/dxmt/dxmt_buffer.cpp
++++ b/src/dxmt/dxmt_buffer.cpp
+@@ -25,11 +25,76 @@
+ #include <cassert>
+ #include <mutex>
+ #include "dxmt_mem_census.hpp"
++#include "log/log.hpp"
++#include "util_string.hpp"
++#include <cstring>
+ 
+ namespace dxmt {
+ 
+ std::atomic_uint64_t global_buffer_seq = {0};
+ 
++/* Playport (PLA-354): madeira.cfg gpu-pool-buffers = 1 places each shared-storage
++ * buffer of at least 1 MiB (not write-combined) in fresh VirtualAlloc pages of its
++ * own, as a no-copy Metal buffer, instead of Metal's newBufferWithLength. Such a
++ * commit is fresh RW guest memory, so madeira-unix 0148/0150 back it with the
++ * app's donor pool when one is installed: no-copy buffers over pool memory are
++ * not charged to the app (docs/evidence/2026-10-15-donor-pool-gpu.md). The pages
++ * are released after the Metal buffer, when the allocation's last reference ends
++ * (after the GPU's last use: command chunks hold their allocations until they
++ * complete); the pool then zeroes them before reuse. Any refusal falls back to an
++ * ordinary buffer. Off by default; read once through MadeiraCtl's config lookup. */
++static bool
++gpu_pool_buffers_enabled() {
++  static const bool enabled = [] {
++    struct madeira_ctl_args args = {};
++    char value[16] = {};
++    args.op = 2;
++    args.ptr = (uint64_t)(uintptr_t)value;
++    args.len = sizeof value;
++    std::strncpy(args.name, "gpu-pool-buffers", sizeof args.name - 1);
++    MadeiraCtl(&args);
++    bool on = args.ret == 1 && value[0] == '1';
++    Logger::warn(str::format("[gpu-pool] madeira.cfg gpu-pool-buffers: ", on ? "on" : "off"));
++    return on;
++  }();
++  return enabled;
++}
++
++constexpr uint64_t kPoolPlacedMinBytes = 1ull << 20;
++constexpr uint64_t kPoolPlacedAlign = 64ull << 10;   /* VirtualAlloc's granularity */
++static std::atomic_uint64_t pool_placed_count = {0}, pool_placed_live = {0}, pool_placed_total = {0},
++                            pool_placed_refused = {0};
++
++void
++BufferAllocation::placeInOwnPages(WMT::Device device) {
++  const uint64_t bytes = align(info_.length, kPoolPlacedAlign);
++  void *pages = wsi::virtual_alloc(bytes);
++  if (pages) {
++    WMTBufferInfo placed = info_;
++    placed.length = bytes;
++    placed.memory.set(pages);
++    obj_ = device.newBuffer(placed);
++    if (obj_) {
++      info_.memory.set(pages);
++      info_.gpu_address = placed.gpu_address;
++      pool_placed_ = pages;
++      pool_placed_bytes_ = bytes;
++      uint64_t n = pool_placed_count.fetch_add(1) + 1;
++      uint64_t live = pool_placed_live.fetch_add(bytes) + bytes;
++      uint64_t total = pool_placed_total.fetch_add(bytes) + bytes;
++      if (n <= 16 || !(n % 256))
++        Logger::warn(str::format("[gpu-pool] placed n=", n, " bytes=", bytes, " live_mb=", live >> 20,
++                                 " total_mb=", total >> 20, " refused=", pool_placed_refused.load()));
++      return;
++    }
++    wsi::virtual_free(pages, bytes);
++  }
++  uint64_t refused = pool_placed_refused.fetch_add(1) + 1;
++  if (refused <= 16 || !(refused % 256))
++    Logger::warn(str::format("[gpu-pool] refused n=", refused, " bytes=", bytes, " pages=", pages ? 1 : 0,
++                             "; an ordinary buffer"));
++}
++
+ BufferAllocation::BufferAllocation(WMT::Device device, const WMTBufferInfo &info, Flags<BufferAllocationFlag> flags) :
+     info_(info),
+     flags_(flags) {
+@@ -45,8 +110,12 @@ BufferAllocation::BufferAllocation(WMT::Device device, const WMTBufferInfo &info
+   if (flags_.test(BufferAllocationFlag::CpuPlaced)) {
+     placed_buffer = wsi::aligned_malloc(info_.length, DXMT_PAGE_SIZE);
+     info_.memory.set(placed_buffer);
++  } else if (info_.length >= kPoolPlacedMinBytes && ((uint32_t)info_.options & 0x30) == WMTResourceStorageModeShared &&
++             !flags_.test(BufferAllocationFlag::CpuWriteCombined) && gpu_pool_buffers_enabled()) {
++    placeInOwnPages(device);
+   }
+-  obj_ = device.newBuffer(info_);
++  if (!obj_)
++    obj_ = device.newBuffer(info_);
+   g_live_bufalloc.created.fetch_add(1, std::memory_order_relaxed);   /* ml684 */
+   census_bytes_ = info_.length;                            /* ml677 */
+   census_storage_ = ((uint32_t)info_.options >> 4) & 3;    /* ml678 storage mode */
+@@ -96,6 +165,14 @@ BufferAllocation::free() {
+     wsi::aligned_free(placed_buffer);
+     placed_buffer = nullptr;
+   }
++  if (pool_placed_) {
++    /* The Metal buffer ends before its pages go back. */
++    cached_view_.clear();
++    obj_ = nullptr;
++    wsi::virtual_free(pool_placed_, pool_placed_bytes_);
++    pool_placed_live.fetch_sub(pool_placed_bytes_);
++    pool_placed_ = nullptr;
++  }
+   delete this;
+ }
+ 
+diff --git a/src/dxmt/dxmt_buffer.hpp b/src/dxmt/dxmt_buffer.hpp
+index 75fd088..61b0609 100644
+--- a/src/dxmt/dxmt_buffer.hpp
++++ b/src/dxmt/dxmt_buffer.hpp
+@@ -175,6 +175,11 @@ private:
+   uint32_t suballocation_count_ = 1;
+ 
+   void * placed_buffer = nullptr;
++  /* Playport (PLA-354): the buffer's own VirtualAlloc pages (madeira.cfg
++   * gpu-pool-buffers), released after the buffer. */
++  void *pool_placed_ = nullptr;
++  uint64_t pool_placed_bytes_ = 0;
++  void placeInOwnPages(WMT::Device device);
+ };
+ 
+ class Buffer {
+diff --git a/src/util/wsi_platform.hpp b/src/util/wsi_platform.hpp
+index f476315..94d6905 100644
+--- a/src/util/wsi_platform.hpp
++++ b/src/util/wsi_platform.hpp
+@@ -7,4 +7,10 @@ void *aligned_malloc(size_t size, size_t alignment);
+ 
+ void aligned_free(void *ptr);
+ 
++/* Fresh zeroed pages of their own (VirtualAlloc on Windows), size a whole
++ * number of pages; nullptr if refused. */
++void *virtual_alloc(size_t size);
++
++void virtual_free(void *ptr, size_t size);
++
+ }; // namespace dxmt::wsi
+\ No newline at end of file
+diff --git a/src/util/wsi_platform_darwin.cpp b/src/util/wsi_platform_darwin.cpp
+index 0bf8a3b..6bbd24b 100644
+--- a/src/util/wsi_platform_darwin.cpp
++++ b/src/util/wsi_platform_darwin.cpp
+@@ -1,5 +1,6 @@
+ #include "wsi_platform.hpp"
+ #include <cstdlib>
++#include <sys/mman.h>
+ 
+ namespace dxmt::wsi {
+ 
+@@ -9,4 +10,14 @@ void *aligned_malloc(size_t size, size_t alignment) {
+ 
+ void aligned_free(void *ptr) { return free(ptr); }
+ 
++void *virtual_alloc(size_t size) {
++  void *p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++  return p == MAP_FAILED ? nullptr : p;
++}
++
++void virtual_free(void *ptr, size_t size) {
++  if (ptr)
++    munmap(ptr, size);
++}
++
+ } // namespace dxmt::wsi
+\ No newline at end of file
+diff --git a/src/util/wsi_platform_win32.cpp b/src/util/wsi_platform_win32.cpp
+index b17cb61..129aa65 100644
+--- a/src/util/wsi_platform_win32.cpp
++++ b/src/util/wsi_platform_win32.cpp
+@@ -1,5 +1,6 @@
+ #include "wsi_platform.hpp"
+ #include <cstdlib>
++#include <windows.h>
+ 
+ namespace dxmt::wsi {
+ 
+@@ -9,4 +10,14 @@ void *aligned_malloc(size_t size, size_t alignment) {
+ 
+ void aligned_free(void *ptr) { return _aligned_free(ptr); }
+ 
++void *virtual_alloc(size_t size) {
++  return VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++}
++
++void virtual_free(void *ptr, size_t size) {
++  (void)size;
++  if (ptr)
++    VirtualFree(ptr, 0, MEM_RELEASE);
++}
++
+ } // namespace dxmt::wsi
+\ No newline at end of file
+-- 
+2.55.0
+

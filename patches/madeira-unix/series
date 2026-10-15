@@ -145,3 +145,6 @@
 0144-win32u-log-a-sent-message-that-waits-5-s-for-its-rep.patch
 0145-win32u-store-the-queue-masks-when-the-iOS-driver-dra.patch
 0146-ntdll-reserve-a-WoW64-window-in-a-fixed-slot-first.patch
+0148-virtual-back-bounded-fresh-guest-data-through-the-host.patch
+0149-virtual-count-guest-memory-by-class-while-the-host-b.patch
+0150-virtual-back-every-fresh-guest-commit-of-a-host-page.patch

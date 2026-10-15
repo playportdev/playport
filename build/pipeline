@@ -181,8 +181,10 @@ stage_inputs() {
         bash "$HERE/toolchain/rust.sh" > "$RUN/logs/rust.log" 2>&1 || { say "build/toolchain/rust.sh failed"; missing=1; }
     fi
     [ "$missing" = 0 ] || exit 1
-    # The Swift frontend needs the host's clang resource headers inside the SDK.
-    for d in /usr/lib/swift/lib/clang/*/include; do
+    # The Swift frontend needs the host's clang resource headers inside the SDK. The
+    # toolchain's packages put them under lib/ or usr/lib/.
+    for d in /usr/lib/swift/lib/clang/*/include /usr/lib/swift/usr/lib/clang/*/include; do
+        [ -d "$d" ] || continue
         v=$(basename "$(dirname "$d")")
         inc=$DARWIN_SDK/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/$v/include
         [ -f "$inc/arm_neon.h" ] ||

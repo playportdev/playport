@@ -186,7 +186,7 @@ BID_RE='^XTL-[A-Z0-9]+\.dev\.playport\.app$'
 xtl_apps apps-before
 mapfile -t APPS < "$LOG/apps-before.txt"
 INSTALLED=$(grep -E "$BID_RE" "$LOG/apps-before.txt" || true)
-pmd disk 30 lockdown get --domain com.apple.disk_usage
+pmd disk 30 lockdown get com.apple.disk_usage
 FREE=$(jq .AmountDataAvailable "$LOG/disk.out")
 say "free-team apps: ${#APPS[@]}/$SLOT_LIMIT; Playport $([ -n "$INSTALLED" ] && echo installed || echo 'not installed'); $((FREE / 1000000)) MB free"
 [ "$FREE" -gt 2000000000 ] || die "less than 2 GB free on the phone"

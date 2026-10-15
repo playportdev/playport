@@ -245,7 +245,10 @@ by `pp ui --action`. A `pad:` right after `play:` (and its `wait:`/`tap:` action
 refused: it would run only after the game ends. Press buttons in a running game with
 `pp ui --pad … --leave-running`, then `pp pad send`, in one `pp phone lock`.
 `--settings` `"arguments"` is a string, or a list of strings that `pp ui` joins (an
-argument with a space is quoted; one holding `"` is refused). `pp phone rm Documents/NAME.zip`
+argument with a space is quoted; one holding `"` is refused). `pp phone put LOCAL
+Documents/Import/NAME/FILE` copies one file into the app's import inbox (what a person does with
+Files; nothing else, and the import still goes through the UI: `import:Import/NAME`), so a probe from
+`tools/compat/probes/build.sh` is put file by file. `pp phone rm Documents/NAME.zip`
 deletes a zip put in Documents for `import:` and nothing else. For a known no-frame problem, stop at an existing launch
 mark, e.g. `--until 'mark:game started+30' --wait 120 --shot`, rather than waiting
 for the missing first frame. `--wait` counts from JIT ready (the app's "runtime started" mark); the launch
@@ -311,7 +314,16 @@ not that gameplay appeared: inspect the timeline, log and screenshot.
   steps into Training). Time pushes from the first frame (`first-frame+25`): the JIT and
   runtime start before it vary. Within a title, `pp pad wait-still --shot
   FILE` waits for the screen to settle (a menu after a load) instead of a
-  fixed wait, and leaves the settled screen in FILE.
+  fixed wait, and leaves the settled screen in FILE. `pp pad wait-text TEXT ...
+  [--need N] [--press STEP ...] --shot FILE` waits until tesseract reads the
+  menu's labels on the screen, pressing STEP (an intro's skip) only while none
+  is read, so the next press lands on a recognized menu, not after a fixed
+  delay (Kingdom Come: `--press "150 B" --press "300 -" --need 2 "New Game"
+  "Load Game" Settings`, then `pp pad send "150 A" "1000 -"` on its Continue).
+  Tesseract misreads a highlighted item, so `--crop L,T,R,B --highlight-above TEXT
+  --timeout 0` checks once that a light bar sits just above TEXT in that part of
+  the screen (Kingdom Come's Continue above New Game: `--crop 0.70,0.33,0.92,0.80
+  --highlight-above "New Game" "New Game"`) before that A.
 - **The in-game menu.** Holding the controller's Home button half a second over
   a running game opens Playport's menu (`UI/InGameMenuView.swift`): the game is
   paused behind it (its pads at rest, audio stopped, its threads suspended by
