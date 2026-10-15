@@ -100,12 +100,18 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
      `installscript_sdk.vdf` as prerequisites with the launch screen. The installer's pages are
      GDI windows, which 0075's layer shows and touch can press. **Done 2026-10-15** (depot rule,
      Repair adds the depot: 235.6 MB downloaded; both scripts run; the owner pressed through the
-     pages; [evidence](../evidence/2026-10-15-rockstar-stage0-phone.md)). Open: the installer
-     fails when `RockstarService.exe` faults in a self-modifying-code loop under FEX, so it goes
-     with step 2.
+     pages; [evidence](../evidence/2026-10-15-rockstar-stage0-phone.md)). The launcher is now
+     installed in the phone's prefix, with its `InstallFolder` key and the `Rockstar Service`
+     entry.
   2. [PLA-275](https://linear.app/playportdev/issue/PLA-275): `services.exe` and `rpcss` for a
      play flagged as needing them (D5). This is required for Rockstar, not optional. The flag
-     covers `RockstarService.exe` and COM over rpcss.
+     covers `RockstarService.exe` and COM over rpcss. **In place 2026-10-16**
+     ([decision 0107](../decisions/0107-windows-services-for-a-flagged-play.md); madeira-unix 0151
+     stops the storm breaker ending the service's self-modifying loop; wine-unix 0038 fixes a job
+     termination that crashed the app; the profile's Desktop and Start Menu folders). **Open,
+     first for the next writer:** the service process exits with `0xC0000001` as soon as
+     services.exe starts it (run `20261016T002413`), so the launcher retries three times and stays
+     on a black screen.
   3. [PLA-292](https://linear.app/playportdev/issue/PLA-292) and
      [PLA-314](https://linear.app/playportdev/issue/PLA-314): fault containment for child
      pseudo-processes (renderers, crashpad).

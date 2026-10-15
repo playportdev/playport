@@ -2,7 +2,7 @@
 /*
  * session_protocol_test.c — session_protocol.h on the Linux host (pp test):
  * the request validator the session root runs before it starts anything (a
- * title or one of its prerequisites), and
+ * title, one of its prerequisites, or the services of a play that needs them), and
  * the control validator it runs before it pauses, resumes or closes the title.
  */
 #include "session_protocol.h"
@@ -88,6 +88,17 @@ int main(void)
     g.argc = 0;
     CHECK(!pp_session_request_valid(&g, buf, n));
 
+    /* SERVICES: the SCM for a play that needs it (decision 0107), with nothing else */
+    pp_session_request sv = { PP_SESSION_MAGIC, 4, PP_REQUEST_SERVICES, 0, 0, 0 };
+    CHECK(pp_session_request_valid(&sv, NULL, 0));
+    CHECK(!pp_session_request_valid(&sv, buf, 1));          /* a payload it does not take */
+    sv.length = n;
+    CHECK(!pp_session_request_valid(&sv, buf, n));
+    sv.length = 0; sv.argc = 1;
+    CHECK(!pp_session_request_valid(&sv, NULL, 0));
+    sv.argc = 0; sv.sequence = 0;
+    CHECK(!pp_session_request_valid(&sv, NULL, 0));
+
     /* controls: a known kind, a sequence, an arg only for CLOSE and within its bound */
     pp_session_control c = { PP_SESSION_MAGIC, 3, PP_CONTROL_PAUSE, 0 };
     CHECK(pp_session_control_valid(&c, sizeof(c)));
@@ -105,6 +116,8 @@ int main(void)
     CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* a launch is not a control */
     c.kind = PP_REQUEST_PREREQUISITE;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* nor is a prerequisite */
+    c.kind = PP_REQUEST_SERVICES;
+    CHECK(!pp_session_control_valid(&c, sizeof(c)));   /* nor the services */
     c.kind = PP_CONTROL_PAUSE; c.sequence = 0;
     CHECK(!pp_session_control_valid(&c, sizeof(c)));
     c.sequence = 1; c.magic = 0;

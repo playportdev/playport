@@ -81,6 +81,9 @@ enum LaunchCoordinator {
         /// The title's own prerequisite installers (decision 0079), each run before the
         /// game when one of its ids has not run in the prefix.
         var prerequisites: [Prerequisite] = []
+        /// Start Windows services (services.exe, Wine's SCM) before the prerequisites and the
+        /// title (LaunchSettings.windowsServices, decision 0107).
+        var windowsServices = false
         /// Whether a prerequisite that ran may end the launch before the game, for Playport's
         /// restart and the same Play in the new process (decision 0084), when the pool after
         /// them leaves the game too little room (decision 0094); false starts the game in this
@@ -492,6 +495,12 @@ enum LaunchCoordinator {
             MainActor.assumeIsolated { HostIO.shared.dialogOverGame(up) }
         }
         let pool = PoolLog()
+        if r.windowsServices {
+            let t0 = Date()
+            let rc = runtime.startServices()
+            log(rc == 0 ? String(format: "services: services.exe runs for this play (%.2f s)", Date().timeIntervalSince(t0))
+                        : "services: services.exe not started (\(rc)); the title starts without Windows services")
+        }
         var ran = 0
         if let ended = runPrerequisites(r, environment: environment, pool: pool, ran: &ran, step: step, mark: mark) {
             PacedMetalLayer.onFirstFrame { }

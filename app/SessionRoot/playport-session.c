@@ -27,9 +27,14 @@
 // closing a window on Windows does, then ends the job if the title is still
 // running when the wait it names is over.
 //
+// For a play that needs Windows services (decision 0107), it starts services.exe,
+// Wine's SCM, before the title, logs each service's changes as `[service]`
+// lines, and stops them all before it reports the title's end.
+//
 // x86-64, as every title is, GUI subsystem (no console, so no conhost),
 // kernel32 and user32 only, no C runtime: nothing is loaded that a title would
-// not load too. Its lines go to stderr, the app log, prefixed `session:`.
+// not load too (advapi32 only for the services, looked up). Its lines go to
+// stderr, the app log, prefixed `session:`.
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -337,6 +342,194 @@ static void control(uint32_t title_seq, HANDLE job, DWORD title, int *closing, D
     reply_to(control_reply_path, control_reply_tmp, c.sequence, PP_CONTROL_DONE, done);
 }
 
+/* --- Windows services (decision 0107) */
+
+/* The SCM calls the root makes, from advapi32 (loaded only for a play with services). */
+static struct {
+    SC_HANDLE (WINAPI *open_manager)(LPCWSTR, LPCWSTR, DWORD);
+    SC_HANDLE (WINAPI *open_service)(SC_HANDLE, LPCWSTR, DWORD);
+    BOOL (WINAPI *enum_services)(SC_HANDLE, SC_ENUM_TYPE, DWORD, DWORD, LPBYTE, DWORD, LPDWORD, LPDWORD, LPDWORD, LPCWSTR);
+    BOOL (WINAPI *control)(SC_HANDLE, DWORD, LPSERVICE_STATUS);
+    BOOL (WINAPI *close)(SC_HANDLE);
+} scm;
+static HANDLE services_process;   /* services.exe, while it runs for this play */
+static volatile LONG services_watching;
+
+#define MAX_SERVICES 64
+static struct { WCHAR name[80]; DWORD state, pid; } seen[MAX_SERVICES];
+static DWORD nseen;
+
+static const char *state_name(DWORD state)
+{
+    switch (state) {
+    case SERVICE_STOPPED: return "stopped";
+    case SERVICE_START_PENDING: return "starting";
+    case SERVICE_STOP_PENDING: return "stopping";
+    case SERVICE_RUNNING: return "running";
+    case SERVICE_CONTINUE_PENDING: return "continuing";
+    case SERVICE_PAUSE_PENDING: return "pausing";
+    case SERVICE_PAUSED: return "paused";
+    default: return "in an unknown state";
+    }
+}
+
+/* Every Win32 service the SCM knows and its status, in buf; how many, or 0. */
+static DWORD list_services(BYTE *buf, DWORD cap)
+{
+    SC_HANDLE m = scm.open_manager(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
+    DWORD need = 0, count = 0, resume = 0;
+    if (!m) return 0;
+    if (!scm.enum_services(m, SC_ENUM_PROCESS_INFO, SERVICE_WIN32, SERVICE_STATE_ALL, buf, cap, &need, &count, &resume, NULL))
+        count = 0;
+    scm.close(m);
+    return count;
+}
+
+/* `[service]` lines for each change since the last look: a service the SCM lists
+ * for the first time (one CreateService installed, or the prefix had), and each
+ * change of state, a stop with its exit codes. */
+static void log_service_changes(void)
+{
+    static BYTE buf[32768];
+    ENUM_SERVICE_STATUS_PROCESSW *e = (ENUM_SERVICE_STATUS_PROCESSW *)buf;
+    DWORD n = list_services(buf, sizeof(buf)), i, k;
+    char name[160];
+    for (i = 0; i < n; i++) {
+        SERVICE_STATUS_PROCESS *st = &e[i].ServiceStatusProcess;
+        for (k = 0; k < nseen && !same_name(seen[k].name, e[i].lpServiceName); k++) {}
+        if (k == nseen) {
+            if (nseen == MAX_SERVICES || wlen(e[i].lpServiceName) >= 80) continue;
+            wcopy(seen[nseen].name, e[i].lpServiceName);
+            seen[nseen].state = 0;
+            nseen++;
+        }
+        if (seen[k].state == st->dwCurrentState && seen[k].pid == st->dwProcessId) continue;
+        if (!WideCharToMultiByte(CP_UTF8, 0, e[i].lpServiceName, -1, name, sizeof(name), NULL, NULL)) name[0] = 0;
+        if (!seen[k].state && st->dwCurrentState == SERVICE_STOPPED)
+            say("[service] %s: listed, stopped", name);
+        else if (st->dwCurrentState == SERVICE_STOPPED)
+            say("[service] %s: stopped, exit %u (service code %u)", name, (unsigned long long)st->dwWin32ExitCode,
+                (unsigned long long)st->dwServiceSpecificExitCode);
+        else
+            say("[service] %s: %s, pid %u", name, state_name(st->dwCurrentState), (unsigned long long)st->dwProcessId);
+        seen[k].state = st->dwCurrentState;
+        seen[k].pid = st->dwProcessId;
+    }
+}
+
+static DWORD WINAPI watch_services(void *unused)
+{
+    (void)unused;
+    while (services_watching) {
+        log_service_changes();
+        Sleep(500);
+    }
+    return 0;
+}
+
+/* Starts services.exe and waits until its SCM listens (it sets Wine's
+ * __wine_SvcctlStarted event): its process id, or 0 with the error in *error. */
+static DWORD start_services(DWORD *error)
+{
+    static const char *const fns[] = { "OpenSCManagerW", "OpenServiceW", "EnumServicesStatusExW", "ControlService",
+                                       "CloseServiceHandle" };
+    void **slots[] = { (void **)&scm.open_manager, (void **)&scm.open_service, (void **)&scm.enum_services,
+                       (void **)&scm.control, (void **)&scm.close };
+    WCHAR exe[] = L"C:\\windows\\system32\\services.exe", line[] = L"services.exe";
+    HMODULE advapi = LoadLibraryW(L"advapi32.dll");
+    HANDLE started, wait[2], err = GetStdHandle(STD_ERROR_HANDLE);
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    DWORD i, w, t = GetTickCount();
+
+    if (services_process) { *error = ERROR_SERVICE_ALREADY_RUNNING; return 0; }
+    for (i = 0; i < sizeof(fns) / sizeof(*fns); i++)
+        if (!advapi || !(*slots[i] = (void *)GetProcAddress(advapi, fns[i]))) { *error = ERROR_PROC_NOT_FOUND; return 0; }
+    /* Made first, so the wait cannot miss the SCM setting it. */
+    if (!(started = CreateEventW(NULL, TRUE, FALSE, L"__wine_SvcctlStarted"))) { *error = GetLastError(); return 0; }
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = si.hStdError = err;
+    memset(&pi, 0, sizeof(pi));
+    if (!CreateProcessW(exe, line, NULL, NULL, err && err != INVALID_HANDLE_VALUE, 0, NULL, NULL, &si, &pi)) {
+        *error = GetLastError();
+        CloseHandle(started);
+        return 0;
+    }
+    CloseHandle(pi.hThread);
+    wait[0] = started;
+    wait[1] = pi.hProcess;
+    w = WaitForMultipleObjects(2, wait, FALSE, 10000);
+    CloseHandle(started);
+    if (w != WAIT_OBJECT_0) {
+        say("[service] services.exe %s after %u ms", w == WAIT_OBJECT_0 + 1 ? "ended" : "did not start its SCM",
+            (unsigned long long)(GetTickCount() - t));
+        TerminateProcess(pi.hProcess, ERROR_SERVICE_REQUEST_TIMEOUT);
+        CloseHandle(pi.hProcess);
+        *error = w == WAIT_OBJECT_0 + 1 ? ERROR_SERVICE_NOT_ACTIVE : ERROR_SERVICE_REQUEST_TIMEOUT;
+        return 0;
+    }
+    services_process = pi.hProcess;
+    say("[service] services.exe started, pid %u, its SCM listening after %u ms", (unsigned long long)pi.dwProcessId,
+        (unsigned long long)(GetTickCount() - t));
+    log_service_changes();
+    services_watching = 1;
+    CloseHandle(CreateThread(NULL, 0, watch_services, NULL, 0, NULL));
+    return pi.dwProcessId;
+}
+
+/* Before the title's end is reported: every running service is asked to stop
+ * (3 s at most), one still running is ended, then services.exe, so none
+ * outlives the title. */
+static void stop_services(void)
+{
+    static BYTE buf[32768];
+    ENUM_SERVICE_STATUS_PROCESSW *e = (ENUM_SERVICE_STATUS_PROCESSW *)buf;
+    SERVICE_STATUS status;
+    DWORD n, i, t = GetTickCount(), ended = 0;
+    SC_HANDLE m;
+
+    if (!services_process) return;
+    services_watching = 0;
+    if ((m = scm.open_manager(NULL, NULL, SC_MANAGER_CONNECT))) {
+        n = list_services(buf, sizeof(buf));
+        for (i = 0; i < n; i++) {
+            SC_HANDLE s;
+            if (e[i].ServiceStatusProcess.dwCurrentState == SERVICE_STOPPED) continue;
+            if ((s = scm.open_service(m, e[i].lpServiceName, SERVICE_STOP))) {
+                scm.control(s, SERVICE_CONTROL_STOP, &status);
+                scm.close(s);
+            }
+        }
+        scm.close(m);
+    }
+    while (GetTickCount() - t < 3000) {
+        int running = 0;
+        n = list_services(buf, sizeof(buf));
+        for (i = 0; i < n; i++) running |= e[i].ServiceStatusProcess.dwCurrentState != SERVICE_STOPPED;
+        if (!running) break;
+        Sleep(100);
+    }
+    log_service_changes();
+    n = list_services(buf, sizeof(buf));
+    for (i = 0; i < n; i++) {
+        DWORD pid = e[i].ServiceStatusProcess.dwProcessId;
+        HANDLE h;
+        if (e[i].ServiceStatusProcess.dwCurrentState == SERVICE_STOPPED || !pid) continue;
+        if ((h = OpenProcess(PROCESS_TERMINATE, FALSE, pid))) {
+            if (TerminateProcess(h, ERROR_PROCESS_ABORTED)) ended++;
+            CloseHandle(h);
+        }
+    }
+    TerminateProcess(services_process, 0);
+    WaitForSingleObject(services_process, 2000);
+    CloseHandle(services_process);
+    services_process = NULL;
+    say("[service] services.exe and its services stopped with the title in %u ms (%u ended)",
+        (unsigned long long)(GetTickCount() - t), (unsigned long long)ended);
+}
+
 /* --- one title */
 
 /* Before a title's end is reported: the registry on disk. The app may end as
@@ -469,6 +662,7 @@ static void launch(const pp_session_request *r, const char *payload)
     }
     resume_title();
     DeleteFileW(control_path);
+    if (r->kind == PP_REQUEST_LAUNCH) stop_services();
     if (!GetExitCodeProcess(pi.hProcess, &code)) code = GetLastError();
     CloseHandle(pi.hProcess);
     if (job) CloseHandle(job);
@@ -481,6 +675,7 @@ static void launch(const pp_session_request *r, const char *payload)
 refuse:
     if (error == ERROR_INVALID_DATA && GetLastError()) error = GetLastError();
     say("%s %u: not started, error %u", what, (unsigned long long)r->sequence, (unsigned long long)error);
+    if (r->kind == PP_REQUEST_LAUNCH) stop_services();
     reply(r->sequence, PP_TITLE_REFUSED, error);
 done:
     for (i = 0; i < r->envc; i++) if (set[i]) HeapFree(GetProcessHeap(), 0, set[i]);
@@ -546,6 +741,15 @@ void __stdcall entry(void)
         got = take(request_path, &r, &payload);
         if (got < 0) { Sleep(50); continue; }
         if (got && r.kind == PP_REQUEST_LAUNCH) break;
+        if (got && r.kind == PP_REQUEST_SERVICES) {
+            DWORD error = 0, pid = start_services(&error);
+            if (pid) reply(r.sequence, PP_TITLE_STARTED, pid);
+            else {
+                say("services %u: not started, error %u", (unsigned long long)r.sequence, (unsigned long long)error);
+                reply(r.sequence, PP_TITLE_REFUSED, error);
+            }
+            continue;
+        }
         if (got && (r.kind == PP_REQUEST_PREREQUISITE || r.kind == PP_REQUEST_PREREQUISITE_LINE)) {
             launch(&r, payload);
             HeapFree(GetProcessHeap(), 0, payload);

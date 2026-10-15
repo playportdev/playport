@@ -1003,6 +1003,23 @@ private struct GameDetailPage: View {
         }
         // A compatibility default's keys stay under the person's own, per key (decision 0091).
         let compat = launchSettings.compat(for: t.id)?.settings
+        // Windows services (decision 0107): services.exe and the services it starts, for this play.
+        let services = OptionValue.of(own: settings.wrappedValue.windowsServices, compat: compat?.windowsServices,
+                                      inherited: false, name: onOff)
+        PadRow(id: "opt:windowsServices", title: "Windows services", value: services.text, accessory: .chevron,
+               changed: services.changed, style: .plain,
+               reset: services.changed ? { settings.wrappedValue.windowsServices = nil } : nil) {
+            PadModal.shared.picker(
+                title: "Windows services", context: "\(context) · Windows",
+                note: "Starts Wine's service manager (services.exe) before the game, for a launcher that installs "
+                    + "and uses a Windows service; its services stop when the game ends.",
+                options: [PadOption(id: "", label: "Default",
+                                    detail: compat?.windowsServices.map { "\(onOff($0)), for this game" } ?? "Off"),
+                          PadOption(id: "on", label: "On"), PadOption(id: "off", label: "Off")],
+                selected: settings.wrappedValue.windowsServices.map { $0 ? "on" : "off" } ?? "") {
+                settings.wrappedValue.windowsServices = $0.isEmpty ? nil : $0 == "on"
+            }
+        }
         let compatKeys = compat?.runtime.trimmingCharacters(in: .whitespaces) ?? ""
         let compatOptions = compat?.graphicsOptions.trimmingCharacters(in: .whitespaces) ?? ""
         let forThisGame: (String) -> String? = { $0.isEmpty ? nil : "\(OptionValue.compatMarker) For this game: \($0); your own key of the same name wins" }

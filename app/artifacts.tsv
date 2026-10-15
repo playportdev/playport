@@ -2373,7 +2373,7 @@ resource	Runtime/vulkan/i386-windows/d3d11.dll	8306688	8d4a47890c2afadba9a8a13d3
 resource	Runtime/vulkan/i386-windows/dxgi.dll	5607424	96427bc77b2811d94b201aa5cf7b08287dbecb61b13c61c4437ee1e92efa2ae5	vulkan-pe	i386-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8353280	f0db32854540fbfb0096e212436c03c7cee50f2671ce9bd14eab6da88484e713	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8667648	0d6b96b7689a3286c891dd5b072f9f4b7ca88bf23ed84c2aba9b2b81106f7985	steamapi	i386-windows/steam_api.dll	P8-steamapi
-resource	Runtime/arm64ec-windows/playport-session.exe	20480	5efa9ac7197170a4beceba8c10c1369e4b7e43acf60a80d73e90e83f712e7ae4	session	playport-session.exe	P9-session
+resource	Runtime/arm64ec-windows/playport-session.exe	25600	7bcc8155e33d37949e54e314d37a5fd44b898bd54ab03e313c4b2bb7eed8cb35	session	playport-session.exe	P9-session
 resource	Runtime/arm64ec-windows/playport-url-opener.exe	5120	a4a9e67cec4f8df8e902e2a0714dd7c4828a4d3e0cabb65ef2fb6e214f0a6e4d	session	playport-url-opener.exe	P9-url-opener
 resource	Runtime/nls/c_1252.nls	66082	e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76	unix	wine/nls/c_1252.nls	nls
 resource	Runtime/nls/c_20127.nls	66082	951a19ce0d3c785d12ea94cb28ce5c2c096d302e35b3fb3e8b35248a006435ba	unix	wine/nls/c_20127.nls	nls
@@ -5367,7 +5367,7 @@ resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857c
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
 link	lib/libntdll_unix.a	4713800	9ae6bef243281f17d0f0a88dd7321c7e6033910f74a45870a3ec27c0d6a29d60	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4118760	ad9b5e17ba3061ed95ffee23be7e46bc6fe30a1866bacd70f5dc43d07d53912d	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
-link	lib/libwineserver.a	1218304	d26e2c5566afe251cd4cd3b64d7be3131029a43da6e18621935b8bf8511d3ce7	unix	mythic/app/Madeira/libwineserver.a	P4-server
+link	lib/libwineserver.a	1218320	4ae866dd58919245d46ad88ad6f08a5af54620a86e1517fa9924a0f8efbaa902	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto
 link	lib/libhogweed.a	1105792	247e869163901151301d2ff3c930a68c3742fbbb263a33b8bc10a98dfbd65b9f	unix	mythic/toolchains/gnutls-ios/lib/libhogweed.a	P4-crypto
 link	lib/libnettle.a	1705864	ff2ecf070899ab728cf21dc13bb9463fdf5a79775a34c5f87e7d861fed2d9543	unix	mythic/toolchains/gnutls-ios/lib/libnettle.a	P4-crypto

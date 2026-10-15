@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WINE_HOST_ABI_VERSION 7
+#define WINE_HOST_ABI_VERSION 8
 
 typedef void (*wine_host_log_fn)(const char *line);
 
@@ -120,6 +120,14 @@ int wine_host_session_prerequisite(const char *dos_path, const char *const *args
  * redistributables, decision 0090). Added in ABI 7 without changing any existing call. */
 int wine_host_session_prerequisite_line(const char *dos_path, const char *line,
                                         const char *const *env, int nenv, int timeout_ms);
+
+/* Start services.exe, Wine's SCM, for this play (decision 0107), before any
+ * prerequisite or the title; the root stops it and its services before it
+ * reports the title's end. 0 when its SCM listens; -1 bad call (no session,
+ * after the launch, or while a prerequisite runs), -4 the request could not
+ * be written, -6 no answer in timeout_ms, -7 the root could not start it.
+ * Added in ABI 8 without changing any existing call. */
+int wine_host_session_services(int timeout_ms);
 
 /* Wait up to timeout_ms for the running title (or prerequisite) and everything
  * it started to end. 0 and its exit code once they have, 1 on timeout, -1 with

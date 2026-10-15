@@ -120,6 +120,12 @@ final class WineHostRuntime: @unchecked Sendable {
     }
     #endif
 
+    /// Starts services.exe, Wine's SCM, for a play that needs Windows services, before its
+    /// prerequisites and title (wine_host_session_services, decision 0107); 0 once it listens.
+    func startServices() -> Int32 {
+        wine_host_session_services(15_000)
+    }
+
     /// Starts a title as the session root's child (wine_host_session_launch):
     /// `environment` is set over the root's own for this title only.
     func launch(exe: String, args: [String], environment: [String: String]) -> Int32 {

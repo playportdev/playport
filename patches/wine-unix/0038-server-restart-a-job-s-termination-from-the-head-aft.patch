@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 00:30:00 +0200
+Subject: [PATCH] server: restart a job's termination from the head after each
+ process
+
+terminate_job walked the job's processes with a saved next entry. Ending
+one closes its handles, and a process of the job that had already ended
+and was kept alive only by such a handle is then destroyed, which takes
+it off the list: the saved entry pointed at freed memory and
+`assert( process->job == job )` failed, which on iOS ends the app with
+every process of its session. The Rockstar Games Launcher installer, a
+Steam prerequisite that Playport closed after its time limit, had
+started winemenubuilder.exe, which had ended.
+
+Walk from the head after each process instead, skipping those already
+terminating, as kill_console_processes does.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no
+---
+ server/process.c | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/server/process.c b/server/process.c
+index c8b97b8..23ddab4 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -318,7 +318,7 @@ static void release_job_process( struct process *process )
+ 
+ static void terminate_job( struct job *job, int exit_code )
+ {
+-    struct process *process, *next_process;
++    struct process *process;
+     struct job *j, *next_job;
+ 
+     LIST_FOR_EACH_ENTRY_SAFE( j, next_job, &job->child_job_list, struct job, parent_job_entry )
+@@ -330,11 +330,20 @@ static void terminate_job( struct job *job, int exit_code )
+         release_object( j );
+     }
+ 
++    /* Restart from the head after each process: ending one closes its handles, and
++     * a process that already ended and was kept only by such a handle (a child the
++     * job's process started) is then destroyed and leaves the list, so a saved next
++     * entry may be gone. */
+     job->terminating = 1;
+-    LIST_FOR_EACH_ENTRY_SAFE( process, next_process, &job->process_list, struct process, job_entry )
++    for (;;)
+     {
+-        assert( process->job == job );
+-        if (process->running_threads) terminate_process( process, NULL, exit_code );
++        LIST_FOR_EACH_ENTRY( process, &job->process_list, struct process, job_entry )
++        {
++            assert( process->job == job );
++            if (process->running_threads && !process->is_terminating) break;
++        }
++        if (&process->job_entry == &job->process_list) break;
++        terminate_process( process, NULL, exit_code );
+     }
+     job->terminating = 0;
+     signal_sync( job->sync );

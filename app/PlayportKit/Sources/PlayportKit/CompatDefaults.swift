@@ -115,7 +115,8 @@ extension LaunchSettings {
                               ordering: ordering.isEmpty ? base.ordering : ordering, maxInst: maxInst ?? base.maxInst,
                               x87Reduced: x87Reduced ?? base.x87Reduced, diskCache: diskCache ?? base.diskCache,
                               runtime: Self.keyItems(runtime, over: base.runtime),
-                              graphicsOptions: Self.keyItems(graphicsOptions, over: base.graphicsOptions))
+                              graphicsOptions: Self.keyItems(graphicsOptions, over: base.graphicsOptions),
+                              windowsServices: windowsServices ?? base.windowsServices)
     }
 
     /// `key=value` items as typed (Runtime keys, Graphics options) over the default's: the

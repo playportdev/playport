@@ -120,6 +120,39 @@ the installer, because the prerequisite was recorded as failed with this build. 
 
 Hollow Knight on `fb14fc65`, run `20261015T235413`: first frame at +11.22 s, ok.
 
+## Step 2: Windows services for a flagged play (PLA-275, decision 0107)
+
+Red Dead Redemption 2's play now starts services.exe: `windowsServices` is set in the
+compatibility table. The session root logs `[service]` lines and stops the services before it
+reports the title's end. Hollow Knight starts none.
+
+| Run | IPA | What it showed |
+| --- | --- | --- |
+| `20261016T000630` | `c2c099e164bdd3367bb3cc16b241d32ded3ddcdd17b6160f9a856c30910a740e` | Hollow Knight: first frame +10.11 s, no `[service]` line |
+| `20261016T000828` | `c2c099e1…` | RDR2, the owner pressing the pages: `[service] services.exe started, pid 40, its SCM listening after 78 ms`, `[service] RpcSs: listed, stopped`. The installer's log shows `RockstarService.exe with args: install` → `Exit code: 0`, then `[service] Rockstar Service: listed, stopped`, then its uninstall registry keys. It then created its desktop shortcut as `\Rockstar Games Launcher.lnk` (empty folder path), and its worker thread ended. The page stayed on Installing until Playport's 300 s prerequisite limit closed it. That forced close hit `Assertion failed: (process->job == job), function terminate_job` in the wineserver and ended the app |
+| `20261016T002213` | `2966df7c6bf8cdc08f35636222ebacc6157ebf9d3851bbb0accdf374b7ea97b5` | Hollow Knight: first frame +9.22 s |
+| `20261016T002413` | `2966df7c…` | RDR2: the installer exits 0 in 0.5 s (`Silent install mode`: the closed run had already written the launcher's keys). `PlayRDR2.exe` starts `Launcher.exe` (Steam mode). The launcher runs `RockstarService.exe start` three times. Each time services.exe starts the service process, which exits with `0xC0000001` at once: `[service] Rockstar Service: starting, pid 304` / `stopped, exit 1077`. The screen stays black, with no window and no present |
+
+Two fixes went with the IPA `2966df7c`:
+
+- **Profile folders.** wine_host's profile folders now include `Desktop`, the user's and
+  ProgramData's `Start Menu\Programs\Startup`, and `Public\Desktop`. shell32 gives an empty
+  path for an absent folder, which is where the installer's shortcut went.
+- **Job termination.** wine-unix 0038: `terminate_job` walks the job from its head after each
+  process. Ending the installer closed its handle to `winemenubuilder.exe`, which had already
+  ended; the server then destroyed that process while it was the saved next entry. 0038 is not
+  yet exercised on the phone, since no run since has needed a forced close.
+
+### Where Stage 0 stands
+
+- **Installed** in the phone's prefix:
+  - the launcher's files, its registry (`InstallFolder`) and the `Rockstar Service` entry;
+  - Social Club, via the SDK script.
+- **Next blocker:** the service process exits with `0xC0000001` when the SCM starts it. Without it
+  the launcher shows no sign-in page (code 135 in Stage R).
+- **Not reached yet:** the launcher's window and D3D11 present (step 6). Steam mode also needs a
+  Steam client (PLA-253), so Stage 0 opens `Launcher.exe` standalone (step 5).
+
 ### Not done in step 1
 
 - The SCM (step 2).

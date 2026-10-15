@@ -329,6 +329,16 @@ final class LibraryModel: ObservableObject {
             gogInstallScripts(t)
         }
         let prerequisites = Prerequisite.merge(store: storePrerequisites, unrealEngine: unrealEngine)
+        // Windows services (decision 0107): COM's RpcSs entry, which the prefix seed lacks, for the SCM
+        // this play starts; a top-up, so a prefix that has it keeps its own.
+        if settings.windowsServices {
+            do {
+                try PrefixRegistryFile(prefix: WineHostRuntime.shared.prefixURL).add(WindowsServices.rpcss)
+                Self.log("play \(t.name): Windows services on; RpcSs's service entry topped up in the prefix")
+            } catch {
+                Self.log("play \(t.name): RpcSs's service entry not written (\(error))")
+            }
+        }
         // A GOG game's Galaxy service (decision 0063), on by default: listening from now to the game's exit
         // when its build names a Galaxy client and GOG is signed in; otherwise the game runs without it.
         let galaxy = t.store == .gog ? await GOGAccount.shared.galaxyListener(t.key.id, name: t.name) : nil
@@ -342,7 +352,8 @@ final class LibraryModel: ObservableObject {
                                        graphics: settings.graphics, graphicsEnvironment: settings.graphicsEnvironment,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
-                                       prerequisites: prerequisites, epicOffline: epicOffline) else {
+                                       prerequisites: prerequisites, windowsServices: settings.windowsServices,
+                                       epicOffline: epicOffline) else {
             endTickets()
             galaxy?.stop()
             return false

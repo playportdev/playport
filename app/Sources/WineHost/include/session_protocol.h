@@ -46,6 +46,11 @@ enum {
      * quoted path, used as it is: a store's own command-line string, as its client
      * passes it to CreateProcess (GOG's nested quotes, decision 0090). */
     PP_REQUEST_PREREQUISITE_LINE = 6,
+    /* The Windows services of a play that needs them (decision 0107): the root starts
+     * services.exe, Wine's SCM, outside the title's job, and answers STARTED (its process
+     * id) once the SCM listens, or REFUSED; no payload. The services it starts are stopped
+     * before the title's end is reported. */
+    PP_REQUEST_SERVICES = 7,
 };
 
 /* The most a CLOSE waits before it ends the title. */
@@ -94,6 +99,7 @@ static inline int pp_session_request_valid(const pp_session_request *r, const ch
 {
     uint32_t want, i = 0, at = 0;
     if (!r || r->magic != PP_SESSION_MAGIC || !r->sequence || r->length != size) return 0;
+    if (r->kind == PP_REQUEST_SERVICES) return size == 0 && r->argc == 0 && r->envc == 0;
     if ((r->kind != PP_REQUEST_LAUNCH && r->kind != PP_REQUEST_PREREQUISITE && r->kind != PP_REQUEST_PREREQUISITE_LINE) ||
         !payload || size > PP_SESSION_MAX_PAYLOAD || r->argc > PP_SESSION_MAX_ARGS || r->envc > PP_SESSION_MAX_ENV) return 0;
     if (r->kind == PP_REQUEST_PREREQUISITE_LINE && r->argc != 1) return 0;
