@@ -18,6 +18,8 @@ PPMemoryRegion * _Nullable pp_memory_create_purgeable(uint64_t bytes, uint64_t t
 /// The object's purgeable state as seen through this task's mapping
 /// (VM_PURGABLE_NONVOLATILE 0, VOLATILE 1, EMPTY 2), -1 if unmappable, -1000-kr if not purgeable.
 int pp_memory_purgeable_state(PPMemoryRegion *region);
+/// This task's footprint, resident, compressed, internal, external and available bytes, and its
+/// ledgers: graphics (Metal's charge, in the footprint), graphics_nofootprint, purgeable_nonvolatile.
 NSDictionary<NSString *, NSNumber *> *pp_memory_snapshot(void);
 /// The whole phone's VM counters (host_statistics64, page counts as bytes) and jetsam's
 /// kern.memorystatus_level (percent available) and _vm_pressure_level (1 normal, 2 warn, 4 critical; -1 unreadable).
@@ -50,5 +52,7 @@ int64_t pp_memory_zero_range(PPMemoryRegion *region, uint64_t offset, uint64_t b
 /// pp_memory_fill's words at an address; pp_memory_verify_range reads them in the object from offset.
 void pp_memory_fill_address(void *address, uint64_t bytes, uint64_t seed);
 bool pp_memory_verify_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, uint64_t seed);
+/// Whether every byte at address (8-byte aligned, bytes a multiple of 8) reads value.
+bool pp_memory_reads_byte(const void *address, uint64_t bytes, uint8_t value);
 NS_ASSUME_NONNULL_END
 #import "GuestPool.h"

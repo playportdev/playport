@@ -96,6 +96,9 @@
 //   probe:memory-pool-zero     Settings' Donor pool: zeroing: 1 GiB from a donor that ends, then
 //                              memset, purge, fixed-address range mapping and four ways to zero
 //                              or give back 64 MiB of an object (`pool-zero` lines)
+//   probe:memory-pool-gpu      Settings' Donor pool: Metal buffers: 1 GiB from a donor that ends, as
+//                              four no-copy shared Metal buffers written by the GPU and read back,
+//                              a range view's buffer, then four ordinary buffers (`pool-gpu` lines)
 //   background:<seconds>       Opens iOS Settings (10-600 s), so Playport goes to the background,
 //                              and waits until it is in front again: pp ui brings it back after
 //                              that long, unless iOS ended it (the ui-background event)
@@ -600,6 +603,13 @@ enum UIDriver {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
                         }
                         log("donor pool zeroing: \(SharedMemoryProbe.shared.status)")
+                    case "memory-pool-gpu":
+                        _ = AppNavigation.shared.open("settings")
+                        AppNavigation.shared.pageSection = "probes"
+                        guard await SharedMemoryProbe.shared.runPoolGPU() else {
+                            return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")
+                        }
+                        log("donor pool Metal buffers: \(SharedMemoryProbe.shared.status)")
                     case "memory-pool-verify":
                         guard await SharedMemoryProbe.shared.verifyPool() else {
                             return finish("action=\(action) failed: \(SharedMemoryProbe.shared.status)")

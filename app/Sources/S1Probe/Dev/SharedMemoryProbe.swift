@@ -3,6 +3,7 @@
 // disk-backed file, purgable cache, or virtual-address reservation.
 import Foundation
 import JITHelperXPC
+import Metal
 import PlayportKit
 import SharedMemory
 import SwiftUI
@@ -98,6 +99,170 @@ final class SharedMemoryProbe: ObservableObject {
         status = result.1
         busy = false
         return result.0
+    }
+
+    /// Graphics memory in the pool (step 5, PLA-354): one donor gives 1 GiB untouched and ends;
+    /// the app makes four shared-storage Metal buffers with no copy over the objects' own views,
+    /// writes object 1 on the CPU, then on the GPU copies buffer 1 to buffer 2 and fills buffers 3
+    /// and 4, reads them back on the CPU, does the same with a 64 MiB buffer over a range of
+    /// object 4 mapped at a fixed address (as the guest hooks map), and ends with the control:
+    /// four ordinary shared buffers of the same size, filled on the GPU. Each step logs the
+    /// footprint, the graphics ledgers and Metal's allocated size (`pool-gpu` lines).
+    func runPoolGPU() async -> Bool {
+        guard !busy else { return false }
+        while BuiltInJitStatus.shared.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        busy = true
+        status = "Measuring Metal buffers in the pool…"
+        let result = await withCheckedContinuation { done in
+            BuiltInJit.queue.async { done.resume(returning: Self.measurePoolGPU()) }
+        }
+        status = result.1
+        busy = false
+        return result.0
+    }
+
+    private nonisolated static func measurePoolGPU() -> (Bool, String) {
+        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
+            log("pool-gpu RESULT FAIL no Metal device")
+            return (false, "Pool GPU: no Metal device")
+        }
+        log("pool-gpu start " + describe(pp_memory_snapshot()) + " " + system())
+        let rounds = donorRounds(mb: 4 * donorChunkMB, touch: false, donors: 1, log: log)
+        let objects = rounds.regions
+        guard objects.count == 4 else {
+            log("pool-gpu RESULT FAIL donors gave \(objects.count) objects: \(rounds.stop)")
+            return (false, "Pool GPU: donors gave \(objects.count) objects; \(rounds.stop)")
+        }
+        let result = poolGPU(device: device, queue: queue, objects: objects, donors: rounds.pids.count)
+        // Every buffer over the objects ended inside poolGPU, before the objects unmap here.
+        withExtendedLifetime(objects) {}
+        return result
+    }
+
+    /// measurePoolGPU's buffers and readings; the objects outlive every buffer made here.
+    private nonisolated static func poolGPU(device: MTLDevice, queue: MTLCommandQueue, objects: [PPMemoryRegion],
+                                            donors: Int) -> (Bool, String) {
+        let chunk = donorChunkMB << 20
+        struct Reading { var footprint: Int64; var graphics: Int64; var graphicsNoFootprint: Int64; var metal: Int64 }
+        func read(_ name: String) -> Reading {
+            Thread.sleep(forTimeInterval: 1)
+            let s = pp_memory_snapshot()
+            func mb(_ k: String) -> Int64 { Int64(bitPattern: s[k]?.uint64Value ?? 0) >> 20 }
+            let r = Reading(footprint: mb("footprint"), graphics: mb("graphics"),
+                            graphicsNoFootprint: mb("graphics_nofootprint"), metal: Int64(device.currentAllocatedSize >> 20))
+            log("pool-gpu point=\(name) app_footprint_mb=\(r.footprint) graphics_mb=\(r.graphics) "
+                + "graphics_nofootprint_mb=\(r.graphicsNoFootprint) metal_allocated_mb=\(r.metal) "
+                + "purgeable_nonvolatile_mb=\(mb("purgeable_nonvolatile")) available_mb=\(mb("available")) "
+                + "resident_mb=\(objects.map { ($0.pageCounts()["resident"]?.uint64Value ?? 0) >> 20 })")
+            return r
+        }
+        /// One blit pass; whether it completed, with its error for the log.
+        func blit(_ name: String, _ encode: (MTLBlitCommandEncoder) -> Void) -> Bool {
+            autoreleasepool {
+                guard let commands = queue.makeCommandBuffer(), let encoder = commands.makeBlitCommandEncoder() else {
+                    log("pool-gpu blit=\(name) no command buffer")
+                    return false
+                }
+                let t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                encode(encoder)
+                encoder.endEncoding()
+                commands.commit()
+                commands.waitUntilCompleted()
+                let ms = String(format: "%.2f", Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0) / 1e6)
+                log("pool-gpu blit=\(name) status=\(commands.status.rawValue) ms=\(ms) "
+                    + "error=\(commands.error.map { String(describing: $0) } ?? "none")")
+                return commands.status == .completed
+            }
+        }
+        log("pool-gpu donors=\(donors) objects=\(objects.count) chunk_mb=\(donorChunkMB) page=\(getpagesize())")
+        let base = read("untouched")
+        var views: [UnsafeMutableRawPointer] = []
+        for object in objects {
+            guard let view = try? object.map() else {
+                log("pool-gpu RESULT FAIL an object did not map")
+                return (false, "Pool GPU: an object did not map")
+            }
+            views.append(view)
+        }
+        _ = read("mapped")
+
+        // The pool's buffers: no copy over each object's own view.
+        var buffers = views.map {
+            device.makeBuffer(bytesNoCopy: $0, length: chunk, options: .storageModeShared, deallocator: nil)
+        }
+        log("pool-gpu nocopy_created=\(buffers.filter { $0 != nil }.count)/\(buffers.count) "
+            + "allocated_mb=\(buffers.map { ($0?.allocatedSize ?? 0) >> 20 }) "
+            + "contents_match=\(zip(buffers, views).allSatisfy { $0?.contents() == $1 })")
+        guard buffers.allSatisfy({ $0 != nil }) else {
+            log("pool-gpu RESULT FAIL Metal refused a no-copy buffer over a pool object")
+            return (false, "Pool GPU: Metal refused a no-copy buffer over pool memory")
+        }
+        var pool = buffers.map { $0! }
+        let created = read("nocopy_created")
+        let filled = pp_memory_fill(objects[0], seed + 1)
+        let cpu = read("cpu_filled_object1")
+        let gpuOK = blit("pool") { e in
+            e.copy(from: pool[0], sourceOffset: 0, to: pool[1], destinationOffset: 0, size: chunk)
+            e.fill(buffer: pool[2], range: 0..<chunk, value: 0x5A)
+            e.fill(buffer: pool[3], range: 0..<chunk, value: 0xC3)
+        }
+        let gpu = read("gpu_written")
+        let copied = pp_memory_verify(objects[1], seed + 1)
+        let fill3 = pp_memory_reads_byte(views[2], UInt64(chunk), 0x5A)
+        let fill4 = pp_memory_reads_byte(views[3], UInt64(chunk), 0xC3)
+        log("pool-gpu read cpu_filled=\(filled) gpu_completed=\(gpuOK) copy_reads_back=\(copied) "
+            + "fill_reads_back=\(fill3 && fill4)")
+
+        // A range view as the guest hooks map one: 64 MiB of object 4 at offset 64 MiB over a fresh reservation.
+        let span = 64 << 20
+        var reservation: vm_address_t = 0
+        var rangeOK = false, rangeMade = false
+        if vm_allocate(mach_task_self_, &reservation, vm_size_t(span), VM_FLAGS_ANYWHERE) == KERN_SUCCESS,
+           let at = UnsafeMutableRawPointer(bitPattern: UInt(reservation)) {
+            let kr = pp_memory_map_range(objects[3], UInt64(span), UInt64(span), at)
+            if kr == 0, let range = device.makeBuffer(bytesNoCopy: at, length: span, options: .storageModeShared,
+                                                       deallocator: nil) {
+                rangeMade = true
+                let done = blit("range") { e in e.fill(buffer: range, range: 0..<span, value: 0x77) }
+                rangeOK = done && pp_memory_reads_byte(views[3] + span, UInt64(span), 0x77)
+                    && pp_memory_reads_byte(views[3], UInt64(span), 0xC3)
+                    && pp_memory_reads_byte(views[3] + 2 * span, UInt64(chunk - 2 * span), 0xC3)
+            } else {
+                log("pool-gpu range map_kr=\(kr)")
+            }
+            vm_deallocate(mach_task_self_, reservation, vm_size_t(span))
+        }
+        log("pool-gpu range nocopy_created=\(rangeMade) reads_back_in_object=\(rangeOK)")
+        _ = read("range_done")
+        buffers.removeAll()
+        pool.removeAll()
+        let released = read("nocopy_released")
+
+        // The control: ordinary shared buffers of the same size, filled on the GPU.
+        let controls = (0..<objects.count).compactMap { _ in device.makeBuffer(length: chunk, options: .storageModeShared) }
+        let controlCreated = read("control_created")
+        let controlOK = controls.count == objects.count && blit("control") { e in
+            for (i, b) in controls.enumerated() { e.fill(buffer: b, range: 0..<chunk, value: UInt8(0x10 + i)) }
+        }
+        let controlGPU = read("control_gpu_written")
+        let controlRead = controlOK && controls.enumerated().allSatisfy {
+            pp_memory_reads_byte($1.contents(), UInt64(chunk), UInt8(0x10 + $0))
+        }
+        let pass = filled && gpuOK && copied && fill3 && fill4 && rangeOK && controlRead
+        let poolFootprint = gpu.footprint - base.footprint, poolGraphics = gpu.graphics - base.graphics
+        let controlFootprint = controlGPU.footprint - released.footprint
+        let controlGraphics = controlGPU.graphics - released.graphics
+        log("pool-gpu RESULT \(pass ? "PASS" : "FAIL") buffers_mb=\(objects.count * donorChunkMB) "
+            + "nocopy_footprint_delta_mb=\(poolFootprint) nocopy_graphics_delta_mb=\(poolGraphics) "
+            + "nocopy_created_footprint_delta_mb=\(created.footprint - base.footprint) "
+            + "cpu_touch_footprint_delta_mb=\(cpu.footprint - created.footprint) "
+            + "nocopy_metal_allocated_delta_mb=\(gpu.metal - base.metal) "
+            + "control_footprint_delta_mb=\(controlFootprint) control_graphics_delta_mb=\(controlGraphics) "
+            + "control_created_footprint_delta_mb=\(controlCreated.footprint - released.footprint) "
+            + "control_metal_allocated_delta_mb=\(controlGPU.metal - released.metal) control_read=\(controlRead) "
+            + "copy=\(copied) fill=\(fill3 && fill4) range=\(rangeOK) " + describe(pp_memory_snapshot()))
+        return (pass, "Pool GPU \(pass ? "PASS" : "FAIL"): no-copy +\(poolFootprint) MiB footprint "
+                + "(graphics +\(poolGraphics)), control +\(controlFootprint) MiB (graphics +\(controlGraphics))")
     }
 
     private nonisolated static func measurePoolZero() -> (Bool, String) {

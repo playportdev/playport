@@ -201,7 +201,12 @@ NSDictionary *pp_memory_snapshot(void) {
     return @{@"pid": @(getpid()), @"kr": @(kr), @"footprint": @(info.phys_footprint),
              @"resident": @(info.resident_size), @"compressed": @(info.compressed),
              @"internal": @(info.internal), @"external": @(info.external),
-             @"available": @(os_proc_available_memory())};
+             @"available": @(os_proc_available_memory()),
+             @"graphics": @(info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed),
+             @"graphics_nofootprint": @(info.ledger_tag_graphics_nofootprint
+                                        + info.ledger_tag_graphics_nofootprint_compressed),
+             @"purgeable_nonvolatile": @(info.ledger_purgeable_nonvolatile
+                                         + info.ledger_purgeable_novolatile_compressed)};
 }
 int pp_memory_nofootprint_control(void) {
     NSError *error = nil;
@@ -264,6 +269,15 @@ int64_t pp_memory_zero_range(PPMemoryRegion *region, uint64_t offset, uint64_t b
 void pp_memory_fill_address(void *address, uint64_t bytes, uint64_t seed) {
     volatile uint64_t *p = address;
     for (uint64_t i = 0, n = bytes / 8; i < n; ++i) { p[i] = word(i, seed); }
+}
+bool pp_memory_reads_byte(const void *address, uint64_t bytes, uint8_t value) {
+    const volatile uint64_t *p = address;
+    uint64_t word = value * UINT64_C(0x0101010101010101);
+    if (!p || (uintptr_t)address % 8 || bytes % 8) { return false; }
+    for (uint64_t i = 0, n = bytes / 8; i < n; ++i) {
+        if (p[i] != word) { return false; }
+    }
+    return true;
 }
 bool pp_memory_verify_range(PPMemoryRegion *region, uint64_t offset, uint64_t bytes, uint64_t seed) {
     const volatile uint64_t *p = [region mapWithError:NULL];

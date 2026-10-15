@@ -142,6 +142,9 @@ struct DeveloperSettings: View {
         PadRow(id: "set:dev:memoryPoolZero", title: "Donor pool: zeroing", subtitle: sharedMemory.status, hint: "Measure") {
             if !sharedMemory.busy { Task { _ = await sharedMemory.runPoolZero() } }
         }
+        PadRow(id: "set:dev:memoryPoolGPU", title: "Donor pool: Metal buffers", subtitle: sharedMemory.status, hint: "Measure") {
+            if !sharedMemory.busy { Task { _ = await sharedMemory.runPoolGPU() } }
+        }
         PadRow(id: "set:dev:memoryPoolVerify", title: "Verify the donor pool", subtitle: sharedMemory.status, hint: "Verify") {
             if !sharedMemory.busy { Task { _ = await sharedMemory.verifyPool() } }
         }
