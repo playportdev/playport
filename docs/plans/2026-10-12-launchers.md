@@ -86,8 +86,11 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   - **Saving works without the launcher** (23:44, 17 min after it was ended; save files and Social
     Club cloud registration). RDR2 ran **62 minutes** without the launcher, autosaving every 5 min, with no sign-out; no
     ticket refresh was attempted in that time.
-  - **For the owner to decide:** whether Playport ends the launcher after the game's Social Club
-    has signed in.
+  - **Owner, 2026-10-16: (b) close the launcher after hand-off.** Every play starts through the
+    genuine launcher and its genuine sign-in. Once the game's Social Club logs "Signed in online",
+    Playport closes the launcher, and the game keeps its own Social Club CEF. This needs a
+    decision record (Stage 2, with PLA-295). It takes the place of "hidden and hibernating"
+    during play, and of suspension (dropped).
 - **Running now:** chunk 2 below (writer run `7179aee9`: builds, phone, commits). Phone: dev IPA
   `fb14fc65` installed, Hollow Knight and RDR2 installed, 3.3 GB free.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
