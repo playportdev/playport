@@ -1,6 +1,6 @@
 {
   "comment": "Playport's public compatibility list, shown by site/compatibility/index.html: each title's status from Linear project Compatibility (team PLA). Keep entries sorted by name; tools/tests/test_compat_site.py checks the format.",
-  "updated": "2026-10-14",
+  "updated": "2026-10-15",
   "games": [
     {
       "name": "#DRIVE Rally",
@@ -217,6 +217,12 @@
       "store": "steam",
       "id": "620",
       "status": "works"
+    },
+    {
+      "name": "Red Dead Redemption 2",
+      "store": "steam",
+      "id": "1174180",
+      "status": "broken"
     },
     {
       "name": "Shogun Showdown",
