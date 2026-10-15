@@ -4,7 +4,9 @@
 // 0105, the owner's table of 2026-10-15), clamped to the app's limit L read
 // just before Wine starts: a limit lower than the tier assumes (no
 // increased-memory-limit entitlement, or Game Mode not on yet) tells the guest
-// L rounded down to a GiB and a video figure about 3/8 of that.
+// L rounded down to a GiB and a video figure about 3/8 of that. A limit within
+// 512 MiB of the tier's G is the tier's own (decision 0106: the 8 GB phone's
+// 6,046) and takes the row in full.
 //
 // The app passes the plan through the environment: MADEIRA_TOTAL_PHYS_MB
 // (ml992's own override) and PLAYPORT_VRAM_MB (patches/dxmt 0011, after
@@ -58,6 +60,10 @@ public struct MemoryPlan: Equatable, Sendable {
 
     /// The clamp's step: a limit under the tier's G tells the guest L rounded down to this.
     public static let clampStepMB = 1024
+    /// A limit this far or less under the tier's G does not clamp (decision 0106): the 8 GB
+    /// phone's limit is published as 6,046 MiB, 98 under its row's 6,144, while the shortfalls
+    /// the clamp is for are whole GiB (6,144 on 12 GB before Game Mode, about 3,356 unentitled).
+    public static let clampMarginMB = 512
     /// Added to L before it is rounded down: the limit is read as available + footprint in
     /// whole MiB, 8,191 for the 8 GiB limit on the reference phone.
     public static let limitSlackMB = 64
@@ -77,8 +83,8 @@ public struct MemoryPlan: Equatable, Sendable {
     /// madeira.cfg keys that win over the plan (ml993, ml1095).
     public static let guestRAMKey = "totalphys"
     public static let videoKey = "vram-mb"
-    /// madeira.cfg key: 1 clamps DXVK's reported video memory and KosmicKrisp's heap budget
-    /// to the plan (off by default).
+    /// madeira.cfg key: DXVK's reported video memory and KosmicKrisp's heap budget follow the
+    /// plan unless it is 0 (on by default, decision 0106).
     public static let vulkanKey = "vulkan-vram-plan"
     /// KosmicKrisp's cap on its heap's VK_EXT_memory_budget budget, MiB (patches/mesa 0036).
     public static let vulkanBudgetVariable = "PLAYPORT_VK_BUDGET_MB"
@@ -105,10 +111,11 @@ public struct MemoryPlan: Equatable, Sendable {
         public var guestRAMMB: Int?
         /// `vram-mb` from madeira.cfg (ml1042 honours 256 or more).
         public var videoMB: Int?
-        /// `vulkan-vram-plan = 1`: DXVK's DXGI report and KosmicKrisp's heap budget take the plan's.
+        /// DXVK's DXGI report and KosmicKrisp's heap budget take the plan's; false only with
+        /// `vulkan-vram-plan = 0`.
         public var vulkan: Bool
 
-        public init(guestRAMMB: Int? = nil, videoMB: Int? = nil, vulkan: Bool = false) {
+        public init(guestRAMMB: Int? = nil, videoMB: Int? = nil, vulkan: Bool = true) {
             self.guestRAMMB = guestRAMMB
             self.videoMB = videoMB
             self.vulkan = vulkan
@@ -121,7 +128,7 @@ public struct MemoryPlan: Equatable, Sendable {
             var ram = int(value(guestRAMKey)).flatMap { $0 > 0 ? $0 : nil }
             if let env = int(environment[guestRAMVariable]), env > 0 { ram = env }
             let video = int(value(videoKey)).flatMap { $0 >= 256 ? $0 : nil }
-            return Overrides(guestRAMMB: ram, videoMB: video, vulkan: int(value(vulkanKey)) == 1)
+            return Overrides(guestRAMMB: ram, videoMB: video, vulkan: int(value(vulkanKey)) != 0)
         }
     }
 
@@ -145,8 +152,10 @@ public struct MemoryPlan: Equatable, Sendable {
         self.inputs = inputs
         self.overrides = overrides
         tier = Tier(physicalMB: inputs.physicalMB)
-        let ceiling = (max(0, inputs.limitMB) + Self.limitSlackMB) / Self.clampStepMB * Self.clampStepMB
-        plannedGuestRAMMB = min(tier.guestRAMMB, ceiling)
+        let limit = max(0, inputs.limitMB)
+        let ceiling = (limit + Self.limitSlackMB) / Self.clampStepMB * Self.clampStepMB
+        plannedGuestRAMMB = limit >= tier.guestRAMMB - Self.clampMarginMB ? tier.guestRAMMB
+            : min(tier.guestRAMMB, ceiling)
         plannedVideoMB = min(tier.videoMB, Self.videoMB(guestRAMMB: plannedGuestRAMMB))
     }
 
@@ -162,13 +171,13 @@ public struct MemoryPlan: Equatable, Sendable {
 
     /// DXVK's option that clamps the dedicated video memory its DXGI reports (heap size,
     /// Metal's recommended working set: 8 GiB on the reference phone) to this plan's;
-    /// nil unless `vulkan-vram-plan = 1`.
+    /// nil with `vulkan-vram-plan = 0`.
     public var dxvkOption: String? {
         overrides.vulkan ? "dxgi.maxDeviceMemory = \(videoMB)" : nil
     }
 
     /// KosmicKrisp's heap budget capped at this plan's video memory (patches/mesa 0036; the
-    /// heap's size stays Metal's working set); empty unless `vulkan-vram-plan = 1`.
+    /// heap's size stays Metal's working set); empty with `vulkan-vram-plan = 0`.
     public var vulkanEnvironment: [String: String] {
         overrides.vulkan ? [Self.vulkanBudgetVariable: String(videoMB)] : [:]
     }

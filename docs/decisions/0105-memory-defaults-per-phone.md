@@ -2,7 +2,9 @@
 
 **Status:** accepted, 2026-10-15, by the owner ("implement now and merge to main"), with the
 supervisor's extrapolation of the 6 and 4 GB rows; the clamp is the implementing worker's
-choice. [PLA-355](https://linear.app/playportdev/issue/PLA-355),
+choice. Amended by [0106](0106-8gb-row-in-full-and-vulkan-plan-default.md): the clamp
+applies only to a limit more than 512 MiB under the tier's G, and the Vulkan clamp is on by
+default. [PLA-355](https://linear.app/playportdev/issue/PLA-355),
 [PLA-352](https://linear.app/playportdev/issue/PLA-352) (the memory plan),
 [PLA-351](https://linear.app/playportdev/issue/PLA-351) and
 [PLA-216](https://linear.app/playportdev/issue/PLA-216) (the donor pool). Replaces the memory

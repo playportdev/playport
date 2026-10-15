@@ -29,7 +29,10 @@
 #          them as in Delphi's Move (x87m64.c, PLA-202, PLA-235)
 #   protect  x86-64: the cost of one-page VirtualProtect calls (data, RX, the
 #          image's own pages, write-protect-call) and a user shared data
-#          read from x86 code (protect.c, PLA-118)
+#          read from x86 code (protect.c, PLA-118); `purge` (named) commits,
+#          releases and recommits 1.5 GiB five times and decommits a region:
+#          every recommitted page must read zero (the dev donor pool's whole-
+#          object purge, PLA-363)
 #   machine  x86-64: the machine values wineboot writes (environment, CPU keys,
 #          computer name, Volatile Environment), xaudio2_9redist.dll by
 #          LoadLibrary and by a child that imports it (xaudio2redist.exe), the

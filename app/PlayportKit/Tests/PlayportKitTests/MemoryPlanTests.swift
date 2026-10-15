@@ -5,7 +5,8 @@ import XCTest
 
 /// Decision 0105's per-phone defaults: the tier from the phone's RAM (11,734, 7,679, 5,734 and
 /// 3,662 MiB reported by the 12, 8, 6 and 4 GB phones), clamped to the app's limit L (12 GB:
-/// measured, 8,191 with Game Mode and 6,144 before it; the others from the public crash ceilings).
+/// measured, 8,191 with Game Mode and 6,144 before it; the others from the public crash ceilings)
+/// when L is more than 512 MiB under the tier's G (decision 0106).
 final class MemoryPlanTests: XCTestCase {
     private func plan(_ limit: Int, ram: Int = 11734, pool: Int = 0,
                       _ o: MemoryPlan.Overrides = MemoryPlan.Overrides()) -> MemoryPlan {
@@ -20,6 +21,7 @@ final class MemoryPlanTests: XCTestCase {
             (11734, 8191, 12, 8192, 4096, 3072),  // 12 GB with Game Mode: L read as 8,191
             (16 * 1024, 8192, 12, 8192, 4096, 3072),  // more than 12 GB: the 12 GB row
             (7679, 6144, 8, 6144, 1024, 2048),
+            (7679, 6046, 8, 6144, 1024, 2048),  // 8 GB at the public figure: the owner's row in full
             (5734, 3064, 6, 3072, 0, 1024),   // 6 GB unentitled (public figure): L within the slack
             (3662, 2090, 4, 2048, 0, 768),    // 4 GB unentitled
         ]
@@ -50,8 +52,8 @@ final class MemoryPlanTests: XCTestCase {
         }
     }
 
-    /// A limit under the tier's G: G is L rounded down to a GiB (after 64 MiB of slack), V the
-    /// lesser of the tier's and 3/8 of that G.
+    /// A limit more than 512 MiB under the tier's G: G is L rounded down to a GiB (after 64 MiB
+    /// of slack), V the lesser of the tier's and 3/8 of that G.
     func testClampToTheLimit() {
         // 12 GB before Game Mode raises the limit: 6,144.
         let g = plan(6144)
@@ -62,20 +64,23 @@ final class MemoryPlanTests: XCTestCase {
         let u = plan(3356)
         XCTAssertEqual(u.guestRAMMB, 3072)
         XCTAssertEqual(u.videoMB, 1024)
-        // 8 GB entitled at the public crash figure (6,046), 98 MiB under the tier's 6,144: 5,120
-        // and 1,536.
-        XCTAssertTrue(plan(6046, ram: 7679).clamped)
-        XCTAssertEqual(plan(6046, ram: 7679).guestRAMMB, 5120)
-        XCTAssertEqual(plan(6046, ram: 7679).videoMB, 1536)
         // 8 GB unentitled (3,355): 3,072 and 1,024.
         XCTAssertEqual(plan(3355, ram: 7679).guestRAMMB, 3072)
         XCTAssertEqual(plan(3355, ram: 7679).videoMB, 1024)
         // 6 GB under its tier: 2,048 and the 768 floor.
         XCTAssertEqual(plan(2500, ram: 5734).guestRAMMB, 2048)
         XCTAssertEqual(plan(2500, ram: 5734).videoMB, 768)
-        // A limit 65 MiB short of a GiB step rounds down.
-        XCTAssertEqual(plan(8192 - 65).guestRAMMB, 7168)
-        XCTAssertEqual(plan(8192 - 65).videoMB, 2560)
+        // The margin: 512 MiB under the tier's G keeps the row, 513 clamps (and rounds down).
+        XCTAssertFalse(plan(8192 - 512).clamped)
+        XCTAssertEqual(plan(8192 - 512).guestRAMMB, 8192)
+        XCTAssertTrue(plan(8192 - 513).clamped)
+        XCTAssertEqual(plan(8192 - 513).guestRAMMB, 7168)
+        XCTAssertEqual(plan(8192 - 513).videoMB, 2560)
+        XCTAssertFalse(plan(6144 - 512, ram: 7679).clamped)
+        XCTAssertEqual(plan(6144 - 513, ram: 7679).guestRAMMB, 5120)
+        XCTAssertEqual(plan(6144 - 513, ram: 7679).videoMB, 1536)
+        // 8 GB before Game Mode, if its limit then reads a GiB lower: clamped.
+        XCTAssertEqual(plan(5120, ram: 7679).guestRAMMB, 5120)
         XCTAssertTrue(g.logLine.contains("clamp=yes planned_guest_ram_mb=6144 planned_video_mb=2048"), g.logLine)
     }
 
@@ -112,20 +117,29 @@ final class MemoryPlanTests: XCTestCase {
         // ml992 reads MADEIRA_TOTAL_PHYS_MB before madeira.cfg; ml1042 ignores vram-mb under 256.
         let e = MemoryPlan.Overrides.read(value: { ["totalphys": "6144", "vram-mb": "100"][$0] },
                                           environment: ["MADEIRA_TOTAL_PHYS_MB": "4096"])
-        XCTAssertEqual(e, MemoryPlan.Overrides(guestRAMMB: 4096, videoMB: nil, vulkan: false))
+        XCTAssertEqual(e, MemoryPlan.Overrides(guestRAMMB: 4096, videoMB: nil, vulkan: true))
         XCTAssertEqual(MemoryPlan.Overrides.read(value: { _ in nil }, environment: [:]), MemoryPlan.Overrides())
+        // The Vulkan clamp is on unless the title sets 0.
+        XCTAssertTrue(MemoryPlan.Overrides.read(value: { _ in nil }, environment: [:]).vulkan)
+        XCTAssertFalse(MemoryPlan.Overrides.read(value: { ["vulkan-vram-plan": " 0 "][$0] }, environment: [:]).vulkan)
+        XCTAssertTrue(MemoryPlan.Overrides.read(value: { ["vulkan-vram-plan": "1"][$0] }, environment: [:]).vulkan)
     }
 
-    func testVulkanClampIsOptIn() {
-        XCTAssertNil(plan(8192).dxvkOption)
-        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(vulkan: true)).dxvkOption, "dxgi.maxDeviceMemory = 3072")
-        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 3072, vulkan: true)).dxvkOption, "dxgi.maxDeviceMemory = 3072")
-        // KosmicKrisp's heap budget follows the same key and value.
-        XCTAssertEqual(plan(8192).vulkanEnvironment, [:])
-        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(vulkan: true)).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "3072"])
-        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 2048, vulkan: true)).vulkanEnvironment,
+    func testVulkanClampIsOnByDefault() {
+        XCTAssertEqual(plan(8192).dxvkOption, "dxgi.maxDeviceMemory = 3072")
+        XCTAssertEqual(plan(8192).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "3072"])
+        // The tier's V, and a clamped plan's.
+        XCTAssertEqual(plan(6046, ram: 7679).dxvkOption, "dxgi.maxDeviceMemory = 2048")
+        XCTAssertEqual(plan(6144).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "2048"])
+        // An explicit vram-mb wins.
+        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 2048)).dxvkOption, "dxgi.maxDeviceMemory = 2048")
+        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 2048)).vulkanEnvironment,
                        ["PLAYPORT_VK_BUDGET_MB": "2048"])
-        XCTAssertNil(plan(8192, MemoryPlan.Overrides(vulkan: true)).environment["PLAYPORT_VK_BUDGET_MB"])
+        // vulkan-vram-plan = 0 turns both off.
+        XCTAssertNil(plan(8192, MemoryPlan.Overrides(vulkan: false)).dxvkOption)
+        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(vulkan: false)).vulkanEnvironment, [:])
+        // KosmicKrisp's cap is set apart from the runtime's plan variables.
+        XCTAssertNil(plan(8192).environment["PLAYPORT_VK_BUDGET_MB"])
     }
 
     func testUnreadLimitSetsNothing() {
@@ -136,7 +150,7 @@ final class MemoryPlanTests: XCTestCase {
         XCTAssertEqual(plan(8191, pool: 4096).logLine,
                        "tier=12GB ram_mb=11734 tier_guest_ram_mb=8192 tier_video_mb=3072 tier_pool_mb=4096 L_mb=8191 "
                        + "clamp=none planned_guest_ram_mb=8192 planned_video_mb=3072 pool_mb=4096 "
-                       + "guest_ram_mb=8192 video_mb=3072 override=none vulkan_clamp=0")
+                       + "guest_ram_mb=8192 video_mb=3072 override=none vulkan_clamp=1")
     }
 
     func testMadeiraConfigReadsAsTheRuntime() throws {
