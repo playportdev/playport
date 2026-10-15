@@ -93,8 +93,9 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
     during play, and of suspension (dropped).
 - **Chunk 2 ended 2026-10-16 after steps 1–2** (writer run `7179aee9`, stopped for context;
   commits `f71f15a`, `9a381ca`, `df5d1d5`; report `reports/chunk2-stage0.md`).
-- **Running now: chunk 3** (writer run `8c1186ac`), a fresh writer for the remainder of step 2 (the service exiting
-  `0xC0000001`) and steps 3–7 below.
+- **Chunk 3 ended 2026-10-16 after steps 2–3** (writer run `8c1186ac`, stopped at half its context;
+  report `reports/chunk3-stage0.md`). **Next: a fresh writer for steps 5, 4, 6, 7, in that order**
+  (the supervisor's order: Open first, so CEF can start without Steam mode).
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
@@ -110,13 +111,18 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
      covers `RockstarService.exe` and COM over rpcss. **In place 2026-10-16**
      ([decision 0107](../decisions/0107-windows-services-for-a-flagged-play.md); madeira-unix 0151
      stops the storm breaker ending the service's self-modifying loop; wine-unix 0038 fixes a job
-     termination that crashed the app; the profile's Desktop and Start Menu folders). **Open,
-     first for the next writer:** the service process exits with `0xC0000001` as soon as
-     services.exe starts it (run `20261016T002413`), so the launcher retries three times and stays
-     on a black screen.
+     termination that crashed the app; the profile's Desktop and Start Menu folders). **Done
+     2026-10-16** (chunk 3): `[service] Rockstar Service: running`. The `0xC0000001` was
+     services.exe's environment block dropping `WINE_IOS_JIT_RX/RW` (wine-pe 0045); then the
+     service needed a 2-minute SCM start timeout and the play an 896 MiB JIT pool
+     ([decision 0108](../decisions/0108-a-launchers-jit-pool-and-service-start-timeout.md)).
   3. [PLA-292](https://linear.app/playportdev/issue/PLA-292) and
      [PLA-314](https://linear.app/playportdev/issue/PLA-314): fault containment for child
-     pseudo-processes (renderers, crashpad).
+     pseudo-processes (renderers, crashpad). **Checked 2026-10-16:** wine-unix 0038 holds on a
+     forced close of a two-process job, and the services stop with the title. Containment today
+     covers a guest's unhandled exception, an exited child's thread (0118) and a child's fault
+     storm (0119, 0151); the other fatal host-fault paths still end the app. **Open:** the
+     general case, and a renderer killed on purpose once CEF runs (step 5 or 4).
   4. [PLA-277](https://linear.app/playportdev/issue/PLA-277): the Chromium policy, with
      Rockstar's set (`--in-process-gpu`, `--disable-gpu`, `--disable-gpu-compositing`,
      `--js-flags=--jitless`), applied to `SocialClubHelper.exe` (detected by `libcef.dll` next to
@@ -125,6 +131,10 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   5. [PLA-271](https://linear.app/playportdev/issue/PLA-271), minimal: Settings › Launchers with
      an Open row that starts `Launcher.exe` standalone, and the driver action for it. Install
      comes from step 1.
+     **Next writer starts here.** The Open play sets `windowsServices` (0107) and a JIT pool of
+     896 MiB (0108); the launcher is in the prefix at `InstallFolder`. In Steam mode the launcher
+     reaches a 940×318 dark dialog with no text (run `20261016T010049`); standalone it should go on
+     to `SocialClubHelper.exe`.
   6. The launcher's D3D11 present on the Vulkan backend (decision 0100), with sane DXGI adapter
      data. On a display without a GPU, the launcher divided by zero while reading D3D11 device
      information. In a launcher-only session, the launcher's present stands for the first frame;
@@ -139,9 +149,9 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   [PLA-294](https://linear.app/playportdev/issue/PLA-294) and
   [PLA-295](https://linear.app/playportdev/issue/PLA-295) (Stage 2; PLA-295 also depends on
   PLA-253), PLA-273 (until a game runs beside the launcher), and PLA-213 (done).
-- **Queue:** chunk 3 (steps 2–7 above) → Stage 1 (PLA-271, 267, 293, 273, 278) → Stage 2 (PLA-294, 295,
+- **Queue:** steps 4–7 above (fresh writer) → Stage 1 (PLA-271, 267, 293, 273, 278) → Stage 2 (PLA-294, 295,
   PLA-253; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
-- **Phone:** dev IPA `2966df7c` installed. RDR2 (with depot 1899671), Hollow Knight and Steamworks
+- **Phone:** dev IPA `02191635` installed. RDR2 (with depot 1899671), Hollow Knight and Steamworks
   Shared are installed, and the Rockstar launcher is installed in the prefix. About 3.9 GB free.
 
 ## Goal

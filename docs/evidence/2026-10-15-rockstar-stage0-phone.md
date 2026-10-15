@@ -184,3 +184,26 @@ the caller's `WINE_IOS_*` and `MADEIRA_*` variables.
 The window `Launcher.exe` shows in Steam mode (940×318, `[guest-window] hwnd=0x1003e`) is a dark
 dialog with a close button and one button, and no text. Launcher.exe loaded d3d11/dxgi (DXVK) for
 it. Steam mode is not Stage 0's path (PLA-253); the standalone launcher is step 5's.
+
+## Chunk 3, step 2: a forced close, and fault containment today (PLA-292, PLA-314)
+
+Run `20261016T010654` (IPA `02191635…`): RDR2's play with Windows services, then the in-game
+menu's Quit game about 4 minutes in (the driver's `menu:open` waited about 3 minutes on the
+launcher's window). `session: title 2: WM_CLOSE to 1 windows of 2 processes` (PlayRDR2.exe and
+Launcher.exe), then `still running after WM_CLOSE; ending it`. The job ended both processes with
+no `terminate_job` assertion: wine-unix 0038 holds on a forced close. Then
+`[service] Rockstar Service: stopped, exit 0` and `[service] services.exe and its services stopped
+with the title in 331 ms (0 ended)`: 0107's stop at the title's end works. The outcome is
+`exit=0x0000042b`, a forced end, and Playport restarted as after any title.
+
+What a child pseudo-process's fault does today:
+
+- a guest exception the guest leaves unhandled ends that process (NtTerminateProcess, ml937's
+  `abort_process` tears down that pseudo-process only);
+- a fault on a thread of a child that has exited ends that thread (madeira-unix 0118);
+- a storm of 2,000 identical redeliveries in a live child ends that child with `c0000005`
+  (0119), counted by the thread's registers too (0151);
+- the remaining fatal host-fault paths in `signal_arm64_ios.c` (`bus_fatal`, the fatal SEGV
+  path, the breaker's second storm) still end the app. The general case stays open in
+  PLA-292 (and PLA-314 for the x86-64 killed waiter). A renderer killed on purpose is tested once
+  CEF runs on the phone.
