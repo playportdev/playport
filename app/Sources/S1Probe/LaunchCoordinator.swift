@@ -463,9 +463,9 @@ enum LaunchCoordinator {
         }
         backend.merge(Diagnostics.launchEnvironment(exe: r.exe, dir: dir, graphics: r.graphics, log: log)) { own, _ in own }
         #endif
-        // DXVK reports Metal's whole working set as video memory, and KosmicKrisp budgets
-        // most of the limit, unless the title opts into the plan's (`vulkan-vram-plan = 1`,
-        // MemoryPlan.dxvkOption and vulkanEnvironment; off by default).
+        // DXVK would report Metal's whole working set as video memory, and KosmicKrisp budget
+        // most of the limit: both take the plan's instead (MemoryPlan.dxvkOption and
+        // vulkanEnvironment; on by default, decision 0106; `vulkan-vram-plan = 0` turns it off).
         if r.graphics == .vulkan, let p = plan, let option = p.dxvkOption {
             backend["DXVK_CONFIG"] = backend["DXVK_CONFIG"].map { $0 + ";" + option } ?? option
             backend.merge(p.vulkanEnvironment) { _, planned in planned }
