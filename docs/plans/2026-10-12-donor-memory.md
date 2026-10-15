@@ -106,6 +106,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
      - **KosmicKrisp** already exposes `VK_EXT_external_memory_host`. Nothing in DXVK imports
        host memory, so it was not pursued.
   6. **Memory ceiling and video figure (PLA-216, PLA-355, PLA-352), measured 2026-10-15:** KCD 600 s × 5 with Auto (4 GiB) and Runtime keys `totalphys`/`vram-mb` (IPA `efd4f8e6…`, no code change); guest told 9,216 ran without jetsam but took the kernel's available memory to 1,137 MiB, under the 1,408 floor; 2,048/3,072 MiB of video changed KCD's machine class (1 → 2) but not its graphics ledger (about 1.6 GB), and pool off at 3,072 peaked 7,931 with no jetsam; constants kept ([evidence](../evidence/2026-10-15-memory-ceiling-vram.md)).
+  7. **Video figure at medium spec and native resolution (PLA-355, PLA-216, PLA-352), measured 2026-10-15:** KCD medium, Auto pool, 600 s × 4 (IPA `efd4f8e6…`, no code change); the graphics ledger ignored `vram-mb` at 1564×720 (1,536/2,048: about 1.98/1.89 GB) and at 2736×1260 (3,072/1,536: 2.61/2.49 GB); medium costs about 0.3 GB over low and native about 0.6 GB over 720; no jetsam; pool off at medium/native estimated 0.6–1.4 GB over the 8,192 limit; defaults kept ([evidence](../evidence/2026-10-15-vram-medium.md)).
 - **Phone (2026-10-15, 10:08):** dev IPA `efd4f8e6…` (`4e3ea9e`, mesa 0036) installed, 80 % on
   the charger, unattended on, app killed. The ceiling session's KCD `--settings` (screen 720,
   60 FPS, Runtime keys `totalphys`/`vram-mb`) are undone at the app's next launch outside a
