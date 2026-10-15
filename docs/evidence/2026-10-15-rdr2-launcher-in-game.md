@@ -87,9 +87,16 @@ once the prologue was over [O]. With no launcher process alive, the game wrote i
 times]. The game's `socialclub.log` logged "Cloud file registered" for the save files after the
 launcher was gone, with no sign-out or offline line [M].
 
+**An hour without the launcher** [M, 00:29]: RDR2 was still running 62 minutes after
+`Launcher.exe` was ended, with only the game's own Social Club CEF browser left. The game kept
+autosaving about every 5 minutes. The last save was at 00:24:52: `SRDR30015`, its `.bak` and
+`cloudsavedata.dat`. The game's `socialclub.log` logged "Cloud file registered" for each save. It
+logged no sign-out, offline, ticket or error line after the 23:27 sign-in. No ticket refresh was
+logged in that hour either, so whether a refresh would succeed without the launcher is not shown.
+
 **Not determined:**
 
-- the ticket's expiry or refresh without the launcher, over more than an hour;
+- the ticket refresh without the launcher (none was attempted in 62 minutes);
 - whether cloud saves reach Rockstar's servers (only their local registration is logged);
 - achievements and presence without the launcher.
 

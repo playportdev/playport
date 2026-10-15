@@ -84,7 +84,8 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   - **Suspension is dropped:** traffic runs between the game and the launcher during play
     (ticket, presence).
   - **Saving works without the launcher** (23:44, 17 min after it was ended; save files and Social
-    Club cloud registration). **Not determined:** the ticket refresh over more than 1 hour.
+    Club cloud registration). RDR2 ran **62 minutes** without the launcher, autosaving every 5 min, with no sign-out; no
+    ticket refresh was attempted in that time.
   - **For the owner to decide:** whether Playport ends the launcher after the game's Social Club
     has signed in.
 - **Running now:** chunk 2 below (writer run `7179aee9`: builds, phone, commits). Phone: dev IPA
