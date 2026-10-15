@@ -856,7 +856,9 @@ private struct GameDetailPage: View {
             if canCheck, !checking { library.verify(t.id) }
         }
         if t.source == .installed, let app = t.appID, job == nil, !checking, t.lastVerification.map({ !$0.ok }) ?? false {
-            PadRow(id: "opt:repair", title: "Repair from Steam", subtitle: "Downloads the damaged files again",
+            PadRow(id: "opt:repair", title: "Repair from Steam",
+                   subtitle: (t.lastVerification?.depotsToRecheck ?? 0) > 0 ? "Downloads what Steam installs that is missing"
+                                                                            : "Downloads the damaged files again",
                    accessory: .chevron, style: .plain, hint: "Repair") {
                 if !installs.suspended, !launch.running { installs.repair(app, name: t.name) }
             }
@@ -880,6 +882,7 @@ private struct GameDetailPage: View {
         if !library.canVerify(t) { return "Store installs only" }
         guard let v = t.lastVerification else { return "Not checked yet" }
         let when = v.date.formatted(.relative(presentation: .named))
+        if v.bad == 0, (v.depotsToRecheck ?? 0) > 0 { return "Content to check with Steam" }
         return v.ok ? "Last OK \(when)" : "\(v.bad) of \(v.files) damaged"
     }
 

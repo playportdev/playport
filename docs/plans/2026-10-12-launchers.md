@@ -85,7 +85,11 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   each step passes Hollow Knight's smoke play.
   1. [PLA-365](https://linear.app/playportdev/issue/PLA-365): install depot 1899671 and run
      `installscript_sdk.vdf` as prerequisites with the launch screen. The installer's pages are
-     GDI windows, which 0075's layer shows and touch can press.
+     GDI windows, which 0075's layer shows and touch can press. **Done 2026-10-15** (depot rule,
+     Repair adds the depot: 235.6 MB downloaded; both scripts run; the owner pressed through the
+     pages; [evidence](../evidence/2026-10-15-rockstar-stage0-phone.md)). Open: the installer
+     fails when `RockstarService.exe` faults in a self-modifying-code loop under FEX, so it goes
+     with step 2.
   2. [PLA-275](https://linear.app/playportdev/issue/PLA-275): `services.exe` and `rpcss` for a
      play flagged as needing them (D5). This is required for Rockstar, not optional. The flag
      covers `RockstarService.exe` and COM over rpcss.

@@ -73,6 +73,12 @@ public struct TitleInstaller: Sendable {
         public var unlisted: [String]
         public var seconds: Double
         public var repaired: Int?
+        /// Depots the record left out that Steam's depot list may have installed in the folder
+        /// (InstallReceipt.depotsToRecheck): a repair asks Steam and downloads those it would.
+        public var depotsToRecheck: [UInt32] = []
+
+        /// Whether a repair has something to do: a bad file, or a depot to check again.
+        public var ok: Bool { bad.isEmpty && depotsToRecheck.isEmpty }
     }
 
     // MARK: install
@@ -253,7 +259,8 @@ public struct TitleInstaller: Sendable {
             unlisted = Self.regularFiles(under: root).filter { !known.contains($0.lowercased()) && !SteamAPISwap.isSwapFile(root, $0) }
         }
         let report = VerifyReport(files: entries.count, bytes: entries.reduce(0) { $0 + $1.size }, bad: bad.sorted(),
-                                  unlisted: unlisted, seconds: Date().timeIntervalSince(started), repaired: nil)
+                                  unlisted: unlisted, seconds: Date().timeIntervalSince(started), repaired: nil,
+                                  depotsToRecheck: only == nil ? receipt.depotsToRecheck : [])
         return (report, plan, receipt, root)
     }
 
@@ -264,18 +271,33 @@ public struct TitleInstaller: Sendable {
                        progress: @escaping @Sendable (InstallEngine.Progress) -> Void = { _ in },
                        say: @escaping @Sendable (String) -> Void) async throws -> VerifyReport {
         let session = try requireSession()
-        let (first, plan, receipt, root) = try await verifyPlan(appID: appID, concurrency: max(2, options.concurrency / 2))
+        var (first, plan, receipt, root) = try await verifyPlan(appID: appID, concurrency: max(2, options.concurrency / 2))
         say(Self.verifyLine(first))
         for p in first.bad.prefix(20) { say("  BAD \(p)") }
-        guard !first.bad.isEmpty else { return first }
+        guard !first.ok else { return first }
 
-        let sub = plan.restricted(to: Set(first.bad))
         let content = await ContentClient(session: session)
         let servers = try await content.servers(appID: appID)
+        // Another app's depot installed in the folder has its source app's key (Counter-Strike's Half-Life engine).
+        var app = try? await Library(session: session).depots(appID: appID)
+        if !first.depotsToRecheck.isEmpty {
+            guard let listed = app else { throw SteamError.notFound("app \(appID)'s depot list is unreadable; its depots \(first.depotsToRecheck) are not checked") }
+            app = listed
+            let added = try await addRecheckedDepots(listed, receipt: receipt, root: root, content: content, servers: servers, say: say)
+            if let added {
+                receipt = added.receipt
+                plan = added.plan
+                first.bad = (Set(first.bad).union(added.missing)).sorted()
+                first.files = plan.files.count
+                first.bytes = plan.totalBytes
+            }
+            first.depotsToRecheck = []
+            guard !first.bad.isEmpty else { return first }
+        }
+
+        let sub = plan.restricted(to: Set(first.bad))
         var keys: [UInt32: AES256Decryptor] = [:]
         let depots = Set(sub.files.map(\.depotID))
-        // A depot that shares the install folder has its source app's key (Counter-Strike's Half-Life engine).
-        let app = try? await Library(session: session).depots(appID: appID)
         for depot in depots {
             let keyApp = app?.keyAppID(depot: depot) ?? appID
             keys[depot] = try AES256Decryptor(key: try await depotKey(content, appID: keyApp, depotID: depot, for: appID).value)
@@ -283,6 +305,72 @@ public struct TitleInstaller: Sendable {
         let source = CDNChunkSource(content: content, keys: keys, pool: ServerPool(servers, use: use, log: log), log: log)
         return try await replace(first, plan: sub, receipt: receipt, root: root, source: source, options: options,
                                  progress: progress, say: say)
+    }
+
+    /// A repair's check of the depots an earlier record left out as shared installs
+    /// (VerifyReport.depotsToRecheck), against Steam's depot list now: those the selection now
+    /// installs in the folder join the record, which is saved at once, with their files (those not
+    /// already there as the plan has them) returned as missing for the repair to download; the
+    /// others are recorded with their reasons now. Nil when none joins. Only at the record's build:
+    /// another build is an update.
+    func addRecheckedDepots(_ listed: AppDepots, receipt: InstallReceipt, root: URL, content: ContentClient,
+                            servers: [GetServersForSteamPipeResponse.Server], say: @escaping @Sendable (String) -> Void) async throws
+        -> (receipt: InstallReceipt, plan: InstallPlan, missing: [String])? {
+        let branch = receipt.branch ?? Branch.publicName
+        let app = try listed.onBranch(branch)
+        guard app.publicBuildID == receipt.buildID else {
+            throw SteamError.unsupported("app \(receipt.appID) is at build \(app.publicBuildID.map(String.init) ?? "?") on Steam, "
+                                         + "\(receipt.buildID.map(String.init) ?? "?") here: update it rather than repair")
+        }
+        var options = DepotSelection.Options()
+        options.ownedDepots = await ownedDepots(try requireSession(), say: say)
+        let selection = try DepotSelection.select(app, options)
+        let have = Set(receipt.depots.map(\.depotID))
+        let joining = selection.depots.filter { !have.contains($0.depotID) && receipt.depotsToRecheck.contains($0.depotID) }
+        var updated = receipt
+        let recheck = Set(receipt.depotsToRecheck)
+        // The rechecked depots' entries as the selection gives them now; every other entry is kept.
+        updated.skippedDepots = receipt.skippedDepots.filter { e in
+            DepotSelection.sharedInstall(skipped: e).map { !recheck.contains($0.depotID) } ?? true
+        } + selection.skipped.filter { recheck.contains($0.depotID) }.map { "\($0.depotID): \($0.reason)" }
+        for s in selection.skipped where recheck.contains(s.depotID) { say("  depot \(s.depotID) still skipped: \(s.reason)") }
+        guard !joining.isEmpty else {
+            try saveReceipt(updated)
+            return nil
+        }
+        var manifests: [DepotManifest] = []
+        for ref in receipt.depots {
+            guard let m = try RetainedManifest.load(layout.manifestFile(ref)) else {
+                throw SteamError.notFound("retained manifest \(ref.depotID)_\(ref.gid) is missing")
+            }
+            manifests.append(m)
+        }
+        var added: [DepotRef] = []
+        for d in joining {
+            let ref = DepotRef(depotID: d.depotID, gid: d.publicManifestGID!)
+            say("  depot \(d.depotID) joins the install: gid \(ref.gid) size=\(d.publicManifestSize.map(String.init) ?? "?") (from app \(d.depotFromApp.map(String.init) ?? "-"))")
+            let keyApp = app.keyAppID(depot: ref.depotID)
+            let key = try await depotKey(content, appID: keyApp, depotID: ref.depotID, for: receipt.appID)
+            manifests.append(try await manifest(ref, appID: keyApp, branch: branch, key: key, content: content, servers: servers, say: say))
+            added.append(ref)
+        }
+        // Steam's install order, the selection's: a later depot overrides an earlier one by path.
+        let order = selection.depots.map(\.depotID)
+        manifests.sort { (order.firstIndex(of: $0.depotID) ?? Int.max) < (order.firstIndex(of: $1.depotID) ?? Int.max) }
+        let plan = try InstallPlan.make(appID: receipt.appID, buildID: receipt.buildID, manifests: manifests)
+        let joined = Set(added.map(\.depotID))
+        let missing = try plan.files.filter { f in
+            guard joined.contains(f.depotID) else { return false }
+            let url = try InstallFS.resolveInside(root, SteamAPISwap.manifestFile(root, f.path), createParents: false)
+            return !InstallEngine.fileMatches(url, size: f.size, hash: f.sha.map(FileHash.sha1) ?? .none)
+        }.map(\.path)
+        for d in plan.directories { try InstallFS.makeDirectory(try InstallFS.resolveInside(root, d, createParents: true)) }
+        updated.depots = manifests.map { DepotRef(depotID: $0.depotID, gid: $0.gid) }
+        updated.files = plan.files.count
+        updated.bytes = plan.totalBytes
+        try saveReceipt(updated)
+        say("repair: depot(s) \(added.map(\.depotID)) added to the record, \(missing.count) files to download")
+        return (updated, plan, missing)
     }
 
     /// Stages `sub` (the files that failed) beside the install and renames each
@@ -632,5 +720,6 @@ public struct TitleInstaller: Sendable {
 
     public static func verifyLine(_ r: VerifyReport) -> String {
         String(format: "verify: %d files, %llu bytes, %d bad, %d unlisted, %.1f s", r.files, r.bytes, r.bad.count, r.unlisted.count, r.seconds)
+            + (r.depotsToRecheck.isEmpty ? "" : "; depots to check with Steam: \(r.depotsToRecheck.map(String.init).joined(separator: ", "))")
     }
 }

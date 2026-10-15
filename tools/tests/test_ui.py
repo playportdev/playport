@@ -127,9 +127,9 @@ class UiEnvTest(unittest.TestCase):
         m = load()
         for ok in ("queue:2494780", "downloading:2494780", "install:367520", "install:gog-1104084973@123",
                    "install:epic-Hazelnut", "install:epic-65d73e3be8824829b5b788bd849b6559", "open:epic-Hazelnut",
-                   "verify:epic-Hazelnut", "uninstall:epic-65d73e3be8824829b5b788bd849b6559"):
+                   "verify:epic-Hazelnut", "uninstall:epic-65d73e3be8824829b5b788bd849b6559", "repair:app-1174180"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
-        for bad in ("queue:app-2494780", "downloading:", "queue:12a", "install:epic-", "install:epic-a/b", "install:gog-x"):
+        for bad in ("queue:app-2494780", "downloading:", "queue:12a", "install:epic-", "install:epic-a/b", "install:gog-x", "repair:1174180"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
     def test_actions_after_a_play_run_after_the_restart(self):

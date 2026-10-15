@@ -243,7 +243,7 @@ enum UIDriver {
                 let parts = action.split(separator: ":", maxSplits: 1).map(String.init)
                 guard parts.count == 2 else { return finish("action=\(action) refused: not <verb>:<id>") }
                 let id = parts[1]
-                if ["verify", "play", "uninstall", "settings", "controls"].contains(parts[0]), library.title(id) == nil {
+                if ["verify", "repair", "play", "uninstall", "settings", "controls"].contains(parts[0]), library.title(id) == nil {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
@@ -651,6 +651,8 @@ enum UIDriver {
                     } else {
                         return finish("action=\(action) failed: \(library.verifyErrors[id] ?? "no result")")
                     }
+                case "repair":
+                    if let failure = await repair(id) { return finish("action=\(action) failed: \(failure)") }
                 case "play":
                     do {
                         guard try await library.play(id) else {
@@ -765,6 +767,37 @@ enum UIDriver {
         guard let t = library.catalog.titles.first(where: { $0.appID == app }) else { return "done, but not in the library" }
         log(String(format: "install \(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.buildID.map(String.init) ?? "?") "
                     + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s", Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// The game page's Repair from Steam, which it offers after a check that did not pass (a
+    /// verify: first); nil once the repair's job ended with the files checked OK, else why not.
+    private static func repair(_ id: String) async -> String? {
+        let library = LibraryModel.shared
+        guard let t = library.title(id), t.source == .installed, let app = t.appID else { return "\(id) is not a Steam install" }
+        guard let v = t.lastVerification, !v.ok else { return "the page offers no Repair: its last check passed or there is none" }
+        guard let steam = SteamAccountModel.current else { return "no Steam model" }
+        for _ in 0..<600 where steam.state.account == nil || { if case .restoring = steam.state { return true }; return false }() {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard case .signedIn = steam.state else { return "Steam is not signed in (\(steam.state))" }
+        let installs = steam.installs
+        let started = Date()
+        log("repair \(id): started")
+        installs.repair(app, name: t.name)
+        var lastLog = Date()
+        while let j = installs.jobs[.steam(app)] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("repair \(id): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let after = library.title(id)?.lastVerification, after.ok, after.date > started else {
+            return "the repair ended without a passing check"
+        }
+        log(String(format: "repair \(id): \(after.files) files OK after %.0f s", Date().timeIntervalSince(started)))
         return nil
     }
 

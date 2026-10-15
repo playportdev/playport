@@ -234,6 +234,65 @@ final class DepotSelectionTests: XCTestCase {
         XCTAssertThrowsError(try DepotSelection.select(resolved, .init(explicit: [228988])))
     }
 
+    /// Red Dead Redemption 2 (1174180) lists depot 1899671, Rockstar's installers, from the config app
+    /// 1899670 (`RGLSC`) with no `sharedinstall`, and its manifest in the game's own record: Steam
+    /// installs it into the game's folder (PLA-365), as it does the game's own depots. The two
+    /// Steamworks Common Redistributables depots stay shared installs. PICS as read on 2026-10-15.
+    func testRedDeadRedemption2InstallsRockstarsInstallerDepotInItsFolder() throws {
+        let rdr2 = """
+        "1174180"
+        {
+            "common" { "name" "Red Dead Redemption 2" "type" "Game" }
+            "config" { "installdir" "Red Dead Redemption 2" }
+            "depots"
+            {
+                "228987" { "config" { "oslist" "windows" } "depotfromapp" "228980" "sharedinstall" "1" }
+                "228990" { "config" { "oslist" "windows" } "depotfromapp" "228980" "sharedinstall" "1" }
+                "1174181" { "manifests" { "public" { "gid" "4757128409362785099" "size" "746" "download" "528" } } }
+                "1174182" { "manifests" { "public" { "gid" "2258488483491377476" } } }
+                "1174183" { "manifests" { "public" { "gid" "4785346550216140531" } } }
+                "1174184" { "manifests" { "public" { "gid" "2698939236196220127" } } }
+                "1174185" { "manifests" { "public" { "gid" "8173342615013177810" } } }
+                "1174186" { "manifests" { "public" { "gid" "357926288062992323" } } }
+                "1899671" { "manifests" { "public" { "gid" "3914969219305676290" "size" "239826989" "download" "209058416" } } "depotfromapp" "1899670" }
+                "branches" { "public" { "buildid" "13773296" } }
+            }
+        }
+        """
+        let app = try Library.parseDepots(appID: 1174180, try KeyValue.parseText(Array(rdr2.utf8)))
+        let s = try DepotSelection.select(app)
+        XCTAssertEqual(s.depots.map(\.depotID), [1174181, 1174182, 1174183, 1174184, 1174185, 1174186, 1899671])
+        XCTAssertEqual(s.depots.last?.publicManifestGID, 3914969219305676290)
+        XCTAssertEqual(s.skipped.map(\.depotID), [228987, 228990])
+        XCTAssertEqual(s.skipped.map(\.reason), [DepotSelection.sharedInstallReason(228980), DepotSelection.sharedInstallReason(228980)])
+        // Its key and manifest request code are asked for the source app, as for Half-Life's depots.
+        XCTAssertEqual(app.keyAppID(depot: 1899671), 1899670)
+        XCTAssertEqual(app.keyAppID(depot: 1174181), 1174180)
+        XCTAssertEqual(try DepotSelection.select(app, .init(explicit: [1899671])).depots.map(\.depotID), [1899671])
+        // A `sharedinstall` depot of an app other than 228980 is left out, with a reason no older record gave.
+        var other = app
+        other.depots[8].sharedInstall = true
+        let reason = try DepotSelection.select(other).skipped.first { $0.depotID == 1899671 }?.reason
+        XCTAssertEqual(reason, "shared install in app 1899670's own folder (not installed)")
+        XCTAssertNil(DepotSelection.sharedInstall(skipped: "1899671: \(reason!)"))
+    }
+
+    /// A record written before that rule (the phone's RDR2 install of 2026-10-15) left depot 1899671
+    /// out as a redistributable: a repair checks it with Steam again; 228980's are not rechecked.
+    func testAnOlderRecordsOtherAppDepotsAreRecheckedAtRepair() {
+        let r = InstallReceipt(appID: 1174180, name: "Red Dead Redemption 2", installDir: "Red Dead Redemption 2", buildID: 13773296,
+                               depots: [DepotRef(depotID: 1174181, gid: 4757128409362785099)], files: 120, bytes: 1,
+                               skippedDepots: ["228987: shared install from app 228980 (redistributable, not installed)",
+                                               "228990: shared install from app 228980 (redistributable, not installed)",
+                                               "1899671: shared install from app 1899670 (redistributable, not installed)"],
+                               skippedSymlinks: 0, installedAt: "-")
+        XCTAssertEqual(r.depotsToRecheck, [1899671])
+        XCTAssertEqual(r.commonRedistributableDepots, [228987, 228990])
+        var now = r
+        now.skippedDepots[2] = "1899671: shared install in app 1899670's own folder (not installed)"
+        XCTAssertEqual(now.depotsToRecheck, [])
+    }
+
     /// The launch entry an install records: Counter-Strike's `hl.exe -steam -game cstrike`,
     /// Windows only (macOS and Linux start `hl.sh`); Half-Life's own carries just `-steam`.
     func testTheWindowsLaunchEntryCarriesItsArguments() throws {
