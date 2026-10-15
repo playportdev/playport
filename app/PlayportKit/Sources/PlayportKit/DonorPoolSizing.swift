@@ -3,15 +3,12 @@
 // Donor pool, app/Sources/S1Probe/Dev/DonorPool.swift; PLA-351). The pool's
 // pages are charged to no process, but they are the phone's RAM: with a pool,
 // physical RAM and not the app's limit is the wall
-// (docs/evidence/2026-10-14-donor-memory-scale.md). Auto sizes the pool from
-// that headroom (docs/evidence/2026-10-15-donor-pool-auto-headroom.md): the game
-// (the app's own part plus the pool) may use the RAM the system does not
-// (systemReserveMB) less the spare floor; the app's own part is at most its
-// limit L and is taken as appPartMB (Kingdom Come's app part beside a pool), and
-// the pool gets the rest. It is not gated on jetsam's level at Play: idle
-// processes there are jetsam's to end, and growth during play stops on low
-// memory instead (growthStop). The fixed sizes stay as experiments, capped by
-// jetsam's level as before.
+// (docs/evidence/2026-10-14-donor-memory-scale.md). Auto takes the phone's tier's
+// pool (MemoryPlan.Tier, decision 0105: 4 GiB on 12 GB, 1 GiB on 8 GB, none
+// under), at most what one donor grants (DonorPool). It is not gated on
+// jetsam's level at Play: idle processes there are jetsam's to end, and growth
+// during play stops on low memory instead (growthStop). The fixed sizes stay as
+// experiments, capped by jetsam's level as before.
 
 import Foundation
 
@@ -54,17 +51,6 @@ public enum DonorPoolSizing {
 
     /// The fixed sizes the dev Settings offers, in MiB.
     public static let fixedSizesMB = [2048, 4096, 6144]
-    /// The most Auto asks for (the largest fixed size).
-    public static let autoMaximumMB = 6144
-    /// The RAM the system keeps for itself: wired memory read 1,662–1,952 MiB at the pool's
-    /// installs on the 12 GB phone (Kingdom Come, Hollow Knight), rounded up.
-    public static let systemReserveMB = 2048
-    /// The app's own part beside a pool: Kingdom Come's footprint with a 5 GiB pool stayed at
-    /// 3,750–3,900 MiB for 32 minutes, peak 4,007 (the runtime, GPU memory and what the pool
-    /// does not back); rounded up. At most L.
-    public static let appPartMB = 4096
-    /// Under this much, Auto takes no pool: too little to be worth the rounds.
-    public static let minimumPoolMB = 1024
     /// Under this much available memory in the first donor, no pool (an
     /// extension-class limit would give nothing worth the rounds).
     public static let minimumDonorMB = 1024
@@ -75,24 +61,17 @@ public enum DonorPoolSizing {
     /// levelResumeMargin points over levelFloor (so it does not flap at the floor).
     public static let resumeMarginMB = 512
     public static let levelResumeMargin = 5
-    /// Below this much RAM (4 and 6 GB phones) Settings offers no pool, and none is taken.
-    public static let offeredFromMB = 7 * 1024
     /// Objects are 256 MiB.
     public static let granuleMB = 256
 
-    /// Whether a phone with this much RAM is offered a pool at all.
-    public static func offered(physicalMB: Int) -> Bool { physicalMB >= offeredFromMB }
+    /// Whether a phone with this much RAM is offered a pool at all: its tier has one (8 GB and
+    /// up); on 4 and 6 GB phones Settings offers none, and none is taken.
+    public static func offered(physicalMB: Int) -> Bool { MemoryPlan.Tier(physicalMB: physicalMB).poolMB > 0 }
 
     /// The free + inactive + speculative + purgeable memory the phone must keep before
     /// each object, and during play: 12 % of its RAM, at least 768 MiB (1,408 MiB on 12 GB,
     /// 921 on 8 GB).
     public static func spareFloorMB(physicalMB: Int) -> Int { max(768, physicalMB * 12 / 100) }
-
-    /// What the game (the app's own memory plus its pool) may use of this much RAM: the RAM
-    /// less the system's reserve and the spare floor (8,278 MiB on 12 GB, 4,710 on 8 GB).
-    public static func gameBudgetMB(physicalMB: Int) -> Int {
-        max(0, physicalMB - systemReserveMB - spareFloorMB(physicalMB: physicalMB))
-    }
 
     /// The phone at Play: the app's available memory and footprint (its limit L is
     /// their sum), its RAM and jetsam's level (kern.memorystatus_level, percent).
@@ -113,10 +92,8 @@ public enum DonorPoolSizing {
         public var limitMB: Int { availableMB + footprintMB }
         /// What jetsam's level leaves above levelFloor, rounded down to a granule (the fixed sizes' cap).
         public var levelCapMB: Int { max(0, (level - levelFloor) * physicalMB / 100) / granuleMB * granuleMB }
-        /// The game's budget for this RAM (gameBudgetMB).
-        public var budgetMB: Int { gameBudgetMB(physicalMB: physicalMB) }
-        /// The app's own part Auto leaves room for: appPartMB, or L when L is smaller.
-        public var appMB: Int { min(limitMB, appPartMB) }
+        /// The phone's tier (MemoryPlan.Tier).
+        public var tier: MemoryPlan.Tier { MemoryPlan.Tier(physicalMB: physicalMB) }
     }
 
     /// A Play's pool size and why.
@@ -135,7 +112,7 @@ public enum DonorPoolSizing {
     public static func decide(_ setting: Setting, _ r: Reading) -> Decision {
         guard setting != .off else { return Decision(targetMB: 0, reason: "off") }
         guard offered(physicalMB: r.physicalMB) else {
-            return Decision(targetMB: 0, reason: "phone has \(r.physicalMB) MiB, under \(offeredFromMB)")
+            return Decision(targetMB: 0, reason: "phone has \(r.physicalMB) MiB, the \(r.tier.ramGB) GB tier has no pool")
         }
         guard r.level >= 0 else { return Decision(targetMB: 0, reason: "memorystatus level unreadable") }
         guard r.levelCapMB > 0 else { return Decision(targetMB: 0, reason: "level \(r.level)% leaves no room over \(levelFloor)%") }
@@ -147,12 +124,7 @@ public enum DonorPoolSizing {
             return Decision(targetMB: target, reason: target < mb ? "fixed \(mb), capped by the level" : "fixed \(mb)")
         case .auto:
             guard r.availableMB > 0 else { return Decision(targetMB: 0, reason: "app limit not reported") }
-            let headroom = r.budgetMB - r.appMB
-            let wanted = max(0, headroom) / granuleMB * granuleMB
-            let why = "budget \(r.budgetMB) MiB - app \(r.appMB) MiB = \(headroom)"
-            guard wanted >= minimumPoolMB else { return Decision(targetMB: 0, reason: "\(why) < \(minimumPoolMB)") }
-            let target = min(autoMaximumMB, wanted)
-            return Decision(targetMB: target, reason: why + (target < wanted ? ", the maximum" : ""))
+            return Decision(targetMB: r.tier.poolMB, reason: "the \(r.tier.ramGB) GB tier's pool")
         }
     }
 

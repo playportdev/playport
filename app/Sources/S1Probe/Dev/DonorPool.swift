@@ -7,8 +7,8 @@
 // by it, charged to no process (docs/evidence/2026-10-14-donor-memory.md).
 // Nothing touches the pool here: its pages are resident only once the game
 // uses them, and physical RAM is the wall (docs/evidence/2026-10-14-donor-memory-scale.md),
-// so Auto sizes the pool from the RAM headroom beside the app's own part, and a fixed size
-// is capped by what jetsam's level says is free (PlayportKit DonorPoolSizing, PLA-351).
+// so Auto takes the phone's tier's pool (decision 0105) and a fixed size is capped by what
+// jetsam's level says is free (PlayportKit DonorPoolSizing, PLA-351).
 // During play the pool stops growing when the phone runs low (watchGrowth). Any failure
 // leaves the Play on ordinary memory.
 import Foundation
@@ -48,11 +48,11 @@ enum DonorPool {
         let r = reading()
         var installed = Installed()
         let decision = DonorPoolSizing.decide(setting, r)
-        /// The `donor-pool: auto` line: L, the game's budget, the app's part, RAM, the donor's
-        /// limit, the target and why (PLA-351).
+        /// The `donor-pool: auto` line: L, the tier, RAM, the donor's limit, the target and why
+        /// (PLA-351).
         func autoLine(donorMB: Int?, target: Int, reason: String) {
             guard setting == .auto else { return }
-            log("auto L_mb=\(r.limitMB) budget_mb=\(r.budgetMB) app_part_mb=\(r.appMB) ram_mb=\(r.physicalMB) "
+            log("auto L_mb=\(r.limitMB) tier=\(r.tier.ramGB)GB tier_pool_mb=\(r.tier.poolMB) ram_mb=\(r.physicalMB) "
                 + "level=\(r.level) footprint_mb=\(r.footprintMB) donor_limit_mb=\(donorMB.map(String.init) ?? "unknown") "
                 + "target_mb=\(target) reason=\"\(reason)\"")
         }

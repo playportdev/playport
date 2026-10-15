@@ -199,9 +199,9 @@ pool is on (`set:donorPoolMB=auto|2048|4096|6144`, off by default): at Play, aft
 the JIT activation, helpers that then end give purgeable objects, and each
 commit is a `vm_map` of an unused range of one at Wine's address
 (`SharedMemory/GuestPool.m`, `Dev/DonorPool.swift`;
-[plan](plans/2026-10-12-donor-memory.md), step 3). Auto sizes it from the RAM
-headroom: RAM − 2 GiB for the system − the spare floor (12 % of RAM) − the app's
-own part (min(L, 4 GiB)), at most 6 GiB and one donor's grant
+[plan](plans/2026-10-12-donor-memory.md), step 3). Auto takes the phone's tier's
+pool ([decision 0105](decisions/0105-memory-defaults-per-phone.md): 4 GiB on a 12 GB
+phone, 1 GiB on 8 GB, none and no setting under), at most one donor's grant
 (PlayportKit `DonorPoolSizing`). During play the pool stops taking unused pages
 when the phone's spare memory or jetsam's level falls under its floor
 (`donor-pool: pressure` lines). An earlier per-allocation
@@ -1090,14 +1090,15 @@ land in that directory for such a launch. The first title in a process fixes
 the guest's screen (`TitleScreen.configure`).
 
 **The memory plan** (PLA-352, PlayportKit `MemoryPlan`). Just before Wine starts,
-after the JIT pool and a dev build's donor pool, the app reads the limit L once and
-tells the runtime the guest's RAM and the video budget through the environment:
-`MADEIRA_TOTAL_PHYS_MB` (ml992) and `PLAYPORT_VRAM_MB` (DXMT ml1042, patches/dxmt
-0011; its formula stays the fallback). Above a 6 GiB limit the guest is told L; at
-or under it, L less the runtime's 2 GiB (at least half of L). Video is L − 4 GiB of
-guest heap − 2 GiB of runtime − 512 MiB of margin, at least 1 GiB (768 MiB at or
-under a 4 GiB limit): 8,192 / 1,536 MiB on the reference phone, as before. A pool
-raises the guest's RAM up to Auto's budget (RAM − 2 GiB − the spare floor), never the video budget. A title's
+after the JIT pool and a dev build's donor pool, the app tells the runtime the
+guest's RAM G and the video figure V through the environment: `MADEIRA_TOTAL_PHYS_MB`
+(ml992) and `PLAYPORT_VRAM_MB` (DXMT ml1042, patches/dxmt 0011; its formula stays the
+fallback). Both come from the phone's tier by its RAM
+([decision 0105](decisions/0105-memory-defaults-per-phone.md)): G / V 8,192 / 3,072 MiB
+on 12 GB, 6,144 / 2,048 on 8 GB, 3,072 / 1,024 on 6 GB, 2,048 / 768 on 4 GB. A limit L
+read lower than the tier assumes (no entitlement, or before Game Mode) clamps G to L
+rounded down to a GiB (after 64 MiB of slack) and V to 3/8 of that G, rounded down to
+512, at least 768. A pool does not raise G. A title's
 `totalphys` and `vram-mb` win. The `memory plan:` app-log line has every input and
 output. Opt-in keys, off by default: `vram-budget-event = 1` signals DXGI's
 budget-change event when the ml1075 trim moves the budget (it hung RDR2 when it

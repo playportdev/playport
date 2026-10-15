@@ -424,8 +424,8 @@ enum LaunchCoordinator {
         #endif
         step(.waitingForJit(until: Date().addingTimeInterval(r.jitWait)))
         if let value = HostCPU.exportDisableSwitches() { log("host-cpu: FEX_HOSTFEATURES \(value) for every process (absent: \(HostCPU.summary))") }
-        // The guest's RAM and the video budget from one reading of the limit (PlayportKit
-        // MemoryPlan, PLA-352), after the donor pool, just before Wine starts; the launch's
+        // The guest's RAM and the video budget from the phone's tier, clamped to the limit read
+        // here (PlayportKit MemoryPlan, decision 0105), after the donor pool, just before Wine starts; the launch's
         // madeira.cfg (its title keys over the shared file) and environment may override it.
         var plan: MemoryPlan?
         let started = runtime.start(poolMB: poolMB, wait: r.jitWait, pooled: { step(.startingRuntime) }) { donorMB in

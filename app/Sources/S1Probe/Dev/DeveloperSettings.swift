@@ -78,7 +78,7 @@ struct DeveloperSettings: View {
                options: [PadOption(id: "0", label: "Off")] + pools.map { PadOption(id: "\($0)", label: MemoryNeed.format(mb: $0)) },
                selected: "\(simulatedPool)", note: nil) { simulatedPool = Int($0) ?? 0 }
         // docs/plans/2026-10-12-donor-memory.md step 3 (DonorPool.swift); Off, Auto (PLA-351) or a
-        // fixed size to experiment with. Not offered on a phone under 7 GiB (PlayportKit DonorPoolSizing).
+        // fixed size to experiment with. Not offered on a 4 or 6 GB phone (PlayportKit DonorPoolSizing).
         if DonorPoolSizing.offered(physicalMB: Int(ProcessInfo.processInfo.physicalMemory >> 20)) {
             // Read through DonorPool.setting: the driver's set: may store "auto" as a string.
             let current = donorPool == DonorPoolSizing.Setting.autoStored ? .auto : DonorPool.setting
@@ -88,7 +88,7 @@ struct DeveloperSettings: View {
                    value: options.first { $0.0 == current }?.1 ?? "\(current.stored) MB (fixed)",
                    options: options.map { PadOption(id: "\($0.0.stored)", label: $0.1) },
                    selected: "\(current.stored)",
-                   note: "Auto: the RAM beside the app's own part, stopping on low memory. "
+                   note: "Auto: the phone's default pool, stopping on low memory. "
                        + "Any failure plays on ordinary memory.") {
                 donorPool = Int($0) ?? 0
             }

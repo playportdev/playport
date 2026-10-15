@@ -1,48 +1,75 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // One memory plan per Play (PLA-352): the RAM the guest is told it has and the
-// video budget DXGI reports, from one reading of the app's limit, so the two
-// add up under it. Before, ntdll's ml992 told the guest the whole limit (8,192
-// MiB on the reference phone) while DXMT's ml1042 budgeted video memory as if
-// the guest were told 4 GiB, with a 2.5 GiB overhead measured with the old
-// 896 MiB JIT pool, read at the first DXGI query (so a query before Game Mode
-// raised the limit gave the 1 GiB floor for the whole run).
+// video budget DXGI reports. Both come from the phone's tier (Tier, decision
+// 0105, the owner's table of 2026-10-15), clamped to the app's limit L read
+// just before Wine starts: a limit lower than the tier assumes (no
+// increased-memory-limit entitlement, or Game Mode not on yet) tells the guest
+// L rounded down to a GiB and a video figure about 3/8 of that.
 //
-// The app computes the plan just before Wine starts and passes it through the
-// environment: MADEIRA_TOTAL_PHYS_MB (ml992's own override) and
-// PLAYPORT_VRAM_MB (patches/dxmt 0011, after madeira.cfg `vram-mb`, before
-// ml1042's formula, which stays the fallback). A title's own `totalphys` or
-// `vram-mb` (its cohort entry's `config`, the dev Runtime keys, the shared
-// madeira.cfg) wins over the plan. The DXMT trim (ml1075) still shrinks the
-// budget as the footprint nears the limit.
+// The app passes the plan through the environment: MADEIRA_TOTAL_PHYS_MB
+// (ml992's own override) and PLAYPORT_VRAM_MB (patches/dxmt 0011, after
+// madeira.cfg `vram-mb`, before ml1042's formula, which stays the fallback). A
+// title's own `totalphys` or `vram-mb` (its cohort entry's `config`, the dev
+// Runtime keys, the shared madeira.cfg) wins over the plan. The DXMT trim
+// (ml1075) still shrinks the budget as the footprint nears the limit.
 //
-// A donor pool backs guest RAM only, outside the app's limit; GPU memory stays
-// ordinary, and with a pool physical RAM is the wall
-// (docs/evidence/2026-10-14-donor-memory-scale.md). So a pool may raise the
-// guest's RAM only up to the game's budget, the RAM Auto sizes the pool from
-// (DonorPoolSizing.gameBudgetMB, less L), never the video budget.
+// A dev build's donor pool (DonorPoolSizing) backs guest RAM outside L; its Auto
+// size is the tier's too. The pool no longer raises the guest's RAM: the tier's
+// figure is what the guest is told.
 
 import Foundation
 
 public struct MemoryPlan: Equatable, Sendable {
-    /// The runtime's own share of the limit, neither the guest's heap nor the GPU: Kingdom
-    /// Come's census with the 512 MiB JIT pool had JIT 512 + FEX band 473 + images 132 +
-    /// host about 820 = 1,937 MiB (docs/evidence/2026-10-14-donor-pool-widen.md), rounded up.
-    public static let overheadMB = 2048
-    /// The guest heap's share of the limit the video budget leaves room for (Kingdom Come's
-    /// guest reached about 4.1–4.4 GiB at its peak).
-    public static let guestShareMB = 4096
-    /// Kept under the limit: Kingdom Come's peak (7,914 MB) left 278 MiB; the 384 MiB the
-    /// 512 MiB JIT pool freed (decision 0036) stays as headroom.
-    public static let marginMB = 512
-    /// At or under this limit the guest is told less than the limit (the runtime's share is not its).
-    public static let lowLimitMB = 6144
-    /// The video budget's floor (ml1042's) above lowVideoLimitMB, and at or under it (an
-    /// unentitled limit, 2–3.4 GB) ml1075's trim floor: 1 GiB is more than such a limit affords.
-    public static let videoFloorMB = 1024
-    public static let lowVideoFloorMB = 768
-    public static let lowVideoLimitMB = 4096
-    /// Guest RAM is a multiple of this when the plan lowers it.
-    public static let granuleMB = 256
+    /// The defaults per phone, by its RAM (decision 0105: the owner's 12 and 8 GB rows,
+    /// 2026-10-15; the 6 and 4 GB rows extrapolated from them and unmeasured, PLA-355).
+    public struct Tier: Equatable, Sendable {
+        /// The phone's marketed RAM, GB.
+        public var ramGB: Int
+        /// The least reported RAM (hw.memsize, MiB) of the tier: phones report less than
+        /// their marketed RAM (11,734 MiB on 12 GB, 7,679 on 8, 5,734 on 6, 3,662 on 4).
+        public var fromMB: Int
+        /// G: the RAM the guest is told.
+        public var guestRAMMB: Int
+        /// The donor pool Auto asks for (0: the setting is not offered).
+        public var poolMB: Int
+        /// V: the dedicated video memory DXGI reports.
+        public var videoMB: Int
+
+        public static let table: [Tier] = [
+            Tier(ramGB: 12, fromMB: 10 * 1024, guestRAMMB: 8192, poolMB: 4096, videoMB: 3072),
+            Tier(ramGB: 8, fromMB: 7 * 1024, guestRAMMB: 6144, poolMB: 1024, videoMB: 2048),
+            Tier(ramGB: 6, fromMB: 5 * 1024, guestRAMMB: 3072, poolMB: 0, videoMB: 1024),
+            Tier(ramGB: 4, fromMB: 0, guestRAMMB: 2048, poolMB: 0, videoMB: 768),
+        ]
+
+        /// The tier of a phone with this much RAM; more than 12 GB takes the 12 GB row.
+        public init(physicalMB: Int) {
+            self = Self.table.first { physicalMB >= $0.fromMB } ?? Self.table[Self.table.count - 1]
+        }
+
+        public init(ramGB: Int, fromMB: Int, guestRAMMB: Int, poolMB: Int, videoMB: Int) {
+            self.ramGB = ramGB
+            self.fromMB = fromMB
+            self.guestRAMMB = guestRAMMB
+            self.poolMB = poolMB
+            self.videoMB = videoMB
+        }
+    }
+
+    /// The clamp's step: a limit under the tier's G tells the guest L rounded down to this.
+    public static let clampStepMB = 1024
+    /// Added to L before it is rounded down: the limit is read as available + footprint in
+    /// whole MiB, 8,191 for the 8 GiB limit on the reference phone.
+    public static let limitSlackMB = 64
+    /// The video figure for a clamped G: 3/8 of it, rounded down to videoStepMB, at least
+    /// videoFloorMB (the tier table's own V follows the same rule).
+    public static let videoStepMB = 512
+    public static let videoFloorMB = 768
+
+    /// The video figure that goes with this guest RAM: 3/8 of it rounded down to 512, at least 768.
+    public static func videoMB(guestRAMMB g: Int) -> Int {
+        max(videoFloorMB, g * 3 / 8 / videoStepMB * videoStepMB)
+    }
 
     /// The environment variables the runtime reads.
     public static let guestRAMVariable = "MADEIRA_TOTAL_PHYS_MB"
@@ -62,7 +89,7 @@ public struct MemoryPlan: Equatable, Sendable {
         public var limitMB: Int
         /// The phone's RAM (hw.memsize), MiB.
         public var physicalMB: Int
-        /// The donor pool granted for this Play, MiB (0 for none).
+        /// The donor pool granted for this Play, MiB (0 for none); logged only.
         public var poolMB: Int
 
         public init(limitMB: Int, physicalMB: Int, poolMB: Int = 0) {
@@ -70,9 +97,6 @@ public struct MemoryPlan: Equatable, Sendable {
             self.physicalMB = physicalMB
             self.poolMB = poolMB
         }
-
-        /// What the game may use of the phone's RAM (DonorPoolSizing.gameBudgetMB).
-        public var budgetMB: Int { DonorPoolSizing.gameBudgetMB(physicalMB: physicalMB) }
     }
 
     /// A title's own values, which win over the plan's.
@@ -103,13 +127,15 @@ public struct MemoryPlan: Equatable, Sendable {
 
     public var inputs: Inputs
     public var overrides: Overrides
-    /// The guest's RAM by the plan, before any override.
+    /// The phone's tier, from its RAM.
+    public var tier: Tier
+    /// The guest's RAM by the plan, before any override: the tier's, clamped to L.
     public var plannedGuestRAMMB: Int
-    /// What a pool added to it.
-    public var poolRaiseMB: Int
     /// The video budget by the plan, before any override (DXMT still caps it at Metal's value).
     public var plannedVideoMB: Int
 
+    /// Whether L lowered the tier's G (and so perhaps V).
+    public var clamped: Bool { plannedGuestRAMMB < tier.guestRAMMB }
     /// What the guest is told: the override, else the plan.
     public var guestRAMMB: Int { overrides.guestRAMMB ?? plannedGuestRAMMB }
     /// What DXGI reports: the override, else the plan.
@@ -118,18 +144,10 @@ public struct MemoryPlan: Equatable, Sendable {
     public init(_ inputs: Inputs, overrides: Overrides = Overrides()) {
         self.inputs = inputs
         self.overrides = overrides
-        let l = max(0, inputs.limitMB)
-        let base: Int
-        if l > Self.lowLimitMB {
-            base = l
-        } else {
-            base = max(l - Self.overheadMB, l / 2) / Self.granuleMB * Self.granuleMB
-        }
-        let room = inputs.physicalMB > 0 ? max(0, inputs.budgetMB - l) / Self.granuleMB * Self.granuleMB : 0
-        poolRaiseMB = min(max(0, inputs.poolMB), room)
-        plannedGuestRAMMB = max(0, min(base + poolRaiseMB, inputs.physicalMB > 0 ? inputs.physicalMB : Int.max))
-        let floor = l > Self.lowVideoLimitMB ? Self.videoFloorMB : Self.lowVideoFloorMB
-        plannedVideoMB = max(floor, l - min(base, Self.guestShareMB) - Self.overheadMB - Self.marginMB)
+        tier = Tier(physicalMB: inputs.physicalMB)
+        let ceiling = (max(0, inputs.limitMB) + Self.limitSlackMB) / Self.clampStepMB * Self.clampStepMB
+        plannedGuestRAMMB = min(tier.guestRAMMB, ceiling)
+        plannedVideoMB = min(tier.videoMB, Self.videoMB(guestRAMMB: plannedGuestRAMMB))
     }
 
     /// The variables to set for the runtime: each value the title does not override; none
@@ -155,14 +173,15 @@ public struct MemoryPlan: Equatable, Sendable {
         overrides.vulkan ? [Self.vulkanBudgetVariable: String(videoMB)] : [:]
     }
 
-    /// The one `memory plan:` log line.
+    /// The one `memory plan:` log line: the tier and its row, L and the clamp, what the guest
+    /// is told and DXGI reports, the pool granted, and any override.
     public var logLine: String {
-        var f = ["L_mb=\(inputs.limitMB)", "ram_mb=\(inputs.physicalMB)",
-                 "budget_mb=\(inputs.budgetMB)", "pool_mb=\(inputs.poolMB)",
-                 "guest_ram_mb=\(guestRAMMB)", "video_mb=\(videoMB)",
-                 "planned_guest_ram_mb=\(plannedGuestRAMMB)", "pool_raise_mb=\(poolRaiseMB)",
-                 "planned_video_mb=\(plannedVideoMB)",
-                 "overhead_mb=\(Self.overheadMB)", "guest_share_mb=\(Self.guestShareMB)", "margin_mb=\(Self.marginMB)"]
+        var f = ["tier=\(tier.ramGB)GB", "ram_mb=\(inputs.physicalMB)",
+                 "tier_guest_ram_mb=\(tier.guestRAMMB)", "tier_video_mb=\(tier.videoMB)",
+                 "tier_pool_mb=\(tier.poolMB)", "L_mb=\(inputs.limitMB)",
+                 "clamp=\(clamped ? "yes" : "none")", "planned_guest_ram_mb=\(plannedGuestRAMMB)",
+                 "planned_video_mb=\(plannedVideoMB)", "pool_mb=\(inputs.poolMB)",
+                 "guest_ram_mb=\(guestRAMMB)", "video_mb=\(videoMB)"]
         f.append("override=" + ([overrides.guestRAMMB.map { "totalphys=\($0)" }, overrides.videoMB.map { "vram-mb=\($0)" }]
             .compactMap { $0 }.joined(separator: ",")).ifEmpty("none"))
         f.append("vulkan_clamp=\(overrides.vulkan ? 1 : 0)")
