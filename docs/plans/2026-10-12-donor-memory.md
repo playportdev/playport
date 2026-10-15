@@ -97,10 +97,16 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
        already full, so peak `fpMB` did not fall (4,073 on, 4,018 off). FPS matched and there
        was no corruption.
      - **HK on DXMT** reached the first frame with the key on and off.
+  5. **[PLA-353](https://linear.app/playportdev/issue/PLA-353), done 2026-10-15:** the Vulkan clamp
+     (`4e3ea9e`, IPA `efd4f8e6…`; [evidence](../evidence/2026-10-15-vulkan-clamp.md)). patches/mesa
+     0036 caps KosmicKrisp's heap budget at `PLAYPORT_VK_BUDGET_MB`, which `vulkan-vram-plan = 1`
+     now sets to the plan's video memory (off by default); the heap's size stays Metal's 8 GiB.
+     HK on Vulkan: `Budget: 6.1 GiB` off, `1.50 GiB` on, first frame both ways; the DXMT gate
+     passed. A heavier Vulkan title over 1.5 GiB is not measured.
      - **KosmicKrisp** already exposes `VK_EXT_external_memory_host`. Nothing in DXVK imports
        host memory, so it was not pursued.
-- **Phone (2026-10-15, 03:18):** dev IPA `82e1039e…` (`821c0dd`, dxmt 0012) installed, on the
-  charger (100 %), unattended on, app killed. The step 5 sessions' `--settings` for HK and KCD
+- **Phone (2026-10-15, 07:13):** dev IPA `efd4f8e6…` (`4e3ea9e`, mesa 0036) installed, 100 %,
+  unattended on, app killed. The step 5 sessions' `--settings` for HK and KCD
   (`gpu-pool-buffers`, screen 720, 60 FPS) and `set:donorPoolMB` are undone at the app's next
   launch outside a session. The sessions' `set:donorPoolMB` is undone at the app's next launch
   outside a session. KCD and HK are installed; HK profile slot 3 read New Game before the last
@@ -430,7 +436,8 @@ off-by-default key (PLA-354). Still open:
 - the unentitled part of step 2 and every phone other than the 12 GB reference
   (PLA-351);
 - purges on the phone (the detach probe, done 2026-10-15, frees no whole object);
-- the Vulkan clamp (PLA-353);
+- the Vulkan clamp (PLA-353, done 2026-10-15) on a title that keeps more than the plan's
+  video memory resident;
 - the lower 1 % lows in HK play with the pool.
 
 Nothing from this branch is on `main`.
