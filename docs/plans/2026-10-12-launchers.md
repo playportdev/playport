@@ -24,7 +24,10 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   installed ([PLA-364](https://linear.app/playportdev/issue/PLA-364), run
   `$PLAYPORT_BUILD/ui-runs/20261015T210227`).
 - **Running:** chunk 1 (subagent run `4209acb9`), Stage R for Rockstar only
-  ([PLA-291](https://linear.app/playportdev/issue/PLA-291)), host only, no phone.
+  ([PLA-291](https://linear.app/playportdev/issue/PLA-291)), host only, no phone. In parallel, read-only
+  research run `82cea138`: routes that avoid running the whole launcher during play (a host-side
+  bridge to Rockstar's services, a minimal genuine launcher, the launcher's heap on the donor
+  pool), report `reports/research-alternatives.md`.
 - **Queue:** Stage R (Rockstar) → Stage 0 with the Rockstar installer and sign-in page as
   subject (PLA-292/314, 277, 274, 275 as needed) → Stage 1 (PLA-271, 267, 293, 273, 278) →
   Stage 2 (PLA-294, 295; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
