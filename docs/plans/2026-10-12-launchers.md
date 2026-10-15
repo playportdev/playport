@@ -93,7 +93,7 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
     during play, and of suspension (dropped).
 - **Chunk 2 ended 2026-10-16 after steps 1–2** (writer run `7179aee9`, stopped for context;
   commits `f71f15a`, `9a381ca`, `df5d1d5`; report `reports/chunk2-stage0.md`).
-- **Running now: chunk 3**, a fresh writer for the remainder of step 2 (the service exiting
+- **Running now: chunk 3** (writer run `8c1186ac`), a fresh writer for the remainder of step 2 (the service exiting
   `0xC0000001`) and steps 3–7 below.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
