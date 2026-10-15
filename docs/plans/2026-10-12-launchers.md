@@ -38,6 +38,11 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   heaps on the donor pool (PLA-216). Stages 0–2 stay; their subject is one or two idle CEF
   instances at play time, not a launcher in use. Suspending the launcher during play is measured
   only after a policy ruling. Questions 1–10 of the report went to the Stage R writer.
+- **Owner, 2026-10-15:** (1) RDR2 is downloaded in the owner's desktop Steam on the workstation, so
+  Stage R gets an in-game phase under desktop Proton (which launcher processes stay alive during
+  Story play, their cost, ending each to see dependency); the one online Rockstar sign-in is the
+  owner's, in person. (2) Suspending the launcher during play is measured only if that phase shows
+  no traffic between the game and the launcher during play; otherwise it is dropped.
 - **Queue:** Stage R (Rockstar) → Stage 0 with the Rockstar installer and sign-in page as
   subject (PLA-292/314, 277, 274, 275 as needed) → Stage 1 (PLA-271, 267, 293, 273, 278) →
   Stage 2 (PLA-294, 295; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
