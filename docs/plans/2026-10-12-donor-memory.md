@@ -108,6 +108,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   6. **Memory ceiling and video figure (PLA-216, PLA-355, PLA-352), measured 2026-10-15:** KCD 600 s × 5 with Auto (4 GiB) and Runtime keys `totalphys`/`vram-mb` (IPA `efd4f8e6…`, no code change); guest told 9,216 ran without jetsam but took the kernel's available memory to 1,137 MiB, under the 1,408 floor; 2,048/3,072 MiB of video changed KCD's machine class (1 → 2) but not its graphics ledger (about 1.6 GB), and pool off at 3,072 peaked 7,931 with no jetsam; constants kept ([evidence](../evidence/2026-10-15-memory-ceiling-vram.md)).
   7. **Video figure at medium spec and native resolution (PLA-355, PLA-216, PLA-352), measured 2026-10-15:** KCD medium, Auto pool, 600 s × 4 (IPA `efd4f8e6…`, no code change); the graphics ledger ignored `vram-mb` at 1564×720 (1,536/2,048: about 1.98/1.89 GB) and at 2736×1260 (3,072/1,536: 2.61/2.49 GB); medium costs about 0.3 GB over low and native about 0.6 GB over 720; no jetsam; pool off at medium/native estimated 0.6–1.4 GB over the 8,192 limit; defaults kept ([evidence](../evidence/2026-10-15-vram-medium.md)).
   8. **Memory defaults per phone (PLA-355, PLA-352, PLA-351, PLA-216), done 2026-10-15:** decision 0105's tier table (`d6199a6`, IPA `f9e47014…`): 12 GB G 8,192 / V 3,072 / Auto pool 4,096, 8 GB 6,144 / 2,048 / 1,024, 6 GB 3,072 / 1,024 / none, 4 GB 2,048 / 768 / none, clamped to a lower limit; the pool no longer raises G; HK first frame on Vulkan and DXMT (ml1042 3,072), KCD medium/native 600 s on the defaults with no jetsam, peak 6,002 MB ([evidence](../evidence/2026-10-15-memory-defaults.md)).
+  9. **The 8 GB row in full, the Vulkan clamp on by default, purges (PLA-355, PLA-362, PLA-363), done 2026-10-15:** decision 0106 (`964e08c`): the clamp applies only when L is more than 512 MiB under the tier's G (8 GB at 6,046 gets 6,144 / 2,048), and DXVK's `dxgi.maxDeviceMemory` and KosmicKrisp's budget cap take V unless `vulkan-vram-plan = 0`; HK on Vulkan reads `Budget: 3.0 GiB` and plays as before (clamp alone vs `hk-0`, pool off); `protect.exe purge` (`435955d`, IPA `560d43cb…`) released and recommitted 1.5 GiB five times: 30 whole-object purges (65–70 ms a cycle), 0 stale pages, live back to 10 MiB each cycle, about 1.35 GiB back to the phone's free memory ([evidence](../evidence/2026-10-15-donor-pool-purge.md)).
 - **Phone (2026-10-15, 10:08):** dev IPA `efd4f8e6…` (`4e3ea9e`, mesa 0036) installed, 80 % on
   the charger, unattended on, app killed. The ceiling session's KCD `--settings` (screen 720,
   60 FPS, Runtime keys `totalphys`/`vram-mb`) are undone at the app's next launch outside a
@@ -116,7 +117,9 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   launch outside a session. The sessions' `set:donorPoolMB` is undone at the app's next launch
   outside a session. KCD and HK are installed; HK profile slot 3 read New Game before the last
   run, which was killed without a save. The `protect` probe was imported on 2026-10-15 as
-  `dir-protect` (its `Documents/Import/protect` copy stays). Results are filed on
+  `dir-protect` (its `Documents/Import/protect` copy stays); the 15:30 purge session's import of the
+  rebuilt probe added a second entry, `dir-protect 2`, left in place. Since 16:04 the dev IPA
+  `560d43cb…` is installed; HK's profile cursor is on slot 2, slot 3 still reads New Game. Results are filed on
   PLA-42, PLA-49, PLA-216 and PLA-350 (PLA-352's, the 2026-10-15 follow-ups', the Auto-headroom
   session's and the ceiling session's for the supervisor to file).
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
