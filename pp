@@ -418,7 +418,7 @@ def phone_status():
             s["app"] = phone.bundle_id().split(".", 1)[1]
             s["app_pid"] = phone.pid()
             s["battery"] = phone.battery()
-            text = phone.pmd("disk", "lockdown", "get", "--domain", "com.apple.disk_usage", check=False)
+            text = phone.pmd("disk", "lockdown", "get", "com.apple.disk_usage", check=False)
             try:
                 s["free_gb"] = round(json.loads(text[text.index("{"):text.rindex("}") + 1])["AmountDataAvailable"] / 1e9, 1)
             except (ValueError, KeyError):
