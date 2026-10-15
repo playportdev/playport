@@ -27,7 +27,17 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   ([PLA-291](https://linear.app/playportdev/issue/PLA-291)), host only, no phone. In parallel, read-only
   research run `82cea138`: routes that avoid running the whole launcher during play (a host-side
   bridge to Rockstar's services, a minimal genuine launcher, the launcher's heap on the donor
-  pool), report `reports/research-alternatives.md`.
+  pool), report `reports/research-alternatives.md`. **Done 2026-10-15:** no legitimate route avoids
+  the genuine launcher. A Rockstar bridge (the Steam-bridge model) is rejected: no public SDK seam,
+  ROS is encrypted with keys in Rockstar's binaries, sign-in is behind a captcha, the EULA ends the
+  licence for interfering with access controls, and even Rockstar's own Cfx.re requires the running
+  RGL (decision 0004). The target becomes a *minimal-footprint genuine launcher*: hidden,
+  "Hibernate while game is running" on, offline after one sign-in (RGL adds `-scOfflineOnly`),
+  `PlayRDR2.exe -skipInstallers` after the first install, R1's Chromium switches on
+  `SocialClubHelper.exe` (the CEF host, Chromium 143 per Rockstar's notes; to confirm), and its
+  heaps on the donor pool (PLA-216). Stages 0–2 stay; their subject is one or two idle CEF
+  instances at play time, not a launcher in use. Suspending the launcher during play is measured
+  only after a policy ruling. Questions 1–10 of the report went to the Stage R writer.
 - **Queue:** Stage R (Rockstar) → Stage 0 with the Rockstar installer and sign-in page as
   subject (PLA-292/314, 277, 274, 275 as needed) → Stage 1 (PLA-271, 267, 293, 273, 278) →
   Stage 2 (PLA-294, 295; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
