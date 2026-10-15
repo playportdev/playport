@@ -82,6 +82,9 @@ public struct CompatDefaults: Equatable, Sendable {
         if let screen = s.screen, !LaunchPlan.validScreen(screen) { throw CompatDefaultsError.badSetting("\(id).screen") }
         if let aspect = s.aspect, ScreenAspect(rawValue: aspect) == nil { throw CompatDefaultsError.badSetting("\(id).aspect") }
         if let limit = s.frameLimit, limit < 0 { throw CompatDefaultsError.badSetting("\(id).frameLimit") }
+        if let pool = s.jitPoolMB, !(JitPool.minimumMB...JitPool.maximumMB).contains(pool) || pool % 16 != 0 {
+            throw CompatDefaultsError.badSetting("\(id).jitPoolMB")
+        }
         return s
     }
 }
@@ -116,7 +119,8 @@ extension LaunchSettings {
                               x87Reduced: x87Reduced ?? base.x87Reduced, diskCache: diskCache ?? base.diskCache,
                               runtime: Self.keyItems(runtime, over: base.runtime),
                               graphicsOptions: Self.keyItems(graphicsOptions, over: base.graphicsOptions),
-                              windowsServices: windowsServices ?? base.windowsServices)
+                              windowsServices: windowsServices ?? base.windowsServices,
+                              jitPoolMB: jitPoolMB ?? base.jitPoolMB)
     }
 
     /// `key=value` items as typed (Runtime keys, Graphics options) over the default's: the

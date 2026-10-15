@@ -25,7 +25,7 @@ final class WindowsServicesTests: XCTestCase {
     func testTheShippedTableTurnsThemOnForRedDeadRedemption2Only() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
-        XCTAssertEqual(rdr2.settings, LaunchSettings(windowsServices: true))
+        XCTAssertEqual(rdr2.settings, LaunchSettings(windowsServices: true, jitPoolMB: 896))
         XCTAssertNil(table.entry(for: "epic-Buffalo")?.settings.windowsServices)
         XCTAssertNil(table.entry(for: "app-367520"))   // Hollow Knight starts no services
     }
@@ -44,5 +44,15 @@ final class WindowsServicesTests: XCTestCase {
         try file.add(WindowsServices.rpcss)
         XCTAssertEqual(try String(contentsOf: file.url(.system), encoding: .utf8), text)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.url(.user).path))
+    }
+
+    func testTheStartTimeoutIsAStringServicesExeReadsAndOnlyTopsUp() throws {
+        let prefix = FileManager.default.temporaryDirectory.appendingPathComponent("ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: prefix) }
+        let file = PrefixRegistryFile(prefix: prefix)
+        try file.add([WindowsServices.startTimeout])
+        // Wine's services.exe reads ServicesPipeTimeout only as REG_SZ.
+        XCTAssertEqual(try String(contentsOf: file.url(.system), encoding: .utf8),
+                       ";; playport:top-up\n[System\\\\CurrentControlSet\\\\Control]\n\"ServicesPipeTimeout\"=\"120000\"\n\n")
     }
 }

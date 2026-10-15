@@ -49,9 +49,11 @@ enum MemoryLimit {
     static let simulatedPoolKey = "jitPoolSimulatedMB"
     #endif
 
-    /// The JIT pool a Play gets under this reading, in MiB (a multiple of 16 KiB).
-    static func poolMB(_ r: Reading) -> Int {
-        r.simulatedPoolMB ?? JitPool.sizeMB(limitMB: r.effectiveMB)
+    /// The JIT pool a Play gets under this reading, in MiB (a multiple of 16 KiB), with the
+    /// game's own (`gameMB`, decision 0108) when the limit grants it; a note when it does not.
+    static func poolMB(_ r: Reading, gameMB: Int? = nil) -> (mb: Int, note: String?) {
+        if let simulated = r.simulatedPoolMB { return (simulated, nil) }
+        return JitPool.size(limitMB: r.effectiveMB, gameMB: gameMB)
     }
 
     static func read() -> Reading {

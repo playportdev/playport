@@ -84,6 +84,9 @@ enum LaunchCoordinator {
         /// Start Windows services (services.exe, Wine's SCM) before the prerequisites and the
         /// title (LaunchSettings.windowsServices, decision 0107).
         var windowsServices = false
+        /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
+        /// 0108), granted when the memory limit allows; nil for the default.
+        var gamePoolMB: Int? = nil
         /// Whether a prerequisite that ran may end the launch before the game, for Playport's
         /// restart and the same Play in the new process (decision 0084), when the pool after
         /// them leaves the game too little room (decision 0094); false starts the game in this
@@ -418,9 +421,12 @@ enum LaunchCoordinator {
         // Every byte of the pool counts against the limit from the bless on. Read
         // again: Game Mode may have raised the limit since the Play.
         memory = MemoryLimit.read()
-        let poolMB = r.poolMB ?? MemoryLimit.poolMB(memory)
+        let sized = MemoryLimit.poolMB(memory, gameMB: r.gamePoolMB)
+        let poolMB = r.poolMB ?? sized.mb
         log("jit pool: \(poolMB) MiB for a memory limit of \(memory.effectiveMB.map { "\($0) MB" } ?? "not reported")"
-            + (memory.simulatedPoolMB != nil ? " (simulated pool)" : ""))
+            + (memory.simulatedPoolMB != nil ? " (simulated pool)" : "")
+            + (r.poolMB == nil && memory.simulatedPoolMB == nil && sized.mb > JitPool.minimumMB ? " (the game's)" : "")
+            + (r.poolMB == nil ? sized.note.map { "; \($0)" } ?? "" : ""))
         mark("surface ready; asking for JIT")
         #if !PLAYPORT_RELEASE
         Diagnostics.loadBeforeRuntime()

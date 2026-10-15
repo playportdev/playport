@@ -159,3 +159,28 @@ Two fixes went with the IPA `2966df7c`:
 - The Hollow Knight smoke play: Hollow Knight is not installed on the phone (the library holds
   only RDR2). Step 1 is not a runtime change; its gate is the RDR2 runs above and the host tests.
   Hollow Knight is installed before step 2.
+
+## Chunk 3, step 1: Rockstar Service runs under services.exe (PLA-275)
+
+**Cause of the `0xC0000001`.** In run `20261016T002413` each service process ended in
+`arm64ec_process_init: pProcessInit -> c0000001` before its entry point, after `[atomic-alias]
+LIVE: WINE_IOS_JIT_RX=<unset>` (all 6 such processes; every other process logs the pool's
+addresses). services.exe builds a service's environment with `CreateEnvironmentBlock(token,
+FALSE)`, from the registry alone, so the runtime's `WINE_IOS_JIT_RX/RW` never reached it, and FEX
+refuses to start without them (fex 0007). `RockstarService.exe install`, run by the installer,
+inherits its environment and so ran. Fix: wine-pe 0045, userenv's `CreateEnvironmentBlock` copies
+the caller's `WINE_IOS_*` and `MADEIRA_*` variables.
+
+**Then two limits** ([decision 0108](../decisions/0108-a-launchers-jit-pool-and-service-start-timeout.md)):
+
+| Run | IPA | What it showed |
+| --- | --- | --- |
+| `20261016T004537` | `426b0d59ff90bdfb999c3e693578aa64c15bb1314c8ee2127af1a252def5c566` | Hollow Knight: first frame +9.97 s |
+| `20261016T004627` | `426b0d59…` | RDR2: the service starts (`starting, pid 200`, FEX up) and runs its self-modifying loop (72k writes); services.exe ends it after its 10 s `ServicesPipeTimeout` (`process_send_start_message service L"Rockstar Service" failed to start`). The 512 MiB pool runs out (`exhausted=head`: head 204, tail 309 MiB; 9 `image map FAILED`); the next service start ends with `0xc0000135` |
+| `20261016T005101` | `f9670d7ed7484af44dc90e14a0a04a8622f8f583eb5edb12157d0ba7a1d6f01d` | RDR2 with a 2-minute start timeout and the dev 896 MiB pool: `[service] Rockstar Service: running, pid 200`; the launcher's first window at +89.0 s; pool head 213, tail 481 MiB |
+| `20261016T005959` | `021916352e9c88e5c5b2fd39dca06f84ad416f75ebc3bdd849b08a9bd7bd0747` | Hollow Knight: `jit pool: 512 MiB`, first frame +9.20 s |
+| `20261016T010049` | `02191635…` | RDR2: `jit pool: 896 MiB for a memory limit of 8192 MB (the game's)`; `[service] Rockstar Service: starting, pid 240` → `running, pid 240`; first window at +15.8 s (FEX's cache warm). Pool after 150 s: head 219, tail 481 (465 live) MiB, room 197 MiB, 5 children |
+
+The window `Launcher.exe` shows in Steam mode (940×318, `[guest-window] hwnd=0x1003e`) is a dark
+dialog with a close button and one button, and no text. Launcher.exe loaded d3d11/dxgi (DXVK) for
+it. Steam mode is not Stage 0's path (PLA-253); the standalone launcher is step 5's.

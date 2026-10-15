@@ -329,14 +329,14 @@ final class LibraryModel: ObservableObject {
             gogInstallScripts(t)
         }
         let prerequisites = Prerequisite.merge(store: storePrerequisites, unrealEngine: unrealEngine)
-        // Windows services (decision 0107): COM's RpcSs entry, which the prefix seed lacks, for the SCM
-        // this play starts; a top-up, so a prefix that has it keeps its own.
+        // Windows services (decision 0107): COM's RpcSs entry, which the prefix seed lacks, and the SCM's
+        // start timeout, for the SCM this play starts; a top-up, so a prefix that has them keeps its own.
         if settings.windowsServices {
             do {
-                try PrefixRegistryFile(prefix: WineHostRuntime.shared.prefixURL).add(WindowsServices.rpcss)
-                Self.log("play \(t.name): Windows services on; RpcSs's service entry topped up in the prefix")
+                try PrefixRegistryFile(prefix: WineHostRuntime.shared.prefixURL).add(WindowsServices.rpcss + [WindowsServices.startTimeout])
+                Self.log("play \(t.name): Windows services on; RpcSs's service entry and the start timeout topped up in the prefix")
             } catch {
-                Self.log("play \(t.name): RpcSs's service entry not written (\(error))")
+                Self.log("play \(t.name): RpcSs's service entry and the start timeout not written (\(error))")
             }
         }
         // A GOG game's Galaxy service (decision 0063), on by default: listening from now to the game's exit
@@ -353,7 +353,7 @@ final class LibraryModel: ObservableObject {
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
                                        prerequisites: prerequisites, windowsServices: settings.windowsServices,
-                                       epicOffline: epicOffline) else {
+                                       jitPoolMB: settings.jitPoolMB, epicOffline: epicOffline) else {
             endTickets()
             galaxy?.stop()
             return false

@@ -37,10 +37,28 @@ public enum JitPool {
     /// heads (Hollow Knight's from 138 to 83 MiB).
     public static let gameRoomMB = 320
 
-    /// The pool a Play gets: `minimumMB`, whatever the memory limit (decision 0036).
-    /// The limit is still taken, for the day a size depends on it again.
-    public static func sizeMB(limitMB: Int?) -> Int {
-        minimumMB
+    /// The pool a Play gets: `minimumMB`, whatever the memory limit (decision 0036), unless the
+    /// game's compatibility entry asks for more (`gameMB`, decision 0108).
+    public static func sizeMB(limitMB: Int?, gameMB: Int? = nil) -> Int {
+        size(limitMB: limitMB, gameMB: gameMB).mb
+    }
+
+    /// The least memory limit, in MB, under which a game's larger pool is granted (decision 0108):
+    /// the reference phone's limit with the Increased Memory Limit entitlement before Game Mode.
+    /// Under it (a signer that dropped the entitlement, a phone with less RAM) the Play keeps
+    /// `minimumMB`, since every byte of the pool comes out of the game's memory. The limit
+    /// reads a little under a whole GiB (8,191 for 8 GiB, decision 0105), so 64 MB of slack count.
+    public static let largerPoolLimitMB = 6144
+
+    /// The pool for a game, and why when it is not the one the game asked for.
+    public static func size(limitMB: Int?, gameMB: Int?) -> (mb: Int, note: String?) {
+        guard let gameMB, gameMB > minimumMB else { return (minimumMB, nil) }
+        let wanted = min(gameMB, maximumMB)
+        guard let limitMB, limitMB + 64 >= largerPoolLimitMB else {
+            return (minimumMB, "the game's \(wanted) MiB not granted: a memory limit of "
+                    + (limitMB.map { "\($0) MB" } ?? "not reported") + ", under \(largerPoolLimitMB) MB")
+        }
+        return (wanted, wanted < gameMB ? "the game's \(gameMB) MiB capped at \(maximumMB) MiB" : nil)
     }
 
     /// What ran out, from the runtime's refusal counts.
