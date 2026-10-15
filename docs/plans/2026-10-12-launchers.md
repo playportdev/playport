@@ -23,7 +23,7 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   bootstrapper `PlayRDR2.exe` with "File not found." because no Rockstar Games Launcher is
   installed ([PLA-364](https://linear.app/playportdev/issue/PLA-364), run
   `$PLAYPORT_BUILD/ui-runs/20261015T210227`).
-- **Running:** chunk 1, Stage R for Rockstar only
+- **Running:** chunk 1 (subagent run `4209acb9`), Stage R for Rockstar only
   ([PLA-291](https://linear.app/playportdev/issue/PLA-291)), host only, no phone.
 - **Queue:** Stage R (Rockstar) → Stage 0 with the Rockstar installer and sign-in page as
   subject (PLA-292/314, 277, 274, 275 as needed) → Stage 1 (PLA-271, 267, 293, 273, 278) →
