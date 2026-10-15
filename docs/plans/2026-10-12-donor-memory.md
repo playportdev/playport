@@ -83,7 +83,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   below runs in order, one writer at a time, with the phone in unattended
   mode. Run ids are in the build-area queue.
 - **Queue:**
-  1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)). Follow-ups 2026-10-15 ([evidence](../evidence/2026-10-15-donor-pool-followups.md)): the scripted HK A/B on an unsaved new game in slot 3 (no save made) matched in steady play (walk and roam 59.9–60.0 FPS, the same server requests per frame), but the pool run's two scene loads took 1.5–2.2 s longer and its 1 % lows were lower (20.9 vs 21.8 over the run); one pair, not settled. **Load gap explained 2026-10-15** ([evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)): that pool run built 41 Metal pipelines (iOS's Metal cache was cold), 2.42 s and 1.51 s of them inside the two loads; the pool's hook took at most 4 ms and 241 ms there. A new pair with no Metal builds matched (loads 1.85/1.67 s off vs 1.82/1.73 s Auto, mean FPS 57.5 vs 57.4); the walk and roam 1 % lows were lower again with the hooks idle (open). **Zeroing by `MADV_ZERO`** (`28108ca`): KCD's zeroing up to +180 s fell from 2,299 to 370 ms for about 25 GiB (93 → 16 ms/GiB), the backing hook from 2,761 to 771 ms, the longest call from 4.5 to 3.5 ms. The detach probe was not run: no `protect` title in the library, and pp has no command to copy a file to the phone (owner: Files/Finder, or decide on a `pp phone put`).
+  1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)). Follow-ups 2026-10-15 ([evidence](../evidence/2026-10-15-donor-pool-followups.md)): the scripted HK A/B on an unsaved new game in slot 3 (no save made) matched in steady play (walk and roam 59.9–60.0 FPS, the same server requests per frame), but the pool run's two scene loads took 1.5–2.2 s longer and its 1 % lows were lower (20.9 vs 21.8 over the run); one pair, not settled. **Load gap explained 2026-10-15** ([evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)): that pool run built 41 Metal pipelines (iOS's Metal cache was cold), 2.42 s and 1.51 s of them inside the two loads; the pool's hook took at most 4 ms and 241 ms there. A new pair with no Metal builds matched (loads 1.85/1.67 s off vs 1.82/1.73 s Auto, mean FPS 57.5 vs 57.4); the walk and roam 1 % lows were lower again with the hooks idle (open). **Zeroing by `MADV_ZERO`** (`28108ca`): KCD's zeroing up to +180 s fell from 2,299 to 370 ms for about 25 GiB (93 → 16 ms/GiB), the backing hook from 2,761 to 771 ms, the longest call from 4.5 to 3.5 ms. **Detach probe, done 2026-10-15** ([evidence](../evidence/2026-10-15-donor-pool-copyback.md)): `pp phone put` (`98a0581`, import inbox only) put `protect.exe` in `Documents/Import/protect`, imported through the UI as `dir-protect`; its `exec-rw` phase with 4096 detached 128 host pages (`detached_mb=2`), reused one released range, and every call into code copied back returned its value (0 stale, `done ok`); map failures, refused and not-leased 0; pool off the same. Purges are still not exercised.
   2. **[PLA-351](https://linear.app/playportdev/issue/PLA-351), done 2026-10-14:** Off/Auto sizing from P − L (`da6fe62`, IPA `d2c62e6c…`); on this phone Auto is off at Play (P 4,440, L 8,191); the helper is signed with increased-memory-limit, and its limit is 6,139 MiB ([evidence](../evidence/2026-10-14-donor-pool-auto.md)). **Auto from the headroom, done 2026-10-15** (owner's direction; `28108ca`, IPA `a3058add…`; [evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)): target = min(6,144, round256(RAM − 2,048 − spare floor − min(L, 4,096))), none under 1 GiB, one donor; 4,096 on the 12 GB phone (entitled), 4,864 unentitled, 0 / 1,280 on 8 GB; growth stops below the spare floor or level 15 % (`donor-pool: pressure`). The memory plan raises guest RAM only up to the same budget (0 on the reference phone). KCD 600 s on Auto: 4 GiB, peak `fpMB` 4,292, no jetsam, one growth stop at level 14 %.
   3. **[PLA-352](https://linear.app/playportdev/issue/PLA-352), done 2026-10-14:** one memory plan per Play (`9e900b8`, IPA `21347e47…`); the reference phone keeps 8,192 / 1,536 MiB, ≤ 6 GiB limits tell the guest less, the event and the Vulkan clamp are opt-in; DXVK reports an 8 GiB heap ([evidence](../evidence/2026-10-14-memory-plan.md)).
   4. **Step 5, [PLA-354](https://linear.app/playportdev/issue/PLA-354), done 2026-10-15:**
@@ -104,7 +104,8 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   (`gpu-pool-buffers`, screen 720, 60 FPS) and `set:donorPoolMB` are undone at the app's next
   launch outside a session. The sessions' `set:donorPoolMB` is undone at the app's next launch
   outside a session. KCD and HK are installed; HK profile slot 3 read New Game before the last
-  run, which was killed without a save. The `protect` probe is not installed. Results are filed on
+  run, which was killed without a save. The `protect` probe was imported on 2026-10-15 as
+  `dir-protect` (its `Documents/Import/protect` copy stays). Results are filed on
   PLA-42, PLA-49, PLA-216 and PLA-350 (PLA-352's, the 2026-10-15 follow-ups' and the Auto-headroom
   session's for the supervisor to file).
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
@@ -306,7 +307,9 @@ This is the cheapest test, and it decides the plan.
     - the app's footprint at the end was 343 MB lower than with the pool
       off;
     - first frame at +9.98 s with the pool, +10.24 s without.
-  - **Not yet exercised on the phone:** detaches, purges and reuse.
+  - **Not yet exercised on the phone:** detaches, purges and reuse. Detaches
+    and one reuse were exercised on 2026-10-15
+    ([evidence](../evidence/2026-10-15-donor-pool-copyback.md)); purges not yet.
   [Evidence](../evidence/2026-10-14-donor-pool-at-play.md).
 
 ### 4. Does it help a game?
@@ -426,8 +429,7 @@ off-by-default key (PLA-354). Still open:
 
 - the unentitled part of step 2 and every phone other than the 12 GB reference
   (PLA-351);
-- the detach-path probe (no way to put `protect.exe` on the phone without the
-  owner);
+- purges on the phone (the detach probe, done 2026-10-15, frees no whole object);
 - the Vulkan clamp (PLA-353);
 - the lower 1 % lows in HK play with the pool.
 
