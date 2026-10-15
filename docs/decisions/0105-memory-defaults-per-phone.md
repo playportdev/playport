@@ -61,6 +61,9 @@ and without the pool, at low and at medium, at 720 and at the panel's 2736×1260
   use far less; Kingdom Come at medium/native peaked at 6.3 GB of footprint with the pool. A
   title that does fill its budget is jetsammed rather than refused, and its fix is a per-title
   `vram-mb` or `totalphys`.
+- **On Vulkan, V reaches DXGI and KosmicKrisp only with `vulkan-vram-plan = 1`** (off by
+  default): a Vulkan title (Hollow Knight's default backend, decision 0044) still sees about
+  8 GiB of video memory. G applies to every backend.
 - **V mainly matters for minimum-spec checks.** Kingdom Come's graphics memory did not follow
   V at 1,536, 2,048 or 3,072 MiB, at low or medium; only its machine class moved (2 from 2,048
   on). DXMT's trim (ml1075) still shrinks the budget as the footprint nears L.
