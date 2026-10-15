@@ -434,7 +434,8 @@ Steps 4 and 5 were run on the reference phone, with step 5 ending at an
 off-by-default key (PLA-354). Still open:
 
 - the unentitled part of step 2 and every phone other than the 12 GB reference
-  (PLA-351);
+  (PLA-351); an 8 GB entitled phone is first, to decide whether Auto should give it
+  a small pool and to revisit the memory settings ([PLA-355](https://linear.app/playportdev/issue/PLA-355), High, the owner);
 - purges on the phone (the detach probe, done 2026-10-15, frees no whole object);
 - the Vulkan clamp (PLA-353, done 2026-10-15) on a title that keeps more than the plan's
   video memory resident;
