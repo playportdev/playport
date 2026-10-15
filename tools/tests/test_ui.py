@@ -163,6 +163,20 @@ class UiEnvTest(unittest.TestCase):
         env = m.ui_env("n1", play="app-367520", extra=after)
         self.assertIn("UI_ACTIONS=" + ",".join(after + ["play:app-367520"]), env)
 
+    def test_open_launcher_is_followed_as_a_play(self):
+        """Settings › Launchers' Open (UIDriver open-launcher:) ends the run at the launcher's end, as play: does."""
+        m = load()
+        for ok in ("open-launcher:rockstar", "open:settings#launchers"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("open-launcher:", "open-launcher:Rock-star", "open-launcher:rockstar,play:app-1"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        title = {"event": "title-done", "outcome": "exit=0 after_s=90"}
+        ui = {"event": "ui-done", "outcome": "ok actions=1"}
+        self.assertTrue(m.ends_run(title, ["open-launcher:rockstar"], None))
+        self.assertFalse(m.ends_run(ui, ["open-launcher:rockstar"], None))
+        self.assertTrue(m.after_play(["open-launcher:rockstar", "wait:5", "open:settings"]))
+        self.assertEqual(m.pad_after_play(["open-launcher:rockstar", "pad:a"]), "pad:a")
+
     def test_the_in_game_menu_runs_while_the_game_does(self):
         """wait: and menu: after a play: act on the running game: a run that ends with
         menu:quit ends with the title, one that goes on after it with the UI's done."""

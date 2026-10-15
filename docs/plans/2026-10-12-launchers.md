@@ -131,8 +131,11 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
      `[chromium]`. The decision record states that the fallback is the default for this launcher.
   5. [PLA-271](https://linear.app/playportdev/issue/PLA-271), minimal: Settings › Launchers with
      an Open row that starts `Launcher.exe` standalone, and the driver action for it. Install
-     comes from step 1.
-     **Next writer starts here.** The Open play sets `windowsServices` (0107) and a JIT pool of
+     comes from step 1. **Done 2026-10-16** (chunk 4, run `20261016T012523`): Settings ›
+     Launchers lists the launcher from PlayportKit's `PublisherLauncher` table, **dev builds only
+     until a launcher passes Stage 1** (supervisor, 2026-10-16), "Not installed" without
+     `InstallFolder` or its `Launcher.exe`; Open (driver `open-launcher:rockstar`) starts it
+     standalone with services, 896 MiB and Vulkan, and reaches its splash. The Open play sets `windowsServices` (0107) and a JIT pool of
      896 MiB (0108); the launcher is in the prefix at `InstallFolder`. In Steam mode the launcher
      reaches a 940×318 dark dialog with no text (run `20261016T010049`); standalone it should go on
      to `SocialClubHelper.exe`.

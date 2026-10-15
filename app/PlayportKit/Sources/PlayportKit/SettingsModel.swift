@@ -15,6 +15,9 @@ import Foundation
 public enum SettingsSection: String, CaseIterable, Sendable {
     /// Every store's account (Steam, then GOG and Epic Games as they land).
     case accounts, graphics, downloads, controls, storage, setup, about
+    /// Dev builds only until a launcher passes Stage 1 (docs/plans/2026-10-12-launchers.md):
+    /// each publisher's launcher (PublisherLauncher) with Open.
+    case launchers
     /// Dev builds only: diagnostics, simulations, probes and logs.
     case developer
 
@@ -27,13 +30,14 @@ public enum SettingsSection: String, CaseIterable, Sendable {
         case .storage: "Storage"
         case .setup: "Setup check"
         case .about: "About"
+        case .launchers: "Launchers"
         case .developer: "Developer"
         }
     }
 
     /// The sections a build shows, top to bottom.
     public static func all(developer: Bool) -> [SettingsSection] {
-        allCases.filter { developer || $0 != .developer }
+        allCases.filter { developer || ($0 != .developer && $0 != .launchers) }
     }
 
     /// The section `open:settings#NAME` names: a section's own name, or what

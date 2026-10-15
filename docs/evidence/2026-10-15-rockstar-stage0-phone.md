@@ -207,3 +207,29 @@ What a child pseudo-process's fault does today:
   path, the breaker's second storm) still end the app. The general case stays open in
   PLA-292 (and PLA-314 for the x86-64 killed waiter). A renderer killed on purpose is tested once
   CEF runs on the phone.
+
+## Chunk 4, step 5: Settings › Launchers › Open (PLA-271, minimal)
+
+Settings › Launchers (dev builds only until a launcher passes Stage 1) lists the Rockstar Games
+Launcher from PlayportKit's `PublisherLauncher` table: "Installed" when the prefix's
+`HKLM\Software\Wow6432Node\Rockstar Games\Launcher` `InstallFolder` names a folder on drive C
+holding `Launcher.exe`, else "Not installed" with no Open. Open runs the same setup checks as a
+Play, then a launch whose title is the launcher (`launcher-rockstar`): `Launcher.exe` with no
+arguments (no `-steamAppId`), Windows services on, a JIT pool of 896 MiB, the Vulkan backend. The
+driver's `open-launcher:rockstar` calls the same Open.
+
+Run `20261016T012523` (IPA `9dfc1c0e52d91a733887655188f52423236ddc687f568525d3ed16afbe396bda`,
+`open:settings#launchers`, `open-launcher:rockstar`, until first window +60 s):
+
+- `launcher: open rockstar on vulkan: C:\Program Files\Rockstar Games\Launcher\Launcher.exe`;
+  `title: jit pool: 896 MiB for a memory limit of 8192 MB (the game's)`;
+  `[service] Rockstar Service: starting, pid 288` → `running, pid 288`.
+- First window at +27.3 s: the launcher's 500×400 splash (the outlined R★ and a close button).
+- It starts `LauncherPatcher.exe` (its update check), `ThirdParty\Crashpad\RockstarErrorHandler.exe`
+  (twice) and Wine's `dxdiag /t …\Rockstar Games\Launcher\dxdiag.txt`. No `SocialClubHelper.exe`
+  within the 60 s.
+- Pool at the end: head 267, tail 545 (513 live) MiB, room 85 MiB, 7 children; band 3,683 MiB
+  used of 16,384, 54 threads. The launcher's helpers alone take the pool that RDR2's
+  Steam-mode play left at 197 MiB of room to 85, before any CEF process.
+
+Hollow Knight on the same IPA (run `20261016T012433`): `jit pool: 512 MiB`, first frame +10.58 s.

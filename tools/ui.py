@@ -163,6 +163,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          phone's saves, keep Steam's (either starts the game), or decide later.
                          Game options' Developer section has "Forget the cloud sync" (a first
                          sync next: a save that differs from Steam's becomes a conflict)
+  open-launcher:ID       Settings › Launchers' Open for a publisher's launcher (rockstar), dev
+                         builds: followed as play: is (its window is the `first window` mark;
+                         --until "mark:first window+S"); refused when it is not installed
   probe:helper-exit | probe:helper-kill [-hold]
                          Settings' helper-lifetime probe (Dev/HelperLifetimeProbe.swift): the JIT
                          helper ticks, then the app ends itself by exit(0) or SIGKILL 2 s after
@@ -399,9 +402,9 @@ TOUCH_CONTROL = r"[A-Za-z0-9_-]+(?:\.(?:up|down|left|right))?"
 # A gyro: script's step (HostIOKit GyroScript): axis=deg/s terms joined by +, or rest, then @ms.
 GYRO_TERM = r"(?:yaw|pitch|roll)=-?[0-9]{1,4}(?:\.[0-9]+)?"
 GYRO_STEP = rf"(?:rest|{GYRO_TERM}(?:\+{GYRO_TERM})*)@[0-9]{{1,5}}"
-ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+"
+ACTION_RE = re.compile((r"^(?:(?:install|pause-resume|queue|downloading):[0-9]+|install:gog-[0-9]+(?:@[0-9]+)?|install:epic-[A-Za-z0-9._-]+|(?:uninstall|verify|repair|play):[a-z]+-[A-Za-z0-9 ._-]+|open-launcher:[a-z]+"
                         r"|import:[A-Za-z0-9 ._()'+-]+(?:/[A-Za-z0-9 ._()'+-]+)*"
-                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
+                       r"|hud:(?:on|off)|open:[a-z]+(?:-[A-Za-z0-9 ._-]+(?:#[a-z]+)?)?|open:settings#(?:accounts|steam|graphics|downloads|controls|controllers|gyro|controller|storage|setup|about|launchers|developer|account|jit|memory|diagnostics|pairing|probes|logs)|open:licences(?:#[a-z0-9 ._-]+)?|pad:(?:{b})(?:\+(?:{b}))*|set:[A-Za-z0-9._-]+=[^,]*"
                        r"|wait:[0-9]{1,3}|tap:(?:0(?:\.[0-9]+)?|1(?:\.0+)?):(?:0(?:\.[0-9]+)?|1(?:\.0+)?)|menu:(?:open|resume|controls|screenshot|overlay|controller|quit)"
                        r"|touch:{t}(?:\+{t})*(?:@[0-9]{1,5})?|gyro:{g}(?:/{g})*|gesture:three-finger-tap|web:(?:wait|close)|web:click:[A-Za-z0-9 ._-]+"
                        r"|jit:(?:setup|pair|continue|open-settings|cancel|wait)|probe:settings-url-[0-9]|probe:helper-(?:(?:exit|kill)(?:-hold)?|report)|probe:memory-(?:64|2048|4096|donor-(?:tagged|purgeable)-(?:2048|4096)|donors-(?:6144|8192|10240)|pool-verify|pool-zero|pool-gpu)|background:(?:[1-9][0-9]|[1-5][0-9]{2}|600)|probe:relaunch|probe:native-auth|probe:pairing(?:-cancel|-use)?)$").replace("{b}", PAD_BUTTONS).replace("{t}", TOUCH_CONTROL)
@@ -436,12 +439,18 @@ def in_game(actions, start):
     return n
 
 
+def is_play(action):
+    """Whether an action starts a launch the run follows as a game: play:ID, or open-launcher:ID
+    (Settings › Launchers' Open, whose title is the launcher itself)."""
+    return action.startswith(("play:", "open-launcher:"))
+
+
 def pad_after_play(actions):
     """The first pad: that follows a play: and its in-game actions without a menu:open, or None.
     The app defers it to after the game ends (UIDriver.inGame), so a run that means it for the
     game waits for a game that does not end: refused up front."""
     for i, x in enumerate(actions):
-        if x.startswith("play:"):
+        if is_play(x):
             nxt = i + 1 + in_game(actions, i + 1)
             if nxt < len(actions) and actions[nxt].startswith("pad:"):
                 return actions[nxt]
@@ -452,7 +461,7 @@ def after_play(actions):
     """Whether an action follows the last play: in actions, past the ones for the running
     game (in_game): the app then runs it after the restart that follows the game, and the
     UI's done event, not the title's, ends the run."""
-    plays = [i for i, x in enumerate(actions) if x.startswith("play:")]
+    plays = [i for i, x in enumerate(actions) if is_play(x)]
     return bool(plays) and plays[-1] + in_game(actions, plays[-1] + 1) < len(actions) - 1
 
 
@@ -464,9 +473,9 @@ def ends_run(e, actions, play, titles_done=1):
     failed action at once."""
     seq = list(actions) + [f"play:{play}"] * bool(play)
     if e.get("event") == "title-done":
-        plays = sum(x.startswith("play:") for x in seq)
+        plays = sum(is_play(x) for x in seq)
         return titles_done >= plays and not after_play(seq)
-    game_last = bool(seq) and (seq[-1].startswith("play:") or seq[-1] == "menu:quit")
+    game_last = bool(seq) and (is_play(seq[-1]) or seq[-1] == "menu:quit")
     return not game_last or not e.get("outcome", "").startswith("ok")
 
 
@@ -664,7 +673,7 @@ def parse(argv=None):
         if not ACTION_RE.match(x) or (x.startswith("open:") and "-" not in x.split("#")[0]
                                       and x[5:].split("#")[0] not in SCREENS + ("licences", "black")):
             p.error(f"{x!r} is not open:SCREEN|ID, pad:BUTTON[+BUTTON...], wait:S, menu:open|ROW, touch:CONTROL[+CONTROL...][@MS], gyro:STEP[/STEP...], gesture:three-finger-tap, set:KEY=VALUE, hud:on|off, install:APP, pause-resume:APP, "
-                    "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
+                    "queue:APP, downloading:APP, import:PATH, uninstall:ID, verify:ID, repair:ID, play:ID, open-launcher:ID, probe:helper-exit|kill|report, probe:relaunch or probe:pairing[-cancel|-use]")
     seq = a.action + [f"play:{a.play}"] * bool(a.play)
     pad = pad_after_play(seq)
     if pad:
@@ -899,7 +908,7 @@ LAST_PLAY = os.path.join(phonelib.BUILD, "last-play.json")
 
 
 def plays(a):
-    return bool(a.play) or any(x.startswith("play:") for x in a.action)
+    return bool(a.play) or any(is_play(x) for x in a.action)
 
 
 def played(argv):

@@ -11,6 +11,8 @@
 //                              run in the new process, under this run (DriverContinuation);
 //                              a Play refused before the runtime started (its alert shows)
 //                              goes on here
+//   open-launcher:<id>         Settings › Launchers' Open for a publisher's launcher
+//                              (PlayportKit PublisherLauncher: rockstar), followed as play:
 //   install:<app id>           Install from Steam (the paired account's session);
 //                              waits until the title is in the library
 //   install:gog-<id>[@<build>] Install from GOG (signed in on the phone), the newest build or
@@ -67,7 +69,7 @@
 //                              row opens the ActionPicker, whose presses pad: sends);
 //                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controls, storage, setup, about,
-//                              developer; PlayportKit SettingsSection.named also takes
+//                              launchers, developer; PlayportKit SettingsSection.named also takes
 //                              account, steam, jit, memory, diagnostics, pairing, probes, logs,
 //                              gyro: Controls, ringed at its Gyro aim rows, and controller:
 //                              Settings › Controls › Controller, the default's page);
@@ -653,9 +655,18 @@ enum UIDriver {
                     }
                 case "repair":
                     if let failure = await repair(id) { return finish("action=\(action) failed: \(failure)") }
-                case "play":
+                case "play", "open-launcher":
+                    // open-launcher:ID is Settings › Launchers' Open (UI/LaunchersSettings.swift), followed as a play.
+                    let launcher = parts[0] == "open-launcher" ? PublisherLauncher.named(id) : nil
+                    if parts[0] == "open-launcher", launcher == nil {
+                        return finish("action=\(action) refused: \(id) is not a launcher (\(PublisherLauncher.all.map(\.id).joined(separator: ", ")))")
+                    }
                     do {
-                        guard try await library.play(id) else {
+                        let started = if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
+                        guard started else {
+                            if launcher != nil {
+                                return finish("action=\(action) refused: not installed, or a launch is running or Playport needs a restart")
+                            }
                             if case .cloud = PadModal.shared.content {
                                 try? await Task.sleep(for: .milliseconds(1000))   // the screen drawn, for a screenshot
                                 return finish("action=\(action) refused: \(PadModal.shared.summary ?? "cloud conflict"): "
@@ -663,7 +674,7 @@ enum UIDriver {
                             }
                             return finish("action=\(action) refused: a launch is running or Playport needs a restart")
                         }
-                        log("play \(id): started")
+                        log("\(parts[0]) \(id): started")
                     } catch {
                         return finish("action=\(action) failed: \(error)")
                     }
@@ -674,11 +685,11 @@ enum UIDriver {
                         if AppRestart.shared.restarting {
                             // The restarted process runs the rest (DriverContinuation, saved as it asks).
                             RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": done + 1, "restart": true])
-                            log("play \(id): ended; Playport restarts, and the new process goes on")
+                            log("\(parts[0]) \(id): ended; Playport restarts, and the new process goes on")
                             return
                         }
                         try? await Task.sleep(for: .milliseconds(1500))   // the alert drawn, for a screenshot
-                        log("play \(id): ended without starting the runtime: \(launch.message?.title ?? "no message")"
+                        log("\(parts[0]) \(id): ended without starting the runtime: \(launch.message?.title ?? "no message")"
                             + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
                     }
                 default:

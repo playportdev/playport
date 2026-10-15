@@ -1471,6 +1471,8 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(SettingsSection.all(developer: false).map(\.title),
                        ["Accounts", "Graphics", "Downloads", "Controls", "Storage", "Setup check", "About"])
         XCTAssertEqual(SettingsSection.all(developer: true).last, .developer)
+        XCTAssertEqual(SettingsSection.all(developer: true).suffix(2), [.launchers, .developer])
+        XCTAssertEqual(SettingsSection.named("launchers"), .launchers)
         XCTAssertEqual(SettingsSection.named("account"), .accounts)
         XCTAssertEqual(SettingsSection.named("steam"), .accounts)
         XCTAssertEqual(SettingsSection.named("diagnostics"), .developer)
@@ -1480,10 +1482,11 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(SettingsSection.named("controllers"), .controls)
         XCTAssertEqual(SettingsSection.named("gyro"), .controls)
         XCTAssertNil(SettingsSection.named("nope"))
-        // Up and down stop at the ends; a release build never steps onto Developer.
+        // Up and down stop at the ends; a release build never steps onto Launchers or Developer.
         XCTAssertEqual(SettingsSection.accounts.step(-1, developer: true), .accounts)
         XCTAssertEqual(SettingsSection.about.step(1, developer: false), .about)
-        XCTAssertEqual(SettingsSection.about.step(1, developer: true), .developer)
+        XCTAssertEqual(SettingsSection.about.step(1, developer: true), .launchers)
+        XCTAssertEqual(SettingsSection.launchers.step(1, developer: true), .developer)
         XCTAssertEqual(SettingsSection.graphics.step(1, developer: false), .downloads)
     }
 

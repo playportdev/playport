@@ -195,6 +195,23 @@ public struct PrefixRegistryFile: Sendable {
         return String(decoding: units, as: UTF16.self)
     }
 
+    /// A string value (REG_SZ) in a hive's text, as `dword(inHive:)` reads one.
+    public static func string(inHive text: String, key: String, name: String) -> String? {
+        let header = "[" + escape(key, "[]").lowercased() + "]"
+        let prefix = (name.isEmpty ? "@" : "\"" + escape(name, "\"\"") + "\"").lowercased() + "=\""
+        var inKey = false
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.hasPrefix("[") {
+                inKey = line.lowercased().hasPrefix(header)
+                continue
+            }
+            guard inKey, line.lowercased().hasPrefix(prefix), line.hasSuffix("\"") else { continue }
+            let data = line.dropFirst(prefix.count).dropLast()
+            return unescape(String(data))
+        }
+        return nil
+    }
+
     /// A DWORD value in a hive's text (system.reg or user.reg as wineserver saves it, the
     /// runtime stopped): any section of the key holding a `dword:` value of that name.
     public static func dword(inHive text: String, key: String, name: String) -> UInt32? {
