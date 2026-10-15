@@ -463,11 +463,14 @@ enum LaunchCoordinator {
         }
         backend.merge(Diagnostics.launchEnvironment(exe: r.exe, dir: dir, graphics: r.graphics, log: log)) { own, _ in own }
         #endif
-        // DXVK reports Metal's whole working set as video memory unless the title opts into
-        // the plan's (`vulkan-vram-plan = 1`, MemoryPlan.dxvkOption; off by default).
-        if r.graphics == .vulkan, let option = plan?.dxvkOption {
+        // DXVK reports Metal's whole working set as video memory, and KosmicKrisp budgets
+        // most of the limit, unless the title opts into the plan's (`vulkan-vram-plan = 1`,
+        // MemoryPlan.dxvkOption and vulkanEnvironment; off by default).
+        if r.graphics == .vulkan, let p = plan, let option = p.dxvkOption {
             backend["DXVK_CONFIG"] = backend["DXVK_CONFIG"].map { $0 + ";" + option } ?? option
-            log("memory plan: DXVK_CONFIG \(option)")
+            backend.merge(p.vulkanEnvironment) { _, planned in planned }
+            log("memory plan: DXVK_CONFIG \(option); "
+                + p.vulkanEnvironment.keys.sorted().map { "\($0)=\(p.vulkanEnvironment[$0]!)" }.joined(separator: " "))
         }
         let environment = applyEnvironment(backend: backend, steamAppID: r.steamAppID, fex: r.fex)
         PacedMetalLayer.onFirstFrame {

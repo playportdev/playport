@@ -1102,7 +1102,9 @@ raises the guest's RAM up to Auto's budget (RAM − 2 GiB − the spare floor), 
 output. Opt-in keys, off by default: `vram-budget-event = 1` signals DXGI's
 budget-change event when the ml1075 trim moves the budget (it hung RDR2 when it
 never fired); `vulkan-vram-plan = 1` adds `dxgi.maxDeviceMemory` = the plan's
-budget to `DXVK_CONFIG` (DXVK otherwise reports KosmicKrisp's 8 GiB heap).
+budget to `DXVK_CONFIG` (DXVK otherwise reports KosmicKrisp's 8 GiB heap) and sets
+`PLAYPORT_VK_BUDGET_MB`, which caps KosmicKrisp's `VK_EXT_memory_budget` budget at it
+(patches/mesa 0036; the heap's size stays Metal's working set).
 
 **`inproc-sync` is off by default**
 ([madeira-unix 0014](../patches/madeira-unix/0014-madsync-make-in-process-sync-opt-in.patch)).

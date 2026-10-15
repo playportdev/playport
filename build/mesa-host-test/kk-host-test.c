@@ -6,7 +6,8 @@
  * rendered; the mock completes every commit at once. What this checks is the
  * driver's CPU side: that every pipeline compiles (NIR validation runs in a
  * debug build), that every MSL library is fully translated (the mock exits 3
- * otherwise) and that recording the draws does not crash or assert.
+ * otherwise) and that recording the draws does not crash or assert. First,
+ * that PLAYPORT_VK_BUDGET_MB caps the heap's budget and not its size.
  *
  *    kk-host-test DRIVER.so SPV_DIR
  *
@@ -253,6 +254,69 @@ find_memory(VkPhysicalDevice pd, uint32_t bits)
    return 0;
 }
 
+/* Heap 0's size and VK_EXT_memory_budget budget in MiB, from a fresh
+ * instance (the driver reads PLAYPORT_VK_BUDGET_MB when it enumerates). */
+static void
+heap_and_budget(const VkInstanceCreateInfo *ici, uint64_t *size_MB,
+                uint64_t *budget_MB)
+{
+   VkInstance i;
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(ici, NULL, &i));
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   CHECK(((PFN_vkEnumeratePhysicalDevices)gipa(i, "vkEnumeratePhysicalDevices"))(
+      i, &count, &pd));
+   VkPhysicalDeviceMemoryBudgetPropertiesEXT budget = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT,
+   };
+   VkPhysicalDeviceMemoryProperties2 mp = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2,
+      .pNext = &budget,
+   };
+   ((PFN_vkGetPhysicalDeviceMemoryProperties2)gipa(
+      i, "vkGetPhysicalDeviceMemoryProperties2"))(pd, &mp);
+   *size_MB = mp.memoryProperties.memoryHeaps[0].size >> 20;
+   *budget_MB = budget.heapBudget[0] >> 20;
+   ((PFN_vkDestroyInstance)gipa(i, "vkDestroyInstance"))(i, NULL);
+}
+
+/* patches/mesa 0036: PLAYPORT_VK_BUDGET_MB caps heap 0's budget and leaves
+ * its size; unset, or under 256, it changes nothing. */
+static int
+check_budget_cap(const VkInstanceCreateInfo *ici)
+{
+   uint64_t size, budget, cap_size, cap_budget, low_size, low_budget;
+   unsetenv("PLAYPORT_VK_BUDGET_MB");
+   heap_and_budget(ici, &size, &budget);
+   setenv("PLAYPORT_VK_BUDGET_MB", "1536", 1);
+   heap_and_budget(ici, &cap_size, &cap_budget);
+   setenv("PLAYPORT_VK_BUDGET_MB", "100", 1);
+   heap_and_budget(ici, &low_size, &low_budget);
+   unsetenv("PLAYPORT_VK_BUDGET_MB");
+   printf("memory: heap 0 %llu MiB, budget %llu MiB; capped at 1536: heap "
+          "%llu MiB, budget %llu MiB; 100 (ignored): budget %llu MiB\n",
+          (unsigned long long)size, (unsigned long long)budget,
+          (unsigned long long)cap_size, (unsigned long long)cap_budget,
+          (unsigned long long)low_budget);
+   if (size != 5120 || cap_size != size || low_size != size) {
+      fprintf(stderr, "the budget cap changed heap 0's size\n");
+      return 1;
+   }
+   /* The uncapped budget follows the host's free memory, which moves
+    * between instances: compare only well clear of the cap. */
+   if (budget < 2048 || low_budget < 2048) {
+      fprintf(stderr, "this host's budget (%llu MiB) is too close to the cap "
+              "to check it\n", (unsigned long long)budget);
+      return 1;
+   }
+   if (cap_budget != 1536) {
+      fprintf(stderr, "PLAYPORT_VK_BUDGET_MB=1536 gave a %llu MiB budget\n",
+              (unsigned long long)cap_budget);
+      return 1;
+   }
+   return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -275,6 +339,8 @@ main(int argc, char **argv)
                             .apiVersion = VK_API_VERSION_1_3};
    VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                .pApplicationInfo = &app};
+   if (check_budget_cap(&ici))
+      return 1;
    CHECK(vkCreateInstance(&ici, NULL, &inst));
 
    IPROC(vkEnumeratePhysicalDevices);

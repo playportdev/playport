@@ -50,8 +50,11 @@ public struct MemoryPlan: Equatable, Sendable {
     /// madeira.cfg keys that win over the plan (ml993, ml1095).
     public static let guestRAMKey = "totalphys"
     public static let videoKey = "vram-mb"
-    /// madeira.cfg key: 1 clamps DXVK's reported video memory to the plan (off by default).
+    /// madeira.cfg key: 1 clamps DXVK's reported video memory and KosmicKrisp's heap budget
+    /// to the plan (off by default).
     public static let vulkanKey = "vulkan-vram-plan"
+    /// KosmicKrisp's cap on its heap's VK_EXT_memory_budget budget, MiB (patches/mesa 0036).
+    public static let vulkanBudgetVariable = "PLAYPORT_VK_BUDGET_MB"
 
     /// What the plan reads at Play.
     public struct Inputs: Equatable, Sendable {
@@ -78,7 +81,7 @@ public struct MemoryPlan: Equatable, Sendable {
         public var guestRAMMB: Int?
         /// `vram-mb` from madeira.cfg (ml1042 honours 256 or more).
         public var videoMB: Int?
-        /// `vulkan-vram-plan = 1`.
+        /// `vulkan-vram-plan = 1`: DXVK's DXGI report and KosmicKrisp's heap budget take the plan's.
         public var vulkan: Bool
 
         public init(guestRAMMB: Int? = nil, videoMB: Int? = nil, vulkan: Bool = false) {
@@ -144,6 +147,12 @@ public struct MemoryPlan: Equatable, Sendable {
     /// nil unless `vulkan-vram-plan = 1`.
     public var dxvkOption: String? {
         overrides.vulkan ? "dxgi.maxDeviceMemory = \(videoMB)" : nil
+    }
+
+    /// KosmicKrisp's heap budget capped at this plan's video memory (patches/mesa 0036; the
+    /// heap's size stays Metal's working set); empty unless `vulkan-vram-plan = 1`.
+    public var vulkanEnvironment: [String: String] {
+        overrides.vulkan ? [Self.vulkanBudgetVariable: String(videoMB)] : [:]
     }
 
     /// The one `memory plan:` log line.

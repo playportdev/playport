@@ -34,3 +34,4 @@
 0033-zink-no-triangle-fans-on-KosmicKrisp.patch
 0034-zink-acquire-a-window-buffer-before-a-copy-reads-it.patch
 0035-kk-hang-a-drawable-s-readable-source-on-its-texture.patch
+0036-kk-PLAYPORT_VK_BUDGET_MB-caps-the-heap-s-memory-budg.patch

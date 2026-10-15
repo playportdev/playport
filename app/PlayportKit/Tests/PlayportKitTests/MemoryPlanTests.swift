@@ -89,6 +89,12 @@ final class MemoryPlanTests: XCTestCase {
         XCTAssertNil(plan(8192).dxvkOption)
         XCTAssertEqual(plan(8192, MemoryPlan.Overrides(vulkan: true)).dxvkOption, "dxgi.maxDeviceMemory = 1536")
         XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 3072, vulkan: true)).dxvkOption, "dxgi.maxDeviceMemory = 3072")
+        // KosmicKrisp's heap budget follows the same key and value.
+        XCTAssertEqual(plan(8192).vulkanEnvironment, [:])
+        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(vulkan: true)).vulkanEnvironment, ["PLAYPORT_VK_BUDGET_MB": "1536"])
+        XCTAssertEqual(plan(8192, MemoryPlan.Overrides(videoMB: 3072, vulkan: true)).vulkanEnvironment,
+                       ["PLAYPORT_VK_BUDGET_MB": "3072"])
+        XCTAssertNil(plan(8192, MemoryPlan.Overrides(vulkan: true)).environment["PLAYPORT_VK_BUDGET_MB"])
     }
 
     func testUnreadLimitSetsNothing() {
