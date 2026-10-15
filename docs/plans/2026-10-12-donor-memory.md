@@ -3,7 +3,7 @@
 **Date:** 2026-10-12. **Status:** steps 1, 2 and 3 done 2026-10-14; step 4's Kingdom Come pair done 2026-10-14 (peak −697 MiB); pool reuse within an object done 2026-10-14 (refused 0, peak −582 MiB); 0148 widened to small commits 2026-10-14 (peak −3,798 MiB).
 **Linear:** [PLA-216](https://linear.app/playportdev/issue/PLA-216).
 **Branch:** `research/extended-memory`, rebased onto `main` (`6ad89e8`). It is
-not merged. Last built at `7413ff3` (IPA `b3cdca61…`, small commits backed).
+not merged. Last built at `28108ca` (IPA `a3058add…`, Auto from the headroom, `MADV_ZERO`).
 
 ## Progress
 
@@ -83,19 +83,20 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   below runs in order, one writer at a time, with the phone in unattended
   mode. Run ids are in the build-area queue.
 - **Queue:**
-  1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)). Follow-ups 2026-10-15 ([evidence](../evidence/2026-10-15-donor-pool-followups.md)): the scripted HK A/B on an unsaved new game in slot 3 (no save made) matched in steady play (walk and roam 59.9–60.0 FPS, the same server requests per frame), but the pool run's two scene loads took 1.5–2.2 s longer and its 1 % lows were lower (20.9 vs 21.8 over the run); one pair, not settled. The detach probe was not run: no `protect` title in the library, and pp has no command to copy a file to the phone (owner: Files/Finder, or decide on a `pp phone put`).
-  2. **[PLA-351](https://linear.app/playportdev/issue/PLA-351), done 2026-10-14:** Off/Auto sizing from P − L (`da6fe62`, IPA `d2c62e6c…`); on this phone Auto is off at Play (P 4,440, L 8,191); the helper is signed with increased-memory-limit, and its limit is 6,139 MiB ([evidence](../evidence/2026-10-14-donor-pool-auto.md)).
+  1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)). Follow-ups 2026-10-15 ([evidence](../evidence/2026-10-15-donor-pool-followups.md)): the scripted HK A/B on an unsaved new game in slot 3 (no save made) matched in steady play (walk and roam 59.9–60.0 FPS, the same server requests per frame), but the pool run's two scene loads took 1.5–2.2 s longer and its 1 % lows were lower (20.9 vs 21.8 over the run); one pair, not settled. **Load gap explained 2026-10-15** ([evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)): that pool run built 41 Metal pipelines (iOS's Metal cache was cold), 2.42 s and 1.51 s of them inside the two loads; the pool's hook took at most 4 ms and 241 ms there. A new pair with no Metal builds matched (loads 1.85/1.67 s off vs 1.82/1.73 s Auto, mean FPS 57.5 vs 57.4); the walk and roam 1 % lows were lower again with the hooks idle (open). **Zeroing by `MADV_ZERO`** (`28108ca`): KCD's zeroing up to +180 s fell from 2,299 to 370 ms for about 25 GiB (93 → 16 ms/GiB), the backing hook from 2,761 to 771 ms, the longest call from 4.5 to 3.5 ms. The detach probe was not run: no `protect` title in the library, and pp has no command to copy a file to the phone (owner: Files/Finder, or decide on a `pp phone put`).
+  2. **[PLA-351](https://linear.app/playportdev/issue/PLA-351), done 2026-10-14:** Off/Auto sizing from P − L (`da6fe62`, IPA `d2c62e6c…`); on this phone Auto is off at Play (P 4,440, L 8,191); the helper is signed with increased-memory-limit, and its limit is 6,139 MiB ([evidence](../evidence/2026-10-14-donor-pool-auto.md)). **Auto from the headroom, done 2026-10-15** (owner's direction; `28108ca`, IPA `a3058add…`; [evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)): target = min(6,144, round256(RAM − 2,048 − spare floor − min(L, 4,096))), none under 1 GiB, one donor; 4,096 on the 12 GB phone (entitled), 4,864 unentitled, 0 / 1,280 on 8 GB; growth stops below the spare floor or level 15 % (`donor-pool: pressure`). The memory plan raises guest RAM only up to the same budget (0 on the reference phone). KCD 600 s on Auto: 4 GiB, peak `fpMB` 4,292, no jetsam, one growth stop at level 14 %.
   3. **[PLA-352](https://linear.app/playportdev/issue/PLA-352), done 2026-10-14:** one memory plan per Play (`9e900b8`, IPA `21347e47…`); the reference phone keeps 8,192 / 1,536 MiB, ≤ 6 GiB limits tell the guest less, the event and the Vulkan clamp are opt-in; DXVK reports an 8 GiB heap ([evidence](../evidence/2026-10-14-memory-plan.md)).
   4. Step 5: GPU buffers in pool memory (stretch).
-- **Phone (2026-10-15, 01:03):** dev IPA `21347e47…` installed, on the charger (96 %),
-  unattended on, app killed. The sessions' `set:donorPoolMB` and the HUD switch are undone at
-  the app's next launch outside a session. KCD and HK are installed; HK profile slot 3 is still
-  New Game. The `protect` probe is not installed. Results are filed on PLA-42, PLA-49, PLA-216
-  and PLA-350 (PLA-352's and the 2026-10-15 follow-ups' for the supervisor to file).
+- **Phone (2026-10-15, 02:17):** dev IPA `a3058add…` (`28108ca`) installed, on the charger (100 %),
+  unattended on, app killed. The sessions' `set:donorPoolMB` is undone at the app's next launch
+  outside a session. KCD and HK are installed; HK profile slot 3 read New Game before the last
+  run, which was killed without a save. The `protect` probe is not installed. Results are filed on
+  PLA-42, PLA-49, PLA-216 and PLA-350 (PLA-352's, the 2026-10-15 follow-ups' and the Auto-headroom
+  session's for the supervisor to file).
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
   step2-writer.md, step3-writer.md, step4-writer.md,
-  pla350-writer.md, reuse-writer.md, widen-writer.md, pla351-writer.md, research-device-ram.md,
+  pla350-writer.md, reuse-writer.md, widen-writer.md, pla351-writer.md, auto-zero-writer.md, research-device-ram.md,
   research-gpu-reporting.md; MeloNX notes in
   `melonx-2.7-notes.md`).
 
