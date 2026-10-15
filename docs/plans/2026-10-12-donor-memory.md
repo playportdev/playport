@@ -86,9 +86,23 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
   1. **Phone measurements, done 2026-10-14:** KCD 32 min with the pool stable (peak `fpMB` 4,007, no jetsam); HK A/B and detach probe not run ([evidence](../evidence/2026-10-14-donor-pool-measure.md)). Follow-ups 2026-10-15 ([evidence](../evidence/2026-10-15-donor-pool-followups.md)): the scripted HK A/B on an unsaved new game in slot 3 (no save made) matched in steady play (walk and roam 59.9–60.0 FPS, the same server requests per frame), but the pool run's two scene loads took 1.5–2.2 s longer and its 1 % lows were lower (20.9 vs 21.8 over the run); one pair, not settled. **Load gap explained 2026-10-15** ([evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)): that pool run built 41 Metal pipelines (iOS's Metal cache was cold), 2.42 s and 1.51 s of them inside the two loads; the pool's hook took at most 4 ms and 241 ms there. A new pair with no Metal builds matched (loads 1.85/1.67 s off vs 1.82/1.73 s Auto, mean FPS 57.5 vs 57.4); the walk and roam 1 % lows were lower again with the hooks idle (open). **Zeroing by `MADV_ZERO`** (`28108ca`): KCD's zeroing up to +180 s fell from 2,299 to 370 ms for about 25 GiB (93 → 16 ms/GiB), the backing hook from 2,761 to 771 ms, the longest call from 4.5 to 3.5 ms. The detach probe was not run: no `protect` title in the library, and pp has no command to copy a file to the phone (owner: Files/Finder, or decide on a `pp phone put`).
   2. **[PLA-351](https://linear.app/playportdev/issue/PLA-351), done 2026-10-14:** Off/Auto sizing from P − L (`da6fe62`, IPA `d2c62e6c…`); on this phone Auto is off at Play (P 4,440, L 8,191); the helper is signed with increased-memory-limit, and its limit is 6,139 MiB ([evidence](../evidence/2026-10-14-donor-pool-auto.md)). **Auto from the headroom, done 2026-10-15** (owner's direction; `28108ca`, IPA `a3058add…`; [evidence](../evidence/2026-10-15-donor-pool-auto-headroom.md)): target = min(6,144, round256(RAM − 2,048 − spare floor − min(L, 4,096))), none under 1 GiB, one donor; 4,096 on the 12 GB phone (entitled), 4,864 unentitled, 0 / 1,280 on 8 GB; growth stops below the spare floor or level 15 % (`donor-pool: pressure`). The memory plan raises guest RAM only up to the same budget (0 on the reference phone). KCD 600 s on Auto: 4 GiB, peak `fpMB` 4,292, no jetsam, one growth stop at level 14 %.
   3. **[PLA-352](https://linear.app/playportdev/issue/PLA-352), done 2026-10-14:** one memory plan per Play (`9e900b8`, IPA `21347e47…`); the reference phone keeps 8,192 / 1,536 MiB, ≤ 6 GiB limits tell the guest less, the event and the Vulkan clamp are opt-in; DXVK reports an 8 GiB heap ([evidence](../evidence/2026-10-14-memory-plan.md)).
-  4. Step 5: GPU buffers in pool memory (stretch).
-- **Phone (2026-10-15, 02:17):** dev IPA `a3058add…` (`28108ca`) installed, on the charger (100 %),
-  unattended on, app killed. The sessions' `set:donorPoolMB` is undone at the app's next launch
+  4. **Step 5, [PLA-354](https://linear.app/playportdev/issue/PLA-354), done 2026-10-15:**
+     GPU buffers in pool memory ([evidence](../evidence/2026-10-15-donor-pool-gpu.md)).
+     - **Probe** (`adc7adb`, `probe:memory-pool-gpu`): Metal takes no-copy buffers over pool
+       objects and the GPU reads and writes them correctly. 1 GiB of them added 19 MiB of
+       footprint; 1 GiB of ordinary buffers added 1,020 MiB.
+     - **DXMT 0012** (`821c0dd`, IPA `82e1039e…`): madeira.cfg `gpu-pool-buffers`, off by
+       default.
+     - **KCD A/B at Auto:** the graphics ledger fell by about 370 MB, but the 4 GiB pool was
+       already full, so peak `fpMB` did not fall (4,073 on, 4,018 off). FPS matched and there
+       was no corruption.
+     - **HK on DXMT** reached the first frame with the key on and off.
+     - **KosmicKrisp** already exposes `VK_EXT_external_memory_host`. Nothing in DXVK imports
+       host memory, so it was not pursued.
+- **Phone (2026-10-15, 03:18):** dev IPA `82e1039e…` (`821c0dd`, dxmt 0012) installed, on the
+  charger (100 %), unattended on, app killed. The step 5 sessions' `--settings` for HK and KCD
+  (`gpu-pool-buffers`, screen 720, 60 FPS) and `set:donorPoolMB` are undone at the app's next
+  launch outside a session. The sessions' `set:donorPoolMB` is undone at the app's next launch
   outside a session. KCD and HK are installed; HK profile slot 3 read New Game before the last
   run, which was killed without a save. The `protect` probe is not installed. Results are filed on
   PLA-42, PLA-49, PLA-216 and PLA-350 (PLA-352's, the 2026-10-15 follow-ups' and the Auto-headroom
@@ -96,7 +110,7 @@ for this run: hard tasks `anthropic/claude-opus-5-5` (medium), easy tasks
 - **Reports:** `.work/agent-notes/donor-memory/reports/` (step1-writer.md is
   the stopped first writer's partial report; step1-finish-writer.md,
   step2-writer.md, step3-writer.md, step4-writer.md,
-  pla350-writer.md, reuse-writer.md, widen-writer.md, pla351-writer.md, auto-zero-writer.md, research-device-ram.md,
+  pla350-writer.md, reuse-writer.md, widen-writer.md, pla351-writer.md, auto-zero-writer.md, step5-writer.md, research-device-ram.md,
   research-gpu-reporting.md; MeloNX notes in
   `melonx-2.7-notes.md`).
 
@@ -385,7 +399,14 @@ AAA game's memory.
 - **KosmicKrisp:** look at host-pointer import (`VK_EXT_external_memory_host`)
   for buffers.
 - **Textures:** they probably stay ordinary.
-- **Next step:** this gets its own issue once step 3 holds.
+- **Status (2026-10-15, [PLA-354](https://linear.app/playportdev/issue/PLA-354)):**
+  - **Done.** No-copy Metal buffers over pool memory work and are not charged to the app.
+  - **DXMT 0012** (`gpu-pool-buffers`, off by default) places large shared buffers in fresh
+    pages that the pool backs.
+  - **No gain for KCD at Auto.** The pool is full of guest data, so the buffers only displace
+    it.
+  - **KosmicKrisp** already has the host-pointer import, but nothing uses it. See the
+    [evidence](../evidence/2026-10-15-donor-pool-gpu.md).
 
 ## Risks
 
