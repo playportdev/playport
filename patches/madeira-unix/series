@@ -148,3 +148,4 @@
 0148-virtual-back-bounded-fresh-guest-data-through-the-host.patch
 0149-virtual-count-guest-memory-by-class-while-the-host-b.patch
 0150-virtual-back-every-fresh-guest-commit-of-a-host-page.patch
+0151-signal-count-a-fault-storm-by-the-thread-s-registers.patch

@@ -95,10 +95,34 @@ The depot holds:
 In the first Play (`20261015T230510`) the same box came up before the language page. A console
 window left by the VC++ 2017 `.cmd` stayed in the guest window layer over it.
 
+### RockstarService.exe and the storm breaker (step 2, part 1)
+
+The faulting store wrote 4 bytes at RVA 0x24F47 of `RockstarService.exe`. The service has a second
+`.text` section, and its own code shares that 16 KiB host page. Each pass of its loop took a
+self-modifying-code fault that FEX handled, then went on. The breaker (ml461, and madeira-unix
+0119 for a child) counts identical `(thread, pc, address)` deliveries, so it ended the process at
+2,000 passes. madeira-unix 0151 adds the thread's general registers to that key. FEX holds the x86
+registers in host registers, so a pass that made progress no longer counts as a repeat.
+
+With IPA `fb14fc653935ebfec9b6730bb409ef97c83a3ce9caad96953a01ef9bc7dea244`, run
+`20261015T234109`, the owner pressed through the pages again. This time `PlayRDR2.exe` started
+the installer, because the prerequisite was recorded as failed with this build. Results:
+
+- The service's loop got through: `[smc] ml1055 147000 self-modifying writes handled so far` in
+  about 28 s, and no `[host-fault]`.
+- The installer's log (`ProgramData\Rockstar Games\Launcher\installer_log.txt`) shows where it
+  stopped. Its files were written and both VC++ 14.44 setups exited 0, then:
+  `Found service` / `Running install service action...` / `App launched: ...RockstarService.exe
+  with args: install` / `Exit code: 1`.
+- The cause is `[file-wfail] ... status=0xc0000034 ... name=\??\pipe\svcctl`: no SCM runs in the
+  session. That is step 2's subject (PLA-275). The same `[msgbox]` followed; the screenshot shows
+  it over the installer's Installing page.
+
+Hollow Knight on `fb14fc65`, run `20261015T235413`: first frame at +11.22 s, ok.
+
 ### Not done in step 1
 
-- `RockstarService.exe` under the phone's runtime. It is the next item, with step 2: the SCM,
-  and the service process itself.
+- The SCM (step 2).
 - The Hollow Knight smoke play: Hollow Knight is not installed on the phone (the library holds
   only RDR2). Step 1 is not a runtime change; its gate is the RDR2 runs above and the host tests.
   Hollow Knight is installed before step 2.
