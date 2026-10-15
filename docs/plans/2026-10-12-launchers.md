@@ -74,7 +74,13 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   - There is no "Hibernate while game is running" setting string in this build; there is an
     internal UI hibernation in Social Club.
   - The installer and `Social-Club-Setup.exe` are the same bytes from Steam and from Rockstar.
-- **Proposed chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
+- **Running now (owner, 2026-10-15, in parallel):** chunk 2 below (the writer: builds, phone,
+  commits), and the in-game measurement (read-only observer: the owner plays RDR2 Story from
+  the owner's desktop Steam on the owner's desktop; the observer reads `/proc` and sockets only,
+  writes `$PLAYPORT_BUILD/agent-notes/pla254-rockstar/ingame/`, and commits nothing; the
+  supervisor folds its results into the evidence). Phone: IPA `560d43cb` installed (newest
+  verified `62791f62`), 9.3 GB free, RDR2 installed without depot 1899671.
+- **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
   1. [PLA-365](https://linear.app/playportdev/issue/PLA-365): install depot 1899671 and run
