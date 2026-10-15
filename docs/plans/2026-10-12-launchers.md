@@ -74,12 +74,20 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   - There is no "Hibernate while game is running" setting string in this build; there is an
     internal UI hibernation in Social Club.
   - The installer and `Social-Club-Setup.exe` are the same bytes from Steam and from Rockstar.
-- **Running now (owner, 2026-10-15, in parallel):** chunk 2 below (writer run `7179aee9`: builds, phone,
-  commits), and the in-game measurement (observer run `319b1952`, read-only: the owner plays RDR2 Story from
-  the owner's desktop Steam on the owner's desktop; the observer reads `/proc` and sockets only,
-  writes `$PLAYPORT_BUILD/agent-notes/pla254-rockstar/ingame/`, and commits nothing; the
-  supervisor folds its results into the evidence). Phone: IPA `560d43cb` installed (newest
-  verified `62791f62`), 9.3 GB free, RDR2 installed without depot 1899671.
+- **In-game phase done (observer run `319b1952`, 2026-10-15):**
+  [evidence](../evidence/2026-10-15-rdr2-launcher-in-game.md).
+  - **Cost during play:** the full launcher costs 11 processes, 319 threads and 3.5 GiB PSS during
+    Story. It does not hibernate, and the game's overlay is a renderer of its CEF.
+  - **The game runs on without it:** once `Launcher.exe` is ended, RDR2 keeps running (at least
+    6.5 min). It hosts its own Social Club CEF (5 processes, 150 threads, 2.1 GiB, of which
+    1.2 GiB is libcef private copies) and signs in with the ticket it already holds.
+  - **Suspension is dropped:** traffic runs between the game and the launcher during play
+    (ticket, presence).
+  - **Not determined:** saving and the ticket refresh without the launcher.
+  - **For the owner to decide:** whether Playport ends the launcher after the game's Social Club
+    has signed in.
+- **Running now:** chunk 2 below (writer run `7179aee9`: builds, phone, commits). Phone: dev IPA
+  `fb14fc65` installed, Hollow Knight and RDR2 installed, 3.3 GB free.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
