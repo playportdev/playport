@@ -1,0 +1,157 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 01:31:44 +0200
+Subject: [PATCH] process: Chromium's switches for a CEF browser
+
+Playport's Chromium policy (decision 0109, the launchers plan's R1): a
+process whose image has libcef.dll beside it and no --type= switch is a
+Chromium Embedded Framework browser, and its command line gets
+--in-process-gpu --disable-gpu --disable-gpu-compositing
+--js-flags=--jitless, which Chromium passes on to its children. Under
+desktop Wine this set keeps the Rockstar Games Launcher's Social Club UI
+working with one process fewer and interpreted JavaScript (no V8 code for
+FEX to translate again). --single-process is not added: Social Club's UI
+fails under it, and its IPC wants one renderer per page.
+
+A switch the app already passes is kept as it wrote it. The children are
+left as started. Each is logged as a [chromium] line. Rockstar's files are
+not changed: the switches go in at process creation, for the launcher's
+SocialClubHelper.exe and the one a game's socialclub.dll starts alike.
+
+Class: feature
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no
+---
+ build/ntdll-unix/process_ios.c | 112 +++++++++++++++++++++++++++++++++
+ 1 file changed, 112 insertions(+)
+
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index fa83eb8..caccdfa 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -864,6 +864,116 @@ static NTSTATUS alloc_handle_list( const PS_ATTRIBUTE *handles_attr, obj_handle_
+ /**********************************************************************
+  *           NtCreateUserProcess  (NTDLL.@)
+  */
++#ifdef WINE_IOS
++/* Playport's Chromium policy (docs/plans/2026-10-12-launchers.md R1, decision 0109): every
++ * Chromium Embedded Framework browser, a process whose image has libcef.dll beside it and no
++ * --type= switch, gets the switches below added to its command line; Chromium hands them on to
++ * the children it starts. Not --single-process: Rockstar's Social Club UI fails under it, and
++ * its IPC wants one renderer per page (Stage R). The children (--type=) are left alone and
++ * logged. A switch the command line already names is kept as the app wrote it. The new
++ * command line's buffer is never freed (one small block per browser start): the caller owns
++ * params, and the old buffer stays the caller's. */
++static const char * const chromium_switches[] = {
++    "--in-process-gpu", "--disable-gpu", "--disable-gpu-compositing", "--js-flags=--jitless",
++};
++
++/* Whether cl holds the switch at a word start, by its name up to '=' (case-sensitive, as
++ * Chromium's switches are). */
++static BOOL chromium_has_switch( const WCHAR *cl, int len, const char *sw )
++{
++    int n = 0, k, j;
++    while (sw[n] && sw[n] != '=') n++;
++    for (k = 0; k + n <= len; k++)
++    {
++        if (k && cl[k - 1] != ' ' && cl[k - 1] != '\t' && cl[k - 1] != '"') continue;
++        for (j = 0; j < n; j++) if (cl[k + j] != (WCHAR)sw[j]) break;
++        if (j == n && (k + n == len || cl[k + n] == '=' || cl[k + n] == ' ' || cl[k + n] == '"' || cl[k + n] == '\t'))
++            return TRUE;
++    }
++    return FALSE;
++}
++
++static void chromium_policy( const UNICODE_STRING *nt_image, RTL_USER_PROCESS_PARAMETERS *params )
++{
++    static const WCHAR prefix[] = {'\\','?','?','\\'};
++    static const char cef[] = "libcef.dll";
++    const UNICODE_STRING *img = &params->ImagePathName;
++    const WCHAR *src;
++    WCHAR probe[1024];
++    int src_len, dir_len, n = 0, k, cl_len, add_len = 0;
++    UNICODE_STRING probe_us;
++    OBJECT_ATTRIBUTES attr;
++    FILE_BASIC_INFORMATION basic;
++    const WCHAR *cl = params->CommandLine.Buffer;
++    char added[256] = "", kept[256] = "";
++    WCHAR *buf;
++    unsigned s;
++
++    /* libcef.dll beside the image, by the NT path when the caller gave one. */
++    if (nt_image && nt_image->Length) { src = nt_image->Buffer; src_len = nt_image->Length / sizeof(WCHAR); }
++    else { src = img->Buffer; src_len = img->Length / sizeof(WCHAR); }
++    if (!src || !src_len || !cl) return;
++    for (dir_len = src_len; dir_len > 0 && src[dir_len - 1] != '\\' && src[dir_len - 1] != '/'; dir_len--) ;
++    if (!dir_len || dir_len + 4 + sizeof(cef) > ARRAY_SIZE(probe)) return;
++    if (!(src_len >= 4 && src[0] == '\\' && src[1] == '?' && src[2] == '?' && src[3] == '\\'))
++    {
++        memcpy( probe, prefix, sizeof(prefix) );
++        n = 4;
++    }
++    memcpy( probe + n, src, dir_len * sizeof(WCHAR) );
++    n += dir_len;
++    for (k = 0; cef[k]; k++) probe[n++] = cef[k];
++    probe_us.Buffer = probe;
++    probe_us.Length = probe_us.MaximumLength = n * sizeof(WCHAR);
++    InitializeObjectAttributes( &attr, &probe_us, OBJ_CASE_INSENSITIVE, 0, 0 );
++    if (NtQueryAttributesFile( &attr, &basic )) return;
++
++    cl_len = params->CommandLine.Length / sizeof(WCHAR);
++    if (chromium_has_switch( cl, cl_len, "--type" ))
++    {
++        static const WCHAR type_sw[] = {'-','-','t','y','p','e','='};
++        int t;
++        char type[48] = "";
++        for (k = 0; k + 7 <= cl_len; k++)
++            if (!memcmp( cl + k, type_sw, sizeof(type_sw) )) break;
++        for (t = 0, k += 7; k < cl_len && t + 1 < (int)sizeof(type) && cl[k] != ' ' && cl[k] != '"'; k++) type[t++] = (char)cl[k];
++        type[t] = 0;
++        dprintf( 2, "[chromium] child --type=%s of %s: left as started\n", type, debugstr_us( img ) );
++        return;
++    }
++    for (s = 0; s < ARRAY_SIZE(chromium_switches); s++)
++    {
++        char *list = chromium_has_switch( cl, cl_len, chromium_switches[s] ) ? kept : added;
++        if (strlen( list ) + strlen( chromium_switches[s] ) + 2 > sizeof(added)) continue;
++        if (*list) strcat( list, " " );
++        strcat( list, chromium_switches[s] );
++        if (list == added) add_len += 1 + (int)strlen( chromium_switches[s] );
++    }
++    if (add_len)
++    {
++        if (!(buf = malloc( (cl_len + add_len + 1) * sizeof(WCHAR) )))
++        {
++            dprintf( 2, "[chromium] browser %s: no memory for its switches; started as it asked\n", debugstr_us( img ) );
++            return;
++        }
++        memcpy( buf, cl, cl_len * sizeof(WCHAR) );
++        n = cl_len;
++        for (s = 0; s < ARRAY_SIZE(chromium_switches); s++)
++        {
++            if (chromium_has_switch( cl, cl_len, chromium_switches[s] )) continue;
++            buf[n++] = ' ';
++            for (k = 0; chromium_switches[s][k]; k++) buf[n++] = chromium_switches[s][k];
++        }
++        buf[n] = 0;
++        params->CommandLine.Buffer = buf;
++        params->CommandLine.Length = n * sizeof(WCHAR);
++        params->CommandLine.MaximumLength = (n + 1) * sizeof(WCHAR);
++    }
++    dprintf( 2, "[chromium] browser %s (libcef.dll beside it): added %s; kept the app's own %s\n",
++             debugstr_us( img ), *added ? added : "none", *kept ? kept : "none" );
++}
++#endif
++
+ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_handle_ptr,
+                                      ACCESS_MASK process_access, ACCESS_MASK thread_access,
+                                      OBJECT_ATTRIBUTES *process_attr, OBJECT_ATTRIBUTES *thread_attr,
+@@ -1039,6 +1149,8 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
+         }
+     }
+ 
++    chromium_policy( &path, params );
++
+     /* ml526: stamp every accepted spawn on the startup timeline. This is the
+      * boundary the coarse phase accounting could not see — steam.exe -> the
+      * webhelper spawn was a ~16s block with no internal detail. */

@@ -128,7 +128,9 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
      Rockstar's set (`--in-process-gpu`, `--disable-gpu`, `--disable-gpu-compositing`,
      `--js-flags=--jitless`), applied to `SocialClubHelper.exe` (detected by `libcef.dll` next to
      it). It leaves out `--single-process`, lets the three renderers start, and logs
-     `[chromium]`. The decision record states that the fallback is the default for this launcher.
+     `[chromium]`. The decision record states that the fallback is the default for this launcher. **In place 2026-10-16** (madeira-unix 0152, [decision 0109](../decisions/0109-chromium-switches-for-a-cef-browser.md)),
+     not yet exercised: the standalone launcher first self-updates through a very slow Rockstar
+     Service, and no CEF process started in 5 minutes (run `20261016T013646`).
   5. [PLA-271](https://linear.app/playportdev/issue/PLA-271), minimal: Settings › Launchers with
      an Open row that starts `Launcher.exe` standalone, and the driver action for it. Install
      comes from step 1. **Done 2026-10-16** (chunk 4, run `20261016T012523`): Settings ›

@@ -233,3 +233,24 @@ Run `20261016T012523` (IPA `9dfc1c0e52d91a733887655188f52423236ddc687f568525d3ed
   Steam-mode play left at 197 MiB of room to 85, before any CEF process.
 
 Hollow Knight on the same IPA (run `20261016T012433`): `jit pool: 512 MiB`, first frame +10.58 s.
+
+## Chunk 4, step 4: the Chromium policy (PLA-277, decision 0109): in place, not exercised yet
+
+madeira-unix 0152 gives every CEF browser (an image with `libcef.dll` beside it, no `--type=`)
+`--in-process-gpu --disable-gpu --disable-gpu-compositing --js-flags=--jitless` at process creation
+and logs `[chromium]` lines. IPA `1102672b13cb28383f0afe70572427d0d563d0cd9647ca5b6a9b3ef4cce293a3`:
+Hollow Knight passes (run `20261016T013556`, first frame +10.64 s).
+
+The Open run on it (`20261016T013646`, first window +27.6 s, then 300 s) started no
+`SocialClubHelper.exe`, so no `[chromium]` line yet. The launcher's own log says why: version
+1.0.109.3031 runs its first self-update (239.65 MB to build 1239), through Rockstar Service.
+- **The service is far too slow.** Its worker thread took 860,645 guest `c0000005` exceptions and
+  1,756,637 `NtProtectVirtualMemory` calls in about 330 s. The calls set PAGE_EXECUTE_READ on 16 KiB
+  pages of its own code at `0x145b…`, a write-then-reprotect loop.
+- **What each call costs:** madeira's `NtProtect-sync` scan of 162 JIT mappings, and 3 to 5 ERR
+  lines (5.5 million log lines in the run).
+- **What the launcher logs:** launcher↔service transactions time out after 60 to 158 s
+  (`svc_transactionqueue`). Five update chunks fail with "Connection timed out waiting for
+  response". The service then maps 400 MB of shared memory, and the splash stays.
+- **Pool at 300 s:** head 230, tail 609 (593 live) MiB, room 58 MiB, 6 children. Band: 4,354 MiB
+  used, 57 threads. No CEF process had started by then.
