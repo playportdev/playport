@@ -43,6 +43,13 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   Story play, their cost, ending each to see dependency); the one online Rockstar sign-in is the
   owner's, in person. (2) Suspending the launcher during play is measured only if that phase shows
   no traffic between the game and the launcher during play; otherwise it is dropped.
+- **Found 2026-10-15:** the phone's "File not found." is Playport's Steam installer skipping
+  RDR2's depot 1899671 (shared install from app 1899670, 240 MB), which desktop Steam installs into
+  the game's folder: `Redistributables/Rockstar-Games-Launcher.exe`, `Social-Club-Setup.exe` and
+  `installscript_sdk.vdf` (silent installs of both). So a Steam copy gets the genuine installers
+  from Steam itself, with no publisher-URL download.
+  [PLA-365](https://linear.app/playportdev/issue/PLA-365) (blocks PLA-364) goes in the queue
+  before Stage 1's Install step.
 - **Queue:** Stage R (Rockstar) → Stage 0 with the Rockstar installer and sign-in page as
   subject (PLA-292/314, 277, 274, 275 as needed) → Stage 1 (PLA-271, 267, 293, 273, 278) →
   Stage 2 (PLA-294, 295; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
