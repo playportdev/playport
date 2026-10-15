@@ -23,8 +23,10 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   bootstrapper `PlayRDR2.exe` with "File not found." because no Rockstar Games Launcher is
   installed ([PLA-364](https://linear.app/playportdev/issue/PLA-364), run
   `$PLAYPORT_BUILD/ui-runs/20261015T210227`).
-- **Running:** chunk 1 (subagent run `4209acb9`), Stage R for Rockstar only
-  ([PLA-291](https://linear.app/playportdev/issue/PLA-291)), host only, no phone. In parallel, read-only
+- **Done:** chunk 1 (subagent run `4209acb9`), Stage R for Rockstar only, launcher alone
+  ([PLA-291](https://linear.app/playportdev/issue/PLA-291)), host only, no phone;
+  [evidence](../evidence/2026-10-15-rockstar-launcher-recon.md). The in-game phase is not run: it
+  needs the owner's sign-in, and a Steam client for the launcher (below). In parallel, read-only
   research run `82cea138`: routes that avoid running the whole launcher during play (a host-side
   bridge to Rockstar's services, a minimal genuine launcher, the launcher's heap on the donor
   pool), report `reports/research-alternatives.md`. **Done 2026-10-15:** no legitimate route avoids
@@ -46,13 +48,74 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
 - **Found 2026-10-15:** the phone's "File not found." is Playport's Steam installer skipping
   RDR2's depot 1899671 (shared install from app 1899670, 240 MB), which desktop Steam installs into
   the game's folder: `Redistributables/Rockstar-Games-Launcher.exe`, `Social-Club-Setup.exe` and
-  `installscript_sdk.vdf` (silent installs of both). So a Steam copy gets the genuine installers
+  `installscript_sdk.vdf` (`Social-Club-Setup.exe /silent`, which is silent, and
+  `Rockstar-Games-Launcher.exe /s /t`, which is not: it shows language, Terms of Service and
+  location pages to click through; Stage R). So a Steam copy gets the genuine installers
   from Steam itself, with no publisher-URL download.
   [PLA-365](https://linear.app/playportdev/issue/PLA-365) (blocks PLA-364) goes in the queue
   before Stage 1's Install step.
-- **Queue:** Stage R (Rockstar) → Stage 0 with the Rockstar installer and sign-in page as
-  subject (PLA-292/314, 277, 274, 275 as needed) → Stage 1 (PLA-271, 267, 293, 273, 278) →
-  Stage 2 (PLA-294, 295; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
+- **Stage R's results (chunk 1), and what they change:**
+  - **No cheaper route.** The service is required before the sign-in page, so R4/D5 applies to
+    Rockstar from Stage 0.
+  - **`--single-process` breaks the UI.** So does a single renderer, because Rockstar's IPC wants
+    one renderer per page.
+  - **The working minimum** is `--in-process-gpu --disable-gpu --disable-gpu-compositing
+    --js-flags=--jitless`: 8 CEF processes (browser, network, storage, audio, video capture, three
+    renderers), about 4.0 GiB PSS and about 285 threads under desktop Wine. That is far above
+    R2's estimate. About 285 threads × about 50 MB is beyond the 16 GB FEX band (an inference,
+    to measure in Stage 0).
+  - **The UI is drawn through D3D11.** CEF renders off-screen and `Launcher.exe` presents with
+    D3D11, so R3's "GDI first" does not apply to Rockstar.
+  - **Steam mode needs a Steam client.** `PlayRDR2.exe` starts the launcher with
+    `-steamAppId`, and the launcher then calls `SteamAPI_Init` before its sign-in page. So Stage 0
+    and Stage 1 start `Launcher.exe` standalone, and Stage 2 needs the Steam client bridge
+    ([PLA-253](https://linear.app/playportdev/issue/PLA-253)) or the emulator in the launcher's
+    `ThirdParty\Steam` folder (Rockstar's entitlement check against it is untested).
+  - There is no "Hibernate while game is running" setting string in this build; there is an
+    internal UI hibernation in Social Club.
+  - The installer and `Social-Club-Setup.exe` are the same bytes from Steam and from Rockstar.
+- **Proposed chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
+  standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
+  each step passes Hollow Knight's smoke play.
+  1. [PLA-365](https://linear.app/playportdev/issue/PLA-365): install depot 1899671 and run
+     `installscript_sdk.vdf` as prerequisites with the launch screen. The installer's pages are
+     GDI windows, which 0075's layer shows and touch can press.
+  2. [PLA-275](https://linear.app/playportdev/issue/PLA-275): `services.exe` and `rpcss` for a
+     play flagged as needing them (D5). This is required for Rockstar, not optional. The flag
+     covers `RockstarService.exe` and COM over rpcss.
+  3. [PLA-292](https://linear.app/playportdev/issue/PLA-292) and
+     [PLA-314](https://linear.app/playportdev/issue/PLA-314): fault containment for child
+     pseudo-processes (renderers, crashpad).
+  4. [PLA-277](https://linear.app/playportdev/issue/PLA-277): the Chromium policy, with
+     Rockstar's set (`--in-process-gpu`, `--disable-gpu`, `--disable-gpu-compositing`,
+     `--js-flags=--jitless`), applied to `SocialClubHelper.exe` (detected by `libcef.dll` next to
+     it). It leaves out `--single-process`, lets the three renderers start, and logs
+     `[chromium]`. The decision record states that the fallback is the default for this launcher.
+  5. [PLA-271](https://linear.app/playportdev/issue/PLA-271), minimal: Settings › Launchers with
+     an Open row that starts `Launcher.exe` standalone, and the driver action for it. Install
+     comes from step 1.
+  6. The launcher's D3D11 present on the Vulkan backend (decision 0100), with sane DXGI adapter
+     data. On a display without a GPU, the launcher divided by zero while reading D3D11 device
+     information. In a launcher-only session, the launcher's present stands for the first frame;
+     [PLA-273](https://linear.app/playportdev/issue/PLA-273) waits for Stage 2.
+  7. [PLA-274](https://linear.app/playportdev/issue/PLA-274): pool, band, VA and footprint for
+     about 13 processes and about 300 threads, then Stage 0's acceptance. If the band or the
+     footprint is short, it stops there for a decision.
+
+  Not in chunk 2: [PLA-267](https://linear.app/playportdev/issue/PLA-267),
+  [PLA-293](https://linear.app/playportdev/issue/PLA-293),
+  [PLA-278](https://linear.app/playportdev/issue/PLA-278) (Stage 1, sign-in),
+  [PLA-294](https://linear.app/playportdev/issue/PLA-294) and
+  [PLA-295](https://linear.app/playportdev/issue/PLA-295) (Stage 2; PLA-295 also depends on
+  PLA-253), PLA-273 (until a game runs beside the launcher), and PLA-213 (done).
+- **In-game phase (open, needs the owner):**
+  - the owner signs in once, in person, on the sway display;
+  - a decision on the Steam client the launcher's `steam_api64` may use under desktop Proton (the
+    owner's running Steam, or none);
+  - then RDR2 from the scratch prefix against a read-only view of the owner's install, for the
+    research questions 1, 2, 3, 5 and 7.
+- **Queue:** chunk 2 (above) → Stage 1 (PLA-271, 267, 293, 273, 278) → Stage 2 (PLA-294, 295,
+  PLA-253; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
 - **Phone:** RDR2 and Steamworks Shared installed, 9.6 GB free, unattended mode on.
 
 ## Goal
@@ -515,24 +578,46 @@ workstation under desktop Proton/Wine (HOST-DEBUGGING.md) before the phone.
 
 ### Rockstar Games Launcher and Social Club
 
+Measured on the workstation, 2026-10-15 (Stage R; launcher 1.0.109.3031, Social Club 2.4.0.240;
+[evidence](../evidence/2026-10-15-rockstar-launcher-recon.md)):
+
 - **Parts:**
-  - `Launcher.exe`, a CEF UI;
-  - `LauncherPatcher.exe`, the updater;
-  - `RockstarService.exe`, the "Rockstar Games Library Service" Windows service (installs,
-    updates, file checks) *(verify)*;
-  - Social Club (`Program Files\Rockstar Games\Social Club`): `socialclub.dll`, loaded by the
-    game, with its own CEF `subprocess.exe` for the in-game overlay and sign-in *(verify)*.
-- **Game hand-off:** the game finds no launcher and starts it, and the launcher starts the game
-  again (Madeira's RDR2 handoff: `RDR2.exe` → `Launcher.exe` → `RDR2.exe`). Social Club runs
-  **inside the game process**, so CEF and the game share one pseudo-process at play time. That is
-  R1's policy applied inside the game itself, and it is the biggest memory risk.
-- **Offline:** the launcher has an offline mode after an online sign-in, for a limited time
-  *(verify)*. Single-player RDR2 can then start without a network, but not without the launcher.
-- **Steam and Epic copies:** both start the Rockstar launcher. The Epic copy links an Epic account
-  to a Rockstar account on first sign-in *(verify)*.
+  - `Launcher.exe`: the UI host. It loads `socialclub.dll` and draws Social Club's off-screen CEF
+    pages into its own window with D3D11. It has no CEF of its own.
+  - `LauncherPatcher.exe`: a version gate on a standalone start; it stays alive.
+  - `RockstarService.exe`: the "Rockstar Game Library Service". Demand start, LocalSystem,
+    started through the SCM by a `RockstarService.exe start` helper. It writes the self-update
+    files and fixes folder permissions. **Without it the launcher stops before its sign-in page**
+    ("Failed to connect to the Rockstar Games Library Service").
+  - `RockstarErrorHandler.exe`: crashpad.
+  - Social Club (`Program Files\Rockstar Games\Social Club`). The launcher installs it on first
+    run (`Social-Club-Setup.exe /silent /forceinstall`). `socialclub.dll` starts
+    `SocialClubHelper.exe`, which is the CEF host (CEF 143.0.14, Chromium 143.0.7499.193,
+    `libcef.dll` 249 MB): a browser, GPU, network, storage, audio and video-capture processes, and
+    three renderers (one per page). There is no separate `subprocess.exe`.
+  - At the sign-in page: 13 Rockstar processes, about 330 threads and 4.4 GiB PSS under desktop
+    Wine.
+- **Game hand-off:** a Steam copy starts `PlayRDR2.exe`. It reads
+  `HKLM\SOFTWARE\WOW6432Node\Rockstar Games\Launcher\InstallFolder`, runs
+  `Redistributables\Rockstar-Games-Launcher.exe /s /t` if that value is missing, then opens
+  `Launcher.exe -skipPatcherCheck -steamAppId=1174180 -steamLocation "<game folder>" @args.txt`.
+  In that Steam mode the launcher calls `SteamAPI_Init` through its own `steam_api64.dll` before
+  its sign-in page, and stops if no Steam client answers. From there, Madeira's handoff gives
+  `Launcher.exe` → `RDR2.exe`. The game's `socialclub.dll` very likely starts its own
+  `SocialClubHelper.exe` CEF processes, as the launcher's does (not yet measured). The IPC is
+  named pipes: `chrome.rgsc_gameinst_0`, `rgsc_launcher_0`, `rgsc_ipc_*`, `MTL*_Pipe`.
+- **Offline:** without a prior online sign-in there is no sign-in page and no offline mode. The
+  launcher has `-scOfflineOnly` and an offline auto sign-in (`autosignin.dat`). How long offline
+  lasts, and what the game is given, needs the owner's sign-in. Single-player RDR2 still cannot
+  start without the launcher.
+- **Steam and Epic copies:** both start the launcher. Steam ships the genuine installers in the
+  game folder (depot 1899671). Epic copies use `-epicAppId` and `Rockstar-Games-Epic.exe`;
+  account linking is still to be seen in Stage 3.
 - **Proton today:** Steam's own RDR2 and GTA V run under Proton. Valve's tree carries an RDR2
   `vulkan-1` load-order line, a GTA V first-page write-copy hack, and a winex11 popup fix for this
-  launcher. None of them reaches Playport as-is (see [Where things stand](#where-things-stand-the-tree-at-2026-10-12)).
+  launcher (`SocialClubHelper.exe`). Proton 10 also turns off OPWR for Rockstar app ids (login
+  text-input delay) and has an RDR2 SIGSYS handler. It has no Chromium switches for this launcher.
+  None of them reaches Playport as-is (see [Where things stand](#where-things-stand-the-tree-at-2026-10-12)).
 - **Known Playport walls** ([sibling plan](2026-10-12-rdr2.md)): RDR2's anti-tamper puts x64 inline hooks on ARM64EC
   exports (Madeira's `research/HANDOFF-rdr2-arm64ec-hooks.md`). [The RDR2 plan](2026-10-12-rdr2.md) owns that work; this
   plan owns the launcher and Social Club.
@@ -807,8 +892,11 @@ Umbrella: [PLA-254](https://linear.app/playportdev/issue/PLA-254). Each line is 
 
 - Whether each launcher accepts `--single-process`, `--in-process-gpu` and
   `NetworkServiceInProcess`, or sets its CEF options from code. Its Chromium version, too.
-  (Stage R.)
-- Each launcher's services, and whether its UI comes up without them.
+  (Stage R. Rockstar, measured 2026-10-15: CEF 143. `--single-process` and a single renderer
+  break its UI. `--in-process-gpu`, `--disable-gpu` and `--jitless` work. `NetworkServiceInProcess`
+  has no effect.)
+- Each launcher's services, and whether its UI comes up without them. (Rockstar: its service is
+  required.)
 - How much of Madeira's CEF failure set (render corruption, `KERN_MEMORY_ERROR`, the websocket
   failure) remains on today's runtime. Playport has never run a Chromium app on the phone.
 - Whether any of the four sign-ins leaves the guest for a browser and comes back through a loopback
