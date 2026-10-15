@@ -245,7 +245,10 @@ by `pp ui --action`. A `pad:` right after `play:` (and its `wait:`/`tap:` action
 refused: it would run only after the game ends. Press buttons in a running game with
 `pp ui --pad … --leave-running`, then `pp pad send`, in one `pp phone lock`.
 `--settings` `"arguments"` is a string, or a list of strings that `pp ui` joins (an
-argument with a space is quoted; one holding `"` is refused). `pp phone rm Documents/NAME.zip`
+argument with a space is quoted; one holding `"` is refused). `pp phone put LOCAL
+Documents/Import/NAME/FILE` copies one file into the app's import inbox (what a person does with
+Files; nothing else, and the import still goes through the UI: `import:Import/NAME`), so a probe from
+`tools/compat/probes/build.sh` is put file by file. `pp phone rm Documents/NAME.zip`
 deletes a zip put in Documents for `import:` and nothing else. For a known no-frame problem, stop at an existing launch
 mark, e.g. `--until 'mark:game started+30' --wait 120 --shot`, rather than waiting
 for the missing first frame. `--wait` counts from JIT ready (the app's "runtime started" mark); the launch
