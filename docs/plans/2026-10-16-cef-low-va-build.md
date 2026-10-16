@@ -105,6 +105,10 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 - 2026-10-16: the owner accepted the Microsoft licence in person and ran the xwin splat command. It wrote the CRT and SDK (644 MB) to `$PLAYPORT_BUILD/cef-src/tools/xwin-sdk`.
 
 - 2026-10-16: stage A passed: Windows x64 official-mode project generation (35,979 targets) and a one-object CRT/SDK compile-and-link smoke test succeeded on Linux. Scratch toolchain adapters and exact arguments are under `$PLAYPORT_BUILD/agent-notes/pla370-cef/`; PGO is off, the context snapshot is on, and stage B has not started.
+- 2026-10-16: stage B built the stock Windows x64 CEF on Linux with ninja exit 0. It needed five more scratch adapters: rc include flags, empty UCRT warning macros, `/ignore:4099`, no Dawn dxcompiler build dependency, and gperf plus a clean python venv.
+  - libcef.dll and chrome_elf.dll are PE32+ x64. Their export names and imported DLL names match the stock distribution's.
+  - The data files are built. icudtl.dat is identical; resources.pak lacks only the WebUI code cache, which upstream disables on cross-builds.
+  - The swap-test tree is `$PLAYPORT_BUILD/cef-src/out-stage-b`. Nothing has run yet.
 
 ## Risks
 
