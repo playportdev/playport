@@ -191,7 +191,8 @@ are usable, beside Wine.
   ([PLA-371](https://linear.app/playportdev/issue/PLA-371)), and whether V8's code range finds room.
 - Behaviour beyond the sign-in page. With 1 GiB pools a renderer's PartitionAlloc heap is limited to
   1 GiB per pool.
-- IPA delivery and loader substitution: stage D below formalizes the inputs only.
+- IPA delivery and loader substitution: stage D below formalizes the inputs only. The phone results are in
+  [CEF on the phone](2026-10-16-cef-low-va-phone.md).
 
 ## Stage D slice 1: formal build inputs (host only)
 
