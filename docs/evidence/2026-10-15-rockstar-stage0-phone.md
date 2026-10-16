@@ -465,3 +465,144 @@ Rockstar Service under the SCM, dxdiag, then SocialClubHelper 18 times.
 
 The key was cleared at the next launch outside the session: run `20261016T040724` shows the
 Launchers page's Runtime keys row as None.
+
+## Chunk 9: why CEF's browser dies, and why crashed helpers cost memory (PLA-369, PLA-368; stopped for the owner)
+
+Host analysis only: no build, no phone run (the supervisor chose to stop here, as both fixes need an
+owner decision). The inputs are run `20261016T040029`'s log (chunk 8, IPA `243d9b4b…`) and the
+Social Club install. `chrome_elf.dll` is the same file on the phone and in chunk 1's scratch prefix:
+sha256 `b46223f386643ba5cfe3152c5fa2bdd535e3b2d80e25e82073131889d8834a4e`, 1,822,840 bytes, image
+base `0x180000000` (Chromium 143, decision 0109).
+
+### PLA-369: PartitionAlloc cannot reserve its 32 GiB pool
+
+**The trap is a deliberate crash, not a CPU feature.** `llvm-objdump -d chrome_elf.dll`:
+
+```
+; PartitionAddressSpace::Init (RVA 0x4d680)
+18004d69b: movabsq $0x800000000, %rcx        ; size 32 GiB
+18004d6a5: movq    %rcx, %rdx                ; alignment 32 GiB
+18004d6a8: xorl    %r8d, %r8d
+18004d6ab: movl    $0xfd, %r9d               ; inaccessible, PA's page tag
+18004d6b1: callq   0x180059300               ; AllocPages (reserve)
+18004d6bd: testq   %rax, %rax
+18004d6c0: je      0x18004d7a8
+18004d6c6: movabsq $0x400000000, %rsi        ; the BRP pool starts 16 GiB in
+...
+18004d7a8: callq   0x18013a4b0               ; HandlePoolAllocFailure
+; HandlePoolAllocFailure (RVA 0x13a4b0)
+18013a4c5: callq   0x180141710               ; the saved allocation error
+18013a4ca: movl    %eax, %esi
+18013a4d7: ...                               ; PA_DEBUG_DATA_ON_STACK("error", ...)
+18013a4fc: cmpl    $0x5af, %esi              ; ERROR_COMMITMENT_LIMIT
+18013a504: cmpl    $0x27b, %esi              ; ERROR_COMMITMENT_MINIMUM
+18013a50c: callq   0x18013a540               ;   -> ...OutOfCommitCharge
+18013a511: cmpl    $0x8, %esi                ; ERROR_NOT_ENOUGH_MEMORY
+18013a516: callq   0x18013a520               ;   -> ...OutOfVASpace
+18013a51b: int3 ; ud2                        ; PA_CHECK(false)
+; HandlePoolAllocFailureOutOfVASpace (RVA 0x13a520)
+18013a529: movl    $0x37, (%rcx)             ; no code folding
+18013a52f: callq   0x18001ad70
+18013a534: int3
+18013a535: int3
+18013a536: ud2
+```
+
+The phone log at the crash agrees: `RSI=0x8` (`ERROR_NOT_ENOUGH_MEMORY`), `R11=0xc0000017`
+(`STATUS_NO_MEMORY`), guest return addresses chrome_elf + `0x13a51b` and + `0x4d7ad`, chrome_elf
+at `0x73d3ad0000`. FEX raised `c000001d` for the trap and rethrew it as `80000003` at + `0x13A534`.
+This runs while chrome_elf initialises, so the loader reported "chrome_elf.dll failed to
+initialize" and the process ended with `0x80000003`. This matches Chromium's
+`HandlePoolAllocFailure`: the error code says the address space ran out.
+
+**Why the reservation fails.** All Windows allocations in the app share one 64 GB window,
+`[0x7000000000, 0x8000000000)`; the task's `max_address` is `0x8000000000` (Witcher 3 setup
+record, §2–3: no entitlement Playport can get raises it). PartitionAlloc wants 32 GiB at a
+32 GiB-aligned address, so only `0x7000000000` and `0x7800000000` could take it. FEX's band holds
+`[0x7c00000000, 0x8000000000)`, and the 896 MiB JIT pool sits at `0x700848c000` (the run's `vm:`
+lines), so neither slot is free. Chromium makes this reservation in every process, so even one
+free slot would serve only one of a browser, its renderers and its utility processes. Social
+Club's UI fails under `--single-process` and with one renderer (decision 0109). The size is a
+compile-time constant; no Chromium switch changes it. Under desktop Proton (chunk 1) the same
+helper has Linux's 128 TiB, so the problem does not appear there.
+
+**Options for the owner** (none is a Playport setting, so none was tried):
+
+1. **A larger or separate address-space window per CEF process.** The ceiling cannot move: iOS
+   gives this app 512 GB of addresses, of which 64 GB is usable. Every pseudo-process shares that
+   window, and FEX runs x86-64 code at host addresses with no base to offset. The most the
+   runtime could do is keep `[0x7000000000, 0x7800000000)` free for one 32 GiB reservation. That
+   means moving the JIT pool (reserved inside the executable at start) and Wine's other
+   allocations into the 16 GiB between `0x7800000000` and the band, or shrinking the band, for
+   every title. Even then only one Chromium process at a time would fit, which is not enough for
+   Social Club. Each renderer also needs V8's 4 GiB pointer cage. Cost: high. Risk: every title's
+   memory layout. Outcome: CEF still cannot run.
+2. **Patching PartitionAlloc's pool size in memory.** The size is not one value. The 8-byte
+   `0x800000000` appears 27 times in chrome_elf.dll and 2,386 times in libcef.dll; its mask
+   (`-0x800000000`) appears 1 and 31 times. These do not count shifts and smaller immediates.
+   The pool mask is inlined into every PartitionAlloc pointer check. Any patch would be specific to
+   one CEF build, which Rockstar updates on its own schedule. It would also change Rockstar's code
+   at run time, which decision 0109 rules out for files, and raises the EULA and anti-tamper
+   question. Cost: very high and fragile. It needs a policy decision before anyone tries it.
+3. **Host CEF another way.** Possibilities:
+   - **Avoid the UI.** The research routes (plan, research run `82cea138`) that avoid running
+     the whole launcher during play. The sign-in still needs Social Club's web UI once.
+   - **Show the sign-in elsewhere.** Draw the sign-in page through the app's own WKWebView,
+     outside Wine. This is a new component and needs its own decision.
+   - **Wait for Rockstar.** A CEF build whose Windows pools fit would need Rockstar to change it.
+     It is not ours to change.
+
+   Cost and outcome are unknown until one is chosen. Whatever the route, the game's own
+   `socialclub.dll` also starts SocialClubHelper.
+
+### PLA-368: helpers do end, but their memory is never given back
+
+Chunk 8's reading that "the crashed helpers stayed" is wrong. In run `20261016T040029` each crashed
+helper ended: `NtTerminateProcess(exit_code=0x80000003)`, then "abort_process: tearing down this
+pseudo-process only (ml937)", then "child exited with code -2147483645". That happened 17 times, and
+4 other children exited with 0. The pool's `children=26` counts the image copies children made in
+the pool, not live processes.
+
+What leaks is each dead child's memory. `process_exit_wrapper` (Madeira's
+`build/ntdll-unix/server_ios.c`) releases only the following:
+- the child's JIT-pool copies (`ios_jit_reclaim_process`);
+- a fixed-base main image;
+- its WoW64 window;
+- its fd cache.
+
+Wine's view tree is shared by all pseudo-processes, and `struct file_view` records no owner. So
+nothing deletes an x86-64 child's views: its DLL images, heaps and reservations. Each helper had
+mapped libcef.dll as its own 251 MB image view (`0xefbe000`; `[jit-pool] x64 image …: no pool
+copy`), each at a new address (`0x72e0…`, `0x72ce…`, `0x72bb…`). That matches the footprint's
+rise of about 250 MB per helper, from 3.2 GB to 7,966 MB. Every title whose children exit leaks
+this way. It is not specific to crashes.
+
+**Proposed fix, issue-ready ("Release an exited x86-64 child's views"):**
+- **Owner.** Add `void *owner_peb` to `struct file_view` in `virtual_ios.c`. Set it in
+  `create_view` from the calling pseudo-process (`ios_jit_current_peb()`). Session views
+  (NULL owner) are never released.
+  - Cross-process allocation and mapping (`NtAllocateVirtualMemory` or `NtMapViewOfSection` on
+    another process's handle, such as a parent writing a child's parameters) must take the
+    target's PEB, not the caller's. Check every such entry point first.
+- **Release.** When the dead process's last thread is reclaimed, delete every view whose owner is
+  its PEB, except `VPROT_SYSTEM` views, the FEX band and the JIT pool. Use the same rule as
+  0139's WoW64 window: the window is retired at exit and torn down by the last thread's
+  reclamation. Do not delete them in `process_exit_wrapper` itself: its thread is still running on
+  its own stack and TEB, and laggard threads of the process may still be running in its memory.
+  - The views must go through `delete_view`, so the page protection, the EC code bitmap and the
+    tree stay consistent.
+  - Section handles must be forgotten, not closed. 0139 explains why: the server has already
+    closed them, and an `NtClose` on another process's thread closes that process's handles.
+- **Tests.**
+  - A host C test (`app/tests`) of the owner bookkeeping, if `virtual_ios.c`'s view tree can be
+    built outside the app. Otherwise the childabort probe, run repeatedly on the phone, with the
+    footprint staying flat.
+  - A Hollow Knight first-frame gate.
+  - A WiX/Burn chain and a Steam game with child processes, because these paths delete memory
+    those children shared.
+- **Risk.** The change touches every title that starts children. A wrong owner frees live memory
+  and leads to host faults that end the app. That is why the work is an issue of its own, not
+  part of this chunk.
+
+This does not make CEF work: PLA-369 still stops each helper in DLL init. It removes the memory
+death that ends the app, and a launcher's exited helpers and installers stop costing memory.

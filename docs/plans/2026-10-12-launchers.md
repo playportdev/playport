@@ -123,7 +123,14 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
-- **Running now: chunk 9** (run `4e17ac0e`): the CEF browser crash ([PLA-369](https://linear.app/playportdev/issue/PLA-369), host first), crashed children not reaped ([PLA-368](https://linear.app/playportdev/issue/PLA-368)), then Open again. **Owner to decide:** PLA-367's permanent route (per-executable `SMCChecks=none` with a decision record, or FullSMC after PLA-206).
+- **Stopped: chunk 9 (run `4e17ac0e`), waiting on the owner's architecture call ([PLA-369](https://linear.app/playportdev/issue/PLA-369), [PLA-368](https://linear.app/playportdev/issue/PLA-368)).** Host analysis only, no phone run ([evidence](../evidence/2026-10-15-rockstar-stage0-phone.md#chunk-9-why-cefs-browser-dies-and-why-crashed-helpers-cost-memory-pla-369-pla-368-stopped-for-the-owner)).
+  - **PLA-369.** CEF's browser dies in chrome_elf's DLL init. The trap at + `0x13A535` is PartitionAlloc's `HandlePoolAllocFailureOutOfVASpace`: its 32 GiB, 32 GiB-aligned pool reservation fails (`ERROR_NOT_ENOUGH_MEMORY`). All pseudo-processes share one 64 GB window, which holds FEX's band and the JIT pool, so no such slot exists. Every Chromium process needs one. No setting or switch changes this.
+  - **PLA-368.** The helpers did end, 17 times with `0x80000003`. Their memory stays: an exited x86-64 child's views (a 251 MB libcef image each) are never deleted, because views record no owner. The evidence has the fix as an issue-ready design: per-view owner, released at the last thread's reclamation.
+  - **Owner to decide:**
+    - PLA-369's route: (1) keep a 32 GiB slot free, which fits one Chromium process at most and does not make CEF work; (2) patch PartitionAlloc's pool size in memory, which touches thousands of sites and Rockstar's code at run time and needs a policy; (3) host CEF another way, or avoid the UI.
+    - Whether to schedule PLA-368's owner teardown.
+    - PLA-367's permanent route, still open.
+  - **Next step:** the owner's PLA-369 choice. Until then, an Open repeats chunk 8.
 - **Chunk 8 (run `ef661d2e`): services get the launch's FEX variables, and the launcher reaches CEF ([PLA-367](https://linear.app/playportdev/issue/PLA-367)).**
   wine-pe 0045 now copies `FEX_*` too (`7213e77`), so a service runs with the launch's FEX profile
   and runtime keys. Open with `env.FEX_SMCCHECKS=none` (run `20261016T040029`, IPA `243d9b4b…`):
