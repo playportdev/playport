@@ -2416,7 +2416,7 @@ resource	Runtime/winsxs/msvcr90/msvcr90.manifest	374	c137bf556c09d6071bdfe0bb998
 resource	Runtime/winsxs/msxml3/msxml3.manifest	322	69304ab6275f1614af7ccc021bea1af6773566e1a21c4b169c02f3c535c740cb	unix	wine/dlls/msxml3/msxml3.manifest	winsxs
 resource	Runtime/winsxs/msxml4/msxml4.manifest	306	04e566672246f68a36f7ea72c0d21c2fa5d44ab71e7a5fa07c6ad8490f76ae83	unix	wine/dlls/msxml4/msxml4.manifest	winsxs
 resource	Runtime/winsxs/msxml6/msxml6.manifest	322	80318507a7351e74d73e25cbc850f60190a5e52c1586aa3043dfc50dc77a7ae7	unix	wine/dlls/msxml6/msxml6.manifest	winsxs
-resource	Runtime/registry/system.reg	1315799	c78ef0ab7f147ad12f295d7393740a9f3acb3e4539b1c7636f5c0c828c08c0bf	registry	system.reg	P7-reg
+resource	Runtime/registry/system.reg	1315872	f12717d9360aedc363bd762585d613b2170273e112867d9938a6cf718e11c4df	registry	system.reg	P7-reg
 resource	Runtime/registry/user.reg	12233	5088f07a85858de831633f8873b83600e40a717851af5fbdc0e0fd041caf34a0	registry	user.reg	P7-reg
 resource	Runtime/certs/cacert.pem	188900	a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505	ca-bundle	cacert.pem	ca-bundle
 resource	Runtime/mono/wine-mono-11.3.0/bin/libmono-2.0-x86.dll	3725824	cda071f4f4948abc4ab85593ec06f3b633c7420dcf455d10157e06d460f2db9f	wine-mono	bin/libmono-2.0-x86.dll	wine-mono
