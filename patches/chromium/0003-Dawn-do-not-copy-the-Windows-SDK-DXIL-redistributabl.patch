@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 18:21:39 +0200
+Subject: [PATCH] Dawn: do not copy the Windows SDK DXIL redistributable on
+ Linux
+
+Formalize stage A-C scratch diff 004, retaining the built bytes.
+Apply after the pinned CEF stock patches.
+
+Class: linux-build
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+Upstream-repo: dawn
+---
+ third_party/dawn/third_party/gn/dxc/BUILD.gn | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/dawn/third_party/gn/dxc/BUILD.gn b/third_party/dawn/third_party/gn/dxc/BUILD.gn
+index f503eeb..cefab37 100644
+--- a/third_party/dawn/third_party/gn/dxc/BUILD.gn
++++ b/third_party/dawn/third_party/gn/dxc/BUILD.gn
+@@ -2444,9 +2444,16 @@ executable("dxc") {
+ # Define a target to copy the DXIL signing library, dxil.dll, to the output directory
+ if (is_win) {
+   import("//build/config/win/visual_studio_version.gni")
+-  copy("copy_dxil_dll") {
+-    sources =
+-        [ "$windows_sdk_path/bin/$windows_sdk_version/$target_cpu/dxil.dll" ]
+-    outputs = [ "$root_out_dir/{{source_file_part}}" ]
++  if (host_os == "win") {
++    copy("copy_dxil_dll") {
++      sources =
++          [ "$windows_sdk_path/bin/$windows_sdk_version/$target_cpu/dxil.dll" ]
++      outputs = [ "$root_out_dir/{{source_file_part}}" ]
++    }
++  } else {
++    # Playport cross-build: the SDK's dxil.dll is not in the xwin layout and is
++    # not shipped (the client brings its own).
++    group("copy_dxil_dll") {
++    }
+   }
+ }

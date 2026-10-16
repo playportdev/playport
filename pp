@@ -160,12 +160,23 @@ def cmd_secrets(args):
 
 
 def cmd_names(args):
-    """No tracked file (in COMMIT, or the index) names the retired project or its identifier
-    prefix, in any letter case. The patterns are split so this file does not match itself."""
-    old, prefix = "game" "native", r"\b" "gn[_-]"
+    """Reject retired provenance/prefixes in tracked files (COMMIT or index).
+
+    Only two exact upstream GN tokens in CEF/Chromium patches are exempt;
+    checks.name_scan_text defines this path-scoped exception for both gates.
+    """
+    old, prefix = checks.NAME_PATTERNS
     where = [args[0]] if args else ["--cached"]
-    hits = subprocess.run(["git", "-C", REPO, "grep", "-n", "-I", "-i", "-e", old, "-e", prefix, *where, "--", "."],
-                          capture_output=True, text=True).stdout
+    raw = subprocess.run(["git", "-C", REPO, "grep", "-z", "-n", "-I", "-i", "-e", old, "-e", prefix, *where, "--", "."],
+                         capture_output=True, text=True).stdout
+    hits = []
+    for hit in raw.splitlines():
+        path, number, line = hit.split("\0", 2)
+        relative = path.removeprefix(args[0] + ":") if args else path
+        text = checks.name_scan_text(relative, line)
+        if any(re.search(pattern, text, re.I) for pattern in checks.NAME_PATTERNS):
+            hits.append(f"{path}:{number}:{line}\n")
+    hits = "".join(hits)
     if hits:
         sys.stderr.write(hits)
         print(f"pp names: {len(hits.splitlines())} line(s) use a retired name or prefix", file=sys.stderr)

@@ -1230,6 +1230,8 @@ host sign-out ([0064](decisions/0064-game-web-sheet.md)); the player revokes it 
 
 ## Patch series
 
+The name gate permits only the two exact upstream GN tokens (the argument module and helper module) inside `patches/cef/` and `patches/chromium/`; all other retired names/prefixes still fail (shared rule in `tools/checks.py`).
+
 Every patch is a `git format-patch` file listed in its target's `series`, with
 the trailers `Class:`, `Evidence:` and `Offered-upstream:`. The classes are:
 

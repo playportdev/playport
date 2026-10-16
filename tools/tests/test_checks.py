@@ -59,6 +59,43 @@ class Secrets(unittest.TestCase):
         self.assertFalse(hit("docs/evidence/2026-09-30-x.md"))
 
 
+class Names(unittest.TestCase):
+    def test_upstream_gn_exception_in_index_and_commit(self):
+        import contextlib
+        import io
+        from pathlib import Path
+        from unittest import mock
+
+        cli = load_pp()
+        tokens = "gn" + "_args gn" + "_helpers"
+        retired = "game" + "native"
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "init", "-q", root], check=True)
+            for path, text, expected in (
+                ("patches/cef/a.patch", tokens, 0),
+                ("patches/chromium/a.patch", tokens, 0),
+                ("patches/cef/a.patch", tokens + retired, 1),
+                ("patches/chromium/a.patch", "gn" + "_foo", 1),
+                ("patches/cef/a.patch", "gn" + "_args-extra", 1),
+                ("patches/cef/a.patch", "gn" + "_helpers_extra", 1),
+                ("patches/cef/a.patch", tokens.upper(), 1),
+                ("other/a.patch", tokens, 1),
+            ):
+                with self.subTest(path=path, text=text):
+                    subprocess.run(["git", "rm", "-rf", "--ignore-unmatch", "."], cwd=root,
+                                   check=True, stdout=subprocess.DEVNULL)
+                    file = Path(root, path)
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_text(text + "\n")
+                    subprocess.run(["git", "add", "."], cwd=root, check=True)
+                    subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.org",
+                                    "commit", "-qm", "fixture"], cwd=root, check=True)
+                    with mock.patch.object(cli, "REPO", root), contextlib.redirect_stdout(io.StringIO()), \
+                            contextlib.redirect_stderr(io.StringIO()):
+                        self.assertEqual(cli.cmd_names([]), expected)
+                        self.assertEqual(cli.cmd_names(["HEAD"]), expected)
+
+
 class Inputs(unittest.TestCase):
     """build/inputs.py: this machine's tool paths, from inputs.local or the environment."""
 
@@ -110,6 +147,17 @@ class Patches(unittest.TestCase):
 
     def test_clean(self):
         self.assertEqual(checks.patch_problems(self.repo), [])
+
+    def test_cef_and_chromium_series_are_discovered(self):
+        for target in ("cef", "chromium"):
+            self.d = os.path.join(self.repo, "patches", target)
+            os.makedirs(self.d)
+            self.add("0001-a.patch", PATCH)
+            self.series("0001-a.patch")
+        self.assertEqual(checks.patch_problems(self.repo), [])
+        self.add("0001-a.patch", PATCH.replace("Evidence: docs/evidence/x.md\n", ""))
+        self.assertIn("patches/chromium/0001-a.patch has no Evidence: trailer",
+                      "\n".join(checks.patch_problems(self.repo)))
 
     def test_each_problem(self):
         self.add("0002-b.patch", PATCH.replace("Offered-upstream: no\n", ""))

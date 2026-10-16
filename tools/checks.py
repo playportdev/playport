@@ -43,6 +43,23 @@ PAIRING_RECORDS = "/var/lib/lockdown"   # netmuxd's (tools/systemd): <UDID>.plis
 _SECRET_RES = [(what, re.compile(p)) for what, p in SECRETS]
 
 
+# Split literals keep the gate's own definitions out of its matches.
+NAME_PATTERNS = ("game" "native", r"\b" "gn[_-]")
+_UPSTREAM_GN_TOKENS = re.compile(r"(?<![\w-])(?:" + "gn" + r"_args|" + "gn" + r"_helpers)(?![\w-])")
+
+
+def name_scan_text(path, text):
+    """Only the two upstream GN tokens are exempt, only in CEF/Chromium patches.
+
+    The retired project name and every other retired-prefix word still fail.
+    Callers pass a repository-relative path, never an archive or commit prefix.
+    """
+    if (path.startswith(("patches/cef/", "patches/chromium/"))
+            and all(part not in ("", ".", "..") for part in path.split("/"))):
+        return _UPSTREAM_GN_TOKENS.sub("", text)
+    return text
+
+
 def secret_hits(text):
     """(what, line) for each line of text that matches a secret pattern."""
     return [(what, line) for line in text.splitlines() if not any(f in line for f in SECRET_FIXTURES)

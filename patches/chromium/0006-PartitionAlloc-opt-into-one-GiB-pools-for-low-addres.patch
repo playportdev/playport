@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 18:21:39 +0200
+Subject: [PATCH] PartitionAlloc: opt into one GiB pools for low address space
+
+Formalize stage A-C scratch diff 008, retaining the built bytes.
+Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+---
+ base/allocator/partition_allocator/partition_alloc.gni      | 6 ++++++
+ .../partition_allocator/src/partition_alloc/BUILD.gn        | 1 +
+ .../src/partition_alloc/partition_alloc_constants.h         | 6 +++++-
+ 3 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/base/allocator/partition_allocator/partition_alloc.gni b/base/allocator/partition_allocator/partition_alloc.gni
+index e4bdfa2..abb9f52 100644
+--- a/base/allocator/partition_allocator/partition_alloc.gni
++++ b/base/allocator/partition_allocator/partition_alloc.gni
+@@ -341,6 +341,12 @@ declare_args() {
+   enable_move_metadata_outside_gigacage_trial = move_metadata_outside_gigacage
+ }
+ 
++declare_args() {
++  # Shrinks kPoolMaxSize to 1 GiB on 64-bit, so each PartitionAlloc instance
++  # reserves 2 GiB aligned to 2 GiB instead of 32 GiB aligned to 32 GiB.
++  partition_alloc_low_va = false
++}
++
+ assert(!enable_move_metadata_outside_gigacage_trial ||
+            move_metadata_outside_gigacage,
+        "Can't enable PartitionAllocExternalMetadata synthetic trial " +
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+index 179a38f..c929aee 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
++++ b/base/allocator/partition_allocator/src/partition_alloc/BUILD.gn
+@@ -156,6 +156,7 @@ pa_buildflag_header("buildflags") {
+     "ENABLE_POINTER_COMPRESSION=$enable_pointer_compression",
+     "ENABLE_POINTER_SUBTRACTION_CHECK=$enable_pointer_subtraction_check",
+     "MOVE_METADATA_OUT_OF_GIGACAGE_FOR_64_BITS_POINTERS=$move_metadata_outside_gigacage",
++    "PARTITION_ALLOC_LOW_VA=$partition_alloc_low_va",
+     "ENABLE_MOVE_METADATA_OUT_OF_GIGACAGE_TRIAL=$enable_move_metadata_outside_gigacage_trial",
+     "ENABLE_THREAD_ISOLATION=$enable_pkeys",
+     "EXPENSIVE_DCHECKS_ARE_ON=$enable_expensive_dchecks",
+diff --git a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
+index e941d16..351c519 100644
+--- a/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
++++ b/base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h
+@@ -314,7 +314,11 @@ PA_DEFINE_OPERATORS_FOR_FLAGS(PoolHandleMask);
+ // When pointer compression is enabled, we cannot use large pools (at most
+ // 8GB for each of the glued pools).
+ #if PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+-#if PA_BUILDFLAG(IS_ANDROID) || PA_BUILDFLAG(IS_IOS) || \
++#if PA_BUILDFLAG(PARTITION_ALLOC_LOW_VA)
++// An embedder that must fit several processes in a small address space:
++// each glued regular+BRP block is 2 GiB, aligned to 2 GiB.
++constexpr size_t kPoolMaxSize = 1 * kGiB;
++#elif PA_BUILDFLAG(IS_ANDROID) || PA_BUILDFLAG(IS_IOS) || \
+     PA_BUILDFLAG(ENABLE_POINTER_COMPRESSION)
+ constexpr size_t kPoolMaxSize = 8 * kGiB;
+ #else

@@ -70,6 +70,28 @@ class SourcePayloadAudit(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_upstream_gn_name_exception_is_path_and_token_scoped(self):
+        tokens = b"gn" + b"_args gn" + b"_helpers"
+        cases = [
+            ("patches/cef/a.patch", tokens, False),
+            ("patches/chromium/a.patch", tokens, False),
+            ("playport-" + "a" * 12 + "/patches/cef/a.patch", tokens, False),
+            ("playport/patches/chromium/a.patch", tokens, False),
+            ("patches/cef/a.patch", tokens + b"game" + b"native", True),
+            ("patches/chromium/a.patch", b"gn" + b"_foo", True),
+            ("patches/cef/a.patch", b"gn" + b"_args-extra", True),
+            ("patches/cef/a.patch", b"gn" + b"_helpers_extra", True),
+            ("patches/cef/a.patch", tokens.upper(), True),
+            ("other/a.patch", tokens, True),
+            ("other/patches/cef/a.patch", tokens, True),
+            ("patches/cef/../other.patch", tokens, True),
+        ]
+        for path, data, expected in cases:
+            with self.subTest(path=path, data=data):
+                scanner = self.scanner()
+                scanner.payload(data, path, "fixture", 0)
+                self.assertEqual(any(r.startswith("retired-name-") for r in scanner.rules), expected)
+
     def refresh(self):
         (self.bundle / "SOURCE-MANIFEST.json").write_text(json.dumps(self.manifest))
         (self.bundle / "README.md").write_text("Incomplete source bundle\n")

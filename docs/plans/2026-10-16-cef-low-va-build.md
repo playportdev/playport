@@ -4,7 +4,7 @@
 [PLA-369](https://linear.app/playportdev/issue/PLA-369); parent
 [PLA-254](https://linear.app/playportdev/issue/PLA-254)).
 **Decision:** [0110](../decisions/0110-own-cef-build-for-a-clients-cef.md) (accepted).
-**Status:** written 2026-10-16; the owner approved it the same day, with D1–D6 as recommended. Stage A is next.
+**Status:** stages A–C passed; stage D started with the formal source series and prebuilt input record. Dev delivery, loader substitution and the phone gate remain.
 
 ## Goal
 
@@ -114,6 +114,8 @@ the dev-only `env.FEX_SMCCHECKS=none`.
   - Swapped in under desktop Proton, it reached the sign-in page both without switches and with 0109's switches.
   - The 9-process tree holds 10.1 GiB of reservations of 64 MiB or more: none outside the renderers, 2.9–4.4 GiB per renderer, the largest 2 GiB aligned to 2 GiB.
   - Evidence: [low-VA CEF build](../evidence/2026-10-16-cef-low-va-build.md).
+
+- 2026-10-16: stage D slice 1 formalized the stage A–C sources: CEF/Chromium pins, one CEF and six Chromium format-patches (including DEPS-pinned ANGLE/Dawn), and the separate cross-build adapters under `build/cef/`. Replay reproduces all 14 touched source files byte-for-byte. `build/generated/cef-143.0.14.sha256` records the 233-file prebuilt input; its verifier and host tests pass, as does `pp test --quick`. Packing, required notices, the loader swap, IPA measurement, Hollow Knight and phone Open are not done. No runtime or phone changes in this slice.
 
 ## Risks
 
