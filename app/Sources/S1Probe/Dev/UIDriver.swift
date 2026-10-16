@@ -245,7 +245,10 @@ enum UIDriver {
                 let parts = action.split(separator: ":", maxSplits: 1).map(String.init)
                 guard parts.count == 2 else { return finish("action=\(action) refused: not <verb>:<id>") }
                 let id = parts[1]
-                if ["verify", "repair", "play", "uninstall", "settings", "controls"].contains(parts[0]), library.title(id) == nil {
+                // settings:launcher-ID saves what Settings › Launchers' Open reads (LauncherOpen.open).
+                let launcherSettings = parts[0] == "settings" && PublisherLauncher.all.contains { $0.titleID == id }
+                if ["verify", "repair", "play", "uninstall", "settings", "controls"].contains(parts[0]), !launcherSettings,
+                   library.title(id) == nil {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
