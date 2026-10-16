@@ -127,7 +127,8 @@ TARGET_COMPONENT = {"madeira-unix": "madeira", "madeira-winios": "madeira", "win
                     "dxmt": "dxmt", "rpmalloc-port": "rpmalloc", "rpmalloc": "rpmalloc"}
 # Series on pins no Madeira commit moves (their own upstreams, outside COMPONENTS):
 # a sync does not replay them.
-NOT_REPLAYED = {"mesa", "vkd3d-proton", "gbe", "idevice"}
+# CEF/Chromium are built separately (build/cef/README.md), not by pp sync.
+NOT_REPLAYED = {"mesa", "dxvk", "vkd3d-proton", "gbe", "idevice", "cef", "chromium"}
 # Series applied under a target's own, in order, as build/stages/unix.sh,
 # build/stages/wine-pe.sh, build/stages/dxmt-patched.sh and build/stages/fex.sh do.
 BELOW = {"wine-valve": ["wine-port"], "wine-unix": ["wine-port", "wine-valve"], "wine-pe": ["wine-port", "wine-valve"],

@@ -138,6 +138,9 @@ _spec.loader.exec_module(notices_bundle)
 _spec = importlib.util.spec_from_file_location("notices_app", REPO / "build/notices-app.py")
 notices_app = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(notices_app)
+_spec = importlib.util.spec_from_file_location("cef_payload", REPO / "build/cef/verify-payload.py")
+cef_payload = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cef_payload)
 MSL_SHA256 = "78cc2261e4259f43dd1478c2055031b2446aa40acfb2e47187c464397274323a"  # dxmt_command.metal at the dxmt pin, includes inlined
 SLOT = 144         # upstream DXMT's MTLDevice_newLibraryWithSource (139 was Playport's own slot before the upstream rebase)
 TABLE_SLOTS = 150  # upstream's 0-145, then patches/dxmt-port's 146-149
@@ -571,6 +574,23 @@ def release_checks(exe, info):
           + (f" (missing {', '.join(missing)})" if missing else ""))
 
 
+def cef_checks(app, base, variant, distribution=False):
+    """CEF is an exact recorded dev payload, never a release/distribution input."""
+    found = [p for p in app.rglob('*') if p.name.lower() in ('cef', 'libcef.dll')]
+    if variant == 'release' or distribution:
+        check(not found, 'cef: payload absent from release/distribution (0110, PLA-372)')
+        return
+    directory = base / 'cef'
+    try:
+        if sorted(p.name for p in directory.iterdir()) != [cef_payload.VERSION]:
+            raise ValueError('unexpected CEF version directory')
+        entries = cef_payload.verify_runtime(directory / cef_payload.VERSION)
+    except (OSError, ValueError) as error:
+        check(False, f'cef: {error}')
+        return
+    check(True, f'cef: {len(entries)} runtime/notice files match the dev-only records')
+
+
 def icon_checks(app, info, variant):
     """The home-screen icon: xtool.yml's iconPath, copied to the app root (app/Icon)."""
     name = "AppIcon-dev" if variant == "dev" else "AppIcon"
@@ -769,6 +789,7 @@ def main():
                 or sha256(rt(k).read_bytes()) != h]
         check(not miss and got == set(res), f"resources: all {len(res)} rows match, no extras; gaps absent: "
               f"{sum(r[0] == 'gap' and not rt(r[1]).exists() for r in rows)}/{sum(r[0] == 'gap' for r in rows)}")
+        cef_checks(app, base, a.variant, a.distribution)
         empty = [p for p in app.rglob("*") if p.is_dir() and not any(p.iterdir())]
         check(not empty, "resources: no empty directories")
 

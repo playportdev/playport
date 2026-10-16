@@ -74,12 +74,14 @@ class Names(unittest.TestCase):
             for path, text, expected in (
                 ("patches/cef/a.patch", tokens, 0),
                 ("patches/chromium/a.patch", tokens, 0),
-                ("patches/cef/a.patch", tokens + retired, 1),
+                ("patches/cef/a.patch", tokens + " " + retired, 1),
                 ("patches/chromium/a.patch", "gn" + "_foo", 1),
                 ("patches/cef/a.patch", "gn" + "_args-extra", 1),
                 ("patches/cef/a.patch", "gn" + "_helpers_extra", 1),
                 ("patches/cef/a.patch", tokens.upper(), 1),
                 ("other/a.patch", tokens, 1),
+                ("Patches/cef/a.patch", tokens, 1),
+                ("patches/cef/a.patch", tokens + " gn" + "_foo", 1),
             ):
                 with self.subTest(path=path, text=text):
                     subprocess.run(["git", "rm", "-rf", "--ignore-unmatch", "."], cwd=root,

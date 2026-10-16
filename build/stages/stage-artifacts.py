@@ -390,6 +390,8 @@ def release_xtool_yml(text):
             line, product = "product: Playport\n", product + 1
         elif line == "iconPath: Icon/AppIcon-dev.png\n":
             line, icon = "iconPath: Icon/AppIcon.png\n", icon + 1
+        elif line.strip() == "- Sources/S1Probe/Runtime/cef":
+            continue  # Decision 0110: the separate CEF payload is dev-only.
         elif line.lstrip().startswith("- Sources/S1Probe/Runtime/"):
             line, runtime = line.replace("Sources/S1Probe/Runtime/", "Runtime/", 1), runtime + 1
         out.append(line)

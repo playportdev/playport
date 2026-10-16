@@ -50,6 +50,8 @@ resources:
   # The Steam API emulator (gbe_fork's steam_api DLLs), copied into a game's folder
   # in place of its own steam_api(64).dll (SteamClientKit SteamAPISwap).
   - Sources/S1Probe/Runtime/steamapi
+  # Dev-only CEF (0110); release_xtool_yml removes this resource.
+  - Sources/S1Probe/Runtime/cef
   - Sources/S1Probe/Runtime/artifacts.tsv
   # The pinned title cohort and its checksum lists, which the library adopts and verifies (app/PlayportKit).
   - PlayportKit/Titles

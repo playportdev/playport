@@ -372,6 +372,10 @@ stage_app() {
     if [ "$VARIANT" = release ]; then
         run app python3 "$HERE/stages/stage-artifacts.py" release "$PKG"
         say "  $(tail -1 "$RUN/logs/app.log")"
+    else
+        # Always verify before copying, even when the common stage stamp is warm.
+        # CEF compilation and notice generation are separate owner inputs.
+        run app python3 "$HERE/cef/stage-payload.py"
     fi
     rm -f "$IPA"
     (cd "$PKG" && PLAYPORT_VARIANT=$VARIANT SWIFTPM_CUSTOM_BIN_DIR=$HERE/ld64 "$XTOOL" dev build $SIGN --ipa) >> "$RUN/logs/app.log" 2>&1 ||

@@ -92,8 +92,8 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 | | Question | Recommendation |
 | --- | --- | --- |
 | D1 | Accept decision 0110: our own CEF build, loaded in place of a client's of the exact same version | Accept, so stages A–C can run |
-| D2 | Add CEF and Chromium as pinned components with patch series (`pins.lock`, `patches/cef`, `patches/chromium`) | Yes; same model as Wine, FEX and DXMT |
-| D3 | Delivery: ship the CEF payload in the IPA (about +300 MB uncompressed; compressed size to be measured) or make it an optional part of the IPA built only for dev until Stage D passes | Dev-only payload until Stage D passes, then decide for release by size |
+| D2 | Add CEF and Chromium as pinned components with patch series (`pins.lock`, `patches/cef`, `patches/chromium`) | Yes; pins and format-patch series, but as built CEF is a separately verified prebuilt input, not checked out or replayed by `pp build` or `pp sync` (`build/cef/README.md`). |
+| D3 | Delivery: ship the CEF payload in the IPA (about +300 MB uncompressed; compressed size to be measured) or make it an optional part of the IPA built only for dev until Stage D passes | Owner-only dev payload until Stage D passes, then decide for release by size. Not yet distributable: [PLA-372](https://linear.app/playportdev/issue/PLA-372) must add CEF/Chromium and their series to `pp source` and meet the rebuild/FFmpeg relinking duties before any release or tester copy ([LICENSING](../LICENSING.md), [DISTRIBUTION](../DISTRIBUTION.md)). |
 | D4 | Security: Social Club's pages run without the V8 sandbox, on an unsupported branch | Accept for Rockstar's own pages only. The substitution covers only the exact client version, and the client loads only Rockstar's sites |
 | D5 | Updates: rebuild for each Social Club CEF version; the launcher is broken between an update and the rebuild | Accept; record each rebuild as evidence |
 | D6 | You sign in on the phone at Stage E | As before: in person; agents never hold the password |
@@ -116,6 +116,7 @@ the dev-only `env.FEX_SMCCHECKS=none`.
   - Evidence: [low-VA CEF build](../evidence/2026-10-16-cef-low-va-build.md).
 
 - 2026-10-16: stage D slice 1 formalized the stage A–C sources: CEF/Chromium pins, one CEF and six Chromium format-patches (including DEPS-pinned ANGLE/Dawn), and the separate cross-build adapters under `build/cef/`. Replay reproduces all 14 touched source files byte-for-byte. `build/generated/cef-143.0.14.sha256` records the 233-file prebuilt input; its verifier and host tests pass, as does `pp test --quick`. Packing, required notices, the loader swap, IPA measurement, Hollow Knight and phone Open are not done. No runtime or phone changes in this slice.
+- 2026-10-16: stage D slice 2 packs the verified payload into the dev IPA only (`Runtime/cef/143.0.14/`, the import library omitted; `pp verify` checks its exact set in dev and rejects it in release and `--distribution`), with notices generated from the pinned tree: Chromium's credits, CEF's BSD licence, FFmpeg's licence and LGPL-2.1, and a build notice on the statically linked MSVC CRT. Review findings F1–F11 of `654c954` are fixed. Not distributable until PLA-372.
 
 ## Risks
 

@@ -248,8 +248,8 @@ class Scanner:
         # Playport source archives add one top-level name (component + commit).
         # Do not grant the exception to unrelated/nested archive paths.
         parts = PurePosixPath(name).parts
-        path = name
-        if parts and re.fullmatch(r"playport(?:-[0-9a-f]{7,40})?", parts[0]):
+        path = ""
+        if depth == 0 and parts and re.fullmatch(r"playport(?:-[0-9a-f]{7,40})?", parts[0]):
             path = "/".join(parts[1:]) if safe_path(name) else ""
         rules = text_rules(data, path)
         rules += [rule for rule, pattern in PATH_RULES if pattern.search(name)]

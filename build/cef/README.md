@@ -15,16 +15,43 @@ python3 build/cef/verify-payload.py
 
 Missing or changed files fail; extra files are not part of the recorded input.
 `Release/libcef.lib` is recorded for provenance but is an import library, not a
-runtime file. Future packing must use only the verified list, omit that library,
-and flatten `Release/` and `Resources/` into `Runtime/cef/143.0.14/` (preserving
-`locales/`). The snapshot is mandatory: pointer compression is disabled.
+runtime file. The pipeline's dev `app` stage runs `stage-payload.py` before every
+pack, including warm builds. It verifies all inputs before copying, omits that
+library, and flattens `Release/` and `Resources/` into `Runtime/cef/143.0.14/`
+(preserving `locales/`). xtool puts Runtime's directories at the app root, so the
+installed path is `cef/143.0.14/`. The snapshot is mandatory: pointer compression
+is disabled. The loader substitution is not implemented yet.
 
-**Stage D integration is not done yet:** neither packing nor the loader swap is
-wired up. The payload is authorized for **dev only**, never release, until the
-owner decides otherwise. Before packing, also include CEF's BSD licence and
-Chromium's generated credits and meet ffmpeg's source/relinking duties (0110).
-Those notices are not in the stage C payload record. No Microsoft redistributable
-is in this payload; the client retains its own d3dcompiler, dxcompiler and dxil.
+Generate notices separately, from the pinned source tree, before `pp build`:
+
+```sh
+python3 build/cef/generate-notices.py
+```
+
+This runs Chromium's own `tools/licenses/licenses.py credits --target-os=win`,
+the `components/resources:about_credits` action, without GN, ninja or an SDK.
+It writes `$PLAYPORT_BUILD/cef-src/notices`: the generated `about_credits.html`,
+CEF's BSD licence, FFmpeg's licence summary and LGPL-2.1 text, and the Playport
+build notice (including the statically linked MSVC CRT under the owner-accepted
+Visual Studio licence). Their hashes
+are in `build/generated/cef-143.0.14-notices.sha256`; the dev stage requires them
+and puts them under `cef/143.0.14/notices/`. The generated credits are identical
+to stage C's about_credits output. Regeneration never updates the record silently.
+
+The payload is authorized for **owner-only dev use**, never release, until the
+owner decides otherwise. Release staging excludes it; `pp verify --variant
+release` rejects it anywhere in the bundle. Dev verification checks its exact
+runtime/notice set and hashes independently of the common `app/artifacts.tsv`.
+`pp verify --distribution` also rejects a CEF-bearing dev IPA.
+
+**Not yet distributable:** before any release or tester copy,
+[PLA-372](https://linear.app/playportdev/issue/PLA-372) must add the CEF/Chromium
+pins and patch series to the `pp source` catalog and meet the rebuild route and
+FFmpeg source/relinking duties in [LICENSING.md](../../docs/LICENSING.md) and
+[DISTRIBUTION.md](../../docs/DISTRIBUTION.md). Local sources/adapters are retained;
+notices alone do not discharge those duties. No Microsoft redistributable DLL is in
+this payload; the client retains its own d3dcompiler, dxcompiler and dxil. libcef
+and chrome_elf nevertheless contain statically linked MSVC CRT code.
 
 ## Source and patch order
 
@@ -46,9 +73,10 @@ is in this payload; the client retains its own d3dcompiler, dxcompiler and dxil.
 
 The formal series reproduces the 14 touched live source files byte-for-byte.
 `pp test`'s series/trailer checker discovers all directories, including these
-new ones; it needs no target allowlist extension. Its special pin consistency
-check is only Madeira's gitlink; CEF/Chromium have no repository gitlinks.
-It does not replay these series or fetch their sources.
+new ones without an allowlist. `pp sync` does have an allowlist: both are
+classified in `NOT_REPLAYED` because they are built separately. The special pin
+consistency check is only Madeira's gitlink; CEF/Chromium have no repository
+gitlinks. Neither check replays these series or fetches their sources.
 
 ## Existing owner-provided toolchain
 
@@ -77,6 +105,8 @@ mkdir -p "$TMPDIR"
 python3 build/cef/create-xwin-layout.py
 build/cef/run-project-files.sh
 build/cef/run-ninja-lowva.sh run1 12
+python3 build/cef/assemble-payload.py
+python3 build/cef/generate-notices.py
 ```
 
 `args.gn` holds the stage C settings; the GN wrapper appends the two local
@@ -85,3 +115,9 @@ adapter keeps caches and temporary files under the build area. The wrappers
 record the producer's exit code under `cef-src/logs` and return it to the caller;
 redirect stdout/stderr there when launching the multi-hour build. No wrapper
 performs a source sync, stock patch application, input download or IPA build.
+
+`assemble-payload.py` copies only the recorded files from the ninja output into
+`out-stage-c/Release` and `Resources`, preserving locale names and renaming the
+import library `libcef.dll.lib` to `libcef.lib`. It verifies all hashes before
+replacing an existing payload. A different build requires an explicitly reviewed
+record update; records use byte filename order (`LC_ALL=C sort -k2`).

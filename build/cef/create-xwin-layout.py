@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Adapt the owner-downloaded x64 CRT/SDK; no downloads or licence actions."""
 import json
 import os
@@ -19,7 +20,9 @@ links = {
 for dest, src in links.items():
     assert src.is_dir(), src
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if not dest.is_symlink():
+    if dest.is_symlink():
+        assert dest.resolve() == src.resolve(), f'stale layout link: {dest}'
+    else:
         dest.symlink_to(src, target_is_directory=True)
 includes = [msvc / 'include'] + [sdk / 'Include/10.0.26100.0' / part for part in ('ucrt', 'shared', 'um', 'winrt', 'cppwinrt')]
 libs = [msvc / 'lib/x64'] + [sdk / 'Lib/10.0.26100.0' / part / 'x64' for part in ('ucrt', 'um')]

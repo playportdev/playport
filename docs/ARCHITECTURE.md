@@ -1230,8 +1230,6 @@ host sign-out ([0064](decisions/0064-game-web-sheet.md)); the player revokes it 
 
 ## Patch series
 
-The name gate permits only the two exact upstream GN tokens (the argument module and helper module) inside `patches/cef/` and `patches/chromium/`; all other retired names/prefixes still fail (shared rule in `tools/checks.py`).
-
 Every patch is a `git format-patch` file listed in its target's `series`, with
 the trailers `Class:`, `Evidence:` and `Offered-upstream:`. The classes are:
 
@@ -1278,3 +1276,9 @@ trailers say what it changes and why, and its `Evidence:` trailer names the
 record that proved it. Where each series is
 applied is in [BUILDING.md](BUILDING.md#the-pipeline). No patch has
 been offered upstream yet ([LICENSING.md](LICENSING.md#other-projects)).
+
+`patches/cef` and `patches/chromium` are applied outside `pp build` per
+[build/cef/README.md](../build/cef/README.md); ANGLE/Dawn patches carry
+`Upstream-repo:` to name their DEPS-pinned repository.
+
+The name gate permits only the two exact upstream GN tokens (the argument module and helper module) inside `patches/cef/` and `patches/chromium/`; all other retired names/prefixes still fail (shared rule in `tools/checks.py`).
