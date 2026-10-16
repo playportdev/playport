@@ -20,7 +20,9 @@ pack, including warm builds. It verifies all inputs before copying, omits that
 library, and flattens `Release/` and `Resources/` into `Runtime/cef/143.0.14/`
 (preserving `locales/`). xtool puts Runtime's directories at the app root, so the
 installed path is `cef/143.0.14/`. The snapshot is mandatory: pointer compression
-is disabled. The loader substitution is not implemented yet.
+is disabled. Wine's file layer (patches/wine-unix 0039, guard in
+`app/Sources/WineHost/cef_swap.c`) opens these files in place of a client's when
+the client's `libcef.dll` has exactly file version 143.0.14.0.
 
 Generate notices separately, from the pinned source tree, before `pp build`:
 

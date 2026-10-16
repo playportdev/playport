@@ -68,10 +68,14 @@ Exit: the trace totals for the 9-process tree fit within 48 GiB, less Wine's use
 holes. If 1 GiB pools run out of memory on the launcher's pages, use 2 GiB.
 
 **D. Playport loads it.**
-- At load time (madeira-unix), when a process's `libcef.dll` beside its image has the exact built
-  version, the loader maps Playport's `libcef.dll` and `chrome_elf.dll` instead, along with the
-  data files that must match: the snapshot, `resources.pak`, ICU and locales. Every case logs a
-  `[cef-swap]` line; any other version is left alone.
+- At open time (patches/wine-unix, Wine's `dlls/ntdll/unix/file.c`), when the `libcef.dll` in a
+  CEF file's directory has the exact built version, the file is opened from Playport's build
+  instead: `libcef.dll` and `chrome_elf.dll` along with the data files that must match: the
+  snapshot, the paks, ICU and locales (and the GL/Vulkan DLLs). Every case logs a `[cef-swap]`
+  line; any other version is left alone. As built, the hook is in Wine's file layer rather than
+  Madeira's loader (madeira-unix), because both the DLL images and the memory-mapped data files
+  are opened by name there; a swap at section creation would leave the handle, and the size
+  Chromium reads from it, on the client's file. The guard is `app/Sources/WineHost/cef_swap.c`.
 - Delivery is the open question D3 below.
 - A host test for the version guard.
 - The Hollow Knight gate.

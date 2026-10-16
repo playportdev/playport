@@ -37,3 +37,4 @@
 0036-server-capture-a-thread-s-context-afresh-at-each-sus.patch
 0037-ntdll-end-a-killed-thread-in-NtWaitForAlertByThreadI.patch
 0038-server-restart-a-job-s-termination-from-the-head-aft.patch
+0039-ntdll-open-Playport-s-CEF-build-in-place-of-a-client.patch
