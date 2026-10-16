@@ -102,6 +102,7 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 
 - 2026-10-16: the owner approved D1–D6 as recommended. The xwin licence is still to be accepted by the owner in person at stage A step 2. Stage A started.
 - 2026-10-16: stage A bootstrap checked out depot_tools and CEF `dd46a3761`, completed the pinned Chromium/Windows-deps sync with a disk watchdog, and fetched xwin 0.10.0. Owner licence acceptance remains pending; toolchain layout and `gn gen` have not run. Successor commands and live-process records: `.work/agent-notes/pla370-cef/PROGRESS.md`.
+- 2026-10-16: the owner accepted the Microsoft licence in person and ran the xwin splat command. It wrote the CRT and SDK (644 MB) to `$PLAYPORT_BUILD/cef-src/tools/xwin-sdk`.
 
 ## Risks
 
