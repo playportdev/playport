@@ -104,6 +104,8 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 - 2026-10-16: stage A bootstrap checked out depot_tools and CEF `dd46a3761`, completed the pinned Chromium/Windows-deps sync with a disk watchdog, and fetched xwin 0.10.0. Owner licence acceptance remains pending; toolchain layout and `gn gen` have not run. Successor commands and live-process records: `.work/agent-notes/pla370-cef/PROGRESS.md`.
 - 2026-10-16: the owner accepted the Microsoft licence in person and ran the xwin splat command. It wrote the CRT and SDK (644 MB) to `$PLAYPORT_BUILD/cef-src/tools/xwin-sdk`.
 
+- 2026-10-16: stage A passed: Windows x64 official-mode project generation (35,979 targets) and a one-object CRT/SDK compile-and-link smoke test succeeded on Linux. Scratch toolchain adapters and exact arguments are under `$PLAYPORT_BUILD/agent-notes/pla370-cef/`; PGO is off, the context snapshot is on, and stage B has not started.
+
 ## Risks
 
 - The untested build combination may need several Chromium patches, or prove too costly.
