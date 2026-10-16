@@ -1,6 +1,6 @@
 # 0110: Playport supplies its own build of the CEF version a client ships, loaded in its place
 
-**Status:** proposed, 2026-10-16. It needs the owner's acceptance before any build starts.
+**Status:** accepted by the owner, 2026-10-16, with the plan's D1–D6 as recommended.
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
 [PLA-369](https://linear.app/playportdev/issue/PLA-369),
 [plan](../plans/2026-10-16-cef-low-va-build.md).

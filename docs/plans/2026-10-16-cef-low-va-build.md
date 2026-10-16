@@ -3,8 +3,8 @@
 **Linear:** [PLA-370](https://linear.app/playportdev/issue/PLA-370) (blocks
 [PLA-369](https://linear.app/playportdev/issue/PLA-369); parent
 [PLA-254](https://linear.app/playportdev/issue/PLA-254)).
-**Decision:** [0110](../decisions/0110-own-cef-build-for-a-clients-cef.md) (proposed).
-**Status:** written 2026-10-16. Waiting on the owner's approval; no build until then.
+**Decision:** [0110](../decisions/0110-own-cef-build-for-a-clients-cef.md) (accepted).
+**Status:** written 2026-10-16; the owner approved it the same day, with D1–D6 as recommended. Stage A is next.
 
 ## Goal
 
@@ -97,6 +97,10 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 | D4 | Security: Social Club's pages run without the V8 sandbox, on an unsupported branch | Accept for Rockstar's own pages only. The substitution covers only the exact client version, and the client loads only Rockstar's sites |
 | D5 | Updates: rebuild for each Social Club CEF version; the launcher is broken between an update and the rebuild | Accept; record each rebuild as evidence |
 | D6 | You sign in on the phone at Stage E | As before: in person; agents never hold the password |
+
+## Progress
+
+- 2026-10-16: the owner approved D1–D6 as recommended. The xwin licence is still to be accepted by the owner in person at stage A step 2. Stage A started.
 
 ## Risks
 
