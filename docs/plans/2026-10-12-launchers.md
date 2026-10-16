@@ -96,7 +96,17 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
 - **Chunk 3 ended 2026-10-16 after steps 2–3** (writer run `8c1186ac`, stopped at half its context;
   report `reports/chunk3-stage0.md`). **Next: a fresh writer for steps 5, 4, 6, 7, in that order**
   (the supervisor's order: Open first, so CEF can start without Steam mode).
-- **Running now: chunk 4** (writer run `25d06b24`, owner away, unattended): steps 5, 4, 6, 7.
+- **Chunk 4 stopped 2026-10-16** (writer run `25d06b24`, owner away; report
+  `reports/chunk4-stage0.md`). Step 5 is done and step 4 is in place, not yet exercised. Run
+  `20261016T014751` stopped the chunk. The standalone launcher's first self-update (141.68 MB left)
+  runs through Rockstar Service, and the service is far too slow under FEX: 1.79 million guest
+  `c0000005` exceptions and 3.45 million `NtProtectVirtualMemory` calls in about 950 s, from a
+  write-then-reprotect loop on its own code. The update fails (code 242). The 896 MiB pool runs out
+  (`exhausted=head`) with 10 children and no CEF process. So steps 6 and 7 did not start.
+  **Next:** the follow-up on the service's per-fault cost (madeira's NtProtect-sync scan, the ERR
+  lines per call, the guest exception path) and on FEX re-translating its code, which looks like the
+  tail's 128 MiB steps. Then Open again, so the update finishes and CEF starts (steps 4's
+  measurements, 6, 7).
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
@@ -157,8 +167,10 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-253), PLA-273 (until a game runs beside the launcher), and PLA-213 (done).
 - **Queue:** steps 4–7 above (fresh writer) → Stage 1 (PLA-271, 267, 293, 273, 278) → Stage 2 (PLA-294, 295,
   PLA-253; RDR2 per [the RDR2 plan](2026-10-12-rdr2.md)).
-- **Phone:** dev IPA `02191635` installed. RDR2 (with depot 1899671), Hollow Knight and Steamworks
-  Shared are installed, and the Rockstar launcher is installed in the prefix. About 3.9 GB free.
+- **Phone:** dev IPA `1102672b` installed. RDR2 (with depot 1899671), Hollow Knight and Steamworks
+  Shared are installed, and the Rockstar launcher is installed in the prefix, part-updated (its
+  self-update failed). There is 1.2 GB free, because the last two runs' host logs hold 4.6 GB.
+  The next `pp ui` run rotates them and drops the older one.
 
 ## Goal
 

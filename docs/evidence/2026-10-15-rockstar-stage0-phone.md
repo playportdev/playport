@@ -254,3 +254,45 @@ The Open run on it (`20261016T013646`, first window +27.6 s, then 300 s) started
   response". The service then maps 400 MB of shared memory, and the splash stays.
 - **Pool at 300 s:** head 230, tail 609 (593 live) MiB, room 58 MiB, 6 children. Band: 4,354 MiB
   used, 57 threads. No CEF process had started by then.
+
+## Chunk 4: the self-update fails, and the pool runs out before CEF (stop)
+
+Run `20261016T014751` (IPA `1102672b…`): Open, then first window +870 s. The phone was at
+"thermal: serious" at the launch, and the first window came at +105.2 s. Result:
+`pool=exhausted:head still-running after_s=957`.
+
+**The launcher's log** (pulled from the prefix; it holds launcher tokens, so it stays under the
+build area):
+- **The update:** it resumes with 141.68 MB left of its update, so about 98 MB came down in the
+  earlier runs. It maps the service's 400 MB shared memory.
+- **The service dies:** Rockstar Service stops with `exit 1067` and is started again
+  (`[service] Rockstar Service: running, pid 388`), and seven `RockstarService.exe` processes are
+  started in all. Then `Service reports allocation failure: 2097152 bytes`, and "Failed to update
+  the Rockstar Games Launcher (code 242)".
+- **The screen:** the splash shows an update bar at about 5 % from 300 s to the end.
+- No `SocialClubHelper.exe` was started, so there is no `[chromium]` line.
+
+**Pool and band, sample by sample** (head / tail / room MiB, children):
+
+| When | Head | Tail | Room | Children |
+| --- | --- | --- | --- | --- |
+| Before the first window | 202 | 481 | 214 | 6 |
+| | 202 | 609 | 86 | 6 |
+| After the first window | 224 | 609 | 64 | 6 |
+| | 246 | 609 | 42 | 8 |
+| | 246 | 625 | 26 | 9 |
+| | 255 | 625 | 17 | 10 |
+| End | 272 | 625 | 0 (`exhausted=head`, 25 refusals) | 10 |
+
+- Eight `image map FAILED (pool exhausted)` lines came before the end.
+- Band at the end: 5,432 MiB used of 16,384, 67 threads, 945 views.
+
+**Rockstar Service's churn:**
+- One service thread made 3,453,004 `NtProtectVirtualMemory` calls and took 1,785,277 guest
+  `c0000005` exceptions in about 950 s. Two more threads made about 320,000 calls each.
+- **The log:** 30.9 million lines (3.1 GB). On the phone, `s1-host.log` and its previous copy
+  hold 4.6 GB of the container, and free space went down to 1.2 GB.
+- **The tail:** it grows in 128 MiB steps (481 → 609 → 625 MiB) while the churn runs. FEX
+  allocated the most code buffers on the churning service threads (4 or 5 each, "Failed to mprotect
+  last page of code buffer"). That is consistent with FEX re-translating the service's rewritten
+  code. This is an inference: nothing logs the tail per process.
