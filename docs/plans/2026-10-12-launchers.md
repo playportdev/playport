@@ -107,9 +107,22 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   lines per call, the guest exception path) and on FEX re-translating its code, which looks like the
   tail's 128 MiB steps. Then Open again, so the update finishes and CEF starts (steps 4's
   measurements, 6, 7).
-- **Running now: chunk 5** (writer run `9f45b045`, [PLA-366](https://linear.app/playportdev/issue/PLA-366), owner away,
-  unattended): the service's per-fault cost and FEX re-translation, then Open until the update
-  finishes and CEF starts.
+- **Chunk 5 stopped 2026-10-16** (writer run `9f45b045`, [PLA-366](https://linear.app/playportdev/issue/PLA-366),
+  owner away; report `reports/chunk5-pla366.md`; commit `1fdc552`, IPA `60611f78`). The loop is
+  FEX's self-modifying-code tracking, not the guest's VirtualProtect: each write to the
+  protected code faults, FEX invalidates the 16 KiB host page (resetting the thread's call-return
+  stack), untraps it, recompiles a block from that page and traps it again. The writes cycle over
+  the same 0x144390000–0x1443C8000 range for ever (a decrypt-and-re-encrypt protector), and
+  Launcher.exe and the service's helper process do the same at a smaller rate. The per-call log
+  lines are now sampled (log 1.5 GB → 26 MB for a 5-minute Open), but the rate stayed about
+  2,000 writes a second, the self-update still stalls after "Updating launcher...", and the
+  pool ends with 15 MiB of room. Per process, the service and the second Launcher.exe each hold
+  272 MiB of tail (bounded: later carves are reused). Steps 4's measurements, 6 and 7 did not
+  start. **Next:** a FEX change so these writes stop faulting: a host page that takes many
+  self-modifying writes is compiled with code checks (FullSMC) and left writable, after fixing
+  PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
+  `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
+  stale code if the protector ever writes different code). Then Open again.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.

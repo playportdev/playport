@@ -296,3 +296,66 @@ build area):
   allocated the most code buffers on the churning service threads (4 or 5 each, "Failed to mprotect
   last page of code buffer"). That is consistent with FEX re-translating the service's rewritten
   code. This is an inference: nothing logs the tail per process.
+
+## Chunk 5: what the service's loop is, and quieter logs (PLA-366)
+
+**What the loop is** (host reading of run `20261016T013646`'s log, then run `20261016T023613`):
+FEX's self-modifying-code tracking, not the guest calling `VirtualProtect`. The guest made only
+1,040 `NtProtectVirtualMemory` calls of its own (`[inv-census]` "protect"). Each pass:
+
+1. a guest store into its own RWX code faults (`c0000005`, a write, in FEX's code buffer);
+2. FEX's `HandleRWXAccessViolation` invalidates the 16 KiB host page; the invalidation resets the
+   thread's call-return stack (`VirtualDontNeed` of 16 MiB: the `mprotect_exec` on
+   `FEXMem_CallRetStacks` each pass);
+3. FEX untraps the page (`NtProtectVirtualMemory(addr, 1, PAGE_EXECUTE_READWRITE)`);
+4. a block compiled again from that host page traps it again
+   (`NtProtectVirtualMemory(page, 0x4000, PAGE_EXECUTE_READ)`), and the next store faults.
+
+- Of 166,975 inline cases (the running block is in the written host page) in run
+  `20261016T013646`, 121,804 (73 %) share only the 16 KiB host page, not the 4 KiB guest page:
+  with 4 KiB pages they would not fault.
+- The written addresses cycle over the same range (0x144390000–0x1443C8000) for the whole run: a
+  protector that decrypts and re-encrypts its code, so the loop never ends by itself.
+- Launcher.exe (about 57,000 writes per process) and the service's `start` helper process
+  (147,000) do the same at a smaller rate.
+- Madeira's NtProtect-sync scan costs little: for an image with no pool copy it compares the
+  region with each of about 162 mappings and copies nothing. Its cost was its two log lines.
+
+**The change** (`1fdc552`; IPA `60611f789bacdcfe74508dddd8d3a33fdf4c01df2c1004020ac7a978fe84448f`):
+madeira-unix 0153 prints the `NtProtectVirtualMemory`, `NtProtect-sync` and `mprotect_exec`
+lines for the first 64 calls of each and then every 65536th, with a `[protect-census]` line, and
+logs `[jit-pool] tail of pid N` after each tail carve; wine-pe 0046 samples the `[rtcs] pre` line
+of a write access violation the same way; fex 0045 samples FEX's inline self-modifying-code line
+as ml1055 samples the others.
+
+| | Run `20261016T013646` (IPA `1102672b…`) | Run `20261016T023613` (IPA `60611f78…`) |
+| --- | --- | --- |
+| Open, then | first window + 300 s | first window + 300 s |
+| `s1-host.log` | 1,478 MB | 26 MB |
+| Self-modifying writes in the 300 s after the first window | about 1,008,000 | about 619,000 (2,060 a second) |
+| Invalidation, average | 58 µs | 30 µs |
+| Call-return stack reset, average | 53 µs | 28 µs |
+| Self-update | stalls | stalls after "Updating launcher..." (141.68 MB left), "Handshake with service timed out" |
+| Pool at the end (head / tail / room MiB) | 272 / 625 / 0 at 950 s (`exhausted=head`) | 273 / 609 (449 live) / 15, not exhausted |
+
+The per-pass cost fell, but the write rate did not rise. In the first run the service's writes
+began after the first window; in the second, 228,000 came before it. The runs also differ in
+heat, so the two rates are not a clean A/B.
+
+**The tail per process** (run `20261016T023613`): the service (pid 228) holds 16, then 32, then
+160, then 272 MiB in 3 code buffers, and its later carves reuse freed ones, so re-translation
+does not grow the tail past that. The second Launcher.exe (pid 108) also holds 272 MiB, the first
+(pid 68) 144 MiB, the service's helper (pid 128) 160 MiB. Two protected processes at 272 MiB each
+leave 896 MiB about 15 MiB of room before any CEF process.
+
+**What follows:** the writes have to stop faulting. Options: compile a host page that takes
+many writes with FEX's per-instruction code checks (FullSMC) and leave it writable, which first
+needs PLA-206's x86-64 FullSMC deadlock fixed; or turn `SMCChecks` off for `RockstarService.exe`
+and `Launcher.exe` through FEX's per-executable AppConfig. The second is cheap, but a stale
+translation would run if the protector ever wrote different code. Cutting the call-return stack
+reset when the same host page is invalidated again was not taken: no evidence yet shows it is safe
+to skip.
+
+Hollow Knight (`app-367520`) on IPA `60611f78…`: first frame at +10.52 s (run
+`20261016T023523`), title menu shown. The earlier build of the same code, IPA `60471856…`, before
+its patches got their author line: +10.69 s (run `20261016T022813`).
