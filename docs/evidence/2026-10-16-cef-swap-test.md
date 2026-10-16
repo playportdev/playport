@@ -143,3 +143,80 @@ On the phone those all share one address window.
 - **The target is known.** Per process: two 32 GiB, 32 GiB-aligned pools and two 16 GiB metadata
   regions. Renderers add a 32 GiB pool, a 1,320 GiB sandbox placeholder and a 1 GiB region. A
   low-address-space build has to shrink all of them.
+
+## Our stock-args build in place of Social Club's (PLA-370 stage B exit)
+
+**Date:** 2026-10-16 (14:47–14:50). **Linear:** [PLA-370](https://linear.app/playportdev/issue/PLA-370).
+**Plan:** [CEF low-VA build](../plans/2026-10-16-cef-low-va-build.md), stage B. The same procedure,
+prefix and runner as the swap above (`swaprun.sh`, 150 s, `WINEDEBUG=+pid,+virtual,+process,+loaddll`),
+run `runs/swap-ours1`. Host only, no sign-in.
+
+**Files.** Before the swap, the Social Club folder matched the `sc-orig` sha256 list (81 files). Our
+cross-built CEF 143.0.14 (stock arguments, built on Linux; `$PLAYPORT_BUILD/cef-src/out-stage-b`)
+replaced `libcef.dll`, `chrome_elf.dll`, `v8_context_snapshot.bin`, `libEGL.dll`, `libGLESv2.dll`,
+`vk_swiftshader.dll`, `vk_swiftshader_icd.json`, `vulkan-1.dll`, `resources.pak`,
+`chrome_100_percent.pak`, `chrome_200_percent.pak`, `icudtl.dat` and `locales/` (220 files). Social
+Club's `d3dcompiler_47.dll`, `dxcompiler.dll` and `dxil.dll` and all Rockstar files stayed. In place
+during the run [M]:
+
+| File | sha256 |
+| --- | --- |
+| `libcef.dll` | `c321c8a573fd16eb7199eb4f0ff8f5ec69ce70f1cd08dd2b0a6ef28ee60ce7d8` |
+| `chrome_elf.dll` | `b2cf884b88fe4a4f5c06b459a1d345d6d8d9effcf2d2e376f7216548dcf4beac` |
+| `v8_context_snapshot.bin` | `9e734da381305dc427e1a8e61fc07e6e5529b85a2c6d6dc91aace2eb9b4e04e9` |
+| `libEGL.dll` | `0195066a7f45850c1758ad0cc525208c74dffeb3022a52dae6eb93e6e0bd12d2` |
+| `libGLESv2.dll` | `660162218efed83bf419dbd6aaa95a42dd3a7f249161d06c2563e9075d518bdd` |
+| `vk_swiftshader.dll` | `1d9d93562bf2e4e475cdedf5a99fc777017d2e536838a6f7ea49b7b581054ad0` |
+| `vk_swiftshader_icd.json` | `32d83ff113fef532a9f97e0d2831f8656628ab1c99e9060f0332b1532839afd9` |
+| `vulkan-1.dll` | `5f74f80c90d38db8f5ad527a4b1ec2bbde3cd6015d8e17d6329d797439bdf571` |
+| `resources.pak` | `464f27f2a4be3789cc27338c0d2f5e6fe7ea93a9570f2548790e09b9df61903b` |
+| `chrome_100_percent.pak` | `cd9eca12dd6172b6e695341fffe040c0329626cd041b09a93d5f8d01cb1323e2` |
+| `chrome_200_percent.pak` | `2ca5f848f9c5e837fc022fa08e72305117026624360ddfedd967247f9298336a` |
+| `icudtl.dat` | `1cf67874b5a87a8363a86fb3f81e3cbbed54d389062dab8fb52308d5cf8c8612` |
+| `locales/*.pak`, concatenated in name order | `353e2d0dc18f9415bf0bd1e339d501b69f158d63fcd19430bf6a7f2e8860bd67` |
+| kept: `d3dcompiler_47.dll`, `dxcompiler.dll`, `dxil.dll` | `a05f9973…cbbb`, `1224f162…b72b`, `77e039c9…a59a` (Social Club's) |
+
+**Result: accepted, sign-in page reached [M].**
+
+- Social Club UI states, from `socialclub_launcher.log` (ms since SDK start): `WAIT_BROWSER_WINDOW`
+  37 → `LOADING` (`https://rgl.rockstargames.com/launcher`) 18,487 → `WAITING_FOR_PAGE_LOAD` 18,487 →
+  `WAITING_FOR_PAGE_READY` 51,511 → `PAGE_READY` 51,774 → `START_SIGN_IN` 51,774 → `FINISHED` 51,787.
+  The module list reads "Chromium Embedded Framework (…\libcef.dll) - 143.0.14.0". No `SC_INIT_ERR_*`.
+- `launcher.log`: the same lines as in the stock swap and control, including the usual
+  `[folderfix] Folder permissions operation failed`, which all three runs log.
+- Wine: our `libcef.dll` and `chrome_elf.dll` loaded as native in all 11 helper processes. No
+  exception, backtrace or page fault in a CEF process. The only `err:` lines are the usual prefix
+  noise listed above, of the same kinds; the one stack overflow is again Proton's `xalia.exe`.
+- Screens: at 30 s and 60 s the launcher's small splash window; at 90, 120 and 150 s the sign-in page
+  (Rockstar logo, "Sign In", Email and Password fields, the cookie notice with "Accept all cookies",
+  "Reject all" and "Cookie settings"). The 90 s screenshot is byte-identical to the stock swap's.
+- After the run the original files were restored, and the folder again matched the `sc-orig` list
+  (81 files). Stage R's own prefix still has Social Club's `libcef.dll` (`c6ee879d…486a`).
+
+Timing, seconds after `launcher.log`'s "Init phase 3" [M]:
+
+| Run | browser ready (`WaitForBrowser`, = `FINISHED`) | window active |
+| --- | --- | --- |
+| control1 (Social Club's files) | 47.6 | 72.0 |
+| swap1 (Spotify stock build) | 50.7 | 74.9 |
+| swap-ours1 (our build) | 51.8 | 81.2 |
+
+One run each; our build is within about 1 s of the stock build to the page, and its window became
+active about 6 s later. One run cannot show a real slowdown; if there is one, the missing PGO is
+the likely cause [I].
+
+Process tree at the sign-in page, steady from 90 s to 150 s [M], the same as both earlier runs:
+browser 1, `gpu-process` 1, `renderer` 3, `utility` network, storage, audio and video capture 1 each
+(9). Short-lived: `utility` `ProcessorMetrics` 1, and a second `gpu-process` with
+`--use-gl=disabled` (Chromium's GPU-info collector), which all three runs start (each `wine.log` has
+its command line). `FilePatcher`/`Unzipper` did not appear, as in the control.
+
+Reservations (`+virtual`, ≥ 1 GiB) have the stock shape in every process [M]: two 32 GiB pools at
+32 GiB-aligned addresses and two unaligned 16 GiB regions; renderers add a third 32 GiB pool, the
+1,320 GiB `MEM_RESERVE_PLACEHOLDER` region (first 36 GiB split off), the 4 GiB and 16 GiB
+`MEM_REPLACE_PLACEHOLDER` carves and the 1 GiB region (part decommitted). All are made after
+`libcef.dll` loads. This run's renderers all got the 1,320 GiB region at the first hint; the stock and
+control runs each had one renderer that retried.
+
+So the Linux cross-toolchain produces a CEF that Social Club drives to its sign-in page, with stock
+reservations. Stage C's changed arguments are the next variable.
