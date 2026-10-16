@@ -595,7 +595,7 @@ resource	Runtime/arm64ec-windows/url.dll	655360	3471af259198db63d7c930cf0d976e8f
 resource	Runtime/arm64ec-windows/urlmon.dll	1310720	ecda4964c396aba0c5563c232f5854f3e7f7fa2daa59cd65685df7a9abcfde24	wine-build	build-arm64ec/dlls/urlmon/arm64ec-windows/urlmon.dll	P2
 resource	Runtime/arm64ec-windows/usbd.sys	655360	6672e4e5c7379e6363a4f4decd7e1cd3c0f786b0401e09ba10d17d99d3047af8	wine-build	build-arm64ec/dlls/usbd.sys/arm64ec-windows/usbd.sys	P2
 resource	Runtime/arm64ec-windows/user32.dll	2686976	65918fc5944ff3800b7b07bc1c8c0bc885f627e9eed5909c5bf17c0c1d243426	wine-build	build-arm64ec/dlls/user32/arm64ec-windows/user32.dll	P2
-resource	Runtime/arm64ec-windows/userenv.dll	589824	2941fb0746af22d7fa2219e3bd9635cee648bff44991c736f0160ff0f3bce35e	wine-build	build-arm64ec/dlls/userenv/arm64ec-windows/userenv.dll	P2
+resource	Runtime/arm64ec-windows/userenv.dll	589824	5c80434252e7d3d7f57b98cba4c1e0b5e38fd1e50b73eb15194bf15ebf94c2fd	wine-build	build-arm64ec/dlls/userenv/arm64ec-windows/userenv.dll	P2
 resource	Runtime/arm64ec-windows/usp10.dll	131072	ea85fd2f56dfea58ad39f37a37e7e3103178a5be7e9cc021e7114c5f0418c084	wine-build	build-arm64ec/dlls/usp10/arm64ec-windows/usp10.dll	P2
 resource	Runtime/arm64ec-windows/utildll.dll	655360	8f4b248d28b9a39798f9752d7dc5a491d52567ac574d497ffe363cd1c4724a73	wine-build	build-arm64ec/dlls/utildll/arm64ec-windows/utildll.dll	P2
 resource	Runtime/arm64ec-windows/uxtheme.dll	851968	0f9947bca87ac13b47a84e1b3c6ab871ca39778206c35e06d45a19e4caa601a2	wine-build	build-arm64ec/dlls/uxtheme/arm64ec-windows/uxtheme.dll	P2
@@ -1341,7 +1341,7 @@ resource	Runtime/aarch64-windows/url.dll	458752	deb00d3573ae332aef0ad48642dabf2b
 resource	Runtime/aarch64-windows/urlmon.dll	983040	8ba623955d32c86cc005bd360d027f0395f75a737028f620b7b3cbcaf6b6c81a	wine-build	build-macos/dlls/urlmon/aarch64-windows/urlmon.dll	P2
 resource	Runtime/aarch64-windows/usbd.sys	458752	1a86b45a7f23bcc29966cdbbe454d443498bfa8f0ecf1642a66478a79569e531	wine-build	build-macos/dlls/usbd.sys/aarch64-windows/usbd.sys	P2
 resource	Runtime/aarch64-windows/user32.dll	2490368	9069535e3cade27fcf7518a15bb019ba18eb2cc265d2915cff3bb4f5f3f6b3b7	wine-build	build-macos/dlls/user32/aarch64-windows/user32.dll	P2
-resource	Runtime/aarch64-windows/userenv.dll	458752	7c9ba9d9592aca4995845deb56b657f6578c1ed7f0b249a80a72903bde39a7bf	wine-build	build-macos/dlls/userenv/aarch64-windows/userenv.dll	P2
+resource	Runtime/aarch64-windows/userenv.dll	458752	46f787dae581e9894473a2677e7080ef87829918ffee5b86e300fd8ce78c160a	wine-build	build-macos/dlls/userenv/aarch64-windows/userenv.dll	P2
 resource	Runtime/aarch64-windows/usp10.dll	131072	eb633038b647f2930ddcd659a4e15574af3fb915f47518495e48a63f18b4a5db	wine-build	build-macos/dlls/usp10/aarch64-windows/usp10.dll	P2
 resource	Runtime/aarch64-windows/utildll.dll	458752	c7f44f68f0a9bb19380bfcc8d5ad70c3bf402ef19dc85b34a309829955d85ff2	wine-build	build-macos/dlls/utildll/aarch64-windows/utildll.dll	P2
 resource	Runtime/aarch64-windows/uxtheme.dll	655360	bf7e4247d24fa93cab2775732771111eac501f6d8ecff364f173619503c5b3fd	wine-build	build-macos/dlls/uxtheme/aarch64-windows/uxtheme.dll	P2
@@ -2153,7 +2153,7 @@ resource	Runtime/i386-windows/urlmon.dll	630784	048174dd8ad030c142cef6af70f23a0a
 resource	Runtime/i386-windows/usbd.sys	40960	058ec3371c7f297876471a4ed2b1afe4aff581e0084e7dc4cfa8d1481717f47d	wine-build	build-macos/dlls/usbd.sys/i386-windows/usbd.sys	P2
 resource	Runtime/i386-windows/user.exe16	335872	75231c3b255fa4a567e20fe72d0762029098c347711b2375a5c2aff5e575f54a	wine-build	build-macos/dlls/user.exe16/i386-windows/user.exe16	P2
 resource	Runtime/i386-windows/user32.dll	2195456	77d0971d54a78972a0b4920c7afb89edad0bbfbe5f47aa9c6e8e84e5b1624bae	wine-build	build-macos/dlls/user32/i386-windows/user32.dll	P2
-resource	Runtime/i386-windows/userenv.dll	53248	4cb31f9f8cba5367f7884919a2128700724fbb9ab6cc188502e36b934351b082	wine-build	build-macos/dlls/userenv/i386-windows/userenv.dll	P2
+resource	Runtime/i386-windows/userenv.dll	53248	6831db7728fb13869deceabfb4f8356784465c6e98735e39629b6bf7c9a3af26	wine-build	build-macos/dlls/userenv/i386-windows/userenv.dll	P2
 resource	Runtime/i386-windows/usp10.dll	8192	adcdf598b3cb44d3d277dd9b46834f293c53a315f7bd5cabbd3269511f7c1ff5	wine-build	build-macos/dlls/usp10/i386-windows/usp10.dll	P2
 resource	Runtime/i386-windows/utildll.dll	32768	cc08d0351ed2ebc89127e045de7f8ccf3818a5b645bb905087cbcd06a31dc961	wine-build	build-macos/dlls/utildll/i386-windows/utildll.dll	P2
 resource	Runtime/i386-windows/uxtheme.dll	241664	63c779539ec134b8d15711c925035e816cf982542fed01a105182b1c01c865f4	wine-build	build-macos/dlls/uxtheme/i386-windows/uxtheme.dll	P2
