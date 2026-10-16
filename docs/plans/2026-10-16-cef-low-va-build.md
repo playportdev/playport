@@ -110,6 +110,10 @@ the dev-only `env.FEX_SMCCHECKS=none`.
   - The data files are built. icudtl.dat is identical; resources.pak lacks only the WebUI code cache, which upstream disables on cross-builds.
   - The swap-test tree is `$PLAYPORT_BUILD/cef-src/out-stage-b`. Nothing has run yet.
 - 2026-10-16: stage B passed its exit test. Under desktop Proton, with our build in place of Social Club's CEF files, the launcher reached its sign-in page: the same UI states, process tree and reservation shape as the stock build, no `SC_INIT_ERR`, and `FINISHED` 51.8 s after init phase 3 (stock 50.7 s, original 47.6 s). Evidence: [CEF swap test](../evidence/2026-10-16-cef-swap-test.md#our-stock-args-build-in-place-of-social-clubs-pla-370-stage-b-exit).
+- 2026-10-16: stage C passed on the desktop. The low-address-space build (the plan's six args, a `partition_alloc_low_va` PartitionAlloc flag for 1 GiB pools, and `use_allocator_shim=false`, because the shim without PartitionAlloc-as-malloc does not compile on Windows) built with ninja exit 0.
+  - Swapped in under desktop Proton, it reached the sign-in page both without switches and with 0109's switches.
+  - The 9-process tree holds 10.1 GiB of reservations of 64 MiB or more: none outside the renderers, 2.9–4.4 GiB per renderer, the largest 2 GiB aligned to 2 GiB.
+  - Evidence: [low-VA CEF build](../evidence/2026-10-16-cef-low-va-build.md).
 
 ## Risks
 
