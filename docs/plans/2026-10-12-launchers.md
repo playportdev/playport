@@ -123,6 +123,9 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
+- **Running now: a diagnostic** (run `ed5e3805`, [PLA-367](https://linear.app/playportdev/issue/PLA-367), no
+  code change): Open with the dev runtime key `env.FEX_SMCCHECKS=none` (then `full` if needed), to show
+  which of PLA-367's options lets the update complete and CEF start, before the owner decides.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
