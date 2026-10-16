@@ -123,7 +123,25 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
-- **Running now: chunk 8** (run `ef661d2e`): wine-pe 0045 also copies `FEX_*` into a service's environment, then the same diagnostic with the service unchecked.
+- **Chunk 8 (run `ef661d2e`): services get the launch's FEX variables, and the launcher reaches CEF ([PLA-367](https://linear.app/playportdev/issue/PLA-367)).**
+  wine-pe 0045 now copies `FEX_*` too (`7213e77`), so a service runs with the launch's FEX profile
+  and runtime keys. Open with `env.FEX_SMCCHECKS=none` (run `20261016T040029`, IPA `243d9b4b…`):
+  - Rockstar Service ran unchecked: no write faults, and every one of 28 processes had a 16 MiB tail.
+  - The self-update no longer blocked ("No self-update, continuing").
+  - SocialClubHelper started 18 times. Each time CEF's browser process raised `c000001d` at
+    chrome_elf.dll + 0x13A535.
+  - The launcher logged `SC_INIT_ERR_WEBSITE_FAILED_LOAD`.
+  - The crashed helpers stayed. Their footprint reached about 8 GB, and the app ended at about +143 s,
+    likely a memory kill.
+  - The 896 MiB pool kept 422 MiB of room.
+  An earlier Open in the same session (run `20261016T033304`) stalled before its first window, with no
+  launcher log; the cause is unknown
+  ([evidence](../evidence/2026-10-15-rockstar-stage0-phone.md#chunk-8-services-get-the-launchs-fex-variables-the-launcher-reaches-cef-pla-367)).
+  **Next:** find what chrome_elf.dll + 0x13A535 is: disassemble the shipped chrome_elf.dll on the
+  workstation, likely Chromium's deliberate crash after a failed check. Then reproduce
+  SocialClubHelper's start under desktop Wine to see which check fails. Separately, a crashed
+  helper should not stay alive (file it). The owner still chooses PLA-367's permanent route; the
+  `none` key works for the diagnostic only.
 - **Chunk 7 (run `eaecb8d6`): the SMC diagnostic, [PLA-367](https://linear.app/playportdev/issue/PLA-367).**
   A dev build's Open now takes `launcher-rockstar`'s saved runtime keys and FEX inputs (PLA-271
   gap, `fe39ed5`, `07acf11`). With `env.FEX_SMCCHECKS=none`, Launcher.exe and the service's helper

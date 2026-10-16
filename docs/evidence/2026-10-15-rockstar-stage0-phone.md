@@ -410,3 +410,58 @@ received from service" 9 s later.
 `env.FEX_SMCCHECKS=full` was not run: it would reach the service no more than `none` did. The
 saved key was cleared at the next launch outside the session (`settings-restored
 settings:launcher-rockstar`, run `20261016T031933`).
+
+## Chunk 8: services get the launch's FEX variables; the launcher reaches CEF (PLA-367)
+
+**The change.** wine-pe 0045 now copies the caller's `FEX_*` variables into the block
+`CreateEnvironmentBlock` builds, as well as `WINE_IOS_*` and `MADEIRA_*` (commit `7213e77`). A
+service therefore runs with the launch's FEX profile (`FEX_HOSTFEATURES`, the memory ordering,
+`FEX_MAXINST`, `FEX_DISKCACHE`, `FEX_X87REDUCEDPRECISION`) and any dev runtime key, as the process
+that started it does. Nothing in that profile is wrong for a service: these are the values its
+launcher already runs with, and FEX keeps the disk cache off in a WoW64 process itself (patches/fex
+0022). IPA `243d9b4be2311ae23731e6dffb648e3e5eb2215c364edddce2da7683ffb567be`. Hollow Knight
+(`app-367520`) on it: first frame at +11.86 s (run `20261016T033003`; the shot at +10 s was still
+black), then +10.40 s with the title menu (run `20261016T033115`).
+
+**Open A, run `20261016T033304`** (`env.FEX_SMCCHECKS=none` saved by run `20261016T033234`, the
+same lock session). The runtime and game started (+3.47 s, +3.90 s), but no first window came. The
+launcher wrote no log, started no LauncherPatcher, and Rockstar Service was never started (listed,
+stopped). The screen was black at 120, 300 and 480 s. The driver had no time cap, so the play ran
+about 1,480 s before the app was ended with `pp phone kill`. The cause was not found.
+
+**Open B, run `20261016T040029`** (key saved again in the same session; `--wait 900`). This time
+the first window came at +10.41 s (chunk 7: +51.0 s). The processes started in this order:
+Launcher.exe, LauncherPatcher, a second Launcher.exe, the service's `start` helper (exited 0),
+Rockstar Service under the SCM, dxdiag, then SocialClubHelper 18 times.
+
+- **The service got the key.** It produced no write-fault `[rtcs]` lines (chunk 7: 1,538,807) and no
+  invalidation storm. Every one of the 28 processes ended with a 16 MiB JIT tail, 448 MiB in all.
+- **The self-update no longer blocks.** The launcher's log (kept under `$PLAYPORT_BUILD`, not
+  here) reads "Self-update not ready to apply yet", then "No self-update, continuing". Social Club
+  2.4.0.240 matched the available version, and the launcher went on to its UI.
+- **CEF starts, but its browser process crashes.** Each SocialClubHelper logged its `[chromium]`
+  browser line (decision 0109: `--in-process-gpu --disable-gpu ...`). Each one then raised
+  `c000001d` at the same guest address, chrome_elf.dll + 0x13A535. No renderer was started.
+- **The launcher gave up.** At +82 s it logged "Social club UI in fail state... requesting
+  shutdown" with `SC_INIT_ERR_WEBSITE_FAILED_LOAD` (category 3, code 17), "timed out loading both
+  its online and offline content". The screenshot at 60 s shows the launcher's splash (the R-star
+  logo and its close button).
+- **Memory.** The crashed helpers stayed: the pool counted 26 children at the end. The app's
+  footprint rose from about 3 GB to 7,966 MB (4,726 MB compressed), about 0.5 GB for each helper.
+  The log stops at +143 s, while a helper was mapping libcef.dll (0xefbe000 bytes). The driver
+  saw the app gone at about +310 s, and there was no crash report. A memory kill is likely but
+  not confirmed.
+- **The pool and the band.** At the end the 896 MiB pool had: head 346 MiB (251 live, 95 free),
+  tail 129 MiB (97 live), and 422 MiB of room. Nothing was exhausted. Images 179. Band: 8,437 of
+  16,384 MiB used.
+- **libcef in the pool.** Each process maps libcef as its own x64 image view, with "no pool copy".
+  The JIT pool holds neither an alias nor a copy of it.
+
+**Not done.**
+- The renderer kill (PLA-292): no renderer existed.
+- The sign-in page: not reached.
+- A second Open: not run. The crash loop that ends the app is deterministic: 18 helpers
+  crashed at one address. A repeat would only push memory to the same limit again.
+
+The key was cleared at the next launch outside the session: run `20261016T040724` shows the
+Launchers page's Runtime keys row as None.
