@@ -5,6 +5,8 @@
 and D2 there. [PLA-277](https://linear.app/playportdev/issue/PLA-277),
 [PLA-271](https://linear.app/playportdev/issue/PLA-271),
 [PLA-254](https://linear.app/playportdev/issue/PLA-254).
+Amended by [0111](0111-fewer-cef-processes-with-chromium-features.md) (2026-10-16): the switch set
+also turns on `NetworkServiceInProcess2` and `RunVideoCaptureServiceInBrowserProcess`.
 
 ## Context
 
