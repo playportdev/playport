@@ -44,7 +44,7 @@ Each stage ends with a commit, evidence and Linear updates. Stages A–C are hos
 2. xwin downloads the MSVC CRT and the Windows SDK 10.0.26100, after the owner accepts Microsoft's
    licence in person.
 3. Build the `win_sdk/bin/SetEnv.x64.json` layout Chromium's `setup_toolchain.py` reads.
-4. Patch CEF's `automate-git.py`, `gn_args.py` and `gclient_hook.py` so they target `win` from a
+4. Patch CEF's automation, build-argument and gclient-hook scripts so they target `win` from a
    Linux host.
 
 Exit: `gn gen` succeeds for a stock-args Windows x64 CEF.
@@ -101,6 +101,7 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 ## Progress
 
 - 2026-10-16: the owner approved D1–D6 as recommended. The xwin licence is still to be accepted by the owner in person at stage A step 2. Stage A started.
+- 2026-10-16: stage A bootstrap checked out depot_tools and CEF `dd46a3761`, completed the pinned Chromium/Windows-deps sync with a disk watchdog, and fetched xwin 0.10.0. Owner licence acceptance remains pending; toolchain layout and `gn gen` have not run. Successor commands and live-process records: `.work/agent-notes/pla370-cef/PROGRESS.md`.
 
 ## Risks
 
