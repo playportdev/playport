@@ -126,6 +126,8 @@ Runs 2–4 were one `pp phone lock` session.
 **The first renderer's large reservations [M]:** one 256 MB placeholder reservation
 (`type=0x42000`), then eight 512 MB `MEM_RESERVE` reservations, 4,352 MB in total. The second
 renderer died before it made any.
+(Corrected in [fewer CEF processes](2026-10-16-cef-fewer-processes-phone.md#v8-code-range-correction-m):
+these are requests, and V8 retries each code range four times, so most were refused.)
 
 ## The next blocker: the JIT pool fills [M]
 
