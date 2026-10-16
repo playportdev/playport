@@ -123,7 +123,9 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
-- **Running now: a diagnostic** (run `ed5e3805`, [PLA-367](https://linear.app/playportdev/issue/PLA-367), no
+- **Diagnostic run `ed5e3805` stopped before the phone:** Open ignored the launcher's saved runtime keys
+  (`LauncherOpen.open` passes no title config). **Running now: chunk 7** (run `eaecb8d6`): Open honours
+  `launcher-rockstar`'s saved settings (PLA-271 gap), then the diagnostic below. Planned diagnostic (run `ed5e3805`, [PLA-367](https://linear.app/playportdev/issue/PLA-367), no
   code change): Open with the dev runtime key `env.FEX_SMCCHECKS=none` (then `full` if needed), to show
   which of PLA-367's options lets the update complete and CEF start, before the owner decides.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
