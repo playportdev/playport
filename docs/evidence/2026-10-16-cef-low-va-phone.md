@@ -29,6 +29,8 @@
   `load_auth_packages` logs `80090304` (`SEC_E_INTERNAL_ERROR`). The launcher survives that failure.
   Three of the CEF processes then dereference a null pointer inside `secur32`, and the exception
   never resolves. No band or pool exhaustion was involved: `refused=0` and `exhausted=none`.
+  Later: the null read was a full FEX alias table, not `secur32`; see
+  [the alias table on the phone](2026-10-16-alias-table-cap-phone.md) (PLA-373).
 - **Delivery size [M].** The compressed dev IPA grows by 150,977,731 B: 558,603,570 B against the
   previous 407,625,839 B (`bf9175bf…`). Uncompressed, it is 2,309.1 MB.
 - **Hollow Knight still works [M].** First frame at +10.60 s, with the screenshot showing the title menu.
