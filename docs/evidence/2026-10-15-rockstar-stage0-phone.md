@@ -606,3 +606,63 @@ this way. It is not specific to crashes.
 
 This does not make CEF work: PLA-369 still stops each helper in DLL init. It removes the memory
 death that ends the app, and a launcher's exited helpers and installers stop costing memory.
+
+## Chunk 10: an exited child's views are released (PLA-368)
+
+**The change, madeira-unix 0154.** A `struct file_view` now records `ios_owner_peb`. `create_view`
+takes it from a thread-local scope. The scope is set only around `allocate_virtual_memory` and
+`virtual_map_section`, which do the work of `NtAllocateVirtualMemory[Ex]` and
+`NtMapViewOfSection[Ex]`. A call for another process already runs as an APC on a thread of the
+target (`server_queue_process_apc`), so the owner is the target. The runtime's own views have no
+owner and are never released: TEB blocks, thread data, thread stacks and the main image's fixed
+base.
+
+`process_exit_wrapper` queues an exited x86-64 child. Its views go once every thread of it in
+`teb_list` has finished, meaning it reached the end of `pthread_exit_wrapper` or
+`process_exit_wrapper`. The release happens on another process's thread, at the next thread
+reclamation (`virtual_free_thread_data`) or TEB allocation, as 0139 does for the WoW64 window.
+The private and image views go through `delete_view`, and their `wow64_mapping` is forgotten, not
+closed.
+
+These are kept and counted:
+- views of other sections (shared memory a live process may have cached, such as win32u's
+  session blocks);
+- `VPROT_SYSTEM` views;
+- anything in FEX's band `[0x7c00000000, 0x8000000000)`, the JIT pool or a WoW64 window;
+- every view of an i386 child (its window is 0139's; its secondary threads are not in `teb_list`).
+
+One `[view-owner]` line per exit gives the views and MB freed and kept, and the number of
+finished threads. If its tables are full, a process keeps its views and that is logged.
+
+No host C test: the patched `virtual_ios.c` exists only in the run tree, and `app/tests` builds
+from `upstream/madeira`. The check is on the phone.
+
+**Runs** (IPA `bf9175bf10f05a8248d4eed1d30a338ad5c6c0cd454701f51cd94ce45be1de7c`):
+
+| Run | What | Outcome |
+| --- | --- | --- |
+| `20261016T083302` | Hollow Knight `app-367520 --until first-frame+10 --shot` | first frame +10.20 s, title menu shown |
+| `20261016T083450` | `--settings launcher-rockstar:{"runtime":"env.FEX_SMCCHECKS=none"}` | saved |
+| `20261016T083514` | `--action open-launcher:rockstar --until "mark:first window+240" --wait 600` | first window +10.43 s; ran to +250 s, no app crash |
+| `20261016T083954` | `--settings launcher-rockstar:{}` | key cleared |
+| `20261016T084018` | `--play dir-childabort-325` | refused: not a catalogued title (the library holds only Hollow Knight and RDR2) |
+
+All five ran in one `pp phone lock` session. In the Open, 51 children exited: 47 with
+`0x80000003`, the CEF helpers that still crash (PLA-369), and 4 with 0. There were 50
+`[view-owner]` lines. A helper's line reads "freed 61 views (300 MB), kept 29 (142 MB); 2
+finished thread(s)". The first, non-CEF children freed 30–49 MB each.
+
+**Footprint** (`[xp]` `fpMB`):
+- 3,028 MB at +12 s;
+- 4,029 MB at +61 s;
+- 4,410 MB at +157 s;
+- 4,708 MB at +260 s, with a peak of 4,976 MB.
+
+That is about 36 MB per exited helper. In chunk 8, without the fix, it was about 260 MB per
+helper (3.2 GB to 7,966 MB with 18 helpers in 140 s).
+
+**Not done:**
+- The 142 MB kept per helper is not yet broken down by class (section views, band, pool), and the
+  remaining climb is not explained.
+- There was no regression play of a title whose children used to work. The childabort probe is
+  not in the library.
