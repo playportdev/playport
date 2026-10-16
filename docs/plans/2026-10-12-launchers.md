@@ -123,6 +123,7 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
+- **Running now: chunk 8** (run `ef661d2e`): wine-pe 0045 also copies `FEX_*` into a service's environment, then the same diagnostic with the service unchecked.
 - **Chunk 7 (run `eaecb8d6`): the SMC diagnostic, [PLA-367](https://linear.app/playportdev/issue/PLA-367).**
   A dev build's Open now takes `launcher-rockstar`'s saved runtime keys and FEX inputs (PLA-271
   gap, `fe39ed5`, `07acf11`). With `env.FEX_SMCCHECKS=none`, Launcher.exe and the service's helper
