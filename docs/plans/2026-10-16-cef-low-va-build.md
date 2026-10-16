@@ -108,6 +108,22 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 
 ## Risks
 
+- **V8's sandbox must be off on the phone, not just for cost.** Stock V8 checks
+  `CHECK_LT(kSandboxSize, address_space_limit)` (`v8/src/sandbox/sandbox.cc:114`). The limit comes
+  from the reported top of the address space, which ml990 clamps to 512 GiB, so the 1 TiB sandbox
+  aborts every renderer before V8's partial-reservation fallback.
+  - If `v8_enable_sandbox=false` proves unbuildable, the fallback is a V8 source patch in our build
+    (the iOS shape, `kSandboxSizeLog2 = 34`, with an 8 GiB partial reservation, at least 8 GiB per
+    renderer). It is not a Wine shim hiding `VirtualAlloc2`/`MapViewOfFile3`/`UnmapViewOfFile2`:
+    that leaves PartitionAlloc untouched and still trips the check.
+  - Review: `$PLAYPORT_BUILD/agent-notes/pla370-cef/reports/review-external-v8-fallback.md`.
+- **Rockstar's ~30 s browser timeout** counts from "Init phase 3"
+  ([PLA-371](https://linear.app/playportdev/issue/PLA-371)). The helper has to start under FEX
+  within it. If Stage D times out at `WAIT_BROWSER_WINDOW`, check helper start-up first, including
+  `MMDeviceEnumerator` activation (ValveSoftware/Proton#3291).
+  - The phone also shows an unexplained 39 s pre-init gap.
+  - If 0109's `--disable-gpu` path fails to render, the alternative is
+    `--use-gl=angle --use-angle=swiftshader`.
 - The untested build combination may need several Chromium patches, or prove too costly.
 - xwin is not supported by Chromium or CEF; missing pieces (ATL, redistributables, `.asm` files) may
   need workarounds.
