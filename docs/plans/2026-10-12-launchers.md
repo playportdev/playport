@@ -123,6 +123,7 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
+- **Running now: chunk 9** (run `4e17ac0e`): the CEF browser crash ([PLA-369](https://linear.app/playportdev/issue/PLA-369), host first), crashed children not reaped ([PLA-368](https://linear.app/playportdev/issue/PLA-368)), then Open again. **Owner to decide:** PLA-367's permanent route (per-executable `SMCChecks=none` with a decision record, or FullSMC after PLA-206).
 - **Chunk 8 (run `ef661d2e`): services get the launch's FEX variables, and the launcher reaches CEF ([PLA-367](https://linear.app/playportdev/issue/PLA-367)).**
   wine-pe 0045 now copies `FEX_*` too (`7213e77`), so a service runs with the launch's FEX profile
   and runtime keys. Open with `env.FEX_SMCCHECKS=none` (run `20261016T040029`, IPA `243d9b4b…`):
