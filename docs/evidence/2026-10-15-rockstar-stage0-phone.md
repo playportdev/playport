@@ -404,7 +404,8 @@ Launcher.exe and the helper hold 16 MiB of tail instead of 144–272 MiB; the se
 BRANCHACCESS tokens) reads "No update", then "Applying downloaded self-update..." 20 s after it
 started, then a background-service "Folder permissions operation failed" 6 s later, then nothing
 for the rest of the run. The update was not applied; applying it goes through the service, which
-still loops. Chunk 5's "Handshake with service timed out" did not appear in this run.
+still loops. "Handshake with service timed out" appeared again, 23 s after start, and "Handshake
+received from service" 9 s later.
 
 `env.FEX_SMCCHECKS=full` was not run: it would reach the service no more than `none` did. The
 saved key was cleared at the next launch outside the session (`settings-restored
