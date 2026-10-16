@@ -238,7 +238,9 @@ before playing. --dry-run prints UI_ACTIONS without accessing the phone:
                          stick bound to mouse:move turns the view, a multiple of 2000 counts/s (the
                          Controller page's Look speed row); a change logs `controls: look speed 2.0×`
   --settings ID:JSON     a game's own launch settings, as its page saves them (PlayportKit
-                         LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears)
+                         LaunchSettings: frame limit, screen, launch arguments; `ID:{}` clears);
+                         `launcher-rockstar:JSON` is the runtime keys and FEX inputs open-launcher:rockstar
+                         reads (dev). Actions run first: save them in an earlier pp ui of the same session
   --play ID              Play, as the button does, after --action/--settings/--verify; JIT via Setup check's method
 
 ID is the catalogue's title id (`app-367520`, Hollow Knight), APP a Steam app

@@ -5,7 +5,8 @@
 // settings (Windows services, its JIT pool, its backend). Dev builds only until a launcher passes
 // Stage 1 (SettingsSection.all). A launcher the prefix does not record, or whose executable is not
 // in the folder it records, reads "Not installed" and has no Open. The driver's
-// `open-launcher:ID` calls the same LauncherOpen.open.
+// `open-launcher:ID` calls the same LauncherOpen.open. Dev builds take the runtime keys and FEX's
+// inputs saved under the launcher's title id (`launcher-rockstar`), as a game's Play does.
 
 import Foundation
 import PlayportKit
@@ -51,8 +52,22 @@ enum LauncherOpen {
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { log in
             WineHostRuntime.appendLog("launcher: " + log)
         } }.value
-        let fex = FEXProfile.launch(appID: nil, exe: exe, ordering: MemoryOrdering())
-        guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments,
+        // The settings saved under the launcher's title id: runtime keys and FEX's inputs, a dev
+        // build's as for a game's Play (decision 0034); the player's app runs the defaults.
+        #if PLAYPORT_RELEASE
+        let saved = PublisherLauncher.OpenSettings()
+        #else
+        let saved = PublisherLauncher.openSettings(saved: LaunchSettingsStore.shared.settings(for: l.titleID))
+        #endif
+        if saved != PublisherLauncher.OpenSettings() {
+            log("open \(l.id): saved settings runtime=\(saved.config.keys.sorted().map { "\($0)=\(saved.config[$0]!)" }) "
+                + "ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in saved.ordering[s].map { "\(s.rawValue)=\($0)" } }) "
+                + "maxInst=\(saved.maxInst.map(String.init) ?? "profile") x87Reduced=\(saved.x87Reduced.map { String($0) } ?? "profile") "
+                + "diskCache=\(saved.diskCache.map { String($0) } ?? "default")")
+        }
+        let fex = FEXProfile.launch(appID: nil, exe: exe, ordering: saved.ordering, maxInst: saved.maxInst,
+                                    x87Reduced: saved.x87Reduced, diskCache: saved.diskCache)
+        guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments, config: saved.config,
                                        graphics: l.graphics, fex: fex, windowsServices: l.windowsServices,
                                        jitPoolMB: l.jitPoolMB) else { return false }
         log("open \(l.id) on \(l.graphics.rawValue): \(exe) \(l.arguments.joined(separator: " "))")
@@ -62,6 +77,7 @@ enum LauncherOpen {
 
 struct LaunchersSettings: View {
     @ObservedObject private var launch = TitleLaunch.shared
+    @ObservedObject private var launchSettings = LaunchSettingsStore.shared
     /// Each launcher's executable when installed; absent until read.
     @State private var installed: [String: String?] = [:]
 
@@ -76,6 +92,21 @@ struct LaunchersSettings: View {
                 Task { _ = await LauncherOpen.open(l) }
             }
         }
+        #if !PLAYPORT_RELEASE
+        // A game page's Runtime keys row, for the launchers' title ids (`env.FEX_SMCCHECKS=none`).
+        ForEach(PublisherLauncher.all) { l in
+            let runtime = launchSettings.binding(for: l.titleID)
+            let keys = runtime.wrappedValue.runtime.trimmingCharacters(in: .whitespaces)
+            PadRow(id: "set:launcher-" + l.id + "-runtime", title: "Runtime keys",
+                   subtitle: keys.isEmpty || LaunchSettings.runtimeKeys(keys) != nil ? l.name : "Not key=value items: not used",
+                   value: keys.isEmpty ? "None" : keys, accessory: .chevron, changed: !keys.isEmpty, style: .plain,
+                   reset: keys.isEmpty ? nil : { runtime.wrappedValue.runtime = "" }) {
+                PadModal.shared.keyboard(title: "Runtime keys", text: runtime.wrappedValue.runtime,
+                                         placeholder: "For example env.FEX_SMCCHECKS=none",
+                                         maxLength: 200) { runtime.wrappedValue.runtime = $0 }
+            }
+        }
+        #endif
         SettingsNote(text: "Open starts the launcher by itself, with no game.")
             .task {
                 let prefix = WineHostRuntime.shared.prefixURL

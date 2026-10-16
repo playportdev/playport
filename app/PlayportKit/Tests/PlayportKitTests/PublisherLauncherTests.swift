@@ -32,6 +32,25 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(JitPool.size(limitMB: 8191, gameMB: r.jitPoolMB).mb, 896)
     }
 
+    func testOpenTakesTheSavedRuntimeKeysAndFEXInputsOnly() {
+        XCTAssertEqual(PublisherLauncher.openSettings(saved: nil), .init())
+        var ordering = MemoryOrdering()
+        ordering[.tso] = false
+        let saved = LaunchSettings(screen: "1080", graphics: .dxmt, ordering: ordering, maxInst: 100, x87Reduced: true,
+                                   diskCache: false, runtime: "env.FEX_SMCCHECKS=none vram-mb=1024",
+                                   windowsServices: false, jitPoolMB: 512)
+        let open = PublisherLauncher.openSettings(saved: saved)
+        XCTAssertEqual(open.config, ["env.FEX_SMCCHECKS": "none", "vram-mb": "1024"])
+        XCTAssertEqual(open.ordering, ordering)
+        XCTAssertEqual(open.maxInst, 100)
+        XCTAssertEqual(open.x87Reduced, true)
+        XCTAssertEqual(open.diskCache, false)
+        // Keys that are not key=value items and a block size FEX cannot take are unset, as for a game.
+        let bad = PublisherLauncher.openSettings(saved: LaunchSettings(maxInst: 0, runtime: "FEX_SMCCHECKS"))
+        XCTAssertEqual(bad.config, [:])
+        XCTAssertNil(bad.maxInst)
+    }
+
     func testTheExecutableComesFromTheInstallFolderTheInstallerRecorded() {
         let r = PublisherLauncher.rockstar
         XCTAssertEqual(r.executablePath(systemHive: Self.hive), #"C:\Program Files\Rockstar Games\Launcher\Launcher.exe"#)

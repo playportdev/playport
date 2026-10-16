@@ -39,6 +39,36 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
 
     public static func named(_ id: String) -> PublisherLauncher? { all.first { $0.id == id } }
 
+    /// What an Open takes from the settings saved under `titleID` (a dev build's, as a game's
+    /// Play takes its own: the driver's `--settings launcher-ID:JSON`, the Launchers page's
+    /// Runtime keys row): the runtime keys and FEX's inputs. Windows services, the pool and the
+    /// backend stay this table's.
+    public struct OpenSettings: Equatable, Sendable {
+        /// madeira.cfg keys, `env.NAME` among them (LaunchCoordinator exports those).
+        public var config: [String: String] = [:]
+        public var ordering = MemoryOrdering()
+        public var maxInst: Int?
+        public var x87Reduced: Bool?
+        public var diskCache: Bool?
+
+        public init(config: [String: String] = [:], ordering: MemoryOrdering = MemoryOrdering(), maxInst: Int? = nil,
+                    x87Reduced: Bool? = nil, diskCache: Bool? = nil) {
+            self.config = config
+            self.ordering = ordering
+            self.maxInst = maxInst
+            self.x87Reduced = x87Reduced
+            self.diskCache = diskCache
+        }
+    }
+
+    /// The saved settings' runtime keys and FEX inputs, read as a game's are
+    /// (LaunchSettings.resolve: unparsable keys and a block size FEX cannot take are unset).
+    public static func openSettings(saved: LaunchSettings?) -> OpenSettings {
+        let e = LaunchSettings.resolve(game: saved, global: LaunchSettings())
+        return OpenSettings(config: e.runtime, ordering: e.ordering, maxInst: e.maxInst,
+                            x87Reduced: e.x87Reduced, diskCache: e.diskCache)
+    }
+
     /// The executable's DOS path from the system hive's text (system.reg), or nil when the install
     /// folder is not recorded, or is not an absolute path on drive C (the only drive in the prefix).
     public func executablePath(systemHive text: String) -> String? {
