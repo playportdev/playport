@@ -107,6 +107,9 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   lines per call, the guest exception path) and on FEX re-translating its code, which looks like the
   tail's 128 MiB steps. Then Open again, so the update finishes and CEF starts (steps 4's
   measurements, 6, 7).
+- **Running now: chunk 5** ([PLA-366](https://linear.app/playportdev/issue/PLA-366), owner away,
+  unattended): the service's per-fault cost and FEX re-translation, then Open until the update
+  finishes and CEF starts.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
