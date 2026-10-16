@@ -359,3 +359,53 @@ to skip.
 Hollow Knight (`app-367520`) on IPA `60611f78…`: first frame at +10.52 s (run
 `20261016T023523`), title menu shown. The earlier build of the same code, IPA `60471856…`, before
 its patches got their author line: +10.69 s (run `20261016T022813`).
+
+## Chunk 7: Open with FEX's self-modifying-code checks off (PLA-271, PLA-367)
+
+**The plumbing (PLA-271).** A dev build's Settings › Launchers › Open now takes the runtime keys
+and FEX's inputs saved under `launcher-rockstar`, as a game's Play does (commit `fe39ed5`); the
+page has a dev Runtime keys row, and `pp ui --settings launcher-rockstar:JSON` saves the same
+settings (`07acf11`). The driver runs actions before `--settings`, so the settings go in an earlier
+`pp ui` of the same `pp phone lock` session. Hollow Knight (`app-367520`): first frame +10.56 s on
+IPA `8e5f2122…` (run `20261016T025849`) and +9.64 s on `0082f431…` (run `20261016T030301`),
+title menu shown. The Launchers page with the row: runs `20261016T025939` and, after the key was
+cleared, `20261016T031933` (None).
+
+**The run.** IPA `0082f431300ecf0460fac68cc14a79f3af55c567a905ac2a54a8c346f24e5f2b`, run
+`20261016T030415`: `env.FEX_SMCCHECKS=none` saved (run `20261016T030351`), then
+`open-launcher:rockstar` to first window + 600 s. The log shows the key reaching the play
+(`title: config: environment FEX_SMCCHECKS=none`); the phone reported thermal state serious at
+launch. First window at +51.0 s (chunk 5: +88.3 s). The launcher stayed on its splash for the
+whole 600 s; no crash, no `c000001d`, and the play ran until the driver ended it.
+
+**The variable did not reach Rockstar Service.** FEX's `[inv-census]` line carries `smc_off`, and
+the self-modifying-code lines name their thread:
+
+| Process (pid) | Chunk 5, `mtrack` (`20261016T023613`) | This run, `none` |
+| --- | --- | --- |
+| session root (0x20), services.exe (0x28) | — | `smc_off=1` |
+| Launcher.exe #1 (0x44) | SMC lines; 144 MiB tail | no SMC lines; 16 MiB tail |
+| Launcher.exe #2 (0x6c) | SMC lines; 272 MiB tail | no SMC lines; 16 MiB tail |
+| the service's `start` helper | SMC lines; 160 MiB tail | no SMC lines; 16 MiB tail |
+| Rockstar Service (0xe8) | SMC lines; 272 MiB tail | `smc_off=0`; 1,538,807 write faults for the run; 256 MiB tail |
+
+services.exe builds each service's environment block without inheriting
+(`CreateEnvironmentBlock`), and wine-pe 0045 copies only `WINE_IOS_*` and `MADEIRA_*` into it.
+So no `FEX_*` variable reaches a service: neither this key nor the launch's FEX profile
+(`FEX_HOSTFEATURES`, the memory ordering).
+
+**The pool.** After +15 s from the first window the pool did not change for the rest of the run:
+head 224 MiB (196 live), tail 353 MiB (193 live), room 319 MiB, not exhausted (chunk 5: 273 / 609
+(449 live) / 15 MiB). Band at the end: 4,469 MiB used of 16,384. With the checks off, each
+Launcher.exe and the helper hold 16 MiB of tail instead of 144–272 MiB; the service alone holds
+256 MiB.
+
+**The self-update.** The launcher's log (kept under `$PLAYPORT_BUILD`, not here: it holds
+BRANCHACCESS tokens) reads "No update", then "Applying downloaded self-update..." 20 s after it
+started, then a background-service "Folder permissions operation failed" 6 s later, then nothing
+for the rest of the run. The update was not applied; applying it goes through the service, which
+still loops. Chunk 5's "Handshake with service timed out" did not appear in this run.
+
+`env.FEX_SMCCHECKS=full` was not run: it would reach the service no more than `none` did. The
+saved key was cleared at the next launch outside the session (`settings-restored
+settings:launcher-rockstar`, run `20261016T031933`).

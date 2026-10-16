@@ -123,11 +123,22 @@ Branch `dev/pla-291-rockstar-launcher` from `main` `f7ac25f`, not merged. Report
   PLA-206's x86-64 FullSMC deadlock; or, as an owner decision, `SMCChecks` off for
   `RockstarService.exe` and `Launcher.exe` through FEX's per-executable AppConfig (cheap, but
   stale code if the protector ever writes different code). Then Open again.
-- **Diagnostic run `ed5e3805` stopped before the phone:** Open ignored the launcher's saved runtime keys
-  (`LauncherOpen.open` passes no title config). **Running now: chunk 7** (run `eaecb8d6`): Open honours
-  `launcher-rockstar`'s saved settings (PLA-271 gap), then the diagnostic below. Planned diagnostic (run `ed5e3805`, [PLA-367](https://linear.app/playportdev/issue/PLA-367), no
-  code change): Open with the dev runtime key `env.FEX_SMCCHECKS=none` (then `full` if needed), to show
-  which of PLA-367's options lets the update complete and CEF start, before the owner decides.
+- **Chunk 7 (run `eaecb8d6`): the SMC diagnostic, [PLA-367](https://linear.app/playportdev/issue/PLA-367).**
+  A dev build's Open now takes `launcher-rockstar`'s saved runtime keys and FEX inputs (PLA-271
+  gap, `fe39ed5`, `07acf11`). With `env.FEX_SMCCHECKS=none`, Launcher.exe and the service's helper
+  stopped faulting and their JIT tails fell from 144–272 MiB to 16 MiB each; the pool kept 319 MiB
+  of room (chunk 5: 15 MiB). Rockstar Service did not get the variable: services.exe builds a
+  service's environment afresh, and wine-pe 0045 copies only `WINE_IOS_*` and `MADEIRA_*` into it.
+  So the service still looped (1.5 million write faults, 256 MiB tail), and the self-update stopped
+  at "Applying downloaded self-update..." with the splash up for 600 s
+  ([evidence](../evidence/2026-10-15-rockstar-stage0-phone.md#chunk-7-open-with-fexs-self-modifying-code-checks-off-pla-271-pla-367)).
+  `full` was not run: it would not reach the service either. **Next:** the owner chooses PLA-367's
+  route. Option 2 (`SMCChecks` off per executable, FEX AppConfig for `RockstarService.exe` and
+  `Launcher.exe`) reaches the service without the environment; option 1 (FullSMC for hot pages)
+  needs PLA-206 first. The diagnostic itself can finish with one small dev change, `FEX_` added to
+  wine-pe 0045's copied prefixes, so a service gets the launch's FEX variables (the profile's too),
+  then one more Open. The pool question waits on that run: with every process unchecked the tails
+  suggest 896 MiB is enough; if the service keeps 256 MiB, it stays tight once CEF starts.
 - **Chunk 2: Stage 0 on the phone.** Subject: the Rockstar installer, then the
   standalone launcher to its sign-in page. No game and no sign-in. The work below is in order;
   each step passes Hollow Knight's smoke play.
