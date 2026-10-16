@@ -42,3 +42,4 @@
 0043-ntdll-wait-again-after-unqueueing-when-a-killed-thre.patch
 0044-kernelbase-let-an-ARM64EC-FlushInstructionCache-reach.patch
 0045-userenv-keep-the-iOS-runtime-s-variables-in-a-new-en.patch
+0046-ntdll-log-a-write-to-tracked-code-s-exception-once-i.patch

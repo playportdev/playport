@@ -1,0 +1,160 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 02:18:29 +0200
+Subject: [PATCH] virtual: print a protection change's lines once in 65536, and
+ the tail per process
+
+A guest that rewrites its own code costs two NtProtectVirtualMemory calls
+and three mprotect_exec calls a pass, from FEX's write tracking: its trap
+and untrap of the host page, and the reset of the thread's call-return
+stack. Each call printed one to three lines. Rockstar's
+RockstarService.exe made 3.45 million calls in 950 s, and its 3.1 GB of
+log filled the phone.
+
+The NtProtectVirtualMemory, NtProtect-sync-check, NtProtect-sync
+triggered and mprotect_exec lines now print for the first 64 calls of
+each site and then every 65536th, with the count, and a
+[protect-census] line sums the three every 65536 calls. The sync scan is
+unchanged: for an image with no pool copy it compares the region with
+each mapping and copies nothing; its cost was the two lines.
+
+After each pool tail carve (fresh or reused), a "[jit-pool] tail of pid"
+line gives the live tail the current process holds, so a process whose
+code FEX translates again and again names itself.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 69 +++++++++++++++++++++++++++++-----
+ 1 file changed, 60 insertions(+), 9 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 166767b..5a44db6 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -2986,6 +2986,28 @@ static int ios_tail_carve_occupied( const void *base, size_t size )
+ static unsigned ios_tail_carve_n;
+ static pthread_mutex_t ios_tail_carve_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
++/* Playport (PLA-366): the pool tail is FEX's code buffers, and the pool lines show only
++ * its total. After each carve this prints the live tail the current process holds, so a
++ * process that translates the same code again and again names itself. */
++static void ios_tail_log_process_share( void )
++{
++    void *owner = ios_jit_current_peb();
++    size_t live = 0;
++    unsigned i, carves = 0;
++
++    pthread_mutex_lock( &ios_tail_carve_lock );
++    for (i = 0; i < ios_tail_carve_n; i++)
++        if (!ios_tail_carves[i].free && ios_tail_carves[i].owner == owner)
++        {
++            live += ios_tail_carves[i].size;
++            carves++;
++        }
++    pthread_mutex_unlock( &ios_tail_carve_lock );
++    dprintf( 2, "[jit-pool] tail of pid %04x: %lu MiB live in %u code buffers\n",
++             (unsigned)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess,
++             (unsigned long)(live >> 20), carves );
++}
++
+ /* Playport: the pool's use, for the host (wine_host_pool_stats, which a launch
+  * logs as `pool:` lines). v[] gets, in this order and in bytes or counts:
+  *    0 size          the pool
+@@ -10061,6 +10083,18 @@ static int ios_jit_copy_header_matches( const char *pe, const char *copy, unsign
+     return 1;
+ }
+ 
++/* Playport (PLA-366): the protection-change lines below were printed on every call. A
++ * guest that rewrites its own code takes two NtProtectVirtualMemory calls and three
++ * mprotect_exec calls a pass from FEX's write tracking (Rockstar's RockstarService.exe:
++ * 3.45 million calls in 950 s, 3.1 GB of log). Each line is now printed for the first
++ * 64 calls of its site and then every 65536th, with the count; [protect-census] sums
++ * the sites every 65536 NtProtectVirtualMemory calls. */
++static unsigned long ios_protect_calls, ios_protect_syncs, ios_protect_mprotects;
++static inline int ios_protect_line_due( unsigned long n )
++{
++    return n <= 64 || !(n & 0xffff);
++}
++
+ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+ {
+     /* ml247: catch WHO narrows maxprot on pool pages.
+@@ -10115,10 +10149,14 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+      * Apply only on the PROT_WRITE-add path; non-write protect changes go
+      * through the regular mprotect below. */
+     if (!ios_in_mach_exc)                       /* ml374: see ios_in_mach_exc */
+-        ERR("mprotect_exec(%p, 0x%lx, %c%c%c)\n", base, (unsigned long)size,
+-            (unix_prot & PROT_READ)  ? 'r' : '-',
+-            (unix_prot & PROT_WRITE) ? 'w' : '-',
+-            (unix_prot & PROT_EXEC)  ? 'x' : '-');
++    {
++        unsigned long n = __sync_add_and_fetch( &ios_protect_mprotects, 1 );
++        if (ios_protect_line_due( n ))
++            ERR("mprotect_exec(%p, 0x%lx, %c%c%c) #%lu\n", base, (unsigned long)size,
++                (unix_prot & PROT_READ)  ? 'r' : '-',
++                (unix_prot & PROT_WRITE) ? 'w' : '-',
++                (unix_prot & PROT_EXEC)  ? 'x' : '-', n);
++    }
+     if ((unix_prot & PROT_WRITE) && !(unix_prot & PROT_EXEC))
+     {
+         /* ml391 (task #60): try WITHOUT VM_PROT_COPY first.  COPY forcibly
+@@ -21113,6 +21151,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+                 *size_ptr = got;
+                 dprintf(2, "[jit-pool] tail REUSE rx=%p size=0x%lx (asked 0x%lx) free_left=%u rev=ml438\n",
+                         jit_rx, (unsigned long)got, (unsigned long)alloc_size, ios_tail_carve_n);
++                ios_tail_log_process_share();
+                 return STATUS_SUCCESS;
+             }
+             pthread_mutex_unlock( &ios_tail_carve_lock );
+@@ -21257,6 +21296,7 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+                     jit_rx, (unsigned long)alloc_size,
+                     (unsigned long)(reserve_offset + alloc_size),
+                     (unsigned long)jit_pool_offset, (unsigned long)ios_jit_pool_size_global);
++            ios_tail_log_process_share();
+             return STATUS_SUCCESS;
+         }
+     }
+@@ -21830,8 +21870,16 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+             ios_jit_orig_addr = orig_addr;
+             addr = reversed;
+         }
+-        ERR("NtProtectVirtualMemory(orig=%p reversed=%p sz=0x%lx prot=0x%x)\n",
+-            orig_addr, addr, (unsigned long)*size_ptr, new_prot);
++        {
++            unsigned long n = __sync_add_and_fetch( &ios_protect_calls, 1 );
++            if (ios_protect_line_due( n ))
++                ERR("NtProtectVirtualMemory(orig=%p reversed=%p sz=0x%lx prot=0x%x) #%lu\n",
++                    orig_addr, addr, (unsigned long)*size_ptr, new_prot, n);
++            if (!(n & 0xffff))
++                ERR("[protect-census] NtProtectVirtualMemory %lu, NtProtect-sync %lu, mprotect_exec %lu "
++                    "(each site's line: the first 64, then every 65536th)\n",
++                    n, ios_protect_syncs, ios_protect_mprotects);
++        }
+     }
+ #endif
+ 
+@@ -21926,8 +21974,10 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+          * section's allocation prot (PAGE_WRITECOPY for .data) — not the
+          * actual per-page state — so RW→WRITECOPY transitions read as 0x8→0x8.
+          * Over-syncing is OK: parent is always the source of truth. */
+-        ERR("iOS NtProtect-sync-check: base=%p sz=0x%lx old=0x%x new=0x%x\n",
+-            base, (unsigned long)size, old, new_prot);
++        unsigned long ios_sync_n = __sync_add_and_fetch( &ios_protect_syncs, 1 );  /* PLA-366 */
++        if (ios_protect_line_due( ios_sync_n ))
++            ERR("iOS NtProtect-sync-check: base=%p sz=0x%lx old=0x%x new=0x%x #%lu\n",
++                base, (unsigned long)size, old, new_prot, ios_sync_n);
+         /* iOS-Madeira 2026-05-13: bail out if the new protection makes the
+          * source region unreadable. The sync below memcpys from `base` into
+          * the JIT pool. When the caller is revoking read access (e.g.
+@@ -21950,7 +22000,8 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+         if (1)
+         {
+             int idx;
+-            ERR("iOS NtProtect-sync: triggered, scanning %d JIT mappings\n", ios_jit_mapping_count);
++            if (ios_protect_line_due( ios_sync_n ))
++                ERR("iOS NtProtect-sync: triggered, scanning %d JIT mappings\n", ios_jit_mapping_count);
+             for (idx = 0; idx < ios_jit_mapping_count; idx++)
+             {
+                 uintptr_t pe_start = (uintptr_t)ios_jit_mappings[idx].pe_base;
