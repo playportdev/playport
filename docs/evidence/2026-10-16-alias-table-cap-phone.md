@@ -139,4 +139,5 @@ No renderer reservations to report.
 ## Not checked
 
 - The sign-in page, renderers and their reservations: no renderer started.
-- Whether Wine's DirectWrite on the phone enumerates any font.
+- Whether Wine's DirectWrite on the phone enumerates any font. It did not: see
+  [CEF fonts on the phone](2026-10-16-cef-fonts-phone.md) (PLA-374).
