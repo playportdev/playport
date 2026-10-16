@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 19:30:05 +0200
+Subject: [PATCH] ntdll: hold 1024 JIT pool images, and keep a full alias table
+ loud
+
+The Rockstar Games Launcher's tree had 338 live image copies when Social
+Club's second CEF browser started, and each CEF process adds about 50; the
+full Social Club tree (a browser, its network and storage services,
+renderers and utilities) would pass this table's 512. Every live image is
+also pushed to every process's emulator, whose table held 256: the CEF
+network and storage services and the second browser refused their late
+images, secur32 among them, and died in its delay-load thunk (PLA-373).
+
+The table now holds 1024 images, and FEX's per-emulator alias table the
+same (patches/fex 0046); the two must stay in step. A refused alias was
+logged 8 times per session; now the first 64 and then one in 256 are,
+each with the running count.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-16-alias-table-cap-phone.md
+Offered-upstream: no; the JIT pool is Madeira's own iOS code
+---
+ build/ntdll-unix/virtual_ios.c | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 6ebdb8f..a23248f 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -149,7 +149,12 @@ WINE_DECLARE_DEBUG_CHANNEL(virtual_ranges);
+  * pseudo-process child's x64/EC set in one table. 64 overflowed at exactly
+  * the 65th image (Thumper under desktop, 2026-07-06): concrt140 copied but
+  * never registered → raw-VA DllMain call → unfixable exec-fault loop. */
+-#define IOS_JIT_MAX_MAPPINGS 512
++/* 1024 (PLA-373): the Rockstar Games Launcher's tree with its Social Club CEF
++ * processes had 338 live images when its second browser started, and each CEF
++ * process adds about 50. Every live image is also pushed to every process's
++ * emulator, so FEX's IosAliasEntries (kMaxEntries, patches/fex 0046) must hold
++ * at least this many: keep the two in step. */
++#define IOS_JIT_MAX_MAPPINGS 1024
+ struct ios_jit_mapping {
+     void *pe_base;      /* Original PE image base address (unix mapping) */
+     void *jit_base;     /* JIT pool RX address */
+@@ -3277,13 +3282,16 @@ static ios_alias_cb_t ios_jit_alias_pushback_cb = NULL;   /* non-NULL once any p
+ 
+ /* An emulator refused an alias: its table is full, and every x64->EC call into
+  * the image takes the exec-fault redirect instead (ml1106). */
++/* PLA-373: the first 64 refusals, then one in 256, each with the running total,
++ * so a full table stays visible for as long as it refuses. */
+ static void ios_alias_note_refused( void *peb, unsigned long long pe, unsigned long long jit,
+                                     unsigned long long size )
+ {
+-    static int said;
+-    if (said++ < 8)
++    static unsigned int refused;
++    unsigned int n = __sync_add_and_fetch( &refused, 1 );
++    if (n <= 64 || !(n % 256))
+         dprintf( 2, "[jit-alias] PLA-310 emulator of peb=%p FULL: image %#llx+%#llx -> %#llx NOT registered"
+-                    " -- its calls will fault-redirect\n", peb, pe, size, jit );
++                    " -- its calls will fault-redirect (refusals so far: %u)\n", peb, pe, size, jit, n );
+ }
+ 
+ /* Push one alias to every process's emulator: an image's PE range is unique in
