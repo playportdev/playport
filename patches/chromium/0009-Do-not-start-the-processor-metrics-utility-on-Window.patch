@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 17 Oct 2026 21:00:00 +0200
+Subject: [PATCH] Do not start the processor metrics utility on Windows
+
+Chrome's browser starts a utility process after startup only to record
+processor metrics over WMI (chrome.mojom.ProcessorMetrics). Under
+Playport it is one more process and JIT pool copy, and it was the one
+that ran the pool's head out in the Rockstar launcher's Open (PLA-384).
+Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-17-cef-trim.md
+Offered-upstream: no
+---
+ chrome/browser/chrome_browser_main_win.cc |   17 ++---------------
+ 1 file changed, 2 insertions(+), 15 deletions(-)
+
+diff --git a/chrome/browser/chrome_browser_main_win.cc b/chrome/browser/chrome_browser_main_win.cc
+index 6684175f48..caf2a3391f 100644
+--- a/chrome/browser/chrome_browser_main_win.cc
++++ b/chrome/browser/chrome_browser_main_win.cc
+@@ -167,14 +167,6 @@ class TranslationDelegate : public installer::TranslationDelegate {
+   std::wstring GetLocalizedString(int installer_string_id) override;
+ };
+ 
+-void DelayedRecordProcessorMetrics() {
+-  mojo::Remote<chrome::mojom::ProcessorMetrics> remote_util_win =
+-      LaunchProcessorMetricsService();
+-  auto* remote_util_win_ptr = remote_util_win.get();
+-  remote_util_win_ptr->RecordProcessorMetrics(
+-      base::DoNothingWithBoundArgs(std::move(remote_util_win)));
+-}
+-
+ // Initializes the ModuleDatabase on its owning sequence. Also starts the
+ // enumeration of registered modules in the Windows Registry.
+ void InitializeModuleDatabase() {
+@@ -693,13 +685,8 @@ void ChromeBrowserMainPartsWin::PostBrowserStart() {
+   }
+ #endif
+ 
+-  // Record Processor Metrics. This is very low priority, hence posting as
+-  // BEST_EFFORT to start after Chrome startup has completed.
+-  scoped_refptr<base::SequencedTaskRunner> task_runner =
+-      base::ThreadPool::CreateSequencedTaskRunner(
+-          {base::MayBlock(), base::TaskPriority::BEST_EFFORT});
+-  task_runner->PostTask(FROM_HERE,
+-                        base::BindOnce(&DelayedRecordProcessorMetrics));
++  // Processor metrics are not recorded: their utility process (one more
++  // process for a metric nobody uploads) is not started.
+ 
+   // Write current executable path to the User Data directory to inform
+   // Progressive Web App launchers, which run from within the User Data

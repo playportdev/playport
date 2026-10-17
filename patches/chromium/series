@@ -5,3 +5,9 @@
 0005-Dawn-use-the-client-DXC-DLL-instead-of-building-it-o.patch
 0006-PartitionAlloc-opt-into-one-GiB-pools-for-low-addres.patch
 0007-Run-the-audio-service-in-the-browser-process-on-Wind.patch
+0008-Run-the-storage-service-in-the-browser-process-on-Wi.patch
+0009-Do-not-start-the-processor-metrics-utility-on-Window.patch
+0010-Cap-every-process-s-thread-pool-on-Windows.patch
+0011-Turn-the-hang-watcher-off-by-default-on-Windows.patch
+0012-Build-without-loader-lock-sampling.patch
+0013-Do-not-run-the-stack-sampling-profiler-in-a-Windows.patch

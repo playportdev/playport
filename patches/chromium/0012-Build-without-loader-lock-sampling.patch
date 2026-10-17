@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 17 Oct 2026 21:00:00 +0200
+Subject: [PATCH] Build without loader lock sampling
+
+enable_loader_lock_sampling is a plain gni value, not an argument; set it
+false so no process starts a LoaderLockSampler thread (PLA-384).
+Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-17-cef-trim.md
+Offered-upstream: no
+---
+ .../cpp/stack_sampling/loader_lock_sampling.gni    |    4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/services/tracing/public/cpp/stack_sampling/loader_lock_sampling.gni b/services/tracing/public/cpp/stack_sampling/loader_lock_sampling.gni
+index 2e08f3166a..6341da71ff 100644
+--- a/services/tracing/public/cpp/stack_sampling/loader_lock_sampling.gni
++++ b/services/tracing/public/cpp/stack_sampling/loader_lock_sampling.gni
+@@ -2,4 +2,6 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-enable_loader_lock_sampling = is_win && target_cpu == "x64"
++# Off: an embedder that must fit several processes in a small address space
++# runs no sampling thread in each.
++enable_loader_lock_sampling = false

@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 17 Oct 2026 21:00:00 +0200
+Subject: [PATCH] Cap every process's thread pool on Windows
+
+At most 4 foreground and 2 utility workers in every process (the
+background pool already has 2). The browser asked for 16 and a
+renderer for the CPU count less one; under Playport every thread holds
+about 65 MB of FEX's 16 GiB host band (PLA-384). No switch sizes
+these pools.
+Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-17-cef-trim.md
+Offered-upstream: no
+---
+ base/task/thread_pool/thread_pool_impl.cc |   11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/base/task/thread_pool/thread_pool_impl.cc b/base/task/thread_pool/thread_pool_impl.cc
+index 02844d94f9..abe3a6111f 100644
+--- a/base/task/thread_pool/thread_pool_impl.cc
++++ b/base/task/thread_pool/thread_pool_impl.cc
+@@ -55,6 +55,13 @@ enum ThreadGroupType { FOREGROUND = 0, UTILITY, BACKGROUND };
+ 
+ constexpr size_t kMaxBestEffortTasks = 2;
+ 
++#if BUILDFLAG(IS_WIN)
++// Every process's pools are capped on Windows, for an embedder that must fit
++// several processes' threads in a small address space.
++constexpr size_t kMaxForegroundThreadsOnWin = 4;
++constexpr size_t kMaxUtilityThreadsOnWin = 2;
++#endif
++
+ // Indicates whether BEST_EFFORT tasks are disabled by a command line switch.
+ bool HasDisableBestEffortTasksSwitch() {
+   // The CommandLine might not be initialized if ThreadPool is initialized in a
+@@ -193,6 +200,10 @@ void ThreadPoolImpl::Start(const ThreadPoolInstance::InitParams& init_params,
+ 
+   size_t foreground_threads = init_params.max_num_foreground_threads;
+   size_t utility_threads = init_params.max_num_utility_threads;
++#if BUILDFLAG(IS_WIN)
++  foreground_threads = std::min(foreground_threads, kMaxForegroundThreadsOnWin);
++  utility_threads = std::min(utility_threads, kMaxUtilityThreadsOnWin);
++#endif
+ 
+   // On platforms that can't use the background thread priority, best-effort
+   // tasks run in foreground pools. A cap is set on the number of best-effort
