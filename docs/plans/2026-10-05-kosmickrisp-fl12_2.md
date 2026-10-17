@@ -347,12 +347,20 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 
 ### V3. Pipelines that ask for more samples than reported
 
-- RDR2 builds 96 pipelines with `rasterizationSamples = 8`; KosmicKrisp reports 1, 2 and 4.
-- Find what KosmicKrisp does with 8 today (render pipeline descriptor, `poly` paths) on the
-  mock, and make the build fail cleanly or clamp, whichever keeps Metal from rejecting the
-  pipeline state at draw time. Record the choice in the patch; no new decision unless a
-  reported limit changes.
-- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+- **Done** (2026-10-17, PLA-386; host only, **not checked on the phone**). RDR2 builds 96
+  pipelines with `rasterizationSamples = 8`; KosmicKrisp reports 1, 2 and 4 and passed 8 to
+  Metal as the pipeline's raster sample count (and as an attachment-less pass's default).
+  The mock now aborts on a raster sample count the device does not support; the replay then
+  crashed on 51 pipelines (one group; module skipping hides the rest).
+- **Choice:** `patches/mesa` 0039 (`feature`) clamps the count Metal sees to the highest
+  supported one not above the request. Failing the build instead would hand the game an
+  error at load for a pipeline it can only draw into its 4-sample images; a valid
+  application never asks for an unsupported count, so it sees no change. No reported limit
+  changes.
+- `kk-host-test` builds an 8-sample pipeline and draws it into a 4-sample image and without
+  attachments; it aborted in the mock before the patch. Replay: 0 crashes again.
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10. What Metal itself does with an
+  unsupported count was not seen.
 
 ### V4. Sampled multisample arrays without `shaderStorageImageMultisample`
 

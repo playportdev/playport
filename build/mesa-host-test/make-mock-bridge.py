@@ -44,6 +44,9 @@ struct kk_mock_obj {
 
 void *kk_mock_new(int kind, uint64_t size);
 void kk_mock_record_msl(const char *src);
+
+/* The sample counts of an A19 (supportsTextureSampleCount:). */
+#define KK_MOCK_SAMPLE_COUNT_OK(n) ((n) == 1 || (n) == 2 || (n) == 4)
 '''
 
 DEFS = {}
@@ -117,7 +120,18 @@ body("mtl_device_get_name", 'snprintf(buffer, 256, "Mock Apple A19 Pro GPU");')
 body("mtl_device_get_architecture_name", 'snprintf(buffer, 256, "applegpu_g18p");')
 body("mtl_device_get_gpu_apple_family", "return 10u;")
 body("mtl_device_get_registry_id", "return 1u;")
-body("mtl_device_supports_sample_count", "return sample_count == 1 || sample_count == 2 || sample_count == 4;")
+body("mtl_device_supports_sample_count", "return KK_MOCK_SAMPLE_COUNT_OK(sample_count);")
+# A pipeline's raster sample count must match its attachments', and a render
+# pass without attachments takes its default: one the device does not support
+# is a driver bug the phone would hit (what Metal then does is not checked).
+for f, what in (("mtl_render_pipeline_descriptor_set_raster_sample_count", "render pipeline"),
+                ("mtl_render_pass_descriptor_set_default_raster_sample_count", "render pass")):
+    body(f, r'''
+   if (!KK_MOCK_SAMPLE_COUNT_OK(sample_count)) {
+      fprintf(stderr, "kk-mock: ''' + what + r''' raster sample count %u, which "
+                      "the device does not support\n", sample_count);
+      abort();
+   }''')
 body("mtl_device_max_threads_per_threadgroup", "return (struct mtl_size){1024, 1024, 1024};")
 body("mtl_device_max_threadgroup_memory_length", "return 32768u;")
 body("mtl_device_max_buffer_length", "return 1ull << 32;")

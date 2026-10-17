@@ -119,6 +119,9 @@ struct pipe_desc {
    bool xfb;
    bool discard;
    uint32_t rast_stream;
+   /* 0 is VK_SAMPLE_COUNT_1_BIT */
+   VkSampleCountFlagBits samples;
+   bool no_attachments;
 };
 
 static VkPipeline
@@ -194,7 +197,7 @@ make_pipeline(const struct pipe_desc *d, VkPipelineLayout layout)
    };
    VkPipelineMultisampleStateCreateInfo ms = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+      .rasterizationSamples = d->samples ? d->samples : VK_SAMPLE_COUNT_1_BIT,
    };
    VkPipelineColorBlendAttachmentState att = {.colorWriteMask = 0xf};
    VkPipelineColorBlendStateCreateInfo cb = {
@@ -212,7 +215,7 @@ make_pipeline(const struct pipe_desc *d, VkPipelineLayout layout)
    VkFormat color = VK_FORMAT_R8G8B8A8_UNORM;
    VkPipelineRenderingCreateInfo rinfo = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-      .colorAttachmentCount = 1,
+      .colorAttachmentCount = d->no_attachments ? 0 : 1,
       .pColorAttachmentFormats = &color,
    };
    VkGraphicsPipelineCreateInfo ci = {
@@ -226,7 +229,7 @@ make_pipeline(const struct pipe_desc *d, VkPipelineLayout layout)
       .pViewportState = &vp,
       .pRasterizationState = &rs,
       .pMultisampleState = &ms,
-      .pColorBlendState = &cb,
+      .pColorBlendState = d->no_attachments ? NULL : &cb,
       .pDynamicState = &dyn,
       .layout = layout,
    };
@@ -1024,6 +1027,89 @@ main(int argc, char **argv)
       CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
       CHECK(vkQueueWaitIdle(queue));
       printf("ok pipeline-statistics-without-feature\n");
+   }
+
+   /* Pipelines with rasterizationSamples 8 on a device whose sample counts
+    * are 1, 2 and 4, as Red Dead Redemption 2 builds 96 (its images are
+    * clamped to 4): drawn into a 4-sample image, and without attachments.
+    * The mock aborts on a raster sample count the device does not
+    * support. */
+   {
+      if (props.limits.framebufferColorSampleCounts & VK_SAMPLE_COUNT_8_BIT) {
+         fprintf(stderr, "the device reports 8 samples\n");
+         return 1;
+      }
+      VkImageCreateInfo msci = imci;
+      msci.samples = VK_SAMPLE_COUNT_4_BIT;
+      VkImage ms_image;
+      CHECK(vkCreateImage(dev, &msci, NULL, &ms_image));
+      vkGetImageMemoryRequirements(dev, ms_image, &mr);
+      mai.allocationSize = mr.size;
+      mai.memoryTypeIndex = find_memory(pd, mr.memoryTypeBits);
+      VkDeviceMemory ms_mem;
+      CHECK(vkAllocateMemory(dev, &mai, NULL, &ms_mem));
+      CHECK(vkBindImageMemory(dev, ms_image, ms_mem, 0));
+      VkImageViewCreateInfo msvci = ivci;
+      msvci.image = ms_image;
+      VkImageView ms_view;
+      CHECK(vkCreateImageView(dev, &msvci, NULL, &ms_view));
+
+      struct pipe_desc d8 = {"samples-8", "pass.vert", NULL, NULL, NULL,
+                             "color.frag", TRI, false, FIRST, FILL};
+      d8.samples = VK_SAMPLE_COUNT_8_BIT;
+      VkPipeline p8 = make_pipeline(&d8, layout);
+      d8.no_attachments = true;
+      VkPipeline p8_none = make_pipeline(&d8, layout);
+
+      VkCommandBufferAllocateInfo cbai = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+         .commandPool = pool,
+         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+         .commandBufferCount = 1,
+      };
+      VkCommandBuffer cmd;
+      CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+      VkCommandBufferBeginInfo bi = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      };
+      CHECK(vkBeginCommandBuffer(cmd, &bi));
+      VkRenderingAttachmentInfo ca = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+         .imageView = ms_view,
+         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      };
+      VkRenderingInfo ri = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+         .renderArea = {{0, 0}, {64, 64}},
+         .layerCount = 1,
+         .colorAttachmentCount = 1,
+         .pColorAttachments = &ca,
+      };
+      VkViewport vpt = {0, 0, 64, 64, 0, 1};
+      VkRect2D sc = {{0, 0}, {64, 64}};
+      VkDeviceSize off = 0;
+      VkPipeline pipes[2] = {p8, p8_none};
+      for (unsigned i = 0; i < 2; i++) {
+         ri.colorAttachmentCount = i == 0 ? 1 : 0;
+         vkCmdBeginRendering(cmd, &ri);
+         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[i]);
+         vkCmdSetViewport(cmd, 0, 1, &vpt);
+         vkCmdSetScissor(cmd, 0, 1, &sc);
+         vkCmdBindVertexBuffers(cmd, 0, 1, &buf, &off);
+         vkCmdDraw(cmd, 12, 1, 0, 0);
+         vkCmdEndRendering(cmd);
+      }
+      CHECK(vkEndCommandBuffer(cmd));
+      VkSubmitInfo si = {
+         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+         .commandBufferCount = 1,
+         .pCommandBuffers = &cmd,
+      };
+      CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(queue));
+      printf("ok samples-8-on-a-4-sample-device\n");
    }
    return 0;
 }

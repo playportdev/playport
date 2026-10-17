@@ -154,3 +154,9 @@ pipeline alone for its message. No game was run; not checked on the phone.
   (`Unsupported query type`) in a `kk-host-test` case made from the capture; with 0038 the
   pool works with every counter 0 and the feature stays unreported. The replay builds no
   query pool, so its numbers do not move (graphics 1,923 / 17, compute 731 / 57, 0 crashes).
+- **8-sample pipelines (V3, mesa 0039):** KosmicKrisp passed the game's
+  `rasterizationSamples = 8` to Metal unchanged. With the mock made to abort on a raster
+  sample count the device does not support, the replay crashed on 51 graphics pipelines
+  (one group, `render pipeline raster sample count 8`; graphics 1,795 built of 5,420 parsed
+  across restarted replayers). 0039 clamps the count to 4 (the highest supported): 0
+  crashes, graphics 1,923 / 17, compute 731 / 57.
