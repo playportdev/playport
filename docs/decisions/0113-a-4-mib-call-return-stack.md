@@ -1,7 +1,8 @@
 # 0113: FEX's call-return stack is 4 MiB per thread
 
-**Status:** accepted, 2026-10-17, the lever approved by the owner (PLA-383: shrink the per-thread
-call-return stack to relieve the 16 GiB FEX host band).
+**Status:** proposed, 2026-10-17. Measured on the phone; not accepted (owner, 2026-10-17: the
+next work trims Chromium's and the launcher's threads instead). `patches/fex` 0047 and
+`patches/madeira-unix` 0157 are committed and built; whether they stay is the owner's call.
 [PLA-383](https://linear.app/playportdev/issue/PLA-383),
 [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
@@ -48,8 +49,10 @@ only by the dispatcher's single-entry callback push.
 
 ## Measured savings
 
-Recorded in the evidence: the band's use, threads and refusals in the same Rockstar Open, and
-Hollow Knight's first frame and reset counts, before and after.
+[Evidence](../evidence/2026-10-17-callret-stack.md), IPA `adf8ea8f…`: in the same Rockstar Open
+the band peaked at 13,806 MB with no refusal (before: 16,203 MB, refused at 204 threads); the
+896 MiB JIT pool then ran out instead, and Social Club still showed no window. Hollow Knight: the
+same 17,408 invalidation clears in half the time; first frame +12.44 s against +10.75 s, one run.
 
 ## Risks
 

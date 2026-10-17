@@ -9,8 +9,9 @@
 ## Current handoff and ordered queue
 
 - **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. Last phone result: IPA `0013352e…`, Open `20261017T191412` (PLA-381: decision 0112's 240 s grace and the in-process audio service). Social Club reached `FINISHED`, then the FEX host band filled at 16,202 MB (204 threads, 3.3 GB of it in 16 MiB call-return stacks); FEX's allocation failed in the second renderer, which died, and the launcher gave up waiting for Social Club's window.
-- **[PLA-383](https://linear.app/playportdev/issue/PLA-383):** a 4 MiB call-return stack ([decision 0113](../decisions/0113-a-4-mib-call-return-stack.md), `patches/fex` 0047, `patches/madeira-unix` 0157). Host work done; build and phone run pending.
-- **Later levers, only with the owner:** storage in the browser process; a less greedy tail in the existing allocator; rpmalloc's span use.
+- **[PLA-383](https://linear.app/playportdev/issue/PLA-383), measured, not accepted:** a 4 MiB call-return stack ([decision 0113](../decisions/0113-a-4-mib-call-return-stack.md), proposed; `patches/fex` 0047, `patches/madeira-unix` 0157, commit `e777fad`, IPA `adf8ea8f…`). Open `20261017T194000`: band peak 13,806 MB, no refusal; the 896 MiB JIT pool ran out instead (second renderer's code buffer, utilities); no Social Club window, sign-in not visible. Hollow Knight first frame +12.44 s (one run). Whether 0047/0157 stay is the owner's call ([evidence](../evidence/2026-10-17-callret-stack.md)).
+- **Next (owner):** trim Chromium's and the launcher's threads.
+- **Other levers, only with the owner:** storage in the browser process; a less greedy pool tail; rpmalloc's span use.
 - **Models:** subagents use `anthropic/claude-opus-5-5:medium` (owner, 2026-10-17).
 - **Phone:** RDR2 and Hollow Knight installed; never uninstall. Recheck charge and space first.
 

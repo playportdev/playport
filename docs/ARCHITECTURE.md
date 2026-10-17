@@ -414,7 +414,7 @@ threads on the Vulkan backend ([fex-band](evidence/2026-09-28-fex-band.md)).
 
 The call-return stack is a return-address predictor, so its size costs only
 predictions. `patches/fex` 0047 takes it from Madeira's 16 MB back to 4 MB
-([decision 0113](decisions/0113-a-4-mib-call-return-stack.md)): the
+([decision 0113](decisions/0113-a-4-mib-call-return-stack.md), proposed): the
 Rockstar launcher's Social Club filled the band at 204 threads, 3.3 GB of it
 in these stacks. ARM64EC's inline guard keeps the stack pointer in
 `[1 MB, 3 MB)` of the stack and resets it to the middle when it leaves;

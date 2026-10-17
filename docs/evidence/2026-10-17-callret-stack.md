@@ -58,3 +58,55 @@ filling in the Rockstar Games Launcher's Open, and what does it cost Hollow Knig
 `patches/fex` 0047 and `patches/madeira-unix` 0157 (decision 0113).
 
 ## After
+
+IPA `adf8ea8f4b784da5f6e8b150e212bd9ad381b5dbcb3d32a463fc7160a0399d8e` (HEAD `2a16059`, 87 IPA
+checks), installed in place and driven in one `pp phone lock` session (setting saved, Open, setting
+cleared; all three `pp ui` steps ended as planned).
+
+### Hollow Knight, `20261017T193843`
+
+| | before `20261017T191241` | after `20261017T193843` |
+| --- | --- | --- |
+| first frame | +10.75 s | +12.44 s |
+| `[callret]` resets (last line) | 17,408 (core 17,371, cpubackend 37) | 17,408 (core 17,371, cpubackend 37) |
+| reset time, total / max | 472,997 µs / 6,190 µs | 219,310 µs / 261 µs |
+| `[callret-geom]` | size 0x1000000, window `[+0x200000, +0x600000)` | size 0x400000, window `[+0x100000, +0x300000)` |
+| band at the end | 3,805 MB, 55 threads | 3,041 MB, 55 threads |
+| `[CALLRET_OOB]` | 0 | 0 |
+
+The first frame is slower than in all 19 earlier Hollow Knight gates since 2026-10-15 (+9.20 to
++11.86 s), in a single run; the disk cache was as warm as before (69,960 hits against 70,061).
+This run cannot say whether it is noise or the narrower guard window (the guard's resets are not
+counted). The invalidation clears are as many as before and take half the time.
+
+### Rockstar Games Launcher Open, `20261017T194000`
+
+| | before `20261017T191412` | after `20261017T194000` |
+| --- | --- | --- |
+| band peak / refusals | 16,203 MB / 1 (first refusal at 204 threads, a 16 MiB span) | 13,806 MB / 0 |
+| band at the end | 15,288 MB, 196 threads | 12,805 MB, 201 threads |
+| most threads seen | 205 | 202 |
+| JIT pool | `exhausted=head`, head_exhausted 19, tail_refused 0 | `exhausted=head`, head_exhausted 123, tail_refused 5, tail_fatal 1; room 0, head 511 of 528 MB live, tail 369 of 369 MB live, 404 images, 13 children |
+| how it ended | the launcher exited on its own at +79.78 s | still running at the 240 s grace; ended at +298.6 s (`pool=exhausted:head still-running after_s=294`) |
+| first window | +30.84 s | +35.24 s (the launcher's 500×400 window) |
+| Social Club states | `FINISHED` at 7.8 s | `FINISHED` at 6.4 s of its log (`WAIT_BROWSER_WINDOW` … `START_SIGN_IN`, `FINISHED`) |
+| launcher.log | `WaitForBrowser -> WaitForWindow`, never `Active` | the same, then nothing more |
+
+- The band no longer filled: its peak was 2.4 GB lower at the same thread count (204 stacks of
+  16 MiB were 3.3 GB; 4 MiB stacks are 0.8 GB).
+- The JIT pool did: as the band filled before, the 896 MiB pool ran out at about 199 threads and
+  13 processes. The first exhaustion was a utility process's `xtajit64.dll` copy (4.6 MiB) in the
+  pool's head; then the second renderer (pid `03a0`) could not get a 16 MiB FEX code buffer from
+  the tail (`JIT-pool tail exhausted for FEX EC_CODE`, the one `tail_fatal`). Chromium restarted
+  utilities four times; they ended with `0xc0000017` (no memory) and `0xc0000142`. A third renderer
+  started.
+- Screenshots: at 30 s the Playport launch screen; at 45 s the launcher's "Connecting to Rockstar
+  Games Services" window; from 60 s to the stop, black (the launcher hid its window and Social Club
+  showed none). **The sign-in form was not visible.**
+
+## Reading
+
+A 4 MiB stack moves the Open's first limit from the band to the JIT pool; it does not bring
+Social Club's window. The owner has chosen to trim Chromium's and the launcher's threads next, and
+decision 0113 stays proposed: this record is a measurement. Rockstar's text logs are in the build
+area (`agent-notes/pla370-cef/inputs/pla383-rockstar-logs/`), not here (they hold a public IP).
