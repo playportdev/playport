@@ -1,12 +1,14 @@
-# Local Windows CEF diagnostic: invalid baseline control
+# Local Windows CEF diagnostic: corrected control and candidate agree
 
 **Linear:** [PLA-379](https://linear.app/playportdev/issue/PLA-379), under
 [PLA-370](https://linear.app/playportdev/issue/PLA-370).
-**Result:** INVALID CONTROL. The sole baseline launch failed in Proton prefix
-setup before the diagnostic executable started. The candidate was **not run**.
-No JavaScript, DOM, worker, paint or code-range conclusion is possible. The
-[existing candidate visual rejection](2026-10-17-cef-jitless-code-range.md)
-remains in force; PLA-379 is not complete and PLA-380 stays stopped.
+**Latest result:** corrected local baseline and candidate both pass JavaScript,
+independent DOM and software OSR paint controls; final DOM and paint bytes agree.
+Candidate traces have no 512 MiB code-range requests/views. This limited no-range
+workload works; the [existing candidate visual rejection](2026-10-17-cef-jitless-code-range.md)
+remains in force. PLA-379 is not complete; PLA-380 stays stopped. The original
+prefix-setup failure below is preserved as historical invalid-control evidence;
+see the corrected diagnostic section for the authorized continuation.
 
 Run `c9dceb68-0612-467d-a108-79627582072b` (owner-selected Sol high),
 `dev/pla-291-rockstar-launcher`, starting HEAD `9bf7ecd`. This records only the
@@ -78,7 +80,7 @@ The verified sway-nocap PID 1025249 owned wayland-1 and X0; `xdpyinfo :0` worked
 The launch explicitly used `DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-1`, never niri.
 TMPDIR and all newly created scratch files are under the diagnostic directory.
 
-## Sole arm and failure
+## Original arm and failure (historical)
 
 `run.py baseline` bounded the producer to 30 seconds, plus cleanup. It copied
 Proton's shipped `default_pfx` into a fresh scratch `baseline/compat/pfx`.
@@ -105,7 +107,7 @@ Raw evidence: `baseline-wrapper.{log,exit}`, `baseline/run/{wine.log,server.log,
 result.json,processes.json,command.json}`, `cleanup-verification.json`.
 There are no screenshots because the host never started.
 
-## Stop and next step
+## Original stop point (superseded by explicit continuation authorization)
 
 The task's baseline-failure stop rule was applied. This probe establishes no new
 runtime property of either payload. The failing candidate remains rejected and
@@ -114,3 +116,140 @@ step is supervisor review of a corrected fresh-prefix initialization approach
 (let Proton create the prefix rather than relocating its template symlinks)
 before authorizing any new baseline control. No new run is authorized by this
 record. Linear status synchronization is left to the supervisor session.
+
+## Corrected diagnostic — authorized continuation, stopped after one pair
+
+The supervisor independently confirmed the prefix-copy error and authorized a
+setup correction at HEAD `37fe441`. Same Sol high run
+`c9dceb68-0612-467d-a108-79627582072b`, continuation `78bedfc2`. The old failed
+`baseline/` prefix/logs were not overwritten. The original scratch runner was
+preserved as `run-invalid-prefix.py`; corrected `run.py` removes the template
+copy, adds separate setup/runtime phases and checks full baseline console/DOM/
+paint success before permitting candidate setup or runtime.
+
+New paths under the scratch root: `corrected-{baseline,candidate}/`, each with
+`compat/pfx`, `payload`, `setup`, `run`, `tmp`, `empty-steam` and `inputs.sha256`.
+No host/page/worker recompile or source change: the exact executable and hashes
+above were reused. All 232 runtime source/copy hashes were reverified before
+setup and runtime, same file set, only libcef differs. `corrected-inputs.json`
+records this check. All native CEF API hash checks matched version 14300.
+Native settings, view/locale, page, switches and Proton options stayed identical;
+only arm-specific scratch paths/process-generated identifiers differ. Browser
+commands contain all five 0111 switches; renderer commands confirm jitless,
+disabled GPU compositing and the same in-process service feature flags.
+
+### Prefix setup and isolation
+
+Each setup invoked normal `proton run C:\windows\system32\cmd.exe /d /c exit 0`
+with a new, initially absent prefix, bounded to **180 s**, separate from CEF time.
+Proton created its own prefix and converted Wine DLL links normally. Neither
+installed Proton nor other prefixes were modified.
+
+| Setup | Baseline | Candidate |
+| --- | --- | --- |
+| Producer PID / actual exit | 1082256 / **0** | 1082763 / **0** |
+| Wall seconds, including cleanup | 3.062 | 3.043 |
+| DLL/EXE symlinks checked / dangling | 1202 / **0** | 1202 / **0** |
+| Canonical prefix PIDs before / after | empty / empty | empty / empty |
+
+Setup service cleanup signalled only individually reverified canonical-prefix
+PIDs (with matching `/proc` start times). Baseline used SIGTERM, then SIGKILL for
+remaining winedevice PID 1082292; candidate used SIGTERM for PIDs 1082769/1082839.
+The exact sets are in each `setup/result.json`; all were gone before CEF runtime.
+Steam client DLLs/browser redirects remained disabled and the Steam client path
+empty. Proton's own builtin `system32\steam.exe` launch shim appears in process
+snapshots; this is not the owner's Steam client. Explicit sway `:0`/`wayland-1`
+ownership/access was rechecked. The loopback server was active only for runtime.
+
+### Corrected runtime outcomes
+
+Exactly one corrected **30 s** runtime arm per payload; candidate ran only after
+a valid baseline. Setup time was excluded. Browser close was requested at 22 s,
+and each producer exited normally before the 30 s bound. Wrappers took about
+32.3 s including cleanup waits, not additional CEF execution. No runtime process
+was signalled or timed out. Wrapper success is independently backed by native
+browser exits, console/DOM controls, paints and the actual producer exit codes.
+
+| Observation | Baseline | Candidate |
+| --- | --- | --- |
+| Producer / trace filter PIDs | 1082418 / 1082417 | 1082934 / 1082933 |
+| Producer / filter / wrapper exits | **0 / 0 / 0** | **0 / 0 / 0** |
+| Browser Windows PID | 288 | 284 |
+| HTTP index / worker requests | 200 / 200 | 200 / 200 |
+| Main load-end ms / HTTP | 363 / 200 | 339 / 200 |
+| Sync arithmetic/function/regexp console ms | 357 | 333 |
+| Promise / timer console ms | 357 / 460 | 334 / 437 |
+| Worker console ms | 377 | 353 |
+| First independent complete DOM text ms | 1205 | 1193 |
+| Native browser exit ms / code | 22025 / **0** | 22022 / **0** |
+| OSR paints / dimensions | 5 / 640×360 | 5 / 640×360 |
+| Load-error / renderer-termination callbacks | none / none | none / none |
+| Canonical prefix PIDs before / after | empty / empty | empty / empty |
+
+Times are relative to each native browser start, not performance comparisons.
+Both `dom-last.txt` files contain all five expected markers. Native browser logs
+report `dom=1 paints=5 errors=0 closed=1`. Four child logs each show startup/API
+checks: storage, two renderers and transient ProcessorMetrics. Metrics child 748
+explicitly returns subprocess exit 0 in both arms; the other three child exit
+codes were **not captured**, so browser/producer exit 0 is not claimed as their
+individual exit status. Process snapshots show the children present until browser
+shutdown and no prefix processes by the first producer-exit snapshot (~23.15 s).
+Both Chromium logs have the same network-change-notifier and unconfigured OAuth
+warnings; neither prevented the wholly local controls completing.
+
+Final DOM SHA-256, both:
+`e7bd52aa02c206b4750ec7264a0a817ea9ddcf9dc707e44a62541136aaa97926`.
+Final BGRA SHA-256, both:
+`5c39f1fdcc8210b1d04f1eb2a4966ec424bb36e288bba474388935324f100363`.
+Final PPM SHA-256, both:
+`df23d78773cf25b1b6ff5e8712d27f696b1ff7736f690dfb218c34f77b9cbbcb`.
+The entire five-frame hash sequences also agree. Pixel checks and inspected
+`corrected-{baseline,candidate}/paint-last.png` images show the blue HTML marker
+and four green JS completion strips, with matching text. These PNGs are offline
+conversions of OSR paints, not final desktop screenshots; images remain in .work.
+
+### Successful held reservations, not failed hints
+
+`+pid,+virtual,+process` traces were filtered by the existing `vfilter64.py`.
+Counting only successful 512 MiB `VIEW` results with matching view extent:
+
+| Windows renderer PID | Baseline successful views | Peak held | Explicit releases | Unreleased in filtered trace |
+| --- | ---: | ---: | ---: | ---: |
+| 0228 (552) | 1 | 1 | 0 | 1 |
+| 0234 (564) | 2 | 2 | 1 | 1 |
+| Candidate, both renderers | **0** | **0** | **0** | **0** |
+
+Baseline had three additional failed/unconfirmed `NOVIEW` hints, excluded from
+held counts. The additional allocation on thread 02e0 is explicitly released;
+MEM_DECOMMIT on the other views does not release their reservations. Baseline therefore has
+three actual successful ranges (one subsequently freed), versus candidate **no
+512 MiB request or successful view**. Two baseline views / 1 GiB lack explicit
+release records in the filtered trace; **this is allocation/release bookkeeping,
+not live VA after exit**. Process teardown reclaims their reservations. There is
+no independent VirtualQuery inventory, total VA/footprint measurement or claim
+that the trace directly enumerates live isolates. Raw lines and accounting are
+preserved in `corrected-analysis.json` and each `run/wine.log`.
+
+### Interpretation and final stop
+
+**Observed:** both payloads execute the intended sync/Promise/timer/worker work,
+independent document text agrees, and software OSR paint output agrees exactly;
+the candidate does so without the traced code-range reservations.
+**Limited inference:** this no-range workload works; blanket JavaScript
+nonexecution is not supported by this probe. The SC visual gate remains
+unresolved and workload/environment-dependent. This is not evidence that its
+failure is necessarily painting, nor replacement SC or phone acceptance.
+
+No further diagnostic arm, implementation, range size, packaging or PLA-380 work
+was performed. The default assembled candidate remains rejected. Patch 0007,
+series and payload record remain unchanged and uncommitted. No game or phone
+acceptance. **ONE next step:** independent review of this passing local control
+alongside the existing SC visual-gate evidence before selecting further diagnosis.
+
+Raw evidence under each corrected arm: `setup/{wine.log,command.json,result.json,
+processes.json,dll-exe-symlinks.json}`, `run/{wine.log,server.log,command.json,
+result.json,processes.json}`, `payload/{host-*.log,chrome_debug.log,dom-last.txt,
+paint-last.bgra,paint-last.ppm}`. Wrapper logs/exits are at the scratch root.
+`analyze-corrected.py`, `corrected-analysis.{json,log}` preserve offline comparisons.
+`corrected-cleanup-verification.json` records a final empty scan of all diagnostic
+prefixes and successful port-18793 bind check after the servers stopped.
