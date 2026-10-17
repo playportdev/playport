@@ -7,7 +7,7 @@ item (each marked below):
 
 | Item | Status |
 | --- | --- |
-| A0 Proton data in `FEXProfile` | done (3bbc21d) |
+| A0 Proton data in `FEXProfile` | done (3bbc21d); re-read 2026-10-17 (W2): data unchanged, `protonSource` names bleeding-edge `47c39230` |
 | A1 `MaxInst=500` | done ([0055](../decisions/0055-maxinst-500-global.md)) |
 | A2 WoW64 suspend/termination | done: came with FEX `main`, then adapted to iOS's real suspend by patches (PLA-93, 222, 223, 226, 229, 302, 304); leftovers open in their own issues |
 | B1 disk cache default | done: on by default ([0056](../decisions/0056-fex-disk-cache-on.md), [2026-10-14 evidence](../evidence/2026-10-14-fex-disk-cache-on.md); PLA-341): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004) |
@@ -53,7 +53,8 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   reports for P and E cores (source, desktop Wine where it answers); W6 B3 close or name a
   blocker. Each ends in evidence or a plan rewrite; phone measurements stay owed.
 - **Not here:** B1 (done), the Portal 2 follow-ups (phone), anything needing a build.
-- **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); next W2. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+- **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); W2 done
+  ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); next W3. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
@@ -106,7 +107,51 @@ Steps 1–2 come first because the helper pays off on the moves of step 3; step 
 needs Madeira `main` as it is when Madeira is next. Nothing is offered upstream
 (owner, 2026-10-05): every patch stays carried.
 
-## Valve's reference snapshot (2026-10-05)
+## Valve's reference snapshot (2026-10-17)
+
+Re-read by W2 from ValveSoftware/Proton and ValveSoftware/wine (blobless clones in the build
+area). Every ARM64 Proton branch carries a commit only for its gitlinks on top of its Proton
+base, so `ae4e5bc925d7` (which `protonSource` named) is not an ancestor of today's head.
+
+| Proton branch | Head | FEX | Wine (ValveSoftware/wine) | DXVK | vkd3d-proton |
+|---|---|---|---|---|---|
+| proton_11.0 (stable) | `bc896217` (10-09) | `1cc4b93e` (FEX-2607) | `e60892cc` | `a6764047` | `212991fc` |
+| experimental_11.0 | `7a94df49` (10-14) | `5285020d` (FEX main, 10-13) | `7fc704ef` | `a78a467c` | `0bb64c56` |
+| bleeding-edge | `47c39230` (10-17) | `5285020d` (FEX main head, 10-13) | `c53678ab` (bleeding-edge head, 10-16) | `c8679a55` (master head, 10-17) | `0bb64c56` (master head, 10-14) |
+
+Against `ae4e5bc925d7` and Playport:
+
+- `FEX_Config.json` (the 8 keys) and `fex_application_profiles` (292030 `setup*` →
+  `X87ReducedPrecision=0`) are byte-identical on all three branches and to `ae4e5bc925d7`:
+  `FEXProfile` needs no data change; only `protonSource` moved.
+- The ARM defaults are unchanged: `FEX_DISKCACHE=1` and `WINE_CPU_TOPOLOGY` from affinity on
+  experimental and bleeding-edge only, `generate_fex_app_config` (appinfo TSO/Multiblock,
+  `SilentLog`, `AppOverrides`) and `FEX_APP_CONFIG_LOCATION` as before. No FEX, MaxInst, LAA
+  or other ARM64 default is new. `Makefile.in` did not change.
+- Proton's own commits since (`1ef4b65a` WoW64 for 4005300 on x86_64 hosts only, two
+  lsteamclient fixes, `f413b3fa` nvapi off without an NV kernel driver): nothing to carry.
+- Playport is behind bleeding-edge on FEX (`3648ee9`, 29 commits; FEX-2610 tagged 10-07),
+  `wine-valve` (`750fd01`, 36 commits, all listed by `pp sync`), `wine` (wine-11.19; WineHQ
+  tagged wine-11.20 on 10-16), DXVK (`e5ffd0f`, 61) and vkd3d-proton (`31d1f89`, 9). `pp sync`
+  reports only the `wine-valve` gap (`wine-valve-new.tsv`); it reads neither Proton nor the
+  FEX, WineHQ, DXVK and vkd3d-proton heads.
+
+Follow-ups from this re-read (to file in Linear; none blocks an item here):
+
+1. FEX `5285020d`: `b49837f` fixes a race on the disk cache's data blob (cache on by default
+   since 0056); `aad2c96`, `4dbb046` and `3a2b1c0` change ARM64EC's `Module.S` (NT syscall
+   numbers read at run time, `NtDllRedirectionLUT` bounds in `CheckCall`), where fex-port
+   patches also apply; `e3f402a`/`b2dffb5` bump the disk-cache key and version beside fex
+   0041–0044; `679d6c7` moves `External/rpmalloc` (`09142d7` → `ed22744`). Port `b49837f` or
+   move the pin (0049); either needs a build and a Hollow Knight play.
+2. `wine-valve` `750fd01..c53678a`: the ARM64-relevant picks are WineHQ commits in wine-11.20:
+   `f9a7e33` (reserved CPSR bits; its `signal_arm64.c` half lands in Madeira's
+   `signal_arm64_ios.c` only by a hand port), `9de060e`/`e408a5a`/`c9e2884` (ARM64
+   Acquire/Release without a full barrier, `winnt.h`), `b2a60dc` (`RtlWaitOnAddress` queue) and
+   `ea85d1c` (thread group affinity under process affinity, B7). A wine-11.20 move brings them.
+3. DXVK and vkd3d-proton heads moved past their pins; no ARM64-specific change was looked for.
+
+### Earlier snapshot (2026-10-05, history)
 
 | Proton branch | Head | FEX | Wine (ValveSoftware/wine) | DXVK | vkd3d-proton |
 |---|---|---|---|---|---|
@@ -131,7 +176,8 @@ Sources:
 - https://github.com/ValveSoftware/Proton/blob/b37494057ba64f96acf66eebe33928838d64b9b6/Makefile.in
 - https://github.com/ValveSoftware/Proton/commit/09d3d6e5f60c51a6c30501306d88f8d385188901
 
-Re-read the heads before starting. Valve moves these branches weekly.
+Re-read the heads before starting. Valve moves these branches weekly. (On 2026-10-05
+`ae4e5bc925d7` replaced `b3749405` on bleeding-edge, with FEX `7d3090f7`.)
 
 ## Step 1: every dependency to its latest version
 
@@ -228,8 +274,9 @@ on the phone and whether it needs a decision record.
 
 **A0. Refresh the Proton data in `FEXProfile`.** *Done (Review 2026-10-13):
 3bbc21d (2026-10-06) checked the data against bleeding-edge `ae4e5bc925d7`
-(2026-10-05), which `protonSource` now names. Not re-diffed against later
-heads.*
+(2026-10-05). Re-read 2026-10-17 (W2): bleeding-edge `47c39230`, experimental_11.0
+`7a94df49` and proton_11.0 `bc896217` carry the same 8 keys and profile; `protonSource`
+names them, no data or test changed ([snapshot](#valves-reference-snapshot-2026-10-17)).*
 - **Change:** `protonSource` still names bleeding-edge `c9e0da9d736c`
   (2026-09-26). Update it to the heads in the snapshot table, and diff the
   8 keys and `fex_application_profiles` again.
