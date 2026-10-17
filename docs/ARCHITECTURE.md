@@ -14,6 +14,25 @@ rebased as `patches/*-port` series (decisions
 [0007](decisions/0007-dxmt-on-upstream.md), [0008](decisions/0008-fex-on-upstream.md)).
 `pins.lock`'s header says what each row means.
 
+### Valve's ARM64 Proton items not carried
+
+Valve's Proton bleeding-edge is the reference for ARM64 defaults, not a base
+([decision 0049](decisions/0049-latest-pins.md); the items taken and still open
+are in [the alignment plan](plans/2026-10-05-proton-arm64-alignment.md)). These
+do not apply on iOS:
+
+| Proton item | Why not |
+|---|---|
+| `ProfileStats=1` | Writes Linux stats shared memory. `pp perf` has its own telemetry (0021). |
+| FEX Linux UnixLib (prctl hardware TSO and unaligned atomics, THP, VMA names) | Linux-only kernel interfaces. iOS has no separate FEX UnixLib; its entry points are no-ops (`patches/fex-port` 0030). |
+| `-march=armv8.2-a -mtune=cortex-x3` | Tuning for Snapdragon/Cortex. Apple cores need their own check. |
+| `-marm64x` for DXVK/vkd3d-proton | ARM64X serves native ARM64 callers. All guests are x86. Revisit only if native ARM64 Windows games come into scope. |
+| fsync/ntsync, the Steam runtime, `PROTON_USE_ARM64` paths, `SilentLog`/`PROTON_LOG`, NVAPI | Linux launcher, driver or GPU specifics. In-process sync is fastsync, carried as Playport patches and on by default (0054); madsync stays off (0023). |
+| FEX `client.json`/`steamwebhelper.json` app configs | These target the Linux Steam client. Playport's Steam client is native Swift. |
+| Valve Wine AVX/YMM contexts, SVE state | FEX on iOS advertises no AVX (`patches/fex-port` 0009), and Apple CPUs have no SVE (0018). |
+| `MIMALLOC_DISABLE_REDIRECT` for Teardown (1167630) | Per-game data, not an ARM default. Carry it only if Teardown is played. |
+| Valve's FEX DLL names (`libarm64ecfex.dll`, `libwow64fex.dll`) | Playport ships `xtajit64.dll`/`xtajit.dll`, the names Windows uses and Madeira's loader expects (0018). |
+
 ## One process on iOS
 
 Everything runs inside the app's single Mach process. iOS allows no `fork`,

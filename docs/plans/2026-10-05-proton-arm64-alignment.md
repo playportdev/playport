@@ -17,7 +17,7 @@ item (each marked below):
 | B5 release log defaults | done (2331995) |
 | B6 Steam appinfo FEX settings | open, not started |
 | B7 CPU topology | open: processor count is the phone's ([0098](../decisions/0098-machine-values-at-session-start.md)); P/E reporting not checked |
-| C table into ARCHITECTURE.md | open |
+| C table into ARCHITECTURE.md | done ([section](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried), W1) |
 | Portal 2 follow-ups | open, not re-measured |
 
 Older "not started" lines below describe the original snapshot.
@@ -53,7 +53,7 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   reports for P and E cores (source, desktop Wine where it answers); W6 B3 close or name a
   blocker. Each ends in evidence or a plan rewrite; phone measurements stay owed.
 - **Not here:** B1 (done), the Portal 2 follow-ups (phone), anything needing a build.
-- **Running:** W1. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+- **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); next W2. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
@@ -454,7 +454,10 @@ each). Whether P and E cores are told apart was not checked. On the desktop,
 
 ### C. Not applicable on iOS (record the reason, do not copy)
 
-*Review 2026-10-13: not yet copied into ARCHITECTURE.md (Done when).*
+*Review 2026-10-13: not yet copied into ARCHITECTURE.md (Done when).* *2026-10-17 (W1):
+copied into [ARCHITECTURE.md](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried), with two rows re-worded there: the UnixLib row
+names fex-port 0030 (its entry points are no-ops), and the fsync row says fastsync is on
+by default (0054), madsync off (0023).*
 
 | Proton item | Why not |
 |---|---|
@@ -545,7 +548,7 @@ p10) by `pp perf --compare`.
 *Review 2026-10-13: the first item is met
 ([deps-latest](../evidence/2026-10-05-deps-latest.md)); A0, A1, A2, B2 and B5
 are closed, B1 has a named blocker, B3, B4, B6 and B7 are open; the C table is
-not in ARCHITECTURE.md yet; the x86-64-only line is gone (ARCHITECTURE.md now
+in ARCHITECTURE.md (2026-10-17, W1); the x86-64-only line is gone (ARCHITECTURE.md now
 says i386 guests run through WoW64).*
 
 - Step 1's evidence record lists every `pins.lock` row as moved or held with a
