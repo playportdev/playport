@@ -418,7 +418,11 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   images found, [above](#not-in-v0v4)); H2 (the video-memory warning: the SGA instance's heap
   size, box at 1,927 MiB or less, not 1,928; a profile-layer artifact at 256 MiB, [above](#not-in-v0v4)).
   Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only):** next H3 RDR2's DX12 route through
+- **Queue (owner-approved 2026-10-17, host only):** next H1b: the capture layer picks its
+  stand-in memory type per physical device and reports the profile heap uncapped (H2's
+  `H2_HEAP_EXACT`), then Story mode is captured again with an 8,192 MiB heap (iPhone18,4's) and
+  the game's own settings choice (H1 ran at 256 MiB, "Safe" settings), replayed on the mock;
+  then H3 RDR2's DX12 route through
   vkd3d-proton under the KosmicKrisp profile, replayed on the mock (a desktop-game writer;
   check the profile's heap per instance: RADV's RDR2 driconf, matched by application name,
   changed the Vulkan renderer's memory layout, and H2's scratch layer has `H2_HEAP_EXACT`);
@@ -427,7 +431,8 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   the replay's feature-gate bypass and PLA-387; H7 measure RDR2's unsupported linear images on
   the mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
   chunk 0 below (needs the phone).
-- **Running:** none. Reports: `agent-notes/rdr2-vk/reports/h1-h3.md` (H1) and `h2.md` (H2).
+- **Running:** H1b (report `agent-notes/rdr2-vk/reports/h1b.md`). Earlier reports:
+  `h1-h3.md` (H1) and `h2.md` (H2).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
