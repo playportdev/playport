@@ -4,7 +4,22 @@
 [PLA-369](https://linear.app/playportdev/issue/PLA-369); parent
 [PLA-254](https://linear.app/playportdev/issue/PLA-254)).
 **Decision:** [0110](../decisions/0110-own-cef-build-for-a-clients-cef.md) (accepted).
-**Status:** stages A–C passed; stage D started with the formal source series and prebuilt input record. Dev delivery, loader substitution and the phone gate remain.
+**Status:** stages A–C passed. Stage D delivery and substitution work; Social Club reaches `FINISHED`, but the sign-in page is not yet visible because the JIT pool and band fill. Latest evidence: [fewer processes](../evidence/2026-10-16-cef-fewer-processes-phone.md).
+
+## Current handoff and ordered queue
+
+- **Checkout:** `dev/pla-291-rockstar-launcher`, baseline `9192531`, not merged or pushed.
+- **Completed:** `ae4d7cb` / `9192531`, decision 0111, [PLA-378](https://linear.app/playportdev/issue/PLA-378): network and video capture in-process. Desktop sign-in works (8 → 6 CEF processes). Phone IPA `887442a3…`, Open `20261016T203152`: `FINISHED` at 8.2 s, then pool exhaustion (head 524 MB / tail 373 MB); band peak 16,227 MB. Hollow Knight first frame +9.98 s (`20261016T203027`).
+- **Owner-approved next work:** V8 code-range patch **and** launcher-only FEX helper cap; no shared-code redesign or larger pool. Implementation: `openai-codex/gpt-6-astra:high`; focused reviews: `openai-codex/gpt-6.1-sol:high`. Stop and report quota failures; do not silently substitute models.
+- **Ordered queue:**
+  1. [PLA-379](https://linear.app/playportdev/issue/PLA-379): omit unused V8 code ranges for jitless isolates in our CEF; incremental build and desktop swap/reservation checks. Preserve non-jitless behavior and update matching payload records. No phone run in this chunk.
+  2. Focused review, then [PLA-380](https://linear.app/playportdev/issue/PLA-380): launcher-only per-helper FEX code-buffer cap (initial target about 32 MiB, subject to safe allocator semantics); record the decision and keep game defaults unchanged.
+  3. Build/install and Hollow Knight on the exact IPA; one bounded Rockstar Open with both changes. Stop for a new blocker, no sign-in or RDR2. Stage E still needs the owner in person.
+- **Running now:** no child launched yet; supervisor is preparing PLA-379. Its run ID will be recorded here after launch.
+- **Phone:** attended at the last run, 80% charge and 4.2 GB free then; recheck before device work. Latest installed IPA `887442a3…`. RDR2 and Hollow Knight remain installed; never uninstall. Launcher runtime setting was cleared after the run; LocalDevVPN failures require the owner. No unattended-mode change requested.
+- **Build-area handoff:** `.work/agent-notes/pla370-cef/PROGRESS.md`, `reports/pla378-fewer-processes.md`; [PLA-377](https://linear.app/playportdev/issue/PLA-377) research at `.work/agent-notes/pla377-pool-copies/report.md` (read-only findings, no sharing implementation approved).
+
+**Counting correction:** PLA-374's eight 512 MB V8 allocation requests included failed retries; renderer 1 held two code ranges, not eight. Savings must be measured from successful held reservations.
 
 ## Goal
 
