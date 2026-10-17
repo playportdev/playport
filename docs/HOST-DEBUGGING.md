@@ -97,7 +97,9 @@ child arguments or a 0600 file deleted after the run. Scrub arguments and reques
   without it, stop and ask rather than approve the page.
 - **Input.** In the dated setup, sway's headless seat did not pass synthetic input (wtype, XTEST,
   `swaymsg seat cursor`); `ydotool` would type into the owner's session, so do not use it. A
-  desktop run shows how far a game gets without input.
+  desktop run shows how far a game gets without input. Input made inside the game's prefix
+  does reach it: a Win32 program run there (`proton run`) that calls `SendInput` drove RDR2's
+  menus and play, keyboard and relative mouse ([evidence](evidence/2026-10-17-rdr2-vulkan-needs.md#in-story-mode-2026-10-17-h1)).
 - **Processes.** Kill only your own process group by PID and `wineserver -k` with your
   `WINEPREFIX`; no `pkill -f`.
 - **Disk.** Game copies and prefixes stay under `$PLAYPORT_BUILD/agent-notes/`; delete copies

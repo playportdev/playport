@@ -169,3 +169,94 @@ pipeline alone for its message. No game was run; not checked on the phone.
   untranslated MSL; 14 MSL libraries read a `texture2d_ms_array`. A hand-written module in
   `kk-host-test` covers it. Not checked on the phone (Apple's compiler, the A19's
   multisample array textures).
+
+## In Story mode (2026-10-17, H1)
+
+Two more runs of the same setup with the KosmicKrisp profile and Steam's Fossilize layer, this
+time into Story mode with the owner's save (owner-approved). Steam was started on the agent's
+sway display (`steam -silent`), because the launcher stops at "Steam failed to initialize"
+without it, and shut down after each run. Input came from a Win32 program run in the same
+prefix that sends `SendInput` keyboard and relative mouse input to the game's window; the
+game took both. The program, the run script and the screenshots stay in the build area
+(`agent-notes/rdr2-vk/`).
+
+- `ing1`: landing page after about 90 s, Enter (Story mode), the latest save loaded in about
+  3 minutes; then about 6 minutes of play: walking and turning the camera around Colter in
+  snow, wading a river, the map, the pause menu, the weapon wheel and the satchel. Quit to the
+  desktop from the pause menu ("unsaved progress will be lost").
+- `ing2`: the same, with a scratch build of the layer (below). The game loaded the autosave
+  `ing1` had written: a cabin interior, then outdoors again, about 2 minutes.
+
+**Pipelines.** The game creates almost all of them before Story mode:
+
+| SGA device (Fossilize) | landing (`prof2`) | `ing1` | `ing2` |
+|---|---|---|---|
+| shader modules | 13,251 | 13,251 (the same) | 13,251 (the same) |
+| graphics pipelines | 1,940 | 1,943 (8 new, 5 of the landing's not made) | 1,948 (`ing1`'s and 5 more) |
+| compute pipelines | 788 | 788 (the same) | 788 (the same) |
+| graphics pipelines created (capture layer, duplicates included) | 2,150 | 2,157 | 2,162 |
+
+The new ones repeat states the landing page already had (no new topology, sample count,
+blend, depth or dynamic state); only their shaders differ. (inference: the game builds at
+startup what its own pipeline list in `Settings/sga_vulkan_final_init.*` names, which this
+prefix had from earlier play; `ing2`'s 5 extra are what `ing1` added to it.) All 1,953
+graphics pipelines across the three databases are in `ing2`'s database and the landing
+corpus.
+
+**Replay on the host mock** (`run-replay.sh`, `mesa` b39d173 + `patches/mesa` 0001–0039, debug):
+
+| | `ing1` | `ing2` | `ing2`, ImageMSArray gate bypassed (V4's scratch layer) |
+|---|---|---|---|
+| graphics built / of | 1,926 / 1,943 | 1,931 / 1,948 | 1,948 / 1,948 |
+| compute built / of | 731 / 788 | 731 / 788 | 788 / 788 |
+| modules failing validation | 87 | 87 | 0 |
+| crashed pipelines | 0 | 0 | 0 |
+
+An in-process replay of `ing2` with the bypass translated 3,915 MSL libraries, none with an
+untranslated intrinsic. **No new crash group, so no new patch.** The skipped pipelines are V4's
+(`ImageMSArray`), as on the landing page.
+
+**What changes in the game** (`ing1` against `prof2`, both under the profile): the instance
+and device create infos, the query pools (5 timestamp, 6 occlusion, the one
+pipeline-statistics pool), descriptor set layouts, pipeline layouts, descriptor pools,
+samplers and render passes are the same; no new distinct one. Sample counts are the same
+(images at most 4, 96 pipelines asking for 8). What grows:
+
+- images 5,940 → 27,471 (2D 26,812, 3D 633, 1D 26) and views 7,601 → 30,781: more BC1, BC3,
+  BC4 and BC6H arrays, cube-compatible BC3 and R16_UNORM images; new cube views (BC3,
+  R16_UNORM, B10G11R11) and cube-array views (BC4, BC6H, RGBA8 sRGB, and D32_SFLOAT_S8_UINT
+  with depth and with stencil aspect);
+- memory 41 allocations, 1,038 MiB → 103, 2,787 MiB (the profile's one 5 GiB heap);
+- commands: 10,404,713 indirect draws (all with `drawCount` 1) and 1,703,131 indirect
+  dispatches over 3.02 million render passes, where the landing page had none; 971,229
+  `vkCmdSetDepthBounds`, 52,698 `vkCmdCopyQueryPoolResults`. The replay builds pipelines only,
+  so none of this is tested by it.
+
+**Linear-tiled images KosmicKrisp does not support.** Every optimal-tiling image the game
+creates has the matching features in the KosmicKrisp report (above), but its linear-tiled
+ones do not, and the landing page had them too. `ing2`'s scratch layer gave the game
+KosmicKrisp's linear-tiling answers from `kk_image.c` (3D or attachment usage: not supported;
+otherwise at most 1 layer and 1 mip level) and logged every image format query: the SGA
+renderer made **no** `vkGetPhysicalDeviceImageFormatProperties` call, and created the same
+images. Of the 11,519 linear images created after its device:
+
+| | count | KosmicKrisp |
+|---|---|---|
+| 2D, 1 layer, 1 mip, no attachment usage | 10,633 | supported |
+| 2D with `COLOR_ATTACHMENT` usage (R8_UNORM, R8_UINT, R16_UINT, R16G16_UINT, R32_SFLOAT, R32G32_SFLOAT, R32G32_UINT, R32G32B32A32_SFLOAT, R8G8B8A8_SRGB) | 435 | no `COLOR_ATTACHMENT` linear feature; `VK_ERROR_FORMAT_NOT_SUPPORTED` |
+| 2D arrays, RGBA16F 16×28, 2–8 layers, transfer and sampled (Story mode only) | 386 | `maxArrayLayers` 1 |
+| 3D, RGBA16F 64×64×16 and R32_UINT, storage, `2D_ARRAY_COMPATIBLE` | 56 | `VK_ERROR_FORMAT_NOT_SUPPORTED` |
+| 2D R32_SFLOAT with 7 mip levels | 9 | `maxMipLevels` 1 |
+
+KosmicKrisp's `vkCreateImage` does not refuse them: a linear image becomes a Metal texture
+made from its memory's buffer (`newTextureWithDescriptor:offset:bytesPerRow:`). What Metal
+does with such a descriptor for a 3D, array or mipmapped texture is not known here: the host
+mock does not model it. Not fixed (a choice of what KosmicKrisp should make of them);
+follow-up under PLA-386.
+
+**Owner state.** The game wrote one autosave in `ing1` (the autosave slot, `SRDR30015`) and
+the launcher uploaded files to Rockstar's cloud saves at that run's start and end
+(`PostFile`); the manual save `SRDR30000` was not changed. `ing2` wrote no save and uploaded
+nothing. Steam counted both runs as RDR2 play time; its content log shows no download.
+
+Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.

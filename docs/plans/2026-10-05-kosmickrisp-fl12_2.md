@@ -393,6 +393,12 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   unified-memory device: PLA-269 (per-title reported VRAM).
 - The phone run of RDR2: after PLA-295 (launcher) and PLA-300 (first native Vulkan title).
 - What the host cannot show: Apple's MSL compiler, `poly` at run time, depth bounds on the A19.
+- **Linear-tiled images KosmicKrisp does not support** (found in H1,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#in-story-mode-2026-10-17-h1)): the game
+  never queries image format properties and creates linear images with color-attachment usage,
+  3D, 2–8 layers (Story mode) or 7 mip levels; KosmicKrisp reports none of these, and
+  `vkCreateImage` makes a buffer-backed Metal texture anyway. Not fixed: what KosmicKrisp should
+  make of them is a choice; follow-up under PLA-386.
 
 ## Runner state
 
@@ -403,15 +409,16 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 - **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
   `1fc4605`); V1 (undefined image, mesa 0037, `33e2194`); V2 (pipeline-statistics pools,
   mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
-  multisample arrays: host test only, no patch). Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only, in order):** H1 capture RDR2's in-game
-  pipelines under desktop Proton (Story mode, the owner's save) and replay them on the mock;
-  H2 what RDR2 reads for its video-memory warning (PLA-269); H3 RDR2's DX12 route through
-  vkd3d-proton under the KosmicKrisp profile, replayed on the mock; H4 the dev IPA with mesa
-  0037–0039 built in the main checkout (stacked on `dev/pla-291-rockstar-launcher`); H5 Apple's
-  Metal compiler for Windows under Wine on the replay's MSL, after a licence check; H6 the
-  replay's feature-gate bypass and PLA-387. Then chunk 0 below (needs the phone).
-- **Running:** H1–H3 (one desktop-game writer; report `agent-notes/rdr2-vk/reports/h1-h3.md`).
+  multisample arrays: host test only, no patch); H1 (Story mode captured and replayed: 1,948
+  graphics and 788 compute pipelines, 0 crashes on 0001–0039, no new patch; linear-tiled
+  images found, [above](#not-in-v0v4)). Host only; not checked on the phone.
+- **Queue (owner-approved 2026-10-17, host only):** H2 what RDR2 reads for its video-memory
+  warning (PLA-269) and H3 RDR2's DX12 route through vkd3d-proton under the KosmicKrisp
+  profile, replayed on the mock (each its own desktop-game writer); next H4 the dev IPA with
+  mesa 0037–0039 built in the main checkout (stacked on `dev/pla-291-rockstar-launcher`); H5
+  Apple's Metal compiler for Windows under Wine on the replay's MSL, after a licence check; H6
+  the replay's feature-gate bypass and PLA-387. Then chunk 0 below (needs the phone).
+- **Running:** none from H1 (report `agent-notes/rdr2-vk/reports/h1-h3.md`, H1 only).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
