@@ -11,7 +11,13 @@
 - **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. Before PLA-384: Open `20261017T191412` (IPA `0013352e…`) filled the FEX host band at 16,202 MB (204 threads) and the launcher never got Social Club's window.
 - **[PLA-383](https://linear.app/playportdev/issue/PLA-383), not adopted:** a 4 MiB call-return stack ([decision 0113](../decisions/0113-a-4-mib-call-return-stack.md)) relieved the band (Open `20261017T194000`: peak 13,806 MB) but the 896 MiB JIT pool then ran out; the owner chose the thread trim instead, and `patches/fex` 0047 and `patches/madeira-unix` 0157 were removed ([evidence](../evidence/2026-10-17-callret-stack.md)).
 - **[PLA-384](https://linear.app/playportdev/issue/PLA-384):** [decision 0114](../decisions/0114-trim-social-clubs-chromium-and-the-launchers-threads.md) (`patches/chromium` 0008–0013, libcef `de6693eb…`; the Rockstar Open's DXVK/vkd3d-proton settings). IPA `73dc65fc…`, Open `20261017T201653`: band peak 13,720 MB at 168 threads (no refusal), launcher `Active`, Social Club's sign-in form on screen from 60 s to the end **but with no text drawn**; the pool's head still runs out for later children (renderers, Unzipper, rpcss/dllhost). HK first frame +10.28 s ([evidence](../evidence/2026-10-17-cef-trim.md)).
-- **Next:** why the page draws no text on the phone (desktop draws it); then whether the late children matter.
+- **PAUSED by the owner (2026-10-17).** Next, [PLA-385](https://linear.app/playportdev/issue/PLA-385): the page draws no text on the phone, though desktop does.
+  - The phone's DirectWrite FreeType path rasterises glyphs in other processes.
+  - Renderer 1 makes no glyph calls at all.
+  - Leading hypothesis: Blink's last-resort font chain (`font_cache_skia.cc` `GetLastResortFallbackFont`: Arial, Segoe UI, Times New Roman…) never tries Tahoma, the only face registered on the phone.
+  - Next: a desktop A/B with only Tahoma, then an owner decision between a freely licensed face under a family name on the chain and a Chromium patch adding Tahoma or system fallback.
+  - Notes: `.work/agent-notes/pla370-cef/reports/pla385-no-text.md`.
+  - After that: whether the late children (renderer 3, Unzipper, rpcss/dllhost) that exhaust the pool matter.
 - **Other levers, only with the owner:** a less greedy pool tail; rpmalloc's span use.
 - **Models:** subagents use `anthropic/claude-opus-5-5:medium` (owner, 2026-10-17).
 - **Phone:** RDR2 and Hollow Knight installed; never uninstall. Recheck charge and space first.
