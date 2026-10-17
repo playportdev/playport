@@ -13,7 +13,7 @@ item (each marked below):
 | B1 disk cache default | done: on by default ([0056](../decisions/0056-fex-disk-cache-on.md), [2026-10-14 evidence](../evidence/2026-10-14-fex-disk-cache-on.md); PLA-341): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004) |
 | B2 Valve Wine past stable | done (`wine-valve` from bleeding-edge, `pp sync` lists it); questions 4 and 5 answered |
 | B3 LAA for i386 | open, not started; Portal 2 is LAA already (question 3) |
-| B4 child-process FEX profiles | open, not started |
+| B4 child-process FEX profiles | designed, not implemented (W3, [evidence](../evidence/2026-10-17-fex-child-profiles.md)): `FEX_APP_CONFIG` works per pseudo-process; waits for a played title with a child entry, or B6 |
 | B5 release log defaults | done (2331995) |
 | B6 Steam appinfo FEX settings | open, not started |
 | B7 CPU topology | open: processor count is the phone's ([0098](../decisions/0098-machine-values-at-session-start.md)); P/E reporting not checked |
@@ -54,7 +54,8 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   blocker. Each ends in evidence or a plan rewrite; phone measurements stay owed.
 - **Not here:** B1 (done), the Portal 2 follow-ups (phone), anything needing a build.
 - **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); W2 done
-  ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); next W3. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); W3 done (B4 designed,
+  [evidence](../evidence/2026-10-17-fex-child-profiles.md)); next W4. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
@@ -448,17 +449,33 @@ gets 2 GiB (madeira-unix 0063). No title has been seen to need it.*
   guest's virtual-allocation failures and the window's peak use.
 - **Decision record:** yes (a new global i386 policy).
 
-**B4. Per-executable FEX profiles for child processes.** *Open, not started
-(Review 2026-10-13): `FEXProfile` still matches only the executable the launch
-runs.*
-- **Change:** today Witcher `setup*` applies only when the app launches it
-  (0021 cost). Proton writes `AppOverrides` into a per-launch FEX config file
-  (`FEX_APP_CONFIG`), which FEX matches per process.
-- **Investigate:** whether `FEX_APP_CONFIG` works in one Mach process with
-  per-pseudo-process emulators.
-- **Expected effect:** child installers get the right x87 precision.
-- **Risk:** low. No current cohort title needs it.
-- **Decision record:** yes, if the transport changes (extends 0021).
+**B4. Per-executable FEX profiles for child processes.** *Designed, not
+implemented (2026-10-17, W3; [evidence](../evidence/2026-10-17-fex-child-profiles.md)).*
+- **Found:** `FEX_APP_CONFIG` works in one Mach process. Each pseudo-process
+  loads its own emulator copy. Its `ProcessInit` (`BTCpuProcessInit` for WoW64)
+  loads FEX's config from that process's PEB environment and matches
+  `AppOverrides` against its own executable name.
+- **The obstacle is ours:** Playport exports every value as `FEX_*`, and every
+  child inherits those variables. The environment layer sits above
+  `FEX_APP_CONFIG`, so it would mask a `setup*` entry in every process.
+- **Design:** follow Proton. A per-launch file named by `FEX_APP_CONFIG` takes
+  the keys the game's entries set (Proton's global value in `Config`, the
+  entries in `AppOverrides`), and those keys leave the environment. A key the
+  game's page chose stays in the environment. A game without entries is
+  unchanged.
+  - Code points: `FEXProfile.launch`, which adds `appConfig`;
+    `LaunchCoordinator.applyEnvironment`, which writes the file outside
+    `fex-emu` and sets the variable; a `patches/fex` log line with each
+    process's effective values; the x87 footer on the game's page.
+  - The evidence lists the host tests and the phone checks: Hollow Knight,
+    The Witcher 3 and its `setup*` child, which is not yet identified.
+- **Why not now:** it changes what `witcher3.exe` itself receives, through a
+  file FEX has never been shown to read on the phone. It also needs a build,
+  a FEX patch and phone runs, and no played title has a child entry.
+  Implement it when one does, or with B6: Steam's TSO and Multiblock go in the
+  same file.
+- **Decision record:** yes, at implementation (extends 0021; the draft is in
+  the evidence).
 
 **B5. Release-build log defaults.** *Done (Review 2026-10-13): 2331995
 (2026-10-06). The release runtime already set `WINEDEBUG=-all`; it now also
@@ -532,6 +549,8 @@ small-and-frequent moves have not happened since 2026-10-05.*
 - `MaxInst=500` (A1): supersedes part of 0021. **Written: 0055.**
 - Disk cache default (B1). **Written: 0056 (default held off).**
 - LAA for i386 (B3).
+- Child-process FEX profiles through `FEX_APP_CONFIG` (B4), at implementation:
+  extends 0021 (draft in the [evidence](../evidence/2026-10-17-fex-child-profiles.md)).
 - Optionally, a standing policy record that "Valve's ARM64 Proton is the
   reference platform", naming which branch is the reference for which kind of
   change.
