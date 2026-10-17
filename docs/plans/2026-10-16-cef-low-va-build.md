@@ -15,7 +15,7 @@
   1. [PLA-379](https://linear.app/playportdev/issue/PLA-379): omit unused V8 code ranges for jitless isolates in our CEF; incremental build and desktop swap/reservation checks. Preserve non-jitless behavior and update matching payload records. No phone run in this chunk.
   2. Focused review, then [PLA-380](https://linear.app/playportdev/issue/PLA-380): launcher-only per-helper FEX code-buffer cap (initial target about 32 MiB, subject to safe allocator semantics); record the decision and keep game defaults unchanged.
   3. Build/install and Hollow Knight on the exact IPA; one bounded Rockstar Open with both changes. Stop for a new blocker, no sign-in or RDR2. Stage E still needs the owner in person.
-- **Running now:** no child launched yet; supervisor is preparing PLA-379. Its run ID will be recorded here after launch.
+- **Running now:** PLA-379 host-only writer `4089dfaa-50da-4215-96ee-067a2154f249` (`openai-codex/gpt-6-astra:high`), launched after queue commit `9508cb5`. Wait for its report before starting PLA-380; no other writer, build or phone work in parallel.
 - **Phone:** attended at the last run, 80% charge and 4.2 GB free then; recheck before device work. Latest installed IPA `887442a3…`. RDR2 and Hollow Knight remain installed; never uninstall. Launcher runtime setting was cleared after the run; LocalDevVPN failures require the owner. No unattended-mode change requested.
 - **Build-area handoff:** `.work/agent-notes/pla370-cef/PROGRESS.md`, `reports/pla378-fewer-processes.md`; [PLA-377](https://linear.app/playportdev/issue/PLA-377) research at `.work/agent-notes/pla377-pool-copies/report.md` (read-only findings, no sharing implementation approved).
 
