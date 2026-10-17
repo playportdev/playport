@@ -16,7 +16,7 @@
 - **Dropped:** no decision 0112 for either.
   - PLA-379: archived under `.work/agent-notes/pla379-parked/`.
   - PLA-380: partial diff reverted; a copy is in `.work/agent-notes/pla380-partial/`.
-- **Owner direction (2026-10-17):** make both changes in one build cycle, because the phone is not reachable now:
+- **Owner direction (2026-10-17, [PLA-381](https://linear.app/playportdev/issue/PLA-381)):** make both changes in one build cycle, because the phone is not reachable now:
   1. A launcher Open is not stopped 10 s after a head exhaustion. Give the Rockstar launcher Open alone a bounded longer grace, in a new decision amending 0022.
   2. The audio service runs in the CEF browser process, through a Chromium patch in our CEF (decision 0110). That removes one process, its threads and the restart loop. Check on desktop Proton that the sign-in page still shows.
 - **Then:**
