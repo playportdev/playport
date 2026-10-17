@@ -417,8 +417,11 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   profile, replayed on the mock (each its own desktop-game writer); next H4 the dev IPA with
   mesa 0037–0039 built in the main checkout (stacked on `dev/pla-291-rockstar-launcher`); H5
   Apple's Metal compiler for Windows under Wine on the replay's MSL, after a licence check; H6
-  the replay's feature-gate bypass and PLA-387. Then chunk 0 below (needs the phone).
-- **Running:** none from H1 (report `agent-notes/rdr2-vk/reports/h1-h3.md`, H1 only).
+  the replay's feature-gate bypass and PLA-387; H7 measure RDR2's unsupported linear images on
+  the mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
+  chunk 0 below (needs the phone).
+- **Running:** H2 (report `agent-notes/rdr2-vk/reports/h2.md`). H1's report:
+  `agent-notes/rdr2-vk/reports/h1-h3.md`.
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
