@@ -39,6 +39,19 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(JitPool.exhaustionGrace, 10)
     }
 
+    /// Decision 0114: the Rockstar launcher's Open runs one DXVK compiler thread and no DXVK or
+    /// vkd3d-proton disk cache, over Vulkan's own DXVK_CONFIG; a game's backend keeps DXVK's own.
+    func testRockstarOpenRunsOneDXVKCompilerThreadAndNoShaderCacheThreads() {
+        let r = PublisherLauncher.rockstar
+        XCTAssertEqual(r.graphicsEnvironment, ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
+                                               "VKD3D_SHADER_CACHE_PATH": "0"])
+        let env = r.graphics.environment(graphicsOptions: r.graphicsEnvironment)
+        XCTAssertEqual(env["DXVK_CONFIG"], "dxvk.tilerMode = False;dxvk.numCompilerThreads = 1")
+        XCTAssertEqual(env["DXVK_SHADER_CACHE"], "0")
+        XCTAssertEqual(env["VKD3D_SHADER_CACHE_PATH"], "0")
+        XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
+    }
+
     func testOpenTakesTheSavedRuntimeKeysAndFEXInputsOnly() {
         XCTAssertEqual(PublisherLauncher.openSettings(saved: nil), .init())
         var ordering = MemoryOrdering()

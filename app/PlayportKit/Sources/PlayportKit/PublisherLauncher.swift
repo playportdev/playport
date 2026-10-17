@@ -24,6 +24,9 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     public let graphics: GraphicsBackend
     /// How long its Open goes on after the pool ran out (JitPool.exhaustionGrace for a game).
     public let exhaustionGrace: TimeInterval
+    /// Environment over the backend's for its Open, in LaunchSettings.graphicsEnvironment's form
+    /// (DXVK_CONFIG joins the backend's after `;`); a game's launch never takes it.
+    public let graphicsEnvironment: [String: String]
 
     /// The launch's title id (TitleLaunch), apart from every store's game ids.
     public var titleID: String { "launcher-" + id }
@@ -34,11 +37,16 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// runs under services.exe, and the launcher with it needs the 896 MiB pool (decision 0108).
     /// A Social Club child that runs the pool out does not end the Open for 240 s (decision 0112):
     /// the browser and its renderers go on after an optional child cannot start.
+    /// Its Direct3D device query starts DXVK and vkd3d-proton in the launcher; one DXVK compiler
+    /// thread and no DXVK or vkd3d-proton disk cache (so no writer threads) leave more of FEX's
+    /// host band to Social Club's threads (decision 0114).
     public static let rockstar = PublisherLauncher(
         id: "rockstar", name: "Rockstar Games Launcher",
         installKey: #"Software\Wow6432Node\Rockstar Games\Launcher"#, installValue: "InstallFolder",
         executable: "Launcher.exe", arguments: [], windowsServices: true, jitPoolMB: 896, graphics: .vulkan,
-        exhaustionGrace: 240)
+        exhaustionGrace: 240,
+        graphicsEnvironment: ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
+                              "VKD3D_SHADER_CACHE_PATH": "0"])
 
     public static let all: [PublisherLauncher] = [rockstar]
 

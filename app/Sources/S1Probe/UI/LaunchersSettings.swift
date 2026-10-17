@@ -68,7 +68,8 @@ enum LauncherOpen {
         let fex = FEXProfile.launch(appID: nil, exe: exe, ordering: saved.ordering, maxInst: saved.maxInst,
                                     x87Reduced: saved.x87Reduced, diskCache: saved.diskCache)
         guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments, config: saved.config,
-                                       graphics: l.graphics, fex: fex, windowsServices: l.windowsServices,
+                                       graphics: l.graphics, graphicsEnvironment: l.graphicsEnvironment,
+                                       fex: fex, windowsServices: l.windowsServices,
                                        jitPoolMB: l.jitPoolMB, exhaustionGrace: l.exhaustionGrace) else { return false }
         log("open \(l.id) on \(l.graphics.rawValue): \(exe) \(l.arguments.joined(separator: " "))")
         return true

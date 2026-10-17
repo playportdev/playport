@@ -58,7 +58,8 @@ enum LaunchCoordinator {
         /// Which layer runs the game's Direct3D (LaunchSettings).
         var graphics: GraphicsBackend = .default
         /// The game's Graphics options (LaunchSettings.graphicsEnvironment; dev builds only,
-        /// decision 0060), over the backend's own environment.
+        /// decision 0060), or a publisher launcher's own (PublisherLauncher.graphicsEnvironment),
+        /// over the backend's own environment.
         var graphicsEnvironment: [String: String] = [:]
         /// FEX's memory ordering for the game (FEXProfile.launch); nil leaves FEX's own defaults.
         var fex: FEXProfile.Launch? = nil
