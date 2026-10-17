@@ -60,7 +60,11 @@ ninja -C "$ROOT/build" src/kosmickrisp/vulkan/libvulkan_kosmickrisp.so >/dev/nul
 
 mkdir -p "$ROOT/spv"
 for s in "$HERE"/shaders/*; do
-    glslangValidator -V --target-env vulkan1.3 -o "$ROOT/spv/$(basename "$s").spv" "$s" >/dev/null
+    case $s in
+    # Hand-written SPIR-V, for what GLSL cannot say (an undefined image).
+    *.spvasm) spirv-as --target-env vulkan1.3 -o "$ROOT/spv/$(basename "$s" .spvasm).spv" "$s" ;;
+    *) glslangValidator -V --target-env vulkan1.3 -o "$ROOT/spv/$(basename "$s").spv" "$s" >/dev/null ;;
+    esac
 done
 cc -O1 -g -Wall -o "$ROOT/kk-host-test" "$HERE/kk-host-test.c" -ldl
 

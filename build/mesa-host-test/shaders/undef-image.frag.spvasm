@@ -1,0 +1,39 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; A defined sampler with an undefined image (OpUndef), sampled with an
+; implicit LOD, which KosmicKrisp lowers to a bias query and txb. SPIR-V
+; allows it; a compiler can leave one in code that never runs. The result is
+; undefined, but the pipeline must build.
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %color %o %smp
+               OpExecutionMode %main OriginUpperLeft
+               OpDecorate %color Location 0
+               OpDecorate %o Location 0
+               OpDecorate %smp DescriptorSet 0
+               OpDecorate %smp Binding 0
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+         %v2 = OpTypeVector %float 2
+         %v4 = OpTypeVector %float 4
+        %img = OpTypeImage %float 2D 0 0 0 1 Unknown
+       %simg = OpTypeSampledImage %img
+    %sampler = OpTypeSampler
+  %p_sampler = OpTypePointer UniformConstant %sampler
+    %p_in_v4 = OpTypePointer Input %v4
+   %p_out_v4 = OpTypePointer Output %v4
+        %smp = OpVariable %p_sampler UniformConstant
+      %color = OpVariable %p_in_v4 Input
+          %o = OpVariable %p_out_v4 Output
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+          %s = OpLoad %sampler %smp
+          %t = OpUndef %img
+         %st = OpSampledImage %simg %t %s
+          %c = OpLoad %v4 %color
+         %uv = OpVectorShuffle %v2 %c %c 0 1
+          %r = OpImageSampleImplicitLod %v4 %st %uv
+               OpStore %o %r
+               OpReturn
+               OpFunctionEnd

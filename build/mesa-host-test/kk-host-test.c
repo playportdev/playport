@@ -868,5 +868,31 @@ main(int argc, char **argv)
       CHECK(vkQueueWaitIdle(queue));
       printf("ok texel-buffers-unaligned\n");
    }
+
+   /* A defined sampler with an undefined image (shaders/undef-image.frag.spvasm):
+    * the pipeline builds, and descriptor lowering does not abort. */
+   {
+      DPROC(vkCreateDescriptorSetLayout);
+      VkDescriptorSetLayoutBinding binding = {
+         0, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT};
+      VkDescriptorSetLayoutCreateInfo dslci = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+         .bindingCount = 1,
+         .pBindings = &binding,
+      };
+      VkDescriptorSetLayout dsl;
+      CHECK(vkCreateDescriptorSetLayout(dev, &dslci, NULL, &dsl));
+      VkPipelineLayoutCreateInfo uplci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+         .setLayoutCount = 1,
+         .pSetLayouts = &dsl,
+      };
+      VkPipelineLayout upl;
+      CHECK(vkCreatePipelineLayout(dev, &uplci, NULL, &upl));
+      struct pipe_desc d = {"undef-image", "pass.vert", NULL, NULL, NULL,
+                            "undef-image.frag", TRI, false, FIRST, FILL};
+      make_pipeline(&d, upl);
+      printf("ok undef-image\n");
+   }
    return 0;
 }

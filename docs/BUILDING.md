@@ -246,7 +246,8 @@ The pipeline's `vulkan` stage leaves the host test out. Run it on the build's
 tree, edits included, with `build/stages/mesa.sh .work/run/mesa hosttest`
 (after a `pp build` has made `run/mesa/mesa` and `run/mesa/host`); the MSL
 libraries it translated land in `.work/run/mesa/hosttest/msl/`. A new case is
-a shader in `build/mesa-host-test/shaders/` and a pipeline in `kk-host-test.c`.
+a shader in `build/mesa-host-test/shaders/` (GLSL, or SPIR-V assembly as
+`.spvasm` for what GLSL cannot say) and a pipeline in `kk-host-test.c`.
 
 Three workstation tools beside it measure an application's Vulkan against the
 driver; none runs in a build, and what they capture is game data that stays

@@ -311,17 +311,23 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   first replay: Fossilize skips pipelines that share a module with a crashed one, so the
   count moves between runs).
 
-### V1. Texture deref lowered to a heap offset without a heap mapping
+### V1. Sampling an undefined image
 
-- 153 RDR2 pipelines abort in `kk_nir_lower_descriptors.c` `lower_tex` (`assert(!sampler)`):
-  `vk_nir_lower_descriptor_heaps` turns a texture deref that is not a set/binding variable
-  into `texture_heap_offset` 0 even when the pipeline has no heap mapping.
-- First check Mesa `main` for a fix and port it (authorship kept). Otherwise fix the runtime
-  pass so the cast path applies only to descriptor-heap pointers, and make KosmicKrisp's
-  `lower_tex` tolerate a texture source that is not a deref (an undefined texture in dead
-  code): an undefined result, not an abort.
-- A minimal SPIR-V reproduction (hand-written, not the game's) in `kk-host-test`.
-- **Done when:** the replay has no crash in this group and the host test covers it.
+- **Done** (2026-10-17, PLA-386; host only, **not checked on the phone**). V0 is `1fc4605`.
+  The game samples an OpUndef image with a defined sampler. `patches/mesa` 0037
+  (`upstream-bug`) drops such a texture instruction (undefined result) first in
+  `kk_preprocess_nir`, before the runtime's descriptor heap lowering turns the undefined
+  image into `texture_heap_offset` 0 and `lower_tex` aborts on the sampler beside it.
+  Mesa `main` (335d5698) has no fix. Fixing only the runtime pass was tried and moves the
+  crash to `nir_vk_lower_ycbcr_tex`; the runtime is left as it is.
+- `kk-host-test` builds `shaders/undef-image.frag.spvasm` (hand-written SPIR-V); it aborted
+  before the patch.
+- **Result:** the RDR2 replay has no crash (graphics 1,923 of 1,940 built, compute 731 of
+  788; the rest are modules Fossilize refuses as unsupported, below).
+- **Follow-ups (not fixed here):** 73 modules use `ImageMSArray`, which Vulkan gates on
+  `shaderStorageImageMultisample` and KosmicKrisp does not report, so Fossilize skips 17
+  graphics and 57 compute pipelines; and a storage image load from an undefined image
+  crashes in `nir_shader_gather_info` (seen on a test shader, not in the corpus).
 - **Phone, owed:** Hollow Knight on Vulkan first frame+10.
 
 ### V2. Pipeline-statistics query pools
@@ -356,10 +362,11 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   `$PLAYPORT_BUILD/worktrees/pla-386-rdr2-vulkan` (owner-authorized 2026-10-17, with its own
   reflinked `.work/cache` and `.work/inputs` so the mesa stage need not rebuild toolchains).
   Not merged, not pushed.
-- **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness).
-- **Queue:** V1 → V2 → V3 (PLA-386), then chunk 0 below.
-- **Running:** V0+V1 writer, subagent run fdddba81 (started 2026-10-17); report to
-  `agent-notes/rdr2-vk/reports/v0-v1.md` in the side copy's build area.
+- **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
+  `1fc4605`); V1 (undefined image, mesa 0037). Host only; not checked on the phone.
+- **Queue:** V2 → V3 (PLA-386), then chunk 0 below.
+- **Running:** nothing. The V0+V1 report is `agent-notes/rdr2-vk/reports/v0-v1.md` in the
+  side copy's build area.
 - **Phone:** not used by this run; Hollow Knight on Vulkan is owed after V1–V3.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under

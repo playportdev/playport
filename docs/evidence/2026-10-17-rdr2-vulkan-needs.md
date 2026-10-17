@@ -125,3 +125,27 @@ transform-feedback pools only; a pipeline-statistics pool reaches `UNREACHABLE`
 - Desktop limits: RADV underneath, winevulkan's own extension filtering, no gameplay
   (no input on the headless seat, and the landing page offers Online, which is out of scope),
   and the capture covers only what the landing page builds.
+
+## Host fixes (2026-10-17, chunks V0–V1)
+
+Same database, host mock (debug build, `mesa` b39d173 + `patches/mesa`), replayed by
+`build/mesa-host-test/run-replay.sh` (V0, commit `1fc4605`), which replays each crashed
+pipeline alone for its message. No game was run; not checked on the phone.
+
+| | before (0001–0036) | after (0001–0037) |
+|---|---|---|
+| graphics built / skipped / of | 1,452 / 337 / 1,940 | 1,923 / 17 / 1,940 |
+| compute built / skipped / of | 731 / 57 / 788 | 731 / 57 / 788 |
+| crashed pipelines | 151, one group: `kk_nir_lower_descriptors.c:534: lower_tex: Assertion '!sampler' failed` | 0 |
+
+- **The cause:** the shaders sample an `OpUndef` image with a defined sampler. Mesa 0037 gives
+  such an instruction an undefined result before descriptor lowering (V1 in the plan); a
+  hand-written SPIR-V shader in `kk-host-test` reproduces it. Mesa `main` (335d5698) has no fix.
+- **The crash count moves** between replays (151 here, 153 in the first, 133 with one
+  thread): Fossilize skips the pipelines that share a module with one that crashed. The
+  14,380 graphics entries above were that parse counter summed over restarted replayers;
+  without crashes it parses 1,940.
+- **What is left:** Fossilize refuses 73 modules for `ImageMSArray`, which Vulkan gates on
+  `shaderStorageImageMultisample`, which KosmicKrisp does not report (the capability table
+  above counted it as reported), and calls the create infos of the 17 graphics and 57
+  compute pipelines it skips invalid (inference: those that use the refused modules).
