@@ -12,7 +12,7 @@ item (each marked below):
 | A2 WoW64 suspend/termination | done: came with FEX `main`, then adapted to iOS's real suspend by patches (PLA-93, 222, 223, 226, 229, 302, 304); leftovers open in their own issues |
 | B1 disk cache default | done: on by default ([0056](../decisions/0056-fex-disk-cache-on.md), [2026-10-14 evidence](../evidence/2026-10-14-fex-disk-cache-on.md); PLA-341): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004) |
 | B2 Valve Wine past stable | done (`wine-valve` from bleeding-edge, `pp sync` lists it); questions 4 and 5 answered |
-| B3 LAA for i386 | open, not started; Portal 2 is LAA already (question 3) |
+| B3 LAA for i386 | closed (W6, [evidence](../evidence/2026-10-17-i386-laa.md)): every i386 game image checked (Portal 2, DiRT 3, MKKE) is LAA, so Valve's override would change nothing; reopen when a played i386 title's image lacks the flag and fails near 2 GiB |
 | B4 child-process FEX profiles | designed, not implemented (W3, [evidence](../evidence/2026-10-17-fex-child-profiles.md)): `FEX_APP_CONFIG` works per pseudo-process; waits for a played title with a child entry (B6 is closed) |
 | B5 release log defaults | done (2331995) |
 | B6 Steam appinfo FEX settings | closed (W4, [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)): the only public value, `tso_enable`, is Auto for every reviewed title, Portal 2 included; Hollow Knight has none; reopen when a played title's is Force On or Off |
@@ -64,7 +64,8 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); W3 done (B4 designed,
   [evidence](../evidence/2026-10-17-fex-child-profiles.md); follow-up PLA-391); W4 done (B6 closed,
   [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)); W5 done (B7 closed,
-  [evidence](../evidence/2026-10-17-cpu-topology.md)); next W6. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  [evidence](../evidence/2026-10-17-cpu-topology.md)); W6 done (B3 closed,
+  [evidence](../evidence/2026-10-17-i386-laa.md)); next W7 (PLA-389 FEX move, a build). Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
@@ -437,26 +438,19 @@ Questions 4 and 5 are answered below.*
   today it lists only proton_11.0, so newer Valve deltas are invisible to it.
 
 **B3. Large address aware for i386 (`WINE_LARGE_ADDRESS_AWARE`, on by default in Proton).**
-*Open, not started (Review 2026-10-13). Both measurements are answered:
-`portal2.exe` is LAA (question 3), so Portal 2 cannot gain; a non-LAA image
-gets 2 GiB (madeira-unix 0063). No title has been seen to need it.*
-- **Change if adopted:** port Valve `799e5f0f` ("ntdll/loader: add support for
-  overriding IMAGE_FILE_LARGE_ADDRESS_AWARE") into Madeira's `virtual_ios.c`
-  WoW64 limit logic as a `madeira-unix` patch. Keep Proton's per-game
-  `noforcelgadd` exceptions as data.
-  - Setting the variable alone does nothing: WineHQ `virtual.c` has no such
-    variable, and Valve's code is on by default only inside Valve Wine.
-- **First, measure:**
-  - whether `portal2.exe` already has the LAA flag;
-  - what the guest window (0047) gives a non-LAA image today: a 2 GiB or a
-    4 GiB user limit.
-- **Expected effect:** more address space for non-LAA 32-bit games. There
-  could be no effect at all on Portal 2.
-- **Risk:** medium. Some i386 code assumes pointers stay below 2 GiB, and the
-  guest-window and allocator contracts are involved.
-- **Phone measurement:** Portal 2 map transitions and save/load. Log the
-  guest's virtual-allocation failures and the window's peak use.
-- **Decision record:** yes (a new global i386 policy).
+*Closed 2026-10-17 (W6, [evidence](../evidence/2026-10-17-i386-laa.md)).* Playport gives a
+WoW64 child 4 GiB or 2 GiB of its window from the image's own flag (madeira-unix 0063 and
+the window patches; nothing reads the variable). Valve Wine (still in bleeding-edge
+`c53678a`; the 2026-10-14 address-space reverts do not touch it) ORs the flag with
+`WINE_LARGE_ADDRESS_AWARE`, on unless set to `0`, in ntdll and the i386 `kernel32`
+`GlobalMemoryStatus`; Proton sets it except for three `noforcelgadd` titles, none in
+Playport's list. Every i386 game image checked carries the flag (Portal 2, DiRT 3, MKKE);
+only a launcher, a tool and an uninstaller do not. No decision record: the policy is
+unchanged.
+- **Reopen when** a played i386 title's game image lacks the flag and its guest
+  allocations fail near 2 GiB. Then: one helper (flag OR override) at every site the
+  evidence lists, Valve's `GlobalMemoryStatus` change as a `wine-pe` patch, Proton's
+  `noforcelgadd` titles as data, and a phone gate on that title and Hollow Knight.
 
 **B4. Per-executable FEX profiles for child processes.** *Designed, not
 implemented (2026-10-17, W3; [evidence](../evidence/2026-10-17-fex-child-profiles.md)).*
@@ -595,7 +589,7 @@ small-and-frequent moves have not happened since 2026-10-05.*
   the pin-source parts of 0008, 0013 and 0018. **Written: 0049.**
 - `MaxInst=500` (A1): supersedes part of 0021. **Written: 0055.**
 - Disk cache default (B1). **Written: 0056 (default held off).**
-- LAA for i386 (B3).
+- LAA for i386 (B3). *Not needed: closed 2026-10-17 with the policy unchanged.*
 - Child-process FEX profiles through `FEX_APP_CONFIG` (B4), at implementation:
   extends 0021 (draft in the [evidence](../evidence/2026-10-17-fex-child-profiles.md)).
 - Optionally, a standing policy record that "Valve's ARM64 Proton is the
