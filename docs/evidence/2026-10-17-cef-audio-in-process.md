@@ -90,6 +90,13 @@ Social Club files matched their original hashes. No sign-in was attempted.
   here also a `FilePatcher` and two `Unzipper` utilities, which ended. They are Social Club's or
   the launcher's own update work and were not looked into.
 
+## The IPA
+
+`./pp build` (dev) packed this payload with decision 0112's app change: IPA
+`0013352e9a823165c41e1f423bf9c8c92842ef5d3ff836cebd9d88b56f450817`, 558.6 MB, 87 IPA checks passed.
+Its `cef/143.0.14/libcef.dll` is `f724d38b…`. `app/artifacts.tsv` and `build/generated/wine-pe-*.tsv`
+did not change.
+
 ## Not done
 
 - No phone run: not the Hollow Knight gate, not the launcher Open. On the phone the browser now runs
