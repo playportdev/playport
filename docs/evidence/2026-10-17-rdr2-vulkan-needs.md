@@ -118,7 +118,7 @@ transform-feedback pools only; a pipeline-statistics pool reaches `UNREACHABLE`
 - RDR2 on Vulkan needs **none** of the FL12_2 plan's features. Its gaps on KosmicKrisp are
   three defects (the texture lowering, statistics query pools, 8-sample pipelines) and the
   VRAM message box. The [FL12_2 plan](../plans/2026-10-05-kosmickrisp-fl12_2.md) now carries
-  them as chunks V0–V3 ahead of its own.
+  them as chunks V0–V4 ahead of its own.
 - What the host cannot show: MSL compilation by Apple's compiler, `poly`'s tessellation and
   geometry at run time, depth bounds on the A19, performance, memory. The phone is the
   judge once the launcher (PLA-295) and a native Vulkan title (PLA-300) work.
@@ -160,3 +160,12 @@ pipeline alone for its message. No game was run; not checked on the phone.
   (one group, `render pipeline raster sample count 8`; graphics 1,795 built of 5,420 parsed
   across restarted replayers). 0039 clamps the count to 4 (the highest supported): 0
   crashes, graphics 1,923 / 17, compute 731 / 57.
+- **`ImageMSArray` (V4, no patch):** of the 73 modules Fossilize refuses, 11 have a
+  multisample array image, and every multisample image in them is sampled (fetches with a
+  sample index, size queries), never storage; spirv_to_nir implements the capability and
+  only warns. With a scratch layer that reported `shaderStorageImageMultisample` to
+  Fossilize and stripped it at device creation, the replay built every pipeline (graphics
+  1,940 / 1,940, compute 788 / 788, modules failing validation 87 → 0), 0 crashes, no
+  untranslated MSL; 14 MSL libraries read a `texture2d_ms_array`. A hand-written module in
+  `kk-host-test` covers it. Not checked on the phone (Apple's compiler, the A19's
+  multisample array textures).

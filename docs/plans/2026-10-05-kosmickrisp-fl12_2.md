@@ -37,7 +37,7 @@ storage/pricing assumptions. This is separate from [backend convergence](2026-10
 RDR2's own Vulkan renderer was measured on the workstation
 ([evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md)). It needs none of the 12_1/12_2
 features below, but it hits three KosmicKrisp defects that the host mock shows. They are
-chunks V0–V3 in [RDR2 on Vulkan](#rdr2-on-vulkan-chunks-v0v3), run before chunk 0. See
+chunks V0–V4 in [RDR2 on Vulkan](#rdr2-on-vulkan-chunks-v0v4), run before chunk 0. See
 [Runner state](#runner-state) for what is running.
 
 **Date:** 2026-10-05. **Kind:** research and plan.
@@ -276,7 +276,7 @@ not establish compatibility for games that use different combinations of feature
 - **Mac:** at the first shader bug that phone logs cannot locate, stop and ask the owner
   to borrow one (0031: attach and replay only).
 
-## RDR2 on Vulkan (chunks V0–V3)
+## RDR2 on Vulkan (chunks V0–V4)
 
 **Why here:** this is the KosmicKrisp feature plan, and RDR2's Vulkan route (RDR2 plan D6)
 runs on KosmicKrisp with no D3D layer. The measurement
@@ -290,7 +290,7 @@ runs on KosmicKrisp with no D3D layer. The measurement
 - **Not needed from this plan:** mesh, ray tracing, ROV, VRS, sparse, conservative raster,
   int64/float64, 16-bit types, subgroups, barycentrics. Chunks 0–11 below stay for D3D12
   titles; RDR2's DX12 fallback through vkd3d-proton would need only 12_0, which already works.
-- **Missing (V1–V3):** three defects the game reaches and the host can test.
+- **Missing (V1–V4):** what the game reaches and the host can test; V4 needed no driver change.
 
 The chunks are host-only: the side copy has no phone. Each ends with commits, the mesa host
 test (`build/stages/mesa.sh` `host hosttest`), the iOS build and import check of the patched
@@ -364,19 +364,30 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 
 ### V4. Sampled multisample arrays without `shaderStorageImageMultisample`
 
-- 73 RDR2 modules declare `ImageMSArray`; Vulkan gates that capability on
-  `shaderStorageImageMultisample`, which KosmicKrisp reports as 0 (Apple GPUs have no
-  multisample storage images). Fossilize therefore skips 17 graphics and 57 compute pipelines;
-  the game creates them anyway.
-- Check whether these modules only sample `texture2DMSArray` (Metal has
-  `texture2d_ms_array` for reading). Make sure KosmicKrisp builds them on the mock: replay
-  with Fossilize's validation of those modules bypassed, or a hand-written reproduction in
-  `kk-host-test`. Fix what fails; keep the feature unreported unless storage works.
+- **Done, no driver change** (2026-10-17, PLA-386; host only, **not checked on the phone**).
+  73 RDR2 modules declare `ImageMSArray`; Vulkan gates it on
+  `shaderStorageImageMultisample`, which KosmicKrisp does not report, so Fossilize skipped 17
+  graphics and 57 compute pipelines. The game itself creates them: KosmicKrisp does not
+  check module capabilities.
+- **What the modules do:** only 11 have a multisample array image at all, and every
+  multisample image in the 73 is sampled (`Sampled 1`), read by `OpImageFetch` with a
+  sample index and sized by `OpImageQuerySize`; SPIR-V needs the capability only for
+  storage. spirv_to_nir implements it and only warns that it is unsupported.
+- **Forced replay:** a scratch layer (build area, not committed) reported the feature to
+  Fossilize and stripped it at device creation: every pipeline built (graphics 1,940 of
+  1,940, compute 788 of 788), 0 crashes, no untranslated MSL; 14 MSL libraries read a
+  `texture2d_ms_array` with `.read(coord, layer, sample)`.
+- `kk-host-test` builds and draws `shaders/ms-array.frag.spvasm` (hand-written: declares the
+  capability, fetches two samples of a 4-sample 2-layer image through a 2D array view) and
+  checks the MSL has `texture2d_ms_array`. It passes with no patch;
+  `shaderStorageImageMultisample` stays unreported.
 - Follow-up found in V1, not scheduled: [PLA-387](https://linear.app/playportdev/issue/PLA-387)
   (storage load from an undefined image).
-- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10; that Apple's compiler takes the
+  `texture2d_ms_array` reads, and that the A19 makes a 2D multisample array texture, are not
+  checked.
 
-### Not in V0–V3
+### Not in V0–V4
 
 - The VRAM message box ("does not meet the minimum requirements for video memory") on a
   unified-memory device: PLA-269 (per-title reported VRAM).
@@ -390,11 +401,14 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   reflinked `.work/cache` and `.work/inputs` so the mesa stage need not rebuild toolchains).
   Not merged, not pushed.
 - **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
-  `1fc4605`); V1 (undefined image, mesa 0037). Host only; not checked on the phone.
-- **Queue:** V2 → V3 → V4 (PLA-386), then chunk 0 below.
-- **Running:** V2–V4 writer (started 2026-10-17; report `agent-notes/rdr2-vk/reports/v2-v4.md`). The V0+V1 report is `agent-notes/rdr2-vk/reports/v0-v1.md` in the
+  `1fc4605`); V1 (undefined image, mesa 0037, `33e2194`); V2 (pipeline-statistics pools,
+  mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
+  multisample arrays: host test only, no patch). Host only; not checked on the phone.
+- **Queue:** chunk 0 below.
+- **Running:** nothing. Reports: `agent-notes/rdr2-vk/reports/v0-v1.md` and `v2-v4.md` in the
   side copy's build area.
-- **Phone:** not used by this run; Hollow Knight on Vulkan is owed after V1–V3.
+- **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
+  (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under
   `agent-notes/rdr2-vk/reports/` of the side copy.

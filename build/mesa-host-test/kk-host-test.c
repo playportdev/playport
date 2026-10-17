@@ -76,6 +76,27 @@ msl_vertex_stores(int first, int last)
    return false;
 }
 
+/* Whether any MSL library among [first, last) of the mock contains text. */
+static bool
+msl_contains(int first, int last, const char *text)
+{
+   const char *dir = getenv("KK_MOCK_MSL_DIR");
+   for (int i = first; dir && i < last; ++i) {
+      char path[4096];
+      snprintf(path, sizeof(path), "%s/%04d.metal", dir, i);
+      FILE *f = fopen(path, "r");
+      if (!f)
+         continue;
+      static char src[1 << 20];
+      size_t n = fread(src, 1, sizeof(src) - 1, f);
+      fclose(f);
+      src[n] = 0;
+      if (strstr(src, text))
+         return true;
+   }
+   return false;
+}
+
 static VkShaderModule load_module(const char *name);
 static VkShaderModule
 load_module(const char *name)
@@ -1110,6 +1131,146 @@ main(int argc, char **argv)
       CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
       CHECK(vkQueueWaitIdle(queue));
       printf("ok samples-8-on-a-4-sample-device\n");
+   }
+
+   /* Texel fetches from a sampled 4-sample, 2-layer image through a 2D array
+    * view, in a module that declares ImageMSArray
+    * (shaders/ms-array.frag.spvasm) while shaderStorageImageMultisample is
+    * not reported, as 73 of Red Dead Redemption 2's modules do. */
+   {
+      if (f2.features.shaderStorageImageMultisample) {
+         fprintf(stderr, "shaderStorageImageMultisample is reported\n");
+         return 1;
+      }
+      DPROC(vkCreateDescriptorSetLayout);
+      DPROC(vkCreateDescriptorPool);
+      DPROC(vkAllocateDescriptorSets);
+      DPROC(vkUpdateDescriptorSets);
+      DPROC(vkCmdBindDescriptorSets);
+
+      VkImageCreateInfo msci = imci;
+      msci.samples = VK_SAMPLE_COUNT_4_BIT;
+      msci.arrayLayers = 2;
+      msci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+      VkImage ms_image;
+      CHECK(vkCreateImage(dev, &msci, NULL, &ms_image));
+      vkGetImageMemoryRequirements(dev, ms_image, &mr);
+      mai.allocationSize = mr.size;
+      mai.memoryTypeIndex = find_memory(pd, mr.memoryTypeBits);
+      VkDeviceMemory ms_mem;
+      CHECK(vkAllocateMemory(dev, &mai, NULL, &ms_mem));
+      CHECK(vkBindImageMemory(dev, ms_image, ms_mem, 0));
+      VkImageViewCreateInfo msvci = ivci;
+      msvci.image = ms_image;
+      msvci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+      msvci.subresourceRange.layerCount = 2;
+      VkImageView ms_view;
+      CHECK(vkCreateImageView(dev, &msvci, NULL, &ms_view));
+
+      VkDescriptorSetLayoutBinding binding = {
+         0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT};
+      VkDescriptorSetLayoutCreateInfo dslci = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+         .bindingCount = 1,
+         .pBindings = &binding,
+      };
+      VkDescriptorSetLayout dsl;
+      CHECK(vkCreateDescriptorSetLayout(dev, &dslci, NULL, &dsl));
+      VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
+      VkDescriptorPoolCreateInfo dpci = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+         .maxSets = 1,
+         .poolSizeCount = 1,
+         .pPoolSizes = &size,
+      };
+      VkDescriptorPool dp;
+      CHECK(vkCreateDescriptorPool(dev, &dpci, NULL, &dp));
+      VkDescriptorSetAllocateInfo dsai = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+         .descriptorPool = dp,
+         .descriptorSetCount = 1,
+         .pSetLayouts = &dsl,
+      };
+      VkDescriptorSet ds;
+      CHECK(vkAllocateDescriptorSets(dev, &dsai, &ds));
+      VkDescriptorImageInfo dii = {
+         .imageView = ms_view,
+         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+      };
+      VkWriteDescriptorSet write = {
+         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = ds,
+         .dstBinding = 0,
+         .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+         .pImageInfo = &dii,
+      };
+      vkUpdateDescriptorSets(dev, 1, &write, 0, NULL);
+      VkPipelineLayoutCreateInfo mplci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+         .setLayoutCount = 1,
+         .pSetLayouts = &dsl,
+      };
+      VkPipelineLayout mpl;
+      CHECK(vkCreatePipelineLayout(dev, &mplci, NULL, &mpl));
+
+      int msl_before = msl_count();
+      struct pipe_desc d = {"ms-array", "pass.vert", NULL, NULL, NULL,
+                            "ms-array.frag", TRI, false, FIRST, FILL};
+      VkPipeline p = make_pipeline(&d, mpl);
+      if (msl_before >= 0 &&
+          !msl_contains(msl_before, msl_count(), "texture2d_ms_array<float>")) {
+         fprintf(stderr, "ms-array: no texture2d_ms_array in the MSL\n");
+         return 1;
+      }
+
+      VkCommandBufferAllocateInfo cbai = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+         .commandPool = pool,
+         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+         .commandBufferCount = 1,
+      };
+      VkCommandBuffer cmd;
+      CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+      VkCommandBufferBeginInfo bi = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      };
+      CHECK(vkBeginCommandBuffer(cmd, &bi));
+      VkRenderingAttachmentInfo ca = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+         .imageView = view,
+         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      };
+      VkRenderingInfo ri = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+         .renderArea = {{0, 0}, {64, 64}},
+         .layerCount = 1,
+         .colorAttachmentCount = 1,
+         .pColorAttachments = &ca,
+      };
+      vkCmdBeginRendering(cmd, &ri);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mpl, 0, 1,
+                              &ds, 0, NULL);
+      VkViewport vpt = {0, 0, 64, 64, 0, 1};
+      VkRect2D sc = {{0, 0}, {64, 64}};
+      vkCmdSetViewport(cmd, 0, 1, &vpt);
+      vkCmdSetScissor(cmd, 0, 1, &sc);
+      VkDeviceSize off = 0;
+      vkCmdBindVertexBuffers(cmd, 0, 1, &buf, &off);
+      vkCmdDraw(cmd, 12, 1, 0, 0);
+      vkCmdEndRendering(cmd);
+      CHECK(vkEndCommandBuffer(cmd));
+      VkSubmitInfo si = {
+         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+         .commandBufferCount = 1,
+         .pCommandBuffers = &cmd,
+      };
+      CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(queue));
+      printf("ok ms-array\n");
    }
    return 0;
 }

@@ -1,0 +1,55 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; Texel fetches from a sampled multisample array image, with its size
+; queried, in a module that declares ImageMSArray. SPIR-V needs that
+; capability only for a storage image (Sampled 2), and Vulkan gates it on
+; shaderStorageImageMultisample, which KosmicKrisp does not report; a
+; compiler may declare it anyway, as Red Dead Redemption 2's do. glslang does
+; not, hence SPIR-V. The pipeline must build, reading the image as a Metal
+; texture2d_ms_array.
+               OpCapability Shader
+               OpCapability ImageQuery
+               OpCapability ImageMSArray
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %t %coord %color
+               OpExecutionMode %main OriginUpperLeft
+               OpDecorate %t DescriptorSet 0
+               OpDecorate %t Binding 0
+               OpDecorate %coord BuiltIn FragCoord
+               OpDecorate %color Location 0
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+        %int = OpTypeInt 32 1
+      %float = OpTypeFloat 32
+         %v2 = OpTypeVector %float 2
+         %v4 = OpTypeVector %float 4
+      %v2int = OpTypeVector %int 2
+      %v3int = OpTypeVector %int 3
+        %img = OpTypeImage %float 2D 0 1 1 1 Unknown
+      %p_img = OpTypePointer UniformConstant %img
+    %p_in_v4 = OpTypePointer Input %v4
+   %p_out_v4 = OpTypePointer Output %v4
+          %t = OpVariable %p_img UniformConstant
+      %coord = OpVariable %p_in_v4 Input
+      %color = OpVariable %p_out_v4 Output
+      %int_0 = OpConstant %int 0
+      %int_1 = OpConstant %int 1
+      %int_3 = OpConstant %int 3
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+      %image = OpLoad %img %t
+       %size = OpImageQuerySize %v3int %image
+     %layers = OpCompositeExtract %int %size 2
+       %last = OpISub %int %layers %int_1
+     %extent = OpVectorShuffle %v2int %size %size 0 1
+       %frag = OpLoad %v4 %coord
+         %xy = OpVectorShuffle %v2 %frag %frag 0 1
+      %xyint = OpConvertFToS %v2int %xy
+       %wrap = OpSMod %v2int %xyint %extent
+          %p = OpCompositeConstruct %v3int %wrap %last
+         %s0 = OpImageFetch %v4 %image %p Sample %int_0
+         %s3 = OpImageFetch %v4 %image %p Sample %int_3
+        %sum = OpFAdd %v4 %s0 %s3
+               OpStore %color %sum
+               OpReturn
+               OpFunctionEnd

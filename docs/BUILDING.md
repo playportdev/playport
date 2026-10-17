@@ -230,9 +230,11 @@ device, host-memory heaps and dummy handles, and completes commits at once.
 `kk-host-test.c` then drives the driver through Vulkan: it creates a device
 and builds and records draws with the pipelines it lists (geometry,
 tessellation into geometry, line and point fill, transform feedback with its
-counters and queries). The stage fails on a
-crash, a NIR validation error (debug build), or an MSL library that has an
-untranslated intrinsic. It also fails if a pipeline that captures transform
+counters and queries, and what a captured title asks for beyond the device's
+report: pipeline-statistics queries, 8-sample pipelines, multisample array
+reads). The stage fails on a crash, a NIR validation error (debug build), an
+MSL library that has an untranslated intrinsic, or a raster sample count the
+device does not support. It also fails if a pipeline that captures transform
 feedback has no vertex function that writes it. Then it builds Zink and EGL for
 Linux on the same mock (`run/mesa/hosttest/build-gl`) and runs
 `zink-host-test.c`: a surfaceless EGL display reaches Zink the way the phone
