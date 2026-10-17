@@ -627,3 +627,53 @@ Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
 - Hollow Knight (`app-367520`) on Vulkan through first frame+10 on this exact IPA (sha256
   above), for V1–V3.
 - Then RDR2 after PLA-295 and PLA-300.
+
+## Apple's Metal compiler on the generated MSL (H5)
+
+**Date:** 2026-10-18. Licence and download check only, from this workstation; **blocked**
+before any download. No tool was fetched, installed or run, so there are no compile results.
+
+- **Where the tool is:** Apple's [Metal developer tools page](https://developer.apple.com/metal/tools/)
+  lists "Metal Developer Tools for Windows", "the collection of Windows-hosted tools, headers and
+  libraries that enable developers to build their Metal shader programs/assets for deployment on
+  iOS, macOS, and tvOS". Its "Download now" link goes to
+  `https://developer.apple.com/download/all/?q=metal%20developer%20tools%20for%20windows`, which
+  answers 302 to Apple's account sign-in (`idmsa.apple.com/IDMSWebAuth/signin…`). A request
+  straight to the download host (`download.developer.apple.com/Developer_Tools/…`) answers 302 to
+  `developer.apple.com/unauthorized/`. **The download needs an Apple developer account
+  sign-in.** The only account available is the owner's, which this run may not use.
+- **Licence:** the terms that govern the Windows tools are not published. The
+  [Agreements and Guidelines](https://developer.apple.com/support/terms/) page and
+  [apple.com/legal/sla](https://www.apple.com/legal/sla/) list no Metal or Windows tools agreement.
+  So whether running the tools under Wine on Linux is permitted could not be read.
+  The agreements that are public do not settle it:
+  - The [Xcode and Apple SDKs Agreement](https://www.apple.com/legal/sla/docs/xcode.pdf) covers
+    Apple's macOS-hosted tools: "USE OF APPLE SOFTWARE IS GOVERNED BY THIS AGREEMENT AND IS
+    AUTHORIZED ONLY FOR EXECUTION ON AN APPLE-BRANDED PRODUCT RUNNING MACOS. ANY OTHER DOWNLOAD
+    OR USE OF APPLE SOFTWARE IS NOT AUTHORIZED". The Windows tools must have their own terms,
+    which may tie use to a host platform in the same way.
+  - The [Apple Developer Agreement](https://developer.apple.com/support/downloads/terms/apple-developer-agreement/Apple-Developer-Agreement-20250318-English.pdf),
+    which the sign-in accepts, §1: "The Apple Account and password you use to log into your
+    Apple Developer account cannot be shared in any way or with anyone". §3: "you agree to abide
+    by and maintain all notices, license information, and restrictions contained therein".
+- **Conclusion (conservative, as the owner asked):** blocked. The tool needs an Apple account
+  sign-in, and its licence can be read only after that sign-in. Nothing was downloaded. No
+  third-party copy was looked for: it would bypass the gate and the terms.
+- **To unblock (owner):**
+  1. Sign in with the owner's own Apple ID and download the tools; a free developer
+     account may be enough (not checked).
+  2. Read the licence shown at download or install, and decide whether Wine on Linux is
+     permitted.
+  3. If it is, put the installer in this copy's build area (never committed). The rest of H5
+     (scratch prefix, compile, grouping) needs no account.
+- **Ready for that run:**
+  - The corpora came from the mock and stay in the build area: the DX12 route's 3,564 libraries in
+    `scratch/h3/msl`; the Vulkan route's 3,895 in `scratch/v4/msl`; and the host test's own MSL,
+    135 files in `run/mesa/hosttest/msl` and 25 in `msl-zink`.
+  - KosmicKrisp compiles each library with `MTL4Compiler` (`bridge/mtl_compiler.m`), at the
+    device's `msl_version`. The device needs at least 4.1 for some features
+    (`kk_physical_device.c`). So an offline check should use the same language standard and an
+    iOS AIR target **(inference)**.
+- **Without the tool:** whether Apple's compiler accepts this MSL is still unknown. The phone
+  answers it at pipeline creation. The host mock bridge writes the MSL and compiles none of it;
+  chunk 0's device logs or an RDR2 run on the phone show any failure.
