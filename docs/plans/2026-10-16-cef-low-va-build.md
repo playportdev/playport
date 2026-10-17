@@ -8,19 +8,9 @@
 
 ## Current handoff and ordered queue
 
-- **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. Last phone result: IPA `887442a3…`, Open `20261016T203152` ([PLA-378](../evidence/2026-10-16-cef-fewer-processes-phone.md)). That Open was ended by Playport's own 10 s stop after Social Club's audio utility ran the JIT pool out (review: `$PLAYPORT_BUILD/agent-notes/pla370-cef/reports/review-since-9192531.md`). PLA-379 and PLA-380 are dropped.
-- **[PLA-381](https://linear.app/playportdev/issue/PLA-381), both changes in one build cycle (host work done, phone not reachable):**
-  1. [Decision 0112](../decisions/0112-a-launchers-open-outlasts-a-pool-exhaustion.md): the Rockstar launcher's Open goes on 240 s, not 10, after the pool ran out.
-  2. `patches/chromium` 0007: the audio service runs in the CEF browser process. CEF payload `libcef.dll` `f724d38b…`; under desktop Proton, 5 Chromium processes instead of 6 and the sign-in page shows ([evidence](../evidence/2026-10-17-cef-audio-in-process.md)).
-- **Built:** dev IPA `0013352e9a823165c41e1f423bf9c8c92842ef5d3ff836cebd9d88b56f450817` (`$PLAYPORT_BUILD/out/20261017-185413-0013352e/`, 87 IPA checks passed; no build records changed). Not installed.
-- **Next, on the phone:** the Hollow Knight gate, then one long Open, in one lock session:
-
-  ```sh
-  ./pp phone lock -- sh -c "./pp install --no-build && ./pp ui --play app-367520 --until first-frame+10 --shot && ./pp ui --settings 'launcher-rockstar:{\"runtime\":\"env.FEX_SMCCHECKS=none\"}' --wait 120 && ./pp ui --action open-launcher:rockstar --until 'mark:first window+240' --wait 600 --screenshot-after 30 --screenshot-after 90 --screenshot-after 150 --screenshot-after 240 --shot; ./pp ui --settings 'launcher-rockstar:{}' --wait 120"
-  ```
-
-  Check that the `installed` event names `0013352e…`. Collect the screenshots, the `pool:` and `band:` lines, the `pool: a title still running 240 s …` line, and the first band refusal and its process. If sign-in shows, this run will not say which change did it.
-- **Later levers, if needed:** a smaller FEX call-return stack (16 MiB per thread, 3.2 GB at 200 threads); storage in the browser process; a less greedy tail in the existing allocator.
+- **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. Last phone result: IPA `0013352e…`, Open `20261017T191412` (PLA-381: decision 0112's 240 s grace and the in-process audio service). Social Club reached `FINISHED`, then the FEX host band filled at 16,202 MB (204 threads, 3.3 GB of it in 16 MiB call-return stacks); FEX's allocation failed in the second renderer, which died, and the launcher gave up waiting for Social Club's window.
+- **[PLA-383](https://linear.app/playportdev/issue/PLA-383):** a 4 MiB call-return stack ([decision 0113](../decisions/0113-a-4-mib-call-return-stack.md), `patches/fex` 0047, `patches/madeira-unix` 0157). Host work done; build and phone run pending.
+- **Later levers, only with the owner:** storage in the browser process; a less greedy tail in the existing allocator; rpmalloc's span use.
 - **Models:** subagents use `anthropic/claude-opus-5-5:medium` (owner, 2026-10-17).
 - **Phone:** RDR2 and Hollow Knight installed; never uninstall. Recheck charge and space first.
 

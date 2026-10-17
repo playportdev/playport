@@ -402,17 +402,29 @@ fell from 138 to 83 MiB, Jurassic World Evolution's from 480 to 68.
 
 FEX keeps its host state in one 16 GB range, `[0x7c00000000, 0x8000000000)`,
 which ntdll reserves at start and serves only to FEX's requests (the
-`[fex-arena]` lines). Every emulator thread takes about 50 MB of it: its
+`[fex-arena]` lines). Every emulator thread takes about 38 MB of it: its
 rpmalloc heap's two 16 MB spans (one for small blocks, one for medium),
-a call-return stack of 16 MB and two guard pages, and a 2 MB L1 lookup cache.
+a call-return stack of 4 MB and two guard pages, and a 2 MB L1 lookup cache.
 The L2 cache and its table for the 8 GB `VirtualMemSize` are off on iOS, so
 they take nothing. Call-return stacks are placed from the top of the band
 down (`patches/fex` 0010), and rpmalloc's spans from the bottom up, so the
-stacks leave no holes between 16 MB-aligned spans. Hollow Knight holds
-3.3 GB with 50 threads, and 3.5 GB with DXVK's six compiler threads on the
-Vulkan backend ([fex-band](evidence/2026-09-28-fex-band.md)).
+stacks leave no holes between 16 MB-aligned spans. With 16 MB stacks, Hollow
+Knight held 3.3 GB with 50 threads, and 3.5 GB with DXVK's six compiler
+threads on the Vulkan backend ([fex-band](evidence/2026-09-28-fex-band.md)).
 
-- Madeira-unix 0038 counts the band's views (`ios_fex_band_stats`), and
+The call-return stack is a return-address predictor, so its size costs only
+predictions. `patches/fex` 0047 takes it from Madeira's 16 MB back to 4 MB
+([decision 0113](decisions/0113-a-4-mib-call-return-stack.md)): the
+Rockstar launcher's Social Club filled the band at 204 threads, 3.3 GB of it
+in these stacks. ARM64EC's inline guard keeps the stack pointer in
+`[1 MB, 3 MB)` of the stack and resets it to the middle when it leaves;
+`InternalThreadState.h` names that window and every site that bounds or
+resets the pointer uses it. WOW64 has no inline guard: a 32-bit thread that
+leaks entries walks 2 MB down to the base, and past it (iOS does not fault on
+the guard page), until CompileBlock's `[CALLRET_OOB]` check resets it.
+
+- Madeira-unix 0038 counts the band's views (`ios_fex_band_stats`; 0157 knows
+  a call-return stack by its 4 MB shape, and `threads=` is their count), and
   `wine_host_band_stats_read` passes the counts to the app. A launch logs a
   `title: band: size_mb=… used_mb=… largest_free_mb=… span_slots=… threads=…
   refused=…` line whenever the use moved by 256 MB or the thread count by 4,

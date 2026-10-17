@@ -154,3 +154,4 @@
 0154-ntdll-release-an-exited-child-s-views-once-its-threa.patch
 0155-ntdll-hold-1024-JIT-pool-images-and-keep-a-full-alia.patch
 0156-process-run-a-CEF-browser-s-network-and-video-captur.patch
+0157-virtual-count-a-4-MiB-call-return-stack-as-one-in-th.patch
