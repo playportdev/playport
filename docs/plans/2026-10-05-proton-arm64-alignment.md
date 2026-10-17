@@ -13,9 +13,9 @@ item (each marked below):
 | B1 disk cache default | done: on by default ([0056](../decisions/0056-fex-disk-cache-on.md), [2026-10-14 evidence](../evidence/2026-10-14-fex-disk-cache-on.md); PLA-341): the warm-start crashes were rpmalloc's one-block pages (rpmalloc 0004) |
 | B2 Valve Wine past stable | done (`wine-valve` from bleeding-edge, `pp sync` lists it); questions 4 and 5 answered |
 | B3 LAA for i386 | open, not started; Portal 2 is LAA already (question 3) |
-| B4 child-process FEX profiles | designed, not implemented (W3, [evidence](../evidence/2026-10-17-fex-child-profiles.md)): `FEX_APP_CONFIG` works per pseudo-process; waits for a played title with a child entry, or B6 |
+| B4 child-process FEX profiles | designed, not implemented (W3, [evidence](../evidence/2026-10-17-fex-child-profiles.md)): `FEX_APP_CONFIG` works per pseudo-process; waits for a played title with a child entry (B6 is closed) |
 | B5 release log defaults | done (2331995) |
-| B6 Steam appinfo FEX settings | open, not started |
+| B6 Steam appinfo FEX settings | closed (W4, [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)): the only public value, `tso_enable`, is Auto for every reviewed title, Portal 2 included; Hollow Knight has none; reopen when a played title's is Force On or Off |
 | B7 CPU topology | open: processor count is the phone's ([0098](../decisions/0098-machine-values-at-session-start.md)); P/E reporting not checked |
 | C table into ARCHITECTURE.md | done ([section](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried), W1) |
 | Portal 2 follow-ups | open, not re-measured |
@@ -62,7 +62,8 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 - **Not here:** B1 (done), the Portal 2 follow-ups (phone), installs.
 - **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); W2 done
   ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); W3 done (B4 designed,
-  [evidence](../evidence/2026-10-17-fex-child-profiles.md); follow-up PLA-391); W4 running. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  [evidence](../evidence/2026-10-17-fex-child-profiles.md); follow-up PLA-391); W4 done (B6 closed,
+  [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)); next W5. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
@@ -479,8 +480,8 @@ implemented (2026-10-17, W3; [evidence](../evidence/2026-10-17-fex-child-profile
 - **Why not now:** it changes what `witcher3.exe` itself receives, through a
   file FEX has never been shown to read on the phone. It also needs a build,
   a FEX patch and phone runs, and no played title has a child entry.
-  Implement it when one does, or with B6: Steam's TSO and Multiblock go in the
-  same file.
+  Implement it when one does. B6 is closed; if it reopens, Steam's TSO value goes
+  in the same file.
 - **Decision record:** yes, at implementation (extends 0021; the draft is in
   the evidence).
 
@@ -500,14 +501,35 @@ log size and CPU was not recorded.*
 - **Decision record:** no.
 
 **B6. Steam appinfo FEX settings (`STEAM_FEX_TSOENABLED`, `STEAM_FEX_MULTIBLOCK`).**
-*Open, not started (Review 2026-10-13).*
-- **Investigate:** whether Playport's PICS client receives these fields, and
-  what values 620 and 367520 get.
-- **Expected effect:** unknown. Valve's per-game TSO/Multiblock data is not
-  public.
-- **Risk:** stale data could turn TSO off.
-- **Decision record:** yes (remote data feeding launch defaults; amends 0021's
-  "not carried").
+*Closed with a reason (2026-10-17, W4; [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)).
+This was a reading of public PICS records and source. No runtime change was made.*
+- **Source:**
+  - TSO comes from the public PICS key
+    `common/steam_frame_compatibility/configuration/tso_enable`, part of the Steam
+    Frame review block. Steam's UI calls it *ARM Translation Memory Ordering*:
+    0 is Auto, 1 Force On, 2 Force Off, and the player can override it.
+  - No appinfo key for Multiblock exists. The only Multiblock in the client is the
+    player's *Override ARM Translation Options* string, the format that Proton's
+    `STEAM_COMPAT_FEX_CONFIG` parses.
+  - How the ARM64 client turns either value into `STEAM_FEX_*` was not seen. The
+    x86 client does not name the variables.
+- **Values:**
+  - Portal 2 (620): 0 (Auto), Frame-verified.
+  - Hollow Knight (367520): no Frame block.
+  - All 21 records with the block, out of 115 public records read (The Witcher 3,
+    RDR2, Cyberpunk, BG3 among them): 0.
+- **Playport:** the PICS client receives each full record
+  (`Library.swift:177-215`), but `SteamAppInfo.parse` keeps none of this block
+  (`SteamApp.swift:80-112`).
+- **Why closed:** Auto leaves FEX at Proton's global `TSOEnabled=1`, which Playport
+  already uses (0021). Carrying the key would change no played title. 0021's "not
+  public" is now half true; it was not amended, because nothing is carried.
+- **Reopen when:** a played title has `tso_enable` 1 or 2, or a Multiblock key
+  appears. The design is in the evidence:
+  - an optional `SteamAppInfo` field;
+  - a `FEXProfile.launch` layer between Proton's entry and the page's picker;
+  - B4's file, if B4 exists by then;
+  - a decision record amending 0021 (remote data feeding a launch default).
 
 **B7. `WINE_CPU_TOPOLOGY` from affinity** (experimental/bleeding-edge).
 *Open (Review 2026-10-13). Playport sets no `WINE_CPU_TOPOLOGY`. The guest
