@@ -121,7 +121,7 @@ record. Linear status synchronization is left to the supervisor session.
 
 The supervisor independently confirmed the prefix-copy error and authorized a
 setup correction at HEAD `37fe441`. Same Sol high run
-`c9dceb68-0612-467d-a108-79627582072b`, continuation `78bedfc2`. The old failed
+`c9dceb68-0612-467d-a108-79627582072b`, revived run `78bedfc2-92eb-4de0-bbcf-0808d12a7c2b`. The old failed
 `baseline/` prefix/logs were not overwritten. The original scratch runner was
 preserved as `run-invalid-prefix.py`; corrected `run.py` removes the template
 copy, adds separate setup/runtime phases and checks full baseline console/DOM/
