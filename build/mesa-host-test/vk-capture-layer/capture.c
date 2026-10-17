@@ -165,13 +165,14 @@ static VkResult VKAPI_CALL c_CreateDevice(VkPhysicalDevice pd, const VkDeviceCre
     if (r == VK_SUCCESS) {
         g_dev = *out;
         prof_resolve_dev(*out);
+        prof_device_created(pd, *out);
 #define LOAD(n) n_##n = (PFN_vk##n)next_gdpa(*out, "vk" #n);
         DEVFNS(LOAD)
     }
     return r;
 }
 
-static void VKAPI_CALL c_DestroyDevice(VkDevice d, const VkAllocationCallbacks *a) { stats(); L("device destroy\n"); n_DestroyDevice(d, a); }
+static void VKAPI_CALL c_DestroyDevice(VkDevice d, const VkAllocationCallbacks *a) { stats(); L("device destroy\n"); prof_device_destroyed(d); n_DestroyDevice(d, a); }
 
 static uint64_t fnv(const void *p, size_t n) {
     const unsigned char *c = p; uint64_t h = 1469598103934665603ull;
@@ -364,7 +365,8 @@ static VkResult VKAPI_CALL c_AllocateMemory(VkDevice d, const VkMemoryAllocateIn
     fprintf(logf_, "\n");
     pthread_mutex_unlock(&mu);
     VkMemoryAllocateInfo tai = *ai;
-    if (prof_on && prof_memtype != UINT32_MAX) tai.memoryTypeIndex = prof_memtype;
+    uint32_t standin = prof_memtype_dev(d);
+    if (standin != UINT32_MAX) tai.memoryTypeIndex = standin;
     VkResult r = n_AllocateMemory(d, &tai, a, m);
     if (r != VK_SUCCESS) L("alloc result %d\n", r);
     return r;

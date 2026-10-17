@@ -267,7 +267,10 @@ in the build area:
   creates and saves its SPIR-V (`PP_CAPTURE_OUT`). With
   `PP_CAPTURE_PROFILE=REPORT` (devinfo's output, for example the mock's) it
   presents the desktop device as that one, and with `PP_CAPTURE_SPOOF=1` under
-  its name and vendor. Build it beside its manifest with
+  its name and vendor. Its one memory heap has the report's size; the desktop
+  memory type behind it is chosen per physical device, and
+  `PP_CAPTURE_HEAP_CAP=1` caps the heap at that type's heap. Build it beside
+  its manifest with
   `cc -shared -fPIC -O1 -o DIR/libpp_capture.so capture.c -lpthread` and
   `cp capture.json DIR/`, then run with `VK_ADD_IMPLICIT_LAYER_PATH=DIR
   ENABLE_PP_CAPTURE=1`.

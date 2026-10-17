@@ -6,9 +6,15 @@
  * device's extensions, its 1.0 features (ANDed), format features (ANDed),
  * sample counts and line width, one queue family with one queue, and one
  * memory type (DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT | HOST_CACHED) on
- * one heap no larger than the report's heap 0, as KosmicKrisp has. With
+ * one heap of the report's heap 0 size, as KosmicKrisp has. With
  * PP_CAPTURE_SPOOF=1 it also takes the report's vendor, device ID, name and
  * an integrated device type. Included by capture.c.
+ *
+ * The report's memory type stands for the first desktop type that is
+ * DEVICE_LOCAL, HOST_VISIBLE and HOST_COHERENT, chosen per physical device:
+ * instances in one process can see different memory layouts (Mesa's driconf
+ * matches by application name). The heap's size is the report's, not capped
+ * by the size of the heap behind that type; PP_CAPTURE_HEAP_CAP=1 caps it.
  */
 
 static int prof_on;
@@ -17,7 +23,6 @@ static VkBool32 prof_f10[55];
 static VkFormatProperties prof_fmt[200];
 static uint32_t prof_vendor, prof_devid;
 static char prof_name[256];
-static uint32_t prof_memtype = UINT32_MAX; // the desktop type that stands for the report's one
 static VkDeviceSize prof_heap = ~0ull;
 // Sample count masks and the widest line, from the report's limits.
 static VkSampleCountFlags prof_color_samples = ~0u, prof_depth_samples = ~0u, prof_storage_samples = ~0u;
@@ -155,22 +160,30 @@ static void VKAPI_CALL q_GetQF2(VkPhysicalDevice pd, uint32_t *n, VkQueueFamilyP
     free(a);
 }
 
-static void prof_mem(VkPhysicalDeviceMemoryProperties *m) {
-    if (prof_memtype == UINT32_MAX) {
-        for (uint32_t i = 0; i < m->memoryTypeCount; i++) {
-            uint32_t want = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-            if ((m->memoryTypes[i].propertyFlags & want) == want) { prof_memtype = i; break; }
-        }
-        L("profile memtype -> desktop type %u\n", prof_memtype);
-    }
-    if (prof_memtype == UINT32_MAX) return; // no such type: leave the driver's memory as it is
-    VkMemoryHeap h = m->memoryHeaps[m->memoryTypes[prof_memtype].heapIndex];
+// The desktop memory type that stands for the report's one in this layout, or UINT32_MAX.
+static uint32_t prof_memtype_of(const VkPhysicalDeviceMemoryProperties *m) {
+    uint32_t want = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < m->memoryTypeCount; i++)
+        if ((m->memoryTypes[i].propertyFlags & want) == want) return i;
+    return UINT32_MAX;
+}
+
+static void prof_mem(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties *m) {
+    static VkPhysicalDevice last_pd; // log a physical device's answer once in a row
+    int log = pd != last_pd; last_pd = pd;
+    uint32_t t = prof_memtype_of(m);
+    if (t == UINT32_MAX) { if (log) L("profile memory pd %p: no stand-in type, left as the driver's\n", (void *)pd); return; }
+    VkMemoryHeap h = m->memoryHeaps[m->memoryTypes[t].heapIndex];
+    VkDeviceSize size = prof_heap;
+    if (size == ~0ull || (getenv("PP_CAPTURE_HEAP_CAP") && h.size < size)) size = h.size;
+    if (log) L("profile memory pd %p: desktop type %u on heap %u (%llu), reported heap %llu\n", (void *)pd, t,
+               m->memoryTypes[t].heapIndex, (unsigned long long)h.size, (unsigned long long)size);
     memset(m, 0, sizeof *m);
     m->memoryTypeCount = 1; m->memoryTypes[0].propertyFlags = 0xf; m->memoryTypes[0].heapIndex = 0;
-    m->memoryHeapCount = 1; m->memoryHeaps[0].size = prof_heap < h.size ? prof_heap : h.size; m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+    m->memoryHeapCount = 1; m->memoryHeaps[0].size = size; m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
 }
-static void VKAPI_CALL q_GetMem(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties *m) { p_GetMem(pd, m); prof_mem(m); }
-static void VKAPI_CALL q_GetMem2(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties2 *m) { p_GetMem2(pd, m); prof_mem(&m->memoryProperties); }
+static void VKAPI_CALL q_GetMem(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties *m) { p_GetMem(pd, m); prof_mem(pd, m); }
+static void VKAPI_CALL q_GetMem2(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties2 *m) { p_GetMem2(pd, m); prof_mem(pd, &m->memoryProperties); }
 
 static void prof_fmtmask(VkFormat f, VkFormatProperties *p) {
     if ((int)f <= 0 || (int)f >= 200) return; // extension formats: leave as the driver says
@@ -223,21 +236,48 @@ static PFN_vkVoidFunction prof_lookup_inst(const char *n) {
     return NULL;
 }
 
-/* device side: memory type translation */
+/* device side: memory type translation, by each device's stand-in type */
 static PFN_vkGetBufferMemoryRequirements p_BufReq; static PFN_vkGetImageMemoryRequirements p_ImgReq;
 static PFN_vkGetBufferMemoryRequirements2 p_BufReq2; static PFN_vkGetImageMemoryRequirements2 p_ImgReq2;
-static uint32_t prof_bits(uint32_t b) { return (b >> prof_memtype) & 1; }
-static void VKAPI_CALL q_BufReq(VkDevice d, VkBuffer b, VkMemoryRequirements *r) { p_BufReq(d, b, r); r->memoryTypeBits = prof_bits(r->memoryTypeBits); }
-static void VKAPI_CALL q_ImgReq(VkDevice d, VkImage i, VkMemoryRequirements *r) { p_ImgReq(d, i, r); r->memoryTypeBits = prof_bits(r->memoryTypeBits); }
-static void VKAPI_CALL q_BufReq2(VkDevice d, const VkBufferMemoryRequirementsInfo2 *i, VkMemoryRequirements2 *r) { p_BufReq2(d, i, r); r->memoryRequirements.memoryTypeBits = prof_bits(r->memoryRequirements.memoryTypeBits); }
-static void VKAPI_CALL q_ImgReq2(VkDevice d, const VkImageMemoryRequirementsInfo2 *i, VkMemoryRequirements2 *r) { p_ImgReq2(d, i, r); r->memoryRequirements.memoryTypeBits = prof_bits(r->memoryRequirements.memoryTypeBits); }
+static pthread_mutex_t prof_dev_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct { VkDevice dev; uint32_t memtype; } prof_devs[64];
+
+static void prof_device_created(VkPhysicalDevice pd, VkDevice d) {
+    if (!prof_on) return;
+    VkPhysicalDeviceMemoryProperties m; p_GetMem(pd, &m);
+    uint32_t t = prof_memtype_of(&m);
+    pthread_mutex_lock(&prof_dev_mu);
+    int k = 0;
+    while (k < 64 && prof_devs[k].dev && prof_devs[k].dev != d) k++;
+    if (k < 64) { prof_devs[k].dev = d; prof_devs[k].memtype = t; }
+    pthread_mutex_unlock(&prof_dev_mu);
+    L("profile device %p on pd %p: desktop memory type %u%s\n", (void *)d, (void *)pd, t, k < 64 ? "" : " (table full: not translated)");
+}
+static void prof_device_destroyed(VkDevice d) {
+    pthread_mutex_lock(&prof_dev_mu);
+    for (int k = 0; k < 64; k++) if (prof_devs[k].dev == d) prof_devs[k].dev = NULL;
+    pthread_mutex_unlock(&prof_dev_mu);
+}
+// The device's stand-in type, or UINT32_MAX (no profile, or its memory left as the driver's).
+static uint32_t prof_memtype_dev(VkDevice d) {
+    uint32_t t = UINT32_MAX;
+    pthread_mutex_lock(&prof_dev_mu);
+    for (int k = 0; k < 64; k++) if (prof_devs[k].dev == d) { t = prof_devs[k].memtype; break; }
+    pthread_mutex_unlock(&prof_dev_mu);
+    return t;
+}
+static uint32_t prof_bits(VkDevice d, uint32_t b) { uint32_t t = prof_memtype_dev(d); return t == UINT32_MAX ? b : (b >> t) & 1; }
+static void VKAPI_CALL q_BufReq(VkDevice d, VkBuffer b, VkMemoryRequirements *r) { p_BufReq(d, b, r); r->memoryTypeBits = prof_bits(d, r->memoryTypeBits); }
+static void VKAPI_CALL q_ImgReq(VkDevice d, VkImage i, VkMemoryRequirements *r) { p_ImgReq(d, i, r); r->memoryTypeBits = prof_bits(d, r->memoryTypeBits); }
+static void VKAPI_CALL q_BufReq2(VkDevice d, const VkBufferMemoryRequirementsInfo2 *i, VkMemoryRequirements2 *r) { p_BufReq2(d, i, r); r->memoryRequirements.memoryTypeBits = prof_bits(d, r->memoryRequirements.memoryTypeBits); }
+static void VKAPI_CALL q_ImgReq2(VkDevice d, const VkImageMemoryRequirementsInfo2 *i, VkMemoryRequirements2 *r) { p_ImgReq2(d, i, r); r->memoryRequirements.memoryTypeBits = prof_bits(d, r->memoryRequirements.memoryTypeBits); }
 
 static void prof_resolve_dev(VkDevice d) {
     p_BufReq = (void *)next_gdpa(d, "vkGetBufferMemoryRequirements"); p_ImgReq = (void *)next_gdpa(d, "vkGetImageMemoryRequirements");
     p_BufReq2 = (void *)next_gdpa(d, "vkGetBufferMemoryRequirements2"); p_ImgReq2 = (void *)next_gdpa(d, "vkGetImageMemoryRequirements2");
 }
 static PFN_vkVoidFunction prof_lookup_dev(const char *n) {
-    if (!prof_on || prof_memtype == UINT32_MAX) return NULL;
+    if (!prof_on) return NULL;
     Q("vkGetBufferMemoryRequirements", q_BufReq) Q("vkGetImageMemoryRequirements", q_ImgReq)
     Q("vkGetBufferMemoryRequirements2", q_BufReq2) Q("vkGetImageMemoryRequirements2", q_ImgReq2)
     return NULL;
