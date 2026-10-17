@@ -8,27 +8,14 @@
 
 ## Current handoff and ordered queue
 
-- **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. The CEF input is the approved `a07bb71d…` payload ([restored](../evidence/2026-10-17-cef-baseline-restored.md)). The last phone result is IPA `887442a3…`, Open `20261016T203152` ([PLA-378](../evidence/2026-10-16-cef-fewer-processes-phone.md)).
-- **Review of the work since `9192531`** (owner-requested, Opus, 2026-10-17; `.work/agent-notes/pla370-cef/reports/review-since-9192531.md`):
-  1. **Playport ended that Open itself.** Social Club's audio utility could not load its 4.6 MiB `xtajit64.dll` copy, the first head exhaustion. 10 s later the app's stop rule (decision 0022, `LaunchCoordinator.swift`, `PoolLog.grace`) ended the session. The browser, the storage service and both renderers were still alive, and Social Club's UI had had about 17 s on interpreter-only V8. Whether the sign-in page paints given more time has never been measured.
-  2. **The 16 GiB band is FEX's host arena.** Guest reservations such as V8's code ranges are never placed in it. It fills with threads, about 50–80 MB each: 201 threads held 16,128 MB before the pool ran out. So PLA-379 had no possible phone benefit, and the earlier "512 MB of band per isolate" was wrong.
-  3. **A flat cap frees too little.** The pool allocator already shrinks code buffers as room runs out. A flat launcher cap (PLA-380) would free about 100–130 MiB, and flat caps caused retranslation thrash before.
-- **Dropped:** no decision 0112 for either.
-  - PLA-379: archived under `.work/agent-notes/pla379-parked/`.
-  - PLA-380: partial diff reverted; a copy is in `.work/agent-notes/pla380-partial/`.
-- **Owner direction (2026-10-17, [PLA-381](https://linear.app/playportdev/issue/PLA-381)):** make both changes in one build cycle, because the phone is not reachable now:
-  1. A launcher Open is not stopped 10 s after a head exhaustion. Give the Rockstar launcher Open alone a bounded longer grace, in a new decision amending 0022.
-  2. The audio service runs in the CEF browser process, through a Chromium patch in our CEF (decision 0110). That removes one process, its threads and the restart loop. Check on desktop Proton that the sign-in page still shows.
-- **Then:**
-  - build the IPA and run the host checks;
-  - wait for the phone before Hollow Knight and the long phone Open. Collect screenshots to +240 s, the `pool:` and `band:` lines, and the first band refusal and its process.
-  - If sign-in shows, the combined run will not say which change did it.
-- **Later levers, if needed:**
-  - a smaller FEX call-return stack (16 MiB per thread, 3.2 GB at 200 threads);
-  - storage in the browser process;
-  - a less greedy tail in the existing allocator.
+- **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. Last phone result: IPA `887442a3…`, Open `20261016T203152` ([PLA-378](../evidence/2026-10-16-cef-fewer-processes-phone.md)). That Open was ended by Playport's own 10 s stop after Social Club's audio utility ran the JIT pool out (review: `$PLAYPORT_BUILD/agent-notes/pla370-cef/reports/review-since-9192531.md`). PLA-379 and PLA-380 are dropped.
+- **[PLA-381](https://linear.app/playportdev/issue/PLA-381), both changes in one build cycle (host work done, phone not reachable):**
+  1. [Decision 0112](../decisions/0112-a-launchers-open-outlasts-a-pool-exhaustion.md): the Rockstar launcher's Open goes on 240 s, not 10, after the pool ran out.
+  2. `patches/chromium` 0007: the audio service runs in the CEF browser process. CEF payload `libcef.dll` `f724d38b…`; under desktop Proton, 5 Chromium processes instead of 6 and the sign-in page shows ([evidence](../evidence/2026-10-17-cef-audio-in-process.md)).
+- **Next, on the phone:** the Hollow Knight gate, then one long Open. Collect the screenshots, the `pool:` and `band:` lines, and the first band refusal and its process. If sign-in shows, this run will not say which change did it.
+- **Later levers, if needed:** a smaller FEX call-return stack (16 MiB per thread, 3.2 GB at 200 threads); storage in the browser process; a less greedy tail in the existing allocator.
 - **Models:** subagents use `anthropic/claude-opus-5-5:medium` (owner, 2026-10-17).
-- **Phone:** RDR2 and Hollow Knight installed; never uninstall. Recheck charge and space before device work.
+- **Phone:** RDR2 and Hollow Knight installed; never uninstall. Recheck charge and space first.
 
 ## Goal
 
@@ -159,6 +146,7 @@ the dev-only `env.FEX_SMCCHECKS=none`.
 - 2026-10-17: PLA-380 restoration-only checkpoint: archived exact rejected V8 edits/payload/output, restored baseline series/live source and approved 233-file input, verified 237-file app staging and five notices. `pp test --quick` passed; no build/phone work. FEX source proves 32 MiB per-generation does not bound aggregate process retention; escalated, supervisor requires owner choice before implementation/decision. [Evidence](../evidence/2026-10-17-cef-baseline-restored.md).
 
 - 2026-10-17: owner-requested review of the work since `9192531` (above): the Open was ended by Playport's own 10 s stop rule, not by Chromium; PLA-379 aimed at a resource it could not affect; PLA-380 would free too little. Both are dropped. Next: a longer grace for the launcher Open and the audio service in the browser process.
+- 2026-10-17: PLA-381 host work. Decision 0112 gives the Rockstar launcher's Open a 240 s grace after a pool exhaustion (PlayportKit test). `patches/chromium` 0007 turns `AudioServiceOutOfProcess` off by default on Windows; an incremental build in the former low-VA ninja directory changed only `libcef.dll` (`f724d38b…`). Under desktop Proton (sway; an Xvfb run crashed in the launcher's D3D11 probe, as with Rockstar's own files), Social Club reached `FINISHED` at 2.2 s and showed its sign-in page from 30 to 150 s with 5 Chromium processes, no audio service. Evidence: [audio in process](../evidence/2026-10-17-cef-audio-in-process.md). Not run on the phone.
 
 ## Risks
 

@@ -4,3 +4,4 @@
 0004-Separate-rc-includes-and-adapt-CRT-warnings-and-debu.patch
 0005-Dawn-use-the-client-DXC-DLL-instead-of-building-it-o.patch
 0006-PartitionAlloc-opt-into-one-GiB-pools-for-low-addres.patch
+0007-Run-the-audio-service-in-the-browser-process-on-Wind.patch

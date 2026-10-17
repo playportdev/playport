@@ -73,7 +73,7 @@ and chrome_elf nevertheless contain statically linked MSVC CRT code.
 5. Never rerun the stock patcher over these changes. For regeneration use only
    `run-project-files.sh` below.
 
-The formal series reproduces the 14 touched live source files byte-for-byte.
+The formal series reproduces the 15 touched live source files byte-for-byte.
 `pp test`'s series/trailer checker discovers all directories, including these
 new ones without an allowlist. `pp sync` does have an allowlist: both are
 classified in `NOT_REPLAYED` because they are built separately. The special pin
