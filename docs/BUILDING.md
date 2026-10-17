@@ -260,7 +260,13 @@ in the build area:
   manifest, `FOSSILIZE_REPLAY` the replayer, which Steam ships in
   `ubuntu12_64/`), replays each pipeline that crashed alone to get its
   message, prints the crashes grouped by message and exits 1 if there are any.
-  Logs go to `$PLAYPORT_BUILD/run/replay/NAME/`.
+  Logs go to `$PLAYPORT_BUILD/run/replay/NAME/`. With `--bypass-feature-gate`
+  it builds `vk-replay-gate/` (a layer) and replays under it: Fossilize then
+  takes the SPIR-V modules it refuses for a capability the mock does not
+  report but compiles anyway (ImageMSArray, float controls), while the driver
+  is created with only its own features; `NAME/gate/` lists and keeps the
+  modules that needed it. Pipelines the device cannot make (sample counts,
+  formats, required subgroup sizes) stay skipped.
 - `devinfo.c` prints a device's report: extensions, features, limits, queues,
   memory and format features (`cc -o devinfo devinfo.c -lvulkan`).
 - `vk-capture-layer/` is a Linux implicit layer that logs what an application

@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Replay captured Fossilize databases on the host mock of KosmicKrisp and
-# group the pipelines that crash by their message. It builds nothing: the
+# group the pipelines that crash by their message. It builds no driver: the
 # hosttest stage (build/stages/mesa.sh ROOT hosttest) must have made the mock
 # driver and its ICD manifest.
 #
-#   build/mesa-host-test/run-replay.sh FOZ...
+#   build/mesa-host-test/run-replay.sh [--bypass-feature-gate] FOZ...
 #
+# --bypass-feature-gate  builds vk-replay-gate/ into $PLAYPORT_BUILD/run/replay/
+#                   replay-gate-layer/ and replays under it: Fossilize then
+#                   takes the modules it refuses for a capability the driver
+#                   does not report but compiles anyway (ImageMSArray, float
+#                   controls; the list is in replay-gate.c). The modules that
+#                   relied on it are listed, and saved, in NAME/gate/.
 # KK_MOCK_ICD       the mock's ICD manifest, default
 #                   $PLAYPORT_BUILD/run/mesa/hosttest/kk-mock-icd.json
 # FOSSILIZE_REPLAY  fossilize_replay, default the one on PATH (Steam ships one
@@ -26,7 +32,9 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../lib.sh"
-[ $# -gt 0 ] || { echo "usage: $0 FOZ..." >&2; exit 2; }
+GATE=
+[ "${1:-}" = --bypass-feature-gate ] && { GATE=1; shift; }
+[ $# -gt 0 ] || { echo "usage: $0 [--bypass-feature-gate] FOZ..." >&2; exit 2; }
 ICD=$(realpath -m "${KK_MOCK_ICD:-$PLAYPORT_BUILD/run/mesa/hosttest/kk-mock-icd.json}")
 REPLAY=${FOSSILIZE_REPLAY:-$(command -v fossilize_replay || true)}
 JOBS=${JOBS:-$(nproc)}
@@ -36,6 +44,13 @@ JOBS=${JOBS:-$(nproc)}
 # Only the mock, no layers, no window system, no shader cache.
 export VK_DRIVER_FILES=$ICD VK_LOADER_LAYERS_DISABLE='~all~' MESA_SHADER_CACHE_DISABLE=true
 unset DISPLAY WAYLAND_DISPLAY VK_ICD_FILENAMES VK_ADD_DRIVER_FILES
+if [ -n "$GATE" ]; then
+    layer=$(realpath -m "$PLAYPORT_BUILD/run/replay/replay-gate-layer")
+    mkdir -p "$layer"
+    cc -shared -fPIC -O1 -Wall -o "$layer/libpp_replay_gate.so" "$HERE/vk-replay-gate/replay-gate.c" -lpthread
+    cp "$HERE/vk-replay-gate/replay-gate.json" "$layer/"
+    export VK_ADD_IMPLICIT_LAYER_PATH=$layer ENABLE_PP_REPLAY_GATE=1 VK_LOADER_LAYERS_ENABLE='*PLAYPORT_replay_gate'
+fi
 
 # single FOZ KIND START LOG: replay one pipeline alone; LOG gets its output.
 single() {
@@ -59,6 +74,7 @@ for foz in "$@"; do
     name=$(basename "$foz" .foz)
     out=$(realpath -m "${REPLAY_OUT:-$PLAYPORT_BUILD/run/replay}/$name")
     rm -rf "$out"; mkdir -p "$out/single"
+    [ -n "$GATE" ] && export PP_REPLAY_GATE_OUT=$out/gate
     "$REPLAY" --progress "$foz" >"$out/master.log" 2>&1 || true
 
     # "graphics pipeline crashed or hung: HASH. Repro with: --graphics-pipeline-range A B"
@@ -74,6 +90,10 @@ for foz in "$@"; do
     awk '/Progress report/ { n = NR } { line[NR] = $0 } END {
         for (i = n + 1; i <= NR && line[i] !~ /=====/; i++) { sub(/^Fossilize INFO: +/, "", line[i]); print "  " line[i] } }' \
         "$out/master.log"
+    if [ -n "$GATE" ]; then
+        gated=$(cat "$out"/gate/replay-gate.*.log 2>/dev/null | awk '$1 == "module" { print $2 }' | sort -u | wc -l)
+        echo "  feature gate bypassed for $gated modules (listed and saved in $out/gate)"
+    fi
     crashes=$(wc -l <"$out/crashed.txt")
     echo "  crashed pipelines: $crashes (logs in $out)"
     [ "$crashes" -eq 0 ] && continue

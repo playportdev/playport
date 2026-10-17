@@ -1,0 +1,14 @@
+{
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_PLAYPORT_replay_gate",
+    "type": "GLOBAL",
+    "library_path": "./libpp_replay_gate.so",
+    "api_version": "1.4.300",
+    "implementation_version": "1",
+    "description": "Playport replay feature-gate bypass (build/mesa-host-test/vk-replay-gate)",
+    "functions": { "vkNegotiateLoaderLayerInterfaceVersion": "ppgate_NegotiateLoaderLayerInterfaceVersion" },
+    "disable_environment": { "DISABLE_PP_REPLAY_GATE": "1" },
+    "enable_environment": { "ENABLE_PP_REPLAY_GATE": "1" }
+  }
+}
