@@ -292,7 +292,8 @@ process and text; the game's `system.xml` was restored to the same file before e
   SGA instance that type is on the 256 MiB heap, so the game saw **256 MiB**, not the
   profile's 5 GiB. So the box in `prof2`, `ing1` and `ing2` is a layer artifact; with the 5 GiB
   heap reported as it is there is no box. (inference: the game's settings for those runs, the
-  `Safe` configuration in `system.xml`, may come from the same 256 MiB.)
+  `Safe` configuration in `system.xml`, may come from the same 256 MiB.) **Not so (H1b
+  below):** at 8,192 MiB the game picked the same settings.
 - **The settings menu:** Settings › Graphics shows "Video memory: 2905 / 4096 MB" with a
   4,096 MiB heap while DXGI said 3,072 MiB. The meter's total is the Vulkan heap too; 2,905 MB
   is what the copy's settings need (1280×720, Ultra textures, otherwise low).
@@ -343,7 +344,8 @@ unified-memory.
   phone it would see 8 GiB unless the heap size changes.
 - The profile layer's memory type choice is per process, so in a title with a RADV driconf
   entry the profile is wrong for that title's instance. The committed layer is unchanged; the
-  scratch fix (`H2_HEAP_EXACT`) is in the side copy's `.work/scratch/h2/layer/`.
+  scratch fix (`H2_HEAP_EXACT`) is in the side copy's `.work/scratch/h2/layer/`. (Fixed in the
+  committed layer by H1b, commit `73a9323`.)
 
 **Owner state.** No save was written: `SRDR30000` and `SRDR30015` have the same content (the
 game rewrote `SRDR30000.bak` with the same bytes). In the copy, `cfg.dat` and the pipeline-cache
@@ -354,5 +356,100 @@ Every run was stopped before the game exited, which is when H1 saw uploads. (inf
 copy's next launcher start may upload the changed `cfg.dat` and `ProfileSettings`, as at H1's
 `ing1` start.) Steam ran once for all 21 launches and was shut down at the end. Its content log
 shows no download.
+
+Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
+
+## Story mode at the phone's heap (2026-10-18, H1b)
+
+**Question.** H1 ran with the game's renderer seeing a 256 MiB heap (H2). What does it pick and
+create when it sees KosmicKrisp's heap on iPhone18,4, 8,192 MiB
+([vulkan-clamp evidence](2026-10-15-vulkan-clamp.md)), with settings of its own choosing?
+
+**Setup.** As H1 (Steam on the agent's sway display, the prefix copy, the input program, Steam's
+Fossilize layer), with the capture layer fixed in commit `73a9323`: it now chooses its stand-in
+memory type per physical device and reports the report's heap uncapped (`PP_CAPTURE_HEAP_CAP=1`
+restores the old cap). The profile was H1's KosmicKrisp report with heap 0 set to
+8,589,934,592 bytes. The game's `system.xml` was moved aside before the run and put back after
+it. One run, `h1b-ing`: landing page, Settings › Graphics (looked at, nothing changed), Story
+mode (the autosave loaded in about 2.5–3 minutes: the cabin at Colter), about 5 minutes of play
+(walking indoors, camera turns, the map twice, the satchel, the pause menu; the weapon wheel did
+not open), quit to the desktop from the pause menu.
+
+**The heap.** Every instance in the process saw one 8,192 MiB heap. The SGA instance's memory
+queries returned 8,589,934,592 bytes, over RADV's 256 MiB host-visible heap (the driconf layout
+H2 found); the DXVK and vkd3d-proton instances' over the 16 GiB one. No video-memory box came.
+The game's 2.6 GiB of allocations on the SGA device all succeeded.
+
+**What the game picks.** With no `system.xml` it wrote one identical to the copy's earlier one
+except the display mode: `configSource` `kSettingsConfig_Safe`, 1280×720, textures Ultra,
+anisotropic filtering off, lighting, shadows, reflections, water, volumetrics, particles and
+tessellation Low, SSAO and TAA Medium, MSAA off, the API Vulkan; windowed (1, not 2). Settings ›
+Graphics showed "Video memory: 2905 / 8192 MB". So the 256 MiB heap did not cause the `Safe`
+settings (H2's inference); the heap size changes only the meter's total. (inference: the
+`Safe` choice comes from something else in the profile, for example the unknown vendor or the
+integrated device type; not measured.)
+
+**Pipelines.** Fossilize recorded 1,950 graphics and 788 compute pipelines over the same 13,251
+modules: `ing2`'s 1,948 and 2 more graphics pipelines, no new module. The capture layer counted
+2,157 graphics pipeline creations (`ing1` 2,157), 96 asking for 8 samples. Replayed on the host
+mock (`run-replay.sh`, `mesa` b39d173 + `patches/mesa` 0001–0039, debug):
+
+| | `ing2` (H1) | `h1b-ing` | `h1b-ing`, ImageMSArray gate bypassed |
+|---|---|---|---|
+| graphics built / of | 1,931 / 1,948 | 1,933 / 1,950 | 1,950 / 1,950 |
+| compute built / of | 731 / 788 | 731 / 788 | 788 / 788 |
+| modules failing validation | 87 | 87 | 0 |
+| crashed pipelines | 0 | 0 | 0 |
+
+No crash group, so no new patch.
+
+**What the renderer creates** (the SGA device, `ing1` against `h1b-ing`):
+
+| | `ing1` (H1, 256 MiB) | `h1b-ing` (8,192 MiB) | `h1b-ing` without the Graphics page's probes |
+|---|---|---|---|
+| images (2D / 3D / 1D) | 27,471 (26,812 / 633 / 26) | 49,999 (47,472 / 2,501 / 26) | about 28,700 (3D 827) |
+| views | 30,781 | 31,372 | |
+| image formats | 35 | 36 (R16G16B16A16_UNORM, Graphics page only) | 35 |
+| memory | 103 allocations, 2,787 MiB, largest 128 MiB | 105, 2,635 MiB, largest 128 MiB | |
+| query pools | 12 | 12 | |
+| image samples | at most 4 (6 images) | the same | |
+| indirect draws / dispatches | 10.40 M / 1.70 M | 10.67 M / 0.75 M | |
+| `vkCmdSetDepthBounds` / query copies / render passes | 971 k / 52.7 k / 3.02 M | 1.28 M / 66.5 k / 3.38 M | |
+
+- **The Graphics page probes.** Opening Settings › Graphics made the renderer create its render
+  targets about 30 more times with no view and no memory: 21,277 images, 79 views and 1
+  allocation in the log between the landing page's targets and the first in-game frames. H2's
+  `r21` (the same page at 4,096 MiB) against `r3` (landing page only) shows the same: 20,559
+  more images, 36 more views, no more allocations. (inference: the game sizes its video-memory
+  meter by creating images and reading their memory requirements.) `ing1` never opened the page.
+- **The heap does not change what the game allocates**: about 2.6–2.8 GiB in both runs, with the
+  same settings.
+
+**Linear-tiled images** ([PLA-388](https://linear.app/playportdev/issue/PLA-388)), classified as
+in H1 (KosmicKrisp's linear rules):
+
+| | `ing2` (H1) | `h1b-ing` | of these, the Graphics page's probes |
+|---|---|---|---|
+| all linear images | 11,519 | 15,940 | 4,340 |
+| 2D, 1 layer, 1 mip, no attachment (supported) | 10,633 | 10,667 | 31 |
+| 2D with `COLOR_ATTACHMENT` usage | 435 | 4,318 | 3,813 |
+| 2D arrays, 2–8 layers | 386 | 386 | 0 |
+| 3D | 56 | 560 | 496 |
+| 2D with 7 mip levels | 9 | 9 | 0 |
+
+The formats in each row are H1's. Without the probes the numbers are close to H1's (attachment
+505, 3D 64); the probes are created and never bound to memory (inference from the log: no
+allocation or view among them).
+
+**Owner state.**
+- **Saves and cloud:**
+  - The game wrote an autosave in the autosave slot (`SRDR30015`, its `.bak` the same).
+  - The launcher uploaded to Rockstar's cloud saves at the run's start (one `PostFile`, after
+    `cfg.dat` changed) and when the game exited (three).
+  - The manual save `SRDR30000` is unchanged.
+- **Settings:** `system.xml` was put back to the copy's earlier file (same sha256), so the copy's
+  settings are as before.
+- **Steam:** started once on the agent's display and shut down after the run. It counted about
+  14 minutes of RDR2 play time; its content log shows no download.
 
 Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
