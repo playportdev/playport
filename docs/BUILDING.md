@@ -248,6 +248,27 @@ tree, edits included, with `build/stages/mesa.sh .work/run/mesa hosttest`
 libraries it translated land in `.work/run/mesa/hosttest/msl/`. A new case is
 a shader in `build/mesa-host-test/shaders/` and a pipeline in `kk-host-test.c`.
 
+Three workstation tools beside it measure an application's Vulkan against the
+driver; none runs in a build, and what they capture is game data that stays
+in the build area:
+
+- `build/mesa-host-test/run-replay.sh FOZ...` replays a captured Fossilize
+  database on the mock (after `hosttest`; `KK_MOCK_ICD` names another ICD
+  manifest, `FOSSILIZE_REPLAY` the replayer, which Steam ships in
+  `ubuntu12_64/`), replays each pipeline that crashed alone to get its
+  message, prints the crashes grouped by message and exits 1 if there are any.
+  Logs go to `$PLAYPORT_BUILD/run/replay/NAME/`.
+- `devinfo.c` prints a device's report: extensions, features, limits, queues,
+  memory and format features (`cc -o devinfo devinfo.c -lvulkan`).
+- `vk-capture-layer/` is a Linux implicit layer that logs what an application
+  creates and saves its SPIR-V (`PP_CAPTURE_OUT`). With
+  `PP_CAPTURE_PROFILE=REPORT` (devinfo's output, for example the mock's) it
+  presents the desktop device as that one, and with `PP_CAPTURE_SPOOF=1` under
+  its name and vendor. Build it beside its manifest with
+  `cc -shared -fPIC -O1 -o DIR/libpp_capture.so capture.c -lpthread` and
+  `cp capture.json DIR/`, then run with `VK_ADD_IMPLICIT_LAYER_PATH=DIR
+  ENABLE_PP_CAPTURE=1`.
+
 ## Variants
 
 Only `app` and `verify` differ between `dev` and `release`

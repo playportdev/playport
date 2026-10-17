@@ -299,15 +299,17 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 
 ### V0. A replay harness for captured pipelines
 
-- Commit the workstation tools used for the measurement, made general: the capture/profile
-  layer (Linux implicit layer: logs create infos, dumps SPIR-V, optionally presents a
-  device as KosmicKrisp from a device report) and the device report program, under
-  `build/mesa-host-test/` with a README section. Game data never enters the repository.
-- `build/mesa-host-test/run-replay.sh FOZ...`: replays Fossilize databases on the host mock
-  (system `fossilize_replay`; Steam ships one) and prints a table of failures grouped by
-  assertion or message, exit status non-zero on any crash. Corpus paths are arguments.
-- **Done when:** the RDR2 database in the build area reproduces the 153 aborts in one
-  group.
+- **Done** (2026-10-17, PLA-386; host only). `build/mesa-host-test/run-replay.sh FOZ...`
+  replays Fossilize databases on the host mock (after `hosttest`; `KK_MOCK_ICD`,
+  `FOSSILIZE_REPLAY`), replays each crashed pipeline alone for its message, prints the
+  crashes grouped by message, exits 1 on any. The capture/profile layer
+  (`vk-capture-layer/`, profile from a device report) and the report program (`devinfo.c`)
+  are beside it; [BUILDING.md](../BUILDING.md#kosmickrisp) has how to build and run them.
+  Game data stays in the build area.
+- **Result:** the RDR2 database gives one group, 151 graphics pipelines at
+  `kk_nir_lower_descriptors.c:534: lower_tex: Assertion '!sampler' failed` (153 in the
+  first replay: Fossilize skips pipelines that share a module with a crashed one, so the
+  count moves between runs).
 
 ### V1. Texture deref lowered to a heap offset without a heap mapping
 
@@ -354,8 +356,8 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   `$PLAYPORT_BUILD/worktrees/pla-386-rdr2-vulkan` (owner-authorized 2026-10-17, with its own
   reflinked `.work/cache` and `.work/inputs` so the mesa stage need not rebuild toolchains).
   Not merged, not pushed.
-- **Done:** the measurement (2026-10-17, PLA-386, evidence above).
-- **Queue:** V0 → V1 → V2 → V3 (PLA-386), then chunk 0 below.
+- **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness).
+- **Queue:** V1 → V2 → V3 (PLA-386), then chunk 0 below.
 - **Running:** V0+V1 writer, subagent run fdddba81 (started 2026-10-17); report to
   `agent-notes/rdr2-vk/reports/v0-v1.md` in the side copy's build area.
 - **Phone:** not used by this run; Hollow Knight on Vulkan is owed after V1–V3.
