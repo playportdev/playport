@@ -16,7 +16,7 @@ item (each marked below):
 | B4 child-process FEX profiles | designed, not implemented (W3, [evidence](../evidence/2026-10-17-fex-child-profiles.md)): `FEX_APP_CONFIG` works per pseudo-process; waits for a played title with a child entry (B6 is closed) |
 | B5 release log defaults | done (2331995) |
 | B6 Steam appinfo FEX settings | closed (W4, [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)): the only public value, `tso_enable`, is Auto for every reviewed title, Portal 2 included; Hollow Knight has none; reopen when a played title's is Force On or Off |
-| B7 CPU topology | open: processor count is the phone's ([0098](../decisions/0098-machine-values-at-session-start.md)); P/E reporting not checked |
+| B7 CPU topology | closed (W5, [evidence](../evidence/2026-10-17-cpu-topology.md)): six equal cores, `EfficiencyClass` 0, as Valve's Proton shows on ARM; Valve's `WINE_CPU_TOPOLOGY` would be unset on the phone; reopen when a played title reads the class |
 | C table into ARCHITECTURE.md | done ([section](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried), W1) |
 | Portal 2 follow-ups | open, not re-measured |
 
@@ -63,7 +63,8 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 - **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); W2 done
   ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); W3 done (B4 designed,
   [evidence](../evidence/2026-10-17-fex-child-profiles.md); follow-up PLA-391); W4 done (B6 closed,
-  [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)); next W5. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)); W5 done (B7 closed,
+  [evidence](../evidence/2026-10-17-cpu-topology.md)); next W6. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
@@ -532,18 +533,35 @@ This was a reading of public PICS records and source. No runtime change was made
   - a decision record amending 0021 (remote data feeding a launch default).
 
 **B7. `WINE_CPU_TOPOLOGY` from affinity** (experimental/bleeding-edge).
-*Open (Review 2026-10-13). Playport sets no `WINE_CPU_TOPOLOGY`. The guest
-sees the phone's processor count (`sysconf`, 6 on our phone), and since
-[0098](../decisions/0098-machine-values-at-session-start.md) the registry and
-environment say the same (`NUMBER_OF_PROCESSORS`, one `CentralProcessor` key
-each). Whether P and E cores are told apart was not checked. On the desktop,
-`WINE_CPU_TOPOLOGY=6:…` did not change Tomb Raider's draw fault
-([tomb-raider-draw-diagnostics](../evidence/2026-10-10-tomb-raider-draw-diagnostics.md)).*
-- **Investigate:** whether Wine's topology on iOS reports P and E cores
-  sensibly to games. Valve's code uses Linux `sched_getaffinity`, which iOS
-  does not have.
-- **Expected effect:** only for games that size thread pools by core count.
-- **Decision record:** only if it changes.
+*Closed with a reason (W5, 2026-10-17,
+[evidence](../evidence/2026-10-17-cpu-topology.md)). Source only; no phone reading.*
+- **What the guest sees:** six equal cores in one package, no SMT, `EfficiencyClass` 0 on
+  every core and CPU set, one NUMA node, one group of 6.
+  - The source is WineHQ's Apple branch of `create_logical_proc_info` (from `hw.physicalcpu`,
+    `hw.cacheconfig` and the top-level `hw.l*cachesize`). Playport compiles `system.c`
+    unreplaced.
+  - Each core is told one cluster's cache sizes.
+  - With unequal clusters, an L2 mask can name CPUs that do not exist.
+- **`WINE_CPU_TOPOLOGY`:** absent from our tree, since `wine-valve` did not pick it. Even
+  picked, on iOS it would only lower the count.
+- **Valve on a phone:** Proton's `9ccc0607` sets the variable only when the affinity is
+  narrower than all CPUs, so Valve's value here would be unset. Valve's Wine finds P cores
+  only through Intel's `/sys/devices/cpu_core/cpus`, so on ARM it too reports class 0. We
+  match Valve.
+- **Why not report P cores:**
+  - `hw.perflevelN.*` gives counts, not CPU numbers, and the guest sees real numbers
+    (`pthread_cpu_number_np`).
+  - Affinity is bookkeeping only on iOS.
+  - No played title is known to read the class.
+  - A hybrid-aware engine could drop to 2 workers.
+- **Reopen when:** a played title sizes or places work by `EfficiencyClass` or CPU sets, or a
+  phone reading gives the cluster-to-CPU mapping. The change then: a `wine-unix` patch to the
+  Apple branch, from `hw.perflevelN.*`, with a Hollow Knight gate.
+- **Seen in passing:** FEX's CPUID reports one core on iOS (one MIDR entry), against six from
+  `GetSystemInfo`.
+- **Earlier:** on the desktop, `WINE_CPU_TOPOLOGY=6:…` did not change Tomb Raider's draw
+  fault ([tomb-raider-draw-diagnostics](../evidence/2026-10-10-tomb-raider-draw-diagnostics.md)).
+- **Decision record:** none (nothing changed).
 
 ### C. Not applicable on iOS (record the reason, do not copy)
 
