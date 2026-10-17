@@ -9,8 +9,7 @@ not set up or launched.** This is not a software-WebGL A/B or candidate result.
 The [SC visual rejection](2026-10-17-cef-jitless-code-range.md) remains unresolved;
 current assembled candidate stays rejected and must not be packaged.
 
-Same owner-selected Sol high, revival `08925659` (identifier supplied in the
-handoff; full revived UUID not yet supplied), starting HEAD `d26e17e` on
+Same owner-selected Sol high, revived run `08925659-40f2-4994-8009-3195e258061b`, starting HEAD `d26e17e` on
 `dev/pla-291-rockstar-launcher`. Preceding run
 `78bedfc2-92eb-4de0-bbcf-0808d12a7c2b` completed the valid
 [non-WebGL local control](2026-10-17-cef-local-control.md). The original reviewer's
