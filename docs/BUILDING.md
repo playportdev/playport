@@ -269,7 +269,9 @@ in the build area:
   presents the desktop device as that one, and with `PP_CAPTURE_SPOOF=1` under
   its name and vendor. Its one memory heap has the report's size; the desktop
   memory type behind it is chosen per physical device, and
-  `PP_CAPTURE_HEAP_CAP=1` caps the heap at that type's heap. Build it beside
+  `PP_CAPTURE_HEAP_CAP=1` caps the heap at that type's heap. Its
+  `VK_EXT_memory_budget` budget follows KosmicKrisp's rule (90% of available
+  memory plus usage, at most the heap), with that heap's usage. Build it beside
   its manifest with
   `cc -shared -fPIC -O1 -o DIR/libpp_capture.so capture.c -lpthread` and
   `cp capture.json DIR/`, then run with `VK_ADD_IMPLICIT_LAYER_PATH=DIR

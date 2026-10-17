@@ -15,6 +15,8 @@
  * instances in one process can see different memory layouts (Mesa's driconf
  * matches by application name). The heap's size is the report's, not capped
  * by the size of the heap behind that type; PP_CAPTURE_HEAP_CAP=1 caps it.
+ * VK_EXT_memory_budget's heap 0 follows KosmicKrisp's rule (prof_budget),
+ * with the usage of the heap behind that type.
  */
 
 static int prof_on;
@@ -168,22 +170,56 @@ static uint32_t prof_memtype_of(const VkPhysicalDeviceMemoryProperties *m) {
     return UINT32_MAX;
 }
 
-static void prof_mem(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties *m) {
+// Translates the memory properties to the report's one type and heap; returns the
+// desktop heap behind the stand-in type, or UINT32_MAX when they are left as the driver's.
+static uint32_t prof_mem(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties *m) {
     static VkPhysicalDevice last_pd; // log a physical device's answer once in a row
     int log = pd != last_pd; last_pd = pd;
     uint32_t t = prof_memtype_of(m);
-    if (t == UINT32_MAX) { if (log) L("profile memory pd %p: no stand-in type, left as the driver's\n", (void *)pd); return; }
-    VkMemoryHeap h = m->memoryHeaps[m->memoryTypes[t].heapIndex];
+    if (t == UINT32_MAX) { if (log) L("profile memory pd %p: no stand-in type, left as the driver's\n", (void *)pd); return UINT32_MAX; }
+    uint32_t hi = m->memoryTypes[t].heapIndex;
+    VkMemoryHeap h = m->memoryHeaps[hi];
     VkDeviceSize size = prof_heap;
     if (size == ~0ull || (getenv("PP_CAPTURE_HEAP_CAP") && h.size < size)) size = h.size;
     if (log) L("profile memory pd %p: desktop type %u on heap %u (%llu), reported heap %llu\n", (void *)pd, t,
-               m->memoryTypes[t].heapIndex, (unsigned long long)h.size, (unsigned long long)size);
+               hi, (unsigned long long)h.size, (unsigned long long)size);
     memset(m, 0, sizeof *m);
     m->memoryTypeCount = 1; m->memoryTypes[0].propertyFlags = 0xf; m->memoryTypes[0].heapIndex = 0;
     m->memoryHeapCount = 1; m->memoryHeaps[0].size = size; m->memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+    return hi;
 }
+
+// KosmicKrisp's heap budget (kk_get_sysmem_heap_budget): 90% of the system's
+// available memory plus the heap's usage, at most the heap, in whole MiB. The
+// system here is the workstation's (MemAvailable, as Mesa reads it on Linux).
+static VkDeviceSize prof_budget(VkDeviceSize heap, VkDeviceSize used) {
+    unsigned long long kb = 0;
+    FILE *f = fopen("/proc/meminfo", "r");
+    char line[256];
+    while (f && fgets(line, sizeof line, f)) if (sscanf(line, "MemAvailable: %llu", &kb) == 1) break;
+    if (f) fclose(f);
+    VkDeviceSize b = (VkDeviceSize)((kb << 10) * 0.9f) + used;
+    if (b > heap) b = heap;
+    return b & ~((VkDeviceSize)(1 << 20) - 1);
+}
+
 static void VKAPI_CALL q_GetMem(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties *m) { p_GetMem(pd, m); prof_mem(pd, m); }
-static void VKAPI_CALL q_GetMem2(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties2 *m) { p_GetMem2(pd, m); prof_mem(pd, &m->memoryProperties); }
+static void VKAPI_CALL q_GetMem2(VkPhysicalDevice pd, VkPhysicalDeviceMemoryProperties2 *m) {
+    p_GetMem2(pd, m);
+    uint32_t hi = prof_mem(pd, &m->memoryProperties);
+    if (hi == UINT32_MAX) return;
+    for (Hdr *h = (Hdr *)m->pNext; h; h = (Hdr *)h->pNext) {
+        if (h->sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT) continue;
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT *b = (VkPhysicalDeviceMemoryBudgetPropertiesEXT *)h;
+        VkDeviceSize desk = b->heapBudget[hi], used = b->heapUsage[hi];
+        memset(b->heapBudget, 0, sizeof b->heapBudget); memset(b->heapUsage, 0, sizeof b->heapUsage);
+        b->heapBudget[0] = prof_budget(m->memoryProperties.memoryHeaps[0].size, used); b->heapUsage[0] = used;
+        static VkPhysicalDevice last_pd; // as prof_mem's log
+        if (pd != last_pd) L("profile budget pd %p: heap 0 budget %llu, usage %llu (desktop heap %u budget %llu)\n", (void *)pd,
+                             (unsigned long long)b->heapBudget[0], (unsigned long long)used, hi, (unsigned long long)desk);
+        last_pd = pd;
+    }
+}
 
 static void prof_fmtmask(VkFormat f, VkFormatProperties *p) {
     if ((int)f <= 0 || (int)f >= 200) return; // extension formats: leave as the driver says
