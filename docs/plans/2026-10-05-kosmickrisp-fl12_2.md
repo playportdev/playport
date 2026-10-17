@@ -33,6 +33,13 @@ storage/pricing assumptions. This is separate from [backend convergence](2026-10
 - The Witcher 3 DX12 candidate is still blocked by AVX (PLA-43; see the candidates
   below).
 
+**Update 2026-10-17 (RDR2 on Vulkan, [PLA-386](https://linear.app/playportdev/issue/PLA-386)):**
+RDR2's own Vulkan renderer was measured on the workstation
+([evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md)). It needs none of the 12_1/12_2
+features below, but it hits three KosmicKrisp defects that the host mock shows. They are
+chunks V0–V3 in [RDR2 on Vulkan](#rdr2-on-vulkan-chunks-v0v3), run before chunk 0. See
+[Runner state](#runner-state) for what is running.
+
 **Date:** 2026-10-05. **Kind:** research and plan.
 **Status:** proposed, not executed. Research, upstream status, game requirements
 and estimates below are the original snapshot, not newly verified facts. Before
@@ -268,6 +275,92 @@ not establish compatibility for games that use different combinations of feature
   and MultiVersus `-dx12` on Vulkan to the title screen, on the committed IPA.
 - **Mac:** at the first shader bug that phone logs cannot locate, stop and ask the owner
   to borrow one (0031: attach and replay only).
+
+## RDR2 on Vulkan (chunks V0–V3)
+
+**Why here:** this is the KosmicKrisp feature plan, and RDR2's Vulkan route (RDR2 plan D6)
+runs on KosmicKrisp with no D3D layer. The measurement
+([evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md)) found:
+
+- **Covered already:** every extension RDR2 enables except `VK_AMD_memory_overallocation_behavior`
+  (it goes on without it); every SPIR-V capability its 13,233 modules use; every format and
+  usage it creates; dual-source blending, depth bounds, depth clamp, clip and cull distance,
+  geometry and tessellation through `poly`; one queue and one memory type. Under a
+  KosmicKrisp profile on RADV it reached its landing page.
+- **Not needed from this plan:** mesh, ray tracing, ROV, VRS, sparse, conservative raster,
+  int64/float64, 16-bit types, subgroups, barycentrics. Chunks 0–11 below stay for D3D12
+  titles; RDR2's DX12 fallback through vkd3d-proton would need only 12_0, which already works.
+- **Missing (V1–V3):** three defects the game reaches and the host can test.
+
+The chunks are host-only: the side copy has no phone. Each ends with commits, the mesa host
+test (`build/stages/mesa.sh` `host hosttest`), the iOS build and import check of the patched
+KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The phone checks
+(Hollow Knight on Vulkan, then RDR2) are owed and listed per chunk.
+
+### V0. A replay harness for captured pipelines
+
+- Commit the workstation tools used for the measurement, made general: the capture/profile
+  layer (Linux implicit layer: logs create infos, dumps SPIR-V, optionally presents a
+  device as KosmicKrisp from a device report) and the device report program, under
+  `build/mesa-host-test/` with a README section. Game data never enters the repository.
+- `build/mesa-host-test/run-replay.sh FOZ...`: replays Fossilize databases on the host mock
+  (system `fossilize_replay`; Steam ships one) and prints a table of failures grouped by
+  assertion or message, exit status non-zero on any crash. Corpus paths are arguments.
+- **Done when:** the RDR2 database in the build area reproduces the 153 aborts in one
+  group.
+
+### V1. Texture deref lowered to a heap offset without a heap mapping
+
+- 153 RDR2 pipelines abort in `kk_nir_lower_descriptors.c` `lower_tex` (`assert(!sampler)`):
+  `vk_nir_lower_descriptor_heaps` turns a texture deref that is not a set/binding variable
+  into `texture_heap_offset` 0 even when the pipeline has no heap mapping.
+- First check Mesa `main` for a fix and port it (authorship kept). Otherwise fix the runtime
+  pass so the cast path applies only to descriptor-heap pointers, and make KosmicKrisp's
+  `lower_tex` tolerate a texture source that is not a deref (an undefined texture in dead
+  code): an undefined result, not an abort.
+- A minimal SPIR-V reproduction (hand-written, not the game's) in `kk-host-test`.
+- **Done when:** the replay has no crash in this group and the host test covers it.
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+
+### V2. Pipeline-statistics query pools
+
+- RDR2 creates a pool of 8 pipeline-statistics queries (all 11 counters) without enabling
+  `pipelineStatisticsQuery`. `kk_reports_per_query` reaches `UNREACHABLE`.
+- Accept the pool (Metal on Apple GPUs has no statistics counters): begin/end record
+  nothing, results are zeros with availability set, copies write zeros. Keep the feature
+  unexposed. A note in the patch that this is tolerance of an application bug.
+- `kk-host-test` creates, resets, begins/ends, copies and reads such a pool.
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+
+### V3. Pipelines that ask for more samples than reported
+
+- RDR2 builds 96 pipelines with `rasterizationSamples = 8`; KosmicKrisp reports 1, 2 and 4.
+- Find what KosmicKrisp does with 8 today (render pipeline descriptor, `poly` paths) on the
+  mock, and make the build fail cleanly or clamp, whichever keeps Metal from rejecting the
+  pipeline state at draw time. Record the choice in the patch; no new decision unless a
+  reported limit changes.
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+
+### Not in V0–V3
+
+- The VRAM message box ("does not meet the minimum requirements for video memory") on a
+  unified-memory device: PLA-269 (per-title reported VRAM).
+- The phone run of RDR2: after PLA-295 (launcher) and PLA-300 (first native Vulkan title).
+- What the host cannot show: Apple's MSL compiler, `poly` at run time, depth bounds on the A19.
+
+## Runner state
+
+- **Branch:** `dev/pla-386-rdr2-vulkan-kk`, off `main` at f7ac25f, in the side copy
+  `$PLAYPORT_BUILD/worktrees/pla-386-rdr2-vulkan` (owner-authorized 2026-10-17, with its own
+  reflinked `.work/cache` and `.work/inputs` so the mesa stage need not rebuild toolchains).
+  Not merged, not pushed.
+- **Done:** the measurement (2026-10-17, PLA-386, evidence above).
+- **Queue:** V0 → V1 → V2 → V3 (PLA-386), then chunk 0 below.
+- **Running:** see the latest commit touching this file.
+- **Phone:** not used by this run; Hollow Knight on Vulkan is owed after V1–V3.
+- **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
+  (capture runs, Fossilize database, analysis); child reports under
+  `agent-notes/rdr2-vk/reports/` of the side copy.
 
 ## Chunks
 
