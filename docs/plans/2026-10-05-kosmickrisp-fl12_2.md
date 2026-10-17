@@ -409,8 +409,10 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 
 - **Branch:** `dev/pla-386-rdr2-vulkan-kk`, off `main` at f7ac25f, in the side copy
   `$PLAYPORT_BUILD/worktrees/pla-386-rdr2-vulkan` (owner-authorized 2026-10-17, with its own
-  reflinked `.work/cache` and `.work/inputs` so the mesa stage need not rebuild toolchains).
-  Not merged, not pushed.
+  reflinked `.work/cache`, `.work/inputs` and, since 2026-10-18, `.work/run`, with build
+  directories that named main's path removed). The owner authorized it to build (beyond
+  decision 0069); no install or phone. Its build records are not canonical (the build path
+  differs). Not merged, not pushed.
 - **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
   `1fc4605`); V1 (undefined image, mesa 0037, `33e2194`); V2 (pipeline-statistics pools,
   mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
@@ -426,13 +428,14 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 - **Queue (owner-approved 2026-10-17, host only):** next H3 RDR2's DX12 route through
   vkd3d-proton under the KosmicKrisp profile, replayed on the mock (a desktop-game writer;
   check every instance's `profile memory` line in the capture log: the committed layer now
-  reports the profile's heap per physical device, uncapped);
-  then H4 the dev IPA with mesa 0037–0039 built in the main checkout (stacked on `dev/pla-291-rockstar-launcher`); H5
+  reports the profile's heap per physical device, uncapped; first make it translate
+  `VK_EXT_memory_budget` to the profile's one heap, since vkd3d-proton reads budgets);
+  then H4 the dev IPA with mesa 0037–0039 built and verified in this copy (`pp build`); H5
   Apple's Metal compiler for Windows under Wine on the replay's MSL, after a licence check; H6
   the replay's feature-gate bypass and PLA-387; H7 measure RDR2's unsupported linear images on
   the mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
   chunk 0 below (needs the phone).
-- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b).
+- **Running:** H3 (report `h3.md`). Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
