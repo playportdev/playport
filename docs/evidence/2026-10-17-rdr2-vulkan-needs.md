@@ -453,3 +453,127 @@ allocation or view among them).
   14 minutes of RDR2 play time; its content log shows no download.
 
 Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
+
+## DX12 route (2026-10-18, H3)
+
+**Question.** RDR2 also has a Direct3D 12 renderer. Through vkd3d-proton on the same KosmicKrisp
+profile, at the phone's 8,192 MiB heap, what does it get and create, and does it replay on the
+mock?
+
+**Setup.** As H1b, with the capture layer of commit `1e86305`: `VK_EXT_memory_budget`'s heap 0
+now follows KosmicKrisp's rule (90% of available memory plus usage, at most the heap), with the
+usage of the desktop heap behind the stand-in type. The copy's `system.xml` was saved, its API
+set to `kSettingAPI_DX12` (the game's own value name: `RDR2.exe` has `kSettingAPI_DX11`,
+`_DX12` and `_Vulkan`), and put back after the run. `VKD3D_DEBUG=info`. The D3D layers are
+Proton Experimental's: vkd3d-proton `0bb64c56c` (`vkd3d-1.1-5656`) and DXVK `v3.1.1-97`, not
+Playport's vkd3d-proton (`31d1f89` + `patches/vkd3d-proton`), which this copy has only for
+ARM64EC. One run, `h3-dx12`: landing page at about 90 s, Story mode (the Colter cabin autosave,
+about 2.5 minutes to load), about 7 minutes of play (out of the cabin into Colter, the map,
+the satchel, the pause menu), quit to the desktop from the pause menu; the game exited with
+code 0.
+
+**Result.** The game ran on D3D12 through vkd3d-proton under the profile: landing page, Story
+mode, and play rendered normally (screenshots in the build area). vkd3d-proton logged no warning
+or error. It saw a "UMA-like topology". No video-memory box came. `RDR2.exe` still made its own
+Vulkan instance (engine SGA) for a moment, read the 8 GiB heap and made no device. (inference:
+this is the video-memory check H2 found, also on the D3D12 route.) DXGI (the program below)
+showed "Apple A19 Pro GPU", vendor 0, 8,556,380,160 bytes of dedicated video memory, a local budget of 8 GiB and a
+non-local budget of 0.
+
+**What D3D12 reports** (a scratch `D3D12CreateDevice` + `CheckFeatureSupport` program in the
+same prefix; the game's vkd3d-proton device enabled the same 36 extensions as the program's):
+
+| | RADV as it is | KosmicKrisp profile |
+|---|---|---|
+| feature level | 12_2 | **11_1** |
+| shader model | 6.8 | **6.5** |
+| tiled resources / conservative raster / ROV | tier 4 / tier 3 / yes | 0 / 0 / no |
+| ray tracing / mesh / VRS / sampler feedback | 1.1 / 1 / 2 / 0.9 | none |
+| barycentrics, 64-bit typed atomics, doubles | yes | no |
+| binding tier, typed UAV loads, wave ops, int64, 16-bit ops, depth bounds, enhanced barriers | 3, yes, yes, yes, yes, yes, yes | the same |
+| device extensions vkd3d-proton enabled | 76 | 36 |
+
+- **Optional extensions lost under the profile:**
+  - descriptor buffer, device-generated commands and graphics pipeline libraries;
+  - conservative rasterization, fragment shader interlock, mesh shaders, fragment shading rate
+    and barycentrics;
+  - ray query and ray tracing pipelines, acceleration structures;
+  - 64-bit image atomics, compute derivatives and quad control;
+  - custom border colour, depth-bias control, memory priority, image view min LOD, and others.
+- **Why 11_1:** stock vkd3d-proton needs tiled tier 2 for 12_0, and KosmicKrisp has no sparse.
+  Playport's vkd3d-proton waives that (its patch 0001) and exposes SM 6.6 on KosmicKrisp by
+  driver ID. The profile keeps RADV's driver ID, so neither applies here. (inference: on the
+  phone, Playport's build reports 12_0 and SM 6.6, as for MultiVersus.)
+- **What RDR2 needs:** RDR2 created its device and played at 11_1, so its D3D12 renderer needs
+  no level above 11_1.
+
+**What the renderer creates** (the vkd3d-proton device):
+- **Images:** 29,643 (2D 29,069, 3D 548, 1D 26). At most 4 samples (2 images). 36 formats,
+  among them `A8_UNORM` (110 images). **No linear-tiled images.**
+- **Views:** 61,391.
+- **Memory:** 673 allocations summing 4,729 MiB, largest 128 MiB. This is a sum over the run,
+  not a peak.
+- **Pipelines:** 2,152 graphics pipeline creations (14 with 8 samples) and 753 compute.
+- **Query pools:** 46.
+- **Swapchain:** 1280×720.
+
+**Replay.** Fossilize recorded `RDR2.exe`'s vkd3d-proton device as 1,607 graphics and 758 compute
+pipelines over 2,304 shader modules. It was replayed on the mock (`mesa` b39d173 +
+`patches/mesa` 0001–0039, debug):
+
+| | plain | ImageMSArray gate bypassed | and the float-controls gate bypassed |
+|---|---|---|---|
+| graphics built / of | 17 / 1,607 | 17 / 1,607 | 1,587 / 1,607 |
+| compute built / of | 77 / 758 | 77 / 758 | 757 / 758 |
+| module loads failing validation | 3,299 / 3,409 | 3,299 / 3,409 | 0 / 3,409 |
+| crashed pipelines | 0 | 0 | 0 |
+
+- **Why modules failed validation:**
+  - Nearly every module declares `DenormFlushToZero`. vkd3d-proton emits it only when the
+    driver reports `shaderDenormFlushToZeroFloat32`. The profile passes RADV's float-controls
+    properties through; KosmicKrisp reports none.
+  - So the gate is a profile artifact. (inference: on KosmicKrisp vkd3d-proton would not emit
+    it.)
+  - A scratch layer that reports these properties let every module through. spirv_to_nir only
+    warns about the capability.
+- **The in-process run with both bypasses:** it translated 3,564 MSL libraries, exited 0, and
+  had no untranslated intrinsic. 8 libraries read a `texture2d_ms_array`.
+- **The pipelines still skipped:**
+  - 14 graphics pipelines ask for 8 samples, as on the Vulkan route.
+  - 6 graphics pipelines render to `A8_UNORM`, which KosmicKrisp does not have.
+  - 1 compute pipeline asks for a required subgroup size of 32; KosmicKrisp has no
+    `requiredSubgroupSizeStages`.
+  - The last two are also profile artifacts: the layer passes extension formats and subgroup
+    properties through. (inference: on KosmicKrisp, vkd3d-proton takes its fallbacks.)
+- **No crash group, so no new patch.**
+
+**The two routes on KosmicKrisp** (desktop, profile, 8 GiB):
+
+| | Vulkan (H1b) | D3D12 through vkd3d-proton (H3) |
+|---|---|---|
+| reached | Story mode, played | Story mode, played |
+| level needed | — | at most 11_1 (Playport's vkd3d-proton gives 12_0) |
+| Fossilize pipelines / modules | 1,950 + 788 / 13,251 | 1,607 + 758 / 2,304 |
+| replay on 0001–0039 | 0 crashes | 0 crashes |
+| linear images KosmicKrisp lacks ([PLA-388](https://linear.app/playportdev/issue/PLA-388)) | 964 without the Graphics page's probes (505 attachment, 386 arrays, 64 3D, 9 mipped) | none |
+| 8-sample pipelines | 96 creations | 14 |
+| images / views | about 28,700 / 31,372 | 29,643 / 61,391 |
+| allocations | 105, 2,635 MiB | 673, 4,729 MiB (both sums) |
+| video-memory box at 8 GiB | no | no |
+
+(inference: the D3D12 route avoids the linear-image gap and needs nothing KosmicKrisp with
+Playport's vkd3d-proton lacks. It adds vkd3d-proton's translation and DXIL compilation at run
+time. Which route the phone should use is for the phone to settle.)
+
+**Owner state.**
+- **Saves and cloud:**
+  - The game rewrote the autosave slot `SRDR30015` (and its `.bak`).
+  - At game exit the launcher uploaded to Rockstar's cloud saves (two `PostFile`s), then
+    exited by itself.
+  - The manual save `SRDR30000` is unchanged.
+- **Settings:** `system.xml` was put back (same sha256). The game left D3D12 pipeline-cache
+  files beside the Vulkan ones in `Settings/`.
+- **Steam:** started once on the agent's display and shut down after the run. It counted about
+  13.5 minutes of RDR2 play time, with no download.
+
+Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.

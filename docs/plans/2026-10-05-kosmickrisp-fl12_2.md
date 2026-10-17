@@ -289,7 +289,8 @@ runs on KosmicKrisp with no D3D layer. The measurement
   KosmicKrisp profile on RADV it reached its landing page.
 - **Not needed from this plan:** mesh, ray tracing, ROV, VRS, sparse, conservative raster,
   int64/float64, 16-bit types, subgroups, barycentrics. Chunks 0–11 below stay for D3D12
-  titles; RDR2's DX12 fallback through vkd3d-proton would need only 12_0, which already works.
+  titles; RDR2's DX12 fallback through vkd3d-proton would need only 12_0, which already works
+  (H3: it played at 11_1 under the profile).
 - **Missing (V1–V4):** what the game reaches and the host can test; V4 needed no driver change.
 
 The chunks are host-only: the side copy has no phone. Each ends with commits, the mesa host
@@ -423,19 +424,20 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   H1b (capture layer fixed, `73a9323`; Story mode at an 8,192 MiB heap: the game picks the same
   `Safe` settings, no box, 1,950 graphics and 788 compute pipelines, 0 crashes on 0001–0039, no
   new patch; the Graphics settings page adds about 21,000 unbound probe images,
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#story-mode-at-the-phones-heap-2026-10-18-h1b)).
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#story-mode-at-the-phones-heap-2026-10-18-h1b));
+  H3 (capture layer budget by KosmicKrisp's rule, `1e86305`; RDR2 on D3D12 through Proton's
+  vkd3d-proton under the profile: feature level 11_1 and SM 6.5 there, Story mode played, no
+  linear images, 1,607 graphics and 758 compute pipelines, 0 crashes on 0001–0039 once the
+  profile's float-controls gate is bypassed, no new patch,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dx12-route-2026-10-18-h3)).
   Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only):** next H3 RDR2's DX12 route through
-  vkd3d-proton under the KosmicKrisp profile, replayed on the mock (a desktop-game writer;
-  check every instance's `profile memory` line in the capture log: the committed layer now
-  reports the profile's heap per physical device, uncapped; first make it translate
-  `VK_EXT_memory_budget` to the profile's one heap, since vkd3d-proton reads budgets);
-  then H4 the dev IPA with mesa 0037–0039 built and verified in this copy (`pp build`); H5
-  Apple's Metal compiler for Windows under Wine on the replay's MSL, after a licence check; H6
-  the replay's feature-gate bypass and PLA-387; H7 measure RDR2's unsupported linear images on
-  the mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
+- **Queue (owner-approved 2026-10-17, host only):** next H4 the dev IPA with mesa 0037–0039
+  built and verified in this copy (`pp build`); H5 Apple's Metal compiler for Windows under
+  Wine on the replay's MSL, after a licence check; H6 the replay's feature-gate bypass (with
+  H3's float-controls gate) and PLA-387; H7 measure RDR2's unsupported linear images on the
+  mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
   chunk 0 below (needs the phone).
-- **Running:** H3 (report `h3.md`). Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b).
+- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
