@@ -44,18 +44,25 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 ## Runner state (workstation only, 2026-10-17)
 
 - **Branch:** `dev/pla-76-proton-alignment-ws`, off `main` at f7ac25f, in the owner-authorized
-  side copy `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment` (decision 0069: docs, code and
-  isolated host checks only; no build, install or phone). Not merged, not pushed.
+  side copy `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment`. The owner authorized it to
+  build (2026-10-17, beyond decision 0069): its own `.work` holds reflinked copies of main's
+  `cache`, `inputs` and `run`, with build directories that named main's path removed. No
+  install or phone. Its build records are not canonical (the build path differs); main's build
+  regenerates them after merge. Not merged, not pushed.
 - **Queue, one writer per item:** W1 the C table into ARCHITECTURE.md; W2 A0 re-read against
   Valve's current bleeding-edge (FEX config, app profiles, ARM defaults); W3 B4
   `FEX_APP_CONFIG` in one Mach process (source reading, a design); W4 B6 what Steam appinfo
   carries for 620 and 367520 and whether Playport's PICS client sees it; W5 B7 what Wine on iOS
   reports for P and E cores (source, desktop Wine where it answers); W6 B3 close or name a
-  blocker. Each ends in evidence or a plan rewrite; phone measurements stay owed.
-- **Not here:** B1 (done), the Portal 2 follow-ups (phone), anything needing a build.
+  blocker; W7 [PLA-389](https://linear.app/playportdev/issue/PLA-389): FEX to Valve's
+  `5285020d` by `pp rebase` (or b49837f alone if the rebase is out of reach), built to a verified
+  dev IPA; W8 [PLA-390](https://linear.app/playportdev/issue/PLA-390): wine 11.20 and
+  `wine-valve` c53678a, built likewise. Each ends in evidence or a plan rewrite; phone gates
+  (Hollow Knight first frame+10 on the exact IPA) stay owed.
+- **Not here:** B1 (done), the Portal 2 follow-ups (phone), installs.
 - **Running:** W1 done (the commit adding [the C table](../ARCHITECTURE.md#valves-arm64-proton-items-not-carried)); W2 done
   ([2026-10-17 snapshot](#valves-reference-snapshot-2026-10-17)); W3 done (B4 designed,
-  [evidence](../evidence/2026-10-17-fex-child-profiles.md)); next W4. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  [evidence](../evidence/2026-10-17-fex-child-profiles.md); follow-up PLA-391); W4 running. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
