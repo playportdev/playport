@@ -161,7 +161,7 @@ diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Inte
 index 39011b4..3f5a77d 100644
 --- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
-@@ -343,7 +343,7 @@ DEF_OP(MonoBackpatcherWrite) {
+@@ -375,7 +375,7 @@ DEF_OP(MonoBackpatcherWrite) {
    // iOS x18 quirk: TEB read via TPIDRRO_EL0+TSD slot 275.
    mrs(TMP2, ARMEmitter::SystemRegister::TPIDRRO_EL0);
    and_(ARMEmitter::Size::i64Bit, TMP2, TMP2, ~7ULL);
@@ -171,7 +171,7 @@ index 39011b4..3f5a77d 100644
  #else
    ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
 diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
-index c910a70..5e96f35 100644
+index 0509dbf..6063673 100644
 --- a/Source/Windows/ARM64EC/Module.S
 +++ b/Source/Windows/ARM64EC/Module.S
 @@ -1,11 +1,22 @@
@@ -203,7 +203,7 @@ index c910a70..5e96f35 100644
  .macro IOS_LOAD_TEB reg
    mrs \reg, TPIDRRO_EL0
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index e9ebe7b..8290819 100644
+index 098d4e3..4ee30b2 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
 @@ -77,6 +77,14 @@ extern "C" uint64_t IosJitReverseTranslate(uint64_t Addr);
@@ -221,7 +221,7 @@ index e9ebe7b..8290819 100644
  uint64_t IosFfsBypassLog[4] {};
  #endif // FEX_IOS_HOST
  
-@@ -213,7 +221,9 @@ static inline _TEB* IOSLoadTEB() {
+@@ -215,7 +223,9 @@ static inline _TEB* IOSLoadTEB() {
    uintptr_t tpidrro;
    __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
    tpidrro &= ~uintptr_t(7);
@@ -232,7 +232,7 @@ index e9ebe7b..8290819 100644
    if (via_tsd) return via_tsd;
    /* 2026-05-19: TSD slot 275 isn't always populated by the time ThreadInit
     * runs on FMOD worker threads (Wine thread bootstrap race). Fall back to
-@@ -251,7 +261,9 @@ ThreadCPUArea GetCPUArea() {
+@@ -253,7 +263,9 @@ ThreadCPUArea GetCPUArea() {
  static void IosLogCPUArea(const char* tag) {
    uintptr_t tpidrro;
    __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
@@ -243,7 +243,7 @@ index e9ebe7b..8290819 100644
    _TEB* teb = IOSLoadTEB();
    auto* area = *reinterpret_cast<CHPE_V2_CPU_AREA_INFO**>(reinterpret_cast<uintptr_t>(teb) + ThreadCPUArea::TEBCPUAreaOffset);
  
-@@ -800,6 +812,35 @@ NTSTATUS ProcessInit() {
+@@ -859,6 +871,35 @@ NTSTATUS ProcessInit() {
     * The old hardcode corrupted the JIT pool on runs where the offset
     * differed. See FEXBridge.mm (setenv) + env_ios.c (forwarding). */
  
@@ -276,10 +276,10 @@ index e9ebe7b..8290819 100644
 +  }
 +#endif
 +
-   InitSyscalls();
- 
-   FEX::Windows::InitCRTProcess();
-@@ -849,8 +890,16 @@ NTSTATUS ProcessInit() {
+   if (!InitSyscalls()) {
+     return STATUS_NOT_SUPPORTED;
+   }
+@@ -910,8 +951,16 @@ NTSTATUS ProcessInit() {
   * __DATE__/__TIME__ below is compiler-generated and therefore the
   * authoritative identity; if the two disagree, the tag is wrong, not the
   * build. */

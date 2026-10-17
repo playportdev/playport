@@ -65,7 +65,9 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   [evidence](../evidence/2026-10-17-fex-child-profiles.md); follow-up PLA-391); W4 done (B6 closed,
   [evidence](../evidence/2026-10-17-steam-appinfo-fex.md)); W5 done (B7 closed,
   [evidence](../evidence/2026-10-17-cpu-topology.md)); W6 done (B3 closed,
-  [evidence](../evidence/2026-10-17-i386-laa.md)); next W7 (PLA-389 FEX move, a build). Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  [evidence](../evidence/2026-10-17-i386-laa.md)); W7 done (`fex` 5285020d and `rpmalloc` ed22744,
+  a verified dev IPA, [evidence](../evidence/2026-10-18-fex-5285020d.md); phone gates owed); next W8
+  (PLA-390 wine 11.20, a build). Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 

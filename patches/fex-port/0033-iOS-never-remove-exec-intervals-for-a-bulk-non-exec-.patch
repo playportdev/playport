@@ -52,7 +52,7 @@ diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/C
 index 4b5b6a2..b625d96 100644
 --- a/FEXCore/Source/Interface/Core/Core.cpp
 +++ b/FEXCore/Source/Interface/Core/Core.cpp
-@@ -788,6 +788,17 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
+@@ -774,6 +774,17 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
              } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::UNIMPLEMENTED_INST) {
                Thread->OpDispatcher->UnimplementedOp(DecodedInfo);
              } else {
@@ -70,7 +70,7 @@ index 4b5b6a2..b625d96 100644
                Thread->OpDispatcher->NoExecOp(DecodedInfo);
              }
            }
-@@ -943,6 +954,35 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
+@@ -929,6 +940,35 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
      return 0;
    }
  
@@ -107,10 +107,10 @@ index 4b5b6a2..b625d96 100644
     *
     * Initial diagnostic showed callret_sp going 0x10..0x70 BELOW
 diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
-index ae9f725..83ebb87 100644
+index 3ebca48..ab8a4fa 100644
 --- a/Source/Windows/ARM64EC/Module.cpp
 +++ b/Source/Windows/ARM64EC/Module.cpp
-@@ -347,6 +347,33 @@ void HandleImageMap(uint64_t Address, bool MainImage = false) {
+@@ -406,6 +406,33 @@ void HandleImageMap(uint64_t Address, bool MainImage = false) {
    ImageTracker->HandleImageMap(ModulePath, Address, MainImage);
  }
  
@@ -144,7 +144,7 @@ index ae9f725..83ebb87 100644
  void HandleImageUnmap(uint64_t Address, uint64_t Size) {
    ImageTracker->HandleImageUnmap(Address, Size);
  }
-@@ -651,6 +678,14 @@ public:
+@@ -710,6 +737,14 @@ public:
          }
        }
      }
@@ -159,7 +159,7 @@ index ae9f725..83ebb87 100644
  #endif
      return Result;
    }
-@@ -793,6 +828,12 @@ NTSTATUS ProcessInit() {
+@@ -855,6 +890,12 @@ NTSTATUS ProcessInit() {
  
    HandleImageMap(NtDllBase);
  
@@ -172,7 +172,7 @@ index ae9f725..83ebb87 100644
    CPUFeatures.emplace(*CTX);
  
    X64ReturnInstr = ::VirtualAlloc(nullptr, FEXCore::Utils::FEX_PAGE_SIZE, MEM_COMMIT | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
-@@ -800,6 +841,22 @@ NTSTATUS ProcessInit() {
+@@ -862,6 +903,22 @@ NTSTATUS ProcessInit() {
                                                            PAGE_EXECUTE_READ);
    *reinterpret_cast<uint8_t*>(X64ReturnInstr) = 0xc3;
  
@@ -195,7 +195,7 @@ index ae9f725..83ebb87 100644
    const uintptr_t KiUserExceptionDispatcherFFS = reinterpret_cast<uintptr_t>(GetProcAddress(NtDll, "KiUserExceptionDispatcher"));
    Exception::KiUserExceptionDispatcher = NtDllRedirectionLUT[KiUserExceptionDispatcherFFS - NtDllBase] + NtDllBase;
  
-@@ -1020,7 +1077,26 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
+@@ -1082,7 +1139,26 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After,
  }
  
  NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
@@ -384,7 +384,7 @@ index bbb025e..0bc28ba 100644
    if (WineDbgOut) {
      WineDbgOut(Output.c_str());
    } else if (LogFile) {
-@@ -55,7 +96,7 @@ void Init() {
+@@ -61,7 +102,7 @@ void Init() {
  #ifdef FEX_IOS_HOST
    /* iOS-Mythic: trace install via stderr directly to confirm Init() ran. */
    const char *m = "[FEX-iOS] Logging::Init installing MsgHandler\n";

@@ -41,7 +41,7 @@ on `__APPLE__ && !__arm64ec__` since it's only valid for native macOS FEX
 builds, not for cross-compiled PE.
 
 Madeira-commit: 1587b0084b12a62e7fa5adf5aac6bb8e46c37809
-Rebased: clean
+Rebased: resolved
 Class: madeira-port
 Evidence: docs/evidence/2026-09-24-fex-latest-rebase.md
 Offered-upstream: no
@@ -172,7 +172,7 @@ index 972b84e..e630165 100644
      strb(ARMEmitter::WReg::zr, TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
  #endif
  
-@@ -606,7 +635,10 @@ void Dispatcher::EmitDispatcher() {
+@@ -671,7 +700,10 @@ void Dispatcher::EmitDispatcher() {
  
    Start = reinterpret_cast<uint64_t>(DispatchPtr);
    End = GetCursorAddress<uint64_t>();
@@ -188,7 +188,7 @@ diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Inte
 index 93ed6de..39011b4 100644
 --- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
 +++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
-@@ -339,7 +339,15 @@ DEF_OP(MonoBackpatcherWrite) {
+@@ -371,7 +371,15 @@ DEF_OP(MonoBackpatcherWrite) {
    }
  
  #ifdef ARCHITECTURE_arm64ec
@@ -205,7 +205,7 @@ index 93ed6de..39011b4 100644
    strb(TMP1.W(), TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
  #endif
 diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
-index 4a59cf6..b3c1c83 100644
+index ce36c1d..65dbfcd 100644
 --- a/Source/Windows/ARM64EC/Module.S
 +++ b/Source/Windows/ARM64EC/Module.S
 @@ -1,6 +1,19 @@
@@ -295,7 +295,7 @@ index 4a59cf6..b3c1c83 100644
    strb wzr, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
    ldr x17, [x17, #0x20] // ChpeV2CpuAreaInfo->SuspendDoorbell
    ldr w17, [x17]
-@@ -120,13 +163,28 @@ ExitFunctionSuspendPoint:
+@@ -139,13 +182,28 @@ SyscallTableEnd:
  
    // Allows for continuing from a full native context, as the NTDLL NtContinue export takes in an x64 context with EC and
    // the conversion to that loses the ARM64EC ABI-disallowed registers that FEX uses.
@@ -306,8 +306,8 @@ index 4a59cf6..b3c1c83 100644
 +.global NtContinueNative
 +NtContinueNative:
 +#endif
- DIRECT_SYSCALL_WRAPPER("#NtContinueNative", WineNtContinueSyscallId, 0x43)
- DIRECT_SYSCALL_WRAPPER("#NtRaiseExceptionNative", WineNtRaiseExceptionSyscallId, 0x174)
+ DIRECT_SYSCALL_WRAPPER("#NtContinueNative", WineNtContinueSyscallId)
+ DIRECT_SYSCALL_WRAPPER("#NtRaiseExceptionNative", WineNtRaiseExceptionSyscallId)
  
    // Both of these are wrapped as FEX needs them to setup its call checker at startup time and their NTDLL thunks could
    // already be patched by then (and because the call checker isn't installed, their patched x86 versions would be invoked
@@ -316,15 +316,15 @@ index 4a59cf6..b3c1c83 100644
 +.global NtAllocateVirtualMemoryNative
 +NtAllocateVirtualMemoryNative:
 +#endif
- DIRECT_SYSCALL_WRAPPER("#NtAllocateVirtualMemoryNative", WineNtAllocateVirtualMemorySyscallId, 0x18)
+ DIRECT_SYSCALL_WRAPPER("#NtAllocateVirtualMemoryNative", WineNtAllocateVirtualMemorySyscallId)
 +#ifdef FEX_IOS_HOST
 +.global NtProtectVirtualMemoryNative
 +NtProtectVirtualMemoryNative:
 +#endif
- DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemorySyscallId, 0x50)
+ DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemorySyscallId)
  
    // A replacement for the standard ARM64EC call checker that ignores any FFS patches and always redirects to a function's
-@@ -150,6 +208,10 @@ end:
+@@ -169,6 +227,10 @@ end:
    ret
  
    // Expects target address in x0, and the SP to set in x1
