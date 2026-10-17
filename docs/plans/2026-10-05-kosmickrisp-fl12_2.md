@@ -356,7 +356,8 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   Not merged, not pushed.
 - **Done:** the measurement (2026-10-17, PLA-386, evidence above).
 - **Queue:** V0 → V1 → V2 → V3 (PLA-386), then chunk 0 below.
-- **Running:** see the latest commit touching this file.
+- **Running:** V0+V1 writer, subagent run fdddba81 (started 2026-10-17); report to
+  `agent-notes/rdr2-vk/reports/v0-v1.md` in the side copy's build area.
 - **Phone:** not used by this run; Hollow Knight on Vulkan is owed after V1–V3.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under
