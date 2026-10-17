@@ -332,12 +332,17 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 
 ### V2. Pipeline-statistics query pools
 
-- RDR2 creates a pool of 8 pipeline-statistics queries (all 11 counters) without enabling
-  `pipelineStatisticsQuery`. `kk_reports_per_query` reaches `UNREACHABLE`.
-- Accept the pool (Metal on Apple GPUs has no statistics counters): begin/end record
-  nothing, results are zeros with availability set, copies write zeros. Keep the feature
-  unexposed. A note in the patch that this is tolerance of an application bug.
-- `kk-host-test` creates, resets, begins/ends, copies and reads such a pool.
+- **Done** (2026-10-17, PLA-386; host only, **not checked on the phone**). RDR2 creates a pool
+  of 8 pipeline-statistics queries (all 11 counters) without enabling
+  `pipelineStatisticsQuery`; `kk_reports_per_query` reached `UNREACHABLE` at pool creation.
+  `patches/mesa` 0038 (`feature`, tolerance of the application's invalid usage) gives the
+  pool one report per enabled counter and records nothing between begin and end: results
+  are the reset's zeros, the end sets availability, and host results and
+  `vkCmdCopyQueryPoolResults` take the existing paths. `pipelineStatisticsQuery` stays
+  unreported (Metal has no statistics counters).
+- `kk-host-test` creates, resets (host and command), begins/ends around draws, copies
+  (64-bit with availability and wait, 32-bit partial) and reads such a pool (11 values per
+  query, nothing past them); it aborted before the patch.
 - **Phone, owed:** Hollow Knight on Vulkan first frame+10.
 
 ### V3. Pipelines that ask for more samples than reported

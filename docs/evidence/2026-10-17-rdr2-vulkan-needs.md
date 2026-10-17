@@ -126,7 +126,7 @@ transform-feedback pools only; a pipeline-statistics pool reaches `UNREACHABLE`
   (no input on the headless seat, and the landing page offers Online, which is out of scope),
   and the capture covers only what the landing page builds.
 
-## Host fixes (2026-10-17, chunks V0–V1)
+## Host fixes (2026-10-17, chunks V0–V4)
 
 Same database, host mock (debug build, `mesa` b39d173 + `patches/mesa`), replayed by
 `build/mesa-host-test/run-replay.sh` (V0, commit `1fc4605`), which replays each crashed
@@ -149,3 +149,8 @@ pipeline alone for its message. No game was run; not checked on the phone.
   `shaderStorageImageMultisample`, which KosmicKrisp does not report (the capability table
   above counted it as reported), and calls the create infos of the 17 graphics and 57
   compute pipelines it skips invalid (inference: those that use the refused modules).
+- **Pipeline-statistics pools (V2, mesa 0038):** creating the game's pool (8 queries, all 11
+  counters, `pipelineStatisticsQuery` not enabled) aborted at `kk_reports_per_query`
+  (`Unsupported query type`) in a `kk-host-test` case made from the capture; with 0038 the
+  pool works with every counter 0 and the feature stays unreported. The replay builds no
+  query pool, so its numbers do not move (graphics 1,923 / 17, compute 731 / 57, 0 crashes).

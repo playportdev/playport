@@ -390,8 +390,13 @@ main(int argc, char **argv)
       .queueCount = 1,
       .pQueuePriorities = &prio,
    };
+   VkPhysicalDeviceVulkan12Features v12 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+      .hostQueryReset = VK_TRUE,
+   };
    VkPhysicalDeviceVulkan13Features v13 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+      .pNext = &v12,
       .dynamicRendering = VK_TRUE,
       .synchronization2 = VK_TRUE,
    };
@@ -507,7 +512,8 @@ main(int argc, char **argv)
                VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT |
-               VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT,
+               VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT |
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
    };
    VkBuffer buf;
    CHECK(vkCreateBuffer(dev, &bci, NULL, &buf));
@@ -893,6 +899,131 @@ main(int argc, char **argv)
                             "undef-image.frag", TRI, false, FIRST, FILL};
       make_pipeline(&d, upl);
       printf("ok undef-image\n");
+   }
+
+   /* A pipeline-statistics pool without pipelineStatisticsQuery, as Red Dead
+    * Redemption 2 makes (8 queries, all 11 counters): it is created, reset,
+    * begun and ended around a draw and copied, and its results are 11 zeros
+    * per query. The mock runs no GPU work, so the end's availability and the
+    * copy are only recorded; the host results are those of the reset. */
+   {
+      if (f2.features.pipelineStatisticsQuery) {
+         fprintf(stderr, "pipelineStatisticsQuery is reported\n");
+         return 1;
+      }
+      DPROC(vkResetQueryPool);
+      DPROC(vkCmdBeginQuery);
+      DPROC(vkCmdEndQuery);
+      DPROC(vkCmdCopyQueryPoolResults);
+      VkQueryPoolCreateInfo ci = {
+         .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+         .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+         .queryCount = 8,
+         .pipelineStatistics = 0x7ff,
+      };
+      VkQueryPool stats;
+      CHECK(vkCreateQueryPool(dev, &ci, NULL, &stats));
+      vkResetQueryPool(dev, stats, 0, 8);
+
+      /* 11 counters and the availability, then a guard word the driver
+       * must leave alone. */
+      const uint64_t guard = 0xa5a5a5a5a5a5a5a5ull;
+      uint64_t r64[8][13];
+      memset(r64, 0xa5, sizeof(r64));
+      VkResult r = vkGetQueryPoolResults(
+         dev, stats, 0, 8, sizeof(r64), r64, sizeof(r64[0]),
+         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT |
+            VK_QUERY_RESULT_PARTIAL_BIT);
+      /* Partial results of unavailable queries: KosmicKrisp, like NVK,
+       * returns VK_SUCCESS when it wrote every value. */
+      if (r != VK_SUCCESS && r != VK_NOT_READY) {
+         fprintf(stderr, "statistics after a reset: %d\n", r);
+         return 1;
+      }
+      for (unsigned q = 0; q < 8; q++) {
+         for (unsigned j = 0; j < 12; j++) {
+            if (r64[q][j] != 0) {
+               fprintf(stderr, "statistics query %u value %u is %llx\n", q, j,
+                       (unsigned long long)r64[q][j]);
+               return 1;
+            }
+         }
+         if (r64[q][12] != guard) {
+            fprintf(stderr, "statistics query %u wrote past 11 counters\n", q);
+            return 1;
+         }
+      }
+      /* 32-bit, no partial results: only the availability is written. */
+      uint32_t r32[2][13];
+      memset(r32, 0xa5, sizeof(r32));
+      r = vkGetQueryPoolResults(dev, stats, 3, 2, sizeof(r32), r32,
+                                sizeof(r32[0]),
+                                VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+      if (r != VK_NOT_READY || r32[0][0] != (uint32_t)guard ||
+          r32[0][11] != 0 || r32[1][11] != 0 || r32[1][12] != (uint32_t)guard) {
+         fprintf(stderr, "32-bit statistics results wrong (%d)\n", r);
+         return 1;
+      }
+
+      VkPipeline p = make_pipeline(&descs[0], layout);
+      VkCommandBufferAllocateInfo cbai = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+         .commandPool = pool,
+         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+         .commandBufferCount = 1,
+      };
+      VkCommandBuffer cmd;
+      CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+      VkCommandBufferBeginInfo bi = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      };
+      CHECK(vkBeginCommandBuffer(cmd, &bi));
+      vkCmdResetQueryPool(cmd, stats, 0, 8);
+      VkRenderingAttachmentInfo ca = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+         .imageView = view,
+         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      };
+      VkRenderingInfo ri = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+         .renderArea = {{0, 0}, {64, 64}},
+         .layerCount = 1,
+         .colorAttachmentCount = 1,
+         .pColorAttachments = &ca,
+      };
+      vkCmdBeginRendering(cmd, &ri);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+      VkViewport vpt = {0, 0, 64, 64, 0, 1};
+      VkRect2D sc = {{0, 0}, {64, 64}};
+      vkCmdSetViewport(cmd, 0, 1, &vpt);
+      vkCmdSetScissor(cmd, 0, 1, &sc);
+      VkDeviceSize off = 0;
+      vkCmdBindVertexBuffers(cmd, 0, 1, &buf, &off);
+      vkCmdBeginQuery(cmd, stats, 0, 0);
+      vkCmdDraw(cmd, 12, 1, 0, 0);
+      vkCmdEndQuery(cmd, stats, 0);
+      vkCmdBeginQuery(cmd, stats, 1, 0);
+      vkCmdDraw(cmd, 3, 1, 0, 0);
+      vkCmdEndQuery(cmd, stats, 1);
+      vkCmdEndRendering(cmd);
+      vkCmdCopyQueryPoolResults(
+         cmd, stats, 0, 2, buf, 65536, 12 * sizeof(uint64_t),
+         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT |
+            VK_QUERY_RESULT_WAIT_BIT);
+      vkCmdCopyQueryPoolResults(cmd, stats, 0, 8, buf, 65536 + 256,
+                                11 * sizeof(uint32_t),
+                                VK_QUERY_RESULT_PARTIAL_BIT);
+      CHECK(vkEndCommandBuffer(cmd));
+      VkSubmitInfo si = {
+         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+         .commandBufferCount = 1,
+         .pCommandBuffers = &cmd,
+      };
+      CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(queue));
+      printf("ok pipeline-statistics-without-feature\n");
    }
    return 0;
 }
