@@ -1,7 +1,8 @@
 # What RDR2's Vulkan renderer asks of the driver, against KosmicKrisp
 
 **Date:** 2026-10-17. **Linear:** [PLA-386](https://linear.app/playportdev/issue/PLA-386)
-(under PLA-254). **Kind:** workstation measurement, no phone, no IPA.
+(under PLA-254). **Kind:** workstation measurement, no phone; one dev IPA built, not
+installed ([H4](#dev-ipa-with-mesa-00370039-h4)).
 Answers the open question in the [RDR2 plan](../plans/2026-10-12-rdr2.md): which Vulkan
 features and extensions RDR2's renderer requires, against KosmicKrisp's.
 
@@ -577,3 +578,52 @@ time. Which route the phone should use is for the phone to settle.)
   13.5 minutes of RDR2 play time, with no download.
 
 Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
+
+## Dev IPA with mesa 0037–0039 (H4)
+
+**Date:** 2026-10-18. `pp build` (dev variant) in the side copy
+`$PLAYPORT_BUILD/worktrees/pla-386-rdr2-vulkan` at `99c60b9`, with its own build area
+(`PLAYPORT_BUILD` set to the copy's `.work`). Not installed; not checked on the phone.
+
+- **IPA:** `out/20261018-012814-1fb1fb9e/Playport-26.5-1fb1fb9e.ipa` in the copy's build area,
+  sha256 `1fb1fb9e17442ca1400f8df7acc857cfe634cd5678fda1465e61f5ca1252157b`, 407,207,531
+  bytes (1,944.7 MB unpacked). `S1Probe.app`, signed.
+- **What it carries:** KosmicKrisp from `mesa` b39d173 + `patches/mesa` 0001–0039 (38
+  patches; the tree's last three commits are 0037–0039), staged as `56ca4e5c1cfa92f9`,
+  14,321,336 bytes. Every other pin and series as `main` at f7ac25f: this branch changes no
+  build input but `patches/mesa`.
+- **Verify:** the build's `verify-ipa` passed 85 checks, 0 failed. A standalone `pp verify`
+  after the committed `app/artifacts.tsv` was put back fails one check, "bundled
+  artifacts.tsv equals the committed one", and passes the other 84: six rows differ (below).
+- **Stages:** every one ran, 19.5 minutes in all (01:08:44 to 01:28:14). The trees' stamps were
+  copied from the main checkout's run area. Every tree's toolchain digest differs, because it
+  names the copy's llvm-mingw path. The copied stamps also predate the current `madeira-unix`,
+  `wine-unix`, `wine-pe` and `fex` series, and `mesa` has 0037–0039. `stage` and `notices` had
+  never run in this build area.
+- **Copied tree:** before the build, these build directories still named the main checkout's
+  run path in their build files (CMake caches, ninja files, Makefiles, cargo's dependency
+  info):
+  - FEX's two build directories;
+  - the Wine trees' `build-*` directories (pe and unix);
+  - Madeira's freetype and GnuTLS builds, with their `toolchains/gnutls-ios` prefix;
+  - steamapi's CMake toolchain files;
+  - idevice's cargo `target`;
+  - and in the copy's cache, the iOS LLVM 15 libraries (`llvm-ios-15.0.7-sdkcxx`), whose
+    CMake cache would have refused the copy's source path.
+
+  They were removed in the copy and rebuilt there. No stage failed. After the build, no file
+  under the main checkout's `.work` (outside `worktrees/`) was newer than a marker made before
+  the build.
+- **Build records:** the `wine-pe` manifests are unchanged. `app/artifacts.tsv` changed in six
+  link rows: `libgnutls.a`, `libhogweed.a`, `libnettle.a` and `libgmp.a` (rebuilt from clean
+  at the copy's path), `libdxmt_combined.a` (with the iOS LLVM libraries rebuilt in the
+  copy's cache) and `libidevice_ffi.a`. These rows come from the build path and the clean
+  rebuild, not from mesa 0037–0039: the KosmicKrisp framework has no row in
+  `app/artifacts.tsv`. None was committed. A build of this change in the main checkout's own
+  run area records the rows.
+- **`pp test`** (full, Swift included) passed on `99c60b9`'s tree, the one built.
+
+**Owed on the phone:**
+- Hollow Knight (`app-367520`) on Vulkan through first frame+10 on this exact IPA (sha256
+  above), for V1–V3.
+- Then RDR2 after PLA-295 and PLA-300.

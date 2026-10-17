@@ -429,17 +429,20 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   vkd3d-proton under the profile: feature level 11_1 and SM 6.5 there, Story mode played, no
   linear images, 1,607 graphics and 758 compute pipelines, 0 crashes on 0001–0039 once the
   profile's float-controls gate is bypassed, no new patch,
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dx12-route-2026-10-18-h3)).
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dx12-route-2026-10-18-h3));
+  H4 (the dev IPA with mesa 0037–0039 built in this copy at `99c60b9`: sha256 `1fb1fb9e…`,
+  `verify-ipa` 85 checks passed, 0 failed; build records not committed, since their changed rows
+  come from the copy's path, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dev-ipa-with-mesa-00370039-h4)).
   Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only):** next H4 the dev IPA with mesa 0037–0039
-  built and verified in this copy (`pp build`); H5 Apple's Metal compiler for Windows under
-  Wine on the replay's MSL, after a licence check; H6 the replay's feature-gate bypass (with
+- **Queue (owner-approved 2026-10-17, host only):** next H5 Apple's Metal compiler for Windows
+  under Wine on the replay's MSL, after a licence check; H6 the replay's feature-gate bypass (with
   H3's float-controls gate) and PLA-387; H7 measure RDR2's unsupported linear images on the
   mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
   chunk 0 below (needs the phone).
-- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3).
+- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
+  `h4.md` (H4).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
-  (mesa 0037–0039).
+  (mesa 0037–0039), on H4's IPA (sha256 above), then RDR2 after PLA-295 and PLA-300.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under
   `agent-notes/rdr2-vk/reports/` of the side copy.
