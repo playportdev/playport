@@ -41,6 +41,20 @@ re-read in this review.
 wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 82d4f86, `dxvk` 52fe923, `vkd3d-proton` 472989a, `gbe` release-2026_09_27).
 
+## Runner state (workstation only, 2026-10-17)
+
+- **Branch:** `dev/pla-76-proton-alignment-ws`, off `main` at f7ac25f, in the owner-authorized
+  side copy `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment` (decision 0069: docs, code and
+  isolated host checks only; no build, install or phone). Not merged, not pushed.
+- **Queue, one writer per item:** W1 the C table into ARCHITECTURE.md; W2 A0 re-read against
+  Valve's current bleeding-edge (FEX config, app profiles, ARM defaults); W3 B4
+  `FEX_APP_CONFIG` in one Mach process (source reading, a design); W4 B6 what Steam appinfo
+  carries for 620 and 367520 and whether Playport's PICS client sees it; W5 B7 what Wine on iOS
+  reports for P and E cores (source, desktop Wine where it answers); W6 B3 close or name a
+  blocker. Each ends in evidence or a plan rewrite; phone measurements stay owed.
+- **Not here:** B1 (done), the Portal 2 follow-ups (phone), anything needing a build.
+- **Running:** W1. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+
 ## Goal
 
 Treat Valve's ARM64 work in Proton (FEX through ARM64EC/WoW64, and its FEX and
