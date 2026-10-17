@@ -349,6 +349,20 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   reported limit changes.
 - **Phone, owed:** Hollow Knight on Vulkan first frame+10.
 
+### V4. Sampled multisample arrays without `shaderStorageImageMultisample`
+
+- 73 RDR2 modules declare `ImageMSArray`; Vulkan gates that capability on
+  `shaderStorageImageMultisample`, which KosmicKrisp reports as 0 (Apple GPUs have no
+  multisample storage images). Fossilize therefore skips 17 graphics and 57 compute pipelines;
+  the game creates them anyway.
+- Check whether these modules only sample `texture2DMSArray` (Metal has
+  `texture2d_ms_array` for reading). Make sure KosmicKrisp builds them on the mock: replay
+  with Fossilize's validation of those modules bypassed, or a hand-written reproduction in
+  `kk-host-test`. Fix what fails; keep the feature unreported unless storage works.
+- Follow-up found in V1, not scheduled: [PLA-387](https://linear.app/playportdev/issue/PLA-387)
+  (storage load from an undefined image).
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+
 ### Not in V0–V3
 
 - The VRAM message box ("does not meet the minimum requirements for video memory") on a
@@ -364,8 +378,8 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   Not merged, not pushed.
 - **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
   `1fc4605`); V1 (undefined image, mesa 0037). Host only; not checked on the phone.
-- **Queue:** V2 → V3 (PLA-386), then chunk 0 below.
-- **Running:** nothing. The V0+V1 report is `agent-notes/rdr2-vk/reports/v0-v1.md` in the
+- **Queue:** V2 → V3 → V4 (PLA-386), then chunk 0 below.
+- **Running:** V2–V4 writer (started 2026-10-17; report `agent-notes/rdr2-vk/reports/v2-v4.md`). The V0+V1 report is `agent-notes/rdr2-vk/reports/v0-v1.md` in the
   side copy's build area.
 - **Phone:** not used by this run; Hollow Knight on Vulkan is owed after V1–V3.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
