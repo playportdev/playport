@@ -82,7 +82,8 @@ compute pipelines and 1,038 MiB allocated by then. Two things differed from plai
    was a 5 GiB unified-memory integrated GPU; a discrete one with 16 GiB showed none.
    (inference: the game reads dedicated video memory, which a unified-memory adapter
    reports small.) On the phone this box would come too; PLA-269 (per-title reported
-   VRAM) is where the answer belongs.
+   VRAM) is where the answer belongs. **Corrected by H2 below:** the game's own instance saw
+   a 256 MiB heap here, an artifact of the profile layer; the box needs a heap under 1,928 MiB.
 2. MSAA images were created with 4 samples instead of 8, but **96 pipelines still asked for
    8 samples**, which KosmicKrisp does not report.
 
@@ -258,5 +259,100 @@ follow-up under PLA-386.
 the launcher uploaded files to Rockstar's cloud saves at that run's start and end
 (`PostFile`); the manual save `SRDR30000` was not changed. `ing2` wrote no save and uploaded
 nothing. Steam counted both runs as RDR2 play time; its content log shows no download.
+
+Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
+
+## Video-memory warning (2026-10-17, H2)
+
+**Question.** What does RDR2 read to show "Your computer does not meet the minimum
+requirements for the amount of memory on the graphics card" (OK/Cancel, in Polish here), and
+at what value? Same setup as H1: Steam on the agent's sway display, the prefix copy, the
+landing page only (no Story mode, no save). The input program logged each dialog's owning
+process and text; the game's `system.xml` was restored to the same file before every run.
+
+**Answer.**
+- **Who:** `RDR2.exe` raises it, not the launcher. It comes about 50 ms after the game's own
+  Vulkan instance (application "Red Dead Redemption 2", engine SGA) reads the physical
+  device's memory properties, before its `vkCreateDevice` and about 20 s after the launcher
+  starts.
+- **What:** the size of the device's `DEVICE_LOCAL` memory heap, as that instance sees it. Its
+  query has no `VK_EXT_memory_budget` struct.
+- **Threshold:** a heap of **1,927 MiB or less shows the box; 1,928 MiB or more does not**
+  (bisected at 1 MiB).
+- **Not read for it:** DXGI's `DedicatedVideoMemory` (DXVK's `dxgi.maxDeviceMemory = 1024` with
+  a 5 GiB heap: no box), the memory budget (1 GiB in every budget query with a 5 GiB heap: no
+  box), the vendor ID (0 or Apple's `0x106b`), the device ID, the name and the integrated
+  device type (the full spoof over the desktop's memory: no box).
+- **Why every earlier profile run showed it:** Mesa's driconf for RDR2
+  (`00-radv-defaults.conf`, matched by application name) sets `radv_hide_rebar_on_dgpu`, so the
+  SGA instance's RADV device has a different memory layout from the DXVK and vkd3d-proton
+  instances in the same process: VRAM 15.7 GiB not host-visible, system memory, and a 256 MiB
+  host-visible VRAM heap. The capture layer picks its stand-in memory type once per process,
+  from the first instance's layout, and caps the profile's heap at that type's heap. In the
+  SGA instance that type is on the 256 MiB heap, so the game saw **256 MiB**, not the
+  profile's 5 GiB. So the box in `prof2`, `ing1` and `ing2` is a layer artifact; with the 5 GiB
+  heap reported as it is there is no box. (inference: the game's settings for those runs, the
+  `Safe` configuration in `system.xml`, may come from the same 256 MiB.)
+- **The settings menu:** Settings › Graphics shows "Video memory: 2905 / 4096 MB" with a
+  4,096 MiB heap while DXGI said 3,072 MiB. The meter's total is the Vulkan heap too; 2,905 MB
+  is what the copy's settings need (1280×720, Ultra textures, otherwise low).
+
+**Runs** (`agent-notes/rdr2-vk/runs/h2-r*`). "Heap" is what the SGA instance's memory query
+returned. "Profile" is the KosmicKrisp profile as in H1 (one memory type, vendor 0, integrated),
+with the H2 scratch layer. "Exact" means the scratch layer's `H2_HEAP_EXACT`, which reports the
+profile's heap as it is, uncapped; with it DXGI's dedicated memory equals the heap unless set.
+
+| Run | Changed from the profile | Heap (SGA) | DXGI dedicated | Box |
+|---|---|---|---|---|
+| r1 | none (H1's profile) | 256 MiB | 5,120 MiB | yes |
+| r2 | the desktop's memory left as it is | 15.7 GiB VRAM + 256 MiB visible | 16,304 MiB | no |
+| r3 | exact, 5,120 MiB | 5,120 MiB | 5,120 MiB | no |
+| r4 | exact, 2,048 | 2,048 | 2,048 | no |
+| r5 | exact, 1,024 | 1,024 | 1,024 | yes |
+| r6 | exact, 1,536 | 1,536 | 1,536 | yes |
+| r7 | exact, 1,920 | 1,920 | 1,920 | yes |
+| r8 | exact, 2,047 | 2,047 | 2,047 | no |
+| r9 | exact, 1,984 | 1,984 | 1,984 | no |
+| r10 | exact, 1,952 | 1,952 | 1,952 | no |
+| r11 | exact, 1,944 | 1,944 | 1,944 | no |
+| r12 | exact, 1,921 | 1,921 | 1,921 | yes |
+| r13 | exact, 1,932 | 1,932 | 1,932 | no |
+| r14 | exact, 1,926 | 1,926 | 1,926 | yes |
+| r15 | exact, 1,927 | 1,927 | 1,927 | yes |
+| r16 | exact, 1,929 | 1,929 | 1,929 | no |
+| r17 | exact, 1,928 | 1,928 | 1,928 | no |
+| r18 | exact, 5,120; `dxgi.maxDeviceMemory = 1024` | 5,120 | 1,024 | no |
+| r19 | exact, 1,928; vendor `0x106b`, device `0x64` (KosmicKrisp's) | 1,928 | 1,928 | no |
+| r20 | exact, 5,120; budget 1,024 MiB in every budget query | 5,120 | 5,120 (DXGI budget 1,024) | no |
+| r21 | exact, 4,096; `dxgi.maxDeviceMemory = 3072`; to Settings › Graphics | 4,096 | 3,072 | no |
+
+The DXGI values come from a probe program run in the same prefix with the same settings
+(`IDXGIAdapter1::GetDesc1`, `IDXGIAdapter3::QueryVideoMemoryInfo`); r2's is the desktop's own.
+Under the profile DXVK also reports the heap as shared memory, because the device is
+unified-memory.
+
+**What it means for the phone and PLA-269.**
+- KosmicKrisp reports one heap, Metal's recommended working set: 8,192 MiB on iPhone18,4
+  ([vulkan-clamp evidence](2026-10-15-vulkan-clamp.md)). That is far above 1,928 MiB.
+  - `PLAYPORT_VK_BUDGET_MB` (mesa 0036) caps only the budget, and `dxgi.maxDeviceMemory` only
+    DXGI. Neither reaches the value the game checks.
+  - (inference) So on the phone RDR2 on Vulkan shows no box, and PLA-269 needs nothing for it.
+- A per-title value that lowered the Vulkan heap size itself, not only the budget, would have to
+  stay at 1,928 MiB or more for RDR2.
+- (inference) The game sizes its settings and its meter by that heap, not by the budget. On the
+  phone it would see 8 GiB unless the heap size changes.
+- The profile layer's memory type choice is per process, so in a title with a RADV driconf
+  entry the profile is wrong for that title's instance. The committed layer is unchanged; the
+  scratch fix (`H2_HEAP_EXACT`) is in the side copy's `.work/scratch/h2/layer/`.
+
+**Owner state.** No save was written: `SRDR30000` and `SRDR30015` have the same content (the
+game rewrote `SRDR30000.bak` with the same bytes). In the copy, `cfg.dat` and the pipeline-cache
+files changed every run, and r21 rewrote `ProfileSettings` and `cloudsavedata.dat` when the
+settings menu opened. Nothing in the settings was changed. The launcher's last ten logs
+(r12–r21) have cloud-save manifest reads and no `PostFile` request. r1–r11's logs rotated out.
+Every run was stopped before the game exited, which is when H1 saw uploads. (inference: the
+copy's next launcher start may upload the changed `cfg.dat` and `ProfileSettings`, as at H1's
+`ing1` start.) Steam ran once for all 21 launches and was shut down at the end. Its content log
+shows no download.
 
 Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.

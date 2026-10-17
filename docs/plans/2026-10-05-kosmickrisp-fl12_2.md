@@ -389,8 +389,12 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
 
 ### Not in V0–V4
 
-- The VRAM message box ("does not meet the minimum requirements for video memory") on a
-  unified-memory device: PLA-269 (per-title reported VRAM).
+- The VRAM message box ("does not meet the minimum requirements for video memory"): found in
+  H2 ([evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#video-memory-warning-2026-10-17-h2))
+  to come from `RDR2.exe` when its own Vulkan instance sees a `DEVICE_LOCAL` heap of 1,927 MiB
+  or less. The profile runs showed it because the capture layer gave that instance a 256 MiB
+  heap (RADV's RDR2 driconf). KosmicKrisp's 8 GiB heap is above the threshold (inference: no box
+  on the phone), so PLA-269 needs nothing for it.
 - The phone run of RDR2: after PLA-295 (launcher) and PLA-300 (first native Vulkan title).
 - What the host cannot show: Apple's MSL compiler, `poly` at run time, depth bounds on the A19.
 - **Linear-tiled images KosmicKrisp does not support** (found in H1,
@@ -411,17 +415,19 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
   multisample arrays: host test only, no patch); H1 (Story mode captured and replayed: 1,948
   graphics and 788 compute pipelines, 0 crashes on 0001–0039, no new patch; linear-tiled
-  images found, [above](#not-in-v0v4)). Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only):** H2 what RDR2 reads for its video-memory
-  warning (PLA-269) and H3 RDR2's DX12 route through vkd3d-proton under the KosmicKrisp
-  profile, replayed on the mock (each its own desktop-game writer); next H4 the dev IPA with
-  mesa 0037–0039 built in the main checkout (stacked on `dev/pla-291-rockstar-launcher`); H5
+  images found, [above](#not-in-v0v4)); H2 (the video-memory warning: the SGA instance's heap
+  size, box at 1,927 MiB or less, not 1,928; a profile-layer artifact at 256 MiB, [above](#not-in-v0v4)).
+  Host only; not checked on the phone.
+- **Queue (owner-approved 2026-10-17, host only):** next H3 RDR2's DX12 route through
+  vkd3d-proton under the KosmicKrisp profile, replayed on the mock (a desktop-game writer;
+  check the profile's heap per instance: RADV's RDR2 driconf, matched by application name,
+  changed the Vulkan renderer's memory layout, and H2's scratch layer has `H2_HEAP_EXACT`);
+  then H4 the dev IPA with mesa 0037–0039 built in the main checkout (stacked on `dev/pla-291-rockstar-launcher`); H5
   Apple's Metal compiler for Windows under Wine on the replay's MSL, after a licence check; H6
   the replay's feature-gate bypass and PLA-387; H7 measure RDR2's unsupported linear images on
   the mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
   chunk 0 below (needs the phone).
-- **Running:** H2 (report `agent-notes/rdr2-vk/reports/h2.md`). H1's report:
-  `agent-notes/rdr2-vk/reports/h1-h3.md`.
+- **Running:** none. Reports: `agent-notes/rdr2-vk/reports/h1-h3.md` (H1) and `h2.md` (H2).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout

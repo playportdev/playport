@@ -114,6 +114,10 @@ child arguments or a 0600 file deleted after the run. Scrub arguments and reques
   sizes.
 - **A/B in a scratch prefix**, with a table of runs: one changed input per run (a file's content,
   an argument, a cache present or deleted).
+- **Per-title driver settings.** Mesa's driconf (`/usr/share/drirc.d/`) changes RADV for some
+  titles by application or executable name. RDR2's Vulkan renderer gets a 256 MiB host-visible
+  VRAM heap, so instances in one process can see different devices. Compare per instance before
+  blaming the game ([evidence](evidence/2026-10-17-rdr2-vulkan-needs.md#video-memory-warning-2026-10-17-h2)).
 - **Requests through the proxy** show a sign-in's path (a launch code redeemed, a device-code
   browser flow, a token refused) and a server's error codes.
 - **Compare with the phone:** DLL load order, request sizes and order (`[sock-tl]` on the phone),
