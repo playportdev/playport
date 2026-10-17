@@ -37,6 +37,11 @@ public enum JitPool {
     /// heads (Hollow Knight's from 138 to 83 MiB).
     public static let gameRoomMB = 320
 
+    /// How long a title still running after it ran the pool out gets before its launch ends and
+    /// the restart ends it (decisions 0022, 0030). A publisher's launcher Open may carry its own
+    /// (`PublisherLauncher.exhaustionGrace`, decision 0112).
+    public static let exhaustionGrace: TimeInterval = 10
+
     /// The pool a Play gets: `minimumMB`, whatever the memory limit (decision 0036), unless the
     /// game's compatibility entry asks for more (`gameMB`, decision 0108).
     public static func sizeMB(limitMB: Int?, gameMB: Int? = nil) -> Int {

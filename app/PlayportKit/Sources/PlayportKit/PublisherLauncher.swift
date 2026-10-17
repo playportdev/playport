@@ -22,6 +22,8 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// The JIT pool its play asks for (JitPool.size grants it under a large enough memory limit).
     public let jitPoolMB: Int?
     public let graphics: GraphicsBackend
+    /// How long its Open goes on after the pool ran out (JitPool.exhaustionGrace for a game).
+    public let exhaustionGrace: TimeInterval
 
     /// The launch's title id (TitleLaunch), apart from every store's game ids.
     public var titleID: String { "launcher-" + id }
@@ -30,10 +32,13 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// `PlayRDR2.exe` reads the same value (Stage R). Started with no `-steamAppId`: in Steam mode
     /// it wants a Steam client before its sign-in page (run `20261016T010049`). Rockstar Service
     /// runs under services.exe, and the launcher with it needs the 896 MiB pool (decision 0108).
+    /// A Social Club child that runs the pool out does not end the Open for 240 s (decision 0112):
+    /// the browser and its renderers go on after an optional child cannot start.
     public static let rockstar = PublisherLauncher(
         id: "rockstar", name: "Rockstar Games Launcher",
         installKey: #"Software\Wow6432Node\Rockstar Games\Launcher"#, installValue: "InstallFolder",
-        executable: "Launcher.exe", arguments: [], windowsServices: true, jitPoolMB: 896, graphics: .vulkan)
+        executable: "Launcher.exe", arguments: [], windowsServices: true, jitPoolMB: 896, graphics: .vulkan,
+        exhaustionGrace: 240)
 
     public static let all: [PublisherLauncher] = [rockstar]
 

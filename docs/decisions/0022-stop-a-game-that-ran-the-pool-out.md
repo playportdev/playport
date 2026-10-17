@@ -5,6 +5,8 @@
 after the pool ran out used to end only the launch, with the game running on
 behind the result screen; now the game is stopped. The rest of 0019 stands.
 The runs are in the [evidence record](../evidence/2026-09-28-jit-pool-stop.md).
+Amended by [0112](0112-a-launchers-open-outlasts-a-pool-exhaustion.md): the Rockstar
+launcher's Open gets 240 s, not 10.
 
 ## Decision
 

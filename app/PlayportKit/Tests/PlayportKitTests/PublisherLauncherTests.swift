@@ -32,6 +32,13 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(JitPool.size(limitMB: 8191, gameMB: r.jitPoolMB).mb, 896)
     }
 
+    /// Decision 0112: the Rockstar launcher's Open alone goes on 240 s after the pool ran out;
+    /// a game's launch keeps 0022's 10 s.
+    func testRockstarOpenGetsTheLongerExhaustionGraceAndAGameKeepsTen() {
+        XCTAssertEqual(PublisherLauncher.rockstar.exhaustionGrace, 240)
+        XCTAssertEqual(JitPool.exhaustionGrace, 10)
+    }
+
     func testOpenTakesTheSavedRuntimeKeysAndFEXInputsOnly() {
         XCTAssertEqual(PublisherLauncher.openSettings(saved: nil), .init())
         var ordering = MemoryOrdering()

@@ -87,6 +87,9 @@ enum LaunchCoordinator {
         /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
         /// 0108), granted when the memory limit allows; nil for the default.
         var gamePoolMB: Int? = nil
+        /// How long the title goes on after it ran the pool out before the launch ends (decisions
+        /// 0022, 0030); a publisher's launcher Open carries its own (decision 0112).
+        var exhaustionGrace: TimeInterval = JitPool.exhaustionGrace
         /// Whether a prerequisite that ran may end the launch before the game, for Playport's
         /// restart and the same Play in the new process (decision 0084), when the pool after
         /// them leaves the game too little room (decision 0094); false starts the game in this
@@ -500,7 +503,8 @@ enum LaunchCoordinator {
             mark(up ? "dialog shown" : "dialog closed")
             MainActor.assumeIsolated { HostIO.shared.dialogOverGame(up) }
         }
-        let pool = PoolLog()
+        let pool = PoolLog(grace: r.exhaustionGrace)
+        log("pool: a title still running \(Int(r.exhaustionGrace)) s after it runs out of JIT memory ends this launch")
         if r.windowsServices {
             let t0 = Date()
             let rc = runtime.startServices()
@@ -561,9 +565,9 @@ enum LaunchCoordinator {
                 return pool.end(Outcome(kind: .failed, line: "launch=failed wait=\(w.rc)"), mark: mark)
             }
             pool.sample()
-            if let t = pool.exhaustedAt, Date().timeIntervalSince(t) >= PoolLog.grace {
-                // The restart that follows the launch ends it (decisions 0022, 0030).
-                log("pool: the game is still running \(Int(PoolLog.grace)) s after it ran out of JIT memory; the restart ends it")
+            if let t = pool.exhaustedAt, Date().timeIntervalSince(t) >= pool.grace {
+                // The restart that follows the launch ends it (decisions 0022, 0030, 0112).
+                log("pool: the game is still running \(Int(pool.grace)) s after it ran out of JIT memory; the restart ends it")
                 return pool.end(Outcome(kind: .failed, line: "still-running after_s=\(Int(elapsed))"), mark: mark)
             }
         }
@@ -696,8 +700,8 @@ enum LaunchCoordinator {
     /// So does the FEX arena's use (FexBand), as `band:` lines and a `band:` mark;
     /// a dev build also writes the arena's map into the log at the end.
     private final class PoolLog {
-        /// How long a title that ran the pool out gets to end on its own.
-        static let grace: TimeInterval = 10
+        /// How long a title that ran the pool out gets to end on its own (Request.exhaustionGrace).
+        let grace: TimeInterval
         private var last: JitPool.Use?
         private var lastLimits: RuntimeLimits.Counts?
         private var lastBand: FexBand.Use?
@@ -705,6 +709,8 @@ enum LaunchCoordinator {
         private var bandMapBucket: UInt64 = 0
         /// When a reading first showed the pool run out.
         private(set) var exhaustedAt: Date?
+
+        init(grace: TimeInterval) { self.grace = grace }
 
         static func read() -> JitPool.Use? {
             var s = wine_host_pool_stats()

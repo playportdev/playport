@@ -69,7 +69,7 @@ enum LauncherOpen {
                                     x87Reduced: saved.x87Reduced, diskCache: saved.diskCache)
         guard TitleLaunch.shared.start(title: l.name, titleID: l.titleID, exe: exe, args: l.arguments, config: saved.config,
                                        graphics: l.graphics, fex: fex, windowsServices: l.windowsServices,
-                                       jitPoolMB: l.jitPoolMB) else { return false }
+                                       jitPoolMB: l.jitPoolMB, exhaustionGrace: l.exhaustionGrace) else { return false }
         log("open \(l.id) on \(l.graphics.rawValue): \(exe) \(l.arguments.joined(separator: " "))")
         return true
     }

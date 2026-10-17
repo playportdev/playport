@@ -74,7 +74,7 @@ final class TitleLaunch: ObservableObject {
                fex: FEXProfile.Launch? = nil, steamAPI: LaunchCoordinator.SteamAPI? = nil,
                memory: MemoryNeed? = nil, epic: LaunchCoordinator.Epic? = nil, galaxy: GalaxyListener? = nil,
                prerequisites: [Prerequisite] = [], windowsServices: Bool = false, jitPoolMB: Int? = nil,
-               epicOffline: Bool = false) -> Bool {
+               epicOffline: Bool = false, exhaustionGrace: TimeInterval = JitPool.exhaustionGrace) -> Bool {
         guard !running, !spent else { return false }
         self.title = title
         self.titleID = titleID
@@ -109,7 +109,7 @@ final class TitleLaunch: ObservableObject {
                                                 graphicsEnvironment: graphicsEnvironment, fex: fex, jitWait: 180, steamAPI: steamAPI,
                                                 memory: memory, epic: epic, title: title, galaxy: galaxy,
                                                 prerequisites: prerequisites, windowsServices: windowsServices,
-                                                gamePoolMB: jitPoolMB,
+                                                gamePoolMB: jitPoolMB, exhaustionGrace: exhaustionGrace,
                                                 restartAfterPrerequisites: restartAfterPrerequisites,
                                                 quitting: { DispatchQueue.main.sync { MainActor.assumeIsolated { TitleLaunch.shared.quitting } } })
         Thread.detachNewThread {
