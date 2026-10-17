@@ -88,4 +88,14 @@ A game's launch never takes them, and the owner does not type them.
   diagnostics are hang reports and sampling, which nothing of ours reads.
 - **Scope.** The DXVK and vkd3d-proton settings apply only to the launcher's own Direct3D device
   query. Games keep DXVK's own compiler thread count (decision 0024).
-- **The phone result** is in the [evidence](../evidence/2026-10-17-cef-trim.md).
+- **The phone, IPA `73dc65fc…`, Open `20261017T201653`.** Against `20261017T191412`:
+  - The band peaked at 13,720 MB with 168 threads at most and refused nothing, against
+    16,203 MB, 202 threads and one refusal.
+  - The browser created 51 threads, against 65.
+  - The launcher created 55, against 64. DXVK and vkd3d-proton ran one compiler thread and no
+    cache threads.
+  - The launcher reached `Active`, and Social Club's sign-in form was on screen from 60 s to the
+    end. The page drew no text, a separate problem.
+  - The JIT pool's head still ran out for children started later.
+
+  The details are in the [evidence](../evidence/2026-10-17-cef-trim.md).

@@ -8,9 +8,10 @@
 
 ## Current handoff and ordered queue
 
-- **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. Last phone result: IPA `0013352e…`, Open `20261017T191412` (PLA-381: decision 0112's 240 s grace and the in-process audio service). Social Club reached `FINISHED`, then the FEX host band filled at 16,202 MB (204 threads, 3.3 GB of it in 16 MiB call-return stacks); FEX's allocation failed in the second renderer, which died, and the launcher gave up waiting for Social Club's window.
+- **Checkout:** `dev/pla-291-rockstar-launcher`, not merged or pushed. Before PLA-384: Open `20261017T191412` (IPA `0013352e…`) filled the FEX host band at 16,202 MB (204 threads) and the launcher never got Social Club's window.
 - **[PLA-383](https://linear.app/playportdev/issue/PLA-383), not adopted:** a 4 MiB call-return stack ([decision 0113](../decisions/0113-a-4-mib-call-return-stack.md)) relieved the band (Open `20261017T194000`: peak 13,806 MB) but the 896 MiB JIT pool then ran out; the owner chose the thread trim instead, and `patches/fex` 0047 and `patches/madeira-unix` 0157 were removed ([evidence](../evidence/2026-10-17-callret-stack.md)).
-- **[PLA-384](https://linear.app/playportdev/issue/PLA-384), in progress:** [decision 0114](../decisions/0114-trim-social-clubs-chromium-and-the-launchers-threads.md): `patches/chromium` 0008–0013 (libcef `de6693eb…`) and the Rockstar Open's DXVK/vkd3d-proton settings. Desktop: 4 Chromium processes, 112 CEF threads (was 5 and 171), sign-in visible ([evidence](../evidence/2026-10-17-cef-trim.md)). Phone run next.
+- **[PLA-384](https://linear.app/playportdev/issue/PLA-384):** [decision 0114](../decisions/0114-trim-social-clubs-chromium-and-the-launchers-threads.md) (`patches/chromium` 0008–0013, libcef `de6693eb…`; the Rockstar Open's DXVK/vkd3d-proton settings). IPA `73dc65fc…`, Open `20261017T201653`: band peak 13,720 MB at 168 threads (no refusal), launcher `Active`, Social Club's sign-in form on screen from 60 s to the end **but with no text drawn**; the pool's head still runs out for later children (renderers, Unzipper, rpcss/dllhost). HK first frame +10.28 s ([evidence](../evidence/2026-10-17-cef-trim.md)).
+- **Next:** why the page draws no text on the phone (desktop draws it); then whether the late children matter.
 - **Other levers, only with the owner:** a less greedy pool tail; rpmalloc's span use.
 - **Models:** subagents use `anthropic/claude-opus-5-5:medium` (owner, 2026-10-17).
 - **Phone:** RDR2 and Hollow Knight installed; never uninstall. Recheck charge and space first.
