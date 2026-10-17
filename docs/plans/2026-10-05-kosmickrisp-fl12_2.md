@@ -404,9 +404,14 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   `1fc4605`); V1 (undefined image, mesa 0037, `33e2194`); V2 (pipeline-statistics pools,
   mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
   multisample arrays: host test only, no patch). Host only; not checked on the phone.
-- **Queue:** chunk 0 below.
-- **Running:** nothing. Reports: `agent-notes/rdr2-vk/reports/v0-v1.md` and `v2-v4.md` in the
-  side copy's build area.
+- **Queue (owner-approved 2026-10-17, host only, in order):** H1 capture RDR2's in-game
+  pipelines under desktop Proton (Story mode, the owner's save) and replay them on the mock;
+  H2 what RDR2 reads for its video-memory warning (PLA-269); H3 RDR2's DX12 route through
+  vkd3d-proton under the KosmicKrisp profile, replayed on the mock; H4 the dev IPA with mesa
+  0037–0039 built in the main checkout (stacked on `dev/pla-291-rockstar-launcher`); H5 Apple's
+  Metal compiler for Windows under Wine on the replay's MSL, after a licence check; H6 the
+  replay's feature-gate bypass and PLA-387. Then chunk 0 below (needs the phone).
+- **Running:** H1–H3 (one desktop-game writer; report `agent-notes/rdr2-vk/reports/h1-h3.md`).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
   (mesa 0037–0039).
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
