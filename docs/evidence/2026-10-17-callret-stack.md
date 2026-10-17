@@ -108,5 +108,5 @@ counted). The invalidation clears are as many as before and take half the time.
 
 A 4 MiB stack moves the Open's first limit from the band to the JIT pool; it does not bring
 Social Club's window. The owner has chosen to trim Chromium's and the launcher's threads next, and
-decision 0113 stays proposed: this record is a measurement. Rockstar's text logs are in the build
+decision 0113 was not adopted (its patches were removed): this record is a measurement. Rockstar's text logs are in the build
 area (`agent-notes/pla370-cef/inputs/pla383-rockstar-logs/`), not here (they hold a public IP).

@@ -1,8 +1,8 @@
 # 0113: FEX's call-return stack is 4 MiB per thread
 
-**Status:** proposed, 2026-10-17. Measured on the phone; not accepted (owner, 2026-10-17: the
-next work trims Chromium's and the launcher's threads instead). `patches/fex` 0047 and
-`patches/madeira-unix` 0157 are committed and built; whether they stay is the owner's call.
+**Status:** not adopted, 2026-10-17 (owner): the next work trims Chromium's and the launcher's
+threads instead; `patches/fex` 0047 and `patches/madeira-unix` 0157 were removed, and the
+measurement stays in the [evidence](../evidence/2026-10-17-callret-stack.md).
 [PLA-383](https://linear.app/playportdev/issue/PLA-383),
 [PLA-381](https://linear.app/playportdev/issue/PLA-381),
 [PLA-370](https://linear.app/playportdev/issue/PLA-370),
