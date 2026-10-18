@@ -50,5 +50,7 @@ so clearing them dropped it.
   buffers; they rotate more often instead of running the pool out for everyone.
 - Hollow Knight's run is the gate for single-process games; a game whose head is within 16 MiB of
   the old cap's step would get the next smaller buffer.
-- Whether the sign-in page paints is measured in the evidence; the head (images) is not changed by
-  this record.
+- On the phone (IPA `2f784757…`) the tail peaked at 353–385 MiB, not 416–433, and three of three
+  Opens showed the Sign In form with its text; Hollow Knight still got its 128 MiB buffer. The
+  head grew into the room (512–533 MiB), so the pool still ends nearly full: the head (images) is
+  not changed by this record and is the next lever.

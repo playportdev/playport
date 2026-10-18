@@ -14,10 +14,10 @@
 - **2026-10-18: the Sign In page with its text is on the phone** (Open `20261018T085305`, IPA `0f8b3ff5…`, [evidence](../evidence/2026-10-18-cef-late-children.md)).
   - Needed: chromium 0014 (Tahoma, [PLA-385](https://linear.app/playportdev/issue/PLA-385)), cef 0002 and chromium 0015–0016 ([PLA-394](https://linear.app/playportdev/issue/PLA-394)), and FEX's disk cache off for the launcher.
   - **[PLA-395](https://linear.app/playportdev/issue/PLA-395), fixed:** the exit fault with a warm disk cache was FEX's memory notifications reaching its destroyed statics at DLL detach. `patches/fex` 0047 fixes it, and the launcher's disk cache is back on. Warm Open `20261018T094035` (IPA `f42c95fc…`) had no exit fault and showed the Sign In page with its text ([evidence](../evidence/2026-10-18-fex-exit-fault.md)).
-  - The pool still runs out later (tail ~430 MiB), but the form stays up.
-  - **Next:** a less greedy pool tail; then stage E, where the owner signs in.
+  - **[PLA-394](https://linear.app/playportdev/issue/PLA-394), less greedy tail:** `patches/madeira-unix` 0157 and the launcher's compiled `env.FEX_SMCCHECKS=none` ([decision 0116](../decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md)). IPA `2f784757…`: three of three Opens with nothing saved showed the Sign In form with its text; tail peak 353–385 MiB (was ~430), but the head grew to 512–533 MiB, so the pool still ends nearly full. HK +10.19 s ([evidence](../evidence/2026-10-18-pool-tail.md)).
+  - **Next:** stage E, where the owner signs in; the pool's head (late children's images) if it runs out again.
 - **Process (owner, 2026-10-18):** CEF and launcher changes go straight to the phone after the host checks and `./pp build`; there is no desktop Proton check.
-- **Other levers, only with the owner:** a less greedy pool tail; rpmalloc's span use.
+- **Other levers, only with the owner:** the pool's head; rpmalloc's span use.
 - **Models:** subagents use `anthropic/claude-opus-5-5:medium` (owner, 2026-10-17).
 - **Phone:** RDR2 and Hollow Knight installed; never uninstall. Recheck charge and space first.
 
