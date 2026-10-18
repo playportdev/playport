@@ -43,12 +43,13 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
 
 ## Runner state (workstation only, 2026-10-17)
 
-- **Branch:** `dev/pla-76-proton-alignment-ws`, off `main` at f7ac25f, in the owner-authorized
-  side copy `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment`. The owner authorized it to
-  build (2026-10-17, beyond decision 0069): its own `.work` holds reflinked copies of main's
-  `cache`, `inputs` and `run`, with build directories that named main's path removed. No
-  install or phone. Its build records are not canonical (the build path differs); main's build
-  regenerates them after merge. Not merged, not pushed.
+- **Branch:** `dev/pla-76-proton-alignment-ws`, off `main` at f7ac25f, rebased onto `main` at
+  dfc527f (M2a), in the owner-authorized side copy
+  `$PLAYPORT_BUILD/worktrees/pla-76-proton-alignment`. The owner authorized it to build
+  (2026-10-17, beyond decision 0069): its own `.work` holds reflinked copies of main's `cache`,
+  `inputs`, `run` and (M2a) `cef-src`'s CEF payload and notices, with build directories that
+  named main's path removed. No install or phone. Its build records are not canonical (the
+  build path differs); main's build regenerates them after merge. Not merged, not pushed.
 - **Queue, one writer per item:** W1 the C table into ARCHITECTURE.md; W2 A0 re-read against
   Valve's current bleeding-edge (FEX config, app profiles, ARM defaults); W3 B4
   `FEX_APP_CONFIG` in one Mach process (source reading, a design); W4 B6 what Steam appinfo
@@ -74,8 +75,12 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   re-applies when a series' diffs change, [UPSTREAM-SYNC.md](../UPSTREAM-SYNC.md#moving-a-component-pin));
   W8b done (WineHQ 7fb24b7, reserved CPSR bits, hand-ported into `signal_arm64_ios.c` and
   `thread_ios.c` as madeira-unix 0161, a verified dev IPA,
-  [evidence](../evidence/2026-10-18-cpsr-reserved-bits.md)); queue empty: phone gates owed for
-  the W7/W8/W8b IPAs. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  [evidence](../evidence/2026-10-18-cpsr-reserved-bits.md)). M2a: rebased onto main (dfc527f);
+  main's new fex 0045–0051, wine-pe 0045–0046 and wine-unix 0038–0042 apply unchanged on the
+  new pins (`pp rebase` replays, written series tree-equal), the branch's own patches follow
+  main's (madeira-unix 0151→0160, 0152→0161; wine-pe 0045→0047); verified dev IPA `fe24590e`;
+  next M2b phone gates in the main checkout (they replace the W7/W8/W8b IPAs' owed gates).
+  Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
