@@ -452,9 +452,12 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   download needs an Apple account sign-in, and the tools' licence is not published, so whether
   Wine on Linux is permitted is unknown. Nothing downloaded; the owner's step is in the
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5).
-- **Queue (owner-approved 2026-10-17, host only):** H7 done; queue empty: next chunk 0 needs
-  the phone.
-- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
+- **Queue (owner-approved 2026-10-17, host only):** H5 (resumed 2026-10-18 under the owner's
+  Wine decision, running); H7b measure on the desktop what RDR2 does with its linear images
+  (binds, maps, `vkGetImageSubresourceLayout`, copies) and whether the integrated device type
+  triggers them and its `Safe` settings (the owner released his Steam client for these runs,
+  2026-10-18); H8 the dev IPA with mesa 0037–0041. Then chunk 0 below (needs the phone).
+- **Running:** H5 (`h5c.md`, no commits; results committed after). Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
   `h4.md` (H4), `h5.md` (H5), `h6.md` (H6), `h6b.md` (H6b), `h7.c6627d62.md` (H7).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3,
   H6b and H7 (mesa 0037–0041), on an IPA with 0041 (H4's has 0037–0039 only), then RDR2 after
