@@ -127,10 +127,12 @@ not a failure, and what must hold:
   [0070](decisions/0070-wine-modules-proton-parity.md) and
   [0071](decisions/0071-wine-modules-full-proton-set.md)): the whole production
   arm64ec, aarch64 and i386 sets, programs and i386's 16-bit modules included,
-  without tests and `winetest.exe`. The arm64ec tree is configured with every
-  program configure lists (`--enable-<program>`, `stages/wine-pe.sh`), since Wine
-  leaves programs out of an arm64ec build by default; `winedbg`, `wineboot` and
-  `explorer` stay out of it ([decision 0082](decisions/0082-system32-programs.md)).
+  without tests and `winetest.exe`. The arm64ec tree builds every program
+  ([decision 0082](decisions/0082-system32-programs.md)): a program's Makefile.in
+  chooses its architectures (`ENABLE_ARCHS`, since wine-11.20), and
+  `patches/wine-pe` 0047 adds arm64ec to the services, `conhost` and `winevdm`,
+  which name only the host or the 16-bit one; `stages/wine-pe.sh` disables
+  `winedbg`, `wineboot`, `explorer` and `winetest` in that tree.
 - **dxmt.** The unix slice and the PE DLLs must come from the same patched
   tree: the winemetal unix-call table has 150 slots (upstream's, then the
   port's 146-149), and a DLL next to another tree's table calls the wrong

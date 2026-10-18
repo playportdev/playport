@@ -7,7 +7,7 @@
 # and pp sync only reports what Madeira did since.
 #
 # Wine is taken from its own upstream, not from Madeira (decision 0013): wine
-# is the newest WineHQ development tag (wine-11.19; decision 0049), and
+# is the newest WineHQ development tag (wine-11.20; decision 0049), and
 # patches/wine-port carries Madeira's Wine fork rebased onto it. wine-port is the madeira-lgpl
 # commit that series was rebased from; it must equal Madeira's wine gitlink.
 # With madeira frozen (0054) this row and the other *-port rows are frozen
@@ -46,9 +46,9 @@
 #
 # name       commit                                    repository                                    branch
 madeira      8c050d03f4d89096e1e2e2c8bb44479fffd86619  https://github.com/willfaust/Madeira.git      main
-wine         455e3509b98a6919fd4ad1def4803e08c41c03b2  https://gitlab.winehq.org/wine/wine.git       master
+wine         7298a818b79446bae153b8d5aa27235ab3703bf9  https://gitlab.winehq.org/wine/wine.git       master
 wine-port    723d1bf5132768276cea9bc35ab59c83557bb5fb  https://github.com/willfaust/wine.git         madeira-lgpl
-wine-valve   750fd011356cfcb28125c96d295ddef0d9e66dac  https://github.com/ValveSoftware/wine.git     bleeding-edge
+wine-valve   c53678ab22a85f0fad3588dd34f0452a463bd015  https://github.com/ValveSoftware/wine.git     bleeding-edge
 fex          5285020de0b30dbdae7b44d0d83541af2d13d002  https://github.com/FEX-Emu/FEX.git            main
 dxmt         68af85e96196e1cf9f50de9fe24c70f03a1db4a7  https://github.com/3Shain/dxmt.git           main
 dxmt-port    ca8a2516d819e7e1f366981825ad1f0d26f80fdd  https://github.com/willfaust/dxmt.git         ios-port

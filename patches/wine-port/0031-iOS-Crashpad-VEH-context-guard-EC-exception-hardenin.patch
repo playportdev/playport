@@ -128,7 +128,7 @@ index 1802244..ab7fe19 100644
  
          RtlEnterCriticalSection( &vectored_handlers_section );
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 3cdd7e2..3eab182 100644
+index c6f170c..496a5d3 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -4426,7 +4426,15 @@ void WINAPI LdrShutdownThread(void)
@@ -148,7 +148,7 @@ index 3cdd7e2..3eab182 100644
      }
  
      RtlAcquirePebLock();
-@@ -4921,6 +4929,78 @@ static void release_address_space(void)
+@@ -4922,6 +4930,78 @@ static void release_address_space(void)
  #endif
  }
  
@@ -227,7 +227,7 @@ index 3cdd7e2..3eab182 100644
  /******************************************************************
   *		loader_init
   *
-@@ -5062,6 +5142,9 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -5065,6 +5145,9 @@ void loader_init( CONTEXT *context, void **entry )
      if (!attach_done)  /* first time around */
      {
          attach_done = 1;
@@ -979,7 +979,7 @@ index 9ae02b1..e70d4ae 100644
  }
  
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index ca6dd4a..88d882b 100644
+index 8bd5a29..ed9040e 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -511,6 +511,50 @@ void WINAPI RtlInitializeSRWLock( RTL_SRWLOCK *lock )
@@ -1151,9 +1151,9 @@ index ca6dd4a..88d882b 100644
 +    }
 +
      /* We may have already been removed by a call to RtlWakeAddressSingle() or RtlWakeAddressAll(). */
-     if (entry.addr)
+     if (ReadPointerAcquire( (void * volatile *)&entry.addr ))
      {
-@@ -960,6 +1062,7 @@ void WINAPI RtlWakeAddressAll( const void *addr )
+@@ -962,6 +1064,7 @@ void WINAPI RtlWakeAddressAll( const void *addr )
      /* Try not to make a system call while holding a spinlock (even if that can be responsible for spurious wake
       * up scenario). */
      spin_unlock( &queue->lock );
@@ -1161,7 +1161,7 @@ index ca6dd4a..88d882b 100644
      if (count)
          NtAlertMultipleThreadByThreadId( tids, count, NULL, NULL );
  }
-@@ -1000,6 +1103,7 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
+@@ -1002,6 +1105,7 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
      }
  
      spin_unlock( &queue->lock );

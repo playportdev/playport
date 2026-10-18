@@ -16,18 +16,18 @@ Offered-upstream: no
  1 file changed, 7 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 476d9697..aebd77a 100644
+index d25884e..43230f1 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
-@@ -5648,6 +5648,7 @@ void loader_init( CONTEXT *context, void **entry )
-         WINE_MODREF *kernel32;
+@@ -5650,6 +5650,7 @@ void loader_init( CONTEXT *context, void **entry )
          PEB *peb = NtCurrentTeb()->Peb;
+         void *ntdll_module;
          WCHAR env_str[16];
 +        ULONG heap_flags = HEAP_GROWABLE;
          unsigned int i;
  
          peb->LdrData            = &ldr;
-@@ -5664,8 +5665,13 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -5666,8 +5667,13 @@ void loader_init( CONTEXT *context, void **entry )
                  delay_heap_free = TRUE;
              }
          }

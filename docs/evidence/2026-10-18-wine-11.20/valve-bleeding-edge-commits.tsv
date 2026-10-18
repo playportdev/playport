@@ -1,0 +1,37 @@
+# commit	verdict	subject  (ValveSoftware/wine bleeding-edge 750fd011356..c53678ab22a, oldest first; the move to wine-11.20, 2026-10-18)
+9f163a40959	fixup: of Valve's "win32u, winex11.drv: Avoid onscreen GL rendering for ULW windows", which the series does not carry (unused: winex11)	fixup! win32u, winex11.drv: Avoid onscreen GL rendering for ULW windows.
+673aeabe08f	upstream: wine-11.20 has it (WineHQ bad6d3d)	kernel32/tests: Test setting thread group affinity with process affinity.
+ea85d1c5025	upstream: wine-11.20 has it (WineHQ eba8937; its thread.c part is carried into thread_ios.c by madeira-unix 0160)	ntdll: Correct handling of process affinity when setting thread group affinity.
+a8d3bb68570	media: winegstreamer HACK (Playport keeps its own video work, 0018)	winegstreamer: HACK: Add Terminator: Dark Fate - Defiance to the bottom padding fill hack.
+49142368735	media: winegstreamer HACK (Playport keeps its own video work, 0018)	winegstreamer: HACK: Copy the sample if padding fill is needed.
+7980a84106e	upstream: wine-11.19 has it (already in the base)	ntdll: Move NT syscall Unix-side support to a new syscall.c file.
+55f07e19195	upstream: wine-11.19 has it (already in the base)	ntdll: Add syscall wrappers to work around ABI breakages.
+bc8d17c6914	upstream: wine-11.20 has it (WineHQ 9eb4614)	dinput: Only wait for the input thread to complete cleanup.
+c8df1a2d652	upstream: wine-11.19 has it (already in the base)	winedmo: Use correct parameter structure in wow64_demuxer_destroy().
+f9a7e33ae77	upstream: wine-11.20 has it (WineHQ 7fb24b7; its signal_arm64.c and thread.c parts are overridden by signal_arm64_ios.c and thread_ios.c and wait for a hand port (W8b))	ntdll: Ignore attempts to set reserved CPSR bits.
+c92f2231a10	upstream: wine-11.20 has it (WineHQ 61dfdd1)	dinput/tests: Add a test for winmm joystick replugging.
+5478f9a72f9	upstream: wine-11.20 has it (WineHQ 38ef683)	winmm: Avoid duplicating the same joystick devices.
+62b7745b5fe	upstream: wine-11.20 has it (WineHQ 4587416)	winmm: Reacquire joystick device if it was reconnected.
+981e2f0b900	upstream: wine-11.20's winmm add_joystick already initialises device (WineHQ folded the fixup in)	fixup! winmm: Avoid duplicating the same joystick devices.
+ac41217cc73	upstream: wine-11.19 has it (already in the base)	ntdll: Add SIGQUIT to the blocked signals.
+290276fb04e	upstream: wine-11.19 has it (already in the base)	d2d1: Allow value NULL in d2d_effect_SetInput.
+7fc704ef49c	conflict: not taken. WineHQ has the regressing change (6b486ec) but its code is is_render_target(ddraw, caps, version) with three callers, not Valve's force_3ddevice; the fix needs the pixel format there, a ddraw change rather than a pick (follow-up)	ddraw: Do not force render target for paletted primary surfaces.
+d3745ba077a	proton: explorer shutting down Xalia, Proton's Linux accessibility layer	explorer: Shut down Xalia when quitting.
+6eb78e124f1	reverted: reverts Valve's x86_64 syscall emulation, which the series never carried (x86_64 Linux host)	Revert "fixup! ntdll: Support x86_64 syscall emulation."
+9f00f2a60e6	reverted: reverts Valve's x86_64 syscall emulation, which the series never carried (x86_64 Linux host)	Revert "ntdll: Support x86_64 syscall emulation."
+f909ced378b	upstream: wine-11.19 has it (already in the base)	ntdll: Implement syscall emulation on Linux using Syscall User Dispatch.
+679feeaac90	upstream: wine-11.19 has it (already in the base)	ntdll: Disable syscall dispatch when loading a .so dll.
+cb8a1857536	upstream: wine-11.19 has it (already in the base)	ntdll: Make sure User Syscall Dispatch defines are always defined on Linux.
+79ab44b2d67	upstream: wine-11.19 has it (already in the base)	ntdll: Search for the library containing sa_restorer.
+2f445676483	unix-side: EAC native syscalls HACK for x86_64 Linux (signal_x86_64.c, loader.c, unix_private.h); not applicable on ARM64 iOS	ntdll: HACK: Allow native syscalls for EAC.
+b256c6e6092	reverted: reverts a virtual.c address-space HACK the series never carried (and virtual_ios.c replaces virtual.c)	Revert "ntdll: HACK: Add PROTON_LIMIT_ADDRESS_SPACE environment variable."
+4de2ea51ddf	reverted: reverts a virtual.c address-space HACK the series never carried (and virtual_ios.c replaces virtual.c)	Revert "ntdll: HACK: Limit address space for Blue Protocol: Star Resonance."
+ed51707ef2a	reverted: reverts a virtual.c address-space HACK the series never carried (and virtual_ios.c replaces virtual.c)	Revert "ntdll: HACK: Limit address space for Reverse: 1999."
+c9e2884d753	upstream: wine-11.20 has it (WineHQ 970f76c)	include: Remove workarounds for old MSVC compiler versions.
+9de060ec816	upstream: wine-11.20 has it (WineHQ 5086820)	include: Don't use a full barrier in Acquire/Release functions on ARM64.
+e408a5aff61	upstream: wine-11.20 has it (WineHQ a370843)	include: Implement more Acquire/Release functions.
+b2a60dcd145	upstream: wine-11.20 has it (WineHQ 81e5262)	ntdll: Make sure entry is removed from queue if unlocked entry.addr precheck in RtlWaitOnAddress() suggests so.
+eb674084226	not taken: extends the Far Cry 4 xinput HACK (SteamGameId 298110) to Witcher 3; the series left that HACK out (Madeira's host-pad xinput answers first) and wine-pe 0028 limits the empty-slot rescan for every title	HACK: xinput1_3: Don't rescan controller in get_state for Witcher 3.
+48faf326df1	unused: winex11	winex11.drv: Don't produce mouse move event after mouse wheel rotation.
+0ab83f43c6e	unused: winex11	winex11.drv: Do not produce zero movement relative raw mouse events.
+c53678ab22a	upstream: wine-11.20 has it (WineHQ 1fa894d)	kernel32: Add GetNamedPipeClientComputerName(A|W) stubs.

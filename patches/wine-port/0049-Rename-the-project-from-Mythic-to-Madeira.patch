@@ -47,7 +47,7 @@ Offered-upstream: no
  31 files changed, 123 insertions(+), 123 deletions(-)
 
 diff --git a/dlls/cryptnet/cryptnet_main.c b/dlls/cryptnet/cryptnet_main.c
-index 83df125..771a221 100644
+index 0dd2c7d..02a7a70 100644
 --- a/dlls/cryptnet/cryptnet_main.c
 +++ b/dlls/cryptnet/cryptnet_main.c
 @@ -658,7 +658,7 @@ static BOOL CRYPT_DownloadObject(DWORD dwRetrievalFlags, HINTERNET hHttp,
@@ -152,7 +152,7 @@ index 17d25a0..ec04f7e 100644
       * STATUS_STACK_BUFFER_OVERRUN is what `int 0x29` (__fastfail) and the /GS
       * cookie check raise.  On real Windows this NEVER runs VEH or frame-based
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 520900d..3a09ef9 100644
+index a3eb551..57a98cb 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -78,7 +78,7 @@ SYSTEM_DLL_INIT_BLOCK LdrSystemDllInitBlock = { 0xf0 };
@@ -308,7 +308,7 @@ index 520900d..3a09ef9 100644
       *
       * ml332/ml333's fatal is libcef executing `int3; ud2` -- Chromium's IMMEDIATE_CRASH()
       * -- from a routine that first stores the crash key string "DelayLoad-ModuleName"
-@@ -5426,7 +5426,7 @@ static void ios_sectest(void)
+@@ -5427,7 +5427,7 @@ static void ios_sectest(void)
      void *base = NULL;
      SIZE_T view_size = 0;
      ULONG_PTR pid = (ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess;
@@ -317,7 +317,7 @@ index 520900d..3a09ef9 100644
  
      RtlInitUnicodeString( &us, path );
      InitializeObjectAttributes( &attr, &us, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, 0, NULL );
-@@ -5435,7 +5435,7 @@ static void ios_sectest(void)
+@@ -5436,7 +5436,7 @@ static void ios_sectest(void)
                                PAGE_READWRITE, SEC_COMMIT, 0 );
      if (status == STATUS_OBJECT_PATH_NOT_FOUND)
      {
@@ -326,7 +326,7 @@ index 520900d..3a09ef9 100644
          RtlInitUnicodeString( &us, path );
          status = NtCreateSection( &handle, SECTION_ALL_ACCESS, &attr, &sec_size,
                                    PAGE_READWRITE, SEC_COMMIT, 0 );
-@@ -5457,7 +5457,7 @@ static void ios_sectest(void)
+@@ -5458,7 +5458,7 @@ static void ios_sectest(void)
      if (status != STATUS_OBJECT_NAME_EXISTS)   /* we created it: write the pattern */
      {
          volatile ULONG64 *p = base;
@@ -335,16 +335,16 @@ index 520900d..3a09ef9 100644
          p[1] = pid;
          ERR( "[sec-test] pid=%04Ix CREATED %s base=%p magic written (handle+view leaked on purpose)\n",
               pid, debugstr_w(path), base );
-@@ -5537,7 +5537,7 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -5539,7 +5539,7 @@ void loader_init( CONTEXT *context, void **entry )
          wm = build_main_module();
-         build_ntdll_module();
+         ntdll_module = build_ntdll_module();
  #ifdef __arm64ec__
 -        /* iOS-Mythic: pre-allocate the main EXE's TLS slot BEFORE
 +        /* iOS-Madeira: pre-allocate the main EXE's TLS slot BEFORE
           * load_arm64ec_module() so the main EXE claims slot 0 instead of
           * xtajit64.dll. Compiler-emitted magic-static / __declspec(thread)
           * code in main EXEs frequently hardcodes `TLS[0]`, assuming the
-@@ -5549,7 +5549,7 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -5551,7 +5551,7 @@ void loader_init( CONTEXT *context, void **entry )
           * via the TlsIndex == -1 marker. */
          if (alloc_tls_slot( &wm->ldr )) wm->ldr.TlsIndex = -1;
          ERR( "loader_init: pre-allocated main EXE TLS slot (TlsIndex=%ld)\n", wm->ldr.TlsIndex );
@@ -420,7 +420,7 @@ index 7065613..a9f46c7 100644
       *
       * ml611/ml616/ml617 all froze the whole app the same way: a thread dies in
       * abnormal exit still owning one CodeInvalidationMutex reader, a writer
-@@ -1698,7 +1698,7 @@ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
+@@ -1699,7 +1699,7 @@ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
      return status;
  }
  
@@ -429,7 +429,7 @@ index 7065613..a9f46c7 100644
   *
   * A global cap is the wrong design when the event of interest is LATE: the ml187/ml188
   * probes burned their whole budget on early loader traffic (unexec #400 at log line 3048)
-@@ -1729,7 +1729,7 @@ static int ios_in_big_image( ULONG_PTR a )
+@@ -1730,7 +1730,7 @@ static int ios_in_big_image( ULONG_PTR a )
      return 0;
  }
  
@@ -438,7 +438,7 @@ index 7065613..a9f46c7 100644
   * (InvalidationTracker::InvalidateContainingSection -> XIntervals.Remove), and this port
   * purges stale image mappings (#33). If libcef's view is unmapped and not re-notified, its
   * .text leaves XIntervals and every later decode there is NOEXEC. Log unmaps in the guest
-@@ -1750,7 +1750,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
+@@ -1751,7 +1751,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
      SECTION_IMAGE_INFORMATION info;
      NTSTATUS status;
  
@@ -447,7 +447,7 @@ index 7065613..a9f46c7 100644
       * InvalidationTracker::XIntervals covers it, and that is populated ONLY from
       * HandleImageMap(), which runs off this notification. A skipped notify means every
       * later decode in that image returns NOEXEC -> NoExecOp -> FAULT_SIGSEGV -> the
-@@ -1789,7 +1789,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
+@@ -1790,7 +1790,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
      *ret_status = status;
  }
  
@@ -456,7 +456,7 @@ index 7065613..a9f46c7 100644
   *
   * FEX only treats a guest range as executable if InvalidationTracker::XIntervals
   * covers it, and that is populated ONLY from HandleImageMap(), which runs off
-@@ -1811,7 +1811,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
+@@ -1812,7 +1812,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size,
   * Log outside every gate so one run separates them. Zero [map-gate] lines
   * alongside the [jit-pool] image lines means (a) and nothing else. */
  
@@ -465,7 +465,7 @@ index 7065613..a9f46c7 100644
   *
   * FEX only treats a guest range as executable if InvalidationTracker::XIntervals covers
   * it, and that is populated from HandleImageMap(), which until now ran ONLY off
-@@ -1940,7 +1940,7 @@ NTSTATUS SYSCALL_API NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID
+@@ -1941,7 +1941,7 @@ NTSTATUS SYSCALL_API NtMapViewOfSectionEx( HANDLE handle, HANDLE process, PVOID
      return status;
  }
  
@@ -474,7 +474,7 @@ index 7065613..a9f46c7 100644
   *
   * A protect spanning >= 1GB is never a code-permission change; it is an allocator managing
   * a reservation. FEX, however, treats any protect without EXEC as "this range is no longer
-@@ -1980,7 +1980,7 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
+@@ -1981,7 +1981,7 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
                                                        *addr_ptr, *size_ptr, 2, new_prot, 0 );
      else if (pNotifyMemoryProtect)
      {
@@ -483,7 +483,7 @@ index 7065613..a9f46c7 100644
           * as "this range is no longer executable" and REMOVES it from
           * InvalidationTracker::XIntervals (InvalidationTracker.cpp:69-71). A single
           * PartitionAlloc protect over its own 16GB soft pool
-@@ -2000,7 +2000,7 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
+@@ -2001,7 +2001,7 @@ NTSTATUS SYSCALL_API NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SI
              pNotifyMemoryProtect( *addr_ptr, *size_ptr, new_prot, FALSE, 0 );
      }
  
@@ -492,7 +492,7 @@ index 7065613..a9f46c7 100644
       * size=0xD3CA000 pfn=1), so its .text reaches InvalidationTracker::XIntervals — yet
       * the decoder still reports NOEXEC at libcef+0x1900733 / +0x3b508f0. The only thing
       * that REMOVES an XInterval is HandleMemoryProtectionNotification being told a
-@@ -2282,7 +2282,7 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
+@@ -2283,7 +2283,7 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
          case CrossProcessPreVirtualProtect:
          case CrossProcessPostVirtualProtect:
              if (!pNotifyMemoryProtect) break;
@@ -501,7 +501,7 @@ index 7065613..a9f46c7 100644
               * pseudo-processes share one address space, so RtlIsCurrentProcess() is FALSE
               * for a sibling handle and the protect is queued here rather than taking the
               * is_current branch ml203 guarded — which is why that fix logged nothing while
-@@ -2447,7 +2447,7 @@ static DWORD __attribute__((naked)) call_seh_handler( EXCEPTION_RECORD *rec, ULO
+@@ -2448,7 +2448,7 @@ static DWORD __attribute__((naked)) call_seh_handler( EXCEPTION_RECORD *rec, ULO
  
  
  /**********************************************************************
@@ -510,7 +510,7 @@ index 7065613..a9f46c7 100644
   *
   * Report SEH language-handler translation ONCE PER DISTINCT HANDLER.
   *
-@@ -2519,7 +2519,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2520,7 +2520,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
      ULONG_PTR frame;
      DWORD res;
  
@@ -519,7 +519,7 @@ index 7065613..a9f46c7 100644
       * already corrupt here but was clean at [veh], the vectored handlers (or
       * the emulator trip that ran them) are the corruptor. AV-only, capped. */
      if (rec->ExceptionCode == STATUS_ACCESS_VIOLATION)
-@@ -2529,14 +2529,14 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2530,14 +2530,14 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
              ERR( "[seh-entry] ctx=%p Rsp=%p Rip=%p\n", orig_context,
                   (void *)(ULONG_PTR)orig_context->Rsp, (void *)(ULONG_PTR)orig_context->Rip );
  
@@ -536,7 +536,7 @@ index 7065613..a9f46c7 100644
       * its frame in virtual_unwind/RtlVirtualUnwind2/memset below this
       * function (PROF), yet nothing logs: these are HANDLED exceptions
       * (likely software RaiseException/C++ throws — no Mach fault, TRACE
-@@ -2559,7 +2559,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2560,7 +2560,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
      dispatch.HistoryTable  = &table;
      dispatch.NonVolatileRegisters = nonvol_regs.Buffer;
  
@@ -545,7 +545,7 @@ index 7065613..a9f46c7 100644
       * holds JIT-pool VAs finds no unwind tables (function tables are
       * registered for the PE VAs), so RtlVirtualUnwind2's leaf-frame
       * fallback can cycle without advancing — measured: ONE stuck dispatch
-@@ -2592,7 +2592,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2593,7 +2593,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
  
          if (!dispatch.EstablisherFrame) break;
  
@@ -554,7 +554,7 @@ index 7065613..a9f46c7 100644
           * unwind to, and continuing just walks memory until it faults.
           *
           * The existing no-progress guard needs BOTH pc and frame to repeat, so it cannot
-@@ -2634,7 +2634,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2635,7 +2635,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
          if ((dispatch.ControlPc == prev_pc && dispatch.EstablisherFrame == prev_frame) ||
              ++walk_steps > 0x10000)
          {
@@ -563,7 +563,7 @@ index 7065613..a9f46c7 100644
               *
               * Abandoning the walk ends THIS dispatch, but nothing stops the same fault
               * from recurring: a live run was caught repeating
-@@ -2679,7 +2679,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2680,7 +2680,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
          prev_pc = dispatch.ControlPc;
          prev_frame = dispatch.EstablisherFrame;
  
@@ -572,7 +572,7 @@ index 7065613..a9f46c7 100644
           *
           * Usable frames are [lo, hi), but the OUTERMOST frame of a thread sits exactly
           * AT hi. In the ml632 ULTRAKILL run the walk reached
-@@ -2863,7 +2863,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2864,7 +2864,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
          {
              TRACE( "calling handler %p (rec=%p, frame=%I64x context=%p, dispatch=%p)\n",
                     dispatch.LanguageHandler, rec, dispatch.EstablisherFrame, orig_context, &dispatch );
@@ -581,7 +581,7 @@ index 7065613..a9f46c7 100644
               * revert note below instructed.
               *
               * The problem: LanguageHandler is ImageBase + unwind handler RVA,
-@@ -2880,7 +2880,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
+@@ -2881,7 +2881,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
               *  (a) "the storm ONLY occurs with --js-flags=--jitless OFF, and
               *      jitless-off is convicted anyway, so the fix buys nothing."
               *      >>> FALSIFIED by ml602 (db 7252): jitless was ON
@@ -590,7 +590,7 @@ index 7065613..a9f46c7 100644
               *      cmdline-tail shows --js-flags=--jitless) and the storm still
               *      reached 791,552 exec faults, 749/1029 sampled at this exact
               *      handler.  The dominant site is ntdll's own
-@@ -3023,7 +3023,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+@@ -3024,7 +3024,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
  {
      if (rec->ExceptionCode == STATUS_EMULATION_SYSCALL) dispatch_syscall( arm_ctx );
      context_arm_to_x64( context, arm_ctx );
@@ -599,7 +599,7 @@ index 7065613..a9f46c7 100644
       * write(2) resolves to the PE CRT's WriteFile → unplumbed std handle),
       * so trace the guest-exception conversion from the wine side. Rate-
       * capped; STATUS_EMULATION_SYSCALL is the hot syscall path and is
-@@ -3132,7 +3132,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+@@ -3133,7 +3133,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
                                   " cannot name the caller\n", grsp );
                      }
  
@@ -608,7 +608,7 @@ index 7065613..a9f46c7 100644
                       *
                       * It hangs off the INNER committed-but-non-executable test, not off
                       * the `else if (!qst)` chain, so ANY executable page printed
-@@ -3159,7 +3159,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+@@ -3160,7 +3160,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
                       *
                       * Bounded and read-only: capped firings, no allocation, no locks; the
                       * unix probe is a pure table walk. */
@@ -617,7 +617,7 @@ index 7065613..a9f46c7 100644
                       *
                       * The ml635 gate required NtQueryVirtualMemory to classify the
                       * reconstructed RIP as executable — which CANNOT hold for the very case
-@@ -3220,7 +3220,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+@@ -3221,7 +3221,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
                                       pp.highest + 256 >= pp.end - pp.base
                                           ? "tail WAS written (reaches the very end)"
                                           : "**TAIL NEVER WRITTEN** — control ran past the real code" );
@@ -626,7 +626,7 @@ index 7065613..a9f46c7 100644
                                   *
                                   * guest = user_va+off, poolRX = jit_rx_alias+off,
                                   * poolRW = jit_rw_alias+off. All three are the SAME physical
-@@ -3368,7 +3368,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+@@ -3369,7 +3369,7 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
                   (void *)(ULONG_PTR)arm_ctx->Pc );
      }
      /* call x64 dispatcher if the thunk or the function pointer was modified */
@@ -635,7 +635,7 @@ index 7065613..a9f46c7 100644
       * high dword became exactly 1 and whose Rip/Rbp/R12 turned into FEX-band
       * host pointers with recurring low bits, while [rtcs] post had printed the
       * SAME context fields correct moments earlier. The corruption window is
-@@ -3415,7 +3415,7 @@ void __attribute__((naked)) KiUserExceptionDispatcher( EXCEPTION_RECORD *rec, CO
+@@ -3416,7 +3416,7 @@ void __attribute__((naked)) KiUserExceptionDispatcher( EXCEPTION_RECORD *rec, CO
           /* bypass exit thunk to avoid messing up the stack */
           "adrp x16, __os_arm64x_dispatch_call_no_redirect\n\t"
           "ldr x16, [x16, #:lo12:__os_arm64x_dispatch_call_no_redirect]\n\t"
@@ -644,7 +644,7 @@ index 7065613..a9f46c7 100644
            * this slot is sometimes still NULL (per-process ntdll global not
            * populated; arm64ec_process_init_dispatchers SKIPs ntdll re-patch).
            * A NULL x16 here → `blr x16` to 0 → SEGV loop → dead thread (observed
-@@ -3489,7 +3489,7 @@ __ASM_GLOBAL_FUNC( "#KiUserCallbackDispatcher",
+@@ -3490,7 +3490,7 @@ __ASM_GLOBAL_FUNC( "#KiUserCallbackDispatcher",
  /**************************************************************************
   *              RtlIsEcCode (NTDLL.@)
   */
@@ -653,7 +653,7 @@ index 7065613..a9f46c7 100644
   *
   * The 0x800000000000 (48-bit) bound below was WRONG for this port. alloc_arm64ec_map()
   * sizes the bitmap from min(address_space_limit, host_addr_space_limit) rather than
-@@ -3578,7 +3578,7 @@ BOOLEAN WINAPI RtlIsEcCode( ULONG_PTR ptr )
+@@ -3579,7 +3579,7 @@ BOOLEAN WINAPI RtlIsEcCode( ULONG_PTR ptr )
  
  
  /* unwind context by one call frame */
@@ -662,7 +662,7 @@ index 7065613..a9f46c7 100644
   *
   * Unwind info is registered for PE VAs, but code physically executes from the
   * JIT-pool alias, so context->Rip is a POOL VA here.  RtlLookupFunctionEntry
-@@ -3891,7 +3891,7 @@ void WINAPI RtlUnwindEx( PVOID end_frame, PVOID target_ip, EXCEPTION_RECORD *rec
+@@ -3892,7 +3892,7 @@ void WINAPI RtlUnwindEx( PVOID end_frame, PVOID target_ip, EXCEPTION_RECORD *rec
  
      rec->ExceptionFlags |= EXCEPTION_UNWINDING | (end_frame ? 0 : EXCEPTION_EXIT_UNWIND);
  
@@ -671,7 +671,7 @@ index 7065613..a9f46c7 100644
       * stayed at zero while PROF shows the render worker living in
       * virtual_unwind/RtlVirtualUnwind2, so THIS entry point (phase-2
       * unwind without dispatch = longjmp / handled unwinds) must be the
-@@ -4183,7 +4183,7 @@ static void __attribute__((naked)) arm64x_check_call(void)
+@@ -4184,7 +4184,7 @@ static void __attribute__((naked)) arm64x_check_call(void)
      asm( ".seh_proc \"#arm64x_check_call\"\n\t"
           ".seh_endprologue\n\t"
           /* check for EC code */
@@ -680,7 +680,7 @@ index 7065613..a9f46c7 100644
            * NOT from x18. iOS clobbers x18 (every SEGV dump in this port shows x18=0), so
            * `ldr x16,[x18,#0x60]` fetched a garbage PEB, the EcCodeBitMap pointer was
            * garbage, the bit test read 0, and this function reported EVERY target as
-@@ -4199,7 +4199,7 @@ static void __attribute__((naked)) arm64x_check_call(void)
+@@ -4200,7 +4200,7 @@ static void __attribute__((naked)) arm64x_check_call(void)
            *
            * FEX's own check_target_ec already does this (IOS_LOAD_TEB); Wine's copy never
            * did. x16 is scratch here, so the load is free of side effects. */
@@ -690,7 +690,7 @@ index 7065613..a9f46c7 100644
            * iOS clobbers x18 (every SEGV dump in this port shows x18=0), so this fetches a
            * garbage PEB, the EcCodeBitMap pointer is garbage, the bit test reads 0, and this
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 7a5babb..a485e21 100644
+index 3c06fe6..b980f5f 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -521,7 +521,7 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
@@ -730,10 +730,10 @@ index 7a5babb..a485e21 100644
   * one WAIT, no ALERTED, while its sibling server thread cycles normally).
   * futex_queues is a PER-NTDLL-COPY global and our pseudo-processes each carry
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 352f2c9..e02e29c 100644
+index 8d8b58e..1d7c403 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -4826,7 +4826,7 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
+@@ -4512,7 +4512,7 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
              }
          }
      }
@@ -742,7 +742,7 @@ index 352f2c9..e02e29c 100644
       * open, and that blind spot cost several runs on Book of the Dead.
       *
       * Book of the Dead's stdout stream is left at _flags=0,_file=-1 -- the exact
-@@ -6223,7 +6223,7 @@ static unsigned int set_pending_write( HANDLE device )
+@@ -5909,7 +5909,7 @@ static unsigned int set_pending_write( HANDLE device )
   *              NtReadFile   (NTDLL.@)
   */
  #ifdef WINE_IOS
@@ -755,7 +755,7 @@ diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
 index 6849b33..7ef850e 100644
 --- a/dlls/ntdll/unix/socket.c
 +++ b/dlls/ntdll/unix/socket.c
-@@ -788,7 +788,7 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
+@@ -789,7 +789,7 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
  }
  
  #ifdef __APPLE__
@@ -764,7 +764,7 @@ index 6849b33..7ef850e 100644
   * "ChunkLoadError: missing steamloopback.host/libraries/libraries~....js" —
   * a 1.99MB file that EXISTS on disk, served by steam.exe's loopback HTTP
   * server, while a 678KB file served fine seconds earlier. Prime suspect is a
-@@ -798,7 +798,7 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
+@@ -799,7 +799,7 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
   * A transfer that STOPS at a byte count without an error implicates the
   * file-read side of TransmitFile instead; an errno names the socket layer.
   * Racy counters are acceptable — fixed array, no pointers, probe-only. */
@@ -773,7 +773,7 @@ index 6849b33..7ef850e 100644
   *
   * State of the hunt: the Shenzhen network is EXONERATED — from the same phone,
   * Safari got 91 CM endpoints from the directory API, loaded /cmping/ on 443, and
-@@ -822,7 +822,7 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
+@@ -823,7 +823,7 @@ static ssize_t fixup_icmp_over_dgram( struct msghdr *hdr, union unix_sockaddr *u
   * able to starve the CM sockets, which is the trap that has invalidated three
   * probes in this investigation already. Loopback is skipped so the steamloopback
   * traffic cannot drown the census. */
@@ -782,7 +782,7 @@ index 6849b33..7ef850e 100644
   *
   * ml590 settled the PHASE question: on every CM socket we caught, the handshake ran
   * to completion (ClientHello -> server flight -> CCS+Finished -> encrypted
-@@ -1019,7 +1019,7 @@ static void ios_sock_wire( int fd, int is_send, const void *buf, long ret_bytes,
+@@ -1020,7 +1020,7 @@ static void ios_sock_wire( int fd, int is_send, const void *buf, long ret_bytes,
       * Steam never sent its request at all. A useful version must track handshake
       * state, not record type. (Caught by Sol.) */
      { static int off = -1;
@@ -791,7 +791,7 @@ index 6849b33..7ef850e 100644
        if (off) return; }
      if (getpeername( fd, (struct sockaddr *)&pa, &pl ) != 0) return;   /* not connected */
      if (pa.ss_family == AF_INET)
-@@ -1109,7 +1109,7 @@ static void ios_sock_big_note( int fd, int is_send, long ret_bytes, int err )
+@@ -1110,7 +1110,7 @@ static void ios_sock_big_note( int fd, int is_send, long ret_bytes, int err )
          tab[slot].next[is_send] = tab[slot].tot[is_send] + 0x80000;
      }
  }
@@ -804,7 +804,7 @@ diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
 index 1d063b9..9647b96 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -3516,7 +3516,7 @@ NTSTATUS WINAPI NtAlertMultipleThreadByThreadId( HANDLE *tids, ULONG count, void
+@@ -3519,7 +3519,7 @@ NTSTATUS WINAPI NtAlertMultipleThreadByThreadId( HANDLE *tids, ULONG count, void
  }
  
  
@@ -813,7 +813,7 @@ index 1d063b9..9647b96 100644
   * ml400 caught a thread storming instant-ALERTED on INFINITE waits (webhelper
   * 00c8) while other threads slept through their wakes — the recycled-tid
   * theory says a stale threadpool/waiter list in another pseudo-process keeps
-@@ -3925,7 +3925,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+@@ -3928,7 +3928,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
  #ifdef USE_FUTEX
      {
          LONG *futex = &entry->futex;
@@ -822,7 +822,7 @@ index 1d063b9..9647b96 100644
           * it wakes a TARGET tid — but the two probes below read
           * NtCurrentTeb()->ClientId.UniqueThread, i.e. TEB+0x48. Threads created
           * directly by CEF/FEX have no TEB, so on those the probe (not the
-@@ -3936,7 +3936,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+@@ -3939,7 +3939,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
           * sender", which is all the diagnostics ever needed. */
          TEB *self_teb = NtCurrentTeb();
          unsigned int self_tid = self_teb ? (unsigned int)(ULONG_PTR)self_teb->ClientId.UniqueThread : 0;
@@ -831,7 +831,7 @@ index 1d063b9..9647b96 100644
           * waiter can name its pounder — see [alert-storm] in
           * NtWaitForAlertByThreadId. */
          LONG pos = InterlockedIncrement( &ios_alert_ring_pos );
-@@ -4003,7 +4003,7 @@ static LONGLONG update_timeout( ULONGLONG end )
+@@ -4006,7 +4006,7 @@ static LONGLONG update_timeout( ULONGLONG end )
  NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEGER *timeout )
  {
      union tid_alert_entry *entry = get_tid_alert_entry( ULongToHandle(get_thread_data()->tid) );
@@ -840,7 +840,7 @@ index 1d063b9..9647b96 100644
       * (TEB->Instrumentation[10] == 'PUMP', stamped by the EC chrome-ipc
       * wrappers).  The pump entered an alert-wait post-wake WITHOUT hitting
       * the EC-side [pump-op] wrapper — native-aarch64-ntdll routes bypass it,
-@@ -4086,7 +4086,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -4089,7 +4089,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
          if (ios_marked && ios_alert_unix_n < 120) { InterlockedIncrement( &ios_alert_unix_n );
              ERR( "[alert-unix] tid=%04x -> ALERTED\n",
                   (int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread ); }
@@ -863,10 +863,10 @@ index 50bd057..30af443 100644
       * the per-copy futex_queues split that lost RtlWakeAddress* wakes. */
      if ((unsigned int)class == 0xf00d && size == sizeof(void *))
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index be18e4a..72bb0ad 100644
+index 62550cf..29a8387 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -500,7 +500,7 @@ extern pthread_key_t teb_key;  /* upstream 11.18 dropped it; the iOS thread_ios.
+@@ -497,7 +497,7 @@ extern pthread_key_t teb_key;  /* upstream 11.18 dropped it; the iOS thread_ios.
   * 2f69c014); the iOS signal_arm64 replacement still uses it. */
  static inline BOOL is_ec_code( ULONG_PTR ptr )
  {
@@ -1241,10 +1241,10 @@ index af57b03..9235076 100644
       * dialing client socket (and steam's accepted peers) never appeared.
       * This names every socket the walk actually reaches, pre-filter, so
 diff --git a/server/thread.c b/server/thread.c
-index 0853e69..9972c49 100644
+index c71078d..ac9515a 100644
 --- a/server/thread.c
 +++ b/server/thread.c
-@@ -1038,7 +1038,7 @@ int resume_thread( struct thread *thread )
+@@ -1053,7 +1053,7 @@ int resume_thread( struct thread *thread )
  }
  
  /* add a thread to an object wait queue; return 1 if OK, 0 on error */

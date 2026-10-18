@@ -3,6 +3,15 @@
 ;; DMOs (DMORegister) and Media Foundation transforms (MFTRegister), as a desktop prefix of the
 ;; same Wine (wineboot --init) holds them. Each section names the DLL whose DllRegisterServer
 ;; writes it; app/tools/prefix-registry.py MEDIA_REGISTER_SHA256 guards that code.
+;; Not from a prefix: quartz's Color Space Converter (wine-11.20), whose FilterData is
+;; FM2_WriteFilterData's layout, checked against three entries here
+;; (docs/evidence/2026-10-18-wine-11.20.md).
+
+;; quartz.dll
+[Software\\Classes\\CLSID\\{083863F1-70DE-11D0-BD40-00A0C911CE86}\\Instance\\{1643E180-90F5-11CE-97D5-00AA0055595A}]
+"CLSID"="{1643E180-90F5-11CE-97D5-00AA0055595A}"
+"FilterData"=hex:02,00,00,00,01,00,40,00,02,00,00,00,00,00,00,00,30,70,69,33,00,00,00,00,00,00,00,00,06,00,00,00,00,00,00,00,00,00,00,00,30,74,79,33,00,00,00,00,00,01,00,00,10,01,00,00,31,74,79,33,00,00,00,00,00,01,00,00,20,01,00,00,32,74,79,33,00,00,00,00,00,01,00,00,30,01,00,00,33,74,79,33,00,00,00,00,00,01,00,00,40,01,00,00,34,74,79,33,00,00,00,00,00,01,00,00,50,01,00,00,35,74,79,33,00,00,00,00,00,01,00,00,60,01,00,00,31,70,69,33,08,00,00,00,00,00,00,00,06,00,00,00,00,00,00,00,00,00,00,00,30,74,79,33,00,00,00,00,00,01,00,00,10,01,00,00,31,74,79,33,00,00,00,00,00,01,00,00,20,01,00,00,32,74,79,33,00,00,00,00,00,01,00,00,30,01,00,00,33,74,79,33,00,00,00,00,00,01,00,00,40,01,00,00,34,74,79,33,00,00,00,00,00,01,00,00,50,01,00,00,35,74,79,33,00,00,00,00,00,01,00,00,60,01,00,00,76,69,64,73,00,00,10,00,80,00,00,aa,00,38,9b,71,7a,eb,36,e4,4f,52,ce,11,9f,53,00,20,af,0b,a7,70,7c,eb,36,e4,4f,52,ce,11,9f,53,00,20,af,0b,a7,70,7b,eb,36,e4,4f,52,ce,11,9f,53,00,20,af,0b,a7,70,7d,eb,36,e4,4f,52,ce,11,9f,53,00,20,af,0b,a7,70,7e,eb,36,e4,4f,52,ce,11,9f,53,00,20,af,0b,a7,70,c0,9a,3c,77,74,32,d0,11,b7,24,00,aa,00,6c,1a,01
+"FriendlyName"="Color Space Converter"
 
 ;; quartz.dll
 [Software\\Classes\\CLSID\\{083863F1-70DE-11D0-BD40-00A0C911CE86}\\Instance\\{1B544C20-FD0B-11CE-8C63-00AA0044B51E}]

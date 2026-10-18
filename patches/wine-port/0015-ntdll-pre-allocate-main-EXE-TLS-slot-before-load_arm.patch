@@ -44,7 +44,7 @@ Offered-upstream: no
  1 file changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 3ffa738..a89abcc 100644
+index 5c62df4..36c2423 100644
 --- a/dlls/ntdll/loader.c
 +++ b/dlls/ntdll/loader.c
 @@ -1531,7 +1531,12 @@ static NTSTATUS fixup_imports( WINE_MODREF *wm, LPCWSTR load_path )
@@ -61,9 +61,9 @@ index 3ffa738..a89abcc 100644
  
      if (!(imports = RtlImageDirectoryEntryToData( wm->ldr.DllBase, TRUE,
                                                    IMAGE_DIRECTORY_ENTRY_IMPORT, &size )))
-@@ -4587,6 +4592,18 @@ void loader_init( CONTEXT *context, void **entry )
+@@ -4589,6 +4594,18 @@ void loader_init( CONTEXT *context, void **entry )
          wm = build_main_module();
-         build_ntdll_module();
+         ntdll_module = build_ntdll_module();
  #ifdef __arm64ec__
 +        /* iOS-Mythic: pre-allocate the main EXE's TLS slot BEFORE
 +         * load_arm64ec_module() so the main EXE claims slot 0 instead of

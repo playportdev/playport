@@ -44,10 +44,10 @@ Offered-upstream: no
  1 file changed, 131 insertions(+)
 
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 1bfec7a..0412b4a 100644
+index 8b87cc8..6948ce8 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -4642,6 +4642,12 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
+@@ -4328,6 +4328,12 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
  /******************************************************************************
   *              NtCreateFile   (NTDLL.@)
   */
@@ -60,7 +60,7 @@ index 1bfec7a..0412b4a 100644
  NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr,
                                IO_STATUS_BLOCK *io, LARGE_INTEGER *alloc_size,
                                ULONG attributes, ULONG sharing, ULONG disposition,
-@@ -4695,6 +4701,11 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
+@@ -4381,6 +4387,11 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
          name_hidden = is_hidden_file( unix_name );
          status = open_unix_file( handle, unix_name, access, &new_attr, attributes,
                                   sharing, disposition, options, ea_buffer, ea_length );
@@ -72,7 +72,7 @@ index 1bfec7a..0412b4a 100644
      }
      else WARN( "%s not found (%x)\n", debugstr_us(attr->ObjectName), status );
  
-@@ -6082,6 +6093,121 @@ static unsigned int set_pending_write( HANDLE device )
+@@ -5768,6 +5779,121 @@ static unsigned int set_pending_write( HANDLE device )
  /******************************************************************************
   *              NtReadFile   (NTDLL.@)
   */
@@ -194,7 +194,7 @@ index 1bfec7a..0412b4a 100644
  NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
                              IO_STATUS_BLOCK *io, void *buffer, ULONG length,
                              LARGE_INTEGER *offset, ULONG *key )
-@@ -6255,6 +6381,11 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
+@@ -5941,6 +6067,11 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
      }
  
  done:

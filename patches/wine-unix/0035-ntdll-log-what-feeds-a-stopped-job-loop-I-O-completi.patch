@@ -36,7 +36,7 @@ Offered-upstream: no; iOS-only diagnostics
  3 files changed, 500 insertions(+), 4 deletions(-)
 
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index c6b7a28..1a92429 100644
+index daeaabf..ee712a5 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -127,6 +127,9 @@
@@ -49,7 +49,7 @@ index c6b7a28..1a92429 100644
  
  #define MAX_DOS_DRIVES 26
  
-@@ -5485,6 +5488,10 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
+@@ -5171,6 +5174,10 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
                  status = wine_server_call( req );
              }
              SERVER_END_REQ;
@@ -60,7 +60,7 @@ index c6b7a28..1a92429 100644
          }
          else status = STATUS_INVALID_PARAMETER_3;
          break;
-@@ -5504,6 +5511,9 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
+@@ -5190,6 +5197,9 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
                  status = wine_server_call( req );
              }
              SERVER_END_REQ;
@@ -70,7 +70,7 @@ index c6b7a28..1a92429 100644
          }
          else status = STATUS_INFO_LENGTH_MISMATCH;
          break;
-@@ -6669,6 +6679,11 @@ err:
+@@ -6355,6 +6365,11 @@ err:
  
      ret_status = async_read && type == FD_TYPE_FILE && (status == STATUS_SUCCESS || status == STATUS_END_OF_FILE)
              ? STATUS_PENDING : status;
@@ -82,7 +82,7 @@ index c6b7a28..1a92429 100644
  
      if (send_completion && async_read)
          add_completion( handle, cvalue, status, total, ret_status == STATUS_PENDING );
-@@ -6973,6 +6988,11 @@ err:
+@@ -6659,6 +6674,11 @@ err:
      }
  
      ret_status = async_write && type == FD_TYPE_FILE && status == STATUS_SUCCESS ? STATUS_PENDING : status;
@@ -681,10 +681,10 @@ index e44597a..2d9d29b 100644
      HANDLE wait_handle = NULL;
      unsigned int status;
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index f8535bf..72f11f1 100644
+index 0969ffa..923d70d 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -533,6 +533,14 @@ static inline BOOL is_ec_code( ULONG_PTR ptr )
+@@ -530,6 +530,14 @@ static inline BOOL is_ec_code( ULONG_PTR ptr )
      if (!map) return FALSE;
      return (map[page / 64] >> (page & 63)) & 1;
  }

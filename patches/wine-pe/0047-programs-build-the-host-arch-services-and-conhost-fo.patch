@@ -1,0 +1,157 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 02:23:08 +0200
+Subject: [PATCH] programs: build the host-arch services and conhost for
+ arm64ec too
+
+wine-11.20 (886f2ea) moved the choice of which architectures build a
+module from configure into its Makefile.in (ENABLE_ARCHS). conhost,
+lsass, plugplay, rpcss, services, spoolsv, termsv, winemenubuilder and
+wuauserv are now built for the host architecture only, and winevdm for
+the 16-bit one, so the arm64ec tree, which builds Playport's system32,
+left them out, and the --enable-<program> options stages/wine-pe.sh
+passes no longer choose architectures.
+
+On iOS an x86-64 process cannot start a pure ARM64 one, so system32 has
+arm64ec builds of Wine's programs (decision 0082); without conhost.exe
+there a console program's conhost start fails again (c0000135). Add
+arm64ec to these programs' ENABLE_ARCHS, which keeps the arm64ec set
+what it was on wine-11.19. The aarch64 and i386 builds do not change.
+
+Class: feature
+Evidence: docs/evidence/2026-10-18-wine-11.20.md
+Offered-upstream: no
+---
+ programs/conhost/Makefile.in         | 2 +-
+ programs/lsass/Makefile.in           | 2 +-
+ programs/plugplay/Makefile.in        | 2 +-
+ programs/rpcss/Makefile.in           | 2 +-
+ programs/services/Makefile.in        | 2 +-
+ programs/spoolsv/Makefile.in         | 2 +-
+ programs/termsv/Makefile.in          | 2 +-
+ programs/winemenubuilder/Makefile.in | 2 +-
+ programs/winevdm/Makefile.in         | 2 +-
+ programs/wuauserv/Makefile.in        | 2 +-
+ 10 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/programs/conhost/Makefile.in b/programs/conhost/Makefile.in
+index 6d4caea..0d3157a 100644
+--- a/programs/conhost/Makefile.in
++++ b/programs/conhost/Makefile.in
+@@ -1,7 +1,7 @@
+ MODULE    = conhost.exe
+ IMPORTS   = user32 gdi32 advapi32
+ DELAYIMPORTS = comctl32 winmm
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mwindows -municode
+ 
+diff --git a/programs/lsass/Makefile.in b/programs/lsass/Makefile.in
+index 81c6c0f..5631e11 100644
+--- a/programs/lsass/Makefile.in
++++ b/programs/lsass/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = lsass.exe
+ IMPORTS   = advapi32 rpcrt4
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mconsole -municode
+ 
+diff --git a/programs/plugplay/Makefile.in b/programs/plugplay/Makefile.in
+index dfd46fd..3d8f019 100644
+--- a/programs/plugplay/Makefile.in
++++ b/programs/plugplay/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = plugplay.exe
+ IMPORTS   = advapi32 rpcrt4 user32
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mconsole -municode
+ 
+diff --git a/programs/rpcss/Makefile.in b/programs/rpcss/Makefile.in
+index 4bad667..e6936a1 100644
+--- a/programs/rpcss/Makefile.in
++++ b/programs/rpcss/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = rpcss.exe
+ IMPORTS   = rpcrt4 advapi32
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mconsole -municode
+ 
+diff --git a/programs/services/Makefile.in b/programs/services/Makefile.in
+index 743d43a..e79abad 100644
+--- a/programs/services/Makefile.in
++++ b/programs/services/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = services.exe
+ IMPORTS   = rpcrt4 advapi32 userenv setupapi
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mwindows
+ 
+diff --git a/programs/spoolsv/Makefile.in b/programs/spoolsv/Makefile.in
+index d0d9764..ea64ae6 100644
+--- a/programs/spoolsv/Makefile.in
++++ b/programs/spoolsv/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = spoolsv.exe
+ IMPORTS   = advapi32
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mwindows
+ 
+diff --git a/programs/termsv/Makefile.in b/programs/termsv/Makefile.in
+index 1a727a0..3e8a140 100644
+--- a/programs/termsv/Makefile.in
++++ b/programs/termsv/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = termsv.exe
+ IMPORTS   = advapi32
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mconsole -municode
+ 
+diff --git a/programs/winemenubuilder/Makefile.in b/programs/winemenubuilder/Makefile.in
+index 43e24d2..eaf1ae1 100644
+--- a/programs/winemenubuilder/Makefile.in
++++ b/programs/winemenubuilder/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = winemenubuilder.exe
+ IMPORTS   = uuid windowscodecs shell32 shlwapi ole32 user32 advapi32
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mwindows -municode
+ 
+diff --git a/programs/winevdm/Makefile.in b/programs/winevdm/Makefile.in
+index 3cbaff0..4aa0841 100644
+--- a/programs/winevdm/Makefile.in
++++ b/programs/winevdm/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = winevdm.exe
+ IMPORTS   = user32 kernel
+-ENABLE_ARCHS = $(WIN16_ARCH)
++ENABLE_ARCHS = $(WIN16_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mwindows
+ 
+diff --git a/programs/wuauserv/Makefile.in b/programs/wuauserv/Makefile.in
+index 4850bd2..49be491 100644
+--- a/programs/wuauserv/Makefile.in
++++ b/programs/wuauserv/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = wuauserv.exe
+ IMPORTS   = advapi32
+-ENABLE_ARCHS = $(HOST_ARCH)
++ENABLE_ARCHS = $(HOST_ARCH) arm64ec
+ 
+ EXTRADLLFLAGS = -mconsole
+ 
