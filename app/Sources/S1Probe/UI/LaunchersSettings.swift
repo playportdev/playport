@@ -27,6 +27,22 @@ enum LauncherOpen {
         return title_path_resolve(prefix.path, dos, &tp, &msg, msg.count) == 0 ? dos : nil
     }
 
+    #if !PLAYPORT_RELEASE
+    /// Deletes the launcher's saved window settings file in the prefix user's profile (a dev
+    /// build's Launchers row and `forget-launcher-window:ID`). Nil on success, else the failure.
+    static func forgetWindowSettings(_ l: PublisherLauncher) -> String? {
+        let profile = WineHostRuntime.shared.prefixURL.appendingPathComponent("drive_c/users/playport")
+        do {
+            let removed = try l.forgetWindowSettings(profile: profile)
+            log("forget-window \(l.id): \(removed ? "removed" : "absent") \(l.windowSettingsFile ?? "none")")
+            return nil
+        } catch {
+            log("forget-window \(l.id): not removed \(l.windowSettingsFile ?? "none") (\(error))")
+            return "\(error)"
+        }
+    }
+    #endif
+
     /// Open: the setup checks a Play runs, then TitleLaunch with the launcher's settings. False
     /// when a launch is running or spent, setup was cancelled, or the launcher is not installed.
     static func open(_ l: PublisherLauncher) async -> Bool {
@@ -107,6 +123,15 @@ struct LaunchersSettings: View {
                 PadModal.shared.keyboard(title: "Runtime keys", text: runtime.wrappedValue.runtime,
                                          placeholder: "For example env.FEX_SMCCHECKS=none",
                                          maxLength: 200) { runtime.wrappedValue.runtime = $0 }
+            }
+        }
+        // Deletes the launcher's own saved window settings file (PublisherLauncher.windowSettingsFile),
+        // as the driver's `forget-launcher-window:ID` does (PLA-401).
+        ForEach(PublisherLauncher.all.filter { $0.windowSettingsFile != nil }) { l in
+            PadRow(id: "set:launcher-" + l.id + "-forget-window", title: "Forget the launcher's saved window settings",
+                   subtitle: l.name, style: .plain, hint: launch.running ? "" : "Forget") {
+                guard !launch.running else { return }
+                _ = LauncherOpen.forgetWindowSettings(l)
             }
         }
         #endif

@@ -135,4 +135,20 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(t.graphicsEnvironment["DXVK_CONFIG"], "dxvk.numCompilerThreads = 1;" + (own.graphicsEnvironment["DXVK_CONFIG"] ?? ""))
         XCTAssertEqual(t.graphicsEnvironment["DXVK_SHADER_CACHE"], "0")
     }
+
+    /// Forgetting the Rockstar launcher's window settings deletes settings_user.dat and nothing
+    /// beside it; a second time there is nothing to delete.
+    func testForgettingTheWindowSettingsDeletesOnlySettingsUser() throws {
+        let profile = FileManager.default.temporaryDirectory.appendingPathComponent("pl-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: profile) }
+        let folder = profile.appendingPathComponent("AppData/Local/Rockstar Games/Launcher")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for name in ["settings_user.dat", "launcher_online_config.dat", "firstrun.dat"] {
+            try Data([1, 2, 3]).write(to: folder.appendingPathComponent(name))
+        }
+        XCTAssertTrue(try PublisherLauncher.rockstar.forgetWindowSettings(profile: profile))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(),
+                       ["firstrun.dat", "launcher_online_config.dat"])
+        XCTAssertFalse(try PublisherLauncher.rockstar.forgetWindowSettings(profile: profile))
+    }
 }

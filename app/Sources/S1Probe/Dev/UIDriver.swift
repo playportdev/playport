@@ -13,6 +13,9 @@
 //                              goes on here
 //   open-launcher:<id>         Settings › Launchers' Open for a publisher's launcher
 //                              (PlayportKit PublisherLauncher: rockstar), followed as play:
+//   forget-launcher-window:<id> Settings › Launchers' Forget the launcher's saved window
+//                              settings: deletes that one file in the prefix (a `launcher:
+//                              forget-window` line says removed or absent)
 //   install:<app id>           Install from Steam (the paired account's session);
 //                              waits until the title is in the library
 //   install:gog-<id>[@<build>] Install from GOG (signed in on the phone), the newest build or
@@ -646,6 +649,12 @@ enum UIDriver {
                         return finish("action=\(action) failed: not in front again \(seconds + 180) s after leaving")
                     }
                     log("background: in front again after \(Int(Date().timeIntervalSince(left))) s")
+                case "forget-launcher-window":
+                    guard let launcher = PublisherLauncher.named(id), launcher.windowSettingsFile != nil else {
+                        return finish("action=\(action) refused: \(id) is not a launcher with window settings")
+                    }
+                    guard !TitleLaunch.shared.running else { return finish("action=\(action) refused: a launch is running") }
+                    if let failure = LauncherOpen.forgetWindowSettings(launcher) { return finish("action=\(action) failed: \(failure)") }
                 case "uninstall":
                     if let failure = await uninstall(id) { return finish("action=\(action) failed: \(failure)") }
                 case "verify":

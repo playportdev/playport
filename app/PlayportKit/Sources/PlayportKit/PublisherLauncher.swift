@@ -34,6 +34,10 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// executable runs it): their Play inherits its Open's grace, graphics environment and
     /// runtime keys, under the game's own (decision 0115; `startingGame`).
     public let games: [String]
+    /// The launcher's own saved window settings, relative to the prefix user's profile folder:
+    /// a dev build's Settings › Launchers row and the driver's `forget-launcher-window:ID` delete
+    /// this one file (forgetWindowSettings). Nil when Playport knows none.
+    public let windowSettingsFile: String?
 
     /// The launch's title id (TitleLaunch), apart from every store's game ids.
     public var titleID: String { "launcher-" + id }
@@ -58,7 +62,10 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
                               "VKD3D_SHADER_CACHE_PATH": "0"],
         runtime: ["env.FEX_SMCCHECKS": "none"],
         // Red Dead Redemption 2's Steam copy: PlayRDR2.exe starts Launcher.exe -steamAppId=1174180.
-        games: ["app-1174180"])
+        games: ["app-1174180"],
+        // With it the main window logs "Using saved geometry"; without it "Centering on monitor",
+        // the prefix otherwise the same (PLA-401, desktop runs s1 and r2-nosettings).
+        windowSettingsFile: "AppData/Local/Rockstar Games/Launcher/settings_user.dat")
 
     public static let all: [PublisherLauncher] = [rockstar]
 
@@ -109,6 +116,16 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
         let e = LaunchSettings.resolve(game: saved, global: LaunchSettings())
         return OpenSettings(config: runtime.merging(e.runtime) { _, saved in saved }, ordering: e.ordering, maxInst: e.maxInst,
                             x87Reduced: e.x87Reduced, diskCache: e.diskCache)
+    }
+
+    /// Deletes `windowSettingsFile` under `profile` (the prefix's `drive_c/users/<user>`) and no
+    /// other file: true when it was there and is gone, false when there was nothing to delete.
+    public func forgetWindowSettings(profile: URL) throws -> Bool {
+        guard let rel = windowSettingsFile else { return false }
+        let file = rel.split(separator: "/").reduce(profile) { $0.appendingPathComponent(String($1)) }
+        guard FileManager.default.fileExists(atPath: file.path) else { return false }
+        try FileManager.default.removeItem(at: file)
+        return true
     }
 
     /// The executable's DOS path from the system hive's text (system.reg), or nil when the install

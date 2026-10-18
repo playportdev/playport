@@ -177,6 +177,15 @@ class UiEnvTest(unittest.TestCase):
         self.assertTrue(m.after_play(["open-launcher:rockstar", "wait:5", "open:settings"]))
         self.assertEqual(m.pad_after_play(["open-launcher:rockstar", "pad:a"]), "pad:a")
 
+    def test_forget_launcher_window_is_a_ui_step_not_a_play(self):
+        """Settings \u203a Launchers' Forget the launcher's saved window settings (UIDriver
+        forget-launcher-window:) is accepted for a launcher id and is not followed as a play."""
+        m = load()
+        self.assertTrue(m.ACTION_RE.match("forget-launcher-window:rockstar"))
+        for bad in ("forget-launcher-window:", "forget-launcher-window:Rock-star", "forget-launcher-window:../x"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        self.assertFalse(m.after_play(["forget-launcher-window:rockstar", "wait:5"]))
+
     def test_the_in_game_menu_runs_while_the_game_does(self):
         """wait: and menu: after a play: act on the running game: a run that ends with
         menu:quit ends with the title, one that goes on after it with the UI's done."""
