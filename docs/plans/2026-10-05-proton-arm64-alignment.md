@@ -72,8 +72,10 @@ wine-11.18, `wine-valve` dc26e61, `fex` FEX-2609.1, `dxmt` 7c8dee1, `mesa`
   ([PLA-393](https://linear.app/playportdev/issue/PLA-393): `pp rebase` replays the written
   series with `git am -3` and re-exports a clean patch that lands elsewhere; `ensure_series`
   re-applies when a series' diffs change, [UPSTREAM-SYNC.md](../UPSTREAM-SYNC.md#moving-a-component-pin));
-  next (one writer): W8b the hand port of WineHQ 7fb24b7 (reserved
-  CPSR bits) into `signal_arm64_ios.c` and `thread_ios.c`, built to a verified IPA. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
+  W8b done (WineHQ 7fb24b7, reserved CPSR bits, hand-ported into `signal_arm64_ios.c` and
+  `thread_ios.c` as madeira-unix 0161, a verified dev IPA,
+  [evidence](../evidence/2026-10-18-cpsr-reserved-bits.md)); queue empty: phone gates owed for
+  the W7/W8/W8b IPAs. Reports: `agent-notes/pla-76/reports/` in the side copy's build area.
 
 ## Goal
 
