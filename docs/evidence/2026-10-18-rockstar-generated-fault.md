@@ -113,3 +113,90 @@ uses existing fault-record storage. The added iOS exception log is capped at
 It is diagnostic infrastructure, not a compatibility fix or release sign-off.
 Private logs and addresses stay under `.work/agent-notes/pla401/` and the UI
 run directories. RDR2's compatibility status remains Broken.
+
+## The faulting instruction (fex 0049) and an SMC A/B
+
+On 2026-10-18 the owner authorized logging a bounded guest code window at the
+fault: 16 bytes on each side of the rip, for the first four generated faults
+per process, with the module and RVA. FEX patch 0049 logs these together with
+the region's type and protection. It reads the bytes with
+`NtReadVirtualMemory` on its own process. On iOS that call is
+`mach_vm_read_overwrite`, so an unreadable page fails the read instead of
+faulting. Exception semantics are unchanged. The raw bytes and addresses are
+kept only in the private run logs.
+
+IPA `2041ad28a1563305b615f40cdf257d87be1c35ac1ee51bddc818e3f83039cbf3`.
+`./pp test --quick`, `./pp names` and `./pp secrets` passed, and `./pp build`
+passed 89/89. The phone was at 37% and then 34%, not charging, with
+6.0 GB free. Both sessions ran with `set -eu` and exact-IPA checks and exited 0.
+No authentication or game input was supplied.
+
+**From source alone, the instruction is HLT.** `INTOp`'s generated #GP has
+error 0 only for HLT (`0xF4`). `INT imm8` sets the error to `imm << 3 | 2`,
+which is never 0. INTO, INT1, INT3 and UD2 use other traps or signals.
+
+| Game | Run under `.work/ui-runs/` | Observation |
+| --- | --- | --- |
+| Hollow Knight (367520) | `20261018T192202` | First frame +10.19 s, first-frame+10 reached |
+| RDR2 (1174180), default `FEX_SMCCHECKS=none` | `20261018T192315` | First window +28.15 s; the 90 s screenshot shows Unable to launch game; `c0000096` |
+| Hollow Knight (367520) | `20261018T193044` | first-frame+10 reached |
+| RDR2 (1174180), session-only `env.FEX_SMCCHECKS=mtrack` | `20261018T193203` | First window +62.92 s; no main window by +240 s; pool head exhausted; **inconclusive** |
+
+### The code window in the default run
+
+The fault is in `Launcher.exe` at RVA `0x258cf6`. The same RVA appears in run
+`20261018T190814`, where the image was loaded at a different base.
+
+- The region is `MEM_IMAGE` with protection `PAGE_EXECUTE_WRITECOPY` (`0x80`),
+  which is a writable code page.
+- The byte at the rip, in current memory, is `F4` (HLT). FEX's translation
+  therefore matches memory at the rip: this is not a stale or mis-synced
+  decode of the faulting instruction.
+- The bytes before it decode as the tail of a function: `sete al; ret`, then
+  `mov al, 1; ret`.
+- After the HLT come filler bytes that are not `int3`. The next 16-byte-aligned
+  function starts at RVA `0x258d00`.
+- So the HLT sits in a gap between two functions. Execution can reach it only
+  by a control transfer into the gap; it cannot fall through into it.
+
+### SMC A/B
+
+The A/B used one session-only setting:
+`--settings 'app-1174180:{"runtime":"env.FEX_SMCCHECKS=mtrack"}'`. The game's
+key replaces the launcher's (decision 0115), and the run did not use
+`--keep-settings`. The log shows `environment FEX_SMCCHECKS=mtrack`, and every
+emulated thread's invalidation census reports `smc_off=0`, Launcher.exe's
+main thread among them.
+
+**What the A/B showed:**
+- **Self-modifying code in Launcher.exe.** FEX handled 83 self-modifying-code
+  writes from Launcher.exe's main thread. All of them land on pages of its own
+  image, about 27 distinct 16 KiB pages between RVA `0x1c000` and `0x1f3f024`.
+  They show that the launcher writes, at run time, to image pages from which
+  FEX had already translated code. With `none`, FEX ignores such writes. The
+  page granularity means the written bytes need not be code themselves.
+- **Run outcome.**
+  - No generated fault and no `c0000096` occurred.
+  - However, the main window never appeared. The first window came at +62.92 s
+    (28 s with `none`) and was then hidden. The screenshots at 90, 150 and
+    240 s are black.
+  - About 19 s after the first window, the pool head ran out: head 416 MiB,
+    tail 481 MiB, room 0, `head_exhausted=75`, `exhausted=head`.
+  - After that, a Social Club helper ended with `c0000135` when a DLL load
+    failed with `c0000017`, and `rpcss.exe` ended with `c0000017`.
+  - Band peak was 11,313 MiB with zero refusals.
+- **Not a result.** The run never reached the point where the default run
+  faults, which is about 0.3 s after the main window. Under the pool rule set
+  for this A/B, it is inconclusive.
+
+### Status
+
+- **Shown:** the fault is a genuine HLT that the launcher reaches through a
+  control transfer into a gap between functions. Launcher.exe also modifies
+  its own image's code pages at run time.
+- **Not shown:** whether stale translations under `FEX_SMCCHECKS=none` send
+  control into the gap, or whether the launcher deliberately jumps there.
+  Proving the first needs a launcher run with SMC tracking that reaches the
+  main window inside the pool.
+- **Unchanged:** the default (`none`, decision 0116), every pool setting and
+  the exception path. RDR2 stays Broken.
