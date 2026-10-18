@@ -451,20 +451,23 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   images instead of 521 and still picks `Safe`; the CPU writes the 9 mip chains and 3 of the 3D
   images through the mapping and the GPU writes 1 more for host reads, so 0041's fallback is
   enough only for the arrays,
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-image-use-and-the-device-type-h7b)).
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-image-use-and-the-device-type-h7b));
+  H5 and H5d ([PLA-396](https://linear.app/playportdev/issue/PLA-396), under the owner's Wine
+  decision of 2026-10-18: Apple's Metal Developer Tools for Windows 6.2 under Wine compile the
+  generated MSL at MSL 4.0, one below the phone's 4.1; the one failure, 297 DX12 libraries with an
+  untranslated `fcanonicalize` under the forced float-controls profile, is fixed by mesa 0042,
+  whose untranslated ALU ops now fail visibly and are counted by the mock; after it the host
+  test's 164, the Vulkan route's 3,891 and the DX12 route's 3,558 libraries all compile,
+  `build/mesa-host-test/msl-compile.sh`,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5)).
   Host only; not checked on the phone.
-- **Blocked:** H5 (Apple's Metal compiler for Windows under Wine on the replay's MSL). The
-  download needs an Apple account sign-in, and the tools' licence is not published, so whether
-  Wine on Linux is permitted is unknown. Nothing downloaded; the owner's step is in the
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5).
-- **Queue (owner-approved 2026-10-17, host only):** next H5d (commit the H5 results under the
-  owner's Wine decision of 2026-10-18, fix `fcanonicalize`); then H8 the dev IPA with mesa
-  0037–0041. Then chunk 0 below (needs the phone).
+- **Queue (owner-approved 2026-10-17, host only):** H5d done; next H8 the dev IPA with mesa
+  0037–0042. Then chunk 0 below (needs the phone).
 - **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
-  `h4.md` (H4), `h5.md` (H5), `h5c.md` (H5, results not yet committed), `h6.md` (H6), `h6b.md`
+  `h4.md` (H4), `h5.md` (H5, blocked), `h5c.md` (H5), `h5d.md` (H5d), `h6.md` (H6), `h6b.md`
   (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3,
-  H6b and H7 (mesa 0037–0041), on an IPA with 0041 (H4's has 0037–0039 only), then RDR2 after
+  H6b, H7 and H5d (mesa 0037–0042), on an IPA with 0042 (H4's has 0037–0039 only), then RDR2 after
   PLA-295 and PLA-300.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under

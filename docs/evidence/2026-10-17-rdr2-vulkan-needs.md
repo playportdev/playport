@@ -642,53 +642,130 @@ Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
 
 ## Apple's Metal compiler on the generated MSL (H5)
 
-**Date:** 2026-10-18. Licence and download check only, from this workstation; **blocked**
-before any download. No tool was fetched, installed or run, so there are no compile results.
+**Date:** 2026-10-18. Host only, in the side copy, under desktop Wine 11.19 in a scratch
+prefix in the build area (headless, silent install). No phone, no game run. Every compile is
+`metal -c` of one MSL library to AIR; the outputs were discarded. H5c ran the compiler on the
+corpora; H5d (PLA-396) fixed the one failure (mesa 0042) and ran it again.
 
-- **Where the tool is:** Apple's [Metal developer tools page](https://developer.apple.com/metal/tools/)
-  lists "Metal Developer Tools for Windows", "the collection of Windows-hosted tools, headers and
-  libraries that enable developers to build their Metal shader programs/assets for deployment on
-  iOS, macOS, and tvOS". Its "Download now" link goes to
-  `https://developer.apple.com/download/all/?q=metal%20developer%20tools%20for%20windows`, which
-  answers 302 to Apple's account sign-in (`idmsa.apple.com/IDMSWebAuth/signin…`). A request
-  straight to the download host (`download.developer.apple.com/Developer_Tools/…`) answers 302 to
-  `developer.apple.com/unauthorized/`. **The download needs an Apple developer account
-  sign-in.** The only account available is the owner's, which this run may not use.
-- **Licence:** the terms that govern the Windows tools are not published. The
-  [Agreements and Guidelines](https://developer.apple.com/support/terms/) page and
-  [apple.com/legal/sla](https://www.apple.com/legal/sla/) list no Metal or Windows tools agreement.
-  So whether running the tools under Wine on Linux is permitted could not be read.
-  The agreements that are public do not settle it:
-  - The [Xcode and Apple SDKs Agreement](https://www.apple.com/legal/sla/docs/xcode.pdf) covers
-    Apple's macOS-hosted tools: "USE OF APPLE SOFTWARE IS GOVERNED BY THIS AGREEMENT AND IS
-    AUTHORIZED ONLY FOR EXECUTION ON AN APPLE-BRANDED PRODUCT RUNNING MACOS. ANY OTHER DOWNLOAD
-    OR USE OF APPLE SOFTWARE IS NOT AUTHORIZED". The Windows tools must have their own terms,
-    which may tie use to a host platform in the same way.
-  - The [Apple Developer Agreement](https://developer.apple.com/support/downloads/terms/apple-developer-agreement/Apple-Developer-Agreement-20250318-English.pdf),
-    which the sign-in accepts, §1: "The Apple Account and password you use to log into your
-    Apple Developer account cannot be shared in any way or with anyone". §3: "you agree to abide
-    by and maintain all notices, license information, and restrictions contained therein".
-- **Conclusion (conservative, as the owner asked):** blocked. The tool needs an Apple account
-  sign-in, and its licence can be read only after that sign-in. Nothing was downloaded. No
-  third-party copy was looked for: it would bypass the gate and the terms.
-- **To unblock (owner):**
-  1. Sign in with the owner's own Apple ID and download the tools; a free developer
-     account may be enough (not checked).
-  2. Read the licence shown at download or install, and decide whether Wine on Linux is
-     permitted.
-  3. If it is, put the installer in this copy's build area (never committed). The rest of H5
-     (scratch prefix, compile, grouping) needs no account.
-- **Ready for that run:**
-  - The corpora came from the mock and stay in the build area: the DX12 route's 3,564 libraries in
-    `scratch/h3/msl`; the Vulkan route's 3,895 in `scratch/v4/msl`; and the host test's own MSL,
-    135 files in `run/mesa/hosttest/msl` and 25 in `msl-zink`.
-  - KosmicKrisp compiles each library with `MTL4Compiler` (`bridge/mtl_compiler.m`), at the
-    device's `msl_version`. The device needs at least 4.1 for some features
-    (`kk_physical_device.c`). So an offline check should use the same language standard and an
-    iOS AIR target **(inference)**.
-- **Without the tool:** whether Apple's compiler accepts this MSL is still unknown. The phone
-  answers it at pipeline creation. The host mock bridge writes the MSL and compiles none of it;
-  chunk 0's device logs or an RDR2 run on the phone show any failure.
+- **Owner decision (2026-10-18, recorded on PLA-386):** running Apple's Metal Developer Tools
+  for Windows under Wine on this Linux workstation is acceptable, including compiling the
+  game-derived MSL corpora (licence §7B). The download needs an Apple account sign-in, so the
+  owner downloaded it. The licence is "SOFTWARE LICENSE AGREEMENT FOR METAL DEVELOPER TOOLS FOR
+  WINDOWS", EA1689, 8/29/2023. §2A grants use "for the sole purpose of processing textures and
+  shaders on Windows systems owned or controlled by you"; Wine is not mentioned. §2A allows one
+  backup copy, so the tools were installed straight from the owner's download, with no further
+  copy of the installer.
+- **The tool:** Metal Developer Tools for Windows 6.2 ("for use with Xcode 26.2"),
+  `Metal_Developer_Tools6.2Windows.exe`, sha256 `f6f24c4b…6327e`, kept in the build area and
+  never committed. It installs silently with `/S /D=C:\MetalTools`. `bin/metal.exe` is a shim;
+  the compiler is `metal/32023/bin/metal.exe`:
+  `Apple metal version 32023.850 (metalfe-custom-windows)`, default target
+  `air64-apple-darwin19.0.0`. Under Wine a compile takes about 1 s, most of it Wine start-up.
+- **Flags, matching `mtl_new_library`'s callers:**
+  `-std=metal4.0 -target air64-apple-ios26.0 -fmetal-math-mode=fast -fmetal-math-fp32-functions=fast`.
+  - KosmicKrisp passes `MTL_MATH_MODE_FAST` and `MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST`
+    everywhere (`kk_shader.c`, `kk_device_lib.c`).
+  - It sets `languageVersion` to 4.1 on iOS 27 or later and to 4.0 otherwise
+    (`kk_physical_device.c`). So the phone, on iOS 27, compiles at **MSL 4.1**.
+  - These tools accept `metal3.0`–`metal4.0` (plus the older `ios-`/`macos-` names). They reject
+    `metal4.1` ("invalid value 'metal4.1' in '-std=metal4.1'"). So these runs check MSL 4.0,
+    one version below the phone.
+  - A hand-written kernel compiled to AIR for targets `ios18.0`, `ios26.0` and `ios27.0`. The
+    `ios26.0` AIR linked with `metallib` into a `MTLB` library.
+- **Results before the fix (H5c, metal4.0, iOS 26 target; game corpora from mesa 0001–0039, host test from 0001–0041):**
+
+  | corpus | files | compiled | failed |
+  |---|---|---|---|
+  | host test, `run/mesa/hosttest/msl` | 138 | 138 | 0 |
+  | host test, Zink, `run/mesa/hosttest/msl-zink` | 25 | 25 | 0 |
+  | Vulkan route, `scratch/v4/msl` | 3,895 | 3,895 | 0 |
+  | DX12 route, `scratch/h3/msl` | 3,564 | 3,267 | 297 |
+
+  - The same runs at `-std=metal3.2` gave the same results for the first three corpora (all
+    compiled), so nothing here needs a Metal 4 language feature.
+  - The only warnings: 20 unused SSA temporaries (`-Wunused-variable`) and 9 unused
+    `constant_data` arrays (`-Wunused-const-variable`), in 29 files of the two game corpora.
+- **The one failure group (297 files, 428 sites):** every error is the same line,
+  `tN = ALU fcanonicalize;` ("expected ';' after expression", then "use of undeclared
+  identifier 'ALU'" and "'fcanonicalize'").
+  - **Source:** `alu_to_msl` in `src/kosmickrisp/compiler/nir_to_msl.c` had no case for
+    `nir_op_fcanonicalize`. Its `default:` printed `ALU <op name>` into the MSL, with no
+    operand, and translation went on.
+  - **Why only the DX12 corpus:** `nir_opt_algebraic` turns `x * 1.0`, `x + -0.0`, `fmin(x, x)`
+    and the like into `fcanonicalize`. It removes every `fcanonicalize` unless the shader
+    flushes FP32 denormals. KosmicKrisp reports `shaderDenormFlushToZeroFloat32 = false`, so
+    vkd3d-proton declares no flush on the device. H3's DX12 replay used a scratch layer
+    (`fcfeat`, now `run-replay.sh --bypass-feature-gate`) that reported all float-controls
+    properties; vkd3d-proton then emitted `DenormFlushToZero` for FP32, and the
+    `fcanonicalize`s whose results are used as bits stayed.
+  - **So the phone does not hit it today:** the forced float-controls profile exposed the gap.
+    It was reachable if KosmicKrisp reported FP32 flush-to-zero, or if a module declared
+    `DenormFlushToZero` 32 anyway (spirv_to_nir only warns "Unsupported SPIR-V capability").
+  - **Rest of those files:** with each `ALU fcanonicalize` replaced by `{}` (scratch copies,
+    deleted after), all 297 compiled. So nothing else in them failed.
+  - **Not flag-dependent:** the 297 failed the same way at `metal3.2`, with an `ios27.0` target,
+    and with `-fmetal-math-mode=safe`.
+  - **The host test missed it:** the mock bridge (`make-mock-bridge.py`) counted only libraries
+    that contain "Unknown intrinsic". It did not look for the `ALU ` fallback, so H3's "no
+    untranslated intrinsic" did not cover ALU ops.
+- **The fix (H5d, mesa 0042):**
+  - `alu_to_msl` translates `fcanonicalize` as its source. Metal has no canonicalize, and
+    KosmicKrisp reports no flush-to-zero mode, so no reported mode asks for the flush.
+  - The `default:` now prints `Unknown ALU <op>`, like an unknown intrinsic's
+    `Unknown intrinsic <name>`. It is still invalid MSL, so the library fails to compile and
+    the pipeline fails to build (`VK_ERROR_INVALID_SHADER_NV`, with Metal's error on stderr),
+    with no crash, and the error names the missing op.
+  - The mock now counts an `ALU ` token (both markers) as untranslated, like "Unknown
+    intrinsic", and the host test then exits 3.
+  - **New host test case:** `shaders/texel-ftz.comp.spvasm` stores `uintBitsToFloat(v) * 1.0`
+    as bits under `DenormFlushToZero 32`. It is hand-written and passes `spirv-val`. On 0001–0041
+    with the new mock, the hosttest stage failed (`ALU fcanonicalize;`, exit 3). With 0042 it
+    prints `ok texel-ftz`, and the library reads `as_type<float4>(…).x` where the marker was.
+  - **The other ALU ops** were audited against KosmicKrisp's compiler options and lowering
+    (`msl_optimize_nir` runs `nir_opt_algebraic` to a fixpoint right before translation). Of
+    the 331 NIR ops with no case, none other than `fcanonicalize` is left for the features
+    KosmicKrisp reports. The rest:
+    - are other drivers' ops (`_amd`, `_agx`, `_pan`, `_ir3`, `_v3d`, `_nv`, …);
+    - are 32-bit-boolean forms nothing in KosmicKrisp makes;
+    - are made only under options it does not set (`has_bfe`, `has_fmulz`, `has_tanh`,
+      `mediump_16bit_alu`, …);
+    - are lowered by options it sets or by passes in that loop (packing, `ball`/`bany`,
+      find-MSB/LSB, integer dot products, `ffma_weak`, `amul`);
+    - or come only from OpenCL or from features it does not report (64-bit floats, bfloat16,
+      8-bit floats, Intel integer functions 2, Valve's mixed float dot product).
+- **Results after the fix (H5d, metal4.0, iOS 26 target, MSL from mesa 0001–0042):**
+
+  | corpus | files | compiled | failed |
+  |---|---|---|---|
+  | host test and Zink, `run/mesa/hosttest/msl{,-zink}` | 164 | 164 | 0 |
+  | Vulkan route, `rdr2-sga.foz` | 3,891 | 3,891 | 0 |
+  | DX12 route, `rdr2-vkd3d-h3.foz` | 3,558 | 3,558 | 0 |
+
+  - Both game corpora were made again on the 0042 mock, by a single-threaded in-process
+    Fossilize replay under `--bypass-feature-gate`'s layer (the float-controls profile H3 used),
+    and deleted after. None has an `ALU ` or "Unknown intrinsic" marker. They have 4 and 6
+    fewer libraries than H5c's. The pipeline counts are the same, and the h3 replay parsed 6
+    fewer SPIR-V modules, so this is probably single-thread cache reuse (inference).
+  - The only warnings are the same unused-variable kinds (16 files of the Vulkan route, 13 of
+    the DX12 route).
+  - `run-replay.sh --bypass-feature-gate` on 0001–0042 is unchanged: h1b graphics 1,950/1,950
+    and compute 788/788; vkd3d-h3 1,587/1,607 and 757/758; 0 crashes.
+- **No Wine artefacts:** every failure had a compiler diagnostic, and no compile crashed or
+  ended without one.
+- **What this does not cover:**
+  - MSL 4.1, the phone's version.
+  - Anything after the front end: `MTL4Compiler`'s GPU back end, function linking and pipeline
+    creation (vertex descriptors, render state). The phone is still the only verdict for those.
+- **Tooling:** `build/mesa-host-test/msl-compile.sh` runs the tools under Wine over files or
+  directories in parallel. It writes per-file logs, `results.tsv`, and the failures grouped by
+  first error (with the location stripped and names and numbers normalised). `METAL_EXE` names
+  the compiler and `WINEPREFIX` the prefix; the default flags are the ones above. Wine's output
+  goes to files, never to a pipe, because the persistent wineserver would hold the pipe open.
+- **Follow-ups:**
+  - When tools with MSL 4.1 appear (an Xcode 27 era release), rerun at `-std=metal4.1`
+    (`MSL_STD=metal4.1`).
+  - Mesa 0042 is not offered upstream.
+  - Hollow Knight on Vulkan first frame+10 on an IPA with 0042 (H8), which covers 0037–0042.
 
 ## Replay and profile tooling (H6)
 

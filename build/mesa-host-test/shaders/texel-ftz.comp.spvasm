@@ -1,0 +1,50 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; A float multiplied by 1.0 and stored as bits, in a shader that flushes FP32
+; denormals (DenormFlushToZero 32). nir_opt_algebraic turns x * 1.0 into
+; fcanonicalize and keeps it only under that mode. KosmicKrisp does not report
+; shaderDenormFlushToZeroFloat32, but spirv_to_nir takes the mode with a
+; warning, and vkd3d-proton declares it when a driver reports it. The pipeline
+; must build, with every ALU op translated. It uses binding 1 of texel.comp's
+; layout (an r32ui storage texel buffer).
+               OpCapability Shader
+               OpCapability ImageBuffer
+               OpCapability DenormFlushToZero
+               OpExtension "SPV_KHR_float_controls"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gid %dst
+               OpExecutionMode %main LocalSize 64 1 1
+               OpExecutionMode %main DenormFlushToZero 32
+               OpDecorate %gid BuiltIn GlobalInvocationId
+               OpDecorate %dst DescriptorSet 0
+               OpDecorate %dst Binding 1
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+        %int = OpTypeInt 32 1
+      %float = OpTypeFloat 32
+        %v3u = OpTypeVector %uint 3
+        %v4u = OpTypeVector %uint 4
+     %in_v3u = OpTypePointer Input %v3u
+        %gid = OpVariable %in_v3u Input
+        %img = OpTypeImage %uint Buffer 0 0 0 2 R32ui
+    %img_ptr = OpTypePointer UniformConstant %img
+        %dst = OpVariable %img_ptr UniformConstant
+    %float_1 = OpConstant %float 1
+      %int_2 = OpConstant %int 2
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+          %g = OpLoad %v3u %gid
+         %gx = OpCompositeExtract %uint %g 0
+          %i = OpBitcast %int %gx
+         %im = OpLoad %img %dst
+          %t = OpImageRead %v4u %im %i
+          %v = OpCompositeExtract %uint %t 0
+          %f = OpBitcast %float %v
+         %f1 = OpFMul %float %f %float_1
+          %b = OpBitcast %uint %f1
+         %b4 = OpCompositeConstruct %v4u %b %b %b %b
+         %i2 = OpIAdd %int %i %int_2
+               OpImageWrite %im %i2 %b4
+               OpReturn
+               OpFunctionEnd

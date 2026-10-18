@@ -234,7 +234,7 @@ counters and queries, and what a captured title asks for beyond the device's
 report: pipeline-statistics queries, 8-sample pipelines, multisample array
 reads, linear images of every shape). The stage fails on a crash, a NIR
 validation error (debug build), an MSL library that has an untranslated
-intrinsic, a raster sample count the device does not support, or a linear
+intrinsic or ALU op, a raster sample count the device does not support, or a linear
 texture Metal cannot make from a buffer. It also fails if a pipeline that captures transform
 feedback has no vertex function that writes it. Then it builds Zink and EGL for
 Linux on the same mock (`run/mesa/hosttest/build-gl`) and runs
@@ -251,6 +251,10 @@ tree, edits included, with `build/stages/mesa.sh .work/run/mesa hosttest`
 libraries it translated land in `.work/run/mesa/hosttest/msl/`. A new case is
 a shader in `build/mesa-host-test/shaders/` (GLSL, or SPIR-V assembly as
 `.spvasm` for what GLSL cannot say) and a pipeline in `kk-host-test.c`.
+`build/mesa-host-test/msl-compile.sh DIR...` compiles such MSL to AIR with
+Apple's Metal Developer Tools for Windows under Wine (`METAL_EXE`, `WINEPREFIX`;
+the tools are an Apple account download kept in the build area) and groups the
+failures by first error; `-h` lists its flags.
 
 Three workstation tools beside it measure an application's Vulkan against the
 driver; none runs in a build, and what they capture is game data that stays

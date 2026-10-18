@@ -11,8 +11,9 @@ limits), heaps and buffers backed by host memory (GPU address == CPU address),
 and dummy handles for everything else. The command stream is not executed:
 commits complete at once. Every MSL library the driver compiles is written to
 $KK_MOCK_MSL_DIR (if set), and one the MSL backend could not translate (it
-prints "Unknown intrinsic") is reported on stderr and counted; the process
-exits 3 at exit if there was any.
+prints "Unknown intrinsic NAME", or "ALU OP" for an ALU op, "Unknown ALU OP"
+from mesa 0042 on) is reported on stderr and counted; the process exits 3 at
+exit if there was any.
 
 The stubs are the template, so a new bridge function upstream still links:
 it gets the stub's body, with a dummy handle for a pointer return.
@@ -67,7 +68,7 @@ __attribute__((destructor)) static void
 kk_mock_exit(void)
 {
    if (kk_mock_bad_msl) {
-      fprintf(stderr, "kk-mock: %d MSL libraries had untranslated intrinsics\n",
+      fprintf(stderr, "kk-mock: %d MSL libraries had untranslated intrinsics or ALU ops\n",
               kk_mock_bad_msl);
       fflush(stderr);
       _exit(3);
@@ -89,6 +90,23 @@ kk_mock_new(int kind, uint64_t size)
    return o;
 }
 
+/* The next marker of untranslated NIR in src at or after p: "Unknown
+ * intrinsic NAME", or an "ALU OP" token (nir_to_msl.c's alu_to_msl default;
+ * "Unknown ALU OP" from mesa 0042 on). Neither is valid MSL. */
+static const char *
+kk_mock_untranslated(const char *src, const char *p)
+{
+   for (; *p; ++p) {
+      if (!strncmp(p, "Unknown intrinsic", 17) || !strncmp(p, "Unknown ALU ", 12))
+         return p;
+      if (!strncmp(p, "ALU ", 4) &&
+          (p == src || !(p[-1] == '_' || (p[-1] >= '0' && p[-1] <= '9') ||
+                         ((p[-1] | 0x20) >= 'a' && (p[-1] | 0x20) <= 'z'))))
+         return p;
+   }
+   return NULL;
+}
+
 void
 kk_mock_record_msl(const char *src)
 {
@@ -103,12 +121,14 @@ kk_mock_record_msl(const char *src)
          fclose(f);
       }
    }
-   if (strstr(src, "Unknown intrinsic")) {
+   const char *m = kk_mock_untranslated(src, src);
+   if (m) {
       kk_mock_bad_msl++;
-      fprintf(stderr, "kk-mock: MSL library %04u has an untranslated intrinsic:\n", n);
-      for (const char *l = src; (l = strstr(l, "Unknown intrinsic")); l++) {
-         const char *e = strchr(l, '\n');
-         fprintf(stderr, "  %.*s\n", (int)(e ? e - l : 80), l);
+      fprintf(stderr, "kk-mock: MSL library %04u has untranslated NIR:\n", n);
+      while (m) {
+         const char *e = strchr(m, '\n');
+         fprintf(stderr, "  %.*s\n", (int)(e ? e - m : 80), m);
+         m = e ? kk_mock_untranslated(src, e) : NULL;
       }
    }
 }

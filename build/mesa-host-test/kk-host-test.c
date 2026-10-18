@@ -1120,6 +1120,22 @@ main(int argc, char **argv)
          }
       }
 
+      /* An fcanonicalize kept by an FP32 flush-to-zero execution mode
+       * (shaders/texel-ftz.comp.spvasm), in the same layout: the pipeline
+       * builds and the MSL has no untranslated ALU op. */
+      {
+         int ftz_before = msl_count();
+         VkComputePipelineCreateInfo fci = cpci;
+         fci.stage.module = load_module("texel-ftz.comp");
+         VkPipeline fp;
+         CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &fci, NULL, &fp));
+         if (ftz_before >= 0 && msl_contains(ftz_before, msl_count(), "ALU ")) {
+            fprintf(stderr, "texel-ftz: an untranslated ALU op in the MSL\n");
+            return 1;
+         }
+         printf("ok texel-ftz\n");
+      }
+
       VkCommandBufferAllocateInfo cbai = {
          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
          .commandPool = pool,
