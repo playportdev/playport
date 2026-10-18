@@ -89,3 +89,33 @@ rebuilt 10 edges; only `libcef.dll` changed: `b8a810eb…` →
 `b22e4e188bc3e5c3bc365a4dae542ecb7be06734e230eb2bcd961153a36c9678`. The replay check reproduces the
 25 touched files (125 patches, 430 files, no mismatch). Per the owner, no desktop Proton run was
 made for this change.
+
+## The phone
+
+IPA `0f8b3ff5e96e461cfdb618bc0d6f394207af7c2e871def80e61e61766595420c` (`./pp build` exit 0, 87
+checks; its `libcef.dll` is `b22e4e18…`), one `pp phone lock` session on battery (18 %, not
+charging; the owner said go on).
+
+- **Hollow Knight `20261018T083148`:** first frame +9.03 s; the stop screenshot shows the title
+  menu (Start Game, Options, Achievements, Extras, Quit Game) with the touch controls.
+- **Open `20261018T083301`:** no first window. The run ended at its 600 s bound
+  (`no stop condition within --wait`); every screenshot (45, 60, 90, 150, 240 s) is black. The
+  setting was set and cleared (`set_rc=0`, `clear_rc=0`).
+
+Social Club never started, so the change was not exercised. The launcher hung earlier:
+
+- As in `20261018T075924`, the first Launcher.exe's exit faulted in `libarm64ecfex.dll+0x1d46c`
+  (`CompileBlock`, null+0x48; host log lines 13229–14618) and so did RockstarErrorHandler's
+  (14749–15867). Neither reached `exit_process`.
+- The second Launcher.exe's main thread (00a0) stopped after `vkd3d_instance_init`, during the
+  launcher's own D3D12 query (its `launcher.log` never opened). From 60 s to the end it waits
+  on `0x10b528d78` (`[waiters] tid=00a0 … age=606s`). That address is 0x50 into the first
+  Launcher's FEX code tracker (`tracker=0x10b528d28`, thread 0048), not its own
+  (`0x114040d28`): it waits on the dead process's FEX state, which the aborted thread
+  presumably left locked.
+- The pool was not the limit: head 262 MiB, tail 113 MiB, no exhaustion; the band peaked at
+  2,062 MB.
+
+Two Opens in a row now hit this exit fault, and no launcher Open before 2026-10-18 did. Without a
+working Open, whether the late children are gone and whether Tahoma brings the page's text
+(PLA-385) are both untested. The fault is FEX's; FEX is the owner's call.
