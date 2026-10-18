@@ -83,5 +83,22 @@ The probe was a scratch tool under `.work`. Checked against DSP0134 3.6.0:
 Checks: `pp test --quick` (655 Python tests, host C suites), `pp names`,
 `pp secrets` clean. `pp build`: 89/89 IPA checks, IPA
 `c0ff4235d29369408b18ae269b0b32e28c762f2cc82804a75b6807bc547fdf5b`. The record is
-`app/artifacts.tsv` (`libntdll_unix.a`). The phone result follows once the single
-diagnostic round has run.
+`app/artifacts.tsv` (`libntdll_unix.a`). See the phone result below.
+
+## Phone result: SMBIOS read conforms, the fault remains
+
+The round ran in one lock session on IPA `c0ff4235` (HEAD `8f045f8`). The phone
+was on home Wi-Fi and added to netmuxd by its LAN address for this session only.
+
+- Hollow Knight (`20261018T190701`): first frame at +9.39 s.
+- RDR2 Steam Play (`20261018T190814`): Vulkan, first window at +28.02 s.
+  - The launcher thread made two RSMB queries:
+    - a size probe, which got `STATUS_BUFFER_TOO_SMALL` and a required size;
+    - a full read, which got status 0. The table walked validly: 13 structures, 6 of them type 44, and all 6 have Block Length = Length − 8.
+  - The same thread then logged `[generated-fault] producer=INTOp … trap=13 error=0x0`, followed by an unhandled `c0000096`, as before.
+  - Screenshots after the fault show PlayRDR2's "Unable to launch game" dialog.
+  - The pool had head 516 MiB, tail 369 MiB and 12 MiB of room, with no exhaustion or refusal.
+
+Conclusion: the launcher reads a conforming, complete SMBIOS table and still
+reaches the generated #GP. The type 44 Block Length was not the cause. Patches 0040 and 0041 stay as
+conformance fixes, and 0042 as bounded telemetry. This closes the firmware seam of PLA-401.
