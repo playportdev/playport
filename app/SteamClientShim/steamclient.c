@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include "../Sources/WineHost/include/steam_client_protocol.h"
 #include "steamclient_slots.h"
+#include "steamclient_trace.h"
 
 void *memset(void *d, int c, size_t n)
 {
@@ -251,6 +252,8 @@ typedef struct iface {
     const char *hidden;             /* '1': the slot returns a class through a hidden pointer */
     unsigned slots;
     unsigned char called[MAX_SLOTS]; /* each trampoline logs its first call */
+    void *targets[MAX_SLOTS];        /* traced: the served method a slot's wrapper calls */
+    char kinds[MAX_SLOTS];           /* traced: how its result is shown (steamclient_trace.h) */
 } iface;
 
 static void log_missing(iface *self, unsigned slot)
@@ -262,6 +265,132 @@ static void log_missing(iface *self, unsigned slot)
         ": not served, answers 0");
 }
 
+/* --- the dev app's per-call trace (steamclient_trace.h): only when HELLO's `trace` is 1 */
+
+#define MAX_STATS 192
+static struct tstat {
+    const char *iface, *method;
+    unsigned slot, calls, since, changes;
+    uint64_t last;
+} stats[MAX_STATS];
+static int nstats;
+static unsigned trace_lines;
+static ULONGLONG last_summary;
+
+/* The value a result is compared by for "changed": what its line would show. */
+static uint64_t shown_value(char kind, uint64_t r, const void *hidden)
+{
+    switch (kind) {
+    case 'b': return r & 0xff;
+    case 'i': case 'u': return (uint32_t)r;
+    case 'q': return r;
+    case 'h': return hidden && *(const uint64_t *)hidden ? 1 : 0;
+    case 'v': return 0;
+    default: return r ? 1 : 0;   /* p s S: null or not */
+    }
+}
+
+static struct tstat *stat_of(const char *ifc, const char *method, unsigned slot)
+{
+    for (int i = 0; i < nstats; i++)
+        if (stats[i].iface == ifc && stats[i].slot == slot) return &stats[i];
+    if (nstats >= MAX_STATS) return NULL;
+    stats[nstats].iface = ifc;
+    stats[nstats].method = method;
+    stats[nstats].slot = slot;
+    return &stats[nstats++];
+}
+
+static void trace_prefix(pp_tr_line *l, ULONGLONG now)
+{
+    pp_tr_reset(l);
+    pp_tr_str(l, "trace +");
+    pp_tr_u64(l, now - started);
+    pp_tr_str(l, "ms ");
+}
+
+/* Under the lock: each method's calls since the last summary, in as many lines as it takes. */
+static void trace_summary(ULONGLONG now)
+{
+    pp_tr_line l;
+    char n[24];
+    int any = 0;
+    if (now - last_summary < PP_TR_SUMMARY_MS) return;
+    last_summary = now;
+    trace_prefix(&l, now);
+    pp_tr_str(&l, "summary");
+    for (int i = 0; i < nstats; i++) {
+        if (!stats[i].since) continue;
+        if (l.n > PP_SC_LOG_MAX - 72) {
+            if (trace_lines < PP_TR_MAX_LINES) { trace_lines++; say(l.text, NULL, NULL, NULL, NULL, NULL); }
+            trace_prefix(&l, now);
+            pp_tr_str(&l, "summary+");
+        }
+        pp_tr_str(&l, " ");
+        pp_tr_str(&l, stats[i].iface);
+        pp_tr_str(&l, ".");
+        if (stats[i].method) pp_tr_str(&l, stats[i].method);
+        else { pp_tr_str(&l, "slot"); pp_tr_str(&l, num(n, stats[i].slot)); }
+        pp_tr_str(&l, "x");
+        pp_tr_u64(&l, stats[i].since);
+        stats[i].since = 0;
+        any = 1;
+    }
+    if (any && trace_lines < PP_TR_MAX_LINES) { trace_lines++; say(l.text, NULL, NULL, NULL, NULL, NULL); }
+}
+
+/* One traced call. `force` makes it a line whatever the counts say (a callback handed out). */
+static void trace_line(const char *ifc, const char *method, unsigned slot, char kind, uint64_t r, const void *hidden,
+                       uint64_t a1, uint64_t a2, uint64_t a4, const char *extra, int force)
+{
+    struct tstat *t;
+    pp_tr_line l;
+    uint64_t v = shown_value(kind, r, hidden);
+    ULONGLONG now;
+    int changed;
+    if (!snapshot.trace) return;
+    AcquireSRWLockExclusive(&lock);
+    now = GetTickCount64();
+    t = stat_of(ifc, method, slot);
+    if (t) {
+        t->calls++;
+        t->since++;
+        changed = t->calls > 1 && v != t->last;
+        t->last = v;
+        if (force || pp_tr_should_log(t->calls, changed, t->changes, trace_lines)) {
+            if (t->calls > PP_TR_FIRST && !force) t->changes++;
+            if (trace_lines < PP_TR_MAX_LINES) {
+                trace_prefix(&l, now);
+                pp_tr_str(&l, "t");
+                pp_tr_hex(&l, GetCurrentThreadId());
+                pp_tr_str(&l, " ");
+                pp_tr_str(&l, ifc);
+                pp_tr_str(&l, " ");
+                if (method) pp_tr_str(&l, method);
+                else { pp_tr_str(&l, "slot "); pp_tr_u64(&l, slot); }
+                pp_tr_str(&l, "(");
+                if (method) pp_tr_args(&l, method, a1, a2, a4);
+                pp_tr_str(&l, ") -> ");
+                pp_tr_result(&l, kind, r, hidden);
+                if (extra) pp_tr_str(&l, extra);
+                pp_tr_str(&l, " #");
+                pp_tr_u64(&l, t->calls);
+                trace_lines++;
+                say(l.text, NULL, NULL, NULL, NULL, NULL);
+            }
+        }
+    }
+    trace_summary(now);
+    ReleaseSRWLockExclusive(&lock);
+}
+
+static void trace_slot(iface *self, unsigned slot, char kind, uint64_t r, const void *hidden,
+                       uint64_t a1, uint64_t a2, uint64_t a4, const char *extra)
+{
+    const char *method = self->names && slot < self->slots ? self->names[slot] : NULL;
+    trace_line(self->name, method, slot, kind, r, hidden, a1, a2, a4, extra, 0);
+}
+
 /* A trampoline per slot number: the object tells the interface. A slot that returns a
  * class gets its hidden return pointer (after this) zeroed (8 bytes: CSteamID, CGameID) back. */
 #define TRAMPOLINE(n) \
@@ -270,7 +399,12 @@ static void log_missing(iface *self, unsigned slot)
         AcquireSRWLockExclusive(&lock); \
         log_missing(self, n); \
         ReleaseSRWLockExclusive(&lock); \
-        if (self->hidden && n < self->slots && self->hidden[n] == '1' && ret) { *ret = 0; return (uint64_t)ret; } \
+        if (self->hidden && n < self->slots && self->hidden[n] == '1' && ret) { \
+            *ret = 0; \
+            trace_slot(self, n, 'h', (uint64_t)ret, ret, 0, 0, 0, " (not served)"); \
+            return (uint64_t)ret; \
+        } \
+        trace_slot(self, n, 'u', 0, NULL, 0, 0, 0, " (not served)"); \
         return 0; \
     }
 #define T10(b) TRAMPOLINE(b##0) TRAMPOLINE(b##1) TRAMPOLINE(b##2) TRAMPOLINE(b##3) TRAMPOLINE(b##4) \
@@ -282,6 +416,29 @@ TRAMPOLINE(8) TRAMPOLINE(9) T10(1) T10(2) T10(3) T10(4) T10(5) T10(6) T10(7) T10
 static void *const trampolines[MAX_SLOTS] = {
     (void *)tramp_0, (void *)tramp_1, (void *)tramp_2, (void *)tramp_3, (void *)tramp_4, (void *)tramp_5, (void *)tramp_6,
     (void *)tramp_7, (void *)tramp_8, (void *)tramp_9, R10(1), R10(2), R10(3), R10(4), R10(5), R10(6), R10(7), R10(8), R10(9),
+};
+
+/* Traced, a served slot's vtable entry is its wrapper, which calls the method with every
+ * argument register and the first stack slots passed on as they came (no served method takes
+ * a float), then traces the result. Unread extra arguments are harmless to the method. */
+typedef uint64_t (*forward_fn)(iface *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+#define WRAP(n) \
+    static uint64_t wrap_##n(iface *self, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, \
+                             uint64_t a6, uint64_t a7) \
+    { \
+        uint64_t r = ((forward_fn)self->targets[n])(self, a1, a2, a3, a4, a5, a6, a7); \
+        trace_slot(self, n, self->kinds[n], r, (const void *)(uintptr_t)a1, a1, a2, a4, NULL); \
+        return r; \
+    }
+#define W10(b) WRAP(b##0) WRAP(b##1) WRAP(b##2) WRAP(b##3) WRAP(b##4) WRAP(b##5) WRAP(b##6) WRAP(b##7) \
+               WRAP(b##8) WRAP(b##9)
+WRAP(0) WRAP(1) WRAP(2) WRAP(3) WRAP(4) WRAP(5) WRAP(6) WRAP(7) WRAP(8) WRAP(9) W10(1) W10(2) W10(3) W10(4) W10(5)
+W10(6) W10(7) W10(8) W10(9)
+#define V10(b) (void *)wrap_##b##0, (void *)wrap_##b##1, (void *)wrap_##b##2, (void *)wrap_##b##3, (void *)wrap_##b##4, \
+               (void *)wrap_##b##5, (void *)wrap_##b##6, (void *)wrap_##b##7, (void *)wrap_##b##8, (void *)wrap_##b##9
+static void *const wrappers[MAX_SLOTS] = {
+    (void *)wrap_0, (void *)wrap_1, (void *)wrap_2, (void *)wrap_3, (void *)wrap_4, (void *)wrap_5, (void *)wrap_6,
+    (void *)wrap_7, (void *)wrap_8, (void *)wrap_9, V10(1), V10(2), V10(3), V10(4), V10(5), V10(6), V10(7), V10(8), V10(9),
 };
 
 /* --- implemented methods (MSVC x64: this in RCX, a hidden return pointer next) */
@@ -562,7 +719,7 @@ static const struct { const char *family, *method; void *fn; } served[] = {
 /* Every interface of the slot table, its vtable filled at the first CreateInterface. */
 #define DECLARE(n, v) static void *vt_##n[PP_SLOTS_##n];
 PP_SLOT_INTERFACES(DECLARE)
-#define OBJECT(n, v) { vt_##n, #n, v, pp_names_##n, pp_hidden_##n, PP_SLOTS_##n, { 0 } },
+#define OBJECT(n, v) { vt_##n, #n, v, pp_names_##n, pp_hidden_##n, PP_SLOTS_##n, { 0 }, { 0 }, { 0 } },
 static iface objects[] = { PP_SLOT_INTERFACES(OBJECT) };
 #define NOBJECTS (sizeof(objects) / sizeof(*objects))
 
@@ -582,6 +739,11 @@ static void fill(iface *o)
             vt[i] = same(m, "GetISteamUtils") ? (void *)client_get2 : (void *)client_get3;
         for (size_t k = 0; k < sizeof(served) / sizeof(*served); k++)
             if (starts(o->name, served[k].family) && same(m, served[k].method)) vt[i] = served[k].fn;
+        if (snapshot.trace && vt[i] != trampolines[i]) {
+            o->targets[i] = vt[i];
+            o->kinds[i] = pp_tr_kind_of(m);
+            vt[i] = wrappers[i];
+        }
     }
 }
 
@@ -645,6 +807,12 @@ __declspec(dllexport) uint8_t Steam_BGetCallback(int32_t pipe, callback_msg *msg
     AcquireSRWLockExclusive(&lock);
     got = next_callback(msg);
     ReleaseSRWLockExclusive(&lock);
+    if (snapshot.trace) {
+        pp_tr_line cb;
+        pp_tr_reset(&cb);
+        if (got) { pp_tr_str(&cb, " cb="); pp_tr_i64(&cb, msg->callback); }
+        trace_line("export", "Steam_BGetCallback", 0, 'b', (uint64_t)got, NULL, 0, 0, 0, cb.text, got);
+    }
     return (uint8_t)got;
 }
 
@@ -666,6 +834,7 @@ __declspec(dllexport) uint8_t Steam_GetAPICallResult(int32_t pipe, uint64_t call
     AcquireSRWLockExclusive(&lock);
     r = (uint8_t)take_result(call, buf, size, expected, failed);
     ReleaseSRWLockExclusive(&lock);
+    trace_line("export", "GetAPICallResult", 1, 'b', r, NULL, call, 0, (uint64_t)(uint32_t)expected, NULL, r);
     return r;
 }
 

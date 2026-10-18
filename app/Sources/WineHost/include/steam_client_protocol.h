@@ -24,7 +24,7 @@
 #include <stdint.h>
 
 #define PP_SC_MAGIC 0x43535050u /* "PPSC" */
-#define PP_SC_PROTOCOL 1u
+#define PP_SC_PROTOCOL 2u   /* 2: HELLO carries `trace` */
 #define PP_SC_PERSONA_MAX 128
 #define PP_SC_LANGUAGE_MAX 32
 #define PP_SC_IDENTITY_MAX 256
@@ -69,6 +69,8 @@ typedef struct {
     uint32_t logged_on;  /* out: 1 when the host's session is logged on for the play */
     uint32_t owns_app;   /* out: 1 when the account owns the launched app */
     uint32_t tickets;    /* out: 1 when auth tickets are armed */
+    uint32_t trace;      /* out: 1 when a dev app wants every call traced (steamclient_trace.h) */
+    uint32_t reserved;   /* 0: keeps the strings at the same offsets for x86-64 and i386 */
     char persona[PP_SC_PERSONA_MAX];    /* out: NUL-terminated UTF-8 */
     char language[PP_SC_LANGUAGE_MAX];  /* out: a Steam API language code, NUL-terminated */
 } pp_sc_hello;

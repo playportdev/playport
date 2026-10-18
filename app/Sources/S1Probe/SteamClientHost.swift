@@ -77,6 +77,10 @@ enum SteamClientHost {
         h.pointee.logged_on = loggedOn ? 1 : 0
         h.pointee.owns_app = 1   // a Play from the Steam library is of an app the account owns
         h.pointee.tickets = loggedOn ? 1 : 0
+        #if !PLAYPORT_RELEASE
+        // A dev app has the shim trace every call (steamclient_trace.h: no secrets, bounded); a release app never does.
+        h.pointee.trace = 1
+        #endif
         SteamClientHost.copy(p.personaName ?? "", into: &h.pointee.persona)
         SteamClientHost.copy(p.language, into: &h.pointee.language)
         SteamClientHost.log("client connected (protocol \(PP_SC_PROTOCOL)) for app \(p.appID): "

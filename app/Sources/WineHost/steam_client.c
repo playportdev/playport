@@ -34,6 +34,8 @@ static unsigned sc_hello(void *args)
     /* Whatever the provider wrote, the strings end inside their fields. */
     h->persona[PP_SC_PERSONA_MAX - 1] = 0;
     h->language[PP_SC_LANGUAGE_MAX - 1] = 0;
+    h->trace = h->trace ? 1 : 0;
+    h->reserved = 0;
     h->magic = PP_SC_MAGIC;
     h->size = sizeof(*h);
     h->version = PP_SC_PROTOCOL;

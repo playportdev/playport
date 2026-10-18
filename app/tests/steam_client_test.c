@@ -70,7 +70,8 @@ static void fresh_call(pp_sc_call *c, unsigned method)
 int main(void)
 {
     /* One layout for x86-64 and i386: fixed sizes, no pointers, the SteamID 8-aligned. */
-    CHECK(sizeof(pp_sc_hello) == 200);
+    CHECK(sizeof(pp_sc_hello) == 208);
+    CHECK(offsetof(pp_sc_hello, persona) == 48);
     CHECK(offsetof(pp_sc_hello, steam_id) == 16);
     CHECK(sizeof(pp_sc_call) == 2840);
     CHECK(sizeof(pp_sc_poll) == 24);
