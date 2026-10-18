@@ -26,6 +26,7 @@
 #   P6-gst    winegstreamer's unix side (wine pin + patches/wine-port + patches/wine-unix) prelinked with the static plugin set from the pins.lock gstreamer iOS release (build/stages/gstreamer.sh); one object, one exported symbol
 #   P8-steamapi gbe_fork (LGPL-3.0) at the gbe pin + patches/gbe: its regular steam_api for x86-64 and i386 with its static dependencies (build/stages/steamapi.sh, llvm-mingw 20260922); native DLLs under Runtime/steamapi/, which the app copies into a game's folder in place of the game's own (SteamClientKit SteamAPISwap)
 #   P9-session app/SessionRoot/playport-session.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the one Wine main process of an app run, which starts every title as its child (decision 0027); in arm64ec-windows so the prefix's system32 has it
+#   P9-steamclient app/SteamClientShim/steamclient.c (Playport's own; its generated slot table from the Steamworks SDK headers pinned as gbe's sdk/) compiled by build/stages/steamclient.sh (llvm-mingw 20260922) as a freestanding x86-64 DLL: Playport's Steam client for a game's genuine steam_api (decision 0115), which the app copies to the prefix's C:\Program Files (x86)\Steam\ for a play in client mode
 #   P9-url-opener app/UrlOpener/playport-url-opener.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the prefix's http and https handler, which hands a URL a game opens to the host app (decision 0064); in arm64ec-windows so the prefix's system32 has it
 #   P10-idevice idevice (MIT) at the idevice pin, its C FFI with the features the app's restart uses, built for aarch64-apple-ios with the pins.lock Rust (build/stages/idevice.sh) and prelinked into one object that exports four calls (app/Sources/Relaunch); its crates are in the run's idevice/crates.tsv
 #   P7-reg    app/registry/{system,user}.reg (committed): app/tools/prefix-registry.py applies the WINE_REGISTRY scripts of the staged arm64ec-windows DLLs as wineboot's register_fake_dll would; wine_host.c appends the sections a prefix lacks before the wineserver starts
@@ -2373,8 +2374,9 @@ resource	Runtime/vulkan/i386-windows/d3d11.dll	8306688	8d4a47890c2afadba9a8a13d3
 resource	Runtime/vulkan/i386-windows/dxgi.dll	5607424	96427bc77b2811d94b201aa5cf7b08287dbecb61b13c61c4437ee1e92efa2ae5	vulkan-pe	i386-windows/dxgi.dll	P6-vulkan-pe
 resource	Runtime/steamapi/x86_64-windows/steam_api64.dll	8353280	f0db32854540fbfb0096e212436c03c7cee50f2671ce9bd14eab6da88484e713	steamapi	x86_64-windows/steam_api64.dll	P8-steamapi
 resource	Runtime/steamapi/i386-windows/steam_api.dll	8667648	0d6b96b7689a3286c891dd5b072f9f4b7ca88bf23ed84c2aba9b2b81106f7985	steamapi	i386-windows/steam_api.dll	P8-steamapi
-resource	Runtime/arm64ec-windows/playport-session.exe	25600	7bcc8155e33d37949e54e314d37a5fd44b898bd54ab03e313c4b2bb7eed8cb35	session	playport-session.exe	P9-session
+resource	Runtime/arm64ec-windows/playport-session.exe	27648	88e358065469a4d52163d6accca711ffd9dc5efcab913dffe815d91796474d87	session	playport-session.exe	P9-session
 resource	Runtime/arm64ec-windows/playport-url-opener.exe	5120	a4a9e67cec4f8df8e902e2a0714dd7c4828a4d3e0cabb65ef2fb6e214f0a6e4d	session	playport-url-opener.exe	P9-url-opener
+resource	Runtime/steamclient/x86_64-windows/steamclient64.dll	68608	8a570de9c79971cc6b1030e530e05d8bd34a8f6628975545855c47debc668d05	steamclient	steamclient64.dll	P9-steamclient
 resource	Runtime/nls/c_1252.nls	66082	e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76	unix	wine/nls/c_1252.nls	nls
 resource	Runtime/nls/c_20127.nls	66082	951a19ce0d3c785d12ea94cb28ce5c2c096d302e35b3fb3e8b35248a006435ba	unix	wine/nls/c_20127.nls	nls
 resource	Runtime/nls/c_28591.nls	66082	aa52cf173808f65b117f0d7af574c11dde85133cccde306ccc57b5de50961b5c	unix	wine/nls/c_28591.nls	nls
@@ -5365,7 +5367,7 @@ resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86.exe	12288	
 resource	Runtime/mono/wine-mono-11.3.0/support/removeuserinstalls-x86_64.exe	14848	716081b9913e005f0e1261f2c2a9d88da970fbe579c7dfd083774b228bd71675	wine-mono	support/removeuserinstalls-x86_64.exe	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.cab	1395918	857cb2bc7001aa6b94a90560a6996f7cf9fe3ebff72ac39e73ed5d05f83b78f4	wine-mono	support/winemono-support.cab	wine-mono
 resource	Runtime/mono/wine-mono-11.3.0/support/winemono-support.msi	22528	0567d9569c9ca7f678c7ccd4a5ccffbd9dc7bdd3c632ce204afaf7068bf9c2db	wine-mono	support/winemono-support.msi	wine-mono
-link	lib/libntdll_unix.a	4724072	e54469323c4684f98daf11403ae45c28670c40838190c1f8988a4e97bdbc744a	unix	mythic/app/Madeira/libntdll_unix.a	P3
+link	lib/libntdll_unix.a	4724432	3246e51ca78eba626a87ed63811061771ce1bd6d2004f29f91550a72050bc100	unix	mythic/app/Madeira/libntdll_unix.a	P3
 link	lib/libwin32u_unix.a	4118760	ad9b5e17ba3061ed95ffee23be7e46bc6fe30a1866bacd70f5dc43d07d53912d	unix	mythic/app/Madeira/libwin32u_unix.a	P4-win32u
 link	lib/libwineserver.a	1218320	4ae866dd58919245d46ad88ad6f08a5af54620a86e1517fa9924a0f8efbaa902	unix	mythic/app/Madeira/libwineserver.a	P4-server
 link	lib/libgnutls.a	3603280	e9fb697d624bb63d1c89e8569f1a8e0e69e576175407853bf34a6279fa1673b3	unix	mythic/toolchains/gnutls-ios/lib/libgnutls.a	P4-crypto
