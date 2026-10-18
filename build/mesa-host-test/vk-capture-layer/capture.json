@@ -1,0 +1,14 @@
+{
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_PLAYPORT_capture",
+    "type": "GLOBAL",
+    "library_path": "./libpp_capture.so",
+    "api_version": "1.4.300",
+    "implementation_version": "1",
+    "description": "Playport capture layer (build/mesa-host-test/vk-capture-layer)",
+    "functions": { "vkNegotiateLoaderLayerInterfaceVersion": "ppcap_NegotiateLoaderLayerInterfaceVersion" },
+    "disable_environment": { "DISABLE_PP_CAPTURE": "1" },
+    "enable_environment": { "ENABLE_PP_CAPTURE": "1" }
+  }
+}

@@ -17,9 +17,9 @@
 # hosttest  build/mesa-host-test/run.sh: the same tree built for Linux on a mock
 #        Metal bridge, driven through the Vulkan API by kk-host-test.c (device,
 #        geometry/tessellation/polygon-mode pipelines, recorded draws), with
-#        every MSL library checked for untranslated intrinsics; then Zink and
-#        EGL on the same mock (zink-host-test.c: GL context, fixed-function
-#        and GLSL 1.20 draws, a blit). No GPU runs.
+#        every MSL library checked for untranslated intrinsics and ALU ops;
+#        then Zink and EGL on the same mock (zink-host-test.c: GL context,
+#        fixed-function and GLSL 1.20 draws, a blit). No GPU runs.
 # ios    libvulkan_kosmickrisp.dylib for arm64-apple-ios26.0 (Metal 4 needs iOS 26),
 #        against the darwin SDK's iPhoneOS26.5.sdk, with those tools; and in a
 #        second build directory (ROOT/ios-gl) libEGL and libgallium_dri (Zink

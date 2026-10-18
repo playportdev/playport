@@ -33,6 +33,13 @@ storage/pricing assumptions. This is separate from [backend convergence](2026-10
 - The Witcher 3 DX12 candidate is still blocked by AVX (PLA-43; see the candidates
   below).
 
+**Update 2026-10-17 (RDR2 on Vulkan, [PLA-386](https://linear.app/playportdev/issue/PLA-386)):**
+RDR2's own Vulkan renderer was measured on the workstation
+([evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md)). It needs none of the 12_1/12_2
+features below, but it hits three KosmicKrisp defects that the host mock shows. They are
+chunks V0–V4 in [RDR2 on Vulkan](#rdr2-on-vulkan-chunks-v0v4), run before chunk 0. See
+[Runner state](#runner-state) for what is running.
+
 **Date:** 2026-10-05. **Kind:** research and plan.
 **Status:** proposed, not executed. Research, upstream status, game requirements
 and estimates below are the original snapshot, not newly verified facts. Before
@@ -268,6 +275,223 @@ not establish compatibility for games that use different combinations of feature
   and MultiVersus `-dx12` on Vulkan to the title screen, on the committed IPA.
 - **Mac:** at the first shader bug that phone logs cannot locate, stop and ask the owner
   to borrow one (0031: attach and replay only).
+
+## RDR2 on Vulkan (chunks V0–V4)
+
+**Why here:** this is the KosmicKrisp feature plan, and RDR2's Vulkan route (RDR2 plan D6)
+runs on KosmicKrisp with no D3D layer. The measurement
+([evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md)) found:
+
+- **Covered already:** every extension RDR2 enables except `VK_AMD_memory_overallocation_behavior`
+  (it goes on without it); every SPIR-V capability its 13,233 modules use; every format and
+  usage it creates; dual-source blending, depth bounds, depth clamp, clip and cull distance,
+  geometry and tessellation through `poly`; one queue and one memory type. Under a
+  KosmicKrisp profile on RADV it reached its landing page.
+- **Not needed from this plan:** mesh, ray tracing, ROV, VRS, sparse, conservative raster,
+  int64/float64, 16-bit types, subgroups, barycentrics. Chunks 0–11 below stay for D3D12
+  titles; RDR2's DX12 fallback through vkd3d-proton would need only 12_0, which already works
+  (H3: it played at 11_1 under the profile).
+- **Missing (V1–V4):** what the game reaches and the host can test; V4 needed no driver change.
+
+The chunks are host-only: the side copy has no phone. Each ends with commits, the mesa host
+test (`build/stages/mesa.sh` `host hosttest`), the iOS build and import check of the patched
+KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The phone checks
+(Hollow Knight on Vulkan, then RDR2) are owed and listed per chunk.
+
+### V0. A replay harness for captured pipelines
+
+- **Done** (2026-10-17, PLA-386; host only). `build/mesa-host-test/run-replay.sh FOZ...`
+  replays Fossilize databases on the host mock (after `hosttest`; `KK_MOCK_ICD`,
+  `FOSSILIZE_REPLAY`), replays each crashed pipeline alone for its message, prints the
+  crashes grouped by message, exits 1 on any. The capture/profile layer
+  (`vk-capture-layer/`, profile from a device report) and the report program (`devinfo.c`)
+  are beside it; [BUILDING.md](../BUILDING.md#kosmickrisp) has how to build and run them.
+  Game data stays in the build area.
+- **Result:** the RDR2 database gives one group, 151 graphics pipelines at
+  `kk_nir_lower_descriptors.c:534: lower_tex: Assertion '!sampler' failed` (153 in the
+  first replay: Fossilize skips pipelines that share a module with a crashed one, so the
+  count moves between runs).
+
+### V1. Sampling an undefined image
+
+- **Done** (2026-10-17, PLA-386; host only, **not checked on the phone**). V0 is `1fc4605`.
+  The game samples an OpUndef image with a defined sampler. `patches/mesa` 0037
+  (`upstream-bug`) drops such a texture instruction (undefined result) first in
+  `kk_preprocess_nir`, before the runtime's descriptor heap lowering turns the undefined
+  image into `texture_heap_offset` 0 and `lower_tex` aborts on the sampler beside it.
+  Mesa `main` (335d5698) has no fix. Fixing only the runtime pass was tried and moves the
+  crash to `nir_vk_lower_ycbcr_tex`; the runtime is left as it is.
+- `kk-host-test` builds `shaders/undef-image.frag.spvasm` (hand-written SPIR-V); it aborted
+  before the patch.
+- **Result:** the RDR2 replay has no crash (graphics 1,923 of 1,940 built, compute 731 of
+  788; the rest are modules Fossilize refuses as unsupported, below).
+- **Follow-ups (not fixed here):** 73 modules use `ImageMSArray`, which Vulkan gates on
+  `shaderStorageImageMultisample` and KosmicKrisp does not report, so Fossilize skips 17
+  graphics and 57 compute pipelines; and a storage image load from an undefined image
+  crashes in `nir_shader_gather_info` (seen on a test shader, not in the corpus).
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+
+### V2. Pipeline-statistics query pools
+
+- **Done** (2026-10-17, PLA-386; host only, **not checked on the phone**). RDR2 creates a pool
+  of 8 pipeline-statistics queries (all 11 counters) without enabling
+  `pipelineStatisticsQuery`; `kk_reports_per_query` reached `UNREACHABLE` at pool creation.
+  `patches/mesa` 0038 (`feature`, tolerance of the application's invalid usage) gives the
+  pool one report per enabled counter and records nothing between begin and end: results
+  are the reset's zeros, the end sets availability, and host results and
+  `vkCmdCopyQueryPoolResults` take the existing paths. `pipelineStatisticsQuery` stays
+  unreported (Metal has no statistics counters).
+- `kk-host-test` creates, resets (host and command), begins/ends around draws, copies
+  (64-bit with availability and wait, 32-bit partial) and reads such a pool (11 values per
+  query, nothing past them); it aborted before the patch.
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10.
+
+### V3. Pipelines that ask for more samples than reported
+
+- **Done** (2026-10-17, PLA-386; host only, **not checked on the phone**). RDR2 builds 96
+  pipelines with `rasterizationSamples = 8`; KosmicKrisp reports 1, 2 and 4 and passed 8 to
+  Metal as the pipeline's raster sample count (and as an attachment-less pass's default).
+  The mock now aborts on a raster sample count the device does not support; the replay then
+  crashed on 51 pipelines (one group; module skipping hides the rest).
+- **Choice:** `patches/mesa` 0039 (`feature`) clamps the count Metal sees to the highest
+  supported one not above the request. Failing the build instead would hand the game an
+  error at load for a pipeline it can only draw into its 4-sample images; a valid
+  application never asks for an unsupported count, so it sees no change. No reported limit
+  changes.
+- `kk-host-test` builds an 8-sample pipeline and draws it into a 4-sample image and without
+  attachments; it aborted in the mock before the patch. Replay: 0 crashes again.
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10. What Metal itself does with an
+  unsupported count was not seen.
+
+### V4. Sampled multisample arrays without `shaderStorageImageMultisample`
+
+- **Done, no driver change** (2026-10-17, PLA-386; host only, **not checked on the phone**).
+  73 RDR2 modules declare `ImageMSArray`; Vulkan gates it on
+  `shaderStorageImageMultisample`, which KosmicKrisp does not report, so Fossilize skipped 17
+  graphics and 57 compute pipelines. The game itself creates them: KosmicKrisp does not
+  check module capabilities.
+- **What the modules do:** only 11 have a multisample array image at all, and every
+  multisample image in the 73 is sampled (`Sampled 1`), read by `OpImageFetch` with a
+  sample index and sized by `OpImageQuerySize`; SPIR-V needs the capability only for
+  storage. spirv_to_nir implements it and only warns that it is unsupported.
+- **Forced replay:** a scratch layer (build area, not committed) reported the feature to
+  Fossilize and stripped it at device creation: every pipeline built (graphics 1,940 of
+  1,940, compute 788 of 788), 0 crashes, no untranslated MSL; 14 MSL libraries read a
+  `texture2d_ms_array` with `.read(coord, layer, sample)`.
+- `kk-host-test` builds and draws `shaders/ms-array.frag.spvasm` (hand-written: declares the
+  capability, fetches two samples of a 4-sample 2-layer image through a 2D array view) and
+  checks the MSL has `texture2d_ms_array`. It passes with no patch;
+  `shaderStorageImageMultisample` stays unreported.
+- Follow-up found in V1: [PLA-387](https://linear.app/playportdev/issue/PLA-387)
+  (storage load from an undefined image), fixed in H6b (mesa 0040).
+- **Phone, owed:** Hollow Knight on Vulkan first frame+10; that Apple's compiler takes the
+  `texture2d_ms_array` reads, and that the A19 makes a 2D multisample array texture, are not
+  checked.
+
+### Not in V0–V4
+
+- The VRAM message box ("does not meet the minimum requirements for video memory"): found in
+  H2 ([evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#video-memory-warning-2026-10-17-h2))
+  to come from `RDR2.exe` when its own Vulkan instance sees a `DEVICE_LOCAL` heap of 1,927 MiB
+  or less. The profile runs showed it because the capture layer gave that instance a 256 MiB
+  heap (RADV's RDR2 driconf). KosmicKrisp's 8 GiB heap is above the threshold (inference: no box
+  on the phone), so PLA-269 needs nothing for it.
+- The phone run of RDR2: after PLA-295 (launcher) and PLA-300 (first native Vulkan title).
+- What the host cannot show: Apple's MSL compiler, `poly` at run time, depth bounds on the A19.
+- **Linear-tiled images KosmicKrisp does not support** (found in H1,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#in-story-mode-2026-10-17-h1)): the game
+  never queries image format properties and creates linear images with color-attachment usage,
+  3D, 2–8 layers (Story mode) or 7 mip levels; KosmicKrisp reports none of these, and
+  `vkCreateImage` makes a buffer-backed Metal texture anyway. H1b, at the phone's heap: the same
+  rows in Story mode, and the Graphics settings page creates about 4,300 more, never bound to
+  memory. H7 (mesa 0041, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-images-h7)):
+  the arrays, 3D images and mip chain get a texture of Metal's own layout. The 2D ones, colour
+  attachments included, stay buffer-backed, which Metal allows. Whether the game accesses those
+  three groups through a mapping is not measured; if it does, it sees other data.
+
+## Runner state
+
+- **Branch:** `dev/pla-386-rdr2-vulkan-kk`, off `main` at f7ac25f, built in the side copy
+  `$PLAYPORT_BUILD/worktrees/pla-386-rdr2-vulkan` (owner-authorized 2026-10-17, with its own
+  reflinked `.work/cache`, `.work/inputs` and, since 2026-10-18, `.work/run`, with build
+  directories that named main's path removed) until M1. M1 (owner, 2026-10-18): rebased onto
+  `main` at `dfc527f` without conflicts and checked out in the main checkout, which builds and
+  installs it; the side copy is detached and kept for its `.work` (reports, corpora), to be
+  removed later. Not merged, not pushed.
+- **Done:** the measurement (2026-10-17, PLA-386, evidence above); V0 (replay harness,
+  `1fc4605`); V1 (undefined image, mesa 0037, `33e2194`); V2 (pipeline-statistics pools,
+  mesa 0038, `efed211`); V3 (8-sample pipelines, mesa 0039, `f4f407b`); V4 (sampled
+  multisample arrays: host test only, no patch); H1 (Story mode captured and replayed: 1,948
+  graphics and 788 compute pipelines, 0 crashes on 0001–0039, no new patch; linear-tiled
+  images found, [above](#not-in-v0v4)); H2 (the video-memory warning: the SGA instance's heap
+  size, box at 1,927 MiB or less, not 1,928; a profile-layer artifact at 256 MiB, [above](#not-in-v0v4));
+  H1b (capture layer fixed, `73a9323`; Story mode at an 8,192 MiB heap: the game picks the same
+  `Safe` settings, no box, 1,950 graphics and 788 compute pipelines, 0 crashes on 0001–0039, no
+  new patch; the Graphics settings page adds about 21,000 unbound probe images,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#story-mode-at-the-phones-heap-2026-10-18-h1b));
+  H3 (capture layer budget by KosmicKrisp's rule, `1e86305`; RDR2 on D3D12 through Proton's
+  vkd3d-proton under the profile: feature level 11_1 and SM 6.5 there, Story mode played, no
+  linear images, 1,607 graphics and 758 compute pipelines, 0 crashes on 0001–0039 once the
+  profile's float-controls gate is bypassed, no new patch,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dx12-route-2026-10-18-h3));
+  H4 (the dev IPA with mesa 0037–0039 built in this copy at `99c60b9`: sha256 `1fb1fb9e…`,
+  `verify-ipa` 85 checks passed, 0 failed; build records not committed, since their changed rows
+  come from the copy's path, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dev-ipa-with-mesa-00370039-h4));
+  H6 (tooling: `run-replay.sh --bypass-feature-gate`, `667f8fe`, replays both corpora as the
+  scratch layers did, with no scratch layer; the profile copies float controls, subgroup sizes,
+  the driver ID and extension formats, and devinfo prints them,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#replay-and-profile-tooling-h6));
+  H6b ([PLA-387](https://linear.app/playportdev/issue/PLA-387), mesa 0040: a storage image
+  read, write or size query of an undefined image no longer crashes; host test only, replays
+  unchanged, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#host-fixes-2026-10-17-chunks-v0v4));
+  H7 ([PLA-388](https://linear.app/playportdev/issue/PLA-388), mesa 0041: a linear image Metal
+  cannot make from a buffer (array, 3D, mip chain) gets a texture of Metal's own layout. The mock
+  checks Apple's rules for buffer textures; host test, replays unchanged,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-images-h7)); H7b (PLA-388, desktop
+  runs; the capture layer logs linear-image use: with a discrete device type RDR2 makes 2 linear
+  images instead of 521 and still picks `Safe`; the CPU writes the 9 mip chains and 3 of the 3D
+  images through the mapping and the GPU writes 1 more for host reads, so 0041's fallback is
+  enough only for the arrays,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-image-use-and-the-device-type-h7b));
+  H5 and H5d ([PLA-396](https://linear.app/playportdev/issue/PLA-396), under the owner's Wine
+  decision of 2026-10-18: Apple's Metal Developer Tools for Windows 6.2 under Wine compile the
+  generated MSL at MSL 4.0, one below the phone's 4.1; the one failure, 297 DX12 libraries with an
+  untranslated `fcanonicalize` under the forced float-controls profile, is fixed by mesa 0042,
+  whose untranslated ALU ops now fail visibly and are counted by the mock; after it the host
+  test's 164, the Vulkan route's 3,891 and the DX12 route's 3,558 libraries all compile,
+  `build/mesa-host-test/msl-compile.sh`,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5));
+  H7c ([PLA-397](https://linear.app/playportdev/issue/PLA-397), under the owner's decision of
+  2026-10-18 to take whichever makes RDR2 playable at the least speed: desktop Story-mode runs
+  with a discrete and an integrated device type; with discrete RDR2 makes 1 linear image (2D,
+  transfer only) instead of 11,519, none CPU-written, with the same memory and no errors, and
+  instead copies: about 85 more transfer commands and 3 MiB more copy traffic per frame; the
+  capture layer counts memory, copies and presents (`PP_CAPTURE_MEMUSE`),
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#discrete-vs-integrated-device-type-in-story-mode-h7c));
+  H7d (PLA-386, mesa 0043: KosmicKrisp reports a discrete device type to the instance named
+  "Red Dead Redemption 2" with engine "SGA", exactly, and integrated to every other one, the
+  game's DXVK and vkd3d-proton instances included; `MESA_KK_DEBUG=integrated_device` turns it
+  off for an A/B; host test, replays unchanged,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#a-discrete-device-type-for-rdr2-h7d-mesa-0043)).
+  Host only; not checked on the phone. H8 (the dev IPA with mesa 0037–0043 built in this copy
+  at `047428f`: sha256 `f49a09d9…`, `verify-ipa` 86 checks passed, 0 failed; build records not
+  committed, the same six path-dependent rows as H4,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dev-ipa-with-mesa-00370043-h8)).
+- **Queue (owner-approved 2026-10-17, host only):** H8 done; queue empty. PLA-397 (the sync
+  path) only if discrete breaks or slows RDR2 on the phone. Then chunk 0 below (needs the
+  phone).
+- **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
+  `h4.md` (H4), `h5.md` (H5, blocked), `h5c.md` (H5), `h5d.md` (H5d), `h6.md` (H6), `h6b.md`
+  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c), `h7d.md` (H7d), `h8.md` (H8);
+  `m1-rdr2-main.md` (M1) in the main checkout's `agent-notes/rdr2-vk/reports/`.
+- **Phone gate (M1, 2026-10-18):** Hollow Knight on Vulkan (KosmicKrisp) reached first
+  frame+10 twice on main's build of 0037–0043 (`3f4f8876…`; first frame +9.18 s and +9.21 s; no
+  `[kk-device]`, `Unknown ALU` or `Unknown intrinsic`; no crash; no build record changed),
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#phone-gate-m1). Owed: RDR2 after
+  PLA-295/PLA-300.
+- **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
+  (capture runs, Fossilize database, analysis); child reports under
+  `agent-notes/rdr2-vk/reports/` of the side copy.
 
 ## Chunks
 

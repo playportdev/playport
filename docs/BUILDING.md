@@ -231,12 +231,16 @@ The `hosttest` stage, `build/mesa-host-test/run.sh`, tests the driver's CPU
 side, and Zink's over it, without a GPU. It builds the same tree for Linux, with KosmicKrisp's
 Metal stubs replaced by a mock (`make-mock-bridge.py`). The mock provides a
 device, host-memory heaps and dummy handles, and completes commits at once.
-`kk-host-test.c` then drives the driver through Vulkan: it creates a device
+`kk-host-test.c` then drives the driver through Vulkan: it checks which
+applications get a discrete device type, creates a device
 and builds and records draws with the pipelines it lists (geometry,
 tessellation into geometry, line and point fill, transform feedback with its
-counters and queries). The stage fails on a
-crash, a NIR validation error (debug build), or an MSL library that has an
-untranslated intrinsic. It also fails if a pipeline that captures transform
+counters and queries, and what a captured title asks for beyond the device's
+report: pipeline-statistics queries, 8-sample pipelines, multisample array
+reads, linear images of every shape). The stage fails on a crash, a NIR
+validation error (debug build), an MSL library that has an untranslated
+intrinsic or ALU op, a raster sample count the device does not support, or a linear
+texture Metal cannot make from a buffer. It also fails if a pipeline that captures transform
 feedback has no vertex function that writes it. Then it builds Zink and EGL for
 Linux on the same mock (`run/mesa/hosttest/build-gl`) and runs
 `zink-host-test.c`: a surfaceless EGL display reaches Zink the way the phone
@@ -250,7 +254,60 @@ The pipeline's `vulkan` stage leaves the host test out. Run it on the build's
 tree, edits included, with `build/stages/mesa.sh .work/run/mesa hosttest`
 (after a `pp build` has made `run/mesa/mesa` and `run/mesa/host`); the MSL
 libraries it translated land in `.work/run/mesa/hosttest/msl/`. A new case is
-a shader in `build/mesa-host-test/shaders/` and a pipeline in `kk-host-test.c`.
+a shader in `build/mesa-host-test/shaders/` (GLSL, or SPIR-V assembly as
+`.spvasm` for what GLSL cannot say) and a pipeline in `kk-host-test.c`.
+`build/mesa-host-test/msl-compile.sh DIR...` compiles such MSL to AIR with
+Apple's Metal Developer Tools for Windows under Wine (`METAL_EXE`, `WINEPREFIX`;
+the tools are an Apple account download kept in the build area) and groups the
+failures by first error; `-h` lists its flags.
+
+Three workstation tools beside it measure an application's Vulkan against the
+driver; none runs in a build, and what they capture is game data that stays
+in the build area:
+
+- `build/mesa-host-test/run-replay.sh FOZ...` replays a captured Fossilize
+  database on the mock (after `hosttest`; `KK_MOCK_ICD` names another ICD
+  manifest, `FOSSILIZE_REPLAY` the replayer, which Steam ships in
+  `ubuntu12_64/`), replays each pipeline that crashed alone to get its
+  message, prints the crashes grouped by message and exits 1 if there are any.
+  Logs go to `$PLAYPORT_BUILD/run/replay/NAME/`. With `--bypass-feature-gate`
+  it builds `vk-replay-gate/` (a layer) and replays under it: Fossilize then
+  takes the SPIR-V modules it refuses for a capability the mock does not
+  report but compiles anyway (ImageMSArray, float controls), while the driver
+  is created with only its own features; `NAME/gate/` lists and keeps the
+  modules that needed it. Pipelines the device cannot make (sample counts,
+  formats, required subgroup sizes) stay skipped.
+- `devinfo.c` prints a device's report: extensions, features, the driver's ID,
+  name and conformance version, limits, float-controls and subgroup
+  properties, queues, memory and the features of every format the Vulkan
+  headers name, extension formats included (`cc -o devinfo devinfo.c -lvulkan`).
+- `vk-capture-layer/` is a Linux implicit layer that logs what an application
+  creates and saves its SPIR-V (`PP_CAPTURE_OUT`). With
+  `PP_CAPTURE_PROFILE=REPORT` (devinfo's output, for example the mock's) it
+  presents the desktop device as that one: its extensions, features, format
+  features (an extension format the report lacks has none), float controls
+  and subgroup sizes, within what the desktop device has. With
+  `PP_CAPTURE_SPOOF=1` it also takes the report's name, vendor and driver ID,
+  so vkd3d-proton sees KosmicKrisp's. Its one memory heap has the report's
+  size; the desktop memory type behind it is chosen per physical device, and
+  `PP_CAPTURE_HEAP_CAP=1` caps the heap at that type's heap. Its
+  `VK_EXT_memory_budget` budget follows KosmicKrisp's rule (90% of available
+  memory plus usage, at most the heap), with that heap's usage.
+  `PP_CAPTURE_DEVICE_TYPE=discrete` (or `integrated`) overrides the profile's
+  device type. With `PP_CAPTURE_LINEAR=1` (`linear.c`) it logs, per linear
+  image, where it is bound, whether its range is mapped, its layout queries,
+  the copies, barriers (host access included), descriptors and framebuffers
+  naming it, and with `PP_CAPTURE_LINEAR_HASH=N` the content changes of the
+  3D, array and mipmapped ones that no GPU write explains. With
+  `PP_CAPTURE_MEMUSE=N` (`memuse.c`) it counts, per device, the memory
+  allocated (live and peak bytes by memory type, the bytes the application
+  maps and never maps), staging buffers, the bytes bound to optimal and
+  linear images and the copy commands with the bytes they move, in a
+  `memuse` line every N presents, and writes every present's time to
+  `present.PID.log`. Build it beside its manifest with
+  `cc -shared -fPIC -O1 -o DIR/libpp_capture.so capture.c -lpthread` and
+  `cp capture.json DIR/`, then run with `VK_ADD_IMPLICIT_LAYER_PATH=DIR
+  ENABLE_PP_CAPTURE=1`.
 
 ## Variants
 

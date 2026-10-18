@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 11:32:10 +0200
+Subject: [PATCH] kk: report a discrete device type to Red Dead Redemption 2
+
+KosmicKrisp reports an integrated GPU to every application. Red Dead
+Redemption 2's Vulkan renderer, on an integrated GPU, creates its
+images linear: about 11,500 in Story mode, among them 2D arrays, 3D
+images and mip chains that Metal cannot make from a buffer. It writes
+the mip chains and some of the 3D images through their mapping, at the
+offsets vkGetImageSubresourceLayout reports, with no GPU write; the
+texture KosmicKrisp gives such an image does not read what the mapping
+holds. On a discrete GPU, with the same memory types and heap, the
+renderer makes one linear image (2D, transfer only, which Metal makes
+from a buffer) and uploads and reads back through buffer copies
+instead, with about the same memory.
+
+Report a discrete GPU to the instance whose application name is "Red
+Dead Redemption 2" and whose engine name is "SGA", both exactly, and
+log it. The executable name is not used: on iOS it is the app that
+runs Wine. The game's process also makes DXVK and vkd3d-proton
+instances (application RDR2.exe); those keep the integrated type, as
+does every other application. KosmicKrisp has no driconf option table,
+and this follows the engine-name check it already makes for Zink.
+Nothing else in KosmicKrisp or the Vulkan runtime it uses depends on
+the device type. MESA_KK_DEBUG=integrated_device reports the integrated
+type to the game as well, to compare the two.
+
+Mesa main (9a1e58da, checked on 2026-10-18) reports an integrated GPU
+to every application.
+
+Class: feature
+Evidence: docs/evidence/2026-10-17-rdr2-vulkan-needs.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_debug.c           |  1 +
+ src/kosmickrisp/vulkan/kk_debug.h           |  3 ++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 32 ++++++++++++++++++++-
+ 3 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index ad0812ed..527c8ee0 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -16,6 +16,7 @@ const struct debug_named_value debug_flags[] = {
+    {"draws", KK_DEBUG_DRAWS},
+    {"solid", KK_DEBUG_SOLID},
+    {"os26_workarounds", KK_DEBUG_OS26_WORKAROUNDS},
++   {"integrated_device", KK_DEBUG_INTEGRATED_DEVICE},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 3d11a1dc..2ddff857 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -29,6 +29,9 @@ enum kk_debug {
+     * miscompile or memory-model problem those workarounds cover from the
+     * rest */
+    KK_DEBUG_OS26_WORKAROUNDS = 1ull << 7,
++   /* Report the integrated device type to the applications that get the
++    * discrete one (kk_get_device_type), to compare */
++   KK_DEBUG_INTEGRATED_DEVICE = 1ull << 8,
+ };
+ 
+ extern enum kk_debug kk_mesa_debug_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 0efbd147..c8e36a03 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -555,6 +555,36 @@ kk_get_device_features(
+    };
+ }
+ 
++/* Red Dead Redemption 2's Vulkan renderer (application "Red Dead Redemption
++ * 2", engine "SGA") creates about 11,500 linear images on an integrated GPU,
++ * and writes its linear mip chains and some 3D images through their mapping;
++ * Metal cannot make those shapes from a buffer, and the texture KosmicKrisp
++ * gives them instead does not read what the mapping holds. On a discrete GPU
++ * it makes one linear image (2D, transfer only) and copies through buffers
++ * instead, in the same memory. Matched by the instance's application and
++ * engine names, exactly: on iOS the executable is the app that runs Wine,
++ * and the game's process makes DXVK and vkd3d-proton instances (application
++ * RDR2.exe), which keep the integrated type. MESA_KK_DEBUG=integrated_device
++ * reports integrated to it as well, to compare.
++ */
++static VkPhysicalDeviceType
++kk_get_device_type(const struct kk_instance *instance)
++{
++   const char *app = instance->vk.app_info.app_name;
++   const char *engine = instance->vk.app_info.engine_name;
++   if (!app || strcmp(app, "Red Dead Redemption 2") || !engine ||
++       strcmp(engine, "SGA"))
++      return VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
++
++   if (KK_DEBUG(INTEGRATED_DEVICE)) {
++      fprintf(stderr, "[kk-device] %s (%s): integrated device type "
++              "(MESA_KK_DEBUG=integrated_device)\n", app, engine);
++      return VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
++   }
++   fprintf(stderr, "[kk-device] %s (%s): discrete device type\n", app, engine);
++   return VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
++}
++
+ static void
+ kk_get_device_properties(
+    const struct kk_physical_device *pdev, const struct kk_instance *instance,
+@@ -585,7 +615,7 @@ kk_get_device_properties(
+       .vendorID =
+          instance->force_vk_vendor != 0 ? instance->force_vk_vendor : 0x106b,
+       .deviceID = 100,
+-      .deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
++      .deviceType = kk_get_device_type(instance),
+ 
+       /* Vulkan 1.0 limits */
+       /* Values taken from Apple7

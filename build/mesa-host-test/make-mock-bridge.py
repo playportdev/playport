@@ -11,8 +11,9 @@ limits), heaps and buffers backed by host memory (GPU address == CPU address),
 and dummy handles for everything else. The command stream is not executed:
 commits complete at once. Every MSL library the driver compiles is written to
 $KK_MOCK_MSL_DIR (if set), and one the MSL backend could not translate (it
-prints "Unknown intrinsic") is reported on stderr and counted; the process
-exits 3 at exit if there was any.
+prints "Unknown intrinsic NAME", or "ALU OP" for an ALU op, "Unknown ALU OP"
+from mesa 0042 on) is reported on stderr and counted; the process exits 3 at
+exit if there was any.
 
 The stubs are the template, so a new bridge function upstream still links:
 it gets the stub's body, with a dummy handle for a pointer return.
@@ -44,6 +45,9 @@ struct kk_mock_obj {
 
 void *kk_mock_new(int kind, uint64_t size);
 void kk_mock_record_msl(const char *src);
+
+/* The sample counts of an A19 (supportsTextureSampleCount:). */
+#define KK_MOCK_SAMPLE_COUNT_OK(n) ((n) == 1 || (n) == 2 || (n) == 4)
 '''
 
 DEFS = {}
@@ -52,7 +56,8 @@ def body(name, text):
 
 # mtl_bridge.c: the shared helpers live here
 EXTRA = {"mtl_device.c": '#include "kk_image_layout.h"\n',
-         "mtl_buffer.c": '#include "kk_image_layout.h"\n', "mtl_bridge.c": r'''
+         "mtl_buffer.c": '#include "kk_image_layout.h"\n#include "mtl_format.h"\n',
+         "mtl_bridge.c": r'''
 static int kk_mock_bad_msl;
 static unsigned kk_mock_msl_count;
 
@@ -63,7 +68,7 @@ __attribute__((destructor)) static void
 kk_mock_exit(void)
 {
    if (kk_mock_bad_msl) {
-      fprintf(stderr, "kk-mock: %d MSL libraries had untranslated intrinsics\n",
+      fprintf(stderr, "kk-mock: %d MSL libraries had untranslated intrinsics or ALU ops\n",
               kk_mock_bad_msl);
       fflush(stderr);
       _exit(3);
@@ -85,6 +90,23 @@ kk_mock_new(int kind, uint64_t size)
    return o;
 }
 
+/* The next marker of untranslated NIR in src at or after p: "Unknown
+ * intrinsic NAME", or an "ALU OP" token (nir_to_msl.c's alu_to_msl default;
+ * "Unknown ALU OP" from mesa 0042 on). Neither is valid MSL. */
+static const char *
+kk_mock_untranslated(const char *src, const char *p)
+{
+   for (; *p; ++p) {
+      if (!strncmp(p, "Unknown intrinsic", 17) || !strncmp(p, "Unknown ALU ", 12))
+         return p;
+      if (!strncmp(p, "ALU ", 4) &&
+          (p == src || !(p[-1] == '_' || (p[-1] >= '0' && p[-1] <= '9') ||
+                         ((p[-1] | 0x20) >= 'a' && (p[-1] | 0x20) <= 'z'))))
+         return p;
+   }
+   return NULL;
+}
+
 void
 kk_mock_record_msl(const char *src)
 {
@@ -99,12 +121,14 @@ kk_mock_record_msl(const char *src)
          fclose(f);
       }
    }
-   if (strstr(src, "Unknown intrinsic")) {
+   const char *m = kk_mock_untranslated(src, src);
+   if (m) {
       kk_mock_bad_msl++;
-      fprintf(stderr, "kk-mock: MSL library %04u has an untranslated intrinsic:\n", n);
-      for (const char *l = src; (l = strstr(l, "Unknown intrinsic")); l++) {
-         const char *e = strchr(l, '\n');
-         fprintf(stderr, "  %.*s\n", (int)(e ? e - l : 80), l);
+      fprintf(stderr, "kk-mock: MSL library %04u has untranslated NIR:\n", n);
+      while (m) {
+         const char *e = strchr(m, '\n');
+         fprintf(stderr, "  %.*s\n", (int)(e ? e - m : 80), m);
+         m = e ? kk_mock_untranslated(src, e) : NULL;
       }
    }
 }
@@ -117,7 +141,18 @@ body("mtl_device_get_name", 'snprintf(buffer, 256, "Mock Apple A19 Pro GPU");')
 body("mtl_device_get_architecture_name", 'snprintf(buffer, 256, "applegpu_g18p");')
 body("mtl_device_get_gpu_apple_family", "return 10u;")
 body("mtl_device_get_registry_id", "return 1u;")
-body("mtl_device_supports_sample_count", "return sample_count == 1 || sample_count == 2 || sample_count == 4;")
+body("mtl_device_supports_sample_count", "return KK_MOCK_SAMPLE_COUNT_OK(sample_count);")
+# A pipeline's raster sample count must match its attachments', and a render
+# pass without attachments takes its default: one the device does not support
+# is a driver bug the phone would hit (what Metal then does is not checked).
+for f, what in (("mtl_render_pipeline_descriptor_set_raster_sample_count", "render pipeline"),
+                ("mtl_render_pass_descriptor_set_default_raster_sample_count", "render pass")):
+    body(f, r'''
+   if (!KK_MOCK_SAMPLE_COUNT_OK(sample_count)) {
+      fprintf(stderr, "kk-mock: ''' + what + r''' raster sample count %u, which "
+                      "the device does not support\n", sample_count);
+      abort();
+   }''')
 body("mtl_device_max_threads_per_threadgroup", "return (struct mtl_size){1024, 1024, 1024};")
 body("mtl_device_max_threadgroup_memory_length", "return 32768u;")
 body("mtl_device_max_buffer_length", "return 1ull << 32;")
@@ -126,10 +161,13 @@ body("mtl_device_max_argument_buffer_sampler_count", "return 1024u;")
 body("mtl_device_timestamp_frequency", "return 1000000000u;")
 body("mtl_heap_buffer_size_and_align_with_length", "if (align_B) *align_B = 256;")
 body("mtl_minimum_linear_texture_alignment_for_pixel_format", "return 16u;")
+# Each layer is padded to 16 KiB, so a layer's size times the layer count is
+# the texture's, as kk_image_layout_calc_tiled asserts for a texture whose
+# contents Metal may not optimize.
 body("mtl_heap_texture_size_and_align_with_descriptor", r'''
    uint64_t px = (uint64_t)layout->width_px * layout->height_px *
-                 layout->depth_px * layout->layers * layout->sample_count_sa;
-   if (size_B) *size_B = (px * 16u * 2u + 16383u) & ~16383ull;
+                 layout->depth_px * layout->sample_count_sa;
+   if (size_B) *size_B = layout->layers * ((px * 16u * 2u + 16383u) & ~16383ull);
    if (align_B) *align_B = 16384u;''')
 body("mtl_sparse_tile_size_in_bytes", "return 16384u;")
 body("mtl_new_heap", "return kk_mock_new(2, size);")
@@ -151,11 +189,47 @@ body("mtl_get_contents", "return ((struct kk_mock_obj *)buffer)->mem;")
 # Metal requires a texture made from a buffer to start at an aligned offset
 # (minimumLinearTextureAlignmentForPixelFormat; KosmicKrisp assumes 16 bytes
 # covers every format). Anything else is a driver bug the phone would hit.
+# A linear texture (any type but a texture buffer) has more rules, from
+# MTLBuffer newTextureWithDescriptor:offset:bytesPerRow: in Apple's Metal
+# documentation: one 2D level and layer, one sample, an ordinary or packed
+# colour format other than GBGR422 and BGRG422 (so not depth, stencil or
+# compressed: minimumLinearTextureAlignmentForPixelFormat throws for those),
+# and bytesPerRow aligned and at least one row of pixels. What Metal does
+# otherwise (nil, or a validation error) is not modelled.
 body("mtl_new_texture_with_descriptor_linear", r'''
    if (offset % 16u) {
       fprintf(stderr, "kk-mock: linear texture at buffer offset %llu, not "
                       "16-byte aligned\n", (unsigned long long)offset);
       abort();
+   }
+   if (layout->type != MTL_TEXTURE_TYPE_TEXTURE_BUFFER) {
+      const char *bad = NULL;
+      if (layout->type != MTL_TEXTURE_TYPE_2D)
+         bad = "a texture type other than 2D";
+      else if (layout->depth_px != 1u || layout->layers != 1u)
+         bad = "depth or array length over 1";
+      else if (layout->levels != 1u)
+         bad = "more than one mipmap level";
+      else if (layout->sample_count_sa != 1u)
+         bad = "more than one sample";
+      else if (util_format_is_depth_or_stencil(layout->format.pipe) ||
+               util_format_is_compressed(layout->format.pipe) ||
+               layout->format.mtl == MTL_PIXEL_FORMAT_GBGR422 ||
+               layout->format.mtl == MTL_PIXEL_FORMAT_BGRG422)
+         bad = "a pixel format that is not ordinary or packed colour";
+      else if (layout->linear_stride_B % 16u ||
+               layout->linear_stride_B <
+                  (uint64_t)layout->width_px *
+                     util_format_get_blocksize(layout->format.pipe))
+         bad = "bytesPerRow unaligned or shorter than a row";
+      if (bad) {
+         fprintf(stderr, "kk-mock: linear texture %ux%ux%u, %u layers, %u "
+                         "levels, type %u, %s: %s\n", layout->width_px,
+                 layout->height_px, layout->depth_px, layout->layers,
+                 layout->levels, layout->type,
+                 util_format_short_name(layout->format.pipe), bad);
+         abort();
+      }
    }
    return kk_mock_new(8, 0);''')
 body("mtl_texture_get_gpu_resource_id", "return (uint64_t)(uintptr_t)texture;")
