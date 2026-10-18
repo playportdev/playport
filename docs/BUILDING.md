@@ -227,7 +227,8 @@ The `hosttest` stage, `build/mesa-host-test/run.sh`, tests the driver's CPU
 side, and Zink's over it, without a GPU. It builds the same tree for Linux, with KosmicKrisp's
 Metal stubs replaced by a mock (`make-mock-bridge.py`). The mock provides a
 device, host-memory heaps and dummy handles, and completes commits at once.
-`kk-host-test.c` then drives the driver through Vulkan: it creates a device
+`kk-host-test.c` then drives the driver through Vulkan: it checks which
+applications get a discrete device type, creates a device
 and builds and records draws with the pipelines it lists (geometry,
 tessellation into geometry, line and point fill, transform feedback with its
 counters and queries, and what a captured title asks for beyond the device's

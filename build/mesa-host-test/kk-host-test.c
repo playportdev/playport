@@ -7,7 +7,8 @@
  * driver's CPU side: that every pipeline compiles (NIR validation runs in a
  * debug build), that every MSL library is fully translated (the mock exits 3
  * otherwise) and that recording the draws does not crash or assert. First,
- * that PLAYPORT_VK_BUDGET_MB caps the heap's budget and not its size.
+ * which instances get a discrete device type, and that PLAYPORT_VK_BUDGET_MB
+ * caps the heap's budget and not its size.
  *
  *    kk-host-test DRIVER.so SPV_DIR
  *
@@ -18,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vulkan/vulkan.h>
 
 #define CHECK(x)                                                               \
@@ -341,6 +344,81 @@ check_budget_cap(const VkInstanceCreateInfo *ici)
    return 0;
 }
 
+/* The device type a fresh instance with these application and engine names
+ * sees. */
+static VkPhysicalDeviceType
+device_type_for(const char *app_name, const char *engine_name)
+{
+   VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+                            .pApplicationName = app_name,
+                            .pEngineName = engine_name,
+                            .apiVersion = VK_API_VERSION_1_1};
+   VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                               .pApplicationInfo = &app};
+   VkInstance i;
+   CHECK(((PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance"))(&ici, NULL, &i));
+   uint32_t count = 1;
+   VkPhysicalDevice pd;
+   CHECK(((PFN_vkEnumeratePhysicalDevices)gipa(i, "vkEnumeratePhysicalDevices"))(
+      i, &count, &pd));
+   VkPhysicalDeviceProperties props;
+   ((PFN_vkGetPhysicalDeviceProperties)gipa(i, "vkGetPhysicalDeviceProperties"))(
+      pd, &props);
+   ((PFN_vkDestroyInstance)gipa(i, "vkDestroyInstance"))(i, NULL);
+   return props.deviceType;
+}
+
+/* patches/mesa 0043: Red Dead Redemption 2's renderer (application "Red Dead
+ * Redemption 2", engine "SGA") gets a discrete device type; any other
+ * instance, the DXVK and vkd3d-proton ones in its process included, keeps the
+ * integrated one, and so does the renderer under
+ * MESA_KK_DEBUG=integrated_device. The driver reads MESA_KK_DEBUG once per
+ * process, so that case runs in a child, before this process makes an
+ * instance. */
+static int
+check_device_type(void)
+{
+   pid_t child = fork();
+   if (child == 0) {
+      setenv("MESA_KK_DEBUG", "integrated_device", 1);
+      _exit(device_type_for("Red Dead Redemption 2", "SGA") ==
+                  VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+               ? 0
+               : 1);
+   }
+   int status = 0;
+   if (child < 0 || waitpid(child, &status, 0) != child ||
+       !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      fprintf(stderr, "MESA_KK_DEBUG=integrated_device: the renderer did not "
+              "get the integrated device type\n");
+      return 1;
+   }
+
+   static const struct {
+      const char *app, *engine;
+      VkPhysicalDeviceType type;
+   } cases[] = {
+      {"Red Dead Redemption 2", "SGA", VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU},
+      {"RDR2.exe", "DXVK", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU},
+      {"RDR2.exe", "vkd3d", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU},
+      {"Red Dead Redemption 2", NULL, VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU},
+      {"Red Dead Redemption", "SGA", VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU},
+      {NULL, NULL, VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU},
+   };
+   for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+      VkPhysicalDeviceType type = device_type_for(cases[i].app, cases[i].engine);
+      if (type != cases[i].type) {
+         fprintf(stderr, "application %s, engine %s: device type %d, not %d\n",
+                 cases[i].app ? cases[i].app : "(none)",
+                 cases[i].engine ? cases[i].engine : "(none)", type,
+                 cases[i].type);
+         return 1;
+      }
+   }
+   printf("ok device-type\n");
+   return 0;
+}
+
 /* Linear images of the shapes Red Dead Redemption 2's Vulkan renderer
  * creates on an integrated GPU without asking for their format properties:
  * 2D ones KosmicKrisp supports, 2D colour attachments, 2D arrays, 3D storage
@@ -611,6 +689,8 @@ main(int argc, char **argv)
                             .apiVersion = VK_API_VERSION_1_3};
    VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                .pApplicationInfo = &app};
+   if (check_device_type())
+      return 1;
    if (check_budget_cap(&ici))
       return 1;
    CHECK(vkCreateInstance(&ici, NULL, &inst));

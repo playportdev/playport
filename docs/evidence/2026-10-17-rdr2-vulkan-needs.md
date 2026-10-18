@@ -1092,3 +1092,41 @@ slows RDR2 there, and for other titles that use linear images.
 of each run (10:26, 10:46, 11:03, 11:18). The autosave `SRDR30015` changed in every run (Story
 mode saves on load); `SRDR30000` is unchanged; `cfg.dat` and `cloudsavedata.dat` changed.
 `system.xml` was not changed (sha256 `24963ca1…` before and after). No sign-in page appeared.
+
+## A discrete device type for RDR2 (H7d, mesa 0043)
+
+**Date:** 2026-10-18. **Linear:** [PLA-386](https://linear.app/playportdev/issue/PLA-386)
+(PLA-397 stays the fallback). Host only: the mock driver and the replays; no game, not checked on
+the phone.
+
+**The patch.** Mesa 0043 reports `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU` to an instance whose
+application name is exactly "Red Dead Redemption 2" and whose engine name is exactly "SGA", the
+game's renderer (H1); every other instance keeps the integrated type, among them the DXVK and
+vkd3d-proton ones in the game's process (application `RDR2.exe`) and those with no names. It
+logs `[kk-device] Red Dead Redemption 2 (SGA): discrete device type`.
+`MESA_KK_DEBUG=integrated_device` gives the renderer the integrated type again, for an A/B on the
+phone; `MESA_KK_DEBUG` is already on the dev build's Graphics options allowlist.
+
+- **Match key:** the application and engine names, as RADV's driconf entry for RDR2 matches
+  (`application_name_match`, a regular expression; here an exact comparison). Not the executable:
+  on iOS it is the app that runs Wine.
+- **Mechanism:** a check in KosmicKrisp, like its engine-name check for Zink (mesa 0032).
+  KosmicKrisp parses no driconf options (it has no option table), so a driconf entry would need
+  that first.
+- **Per instance:** KosmicKrisp fills a physical device's properties when the instance enumerates
+  it, from that instance, so the renderer's type does not reach other instances.
+- **Nothing else follows the type:** no other code in KosmicKrisp or the Vulkan runtime it builds
+  reads it (Mesa's device-select layer does, but it is not in the iOS build). Memory types and
+  heaps are unchanged, as in H7c.
+
+**Host test** (`kk-host-test.c`, case `device-type`): fresh instances with "Red Dead Redemption
+2"/"SGA" get discrete; "RDR2.exe"/"DXVK", "RDR2.exe"/"vkd3d", "Red Dead Redemption 2" with no
+engine, "Red Dead Redemption"/"SGA" and no names get integrated; and in a child process with
+`MESA_KK_DEBUG=integrated_device` (read once per process) "Red Dead Redemption 2"/"SGA" gets
+integrated. Without 0043 the case fails (`device type 1, not 2`); with 0001–0043 the hosttest
+stage passes every case, as before, and the iOS check resolves every import.
+
+**Replays.** `run-replay.sh --bypass-feature-gate` on 0001–0043 gives the same counts as on
+0001–0042 (H5d): `rdr2-sga-ingame-h1b` 1,950/1,950 graphics and 788/788 compute, `rdr2-vkd3d-h3`
+1,587/1,607 and 757/758, 0 crashes. Fossilize replays the SGA database under the recorded
+application info, so those pipelines now compile on the discrete type, with the same result.

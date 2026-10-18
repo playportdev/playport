@@ -466,17 +466,22 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   transfer only) instead of 11,519, none CPU-written, with the same memory and no errors, and
   instead copies: about 85 more transfer commands and 3 MiB more copy traffic per frame; the
   capture layer counts memory, copies and presents (`PP_CAPTURE_MEMUSE`),
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#discrete-vs-integrated-device-type-in-story-mode-h7c)).
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#discrete-vs-integrated-device-type-in-story-mode-h7c));
+  H7d (PLA-386, mesa 0043: KosmicKrisp reports a discrete device type to the instance named
+  "Red Dead Redemption 2" with engine "SGA", exactly, and integrated to every other one, the
+  game's DXVK and vkd3d-proton instances included; `MESA_KK_DEBUG=integrated_device` turns it
+  off for an A/B; host test, replays unchanged,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#a-discrete-device-type-for-rdr2-h7d-mesa-0043)).
   Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only):** H7c done; next H7d (a mesa patch reporting
-  a discrete device type to RDR2) or PLA-397 (the sync path, if discrete breaks or slows RDR2),
-  then H8 the dev IPA with mesa 0037–0042 and H7d. Then chunk 0 below (needs the phone).
+- **Queue (owner-approved 2026-10-17, host only):** H7d done; next H8 (dev IPA with mesa
+  0037–0043). PLA-397 (the sync path) only if discrete breaks or slows RDR2 on the phone. Then
+  chunk 0 below (needs the phone).
 - **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
   `h4.md` (H4), `h5.md` (H5, blocked), `h5c.md` (H5), `h5d.md` (H5d), `h6.md` (H6), `h6b.md`
-  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c).
+  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c), `h7d.md` (H7d).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3,
-  H6b, H7 and H5d (mesa 0037–0042), on an IPA with 0042 (H4's has 0037–0039 only), then RDR2 after
-  PLA-295 and PLA-300.
+  H6b, H7, H5d and H7d (mesa 0037–0043), on an IPA with 0043 (H4's has 0037–0039 only), then RDR2
+  after PLA-295 and PLA-300.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under
   `agent-notes/rdr2-vk/reports/` of the side copy.
