@@ -1,5 +1,9 @@
 {
   "titles": {
+    "app-1174180": {
+      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client", "graphics": "vulkan"},
+      "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, with its service it outgrows the default JIT pool, it asks Steam's client for the game, and it draws its window through Vulkan."
+    },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
       "reason": "This game draws nothing on a screen wider than 16:9."

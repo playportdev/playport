@@ -15,6 +15,7 @@
 #include "dotnet_fakedlls.h"
 #include "prefix_registry.h"
 #include "selfcheck.h"
+#include "timezone_bias.h"
 #include "title_path.h"
 #include "session_protocol.h"
 
@@ -43,6 +44,7 @@
 extern int wineserver_main(int argc, char *argv[]);          /* libwineserver.a (-Dmain=) */
 extern void wineserver_log_set_file(const char *path);       /* libwineserver.a */
 extern void wineserver_set_nls_dir(const char *path);        /* libwineserver.a */
+extern void wineserver_set_timezone_bias(long long bias);    /* libwineserver.a (madeira-unix 0159) */
 extern void wineserver_inject_client_fd(int fd);             /* libwineserver.a */
 extern int foreground;                                       /* libwineserver.a */
 extern void __wine_main(int argc, char *argv[]);             /* libntdll_unix.a */
@@ -802,7 +804,9 @@ static void seed_machine_values(void)
  * cannot save. Documents (CSIDL_PERSONAL) likewise: Witcher 3 looks it up
  * without the flag and, when it fails (0x80070003), reads no user.settings
  * and has nowhere to save (docs/evidence/2026-09-25-witcher3-setup.md). Saved
- * Games is the other common save folder. C:\windows\temp is %TEMP% and %TMP%
+ * Games is the other common save folder. The Desktop and Start Menu folders are
+ * where an installer puts its shortcuts: without them the Rockstar Games Launcher's
+ * installer got an empty desktop path for its shortcut. C:\windows\temp is %TEMP% and %TMP%
  * (the seeded Session Manager\Environment, as wine.inf has them). Existing
  * directories and their contents are left alone. */
 static void seed_profile(void)
@@ -813,8 +817,10 @@ static void seed_profile(void)
         "drive_c/users/" WINE_HOST_USER "/AppData/Roaming",
         "drive_c/users/" WINE_HOST_USER "/Documents",
         "drive_c/users/" WINE_HOST_USER "/Saved Games",
-        "drive_c/users/Public",
-        "drive_c/ProgramData",
+        "drive_c/users/" WINE_HOST_USER "/Desktop",
+        "drive_c/users/" WINE_HOST_USER "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
+        "drive_c/users/Public/Desktop",
+        "drive_c/ProgramData/Microsoft/Windows/Start Menu/Programs/Startup",
         "drive_c/windows/temp",
     };
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
@@ -1362,6 +1368,13 @@ int wine_host_init(const wine_host_config *c)
     seed_registry();
     seed_machine_values();
 
+    /* KUSER_SHARED_DATA.TimeZoneBias, which the iOS wineserver does not compute
+     * itself: here, before the server thread or any guest thread exists
+     * (timezone_bias.h). */
+    long long tz_bias = pp_timezone_bias(time(NULL));
+    wineserver_set_timezone_bias(tz_bias);
+    host_log("time zone bias %lld min (local = UTC%+lld min)", tz_bias / 600000000LL, -tz_bias / 600000000LL);
+
     g_wineserver_should_stop = 0;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -1609,6 +1622,48 @@ int wine_host_session_prerequisite_line(const char *dos_path, const char *line,
 {
     if (!line) return -1;
     return session_request(PP_REQUEST_PREREQUISITE_LINE, dos_path, &line, 1, env, nenv, timeout_ms);
+}
+
+int wine_host_session_services(int timeout_ms)
+{
+    if (!g_session_ready || g_session_launched || g_session_title) return -1;
+    pp_session_request req = { PP_SESSION_MAGIC, ++g_session_seq, PP_REQUEST_SERVICES, 0, 0, 0 };
+    host_log("session: services %u: services.exe for this play (decision 0107)", req.sequence);
+    if (session_send("request", &req, NULL)) return -4;
+    pp_session_reply r;
+    int rc = session_await(req.sequence, (1u << PP_TITLE_STARTED) | (1u << PP_TITLE_REFUSED), timeout_ms, &r);
+    if (rc != 1) {
+        host_log("session: services %u: the root %s", req.sequence, rc < 0 ? "has ended" : "did not answer in time");
+        return -6;
+    }
+    if (r.state == PP_TITLE_REFUSED) {
+        host_log("session: services %u: not started, Windows error %u", req.sequence, r.code);
+        return -7;
+    }
+    host_log("session: services %u: services.exe runs, pid %04x", req.sequence, r.code);
+    return 0;
+}
+
+int wine_host_session_steam_client(unsigned account_id, int timeout_ms)
+{
+    if (!g_session_ready || g_session_launched || g_session_title) return -1;
+    char id[12];
+    int n = snprintf(id, sizeof(id), "%u", account_id);
+    pp_session_request req = { PP_SESSION_MAGIC, ++g_session_seq, PP_REQUEST_STEAM_CLIENT, (uint32_t)n + 1, 1, 0 };
+    host_log("session: steam client %u: the root is the prefix's Steam client (decision 0115)", req.sequence);
+    if (session_send("request", &req, id)) return -4;
+    pp_session_reply r;
+    int rc = session_await(req.sequence, (1u << PP_TITLE_STARTED) | (1u << PP_TITLE_REFUSED), timeout_ms, &r);
+    if (rc != 1) {
+        host_log("session: steam client %u: the root %s", req.sequence, rc < 0 ? "has ended" : "did not answer in time");
+        return -6;
+    }
+    if (r.state == PP_TITLE_REFUSED) {
+        host_log("session: steam client %u: keys not written, Windows error %u", req.sequence, r.code);
+        return -7;
+    }
+    host_log("session: steam client %u: ActiveProcess pid %04x", req.sequence, r.code);
+    return 0;
 }
 
 int wine_host_session_wait(int timeout_ms, int *exit_code)

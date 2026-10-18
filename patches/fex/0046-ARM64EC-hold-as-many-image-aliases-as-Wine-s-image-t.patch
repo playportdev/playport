@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 19:29:26 +0200
+Subject: [PATCH] ARM64EC: hold as many image aliases as Wine's image table
+
+Wine pushes every live image copy of every process to every emulator
+(madeira-unix ios_alias_push_all and the drain at the emulator's start),
+so an emulator's IosAliasEntries needs room for every live entry of
+Wine's ios_jit_mappings. It had 256 against Wine's 512. In the Rockstar
+Games Launcher's Social Club tree, the CEF network and storage services
+and a second browser drained 243, 287 and 338 images at their start; the
+table was full before their secur32 loaded. A call reaching secur32's x64
+delay-load thunk at its pool copy then found no alias to translate, FEX
+built a NoExec block, the thread read address 0, and the RPC exception
+filter, which calls I_RpcExceptionFilter through the same kind of thunk,
+faulted again until the stack overflowed.
+
+The table now holds 1024 entries, the same as Wine's table after
+madeira-unix 0155, which keeps the two in step.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-16-alias-table-cap-phone.md
+Offered-upstream: no; the JIT pool alias table is the iOS port's
+---
+ Source/Windows/ARM64EC/IosJitAlias.cpp | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/Source/Windows/ARM64EC/IosJitAlias.cpp b/Source/Windows/ARM64EC/IosJitAlias.cpp
+index d9a4f41..7fdeb5c 100644
+--- a/Source/Windows/ARM64EC/IosJitAlias.cpp
++++ b/Source/Windows/ARM64EC/IosJitAlias.cpp
+@@ -32,7 +32,11 @@ struct IosAliasEntry {
+   uint64_t Size;
+   uint64_t _Padding;  // Keeps the struct 32-byte to make array stride a power of 2.
+ };
+-constexpr int kMaxEntries = 256;
++// Wine pushes every live image copy of every process to every emulator, so this
++// table must hold as many entries as Wine's own image table: keep it >= Wine's
++// IOS_JIT_MAX_MAPPINGS (build/ntdll-unix/virtual_ios.c). At 256 against Wine's 512
++// the Social Club CEF helpers' tables were full before secur32 loaded (PLA-373).
++constexpr int kMaxEntries = 1024;
+ 
+ // extern "C" storage (not anonymous-namespace) so Module.S's ExitFunctionEC
+ // can reach the table via adrp/:lo12: — it translates the branch target

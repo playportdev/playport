@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define WINE_HOST_ABI_VERSION 7
+#define WINE_HOST_ABI_VERSION 9
 
 typedef void (*wine_host_log_fn)(const char *line);
 
@@ -120,6 +120,23 @@ int wine_host_session_prerequisite(const char *dos_path, const char *const *args
  * redistributables, decision 0090). Added in ABI 7 without changing any existing call. */
 int wine_host_session_prerequisite_line(const char *dos_path, const char *line,
                                         const char *const *env, int nenv, int timeout_ms);
+
+/* Start services.exe, Wine's SCM, for this play (decision 0107), before any
+ * prerequisite or the title; the root stops it and its services before it
+ * reports the title's end. 0 when its SCM listens; -1 bad call (no session,
+ * after the launch, or while a prerequisite runs), -4 the request could not
+ * be written, -6 no answer in timeout_ms, -7 the root could not start it.
+ * Added in ABI 8 without changing any existing call. */
+int wine_host_session_services(int timeout_ms);
+
+/* Make the session root the prefix's running Steam client for a play served by
+ * Playport's steamclient64.dll (decision 0115): it writes its own process id as
+ * HKCU\Software\Valve\Steam\ActiveProcess\pid and account_id as ActiveUser, and
+ * sets both to 0 at the title's end. 0 once written; -1 bad call (no session,
+ * after the launch, or while a prerequisite runs), -4 the request could not be
+ * written, -6 no answer in timeout_ms, -7 the root could not write them.
+ * Added in ABI 9 without changing any existing call. */
+int wine_host_session_steam_client(unsigned account_id, int timeout_ms);
 
 /* Wait up to timeout_ms for the running title (or prerequisite) and everything
  * it started to end. 0 and its exit code once they have, 1 on timeout, -1 with
@@ -233,6 +250,23 @@ typedef struct {
     unsigned (*open)(const char *url);
 } wine_host_url_opener;
 void wine_host_set_url_opener(const wine_host_url_opener *opener);
+
+/* The host side of Playport's steamclient64.dll (steam_client_protocol.h,
+ * decision 0115): the calls playport_steamclient_unix_call_funcs
+ * (steam_client.c) makes, on the guest's thread, with a block it checked.
+ * Each returns an NTSTATUS from steam_client_protocol.h and must not wait on
+ * the network. hello fills the snapshot's out fields and answers 1 when the
+ * play is armed; call fills a CALL's out fields; poll a POLL's; log takes one
+ * line of the shim's for the app log (a checked, NUL-terminated text). Set (or
+ * cleared with NULL) from any app thread; with none set every call answers
+ * PP_SC_NOT_SUPPORTED. Added in ABI 9 without changing any existing call. */
+typedef struct {
+    unsigned (*hello)(void *hello);   /* pp_sc_hello * */
+    unsigned (*call)(void *call);     /* pp_sc_call * */
+    unsigned (*poll)(void *poll);     /* pp_sc_poll * */
+    void (*log)(const char *text);
+} wine_host_steamclient_provider;
+void wine_host_set_steamclient_provider(const wine_host_steamclient_provider *provider);
 
 #ifdef __cplusplus
 }

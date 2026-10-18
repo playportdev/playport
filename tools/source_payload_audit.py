@@ -31,12 +31,9 @@ except ImportError:
     zstd = None  # Python before 3.14: explicitly blocked, never silently skipped.
 
 try:
-    from .checks import SECRETS, SECRET_FILES
+    from .checks import SECRETS, SECRET_FILES, NAME_PATTERNS, name_scan_text
 except ImportError:
-    from checks import SECRETS, SECRET_FILES
-
-# Keep in sync with pp cmd_names; split literals avoid matching our own source.
-NAME_PATTERNS = ("game" "native", r"\b" "gn[_-]")
+    from checks import SECRETS, SECRET_FILES, NAME_PATTERNS, name_scan_text
 CONTENT_RULES = [("secret-pattern-%02d" % i, re.compile(p, re.ASCII))
                  for i, (_, p) in enumerate(SECRETS)]
 CONTENT_RULES += [("retired-name-%d" % i, re.compile(p, re.I | re.ASCII))
@@ -94,19 +91,25 @@ LIMITATIONS = [
 
 
 
-def text_rules(data):
-    """Pattern IDs only; strict (no blanket line-level fixture exemptions)."""
+def text_rules(data, path=""):
+    """Pattern IDs only; no blanket line-level exemptions.
+
+    The name gate alone exempts two exact upstream GN tokens in CEF/Chromium
+    patches, using the same repository-relative path rule as pp names.
+    """
     views = [data.decode("latin1")]
     if b"\0" in data:
         # Both alignments handle a UTF-16 string embedded in arbitrary binary data.
         views.extend(data[start:].decode(enc, errors="replace")
                      for enc in ("utf-16-le", "utf-16-be") for start in (0, 1))
     return sorted({rule for rule, pattern in CONTENT_RULES
-                   if any(pattern.search(view) for view in views)})
+                   if any(pattern.search(name_scan_text(path, view)
+                                         if rule.startswith("retired-name-") else view)
+                          for view in views)})
 
 
-def payload_rules(data):
-    rules = text_rules(data)
+def payload_rules(data, path=""):
+    rules = text_rules(data, path)
     try:
         data.decode("utf-8")
         binary = any(c < 32 and c not in (9, 10, 13) for c in data)
@@ -242,9 +245,15 @@ class Scanner:
 
     def payload(self, data, name, context, depth, allowed=()):
         self.counts["regular_files"] += 1
-        rules = text_rules(data)
+        # Playport source archives add one top-level name (component + commit).
+        # Do not grant the exception to unrelated/nested archive paths.
+        parts = PurePosixPath(name).parts
+        path = ""
+        if depth == 0 and parts and re.fullmatch(r"playport(?:-[0-9a-f]{7,40})?", parts[0]):
+            path = "/".join(parts[1:]) if safe_path(name) else ""
+        rules = text_rules(data, path)
         rules += [rule for rule, pattern in PATH_RULES if pattern.search(name)]
-        binary = payload_rules(data)
+        binary = payload_rules(data, path)
         # Recursive archive decoding replaces the opaque-archive label.
         rules += [r for r in binary if r not in rules and r != "archive-payload-unexpanded"]
         if BINARY.search(name):

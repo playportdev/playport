@@ -23,6 +23,7 @@
 // - Storage: free space and each game's size; A opens the game's page. Steamworks Shared
 //   (Steam's redistributables) with its size and Remove, and the emulator cache with Clear.
 // - Setup check: JIT, LocalDevVPN and memory (SetupCheckSettings.swift).
+// - Launchers, dev builds only for now: each publisher's launcher with Open (LaunchersSettings.swift).
 // - About: the build, the copyright and the licences (LicencesView.swift),
 //   whose pages show in its place; B on one of their rows goes back a page.
 // - Developer, dev builds only (Dev/DeveloperSettings.swift, decision 0009).
@@ -161,6 +162,7 @@ struct SettingsView: View {
         case .controls: ControlsSettings()
         case .storage: StorageSettings()
         case .setup: SetupCheckSettings()
+        case .launchers: LaunchersSettings()
         case .about:
             if let page = navigation.licences.last { LicencePageView(page: page) } else { AboutSettings() }
         case .developer:

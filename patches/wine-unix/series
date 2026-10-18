@@ -36,3 +36,8 @@
 0035-ntdll-log-what-feeds-a-stopped-job-loop-I-O-completi.patch
 0036-server-capture-a-thread-s-context-afresh-at-each-sus.patch
 0037-ntdll-end-a-killed-thread-in-NtWaitForAlertByThreadI.patch
+0038-server-restart-a-job-s-termination-from-the-head-aft.patch
+0039-ntdll-open-Playport-s-CEF-build-in-place-of-a-client.patch
+0040-ntdll-give-an-SMBIOS-type-44-structure-the-Block-Len.patch
+0041-ntdll-keep-an-IOKit-string-s-terminator-inside-its-b.patch
+0042-ntdll-log-a-process-s-first-firmware-table-queries-a.patch

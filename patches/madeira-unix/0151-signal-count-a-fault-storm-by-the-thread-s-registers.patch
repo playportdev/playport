@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Thu, 15 Oct 2026 23:40:00 +0200
+Subject: [PATCH] signal: count a fault storm by the thread's registers too
+
+The redelivery breaker (ml461, and 0119 for a child) ends a process when
+one thread takes the same (pc, address) fault 2,000 times. Rockstar's
+RockstarService.exe, started by the Rockstar Games Launcher's installer,
+writes one address in its own code on each pass of a loop whose code
+shares that 16 KiB host page: each pass takes a self-modifying-code fault
+FEX handles, then runs on. It was ended at the 2,000th pass, and the
+installer failed with "An error has occurred".
+
+The key now hashes the thread's general registers as well. FEX keeps the
+x86 registers in host registers, so a pass that made progress differs;
+a resume into the same fault restores the same context and still counts.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no
+---
+ build/ntdll-unix/signal_arm64_ios.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/build/ntdll-unix/signal_arm64_ios.c b/build/ntdll-unix/signal_arm64_ios.c
+index 9546afb..5dfff67 100644
+--- a/build/ntdll-unix/signal_arm64_ios.c
++++ b/build/ntdll-unix/signal_arm64_ios.c
+@@ -7856,6 +7856,18 @@ dispatch:
+         static struct { uint64_t key; uint32_t n; } redeliv[16];
+         static volatile int ios_redeliv_terminating;
+         uint64_t rkey = ((uint64_t)thread << 48) ^ pc ^ ((uint64_t)fault_addr << 1);
++        /* Playport (PLA-275): and the thread's registers. A guest loop that writes the
++         * same address on each pass, with its own code in that host page, takes a
++         * handled self-modifying-code fault at the same (pc, addr) every pass, and
++         * moves on between them: Rockstar's RockstarService.exe did 2,000 passes and
++         * was ended as a storm. FEX keeps the x86 registers in host registers, so a
++         * pass that made progress differs in them; a resume into the same fault (the
++         * storms above) restores the same context and still counts. */
++        {
++            unsigned int ri;
++            for (ri = 0; ri < 29; ri++)
++                rkey ^= state->__x[ri] * (0x9e3779b97f4a7c15ull + 2 * ri);
++        }
+         int rslot = (int)((rkey >> 4) & 15);
+         if (redeliv[rslot].key != rkey) { redeliv[rslot].key = rkey; redeliv[rslot].n = 1; }
+         else if (++redeliv[rslot].n == 256)

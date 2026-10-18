@@ -210,7 +210,7 @@ struct SetupCheckSettings: View {
         SettingsInfoRow(id: "setup:iml", title: "Increased Memory Limit",
                         subtitle: reading.entitled == false ? "This copy was signed without it" : nil,
                         value: reading.entitled.map { $0 ? "On" : "Off" } ?? "Unknown")
-        SettingsInfoRow(id: "setup:pool", title: "JIT memory", value: MemoryNeed.format(mb: MemoryLimit.poolMB(reading)))
+        SettingsInfoRow(id: "setup:pool", title: "JIT memory", value: MemoryNeed.format(mb: MemoryLimit.poolMB(reading).mb))
         #if !PLAYPORT_RELEASE
         if reading.simulatedMB != nil {
             SettingsInfoRow(id: "setup:realLimit", title: "Real limit",

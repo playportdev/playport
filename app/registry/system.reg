@@ -25069,6 +25069,8 @@ WINE REGISTRY Version 2
 
 ;; playport:top-up
 [Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts]
+"Tahoma (TrueType)"="tahoma.ttf"
+"Tahoma Bold (TrueType)"="tahomabd.ttf"
 
 ;; playport:top-up
 [Software\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes]

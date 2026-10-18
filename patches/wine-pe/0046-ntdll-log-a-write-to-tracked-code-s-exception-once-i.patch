@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 02:18:55 +0200
+Subject: [PATCH] ntdll: log a write to tracked code's exception once in 65536
+
+prepare_exception_arm64ec printed its "[rtcs] pre" line for every
+exception but a misaligned atomic (0040). A guest that rewrites its own
+code takes an access violation on each write, which FEX handles as
+self-modifying code: Rockstar's RockstarService.exe took 1.79 million in
+950 s, a line each.
+
+Access violations on a write are now counted, and the first 64 and
+every 65536th are logged with the count and the address written. FEX
+prints its own full line for one it does not handle (ml1055), so a
+genuine access violation keeps its data address. Every other exception
+code is logged as before.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no; the line is the iOS port's
+---
+ dlls/ntdll/signal_arm64ec.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 9252576..cca4fdd 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -3966,6 +3966,23 @@ static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD
+                      (void *)(ULONG_PTR)arm_ctx->Pc, (void *)(ULONG_PTR)context->AMD64_Context.Rip,
+                      pResetToConsistentState, get_arm64ec_cpu_area()->InSimulation, n );
+         }
++        /* PLA-366: so is a write to tracked code, which FEX handles as self-modifying
++         * code: Rockstar's RockstarService.exe rewrites its own code about 2,000 times
++         * a second. Count access violations on a write, and log the first 64 and every
++         * 65536th; FEX prints its own full line for one it does not handle. */
++        else if (rec->ExceptionCode == STATUS_ACCESS_VIOLATION && rec->NumberParameters >= 2 &&
++                 rec->ExceptionInformation[0] == EXCEPTION_WRITE_FAULT)
++        {
++            static LONG write_av_n;
++            LONG n = InterlockedIncrement( &write_av_n );
++            if (n <= 64 || !(n % 65536))
++                ERR( "[rtcs] pre: code=%08x addr=%p armPc=%p ecRip=%p rtcs=%p insim=%u (write to %p, #%ld; "
++                     "the first 64 and every 65536th are logged)\n",
++                     (unsigned int)rec->ExceptionCode, rec->ExceptionAddress,
++                     (void *)(ULONG_PTR)arm_ctx->Pc, (void *)(ULONG_PTR)context->AMD64_Context.Rip,
++                     pResetToConsistentState, get_arm64ec_cpu_area()->InSimulation,
++                     (void *)rec->ExceptionInformation[1], n );
++        }
+         else
+             ERR( "[rtcs] pre: code=%08x addr=%p armPc=%p ecRip=%p rtcs=%p insim=%u\n",
+                  (unsigned int)rec->ExceptionCode, rec->ExceptionAddress,

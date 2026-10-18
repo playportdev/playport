@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 18:21:39 +0200
+Subject: [PATCH] Dawn: use the client DXC DLL instead of building it on Linux
+
+Formalize stage A-C scratch diff 006, retaining the built bytes.
+Apply after the pinned CEF stock patches.
+
+Class: linux-build
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+Upstream-repo: dawn
+---
+ third_party/dawn/src/dawn/native/BUILD.gn | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/third_party/dawn/src/dawn/native/BUILD.gn b/third_party/dawn/src/dawn/native/BUILD.gn
+index b45bacb..d4ecf38 100644
+--- a/third_party/dawn/src/dawn/native/BUILD.gn
++++ b/third_party/dawn/src/dawn/native/BUILD.gn
+@@ -566,7 +566,11 @@ source_set("sources") {
+ 
+   if (dawn_enable_d3d12) {
+     if (dawn_use_built_dxc) {
+-      deps += [ "$dawn_root/third_party/gn/dxc:dxcompiler" ]
++      # Dawn loads dxcompiler.dll at run time and links nothing from it. A
++      # non-Windows host cannot build it (DIA SDK), so the client's DLL is used.
++      if (host_os == "win") {
++        deps += [ "$dawn_root/third_party/gn/dxc:dxcompiler" ]
++      }
+       defines += [ "DAWN_USE_BUILT_DXC" ]
+       data_deps += [ "$dawn_root/third_party/gn/dxc:copy_dxil_dll" ]
+     }

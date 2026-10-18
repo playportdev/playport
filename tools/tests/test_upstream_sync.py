@@ -63,6 +63,15 @@ def link(repo, path, sha):
     git(repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},{path}")
 
 
+class SeriesClassification(unittest.TestCase):
+    def test_every_patch_directory_has_a_sync_classification(self):
+        spec = importlib.util.spec_from_file_location("sync_classification", TOOL)
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        patches = os.path.join(os.path.dirname(PIPELINE), "..", "patches")
+        self.assertLessEqual(set(os.listdir(patches)), set(tool.TARGET_COMPONENT) | tool.NOT_REPLAYED)
+
+
 class UpstreamSync(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

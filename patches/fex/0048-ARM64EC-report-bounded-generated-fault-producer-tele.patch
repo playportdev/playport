@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sun, 18 Oct 2026 12:00:18 +0200
+Subject: [PATCH] ARM64EC: report bounded generated-fault producer telemetry on
+ iOS
+
+Carry only the already-selected FEX handler category in former fault padding. Report at most sixteen generated faults per process without inspecting guest code or changing exception semantics.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-18-rockstar-generated-fault.md
+Offered-upstream: no; iOS crash diagnosis
+---
+ FEXCore/Source/Interface/Core/JIT/MiscOps.cpp     |  1 +
+ .../Source/Interface/Core/OpcodeDispatcher.cpp    |  2 ++
+ FEXCore/Source/Interface/IR/IR.json               |  1 +
+ FEXCore/include/FEXCore/Core/CoreState.h          |  5 ++++-
+ Source/Windows/ARM64EC/Module.cpp                 | 15 +++++++++++++++
+ 5 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+index 8f91dcd..8e77f39 100644
+--- a/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
++++ b/FEXCore/Source/Interface/Core/JIT/MiscOps.cpp
+@@ -73,6 +73,7 @@ DEF_OP(Break) {
+     .TrapNo = Op->Reason.TrapNumber,
+     .si_code = Op->Reason.si_code,
+     .err_code = Op->Reason.ErrorRegister,
++    .DiagnosticProducer = Op->Reason.DiagnosticProducer,
+   };
+ 
+   uint64_t Constant {};
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+index 142c90c..dbd902b 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher.cpp
+@@ -4909,6 +4909,7 @@ void OpDispatchBuilder::LSLOp(OpcodeArgs) {
+ 
+ void OpDispatchBuilder::INTOp(OpcodeArgs) {
+   IR::BreakDefinition Reason;
++  Reason.DiagnosticProducer = 2; // INTOp, not a guest instruction identifier
+   bool SetRIPToNext = false;
+ 
+   switch (Op->OP) {
+@@ -5277,6 +5278,7 @@ void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
+                 .Signal = SIGSEGV,
+                 .TrapNumber = X86State::X86_TRAPNO_GP,
+                 .si_code = 0x80,
++                .DiagnosticProducer = 1, // PermissionRestrictedOp
+               });
+ }
+ 
+diff --git a/FEXCore/Source/Interface/IR/IR.json b/FEXCore/Source/Interface/IR/IR.json
+index 830252c..31c9248 100644
+--- a/FEXCore/Source/Interface/IR/IR.json
++++ b/FEXCore/Source/Interface/IR/IR.json
+@@ -124,6 +124,7 @@
+     "  uint8_t Signal;",
+     "  uint8_t TrapNumber;",
+     "  uint8_t si_code;",
++    "  uint16_t DiagnosticProducer {}; // 1: PermissionRestrictedOp, 2: INTOp; telemetry only",
+     "};"
+   ],
+   "IRTypes" : {
+diff --git a/FEXCore/include/FEXCore/Core/CoreState.h b/FEXCore/include/FEXCore/Core/CoreState.h
+index f4b3a4b..c0e5e78 100644
+--- a/FEXCore/include/FEXCore/Core/CoreState.h
++++ b/FEXCore/include/FEXCore/Core/CoreState.h
+@@ -431,7 +431,8 @@ struct CpuStateFrame {
+     uint8_t TrapNo;
+     uint8_t si_code;
+     uint16_t err_code;
+-    uint16_t _pad : 16;
++    // Uses the former padding; does not participate in exception conversion.
++    uint16_t DiagnosticProducer {};
+   } SynchronousFaultData;
+ 
+   InternalThreadState* Thread;
+@@ -496,5 +497,7 @@ static_assert(offsetof(CpuStateFrame, Pointers) + sizeof(CpuStateFrame::Pointers
+ static_assert(std::is_standard_layout<CpuStateFrame>::value, "This needs to be standard layout");
+ static_assert(sizeof(CpuStateFrame::SynchronousFaultData) == 8, "This needs to be 8 bytes");
+ static_assert(alignof(CpuStateFrame::SynchronousFaultDataStruct) == 8, "This needs to be 8 bytes");
++static_assert(sizeof(CpuStateFrame::SynchronousFaultDataStruct) == 8, "Break stores one 64-bit fault record");
++static_assert(offsetof(CpuStateFrame::SynchronousFaultDataStruct, DiagnosticProducer) == 6, "Diagnostic tag uses only former padding");
+ static_assert(offsetof(CpuStateFrame, SynchronousFaultData) % 8 == 0, "This needs to be aligned");
+ } // namespace FEXCore::Core
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 0b1f2d0..bd4e8bb 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -697,6 +697,21 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
+   ARM64_NT_CONTEXT GuestContext = StoreStateToPackedECContext(Thread, Context.Fpcr, Context.Fpsr);
+   LogMan::Msg::DFmt("pc: {:X} rip: {:X}", Context.Pc, GuestContext.Pc);
+ 
++#ifdef FEX_IOS_HOST
++  // PLA-401: report only our generated-fault provenance, never guest bytes or
++  // decoded instructions. The former fault padding carries a handler tag from
++  // translation through the existing Break IR; exception semantics are unchanged.
++  if (Fault.FaultToTopAndGeneratedException) {
++    static std::atomic<uint32_t> GeneratedFaultReports {0};
++    if (GeneratedFaultReports.fetch_add(1, std::memory_order_relaxed) < 16) {
++      const char* Producer = Fault.DiagnosticProducer == 1 ? "PermissionRestrictedOp" :
++                             Fault.DiagnosticProducer == 2 ? "INTOp" : "other";
++      LogMan::Msg::EFmt("[generated-fault] producer={} generated=1 signal={} trap={} si_code={} error={:#x} rip={:#x}",
++                       Producer, Fault.Signal, Fault.TrapNo, Fault.si_code, Fault.err_code, GuestContext.Pc);
++    }
++  }
++#endif
++
+   // ml341: same gap as #52 but on the exception path — the reconstructed rip can be a
+   // module POOL-COPY alias (block metadata predating the CompileBlock redirect, or a
+   // branch target captured mid-lookup). Handing a pool-band rip to KiUserExceptionDispatcher

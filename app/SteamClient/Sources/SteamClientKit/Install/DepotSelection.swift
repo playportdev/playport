@@ -5,10 +5,10 @@ import Foundation
 /// each other depot is left out. Steam's own rules, narrowed to what the
 /// runtime runs: Windows or OS-neutral content, 64-bit or arch-neutral, the
 /// default language plus the chosen one, owned DLC only, no low-violence
-/// variant, and no `depotfromapp` redistributables (shared VC++/DirectX
-/// installs, recorded as not installed). A `depotfromapp` depot that shares
-/// the install folder (`DepotInfo.sharesInstallDir`) is content and follows
-/// the other rules.
+/// variant, and no `sharedinstall` depot of another app (shared VC++/DirectX
+/// installs, recorded as not installed). Another app's depot Steam installs
+/// into this app's folder (`DepotInfo.isContentFromAnotherApp`) is content
+/// and follows the other rules.
 public struct DepotSelection: Sendable, Equatable {
     public struct Skip: Sendable, Equatable {
         public var depotID: UInt32
@@ -50,7 +50,7 @@ public struct DepotSelection: Sendable, Equatable {
                     skipped.append(Skip(depotID: d.depotID, reason: "not requested"))
                     continue
                 }
-                if let from = d.depotFromApp, d.sharesInstallDir != true {
+                if let from = d.depotFromApp, !d.isContentFromAnotherApp {
                     throw SteamError.unsupported("depot \(d.depotID) is a shared install from app \(from) (redistributable)")
                 }
                 guard d.publicManifestGID != nil else {
@@ -74,6 +74,12 @@ public struct DepotSelection: Sendable, Equatable {
     /// The reason a receipt keeps for a redistributable depot (`skippedDepots`, "<depot>: <reason>").
     static func sharedInstallReason(_ app: UInt32) -> String { "shared install from app \(app) (redistributable, not installed)" }
 
+    /// The reason for another `sharedinstall` app's depot: Steam installs it into that app's own
+    /// folder, which Playport does not. Not `sharedInstallReason`, which a record written before
+    /// Playport installed `isContentFromAnotherApp` depots gave every source app's depot
+    /// (`InstallReceipt.depotsToRecheck`).
+    static func sharedInstallElsewhereReason(_ app: UInt32) -> String { "shared install in app \(app)'s own folder (not installed)" }
+
     /// The depot and source app of a receipt's `skippedDepots` entry for a redistributable; nil for any other.
     public static func sharedInstall(skipped entry: String) -> (depotID: UInt32, appID: UInt32)? {
         let parts = entry.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -84,7 +90,9 @@ public struct DepotSelection: Sendable, Equatable {
     }
 
     static func exclusion(_ d: DepotInfo, _ o: Options) -> String? {
-        if let from = d.depotFromApp, d.sharesInstallDir != true { return sharedInstallReason(from) }
+        if let from = d.depotFromApp, !d.isContentFromAnotherApp {
+            return from == CommonRedistributables.appID ? sharedInstallReason(from) : sharedInstallElsewhereReason(from)
+        }
         if d.publicManifestGID == nil { return d.encryptedManifestsOnly ? "encrypted manifests only" : "no public manifest" }
         if !d.isWindows { return "os \(d.osList.joined(separator: ","))" }
         if let arch = d.osArch, !arch.isEmpty, arch != "64" { return "osarch \(arch)" }

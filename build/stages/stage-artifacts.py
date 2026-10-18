@@ -39,6 +39,7 @@ under $PLAYPORT_RUN, default $PLAYPORT_BUILD/run):
   STEAMAPI_ROOT       steamapi/pe        stages/steamapi.sh (P8-steamapi): gbe_fork's steam_api DLLs
   session             session            stages/session-root.sh (P9-session, P9-url-opener): the session
                                          root and the URL opener
+  steamclient         steamclient        stages/steamclient.sh (P9-steamclient): Playport's steamclient64.dll
   idevice             idevice            stages/idevice.sh (P10-idevice): idevice's C FFI, one object
   registry            app/registry (committed; app/tools/prefix-registry.py, P7-reg)
   ca-bundle           $PLAYPORT_BUILD/cache/ca-bundle-<pin>
@@ -82,6 +83,7 @@ ROOTS = {
     "vulkan-pe": Path(os.environ.get("VULKAN_PE_ROOT", RUN / "vulkan-pe" / "pe")),
     "steamapi": Path(os.environ.get("STEAMAPI_ROOT", RUN / "steamapi" / "pe")),
     "session": RUN / "session",
+    "steamclient": RUN / "steamclient",
     "idevice": RUN / "idevice",
     "registry": PKG / "registry",
     "ca-bundle": BUILD / "cache" / f"ca-bundle-{pin('ca-bundle')}",
@@ -119,6 +121,7 @@ HEADER = """\
 #   P6-gst    winegstreamer's unix side (wine pin + patches/wine-port + patches/wine-unix) prelinked with the static plugin set from the pins.lock gstreamer iOS release (build/stages/gstreamer.sh); one object, one exported symbol
 #   P8-steamapi gbe_fork (LGPL-3.0) at the gbe pin + patches/gbe: its regular steam_api for x86-64 and i386 with its static dependencies (build/stages/steamapi.sh, llvm-mingw 20260922); native DLLs under Runtime/steamapi/, which the app copies into a game's folder in place of the game's own (SteamClientKit SteamAPISwap)
 #   P9-session app/SessionRoot/playport-session.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the one Wine main process of an app run, which starts every title as its child (decision 0027); in arm64ec-windows so the prefix's system32 has it
+#   P9-steamclient app/SteamClientShim/steamclient.c (Playport's own; its generated slot table from the Steamworks SDK headers pinned as gbe's sdk/) compiled by build/stages/steamclient.sh (llvm-mingw 20260922) as a freestanding x86-64 DLL: Playport's Steam client for a game's genuine steam_api (decision 0115), which the app copies to the prefix's C:\Program Files (x86)\Steam\ for a play in client mode
 #   P9-url-opener app/UrlOpener/playport-url-opener.c (Playport's own) compiled by build/stages/session-root.sh (llvm-mingw 20260922) as a freestanding x86-64 program: the prefix's http and https handler, which hands a URL a game opens to the host app (decision 0064); in arm64ec-windows so the prefix's system32 has it
 #   P10-idevice idevice (MIT) at the idevice pin, its C FFI with the features the app's restart uses, built for aarch64-apple-ios with the pins.lock Rust (build/stages/idevice.sh) and prelinked into one object that exports four calls (app/Sources/Relaunch); its crates are in the run's idevice/crates.tsv
 #   P7-reg    app/registry/{system,user}.reg (committed): app/tools/prefix-registry.py applies the WINE_REGISTRY scripts of the staged arm64ec-windows DLLs as wineboot's register_fake_dll would; wine_host.c appends the sections a prefix lacks before the wineserver starts
@@ -312,6 +315,7 @@ def record():
         add("resource", f"Runtime/steamapi/{arch}-windows/{name}", "steamapi", f"{arch}-windows/{name}", "P8-steamapi")
     add("resource", "Runtime/arm64ec-windows/playport-session.exe", "session", "playport-session.exe", "P9-session")
     add("resource", "Runtime/arm64ec-windows/playport-url-opener.exe", "session", "playport-url-opener.exe", "P9-url-opener")
+    add("resource", "Runtime/steamclient/x86_64-windows/steamclient64.dll", "steamclient", "steamclient64.dll", "P9-steamclient")
     for name in NLS:
         add("resource", f"Runtime/nls/{name}", "unix", f"wine/nls/{name}", "nls")
     for name in FONTS:
@@ -390,6 +394,8 @@ def release_xtool_yml(text):
             line, product = "product: Playport\n", product + 1
         elif line == "iconPath: Icon/AppIcon-dev.png\n":
             line, icon = "iconPath: Icon/AppIcon.png\n", icon + 1
+        elif line.strip() == "- Sources/S1Probe/Runtime/cef":
+            continue  # Decision 0110: the separate CEF payload is dev-only.
         elif line.lstrip().startswith("- Sources/S1Probe/Runtime/"):
             line, runtime = line.replace("Sources/S1Probe/Runtime/", "Runtime/", 1), runtime + 1
         out.append(line)

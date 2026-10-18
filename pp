@@ -4,6 +4,7 @@
 
 Build and ship
   pp setup [--check]              record where this machine's toolchains and netmuxd socket are (once)
+           [--phone-addr IP]      the phone's WireGuard address, for driving it away from home
   pp build [--variant dev|release] [--unsigned] [--clean | --from STAGE] [--to STAGE] [--keep-outputs N] [--plan]
                                   build what changed into a verified IPA (keeps the newest 3;
                                   --plan: which stages would run and why, building nothing;
@@ -100,8 +101,12 @@ C_TESTS = [
     ("session protocol", ["app/tests/session_protocol_test.c"], []),
     ("jit debugger", ["app/tests/jit_debugger_test.c"], []),
     ("steam tickets", ["app/tests/steam_ticket_test.c", "app/Sources/WineHost/steam_ticket.c"], []),
+    ("steam client", ["app/tests/steam_client_test.c", "app/Sources/WineHost/steam_client.c"], []),
+    ("steamclient trace", ["app/tests/steamclient_trace_test.c"], []),
     ("url opener", ["app/tests/url_opener_test.c", "app/Sources/WineHost/url_opener.c"], []),
+    ("time zone bias", ["app/tests/timezone_bias_test.c", "app/Sources/WineHost/timezone_bias.c"], ["-D_DEFAULT_SOURCE"]),
     ("command line", ["app/tests/command_line_test.c"], []),
+    ("cef swap", ["app/tests/cef_swap_test.c", "app/Sources/WineHost/cef_swap.c"], ["-D_GNU_SOURCE", "-pthread"]),
     ("guest pool", ["app/tests/guest_pool_test.c", "app/Sources/SharedMemory/guest_pool.c"],
      ["-Iapp/Sources/SharedMemory", "-fsanitize=address,undefined"]),
 ]
@@ -160,12 +165,23 @@ def cmd_secrets(args):
 
 
 def cmd_names(args):
-    """No tracked file (in COMMIT, or the index) names the retired project or its identifier
-    prefix, in any letter case. The patterns are split so this file does not match itself."""
-    old, prefix = "game" "native", r"\b" "gn[_-]"
+    """Reject retired provenance/prefixes in tracked files (COMMIT or index).
+
+    Only two exact upstream GN tokens in CEF/Chromium patches are exempt;
+    checks.name_scan_text defines this path-scoped exception for both gates.
+    """
+    old, prefix = checks.NAME_PATTERNS
     where = [args[0]] if args else ["--cached"]
-    hits = subprocess.run(["git", "-C", REPO, "grep", "-n", "-I", "-i", "-e", old, "-e", prefix, *where, "--", "."],
-                          capture_output=True, text=True).stdout
+    raw = subprocess.run(["git", "-C", REPO, "grep", "-z", "-n", "-I", "-i", "-e", old, "-e", prefix, *where, "--", "."],
+                         capture_output=True, text=True).stdout
+    hits = []
+    for hit in raw.splitlines():
+        path, number, line = hit.split("\0", 2)
+        relative = path.removeprefix(args[0] + ":") if args else path
+        text = checks.name_scan_text(relative, line)
+        if any(re.search(pattern, text, re.I) for pattern in checks.NAME_PATTERNS):
+            hits.append(f"{path}:{number}:{line}\n")
+    hits = "".join(hits)
     if hits:
         sys.stderr.write(hits)
         print(f"pp names: {len(hits.splitlines())} line(s) use a retired name or prefix", file=sys.stderr)
@@ -410,6 +426,9 @@ def phone_status():
     phone = phonelib.Phone()
     try:
         devs = phone.devices()
+        if not devs and phone.add_away():  # away from home: added by address (docs/DEVICE.md)
+            devs = phone.devices()
+            s["away"] = phonelib.PHONE_ADDR
         s["phones"] = len(devs)
         if len(devs) == 1:
             d = devs[0]
@@ -424,7 +443,10 @@ def phone_status():
             except (ValueError, KeyError):
                 pass
         elif not devs:
-            s["error"] = f"no phone on {phonelib.SOCK}: wake and unlock it, check it is on the same network (or cabled)"
+            away = (f" or on WireGuard at {phonelib.PHONE_ADDR} ({phone.away_why})"
+                    if phonelib.PHONE_ADDR else "")
+            s["error"] = (f"no phone on {phonelib.SOCK}: wake and unlock it, check it is on the same "
+                          f"network (or cabled){away}")
     except phonelib.PhoneError as e:
         s["error"] = str(e)
     print(json.dumps(s, indent=1))

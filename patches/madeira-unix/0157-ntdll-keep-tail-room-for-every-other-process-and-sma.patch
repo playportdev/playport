@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 10:12:27 +0200
+Subject: [PATCH] ntdll: keep tail room for every other process, and small asks
+ off code-sized carves
+
+The Rockstar Games Launcher's session runs about ten emulated processes in
+the one JIT pool. The tail's cap granted a process that filled its first
+code buffer up to 128 MB while 48 MB stayed free for the head: Social
+Club's browser and its first renderer each took 128 MB, the head then
+grew by 60 MB of late images, and head and tail met (tail 433 MB, head
+463 MB of 896): the next renderer's code buffer was refused and the
+launcher showed nothing.
+
+The reserve now also keeps one initial-size code buffer (16 MB) for each
+other process holding a live tail carve. A lone game (one emulated
+process beside its start process) loses 16 MB of room and keeps its
+128 MB buffer; in the launcher the browser still gets 128 MB, a later
+renderer 32 MB. The cap's log lines name the count.
+
+A 16 KB ask (FEX's dispatcher) was served a free 16 MB carve, and the
+same process's first code buffer then carved a fresh 16 MB. An ask below
+16 MB now takes a carve of 16 MB or more only when a fresh carve would
+not fit.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-18-pool-tail.md
+Offered-upstream: no; the JIT pool is Madeira's own iOS code
+---
+ build/ntdll-unix/virtual_ios.c | 48 +++++++++++++++++++++++++++++-----
+ 1 file changed, 42 insertions(+), 6 deletions(-)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index a23248f..acd8fce 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -3013,6 +3013,25 @@ static void ios_tail_log_process_share( void )
+              (unsigned long)(live >> 20), carves );
+ }
+ 
++/* Playport (PLA-394): how many processes other than the current one hold a live tail
++ * carve. The tail cap keeps room for each of them (decision 0116). */
++static unsigned ios_tail_other_live_processes( void )
++{
++    void *owner = ios_jit_current_peb();
++    unsigned i, j, others = 0;
++
++    pthread_mutex_lock( &ios_tail_carve_lock );
++    for (i = 0; i < ios_tail_carve_n; i++)
++    {
++        if (ios_tail_carves[i].free || ios_tail_carves[i].owner == owner) continue;
++        for (j = 0; j < i; j++)
++            if (!ios_tail_carves[j].free && ios_tail_carves[j].owner == ios_tail_carves[i].owner) break;
++        if (j == i) others++;
++    }
++    pthread_mutex_unlock( &ios_tail_carve_lock );
++    return others;
++}
++
+ /* Playport: the pool's use, for the host (wine_host_pool_stats, which a launch
+  * logs as `pool:` lines). v[] gets, in this order and in bytes or counts:
+  *    0 size          the pool
+@@ -21308,10 +21327,18 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+              * now what the pool can actually afford: up to 128 MB (the branch
+              * range FEX itself limits a buffer to) while HEAD_RESERVE stays free
+              * between the image head and the tail. */
++            /* Playport (PLA-394, decision 0116): a session of many processes (a
++             * launcher's CEF tree) shares this pool, and a big buffer granted to one
++             * of them took the room the others' images and next buffers needed: two
++             * 128 MB grants, then head and tail met and every later process failed.
++             * The reserve now also keeps one initial-size buffer (TAIL_SMALL) per
++             * other process holding a live carve, so a lone game keeps its cap. */
+             enum { TAIL_SMALL = 0x1000000, TAIL_MAX = 0x8000000, HEAD_RESERVE = 48u * 1024 * 1024 };
+             size_t head_now = jit_pool_offset, tail_now = ios_jit_tail_reserved;
+-            size_t room = ios_jit_pool_size_global > head_now + tail_now + HEAD_RESERVE
+-                        ? ios_jit_pool_size_global - head_now - tail_now - HEAD_RESERVE : 0;
++            unsigned others = ios_tail_other_live_processes();
++            size_t reserve = HEAD_RESERVE + (size_t)others * TAIL_SMALL;
++            size_t room = ios_jit_pool_size_global > head_now + tail_now + reserve
++                        ? ios_jit_pool_size_global - head_now - tail_now - reserve : 0;
+             size_t cap = TAIL_SMALL;
+             while (cap < TAIL_MAX && cap * 2 <= room) cap *= 2;
+             /* A retired generation of this size already sitting on the carve
+@@ -21329,9 +21356,9 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+                 static int cap_log_n;
+                 if (cap_log_n < 16) {
+                     cap_log_n++;
+-                    dprintf(2, "[jit-pool] tail CAP: refusing 0x%lx (cap 0x%lx, tail_resv=0x%lx) so FEX halves down rev=ml480\n",
++                    dprintf(2, "[jit-pool] tail CAP: refusing 0x%lx (cap 0x%lx, tail_resv=0x%lx, other processes %u) so FEX halves down rev=ml480\n",
+                             (unsigned long)alloc_size, (unsigned long)cap,
+-                            (unsigned long)ios_jit_tail_reserved);
++                            (unsigned long)ios_jit_tail_reserved, others);
+                 }
+                 return STATUS_NO_MEMORY;
+             }
+@@ -21339,17 +21366,26 @@ NTSTATUS WINAPI NtAllocateVirtualMemoryEx( HANDLE process, PVOID *ret, SIZE_T *s
+                 static int big_log_n;
+                 if (big_log_n < 16) {
+                     big_log_n++;
+-                    dprintf(2, "[jit-pool] tail BIG: granting 0x%lx (tail_resv=0x%lx) rev=ml480\n",
+-                            (unsigned long)alloc_size, (unsigned long)ios_jit_tail_reserved);
++                    dprintf(2, "[jit-pool] tail BIG: granting 0x%lx (tail_resv=0x%lx, other processes %u) rev=ml480\n",
++                            (unsigned long)alloc_size, (unsigned long)ios_jit_tail_reserved, others);
+                 }
+             }
+         }
+         /* ml438 (#74): serve from the free-list first — see ios_tail_carves. */
+         {
+             unsigned i, best = ~0u;
++            /* Playport (PLA-394): an ask smaller than FEX's initial code buffer (its
++             * 16 KB dispatcher) took a free 16 MB carve, and the same process's code
++             * buffer then carved a fresh 16 MB. Such an ask takes a carve of 16 MB or
++             * more only when a fresh carve would not fit. */
++            size_t tail_now = ios_jit_tail_reserved;
++            int fresh_fits = tail_now + alloc_size <= (ios_jit_pool_size_global / 4) * 3 &&
++                             ios_jit_pool_size_global - tail_now - alloc_size >= jit_pool_offset;
++            int skip_code_sized = alloc_size < 0x1000000 && fresh_fits;
+             pthread_mutex_lock( &ios_tail_carve_lock );
+             for (i = 0; i < ios_tail_carve_n; i++)
+                 if (ios_tail_carves[i].free && ios_tail_carves[i].size >= alloc_size &&
++                    !(skip_code_sized && ios_tail_carves[i].size >= 0x1000000) &&
+                     (best == ~0u || ios_tail_carves[i].size < ios_tail_carves[best].size) &&
+                     /* Playport: a carve freed by a dead process's reclaim is
+                      * checked again at hand-out, as ml557 does at a FEX free */

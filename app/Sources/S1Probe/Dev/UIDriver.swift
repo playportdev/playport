@@ -11,6 +11,11 @@
 //                              run in the new process, under this run (DriverContinuation);
 //                              a Play refused before the runtime started (its alert shows)
 //                              goes on here
+//   open-launcher:<id>         Settings › Launchers' Open for a publisher's launcher
+//                              (PlayportKit PublisherLauncher: rockstar), followed as play:
+//   forget-launcher-window:<id> Settings › Launchers' Forget the launcher's saved window
+//                              settings: deletes that one file in the prefix (a `launcher:
+//                              forget-window` line says removed or absent)
 //   install:<app id>           Install from Steam (the paired account's session);
 //                              waits until the title is in the library
 //   install:gog-<id>[@<build>] Install from GOG (signed in on the phone), the newest build or
@@ -67,7 +72,7 @@
 //                              row opens the ActionPicker, whose presses pad: sends);
 //                              `open:settings#<section>` shows a Settings section (accounts,
 //                              graphics, downloads, controls, storage, setup, about,
-//                              developer; PlayportKit SettingsSection.named also takes
+//                              launchers, developer; PlayportKit SettingsSection.named also takes
 //                              account, steam, jit, memory, diagnostics, pairing, probes, logs,
 //                              gyro: Controls, ringed at its Gyro aim rows, and controller:
 //                              Settings › Controls › Controller, the default's page);
@@ -243,7 +248,10 @@ enum UIDriver {
                 let parts = action.split(separator: ":", maxSplits: 1).map(String.init)
                 guard parts.count == 2 else { return finish("action=\(action) refused: not <verb>:<id>") }
                 let id = parts[1]
-                if ["verify", "play", "uninstall", "settings", "controls"].contains(parts[0]), library.title(id) == nil {
+                // settings:launcher-ID saves what Settings › Launchers' Open reads (LauncherOpen.open).
+                let launcherSettings = parts[0] == "settings" && PublisherLauncher.all.contains { $0.titleID == id }
+                if ["verify", "repair", "play", "uninstall", "settings", "controls"].contains(parts[0]), !launcherSettings,
+                   library.title(id) == nil {
                     return finish("action=\(action) refused: \(id) is not a catalogued title")
                 }
                 switch parts[0] {
@@ -272,7 +280,7 @@ enum UIDriver {
                     LaunchSettingsStore.shared.binding(for: id).wrappedValue = s
                     let e = LibraryModel.shared.title(id).map { LaunchSettingsStore.shared.effective(for: $0) }
                         ?? LaunchSettings.resolve(game: s, global: LaunchSettingsStore.shared.global)
-                    log("settings \(id): screen=\(e.screen ?? "native") aspect=\(e.aspect.rawValue) limit=\(e.frameLimit) graphics=\(e.graphics.rawValue) arguments=\(e.arguments) ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in e.ordering[s].map { "\(s.rawValue)=\($0)" } }) maxInst=\(e.maxInst.map(String.init) ?? "profile") x87Reduced=\(e.x87Reduced.map { String($0) } ?? "profile") diskCache=\(e.diskCache.map { String($0) } ?? "default") runtime=\(e.runtime.keys.sorted().map { "\($0)=\(e.runtime[$0]!)" }) graphicsOptions=\(e.graphicsEnvironment.keys.sorted().map { "\($0)=\(e.graphicsEnvironment[$0]!)" })")
+                    log("settings \(id): screen=\(e.screen ?? "native") aspect=\(e.aspect.rawValue) limit=\(e.frameLimit) graphics=\(e.graphics.rawValue) arguments=\(e.arguments) ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in e.ordering[s].map { "\(s.rawValue)=\($0)" } }) maxInst=\(e.maxInst.map(String.init) ?? "profile") x87Reduced=\(e.x87Reduced.map { String($0) } ?? "profile") diskCache=\(e.diskCache.map { String($0) } ?? "default") runtime=\(e.runtime.keys.sorted().map { "\($0)=\(e.runtime[$0]!)" }) graphicsOptions=\(e.graphicsEnvironment.keys.sorted().map { "\($0)=\(e.graphicsEnvironment[$0]!)" }) windowsServices=\(e.windowsServices) jitPoolMB=\(e.jitPoolMB.map(String.init) ?? "default")")
                 case "controls":
                     guard let json = env["UI_CONTROLS"],
                           let c = try? JSONDecoder().decode(GameControls.self, from: Data(json.utf8)) else {
@@ -641,6 +649,12 @@ enum UIDriver {
                         return finish("action=\(action) failed: not in front again \(seconds + 180) s after leaving")
                     }
                     log("background: in front again after \(Int(Date().timeIntervalSince(left))) s")
+                case "forget-launcher-window":
+                    guard let launcher = PublisherLauncher.named(id), launcher.windowSettingsFile != nil else {
+                        return finish("action=\(action) refused: \(id) is not a launcher with window settings")
+                    }
+                    guard !TitleLaunch.shared.running else { return finish("action=\(action) refused: a launch is running") }
+                    if let failure = LauncherOpen.forgetWindowSettings(launcher) { return finish("action=\(action) failed: \(failure)") }
                 case "uninstall":
                     if let failure = await uninstall(id) { return finish("action=\(action) failed: \(failure)") }
                 case "verify":
@@ -651,9 +665,20 @@ enum UIDriver {
                     } else {
                         return finish("action=\(action) failed: \(library.verifyErrors[id] ?? "no result")")
                     }
-                case "play":
+                case "repair":
+                    if let failure = await repair(id) { return finish("action=\(action) failed: \(failure)") }
+                case "play", "open-launcher":
+                    // open-launcher:ID is Settings › Launchers' Open (UI/LaunchersSettings.swift), followed as a play.
+                    let launcher = parts[0] == "open-launcher" ? PublisherLauncher.named(id) : nil
+                    if parts[0] == "open-launcher", launcher == nil {
+                        return finish("action=\(action) refused: \(id) is not a launcher (\(PublisherLauncher.all.map(\.id).joined(separator: ", ")))")
+                    }
                     do {
-                        guard try await library.play(id) else {
+                        let started = if let launcher { await LauncherOpen.open(launcher) } else { try await library.play(id) }
+                        guard started else {
+                            if launcher != nil {
+                                return finish("action=\(action) refused: not installed, or a launch is running or Playport needs a restart")
+                            }
                             if case .cloud = PadModal.shared.content {
                                 try? await Task.sleep(for: .milliseconds(1000))   // the screen drawn, for a screenshot
                                 return finish("action=\(action) refused: \(PadModal.shared.summary ?? "cloud conflict"): "
@@ -661,7 +686,7 @@ enum UIDriver {
                             }
                             return finish("action=\(action) refused: a launch is running or Playport needs a restart")
                         }
-                        log("play \(id): started")
+                        log("\(parts[0]) \(id): started")
                     } catch {
                         return finish("action=\(action) failed: \(error)")
                     }
@@ -672,11 +697,11 @@ enum UIDriver {
                         if AppRestart.shared.restarting {
                             // The restarted process runs the rest (DriverContinuation, saved as it asks).
                             RunEvents.emit("ui-action", ["action": action, "result": "ok", "index": done + 1, "restart": true])
-                            log("play \(id): ended; Playport restarts, and the new process goes on")
+                            log("\(parts[0]) \(id): ended; Playport restarts, and the new process goes on")
                             return
                         }
                         try? await Task.sleep(for: .milliseconds(1500))   // the alert drawn, for a screenshot
-                        log("play \(id): ended without starting the runtime: \(launch.message?.title ?? "no message")"
+                        log("\(parts[0]) \(id): ended without starting the runtime: \(launch.message?.title ?? "no message")"
                             + (launch.message?.step.map { " (failed at \(LaunchProgress.stepName($0)))" } ?? ""))
                     }
                 default:
@@ -765,6 +790,37 @@ enum UIDriver {
         guard let t = library.catalog.titles.first(where: { $0.appID == app }) else { return "done, but not in the library" }
         log(String(format: "install \(app): in the library as \(t.id) [\(t.badge.rawValue)] build=\(t.buildID.map(String.init) ?? "?") "
                     + "size=\(t.sizeBytes ?? 0) exe=\(t.executable ?? "none") after %.0f s", Date().timeIntervalSince(started)))
+        return nil
+    }
+
+    /// The game page's Repair from Steam, which it offers after a check that did not pass (a
+    /// verify: first); nil once the repair's job ended with the files checked OK, else why not.
+    private static func repair(_ id: String) async -> String? {
+        let library = LibraryModel.shared
+        guard let t = library.title(id), t.source == .installed, let app = t.appID else { return "\(id) is not a Steam install" }
+        guard let v = t.lastVerification, !v.ok else { return "the page offers no Repair: its last check passed or there is none" }
+        guard let steam = SteamAccountModel.current else { return "no Steam model" }
+        for _ in 0..<600 where steam.state.account == nil || { if case .restoring = steam.state { return true }; return false }() {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard case .signedIn = steam.state else { return "Steam is not signed in (\(steam.state))" }
+        let installs = steam.installs
+        let started = Date()
+        log("repair \(id): started")
+        installs.repair(app, name: t.name)
+        var lastLog = Date()
+        while let j = installs.jobs[.steam(app)] {
+            if case let .paused(reason) = j.phase { return "paused: \(reason ?? "no reason")" }
+            if Date().timeIntervalSince(lastLog) > 30 {
+                lastLog = Date()
+                log("repair \(id): \(j.status) \(j.detail ?? "")")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let after = library.title(id)?.lastVerification, after.ok, after.date > started else {
+            return "the repair ended without a passing check"
+        }
+        log(String(format: "repair \(id): \(after.files) files OK after %.0f s", Date().timeIntervalSince(started)))
         return nil
     }
 

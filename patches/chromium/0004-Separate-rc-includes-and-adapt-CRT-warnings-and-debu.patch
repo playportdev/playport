@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 18:21:39 +0200
+Subject: [PATCH] Separate rc includes and adapt CRT warnings and debug
+ libraries
+
+Formalize stage A-C scratch diff 005, retaining the built bytes.
+Apply after the pinned CEF stock patches.
+
+Class: linux-build
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+---
+ build/toolchain/win/setup_toolchain.py | 10 ++++++++++
+ build/toolchain/win/toolchain.gni      | 12 +++++++++++-
+ 2 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/build/toolchain/win/setup_toolchain.py b/build/toolchain/win/setup_toolchain.py
+index 29a0bd2..3b0ff0d 100644
+--- a/build/toolchain/win/setup_toolchain.py
++++ b/build/toolchain/win/setup_toolchain.py
+@@ -304,13 +304,21 @@ def main():
+       include_I = ['/I' + i for i in include]
+       include_imsvc = ['-imsvc' + i for i in include]
+       libpath_flags = ['-libpath:' + i for i in lib]
++      # rc.py accepts include paths but not the compiler's VFS overlay flag.
++      include_rc = list(include_imsvc)
+       if sys.platform.startswith('linux'):
+         overlay = os.path.join(toolchain_root, 'overlay.json')
+         assert os.path.isfile(overlay), overlay
+         include_imsvc.extend(['-vfsoverlay', relflag(overlay)])
++        # The xwin CRT 14.43 headers (threads.h) use UCRT macros that the
++        # SDK 10.0.26100 corecrt.h predates; define them empty.
++        include_imsvc.extend(['/D_UCRT_DISABLE_CLANG_WARNINGS=',
++                              '/D_UCRT_RESTORE_CLANG_WARNINGS='])
+         # lld's VFS lookup needs absolute search paths to match overlay roots.
+         libpath_flags = ['-libpath:' + os.path.abspath(i) for i in lib]
+         libpath_flags.append('/vfsoverlay:' + overlay)
++        # xwin ships no CRT PDBs, so libcmt.lib's debug info cannot be found.
++        libpath_flags.append('/ignore:4099')
+ 
+       if (environment_block_name != ''):
+         env_block = _FormatAsEnvironmentBlock(env)
+@@ -332,9 +340,11 @@ def main():
+     flags = ['/winsysroot' + relflag(toolchain_root)]
+     print(f'include_flags_imsvc = {ListToArgString(flags)}')
+     print(f'include_flags_imsvc_list = {ListToArgList(flags)}')
++    print(f'include_flags_rc = {ListToArgString(flags)}')
+   else:
+     print(f'include_flags_imsvc = {ListToArgString(include_imsvc)}')
+     print(f'include_flags_imsvc_list = {ListToArgList(include_imsvc)}')
++    print(f'include_flags_rc = {ListToArgString(include_rc)}')
+   print('paths = ' + gn_helpers.ToGNString(env['PATH']))
+   assert libpath_flags
+   print(f'libpath_flags = {ListToArgString(libpath_flags)}')
+diff --git a/build/toolchain/win/toolchain.gni b/build/toolchain/win/toolchain.gni
+index c541192..e3aebdb 100644
+--- a/build/toolchain/win/toolchain.gni
++++ b/build/toolchain/win/toolchain.gni
+@@ -133,11 +133,17 @@ template("msvc_toolchain") {
+       env_wrapper = ""
+       sys_include_flags =
+           "${invoker.sys_include_flags} "  # Note trailing space.
++      if (defined(invoker.rc_sys_include_flags)) {
++        rc_sys_include_flags = "${invoker.rc_sys_include_flags} "
++      } else {
++        rc_sys_include_flags = sys_include_flags
++      }
+     } else {
+       # clang-cl doesn't need this env hoop, so omit it there.
+       assert(!toolchain_is_clang)
+       env_wrapper = "ninja -t msvc -e $env -- "  # Note trailing space.
+       sys_include_flags = ""
++      rc_sys_include_flags = ""
+     }
+ 
+     if (host_os != "win" || (use_lld && defined(invoker.sys_lib_flags))) {
+@@ -260,7 +266,7 @@ template("msvc_toolchain") {
+       } else {
+         werror = ""
+       }
+-      command = "\"$python_path\" $_tool_wrapper_path rc-wrapper $env rc.exe /nologo $werror$sys_include_flags{{defines}} {{include_dirs}} /fo{{output}} {{source}}"
++      command = "\"$python_path\" $_tool_wrapper_path rc-wrapper $env rc.exe /nologo $werror$rc_sys_include_flags{{defines}} {{include_dirs}} /fo{{output}} {{source}}"
+       depsformat = "msvc"
+       outputs = [ "$object_subdir/{{source_name_part}}.res" ]
+       description = "RC {{output}}"
+@@ -800,6 +806,7 @@ template("win_toolchains") {
+     cl = "${_clang_bin_path}/clang-cl${_exe}"
+ 
+     sys_include_flags = "${win_toolchain_data.include_flags_imsvc}"
++    rc_sys_include_flags = "${win_toolchain_data.include_flags_rc}"
+     if (use_lld) {
+       sys_lib_flags = "-libpath:$_clang_lib_dir " +
+                       "${win_toolchain_data.libpath_lldlink_flags}"
+@@ -820,6 +827,7 @@ template("win_toolchains") {
+     cl = "${_clang_bin_path}/clang-cl${_exe}"
+ 
+     sys_include_flags = "${rust_host_win_toolchain_data.include_flags_imsvc}"
++    rc_sys_include_flags = "${rust_host_win_toolchain_data.include_flags_rc}"
+     if (use_lld) {
+       sys_lib_flags = "-libpath:$_clang_lib_dir " +
+                       "${rust_host_win_toolchain_data.libpath_lldlink_flags}"
+@@ -840,6 +848,7 @@ template("win_toolchains") {
+     cl = "${_clang_bin_path}/clang-cl${_exe}"
+ 
+     sys_include_flags = "${win_toolchain_data.include_flags_imsvc}"
++    rc_sys_include_flags = "${win_toolchain_data.include_flags_rc}"
+     if (use_lld) {
+       sys_lib_flags = "-libpath:$_clang_lib_dir " +
+                       "${win_toolchain_data.libpath_lldlink_flags}"
+@@ -860,6 +869,7 @@ template("win_toolchains") {
+     cl = "${_clang_bin_path}/clang-cl${_exe}"
+ 
+     sys_include_flags = "${rust_host_win_toolchain_data.include_flags_imsvc}"
++    rc_sys_include_flags = "${rust_host_win_toolchain_data.include_flags_rc}"
+     if (use_lld) {
+       sys_lib_flags = "-libpath:$_clang_lib_dir " +
+                       "${rust_host_win_toolchain_data.libpath_lldlink_flags}"

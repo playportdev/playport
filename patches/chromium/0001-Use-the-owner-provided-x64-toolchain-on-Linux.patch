@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 18:21:39 +0200
+Subject: [PATCH] Use the owner-provided x64 toolchain on Linux
+
+Formalize stage A-C scratch diff 002, retaining the built bytes.
+Apply after the pinned CEF stock patches.
+
+Class: linux-build
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+---
+ build/config/win/visual_studio_version.gni |  8 ++++---
+ build/toolchain/linux/BUILD.gn             |  6 ++++++
+ build/toolchain/win/BUILD.gn               |  6 ++++--
+ build/toolchain/win/setup_toolchain.py     | 13 +++++++++--
+ build/toolchain/win/win_toolchain_data.gni | 25 ++++++++++++----------
+ 5 files changed, 40 insertions(+), 18 deletions(-)
+
+diff --git a/build/config/win/visual_studio_version.gni b/build/config/win/visual_studio_version.gni
+index fba7843..e3a14cd 100644
+--- a/build/config/win/visual_studio_version.gni
++++ b/build/config/win/visual_studio_version.gni
+@@ -34,9 +34,11 @@ if (visual_studio_path == "") {
+ } else {
+   assert(visual_studio_version != "",
+          "You must set the visual_studio_version if you set the path")
+-  assert(visual_studio_runtime_dirs != "",
+-         "You must set the visual_studio_runtime_dirs if you set the visual " +
+-         "studio path")
++  # Cross-built binaries are not executed on the Linux build host.
++  if (host_os == "win") {
++    assert(visual_studio_runtime_dirs != "",
++           "You must set visual_studio_runtime_dirs on Windows")
++  }
+   assert(windows_sdk_version != "",
+          "You must set the windows_sdk_version if you set the path")
+ }
+diff --git a/build/toolchain/linux/BUILD.gn b/build/toolchain/linux/BUILD.gn
+index a6e20a0..afaa50e 100644
+--- a/build/toolchain/linux/BUILD.gn
++++ b/build/toolchain/linux/BUILD.gn
+@@ -111,6 +111,12 @@ clang_toolchain("clang_x64") {
+   toolchain_args = {
+     current_cpu = "x64"
+     current_os = "linux"
++    if (target_os == "win") {
++      # CEF enables these for the Windows payload, not Linux host tools.
++      enable_cdm_host_verification = false
++      enable_cdm_storage_id = false
++      enable_rlz = false
++    }
+   }
+ }
+ 
+diff --git a/build/toolchain/win/BUILD.gn b/build/toolchain/win/BUILD.gn
+index 87d1e4a..9dc50e4 100644
+--- a/build/toolchain/win/BUILD.gn
++++ b/build/toolchain/win/BUILD.gn
+@@ -31,8 +31,10 @@ if (current_toolchain == default_toolchain) {
+ }
+ 
+ if (target_cpu == "x86" || target_cpu == "x64") {
+-  win_toolchains("x86") {
+-    toolchain_arch = "x86"
++  if (host_os == "win" || target_cpu == "x86") {
++    win_toolchains("x86") {
++      toolchain_arch = "x86"
++    }
+   }
+   win_toolchains("x64") {
+     toolchain_arch = "x64"
+diff --git a/build/toolchain/win/setup_toolchain.py b/build/toolchain/win/setup_toolchain.py
+index f1583a4..29a0bd2 100644
+--- a/build/toolchain/win/setup_toolchain.py
++++ b/build/toolchain/win/setup_toolchain.py
+@@ -110,7 +110,8 @@ def _LoadToolchainEnv(cpu, toolchain_root, sdk_dir, target_store):
+   # the setup script from the SDK if so. |cpu| should be either
+   # 'x86' or 'x64' or 'arm' or 'arm64'.
+   assert cpu in ('x86', 'x64', 'arm', 'arm64')
+-  if bool(int(os.environ.get('DEPOT_TOOLS_WIN_TOOLCHAIN', 1))) and sdk_dir:
++  if sdk_dir and (sys.platform.startswith('linux') or
++                  bool(int(os.environ.get('DEPOT_TOOLS_WIN_TOOLCHAIN', 1)))):
+     # Load environment from json file.
+     env = os.path.normpath(os.path.join(sdk_dir, 'bin/SetEnv.%s.json' % cpu))
+     env = json.load(open(env))['env']
+@@ -281,7 +282,8 @@ def main():
+       env = _LoadToolchainEnv(cpu, toolchain_root, win_sdk_path, target_store)
+       env['PATH'] = runtime_dirs + os.pathsep + env['PATH']
+ 
+-      vc_bin_dir = FindFileInEnvList(env, 'PATH', os.pathsep, 'cl.exe')
++      vc_bin_dir = FindFileInEnvList(env, 'PATH', os.pathsep, 'cl.exe',
++                                   optional=sys.platform.startswith('linux'))
+ 
+       # The separator for INCLUDE here must match the one used in
+       # _LoadToolchainEnv() above.
+@@ -302,6 +304,13 @@ def main():
+       include_I = ['/I' + i for i in include]
+       include_imsvc = ['-imsvc' + i for i in include]
+       libpath_flags = ['-libpath:' + i for i in lib]
++      if sys.platform.startswith('linux'):
++        overlay = os.path.join(toolchain_root, 'overlay.json')
++        assert os.path.isfile(overlay), overlay
++        include_imsvc.extend(['-vfsoverlay', relflag(overlay)])
++        # lld's VFS lookup needs absolute search paths to match overlay roots.
++        libpath_flags = ['-libpath:' + os.path.abspath(i) for i in lib]
++        libpath_flags.append('/vfsoverlay:' + overlay)
+ 
+       if (environment_block_name != ''):
+         env_block = _FormatAsEnvironmentBlock(env)
+diff --git a/build/toolchain/win/win_toolchain_data.gni b/build/toolchain/win/win_toolchain_data.gni
+index a6e8328..e27d46b 100644
+--- a/build/toolchain/win/win_toolchain_data.gni
++++ b/build/toolchain/win/win_toolchain_data.gni
+@@ -5,17 +5,20 @@
+ import("//build/config/win/visual_studio_version.gni")
+ 
+ declare_args() {
+-  win_toolchain_data_x86 =
+-      exec_script("//build/toolchain/win/setup_toolchain.py",
+-                  [
+-                    visual_studio_path,
+-                    windows_sdk_path,
+-                    visual_studio_runtime_dirs,
+-                    "win",
+-                    "x86",
+-                    "environment.x86",
+-                  ],
+-                  "scope")
++  # A Linux cross-build needs only the selected Windows architecture.
++  if (host_os == "win" || target_cpu == "x86") {
++    win_toolchain_data_x86 =
++        exec_script("//build/toolchain/win/setup_toolchain.py",
++                    [
++                      visual_studio_path,
++                      windows_sdk_path,
++                      visual_studio_runtime_dirs,
++                      "win",
++                      "x86",
++                      "environment.x86",
++                    ],
++                    "scope")
++  }
+ 
+   win_toolchain_data_x64 =
+       exec_script("//build/toolchain/win/setup_toolchain.py",

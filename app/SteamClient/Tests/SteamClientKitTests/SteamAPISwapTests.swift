@@ -170,6 +170,12 @@ final class SteamAPISwapTests: XCTestCase {
     func testEnsureFollowsTheMode() throws {
         XCTAssertEqual(try SteamAPISwap.ensure(.emulated, in: root, emulator: emulator, settings: settings), .emulated)
         XCTAssertEqual(try SteamAPISwap.ensure(.original, in: root, emulator: emulator, settings: settings), .original)
+        // Playport's Steam client serves the game's own DLLs (decision 0115).
+        XCTAssertEqual(try SteamAPISwap.ensure(.emulated, in: root, emulator: emulator, settings: settings), .emulated)
+        XCTAssertEqual(try SteamAPISwap.ensure(.client, in: root, emulator: emulator, settings: settings), .original)
+        XCTAssertTrue(SteamAPISwap.Mode.client.removesSteamStub)
+        XCTAssertTrue(SteamAPISwap.Mode.emulated.removesSteamStub)
+        XCTAssertFalse(SteamAPISwap.Mode.original.removesSteamStub)
         try FileManager.default.removeItem(at: root.appendingPathComponent("tools"))
         try FileManager.default.removeItem(at: root.appendingPathComponent("Game_Data"))
         XCTAssertEqual(try SteamAPISwap.ensure(.emulated, in: root, emulator: emulator, settings: settings), .none)

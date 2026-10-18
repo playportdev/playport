@@ -1,0 +1,168 @@
+# Rockstar launcher on desktop Proton versus the phone's generated fault (PLA-401)
+
+**Linear:** https://linear.app/playportdev/issue/PLA-401. Follows
+[the generated fault](2026-10-18-rockstar-generated-fault.md). Workstation only: no build, no
+install, no play on the phone. The phone was used only for directory listings and two file pulls,
+under its lock.
+
+**Question:** On x86-64 desktop Wine, does the RDR2 Steam chain
+(`PlayRDR2.exe` → `Launcher.exe -steamAppId=1174180`) get past the main window, or does it hit the
+same privileged instruction (`c0000096`) about 0.2 s after `Active`? Where the two differ, which
+input differs?
+
+**Answer:**
+- **The owner's own desktop play (2026-10-15) went past that point.** It used real Steam and
+  Proton Experimental, with the same launcher, Social Club and Rockstar profile as the phone.
+- **The Playport-like desktop run could not reach that point.** It used our Steam client with no
+  host, and the phone's remembered Rockstar session did not carry over.
+- So the fault was **not** reproduced or excluded on desktop.
+
+## Owner's desktop play against the phone (launcher.log line kinds)
+
+The owner's log was copied read-only and deleted after this comparison. It came from the owner's
+own RDR2 prefix: launcher 1.0.109.3031, Social Club 2.4.0.240, the same profile id as the phone.
+The phone run is `20261018T120626`. Times are from `UiWindowController::SetContext: Auth -> MainWindow` (t0).
+
+| Step | Owner's desktop | Phone |
+| --- | --- | --- |
+| `Setting up steam title: rdr2` | `Successfully setup title` | `Successfully setup title` |
+| Time to start up | 4,365 ms | 37,383 ms |
+| Auth status 200, privacy 200, "external launch post-sign in", Auth → MainWindow | yes (the owner signed in by hand) | yes (remembered session) |
+| Main window placement | `Centering on monitor` | `Using saved geometry` 1280×600 |
+| Signed In / Went Online / title list | +14 / +21 / +21 ms | +57 / +110 / +111 ms |
+| `SetState … -> Active` | +21 ms | +127 ms |
+| Next logged step | +451 ms `Could not enumerate … <profile folder>`; +458 ms `Attempting external title launch`, `Begin game launch: rdr2` | +316 ms `Exception: 0xc0000096`, backtrace hash `0xCC332291` |
+
+**Reading.**
+- Both logs follow the same sequence up to `Active`.
+- The phone faults inside the ~430 ms in which the desktop logs nothing before its external-launch step.
+- Other differences in the logs:
+  - **Phone only:** the service handshake times out (protocol 0), and `Shell_NotifyIconW` fails.
+  - **Desktop only:** the launcher is a second, `-upgrade` generation, and logs "Could not do OpenProcess on parent process".
+  - Locale.
+
+## Desktop reproduction (Proton 10, scratch prefix)
+
+**Setup:**
+- **Wine and prefix:** Proton 10's own `wine`, run directly so that Proton's Steam setup never ran. The prefix was a copy of the Stage R scratch prefix, with launcher 1.0.109.3031 and Social Club 2.4.0.240.
+- **Display:** the sway session (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-1`, checked to belong to `sway-nocap`). URL opens were blocked.
+- **Steam client:** Playport's `steamclient64.dll` (sha256 `8a570de9…`, as `app/artifacts.tsv`) in `C:\Program Files (x86)\Steam`, with no host. That means `BLoggedOn` 0, no SteamID and no tickets.
+- **Registry:** `Valve\Steam` keys in both views. `ActiveProcess\pid` was a stand-in session process.
+- **Environment:** `SteamAppId`, `SteamGameId` and `STEAM_COMPAT_APP_ID`.
+- **Game folder:** the phone's `PlayRDR2.exe` (sha256 `028db16c…`), started with no arguments in `C:\Games\Red Dead Redemption 2`. There was no `RDR2.exe`.
+- **Rockstar session:** the phone's remembered Social Club `profile.dat` and launcher `settings_user.dat`. The owner approved copying them; they were deleted after the run.
+
+**Result (one run, 240 s):**
+- **Command line and working directory:** identical to the phone's launcher.
+- **Steam:** `SteamAPI_Init` succeeded. The interfaces served and the stubs called were the same as on the phone.
+- **Service and tray:** the service handshake succeeded, and there was no tray failure.
+- **Where it stopped:** `Setting up steam title: rdr2` → "Aborting launch due to being unable to auto sign in to offline profile!" → error 133 ("services are unavailable and offline play could not be verified"). The main window then opened in Offline Mode with that error.
+- **Remembered session:** Social Club logged `Failed to import profile … profile.dat (2508 bytes read)`, then `START_SIGN_IN`. The session does not carry over to another machine, and it was not worked around.
+- **No fault:** no `c0000096` and no unhandled exception. Launcher.exe stayed alive for 240 s with the saved 1280×600 geometry in use. That was an offline main window, not the signed-in one, so it says little about the geometry lead.
+
+**Differing inputs this run could not close:**
+- Steam logged on, with a SteamID and an auth ticket (the phone has them, this run had none).
+- The Rockstar session.
+- `RDR2.exe` present.
+
+On the owner's desktop, title setup succeeded *before* any sign-in, with real Steam. This run failed
+the same setup step with no Steam logon and no importable profile. Which of the two caused it is not
+separated: inference only.
+
+## Not done
+
+- Rockstar sign-in on the desktop.
+- A real Steam session for the shim. Playport's session exists only in the phone's Keychain, and
+  the Linux host has no CM transport. The owner chose not to make a new Steam sign-in.
+- Gameplay.
+
+All private inputs are deleted:
+- the owner log copies;
+- the pulled `profile.dat` and `settings_user.dat`;
+- the scratch prefix copy.
+
+Social Club originals were verified, 81 of 81 files, in the copy and in its source.
+
+## Candidate next checks (phone, not run)
+
+- With the launcher's saved window geometry removed (`settings_user.dat` placement), does the main
+  window still fault? Desktop centred; the phone used saved geometry.
+- The `Shell_NotifyIconW` failure: whether the tray icon call's failure precedes the fault on
+  every run.
+- On the desktop, a Steam answer with a logged-on user (a stand-in snapshot), to reach title setup
+  without Rockstar's offline path. A sign-in there would still need the owner in person.
+
+## Follow-up: a fresh prefix offered for the owner's own sign-in (no phone files)
+
+The owner offered to sign in in person, on the niri session, for this one run. `DISPLAY=:2` is
+niri's xwayland-satellite, checked by socket ownership, and `WAYLAND_DISPLAY=wayland-2`. URL opens
+were blocked.
+
+**Setup:**
+- A fresh copy of the Stage R prefix, set up as before: Proton 10's wine, our shim with no host,
+  and the stand-in session.
+- No phone files and no remembered session.
+
+**Result:**
+- **Where it stopped:** the launcher took the same path as the earlier run. At 3.1 s, `Setting up steam title: rdr2` → "Aborting launch due to being unable to auto sign in to offline profile!" → error 133.
+- **What it showed:** `SetContext: Invalid -> MainWindow`, the offline main window with the error. There was no `Invalid -> Auth` context, so no Sign In page was offered.
+- **Social Club:** logged `Offline Only Mode: true`. Its UI reached `START_SIGN_IN` internally, but the launcher never showed an Auth window.
+- **No sign-in took place**, so no credentials were involved.
+- **Shutdown:** 18 s after the error, the launcher logged `Shutdown requested! Forced: true` and quit with exit code 0. The earlier run on sway, with no input, stayed up for 240 s, so this was most likely the error dialog's OK or a close on the desktop.
+- **No exception:** no `c0000096`.
+- **Cleanup:** the runner was stopped at about 52 s and the prefix was killed with `wineserver -k`; 0 processes were left. The prefix copy was deleted. Social Club originals were verified, 81 of 81 files, in the copy and in its source.
+
+**Reading.** Without a logged-on Steam user, the launcher's Steam title setup goes straight to
+Rockstar's offline-profile path. This happens with or without a Rockstar profile, before any
+Sign In page. So on the desktop, our shim with no host cannot reach the signed-in main window at
+all. Steam's logged-on state (SteamID and ticket) is the input that gates title setup. The phone
+has it and the owner's desktop (real Steam) has it.
+
+Comparing the phone's fault point on the desktop therefore needs a Steam answer with a logged-on
+user. Whether a stand-in snapshot without a valid ticket is enough is not known. Real tickets need
+a Playport Steam session on the workstation, which the owner declined.
+
+## Saved window placement removed: the fault remains (phone, IPA `cbd5a158`)
+
+**Which file holds the placement (desktop):** the same scratch prefix was run twice, once without the
+launcher's `AppData/Local/Rockstar Games/Launcher/settings_user.dat` (run `r2-nosettings`) and
+once with it (`s1`).
+- **Without the file:** the launcher logs "Centering on monitor".
+- **With the file:** it logs "Using saved geometry".
+
+No other file or registry value was changed between the two runs. The file's format was not read.
+
+**The change:** a dev-only action deletes exactly that file, and nothing else, in the prefix.
+- **In the app:** Settings › Launchers › Forget the launcher's saved window settings.
+- **For the driver:** `pp ui --action forget-launcher-window:rockstar`.
+- **Where it lives:** `PublisherLauncher.windowSettingsFile` and `forgetWindowSettings`, commit `2115527`.
+
+**Phone session:** one hold of the lock, IPA
+`cbd5a1580a9f1a0d5027c88b40b9cc50a00ddb168d267b553ef00c10bbe80b26`. Battery went from 19% to 18%,
+not charging; free space stayed between 5.6 and 6.0 GB.
+
+| Run | What |
+| --- | --- |
+| `20261018T211258` | Hollow Knight: first frame +10.10 s, first-frame+10 reached |
+| `20261018T211352` | `forget-launcher-window:rockstar`: `launcher: forget-window rockstar: removed AppData/Local/Rockstar Games/Launcher/settings_user.dat` |
+| `20261018T211417` | RDR2 settings cleared for the session only (`{}`): `graphics=vulkan` |
+| `20261018T211446` | RDR2 from the library, `mark:first window+240`, with screenshots |
+
+**RDR2 (`20261018T211446`), from the crash copy of `launcher.log` and the host log:**
+- **Before the main window:**
+  - The launcher reported that it couldn't read `settings_user.dat` and used its defaults.
+  - The service handshake still timed out, and `Shell_NotifyIconW` still failed.
+  - `Setting up steam title` → `Successfully setup title`. Time to start up: 37,638 ms.
+- **Sign-in:** the Auth window (caption "Rockstar Games - Sign In") was up while the launcher signed in by itself. Auth returned 200 with no input; the remembered sign-in did not depend on the file.
+- **The main window:** Auth → MainWindow (t0), then **`Centering on monitor` 1280×600**. Signed In at +53 ms, Online at +114 ms, `Active` at +130 ms.
+- **The fault, unchanged:**
+  - At +393 ms (263 ms after `Active`): `Exception: 0xc0000096`, backtrace hash `0xCC8D2291`. The backtrace frames have the same offsets from the module base as before.
+  - Host log: `[generated-fault] producer=INTOp … error=0x0`, then `[generated-fault-window] module=Launcher.exe rva=0x258cf6`, with the same code window bytes as in chunk 3 (protect `0x80`).
+  - Then `c0000096` unhandled.
+  - At 90 s, 150 s and 240 s: PlayRDR2's "Unable to launch game, please try reinstalling the game." No `Begin game launch`, and no first frame from the game.
+- **Pool:** head 516 MiB, tail 369 MiB, room 12 MiB, `head_exhausted` 0, alias 15. Band peak 15,144 MiB, 0 refused.
+
+**Reading.** The saved window placement is not the trigger. With the launcher centring its window,
+as on the owner's desktop, the phone executes the same HLT at the same RVA. The size was 1280×600 in
+both cases; only the position differed. The other inputs that still differ are unchanged: Steam's
+answers (our host), the service handshake timeout, the tray icon failure, and the runtime itself.

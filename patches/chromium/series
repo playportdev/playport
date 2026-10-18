@@ -1,0 +1,16 @@
+0001-Use-the-owner-provided-x64-toolchain-on-Linux.patch
+0002-ANGLE-leave-the-compiler-redistributable-to-the-clie.patch
+0003-Dawn-do-not-copy-the-Windows-SDK-DXIL-redistributabl.patch
+0004-Separate-rc-includes-and-adapt-CRT-warnings-and-debu.patch
+0005-Dawn-use-the-client-DXC-DLL-instead-of-building-it-o.patch
+0006-PartitionAlloc-opt-into-one-GiB-pools-for-low-addres.patch
+0007-Run-the-audio-service-in-the-browser-process-on-Wind.patch
+0008-Run-the-storage-service-in-the-browser-process-on-Wi.patch
+0009-Do-not-start-the-processor-metrics-utility-on-Window.patch
+0010-Cap-every-process-s-thread-pool-on-Windows.patch
+0011-Turn-the-hang-watcher-off-by-default-on-Windows.patch
+0012-Build-without-loader-lock-sampling.patch
+0013-Do-not-run-the-stack-sampling-profiler-in-a-Windows.patch
+0014-Try-Tahoma-last-in-Blink-s-last-resort-fonts-on-Windows.patch
+0015-Do-not-use-the-on-device-model-service-on-Windows.patch
+0016-No-system-CPU-probe-on-Windows.patch

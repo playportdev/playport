@@ -856,7 +856,9 @@ private struct GameDetailPage: View {
             if canCheck, !checking { library.verify(t.id) }
         }
         if t.source == .installed, let app = t.appID, job == nil, !checking, t.lastVerification.map({ !$0.ok }) ?? false {
-            PadRow(id: "opt:repair", title: "Repair from Steam", subtitle: "Downloads the damaged files again",
+            PadRow(id: "opt:repair", title: "Repair from Steam",
+                   subtitle: (t.lastVerification?.depotsToRecheck ?? 0) > 0 ? "Downloads what Steam installs that is missing"
+                                                                            : "Downloads the damaged files again",
                    accessory: .chevron, style: .plain, hint: "Repair") {
                 if !installs.suspended, !launch.running { installs.repair(app, name: t.name) }
             }
@@ -880,6 +882,7 @@ private struct GameDetailPage: View {
         if !library.canVerify(t) { return "Store installs only" }
         guard let v = t.lastVerification else { return "Not checked yet" }
         let when = v.date.formatted(.relative(presentation: .named))
+        if v.bad == 0, (v.depotsToRecheck ?? 0) > 0 { return "Content to check with Steam" }
         return v.ok ? "Last OK \(when)" : "\(v.bad) of \(v.files) damaged"
     }
 
@@ -1000,6 +1003,23 @@ private struct GameDetailPage: View {
         }
         // A compatibility default's keys stay under the person's own, per key (decision 0091).
         let compat = launchSettings.compat(for: t.id)?.settings
+        // Windows services (decision 0107): services.exe and the services it starts, for this play.
+        let services = OptionValue.of(own: settings.wrappedValue.windowsServices, compat: compat?.windowsServices,
+                                      inherited: false, name: onOff)
+        PadRow(id: "opt:windowsServices", title: "Windows services", value: services.text, accessory: .chevron,
+               changed: services.changed, style: .plain,
+               reset: services.changed ? { settings.wrappedValue.windowsServices = nil } : nil) {
+            PadModal.shared.picker(
+                title: "Windows services", context: "\(context) · Windows",
+                note: "Starts Wine's service manager (services.exe) before the game, for a launcher that installs "
+                    + "and uses a Windows service; its services stop when the game ends.",
+                options: [PadOption(id: "", label: "Default",
+                                    detail: compat?.windowsServices.map { "\(onOff($0)), for this game" } ?? "Off"),
+                          PadOption(id: "on", label: "On"), PadOption(id: "off", label: "Off")],
+                selected: settings.wrappedValue.windowsServices.map { $0 ? "on" : "off" } ?? "") {
+                settings.wrappedValue.windowsServices = $0.isEmpty ? nil : $0 == "on"
+            }
+        }
         let compatKeys = compat?.runtime.trimmingCharacters(in: .whitespaces) ?? ""
         let compatOptions = compat?.graphicsOptions.trimmingCharacters(in: .whitespaces) ?? ""
         let forThisGame: (String) -> String? = { $0.isEmpty ? nil : "\(OptionValue.compatMarker) For this game: \($0); your own key of the same name wins" }
@@ -1026,19 +1046,25 @@ private struct GameDetailPage: View {
                                      maxLength: 300) { settings.wrappedValue.graphicsOptions = $0 }
         }
         if let app = t.appID {
-            let mode = settings.wrappedValue.steamAPI ?? .emulated
-            PadRow(id: "opt:steamAPI", title: "Steam API", value: Self.steamAPIModeText(mode), accessory: .chevron,
-                   changed: settings.wrappedValue.steamAPI != nil, style: .plain,
-                   reset: settings.wrappedValue.steamAPI == nil ? nil : { settings.wrappedValue.steamAPI = nil }) {
+            // Playport's Steam client (decision 0115) may be the game's compatibility default.
+            let steamAPI = OptionValue.of(own: settings.wrappedValue.steamAPI, compat: compat?.steamAPI, inherited: .emulated,
+                                          name: Self.steamAPIModeText)
+            PadRow(id: "opt:steamAPI", title: "Steam API", value: steamAPI.text, accessory: .chevron,
+                   changed: steamAPI.changed, style: .plain,
+                   reset: steamAPI.changed ? { settings.wrappedValue.steamAPI = nil } : nil) {
                 PadModal.shared.picker(
                     title: "Steam API", context: "\(context) · Steam",
-                    note: "The game's own Steam API needs Steam running, which Playport does not run: games that check for "
-                        + "Steam will not start. Changes apply from the game's next launch.",
-                    options: [PadOption(id: SteamAPISwap.Mode.emulated.rawValue, label: Self.steamAPIModeText(.emulated), detail: "Default"),
+                    note: "The game's own Steam API needs Steam running: with Playport's Steam client it finds one that "
+                        + "answers for this game only; alone, games that check for Steam will not start. "
+                        + "Changes apply from the game's next launch.",
+                    options: [PadOption(id: "", label: "Default",
+                                        detail: compat?.steamAPI.map { "\(Self.steamAPIModeText($0)), for this game" }
+                                            ?? Self.steamAPIModeText(.emulated)),
+                              PadOption(id: SteamAPISwap.Mode.emulated.rawValue, label: Self.steamAPIModeText(.emulated)),
+                              PadOption(id: SteamAPISwap.Mode.client.rawValue, label: Self.steamAPIModeText(.client)),
                               PadOption(id: SteamAPISwap.Mode.original.rawValue, label: Self.steamAPIModeText(.original))],
-                    selected: mode.rawValue) {
-                    let m = SteamAPISwap.Mode(rawValue: $0) ?? .emulated
-                    settings.wrappedValue.steamAPI = m == .emulated ? nil : m
+                    selected: settings.wrappedValue.steamAPI?.rawValue ?? "") {
+                    settings.wrappedValue.steamAPI = SteamAPISwap.Mode(rawValue: $0)
                 }
             }
             developerFacts(t, app)
@@ -1097,14 +1123,15 @@ private struct GameDetailPage: View {
     private static func steamAPIModeText(_ m: SteamAPISwap.Mode) -> String {
         switch m {
         case .emulated: "Playport's emulator"
+        case .client: "Playport's Steam client"
         case .original: "The game's own"
         }
     }
 
     private static func steamStubText(_ site: SteamStub.Site, mode: SteamAPISwap.Mode) -> String {
         if site.info.unsupported != nil { return "\(site.info.label), can't be removed yet" }
-        if site.removed { return mode == .emulated ? "Removed (\(site.info.label))" : "Removed; back at next launch" }
-        return mode == .emulated ? "\(site.info.label), removed at next launch" : site.info.label
+        if site.removed { return mode.removesSteamStub ? "Removed (\(site.info.label))" : "Removed; back at next launch" }
+        return mode.removesSteamStub ? "\(site.info.label), removed at next launch" : site.info.label
     }
 
     private static func steamAPIText(_ s: SteamAPISwap.State) -> String {

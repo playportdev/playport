@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 10:56:15 +0200
+Subject: [PATCH] ntdll: give Playport's steamclient its host table
+
+Playport's own steamclient64.dll (a native DLL in the prefix's Steam
+folder) serves a game's, and its launcher's, genuine steam_api for the
+launched app (Playport's decision 0115). It asks the host app for the
+account's snapshot and the play's tickets as a Wine library reaches its
+unix side: MemoryWineLoadUnixLib on its own module. A module whose
+export name contains "steamclient" now gets
+playport_steamclient_unix_call_funcs, which the app defines (its WineHost
+steam_client.c); the match comes before steam_api's, so a genuine
+steam_api, which never asks for a unix library, is unaffected. The
+table's argument blocks hold no pointers, so a WoW64 caller gets the same
+table.
+
+Class: host-app
+Evidence: docs/decisions/0115-a-steam-client-for-the-launched-app.md
+Offered-upstream: no
+---
+ build/ntdll-unix/virtual_ios.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index acd8fce..c4804b0 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -7860,6 +7860,13 @@ extern const void *winegstreamer_unix_call_funcs[];
+  * WoW64 calls use the same table. */
+ extern const void *playport_steam_unix_call_funcs[];
+ 
++/* Playport: Playport's Steam client (a native steamclient64.dll, matched by
++ * its export name) asks the host app for what Steam's client gives the
++ * launched game through this table, defined in the app (WineHost
++ * steam_client.c). Its blocks have no pointers, so a WoW64 caller uses the
++ * same table. */
++extern const void *playport_steamclient_unix_call_funcs[];
++
+ /* Playport: Playport's URL opener (playport-url-opener.exe, the prefix's
+  * http and https handler, matched by its exact export name) hands the host
+  * app a web page a game opens through this table, defined in the app
+@@ -7966,6 +7973,11 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             dprintf(2, "[unixlib] module %p (%s) -> winegstreamer_unix_call_funcs (%p)\n",
+                 module, match, (void *)winegstreamer_unix_call_funcs);
+             status = STATUS_SUCCESS;
++        } else if (match && strstr(match, "steamclient")) {
++            *funcs = (const void *)playport_steamclient_unix_call_funcs;
++            dprintf(2, "[unixlib] module %p (%s) -> playport_steamclient_unix_call_funcs (%p)\n",
++                module, match, (void *)playport_steamclient_unix_call_funcs);
++            status = STATUS_SUCCESS;
+         } else if (match && strstr(match, "steam_api")) {
+             *funcs = (const void *)playport_steam_unix_call_funcs;
+             dprintf(2, "[unixlib] module %p (%s) -> playport_steam_unix_call_funcs (%p)\n",
+@@ -8023,6 +8035,7 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
+             else if (*funcs == (const void *)winevulkan_unix_call_funcs) wow_funcs = winevulkan_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)nsi_unix_call_funcs) wow_funcs = nsi_unix_call_wow64_funcs;
+             else if (*funcs == (const void *)playport_steam_unix_call_funcs) wow_funcs = playport_steam_unix_call_funcs;
++            else if (*funcs == (const void *)playport_steamclient_unix_call_funcs) wow_funcs = playport_steamclient_unix_call_funcs;
+             else if (*funcs == (const void *)playport_url_unix_call_funcs) wow_funcs = playport_url_unix_call_funcs;
+             else if (*funcs == (const void *)opengl32_unix_call_funcs) wow_funcs = opengl32_unix_call_wow64_funcs;
+             if (!wow_funcs)
+-- 
+2.56.0
+

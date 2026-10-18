@@ -230,18 +230,29 @@ final class LibraryModel: ObservableObject {
         #if PLAYPORT_RELEASE
         var settings = LaunchSettingsStore.shared.effective(for: t)
         // Memory ordering, block size, x87 precision, the disk cache, the Steam API choice and runtime keys are a dev build's
-        // (decision 0034): the player's app runs the game's profile and the emulator, whatever a dev build left stored.
+        // (decision 0034): the player's app runs the game's profile and the emulator (Playport's Steam client where the
+        // game's compatibility default names it), whatever a dev build left stored.
         settings.ordering = MemoryOrdering()
         settings.maxInst = nil
         settings.x87Reduced = nil
         settings.diskCache = nil
-        settings.steamAPI = .emulated
+        // Playport's Steam client where it is the game's compatibility default (decision 0115).
+        settings.steamAPI = LaunchSettingsStore.shared.compat(for: t.id)?.settings.steamAPI == .client ? .client : .emulated
         settings.runtime = [:]
         settings.graphicsEnvironment = [:]
         #else
-        let settings = LaunchSettingsStore.shared.effective(for: t)
+        var settings = LaunchSettingsStore.shared.effective(for: t)
         #endif
-        // A Steam app's steam_api: the emulator told about the paired account, or the game's own.
+        // A game whose Play starts a publisher's launcher runs with its Open's grace, graphics
+        // environment and runtime keys under its own (decision 0115).
+        var exhaustionGrace = JitPool.exhaustionGrace
+        if let launcher = PublisherLauncher.startedBy(game: t.id) {
+            (settings, exhaustionGrace) = launcher.startingGame(settings)
+            Self.log("play \(t.name): starts \(launcher.name); its Open's grace (\(Int(exhaustionGrace)) s), graphics environment "
+                     + "and runtime keys apply")
+        }
+        // A Steam app's steam_api: the emulator told about the paired account, the game's own served by
+        // Playport's Steam client (decision 0115), or the game's own alone.
         let service = SteamAccountModel.current?.service
         // The emulator's encrypted app ticket, on by default (decision 0017): asked for now, while the
         // session is up (TitleLaunch.start closes it), after the start's sweep of old ones.
@@ -249,7 +260,7 @@ final class LibraryModel: ObservableObject {
         // The game's auth session and web API tickets, on by default (decision 0062): armed now, and
         // the CM session stays logged on for them alone through the play.
         var tickets: SteamTicketBroker?
-        if let app = t.appID, settings.steamAPI == .emulated, let service {
+        if let app = t.appID, settings.steamAPI == .emulated || settings.steamAPI == .client, let service {
             await ticketSweep?.value
             ticket = await service.encryptedAppTicket(appID: app)
             tickets = await service.prepareTicketSession(appID: app, playLog: SteamTicketHost.log)
@@ -329,6 +340,16 @@ final class LibraryModel: ObservableObject {
             gogInstallScripts(t)
         }
         let prerequisites = Prerequisite.merge(store: storePrerequisites, unrealEngine: unrealEngine)
+        // Windows services (decision 0107): COM's RpcSs entry, which the prefix seed lacks, and the SCM's
+        // start timeout, for the SCM this play starts; a top-up, so a prefix that has them keeps its own.
+        if settings.windowsServices {
+            do {
+                try PrefixRegistryFile(prefix: WineHostRuntime.shared.prefixURL).add(WindowsServices.rpcss + [WindowsServices.startTimeout])
+                Self.log("play \(t.name): Windows services on; RpcSs's service entry and the start timeout topped up in the prefix")
+            } catch {
+                Self.log("play \(t.name): RpcSs's service entry and the start timeout not written (\(error))")
+            }
+        }
         // A GOG game's Galaxy service (decision 0063), on by default: listening from now to the game's exit
         // when its build names a Galaxy client and GOG is signed in; otherwise the game runs without it.
         let galaxy = t.store == .gog ? await GOGAccount.shared.galaxyListener(t.key.id, name: t.name) : nil
@@ -342,7 +363,9 @@ final class LibraryModel: ObservableObject {
                                        graphics: settings.graphics, graphicsEnvironment: settings.graphicsEnvironment,
                                        steamAppID: t.appID, fex: fex, steamAPI: steamAPI,
                                        memory: MemoryNeed.of(t, cohort: Self.cohort), epic: epic, galaxy: galaxy,
-                                       prerequisites: prerequisites, epicOffline: epicOffline) else {
+                                       prerequisites: prerequisites, windowsServices: settings.windowsServices,
+                                       jitPoolMB: settings.jitPoolMB, epicOffline: epicOffline,
+                                       exhaustionGrace: exhaustionGrace) else {
             endTickets()
             galaxy?.stop()
             return false
@@ -638,7 +661,11 @@ final class LibraryModel: ObservableObject {
                 }
                 if t.checksums == nil, let app = t.appID {
                     let r = try await TitleInstaller(layout: LibraryModel.paths.layout, session: nil, log: SteamUILog.logger).verify(appID: app)
-                    (v, report) = (InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: r.unlisted.count), r)
+                    (v, report) = (InstalledTitle.Verification(date: Date(), files: r.files, bad: r.bad.count, unlisted: r.unlisted.count,
+                                                               depotsToRecheck: r.depotsToRecheck.isEmpty ? nil : r.depotsToRecheck.count), r)
+                    if !r.depotsToRecheck.isEmpty {
+                        LibraryModel.log("verify \(t.name): depots \(r.depotsToRecheck) left out as shared installs; Repair checks them with Steam")
+                    }
                 } else {
                     (v, report) = try await TitleVerifier.verify(t, games: LibraryModel.paths.games, cohort: LibraryModel.cohort)
                 }

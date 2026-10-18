@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 18:21:39 +0200
+Subject: [PATCH] ANGLE: leave the compiler redistributable to the client
+
+Formalize stage A-C scratch diff 003, retaining the built bytes.
+Apply after the pinned CEF stock patches.
+
+Class: linux-build
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+Upstream-repo: angle
+---
+ third_party/angle/BUILD.gn | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/third_party/angle/BUILD.gn b/third_party/angle/BUILD.gn
+index 37aacba..fcc773e 100644
+--- a/third_party/angle/BUILD.gn
++++ b/third_party/angle/BUILD.gn
+@@ -405,7 +405,9 @@ config("build_id_config") {
+   ldflags = [ "-Wl,--build-id" ]
+ }
+ 
+-_use_copy_compiler_dll = angle_has_build && is_win
++# Playport cross-build: the SDK redistributable is not part of the xwin layout,
++# and the DLL is not shipped (the client brings its own; Wine has a builtin).
++_use_copy_compiler_dll = angle_has_build && is_win && host_os == "win"
+ 
+ if (_use_copy_compiler_dll) {
+   copy("copy_compiler_dll") {

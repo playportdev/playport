@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 19:30:05 +0200
+Subject: [PATCH] process: run a CEF browser's network and video capture in its
+ process
+
+Decision 0111 (the owner's choice for PLA-378) amends 0109's switch set:
+a CEF browser also gets
+--enable-features=NetworkServiceInProcess2,RunVideoCaptureServiceInBrowserProcess,
+which Chromium 143 reads to run its network service and its video capture
+service in the browser rather than in two utility processes. The
+Rockstar Games Launcher's Open on the phone filled the 896 MiB JIT pool
+with each child process's builtin copies and FEX code (13 processes, the
+network service alone 96 MiB of code). Under desktop Proton the same
+Social Club build runs 6 Chromium processes instead of 8 and still shows
+its sign-in page.
+
+The storage service has no switch. Social Club gives its children its own
+--disable-features value, so AudioServiceOutOfProcess cannot be turned
+off this way. --renderer-process-limit=1 has no effect while each site has
+its own renderer. None of these is added. The scope is 0109's: only a
+browser, and an --enable-features the app passes is kept as it wrote it.
+
+Class: feature
+Evidence: docs/evidence/2026-10-16-cef-fewer-processes-phone.md
+Offered-upstream: no
+---
+ build/ntdll-unix/process_ios.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/build/ntdll-unix/process_ios.c b/build/ntdll-unix/process_ios.c
+index caccdfa..51eb559 100644
+--- a/build/ntdll-unix/process_ios.c
++++ b/build/ntdll-unix/process_ios.c
+@@ -872,9 +872,14 @@ static NTSTATUS alloc_handle_list( const PS_ATTRIBUTE *handles_attr, obj_handle_
+  * its IPC wants one renderer per page (Stage R). The children (--type=) are left alone and
+  * logged. A switch the command line already names is kept as the app wrote it. The new
+  * command line's buffer is never freed (one small block per browser start): the caller owns
+- * params, and the old buffer stays the caller's. */
++ * params, and the old buffer stays the caller's. Decision 0111 adds the features that run the
++ * network and video capture services inside the browser, so the tree has two processes fewer
++ * for the JIT pool; Chromium 143 names the first NetworkServiceInProcess2. The storage service
++ * has no such switch, and Social Club replaces a browser's --disable-features, so the audio
++ * service stays a process. */
+ static const char * const chromium_switches[] = {
+     "--in-process-gpu", "--disable-gpu", "--disable-gpu-compositing", "--js-flags=--jitless",
++    "--enable-features=NetworkServiceInProcess2,RunVideoCaptureServiceInBrowserProcess",
+ };
+ 
+ /* Whether cl holds the switch at a word start, by its name up to '=' (case-sensitive, as
+-- 
+2.56.0
+

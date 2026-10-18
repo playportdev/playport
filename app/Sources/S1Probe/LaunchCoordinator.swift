@@ -58,7 +58,8 @@ enum LaunchCoordinator {
         /// Which layer runs the game's Direct3D (LaunchSettings).
         var graphics: GraphicsBackend = .default
         /// The game's Graphics options (LaunchSettings.graphicsEnvironment; dev builds only,
-        /// decision 0060), over the backend's own environment.
+        /// decision 0060), or a publisher launcher's own (PublisherLauncher.graphicsEnvironment),
+        /// over the backend's own environment.
         var graphicsEnvironment: [String: String] = [:]
         /// FEX's memory ordering for the game (FEXProfile.launch); nil leaves FEX's own defaults.
         var fex: FEXProfile.Launch? = nil
@@ -81,6 +82,15 @@ enum LaunchCoordinator {
         /// The title's own prerequisite installers (decision 0079), each run before the
         /// game when one of its ids has not run in the prefix.
         var prerequisites: [Prerequisite] = []
+        /// Start Windows services (services.exe, Wine's SCM) before the prerequisites and the
+        /// title (LaunchSettings.windowsServices, decision 0107).
+        var windowsServices = false
+        /// The game's own pool from its compatibility entry (LaunchSettings.jitPoolMB, decision
+        /// 0108), granted when the memory limit allows; nil for the default.
+        var gamePoolMB: Int? = nil
+        /// How long the title goes on after it ran the pool out before the launch ends (decisions
+        /// 0022, 0030); a publisher's launcher Open carries its own (decision 0112).
+        var exhaustionGrace: TimeInterval = JitPool.exhaustionGrace
         /// Whether a prerequisite that ran may end the launch before the game, for Playport's
         /// restart and the same Play in the new process (decision 0084), when the pool after
         /// them leaves the game too little room (decision 0094); false starts the game in this
@@ -176,7 +186,7 @@ enum LaunchCoordinator {
         do {
             let state = try SteamAPISwap.ensure(s.mode, in: s.root, emulator: runtime.appendingPathComponent("steamapi", isDirectory: true),
                                                 settings: settings ?? .init(appID: s.appID))
-            log("steamapi: \(s.mode.rawValue): \(state.rawValue)" + (s.mode == .emulated ? " (\(fields))" : ""))
+            log("steamapi: \(s.mode.rawValue): \(state.rawValue)" + (s.mode != .original ? " (\(fields))" : ""))
             if s.mode == .emulated {
                 if let ticket = s.ticket {
                     let n = try SteamAPISwap.writeTicket(ticket, in: s.root)
@@ -185,14 +195,16 @@ enum LaunchCoordinator {
                     log("ticket: none; the emulator makes up its own")
                 }
             }
-            // The emulator's unix calls reach the play's broker, or none (SteamTicketHost).
+            // The emulator's unix calls reach the play's broker, or none (SteamTicketHost); Playport's
+            // Steam client's reach its own provider (SteamClientHost, decision 0115).
             SteamTicketHost.arm(s.mode == .emulated ? s.tickets : nil)
+            SteamClientHost.arm(s.mode == .client ? prepareSteamClient(s, settings: settings, runtime: runtime) : nil)
             if s.mode == .emulated {
                 log(s.tickets != nil ? "ticket: auth session and web API tickets armed; the CM session stays logged on for them"
                                      : "ticket: auth session and web API tickets off; the emulator makes up its own")
             }
             var stub = "none"
-            if s.mode == .emulated {
+            if s.mode.removesSteamStub {
                 for site in try SteamStub.remove(in: s.root) {
                     log("steamstub: \(site.path): \(site.info.label), " + (site.info.unsupported ?? (site.removed ? "removed" : "kept")))
                     stub = site.removed ? "removed" : "unsupported"
@@ -210,6 +222,31 @@ enum LaunchCoordinator {
             RunEvents.emit("steamapi", ["mode": s.mode.rawValue, "error": "\(error)"])
             #endif
         }
+    }
+
+    /// The prefix's Steam client for a play in client mode (decision 0115): Playport's
+    /// steamclient64.dll in `C:\Program Files (x86)\Steam\` and the `Valve\Steam` keys a genuine
+    /// steam_api reads to find it (top-ups, written before wineserver starts; the session root
+    /// writes ActiveProcess's pid once it runs). Returns what the client answers with.
+    private static func prepareSteamClient(_ s: SteamAPI, settings: SteamAPISwap.Settings?, runtime: URL) -> SteamClientHost.Play {
+        let prefix = WineHostRuntime.shared.prefixURL
+        let source = runtime.appendingPathComponent("steamclient/x86_64-windows/steamclient64.dll")
+        let folder = prefix.appendingPathComponent("drive_c/Program Files (x86)/Steam", isDirectory: true)
+        let dest = folder.appendingPathComponent("steamclient64.dll")
+        do {
+            let shim = try Data(contentsOf: source)
+            if (try? Data(contentsOf: dest)) != shim {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try shim.write(to: dest, options: .atomic)
+                log("steamclient: Playport's steamclient64.dll (\(shim.count) bytes) placed in C:\\Program Files (x86)\\Steam")
+            }
+            try PrefixRegistryFile(prefix: prefix).add(SteamClientKeys.values)
+            log("steamclient: Valve\\Steam keys topped up in the prefix")
+        } catch {
+            log("steamclient: not placed (\(error)); the game's steam_api finds no Steam client")
+        }
+        return SteamClientHost.Play(appID: s.appID, steamID: settings?.steamID, personaName: settings?.personaName,
+                                    language: settings?.language ?? "english", tickets: s.tickets, appTicket: s.ticket)
     }
 
     /// Takes the encrypted app ticket out of the game's emulator settings
@@ -415,9 +452,12 @@ enum LaunchCoordinator {
         // Every byte of the pool counts against the limit from the bless on. Read
         // again: Game Mode may have raised the limit since the Play.
         memory = MemoryLimit.read()
-        let poolMB = r.poolMB ?? MemoryLimit.poolMB(memory)
+        let sized = MemoryLimit.poolMB(memory, gameMB: r.gamePoolMB)
+        let poolMB = r.poolMB ?? sized.mb
         log("jit pool: \(poolMB) MiB for a memory limit of \(memory.effectiveMB.map { "\($0) MB" } ?? "not reported")"
-            + (memory.simulatedPoolMB != nil ? " (simulated pool)" : ""))
+            + (memory.simulatedPoolMB != nil ? " (simulated pool)" : "")
+            + (r.poolMB == nil && memory.simulatedPoolMB == nil && sized.mb > JitPool.minimumMB ? " (the game's)" : "")
+            + (r.poolMB == nil ? sized.note.map { "; \($0)" } ?? "" : ""))
         mark("surface ready; asking for JIT")
         #if !PLAYPORT_RELEASE
         Diagnostics.loadBeforeRuntime()
@@ -491,7 +531,20 @@ enum LaunchCoordinator {
             mark(up ? "dialog shown" : "dialog closed")
             MainActor.assumeIsolated { HostIO.shared.dialogOverGame(up) }
         }
-        let pool = PoolLog()
+        let pool = PoolLog(grace: r.exhaustionGrace)
+        log("pool: a title still running \(Int(r.exhaustionGrace)) s after it runs out of JIT memory ends this launch")
+        if r.windowsServices {
+            let t0 = Date()
+            let rc = runtime.startServices()
+            log(rc == 0 ? String(format: "services: services.exe runs for this play (%.2f s)", Date().timeIntervalSince(t0))
+                        : "services: services.exe not started (\(rc)); the title starts without Windows services")
+        }
+        // Playport's Steam client (decision 0115): the session root stands for Steam's process.
+        if let s = r.steamAPI, s.mode == .client {
+            let rc = runtime.steamClient(accountID: SteamClientHost.accountID)
+            log(rc == 0 ? "steamclient: the session root is the prefix's running Steam client"
+                        : "steamclient: ActiveProcess not written (\(rc)); the game's steam_api finds no running Steam")
+        }
         var ran = 0
         if let ended = runPrerequisites(r, environment: environment, pool: pool, ran: &ran, step: step, mark: mark) {
             PacedMetalLayer.onFirstFrame { }
@@ -546,9 +599,9 @@ enum LaunchCoordinator {
                 return pool.end(Outcome(kind: .failed, line: "launch=failed wait=\(w.rc)"), mark: mark)
             }
             pool.sample()
-            if let t = pool.exhaustedAt, Date().timeIntervalSince(t) >= PoolLog.grace {
-                // The restart that follows the launch ends it (decisions 0022, 0030).
-                log("pool: the game is still running \(Int(PoolLog.grace)) s after it ran out of JIT memory; the restart ends it")
+            if let t = pool.exhaustedAt, Date().timeIntervalSince(t) >= pool.grace {
+                // The restart that follows the launch ends it (decisions 0022, 0030, 0112).
+                log("pool: the game is still running \(Int(pool.grace)) s after it ran out of JIT memory; the restart ends it")
                 return pool.end(Outcome(kind: .failed, line: "still-running after_s=\(Int(elapsed))"), mark: mark)
             }
         }
@@ -681,8 +734,8 @@ enum LaunchCoordinator {
     /// So does the FEX arena's use (FexBand), as `band:` lines and a `band:` mark;
     /// a dev build also writes the arena's map into the log at the end.
     private final class PoolLog {
-        /// How long a title that ran the pool out gets to end on its own.
-        static let grace: TimeInterval = 10
+        /// How long a title that ran the pool out gets to end on its own (Request.exhaustionGrace).
+        let grace: TimeInterval
         private var last: JitPool.Use?
         private var lastLimits: RuntimeLimits.Counts?
         private var lastBand: FexBand.Use?
@@ -690,6 +743,8 @@ enum LaunchCoordinator {
         private var bandMapBucket: UInt64 = 0
         /// When a reading first showed the pool run out.
         private(set) var exhaustedAt: Date?
+
+        init(grace: TimeInterval) { self.grace = grace }
 
         static func read() -> JitPool.Use? {
             var s = wine_host_pool_stats()

@@ -70,6 +70,42 @@ class SourcePayloadAudit(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_upstream_gn_name_exception_is_path_and_token_scoped(self):
+        tokens = b"gn" + b"_args gn" + b"_helpers"
+        cases = [
+            ("patches/cef/a.patch", tokens, True),
+            ("patches/chromium/a.patch", tokens, True),
+            ("playport-" + "a" * 12 + "/patches/cef/a.patch", tokens, False),
+            ("playport/patches/chromium/a.patch", tokens, False),
+            ("playport/patches/cef/a.patch", tokens + b" game" + b"native", True),
+            ("patches/chromium/a.patch", b"gn" + b"_foo", True),
+            ("patches/cef/a.patch", b"gn" + b"_args-extra", True),
+            ("patches/cef/a.patch", b"gn" + b"_helpers_extra", True),
+            ("patches/cef/a.patch", tokens.upper(), True),
+            ("other/a.patch", tokens, True),
+            ("playport/Patches/cef/a.patch", tokens, True),
+            ("playport/patches/cef/a.patch", tokens + b" gn" + b"_foo", True),
+            ("other/patches/cef/a.patch", tokens, True),
+            ("patches/cef/../other.patch", tokens, True),
+        ]
+        for path, data, expected in cases:
+            with self.subTest(path=path, data=data):
+                scanner = self.scanner()
+                scanner.payload(data, path, "fixture", 0)
+                self.assertEqual(any(r.startswith("retired-name-") for r in scanner.rules), expected)
+
+    def test_nested_archives_never_receive_name_exception(self):
+        tokens = b"gn" + b"_args gn" + b"_helpers"
+        for name in ("patches/cef/a.patch", "playport/patches/chromium/a.patch"):
+            for pack in (tar_bytes, zip_bytes):
+                with self.subTest(name=name, pack=pack):
+                    nested = pack([(name, tokens)])
+                    scanner = self.scan(tar_bytes([("playport/nested.tar.gz" if pack is tar_bytes else "playport/nested.zip", nested)]))
+                    self.assertTrue(any(r.startswith("retired-name-") for r in scanner.rules))
+        # A direct tree caller uses the shared text rule with its repo-relative path.
+        self.assertFalse(any(r.startswith("retired-name-") for r in
+                             audit.text_rules(tokens, "patches/cef/a.patch")))
+
     def refresh(self):
         (self.bundle / "SOURCE-MANIFEST.json").write_text(json.dumps(self.manifest))
         (self.bundle / "README.md").write_text("Incomplete source bundle\n")

@@ -25,6 +25,16 @@ extension InstallReceipt {
         skippedDepots.compactMap { DepotSelection.sharedInstall(skipped: $0) }
             .filter { $0.appID == CommonRedistributables.appID }.map(\.depotID)
     }
+
+    /// Other apps' depots (any source app but 228980) this record left out as shared installs: a
+    /// record written before Playport installed another app's depots into a game's folder
+    /// (`DepotInfo.isContentFromAnotherApp`; PLA-365) gave them all that reason, so Steam's depot
+    /// list decides again at a repair. A record written since names a true shared install
+    /// otherwise (`DepotSelection.sharedInstallElsewhereReason`).
+    public var depotsToRecheck: [UInt32] {
+        skippedDepots.compactMap { DepotSelection.sharedInstall(skipped: $0) }
+            .filter { $0.appID != CommonRedistributables.appID }.map(\.depotID)
+    }
 }
 
 extension TitleInstaller {

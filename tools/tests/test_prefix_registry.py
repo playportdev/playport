@@ -8,7 +8,8 @@ registration (register_wic, decision 0072) in the committed system.reg seed,
 and its reading of windowscodecs' regsvr.c tables; wine.inf's AddReg sections, urlmon's
 REGINST zones, the media registrations and the i386-only modules' classes (decision 0080),
 with REQUIRED: registrations a wineboot'ed prefix has that the seed must keep, and
-REQUIRED_I386: what i386 callers read in the one 64-bit view (PLA-175)."""
+REQUIRED_I386: what i386 callers read in the one 64-bit view (PLA-175); and the shipped
+fonts registered for DirectWrite (PLA-374)."""
 import importlib.util
 from pathlib import Path
 import unittest
@@ -61,6 +62,22 @@ class VcRuntime(unittest.TestCase):
         self.assertIn('"Major"=dword:0000000e', values)
         self.assertIn('"Minor"=dword:0000002a', values)
         self.assertIn('"Rbld"=dword:00000000', values)
+
+
+class Fonts(unittest.TestCase):
+    def test_system_seed_registers_each_shipped_face_where_dwrite_builds_its_collection(self):
+        # Wine's dwrite reads only this key (PLA-374); a bare file name is in %windir%\fonts,
+        # where wine_host.c link_fonts links every file of Runtime/fonts.
+        marked, values = sections((REPO / "app/registry/system.reg").read_text())[
+            "Software\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Fonts"]
+        self.assertTrue(marked)
+        self.assertIn('"Tahoma (TrueType)"="tahoma.ttf"', values)
+        self.assertIn('"Tahoma Bold (TrueType)"="tahomabd.ttf"', values)
+        spec = importlib.util.spec_from_file_location("font_stage", REPO / "build/stages/stage-artifacts.py")
+        stage = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(stage)
+        registered = {line.split("=", 1)[1].strip('"') for line in values}
+        self.assertEqual(registered, set(stage.FONTS))
 
 
 class WintrustRegistration(unittest.TestCase):

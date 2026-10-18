@@ -46,6 +46,17 @@ enum {
      * quoted path, used as it is: a store's own command-line string, as its client
      * passes it to CreateProcess (GOG's nested quotes, decision 0090). */
     PP_REQUEST_PREREQUISITE_LINE = 6,
+    /* The Windows services of a play that needs them (decision 0107): the root starts
+     * services.exe, Wine's SCM, outside the title's job, and answers STARTED (its process
+     * id) once the SCM listens, or REFUSED; no payload. The services it starts are stopped
+     * before the title's end is reported. */
+    PP_REQUEST_SERVICES = 7,
+    /* A play served by Playport's steamclient64.dll (decision 0115): the root writes
+     * HKCU\Software\Valve\Steam\ActiveProcess's pid (its own process id) and ActiveUser
+     * (the payload: one argument, the account ID in decimal), and answers STARTED (its
+     * process id) or REFUSED. It sets both to 0 at the title's end, and at its own start
+     * when a crash left them. */
+    PP_REQUEST_STEAM_CLIENT = 8,
 };
 
 /* The most a CLOSE waits before it ends the title. */
@@ -94,6 +105,17 @@ static inline int pp_session_request_valid(const pp_session_request *r, const ch
 {
     uint32_t want, i = 0, at = 0;
     if (!r || r->magic != PP_SESSION_MAGIC || !r->sequence || r->length != size) return 0;
+    if (r->kind == PP_REQUEST_SERVICES) return size == 0 && r->argc == 0 && r->envc == 0;
+    if (r->kind == PP_REQUEST_STEAM_CLIENT) {
+        /* One decimal account ID that fits a DWORD: 1 to 10 digits, then its NUL. */
+        uint64_t v = 0;
+        if (r->argc != 1 || r->envc != 0 || !payload || size < 2 || size > 11 || payload[size - 1]) return 0;
+        for (i = 0; i + 1 < size; i++) {
+            if (payload[i] < '0' || payload[i] > '9') return 0;
+            v = v * 10 + (uint64_t)(payload[i] - '0');
+        }
+        return v <= 0xffffffffu;
+    }
     if ((r->kind != PP_REQUEST_LAUNCH && r->kind != PP_REQUEST_PREREQUISITE && r->kind != PP_REQUEST_PREREQUISITE_LINE) ||
         !payload || size > PP_SESSION_MAX_PAYLOAD || r->argc > PP_SESSION_MAX_ARGS || r->envc > PP_SESSION_MAX_ENV) return 0;
     if (r->kind == PP_REQUEST_PREREQUISITE_LINE && r->argc != 1) return 0;

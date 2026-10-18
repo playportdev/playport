@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 17 Oct 2026 21:00:00 +0200
+Subject: [PATCH] Run the storage service in the browser process on Windows
+
+Return no sandboxed storage directory on Windows, so the storage service
+runs in the browser process (the path --single-process takes) instead of
+a utility process. One process, its threads and its JIT pool copies
+fewer under Playport (PLA-384).
+Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-17-cef-trim.md
+Offered-upstream: no
+---
+ chrome/browser/chrome_content_browser_client.cc |    6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index caccaf08e6..86127f98ec 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -7236,10 +7236,16 @@ void ChromeContentBrowserClient::OnNetworkServiceDataUseUpdate(
+ 
+ base::FilePath
+ ChromeContentBrowserClient::GetSandboxedStorageServiceDataDirectory() {
++#if BUILDFLAG(IS_WIN)
++  // No directory on Windows: the storage service runs in the browser process,
++  // for an embedder that must fit several processes in a small address space.
++  return base::FilePath();
++#else
+   if (!g_browser_process || !g_browser_process->profile_manager()) {
+     return base::FilePath();
+   }
+   return g_browser_process->profile_manager()->user_data_dir();
++#endif
+ }
+ 
+ bool ChromeContentBrowserClient::ShouldSandboxAudioService() {

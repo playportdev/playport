@@ -1,0 +1,357 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 08:27:54 +0200
+Subject: [PATCH] ntdll: release an exited child's views once its threads have
+ finished
+
+Wine's view tree is shared by every pseudo-process and a view recorded no
+owner, so process_exit_wrapper gave back only an exited child's JIT-pool
+copies, fixed-base image, WoW64 window and fd cache. Its DLL images, heaps
+and reservations stayed mapped: about 250 MB per exited CEF helper
+(libcef.dll's own image view is 251 MB), from 3.2 GB to 7,966 MB in the
+Rockstar launcher's run.
+
+A view now records the pseudo-process whose NtAllocateVirtualMemory[Ex] or
+NtMapViewOfSection[Ex] made it (a call for another process runs as an APC
+on that process's thread, so the owner is the target). Views the runtime
+makes for itself (TEB blocks, thread data, thread stacks) have none. An
+exited x86-64 child is queued; once every thread of it in teb_list has
+finished (pthread_exit_wrapper's end, or process_exit_wrapper), the next
+thread reclamation or creation on another process deletes its private and
+image views through delete_view, as 0139 tears a dead owner's WoW64 window
+down at its last thread's reclamation, and forgets their section handles.
+Views of other sections (shared memory a live process may have cached),
+VPROT_SYSTEM views, FEX's band, the JIT pool, WoW64 windows and an i386
+child's views are kept. One "[view-owner]" line per exit gives the views
+and bytes freed and kept.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no; pseudo-processes sharing one view tree are the iOS port's
+---
+ build/ntdll-unix/server_ios.c  |   6 +
+ build/ntdll-unix/thread_ios.c  |   5 +
+ build/ntdll-unix/virtual_ios.c | 216 +++++++++++++++++++++++++++++++++
+ 3 files changed, 227 insertions(+)
+
+diff --git a/build/ntdll-unix/server_ios.c b/build/ntdll-unix/server_ios.c
+index 68931b5..4932ac5 100644
+--- a/build/ntdll-unix/server_ios.c
++++ b/build/ntdll-unix/server_ios.c
+@@ -4043,6 +4043,12 @@ void process_exit_wrapper( int status )
+          * the session (else-branch) lives as long as the app. Reuse is
+          * grace-delayed inside the allocator for laggard exit threads. */
+         ios_jit_reclaim_process( dead_peb );
++        /* Playport (PLA-368): queue its views for release once all its threads
++         * have finished; this thread has. */
++        {
++            extern void ios_view_owner_process_exit( void *peb );
++            ios_view_owner_process_exit( dead_peb );
++        }
+         /* ml988 phase 2: only now may the retired fixed base be handed on. Until
+          * this point the old generation's pool mappings and FEX translations are
+          * still live, so a new claimant taking the same VA would race them. */
+diff --git a/build/ntdll-unix/thread_ios.c b/build/ntdll-unix/thread_ios.c
+index b333906..a1ac4d2 100644
+--- a/build/ntdll-unix/thread_ios.c
++++ b/build/ntdll-unix/thread_ios.c
+@@ -1274,6 +1274,11 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+         extern void ios_wow64_thread_exit( struct thread_data *data );
+         ios_wow64_thread_exit( get_thread_data() );
+     }
++    {
++        /* Playport (PLA-368): this thread is done with its process's guest memory. */
++        extern void ios_view_owner_thread_exit( struct thread_data *data );
++        ios_view_owner_thread_exit( get_thread_data() );
++    }
+     pthread_exit( UIntToPtr(status) );
+ }
+ 
+diff --git a/build/ntdll-unix/virtual_ios.c b/build/ntdll-unix/virtual_ios.c
+index 5a44db6..6ebdb8f 100644
+--- a/build/ntdll-unix/virtual_ios.c
++++ b/build/ntdll-unix/virtual_ios.c
+@@ -5419,8 +5419,19 @@ struct file_view
+     size_t        wow64_size;    /* exact server image extent, before host rounding */
+     USHORT        wow64_machine;
+     BOOL          wow64_registered;
++    void         *ios_owner_peb; /* Playport (PLA-368): the pseudo-process whose
++                                  * allocation or section map made it, NULL for the
++                                  * runtime's own views; released when it exits */
+ };
+ 
++/* Playport (PLA-368): the owner create_view gives a view. Set only around
++ * allocate_virtual_memory and virtual_map_section, the work of
++ * NtAllocateVirtualMemory[Ex] and NtMapViewOfSection[Ex]: a call for another
++ * process runs there as an APC on that process's thread, so the owner is the
++ * target. Views the runtime makes for itself (TEB blocks, thread data, thread
++ * stacks, the session's own state) stay NULL and are never released. */
++static __thread void *ios_view_owner_scope;
++
+ /* per-page protection flags */
+ #define VPROT_READ       0x01
+ #define VPROT_WRITE      0x02
+@@ -9621,6 +9632,7 @@ static NTSTATUS create_view( struct file_view **view_ret, void *base, size_t siz
+     view->base    = base;
+     view->size    = size;
+     view->protect = vprot;
++    view->ios_owner_peb = ios_view_owner_scope;
+     if (use_kernel_writewatch) vprot &= ~VPROT_WRITEWATCH;
+     set_page_vprot( base, size, vprot );
+ 
+@@ -15185,10 +15197,31 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
+  *
+  * Map a file section into memory.
+  */
++static unsigned int virtual_map_section_body( HANDLE handle, PVOID *addr_ptr, ULONG_PTR limit_low,
++                                              ULONG_PTR limit_high, SIZE_T commit_size,
++                                              const LARGE_INTEGER *offset_ptr, SIZE_T *size_ptr,
++                                              ULONG alloc_type, ULONG protect, USHORT machine );
++
++/* Playport (PLA-368): the views it makes belong to the calling pseudo-process. */
+ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_PTR limit_low,
+                                          ULONG_PTR limit_high, SIZE_T commit_size,
+                                          const LARGE_INTEGER *offset_ptr, SIZE_T *size_ptr,
+                                          ULONG alloc_type, ULONG protect, USHORT machine )
++{
++    void *saved = ios_view_owner_scope;
++    unsigned int status;
++
++    ios_view_owner_scope = ios_jit_current_peb();
++    status = virtual_map_section_body( handle, addr_ptr, limit_low, limit_high, commit_size,
++                                       offset_ptr, size_ptr, alloc_type, protect, machine );
++    ios_view_owner_scope = saved;
++    return status;
++}
++
++static unsigned int virtual_map_section_body( HANDLE handle, PVOID *addr_ptr, ULONG_PTR limit_low,
++                                              ULONG_PTR limit_high, SIZE_T commit_size,
++                                              const LARGE_INTEGER *offset_ptr, SIZE_T *size_ptr,
++                                              ULONG alloc_type, ULONG protect, USHORT machine )
+ {
+     unsigned int res;
+     mem_size_t full_size;
+@@ -17345,6 +17378,163 @@ static BOOL ios_wow64_free_teb( struct thread_data *data )
+     return TRUE;
+ }
+ 
++/* Playport (PLA-368): release an exited pseudo-process's views.
++ *
++ * Wine's view tree is shared by every pseudo-process, and process_exit_wrapper
++ * gave back only a child's JIT-pool copies, fixed-base image, WoW64 window and
++ * fd cache: its DLL images, heaps and reservations stayed mapped, about 250 MB
++ * per exited CEF helper (libcef.dll alone). A child that exits is queued here;
++ * its views go once every thread of it in teb_list has finished (reached
++ * pthread_exit_wrapper's end or process_exit_wrapper: neither touches its
++ * guest memory again), at the next thread reclamation or creation, as 0139
++ * tears a dead owner's WoW64 window down at its last thread's reclamation, on
++ * a thread of another process. What goes, through delete_view: views it made
++ * by allocation (private memory) and image views. What stays, counted as kept:
++ * views of other sections (shared memory a long-lived process may have cached,
++ * such as win32u's session blocks), VPROT_SYSTEM views, anything in FEX's band,
++ * the JIT pool or a WoW64 window, and every view of an i386 child (its window
++ * is torn down by 0139; its secondary threads are not in teb_list). */
++#define IOS_VIEW_OWNER_DEAD_MAX 64
++#define IOS_VIEW_OWNER_EXITED_TEBS 1024
++static void *ios_view_owner_dead[IOS_VIEW_OWNER_DEAD_MAX];       /* virtual_mutex */
++static TEB *ios_view_owner_exited_tebs[IOS_VIEW_OWNER_EXITED_TEBS]; /* atomic slots */
++
++static BOOL ios_view_owner_teb_exited( TEB *teb )
++{
++    unsigned int i;
++
++    for (i = 0; i < IOS_VIEW_OWNER_EXITED_TEBS; i++)
++        if (__atomic_load_n( &ios_view_owner_exited_tebs[i], __ATOMIC_ACQUIRE ) == teb) return TRUE;
++    return FALSE;
++}
++
++/* The calling thread will not touch its process's guest memory again. A full
++ * table leaves its process's views mapped, never released early. */
++void ios_view_owner_thread_exit( struct thread_data *data )
++{
++    TEB *teb = data ? data->teb : NULL;   /* NtCurrentTeb() is cleared by now */
++    unsigned int i;
++
++    if (!teb || ios_view_owner_teb_exited( teb )) return;
++    for (i = 0; i < IOS_VIEW_OWNER_EXITED_TEBS; i++)
++    {
++        TEB *expected = NULL;
++        if (__atomic_compare_exchange_n( &ios_view_owner_exited_tebs[i], &expected, teb, FALSE,
++                                         __ATOMIC_RELEASE, __ATOMIC_RELAXED )) return;
++    }
++    dprintf( 2, "[view-owner] exited-thread table full: peb=%p keeps its views\n", teb->Peb );
++}
++
++/* A TEB is reused once its thread data is freed. virtual_mutex held. */
++static void ios_view_owner_forget_teb( TEB *teb )
++{
++    unsigned int i;
++
++    for (i = 0; i < IOS_VIEW_OWNER_EXITED_TEBS; i++)
++        if (ios_view_owner_exited_tebs[i] == teb)
++            __atomic_store_n( &ios_view_owner_exited_tebs[i], NULL, __ATOMIC_RELEASE );
++}
++
++static BOOL ios_view_owner_kept_range( const struct file_view *view )
++{
++    uintptr_t base = (uintptr_t)view->base, end = base + view->size;
++    uintptr_t pool = (uintptr_t)ios_jit_rx_base_global;
++    unsigned int i;
++
++    if (end > 0x7c00000000ULL && base < 0x8000000000ULL) return TRUE;   /* FEX's band */
++    if (pool && end > pool && base < pool + ios_jit_pool_size_global) return TRUE;
++    pool = (uintptr_t)ios_jit_rw_base_global;
++    if (pool && end > pool && base < pool + ios_jit_pool_size_global) return TRUE;
++    for (i = 0; i < IOS_WOW64_WINDOWS_MAX; i++)
++    {
++        uintptr_t window = __atomic_load_n( &ios_wow64_windows[i].base, __ATOMIC_RELAXED );
++        if (window && end > window && base < window + IOS_WOW64_WINDOW_SIZE) return TRUE;
++    }
++    return FALSE;
++}
++
++/* virtual_mutex held. Releases peb's views if all its threads have finished. */
++static BOOL ios_view_owner_release_locked( void *peb )
++{
++    struct file_view *view, *next;
++    struct thread_data *data;
++    unsigned long freed = 0, kept = 0;
++    unsigned long long freed_bytes = 0, kept_bytes = 0;
++    unsigned int threads = 0;
++
++    LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
++    {
++        if (!data->teb || data->teb->Peb != peb) continue;
++        if (!ios_view_owner_teb_exited( data->teb )) return FALSE;
++        threads++;
++    }
++    WINE_RB_FOR_EACH_ENTRY_DESTRUCTOR( view, next, &views_tree, struct file_view, entry )
++    {
++        if (view->ios_owner_peb != peb) continue;
++        view->ios_owner_peb = NULL;
++        if ((view->protect & VPROT_SYSTEM) || ios_view_owner_kept_range( view ) ||
++            !(is_view_valloc( view ) || (view->protect & SEC_IMAGE)))
++        {
++            kept++;
++            kept_bytes += view->size;
++            continue;
++        }
++        freed++;
++        freed_bytes += view->size;
++        view->wow64_mapping = 0;   /* the server closed the dead process's handles (0139) */
++        delete_view( view );
++    }
++    LIST_FOR_EACH_ENTRY( data, &teb_list, struct thread_data, entry )
++        if (data->teb && data->teb->Peb == peb) ios_view_owner_forget_teb( data->teb );
++    dprintf( 2, "[view-owner] peb=%p exited: freed %lu views (%llu MB), kept %lu (%llu MB); "
++             "%u finished thread(s)\n", peb, freed, freed_bytes >> 20, kept, kept_bytes >> 20, threads );
++    return TRUE;
++}
++
++/* Release the views of every queued process whose threads have all finished;
++ * never the caller's own process. */
++static void ios_view_owner_sweep(void)
++{
++    void *self = ios_jit_current_peb();
++    sigset_t sigset;
++    unsigned int i;
++
++    for (i = 0; i < IOS_VIEW_OWNER_DEAD_MAX; i++)
++        if (__atomic_load_n( &ios_view_owner_dead[i], __ATOMIC_RELAXED )) break;
++    if (i == IOS_VIEW_OWNER_DEAD_MAX) return;
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    for (i = 0; i < IOS_VIEW_OWNER_DEAD_MAX; i++)
++    {
++        void *peb = ios_view_owner_dead[i];
++        if (!peb || peb == self) continue;
++        if (ios_view_owner_release_locked( peb )) __atomic_store_n( &ios_view_owner_dead[i], NULL, __ATOMIC_RELAXED );
++    }
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++}
++
++/* process_exit_wrapper, on the exiting thread of a child pseudo-process. */
++void ios_view_owner_process_exit( void *peb )
++{
++    sigset_t sigset;
++    unsigned int i;
++
++    ios_view_owner_thread_exit( get_thread_data() );
++    if (!peb) return;
++    if (ios_image_info_for_peb( peb )->Machine == IMAGE_FILE_MACHINE_I386)
++    {
++        dprintf( 2, "[view-owner] peb=%p exited: i386, its views are kept\n", peb );
++        return;
++    }
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    for (i = 0; i < IOS_VIEW_OWNER_DEAD_MAX; i++)
++        if (!ios_view_owner_dead[i] || ios_view_owner_dead[i] == peb) break;
++    if (i < IOS_VIEW_OWNER_DEAD_MAX) __atomic_store_n( &ios_view_owner_dead[i], peb, __ATOMIC_RELAXED );
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    if (i == IOS_VIEW_OWNER_DEAD_MAX)
++        dprintf( 2, "[view-owner] peb=%p exited: queue full, its views are kept\n", peb );
++    ios_view_owner_sweep();
++}
++
+ /***********************************************************************
+  *           virtual_alloc_teb
+  */
+@@ -17355,6 +17545,7 @@ NTSTATUS virtual_alloc_teb( struct thread_data *data )
+     SIZE_T size;
+     NTSTATUS status = STATUS_SUCCESS;
+ 
++    ios_view_owner_sweep();   /* PLA-368 */
+     /* Never hand a WoW64 owner the session's unpaired native layout. */
+     if (ios_wow64_current_base()) return ios_wow64_alloc_teb( data );
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+@@ -17473,6 +17664,9 @@ void virtual_free_thread_data( struct thread_data *data )
+     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+     signal_free_thread( teb );
+     list_remove( &data->entry );
++#ifdef WINE_IOS
++    ios_view_owner_forget_teb( teb );   /* PLA-368: the TEB is reused */
++#endif
+     ptr = teb;
+     if (is_old_wow64()) ptr = (char *)ptr - teb_offset;
+     *(void **)ptr = next_free_teb;
+@@ -17483,6 +17677,9 @@ void virtual_free_thread_data( struct thread_data *data )
+     size = 0;
+     ptr = data;
+     NtFreeVirtualMemory( GetCurrentProcess(), &ptr, &size, MEM_RELEASE );
++#ifdef WINE_IOS
++    ios_view_owner_sweep();   /* PLA-368: maybe the last thread of an exited process */
++#endif
+ }
+ 
+ 
+@@ -18701,9 +18898,28 @@ static void virtual_release_address_space(void)
+  *
+  * NtAllocateVirtualMemory[Ex] implementation.
+  */
++static NTSTATUS allocate_virtual_memory_body( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
++                                              ULONG_PTR limit_low, ULONG_PTR limit_high,
++                                              ULONG_PTR align, ULONG attributes );
++
++/* Playport (PLA-368): the views it makes belong to the calling pseudo-process. */
+ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
+                                          ULONG_PTR limit_low, ULONG_PTR limit_high,
+                                          ULONG_PTR align, ULONG attributes )
++{
++    void *saved = ios_view_owner_scope;
++    NTSTATUS status;
++
++    ios_view_owner_scope = ios_jit_current_peb();
++    status = allocate_virtual_memory_body( ret, size_ptr, type, protect, limit_low, limit_high,
++                                           align, attributes );
++    ios_view_owner_scope = saved;
++    return status;
++}
++
++static NTSTATUS allocate_virtual_memory_body( void **ret, SIZE_T *size_ptr, ULONG type, ULONG protect,
++                                              ULONG_PTR limit_low, ULONG_PTR limit_high,
++                                              ULONG_PTR align, ULONG attributes )
+ {
+     void *base;
+     unsigned int vprot;
+-- 
+2.56.0
+

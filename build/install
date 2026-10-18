@@ -32,6 +32,8 @@
 #   PLAYPORT_DEVICE_LOCK    the device lock (default $PLAYPORT_DEVICE_DIR/device.lock:
 #                    build/lib.sh; tools/phonelib.py takes the same one)
 #   PLAYPORT_USBMUX_SOCKET  netmuxd's socket (pp setup records it)
+#   PLAYPORT_PHONE_ADDR     the phone's address away from home, added to netmuxd when
+#                    none lists (pp setup --phone-addr; docs/DEVICE.md, Away from home)
 #   plus everything pp build reads (build/lib.sh, JOBS, PLAYPORT_RUN,
 #   PLAYPORT_OUT)
 #
@@ -149,29 +151,48 @@ systemctl --user is-active netmuxd > /dev/null 2>&1 || systemctl --user start ne
 pmd usbmux 30 usbmux list
 n=$(jq length "$LOG/usbmux.out")
 skipped=""
+if [ "$n" = 0 ] && [ -n "${PLAYPORT_PHONE_ADDR:-}" ]; then
+    # Away from home (docs/DEVICE.md): mDNS does not cross the VPN; add the phone by address.
+    if why=$(PLAYPORT_USBMUX_SOCKET=$SOCK python3 "$PLAYPORT_REPO/tools/phonelib.py" add-away); then
+        say "no phone on $SOCK: added it at $PLAYPORT_PHONE_ADDR"
+        for _ in 1 2 3 4 5; do
+            pmd usbmux 30 usbmux list
+            n=$(jq length "$LOG/usbmux.out")
+            [ "$n" = 0 ] || break
+            sleep 1
+        done
+    else
+        skipped="; not added at $PLAYPORT_PHONE_ADDR: $why"
+    fi
+fi
 if [ "$n" = 0 ]; then
     # A netmuxd that started before the network had a route fails the phone's
     # first heartbeat and never lists it again; a restart rediscovers it. It is
     # the machine's, shared by every agent: phonelib decides whether it is ours to
     # restart (under the device lock, taken for the restart alone when no other job
     # holds it; our socket; not restarted lately).
+    restarted=0
     if why=$(PLAYPORT_USBMUX_SOCKET=$SOCK python3 "$PLAYPORT_REPO/tools/phonelib.py" netmuxd-restart); then
-        say "no phone on $SOCK: restarted netmuxd once"
+        say "no phone on $SOCK: restarted netmuxd once"; restarted=1
     else
-        skipped="; netmuxd not restarted: $why"
+        skipped="$skipped; netmuxd not restarted: $why"
     fi
-    [ -n "$skipped" ] || for _ in $(seq 20); do
+    [ "$restarted" = 0 ] || for i in $(seq 20); do
         sleep 3
         [ -S "$SOCK" ] || continue
+        # A restart forgets a phone added by address: add it again once netmuxd is up.
+        [ "$i" != 2 ] || [ -z "${PLAYPORT_PHONE_ADDR:-}" ] ||
+            PLAYPORT_USBMUX_SOCKET=$SOCK python3 "$PLAYPORT_REPO/tools/phonelib.py" add-away > /dev/null || true
         pmd usbmux 30 usbmux list
         n=$(jq length "$LOG/usbmux.out")
         [ "$n" = 0 ] || break
     done
 fi
-[ "$n" = 1 ] || die "expected exactly one phone on $SOCK, found $n (is it unlocked, on the same network or cabled?)$skipped" 3
+[ "$n" = 1 ] || die "expected exactly one phone on $SOCK, found $n (is it unlocked, on the same network, cabled or on WireGuard?)$skipped" 3
 jq -c '.[0] | {ConnectionType, ProductType, ProductVersion}' "$LOG/usbmux.out" > "$LOG/device.json"
 UDID=$(jq -r '.[0].Identifier // empty' "$LOG/usbmux.out"); rm "$LOG/usbmux.out"   # kept in memory only
 [ -n "$UDID" ] || die "usbmux list gave no device identifier"
+printf '%s' "$UDID" | python3 "$PLAYPORT_REPO/tools/phonelib.py" remember-udid   # for add-away
 say "phone $(cat "$LOG/device.json")"
 pmd devmode 30 amfi developer-mode-status
 grep -qi true "$LOG/devmode.out" || die "Developer Mode is off (Settings, Privacy & Security, Developer Mode)"

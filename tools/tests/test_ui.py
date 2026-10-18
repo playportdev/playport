@@ -127,9 +127,9 @@ class UiEnvTest(unittest.TestCase):
         m = load()
         for ok in ("queue:2494780", "downloading:2494780", "install:367520", "install:gog-1104084973@123",
                    "install:epic-Hazelnut", "install:epic-65d73e3be8824829b5b788bd849b6559", "open:epic-Hazelnut",
-                   "verify:epic-Hazelnut", "uninstall:epic-65d73e3be8824829b5b788bd849b6559"):
+                   "verify:epic-Hazelnut", "uninstall:epic-65d73e3be8824829b5b788bd849b6559", "repair:app-1174180"):
             self.assertTrue(m.ACTION_RE.match(ok), ok)
-        for bad in ("queue:app-2494780", "downloading:", "queue:12a", "install:epic-", "install:epic-a/b", "install:gog-x"):
+        for bad in ("queue:app-2494780", "downloading:", "queue:12a", "install:epic-", "install:epic-a/b", "install:gog-x", "repair:1174180"):
             self.assertFalse(m.ACTION_RE.match(bad), bad)
 
     def test_actions_after_a_play_run_after_the_restart(self):
@@ -162,6 +162,29 @@ class UiEnvTest(unittest.TestCase):
         self.assertTrue(m.ends_run(title, two, None, 2))
         env = m.ui_env("n1", play="app-367520", extra=after)
         self.assertIn("UI_ACTIONS=" + ",".join(after + ["play:app-367520"]), env)
+
+    def test_open_launcher_is_followed_as_a_play(self):
+        """Settings › Launchers' Open (UIDriver open-launcher:) ends the run at the launcher's end, as play: does."""
+        m = load()
+        for ok in ("open-launcher:rockstar", "open:settings#launchers"):
+            self.assertTrue(m.ACTION_RE.match(ok), ok)
+        for bad in ("open-launcher:", "open-launcher:Rock-star", "open-launcher:rockstar,play:app-1"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        title = {"event": "title-done", "outcome": "exit=0 after_s=90"}
+        ui = {"event": "ui-done", "outcome": "ok actions=1"}
+        self.assertTrue(m.ends_run(title, ["open-launcher:rockstar"], None))
+        self.assertFalse(m.ends_run(ui, ["open-launcher:rockstar"], None))
+        self.assertTrue(m.after_play(["open-launcher:rockstar", "wait:5", "open:settings"]))
+        self.assertEqual(m.pad_after_play(["open-launcher:rockstar", "pad:a"]), "pad:a")
+
+    def test_forget_launcher_window_is_a_ui_step_not_a_play(self):
+        """Settings \u203a Launchers' Forget the launcher's saved window settings (UIDriver
+        forget-launcher-window:) is accepted for a launcher id and is not followed as a play."""
+        m = load()
+        self.assertTrue(m.ACTION_RE.match("forget-launcher-window:rockstar"))
+        for bad in ("forget-launcher-window:", "forget-launcher-window:Rock-star", "forget-launcher-window:../x"):
+            self.assertFalse(m.ACTION_RE.match(bad), bad)
+        self.assertFalse(m.after_play(["forget-launcher-window:rockstar", "wait:5"]))
 
     def test_the_in_game_menu_runs_while_the_game_does(self):
         """wait: and menu: after a play: act on the running game: a run that ends with

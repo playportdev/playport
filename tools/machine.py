@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """pp setup: record where this machine's system tools are, once.
 
-  pp setup [--llvm-mingw DIR] [--darwin-sdk DIR] [--usbmux-socket PATH] [--check]
+  pp setup [--llvm-mingw DIR] [--darwin-sdk DIR] [--usbmux-socket PATH] [--phone-addr IP] [--check]
 
 The repository names no path outside itself. Each input below is found, checked
 and written to $PLAYPORT_BUILD/inputs.local (gitignored), which build/env.sh
@@ -12,10 +12,17 @@ else the file already written, else what the tool itself reports:
   DARWIN_SDK              the bundle `swift sdk configure --show-configuration darwin` names
   PLAYPORT_USBMUX_SOCKET  the --socket-path of the running netmuxd user unit
 
+One optional input is never found, only given:
+
+  PLAYPORT_PHONE_ADDR     the phone's address on WireGuard, away from home: added to
+                          netmuxd when no phone lists (docs/DEVICE.md, Away from home;
+                          --phone-addr '' forgets it)
+
 --check reports what is recorded and whether it is usable, and writes nothing.
 The tools themselves stay installed where they are (AGENTS.md, Disk).
 """
 
+import ipaddress
 import os
 import re
 import shutil
@@ -88,6 +95,13 @@ def main(args):
             check = True
         elif a in OPTIONS and args:
             given[OPTIONS[a]] = os.path.abspath(os.path.expanduser(args.pop(0)))
+        elif a == "--phone-addr" and args:
+            addr = args.pop(0)
+            try:
+                given["PLAYPORT_PHONE_ADDR"] = str(ipaddress.ip_address(addr)) if addr else ""
+            except ValueError:
+                print(f"pp setup: --phone-addr {addr}: not an IP address", file=sys.stderr)
+                return 2
         else:
             print(f"pp setup: unknown argument {a} (pp setup --help)", file=sys.stderr)
             return 2
@@ -101,6 +115,10 @@ def main(args):
         print(f"{key:24} {v or '-'}" + (f"  ({why})" if why else ""))
         if v:
             values[key] = v
+    addr = given.get("PLAYPORT_PHONE_ADDR", os.environ.get("PLAYPORT_PHONE_ADDR") or recorded.get("PLAYPORT_PHONE_ADDR"))
+    print(f"{'PLAYPORT_PHONE_ADDR':24} {addr or '-'}" + ("" if addr else "  (optional: the phone away from home)"))
+    if "PLAYPORT_PHONE_ADDR" in given:
+        values["PLAYPORT_PHONE_ADDR"] = given["PLAYPORT_PHONE_ADDR"]
     where = inputs.rel(inputs.FILE)
     if check:
         print(f"pp setup: {where} {'is usable' if not bad else 'needs pp setup'}")

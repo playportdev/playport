@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 09:00:00 +0200
+Subject: [PATCH] No system CPU probe on Windows
+
+CpuProbe::Create returns no probe on Windows, as on platforms without
+one; every caller already handles that. The probe's PDH queries
+delay-load pdh.dll on a browser thread pool worker as soon as the
+performance manager starts, and in the Rockstar launcher's Open that
+load failed when the JIT pool was full and Chromium ended the browser
+(PLA-394). Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-18-cef-late-children.md
+Offered-upstream: no
+---
+ components/system_cpu/cpu_probe.cc |    4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/components/system_cpu/cpu_probe.cc b/components/system_cpu/cpu_probe.cc
+index 4c9bdb9cc8..3801d75748 100644
+--- a/components/system_cpu/cpu_probe.cc
++++ b/components/system_cpu/cpu_probe.cc
+@@ -27,7 +27,9 @@ std::unique_ptr<CpuProbe> CpuProbe::Create() {
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   return CpuProbeLinux::Create();
+ #elif BUILDFLAG(IS_WIN)
+-  return CpuProbeWin::Create();
++  // No system CPU probe on Windows: its PDH queries load pdh.dll, and the
++  // browser ends itself when that delay-load fails.
++  return nullptr;
+ #elif BUILDFLAG(IS_MAC)
+   return CpuProbeMac::Create();
+ #else

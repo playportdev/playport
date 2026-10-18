@@ -998,6 +998,35 @@ final class JitPoolTests: XCTestCase {
         XCTAssertLessThanOrEqual(JitPool.minimumMB, JitPool.maximumMB)   // it fits the executable's reservation
     }
 
+    func testAGamesLargerPoolIsGrantedOnlyUnderAnEntitledLimitAndNeverAboveTheReservation() {
+        // Decision 0108: a compatibility entry's pool, on a limit of at least 6 GiB.
+        XCTAssertEqual(JitPool.sizeMB(limitMB: 8191, gameMB: 896), 896)
+        XCTAssertEqual(JitPool.sizeMB(limitMB: 6143, gameMB: 896), 896)     // 6 GiB as the phone reads it
+        XCTAssertNil(JitPool.size(limitMB: 8191, gameMB: 896).note)
+        XCTAssertEqual(JitPool.size(limitMB: 8191, gameMB: 4096).mb, JitPool.maximumMB)
+        XCTAssertNotNil(JitPool.size(limitMB: 8191, gameMB: 4096).note)
+        // Signed without the entitlement, or no limit reported: the default, with a note.
+        XCTAssertEqual(JitPool.size(limitMB: 3379, gameMB: 896).mb, JitPool.minimumMB)
+        XCTAssertEqual(JitPool.size(limitMB: 3379, gameMB: 896).note,
+                       "the game's 896 MiB not granted: a memory limit of 3379 MB, under 6144 MB")
+        XCTAssertEqual(JitPool.size(limitMB: nil, gameMB: 896).mb, JitPool.minimumMB)
+        // A game with no entry of its own, or one below the default, gets the default.
+        XCTAssertEqual(JitPool.size(limitMB: 8191, gameMB: nil).mb, JitPool.minimumMB)
+        XCTAssertNil(JitPool.size(limitMB: 8191, gameMB: 256).note)
+        XCTAssertEqual(JitPool.sizeMB(limitMB: 8191, gameMB: 256), JitPool.minimumMB)
+    }
+
+    func testTheCompatibilityTableRefusesAPoolOutsideTheReservation() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pool-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("compat-defaults.json")
+        try Data(#"{"titles": {"app-1": {"settings": {"jitPoolMB": 2048}, "reason": "r"}}}"#.utf8).write(to: file)
+        XCTAssertThrowsError(try CompatDefaults.load(directory: dir)) {
+            XCTAssertEqual($0 as? CompatDefaultsError, .badSetting("app-1.jitPoolMB"))
+        }
+    }
+
     func testTheLineCarriesEveryFieldAndWhatRanOut() {
         let mib: UInt64 = 1 << 20
         var use = JitPool.Use(size: 896 * mib, head: 153 * mib - 4096, headLive: 150 * mib, tail: 144 * mib,
@@ -1442,6 +1471,8 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(SettingsSection.all(developer: false).map(\.title),
                        ["Accounts", "Graphics", "Downloads", "Controls", "Storage", "Setup check", "About"])
         XCTAssertEqual(SettingsSection.all(developer: true).last, .developer)
+        XCTAssertEqual(SettingsSection.all(developer: true).suffix(2), [.launchers, .developer])
+        XCTAssertEqual(SettingsSection.named("launchers"), .launchers)
         XCTAssertEqual(SettingsSection.named("account"), .accounts)
         XCTAssertEqual(SettingsSection.named("steam"), .accounts)
         XCTAssertEqual(SettingsSection.named("diagnostics"), .developer)
@@ -1451,10 +1482,11 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(SettingsSection.named("controllers"), .controls)
         XCTAssertEqual(SettingsSection.named("gyro"), .controls)
         XCTAssertNil(SettingsSection.named("nope"))
-        // Up and down stop at the ends; a release build never steps onto Developer.
+        // Up and down stop at the ends; a release build never steps onto Launchers or Developer.
         XCTAssertEqual(SettingsSection.accounts.step(-1, developer: true), .accounts)
         XCTAssertEqual(SettingsSection.about.step(1, developer: false), .about)
-        XCTAssertEqual(SettingsSection.about.step(1, developer: true), .developer)
+        XCTAssertEqual(SettingsSection.about.step(1, developer: true), .launchers)
+        XCTAssertEqual(SettingsSection.launchers.step(1, developer: true), .developer)
         XCTAssertEqual(SettingsSection.graphics.step(1, developer: false), .downloads)
     }
 

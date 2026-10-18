@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 20:00:00 +0200
+Subject: [PATCH] ntdll: open Playport's CEF build in place of a client's of
+ the same version on iOS
+
+Decision 0110 (PLA-370): Playport builds the CEF version Social Club ships
+with small PartitionAlloc pools and no V8 sandbox, and loads it in place
+of the client's. The substitution is by path, when a file is opened: the
+client's files are never changed, and Rockstar's own files are never
+substituted.
+
+NtCreateFile (and so NtOpenFile) and NtQuery(Full)AttributesFile hand the
+resolved Unix name to playport_cef_swap_path (app/Sources/WineHost
+cef_swap.c, with its host test). For a read-only open of an existing file
+named as one of CEF's runtime files (libcef, chrome_elf, the V8 snapshot,
+the paks, ICU, locales/*.pak, libEGL, libGLESv2, vk_swiftshader and
+vulkan-1), whose directory's own libcef.dll carries exactly the file
+version 143.0.14.0 in its standard version resource, it returns the copy
+under the app bundle's cef/143.0.14/; the image and the data files then
+come from the same build, and an attribute query by path sees the file an
+open would get. Each directory's decision is made once and logged as a
+[cef-swap] line, as is each file at its first substitution. Any other
+name costs only a check of its extension; any other version, a parse
+failure, a write, create or delete open and a build without the payload
+(release) leave the client's file in place.
+
+Wine's file layer is where both DLL images and the memory-mapped data
+files are opened by name: a swap at section creation would leave a file
+handle, and the size Chromium reads from it, on the client's file.
+
+Class: feature
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+---
+ dlls/ntdll/unix/file.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 1a92429..5fae8cd 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -4645,6 +4645,24 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
+ /******************************************************************************
+  *              NtCreateFile   (NTDLL.@)
+  */
++#ifdef WINE_IOS
++/* Playport's own CEF build in place of a client's of the exact same version
++ * (decision 0110, PLA-370): app/Sources/WineHost/cef_swap.c. For a read-only open
++ * of one of CEF's runtime files beside a libcef.dll whose version resource is
++ * exactly the one Playport built, the Unix path of Playport's copy (malloc'd);
++ * otherwise NULL, after a short string check. The client's files are not changed. */
++extern char *playport_cef_swap_path( const char *unix_name, unsigned int access, unsigned int disposition,
++                                     unsigned int options, const char *bundle_dir );
++
++static void cef_swap( char **unix_name, ACCESS_MASK access, ULONG disposition, ULONG options )
++{
++    char *ours = playport_cef_swap_path( *unix_name, access, disposition, options, data_dir );
++    if (!ours) return;
++    free( *unix_name );
++    *unix_name = ours;
++}
++#endif
++
+ #ifdef WINE_IOS
+ /* ml487 (#78): defined next to NtReadFile, used here — forward-declare so the
+  * call below doesn't become an implicit (non-static) declaration. */
+@@ -4751,6 +4769,7 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
+     {
+         name_hidden = is_hidden_file( unix_name );
+ #ifdef WINE_IOS
++        if (!created) cef_swap( &unix_name, access, disposition, options );
+         /* The prefix's system32, syswow64 and sysarm64 are links into the app
+          * bundle, which cannot be written. A file created over one replaces the
+          * link with a file of its own, as on a desktop prefix, where these are
+@@ -5061,6 +5080,9 @@ NTSTATUS WINAPI NtQueryFullAttributesFile( const OBJECT_ATTRIBUTES *attr,
+         ULONG attributes;
+         struct stat st;
+ 
++#ifdef WINE_IOS
++        cef_swap( &unix_name, FILE_READ_ATTRIBUTES, FILE_OPEN, 0 );  /* as the file it opens */
++#endif
+         if (get_file_info( unix_name, &st, &attributes, NULL ) == -1)
+             status = errno_to_status( errno );
+         else if (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode))
+@@ -5090,6 +5112,9 @@ NTSTATUS WINAPI NtQueryAttributesFile( const OBJECT_ATTRIBUTES *attr, FILE_BASIC
+         ULONG attributes;
+         struct stat st;
+ 
++#ifdef WINE_IOS
++        cef_swap( &unix_name, FILE_READ_ATTRIBUTES, FILE_OPEN, 0 );  /* as the file it opens */
++#endif
+         if (get_file_info( unix_name, &st, &attributes, NULL ) == -1)
+             status = errno_to_status( errno );
+         else if (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode))

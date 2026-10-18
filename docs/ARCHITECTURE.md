@@ -332,7 +332,9 @@ The pool never grows. PE images with native code (a full copy of each ARM64EC,
 ARM64X or ARM64 image, x18 trampolines included), guest JIT blocks (Mono's, V8's) and each pseudo-process's private
 ntdll copy take its **head**, from the bottom up; FEX's code buffers take its
 **tail**, from the top down, up to 128 MiB each while the room between them
-allows. A guest JIT region's writes are routed through the **anonymous-alias
+allows, less 48 MiB and 16 MiB for each other process holding a code buffer
+(`patches/madeira-unix` 0157, decision
+[0116](decisions/0116-tail-room-for-every-process-and-the-launchers-smc-checks.md)). A guest JIT region's writes are routed through the **anonymous-alias
 table** (4096 entries); an entry ends when its memory is released
 (`MEM_RELEASE`, [evidence](evidence/2026-10-12-jit-alias-release.md)), and its pool
 range stays used. A dead process's code buffers are reused, and so are its
@@ -1276,3 +1278,9 @@ trailers say what it changes and why, and its `Evidence:` trailer names the
 record that proved it. Where each series is
 applied is in [BUILDING.md](BUILDING.md#the-pipeline). No patch has
 been offered upstream yet ([LICENSING.md](LICENSING.md#other-projects)).
+
+`patches/cef` and `patches/chromium` are applied outside `pp build` per
+[build/cef/README.md](../build/cef/README.md); ANGLE/Dawn patches carry
+`Upstream-repo:` to name their DEPS-pinned repository.
+
+The name gate permits only the two exact upstream GN tokens (the argument module and helper module) inside `patches/cef/` and `patches/chromium/`; all other retired names/prefixes still fail (shared rule in `tools/checks.py`).

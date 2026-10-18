@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 02:19:25 +0200
+Subject: [PATCH] ARM64EC: sample the inline self-modifying-code line like the
+ others
+
+ml1055 samples FEX's lines for a handled self-modifying write (the first
+40, then one in 1000), but the inline case, a write into the host page of
+the block that is running, still printed each time. Rockstar's
+RockstarService.exe rewrites its own code from code in the same 16 KiB
+host page: 166,975 such lines in a 330 s run. It now shares the sample.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no; the sampling is the iOS port's
+---
+ Source/Windows/ARM64EC/Module.cpp | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 1650df1..b6b48cc 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -1249,8 +1249,11 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
+                                        FEX::Windows::InvalidationTracker::TrapGranuleSize)) {
+         // If we are not patching ourself (single inst block case) and potentially patching the current block, this is inline SMC. Reconstruct the current context (before the SMC write) then single step the write to reduce it to regular SMC.
+         Exception::ReconstructThreadState(Thread, *NativeContext);
+-        LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", NativeContext->Pc,
+-                          Thread->CurrentFrame->State.rip, FaultAddress);
++        // PLA-366: sampled like the other SMC lines (ml1055): RockstarService.exe takes 500 a second.
++        if (IosSmcSay) {
++          LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", NativeContext->Pc,
++                            Thread->CurrentFrame->State.rip, FaultAddress);
++        }
+         NativeContext->Pc = CPUArea.DispatcherLoopTopEnterECFillSRA();
+         NativeContext->Sp = CPUArea.EmulatorStackBase();
+         NativeContext->X11 = 1;                                        // Set ENTRY_FILL_SRA_SINGLE_INST_REG to force a single step

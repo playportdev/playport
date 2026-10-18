@@ -29,13 +29,17 @@ public struct InstalledTitle: Codable, Equatable, Identifiable, Sendable {
         public var files: Int
         public var bad: Int
         public var unlisted: Int
-        public var ok: Bool { bad == 0 }
+        /// Depots the install left out that a repair checks with Steam again
+        /// (TitleInstaller.VerifyReport.depotsToRecheck); nil in a check from before them.
+        public var depotsToRecheck: Int?
+        public var ok: Bool { bad == 0 && (depotsToRecheck ?? 0) == 0 }
 
-        public init(date: Date, files: Int, bad: Int, unlisted: Int) {
+        public init(date: Date, files: Int, bad: Int, unlisted: Int, depotsToRecheck: Int? = nil) {
             self.date = date
             self.files = files
             self.bad = bad
             self.unlisted = unlisted
+            self.depotsToRecheck = depotsToRecheck
         }
     }
 

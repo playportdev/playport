@@ -258,6 +258,19 @@ NETWORK_DATABASE = {
         ("DataBasePath", "sz", SYSTEM32 + "\\drivers\\etc"),
     ],
 }
+# The shipped fallback faces (Runtime/fonts, Wine's own Tahoma), registered where DirectWrite
+# looks for them. wine_host.c link_fonts puts the files in C:\windows\fonts, where win32u's
+# directory scan finds them for GDI; but Wine's dwrite builds its system font collection only
+# from the files this key names (dlls/dwrite/main.c create_system_path_list; a name without a
+# backslash is in %windir%\fonts), and win32u registers only the fonts of Wine's data directory
+# there (dlls/win32u/font.c update_external_font_keys), which the app has none of. With the key
+# empty, DirectWrite had no font at all: Direct2D's DrawTextLayout failed and Chromium's
+# Skia found no typeface for the message font, Tahoma, or "sans" (PLA-374). Each value name is
+# the face's full name plus " (TrueType)", as win32u names its own; win32u's load_registry_fonts
+# skips a face it already has by that name. Marked like PROFILE.
+FONTS_KEY = "Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+FONTS = {"tahoma.ttf": "Tahoma (TrueType)", "tahomabd.ttf": "Tahoma Bold (TrueType)"}
+RUNTIME_FONTS = PKG / "Sources" / "S1Probe" / "Runtime" / "fonts"
 # The computer's name, which wineboot's create_computer_name_keys writes at every
 # start from the host's name (programs/wineboot/wineboot.c): SetComputerNameEx
 # for the DNS host name (Tcpip\Parameters Hostname and Domain, and the NetBIOS
@@ -1325,6 +1338,10 @@ def generate():
     for path, values in STEAM_REDIST_RUN.items():
         for vname, vtype, data in values:
             hives["system"].value(path, vname, vtype, data)
+    for file, vname in FONTS.items():
+        if not (RUNTIME_FONTS / file).is_file():
+            raise SystemExit(f"{RUNTIME_FONTS / file} does not exist; FONTS names a face the app does not ship")
+        hives["system"].value(FONTS_KEY, vname, "sz", file)
     for path, values in WINE_MONO.items():
         hives["system"].key(path)
         for vname, vtype, data in values:
@@ -1336,6 +1353,7 @@ def generate():
     marked["system"] |= {path.lower() for path in COMPUTER_NAME}
     marked["system"] |= {path.lower() for path in WINE_MONO}
     marked["system"] |= {path.lower() for path in STEAM_REDIST_RUN}
+    marked["system"].add(FONTS_KEY.lower())
     marked["system"] |= wic_marked
     for name in hives:
         marked[name] |= inf_marked[name] | i386_marked[name]

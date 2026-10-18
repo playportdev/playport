@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 18:21:39 +0200
+Subject: [PATCH] Allow an explicit Windows target on a Linux host
+
+Formalize stage A-C scratch diff 001, retaining the built bytes.
+Apply to the CEF pin before its stock Chromium patcher runs.
+
+Class: linux-build
+Evidence: docs/evidence/2026-10-16-cef-low-va-build.md
+Offered-upstream: no
+---
+ tools/gclient_hook.py | 7 ++++++-
+ tools/gn_args.py      | 8 ++++++--
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/tools/gclient_hook.py b/tools/gclient_hook.py
+index 234d3a7..486840c 100644
+--- a/tools/gclient_hook.py
++++ b/tools/gclient_hook.py
+@@ -19,7 +19,10 @@ cef_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+ src_dir = os.path.abspath(os.path.join(cef_dir, os.pardir))
+ 
+ # Determine the platform.
+-if sys.platform == 'win32':
++if os.environ.get('CEF_TARGET_OS') == 'win':
++  assert sys.platform.startswith('linux'), 'CEF_TARGET_OS=win requires Linux'
++  platform = 'windows'
++elif sys.platform == 'win32':
+   platform = 'windows'
+ elif sys.platform == 'darwin':
+   platform = 'mac'
+@@ -51,6 +54,8 @@ if platform == 'linux' and 'CEF_INSTALL_SYSROOT' in os.environ:
+ print("\nGenerating CEF project files...")
+ 
+ gn_args = {}
++if os.environ.get('CEF_TARGET_OS') == 'win':
++  gn_args['target_os'] = 'win'
+ 
+ if platform == 'windows':
+   # Force use of the locally installed version of Visual Studio.
+diff --git a/tools/gn_args.py b/tools/gn_args.py
+index d11fa00..0b799f3 100644
+--- a/tools/gn_args.py
++++ b/tools/gn_args.py
+@@ -74,7 +74,11 @@ cef_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+ src_dir = os.path.abspath(os.path.join(cef_dir, os.pardir))
+ 
+ # Determine the platform.
+-if sys.platform == 'win32':
++if os.environ.get('CEF_TARGET_OS') == 'win':
++  assert sys.platform.startswith('linux'), 'CEF_TARGET_OS=win requires Linux'
++  platform = 'windows'
++  machine = 'amd64'
++elif sys.platform == 'win32':
+   platform = 'windows'
+   # Windows machines report 'ARM64' or 'AMD64'.
+   machine = 'arm64' if python_platform.machine() == 'ARM64' else 'amd64'
+@@ -485,7 +489,7 @@ def ValidateArgs(args, is_debug):
+     #
+     # See comments in gclient_hook.py for environment variable usage.
+     #
+-    if visual_studio_path != '':
++    if visual_studio_path != '' and sys.platform == 'win32':
+       assert visual_studio_version != '', 'visual_studio_path requires visual_studio_version'
+       assert visual_studio_runtime_dirs != '', 'visual_studio_path requires visual_studio_runtime_dirs'
+       assert windows_sdk_path != '', 'visual_studio_path requires windows_sdk_path'

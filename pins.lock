@@ -60,6 +60,12 @@ dxvk         e5ffd0fe5e5d62e68b2831d1285b51e61bb454d8  https://github.com/doitsu
 vkd3d-proton 31d1f89ca5b3f2fd3b6f025c8e6f73ed3eaa852b  https://github.com/HansKristian-Work/vkd3d-proton.git master
 gbe          7103add7ca6ef3ef8353279219880068f2494fc8  https://github.com/Detanup01/gbe_fork.git     dev
 #
+# CEF 143.0.14 / Chromium 143.0.7499.193 (decision 0110). Built separately;
+# prebuilt input record and integration status: build/cef/README.md.
+# Chromium's series follows CEF's stock patches; nested ANGLE/Dawn are DEPS-pinned.
+cef          dd46a3761b5389255e1824c81ae1b131459f7cd0  https://bitbucket.org/chromiumembedded/cef.git 7499
+chromium     fc6af963edebc86a5d6779e29b94312ebe911538  https://chromium.googlesource.com/chromium/src.git 143.0.7499.193
+#
 # Build-time sources that are not Madeira components, fetched by tag.
 freetype     VER-2-14-3                                https://github.com/freetype/freetype.git      -
 llvm-project llvmorg-15.0.7                            https://github.com/llvm/llvm-project.git      -

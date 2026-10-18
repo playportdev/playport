@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Fri, 16 Oct 2026 00:40:44 +0200
+Subject: [PATCH] userenv: keep the iOS runtime's variables in a new
+ environment block
+
+services.exe starts each service with CreateEnvironmentBlock(token, FALSE),
+a block built from the registry alone. On iOS every Wine process is a
+pseudo-process of one app, which hands each its runtime through WINE_IOS_*
+and MADEIRA_* variables, and FEX (xtajit64) refuses to start without
+WINE_IOS_JIT_RX/RW. So every service process ended in arm64ec_process_init
+with 0xc0000001 before its entry point: the Rockstar Games Launcher's
+Rockstar Service never ran under the SCM, while the same executable run by
+its installer, which inherits the environment, did.
+
+The launch's FEX configuration reaches each process the same way, as
+FEX_* variables (host features, memory ordering, block size, SMC checks),
+and was dropped too: a service ran with FEX's defaults while the launcher
+that started it ran with the launch's profile, and FEX_SMCCHECKS=none set
+for the launch left Rockstar Service checked.
+
+CreateEnvironmentBlock now copies the calling process's WINE_IOS_*,
+MADEIRA_* and FEX_* variables into the block it builds.
+
+Class: ios-port
+Evidence: docs/evidence/2026-10-15-rockstar-stage0-phone.md
+Offered-upstream: no; the variables exist only in the iOS one-process runtime
+---
+ dlls/userenv/userenv_main.c | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/dlls/userenv/userenv_main.c b/dlls/userenv/userenv_main.c
+index 54f713e..16e9386 100644
+--- a/dlls/userenv/userenv_main.c
++++ b/dlls/userenv/userenv_main.c
+@@ -86,6 +86,36 @@ static void set_env_var( WCHAR **env, const WCHAR *name, const WCHAR *val )
+     RtlSetEnvironmentVariable( env, &nameW, &valW );
+ }
+ 
++/* On iOS every Wine process is a pseudo-process of one app, and the app hands
++ * each one its runtime through WINE_IOS_* and MADEIRA_* variables: FEX
++ * (xtajit64) refuses to start without WINE_IOS_JIT_RX/RW. The launch's FEX
++ * configuration (FEX_*: host features, memory ordering, SMC checks) comes the
++ * same way. A block built without inheriting, as services.exe builds one for
++ * each service, would drop them, so they are copied from the calling process. */
++static void set_ios_runtime_variables( WCHAR **env )
++{
++    static const WCHAR *prefixes[] = { L"WINE_IOS_", L"MADEIRA_", L"FEX_" };
++    WCHAR *strings = GetEnvironmentStringsW(), *p, *eq;
++    UNICODE_STRING nameW, valW;
++    unsigned int i;
++
++    if (!strings) return;
++    for (p = strings; *p; p += wcslen( p ) + 1)
++    {
++        if (!(eq = wcschr( p + 1, '=' ))) continue;
++        for (i = 0; i < ARRAY_SIZE(prefixes); i++)
++        {
++            if (wcsncmp( p, prefixes[i], wcslen( prefixes[i] ) )) continue;
++            nameW.Buffer = p;
++            nameW.Length = nameW.MaximumLength = (eq - p) * sizeof(WCHAR);
++            RtlInitUnicodeString( &valW, eq + 1 );
++            RtlSetEnvironmentVariable( env, &nameW, &valW );
++            break;
++        }
++    }
++    FreeEnvironmentStringsW( strings );
++}
++
+ static void set_registry_variables(WCHAR **env, HKEY hkey, DWORD type, BOOL set_path)
+ {
+     UNICODE_STRING us_name, us_value;
+@@ -260,6 +290,7 @@ BOOL WINAPI CreateEnvironmentBlock( LPVOID* lpEnvironment,
+         set_env_var(&env, L"COMPUTERNAME", buf);
+ 
+     set_wow64_environment(&env);
++    set_ios_runtime_variables(&env);
+ 
+     if (!hToken)
+     {

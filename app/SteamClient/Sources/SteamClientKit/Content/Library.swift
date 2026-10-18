@@ -34,6 +34,13 @@ public struct DepotInfo: Sendable, Codable, Equatable {
     /// Nil for every other depot, a redistributable included.
     public var sharesInstallDir: Bool? = nil
 
+    /// A `depotfromapp` depot Steam installs into this app's own folder: one whose source app shares
+    /// the folder (`sharesInstallDir`), or one Steam does not list as a `sharedinstall` (Red Dead
+    /// Redemption 2's depot 1899671 of Rockstar's installers, from the config app 1899670, whose
+    /// manifest the game's own record lists). A `sharedinstall` depot goes into its source app's
+    /// folder (Steamworks Common Redistributables'), and is not this app's content.
+    public var isContentFromAnotherApp: Bool { depotFromApp != nil && (sharesInstallDir == true || !sharedInstall) }
+
     /// Windows content: explicitly "windows", or no OS restriction.
     public var isWindows: Bool { osList.isEmpty || osList.contains("windows") }
 }
@@ -81,10 +88,10 @@ public struct AppDepots: Sendable, Codable, Equatable {
     public func branch(_ name: String) -> Branch? { branches?.first { $0.name == name } }
 
     /// The app a depot's key and manifest request code are asked for: the source
-    /// app of a depot that shares the install folder, as Steam's own client does;
-    /// this app for every other depot.
+    /// app of another app's depot installed in this app's folder (`isContentFromAnotherApp`),
+    /// as Steam's own client does; this app for every other depot.
     public func keyAppID(depot: UInt32) -> UInt32 {
-        guard let d = depots.first(where: { $0.depotID == depot }), d.sharesInstallDir == true, let from = d.depotFromApp
+        guard let d = depots.first(where: { $0.depotID == depot }), d.isContentFromAnotherApp, let from = d.depotFromApp
         else { return appID }
         return from
     }

@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 17 Oct 2026 18:00:00 +0200
+Subject: [PATCH] Run the audio service in the browser process on Windows
+
+Default AudioServiceOutOfProcess to disabled on Windows, so the audio
+service runs in the browser process. Social Club replaces the browser's
+--disable-features for its children, so the switch cannot do this; a
+compiled default it never names can. One process, its threads and its
+JIT pool copies fewer under Playport (decision 0111, PLA-381).
+Apply after the pinned CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-17-cef-audio-in-process.md
+Offered-upstream: no
+---
+ content/public/common/content_features.cc | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/content/public/common/content_features.cc b/content/public/common/content_features.cc
+index d70d0da717..d74762ee02 100644
+--- a/content/public/common/content_features.cc
++++ b/content/public/common/content_features.cc
+@@ -105,8 +105,10 @@ BASE_FEATURE(kAttachUnownedInnerWebContents, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kAudioServiceLaunchOnStartup, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Runs the audio service in a separate process.
++// Off on Windows: an embedder that must fit several processes in a small
++// address space runs it in the browser process.
+ BASE_FEATURE(kAudioServiceOutOfProcess,
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+              base::FEATURE_ENABLED_BY_DEFAULT
+ #else
+              base::FEATURE_DISABLED_BY_DEFAULT

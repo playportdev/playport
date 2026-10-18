@@ -1,0 +1,13 @@
+Playport's CEF 143.0.14 low-address-space build (decision 0110)
+
+This payload is for local use on the owner's phone only. It is not yet
+approved for distribution. CEF and Chromium's notices accompany it.
+FFmpeg is built with Chromium branding and proprietary codecs disabled;
+its licence summary and LGPL-2.1 text accompany it. Corresponding Source
+packaging and the rebuild/relink route are tracked in PLA-372 and must be
+completed before any release or tester copy.
+
+libcef.dll and chrome_elf.dll statically link the MSVC CRT under the Visual
+Studio licence accepted by the owner. The absence of separate Microsoft
+redistributable DLLs does not mean these binaries contain no Microsoft code.
+No Microsoft SDK, toolchain or separate redistributable DLL is supplied here.

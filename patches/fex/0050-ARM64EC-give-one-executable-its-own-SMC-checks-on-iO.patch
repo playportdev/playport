@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kamil=20Postro=C5=BCny?= <kamil@postrozny.pl>
+Date: Sun, 18 Oct 2026 19:44:51 +0200
+Subject: [PATCH] ARM64EC: give one executable its own SMC checks on iOS
+
+FEX_SMCCHECKS_FOR=<exe>=<mode> sets SMCChecks (none, mtrack or full) in
+the one process whose executable base name is <exe>, compared
+case-insensitively; every other process keeps the SMCChecks its
+configuration gives. FEX's environment layer is its highest, so a
+session-wide FEX_SMCCHECKS cannot be narrowed by an app config; this is
+set over it at process start, before any code is translated. When the
+variable is set, each process logs one `[smc-for]` line with its
+executable and effective mode; an unknown mode is logged and ignored.
+
+Class: diagnostics
+Evidence: docs/evidence/2026-10-18-rockstar-generated-fault.md
+Offered-upstream: no; iOS crash diagnosis
+---
+ Source/Windows/ARM64EC/Module.cpp    | 30 ++++++++++++++
+ Source/Windows/Common/SMCChecksFor.h | 59 ++++++++++++++++++++++++++++
+ 2 files changed, 89 insertions(+)
+ create mode 100644 Source/Windows/Common/SMCChecksFor.h
+
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 5f7ebe2..c5518bd 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -44,6 +44,7 @@ $end_info$
+ #include "Common/CPUFeatures.h"
+ #include "Common/Logging.h"
+ #include "Common/Module.h"
++#include "Common/SMCChecksFor.h"
+ #include "Common/CRT/CRT.h"
+ #include "Common/PortabilityInfo.h"
+ #include "Common/Handle.h"
+@@ -982,6 +983,32 @@ int64_t WriteOffset = 0;
+ } // namespace FEXCore::DualMap
+ #endif
+ 
++#ifdef FEX_IOS_HOST
++// PLA-401 diagnostics: FEX_SMCCHECKS_FOR (SMCChecksFor.h) sets SMCChecks for one
++// executable only. The environment layer is FEX's highest, so a session-wide
++// FEX_SMCCHECKS cannot be narrowed by an app config; this is set over it, in this
++// process only, before any code is translated. Silent unless the variable is set.
++static void ApplySMCChecksFor(std::string_view AppName) {
++  static_assert(FEXCore::Config::CONFIG_SMC_NONE == 0 && FEXCore::Config::CONFIG_SMC_MTRACK == 1 && FEXCore::Config::CONFIG_SMC_FULL == 2,
++                "SMCChecksFor.h uses FEX's SMCChecks values");
++  const char* Spec = getenv("FEX_SMCCHECKS_FOR");
++  if (!Spec) {
++    return;
++  }
++  const auto Result = FEX::Windows::ParseSMCChecksFor(Spec, AppName);
++  using enum FEX::Windows::SMCChecksForResult::KindType;
++  if (Result.Kind == Apply) {
++    FEXCore::Config::Set(FEXCore::Config::CONFIG_SMCCHECKS, fextl::fmt::format("{}", Result.Mode));
++  }
++  FEX_CONFIG_OPT(SMCChecks, SMCCHECKS);
++  static constexpr const char* ModeNames[] = {"none", "mtrack", "full"};
++  const auto Effective = SMCChecks();
++  LogMan::Msg::EFmt("[smc-for] exe={} for={} {} smcchecks={}", AppName, Spec,
++                    Result.Kind == Apply ? "applied" : Result.Kind == Invalid ? "invalid-ignored" : "other-process",
++                    Effective < 3 ? ModeNames[Effective] : "unknown");
++}
++#endif
++
+ NTSTATUS ProcessInit() {
+   /* iOS-Madeira: DualMap::WriteOffset (RX→RW alias distance) is set below,
+    * after InitCRTProcess() populates the environment, and BEFORE InitCore().
+@@ -1035,6 +1062,9 @@ NTSTATUS ProcessInit() {
+   FEX::Windows::Logging::Init();
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_FILENAME, ExecutablePath);
+   FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, AppConfigName);
++#ifdef FEX_IOS_HOST
++  ApplySMCChecksFor(AppConfigName);
++#endif
+ 
+ #if defined(FEX_IOS_HOST) && defined(MADEIRA_ARENA_SELFTEST)
+   /* Runs only when MADEIRA_ARENA_TEST is set, and only in builds that link the
+diff --git a/Source/Windows/Common/SMCChecksFor.h b/Source/Windows/Common/SMCChecksFor.h
+new file mode 100644
+index 0000000..b8e8700
+--- /dev/null
++++ b/Source/Windows/Common/SMCChecksFor.h
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++#include <cstdint>
++#include <string_view>
++
++namespace FEX::Windows {
++// FEX_SMCCHECKS_FOR=<exe>=<mode> (PLA-401 diagnostics): SMCChecks <mode> for the one
++// process whose executable base name is <exe>, compared case-insensitively as Windows
++// compares file names. Every other process keeps the SMCChecks its configuration gives.
++// <mode> is FEX's own spelling: none, mtrack or full.
++struct SMCChecksForResult {
++  enum class KindType { OtherProcess, Apply, Invalid };
++  KindType Kind;
++  uint8_t Mode; // FEXCore::Config::ConfigSMCChecks, when Kind is Apply
++};
++
++inline bool SMCChecksForNameEquals(std::string_view A, std::string_view B) {
++  if (A.size() != B.size()) {
++    return false;
++  }
++  for (size_t i = 0; i < A.size(); ++i) {
++    char a = A[i], b = B[i];
++    if (a >= 'A' && a <= 'Z') {
++      a = static_cast<char>(a - 'A' + 'a');
++    }
++    if (b >= 'A' && b <= 'Z') {
++      b = static_cast<char>(b - 'A' + 'a');
++    }
++    if (a != b) {
++      return false;
++    }
++  }
++  return true;
++}
++
++inline SMCChecksForResult ParseSMCChecksFor(std::string_view Spec, std::string_view AppName) {
++  using enum SMCChecksForResult::KindType;
++  // The mode follows the last '=': an executable name cannot contain one in practice,
++  // and the mode never does.
++  const auto Eq = Spec.rfind('=');
++  if (Eq == std::string_view::npos || Eq == 0) {
++    return {Invalid, 0};
++  }
++  const auto Exe = Spec.substr(0, Eq);
++  const auto ModeName = Spec.substr(Eq + 1);
++  uint8_t Mode;
++  if (ModeName == "none") {
++    Mode = 0;
++  } else if (ModeName == "mtrack") {
++    Mode = 1;
++  } else if (ModeName == "full") {
++    Mode = 2;
++  } else {
++    return {Invalid, 0};
++  }
++  return SMCChecksForNameEquals(Exe, AppName) ? SMCChecksForResult {Apply, Mode} : SMCChecksForResult {OtherProcess, 0};
++}
++} // namespace FEX::Windows

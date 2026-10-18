@@ -313,4 +313,25 @@ final class SteamInstallScriptTests: XCTestCase {
         XCTAssertEqual(PrefixRegistryFile.unescape(PrefixRegistryFile.escape("a\\b\"c\u{e9}\n", "\"\"")), "a\\b\"c\u{e9}\n")
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.url(.user).path))
     }
+
+    /// The keys a genuine steam_api reads to find Playport's Steam client (decision 0115): user hive
+    /// top-ups, with no pid (the session root's while a play runs).
+    func testSteamClientKeysPointAtThePrefixsSteamFolder() throws {
+        let file = PrefixRegistryFile(prefix: games)
+        try file.add(SteamClientKeys.values)
+        let text = try String(contentsOf: file.url(.user), encoding: .utf8)
+        XCTAssertEqual(PrefixRegistryFile.string(inHive: text, key: #"Software\Valve\Steam\ActiveProcess"#, name: "SteamClientDll64"),
+                       #"C:\Program Files (x86)\Steam\steamclient64.dll"#)
+        XCTAssertEqual(PrefixRegistryFile.string(inHive: text, key: #"Software\Valve\Steam"#, name: "SteamPath"),
+                       "c:/program files (x86)/steam")
+        XCTAssertEqual(PrefixRegistryFile.string(inHive: text, key: #"Software\Valve\Steam"#, name: "SteamExe"),
+                       "c:/program files (x86)/steam/steam.exe")
+        // The same in the Wow6432Node view, where this runtime sends an x64 process's 64-bit read.
+        XCTAssertEqual(PrefixRegistryFile.string(inHive: text, key: #"Software\Wow6432Node\Valve\Steam\ActiveProcess"#,
+                                                 name: "SteamClientDll64"), #"C:\Program Files (x86)\Steam\steamclient64.dll"#)
+        XCTAssertEqual(SteamClientKeys.values.count, 8)
+        XCTAssertFalse(text.contains("\"pid\""))
+        XCTAssertTrue(text.hasPrefix(";; playport:top-up\n"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.url(.system).path))
+    }
 }

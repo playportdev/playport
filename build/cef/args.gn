@@ -1,0 +1,33 @@
+alternate_cdm_storage_id_key="968b476909da4373b08903c28e859454"
+chrome_pgo_phase=0
+clang_use_chrome_plugins=false
+disable_fieldtrial_testing_config=true
+enable_background_mode=false
+enable_cdm_host_verification=true
+enable_cdm_storage_id=true
+enable_downgrade_processing=false
+enable_resource_allowlist_generation=false
+enable_rlz=true
+enable_widevine=true
+ffmpeg_branding="Chromium"
+proprietary_codecs=false
+is_component_build=false
+is_debug=false
+is_official_build=true
+optimize_webui=true
+target_cpu="x64"
+target_os="win"
+use_v8_context_snapshot=true
+visual_studio_version="2022"
+windows_sdk_version="10.0.26100.0"
+# PLA-370 stage C: low address space
+use_partition_alloc_as_malloc=false
+enable_backup_ref_ptr_support=false
+move_metadata_outside_gigacage=false
+v8_enable_sandbox=false
+v8_enable_pointer_compression=false
+cppgc_enable_caged_heap=false
+# patches/chromium: kPoolMaxSize 1 GiB
+partition_alloc_low_va=true
+# The allocator shim without PA-E (winheap dispatch) does not compile on Windows in M143; Windows debug/component builds also run without the shim.
+use_allocator_shim=false
