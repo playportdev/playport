@@ -57,6 +57,9 @@
 #          after another, x86-64 and i386, each calling into the DLLs it loads
 #          and into code it writes; the pool's head must not grow with every
 #          child (poolstress.c, PLA-213)
+#   console  x86-64, the one console-subsystem probe (no -mwindows): the
+#          conhost kernelbase starts for it, cmd /c echo into a pipe and
+#          cmd /c exit 7 in a new console (console.c, PLA-390)
 #
 #   tools/compat/probes/build.sh
 set -euo pipefail
@@ -106,6 +109,9 @@ mkdir -p "$OUT/poolstress"
     -o "$OUT/poolstress/poolstress.exe" "$HERE/poolstress.c" -lole32 -ladvapi32 -luser32
 "$CC32" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -mwindows -Wl,--no-insert-timestamp \
     -o "$OUT/poolstress/poolstress-i386.exe" "$HERE/poolstress.c" -lole32 -ladvapi32 -luser32
+mkdir -p "$OUT/console"
+"$CC" -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wl,--no-insert-timestamp \
+    -o "$OUT/console/console.exe" "$HERE/console.c"
 # xaudio2_9redist.dll's import library: llvm-mingw has none (the EOS SDK
 # links Microsoft's), so it is made from its one export here.
 DLLTOOL=$LLVM_MINGW/bin/llvm-dlltool
@@ -127,6 +133,6 @@ for probe in machine machine-i386; do
     mkdir -p "$OUT/$probe/redist"
     cp "$OUT/$probe/xaudio2redist.exe" "$OUT/$probe/redist/"
 done
-for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress; do
+for probe in gl21 gl21-i386 wgl childabort childabort-i386 x87m64-i386 protect machine machine-i386 splitlock splitlock-i386 threadctx threadctx-i386 shmap shmap-i386 poolstress console; do
     echo "$(sha256sum "$OUT/$probe/$probe.exe" | cut -c1-16)  $probe.exe ($(stat -c %s "$OUT/$probe/$probe.exe") bytes) in $OUT/$probe"
 done
