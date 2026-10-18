@@ -1,8 +1,8 @@
 # What RDR2's Vulkan renderer asks of the driver, against KosmicKrisp
 
 **Date:** 2026-10-17. **Linear:** [PLA-386](https://linear.app/playportdev/issue/PLA-386)
-(under PLA-254). **Kind:** workstation measurement, no phone; one dev IPA built, not
-installed ([H4](#dev-ipa-with-mesa-00370039-h4)).
+(under PLA-254). **Kind:** workstation measurement, no phone; two dev IPAs built, not
+installed ([H4](#dev-ipa-with-mesa-00370039-h4), [H8](#dev-ipa-with-mesa-00370043-h8)).
 Answers the open question in the [RDR2 plan](../plans/2026-10-12-rdr2.md): which Vulkan
 features and extensions RDR2's renderer requires, against KosmicKrisp's.
 
@@ -638,6 +638,36 @@ Not checked on the phone; desktop RADV under a profile, not KosmicKrisp itself.
 **Owed on the phone:**
 - Hollow Knight (`app-367520`) on Vulkan through first frame+10 on this exact IPA (sha256
   above), for V1–V3.
+- Then RDR2 after PLA-295 and PLA-300.
+
+## Dev IPA with mesa 0037–0043 (H8)
+
+**Date:** 2026-10-18. `pp build` (dev variant) in the side copy at `047428f`, with its own
+build area, as H4. Not installed; not checked on the phone.
+
+- **IPA:** `out/20261018-114046-f49a09d9/Playport-26.5-f49a09d9.ipa` in the copy's build area,
+  sha256 `f49a09d9b46950e49e6c0f705a32c7d84da5530ac3f43434225d2e0d2c9f7214`, 407,208,205
+  bytes (1,944.7 MB unpacked). `S1Probe.app`, signed.
+- **What it carries:** KosmicKrisp from `mesa` b39d173 + `patches/mesa` 0001–0043 (42
+  patches; 0026 is absent by design), staged as `9f133b0226d22a4e`, 14,321,544 bytes. Its
+  strings include 0043's `[kk-device] %s (%s): discrete device type` and 0042's
+  `Unknown ALU %s`. Every other pin and series as H4's IPA.
+- **Verify:** the build's `verify-ipa` passed 86 checks, 0 failed (one more than H4: the same
+  provisioned device as H4's IPA). A standalone `pp verify` passed 85 with the build's
+  `app/artifacts.tsv`; with the committed one put back it fails only "bundled artifacts.tsv
+  equals the committed one".
+- **Stages:** `vulkan` (series mesa), then `stage`, `notices`, `app` and `verify`; 2 min 47 s
+  (11:37:59 to 11:40:46). The copy's iOS Mesa objects were already current with the patched
+  tree, so ninja only regenerated `git_sha1.h`.
+- **Build records:** the `wine-pe` manifests are unchanged. `app/artifacts.tsv` differs in the
+  same six path-dependent link rows as H4, byte for byte (`libgnutls.a`, `libhogweed.a`,
+  `libnettle.a`, `libgmp.a`, `libdxmt_combined.a`, `libidevice_ffi.a`); KosmicKrisp and the
+  Mesa frameworks have no row there. None was committed.
+- **`pp test`** (full, Swift included) passed on `047428f`'s tree.
+
+**Owed on the phone:**
+- Hollow Knight (`app-367520`) on Vulkan through first frame+10 on this exact IPA (sha256
+  above), which covers mesa 0037–0043.
 - Then RDR2 after PLA-295 and PLA-300.
 
 ## Apple's Metal compiler on the generated MSL (H5)

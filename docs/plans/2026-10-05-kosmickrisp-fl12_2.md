@@ -472,16 +472,18 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   game's DXVK and vkd3d-proton instances included; `MESA_KK_DEBUG=integrated_device` turns it
   off for an A/B; host test, replays unchanged,
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#a-discrete-device-type-for-rdr2-h7d-mesa-0043)).
-  Host only; not checked on the phone.
-- **Queue (owner-approved 2026-10-17, host only):** H7d done; next H8 (dev IPA with mesa
-  0037–0043). PLA-397 (the sync path) only if discrete breaks or slows RDR2 on the phone. Then
-  chunk 0 below (needs the phone).
+  Host only; not checked on the phone. H8 (the dev IPA with mesa 0037–0043 built in this copy
+  at `047428f`: sha256 `f49a09d9…`, `verify-ipa` 86 checks passed, 0 failed; build records not
+  committed, the same six path-dependent rows as H4,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#dev-ipa-with-mesa-00370043-h8)).
+- **Queue (owner-approved 2026-10-17, host only):** H8 done; queue empty. PLA-397 (the sync
+  path) only if discrete breaks or slows RDR2 on the phone. Then chunk 0 below (needs the
+  phone).
 - **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
   `h4.md` (H4), `h5.md` (H5, blocked), `h5c.md` (H5), `h5d.md` (H5d), `h6.md` (H6), `h6b.md`
-  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c), `h7d.md` (H7d).
-- **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3,
-  H6b, H7, H5d and H7d (mesa 0037–0043), on an IPA with 0043 (H4's has 0037–0039 only), then RDR2
-  after PLA-295 and PLA-300.
+  (H6b), `h7.c6627d62.md` (H7), `h7b.md` (H7b), `h7c.md` (H7c), `h7d.md` (H7d), `h8.md` (H8).
+- **Phone gates owed:** Hollow Knight on Vulkan first frame+10 on H8's IPA (`f49a09d9…`; covers
+  0037–0043), then RDR2 after PLA-295/PLA-300. These runs did not use the phone.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under
   `agent-notes/rdr2-vk/reports/` of the side copy.
