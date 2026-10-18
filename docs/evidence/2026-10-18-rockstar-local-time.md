@@ -36,3 +36,28 @@ daylight-saving adjustment (`pp_timezone_bias`), at a point where nothing else i
 - For each one, the bias is the negated UTC offset in 100 ns units.
 - UTC minus the bias equals libc's local time.
 - Negative control: the old constant 0 is right only in UTC.
+
+## Phone round (IPA `2b349fdefabfe2c88fe58028c4ff5cbe200b369c477f8c5576bdf26d400307d6`)
+
+One hold of the lock. Battery went from 36% to 44% while charging; free space stayed between 5.7 and 6.0 GB.
+
+| Run | Result |
+| --- | --- |
+| `20261018T214200` Hollow Knight | `time zone bias -120 min (local = UTC+120 min)`; first frame +10.30 s; first-frame+10 reached. The host log has the same count of time-related error lines as the previous build's run (`211258`) |
+| `20261018T214254` | RDR2 settings cleared for this session only |
+| `20261018T214323` RDR2 | first window +27.93 s; the fault recurs |
+
+**RDR2 run (`launcher.log` crash copy and host log):**
+- **Timestamps are local now.** The log starts at 21:43:41 (host 21:43) and still reports "Central Europe Daylight Time". Before, it started 2 h behind.
+- **Start-up:** the service handshake still times out, and `Shell_NotifyIconW` still fails. Time to start up 37,682 ms.
+- **Sign-in:** Auth signed in by itself (status 200, no input).
+- **Main window:** Auth → MainWindow (t0), `Centering on monitor` 1280×600, `Active` at +141 ms.
+- **The fault:** `Exception: 0xc0000096` at +330 ms (189 ms after `Active`), backtrace hash `0xC7B32291` (the base differs).
+  - Host log: `[generated-fault] producer=INTOp`, then `[generated-fault-window] module=Launcher.exe rva=0x258cf6` with the same bytes as before.
+  - Then `c0000096` unhandled, and "Unable to launch game" at 90, 150 and 240 s.
+  - No `Begin game launch` and no game frame.
+- **Pool:** head 516 MiB, tail 353 MiB, room 28 MiB, `head_exhausted` 0. Band peak 15,016 MiB, 0 refused.
+
+**Reading.** Local time is now right: the launcher's clock agrees with its time zone. The Rockstar
+launcher's generated HLT is unchanged, so this inconsistency was not its trigger. The fix stays as a
+correctness fix.
