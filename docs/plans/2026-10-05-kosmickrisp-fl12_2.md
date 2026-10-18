@@ -402,9 +402,12 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#in-story-mode-2026-10-17-h1)): the game
   never queries image format properties and creates linear images with color-attachment usage,
   3D, 2–8 layers (Story mode) or 7 mip levels; KosmicKrisp reports none of these, and
-  `vkCreateImage` makes a buffer-backed Metal texture anyway. Not fixed: what KosmicKrisp should
-  make of them is a choice; follow-up under PLA-386. H1b, at the phone's heap: the same rows
-  in Story mode, and the Graphics settings page creates about 4,300 more, never bound to memory.
+  `vkCreateImage` makes a buffer-backed Metal texture anyway. H1b, at the phone's heap: the same
+  rows in Story mode, and the Graphics settings page creates about 4,300 more, never bound to
+  memory. H7 (mesa 0041, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-images-h7)):
+  the arrays, 3D images and mip chain get a texture of Metal's own layout. The 2D ones, colour
+  attachments included, stay buffer-backed, which Metal allows. Whether the game accesses those
+  three groups through a mapping is not measured; if it does, it sees other data.
 
 ## Runner state
 
@@ -439,19 +442,22 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#replay-and-profile-tooling-h6));
   H6b ([PLA-387](https://linear.app/playportdev/issue/PLA-387), mesa 0040: a storage image
   read, write or size query of an undefined image no longer crashes; host test only, replays
-  unchanged, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#host-fixes-2026-10-17-chunks-v0v4)).
+  unchanged, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#host-fixes-2026-10-17-chunks-v0v4));
+  H7 ([PLA-388](https://linear.app/playportdev/issue/PLA-388), mesa 0041: a linear image Metal
+  cannot make from a buffer (array, 3D, mip chain) gets a texture of Metal's own layout. The mock
+  checks Apple's rules for buffer textures; host test, replays unchanged,
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#linear-images-h7)).
   Host only; not checked on the phone.
 - **Blocked:** H5 (Apple's Metal compiler for Windows under Wine on the replay's MSL). The
   download needs an Apple account sign-in, and the tools' licence is not published, so whether
   Wine on Linux is permitted is unknown. Nothing downloaded; the owner's step is in the
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5).
-- **Queue (owner-approved 2026-10-17, host only):** H6b done; next H7 measure RDR2's
-  unsupported linear images on the mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)).
-  One writer per item. Then chunk 0 below (needs the phone).
+- **Queue (owner-approved 2026-10-17, host only):** H7 done; queue empty: next chunk 0 needs
+  the phone.
 - **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
-  `h4.md` (H4), `h5.md` (H5), `h6.md` (H6), `h6b.md` (H6b).
-- **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
-  and H6b (mesa 0037–0040), on an IPA with 0040 (H4's has 0037–0039 only), then RDR2 after
+  `h4.md` (H4), `h5.md` (H5), `h6.md` (H6), `h6b.md` (H6b), `h7.c6627d62.md` (H7).
+- **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3,
+  H6b and H7 (mesa 0037–0041), on an IPA with 0041 (H4's has 0037–0039 only), then RDR2 after
   PLA-295 and PLA-300.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under

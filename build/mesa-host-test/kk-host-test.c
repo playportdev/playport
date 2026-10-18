@@ -341,6 +341,254 @@ check_budget_cap(const VkInstanceCreateInfo *ici)
    return 0;
 }
 
+/* Linear images of the shapes Red Dead Redemption 2's Vulkan renderer
+ * creates on an integrated GPU without asking for their format properties:
+ * 2D ones KosmicKrisp supports, 2D colour attachments, 2D arrays, 3D storage
+ * images (2D array compatible) and a mipmapped one; KosmicKrisp reports
+ * none but the first (no linear attachments, 3D, layers or levels). They are
+ * bound at their alignment in one allocation, viewed, copied from and to a
+ * buffer, and the attachments cleared in a render pass. The mock aborts on
+ * a linear Metal texture MTLBuffer cannot make (patches/mesa 0041 gives
+ * those a texture of Metal's own layout). Each one's subresource layout has
+ * to fit the memory it asked for, and the 2D ones' to stay as it was. */
+static int
+check_linear_images(VkPhysicalDevice pd, VkQueue queue, VkCommandPool pool)
+{
+   DPROC(vkCreateImage);
+   DPROC(vkGetImageMemoryRequirements);
+   DPROC(vkGetImageSubresourceLayout);
+   DPROC(vkAllocateMemory);
+   DPROC(vkBindImageMemory);
+   DPROC(vkCreateImageView);
+   DPROC(vkCreateBuffer);
+   DPROC(vkGetBufferMemoryRequirements);
+   DPROC(vkBindBufferMemory);
+   DPROC(vkAllocateCommandBuffers);
+   DPROC(vkBeginCommandBuffer);
+   DPROC(vkEndCommandBuffer);
+   DPROC(vkCmdCopyBufferToImage);
+   DPROC(vkCmdCopyImageToBuffer);
+   DPROC(vkCmdBeginRendering);
+   DPROC(vkCmdEndRendering);
+   DPROC(vkQueueSubmit);
+   DPROC(vkQueueWaitIdle);
+
+   const VkImageUsageFlags xfer_sampled = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                          VK_IMAGE_USAGE_SAMPLED_BIT;
+   const struct {
+      const char *name;
+      VkImageType type;
+      VkFormat format;
+      uint32_t texel_B;
+      VkExtent3D extent;
+      uint32_t levels, layers;
+      VkImageUsageFlags usage;
+      VkImageCreateFlags flags;
+   } shapes[] = {
+      {"2d", VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, 8, {32, 4, 1},
+       1, 1, xfer_sampled, 0},
+      {"2d-colour-attachment", VK_IMAGE_TYPE_2D, VK_FORMAT_R32_SFLOAT, 4,
+       {1, 1, 1}, 1, 1, xfer_sampled | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 0},
+      {"2d-colour-attachment-storage", VK_IMAGE_TYPE_2D, VK_FORMAT_R8_UINT, 1,
+       {4096, 64, 1}, 1, 1,
+       xfer_sampled | VK_IMAGE_USAGE_STORAGE_BIT |
+          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+       0},
+      {"2d-array", VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, 8,
+       {16, 28, 1}, 1, 8, xfer_sampled, 0},
+      {"3d-storage", VK_IMAGE_TYPE_3D, VK_FORMAT_R16G16B16A16_SFLOAT, 8,
+       {64, 64, 16}, 1, 1, xfer_sampled | VK_IMAGE_USAGE_STORAGE_BIT,
+       VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT},
+      {"3d-storage-r32ui", VK_IMAGE_TYPE_3D, VK_FORMAT_R32_UINT, 4,
+       {32, 32, 16}, 1, 1, xfer_sampled | VK_IMAGE_USAGE_STORAGE_BIT,
+       VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT},
+      {"2d-mips", VK_IMAGE_TYPE_2D, VK_FORMAT_R32_SFLOAT, 4, {128, 72, 1}, 7,
+       1, xfer_sampled, 0},
+   };
+   enum { N = sizeof(shapes) / sizeof(shapes[0]) };
+   VkImage images[N];
+   VkDeviceSize offsets[N], total = 0, staging = 0;
+   uint32_t bits = ~0u;
+   for (unsigned i = 0; i < N; i++) {
+      VkImageCreateInfo ci = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+         .flags = shapes[i].flags,
+         .imageType = shapes[i].type,
+         .format = shapes[i].format,
+         .extent = shapes[i].extent,
+         .mipLevels = shapes[i].levels,
+         .arrayLayers = shapes[i].layers,
+         .samples = VK_SAMPLE_COUNT_1_BIT,
+         .tiling = VK_IMAGE_TILING_LINEAR,
+         .usage = shapes[i].usage,
+      };
+      CHECK(vkCreateImage(dev, &ci, NULL, &images[i]));
+      VkMemoryRequirements mr;
+      vkGetImageMemoryRequirements(dev, images[i], &mr);
+      bits &= mr.memoryTypeBits;
+      /* As the game does: one allocation, each image at its alignment. */
+      offsets[i] = (total + mr.alignment - 1) / mr.alignment * mr.alignment;
+      total = offsets[i] + mr.size;
+
+      /* Every subresource's layout inside the image's memory, none
+       * overlapping another. */
+      VkDeviceSize texels = 0, start[64], end[64];
+      unsigned nsub = 0;
+      for (uint32_t level = 0; level < shapes[i].levels; level++) {
+         uint32_t w = shapes[i].extent.width >> level;
+         uint32_t h = shapes[i].extent.height >> level;
+         uint32_t d = shapes[i].extent.depth >> level;
+         w = w ? w : 1;
+         h = h ? h : 1;
+         d = d ? d : 1;
+         texels += (VkDeviceSize)w * h * d * shapes[i].layers;
+         for (uint32_t layer = 0; layer < shapes[i].layers; layer++) {
+            VkImageSubresource sr = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer};
+            VkSubresourceLayout sl;
+            vkGetImageSubresourceLayout(dev, images[i], &sr, &sl);
+            VkDeviceSize row_B = (VkDeviceSize)w * shapes[i].texel_B;
+            if (sl.rowPitch < row_B ||
+                (d > 1 && sl.depthPitch < sl.rowPitch * h) ||
+                sl.size < sl.rowPitch * (h - 1) + row_B +
+                             (d > 1 ? sl.depthPitch * (d - 1) : 0) ||
+                sl.offset + sl.size > mr.size) {
+               fprintf(stderr, "linear %s level %u layer %u: offset %llu "
+                       "size %llu rowPitch %llu depthPitch %llu in %llu "
+                       "bytes\n", shapes[i].name, level, layer,
+                       (unsigned long long)sl.offset,
+                       (unsigned long long)sl.size,
+                       (unsigned long long)sl.rowPitch,
+                       (unsigned long long)sl.depthPitch,
+                       (unsigned long long)mr.size);
+               return 1;
+            }
+            for (unsigned k = 0; k < nsub; k++) {
+               if (sl.offset < end[k] && start[k] < sl.offset + sl.size) {
+                  fprintf(stderr, "linear %s level %u layer %u overlaps "
+                          "another subresource\n", shapes[i].name, level,
+                          layer);
+                  return 1;
+               }
+            }
+            start[nsub] = sl.offset;
+            end[nsub++] = sl.offset + sl.size;
+            /* The 2D images Metal can make from a buffer keep their
+             * layout: rows at the linear alignment, from the start. */
+            if (shapes[i].type == VK_IMAGE_TYPE_2D && shapes[i].levels == 1 &&
+                shapes[i].layers == 1 &&
+                (sl.offset != 0 || sl.rowPitch != (row_B + 15) / 16 * 16 ||
+                 sl.size != sl.rowPitch * h)) {
+               fprintf(stderr, "linear %s: layout changed (rowPitch %llu, "
+                       "size %llu)\n", shapes[i].name,
+                       (unsigned long long)sl.rowPitch,
+                       (unsigned long long)sl.size);
+               return 1;
+            }
+         }
+      }
+      if (texels * shapes[i].texel_B > staging)
+         staging = texels * shapes[i].texel_B;
+      printf("linear %s: %llu bytes, alignment %llu\n", shapes[i].name,
+             (unsigned long long)mr.size, (unsigned long long)mr.alignment);
+   }
+
+   VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                               .allocationSize = total,
+                               .memoryTypeIndex = find_memory(pd, bits)};
+   VkDeviceMemory mem;
+   CHECK(vkAllocateMemory(dev, &mai, NULL, &mem));
+   VkImageView views[N];
+   for (unsigned i = 0; i < N; i++) {
+      CHECK(vkBindImageMemory(dev, images[i], mem, offsets[i]));
+      VkImageViewCreateInfo vci = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+         .image = images[i],
+         .viewType = shapes[i].type == VK_IMAGE_TYPE_3D ? VK_IMAGE_VIEW_TYPE_3D
+                     : shapes[i].layers > 1             ? VK_IMAGE_VIEW_TYPE_2D_ARRAY
+                                                        : VK_IMAGE_VIEW_TYPE_2D,
+         .format = shapes[i].format,
+         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, shapes[i].levels,
+                              0, shapes[i].layers},
+      };
+      CHECK(vkCreateImageView(dev, &vci, NULL, &views[i]));
+   }
+
+   VkBufferCreateInfo bci = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = staging,
+      .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+   };
+   VkBuffer sbuf;
+   CHECK(vkCreateBuffer(dev, &bci, NULL, &sbuf));
+   VkMemoryRequirements bmr;
+   vkGetBufferMemoryRequirements(dev, sbuf, &bmr);
+   mai.allocationSize = bmr.size;
+   mai.memoryTypeIndex = find_memory(pd, bmr.memoryTypeBits);
+   VkDeviceMemory smem;
+   CHECK(vkAllocateMemory(dev, &mai, NULL, &smem));
+   CHECK(vkBindBufferMemory(dev, sbuf, smem, 0));
+
+   VkCommandBufferAllocateInfo cbai = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = pool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+   };
+   VkCommandBuffer cmd;
+   CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
+   VkCommandBufferBeginInfo bi = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+   };
+   CHECK(vkBeginCommandBuffer(cmd, &bi));
+   for (unsigned i = 0; i < N; i++) {
+      for (uint32_t level = 0; level < shapes[i].levels; level++) {
+         uint32_t w = shapes[i].extent.width >> level;
+         uint32_t h = shapes[i].extent.height >> level;
+         uint32_t d = shapes[i].extent.depth >> level;
+         VkBufferImageCopy region = {
+            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0,
+                                 shapes[i].layers},
+            .imageExtent = {w ? w : 1, h ? h : 1, d ? d : 1},
+         };
+         vkCmdCopyBufferToImage(cmd, sbuf, images[i],
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+         vkCmdCopyImageToBuffer(cmd, images[i],
+                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sbuf, 1,
+                                &region);
+      }
+      if (!(shapes[i].usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+         continue;
+      VkRenderingAttachmentInfo ca = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+         .imageView = views[i],
+         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      };
+      VkRenderingInfo ri = {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+         .renderArea = {{0, 0},
+                        {shapes[i].extent.width, shapes[i].extent.height}},
+         .layerCount = 1,
+         .colorAttachmentCount = 1,
+         .pColorAttachments = &ca,
+      };
+      vkCmdBeginRendering(cmd, &ri);
+      vkCmdEndRendering(cmd);
+   }
+   CHECK(vkEndCommandBuffer(cmd));
+   VkSubmitInfo si = {
+      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1,
+      .pCommandBuffers = &cmd,
+   };
+   CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+   CHECK(vkQueueWaitIdle(queue));
+   printf("ok linear-images\n");
+   return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1302,5 +1550,8 @@ main(int argc, char **argv)
       CHECK(vkQueueWaitIdle(queue));
       printf("ok ms-array\n");
    }
+
+   if (check_linear_images(pd, queue, pool))
+      return 1;
    return 0;
 }

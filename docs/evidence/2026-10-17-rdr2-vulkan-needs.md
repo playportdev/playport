@@ -266,7 +266,7 @@ KosmicKrisp's `vkCreateImage` does not refuse them: a linear image becomes a Met
 made from its memory's buffer (`newTextureWithDescriptor:offset:bytesPerRow:`). What Metal
 does with such a descriptor for a 3D, array or mipmapped texture is not known here: the host
 mock does not model it. Not fixed (a choice of what KosmicKrisp should make of them);
-follow-up under PLA-386.
+follow-up under PLA-386. Fixed in [H7](#linear-images-h7) (mesa 0041).
 
 **Owner state.** The game wrote one autosave in `ing1` (the autosave slot, `SRDR30015`) and
 the launcher uploaded files to Rockstar's cloud saves at that run's start and end
@@ -753,3 +753,97 @@ mock built from mesa 0001–0039. No game run, no phone.
   - Playport's vkd3d-proton (patch 0002) counts them as given on KosmicKrisp's driver ID,
     which the profile now spoofs. A desktop DX12 capture that should match the phone
     therefore needs an x86-64 build of Playport's vkd3d-proton.
+
+## Linear images (H7)
+
+**Date:** 2026-10-18. **Linear:** [PLA-388](https://linear.app/playportdev/issue/PLA-388).
+Host only, in the side copy, on the mock built from mesa 0001–0041. No game run, no phone.
+
+**What the game does with them.** The capture logs have create infos only: no binds, maps,
+`vkGetImageSubresourceLayout` calls, copies or descriptor writes. A game run to measure them was
+not made: Steam was running in the owner's desktop session, and the game would have attached to
+it. What the logs and the executable show:
+
+- **Only under the KosmicKrisp profile.** On RADV as it is (`play1`) the SGA device makes one
+  linear image (B8G8R8A8 1920×1080, transfer and sampled). Under the profile with the desktop's
+  memory types left as they are (H2 `r2`) it makes 521, the same as with the profile's one
+  memory type. So the single memory type is not the trigger. (inference: the integrated device
+  type is, as a unified-memory path. The vendor, name and queue layout were not ruled out.)
+- **In sets of 3 or 4**, one per frame in flight (inference): for example R32_SFLOAT 1×1 and R8
+  256×256 colour attachments, R8_UINT 4096×64 and R32G32_SFLOAT 64×64 attachments with storage,
+  3D R32_UINT 32×32×16. (inference: per-frame host-written or host-read resources.)
+- `RDR2.exe` names `vkGetImageSubresourceLayout` and `vkMapMemory` among the functions it
+  looks up. Whether it calls them on these images is not measured.
+- Under the profile there is one memory type, `DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT |
+  HOST_CACHED`, so every image is in host-visible memory, as on KosmicKrisp.
+
+| Group (landing page; Story mode) | Usage | Metal from a buffer |
+|---|---|---|
+| 2D, one level and layer, no attachment (24; 10,667) | transfer, sampled, some storage | yes, as before |
+| 2D colour attachments (505), R8, R8_UINT, R16_UINT, R16G16_UINT, R32_SFLOAT, R32G32_SFLOAT/UINT, RGBA32F, RGBA8 sRGB | transfer, sampled, attachment; `0x1f` adds storage | yes: render target usage is allowed |
+| 2D arrays RGBA16F 16×28, 2–8 layers (Story mode, 386) | transfer, sampled | no: array length 1 only |
+| 3D RGBA16F 64×64×16, R32_UINT 32×32×16/30 and 64×64×1, 2D array compatible (64) | transfer, sampled, storage | no: 2D only |
+| 2D R32_SFLOAT 128×72, 7 levels (9) | transfer, sampled | no: one level only |
+
+**Apple's constraints** on `MTLBuffer newTextureWithDescriptor:offset:bytesPerRow:`
+(`makeTexture(descriptor:offset:bytesPerRow:)`, developer.apple.com, read 2026-10-18; the iOS
+26.5 SDK's `MTLBuffer.h`: "Create a 2D texture or texture buffer that shares storage with this
+buffer"). For a linear texture:
+- `offset` and `bytesPerRow` aligned to `minimumLinearTextureAlignment(for:)`, and
+  `bytesPerRow` at least one row of pixels;
+- `textureType` 2D or texture buffer; `depth`, `arrayLength`, `mipmapLevelCount` and
+  `sampleCount` 1;
+- `usage`: any, `renderTarget` included on Apple GPUs;
+- `storageMode` the buffer's;
+- `pixelFormat` any ordinary or packed colour format except GBGR422 and BGRG422. The alignment
+  query "throws for depth, stencil or compressed formats" (`MTLDevice.h`).
+
+`makeTextureView(pixelFormat:textureType:levels:slices:)` lets a 2D texture be viewed as a 2D
+array, which KosmicKrisp does for attachments. The page names no exception for a linear texture.
+
+**The mock** (`make-mock-bridge.py`) now aborts on a linear texture outside those rules, as V3's
+sample-count check does. Texture buffers keep only the offset check. Its tiled sizes are now
+padded per layer, so a layer's size times the layer count is the texture's.
+
+**`kk-host-test`'s linear case** creates one image of each group's shape, hand-written, with
+`VK_IMAGE_TILING_LINEAR`. Each is bound at its alignment in one allocation, viewed and copied
+from and to a buffer, and the attachments are cleared. Every subresource's layout must fit in
+the image's memory without overlapping another, and the 2D ones' must be unchanged. On
+0001–0040 with the new check:
+
+| Shape | Memory, before | Mock | Memory, after (mock's tiled sizes) |
+|---|---|---|---|
+| 2D RGBA16F 32×4 | 1,024 | passes | 1,024 (unchanged) |
+| 2D R32_SFLOAT 1×1 attachment | 16 | passes | 16 (unchanged) |
+| 2D R8_UINT 4096×64 attachment, storage | 262,144 | passes | 262,144 (unchanged) |
+| 2D array RGBA16F 16×28, 8 layers | 3,584, one layer | aborts: type 2D array | 131,072 |
+| 3D RGBA16F 64×64×16, storage | 32,768, one slice | aborts: type 3D | 2,097,152 |
+| 3D R32_UINT 32×32×16, storage | 4,096, one slice | aborts: type 3D | 524,288 |
+| 2D R32_SFLOAT 128×72, 7 levels | 36,864, level 0 | aborts: 7 mipmap levels | 294,912 |
+
+The whole case on 0001–0040 also fails before the mock aborts, on the layout: the 3D image
+reports depth pitch 1 and one slice's size.
+
+**Mesa 0041** (`kk_image_layout.c`): a linear-tiled image that Metal cannot make from a buffer
+gets a texture of Metal's own layout. That means not 2D (an array or input-attachment image is a
+2D array texture), more than one level, multisampled, or a depth, stencil or compressed format.
+The texture is placed in its memory's heap as an optimal image's is. For such an image,
+`vkGetImageSubresourceLayout` reports a packed linear layout: rows at the format's stride, level
+after level, each level's layers in turn, 3D depth pitch one slice. The memory requirement covers
+both, so a host access at those offsets stays inside the image. Other linear images are
+unchanged, colour attachments included. A valid application makes no other linear image, because
+KosmicKrisp reports none.
+
+- **Why this choice:** Metal has no buffer-backed array, 3D or mipmapped texture. Failing
+  `vkCreateImage` would likely end the game at load.
+- **What it costs:** if RDR2 reads or writes these images through a mapping, it sees data that is
+  not the texture's: the GPU's texels are not at the reported offsets, and the GPU does not read
+  what the host writes there. Not measured; it affects the arrays, 3D images and the mip chain
+  only. A faithful copy between the mapping and the texture is not built.
+- Mesa main (335d5698, checked 2026-10-18) has the old behaviour.
+
+**Checks:** `mesa.sh src host hosttest ios check` passes. `run-replay.sh --bypass-feature-gate`
+gives the same numbers as before (h1b: graphics 1,950/1,950, compute 788/788; vkd3d-h3:
+1,587/1,607, 757/758; 0 crashes). The replay creates no image. Not checked on the phone. Whether
+Apple's Metal refuses these textures (nil or a validation error) is from its documentation, not
+run.

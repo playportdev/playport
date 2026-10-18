@@ -232,9 +232,10 @@ and builds and records draws with the pipelines it lists (geometry,
 tessellation into geometry, line and point fill, transform feedback with its
 counters and queries, and what a captured title asks for beyond the device's
 report: pipeline-statistics queries, 8-sample pipelines, multisample array
-reads). The stage fails on a crash, a NIR validation error (debug build), an
-MSL library that has an untranslated intrinsic, or a raster sample count the
-device does not support. It also fails if a pipeline that captures transform
+reads, linear images of every shape). The stage fails on a crash, a NIR
+validation error (debug build), an MSL library that has an untranslated
+intrinsic, a raster sample count the device does not support, or a linear
+texture Metal cannot make from a buffer. It also fails if a pipeline that captures transform
 feedback has no vertex function that writes it. Then it builds Zink and EGL for
 Linux on the same mock (`run/mesa/hosttest/build-gl`) and runs
 `zink-host-test.c`: a surfaceless EGL display reaches Zink the way the phone

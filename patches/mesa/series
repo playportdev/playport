@@ -39,3 +39,4 @@
 0038-kk-accept-pipeline-statistics-query-pools-with-every.patch
 0039-kk-build-a-pipeline-with-too-many-samples-at-the-hig.patch
 0040-kk-drop-storage-image-access-to-an-undefined-image-b.patch
+0041-kk-give-a-linear-image-Metal-cannot-make-from-a-buff.patch

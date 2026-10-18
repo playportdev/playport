@@ -1,0 +1,197 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 02:29:01 +0200
+Subject: [PATCH] kk: give a linear image Metal cannot make from a buffer a
+ tiled texture
+
+KosmicKrisp makes a linear-tiled image's texture from its memory's
+MTLBuffer (newTextureWithDescriptor:offset:bytesPerRow:), and sizes its
+memory as one row-aligned 2D level of one layer. Metal's documentation
+for that method allows only such a texture: type 2D (or a texture
+buffer), depth, array length, mipmap level count and sample count 1, an
+ordinary or packed colour format other than GBGR422 and BGRG422; render
+target usage is allowed. KosmicKrisp reports linear tiling within those
+limits (no 3D, one layer, one level), but an application can create a
+linear image without asking: Red Dead Redemption 2's Vulkan renderer,
+on an integrated GPU, creates linear 2D arrays (RGBA16F, 2 to 8
+layers), 3D storage images (RGBA16F and R32_UINT, 2D array compatible)
+and an R32_SFLOAT mip chain, and never calls
+vkGetPhysicalDeviceImageFormatProperties. Metal would refuse each of
+those textures, and the memory would hold one slice of one layer.
+
+Give such an image a texture of Metal's own layout, placed in its
+memory's heap as an optimal-tiling image's is, and report for it, in
+vkGetImageSubresourceLayout, a packed linear layout (rows of the
+format's stride, level after level, each level's layers in turn; the
+depth pitch of a 3D level is one slice). Its memory requirement covers
+both, so a host access through a mapping at the reported offsets stays
+inside the image. The GPU's contents are not at those offsets, and what
+the host writes there the GPU does not read: an application that reads
+or writes such an image's texels through a mapping sees other data.
+Making a creation fail instead would likely end the game at load.
+
+Linear images Metal can make from a buffer (2D, one level and layer,
+one sample, colour) are unchanged, attachments among them: Metal allows
+render target usage on a linear texture, and RDR2's linear colour
+attachments are of that shape. A valid application creates no other
+linear image, because KosmicKrisp reports none, so its images are
+unchanged.
+
+Mesa main (335d5698, checked on 2026-10-18) has no change here.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-17-rdr2-vulkan-needs.md
+Offered-upstream: no
+---
+ src/kosmickrisp/vulkan/kk_image.c        | 22 ++++++---
+ src/kosmickrisp/vulkan/kk_image_layout.c | 58 ++++++++++++++++++++++++
+ src/kosmickrisp/vulkan/kk_image_layout.h | 12 +++--
+ 3 files changed, 82 insertions(+), 10 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+index ccd4349..a4c255e 100644
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -855,13 +855,21 @@ kk_get_image_subresource_layout(struct kk_device *dev, struct kk_image *image,
+       }
+    }
+ 
+-   pLayout->subresourceLayout = (VkSubresourceLayout){
+-      .offset = offset_B,
+-      .size = plane->layout.size_B,
+-      .rowPitch = plane->layout.linear_stride_B,
+-      .arrayPitch = plane->layout.layer_stride_B,
+-      .depthPitch = 1u,
+-   };
++   if (image->vk.tiling == VK_IMAGE_TILING_LINEAR && !plane->layout.linear) {
++      /* A texture of Metal's own layout (kk_image_layout_init) */
++      kk_image_layout_packed_subresource(&plane->layout, isr->mipLevel,
++                                         isr->arrayLayer,
++                                         &pLayout->subresourceLayout);
++      pLayout->subresourceLayout.offset += offset_B;
++   } else {
++      pLayout->subresourceLayout = (VkSubresourceLayout){
++         .offset = offset_B,
++         .size = plane->layout.size_B,
++         .rowPitch = plane->layout.linear_stride_B,
++         .arrayPitch = plane->layout.layer_stride_B,
++         .depthPitch = 1u,
++      };
++   }
+ 
+    VkSubresourceHostMemcpySize *memcpy_size =
+       vk_find_struct(pLayout, SUBRESOURCE_HOST_MEMCPY_SIZE_EXT);
+diff --git a/src/kosmickrisp/vulkan/kk_image_layout.c b/src/kosmickrisp/vulkan/kk_image_layout.c
+index 4162bd3..1e55a62 100644
+--- a/src/kosmickrisp/vulkan/kk_image_layout.c
++++ b/src/kosmickrisp/vulkan/kk_image_layout.c
+@@ -216,6 +216,47 @@ kk_image_layout_calc_tiled(const struct kk_device *dev,
+    assert(layout->level_offsets_B[layout->levels] <= layout->layer_stride_B);
+ }
+ 
++/* Whether Metal can make the image's texture from a buffer, as a linear
++ * texture. MTLBuffer newTextureWithDescriptor:offset:bytesPerRow: takes one
++ * 2D level and layer, one sample, in an ordinary or packed colour format, so
++ * not a depth, stencil or compressed one (Apple's Metal documentation). */
++static bool
++kk_image_layout_buffer_texture_possible(const struct kk_image_layout *layout)
++{
++   return layout->type == MTL_TEXTURE_TYPE_2D && layout->levels == 1u &&
++          layout->layers == 1u && layout->depth_px == 1u &&
++          layout->sample_count_sa == 1u &&
++          !util_format_is_compressed(layout->format.pipe) &&
++          !util_format_is_depth_or_stencil(layout->format.pipe);
++}
++
++/* The layout vkGetImageSubresourceLayout reports for a linear-tiled image
++ * with a texture of Metal's own layout: rows packed, level after level, each
++ * level's layers after one another. Only a host access through a mapping
++ * sees it; the GPU uses the texture. */
++void
++kk_image_layout_packed_subresource(const struct kk_image_layout *layout,
++                                   uint32_t level, uint32_t layer,
++                                   VkSubresourceLayout *out)
++{
++   const enum pipe_format format = layout->format.pipe;
++   uint64_t offset_B = 0u, level_B = 0u, row_B = 0u, slice_B = 0u;
++   for (uint32_t l = 0u; l <= level; ++l) {
++      offset_B += level_B * layout->layers;
++      row_B = util_format_get_stride(format, u_minify(layout->width_px, l));
++      slice_B = row_B * util_format_get_nblocksy(
++                           format, u_minify(layout->height_px, l));
++      level_B = slice_B * u_minify(layout->depth_px, l);
++   }
++   *out = (VkSubresourceLayout){
++      .offset = offset_B + layer * level_B,
++      .size = level_B,
++      .rowPitch = row_B,
++      .arrayPitch = level_B,
++      .depthPitch = slice_B,
++   };
++}
++
+ void
+ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
+                      enum pipe_format format, const uint8_t width_scale,
+@@ -254,9 +295,26 @@ kk_image_layout_init(const struct kk_device *dev, const struct vk_image *image,
+       layout->usage |= MTL_TEXTURE_USAGE_PIXEL_FORMAT_VIEW;
+    }
+ 
++   /* KosmicKrisp reports linear tiling only for what Metal can make from a
++    * buffer, but applications create other linear images without asking
++    * (Red Dead Redemption 2: arrays, 3D storage images, a mip chain). Metal
++    * would refuse their buffer textures, and their memory would hold one
++    * level of one layer. Give them a texture of Metal's own layout, and
++    * memory for that and for the packed layout vkGetImageSubresourceLayout
++    * reports, so a host access through a mapping stays inside the image.
++    * What the GPU writes is then not at the reported offsets, and what the
++    * host writes there the GPU does not read. */
++   if (layout->linear && !kk_image_layout_buffer_texture_possible(layout))
++      layout->linear = false;
++
+    if (layout->linear) {
+       kk_image_layout_calc_linear(dev, layout);
+    } else {
+       kk_image_layout_calc_tiled(dev, layout);
++      if (image->tiling == VK_IMAGE_TILING_LINEAR) {
++         VkSubresourceLayout end;
++         kk_image_layout_packed_subresource(layout, layout->levels, 0u, &end);
++         layout->size_B = MAX2(layout->size_B, end.offset);
++      }
+    }
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_image_layout.h b/src/kosmickrisp/vulkan/kk_image_layout.h
+index f964fdb..870d653 100644
+--- a/src/kosmickrisp/vulkan/kk_image_layout.h
++++ b/src/kosmickrisp/vulkan/kk_image_layout.h
+@@ -36,7 +36,9 @@ struct kk_image_layout {
+    /** Number of miplevels. 1 if no mipmapping is used. */
+    uint8_t levels;
+ 
+-   /** Whether the image has linear tiling */
++   /** Whether the image has linear tiling: a Metal texture made from its
++    * memory's buffer. A linear-tiled image Metal cannot make that way has
++    * a texture of Metal's own layout instead (kk_image_layout_init). */
+    uint8_t linear;
+ 
+    /** Whether to allow Metal to optimize image contents for the GPU */
+@@ -63,8 +65,8 @@ struct kk_image_layout {
+    } swizzle;
+ 
+    /**
+-    * If tiling is LINEAR, the number of bytes between adjacent rows of
+-    * elements. Otherwise, this field is zero.
++    * If linear, the number of bytes between adjacent rows of elements.
++    * Otherwise, this field is zero.
+     */
+    uint32_t linear_stride_B;
+ 
+@@ -222,4 +224,8 @@ void kk_image_layout_init(const struct kk_device *dev,
+                           bool views_keep_layout,
+                           struct kk_image_layout *layout);
+ 
++void kk_image_layout_packed_subresource(const struct kk_image_layout *layout,
++                                        uint32_t level, uint32_t layer,
++                                        VkSubresourceLayout *out);
++
+ #endif /* KK_IMAGE_LAYOUT_H */
