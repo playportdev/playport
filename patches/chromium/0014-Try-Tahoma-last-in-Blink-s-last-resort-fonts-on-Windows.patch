@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sat, 17 Oct 2026 23:00:00 +0200
+Subject: [PATCH] Try Tahoma last in Blink's last-resort fonts on Windows
+
+GetLastResortFallbackFont tries the generic family, Sans, Arial, MS UI
+Gothic, Microsoft Sans Serif, Segoe UI, Calibri, Times New Roman and
+Courier New. A Wine prefix may register none of them but Tahoma, Wine's
+own UI font: the renderer then has no primary font and draws no text.
+Try Tahoma after the others (PLA-385). Apply after the pinned CEF stock
+patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-17-cef-text.md
+Offered-upstream: no
+---
+ .../platform/fonts/skia/font_cache_skia.cc        | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+index a33776c4a7..06ef70b0aa 100644
+--- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
++++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+@@ -217,11 +217,20 @@ const SimpleFontData* FontCache::GetLastResortFallbackFont(
+                             AlternateFontName::kLastResort);
+     ++last_resort_fallback_attempt;
+   }
++  // A Wine prefix may register Tahoma and none of the families above.
++  if (!font_platform_data) {
++    DEFINE_THREAD_SAFE_STATIC_LOCAL(const FontFaceCreationParams,
++                                    tahoma_creation_params,
++                                    (AtomicString("Tahoma")));
++    font_platform_data = GetFontPlatformData(
++        description, tahoma_creation_params, AlternateFontName::kLastResort);
++    ++last_resort_fallback_attempt;
++  }
+ #endif
+ 
+-  // 0 <= last_resort_fallback_attempt <= 8, so set the max to 9 and put failed
+-  // attempts in that bucket.
+-  static const int kMaxAttempts = 9;
++  // 0 <= last_resort_fallback_attempt <= 9, so set the max to 10 and put
++  // failed attempts in that bucket.
++  static const int kMaxAttempts = 10;
+   if (!font_platform_data) {
+     last_resort_fallback_attempt = kMaxAttempts;
+   }

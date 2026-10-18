@@ -11,3 +11,4 @@
 0011-Turn-the-hang-watcher-off-by-default-on-Windows.patch
 0012-Build-without-loader-lock-sampling.patch
 0013-Do-not-run-the-stack-sampling-profiler-in-a-Windows.patch
+0014-Try-Tahoma-last-in-Blink-s-last-resort-fonts-on-Windows.patch
