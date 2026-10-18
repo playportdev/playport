@@ -15,6 +15,7 @@
 #include "dotnet_fakedlls.h"
 #include "prefix_registry.h"
 #include "selfcheck.h"
+#include "timezone_bias.h"
 #include "title_path.h"
 #include "session_protocol.h"
 
@@ -43,6 +44,7 @@
 extern int wineserver_main(int argc, char *argv[]);          /* libwineserver.a (-Dmain=) */
 extern void wineserver_log_set_file(const char *path);       /* libwineserver.a */
 extern void wineserver_set_nls_dir(const char *path);        /* libwineserver.a */
+extern void wineserver_set_timezone_bias(long long bias);    /* libwineserver.a (madeira-unix 0159) */
 extern void wineserver_inject_client_fd(int fd);             /* libwineserver.a */
 extern int foreground;                                       /* libwineserver.a */
 extern void __wine_main(int argc, char *argv[]);             /* libntdll_unix.a */
@@ -1365,6 +1367,13 @@ int wine_host_init(const wine_host_config *c)
     seed_etc();
     seed_registry();
     seed_machine_values();
+
+    /* KUSER_SHARED_DATA.TimeZoneBias, which the iOS wineserver does not compute
+     * itself: here, before the server thread or any guest thread exists
+     * (timezone_bias.h). */
+    long long tz_bias = pp_timezone_bias(time(NULL));
+    wineserver_set_timezone_bias(tz_bias);
+    host_log("time zone bias %lld min (local = UTC%+lld min)", tz_bias / 600000000LL, -tz_bias / 600000000LL);
 
     g_wineserver_should_stop = 0;
     pthread_attr_t attr;

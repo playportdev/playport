@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 21:35:27 +0200
+Subject: [PATCH] wineserver: publish the host's time zone bias in the iOS
+ shared page
+
+KUSER_SHARED_DATA.TimeZoneBias is what ntdll's RtlSystemTimeToLocalTime
+subtracts from the system time, so GetLocalTime and every local-time
+conversion depend on it. Upstream wineserver computes it in
+set_user_shared_data_time; Madeira's iOS replacement deliberately skips
+it, because gmtime/localtime/mktime take libc's time zone lock in a
+process the server shares with every guest thread. It stayed at its
+initial 0, so on the phone GetLocalTime returned UTC while
+GetTimeZoneInformation reported the real zone (Central Europe Daylight
+Time): two clocks two hours apart, which Windows never shows a program.
+
+The host app now computes the bias as upstream does, daylight-saving
+adjustment included, once before it starts this server thread or any
+guest thread (WineHost timezone_bias.c), and hands it over through
+wineserver_set_timezone_bias. The shared page's creation publishes it.
+The periodic path still does not touch it, as before; a daylight-saving
+change during one session goes unseen until the app's next start.
+
+Class: upstream-bug
+Evidence: docs/evidence/2026-10-18-rockstar-local-time.md
+Offered-upstream: no
+---
+ build/wineserver/fd_ios.c      | 25 +++++++++++++++++++++++--
+ build/wineserver/mapping_ios.c |  5 +++++
+ 2 files changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/build/wineserver/fd_ios.c b/build/wineserver/fd_ios.c
+index 86d460c..698c44a 100644
+--- a/build/wineserver/fd_ios.c
++++ b/build/wineserver/fd_ios.c
+@@ -364,6 +364,26 @@ int ios_usd_time_enabled(void)
+     return env;
+ }
+ 
++/* Playport: KUSER_SHARED_DATA.TimeZoneBias (UTC minus local, 100 ns units),
++ * which ntdll's RtlSystemTimeToLocalTime subtracts. The periodic path does not
++ * compute it (see below), so the host app computes it once, before this
++ * server thread or any guest thread exists, and hands it here; the page's
++ * creation publishes it, and nothing recomputes it while the session runs. */
++static timeout_t ios_timezone_bias;
++
++void wineserver_set_timezone_bias( long long bias )
++{
++    ios_timezone_bias = bias;
++}
++
++void ios_usd_publish_timezone_bias(void)
++{
++    if (!user_shared_data) return;
++    atomic_store_long(&user_shared_data->TimeZoneBias.High2Time, ios_timezone_bias >> 32);
++    atomic_store_ulong(&user_shared_data->TimeZoneBias.LowPart, ios_timezone_bias);
++    atomic_store_long(&user_shared_data->TimeZoneBias.High1Time, ios_timezone_bias >> 32);
++}
++
+ /* Report what the writable alias actually IS right now, and prove a store to it
+  * still lands. The wedge we are chasing is an address that accepts a write at
+  * startup and later stops completing one, so protection/tag at creation time
+@@ -509,10 +529,11 @@ void set_current_time(void)
+          * and that is not something the four public APIs can prove either way.
+          * These are three more plain atomic stores.
+          *
+-         * TimeZoneBias is deliberately NOT published: computing it needs
++         * TimeZoneBias is deliberately NOT recomputed here: computing it needs
+          * gmtime/localtime/mktime, which take libc's timezone lock and share a
+          * static buffer in a process where wineserver and every guest thread
+-         * share libc. It keeps its initialization value (UTC). */
++         * share libc. The host's value is published once when the page is
++         * created (ios_usd_publish_timezone_bias). */
+         atomic_store_long(&user_shared_data->SystemTime.High2Time, current_time >> 32);
+         atomic_store_ulong(&user_shared_data->SystemTime.LowPart, current_time);
+         atomic_store_long(&user_shared_data->SystemTime.High1Time, current_time >> 32);
+diff --git a/build/wineserver/mapping_ios.c b/build/wineserver/mapping_ios.c
+index 26aa0e5..aecfe95 100644
+--- a/build/wineserver/mapping_ios.c
++++ b/build/wineserver/mapping_ios.c
+@@ -27,6 +27,7 @@
+ 
+ #ifdef WINE_IOS
+ extern void ws_log(const char *fmt, ...);
++extern void ios_usd_publish_timezone_bias(void);
+ #endif
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -1568,6 +1569,7 @@ struct object *create_user_data_mapping( struct object *root, struct unicode_str
+     {
+         ptr = mmap( NULL, mapping->size, PROT_WRITE, MAP_SHARED, get_unix_fd( mapping->fd ), 0 );
+         if (ptr != MAP_FAILED) user_shared_data = ptr;
++        ios_usd_publish_timezone_bias();
+         return &mapping->obj;
+     }
+ 
+@@ -1611,6 +1613,9 @@ struct object *create_user_data_mapping( struct object *root, struct unicode_str
+     ptr = mmap( NULL, mapping->size, PROT_WRITE, MAP_SHARED, get_unix_fd( mapping->fd ), 0 );
+ #endif
+     if (ptr != MAP_FAILED) user_shared_data = ptr;
++#ifdef WINE_IOS
++    ios_usd_publish_timezone_bias();
++#endif
+     return &mapping->obj;
+ }
+ 
+-- 
+2.56.0
+
