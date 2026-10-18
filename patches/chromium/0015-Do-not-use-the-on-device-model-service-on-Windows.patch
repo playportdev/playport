@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 09:00:00 +0200
+Subject: [PATCH] Do not use the on-device model service on Windows
+
+Default OptimizationGuideOnDeviceModel to disabled on Windows, as on
+other platforms without the service: the browser starts no
+on_device_model utility (an AI model host, one more process and JIT
+pool copy under Playport; PLA-394). Social Club replaces the browser's
+--disable-features, so a switch cannot do this. Apply after the pinned
+CEF stock patches.
+
+Class: feature
+Evidence: docs/evidence/2026-10-18-cef-late-children.md
+Offered-upstream: no
+---
+ .../core/optimization_guide_features.cc            |    6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/components/optimization_guide/core/optimization_guide_features.cc b/components/optimization_guide/core/optimization_guide_features.cc
+index b75689a78a..92ab860d2c 100644
+--- a/components/optimization_guide/core/optimization_guide_features.cc
++++ b/components/optimization_guide/core/optimization_guide_features.cc
+@@ -95,10 +95,10 @@ BASE_FEATURE(kOptimizationGuidePredictionModelKillswitch,
+ BASE_FEATURE(kOptimizationGuideModelExecution,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+-// Whether to use the on device model service in optimization guide.
++// Whether to use the on device model service in optimization guide. Off on
++// Windows: no on_device_model utility process.
+ BASE_FEATURE(kOptimizationGuideOnDeviceModel,
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ #else
+              base::FEATURE_DISABLED_BY_DEFAULT);

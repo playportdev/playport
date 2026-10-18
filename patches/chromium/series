@@ -12,3 +12,5 @@
 0012-Build-without-loader-lock-sampling.patch
 0013-Do-not-run-the-stack-sampling-profiler-in-a-Windows.patch
 0014-Try-Tahoma-last-in-Blink-s-last-resort-fonts-on-Windows.patch
+0015-Do-not-use-the-on-device-model-service-on-Windows.patch
+0016-No-system-CPU-probe-on-Windows.patch

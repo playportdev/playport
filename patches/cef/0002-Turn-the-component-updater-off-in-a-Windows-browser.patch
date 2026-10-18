@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: The Playport authors <dev@playport.dev>
+Date: Sun, 18 Oct 2026 09:00:00 +0200
+Subject: [PATCH] Turn the component updater off in a Windows browser
+
+Append --disable-component-update to the Windows browser process's
+command line after the application's OnBeforeCommandLineProcessing, so
+a client cannot drop it. In the Rockstar launcher's Open the updater
+started about a minute after the page: its BITS downloads asked COM
+for BackgroundCopyManager (rpcss and a dllhost each time) and its
+unpacking started Unzipper utilities, each one more process and JIT
+pool copy under Playport (PLA-394). Social Club does not update
+Chromium components. Apply to the CEF pin before its stock Chromium
+patcher runs.
+
+Class: feature
+Evidence: docs/evidence/2026-10-18-cef-late-children.md
+Offered-upstream: no
+---
+ libcef/common/chrome/chrome_main_delegate_cef.cc |    9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/libcef/common/chrome/chrome_main_delegate_cef.cc b/libcef/common/chrome/chrome_main_delegate_cef.cc
+index cd5203bee..69ce418f2 100644
+--- a/libcef/common/chrome/chrome_main_delegate_cef.cc
++++ b/libcef/common/chrome/chrome_main_delegate_cef.cc
+@@ -387,6 +387,15 @@ std::optional<int> ChromeMainDelegateCef::BasicStartupComplete() {
+     std::ignore = commandLinePtr->Detach(nullptr);
+   }
+ 
++#if BUILDFLAG(IS_WIN)
++  // No component updater in the browser: its BITS downloads start COM
++  // servers (rpcss, dllhost) and its unpacking starts Unzipper utilities.
++  // Added after the application's hook so that it stays on.
++  if (process_type.empty()) {
++    command_line->AppendSwitch(switches::kDisableComponentUpdate);
++  }
++#endif
++
+   // Call as early as possible.
+   InitLogging(command_line);
+ 

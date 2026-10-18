@@ -50,6 +50,13 @@ pinned-tree lines:
 | 0012 | The build has no loader lock sampling (`enable_loader_lock_sampling` is a gni value, not an argument). | `services/tracing/public/cpp/stack_sampling/loader_lock_sampling.gni:5`; `tracing_sampler_profiler.cc:609-615` |
 | 0013 | The stack sampling profiler is off in a build without Chrome branding. Such a build counts as local, and local builds profiled every browser. | `chrome/common/profiler/thread_profiler_platform_configuration.cc:63-66`; `thread_profiler_configuration.cc:44-50` |
 
+**Amended 2026-10-18 ([PLA-394](https://linear.app/playportdev/issue/PLA-394)):** the same rule
+covers the browser's late children ([evidence](../evidence/2026-10-18-cef-late-children.md)):
+`patches/cef` 0002 turns the component updater off (`--disable-component-update`, appended after
+the client's command-line hook: no BITS COM servers, no Unzipper utilities), `patches/chromium`
+0015 turns `OptimizationGuideOnDeviceModel` off (no `on_device_model` utility), and 0016 gives
+no system CPU probe (no `pdh.dll` in the browser).
+
 **The Rockstar launcher's Open** (`PublisherLauncher.rockstar.graphicsEnvironment`). Its Open
 passes these over the Vulkan backend's environment:
 
