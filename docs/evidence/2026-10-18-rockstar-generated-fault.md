@@ -200,3 +200,59 @@ main thread among them.
   main window inside the pool.
 - **Unchanged:** the default (`none`, decision 0116), every pool setting and
   the exception path. RDR2 stays Broken.
+
+## SMC checks for Launcher.exe alone (fex 0050)
+
+FEX's environment layer is its highest. The launcher's session-wide
+`FEX_SMCCHECKS=none` therefore overrides any per-executable FEX app config,
+and Playport writes none.
+
+FEX patch 0050 adds a diagnostic, `FEX_SMCCHECKS_FOR=<exe>=<mode>`:
+- It sets SMCChecks only in the process whose executable base name matches,
+  compared case-insensitively.
+- It accepts `none`, `mtrack` and `full`; any other value is logged and ignored.
+- It logs one `[smc-for]` line per process with that process's effective mode.
+
+It was set session-only from RDR2's Runtime keys row:
+`env.FEX_SMCCHECKS_FOR=Launcher.exe=mtrack`. Tests:
+`tools/tests/test_smc_checks_for.py` covers the parser and matcher.
+`PublisherLauncherTests` checks that the value keeps its own `=` beside the
+launcher's key.
+
+IPA `9b4751a2acd061c3e471c320b1850c5371da69d5eb0d77d61d8a207c9c70cf96`.
+`./pp test --quick`, `./pp names` and `./pp secrets` passed, and
+`./pp build` passed 89/89. The phone was at 27%, not charging, with 5.8 GB
+free. The session exited 0 and did not use `--keep-settings`. No
+authentication or game input was supplied.
+
+| Game | Run under `.work/ui-runs/` | Observation |
+| --- | --- | --- |
+| Hollow Knight (367520) | `20261018T195001` | First frame +10.23 s, first-frame+10 reached |
+| RDR2 (1174180), Launcher.exe `mtrack`, every other process `none` | `20261018T195116` | First window +34.53 s; main window shown; generated fault and `c0000096` again; pool head exhausted before the main window |
+
+- **Which processes got mtrack.** The `[smc-for]` lines show `mtrack`
+  applied in Launcher.exe only. These kept `none`: the session process,
+  PlayRDR2, RockstarErrorHandler, services, RockstarService (2) and
+  SocialClubHelper (5). The invalidation census agrees: only
+  Launcher.exe's threads report `smc_off=0`.
+- **SMC tracking was active.** FEX handled 101 self-modifying-code writes
+  on the launcher's main thread.
+- **The fault recurred unchanged.** It is the same generated HLT, at the
+  same RVA `0x258cf6`, with the same code window, followed by `c0000096`.
+  The launcher reached its main window (1280×600), then the fault, then
+  PlayRDR2's Unable to launch game dialog, as in the default run.
+  The page's protection now read `PAGE_EXECUTE_READ`. That is consistent
+  with FEX write-protecting translated pages under `mtrack`.
+- **Pool.** The head ran out about 26 s after the first window, before the
+  main window: head 496 MiB, tail 401 MiB, room 0, `head_exhausted` 48 and
+  later 96. After that, two Social Club helpers ended `c0000135`. Band peak
+  was 13,467 MiB with zero refusals. The default run (`20261018T192315`)
+  did not exhaust the pool and faulted the same way.
+
+**Reading.** Under the rule set for this A/B, the run is inconclusive,
+because the pool ran out before the main window. The observation itself
+still weighs against stale translations in Launcher.exe as the cause: with
+its own SMC tracking on and active, it executes the same HLT at the same
+RVA, with or without pool exhaustion. Writes that page tracking cannot see
+(SMCChecks `full`) were not tested. No defaults were changed, and RDR2 stays
+Broken.
