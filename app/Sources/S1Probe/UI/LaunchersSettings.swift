@@ -52,14 +52,16 @@ enum LauncherOpen {
         await Task.detached(priority: .userInitiated) { EmulatorCache.keepWithinBudget { log in
             WineHostRuntime.appendLog("launcher: " + log)
         } }.value
-        // The settings saved under the launcher's title id: runtime keys and FEX's inputs, a dev
-        // build's as for a game's Play (decision 0034); the player's app runs the defaults.
+        // The settings saved under the launcher's title id over its own runtime keys: runtime keys
+        // and FEX's inputs, a dev build's as for a game's Play (decision 0034); the player's app
+        // runs the launcher's own.
+        let defaults = l.openSettings(saved: nil)
         #if PLAYPORT_RELEASE
-        let saved = PublisherLauncher.OpenSettings()
+        let saved = defaults
         #else
-        let saved = PublisherLauncher.openSettings(saved: LaunchSettingsStore.shared.settings(for: l.titleID))
+        let saved = l.openSettings(saved: LaunchSettingsStore.shared.settings(for: l.titleID))
         #endif
-        if saved != PublisherLauncher.OpenSettings() {
+        if saved != defaults {
             log("open \(l.id): saved settings runtime=\(saved.config.keys.sorted().map { "\($0)=\(saved.config[$0]!)" }) "
                 + "ordering=\(MemoryOrdering.Setting.allCases.compactMap { s in saved.ordering[s].map { "\(s.rawValue)=\($0)" } }) "
                 + "maxInst=\(saved.maxInst.map(String.init) ?? "profile") x87Reduced=\(saved.x87Reduced.map { String($0) } ?? "profile") "

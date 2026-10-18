@@ -52,22 +52,34 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(GraphicsBackend.vulkan.runtimeEnvironment, ["DXVK_CONFIG": "dxvk.tilerMode = False"])
     }
 
+    /// Decision 0116: the Rockstar launcher's Open runs with FEX's self-modifying-code checks off
+    /// when nothing is saved, and a saved key of the same name replaces it.
+    func testRockstarOpenTurnsSMCChecksOffUnlessASavedKeySaysOtherwise() {
+        let r = PublisherLauncher.rockstar
+        XCTAssertEqual(r.runtime, ["env.FEX_SMCCHECKS": "none"])
+        XCTAssertEqual(r.openSettings(saved: nil), .init(config: ["env.FEX_SMCCHECKS": "none"]))
+        XCTAssertEqual(r.openSettings(saved: LaunchSettings()).config, ["env.FEX_SMCCHECKS": "none"])
+        let own = r.openSettings(saved: LaunchSettings(runtime: "env.FEX_SMCCHECKS=mtrack vram-mb=1024"))
+        XCTAssertEqual(own.config, ["env.FEX_SMCCHECKS": "mtrack", "vram-mb": "1024"])
+    }
+
     func testOpenTakesTheSavedRuntimeKeysAndFEXInputsOnly() {
-        XCTAssertEqual(PublisherLauncher.openSettings(saved: nil), .init())
+        let launcher = PublisherLauncher.rockstar
+        XCTAssertEqual(launcher.openSettings(saved: nil).config, launcher.runtime)
         var ordering = MemoryOrdering()
         ordering[.tso] = false
         let saved = LaunchSettings(screen: "1080", graphics: .dxmt, ordering: ordering, maxInst: 100, x87Reduced: true,
                                    diskCache: false, runtime: "env.FEX_SMCCHECKS=none vram-mb=1024",
                                    windowsServices: false, jitPoolMB: 512)
-        let open = PublisherLauncher.openSettings(saved: saved)
+        let open = launcher.openSettings(saved: saved)
         XCTAssertEqual(open.config, ["env.FEX_SMCCHECKS": "none", "vram-mb": "1024"])
         XCTAssertEqual(open.ordering, ordering)
         XCTAssertEqual(open.maxInst, 100)
         XCTAssertEqual(open.x87Reduced, true)
         XCTAssertEqual(open.diskCache, false)
         // Keys that are not key=value items and a block size FEX cannot take are unset, as for a game.
-        let bad = PublisherLauncher.openSettings(saved: LaunchSettings(maxInst: 0, runtime: "FEX_SMCCHECKS"))
-        XCTAssertEqual(bad.config, [:])
+        let bad = launcher.openSettings(saved: LaunchSettings(maxInst: 0, runtime: "FEX_SMCCHECKS"))
+        XCTAssertEqual(bad.config, launcher.runtime)
         XCTAssertNil(bad.maxInst)
     }
 

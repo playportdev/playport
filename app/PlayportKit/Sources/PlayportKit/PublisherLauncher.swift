@@ -27,6 +27,9 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// Environment over the backend's for its Open, in LaunchSettings.graphicsEnvironment's form
     /// (DXVK_CONFIG joins the backend's after `;`); a game's launch never takes it.
     public let graphicsEnvironment: [String: String]
+    /// madeira.cfg keys (`env.NAME` among them) its Open runs with; a key saved under its title
+    /// id replaces the same key here (openSettings).
+    public let runtime: [String: String]
 
     /// The launch's title id (TitleLaunch), apart from every store's game ids.
     public var titleID: String { "launcher-" + id }
@@ -39,14 +42,17 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
     /// the browser and its renderers go on after an optional child cannot start.
     /// Its Direct3D device query starts DXVK and vkd3d-proton in the launcher; one DXVK compiler
     /// thread and no DXVK or vkd3d-proton disk cache (so no writer threads) leave more of FEX's
-    /// host band to Social Club's threads (decision 0114).
+    /// host band to Social Club's threads (decision 0114). FEX's self-modifying-code checks are
+    /// off (`env.FEX_SMCCHECKS=none`): with them on, Social Club's CEF crashed and the pool's tail
+    /// passed 560 MB (run `20261018T095302`; decision 0116).
     public static let rockstar = PublisherLauncher(
         id: "rockstar", name: "Rockstar Games Launcher",
         installKey: #"Software\Wow6432Node\Rockstar Games\Launcher"#, installValue: "InstallFolder",
         executable: "Launcher.exe", arguments: [], windowsServices: true, jitPoolMB: 896, graphics: .vulkan,
         exhaustionGrace: 240,
         graphicsEnvironment: ["DXVK_CONFIG": "dxvk.numCompilerThreads = 1", "DXVK_SHADER_CACHE": "0",
-                              "VKD3D_SHADER_CACHE_PATH": "0"])
+                              "VKD3D_SHADER_CACHE_PATH": "0"],
+        runtime: ["env.FEX_SMCCHECKS": "none"])
 
     public static let all: [PublisherLauncher] = [rockstar]
 
@@ -74,11 +80,12 @@ public struct PublisherLauncher: Equatable, Sendable, Identifiable {
         }
     }
 
-    /// The saved settings' runtime keys and FEX inputs, read as a game's are
-    /// (LaunchSettings.resolve: unparsable keys and a block size FEX cannot take are unset).
-    public static func openSettings(saved: LaunchSettings?) -> OpenSettings {
+    /// The saved settings' runtime keys over this launcher's `runtime`, and their FEX inputs, read
+    /// as a game's are (LaunchSettings.resolve: unparsable keys and a block size FEX cannot take
+    /// are unset). With nothing saved, an Open runs this table's keys.
+    public func openSettings(saved: LaunchSettings?) -> OpenSettings {
         let e = LaunchSettings.resolve(game: saved, global: LaunchSettings())
-        return OpenSettings(config: e.runtime, ordering: e.ordering, maxInst: e.maxInst,
+        return OpenSettings(config: runtime.merging(e.runtime) { _, saved in saved }, ordering: e.ordering, maxInst: e.maxInst,
                             x87Reduced: e.x87Reduced, diskCache: e.diskCache)
     }
 
