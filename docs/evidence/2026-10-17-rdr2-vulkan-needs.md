@@ -171,6 +171,18 @@ pipeline alone for its message. No game was run; not checked on the phone.
   untranslated MSL; 14 MSL libraries read a `texture2d_ms_array`. A hand-written module in
   `kk-host-test` covers it. Not checked on the phone (Apple's compiler, the A19's
   multisample array textures).
+- **Storage image access to an undefined image (H6b, 2026-10-18, mesa 0040,
+  [PLA-387](https://linear.app/playportdev/issue/PLA-387)):** not in any captured title.
+  Hand-written SPIR-V (`shaders/undef-storage-image.{frag,comp}.spvasm`) on 0001–0039: an
+  `OpImageRead` of an `OpUndef` storage image segfaulted in `nir_shader_gather_info`
+  (`nir_gather_info.c:531`, no variable) from `kk_preprocess_nir`, in a fragment and a compute
+  shader; an `OpImageWrite` or `OpImageQuerySize` alone segfaulted in the runtime's descriptor
+  heap lowering (`nir_rewrite_image_intrinsic`, `nir.c:2910`). An atomic cannot be written:
+  spirv_to_nir refuses the undefined image pointer its texel pointer needs ("expected
+  'pointer'"). 0040 extends 0037's pass to `image_deref` intrinsics: both pipelines build, and
+  their MSL has no texture. Mesa `main` (335d5698, checked 2026-10-18) has no fix. Replays with
+  `--bypass-feature-gate` unchanged (h1b: graphics 1,950/1,950, compute 788/788; vkd3d-h3:
+  1,587/1,607, 757/758; 0 crashes). Not checked on the phone.
 
 ## In Story mode (2026-10-17, H1)
 

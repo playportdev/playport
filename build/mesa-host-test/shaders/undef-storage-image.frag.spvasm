@@ -1,0 +1,41 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; An undefined storage image (OpUndef): a read, a write and a size query.
+; SPIR-V allows them; a compiler can leave them in code that never runs. The
+; read and the query are undefined, but the pipeline must build. (An atomic
+; needs a texel pointer into an undefined image pointer, which spirv_to_nir
+; refuses before any driver code: "expected 'pointer'".)
+               OpCapability Shader
+               OpCapability ImageQuery
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %color %o
+               OpExecutionMode %main OriginUpperLeft
+               OpDecorate %color Location 0
+               OpDecorate %o Location 0
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+        %int = OpTypeInt 32 1
+         %v2 = OpTypeVector %float 2
+         %v4 = OpTypeVector %float 4
+        %v2i = OpTypeVector %int 2
+        %img = OpTypeImage %float 2D 0 0 0 2 Rgba32f
+    %p_in_v4 = OpTypePointer Input %v4
+   %p_out_v4 = OpTypePointer Output %v4
+      %color = OpVariable %p_in_v4 Input
+          %o = OpVariable %p_out_v4 Output
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+          %t = OpUndef %img
+          %c = OpLoad %v4 %color
+         %uv = OpVectorShuffle %v2 %c %c 0 1
+         %xy = OpConvertFToS %v2i %uv
+          %r = OpImageRead %v4 %t %xy
+               OpImageWrite %t %xy %c
+         %sz = OpImageQuerySize %v2i %t
+        %szf = OpConvertSToF %v2 %sz
+         %rs = OpVectorShuffle %v4 %szf %szf 0 1 0 1
+         %r2 = OpFAdd %v4 %r %rs
+               OpStore %o %r2
+               OpReturn
+               OpFunctionEnd

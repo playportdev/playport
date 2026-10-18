@@ -925,6 +925,36 @@ main(int argc, char **argv)
       printf("ok undef-image\n");
    }
 
+   /* Undefined storage images (shaders/undef-storage-image.frag.spvasm and
+    * .comp.spvasm): a read, a write, a size query and an atomic, in a
+    * fragment and a compute shader. Both pipelines build, and their MSL
+    * touches no texture. */
+   {
+      DPROC(vkCreateComputePipelines);
+      int msl_before = msl_count();
+      struct pipe_desc d = {"undef-storage-image", "pass.vert", NULL, NULL,
+                            NULL, "undef-storage-image.frag", TRI, false,
+                            FIRST, FILL};
+      make_pipeline(&d, layout);
+      VkComputePipelineCreateInfo cpci = {
+         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+         .stage = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = load_module("undef-storage-image.comp"),
+            .pName = "main",
+         },
+         .layout = layout,
+      };
+      VkPipeline cp;
+      CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, NULL, &cp));
+      if (msl_before >= 0 && msl_contains(msl_before, msl_count(), "texture2d")) {
+         fprintf(stderr, "undef-storage-image: a texture in the MSL\n");
+         return 1;
+      }
+      printf("ok undef-storage-image\n");
+   }
+
    /* A pipeline-statistics pool without pipelineStatisticsQuery, as Red Dead
     * Redemption 2 makes (8 queries, all 11 counters): it is created, reset,
     * begun and ended around a draw and copied, and its results are 11 zeros

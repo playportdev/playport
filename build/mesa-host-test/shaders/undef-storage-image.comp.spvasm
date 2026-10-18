@@ -1,0 +1,38 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; The compute side of undef-storage-image.frag.spvasm: a read and a size
+; query of an undefined storage image (OpUndef), written back to it. The
+; pipeline must build.
+               OpCapability Shader
+               OpCapability ImageQuery
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gid
+               OpExecutionMode %main LocalSize 64 1 1
+               OpDecorate %gid BuiltIn GlobalInvocationId
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+        %int = OpTypeInt 32 1
+       %uint = OpTypeInt 32 0
+         %v2 = OpTypeVector %float 2
+         %v4 = OpTypeVector %float 4
+        %v2i = OpTypeVector %int 2
+        %v2u = OpTypeVector %uint 2
+        %v3u = OpTypeVector %uint 3
+        %img = OpTypeImage %float 2D 0 0 0 2 Rgba32f
+   %p_in_v3u = OpTypePointer Input %v3u
+        %gid = OpVariable %p_in_v3u Input
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+          %t = OpUndef %img
+          %g = OpLoad %v3u %gid
+        %xyu = OpVectorShuffle %v2u %g %g 0 1
+         %xy = OpBitcast %v2i %xyu
+          %r = OpImageRead %v4 %t %xy
+         %sz = OpImageQuerySize %v2i %t
+        %szf = OpConvertSToF %v2 %sz
+         %rs = OpVectorShuffle %v4 %szf %szf 0 1 0 1
+         %r2 = OpFAdd %v4 %r %rs
+               OpImageWrite %t %xy %r2
+               OpReturn
+               OpFunctionEnd

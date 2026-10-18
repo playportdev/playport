@@ -382,8 +382,8 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   capability, fetches two samples of a 4-sample 2-layer image through a 2D array view) and
   checks the MSL has `texture2d_ms_array`. It passes with no patch;
   `shaderStorageImageMultisample` stays unreported.
-- Follow-up found in V1, not scheduled: [PLA-387](https://linear.app/playportdev/issue/PLA-387)
-  (storage load from an undefined image).
+- Follow-up found in V1: [PLA-387](https://linear.app/playportdev/issue/PLA-387)
+  (storage load from an undefined image), fixed in H6b (mesa 0040).
 - **Phone, owed:** Hollow Knight on Vulkan first frame+10; that Apple's compiler takes the
   `texture2d_ms_array` reads, and that the A19 makes a 2D multisample array texture, are not
   checked.
@@ -436,20 +436,23 @@ KosmicKrisp (`ios check`), `pp names`, `pp secrets` and `pp test --quick`. The p
   H6 (tooling: `run-replay.sh --bypass-feature-gate`, `667f8fe`, replays both corpora as the
   scratch layers did, with no scratch layer; the profile copies float controls, subgroup sizes,
   the driver ID and extension formats, and devinfo prints them,
-  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#replay-and-profile-tooling-h6)).
+  [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#replay-and-profile-tooling-h6));
+  H6b ([PLA-387](https://linear.app/playportdev/issue/PLA-387), mesa 0040: a storage image
+  read, write or size query of an undefined image no longer crashes; host test only, replays
+  unchanged, [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#host-fixes-2026-10-17-chunks-v0v4)).
   Host only; not checked on the phone.
 - **Blocked:** H5 (Apple's Metal compiler for Windows under Wine on the replay's MSL). The
   download needs an Apple account sign-in, and the tools' licence is not published, so whether
   Wine on Linux is permitted is unknown. Nothing downloaded; the owner's step is in the
   [evidence](../evidence/2026-10-17-rdr2-vulkan-needs.md#apples-metal-compiler-on-the-generated-msl-h5).
-- **Queue (owner-approved 2026-10-17, host only):** next H6b
-  [PLA-387](https://linear.app/playportdev/issue/PLA-387); H7 measure RDR2's unsupported linear images on the
-  mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)). One writer per item. Then
-  chunk 0 below (needs the phone).
+- **Queue (owner-approved 2026-10-17, host only):** H6b done; next H7 measure RDR2's
+  unsupported linear images on the mock ([PLA-388](https://linear.app/playportdev/issue/PLA-388)).
+  One writer per item. Then chunk 0 below (needs the phone).
 - **Running:** none. Reports: `h1-h3.md` (H1), `h2.md` (H2), `h1b.md` (H1b), `h3.md` (H3),
-  `h4.md` (H4), `h5.md` (H5), `h6.md` (H6).
+  `h4.md` (H4), `h5.md` (H5), `h6.md` (H6), `h6b.md` (H6b).
 - **Phone:** not used by these runs; Hollow Knight on Vulkan first frame+10 is owed for V1–V3
-  (mesa 0037–0039), on H4's IPA (sha256 above), then RDR2 after PLA-295 and PLA-300.
+  and H6b (mesa 0037–0040), on an IPA with 0040 (H4's has 0037–0039 only), then RDR2 after
+  PLA-295 and PLA-300.
 - **Reports and scratch:** `$PLAYPORT_BUILD/agent-notes/rdr2-vk/` in the main checkout
   (capture runs, Fossilize database, analysis); child reports under
   `agent-notes/rdr2-vk/reports/` of the side copy.
