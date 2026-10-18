@@ -31,6 +31,12 @@ public enum SteamAPISwap {
         case emulated
         /// The game's own steam_api, which needs a running Steam client.
         case original
+        /// The game's own steam_api, served by Playport's steamclient64.dll in the prefix for the
+        /// launched app only (decision 0115); SteamStub is still taken off, as for `emulated`.
+        case client
+
+        /// SteamStub comes off the game's executables (it stays off with Playport's client).
+        public var removesSteamStub: Bool { self != .original }
     }
 
     /// A game DLL the swap covers, by its path under the install.
@@ -166,7 +172,7 @@ public enum SteamAPISwap {
     public static func ensure(_ mode: Mode, in root: URL, emulator: URL, settings: Settings) throws -> State {
         switch mode {
         case .emulated: try apply(in: root, emulator: emulator, settings: settings)
-        case .original: try restore(in: root)
+        case .original, .client: try restore(in: root)
         }
         return state(in: root)
     }

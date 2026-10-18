@@ -25,7 +25,7 @@ final class WindowsServicesTests: XCTestCase {
     func testTheShippedTableTurnsThemOnForRedDeadRedemption2Only() throws {
         let table = try CompatDefaults.load(directory: CompatDefaultsTests.shipped)
         let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
-        XCTAssertEqual(rdr2.settings, LaunchSettings(windowsServices: true, jitPoolMB: 896))
+        XCTAssertEqual(rdr2.settings, LaunchSettings(steamAPI: .client, windowsServices: true, jitPoolMB: 896))
         XCTAssertNil(table.entry(for: "epic-Buffalo")?.settings.windowsServices)
         XCTAssertNil(table.entry(for: "app-367520"))   // Hollow Knight starts no services
     }

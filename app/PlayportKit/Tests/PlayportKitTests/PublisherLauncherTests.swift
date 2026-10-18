@@ -106,4 +106,23 @@ final class PublisherLauncherTests: XCTestCase {
         XCTAssertEqual(PrefixRegistryFile.string(inHive: Self.hive, key: #"Software\Wow6432Node\Rockstar Games\Launcher"#, name: "language"), "en-US")
         XCTAssertNil(PrefixRegistryFile.string(inHive: Self.hive, key: #"Software\Rockstar Games\Launcher"#, name: "InstallFolder"))
     }
+
+    /// A game whose Play starts a launcher inherits its Open's grace, graphics environment and
+    /// runtime keys, under the game's own (decision 0115).
+    func testAGameStartedThroughALauncherInheritsItsOpenSettings() {
+        XCTAssertEqual(PublisherLauncher.startedBy(game: "app-1174180"), .rockstar)
+        XCTAssertNil(PublisherLauncher.startedBy(game: "app-367520"))
+        let plain = LaunchSettings.resolve(game: nil, global: LaunchSettings())
+        let (s, grace) = PublisherLauncher.rockstar.startingGame(plain)
+        XCTAssertEqual(grace, PublisherLauncher.rockstar.exhaustionGrace)
+        XCTAssertEqual(s.runtime, ["env.FEX_SMCCHECKS": "none"])
+        XCTAssertEqual(s.graphicsEnvironment, PublisherLauncher.rockstar.graphicsEnvironment)
+        // The game's own keys win; DXVK_CONFIG's items join, the launcher's first.
+        let own = LaunchSettings.resolve(game: LaunchSettings(runtime: "env.FEX_SMCCHECKS=mtrack env.X=1",
+                                                               graphicsOptions: "dxvk.tilerMode=False"), global: LaunchSettings())
+        let (t, _) = PublisherLauncher.rockstar.startingGame(own)
+        XCTAssertEqual(t.runtime, ["env.FEX_SMCCHECKS": "mtrack", "env.X": "1"])
+        XCTAssertEqual(t.graphicsEnvironment["DXVK_CONFIG"], "dxvk.numCompilerThreads = 1;" + (own.graphicsEnvironment["DXVK_CONFIG"] ?? ""))
+        XCTAssertEqual(t.graphicsEnvironment["DXVK_SHADER_CACHE"], "0")
+    }
 }

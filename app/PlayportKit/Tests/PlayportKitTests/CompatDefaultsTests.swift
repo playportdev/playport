@@ -20,6 +20,15 @@ final class CompatDefaultsTests: XCTestCase {
         XCTAssertNil(table.entry(for: "app-367520"))
     }
 
+    /// Red Dead Redemption 2's Steam copy is served by Playport's Steam client (decision 0115).
+    func testTheShippedTableGivesRDR2PlayportsSteamClient() throws {
+        let table = try CompatDefaults.load(directory: Self.shipped)
+        let rdr2 = try XCTUnwrap(table.entry(for: "app-1174180"))
+        XCTAssertEqual(rdr2.settings.steamAPI, .client)
+        XCTAssertEqual(LaunchSettings().over(rdr2.settings).steamAPI, .client)
+        XCTAssertEqual(LaunchSettings(steamAPI: .emulated).over(rdr2.settings).steamAPI, .emulated)
+    }
+
     /// The table reaches players: no issue id or tracker address anywhere in it.
     func testTheShippedTableNamesNothingInternal() throws {
         let text = try String(contentsOf: Self.shipped.appendingPathComponent(CompatDefaults.fileName), encoding: .utf8)

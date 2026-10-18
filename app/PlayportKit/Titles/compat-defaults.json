@@ -1,8 +1,8 @@
 {
   "titles": {
     "app-1174180": {
-      "settings": {"windowsServices": true, "jitPoolMB": 896},
-      "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, and with its service it outgrows the default JIT pool."
+      "settings": {"windowsServices": true, "jitPoolMB": 896, "steamAPI": "client"},
+      "reason": "The Rockstar Games Launcher this game starts installs and uses a Windows service, with its service it outgrows the default JIT pool, and it asks Steam's client for the game."
     },
     "epic-Buffalo": {
       "settings": {"aspect": "16:9"},
